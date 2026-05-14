@@ -1,4 +1,4 @@
-# gossip-protocol
+# mycelium
 
 A peer-to-peer gossip protocol library and CLI node written in Rust. Nodes exchange key-value updates over persistent TCP connections using TTL-based epidemic propagation, last-write-wins conflict resolution, and tombstone deletes.
 
