@@ -94,42 +94,59 @@ impl GridSnapshot {
 }
 
 // ── Minimal HTTP server — no dependencies beyond tokio ────────────────
-// Serves /state as JSON with CORS headers so the HTML page (file://) can fetch it.
+// Serves the HTML visualiser at / and the JSON state at /state.
+// Serving the page from the same origin as the API avoids all CORS and
+// file:// protocol restrictions.
 async fn serve_http(snapshot: Arc<Mutex<GridSnapshot>>) {
-    let listener = TcpListener::bind(format!("127.0.0.1:{HTTP_PORT}")).await
-        .expect("failed to bind HTTP server — is port {HTTP_PORT} already in use?");
-    eprintln!("Live viewer ready — open docs/conway.html and switch to 'Live (Rust)'");
-    eprintln!("  state endpoint: http://127.0.0.1:{HTTP_PORT}/state");
+    let listener = match TcpListener::bind(format!("127.0.0.1:{HTTP_PORT}")).await {
+        Ok(l)  => l,
+        Err(e) => { eprintln!("HTTP server failed to bind :{HTTP_PORT} — {e}"); return; }
+    };
+    eprintln!("╔══════════════════════════════════════════════════╗");
+    eprintln!("║  Open in browser → http://127.0.0.1:{HTTP_PORT}       ║");
+    eprintln!("║  Switch to  Live (Rust)  to see the real mesh    ║");
+    eprintln!("╚══════════════════════════════════════════════════╝");
 
     loop {
         let Ok((mut stream, _)) = listener.accept().await else { continue };
         let snap = snapshot.clone();
         tokio::spawn(async move {
             let mut buf = [0u8; 512];
-            let _ = stream.read(&mut buf).await;
+            let n = stream.read(&mut buf).await.unwrap_or(0);
+            let req = std::str::from_utf8(&buf[..n]).unwrap_or("");
 
-            // Handle CORS preflight
-            if buf.starts_with(b"OPTIONS") {
+            if req.starts_with("OPTIONS") {
                 let _ = stream.write_all(
                     b"HTTP/1.1 204 No Content\r\n\
                       Access-Control-Allow-Origin: *\r\n\
-                      Access-Control-Allow-Methods: GET\r\n\
                       Connection: close\r\n\r\n"
                 ).await;
                 return;
             }
 
-            let json = snap.lock().unwrap().to_json();
-            let response = format!(
-                "HTTP/1.1 200 OK\r\n\
-                 Content-Type: application/json\r\n\
-                 Access-Control-Allow-Origin: *\r\n\
-                 Content-Length: {}\r\n\
-                 Connection: close\r\n\r\n\
-                 {}",
-                json.len(), json
-            );
-            let _ = stream.write_all(response.as_bytes()).await;
+            if req.contains("GET /state") {
+                let json = snap.lock().unwrap().to_json();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\n\
+                     Content-Type: application/json\r\n\
+                     Access-Control-Allow-Origin: *\r\n\
+                     Content-Length: {}\r\n\
+                     Connection: close\r\n\r\n{}",
+                    json.len(), json
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            } else {
+                // Serve the visualiser — embedded at compile time from docs/conway.html
+                let html = include_str!("../docs/conway.html");
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\n\
+                     Content-Type: text/html; charset=utf-8\r\n\
+                     Content-Length: {}\r\n\
+                     Connection: close\r\n\r\n{}",
+                    html.len(), html
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
         });
     }
 }
@@ -221,14 +238,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // ── Settle ────────────────────────────────────────────────────────
-    eprintln!("Mesh settling ({SETTLE_MS}ms)…");
-    time::sleep(Duration::from_millis(SETTLE_MS)).await;
-
-    // ── Shared snapshot for HTTP viewer ───────────────────────────────
+    // ── HTTP viewer — start before settle so the browser can connect immediately
     let snapshot: Arc<Mutex<GridSnapshot>> = Arc::new(Mutex::new(GridSnapshot::default()));
     let snap_for_server = snapshot.clone();
     tokio::spawn(async move { serve_http(snap_for_server).await });
+
+    // ── Settle ────────────────────────────────────────────────────────
+    eprintln!("Mesh settling ({SETTLE_MS}ms)…");
+    time::sleep(Duration::from_millis(SETTLE_MS)).await;
 
     // ── Per-cell tick handlers ────────────────────────────────────────
     for y in 0..GRID {
