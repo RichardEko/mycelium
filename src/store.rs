@@ -1,0 +1,111 @@
+use crate::framing::GossipUpdate;
+use bytes::Bytes;
+use papaya::Operation;
+use std::sync::{Arc, OnceLock};
+use tokio::sync::watch;
+
+static KEY_POOL: OnceLock<papaya::HashMap<Arc<str>, Arc<str>>> = OnceLock::new();
+
+fn key_pool() -> &'static papaya::HashMap<Arc<str>, Arc<str>> {
+    KEY_POOL.get_or_init(papaya::HashMap::new)
+}
+
+/// Returns the current number of entries in the intern pool.
+/// Zero if `intern_keys = false` and no key has ever been interned.
+/// The pool grows with the number of **distinct keys ever observed** — including
+/// keys that have since been tombstoned and GC'd from the store — and is never
+/// trimmed. Monitor this in `SystemStats::intern_pool_size` on long-running
+/// clusters with high key churn; disable interning with `GossipConfig::intern_keys
+/// = false` if the pool grows without bound.
+pub(crate) fn intern_pool_len() -> usize {
+    KEY_POOL.get().map_or(0, |p| p.len())
+}
+
+/// Process-wide key interning pool. Returns a shared `Arc<str>` for a given
+/// key string — after the first call for a key, all subsequent calls return
+/// the same allocation. This eliminates one heap allocation per received
+/// gossip message for workloads with a bounded key set.
+///
+/// The pool grows with the number of distinct keys ever seen (not just currently
+/// live) and is never evicted. Set `GossipConfig::intern_keys = false` for
+/// workloads with an unbounded key space (e.g. per-request UUIDs as keys).
+pub(crate) fn intern_key(key: Arc<str>) -> Arc<str> {
+    let pool = key_pool();
+    let guard = pool.pin();
+    if let Some(existing) = guard.get(&*key) {
+        return existing.clone();
+    }
+    // `slot` is taken inside the compute callback. papaya may retry the callback
+    // on CAS contention; the second call must not unwrap an already-taken slot.
+    let mut slot = Some(key.clone());
+    match guard.compute(key.clone(), |existing| match existing {
+        Some(_) => papaya::Operation::Abort(()),
+        None => match slot.take() {
+            Some(v) => papaya::Operation::Insert(v),
+            None    => papaya::Operation::Abort(()),
+        },
+    }) {
+        papaya::Compute::Inserted(_, v) => v.clone(),
+        _ => guard.get(&*key).cloned().unwrap_or(key),
+    }
+}
+
+/// A store entry with timestamp for LWW conflict resolution.
+/// `data: None` = tombstone; kept until it ages out to prevent key resurrection.
+#[derive(Clone, Debug)]
+pub(crate) struct StoreEntry {
+    pub(crate) data: Option<Bytes>,
+    pub(crate) timestamp: u64,
+}
+
+/// Applies `update` using last-write-wins. Returns `true` if the store changed.
+/// Tombstones win on equal timestamps; plain data requires a strictly newer timestamp.
+/// Uses papaya `compute` for a single atomic CAS — no separate read then write.
+pub(crate) fn apply_to_store(store: &papaya::HashMap<Arc<str>, StoreEntry>, update: &GossipUpdate) -> bool {
+    let ts          = update.timestamp;
+    let is_tombstone = update.is_tombstone;
+    // Clone value once outside the callback (O(1) Bytes refcount bump).
+    // The callback may be retried by papaya on CAS contention; capturing `val`
+    // outside avoids re-cloning from `update` on every retry iteration.
+    let val = if is_tombstone { None } else { Some(update.value.clone()) };
+
+    let guard = store.pin();
+    let result = guard.compute(update.key.clone(), |existing| {
+        match existing {
+            None => Operation::Insert(StoreEntry { data: val.clone(), timestamp: ts }),
+            Some((_, curr)) => {
+                let wins = if is_tombstone { ts >= curr.timestamp } else { ts > curr.timestamp };
+                if wins {
+                    Operation::Insert(StoreEntry { data: val.clone(), timestamp: ts })
+                } else {
+                    Operation::Abort(())
+                }
+            }
+        }
+    });
+
+    matches!(result, papaya::Compute::Inserted(..) | papaya::Compute::Updated { .. })
+}
+
+/// Applies `update` to the store, then notifies any subscriber watching that key.
+pub(crate) fn apply_and_notify(
+    store: &papaya::HashMap<Arc<str>, StoreEntry>,
+    subs: &papaya::HashMap<Arc<str>, watch::Sender<Option<Bytes>>>,
+    update: &GossipUpdate,
+) {
+    if apply_to_store(store, update) {
+        let guard = subs.pin();
+        if let Some(tx) = guard.get(&update.key) {
+            if tx.is_closed() {
+                // Conditional remove: only evict if the entry is still the closed sender.
+                guard.compute(update.key.clone(), |existing| match existing {
+                    Some((_, tx)) if tx.is_closed() => Operation::Remove,
+                    _ => Operation::Abort(()),
+                });
+            } else {
+                let val = if update.is_tombstone { None } else { Some(update.value.clone()) };
+                let _ = tx.send(val);
+            }
+        }
+    }
+}

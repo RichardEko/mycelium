@@ -1,0 +1,1253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Conway's Life — Gossip Signal Mesh</title>
+<style>
+  :root {
+    --bg:         #0d1117;
+    --surface:    #161b22;
+    --surface2:   #1c2128;
+    --surface3:   #21262d;
+    --border:     #30363d;
+    --accent:     #58a6ff;
+    --accent2:    #3fb950;
+    --accent3:    #d2a8ff;
+    --accent4:    #ffa657;
+    --accent5:    #ff7b72;
+    --muted:      #8b949e;
+    --text:       #e6edf3;
+    --text2:      #c9d1d9;
+    --radius:     8px;
+    --radius-lg:  14px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  /* ── Header ─────────────────────────────────────────────── */
+  .header {
+    background: radial-gradient(ellipse at 60% 0%, rgba(88,166,255,0.07) 0%, transparent 55%), var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 28px 36px 22px;
+    display: flex; align-items: flex-start; gap: 16px;
+  }
+  .header-badge {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--accent2); background: rgba(63,185,80,0.1);
+    border: 1px solid rgba(63,185,80,0.25); border-radius: 20px;
+    padding: 4px 12px; white-space: nowrap; margin-top: 4px;
+  }
+  .header-text { flex: 1; }
+  .header-title { font-size: 21px; font-weight: 700; letter-spacing: -0.02em; }
+  .header-title em { font-style: normal; color: var(--accent); }
+  .header-sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .header-links a {
+    font-size: 12px; color: var(--accent); text-decoration: none; opacity: 0.7;
+  }
+  .header-links a:hover { opacity: 1; }
+
+  /* ── Body layout ─────────────────────────────────────────── */
+  .layout {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 24px;
+    padding: 24px 32px;
+    max-width: 1160px;
+    margin: 0 auto;
+  }
+
+  /* ── Left: grid + controls ───────────────────────────────── */
+  .left-col { display: flex; flex-direction: column; gap: 14px; }
+
+  .view-tabs {
+    display: flex; gap: 4px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 4px; width: fit-content;
+  }
+  .view-tab {
+    padding: 5px 14px; border-radius: 5px; border: none;
+    background: transparent; color: var(--muted);
+    font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.15s;
+  }
+  .view-tab.active {
+    background: var(--surface3); color: var(--text);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+  }
+  .view-tab:hover:not(.active) { color: var(--text2); }
+
+  /* ── Cell grid ───────────────────────────────────────────── */
+  .grid-wrap { position: relative; }
+  .cell-grid {
+    display: grid;
+    grid-template-columns: repeat(16, 34px);
+    grid-template-rows: repeat(16, 34px);
+    gap: 2px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 7px;
+    user-select: none;
+  }
+
+  .cell {
+    border-radius: 3px;
+    background: var(--surface2);
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: background 0.1s, border-color 0.1s, box-shadow 0.1s;
+    position: relative;
+    font-size: 8px;
+    font-family: monospace;
+    color: transparent;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .cell:hover { border-color: var(--border); }
+
+  /* ── Life view states ────────────────────────────────────── */
+  .life-view .cell.alive {
+    background: var(--accent2); border-color: #56d364;
+    box-shadow: 0 0 5px rgba(63,185,80,0.35);
+  }
+  /* Forwarding-only: receives tick signal, in no relevant group, just forwards */
+  .life-view .cell.fwd-flash {
+    animation: fwdFlash 0.4s ease-out forwards;
+  }
+  @keyframes fwdFlash {
+    0%   { border-color: rgba(88,166,255,0.35); box-shadow: inset 0 0 0 1px rgba(88,166,255,0.2); }
+    100% { border-color: transparent; box-shadow: none; }
+  }
+  /* Group member acting on a signal */
+  .life-view .cell.acting {
+    animation: actPulse 0.45s ease-out forwards;
+  }
+  @keyframes actPulse {
+    0%   { border-color: var(--accent3); box-shadow: 0 0 10px rgba(210,168,255,0.6); }
+    100% { border-color: transparent; box-shadow: none; }
+  }
+  /* Born / died */
+  .life-view .cell.born { animation: born 0.4s cubic-bezier(0.34,1.56,0.64,1) forwards; }
+  @keyframes born {
+    0%   { transform: scale(0.5); background: #7ee787; box-shadow: 0 0 12px rgba(126,231,135,0.9); }
+    100% { transform: scale(1); }
+  }
+  .life-view .cell.died { animation: died 0.4s ease-out forwards; }
+  @keyframes died {
+    0%   { background: #ff7b72; box-shadow: 0 0 10px rgba(255,123,114,0.7); }
+    100% { background: var(--surface2); box-shadow: none; }
+  }
+  /* Stale state: computed from gossip lag */
+  .life-view .cell.stale {
+    outline: 2px solid rgba(255,166,87,0.7);
+    outline-offset: -2px;
+  }
+  /* Correction after stale */
+  .life-view .cell.correcting { animation: correcting 0.5s ease-out forwards; }
+  @keyframes correcting {
+    0%   { box-shadow: 0 0 12px rgba(255,166,87,0.9); }
+    100% { box-shadow: none; }
+  }
+
+  /* Hover neighbour highlight (group membership visualisation) */
+  .cell.nb-hover {
+    border-color: var(--accent3) !important;
+    box-shadow: 0 0 8px rgba(210,168,255,0.5) !important;
+    z-index: 3;
+  }
+  .cell.self-hover {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 10px rgba(88,166,255,0.6) !important;
+    z-index: 4;
+  }
+
+  /* ── KV freshness view ───────────────────────────────────── */
+  /* Overrides applied via JS inline style: background set to freshness colour */
+  .kv-view .cell {
+    transition: background 0.3s;
+    border-color: transparent !important;
+  }
+  .kv-view .cell.alive { box-shadow: none; }
+
+  /* ── Signal flow view ────────────────────────────────────── */
+  .signal-view .cell { transition: background 0.15s; }
+  .signal-view .cell.sig-act {
+    background: rgba(210,168,255,0.6);
+    border-color: var(--accent3);
+    box-shadow: 0 0 8px rgba(210,168,255,0.4);
+  }
+  .signal-view .cell.sig-fwd {
+    background: rgba(88,166,255,0.2);
+    border-color: rgba(88,166,255,0.4);
+  }
+
+  /* KV write propagation ring */
+  .cell.kv-write { animation: kvWrite 0.5s ease-out forwards; }
+  @keyframes kvWrite {
+    0%   { box-shadow: 0 0 0 0 rgba(63,185,80,0.8); }
+    100% { box-shadow: 0 0 0 10px rgba(63,185,80,0); }
+  }
+  .cell.kv-recv { animation: kvRecv 0.4s ease-out forwards; }
+  @keyframes kvRecv {
+    0%   { box-shadow: 0 0 0 0 rgba(63,185,80,0.5); }
+    100% { box-shadow: 0 0 0 6px rgba(63,185,80,0); }
+  }
+
+  /* ── Controls ────────────────────────────────────────────── */
+  .controls {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  }
+  .btn {
+    padding: 6px 14px; border-radius: var(--radius);
+    border: 1px solid var(--border); background: var(--surface2);
+    color: var(--text); font-size: 12px; font-weight: 500;
+    cursor: pointer; transition: background 0.12s, border-color 0.12s;
+  }
+  .btn:hover { background: var(--surface3); border-color: var(--muted); }
+  .btn.primary { background: rgba(88,166,255,0.12); border-color: rgba(88,166,255,0.3); color: var(--accent); }
+  .btn.primary:hover { background: rgba(88,166,255,0.2); }
+  .btn.danger { background: rgba(255,123,114,0.1); border-color: rgba(255,123,114,0.25); color: var(--accent5); }
+  select {
+    padding: 5px 9px; border-radius: var(--radius);
+    border: 1px solid var(--border); background: var(--surface2);
+    color: var(--text); font-size: 12px; cursor: pointer;
+  }
+  .toggle-wrap {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 12px; color: var(--muted);
+    padding: 4px 10px; border-radius: var(--radius);
+    border: 1px solid var(--border); background: var(--surface2);
+    cursor: pointer; user-select: none; transition: border-color 0.15s;
+  }
+  .toggle-wrap:hover { border-color: var(--muted); }
+  .toggle-wrap.on { border-color: var(--accent4); color: var(--accent4); }
+  .toggle-dot {
+    width: 26px; height: 14px; border-radius: 7px;
+    background: var(--surface3); border: 1px solid var(--border);
+    position: relative; transition: background 0.2s;
+  }
+  .toggle-dot::after {
+    content: ''; position: absolute; top: 2px; left: 2px;
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--muted); transition: transform 0.2s, background 0.2s;
+  }
+  .toggle-wrap.on .toggle-dot { background: rgba(255,166,87,0.2); border-color: var(--accent4); }
+  .toggle-wrap.on .toggle-dot::after { transform: translateX(12px); background: var(--accent4); }
+  .speed-wrap { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  input[type=range] { width: 80px; accent-color: var(--accent); cursor: pointer; }
+
+  /* ── Right column ────────────────────────────────────────── */
+  .right-col { display: flex; flex-direction: column; gap: 16px; min-width: 280px; max-width: 310px; }
+
+  .panel {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); overflow: hidden;
+  }
+  .panel-hdr {
+    padding: 10px 14px 8px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px; font-weight: 600; letter-spacing: 0.07em;
+    text-transform: uppercase; color: var(--muted);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .dot-live {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent2); box-shadow: 0 0 5px var(--accent2);
+    animation: blink 1.6s ease-in-out infinite;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
+
+  /* Stats */
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; }
+  .stat-item {
+    padding: 12px 14px;
+    border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  }
+  .stat-item:nth-child(2n) { border-right: none; }
+  .stat-item:nth-last-child(-n+2) { border-bottom: none; }
+  .stat-label { font-size: 10px; color: var(--muted); margin-bottom: 3px; }
+  .stat-val {
+    font-size: 20px; font-weight: 700; line-height: 1;
+    font-family: "SF Mono", "Fira Code", monospace;
+  }
+
+  /* Node inspector */
+  .inspector { padding: 12px 14px; }
+  .insp-empty { color: var(--muted); font-size: 12px; font-style: italic; text-align: center; padding: 16px 0; }
+  .insp-title {
+    font-size: 13px; font-weight: 600; margin-bottom: 10px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .insp-alive-badge {
+    font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600;
+  }
+  .insp-alive-badge.alive { background: rgba(63,185,80,0.15); color: var(--accent2); }
+  .insp-alive-badge.dead  { background: rgba(139,148,158,0.15); color: var(--muted); }
+  .insp-section { margin-bottom: 10px; }
+  .insp-section-label {
+    font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 5px;
+  }
+  .kv-table { width: 100%; border-collapse: collapse; font-size: 11px; font-family: monospace; }
+  .kv-table td { padding: 2px 4px; }
+  .kv-table .kv-key { color: var(--accent); }
+  .kv-table .kv-val { color: var(--text2); }
+  .kv-table .kv-age { color: var(--muted); text-align: right; font-size: 10px; }
+  .kv-fresh { color: var(--accent2) !important; }
+  .kv-stale { color: var(--accent4) !important; }
+  .group-list { display: flex; flex-wrap: wrap; gap: 4px; }
+  .group-chip {
+    font-size: 10px; font-family: monospace;
+    background: rgba(210,168,255,0.1); border: 1px solid rgba(210,168,255,0.2);
+    color: var(--accent3); border-radius: 4px; padding: 1px 6px;
+  }
+  .code-snippet {
+    font-size: 10px; font-family: "SF Mono", "Fira Code", monospace;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 5px; padding: 8px 10px; color: var(--text2);
+    line-height: 1.7; overflow-x: auto; white-space: pre;
+    margin-top: 4px;
+  }
+  .code-snippet .kw  { color: var(--accent5); }
+  .code-snippet .fn  { color: var(--accent); }
+  .code-snippet .str { color: var(--accent2); }
+  .code-snippet .cm  { color: var(--muted); font-style: italic; }
+  .code-snippet .tp  { color: var(--accent3); }
+
+  /* Signal log */
+  .signal-log {
+    height: 180px; overflow-y: auto;
+    padding: 6px 0;
+    font-family: "SF Mono", "Fira Code", monospace; font-size: 10px;
+  }
+  .signal-log::-webkit-scrollbar { width: 3px; }
+  .signal-log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .log-entry {
+    padding: 2px 12px; display: flex; gap: 6px; align-items: baseline;
+    animation: fadeIn 0.2s ease-out;
+  }
+  @keyframes fadeIn { from { opacity: 0; transform: translateX(-3px); } to { opacity: 1; } }
+  .log-entry:hover { background: var(--surface2); }
+  .log-ts { color: var(--muted); min-width: 24px; }
+  .log-scope {
+    font-size: 9px; padding: 1px 4px; border-radius: 2px; white-space: nowrap;
+  }
+  .log-scope.sys   { background: rgba(88,166,255,0.12); color: var(--accent); }
+  .log-scope.grp   { background: rgba(210,168,255,0.12); color: var(--accent3); }
+  .log-scope.kv    { background: rgba(63,185,80,0.12); color: var(--accent2); }
+  .log-scope.tomb  { background: rgba(255,123,114,0.12); color: var(--accent5); }
+  .log-kind { color: var(--text2); }
+  .log-detail { color: var(--muted); font-size: 9px; margin-left: auto; }
+
+  /* ── Concept explainer ───────────────────────────────────── */
+  .concepts {
+    max-width: 1160px; margin: 8px auto 0; padding: 0 32px 40px;
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+  }
+  .concept-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 16px 18px;
+  }
+  .concept-num {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .concept-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  .concept-body { font-size: 11px; color: var(--muted); line-height: 1.65; margin-bottom: 8px; }
+
+  /* View-hint banners */
+  .view-hint {
+    font-size: 11px; color: var(--muted);
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 12px;
+    display: none;
+  }
+  .view-hint.visible { display: block; }
+  .view-hint em { font-style: normal; color: var(--text2); }
+
+  footer {
+    text-align: center; padding: 32px; font-size: 11px; color: var(--muted);
+    border-top: 1px solid var(--border);
+  }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <span class="header-badge">Layers 1 &amp; 2</span>
+  <div class="header-text">
+    <div class="header-title">Conway's Life — <em>Gossip Signal Mesh</em></div>
+    <div class="header-sub">
+      256 simulated agents · epidemic KV store · System-scope tick · Group-scope boundary
+      · hover any cell to see its group memberships
+    </div>
+  </div>
+  <div class="header-links"><a href="roadmap.html">← Roadmap</a></div>
+</header>
+
+<div class="layout">
+
+  <!-- ── Left column ──────────────────────────────────────── -->
+  <div class="left-col">
+
+    <!-- Source selector -->
+    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+      <div class="view-tabs" id="source-tabs">
+        <button class="view-tab active" data-source="sim">Simulated</button>
+        <button class="view-tab" data-source="live">
+          Live (Rust) <span id="conn-dot" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--muted);margin-left:4px;vertical-align:middle;"></span>
+        </button>
+      </div>
+      <div id="live-hint-inline" style="display:none; font-size:11px; color:var(--muted);">
+        run <code style="background:var(--surface2);padding:1px 5px;border-radius:3px;color:var(--text2)">cargo run --example conway</code> · connecting to <code style="background:var(--surface2);padding:1px 5px;border-radius:3px;color:var(--accent)">:8090</code>
+      </div>
+    </div>
+
+    <!-- View selector -->
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+      <div class="view-tabs">
+        <button class="view-tab active" data-view="life">Life view</button>
+        <button class="view-tab" data-view="kv">KV freshness</button>
+        <button class="view-tab" data-view="signal">Signal flow</button>
+      </div>
+      <div class="toggle-wrap" id="delay-toggle">
+        <span>Gossip delay</span>
+        <div class="toggle-dot"></div>
+      </div>
+    </div>
+
+    <!-- View hints -->
+    <div class="view-hint" id="hint-kv">
+      <em>KV freshness view</em> — colour shows how many ticks since each node's cell state was
+      <em>received</em> by gossip: <span style="color:var(--accent2)">■ this tick</span>
+      · <span style="color:#85c46c">■ 1 ago</span>
+      · <span style="color:var(--accent4)">■ 2+ ago (stale)</span>.
+      With <strong>Gossip delay</strong> on you can watch the epidemic wave spread.
+    </div>
+    <div class="view-hint" id="hint-signal">
+      <em>Signal flow view</em> — on each tick, cells glow <span style="color:var(--accent3)">purple</span>
+      if they are <em>acting</em> on a Group-scope signal from the selected cell,
+      or <span style="color:var(--accent)">blue</span> if they are only <em>forwarding</em>.
+      Click any cell to set it as the signal source.
+    </div>
+
+    <!-- Grid -->
+    <div class="grid-wrap">
+      <div class="cell-grid life-view" id="grid"></div>
+    </div>
+
+    <!-- Controls -->
+    <div class="controls">
+      <button class="btn primary" id="btn-play">▶ Play</button>
+      <button class="btn" id="btn-step">Step</button>
+      <button class="btn danger" id="btn-clear">Clear</button>
+      <select id="pattern-select">
+        <option value="glider">Glider</option>
+        <option value="rpentomino">R-pentomino</option>
+        <option value="blinker">Blinker</option>
+        <option value="random">Random (30%)</option>
+      </select>
+      <button class="btn" id="btn-load">Load pattern</button>
+      <div class="speed-wrap">
+        <span>Speed</span>
+        <input type="range" id="speed" min="1" max="9" value="5">
+        <span id="speed-lbl">560ms</span>
+      </div>
+    </div>
+
+  </div><!-- /left-col -->
+
+  <!-- ── Right column ─────────────────────────────────────── -->
+  <div class="right-col">
+
+    <!-- Stats -->
+    <div class="panel">
+      <div class="panel-hdr">Mesh stats <div class="dot-live"></div></div>
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div class="stat-label">Generation</div>
+          <div class="stat-val" style="color:var(--accent)" id="s-gen">0</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Live agents</div>
+          <div class="stat-val" style="color:var(--accent2)" id="s-live">0</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">KV writes</div>
+          <div class="stat-val" style="color:var(--accent3)" id="s-kv">0</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Stale reads</div>
+          <div class="stat-val" style="color:var(--accent4)" id="s-stale">0</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Node inspector -->
+    <div class="panel">
+      <div class="panel-hdr">Node inspector — hover a cell</div>
+      <div class="inspector" id="inspector">
+        <div class="insp-empty">Hover any cell to inspect its local state</div>
+      </div>
+    </div>
+
+    <!-- Signal log -->
+    <div class="panel">
+      <div class="panel-hdr">Signal &amp; KV log <div class="dot-live"></div></div>
+      <div class="signal-log" id="log"></div>
+    </div>
+
+  </div><!-- /right-col -->
+
+</div><!-- /layout -->
+
+<!-- ── Concept cards ───────────────────────────────────────── -->
+<div class="concepts">
+
+  <div class="concept-card">
+    <div class="concept-num" style="color:var(--accent)">Layer 1 — KV Store</div>
+    <div class="concept-title">No central state — each node has its own view</div>
+    <div class="concept-body">
+      Each agent writes only its own cell to its local KV store. The update then propagates
+      peer-to-peer via epidemic gossip — there is no server holding ground truth.
+      Switch to <strong>KV freshness view</strong> to see this directly: colour encodes how many
+      ticks since each cell last changed state. A moving glider leaves a <span style="color:var(--accent2)">green</span> trail;
+      cells that haven't changed fade to <span style="color:var(--accent4)">amber</span>.
+      Enable <strong>Gossip delay</strong> and watch the write-wave ripple outward from each born or
+      dying cell — distant nodes receiving the update flash as gossip reaches them hop by hop.
+    </div>
+    <div class="code-snippet"><span class="cm">// each agent writes only its own cell</span>
+<span class="fn">agent</span>.<span class="fn">set</span>(<span class="str">"cell/3/4"</span>, alive_bytes);
+
+<span class="cm">// agent(7,7) reads neighbour from its own KV</span>
+<span class="cm">// (gossip delivered it — may be 1 tick stale)</span>
+<span class="kw">let</span> nb = <span class="fn">agent</span>.<span class="fn">get</span>(<span class="str">"cell/2/4"</span>);</div>
+  </div>
+
+  <div class="concept-card">
+    <div class="concept-num" style="color:var(--accent3)">Layer 2 — Boundary Mesh</div>
+    <div class="concept-title">Forwarding is unconditional — acting is filtered</div>
+    <div class="concept-body">
+      Every node forwards every signal regardless of scope. Only nodes that
+      <em>joined the right group</em> act on it — the boundary is purely local state.
+      Hover any cell: its 8 toroidal neighbours glow <span style="color:var(--accent3)">purple</span>,
+      showing exactly which <code style="font-size:10px;color:var(--text2)">nb_x_y</code> groups
+      this node has joined. Switch to <strong>Signal flow view</strong> to see the
+      distinction live on every tick: <span style="color:var(--accent3)">purple</span> = acting
+      (in the group), <span style="color:var(--accent)">blue</span> = forwarding only.
+      Click any cell to change the signal source.
+    </div>
+    <div class="code-snippet"><span class="cm">// cell (3,4) joins its neighbours' groups</span>
+<span class="kw">for</span> (nx, ny) <span class="kw">in</span> <span class="fn">toroidal_neighbours</span>(3, 4) {
+    agent.<span class="fn">join_group</span>(<span class="fn">format!</span>(<span class="str">"nb_{nx}_{ny}"</span>));
+}
+
+<span class="cm">// tick: System scope → every node acts</span>
+agent.<span class="fn">emit</span>(<span class="str">"conway.tick"</span>,
+    <span class="tp">SignalScope</span>::<span class="tp">System</span>, payload);</div>
+  </div>
+
+  <div class="concept-card">
+    <div class="concept-num" style="color:var(--accent4)">Eventual consistency</div>
+    <div class="concept-title">The ripple is not a bug</div>
+    <div class="concept-body">
+      Enable <strong>Gossip delay</strong>, then watch both views together.
+      In <strong>KV freshness</strong>: the write-wave from a state change spreads outward — distant
+      cells are still <span style="color:var(--accent4)">amber</span> while the source is already
+      <span style="color:var(--accent2)">green</span>.
+      In <strong>Life view</strong>: cells with an amber outline computed this generation from a
+      neighbour snapshot that hadn't arrived yet (stale reads counter climbs).
+      Once gossip catches up they correct. This is the two-timescale design —
+      fast signals trigger computation; durable KV carries truth.
+    </div>
+    <div class="code-snippet"><span class="cm">// per-cell tick handler reads its local view</span>
+<span class="kw">let</span> live_count = neighbours
+    .<span class="fn">iter</span>()
+    .<span class="fn">filter</span>(|(nx, ny)| {
+        agent.<span class="fn">get</span>(<span class="str">"cell/{nx}/{ny}"</span>)
+             .<span class="fn">map</span>(|b| b[0] == 1)
+             .<span class="fn">unwrap_or</span>(<span class="kw">false</span>)
+    })
+    .<span class="fn">count</span>();  <span class="cm">// may be stale — the ripple</span></div>
+  </div>
+
+</div><!-- /concepts -->
+
+<footer>gossip-protocol · Layers 1 &amp; 2 complete · 2026-05-14</footer>
+
+<script>
+const GRID = 16;
+const MAX_LOG = 60;
+
+// ── Ground-truth grid ──────────────────────────────────────
+let cells   = Array.from({length: GRID}, () => new Array(GRID).fill(false));
+
+// kvAge[y][x] = generation when cell (x,y) last CHANGED STATE and wrote to KV.
+// Never touched by other cells. Freshness = generation - kvAge[y][x].
+// -1 = never written (cell has never changed from its initial dead state).
+let kvAge   = Array.from({length: GRID}, () => new Array(GRID).fill(-1));
+
+// prevCells: snapshot of cells from the start of the previous tick.
+// Used by gossip-delay stale simulation: a "distant" node reads neighbour
+// state that is one tick old — it hasn't received the gossip update yet.
+let prevCells = Array.from({length: GRID}, () => new Array(GRID).fill(false));
+
+// staleCount: how many times a cell computed from stale neighbour data this session
+let totalStale = 0;
+
+// Cells that are currently showing the stale indicator
+const staleSet = new Set();
+
+let generation = 0;
+let totalKvWrites = 0;
+let playing = false;
+let tickInterval = null;
+let tickMs = 560;
+let gossipDelay = false;
+let currentView = 'life';
+
+// Signal flow: selected source cell for the signal view
+let signalSource = {x: 0, y: 0};
+
+// ── DOM ────────────────────────────────────────────────────
+const gridEl     = document.getElementById('grid');
+const inspEl     = document.getElementById('inspector');
+const logEl      = document.getElementById('log');
+const sGen       = document.getElementById('s-gen');
+const sLive      = document.getElementById('s-live');
+const sKv        = document.getElementById('s-kv');
+const sStale     = document.getElementById('s-stale');
+const delayToggle= document.getElementById('delay-toggle');
+const speedSldr  = document.getElementById('speed');
+const speedLbl   = document.getElementById('speed-lbl');
+const hintKv     = document.getElementById('hint-kv');
+const hintSig    = document.getElementById('hint-signal');
+
+// ── Build grid DOM ─────────────────────────────────────────
+const cellEls = [];
+for (let y = 0; y < GRID; y++) {
+  cellEls.push([]);
+  for (let x = 0; x < GRID; x++) {
+    const el = document.createElement('div');
+    el.className = 'cell';
+    el.addEventListener('click',      () => handleCellClick(x, y));
+    el.addEventListener('mouseenter', () => handleCellHover(x, y, true));
+    el.addEventListener('mouseleave', () => handleCellHover(x, y, false));
+    gridEl.appendChild(el);
+    cellEls[y].push(el);
+  }
+}
+
+// ── Conway helpers ─────────────────────────────────────────
+function wrap(v) { return ((v % GRID) + GRID) % GRID; }
+
+function neighbours(x, y) {
+  const r = [];
+  for (let dy = -1; dy <= 1; dy++)
+    for (let dx = -1; dx <= 1; dx++)
+      if (dx || dy) r.push([wrap(x+dx), wrap(y+dy)]);
+  return r;
+}
+
+// ── Gossip freshness simulation ────────────────────────────
+// Gossip "hop count" from source (x,y) to target (tx,ty) on the
+// toroidal mesh — used to simulate epidemic propagation delay.
+function gossipHops(sx, sy, tx, ty) {
+  const dx = Math.min(Math.abs(tx-sx), GRID - Math.abs(tx-sx));
+  const dy = Math.min(Math.abs(ty-sy), GRID - Math.abs(ty-sy));
+  return Math.max(dx, dy); // Chebyshev distance — 1 hop per ring
+}
+
+// Record that cell (x,y) changed state — updates kvAge for that cell only.
+// Also animates the epidemic KV-write wave outward (visual only — does not
+// touch other cells' kvAge, which would falsely reset their freshness).
+function gossipKvWrite(x, y) {
+  totalKvWrites++;
+  kvAge[y][x] = generation; // ONLY this cell's age changes
+
+  // Animate the gossip wave: rings expand outward from the writer.
+  // With gossip delay on, the wave is slowed to the hop interval (~180ms/hop).
+  // Without delay the wave is cosmetic only (still looks good).
+  const hopMs = gossipDelay ? 180 : 55;
+  for (let ty = 0; ty < GRID; ty++) {
+    for (let tx = 0; tx < GRID; tx++) {
+      if (tx === x && ty === y) continue;
+      const hops = gossipHops(x, y, tx, ty);
+      setTimeout(() => {
+        cellEls[ty][tx].classList.add('kv-recv');
+        setTimeout(() => cellEls[ty][tx].classList.remove('kv-recv'), 300);
+        if (currentView === 'kv') updateKvView();
+      }, hops * hopMs);
+    }
+  }
+}
+
+// ── Tick ───────────────────────────────────────────────────
+function tick(animate = true) {
+  // 1. Emit System-scope conway.tick signal
+  addLog('sys', 'conway.tick', `gen ${generation}`, `→ ${GRID*GRID} nodes`);
+
+  // Animate signal flow view
+  if (animate && currentView === 'signal') animateSignalFlow();
+
+  // 2. Compute next generation.
+  //
+  // Gossip delay model: nodes at Chebyshev distance > 2 from a recently-changed
+  // cell haven't received the gossip update yet. They read from prevCells (the
+  // state as of the PREVIOUS tick) rather than the current ground truth.
+  // This produces genuine stale-read divergence — the same effect that makes
+  // patterns "ripple" across the real Rust mesh before converging.
+  const prev = cells.map(r => [...r]);
+  const next = Array.from({length: GRID}, () => new Array(GRID).fill(false));
+  let staleReads = 0;
+  const newStaleSet = new Set();
+
+  // Collect cells that changed last tick (gossip-delay staleness source)
+  const recentChanges = [];
+  if (gossipDelay) {
+    for (let y = 0; y < GRID; y++)
+      for (let x = 0; x < GRID; x++)
+        if (prev[y][x] !== prevCells[y][x]) recentChanges.push([x, y]);
+  }
+
+  for (let y = 0; y < GRID; y++) {
+    for (let x = 0; x < GRID; x++) {
+      let liveNbs = 0;
+      let isStale = false;
+      for (const [nx, ny] of neighbours(x, y)) {
+        // With gossip delay: if this neighbour changed last tick AND is more than
+        // 2 hops away, this node hasn't received the update yet — read old state.
+        let nbAlive = cells[ny][nx];
+        if (gossipDelay) {
+          const wasRecentChange = recentChanges.some(([cx,cy]) => cx===nx && cy===ny);
+          if (wasRecentChange && gossipHops(x, y, nx, ny) > 2) {
+            nbAlive = prevCells[ny][nx]; // stale: reads one tick behind
+            isStale = true;
+            staleReads++;
+          }
+        }
+        if (nbAlive) liveNbs++;
+      }
+      next[y][x] = (prev[y][x] && (liveNbs === 2 || liveNbs === 3))
+                || (!prev[y][x] && liveNbs === 3);
+      if (isStale) newStaleSet.add(`${x},${y}`);
+    }
+  }
+  totalStale += staleReads;
+
+  // 3. Apply state changes
+  const born = [], died = [];
+  for (let y = 0; y < GRID; y++) {
+    for (let x = 0; x < GRID; x++) {
+      if (prev[y][x] !== next[y][x]) {
+        if (next[y][x]) born.push([x,y]); else died.push([x,y]);
+        gossipKvWrite(x, y);  // KV write propagates epidemically
+      }
+    }
+  }
+  cells = next;
+  generation++;
+
+  // 4. Animate and log
+  if (animate) {
+    // System tick pulse (wave from 0,0)
+    if (currentView === 'life') {
+      for (let y = 0; y < GRID; y++) {
+        for (let x = 0; x < GRID; x++) {
+          const d = (x + y) * 16;
+          const el = cellEls[y][x];
+          const isActing = neighbours(signalSource.x, signalSource.y)
+                             .some(([nx,ny]) => nx===x && ny===y);
+          setTimeout(() => {
+            el.classList.add(isActing ? 'acting' : 'fwd-flash');
+            setTimeout(() => el.classList.remove('acting', 'fwd-flash'), 500);
+          }, d);
+        }
+      }
+    }
+
+    // Born / died animations + KV write rings
+    born.forEach(([x,y]) => {
+      const el = cellEls[y][x];
+      el.classList.remove('died', 'stale');
+      void el.offsetWidth;
+      el.classList.add('born');
+      el.classList.toggle('alive', true);
+      setTimeout(() => el.classList.remove('born'), 500);
+      addLog('kv', `set cell/${x}/${y}`, '→ 1', `born`);
+      el.classList.add('kv-write');
+      setTimeout(() => el.classList.remove('kv-write'), 550);
+    });
+    died.forEach(([x,y]) => {
+      const el = cellEls[y][x];
+      el.classList.remove('born', 'stale');
+      void el.offsetWidth;
+      el.classList.add('died');
+      el.classList.toggle('alive', false);
+      setTimeout(() => el.classList.remove('died'), 500);
+      addLog('tomb', `tombstone cell/${x}/${y}`, '→ 0', `died`);
+    });
+
+    // Stale indicators
+    staleSet.forEach(k => {
+      const [sx, sy] = k.split(',').map(Number);
+      cellEls[sy][sx].classList.remove('stale');
+    });
+    staleSet.clear();
+    newStaleSet.forEach(k => {
+      const [sx, sy] = k.split(',').map(Number);
+      cellEls[sy][sx].classList.add('stale');
+      staleSet.add(k);
+    });
+
+    if (staleReads > 0)
+      addLog('kv', 'stale reads', `×${staleReads}`, `lag in gossip propagation`);
+  } else {
+    // Silent re-render
+    for (let y = 0; y < GRID; y++)
+      for (let x = 0; x < GRID; x++)
+        cellEls[y][x].classList.toggle('alive', cells[y][x]);
+  }
+
+  // Advance prevCells snapshot for next tick's stale simulation
+  prevCells = prev; // prev is the snapshot from BEFORE this tick's changes
+
+  if (currentView === 'kv') updateKvView();
+  updateStats();
+}
+
+// ── KV freshness view ──────────────────────────────────────
+// Heatmap: how many ticks since cell (x,y) last changed state (wrote to KV).
+// lag 0 = changed this tick (green), lag 5+ = dormant for 5 ticks (amber/red).
+// A moving glider leaves a green trail; stable blocks fade to amber.
+const KV_COLOURS = [
+  [63,185,80],    // 0 — changed this tick
+  [95,175,65],    // 1
+  [140,165,50],   // 2
+  [195,155,45],   // 3
+  [255,166,87],   // 4 — orange: noticeably stale
+  [210,100,65],   // 5+
+];
+function kvColour(age) {
+  if (age < 0) return `rgba(33,38,45,1)`; // never changed — always dead
+  // lag = ticks since last change; cap at colour table length
+  // gossipKvWrite is called before generation++, so a cell that changed this
+  // tick has kvAge = generation (pre-increment) → lag = 0 → idx 0 → bright green.
+  // A cell unchanged for N ticks has kvAge N ticks behind → amber/red.
+  const lag = Math.max(0, Math.min(generation - age, KV_COLOURS.length - 1));
+  const [r,g,b] = KV_COLOURS[lag];
+  return `rgb(${r},${g},${b})`;
+}
+function updateKvView() {
+  for (let y = 0; y < GRID; y++)
+    for (let x = 0; x < GRID; x++)
+      cellEls[y][x].style.background = kvColour(kvAge[y][x]);
+}
+function clearKvView() {
+  for (let y = 0; y < GRID; y++)
+    for (let x = 0; x < GRID; x++)
+      cellEls[y][x].style.background = '';
+}
+
+// ── Signal flow view ───────────────────────────────────────
+function animateSignalFlow() {
+  const src = signalSource;
+  const actingSet = new Set(
+    neighbours(src.x, src.y).map(([nx,ny]) => `${nx},${ny}`)
+  );
+  for (let y = 0; y < GRID; y++) {
+    for (let x = 0; x < GRID; x++) {
+      const el = cellEls[y][x];
+      const d = gossipHops(src.x, src.y, x, y) * 60;
+      setTimeout(() => {
+        el.classList.remove('sig-act', 'sig-fwd');
+        if (actingSet.has(`${x},${y}`)) el.classList.add('sig-act');
+        else el.classList.add('sig-fwd');
+        setTimeout(() => el.classList.remove('sig-act', 'sig-fwd'), 800);
+      }, d);
+    }
+  }
+}
+
+// ── Hover inspection ───────────────────────────────────────
+let hoverPinned = false;
+
+function handleCellHover(x, y, entering) {
+  if (hoverPinned) return;
+  // Highlight neighbours (group memberships)
+  const nbs = neighbours(x, y);
+  nbs.forEach(([nx,ny]) => cellEls[ny][nx].classList.toggle('nb-hover', entering));
+  cellEls[y][x].classList.toggle('self-hover', entering);
+  if (entering) showInspector(x, y, false);
+  else clearInspector();
+}
+
+function handleCellClick(x, y) {
+  if (currentView === 'life') {
+    if (hoverPinned) {
+      // Unpin
+      hoverPinned = false;
+      clearNbHighlights();
+    } else {
+      // Pin
+      hoverPinned = true;
+      cells[y][x] = !cells[y][x];
+      cellEls[y][x].classList.toggle('alive', cells[y][x]);
+      showInspector(x, y, true);
+    }
+    return;
+  }
+  if (currentView === 'signal') {
+    signalSource = {x, y};
+    addLog('sys', 'signal source', `set to (${x},${y})`, '');
+  }
+  if (currentView === 'kv') {
+    // Toggle cell
+    cells[y][x] = !cells[y][x];
+    cellEls[y][x].classList.toggle('alive', cells[y][x]);
+  }
+  showInspector(x, y, true);
+}
+
+function clearNbHighlights() {
+  for (let y = 0; y < GRID; y++)
+    for (let x = 0; x < GRID; x++)
+      cellEls[y][x].classList.remove('nb-hover', 'self-hover');
+}
+
+function clearInspector() {
+  if (!hoverPinned) inspEl.innerHTML = '<div class="insp-empty">Hover any cell to inspect its local state</div>';
+}
+
+function showInspector(x, y, pinned) {
+  const nbs = neighbours(x, y);
+  const groups = nbs.map(([nx,ny]) => `nb_${nx}_${ny}`);
+  const alive = cells[y][x];
+  const port = 52000 + y * GRID + x;
+  const lag = kvAge[y][x] >= 0 ? (generation - kvAge[y][x] - 1) : -1;
+  const freshCls = (lag <= 0) ? 'kv-fresh' : lag <= 1 ? '' : 'kv-stale';
+
+  const kvRows = nbs.map(([nx,ny]) => {
+    const nbAlive = cells[ny][nx];
+    const nbLag = kvAge[ny][nx] >= 0 ? (generation - kvAge[ny][nx] - 1) : -1;
+    const cls = nbLag <= 0 ? 'kv-fresh' : nbLag <= 1 ? '' : 'kv-stale';
+    const ageLabel = nbLag < 0 ? '—' : nbLag === 0 ? 'fresh' : `${nbLag}g old`;
+    return `<tr>
+      <td class="kv-key">cell/${nx}/${ny}</td>
+      <td class="kv-val">${nbAlive ? '1' : '0'}</td>
+      <td class="kv-age ${cls}">${ageLabel}</td>
+    </tr>`;
+  }).join('');
+
+  inspEl.innerHTML = `
+    <div class="insp-title">
+      Agent (${x}, ${y}) · :${port}
+      <span class="insp-alive-badge ${alive ? 'alive' : 'dead'}">${alive ? 'alive' : 'dead'}</span>
+      ${pinned ? '<span style="color:var(--muted);font-size:10px">📌 pinned</span>' : ''}
+    </div>
+    <div class="insp-section">
+      <div class="insp-section-label">Own KV entry</div>
+      <table class="kv-table">
+        <tr>
+          <td class="kv-key">cell/${x}/${y}</td>
+          <td class="kv-val">${alive ? '1' : '0'}</td>
+          <td class="kv-age ${freshCls}">${lag < 0 ? '—' : lag === 0 ? 'fresh' : lag+'g old'}</td>
+        </tr>
+      </table>
+    </div>
+    <div class="insp-section">
+      <div class="insp-section-label">Neighbour KV view (8 entries)</div>
+      <table class="kv-table">${kvRows}</table>
+    </div>
+    <div class="insp-section">
+      <div class="insp-section-label">Group memberships (${groups.length})</div>
+      <div class="group-list">${groups.map(g => `<span class="group-chip">${g}</span>`).join('')}</div>
+    </div>`;
+}
+
+// ── Signal log ─────────────────────────────────────────────
+let logSeq = 0;
+function addLog(scope, kind, detail, extra) {
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  const scopeLabels = {
+    sys: 'System', grp: 'Group', kv: 'KV·write', tomb: 'KV·tomb'
+  };
+  entry.innerHTML =
+    `<span class="log-ts">${String(logSeq++ % 1000).padStart(3,'0')}</span>` +
+    `<span class="log-scope ${scope}">${scopeLabels[scope]}</span>` +
+    `<span class="log-kind">${kind}</span>` +
+    `<span class="log-detail">${detail}</span>`;
+  logEl.prepend(entry);
+  while (logEl.children.length > MAX_LOG) logEl.lastChild.remove();
+}
+
+// ── Stats ──────────────────────────────────────────────────
+function countLive() {
+  let n = 0;
+  for (let y = 0; y < GRID; y++) for (let x = 0; x < GRID; x++) if (cells[y][x]) n++;
+  return n;
+}
+function updateStats() {
+  const live = countLive();
+  sGen.textContent   = generation;
+  sLive.textContent  = live;
+  sKv.textContent    = totalKvWrites;
+  sStale.textContent = totalStale;
+}
+
+// ── View switching ─────────────────────────────────────────
+document.querySelectorAll('.view-tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.view-tab').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const v = btn.dataset.view;
+    currentView = v;
+    gridEl.className = 'cell-grid ' + v + '-view';
+    clearKvView();
+    hintKv.classList.toggle('visible', v === 'kv');
+    hintSig.classList.toggle('visible', v === 'signal');
+    if (v === 'kv') updateKvView();
+    if (v === 'signal') animateSignalFlow();
+  });
+});
+
+// ── Gossip delay toggle ────────────────────────────────────
+delayToggle.addEventListener('click', () => {
+  gossipDelay = !gossipDelay;
+  delayToggle.classList.toggle('on', gossipDelay);
+  addLog('sys', gossipDelay ? 'gossip delay ON' : 'gossip delay OFF',
+    gossipDelay ? '~180ms/hop' : 'instant propagation', '');
+});
+
+// ── Playback controls ──────────────────────────────────────
+const playBtn = document.getElementById('btn-play');
+const stepBtn = document.getElementById('btn-step');
+const clearBtn = document.getElementById('btn-clear');
+const loadBtn  = document.getElementById('btn-load');
+const patSel   = document.getElementById('pattern-select');
+
+function setPlaying(p) {
+  playing = p;
+  playBtn.textContent = playing ? '⏸ Pause' : '▶ Play';
+  playBtn.classList.toggle('primary', !playing);
+  clearInterval(tickInterval);
+  if (playing) tickInterval = setInterval(() => tick(true), tickMs);
+}
+
+playBtn.addEventListener('click', () => setPlaying(!playing));
+stepBtn.addEventListener('click', () => { setPlaying(false); tick(true); });
+clearBtn.addEventListener('click', () => {
+  setPlaying(false);
+  cells     = Array.from({length: GRID}, () => new Array(GRID).fill(false));
+  kvAge     = Array.from({length: GRID}, () => new Array(GRID).fill(-1));
+  prevCells = Array.from({length: GRID}, () => new Array(GRID).fill(false));
+  generation = 0; totalKvWrites = 0; totalStale = 0;
+  staleSet.clear();
+  for (let y = 0; y < GRID; y++)
+    for (let x = 0; x < GRID; x++) {
+      cellEls[y][x].className = 'cell';
+      cellEls[y][x].style.background = '';
+    }
+  gridEl.className = 'cell-grid ' + currentView + '-view';
+  updateStats();
+});
+
+speedSldr.addEventListener('input', () => {
+  const v = parseInt(speedSldr.value);
+  tickMs = Math.round(2000 / (v + 1));
+  speedLbl.textContent = tickMs + 'ms';
+  if (playing) setPlaying(true);
+});
+
+// ── Patterns ───────────────────────────────────────────────
+const PATTERNS = {
+  glider:     [[1,0],[2,1],[0,2],[1,2],[2,2]],
+  rpentomino: [[1,0],[2,0],[0,1],[1,1],[1,2]],
+  blinker:    [[0,1],[1,1],[2,1]],
+  random:     null,
+};
+function loadPattern(name) {
+  cells     = Array.from({length: GRID}, () => new Array(GRID).fill(false));
+  kvAge     = Array.from({length: GRID}, () => new Array(GRID).fill(-1));
+  prevCells = Array.from({length: GRID}, () => new Array(GRID).fill(false));
+  const ox = 3, oy = 3;
+  if (name === 'random') {
+    for (let y = 0; y < GRID; y++)
+      for (let x = 0; x < GRID; x++) cells[y][x] = Math.random() < 0.30;
+  } else {
+    PATTERNS[name].forEach(([px,py]) => {
+      cells[(py+oy)%GRID][(px+ox)%GRID] = true;
+    });
+  }
+  // Seed kvAge for initially alive cells (they have "existed since gen 0")
+  cells.forEach((row, y) => row.forEach((v, x) => {
+    if (v) kvAge[y][x] = 0;
+  }));
+  staleSet.clear();
+  for (let y = 0; y < GRID; y++)
+    for (let x = 0; x < GRID; x++) {
+      cellEls[y][x].className = 'cell';
+      cellEls[y][x].style.background = '';
+      if (cells[y][x]) cellEls[y][x].classList.add('alive');
+    }
+  gridEl.className = 'cell-grid ' + currentView + '-view';
+  if (currentView === 'kv') updateKvView();
+  updateStats();
+  addLog('kv', `pattern: ${name}`, `${countLive()} live cells`, 'initial KV writes queued');
+}
+
+loadBtn.addEventListener('click', () => { setPlaying(false); loadPattern(patSel.value); });
+
+// ── Live (Rust) mode ───────────────────────────────────────
+// Polls http://127.0.0.1:8090/state served by examples/conway.rs.
+// The Rust binary returns JSON: { generation, grid, cells[][], kv_ages[][], live }
+// Switching source rebuilds the cell grid to match the server's grid size.
+
+const LIVE_PORT   = 8090;
+let liveMode      = false;
+let liveConnected = false;
+let livePollId    = null;
+let liveGridSize  = GRID; // updated when first live frame arrives
+
+const connDot       = document.getElementById('conn-dot');
+const liveHintInline= document.getElementById('live-hint-inline');
+
+function setConnected(ok) {
+  liveConnected = ok;
+  connDot.style.background    = ok ? 'var(--accent2)' : 'var(--accent4)';
+  connDot.style.boxShadow     = ok ? '0 0 5px var(--accent2)' : 'none';
+  liveHintInline.style.display = (!ok && liveMode) ? 'block' : 'none';
+}
+
+function rebuildGrid(n) {
+  // Rebuild the cell DOM for a different grid size.
+  // Cell size targets ~580px total width regardless of n.
+  const cellPx = Math.floor((580 - n * 2) / n);
+  gridEl.innerHTML = '';
+  // Reset 2D cellEls array
+  cellEls.length = 0;
+  for (let y = 0; y < n; y++) {
+    cellEls.push([]);
+    for (let x = 0; x < n; x++) {
+      const el = document.createElement('div');
+      el.className = 'cell';
+      el.addEventListener('click',      () => handleCellClick(x, y));
+      el.addEventListener('mouseenter', () => handleCellHover(x, y, true));
+      el.addEventListener('mouseleave', () => handleCellHover(x, y, false));
+      gridEl.appendChild(el);
+      cellEls[y].push(el);
+    }
+  }
+  gridEl.style.gridTemplateColumns = `repeat(${n}, ${cellPx}px)`;
+  gridEl.style.gridTemplateRows    = `repeat(${n}, ${cellPx}px)`;
+  cells     = Array.from({length: n}, () => new Array(n).fill(false));
+  kvAge     = Array.from({length: n}, () => new Array(n).fill(-1));
+  prevCells = Array.from({length: n}, () => new Array(n).fill(false));
+  liveGridSize = n;
+}
+
+function applyLiveFrame(data) {
+  const n = data.cells.length;
+
+  // Rebuild if grid size changed (first frame, or different binary)
+  if (n !== liveGridSize) {
+    rebuildGrid(n);
+    gridEl.className = 'cell-grid ' + currentView + '-view';
+    generation = 0;
+  }
+
+  generation = data.generation;
+
+  for (let y = 0; y < n; y++) {
+    for (let x = 0; x < n; x++) {
+      const was = cells[y][x];
+      const now = data.cells[y][x];
+      // kv_ages come directly from the Rust snapshot (generation when cell last changed)
+      kvAge[y][x] = data.kv_ages[y][x];
+      cells[y][x] = now;
+
+      const el = cellEls[y][x];
+      if (was !== now) {
+        el.classList.remove(now ? 'died' : 'born', 'stale');
+        void el.offsetWidth;
+        el.classList.add(now ? 'born' : 'died');
+        setTimeout(() => el.classList.remove('born', 'died'), 500);
+        addLog(now ? 'kv' : 'tomb',
+               now ? `set cell/${x}/${y}` : `tombstone cell/${x}/${y}`,
+               now ? '→ 1' : '→ 0', now ? 'born' : 'died');
+      }
+      el.classList.toggle('alive', now);
+    }
+  }
+
+  staleSet.clear(); // stale detection is server-side in live mode
+
+  if (currentView === 'kv') updateKvView();
+  updateStats();
+  addLog('sys', 'conway.tick', `gen ${generation}`, `↙ live · ${data.live} alive`);
+}
+
+async function pollLive() {
+  try {
+    const res = await fetch(`http://127.0.0.1:${LIVE_PORT}/state`,
+                            {signal: AbortSignal.timeout(2000)});
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    if (!liveConnected) setConnected(true);
+    applyLiveFrame(data);
+  } catch {
+    if (liveConnected) setConnected(false);
+  }
+}
+
+function switchSource(toLive) {
+  liveMode = toLive;
+
+  // Update source tab styles
+  document.querySelectorAll('#source-tabs .view-tab').forEach(b => {
+    b.classList.toggle('active', b.dataset.source === (toLive ? 'live' : 'sim'));
+  });
+
+  // Controls only meaningful in simulated mode
+  const simOnly = [playBtn, stepBtn, loadBtn, patSel];
+  simOnly.forEach(el => el.style.opacity = toLive ? '0.35' : '1');
+  simOnly.forEach(el => el.style.pointerEvents = toLive ? 'none' : '');
+
+  if (toLive) {
+    setPlaying(false);
+    // Rebuild to live grid size (will resize to server grid on first frame)
+    if (liveGridSize !== GRID) rebuildGrid(GRID);
+    setConnected(false);
+    liveHintInline.style.display = 'block';
+    pollLive(); // immediate first poll
+    livePollId = setInterval(pollLive, tickMs);
+  } else {
+    clearInterval(livePollId);
+    livePollId = null;
+    connDot.style.background = 'var(--muted)';
+    connDot.style.boxShadow  = 'none';
+    liveHintInline.style.display = 'none';
+    // Restore sim grid size and pattern
+    rebuildGrid(GRID);
+    gridEl.style.gridTemplateColumns = '';
+    gridEl.style.gridTemplateRows    = '';
+    gridEl.className = 'cell-grid ' + currentView + '-view';
+    loadPattern(patSel.value);
+  }
+}
+
+document.querySelectorAll('#source-tabs .view-tab').forEach(btn => {
+  btn.addEventListener('click', () => switchSource(btn.dataset.source === 'live'));
+});
+
+// ── Init ───────────────────────────────────────────────────
+loadPattern('glider');
+</script>
+</body>
+</html>

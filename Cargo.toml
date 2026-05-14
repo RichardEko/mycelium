@@ -1,0 +1,57 @@
+[package]
+name = "gossip_protocol"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.76"
+authors = ["gossip-protocol contributors"]
+description = "Gossip protocol implementation with resource management"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/example/gossip-protocol"
+readme = "README.md"
+keywords = ["distributed-systems", "gossip", "p2p", "protocol"]
+categories = ["network-programming", "asynchronous"]
+
+[features]
+default = ["cli"]
+cli = ["dep:tracing-subscriber"]
+
+[dependencies]
+# Core
+tokio = { version = "1.35", features = ["full"] }
+fastrand = "2"
+
+# Data structures
+dashmap = "5.4"
+papaya = "0.1"
+
+# Serialization
+serde = { version = "1.0", features = ["derive", "rc"] }
+ahash = "0.8"
+bincode = { version = "2", features = ["serde"] }
+bytes = { version = "1", features = ["serde"] }
+toml = "0.7"
+
+# Synchronization
+parking_lot = "0.12"
+
+# Error handling
+thiserror = "1.0"
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+
+[dev-dependencies]
+tokio     = { version = "1.35", features = ["full"] }
+criterion = { version = "0.5", features = ["async_tokio"] }
+
+[[bench]]
+name    = "throughput"
+harness = false
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+panic = "abort"
+incremental = false

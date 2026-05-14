@@ -1,0 +1,1234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Distributed AI Agent Platform — Engineering Roadmap</title>
+<style>
+  :root {
+    --bg:         #0d1117;
+    --surface:    #161b22;
+    --surface2:   #1c2128;
+    --surface3:   #21262d;
+    --border:     #30363d;
+    --accent:     #58a6ff;
+    --accent2:    #3fb950;
+    --accent3:    #d2a8ff;
+    --accent4:    #ffa657;
+    --accent5:    #ff7b72;
+    --muted:      #8b949e;
+    --text:       #e6edf3;
+    --text2:      #c9d1d9;
+    --radius:     8px;
+    --radius-lg:  14px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif;
+    font-size: 15px;
+    line-height: 1.7;
+    padding-bottom: 100px;
+  }
+
+  /* ─── Hero ─────────────────────────────────────────────────────── */
+  .hero {
+    background: radial-gradient(ellipse at 60% 0%, rgba(88,166,255,0.07) 0%, transparent 60%),
+                radial-gradient(ellipse at 20% 80%, rgba(210,168,255,0.05) 0%, transparent 50%),
+                var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 72px 40px 56px;
+    text-align: center;
+  }
+  .hero-eyebrow {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: rgba(88,166,255,0.08);
+    border: 1px solid rgba(88,166,255,0.2);
+    border-radius: 20px;
+    padding: 5px 16px;
+    margin-bottom: 24px;
+  }
+  .hero h1 {
+    font-size: 46px;
+    font-weight: 800;
+    letter-spacing: -0.025em;
+    line-height: 1.1;
+    margin-bottom: 18px;
+    background: linear-gradient(135deg, #e6edf3 0%, #8b949e 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .hero h1 em {
+    font-style: normal;
+    background: linear-gradient(135deg, #58a6ff 0%, #d2a8ff 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .hero-sub {
+    font-size: 18px;
+    color: var(--muted);
+    max-width: 640px;
+    margin: 0 auto 40px;
+    line-height: 1.65;
+  }
+  .hero-badges {
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  .badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text2);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 6px 14px;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .dot-live    { background: var(--accent2); box-shadow: 0 0 8px var(--accent2); animation: pulse 2s ease-in-out infinite; }
+  .dot-planned { background: var(--accent); }
+  .dot-future  { background: var(--muted); }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  /* ─── Layout ────────────────────────────────────────────────────── */
+  .container { max-width: 1080px; margin: 0 auto; padding: 0 32px; }
+
+  h2 {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 6px;
+  }
+  h3 {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text);
+    margin: 28px 0 12px;
+  }
+  p { color: var(--text2); margin-bottom: 16px; }
+
+  .section { margin-top: 72px; }
+  .section-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 32px;
+  }
+  .phase-tag {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 4px 12px;
+    border-radius: 20px;
+  }
+  .tag-done    { background: rgba(63,185,80,0.12);  color: var(--accent2); border: 1px solid rgba(63,185,80,0.25); }
+  .tag-p2      { background: rgba(88,166,255,0.10); color: var(--accent);  border: 1px solid rgba(88,166,255,0.25); }
+  .tag-p3      { background: rgba(210,168,255,0.10);color: var(--accent3); border: 1px solid rgba(210,168,255,0.25); }
+  .tag-p4      { background: rgba(255,166,87,0.10); color: var(--accent4); border: 1px solid rgba(255,166,87,0.25); }
+
+  /* ─── Philosophy block ──────────────────────────────────────────── */
+  .philosophy {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    margin: 32px 0;
+  }
+  @media (max-width: 900px) { .philosophy { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 500px) { .philosophy { grid-template-columns: 1fr; } }
+  .phil-item {
+    background: var(--surface);
+    padding: 28px 24px;
+  }
+  .phil-icon {
+    font-size: 28px;
+    margin-bottom: 12px;
+    display: block;
+  }
+  .phil-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 8px;
+  }
+  .phil-body {
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.6;
+    margin: 0;
+  }
+
+  /* ─── Architecture Stack ────────────────────────────────────────── */
+  .stack { margin: 32px 0; border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+  .stack-row {
+    display: grid;
+    grid-template-columns: 100px 1fr;
+    border-bottom: 1px solid var(--border);
+  }
+  .stack-row:last-child { border-bottom: none; }
+  .stack-num {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 18px 8px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+  .sn-1 { background: rgba(63,185,80,0.07);  color: var(--accent2); border-right: 2px solid var(--accent2); }
+  .sn-2 { background: rgba(88,166,255,0.06); color: var(--accent);  border-right: 2px solid var(--accent); }
+  .sn-3 { background: rgba(210,168,255,0.06);color: var(--accent3); border-right: 2px solid var(--accent3); }
+  .sn-4 { background: rgba(255,166,87,0.06); color: var(--accent4); border-right: 2px solid var(--accent4); }
+  .stack-body { padding: 20px 24px; }
+  .stack-title {
+    font-size: 15px;
+    font-weight: 700;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .stack-desc { font-size: 13px; color: var(--muted); margin: 0 0 14px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    font-family: "SF Mono","Fira Mono",monospace;
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text2);
+  }
+
+  /* ─── Signal/Boundary diagram ───────────────────────────────────── */
+  .signal-diagram {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 32px;
+    margin: 28px 0;
+    font-family: "SF Mono","Fira Mono",monospace;
+    font-size: 12.5px;
+  }
+  .sd-row {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    margin: 10px 0;
+    position: relative;
+  }
+  .node-box {
+    padding: 10px 16px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    border: 1px solid;
+    min-width: 100px;
+    text-align: center;
+  }
+  .node-sender   { background: rgba(88,166,255,0.1);  border-color: rgba(88,166,255,0.4);  color: var(--accent); }
+  .node-member   { background: rgba(63,185,80,0.1);   border-color: rgba(63,185,80,0.4);   color: var(--accent2); }
+  .node-nonmember{ background: rgba(139,148,158,0.08);border-color: rgba(139,148,158,0.3); color: var(--muted); }
+  .node-target   { background: rgba(210,168,255,0.1); border-color: rgba(210,168,255,0.4); color: var(--accent3); }
+  .arrow {
+    flex: 1;
+    height: 2px;
+    background: var(--border);
+    position: relative;
+    margin: 0 2px;
+    min-width: 20px;
+  }
+  .arrow-label {
+    position: absolute;
+    top: -18px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 10px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .act-label {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    margin-left: 8px;
+    white-space: nowrap;
+  }
+  .acts  { background: rgba(63,185,80,0.12);  color: var(--accent2); border: 1px solid rgba(63,185,80,0.3); }
+  .pass  { background: rgba(139,148,158,0.1); color: var(--muted);   border: 1px solid rgba(139,148,158,0.25); }
+  .act-target { background: rgba(210,168,255,0.12); color: var(--accent3); border: 1px solid rgba(210,168,255,0.3); }
+  .sd-legend {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--muted);
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+  }
+
+  /* ─── Two-col grid ──────────────────────────────────────────────── */
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 20px 0; }
+  @media (max-width: 700px) { .two-col { grid-template-columns: 1fr; } }
+
+  /* ─── Cards ─────────────────────────────────────────────────────── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 22px 22px 20px;
+    position: relative;
+    overflow: hidden;
+  }
+  .card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; }
+  .card.c1::before { background: linear-gradient(90deg, var(--accent2), transparent); }
+  .card.c2::before { background: linear-gradient(90deg, var(--accent),  transparent); }
+  .card.c3::before { background: linear-gradient(90deg, var(--accent3), transparent); }
+  .card.c4::before { background: linear-gradient(90deg, var(--accent4), transparent); }
+  .card-title { font-size: 14px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+  .card-sub   { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+  .card ul    { list-style: none; padding: 0; }
+  .card ul li {
+    font-size: 13px;
+    color: var(--text2);
+    padding: 3px 0 3px 18px;
+    position: relative;
+    line-height: 1.5;
+  }
+  .card ul li::before { content: '→'; position: absolute; left: 0; color: var(--muted); font-size: 11px; top: 5px; }
+
+  /* ─── Code blocks ───────────────────────────────────────────────── */
+  pre {
+    background: #0d1117;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 22px;
+    overflow-x: auto;
+    margin: 16px 0;
+    line-height: 1.65;
+  }
+  code { font-family: "SF Mono","Fira Mono","JetBrains Mono",monospace; font-size: 13px; color: var(--text2); }
+  .kw  { color: #ff7b72; }
+  .ty  { color: #ffa657; }
+  .str { color: #a5d6ff; }
+  .cmt { color: #8b949e; font-style: italic; }
+  .fn  { color: #d2a8ff; }
+  .lit { color: #79c0ff; }
+  .mac { color: #ffa657; }
+  .pn  { color: #e6edf3; }
+
+  /* ─── Comparison table ──────────────────────────────────────────── */
+  .compare {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 20px 0;
+    font-size: 13px;
+  }
+  .compare th {
+    text-align: left;
+    padding: 10px 16px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+  }
+  .compare td {
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(48,54,61,0.5);
+    color: var(--text2);
+    vertical-align: top;
+  }
+  .compare tr:last-child td { border-bottom: none; }
+  .compare td:first-child { color: var(--text); font-weight: 500; }
+
+  /* ─── Scope grid ────────────────────────────────────────────────── */
+  .scope-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    margin: 20px 0;
+  }
+  @media (max-width: 600px) { .scope-grid { grid-template-columns: 1fr; } }
+  .scope-cell {
+    background: var(--surface);
+    padding: 24px 20px;
+  }
+  .scope-name {
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .scope-s { color: var(--accent2); }
+  .scope-g { color: var(--accent); }
+  .scope-i { color: var(--accent3); }
+  .scope-rule {
+    font-family: "SF Mono","Fira Mono",monospace;
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+  .scope-desc { font-size: 12px; color: var(--text2); margin: 0; }
+
+  /* ─── Timeline ──────────────────────────────────────────────────── */
+  .timeline-wrap { margin: 32px 0; }
+  .tl-bar {
+    height: 6px;
+    background: var(--surface2);
+    border-radius: 3px;
+    margin-bottom: 24px;
+    position: relative;
+    overflow: hidden;
+  }
+  .tl-bar-fill {
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 20%;
+    background: linear-gradient(90deg, var(--accent2), rgba(63,185,80,0.2));
+    border-radius: 3px;
+  }
+  .tl-cols {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+  @media (max-width: 600px) { .tl-cols { grid-template-columns: 1fr 1fr; } }
+  .tl-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+  }
+  .tl-num   { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
+  .tl-title { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+  .tl-weeks { font-size: 11px; color: var(--muted); margin-bottom: 10px; }
+  .tl-badge {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 10px;
+    border-radius: 10px;
+  }
+  .tl-done    { background: rgba(63,185,80,0.12);  color: var(--accent2); }
+  .tl-medium  { background: rgba(88,166,255,0.10); color: var(--accent); }
+  .tl-future  { background: rgba(255,166,87,0.10); color: var(--accent4); }
+
+  /* ─── Legacy table ──────────────────────────────────────────────── */
+  .legacy-table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 20px 0; }
+  .legacy-table th {
+    text-align: left;
+    padding: 10px 14px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+  }
+  .legacy-table td {
+    padding: 13px 14px;
+    border-bottom: 1px solid rgba(48,54,61,0.4);
+    vertical-align: top;
+    color: var(--text2);
+    line-height: 1.6;
+  }
+  .legacy-table tr:last-child td { border-bottom: none; }
+  .doc-tag {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 10px;
+    white-space: nowrap;
+  }
+  .doc-obsolete { background: rgba(255,123,114,0.1); color: var(--accent5); border: 1px solid rgba(255,123,114,0.25); }
+  .doc-archive  { background: rgba(139,148,158,0.1); color: var(--muted);   border: 1px solid rgba(139,148,158,0.25); }
+  .doc-replace  { background: rgba(255,166,87,0.1);  color: var(--accent4); border: 1px solid rgba(255,166,87,0.25); }
+  .doc-update   { background: rgba(88,166,255,0.1);  color: var(--accent);  border: 1px solid rgba(88,166,255,0.25); }
+
+  hr { border: none; border-top: 1px solid var(--border); margin: 60px 0; }
+</style>
+</head>
+<body>
+
+<!-- ── Hero ── -->
+<div class="hero">
+  <div class="hero-eyebrow">Engineering Roadmap · 2026</div>
+  <h1>Distributed <em>AI Agent Platform</em></h1>
+  <p class="hero-sub">A swarm of AI agents that signals intent through receptors, discovers
+  capabilities through a shared medium, and moves heavy data over HTTP only when the payload
+  demands it — with no coordinator, no registry, no single point of failure.</p>
+  <div class="hero-badges">
+    <span class="badge"><span class="dot dot-live"></span> Layer 1: Transport — Complete</span>
+    <span class="badge"><span class="dot dot-live"></span> Layer 2: Signal / Boundary Mesh — Complete</span>
+    <span class="badge"><span class="dot dot-future"></span> Layers 3–4: Bulk Transfer + Observability — Planned</span>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- ── Design Philosophy ── -->
+  <div class="section">
+    <div class="section-head">
+      <h2>Design Philosophy</h2>
+    </div>
+
+    <div class="philosophy">
+      <div class="phil-item">
+        <span class="phil-icon">🧬</span>
+        <div class="phil-title">Chemical Signalling</div>
+        <p class="phil-body">Hormones flood the bloodstream. Every cell receives every signal.
+        Specificity comes from receptors — not from routing. This platform works the same way:
+        signals flood the cluster epidemically, boundaries decide who acts.</p>
+      </div>
+      <div class="phil-item">
+        <span class="phil-icon">⚡</span>
+        <div class="phil-title">Forwarding ≠ Acting</div>
+        <p class="phil-body">A node outside <code>group::nlp</code> forwards a group-scoped
+        signal at full speed without acting on it. Propagation is guaranteed regardless of
+        whether any intermediate node is in scope. No routing bottlenecks.</p>
+      </div>
+      <div class="phil-item">
+        <span class="phil-icon">🔌</span>
+        <div class="phil-title">Maximal Decoupling</div>
+        <p class="phil-body">One transport, one abstraction. Invokers fire a signal; they have
+        no knowledge of how the target is implemented. HTTP only appears in Layer 3, and only
+        for agents handling large payloads.</p>
+      </div>
+      <div class="phil-item">
+        <span class="phil-icon">🐜</span>
+        <div class="phil-title">Stigmergy</div>
+        <p class="phil-body">Workers write load state directly into the shared KV medium as
+        pheromone trails. Routing emerges from nodes reading that medium — not from explicit
+        coordination. Stale trails evaporate naturally via embedded timestamps.</p>
+      </div>
+    </div>
+
+    <table class="compare">
+      <thead>
+        <tr>
+          <th>Concern</th>
+          <th>Layer 1 KV Store (Pheromone Trail)</th>
+          <th>Layer 2 Signals</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Semantics</td>
+          <td>State — what is true right now</td>
+          <td>Events — something must be acted on immediately</td>
+        </tr>
+        <tr>
+          <td>Persistence</td>
+          <td>Durable, LWW, anti-entropy synced, visible to late joiners</td>
+          <td>Ephemeral, TTL-bounded, missed if not listening</td>
+        </tr>
+        <tr>
+          <td>Worker availability</td>
+          <td><code>load/&lt;node_id&gt;</code> — authoritative; evaporates via timestamp</td>
+          <td><code>contract.available</code> — fast-path notification only</td>
+        </tr>
+        <tr>
+          <td>Work routing</td>
+          <td>Read <code>load/*</code> to find candidates</td>
+          <td><code>invoke</code> / <code>invoke.result</code> — irreplaceable; no KV equivalent</td>
+        </tr>
+        <tr>
+          <td>Acute load events</td>
+          <td>Reflects new state after next advertise tick (5–30 s lag)</td>
+          <td><code>boundary.opaque</code> — immediate; upstream tears down connections now</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ── Architecture Stack ── -->
+  <div class="section">
+    <div class="section-head">
+      <h2>Architecture</h2>
+    </div>
+
+    <div class="stack">
+      <div class="stack-row">
+        <div class="stack-num sn-4">Layer<br>4</div>
+        <div class="stack-body">
+          <div class="stack-title">Observability <span class="phase-tag tag-p4">Phase 4</span></div>
+          <p class="stack-desc">Prometheus metrics across all layers via a single scrape endpoint. Signal throughput, boundary hit rates, invocation latency histograms, bulk transfer sizes.</p>
+          <div class="chips">
+            <span class="chip">metrics facade</span>
+            <span class="chip">prometheus exporter</span>
+            <span class="chip">latency histograms</span>
+            <span class="chip">signal_delivered_total</span>
+            <span class="chip">boundary_rejected_total</span>
+          </div>
+        </div>
+      </div>
+      <div class="stack-row">
+        <div class="stack-num sn-3">Layer<br>3</div>
+        <div class="stack-body">
+          <div class="stack-title">Bulk Transfer / AI Execution <span class="phase-tag tag-p3">Phase 3</span></div>
+          <p class="stack-desc">When payloads exceed practical signal size, a Layer 2 signal carries a ticket; Layer 3 moves the weight via HTTP. Streaming LLM responses live here. Introduces a distinct <code>Event</code> type for ordered, connection-scoped, flow-controlled events — same mental model as Layer 2 signals, different delivery guarantees.</p>
+          <div class="chips">
+            <span class="chip">reqwest</span>
+            <span class="chip">BulkTransferLayer</span>
+            <span class="chip">Event (distinct from Signal)</span>
+            <span class="chip">invoke.bulk ticket</span>
+            <span class="chip">SSE streaming</span>
+            <span class="chip">peers()</span>
+          </div>
+        </div>
+      </div>
+      <div class="stack-row">
+        <div class="stack-num sn-2">Layer<br>2</div>
+        <div class="stack-body">
+          <div class="stack-title">Signal / Boundary Mesh <span class="phase-tag tag-done">Complete</span></div>
+          <p class="stack-desc">Ephemeral events propagate epidemically. Boundaries (local receptors) decide action. Workers write pheromone trails into Layer 1 KV — routing emerges from the shared medium, not explicit selection. Variable opacity creates emergent backpressure under load.</p>
+          <div class="chips">
+            <span class="chip">WireMessage::Signal</span>
+            <span class="chip">Boundary · opacity</span>
+            <span class="chip">signal_rx / emit / signal_once</span>
+            <span class="chip">advertise · last_signal</span>
+            <span class="chip">scan_prefix("load/")</span>
+            <span class="chip">System / Group / Individual</span>
+            <span class="chip">pheromone trails</span>
+            <span class="chip">boundary.opaque</span>
+          </div>
+        </div>
+      </div>
+      <div class="stack-row">
+        <div class="stack-num sn-1">Layer<br>1</div>
+        <div class="stack-body">
+          <div class="stack-title">Gossip Transport <span class="phase-tag tag-done">Complete</span></div>
+          <p class="stack-desc">Lock-free epidemic KV propagation. LWW conflict resolution, anti-entropy sync, zero-copy fan-out. The bloodstream — general-purpose, knows nothing about contracts or signals.</p>
+          <div class="chips">
+            <span class="chip">GossipAgent</span>
+            <span class="chip">papaya lock-free</span>
+            <span class="chip">ShardedSeen</span>
+            <span class="chip">wire v6</span>
+            <span class="chip">zero-copy TTL</span>
+            <span class="chip">16KB coalesce</span>
+            <span class="chip">94 tests ✓</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Layer 2: Signal / Boundary ── -->
+  <div class="section">
+    <div class="section-head">
+      <h2>Layer 2 — Signal / Boundary Mesh</h2>
+      <span class="phase-tag tag-done">Complete · 94 tests</span>
+    </div>
+
+    <!-- Scope diagram -->
+    <h3>The Three Scopes</h3>
+    <div class="scope-grid">
+      <div class="scope-cell">
+        <div class="scope-name scope-s">System</div>
+        <div class="scope-rule">admits() → always true</div>
+        <p class="scope-desc">All agents in the cluster act. Global broadcasts, cluster-wide events.</p>
+      </div>
+      <div class="scope-cell">
+        <div class="scope-name scope-g">Group</div>
+        <div class="scope-rule">admits() → groups.contains(g)</div>
+        <p class="scope-desc">Only agents whose boundary includes the group name act. NLP agents, data processors, ops monitors — any named cohort. Used for emergent work routing.</p>
+      </div>
+      <div class="scope-cell">
+        <div class="scope-name scope-i">Individual</div>
+        <div class="scope-rule">admits() → id == self.node_id</div>
+        <p class="scope-desc">Only the target node acts. Direct replies (<code>invoke.result</code>) are the canonical use. Bypasses opacity — no routing alternative exists.</p>
+      </div>
+    </div>
+
+    <!-- Signal propagation diagram -->
+    <h3>Propagation — All Nodes Forward, Boundary Decides Action</h3>
+    <div class="signal-diagram">
+      <div style="font-size:11px; color:var(--muted); margin-bottom:16px; letter-spacing:0.06em; text-transform:uppercase;">
+        Group::nlp signal propagating through a mixed cluster
+      </div>
+      <div class="sd-row">
+        <div class="node-box node-sender">Emitter</div>
+        <div class="arrow"><span class="arrow-label">forwards + acts</span></div>
+        <div class="node-box node-member">nlp-agent-1</div>
+        <span class="act-label acts">● acts</span>
+        <div class="arrow" style="margin-left:12px;"><span class="arrow-label">forwards</span></div>
+        <div class="node-box node-nonmember" style="margin-left:2px;">ops-agent</div>
+        <span class="act-label pass">○ passes</span>
+        <div class="arrow" style="margin-left:12px;"><span class="arrow-label">forwards</span></div>
+        <div class="node-box node-member" style="margin-left:2px;">nlp-agent-2</div>
+        <span class="act-label acts">● acts</span>
+      </div>
+      <div class="sd-legend">
+        <span>● acts — boundary admits the scope</span>
+        <span>○ passes — forwards at full TTL speed, no action</span>
+        <span>All nodes forward regardless of membership</span>
+      </div>
+    </div>
+
+    <!-- Actual API -->
+    <h3>API — All on GossipAgent, No Wrapper</h3>
+<pre><code><span class="cmt">// Group membership — updates local boundary + gossips grp/&lt;name&gt;/&lt;node_id&gt;</span>
+agent.<span class="fn">join_group</span>(<span class="str">"nlp"</span>);
+agent.<span class="fn">leave_group</span>(<span class="str">"nlp"</span>);
+
+<span class="cmt">// Persistent handler — one receiver per kind per task</span>
+<span class="kw">let mut</span> rx = agent.<span class="fn">signal_rx</span>(<span class="str">"invoke"</span>);
+tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
+    <span class="kw">while let</span> <span class="ty">Some</span>(sig) = rx.<span class="fn">recv</span>().<span class="kw">await</span> {
+        <span class="kw">let</span> req: <span class="ty">InvokeRequest</span> = <span class="fn">decode</span>(&amp;sig.payload);
+        <span class="kw">let</span> result = <span class="fn">run_model</span>(&amp;req.payload).<span class="kw">await</span>;
+        agent.<span class="fn">emit</span>(
+            <span class="str">"invoke.result"</span>,
+            <span class="ty">SignalScope</span>::<span class="ty">Individual</span>(sig.sender),  <span class="cmt">// reply to specific caller</span>
+            <span class="fn">encode</span>(<span class="ty">InvokeResponse</span> { nonce: req.nonce, result }),
+        );
+    }
+});
+
+<span class="cmt">// One-shot correlation — register BEFORE emitting so no reply is missed</span>
+<span class="kw">let</span> nonce = <span class="fn">fastrand</span>::<span class="fn">u64</span>(..);
+<span class="kw">let</span> reply_fut = agent.<span class="fn">signal_once</span>(
+    <span class="str">"invoke.result"</span>,
+    <span class="ty">Duration</span>::<span class="fn">from_secs</span>(<span class="lit">5</span>),
+    <span class="kw">move</span> |s| s.nonce == nonce,    <span class="cmt">// channel registered synchronously on this call</span>
+);
+agent.<span class="fn">emit_async</span>(<span class="str">"invoke"</span>, <span class="ty">SignalScope</span>::<span class="ty">Group</span>(<span class="str">"nlp"</span>.<span class="fn">into</span>()), payload).<span class="kw">await</span>;
+<span class="kw">let</span> result = reply_fut.<span class="kw">await</span>;   <span class="cmt">// → Option&lt;Signal&gt;</span>
+
+<span class="cmt">// Periodic heartbeat — emits signal AND writes pheromone trail each tick</span>
+<span class="kw">let</span> load_key = <span class="mac">format!</span>(<span class="str">"load/{}"</span>, agent.<span class="fn">node_id</span>());
+<span class="kw">let</span> _handle = agent.<span class="fn">advertise</span>(
+    <span class="str">"contract.available"</span>,
+    <span class="ty">SignalScope</span>::<span class="ty">Group</span>(<span class="str">"nlp"</span>.<span class="fn">into</span>()),
+    <span class="ty">Duration</span>::<span class="fn">from_secs</span>(<span class="lit">10</span>),
+    <span class="kw">move</span> || {
+        <span class="kw">let</span> state = <span class="ty">LoadState</span> { queue_depth: QUEUE.<span class="fn">len</span>(), written_at_ms: <span class="fn">unix_ms_now</span>() };
+        agent2.<span class="fn">set</span>(load_key.<span class="fn">clone</span>(), <span class="fn">encode</span>(&amp;state));  <span class="cmt">// pheromone trail</span>
+        <span class="fn">encode</span>(&amp;state)                                    <span class="cmt">// signal payload</span>
+    },
+);</code></pre>
+
+    <!-- Pheromone trails -->
+    <h3>Stigmergic Load State — Pheromone Trails</h3>
+    <p>Workers write current load into the Layer 1 KV store at <code>load/&lt;node_id&gt;</code>.
+    Any node reads routing state directly from the shared medium — no local cache, no signal
+    handlers, no coordination. New nodes receive the full picture immediately via anti-entropy sync.</p>
+
+<pre><code><span class="cmt">// Read load state for all "nlp" workers at decision time</span>
+<span class="kw">let</span> candidates: <span class="ty">Vec</span>&lt;(<span class="ty">NodeId</span>, <span class="ty">LoadState</span>)&gt; = agent
+    .<span class="fn">scan_prefix</span>(<span class="str">"load/"</span>)
+    .<span class="fn">into_iter</span>()
+    .<span class="fn">filter_map</span>(|(k, b)| {
+        <span class="kw">let</span> state: <span class="ty">LoadState</span> = <span class="fn">decode</span>(&amp;b)?;
+        <span class="cmt">// Evaporation — discard entries older than 3 × advertise interval</span>
+        <span class="kw">if</span> <span class="fn">unix_ms_now</span>() - state.written_at_ms &gt; <span class="lit">30_000</span> { <span class="kw">return</span> <span class="ty">None</span>; }
+        <span class="kw">let</span> node_id = k.<span class="fn">strip_prefix</span>(<span class="str">"load/"</span>)?.<span class="fn">parse</span>().<span class="fn">ok</span>()?;
+        <span class="ty">Some</span>((node_id, state))
+    })
+    .<span class="fn">collect</span>();</code></pre>
+
+    <div class="two-col">
+      <div class="card c2">
+        <div class="card-title">Boundary — the Receptor</div>
+        <div class="card-sub">O(1) on the signal hot path</div>
+        <ul>
+          <li>In-memory AHashSet of group names</li>
+          <li>admits(scope) — single hashset lookup, no locks on delivery</li>
+          <li>join_group() / leave_group() update set + gossip KV entry</li>
+          <li>Variable opacity: probabilistic shedding under load</li>
+        </ul>
+      </div>
+      <div class="card c2">
+        <div class="card-title">Pheromone Trails</div>
+        <div class="card-sub">Stigmergy — routing from the medium</div>
+        <ul>
+          <li>Workers write <code>load/&lt;node_id&gt;</code> each advertise tick</li>
+          <li>Evaporation via embedded <code>written_at_ms</code> timestamp</li>
+          <li>Crashed workers' trails decay without coordination</li>
+          <li>Late joiners bootstrap immediately via anti-entropy</li>
+        </ul>
+      </div>
+      <div class="card c2">
+        <div class="card-title">Emergent Routing</div>
+        <div class="card-sub">No invoker selects a worker</div>
+        <ul>
+          <li>Invoke floods Group scope; workers compete to respond</li>
+          <li>Opaque workers shed signals — stop consuming without coordination</li>
+          <li>First valid reply wins via signal_once</li>
+          <li>On timeout, scan pheromone trails to decide retry vs. escalate</li>
+        </ul>
+      </div>
+      <div class="card c2">
+        <div class="card-title">Two-Timescale Load Signalling</div>
+        <div class="card-sub">Neural + hormonal — both needed</div>
+        <ul>
+          <li>Pheromone trail: 5–30 s, durable, visible to late joiners</li>
+          <li>boundary.opaque signal: immediate, connection teardown now</li>
+          <li>Signals handle the gap before the next KV write propagates</li>
+          <li>Use both — they are complementary, not redundant</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Signal roles table -->
+    <h3>Signal Kinds — Essential vs Pheromone-Covered</h3>
+    <table class="compare">
+      <thead>
+        <tr><th>Signal kind</th><th>Role</th><th>Pheromone covers it?</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>invoke</code></td><td>Work request — must reach a worker now</td><td>No — irreplaceable</td></tr>
+        <tr><td><code>invoke.result</code></td><td>Targeted reply — ephemeral by nature</td><td>No — irreplaceable</td></tr>
+        <tr><td><code>invoke.bulk</code></td><td>Layer 3 bulk transfer ticket</td><td>No — irreplaceable</td></tr>
+        <tr><td><code>boundary.opaque</code></td><td>Immediate overload — tear down connections now</td><td>No — fast-path complement to trail</td></tr>
+        <tr><td><code>boundary.transparent</code></td><td>Recovery — upstream can resume sending</td><td>No — fast-path complement</td></tr>
+        <tr><td><code>contract.available</code></td><td>Worker availability</td><td><strong>Yes</strong> — <code>load/&lt;node_id&gt;</code> is authoritative</td></tr>
+        <tr><td><code>contract.withdrawn</code></td><td>Worker gone</td><td><strong>Yes</strong> — tombstone / evaporation</td></tr>
+        <tr><td><code>cluster.event</code></td><td>Join / leave events</td><td><strong>Yes</strong> — <code>grp/&lt;name&gt;/&lt;node_id&gt;</code> entries</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ── Phase 3: Bulk Transfer ── -->
+  <div class="section">
+    <div class="section-head">
+      <h2>Phase 3 — Bulk Transfer / AI Execution</h2>
+      <span class="phase-tag tag-p3">3–4 weeks</span>
+    </div>
+
+    <p>When payloads exceed practical signal size — multi-KB prompts, model outputs,
+    streaming token responses — a Layer 2 signal carries a <em>ticket</em>. HTTP carries
+    the weight. Agents with only small payloads need no HTTP server at all.</p>
+
+<pre><code><span class="cmt">// Layer 2: coordination via signal</span>
+layer.<span class="fn">signal</span>(
+    <span class="ty">SignalScope</span>::<span class="ty">Individual</span>(target),
+    <span class="str">"invoke.bulk"</span>,
+    <span class="fn">encode</span>(<span class="ty">BulkInvokeRequest</span> { contract_id, corr_id, input_endpoint }),
+);
+
+<span class="cmt">// Layer 3: target fetches large input, runs model, streams response</span>
+<span class="cmt">// POST /invoke/corr_id  →  {large prompt bytes}</span>
+<span class="cmt">// GET  /result/corr_id  ←  token stream (SSE)</span>
+
+<span class="cmt">// Layer 2: completion notification back to caller</span>
+layer.<span class="fn">signal</span>(
+    <span class="ty">SignalScope</span>::<span class="ty">Individual</span>(caller),
+    <span class="str">"invoke.result"</span>,
+    <span class="fn">encode</span>(<span class="ty">InvokeResponse</span> { corr_id, result_endpoint }),
+);</code></pre>
+
+    <div class="two-col">
+      <div class="card c3">
+        <div class="card-title">What lives in Layer 3</div>
+        <div class="card-sub">Only the heavy-payload concerns</div>
+        <ul>
+          <li>reqwest HTTP client (rustls-tls, stream feature)</li>
+          <li>Optional HTTP server per agent (axum / hyper)</li>
+          <li>BulkTransferLayer — fetch input, return result</li>
+          <li>SSE / chunked streaming for LLM token streams</li>
+          <li>Distinct <code>Event</code> type for transport-bound events</li>
+          <li><code>peers()</code> for enumerating reachable nodes by NodeId</li>
+        </ul>
+      </div>
+      <div class="card c3">
+        <div class="card-title">What stays in Layer 2</div>
+        <div class="card-sub">Even for bulk workflows</div>
+        <ul>
+          <li>Signal to initiate the request (ticket only)</li>
+          <li>Signal to notify completion</li>
+          <li>Routing via pheromone trails and opacity</li>
+          <li>Group coordination around the invocation</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3>Layer 3 Eventing — Distinct from Layer 2 Signals</h3>
+    <p>Layer 3 introduces a distinct <code>Event</code> type for connection-scoped, ordered,
+    flow-controlled events riding a transport connection. The delivery guarantees differ
+    fundamentally from Layer 2 signals.</p>
+
+    <table class="compare">
+      <thead><tr><th>Property</th><th>Layer 2 Signal</th><th>Layer 3 Event</th></tr></thead>
+      <tbody>
+        <tr><td>Delivery</td><td>Epidemic flood — every node</td><td>Point-to-point transport (SSE, gRPC stream)</td></tr>
+        <tr><td>Ordering</td><td>None</td><td>Ordered per connection</td></tr>
+        <tr><td>Reliability</td><td>Best-effort — can be silently dropped</td><td>At-least-once on open stream; failure is explicit</td></tr>
+        <tr><td>Flow control</td><td>Probabilistic opacity shedding</td><td>HTTP/2 flow control, TCP backpressure</td></tr>
+        <tr><td>Use cases</td><td>Work routing, load coordination</td><td>Streaming tokens, cancel signals, progress events</td></tr>
+      </tbody>
+    </table>
+
+    <p><strong>Pattern reuse</strong>: the Layer 2 mental model transfers directly. Event kinds reuse
+    the same string constants (<code>invoke.result</code>, <code>boundary.opaque</code>). The
+    "emit to scope, receivers with matching state act" principle applies. Only the delivery
+    substrate changes — the type is distinct to make the guarantee difference explicit in code.</p>
+  </div>
+
+  <!-- ── Timeline ── -->
+  <div class="section">
+    <div class="section-head">
+      <h2>Delivery Timeline</h2>
+    </div>
+    <div class="timeline-wrap">
+      <div class="tl-bar"><div class="tl-bar-fill" style="width:50%;background:linear-gradient(90deg,var(--accent2),rgba(88,166,255,0.3))"></div></div>
+      <div class="tl-cols">
+        <div class="tl-card">
+          <div class="tl-num" style="color:var(--accent2)">Layer 1</div>
+          <div class="tl-title">Gossip Transport</div>
+          <div class="tl-weeks">Complete</div>
+          <span class="tl-badge tl-done">Done ✓</span>
+        </div>
+        <div class="tl-card">
+          <div class="tl-num" style="color:var(--accent2)">Layer 2</div>
+          <div class="tl-title">Signal / Boundary</div>
+          <div class="tl-weeks">Complete · 94 tests</div>
+          <span class="tl-badge tl-done">Done ✓</span>
+        </div>
+        <div class="tl-card">
+          <div class="tl-num" style="color:var(--accent3)">Phase 3</div>
+          <div class="tl-title">Bulk Transfer</div>
+          <div class="tl-weeks">Next</div>
+          <span class="tl-badge tl-medium">3–4 weeks</span>
+        </div>
+        <div class="tl-card">
+          <div class="tl-num" style="color:var(--accent4)">Phase 4</div>
+          <div class="tl-title">Observability</div>
+          <div class="tl-weeks">Parallel with Phase 3</div>
+          <span class="tl-badge tl-future">2 weeks</span>
+        </div>
+      </div>
+    </div>
+    <p style="font-size:13px; color:var(--muted); margin-top:12px;">
+      Layers 1 and 2 complete. Phase 3 begins next. Phase 4 can run in parallel.
+    </p>
+  </div>
+
+  <!-- ── Performance Baselines ── -->
+  <div class="section">
+    <div class="section-head">
+      <h2>Performance Baselines</h2>
+      <span class="phase-tag tag-done">Established</span>
+    </div>
+    <p>Measured on the development machine, release build (<code>cargo bench --bench throughput</code>).
+    Local hot-path only — no network I/O. Run <code>cargo bench</code> to regenerate on target hardware.
+    These are the floor numbers Layer 3 builds on top of.</p>
+
+    <h3>Layer 1 — KV Store</h3>
+    <table class="compare">
+      <thead><tr><th>Benchmark</th><th>Median</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>kv/set</code></td><td>151 ns</td><td>Local store write + gossip channel dispatch</td></tr>
+        <tr><td><code>kv/get</code> (hit)</td><td>16 ns</td><td>Lock-free papaya read</td></tr>
+        <tr><td><code>kv/get</code> (miss)</td><td>13 ns</td><td>Same path, no allocation on miss</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Layer 1 — <code>scan_prefix</code> · O(n) Characterisation</h3>
+    <p>Full store scan — no prefix indexing. At typical pheromone-trail sizes (100–1,000 entries) cost is
+    negligible relative to network latency. <strong>~1 ms threshold at 100,000 entries</strong> — monitor
+    if Layer 3 activity grows the store to that scale.</p>
+    <table class="compare">
+      <thead><tr><th>Store size</th><th>Matching entries</th><th>Median</th></tr></thead>
+      <tbody>
+        <tr><td>100</td><td>10</td><td>332 ns</td></tr>
+        <tr><td>1,000</td><td>10</td><td>2.7 µs</td></tr>
+        <tr><td>10,000</td><td>10</td><td>41 µs</td></tr>
+        <tr><td>10,000</td><td>100</td><td>49 µs</td></tr>
+        <tr><td style="color:var(--accent4);font-weight:600">100,000</td><td>10</td><td style="color:var(--accent4);font-weight:600">622 µs ⚠</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Layer 2 — Signal Fan-out</h3>
+    <p>Near-linear and cheap. 16 handlers costs less than 2× a single handler. The bottleneck at scale
+    will be gossip forwarding (network), not local delivery.</p>
+    <table class="compare">
+      <thead><tr><th>Registered handlers</th><th>Median</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>~700 ns</td><td>emit + boundary check + deliver + drain</td></tr>
+        <tr><td>4</td><td>~1.0 µs</td><td></td></tr>
+        <tr><td>16</td><td>~1.4 µs</td><td>Very flat — mpsc try_send dominates, scales well</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ── End state ── -->
+  <div class="section">
+    <div class="section-head"><h2>Layers 1 &amp; 2 in Practice</h2></div>
+
+<pre><code><span class="cmt">// ── Worker node ───────────────────────────────────────────────────────────</span>
+<span class="kw">let</span> agent = <span class="ty">Arc</span>::<span class="fn">new</span>(<span class="ty">GossipAgent</span>::<span class="fn">new</span>(node_id, config));
+agent.<span class="fn">start</span>().<span class="kw">await</span>?;
+
+<span class="cmt">// Join group — gossips grp/nlp/&lt;node_id&gt; into the KV store</span>
+agent.<span class="fn">join_group</span>(<span class="str">"nlp"</span>);
+
+<span class="cmt">// Advertise every 10 s — emits signal (fast) + writes pheromone trail (durable)</span>
+<span class="kw">let</span> load_key = <span class="mac">format!</span>(<span class="str">"load/{}"</span>, agent.<span class="fn">node_id</span>());
+<span class="kw">let</span> _handle = agent.<span class="fn">advertise</span>(
+    <span class="str">"contract.available"</span>,
+    <span class="ty">SignalScope</span>::<span class="ty">Group</span>(<span class="str">"nlp"</span>.<span class="fn">into</span>()),
+    <span class="ty">Duration</span>::<span class="fn">from_secs</span>(<span class="lit">10</span>),
+    <span class="kw">move</span> || {
+        <span class="kw">let</span> state = <span class="ty">LoadState</span> { queue_depth: QUEUE.<span class="fn">len</span>(), written_at_ms: <span class="fn">unix_ms_now</span>() };
+        agent2.<span class="fn">set</span>(load_key.<span class="fn">clone</span>(), <span class="fn">encode</span>(&amp;state));  <span class="cmt">// pheromone in the medium</span>
+        <span class="fn">encode</span>(&amp;state)
+    },
+);
+
+<span class="cmt">// Handle invocations — emit result back to the specific caller</span>
+<span class="kw">let mut</span> invoke_rx = agent.<span class="fn">signal_rx</span>(<span class="str">"invoke"</span>);
+tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
+    <span class="kw">while let</span> <span class="ty">Some</span>(sig) = invoke_rx.<span class="fn">recv</span>().<span class="kw">await</span> {
+        <span class="kw">let</span> req: <span class="ty">InvokeRequest</span> = <span class="fn">decode</span>(&amp;sig.payload);
+        <span class="kw">let</span> result = <span class="fn">run_model</span>(&amp;req.payload).<span class="kw">await</span>;
+        agent.<span class="fn">emit</span>(
+            <span class="str">"invoke.result"</span>,
+            <span class="ty">SignalScope</span>::<span class="ty">Individual</span>(sig.sender),
+            <span class="fn">encode</span>(<span class="ty">InvokeResponse</span> { nonce: req.nonce, result }),
+        );
+    }
+});
+
+<span class="cmt">// ── Invoker node ──────────────────────────────────────────────────────────</span>
+<span class="cmt">// Register BEFORE emitting — channel is live the moment signal_once() returns</span>
+<span class="kw">let</span> nonce = <span class="fn">fastrand</span>::<span class="fn">u64</span>(..);
+<span class="kw">let</span> reply_fut = agent.<span class="fn">signal_once</span>(
+    <span class="str">"invoke.result"</span>,
+    <span class="ty">Duration</span>::<span class="fn">from_secs</span>(<span class="lit">5</span>),
+    <span class="kw">move</span> |s| s.nonce == nonce,
+);
+<span class="cmt">// Emit to the group — routing emerges from opacity, no worker selected</span>
+agent.<span class="fn">emit_async</span>(<span class="str">"invoke"</span>, <span class="ty">SignalScope</span>::<span class="ty">Group</span>(<span class="str">"nlp"</span>.<span class="fn">into</span>()), payload).<span class="kw">await</span>;
+
+<span class="kw">match</span> reply_fut.<span class="kw">await</span> {
+    <span class="ty">Some</span>(sig) =&gt; <span class="fn">decode</span>(&amp;sig.payload),
+    <span class="ty">None</span> =&gt; {
+        <span class="cmt">// No reply — check pheromone trails to decide retry vs. escalate</span>
+        <span class="kw">let</span> any_live = agent.<span class="fn">scan_prefix</span>(<span class="str">"load/"</span>).<span class="fn">iter</span>()
+            .<span class="fn">filter_map</span>(|(_, b)| <span class="fn">decode</span>::&lt;<span class="ty">LoadState</span>&gt;(b))
+            .<span class="fn">any</span>(|s| <span class="fn">unix_ms_now</span>() - s.written_at_ms &lt; <span class="lit">30_000</span>);
+        <span class="kw">if</span> any_live { <span class="fn">retry_with_backoff</span>() } <span class="kw">else</span> { <span class="ty">Err</span>(<span class="str">"no workers"</span>) }
+    }
+}
+
+<span class="cmt">// ── Upstream node reacting to acute overload ─────────────────────────────</span>
+<span class="kw">let mut</span> opaque_rx = agent.<span class="fn">signal_rx</span>(<span class="str">"boundary.opaque"</span>);
+tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
+    <span class="kw">while let</span> <span class="ty">Some</span>(sig) = opaque_rx.<span class="fn">recv</span>().<span class="kw">await</span> {
+        <span class="cmt">// Fast-path: tear down connections before the pheromone trail updates</span>
+        http_pool.<span class="fn">drain_worker</span>(sig.sender);
+    }
+});</code></pre>
+  </div>
+
+  <!-- ── Legacy docs ── -->
+  <div class="section">
+    <div class="section-head"><h2>Legacy Documentation Status</h2></div>
+    <p>The existing documents describe a valid direction but an obsolete implementation.
+    None accurately reflect the current codebase or this architecture.</p>
+
+    <table class="legacy-table">
+      <thead>
+        <tr><th>Document</th><th>Problem</th><th>Action</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Gossip_Protocol_Locking_Model.docx</strong></td>
+          <td>Describes a mutex-based <code>LockManager</code> with six lock levels, deadlock detection stack, and per-level metrics. This architecture was replaced entirely by lock-free papaya + ShardedSeen. Neither <code>LockManager</code> nor <code>LockLevel</code> exist.</td>
+          <td><span class="doc-tag doc-obsolete">Architecturally Obsolete</span></td>
+        </tr>
+        <tr>
+          <td><strong>Gossip_Architecture_Guide.pages</strong></td>
+          <td>References the lock hierarchy, a <code>TaskManager</code> with priority levels, and <code>EnhancedGossipAgent</code> as if they currently exist. None do.</td>
+          <td><span class="doc-tag doc-replace">Replace after Phase 2</span></td>
+        </tr>
+        <tr>
+          <td><strong>Gossip_Runtime_Guide.pages</strong></td>
+          <td>TOML config section partially accurate. Task priority hierarchy does not match the current agent startup sequence.</td>
+          <td><span class="doc-tag doc-update">Update to GossipConfig</span></td>
+        </tr>
+        <tr>
+          <td><strong>Gossip-AI-Arch.md</strong></td>
+          <td>Vision directionally correct. Implementation details stale: DashMap, HTTP-first invocation, no signal layer, no boundary concept.</td>
+          <td><span class="doc-tag doc-replace">Superseded by this document</span></td>
+        </tr>
+        <tr>
+          <td><strong>DeepSeek-GossipAIstack.md</strong></td>
+          <td>Useful early brainstorm. Not a specification. Pre-optimisation types; HTTP-centric design without the signal/boundary abstraction.</td>
+          <td><span class="doc-tag doc-archive">Archive as early sketch</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ── Design Position ── -->
+  <div class="section">
+    <div class="section-head">
+      <h2>Design Position</h2>
+    </div>
+
+    <p>Being precise about what is prior art is as important as identifying what is genuinely new.
+    This architecture synthesises established ideas. The differentiation lies in the combination
+    and the context.</p>
+
+    <h3>Prior Art</h3>
+    <table class="compare">
+      <thead>
+        <tr><th>Concept</th><th>Prior Art</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Epidemic gossip propagation</td>
+          <td>Demers et al. 1987 · Cassandra, Consul, Redis Cluster</td>
+        </tr>
+        <tr>
+          <td>Scope-filtered pub/sub</td>
+          <td>NATS subjects / queue groups · DDS partitions · MQTT topic trees · SIENA content-based routing (1999)</td>
+        </tr>
+        <tr>
+          <td>Application-layer broadcast filtering</td>
+          <td>Implicit in all gossip implementations</td>
+        </tr>
+        <tr>
+          <td>Chemical computing as design metaphor</td>
+          <td>Berry &amp; Boudol, <em>Chemical Abstract Machine</em>, 1990</td>
+        </tr>
+        <tr>
+          <td>Actor-model group routing</td>
+          <td>Erlang process groups · Akka Cluster distributed pub/sub</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>What Is Genuinely Differentiated</h3>
+    <div class="two-col" style="margin-top:16px;">
+      <div class="card c2">
+        <div class="card-title">1 · Broker-less scope filtering</div>
+        <div class="card-sub">with epidemic delivery guarantees</div>
+        <ul>
+          <li>NATS, Kafka require a broker cluster to route by scope</li>
+          <li>Here scope is a pure application-layer filter</li>
+          <li>No routing infrastructure to operate or fail</li>
+          <li>Group signals reach every node; boundary decides action</li>
+        </ul>
+      </div>
+      <div class="card c2">
+        <div class="card-title">2 · Group topology as KV state</div>
+        <div class="card-sub">in the same store, not a separate registry</div>
+        <ul>
+          <li>Most systems: separate Consul/etcd + separate message bus</li>
+          <li>Here group membership IS a gossip KV entry</li>
+          <li>Same propagation, same LWW, same visibility</li>
+          <li>Cluster is self-describing — zero extra infrastructure</li>
+        </ul>
+      </div>
+      <div class="card c2">
+        <div class="card-title">3 · State and events on one transport</div>
+        <div class="card-sub">one wire format, two semantic modes</div>
+        <ul>
+          <li>KV state: LWW, persistent, queryable, anti-entropy sync'd</li>
+          <li>Signals: TTL-bounded, ephemeral, nonce-dedup'd</li>
+          <li>Typically requires two separate systems</li>
+          <li>One embedded library; no external dependencies</li>
+        </ul>
+      </div>
+      <div class="card c2">
+        <div class="card-title">4 · NodeId as contract address</div>
+        <div class="card-sub">no HTTP endpoint, no service registry</div>
+        <ul>
+          <li>LangChain, AutoGPT, CrewAI: invocation routes to HTTP URLs</li>
+          <li>Here the address IS the node's gossip identity</li>
+          <li>No URL to manage, no port to expose</li>
+          <li>The gossip network is the addressing layer</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3 style="margin-top:32px;">Closest Comparison: NATS.io</h3>
+    <p>NATS is the nearest existing production system with subject-based messaging,
+    queue groups, and cluster-wide gossip membership. The gaps:</p>
+    <table class="compare">
+      <thead><tr><th>Dimension</th><th>NATS.io</th><th>This design</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Infrastructure</td>
+          <td>External NATS server cluster required</td>
+          <td>Embedded library — one Cargo dependency, zero servers</td>
+        </tr>
+        <tr>
+          <td>KV state</td>
+          <td>JetStream (separate subsystem)</td>
+          <td>Same gossip store as signals</td>
+        </tr>
+        <tr>
+          <td>Capability advertisement</td>
+          <td>Not provided</td>
+          <td>Contract registry built on gossip KV</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div style="background:linear-gradient(135deg,rgba(88,166,255,0.04),rgba(210,168,255,0.04));
+                border:1px solid rgba(88,166,255,0.15); border-radius:var(--radius-lg);
+                padding:28px 32px; margin-top:28px;">
+      <p style="font-size:16px; font-style:italic; color:var(--text2); margin:0; line-height:1.75;">
+        The specific combination is novel and potentially paper-worthy. Each individual concept
+        — epidemic gossip, boundary filtering, stigmergy, chemical signalling as design metaphor
+        — has prior art. What is genuinely new is the <strong style="color:var(--text);font-style:normal;">
+        unification of epidemic KV state, ephemeral scoped signals, stigmergic pheromone trails,
+        and emergent load-adaptive routing in a single embedded library</strong>, grounded in
+        biological CAS principles as first-class design constraints rather than post-hoc metaphor.
+        The two-timescale coordination model (neural signals + hormonal trails) applied to
+        distributed AI agent orchestration has no direct precedent in the literature.
+      </p>
+    </div>
+  </div>
+
+  <!-- ── Footer ── -->
+  <div style="margin-top:72px; padding-top:24px; border-top:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+    <span style="font-size:12px; color:var(--muted);">gossip_protocol · Engineering Roadmap · 2026-05-14</span>
+    <span style="font-size:12px; color:var(--muted);">Layers 1 &amp; 2 complete · Phase 3 next · Chemical signalling + stigmergy</span>
+  </div>
+
+</div>
+</body>
+</html>
