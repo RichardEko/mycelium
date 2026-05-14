@@ -41,15 +41,15 @@ fn raise_fd_limit(_: u64) {}
 const GRID: usize = 8;
 const BASE_PORT: u16 = 52000;
 const HTTP_PORT: u16 = 8090;
-const TICK_MS: u64 = 1_100;
-const RENDER_OFFSET_MS: u64 = 400;
+const TICK_MS: u64 = 300;
+const RENDER_OFFSET_MS: u64 = 180;
 const SETTLE_MS: u64 = 5_000;
 // Two-phase update: tick (read phase) → WRITE_DELAY_MS → write (write phase).
 // All 64 agents read neighbours before any agent writes, preventing race-condition
 // pattern corruption when tasks execute concurrently.
 const TICK_KIND:       &str = "conway.tick";
 const WRITE_KIND:      &str = "conway.write";
-const WRITE_DELAY_MS:  u64  = 200;
+const WRITE_DELAY_MS:  u64  = 60;
 
 const GLIDER: &[(usize, usize)] = &[(1, 0), (2, 1), (0, 2), (1, 2), (2, 2)];
 

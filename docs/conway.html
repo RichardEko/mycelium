@@ -82,120 +82,14 @@
   }
   .view-tab:hover:not(.active) { color: var(--text2); }
 
-  /* ── Cell grid ───────────────────────────────────────────── */
+  /* ── Canvas grid ─────────────────────────────────────────── */
   .grid-wrap { position: relative; }
-  .cell-grid {
-    display: grid;
-    grid-template-columns: repeat(16, 34px);
-    grid-template-rows: repeat(16, 34px);
-    gap: 2px;
-    background: var(--surface);
+  #cell-canvas {
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 7px;
+    display: block;
+    cursor: crosshair;
     user-select: none;
-  }
-
-  .cell {
-    border-radius: 3px;
-    background: var(--surface2);
-    border: 1px solid transparent;
-    cursor: pointer;
-    transition: background 0.1s, border-color 0.1s, box-shadow 0.1s;
-    position: relative;
-    font-size: 8px;
-    font-family: monospace;
-    color: transparent;
-    display: flex; align-items: center; justify-content: center;
-  }
-  .cell:hover { border-color: var(--border); }
-
-  /* ── Life view states ────────────────────────────────────── */
-  .life-view .cell.alive {
-    background: var(--accent2); border-color: #56d364;
-    box-shadow: 0 0 5px rgba(63,185,80,0.35);
-  }
-  /* Forwarding-only: receives tick signal, in no relevant group, just forwards */
-  .life-view .cell.fwd-flash {
-    animation: fwdFlash 0.4s ease-out forwards;
-  }
-  @keyframes fwdFlash {
-    0%   { border-color: rgba(88,166,255,0.35); box-shadow: inset 0 0 0 1px rgba(88,166,255,0.2); }
-    100% { border-color: transparent; box-shadow: none; }
-  }
-  /* Group member acting on a signal */
-  .life-view .cell.acting {
-    animation: actPulse 0.45s ease-out forwards;
-  }
-  @keyframes actPulse {
-    0%   { border-color: var(--accent3); box-shadow: 0 0 10px rgba(210,168,255,0.6); }
-    100% { border-color: transparent; box-shadow: none; }
-  }
-  /* Born / died */
-  .life-view .cell.born { animation: born 0.4s cubic-bezier(0.34,1.56,0.64,1) forwards; }
-  @keyframes born {
-    0%   { transform: scale(0.5); background: #7ee787; box-shadow: 0 0 12px rgba(126,231,135,0.9); }
-    100% { transform: scale(1); }
-  }
-  .life-view .cell.died { animation: died 0.4s ease-out forwards; }
-  @keyframes died {
-    0%   { background: #ff7b72; box-shadow: 0 0 10px rgba(255,123,114,0.7); }
-    100% { background: var(--surface2); box-shadow: none; }
-  }
-  /* Stale state: computed from gossip lag */
-  .life-view .cell.stale {
-    outline: 2px solid rgba(255,166,87,0.7);
-    outline-offset: -2px;
-  }
-  /* Correction after stale */
-  .life-view .cell.correcting { animation: correcting 0.5s ease-out forwards; }
-  @keyframes correcting {
-    0%   { box-shadow: 0 0 12px rgba(255,166,87,0.9); }
-    100% { box-shadow: none; }
-  }
-
-  /* Hover neighbour highlight (group membership visualisation) */
-  .cell.nb-hover {
-    border-color: var(--accent3) !important;
-    box-shadow: 0 0 8px rgba(210,168,255,0.5) !important;
-    z-index: 3;
-  }
-  .cell.self-hover {
-    border-color: var(--accent) !important;
-    box-shadow: 0 0 10px rgba(88,166,255,0.6) !important;
-    z-index: 4;
-  }
-
-  /* ── KV freshness view ───────────────────────────────────── */
-  /* Overrides applied via JS inline style: background set to freshness colour */
-  .kv-view .cell {
-    transition: background 0.3s;
-    border-color: transparent !important;
-  }
-  .kv-view .cell.alive { box-shadow: none; }
-
-  /* ── Signal flow view ────────────────────────────────────── */
-  .signal-view .cell { transition: background 0.15s; }
-  .signal-view .cell.sig-act {
-    background: rgba(210,168,255,0.6);
-    border-color: var(--accent3);
-    box-shadow: 0 0 8px rgba(210,168,255,0.4);
-  }
-  .signal-view .cell.sig-fwd {
-    background: rgba(88,166,255,0.2);
-    border-color: rgba(88,166,255,0.4);
-  }
-
-  /* KV write propagation ring */
-  .cell.kv-write { animation: kvWrite 0.5s ease-out forwards; }
-  @keyframes kvWrite {
-    0%   { box-shadow: 0 0 0 0 rgba(63,185,80,0.8); }
-    100% { box-shadow: 0 0 0 10px rgba(63,185,80,0); }
-  }
-  .cell.kv-recv { animation: kvRecv 0.4s ease-out forwards; }
-  @keyframes kvRecv {
-    0%   { box-shadow: 0 0 0 0 rgba(63,185,80,0.5); }
-    100% { box-shadow: 0 0 0 6px rgba(63,185,80,0); }
   }
 
   /* ── Controls ────────────────────────────────────────────── */
@@ -438,7 +332,7 @@
 
     <!-- Grid -->
     <div class="grid-wrap">
-      <div class="cell-grid life-view" id="grid"></div>
+      <canvas id="cell-canvas"></canvas>
     </div>
 
     <!-- Controls -->
@@ -616,7 +510,6 @@ let currentView = 'life';
 let signalSource = {x: 0, y: 0};
 
 // ── DOM ────────────────────────────────────────────────────
-const gridEl     = document.getElementById('grid');
 const inspEl     = document.getElementById('inspector');
 const logEl      = document.getElementById('log');
 const sGen       = document.getElementById('s-gen');
@@ -629,20 +522,151 @@ const speedLbl   = document.getElementById('speed-lbl');
 const hintKv     = document.getElementById('hint-kv');
 const hintSig    = document.getElementById('hint-signal');
 
-// ── Build grid DOM ─────────────────────────────────────────
-const cellEls = [];
-for (let y = 0; y < GRID; y++) {
-  cellEls.push([]);
-  for (let x = 0; x < GRID; x++) {
-    const el = document.createElement('div');
-    el.className = 'cell';
-    el.addEventListener('click',      () => handleCellClick(x, y));
-    el.addEventListener('mouseenter', () => handleCellHover(x, y, true));
-    el.addEventListener('mouseleave', () => handleCellHover(x, y, false));
-    gridEl.appendChild(el);
-    cellEls[y].push(el);
+// ── Canvas ─────────────────────────────────────────────────
+const canvas = document.getElementById('cell-canvas');
+const ctx    = canvas.getContext('2d');
+const PAD    = 7;   // px padding inside canvas border
+const GAP    = 2;   // px gap between cells
+const dpr    = window.devicePixelRatio || 1;
+let   cellPx = 34;  // cell size in CSS px; updated by rebuildGrid
+
+// Per-cell animation state (values 0→1, decay each frame)
+let cellAnim = [];
+const makeCellAnim = () =>
+  ({ born:0, died:0, acting:0, fwd:0, sigAct:0, sigFwd:0, kvRecv:0,
+     nbHover:false, selfHover:false });
+function resetCellAnim(n) {
+  cellAnim = Array.from({length:n}, () => Array.from({length:n}, makeCellAnim));
+}
+
+// Decay speeds (units: per second, so 2.5 → fully faded in 0.4 s)
+const DECAY = { born:2.5, died:2.5, acting:2.5, fwd:2.5, sigAct:1.8, sigFwd:1.8, kvRecv:3.0 };
+
+// ── Color palette ──────────────────────────────────────────
+const C_ALIVE  = [30,160,60];
+const C_DEAD   = [25, 35,40];
+const C_BORN   = [120,255,120];
+const C_DIED   = [180, 30,30];
+const C_FWD    = [40,  80,180];
+const C_ACTING = [130,210,90];
+const C_SIGACT = [210,168,255];
+const C_SIGFWD = [88, 166,255];
+const C_KVRECV = [63, 185, 80];
+const C_NEVER  = [20,  40, 55];
+const KV_COLOURS = [
+  [63,185,80],[95,175,65],[140,165,50],[195,155,45],[255,166,87],[210,100,65],
+];
+
+function lerpC([r1,g1,b1],[r2,g2,b2],t) {
+  t = t<0?0:t>1?1:t;
+  return [(r1+(r2-r1)*t)|0, (g1+(g2-g1)*t)|0, (b1+(b2-b1)*t)|0];
+}
+function rgb([r,g,b]) { return `rgb(${r},${g},${b})`; }
+function kvColorRgb(y,x) {
+  const age = kvAge[y][x];
+  if (age < 0) return [...C_NEVER];
+  return [...KV_COLOURS[Math.max(0,Math.min(generation-age, KV_COLOURS.length-1))]];
+}
+
+// ── Draw frame ─────────────────────────────────────────────
+function drawFrame() {
+  const sz = cellPx, step = sz + GAP;
+  const W = PAD*2 + G*step - GAP;
+  ctx.fillStyle = '#161b22';
+  ctx.fillRect(0, 0, W, W);
+
+  for (let y = 0; y < G; y++) {
+    for (let x = 0; x < G; x++) {
+      const px = PAD + x*step, py = PAD + y*step;
+      const alive = cells[y][x];
+      const a = cellAnim[y][x];
+
+      let c = alive ? [...C_ALIVE] : [...C_DEAD];
+
+      if (currentView === 'life') {
+        if (a.born   > 0) c = lerpC(c, C_BORN,   a.born);
+        if (a.died   > 0) c = lerpC(c, C_DIED,   a.died);
+        if (a.fwd    > 0) c = lerpC(c, C_FWD,    a.fwd * 0.55);
+        if (a.acting > 0) c = lerpC(c, C_ACTING, a.acting);
+        if (a.kvRecv > 0) c = lerpC(c, C_KVRECV, a.kvRecv * 0.35);
+      } else if (currentView === 'kv') {
+        c = kvColorRgb(y, x);
+        if (a.kvRecv > 0) c = lerpC(c, C_KVRECV, a.kvRecv * 0.4);
+      } else {
+        if (a.sigAct > 0) c = lerpC(c, C_SIGACT, a.sigAct * 0.75);
+        if (a.sigFwd > 0) c = lerpC(c, C_SIGFWD, a.sigFwd * 0.45);
+      }
+
+      if (a.nbHover)   c = lerpC(c, [200,200,50],  0.45);
+      if (a.selfHover) c = lerpC(c, [255,255,100], 0.55);
+
+      ctx.fillStyle = rgb(c);
+      ctx.fillRect(px, py, sz, sz);
+
+      // Dead cell border; hover borders
+      if (a.selfHover) {
+        ctx.strokeStyle = '#58a6ff'; ctx.lineWidth = 1.5;
+        ctx.strokeRect(px+0.75, py+0.75, sz-1.5, sz-1.5);
+      } else if (a.nbHover) {
+        ctx.strokeStyle = '#d2a8ff'; ctx.lineWidth = 1;
+        ctx.strokeRect(px+0.5, py+0.5, sz-1, sz-1);
+      } else if (currentView === 'life' && staleSet.has(`${x},${y}`)) {
+        ctx.strokeStyle = 'rgba(255,166,87,0.8)'; ctx.lineWidth = 1.5;
+        ctx.strokeRect(px+0.75, py+0.75, sz-1.5, sz-1.5);
+      } else if (!alive) {
+        ctx.strokeStyle = 'rgba(48,54,61,0.8)'; ctx.lineWidth = 0.5;
+        ctx.strokeRect(px+0.5, py+0.5, sz-1, sz-1);
+      }
+    }
   }
 }
+
+// ── RAF animation loop ─────────────────────────────────────
+let rafTs = 0;
+function animLoop(ts) {
+  const dt = Math.min((ts - rafTs) / 1000, 0.1);
+  rafTs = ts;
+  if (dt > 0) {
+    for (let y = 0; y < G; y++)
+      for (let x = 0; x < G; x++) {
+        const a = cellAnim[y][x];
+        for (const k in DECAY) a[k] = Math.max(0, a[k] - dt * DECAY[k]);
+      }
+  }
+  drawFrame();
+  requestAnimationFrame(animLoop);
+}
+
+// ── Canvas mouse events ────────────────────────────────────
+function canvasToCell(e) {
+  const r = canvas.getBoundingClientRect();
+  const mx = e.clientX - r.left - PAD;
+  const my = e.clientY - r.top  - PAD;
+  const x = Math.floor(mx / (cellPx + GAP));
+  const y = Math.floor(my / (cellPx + GAP));
+  return (x >= 0 && x < G && y >= 0 && y < G) ? [x,y] : null;
+}
+let lastHoverCell = null;
+canvas.addEventListener('click', e => {
+  const c = canvasToCell(e); if (c) handleCellClick(...c);
+});
+canvas.addEventListener('mousemove', e => {
+  const c = canvasToCell(e);
+  if (c) {
+    const [x,y] = c;
+    if (!lastHoverCell || lastHoverCell[0]!==x || lastHoverCell[1]!==y) {
+      if (lastHoverCell) handleCellHover(...lastHoverCell, false);
+      handleCellHover(x, y, true);
+      lastHoverCell = [x,y];
+    }
+  } else if (lastHoverCell) {
+    handleCellHover(...lastHoverCell, false);
+    lastHoverCell = null;
+  }
+});
+canvas.addEventListener('mouseleave', () => {
+  if (lastHoverCell) { handleCellHover(...lastHoverCell, false); lastHoverCell = null; }
+});
 
 // ── Conway helpers ─────────────────────────────────────────
 function wrap(v) { return ((v % G) + G) % G; }
@@ -669,21 +693,15 @@ function gossipHops(sx, sy, tx, ty) {
 // touch other cells' kvAge, which would falsely reset their freshness).
 function gossipKvWrite(x, y) {
   totalKvWrites++;
-  kvAge[y][x] = generation; // ONLY this cell's age changes
+  kvAge[y][x] = generation;
+  cellAnim[y][x].kvRecv = 1.0; // source flash
 
-  // Animate the gossip wave: rings expand outward from the writer.
-  // With gossip delay on, the wave is slowed to the hop interval (~180ms/hop).
-  // Without delay the wave is cosmetic only (still looks good).
   const hopMs = gossipDelay ? 180 : 55;
   for (let ty = 0; ty < G; ty++) {
     for (let tx = 0; tx < G; tx++) {
       if (tx === x && ty === y) continue;
       const hops = gossipHops(x, y, tx, ty);
-      setTimeout(() => {
-        cellEls[ty][tx].classList.add('kv-recv');
-        setTimeout(() => cellEls[ty][tx].classList.remove('kv-recv'), 300);
-        if (currentView === 'kv') updateKvView();
-      }, hops * hopMs);
+      setTimeout(() => { cellAnim[ty][tx].kvRecv = 1.0; }, hops * hopMs);
     }
   }
 }
@@ -756,123 +774,42 @@ function tick(animate = true) {
 
   // 4. Animate and log
   if (animate) {
-    // System tick pulse (wave from 0,0)
+    // System tick pulse wave from signalSource
     if (currentView === 'life') {
-      for (let y = 0; y < GRID; y++) {
-        for (let x = 0; x < GRID; x++) {
-          const d = (x + y) * 16;
-          const el = cellEls[y][x];
-          const isActing = neighbours(signalSource.x, signalSource.y)
-                             .some(([nx,ny]) => nx===x && ny===y);
-          setTimeout(() => {
-            el.classList.add(isActing ? 'acting' : 'fwd-flash');
-            setTimeout(() => el.classList.remove('acting', 'fwd-flash'), 500);
-          }, d);
-        }
-      }
+      const actingNbs = new Set(neighbours(signalSource.x, signalSource.y).map(([nx,ny])=>`${nx},${ny}`));
+      for (let y = 0; y < G; y++)
+        for (let x = 0; x < G; x++)
+          setTimeout(() => { cellAnim[y][x][actingNbs.has(`${x},${y}`) ? 'acting' : 'fwd'] = 1.0; }, (x+y)*16);
     }
 
-    // Born / died animations + KV write rings
-    born.forEach(([x,y]) => {
-      const el = cellEls[y][x];
-      el.classList.remove('died', 'stale');
-      void el.offsetWidth;
-      el.classList.add('born');
-      el.classList.toggle('alive', true);
-      setTimeout(() => el.classList.remove('born'), 500);
-      addLog('kv', `set cell/${x}/${y}`, '→ 1', `born`);
-      el.classList.add('kv-write');
-      setTimeout(() => el.classList.remove('kv-write'), 550);
-    });
-    died.forEach(([x,y]) => {
-      const el = cellEls[y][x];
-      el.classList.remove('born', 'stale');
-      void el.offsetWidth;
-      el.classList.add('died');
-      el.classList.toggle('alive', false);
-      setTimeout(() => el.classList.remove('died'), 500);
-      addLog('tomb', `tombstone cell/${x}/${y}`, '→ 0', `died`);
-    });
+    born.forEach(([x,y]) => { cellAnim[y][x].born = 1.0; addLog('kv',  `set cell/${x}/${y}`, '→ 1', 'born'); });
+    died.forEach(([x,y]) => { cellAnim[y][x].died = 1.0; addLog('tomb',`tombstone cell/${x}/${y}`, '→ 0', 'died'); });
 
-    // Stale indicators
-    staleSet.forEach(k => {
-      const [sx, sy] = k.split(',').map(Number);
-      cellEls[sy][sx].classList.remove('stale');
-    });
     staleSet.clear();
-    newStaleSet.forEach(k => {
-      const [sx, sy] = k.split(',').map(Number);
-      cellEls[sy][sx].classList.add('stale');
-      staleSet.add(k);
-    });
-
-    if (staleReads > 0)
-      addLog('kv', 'stale reads', `×${staleReads}`, `lag in gossip propagation`);
-  } else {
-    // Silent re-render
-    for (let y = 0; y < GRID; y++)
-      for (let x = 0; x < GRID; x++)
-        cellEls[y][x].classList.toggle('alive', cells[y][x]);
+    newStaleSet.forEach(k => staleSet.add(k));
+    if (staleReads > 0) addLog('kv', 'stale reads', `×${staleReads}`, 'lag in gossip propagation');
   }
 
   // Advance prevCells snapshot for next tick's stale simulation
   prevCells = prev; // prev is the snapshot from BEFORE this tick's changes
 
-  if (currentView === 'kv') updateKvView();
   updateStats();
 }
 
-// ── KV freshness view ──────────────────────────────────────
-// Heatmap: how many ticks since cell (x,y) last changed state (wrote to KV).
-// lag 0 = changed this tick (green), lag 5+ = dormant for 5 ticks (amber/red).
-// A moving glider leaves a green trail; stable blocks fade to amber.
-const KV_COLOURS = [
-  [63,185,80],    // 0 — changed this tick
-  [95,175,65],    // 1
-  [140,165,50],   // 2
-  [195,155,45],   // 3
-  [255,166,87],   // 4 — orange: noticeably stale
-  [210,100,65],   // 5+
-];
-function kvColour(age) {
-  if (age < 0) return `rgba(33,38,45,1)`; // never changed — always dead
-  // lag = ticks since last change; cap at colour table length
-  // gossipKvWrite is called before generation++, so a cell that changed this
-  // tick has kvAge = generation (pre-increment) → lag = 0 → idx 0 → bright green.
-  // A cell unchanged for N ticks has kvAge N ticks behind → amber/red.
-  const lag = Math.max(0, Math.min(generation - age, KV_COLOURS.length - 1));
-  const [r,g,b] = KV_COLOURS[lag];
-  return `rgb(${r},${g},${b})`;
-}
-function updateKvView() {
-  for (let y = 0; y < G; y++)
-    for (let x = 0; x < G; x++)
-      cellEls[y][x].style.background = kvColour(kvAge[y][x]);
-}
-function clearKvView() {
-  for (let y = 0; y < G; y++)
-    for (let x = 0; x < G; x++)
-      cellEls[y][x].style.background = '';
-}
+// ── KV / Signal helpers — drawFrame handles rendering ──────
+// kvColorRgb and animLoop/drawFrame are defined above in the canvas block.
 
 // ── Signal flow view ───────────────────────────────────────
 function animateSignalFlow() {
   const src = signalSource;
-  const actingSet = new Set(
-    neighbours(src.x, src.y).map(([nx,ny]) => `${nx},${ny}`)
-  );
-  for (let y = 0; y < G; y++) {
+  const actingSet = new Set(neighbours(src.x, src.y).map(([nx,ny]) => `${nx},${ny}`));
+  for (let y = 0; y < G; y++)
     for (let x = 0; x < G; x++) {
-      const el = cellEls[y][x];
       const d = gossipHops(src.x, src.y, x, y) * 35;
       setTimeout(() => {
-        el.classList.remove('sig-act', 'sig-fwd');
-        if (actingSet.has(`${x},${y}`)) el.classList.add('sig-act');
-        else el.classList.add('sig-fwd');
-        setTimeout(() => el.classList.remove('sig-act', 'sig-fwd'), 550);
+        cellAnim[y][x][actingSet.has(`${x},${y}`) ? 'sigAct' : 'sigFwd'] = 1.0;
       }, d);
     }
-  }
 }
 
 // ── Hover inspection ───────────────────────────────────────
@@ -880,10 +817,8 @@ let hoverPinned = false;
 
 function handleCellHover(x, y, entering) {
   if (hoverPinned) return;
-  // Highlight neighbours (group memberships)
-  const nbs = neighbours(x, y);
-  nbs.forEach(([nx,ny]) => cellEls[ny][nx].classList.toggle('nb-hover', entering));
-  cellEls[y][x].classList.toggle('self-hover', entering);
+  neighbours(x, y).forEach(([nx,ny]) => { cellAnim[ny][nx].nbHover = entering; });
+  cellAnim[y][x].selfHover = entering;
   if (entering) showInspector(x, y, false);
   else clearInspector();
 }
@@ -891,14 +826,11 @@ function handleCellHover(x, y, entering) {
 function handleCellClick(x, y) {
   if (currentView === 'life') {
     if (hoverPinned) {
-      // Unpin
       hoverPinned = false;
       clearNbHighlights();
     } else {
-      // Pin
       hoverPinned = true;
       cells[y][x] = !cells[y][x];
-      cellEls[y][x].classList.toggle('alive', cells[y][x]);
       showInspector(x, y, true);
     }
     return;
@@ -907,18 +839,16 @@ function handleCellClick(x, y) {
     signalSource = {x, y};
     addLog('sys', 'signal source', `set to (${x},${y})`, '');
   }
-  if (currentView === 'kv') {
-    // Toggle cell
-    cells[y][x] = !cells[y][x];
-    cellEls[y][x].classList.toggle('alive', cells[y][x]);
-  }
+  if (currentView === 'kv') cells[y][x] = !cells[y][x];
   showInspector(x, y, true);
 }
 
 function clearNbHighlights() {
   for (let y = 0; y < G; y++)
-    for (let x = 0; x < G; x++)
-      cellEls[y][x].classList.remove('nb-hover', 'self-hover');
+    for (let x = 0; x < G; x++) {
+      cellAnim[y][x].nbHover   = false;
+      cellAnim[y][x].selfHover = false;
+    }
 }
 
 function clearInspector() {
@@ -929,7 +859,7 @@ function showInspector(x, y, pinned) {
   const nbs = neighbours(x, y);
   const groups = nbs.map(([nx,ny]) => `nb_${nx}_${ny}`);
   const alive = cells[y][x];
-  const port = 52000 + y * GRID + x;
+  const port = 52000 + y * G + x;
   const lag = kvAge[y][x] >= 0 ? (generation - kvAge[y][x] - 1) : -1;
   const freshCls = (lag <= 0) ? 'kv-fresh' : lag <= 1 ? '' : 'kv-stale';
 
@@ -1009,11 +939,8 @@ document.querySelectorAll('.view-tab').forEach(btn => {
     btn.classList.add('active');
     const v = btn.dataset.view;
     currentView = v;
-    gridEl.className = 'cell-grid ' + v + '-view';
-    clearKvView();
     hintKv.classList.toggle('visible', v === 'kv');
     hintSig.classList.toggle('visible', v === 'signal');
-    if (v === 'kv') updateKvView();
     if (v === 'signal') animateSignalFlow();
   });
 });
@@ -1050,12 +977,7 @@ clearBtn.addEventListener('click', () => {
   prevCells = Array.from({length: GRID}, () => new Array(GRID).fill(false));
   generation = 0; totalKvWrites = 0; totalStale = 0;
   staleSet.clear();
-  for (let y = 0; y < GRID; y++)
-    for (let x = 0; x < GRID; x++) {
-      cellEls[y][x].className = 'cell';
-      cellEls[y][x].style.background = '';
-    }
-  gridEl.className = 'cell-grid ' + currentView + '-view';
+  resetCellAnim(G);
   updateStats();
 });
 
@@ -1091,14 +1013,7 @@ function loadPattern(name) {
     if (v) kvAge[y][x] = 0;
   }));
   staleSet.clear();
-  for (let y = 0; y < GRID; y++)
-    for (let x = 0; x < GRID; x++) {
-      cellEls[y][x].className = 'cell';
-      cellEls[y][x].style.background = '';
-      if (cells[y][x]) cellEls[y][x].classList.add('alive');
-    }
-  gridEl.className = 'cell-grid ' + currentView + '-view';
-  if (currentView === 'kv') updateKvView();
+  resetCellAnim(GRID);
   updateStats();
   addLog('kv', `pattern: ${name}`, `${countLive()} live cells`, 'initial KV writes queued');
 }
@@ -1127,87 +1042,49 @@ function setConnected(ok) {
 }
 
 function rebuildGrid(n) {
-  // Rebuild the cell DOM for a different grid size.
-  // Cell size targets ~580px total width regardless of n.
-  const cellPx = Math.floor((580 - n * 2) / n);
-  gridEl.innerHTML = '';
-  // Reset 2D cellEls array
-  cellEls.length = 0;
-  for (let y = 0; y < n; y++) {
-    cellEls.push([]);
-    for (let x = 0; x < n; x++) {
-      const el = document.createElement('div');
-      el.className = 'cell';
-      el.addEventListener('click',      () => handleCellClick(x, y));
-      el.addEventListener('mouseenter', () => handleCellHover(x, y, true));
-      el.addEventListener('mouseleave', () => handleCellHover(x, y, false));
-      gridEl.appendChild(el);
-      cellEls[y].push(el);
-    }
-  }
-  gridEl.style.gridTemplateColumns = `repeat(${n}, ${cellPx}px)`;
-  gridEl.style.gridTemplateRows    = `repeat(${n}, ${cellPx}px)`;
-  cells     = Array.from({length: n}, () => new Array(n).fill(false));
-  kvAge     = Array.from({length: n}, () => new Array(n).fill(-1));
-  prevCells = Array.from({length: n}, () => new Array(n).fill(false));
+  cellPx = Math.floor((588 - 2*PAD - (n-1)*GAP) / n);
+  const sz = 2*PAD + n*cellPx + (n-1)*GAP;
+  canvas.style.width  = sz + 'px';
+  canvas.style.height = sz + 'px';
+  canvas.width  = Math.round(sz * dpr);
+  canvas.height = Math.round(sz * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  resetCellAnim(n);
+  cells     = Array.from({length:n}, () => new Array(n).fill(false));
+  kvAge     = Array.from({length:n}, () => new Array(n).fill(-1));
+  prevCells = Array.from({length:n}, () => new Array(n).fill(false));
+  lastHoverCell = null;
   liveGridSize = n;
-  G = n; // update effective grid size used by all rendering functions
+  G = n;
 }
 
 function applyLiveFrame(data) {
   const n = data.cells.length;
-
-  // Rebuild if grid size changed (first frame, or different binary)
-  if (n !== liveGridSize) {
-    rebuildGrid(n);
-    gridEl.className = 'cell-grid ' + currentView + '-view';
-    generation = 0;
-  }
+  if (n !== liveGridSize) { rebuildGrid(n); generation = 0; }
 
   generation = data.generation;
-
   for (let y = 0; y < n; y++) {
     for (let x = 0; x < n; x++) {
       const was = cells[y][x];
       const now = data.cells[y][x];
-      // kv_ages come directly from the Rust snapshot (generation when cell last changed)
-      kvAge[y][x] = data.kv_ages[y][x];
-      cells[y][x] = now;
-
-      const el = cellEls[y][x];
+      kvAge[y][x]  = data.kv_ages[y][x];
+      cells[y][x]  = now;
       if (was !== now) {
-        el.classList.remove(now ? 'died' : 'born', 'stale');
-        void el.offsetWidth;
-        el.classList.add(now ? 'born' : 'died');
-        setTimeout(() => el.classList.remove('born', 'died'), 500);
+        cellAnim[y][x][now ? 'born' : 'died'] = 1.0;
         addLog(now ? 'kv' : 'tomb',
                now ? `set cell/${x}/${y}` : `tombstone cell/${x}/${y}`,
                now ? '→ 1' : '→ 0', now ? 'born' : 'died');
       }
-      el.classList.toggle('alive', now);
     }
   }
-
-  staleSet.clear(); // stale detection is server-side in live mode
+  staleSet.clear();
 
   if (currentView === 'life') {
-    // Tick-signal pulse wave from (0,0) — the Rust tick emitter
-    const actingNbs = new Set(
-      neighbours(0, 0).map(([nx,ny]) => `${nx},${ny}`)
-    );
-    for (let y = 0; y < G; y++) {
-      for (let x = 0; x < G; x++) {
-        const d = (x + y) * 16;
-        const el = cellEls[y][x];
-        const acting = actingNbs.has(`${x},${y}`);
-        setTimeout(() => {
-          el.classList.add(acting ? 'acting' : 'fwd-flash');
-          setTimeout(() => el.classList.remove('acting', 'fwd-flash'), 500);
-        }, d);
-      }
-    }
+    const actingNbs = new Set(neighbours(0, 0).map(([nx,ny]) => `${nx},${ny}`));
+    for (let y = 0; y < G; y++)
+      for (let x = 0; x < G; x++)
+        setTimeout(() => { cellAnim[y][x][actingNbs.has(`${x},${y}`) ? 'acting' : 'fwd'] = 1.0; }, (x+y)*16);
   }
-  if (currentView === 'kv')     updateKvView();
   if (currentView === 'signal') animateSignalFlow();
   updateStats();
   addLog('sys', 'conway.tick', `gen ${generation}`, `↙ live · ${data.live} alive`);
@@ -1253,12 +1130,8 @@ function switchSource(toLive) {
     connDot.style.background = 'var(--muted)';
     connDot.style.boxShadow  = 'none';
     liveHintInline.style.display = 'none';
-    // Restore sim grid size and pattern
     G = GRID;
     rebuildGrid(GRID);
-    gridEl.style.gridTemplateColumns = '';
-    gridEl.style.gridTemplateRows    = '';
-    gridEl.className = 'cell-grid ' + currentView + '-view';
     loadPattern(patSel.value);
   }
 }
@@ -1268,7 +1141,9 @@ document.querySelectorAll('#source-tabs .view-tab').forEach(btn => {
 });
 
 // ── Init ───────────────────────────────────────────────────
+rebuildGrid(GRID);
 loadPattern('glider');
+requestAnimationFrame(animLoop);
 </script>
 </body>
 </html>
