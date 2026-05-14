@@ -22,6 +22,21 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::{signal, time};
 
+/// Raise the process file-descriptor limit to at least `target`.
+/// macOS defaults to 256; 64 agents need ~200+ sockets so we'd hit it immediately.
+#[cfg(unix)]
+fn raise_fd_limit(target: u64) {
+    unsafe {
+        let mut rl: libc::rlimit = std::mem::zeroed();
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut rl) != 0 { return; }
+        if rl.rlim_cur >= target { return; }
+        rl.rlim_cur = target.min(rl.rlim_max);
+        libc::setrlimit(libc::RLIMIT_NOFILE, &rl);
+    }
+}
+#[cfg(not(unix))]
+fn raise_fd_limit(_: u64) {}
+
 const GRID: usize = 8;
 const BASE_PORT: u16 = 52000;
 const HTTP_PORT: u16 = 8090;
@@ -162,6 +177,9 @@ fn render_terminal(viewer: &GossipAgent, gen: u64, live: usize) {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 64 agents × ~3 sockets each comfortably exceeds macOS's default 256 fd limit.
+    raise_fd_limit(4096);
+
     // ── Build agents ──────────────────────────────────────────────────
     let seed_port = port(0, 0);
     let seed_id = NodeId::new("127.0.0.1", seed_port)?;
