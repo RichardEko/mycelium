@@ -1,3 +1,12 @@
+//! Configuration for all gossip protocol components.
+//!
+//! The primary type is [`GossipConfig`], which is passed to [`GossipAgent::new`](crate::GossipAgent::new).
+//! All fields have documented defaults. Use [`GossipConfig::default()`] as a starting point and
+//! override only the fields that matter for your deployment.
+//!
+//! Config can also be loaded from a TOML file via [`GossipConfig::load_from_file`] and overridden
+//! at runtime via `GOSSIP_*` environment variables.
+
 use serde::{Deserialize, Serialize};
 use std::{env, fs, path::Path};
 use crate::error::GossipError;
@@ -23,10 +32,27 @@ pub struct GossipConfig {
     pub default_ttl: u8,
     /// Maximum number of concurrent inbound TCP connections.
     pub max_connections: usize,
-    /// Depth of each per-peer writer task's send channel (number of frames that
-    /// can be queued ahead of a slow or reconnecting peer before new frames are
-    /// dropped). Each peer has its own channel of this depth.
+    /// Capacity of each per-peer outbound channel. **When full, gossip frames are
+    /// silently dropped** — the failure is indistinguishable from network packet loss
+    /// unless `system_stats().dropped_frames` is monitored.
+    ///
+    /// Size this to handle the maximum burst that can arrive before a slow peer drains
+    /// its channel. For a cluster of N agents writing one KV entry per tick with epidemic
+    /// fan-out F, budget at least `N × F` per peer-writer (the intermediate node that
+    /// happens to forward the most messages in one generation). At the default fan-out of
+    /// 4 and N = 256 agents that is 1 024; the default of 64 is correct only for small
+    /// clusters (N ≤ 16).
     pub max_concurrent_forwards: usize,
+    /// Maximum number of peers each gossip shard will forward to simultaneously.
+    ///
+    /// Bootstrap peers are always included regardless of this limit. Peers discovered
+    /// via the health monitor are added up to this cap. Setting this to
+    /// `bootstrap_peers.len()` keeps the gossip topology fixed at the bootstrap mesh
+    /// while still allowing the health monitor to run at its natural interval for failure
+    /// detection.
+    ///
+    /// Default: `i64::MAX as usize` (no effective cap — all discovered peers are forwarded to).
+    pub max_forwarding_peers: usize,
     /// How long (seconds) to wait before retrying after a failed connection attempt or
     /// write error to a peer. Must be in `[1, 300]`. At the minimum, one reconnect attempt
     /// is made per second per dead peer. Increase on large clusters to avoid a connect
@@ -67,6 +93,15 @@ pub struct GossipConfig {
     /// drops SYN packets when the queue is full. Raise if you observe connection
     /// timeouts during cluster restarts or large fan-in connection bursts.
     pub tcp_accept_backlog: u32,
+    /// Maximum number of peers this node will track in its peer table.
+    ///
+    /// Bootstrap peers are always retained. Peers discovered via piggybacked `known_peers`
+    /// lists in Ping messages are only added when the table has fewer than `max_peers`
+    /// entries. Raise when running large dynamic clusters; lower when the gossip topology
+    /// should be fixed (e.g. grid demos where unbounded discovery causes O(N²) connections).
+    ///
+    /// Default: `i64::MAX as usize` (no effective cap — all discovered peers are tracked).
+    pub max_peers: usize,
 }
 
 impl Default for GossipConfig {
@@ -80,6 +115,7 @@ impl Default for GossipConfig {
             default_ttl: 5,
             max_connections: 1024,
             max_concurrent_forwards: 64,
+            max_forwarding_peers: i64::MAX as usize,
             reconnect_backoff_secs: 5,
             gossip_channel_capacity: 1024,
             max_seen_entries: 100_000,
@@ -90,6 +126,7 @@ impl Default for GossipConfig {
             intern_keys: true,
             ping_peer_sample_size: 20,
             tcp_accept_backlog: 1024,
+            max_peers: i64::MAX as usize,
         }
     }
 }
@@ -183,6 +220,11 @@ impl GossipConfig {
                 "tcp_accept_backlog cannot be zero".into(),
             ));
         }
+        if self.max_peers == 0 {
+            return Err(GossipError::Config(
+                "max_peers cannot be zero".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -196,13 +238,15 @@ impl GossipConfig {
     /// **Note:** this method does _not_ call [`validate`](Self::validate). Callers
     /// must invoke `validate()` separately after all overrides are applied.
     ///
-    /// All 16 fields can be overridden: `GOSSIP_BIND_ADDRESS`, `GOSSIP_BIND_PORT`,
+    /// All 18 fields can be overridden: `GOSSIP_BIND_ADDRESS`, `GOSSIP_BIND_PORT`,
     /// `GOSSIP_PROPAGATION_WINDOW_SECS`, `GOSSIP_HEALTH_CHECK_INTERVAL_SECS`,
     /// `GOSSIP_DEFAULT_TTL`, `GOSSIP_MAX_CONNECTIONS`, `GOSSIP_MAX_CONCURRENT_FORWARDS`,
-    /// `GOSSIP_RECONNECT_BACKOFF_SECS`, `GOSSIP_GOSSIP_CHANNEL_CAPACITY`,
-    /// `GOSSIP_MAX_SEEN_ENTRIES`, `GOSSIP_PEER_EVICTION_INTERVALS`, `GOSSIP_GOSSIP_SHARDS`,
+    /// `GOSSIP_MAX_FORWARDING_PEERS`, `GOSSIP_RECONNECT_BACKOFF_SECS`,
+    /// `GOSSIP_GOSSIP_CHANNEL_CAPACITY`, `GOSSIP_MAX_SEEN_ENTRIES`,
+    /// `GOSSIP_PEER_EVICTION_INTERVALS`, `GOSSIP_GOSSIP_SHARDS`,
     /// `GOSSIP_INTERN_KEYS` (`true`/`false`/`1`/`0`), `GOSSIP_BOOTSTRAP_PEERS` (comma-separated
-    /// `ip:port` list), `GOSSIP_PING_PEER_SAMPLE_SIZE`, `GOSSIP_TCP_ACCEPT_BACKLOG`.
+    /// `ip:port` list), `GOSSIP_PING_PEER_SAMPLE_SIZE`, `GOSSIP_TCP_ACCEPT_BACKLOG`,
+    /// `GOSSIP_MAX_PEERS`.
     pub fn apply_env_overrides(&mut self) -> Result<(), GossipError> {
         if let Ok(v) = env::var("GOSSIP_BIND_ADDRESS") {
             self.bind_address = v;
@@ -224,6 +268,9 @@ impl GossipConfig {
         }
         if let Ok(v) = env::var("GOSSIP_MAX_CONCURRENT_FORWARDS") {
             self.max_concurrent_forwards = v.parse().map_err(GossipError::Parse)?;
+        }
+        if let Ok(v) = env::var("GOSSIP_MAX_FORWARDING_PEERS") {
+            self.max_forwarding_peers = v.parse().map_err(GossipError::Parse)?;
         }
         if let Ok(v) = env::var("GOSSIP_RECONNECT_BACKOFF_SECS") {
             self.reconnect_backoff_secs = v.parse().map_err(GossipError::Parse)?;
@@ -261,6 +308,9 @@ impl GossipConfig {
         }
         if let Ok(v) = env::var("GOSSIP_TCP_ACCEPT_BACKLOG") {
             self.tcp_accept_backlog = v.parse().map_err(GossipError::Parse)?;
+        }
+        if let Ok(v) = env::var("GOSSIP_MAX_PEERS") {
+            self.max_peers = v.parse().map_err(GossipError::Parse)?;
         }
         Ok(())
     }

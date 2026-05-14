@@ -46,6 +46,9 @@ pub(crate) struct ConnContext {
     pub(crate) intern_keys:      bool,
     pub(crate) signal_boundary:  Arc<RwLock<Boundary>>,
     pub(crate) signal_handlers:  Arc<SignalHandlers>,
+    /// Cap on the peer table. Piggybacked peers are silently ignored once this
+    /// is reached; bootstrap peers and direct senders are always admitted.
+    pub(crate) max_peers:        usize,
 }
 
 pub(crate) async fn handle_connection(
@@ -56,7 +59,7 @@ pub(crate) async fn handle_connection(
     let ConnContext {
         node_id, store, peers, gossip_txs, seen, shutdown, max_ttl,
         subscriptions, current_ts, peer_writers, writer_depth, backoff, n_shards,
-        intern_keys, signal_boundary, signal_handlers,
+        intern_keys, signal_boundary, signal_handlers, max_peers,
     } = ctx;
     let mut socket = BufReader::with_capacity(8_192, socket);
     let mut shutdown_rx = shutdown.subscribe();
@@ -109,8 +112,11 @@ pub(crate) async fn handle_connection(
                 let sender_is_new = {
                     let guard = peers.pin();
                     let is_new = guard.insert(sender.clone(), now).is_none();
+                    // Only add piggybacked peers while the table has room.
+                    // The direct sender is always admitted (inserted above); only
+                    // the forwarded list is capped.
                     for peer in known_peers {
-                        if peer != node_id {
+                        if peer != node_id && guard.len() < max_peers {
                             guard.get_or_insert(peer, now);
                         }
                     }

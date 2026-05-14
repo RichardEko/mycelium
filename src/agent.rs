@@ -6,7 +6,10 @@ use crate::framing::{
 };
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
-use crate::signal::{AdvertiseHandle, Boundary, Signal, SignalHandlers, SignalScope};
+use crate::signal::{
+    AdvertiseHandle, Boundary, OpacityHandle, OpacityHint, OpacityState,
+    Signal, SignalHandlers, SignalScope, WatchHandle,
+};
 use crate::store::{apply_and_notify, intern_pool_len, StoreEntry};
 use crate::writer::{evict_peer_writer, get_or_spawn_writer, request_state, WriterEntry};
 use ahash::{AHashMap, AHashSet};
@@ -60,6 +63,12 @@ pub struct SystemStats {
     /// Grows with distinct keys ever observed; never trimmed.
     /// Zero when `intern_keys = false` and no key has been interned.
     pub intern_pool_size: usize,
+    /// Cumulative gossip frames dropped since agent creation due to full channels.
+    ///
+    /// Incremented by `set`, `delete`, `emit`, and internal forwarding whenever
+    /// `try_send` returns `Err(Full)`. A non-zero value means the agent lost
+    /// writes — raise `max_concurrent_forwards` or `gossip_channel_capacity`.
+    pub dropped_frames: u64,
 }
 
 /// Core gossip agent.
@@ -96,6 +105,8 @@ pub struct GossipAgent {
     signal_boundary: Arc<RwLock<Boundary>>,
     /// Fan-out registry for local signal delivery.
     signal_handlers: Arc<SignalHandlers>,
+    /// Cumulative count of gossip frames silently dropped due to full channels.
+    dropped_frames: Arc<AtomicU64>,
 }
 
 impl GossipAgent {
@@ -149,6 +160,7 @@ impl GossipAgent {
             task_handles: std::sync::Mutex::new(Vec::new()),
             signal_boundary: Arc::new(RwLock::new(Boundary::new(node_id))),
             signal_handlers: Arc::new(SignalHandlers::new()),
+            dropped_frames: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -236,6 +248,7 @@ impl GossipAgent {
             intern_keys:     self.config.intern_keys,
             signal_boundary: self.signal_boundary.clone(),
             signal_handlers: self.signal_handlers.clone(),
+            max_peers:       self.config.max_peers,
         };
 
         let mut new_handles: Vec<JoinHandle<()>> = Vec::with_capacity(n_listeners);
@@ -269,6 +282,8 @@ impl GossipAgent {
                 self.shard_alive[shard_idx].clone(),
                 writer_depth,
                 backoff,
+                self.config.max_forwarding_peers,
+                self.dropped_frames.clone(),
             ));
             self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).push(handle);
         }
@@ -358,6 +373,12 @@ impl GossipAgent {
     /// `key` accepts `&str`, `Arc<str>`, `String`, or anything that converts to
     /// `Arc<str>`. Callers with a hot key set can pre-intern keys as `Arc<str>`
     /// and pass them here to avoid a heap allocation on every write.
+    ///
+    /// **Each agent should write only its own keys.** Writing all keys from a single
+    /// agent floods that agent's peer-writer channels: with N keys and channel depth D,
+    /// writes are silently dropped when N > D. Distribute writes across agents so each
+    /// agent writes exactly its own key — this produces 1 message per peer-writer
+    /// regardless of cluster size.
     ///
     /// The local store is **always** updated regardless of the return value.
     /// Returns `true` if the update was queued for gossip; `false` if the gossip
@@ -527,7 +548,8 @@ impl GossipAgent {
         emit_signal(
             &self.node_id, &self.seen, &self.current_ts,
             &self.signal_boundary, &self.signal_handlers, &self.gossip_txs,
-            self.config.default_ttl, kind.into(), scope, payload.into(),
+            self.config.default_ttl, &self.dropped_frames,
+            kind.into(), scope, payload.into(),
         )
     }
 
@@ -694,6 +716,7 @@ impl GossipAgent {
         let signal_handlers = self.signal_handlers.clone();
         let gossip_txs      = self.gossip_txs.clone();
         let default_ttl     = self.config.default_ttl;
+        let dropped_frames  = self.dropped_frames.clone();
         let kind: Arc<str>  = kind.into();
 
         let handle = tokio::spawn(async move {
@@ -707,7 +730,7 @@ impl GossipAgent {
                         emit_signal(
                             &node_id, &seen, &current_ts, &signal_boundary,
                             &signal_handlers, &gossip_txs, default_ttl,
-                            kind.clone(), scope.clone(), payload_fn(),
+                            &dropped_frames, kind.clone(), scope.clone(), payload_fn(),
                         );
                     }
                 }
@@ -727,8 +750,265 @@ impl GossipAgent {
     ///
     /// Does not require a registered handler — the timestamp is recorded on every
     /// call to `deliver()` regardless of whether a handler is registered.
+    /// Updated even while the kind is suppressed.
     pub fn last_signal(&self, kind: &str) -> Option<Instant> {
         self.signal_handlers.last_signal(kind)
+    }
+
+    /// Suppresses local delivery of `kind` signals for `duration`.
+    ///
+    /// The signal is still forwarded epidemically — propagation is unconditional.
+    /// The node simply does not call registered handlers for the suppressed kind.
+    /// [`last_signal`](Self::last_signal) continues to update during suppression.
+    ///
+    /// This is an explicit refractory period. Call it after handling a signal to
+    /// prevent re-handling the same kind within a cooldown window:
+    ///
+    /// ```ignore
+    /// while let Some(sig) = invoke_rx.recv().await {
+    ///     agent.suppress(signal_kind::INVOKE, Duration::from_millis(500));
+    ///     handle_invocation(sig).await;
+    /// }
+    /// ```
+    pub fn suppress(&self, kind: impl Into<Arc<str>>, duration: Duration) {
+        self.signal_handlers.suppress(kind.into(), Instant::now() + duration);
+    }
+
+    /// Lifts a suppression set by [`suppress`](Self::suppress) before it expires.
+    pub fn unsuppress(&self, kind: &str) {
+        self.signal_handlers.unsuppress(kind);
+    }
+
+    /// Returns `true` if `kind` is currently suppressed on this node.
+    pub fn is_suppressed(&self, kind: &str) -> bool {
+        self.signal_handlers.is_suppressed(kind)
+    }
+
+    /// Watches `kind` for staleness, calling `on_stale` whenever the signal has not
+    /// been delivered for longer than `threshold`.
+    ///
+    /// Spawns a background task that checks every `threshold / 4` (minimum 100 ms).
+    /// `on_stale` fires repeatedly while the kind remains silent — callers that want
+    /// one-shot behaviour should drop the returned handle or call
+    /// [`unsuppress`](Self::unsuppress) after responding.
+    ///
+    /// A kind that has never been seen counts as stale immediately. Returns a
+    /// [`WatchHandle`] whose drop cancels the task; the task also exits automatically
+    /// on [`shutdown`](Self::shutdown).
+    ///
+    /// ```ignore
+    /// let _watcher = agent.watch(
+    ///     signal_kind::CONTRACT_AVAILABLE,
+    ///     Duration::from_secs(30),
+    ///     move || { respawn_worker(); },
+    /// );
+    /// ```
+    pub fn watch<F>(
+        &self,
+        kind:      impl Into<Arc<str>>,
+        threshold: Duration,
+        on_stale:  F,
+    ) -> WatchHandle
+    where
+        F: Fn() + Send + 'static,
+    {
+        let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
+        let signal_handlers = self.signal_handlers.clone();
+        let kind: Arc<str>  = kind.into();
+        let check_interval  = (threshold / 4).max(Duration::from_millis(100));
+
+        let handle = tokio::spawn(async move {
+            let mut ticker = time::interval(check_interval);
+            ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! { biased;
+                    _ = &mut cancel_rx               => break,
+                    _ = shutdown_rx.wait_for(|v| *v) => break,
+                    _ = ticker.tick() => {
+                        let stale = signal_handlers
+                            .last_signal(&kind)
+                            .map(|t| t.elapsed() > threshold)
+                            .unwrap_or(true);
+                        if stale { on_stale(); }
+                    }
+                }
+            }
+        });
+        {
+            let mut handles = self.task_handles.lock().unwrap_or_else(|e| e.into_inner());
+            handles.retain(|h| !h.is_finished());
+            handles.push(handle);
+        }
+
+        WatchHandle { _cancel: cancel_tx }
+    }
+
+    /// Returns `true` when at least `min_senders` distinct nodes have had a signal of
+    /// `kind` delivered to this node within `window`.
+    ///
+    /// Synchronous read — no background task. Pairs well with
+    /// [`advertise`](Self::advertise): peers advertise their heartbeat every N seconds;
+    /// the receiver calls `quorum` to act only once K distinct peers have been heard:
+    ///
+    /// ```ignore
+    /// if agent.quorum(signal_kind::CONTRACT_AVAILABLE, 3, Duration::from_secs(10)) {
+    ///     dispatch_workload();
+    /// }
+    /// ```
+    pub fn quorum(&self, kind: &str, min_senders: usize, window: Duration) -> bool {
+        self.signal_handlers.quorum(kind, min_senders, window)
+    }
+
+    /// Starts an adaptive opacity governor for `kind`.
+    ///
+    /// The governor samples `kind`'s handler-channel fill ratio every 100 ms and
+    /// automatically emits [`BOUNDARY_OPAQUE`](crate::signal_kind::BOUNDARY_OPAQUE) /
+    /// [`BOUNDARY_TRANSPARENT`](crate::signal_kind::BOUNDARY_TRANSPARENT) on `scope`
+    /// when the fill ratio crosses the adaptive threshold derived from `hint`.
+    ///
+    /// **Threshold adaptation** — the library clamps `hint.threshold` to `[0.4, 0.95]`
+    /// and reduces it by a `trend_factor` when the channel is filling quickly, so the
+    /// signal is emitted before the channel saturates rather than after.
+    ///
+    /// **Hysteresis** — `BOUNDARY_TRANSPARENT` is only emitted once the fill ratio
+    /// drops below `effective_threshold − hint.hysteresis`, preventing oscillation at
+    /// the boundary.
+    ///
+    /// Returns an [`OpacityHandle`] whose drop stops the governor. The task also
+    /// exits automatically on [`shutdown`](Self::shutdown).
+    ///
+    /// ```ignore
+    /// let _gov = agent.manage_opacity(
+    ///     signal_kind::INVOKE,
+    ///     SignalScope::System,
+    ///     OpacityHint::default(),
+    /// );
+    /// ```
+    pub fn manage_opacity(
+        &self,
+        kind:  impl Into<Arc<str>>,
+        scope: SignalScope,
+        hint:  OpacityHint,
+    ) -> OpacityHandle {
+        self.manage_opacity_impl(kind.into(), scope, hint, None)
+    }
+
+    /// Like [`manage_opacity`](Self::manage_opacity) but with an application gate.
+    ///
+    /// The gate is called with an [`OpacityState`] snapshot on every tick where the
+    /// library wants to emit `BOUNDARY_OPAQUE`. Returning `false` defers emission
+    /// until the next tick; the library re-asks every tick so the gate stays stateless.
+    ///
+    /// **Override**: if `fill_ratio == 1.0` (channel completely full) the library
+    /// emits regardless of the gate's return value, so a vetoing gate cannot hold the
+    /// cluster permanently uninformed about a saturated node.
+    ///
+    /// ```ignore
+    /// let _gov = agent.manage_opacity_gated(
+    ///     signal_kind::INVOKE,
+    ///     SignalScope::System,
+    ///     OpacityHint { threshold: 0.8, ..Default::default() },
+    ///     |state| state.fill_ratio >= 0.9 || !has_inflight.load(Ordering::Relaxed),
+    /// );
+    /// ```
+    pub fn manage_opacity_gated<F>(
+        &self,
+        kind:  impl Into<Arc<str>>,
+        scope: SignalScope,
+        hint:  OpacityHint,
+        gate:  F,
+    ) -> OpacityHandle
+    where
+        F: Fn(&OpacityState) -> bool + Send + 'static,
+    {
+        self.manage_opacity_impl(kind.into(), scope, hint, Some(Box::new(gate)))
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn manage_opacity_impl(
+        &self,
+        kind:  Arc<str>,
+        scope: SignalScope,
+        hint:  OpacityHint,
+        gate:  Option<Box<dyn Fn(&OpacityState) -> bool + Send + 'static>>,
+    ) -> OpacityHandle {
+        let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
+
+        let signal_handlers = self.signal_handlers.clone();
+        let node_id         = self.node_id.clone();
+        let seen            = self.seen.clone();
+        let current_ts      = self.current_ts.clone();
+        let signal_boundary = self.signal_boundary.clone();
+        let gossip_txs      = self.gossip_txs.clone();
+        let default_ttl     = self.config.default_ttl;
+        let dropped_frames  = self.dropped_frames.clone();
+
+        let clamped_threshold = hint.threshold.clamp(0.4, 0.95);
+
+        let handle = tokio::spawn(async move {
+            let mut ticker = time::interval(Duration::from_millis(100));
+            ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+
+            // Seed prev_fill from current state so the first-tick trend is meaningful.
+            let mut prev_fill  = signal_handlers.fill_ratio(&kind);
+            let mut is_opaque  = false;
+
+            loop {
+                tokio::select! { biased;
+                    _ = &mut cancel_rx               => break,
+                    _ = shutdown_rx.wait_for(|v| *v) => break,
+                    _ = ticker.tick() => {
+                        let fill_ratio = signal_handlers.fill_ratio(&kind);
+                        // trend_factor in [0, 0.4]: rising 0.2/tick reduces threshold by 40%.
+                        let trend        = fill_ratio - prev_fill;
+                        let trend_factor = (trend.max(0.0) * 2.0).min(0.4);
+                        let eff          = clamped_threshold * (1.0 - trend_factor);
+                        prev_fill        = fill_ratio;
+
+                        let state = OpacityState {
+                            fill_ratio,
+                            effective_threshold: eff,
+                            trend,
+                            is_opaque,
+                        };
+
+                        if !is_opaque && fill_ratio >= eff {
+                            let gate_ok = gate.as_ref()
+                                .map(|g| g(&state))
+                                .unwrap_or(true);
+                            if gate_ok || fill_ratio >= 1.0 {
+                                emit_signal(
+                                    &node_id, &seen, &current_ts, &signal_boundary,
+                                    &signal_handlers, &gossip_txs, default_ttl,
+                                    &dropped_frames,
+                                    Arc::from(crate::signal::signal_kind::BOUNDARY_OPAQUE),
+                                    scope.clone(), hint.payload.clone(),
+                                );
+                                is_opaque = true;
+                            }
+                        } else if is_opaque && fill_ratio < eff - hint.hysteresis {
+                            emit_signal(
+                                &node_id, &seen, &current_ts, &signal_boundary,
+                                &signal_handlers, &gossip_txs, default_ttl,
+                                &dropped_frames,
+                                Arc::from(crate::signal::signal_kind::BOUNDARY_TRANSPARENT),
+                                scope.clone(), Bytes::new(),
+                            );
+                            is_opaque = false;
+                        }
+                    }
+                }
+            }
+        });
+        {
+            let mut handles = self.task_handles.lock().unwrap_or_else(|e| e.into_inner());
+            handles.retain(|h| !h.is_finished());
+            handles.push(handle);
+        }
+
+        OpacityHandle { _cancel: cancel_tx }
     }
 
     /// Returns the current fill ratio of handler channels for `kind`.
@@ -778,6 +1058,7 @@ impl GossipAgent {
             gc_alive:             !running || self.gc_alive.load(Ordering::Relaxed),
             health_monitor_alive: !running || self.health_monitor_alive.load(Ordering::Relaxed),
             intern_pool_size:     intern_pool_len(),
+            dropped_frames:       self.dropped_frames.load(Ordering::Relaxed),
         }
     }
 
@@ -832,6 +1113,7 @@ impl GossipAgent {
         match self.gossip_txs[shard].try_send((buf.freeze(), sender)) {
             Ok(()) => true,
             Err(TrySendError::Full(_)) => {
+                self.dropped_frames.fetch_add(1, Ordering::Relaxed);
                 warn!("Gossip channel full for shard {}; frame dropped", shard);
                 false
             }
@@ -931,6 +1213,7 @@ pub(crate) fn emit_signal(
     signal_handlers: &SignalHandlers,
     gossip_txs:      &[mpsc::Sender<(Bytes, u64)>],
     default_ttl:     u8,
+    dropped_frames:  &AtomicU64,
     kind:            Arc<str>,
     scope:           SignalScope,
     payload:         Bytes,
@@ -969,6 +1252,7 @@ pub(crate) fn emit_signal(
     match gossip_txs[shard].try_send((buf.freeze(), sender_hash)) {
         Ok(()) => true,
         Err(TrySendError::Full(_)) => {
+            dropped_frames.fetch_add(1, Ordering::Relaxed);
             warn!("Gossip channel full for shard {}; signal dropped", shard);
             false
         }
@@ -1031,6 +1315,7 @@ struct ListenerContext {
     intern_keys:     bool,
     signal_boundary: Arc<RwLock<Boundary>>,
     signal_handlers: Arc<SignalHandlers>,
+    max_peers:       usize,
 }
 
 async fn run_listener_task(listener: TcpListener, lctx: ListenerContext) {
@@ -1038,7 +1323,7 @@ async fn run_listener_task(listener: TcpListener, lctx: ListenerContext) {
         node_id, store, peers, gossip_txs, seen, shutdown_tx, subscriptions,
         current_ts, peer_writers, conn_sem, listener_alive,
         max_conn, max_ttl, writer_depth, backoff, n_shards, intern_keys,
-        signal_boundary, signal_handlers,
+        signal_boundary, signal_handlers, max_peers,
     } = lctx;
     let mut shutdown_rx = shutdown_tx.subscribe();
     let mut conn_set: JoinSet<()> = JoinSet::new();
@@ -1083,7 +1368,7 @@ async fn run_listener_task(listener: TcpListener, lctx: ListenerContext) {
                                         current_ts, peer_writers,
                                         writer_depth, backoff, n_shards,
                                         intern_keys, signal_boundary,
-                                        signal_handlers,
+                                        signal_handlers, max_peers,
                                     };
                                     if let Err(e) = handle_connection(socket, addr, ctx).await {
                                         warn!("Connection error from {}: {}", addr, e);
@@ -1118,15 +1403,17 @@ async fn run_listener_task(listener: TcpListener, lctx: ListenerContext) {
 
 #[allow(clippy::too_many_arguments)]
 async fn run_gossip_shard(
-    shard_idx:       usize,
-    mut gossip_rx:   mpsc::Receiver<(Bytes, u64)>,
-    bootstrap_peers: Arc<[NodeId]>,
-    peer_writers:    Arc<DashMap<NodeId, WriterEntry>>,
-    shutdown_tx:     Arc<watch::Sender<bool>>,
-    mut peer_list_rx: watch::Receiver<Arc<[NodeId]>>,
-    alive:           Arc<AtomicBool>,
-    writer_depth:    usize,
-    backoff:         Duration,
+    shard_idx:           usize,
+    mut gossip_rx:       mpsc::Receiver<(Bytes, u64)>,
+    bootstrap_peers:     Arc<[NodeId]>,
+    peer_writers:        Arc<DashMap<NodeId, WriterEntry>>,
+    shutdown_tx:         Arc<watch::Sender<bool>>,
+    mut peer_list_rx:    watch::Receiver<Arc<[NodeId]>>,
+    alive:               Arc<AtomicBool>,
+    writer_depth:        usize,
+    backoff:             Duration,
+    max_forwarding_peers: usize,
+    dropped_frames:      Arc<AtomicU64>,
 ) {
     alive.store(true, Ordering::Relaxed);
     let _alive_guard = AliveGuard(alive.clone());
@@ -1134,7 +1421,8 @@ async fn run_gossip_shard(
     let mut cached_peer_list: Arc<[NodeId]> = peer_list_rx.borrow().clone();
     let mut targets: AHashSet<NodeId> = AHashSet::new();
     targets.extend(bootstrap_peers.iter().cloned());
-    targets.extend(cached_peer_list.iter().cloned());
+    let remaining = max_forwarding_peers.saturating_sub(targets.len());
+    targets.extend(cached_peer_list.iter().take(remaining).cloned());
     let mut sender_cache: AHashMap<NodeId, mpsc::Sender<Bytes>> = AHashMap::new();
 
     loop {
@@ -1149,7 +1437,8 @@ async fn run_gossip_shard(
                     cached_peer_list = peer_list_rx.borrow_and_update().clone();
                     targets.clear();
                     targets.extend(bootstrap_peers.iter().cloned());
-                    targets.extend(cached_peer_list.iter().cloned());
+                    let remaining = max_forwarding_peers.saturating_sub(targets.len());
+                    targets.extend(cached_peer_list.iter().take(remaining).cloned());
                     sender_cache.retain(|k, _| targets.contains(k));
                 }
 
@@ -1169,6 +1458,7 @@ async fn run_gossip_shard(
                     match tx.try_send(data.clone()) {
                         Ok(()) => {}
                         Err(TrySendError::Full(_)) => {
+                            dropped_frames.fetch_add(1, Ordering::Relaxed);
                             warn!("Peer writer channel full, dropping forward to {}", peer);
                         }
                         Err(TrySendError::Closed(_)) => {

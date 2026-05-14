@@ -1,3 +1,9 @@
+//! Error type for gossip protocol operations.
+//!
+//! All fallible public APIs return [`GossipError`]. The most common variant in production
+//! is [`GossipError::Config`] (invalid configuration at startup); [`GossipError::Network`]
+//! and [`GossipError::Io`] indicate connectivity problems.
+
 use thiserror::Error;
 
 #[derive(Error, Debug)]

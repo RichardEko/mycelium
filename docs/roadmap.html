@@ -16,6 +16,7 @@
     --accent3:    #d2a8ff;
     --accent4:    #ffa657;
     --accent5:    #ff7b72;
+    --accent6:    #39d353;
     --muted:      #8b949e;
     --text:       #e6edf3;
     --text2:      #c9d1d9;
@@ -146,11 +147,12 @@
   .tag-p2      { background: rgba(88,166,255,0.10); color: var(--accent);  border: 1px solid rgba(88,166,255,0.25); }
   .tag-p3      { background: rgba(210,168,255,0.10);color: var(--accent3); border: 1px solid rgba(210,168,255,0.25); }
   .tag-p4      { background: rgba(255,166,87,0.10); color: var(--accent4); border: 1px solid rgba(255,166,87,0.25); }
+  .tag-horizon { background: rgba(139,148,158,0.08);color: var(--muted);   border: 1px solid rgba(139,148,158,0.2); }
 
   /* ─── Philosophy block ──────────────────────────────────────────── */
   .philosophy {
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
     gap: 1px;
     background: var(--border);
     border: 1px solid var(--border);
@@ -158,8 +160,6 @@
     overflow: hidden;
     margin: 32px 0;
   }
-  @media (max-width: 900px) { .philosophy { grid-template-columns: 1fr 1fr; } }
-  @media (max-width: 500px) { .philosophy { grid-template-columns: 1fr; } }
   .phil-item {
     background: var(--surface);
     padding: 28px 24px;
@@ -206,6 +206,7 @@
   .sn-2 { background: rgba(88,166,255,0.06); color: var(--accent);  border-right: 2px solid var(--accent); }
   .sn-3 { background: rgba(210,168,255,0.06);color: var(--accent3); border-right: 2px solid var(--accent3); }
   .sn-4 { background: rgba(255,166,87,0.06); color: var(--accent4); border-right: 2px solid var(--accent4); }
+  .sn-5 { background: rgba(139,148,158,0.05);color: var(--muted);   border-right: 2px solid var(--muted); }
   .stack-body { padding: 20px 24px; }
   .stack-title {
     font-size: 15px;
@@ -299,7 +300,8 @@
 
   /* ─── Two-col grid ──────────────────────────────────────────────── */
   .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 20px 0; }
-  @media (max-width: 700px) { .two-col { grid-template-columns: 1fr; } }
+  .three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin: 20px 0; }
+  @media (max-width: 700px) { .two-col, .three-col { grid-template-columns: 1fr; } }
 
   /* ─── Cards ─────────────────────────────────────────────────────── */
   .card {
@@ -315,6 +317,7 @@
   .card.c2::before { background: linear-gradient(90deg, var(--accent),  transparent); }
   .card.c3::before { background: linear-gradient(90deg, var(--accent3), transparent); }
   .card.c4::before { background: linear-gradient(90deg, var(--accent4), transparent); }
+  .card.c5::before { background: linear-gradient(90deg, var(--muted),   transparent); }
   .card-title { font-size: 14px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
   .card-sub   { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
   .card ul    { list-style: none; padding: 0; }
@@ -407,6 +410,79 @@
   }
   .scope-desc { font-size: 12px; color: var(--text2); margin: 0; }
 
+  /* ─── Opacity vs Inhibition comparison ─────────────────────────── */
+  .oi-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    margin: 20px 0;
+  }
+  @media (max-width: 600px) { .oi-grid { grid-template-columns: 1fr; } }
+  .oi-cell { background: var(--surface); padding: 24px; }
+  .oi-header {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 14px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .oi-opacity    { color: var(--accent4); }
+  .oi-inhibition { color: var(--accent3); }
+  .oi-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+    font-size: 13px;
+  }
+  .oi-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    min-width: 72px;
+    margin-top: 2px;
+    flex-shrink: 0;
+  }
+  .oi-value { color: var(--text2); line-height: 1.5; }
+
+  /* ─── Observability table ───────────────────────────────────────── */
+  .obs-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin: 16px 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .obs-table th {
+    text-align: left;
+    padding: 10px 14px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: var(--surface2);
+    border-bottom: 1px solid var(--border);
+  }
+  .obs-table td {
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(48,54,61,0.4);
+    vertical-align: top;
+    color: var(--text2);
+  }
+  .obs-table tr:last-child td { border-bottom: none; }
+  .obs-table td:first-child { color: var(--text2); font-style: italic; }
+  .obs-table td:nth-child(2) { font-family: "SF Mono","Fira Mono",monospace; font-size: 12px; color: var(--accent3); }
+
   /* ─── Timeline ──────────────────────────────────────────────────── */
   .timeline-wrap { margin: 32px 0; }
   .tl-bar {
@@ -420,21 +496,20 @@
   .tl-bar-fill {
     position: absolute;
     left: 0; top: 0; bottom: 0;
-    width: 20%;
     background: linear-gradient(90deg, var(--accent2), rgba(63,185,80,0.2));
     border-radius: 3px;
   }
   .tl-cols {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 12px;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 10px;
   }
-  @media (max-width: 600px) { .tl-cols { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 700px) { .tl-cols { grid-template-columns: 1fr 1fr; } }
   .tl-card {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 16px;
+    padding: 14px;
   }
   .tl-num   { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
   .tl-title { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
@@ -448,7 +523,45 @@
   }
   .tl-done    { background: rgba(63,185,80,0.12);  color: var(--accent2); }
   .tl-medium  { background: rgba(88,166,255,0.10); color: var(--accent); }
+  .tl-purple  { background: rgba(210,168,255,0.10); color: var(--accent3); }
   .tl-future  { background: rgba(255,166,87,0.10); color: var(--accent4); }
+  .tl-horizon { background: rgba(139,148,158,0.08); color: var(--muted); }
+
+  /* ─── Quote block ───────────────────────────────────────────────── */
+  .quote-block {
+    background: linear-gradient(135deg, rgba(88,166,255,0.04), rgba(210,168,255,0.04));
+    border: 1px solid rgba(88,166,255,0.15);
+    border-radius: var(--radius-lg);
+    padding: 28px 32px;
+    margin: 28px 0;
+  }
+  .quote-block p {
+    font-size: 16px;
+    font-style: italic;
+    color: var(--text2);
+    margin: 0;
+    line-height: 1.75;
+  }
+
+  /* ─── Future directions ─────────────────────────────────────────── */
+  .future-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    margin: 24px 0;
+  }
+  @media (max-width: 700px) { .future-grid { grid-template-columns: 1fr; } }
+  .future-cell {
+    background: var(--surface);
+    padding: 24px 22px;
+  }
+  .future-icon { font-size: 24px; margin-bottom: 10px; display: block; opacity: 0.7; }
+  .future-title { font-size: 14px; font-weight: 700; color: var(--muted); margin-bottom: 8px; }
+  .future-body  { font-size: 13px; color: var(--muted); line-height: 1.6; margin: 0; }
 
   /* ─── Legacy table ──────────────────────────────────────────────── */
   .legacy-table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 20px 0; }
@@ -493,12 +606,14 @@
   <div class="hero-eyebrow">Engineering Roadmap · 2026</div>
   <h1>Distributed <em>AI Agent Platform</em></h1>
   <p class="hero-sub">A swarm of AI agents that signals intent through receptors, discovers
-  capabilities through a shared medium, and moves heavy data over HTTP only when the payload
-  demands it — with no coordinator, no registry, no single point of failure.</p>
+  capabilities through a shared medium, and evolves its topology without a coordinator,
+  central registry, or single point of failure. The gossip protocol is not the application —
+  it is the bloodstream the application runs on.</p>
   <div class="hero-badges">
     <span class="badge"><span class="dot dot-live"></span> Layer 1: Transport — Complete</span>
-    <span class="badge"><span class="dot dot-live"></span> Layer 2: Signal / Boundary Mesh — Complete</span>
-    <span class="badge"><span class="dot dot-future"></span> Layers 3–4: Bulk Transfer + Observability — Planned</span>
+    <span class="badge"><span class="dot dot-live"></span> Layer 2: Signal / Boundary Mesh — Complete · 107 tests</span>
+    <span class="badge"><span class="dot dot-planned"></span> Layer 3: Service Patterns — Next</span>
+    <span class="badge"><span class="dot dot-future"></span> Layers 4–5: AI Integration + Observability — Planned</span>
   </div>
 </div>
 
@@ -515,29 +630,40 @@
         <span class="phil-icon">🧬</span>
         <div class="phil-title">Chemical Signalling</div>
         <p class="phil-body">Hormones flood the bloodstream. Every cell receives every signal.
-        Specificity comes from receptors — not from routing. This platform works the same way:
-        signals flood the cluster epidemically, boundaries decide who acts.</p>
+        Specificity comes from <em>receptors</em> — not from routing. This platform works the
+        same way: signals flood the cluster epidemically; boundaries decide who acts.
+        The metaphor isn't decorative — it's doing real architectural work.</p>
       </div>
       <div class="phil-item">
         <span class="phil-icon">⚡</span>
         <div class="phil-title">Forwarding ≠ Acting</div>
         <p class="phil-body">A node outside <code>group::nlp</code> forwards a group-scoped
         signal at full speed without acting on it. Propagation is guaranteed regardless of
-        whether any intermediate node is in scope. No routing bottlenecks.</p>
-      </div>
-      <div class="phil-item">
-        <span class="phil-icon">🔌</span>
-        <div class="phil-title">Maximal Decoupling</div>
-        <p class="phil-body">One transport, one abstraction. Invokers fire a signal; they have
-        no knowledge of how the target is implemented. HTTP only appears in Layer 3, and only
-        for agents handling large payloads.</p>
+        whether any intermediate node is in scope. No routing bottlenecks, no partial delivery.</p>
       </div>
       <div class="phil-item">
         <span class="phil-icon">🐜</span>
         <div class="phil-title">Stigmergy</div>
-        <p class="phil-body">Workers write load state directly into the shared KV medium as
-        pheromone trails. Routing emerges from nodes reading that medium — not from explicit
-        coordination. Stale trails evaporate naturally via embedded timestamps.</p>
+        <p class="phil-body">Workers write load state into the shared KV medium as pheromone
+        trails. Routing emerges from nodes reading that medium — not from explicit coordination.
+        Stale trails evaporate via embedded timestamps. New joiners bootstrap immediately
+        via anti-entropy sync.</p>
+      </div>
+      <div class="phil-item">
+        <span class="phil-icon">🔌</span>
+        <div class="phil-title">Threshold Activation</div>
+        <p class="phil-body">Adaptive systems act when they have sufficient local information —
+        not when all agents are ready. <code>last_signal</code>, <code>quorum</code>, and
+        <code>watch</code> implement this correctly. Barriers are an anti-pattern here:
+        they block rather than degrade gracefully.</p>
+      </div>
+      <div class="phil-item">
+        <span class="phil-icon">🎛</span>
+        <div class="phil-title">Serialisation Autonomy</div>
+        <p class="phil-body">Each agent picks its payload format independently — JSON for
+        MCP compatibility, bincode for internal speed, protobuf for external contracts.
+        The substrate carries opaque <code>Bytes</code> and routes by <code>kind</code>
+        string. No cluster-wide migration when one agent upgrades its format.</p>
       </div>
     </div>
 
@@ -573,7 +699,7 @@
         <tr>
           <td>Acute load events</td>
           <td>Reflects new state after next advertise tick (5–30 s lag)</td>
-          <td><code>boundary.opaque</code> — immediate; upstream tears down connections now</td>
+          <td><code>boundary.opaque</code> — immediate; upstream adjusts now</td>
         </tr>
       </tbody>
     </table>
@@ -582,50 +708,65 @@
   <!-- ── Architecture Stack ── -->
   <div class="section">
     <div class="section-head">
-      <h2>Architecture</h2>
+      <h2>Architecture — Five Layers</h2>
     </div>
 
     <div class="stack">
       <div class="stack-row">
-        <div class="stack-num sn-4">Layer<br>4</div>
+        <div class="stack-num sn-5">Layer<br>5</div>
         <div class="stack-body">
-          <div class="stack-title">Observability <span class="phase-tag tag-p4">Phase 4</span></div>
-          <p class="stack-desc">Prometheus metrics across all layers via a single scrape endpoint. Signal throughput, boundary hit rates, invocation latency histograms, bulk transfer sizes.</p>
+          <div class="stack-title">Observability <span class="phase-tag tag-horizon">Phase 5</span></div>
+          <p class="stack-desc">Prometheus-compatible metrics via a single scrape endpoint. The <code>metrics</code> facade is zero-cost when no recorder is installed; Layers 1–4 emit calls without a hard runtime dependency. Signal throughput, boundary hit rates, invocation latency histograms.</p>
           <div class="chips">
             <span class="chip">metrics facade</span>
             <span class="chip">prometheus exporter</span>
-            <span class="chip">latency histograms</span>
             <span class="chip">signal_delivered_total</span>
             <span class="chip">boundary_rejected_total</span>
+            <span class="chip">gossip_frames_dropped_total</span>
+            <span class="chip">contract_invocation_latency_ms</span>
+          </div>
+        </div>
+      </div>
+      <div class="stack-row">
+        <div class="stack-num sn-4">Layer<br>4</div>
+        <div class="stack-body">
+          <div class="stack-title">AI Integration <span class="phase-tag tag-p4">Phase 4</span></div>
+          <p class="stack-desc">MCP server/client bridge. Tool discovery via gossip KV scan. Actor supervision trees using <code>watch()</code> for fault detection. Multi-agent conversation routing. Serialisation at need: JSON at the MCP boundary, bincode internally, protobuf for external contracts.</p>
+          <div class="chips">
+            <span class="chip">MCP tool registry</span>
+            <span class="chip">scan_prefix("tools/")</span>
+            <span class="chip">supervision trees</span>
+            <span class="chip">conversation-scoped routing</span>
+            <span class="chip">JSON / bincode / protobuf</span>
           </div>
         </div>
       </div>
       <div class="stack-row">
         <div class="stack-num sn-3">Layer<br>3</div>
         <div class="stack-body">
-          <div class="stack-title">Bulk Transfer / AI Execution <span class="phase-tag tag-p3">Phase 3</span></div>
-          <p class="stack-desc">When payloads exceed practical signal size, a Layer 2 signal carries a ticket; Layer 3 moves the weight via HTTP. Streaming LLM responses live here. Introduces a distinct <code>Event</code> type for ordered, connection-scoped, flow-controlled events — same mental model as Layer 2 signals, different delivery guarantees.</p>
+          <div class="stack-title">Service Patterns <span class="phase-tag tag-p3">Phase 3</span></div>
+          <p class="stack-desc">Actor/Event mailboxes (Akka-style), async RPC, and bulk HTTP for large payloads. All three reduce to the same three substrate operations: advertise capability, route a request, return a correlated result. Signal carries the ticket; HTTP carries the weight for payloads too large for signals.</p>
           <div class="chips">
-            <span class="chip">reqwest</span>
-            <span class="chip">BulkTransferLayer</span>
-            <span class="chip">Event (distinct from Signal)</span>
-            <span class="chip">invoke.bulk ticket</span>
+            <span class="chip">Actor mailboxes</span>
+            <span class="chip">async RPC / signal_once</span>
+            <span class="chip">BulkTransfer ticket</span>
+            <span class="chip">invoke.bulk</span>
             <span class="chip">SSE streaming</span>
-            <span class="chip">peers()</span>
+            <span class="chip">Event (distinct from Signal)</span>
           </div>
         </div>
       </div>
       <div class="stack-row">
         <div class="stack-num sn-2">Layer<br>2</div>
         <div class="stack-body">
-          <div class="stack-title">Signal / Boundary Mesh <span class="phase-tag tag-done">Complete</span></div>
-          <p class="stack-desc">Ephemeral events propagate epidemically. Boundaries (local receptors) decide action. Workers write pheromone trails into Layer 1 KV — routing emerges from the shared medium, not explicit selection. Variable opacity creates emergent backpressure under load.</p>
+          <div class="stack-title">Signal / Boundary Mesh <span class="phase-tag tag-done">Complete · 107 tests</span></div>
+          <p class="stack-desc">Ephemeral events propagate epidemically. Boundaries (local receptors) decide action. Variable opacity creates emergent backpressure under load. Active inhibition provides refractory periods. Fault detection, threshold activation, and proactive peer notification round out the layer.</p>
           <div class="chips">
-            <span class="chip">WireMessage::Signal</span>
-            <span class="chip">Boundary · opacity</span>
-            <span class="chip">signal_rx / emit / signal_once</span>
+            <span class="chip">signal_rx · emit · signal_once</span>
             <span class="chip">advertise · last_signal</span>
-            <span class="chip">scan_prefix("load/")</span>
+            <span class="chip">watch · quorum</span>
+            <span class="chip">suppress · unsuppress</span>
+            <span class="chip">manage_opacity · opacity()</span>
             <span class="chip">System / Group / Individual</span>
             <span class="chip">pheromone trails</span>
             <span class="chip">boundary.opaque</span>
@@ -636,15 +777,15 @@
         <div class="stack-num sn-1">Layer<br>1</div>
         <div class="stack-body">
           <div class="stack-title">Gossip Transport <span class="phase-tag tag-done">Complete</span></div>
-          <p class="stack-desc">Lock-free epidemic KV propagation. LWW conflict resolution, anti-entropy sync, zero-copy fan-out. The bloodstream — general-purpose, knows nothing about contracts or signals.</p>
+          <p class="stack-desc">Lock-free epidemic KV propagation. LWW conflict resolution, anti-entropy sync, zero-copy fan-out. The bloodstream — intentionally general, knows nothing about contracts or signals. <code>system_stats().dropped_frames</code> is the primary propagation health indicator.</p>
           <div class="chips">
             <span class="chip">GossipAgent</span>
             <span class="chip">papaya lock-free</span>
             <span class="chip">ShardedSeen</span>
-            <span class="chip">wire v6</span>
             <span class="chip">zero-copy TTL</span>
             <span class="chip">16KB coalesce</span>
-            <span class="chip">94 tests ✓</span>
+            <span class="chip">max_peers · max_forwarding_peers</span>
+            <span class="chip">dropped_frames counter</span>
           </div>
         </div>
       </div>
@@ -655,7 +796,7 @@
   <div class="section">
     <div class="section-head">
       <h2>Layer 2 — Signal / Boundary Mesh</h2>
-      <span class="phase-tag tag-done">Complete · 94 tests</span>
+      <span class="phase-tag tag-done">Complete · 107 tests</span>
     </div>
 
     <!-- Scope diagram -->
@@ -664,17 +805,17 @@
       <div class="scope-cell">
         <div class="scope-name scope-s">System</div>
         <div class="scope-rule">admits() → always true</div>
-        <p class="scope-desc">All agents in the cluster act. Global broadcasts, cluster-wide events.</p>
+        <p class="scope-desc">All agents in the cluster act. Shed under load by opacity — use for broadcasts that can tolerate probabilistic delivery. Global events, cluster-wide state changes.</p>
       </div>
       <div class="scope-cell">
         <div class="scope-name scope-g">Group</div>
         <div class="scope-rule">admits() → groups.contains(g)</div>
-        <p class="scope-desc">Only agents whose boundary includes the group name act. NLP agents, data processors, ops monitors — any named cohort. Used for emergent work routing.</p>
+        <p class="scope-desc">Only agents whose boundary includes the group name act. NLP agents, data processors, ops monitors — any named cohort. Shed under load by opacity. The primary routing primitive for work dispatch.</p>
       </div>
       <div class="scope-cell">
         <div class="scope-name scope-i">Individual</div>
         <div class="scope-rule">admits() → id == self.node_id</div>
-        <p class="scope-desc">Only the target node acts. Direct replies (<code>invoke.result</code>) are the canonical use. Bypasses opacity — no routing alternative exists.</p>
+        <p class="scope-desc">Only the target node acts. Direct replies (<code>invoke.result</code>) are the canonical use. <strong>Bypasses opacity</strong> — there is no routing alternative for a directed reply. Not subject to probabilistic shedding.</p>
       </div>
     </div>
 
@@ -703,110 +844,257 @@
       </div>
     </div>
 
-    <!-- Actual API -->
-    <h3>API — All on GossipAgent, No Wrapper</h3>
-<pre><code><span class="cmt">// Group membership — updates local boundary + gossips grp/&lt;name&gt;/&lt;node_id&gt;</span>
-agent.<span class="fn">join_group</span>(<span class="str">"nlp"</span>);
+    <!-- Full API -->
+    <h3>Complete Layer 2 API</h3>
+<pre><code><span class="cmt">// ── Group membership ──────────────────────────────────────────────────────</span>
+agent.<span class="fn">join_group</span>(<span class="str">"nlp"</span>);          <span class="cmt">// gossips grp/nlp/&lt;node_id&gt; into KV store</span>
 agent.<span class="fn">leave_group</span>(<span class="str">"nlp"</span>);
+<span class="kw">let</span> groups: <span class="ty">Vec</span>&lt;<span class="ty">Arc</span>&lt;<span class="ty">str</span>&gt;&gt; = agent.<span class="fn">groups</span>();  <span class="cmt">// current boundary memberships</span>
 
-<span class="cmt">// Persistent handler — one receiver per kind per task</span>
-<span class="kw">let mut</span> rx = agent.<span class="fn">signal_rx</span>(<span class="str">"invoke"</span>);
-tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
-    <span class="kw">while let</span> <span class="ty">Some</span>(sig) = rx.<span class="fn">recv</span>().<span class="kw">await</span> {
-        <span class="kw">let</span> req: <span class="ty">InvokeRequest</span> = <span class="fn">decode</span>(&amp;sig.payload);
-        <span class="kw">let</span> result = <span class="fn">run_model</span>(&amp;req.payload).<span class="kw">await</span>;
-        agent.<span class="fn">emit</span>(
-            <span class="str">"invoke.result"</span>,
-            <span class="ty">SignalScope</span>::<span class="ty">Individual</span>(sig.sender),  <span class="cmt">// reply to specific caller</span>
-            <span class="fn">encode</span>(<span class="ty">InvokeResponse</span> { nonce: req.nonce, result }),
-        );
-    }
-});
-
-<span class="cmt">// One-shot correlation — register BEFORE emitting so no reply is missed</span>
-<span class="kw">let</span> nonce = <span class="fn">fastrand</span>::<span class="fn">u64</span>(..);
-<span class="kw">let</span> reply_fut = agent.<span class="fn">signal_once</span>(
-    <span class="str">"invoke.result"</span>,
-    <span class="ty">Duration</span>::<span class="fn">from_secs</span>(<span class="lit">5</span>),
-    <span class="kw">move</span> |s| s.nonce == nonce,    <span class="cmt">// channel registered synchronously on this call</span>
-);
-agent.<span class="fn">emit_async</span>(<span class="str">"invoke"</span>, <span class="ty">SignalScope</span>::<span class="ty">Group</span>(<span class="str">"nlp"</span>.<span class="fn">into</span>()), payload).<span class="kw">await</span>;
-<span class="kw">let</span> result = reply_fut.<span class="kw">await</span>;   <span class="cmt">// → Option&lt;Signal&gt;</span>
-
-<span class="cmt">// Periodic heartbeat — emits signal AND writes pheromone trail each tick</span>
+<span class="cmt">// ── Periodic heartbeat + pheromone trail ──────────────────────────────────</span>
 <span class="kw">let</span> load_key = <span class="mac">format!</span>(<span class="str">"load/{}"</span>, agent.<span class="fn">node_id</span>());
-<span class="kw">let</span> _handle = agent.<span class="fn">advertise</span>(
-    <span class="str">"contract.available"</span>,
+<span class="kw">let</span> _advert = agent.<span class="fn">advertise</span>(
+    signal_kind::<span class="ty">CONTRACT_AVAILABLE</span>,
     <span class="ty">SignalScope</span>::<span class="ty">Group</span>(<span class="str">"nlp"</span>.<span class="fn">into</span>()),
     <span class="ty">Duration</span>::<span class="fn">from_secs</span>(<span class="lit">10</span>),
     <span class="kw">move</span> || {
         <span class="kw">let</span> state = <span class="ty">LoadState</span> { queue_depth: QUEUE.<span class="fn">len</span>(), written_at_ms: <span class="fn">unix_ms_now</span>() };
-        agent2.<span class="fn">set</span>(load_key.<span class="fn">clone</span>(), <span class="fn">encode</span>(&amp;state));  <span class="cmt">// pheromone trail</span>
-        <span class="fn">encode</span>(&amp;state)                                    <span class="cmt">// signal payload</span>
+        agent2.<span class="fn">set</span>(load_key.<span class="fn">clone</span>(), <span class="fn">encode</span>(&amp;state));  <span class="cmt">// pheromone trail — persists</span>
+        <span class="fn">encode</span>(&amp;state)                                    <span class="cmt">// signal payload — fast delivery</span>
     },
+);
+
+<span class="cmt">// ── Emit / receive ────────────────────────────────────────────────────────</span>
+agent.<span class="fn">emit</span>(<span class="str">"invoke"</span>, <span class="ty">SignalScope</span>::<span class="ty">Group</span>(<span class="str">"nlp"</span>.<span class="fn">into</span>()), payload);
+<span class="kw">let</span> result = agent.<span class="fn">signal_once</span>(<span class="str">"invoke.result"</span>, <span class="ty">Duration</span>::<span class="fn">from_secs</span>(<span class="lit">5</span>),
+    <span class="kw">move</span> |s| s.nonce == nonce).<span class="kw">await</span>;  <span class="cmt">// register BEFORE emitting</span>
+
+<span class="cmt">// ── Fault detection — supervisor pattern ─────────────────────────────────</span>
+<span class="cmt">// on_stale() called when last_signal(kind) is silent longer than threshold.</span>
+<span class="cmt">// Checks every threshold/4. Drop WatchHandle to cancel.</span>
+<span class="kw">let</span> _watcher = agent.<span class="fn">watch</span>(
+    signal_kind::<span class="ty">CONTRACT_AVAILABLE</span>,
+    <span class="ty">Duration</span>::<span class="fn">from_secs</span>(<span class="lit">30</span>),
+    <span class="kw">move</span> || { <span class="fn">respawn_worker</span>(); },
+);
+
+<span class="cmt">// ── Quorum — threshold activation ────────────────────────────────────────</span>
+<span class="cmt">// Returns true when ≥ min_senders distinct NodeIds heard in window.</span>
+<span class="kw">if</span> agent.<span class="fn">quorum</span>(signal_kind::<span class="ty">CLUSTER_EVENT</span>, <span class="lit">3</span>, <span class="ty">Duration</span>::<span class="fn">from_secs</span>(<span class="lit">10</span>)) {
+    <span class="fn">start_leader_election</span>();
+}
+
+<span class="cmt">// ── Inhibition — refractory period ───────────────────────────────────────</span>
+<span class="kw">let mut</span> invoke_rx = agent.<span class="fn">signal_rx_with_capacity</span>(signal_kind::<span class="ty">INVOKE</span>, <span class="lit">64</span>);
+tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
+    <span class="kw">while let</span> <span class="ty">Some</span>(sig) = invoke_rx.<span class="fn">recv</span>().<span class="kw">await</span> {
+        <span class="cmt">// Block the next invocation for 500ms — prevents pile-up</span>
+        agent.<span class="fn">suppress</span>(signal_kind::<span class="ty">INVOKE</span>, <span class="ty">Duration</span>::<span class="fn">from_millis</span>(<span class="lit">500</span>));
+        <span class="fn">handle_invocation</span>(sig).<span class="kw">await</span>;
+    }
+});
+
+<span class="cmt">// ── Proactive opacity notification ────────────────────────────────────────</span>
+<span class="cmt">// Monitors fill_ratio; emits boundary.opaque / boundary.transparent to peers.</span>
+<span class="cmt">// Application suggests threshold; library adapts based on fill trend.</span>
+<span class="kw">let</span> _governor = agent.<span class="fn">manage_opacity</span>(
+    signal_kind::<span class="ty">BOUNDARY_OPAQUE</span>,
+    <span class="ty">SignalScope</span>::<span class="ty">Group</span>(<span class="str">"nlp"</span>.<span class="fn">into</span>()),
+    <span class="ty">OpacityHint</span>::<span class="fn">default</span>(),  <span class="cmt">// threshold=0.75, hysteresis=0.20</span>
 );</code></pre>
 
-    <!-- Pheromone trails -->
-    <h3>Stigmergic Load State — Pheromone Trails</h3>
-    <p>Workers write current load into the Layer 1 KV store at <code>load/&lt;node_id&gt;</code>.
-    Any node reads routing state directly from the shared medium — no local cache, no signal
-    handlers, no coordination. New nodes receive the full picture immediately via anti-entropy sync.</p>
+    <!-- Observability -->
+    <h3>Observing the Mesh</h3>
+    <p>Layer 2 is not a black box. Every observable dimension has a dedicated query. These answer different questions — use the right tool for each diagnosis.</p>
 
-<pre><code><span class="cmt">// Read load state for all "nlp" workers at decision time</span>
-<span class="kw">let</span> candidates: <span class="ty">Vec</span>&lt;(<span class="ty">NodeId</span>, <span class="ty">LoadState</span>)&gt; = agent
-    .<span class="fn">scan_prefix</span>(<span class="str">"load/"</span>)
+    <table class="obs-table">
+      <thead>
+        <tr><th>Question</th><th>API</th><th>What it tells you</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Was a kind heard recently?</td>
+          <td>last_signal(kind)</td>
+          <td>Timestamp of last delivery to this node — use for circuit-breaker logic</td>
+        </tr>
+        <tr>
+          <td>Has a kind gone silent?</td>
+          <td>watch(kind, threshold, cb)</td>
+          <td>Calls <code>cb</code> when silent longer than threshold — supervisor pattern</td>
+        </tr>
+        <tr>
+          <td>Have K distinct nodes checked in?</td>
+          <td>quorum(kind, K, window)</td>
+          <td>Threshold activation — act when enough distinct senders heard in window</td>
+        </tr>
+        <tr>
+          <td>Is this node refusing a kind?</td>
+          <td>is_suppressed(kind)</td>
+          <td>Active inhibition in effect — application called suppress()</td>
+        </tr>
+        <tr>
+          <td>How saturated is intake?</td>
+          <td>opacity(kind)</td>
+          <td>Fill ratio 0.0–1.0 — probability that next signal is shed at boundary</td>
+        </tr>
+        <tr>
+          <td>Are peers notified of overload?</td>
+          <td>manage_opacity(...)</td>
+          <td>Governor emits boundary.opaque to peers at configured threshold</td>
+        </tr>
+        <tr>
+          <td>What groups is this node in?</td>
+          <td>groups()</td>
+          <td>Current boundary memberships — which Group signals will be acted on</td>
+        </tr>
+        <tr>
+          <td>How many workers are alive?</td>
+          <td>scan_prefix("load/")</td>
+          <td>Pheromone trail count with evaporation — authoritative worker inventory</td>
+        </tr>
+        <tr>
+          <td>Are gossip writes being lost?</td>
+          <td>system_stats().dropped_frames</td>
+          <td>Cumulative drop counter — non-zero means writes were silently lost</td>
+        </tr>
+      </tbody>
+    </table>
+
+<pre><code><span class="cmt">// Diagnostic scenario — worker pool appears stalled. Work through the layers:</span>
+
+<span class="cmt">// 1. Propagation health first — fix this before anything else</span>
+<span class="kw">let</span> stats = supervisor.<span class="fn">system_stats</span>();
+<span class="kw">if</span> stats.dropped_frames &gt; prev_dropped {
+    <span class="mac">tracing::warn!</span>(<span class="str">"gossip losing frames — raise max_concurrent_forwards"</span>);
+}
+
+<span class="cmt">// 2. Any worker heard recently?</span>
+<span class="kw">let</span> fresh = supervisor.<span class="fn">last_signal</span>(signal_kind::<span class="ty">CONTRACT_AVAILABLE</span>)
+    .<span class="fn">map</span>(|t| t.<span class="fn">elapsed</span>() &lt; <span class="ty">Duration</span>::<span class="fn">from_secs</span>(<span class="lit">30</span>))
+    .<span class="fn">unwrap_or</span>(<span class="kw">false</span>);
+
+<span class="cmt">// 3. Do we have quorum? (2+ distinct workers in 30s)</span>
+<span class="kw">let</span> pool_ready = supervisor.<span class="fn">quorum</span>(
+    signal_kind::<span class="ty">CONTRACT_AVAILABLE</span>, <span class="lit">2</span>, <span class="ty">Duration</span>::<span class="fn">from_secs</span>(<span class="lit">30</span>)
+);
+
+<span class="cmt">// 4. Authoritative state from pheromone trails</span>
+<span class="kw">let</span> live_trails = supervisor.<span class="fn">scan_prefix</span>(<span class="str">"load/nlp/"</span>)
     .<span class="fn">into_iter</span>()
-    .<span class="fn">filter_map</span>(|(k, b)| {
-        <span class="kw">let</span> state: <span class="ty">LoadState</span> = <span class="fn">decode</span>(&amp;b)?;
-        <span class="cmt">// Evaporation — discard entries older than 3 × advertise interval</span>
-        <span class="kw">if</span> <span class="fn">unix_ms_now</span>() - state.written_at_ms &gt; <span class="lit">30_000</span> { <span class="kw">return</span> <span class="ty">None</span>; }
-        <span class="kw">let</span> node_id = k.<span class="fn">strip_prefix</span>(<span class="str">"load/"</span>)?.<span class="fn">parse</span>().<span class="fn">ok</span>()?;
-        <span class="ty">Some</span>((node_id, state))
-    })
-    .<span class="fn">collect</span>();</code></pre>
+    .<span class="fn">filter_map</span>(|(_, b)| <span class="fn">decode</span>::&lt;<span class="ty">LoadState</span>&gt;(&amp;b))
+    .<span class="fn">filter</span>(|s| <span class="fn">unix_ms_now</span>() - s.written_at_ms &lt; <span class="lit">30_000</span>)
+    .<span class="fn">count</span>();
 
-    <div class="two-col">
-      <div class="card c2">
-        <div class="card-title">Boundary — the Receptor</div>
-        <div class="card-sub">O(1) on the signal hot path</div>
-        <ul>
-          <li>In-memory AHashSet of group names</li>
-          <li>admits(scope) — single hashset lookup, no locks on delivery</li>
-          <li>join_group() / leave_group() update set + gossip KV entry</li>
-          <li>Variable opacity: probabilistic shedding under load</li>
-        </ul>
+<span class="cmt">// Trail present but quorum false → worker alive but signal channel suppressed or saturated</span>
+<span class="mac">println!</span>(<span class="str">"signals fresh: {fresh}, quorum: {pool_ready}, live trails: {live_trails}"</span>);</code></pre>
+
+    <!-- Opacity vs Inhibition -->
+    <h3>Opacity vs Inhibition — Two Independent Mechanisms</h3>
+    <p>Both mechanisms reduce signal delivery. They look superficially similar and are routinely confused. They are not — they arise from different causes and serve different purposes.</p>
+
+    <div class="oi-grid">
+      <div class="oi-cell">
+        <div class="oi-header oi-opacity">Opacity — passive, automatic, emergent</div>
+        <div class="oi-row">
+          <div class="oi-label">Triggered by</div>
+          <div class="oi-value">Handler channel fill ratio — <em>automatic</em>, no application code needed</div>
+        </div>
+        <div class="oi-row">
+          <div class="oi-label">Effect</div>
+          <div class="oi-value">Probabilistic shedding: <code>admit_prob = 1 - fill_ratio</code>. At fill=0.6, 60% of System/Group signals are shed.</div>
+        </div>
+        <div class="oi-row">
+          <div class="oi-label">Forwarding</div>
+          <div class="oi-value">Unaffected — the node still forwards every signal. The network stays fully connected.</div>
+        </div>
+        <div class="oi-row">
+          <div class="oi-label">Individual scope</div>
+          <div class="oi-value">Always bypassed — no routing alternative for a directed reply</div>
+        </div>
+        <div class="oi-row">
+          <div class="oi-label">Reversible</div>
+          <div class="oi-value">Auto — falls as the channel drains</div>
+        </div>
+        <div class="oi-row">
+          <div class="oi-label">Use for</div>
+          <div class="oi-value">Self-protection under load — emergent backpressure with no coordinator</div>
+        </div>
+        <div class="oi-row">
+          <div class="oi-label">Diagnose with</div>
+          <div class="oi-value"><code>opacity(kind)</code> → fill ratio 0.0–1.0</div>
+        </div>
+        <div class="oi-row" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border);">
+          <div class="oi-label" style="color:var(--accent4);">manage_ opacity</div>
+          <div class="oi-value">Does <em>not</em> change shedding itself. Adds a governor that watches fill ratio and <strong>tells peers</strong> via <code>boundary.opaque</code> when this node is becoming saturated. Library governs threshold; application provides a hint.</div>
+        </div>
       </div>
-      <div class="card c2">
-        <div class="card-title">Pheromone Trails</div>
-        <div class="card-sub">Stigmergy — routing from the medium</div>
-        <ul>
-          <li>Workers write <code>load/&lt;node_id&gt;</code> each advertise tick</li>
-          <li>Evaporation via embedded <code>written_at_ms</code> timestamp</li>
-          <li>Crashed workers' trails decay without coordination</li>
-          <li>Late joiners bootstrap immediately via anti-entropy</li>
-        </ul>
-      </div>
-      <div class="card c2">
-        <div class="card-title">Emergent Routing</div>
-        <div class="card-sub">No invoker selects a worker</div>
-        <ul>
-          <li>Invoke floods Group scope; workers compete to respond</li>
-          <li>Opaque workers shed signals — stop consuming without coordination</li>
-          <li>First valid reply wins via signal_once</li>
-          <li>On timeout, scan pheromone trails to decide retry vs. escalate</li>
-        </ul>
-      </div>
-      <div class="card c2">
-        <div class="card-title">Two-Timescale Load Signalling</div>
-        <div class="card-sub">Neural + hormonal — both needed</div>
-        <ul>
-          <li>Pheromone trail: 5–30 s, durable, visible to late joiners</li>
-          <li>boundary.opaque signal: immediate, connection teardown now</li>
-          <li>Signals handle the gap before the next KV write propagates</li>
-          <li>Use both — they are complementary, not redundant</li>
-        </ul>
+      <div class="oi-cell">
+        <div class="oi-header oi-inhibition">Inhibition — active, deterministic, application-controlled</div>
+        <div class="oi-row">
+          <div class="oi-label">Triggered by</div>
+          <div class="oi-value">Application calling <code>suppress(kind, duration)</code> — <em>deliberate</em>, programmatic</div>
+        </div>
+        <div class="oi-row">
+          <div class="oi-label">Effect</div>
+          <div class="oi-value">100% block — deterministic. Zero signals of that kind are delivered for the duration. Not probabilistic.</div>
+        </div>
+        <div class="oi-row">
+          <div class="oi-label">Forwarding</div>
+          <div class="oi-value">Unaffected — forwarding and <code>last_signal</code> timestamps continue normally</div>
+        </div>
+        <div class="oi-row">
+          <div class="oi-label">Individual scope</div>
+          <div class="oi-value">Blocked like any other scope — inhibition is unconditional</div>
+        </div>
+        <div class="oi-row">
+          <div class="oi-label">Reversible</div>
+          <div class="oi-value">Auto after <code>duration</code>; or explicit <code>unsuppress(kind)</code></div>
+        </div>
+        <div class="oi-row">
+          <div class="oi-label">Use for</div>
+          <div class="oi-value">Refractory period, rate limiting, idempotency window, "just accepted work — stop accepting same kind"</div>
+        </div>
+        <div class="oi-row">
+          <div class="oi-label">Diagnose with</div>
+          <div class="oi-value"><code>is_suppressed(kind)</code> → bool</div>
+        </div>
+        <div class="oi-row" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border);">
+          <div class="oi-label" style="color:var(--muted);">Biological analogy</div>
+          <div class="oi-value">The <em>refractory period</em> after a neuron fires — the cell explicitly will not fire again for a fixed window, regardless of stimulus.</div>
+        </div>
       </div>
     </div>
+
+    <p style="font-size:13px; color:var(--muted); font-style:italic;">
+      Diagnostic shortcut: <code>opacity(kind) &gt; 0</code> means the node is <em>overloaded</em>.
+      <code>is_suppressed(kind)</code> means the node <em>chose</em> to block it.
+      Both can be true simultaneously — they are independent states.
+    </p>
+
+    <!-- Worker scenario combining all three -->
+    <h3>Combined Scenario — Worker Under Heavy Load</h3>
+<pre><code><span class="cmt">// Three mechanisms working together — complementary, not redundant.</span>
+
+<span class="cmt">// 1. Opacity (automatic): as invoke_rx fills, boundary sheds incoming invocations</span>
+<span class="cmt">//    probabilistically. No code needed. Size the channel to match processing rate.</span>
+<span class="kw">let mut</span> invoke_rx = agent.<span class="fn">signal_rx_with_capacity</span>(signal_kind::<span class="ty">INVOKE</span>, <span class="lit">64</span>);
+
+<span class="cmt">// 2. Inhibition (active): after accepting one invocation, block the next for 500ms.</span>
+<span class="cmt">//    Prevents pile-up even when the channel is large enough to buffer many.</span>
+tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
+    <span class="kw">while let</span> <span class="ty">Some</span>(sig) = invoke_rx.<span class="fn">recv</span>().<span class="kw">await</span> {
+        agent.<span class="fn">suppress</span>(signal_kind::<span class="ty">INVOKE</span>, <span class="ty">Duration</span>::<span class="fn">from_millis</span>(<span class="lit">500</span>));
+        <span class="fn">handle_invocation</span>(sig).<span class="kw">await</span>;
+    }
+});
+
+<span class="cmt">// 3. manage_opacity (proactive): emit boundary.opaque to peers when fill rises above</span>
+<span class="cmt">//    threshold — peers route new work elsewhere before the channel fully saturates.</span>
+<span class="kw">let</span> _governor = agent.<span class="fn">manage_opacity</span>(
+    signal_kind::<span class="ty">BOUNDARY_OPAQUE</span>,
+    <span class="ty">SignalScope</span>::<span class="ty">Group</span>(<span class="str">"nlp"</span>.<span class="fn">into</span>()),
+    <span class="ty">OpacityHint</span>::<span class="fn">default</span>(),
+);</code></pre>
 
     <!-- Signal roles table -->
     <h3>Signal Kinds — Essential vs Pheromone-Covered</h3>
@@ -818,8 +1106,8 @@ agent.<span class="fn">emit_async</span>(<span class="str">"invoke"</span>, <spa
         <tr><td><code>invoke</code></td><td>Work request — must reach a worker now</td><td>No — irreplaceable</td></tr>
         <tr><td><code>invoke.result</code></td><td>Targeted reply — ephemeral by nature</td><td>No — irreplaceable</td></tr>
         <tr><td><code>invoke.bulk</code></td><td>Layer 3 bulk transfer ticket</td><td>No — irreplaceable</td></tr>
-        <tr><td><code>boundary.opaque</code></td><td>Immediate overload — tear down connections now</td><td>No — fast-path complement to trail</td></tr>
-        <tr><td><code>boundary.transparent</code></td><td>Recovery — upstream can resume sending</td><td>No — fast-path complement</td></tr>
+        <tr><td><code>boundary.opaque</code></td><td>Immediate overload — peers adjust routing now</td><td>No — fast-path complement to trail</td></tr>
+        <tr><td><code>boundary.transparent</code></td><td>Recovery — upstream can resume full send rate</td><td>No — fast-path complement</td></tr>
         <tr><td><code>contract.available</code></td><td>Worker availability</td><td><strong>Yes</strong> — <code>load/&lt;node_id&gt;</code> is authoritative</td></tr>
         <tr><td><code>contract.withdrawn</code></td><td>Worker gone</td><td><strong>Yes</strong> — tombstone / evaporation</td></tr>
         <tr><td><code>cluster.event</code></td><td>Join / leave events</td><td><strong>Yes</strong> — <code>grp/&lt;name&gt;/&lt;node_id&gt;</code> entries</td></tr>
@@ -827,21 +1115,135 @@ agent.<span class="fn">emit_async</span>(<span class="str">"invoke"</span>, <spa
     </table>
   </div>
 
+  <!-- ── Converging on a Reactive Capability Cell ── -->
+  <div class="section">
+    <div class="section-head">
+      <h2>Converging on a Reactive Capability Cell</h2>
+      <span class="phase-tag tag-p3">Layer 3 Foundation</span>
+    </div>
+
+    <p>The three higher-layer paradigms — Actor/Event systems, async Services/RPC, and MCP AI tool
+    interactions — look different from the outside but share more common ground than they appear to.
+    All three reduce to the same three substrate operations:</p>
+
+    <div class="three-col">
+      <div class="card c1">
+        <div class="card-title">1 · Advertise Capability</div>
+        <div class="card-sub">"I can do X"</div>
+        <ul>
+          <li>Actor: register in <code>actors/&lt;name&gt;/&lt;node_id&gt;</code></li>
+          <li>RPC service: publish to <code>services/&lt;name&gt;/</code></li>
+          <li>MCP tool: write schema to <code>tools/&lt;tool&gt;/&lt;node_id&gt;</code></li>
+          <li>All via <code>advertise()</code> + KV write</li>
+        </ul>
+      </div>
+      <div class="card c1">
+        <div class="card-title">2 · Route a Request</div>
+        <div class="card-sub">"Find something that can do X"</div>
+        <ul>
+          <li>Emit to Group scope; workers compete to respond</li>
+          <li>Routing is emergent from opacity — no invoker selects a worker</li>
+          <li>Pheromone trails give the load picture; <code>quorum</code> confirms readiness</li>
+          <li>All via <code>emit_async(kind, Group(scope), payload)</code></li>
+        </ul>
+      </div>
+      <div class="card c1">
+        <div class="card-title">3 · Return a Correlated Result</div>
+        <div class="card-sub">"Here is the answer"</div>
+        <ul>
+          <li>Actor reply, RPC response, MCP tool result — structurally identical</li>
+          <li><code>signal_once("result", timeout, |s| s.nonce == req_nonce)</code></li>
+          <li>Individual scope — bypasses opacity, always arrives</li>
+          <li>Substrate carries opaque Bytes; paradigm is above it</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="quote-block">
+      <p>The <strong style="color:var(--text);font-style:normal;">reactive capability cell</strong>: each agent advertises what it can do,
+      holds its authoritative state in KV (readable by anyone at any time), activates on
+      threshold signal, writes results back to KV, and emits a correlated result signal.
+      That model is a superset of all three paradigms — and it is the natural shape of the
+      gossip substrate. The higher layers build on this shape; they do not replace it.</p>
+    </div>
+
+    <h3>Actor / Event (Akka-style)</h3>
+    <p>Actors are gossip agents with a defined key namespace (their state in KV) and a signal handler
+    (their message loop). Location transparency comes from <code>NodeId</code>-based addressing —
+    callers emit to <code>Individual(node_id)</code> without knowing the actor's network location.
+    Supervision uses <code>watch()</code>: a supervisor watches a worker's heartbeat kind and
+    triggers restart when stale.</p>
+
+<pre><code><span class="cmt">// Actor registration</span>
+agent.<span class="fn">set</span>(<span class="mac">format!</span>(<span class="str">"actors/summariser/{}"</span>, agent.<span class="fn">node_id</span>()), <span class="fn">encode</span>(&amp;metadata));
+
+<span class="cmt">// Message send (caller) — send to specific actor by NodeId</span>
+agent.<span class="fn">emit</span>(<span class="str">"actor.msg"</span>, <span class="ty">SignalScope</span>::<span class="ty">Individual</span>(target_node_id), payload);
+
+<span class="cmt">// Supervisor — restart if heartbeat goes silent for 30s</span>
+<span class="kw">let</span> _supervisor = agent.<span class="fn">watch</span>(
+    signal_kind::<span class="ty">CONTRACT_AVAILABLE</span>,
+    <span class="ty">Duration</span>::<span class="fn">from_secs</span>(<span class="lit">30</span>),
+    <span class="kw">move</span> || { <span class="fn">respawn</span>(target_node_id); },
+);</code></pre>
+
+    <h3>Async Services / RPC</h3>
+    <p>RPC over gossip: invoker registers <code>signal_once</code> before emitting; worker handles
+    via <code>signal_rx</code> and responds with <code>Individual</code> scope. Load balancing is
+    emergent from opacity. Circuit breaking is <code>last_signal</code> staleness. Each service
+    chooses its own serialisation — bincode for internal Rust services, JSON for MCP-compatible
+    interfaces, protobuf for external-facing endpoints. The substrate routes by <code>kind</code>
+    string; payload format is transparent to the gossip layer.</p>
+
+    <h3>MCP AI Tool Routing</h3>
+    <p>MCP is request-response: tool discovery → tool invocation → structured result. The gossip
+    layer provides discovery and routing; MCP provides the wire format and schema contract. An MCP
+    bridge agent uses the gossip substrate exactly like any other agent — it just happens to
+    serialize JSON at its boundary.</p>
+
+<pre><code><span class="cmt">// Tool registry — any node can discover all available tools</span>
+agent.<span class="fn">set</span>(<span class="mac">format!</span>(<span class="str">"tools/summarise/{}"</span>, agent.<span class="fn">node_id</span>()), tool_schema_json);
+
+<span class="cmt">// Tool discovery — late joiners get the full picture via anti-entropy</span>
+<span class="kw">let</span> available_tools = agent.<span class="fn">scan_prefix</span>(<span class="str">"tools/"</span>);
+
+<span class="cmt">// Tool invocation — routed via Individual scope to a specific tool server</span>
+agent.<span class="fn">emit</span>(<span class="str">"mcp.invoke"</span>, <span class="ty">SignalScope</span>::<span class="ty">Individual</span>(tool_server_id), json_request);</code></pre>
+
+    <h3>Serialisation — Chosen at Need, Not Mandated</h3>
+    <p>A new agent can join the mesh speaking a different serialisation format than its neighbours,
+    advertise its capabilities via the shared <code>kind</code> namespace, and interoperate without
+    requiring any existing agents to change. The gossip layer carries bytes; the capability
+    advertisement carries the contract; agents that understand each other's payloads collaborate,
+    those that don't simply don't handle that signal kind. <strong>Evolution happens by addition,
+    not by coordinated migration.</strong></p>
+
+    <table class="compare">
+      <thead><tr><th>Agent type</th><th>Serialisation choice</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>MCP bridge</td><td>JSON</td><td>MCP wire format requirement — interop with any MCP client</td></tr>
+        <tr><td>Internal compute agent</td><td>bincode</td><td>Fast, Rust-native, already a dependency</td></tr>
+        <tr><td>External-facing service</td><td>protobuf or JSON-Schema</td><td>External contract stability</td></tr>
+        <tr><td>High-throughput actor mailbox</td><td>Custom flat layout</td><td>Minimal allocation on the hot path</td></tr>
+      </tbody>
+    </table>
+  </div>
+
   <!-- ── Phase 3: Bulk Transfer ── -->
   <div class="section">
     <div class="section-head">
-      <h2>Phase 3 — Bulk Transfer / AI Execution</h2>
-      <span class="phase-tag tag-p3">3–4 weeks</span>
+      <h2>Phase 3 — Bulk Transfer / Streaming</h2>
+      <span class="phase-tag tag-p3">Next</span>
     </div>
 
     <p>When payloads exceed practical signal size — multi-KB prompts, model outputs,
     streaming token responses — a Layer 2 signal carries a <em>ticket</em>. HTTP carries
     the weight. Agents with only small payloads need no HTTP server at all.</p>
 
-<pre><code><span class="cmt">// Layer 2: coordination via signal</span>
-layer.<span class="fn">signal</span>(
-    <span class="ty">SignalScope</span>::<span class="ty">Individual</span>(target),
+<pre><code><span class="cmt">// Layer 2: coordination via signal (ticket only)</span>
+agent.<span class="fn">emit</span>(
     <span class="str">"invoke.bulk"</span>,
+    <span class="ty">SignalScope</span>::<span class="ty">Individual</span>(target),
     <span class="fn">encode</span>(<span class="ty">BulkInvokeRequest</span> { contract_id, corr_id, input_endpoint }),
 );
 
@@ -850,41 +1252,16 @@ layer.<span class="fn">signal</span>(
 <span class="cmt">// GET  /result/corr_id  ←  token stream (SSE)</span>
 
 <span class="cmt">// Layer 2: completion notification back to caller</span>
-layer.<span class="fn">signal</span>(
-    <span class="ty">SignalScope</span>::<span class="ty">Individual</span>(caller),
+agent.<span class="fn">emit</span>(
     <span class="str">"invoke.result"</span>,
+    <span class="ty">SignalScope</span>::<span class="ty">Individual</span>(caller),
     <span class="fn">encode</span>(<span class="ty">InvokeResponse</span> { corr_id, result_endpoint }),
 );</code></pre>
 
-    <div class="two-col">
-      <div class="card c3">
-        <div class="card-title">What lives in Layer 3</div>
-        <div class="card-sub">Only the heavy-payload concerns</div>
-        <ul>
-          <li>reqwest HTTP client (rustls-tls, stream feature)</li>
-          <li>Optional HTTP server per agent (axum / hyper)</li>
-          <li>BulkTransferLayer — fetch input, return result</li>
-          <li>SSE / chunked streaming for LLM token streams</li>
-          <li>Distinct <code>Event</code> type for transport-bound events</li>
-          <li><code>peers()</code> for enumerating reachable nodes by NodeId</li>
-        </ul>
-      </div>
-      <div class="card c3">
-        <div class="card-title">What stays in Layer 2</div>
-        <div class="card-sub">Even for bulk workflows</div>
-        <ul>
-          <li>Signal to initiate the request (ticket only)</li>
-          <li>Signal to notify completion</li>
-          <li>Routing via pheromone trails and opacity</li>
-          <li>Group coordination around the invocation</li>
-        </ul>
-      </div>
-    </div>
-
-    <h3>Layer 3 Eventing — Distinct from Layer 2 Signals</h3>
+    <h3>Layer 3 Event vs Layer 2 Signal</h3>
     <p>Layer 3 introduces a distinct <code>Event</code> type for connection-scoped, ordered,
     flow-controlled events riding a transport connection. The delivery guarantees differ
-    fundamentally from Layer 2 signals.</p>
+    fundamentally. Sharing a type would obscure this.</p>
 
     <table class="compare">
       <thead><tr><th>Property</th><th>Layer 2 Signal</th><th>Layer 3 Event</th></tr></thead>
@@ -896,11 +1273,6 @@ layer.<span class="fn">signal</span>(
         <tr><td>Use cases</td><td>Work routing, load coordination</td><td>Streaming tokens, cancel signals, progress events</td></tr>
       </tbody>
     </table>
-
-    <p><strong>Pattern reuse</strong>: the Layer 2 mental model transfers directly. Event kinds reuse
-    the same string constants (<code>invoke.result</code>, <code>boundary.opaque</code>). The
-    "emit to scope, receivers with matching state act" principle applies. Only the delivery
-    substrate changes — the type is distinct to make the guarantee difference explicit in code.</p>
   </div>
 
   <!-- ── Timeline ── -->
@@ -909,7 +1281,7 @@ layer.<span class="fn">signal</span>(
       <h2>Delivery Timeline</h2>
     </div>
     <div class="timeline-wrap">
-      <div class="tl-bar"><div class="tl-bar-fill" style="width:50%;background:linear-gradient(90deg,var(--accent2),rgba(88,166,255,0.3))"></div></div>
+      <div class="tl-bar"><div class="tl-bar-fill" style="width:40%;"></div></div>
       <div class="tl-cols">
         <div class="tl-card">
           <div class="tl-num" style="color:var(--accent2)">Layer 1</div>
@@ -920,26 +1292,29 @@ layer.<span class="fn">signal</span>(
         <div class="tl-card">
           <div class="tl-num" style="color:var(--accent2)">Layer 2</div>
           <div class="tl-title">Signal / Boundary</div>
-          <div class="tl-weeks">Complete · 94 tests</div>
+          <div class="tl-weeks">Complete · 107 tests</div>
           <span class="tl-badge tl-done">Done ✓</span>
         </div>
         <div class="tl-card">
-          <div class="tl-num" style="color:var(--accent3)">Phase 3</div>
-          <div class="tl-title">Bulk Transfer</div>
-          <div class="tl-weeks">Next</div>
+          <div class="tl-num" style="color:var(--accent3)">Layer 3</div>
+          <div class="tl-title">Service Patterns</div>
+          <div class="tl-weeks">Next · Actor/RPC/Bulk</div>
           <span class="tl-badge tl-medium">3–4 weeks</span>
         </div>
         <div class="tl-card">
-          <div class="tl-num" style="color:var(--accent4)">Phase 4</div>
+          <div class="tl-num" style="color:var(--accent4)">Layer 4</div>
+          <div class="tl-title">AI Integration</div>
+          <div class="tl-weeks">MCP · Supervision</div>
+          <span class="tl-badge tl-future">Parallel w/ L3</span>
+        </div>
+        <div class="tl-card">
+          <div class="tl-num" style="color:var(--muted)">Layer 5</div>
           <div class="tl-title">Observability</div>
-          <div class="tl-weeks">Parallel with Phase 3</div>
-          <span class="tl-badge tl-future">2 weeks</span>
+          <div class="tl-weeks">Prometheus · Metrics</div>
+          <span class="tl-badge tl-horizon">Phase 5</span>
         </div>
       </div>
     </div>
-    <p style="font-size:13px; color:var(--muted); margin-top:12px;">
-      Layers 1 and 2 complete. Phase 3 begins next. Phase 4 can run in parallel.
-    </p>
   </div>
 
   <!-- ── Performance Baselines ── -->
@@ -948,9 +1323,8 @@ layer.<span class="fn">signal</span>(
       <h2>Performance Baselines</h2>
       <span class="phase-tag tag-done">Established</span>
     </div>
-    <p>Measured on the development machine, release build (<code>cargo bench --bench throughput</code>).
-    Local hot-path only — no network I/O. Run <code>cargo bench</code> to regenerate on target hardware.
-    These are the floor numbers Layer 3 builds on top of.</p>
+    <p>Measured on the development machine, release build (<code>cargo bench</code>).
+    Local hot-path only — no network I/O. Run <code>cargo bench</code> to regenerate on target hardware.</p>
 
     <h3>Layer 1 — KV Store</h3>
     <table class="compare">
@@ -962,10 +1336,10 @@ layer.<span class="fn">signal</span>(
       </tbody>
     </table>
 
-    <h3>Layer 1 — <code>scan_prefix</code> · O(n) Characterisation</h3>
-    <p>Full store scan — no prefix indexing. At typical pheromone-trail sizes (100–1,000 entries) cost is
-    negligible relative to network latency. <strong>~1 ms threshold at 100,000 entries</strong> — monitor
-    if Layer 3 activity grows the store to that scale.</p>
+    <h3>Layer 1 — <code>scan_prefix</code> · O(n)</h3>
+    <p>Full store scan. At typical pheromone-trail sizes (100–1,000 entries) cost is negligible
+    relative to network latency. <strong style="color:var(--accent4);">~1 ms threshold at 100,000 entries</strong> — introduce a
+    prefix index if Layer 3/4 activity grows the store to that scale.</p>
     <table class="compare">
       <thead><tr><th>Store size</th><th>Matching entries</th><th>Median</th></tr></thead>
       <tbody>
@@ -978,8 +1352,8 @@ layer.<span class="fn">signal</span>(
     </table>
 
     <h3>Layer 2 — Signal Fan-out</h3>
-    <p>Near-linear and cheap. 16 handlers costs less than 2× a single handler. The bottleneck at scale
-    will be gossip forwarding (network), not local delivery.</p>
+    <p>Near-linear and cheap. 16 handlers costs less than 2× a single handler. The bottleneck at
+    scale is gossip forwarding (network), not local delivery.</p>
     <table class="compare">
       <thead><tr><th>Registered handlers</th><th>Median</th><th>Notes</th></tr></thead>
       <tbody>
@@ -990,114 +1364,130 @@ layer.<span class="fn">signal</span>(
     </table>
   </div>
 
-  <!-- ── End state ── -->
+  <!-- ── Layers 1 & 2 in Practice ── -->
   <div class="section">
     <div class="section-head"><h2>Layers 1 &amp; 2 in Practice</h2></div>
 
 <pre><code><span class="cmt">// ── Worker node ───────────────────────────────────────────────────────────</span>
 <span class="kw">let</span> agent = <span class="ty">Arc</span>::<span class="fn">new</span>(<span class="ty">GossipAgent</span>::<span class="fn">new</span>(node_id, config));
 agent.<span class="fn">start</span>().<span class="kw">await</span>?;
-
-<span class="cmt">// Join group — gossips grp/nlp/&lt;node_id&gt; into the KV store</span>
 agent.<span class="fn">join_group</span>(<span class="str">"nlp"</span>);
 
-<span class="cmt">// Advertise every 10 s — emits signal (fast) + writes pheromone trail (durable)</span>
+<span class="cmt">// Advertise every 10s — emits signal (fast) + writes pheromone trail (durable)</span>
 <span class="kw">let</span> load_key = <span class="mac">format!</span>(<span class="str">"load/{}"</span>, agent.<span class="fn">node_id</span>());
-<span class="kw">let</span> _handle = agent.<span class="fn">advertise</span>(
-    <span class="str">"contract.available"</span>,
+<span class="kw">let</span> _advert = agent.<span class="fn">advertise</span>(
+    signal_kind::<span class="ty">CONTRACT_AVAILABLE</span>,
     <span class="ty">SignalScope</span>::<span class="ty">Group</span>(<span class="str">"nlp"</span>.<span class="fn">into</span>()),
     <span class="ty">Duration</span>::<span class="fn">from_secs</span>(<span class="lit">10</span>),
     <span class="kw">move</span> || {
         <span class="kw">let</span> state = <span class="ty">LoadState</span> { queue_depth: QUEUE.<span class="fn">len</span>(), written_at_ms: <span class="fn">unix_ms_now</span>() };
-        agent2.<span class="fn">set</span>(load_key.<span class="fn">clone</span>(), <span class="fn">encode</span>(&amp;state));  <span class="cmt">// pheromone in the medium</span>
+        agent2.<span class="fn">set</span>(load_key.<span class="fn">clone</span>(), <span class="fn">encode</span>(&amp;state));
         <span class="fn">encode</span>(&amp;state)
     },
 );
 
-<span class="cmt">// Handle invocations — emit result back to the specific caller</span>
-<span class="kw">let mut</span> invoke_rx = agent.<span class="fn">signal_rx</span>(<span class="str">"invoke"</span>);
+<span class="cmt">// Handle invocations with refractory period — prevents pile-up</span>
+<span class="kw">let mut</span> invoke_rx = agent.<span class="fn">signal_rx_with_capacity</span>(signal_kind::<span class="ty">INVOKE</span>, <span class="lit">64</span>);
 tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
     <span class="kw">while let</span> <span class="ty">Some</span>(sig) = invoke_rx.<span class="fn">recv</span>().<span class="kw">await</span> {
+        agent.<span class="fn">suppress</span>(signal_kind::<span class="ty">INVOKE</span>, <span class="ty">Duration</span>::<span class="fn">from_millis</span>(<span class="lit">500</span>));
         <span class="kw">let</span> req: <span class="ty">InvokeRequest</span> = <span class="fn">decode</span>(&amp;sig.payload);
         <span class="kw">let</span> result = <span class="fn">run_model</span>(&amp;req.payload).<span class="kw">await</span>;
         agent.<span class="fn">emit</span>(
-            <span class="str">"invoke.result"</span>,
+            signal_kind::<span class="ty">INVOKE_RESULT</span>,
             <span class="ty">SignalScope</span>::<span class="ty">Individual</span>(sig.sender),
             <span class="fn">encode</span>(<span class="ty">InvokeResponse</span> { nonce: req.nonce, result }),
         );
     }
 });
 
+<span class="cmt">// Proactive peer notification when load builds</span>
+<span class="kw">let</span> _governor = agent.<span class="fn">manage_opacity</span>(
+    signal_kind::<span class="ty">BOUNDARY_OPAQUE</span>,
+    <span class="ty">SignalScope</span>::<span class="ty">Group</span>(<span class="str">"nlp"</span>.<span class="fn">into</span>()),
+    <span class="ty">OpacityHint</span>::<span class="fn">default</span>(),
+);
+
 <span class="cmt">// ── Invoker node ──────────────────────────────────────────────────────────</span>
-<span class="cmt">// Register BEFORE emitting — channel is live the moment signal_once() returns</span>
 <span class="kw">let</span> nonce = <span class="fn">fastrand</span>::<span class="fn">u64</span>(..);
-<span class="kw">let</span> reply_fut = agent.<span class="fn">signal_once</span>(
-    <span class="str">"invoke.result"</span>,
+<span class="kw">let</span> reply_fut = agent.<span class="fn">signal_once</span>(  <span class="cmt">// register BEFORE emitting</span>
+    signal_kind::<span class="ty">INVOKE_RESULT</span>,
     <span class="ty">Duration</span>::<span class="fn">from_secs</span>(<span class="lit">5</span>),
     <span class="kw">move</span> |s| s.nonce == nonce,
 );
-<span class="cmt">// Emit to the group — routing emerges from opacity, no worker selected</span>
-agent.<span class="fn">emit_async</span>(<span class="str">"invoke"</span>, <span class="ty">SignalScope</span>::<span class="ty">Group</span>(<span class="str">"nlp"</span>.<span class="fn">into</span>()), payload).<span class="kw">await</span>;
+agent.<span class="fn">emit_async</span>(signal_kind::<span class="ty">INVOKE</span>, <span class="ty">SignalScope</span>::<span class="ty">Group</span>(<span class="str">"nlp"</span>.<span class="fn">into</span>()), payload).<span class="kw">await</span>;
 
 <span class="kw">match</span> reply_fut.<span class="kw">await</span> {
     <span class="ty">Some</span>(sig) =&gt; <span class="fn">decode</span>(&amp;sig.payload),
     <span class="ty">None</span> =&gt; {
         <span class="cmt">// No reply — check pheromone trails to decide retry vs. escalate</span>
-        <span class="kw">let</span> any_live = agent.<span class="fn">scan_prefix</span>(<span class="str">"load/"</span>).<span class="fn">iter</span>()
-            .<span class="fn">filter_map</span>(|(_, b)| <span class="fn">decode</span>::&lt;<span class="ty">LoadState</span>&gt;(b))
+        <span class="kw">let</span> any_live = agent.<span class="fn">scan_prefix</span>(<span class="str">"load/"</span>).<span class="fn">into_iter</span>()
+            .<span class="fn">filter_map</span>(|(_, b)| <span class="fn">decode</span>::&lt;<span class="ty">LoadState</span>&gt;(&amp;b))
             .<span class="fn">any</span>(|s| <span class="fn">unix_ms_now</span>() - s.written_at_ms &lt; <span class="lit">30_000</span>);
         <span class="kw">if</span> any_live { <span class="fn">retry_with_backoff</span>() } <span class="kw">else</span> { <span class="ty">Err</span>(<span class="str">"no workers"</span>) }
     }
 }
 
-<span class="cmt">// ── Upstream node reacting to acute overload ─────────────────────────────</span>
-<span class="kw">let mut</span> opaque_rx = agent.<span class="fn">signal_rx</span>(<span class="str">"boundary.opaque"</span>);
+<span class="cmt">// ── Supervisor node ───────────────────────────────────────────────────────</span>
+<span class="cmt">// Watch the worker's heartbeat — call respawn() if silent for 30s</span>
+<span class="kw">let</span> _watcher = supervisor.<span class="fn">watch</span>(
+    signal_kind::<span class="ty">CONTRACT_AVAILABLE</span>,
+    <span class="ty">Duration</span>::<span class="fn">from_secs</span>(<span class="lit">30</span>),
+    <span class="kw">move</span> || { <span class="fn">respawn_worker</span>(); },
+);
+
+<span class="cmt">// React to peer overload signal — adjust routing immediately</span>
+<span class="kw">let mut</span> opaque_rx = supervisor.<span class="fn">signal_rx</span>(signal_kind::<span class="ty">BOUNDARY_OPAQUE</span>);
 tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
     <span class="kw">while let</span> <span class="ty">Some</span>(sig) = opaque_rx.<span class="fn">recv</span>().<span class="kw">await</span> {
-        <span class="cmt">// Fast-path: tear down connections before the pheromone trail updates</span>
-        http_pool.<span class="fn">drain_worker</span>(sig.sender);
+        route_around(sig.sender);  <span class="cmt">// fast-path: before pheromone trail updates</span>
     }
 });</code></pre>
   </div>
 
-  <!-- ── Legacy docs ── -->
+  <!-- ── Future Research Directions ── -->
   <div class="section">
-    <div class="section-head"><h2>Legacy Documentation Status</h2></div>
-    <p>The existing documents describe a valid direction but an obsolete implementation.
-    None accurately reflect the current codebase or this architecture.</p>
+    <div class="section-head">
+      <h2>Future Research Directions</h2>
+      <span class="phase-tag tag-horizon">Horizon</span>
+    </div>
 
-    <table class="legacy-table">
-      <thead>
-        <tr><th>Document</th><th>Problem</th><th>Action</th></tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td><strong>Gossip_Protocol_Locking_Model.docx</strong></td>
-          <td>Describes a mutex-based <code>LockManager</code> with six lock levels, deadlock detection stack, and per-level metrics. This architecture was replaced entirely by lock-free papaya + ShardedSeen. Neither <code>LockManager</code> nor <code>LockLevel</code> exist.</td>
-          <td><span class="doc-tag doc-obsolete">Architecturally Obsolete</span></td>
-        </tr>
-        <tr>
-          <td><strong>Gossip_Architecture_Guide.pages</strong></td>
-          <td>References the lock hierarchy, a <code>TaskManager</code> with priority levels, and <code>EnhancedGossipAgent</code> as if they currently exist. None do.</td>
-          <td><span class="doc-tag doc-replace">Replace after Phase 2</span></td>
-        </tr>
-        <tr>
-          <td><strong>Gossip_Runtime_Guide.pages</strong></td>
-          <td>TOML config section partially accurate. Task priority hierarchy does not match the current agent startup sequence.</td>
-          <td><span class="doc-tag doc-update">Update to GossipConfig</span></td>
-        </tr>
-        <tr>
-          <td><strong>Gossip-AI-Arch.md</strong></td>
-          <td>Vision directionally correct. Implementation details stale: DashMap, HTTP-first invocation, no signal layer, no boundary concept.</td>
-          <td><span class="doc-tag doc-replace">Superseded by this document</span></td>
-        </tr>
-        <tr>
-          <td><strong>DeepSeek-GossipAIstack.md</strong></td>
-          <td>Useful early brainstorm. Not a specification. Pre-optimisation types; HTTP-centric design without the signal/boundary abstraction.</td>
-          <td><span class="doc-tag doc-archive">Archive as early sketch</span></td>
-        </tr>
-      </tbody>
-    </table>
+    <p style="color:var(--muted);">Not on the near-term roadmap — but the natural next layer of the
+    chemical signalling metaphor. These directions are worth naming because they inform
+    architectural decisions made now.</p>
+
+    <div class="future-grid">
+      <div class="future-cell">
+        <span class="future-icon">🕸</span>
+        <div class="future-title">Fitness-Weighted Topology</div>
+        <p class="future-body">Activity weighting (prefer recently-active peers) is a step.
+        The natural next layer is connections weighted by <em>usefulness</em> — how predictive
+        is peer X's state for my decisions? A connection-strength field on the peer table,
+        updated by the application layer and consulted by the forwarding logic, would make
+        the topology self-organise around actual traffic patterns. The KV store and
+        subscriptions already provide the ingredients.</p>
+      </div>
+      <div class="future-cell">
+        <span class="future-icon">∇</span>
+        <div class="future-title">Gradient / Accumulation Signals</div>
+        <p class="future-body">The pheromone trail pattern hints at this, but last-write-wins
+        is a poor substrate for accumulation. Gradient signals that accumulate across hops —
+        summing, averaging, max-pooling — rather than last-writing-winning would make the
+        epidemic layer directly expressive for neural-style activation propagation. This is
+        a deeper change: accumulation semantics conflict with LWW idempotency. But it is the
+        natural next layer for the chemical computing metaphor.</p>
+      </div>
+      <div class="future-cell">
+        <span class="future-icon">🔑</span>
+        <div class="future-title">Key Ownership &amp; Migration</div>
+        <p class="future-body">The current convention — each agent writes only its own keys —
+        is unenforced. For an evolvable substrate where agents can be added, removed, or
+        repurposed at runtime, informal ownership becomes a problem, especially if agent
+        identity and key namespace are decoupled during evolution. The current model is
+        correct as long as the agent-to-cell mapping is stable. Some notion of ownership
+        transfer or key migration may eventually be needed.</p>
+      </div>
+    </div>
   </div>
 
   <!-- ── Design Position ── -->
@@ -1106,7 +1496,7 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
       <h2>Design Position</h2>
     </div>
 
-    <p>Being precise about what is prior art is as important as identifying what is genuinely new.
+    <p>Being precise about prior art is as important as identifying what is genuinely new.
     This architecture synthesises established ideas. The differentiation lies in the combination
     and the context.</p>
 
@@ -1122,7 +1512,7 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
         </tr>
         <tr>
           <td>Scope-filtered pub/sub</td>
-          <td>NATS subjects / queue groups · DDS partitions · MQTT topic trees · SIENA content-based routing (1999)</td>
+          <td>NATS subjects / queue groups · DDS partitions · MQTT topic trees · SIENA content-based routing</td>
         </tr>
         <tr>
           <td>Application-layer broadcast filtering</td>
@@ -1136,6 +1526,10 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
           <td>Actor-model group routing</td>
           <td>Erlang process groups · Akka Cluster distributed pub/sub</td>
         </tr>
+        <tr>
+          <td>MCP tool discovery</td>
+          <td>Anthropic MCP specification, 2024</td>
+        </tr>
       </tbody>
     </table>
 
@@ -1146,7 +1540,7 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
         <div class="card-sub">with epidemic delivery guarantees</div>
         <ul>
           <li>NATS, Kafka require a broker cluster to route by scope</li>
-          <li>Here scope is a pure application-layer filter</li>
+          <li>Here scope is a pure application-layer filter on an epidemic substrate</li>
           <li>No routing infrastructure to operate or fail</li>
           <li>Group signals reach every node; boundary decides action</li>
         </ul>
@@ -1168,24 +1562,32 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
           <li>KV state: LWW, persistent, queryable, anti-entropy sync'd</li>
           <li>Signals: TTL-bounded, ephemeral, nonce-dedup'd</li>
           <li>Typically requires two separate systems</li>
-          <li>One embedded library; no external dependencies</li>
+          <li>One embedded library; no external process to operate</li>
         </ul>
       </div>
       <div class="card c2">
-        <div class="card-title">4 · NodeId as contract address</div>
-        <div class="card-sub">no HTTP endpoint, no service registry</div>
+        <div class="card-title">4 · Serialisation autonomy</div>
+        <div class="card-sub">evolution by addition, not migration</div>
         <ul>
-          <li>LangChain, AutoGPT, CrewAI: invocation routes to HTTP URLs</li>
-          <li>Here the address IS the node's gossip identity</li>
-          <li>No URL to manage, no port to expose</li>
-          <li>The gossip network is the addressing layer</li>
+          <li>A new agent joins speaking a different format — no cluster migration needed</li>
+          <li>Capability advertisement uses kind strings; payload format is opaque</li>
+          <li>MCP bridge: JSON. Internal agents: bincode. External: protobuf. Coexist.</li>
+          <li>No cluster-wide serialisation contract to maintain</li>
+        </ul>
+      </div>
+      <div class="card c2">
+        <div class="card-title">5 · NodeId as the only contract address</div>
+        <div class="card-sub">no HTTP endpoints, no service registry</div>
+        <ul>
+          <li>The gossip identity <em>is</em> the address — nothing else to manage</li>
+          <li>No HTTP endpoint to provision, rotate, or health-check</li>
+          <li>No service registry (Consul, etcd, ZooKeeper) to run</li>
+          <li>Location transparency falls out of the substrate — not bolted on</li>
         </ul>
       </div>
     </div>
 
     <h3 style="margin-top:32px;">Closest Comparison: NATS.io</h3>
-    <p>NATS is the nearest existing production system with subject-based messaging,
-    queue groups, and cluster-wide gossip membership. The gaps:</p>
     <table class="compare">
       <thead><tr><th>Dimension</th><th>NATS.io</th><th>This design</th></tr></thead>
       <tbody>
@@ -1197,36 +1599,43 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
         <tr>
           <td>KV state</td>
           <td>JetStream (separate subsystem)</td>
-          <td>Same gossip store as signals</td>
+          <td>Same gossip store as signals; anti-entropy synced</td>
         </tr>
         <tr>
           <td>Capability advertisement</td>
           <td>Not provided</td>
-          <td>Contract registry built on gossip KV</td>
+          <td>Contract registry built on gossip KV; visible to late joiners</td>
+        </tr>
+        <tr>
+          <td>Adaptive admission</td>
+          <td>Not provided</td>
+          <td>Variable opacity — emergent backpressure under load</td>
+        </tr>
+        <tr>
+          <td>Higher-layer paradigms</td>
+          <td>Separate SDK per paradigm</td>
+          <td>Actor, RPC, MCP all reduce to the same three substrate operations</td>
         </tr>
       </tbody>
     </table>
 
-    <div style="background:linear-gradient(135deg,rgba(88,166,255,0.04),rgba(210,168,255,0.04));
-                border:1px solid rgba(88,166,255,0.15); border-radius:var(--radius-lg);
-                padding:28px 32px; margin-top:28px;">
-      <p style="font-size:16px; font-style:italic; color:var(--text2); margin:0; line-height:1.75;">
-        The specific combination is novel and potentially paper-worthy. Each individual concept
-        — epidemic gossip, boundary filtering, stigmergy, chemical signalling as design metaphor
-        — has prior art. What is genuinely new is the <strong style="color:var(--text);font-style:normal;">
-        unification of epidemic KV state, ephemeral scoped signals, stigmergic pheromone trails,
-        and emergent load-adaptive routing in a single embedded library</strong>, grounded in
-        biological CAS principles as first-class design constraints rather than post-hoc metaphor.
-        The two-timescale coordination model (neural signals + hormonal trails) applied to
-        distributed AI agent orchestration has no direct precedent in the literature.
-      </p>
+    <div class="quote-block">
+      <p>The core philosophy — epidemic state, threshold-activated events, evolving topology,
+      no central coordinator — is the right shape for adaptive AI systems. The chemical
+      signalling metaphor isn't decorative; it's doing real architectural work. The particular
+      assembly of epidemic KV state, ephemeral scoped signals, stigmergic pheromone trails,
+      emergent load-adaptive routing, and now active inhibitory signals, in a single embedded
+      library grounded in biological CAS principles as first-class design constraints,
+      <strong style="color:var(--text);font-style:normal;">has no direct precedent in the distributed systems literature.</strong>
+      The two-timescale coordination model (neural signals + hormonal trails) applied to
+      distributed AI agent orchestration is the differentiated position.</p>
     </div>
   </div>
 
   <!-- ── Footer ── -->
   <div style="margin-top:72px; padding-top:24px; border-top:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
     <span style="font-size:12px; color:var(--muted);">gossip_protocol · Engineering Roadmap · 2026-05-14</span>
-    <span style="font-size:12px; color:var(--muted);">Layers 1 &amp; 2 complete · Phase 3 next · Chemical signalling + stigmergy</span>
+    <span style="font-size:12px; color:var(--muted);">Layers 1 &amp; 2 complete · Layer 3 next · Chemical signalling + stigmergy + threshold activation</span>
   </div>
 
 </div>

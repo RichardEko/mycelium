@@ -1,3 +1,50 @@
+//! # mycelium — gossip substrate for adaptive AI agent systems
+//!
+//! An embedded, broker-less library that provides two primitives:
+//!
+//! - **Layer 1 — KV store**: epidemic last-write-wins state propagation over TCP.
+//!   Every agent holds a eventually-consistent view of the full cluster's key-value state.
+//! - **Layer 2 — Signal mesh**: ephemeral scoped events that flood the cluster epidemically.
+//!   Each agent holds a local [`Boundary`](signal::Boundary) (its receptor set) that decides
+//!   whether it *acts* on an incoming signal — forwarding is always unconditional.
+//!
+//! Higher layers build Actor/Event systems, async RPC, and MCP AI tool routing on top.
+//! Each agent chooses its own payload serialisation; the substrate routes by signal `kind`
+//! string and carries opaque [`bytes::Bytes`].
+//!
+//! ## Quick start
+//!
+//! ```rust,no_run
+//! use gossip_protocol::{GossipAgent, GossipConfig, NodeId, SignalScope, signal_kind};
+//! use bytes::Bytes;
+//! use std::{sync::Arc, time::Duration};
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let node_id = NodeId::new("127.0.0.1", 7946)?;
+//!     let mut config = GossipConfig::default();
+//!     config.bootstrap_peers = vec![NodeId::new("127.0.0.1", 7947)?];
+//!
+//!     let agent = Arc::new(GossipAgent::new(node_id, config));
+//!     agent.start().await?;
+//!
+//!     // Layer 1 — KV state
+//!     agent.set("load/self", Bytes::from_static(b"queue=0"));
+//!     let val = agent.get("load/self");
+//!
+//!     // Layer 2 — signals
+//!     agent.join_group("nlp");
+//!     agent.emit(signal_kind::INVOKE, SignalScope::Group("nlp".into()), Bytes::new());
+//!
+//!     agent.shutdown().await;
+//!     Ok(())
+//! }
+//! ```
+//!
+//! See [`GossipAgent`] for the full API. See [`GossipConfig`] for all tunable parameters.
+//! See [ROADMAP.md](https://github.com/RichardEko/mycelium/blob/main/ROADMAP.md) for the
+//! layer-by-layer architecture and higher-layer design.
+
 #![forbid(unsafe_code)]
 
 pub mod config;
@@ -16,7 +63,10 @@ pub use agent::{GossipAgent, SystemStats};
 pub use config::GossipConfig;
 pub use error::GossipError;
 pub use node_id::NodeId;
-pub use signal::{AdvertiseHandle, Signal, SignalScope, signal_kind, kv_ns};
+pub use signal::{
+    AdvertiseHandle, OpacityHandle, OpacityHint, OpacityState,
+    Signal, SignalScope, WatchHandle, signal_kind, kv_ns,
+};
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
@@ -34,7 +84,7 @@ mod tests {
     use dashmap::DashMap;
     use std::{
         sync::{
-            atomic::AtomicU64,
+            atomic::{AtomicU64, Ordering},
             Arc,
         },
         time::{Duration, Instant},
@@ -116,6 +166,7 @@ mod tests {
             intern_keys: true,
             signal_boundary: Arc::new(RwLock::new(Boundary::new(node_id))),
             signal_handlers: Arc::new(SignalHandlers::new()),
+            max_peers: usize::MAX,
         };
         let handle = tokio::spawn(handle_connection(
             socket,
@@ -631,7 +682,7 @@ mod tests {
         ];
         let toml_str = toml::to_string(&original).expect("serialise to TOML");
         let roundtripped: GossipConfig = toml::from_str(&toml_str).expect("deserialise from TOML");
-        assert_eq!(roundtripped, original, "all 16 fields must survive a TOML round-trip");
+        assert_eq!(roundtripped, original, "all 18 fields must survive a TOML round-trip");
     }
 
     #[test]
@@ -750,6 +801,7 @@ mod tests {
                 intern_keys: true,
                 signal_boundary: Arc::new(RwLock::new(Boundary::new(node_id))),
                 signal_handlers: Arc::new(SignalHandlers::new()),
+                max_peers: usize::MAX,
             };
             use crate::connection::handle_connection;
             tokio::spawn(handle_connection(reader, "127.0.0.1:0".parse().unwrap(), ctx));
@@ -1498,10 +1550,12 @@ mod tests {
         let kind: Arc<str> = Arc::from("invoke.result");
         let mut rx = agent.signal_rx_with_capacity(kind.clone(), 16);
 
-        // Emit two signals: wrong nonce then right nonce.
+        // Individual scope bypasses the opacity shedding check so both signals
+        // are guaranteed to land in the channel regardless of fill_ratio.
+        let self_id = agent.node_id().clone();
         let target_nonce: u64 = 0xDEAD_BEEF;
-        let _ = agent.emit(kind.clone(), SignalScope::System, Bytes::from_static(b"wrong"));
-        let _ = agent.emit(kind.clone(), SignalScope::System, Bytes::from_static(b"right"));
+        let _ = agent.emit(kind.clone(), SignalScope::Individual(self_id.clone()), Bytes::from_static(b"wrong"));
+        let _ = agent.emit(kind.clone(), SignalScope::Individual(self_id.clone()), Bytes::from_static(b"right"));
 
         // Drain both into a Vec and find the one with "right" payload.
         let mut signals = Vec::new();
@@ -1584,6 +1638,255 @@ mod tests {
         let ts = agent.last_signal(kind);
         assert!(ts.is_some(), "last_signal should be Some after emit");
         assert!(ts.unwrap() >= before, "timestamp should be at or after emit time");
+    }
+
+    // ── suppress / unsuppress / is_suppressed ────────────────────────────────
+
+    #[tokio::test]
+    async fn test_suppress_blocks_delivery() {
+        let agent = make_agent();
+        let mut rx = agent.signal_rx_with_capacity("test.suppress", 8);
+        agent.suppress("test.suppress", Duration::from_secs(60));
+        assert!(agent.is_suppressed("test.suppress"));
+        let _ = agent.emit("test.suppress", SignalScope::System, Bytes::new());
+        let result = time::timeout(Duration::from_millis(50), rx.recv()).await;
+        assert!(result.is_err(), "suppressed kind must not be delivered to handlers");
+    }
+
+    #[tokio::test]
+    async fn test_suppress_allows_after_expiry() {
+        let agent = make_agent();
+        let mut rx = agent.signal_rx_with_capacity("test.expiry", 8);
+        agent.suppress("test.expiry", Duration::from_millis(50));
+        time::sleep(Duration::from_millis(100)).await;
+        assert!(!agent.is_suppressed("test.expiry"), "suppression should have expired");
+        let _ = agent.emit("test.expiry", SignalScope::System, Bytes::new());
+        let result = time::timeout(Duration::from_millis(200), rx.recv()).await;
+        assert!(result.is_ok() && result.unwrap().is_some(), "expired suppression must allow delivery");
+    }
+
+    #[tokio::test]
+    async fn test_unsuppress_lifts_early() {
+        let agent = make_agent();
+        let mut rx = agent.signal_rx_with_capacity("test.unsuppress", 8);
+        agent.suppress("test.unsuppress", Duration::from_secs(60));
+        agent.unsuppress("test.unsuppress");
+        assert!(!agent.is_suppressed("test.unsuppress"), "unsuppressed must not be suppressed");
+        let _ = agent.emit("test.unsuppress", SignalScope::System, Bytes::new());
+        let result = time::timeout(Duration::from_millis(200), rx.recv()).await;
+        assert!(result.is_ok() && result.unwrap().is_some(), "unsuppressed kind must deliver");
+    }
+
+    #[tokio::test]
+    async fn test_suppress_still_updates_last_signal() {
+        let agent = make_agent();
+        agent.suppress("test.last_seen", Duration::from_secs(60));
+        let _ = agent.emit("test.last_seen", SignalScope::System, Bytes::new());
+        time::sleep(Duration::from_millis(10)).await;
+        assert!(agent.last_signal("test.last_seen").is_some(),
+            "last_signal must update even while kind is suppressed");
+    }
+
+    // ── watch ─────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_watch_fires_on_stale() {
+        let agent = make_agent();
+        let fired = Arc::new(AtomicU64::new(0));
+        let fired_clone = fired.clone();
+        // threshold = 50ms → check_interval = max(12ms, 100ms) = 100ms
+        // No signal ever emitted → stale from the first check.
+        let _handle = agent.watch(
+            "health.probe",
+            Duration::from_millis(50),
+            move || { fired_clone.fetch_add(1, Ordering::Relaxed); },
+        );
+        time::sleep(Duration::from_millis(350)).await;
+        assert!(fired.load(Ordering::Relaxed) > 0, "on_stale must fire when no signal received");
+    }
+
+    #[tokio::test]
+    async fn test_watch_does_not_fire_when_fresh() {
+        let agent = make_agent();
+        let fired = Arc::new(AtomicU64::new(0));
+        let fired_clone = fired.clone();
+        // Emit once so last_signal is fresh.
+        let _ = agent.emit("health.fresh", SignalScope::System, Bytes::new());
+        // threshold = 500ms → first check at 125ms. At 250ms elapsed is ~250ms < 500ms.
+        let _handle = agent.watch(
+            "health.fresh",
+            Duration::from_millis(500),
+            move || { fired_clone.fetch_add(1, Ordering::Relaxed); },
+        );
+        time::sleep(Duration::from_millis(250)).await;
+        assert_eq!(fired.load(Ordering::Relaxed), 0, "on_stale must not fire when signal is recent");
+    }
+
+    #[tokio::test]
+    async fn test_watch_stops_on_handle_drop() {
+        let agent = make_agent();
+        let fired = Arc::new(AtomicU64::new(0));
+        let fired_clone = fired.clone();
+        let handle = agent.watch(
+            "health.stop",
+            Duration::from_millis(30),
+            move || { fired_clone.fetch_add(1, Ordering::Relaxed); },
+        );
+        // Let it fire at least once.
+        time::sleep(Duration::from_millis(350)).await;
+        assert!(fired.load(Ordering::Relaxed) > 0, "should fire before drop");
+        drop(handle);
+        // Allow the task to observe the cancellation.
+        time::sleep(Duration::from_millis(50)).await;
+        let count_at_drop = fired.load(Ordering::Relaxed);
+        // Wait well past several check intervals — no further fires expected.
+        time::sleep(Duration::from_millis(400)).await;
+        assert_eq!(fired.load(Ordering::Relaxed), count_at_drop, "no fires after handle drop");
+    }
+
+    // ── quorum ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_quorum_false_initially() {
+        let agent = make_agent();
+        assert!(!agent.quorum("contract.available", 1, Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn test_quorum_true_after_delivery() {
+        let agent = make_agent();
+        // emit() → deliver() is synchronous; no sleep needed.
+        let _ = agent.emit("contract.available", SignalScope::System, Bytes::new());
+        assert!(
+            agent.quorum("contract.available", 1, Duration::from_secs(10)),
+            "quorum(k, 1, 10s) must be true after one delivery",
+        );
+    }
+
+    #[test]
+    fn test_quorum_distinct_senders() {
+        use crate::signal::{Signal, SignalHandlers};
+        let handlers = SignalHandlers::new();
+        let kind: Arc<str> = Arc::from("test.quorum.distinct");
+        let sender_a = NodeId::new("127.0.0.1", 1001).unwrap();
+        let sender_b = NodeId::new("127.0.0.1", 1002).unwrap();
+
+        let sig = |sender: NodeId, nonce: u64| Signal {
+            kind: kind.clone(), scope: SignalScope::System,
+            payload: Bytes::new(), sender, nonce,
+        };
+
+        // Two signals from sender_a — still only one distinct sender.
+        handlers.deliver(&sig(sender_a.clone(), 1));
+        handlers.deliver(&sig(sender_a.clone(), 2));
+        assert!(
+            !handlers.quorum(&kind, 2, Duration::from_secs(10)),
+            "two signals from the same sender must not satisfy quorum(k, 2)",
+        );
+
+        // Add sender_b — now two distinct senders.
+        handlers.deliver(&sig(sender_b, 3));
+        assert!(
+            handlers.quorum(&kind, 2, Duration::from_secs(10)),
+            "two distinct senders must satisfy quorum(k, 2)",
+        );
+    }
+
+    // ── manage_opacity governor ───────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_manage_opacity_emits_opaque_when_threshold_crossed() {
+        let agent = make_agent();
+        // One handler for the monitored kind with cap=4.
+        // fill_ratio = 0.75 after 3 signals; hint.threshold = 0.75.
+        let _work_rx      = agent.signal_rx_with_capacity("test.gov.invoke", 4);
+        let mut opaque_rx = agent.signal_rx_with_capacity(signal_kind::BOUNDARY_OPAQUE, 8);
+
+        let _gov = agent.manage_opacity(
+            "test.gov.invoke",
+            SignalScope::System,
+            OpacityHint::default(), // threshold = 0.75
+        );
+
+        // Individual scope bypasses the opacity-shedding check in emit_signal, so
+        // all three signals reliably land in the channel and fill_ratio reaches 0.75.
+        let self_id = agent.node_id().clone();
+        for _ in 0..3 {
+            let _ = agent.emit("test.gov.invoke", SignalScope::Individual(self_id.clone()), Bytes::new());
+        }
+
+        let result = time::timeout(Duration::from_millis(400), opaque_rx.recv()).await;
+        assert!(
+            result.is_ok() && result.unwrap().is_some(),
+            "governor must emit BOUNDARY_OPAQUE when fill crosses threshold",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_manage_opacity_emits_transparent_after_drain() {
+        let agent = make_agent();
+        let mut work_rx   = agent.signal_rx_with_capacity("test.gov.drain", 4);
+        let mut opaque_rx = agent.signal_rx_with_capacity(signal_kind::BOUNDARY_OPAQUE, 8);
+        let mut clear_rx  = agent.signal_rx_with_capacity(signal_kind::BOUNDARY_TRANSPARENT, 8);
+
+        let _gov = agent.manage_opacity(
+            "test.gov.drain",
+            SignalScope::System,
+            OpacityHint::default(),
+        );
+
+        // Fill to 100% with Individual scope to avoid opacity shedding.
+        let self_id = agent.node_id().clone();
+        for _ in 0..4 {
+            let _ = agent.emit("test.gov.drain", SignalScope::Individual(self_id.clone()), Bytes::new());
+        }
+        let r = time::timeout(Duration::from_millis(400), opaque_rx.recv()).await;
+        assert!(r.is_ok() && r.unwrap().is_some(), "should go opaque first");
+
+        // Drain all four — fill drops to 0.0 < 0.75 - 0.20 = 0.55.
+        for _ in 0..4 {
+            let _ = time::timeout(Duration::from_millis(50), work_rx.recv()).await;
+        }
+
+        let r = time::timeout(Duration::from_millis(400), clear_rx.recv()).await;
+        assert!(
+            r.is_ok() && r.unwrap().is_some(),
+            "governor must emit BOUNDARY_TRANSPARENT once fill drops below clear threshold",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_manage_opacity_gate_vetoes_then_library_overrides() {
+        let agent = make_agent();
+        // cap=8: 6 signals → fill=0.75 (threshold met, gate vetoes), 8 → fill=1.0 (override).
+        let _work_rx      = agent.signal_rx_with_capacity("test.gov.gate", 8);
+        let mut opaque_rx = agent.signal_rx_with_capacity(signal_kind::BOUNDARY_OPAQUE, 8);
+
+        // Gate always vetoes — library must still override when fill == 1.0.
+        let _gov = agent.manage_opacity_gated(
+            "test.gov.gate",
+            SignalScope::System,
+            OpacityHint::default(),
+            |_state| false,
+        );
+
+        // Fill to 75% with Individual scope. Gate should veto every tick.
+        let self_id = agent.node_id().clone();
+        for _ in 0..6 {
+            let _ = agent.emit("test.gov.gate", SignalScope::Individual(self_id.clone()), Bytes::new());
+        }
+        let premature = time::timeout(Duration::from_millis(250), opaque_rx.recv()).await;
+        assert!(premature.is_err(), "gate veto must prevent emission below 100% fill");
+
+        // Fill to 100% — library overrides the gate.
+        for _ in 0..2 {
+            let _ = agent.emit("test.gov.gate", SignalScope::Individual(self_id.clone()), Bytes::new());
+        }
+        let result = time::timeout(Duration::from_millis(400), opaque_rx.recv()).await;
+        assert!(
+            result.is_ok() && result.unwrap().is_some(),
+            "library must override gate and emit BOUNDARY_OPAQUE when fill == 1.0",
+        );
     }
 
     // ── scan_prefix ───────────────────────────────────────────────────────────

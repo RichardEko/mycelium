@@ -1,10 +1,26 @@
+//! Layer 2 — Signal / Boundary Mesh.
+//!
+//! Signals are ephemeral events that propagate epidemically to the entire cluster. Each node
+//! holds a local [`Boundary`] (its receptor set) that decides whether it *acts* on an incoming
+//! signal. Forwarding is always unconditional — the boundary only controls local delivery.
+//!
+//! Key types:
+//! - [`SignalScope`] — System (every node), Group (members only), Individual (one node)
+//! - [`Signal`] — the delivered event: kind, scope, payload, sender, nonce
+//! - [`AdvertiseHandle`] — cancels a periodic `advertise()` task on drop
+//!
+//! Well-known kind strings live in [`signal_kind`]. KV namespace conventions live in [`kv_ns`].
+//!
+//! All signal APIs are exposed directly on [`GossipAgent`](crate::GossipAgent) — there is no
+//! separate Layer 2 wrapper type.
+
 use crate::node_id::NodeId;
 use ahash::AHashSet;
 use bytes::Bytes;
 use dashmap::DashMap;
 use papaya::HashMap as PapayaMap;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 use tracing::warn;
@@ -18,6 +34,11 @@ use tracing::warn;
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum SignalScope {
     /// Every node acts.
+    ///
+    /// **Best-effort epidemic delivery.** Under high message volume the opacity
+    /// mechanism may shed signals at boundaries before they propagate to all nodes.
+    /// Do not use for coordination that requires exactly-once or guaranteed delivery
+    /// — use application-level timers with gossip KV state propagation instead.
     System,
     /// Only nodes that have joined the named group act.
     Group(Arc<str>),
@@ -71,14 +92,26 @@ impl Boundary {
 /// Multiple tasks may register receivers for the same kind. All registered
 /// channels receive the signal on delivery. Closed channels are evicted lazily.
 pub(crate) struct SignalHandlers {
-    map:       DashMap<Arc<str>, Vec<mpsc::Sender<Signal>>>,
+    map:         DashMap<Arc<str>, Vec<mpsc::Sender<Signal>>>,
     /// Lock-free reads via papaya epoch pinning — hot on every `last_signal` query.
-    last_seen: PapayaMap<Arc<str>, Instant>,
+    last_seen:   PapayaMap<Arc<str>, Instant>,
+    /// Active refractory periods. Value is the `Instant` at which suppression expires.
+    /// Read on every `deliver()` call — papaya epoch pinning keeps this lock-free.
+    suppressed:  PapayaMap<Arc<str>, Instant>,
+    /// Per-kind sender history for [`quorum`](Self::quorum) queries.
+    /// Each entry is `(sender, received_at)`. Updated unconditionally in `deliver()`,
+    /// including during suppression. Entries older than 10 minutes are evicted lazily.
+    sender_log:  DashMap<Arc<str>, Vec<(NodeId, Instant)>>,
 }
 
 impl SignalHandlers {
     pub(crate) fn new() -> Self {
-        Self { map: DashMap::new(), last_seen: PapayaMap::new() }
+        Self {
+            map:        DashMap::new(),
+            last_seen:  PapayaMap::new(),
+            suppressed: PapayaMap::new(),
+            sender_log: DashMap::new(),
+        }
     }
 
     /// Returns a new `mpsc::Receiver<Signal>` for `kind` with the default channel depth (256).
@@ -121,7 +154,23 @@ impl SignalHandlers {
     /// least one sender was found closed — the common case (no closed senders) holds
     /// no write lock at all.
     pub(crate) fn deliver(&self, signal: &Signal) {
-        self.last_seen.pin().insert(signal.kind.clone(), Instant::now());
+        let now = Instant::now();
+        self.last_seen.pin().insert(signal.kind.clone(), now);
+        // Track sender history unconditionally — not gated by suppression so that
+        // quorum() counts all received signals, not just delivered ones.
+        {
+            let mut log = self.sender_log.entry(signal.kind.clone()).or_default();
+            log.retain(|(_sender, received_at)| received_at.elapsed() < Duration::from_secs(600));
+            log.push((signal.sender.clone(), now));
+        }
+        // Refractory period: record timestamp but do not fan-out to handlers.
+        // Forwarding (epidemic propagation) is unconditional and happens before deliver().
+        if self.suppressed.pin().get(&signal.kind)
+            .map(|until| now < *until)
+            .unwrap_or(false)
+        {
+            return;
+        }
         let snapshot: Vec<mpsc::Sender<Signal>> = match self.map.get(&signal.kind) {
             Some(guard) => guard.value().clone(),
             None => return,
@@ -152,6 +201,34 @@ impl SignalHandlers {
     pub(crate) fn last_signal(&self, kind: &str) -> Option<Instant> {
         self.last_seen.pin().get(kind).copied()
     }
+
+    pub(crate) fn suppress(&self, kind: Arc<str>, until: Instant) {
+        self.suppressed.pin().insert(kind, until);
+    }
+
+    pub(crate) fn unsuppress(&self, kind: &str) {
+        self.suppressed.pin().remove(kind);
+    }
+
+    pub(crate) fn is_suppressed(&self, kind: &str) -> bool {
+        self.suppressed.pin().get(kind)
+            .map(|until| Instant::now() < *until)
+            .unwrap_or(false)
+    }
+
+    /// Returns `true` when at least `min_senders` distinct [`NodeId`]s have had a
+    /// signal of `kind` delivered within `window`.
+    ///
+    /// Synchronous read; does not start a background task.
+    pub(crate) fn quorum(&self, kind: &str, min_senders: usize, window: Duration) -> bool {
+        let Some(log) = self.sender_log.get(kind) else { return false };
+        let distinct = log.iter()
+            .filter(|(_sender, received_at)| received_at.elapsed() <= window)
+            .map(|(sender, _received_at)| sender)
+            .collect::<AHashSet<_>>()
+            .len();
+        distinct >= min_senders
+    }
 }
 
 /// Cancels the associated [`advertise`](crate::GossipAgent::advertise) task on drop.
@@ -160,6 +237,69 @@ impl SignalHandlers {
 /// when the agent shuts down, even if this handle is still live.
 pub struct AdvertiseHandle {
     pub(crate) _cancel: tokio::sync::oneshot::Sender<()>,
+}
+
+/// Cancels the associated [`watch`](crate::GossipAgent::watch) task on drop.
+///
+/// Obtain one from [`GossipAgent::watch`]. The task also exits automatically
+/// when the agent shuts down, even if this handle is still live.
+pub struct WatchHandle {
+    pub(crate) _cancel: tokio::sync::oneshot::Sender<()>,
+}
+
+/// Cancels the associated [`manage_opacity`](crate::GossipAgent::manage_opacity) governor
+/// task on drop.
+///
+/// Obtain one from [`GossipAgent::manage_opacity`] or
+/// [`GossipAgent::manage_opacity_gated`]. The task also exits automatically when
+/// the agent shuts down, even if this handle is still live.
+pub struct OpacityHandle {
+    pub(crate) _cancel: tokio::sync::oneshot::Sender<()>,
+}
+
+/// Application hint for the opacity governor.
+///
+/// All fields have documented defaults; use [`OpacityHint::default()`] and override
+/// only what you need.
+#[derive(Clone, Debug)]
+pub struct OpacityHint {
+    /// Suggested threshold at which `BOUNDARY_OPAQUE` should be emitted (0.0–1.0).
+    ///
+    /// The library clamps this to `[0.4, 0.95]` and reduces it further when the
+    /// fill rate is rising quickly (trend adaptation). Default: `0.75`.
+    pub threshold:  f32,
+    /// How far fill must drop below `threshold` before `BOUNDARY_TRANSPARENT` is emitted.
+    ///
+    /// Prevents oscillation at the threshold boundary. Default: `0.20`.
+    pub hysteresis: f32,
+    /// Payload attached to the `BOUNDARY_OPAQUE` signal.
+    ///
+    /// Useful for carrying application-defined context (e.g. a reason string or
+    /// estimated drain time in milliseconds). Default: empty.
+    pub payload:    bytes::Bytes,
+}
+
+impl Default for OpacityHint {
+    fn default() -> Self {
+        Self {
+            threshold:  0.75,
+            hysteresis: 0.20,
+            payload:    bytes::Bytes::new(),
+        }
+    }
+}
+
+/// Snapshot of governor state passed to the application gate on each tick.
+#[derive(Clone, Debug)]
+pub struct OpacityState {
+    /// Current fill ratio of the monitored kind's handler channel (0.0–1.0).
+    pub fill_ratio:          f32,
+    /// Threshold the library computed after applying trend adaptation to the hint.
+    pub effective_threshold: f32,
+    /// Fill change since the previous tick (positive = filling, negative = draining).
+    pub trend:               f32,
+    /// Whether `BOUNDARY_OPAQUE` has been emitted and not yet cleared.
+    pub is_opaque:           bool,
 }
 
 /// Well-known signal kind string constants.

@@ -586,7 +586,7 @@ function drawFrame() {
       if (currentView === 'life') {
         if (a.born   > 0) c = lerpC(c, C_BORN,   a.born);
         if (a.died   > 0) c = lerpC(c, C_DIED,   a.died);
-        if (a.fwd    > 0) c = lerpC(c, C_FWD,    a.fwd * 0.55);
+        if (a.fwd    > 0) c = lerpC(c, C_FWD,    a.fwd * 0.18);
         if (a.acting > 0) c = lerpC(c, C_ACTING, a.acting);
         if (a.kvRecv > 0) c = lerpC(c, C_KVRECV, a.kvRecv * 0.35);
       } else if (currentView === 'kv') {

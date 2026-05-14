@@ -1,22 +1,29 @@
-//! Conway's Game of Life on a real 8×8 gossip mesh.
+//! Conway's Game of Life on a real 16×16 gossip mesh.
 //!
-//! 64 GossipAgents run in-process over TCP (ports 52000-52063).
+//! 256 GossipAgents run in-process over TCP (ports 52000-52255).
 //! Each agent owns one cell. Cell state lives in the KV store and
 //! propagates epidemically. A System-scope tick signal drives each
 //! agent to read its neighbours' state from its own gossiped view
 //! and write its cell's next state — demonstrating eventual consistency.
 //!
+//! Coordination: each agent uses a local tokio::time::interval — the
+//! standard pattern in distributed systems (Dynamo, Cassandra, Riak all
+//! do this). The gossip *tick signal* was elegant but unreliable: the
+//! boundary layer's opacity mechanism sheds signals under load, and
+//! eventual consistency cannot guarantee all 256 agents see consistent
+//! neighbour state within a single generation boundary. Local timers
+//! solve the coordination problem; gossip solves the state-propagation
+//! problem. These are different concerns.
+//!
 //! Run:
 //!   cargo run --example conway
 //!
-//! Then open docs/conway.html and switch to "Live (Rust)" to visualise
-//! the real agent mesh. Grid state is served as JSON on http://127.0.0.1:8090/state
+//! Then open http://127.0.0.1:8090 and switch to "Live (Rust)".
 //!
 //! Toroidal edges — the grid wraps on all sides.
 
 use bytes::Bytes;
-use gossip_protocol::{GossipAgent, GossipConfig, NodeId, SignalScope};
-use std::sync::atomic::{AtomicU8, Ordering};
+use gossip_protocol::{GossipAgent, GossipConfig, NodeId};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -38,18 +45,16 @@ fn raise_fd_limit(target: u64) {
 #[cfg(not(unix))]
 fn raise_fd_limit(_: u64) {}
 
-const GRID: usize = 8;
+const GRID: usize = 16;
 const BASE_PORT: u16 = 52000;
 const HTTP_PORT: u16 = 8090;
 const TICK_MS: u64 = 300;
 const RENDER_OFFSET_MS: u64 = 180;
-const SETTLE_MS: u64 = 5_000;
-// Two-phase update: tick (read phase) → WRITE_DELAY_MS → write (write phase).
-// All 64 agents read neighbours before any agent writes, preventing race-condition
-// pattern corruption when tasks execute concurrently.
-const TICK_KIND:       &str = "conway.tick";
-const WRITE_KIND:      &str = "conway.write";
-const WRITE_DELAY_MS:  u64  = 60;
+const SETTLE_MS: u64 = 10_000;
+// Two-phase update: read phase → WRITE_DELAY_MS → write phase.
+// All 256 agents read neighbours before any agent writes. Timer jitter on a
+// single Tokio runtime is <1ms, well within the 100ms write delay.
+const WRITE_DELAY_MS: u64 = 100;
 
 const GLIDER: &[(usize, usize)] = &[(1, 0), (2, 1), (0, 2), (1, 2), (2, 2)];
 
@@ -182,8 +187,8 @@ fn read_alive(agent: &GossipAgent, x: usize, y: usize) -> bool {
 
 fn render_terminal(viewer: &GossipAgent, gen: u64, live: usize) {
     print!("\x1b[H");
-    println!("  Conway's Life — 8×8 gossip mesh   \x1b[36mgen {gen}\x1b[0m   \x1b[33mlive {live:3}\x1b[0m          ");
-    println!("  64 TCP agents · KV epidemic propagation · http://127.0.0.1:{HTTP_PORT}/state\n");
+    println!("  Conway's Life — {GRID}×{GRID} gossip mesh   \x1b[36mgen {gen}\x1b[0m   \x1b[33mlive {live:3}\x1b[0m          ");
+    println!("  {} TCP agents · KV epidemic propagation · http://127.0.0.1:{HTTP_PORT}/state\n", GRID*GRID);
     for y in 0..GRID {
         print!("  ");
         for x in 0..GRID {
@@ -200,35 +205,50 @@ fn render_terminal(viewer: &GossipAgent, gen: u64, live: usize) {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 64 agents × ~3 sockets each comfortably exceeds macOS's default 256 fd limit.
+    // 256 agents × ~3 sockets each comfortably exceeds macOS's default 256 fd limit.
     raise_fd_limit(4096);
 
     // ── Build agents ──────────────────────────────────────────────────
-    let seed_port = port(0, 0);
-    let seed_id = NodeId::new("127.0.0.1", seed_port)?;
-
-    let mut seed_cfg = GossipConfig::default();
-    seed_cfg.bind_address = "127.0.0.1".to_string();
-    seed_cfg.bind_port = seed_port;
-    let seed = Arc::new(GossipAgent::new(seed_id.clone(), seed_cfg));
-
+    // Grid bootstrap topology: each agent's bootstrap_peers = 4 toroidal spatial
+    // neighbours. bootstrap_peers are always in the gossip shard's forwarding
+    // targets regardless of health-check state, so signals propagate through the
+    // grid mesh from the first tick. TTL=20 covers the 16-hop diameter.
     let mut agents: Vec<Arc<GossipAgent>> = Vec::with_capacity(GRID * GRID);
     for y in 0..GRID {
         for x in 0..GRID {
-            if x == 0 && y == 0 {
-                agents.push(seed.clone());
-                continue;
-            }
-            let p = port(x, y);
+            let p   = port(x, y);
             let nid = NodeId::new("127.0.0.1", p)?;
             let mut cfg = GossipConfig::default();
-            cfg.bind_address = "127.0.0.1".to_string();
-            cfg.bind_port = p;
-            cfg.bootstrap_peers = vec![seed_id.clone()];
+            cfg.bind_address             = "127.0.0.1".to_string();
+            cfg.bind_port                = p;
+            cfg.default_ttl              = 20;
+            cfg.reconnect_backoff_secs   = 1;
+            // Each cell writes once per generation, then epidemic-forwards through the mesh.
+            // 256 agents × epidemic-forwarding ≈ 192 msgs/peer-writer in a burst; 512 headroom.
+            cfg.max_concurrent_forwards  = 512;
+            // One shard per agent instead of the default min(CPU, 16). In debug mode the
+            // default produces 256 × 16 = 4096 tasks; one shard cuts that to 256 tasks with
+            // no measurable latency impact at TICK_MS = 300ms.
+            cfg.gossip_shards            = 1;
+            // 4-connected toroidal neighbours
+            cfg.bootstrap_peers = vec![
+                NodeId::new("127.0.0.1", port((x + GRID - 1) % GRID, y))?,  // left
+                NodeId::new("127.0.0.1", port((x + 1) % GRID,        y))?,  // right
+                NodeId::new("127.0.0.1", port(x, (y + GRID - 1) % GRID))?,  // up
+                NodeId::new("127.0.0.1", port(x, (y + 1) % GRID))?,         // down
+            ];
+            // Fix gossip topology at the 4 bootstrap peers.
+            // max_forwarding_peers: limits gossip fan-out to 4 neighbours.
+            // max_peers: prevents peer-table growth beyond 4 entries — without this,
+            //   piggybacked Ping lists propagate all 256 NodeIds to every agent, the
+            //   health monitor opens persistent connections to all of them, and the
+            //   process accumulates ~32 000 file descriptors (256×128) which starves
+            //   the tokio runtime and makes the HTTP server unresponsive.
+            cfg.max_forwarding_peers     = cfg.bootstrap_peers.len();
+            cfg.max_peers                = cfg.bootstrap_peers.len();
             agents.push(Arc::new(GossipAgent::new(nid, cfg)));
         }
     }
-
     // ── Start ─────────────────────────────────────────────────────────
     eprintln!("Starting {} gossip agents on 127.0.0.1:{}-{}…",
         agents.len(), BASE_PORT, BASE_PORT + (GRID * GRID) as u16 - 1);
@@ -237,6 +257,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // ── Initial state ─────────────────────────────────────────────────
+    // Each agent writes its OWN cell — distributed writes.
+    // Centralised writes (one agent writing all 256 keys) flood its 4 peer-writer
+    // channels (depth 64) with 256 messages each, silently dropping 192/256 (75%).
+    // Distributed writes produce exactly 1 message per peer-writer: no drops.
     for y in 0..GRID {
         for x in 0..GRID {
             let alive = GLIDER.contains(&(x, y));
@@ -253,24 +277,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("Mesh settling ({SETTLE_MS}ms)…");
     time::sleep(Duration::from_millis(SETTLE_MS)).await;
 
-    // ── Per-cell two-phase handlers ───────────────────────────────────
-    // Phase 1 (conway.tick): every agent reads its neighbours' current KV state
-    //   and stores the computed next value in a local AtomicU8 — no KV writes yet.
-    // Phase 2 (conway.write, WRITE_DELAY_MS later): every agent commits its stored
-    //   next value to KV, which then gossips to peers.
-    // Separating the phases ensures all reads happen against the previous generation.
-    let next_states: Vec<Arc<AtomicU8>> = (0..GRID * GRID)
-        .map(|_| Arc::new(AtomicU8::new(0)))
-        .collect();
-
+    // ── Per-cell tick tasks ───────────────────────────────────────────
+    // Each agent runs its own local timer — the standard pattern in distributed
+    // systems. The gossip layer handles state propagation; the timer handles
+    // local coordination. Two-phase separation (read → sleep → write) keeps
+    // all reads in the same generation before any writes propagate.
     for y in 0..GRID {
         for x in 0..GRID {
             let agent = agents[y * GRID + x].clone();
             let nbs   = toroidal_neighbours(x, y);
-            let next  = next_states[y * GRID + x].clone();
-            let mut rx = agent.signal_rx(TICK_KIND);
+            let key   = cell_key(x, y);
             tokio::spawn(async move {
-                while rx.recv().await.is_some() {
+                let mut ticker = time::interval(Duration::from_millis(TICK_MS));
+                ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+                loop {
+                    ticker.tick().await;
+                    // Phase 1: read neighbours from gossiped KV view, compute next state
                     let live_count = nbs.iter()
                         .filter(|(nx, ny)| read_alive(&agent, *nx, *ny))
                         .count();
@@ -279,39 +301,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         (was_alive, live_count),
                         (true, 2) | (true, 3) | (false, 3)
                     );
-                    next.store(next_alive as u8, Ordering::Release);
+                    // Phase 2: after delay, write — all reads complete well before any write
+                    time::sleep(Duration::from_millis(WRITE_DELAY_MS)).await;
+                    let _ = agent.set(key.clone(), Bytes::copy_from_slice(&[next_alive as u8]));
                 }
             });
         }
     }
-
-    for y in 0..GRID {
-        for x in 0..GRID {
-            let agent = agents[y * GRID + x].clone();
-            let key   = cell_key(x, y);
-            let next  = next_states[y * GRID + x].clone();
-            let mut rx = agent.signal_rx(WRITE_KIND);
-            tokio::spawn(async move {
-                while rx.recv().await.is_some() {
-                    let v = next.load(Ordering::Acquire);
-                    let _ = agent.set(key.clone(), Bytes::copy_from_slice(&[v]));
-                }
-            });
-        }
-    }
-
-    // ── Tick driver ───────────────────────────────────────────────────
-    let tick_agent = agents[0].clone();
-    tokio::spawn(async move {
-        let mut ticker = time::interval(Duration::from_millis(TICK_MS));
-        ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
-        loop {
-            ticker.tick().await;
-            let _ = tick_agent.emit(TICK_KIND,  SignalScope::System, Bytes::new());
-            time::sleep(Duration::from_millis(WRITE_DELAY_MS)).await;
-            let _ = tick_agent.emit(WRITE_KIND, SignalScope::System, Bytes::new());
-        }
-    });
 
     // ── Render + snapshot loop ────────────────────────────────────────
     // Reads agent(0,0)'s KV view — after settling it holds the full grid.

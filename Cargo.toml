@@ -45,6 +45,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = tr
 tokio     = { version = "1.35", features = ["full"] }
 criterion = { version = "0.5", features = ["async_tokio"] }
 libc      = "0.2"
+wgpu      = "22"
+pollster  = "0.3"
+bytemuck  = { version = "1", features = ["derive"] }
 
 [[bench]]
 name    = "throughput"
