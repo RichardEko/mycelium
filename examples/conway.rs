@@ -16,6 +16,7 @@
 
 use bytes::Bytes;
 use gossip_protocol::{GossipAgent, GossipConfig, NodeId, SignalScope};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -41,9 +42,14 @@ const GRID: usize = 8;
 const BASE_PORT: u16 = 52000;
 const HTTP_PORT: u16 = 8090;
 const TICK_MS: u64 = 1_100;
-const RENDER_OFFSET_MS: u64 = 250;
+const RENDER_OFFSET_MS: u64 = 400;
 const SETTLE_MS: u64 = 5_000;
-const TICK_KIND: &str = "conway.tick";
+// Two-phase update: tick (read phase) → WRITE_DELAY_MS → write (write phase).
+// All 64 agents read neighbours before any agent writes, preventing race-condition
+// pattern corruption when tasks execute concurrently.
+const TICK_KIND:       &str = "conway.tick";
+const WRITE_KIND:      &str = "conway.write";
+const WRITE_DELAY_MS:  u64  = 200;
 
 const GLIDER: &[(usize, usize)] = &[(1, 0), (2, 1), (0, 2), (1, 2), (2, 2)];
 
@@ -247,12 +253,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("Mesh settling ({SETTLE_MS}ms)…");
     time::sleep(Duration::from_millis(SETTLE_MS)).await;
 
-    // ── Per-cell tick handlers ────────────────────────────────────────
+    // ── Per-cell two-phase handlers ───────────────────────────────────
+    // Phase 1 (conway.tick): every agent reads its neighbours' current KV state
+    //   and stores the computed next value in a local AtomicU8 — no KV writes yet.
+    // Phase 2 (conway.write, WRITE_DELAY_MS later): every agent commits its stored
+    //   next value to KV, which then gossips to peers.
+    // Separating the phases ensures all reads happen against the previous generation.
+    let next_states: Vec<Arc<AtomicU8>> = (0..GRID * GRID)
+        .map(|_| Arc::new(AtomicU8::new(0)))
+        .collect();
+
     for y in 0..GRID {
         for x in 0..GRID {
             let agent = agents[y * GRID + x].clone();
-            let nbs = toroidal_neighbours(x, y);
-            let key = cell_key(x, y);
+            let nbs   = toroidal_neighbours(x, y);
+            let next  = next_states[y * GRID + x].clone();
             let mut rx = agent.signal_rx(TICK_KIND);
             tokio::spawn(async move {
                 while rx.recv().await.is_some() {
@@ -264,7 +279,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         (was_alive, live_count),
                         (true, 2) | (true, 3) | (false, 3)
                     );
-                    let _ = agent.set(key.clone(), Bytes::copy_from_slice(&[next_alive as u8]));
+                    next.store(next_alive as u8, Ordering::Release);
+                }
+            });
+        }
+    }
+
+    for y in 0..GRID {
+        for x in 0..GRID {
+            let agent = agents[y * GRID + x].clone();
+            let key   = cell_key(x, y);
+            let next  = next_states[y * GRID + x].clone();
+            let mut rx = agent.signal_rx(WRITE_KIND);
+            tokio::spawn(async move {
+                while rx.recv().await.is_some() {
+                    let v = next.load(Ordering::Acquire);
+                    let _ = agent.set(key.clone(), Bytes::copy_from_slice(&[v]));
                 }
             });
         }
@@ -277,7 +307,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
         loop {
             ticker.tick().await;
-            let _ = tick_agent.emit(TICK_KIND, SignalScope::System, Bytes::new());
+            let _ = tick_agent.emit(TICK_KIND,  SignalScope::System, Bytes::new());
+            time::sleep(Duration::from_millis(WRITE_DELAY_MS)).await;
+            let _ = tick_agent.emit(WRITE_KIND, SignalScope::System, Bytes::new());
         }
     });
 

@@ -474,7 +474,7 @@
           <div class="stat-val" style="color:var(--accent)" id="s-gen">0</div>
         </div>
         <div class="stat-item">
-          <div class="stat-label">Live agents</div>
+          <div class="stat-label">Live cells</div>
           <div class="stat-val" style="color:var(--accent2)" id="s-live">0</div>
         </div>
         <div class="stat-item">
@@ -864,12 +864,12 @@ function animateSignalFlow() {
   for (let y = 0; y < G; y++) {
     for (let x = 0; x < G; x++) {
       const el = cellEls[y][x];
-      const d = gossipHops(src.x, src.y, x, y) * 60;
+      const d = gossipHops(src.x, src.y, x, y) * 35;
       setTimeout(() => {
         el.classList.remove('sig-act', 'sig-fwd');
         if (actingSet.has(`${x},${y}`)) el.classList.add('sig-act');
         else el.classList.add('sig-fwd');
-        setTimeout(() => el.classList.remove('sig-act', 'sig-fwd'), 800);
+        setTimeout(() => el.classList.remove('sig-act', 'sig-fwd'), 550);
       }, d);
     }
   }
@@ -1190,6 +1190,23 @@ function applyLiveFrame(data) {
 
   staleSet.clear(); // stale detection is server-side in live mode
 
+  if (currentView === 'life') {
+    // Tick-signal pulse wave from (0,0) — the Rust tick emitter
+    const actingNbs = new Set(
+      neighbours(0, 0).map(([nx,ny]) => `${nx},${ny}`)
+    );
+    for (let y = 0; y < G; y++) {
+      for (let x = 0; x < G; x++) {
+        const d = (x + y) * 16;
+        const el = cellEls[y][x];
+        const acting = actingNbs.has(`${x},${y}`);
+        setTimeout(() => {
+          el.classList.add(acting ? 'acting' : 'fwd-flash');
+          setTimeout(() => el.classList.remove('acting', 'fwd-flash'), 500);
+        }, d);
+      }
+    }
+  }
   if (currentView === 'kv')     updateKvView();
   if (currentView === 'signal') animateSignalFlow();
   updateStats();
