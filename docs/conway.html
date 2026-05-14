@@ -581,7 +581,8 @@ agent.<span class="fn">emit</span>(<span class="str">"conway.tick"</span>,
 <footer>gossip-protocol · Layers 1 &amp; 2 complete · 2026-05-14</footer>
 
 <script>
-const GRID = 16;
+const GRID = 16;   // sim grid size (constant)
+let G = GRID;      // current effective grid size — updated by rebuildGrid()
 const MAX_LOG = 60;
 
 // ── Ground-truth grid ──────────────────────────────────────
@@ -644,7 +645,7 @@ for (let y = 0; y < GRID; y++) {
 }
 
 // ── Conway helpers ─────────────────────────────────────────
-function wrap(v) { return ((v % GRID) + GRID) % GRID; }
+function wrap(v) { return ((v % G) + G) % G; }
 
 function neighbours(x, y) {
   const r = [];
@@ -658,9 +659,9 @@ function neighbours(x, y) {
 // Gossip "hop count" from source (x,y) to target (tx,ty) on the
 // toroidal mesh — used to simulate epidemic propagation delay.
 function gossipHops(sx, sy, tx, ty) {
-  const dx = Math.min(Math.abs(tx-sx), GRID - Math.abs(tx-sx));
-  const dy = Math.min(Math.abs(ty-sy), GRID - Math.abs(ty-sy));
-  return Math.max(dx, dy); // Chebyshev distance — 1 hop per ring
+  const dx = Math.min(Math.abs(tx-sx), G - Math.abs(tx-sx));
+  const dy = Math.min(Math.abs(ty-sy), G - Math.abs(ty-sy));
+  return Math.max(dx, dy);
 }
 
 // Record that cell (x,y) changed state — updates kvAge for that cell only.
@@ -674,8 +675,8 @@ function gossipKvWrite(x, y) {
   // With gossip delay on, the wave is slowed to the hop interval (~180ms/hop).
   // Without delay the wave is cosmetic only (still looks good).
   const hopMs = gossipDelay ? 180 : 55;
-  for (let ty = 0; ty < GRID; ty++) {
-    for (let tx = 0; tx < GRID; tx++) {
+  for (let ty = 0; ty < G; ty++) {
+    for (let tx = 0; tx < G; tx++) {
       if (tx === x && ty === y) continue;
       const hops = gossipHops(x, y, tx, ty);
       setTimeout(() => {
@@ -844,13 +845,13 @@ function kvColour(age) {
   return `rgb(${r},${g},${b})`;
 }
 function updateKvView() {
-  for (let y = 0; y < GRID; y++)
-    for (let x = 0; x < GRID; x++)
+  for (let y = 0; y < G; y++)
+    for (let x = 0; x < G; x++)
       cellEls[y][x].style.background = kvColour(kvAge[y][x]);
 }
 function clearKvView() {
-  for (let y = 0; y < GRID; y++)
-    for (let x = 0; x < GRID; x++)
+  for (let y = 0; y < G; y++)
+    for (let x = 0; x < G; x++)
       cellEls[y][x].style.background = '';
 }
 
@@ -860,8 +861,8 @@ function animateSignalFlow() {
   const actingSet = new Set(
     neighbours(src.x, src.y).map(([nx,ny]) => `${nx},${ny}`)
   );
-  for (let y = 0; y < GRID; y++) {
-    for (let x = 0; x < GRID; x++) {
+  for (let y = 0; y < G; y++) {
+    for (let x = 0; x < G; x++) {
       const el = cellEls[y][x];
       const d = gossipHops(src.x, src.y, x, y) * 60;
       setTimeout(() => {
@@ -915,8 +916,8 @@ function handleCellClick(x, y) {
 }
 
 function clearNbHighlights() {
-  for (let y = 0; y < GRID; y++)
-    for (let x = 0; x < GRID; x++)
+  for (let y = 0; y < G; y++)
+    for (let x = 0; x < G; x++)
       cellEls[y][x].classList.remove('nb-hover', 'self-hover');
 }
 
@@ -990,7 +991,7 @@ function addLog(scope, kind, detail, extra) {
 // ── Stats ──────────────────────────────────────────────────
 function countLive() {
   let n = 0;
-  for (let y = 0; y < GRID; y++) for (let x = 0; x < GRID; x++) if (cells[y][x]) n++;
+  for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) if (cells[y][x]) n++;
   return n;
 }
 function updateStats() {
@@ -1150,6 +1151,7 @@ function rebuildGrid(n) {
   kvAge     = Array.from({length: n}, () => new Array(n).fill(-1));
   prevCells = Array.from({length: n}, () => new Array(n).fill(false));
   liveGridSize = n;
+  G = n; // update effective grid size used by all rendering functions
 }
 
 function applyLiveFrame(data) {
@@ -1188,7 +1190,8 @@ function applyLiveFrame(data) {
 
   staleSet.clear(); // stale detection is server-side in live mode
 
-  if (currentView === 'kv') updateKvView();
+  if (currentView === 'kv')     updateKvView();
+  if (currentView === 'signal') animateSignalFlow();
   updateStats();
   addLog('sys', 'conway.tick', `gen ${generation}`, `↙ live · ${data.live} alive`);
 }
@@ -1234,6 +1237,7 @@ function switchSource(toLive) {
     connDot.style.boxShadow  = 'none';
     liveHintInline.style.display = 'none';
     // Restore sim grid size and pattern
+    G = GRID;
     rebuildGrid(GRID);
     gridEl.style.gridTemplateColumns = '';
     gridEl.style.gridTemplateRows    = '';
