@@ -153,7 +153,7 @@ mod tests {
         socket: TcpStream,
         store: Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
         peers: Arc<papaya::HashMap<NodeId, Instant>>,
-        gossip_tx: mpsc::Sender<(Bytes, u64, crate::agent::ForwardHint)>,
+        gossip_tx: mpsc::Sender<(Bytes, u64, crate::framing::ForwardHint)>,
         seen: Arc<ShardedSeen>,
         max_ttl: u8,
     ) -> (Arc<watch::Sender<bool>>, tokio::task::JoinHandle<Result<(), GossipError>>) {
@@ -163,7 +163,7 @@ mod tests {
         let node_id = NodeId::new("127.0.0.1", 0).unwrap();
         let (shutdown_tx, _) = watch::channel(false);
         let shutdown_tx = Arc::new(shutdown_tx);
-        let gossip_txs: Arc<[mpsc::Sender<(Bytes, u64, crate::agent::ForwardHint)>]> =
+        let gossip_txs: Arc<[mpsc::Sender<(Bytes, u64, crate::framing::ForwardHint)>]> =
             (0..N_GOSSIP_SHARDS).map(|_| gossip_tx.clone()).collect::<Vec<_>>().into();
         let ctx = ConnContext {
             node_id: node_id.clone(),
@@ -498,7 +498,7 @@ mod tests {
     async fn test_deduplication() {
         let (mut writer, reader) = loopback_pair().await;
         let store: Arc<papaya::HashMap<Arc<str>, StoreEntry>> = Arc::new(papaya::HashMap::new());
-        let (tx, mut rx) = mpsc::channel::<(Bytes, u64, crate::agent::ForwardHint)>(10);
+        let (tx, mut rx) = mpsc::channel::<(Bytes, u64, crate::framing::ForwardHint)>(10);
         let seen = Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS));
         let _ = spawn_handler(reader, store.clone(), Arc::new(papaya::HashMap::new()), tx, seen,
                               GossipConfig::default().default_ttl);
@@ -582,7 +582,7 @@ mod tests {
     async fn test_inbound_ttl_clamped_to_max() {
         let (mut writer, reader) = loopback_pair().await;
         let store: Arc<papaya::HashMap<Arc<str>, StoreEntry>> = Arc::new(papaya::HashMap::new());
-        let (tx, mut rx) = mpsc::channel::<(Bytes, u64, crate::agent::ForwardHint)>(10);
+        let (tx, mut rx) = mpsc::channel::<(Bytes, u64, crate::framing::ForwardHint)>(10);
         let _ = spawn_handler(reader, store.clone(), Arc::new(papaya::HashMap::new()), tx,
                               Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)), 5);
 
@@ -601,7 +601,7 @@ mod tests {
     async fn test_inbound_ttl_above_max_not_forwarded_when_clamped_to_one() {
         let (mut writer, reader) = loopback_pair().await;
         let store: Arc<papaya::HashMap<Arc<str>, StoreEntry>> = Arc::new(papaya::HashMap::new());
-        let (tx, mut rx) = mpsc::channel::<(Bytes, u64, crate::agent::ForwardHint)>(10);
+        let (tx, mut rx) = mpsc::channel::<(Bytes, u64, crate::framing::ForwardHint)>(10);
         let _ = spawn_handler(reader, store.clone(), Arc::new(papaya::HashMap::new()), tx,
                               Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)), 1);
 
@@ -788,7 +788,7 @@ mod tests {
         let store: Arc<papaya::HashMap<Arc<str>, StoreEntry>> = Arc::new(papaya::HashMap::new());
         let subs: Arc<papaya::HashMap<Arc<str>, watch::Sender<Option<Bytes>>>> =
             Arc::new(papaya::HashMap::new());
-        let (gossip_tx, _) = mpsc::channel::<(Bytes, u64, crate::agent::ForwardHint)>(10);
+        let (gossip_tx, _) = mpsc::channel::<(Bytes, u64, crate::framing::ForwardHint)>(10);
         let (shutdown_tx, _sd) = watch::channel(false);
         let shutdown_tx = Arc::new(shutdown_tx);
 
@@ -797,7 +797,7 @@ mod tests {
         sub_rx.borrow_and_update();
         subs.pin().insert(Arc::from("gossip_key"), sub_tx);
 
-        let gossip_txs: Arc<[mpsc::Sender<(Bytes, u64, crate::agent::ForwardHint)>]> =
+        let gossip_txs: Arc<[mpsc::Sender<(Bytes, u64, crate::framing::ForwardHint)>]> =
             (0..N_GOSSIP_SHARDS).map(|_| gossip_tx.clone()).collect::<Vec<_>>().into();
         {
             use crate::signal::{Boundary, SignalHandlers};

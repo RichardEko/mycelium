@@ -307,6 +307,18 @@ where
     Ok(frame_version)
 }
 
+/// Forwarding hint passed alongside pre-encoded signal bytes into the gossip shard.
+/// Data frames always use `ForwardHint::All`.
+#[derive(Clone, Debug)]
+pub(crate) enum ForwardHint {
+    /// Forward to all targets — System signals and Data frames.
+    All,
+    /// Forward to known group members plus up to `EPIDEMIC_K` random non-members.
+    Group(Arc<str>),
+    /// Forward only to the named target peer.
+    Individual(crate::node_id::NodeId),
+}
+
 pub(crate) fn is_connection_closed(e: &GossipError) -> bool {
     match e {
         GossipError::Io(io_err) => matches!(

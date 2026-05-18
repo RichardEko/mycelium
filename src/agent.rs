@@ -2,7 +2,7 @@ use crate::config::GossipConfig;
 use crate::connection::{handle_connection, ConnContext};
 use crate::error::GossipError;
 use crate::framing::{
-    bincode_cfg, shard_for_key, GossipUpdate, WireMessage,
+    bincode_cfg, shard_for_key, ForwardHint, GossipUpdate, WireMessage,
 };
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
@@ -12,8 +12,8 @@ use crate::signal::{
 };
 use crate::store::{apply_and_notify, intern_pool_len, StoreEntry};
 use crate::consensus::{
-    ConsensusConfig, ConsensusHandle, ConsensusMsg, ConsensusResult,
-    consensus_kind, consensus_ns,
+    ConsensusConfig, ConsensusEngine, ConsensusHandle, ConsensusResult,
+    consensus_ns,
 };
 use crate::writer::{evict_peer_writer, get_or_spawn_writer, request_state, WriterEntry};
 use ahash::{AHashMap, AHashSet};
@@ -46,18 +46,6 @@ const STATE_STOPPED: u8 = 2;
 /// Number of random non-member peers added to Group-scoped signal fan-out
 /// for epidemic coverage even when `group_aware_forwarding = true`.
 const EPIDEMIC_K: usize = 3;
-
-/// Forwarding hint passed alongside pre-encoded signal bytes into the gossip shard.
-/// Data frames always use `ForwardHint::All`.
-#[derive(Clone, Debug)]
-pub(crate) enum ForwardHint {
-    /// Forward to all targets — System signals and Data frames.
-    All,
-    /// Forward to known group members plus up to `EPIDEMIC_K` random non-members.
-    Group(Arc<str>),
-    /// Forward only to the named target peer.
-    Individual(NodeId),
-}
 
 /// Snapshot of live protocol state.
 #[derive(Debug)]
@@ -1249,7 +1237,9 @@ impl GossipAgent {
     ) -> ConsensusResult {
         let members = self.scan_prefix(&format!("grp/{}/", group)).len().max(1);
         let quorum  = compute_quorum_size(config.quorum_size, members);
-        self.propose_inner(SignalScope::Group(Arc::from(group)), Arc::from(slot), value, quorum, config).await
+        self.make_consensus_engine()
+            .propose(SignalScope::Group(Arc::from(group)), Arc::from(slot), value, quorum, config)
+            .await
     }
 
     /// Proposes `value` for system-wide consensus (all known peers vote).
@@ -1264,7 +1254,9 @@ impl GossipAgent {
     ) -> ConsensusResult {
         let n_nodes = (self.system_stats().peers + 1).max(1);
         let quorum  = compute_quorum_size(config.quorum_size, n_nodes);
-        self.propose_inner(SignalScope::System, Arc::from(slot), value, quorum, config).await
+        self.make_consensus_engine()
+            .propose(SignalScope::System, Arc::from(slot), value, quorum, config)
+            .await
     }
 
     /// Starts the consensus voter/listener task.
@@ -1279,19 +1271,7 @@ impl GossipAgent {
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
         let shutdown_rx = self.shutdown_tx.subscribe();
 
-        let ctx = ConsensusListenerCtx {
-            node_id:         self.node_id.clone(),
-            seen:            self.seen.clone(),
-            current_ts:      self.current_ts.clone(),
-            signal_boundary: self.signal_boundary.clone(),
-            signal_handlers: self.signal_handlers.clone(),
-            gossip_txs:      self.gossip_txs.clone(),
-            default_ttl:     self.config.default_ttl,
-            dropped_frames:  self.dropped_frames.clone(),
-            store:           self.store.clone(),
-            subscriptions:   self.subscriptions.clone(),
-        };
-        let handle = tokio::spawn(run_consensus_listener(ctx, cancel_rx, shutdown_rx));
+        let handle = self.make_consensus_engine().spawn_listener(cancel_rx, shutdown_rx);
         {
             let mut handles = self.task_handles.lock().unwrap_or_else(|e| e.into_inner());
             handles.retain(|h| !h.is_finished());
@@ -1382,119 +1362,22 @@ impl GossipAgent {
 
     // ── Consensus internals ───────────────────────────────────────────────────
 
-    async fn propose_inner(
-        &self,
-        scope:       SignalScope,
-        slot:        Arc<str>,
-        value:       Bytes,
-        quorum_size: usize,
-        config:      ConsensusConfig,
-    ) -> ConsensusResult {
-        let ballot_key = format!("{}{}", consensus_ns::BALLOT, &*slot);
-        let commit_key = format!("{}{}", consensus_ns::COMMITTED, &*slot);
-
-        let mut ballot = self.read_ballot(&ballot_key) + 1;
-
-        for _attempt in 0..config.max_ballots {
-            if self.get(&commit_key).is_some() {
-                return ConsensusResult::Superseded {
-                    slot,
-                    ballot: self.read_ballot(&ballot_key),
-                };
-            }
-
-            let _ = self.set_async(ballot_key.as_str(), encode_ballot(ballot)).await;
-
-            // Register before emitting so no vote/nack can arrive before we listen.
-            let mut vote_rx = self.signal_handlers.register_with_capacity(
-                Arc::from(consensus_kind::VOTE), 512,
-            );
-            let mut nack_rx = self.signal_handlers.register_with_capacity(
-                Arc::from(consensus_kind::NACK), 64,
-            );
-
-            let propose_msg = ConsensusMsg::Propose {
-                slot: slot.clone(), ballot, value: value.clone(),
-                proposer: self.node_id.clone(),
-            };
-            let _ = self.emit_async(
-                consensus_kind::PROPOSE, scope.clone(), encode_consensus_msg(&propose_msg),
-            ).await;
-
-            // Proposer counts its own vote.
-            let mut voters: AHashSet<u64> = AHashSet::new();
-            voters.insert(self.node_id.id_hash());
-            if voters.len() >= quorum_size {
-                let commit = ConsensusMsg::Commit {
-                    slot: slot.clone(), ballot, value: value.clone(),
-                };
-                let _ = self.emit_async(
-                    consensus_kind::COMMIT, scope.clone(), encode_consensus_msg(&commit),
-                ).await;
-                let _ = self.set_async(commit_key.as_str(), value.clone()).await;
-                return ConsensusResult::Committed { slot, value, ballot };
-            }
-
-            let sleep = time::sleep_until(time::Instant::now() + config.phase1_timeout);
-            tokio::pin!(sleep);
-            let mut nack_ballot = 0u64;
-
-            'collect: loop {
-                tokio::select! { biased;
-                    _ = &mut sleep => break 'collect,
-                    Some(sig) = vote_rx.recv() => {
-                        if let Some(ConsensusMsg::Vote { slot: s, ballot: b, voter }) =
-                            decode_consensus_msg(&sig.payload)
-                        {
-                            if s == slot && b == ballot {
-                                voters.insert(voter.id_hash());
-                                if voters.len() >= quorum_size {
-                                    let commit = ConsensusMsg::Commit {
-                                        slot: slot.clone(), ballot, value: value.clone(),
-                                    };
-                                    let _ = self.emit_async(
-                                        consensus_kind::COMMIT, scope.clone(),
-                                        encode_consensus_msg(&commit),
-                                    ).await;
-                                    let _ = self.set_async(commit_key.as_str(), value.clone()).await;
-                                    return ConsensusResult::Committed { slot, value, ballot };
-                                }
-                            }
-                        }
-                    }
-                    Some(sig) = nack_rx.recv() => {
-                        if let Some(ConsensusMsg::Nack { slot: s, seen_ballot }) =
-                            decode_consensus_msg(&sig.payload)
-                        {
-                            if s == slot && seen_ballot > ballot {
-                                nack_ballot = seen_ballot;
-                                break 'collect;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if self.get(&commit_key).is_some() {
-                return ConsensusResult::Superseded {
-                    slot,
-                    ballot: self.read_ballot(&ballot_key),
-                };
-            }
-
-            if config.ballot_retry_jitter_ms > 0 {
-                let jitter = fastrand::u64(0..config.ballot_retry_jitter_ms);
-                tokio::time::sleep(Duration::from_millis(jitter)).await;
-            }
-            ballot = nack_ballot.max(self.read_ballot(&ballot_key)).max(ballot) + 1;
+    fn make_consensus_engine(&self) -> ConsensusEngine {
+        ConsensusEngine {
+            node_id:         self.node_id.clone(),
+            seen:            self.seen.clone(),
+            current_ts:      self.current_ts.clone(),
+            signal_boundary: self.signal_boundary.clone(),
+            signal_handlers: self.signal_handlers.clone(),
+            gossip_txs:      self.gossip_txs.clone(),
+            default_ttl:     self.config.default_ttl,
+            dropped_frames:  self.dropped_frames.clone(),
+            store:           self.store.clone(),
+            subscriptions:   self.subscriptions.clone(),
         }
-
-        ConsensusResult::Timeout { slot, ballots_tried: config.max_ballots }
     }
 
-    fn read_ballot(&self, ballot_key: &str) -> u64 {
-        self.get(ballot_key).map(|b| decode_ballot(&b)).unwrap_or(0)
-    }
+
 }
 
 /// Sends the shutdown signal on drop — best-effort only. Does not wait for
@@ -2219,155 +2102,4 @@ fn compute_quorum_size(config_size: usize, member_count: usize) -> usize {
     if config_size > 0 { config_size } else { member_count / 2 + 1 }
 }
 
-fn encode_consensus_msg(msg: &ConsensusMsg) -> Bytes {
-    let mut buf = BytesMut::new();
-    let _ = bincode::serde::encode_into_std_write(msg, &mut (&mut buf).writer(), bincode_cfg());
-    buf.freeze()
-}
 
-fn decode_consensus_msg(bytes: &Bytes) -> Option<ConsensusMsg> {
-    bincode::serde::decode_from_slice(bytes, bincode_cfg())
-        .ok()
-        .map(|(v, _)| v)
-}
-
-fn encode_ballot(ballot: u64) -> Bytes {
-    Bytes::copy_from_slice(&ballot.to_le_bytes())
-}
-
-fn decode_ballot(bytes: &Bytes) -> u64 {
-    if bytes.len() >= 8 {
-        u64::from_le_bytes(bytes[..8].try_into().unwrap_or([0u8; 8]))
-    } else {
-        0
-    }
-}
-
-/// Shared state for the consensus listener task.
-///
-/// Bundles the Arc fields that were previously passed individually to
-/// `run_consensus_listener` and `listener_kv_set`, following the same pattern
-/// as [`ListenerContext`].
-struct ConsensusListenerCtx {
-    node_id:         NodeId,
-    seen:            Arc<ShardedSeen>,
-    current_ts:      Arc<AtomicU64>,
-    signal_boundary: Arc<RwLock<Boundary>>,
-    signal_handlers: Arc<SignalHandlers>,
-    gossip_txs:      Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]>,
-    default_ttl:     u8,
-    dropped_frames:  Arc<AtomicU64>,
-    store:           Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
-    subscriptions:   Arc<papaya::HashMap<Arc<str>, watch::Sender<Option<Bytes>>>>,
-}
-
-impl ConsensusListenerCtx {
-    /// Applies a KV update from within the consensus listener task.
-    /// Uses `try_send` for gossip dispatch — dropped frames are recovered via anti-entropy.
-    fn kv_set(&self, key: String, value: Bytes) {
-        let key: Arc<str> = Arc::from(key.as_str());
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-        let update = GossipUpdate {
-            nonce:        fastrand::u64(1..),
-            sender:       self.node_id.id_hash(),
-            ttl:          self.default_ttl,
-            is_tombstone: false,
-            timestamp,
-            key,
-            value,
-        };
-        apply_and_notify(&self.store, &self.subscriptions, &update);
-        let shard  = shard_for_key(&update.key, self.gossip_txs.len());
-        let sender = update.sender;
-        let mut buf = BytesMut::with_capacity(256);
-        if bincode::serde::encode_into_std_write(
-            WireMessage::Data(update), &mut (&mut buf).writer(), bincode_cfg(),
-        ).is_ok() {
-            match self.gossip_txs[shard].try_send((buf.freeze(), sender, ForwardHint::All)) {
-                Ok(()) => {}
-                Err(TrySendError::Full(_)) => {
-                    self.dropped_frames.fetch_add(1, Ordering::Relaxed);
-                    warn!("Consensus KV: gossip shard {} full; frame dropped", shard);
-                }
-                Err(TrySendError::Closed(_)) => {
-                    warn!("Consensus KV: gossip shard {} dead", shard);
-                }
-            }
-        }
-    }
-}
-
-/// Background voter task — processes incoming consensus signals and emits
-/// votes, nacks, and KV commit writes on behalf of this node.
-///
-/// Spawned by [`GossipAgent::start_consensus_listener`].
-async fn run_consensus_listener(
-    ctx:             ConsensusListenerCtx,
-    mut cancel:      tokio::sync::oneshot::Receiver<()>,
-    mut shutdown_rx: watch::Receiver<bool>,
-) {
-    let mut rx_propose = ctx.signal_handlers.register_with_capacity(
-        Arc::from(consensus_kind::PROPOSE), 512,
-    );
-    let mut rx_commit = ctx.signal_handlers.register_with_capacity(
-        Arc::from(consensus_kind::COMMIT), 256,
-    );
-    let mut seen_ballot: AHashMap<Arc<str>, u64> = AHashMap::new();
-
-    loop {
-        tokio::select! { biased;
-            _ = &mut cancel                  => break,
-            _ = shutdown_rx.wait_for(|v| *v) => break,
-            Some(sig) = rx_propose.recv() => {
-                let Some(ConsensusMsg::Propose { slot, ballot, value: _, proposer }) =
-                    decode_consensus_msg(&sig.payload)
-                else { continue };
-
-                let local = *seen_ballot.get(&slot).unwrap_or(&0);
-                if ballot < local {
-                    let nack = ConsensusMsg::Nack { slot, seen_ballot: local };
-                    emit_signal(
-                        &ctx.node_id, &ctx.seen, &ctx.current_ts, &ctx.signal_boundary,
-                        &ctx.signal_handlers, &ctx.gossip_txs, ctx.default_ttl, &ctx.dropped_frames,
-                        Arc::from(consensus_kind::NACK),
-                        SignalScope::Individual(proposer),
-                        encode_consensus_msg(&nack),
-                    );
-                } else {
-                    seen_ballot.insert(slot.clone(), ballot);
-                    ctx.kv_set(
-                        format!("{}{}", consensus_ns::BALLOT, &*slot),
-                        encode_ballot(ballot),
-                    );
-                    let vote = ConsensusMsg::Vote {
-                        slot: slot.clone(), ballot, voter: ctx.node_id.clone(),
-                    };
-                    emit_signal(
-                        &ctx.node_id, &ctx.seen, &ctx.current_ts, &ctx.signal_boundary,
-                        &ctx.signal_handlers, &ctx.gossip_txs, ctx.default_ttl, &ctx.dropped_frames,
-                        Arc::from(consensus_kind::VOTE),
-                        sig.scope,
-                        encode_consensus_msg(&vote),
-                    );
-                }
-            }
-            Some(sig) = rx_commit.recv() => {
-                let Some(ConsensusMsg::Commit { slot, ballot, value }) =
-                    decode_consensus_msg(&sig.payload)
-                else { continue };
-
-                let current = *seen_ballot.get(&slot).unwrap_or(&0);
-                if ballot >= current {
-                    seen_ballot.insert(slot.clone(), ballot);
-                }
-                ctx.kv_set(
-                    format!("{}{}", consensus_ns::COMMITTED, &*slot),
-                    value,
-                );
-            }
-        }
-    }
-}

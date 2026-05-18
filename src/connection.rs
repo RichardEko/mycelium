@@ -1,8 +1,7 @@
-use crate::agent::ForwardHint;
 use crate::error::GossipError;
 use crate::framing::{
     bincode_cfg, bincode_cfg_prev, is_connection_closed, read_frame, shard_for_key,
-    FrameVersion, GossipUpdate, SyncEntry, WireMessage, WireMessageV6,
+    ForwardHint, FrameVersion, GossipUpdate, SyncEntry, WireMessage, WireMessageV6,
     ANTI_ENTROPY_NONCE, DATA_TAG, NONCE_OFFSET, TTL_OFFSET,
 };
 use crate::signal::{Boundary, Signal, SignalHandlers, SignalScope};
