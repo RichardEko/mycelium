@@ -367,6 +367,33 @@ impl GossipAgent {
         WatchHandle { _cancel: cancel_tx }
     }
 
+    /// Routes a request to the group member best suited to handle `kind`.
+    ///
+    /// Selects the target using [`suggest_leader`](Self::suggest_leader) — the member
+    /// with the lowest `sys/load/{member}/{kind}` fill ratio within `max_age`. Ties are
+    /// broken by `id_hash()`. Emits the request as [`SignalScope::Individual`] so only that
+    /// member's handler fires, then awaits the first `result_kind` signal whose first 8
+    /// payload bytes match the correlation nonce. Returns `None` on timeout.
+    ///
+    /// This mirrors what service meshes like Envoy + xDS do (pick the lowest-load endpoint,
+    /// forward) but is built entirely in the gossip layer without a control plane.
+    ///
+    /// Use [`signal_window`](Self::signal_window) as `max_age` to respect the configured
+    /// pheromone evaporation window.
+    pub fn route_to(
+        &self,
+        group:       &str,
+        kind:        impl Into<Arc<str>>,
+        payload:     impl Into<Bytes>,
+        result_kind: impl Into<Arc<str>>,
+        max_age:     Duration,
+        timeout:     Duration,
+    ) -> impl std::future::Future<Output = Option<Signal>> {
+        let kind_arc: Arc<str> = kind.into();
+        let target = self.suggest_leader(group, &kind_arc, max_age);
+        self.request(kind_arc, SignalScope::Individual(target), payload, result_kind, timeout)
+    }
+
     /// Returns `true` when at least `min_senders` distinct nodes have had a signal of
     /// `kind` delivered to this node within `window`.
     ///
