@@ -34,6 +34,7 @@ fn jittered(backoff: Duration) -> Duration {
 /// failures; backs off for `backoff` after each connect failure so a dead peer
 /// doesn't cause a connect storm. Exits on global shutdown, per-peer eviction
 /// signal, or when all senders drop.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_peer_writer(
     peer: NodeId,
     mut rx: mpsc::Receiver<Bytes>,
@@ -42,6 +43,7 @@ pub(crate) async fn run_peer_writer(
     mut shutdown_rx: watch::Receiver<bool>,
     mut peer_shutdown_rx: watch::Receiver<bool>,
     dropped_frames: Arc<AtomicU64>,
+    peer_dropped: Arc<AtomicU64>,
 ) {
     let mut conn: Option<BufWriter<TcpStream>> = None;
     // Stores (fail_time, actual_backoff) where actual_backoff is jittered so
@@ -78,6 +80,7 @@ pub(crate) async fn run_peer_writer(
         if let Some((fail_time, fail_backoff)) = last_fail {
             if fail_time.elapsed() < fail_backoff {
                 dropped_frames.fetch_add(1, Ordering::Relaxed);
+                peer_dropped.fetch_add(1, Ordering::Relaxed);
                 debug!("Dropping frame to {} during reconnect backoff", peer);
                 continue;
             }
@@ -88,6 +91,14 @@ pub(crate) async fn run_peer_writer(
             match TcpStream::connect(peer.to_socket_addr()).await {
                 Ok(s) => {
                     let _ = s.set_nodelay(true);
+                    #[cfg(unix)]
+                    {
+                        use socket2::{SockRef, TcpKeepalive};
+                        let ka = TcpKeepalive::new()
+                            .with_time(Duration::from_secs(30))
+                            .with_interval(Duration::from_secs(10));
+                        let _ = SockRef::from(&s).set_tcp_keepalive(&ka);
+                    }
                     // 16 KB buffer coalesces a full burst of small gossip frames into
                     // one or two kernel write calls; explicit flush sends after drain.
                     conn = Some(BufWriter::with_capacity(16_384, s));
@@ -133,6 +144,9 @@ pub(crate) struct WriterEntry {
     pub(crate) tx:            mpsc::Sender<Bytes>,
     pub(crate) peer_shutdown: Arc<watch::Sender<bool>>,
     pub(crate) handle:        JoinHandle<()>,
+    /// Cumulative frames dropped to this peer during reconnect backoff.
+    /// Subset of the global `dropped_frames` counter; useful for identifying slow peers.
+    pub(crate) dropped:       Arc<AtomicU64>,
 }
 
 /// Returns the frame sender for `peer`'s writer task, spawning a new task on first use.
@@ -157,6 +171,7 @@ pub(crate) fn get_or_spawn_writer(
             if e.handle.is_finished() {
                 let (tx, rx) = mpsc::channel(chan_depth);
                 let (peer_shutdown_tx, peer_shutdown_rx) = watch::channel(false);
+                let dropped = Arc::new(AtomicU64::new(0));
                 let handle = tokio::spawn(run_peer_writer(
                     peer.clone(),
                     rx,
@@ -165,13 +180,15 @@ pub(crate) fn get_or_spawn_writer(
                     shutdown_tx.subscribe(),
                     peer_shutdown_rx,
                     dropped_frames.clone(),
+                    dropped.clone(),
                 ));
-                *e = WriterEntry { tx, peer_shutdown: Arc::new(peer_shutdown_tx), handle };
+                *e = WriterEntry { tx, peer_shutdown: Arc::new(peer_shutdown_tx), handle, dropped };
             }
         })
         .or_insert_with(|| {
             let (tx, rx) = mpsc::channel(chan_depth);
             let (peer_shutdown_tx, peer_shutdown_rx) = watch::channel(false);
+            let dropped = Arc::new(AtomicU64::new(0));
             let handle = tokio::spawn(run_peer_writer(
                 peer.clone(),
                 rx,
@@ -180,8 +197,9 @@ pub(crate) fn get_or_spawn_writer(
                 shutdown_tx.subscribe(),
                 peer_shutdown_rx,
                 dropped_frames.clone(),
+                dropped.clone(),
             ));
-            WriterEntry { tx, peer_shutdown: Arc::new(peer_shutdown_tx), handle }
+            WriterEntry { tx, peer_shutdown: Arc::new(peer_shutdown_tx), handle, dropped }
         })
         .tx
         .clone()

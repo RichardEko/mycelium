@@ -31,6 +31,9 @@ bincode = { version = "2", features = ["serde"] }
 bytes = { version = "1", features = ["serde"] }
 toml = "0.7"
 
+# TCP keepalive configuration (unix only)
+socket2 = "0.5"
+
 # Synchronization
 parking_lot = "0.12"
 

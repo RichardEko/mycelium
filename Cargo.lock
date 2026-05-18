@@ -602,6 +602,7 @@ dependencies = [
  "parking_lot",
  "pollster",
  "serde",
+ "socket2",
  "thiserror",
  "tokio",
  "toml",
