@@ -1458,6 +1458,22 @@ impl GossipAgent {
         ).is_ok() {
             let _ = self.set(key, buf.freeze());
         }
+        // Warn about trusted peers that are not current group members — with
+        // use_trust_slices=true this would cause ballots to time out indefinitely.
+        let member_prefix = format!("grp/{}/", group);
+        let members: ahash::AHashSet<String> = self.scan_prefix(&member_prefix)
+            .into_iter()
+            .filter_map(|(k, _)| k.strip_prefix(&member_prefix).map(str::to_string))
+            .collect();
+        for peer in trusted_peers {
+            if !members.contains(&peer.to_string()) {
+                tracing::warn!(
+                    group, peer = %peer,
+                    "declare_trust: peer is not a current group member; \
+                     use_trust_slices=true will time out waiting for their vote"
+                );
+            }
+        }
     }
 
     /// Returns all declared trust slices for `group`, keyed by declaring node.
@@ -1530,7 +1546,9 @@ impl GossipAgent {
                 let trust = *trust_counts.get(&n.id_hash()).unwrap_or(&0) as f32;
                 fill / (1.0 + trust)
             };
-            score(a).partial_cmp(&score(b)).unwrap_or(std::cmp::Ordering::Equal)
+            score(a).partial_cmp(&score(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.id_hash().cmp(&b.id_hash()))
         });
 
         best.cloned().unwrap_or_else(|| self.node_id.clone())
@@ -1545,6 +1563,13 @@ impl GossipAgent {
     ///
     /// Quorum defaults to `floor(N/2)+1` where N is the current group member
     /// count. Set `config.quorum_size > 0` to override.
+    ///
+    /// **Partition safety**: committed values are stored in the LWW KV store at
+    /// `consensus/committed/{slot}`. During a network partition, both halves may
+    /// commit different values to the same slot. After partition healing,
+    /// anti-entropy's LWW merge silently retains the higher-timestamp value and
+    /// discards the other. For safety-critical slots, include a fencing token in
+    /// the committed value or use `consensus_rx` to detect competing commits.
     pub async fn group_propose(
         &self,
         group:  &str,
@@ -1604,7 +1629,7 @@ impl GossipAgent {
             raw_members
         };
         let quorum  = compute_quorum_size(config.quorum_size, active_members);
-        self.make_consensus_engine(config.abstain_when_opaque, config.use_trust_slices)
+        self.make_consensus_engine(config.abstain_when_opaque, config.use_trust_slices, config.max_abstain_ballots)
             .propose(SignalScope::Group(Arc::from(group)), Arc::from(slot), value, quorum, config)
             .await
     }
@@ -1613,6 +1638,13 @@ impl GossipAgent {
     ///
     /// Quorum defaults to `floor(N/2)+1` where N is `peers + 1` (including self).
     /// Set `config.quorum_size > 0` to override.
+    ///
+    /// **Partition safety**: committed values are stored in the LWW KV store at
+    /// `consensus/committed/{slot}`. During a network partition, both halves may
+    /// commit different values to the same slot. After partition healing,
+    /// anti-entropy's LWW merge silently retains the higher-timestamp value and
+    /// discards the other. For safety-critical slots, include a fencing token in
+    /// the committed value or use `consensus_rx` to detect competing commits.
     pub async fn system_propose(
         &self,
         slot:   &str,
@@ -1632,6 +1664,18 @@ impl GossipAgent {
             let defer_ms = (local_opacity * config.ballot_retry_jitter_ms as f32 * 2.0) as u64;
             tokio::time::sleep(Duration::from_millis(defer_ms)).await;
         }
+        // Defer if another peer has lower propose-trail load than this node.
+        // This approximates suggest_leader for system scope (no group to consult).
+        if config.use_suggest_leader && config.ballot_retry_jitter_ms > 0 {
+            let my_fill = pheromone_fill;
+            let is_lightest = self.peer_load(crate::signal::SENDER_LOG_WINDOW)
+                .iter()
+                .filter(|(_, k, _)| k.as_ref() == consensus_kind::PROPOSE)
+                .all(|(_, _, s)| s.fill_ratio >= my_fill);
+            if !is_lightest {
+                tokio::time::sleep(Duration::from_millis(config.ballot_retry_jitter_ms)).await;
+            }
+        }
         let n_nodes = (self.system_stats().peers + 1).max(1);
         let active_n = if config.count_opaque_as_absent {
             let now_ms = SystemTime::now()
@@ -1650,7 +1694,7 @@ impl GossipAgent {
             n_nodes
         };
         let quorum  = compute_quorum_size(config.quorum_size, active_n);
-        self.make_consensus_engine(config.abstain_when_opaque, config.use_trust_slices)
+        self.make_consensus_engine(config.abstain_when_opaque, config.use_trust_slices, config.max_abstain_ballots)
             .propose(SignalScope::System, Arc::from(slot), value, quorum, config)
             .await
     }
@@ -1670,7 +1714,7 @@ impl GossipAgent {
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
         let shutdown_rx = self.shutdown_tx.subscribe();
 
-        let handle = self.make_consensus_engine(config.abstain_when_opaque, config.use_trust_slices).spawn_listener(cancel_rx, shutdown_rx);
+        let handle = self.make_consensus_engine(config.abstain_when_opaque, config.use_trust_slices, config.max_abstain_ballots).spawn_listener(cancel_rx, shutdown_rx);
         {
             let mut handles = self.task_handles.lock().unwrap_or_else(|e| e.into_inner());
             handles.retain(|h| !h.is_finished());
@@ -1726,7 +1770,12 @@ impl GossipAgent {
 
     // ── Consensus internals ───────────────────────────────────────────────────
 
-    fn make_consensus_engine(&self, abstain_when_opaque: bool, use_trust_slices: bool) -> ConsensusEngine {
+    fn make_consensus_engine(
+        &self,
+        abstain_when_opaque: bool,
+        use_trust_slices:    bool,
+        max_abstain_ballots: u32,
+    ) -> ConsensusEngine {
         ConsensusEngine {
             node_id:             self.node_id.clone(),
             seen:                self.seen.clone(),
@@ -1740,7 +1789,8 @@ impl GossipAgent {
             subscriptions:       self.subscriptions.clone(),
             abstain_when_opaque,
             use_trust_slices,
-            max_store_entries: self.config.max_store_entries,
+            max_store_entries:   self.config.max_store_entries,
+            max_abstain_ballots,
         }
     }
 

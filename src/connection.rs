@@ -326,6 +326,22 @@ pub(crate) async fn handle_connection(
                 if intern_keys { update.key = intern_key(update.key, intern_max_keys); }
                 apply_and_notify(&store, &subscriptions, &update, max_store_entries);
 
+                // Push-based boundary sync: if the received key is grp/{group}/{this_node},
+                // update the boundary immediately rather than waiting for the GC-tick reconcile.
+                if let Some(inner) = update.key.strip_prefix("grp/") {
+                    if let Some(slash) = inner.rfind('/') {
+                        if &inner[slash + 1..] == node_id.to_string().as_str() {
+                            let group_str = &inner[..slash];
+                            let mut bnd = signal_boundary.write();
+                            if update.is_tombstone {
+                                bnd.groups.remove(group_str);
+                            } else {
+                                bnd.groups.insert(Arc::from(group_str));
+                            }
+                        }
+                    }
+                }
+
                 // Clamp inbound TTL to config.default_ttl before forwarding.
                 let fwd_ttl = update.ttl.min(max_ttl);
                 if fwd_ttl > 1 {

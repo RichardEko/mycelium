@@ -83,12 +83,23 @@ pub struct ConsensusConfig {
     ///
     /// Requires `manage_opacity` writing pheromone trails (Fix B) to be effective.
     /// Default: `false`.
+    ///
+    /// **Availability trade-off**: the effective quorum is floored at 1 (a single
+    /// transparent node can commit). When all members are simultaneously opaque, a
+    /// lone transparent node satisfies quorum. Set `quorum_size` explicitly to
+    /// prevent this if your correctness model requires a minimum voter count
+    /// regardless of opacity.
     pub count_opaque_as_absent: bool,
 
     /// When `true`, this node will not vote in consensus rounds while any of its
     /// managed `load/{node_id}/*` entries show `is_opaque: true`. The node neither
     /// votes nor nacks — it silently drops `PROPOSE` messages while overloaded.
     /// Default: `false`.
+    ///
+    /// **Liveness risk**: if all nodes are simultaneously opaque, every ballot
+    /// times out indefinitely. Set `max_abstain_ballots > 0` to automatically
+    /// relax the abstain rule after that many consecutive abstentions, guaranteeing
+    /// liveness at the cost of accepting votes from temporarily overloaded nodes.
     pub abstain_when_opaque: bool,
 
     /// When `true`, the proposer counts only votes from nodes in its own trust
@@ -103,7 +114,19 @@ pub struct ConsensusConfig {
     ///
     /// Uses [`SENDER_LOG_WINDOW`](crate::signal::SENDER_LOG_WINDOW) as the `max_age` for
     /// pheromone freshness. Default: `false`.
+    ///
+    /// **Note**: in `group_propose`, suggestion is based on pheromone load + trust counts
+    /// within the group. In `system_propose`, suggestion defers this node if it is not the
+    /// lowest-load proposer among all peers that have written a `consensus.propose` trail.
     pub use_suggest_leader: bool,
+
+    /// Maximum consecutive ballot attempts during which this node may abstain due to
+    /// `abstain_when_opaque`. After this many consecutive abstentions, the node votes
+    /// regardless of its opacity state, guaranteeing liveness even when all nodes are
+    /// simultaneously overloaded.
+    ///
+    /// `0` = no limit (always abstain when opaque). Default: `0`.
+    pub max_abstain_ballots: u32,
 }
 
 impl Default for ConsensusConfig {
@@ -117,6 +140,7 @@ impl Default for ConsensusConfig {
             abstain_when_opaque:     false,
             use_trust_slices:        false,
             use_suggest_leader:      false,
+            max_abstain_ballots:     0,
         }
     }
 }
@@ -243,7 +267,8 @@ pub(crate) struct ConsensusEngine {
     /// When `true`, the proposer filters incoming votes against its declared
     /// trust slice for the group (`consensus/trust/{group}/{node_id}`).
     pub(crate) use_trust_slices: bool,
-    pub(crate) max_store_entries: usize,
+    pub(crate) max_store_entries:   usize,
+    pub(crate) max_abstain_ballots: u32,
 }
 
 impl ConsensusEngine {
@@ -557,6 +582,7 @@ async fn run_consensus_listener(
         Arc::from(consensus_kind::COMMIT), 256,
     );
     let mut seen_ballot: AHashMap<Arc<str>, u64> = AHashMap::new();
+    let mut consecutive_abstains: u32 = 0;
 
     loop {
         tokio::select! { biased;
@@ -564,19 +590,28 @@ async fn run_consensus_listener(
             _ = shutdown_rx.wait_for(|v| *v) => break,
             Some(sig) = rx_propose.recv() => {
                 // Silent abstain: overloaded node neither votes nor nacks.
+                // max_abstain_ballots > 0 caps how many ballots can be skipped in a row.
                 if ctx.abstain_when_opaque {
-                    let load_prefix = format!("{}{}/", kv_ns::LOAD, ctx.node_id);
-                    let is_overloaded = ctx.store.pin()
-                        .iter()
-                        .filter(|(k, v)| k.starts_with(&*load_prefix) && v.data.is_some())
-                        .any(|(_, v)| {
-                            v.data.as_ref()
-                                .and_then(decode_load_state)
-                                .map(|s| s.is_opaque)
-                                .unwrap_or(false)
-                        });
-                    if is_overloaded { continue; }
+                    let at_cap = ctx.max_abstain_ballots > 0
+                        && consecutive_abstains >= ctx.max_abstain_ballots;
+                    if !at_cap {
+                        let load_prefix = format!("{}{}/", kv_ns::LOAD, ctx.node_id);
+                        let is_overloaded = ctx.store.pin()
+                            .iter()
+                            .filter(|(k, v)| k.starts_with(&*load_prefix) && v.data.is_some())
+                            .any(|(_, v)| {
+                                v.data.as_ref()
+                                    .and_then(decode_load_state)
+                                    .map(|s| s.is_opaque)
+                                    .unwrap_or(false)
+                            });
+                        if is_overloaded {
+                            consecutive_abstains += 1;
+                            continue;
+                        }
+                    }
                 }
+                consecutive_abstains = 0;
 
                 let Some(ConsensusMsg::Propose { slot, ballot, value: _, proposer }) =
                     decode_consensus_msg(&sig.payload)
