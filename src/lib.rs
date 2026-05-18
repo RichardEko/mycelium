@@ -2560,6 +2560,38 @@ mod tests {
         agent_b.shutdown().await;
     }
 
+    // ── H10: peer_load_rx yields typed LoadState ──────────────────────────────
+
+    #[tokio::test]
+    async fn test_peer_load_rx_yields_decoded_state() {
+        use crate::signal::{encode_load_state, LoadState};
+
+        let agent = make_agent();
+        let peer = NodeId::new("127.0.0.1", 9999).unwrap();
+        let mut rx = agent.peer_load_rx(&peer, "test");
+
+        // Initially absent.
+        assert!(rx.borrow().is_none());
+
+        // Write a pheromone entry for that peer.
+        let state = LoadState { fill_ratio: 0.75, is_opaque: true, written_at_ms: 0 };
+        let key = format!("load/{}/test", peer);
+        let _ = agent.set(key.clone(), encode_load_state(&state));
+
+        // Forwarding task should decode and push the typed value.
+        let _ = tokio::time::timeout(Duration::from_millis(200), rx.changed()).await
+            .expect("watch should fire within 200 ms");
+        let got = rx.borrow().clone().expect("should have a LoadState");
+        assert!((got.fill_ratio - 0.75).abs() < 1e-4);
+        assert!(got.is_opaque);
+
+        // Tombstone → None.
+        let _ = agent.delete(key);
+        let _ = tokio::time::timeout(Duration::from_millis(200), rx.changed()).await
+            .expect("watch should fire on tombstone");
+        assert!(rx.borrow().is_none(), "tombstone should decode as None");
+    }
+
     // ── H2: boundary reconciliation from Layer I ──────────────────────────────
 
     #[test]

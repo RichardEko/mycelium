@@ -624,12 +624,26 @@ impl GossipAgent {
 
     /// Returns a `watch::Receiver` that fires whenever `load/{node_id}/{kind}` changes.
     ///
-    /// Backed by [`subscribe`](Self::subscribe) — fires once on registration
-    /// with the current value, then on every update from anti-entropy or a
-    /// peer's opacity transition. `None` means absent or tombstoned (transparent).
+    /// Unlike [`subscribe`](Self::subscribe), the receiver yields decoded [`LoadState`]
+    /// values instead of raw bytes — symmetric with [`peer_load`](Self::peer_load).
+    /// Fires once on registration with the current value, then on every update from
+    /// anti-entropy or a peer's opacity transition. `None` means absent or tombstoned.
+    ///
+    /// The forwarding task exits automatically when either the underlying store channel
+    /// closes (agent shutdown) or all receivers drop (caller abandoned the watch).
     #[must_use]
-    pub fn peer_load_rx(&self, node_id: &NodeId, kind: &str) -> watch::Receiver<Option<Bytes>> {
-        self.subscribe(format!("load/{}/{}", node_id, kind))
+    pub fn peer_load_rx(&self, node_id: &NodeId, kind: &str) -> watch::Receiver<Option<LoadState>> {
+        let mut raw_rx = self.subscribe(format!("load/{}/{}", node_id, kind));
+        let initial = raw_rx.borrow().as_ref().and_then(|b| decode_load_state(b));
+        let (tx, rx) = watch::channel(initial);
+        tokio::spawn(async move {
+            loop {
+                if raw_rx.changed().await.is_err() { break; }
+                let decoded = raw_rx.borrow().as_ref().and_then(|b| decode_load_state(b));
+                if tx.send(decoded).is_err() { break; }
+            }
+        });
+        rx
     }
 
     // ── Signal / Boundary API (Layer 2) ──────────────────────────────────────
