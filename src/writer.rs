@@ -1,10 +1,13 @@
 use crate::framing::{bincode_cfg, write_frame, WireMessage};
 use crate::node_id::NodeId;
-use crate::store::{store_hash, StoreEntry};
+use crate::store::{store_hash_acc, StoreEntry};
 use bytes::{BufMut, Bytes, BytesMut};
 use dashmap::DashMap;
 use std::{
-    sync::Arc,
+    sync::{
+        atomic::AtomicU64,
+        Arc,
+    },
     time::{Duration, Instant},
 };
 use tokio::{
@@ -191,20 +194,21 @@ pub(crate) fn evict_peer_writer(writers: &DashMap<NodeId, WriterEntry>, peer: &N
 /// Serialises and enqueues a `StateRequest` into `peer`'s writer channel,
 /// spawning the writer task if needed.
 ///
-/// Computes `store_hash` of the local store so the receiver can skip sending a full
-/// snapshot if its store is already in sync (anti-entropy fast-path).
+/// Reads `hash_acc` (O(1)) so the receiver can skip sending a full snapshot
+/// if its store is already in sync (anti-entropy fast-path).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn request_state(
     peer: &NodeId,
     peer_writers: &Arc<DashMap<NodeId, WriterEntry>>,
-    store: &Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
+    _store: &Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
     writer_depth: usize,
     backoff: Duration,
     idle_timeout: Duration,
     shutdown_tx: &Arc<watch::Sender<bool>>,
     sender: &NodeId,
+    hash_acc: &AtomicU64,
 ) {
-    let hash = store_hash(store);
+    let hash = store_hash_acc(hash_acc);
     let mut buf = BytesMut::with_capacity(64);
     if let Err(e) = bincode::serde::encode_into_std_write(
         WireMessage::StateRequest { sender: sender.clone(), store_hash: hash },

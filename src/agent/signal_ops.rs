@@ -1,4 +1,4 @@
-use crate::framing::{dispatch_gossip_send, ForwardHint, WireMessage};
+use crate::framing::{ForwardHint, WireMessage};
 use crate::signal::{AdvertiseHandle, Signal, SignalScope, WatchHandle};
 use bytes::{BufMut, Bytes, BytesMut};
 use std::{
@@ -73,40 +73,10 @@ impl GossipAgent {
         scope:   SignalScope,
         payload: impl Into<Bytes>,
     ) -> bool {
-        let kind:    Arc<str> = kind.into();
-        let payload: Bytes    = payload.into();
-        let nonce = fastrand::u64(1..);
-        let ts = self.current_ts.load(std::sync::atomic::Ordering::Relaxed);
-        let _ = self.seen.is_duplicate(nonce, ts);
-
-        if self.signal_boundary.read().admits(&scope) {
-            let admit = match &scope {
-                SignalScope::Individual(_) => true,
-                _ => {
-                    let opacity = self.signal_handlers.fill_ratio(&kind);
-                    opacity == 0.0 || fastrand::f32() >= opacity
-                }
-            };
-            if admit {
-                self.signal_handlers.deliver(&Signal {
-                    kind: kind.clone(), scope: scope.clone(),
-                    payload: payload.clone(), sender: self.node_id.clone(), nonce,
-                });
-            }
-        }
-
-        let hint = match &scope {
-            SignalScope::System           => ForwardHint::All,
-            SignalScope::Group(name)      => ForwardHint::Group(name.clone()),
-            SignalScope::Individual(peer) => ForwardHint::Individual(peer.clone()),
-        };
-        dispatch_gossip_send(
-            &self.gossip_txs,
-            WireMessage::Signal {
-                ttl: self.config.default_ttl, nonce,
-                sender: self.node_id.clone(), scope, kind, payload,
-            },
-            self.node_id.id_hash(), hint,
+        super::helpers::emit_signal_async(
+            &self.node_id, &self.seen, &self.current_ts, &self.signal_boundary,
+            &self.signal_handlers, &self.gossip_txs, self.config.default_ttl,
+            &self.dropped_frames, kind.into(), scope, payload.into(),
         ).await
     }
 
@@ -211,8 +181,9 @@ impl GossipAgent {
         let mut buf = BytesMut::with_capacity(8 + payload_bytes.len());
         buf.put_u64_le(nonce);
         buf.put(payload_bytes);
-        let _ = self.emit(kind.into(), scope, buf.freeze());
+        let frozen = buf.freeze();
         let mut rx = self.signal_handlers.register_with_capacity(result_kind.into(), 256);
+        let _ = self.emit(kind.into(), scope, frozen);
         async move {
             let deadline = time::Instant::now() + timeout;
             loop {
@@ -330,6 +301,7 @@ impl GossipAgent {
         let store             = self.store.clone();
         let subscriptions     = self.subscriptions.clone();
         let prefix_index      = self.prefix_index.clone();
+        let hash_acc          = self.hash_acc.clone();
         let kind: Arc<str>    = kind.into();
         let kv_key: Arc<str>  = Arc::from(format!("svc/{}/{}", kind, node_id).as_str());
 
@@ -359,7 +331,7 @@ impl GossipAgent {
                             key: kv_key.clone(),
                             value: payload,
                         };
-                        apply_and_notify(&store, &subscriptions, &update, max_store_entries, &prefix_index);
+                        apply_and_notify(&store, &subscriptions, &update, max_store_entries, &prefix_index, &hash_acc);
                         dispatch_gossip_try_send(
                             &gossip_txs, WireMessage::Data(update),
                             node_id.id_hash(), ForwardHint::All, &dropped_frames,
@@ -379,7 +351,7 @@ impl GossipAgent {
                 key: kv_key.clone(),
                 value: Bytes::new(),
             };
-            apply_and_notify(&store, &subscriptions, &tombstone, max_store_entries, &prefix_index);
+            apply_and_notify(&store, &subscriptions, &tombstone, max_store_entries, &prefix_index, &hash_acc);
             dispatch_gossip_try_send(
                 &gossip_txs, WireMessage::Data(tombstone),
                 node_id.id_hash(), ForwardHint::All, &dropped_frames,
@@ -545,6 +517,14 @@ impl GossipAgent {
     /// Use this when quorum evidence must survive process restarts — for example, to verify
     /// that enough voters participated in a consensus round before acting on a committed value,
     /// even after this node crashed and was restarted mid-ballot.
+    ///
+    /// **Scope limitation**: evidence is keyed by `(kind, sender)` only — there is no
+    /// slot, ballot, or correlation ID in the key. All signals of `kind` from the same
+    /// sender collapse into one entry regardless of ballot or slot. `quorum_persistent` is
+    /// best suited for application-level quorum queries such as "have K distinct nodes
+    /// advertised capability X within window W?" rather than per-round consensus checks.
+    /// For per-round quorum, use the in-memory `votes_last_ballot` field in
+    /// [`ConsensusResult::Timeout`](crate::consensus::ConsensusResult::Timeout).
     ///
     /// **Prefer [`quorum`](Self::quorum) for latency-sensitive paths.** The in-memory version
     /// is O(window_entries) with no store access; `quorum_persistent` scans the prefix index

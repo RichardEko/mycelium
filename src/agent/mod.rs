@@ -126,6 +126,9 @@ pub struct GossipAgent {
     /// Secondary index: first path segment → live key set.
     /// Maintained by `apply_and_notify`; used by `scan_prefix` for O(bucket) scans.
     pub(super) prefix_index: Arc<PrefixIndex>,
+    /// Incremental XOR hash accumulator for the store; maintained by `apply_and_notify`.
+    /// Allows `store_hash_acc` to return the current digest in O(1) instead of O(store).
+    pub(super) hash_acc: Arc<AtomicU64>,
 }
 
 impl GossipAgent {
@@ -181,6 +184,7 @@ impl GossipAgent {
             signal_handlers: Arc::new(SignalHandlers::new()),
             dropped_frames: Arc::new(AtomicU64::new(0)),
             prefix_index: Arc::new(PrefixIndex::new()),
+            hash_acc: Arc::new(AtomicU64::new(0)),
         }
     }
 }

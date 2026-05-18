@@ -165,6 +165,9 @@ mod tests {
         let shutdown_tx = Arc::new(shutdown_tx);
         let gossip_txs: Arc<[mpsc::Sender<(Bytes, u64, crate::framing::ForwardHint)>]> =
             (0..N_GOSSIP_SHARDS).map(|_| gossip_tx.clone()).collect::<Vec<_>>().into();
+        // Seed the hash accumulator from the store's current state so the
+        // anti-entropy fast-path works correctly for pre-populated test stores.
+        let initial_hash = store_hash(&store);
         let ctx = ConnContext {
             node_id: node_id.clone(),
             store,
@@ -187,6 +190,8 @@ mod tests {
             writer_idle_timeout: Duration::ZERO,
             max_store_entries: 0,
             prefix_index: Arc::new(crate::store::PrefixIndex::new()),
+            dropped_frames: Arc::new(AtomicU64::new(0)),
+            hash_acc: Arc::new(AtomicU64::new(initial_hash)),
         };
         let handle = tokio::spawn(handle_connection(
             socket,
@@ -827,6 +832,8 @@ mod tests {
                 writer_idle_timeout: Duration::ZERO,
                 max_store_entries: 0,
                 prefix_index: Arc::new(crate::store::PrefixIndex::new()),
+                dropped_frames: Arc::new(AtomicU64::new(0)),
+                hash_acc: Arc::new(AtomicU64::new(0)),
             };
             use crate::connection::handle_connection;
             tokio::spawn(handle_connection(reader, "127.0.0.1:0".parse().unwrap(), ctx));

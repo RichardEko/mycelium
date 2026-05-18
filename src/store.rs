@@ -2,7 +2,10 @@ use crate::framing::GossipUpdate;
 use ahash::RandomState;
 use bytes::Bytes;
 use papaya::Operation;
-use std::sync::{Arc, OnceLock};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, OnceLock,
+};
 use tokio::sync::watch;
 use tracing::warn;
 
@@ -108,6 +111,22 @@ pub(crate) struct StoreEntry {
     pub(crate) timestamp: u64,
 }
 
+/// Fixed-seed hash state used by both `store_hash` and `apply_and_notify` so the
+/// incremental accumulator and the full-scan produce identical values.
+static HASH_SEED: OnceLock<RandomState> = OnceLock::new();
+fn hash_seed() -> &'static RandomState {
+    HASH_SEED.get_or_init(|| RandomState::with_seeds(1, 2, 3, 4))
+}
+
+/// O(1) store hash read — returns the value of the incremental XOR accumulator.
+///
+/// The accumulator is maintained by `apply_and_notify` on every live write or
+/// tombstone. Use this in production; `store_hash` (full scan) is kept for tests
+/// and one-shot re-seeding after a snapshot import.
+pub(crate) fn store_hash_acc(acc: &AtomicU64) -> u64 {
+    acc.load(Ordering::Relaxed)
+}
+
 /// Computes a stable XOR-hash of all live (key, timestamp) pairs in the store.
 ///
 /// Uses a fixed-seed `AHasher` so the value is identical across processes for the
@@ -116,9 +135,12 @@ pub(crate) struct StoreEntry {
 /// mismatches. Returns 0 only when the store is empty; 0 is the "no digest" sentinel
 /// in `WireMessage::StateRequest` so an empty store still triggers a full snapshot.
 /// In practice a non-empty store almost never XORs to 0 (probability < 1 in 2^64).
+///
+/// Used in tests to seed a fresh accumulator and verify accumulator correctness.
+/// Production code uses [`store_hash_acc`] instead.
+#[cfg(test)]
 pub(crate) fn store_hash(store: &papaya::HashMap<Arc<str>, StoreEntry>) -> u64 {
-    static SEED: OnceLock<RandomState> = OnceLock::new();
-    let rs = SEED.get_or_init(|| RandomState::with_seeds(1, 2, 3, 4));
+    let rs = hash_seed();
     let guard = store.pin();
     let mut combined: u64 = 0;
     for (k, v) in guard.iter() {
@@ -164,12 +186,17 @@ pub(crate) fn apply_to_store(store: &papaya::HashMap<Arc<str>, StoreEntry>, upda
 /// When `max_store_entries > 0` and the store's current size meets or exceeds that
 /// limit, live (non-tombstone) writes are silently dropped. Tombstone writes are
 /// always accepted — they reduce the live count and must propagate.
+///
+/// `hash_acc` is the incremental XOR accumulator maintained in the caller's
+/// `GossipAgent` or `ConnContext`. Updated in O(1) per call; readable via
+/// [`store_hash_acc`].
 pub(crate) fn apply_and_notify(
     store:             &papaya::HashMap<Arc<str>, StoreEntry>,
     subs:              &papaya::HashMap<Arc<str>, watch::Sender<Option<Bytes>>>,
     update:            &GossipUpdate,
     max_store_entries: usize,
     prefix_index:      &PrefixIndex,
+    hash_acc:          &AtomicU64,
 ) {
     if max_store_entries > 0 && !update.is_tombstone && store.len() >= max_store_entries {
         warn!(
@@ -179,7 +206,21 @@ pub(crate) fn apply_and_notify(
         );
         return;
     }
+    // Read the current entry before the CAS for incremental hash maintenance.
+    // A concurrent update between this read and the CAS can leave the accumulator
+    // transiently off by one — acceptable since any mismatch triggers a full snapshot.
+    let old_entry = store.pin().get(&*update.key).cloned();
     if apply_to_store(store, update) {
+        // Maintain the incremental XOR hash.
+        let key_hash = hash_seed().hash_one(update.key.as_bytes());
+        if let Some(ref old) = old_entry {
+            if old.data.is_some() {
+                hash_acc.fetch_xor(key_hash ^ old.timestamp, Ordering::Relaxed);
+            }
+        }
+        if !update.is_tombstone {
+            hash_acc.fetch_xor(key_hash ^ update.timestamp, Ordering::Relaxed);
+        }
         // Maintain the secondary prefix index.
         if update.is_tombstone {
             prefix_index_remove(prefix_index, &update.key);

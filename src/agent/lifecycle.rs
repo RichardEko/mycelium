@@ -98,6 +98,8 @@ impl GossipAgent {
             writer_idle_timeout: Duration::from_secs(self.config.writer_idle_timeout_secs),
             max_store_entries:   self.config.max_store_entries,
             prefix_index:        self.prefix_index.clone(),
+            dropped_frames:      self.dropped_frames.clone(),
+            hash_acc:            self.hash_acc.clone(),
         };
 
         let mut new_handles = Vec::with_capacity(n_listeners);
@@ -162,6 +164,7 @@ impl GossipAgent {
             self.health_monitor_alive.clone(),
             self.config.ping_peer_sample_size,
             self.config.health_check_max_jitter_ms,
+            self.hash_acc.clone(),
         ));
         self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).push(handle);
     }

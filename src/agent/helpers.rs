@@ -80,6 +80,7 @@ impl GossipAgent {
             max_store_entries:   self.config.max_store_entries,
             max_abstain_ballots,
             prefix_index:        self.prefix_index.clone(),
+            hash_acc:            self.hash_acc.clone(),
         }
     }
 }
@@ -140,6 +141,7 @@ pub(crate) fn emit_signal(
 ///
 /// Used by consensus tasks that must not silently lose PROPOSE/COMMIT signals
 /// under backpressure. Signal delivery to local handlers is still synchronous.
+/// Returns `false` only if the shard task has crashed.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn emit_signal_async(
     node_id:         &NodeId,
@@ -153,7 +155,7 @@ pub(crate) async fn emit_signal_async(
     kind:            Arc<str>,
     scope:           SignalScope,
     payload:         Bytes,
-) {
+) -> bool {
     let nonce = fastrand::u64(1..);
     let ts = current_ts.load(Ordering::Relaxed);
     let _ = seen.is_duplicate(nonce, ts);
@@ -183,7 +185,7 @@ pub(crate) async fn emit_signal_async(
         gossip_txs,
         WireMessage::Signal { ttl: default_ttl, nonce, sender: node_id.clone(), scope, kind, payload },
         node_id.id_hash(), hint,
-    ).await;
+    ).await
 }
 
 pub(crate) fn compute_quorum_size(config_size: usize, member_count: usize) -> usize {

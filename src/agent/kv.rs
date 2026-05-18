@@ -51,7 +51,7 @@ impl GossipAgent {
     pub fn set<K: Into<Arc<str>>>(&self, key: K, value: impl Into<Bytes>) -> bool {
         let key: Arc<str> = key.into();
         let update = self.make_update(key, value.into(), false);
-        apply_and_notify(&self.store, &self.subscriptions, &update, self.config.max_store_entries, &self.prefix_index);
+        apply_and_notify(&self.store, &self.subscriptions, &update, self.config.max_store_entries, &self.prefix_index, &self.hash_acc);
         self.dispatch_update(update)
     }
 
@@ -70,7 +70,7 @@ impl GossipAgent {
     pub fn delete<K: Into<Arc<str>>>(&self, key: K) -> bool {
         let key: Arc<str> = key.into();
         let update = self.make_update(key, Bytes::new(), true);
-        apply_and_notify(&self.store, &self.subscriptions, &update, self.config.max_store_entries, &self.prefix_index);
+        apply_and_notify(&self.store, &self.subscriptions, &update, self.config.max_store_entries, &self.prefix_index, &self.hash_acc);
         self.dispatch_update(update)
     }
 
@@ -85,7 +85,7 @@ impl GossipAgent {
     pub async fn set_async<K: Into<Arc<str>>>(&self, key: K, value: impl Into<Bytes>) -> bool {
         let key: Arc<str> = key.into();
         let update = self.make_update(key, value.into(), false);
-        apply_and_notify(&self.store, &self.subscriptions, &update, self.config.max_store_entries, &self.prefix_index);
+        apply_and_notify(&self.store, &self.subscriptions, &update, self.config.max_store_entries, &self.prefix_index, &self.hash_acc);
         self.dispatch_update_async(update).await
     }
 
@@ -100,7 +100,7 @@ impl GossipAgent {
     pub async fn delete_async<K: Into<Arc<str>>>(&self, key: K) -> bool {
         let key: Arc<str> = key.into();
         let update = self.make_update(key, Bytes::new(), true);
-        apply_and_notify(&self.store, &self.subscriptions, &update, self.config.max_store_entries, &self.prefix_index);
+        apply_and_notify(&self.store, &self.subscriptions, &update, self.config.max_store_entries, &self.prefix_index, &self.hash_acc);
         self.dispatch_update_async(update).await
     }
 

@@ -86,6 +86,8 @@ pub(super) struct ListenerContext {
     pub(super) writer_idle_timeout: Duration,
     pub(super) max_store_entries:   usize,
     pub(super) prefix_index:        Arc<crate::store::PrefixIndex>,
+    pub(super) dropped_frames:      Arc<AtomicU64>,
+    pub(super) hash_acc:            Arc<AtomicU64>,
 }
 
 // ── Task implementations ───────────────────────────────────────────────────────
@@ -96,7 +98,7 @@ pub(super) async fn run_listener_task(listener: TcpListener, lctx: ListenerConte
         current_ts, peer_writers, conn_sem, listener_alive,
         max_conn, max_ttl, writer_depth, backoff, n_shards, intern_keys, intern_max_keys,
         signal_boundary, signal_handlers, max_peers, writer_idle_timeout, max_store_entries,
-        prefix_index,
+        prefix_index, dropped_frames, hash_acc,
     } = lctx;
     let mut shutdown_rx = shutdown_tx.subscribe();
     let mut conn_set: JoinSet<()> = JoinSet::new();
@@ -134,6 +136,8 @@ pub(super) async fn run_listener_task(listener: TcpListener, lctx: ListenerConte
                                 let signal_boundary  = signal_boundary.clone();
                                 let signal_handlers  = signal_handlers.clone();
                                 let prefix_index     = prefix_index.clone();
+                                let dropped_frames   = dropped_frames.clone();
+                                let hash_acc         = hash_acc.clone();
                                 conn_set.spawn(async move {
                                     let _permit = permit;
                                     let ctx = ConnContext {
@@ -143,7 +147,8 @@ pub(super) async fn run_listener_task(listener: TcpListener, lctx: ListenerConte
                                         writer_depth, backoff, n_shards,
                                         intern_keys, intern_max_keys, signal_boundary,
                                         signal_handlers, max_peers, writer_idle_timeout,
-                                        max_store_entries, prefix_index,
+                                        max_store_entries, prefix_index, dropped_frames,
+                                        hash_acc,
                                     };
                                     if let Err(e) = handle_connection(socket, addr, ctx).await {
                                         warn!("Connection error from {}: {}", addr, e);
@@ -338,6 +343,7 @@ pub(super) async fn run_health_monitor(
     health_monitor_alive:    Arc<AtomicBool>,
     ping_peer_sample_size:   usize,
     health_check_max_jitter: u64,
+    hash_acc:                Arc<AtomicU64>,
 ) {
     let bootstrap_set: AHashSet<NodeId> = bootstrap_peers.iter().cloned().collect();
     let mut shutdown_rx = shutdown_tx.subscribe();
@@ -352,7 +358,7 @@ pub(super) async fn run_health_monitor(
     }
 
     for peer in &bootstrap_set {
-        request_state(peer, &peer_writers, &store, writer_depth, backoff, idle_timeout, &shutdown_tx, &node_id);
+        request_state(peer, &peer_writers, &store, writer_depth, backoff, idle_timeout, &shutdown_tx, &node_id, &hash_acc);
     }
 
     let mut ticker = time::interval(Duration::from_secs(interval_secs));

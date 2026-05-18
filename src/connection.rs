@@ -5,7 +5,7 @@ use crate::framing::{
     ANTI_ENTROPY_NONCE, DATA_TAG, NONCE_OFFSET, TTL_OFFSET,
 };
 use crate::signal::{Boundary, Signal, SignalHandlers, SignalScope};
-use crate::store::{intern_key, store_hash};
+use crate::store::{intern_key, store_hash_acc};
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
 use crate::store::{apply_and_notify, PrefixIndex, StoreEntry};
@@ -57,6 +57,12 @@ pub(crate) struct ConnContext {
     pub(crate) max_store_entries: usize,
     /// Secondary prefix index; forwarded to `apply_and_notify`.
     pub(crate) prefix_index:      Arc<PrefixIndex>,
+    /// Shared frame-drop counter; incremented when quorum writes or other try_send
+    /// calls inside the connection handler are rejected due to a full shard channel.
+    pub(crate) dropped_frames:    Arc<AtomicU64>,
+    /// Incremental XOR store-hash accumulator; updated by every `apply_and_notify` call
+    /// so `store_hash_acc` returns the current digest in O(1) for anti-entropy fast-path.
+    pub(crate) hash_acc:          Arc<AtomicU64>,
 }
 
 pub(crate) async fn handle_connection(
@@ -68,12 +74,13 @@ pub(crate) async fn handle_connection(
         node_id, store, peers, gossip_txs, seen, shutdown, max_ttl,
         subscriptions, current_ts, peer_writers, writer_depth, backoff, n_shards,
         intern_keys, intern_max_keys, signal_boundary, signal_handlers, max_peers,
-        writer_idle_timeout, max_store_entries, prefix_index,
+        writer_idle_timeout, max_store_entries, prefix_index, dropped_frames, hash_acc,
     } = ctx;
     let mut socket = BufReader::with_capacity(8_192, socket);
     let mut shutdown_rx = shutdown.subscribe();
     // BytesMut: recv_buf.split().freeze() at TTL_OFFSET is O(1) for zero-copy forwarding.
     let mut recv_buf: BytesMut = BytesMut::with_capacity(2_048);
+    let node_id_str = node_id.to_string();
 
     loop {
         // read_frame returns FrameVersion so we can select the right decoder.
@@ -148,7 +155,7 @@ pub(crate) async fn handle_connection(
                     is_new
                 };
                 if sender_is_new {
-                    request_state(&sender, &peer_writers, &store, writer_depth, backoff, writer_idle_timeout, &shutdown, &node_id);
+                    request_state(&sender, &peer_writers, &store, writer_depth, backoff, writer_idle_timeout, &shutdown, &node_id, &hash_acc);
                 }
             }
 
@@ -164,7 +171,7 @@ pub(crate) async fn handle_connection(
                 // Anti-entropy fast-path: if the sender's store hash matches ours and is
                 // non-zero (zero = "no digest" sentinel from v6 peers), send an empty
                 // StateResponse to acknowledge we're alive without transferring entries.
-                let my_hash = store_hash(&store);
+                let my_hash = store_hash_acc(&hash_acc);
                 if their_hash != 0 && their_hash == my_hash {
                     let empty = WireMessage::StateResponse { entries: vec![] };
                     let mut fast_buf = BytesMut::new();
@@ -247,7 +254,7 @@ pub(crate) async fn handle_connection(
                         key,
                         value:        entry.value,
                     };
-                    apply_and_notify(&store, &subscriptions, &update, max_store_entries, &prefix_index);
+                    apply_and_notify(&store, &subscriptions, &update, max_store_entries, &prefix_index, &hash_acc);
                 }
             }
 
@@ -280,28 +287,39 @@ pub(crate) async fn handle_connection(
                         // Write quorum evidence to Layer I so quorum_persistent() can
                         // reconstruct "who sent signal K" after a process restart via
                         // anti-entropy. Key: quorum/{kind}/{sender}; value: 8-byte LE ms.
+                        // Rate-limited: skip if an entry written within the last 1 s already
+                        // exists — prevents O(signal_rate) gossip churn in busy clusters.
                         let now_ms = SystemTime::now()
                             .duration_since(UNIX_EPOCH).unwrap_or_default()
                             .as_millis() as u64;
                         let quorum_key: Arc<str> = Arc::from(
                             format!("quorum/{}/{}", kind, sender).as_str()
                         );
-                        let quorum_update = GossipUpdate {
-                            nonce:        fastrand::u64(1..),
-                            sender:       node_id.id_hash(),
-                            ttl:          max_ttl,
-                            is_tombstone: false,
-                            timestamp:    now_ms,
-                            key:          quorum_key,
-                            value:        Bytes::copy_from_slice(&now_ms.to_le_bytes()),
+                        let write_quorum = {
+                            let guard = store.pin();
+                            guard.get(&*quorum_key)
+                                .and_then(|e| e.data.as_ref())
+                                .and_then(|v| v.get(..8).and_then(|b| b.try_into().ok()))
+                                .map(|b: [u8; 8]| now_ms.saturating_sub(u64::from_le_bytes(b)) > 1_000)
+                                .unwrap_or(true)
                         };
-                        apply_and_notify(&store, &subscriptions, &quorum_update,
-                                         max_store_entries, &prefix_index);
-                        let _qdrops = AtomicU64::new(0);
-                        dispatch_gossip_try_send(
-                            &gossip_txs, WireMessage::Data(quorum_update),
-                            node_id.id_hash(), ForwardHint::All, &_qdrops,
-                        );
+                        if write_quorum {
+                            let quorum_update = GossipUpdate {
+                                nonce:        fastrand::u64(1..),
+                                sender:       node_id.id_hash(),
+                                ttl:          max_ttl,
+                                is_tombstone: false,
+                                timestamp:    now_ms,
+                                key:          quorum_key,
+                                value:        Bytes::copy_from_slice(&now_ms.to_le_bytes()),
+                            };
+                            apply_and_notify(&store, &subscriptions, &quorum_update,
+                                             max_store_entries, &prefix_index, &hash_acc);
+                            dispatch_gossip_try_send(
+                                &gossip_txs, WireMessage::Data(quorum_update),
+                                node_id.id_hash(), ForwardHint::All, &dropped_frames,
+                            );
+                        }
                     }
                 }
                 // Always forward — epidemic propagation regardless of scope.
@@ -350,13 +368,13 @@ pub(crate) async fn handle_connection(
                     }
                 }
                 if intern_keys { update.key = intern_key(update.key, intern_max_keys); }
-                apply_and_notify(&store, &subscriptions, &update, max_store_entries, &prefix_index);
+                apply_and_notify(&store, &subscriptions, &update, max_store_entries, &prefix_index, &hash_acc);
 
                 // Push-based boundary sync: if the received key is grp/{group}/{this_node},
                 // update the boundary immediately rather than waiting for the GC-tick reconcile.
                 if let Some(inner) = update.key.strip_prefix("grp/") {
                     if let Some(slash) = inner.rfind('/') {
-                        if &inner[slash + 1..] == node_id.to_string().as_str() {
+                        if inner[slash + 1..] == node_id_str {
                             let group_str = &inner[..slash];
                             let mut bnd = signal_boundary.write();
                             if update.is_tombstone {

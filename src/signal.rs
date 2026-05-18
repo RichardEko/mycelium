@@ -426,6 +426,11 @@ pub mod signal_kind {
     /// Invoke a contract — payload is the serialized invocation request.
     pub const INVOKE:               &str = "invoke";
     /// Result of a contract invocation.
+    ///
+    /// **Nonce convention**: the first 8 bytes of the payload carry a little-endian u64
+    /// correlation nonce that matches the first 8 bytes of the originating
+    /// [`INVOKE`] or [`INVOKE_BULK`] payload. Use [`GossipAgent::request`](crate::GossipAgent::request)
+    /// on the caller side to generate and match the nonce automatically.
     pub const INVOKE_RESULT:        &str = "invoke.result";
     /// Bulk-invoke signal. The sender emits this kind to trigger a batch operation
     /// on a group of peers. Payload carries a ticket/correlation ID; the actual
