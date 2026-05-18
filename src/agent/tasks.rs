@@ -273,7 +273,7 @@ pub(super) async fn run_gossip_shard(
                             }
                         }
                         ForwardHint::Group(name) => {
-                            let prefix = format!("grp/{}/", name);
+                            let prefix = crate::signal::grp_prefix(name);
                             let idx_guard = prefix_index.pin();
                             let members: AHashSet<NodeId> = idx_guard.get("grp")
                                 .map(|bucket| {
@@ -335,6 +335,8 @@ pub(super) async fn run_health_monitor(
     health_check_max_jitter: u64,
     hash_acc:                Arc<AtomicU64>,
     dropped_frames:          Arc<AtomicU64>,
+    signal_handlers:         Arc<SignalHandlers>,
+    signal_window_secs:      u64,
 ) {
     let bootstrap_set: AHashSet<NodeId> = bootstrap_peers.iter().cloned().collect();
     let mut shutdown_rx = shutdown_tx.subscribe();
@@ -435,6 +437,8 @@ pub(super) async fn run_health_monitor(
                     .unwrap_or_default()
                     .as_millis() as u64;
                 current_ts.store(wall_ts, Ordering::Relaxed);
+
+                signal_handlers.trim_sender_log(Duration::from_secs(signal_window_secs));
 
                 let eviction_window = Duration::from_secs(interval_secs.saturating_mul(peer_eviction_intervals));
                 let maybe_peer_cutoff = Instant::now().checked_sub(eviction_window);
