@@ -136,6 +136,18 @@ pub struct GossipConfig {
     /// `50`) in test configurations to reduce stabilisation delays without removing jitter
     /// entirely.
     pub health_check_max_jitter_ms: u64,
+
+    /// Maximum number of **live** (non-tombstone) entries in the KV store.
+    ///
+    /// When the live count reaches this limit, new live writes are silently dropped.
+    /// Tombstone writes (deletes) are always accepted — they reduce the live count.
+    /// `0` = unlimited (default).
+    ///
+    /// **Trade-off**: a cap prevents unbounded memory growth in workloads with high key
+    /// cardinality, but silently discards writes once the limit is hit. Monitor
+    /// `system_stats().store_entries` to detect saturation and raise the limit before
+    /// it becomes active in production.
+    pub max_store_entries: usize,
 }
 
 impl Default for GossipConfig {
@@ -165,6 +177,7 @@ impl Default for GossipConfig {
             writer_idle_timeout_secs: 0,
             group_aware_forwarding: false,
             health_check_max_jitter_ms: 0,
+            max_store_entries: 0,
         }
     }
 }

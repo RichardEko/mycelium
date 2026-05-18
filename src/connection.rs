@@ -54,6 +54,8 @@ pub(crate) struct ConnContext {
     /// Idle timeout forwarded to `get_or_spawn_writer` / `request_state`.
     /// Zero means no timeout (default).
     pub(crate) writer_idle_timeout: Duration,
+    /// Max live KV entries; forwarded to `apply_and_notify`. 0 = unlimited.
+    pub(crate) max_store_entries: usize,
 }
 
 pub(crate) async fn handle_connection(
@@ -65,7 +67,7 @@ pub(crate) async fn handle_connection(
         node_id, store, peers, gossip_txs, seen, shutdown, max_ttl,
         subscriptions, current_ts, peer_writers, writer_depth, backoff, n_shards,
         intern_keys, intern_max_keys, signal_boundary, signal_handlers, max_peers,
-        writer_idle_timeout,
+        writer_idle_timeout, max_store_entries,
     } = ctx;
     let mut socket = BufReader::with_capacity(8_192, socket);
     let mut shutdown_rx = shutdown.subscribe();
@@ -244,7 +246,7 @@ pub(crate) async fn handle_connection(
                         key,
                         value:        entry.value,
                     };
-                    apply_and_notify(&store, &subscriptions, &update);
+                    apply_and_notify(&store, &subscriptions, &update, max_store_entries);
                 }
             }
 
@@ -322,7 +324,7 @@ pub(crate) async fn handle_connection(
                     }
                 }
                 if intern_keys { update.key = intern_key(update.key, intern_max_keys); }
-                apply_and_notify(&store, &subscriptions, &update);
+                apply_and_notify(&store, &subscriptions, &update, max_store_entries);
 
                 // Clamp inbound TTL to config.default_ttl before forwarding.
                 let fwd_ttl = update.ttl.min(max_ttl);

@@ -20,6 +20,7 @@ use ahash::AHashSet;
 use bytes::{BufMut, Bytes, BytesMut};
 use dashmap::DashMap;
 use papaya::HashMap as PapayaMap;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -118,7 +119,7 @@ pub(crate) struct SignalHandlers {
     /// primitive is `compute()`, which requires cloning the entire value on every write —
     /// an O(window-entries) allocation on every signal delivery. DashMap's per-shard
     /// lock is the correct trade-off for this write-heavy, Vec-typed field.
-    sender_log:  DashMap<Arc<str>, Vec<(NodeId, Instant)>>,
+    sender_log:  DashMap<Arc<str>, VecDeque<(NodeId, Instant)>>,
 }
 
 impl SignalHandlers {
@@ -192,8 +193,10 @@ impl SignalHandlers {
         // quorum() counts all received signals, not just delivered ones.
         {
             let mut log = self.sender_log.entry(signal.kind.clone()).or_default();
-            log.retain(|(_sender, received_at)| received_at.elapsed() < SENDER_LOG_WINDOW);
-            log.push((signal.sender.clone(), now));
+            while log.front().map(|(_, t)| t.elapsed() >= SENDER_LOG_WINDOW).unwrap_or(false) {
+                log.pop_front();
+            }
+            log.push_back((signal.sender.clone(), now));
         }
         // Refractory period: record timestamp but do not fan-out to handlers.
         // Forwarding (epidemic propagation) is unconditional and happens before deliver().
@@ -269,7 +272,9 @@ impl SignalHandlers {
     pub(crate) fn trim_sender_log(&self) {
         let cutoff = Instant::now() - SENDER_LOG_WINDOW;
         self.sender_log.retain(|_, log| {
-            log.retain(|(_, received_at)| *received_at > cutoff);
+            while log.front().map(|(_, t)| *t <= cutoff).unwrap_or(false) {
+                log.pop_front();
+            }
             !log.is_empty()
         });
     }

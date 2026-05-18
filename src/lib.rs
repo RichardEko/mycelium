@@ -185,6 +185,7 @@ mod tests {
             signal_handlers: Arc::new(SignalHandlers::new()),
             max_peers: usize::MAX,
             writer_idle_timeout: Duration::ZERO,
+            max_store_entries: 0,
         };
         let handle = tokio::spawn(handle_connection(
             socket,
@@ -823,6 +824,7 @@ mod tests {
                 signal_handlers: Arc::new(SignalHandlers::new()),
                 max_peers: usize::MAX,
                 writer_idle_timeout: Duration::ZERO,
+                max_store_entries: 0,
             };
             use crate::connection::handle_connection;
             tokio::spawn(handle_connection(reader, "127.0.0.1:0".parse().unwrap(), ctx));

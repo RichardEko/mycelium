@@ -4,6 +4,7 @@ use bytes::Bytes;
 use papaya::Operation;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::watch;
+use tracing::warn;
 
 static KEY_POOL: OnceLock<papaya::HashMap<Arc<str>, Arc<str>>> = OnceLock::new();
 
@@ -114,11 +115,24 @@ pub(crate) fn apply_to_store(store: &papaya::HashMap<Arc<str>, StoreEntry>, upda
 }
 
 /// Applies `update` to the store, then notifies any subscriber watching that key.
+///
+/// When `max_store_entries > 0` and the store's current size meets or exceeds that
+/// limit, live (non-tombstone) writes are silently dropped. Tombstone writes are
+/// always accepted — they reduce the live count and must propagate.
 pub(crate) fn apply_and_notify(
-    store: &papaya::HashMap<Arc<str>, StoreEntry>,
-    subs: &papaya::HashMap<Arc<str>, watch::Sender<Option<Bytes>>>,
-    update: &GossipUpdate,
+    store:             &papaya::HashMap<Arc<str>, StoreEntry>,
+    subs:              &papaya::HashMap<Arc<str>, watch::Sender<Option<Bytes>>>,
+    update:            &GossipUpdate,
+    max_store_entries: usize,
 ) {
+    if max_store_entries > 0 && !update.is_tombstone && store.len() >= max_store_entries {
+        warn!(
+            key = %update.key,
+            cap = max_store_entries,
+            "KV store cap reached; live write dropped",
+        );
+        return;
+    }
     if apply_to_store(store, update) {
         let guard = subs.pin();
         if let Some(tx) = guard.get(&update.key) {

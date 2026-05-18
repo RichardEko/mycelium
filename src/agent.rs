@@ -279,8 +279,9 @@ impl GossipAgent {
             intern_max_keys: self.config.intern_max_keys,
             signal_boundary: self.signal_boundary.clone(),
             signal_handlers: self.signal_handlers.clone(),
-            max_peers:       self.config.max_peers,
+            max_peers:           self.config.max_peers,
             writer_idle_timeout: Duration::from_secs(self.config.writer_idle_timeout_secs),
+            max_store_entries:   self.config.max_store_entries,
         };
 
         let mut new_handles: Vec<JoinHandle<()>> = Vec::with_capacity(n_listeners);
@@ -345,15 +346,6 @@ impl GossipAgent {
         let ping_peer_sample_size    = self.config.ping_peer_sample_size;
         let health_check_max_jitter  = self.config.health_check_max_jitter_ms;
 
-        let bnd_handle = tokio::spawn(run_boundary_reconcile(
-            self.node_id.clone(),
-            self.store.clone(),
-            self.signal_boundary.clone(),
-            self.shutdown_tx.clone(),
-            interval_secs,
-        ));
-        self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).push(bnd_handle);
-
         let handle = tokio::spawn(run_health_monitor(
             node_id,
             bootstrap_peers,
@@ -389,12 +381,14 @@ impl GossipAgent {
         let gc_alive          = self.gc_alive.clone();
         let signal_handlers   = self.signal_handlers.clone();
         let intern_max_keys   = self.config.intern_max_keys;
+        let signal_boundary   = self.signal_boundary.clone();
+        let node_id           = self.node_id.clone();
 
         let handle = tokio::spawn(run_gc_task(
             store, subscriptions, shutdown_tx,
             interval_secs, default_ttl, propagation, live_entries,
             seen, max_seen_entries, gc_alive, signal_handlers, peer_writers,
-            intern_max_keys,
+            intern_max_keys, signal_boundary, node_id,
         ));
         self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).push(handle);
     }
@@ -406,9 +400,10 @@ impl GossipAgent {
         {
             let guard = self.store.pin();
             for (key, entry) in guard.iter() {
-                if !key.starts_with("grp/") || !key.ends_with(suffix.as_str()) { continue; }
-                let Some(tail) = key.strip_prefix("grp/") else { continue };
-                let Some(group) = tail.strip_suffix(suffix.as_str()) else { continue };
+                let Some(inner) = key.strip_prefix("grp/") else { continue };
+                let Some(slash) = inner.rfind('/') else { continue };
+                if &inner[slash..] != suffix { continue }
+                let group = &inner[..slash];
                 if entry.data.is_some() {
                     to_insert.push(Arc::from(group));
                 } else {
@@ -467,7 +462,7 @@ impl GossipAgent {
     pub fn set<K: Into<Arc<str>>>(&self, key: K, value: impl Into<Bytes>) -> bool {
         let key: Arc<str> = key.into();
         let update = self.make_update(key, value.into(), false);
-        apply_and_notify(&self.store, &self.subscriptions, &update);
+        apply_and_notify(&self.store, &self.subscriptions, &update, self.config.max_store_entries);
         self.dispatch_update(update)
     }
 
@@ -486,7 +481,7 @@ impl GossipAgent {
     pub fn delete<K: Into<Arc<str>>>(&self, key: K) -> bool {
         let key: Arc<str> = key.into();
         let update = self.make_update(key, Bytes::new(), true);
-        apply_and_notify(&self.store, &self.subscriptions, &update);
+        apply_and_notify(&self.store, &self.subscriptions, &update, self.config.max_store_entries);
         self.dispatch_update(update)
     }
 
@@ -501,7 +496,7 @@ impl GossipAgent {
     pub async fn set_async<K: Into<Arc<str>>>(&self, key: K, value: impl Into<Bytes>) -> bool {
         let key: Arc<str> = key.into();
         let update = self.make_update(key, value.into(), false);
-        apply_and_notify(&self.store, &self.subscriptions, &update);
+        apply_and_notify(&self.store, &self.subscriptions, &update, self.config.max_store_entries);
         self.dispatch_update_async(update).await
     }
 
@@ -516,7 +511,7 @@ impl GossipAgent {
     pub async fn delete_async<K: Into<Arc<str>>>(&self, key: K) -> bool {
         let key: Arc<str> = key.into();
         let update = self.make_update(key, Bytes::new(), true);
-        apply_and_notify(&self.store, &self.subscriptions, &update);
+        apply_and_notify(&self.store, &self.subscriptions, &update, self.config.max_store_entries);
         self.dispatch_update_async(update).await
     }
 
@@ -914,7 +909,8 @@ impl GossipAgent {
         let signal_boundary = self.signal_boundary.clone();
         let signal_handlers = self.signal_handlers.clone();
         let gossip_txs      = self.gossip_txs.clone();
-        let default_ttl     = self.config.default_ttl;
+        let default_ttl       = self.config.default_ttl;
+        let max_store_entries = self.config.max_store_entries;
         let dropped_frames  = self.dropped_frames.clone();
         let store           = self.store.clone();
         let subscriptions   = self.subscriptions.clone();
@@ -947,7 +943,7 @@ impl GossipAgent {
                             key: kv_key.clone(),
                             value: payload,
                         };
-                        apply_and_notify(&store, &subscriptions, &update);
+                        apply_and_notify(&store, &subscriptions, &update, max_store_entries);
                         dispatch_gossip_try_send(
                             &gossip_txs, WireMessage::Data(update),
                             node_id.id_hash(), ForwardHint::All, &dropped_frames,
@@ -968,7 +964,7 @@ impl GossipAgent {
                 key: kv_key.clone(),
                 value: Bytes::new(),
             };
-            apply_and_notify(&store, &subscriptions, &tombstone);
+            apply_and_notify(&store, &subscriptions, &tombstone, max_store_entries);
             dispatch_gossip_try_send(
                 &gossip_txs, WireMessage::Data(tombstone),
                 node_id.id_hash(), ForwardHint::All, &dropped_frames,
@@ -1206,7 +1202,8 @@ impl GossipAgent {
         let current_ts      = self.current_ts.clone();
         let signal_boundary = self.signal_boundary.clone();
         let gossip_txs      = self.gossip_txs.clone();
-        let default_ttl     = self.config.default_ttl;
+        let default_ttl       = self.config.default_ttl;
+        let max_store_entries = self.config.max_store_entries;
         let dropped_frames  = self.dropped_frames.clone();
         let store           = self.store.clone();
         let subscriptions   = self.subscriptions.clone();
@@ -1273,7 +1270,7 @@ impl GossipAgent {
                                         written_at_ms,
                                     }),
                                 };
-                                apply_and_notify(&store, &subscriptions, &pheromone_update);
+                                apply_and_notify(&store, &subscriptions, &pheromone_update, max_store_entries);
                                 dispatch_gossip_try_send(
                                     &gossip_txs, WireMessage::Data(pheromone_update),
                                     node_id.id_hash(), ForwardHint::All, &dropped_frames,
@@ -1303,7 +1300,7 @@ impl GossipAgent {
                                 key:          load_key.clone(),
                                 value:        Bytes::new(),
                             };
-                            apply_and_notify(&store, &subscriptions, &tombstone_update);
+                            apply_and_notify(&store, &subscriptions, &tombstone_update, max_store_entries);
                             dispatch_gossip_try_send(
                                 &gossip_txs, WireMessage::Data(tombstone_update),
                                 node_id.id_hash(), ForwardHint::All, &dropped_frames,
@@ -1586,17 +1583,23 @@ impl GossipAgent {
             let now_ms = SystemTime::now()
                 .duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
             let freshness_ms = self.config.health_check_interval_secs * 2 * 1000;
-            // Only count nodes that are actually members of this group as opaque.
-            let opaque_count = member_ids.iter().filter(|node_str| {
-                self.scan_prefix(&format!("load/{}/", node_str))
-                    .into_iter()
-                    .any(|(_, bytes)| {
-                        decode_load_state(&bytes)
-                            .map(|s| s.is_opaque && now_ms.saturating_sub(s.written_at_ms) <= freshness_ms)
-                            .unwrap_or(false)
-                    })
-            }).count();
-            raw_members.saturating_sub(opaque_count).max(1)
+            // Single O(store) pass: build opaque member set without N nested scans.
+            let mut opaque: AHashSet<Arc<str>> = AHashSet::new();
+            let guard = self.store.pin();
+            for (k, v) in guard.iter() {
+                let Some(tail) = k.strip_prefix("load/") else { continue };
+                let Some(slash) = tail.find('/') else { continue };
+                let node_str = &tail[..slash];
+                if !member_ids.contains(node_str) { continue }
+                if v.data.as_ref()
+                    .and_then(decode_load_state)
+                    .map(|s| s.is_opaque && now_ms.saturating_sub(s.written_at_ms) <= freshness_ms)
+                    .unwrap_or(false)
+                {
+                    opaque.insert(Arc::from(node_str));
+                }
+            }
+            raw_members.saturating_sub(opaque.len()).max(1)
         } else {
             raw_members
         };
@@ -1737,6 +1740,7 @@ impl GossipAgent {
             subscriptions:       self.subscriptions.clone(),
             abstain_when_opaque,
             use_trust_slices,
+            max_store_entries: self.config.max_store_entries,
         }
     }
 
@@ -1869,8 +1873,9 @@ struct ListenerContext {
     intern_max_keys: usize,
     signal_boundary: Arc<RwLock<Boundary>>,
     signal_handlers: Arc<SignalHandlers>,
-    max_peers:       usize,
+    max_peers:           usize,
     writer_idle_timeout: Duration,
+    max_store_entries:   usize,
 }
 
 async fn run_listener_task(listener: TcpListener, lctx: ListenerContext) {
@@ -1878,7 +1883,7 @@ async fn run_listener_task(listener: TcpListener, lctx: ListenerContext) {
         node_id, store, peers, gossip_txs, seen, shutdown_tx, subscriptions,
         current_ts, peer_writers, conn_sem, listener_alive,
         max_conn, max_ttl, writer_depth, backoff, n_shards, intern_keys, intern_max_keys,
-        signal_boundary, signal_handlers, max_peers, writer_idle_timeout,
+        signal_boundary, signal_handlers, max_peers, writer_idle_timeout, max_store_entries,
     } = lctx;
     let mut shutdown_rx = shutdown_tx.subscribe();
     let mut conn_set: JoinSet<()> = JoinSet::new();
@@ -1924,6 +1929,7 @@ async fn run_listener_task(listener: TcpListener, lctx: ListenerContext) {
                                         writer_depth, backoff, n_shards,
                                         intern_keys, intern_max_keys, signal_boundary,
                                         signal_handlers, max_peers, writer_idle_timeout,
+                                        max_store_entries,
                                     };
                                     if let Err(e) = handle_connection(socket, addr, ctx).await {
                                         warn!("Connection error from {}: {}", addr, e);
@@ -2320,6 +2326,8 @@ async fn run_gc_task(
     signal_handlers:   Arc<crate::signal::SignalHandlers>,
     peer_writers:      Arc<DashMap<NodeId, WriterEntry>>,
     intern_max_keys:   usize,
+    signal_boundary:   Arc<RwLock<crate::signal::Boundary>>,
+    node_id:           NodeId,
 ) {
     gc_alive.store(true, Ordering::Relaxed);
     let _alive_guard = AliveGuard(gc_alive.clone());
@@ -2430,6 +2438,33 @@ async fn run_gc_task(
                 // peer eviction, disconnect). This keeps cached_connections accurate
                 // and bounds the DashMap to currently-active peers.
                 peer_writers.retain(|_, entry| !entry.handle.is_finished());
+
+                // Boundary reconcile: sync in-memory group set from Layer I grp/* keys.
+                // Amortised with the GC pass — piggybacks on the same store iteration cadence.
+                // The push-based path in handle_connection handles the hot case; this catches
+                // any updates missed by that path (e.g. StateResponse anti-entropy delivery).
+                {
+                    let suffix = format!("/{}", node_id);
+                    let mut to_insert: Vec<Arc<str>> = Vec::new();
+                    let mut to_remove: Vec<Arc<str>> = Vec::new();
+                    {
+                        let guard = store.pin();
+                        for (key, entry) in guard.iter() {
+                            let Some(inner) = key.strip_prefix("grp/") else { continue };
+                            let Some(slash) = inner.rfind('/') else { continue };
+                            if &inner[slash..] != suffix { continue }
+                            let group = &inner[..slash];
+                            if entry.data.is_some() {
+                                to_insert.push(Arc::from(group));
+                            } else {
+                                to_remove.push(Arc::from(group));
+                            }
+                        }
+                    }
+                    let mut bnd = signal_boundary.write();
+                    for g in to_insert { bnd.groups.insert(g); }
+                    for g in &to_remove { bnd.groups.remove(g.as_ref()); }
+                }
             }
             _ = shutdown_rx.wait_for(|v| *v) => break,
         }
@@ -2439,45 +2474,6 @@ async fn run_gc_task(
         error!("GC task exited unexpectedly; tombstone expiry and subscription eviction have stopped");
     }
     // _alive_guard drops here, clearing gc_alive on both clean exit and panic.
-}
-
-async fn run_boundary_reconcile(
-    node_id:         NodeId,
-    store:           Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
-    signal_boundary: Arc<RwLock<Boundary>>,
-    shutdown_tx:     Arc<watch::Sender<bool>>,
-    interval_secs:   u64,
-) {
-    let mut shutdown_rx = shutdown_tx.subscribe();
-    let mut ticker = time::interval(Duration::from_secs(interval_secs));
-    ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
-
-    loop {
-        tokio::select! { biased;
-            _ = shutdown_rx.wait_for(|v| *v) => return,
-            _ = ticker.tick() => {
-                let suffix = format!("/{}", node_id);
-                let mut to_insert: Vec<Arc<str>> = Vec::new();
-                let mut to_remove: Vec<Arc<str>> = Vec::new();
-                {
-                    let guard = store.pin();
-                    for (key, entry) in guard.iter() {
-                        if !key.starts_with("grp/") || !key.ends_with(suffix.as_str()) { continue; }
-                        let Some(tail) = key.strip_prefix("grp/") else { continue };
-                        let Some(group) = tail.strip_suffix(suffix.as_str()) else { continue };
-                        if entry.data.is_some() {
-                            to_insert.push(Arc::from(group));
-                        } else {
-                            to_remove.push(Arc::from(group));
-                        }
-                    }
-                }
-                let mut bnd = signal_boundary.write();
-                for g in to_insert { bnd.groups.insert(g); }
-                for g in &to_remove { bnd.groups.remove(g.as_ref()); }
-            }
-        }
-    }
 }
 
 // ── Consensus helpers ─────────────────────────────────────────────────────────

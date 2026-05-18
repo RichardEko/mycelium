@@ -243,6 +243,7 @@ pub(crate) struct ConsensusEngine {
     /// When `true`, the proposer filters incoming votes against its declared
     /// trust slice for the group (`consensus/trust/{group}/{node_id}`).
     pub(crate) use_trust_slices: bool,
+    pub(crate) max_store_entries: usize,
 }
 
 impl ConsensusEngine {
@@ -273,7 +274,7 @@ impl ConsensusEngine {
     /// Uses `try_send` for gossip dispatch — dropped frames recovered via anti-entropy.
     fn kv_set(&self, key: String, value: Bytes) {
         let upd = self.make_kv_update(Arc::from(key.as_str()), value);
-        apply_and_notify(&self.store, &self.subscriptions, &upd);
+        apply_and_notify(&self.store, &self.subscriptions, &upd, self.max_store_entries);
         dispatch_gossip_try_send(
             &self.gossip_txs, WireMessage::Data(upd),
             self.node_id.id_hash(), ForwardHint::All, &self.dropped_frames,
@@ -283,7 +284,7 @@ impl ConsensusEngine {
     /// Like `kv_set` but awaits channel capacity (used by the proposer).
     async fn set_async(&self, key: &str, value: Bytes) {
         let upd = self.make_kv_update(Arc::from(key), value);
-        apply_and_notify(&self.store, &self.subscriptions, &upd);
+        apply_and_notify(&self.store, &self.subscriptions, &upd, self.max_store_entries);
         dispatch_gossip_send(
             &self.gossip_txs, WireMessage::Data(upd),
             self.node_id.id_hash(), ForwardHint::All,
