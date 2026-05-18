@@ -348,6 +348,12 @@ impl SignalHandlers {
 
     /// Like [`quorum`](Self::quorum) but only counts senders whose `id_hash()` is in
     /// `member_hashes`. Prevents ex-members from satisfying quorum after they leave a group.
+    ///
+    /// **Not suitable for per-ballot consensus vote counting**, which requires
+    /// `(slot, ballot)` correlation filters that this method does not provide —
+    /// the sender log records `(sender, received_at)` without a slot or ballot dimension.
+    /// For consensus voting, maintain a local `AHashSet<u64>` in the ballot collection
+    /// loop instead (see `ConsensusEngine::propose`).
     pub(crate) fn quorum_for_group(
         &self,
         kind: &str,

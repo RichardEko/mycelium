@@ -400,7 +400,9 @@ impl ConsensusEngine {
                 Arc::from(consensus_kind::PROPOSE), scope.clone(), encode_consensus_msg(&propose_msg),
             ).await;
 
-            // Proposer counts its own vote.
+            // Local dedup per (slot, ballot). Cannot use signal_handlers.quorum_for_group
+            // here: the sender_log records (sender, received_at) without slot/ballot
+            // correlation, so it would conflate votes from different rounds.
             let mut voters: AHashSet<u64> = AHashSet::new();
             voters.insert(self.task_ctx.node_id.id_hash());
             if voters.len() >= quorum_size {
