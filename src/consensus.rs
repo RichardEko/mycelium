@@ -100,6 +100,16 @@ pub enum ConsensusResult {
     Timeout {
         slot:          Arc<str>,
         ballots_tried: u32,
+        /// Votes received during the final ballot attempt.
+        ///
+        /// Distinguishes "no voters heard at all" (likely partition) from
+        /// "some voters heard but quorum was not met" (likely overloaded members
+        /// or quorum set too high). `0` if no vote arrived in the last ballot.
+        votes_last_ballot: usize,
+        /// Quorum size that was required (as computed at proposal time).
+        ///
+        /// Compare to `votes_last_ballot` to understand how far off quorum was.
+        quorum_required: usize,
     },
     /// Another node committed a value for this slot before quorum was reached
     /// by this proposer. The committed value is readable via
@@ -386,6 +396,7 @@ impl ConsensusEngine {
         let commit_key = format!("{}{}", consensus_ns::COMMITTED, &*slot);
 
         let mut ballot = self.read_ballot(&ballot_key) + 1;
+        let mut votes_last_ballot: usize = 0;
 
         for _attempt in 0..config.max_ballots {
             if self.get(&commit_key).is_some() {
@@ -474,6 +485,8 @@ impl ConsensusEngine {
                 };
             }
 
+            votes_last_ballot = voters.len();
+
             if config.ballot_retry_jitter_ms > 0 {
                 let jitter = fastrand::u64(0..config.ballot_retry_jitter_ms);
                 tokio::time::sleep(Duration::from_millis(jitter)).await;
@@ -481,7 +494,12 @@ impl ConsensusEngine {
             ballot = nack_ballot.max(self.read_ballot(&ballot_key)).max(ballot) + 1;
         }
 
-        ConsensusResult::Timeout { slot, ballots_tried: config.max_ballots }
+        ConsensusResult::Timeout {
+            slot,
+            ballots_tried: config.max_ballots,
+            votes_last_ballot,
+            quorum_required: quorum_size,
+        }
     }
 
     // ── Listener ─────────────────────────────────────────────────────────────
