@@ -7,8 +7,9 @@ use crate::framing::{
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
 use crate::signal::{
-    encode_load_state, AdvertiseHandle, Boundary, LoadState, OpacityHandle,
-    OpacityHint, OpacityState, Signal, SignalHandlers, SignalScope, WatchHandle,
+    decode_load_state, encode_load_state, kv_ns, AdvertiseHandle, Boundary,
+    LoadState, OpacityHandle, OpacityHint, OpacityState, Signal, SignalHandlers,
+    SignalScope, WatchHandle,
 };
 use crate::store::{apply_and_notify, intern_pool_len, StoreEntry};
 use crate::consensus::{
@@ -552,6 +553,51 @@ impl GossipAgent {
             }
             // A concurrent subscriber won the CAS; loop to borrow its sender.
         }
+    }
+
+    /// Returns all pheromone trail entries not older than `max_age`.
+    ///
+    /// Reads [`kv_ns::LOAD`] from Layer I. Each entry was written by a peer's
+    /// [`manage_opacity`](Self::manage_opacity) governor when it crossed the
+    /// opacity threshold. An absent entry means the peer is transparent (not
+    /// overloaded) for that kind.
+    ///
+    /// Returns `(node_id_str, kind_str, LoadState)` triples sorted by
+    /// `fill_ratio` descending (most-loaded first). Entries whose
+    /// `written_at_ms` is older than `max_age` are excluded (evaporation).
+    pub fn peer_load(&self, max_age: Duration) -> Vec<(Arc<str>, Arc<str>, LoadState)> {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH).unwrap_or_default()
+            .as_millis() as u64;
+        let max_age_ms = max_age.as_millis() as u64;
+        let mut results: Vec<(Arc<str>, Arc<str>, LoadState)> = self
+            .scan_prefix(kv_ns::LOAD)
+            .into_iter()
+            .filter_map(|(key, bytes)| {
+                // Key format: "load/{node_id}/{kind}"
+                let tail = key.strip_prefix("load/")?;
+                let slash = tail.find('/')?;
+                let node_str: Arc<str> = Arc::from(&tail[..slash]);
+                let kind_str: Arc<str> = Arc::from(&tail[slash + 1..]);
+                let state = decode_load_state(&bytes)?;
+                if now_ms.saturating_sub(state.written_at_ms) > max_age_ms {
+                    return None;
+                }
+                Some((node_str, kind_str, state))
+            })
+            .collect();
+        results.sort_by(|a, b| b.2.fill_ratio.partial_cmp(&a.2.fill_ratio).unwrap_or(std::cmp::Ordering::Equal));
+        results
+    }
+
+    /// Returns a `watch::Receiver` that fires whenever `load/{node_id}/{kind}` changes.
+    ///
+    /// Backed by [`subscribe`](Self::subscribe) — fires once on registration
+    /// with the current value, then on every update from anti-entropy or a
+    /// peer's opacity transition. `None` means absent or tombstoned (transparent).
+    #[must_use]
+    pub fn peer_load_rx(&self, node_id: &NodeId, kind: &str) -> watch::Receiver<Option<Bytes>> {
+        self.subscribe(format!("load/{}/{}", node_id, kind))
     }
 
     // ── Signal / Boundary API (Layer 2) ──────────────────────────────────────

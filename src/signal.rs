@@ -316,7 +316,6 @@ pub(crate) fn encode_load_state(s: &LoadState) -> Bytes {
     buf.freeze()
 }
 
-#[allow(dead_code)]  // used by Fix B, C, F (agent.rs); remove after those commits
 pub(crate) fn decode_load_state(b: &Bytes) -> Option<LoadState> {
     bincode::serde::decode_from_slice(b, bincode_cfg())
         .ok()
