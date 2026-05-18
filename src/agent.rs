@@ -1248,6 +1248,17 @@ impl GossipAgent {
     /// Tasks that have not exited within the timeout are logged as warnings and abandoned.
     /// Passing `Duration::MAX` replicates the old unbounded-wait behaviour.
     pub async fn shutdown_with_timeout(&self, timeout: Duration) {
+        // Tombstone this node's pheromone trails before stopping gossip shards so
+        // peers see the evaporation immediately rather than waiting for max_age expiry.
+        let my_load_prefix = format!("load/{}/", self.node_id);
+        let load_keys: Vec<String> = self.store.pin()
+            .iter()
+            .filter(|(k, v)| k.starts_with(&*my_load_prefix) && v.data.is_some())
+            .map(|(k, _)| k.to_string())
+            .collect();
+        for key in load_keys {
+            let _ = self.delete(key);
+        }
         let _ = self.state.compare_exchange(
             STATE_RUNNING, STATE_STOPPED,
             Ordering::AcqRel, Ordering::Acquire,
@@ -1395,19 +1406,28 @@ impl GossipAgent {
             let defer_ms = (local_opacity * config.ballot_retry_jitter_ms as f32 * 2.0) as u64;
             tokio::time::sleep(Duration::from_millis(defer_ms)).await;
         }
-        let raw_members = self.scan_prefix(&format!("grp/{}/", group)).len().max(1);
+        // Collect member ids once; used for both the count and the opaque filter.
+        let grp_prefix = format!("grp/{}/", group);
+        let member_ids: AHashSet<String> = self
+            .scan_prefix(&grp_prefix)
+            .into_iter()
+            .filter_map(|(key, _)| key.strip_prefix(&grp_prefix).map(|s| s.to_string()))
+            .collect();
+        let raw_members = member_ids.len().max(1);
         let active_members = if config.count_opaque_as_absent {
             let now_ms = SystemTime::now()
                 .duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
             let freshness_ms = self.config.health_check_interval_secs * 2 * 1000;
-            let opaque_count = self.scan_prefix(kv_ns::LOAD)
-                .into_iter()
-                .filter(|(_, bytes)| {
-                    decode_load_state(bytes)
-                        .map(|s| s.is_opaque && now_ms.saturating_sub(s.written_at_ms) <= freshness_ms)
-                        .unwrap_or(false)
-                })
-                .count();
+            // Only count nodes that are actually members of this group as opaque.
+            let opaque_count = member_ids.iter().filter(|node_str| {
+                self.scan_prefix(&format!("load/{}/", node_str))
+                    .into_iter()
+                    .any(|(_, bytes)| {
+                        decode_load_state(&bytes)
+                            .map(|s| s.is_opaque && now_ms.saturating_sub(s.written_at_ms) <= freshness_ms)
+                            .unwrap_or(false)
+                    })
+            }).count();
             raw_members.saturating_sub(opaque_count).max(1)
         } else {
             raw_members
@@ -1435,7 +1455,23 @@ impl GossipAgent {
             tokio::time::sleep(Duration::from_millis(defer_ms)).await;
         }
         let n_nodes = (self.system_stats().peers + 1).max(1);
-        let quorum  = compute_quorum_size(config.quorum_size, n_nodes);
+        let active_n = if config.count_opaque_as_absent {
+            let now_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+            let freshness_ms = self.config.health_check_interval_secs * 2 * 1000;
+            let opaque_count = self.scan_prefix(kv_ns::LOAD)
+                .into_iter()
+                .filter(|(_, bytes)| {
+                    decode_load_state(bytes)
+                        .map(|s| s.is_opaque && now_ms.saturating_sub(s.written_at_ms) <= freshness_ms)
+                        .unwrap_or(false)
+                })
+                .count();
+            n_nodes.saturating_sub(opaque_count).max(1)
+        } else {
+            n_nodes
+        };
+        let quorum  = compute_quorum_size(config.quorum_size, active_n);
         self.make_consensus_engine(config.abstain_when_opaque, config.use_trust_slices)
             .propose(SignalScope::System, Arc::from(slot), value, quorum, config)
             .await
