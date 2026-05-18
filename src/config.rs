@@ -300,6 +300,14 @@ impl GossipConfig {
                 "max_peers cannot be zero".into(),
             ));
         }
+        if self.max_forwarding_peers > 100 && self.bootstrap_peers.len() > 20 {
+            tracing::warn!(
+                bootstrap_peers = self.bootstrap_peers.len(),
+                max_forwarding_peers = self.max_forwarding_peers,
+                "max_forwarding_peers is unlimited with a large bootstrap set; \
+                 consider capping it (e.g. 32) to avoid O(N²) gossip traffic",
+            );
+        }
         Ok(())
     }
 
