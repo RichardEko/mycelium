@@ -462,4 +462,14 @@ pub mod kv_ns {
     /// Group membership namespace. Written automatically by `join_group`/`leave_group`.
     /// Key: `grp/<group_name>/<node_id>`. Value: `b"1"` (live) or tombstone (left).
     pub const GROUP: &str = "grp/";
+
+    /// Advertised-capability namespace (optional persistence via
+    /// [`GossipAgent::advertise_persistent`](crate::GossipAgent::advertise_persistent)).
+    ///
+    /// Key: `svc/{kind}/{node_id}`. Value: the payload bytes from the most recent
+    /// advertise tick. Tombstoned automatically when the returned
+    /// [`AdvertiseHandle`](crate::signal::AdvertiseHandle) is dropped or the agent shuts down.
+    /// Late joiners can call `scan_prefix(kv_ns::ADVERTISE)` to find current capabilities
+    /// without waiting for the next advertise tick.
+    pub const ADVERTISE: &str = "svc/";
 }

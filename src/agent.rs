@@ -899,6 +899,114 @@ impl GossipAgent {
         AdvertiseHandle { _cancel: cancel_tx }
     }
 
+    /// Like [`advertise`](Self::advertise) but also writes the payload to Layer I on every
+    /// tick so late joiners and restarted peers can discover capabilities immediately via
+    /// `scan_prefix(kv_ns::ADVERTISE)` without waiting for the next signal tick.
+    ///
+    /// Key written: `svc/{kind}/{node_id}`. Tombstoned automatically when the returned
+    /// [`AdvertiseHandle`] is dropped or the agent shuts down.
+    ///
+    /// The signal is still emitted epidemically on each tick (same as [`advertise`]);
+    /// the Layer I entry is an additional durable anchor.
+    #[must_use]
+    pub fn advertise_persistent<F>(
+        &self,
+        kind:       impl Into<Arc<str>>,
+        scope:      SignalScope,
+        interval:   Duration,
+        payload_fn: F,
+    ) -> AdvertiseHandle
+    where
+        F: Fn() -> Bytes + Send + Sync + 'static,
+    {
+        let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
+
+        let node_id         = self.node_id.clone();
+        let seen            = self.seen.clone();
+        let current_ts      = self.current_ts.clone();
+        let signal_boundary = self.signal_boundary.clone();
+        let signal_handlers = self.signal_handlers.clone();
+        let gossip_txs      = self.gossip_txs.clone();
+        let default_ttl     = self.config.default_ttl;
+        let dropped_frames  = self.dropped_frames.clone();
+        let store           = self.store.clone();
+        let subscriptions   = self.subscriptions.clone();
+        let kind: Arc<str>  = kind.into();
+        let kv_key: Arc<str> = Arc::from(format!("svc/{}/{}", kind, node_id).as_str());
+
+        let handle = tokio::spawn(async move {
+            let mut ticker = time::interval(interval);
+            ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! { biased;
+                    _ = &mut cancel_rx                   => break,
+                    _ = shutdown_rx.wait_for(|v| *v)     => break,
+                    _ = ticker.tick() => {
+                        let payload = payload_fn();
+                        emit_signal(
+                            &node_id, &seen, &current_ts, &signal_boundary,
+                            &signal_handlers, &gossip_txs, default_ttl,
+                            &dropped_frames, kind.clone(), scope.clone(), payload.clone(),
+                        );
+                        let ts = SystemTime::now()
+                            .duration_since(UNIX_EPOCH).unwrap_or_default()
+                            .as_millis() as u64;
+                        let update = GossipUpdate {
+                            nonce: fastrand::u64(1..),
+                            sender: node_id.id_hash(),
+                            ttl: default_ttl,
+                            is_tombstone: false,
+                            timestamp: ts,
+                            key: kv_key.clone(),
+                            value: payload,
+                        };
+                        apply_and_notify(&store, &subscriptions, &update);
+                        let shard = shard_for_key(&kv_key, gossip_txs.len());
+                        let mut buf = BytesMut::with_capacity(256);
+                        if bincode::serde::encode_into_std_write(
+                            WireMessage::Data(update), &mut (&mut buf).writer(), bincode_cfg(),
+                        ).is_ok() {
+                            let _ = gossip_txs[shard].try_send((
+                                buf.freeze(), node_id.id_hash(), ForwardHint::All,
+                            ));
+                        }
+                    }
+                }
+            }
+            // Tombstone the Layer I entry on clean exit so peers don't see a stale capability.
+            let ts = SystemTime::now()
+                .duration_since(UNIX_EPOCH).unwrap_or_default()
+                .as_millis() as u64;
+            let tombstone = GossipUpdate {
+                nonce: fastrand::u64(1..),
+                sender: node_id.id_hash(),
+                ttl: default_ttl,
+                is_tombstone: true,
+                timestamp: ts,
+                key: kv_key.clone(),
+                value: Bytes::new(),
+            };
+            apply_and_notify(&store, &subscriptions, &tombstone);
+            let shard = shard_for_key(&kv_key, gossip_txs.len());
+            let mut buf = BytesMut::with_capacity(64);
+            if bincode::serde::encode_into_std_write(
+                WireMessage::Data(tombstone), &mut (&mut buf).writer(), bincode_cfg(),
+            ).is_ok() {
+                let _ = gossip_txs[shard].try_send((
+                    buf.freeze(), node_id.id_hash(), ForwardHint::All,
+                ));
+            }
+        });
+        {
+            let mut handles = self.task_handles.lock().unwrap_or_else(|e| e.into_inner());
+            handles.retain(|h| !h.is_finished());
+            handles.push(handle);
+        }
+
+        AdvertiseHandle { _cancel: cancel_tx }
+    }
+
     /// Returns when this node last admitted a signal of `kind` via local delivery,
     /// or `None` if no signal of that kind has ever been delivered.
     ///

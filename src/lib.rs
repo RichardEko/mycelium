@@ -2560,6 +2560,42 @@ mod tests {
         agent_b.shutdown().await;
     }
 
+    // ── H9: advertise_persistent writes capability to Layer I ─────────────────
+
+    #[tokio::test]
+    async fn test_advertise_persistent_late_joiner_discovers_capability() {
+        let agent = make_agent();
+        agent.join_group("workers");
+
+        // Start persistent advertise with a short tick so the first write happens quickly.
+        let _handle = agent.advertise_persistent(
+            "contract.available",
+            SignalScope::Group("workers".into()),
+            Duration::from_millis(20),
+            || Bytes::from_static(b"v1"),
+        );
+
+        // Wait for the first tick to fire and write to Layer I.
+        poll_until(
+            || !agent.scan_prefix(kv_ns::ADVERTISE).is_empty(),
+            500,
+        ).await;
+
+        let entries = agent.scan_prefix(kv_ns::ADVERTISE);
+        assert_eq!(entries.len(), 1);
+        let (key, value) = &entries[0];
+        assert!(key.starts_with("svc/contract.available/"), "key should be svc/{{kind}}/{{node_id}}");
+        assert_eq!(*value, Bytes::from_static(b"v1"));
+
+        // Dropping the handle tombstones the Layer I entry.
+        drop(_handle);
+        poll_until(|| agent.scan_prefix(kv_ns::ADVERTISE).is_empty(), 500).await;
+        assert!(
+            agent.scan_prefix(kv_ns::ADVERTISE).is_empty(),
+            "capability should be tombstoned after handle drop"
+        );
+    }
+
     // ── H3: suggest_leader wired into group_propose ───────────────────────────
 
     #[test]
