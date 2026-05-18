@@ -333,11 +333,12 @@ impl GossipAgent {
         let seen              = self.seen.clone();
         let max_seen_entries  = self.config.max_seen_entries;
         let gc_alive          = self.gc_alive.clone();
+        let signal_handlers   = self.signal_handlers.clone();
 
         let handle = tokio::spawn(run_gc_task(
             store, subscriptions, shutdown_tx,
             interval_secs, default_ttl, propagation, live_entries,
-            seen, max_seen_entries, gc_alive,
+            seen, max_seen_entries, gc_alive, signal_handlers,
         ));
         self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).push(handle);
     }
@@ -516,6 +517,12 @@ impl GossipAgent {
     /// Returns an `mpsc::Receiver<Signal>` with the default channel depth (256). Caller is
     /// responsible for spawning a task to drive it. Multiple calls for the same kind each
     /// return an independent receiver — all receive every admitted signal.
+    ///
+    /// **Channel sizing**: 256 suits kinds that arrive at a few Hz (health probes, contract
+    /// advertisements). For kinds where N agents emit simultaneously — e.g. `INVOKE` to a
+    /// group of 256 workers — use [`signal_rx_with_capacity`](Self::signal_rx_with_capacity)
+    /// with `N × expected_burst` as the depth. A full channel produces a warning log and
+    /// the signal is dropped without retry.
     #[must_use]
     pub fn signal_rx(&self, kind: impl Into<Arc<str>>) -> mpsc::Receiver<Signal> {
         self.signal_handlers.register(kind.into())
@@ -569,7 +576,7 @@ impl GossipAgent {
     ) -> bool {
         let kind:    Arc<str> = kind.into();
         let payload: Bytes    = payload.into();
-        let nonce = fastrand::u64(..);
+        let nonce = fastrand::u64(1..);  // 0 is reserved as ANTI_ENTROPY_NONCE
         let ts = self.current_ts.load(Ordering::Relaxed);
         let _ = self.seen.is_duplicate(nonce, ts);
 
@@ -1014,8 +1021,12 @@ impl GossipAgent {
     /// Returns the current fill ratio of handler channels for `kind`.
     ///
     /// `0.0` = all channels empty (boundary fully transparent for this kind).
-    /// `1.0` = all channels full (boundary fully opaque — all signals shed).
+    /// `1.0` = at least one channel full (boundary fully opaque — signals being shed).
     /// Returns `0.0` when no handlers are registered.
+    ///
+    /// The value reflects the **most-loaded** registered handler. If any one handler
+    /// is saturated, this returns 1.0 even if others still have capacity — consistent
+    /// with the opacity shedding model where a fully saturated handler would drop signals.
     ///
     /// Workers can poll this to decide when to emit a
     /// [`BOUNDARY_OPAQUE`](crate::signal_kind::BOUNDARY_OPAQUE) transition signal,
@@ -1166,7 +1177,7 @@ impl GossipAgent {
             .unwrap_or_default()
             .as_millis() as u64;
         GossipUpdate {
-            nonce: fastrand::u64(..),
+            nonce: fastrand::u64(1..),  // 0 is reserved as ANTI_ENTROPY_NONCE
             sender: self.node_id.id_hash(),
             ttl: self.config.default_ttl,
             is_tombstone,
@@ -1218,7 +1229,7 @@ pub(crate) fn emit_signal(
     scope:           SignalScope,
     payload:         Bytes,
 ) -> bool {
-    let nonce = fastrand::u64(..);
+    let nonce = fastrand::u64(1..);  // 0 is reserved as ANTI_ENTROPY_NONCE
     let ts = current_ts.load(Ordering::Relaxed);
     let _ = seen.is_duplicate(nonce, ts);
 
@@ -1593,14 +1604,15 @@ async fn run_health_monitor(
                 let maybe_peer_cutoff = Instant::now().checked_sub(eviction_window);
 
                 if let Some(peer_cutoff) = maybe_peer_cutoff {
-                    let stale_peers: Vec<NodeId> = {
-                        let guard = peers.pin();
-                        guard.iter()
-                            .filter(|(_, t)| **t < peer_cutoff)
-                            .map(|(id, _)| id.clone())
-                            .collect()
-                    };
+                    // Single guard scope: collect stale keys then evict in the same pin.
+                    // papaya's lock-free compute is safe to call while iterating because
+                    // pin() establishes an epoch guard that keeps snapshot consistency.
                     let guard = peers.pin();
+                    let stale_peers: Vec<NodeId> = guard
+                        .iter()
+                        .filter(|(_, t)| **t < peer_cutoff)
+                        .map(|(id, _)| id.clone())
+                        .collect();
                     for id in &stale_peers {
                         let removed = matches!(
                             guard.compute(id.clone(), |existing| match existing {
@@ -1660,8 +1672,8 @@ async fn new_listener(addr: SocketAddr, backlog: u32) -> Result<TcpListener, Gos
 // ── GC task ───────────────────────────────────────────────────────────────────
 
 /// Long-running background task that performs slow housekeeping on a 10× interval:
-/// tombstone expiry, closed-subscription eviction, seen-set eviction, and
-/// live-entry count refresh.
+/// tombstone expiry, closed-subscription eviction, seen-set eviction, sender-log
+/// trimming, intern-pool monitoring, and live-entry count refresh.
 ///
 /// Separating this from the health monitor lets the latency-sensitive ping loop
 /// run at full frequency without being delayed by O(n) store scans.
@@ -1677,6 +1689,7 @@ async fn run_gc_task(
     seen:              Arc<ShardedSeen>,
     max_seen_entries:  usize,
     gc_alive:          Arc<AtomicBool>,
+    signal_handlers:   Arc<crate::signal::SignalHandlers>,
 ) {
     gc_alive.store(true, Ordering::Relaxed);
     let _alive_guard = AliveGuard(gc_alive.clone());
@@ -1722,6 +1735,21 @@ async fn run_gc_task(
                     for key in &stale_keys { guard.remove(key); }
                 }
                 live_entries.store(live, Ordering::Relaxed);
+
+                // Key intern pool monitoring — warn when it grows beyond a typical bounded set.
+                let pool_len = intern_pool_len();
+                if pool_len > 50_000 {
+                    warn!(
+                        "Key intern pool has {} entries — consider setting \
+                         intern_keys = false if keys are not from a bounded set",
+                        pool_len
+                    );
+                }
+
+                // Sender-log GC — removes entries older than 10 min across all signal kinds.
+                // Prevents unbounded growth when dynamic kind strings are used or when
+                // deliver() is not called for a kind (e.g. suppressed, no handler registered).
+                signal_handlers.trim_sender_log();
 
                 // Closed-subscription eviction.
                 {

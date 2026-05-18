@@ -46,9 +46,14 @@ impl NodeId {
     /// Stable u64 identity used in place of the full address string on the wire.
     /// Computed once at construction with fixed ahash seeds — same binary = same hash.
     ///
-    /// Collisions are benign: `id_hash` is used only for echo-suppression (dropping messages
-    /// back to the originating node). A collision means a message is incorrectly suppressed
-    /// for one peer; it does not affect correctness because the nonce deduplicates globally.
+    /// Collisions are rare (2⁶⁴ address space) but not truly benign. `id_hash` is used
+    /// in two places:
+    /// 1. **Echo-suppression** in the connection handler — drops frames back to the originator.
+    /// 2. **Sender filter** in gossip shards — prevents re-forwarding to the frame's source.
+    ///
+    /// A collision between two distinct nodes causes writes from one to be silently filtered
+    /// when forwarding to the other — a propagation failure, not just a missed optimisation.
+    /// At typical cluster sizes (< 10,000 nodes) the birthday-problem probability is < 1 in 10⁸.
     #[inline]
     pub fn id_hash(&self) -> u64 {
         self.id_hash

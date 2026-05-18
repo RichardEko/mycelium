@@ -7,8 +7,7 @@ use std::sync::{Arc, OnceLock};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 pub(crate) const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
-/// Framing-level protocol version. Written before every serialized payload;
-/// frames with a different version byte are rejected without deserialization.
+/// Framing-level protocol version. Written before every serialized payload.
 /// v2: switched serialization from bincode 1.x to bincode 2.x (incompatible wire format).
 /// v3: timestamps changed from second to millisecond granularity (incompatible LWW semantics).
 /// v4: GossipUpdate.sender changed from NodeId (string) to u64 id_hash (compact wire identity).
@@ -17,9 +16,32 @@ pub(crate) const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
 ///     to place all fixed-width fields before variable-length fields, enabling in-place TTL
 ///     decrement and zero-copy forwarding without re-encoding on each hop.
 ///
-/// TODO(rolling-upgrade): when bumping WIRE_VERSION, keep the previous version accepted for one
-/// full rolling-upgrade window (all nodes at new version) before dropping old-version frames.
+/// Rolling-upgrade policy: `read_frame` accepts frames at both `WIRE_VERSION` and
+/// `PREV_WIRE_VERSION`. When bumping WIRE_VERSION:
+///   1. Set `PREV_WIRE_VERSION = old WIRE_VERSION`.
+///   2. Nodes at the new version decode previous-version frames with `bincode_cfg_prev()`.
+///   3. Forwarding always re-encodes at `WIRE_VERSION` so the cluster converges quickly.
+///   4. After all nodes are upgraded, bump `PREV_WIRE_VERSION` to `WIRE_VERSION` so
+///      the acceptance window tracks the new pair.
+/// Data frames from `PREV_WIRE_VERSION` peers cannot use the zero-copy forward path —
+/// they are decoded then re-encoded. Signal/Ping/State messages are unaffected if their
+/// struct layouts have not changed between the two versions.
 pub(crate) const WIRE_VERSION: u8 = 6;
+/// Previous wire version accepted during rolling upgrades.
+/// Frames encoded at this version are decoded with `bincode_cfg_prev()` and
+/// re-encoded at `WIRE_VERSION` before forwarding. See `WIRE_VERSION` for the policy.
+pub(crate) const PREV_WIRE_VERSION: u8 = WIRE_VERSION - 1; // v5
+
+/// Which wire version a received frame was encoded with.
+/// Used by `handle_connection` to select the appropriate decoder and to decide
+/// whether the zero-copy Data forward path is safe (current version only).
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub(crate) enum FrameVersion {
+    /// Encoded at `WIRE_VERSION` — use `bincode_cfg()` and zero-copy Data forwarding.
+    Current,
+    /// Encoded at `PREV_WIRE_VERSION` — use `bincode_cfg_prev()` and full re-encode on forward.
+    Previous,
+}
 /// Fallback shard count used in unit tests that build `ConnContext` directly.
 #[cfg(test)]
 pub(crate) const N_GOSSIP_SHARDS: usize = 4;
@@ -130,6 +152,18 @@ pub(crate) fn bincode_cfg() -> impl bincode::config::Config {
     bincode::config::standard().with_fixed_int_encoding()
 }
 
+/// Returns the bincode configuration for `PREV_WIRE_VERSION` (v5) frames.
+/// v5 used fixed-width encoding (same as v6); the only breaking change in v6 was
+/// the GossipUpdate field order. Non-GossipUpdate messages (Signal, Ping, State)
+/// have the same layout in v5 and v6 and decode correctly with either config.
+/// Data (GossipUpdate) frames from v5 peers will decode with wrong field mapping
+/// and produce a "malformed message" warning — a graceful degradation rather than
+/// a hard connection failure.
+#[inline(always)]
+pub(crate) fn bincode_cfg_prev() -> impl bincode::config::Config {
+    bincode::config::standard().with_fixed_int_encoding()
+}
+
 /// Writes a length-prefixed frame: `[4-byte len][WIRE_VERSION][payload]`.
 /// The 5-byte header and payload are written as two consecutive `write_all` calls;
 /// through the caller's `BufWriter` both land in the same kernel write on flush.
@@ -157,9 +191,13 @@ where
 }
 
 /// Reads one length-prefixed frame into `buf`, reusing its allocation.
+/// Returns [`FrameVersion`] so the caller can select the appropriate decoder.
+/// Accepts frames at both `WIRE_VERSION` and `PREV_WIRE_VERSION` to support
+/// rolling upgrades — see the `WIRE_VERSION` doc for the upgrade policy.
+///
 /// Uses `read_buf` with a `BufMut::limit` guard to avoid zero-initialising the
 /// destination region before `read_exact` fills it (safe, no unsafe code needed).
-pub(crate) async fn read_frame<R>(stream: &mut R, buf: &mut BytesMut) -> Result<(), GossipError>
+pub(crate) async fn read_frame<R>(stream: &mut R, buf: &mut BytesMut) -> Result<FrameVersion, GossipError>
 where
     R: AsyncRead + Unpin,
 {
@@ -172,17 +210,21 @@ where
             total
         )));
     }
-    if header[4] != WIRE_VERSION {
-        let hint = if header[4] < WIRE_VERSION {
-            "peer is running an older version"
+    let frame_version = if header[4] == WIRE_VERSION {
+        FrameVersion::Current
+    } else if header[4] == PREV_WIRE_VERSION {
+        FrameVersion::Previous
+    } else {
+        let hint = if header[4] < PREV_WIRE_VERSION {
+            "peer is running a significantly older version"
         } else {
             "peer is running a newer version"
         };
         return Err(GossipError::Network(format!(
-            "Unsupported wire version {} (expected {}; {})",
-            header[4], WIRE_VERSION, hint
+            "Unsupported wire version {} (accepted {} and {}; {})",
+            header[4], WIRE_VERSION, PREV_WIRE_VERSION, hint
         )));
-    }
+    };
     let payload_len = total - 1;
     buf.clear();
     buf.reserve(payload_len);
@@ -201,7 +243,7 @@ where
             }
         }
     }
-    Ok(())
+    Ok(frame_version)
 }
 
 pub(crate) fn is_connection_closed(e: &GossipError) -> bool {

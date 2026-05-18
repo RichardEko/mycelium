@@ -170,6 +170,11 @@ tokio::spawn(async move {
         // sig.sender, sig.payload, sig.scope, sig.nonce
     }
 });
+// Channel sizing: the default depth of 256 suits kinds that arrive at a few Hz
+// (health probes, contract advertisements). For kinds where N agents all emit
+// simultaneously (e.g. INVOKE to a group of N workers), use:
+//   agent.signal_rx_with_capacity(kind, N * expected_burst)
+// A full channel logs a warning and drops the signal — there is no retry.
 
 // ── Emit ───────────────────────────────────────────────────────────────────
 agent.emit("invoke", SignalScope::Group("nlp"), payload);       // non-blocking
@@ -434,6 +439,22 @@ Measured on the development machine, release build (`cargo bench`). Local hot-pa
 | `signal_fanout` 16 handlers | ~1.4 µs | Very flat — mpsc try_send is cheap |
 
 `scan_prefix` is O(n) over the full store. At typical pheromone-trail sizes (100–1,000 entries) it is negligible. It crosses 1 ms around 100,000 entries — if Layer 3 activity grows the store that large, introduce a prefix index.
+
+## Security Model
+
+mycelium operates in a **trusted domain** — all nodes on the gossip mesh are assumed to be
+cooperative. There is no TLS, no peer authentication, and no payload encryption.
+
+A connected peer can:
+- Send crafted frames to inject arbitrary KV entries (limited by LWW timestamps)
+- Claim any `NodeId` in a `StateRequest` (consequence: misdirected `StateResponse`, harmless)
+- Poison a nonce in the dedup seen-set (probability: < 1/2⁶⁴ per collision)
+
+**Do not expose gossip ports to untrusted networks.** Use a network-layer control (firewall
+rules, WireGuard, VPC security groups) to restrict access to the gossip port to trusted peers
+only.
+
+TLS and mutual authentication are planned at Layer 3 for external-facing service endpoints.
 
 ## Layer III — Bulk Transfer / Eventing (Planned)
 

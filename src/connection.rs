@@ -1,7 +1,8 @@
 use crate::error::GossipError;
 use crate::framing::{
-    bincode_cfg, is_connection_closed, read_frame, shard_for_key, GossipUpdate,
-    SyncEntry, WireMessage, ANTI_ENTROPY_NONCE, DATA_TAG, NONCE_OFFSET, TTL_OFFSET,
+    bincode_cfg, bincode_cfg_prev, is_connection_closed, read_frame, shard_for_key,
+    FrameVersion, GossipUpdate, SyncEntry, WireMessage,
+    ANTI_ENTROPY_NONCE, DATA_TAG, NONCE_OFFSET, TTL_OFFSET,
 };
 use crate::signal::{Boundary, Signal, SignalHandlers, SignalScope};
 use crate::store::intern_key;
@@ -67,27 +68,30 @@ pub(crate) async fn handle_connection(
     let mut recv_buf: BytesMut = BytesMut::with_capacity(2_048);
 
     loop {
-        let live = tokio::select! { biased;
-            result = read_frame(&mut socket, &mut recv_buf) => {
-                match result {
-                    Ok(()) => true,
-                    Err(e) if is_connection_closed(&e) => false,
-                    Err(e) => { warn!("Read error from {}: {}", peer_addr, e); false }
-                }
-            }
-            _ = shutdown_rx.wait_for(|v| *v) => false,
+        // read_frame returns FrameVersion so we can select the right decoder.
+        // The never-type of break expressions coerces to FrameVersion, allowing
+        // break directly inside the select! arms.
+        let frame_version: FrameVersion = tokio::select! { biased;
+            result = read_frame(&mut socket, &mut recv_buf) => match result {
+                Ok(v)                              => v,
+                Err(e) if is_connection_closed(&e) => break,
+                Err(e) => { warn!("Read error from {}: {}", peer_addr, e); break; }
+            },
+            _ = shutdown_rx.wait_for(|v| *v) => break,
         };
-        if !live { break; }
 
-        // Fast-path dedup: read nonce directly from the wire buffer before the
-        // full bincode decode. Data is variant 0 (tag DATA_TAG = [0,0,0,0] LE);
-        // NONCE_OFFSET=4 points at the u64 nonce in fixed-int encoding.
+        // Fast-path dedup: only valid for FrameVersion::Current where fixed field
+        // offsets are known. NONCE_OFFSET=4 points at the u64 nonce in fixed-int
+        // encoding for Data frames (tag DATA_TAG = [0,0,0,0] LE).
         // Under TTL=5, ~80% of inbound Data frames are duplicates; this saves
         // a full decode + two heap allocations (Arc<str> key, Bytes value) on
         // every duplicate. A malformed frame whose first 12 bytes look like a
         // valid Data header may poison that nonce in the seen-set; since nonces
         // are random u64s the collision probability is negligible (< 1 in 2^64).
-        if recv_buf.len() >= NONCE_OFFSET + 8 && recv_buf[..4] == DATA_TAG {
+        if frame_version == FrameVersion::Current
+            && recv_buf.len() >= NONCE_OFFSET + 8
+            && recv_buf[..4] == DATA_TAG
+        {
             let nonce = u64::from_le_bytes(
                 recv_buf[NONCE_OFFSET..NONCE_OFFSET + 8].try_into().unwrap(),
             );
@@ -96,9 +100,12 @@ pub(crate) async fn handle_connection(
             }
         }
 
-        let msg: WireMessage = match bincode::serde::decode_from_slice(
-            &recv_buf, bincode_cfg(),
-        ).map(|(v, _)| v) {
+        // Decode with the config matching the sender's wire version.
+        let msg: WireMessage = match if frame_version == FrameVersion::Current {
+            bincode::serde::decode_from_slice(&recv_buf, bincode_cfg())
+        } else {
+            bincode::serde::decode_from_slice(&recv_buf, bincode_cfg_prev())
+        }.map(|(v, _)| v) {
             Ok(m) => m,
             Err(e) => {
                 warn!("Malformed message from {}: {}", peer_addr, e);
@@ -168,15 +175,16 @@ pub(crate) async fn handle_connection(
                             continue;
                         }
                         let tx = get_or_spawn_writer(&sender, &peer_writers, writer_depth, backoff, &shutdown);
-                        match tx.try_send(data) {
-                            Ok(()) => {}
-                            Err(TrySendError::Full(_)) => {
-                                warn!("StateResponse channel full for {}", sender);
-                            }
-                            Err(TrySendError::Closed(_)) => {
+                        // Use send().await (not try_send) — StateResponse is a rare,
+                        // join-time message. Dropping it causes permanent divergence
+                        // because StateRequest is only sent on first contact; there is
+                        // no automatic retry. Wrap in spawn so the connection handler
+                        // is not blocked waiting for the writer to drain.
+                        tokio::spawn(async move {
+                            if tx.send(data).await.is_err() {
                                 error!("StateResponse writer for {} has exited", sender);
                             }
-                        }
+                        });
                     }
                 }
             }
@@ -260,7 +268,14 @@ pub(crate) async fn handle_connection(
             }
 
             WireMessage::Data(mut update) => {
-                // Nonce was already checked and inserted by the early-dedup path above.
+                // Nonce was already checked and inserted by the early-dedup path above
+                // for FrameVersion::Current. For FrameVersion::Previous, check now.
+                if frame_version == FrameVersion::Previous {
+                    let ts = current_ts.load(Ordering::Relaxed);
+                    if seen.is_duplicate(update.nonce, ts) {
+                        continue;
+                    }
+                }
                 if intern_keys { update.key = intern_key(update.key); }
                 apply_and_notify(&store, &subscriptions, &update);
 
@@ -268,17 +283,45 @@ pub(crate) async fn handle_connection(
                 let fwd_ttl = update.ttl.min(max_ttl);
                 if fwd_ttl > 1 {
                     let shard = shard_for_key(&update.key, n_shards);
-                    // Decrement TTL in-place at TTL_OFFSET (fixed layout, v6 wire format).
-                    // split().freeze() is O(1) when the backing store is unshared.
-                    recv_buf[TTL_OFFSET] = fwd_ttl - 1;
-                    let data = recv_buf.split().freeze();
-                    match gossip_txs[shard].try_send((data, update.sender)) {
-                        Ok(()) => {}
-                        Err(TrySendError::Full(_)) => {
-                            warn!("Gossip shard {} channel full, dropping forward from {}", shard, peer_addr);
+                    if frame_version == FrameVersion::Current {
+                        // Zero-copy forward: TTL decremented in-place at TTL_OFFSET
+                        // (fixed layout, v6 wire format). split().freeze() is O(1).
+                        recv_buf[TTL_OFFSET] = fwd_ttl - 1;
+                        let data = recv_buf.split().freeze();
+                        match gossip_txs[shard].try_send((data, update.sender)) {
+                            Ok(()) => {}
+                            Err(TrySendError::Full(_)) => {
+                                warn!("Gossip shard {} channel full, dropping forward from {}", shard, peer_addr);
+                            }
+                            Err(TrySendError::Closed(_)) => {
+                                error!("Gossip shard {} is dead, dropping forward from {}", shard, peer_addr);
+                            }
                         }
-                        Err(TrySendError::Closed(_)) => {
-                            error!("Gossip shard {} is dead, dropping forward from {}", shard, peer_addr);
+                    } else {
+                        // Previous-version frame: field layout differs from v6, so
+                        // zero-copy is unsafe. Re-encode at WIRE_VERSION for forwarding.
+                        let fwd_update = GossipUpdate { ttl: fwd_ttl - 1, ..update.clone() };
+                        let mut fwd_buf = BytesMut::with_capacity(256);
+                        match bincode::serde::encode_into_std_write(
+                            WireMessage::Data(fwd_update),
+                            &mut (&mut fwd_buf).writer(),
+                            bincode_cfg(),
+                        ) {
+                            Ok(_) => {
+                                match gossip_txs[shard].try_send((fwd_buf.freeze(), update.sender)) {
+                                    Ok(()) => {}
+                                    Err(TrySendError::Full(_)) => {
+                                        warn!("Gossip shard {} channel full, dropping v{} forward from {}",
+                                            shard, crate::framing::PREV_WIRE_VERSION, peer_addr);
+                                    }
+                                    Err(TrySendError::Closed(_)) => {
+                                        error!("Gossip shard {} dead, dropping v{} forward from {}",
+                                            shard, crate::framing::PREV_WIRE_VERSION, peer_addr);
+                                    }
+                                }
+                            }
+                            Err(e) => warn!("Re-encode of v{} Data frame failed: {}",
+                                crate::framing::PREV_WIRE_VERSION, e),
                         }
                     }
                 }

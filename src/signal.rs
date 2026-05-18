@@ -127,21 +127,25 @@ impl SignalHandlers {
         rx
     }
 
-    /// Returns the minimum fill ratio across all open senders for `kind`.
+    /// Returns the maximum fill ratio across all open senders for `kind`.
     ///
     /// 0.0 = all channels empty (boundary fully transparent).
-    /// 1.0 = all channels full (boundary fully opaque).
+    /// 1.0 = at least one channel full (boundary fully opaque).
     /// Returns 0.0 when no handlers are registered — `deliver` would be a no-op anyway.
     ///
-    /// Using the minimum means "admit if *any* handler still has capacity."
+    /// Using the maximum means the opacity reading reflects the most-loaded handler.
+    /// If any one handler is saturated, signals addressed to this node are shed at
+    /// the boundary — consistent with the intent of load-adaptive admission control.
+    /// (The previous minimum aggregation reported 0.0 opacity even when all but one
+    /// handler were full, causing `opacity()` to mislead diagnostics.)
     pub(crate) fn fill_ratio(&self, kind: &Arc<str>) -> f32 {
         let Some(senders) = self.map.get(kind) else { return 0.0 };
-        let mut min_ratio = f32::MAX;
+        let mut max_ratio: f32 = 0.0;
         for tx in senders.iter().filter(|tx| !tx.is_closed()) {
             let ratio = 1.0_f32 - tx.capacity() as f32 / tx.max_capacity() as f32;
-            if ratio < min_ratio { min_ratio = ratio; }
+            if ratio > max_ratio { max_ratio = ratio; }
         }
-        if min_ratio == f32::MAX { 0.0 } else { min_ratio.max(0.0) }
+        max_ratio.min(1.0)
     }
 
     /// Fans out `signal` to all receivers registered for `signal.kind`.
@@ -214,6 +218,20 @@ impl SignalHandlers {
         self.suppressed.pin().get(kind)
             .map(|until| Instant::now() < *until)
             .unwrap_or(false)
+    }
+
+    /// Removes all sender-log entries older than 10 minutes and drops kinds whose
+    /// log has become empty. Called from the GC task on each GC tick.
+    ///
+    /// Bounds both per-kind entry count (lazy retention inside `deliver`) and total
+    /// kind count (removes kinds no longer seen), preventing unbounded growth when
+    /// dynamic or high-cardinality kind strings are used.
+    pub(crate) fn trim_sender_log(&self) {
+        let cutoff = Instant::now() - Duration::from_secs(600);
+        self.sender_log.retain(|_, log| {
+            log.retain(|(_, received_at)| *received_at > cutoff);
+            !log.is_empty()
+        });
     }
 
     /// Returns `true` when at least `min_senders` distinct [`NodeId`]s have had a

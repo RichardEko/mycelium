@@ -153,7 +153,8 @@ impl GossipConfig {
         }
         if self.max_connections > 65535 {
             return Err(GossipError::Config(
-                "max_connections cannot exceed 65535 (OS ephemeral port range)".into(),
+                "max_connections cannot exceed 65535 (practical file-descriptor budget \
+                 per process; each inbound connection consumes one fd)".into(),
             ));
         }
         if self.health_check_interval_secs == 0 {

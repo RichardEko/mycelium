@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Conway GPU — gossip mesh + Metal compute</title>
+<style>
+  :root {
+    --bg: #0d0f14; --surface: #161920; --border: #2a2e38;
+    --text: #c8cdd8; --muted: #6b7280; --accent: #3b82f6;
+    --green: #22c55e; --red: #ef4444; --yellow: #f59e0b; --teal: #06b6d4;
+    --radius: 6px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px; }
+  header { padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; gap: 20px; align-items: center; }
+  header h1 { font-size: 14px; font-weight: 600; color: #fff; }
+  .badge { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; font-size: 11px; color: var(--muted); }
+  .badge span { color: var(--text); }
+  main { display: flex; gap: 16px; padding: 16px; align-items: flex-start; }
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .panel-title { padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  canvas { display: block; cursor: crosshair; }
+  .side { display: flex; flex-direction: column; gap: 12px; min-width: 220px; }
+  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 10px; }
+  .stat { background: var(--bg); border-radius: 4px; padding: 8px; }
+  .stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; }
+  .stat-val { font-size: 18px; font-weight: 700; color: #fff; }
+  .stat-val.green { color: var(--green); }
+  .log { padding: 8px; height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+  .log-line { font-size: 11px; color: var(--muted); }
+  .log-line span { color: var(--text); }
+  .mesh-wrap { padding: 8px; }
+  #mesh-canvas { border-radius: 4px; }
+  .legend { padding: 8px 12px; display: flex; gap: 12px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--border); }
+  .dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; margin-right: 4px; vertical-align: middle; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Conway GPU</h1>
+  <div class="badge">512×512 Metal compute</div>
+  <div class="badge">16×16 gossip mesh — <span id="hdr-agents">256</span> TCP agents</div>
+  <div class="badge">gen <span id="hdr-gen">0</span></div>
+  <div class="badge"><span id="hdr-live">—</span> live cells</div>
+  <div class="badge" id="hdr-status" style="color:var(--yellow)">connecting…</div>
+</header>
+<main>
+  <!-- 512×512 GPU grid canvas -->
+  <div class="panel">
+    <div class="panel-title">512 × 512 GPU grid (Metal compute)</div>
+    <canvas id="gpu-canvas"></canvas>
+    <div class="legend">
+      <div><span class="dot" style="background:#22c55e"></span>alive</div>
+      <div><span class="dot" style="background:#0d0f14"></span>dead</div>
+    </div>
+  </div>
+
+  <div class="side">
+    <!-- 16×16 mesh density -->
+    <div class="panel">
+      <div class="panel-title">16×16 gossip mesh — tile density</div>
+      <div class="mesh-wrap"><canvas id="mesh-canvas"></canvas></div>
+      <div class="legend">
+        <div><span class="dot" style="background:#06b6d4"></span>dense</div>
+        <div><span class="dot" style="background:#1e3a5f"></span>sparse</div>
+        <div><span class="dot" style="background:#0d0f14"></span>empty</div>
+      </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="panel">
+      <div class="panel-title">Stats</div>
+      <div class="stat-grid">
+        <div class="stat"><div class="stat-label">Generation</div><div class="stat-val" id="s-gen">0</div></div>
+        <div class="stat"><div class="stat-label">Live cells</div><div class="stat-val green" id="s-live">—</div></div>
+        <div class="stat"><div class="stat-label">Density</div><div class="stat-val" id="s-density">—</div></div>
+        <div class="stat"><div class="stat-label">FPS</div><div class="stat-val" id="s-fps">—</div></div>
+      </div>
+    </div>
+
+    <!-- Log -->
+    <div class="panel" style="flex:1">
+      <div class="panel-title">Log</div>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+</main>
+
+<script>
+const FULL = 512, MESH = 16, TILE = 32;
+const POLL_MS = 100;
+
+// ── Canvas setup ──────────────────────────────────────────────────────
+const dpr = window.devicePixelRatio || 1;
+
+const gpuCanvas = document.getElementById('gpu-canvas');
+const gpuCtx    = gpuCanvas.getContext('2d');
+const GPU_CSS   = 512;
+gpuCanvas.style.width  = GPU_CSS + 'px';
+gpuCanvas.style.height = GPU_CSS + 'px';
+gpuCanvas.width  = Math.round(GPU_CSS * dpr);
+gpuCanvas.height = Math.round(GPU_CSS * dpr);
+gpuCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+// 1px per cell at GPU_CSS=512 → exactly 1 CSS px per cell at 1:1 scale
+const cellPx = GPU_CSS / FULL;
+
+const meshCanvas = document.getElementById('mesh-canvas');
+const meshCtx    = meshCanvas.getContext('2d');
+const MESH_CSS   = 192;
+meshCanvas.style.width  = MESH_CSS + 'px';
+meshCanvas.style.height = MESH_CSS + 'px';
+meshCanvas.width  = Math.round(MESH_CSS * dpr);
+meshCanvas.height = Math.round(MESH_CSS * dpr);
+meshCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+const meshPx = MESH_CSS / MESH;
+
+// ── State ─────────────────────────────────────────────────────────────
+let grid    = new Uint8Array(FULL * FULL);
+let density = Array.from({length: MESH}, () => new Uint8Array(MESH));
+let generation = 0;
+
+// ── RLE decode ────────────────────────────────────────────────────────
+function rleDecodeInto(rle, out) {
+  let i = 0, pos = 0;
+  while (i < rle.length) {
+    const count = rle[i++], val = rle[i++];
+    out.fill(val, pos, pos + count);
+    pos += count;
+  }
+}
+
+// ── Draw GPU grid using ImageData ─────────────────────────────────────
+const imgData = gpuCtx.createImageData(FULL, FULL);
+const px      = imgData.data; // RGBA flat
+
+function drawGpu() {
+  for (let i = 0; i < FULL * FULL; i++) {
+    const base = i * 4;
+    if (grid[i]) {
+      px[base]   = 34;  // r
+      px[base+1] = 197; // g
+      px[base+2] = 94;  // b  → #22c55e green
+    } else {
+      px[base]   = 13;
+      px[base+1] = 15;
+      px[base+2] = 20;  // → var(--bg) dark
+    }
+    px[base+3] = 255;
+  }
+  // Draw at 1:1 then scale via canvas transform to CSS size
+  const tmp = document.createElement('canvas');
+  tmp.width = FULL; tmp.height = FULL;
+  tmp.getContext('2d').putImageData(imgData, 0, 0);
+  gpuCtx.imageSmoothingEnabled = false;
+  gpuCtx.drawImage(tmp, 0, 0, GPU_CSS, GPU_CSS);
+}
+
+// ── Draw mesh density ─────────────────────────────────────────────────
+function drawMesh() {
+  for (let ty = 0; ty < MESH; ty++) {
+    for (let tx = 0; tx < MESH; tx++) {
+      const d = density[ty][tx]; // 0-100
+      const t = d / 100;
+      // dark blue → teal based on density
+      const r = Math.round(6  + t * (6   - 6));
+      const g = Math.round(30 + t * (182 - 30));
+      const b = Math.round(95 + t * (212 - 95));
+      meshCtx.fillStyle = `rgb(${Math.round(14 + t*0)},${Math.round(30+t*150)},${Math.round(95+t*117)})`;
+      meshCtx.fillRect(tx * meshPx, ty * meshPx, meshPx - 1, meshPx - 1);
+
+      // density label if large enough
+      if (d > 0 && meshPx >= 10) {
+        meshCtx.fillStyle = d > 30 ? '#000' : '#6b7280';
+        meshCtx.font = `${Math.max(7, meshPx * 0.35)}px monospace`;
+        meshCtx.textAlign = 'center';
+        meshCtx.textBaseline = 'middle';
+        meshCtx.fillText(d, tx * meshPx + meshPx/2, ty * meshPx + meshPx/2);
+      }
+    }
+  }
+}
+
+// ── Log ───────────────────────────────────────────────────────────────
+const logEl = document.getElementById('log');
+function addLog(msg) {
+  const line = document.createElement('div');
+  line.className = 'log-line';
+  line.innerHTML = msg;
+  logEl.appendChild(line);
+  while (logEl.children.length > 80) logEl.removeChild(logEl.firstChild);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// ── Polling ────────────────────────────────────────────────────────────
+let lastGenTime = performance.now();
+let fpsGen = 0;
+
+async function poll() {
+  try {
+    const resp = await fetch('http://127.0.0.1:8091/state');
+    const data = await resp.json();
+
+    document.getElementById('hdr-status').textContent = 'live';
+    document.getElementById('hdr-status').style.color = 'var(--green)';
+
+    const newGen = data.generation;
+    if (newGen !== generation) {
+      generation = newGen;
+      rleDecodeInto(data.rle, grid);
+      for (let ty = 0; ty < MESH; ty++)
+        for (let tx = 0; tx < MESH; tx++)
+          density[ty][tx] = data.density[ty][tx];
+
+      const live = grid.reduce((s, v) => s + v, 0);
+      const pct  = (live / (FULL * FULL) * 100).toFixed(1);
+
+      document.getElementById('hdr-gen').textContent  = generation;
+      document.getElementById('hdr-live').textContent = live.toLocaleString();
+      document.getElementById('s-gen').textContent    = generation;
+      document.getElementById('s-live').textContent   = live.toLocaleString();
+      document.getElementById('s-density').textContent = pct + '%';
+
+      // FPS estimate
+      fpsGen++;
+      const now = performance.now();
+      if (now - lastGenTime > 1000) {
+        const fps = (fpsGen / ((now - lastGenTime) / 1000)).toFixed(1);
+        document.getElementById('s-fps').textContent = fps;
+        fpsGen = 0; lastGenTime = now;
+      }
+
+      drawGpu();
+      drawMesh();
+
+      if (generation % 50 === 0) addLog(`gen <span>${generation}</span> — ${live.toLocaleString()} live (${pct}%)`);
+    }
+  } catch(e) {
+    document.getElementById('hdr-status').textContent = 'waiting for server…';
+    document.getElementById('hdr-status').style.color = 'var(--yellow)';
+  }
+}
+
+addLog('Connecting to <span>http://127.0.0.1:8091</span>…');
+addLog('Run: <span>cargo run --example conway_gpu</span>');
+setInterval(poll, POLL_MS);
+</script>
+</body>
+</html>
