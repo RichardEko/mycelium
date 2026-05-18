@@ -93,6 +93,15 @@ pub struct ConsensusConfig {
     /// slice declared via [`GossipAgent::declare_trust`]. If no slice is declared
     /// for the group, all votes are counted (same as `false`). Default: `false`.
     pub use_trust_slices: bool,
+
+    /// When `true`, `group_propose` calls [`suggest_leader`](crate::GossipAgent::suggest_leader)
+    /// before entering the ballot loop. If the suggested leader is not this node, an additional
+    /// deferral of `ballot_retry_jitter_ms` is applied, giving the healthier peer a window to
+    /// win the first ballot unopposed.
+    ///
+    /// Uses [`SENDER_LOG_WINDOW`](crate::signal::SENDER_LOG_WINDOW) as the `max_age` for
+    /// pheromone freshness. Default: `false`.
+    pub use_suggest_leader: bool,
 }
 
 impl Default for ConsensusConfig {
@@ -105,6 +114,7 @@ impl Default for ConsensusConfig {
             count_opaque_as_absent:  false,
             abstain_when_opaque:     false,
             use_trust_slices:        false,
+            use_suggest_leader:      false,
         }
     }
 }

@@ -2560,6 +2560,32 @@ mod tests {
         agent_b.shutdown().await;
     }
 
+    // ── H3: suggest_leader wired into group_propose ───────────────────────────
+
+    #[test]
+    fn test_suggest_leader_returns_least_loaded_member() {
+        use crate::signal::{encode_load_state, LoadState};
+
+        let agent = make_agent();
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+
+        // Register two group members via Layer I.
+        let node_a = NodeId::new("127.0.0.1", 7001).unwrap();
+        let node_b = NodeId::new("127.0.0.1", 7002).unwrap();
+        let _ = agent.set(format!("grp/workers/{}", node_a), Bytes::from_static(b"1"));
+        let _ = agent.set(format!("grp/workers/{}", node_b), Bytes::from_static(b"1"));
+
+        // A is heavily loaded; B is idle.
+        let heavy = LoadState { fill_ratio: 0.9, is_opaque: true,  written_at_ms: now_ms };
+        let light = LoadState { fill_ratio: 0.1, is_opaque: false, written_at_ms: now_ms };
+        let _ = agent.set(format!("load/{}/task", node_a), encode_load_state(&heavy));
+        let _ = agent.set(format!("load/{}/task", node_b), encode_load_state(&light));
+
+        let suggested = agent.suggest_leader("workers", "task", Duration::from_secs(600));
+        assert_eq!(suggested, node_b, "suggest_leader should pick the lighter-loaded member");
+    }
+
     // ── H4: group_quorum filters by current Layer I membership ────────────────
 
     #[test]

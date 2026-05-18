@@ -1485,6 +1485,12 @@ impl GossipAgent {
             let defer_ms = (local_opacity * config.ballot_retry_jitter_ms as f32 * 2.0) as u64;
             tokio::time::sleep(Duration::from_millis(defer_ms)).await;
         }
+        if config.use_suggest_leader && config.ballot_retry_jitter_ms > 0 {
+            let suggested = self.suggest_leader(group, consensus_kind::PROPOSE, crate::signal::SENDER_LOG_WINDOW);
+            if suggested != self.node_id {
+                tokio::time::sleep(Duration::from_millis(config.ballot_retry_jitter_ms)).await;
+            }
+        }
         // Collect member ids once; used for both the count and the opaque filter.
         let grp_prefix = format!("grp/{}/", group);
         let member_ids: AHashSet<String> = self
