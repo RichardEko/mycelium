@@ -88,6 +88,11 @@ pub struct ConsensusConfig {
     /// votes nor nacks — it silently drops `PROPOSE` messages while overloaded.
     /// Default: `false`.
     pub abstain_when_opaque: bool,
+
+    /// When `true`, the proposer counts only votes from nodes in its own trust
+    /// slice declared via [`GossipAgent::declare_trust`]. If no slice is declared
+    /// for the group, all votes are counted (same as `false`). Default: `false`.
+    pub use_trust_slices: bool,
 }
 
 impl Default for ConsensusConfig {
@@ -99,6 +104,7 @@ impl Default for ConsensusConfig {
             ballot_retry_jitter_ms:  50,
             count_opaque_as_absent:  false,
             abstain_when_opaque:     false,
+            use_trust_slices:        false,
         }
     }
 }
@@ -222,6 +228,9 @@ pub(crate) struct ConsensusEngine {
     /// When `true`, this node silently abstains from voting while any pheromone
     /// trail under `load/{node_id}/` shows `is_opaque: true`.
     pub(crate) abstain_when_opaque: bool,
+    /// When `true`, the proposer filters incoming votes against its declared
+    /// trust slice for the group (`consensus/trust/{group}/{node_id}`).
+    pub(crate) use_trust_slices: bool,
 }
 
 impl ConsensusEngine {
@@ -415,6 +424,20 @@ impl ConsensusEngine {
         let ballot_key = format!("{}{}", consensus_ns::BALLOT, &*slot);
         let commit_key = format!("{}{}", consensus_ns::COMMITTED, &*slot);
 
+        // Build trust set once before the ballot loop — it doesn't change mid-round.
+        let trust_set: Option<AHashSet<u64>> = if self.use_trust_slices {
+            if let SignalScope::Group(ref group_name) = scope {
+                let key = format!("{}{}/{}", consensus_ns::TRUST, group_name, self.node_id);
+                self.get(&key).and_then(|b| {
+                    bincode::serde::decode_from_slice::<Vec<NodeId>, _>(&b, bincode_cfg()).ok()
+                }).map(|(peers, _)| peers.iter().map(|p| p.id_hash()).collect())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let mut ballot = self.read_ballot(&ballot_key) + 1;
         let mut votes_last_ballot: usize = 0;
 
@@ -470,6 +493,10 @@ impl ConsensusEngine {
                             decode_consensus_msg(&sig.payload)
                         {
                             if s == slot && b == ballot {
+                                // Trust-slice filtering: only count votes from declared peers.
+                                if let Some(ref ts) = trust_set {
+                                    if !ts.contains(&voter.id_hash()) { continue; }
+                                }
                                 voters.insert(voter.id_hash());
                                 if voters.len() >= quorum_size {
                                     let commit = ConsensusMsg::Commit {

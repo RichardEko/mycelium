@@ -2461,6 +2461,105 @@ mod tests {
         agent_b.shutdown().await;
     }
 
+    // Proposer declares an empty trust slice; B's vote must not count.
+    #[tokio::test]
+    async fn test_trust_slice_filters_votes() {
+        let port_a = alloc_port();
+        let port_b = alloc_port();
+
+        let mut cfg_a = GossipConfig::default();
+        cfg_a.bind_port                  = port_a;
+        cfg_a.health_check_max_jitter_ms = 50;
+        cfg_a.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_b).unwrap()];
+
+        let mut cfg_b = GossipConfig::default();
+        cfg_b.bind_port                  = port_b;
+        cfg_b.health_check_max_jitter_ms = 50;
+        cfg_b.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_a).unwrap()];
+
+        let agent_a = GossipAgent::new(NodeId::new("127.0.0.1", port_a).unwrap(), cfg_a);
+        let agent_b = GossipAgent::new(NodeId::new("127.0.0.1", port_b).unwrap(), cfg_b);
+        agent_a.start().await.unwrap();
+        agent_b.start().await.unwrap();
+        time::sleep(Duration::from_millis(200)).await;
+
+        agent_a.join_group("tg");
+        agent_b.join_group("tg");
+
+        // A declares an empty trust slice — trusts nobody remotely.
+        agent_a.declare_trust("tg", &[]);
+        let _la = agent_a.start_consensus_listener(ConsensusConfig::default());
+        let _lb = agent_b.start_consensus_listener(ConsensusConfig::default());
+
+        let config = ConsensusConfig {
+            quorum_size:      2,
+            phase1_timeout:   Duration::from_millis(300),
+            max_ballots:      1,
+            use_trust_slices: true,
+            ..ConsensusConfig::default()
+        };
+        let result = agent_a
+            .group_propose("tg", "ts1", Bytes::from_static(b"x"), config)
+            .await;
+        assert!(
+            matches!(result, ConsensusResult::Timeout { .. }),
+            "B's vote should be filtered by empty trust slice; got {:?}", result
+        );
+
+        agent_a.shutdown().await;
+        agent_b.shutdown().await;
+    }
+
+    // Proposer includes B in its trust slice; B's vote should be counted.
+    #[tokio::test]
+    async fn test_trust_slice_admits_trusted_vote() {
+        let port_a = alloc_port();
+        let port_b = alloc_port();
+
+        let mut cfg_a = GossipConfig::default();
+        cfg_a.bind_port                  = port_a;
+        cfg_a.health_check_max_jitter_ms = 50;
+        cfg_a.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_b).unwrap()];
+
+        let mut cfg_b = GossipConfig::default();
+        cfg_b.bind_port                  = port_b;
+        cfg_b.health_check_max_jitter_ms = 50;
+        cfg_b.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_a).unwrap()];
+
+        let node_b = NodeId::new("127.0.0.1", port_b).unwrap();
+        let agent_a = GossipAgent::new(NodeId::new("127.0.0.1", port_a).unwrap(), cfg_a);
+        let agent_b = GossipAgent::new(node_b.clone(), cfg_b);
+        agent_a.start().await.unwrap();
+        agent_b.start().await.unwrap();
+        time::sleep(Duration::from_millis(200)).await;
+
+        agent_a.join_group("tg2");
+        agent_b.join_group("tg2");
+
+        // A explicitly trusts B.
+        agent_a.declare_trust("tg2", &[node_b]);
+        let _la = agent_a.start_consensus_listener(ConsensusConfig::default());
+        let _lb = agent_b.start_consensus_listener(ConsensusConfig::default());
+
+        let config = ConsensusConfig {
+            quorum_size:      2,
+            phase1_timeout:   Duration::from_secs(3),
+            max_ballots:      3,
+            use_trust_slices: true,
+            ..ConsensusConfig::default()
+        };
+        let result = agent_a
+            .group_propose("tg2", "ts2", Bytes::from_static(b"y"), config)
+            .await;
+        assert!(
+            matches!(result, ConsensusResult::Committed { .. }),
+            "B is trusted; quorum of 2 should commit; got {:?}", result
+        );
+
+        agent_a.shutdown().await;
+        agent_b.shutdown().await;
+    }
+
     #[tokio::test]
     async fn test_writer_evicted_after_idle_timeout() {
         let port_a = alloc_port();

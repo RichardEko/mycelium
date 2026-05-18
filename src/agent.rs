@@ -1413,7 +1413,7 @@ impl GossipAgent {
             raw_members
         };
         let quorum  = compute_quorum_size(config.quorum_size, active_members);
-        self.make_consensus_engine(config.abstain_when_opaque)
+        self.make_consensus_engine(config.abstain_when_opaque, config.use_trust_slices)
             .propose(SignalScope::Group(Arc::from(group)), Arc::from(slot), value, quorum, config)
             .await
     }
@@ -1436,7 +1436,7 @@ impl GossipAgent {
         }
         let n_nodes = (self.system_stats().peers + 1).max(1);
         let quorum  = compute_quorum_size(config.quorum_size, n_nodes);
-        self.make_consensus_engine(config.abstain_when_opaque)
+        self.make_consensus_engine(config.abstain_when_opaque, config.use_trust_slices)
             .propose(SignalScope::System, Arc::from(slot), value, quorum, config)
             .await
     }
@@ -1456,7 +1456,7 @@ impl GossipAgent {
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
         let shutdown_rx = self.shutdown_tx.subscribe();
 
-        let handle = self.make_consensus_engine(config.abstain_when_opaque).spawn_listener(cancel_rx, shutdown_rx);
+        let handle = self.make_consensus_engine(config.abstain_when_opaque, config.use_trust_slices).spawn_listener(cancel_rx, shutdown_rx);
         {
             let mut handles = self.task_handles.lock().unwrap_or_else(|e| e.into_inner());
             handles.retain(|h| !h.is_finished());
@@ -1547,7 +1547,7 @@ impl GossipAgent {
 
     // ── Consensus internals ───────────────────────────────────────────────────
 
-    fn make_consensus_engine(&self, abstain_when_opaque: bool) -> ConsensusEngine {
+    fn make_consensus_engine(&self, abstain_when_opaque: bool, use_trust_slices: bool) -> ConsensusEngine {
         ConsensusEngine {
             node_id:             self.node_id.clone(),
             seen:                self.seen.clone(),
@@ -1560,6 +1560,7 @@ impl GossipAgent {
             store:                self.store.clone(),
             subscriptions:       self.subscriptions.clone(),
             abstain_when_opaque,
+            use_trust_slices,
         }
     }
 
