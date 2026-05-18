@@ -170,21 +170,10 @@ impl GossipAgent {
             .collect();
         let raw_members = member_ids.len().max(1);
         let active_members = if config.count_opaque_as_absent {
-            let now_ms = SystemTime::now()
-                .duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
-            let freshness_ms = self.config.health_check_interval_secs * 2 * 1000;
-            let opaque_count = self.scan_prefix(kv_ns::LOAD)
-                .into_iter()
-                .filter(|(k, bytes)| {
-                    let tail = k.strip_prefix(kv_ns::LOAD).unwrap_or("");
-                    let slash = tail.find('/').unwrap_or(tail.len());
-                    let node_str = &tail[..slash];
-                    member_ids.contains(node_str)
-                        && decode_load_state(bytes)
-                            .map(|s| s.is_opaque && now_ms.saturating_sub(s.written_at_ms) <= freshness_ms)
-                            .unwrap_or(false)
-                })
-                .count();
+            let freshness = Duration::from_millis(
+                self.config.health_check_interval_secs * 2 * 1000,
+            );
+            let opaque_count = self.count_opaque_members(&member_ids, freshness);
             raw_members.saturating_sub(opaque_count).max(1)
         } else {
             raw_members
@@ -230,17 +219,10 @@ impl GossipAgent {
         }
         let n_nodes = (self.system_stats().peers + 1).max(1);
         let active_n = if config.count_opaque_as_absent {
-            let now_ms = SystemTime::now()
-                .duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
-            let freshness_ms = self.config.health_check_interval_secs * 2 * 1000;
-            let opaque_count = self.scan_prefix(kv_ns::LOAD)
-                .into_iter()
-                .filter(|(_, bytes)| {
-                    decode_load_state(bytes)
-                        .map(|s| s.is_opaque && now_ms.saturating_sub(s.written_at_ms) <= freshness_ms)
-                        .unwrap_or(false)
-                })
-                .count();
+            let freshness = Duration::from_millis(
+                self.config.health_check_interval_secs * 2 * 1000,
+            );
+            let opaque_count = self.count_opaque_system(freshness);
             n_nodes.saturating_sub(opaque_count).max(1)
         } else {
             n_nodes

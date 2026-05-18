@@ -4,6 +4,7 @@ use crate::signal::{
     OpacityState,
 };
 use crate::store::apply_and_notify;
+use ahash::AHashSet;
 use bytes::Bytes;
 use std::{
     sync::Arc,
@@ -306,5 +307,52 @@ impl GossipAgent {
             .and_then(|b| decode_load_state(&b))
             .map(|s| s.is_opaque && now_ms.saturating_sub(s.written_at_ms) <= max_age.as_millis() as u64)
             .unwrap_or(false)
+    }
+
+    /// Count of `member_ids` nodes that have any opaque load entry fresher than `max_age`.
+    ///
+    /// Scans `sys/load/` once and filters by member set, avoiding per-member store lookups.
+    /// Used by `group_propose` to shrink the effective quorum when opaque members are absent.
+    pub(super) fn count_opaque_members(
+        &self,
+        member_ids: &AHashSet<String>,
+        max_age: Duration,
+    ) -> usize {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH).unwrap_or_default()
+            .as_millis() as u64;
+        let max_age_ms = max_age.as_millis() as u64;
+        self.scan_prefix(kv_ns::LOAD)
+            .into_iter()
+            .filter(|(k, bytes)| {
+                let tail = k.strip_prefix(kv_ns::LOAD).unwrap_or("");
+                let slash = tail.find('/').unwrap_or(tail.len());
+                member_ids.contains(&tail[..slash])
+                    && decode_load_state(bytes)
+                        .map(|s| s.is_opaque
+                            && now_ms.saturating_sub(s.written_at_ms) <= max_age_ms)
+                        .unwrap_or(false)
+            })
+            .count()
+    }
+
+    /// Count of all nodes that have any opaque load entry fresher than `max_age`.
+    ///
+    /// Scans `sys/load/` once without member filtering.
+    /// Used by `system_propose` to shrink the effective quorum when opaque nodes are absent.
+    pub(super) fn count_opaque_system(&self, max_age: Duration) -> usize {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH).unwrap_or_default()
+            .as_millis() as u64;
+        let max_age_ms = max_age.as_millis() as u64;
+        self.scan_prefix(kv_ns::LOAD)
+            .into_iter()
+            .filter(|(_, bytes)| {
+                decode_load_state(bytes)
+                    .map(|s| s.is_opaque
+                        && now_ms.saturating_sub(s.written_at_ms) <= max_age_ms)
+                    .unwrap_or(false)
+            })
+            .count()
     }
 }
