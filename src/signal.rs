@@ -93,6 +93,11 @@ pub(crate) fn grp_prefix(group: &str) -> String {
     format!("grp/{}/", group)
 }
 
+/// Returns the KV key for a single node's group membership entry: `grp/{group}/{node_id}`.
+pub(crate) fn grp_member_key(group: &str, node_id: &crate::node_id::NodeId) -> String {
+    format!("{}{}", grp_prefix(group), node_id)
+}
+
 /// Local boundary filter.
 ///
 /// Holds the set of groups this node has joined. `admits()` is O(1).

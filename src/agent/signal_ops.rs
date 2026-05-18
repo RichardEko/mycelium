@@ -88,7 +88,7 @@ impl GossipAgent {
         let group: Arc<str> = group.into();
         let inserted = self.signal_boundary.write().groups.insert(group.clone());
         if inserted {
-            let key = format!("grp/{}/{}", &*group, self.node_id);
+            let key = crate::signal::grp_member_key(&group, &self.node_id);
             let _ = self.set(key, b"1".to_vec());
         }
     }
@@ -101,7 +101,7 @@ impl GossipAgent {
         let group: Arc<str> = group.into();
         let removed = self.signal_boundary.write().groups.remove(&group);
         if removed {
-            let key = format!("grp/{}/{}", &*group, self.node_id);
+            let key = crate::signal::grp_member_key(&group, &self.node_id);
             let _ = self.delete(key);
         }
     }
@@ -111,7 +111,7 @@ impl GossipAgent {
     /// Nodes that have called [`leave_group`] or whose membership entry has been tombstoned
     /// are excluded. Order is arbitrary.
     pub fn group_members(&self, group: &str) -> Vec<crate::node_id::NodeId> {
-        let prefix = format!("grp/{}/", group);
+        let prefix = crate::signal::grp_prefix(group);
         self.scan_prefix(&prefix)
             .into_iter()
             .filter_map(|(key, _)| {

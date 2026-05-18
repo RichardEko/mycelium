@@ -44,7 +44,7 @@ impl GossipAgent {
         }
         // Warn about trusted peers that are not current group members — with
         // use_trust_slices=true this would cause ballots to time out indefinitely.
-        let member_prefix = format!("grp/{}/", group);
+        let member_prefix = crate::signal::grp_prefix(group);
         let members: AHashSet<String> = self.scan_prefix(&member_prefix)
             .into_iter()
             .filter_map(|(k, _)| k.strip_prefix(&member_prefix).map(str::to_string))
