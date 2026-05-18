@@ -1,8 +1,8 @@
 use crate::error::GossipError;
 use crate::framing::{
-    bincode_cfg, bincode_cfg_prev, dispatch_gossip_try_send, is_connection_closed, read_frame,
-    shard_for_key, ForwardHint, FrameVersion, GossipUpdate, SyncEntry, WireMessage, WireMessageV6,
-    ANTI_ENTROPY_NONCE, DATA_TAG, NONCE_OFFSET, TTL_OFFSET,
+    bincode_cfg, bincode_cfg_prev, dispatch_gossip_try_send, is_connection_closed,
+    make_gossip_update, read_frame, shard_for_key, ForwardHint, FrameVersion, GossipUpdate,
+    SyncEntry, WireMessage, WireMessageV6, ANTI_ENTROPY_NONCE, DATA_TAG, NONCE_OFFSET, TTL_OFFSET,
 };
 use crate::signal::{parse_own_grp_key, Boundary, Signal, SignalHandlers, SignalScope};
 use crate::store::{apply_and_notify, intern_key, store_hash_acc, KvState};
@@ -293,15 +293,10 @@ pub(crate) async fn handle_connection(
                                 .unwrap_or(true)
                         };
                         if write_quorum {
-                            let quorum_update = GossipUpdate {
-                                nonce:        fastrand::u64(1..),
-                                sender:       node_id.id_hash(),
-                                ttl:          max_ttl,
-                                is_tombstone: false,
-                                timestamp:    now_ms,
-                                key:          quorum_key,
-                                value:        Bytes::copy_from_slice(&now_ms.to_le_bytes()),
-                            };
+                            let quorum_update = make_gossip_update(
+                                &node_id, max_ttl, quorum_key,
+                                Bytes::copy_from_slice(&now_ms.to_le_bytes()), false,
+                            );
                             apply_and_notify(&kv_state, &quorum_update);
                             dispatch_gossip_try_send(
                                 &gossip_txs, WireMessage::Data(quorum_update),
