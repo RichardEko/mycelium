@@ -373,6 +373,32 @@ pub(crate) enum ForwardHint {
     Individual(crate::node_id::NodeId),
 }
 
+/// Constructs a [`GossipUpdate`] for a locally-originated KV write or tombstone.
+///
+/// Uses `SystemTime::now()` (not a cached tick) so every call gets a distinct
+/// timestamp, preserving LWW determinism under concurrent cross-node writes.
+pub(crate) fn make_gossip_update(
+    node_id:      &crate::node_id::NodeId,
+    ttl:          u8,
+    key:          Arc<str>,
+    value:        bytes::Bytes,
+    is_tombstone: bool,
+) -> GossipUpdate {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    GossipUpdate {
+        nonce:     fastrand::u64(1..),
+        sender:    node_id.id_hash(),
+        ttl,
+        is_tombstone,
+        timestamp: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64,
+        key,
+        value,
+    }
+}
+
 pub(crate) fn is_connection_closed(e: &GossipError) -> bool {
     match e {
         GossipError::Io(io_err) => matches!(

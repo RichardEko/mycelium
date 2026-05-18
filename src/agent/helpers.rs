@@ -7,12 +7,9 @@ use crate::seen::ShardedSeen;
 use crate::signal::{Boundary, Signal, SignalHandlers, SignalScope};
 use bytes::Bytes;
 use parking_lot::RwLock;
-use std::{
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
-    time::{SystemTime, UNIX_EPOCH},
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
 };
 use tokio::sync::mpsc;
 
@@ -175,27 +172,4 @@ pub(crate) fn compute_quorum_size(config_size: usize, member_count: usize) -> us
     if config_size > 0 { config_size } else { member_count / 2 + 1 }
 }
 
-/// Constructs a [`GossipUpdate`] for a locally-originated KV write or tombstone.
-///
-/// Uses `SystemTime::now()` (not a cached tick) so every call gets a distinct
-/// timestamp, preserving LWW determinism under concurrent cross-node writes.
-pub(crate) fn make_gossip_update(
-    node_id:     &NodeId,
-    ttl:         u8,
-    key:         Arc<str>,
-    value:       Bytes,
-    is_tombstone: bool,
-) -> GossipUpdate {
-    GossipUpdate {
-        nonce:        fastrand::u64(1..),
-        sender:       node_id.id_hash(),
-        ttl,
-        is_tombstone,
-        timestamp:    SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64,
-        key,
-        value,
-    }
-}
+pub(crate) use crate::framing::make_gossip_update;
