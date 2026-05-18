@@ -293,6 +293,34 @@ impl GossipAgent {
         self.signal_handlers.last_signal(kind)
     }
 
+    /// Returns how long ago `kind` was last observed by *any* peer, reading from
+    /// the `sys/quorum/` Layer I evidence written by the connection handler.
+    ///
+    /// Unlike [`last_signal`](Self::last_signal), which reads the in-memory
+    /// `last_seen` map and returns `None` after a process restart, this method
+    /// survives restarts: `sys/quorum/` entries are anti-entropy synced and
+    /// persist on disk (if a durable store backend is configured).
+    ///
+    /// Returns the *minimum* (most recent) age across all senders that sent
+    /// `kind`. Returns `None` when no `sys/quorum/{kind}/` entries exist.
+    pub fn last_signal_persistent(&self, kind: &str) -> Option<std::time::Duration> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let prefix = format!("sys/quorum/{}/", kind);
+        self.scan_prefix(&prefix)
+            .into_iter()
+            .filter_map(|(_, bytes)| {
+                if bytes.len() < 8 { return None; }
+                let written_at = u64::from_le_bytes(bytes[..8].try_into().ok()?);
+                now_ms.checked_sub(written_at)
+            })
+            .min()
+            .map(std::time::Duration::from_millis)
+    }
+
     /// Suppresses local delivery of `kind` signals for `duration`.
     ///
     /// The signal is still forwarded epidemically — propagation is unconditional.

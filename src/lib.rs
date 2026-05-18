@@ -2867,4 +2867,33 @@ mod tests {
         agent.warm_quorum_from_layer1();
         assert!(agent.quorum("my.kind", 1, Duration::from_secs(60)));
     }
+
+    #[test]
+    fn test_last_signal_persistent_reads_layer1() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let port_a = alloc_port();
+        let port_b = alloc_port();
+        let node_a = NodeId::new("127.0.0.1", port_a).unwrap();
+        let node_b = NodeId::new("127.0.0.1", port_b).unwrap();
+
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = port_a;
+        let agent = GossipAgent::new(node_a, cfg);
+
+        // Write a quorum entry 5 s in the past.
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH).unwrap_or_default()
+            .as_millis() as u64;
+        let written_at_ms = now_ms - 5_000;
+        let key = format!("sys/quorum/my.kind/{}", node_b);
+        let _ = agent.set(key, Bytes::copy_from_slice(&written_at_ms.to_le_bytes()));
+
+        let age = agent.last_signal_persistent("my.kind").expect("should find entry");
+        // Age should be approximately 5 s (allow ±2 s scheduling slack).
+        assert!(age >= Duration::from_secs(3) && age <= Duration::from_secs(7),
+            "expected ~5 s, got {:?}", age);
+
+        // Non-existent kind returns None.
+        assert!(agent.last_signal_persistent("never.seen").is_none());
+    }
 }
