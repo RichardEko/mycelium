@@ -330,6 +330,19 @@ impl GossipAgent {
             .count()
     }
 
+    /// Returns per-peer cumulative drop counts (only peers with at least one drop).
+    ///
+    /// Each entry is the total number of gossip frames dropped to that peer due to
+    /// reconnect backoff since the peer writer was last spawned. Useful for identifying
+    /// slow or unreachable peers that inflate the global `dropped_frames` counter.
+    pub fn peer_drop_counts(&self) -> Vec<(crate::node_id::NodeId, u64)> {
+        use std::sync::atomic::Ordering;
+        self.peer_writers.iter()
+            .map(|e| (e.key().clone(), e.value().dropped.load(Ordering::Relaxed)))
+            .filter(|(_, n)| *n > 0)
+            .collect()
+    }
+
     /// Returns a snapshot of live protocol state.
     ///
     /// Note: `dead_shards` may transiently report all shards as dead in the brief
