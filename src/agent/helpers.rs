@@ -43,19 +43,7 @@ impl GossipAgent {
         // gets a fresh timestamp. Two set() calls in the same health-monitor tick interval
         // would otherwise share a timestamp and lose LWW determinism for concurrent
         // cross-node writes to the same key.
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-        GossipUpdate {
-            nonce: fastrand::u64(1..),
-            sender: self.node_id.id_hash(),
-            ttl: self.config.default_ttl,
-            is_tombstone,
-            timestamp,
-            key,
-            value,
-        }
+        make_gossip_update(&self.node_id, self.config.default_ttl, key, value, is_tombstone)
     }
 
     pub(super) fn make_consensus_engine(
@@ -185,4 +173,29 @@ pub(crate) async fn emit_signal_async(
 
 pub(crate) fn compute_quorum_size(config_size: usize, member_count: usize) -> usize {
     if config_size > 0 { config_size } else { member_count / 2 + 1 }
+}
+
+/// Constructs a [`GossipUpdate`] for a locally-originated KV write or tombstone.
+///
+/// Uses `SystemTime::now()` (not a cached tick) so every call gets a distinct
+/// timestamp, preserving LWW determinism under concurrent cross-node writes.
+pub(crate) fn make_gossip_update(
+    node_id:     &NodeId,
+    ttl:         u8,
+    key:         Arc<str>,
+    value:       Bytes,
+    is_tombstone: bool,
+) -> GossipUpdate {
+    GossipUpdate {
+        nonce:        fastrand::u64(1..),
+        sender:       node_id.id_hash(),
+        ttl,
+        is_tombstone,
+        timestamp:    SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64,
+        key,
+        value,
+    }
 }

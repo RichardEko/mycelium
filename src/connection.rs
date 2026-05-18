@@ -4,7 +4,7 @@ use crate::framing::{
     shard_for_key, ForwardHint, FrameVersion, GossipUpdate, SyncEntry, WireMessage, WireMessageV6,
     ANTI_ENTROPY_NONCE, DATA_TAG, NONCE_OFFSET, TTL_OFFSET,
 };
-use crate::signal::{Boundary, Signal, SignalHandlers, SignalScope};
+use crate::signal::{parse_own_grp_key, Boundary, Signal, SignalHandlers, SignalScope};
 use crate::store::{apply_and_notify, intern_key, store_hash_acc, KvState};
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
@@ -360,17 +360,12 @@ pub(crate) async fn handle_connection(
 
                 // Push-based boundary sync: if the received key is grp/{group}/{this_node},
                 // update the boundary immediately rather than waiting for the GC-tick reconcile.
-                if let Some(inner) = update.key.strip_prefix("grp/") {
-                    if let Some(slash) = inner.rfind('/') {
-                        if inner[slash + 1..] == node_id_str {
-                            let group_str = &inner[..slash];
-                            let mut bnd = signal_boundary.write();
-                            if update.is_tombstone {
-                                bnd.groups.remove(group_str);
-                            } else {
-                                bnd.groups.insert(Arc::from(group_str));
-                            }
-                        }
+                if let Some(group_str) = parse_own_grp_key(&update.key, &node_id_str) {
+                    let mut bnd = signal_boundary.write();
+                    if update.is_tombstone {
+                        bnd.groups.remove(group_str);
+                    } else {
+                        bnd.groups.insert(Arc::from(group_str));
                     }
                 }
 

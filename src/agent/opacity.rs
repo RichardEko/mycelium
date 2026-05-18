@@ -277,4 +277,34 @@ impl GossipAgent {
     pub fn opacity(&self, kind: &str) -> f32 {
         self.signal_handlers.fill_ratio(&Arc::from(kind))
     }
+
+    /// True if this node's own pheromone trail for `kind` records `is_opaque`.
+    pub fn is_opaque(&self, kind: &str) -> bool {
+        self.get(&format!("{}{}/{}", kv_ns::LOAD, self.node_id, kind))
+            .and_then(|b| decode_load_state(&b))
+            .map(|s| s.is_opaque)
+            .unwrap_or(false)
+    }
+
+    /// Effective load for `kind` — max of the durable pheromone `fill_ratio`
+    /// and the live in-memory channel fill. Returns `0.0` when neither has been written.
+    pub fn effective_opacity(&self, kind: &str) -> f32 {
+        let pheromone = self
+            .get(&format!("{}{}/{}", kv_ns::LOAD, self.node_id, kind))
+            .and_then(|b| decode_load_state(&b))
+            .map(|s| s.fill_ratio)
+            .unwrap_or(0.0);
+        pheromone.max(self.opacity(kind))
+    }
+
+    /// True if `node`'s pheromone trail for `kind` records `is_opaque`
+    /// and was written within `max_age`.
+    pub fn is_node_opaque(&self, node: &crate::node_id::NodeId, kind: &str, max_age: Duration) -> bool {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+        self.get(&format!("{}{}/{}", kv_ns::LOAD, node, kind))
+            .and_then(|b| decode_load_state(&b))
+            .map(|s| s.is_opaque && now_ms.saturating_sub(s.written_at_ms) <= max_age.as_millis() as u64)
+            .unwrap_or(false)
+    }
 }

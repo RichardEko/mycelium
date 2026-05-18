@@ -106,6 +106,21 @@ impl GossipAgent {
         }
     }
 
+    /// Returns the live members of `group` according to the Layer I roster (`grp/{group}/`).
+    ///
+    /// Nodes that have called [`leave_group`] or whose membership entry has been tombstoned
+    /// are excluded. Order is arbitrary.
+    pub fn group_members(&self, group: &str) -> Vec<crate::node_id::NodeId> {
+        let prefix = format!("grp/{}/", group);
+        self.scan_prefix(&prefix)
+            .into_iter()
+            .filter_map(|(key, _)| {
+                key.strip_prefix(&prefix)
+                    .and_then(|s| s.parse::<crate::node_id::NodeId>().ok())
+            })
+            .collect()
+    }
+
     /// Awaits the first locally-admitted signal of `kind` satisfying `predicate`.
     ///
     /// Returns `None` if `timeout` elapses before a matching signal arrives.
@@ -424,15 +439,9 @@ impl GossipAgent {
         window: Duration,
     ) -> bool {
         use ahash::AHashSet;
-        let prefix = format!("grp/{}/", group);
-        let member_hashes: AHashSet<u64> = self
-            .scan_prefix(&prefix)
-            .into_iter()
-            .filter_map(|(key, _)| {
-                key.strip_prefix(&prefix)
-                    .and_then(|s| s.parse::<crate::node_id::NodeId>().ok())
-                    .map(|n| n.id_hash())
-            })
+        let member_hashes: AHashSet<u64> = self.group_members(group)
+            .iter()
+            .map(|n| n.id_hash())
             .collect();
         self.signal_handlers.quorum_for_group(kind, &member_hashes, min_senders, window)
     }

@@ -26,10 +26,9 @@
 //!   [`GossipAgent::declare_trust`]. The basic protocol uses simple majority;
 //!   trust-slice-based quorum intersection is a future extension.
 
-use crate::agent::{emit_signal, emit_signal_async};
+use crate::agent::{emit_signal, emit_signal_async, make_gossip_update};
 use crate::framing::{
-    bincode_cfg, dispatch_gossip_send, dispatch_gossip_try_send, ForwardHint, GossipUpdate,
-    WireMessage,
+    bincode_cfg, dispatch_gossip_send, dispatch_gossip_try_send, ForwardHint, WireMessage,
 };
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
@@ -40,7 +39,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use parking_lot::RwLock;
 use std::{
     sync::{atomic::AtomicU64, Arc},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 use tokio::{
     sync::{mpsc, oneshot, watch},
@@ -277,23 +276,10 @@ impl ConsensusEngine {
         self.get(ballot_key).map(|b| decode_ballot(&b)).unwrap_or(0)
     }
 
-    fn make_kv_update(&self, key: Arc<str>, value: Bytes) -> GossipUpdate {
-        GossipUpdate {
-            nonce:        fastrand::u64(1..),
-            sender:       self.node_id.id_hash(),
-            ttl:          self.default_ttl,
-            is_tombstone: false,
-            timestamp:    SystemTime::now()
-                .duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
-            key,
-            value,
-        }
-    }
-
     /// Applies a KV update from within a consensus task.
     /// Uses `try_send` for gossip dispatch — dropped frames recovered via anti-entropy.
     fn kv_set(&self, key: String, value: Bytes) {
-        let upd = self.make_kv_update(Arc::from(key.as_str()), value);
+        let upd = make_gossip_update(&self.node_id, self.default_ttl, Arc::from(key.as_str()), value, false);
         apply_and_notify(&self.kv_state, &upd);
         dispatch_gossip_try_send(
             &self.gossip_txs, WireMessage::Data(upd),
@@ -303,12 +289,46 @@ impl ConsensusEngine {
 
     /// Like `kv_set` but awaits channel capacity (used by the proposer).
     async fn set_async(&self, key: &str, value: Bytes) {
-        let upd = self.make_kv_update(Arc::from(key), value);
+        let upd = make_gossip_update(&self.node_id, self.default_ttl, Arc::from(key), value, false);
         apply_and_notify(&self.kv_state, &upd);
         dispatch_gossip_send(
             &self.gossip_txs, WireMessage::Data(upd),
             self.node_id.id_hash(), ForwardHint::All,
         ).await;
+    }
+
+    // ── Layer II bridge helpers ──────────────────────────────────────────────
+
+    /// True if any `sys/load/{node_id}/*` pheromone entry is `is_opaque`.
+    fn is_overloaded(&self) -> bool {
+        let load_prefix = format!("{}{}/", kv_ns::LOAD, self.node_id);
+        let idx = self.kv_state.prefix_index.pin();
+        idx.get("sys").map(|bucket| {
+            let store = self.kv_state.store.pin();
+            bucket.pin().iter()
+                .filter(|(k, _)| k.starts_with(&*load_prefix))
+                .any(|(k, _)| store.get(k.as_ref())
+                    .and_then(|e| e.data.as_ref().and_then(decode_load_state))
+                    .map(|s| s.is_opaque)
+                    .unwrap_or(false)
+                )
+        }).unwrap_or(false)
+    }
+
+    fn emit(&self, kind: Arc<str>, scope: SignalScope, payload: Bytes) {
+        emit_signal(
+            &self.node_id, &self.seen, &self.current_ts, &self.signal_boundary,
+            &self.signal_handlers, &self.gossip_txs, self.default_ttl,
+            &self.kv_state.dropped_frames, kind, scope, payload,
+        );
+    }
+
+    async fn emit_async(&self, kind: Arc<str>, scope: SignalScope, payload: Bytes) -> bool {
+        emit_signal_async(
+            &self.node_id, &self.seen, &self.current_ts, &self.signal_boundary,
+            &self.signal_handlers, &self.gossip_txs, self.default_ttl,
+            &self.kv_state.dropped_frames, kind, scope, payload,
+        ).await
     }
 
     // ── Proposer ─────────────────────────────────────────────────────────────
@@ -366,9 +386,7 @@ impl ConsensusEngine {
                 slot: slot.clone(), ballot, value: value.clone(),
                 proposer: self.node_id.clone(),
             };
-            emit_signal_async(
-                &self.node_id, &self.seen, &self.current_ts, &self.signal_boundary,
-                &self.signal_handlers, &self.gossip_txs, self.default_ttl, &self.kv_state.dropped_frames,
+            self.emit_async(
                 Arc::from(consensus_kind::PROPOSE), scope.clone(), encode_consensus_msg(&propose_msg),
             ).await;
 
@@ -379,9 +397,7 @@ impl ConsensusEngine {
                 let commit = ConsensusMsg::Commit {
                     slot: slot.clone(), ballot, value: value.clone(),
                 };
-                emit_signal_async(
-                    &self.node_id, &self.seen, &self.current_ts, &self.signal_boundary,
-                    &self.signal_handlers, &self.gossip_txs, self.default_ttl, &self.kv_state.dropped_frames,
+                self.emit_async(
                     Arc::from(consensus_kind::COMMIT), scope.clone(), encode_consensus_msg(&commit),
                 ).await;
                 self.set_async(commit_key.as_str(), value.clone()).await;
@@ -409,9 +425,7 @@ impl ConsensusEngine {
                                     let commit = ConsensusMsg::Commit {
                                         slot: slot.clone(), ballot, value: value.clone(),
                                     };
-                                    emit_signal_async(
-                                        &self.node_id, &self.seen, &self.current_ts, &self.signal_boundary,
-                                        &self.signal_handlers, &self.gossip_txs, self.default_ttl, &self.kv_state.dropped_frames,
+                                    self.emit_async(
                                         Arc::from(consensus_kind::COMMIT), scope.clone(), encode_consensus_msg(&commit),
                                     ).await;
                                     self.set_async(commit_key.as_str(), value.clone()).await;
@@ -527,26 +541,9 @@ async fn run_consensus_listener(
                 if ctx.abstain_when_opaque {
                     let at_cap = ctx.max_abstain_ballots > 0
                         && consecutive_abstains >= ctx.max_abstain_ballots;
-                    if !at_cap {
-                        let load_prefix = format!("{}{}/", kv_ns::LOAD, ctx.node_id);
-                        let is_overloaded = {
-                            let idx = ctx.kv_state.prefix_index.pin();
-                            idx.get("sys").map(|bucket| {
-                                let store = ctx.kv_state.store.pin();
-                                bucket.pin().iter()
-                                    .filter(|(k, _)| k.starts_with(&*load_prefix))
-                                    .any(|(k, _)| {
-                                        store.get(k.as_ref())
-                                            .and_then(|e| e.data.as_ref().and_then(decode_load_state))
-                                            .map(|s| s.is_opaque)
-                                            .unwrap_or(false)
-                                    })
-                            }).unwrap_or(false)
-                        };
-                        if is_overloaded {
-                            consecutive_abstains += 1;
-                            continue;
-                        }
+                    if !at_cap && ctx.is_overloaded() {
+                        consecutive_abstains += 1;
+                        continue;
                     }
                 }
                 consecutive_abstains = 0;
@@ -558,9 +555,7 @@ async fn run_consensus_listener(
                 let local = *seen_ballot.get(&slot).unwrap_or(&0);
                 if ballot < local {
                     let nack = ConsensusMsg::Nack { slot, seen_ballot: local };
-                    emit_signal(
-                        &ctx.node_id, &ctx.seen, &ctx.current_ts, &ctx.signal_boundary,
-                        &ctx.signal_handlers, &ctx.gossip_txs, ctx.default_ttl, &ctx.kv_state.dropped_frames,
+                    ctx.emit(
                         Arc::from(consensus_kind::NACK),
                         SignalScope::Individual(proposer),
                         encode_consensus_msg(&nack),
@@ -574,9 +569,7 @@ async fn run_consensus_listener(
                     let vote = ConsensusMsg::Vote {
                         slot: slot.clone(), ballot, voter: ctx.node_id.clone(),
                     };
-                    emit_signal(
-                        &ctx.node_id, &ctx.seen, &ctx.current_ts, &ctx.signal_boundary,
-                        &ctx.signal_handlers, &ctx.gossip_txs, ctx.default_ttl, &ctx.kv_state.dropped_frames,
+                    ctx.emit(
                         Arc::from(consensus_kind::VOTE),
                         sig.scope,
                         encode_consensus_msg(&vote),

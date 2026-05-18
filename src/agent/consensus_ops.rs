@@ -87,20 +87,12 @@ impl GossipAgent {
     /// `max_age` is used for pheromone evaporation — entries older than this are
     /// treated as transparent. Ties are broken deterministically by `id_hash()`.
     pub fn suggest_leader(&self, group: &str, kind: &str, max_age: Duration) -> NodeId {
-        let prefix = format!("grp/{}/", group);
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH).unwrap_or_default()
             .as_millis() as u64;
         let max_age_ms = max_age.as_millis() as u64;
 
-        let members: Vec<NodeId> = self
-            .scan_prefix(&prefix)
-            .into_iter()
-            .filter_map(|(key, _)| {
-                let node_str = key.strip_prefix(&prefix)?;
-                node_str.parse::<NodeId>().ok()
-            })
-            .collect();
+        let members: Vec<NodeId> = self.group_members(group);
 
         if members.is_empty() {
             return self.node_id.clone();
@@ -160,15 +152,7 @@ impl GossipAgent {
         value:  Bytes,
         config: ConsensusConfig,
     ) -> ConsensusResult {
-        // Defer if overloaded: prefer the durable pheromone trail (Layer I) as the primary
-        // signal since that is the same source voters use to abstain; fall back to the
-        // in-memory channel fill for the case where manage_opacity hasn't written a trail yet.
-        let pheromone_fill = self
-            .get(&format!("{}{}/{}", kv_ns::LOAD, self.node_id, consensus_kind::PROPOSE))
-            .and_then(|b| decode_load_state(&b))
-            .map(|s| s.fill_ratio)
-            .unwrap_or(0.0);
-        let local_opacity = pheromone_fill.max(self.opacity(consensus_kind::PROPOSE));
+        let local_opacity = self.effective_opacity(consensus_kind::PROPOSE);
         if local_opacity > 0.0 && config.ballot_retry_jitter_ms > 0 {
             let defer_ms = (local_opacity * config.ballot_retry_jitter_ms as f32 * 2.0) as u64;
             tokio::time::sleep(Duration::from_millis(defer_ms)).await;
@@ -180,11 +164,9 @@ impl GossipAgent {
             }
         }
         // Collect member ids once; used for both the count and the opaque filter.
-        let grp_prefix = format!("grp/{}/", group);
-        let member_ids: AHashSet<String> = self
-            .scan_prefix(&grp_prefix)
-            .into_iter()
-            .filter_map(|(key, _)| key.strip_prefix(&grp_prefix).map(|s| s.to_string()))
+        let member_ids: AHashSet<String> = self.group_members(group)
+            .iter()
+            .map(NodeId::to_string)
             .collect();
         let raw_members = member_ids.len().max(1);
         let active_members = if config.count_opaque_as_absent {
@@ -230,23 +212,14 @@ impl GossipAgent {
         value:  Bytes,
         config: ConsensusConfig,
     ) -> ConsensusResult {
-        // Defer if overloaded: prefer the durable pheromone trail (Layer I) as the primary
-        // signal since that is the same source voters use to abstain; fall back to the
-        // in-memory channel fill for the case where manage_opacity hasn't written a trail yet.
-        let pheromone_fill = self
-            .get(&format!("{}{}/{}", kv_ns::LOAD, self.node_id, consensus_kind::PROPOSE))
-            .and_then(|b| decode_load_state(&b))
-            .map(|s| s.fill_ratio)
-            .unwrap_or(0.0);
-        let local_opacity = pheromone_fill.max(self.opacity(consensus_kind::PROPOSE));
+        let local_opacity = self.effective_opacity(consensus_kind::PROPOSE);
         if local_opacity > 0.0 && config.ballot_retry_jitter_ms > 0 {
             let defer_ms = (local_opacity * config.ballot_retry_jitter_ms as f32 * 2.0) as u64;
             tokio::time::sleep(Duration::from_millis(defer_ms)).await;
         }
         // Defer if another peer has lower propose-trail load than this node.
-        // This approximates suggest_leader for system scope (no group to consult).
         if config.use_suggest_leader && config.ballot_retry_jitter_ms > 0 {
-            let my_fill = pheromone_fill;
+            let my_fill = local_opacity;
             let is_lightest = self.peer_load(self.signal_window())
                 .iter()
                 .filter(|(_, k, _)| k.as_ref() == consensus_kind::PROPOSE)
@@ -260,7 +233,7 @@ impl GossipAgent {
             let now_ms = SystemTime::now()
                 .duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
             let freshness_ms = self.config.health_check_interval_secs * 2 * 1000;
-            let opaque_count = self.scan_prefix(crate::signal::kv_ns::LOAD)
+            let opaque_count = self.scan_prefix(kv_ns::LOAD)
                 .into_iter()
                 .filter(|(_, bytes)| {
                     decode_load_state(bytes)

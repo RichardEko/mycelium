@@ -304,6 +304,13 @@ impl GossipAgent {
     /// **Prefer [`quorum`](Self::quorum) for latency-sensitive paths.** The in-memory version
     /// is O(window_entries) with no store access; `quorum_persistent` scans the prefix index
     /// (O(quorum_keys)) plus a store lookup per entry.
+    ///
+    /// **Retention difference vs [`quorum`]**: the in-memory sender-log is retained for
+    /// `signal_window_secs` (default 600 s) and is reset on restart. `quorum_persistent`
+    /// reads from the Layer I store whose entries are evicted by tombstone GC after
+    /// `default_ttl × propagation_window × 10` ms — a typically much longer window.
+    /// Use `quorum` for low-latency reads during normal operation; use `quorum_persistent`
+    /// only when evidence must survive process restarts.
     pub fn quorum_persistent(&self, kind: &str, window: Duration) -> usize {
         use crate::signal::kv_ns;
         let prefix = format!("{}{}/", kv_ns::QUORUM, kind);

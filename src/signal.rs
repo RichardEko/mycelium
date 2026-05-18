@@ -74,6 +74,17 @@ pub struct Signal {
     pub nonce:   u64,
 }
 
+/// If `key` is a group-membership key belonging to `node_id_str`, returns the group name.
+///
+/// Matches keys of the form `grp/{group}/{node_id_str}` (live or tombstone). Returns `None`
+/// for any other key.
+pub(crate) fn parse_own_grp_key<'a>(key: &'a str, node_id_str: &str) -> Option<&'a str> {
+    let inner = key.strip_prefix("grp/")?;
+    let slash  = inner.rfind('/')?;
+    if inner[slash + 1..] != *node_id_str { return None; }
+    Some(&inner[..slash])
+}
+
 /// Local boundary filter.
 ///
 /// Holds the set of groups this node has joined. `admits()` is O(1).
@@ -273,8 +284,8 @@ impl SignalHandlers {
     /// Bounds both per-kind entry count (lazy retention inside `deliver`) and total
     /// kind count (removes kinds no longer seen), preventing unbounded growth when
     /// dynamic or high-cardinality kind strings are used.
-    pub(crate) fn trim_sender_log(&self) {
-        let cutoff = Instant::now() - SENDER_LOG_WINDOW;
+    pub(crate) fn trim_sender_log(&self, window: Duration) {
+        let cutoff = Instant::now() - window;
         self.sender_log.retain(|_, log| {
             while log.front().map(|(_, t)| *t <= cutoff).unwrap_or(false) {
                 log.pop_front();

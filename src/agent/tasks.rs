@@ -3,7 +3,7 @@ use crate::error::GossipError;
 use crate::framing::{bincode_cfg, ForwardHint, WireMessage};
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
-use crate::signal::{Boundary, SignalHandlers};
+use crate::signal::{parse_own_grp_key, Boundary, SignalHandlers};
 use crate::store::{intern_pool_len, KvState, StoreEntry};
 use crate::writer::{evict_peer_writer, get_or_spawn_writer, request_state, WriterEntry};
 use ahash::{AHashMap, AHashSet};
@@ -514,6 +514,7 @@ pub(super) async fn run_gc_task(
     intern_max_keys:   usize,
     signal_boundary:   Arc<RwLock<crate::signal::Boundary>>,
     node_id:           NodeId,
+    signal_window_secs: u64,
 ) {
     gc_alive.store(true, Ordering::Relaxed);
     let _alive_guard = AliveGuard(gc_alive.clone());
@@ -569,7 +570,7 @@ pub(super) async fn run_gc_task(
                     );
                 }
 
-                signal_handlers.trim_sender_log();
+                signal_handlers.trim_sender_log(Duration::from_secs(signal_window_secs));
 
                 {
                     let sub_guard = subscriptions.pin();
@@ -606,16 +607,13 @@ pub(super) async fn run_gc_task(
 
                 // Boundary reconcile — catch-all for updates missed by the push-based path.
                 {
-                    let suffix = format!("/{}", node_id);
+                    let node_id_str = node_id.to_string();
                     let mut to_insert: Vec<Arc<str>> = Vec::new();
                     let mut to_remove: Vec<Arc<str>> = Vec::new();
                     {
                         let guard = store.pin();
                         for (key, entry) in guard.iter() {
-                            let Some(inner) = key.strip_prefix("grp/") else { continue };
-                            let Some(slash) = inner.rfind('/') else { continue };
-                            if inner[slash..] != suffix { continue }
-                            let group = &inner[..slash];
+                            let Some(group) = parse_own_grp_key(key, &node_id_str) else { continue };
                             if entry.data.is_some() {
                                 to_insert.push(Arc::from(group));
                             } else {

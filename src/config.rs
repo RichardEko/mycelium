@@ -125,8 +125,9 @@ pub struct GossipConfig {
     /// all targets regardless of this setting.
     ///
     /// Requires that group membership be published to the KV store (via `join_group`)
-    /// so shards can determine the member set. When `false` (default), all signals fan
-    /// out to all forwarding targets — the pre-Fix-2 behaviour.
+    /// so shards can determine the member set. Defaults to `true`. Set to `false` to
+    /// revert to pre-v0.2 broadcast forwarding (all signals fan out to all peers
+    /// regardless of group scope), which may be useful for debugging topology issues.
     pub group_aware_forwarding: bool,
     /// Hard cap on the one-shot startup jitter before the first health-check ping (ms).
     ///
@@ -190,7 +191,7 @@ impl Default for GossipConfig {
             tcp_accept_backlog: 1024,
             max_peers: i64::MAX as usize,
             writer_idle_timeout_secs: 0,
-            group_aware_forwarding: false,
+            group_aware_forwarding: true,
             health_check_max_jitter_ms: 0,
             signal_window_secs: 600,
             max_store_entries: 0,
