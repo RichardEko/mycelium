@@ -85,6 +85,7 @@ pub(super) struct ListenerContext {
     pub(super) max_peers:           usize,
     pub(super) writer_idle_timeout: Duration,
     pub(super) max_store_entries:   usize,
+    pub(super) prefix_index:        Arc<crate::store::PrefixIndex>,
 }
 
 // ── Task implementations ───────────────────────────────────────────────────────
@@ -95,6 +96,7 @@ pub(super) async fn run_listener_task(listener: TcpListener, lctx: ListenerConte
         current_ts, peer_writers, conn_sem, listener_alive,
         max_conn, max_ttl, writer_depth, backoff, n_shards, intern_keys, intern_max_keys,
         signal_boundary, signal_handlers, max_peers, writer_idle_timeout, max_store_entries,
+        prefix_index,
     } = lctx;
     let mut shutdown_rx = shutdown_tx.subscribe();
     let mut conn_set: JoinSet<()> = JoinSet::new();
@@ -131,6 +133,7 @@ pub(super) async fn run_listener_task(listener: TcpListener, lctx: ListenerConte
                                 let peer_writers     = peer_writers.clone();
                                 let signal_boundary  = signal_boundary.clone();
                                 let signal_handlers  = signal_handlers.clone();
+                                let prefix_index     = prefix_index.clone();
                                 conn_set.spawn(async move {
                                     let _permit = permit;
                                     let ctx = ConnContext {
@@ -140,7 +143,7 @@ pub(super) async fn run_listener_task(listener: TcpListener, lctx: ListenerConte
                                         writer_depth, backoff, n_shards,
                                         intern_keys, intern_max_keys, signal_boundary,
                                         signal_handlers, max_peers, writer_idle_timeout,
-                                        max_store_entries,
+                                        max_store_entries, prefix_index,
                                     };
                                     if let Err(e) = handle_connection(socket, addr, ctx).await {
                                         warn!("Connection error from {}: {}", addr, e);

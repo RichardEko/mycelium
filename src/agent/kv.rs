@@ -51,7 +51,7 @@ impl GossipAgent {
     pub fn set<K: Into<Arc<str>>>(&self, key: K, value: impl Into<Bytes>) -> bool {
         let key: Arc<str> = key.into();
         let update = self.make_update(key, value.into(), false);
-        apply_and_notify(&self.store, &self.subscriptions, &update, self.config.max_store_entries);
+        apply_and_notify(&self.store, &self.subscriptions, &update, self.config.max_store_entries, &self.prefix_index);
         self.dispatch_update(update)
     }
 
@@ -70,7 +70,7 @@ impl GossipAgent {
     pub fn delete<K: Into<Arc<str>>>(&self, key: K) -> bool {
         let key: Arc<str> = key.into();
         let update = self.make_update(key, Bytes::new(), true);
-        apply_and_notify(&self.store, &self.subscriptions, &update, self.config.max_store_entries);
+        apply_and_notify(&self.store, &self.subscriptions, &update, self.config.max_store_entries, &self.prefix_index);
         self.dispatch_update(update)
     }
 
@@ -85,7 +85,7 @@ impl GossipAgent {
     pub async fn set_async<K: Into<Arc<str>>>(&self, key: K, value: impl Into<Bytes>) -> bool {
         let key: Arc<str> = key.into();
         let update = self.make_update(key, value.into(), false);
-        apply_and_notify(&self.store, &self.subscriptions, &update, self.config.max_store_entries);
+        apply_and_notify(&self.store, &self.subscriptions, &update, self.config.max_store_entries, &self.prefix_index);
         self.dispatch_update_async(update).await
     }
 
@@ -100,7 +100,7 @@ impl GossipAgent {
     pub async fn delete_async<K: Into<Arc<str>>>(&self, key: K) -> bool {
         let key: Arc<str> = key.into();
         let update = self.make_update(key, Bytes::new(), true);
-        apply_and_notify(&self.store, &self.subscriptions, &update, self.config.max_store_entries);
+        apply_and_notify(&self.store, &self.subscriptions, &update, self.config.max_store_entries, &self.prefix_index);
         self.dispatch_update_async(update).await
     }
 
@@ -130,11 +130,26 @@ impl GossipAgent {
     /// }
     /// ```
     pub fn scan_prefix(&self, prefix: &str) -> Vec<(Arc<str>, Bytes)> {
-        let guard = self.store.pin();
-        guard.iter()
-            .filter(|(k, v)| v.data.is_some() && k.starts_with(prefix))
-            .map(|(k, v)| (k.clone(), v.data.clone().unwrap()))
-            .collect()
+        let seg = prefix.find('/').map_or(prefix, |i| &prefix[..i]);
+        let store_guard = self.store.pin();
+        let idx_guard = self.prefix_index.pin();
+        if let Some(bucket) = idx_guard.get(seg) {
+            // O(|bucket|) fast path: only iterate keys in this segment.
+            bucket.pin().iter()
+                .filter_map(|(key, _)| {
+                    if !key.starts_with(prefix) { return None; }
+                    let entry = store_guard.get(key.as_ref())?;
+                    let data = entry.data.clone()?;
+                    Some((key.clone(), data))
+                })
+                .collect()
+        } else {
+            // Unknown prefix — full scan fallback.
+            store_guard.iter()
+                .filter(|(k, v)| v.data.is_some() && k.starts_with(prefix))
+                .map(|(k, v)| (k.clone(), v.data.clone().unwrap()))
+                .collect()
+        }
     }
 
     /// Subscribes to changes for `key`.

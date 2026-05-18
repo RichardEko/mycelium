@@ -276,6 +276,7 @@ impl GossipAgent {
         let dropped_frames    = self.dropped_frames.clone();
         let store             = self.store.clone();
         let subscriptions     = self.subscriptions.clone();
+        let prefix_index      = self.prefix_index.clone();
         let kind: Arc<str>    = kind.into();
         let kv_key: Arc<str>  = Arc::from(format!("svc/{}/{}", kind, node_id).as_str());
 
@@ -305,7 +306,7 @@ impl GossipAgent {
                             key: kv_key.clone(),
                             value: payload,
                         };
-                        apply_and_notify(&store, &subscriptions, &update, max_store_entries);
+                        apply_and_notify(&store, &subscriptions, &update, max_store_entries, &prefix_index);
                         dispatch_gossip_try_send(
                             &gossip_txs, WireMessage::Data(update),
                             node_id.id_hash(), ForwardHint::All, &dropped_frames,
@@ -325,7 +326,7 @@ impl GossipAgent {
                 key: kv_key.clone(),
                 value: Bytes::new(),
             };
-            apply_and_notify(&store, &subscriptions, &tombstone, max_store_entries);
+            apply_and_notify(&store, &subscriptions, &tombstone, max_store_entries, &prefix_index);
             dispatch_gossip_try_send(
                 &gossip_txs, WireMessage::Data(tombstone),
                 node_id.id_hash(), ForwardHint::All, &dropped_frames,

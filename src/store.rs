@@ -6,6 +6,50 @@ use std::sync::{Arc, OnceLock};
 use tokio::sync::watch;
 use tracing::warn;
 
+/// Secondary index for O(1) bucket + O(k) prefix scan.
+///
+/// Maps the first path segment of a key (e.g. `"grp"`, `"load"`, `"svc"`) to
+/// the set of live full keys under that segment. Only live (non-tombstone) keys
+/// are tracked; tombstoned keys are removed.
+///
+/// Updated atomically in [`apply_and_notify`] whenever the store changes. Allows
+/// [`GossipAgent::scan_prefix`] to skip the full store and iterate only the
+/// matching bucket — O(|bucket|) instead of O(|store|).
+pub(crate) type PrefixIndex = papaya::HashMap<Arc<str>, Arc<papaya::HashMap<Arc<str>, ()>>>;
+
+#[inline]
+fn prefix_seg(key: &str) -> Option<&str> {
+    key.find('/').map(|i| &key[..i])
+}
+
+/// Inserts `key` into the `seg` bucket, creating the bucket if absent.
+pub(crate) fn prefix_index_insert(index: &PrefixIndex, key: Arc<str>) {
+    let Some(seg) = prefix_seg(&key) else { return };
+    let guard = index.pin();
+    if let Some(bucket) = guard.get(seg) {
+        bucket.pin().insert(key, ());
+        return;
+    }
+    // Create and install a new bucket, tolerating a concurrent racer.
+    let new_bucket: Arc<papaya::HashMap<Arc<str>, ()>> = Arc::new(papaya::HashMap::new());
+    guard.compute(Arc::from(seg), |existing| match existing {
+        Some(_) => papaya::Operation::Abort(()),
+        None    => papaya::Operation::Insert(new_bucket.clone()),
+    });
+    // After compute, the bucket definitely exists (ours or the racer's).
+    if let Some(bucket) = guard.get(seg) {
+        bucket.pin().insert(key, ());
+    }
+}
+
+/// Removes `key` from the `seg` bucket (no-op if absent).
+pub(crate) fn prefix_index_remove(index: &PrefixIndex, key: &Arc<str>) {
+    let Some(seg) = prefix_seg(key) else { return };
+    if let Some(bucket) = index.pin().get(seg) {
+        bucket.pin().remove(key.as_ref());
+    }
+}
+
 static KEY_POOL: OnceLock<papaya::HashMap<Arc<str>, Arc<str>>> = OnceLock::new();
 
 fn key_pool() -> &'static papaya::HashMap<Arc<str>, Arc<str>> {
@@ -114,7 +158,8 @@ pub(crate) fn apply_to_store(store: &papaya::HashMap<Arc<str>, StoreEntry>, upda
     matches!(result, papaya::Compute::Inserted(..) | papaya::Compute::Updated { .. })
 }
 
-/// Applies `update` to the store, then notifies any subscriber watching that key.
+/// Applies `update` to the store, maintains the prefix index, then notifies any
+/// subscriber watching that key.
 ///
 /// When `max_store_entries > 0` and the store's current size meets or exceeds that
 /// limit, live (non-tombstone) writes are silently dropped. Tombstone writes are
@@ -124,6 +169,7 @@ pub(crate) fn apply_and_notify(
     subs:              &papaya::HashMap<Arc<str>, watch::Sender<Option<Bytes>>>,
     update:            &GossipUpdate,
     max_store_entries: usize,
+    prefix_index:      &PrefixIndex,
 ) {
     if max_store_entries > 0 && !update.is_tombstone && store.len() >= max_store_entries {
         warn!(
@@ -134,6 +180,12 @@ pub(crate) fn apply_and_notify(
         return;
     }
     if apply_to_store(store, update) {
+        // Maintain the secondary prefix index.
+        if update.is_tombstone {
+            prefix_index_remove(prefix_index, &update.key);
+        } else {
+            prefix_index_insert(prefix_index, update.key.clone());
+        }
         let guard = subs.pin();
         if let Some(tx) = guard.get(&update.key) {
             if tx.is_closed() {

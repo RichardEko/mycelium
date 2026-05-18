@@ -79,6 +79,7 @@ impl GossipAgent {
             use_trust_slices,
             max_store_entries:   self.config.max_store_entries,
             max_abstain_ballots,
+            prefix_index:        self.prefix_index.clone(),
         }
     }
 }

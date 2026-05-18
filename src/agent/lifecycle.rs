@@ -97,6 +97,7 @@ impl GossipAgent {
             max_peers:           self.config.max_peers,
             writer_idle_timeout: Duration::from_secs(self.config.writer_idle_timeout_secs),
             max_store_entries:   self.config.max_store_entries,
+            prefix_index:        self.prefix_index.clone(),
         };
 
         let mut new_handles = Vec::with_capacity(n_listeners);

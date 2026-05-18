@@ -3,7 +3,7 @@ use crate::framing::ForwardHint;
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
 use crate::signal::{Boundary, SignalHandlers};
-use crate::store::StoreEntry;
+use crate::store::{PrefixIndex, StoreEntry};
 use crate::writer::WriterEntry;
 use bytes::Bytes;
 use dashmap::DashMap;
@@ -122,6 +122,9 @@ pub struct GossipAgent {
     pub(super) signal_handlers: Arc<SignalHandlers>,
     /// Cumulative count of gossip frames silently dropped due to full channels.
     pub(super) dropped_frames: Arc<AtomicU64>,
+    /// Secondary index: first path segment → live key set.
+    /// Maintained by `apply_and_notify`; used by `scan_prefix` for O(bucket) scans.
+    pub(super) prefix_index: Arc<PrefixIndex>,
 }
 
 impl GossipAgent {
@@ -176,6 +179,7 @@ impl GossipAgent {
             signal_boundary: Arc::new(RwLock::new(Boundary::new(node_id))),
             signal_handlers: Arc::new(SignalHandlers::new()),
             dropped_frames: Arc::new(AtomicU64::new(0)),
+            prefix_index: Arc::new(PrefixIndex::new()),
         }
     }
 }

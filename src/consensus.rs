@@ -33,7 +33,7 @@ use crate::framing::{
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
 use crate::signal::{decode_load_state, kv_ns, Signal, SignalHandlers, SignalScope, Boundary};
-use crate::store::{apply_and_notify, StoreEntry};
+use crate::store::{apply_and_notify, PrefixIndex, StoreEntry};
 use ahash::{AHashMap, AHashSet};
 use bytes::{BufMut, Bytes, BytesMut};
 use parking_lot::RwLock;
@@ -269,6 +269,7 @@ pub(crate) struct ConsensusEngine {
     pub(crate) use_trust_slices: bool,
     pub(crate) max_store_entries:   usize,
     pub(crate) max_abstain_ballots: u32,
+    pub(crate) prefix_index:        Arc<PrefixIndex>,
 }
 
 impl ConsensusEngine {
@@ -299,7 +300,7 @@ impl ConsensusEngine {
     /// Uses `try_send` for gossip dispatch — dropped frames recovered via anti-entropy.
     fn kv_set(&self, key: String, value: Bytes) {
         let upd = self.make_kv_update(Arc::from(key.as_str()), value);
-        apply_and_notify(&self.store, &self.subscriptions, &upd, self.max_store_entries);
+        apply_and_notify(&self.store, &self.subscriptions, &upd, self.max_store_entries, &self.prefix_index);
         dispatch_gossip_try_send(
             &self.gossip_txs, WireMessage::Data(upd),
             self.node_id.id_hash(), ForwardHint::All, &self.dropped_frames,
@@ -309,7 +310,7 @@ impl ConsensusEngine {
     /// Like `kv_set` but awaits channel capacity (used by the proposer).
     async fn set_async(&self, key: &str, value: Bytes) {
         let upd = self.make_kv_update(Arc::from(key), value);
-        apply_and_notify(&self.store, &self.subscriptions, &upd, self.max_store_entries);
+        apply_and_notify(&self.store, &self.subscriptions, &upd, self.max_store_entries, &self.prefix_index);
         dispatch_gossip_send(
             &self.gossip_txs, WireMessage::Data(upd),
             self.node_id.id_hash(), ForwardHint::All,

@@ -142,6 +142,7 @@ impl GossipAgent {
         let dropped_frames   = self.dropped_frames.clone();
         let store            = self.store.clone();
         let subscriptions    = self.subscriptions.clone();
+        let prefix_index     = self.prefix_index.clone();
 
         let clamped_threshold = hint.threshold.clamp(0.4, 0.95);
 
@@ -205,7 +206,7 @@ impl GossipAgent {
                                         written_at_ms,
                                     }),
                                 };
-                                apply_and_notify(&store, &subscriptions, &pheromone_update, max_store_entries);
+                                apply_and_notify(&store, &subscriptions, &pheromone_update, max_store_entries, &prefix_index);
                                 dispatch_gossip_try_send(
                                     &gossip_txs, WireMessage::Data(pheromone_update),
                                     node_id.id_hash(), ForwardHint::All, &dropped_frames,
@@ -235,7 +236,7 @@ impl GossipAgent {
                                 key:          load_key.clone(),
                                 value:        Bytes::new(),
                             };
-                            apply_and_notify(&store, &subscriptions, &tombstone_update, max_store_entries);
+                            apply_and_notify(&store, &subscriptions, &tombstone_update, max_store_entries, &prefix_index);
                             dispatch_gossip_try_send(
                                 &gossip_txs, WireMessage::Data(tombstone_update),
                                 node_id.id_hash(), ForwardHint::All, &dropped_frames,

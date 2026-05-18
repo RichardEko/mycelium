@@ -8,7 +8,7 @@ use crate::signal::{Boundary, Signal, SignalHandlers, SignalScope};
 use crate::store::{intern_key, store_hash};
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
-use crate::store::{apply_and_notify, StoreEntry};
+use crate::store::{apply_and_notify, PrefixIndex, StoreEntry};
 use crate::writer::{get_or_spawn_writer, request_state, WriterEntry};
 use bytes::{BufMut, Bytes, BytesMut};
 use dashmap::DashMap;
@@ -56,6 +56,8 @@ pub(crate) struct ConnContext {
     pub(crate) writer_idle_timeout: Duration,
     /// Max live KV entries; forwarded to `apply_and_notify`. 0 = unlimited.
     pub(crate) max_store_entries: usize,
+    /// Secondary prefix index; forwarded to `apply_and_notify`.
+    pub(crate) prefix_index:      Arc<PrefixIndex>,
 }
 
 pub(crate) async fn handle_connection(
@@ -67,7 +69,7 @@ pub(crate) async fn handle_connection(
         node_id, store, peers, gossip_txs, seen, shutdown, max_ttl,
         subscriptions, current_ts, peer_writers, writer_depth, backoff, n_shards,
         intern_keys, intern_max_keys, signal_boundary, signal_handlers, max_peers,
-        writer_idle_timeout, max_store_entries,
+        writer_idle_timeout, max_store_entries, prefix_index,
     } = ctx;
     let mut socket = BufReader::with_capacity(8_192, socket);
     let mut shutdown_rx = shutdown.subscribe();
@@ -246,7 +248,7 @@ pub(crate) async fn handle_connection(
                         key,
                         value:        entry.value,
                     };
-                    apply_and_notify(&store, &subscriptions, &update, max_store_entries);
+                    apply_and_notify(&store, &subscriptions, &update, max_store_entries, &prefix_index);
                 }
             }
 
@@ -324,7 +326,7 @@ pub(crate) async fn handle_connection(
                     }
                 }
                 if intern_keys { update.key = intern_key(update.key, intern_max_keys); }
-                apply_and_notify(&store, &subscriptions, &update, max_store_entries);
+                apply_and_notify(&store, &subscriptions, &update, max_store_entries, &prefix_index);
 
                 // Push-based boundary sync: if the received key is grp/{group}/{this_node},
                 // update the boundary immediately rather than waiting for the GC-tick reconcile.
