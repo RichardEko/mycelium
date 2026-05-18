@@ -77,8 +77,9 @@ mod tests {
     use super::*;
     use crate::connection::ConnContext;
     use crate::framing::{
-        bincode_cfg, read_frame, write_frame, GossipUpdate, SyncEntry, WireMessage,
-        N_GOSSIP_SHARDS, NONCE_OFFSET, TTL_OFFSET,
+        bincode_cfg, bincode_cfg_prev, read_frame, write_frame, GossipUpdate, SyncEntry,
+        WireMessage, WireMessageV6,
+        N_GOSSIP_SHARDS, NONCE_OFFSET, PREV_WIRE_VERSION, TTL_OFFSET,
     };
     use crate::seen::ShardedSeen;
     use crate::store::{apply_to_store, store_hash, StoreEntry};
@@ -121,6 +122,19 @@ mod tests {
     async fn send_wire(writer: &mut TcpStream, msg: &WireMessage) {
         let data = bincode::serde::encode_to_vec(msg, bincode_cfg()).unwrap();
         write_frame(writer, &data).await.unwrap();
+    }
+
+    /// Send a raw frame tagged with `PREV_WIRE_VERSION` (v6), bypassing `write_frame`
+    /// which always stamps `WIRE_VERSION`. Used to test backward-compat decode paths.
+    async fn send_wire_v6(writer: &mut TcpStream, msg: &WireMessageV6) {
+        use tokio::io::AsyncWriteExt;
+        let payload = bincode::serde::encode_to_vec(msg, bincode_cfg_prev()).unwrap();
+        let total = (1 + payload.len()) as u32;
+        let mut header = [0u8; 5];
+        header[..4].copy_from_slice(&total.to_be_bytes());
+        header[4] = PREV_WIRE_VERSION;
+        writer.write_all(&header).await.unwrap();
+        writer.write_all(&payload).await.unwrap();
     }
 
     fn data_update(key: &str, value: &[u8], nonce: u64, is_tombstone: bool) -> GossipUpdate {
@@ -1150,6 +1164,59 @@ mod tests {
         }
     }
 
+    // A v6 StateRequest (no store_hash bytes) must be decoded correctly and trigger
+    // a full StateResponse — not a decode error that silently drops the request.
+    #[tokio::test]
+    async fn test_v6_state_request_decoded_as_no_digest() {
+        let store: Arc<papaya::HashMap<Arc<str>, StoreEntry>> = Arc::new(papaya::HashMap::new());
+        store.pin().insert(
+            Arc::from("v6_key"),
+            StoreEntry { data: Some(Bytes::from_static(b"v6_val")), timestamp: 10 },
+        );
+
+        let response_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let sender_port = response_listener.local_addr().unwrap().port();
+        let sender_id = NodeId::new("127.0.0.1", sender_port).unwrap();
+
+        let peers: Arc<papaya::HashMap<NodeId, Instant>> = Arc::new(papaya::HashMap::new());
+        peers.pin().insert(sender_id.clone(), Instant::now());
+
+        let (mut writer, reader) = loopback_pair().await;
+        let (tx, _rx) = mpsc::channel(10);
+        let (_shutdown, _handle) = spawn_handler(
+            reader, store, peers, tx,
+            Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)),
+            GossipConfig::default().default_ttl,
+        );
+
+        let accept_task = tokio::spawn(async move {
+            let (sock, _) = response_listener.accept().await.unwrap();
+            sock
+        });
+
+        // Send a v6-format StateRequest (no store_hash field).
+        send_wire_v6(&mut writer, &WireMessageV6::StateRequest { sender: sender_id }).await;
+
+        let mut response_sock = accept_task.await.unwrap();
+        let mut buf = BytesMut::new();
+        tokio::time::timeout(
+            Duration::from_millis(500),
+            read_frame(&mut response_sock, &mut buf),
+        )
+        .await
+        .expect("timed out — v6 StateRequest was likely dropped instead of decoded")
+        .expect("read_frame error");
+
+        let (msg, _): (WireMessage, _) = bincode::serde::decode_from_slice(&buf, bincode_cfg()).unwrap();
+        match msg {
+            WireMessage::StateResponse { entries } => assert!(
+                !entries.is_empty(),
+                "v6 StateRequest (store_hash=0) must trigger full snapshot, got empty response",
+            ),
+            other => panic!("expected StateResponse, got {:?}", other),
+        }
+    }
+
     // ── liveness flags ────────────────────────────────────────────────────────
 
     #[tokio::test]
@@ -2172,6 +2239,7 @@ mod tests {
             quorum_size:    2,
             phase1_timeout: Duration::from_millis(50),
             max_ballots:    1,
+            ..ConsensusConfig::default()
         };
         let result = agent.group_propose("cg2", "sl2", Bytes::from_static(b"v2"), config).await;
         assert!(
@@ -2208,12 +2276,81 @@ mod tests {
             quorum_size:    2,
             phase1_timeout: Duration::from_secs(3),
             max_ballots:    3,
+            ..ConsensusConfig::default()
         };
         let result = agent_a.group_propose("cgrp", "slA", Bytes::from_static(b"agreed"), config).await;
         assert!(
             matches!(result, ConsensusResult::Committed { .. }),
             "two-node quorum should commit; got {:?}", result
         );
+        agent_a.shutdown().await;
+        agent_b.shutdown().await;
+    }
+
+    // Two agents propose to the same slot concurrently. With ballot jitter, one
+    // should Commit and the other Superseded. Neither should Timeout.
+    #[tokio::test]
+    async fn test_consensus_simultaneous_proposers_resolve() {
+        let port_a = alloc_port();
+        let port_b = alloc_port();
+
+        let mut cfg_a = GossipConfig::default();
+        cfg_a.bind_port                  = port_a;
+        cfg_a.health_check_max_jitter_ms = 50;
+        cfg_a.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_b).unwrap()];
+
+        let mut cfg_b = GossipConfig::default();
+        cfg_b.bind_port                  = port_b;
+        cfg_b.health_check_max_jitter_ms = 50;
+        cfg_b.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_a).unwrap()];
+
+        let agent_a = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port_a).unwrap(), cfg_a));
+        let agent_b = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port_b).unwrap(), cfg_b));
+        agent_a.start().await.unwrap();
+        agent_b.start().await.unwrap();
+        time::sleep(Duration::from_millis(150)).await;
+
+        let _la = agent_a.start_consensus_listener();
+        let _lb = agent_b.start_consensus_listener();
+
+        // quorum_size=1 so each agent self-commits; the second proposer will find the
+        // commit_key written by the first and return Superseded on the next ballot check.
+        // A tiny stagger ensures A commits before B polls the commit_key.
+        let config = ConsensusConfig {
+            quorum_size:            1,
+            phase1_timeout:         Duration::from_millis(500),
+            max_ballots:            5,
+            ballot_retry_jitter_ms: 0, // disabled — test relies on commit_key propagation, not jitter
+        };
+
+        let aa = agent_a.clone();
+        let cfg_a2 = config.clone();
+        let task_a = tokio::spawn(async move {
+            aa.system_propose("sim_sl", Bytes::from_static(b"val_a"), cfg_a2).await
+        });
+        // Small stagger gives A time to commit and gossip the commit_key to B.
+        time::sleep(Duration::from_millis(50)).await;
+        let bb = agent_b.clone();
+        let cfg_b2 = config.clone();
+        let task_b = tokio::spawn(async move {
+            bb.system_propose("sim_sl", Bytes::from_static(b"val_b"), cfg_b2).await
+        });
+
+        let (res_a, res_b) = tokio::join!(task_a, task_b);
+        let res_a = res_a.unwrap();
+        let res_b = res_b.unwrap();
+
+        assert!(
+            matches!(res_a, ConsensusResult::Committed { .. }),
+            "first proposer must commit; got {:?}", res_a,
+        );
+        assert!(
+            matches!(res_b, ConsensusResult::Superseded { .. }),
+            "second proposer must see commit and return Superseded; got {:?}", res_b,
+        );
+        let timed_out = [&res_a, &res_b].iter().any(|r| matches!(r, ConsensusResult::Timeout { .. }));
+        assert!(!timed_out, "neither proposer should time out; got a={:?} b={:?}", res_a, res_b);
+
         agent_a.shutdown().await;
         agent_b.shutdown().await;
     }
@@ -2290,6 +2427,7 @@ mod tests {
         cfg_a.bind_port                    = port_a;
         cfg_a.reconnect_backoff_secs       = 1;
         cfg_a.health_check_interval_secs   = 1;
+        cfg_a.health_check_max_jitter_ms   = 50;
 
         let agent_a = GossipAgent::new(NodeId::new("127.0.0.1", port_a).unwrap(), cfg_a);
         agent_a.start().await.unwrap();
@@ -2300,19 +2438,18 @@ mod tests {
         assert!(matches!(result, ConsensusResult::Committed { .. }));
 
         // B starts after A has already committed — anti-entropy must deliver the value.
-        // health_check_interval_secs=1 reduces jitter to 0–500ms so the 600ms pre-sleep
-        // reliably covers the window before the first StateRequest is sent.
         let mut cfg_b = GossipConfig::default();
-        cfg_b.bind_port                    = port_b;
-        cfg_b.reconnect_backoff_secs       = 1;
-        cfg_b.health_check_interval_secs   = 1;
+        cfg_b.bind_port                       = port_b;
+        cfg_b.reconnect_backoff_secs          = 1;
+        cfg_b.health_check_interval_secs      = 1;
+        cfg_b.health_check_max_jitter_ms      = 50;
         cfg_b.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_a).unwrap()];
         let agent_b = GossipAgent::new(NodeId::new("127.0.0.1", port_b).unwrap(), cfg_b);
         agent_b.start().await.unwrap();
 
-        // Give B's health monitor time to pass its jitter (0–500 ms) and send
+        // Give B's health monitor time to pass its jitter (0–50 ms) and send
         // the initial StateRequest to A before we start polling.
-        time::sleep(Duration::from_millis(600)).await;
+        time::sleep(Duration::from_millis(100)).await;
         poll_until(|| agent_b.consensus_get("late_sl").is_some(), 5_000).await;
         assert_eq!(
             agent_b.consensus_get("late_sl"),

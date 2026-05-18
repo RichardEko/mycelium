@@ -128,6 +128,14 @@ pub struct GossipConfig {
     /// so shards can determine the member set. When `false` (default), all signals fan
     /// out to all forwarding targets — the pre-Fix-2 behaviour.
     pub group_aware_forwarding: bool,
+    /// Hard cap on the one-shot startup jitter before the first health-check ping (ms).
+    ///
+    /// Jitter prevents a thundering herd when many nodes start simultaneously. The default
+    /// (`0`) uses `[0, health_check_interval_secs × 500)` ms — up to half the interval,
+    /// spreading a cluster's first pings across a full period. Set to a small value (e.g.
+    /// `50`) in test configurations to reduce stabilisation delays without removing jitter
+    /// entirely.
+    pub health_check_max_jitter_ms: u64,
 }
 
 impl Default for GossipConfig {
@@ -156,6 +164,7 @@ impl Default for GossipConfig {
             max_peers: i64::MAX as usize,
             writer_idle_timeout_secs: 0,
             group_aware_forwarding: false,
+            health_check_max_jitter_ms: 0,
         }
     }
 }
@@ -268,7 +277,7 @@ impl GossipConfig {
     /// **Note:** this method does _not_ call [`validate`](Self::validate). Callers
     /// must invoke `validate()` separately after all overrides are applied.
     ///
-    /// All 20 fields can be overridden: `GOSSIP_BIND_ADDRESS`, `GOSSIP_BIND_PORT`,
+    /// All 21 fields can be overridden: `GOSSIP_BIND_ADDRESS`, `GOSSIP_BIND_PORT`,
     /// `GOSSIP_PROPAGATION_WINDOW_SECS`, `GOSSIP_HEALTH_CHECK_INTERVAL_SECS`,
     /// `GOSSIP_DEFAULT_TTL`, `GOSSIP_MAX_CONNECTIONS`, `GOSSIP_WRITER_CHANNEL_DEPTH`,
     /// `GOSSIP_MAX_FORWARDING_PEERS`, `GOSSIP_RECONNECT_BACKOFF_SECS`,
@@ -278,7 +287,8 @@ impl GossipConfig {
     /// `GOSSIP_BOOTSTRAP_PEERS` (comma-separated
     /// `ip:port` list), `GOSSIP_PING_PEER_SAMPLE_SIZE`, `GOSSIP_TCP_ACCEPT_BACKLOG`,
     /// `GOSSIP_MAX_PEERS`, `GOSSIP_WRITER_IDLE_TIMEOUT_SECS`,
-    /// `GOSSIP_GROUP_AWARE_FORWARDING` (`true`/`false`/`1`/`0`).
+    /// `GOSSIP_GROUP_AWARE_FORWARDING` (`true`/`false`/`1`/`0`),
+    /// `GOSSIP_HEALTH_CHECK_MAX_JITTER_MS`.
     pub fn apply_env_overrides(&mut self) -> Result<(), GossipError> {
         if let Ok(v) = env::var("GOSSIP_BIND_ADDRESS") {
             self.bind_address = v;
@@ -358,6 +368,9 @@ impl GossipConfig {
                     "GOSSIP_GROUP_AWARE_FORWARDING must be true/false/1/0".into(),
                 )),
             };
+        }
+        if let Ok(v) = env::var("GOSSIP_HEALTH_CHECK_MAX_JITTER_MS") {
+            self.health_check_max_jitter_ms = v.parse().map_err(GossipError::Parse)?;
         }
         Ok(())
     }

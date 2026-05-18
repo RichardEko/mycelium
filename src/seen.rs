@@ -71,9 +71,17 @@ impl ShardedSeen {
                 .iter()
                 .filter_map(|(&k, &v)| if v <= cutoff { Some(k) } else { None })
                 .collect();
-            removed += stale.len();
             for key in stale {
-                guard.remove(&key);
+                // Atomic check-and-remove: only evict if the stored timestamp is still
+                // ≤ cutoff. A concurrent is_duplicate() that refreshed the timestamp to a
+                // newer value aborts the remove rather than evicting a live entry.
+                let result = guard.compute(key, |existing| match existing {
+                    Some((_, &v)) if v <= cutoff => papaya::Operation::Remove,
+                    _ => papaya::Operation::Abort(()),
+                });
+                if matches!(result, papaya::Compute::Removed(..)) {
+                    removed += 1;
+                }
             }
         }
         removed

@@ -10,7 +10,7 @@ use std::{
 use tokio::{
     io::{AsyncWriteExt, BufWriter},
     net::TcpStream,
-    sync::{mpsc, mpsc::error::TrySendError, watch},
+    sync::{mpsc, watch},
     task::JoinHandle,
     time as ttime,
 };
@@ -216,9 +216,10 @@ pub(crate) fn request_state(
     }
     let data: Bytes = buf.freeze();
     let tx = get_or_spawn_writer(peer, peer_writers, writer_depth, backoff, idle_timeout, shutdown_tx);
-    match tx.try_send(data) {
-        Ok(()) => {}
-        Err(TrySendError::Full(_)) => warn!("StateRequest channel full for {}", peer),
-        Err(TrySendError::Closed(_)) => warn!("StateRequest writer for {} has exited", peer),
-    }
+    let peer_clone = peer.clone();
+    tokio::spawn(async move {
+        if tx.send(data).await.is_err() {
+            warn!("StateRequest writer for {} has exited; state sync skipped", peer_clone);
+        }
+    });
 }

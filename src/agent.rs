@@ -332,7 +332,8 @@ impl GossipAgent {
         let idle_timeout         = Duration::from_secs(self.config.writer_idle_timeout_secs);
         let peer_eviction_intervals = self.config.peer_eviction_intervals;
         let health_monitor_alive = self.health_monitor_alive.clone();
-        let ping_peer_sample_size = self.config.ping_peer_sample_size;
+        let ping_peer_sample_size    = self.config.ping_peer_sample_size;
+        let health_check_max_jitter  = self.config.health_check_max_jitter_ms;
 
         let handle = tokio::spawn(run_health_monitor(
             node_id,
@@ -350,6 +351,7 @@ impl GossipAgent {
             peer_eviction_intervals,
             health_monitor_alive,
             ping_peer_sample_size,
+            health_check_max_jitter,
         ));
         self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).push(handle);
     }
@@ -367,11 +369,13 @@ impl GossipAgent {
         let peer_writers      = self.peer_writers.clone();
         let gc_alive          = self.gc_alive.clone();
         let signal_handlers   = self.signal_handlers.clone();
+        let intern_max_keys   = self.config.intern_max_keys;
 
         let handle = tokio::spawn(run_gc_task(
             store, subscriptions, shutdown_tx,
             interval_secs, default_ttl, propagation, live_entries,
             seen, max_seen_entries, gc_alive, signal_handlers, peer_writers,
+            intern_max_keys,
         ));
         self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).push(handle);
     }
@@ -1363,6 +1367,13 @@ impl GossipAgent {
         let mut ballot = self.read_ballot(&ballot_key) + 1;
 
         for _attempt in 0..config.max_ballots {
+            if self.get(&commit_key).is_some() {
+                return ConsensusResult::Superseded {
+                    slot,
+                    ballot: self.read_ballot(&ballot_key),
+                };
+            }
+
             let _ = self.set_async(ballot_key.as_str(), encode_ballot(ballot)).await;
 
             // Register before emitting so no vote/nack can arrive before we listen.
@@ -1442,6 +1453,10 @@ impl GossipAgent {
                 };
             }
 
+            if config.ballot_retry_jitter_ms > 0 {
+                let jitter = fastrand::u64(0..config.ballot_retry_jitter_ms);
+                tokio::time::sleep(Duration::from_millis(jitter)).await;
+            }
             ballot = nack_ballot.max(self.read_ballot(&ballot_key)).max(ballot) + 1;
         }
 
@@ -1847,15 +1862,17 @@ async fn run_health_monitor(
     backoff:               Duration,
     idle_timeout:          Duration,
     peer_eviction_intervals: u64,
-    health_monitor_alive:  Arc<AtomicBool>,
-    ping_peer_sample_size: usize,
+    health_monitor_alive:    Arc<AtomicBool>,
+    ping_peer_sample_size:   usize,
+    health_check_max_jitter: u64,
 ) {
     let bootstrap_set: AHashSet<NodeId> = bootstrap_peers.iter().cloned().collect();
     let mut shutdown_rx = shutdown_tx.subscribe();
     health_monitor_alive.store(true, Ordering::Relaxed);
     let _alive_guard = AliveGuard(health_monitor_alive.clone());
 
-    let jitter_ms = fastrand::u64(0..interval_secs * 500);
+    let max_jitter = if health_check_max_jitter > 0 { health_check_max_jitter } else { interval_secs * 500 };
+    let jitter_ms = fastrand::u64(0..max_jitter.max(1));
     tokio::select! {
         _ = time::sleep(Duration::from_millis(jitter_ms)) => {}
         _ = shutdown_rx.wait_for(|v| *v) => return,
@@ -2045,6 +2062,7 @@ async fn run_gc_task(
     gc_alive:          Arc<AtomicBool>,
     signal_handlers:   Arc<crate::signal::SignalHandlers>,
     peer_writers:      Arc<DashMap<NodeId, WriterEntry>>,
+    intern_max_keys:   usize,
 ) {
     gc_alive.store(true, Ordering::Relaxed);
     let _alive_guard = AliveGuard(gc_alive.clone());
@@ -2091,13 +2109,22 @@ async fn run_gc_task(
                 }
                 live_entries.store(live, Ordering::Relaxed);
 
-                // Key intern pool monitoring — warn when it grows beyond a typical bounded set.
+                // Key intern pool monitoring.
+                // Threshold: 2× the configured cap (if set) or 100 000 (if uncapped).
+                // Fires once per GC interval so operators have a proactive signal without
+                // needing to poll system_stats().
                 let pool_len = intern_pool_len();
-                if pool_len > 50_000 {
+                let pool_warn = if intern_max_keys > 0 {
+                    intern_max_keys.saturating_mul(2)
+                } else {
+                    100_000
+                };
+                if pool_len > pool_warn {
                     warn!(
-                        "Key intern pool has {} entries — consider setting \
-                         intern_keys = false if keys are not from a bounded set",
-                        pool_len
+                        "Key intern pool has {} entries (warn threshold {}). \
+                         High key churn detected — set intern_max_keys or intern_keys=false \
+                         to prevent unbounded memory growth.",
+                        pool_len, pool_warn
                     );
                 }
 
