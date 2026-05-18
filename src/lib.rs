@@ -2838,4 +2838,33 @@ mod tests {
         agent_a.shutdown().await;
         agent_b.shutdown().await;
     }
+
+    #[test]
+    fn test_warm_quorum_seeds_sender_log() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let port_a = alloc_port();
+        let port_b = alloc_port();
+        let node_a = NodeId::new("127.0.0.1", port_a).unwrap();
+        let node_b = NodeId::new("127.0.0.1", port_b).unwrap();
+
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = port_a;
+        cfg.signal_window_secs = 60;
+        let agent = GossipAgent::new(node_a, cfg);
+
+        // Write a sys/quorum entry 5 s in the past (well within the 60 s window).
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH).unwrap_or_default()
+            .as_millis() as u64;
+        let written_at_ms = now_ms - 5_000;
+        let key = format!("sys/quorum/my.kind/{}", node_b);
+        let _ = agent.set(key, Bytes::copy_from_slice(&written_at_ms.to_le_bytes()));
+
+        // Before seeding, the in-memory sender_log is empty.
+        assert!(!agent.quorum("my.kind", 1, Duration::from_secs(60)));
+
+        // After warm_quorum_from_layer1, the entry is seeded and quorum passes.
+        agent.warm_quorum_from_layer1();
+        assert!(agent.quorum("my.kind", 1, Duration::from_secs(60)));
+    }
 }

@@ -50,6 +50,7 @@ impl GossipAgent {
             }
         }
         self.rehydrate_boundary_from_kv();
+        self.warm_quorum_from_layer1();
         self.start_listener(bind_addr).await.inspect_err(|_| {
             self.state.store(STATE_IDLE, Ordering::Release);
         })?;
@@ -187,6 +188,34 @@ impl GossipAgent {
             self.config.signal_window_secs,
         ));
         self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).push(handle);
+    }
+
+    /// Seeds `signal_handlers.sender_log` from `sys/quorum/` Layer I entries written
+    /// during the previous run. Called once in `start()` so `quorum()` returns a correct
+    /// result on the first call after a process restart rather than always returning false.
+    pub(crate) fn warm_quorum_from_layer1(&self) {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        use crate::node_id::NodeId;
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let window_ms = self.config.signal_window_secs * 1000;
+        let prefix = "sys/quorum/";
+        for (key, bytes) in self.scan_prefix(prefix) {
+            let Some(tail) = key.strip_prefix(prefix) else { continue };
+            // Key format: sys/quorum/{kind}/{sender_id}
+            // rfind('/') splits on the last segment, which is always the sender_id.
+            let Some(slash) = tail.rfind('/') else { continue };
+            let kind: std::sync::Arc<str> = std::sync::Arc::from(&tail[..slash]);
+            let sender_str = &tail[slash + 1..];
+            let Ok(sender) = sender_str.parse::<NodeId>() else { continue };
+            if bytes.len() < 8 { continue; }
+            let written_at_ms = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+            let age_ms = now_ms.saturating_sub(written_at_ms);
+            if age_ms > window_ms { continue; }
+            self.signal_handlers.seed_sender_log(kind, sender, age_ms);
+        }
     }
 
     pub(crate) fn rehydrate_boundary_from_kv(&self) {

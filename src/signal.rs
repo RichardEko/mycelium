@@ -313,6 +313,23 @@ impl SignalHandlers {
         });
     }
 
+    /// Seeds the sender log with a past entry reconstructed from a `sys/quorum/` Layer I record.
+    ///
+    /// Called from `GossipAgent::warm_quorum_from_layer1()` at startup to restore quorum
+    /// state across process restarts. Entries older than `sender_log_window` are silently
+    /// discarded; entries within the window are inserted with an approximated `Instant`
+    /// so `quorum()` counts them correctly on the first call.
+    pub(crate) fn seed_sender_log(&self, kind: Arc<str>, sender: NodeId, age_ms: u64) {
+        if age_ms > self.sender_log_window.as_millis() as u64 { return; }
+        let received_at = Instant::now()
+            .checked_sub(Duration::from_millis(age_ms))
+            .unwrap_or_else(Instant::now);
+        self.sender_log
+            .entry(kind)
+            .or_default()
+            .push_back((sender, received_at));
+    }
+
     /// Returns `true` when at least `min_senders` distinct [`NodeId`]s have had a
     /// signal of `kind` delivered within `window`.
     ///
