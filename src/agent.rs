@@ -1395,9 +1395,25 @@ impl GossipAgent {
             let defer_ms = (local_opacity * config.ballot_retry_jitter_ms as f32 * 2.0) as u64;
             tokio::time::sleep(Duration::from_millis(defer_ms)).await;
         }
-        let members = self.scan_prefix(&format!("grp/{}/", group)).len().max(1);
-        let quorum  = compute_quorum_size(config.quorum_size, members);
-        self.make_consensus_engine()
+        let raw_members = self.scan_prefix(&format!("grp/{}/", group)).len().max(1);
+        let active_members = if config.count_opaque_as_absent {
+            let now_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+            let freshness_ms = self.config.health_check_interval_secs * 2 * 1000;
+            let opaque_count = self.scan_prefix(kv_ns::LOAD)
+                .into_iter()
+                .filter(|(_, bytes)| {
+                    decode_load_state(bytes)
+                        .map(|s| s.is_opaque && now_ms.saturating_sub(s.written_at_ms) <= freshness_ms)
+                        .unwrap_or(false)
+                })
+                .count();
+            raw_members.saturating_sub(opaque_count).max(1)
+        } else {
+            raw_members
+        };
+        let quorum  = compute_quorum_size(config.quorum_size, active_members);
+        self.make_consensus_engine(config.abstain_when_opaque)
             .propose(SignalScope::Group(Arc::from(group)), Arc::from(slot), value, quorum, config)
             .await
     }
@@ -1420,7 +1436,7 @@ impl GossipAgent {
         }
         let n_nodes = (self.system_stats().peers + 1).max(1);
         let quorum  = compute_quorum_size(config.quorum_size, n_nodes);
-        self.make_consensus_engine()
+        self.make_consensus_engine(config.abstain_when_opaque)
             .propose(SignalScope::System, Arc::from(slot), value, quorum, config)
             .await
     }
@@ -1431,13 +1447,16 @@ impl GossipAgent {
     /// Nodes that do not call this still receive committed values via anti-entropy
     /// KV sync but their votes will not be counted.
     ///
+    /// `config.abstain_when_opaque` controls whether this voter silently drops
+    /// PROPOSE messages while its pheromone trail shows `is_opaque: true`.
+    ///
     /// Returns a [`ConsensusHandle`] whose drop stops the task. The task also
     /// exits on [`shutdown`](Self::shutdown).
-    pub fn start_consensus_listener(&self) -> ConsensusHandle {
+    pub fn start_consensus_listener(&self, config: ConsensusConfig) -> ConsensusHandle {
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
         let shutdown_rx = self.shutdown_tx.subscribe();
 
-        let handle = self.make_consensus_engine().spawn_listener(cancel_rx, shutdown_rx);
+        let handle = self.make_consensus_engine(config.abstain_when_opaque).spawn_listener(cancel_rx, shutdown_rx);
         {
             let mut handles = self.task_handles.lock().unwrap_or_else(|e| e.into_inner());
             handles.retain(|h| !h.is_finished());
@@ -1528,18 +1547,19 @@ impl GossipAgent {
 
     // ── Consensus internals ───────────────────────────────────────────────────
 
-    fn make_consensus_engine(&self) -> ConsensusEngine {
+    fn make_consensus_engine(&self, abstain_when_opaque: bool) -> ConsensusEngine {
         ConsensusEngine {
-            node_id:         self.node_id.clone(),
-            seen:            self.seen.clone(),
-            current_ts:      self.current_ts.clone(),
-            signal_boundary: self.signal_boundary.clone(),
-            signal_handlers: self.signal_handlers.clone(),
-            gossip_txs:      self.gossip_txs.clone(),
-            default_ttl:     self.config.default_ttl,
-            dropped_frames:  self.dropped_frames.clone(),
-            store:           self.store.clone(),
-            subscriptions:   self.subscriptions.clone(),
+            node_id:             self.node_id.clone(),
+            seen:                self.seen.clone(),
+            current_ts:          self.current_ts.clone(),
+            signal_boundary:     self.signal_boundary.clone(),
+            signal_handlers:     self.signal_handlers.clone(),
+            gossip_txs:          self.gossip_txs.clone(),
+            default_ttl:         self.config.default_ttl,
+            dropped_frames:      self.dropped_frames.clone(),
+            store:                self.store.clone(),
+            subscriptions:       self.subscriptions.clone(),
+            abstain_when_opaque,
         }
     }
 

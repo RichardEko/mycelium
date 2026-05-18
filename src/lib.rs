@@ -2218,7 +2218,7 @@ mod tests {
     #[tokio::test]
     async fn test_group_propose_single_voter() {
         let agent = make_agent();
-        let _listener = agent.start_consensus_listener();
+        let _listener = agent.start_consensus_listener(ConsensusConfig::default());
         agent.join_group("cg1");
 
         let config = ConsensusConfig { quorum_size: 1, ..ConsensusConfig::default() };
@@ -2269,8 +2269,8 @@ mod tests {
 
         agent_a.join_group("cgrp");
         agent_b.join_group("cgrp");
-        let _la = agent_a.start_consensus_listener();
-        let _lb = agent_b.start_consensus_listener();
+        let _la = agent_a.start_consensus_listener(ConsensusConfig::default());
+        let _lb = agent_b.start_consensus_listener(ConsensusConfig::default());
 
         let config = ConsensusConfig {
             quorum_size:    2,
@@ -2310,8 +2310,8 @@ mod tests {
         agent_b.start().await.unwrap();
         time::sleep(Duration::from_millis(150)).await;
 
-        let _la = agent_a.start_consensus_listener();
-        let _lb = agent_b.start_consensus_listener();
+        let _la = agent_a.start_consensus_listener(ConsensusConfig::default());
+        let _lb = agent_b.start_consensus_listener(ConsensusConfig::default());
 
         // quorum_size=1 so each agent self-commits; the second proposer will find the
         // commit_key written by the first and return Superseded on the next ballot check.
@@ -2321,6 +2321,7 @@ mod tests {
             phase1_timeout:         Duration::from_millis(500),
             max_ballots:            5,
             ballot_retry_jitter_ms: 0, // disabled — test relies on commit_key propagation, not jitter
+            ..ConsensusConfig::default()
         };
 
         let aa = agent_a.clone();
@@ -2358,7 +2359,7 @@ mod tests {
     #[tokio::test]
     async fn test_system_propose_commits() {
         let agent = make_agent();
-        let _listener = agent.start_consensus_listener();
+        let _listener = agent.start_consensus_listener(ConsensusConfig::default());
 
         let config = ConsensusConfig { quorum_size: 1, ..ConsensusConfig::default() };
         let result = agent.system_propose("sys_sl", Bytes::from_static(b"sys_v"), config).await;
@@ -2373,7 +2374,7 @@ mod tests {
     #[tokio::test]
     async fn test_consensus_rx_fires_on_commit() {
         let agent = make_agent();
-        let _listener = agent.start_consensus_listener();
+        let _listener = agent.start_consensus_listener(ConsensusConfig::default());
         let mut rx = agent.consensus_rx("slRx");
 
         let config = ConsensusConfig { quorum_size: 1, ..ConsensusConfig::default() };
@@ -2391,7 +2392,7 @@ mod tests {
     #[tokio::test]
     async fn test_consensus_get_returns_committed() {
         let agent = make_agent();
-        let _listener = agent.start_consensus_listener();
+        let _listener = agent.start_consensus_listener(ConsensusConfig::default());
 
         let config = ConsensusConfig { quorum_size: 1, ..ConsensusConfig::default() };
         let _ = agent.group_propose("cgg", "slGet", Bytes::from_static(b"gotten"), config).await;
@@ -2432,7 +2433,7 @@ mod tests {
         let agent_a = GossipAgent::new(NodeId::new("127.0.0.1", port_a).unwrap(), cfg_a);
         agent_a.start().await.unwrap();
 
-        let _listener_a = agent_a.start_consensus_listener();
+        let _listener_a = agent_a.start_consensus_listener(ConsensusConfig::default());
         let config = ConsensusConfig { quorum_size: 1, ..ConsensusConfig::default() };
         let result = agent_a.system_propose("late_sl", Bytes::from_static(b"late_v"), config).await;
         assert!(matches!(result, ConsensusResult::Committed { .. }));

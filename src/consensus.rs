@@ -29,7 +29,7 @@
 use crate::framing::{bincode_cfg, shard_for_key, ForwardHint, GossipUpdate, WireMessage};
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
-use crate::signal::{Signal, SignalHandlers, SignalScope, Boundary};
+use crate::signal::{decode_load_state, kv_ns, Signal, SignalHandlers, SignalScope, Boundary};
 use crate::store::{apply_and_notify, StoreEntry};
 use ahash::{AHashMap, AHashSet};
 use bytes::{BufMut, Bytes, BytesMut};
@@ -73,6 +73,21 @@ pub struct ConsensusConfig {
     ///
     /// `0` disables jitter (not recommended outside tests). Default: `50`.
     pub ballot_retry_jitter_ms: u64,
+
+    /// When `true`, group members that have a fresh `is_opaque: true` pheromone
+    /// entry in Layer I (`load/{node_id}/{any kind}`) are excluded from the
+    /// member count used to compute quorum. Prevents ballots from timing out
+    /// waiting for overloaded voters.
+    ///
+    /// Requires `manage_opacity` writing pheromone trails (Fix B) to be effective.
+    /// Default: `false`.
+    pub count_opaque_as_absent: bool,
+
+    /// When `true`, this node will not vote in consensus rounds while any of its
+    /// managed `load/{node_id}/*` entries show `is_opaque: true`. The node neither
+    /// votes nor nacks — it silently drops `PROPOSE` messages while overloaded.
+    /// Default: `false`.
+    pub abstain_when_opaque: bool,
 }
 
 impl Default for ConsensusConfig {
@@ -82,6 +97,8 @@ impl Default for ConsensusConfig {
             phase1_timeout:          Duration::from_secs(5),
             max_ballots:             3,
             ballot_retry_jitter_ms:  50,
+            count_opaque_as_absent:  false,
+            abstain_when_opaque:     false,
         }
     }
 }
@@ -192,16 +209,19 @@ pub mod consensus_ns {
 ///
 /// Replaces the former `ConsensusListenerCtx` that was private to `agent.rs`.
 pub(crate) struct ConsensusEngine {
-    pub(crate) node_id:         NodeId,
-    pub(crate) seen:            Arc<ShardedSeen>,
-    pub(crate) current_ts:      Arc<AtomicU64>,
-    pub(crate) signal_boundary: Arc<RwLock<Boundary>>,
-    pub(crate) signal_handlers: Arc<SignalHandlers>,
-    pub(crate) gossip_txs:      Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]>,
-    pub(crate) default_ttl:     u8,
-    pub(crate) dropped_frames:  Arc<AtomicU64>,
-    pub(crate) store:           Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
-    pub(crate) subscriptions:   Arc<papaya::HashMap<Arc<str>, watch::Sender<Option<Bytes>>>>,
+    pub(crate) node_id:             NodeId,
+    pub(crate) seen:                Arc<ShardedSeen>,
+    pub(crate) current_ts:          Arc<AtomicU64>,
+    pub(crate) signal_boundary:     Arc<RwLock<Boundary>>,
+    pub(crate) signal_handlers:     Arc<SignalHandlers>,
+    pub(crate) gossip_txs:          Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]>,
+    pub(crate) default_ttl:         u8,
+    pub(crate) dropped_frames:      Arc<AtomicU64>,
+    pub(crate) store:               Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
+    pub(crate) subscriptions:       Arc<papaya::HashMap<Arc<str>, watch::Sender<Option<Bytes>>>>,
+    /// When `true`, this node silently abstains from voting while any pheromone
+    /// trail under `load/{node_id}/` shows `is_opaque: true`.
+    pub(crate) abstain_when_opaque: bool,
 }
 
 impl ConsensusEngine {
@@ -566,6 +586,21 @@ async fn run_consensus_listener(
             _ = &mut cancel                  => break,
             _ = shutdown_rx.wait_for(|v| *v) => break,
             Some(sig) = rx_propose.recv() => {
+                // Silent abstain: overloaded node neither votes nor nacks.
+                if ctx.abstain_when_opaque {
+                    let load_prefix = format!("{}{}/", kv_ns::LOAD, ctx.node_id);
+                    let is_overloaded = ctx.store.pin()
+                        .iter()
+                        .filter(|(k, v)| k.starts_with(&*load_prefix) && v.data.is_some())
+                        .any(|(_, v)| {
+                            v.data.as_ref()
+                                .and_then(decode_load_state)
+                                .map(|s| s.is_opaque)
+                                .unwrap_or(false)
+                        });
+                    if is_overloaded { continue; }
+                }
+
                 let Some(ConsensusMsg::Propose { slot, ballot, value: _, proposer }) =
                     decode_consensus_msg(&sig.payload)
                 else { continue };
