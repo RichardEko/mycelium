@@ -427,7 +427,13 @@ pub mod signal_kind {
     pub const INVOKE:               &str = "invoke";
     /// Result of a contract invocation.
     pub const INVOKE_RESULT:        &str = "invoke.result";
-    /// Bulk invocation — payload carries a ticket; data travels via HTTP (Layer 3).
+    /// Bulk-invoke signal. The sender emits this kind to trigger a batch operation
+    /// on a group of peers. Payload carries a ticket/correlation ID; the actual
+    /// data transfer is the responsibility of the application's Layer 3 transport
+    /// (HTTP, gRPC, shared storage, etc. — not provided by this library).
+    ///
+    /// Responders reply with [`INVOKE_RESULT`] echoing the ticket in the first 8
+    /// payload bytes so the initiator can correlate via [`GossipAgent::request`](crate::GossipAgent::request).
     pub const INVOKE_BULK:          &str = "invoke.bulk";
     /// A contract has become available at `sender`.
     pub const CONTRACT_AVAILABLE:   &str = "contract.available";

@@ -1,6 +1,6 @@
 use crate::framing::{dispatch_gossip_send, ForwardHint, WireMessage};
 use crate::signal::{AdvertiseHandle, Signal, SignalScope, WatchHandle};
-use bytes::Bytes;
+use bytes::{BufMut, Bytes, BytesMut};
 use std::{
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -170,6 +170,59 @@ impl GossipAgent {
                     Ok(Some(sig)) if predicate(&sig) => return Some(sig),
                     Ok(Some(_))                      => continue,
                     _                               => return None,
+                }
+            }
+        }
+    }
+
+    /// Emits a request signal and awaits a matching reply.
+    ///
+    /// Generates a random 8-byte nonce, prepends it to `payload` (little-endian u64),
+    /// emits `kind` on `scope`, then awaits the first `result_kind` signal whose payload
+    /// starts with the same 8 bytes. Returns `None` if `timeout` elapses.
+    ///
+    /// The result handler is registered **before** the request is emitted so no reply
+    /// can be missed even if the peer responds immediately.
+    ///
+    /// **Nonce convention**: the first 8 bytes of the payload carry the correlation nonce.
+    /// Responders must echo these bytes at the start of their `result_kind` reply payload.
+    /// See [`signal_kind::INVOKE_RESULT`](crate::signal::signal_kind::INVOKE_RESULT).
+    ///
+    /// To cancel early when the target goes opaque, race against a
+    /// [`BOUNDARY_OPAQUE`](crate::signal::signal_kind::BOUNDARY_OPAQUE) subscription:
+    /// ```ignore
+    /// let req = agent.request(INVOKE, scope, payload, INVOKE_RESULT, timeout);
+    /// let mut opaque_rx = agent.signal_rx(signal_kind::BOUNDARY_OPAQUE);
+    /// tokio::select! {
+    ///     result = req        => result,
+    ///     _ = opaque_rx.recv() => None,
+    /// }
+    /// ```
+    pub fn request(
+        &self,
+        kind:        impl Into<Arc<str>>,
+        scope:       SignalScope,
+        payload:     impl Into<Bytes>,
+        result_kind: impl Into<Arc<str>>,
+        timeout:     Duration,
+    ) -> impl std::future::Future<Output = Option<Signal>> {
+        let nonce: u64 = fastrand::u64(1..);
+        let payload_bytes: Bytes = payload.into();
+        let mut buf = BytesMut::with_capacity(8 + payload_bytes.len());
+        buf.put_u64_le(nonce);
+        buf.put(payload_bytes);
+        let _ = self.emit(kind.into(), scope, buf.freeze());
+        let mut rx = self.signal_handlers.register_with_capacity(result_kind.into(), 256);
+        async move {
+            let deadline = time::Instant::now() + timeout;
+            loop {
+                match time::timeout_at(deadline, rx.recv()).await {
+                    Ok(Some(sig)) if sig.payload.get(..8)
+                        .and_then(|b| b.try_into().ok())
+                        .map(|b: [u8; 8]| u64::from_le_bytes(b) == nonce)
+                        .unwrap_or(false) => return Some(sig),
+                    Ok(Some(_)) => continue,
+                    _ => return None,
                 }
             }
         }

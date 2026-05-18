@@ -87,6 +87,12 @@ impl GossipAgent {
     /// drops below `effective_threshold − hint.hysteresis`, preventing oscillation at
     /// the boundary.
     ///
+    /// **Layer 3 integration** — callers issuing requests via [`request`](Self::request)
+    /// should race their request future against a
+    /// [`BOUNDARY_OPAQUE`](crate::signal::signal_kind::BOUNDARY_OPAQUE) subscription on the
+    /// target node so in-flight requests cancel promptly rather than waiting for the full
+    /// timeout when the target saturates. See [`request`](Self::request) for a code example.
+    ///
     /// Returns an [`OpacityHandle`] whose drop stops the governor. The task also
     /// exits automatically on [`shutdown`](Self::shutdown).
     pub fn manage_opacity(
