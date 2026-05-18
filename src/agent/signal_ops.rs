@@ -459,6 +459,10 @@ impl GossipAgent {
     /// Prevents ex-members from satisfying quorum after they call [`leave_group`](Self::leave_group).
     /// A node is considered a current member if its `grp/{group}/{node_id}` key is live
     /// (not tombstoned) in the store.
+    ///
+    /// For hot-path callers that already hold a pre-built member hash set (e.g. during
+    /// ballot collection), prefer [`group_quorum_prehashed`](Self::group_quorum_prehashed)
+    /// to avoid recomputing `id_hash()` on every call.
     pub fn group_quorum(
         &self,
         group: &str,
@@ -472,6 +476,27 @@ impl GossipAgent {
             .map(|n| n.id_hash())
             .collect();
         self.signal_handlers.quorum_for_group(kind, &member_hashes, min_senders, window)
+    }
+
+    /// Like [`group_quorum`](Self::group_quorum) but accepts a pre-built member hash set.
+    ///
+    /// Avoids recomputing `id_hash()` on every call when the caller already holds a
+    /// stable `AHashSet<u64>` for the group's current membership (e.g. during a ballot
+    /// collection loop where the member list doesn't change mid-round).
+    ///
+    /// Build the set once with:
+    /// ```ignore
+    /// let member_hashes: AHashSet<u64> = agent.group_members(group)
+    ///     .iter().map(|n| n.id_hash()).collect();
+    /// ```
+    pub fn group_quorum_prehashed(
+        &self,
+        member_hashes: &ahash::AHashSet<u64>,
+        kind: &str,
+        min_senders: usize,
+        window: Duration,
+    ) -> bool {
+        self.signal_handlers.quorum_for_group(kind, member_hashes, min_senders, window)
     }
 
 }
