@@ -23,6 +23,7 @@ pub(crate) const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
 ///   3. Forwarding always re-encodes at `WIRE_VERSION` so the cluster converges quickly.
 ///   4. After all nodes are upgraded, bump `PREV_WIRE_VERSION` to `WIRE_VERSION` so
 ///      the acceptance window tracks the new pair.
+///
 /// Data frames from `PREV_WIRE_VERSION` peers cannot use the zero-copy forward path —
 /// they are decoded then re-encoded. Signal/Ping/State messages are unaffected if their
 /// struct layouts have not changed between the two versions.

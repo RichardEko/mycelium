@@ -53,6 +53,7 @@ pub mod signal;
 
 mod agent;
 mod connection;
+mod consensus;
 mod framing;
 mod node_id;
 mod seen;
@@ -61,6 +62,7 @@ mod writer;
 
 pub use agent::{GossipAgent, SystemStats};
 pub use config::GossipConfig;
+pub use consensus::{ConsensusConfig, ConsensusHandle, ConsensusResult, consensus_kind, consensus_ns};
 pub use error::GossipError;
 pub use node_id::NodeId;
 pub use signal::{
@@ -2008,5 +2010,178 @@ mod tests {
             SignalScope::Individual(agent.node_id().clone()),
             "reply uses Individual scope targeting the invoker",
         );
+    }
+
+    // ── Consensus ─────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_group_propose_single_voter() {
+        let agent = make_agent();
+        let _listener = agent.start_consensus_listener();
+        agent.join_group("cg1");
+
+        let config = ConsensusConfig { quorum_size: 1, ..ConsensusConfig::default() };
+        let result = agent.group_propose("cg1", "sl1", Bytes::from_static(b"val1"), config).await;
+
+        assert!(
+            matches!(result, ConsensusResult::Committed { .. }),
+            "single-voter quorum should commit immediately; got {:?}", result
+        );
+        assert_eq!(agent.consensus_get("sl1"), Some(Bytes::from_static(b"val1")));
+    }
+
+    #[tokio::test]
+    async fn test_group_propose_timeout() {
+        let agent = make_agent();
+        // No listener started — no votes arrive, quorum of 2 is unreachable.
+        let config = ConsensusConfig {
+            quorum_size:    2,
+            phase1_timeout: Duration::from_millis(50),
+            max_ballots:    1,
+        };
+        let result = agent.group_propose("cg2", "sl2", Bytes::from_static(b"v2"), config).await;
+        assert!(
+            matches!(result, ConsensusResult::Timeout { ballots_tried: 1, .. }),
+            "unreachable quorum must return Timeout; got {:?}", result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_group_propose_two_node_quorum() {
+        let port_a = alloc_port();
+        let port_b = alloc_port();
+
+        let mut cfg_a = GossipConfig::default();
+        cfg_a.bind_port = port_a;
+        cfg_a.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_b).unwrap()];
+
+        let mut cfg_b = GossipConfig::default();
+        cfg_b.bind_port = port_b;
+        cfg_b.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_a).unwrap()];
+
+        let agent_a = GossipAgent::new(NodeId::new("127.0.0.1", port_a).unwrap(), cfg_a);
+        let agent_b = GossipAgent::new(NodeId::new("127.0.0.1", port_b).unwrap(), cfg_b);
+        agent_a.start().await.unwrap();
+        agent_b.start().await.unwrap();
+        time::sleep(Duration::from_millis(150)).await;
+
+        agent_a.join_group("cgrp");
+        agent_b.join_group("cgrp");
+        let _la = agent_a.start_consensus_listener();
+        let _lb = agent_b.start_consensus_listener();
+
+        let config = ConsensusConfig {
+            quorum_size:    2,
+            phase1_timeout: Duration::from_secs(3),
+            max_ballots:    3,
+        };
+        let result = agent_a.group_propose("cgrp", "slA", Bytes::from_static(b"agreed"), config).await;
+        assert!(
+            matches!(result, ConsensusResult::Committed { .. }),
+            "two-node quorum should commit; got {:?}", result
+        );
+        agent_a.shutdown().await;
+        agent_b.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_system_propose_commits() {
+        let agent = make_agent();
+        let _listener = agent.start_consensus_listener();
+
+        let config = ConsensusConfig { quorum_size: 1, ..ConsensusConfig::default() };
+        let result = agent.system_propose("sys_sl", Bytes::from_static(b"sys_v"), config).await;
+
+        assert!(
+            matches!(result, ConsensusResult::Committed { .. }),
+            "single-node system propose must commit; got {:?}", result
+        );
+        assert_eq!(agent.consensus_get("sys_sl"), Some(Bytes::from_static(b"sys_v")));
+    }
+
+    #[tokio::test]
+    async fn test_consensus_rx_fires_on_commit() {
+        let agent = make_agent();
+        let _listener = agent.start_consensus_listener();
+        let mut rx = agent.consensus_rx("slRx");
+
+        let config = ConsensusConfig { quorum_size: 1, ..ConsensusConfig::default() };
+        let _ = agent.group_propose("rxg", "slRx", Bytes::from_static(b"fired"), config).await;
+
+        let val = tokio::time::timeout(Duration::from_millis(500), async {
+            loop {
+                if rx.borrow().is_some() { return rx.borrow().clone(); }
+                rx.changed().await.ok();
+            }
+        }).await;
+        assert_eq!(val.unwrap(), Some(Bytes::from_static(b"fired")));
+    }
+
+    #[tokio::test]
+    async fn test_consensus_get_returns_committed() {
+        let agent = make_agent();
+        let _listener = agent.start_consensus_listener();
+
+        let config = ConsensusConfig { quorum_size: 1, ..ConsensusConfig::default() };
+        let _ = agent.group_propose("cgg", "slGet", Bytes::from_static(b"gotten"), config).await;
+
+        assert_eq!(
+            agent.consensus_get("slGet"),
+            Some(Bytes::from_static(b"gotten")),
+        );
+    }
+
+    #[tokio::test]
+    async fn test_declare_and_read_trust() {
+        let agent = make_agent();
+        let peer_a = NodeId::new("127.0.0.1", 9001).unwrap();
+        let peer_b = NodeId::new("127.0.0.1", 9002).unwrap();
+
+        agent.declare_trust("trustgrp", &[peer_a.clone(), peer_b.clone()]);
+        let slices = agent.group_trust("trustgrp");
+
+        assert_eq!(slices.len(), 1, "one trust slice declared");
+        let (declaring_node, peers) = &slices[0];
+        assert_eq!(*declaring_node, *agent.node_id());
+        assert!(peers.contains(&peer_a));
+        assert!(peers.contains(&peer_b));
+    }
+
+    #[tokio::test]
+    async fn test_consensus_late_joiner_sync() {
+        let port_a = alloc_port();
+        let port_b = alloc_port();
+
+        let mut cfg_a = GossipConfig::default();
+        cfg_a.bind_port               = port_a;
+        cfg_a.reconnect_backoff_secs  = 1;
+
+        let agent_a = GossipAgent::new(NodeId::new("127.0.0.1", port_a).unwrap(), cfg_a);
+        agent_a.start().await.unwrap();
+
+        let _listener_a = agent_a.start_consensus_listener();
+        let config = ConsensusConfig { quorum_size: 1, ..ConsensusConfig::default() };
+        let result = agent_a.system_propose("late_sl", Bytes::from_static(b"late_v"), config).await;
+        assert!(matches!(result, ConsensusResult::Committed { .. }));
+
+        // B starts after A has already committed — anti-entropy must deliver the value.
+        let mut cfg_b = GossipConfig::default();
+        cfg_b.bind_port               = port_b;
+        cfg_b.reconnect_backoff_secs  = 1;
+        cfg_b.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_a).unwrap()];
+        let agent_b = GossipAgent::new(NodeId::new("127.0.0.1", port_b).unwrap(), cfg_b);
+        agent_b.start().await.unwrap();
+
+        // Give B's health monitor time to pass its jitter (0–500 ms) and send
+        // the initial StateRequest to A before we start polling.
+        time::sleep(Duration::from_millis(600)).await;
+        poll_until(|| agent_b.consensus_get("late_sl").is_some(), 5_000).await;
+        assert_eq!(
+            agent_b.consensus_get("late_sl"),
+            Some(Bytes::from_static(b"late_v")),
+        );
+
+        agent_a.shutdown().await;
+        agent_b.shutdown().await;
     }
 }

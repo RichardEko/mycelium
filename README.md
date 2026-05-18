@@ -456,6 +456,70 @@ only.
 
 TLS and mutual authentication are planned at Layer 3 for external-facing service endpoints.
 
+## Consensus (Layer 2 Extension)
+
+Lightweight agreement built directly on top of the signal mesh — no extra wire format, no
+separate consensus port. All consensus messages ride existing `Signal` frames.
+
+### Protocol sketch
+
+```
+Propose → (votes from group members) → Commit → KV committed/{slot}
+```
+
+Committed values are written to `consensus/committed/{slot}` and anti-entropy-synced to
+late joiners automatically via the existing KV mechanism.
+
+### API
+
+```rust
+use gossip_protocol::{ConsensusConfig, ConsensusResult};
+use bytes::Bytes;
+
+// Every node that should vote calls this once.
+let _listener = agent.start_consensus_listener();
+
+// Propose within a group — blocks until quorum or timeout.
+let cfg = ConsensusConfig { quorum_size: 0, ..ConsensusConfig::default() };
+match agent.group_propose("workers", "coordinator", Bytes::from("node-7"), cfg).await {
+    ConsensusResult::Committed { slot, value, ballot } => {
+        println!("committed: {} = {:?} @ ballot {}", slot, value, ballot);
+    }
+    ConsensusResult::Timeout { ballots_tried, .. } => {
+        println!("no quorum after {} ballots", ballots_tried);
+    }
+    ConsensusResult::Superseded { slot, ballot } => {
+        // Another node reached quorum first; read the committed value.
+        let v = agent.consensus_get(&slot).unwrap();
+        println!("superseded at ballot {}: {:?}", ballot, v);
+    }
+}
+
+// System-wide proposal (all known peers vote).
+let _ = agent.system_propose("global/epoch", Bytes::from("42"), ConsensusConfig::default()).await;
+
+// Subscribe to a slot — fires whenever the slot is committed.
+let mut rx = agent.consensus_rx("coordinator");
+
+// Quorum trust slices (SCP §3.1 — optional, stored for future slice-aware extensions).
+agent.declare_trust("workers", &[peer_a, peer_b]);
+let slices = agent.group_trust("workers");
+```
+
+### Key design decisions
+
+| Decision | Rationale |
+|---|---|
+| Ballot numbering (SCP §6.2) | Monotonic counter at `consensus/ballot/{slot}`; higher ballot supersedes stale commits |
+| Group-scoped votes | All members hear all votes → any member reaching quorum can commit; proposer crash does not stall the slot |
+| Proposer self-votes | Proposer always counts as one voter; no listener required for single-node quorum |
+| LWW commit idempotency | Two simultaneous commits of the same value are safe; higher-ballot commit wins via LWW timestamp |
+| No ordering log | Each slot is an independent KV entry (CASPaxos-style); no WAL required |
+| Trusted domain | No signing or FBA quorum intersection; Byzantine fault tolerance is out of scope |
+
+`quorum_size = 0` uses `floor(N/2) + 1` (simple majority). `max_peers` cap and
+`phase1_timeout` are tunable via `ConsensusConfig`.
+
 ## Layer III — Bulk Transfer / Eventing (Planned)
 
 Layer 3 introduces HTTP transport for large payloads and a distinct `Event` type for
