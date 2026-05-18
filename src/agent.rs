@@ -93,8 +93,27 @@ pub struct SystemStats {
 
 /// Core gossip agent.
 ///
-/// All fields are private. Use the public methods (`set`, `get`, `delete`,
-/// `start`, `shutdown`, `system_stats`) to interact with the agent.
+/// All fields are private. Use the public methods to interact with the agent.
+///
+/// ## Interface patterns
+///
+/// ### Direct methods
+/// Most methods (`set`, `get`, `emit`, `subscribe`, …) are synchronous or
+/// `async fn`. They complete in the caller's task and return their result immediately.
+///
+/// ### Task helpers
+/// A smaller subset of methods (`advertise`, `signal_once`, `watch`,
+/// `manage_opacity`, `manage_opacity_gated`) spawn a background tokio task and return
+/// a typed *handle* ([`AdvertiseHandle`](crate::signal::AdvertiseHandle),
+/// [`WatchHandle`](crate::signal::WatchHandle),
+/// [`OpacityHandle`](crate::signal::OpacityHandle), …). Dropping the handle cancels
+/// the task; keeping it alive keeps the task running. These are for standing,
+/// event-driven behaviours — periodic beacons, adaptive opacity controllers, reacting
+/// to incoming signals — that must outlive a single `await` call without blocking the
+/// caller.
+///
+/// All task-helper tasks exit automatically when [`shutdown`](Self::shutdown) is
+/// called, even if the handle is still live.
 pub struct GossipAgent {
     node_id: NodeId,
     config: GossipConfig,
@@ -130,6 +149,8 @@ pub struct GossipAgent {
 }
 
 impl GossipAgent {
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
+
     /// Creates a new agent. Call [`start`](Self::start) to begin listening.
     pub fn new(node_id: NodeId, mut config: GossipConfig) -> Self {
         let cap = config.gossip_channel_capacity;
@@ -183,8 +204,6 @@ impl GossipAgent {
             dropped_frames: Arc::new(AtomicU64::new(0)),
         }
     }
-
-    // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     /// Binds the TCP listener(s) and launches background loops.
     pub async fn start(&self) -> Result<(), GossipError> {
@@ -380,9 +399,7 @@ impl GossipAgent {
         self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).push(handle);
     }
 
-    // ── Public API ────────────────────────────────────────────────────────────
-    // Methods below form the stable user-facing interface. Internal helpers and
-    // task-launch methods above are subject to change without notice.
+    // ── Node state ────────────────────────────────────────────────────────────
 
     /// Returns this node's identifier.
     pub fn node_id(&self) -> &NodeId {
@@ -405,6 +422,8 @@ impl GossipAgent {
     pub fn groups(&self) -> Vec<Arc<str>> {
         self.signal_boundary.read().groups.iter().cloned().collect()
     }
+
+    // ── KV ────────────────────────────────────────────────────────────────────
 
     /// Stores `value` under `key` locally and queues it for gossip to peers.
     ///
@@ -729,6 +748,12 @@ impl GossipAgent {
             }
         }
     }
+
+    // ── Task helpers ─────────────────────────────────────────────────────────────────
+    // Methods below spawn a background tokio task and return a typed handle.
+    // Dropping the handle cancels the task.  See the "Interface patterns" section in
+    // the GossipAgent doc comment for a full explanation of when to prefer these over
+    // direct-call methods.
 
     /// Periodically emits `kind` on `scope` every `interval`, calling `payload_fn`
     /// each tick to capture fresh state (e.g. current load metrics).
@@ -1077,6 +1102,8 @@ impl GossipAgent {
         self.signal_handlers.fill_ratio(&Arc::from(kind))
     }
 
+    // ── Node diagnostics ─────────────────────────────────────────────────────────────
+
     /// Returns a snapshot of live protocol state.
     ///
     /// Note: `dead_shards` may transiently report all shards as dead in the brief
@@ -1120,6 +1147,8 @@ impl GossipAgent {
             dropped_frames:       self.dropped_frames.load(Ordering::Relaxed),
         }
     }
+
+    // ── Lifecycle (shutdown) ──────────────────────────────────────────────────────────
 
     /// Signals all background tasks to stop and waits up to `timeout` for them to exit.
     ///

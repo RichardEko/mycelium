@@ -104,6 +104,12 @@ pub(crate) struct SignalHandlers {
     /// Per-kind sender history for [`quorum`](Self::quorum) queries.
     /// Each entry is `(sender, received_at)`. Updated unconditionally in `deliver()`,
     /// including during suppression. Entries older than 10 minutes are evicted lazily.
+    ///
+    /// **DashMap, not papaya**: the update path in `deliver()` mutates a `Vec` in-place
+    /// via `entry().or_default()` + `retain()` + `push()`. papaya's only mutation
+    /// primitive is `compute()`, which requires cloning the entire value on every write —
+    /// an O(window-entries) allocation on every signal delivery. DashMap's per-shard
+    /// lock is the correct trade-off for this write-heavy, Vec-typed field.
     sender_log:  DashMap<Arc<str>, Vec<(NodeId, Instant)>>,
 }
 
