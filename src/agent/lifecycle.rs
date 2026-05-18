@@ -161,6 +161,8 @@ impl GossipAgent {
             self.config.health_check_max_jitter_ms,
             self.hash_acc.clone(),
             self.dropped_frames.clone(),
+            self.signal_handlers.clone(),
+            self.config.signal_window_secs,
         ));
         self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).push(handle);
     }
