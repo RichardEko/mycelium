@@ -3,7 +3,7 @@ use crate::consensus::{
 };
 use crate::framing::bincode_cfg;
 use crate::node_id::NodeId;
-use crate::signal::{decode_load_state, SignalScope};
+use crate::signal::{decode_load_state, kv_ns, SignalScope};
 use ahash::{AHashMap, AHashSet};
 use bytes::{BufMut, Bytes, BytesMut};
 use std::{
@@ -121,7 +121,7 @@ impl GossipAgent {
 
         let best = members.iter().min_by(|a, b| {
             let score = |n: &NodeId| -> f32 {
-                let fill = self.get(&format!("load/{}/{}", n, kind))
+                let fill = self.get(&format!("{}{}/{}", kv_ns::LOAD, n, kind))
                     .and_then(|b| decode_load_state(&b))
                     .filter(|s| now_ms.saturating_sub(s.written_at_ms) <= max_age_ms)
                     .map(|s| s.fill_ratio)
@@ -164,7 +164,7 @@ impl GossipAgent {
         // signal since that is the same source voters use to abstain; fall back to the
         // in-memory channel fill for the case where manage_opacity hasn't written a trail yet.
         let pheromone_fill = self
-            .get(&format!("load/{}/{}", self.node_id, consensus_kind::PROPOSE))
+            .get(&format!("{}{}/{}", kv_ns::LOAD, self.node_id, consensus_kind::PROPOSE))
             .and_then(|b| decode_load_state(&b))
             .map(|s| s.fill_ratio)
             .unwrap_or(0.0);
@@ -195,7 +195,7 @@ impl GossipAgent {
             let mut opaque: AHashSet<Arc<str>> = AHashSet::new();
             let guard = self.store.pin();
             for (k, v) in guard.iter() {
-                let Some(tail) = k.strip_prefix("load/") else { continue };
+                let Some(tail) = k.strip_prefix(kv_ns::LOAD) else { continue };
                 let Some(slash) = tail.find('/') else { continue };
                 let node_str = &tail[..slash];
                 if !member_ids.contains(node_str) { continue }
@@ -238,7 +238,7 @@ impl GossipAgent {
         // signal since that is the same source voters use to abstain; fall back to the
         // in-memory channel fill for the case where manage_opacity hasn't written a trail yet.
         let pheromone_fill = self
-            .get(&format!("load/{}/{}", self.node_id, consensus_kind::PROPOSE))
+            .get(&format!("{}{}/{}", kv_ns::LOAD, self.node_id, consensus_kind::PROPOSE))
             .and_then(|b| decode_load_state(&b))
             .map(|s| s.fill_ratio)
             .unwrap_or(0.0);

@@ -9,6 +9,22 @@ use std::sync::{
 use tokio::sync::watch;
 use tracing::warn;
 
+/// Bundled KV-path state shared across connection handlers, consensus tasks,
+/// and opacity governors.
+///
+/// Replacing the five individual Arc fields with a single `Arc<KvState>` reduces
+/// the blast-radius of future additions: new KV fields require only one struct
+/// change and one construction-site change rather than edits in every intermediate
+/// context struct (`ListenerContext`, `ConnContext`, `ConsensusEngine`, etc.).
+pub(crate) struct KvState {
+    pub store:             Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
+    pub subscriptions:     Arc<papaya::HashMap<Arc<str>, watch::Sender<Option<Bytes>>>>,
+    pub prefix_index:      Arc<PrefixIndex>,
+    pub hash_acc:          Arc<AtomicU64>,
+    pub dropped_frames:    Arc<AtomicU64>,
+    pub max_store_entries: usize,
+}
+
 /// Secondary index for O(1) bucket + O(k) prefix scan.
 ///
 /// Maps the first path segment of a key (e.g. `"grp"`, `"load"`, `"svc"`) to
@@ -154,6 +170,7 @@ pub(crate) fn store_hash(store: &papaya::HashMap<Arc<str>, StoreEntry>) -> u64 {
 /// Applies `update` using last-write-wins. Returns `true` if the store changed.
 /// Tombstones win on equal timestamps; plain data requires a strictly newer timestamp.
 /// Uses papaya `compute` for a single atomic CAS — no separate read then write.
+#[cfg(test)]
 pub(crate) fn apply_to_store(store: &papaya::HashMap<Arc<str>, StoreEntry>, update: &GossipUpdate) -> bool {
     let ts          = update.timestamp;
     let is_tombstone = update.is_tombstone;
@@ -183,61 +200,80 @@ pub(crate) fn apply_to_store(store: &papaya::HashMap<Arc<str>, StoreEntry>, upda
 /// Applies `update` to the store, maintains the prefix index, then notifies any
 /// subscriber watching that key.
 ///
-/// When `max_store_entries > 0` and the store's current size meets or exceeds that
+/// When `kv.max_store_entries > 0` and the store's current size meets or exceeds that
 /// limit, live (non-tombstone) writes are silently dropped. Tombstone writes are
 /// always accepted — they reduce the live count and must propagate.
 ///
-/// `hash_acc` is the incremental XOR accumulator maintained in the caller's
-/// `GossipAgent` or `ConnContext`. Updated in O(1) per call; readable via
-/// [`store_hash_acc`].
-pub(crate) fn apply_and_notify(
-    store:             &papaya::HashMap<Arc<str>, StoreEntry>,
-    subs:              &papaya::HashMap<Arc<str>, watch::Sender<Option<Bytes>>>,
-    update:            &GossipUpdate,
-    max_store_entries: usize,
-    prefix_index:      &PrefixIndex,
-    hash_acc:          &AtomicU64,
-) {
-    if max_store_entries > 0 && !update.is_tombstone && store.len() >= max_store_entries {
+/// The incremental XOR accumulator in `kv.hash_acc` is updated atomically with the
+/// store CAS: the old entry's live timestamp is captured *inside* the `compute`
+/// callback, eliminating the TOCTOU window that existed when the old entry was read
+/// before the CAS in a separate step. The callback resets its capture on each retry
+/// so the final (successful) invocation always leaves the correct value.
+pub(crate) fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
+    if kv.max_store_entries > 0 && !update.is_tombstone && kv.store.len() >= kv.max_store_entries {
         warn!(
             key = %update.key,
-            cap = max_store_entries,
+            cap = kv.max_store_entries,
             "KV store cap reached; live write dropped",
         );
         return;
     }
-    // Read the current entry before the CAS for incremental hash maintenance.
-    // A concurrent update between this read and the CAS can leave the accumulator
-    // transiently off by one — acceptable since any mismatch triggers a full snapshot.
-    let old_entry = store.pin().get(&*update.key).cloned();
-    if apply_to_store(store, update) {
+
+    let ts           = update.timestamp;
+    let is_tombstone = update.is_tombstone;
+    let val = if is_tombstone { None } else { Some(update.value.clone()) };
+
+    // Capture the old live timestamp inside the compute callback so there is no
+    // TOCTOU window between reading the old entry and performing the CAS.
+    let mut old_ts_if_live: Option<u64> = None;
+
+    let changed = {
+        let guard = kv.store.pin();
+        let result = guard.compute(update.key.clone(), |existing| {
+            old_ts_if_live = None; // reset on each CAS retry
+            match existing {
+                None => Operation::Insert(StoreEntry { data: val.clone(), timestamp: ts }),
+                Some((_, curr)) => {
+                    let wins = if is_tombstone { ts >= curr.timestamp } else { ts > curr.timestamp };
+                    if wins {
+                        if curr.data.is_some() {
+                            old_ts_if_live = Some(curr.timestamp);
+                        }
+                        Operation::Insert(StoreEntry { data: val.clone(), timestamp: ts })
+                    } else {
+                        Operation::Abort(())
+                    }
+                }
+            }
+        });
+        matches!(result, papaya::Compute::Inserted(..) | papaya::Compute::Updated { .. })
+    };
+
+    if changed {
         // Maintain the incremental XOR hash.
         let key_hash = hash_seed().hash_one(update.key.as_bytes());
-        if let Some(ref old) = old_entry {
-            if old.data.is_some() {
-                hash_acc.fetch_xor(key_hash ^ old.timestamp, Ordering::Relaxed);
-            }
+        if let Some(old_ts) = old_ts_if_live {
+            kv.hash_acc.fetch_xor(key_hash ^ old_ts, Ordering::Relaxed);
         }
-        if !update.is_tombstone {
-            hash_acc.fetch_xor(key_hash ^ update.timestamp, Ordering::Relaxed);
+        if !is_tombstone {
+            kv.hash_acc.fetch_xor(key_hash ^ ts, Ordering::Relaxed);
         }
         // Maintain the secondary prefix index.
-        if update.is_tombstone {
-            prefix_index_remove(prefix_index, &update.key);
+        if is_tombstone {
+            prefix_index_remove(&kv.prefix_index, &update.key);
         } else {
-            prefix_index_insert(prefix_index, update.key.clone());
+            prefix_index_insert(&kv.prefix_index, update.key.clone());
         }
-        let guard = subs.pin();
-        if let Some(tx) = guard.get(&update.key) {
+        let subs_guard = kv.subscriptions.pin();
+        if let Some(tx) = subs_guard.get(&update.key) {
             if tx.is_closed() {
-                // Conditional remove: only evict if the entry is still the closed sender.
-                guard.compute(update.key.clone(), |existing| match existing {
+                subs_guard.compute(update.key.clone(), |existing| match existing {
                     Some((_, tx)) if tx.is_closed() => Operation::Remove,
                     _ => Operation::Abort(()),
                 });
             } else {
-                let val = if update.is_tombstone { None } else { Some(update.value.clone()) };
-                let _ = tx.send(val);
+                let notif = if is_tombstone { None } else { Some(update.value.clone()) };
+                let _ = tx.send(notif);
             }
         }
     }

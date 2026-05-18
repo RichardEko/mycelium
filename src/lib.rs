@@ -82,7 +82,7 @@ mod tests {
         N_GOSSIP_SHARDS, NONCE_OFFSET, PREV_WIRE_VERSION, TTL_OFFSET,
     };
     use crate::seen::ShardedSeen;
-    use crate::store::{apply_to_store, store_hash, StoreEntry};
+    use crate::store::{apply_to_store, store_hash, KvState, StoreEntry};
     use bytes::{Bytes, BytesMut};
     use dashmap::DashMap;
     use std::{
@@ -170,13 +170,11 @@ mod tests {
         let initial_hash = store_hash(&store);
         let ctx = ConnContext {
             node_id: node_id.clone(),
-            store,
             peers,
             gossip_txs,
             seen,
             shutdown: shutdown_tx.clone(),
             max_ttl,
-            subscriptions: Arc::new(papaya::HashMap::new()),
             current_ts: Arc::new(AtomicU64::new(0)),
             peer_writers: Arc::new(DashMap::new()),
             writer_depth: 64,
@@ -188,10 +186,14 @@ mod tests {
             signal_handlers: Arc::new(SignalHandlers::new()),
             max_peers: usize::MAX,
             writer_idle_timeout: Duration::ZERO,
-            max_store_entries: 0,
-            prefix_index: Arc::new(crate::store::PrefixIndex::new()),
-            dropped_frames: Arc::new(AtomicU64::new(0)),
-            hash_acc: Arc::new(AtomicU64::new(initial_hash)),
+            kv_state: Arc::new(KvState {
+                store,
+                subscriptions:     Arc::new(papaya::HashMap::new()),
+                prefix_index:      Arc::new(crate::store::PrefixIndex::new()),
+                hash_acc:          Arc::new(AtomicU64::new(initial_hash)),
+                dropped_frames:    Arc::new(AtomicU64::new(0)),
+                max_store_entries: 0,
+            }),
         };
         let handle = tokio::spawn(handle_connection(
             socket,
@@ -812,13 +814,11 @@ mod tests {
             let node_id = NodeId::new("127.0.0.1", 0).unwrap();
             let ctx = ConnContext {
                 node_id: node_id.clone(),
-                store: store.clone(),
                 peers: Arc::new(papaya::HashMap::new()),
                 gossip_txs,
                 seen: Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)),
                 shutdown: shutdown_tx,
                 max_ttl: 5,
-                subscriptions: subs,
                 current_ts: Arc::new(AtomicU64::new(0)),
                 peer_writers: Arc::new(DashMap::new()),
                 writer_depth: 64,
@@ -830,10 +830,14 @@ mod tests {
                 signal_handlers: Arc::new(SignalHandlers::new()),
                 max_peers: usize::MAX,
                 writer_idle_timeout: Duration::ZERO,
-                max_store_entries: 0,
-                prefix_index: Arc::new(crate::store::PrefixIndex::new()),
-                dropped_frames: Arc::new(AtomicU64::new(0)),
-                hash_acc: Arc::new(AtomicU64::new(0)),
+                kv_state: Arc::new(KvState {
+                    store: store.clone(),
+                    subscriptions:     subs,
+                    prefix_index:      Arc::new(crate::store::PrefixIndex::new()),
+                    hash_acc:          Arc::new(AtomicU64::new(0)),
+                    dropped_frames:    Arc::new(AtomicU64::new(0)),
+                    max_store_entries: 0,
+                }),
             };
             use crate::connection::handle_connection;
             tokio::spawn(handle_connection(reader, "127.0.0.1:0".parse().unwrap(), ctx));
@@ -2633,8 +2637,8 @@ mod tests {
         // Let's make B trusted enough: B load=0.8 trust=4 → 0.8/5=0.16; C load=0.2 trust=0 → 0.20 → B wins.
         let b_state = LoadState { fill_ratio: 0.8, is_opaque: false, written_at_ms: now_ms };
         let c_state = LoadState { fill_ratio: 0.2, is_opaque: false, written_at_ms: now_ms };
-        let _ = agent.set(format!("load/{}/task", node_b), encode_load_state(&b_state));
-        let _ = agent.set(format!("load/{}/task", node_c), encode_load_state(&c_state));
+        let _ = agent.set(format!("sys/load/{}/task", node_b), encode_load_state(&b_state));
+        let _ = agent.set(format!("sys/load/{}/task", node_c), encode_load_state(&c_state));
 
         // Declare 4 trust-slice entries that all name B (simulating 4 group members trusting B).
         let trusted_b = vec![node_b.clone()];
@@ -2669,8 +2673,8 @@ mod tests {
         // A is heavily loaded; B is idle.
         let heavy = LoadState { fill_ratio: 0.9, is_opaque: true,  written_at_ms: now_ms };
         let light = LoadState { fill_ratio: 0.1, is_opaque: false, written_at_ms: now_ms };
-        let _ = agent.set(format!("load/{}/task", node_a), encode_load_state(&heavy));
-        let _ = agent.set(format!("load/{}/task", node_b), encode_load_state(&light));
+        let _ = agent.set(format!("sys/load/{}/task", node_a), encode_load_state(&heavy));
+        let _ = agent.set(format!("sys/load/{}/task", node_b), encode_load_state(&light));
 
         let suggested = agent.suggest_leader("workers", "task", Duration::from_secs(600));
         assert_eq!(suggested, node_b, "suggest_leader should pick the lighter-loaded member");
@@ -2731,7 +2735,7 @@ mod tests {
 
         // Write a pheromone entry for that peer.
         let state = LoadState { fill_ratio: 0.75, is_opaque: true, written_at_ms: 0 };
-        let key = format!("load/{}/test", peer);
+        let key = format!("sys/load/{}/test", peer);
         let _ = agent.set(key.clone(), encode_load_state(&state));
 
         // Forwarding task should decode and push the typed value.

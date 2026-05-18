@@ -4,7 +4,7 @@ use crate::framing::{bincode_cfg, ForwardHint, WireMessage};
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
 use crate::signal::{Boundary, SignalHandlers};
-use crate::store::{intern_pool_len, StoreEntry};
+use crate::store::{intern_pool_len, KvState, StoreEntry};
 use crate::writer::{evict_peer_writer, get_or_spawn_writer, request_state, WriterEntry};
 use ahash::{AHashMap, AHashSet};
 use bytes::{BufMut, Bytes, BytesMut};
@@ -63,12 +63,10 @@ impl Drop for ListenerGuard {
 #[derive(Clone)]
 pub(super) struct ListenerContext {
     pub(super) node_id:        NodeId,
-    pub(super) store:          Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
     pub(super) peers:          Arc<papaya::HashMap<NodeId, Instant>>,
     pub(super) gossip_txs:     Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]>,
     pub(super) seen:           Arc<ShardedSeen>,
     pub(super) shutdown_tx:    Arc<watch::Sender<bool>>,
-    pub(super) subscriptions:  Arc<papaya::HashMap<Arc<str>, watch::Sender<Option<Bytes>>>>,
     pub(super) current_ts:     Arc<AtomicU64>,
     pub(super) peer_writers:   Arc<DashMap<NodeId, WriterEntry>>,
     pub(super) conn_sem:       Arc<Semaphore>,
@@ -84,21 +82,19 @@ pub(super) struct ListenerContext {
     pub(super) signal_handlers: Arc<SignalHandlers>,
     pub(super) max_peers:           usize,
     pub(super) writer_idle_timeout: Duration,
-    pub(super) max_store_entries:   usize,
-    pub(super) prefix_index:        Arc<crate::store::PrefixIndex>,
-    pub(super) dropped_frames:      Arc<AtomicU64>,
-    pub(super) hash_acc:            Arc<AtomicU64>,
+    /// Bundled KV-path state (replaces store, subscriptions, prefix_index,
+    /// hash_acc, dropped_frames, max_store_entries individual fields).
+    pub(super) kv_state:            Arc<KvState>,
 }
 
 // ── Task implementations ───────────────────────────────────────────────────────
 
 pub(super) async fn run_listener_task(listener: TcpListener, lctx: ListenerContext) {
     let ListenerContext {
-        node_id, store, peers, gossip_txs, seen, shutdown_tx, subscriptions,
+        node_id, peers, gossip_txs, seen, shutdown_tx,
         current_ts, peer_writers, conn_sem, listener_alive,
         max_conn, max_ttl, writer_depth, backoff, n_shards, intern_keys, intern_max_keys,
-        signal_boundary, signal_handlers, max_peers, writer_idle_timeout, max_store_entries,
-        prefix_index, dropped_frames, hash_acc,
+        signal_boundary, signal_handlers, max_peers, writer_idle_timeout, kv_state,
     } = lctx;
     let mut shutdown_rx = shutdown_tx.subscribe();
     let mut conn_set: JoinSet<()> = JoinSet::new();
@@ -125,30 +121,25 @@ pub(super) async fn run_listener_task(listener: TcpListener, lctx: ListenerConte
                         match conn_sem.clone().try_acquire_owned() {
                             Ok(permit) => {
                                 let node_id          = node_id.clone();
-                                let store            = store.clone();
                                 let peers            = peers.clone();
                                 let gossip_txs       = gossip_txs.clone();
                                 let seen             = seen.clone();
                                 let shutdown         = shutdown_tx.clone();
-                                let subscriptions    = subscriptions.clone();
                                 let current_ts       = current_ts.clone();
                                 let peer_writers     = peer_writers.clone();
                                 let signal_boundary  = signal_boundary.clone();
                                 let signal_handlers  = signal_handlers.clone();
-                                let prefix_index     = prefix_index.clone();
-                                let dropped_frames   = dropped_frames.clone();
-                                let hash_acc         = hash_acc.clone();
+                                let kv_state         = kv_state.clone();
                                 conn_set.spawn(async move {
                                     let _permit = permit;
                                     let ctx = ConnContext {
-                                        node_id, store, peers, gossip_txs,
-                                        seen, shutdown, max_ttl, subscriptions,
+                                        node_id, peers, gossip_txs,
+                                        seen, shutdown, max_ttl,
                                         current_ts, peer_writers,
                                         writer_depth, backoff, n_shards,
                                         intern_keys, intern_max_keys, signal_boundary,
                                         signal_handlers, max_peers, writer_idle_timeout,
-                                        max_store_entries, prefix_index, dropped_frames,
-                                        hash_acc,
+                                        kv_state,
                                     };
                                     if let Err(e) = handle_connection(socket, addr, ctx).await {
                                         warn!("Connection error from {}: {}", addr, e);

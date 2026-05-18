@@ -17,7 +17,7 @@ use super::helpers::emit_signal;
 impl GossipAgent {
     /// Returns all peer load states newer than `max_age`, sorted highest-fill first.
     ///
-    /// Each tuple is `(node_id_str, kind_str, LoadState)`. Reads `load/{node}/{kind}`
+    /// Each tuple is `(node_id_str, kind_str, LoadState)`. Reads `sys/load/{node}/{kind}`
     /// entries from Layer I written by [`manage_opacity`](Self::manage_opacity).
     pub fn peer_load(&self, max_age: Duration) -> Vec<(Arc<str>, Arc<str>, LoadState)> {
         let now_ms = SystemTime::now()
@@ -28,8 +28,8 @@ impl GossipAgent {
             .scan_prefix(kv_ns::LOAD)
             .into_iter()
             .filter_map(|(key, bytes)| {
-                // Key format: "load/{node_id}/{kind}"
-                let tail = key.strip_prefix("load/")?;
+                // Key format: "sys/load/{node_id}/{kind}"
+                let tail = key.strip_prefix(kv_ns::LOAD)?;
                 let slash = tail.find('/')?;
                 let node_str: Arc<str> = Arc::from(&tail[..slash]);
                 let kind_str: Arc<str> = Arc::from(&tail[slash + 1..]);
@@ -59,7 +59,7 @@ impl GossipAgent {
         node_id: &crate::node_id::NodeId,
         kind: &str,
     ) -> tokio::sync::watch::Receiver<Option<LoadState>> {
-        let mut raw_rx = self.subscribe(format!("load/{}/{}", node_id, kind));
+        let mut raw_rx = self.subscribe(format!("{}{}/{}", kv_ns::LOAD, node_id, kind));
         let initial = raw_rx.borrow().as_ref().and_then(decode_load_state);
         let (tx, rx) = tokio::sync::watch::channel(initial);
         tokio::spawn(async move {
@@ -137,29 +137,32 @@ impl GossipAgent {
         let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
         let mut shutdown_rx = self.shutdown_tx.subscribe();
 
-        let signal_handlers  = self.signal_handlers.clone();
-        let node_id          = self.node_id.clone();
-        let seen             = self.seen.clone();
-        let current_ts       = self.current_ts.clone();
-        let signal_boundary  = self.signal_boundary.clone();
-        let gossip_txs       = self.gossip_txs.clone();
-        let default_ttl        = self.config.default_ttl;
-        let max_store_entries  = self.config.max_store_entries;
-        let dropped_frames   = self.dropped_frames.clone();
-        let store            = self.store.clone();
-        let subscriptions    = self.subscriptions.clone();
-        let prefix_index     = self.prefix_index.clone();
-        let hash_acc         = self.hash_acc.clone();
+        let signal_handlers = self.signal_handlers.clone();
+        let node_id         = self.node_id.clone();
+        let seen            = self.seen.clone();
+        let current_ts      = self.current_ts.clone();
+        let signal_boundary = self.signal_boundary.clone();
+        let gossip_txs      = self.gossip_txs.clone();
+        let default_ttl     = self.config.default_ttl;
+        let kv_state        = self.kv_state.clone();
 
         let clamped_threshold = hint.threshold.clamp(0.4, 0.95);
+
+        // Seed opacity state from Layer I so the governor resumes correctly after restart.
+        let init_load_key = format!("{}{}/{}", kv_ns::LOAD, node_id, kind);
+        let (init_is_opaque, init_fill) = self.store.pin()
+            .get(&*init_load_key)
+            .and_then(|e| e.data.as_ref())
+            .and_then(decode_load_state)
+            .map(|ls| (ls.is_opaque, ls.fill_ratio))
+            .unwrap_or((false, signal_handlers.fill_ratio(&kind)));
 
         let handle = tokio::spawn(async move {
             let mut ticker = time::interval(Duration::from_millis(100));
             ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
 
-            // Seed prev_fill from current state so the first-tick trend is meaningful.
-            let mut prev_fill = signal_handlers.fill_ratio(&kind);
-            let mut is_opaque = false;
+            let mut prev_fill = init_fill;
+            let mut is_opaque = init_is_opaque;
 
             loop {
                 tokio::select! { biased;
@@ -188,18 +191,17 @@ impl GossipAgent {
                                 emit_signal(
                                     &node_id, &seen, &current_ts, &signal_boundary,
                                     &signal_handlers, &gossip_txs, default_ttl,
-                                    &dropped_frames,
+                                    &kv_state.dropped_frames,
                                     Arc::from(crate::signal::signal_kind::BOUNDARY_OPAQUE),
                                     scope.clone(), hint.payload.clone(),
                                 );
                                 is_opaque = true;
-                                // Write pheromone trail to Layer I so peers observe this
-                                // node's load state via `peer_load` / anti-entropy.
                                 let written_at_ms = SystemTime::now()
                                     .duration_since(UNIX_EPOCH).unwrap_or_default()
                                     .as_millis() as u64;
-                                let load_key: Arc<str> =
-                                    Arc::from(format!("load/{}/{}", node_id, kind).as_str());
+                                let load_key: Arc<str> = Arc::from(
+                                    format!("{}{}/{}", kv_ns::LOAD, node_id, kind).as_str()
+                                );
                                 let pheromone_update = GossipUpdate {
                                     nonce:        fastrand::u64(1..),
                                     sender:       node_id.id_hash(),
@@ -213,17 +215,17 @@ impl GossipAgent {
                                         written_at_ms,
                                     }),
                                 };
-                                apply_and_notify(&store, &subscriptions, &pheromone_update, max_store_entries, &prefix_index, &hash_acc);
+                                apply_and_notify(&kv_state, &pheromone_update);
                                 dispatch_gossip_try_send(
                                     &gossip_txs, WireMessage::Data(pheromone_update),
-                                    node_id.id_hash(), ForwardHint::All, &dropped_frames,
+                                    node_id.id_hash(), ForwardHint::All, &kv_state.dropped_frames,
                                 );
                             }
                         } else if is_opaque && fill_ratio < eff - hint.hysteresis {
                             emit_signal(
                                 &node_id, &seen, &current_ts, &signal_boundary,
                                 &signal_handlers, &gossip_txs, default_ttl,
-                                &dropped_frames,
+                                &kv_state.dropped_frames,
                                 Arc::from(crate::signal::signal_kind::BOUNDARY_TRANSPARENT),
                                 scope.clone(), Bytes::new(),
                             );
@@ -232,8 +234,9 @@ impl GossipAgent {
                             let written_at_ms = SystemTime::now()
                                 .duration_since(UNIX_EPOCH).unwrap_or_default()
                                 .as_millis() as u64;
-                            let load_key: Arc<str> =
-                                Arc::from(format!("load/{}/{}", node_id, kind).as_str());
+                            let load_key: Arc<str> = Arc::from(
+                                format!("{}{}/{}", kv_ns::LOAD, node_id, kind).as_str()
+                            );
                             let tombstone_update = GossipUpdate {
                                 nonce:        fastrand::u64(1..),
                                 sender:       node_id.id_hash(),
@@ -243,10 +246,10 @@ impl GossipAgent {
                                 key:          load_key.clone(),
                                 value:        Bytes::new(),
                             };
-                            apply_and_notify(&store, &subscriptions, &tombstone_update, max_store_entries, &prefix_index, &hash_acc);
+                            apply_and_notify(&kv_state, &tombstone_update);
                             dispatch_gossip_try_send(
                                 &gossip_txs, WireMessage::Data(tombstone_update),
-                                node_id.id_hash(), ForwardHint::All, &dropped_frames,
+                                node_id.id_hash(), ForwardHint::All, &kv_state.dropped_frames,
                             );
                         }
                     }

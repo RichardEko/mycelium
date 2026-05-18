@@ -5,14 +5,12 @@ use crate::framing::{
     ANTI_ENTROPY_NONCE, DATA_TAG, NONCE_OFFSET, TTL_OFFSET,
 };
 use crate::signal::{Boundary, Signal, SignalHandlers, SignalScope};
-use crate::store::{intern_key, store_hash_acc};
+use crate::store::{apply_and_notify, intern_key, store_hash_acc, KvState};
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
-use crate::store::{apply_and_notify, PrefixIndex, StoreEntry};
 use crate::writer::{get_or_spawn_writer, request_state, WriterEntry};
 use bytes::{BufMut, Bytes, BytesMut};
 use dashmap::DashMap;
-use papaya::HashMap as PapayaMap;
 use parking_lot::RwLock;
 use std::{
     net::SocketAddr,
@@ -28,15 +26,13 @@ use tracing::{error, warn};
 /// Shared state threaded into every inbound connection handler.
 pub(crate) struct ConnContext {
     pub(crate) node_id:          NodeId,
-    pub(crate) store:            Arc<PapayaMap<Arc<str>, StoreEntry>>,
-    pub(crate) peers:            Arc<PapayaMap<NodeId, Instant>>,
+    pub(crate) peers:            Arc<papaya::HashMap<NodeId, Instant>>,
     /// One sender per gossip shard; carries pre-encoded frame bytes + sender id_hash + forward hint.
     /// The shard fans out bytes directly — no re-encoding per hop (zero-copy forwarding).
     pub(crate) gossip_txs:       Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]>,
     pub(crate) seen:             Arc<ShardedSeen>,
     pub(crate) shutdown:         Arc<watch::Sender<bool>>,
     pub(crate) max_ttl:          u8,
-    pub(crate) subscriptions:    Arc<PapayaMap<Arc<str>, watch::Sender<Option<Bytes>>>>,
     /// Unix-millisecond clock shared with the health monitor.
     pub(crate) current_ts:       Arc<AtomicU64>,
     pub(crate) peer_writers:     Arc<DashMap<NodeId, WriterEntry>>,
@@ -53,16 +49,9 @@ pub(crate) struct ConnContext {
     /// Idle timeout forwarded to `get_or_spawn_writer` / `request_state`.
     /// Zero means no timeout (default).
     pub(crate) writer_idle_timeout: Duration,
-    /// Max live KV entries; forwarded to `apply_and_notify`. 0 = unlimited.
-    pub(crate) max_store_entries: usize,
-    /// Secondary prefix index; forwarded to `apply_and_notify`.
-    pub(crate) prefix_index:      Arc<PrefixIndex>,
-    /// Shared frame-drop counter; incremented when quorum writes or other try_send
-    /// calls inside the connection handler are rejected due to a full shard channel.
-    pub(crate) dropped_frames:    Arc<AtomicU64>,
-    /// Incremental XOR store-hash accumulator; updated by every `apply_and_notify` call
-    /// so `store_hash_acc` returns the current digest in O(1) for anti-entropy fast-path.
-    pub(crate) hash_acc:          Arc<AtomicU64>,
+    /// Bundled KV-path state (store, subscriptions, prefix_index, hash_acc,
+    /// dropped_frames, max_store_entries). Replaces five individual Arc fields.
+    pub(crate) kv_state:         Arc<KvState>,
 }
 
 pub(crate) async fn handle_connection(
@@ -71,10 +60,10 @@ pub(crate) async fn handle_connection(
     ctx: ConnContext,
 ) -> Result<(), GossipError> {
     let ConnContext {
-        node_id, store, peers, gossip_txs, seen, shutdown, max_ttl,
-        subscriptions, current_ts, peer_writers, writer_depth, backoff, n_shards,
+        node_id, peers, gossip_txs, seen, shutdown, max_ttl,
+        current_ts, peer_writers, writer_depth, backoff, n_shards,
         intern_keys, intern_max_keys, signal_boundary, signal_handlers, max_peers,
-        writer_idle_timeout, max_store_entries, prefix_index, dropped_frames, hash_acc,
+        writer_idle_timeout, kv_state,
     } = ctx;
     let mut socket = BufReader::with_capacity(8_192, socket);
     let mut shutdown_rx = shutdown.subscribe();
@@ -155,7 +144,7 @@ pub(crate) async fn handle_connection(
                     is_new
                 };
                 if sender_is_new {
-                    request_state(&sender, &peer_writers, &store, writer_depth, backoff, writer_idle_timeout, &shutdown, &node_id, &hash_acc);
+                    request_state(&sender, &peer_writers, &kv_state.store, writer_depth, backoff, writer_idle_timeout, &shutdown, &node_id, &kv_state.hash_acc);
                 }
             }
 
@@ -171,7 +160,7 @@ pub(crate) async fn handle_connection(
                 // Anti-entropy fast-path: if the sender's store hash matches ours and is
                 // non-zero (zero = "no digest" sentinel from v6 peers), send an empty
                 // StateResponse to acknowledge we're alive without transferring entries.
-                let my_hash = store_hash_acc(&hash_acc);
+                let my_hash = store_hash_acc(&kv_state.hash_acc);
                 if their_hash != 0 && their_hash == my_hash {
                     let empty = WireMessage::StateResponse { entries: vec![] };
                     let mut fast_buf = BytesMut::new();
@@ -194,7 +183,7 @@ pub(crate) async fn handle_connection(
                     continue;
                 }
                 let entries: Vec<SyncEntry> = {
-                    let guard = store.pin();
+                    let guard = kv_state.store.pin();
                     guard.iter()
                         .map(|(k, v)| SyncEntry {
                             key:          k.clone(),
@@ -254,7 +243,7 @@ pub(crate) async fn handle_connection(
                         key,
                         value:        entry.value,
                     };
-                    apply_and_notify(&store, &subscriptions, &update, max_store_entries, &prefix_index, &hash_acc);
+                    apply_and_notify(&kv_state, &update);
                 }
             }
 
@@ -293,10 +282,10 @@ pub(crate) async fn handle_connection(
                             .duration_since(UNIX_EPOCH).unwrap_or_default()
                             .as_millis() as u64;
                         let quorum_key: Arc<str> = Arc::from(
-                            format!("quorum/{}/{}", kind, sender).as_str()
+                            format!("sys/quorum/{}/{}", kind, sender).as_str()
                         );
                         let write_quorum = {
-                            let guard = store.pin();
+                            let guard = kv_state.store.pin();
                             guard.get(&*quorum_key)
                                 .and_then(|e| e.data.as_ref())
                                 .and_then(|v| v.get(..8).and_then(|b| b.try_into().ok()))
@@ -313,11 +302,10 @@ pub(crate) async fn handle_connection(
                                 key:          quorum_key,
                                 value:        Bytes::copy_from_slice(&now_ms.to_le_bytes()),
                             };
-                            apply_and_notify(&store, &subscriptions, &quorum_update,
-                                             max_store_entries, &prefix_index, &hash_acc);
+                            apply_and_notify(&kv_state, &quorum_update);
                             dispatch_gossip_try_send(
                                 &gossip_txs, WireMessage::Data(quorum_update),
-                                node_id.id_hash(), ForwardHint::All, &dropped_frames,
+                                node_id.id_hash(), ForwardHint::All, &kv_state.dropped_frames,
                             );
                         }
                     }
@@ -368,7 +356,7 @@ pub(crate) async fn handle_connection(
                     }
                 }
                 if intern_keys { update.key = intern_key(update.key, intern_max_keys); }
-                apply_and_notify(&store, &subscriptions, &update, max_store_entries, &prefix_index, &hash_acc);
+                apply_and_notify(&kv_state, &update);
 
                 // Push-based boundary sync: if the received key is grp/{group}/{this_node},
                 // update the boundary immediately rather than waiting for the GC-tick reconcile.

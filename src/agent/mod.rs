@@ -3,7 +3,7 @@ use crate::framing::ForwardHint;
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
 use crate::signal::{Boundary, SignalHandlers};
-use crate::store::{PrefixIndex, StoreEntry};
+use crate::store::{KvState, PrefixIndex, StoreEntry};
 use crate::writer::WriterEntry;
 use bytes::Bytes;
 use dashmap::DashMap;
@@ -129,6 +129,11 @@ pub struct GossipAgent {
     /// Incremental XOR hash accumulator for the store; maintained by `apply_and_notify`.
     /// Allows `store_hash_acc` to return the current digest in O(1) instead of O(store).
     pub(super) hash_acc: Arc<AtomicU64>,
+    /// Bundled KV-path state (store + subscriptions + prefix_index + hash_acc +
+    /// dropped_frames + max_store_entries) for passing to `apply_and_notify` and
+    /// threading into `ListenerContext` / `ConnContext` / `ConsensusEngine` as a
+    /// single Arc rather than five separate fields.
+    pub(super) kv_state: Arc<KvState>,
 }
 
 impl GossipAgent {
@@ -159,10 +164,25 @@ impl GossipAgent {
             .collect();
         let seen_shards = n_shards.max(16);
 
+        let store        = Arc::new(papaya::HashMap::new());
+        let subscriptions = Arc::new(papaya::HashMap::new());
+        let prefix_index = Arc::new(PrefixIndex::new());
+        let hash_acc     = Arc::new(AtomicU64::new(0));
+        let dropped_frames = Arc::new(AtomicU64::new(0));
+        let max_store_entries = config.max_store_entries;
+        let kv_state = Arc::new(KvState {
+            store:             store.clone(),
+            subscriptions:     subscriptions.clone(),
+            prefix_index:      prefix_index.clone(),
+            hash_acc:          hash_acc.clone(),
+            dropped_frames:    dropped_frames.clone(),
+            max_store_entries,
+        });
+
         Self {
             node_id: node_id.clone(),
             config,
-            store: Arc::new(papaya::HashMap::new()),
+            store,
             peers: Arc::new(papaya::HashMap::new()),
             bootstrap_peers,
             peer_list_tx,
@@ -171,7 +191,7 @@ impl GossipAgent {
             seen: Arc::new(ShardedSeen::new(seen_shards)),
             current_ts: Arc::new(AtomicU64::new(init_ts)),
             peer_writers: Arc::new(DashMap::new()),
-            subscriptions: Arc::new(papaya::HashMap::new()),
+            subscriptions,
             live_entries: Arc::new(AtomicUsize::new(0)),
             state: AtomicU8::new(STATE_IDLE),
             shutdown_tx: Arc::new(shutdown_tx),
@@ -182,9 +202,10 @@ impl GossipAgent {
             task_handles: std::sync::Mutex::new(Vec::new()),
             signal_boundary: Arc::new(RwLock::new(Boundary::new(node_id))),
             signal_handlers: Arc::new(SignalHandlers::new()),
-            dropped_frames: Arc::new(AtomicU64::new(0)),
-            prefix_index: Arc::new(PrefixIndex::new()),
-            hash_acc: Arc::new(AtomicU64::new(0)),
+            dropped_frames,
+            prefix_index,
+            hash_acc,
+            kv_state,
         }
     }
 }

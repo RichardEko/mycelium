@@ -318,7 +318,7 @@ impl SignalHandlers {
 
 /// Pheromone load state written to Layer I by [`GossipAgent::manage_opacity`].
 ///
-/// Key convention: `load/{node_id}/{kind}`.
+/// Key convention: `sys/load/{node_id}/{kind}` (see [`kv_ns::LOAD`]).
 /// Encoded with [`bincode_cfg()`](crate::framing::bincode_cfg) (fixed-int).
 /// An absent key means the node is transparent (not overloaded) for that kind.
 /// Tombstoned automatically when `BOUNDARY_TRANSPARENT` is emitted.
@@ -455,7 +455,7 @@ pub mod signal_kind {
     /// Upstream nodes should drain service-level connections to `sender` on receipt.
     pub const BOUNDARY_OPAQUE:      &str = "boundary.opaque";
     /// Node has cleared its load and resumed normal signal admission.
-    /// The pheromone trail (`load/{node_id}/{kind}`) is tombstoned immediately.
+    /// The pheromone trail (`sys/load/{node_id}/{kind}`) is tombstoned immediately.
     pub const BOUNDARY_TRANSPARENT: &str = "boundary.transparent";
 }
 
@@ -464,17 +464,24 @@ pub mod signal_kind {
 /// These conventions structure entries in the Layer 1 store. The store is the shared
 /// medium — pheromone trails written here are persistent, anti-entropy synced, and
 /// readable by any node at any time without signal handlers or local caches.
+///
+/// **Namespace protection**: entries under `sys/` are written exclusively by the
+/// library. Applications must not write to `sys/load/`, `sys/quorum/`, or any other
+/// `sys/` sub-namespace — doing so will corrupt pheromone trails and quorum evidence,
+/// leading to incorrect opacity decisions and stale quorum reads. Use the `grp/`,
+/// `svc/`, `consensus/`, and application-defined namespaces for application data.
 pub mod kv_ns {
-    /// Pheromone trail namespace.
+    /// Pheromone trail namespace (library-internal — do not write from application code).
     ///
-    /// Key: `load/{node_id}/{kind}`. Value: bincode-encoded [`LoadState`](crate::signal::LoadState).
+    /// Key: `sys/load/{node_id}/{kind}`. Value: bincode-encoded [`LoadState`](crate::signal::LoadState).
     ///
     /// Written automatically by [`GossipAgent::manage_opacity`](crate::GossipAgent::manage_opacity)
     /// on every `BOUNDARY_OPAQUE` transition; tombstoned on `BOUNDARY_TRANSPARENT`.
     /// Readers discard entries where `now_ms − written_at_ms` exceeds their evaporation window
-    /// (no coordination needed). Graceful shutdown should tombstone `load/{node_id}/{kind}`
-    /// directly or rely on pheromone expiry.
-    pub const LOAD:  &str = "load/";
+    /// (no coordination needed). Graceful shutdown tombstones `sys/load/{node_id}/{kind}`
+    /// automatically; callers may also call `agent.delete(format!("sys/load/{}/{}", node_id, kind))`
+    /// directly to force immediate evaporation.
+    pub const LOAD:  &str = "sys/load/";
     /// Group membership namespace. Written automatically by `join_group`/`leave_group`.
     /// Key: `grp/<group_name>/<node_id>`. Value: `b"1"` (live) or tombstone (left).
     pub const GROUP: &str = "grp/";
@@ -489,9 +496,9 @@ pub mod kv_ns {
     /// without waiting for the next advertise tick.
     pub const ADVERTISE: &str = "svc/";
 
-    /// Persistent quorum evidence namespace.
+    /// Persistent quorum evidence namespace (library-internal — do not write from application code).
     ///
-    /// Key: `quorum/{kind}/{sender_node_id}`. Value: 8-byte little-endian Unix millisecond
+    /// Key: `sys/quorum/{kind}/{sender_node_id}`. Value: 8-byte little-endian Unix millisecond
     /// timestamp of when this node last received and admitted a signal of `kind` from
     /// `sender_node_id`. Written by the connection handler on every admitted signal
     /// delivery; anti-entropy synced to peers so the evidence survives process restarts.
@@ -500,5 +507,5 @@ pub mod kv_ns {
     /// within a time window. Prefer [`GossipAgent::quorum`] (in-memory) for low-latency
     /// queries — `quorum_persistent` is only needed when quorum evidence must survive
     /// crashes or restarts.
-    pub const QUORUM: &str = "quorum/";
+    pub const QUORUM: &str = "sys/quorum/";
 }

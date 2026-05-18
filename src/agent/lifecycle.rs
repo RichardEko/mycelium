@@ -75,12 +75,10 @@ impl GossipAgent {
 
         let lctx = ListenerContext {
             node_id:         self.node_id.clone(),
-            store:           self.store.clone(),
             peers:           self.peers.clone(),
             gossip_txs:      self.gossip_txs.clone(),
             seen:            self.seen.clone(),
             shutdown_tx:     self.shutdown_tx.clone(),
-            subscriptions:   self.subscriptions.clone(),
             current_ts:      self.current_ts.clone(),
             peer_writers:    self.peer_writers.clone(),
             conn_sem:        Arc::new(Semaphore::new(self.config.max_connections)),
@@ -96,10 +94,7 @@ impl GossipAgent {
             signal_handlers: self.signal_handlers.clone(),
             max_peers:           self.config.max_peers,
             writer_idle_timeout: Duration::from_secs(self.config.writer_idle_timeout_secs),
-            max_store_entries:   self.config.max_store_entries,
-            prefix_index:        self.prefix_index.clone(),
-            dropped_frames:      self.dropped_frames.clone(),
-            hash_acc:            self.hash_acc.clone(),
+            kv_state:            self.kv_state.clone(),
         };
 
         let mut new_handles = Vec::with_capacity(n_listeners);
@@ -218,7 +213,7 @@ impl GossipAgent {
     /// Tasks that have not exited within the timeout are logged as warnings and abandoned.
     /// Passing `Duration::MAX` replicates the old unbounded-wait behaviour.
     pub async fn shutdown_with_timeout(&self, timeout: Duration) {
-        let my_load_prefix = format!("load/{}/", self.node_id);
+        let my_load_prefix = format!("sys/load/{}/", self.node_id);
         let load_keys: Vec<String> = self.store.pin()
             .iter()
             .filter(|(k, v)| k.starts_with(&*my_load_prefix) && v.data.is_some())

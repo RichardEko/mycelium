@@ -1,9 +1,8 @@
-use crate::framing::{ForwardHint, WireMessage};
 use crate::signal::{AdvertiseHandle, Signal, SignalScope, WatchHandle};
 use bytes::{BufMut, Bytes, BytesMut};
 use std::{
     sync::Arc,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 use tokio::{sync::mpsc, time};
 
@@ -158,6 +157,12 @@ impl GossipAgent {
     /// Responders must echo these bytes at the start of their `result_kind` reply payload.
     /// See [`signal_kind::INVOKE_RESULT`](crate::signal::signal_kind::INVOKE_RESULT).
     ///
+    /// **Channel capacity**: the result handler ring buffer holds 256 entries. If more
+    /// than 256 `result_kind` signals arrive before the matching nonce is found, the
+    /// oldest are dropped. For high-fan-in result kinds, register a larger channel with
+    /// [`signal_rx_with_capacity`](Self::signal_rx_with_capacity) and drive it with
+    /// [`signal_once`](Self::signal_once) manually.
+    ///
     /// To cancel early when the target goes opaque, race against a
     /// [`BOUNDARY_OPAQUE`](crate::signal::signal_kind::BOUNDARY_OPAQUE) subscription:
     /// ```ignore
@@ -253,109 +258,6 @@ impl GossipAgent {
                     }
                 }
             }
-        });
-        {
-            let mut handles = self.task_handles.lock().unwrap_or_else(|e| e.into_inner());
-            handles.retain(|h| !h.is_finished());
-            handles.push(handle);
-        }
-
-        AdvertiseHandle { _cancel: cancel_tx }
-    }
-
-    /// Like [`advertise`](Self::advertise) but also writes the payload to Layer I on every
-    /// tick so late joiners and restarted peers can discover capabilities immediately via
-    /// `scan_prefix(kv_ns::ADVERTISE)` without waiting for the next signal tick.
-    ///
-    /// Key written: `svc/{kind}/{node_id}`. Tombstoned automatically when the returned
-    /// [`AdvertiseHandle`] is dropped or the agent shuts down.
-    ///
-    /// The signal is still emitted epidemically on each tick (same as [`advertise`]);
-    /// the Layer I entry is an additional durable anchor.
-    #[must_use]
-    pub fn advertise_persistent<F>(
-        &self,
-        kind:       impl Into<Arc<str>>,
-        scope:      SignalScope,
-        interval:   Duration,
-        payload_fn: F,
-    ) -> AdvertiseHandle
-    where
-        F: Fn() -> Bytes + Send + Sync + 'static,
-    {
-        use crate::framing::{dispatch_gossip_try_send, GossipUpdate};
-        use crate::store::apply_and_notify;
-
-        let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
-        let mut shutdown_rx = self.shutdown_tx.subscribe();
-
-        let node_id           = self.node_id.clone();
-        let seen              = self.seen.clone();
-        let current_ts        = self.current_ts.clone();
-        let signal_boundary   = self.signal_boundary.clone();
-        let signal_handlers   = self.signal_handlers.clone();
-        let gossip_txs        = self.gossip_txs.clone();
-        let default_ttl       = self.config.default_ttl;
-        let max_store_entries = self.config.max_store_entries;
-        let dropped_frames    = self.dropped_frames.clone();
-        let store             = self.store.clone();
-        let subscriptions     = self.subscriptions.clone();
-        let prefix_index      = self.prefix_index.clone();
-        let hash_acc          = self.hash_acc.clone();
-        let kind: Arc<str>    = kind.into();
-        let kv_key: Arc<str>  = Arc::from(format!("svc/{}/{}", kind, node_id).as_str());
-
-        let handle = tokio::spawn(async move {
-            let mut ticker = time::interval(interval);
-            ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
-            loop {
-                tokio::select! { biased;
-                    _ = &mut cancel_rx                   => break,
-                    _ = shutdown_rx.wait_for(|v| *v)     => break,
-                    _ = ticker.tick() => {
-                        let payload = payload_fn();
-                        emit_signal(
-                            &node_id, &seen, &current_ts, &signal_boundary,
-                            &signal_handlers, &gossip_txs, default_ttl,
-                            &dropped_frames, kind.clone(), scope.clone(), payload.clone(),
-                        );
-                        let ts = SystemTime::now()
-                            .duration_since(UNIX_EPOCH).unwrap_or_default()
-                            .as_millis() as u64;
-                        let update = GossipUpdate {
-                            nonce: fastrand::u64(1..),
-                            sender: node_id.id_hash(),
-                            ttl: default_ttl,
-                            is_tombstone: false,
-                            timestamp: ts,
-                            key: kv_key.clone(),
-                            value: payload,
-                        };
-                        apply_and_notify(&store, &subscriptions, &update, max_store_entries, &prefix_index, &hash_acc);
-                        dispatch_gossip_try_send(
-                            &gossip_txs, WireMessage::Data(update),
-                            node_id.id_hash(), ForwardHint::All, &dropped_frames,
-                        );
-                    }
-                }
-            }
-            let ts = SystemTime::now()
-                .duration_since(UNIX_EPOCH).unwrap_or_default()
-                .as_millis() as u64;
-            let tombstone = GossipUpdate {
-                nonce: fastrand::u64(1..),
-                sender: node_id.id_hash(),
-                ttl: default_ttl,
-                is_tombstone: true,
-                timestamp: ts,
-                key: kv_key.clone(),
-                value: Bytes::new(),
-            };
-            apply_and_notify(&store, &subscriptions, &tombstone, max_store_entries, &prefix_index, &hash_acc);
-            dispatch_gossip_try_send(
-                &gossip_txs, WireMessage::Data(tombstone),
-                node_id.id_hash(), ForwardHint::All, &dropped_frames,
-            );
         });
         {
             let mut handles = self.task_handles.lock().unwrap_or_else(|e| e.into_inner());
@@ -508,43 +410,4 @@ impl GossipAgent {
         self.signal_handlers.quorum_for_group(kind, &member_hashes, min_senders, window)
     }
 
-    /// Counts distinct senders of `kind` within `window` using Layer I as evidence.
-    ///
-    /// Unlike [`quorum`](Self::quorum), which reads the in-memory sender log (lost on restart),
-    /// this reads `quorum/{kind}/` from the KV store — durable, anti-entropy synced records
-    /// written by the connection handler on every admitted signal delivery.
-    ///
-    /// Use this when quorum evidence must survive process restarts — for example, to verify
-    /// that enough voters participated in a consensus round before acting on a committed value,
-    /// even after this node crashed and was restarted mid-ballot.
-    ///
-    /// **Scope limitation**: evidence is keyed by `(kind, sender)` only — there is no
-    /// slot, ballot, or correlation ID in the key. All signals of `kind` from the same
-    /// sender collapse into one entry regardless of ballot or slot. `quorum_persistent` is
-    /// best suited for application-level quorum queries such as "have K distinct nodes
-    /// advertised capability X within window W?" rather than per-round consensus checks.
-    /// For per-round quorum, use the in-memory `votes_last_ballot` field in
-    /// [`ConsensusResult::Timeout`](crate::consensus::ConsensusResult::Timeout).
-    ///
-    /// **Prefer [`quorum`](Self::quorum) for latency-sensitive paths.** The in-memory version
-    /// is O(window_entries) with no store access; `quorum_persistent` scans the prefix index
-    /// (O(quorum_keys)) plus a store lookup per entry.
-    pub fn quorum_persistent(&self, kind: &str, window: Duration) -> usize {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let prefix = format!("quorum/{}/", kind);
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH).unwrap_or_default()
-            .as_millis() as u64;
-        let window_ms = window.as_millis() as u64;
-        self.scan_prefix(&prefix)
-            .into_iter()
-            .filter(|(_, v)| {
-                v.get(..8)
-                    .and_then(|b| b.try_into().ok())
-                    .map(|b: [u8; 8]| u64::from_le_bytes(b))
-                    .map(|ts| now_ms.saturating_sub(ts) <= window_ms)
-                    .unwrap_or(false)
-            })
-            .count()
-    }
 }

@@ -72,15 +72,10 @@ impl GossipAgent {
             signal_handlers:     self.signal_handlers.clone(),
             gossip_txs:          self.gossip_txs.clone(),
             default_ttl:         self.config.default_ttl,
-            dropped_frames:      self.dropped_frames.clone(),
-            store:               self.store.clone(),
-            subscriptions:       self.subscriptions.clone(),
+            kv_state:            self.kv_state.clone(),
             abstain_when_opaque,
             use_trust_slices,
-            max_store_entries:   self.config.max_store_entries,
             max_abstain_ballots,
-            prefix_index:        self.prefix_index.clone(),
-            hash_acc:            self.hash_acc.clone(),
         }
     }
 }
