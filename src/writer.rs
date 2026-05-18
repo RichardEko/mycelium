@@ -11,6 +11,7 @@ use tokio::{
     net::TcpStream,
     sync::{mpsc, mpsc::error::TrySendError, watch},
     task::JoinHandle,
+    time as ttime,
 };
 use tracing::{debug, warn};
 
@@ -33,6 +34,7 @@ pub(crate) async fn run_peer_writer(
     peer: NodeId,
     mut rx: mpsc::Receiver<Bytes>,
     backoff: Duration,
+    idle_timeout: Duration,
     mut shutdown_rx: watch::Receiver<bool>,
     mut peer_shutdown_rx: watch::Receiver<bool>,
 ) {
@@ -40,17 +42,33 @@ pub(crate) async fn run_peer_writer(
     // Stores (fail_time, actual_backoff) where actual_backoff is jittered so
     // simultaneous reconnects after a partition don't all fire at the same instant.
     let mut last_fail: Option<(Instant, Duration)> = None;
+    // Idle eviction: track when we last sent a frame. None = no timeout configured.
+    let mut idle_deadline: Option<ttime::Instant> = if idle_timeout.is_zero() {
+        None
+    } else {
+        Some(ttime::Instant::now() + idle_timeout)
+    };
 
     loop {
         // biased: data path checked first so a burst of frames drains before shutdown.
-        let data = tokio::select! { biased;
+        // The idle arm uses pending() when no timeout is configured so it never fires.
+        let data: Bytes = tokio::select! { biased;
             msg = rx.recv() => match msg {
                 Some(d) => d,
                 None => break, // all senders dropped
             },
             _ = shutdown_rx.wait_for(|v| *v) => break,
             _ = peer_shutdown_rx.wait_for(|v| *v) => break,
+            _ = async {
+                match idle_deadline {
+                    Some(d) => ttime::sleep_until(d).await,
+                    None    => std::future::pending().await,
+                }
+            } => break,
         };
+        if let Some(ref mut d) = idle_deadline {
+            *d = ttime::Instant::now() + idle_timeout;
+        }
 
         if let Some((fail_time, fail_backoff)) = last_fail {
             if fail_time.elapsed() < fail_backoff {
@@ -112,15 +130,37 @@ pub(crate) struct WriterEntry {
 }
 
 /// Returns the frame sender for `peer`'s writer task, spawning a new task on first use.
+///
+/// If the existing writer task has finished (idle timeout, disconnect, or eviction),
+/// the stale map entry is replaced atomically using `and_modify` so the next caller
+/// gets a fresh sender rather than a closed one.
 pub(crate) fn get_or_spawn_writer(
     peer: &NodeId,
     writers: &DashMap<NodeId, WriterEntry>,
     chan_depth: usize,
     backoff: Duration,
+    idle_timeout: Duration,
     shutdown_tx: &Arc<watch::Sender<bool>>,
 ) -> mpsc::Sender<Bytes> {
     writers
         .entry(peer.clone())
+        .and_modify(|e| {
+            // Replace in-place when the writer task has finished so callers don't
+            // get a closed sender. This covers idle timeout, write failure, and eviction.
+            if e.handle.is_finished() {
+                let (tx, rx) = mpsc::channel(chan_depth);
+                let (peer_shutdown_tx, peer_shutdown_rx) = watch::channel(false);
+                let handle = tokio::spawn(run_peer_writer(
+                    peer.clone(),
+                    rx,
+                    backoff,
+                    idle_timeout,
+                    shutdown_tx.subscribe(),
+                    peer_shutdown_rx,
+                ));
+                *e = WriterEntry { tx, peer_shutdown: Arc::new(peer_shutdown_tx), handle };
+            }
+        })
         .or_insert_with(|| {
             let (tx, rx) = mpsc::channel(chan_depth);
             let (peer_shutdown_tx, peer_shutdown_rx) = watch::channel(false);
@@ -128,6 +168,7 @@ pub(crate) fn get_or_spawn_writer(
                 peer.clone(),
                 rx,
                 backoff,
+                idle_timeout,
                 shutdown_tx.subscribe(),
                 peer_shutdown_rx,
             ));
@@ -153,6 +194,7 @@ pub(crate) fn request_state(
     peer_writers: &Arc<DashMap<NodeId, WriterEntry>>,
     writer_depth: usize,
     backoff: Duration,
+    idle_timeout: Duration,
     shutdown_tx: &Arc<watch::Sender<bool>>,
     sender: &NodeId,
 ) {
@@ -166,7 +208,7 @@ pub(crate) fn request_state(
         return;
     }
     let data: Bytes = buf.freeze();
-    let tx = get_or_spawn_writer(peer, peer_writers, writer_depth, backoff, shutdown_tx);
+    let tx = get_or_spawn_writer(peer, peer_writers, writer_depth, backoff, idle_timeout, shutdown_tx);
     match tx.try_send(data) {
         Ok(()) => {}
         Err(TrySendError::Full(_)) => warn!("StateRequest channel full for {}", peer),

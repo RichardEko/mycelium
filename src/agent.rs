@@ -254,6 +254,7 @@ impl GossipAgent {
             signal_boundary: self.signal_boundary.clone(),
             signal_handlers: self.signal_handlers.clone(),
             max_peers:       self.config.max_peers,
+            writer_idle_timeout: Duration::from_secs(self.config.writer_idle_timeout_secs),
         };
 
         let mut new_handles: Vec<JoinHandle<()>> = Vec::with_capacity(n_listeners);
@@ -270,6 +271,7 @@ impl GossipAgent {
         let shutdown_tx     = self.shutdown_tx.clone();
         let writer_depth    = self.config.writer_channel_depth;
         let backoff         = Duration::from_secs(self.config.reconnect_backoff_secs);
+        let idle_timeout    = Duration::from_secs(self.config.writer_idle_timeout_secs);
 
         let rxs = self.gossip_rxs
             .lock()
@@ -287,6 +289,7 @@ impl GossipAgent {
                 self.shard_alive[shard_idx].clone(),
                 writer_depth,
                 backoff,
+                idle_timeout,
                 self.config.max_forwarding_peers,
                 self.dropped_frames.clone(),
             ));
@@ -305,6 +308,7 @@ impl GossipAgent {
         let interval_secs        = self.config.health_check_interval_secs;
         let writer_depth         = self.config.writer_channel_depth;
         let backoff              = Duration::from_secs(self.config.reconnect_backoff_secs);
+        let idle_timeout         = Duration::from_secs(self.config.writer_idle_timeout_secs);
         let peer_eviction_intervals = self.config.peer_eviction_intervals;
         let health_monitor_alive = self.health_monitor_alive.clone();
         let ping_peer_sample_size = self.config.ping_peer_sample_size;
@@ -320,6 +324,7 @@ impl GossipAgent {
             interval_secs,
             writer_depth,
             backoff,
+            idle_timeout,
             peer_eviction_intervals,
             health_monitor_alive,
             ping_peer_sample_size,
@@ -337,13 +342,14 @@ impl GossipAgent {
         let live_entries      = self.live_entries.clone();
         let seen              = self.seen.clone();
         let max_seen_entries  = self.config.max_seen_entries;
+        let peer_writers      = self.peer_writers.clone();
         let gc_alive          = self.gc_alive.clone();
         let signal_handlers   = self.signal_handlers.clone();
 
         let handle = tokio::spawn(run_gc_task(
             store, subscriptions, shutdown_tx,
             interval_secs, default_ttl, propagation, live_entries,
-            seen, max_seen_entries, gc_alive, signal_handlers,
+            seen, max_seen_entries, gc_alive, signal_handlers, peer_writers,
         ));
         self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).push(handle);
     }
@@ -1066,7 +1072,13 @@ impl GossipAgent {
             } else {
                 self.store.pin().iter().filter(|(_, v)| v.data.is_some()).count()
             },
-            cached_connections: self.peer_writers.len(),
+            // Filter out writers whose tasks have finished (idle-timed-out, peer evicted,
+            // or disconnected) so the count reflects currently-active connections.
+            // The GC pass lazily removes the finished entries from the map; this filter
+            // makes the metric accurate without waiting for the next GC cycle.
+            cached_connections: self.peer_writers.iter()
+                .filter(|e| !e.value().handle.is_finished())
+                .count(),
             gossip_shard_queue_depths,
             dead_shards,
             // When not running, gate to `true` so callers don't mistake a clean
@@ -1554,6 +1566,7 @@ struct ListenerContext {
     signal_boundary: Arc<RwLock<Boundary>>,
     signal_handlers: Arc<SignalHandlers>,
     max_peers:       usize,
+    writer_idle_timeout: Duration,
 }
 
 async fn run_listener_task(listener: TcpListener, lctx: ListenerContext) {
@@ -1561,7 +1574,7 @@ async fn run_listener_task(listener: TcpListener, lctx: ListenerContext) {
         node_id, store, peers, gossip_txs, seen, shutdown_tx, subscriptions,
         current_ts, peer_writers, conn_sem, listener_alive,
         max_conn, max_ttl, writer_depth, backoff, n_shards, intern_keys, intern_max_keys,
-        signal_boundary, signal_handlers, max_peers,
+        signal_boundary, signal_handlers, max_peers, writer_idle_timeout,
     } = lctx;
     let mut shutdown_rx = shutdown_tx.subscribe();
     let mut conn_set: JoinSet<()> = JoinSet::new();
@@ -1606,7 +1619,7 @@ async fn run_listener_task(listener: TcpListener, lctx: ListenerContext) {
                                         current_ts, peer_writers,
                                         writer_depth, backoff, n_shards,
                                         intern_keys, intern_max_keys, signal_boundary,
-                                        signal_handlers, max_peers,
+                                        signal_handlers, max_peers, writer_idle_timeout,
                                     };
                                     if let Err(e) = handle_connection(socket, addr, ctx).await {
                                         warn!("Connection error from {}: {}", addr, e);
@@ -1650,6 +1663,7 @@ async fn run_gossip_shard(
     alive:               Arc<AtomicBool>,
     writer_depth:        usize,
     backoff:             Duration,
+    idle_timeout:        Duration,
     max_forwarding_peers: usize,
     dropped_frames:      Arc<AtomicU64>,
 ) {
@@ -1688,7 +1702,7 @@ async fn run_gossip_shard(
                         t.clone()
                     } else {
                         let t = get_or_spawn_writer(
-                            peer, &peer_writers, writer_depth, backoff, &shutdown_tx,
+                            peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx,
                         );
                         sender_cache.insert(peer.clone(), t.clone());
                         t
@@ -1700,10 +1714,26 @@ async fn run_gossip_shard(
                             warn!("Peer writer channel full, dropping forward to {}", peer);
                         }
                         Err(TrySendError::Closed(_)) => {
-                            // Writer exited; most likely the peer was evicted. Evict
-                            // from the local cache so the next tick re-checks.
-                            debug!("Peer writer for {} closed, evicting from shard cache", peer);
+                            // Writer exited (idle timeout, peer eviction, write failure).
+                            // Evict the stale sender and immediately retry with a fresh writer
+                            // so this frame is not silently dropped.
+                            debug!("Peer writer for {} closed; respawning and retrying", peer);
                             sender_cache.remove(peer);
+                            let new_tx = get_or_spawn_writer(
+                                peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx,
+                            );
+                            sender_cache.insert(peer.clone(), new_tx.clone());
+                            match new_tx.try_send(data.clone()) {
+                                Ok(()) => {}
+                                Err(TrySendError::Full(_)) => {
+                                    dropped_frames.fetch_add(1, Ordering::Relaxed);
+                                    warn!("Respawned writer for {} is full; frame dropped", peer);
+                                }
+                                Err(TrySendError::Closed(_)) => {
+                                    // Fresh writer immediately closed — likely shutting down.
+                                    debug!("Respawned writer for {} closed immediately", peer);
+                                }
+                            }
                         }
                     }
                 }
@@ -1730,6 +1760,7 @@ async fn run_health_monitor(
     interval_secs:         u64,
     writer_depth:          usize,
     backoff:               Duration,
+    idle_timeout:          Duration,
     peer_eviction_intervals: u64,
     health_monitor_alive:  Arc<AtomicBool>,
     ping_peer_sample_size: usize,
@@ -1746,7 +1777,7 @@ async fn run_health_monitor(
     }
 
     for peer in &bootstrap_set {
-        request_state(peer, &peer_writers, writer_depth, backoff, &shutdown_tx, &node_id);
+        request_state(peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &node_id);
     }
 
     let mut ticker = time::interval(Duration::from_secs(interval_secs));
@@ -1802,7 +1833,7 @@ async fn run_health_monitor(
                         t.clone()
                     } else {
                         let t = get_or_spawn_writer(
-                            peer, &peer_writers, writer_depth, backoff, &shutdown_tx,
+                            peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx,
                         );
                         ping_sender_cache.insert(peer.clone(), t.clone());
                         t
@@ -1813,8 +1844,19 @@ async fn run_health_monitor(
                             warn!("Peer writer channel full, dropping ping to {}", peer);
                         }
                         Err(TrySendError::Closed(_)) => {
-                            debug!("Peer writer for {} closed, evicting from ping cache", peer);
+                            // Writer exited; evict stale entry and retry with a fresh writer.
+                            debug!("Peer writer for {} closed; respawning for ping retry", peer);
                             ping_sender_cache.remove(peer);
+                            let new_tx = get_or_spawn_writer(
+                                peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx,
+                            );
+                            ping_sender_cache.insert(peer.clone(), new_tx.clone());
+                            match new_tx.try_send(ping_data.clone()) {
+                                Ok(()) => {}
+                                Err(_) => {
+                                    debug!("Respawned writer for {} could not accept ping", peer);
+                                }
+                            }
                         }
                     }
                 }
@@ -1917,6 +1959,7 @@ async fn run_gc_task(
     max_seen_entries:  usize,
     gc_alive:          Arc<AtomicBool>,
     signal_handlers:   Arc<crate::signal::SignalHandlers>,
+    peer_writers:      Arc<DashMap<NodeId, WriterEntry>>,
 ) {
     gc_alive.store(true, Ordering::Relaxed);
     let _alive_guard = AliveGuard(gc_alive.clone());
@@ -2013,6 +2056,11 @@ async fn run_gc_task(
                     seen.emergency_trim(wall_ts.saturating_sub(60_000));
                     warn!("Seen-set emergency trim; {} entries remain", seen.len());
                 }
+
+                // Evict writer map entries whose tasks have finished (idle timeout,
+                // peer eviction, disconnect). This keeps cached_connections accurate
+                // and bounds the DashMap to currently-active peers.
+                peer_writers.retain(|_, entry| !entry.handle.is_finished());
             }
             _ = shutdown_rx.wait_for(|v| *v) => break,
         }

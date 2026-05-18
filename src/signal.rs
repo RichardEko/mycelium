@@ -92,9 +92,10 @@ impl Boundary {
 /// Multiple tasks may register receivers for the same kind. All registered
 /// channels receive the signal on delivery. Closed channels are evicted lazily.
 pub(crate) struct SignalHandlers {
-    /// `Arc<Vec<Sender>>` so `deliver()` can snapshot with an O(1) atomic increment
-    /// instead of an O(n) Vec clone. Registration (cold path) rebuilds the Vec+Arc.
-    map:         DashMap<Arc<str>, Arc<Vec<mpsc::Sender<Signal>>>>,
+    /// papaya::HashMap for lock-free epoch-pinned reads on the hot delivery path.
+    /// Value is `Arc<Vec<Sender>>` so the snapshot in `deliver()` is an O(1) refcount
+    /// increment. Registration (cold path) rebuilds the Vec+Arc via `compute()`.
+    map:         PapayaMap<Arc<str>, Arc<Vec<mpsc::Sender<Signal>>>>,
     /// Lock-free reads via papaya epoch pinning — hot on every `last_signal` query.
     last_seen:   PapayaMap<Arc<str>, Instant>,
     /// Active refractory periods. Value is the `Instant` at which suppression expires.
@@ -109,7 +110,7 @@ pub(crate) struct SignalHandlers {
 impl SignalHandlers {
     pub(crate) fn new() -> Self {
         Self {
-            map:        DashMap::new(),
+            map:        PapayaMap::new(),
             last_seen:  PapayaMap::new(),
             suppressed: PapayaMap::new(),
             sender_log: DashMap::new(),
@@ -125,14 +126,17 @@ impl SignalHandlers {
     /// Returns a new `mpsc::Receiver<Signal>` for `kind` with a caller-specified channel depth.
     pub(crate) fn register_with_capacity(&self, kind: Arc<str>, cap: usize) -> mpsc::Receiver<Signal> {
         let (tx, rx) = mpsc::channel(cap);
-        let tx2 = tx.clone();
-        self.map.entry(kind)
-            .and_modify(|arc| {
-                let mut v = (**arc).clone();
-                v.push(tx2);
-                *arc = Arc::new(v);
-            })
-            .or_insert_with(|| Arc::new(vec![tx]));
+        let mut slot = Some(tx);
+        self.map.pin().compute(kind, |existing| -> papaya::Operation<Arc<Vec<mpsc::Sender<Signal>>>, ()> {
+            match existing {
+                None => papaya::Operation::Insert(Arc::new(vec![slot.take().unwrap()])),
+                Some((_, arc)) => {
+                    let mut v = (**arc).clone();
+                    v.push(slot.take().unwrap());
+                    papaya::Operation::Insert(Arc::new(v))
+                }
+            }
+        });
         rx
     }
 
@@ -148,7 +152,8 @@ impl SignalHandlers {
     /// (The previous minimum aggregation reported 0.0 opacity even when all but one
     /// handler were full, causing `opacity()` to mislead diagnostics.)
     pub(crate) fn fill_ratio(&self, kind: &Arc<str>) -> f32 {
-        let Some(senders) = self.map.get(kind) else { return 0.0 };
+        let guard = self.map.pin();
+        let Some(senders) = guard.get(kind.as_ref()) else { return 0.0 };
         let mut max_ratio: f32 = 0.0;
         for tx in senders.iter().filter(|tx| !tx.is_closed()) {
             let ratio = 1.0_f32 - tx.capacity() as f32 / tx.max_capacity() as f32;
@@ -162,10 +167,10 @@ impl SignalHandlers {
     /// Records the delivery time for [`last_signal`](Self::last_signal) regardless
     /// of whether any handlers are registered.
     ///
-    /// Hot-path design: takes a DashMap *read* lock to snapshot the sender list, then
-    /// sends to each without holding the lock. The write lock is only acquired if at
-    /// least one sender was found closed — the common case (no closed senders) holds
-    /// no write lock at all.
+    /// Hot-path design: epoch-pins the papaya map to get an `Arc<Vec<Sender>>` snapshot
+    /// (one atomic refcount increment), then unpins before iterating. The guard is held
+    /// for the absolute minimum time. Closed-sender eviction uses a CAS `compute()` write
+    /// and only occurs when at least one sender was found closed.
     pub(crate) fn deliver(&self, signal: &Signal) {
         let now = Instant::now();
         self.last_seen.pin().insert(signal.kind.clone(), now);
@@ -184,9 +189,13 @@ impl SignalHandlers {
         {
             return;
         }
-        let snapshot: Arc<Vec<mpsc::Sender<Signal>>> = match self.map.get(&signal.kind) {
-            Some(guard) => Arc::clone(guard.value()),   // O(1) atomic refcount increment
-            None => return,
+        let snapshot: Arc<Vec<mpsc::Sender<Signal>>> = {
+            let guard = self.map.pin();
+            match guard.get(&*signal.kind) {
+                Some(arc) => Arc::clone(arc),   // O(1) atomic refcount increment; guard released below
+                None => return,
+            }
+            // guard drops here — epoch unpinned before the send loop
         };
         let mut has_closed = false;
         for tx in snapshot.iter() {
@@ -204,10 +213,17 @@ impl SignalHandlers {
             }
         }
         if has_closed {
-            if let Some(mut entry) = self.map.get_mut(&signal.kind) {
-                let filtered: Vec<_> = entry.iter().filter(|tx| !tx.is_closed()).cloned().collect();
-                *entry = Arc::new(filtered);
-            }
+            self.map.pin().compute(signal.kind.clone(), |existing| match existing {
+                None => papaya::Operation::Abort(()),
+                Some((_, arc)) => {
+                    let filtered: Vec<_> = arc.iter().filter(|tx| !tx.is_closed()).cloned().collect();
+                    if filtered.is_empty() {
+                        papaya::Operation::Remove
+                    } else {
+                        papaya::Operation::Insert(Arc::new(filtered))
+                    }
+                }
+            });
         }
     }
 

@@ -170,6 +170,7 @@ mod tests {
             signal_boundary: Arc::new(RwLock::new(Boundary::new(node_id))),
             signal_handlers: Arc::new(SignalHandlers::new()),
             max_peers: usize::MAX,
+            writer_idle_timeout: Duration::ZERO,
         };
         let handle = tokio::spawn(handle_connection(
             socket,
@@ -806,6 +807,7 @@ mod tests {
                 signal_boundary: Arc::new(RwLock::new(Boundary::new(node_id))),
                 signal_handlers: Arc::new(SignalHandlers::new()),
                 max_peers: usize::MAX,
+                writer_idle_timeout: Duration::ZERO,
             };
             use crate::connection::handle_connection;
             tokio::spawn(handle_connection(reader, "127.0.0.1:0".parse().unwrap(), ctx));
@@ -2186,6 +2188,59 @@ mod tests {
             agent_b.consensus_get("late_sl"),
             Some(Bytes::from_static(b"late_v")),
         );
+
+        agent_a.shutdown().await;
+        agent_b.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_writer_evicted_after_idle_timeout() {
+        let port_a = alloc_port();
+        let port_b = alloc_port();
+
+        // Long health interval so pings don't keep resetting the idle deadline.
+        // The idle timeout (3 s) is shorter than the health interval jitter window,
+        // so the writer will go idle before any ping resets it.
+        let mut cfg_a = GossipConfig::default();
+        cfg_a.bind_port                  = port_a;
+        cfg_a.reconnect_backoff_secs     = 1;
+        cfg_a.health_check_interval_secs = 60;
+        cfg_a.writer_idle_timeout_secs   = 3;
+        cfg_a.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_b).unwrap()];
+
+        let mut cfg_b = GossipConfig::default();
+        cfg_b.bind_port                  = port_b;
+        cfg_b.reconnect_backoff_secs     = 1;
+        cfg_b.health_check_interval_secs = 60;
+        cfg_b.writer_idle_timeout_secs   = 3;
+        cfg_b.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_a).unwrap()];
+
+        let agent_a = GossipAgent::new(NodeId::new("127.0.0.1", port_a).unwrap(), cfg_a);
+        let agent_b = GossipAgent::new(NodeId::new("127.0.0.1", port_b).unwrap(), cfg_b);
+        agent_a.start().await.unwrap();
+        agent_b.start().await.unwrap();
+        // Small pause so listener tasks fully start before sending.
+        time::sleep(Duration::from_millis(50)).await;
+
+        // A single gossip write establishes a writer from A to B.
+        assert!(agent_a.set("idle_key", Bytes::from_static(b"v1")));
+        poll_until(|| agent_b.get("idle_key").is_some(), 5_000).await;
+
+        // After 3 s of silence the writer task exits. system_stats() filters finished
+        // handles, so cached_connections drops to 0 without waiting for the GC pass.
+        // Allow 10 s total (3 s idle + generous scheduling slack).
+        poll_until(|| agent_a.system_stats().cached_connections == 0, 10_000).await;
+        assert_eq!(
+            agent_a.system_stats().cached_connections, 0,
+            "writer should report as gone after idle timeout"
+        );
+
+        // A new write must reconnect transparently and still reach B.
+        assert!(agent_a.set("idle_key", Bytes::from_static(b"v2")));
+        poll_until(
+            || agent_b.get("idle_key").map(|v| v == Bytes::from_static(b"v2")).unwrap_or(false),
+            5_000,
+        ).await;
 
         agent_a.shutdown().await;
         agent_b.shutdown().await;

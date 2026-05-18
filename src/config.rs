@@ -109,6 +109,15 @@ pub struct GossipConfig {
     ///
     /// Default: `i64::MAX as usize` (no effective cap — all discovered peers are tracked).
     pub max_peers: usize,
+    /// Seconds of inactivity after which a peer writer closes its TCP connection.
+    ///
+    /// The connection is re-established transparently on the next frame destined for that
+    /// peer, so this is invisible to callers. Idle writer tasks consume a file descriptor
+    /// and a tokio task for every peer ever contacted; setting a timeout bounds that cost
+    /// in clusters that churn or where many peers are only occasionally active.
+    ///
+    /// `0` = no timeout (default, existing behaviour — writers stay connected indefinitely).
+    pub writer_idle_timeout_secs: u64,
 }
 
 impl Default for GossipConfig {
@@ -135,6 +144,7 @@ impl Default for GossipConfig {
             ping_peer_sample_size: 20,
             tcp_accept_backlog: 1024,
             max_peers: i64::MAX as usize,
+            writer_idle_timeout_secs: 0,
         }
     }
 }
@@ -247,7 +257,7 @@ impl GossipConfig {
     /// **Note:** this method does _not_ call [`validate`](Self::validate). Callers
     /// must invoke `validate()` separately after all overrides are applied.
     ///
-    /// All 18 fields can be overridden: `GOSSIP_BIND_ADDRESS`, `GOSSIP_BIND_PORT`,
+    /// All 19 fields can be overridden: `GOSSIP_BIND_ADDRESS`, `GOSSIP_BIND_PORT`,
     /// `GOSSIP_PROPAGATION_WINDOW_SECS`, `GOSSIP_HEALTH_CHECK_INTERVAL_SECS`,
     /// `GOSSIP_DEFAULT_TTL`, `GOSSIP_MAX_CONNECTIONS`, `GOSSIP_WRITER_CHANNEL_DEPTH`,
     /// `GOSSIP_MAX_FORWARDING_PEERS`, `GOSSIP_RECONNECT_BACKOFF_SECS`,
@@ -256,7 +266,7 @@ impl GossipConfig {
     /// `GOSSIP_INTERN_KEYS` (`true`/`false`/`1`/`0`), `GOSSIP_INTERN_MAX_KEYS`,
     /// `GOSSIP_BOOTSTRAP_PEERS` (comma-separated
     /// `ip:port` list), `GOSSIP_PING_PEER_SAMPLE_SIZE`, `GOSSIP_TCP_ACCEPT_BACKLOG`,
-    /// `GOSSIP_MAX_PEERS`.
+    /// `GOSSIP_MAX_PEERS`, `GOSSIP_WRITER_IDLE_TIMEOUT_SECS`.
     pub fn apply_env_overrides(&mut self) -> Result<(), GossipError> {
         if let Ok(v) = env::var("GOSSIP_BIND_ADDRESS") {
             self.bind_address = v;
@@ -324,6 +334,9 @@ impl GossipConfig {
         }
         if let Ok(v) = env::var("GOSSIP_MAX_PEERS") {
             self.max_peers = v.parse().map_err(GossipError::Parse)?;
+        }
+        if let Ok(v) = env::var("GOSSIP_WRITER_IDLE_TIMEOUT_SECS") {
+            self.writer_idle_timeout_secs = v.parse().map_err(GossipError::Parse)?;
         }
         Ok(())
     }

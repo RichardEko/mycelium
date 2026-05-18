@@ -51,6 +51,9 @@ pub(crate) struct ConnContext {
     /// Cap on the peer table. Piggybacked peers are silently ignored once this
     /// is reached; bootstrap peers and direct senders are always admitted.
     pub(crate) max_peers:        usize,
+    /// Idle timeout forwarded to `get_or_spawn_writer` / `request_state`.
+    /// Zero means no timeout (default).
+    pub(crate) writer_idle_timeout: Duration,
 }
 
 pub(crate) async fn handle_connection(
@@ -62,6 +65,7 @@ pub(crate) async fn handle_connection(
         node_id, store, peers, gossip_txs, seen, shutdown, max_ttl,
         subscriptions, current_ts, peer_writers, writer_depth, backoff, n_shards,
         intern_keys, intern_max_keys, signal_boundary, signal_handlers, max_peers,
+        writer_idle_timeout,
     } = ctx;
     let mut socket = BufReader::with_capacity(8_192, socket);
     let mut shutdown_rx = shutdown.subscribe();
@@ -131,7 +135,7 @@ pub(crate) async fn handle_connection(
                     is_new
                 };
                 if sender_is_new {
-                    request_state(&sender, &peer_writers, writer_depth, backoff, &shutdown, &node_id);
+                    request_state(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &node_id);
                 }
             }
 
@@ -175,7 +179,7 @@ pub(crate) async fn handle_connection(
                             );
                             continue;
                         }
-                        let tx = get_or_spawn_writer(&sender, &peer_writers, writer_depth, backoff, &shutdown);
+                        let tx = get_or_spawn_writer(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown);
                         // Use send().await (not try_send) — StateResponse is a rare,
                         // join-time message. Dropping it causes permanent divergence
                         // because StateRequest is only sent on first contact; there is
