@@ -22,10 +22,11 @@ mod kv;
 mod signal_ops;
 mod opacity;
 mod consensus_ops;
-mod helpers;
+pub(crate) mod helpers;
 mod tasks;
 
 pub(crate) use helpers::emit_signal;
+pub(crate) use helpers::emit_signal_async;
 
 pub(super) const STATE_IDLE:    u8 = 0;
 pub(super) const STATE_RUNNING: u8 = 1;

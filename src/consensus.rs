@@ -26,20 +26,21 @@
 //!   [`GossipAgent::declare_trust`]. The basic protocol uses simple majority;
 //!   trust-slice-based quorum intersection is a future extension.
 
+use crate::agent::{emit_signal, emit_signal_async};
 use crate::framing::{
     bincode_cfg, dispatch_gossip_send, dispatch_gossip_try_send, ForwardHint, GossipUpdate,
     WireMessage,
 };
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
-use crate::signal::{decode_load_state, kv_ns, Signal, SignalHandlers, SignalScope, Boundary};
+use crate::signal::{decode_load_state, kv_ns, SignalHandlers, SignalScope, Boundary};
 use crate::store::{apply_and_notify, PrefixIndex, StoreEntry};
 use ahash::{AHashMap, AHashSet};
 use bytes::{BufMut, Bytes, BytesMut};
 use parking_lot::RwLock;
 use std::{
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::AtomicU64,
         Arc,
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -317,73 +318,6 @@ impl ConsensusEngine {
         ).await;
     }
 
-    // ── Signal helpers ───────────────────────────────────────────────────────
-
-    /// Emits a signal; uses `try_send` (non-blocking, for voter tasks).
-    fn emit_sync(&self, kind: Arc<str>, scope: SignalScope, payload: Bytes) {
-        let nonce = fastrand::u64(1..);
-        let ts = self.current_ts.load(Ordering::Relaxed);
-        let _ = self.seen.is_duplicate(nonce, ts);
-        if self.signal_boundary.read().admits(&scope) {
-            let admit = match &scope {
-                SignalScope::Individual(_) => true,
-                _ => {
-                    let opacity = self.signal_handlers.fill_ratio(&kind);
-                    opacity == 0.0 || fastrand::f32() >= opacity
-                }
-            };
-            if admit {
-                self.signal_handlers.deliver(&Signal {
-                    kind: kind.clone(), scope: scope.clone(),
-                    payload: payload.clone(), sender: self.node_id.clone(), nonce,
-                });
-            }
-        }
-        let hint = match &scope {
-            SignalScope::System           => ForwardHint::All,
-            SignalScope::Group(name)      => ForwardHint::Group(name.clone()),
-            SignalScope::Individual(peer) => ForwardHint::Individual(peer.clone()),
-        };
-        dispatch_gossip_try_send(
-            &self.gossip_txs,
-            WireMessage::Signal { ttl: self.default_ttl, nonce, sender: self.node_id.clone(), scope, kind, payload },
-            self.node_id.id_hash(), hint, &self.dropped_frames,
-        );
-    }
-
-    /// Emits a signal; awaits channel capacity (used by the proposer).
-    async fn emit_async(&self, kind: &str, scope: SignalScope, payload: Bytes) {
-        let kind: Arc<str> = Arc::from(kind);
-        let nonce = fastrand::u64(1..);
-        let ts = self.current_ts.load(Ordering::Relaxed);
-        let _ = self.seen.is_duplicate(nonce, ts);
-        if self.signal_boundary.read().admits(&scope) {
-            let admit = match &scope {
-                SignalScope::Individual(_) => true,
-                _ => {
-                    let opacity = self.signal_handlers.fill_ratio(&kind);
-                    opacity == 0.0 || fastrand::f32() >= opacity
-                }
-            };
-            if admit {
-                self.signal_handlers.deliver(&Signal {
-                    kind: kind.clone(), scope: scope.clone(),
-                    payload: payload.clone(), sender: self.node_id.clone(), nonce,
-                });
-            }
-        }
-        let hint = match &scope {
-            SignalScope::System           => ForwardHint::All,
-            SignalScope::Group(name)      => ForwardHint::Group(name.clone()),
-            SignalScope::Individual(peer) => ForwardHint::Individual(peer.clone()),
-        };
-        dispatch_gossip_send(
-            &self.gossip_txs,
-            WireMessage::Signal { ttl: self.default_ttl, nonce, sender: self.node_id.clone(), scope, kind, payload },
-            self.node_id.id_hash(), hint,
-        ).await;
-    }
-
     // ── Proposer ─────────────────────────────────────────────────────────────
 
     /// Runs one full proposal attempt sequence for `slot`.
@@ -439,8 +373,10 @@ impl ConsensusEngine {
                 slot: slot.clone(), ballot, value: value.clone(),
                 proposer: self.node_id.clone(),
             };
-            self.emit_async(
-                consensus_kind::PROPOSE, scope.clone(), encode_consensus_msg(&propose_msg),
+            emit_signal_async(
+                &self.node_id, &self.seen, &self.current_ts, &self.signal_boundary,
+                &self.signal_handlers, &self.gossip_txs, self.default_ttl, &self.dropped_frames,
+                Arc::from(consensus_kind::PROPOSE), scope.clone(), encode_consensus_msg(&propose_msg),
             ).await;
 
             // Proposer counts its own vote.
@@ -450,8 +386,10 @@ impl ConsensusEngine {
                 let commit = ConsensusMsg::Commit {
                     slot: slot.clone(), ballot, value: value.clone(),
                 };
-                self.emit_async(
-                    consensus_kind::COMMIT, scope.clone(), encode_consensus_msg(&commit),
+                emit_signal_async(
+                    &self.node_id, &self.seen, &self.current_ts, &self.signal_boundary,
+                    &self.signal_handlers, &self.gossip_txs, self.default_ttl, &self.dropped_frames,
+                    Arc::from(consensus_kind::COMMIT), scope.clone(), encode_consensus_msg(&commit),
                 ).await;
                 self.set_async(commit_key.as_str(), value.clone()).await;
                 return ConsensusResult::Committed { slot, value, ballot };
@@ -478,9 +416,10 @@ impl ConsensusEngine {
                                     let commit = ConsensusMsg::Commit {
                                         slot: slot.clone(), ballot, value: value.clone(),
                                     };
-                                    self.emit_async(
-                                        consensus_kind::COMMIT, scope.clone(),
-                                        encode_consensus_msg(&commit),
+                                    emit_signal_async(
+                                        &self.node_id, &self.seen, &self.current_ts, &self.signal_boundary,
+                                        &self.signal_handlers, &self.gossip_txs, self.default_ttl, &self.dropped_frames,
+                                        Arc::from(consensus_kind::COMMIT), scope.clone(), encode_consensus_msg(&commit),
                                     ).await;
                                     self.set_async(commit_key.as_str(), value.clone()).await;
                                     return ConsensusResult::Committed { slot, value, ballot };
@@ -597,15 +536,20 @@ async fn run_consensus_listener(
                         && consecutive_abstains >= ctx.max_abstain_ballots;
                     if !at_cap {
                         let load_prefix = format!("{}{}/", kv_ns::LOAD, ctx.node_id);
-                        let is_overloaded = ctx.store.pin()
-                            .iter()
-                            .filter(|(k, v)| k.starts_with(&*load_prefix) && v.data.is_some())
-                            .any(|(_, v)| {
-                                v.data.as_ref()
-                                    .and_then(decode_load_state)
-                                    .map(|s| s.is_opaque)
-                                    .unwrap_or(false)
-                            });
+                        let is_overloaded = {
+                            let idx = ctx.prefix_index.pin();
+                            idx.get("load").map(|bucket| {
+                                let store = ctx.store.pin();
+                                bucket.pin().iter()
+                                    .filter(|(k, _)| k.starts_with(&*load_prefix))
+                                    .any(|(k, _)| {
+                                        store.get(k.as_ref())
+                                            .and_then(|e| e.data.as_ref().and_then(decode_load_state))
+                                            .map(|s| s.is_opaque)
+                                            .unwrap_or(false)
+                                    })
+                            }).unwrap_or(false)
+                        };
                         if is_overloaded {
                             consecutive_abstains += 1;
                             continue;
@@ -621,7 +565,9 @@ async fn run_consensus_listener(
                 let local = *seen_ballot.get(&slot).unwrap_or(&0);
                 if ballot < local {
                     let nack = ConsensusMsg::Nack { slot, seen_ballot: local };
-                    ctx.emit_sync(
+                    emit_signal(
+                        &ctx.node_id, &ctx.seen, &ctx.current_ts, &ctx.signal_boundary,
+                        &ctx.signal_handlers, &ctx.gossip_txs, ctx.default_ttl, &ctx.dropped_frames,
                         Arc::from(consensus_kind::NACK),
                         SignalScope::Individual(proposer),
                         encode_consensus_msg(&nack),
@@ -635,7 +581,9 @@ async fn run_consensus_listener(
                     let vote = ConsensusMsg::Vote {
                         slot: slot.clone(), ballot, voter: ctx.node_id.clone(),
                     };
-                    ctx.emit_sync(
+                    emit_signal(
+                        &ctx.node_id, &ctx.seen, &ctx.current_ts, &ctx.signal_boundary,
+                        &ctx.signal_handlers, &ctx.gossip_txs, ctx.default_ttl, &ctx.dropped_frames,
                         Arc::from(consensus_kind::VOTE),
                         sig.scope,
                         encode_consensus_msg(&vote),

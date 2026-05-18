@@ -188,8 +188,8 @@ pub(super) async fn run_gossip_shard(
     idle_timeout:          Duration,
     max_forwarding_peers:  usize,
     dropped_frames:        Arc<AtomicU64>,
-    store:                 Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
     group_aware_forwarding: bool,
+    prefix_index:          Arc<crate::store::PrefixIndex>,
 ) {
     alive.store(true, Ordering::Relaxed);
     let _alive_guard = AliveGuard(alive.clone());
@@ -278,12 +278,17 @@ pub(super) async fn run_gossip_shard(
                         }
                         ForwardHint::Group(name) => {
                             let prefix = format!("grp/{}/", name);
-                            let guard = store.pin();
-                            let members: AHashSet<NodeId> = guard.iter()
-                                .filter(|(k, v)| k.starts_with(&*prefix) && v.data.is_some())
-                                .filter_map(|(k, _)| k[prefix.len()..].parse::<NodeId>().ok())
-                                .collect();
-                            drop(guard);
+                            let idx_guard = prefix_index.pin();
+                            let members: AHashSet<NodeId> = idx_guard.get("grp")
+                                .map(|bucket| {
+                                    bucket.pin().iter()
+                                        .filter_map(|(key, _)| {
+                                            if !key.starts_with(&*prefix) { return None; }
+                                            key[prefix.len()..].parse::<NodeId>().ok()
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default();
 
                             for peer in targets.iter()
                                 .filter(|p| p.id_hash() != sender_hash && members.contains(*p))

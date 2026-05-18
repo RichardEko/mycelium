@@ -115,8 +115,8 @@ impl GossipAgent {
         let writer_depth          = self.config.writer_channel_depth;
         let backoff               = Duration::from_secs(self.config.reconnect_backoff_secs);
         let idle_timeout          = Duration::from_secs(self.config.writer_idle_timeout_secs);
-        let store                 = self.store.clone();
         let group_aware_forwarding = self.config.group_aware_forwarding;
+        let prefix_index          = self.prefix_index.clone();
 
         let rxs = self.gossip_rxs
             .lock()
@@ -137,8 +137,8 @@ impl GossipAgent {
                 idle_timeout,
                 self.config.max_forwarding_peers,
                 self.dropped_frames.clone(),
-                store.clone(),
                 group_aware_forwarding,
+                prefix_index.clone(),
             ));
             self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).push(handle);
         }
