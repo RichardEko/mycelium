@@ -13,8 +13,8 @@ use crate::signal::{
 };
 use crate::store::{apply_and_notify, intern_pool_len, StoreEntry};
 use crate::consensus::{
-    ConsensusConfig, ConsensusEngine, ConsensusHandle, ConsensusResult,
-    consensus_ns,
+    consensus_kind, ConsensusConfig, ConsensusEngine,
+    ConsensusHandle, ConsensusResult, consensus_ns,
 };
 use crate::writer::{evict_peer_writer, get_or_spawn_writer, request_state, WriterEntry};
 use ahash::{AHashMap, AHashSet};
@@ -1324,6 +1324,55 @@ impl GossipAgent {
             .collect()
     }
 
+    /// Returns the group member with the lowest observed load for `kind`.
+    ///
+    /// Iterates `grp/{group}/` for member NodeIds, then reads `load/{member}/{kind}`
+    /// from Layer I (written by [`manage_opacity`](Self::manage_opacity)) for each.
+    /// Members with no load entry are ranked lowest (transparent). Returns the
+    /// lowest-load member, or `self.node_id().clone()` when the group is empty or
+    /// no members have load data within `max_age`.
+    ///
+    /// `max_age` is used for pheromone evaporation — entries older than this are
+    /// treated as transparent.
+    pub fn suggest_leader(&self, group: &str, kind: &str, max_age: Duration) -> NodeId {
+        let prefix = format!("grp/{}/", group);
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH).unwrap_or_default()
+            .as_millis() as u64;
+        let max_age_ms = max_age.as_millis() as u64;
+
+        let members: Vec<NodeId> = self
+            .scan_prefix(&prefix)
+            .into_iter()
+            .filter_map(|(key, _)| {
+                let node_str = key.strip_prefix(&prefix)?;
+                node_str.parse::<NodeId>().ok()
+            })
+            .collect();
+
+        if members.is_empty() {
+            return self.node_id.clone();
+        }
+
+        let best = members
+            .iter()
+            .min_by(|a, b| {
+                let load_a = self.get(&format!("load/{}/{}", a, kind))
+                    .and_then(|b| decode_load_state(&b))
+                    .filter(|s| now_ms.saturating_sub(s.written_at_ms) <= max_age_ms)
+                    .map(|s| s.fill_ratio)
+                    .unwrap_or(0.0);
+                let load_b = self.get(&format!("load/{}/{}", b, kind))
+                    .and_then(|b| decode_load_state(&b))
+                    .filter(|s| now_ms.saturating_sub(s.written_at_ms) <= max_age_ms)
+                    .map(|s| s.fill_ratio)
+                    .unwrap_or(0.0);
+                load_a.partial_cmp(&load_b).unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+        best.cloned().unwrap_or_else(|| self.node_id.clone())
+    }
+
     /// Proposes `value` for a named `slot` within a group.
     ///
     /// Blocks until quorum commits, another node commits first, or all ballot
@@ -1340,6 +1389,12 @@ impl GossipAgent {
         value:  Bytes,
         config: ConsensusConfig,
     ) -> ConsensusResult {
+        // Overloaded nodes defer proportionally, giving healthier peers a head start.
+        let local_opacity = self.opacity(consensus_kind::PROPOSE);
+        if local_opacity > 0.0 && config.ballot_retry_jitter_ms > 0 {
+            let defer_ms = (local_opacity * config.ballot_retry_jitter_ms as f32 * 2.0) as u64;
+            tokio::time::sleep(Duration::from_millis(defer_ms)).await;
+        }
         let members = self.scan_prefix(&format!("grp/{}/", group)).len().max(1);
         let quorum  = compute_quorum_size(config.quorum_size, members);
         self.make_consensus_engine()
@@ -1357,6 +1412,12 @@ impl GossipAgent {
         value:  Bytes,
         config: ConsensusConfig,
     ) -> ConsensusResult {
+        // Overloaded nodes defer proportionally, giving healthier peers a head start.
+        let local_opacity = self.opacity(consensus_kind::PROPOSE);
+        if local_opacity > 0.0 && config.ballot_retry_jitter_ms > 0 {
+            let defer_ms = (local_opacity * config.ballot_retry_jitter_ms as f32 * 2.0) as u64;
+            tokio::time::sleep(Duration::from_millis(defer_ms)).await;
+        }
         let n_nodes = (self.system_stats().peers + 1).max(1);
         let quorum  = compute_quorum_size(config.quorum_size, n_nodes);
         self.make_consensus_engine()
