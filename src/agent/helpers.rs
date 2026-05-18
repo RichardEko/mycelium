@@ -60,6 +60,26 @@ impl GossipAgent {
 
 // ── Free helpers ──────────────────────────────────────────────────────────────
 
+/// Checks the boundary and opacity gate, then delivers `signal` locally.
+/// Extracted from `emit_signal` and `emit_signal_async` to avoid a duplicated block.
+fn deliver_locally(
+    signal_boundary: &RwLock<Boundary>,
+    signal_handlers: &SignalHandlers,
+    signal: &Signal,
+) {
+    if !signal_boundary.read().admits(&signal.scope) { return; }
+    let admit = match &signal.scope {
+        SignalScope::Individual(_) => true,
+        _ => {
+            let opacity = signal_handlers.fill_ratio(&signal.kind);
+            opacity == 0.0 || fastrand::f32() >= opacity
+        }
+    };
+    if admit {
+        signal_handlers.deliver(signal);
+    }
+}
+
 /// Generates a nonce, marks it seen, delivers locally (with boundary + opacity checks),
 /// encodes the wire frame, and routes to the correct gossip shard via `try_send`.
 ///
@@ -81,23 +101,10 @@ pub(crate) fn emit_signal(
     let nonce = fastrand::u64(1..);
     let ts = current_ts.load(Ordering::Relaxed);
     let _ = seen.is_duplicate(nonce, ts);
-
-    if signal_boundary.read().admits(&scope) {
-        let admit = match &scope {
-            SignalScope::Individual(_) => true,
-            _ => {
-                let opacity = signal_handlers.fill_ratio(&kind);
-                opacity == 0.0 || fastrand::f32() >= opacity
-            }
-        };
-        if admit {
-            signal_handlers.deliver(&Signal {
-                kind: kind.clone(), scope: scope.clone(),
-                payload: payload.clone(), sender: node_id.clone(), nonce,
-            });
-        }
-    }
-
+    deliver_locally(signal_boundary, signal_handlers, &Signal {
+        kind: kind.clone(), scope: scope.clone(),
+        payload: payload.clone(), sender: node_id.clone(), nonce,
+    });
     let hint = match &scope {
         SignalScope::System           => ForwardHint::All,
         SignalScope::Group(name)      => ForwardHint::Group(name.clone()),
@@ -132,23 +139,10 @@ pub(crate) async fn emit_signal_async(
     let nonce = fastrand::u64(1..);
     let ts = current_ts.load(Ordering::Relaxed);
     let _ = seen.is_duplicate(nonce, ts);
-
-    if signal_boundary.read().admits(&scope) {
-        let admit = match &scope {
-            SignalScope::Individual(_) => true,
-            _ => {
-                let opacity = signal_handlers.fill_ratio(&kind);
-                opacity == 0.0 || fastrand::f32() >= opacity
-            }
-        };
-        if admit {
-            signal_handlers.deliver(&Signal {
-                kind: kind.clone(), scope: scope.clone(),
-                payload: payload.clone(), sender: node_id.clone(), nonce,
-            });
-        }
-    }
-
+    deliver_locally(signal_boundary, signal_handlers, &Signal {
+        kind: kind.clone(), scope: scope.clone(),
+        payload: payload.clone(), sender: node_id.clone(), nonce,
+    });
     let hint = match &scope {
         SignalScope::System           => ForwardHint::All,
         SignalScope::Group(name)      => ForwardHint::Group(name.clone()),
