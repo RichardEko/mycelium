@@ -81,7 +81,7 @@ mod tests {
         N_GOSSIP_SHARDS, NONCE_OFFSET, TTL_OFFSET,
     };
     use crate::seen::ShardedSeen;
-    use crate::store::{apply_to_store, StoreEntry};
+    use crate::store::{apply_to_store, store_hash, StoreEntry};
     use bytes::{Bytes, BytesMut};
     use dashmap::DashMap;
     use std::{
@@ -366,6 +366,7 @@ mod tests {
         // StateRequest from an unknown peer (not in peers map) must be silently ignored.
         send_wire(&mut writer, &WireMessage::StateRequest {
             sender: "127.0.0.1:4444".parse().unwrap(),
+            store_hash: 0,
         }).await;
 
         // Give the handler time to process the message.
@@ -1079,6 +1080,74 @@ mod tests {
 
         agent_a.shutdown().await;
         agent_b.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_anti_entropy_skips_when_synced() {
+        // Build a store with one live entry so the hash is non-zero (zero is the
+        // "no digest" sentinel and would trigger a full snapshot instead).
+        let store: Arc<papaya::HashMap<Arc<str>, StoreEntry>> = Arc::new(papaya::HashMap::new());
+        store.pin().insert(
+            Arc::from("sync_key"),
+            StoreEntry { data: Some(Bytes::from_static(b"sync_val")), timestamp: 42 },
+        );
+        let expected_hash = store_hash(&store);
+        assert_ne!(expected_hash, 0, "precondition: hash must be non-zero");
+
+        // Bind a listener so the handler's peer writer can connect back to deliver
+        // the StateResponse. The port becomes the sender NodeId's port.
+        let response_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let sender_port = response_listener.local_addr().unwrap().port();
+        let sender_id = NodeId::new("127.0.0.1", sender_port).unwrap();
+
+        // Register sender as a known peer — the handler silently drops StateRequest
+        // from unrecognised peers.
+        let peers: Arc<papaya::HashMap<NodeId, Instant>> = Arc::new(papaya::HashMap::new());
+        peers.pin().insert(sender_id.clone(), Instant::now());
+
+        let (mut writer, reader) = loopback_pair().await;
+        let (tx, _rx) = mpsc::channel(10);
+        let (_shutdown, _handle) = spawn_handler(
+            reader, store, peers, tx,
+            Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)),
+            GossipConfig::default().default_ttl,
+        );
+
+        // Start accepting before sending so the writer can connect immediately.
+        let accept_task = tokio::spawn(async move {
+            let (sock, _) = response_listener.accept().await.unwrap();
+            sock
+        });
+
+        // Send a StateRequest whose hash matches the handler's store — fast-path.
+        send_wire(&mut writer, &WireMessage::StateRequest {
+            sender: sender_id,
+            store_hash: expected_hash,
+        }).await;
+
+        let mut response_sock = accept_task.await.unwrap();
+
+        // Read back the one frame the handler must write: an empty StateResponse.
+        let mut buf = BytesMut::new();
+        tokio::time::timeout(
+            Duration::from_millis(500),
+            read_frame(&mut response_sock, &mut buf),
+        )
+        .await
+        .expect("timed out waiting for fast-path StateResponse")
+        .expect("read_frame error");
+
+        let (msg, _): (WireMessage, _) =
+            bincode::serde::decode_from_slice(&buf, bincode_cfg()).unwrap();
+
+        match msg {
+            WireMessage::StateResponse { entries } => assert!(
+                entries.is_empty(),
+                "anti-entropy fast-path: StateResponse must be empty when hashes match; got {} entries",
+                entries.len(),
+            ),
+            other => panic!("expected StateResponse, got {:?}", other),
+        }
     }
 
     // ── liveness flags ────────────────────────────────────────────────────────

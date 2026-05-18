@@ -15,10 +15,17 @@ pub(crate) const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
 /// v6: GossipUpdate field order changed (nonce, sender, ttl, is_tombstone, timestamp, key, value)
 ///     to place all fixed-width fields before variable-length fields, enabling in-place TTL
 ///     decrement and zero-copy forwarding without re-encoding on each hop.
+/// v7: WireMessage::StateRequest gained `store_hash: u64` for anti-entropy fast-path skipping.
+///     v6 peers send `StateRequest { sender }` which bincode decodes as
+///     `StateRequest { sender, store_hash: 0 }` — hash 0 is reserved for "no digest", so a
+///     v7 node receiving hash=0 always sends the full snapshot (correct graceful downgrade).
 ///
 /// Rolling-upgrade policy: `read_frame` accepts frames at both `WIRE_VERSION` and
 /// `PREV_WIRE_VERSION`. When bumping WIRE_VERSION to N+1:
-///   1. Add a `WireMessageVN` / `GossipUpdateVN` struct with the *old* field layout.
+///   1. Add a `WireMessageVN` / `GossipUpdateVN` struct with the *old* field layout if
+///      the binary layout of existing variants changed. For v7 only a new field was appended
+///      to StateRequest, which is backward-compatible via the hash=0 sentinel — no struct
+///      needed. If field ORDER changes, a conversion struct IS required.
 ///   2. Set `PREV_WIRE_VERSION = old WIRE_VERSION` (N).
 ///   3. In the `FrameVersion::Previous` Data decode path, deserialize into `GossipUpdateVN`
 ///      and convert to `GossipUpdate` — this avoids silent field-mapping corruption.
@@ -26,20 +33,21 @@ pub(crate) const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
 ///   5. After all nodes are upgraded, set `PREV_WIRE_VERSION = WIRE_VERSION` to close
 ///      the acceptance window.
 ///
-/// **Current state**: `PREV_WIRE_VERSION = WIRE_VERSION` (v6 = v6). No legacy window is
-/// open. Any peer sending a frame with a version byte other than `WIRE_VERSION` receives
-/// an explicit "Unsupported wire version" error rather than silent data corruption.
-/// When bumping to v7, set `PREV_WIRE_VERSION = 6` and implement step 3 above.
-pub(crate) const WIRE_VERSION: u8 = 6;
+/// **Current state**: `PREV_WIRE_VERSION = 6` (one-version legacy window open).
+/// v6 peers are accepted; their StateRequest is decoded with store_hash=0 (full snapshot).
+/// When all nodes are on v7, set `PREV_WIRE_VERSION = WIRE_VERSION` to close the window.
+pub(crate) const WIRE_VERSION: u8 = 7;
 /// Previous wire version accepted during rolling upgrades.
 ///
-/// Currently equal to `WIRE_VERSION` — no legacy acceptance window is open. The
-/// `FrameVersion::Previous` arm in `read_frame` is therefore unreachable in practice;
-/// peers sending version ≠ 6 get an explicit connection error.
+/// Set to 6 so nodes still running v6 can exchange gossip during rolling upgrades.
+/// The only wire-format difference between v6 and v7 is the extra `store_hash: u64`
+/// field in `StateRequest`; all other variants are identical. A v6 `StateRequest`
+/// decoded by a v7 node produces `store_hash = 0`, which is the "no digest" sentinel
+/// that triggers a full snapshot — correct and safe.
 ///
-/// When bumping `WIRE_VERSION` to 7: set this to 6 and add a `GossipUpdateV6` conversion
-/// struct so legacy Data frames decode correctly instead of producing garbled field values.
-pub(crate) const PREV_WIRE_VERSION: u8 = WIRE_VERSION; // no legacy window
+/// After all cluster nodes are upgraded to v7, set this to `WIRE_VERSION` to close
+/// the acceptance window and reject stale v6 connections with a clear error.
+pub(crate) const PREV_WIRE_VERSION: u8 = 6;
 
 /// Which wire version a received frame was encoded with.
 /// Used by `handle_connection` to select the appropriate decoder and to decide
@@ -114,7 +122,13 @@ pub(crate) enum WireMessage {
     /// `known_peers` carries the sender's current peer table for passive peer discovery.
     Ping { sender: NodeId, known_peers: Vec<NodeId> },
     /// Anti-entropy probe: ask the receiver to reply with its full store snapshot.
-    StateRequest { sender: NodeId },
+    ///
+    /// `store_hash` is the sender's current XOR-hash of {key, timestamp} pairs (see
+    /// `store::store_hash`). If the receiver's own hash matches, it replies with an
+    /// empty `StateResponse` (fast-path skip). Hash `0` means "no digest" — the
+    /// receiver always sends a full snapshot. This is the sentinel value used when
+    /// decoding v6 frames that lack the field (backward-compatible rolling upgrade).
+    StateRequest { sender: NodeId, store_hash: u64 },
     /// Response to `StateRequest`; contains the responder's current store.
     StateResponse { entries: Vec<SyncEntry> },
     /// An ephemeral signal propagated epidemically (Layer 2).

@@ -1,4 +1,5 @@
 use crate::framing::GossipUpdate;
+use ahash::RandomState;
 use bytes::Bytes;
 use papaya::Operation;
 use std::sync::{Arc, OnceLock};
@@ -60,6 +61,27 @@ pub(crate) fn intern_key(key: Arc<str>, max_keys: usize) -> Arc<str> {
 pub(crate) struct StoreEntry {
     pub(crate) data: Option<Bytes>,
     pub(crate) timestamp: u64,
+}
+
+/// Computes a stable XOR-hash of all live (key, timestamp) pairs in the store.
+///
+/// Uses a fixed-seed `AHasher` so the value is identical across processes for the
+/// same set of entries. Tombstones are excluded: they are not part of the live data
+/// set and GC'd at different times on different nodes, which would cause spurious
+/// mismatches. Returns 0 only when the store is empty; 0 is the "no digest" sentinel
+/// in `WireMessage::StateRequest` so an empty store still triggers a full snapshot.
+/// In practice a non-empty store almost never XORs to 0 (probability < 1 in 2^64).
+pub(crate) fn store_hash(store: &papaya::HashMap<Arc<str>, StoreEntry>) -> u64 {
+    static SEED: OnceLock<RandomState> = OnceLock::new();
+    let rs = SEED.get_or_init(|| RandomState::with_seeds(1, 2, 3, 4));
+    let guard = store.pin();
+    let mut combined: u64 = 0;
+    for (k, v) in guard.iter() {
+        if v.data.is_some() {
+            combined ^= rs.hash_one(k.as_bytes()) ^ v.timestamp;
+        }
+    }
+    combined
 }
 
 /// Applies `update` using last-write-wins. Returns `true` if the store changed.

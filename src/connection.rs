@@ -5,7 +5,7 @@ use crate::framing::{
     ANTI_ENTROPY_NONCE, DATA_TAG, NONCE_OFFSET, TTL_OFFSET,
 };
 use crate::signal::{Boundary, Signal, SignalHandlers, SignalScope};
-use crate::store::intern_key;
+use crate::store::{intern_key, store_hash};
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
 use crate::store::{apply_and_notify, StoreEntry};
@@ -135,17 +135,42 @@ pub(crate) async fn handle_connection(
                     is_new
                 };
                 if sender_is_new {
-                    request_state(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &node_id);
+                    request_state(&sender, &peer_writers, &store, writer_depth, backoff, writer_idle_timeout, &shutdown, &node_id);
                 }
             }
 
-            WireMessage::StateRequest { sender } => {
+            WireMessage::StateRequest { sender, store_hash: their_hash } => {
                 // Trusted-domain check: sender must be a known peer. We do not verify that
                 // peer_addr matches sender.to_socket_addr() — that would reject NAT'd topologies.
                 // In the trusted domain a connected node could spoof the sender field; the
                 // consequence is a StateResponse routed to another peer, which is harmless.
                 if !peers.pin().contains_key(&sender) {
                     warn!("Ignoring StateRequest from unknown peer {} (reported as {})", peer_addr, sender);
+                    continue;
+                }
+                // Anti-entropy fast-path: if the sender's store hash matches ours and is
+                // non-zero (zero = "no digest" sentinel from v6 peers), send an empty
+                // StateResponse to acknowledge we're alive without transferring entries.
+                let my_hash = store_hash(&store);
+                if their_hash != 0 && their_hash == my_hash {
+                    let empty = WireMessage::StateResponse { entries: vec![] };
+                    let mut fast_buf = BytesMut::new();
+                    match bincode::serde::encode_into_std_write(
+                        empty,
+                        &mut (&mut fast_buf).writer(),
+                        bincode_cfg(),
+                    ) {
+                        Ok(_) => {
+                            let data: Bytes = fast_buf.freeze();
+                            let tx = get_or_spawn_writer(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown);
+                            tokio::spawn(async move {
+                                if tx.send(data).await.is_err() {
+                                    tracing::error!("Fast-path StateResponse writer for {} has exited", sender);
+                                }
+                            });
+                        }
+                        Err(e) => warn!("Fast-path StateResponse serialize failed for {}: {}", sender, e),
+                    }
                     continue;
                 }
                 let entries: Vec<SyncEntry> = {

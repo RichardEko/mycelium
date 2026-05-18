@@ -302,6 +302,7 @@ impl GossipAgent {
         let bootstrap_peers      = self.bootstrap_peers.clone();
         let peers                = self.peers.clone();
         let peer_writers         = self.peer_writers.clone();
+        let store                = self.store.clone();
         let peer_list_tx         = self.peer_list_tx.clone();
         let shutdown_tx          = self.shutdown_tx.clone();
         let current_ts           = self.current_ts.clone();
@@ -318,6 +319,7 @@ impl GossipAgent {
             bootstrap_peers,
             peers,
             peer_writers,
+            store,
             peer_list_tx,
             shutdown_tx,
             current_ts,
@@ -1754,6 +1756,7 @@ async fn run_health_monitor(
     bootstrap_peers:       Arc<[NodeId]>,
     peers:                 Arc<papaya::HashMap<NodeId, Instant>>,
     peer_writers:          Arc<DashMap<NodeId, WriterEntry>>,
+    store:                 Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
     peer_list_tx:          watch::Sender<Arc<[NodeId]>>,
     shutdown_tx:           Arc<watch::Sender<bool>>,
     current_ts:            Arc<AtomicU64>,
@@ -1777,7 +1780,7 @@ async fn run_health_monitor(
     }
 
     for peer in &bootstrap_set {
-        request_state(peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &node_id);
+        request_state(peer, &peer_writers, &store, writer_depth, backoff, idle_timeout, &shutdown_tx, &node_id);
     }
 
     let mut ticker = time::interval(Duration::from_secs(interval_secs));
