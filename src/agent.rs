@@ -7,8 +7,8 @@ use crate::framing::{
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
 use crate::signal::{
-    AdvertiseHandle, Boundary, OpacityHandle, OpacityHint, OpacityState,
-    Signal, SignalHandlers, SignalScope, WatchHandle,
+    encode_load_state, AdvertiseHandle, Boundary, LoadState, OpacityHandle,
+    OpacityHint, OpacityState, Signal, SignalHandlers, SignalScope, WatchHandle,
 };
 use crate::store::{apply_and_notify, intern_pool_len, StoreEntry};
 use crate::consensus::{
@@ -1006,6 +1006,8 @@ impl GossipAgent {
         let gossip_txs      = self.gossip_txs.clone();
         let default_ttl     = self.config.default_ttl;
         let dropped_frames  = self.dropped_frames.clone();
+        let store           = self.store.clone();
+        let subscriptions   = self.subscriptions.clone();
 
         let clamped_threshold = hint.threshold.clamp(0.4, 0.95);
 
@@ -1049,6 +1051,37 @@ impl GossipAgent {
                                     scope.clone(), hint.payload.clone(),
                                 );
                                 is_opaque = true;
+                                // Write pheromone trail to Layer I so peers observe this
+                                // node's load state via `peer_load` / anti-entropy.
+                                let written_at_ms = SystemTime::now()
+                                    .duration_since(UNIX_EPOCH).unwrap_or_default()
+                                    .as_millis() as u64;
+                                let load_key: Arc<str> =
+                                    Arc::from(format!("load/{}/{}", node_id, kind).as_str());
+                                let pheromone_update = GossipUpdate {
+                                    nonce:        fastrand::u64(1..),
+                                    sender:       node_id.id_hash(),
+                                    ttl:          default_ttl,
+                                    is_tombstone: false,
+                                    timestamp:    written_at_ms,
+                                    key:          load_key.clone(),
+                                    value:        encode_load_state(&LoadState {
+                                        fill_ratio,
+                                        is_opaque: true,
+                                        written_at_ms,
+                                    }),
+                                };
+                                apply_and_notify(&store, &subscriptions, &pheromone_update);
+                                let shard = shard_for_key(&load_key, gossip_txs.len());
+                                let mut buf = BytesMut::with_capacity(64);
+                                if bincode::serde::encode_into_std_write(
+                                    WireMessage::Data(pheromone_update),
+                                    &mut (&mut buf).writer(), bincode_cfg(),
+                                ).is_ok() {
+                                    let _ = gossip_txs[shard].try_send((
+                                        buf.freeze(), node_id.id_hash(), ForwardHint::All,
+                                    ));
+                                }
                             }
                         } else if is_opaque && fill_ratio < eff - hint.hysteresis {
                             emit_signal(
@@ -1059,6 +1092,32 @@ impl GossipAgent {
                                 scope.clone(), Bytes::new(),
                             );
                             is_opaque = false;
+                            // Tombstone the pheromone trail — immediate evaporation on recovery.
+                            let written_at_ms = SystemTime::now()
+                                .duration_since(UNIX_EPOCH).unwrap_or_default()
+                                .as_millis() as u64;
+                            let load_key: Arc<str> =
+                                Arc::from(format!("load/{}/{}", node_id, kind).as_str());
+                            let tombstone_update = GossipUpdate {
+                                nonce:        fastrand::u64(1..),
+                                sender:       node_id.id_hash(),
+                                ttl:          default_ttl,
+                                is_tombstone: true,
+                                timestamp:    written_at_ms,
+                                key:          load_key.clone(),
+                                value:        Bytes::new(),
+                            };
+                            apply_and_notify(&store, &subscriptions, &tombstone_update);
+                            let shard = shard_for_key(&load_key, gossip_txs.len());
+                            let mut buf = BytesMut::with_capacity(64);
+                            if bincode::serde::encode_into_std_write(
+                                WireMessage::Data(tombstone_update),
+                                &mut (&mut buf).writer(), bincode_cfg(),
+                            ).is_ok() {
+                                let _ = gossip_txs[shard].try_send((
+                                    buf.freeze(), node_id.id_hash(), ForwardHint::All,
+                                ));
+                            }
                         }
                     }
                 }

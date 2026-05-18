@@ -310,7 +310,6 @@ pub struct LoadState {
     pub written_at_ms: u64,
 }
 
-#[allow(dead_code)]  // used by Fix B (manage_opacity_impl); remove after that commit
 pub(crate) fn encode_load_state(s: &LoadState) -> Bytes {
     let mut buf = BytesMut::new();
     let _ = bincode::serde::encode_into_std_write(s, &mut (&mut buf).writer(), bincode_cfg());
