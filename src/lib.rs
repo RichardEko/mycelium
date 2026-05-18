@@ -2563,6 +2563,49 @@ mod tests {
     // ── H3: suggest_leader wired into group_propose ───────────────────────────
 
     #[test]
+    fn test_suggest_leader_weighs_trust_over_load() {
+        use crate::signal::{encode_load_state, LoadState};
+        use crate::consensus_ns;
+
+        let agent = make_agent();
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+
+        let node_b = NodeId::new("127.0.0.1", 7011).unwrap();
+        let node_c = NodeId::new("127.0.0.1", 7012).unwrap();
+        let _ = agent.set(format!("grp/workers/{}", node_b), Bytes::from_static(b"1"));
+        let _ = agent.set(format!("grp/workers/{}", node_c), Bytes::from_static(b"1"));
+
+        // B is moderately loaded (0.6) but is trusted by 2 members.
+        // C is lightly loaded (0.2) but has no trust declarations.
+        // Score B = 0.6 / (1.0 + 2.0) = 0.20
+        // Score C = 0.2 / (1.0 + 0.0) = 0.20  (tie; without trust C wins)
+        // Use B with load 0.6, trust=2 vs C with load 0.1, trust=0.
+        // Score B = 0.6 / 3 = 0.20; Score C = 0.1 / 1 = 0.10 → C still wins.
+        // Instead: B load=0.6 trust=3 → 0.6/4=0.15; C load=0.1 trust=0 → 0.1/1=0.10 → C wins still.
+        // Let's make B trusted enough: B load=0.8 trust=4 → 0.8/5=0.16; C load=0.2 trust=0 → 0.20 → B wins.
+        let b_state = LoadState { fill_ratio: 0.8, is_opaque: false, written_at_ms: now_ms };
+        let c_state = LoadState { fill_ratio: 0.2, is_opaque: false, written_at_ms: now_ms };
+        let _ = agent.set(format!("load/{}/task", node_b), encode_load_state(&b_state));
+        let _ = agent.set(format!("load/{}/task", node_c), encode_load_state(&c_state));
+
+        // Declare 4 trust-slice entries that all name B (simulating 4 group members trusting B).
+        let trusted_b = vec![node_b.clone()];
+        for port in [7020u16, 7021, 7022, 7023] {
+            let voter = NodeId::new("127.0.0.1", port).unwrap();
+            let encoded = bincode::serde::encode_to_vec(&trusted_b, crate::framing::bincode_cfg()).unwrap();
+            let _ = agent.set(
+                format!("{}{}/{}", consensus_ns::TRUST, "workers", voter),
+                encoded,
+            );
+        }
+
+        // B score = 0.8 / (1 + 4) = 0.16; C score = 0.2 / (1 + 0) = 0.20 → B preferred.
+        let suggested = agent.suggest_leader("workers", "task", Duration::from_secs(600));
+        assert_eq!(suggested, node_b, "B should be preferred despite higher load because it has higher trust");
+    }
+
+    #[test]
     fn test_suggest_leader_returns_least_loaded_member() {
         use crate::signal::{encode_load_state, LoadState};
 

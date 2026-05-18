@@ -1437,21 +1437,32 @@ impl GossipAgent {
             return self.node_id.clone();
         }
 
-        let best = members
-            .iter()
-            .min_by(|a, b| {
-                let load_a = self.get(&format!("load/{}/{}", a, kind))
+        // Build trust_count map: candidate id_hash → number of current group members
+        // that have declared a trust slice including this candidate.
+        // Trusted-but-loaded peers are preferred over untrusted idle ones.
+        let trust_prefix = format!("{}{}/", consensus_ns::TRUST, group);
+        let mut trust_counts: AHashMap<u64, usize> = AHashMap::new();
+        for (_, bytes) in self.scan_prefix(&trust_prefix) {
+            let Ok((peers, _)) = bincode::serde::decode_from_slice::<Vec<NodeId>, _>(
+                &bytes, crate::framing::bincode_cfg()
+            ) else { continue };
+            for p in peers {
+                *trust_counts.entry(p.id_hash()).or_insert(0) += 1;
+            }
+        }
+
+        let best = members.iter().min_by(|a, b| {
+            let score = |n: &NodeId| -> f32 {
+                let fill = self.get(&format!("load/{}/{}", n, kind))
                     .and_then(|b| decode_load_state(&b))
                     .filter(|s| now_ms.saturating_sub(s.written_at_ms) <= max_age_ms)
                     .map(|s| s.fill_ratio)
                     .unwrap_or(0.0);
-                let load_b = self.get(&format!("load/{}/{}", b, kind))
-                    .and_then(|b| decode_load_state(&b))
-                    .filter(|s| now_ms.saturating_sub(s.written_at_ms) <= max_age_ms)
-                    .map(|s| s.fill_ratio)
-                    .unwrap_or(0.0);
-                load_a.partial_cmp(&load_b).unwrap_or(std::cmp::Ordering::Equal)
-            });
+                let trust = *trust_counts.get(&n.id_hash()).unwrap_or(&0) as f32;
+                fill / (1.0 + trust)
+            };
+            score(a).partial_cmp(&score(b)).unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         best.cloned().unwrap_or_else(|| self.node_id.clone())
     }
