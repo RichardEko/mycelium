@@ -231,6 +231,7 @@ impl GossipAgent {
         self.start_gossip_loop();
         self.start_health_monitor();
         self.start_gc_task();
+        self.rehydrate_boundary_from_kv();
         info!("Gossip agent started: {}", self.node_id);
         Ok(())
     }
@@ -343,6 +344,15 @@ impl GossipAgent {
         let ping_peer_sample_size    = self.config.ping_peer_sample_size;
         let health_check_max_jitter  = self.config.health_check_max_jitter_ms;
 
+        let bnd_handle = tokio::spawn(run_boundary_reconcile(
+            self.node_id.clone(),
+            self.store.clone(),
+            self.signal_boundary.clone(),
+            self.shutdown_tx.clone(),
+            interval_secs,
+        ));
+        self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).push(bnd_handle);
+
         let handle = tokio::spawn(run_health_monitor(
             node_id,
             bootstrap_peers,
@@ -386,6 +396,28 @@ impl GossipAgent {
             intern_max_keys,
         ));
         self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).push(handle);
+    }
+
+    pub(crate) fn rehydrate_boundary_from_kv(&self) {
+        let suffix = format!("/{}", self.node_id);
+        let mut to_insert: Vec<Arc<str>> = Vec::new();
+        let mut to_remove: Vec<Arc<str>> = Vec::new();
+        {
+            let guard = self.store.pin();
+            for (key, entry) in guard.iter() {
+                if !key.starts_with("grp/") || !key.ends_with(suffix.as_str()) { continue; }
+                let Some(tail) = key.strip_prefix("grp/") else { continue };
+                let Some(group) = tail.strip_suffix(suffix.as_str()) else { continue };
+                if entry.data.is_some() {
+                    to_insert.push(Arc::from(group));
+                } else {
+                    to_remove.push(Arc::from(group));
+                }
+            }
+        }
+        let mut bnd = self.signal_boundary.write();
+        for g in to_insert { bnd.groups.insert(g); }
+        for g in &to_remove { bnd.groups.remove(g.as_ref()); }
     }
 
     // ── Node state ────────────────────────────────────────────────────────────
@@ -2317,6 +2349,45 @@ async fn run_gc_task(
         error!("GC task exited unexpectedly; tombstone expiry and subscription eviction have stopped");
     }
     // _alive_guard drops here, clearing gc_alive on both clean exit and panic.
+}
+
+async fn run_boundary_reconcile(
+    node_id:         NodeId,
+    store:           Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
+    signal_boundary: Arc<RwLock<Boundary>>,
+    shutdown_tx:     Arc<watch::Sender<bool>>,
+    interval_secs:   u64,
+) {
+    let mut shutdown_rx = shutdown_tx.subscribe();
+    let mut ticker = time::interval(Duration::from_secs(interval_secs));
+    ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+
+    loop {
+        tokio::select! { biased;
+            _ = shutdown_rx.wait_for(|v| *v) => return,
+            _ = ticker.tick() => {
+                let suffix = format!("/{}", node_id);
+                let mut to_insert: Vec<Arc<str>> = Vec::new();
+                let mut to_remove: Vec<Arc<str>> = Vec::new();
+                {
+                    let guard = store.pin();
+                    for (key, entry) in guard.iter() {
+                        if !key.starts_with("grp/") || !key.ends_with(suffix.as_str()) { continue; }
+                        let Some(tail) = key.strip_prefix("grp/") else { continue };
+                        let Some(group) = tail.strip_suffix(suffix.as_str()) else { continue };
+                        if entry.data.is_some() {
+                            to_insert.push(Arc::from(group));
+                        } else {
+                            to_remove.push(Arc::from(group));
+                        }
+                    }
+                }
+                let mut bnd = signal_boundary.write();
+                for g in to_insert { bnd.groups.insert(g); }
+                for g in &to_remove { bnd.groups.remove(g.as_ref()); }
+            }
+        }
+    }
 }
 
 // ── Consensus helpers ─────────────────────────────────────────────────────────

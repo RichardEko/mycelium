@@ -2560,6 +2560,40 @@ mod tests {
         agent_b.shutdown().await;
     }
 
+    // ── H2: boundary reconciliation from Layer I ──────────────────────────────
+
+    #[test]
+    fn test_rehydrate_boundary_from_kv_inserts_group() {
+        let agent = make_agent();
+        let node_id = agent.node_id().to_string();
+        let grp_key = format!("grp/workers/{}", node_id);
+        let _ = agent.set(grp_key, Bytes::from_static(b"1"));
+        assert!(agent.groups().is_empty(), "group not yet in boundary");
+        agent.rehydrate_boundary_from_kv();
+        assert!(
+            agent.groups().iter().any(|g| g.as_ref() == "workers"),
+            "rehydrate should admit the group written to KV"
+        );
+    }
+
+    #[test]
+    fn test_rehydrate_boundary_from_kv_removes_tombstoned_group() {
+        let agent = make_agent();
+        let node_id = agent.node_id().to_string();
+        let grp_key = format!("grp/workers/{}", node_id);
+        let _ = agent.set(grp_key.clone(), Bytes::from_static(b"1"));
+        agent.rehydrate_boundary_from_kv();
+        assert!(agent.groups().iter().any(|g| g.as_ref() == "workers"));
+
+        // Tombstone the KV entry — simulates another node forcing this node out.
+        let _ = agent.delete(grp_key);
+        agent.rehydrate_boundary_from_kv();
+        assert!(
+            !agent.groups().iter().any(|g| g.as_ref() == "workers"),
+            "tombstoned group must be evicted from boundary"
+        );
+    }
+
     #[tokio::test]
     async fn test_writer_evicted_after_idle_timeout() {
         let port_a = alloc_port();
