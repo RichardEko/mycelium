@@ -287,6 +287,19 @@ impl ConsensusEngine {
         );
     }
 
+    /// Tombstones `key` in the KV store and gossips the deletion.
+    /// Used to clean up ballot entries once a slot has committed.
+    fn kv_delete(&self, key: &str) {
+        let upd = make_gossip_update(
+            &self.node_id, self.default_ttl, Arc::from(key), Bytes::new(), true,
+        );
+        apply_and_notify(&self.kv_state, &upd);
+        dispatch_gossip_try_send(
+            &self.gossip_txs, WireMessage::Data(upd),
+            self.node_id.id_hash(), ForwardHint::All, &self.kv_state.dropped_frames,
+        );
+    }
+
     /// Like `kv_set` but awaits channel capacity (used by the proposer).
     async fn set_async(&self, key: &str, value: Bytes) {
         let upd = make_gossip_update(&self.node_id, self.default_ttl, Arc::from(key), value, false);
@@ -401,6 +414,7 @@ impl ConsensusEngine {
                     Arc::from(consensus_kind::COMMIT), scope.clone(), encode_consensus_msg(&commit),
                 ).await;
                 self.set_async(commit_key.as_str(), value.clone()).await;
+                self.kv_delete(&ballot_key);
                 return ConsensusResult::Committed { slot, value, ballot };
             }
 
@@ -429,6 +443,7 @@ impl ConsensusEngine {
                                         Arc::from(consensus_kind::COMMIT), scope.clone(), encode_consensus_msg(&commit),
                                     ).await;
                                     self.set_async(commit_key.as_str(), value.clone()).await;
+                                    self.kv_delete(&ballot_key);
                                     return ConsensusResult::Committed { slot, value, ballot };
                                 }
                             }
@@ -589,6 +604,7 @@ async fn run_consensus_listener(
                     format!("{}{}", consensus_ns::COMMITTED, &*slot),
                     value,
                 );
+                ctx.kv_delete(&format!("{}{}", consensus_ns::BALLOT, &*slot));
             }
         }
     }
