@@ -137,6 +137,16 @@ pub struct GossipAgent {
 }
 
 impl GossipAgent {
+    /// Returns the configured pheromone evaporation window as a `Duration`.
+    ///
+    /// Use this in calls to [`suggest_leader`](Self::suggest_leader),
+    /// [`peer_load`](Self::peer_load), and [`route_to`](Self::route_to) instead of
+    /// the compile-time [`SENDER_LOG_WINDOW`](crate::signal::SENDER_LOG_WINDOW) constant,
+    /// so the evaporation window respects the operator's [`GossipConfig::signal_window_secs`].
+    pub fn signal_window(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.config.signal_window_secs)
+    }
+
     /// Creates a new agent. Call [`start`](Self::start) to begin listening.
     pub fn new(node_id: NodeId, mut config: GossipConfig) -> Self {
         let cap = config.gossip_channel_capacity;

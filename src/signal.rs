@@ -27,11 +27,15 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 use tracing::warn;
 
-/// Retention window for the sender-log used by [`SignalHandlers::quorum`].
+/// Compile-time fallback for the sender-log retention window used by [`SignalHandlers::quorum`].
 ///
 /// Entries older than this are evicted by `trim_sender_log` and ignored by `quorum`.
 /// Should be ≥ any pheromone evaporation window callers rely on for load-aware routing
 /// (see [`LoadState::written_at_ms`]).
+///
+/// In application code, prefer [`GossipAgent::signal_window`](crate::GossipAgent::signal_window)
+/// which reads the operator-configured value from [`GossipConfig::signal_window_secs`].
+/// This constant is the hardcoded fallback used where no agent config is available.
 pub(crate) const SENDER_LOG_WINDOW: Duration = Duration::from_secs(600);
 
 /// Scope of a signal — determines which nodes **act** on it.
