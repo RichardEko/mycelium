@@ -183,7 +183,7 @@ mod tests {
             intern_keys: true,
             intern_max_keys: 0,
             signal_boundary: Arc::new(RwLock::new(Boundary::new(node_id))),
-            signal_handlers: Arc::new(SignalHandlers::new()),
+            signal_handlers: Arc::new(SignalHandlers::new(Duration::from_secs(600))),
             max_peers: usize::MAX,
             writer_idle_timeout: Duration::ZERO,
             kv_state: Arc::new(KvState {
@@ -827,7 +827,7 @@ mod tests {
                 intern_keys: true,
                 intern_max_keys: 0,
                 signal_boundary: Arc::new(RwLock::new(Boundary::new(node_id))),
-                signal_handlers: Arc::new(SignalHandlers::new()),
+                signal_handlers: Arc::new(SignalHandlers::new(Duration::from_secs(600))),
                 max_peers: usize::MAX,
                 writer_idle_timeout: Duration::ZERO,
                 kv_state: Arc::new(KvState {
@@ -1651,7 +1651,7 @@ mod tests {
     #[test]
     fn test_opacity_zero_when_channel_empty() {
         use crate::signal::SignalHandlers;
-        let handlers = SignalHandlers::new();
+        let handlers = SignalHandlers::new(Duration::from_secs(600));
         let kind: Arc<str> = Arc::from("probe");
         let _rx = handlers.register_with_capacity(kind.clone(), 8);
         // Channel is empty: fill_ratio must be exactly 0.0.
@@ -1661,7 +1661,7 @@ mod tests {
     #[test]
     fn test_opacity_one_when_channel_full() {
         use crate::signal::{Signal, SignalHandlers};
-        let handlers = SignalHandlers::new();
+        let handlers = SignalHandlers::new(Duration::from_secs(600));
         let kind: Arc<str> = Arc::from("probe");
         let _rx = handlers.register_with_capacity(kind.clone(), 4);
         let sender = NodeId::new("127.0.0.1", 1).unwrap();
@@ -1683,7 +1683,7 @@ mod tests {
     #[tokio::test]
     async fn test_individual_scope_bypasses_opacity() {
         use crate::signal::{Signal, SignalHandlers};
-        let handlers = SignalHandlers::new();
+        let handlers = SignalHandlers::new(Duration::from_secs(600));
         let kind: Arc<str> = Arc::from("invoke");
         let node_id = NodeId::new("127.0.0.1", 1).unwrap();
         // Register with depth 1 and immediately fill it.
@@ -1984,7 +1984,7 @@ mod tests {
     #[test]
     fn test_quorum_distinct_senders() {
         use crate::signal::{Signal, SignalHandlers};
-        let handlers = SignalHandlers::new();
+        let handlers = SignalHandlers::new(Duration::from_secs(600));
         let kind: Arc<str> = Arc::from("test.quorum.distinct");
         let sender_a = NodeId::new("127.0.0.1", 1001).unwrap();
         let sender_b = NodeId::new("127.0.0.1", 1002).unwrap();
