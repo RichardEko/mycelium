@@ -2839,6 +2839,91 @@ mod tests {
         agent_b.shutdown().await;
     }
 
+    // When member B turns opaque mid-ballot the reactive select! arm recomputes quorum
+    // from 2 down to 1, letting A's self-vote commit before the phase1 timeout fires.
+    #[tokio::test]
+    async fn test_ballot_reacts_to_opacity_change() {
+        use crate::signal::{encode_load_state, LoadState};
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let port_a = alloc_port();
+        let port_b = alloc_port();
+
+        let mut cfg_a = GossipConfig::default();
+        cfg_a.bind_port                  = port_a;
+        cfg_a.health_check_interval_secs = 1;
+        cfg_a.health_check_max_jitter_ms = 10;
+        cfg_a.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_b).unwrap()];
+
+        let mut cfg_b = GossipConfig::default();
+        cfg_b.bind_port                  = port_b;
+        cfg_b.health_check_max_jitter_ms = 10;
+        cfg_b.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_a).unwrap()];
+
+        let node_b = NodeId::new("127.0.0.1", port_b).unwrap();
+        let agent_a = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port_a).unwrap(), cfg_a));
+        let agent_b = GossipAgent::new(node_b.clone(), cfg_b);
+        agent_a.start().await.unwrap();
+        agent_b.start().await.unwrap();
+        time::sleep(Duration::from_millis(150)).await;
+
+        agent_a.join_group("ogrp");
+        agent_b.join_group("ogrp");
+        time::sleep(Duration::from_millis(100)).await;
+
+        // Both start as consensus listeners; B will not actually vote because it
+        // goes opaque before A's PROPOSE is forwarded to it — this is fine, the
+        // test verifies A's reactive quorum reduction, not B's vote delivery.
+        let _la = agent_a.start_consensus_listener(ConsensusConfig::default());
+        let _lb = agent_b.start_consensus_listener(ConsensusConfig::default());
+
+        // Background task: after a short pause (to let the 'collect loop start),
+        // write B's opaque pheromone to A's store and emit BOUNDARY_OPAQUE on A.
+        // Both happen in-process on agent_a so there's no gossip propagation race.
+        let aa = agent_a.clone();
+        tokio::spawn(async move {
+            time::sleep(Duration::from_millis(100)).await;
+            let now_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH).unwrap_or_default()
+                .as_millis() as u64;
+            let opaque_bytes = encode_load_state(&LoadState {
+                fill_ratio:   1.0,
+                is_opaque:    true,
+                written_at_ms: now_ms,
+            });
+            let pheromone_key = format!("sys/load/{}/test.kind", node_b);
+            let _ = aa.set(pheromone_key, opaque_bytes);
+            // Emit BOUNDARY_OPAQUE locally on A so opaque_rx fires in propose().
+            let _ = aa.emit(signal_kind::BOUNDARY_OPAQUE, SignalScope::System, Bytes::new());
+        });
+
+        // phase1_timeout = 2 s; the reactive arm should commit within ~150 ms.
+        let config = ConsensusConfig {
+            quorum_size:            0, // auto = floor(2/2)+1 = 2 at proposal time
+            phase1_timeout:         Duration::from_secs(2),
+            max_ballots:            1,
+            ballot_retry_jitter_ms: 0,
+            count_opaque_as_absent: true,
+            ..ConsensusConfig::default()
+        };
+
+        let start = tokio::time::Instant::now();
+        let result = agent_a.group_propose("ogrp", "opq_sl", Bytes::from_static(b"v"), config).await;
+        let elapsed = start.elapsed();
+
+        assert!(
+            matches!(result, ConsensusResult::Committed { .. }),
+            "should commit once B goes opaque and quorum drops to 1; got {:?}", result
+        );
+        assert!(
+            elapsed < Duration::from_millis(1000),
+            "reactive commit must happen well before the 2 s timeout; elapsed {:?}", elapsed
+        );
+
+        agent_a.shutdown().await;
+        agent_b.shutdown().await;
+    }
+
     #[test]
     fn test_warm_quorum_seeds_sender_log() {
         use std::time::{SystemTime, UNIX_EPOCH};

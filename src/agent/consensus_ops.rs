@@ -168,19 +168,24 @@ impl GossipAgent {
             .iter()
             .map(NodeId::to_string)
             .collect();
+        let freshness = Duration::from_millis(
+            self.config.health_check_interval_secs * 2 * 1000,
+        );
         let raw_members = member_ids.len().max(1);
         let active_members = if config.count_opaque_as_absent {
-            let freshness = Duration::from_millis(
-                self.config.health_check_interval_secs * 2 * 1000,
-            );
             let opaque_count = self.count_opaque_members(&member_ids, freshness);
             raw_members.saturating_sub(opaque_count).max(1)
         } else {
             raw_members
         };
         let quorum = compute_quorum_size(config.quorum_size, active_members);
+        let opaque_recompute = if config.count_opaque_as_absent {
+            Some((member_ids, freshness, config.quorum_size))
+        } else {
+            None
+        };
         self.make_consensus_engine(config.abstain_when_opaque, config.use_trust_slices, config.max_abstain_ballots)
-            .propose(SignalScope::Group(Arc::from(group)), Arc::from(slot), value, quorum, config)
+            .propose(SignalScope::Group(Arc::from(group)), Arc::from(slot), value, quorum, config, opaque_recompute)
             .await
     }
 
@@ -229,7 +234,7 @@ impl GossipAgent {
         };
         let quorum = compute_quorum_size(config.quorum_size, active_n);
         self.make_consensus_engine(config.abstain_when_opaque, config.use_trust_slices, config.max_abstain_ballots)
-            .propose(SignalScope::System, Arc::from(slot), value, quorum, config)
+            .propose(SignalScope::System, Arc::from(slot), value, quorum, config, None)
             .await
     }
 

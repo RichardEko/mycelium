@@ -31,8 +31,8 @@ use crate::framing::{
     bincode_cfg, dispatch_gossip_send, dispatch_gossip_try_send, ForwardHint, WireMessage,
 };
 use crate::node_id::NodeId;
-use crate::signal::{decode_load_state, kv_ns, SignalScope};
-use crate::store::apply_and_notify;
+use crate::signal::{decode_load_state, kv_ns, signal_kind, SignalScope};
+use crate::store::{apply_and_notify, KvState};
 use ahash::{AHashMap, AHashSet};
 use bytes::{BufMut, Bytes, BytesMut};
 use std::{
@@ -235,6 +235,43 @@ pub mod consensus_ns {
     pub const TRUST:     &str = "consensus/trust/";
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Counts group members with any opaque load entry fresher than `max_age_ms`.
+/// Mirrors `GossipAgent::count_opaque_members` using `KvState` directly so that
+/// `ConsensusEngine::propose` can recompute quorum without an agent reference.
+fn count_opaque_members_in_kv(
+    kv_state:     &KvState,
+    member_ids:   &AHashSet<String>,
+    max_age_ms:   u64,
+    now_ms:       u64,
+) -> usize {
+    let prefix = kv_ns::LOAD;
+    let seg = prefix.find('/').map_or(prefix, |i| &prefix[..i]);
+    let store = kv_state.store.pin();
+    let idx   = kv_state.prefix_index.pin();
+
+    let is_opaque_member = |key: &Arc<str>| -> bool {
+        if !key.starts_with(prefix) { return false; }
+        let tail = key.strip_prefix(prefix).unwrap_or("");
+        let slash = tail.find('/').unwrap_or(tail.len());
+        if !member_ids.contains(&tail[..slash]) { return false; }
+        store.get(key.as_ref())
+            .and_then(|e| e.data.as_ref().and_then(decode_load_state))
+            .map(|s| s.is_opaque && now_ms.saturating_sub(s.written_at_ms) <= max_age_ms)
+            .unwrap_or(false)
+    };
+
+    if let Some(bucket) = idx.get(seg) {
+        bucket.pin().iter().filter(|(k, _)| is_opaque_member(k)).count()
+    } else {
+        store.iter()
+            .filter(|(k, v)| k.starts_with(prefix) && v.data.is_some())
+            .filter(|(k, _)| is_opaque_member(k))
+            .count()
+    }
+}
+
 // ── ConsensusEngine ──────────────────────────────────────────────────────────
 //
 // Shared context for both the voter/listener task and the proposer.
@@ -346,16 +383,36 @@ impl ConsensusEngine {
     /// Runs one full proposal attempt sequence for `slot`.
     ///
     /// Called by `GossipAgent::group_propose` and `GossipAgent::system_propose`.
+    ///
+    /// `opaque_recompute` — when `Some((member_ids, freshness, config_quorum_size))`,
+    /// `propose` registers for `BOUNDARY_TRANSPARENT` signals and re-evaluates the
+    /// effective quorum size mid-ballot when any member reports a transition back to
+    /// transparent. This allows a ballot to commit earlier when previously-opaque
+    /// members become available during the collection window.
     pub(crate) async fn propose(
         &self,
-        scope:       SignalScope,
-        slot:        Arc<str>,
-        value:       Bytes,
-        quorum_size: usize,
-        config:      ConsensusConfig,
+        scope:             SignalScope,
+        slot:              Arc<str>,
+        value:             Bytes,
+        quorum_size:       usize,
+        config:            ConsensusConfig,
+        opaque_recompute:  Option<(AHashSet<String>, Duration, usize)>,
     ) -> ConsensusResult {
         let ballot_key = format!("{}{}", consensus_ns::BALLOT, &*slot);
         let commit_key = format!("{}{}", consensus_ns::COMMITTED, &*slot);
+
+        let mut quorum_size = quorum_size;
+        // Register for BOUNDARY_TRANSPARENT signals so we can re-evaluate quorum
+        // mid-ballot when previously-opaque members become available.
+        // Watch for BOUNDARY_OPAQUE: a member going opaque shrinks active_members,
+        // which may lower the quorum threshold below votes already collected.
+        let mut opaque_rx = if opaque_recompute.is_some() {
+            Some(self.task_ctx.signal_handlers.register_with_capacity(
+                Arc::from(signal_kind::BOUNDARY_OPAQUE), 8,
+            ))
+        } else {
+            None
+        };
 
         // Build trust set once before the ballot loop — it doesn't change mid-round.
         let trust_set: Option<AHashSet<u64>> = if self.use_trust_slices {
@@ -455,6 +512,42 @@ impl ConsensusEngine {
                             if s == slot && seen_ballot > ballot {
                                 nack_ballot = seen_ballot;
                                 break 'collect;
+                            }
+                        }
+                    }
+                    // Re-evaluate quorum when a member turns opaque mid-ballot.
+                    // BOUNDARY_OPAQUE means the sender is now excluded from active_members,
+                    // shrinking the quorum threshold. If we already have enough votes, commit.
+                    Some(_) = async {
+                        match opaque_rx.as_mut() {
+                            Some(rx) => rx.recv().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        if let Some((ref ids, freshness, config_qs)) = opaque_recompute {
+                            use std::time::{SystemTime, UNIX_EPOCH};
+                            let now_ms = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64;
+                            let opaque = count_opaque_members_in_kv(
+                                &self.task_ctx.kv_state, ids,
+                                freshness.as_millis() as u64, now_ms,
+                            );
+                            let active = ids.len().saturating_sub(opaque).max(1);
+                            quorum_size = if config_qs > 0 { config_qs } else { active / 2 + 1 };
+                            // Check immediately — we may already have enough votes.
+                            if voters.len() >= quorum_size {
+                                let commit = ConsensusMsg::Commit {
+                                    slot: slot.clone(), ballot, value: value.clone(),
+                                };
+                                self.emit_async(
+                                    Arc::from(consensus_kind::COMMIT), scope.clone(),
+                                    encode_consensus_msg(&commit),
+                                ).await;
+                                self.set_async(commit_key.as_str(), value.clone()).await;
+                                self.kv_delete(&ballot_key);
+                                return ConsensusResult::Committed { slot, value, ballot };
                             }
                         }
                     }
