@@ -32,9 +32,9 @@ pub struct GossipConfig {
     pub default_ttl: u8,
     /// Maximum number of concurrent inbound TCP connections.
     pub max_connections: usize,
-    /// Capacity of each per-peer outbound channel. **When full, gossip frames are
-    /// silently dropped** — the failure is indistinguishable from network packet loss
-    /// unless `system_stats().dropped_frames` is monitored.
+    /// Depth of each per-peer outbound MPSC channel (a ring buffer, not a semaphore).
+    /// **When full, gossip frames are silently dropped** — the failure is indistinguishable
+    /// from network packet loss unless `system_stats().dropped_frames` is monitored.
     ///
     /// Size this to handle the maximum burst that can arrive before a slow peer drains
     /// its channel. For a cluster of N agents writing one KV entry per tick with epidemic
@@ -42,7 +42,7 @@ pub struct GossipConfig {
     /// happens to forward the most messages in one generation). At the default fan-out of
     /// 4 and N = 256 agents that is 1 024; the default of 64 is correct only for small
     /// clusters (N ≤ 16).
-    pub max_concurrent_forwards: usize,
+    pub writer_channel_depth: usize,
     /// Maximum number of peers each gossip shard will forward to simultaneously.
     ///
     /// Bootstrap peers are always included regardless of this limit. Peers discovered
@@ -83,6 +83,13 @@ pub struct GossipConfig {
     /// Effective for workloads with a bounded key set; set to `false` for workloads with
     /// an unbounded key space (e.g. per-request UUIDs as keys) to prevent pool growth.
     pub intern_keys: bool,
+    /// Maximum number of distinct keys held in the process-wide intern pool.
+    /// When the pool reaches this limit, new keys bypass interning — they are returned as
+    /// their own `Arc<str>` without being inserted into the pool. This bounds pool memory
+    /// without disabling interning entirely for the keys already present.
+    ///
+    /// `0` = no limit (default). Only meaningful when `intern_keys = true`.
+    pub intern_max_keys: usize,
     /// Number of peer addresses sampled into each outbound Ping's `known_peers` list.
     /// Controls both topology-discovery speed and Ping message size. In clusters with
     /// more than `ping_peer_sample_size` peers, each Ping carries a random subset so
@@ -114,7 +121,7 @@ impl Default for GossipConfig {
             health_check_interval_secs: 10,
             default_ttl: 5,
             max_connections: 1024,
-            max_concurrent_forwards: 64,
+            writer_channel_depth: 64,
             max_forwarding_peers: i64::MAX as usize,
             reconnect_backoff_secs: 5,
             gossip_channel_capacity: 1024,
@@ -124,6 +131,7 @@ impl Default for GossipConfig {
                 .map_or(4, |n| n.get())
                 .min(16),
             intern_keys: true,
+            intern_max_keys: 0,
             ping_peer_sample_size: 20,
             tcp_accept_backlog: 1024,
             max_peers: i64::MAX as usize,
@@ -175,9 +183,9 @@ impl GossipConfig {
                 "propagation_window_secs cannot be zero".into(),
             ));
         }
-        if self.max_concurrent_forwards == 0 {
+        if self.writer_channel_depth == 0 {
             return Err(GossipError::Config(
-                "max_concurrent_forwards cannot be zero".into(),
+                "writer_channel_depth cannot be zero".into(),
             ));
         }
         if self.gossip_channel_capacity == 0 {
@@ -241,11 +249,12 @@ impl GossipConfig {
     ///
     /// All 18 fields can be overridden: `GOSSIP_BIND_ADDRESS`, `GOSSIP_BIND_PORT`,
     /// `GOSSIP_PROPAGATION_WINDOW_SECS`, `GOSSIP_HEALTH_CHECK_INTERVAL_SECS`,
-    /// `GOSSIP_DEFAULT_TTL`, `GOSSIP_MAX_CONNECTIONS`, `GOSSIP_MAX_CONCURRENT_FORWARDS`,
+    /// `GOSSIP_DEFAULT_TTL`, `GOSSIP_MAX_CONNECTIONS`, `GOSSIP_WRITER_CHANNEL_DEPTH`,
     /// `GOSSIP_MAX_FORWARDING_PEERS`, `GOSSIP_RECONNECT_BACKOFF_SECS`,
     /// `GOSSIP_GOSSIP_CHANNEL_CAPACITY`, `GOSSIP_MAX_SEEN_ENTRIES`,
     /// `GOSSIP_PEER_EVICTION_INTERVALS`, `GOSSIP_GOSSIP_SHARDS`,
-    /// `GOSSIP_INTERN_KEYS` (`true`/`false`/`1`/`0`), `GOSSIP_BOOTSTRAP_PEERS` (comma-separated
+    /// `GOSSIP_INTERN_KEYS` (`true`/`false`/`1`/`0`), `GOSSIP_INTERN_MAX_KEYS`,
+    /// `GOSSIP_BOOTSTRAP_PEERS` (comma-separated
     /// `ip:port` list), `GOSSIP_PING_PEER_SAMPLE_SIZE`, `GOSSIP_TCP_ACCEPT_BACKLOG`,
     /// `GOSSIP_MAX_PEERS`.
     pub fn apply_env_overrides(&mut self) -> Result<(), GossipError> {
@@ -267,8 +276,8 @@ impl GossipConfig {
         if let Ok(v) = env::var("GOSSIP_MAX_CONNECTIONS") {
             self.max_connections = v.parse().map_err(GossipError::Parse)?;
         }
-        if let Ok(v) = env::var("GOSSIP_MAX_CONCURRENT_FORWARDS") {
-            self.max_concurrent_forwards = v.parse().map_err(GossipError::Parse)?;
+        if let Ok(v) = env::var("GOSSIP_WRITER_CHANNEL_DEPTH") {
+            self.writer_channel_depth = v.parse().map_err(GossipError::Parse)?;
         }
         if let Ok(v) = env::var("GOSSIP_MAX_FORWARDING_PEERS") {
             self.max_forwarding_peers = v.parse().map_err(GossipError::Parse)?;
@@ -296,6 +305,9 @@ impl GossipConfig {
                     "GOSSIP_INTERN_KEYS must be 'true', 'false', '1', or '0', got '{}'", v
                 ))),
             };
+        }
+        if let Ok(v) = env::var("GOSSIP_INTERN_MAX_KEYS") {
+            self.intern_max_keys = v.parse().map_err(GossipError::Parse)?;
         }
         if let Ok(v) = env::var("GOSSIP_BOOTSTRAP_PEERS") {
             let peers: Result<Vec<NodeId>, _> = v

@@ -92,7 +92,9 @@ impl Boundary {
 /// Multiple tasks may register receivers for the same kind. All registered
 /// channels receive the signal on delivery. Closed channels are evicted lazily.
 pub(crate) struct SignalHandlers {
-    map:         DashMap<Arc<str>, Vec<mpsc::Sender<Signal>>>,
+    /// `Arc<Vec<Sender>>` so `deliver()` can snapshot with an O(1) atomic increment
+    /// instead of an O(n) Vec clone. Registration (cold path) rebuilds the Vec+Arc.
+    map:         DashMap<Arc<str>, Arc<Vec<mpsc::Sender<Signal>>>>,
     /// Lock-free reads via papaya epoch pinning — hot on every `last_signal` query.
     last_seen:   PapayaMap<Arc<str>, Instant>,
     /// Active refractory periods. Value is the `Instant` at which suppression expires.
@@ -123,7 +125,14 @@ impl SignalHandlers {
     /// Returns a new `mpsc::Receiver<Signal>` for `kind` with a caller-specified channel depth.
     pub(crate) fn register_with_capacity(&self, kind: Arc<str>, cap: usize) -> mpsc::Receiver<Signal> {
         let (tx, rx) = mpsc::channel(cap);
-        self.map.entry(kind).or_default().push(tx);
+        let tx2 = tx.clone();
+        self.map.entry(kind)
+            .and_modify(|arc| {
+                let mut v = (**arc).clone();
+                v.push(tx2);
+                *arc = Arc::new(v);
+            })
+            .or_insert_with(|| Arc::new(vec![tx]));
         rx
     }
 
@@ -175,12 +184,12 @@ impl SignalHandlers {
         {
             return;
         }
-        let snapshot: Vec<mpsc::Sender<Signal>> = match self.map.get(&signal.kind) {
-            Some(guard) => guard.value().clone(),
+        let snapshot: Arc<Vec<mpsc::Sender<Signal>>> = match self.map.get(&signal.kind) {
+            Some(guard) => Arc::clone(guard.value()),   // O(1) atomic refcount increment
             None => return,
         };
         let mut has_closed = false;
-        for tx in &snapshot {
+        for tx in snapshot.iter() {
             match tx.try_send(signal.clone()) {
                 Ok(()) => {}
                 Err(TrySendError::Full(_)) => {
@@ -196,7 +205,8 @@ impl SignalHandlers {
         }
         if has_closed {
             if let Some(mut entry) = self.map.get_mut(&signal.kind) {
-                entry.retain(|tx| !tx.is_closed());
+                let filtered: Vec<_> = entry.iter().filter(|tx| !tx.is_closed()).cloned().collect();
+                *entry = Arc::new(filtered);
             }
         }
     }
@@ -242,8 +252,8 @@ impl SignalHandlers {
         let Some(log) = self.sender_log.get(kind) else { return false };
         let distinct = log.iter()
             .filter(|(_sender, received_at)| received_at.elapsed() <= window)
-            .map(|(sender, _received_at)| sender)
-            .collect::<AHashSet<_>>()
+            .map(|(sender, _received_at)| sender.id_hash())
+            .collect::<AHashSet<u64>>()
             .len();
         distinct >= min_senders
     }

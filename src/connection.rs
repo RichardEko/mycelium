@@ -45,6 +45,7 @@ pub(crate) struct ConnContext {
     pub(crate) backoff:          Duration,
     pub(crate) n_shards:         usize,
     pub(crate) intern_keys:      bool,
+    pub(crate) intern_max_keys:  usize,
     pub(crate) signal_boundary:  Arc<RwLock<Boundary>>,
     pub(crate) signal_handlers:  Arc<SignalHandlers>,
     /// Cap on the peer table. Piggybacked peers are silently ignored once this
@@ -60,7 +61,7 @@ pub(crate) async fn handle_connection(
     let ConnContext {
         node_id, store, peers, gossip_txs, seen, shutdown, max_ttl,
         subscriptions, current_ts, peer_writers, writer_depth, backoff, n_shards,
-        intern_keys, signal_boundary, signal_handlers, max_peers,
+        intern_keys, intern_max_keys, signal_boundary, signal_handlers, max_peers,
     } = ctx;
     let mut socket = BufReader::with_capacity(8_192, socket);
     let mut shutdown_rx = shutdown.subscribe();
@@ -193,7 +194,7 @@ pub(crate) async fn handle_connection(
                 for entry in entries {
                     // Intern keys from anti-entropy the same way as Data messages so
                     // both paths share the same Arc<str> allocation for the same key.
-                    let key = if intern_keys { intern_key(entry.key) } else { entry.key };
+                    let key = if intern_keys { intern_key(entry.key, intern_max_keys) } else { entry.key };
                     let update = GossipUpdate {
                         // StateResponse entries bypass the seen-set; TTL=1 prevents re-gossip.
                         nonce:        ANTI_ENTROPY_NONCE,
@@ -276,7 +277,7 @@ pub(crate) async fn handle_connection(
                         continue;
                     }
                 }
-                if intern_keys { update.key = intern_key(update.key); }
+                if intern_keys { update.key = intern_key(update.key, intern_max_keys); }
                 apply_and_notify(&store, &subscriptions, &update);
 
                 // Clamp inbound TTL to config.default_ttl before forwarding.

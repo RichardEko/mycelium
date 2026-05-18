@@ -88,7 +88,7 @@ let stats = agent.system_stats();
 
 // Propagation health — the most important number.
 // dropped_frames > 0 means gossip writes were silently lost.
-// Cause: max_concurrent_forwards or gossip_channel_capacity too small for the burst rate.
+// Cause: writer_channel_depth or gossip_channel_capacity too small for the burst rate.
 // Fix: raise the limiting field (documented sizing formula in GossipConfig).
 assert_eq!(stats.dropped_frames, 0);
 
@@ -109,8 +109,8 @@ println!("dead shards: {}", stats.dead_shards); // should always be 0
 
 ```
 dropped_frames > 0?
-  YES → max_concurrent_forwards or gossip_channel_capacity too small
-        Size max_concurrent_forwards to N_agents × fan_out (default fan_out = 4)
+  YES → writer_channel_depth or gossip_channel_capacity too small
+        Size writer_channel_depth to N_agents × fan_out (default fan_out = 4)
   NO  → peers == 0?  bootstrap_peers misconfigured or all peers unreachable
         health_monitor_alive == false?  internal task failure — restart agent
         shard_queue_depths saturated?   gossip_shards too low for write rate
@@ -551,7 +551,7 @@ Environment variables override both — `GOSSIP_<FIELD_NAME>` for every field.
 | `health_check_interval_secs` | `10` | Ping interval and peer eviction cadence |
 | `propagation_window_secs` | `60` | Tombstone retention window |
 | `max_connections` | `1024` | Inbound connection limit |
-| `max_concurrent_forwards` | `64` | Per-peer outbound channel depth. **Correctness threshold** — frames silently dropped when full. Size to `N × fan_out` |
+| `writer_channel_depth` | `64` | Per-peer outbound channel depth (ring buffer). **Correctness threshold** — frames silently dropped when full. Size to `N × fan_out` |
 | `max_forwarding_peers` | unlimited | Cap gossip fan-out targets. Set to `bootstrap_peers.len()` for fixed-topology meshes |
 | `max_peers` | unlimited | Cap the peer table. Prevents O(N²) persistent connections when piggybacked peer lists would otherwise expand every node's view of the full cluster. Set to `bootstrap_peers.len()` for grid or ring topologies |
 | `gossip_channel_capacity` | `1024` | Per-shard gossip channel depth |

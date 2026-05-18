@@ -71,7 +71,7 @@ pub struct SystemStats {
     ///
     /// Incremented by `set`, `delete`, `emit`, and internal forwarding whenever
     /// `try_send` returns `Err(Full)`. A non-zero value means the agent lost
-    /// writes — raise `max_concurrent_forwards` or `gossip_channel_capacity`.
+    /// writes — raise `writer_channel_depth` or `gossip_channel_capacity`.
     pub dropped_frames: u64,
 }
 
@@ -246,10 +246,11 @@ impl GossipAgent {
             listener_alive:  self.listener_alive.clone(),
             max_conn:        self.config.max_connections,
             max_ttl:         self.config.default_ttl,
-            writer_depth:    self.config.max_concurrent_forwards,
+            writer_depth:    self.config.writer_channel_depth,
             backoff:         Duration::from_secs(self.config.reconnect_backoff_secs),
             n_shards:        self.gossip_txs.len(),
             intern_keys:     self.config.intern_keys,
+            intern_max_keys: self.config.intern_max_keys,
             signal_boundary: self.signal_boundary.clone(),
             signal_handlers: self.signal_handlers.clone(),
             max_peers:       self.config.max_peers,
@@ -267,7 +268,7 @@ impl GossipAgent {
         let bootstrap_peers = self.bootstrap_peers.clone();
         let peer_writers    = self.peer_writers.clone();
         let shutdown_tx     = self.shutdown_tx.clone();
-        let writer_depth    = self.config.max_concurrent_forwards;
+        let writer_depth    = self.config.writer_channel_depth;
         let backoff         = Duration::from_secs(self.config.reconnect_backoff_secs);
 
         let rxs = self.gossip_rxs
@@ -302,7 +303,7 @@ impl GossipAgent {
         let shutdown_tx          = self.shutdown_tx.clone();
         let current_ts           = self.current_ts.clone();
         let interval_secs        = self.config.health_check_interval_secs;
-        let writer_depth         = self.config.max_concurrent_forwards;
+        let writer_depth         = self.config.writer_channel_depth;
         let backoff              = Duration::from_secs(self.config.reconnect_backoff_secs);
         let peer_eviction_intervals = self.config.peer_eviction_intervals;
         let health_monitor_alive = self.health_monitor_alive.clone();
@@ -1206,22 +1207,19 @@ impl GossipAgent {
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
         let shutdown_rx = self.shutdown_tx.subscribe();
 
-        let node_id         = self.node_id.clone();
-        let seen            = self.seen.clone();
-        let current_ts      = self.current_ts.clone();
-        let signal_boundary = self.signal_boundary.clone();
-        let signal_handlers = self.signal_handlers.clone();
-        let gossip_txs      = self.gossip_txs.clone();
-        let default_ttl     = self.config.default_ttl;
-        let dropped_frames  = self.dropped_frames.clone();
-        let store           = self.store.clone();
-        let subscriptions   = self.subscriptions.clone();
-
-        let handle = tokio::spawn(run_consensus_listener(
-            node_id, seen, current_ts, signal_boundary, signal_handlers,
-            gossip_txs, default_ttl, dropped_frames, store, subscriptions,
-            cancel_rx, shutdown_rx,
-        ));
+        let ctx = ConsensusListenerCtx {
+            node_id:         self.node_id.clone(),
+            seen:            self.seen.clone(),
+            current_ts:      self.current_ts.clone(),
+            signal_boundary: self.signal_boundary.clone(),
+            signal_handlers: self.signal_handlers.clone(),
+            gossip_txs:      self.gossip_txs.clone(),
+            default_ttl:     self.config.default_ttl,
+            dropped_frames:  self.dropped_frames.clone(),
+            store:           self.store.clone(),
+            subscriptions:   self.subscriptions.clone(),
+        };
+        let handle = tokio::spawn(run_consensus_listener(ctx, cancel_rx, shutdown_rx));
         {
             let mut handles = self.task_handles.lock().unwrap_or_else(|e| e.into_inner());
             handles.retain(|h| !h.is_finished());
@@ -1552,6 +1550,7 @@ struct ListenerContext {
     backoff:        Duration,
     n_shards:        usize,
     intern_keys:     bool,
+    intern_max_keys: usize,
     signal_boundary: Arc<RwLock<Boundary>>,
     signal_handlers: Arc<SignalHandlers>,
     max_peers:       usize,
@@ -1561,7 +1560,7 @@ async fn run_listener_task(listener: TcpListener, lctx: ListenerContext) {
     let ListenerContext {
         node_id, store, peers, gossip_txs, seen, shutdown_tx, subscriptions,
         current_ts, peer_writers, conn_sem, listener_alive,
-        max_conn, max_ttl, writer_depth, backoff, n_shards, intern_keys,
+        max_conn, max_ttl, writer_depth, backoff, n_shards, intern_keys, intern_max_keys,
         signal_boundary, signal_handlers, max_peers,
     } = lctx;
     let mut shutdown_rx = shutdown_tx.subscribe();
@@ -1606,7 +1605,7 @@ async fn run_listener_task(listener: TcpListener, lctx: ListenerContext) {
                                         seen, shutdown, max_ttl, subscriptions,
                                         current_ts, peer_writers,
                                         writer_depth, backoff, n_shards,
-                                        intern_keys, signal_boundary,
+                                        intern_keys, intern_max_keys, signal_boundary,
                                         signal_handlers, max_peers,
                                     };
                                     if let Err(e) = handle_connection(socket, addr, ctx).await {
@@ -2055,59 +2054,12 @@ fn decode_ballot(bytes: &Bytes) -> u64 {
     }
 }
 
-/// Applies a KV update from within the consensus listener task (no `&self` available).
-/// Uses `try_send` for gossip dispatch — dropped frames are recovered via anti-entropy.
-#[allow(clippy::too_many_arguments)]
-fn listener_kv_set(
-    key:            String,
-    value:          Bytes,
-    node_id:        &NodeId,
-    default_ttl:    u8,
-    store:          &Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
-    subscriptions:  &Arc<papaya::HashMap<Arc<str>, watch::Sender<Option<Bytes>>>>,
-    gossip_txs:     &Arc<[mpsc::Sender<(Bytes, u64)>]>,
-    dropped_frames: &Arc<AtomicU64>,
-) {
-    let key: Arc<str> = Arc::from(key.as_str());
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
-    let update = GossipUpdate {
-        nonce:        fastrand::u64(1..),
-        sender:       node_id.id_hash(),
-        ttl:          default_ttl,
-        is_tombstone: false,
-        timestamp,
-        key,
-        value,
-    };
-    apply_and_notify(store, subscriptions, &update);
-    let shard  = shard_for_key(&update.key, gossip_txs.len());
-    let sender = update.sender;
-    let mut buf = BytesMut::with_capacity(256);
-    if bincode::serde::encode_into_std_write(
-        WireMessage::Data(update), &mut (&mut buf).writer(), bincode_cfg(),
-    ).is_ok() {
-        match gossip_txs[shard].try_send((buf.freeze(), sender)) {
-            Ok(()) => {}
-            Err(TrySendError::Full(_)) => {
-                dropped_frames.fetch_add(1, Ordering::Relaxed);
-                warn!("Consensus KV: gossip shard {} full; frame dropped", shard);
-            }
-            Err(TrySendError::Closed(_)) => {
-                warn!("Consensus KV: gossip shard {} dead", shard);
-            }
-        }
-    }
-}
-
-/// Background voter task — processes incoming consensus signals and emits
-/// votes, nacks, and KV commit writes on behalf of this node.
+/// Shared state for the consensus listener task.
 ///
-/// Spawned by [`GossipAgent::start_consensus_listener`].
-#[allow(clippy::too_many_arguments)]
-async fn run_consensus_listener(
+/// Bundles the Arc fields that were previously passed individually to
+/// `run_consensus_listener` and `listener_kv_set`, following the same pattern
+/// as [`ListenerContext`].
+struct ConsensusListenerCtx {
     node_id:         NodeId,
     seen:            Arc<ShardedSeen>,
     current_ts:      Arc<AtomicU64>,
@@ -2118,13 +2070,60 @@ async fn run_consensus_listener(
     dropped_frames:  Arc<AtomicU64>,
     store:           Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
     subscriptions:   Arc<papaya::HashMap<Arc<str>, watch::Sender<Option<Bytes>>>>,
+}
+
+impl ConsensusListenerCtx {
+    /// Applies a KV update from within the consensus listener task.
+    /// Uses `try_send` for gossip dispatch — dropped frames are recovered via anti-entropy.
+    fn kv_set(&self, key: String, value: Bytes) {
+        let key: Arc<str> = Arc::from(key.as_str());
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let update = GossipUpdate {
+            nonce:        fastrand::u64(1..),
+            sender:       self.node_id.id_hash(),
+            ttl:          self.default_ttl,
+            is_tombstone: false,
+            timestamp,
+            key,
+            value,
+        };
+        apply_and_notify(&self.store, &self.subscriptions, &update);
+        let shard  = shard_for_key(&update.key, self.gossip_txs.len());
+        let sender = update.sender;
+        let mut buf = BytesMut::with_capacity(256);
+        if bincode::serde::encode_into_std_write(
+            WireMessage::Data(update), &mut (&mut buf).writer(), bincode_cfg(),
+        ).is_ok() {
+            match self.gossip_txs[shard].try_send((buf.freeze(), sender)) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) => {
+                    self.dropped_frames.fetch_add(1, Ordering::Relaxed);
+                    warn!("Consensus KV: gossip shard {} full; frame dropped", shard);
+                }
+                Err(TrySendError::Closed(_)) => {
+                    warn!("Consensus KV: gossip shard {} dead", shard);
+                }
+            }
+        }
+    }
+}
+
+/// Background voter task — processes incoming consensus signals and emits
+/// votes, nacks, and KV commit writes on behalf of this node.
+///
+/// Spawned by [`GossipAgent::start_consensus_listener`].
+async fn run_consensus_listener(
+    ctx:             ConsensusListenerCtx,
     mut cancel:      tokio::sync::oneshot::Receiver<()>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
-    let mut rx_propose = signal_handlers.register_with_capacity(
+    let mut rx_propose = ctx.signal_handlers.register_with_capacity(
         Arc::from(consensus_kind::PROPOSE), 512,
     );
-    let mut rx_commit = signal_handlers.register_with_capacity(
+    let mut rx_commit = ctx.signal_handlers.register_with_capacity(
         Arc::from(consensus_kind::COMMIT), 256,
     );
     let mut seen_ballot: AHashMap<Arc<str>, u64> = AHashMap::new();
@@ -2142,26 +2141,24 @@ async fn run_consensus_listener(
                 if ballot < local {
                     let nack = ConsensusMsg::Nack { slot, seen_ballot: local };
                     emit_signal(
-                        &node_id, &seen, &current_ts, &signal_boundary,
-                        &signal_handlers, &gossip_txs, default_ttl, &dropped_frames,
+                        &ctx.node_id, &ctx.seen, &ctx.current_ts, &ctx.signal_boundary,
+                        &ctx.signal_handlers, &ctx.gossip_txs, ctx.default_ttl, &ctx.dropped_frames,
                         Arc::from(consensus_kind::NACK),
                         SignalScope::Individual(proposer),
                         encode_consensus_msg(&nack),
                     );
                 } else {
                     seen_ballot.insert(slot.clone(), ballot);
-                    listener_kv_set(
+                    ctx.kv_set(
                         format!("{}{}", consensus_ns::BALLOT, &*slot),
                         encode_ballot(ballot),
-                        &node_id, default_ttl, &store, &subscriptions,
-                        &gossip_txs, &dropped_frames,
                     );
                     let vote = ConsensusMsg::Vote {
-                        slot: slot.clone(), ballot, voter: node_id.clone(),
+                        slot: slot.clone(), ballot, voter: ctx.node_id.clone(),
                     };
                     emit_signal(
-                        &node_id, &seen, &current_ts, &signal_boundary,
-                        &signal_handlers, &gossip_txs, default_ttl, &dropped_frames,
+                        &ctx.node_id, &ctx.seen, &ctx.current_ts, &ctx.signal_boundary,
+                        &ctx.signal_handlers, &ctx.gossip_txs, ctx.default_ttl, &ctx.dropped_frames,
                         Arc::from(consensus_kind::VOTE),
                         sig.scope,
                         encode_consensus_msg(&vote),
@@ -2177,11 +2174,9 @@ async fn run_consensus_listener(
                 if ballot >= current {
                     seen_ballot.insert(slot.clone(), ballot);
                 }
-                listener_kv_set(
+                ctx.kv_set(
                     format!("{}{}", consensus_ns::COMMITTED, &*slot),
                     value,
-                    &node_id, default_ttl, &store, &subscriptions,
-                    &gossip_txs, &dropped_frames,
                 );
             }
         }

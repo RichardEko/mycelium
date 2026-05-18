@@ -124,7 +124,7 @@ primitive any layer can build on.
 - `dropped_frames: u64` in `SystemStats` — cumulative counter of silently-dropped gossip frames
   (channel-full). Previously invisible; now the first diagnostic to check when writes fail to
   propagate. Incremented at both the agent→shard and shard→peer-writer drop sites.
-- `max_concurrent_forwards` doc clarified as a **correctness threshold**, not a performance knob.
+- `writer_channel_depth` doc clarified as a **correctness threshold**, not a performance knob.
   When full, frames are silently dropped. Sizing formula documented on the field.
 
 **Performance characteristics:**
@@ -165,7 +165,7 @@ agent.system_stats() -> SystemStats     // includes dropped_frames
 | Field | Default | Purpose |
 |---|---|---|
 | `max_forwarding_peers` | `i64::MAX` | Cap gossip targets; set to `bootstrap_peers.len()` for fixed-topology meshes |
-| `max_concurrent_forwards` | `64` | Per-peer outbound channel depth. **Correctness threshold** — size to `N × fan_out` |
+| `writer_channel_depth` | `64` | Per-peer outbound channel depth (ring buffer). **Correctness threshold** — size to `N × fan_out` |
 | `health_check_interval_secs` | `10` | Peer liveness ping interval |
 | `default_ttl` | `5` | Hops before a message stops propagating |
 | `gossip_shards` | `min(CPU, 16)` | Gossip worker tasks; set to `1` for demo/debug to cut task count |
@@ -248,7 +248,7 @@ The mesh is not a black box. Every observable dimension has a dedicated query:
 // 1. Check propagation health first
 let stats = supervisor.system_stats();
 if stats.dropped_frames > prev_dropped {
-    // Gossip is losing frames — fix max_concurrent_forwards before anything else
+    // Gossip is losing frames — fix writer_channel_depth before anything else
 }
 
 // 2. Check if any worker has been heard recently

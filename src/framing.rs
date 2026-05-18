@@ -17,21 +17,29 @@ pub(crate) const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
 ///     decrement and zero-copy forwarding without re-encoding on each hop.
 ///
 /// Rolling-upgrade policy: `read_frame` accepts frames at both `WIRE_VERSION` and
-/// `PREV_WIRE_VERSION`. When bumping WIRE_VERSION:
-///   1. Set `PREV_WIRE_VERSION = old WIRE_VERSION`.
-///   2. Nodes at the new version decode previous-version frames with `bincode_cfg_prev()`.
-///   3. Forwarding always re-encodes at `WIRE_VERSION` so the cluster converges quickly.
-///   4. After all nodes are upgraded, bump `PREV_WIRE_VERSION` to `WIRE_VERSION` so
-///      the acceptance window tracks the new pair.
+/// `PREV_WIRE_VERSION`. When bumping WIRE_VERSION to N+1:
+///   1. Add a `WireMessageVN` / `GossipUpdateVN` struct with the *old* field layout.
+///   2. Set `PREV_WIRE_VERSION = old WIRE_VERSION` (N).
+///   3. In the `FrameVersion::Previous` Data decode path, deserialize into `GossipUpdateVN`
+///      and convert to `GossipUpdate` — this avoids silent field-mapping corruption.
+///   4. Forwarding always re-encodes at `WIRE_VERSION` so the cluster converges quickly.
+///   5. After all nodes are upgraded, set `PREV_WIRE_VERSION = WIRE_VERSION` to close
+///      the acceptance window.
 ///
-/// Data frames from `PREV_WIRE_VERSION` peers cannot use the zero-copy forward path —
-/// they are decoded then re-encoded. Signal/Ping/State messages are unaffected if their
-/// struct layouts have not changed between the two versions.
+/// **Current state**: `PREV_WIRE_VERSION = WIRE_VERSION` (v6 = v6). No legacy window is
+/// open. Any peer sending a frame with a version byte other than `WIRE_VERSION` receives
+/// an explicit "Unsupported wire version" error rather than silent data corruption.
+/// When bumping to v7, set `PREV_WIRE_VERSION = 6` and implement step 3 above.
 pub(crate) const WIRE_VERSION: u8 = 6;
 /// Previous wire version accepted during rolling upgrades.
-/// Frames encoded at this version are decoded with `bincode_cfg_prev()` and
-/// re-encoded at `WIRE_VERSION` before forwarding. See `WIRE_VERSION` for the policy.
-pub(crate) const PREV_WIRE_VERSION: u8 = WIRE_VERSION - 1; // v5
+///
+/// Currently equal to `WIRE_VERSION` — no legacy acceptance window is open. The
+/// `FrameVersion::Previous` arm in `read_frame` is therefore unreachable in practice;
+/// peers sending version ≠ 6 get an explicit connection error.
+///
+/// When bumping `WIRE_VERSION` to 7: set this to 6 and add a `GossipUpdateV6` conversion
+/// struct so legacy Data frames decode correctly instead of producing garbled field values.
+pub(crate) const PREV_WIRE_VERSION: u8 = WIRE_VERSION; // no legacy window
 
 /// Which wire version a received frame was encoded with.
 /// Used by `handle_connection` to select the appropriate decoder and to decide
@@ -153,13 +161,12 @@ pub(crate) fn bincode_cfg() -> impl bincode::config::Config {
     bincode::config::standard().with_fixed_int_encoding()
 }
 
-/// Returns the bincode configuration for `PREV_WIRE_VERSION` (v5) frames.
-/// v5 used fixed-width encoding (same as v6); the only breaking change in v6 was
-/// the GossipUpdate field order. Non-GossipUpdate messages (Signal, Ping, State)
-/// have the same layout in v5 and v6 and decode correctly with either config.
-/// Data (GossipUpdate) frames from v5 peers will decode with wrong field mapping
-/// and produce a "malformed message" warning — a graceful degradation rather than
-/// a hard connection failure.
+/// Returns the bincode configuration for `PREV_WIRE_VERSION` frames.
+///
+/// Currently identical to [`bincode_cfg`] because `PREV_WIRE_VERSION = WIRE_VERSION`
+/// (no legacy window is open). When the version is bumped to v7 and a true v6 legacy
+/// window is opened, this function may need to change if v7 alters the encoding config.
+/// It exists as an explicit hook so the decode path has a clear place to diverge.
 #[inline(always)]
 pub(crate) fn bincode_cfg_prev() -> impl bincode::config::Config {
     bincode::config::standard().with_fixed_int_encoding()

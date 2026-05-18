@@ -225,7 +225,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             cfg.reconnect_backoff_secs   = 1;
             // Each cell writes once per generation, then epidemic-forwards through the mesh.
             // 256 agents × epidemic-forwarding ≈ 192 msgs/peer-writer in a burst; 512 headroom.
-            cfg.max_concurrent_forwards  = 512;
+            cfg.writer_channel_depth     = 512;
             // One shard per agent instead of the default min(CPU, 16). In debug mode the
             // default produces 256 × 16 = 4096 tasks; one shard cuts that to 256 tasks with
             // no measurable latency impact at TICK_MS = 300ms.

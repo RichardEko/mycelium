@@ -166,6 +166,7 @@ mod tests {
             backoff: Duration::ZERO,
             n_shards: N_GOSSIP_SHARDS,
             intern_keys: true,
+            intern_max_keys: 0,
             signal_boundary: Arc::new(RwLock::new(Boundary::new(node_id))),
             signal_handlers: Arc::new(SignalHandlers::new()),
             max_peers: usize::MAX,
@@ -272,9 +273,9 @@ mod tests {
     }
 
     #[test]
-    fn test_config_validate_rejects_zero_max_concurrent_forwards() {
+    fn test_config_validate_rejects_zero_writer_channel_depth() {
         let mut cfg = GossipConfig::default();
-        cfg.max_concurrent_forwards = 0;
+        cfg.writer_channel_depth = 0;
         assert!(cfg.validate().is_err());
     }
 
@@ -801,6 +802,7 @@ mod tests {
                 backoff: Duration::ZERO,
                 n_shards: N_GOSSIP_SHARDS,
                 intern_keys: true,
+                intern_max_keys: 0,
                 signal_boundary: Arc::new(RwLock::new(Boundary::new(node_id))),
                 signal_handlers: Arc::new(SignalHandlers::new()),
                 max_peers: usize::MAX,
@@ -2153,8 +2155,9 @@ mod tests {
         let port_b = alloc_port();
 
         let mut cfg_a = GossipConfig::default();
-        cfg_a.bind_port               = port_a;
-        cfg_a.reconnect_backoff_secs  = 1;
+        cfg_a.bind_port                    = port_a;
+        cfg_a.reconnect_backoff_secs       = 1;
+        cfg_a.health_check_interval_secs   = 1;
 
         let agent_a = GossipAgent::new(NodeId::new("127.0.0.1", port_a).unwrap(), cfg_a);
         agent_a.start().await.unwrap();
@@ -2165,9 +2168,12 @@ mod tests {
         assert!(matches!(result, ConsensusResult::Committed { .. }));
 
         // B starts after A has already committed — anti-entropy must deliver the value.
+        // health_check_interval_secs=1 reduces jitter to 0–500ms so the 600ms pre-sleep
+        // reliably covers the window before the first StateRequest is sent.
         let mut cfg_b = GossipConfig::default();
-        cfg_b.bind_port               = port_b;
-        cfg_b.reconnect_backoff_secs  = 1;
+        cfg_b.bind_port                    = port_b;
+        cfg_b.reconnect_backoff_secs       = 1;
+        cfg_b.health_check_interval_secs   = 1;
         cfg_b.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_a).unwrap()];
         let agent_b = GossipAgent::new(NodeId::new("127.0.0.1", port_b).unwrap(), cfg_b);
         agent_b.start().await.unwrap();

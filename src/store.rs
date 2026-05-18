@@ -26,14 +26,18 @@ pub(crate) fn intern_pool_len() -> usize {
 /// the same allocation. This eliminates one heap allocation per received
 /// gossip message for workloads with a bounded key set.
 ///
-/// The pool grows with the number of distinct keys ever seen (not just currently
-/// live) and is never evicted. Set `GossipConfig::intern_keys = false` for
-/// workloads with an unbounded key space (e.g. per-request UUIDs as keys).
-pub(crate) fn intern_key(key: Arc<str>) -> Arc<str> {
+/// `max_keys`: when > 0, new keys are not inserted once the pool reaches that size;
+/// the caller receives its own `Arc<str>` clone instead. Keys already in the pool
+/// at the time the cap is hit continue to be shared. Set `max_keys = 0` for no cap.
+pub(crate) fn intern_key(key: Arc<str>, max_keys: usize) -> Arc<str> {
     let pool = key_pool();
     let guard = pool.pin();
     if let Some(existing) = guard.get(&*key) {
         return existing.clone();
+    }
+    // Pool cap: return without inserting when the limit is reached.
+    if max_keys > 0 && pool.len() >= max_keys {
+        return key;
     }
     // `slot` is taken inside the compute callback. papaya may retry the callback
     // on CAS contention; the second call must not unwrap an already-taken slot.
