@@ -49,14 +49,22 @@ pub struct ConsensusConfig {
     pub phase1_timeout: Duration,
     /// Maximum number of ballot attempts before returning [`ConsensusResult::Timeout`].
     pub max_ballots:    u32,
+    /// Maximum random sleep (ms) before each ballot retry. Breaks lock-step livelock
+    /// when two proposers increment their ballots in unison and repeatedly Nack each
+    /// other. Two proposers sleeping for independent durations in `[0, N)` ms will
+    /// rarely collide on the next retry; the first to wake succeeds.
+    ///
+    /// `0` disables jitter (not recommended outside tests). Default: `50`.
+    pub ballot_retry_jitter_ms: u64,
 }
 
 impl Default for ConsensusConfig {
     fn default() -> Self {
         Self {
-            quorum_size:    0,
-            phase1_timeout: Duration::from_secs(5),
-            max_ballots:    3,
+            quorum_size:             0,
+            phase1_timeout:          Duration::from_secs(5),
+            max_ballots:             3,
+            ballot_retry_jitter_ms:  50,
         }
     }
 }
