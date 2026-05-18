@@ -14,9 +14,10 @@
 //! All signal APIs are exposed directly on [`GossipAgent`](crate::GossipAgent) — there is no
 //! separate Layer 2 wrapper type.
 
+use crate::framing::bincode_cfg;
 use crate::node_id::NodeId;
 use ahash::AHashSet;
-use bytes::Bytes;
+use bytes::{BufMut, Bytes, BytesMut};
 use dashmap::DashMap;
 use papaya::HashMap as PapayaMap;
 use std::sync::Arc;
@@ -24,6 +25,13 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 use tracing::warn;
+
+/// Retention window for the sender-log used by [`SignalHandlers::quorum`].
+///
+/// Entries older than this are evicted by `trim_sender_log` and ignored by `quorum`.
+/// Should be ≥ any pheromone evaporation window callers rely on for load-aware routing
+/// (see [`LoadState::written_at_ms`]).
+pub(crate) const SENDER_LOG_WINDOW: Duration = Duration::from_secs(600);
 
 /// Scope of a signal — determines which nodes **act** on it.
 ///
@@ -184,7 +192,7 @@ impl SignalHandlers {
         // quorum() counts all received signals, not just delivered ones.
         {
             let mut log = self.sender_log.entry(signal.kind.clone()).or_default();
-            log.retain(|(_sender, received_at)| received_at.elapsed() < Duration::from_secs(600));
+            log.retain(|(_sender, received_at)| received_at.elapsed() < SENDER_LOG_WINDOW);
             log.push((signal.sender.clone(), now));
         }
         // Refractory period: record timestamp but do not fan-out to handlers.
@@ -259,7 +267,7 @@ impl SignalHandlers {
     /// kind count (removes kinds no longer seen), preventing unbounded growth when
     /// dynamic or high-cardinality kind strings are used.
     pub(crate) fn trim_sender_log(&self) {
-        let cutoff = Instant::now() - Duration::from_secs(600);
+        let cutoff = Instant::now() - SENDER_LOG_WINDOW;
         self.sender_log.retain(|_, log| {
             log.retain(|(_, received_at)| *received_at > cutoff);
             !log.is_empty()
@@ -279,6 +287,41 @@ impl SignalHandlers {
             .len();
         distinct >= min_senders
     }
+}
+
+// ── Pheromone trail ───────────────────────────────────────────────────────────
+
+/// Pheromone load state written to Layer I by [`GossipAgent::manage_opacity`].
+///
+/// Key convention: `load/{node_id}/{kind}`.
+/// Encoded with [`bincode_cfg()`](crate::framing::bincode_cfg) (fixed-int).
+/// An absent key means the node is transparent (not overloaded) for that kind.
+/// Tombstoned automatically when `BOUNDARY_TRANSPARENT` is emitted.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct LoadState {
+    /// Handler-channel fill ratio at time of writing (0.0–1.0).
+    pub fill_ratio: f32,
+    /// Whether [`BOUNDARY_OPAQUE`](signal_kind::BOUNDARY_OPAQUE) has been emitted.
+    pub is_opaque: bool,
+    /// Milliseconds since Unix epoch when this entry was written.
+    ///
+    /// Readers discard entries where `now_ms − written_at_ms` exceeds their
+    /// chosen evaporation window (should be ≤ [`SENDER_LOG_WINDOW`]).
+    pub written_at_ms: u64,
+}
+
+#[allow(dead_code)]  // used by Fix B (manage_opacity_impl); remove after that commit
+pub(crate) fn encode_load_state(s: &LoadState) -> Bytes {
+    let mut buf = BytesMut::new();
+    let _ = bincode::serde::encode_into_std_write(s, &mut (&mut buf).writer(), bincode_cfg());
+    buf.freeze()
+}
+
+#[allow(dead_code)]  // used by Fix B, C, F (agent.rs); remove after those commits
+pub(crate) fn decode_load_state(b: &Bytes) -> Option<LoadState> {
+    bincode::serde::decode_from_slice(b, bincode_cfg())
+        .ok()
+        .map(|(v, _)| v)
 }
 
 /// Cancels the associated [`advertise`](crate::GossipAgent::advertise) task on drop.
@@ -378,7 +421,7 @@ pub mod signal_kind {
     /// Upstream nodes should drain service-level connections to `sender` on receipt.
     pub const BOUNDARY_OPAQUE:      &str = "boundary.opaque";
     /// Node has cleared its load and resumed normal signal admission.
-    /// Pheromone trail (`load/<node_id>`) will be refreshed within one advertise interval.
+    /// The pheromone trail (`load/{node_id}/{kind}`) is tombstoned immediately.
     pub const BOUNDARY_TRANSPARENT: &str = "boundary.transparent";
 }
 
@@ -388,12 +431,15 @@ pub mod signal_kind {
 /// medium — pheromone trails written here are persistent, anti-entropy synced, and
 /// readable by any node at any time without signal handlers or local caches.
 pub mod kv_ns {
-    /// Pheromone trail namespace. Workers write `load/<node_id>` containing serialised
-    /// load state (queue depth, accepted kinds, `written_at_ms` timestamp).
+    /// Pheromone trail namespace.
     ///
-    /// Readers discard entries where `now - written_at_ms > N × advertise_interval`
-    /// (pheromone evaporation — no coordination needed). Graceful shutdown should call
-    /// `agent.delete("load/<node_id>")` for immediate evaporation.
+    /// Key: `load/{node_id}/{kind}`. Value: bincode-encoded [`LoadState`](crate::signal::LoadState).
+    ///
+    /// Written automatically by [`GossipAgent::manage_opacity`](crate::GossipAgent::manage_opacity)
+    /// on every `BOUNDARY_OPAQUE` transition; tombstoned on `BOUNDARY_TRANSPARENT`.
+    /// Readers discard entries where `now_ms − written_at_ms` exceeds their evaporation window
+    /// (no coordination needed). Graceful shutdown should tombstone `load/{node_id}/{kind}`
+    /// directly or rely on pheromone expiry.
     pub const LOAD:  &str = "load/";
     /// Group membership namespace. Written automatically by `join_group`/`leave_group`.
     /// Key: `grp/<group_name>/<node_id>`. Value: `b"1"` (live) or tombstone (left).
