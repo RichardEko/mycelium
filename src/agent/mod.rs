@@ -69,6 +69,24 @@ pub struct SystemStats {
     pub dropped_frames: u64,
 }
 
+/// Shared infrastructure fields extracted from `GossipAgent` so they can be
+/// bundled into a single `Arc` and handed to `ConsensusEngine` and long-lived
+/// task helpers without requiring each to clone 8 individual fields.
+///
+/// `GossipAgent` cannot be passed directly to these helpers because doing so
+/// would create a reference cycle: the agent holds task handles, and those
+/// tasks would hold a reference back to the agent.
+pub(crate) struct TaskCtx {
+    pub(crate) node_id:          NodeId,
+    pub(crate) seen:             Arc<ShardedSeen>,
+    pub(crate) current_ts:       Arc<AtomicU64>,
+    pub(crate) signal_boundary:  Arc<RwLock<Boundary>>,
+    pub(crate) signal_handlers:  Arc<SignalHandlers>,
+    pub(crate) gossip_txs:       Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]>,
+    pub(crate) default_ttl:      u8,
+    pub(crate) kv_state:         Arc<KvState>,
+}
+
 /// Core gossip agent.
 ///
 /// All fields are private. Use the public methods to interact with the agent.
@@ -135,6 +153,9 @@ pub struct GossipAgent {
     /// threading into `ListenerContext` / `ConnContext` / `ConsensusEngine` as a
     /// single Arc rather than five separate fields.
     pub(super) kv_state: Arc<KvState>,
+    /// Infrastructure bundle shared with `ConsensusEngine` and long-lived task helpers.
+    /// Avoids cloning 8 individual fields every time a task is spawned.
+    pub(super) task_ctx: Arc<TaskCtx>,
 }
 
 impl GossipAgent {
@@ -191,17 +212,34 @@ impl GossipAgent {
             max_store_entries,
         });
 
+        let default_ttl     = config.default_ttl;
+        let seen            = Arc::new(ShardedSeen::new(seen_shards));
+        let current_ts      = Arc::new(AtomicU64::new(init_ts));
+        let gossip_txs: Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]> = gossip_txs_vec.into();
+        let signal_boundary = Arc::new(RwLock::new(Boundary::new(node_id.clone())));
+        let signal_handlers = Arc::new(SignalHandlers::new(signal_window));
+        let task_ctx = Arc::new(TaskCtx {
+            node_id:         node_id.clone(),
+            seen:            seen.clone(),
+            current_ts:      current_ts.clone(),
+            signal_boundary: signal_boundary.clone(),
+            signal_handlers: signal_handlers.clone(),
+            gossip_txs:      gossip_txs.clone(),
+            default_ttl,
+            kv_state:        kv_state.clone(),
+        });
+
         Self {
-            node_id: node_id.clone(),
+            node_id,
             config,
             store,
             peers: Arc::new(papaya::HashMap::new()),
             bootstrap_peers,
             peer_list_tx,
-            gossip_txs: gossip_txs_vec.into(),
+            gossip_txs,
             gossip_rxs: std::sync::Mutex::new(Some(gossip_rxs_inner)),
-            seen: Arc::new(ShardedSeen::new(seen_shards)),
-            current_ts: Arc::new(AtomicU64::new(init_ts)),
+            seen,
+            current_ts,
             peer_writers: Arc::new(DashMap::new()),
             subscriptions,
             live_entries: Arc::new(AtomicUsize::new(0)),
@@ -212,12 +250,13 @@ impl GossipAgent {
             health_monitor_alive: Arc::new(AtomicBool::new(false)),
             gc_alive: Arc::new(AtomicBool::new(false)),
             task_handles: std::sync::Mutex::new(Vec::new()),
-            signal_boundary: Arc::new(RwLock::new(Boundary::new(node_id))),
-            signal_handlers: Arc::new(SignalHandlers::new(signal_window)),
+            signal_boundary,
+            signal_handlers,
             dropped_frames,
             prefix_index,
             hash_acc,
             kv_state,
+            task_ctx,
         }
     }
 }

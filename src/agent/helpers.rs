@@ -50,14 +50,7 @@ impl GossipAgent {
         max_abstain_ballots: u32,
     ) -> ConsensusEngine {
         ConsensusEngine {
-            node_id:             self.node_id.clone(),
-            seen:                self.seen.clone(),
-            current_ts:          self.current_ts.clone(),
-            signal_boundary:     self.signal_boundary.clone(),
-            signal_handlers:     self.signal_handlers.clone(),
-            gossip_txs:          self.gossip_txs.clone(),
-            default_ttl:         self.config.default_ttl,
-            kv_state:            self.kv_state.clone(),
+            task_ctx: Arc::clone(&self.task_ctx),
             abstain_when_opaque,
             use_trust_slices,
             max_abstain_ballots,

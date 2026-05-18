@@ -26,23 +26,21 @@
 //!   [`GossipAgent::declare_trust`]. The basic protocol uses simple majority;
 //!   trust-slice-based quorum intersection is a future extension.
 
-use crate::agent::{emit_signal, emit_signal_async, make_gossip_update};
+use crate::agent::{emit_signal, emit_signal_async, make_gossip_update, TaskCtx};
 use crate::framing::{
     bincode_cfg, dispatch_gossip_send, dispatch_gossip_try_send, ForwardHint, WireMessage,
 };
 use crate::node_id::NodeId;
-use crate::seen::ShardedSeen;
-use crate::signal::{decode_load_state, kv_ns, SignalHandlers, SignalScope, Boundary};
-use crate::store::{apply_and_notify, KvState};
+use crate::signal::{decode_load_state, kv_ns, SignalScope};
+use crate::store::apply_and_notify;
 use ahash::{AHashMap, AHashSet};
 use bytes::{BufMut, Bytes, BytesMut};
-use parking_lot::RwLock;
 use std::{
-    sync::{atomic::AtomicU64, Arc},
+    sync::Arc,
     time::Duration,
 };
 use tokio::{
-    sync::{mpsc, oneshot, watch},
+    sync::{oneshot, watch},
     task::JoinHandle,
     time,
 };
@@ -247,15 +245,10 @@ pub mod consensus_ns {
 /// Bundles the Arc fields needed for consensus tasks.
 ///
 /// Replaces the former `ConsensusListenerCtx` that was private to `agent.rs`.
+/// Infrastructure fields are shared via `Arc<TaskCtx>` to avoid cloning them
+/// individually at each spawn site.
 pub(crate) struct ConsensusEngine {
-    pub(crate) node_id:             NodeId,
-    pub(crate) seen:                Arc<ShardedSeen>,
-    pub(crate) current_ts:          Arc<AtomicU64>,
-    pub(crate) signal_boundary:     Arc<RwLock<Boundary>>,
-    pub(crate) signal_handlers:     Arc<SignalHandlers>,
-    pub(crate) gossip_txs:          Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]>,
-    pub(crate) default_ttl:         u8,
-    pub(crate) kv_state:            Arc<KvState>,
+    pub(crate) task_ctx:            Arc<TaskCtx>,
     /// When `true`, this node silently abstains from voting while any pheromone
     /// trail under `sys/load/{node_id}/` shows `is_opaque: true`.
     pub(crate) abstain_when_opaque: bool,
@@ -269,7 +262,7 @@ impl ConsensusEngine {
     // ── KV helpers ───────────────────────────────────────────────────────────
 
     fn get(&self, key: &str) -> Option<Bytes> {
-        self.kv_state.store.pin().get(key).and_then(|e| e.data.clone())
+        self.task_ctx.kv_state.store.pin().get(key).and_then(|e| e.data.clone())
     }
 
     fn read_ballot(&self, ballot_key: &str) -> u64 {
@@ -279,34 +272,35 @@ impl ConsensusEngine {
     /// Applies a KV update from within a consensus task.
     /// Uses `try_send` for gossip dispatch — dropped frames recovered via anti-entropy.
     fn kv_set(&self, key: String, value: Bytes) {
-        let upd = make_gossip_update(&self.node_id, self.default_ttl, Arc::from(key.as_str()), value, false);
-        apply_and_notify(&self.kv_state, &upd);
+        let tc = &self.task_ctx;
+        let upd = make_gossip_update(&tc.node_id, tc.default_ttl, Arc::from(key.as_str()), value, false);
+        apply_and_notify(&tc.kv_state, &upd);
         dispatch_gossip_try_send(
-            &self.gossip_txs, WireMessage::Data(upd),
-            self.node_id.id_hash(), ForwardHint::All, &self.kv_state.dropped_frames,
+            &tc.gossip_txs, WireMessage::Data(upd),
+            tc.node_id.id_hash(), ForwardHint::All, &tc.kv_state.dropped_frames,
         );
     }
 
     /// Tombstones `key` in the KV store and gossips the deletion.
     /// Used to clean up ballot entries once a slot has committed.
     fn kv_delete(&self, key: &str) {
-        let upd = make_gossip_update(
-            &self.node_id, self.default_ttl, Arc::from(key), Bytes::new(), true,
-        );
-        apply_and_notify(&self.kv_state, &upd);
+        let tc = &self.task_ctx;
+        let upd = make_gossip_update(&tc.node_id, tc.default_ttl, Arc::from(key), Bytes::new(), true);
+        apply_and_notify(&tc.kv_state, &upd);
         dispatch_gossip_try_send(
-            &self.gossip_txs, WireMessage::Data(upd),
-            self.node_id.id_hash(), ForwardHint::All, &self.kv_state.dropped_frames,
+            &tc.gossip_txs, WireMessage::Data(upd),
+            tc.node_id.id_hash(), ForwardHint::All, &tc.kv_state.dropped_frames,
         );
     }
 
     /// Like `kv_set` but awaits channel capacity (used by the proposer).
     async fn set_async(&self, key: &str, value: Bytes) {
-        let upd = make_gossip_update(&self.node_id, self.default_ttl, Arc::from(key), value, false);
-        apply_and_notify(&self.kv_state, &upd);
+        let tc = &self.task_ctx;
+        let upd = make_gossip_update(&tc.node_id, tc.default_ttl, Arc::from(key), value, false);
+        apply_and_notify(&tc.kv_state, &upd);
         dispatch_gossip_send(
-            &self.gossip_txs, WireMessage::Data(upd),
-            self.node_id.id_hash(), ForwardHint::All,
+            &tc.gossip_txs, WireMessage::Data(upd),
+            tc.node_id.id_hash(), ForwardHint::All,
         ).await;
     }
 
@@ -314,10 +308,11 @@ impl ConsensusEngine {
 
     /// True if any `sys/load/{node_id}/*` pheromone entry is `is_opaque`.
     fn is_overloaded(&self) -> bool {
-        let load_prefix = format!("{}{}/", kv_ns::LOAD, self.node_id);
-        let idx = self.kv_state.prefix_index.pin();
+        let tc = &self.task_ctx;
+        let load_prefix = format!("{}{}/", kv_ns::LOAD, tc.node_id);
+        let idx = tc.kv_state.prefix_index.pin();
         idx.get("sys").map(|bucket| {
-            let store = self.kv_state.store.pin();
+            let store = tc.kv_state.store.pin();
             bucket.pin().iter()
                 .filter(|(k, _)| k.starts_with(&*load_prefix))
                 .any(|(k, _)| store.get(k.as_ref())
@@ -329,18 +324,20 @@ impl ConsensusEngine {
     }
 
     fn emit(&self, kind: Arc<str>, scope: SignalScope, payload: Bytes) {
+        let tc = &self.task_ctx;
         emit_signal(
-            &self.node_id, &self.seen, &self.current_ts, &self.signal_boundary,
-            &self.signal_handlers, &self.gossip_txs, self.default_ttl,
-            &self.kv_state.dropped_frames, kind, scope, payload,
+            &tc.node_id, &tc.seen, &tc.current_ts, &tc.signal_boundary,
+            &tc.signal_handlers, &tc.gossip_txs, tc.default_ttl,
+            &tc.kv_state.dropped_frames, kind, scope, payload,
         );
     }
 
     async fn emit_async(&self, kind: Arc<str>, scope: SignalScope, payload: Bytes) -> bool {
+        let tc = &self.task_ctx;
         emit_signal_async(
-            &self.node_id, &self.seen, &self.current_ts, &self.signal_boundary,
-            &self.signal_handlers, &self.gossip_txs, self.default_ttl,
-            &self.kv_state.dropped_frames, kind, scope, payload,
+            &tc.node_id, &tc.seen, &tc.current_ts, &tc.signal_boundary,
+            &tc.signal_handlers, &tc.gossip_txs, tc.default_ttl,
+            &tc.kv_state.dropped_frames, kind, scope, payload,
         ).await
     }
 
@@ -363,7 +360,7 @@ impl ConsensusEngine {
         // Build trust set once before the ballot loop — it doesn't change mid-round.
         let trust_set: Option<AHashSet<u64>> = if self.use_trust_slices {
             if let SignalScope::Group(ref group_name) = scope {
-                let key = format!("{}{}/{}", consensus_ns::TRUST, group_name, self.node_id);
+                let key = format!("{}{}/{}", consensus_ns::TRUST, group_name, self.task_ctx.node_id);
                 self.get(&key).and_then(|b| {
                     bincode::serde::decode_from_slice::<Vec<NodeId>, _>(&b, bincode_cfg()).ok()
                 }).map(|(peers, _)| peers.iter().map(|p| p.id_hash()).collect())
@@ -388,16 +385,16 @@ impl ConsensusEngine {
             self.set_async(ballot_key.as_str(), encode_ballot(ballot)).await;
 
             // Register before emitting so no vote/nack can arrive before we listen.
-            let mut vote_rx = self.signal_handlers.register_with_capacity(
+            let mut vote_rx = self.task_ctx.signal_handlers.register_with_capacity(
                 Arc::from(consensus_kind::VOTE), 512,
             );
-            let mut nack_rx = self.signal_handlers.register_with_capacity(
+            let mut nack_rx = self.task_ctx.signal_handlers.register_with_capacity(
                 Arc::from(consensus_kind::NACK), 64,
             );
 
             let propose_msg = ConsensusMsg::Propose {
                 slot: slot.clone(), ballot, value: value.clone(),
-                proposer: self.node_id.clone(),
+                proposer: self.task_ctx.node_id.clone(),
             };
             self.emit_async(
                 Arc::from(consensus_kind::PROPOSE), scope.clone(), encode_consensus_msg(&propose_msg),
@@ -405,7 +402,7 @@ impl ConsensusEngine {
 
             // Proposer counts its own vote.
             let mut voters: AHashSet<u64> = AHashSet::new();
-            voters.insert(self.node_id.id_hash());
+            voters.insert(self.task_ctx.node_id.id_hash());
             if voters.len() >= quorum_size {
                 let commit = ConsensusMsg::Commit {
                     slot: slot.clone(), ballot, value: value.clone(),
@@ -537,10 +534,10 @@ async fn run_consensus_listener(
     mut cancel:      oneshot::Receiver<()>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
-    let mut rx_propose = ctx.signal_handlers.register_with_capacity(
+    let mut rx_propose = ctx.task_ctx.signal_handlers.register_with_capacity(
         Arc::from(consensus_kind::PROPOSE), 512,
     );
-    let mut rx_commit = ctx.signal_handlers.register_with_capacity(
+    let mut rx_commit = ctx.task_ctx.signal_handlers.register_with_capacity(
         Arc::from(consensus_kind::COMMIT), 256,
     );
     let mut seen_ballot: AHashMap<Arc<str>, u64> = AHashMap::new();
@@ -582,7 +579,7 @@ async fn run_consensus_listener(
                         encode_ballot(ballot),
                     );
                     let vote = ConsensusMsg::Vote {
-                        slot: slot.clone(), ballot, voter: ctx.node_id.clone(),
+                        slot: slot.clone(), ballot, voter: ctx.task_ctx.node_id.clone(),
                     };
                     ctx.emit(
                         Arc::from(consensus_kind::VOTE),
