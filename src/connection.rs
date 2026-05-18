@@ -144,7 +144,7 @@ pub(crate) async fn handle_connection(
                     is_new
                 };
                 if sender_is_new {
-                    request_state(&sender, &peer_writers, &kv_state.store, writer_depth, backoff, writer_idle_timeout, &shutdown, &node_id, &kv_state.hash_acc);
+                    request_state(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &node_id, &kv_state.hash_acc, &kv_state.dropped_frames);
                 }
             }
 
@@ -171,7 +171,7 @@ pub(crate) async fn handle_connection(
                     ) {
                         Ok(_) => {
                             let data: Bytes = fast_buf.freeze();
-                            let tx = get_or_spawn_writer(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown);
+                            let tx = get_or_spawn_writer(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &kv_state.dropped_frames);
                             tokio::spawn(async move {
                                 if tx.send(data).await.is_err() {
                                     tracing::error!("Fast-path StateResponse writer for {} has exited", sender);
@@ -213,7 +213,7 @@ pub(crate) async fn handle_connection(
                             );
                             continue;
                         }
-                        let tx = get_or_spawn_writer(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown);
+                        let tx = get_or_spawn_writer(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &kv_state.dropped_frames);
                         // Use send().await (not try_send) — StateResponse is a rare,
                         // join-time message. Dropping it causes permanent divergence
                         // because StateRequest is only sent on first contact; there is

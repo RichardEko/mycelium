@@ -174,7 +174,7 @@ impl GossipAgent {
             tokio::time::sleep(Duration::from_millis(defer_ms)).await;
         }
         if config.use_suggest_leader && config.ballot_retry_jitter_ms > 0 {
-            let suggested = self.suggest_leader(group, consensus_kind::PROPOSE, crate::signal::SENDER_LOG_WINDOW);
+            let suggested = self.suggest_leader(group, consensus_kind::PROPOSE, self.signal_window());
             if suggested != self.node_id {
                 tokio::time::sleep(Duration::from_millis(config.ballot_retry_jitter_ms)).await;
             }
@@ -191,23 +191,19 @@ impl GossipAgent {
             let now_ms = SystemTime::now()
                 .duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
             let freshness_ms = self.config.health_check_interval_secs * 2 * 1000;
-            // Single O(store) pass: build opaque member set without N nested scans.
-            let mut opaque: AHashSet<Arc<str>> = AHashSet::new();
-            let guard = self.store.pin();
-            for (k, v) in guard.iter() {
-                let Some(tail) = k.strip_prefix(kv_ns::LOAD) else { continue };
-                let Some(slash) = tail.find('/') else { continue };
-                let node_str = &tail[..slash];
-                if !member_ids.contains(node_str) { continue }
-                if v.data.as_ref()
-                    .and_then(decode_load_state)
-                    .map(|s| s.is_opaque && now_ms.saturating_sub(s.written_at_ms) <= freshness_ms)
-                    .unwrap_or(false)
-                {
-                    opaque.insert(Arc::from(node_str));
-                }
-            }
-            raw_members.saturating_sub(opaque.len()).max(1)
+            let opaque_count = self.scan_prefix(kv_ns::LOAD)
+                .into_iter()
+                .filter(|(k, bytes)| {
+                    let tail = k.strip_prefix(kv_ns::LOAD).unwrap_or("");
+                    let slash = tail.find('/').unwrap_or(tail.len());
+                    let node_str = &tail[..slash];
+                    member_ids.contains(node_str)
+                        && decode_load_state(bytes)
+                            .map(|s| s.is_opaque && now_ms.saturating_sub(s.written_at_ms) <= freshness_ms)
+                            .unwrap_or(false)
+                })
+                .count();
+            raw_members.saturating_sub(opaque_count).max(1)
         } else {
             raw_members
         };
@@ -251,7 +247,7 @@ impl GossipAgent {
         // This approximates suggest_leader for system scope (no group to consult).
         if config.use_suggest_leader && config.ballot_retry_jitter_ms > 0 {
             let my_fill = pheromone_fill;
-            let is_lightest = self.peer_load(crate::signal::SENDER_LOG_WINDOW)
+            let is_lightest = self.peer_load(self.signal_window())
                 .iter()
                 .filter(|(_, k, _)| k.as_ref() == consensus_kind::PROPOSE)
                 .all(|(_, _, s)| s.fill_ratio >= my_fill);

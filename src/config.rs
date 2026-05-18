@@ -137,6 +137,21 @@ pub struct GossipConfig {
     /// entirely.
     pub health_check_max_jitter_ms: u64,
 
+    /// Evaporation window (seconds) for pheromone trail entries written by
+    /// [`manage_opacity`](crate::GossipAgent::manage_opacity).
+    ///
+    /// [`suggest_leader`](crate::GossipAgent::suggest_leader), [`peer_load`](crate::GossipAgent::peer_load),
+    /// and [`peer_load_rx`](crate::GossipAgent::peer_load_rx) treat entries older than this as
+    /// transparent (unloaded). Raise when nodes can be unreachable for longer than the default
+    /// before their pheromone entries should be considered stale.
+    ///
+    /// Use [`GossipAgent::signal_window`] to read this as a `Duration` — prefer that over
+    /// the [`SENDER_LOG_WINDOW`](crate::signal::SENDER_LOG_WINDOW) compile-time constant in
+    /// application code.
+    ///
+    /// Default: 600 (10 minutes).
+    pub signal_window_secs: u64,
+
     /// Maximum number of **live** (non-tombstone) entries in the KV store.
     ///
     /// When the live count reaches this limit, new live writes are silently dropped.
@@ -160,7 +175,7 @@ impl Default for GossipConfig {
             health_check_interval_secs: 10,
             default_ttl: 5,
             max_connections: 1024,
-            writer_channel_depth: 64,
+            writer_channel_depth: 256,
             max_forwarding_peers: i64::MAX as usize,
             reconnect_backoff_secs: 5,
             gossip_channel_capacity: 1024,
@@ -177,6 +192,7 @@ impl Default for GossipConfig {
             writer_idle_timeout_secs: 0,
             group_aware_forwarding: false,
             health_check_max_jitter_ms: 0,
+            signal_window_secs: 600,
             max_store_entries: 0,
         }
     }
@@ -230,6 +246,12 @@ impl GossipConfig {
             return Err(GossipError::Config(
                 "writer_channel_depth cannot be zero".into(),
             ));
+        }
+        if self.writer_channel_depth < 64 {
+            tracing::warn!(
+                "writer_channel_depth {} is below 64; frame drops are likely in clusters with more than 16 nodes",
+                self.writer_channel_depth,
+            );
         }
         if self.gossip_channel_capacity == 0 {
             return Err(GossipError::Config(
@@ -384,6 +406,9 @@ impl GossipConfig {
         }
         if let Ok(v) = env::var("GOSSIP_HEALTH_CHECK_MAX_JITTER_MS") {
             self.health_check_max_jitter_ms = v.parse().map_err(GossipError::Parse)?;
+        }
+        if let Ok(v) = env::var("GOSSIP_SIGNAL_WINDOW_SECS") {
+            self.signal_window_secs = v.parse().map_err(GossipError::Parse)?;
         }
         Ok(())
     }

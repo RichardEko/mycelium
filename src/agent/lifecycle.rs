@@ -48,13 +48,13 @@ impl GossipAgent {
                 ));
             }
         }
+        self.rehydrate_boundary_from_kv();
         self.start_listener(bind_addr).await.inspect_err(|_| {
             self.state.store(STATE_IDLE, Ordering::Release);
         })?;
         self.start_gossip_loop();
         self.start_health_monitor();
         self.start_gc_task();
-        self.rehydrate_boundary_from_kv();
         info!("Gossip agent started: {}", self.node_id);
         Ok(())
     }
@@ -147,7 +147,6 @@ impl GossipAgent {
             self.bootstrap_peers.clone(),
             self.peers.clone(),
             self.peer_writers.clone(),
-            self.store.clone(),
             self.peer_list_tx.clone(),
             self.shutdown_tx.clone(),
             self.current_ts.clone(),
@@ -160,6 +159,7 @@ impl GossipAgent {
             self.config.ping_peer_sample_size,
             self.config.health_check_max_jitter_ms,
             self.hash_acc.clone(),
+            self.dropped_frames.clone(),
         ));
         self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).push(handle);
     }

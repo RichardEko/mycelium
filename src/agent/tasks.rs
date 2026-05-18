@@ -204,7 +204,7 @@ pub(super) async fn run_gossip_shard(
                 t.clone()
             } else {
                 let t = get_or_spawn_writer(
-                    peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx,
+                    peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &dropped_frames,
                 );
                 sender_cache.insert(peer.clone(), t.clone());
                 t
@@ -219,7 +219,7 @@ pub(super) async fn run_gossip_shard(
                     debug!("Peer writer for {} closed; respawning and retrying", peer);
                     sender_cache.remove(peer);
                     let new_tx = get_or_spawn_writer(
-                        peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx,
+                        peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &dropped_frames,
                     );
                     sender_cache.insert(peer.clone(), new_tx.clone());
                     match new_tx.try_send($data.clone()) {
@@ -322,7 +322,6 @@ pub(super) async fn run_health_monitor(
     bootstrap_peers:       Arc<[NodeId]>,
     peers:                 Arc<papaya::HashMap<NodeId, Instant>>,
     peer_writers:          Arc<DashMap<NodeId, WriterEntry>>,
-    store:                 Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
     peer_list_tx:          watch::Sender<Arc<[NodeId]>>,
     shutdown_tx:           Arc<watch::Sender<bool>>,
     current_ts:            Arc<AtomicU64>,
@@ -335,6 +334,7 @@ pub(super) async fn run_health_monitor(
     ping_peer_sample_size:   usize,
     health_check_max_jitter: u64,
     hash_acc:                Arc<AtomicU64>,
+    dropped_frames:          Arc<AtomicU64>,
 ) {
     let bootstrap_set: AHashSet<NodeId> = bootstrap_peers.iter().cloned().collect();
     let mut shutdown_rx = shutdown_tx.subscribe();
@@ -349,7 +349,7 @@ pub(super) async fn run_health_monitor(
     }
 
     for peer in &bootstrap_set {
-        request_state(peer, &peer_writers, &store, writer_depth, backoff, idle_timeout, &shutdown_tx, &node_id, &hash_acc);
+        request_state(peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &node_id, &hash_acc, &dropped_frames);
     }
 
     let mut ticker = time::interval(Duration::from_secs(interval_secs));
@@ -403,7 +403,7 @@ pub(super) async fn run_health_monitor(
                         t.clone()
                     } else {
                         let t = get_or_spawn_writer(
-                            peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx,
+                            peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &dropped_frames,
                         );
                         ping_sender_cache.insert(peer.clone(), t.clone());
                         t
@@ -417,7 +417,7 @@ pub(super) async fn run_health_monitor(
                             debug!("Peer writer for {} closed; respawning for ping retry", peer);
                             ping_sender_cache.remove(peer);
                             let new_tx = get_or_spawn_writer(
-                                peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx,
+                                peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &dropped_frames,
                             );
                             ping_sender_cache.insert(peer.clone(), new_tx.clone());
                             match new_tx.try_send(ping_data.clone()) {

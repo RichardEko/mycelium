@@ -1,11 +1,11 @@
 use crate::framing::{bincode_cfg, write_frame, WireMessage};
 use crate::node_id::NodeId;
-use crate::store::{store_hash_acc, StoreEntry};
+use crate::store::store_hash_acc;
 use bytes::{BufMut, Bytes, BytesMut};
 use dashmap::DashMap;
 use std::{
     sync::{
-        atomic::AtomicU64,
+        atomic::{AtomicU64, Ordering},
         Arc,
     },
     time::{Duration, Instant},
@@ -41,6 +41,7 @@ pub(crate) async fn run_peer_writer(
     idle_timeout: Duration,
     mut shutdown_rx: watch::Receiver<bool>,
     mut peer_shutdown_rx: watch::Receiver<bool>,
+    dropped_frames: Arc<AtomicU64>,
 ) {
     let mut conn: Option<BufWriter<TcpStream>> = None;
     // Stores (fail_time, actual_backoff) where actual_backoff is jittered so
@@ -76,6 +77,7 @@ pub(crate) async fn run_peer_writer(
 
         if let Some((fail_time, fail_backoff)) = last_fail {
             if fail_time.elapsed() < fail_backoff {
+                dropped_frames.fetch_add(1, Ordering::Relaxed);
                 debug!("Dropping frame to {} during reconnect backoff", peer);
                 continue;
             }
@@ -145,6 +147,7 @@ pub(crate) fn get_or_spawn_writer(
     backoff: Duration,
     idle_timeout: Duration,
     shutdown_tx: &Arc<watch::Sender<bool>>,
+    dropped_frames: &Arc<AtomicU64>,
 ) -> mpsc::Sender<Bytes> {
     writers
         .entry(peer.clone())
@@ -161,6 +164,7 @@ pub(crate) fn get_or_spawn_writer(
                     idle_timeout,
                     shutdown_tx.subscribe(),
                     peer_shutdown_rx,
+                    dropped_frames.clone(),
                 ));
                 *e = WriterEntry { tx, peer_shutdown: Arc::new(peer_shutdown_tx), handle };
             }
@@ -175,6 +179,7 @@ pub(crate) fn get_or_spawn_writer(
                 idle_timeout,
                 shutdown_tx.subscribe(),
                 peer_shutdown_rx,
+                dropped_frames.clone(),
             ));
             WriterEntry { tx, peer_shutdown: Arc::new(peer_shutdown_tx), handle }
         })
@@ -200,13 +205,13 @@ pub(crate) fn evict_peer_writer(writers: &DashMap<NodeId, WriterEntry>, peer: &N
 pub(crate) fn request_state(
     peer: &NodeId,
     peer_writers: &Arc<DashMap<NodeId, WriterEntry>>,
-    _store: &Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
     writer_depth: usize,
     backoff: Duration,
     idle_timeout: Duration,
     shutdown_tx: &Arc<watch::Sender<bool>>,
     sender: &NodeId,
     hash_acc: &AtomicU64,
+    dropped_frames: &Arc<AtomicU64>,
 ) {
     let hash = store_hash_acc(hash_acc);
     let mut buf = BytesMut::with_capacity(64);
@@ -219,11 +224,8 @@ pub(crate) fn request_state(
         return;
     }
     let data: Bytes = buf.freeze();
-    let tx = get_or_spawn_writer(peer, peer_writers, writer_depth, backoff, idle_timeout, shutdown_tx);
-    let peer_clone = peer.clone();
-    tokio::spawn(async move {
-        if tx.send(data).await.is_err() {
-            warn!("StateRequest writer for {} has exited; state sync skipped", peer_clone);
-        }
-    });
+    let tx = get_or_spawn_writer(peer, peer_writers, writer_depth, backoff, idle_timeout, shutdown_tx, dropped_frames);
+    if tx.try_send(data).is_err() {
+        warn!("StateRequest writer for {}: channel full or closed; state sync skipped", peer);
+    }
 }
