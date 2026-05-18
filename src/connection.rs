@@ -2,7 +2,7 @@ use crate::agent::ForwardHint;
 use crate::error::GossipError;
 use crate::framing::{
     bincode_cfg, bincode_cfg_prev, is_connection_closed, read_frame, shard_for_key,
-    FrameVersion, GossipUpdate, SyncEntry, WireMessage,
+    FrameVersion, GossipUpdate, SyncEntry, WireMessage, WireMessageV6,
     ANTI_ENTROPY_NONCE, DATA_TAG, NONCE_OFFSET, TTL_OFFSET,
 };
 use crate::signal::{Boundary, Signal, SignalHandlers, SignalScope};
@@ -106,16 +106,26 @@ pub(crate) async fn handle_connection(
             }
         }
 
-        // Decode with the config matching the sender's wire version.
-        let msg: WireMessage = match if frame_version == FrameVersion::Current {
-            bincode::serde::decode_from_slice(&recv_buf, bincode_cfg())
+        // Decode with the layout matching the sender's wire version.
+        // Previous-version frames use WireMessageV6 to correctly handle the
+        // missing `store_hash` field in StateRequest (bincode fixed-int cannot
+        // decode a struct with fewer bytes than expected; WireMessageV6 has the
+        // correct v6 layout and converts to WireMessage via From).
+        let msg: WireMessage = if frame_version == FrameVersion::Current {
+            match bincode::serde::decode_from_slice::<WireMessage, _>(&recv_buf, bincode_cfg()) {
+                Ok((m, _)) => m,
+                Err(e) => {
+                    warn!("Malformed v7 message from {}: {}", peer_addr, e);
+                    continue;
+                }
+            }
         } else {
-            bincode::serde::decode_from_slice(&recv_buf, bincode_cfg_prev())
-        }.map(|(v, _)| v) {
-            Ok(m) => m,
-            Err(e) => {
-                warn!("Malformed message from {}: {}", peer_addr, e);
-                continue;
+            match bincode::serde::decode_from_slice::<WireMessageV6, _>(&recv_buf, bincode_cfg_prev()) {
+                Ok((m, _)) => WireMessage::from(m),
+                Err(e) => {
+                    warn!("Malformed v6 message from {}: {}", peer_addr, e);
+                    continue;
+                }
             }
         };
 

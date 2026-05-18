@@ -16,9 +16,10 @@ pub(crate) const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
 ///     to place all fixed-width fields before variable-length fields, enabling in-place TTL
 ///     decrement and zero-copy forwarding without re-encoding on each hop.
 /// v7: WireMessage::StateRequest gained `store_hash: u64` for anti-entropy fast-path skipping.
-///     v6 peers send `StateRequest { sender }` which bincode decodes as
-///     `StateRequest { sender, store_hash: 0 }` — hash 0 is reserved for "no digest", so a
-///     v7 node receiving hash=0 always sends the full snapshot (correct graceful downgrade).
+///     v6 peers send `StateRequest { sender }` (no `store_hash` bytes). Bincode fixed-int
+///     cannot decode a struct with missing trailing fields; v6 frames are decoded into
+///     `WireMessageV6` and converted via `From`, producing `store_hash = 0` — the "no
+///     digest" sentinel that always triggers a full snapshot (correct graceful downgrade).
 ///
 /// Rolling-upgrade policy: `read_frame` accepts frames at both `WIRE_VERSION` and
 /// `PREV_WIRE_VERSION`. When bumping WIRE_VERSION to N+1:
@@ -41,9 +42,9 @@ pub(crate) const WIRE_VERSION: u8 = 7;
 ///
 /// Set to 6 so nodes still running v6 can exchange gossip during rolling upgrades.
 /// The only wire-format difference between v6 and v7 is the extra `store_hash: u64`
-/// field in `StateRequest`; all other variants are identical. A v6 `StateRequest`
-/// decoded by a v7 node produces `store_hash = 0`, which is the "no digest" sentinel
-/// that triggers a full snapshot — correct and safe.
+/// field in `StateRequest`; all other variants are identical. v6 `StateRequest` frames
+/// are decoded via `WireMessageV6` and converted with `store_hash = 0` (the "no digest"
+/// sentinel that triggers a full snapshot — correct and safe).
 ///
 /// After all cluster nodes are upgraded to v7, set this to `WIRE_VERSION` to close
 /// the acceptance window and reject stale v6 connections with a clear error.
@@ -177,13 +178,51 @@ pub(crate) fn bincode_cfg() -> impl bincode::config::Config {
 
 /// Returns the bincode configuration for `PREV_WIRE_VERSION` frames.
 ///
-/// Currently identical to [`bincode_cfg`] because `PREV_WIRE_VERSION = WIRE_VERSION`
-/// (no legacy window is open). When the version is bumped to v7 and a true v6 legacy
-/// window is opened, this function may need to change if v7 alters the encoding config.
-/// It exists as an explicit hook so the decode path has a clear place to diverge.
+/// Identical encoding config to [`bincode_cfg`]; struct-layout differences between v6
+/// and v7 are handled by deserializing into [`WireMessageV6`] (not `WireMessage` directly).
 #[inline(always)]
 pub(crate) fn bincode_cfg_prev() -> impl bincode::config::Config {
     bincode::config::standard().with_fixed_int_encoding()
+}
+
+/// Wire envelope for `PREV_WIRE_VERSION` (v6) frames.
+///
+/// Identical to [`WireMessage`] except `StateRequest` has no `store_hash` field.
+/// Bincode fixed-int encoding has no optional/missing-field concept; decoding a v6
+/// `StateRequest` as v7 `WireMessage::StateRequest` would attempt to read 8 bytes
+/// that are not present and return an error. This struct gives the decoder the correct
+/// layout, after which [`From<WireMessageV6>`] upgrades it to a `WireMessage`.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) enum WireMessageV6 {
+    Data(GossipUpdate),
+    Ping { sender: NodeId, known_peers: Vec<NodeId> },
+    /// v6 variant — no `store_hash` field.
+    StateRequest { sender: NodeId },
+    StateResponse { entries: Vec<SyncEntry> },
+    Signal {
+        ttl:     u8,
+        nonce:   u64,
+        sender:  NodeId,
+        scope:   SignalScope,
+        kind:    Arc<str>,
+        payload: Bytes,
+    },
+}
+
+impl From<WireMessageV6> for WireMessage {
+    fn from(m: WireMessageV6) -> Self {
+        match m {
+            WireMessageV6::Data(u) => WireMessage::Data(u),
+            WireMessageV6::Ping { sender, known_peers } =>
+                WireMessage::Ping { sender, known_peers },
+            WireMessageV6::StateRequest { sender } =>
+                WireMessage::StateRequest { sender, store_hash: 0 },
+            WireMessageV6::StateResponse { entries } =>
+                WireMessage::StateResponse { entries },
+            WireMessageV6::Signal { ttl, nonce, sender, scope, kind, payload } =>
+                WireMessage::Signal { ttl, nonce, sender, scope, kind, payload },
+        }
+    }
 }
 
 /// Writes a length-prefixed frame: `[4-byte len][WIRE_VERSION][payload]`.
