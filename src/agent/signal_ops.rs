@@ -482,4 +482,36 @@ impl GossipAgent {
             .collect();
         self.signal_handlers.quorum_for_group(kind, &member_hashes, min_senders, window)
     }
+
+    /// Counts distinct senders of `kind` within `window` using Layer I as evidence.
+    ///
+    /// Unlike [`quorum`](Self::quorum), which reads the in-memory sender log (lost on restart),
+    /// this reads `quorum/{kind}/` from the KV store — durable, anti-entropy synced records
+    /// written by the connection handler on every admitted signal delivery.
+    ///
+    /// Use this when quorum evidence must survive process restarts — for example, to verify
+    /// that enough voters participated in a consensus round before acting on a committed value,
+    /// even after this node crashed and was restarted mid-ballot.
+    ///
+    /// **Prefer [`quorum`](Self::quorum) for latency-sensitive paths.** The in-memory version
+    /// is O(window_entries) with no store access; `quorum_persistent` scans the prefix index
+    /// (O(quorum_keys)) plus a store lookup per entry.
+    pub fn quorum_persistent(&self, kind: &str, window: Duration) -> usize {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let prefix = format!("quorum/{}/", kind);
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH).unwrap_or_default()
+            .as_millis() as u64;
+        let window_ms = window.as_millis() as u64;
+        self.scan_prefix(&prefix)
+            .into_iter()
+            .filter(|(_, v)| {
+                v.get(..8)
+                    .and_then(|b| b.try_into().ok())
+                    .map(|b: [u8; 8]| u64::from_le_bytes(b))
+                    .map(|ts| now_ms.saturating_sub(ts) <= window_ms)
+                    .unwrap_or(false)
+            })
+            .count()
+    }
 }

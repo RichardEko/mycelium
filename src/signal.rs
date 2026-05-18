@@ -477,4 +477,17 @@ pub mod kv_ns {
     /// Late joiners can call `scan_prefix(kv_ns::ADVERTISE)` to find current capabilities
     /// without waiting for the next advertise tick.
     pub const ADVERTISE: &str = "svc/";
+
+    /// Persistent quorum evidence namespace.
+    ///
+    /// Key: `quorum/{kind}/{sender_node_id}`. Value: 8-byte little-endian Unix millisecond
+    /// timestamp of when this node last received and admitted a signal of `kind` from
+    /// `sender_node_id`. Written by the connection handler on every admitted signal
+    /// delivery; anti-entropy synced to peers so the evidence survives process restarts.
+    ///
+    /// Use [`GossipAgent::quorum_persistent`] to query the count of distinct senders
+    /// within a time window. Prefer [`GossipAgent::quorum`] (in-memory) for low-latency
+    /// queries — `quorum_persistent` is only needed when quorum evidence must survive
+    /// crashes or restarts.
+    pub const QUORUM: &str = "quorum/";
 }

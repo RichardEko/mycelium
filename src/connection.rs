@@ -1,7 +1,7 @@
 use crate::error::GossipError;
 use crate::framing::{
-    bincode_cfg, bincode_cfg_prev, is_connection_closed, read_frame, shard_for_key,
-    ForwardHint, FrameVersion, GossipUpdate, SyncEntry, WireMessage, WireMessageV6,
+    bincode_cfg, bincode_cfg_prev, dispatch_gossip_try_send, is_connection_closed, read_frame,
+    shard_for_key, ForwardHint, FrameVersion, GossipUpdate, SyncEntry, WireMessage, WireMessageV6,
     ANTI_ENTROPY_NONCE, DATA_TAG, NONCE_OFFSET, TTL_OFFSET,
 };
 use crate::signal::{Boundary, Signal, SignalHandlers, SignalScope};
@@ -14,14 +14,13 @@ use bytes::{BufMut, Bytes, BytesMut};
 use dashmap::DashMap;
 use papaya::HashMap as PapayaMap;
 use parking_lot::RwLock;
-use std::time::Instant;
 use std::{
     net::SocketAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{io::BufReader, net::TcpStream, sync::{mpsc, mpsc::error::TrySendError, watch}};
 use tracing::{error, warn};
@@ -278,6 +277,31 @@ pub(crate) async fn handle_connection(
                             sender: sender.clone(),
                             nonce,
                         });
+                        // Write quorum evidence to Layer I so quorum_persistent() can
+                        // reconstruct "who sent signal K" after a process restart via
+                        // anti-entropy. Key: quorum/{kind}/{sender}; value: 8-byte LE ms.
+                        let now_ms = SystemTime::now()
+                            .duration_since(UNIX_EPOCH).unwrap_or_default()
+                            .as_millis() as u64;
+                        let quorum_key: Arc<str> = Arc::from(
+                            format!("quorum/{}/{}", kind, sender).as_str()
+                        );
+                        let quorum_update = GossipUpdate {
+                            nonce:        fastrand::u64(1..),
+                            sender:       node_id.id_hash(),
+                            ttl:          max_ttl,
+                            is_tombstone: false,
+                            timestamp:    now_ms,
+                            key:          quorum_key,
+                            value:        Bytes::copy_from_slice(&now_ms.to_le_bytes()),
+                        };
+                        apply_and_notify(&store, &subscriptions, &quorum_update,
+                                         max_store_entries, &prefix_index);
+                        let _qdrops = AtomicU64::new(0);
+                        dispatch_gossip_try_send(
+                            &gossip_txs, WireMessage::Data(quorum_update),
+                            node_id.id_hash(), ForwardHint::All, &_qdrops,
+                        );
                     }
                 }
                 // Always forward — epidemic propagation regardless of scope.
