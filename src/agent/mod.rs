@@ -175,6 +175,7 @@ impl GossipAgent {
             .collect();
         let seen_shards = n_shards.max(16);
 
+        let signal_window = std::time::Duration::from_secs(config.signal_window_secs);
         let store        = Arc::new(papaya::HashMap::new());
         let subscriptions = Arc::new(papaya::HashMap::new());
         let prefix_index = Arc::new(PrefixIndex::new());
@@ -212,7 +213,7 @@ impl GossipAgent {
             gc_alive: Arc::new(AtomicBool::new(false)),
             task_handles: std::sync::Mutex::new(Vec::new()),
             signal_boundary: Arc::new(RwLock::new(Boundary::new(node_id))),
-            signal_handlers: Arc::new(SignalHandlers::new()),
+            signal_handlers: Arc::new(SignalHandlers::new(signal_window)),
             dropped_frames,
             prefix_index,
             hash_acc,

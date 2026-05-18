@@ -27,15 +27,15 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 use tracing::warn;
 
-/// Compile-time fallback for the sender-log retention window used by [`SignalHandlers::quorum`].
+/// Default sender-log retention window (10 minutes).
 ///
-/// Entries older than this are evicted by `trim_sender_log` and ignored by `quorum`.
-/// Should be ≥ any pheromone evaporation window callers rely on for load-aware routing
-/// (see [`LoadState::written_at_ms`]).
-///
-/// In application code, prefer [`GossipAgent::signal_window`](crate::GossipAgent::signal_window)
-/// which reads the operator-configured value from [`GossipConfig::signal_window_secs`].
-/// This constant is the hardcoded fallback used where no agent config is available.
+/// Matches the default value of [`GossipConfig::signal_window_secs`].
+/// Kept for doc-link references in [`ConsensusConfig`](crate::ConsensusConfig) and
+/// [`GossipConfig`](crate::GossipConfig). In application code, prefer
+/// [`GossipAgent::signal_window`](crate::GossipAgent::signal_window) — it reads the
+/// operator-configured value. The live window stored on [`SignalHandlers`] is set from
+/// `signal_window_secs` at agent construction and is used for all runtime eviction.
+#[allow(dead_code)]
 pub(crate) const SENDER_LOG_WINDOW: Duration = Duration::from_secs(600);
 
 /// Scope of a signal — determines which nodes **act** on it.
@@ -83,6 +83,14 @@ pub(crate) fn parse_own_grp_key<'a>(key: &'a str, node_id_str: &str) -> Option<&
     let slash  = inner.rfind('/')?;
     if inner[slash + 1..] != *node_id_str { return None; }
     Some(&inner[..slash])
+}
+
+/// Returns the KV prefix for group membership keys: `grp/{group}/`.
+///
+/// Use this wherever a raw `format!("grp/{}/", group)` string would otherwise appear,
+/// so all callers stay consistent with the [`kv_ns::GROUP`] namespace convention.
+pub(crate) fn grp_prefix(group: &str) -> String {
+    format!("grp/{}/", group)
 }
 
 /// Local boundary filter.
@@ -135,15 +143,20 @@ pub(crate) struct SignalHandlers {
     /// an O(window-entries) allocation on every signal delivery. DashMap's per-shard
     /// lock is the correct trade-off for this write-heavy, Vec-typed field.
     sender_log:  DashMap<Arc<str>, VecDeque<(NodeId, Instant)>>,
+    /// Operator-configured retention window for sender log entries.
+    /// Mirrors [`GossipConfig::signal_window_secs`] so `deliver()` inline eviction
+    /// agrees with `trim_sender_log` instead of hardcoding `SENDER_LOG_WINDOW`.
+    sender_log_window: Duration,
 }
 
 impl SignalHandlers {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(sender_log_window: Duration) -> Self {
         Self {
             map:        PapayaMap::new(),
             last_seen:  PapayaMap::new(),
             suppressed: PapayaMap::new(),
             sender_log: DashMap::new(),
+            sender_log_window,
         }
     }
 
@@ -207,8 +220,9 @@ impl SignalHandlers {
         // Track sender history unconditionally — not gated by suppression so that
         // quorum() counts all received signals, not just delivered ones.
         {
+            let window = self.sender_log_window;
             let mut log = self.sender_log.entry(signal.kind.clone()).or_default();
-            while log.front().map(|(_, t)| t.elapsed() >= SENDER_LOG_WINDOW).unwrap_or(false) {
+            while log.front().map(|(_, t)| t.elapsed() >= window).unwrap_or(false) {
                 log.pop_front();
             }
             log.push_back((signal.sender.clone(), now));
@@ -297,15 +311,17 @@ impl SignalHandlers {
     /// Returns `true` when at least `min_senders` distinct [`NodeId`]s have had a
     /// signal of `kind` delivered within `window`.
     ///
-    /// Synchronous read; does not start a background task.
+    /// Synchronous read; does not start a background task. Short-circuits as soon as
+    /// `min_senders` distinct senders are found — O(min_senders) average case.
     pub(crate) fn quorum(&self, kind: &str, min_senders: usize, window: Duration) -> bool {
         let Some(log) = self.sender_log.get(kind) else { return false };
-        let distinct = log.iter()
-            .filter(|(_sender, received_at)| received_at.elapsed() <= window)
-            .map(|(sender, _received_at)| sender.id_hash())
-            .collect::<AHashSet<u64>>()
-            .len();
-        distinct >= min_senders
+        let mut distinct: AHashSet<u64> = AHashSet::with_capacity(min_senders + 1);
+        for (sender, received_at) in log.iter() {
+            if received_at.elapsed() > window { continue; }
+            distinct.insert(sender.id_hash());
+            if distinct.len() >= min_senders { return true; }
+        }
+        false
     }
 
     /// Like [`quorum`](Self::quorum) but only counts senders whose `id_hash()` is in
@@ -318,14 +334,15 @@ impl SignalHandlers {
         window: Duration,
     ) -> bool {
         let Some(log) = self.sender_log.get(kind) else { return false };
-        let distinct = log.iter()
-            .filter(|(sender, received_at)| {
-                received_at.elapsed() <= window && member_hashes.contains(&sender.id_hash())
-            })
-            .map(|(sender, _)| sender.id_hash())
-            .collect::<AHashSet<u64>>()
-            .len();
-        distinct >= min_senders
+        let mut distinct: AHashSet<u64> = AHashSet::with_capacity(min_senders + 1);
+        for (sender, received_at) in log.iter() {
+            if received_at.elapsed() > window { continue; }
+            let hash = sender.id_hash();
+            if !member_hashes.contains(&hash) { continue; }
+            distinct.insert(hash);
+            if distinct.len() >= min_senders { return true; }
+        }
+        false
     }
 }
 
