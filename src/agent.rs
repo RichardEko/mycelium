@@ -43,6 +43,22 @@ const STATE_RUNNING: u8 = 1;
 #[rustfmt::skip]
 const STATE_STOPPED: u8 = 2;
 
+/// Number of random non-member peers added to Group-scoped signal fan-out
+/// for epidemic coverage even when `group_aware_forwarding = true`.
+const EPIDEMIC_K: usize = 3;
+
+/// Forwarding hint passed alongside pre-encoded signal bytes into the gossip shard.
+/// Data frames always use `ForwardHint::All`.
+#[derive(Clone, Debug)]
+pub(crate) enum ForwardHint {
+    /// Forward to all targets — System signals and Data frames.
+    All,
+    /// Forward to known group members plus up to `EPIDEMIC_K` random non-members.
+    Group(Arc<str>),
+    /// Forward only to the named target peer.
+    Individual(NodeId),
+}
+
 /// Snapshot of live protocol state.
 #[derive(Debug)]
 pub struct SystemStats {
@@ -86,10 +102,10 @@ pub struct GossipAgent {
     peers: Arc<papaya::HashMap<NodeId, Instant>>,
     peer_list_tx: watch::Sender<Arc<[NodeId]>>,
     bootstrap_peers: Arc<[NodeId]>,
-    /// Pre-encoded frame bytes + sender id_hash; shards fan out without re-encoding.
-    gossip_txs: Arc<[mpsc::Sender<(Bytes, u64)>]>,
+    /// Pre-encoded frame bytes + sender id_hash + forwarding hint; shards fan out without re-encoding.
+    gossip_txs: Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]>,
     #[allow(clippy::type_complexity)]
-    gossip_rxs: std::sync::Mutex<Option<Vec<mpsc::Receiver<(Bytes, u64)>>>>,
+    gossip_rxs: std::sync::Mutex<Option<Vec<mpsc::Receiver<(Bytes, u64, ForwardHint)>>>>,
     seen: Arc<ShardedSeen>,
     current_ts: Arc<AtomicU64>,
     peer_writers: Arc<DashMap<NodeId, WriterEntry>>,
@@ -120,10 +136,10 @@ impl GossipAgent {
         let n_shards = config.gossip_shards.next_power_of_two();
         // Write the normalised value back so config reflects the actual shard count.
         config.gossip_shards = n_shards;
-        let mut gossip_txs_vec: Vec<mpsc::Sender<(Bytes, u64)>> = Vec::with_capacity(n_shards);
-        let mut gossip_rxs_inner: Vec<mpsc::Receiver<(Bytes, u64)>> = Vec::with_capacity(n_shards);
+        let mut gossip_txs_vec: Vec<mpsc::Sender<(Bytes, u64, ForwardHint)>> = Vec::with_capacity(n_shards);
+        let mut gossip_rxs_inner: Vec<mpsc::Receiver<(Bytes, u64, ForwardHint)>> = Vec::with_capacity(n_shards);
         for _ in 0..n_shards {
-            let (tx, rx) = mpsc::channel::<(Bytes, u64)>(cap);
+            let (tx, rx) = mpsc::channel::<(Bytes, u64, ForwardHint)>(cap);
             gossip_txs_vec.push(tx);
             gossip_rxs_inner.push(rx);
         }
@@ -266,12 +282,14 @@ impl GossipAgent {
     }
 
     fn start_gossip_loop(&self) {
-        let bootstrap_peers = self.bootstrap_peers.clone();
-        let peer_writers    = self.peer_writers.clone();
-        let shutdown_tx     = self.shutdown_tx.clone();
-        let writer_depth    = self.config.writer_channel_depth;
-        let backoff         = Duration::from_secs(self.config.reconnect_backoff_secs);
-        let idle_timeout    = Duration::from_secs(self.config.writer_idle_timeout_secs);
+        let bootstrap_peers       = self.bootstrap_peers.clone();
+        let peer_writers          = self.peer_writers.clone();
+        let shutdown_tx           = self.shutdown_tx.clone();
+        let writer_depth          = self.config.writer_channel_depth;
+        let backoff               = Duration::from_secs(self.config.reconnect_backoff_secs);
+        let idle_timeout          = Duration::from_secs(self.config.writer_idle_timeout_secs);
+        let store                 = self.store.clone();
+        let group_aware_forwarding = self.config.group_aware_forwarding;
 
         let rxs = self.gossip_rxs
             .lock()
@@ -292,6 +310,8 @@ impl GossipAgent {
                 idle_timeout,
                 self.config.max_forwarding_peers,
                 self.dropped_frames.clone(),
+                store.clone(),
+                group_aware_forwarding,
             ));
             self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).push(handle);
         }
@@ -609,6 +629,11 @@ impl GossipAgent {
             }
         }
 
+        let hint = match &scope {
+            SignalScope::System           => ForwardHint::All,
+            SignalScope::Group(name)      => ForwardHint::Group(name.clone()),
+            SignalScope::Individual(peer) => ForwardHint::Individual(peer.clone()),
+        };
         let shard = shard_for_key(&kind, self.gossip_txs.len());
         let sender_hash = self.node_id.id_hash();
         let mut buf = BytesMut::with_capacity(256);
@@ -623,7 +648,7 @@ impl GossipAgent {
             error!("Signal encode failed");
             return false;
         }
-        match self.gossip_txs[shard].send((buf.freeze(), sender_hash)).await {
+        match self.gossip_txs[shard].send((buf.freeze(), sender_hash, hint)).await {
             Ok(()) => true,
             Err(_) => {
                 if self.state.load(Ordering::Relaxed) == STATE_RUNNING {
@@ -1256,7 +1281,7 @@ impl GossipAgent {
             error!("Gossip shard {}: encode failed", shard);
             return false;
         }
-        match self.gossip_txs[shard].try_send((buf.freeze(), sender)) {
+        match self.gossip_txs[shard].try_send((buf.freeze(), sender, ForwardHint::All)) {
             Ok(()) => true,
             Err(TrySendError::Full(_)) => {
                 self.dropped_frames.fetch_add(1, Ordering::Relaxed);
@@ -1285,7 +1310,7 @@ impl GossipAgent {
             error!("Gossip shard {}: encode failed", shard);
             return false;
         }
-        match self.gossip_txs[shard].send((buf.freeze(), sender)).await {
+        match self.gossip_txs[shard].send((buf.freeze(), sender, ForwardHint::All)).await {
             Ok(()) => true,
             Err(_) => {
                 if self.state.load(Ordering::Relaxed) == STATE_RUNNING {
@@ -1462,7 +1487,7 @@ pub(crate) fn emit_signal(
     current_ts:      &AtomicU64,
     signal_boundary: &RwLock<Boundary>,
     signal_handlers: &SignalHandlers,
-    gossip_txs:      &[mpsc::Sender<(Bytes, u64)>],
+    gossip_txs:      &[mpsc::Sender<(Bytes, u64, ForwardHint)>],
     default_ttl:     u8,
     dropped_frames:  &AtomicU64,
     kind:            Arc<str>,
@@ -1489,6 +1514,11 @@ pub(crate) fn emit_signal(
         }
     }
 
+    let hint = match &scope {
+        SignalScope::System           => ForwardHint::All,
+        SignalScope::Group(name)      => ForwardHint::Group(name.clone()),
+        SignalScope::Individual(peer) => ForwardHint::Individual(peer.clone()),
+    };
     let shard = shard_for_key(&kind, gossip_txs.len());
     let sender_hash = node_id.id_hash();
     let mut buf = BytesMut::with_capacity(256);
@@ -1500,7 +1530,7 @@ pub(crate) fn emit_signal(
         error!("Signal encode failed");
         return false;
     }
-    match gossip_txs[shard].try_send((buf.freeze(), sender_hash)) {
+    match gossip_txs[shard].try_send((buf.freeze(), sender_hash, hint)) {
         Ok(()) => true,
         Err(TrySendError::Full(_)) => {
             dropped_frames.fetch_add(1, Ordering::Relaxed);
@@ -1550,7 +1580,7 @@ struct ListenerContext {
     node_id:        NodeId,
     store:          Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
     peers:          Arc<papaya::HashMap<NodeId, Instant>>,
-    gossip_txs:     Arc<[mpsc::Sender<(Bytes, u64)>]>,
+    gossip_txs:     Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]>,
     seen:           Arc<ShardedSeen>,
     shutdown_tx:    Arc<watch::Sender<bool>>,
     subscriptions:  Arc<papaya::HashMap<Arc<str>, watch::Sender<Option<Bytes>>>>,
@@ -1656,18 +1686,20 @@ async fn run_listener_task(listener: TcpListener, lctx: ListenerContext) {
 
 #[allow(clippy::too_many_arguments)]
 async fn run_gossip_shard(
-    shard_idx:           usize,
-    mut gossip_rx:       mpsc::Receiver<(Bytes, u64)>,
-    bootstrap_peers:     Arc<[NodeId]>,
-    peer_writers:        Arc<DashMap<NodeId, WriterEntry>>,
-    shutdown_tx:         Arc<watch::Sender<bool>>,
-    mut peer_list_rx:    watch::Receiver<Arc<[NodeId]>>,
-    alive:               Arc<AtomicBool>,
-    writer_depth:        usize,
-    backoff:             Duration,
-    idle_timeout:        Duration,
-    max_forwarding_peers: usize,
-    dropped_frames:      Arc<AtomicU64>,
+    shard_idx:             usize,
+    mut gossip_rx:         mpsc::Receiver<(Bytes, u64, ForwardHint)>,
+    bootstrap_peers:       Arc<[NodeId]>,
+    peer_writers:          Arc<DashMap<NodeId, WriterEntry>>,
+    shutdown_tx:           Arc<watch::Sender<bool>>,
+    mut peer_list_rx:      watch::Receiver<Arc<[NodeId]>>,
+    alive:                 Arc<AtomicBool>,
+    writer_depth:          usize,
+    backoff:               Duration,
+    idle_timeout:          Duration,
+    max_forwarding_peers:  usize,
+    dropped_frames:        Arc<AtomicU64>,
+    store:                 Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
+    group_aware_forwarding: bool,
 ) {
     alive.store(true, Ordering::Relaxed);
     let _alive_guard = AliveGuard(alive.clone());
@@ -1679,10 +1711,51 @@ async fn run_gossip_shard(
     targets.extend(cached_peer_list.iter().take(remaining).cloned());
     let mut sender_cache: AHashMap<NodeId, mpsc::Sender<Bytes>> = AHashMap::new();
 
+    // Send `data` to `peer`, retrying with a fresh writer if the cached sender is closed.
+    macro_rules! send_to_peer {
+        ($peer:expr, $data:expr) => {{
+            let peer: &NodeId = $peer;
+            let tx = if let Some(t) = sender_cache.get(peer) {
+                t.clone()
+            } else {
+                let t = get_or_spawn_writer(
+                    peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx,
+                );
+                sender_cache.insert(peer.clone(), t.clone());
+                t
+            };
+            match tx.try_send($data.clone()) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) => {
+                    dropped_frames.fetch_add(1, Ordering::Relaxed);
+                    warn!("Peer writer channel full, dropping forward to {}", peer);
+                }
+                Err(TrySendError::Closed(_)) => {
+                    debug!("Peer writer for {} closed; respawning and retrying", peer);
+                    sender_cache.remove(peer);
+                    let new_tx = get_or_spawn_writer(
+                        peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx,
+                    );
+                    sender_cache.insert(peer.clone(), new_tx.clone());
+                    match new_tx.try_send($data.clone()) {
+                        Ok(()) => {}
+                        Err(TrySendError::Full(_)) => {
+                            dropped_frames.fetch_add(1, Ordering::Relaxed);
+                            warn!("Respawned writer for {} is full; frame dropped", peer);
+                        }
+                        Err(TrySendError::Closed(_)) => {
+                            debug!("Respawned writer for {} closed immediately", peer);
+                        }
+                    }
+                }
+            }
+        }};
+    }
+
     loop {
         tokio::select! { biased;
             result = gossip_rx.recv() => {
-                let (data, sender_hash) = match result {
+                let (data, sender_hash, hint) = match result {
                     Some(u) => u,
                     None => break,
                 };
@@ -1699,41 +1772,50 @@ async fn run_gossip_shard(
                 if targets.is_empty() { continue; }
 
                 // Bytes is pre-encoded; no re-encoding per hop (zero-copy forwarding).
-                for peer in targets.iter().filter(|p| p.id_hash() != sender_hash) {
-                    let tx = if let Some(t) = sender_cache.get(peer) {
-                        t.clone()
-                    } else {
-                        let t = get_or_spawn_writer(
-                            peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx,
-                        );
-                        sender_cache.insert(peer.clone(), t.clone());
-                        t
-                    };
-                    match tx.try_send(data.clone()) {
-                        Ok(()) => {}
-                        Err(TrySendError::Full(_)) => {
-                            dropped_frames.fetch_add(1, Ordering::Relaxed);
-                            warn!("Peer writer channel full, dropping forward to {}", peer);
+                if !group_aware_forwarding {
+                    // Default: broadcast to all targets (pre-Fix-2 behaviour).
+                    for peer in targets.iter().filter(|p| p.id_hash() != sender_hash) {
+                        send_to_peer!(peer, data);
+                    }
+                } else {
+                    match &hint {
+                        ForwardHint::All => {
+                            for peer in targets.iter().filter(|p| p.id_hash() != sender_hash) {
+                                send_to_peer!(peer, data);
+                            }
                         }
-                        Err(TrySendError::Closed(_)) => {
-                            // Writer exited (idle timeout, peer eviction, write failure).
-                            // Evict the stale sender and immediately retry with a fresh writer
-                            // so this frame is not silently dropped.
-                            debug!("Peer writer for {} closed; respawning and retrying", peer);
-                            sender_cache.remove(peer);
-                            let new_tx = get_or_spawn_writer(
-                                peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx,
-                            );
-                            sender_cache.insert(peer.clone(), new_tx.clone());
-                            match new_tx.try_send(data.clone()) {
-                                Ok(()) => {}
-                                Err(TrySendError::Full(_)) => {
-                                    dropped_frames.fetch_add(1, Ordering::Relaxed);
-                                    warn!("Respawned writer for {} is full; frame dropped", peer);
-                                }
-                                Err(TrySendError::Closed(_)) => {
-                                    // Fresh writer immediately closed — likely shutting down.
-                                    debug!("Respawned writer for {} closed immediately", peer);
+                        ForwardHint::Individual(target) => {
+                            if target.id_hash() != sender_hash && targets.contains(target) {
+                                send_to_peer!(target, data);
+                            }
+                        }
+                        ForwardHint::Group(name) => {
+                            // Collect known group members from the KV store (grp/<name>/ prefix).
+                            let prefix = format!("grp/{}/", name);
+                            let guard = store.pin();
+                            let members: AHashSet<NodeId> = guard.iter()
+                                .filter(|(k, v)| k.starts_with(&*prefix) && v.data.is_some())
+                                .filter_map(|(k, _)| k[prefix.len()..].parse::<NodeId>().ok())
+                                .collect();
+                            drop(guard);
+
+                            // Forward to all known members present in our target set.
+                            for peer in targets.iter()
+                                .filter(|p| p.id_hash() != sender_hash && members.contains(*p))
+                            {
+                                send_to_peer!(peer, data);
+                            }
+
+                            // Plus up to EPIDEMIC_K random non-members for epidemic coverage.
+                            let non_members: Vec<&NodeId> = targets.iter()
+                                .filter(|p| p.id_hash() != sender_hash && !members.contains(*p))
+                                .collect();
+                            if !non_members.is_empty() {
+                                let k = EPIDEMIC_K.min(non_members.len());
+                                let start = fastrand::usize(0..non_members.len());
+                                for i in 0..k {
+                                    let peer = non_members[(start + i) % non_members.len()];
+                                    send_to_peer!(peer, data);
                                 }
                             }
                         }
@@ -2116,7 +2198,7 @@ struct ConsensusListenerCtx {
     current_ts:      Arc<AtomicU64>,
     signal_boundary: Arc<RwLock<Boundary>>,
     signal_handlers: Arc<SignalHandlers>,
-    gossip_txs:      Arc<[mpsc::Sender<(Bytes, u64)>]>,
+    gossip_txs:      Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]>,
     default_ttl:     u8,
     dropped_frames:  Arc<AtomicU64>,
     store:           Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
@@ -2148,7 +2230,7 @@ impl ConsensusListenerCtx {
         if bincode::serde::encode_into_std_write(
             WireMessage::Data(update), &mut (&mut buf).writer(), bincode_cfg(),
         ).is_ok() {
-            match self.gossip_txs[shard].try_send((buf.freeze(), sender)) {
+            match self.gossip_txs[shard].try_send((buf.freeze(), sender, ForwardHint::All)) {
                 Ok(()) => {}
                 Err(TrySendError::Full(_)) => {
                     self.dropped_frames.fetch_add(1, Ordering::Relaxed);

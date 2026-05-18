@@ -139,7 +139,7 @@ mod tests {
         socket: TcpStream,
         store: Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
         peers: Arc<papaya::HashMap<NodeId, Instant>>,
-        gossip_tx: mpsc::Sender<(Bytes, u64)>,
+        gossip_tx: mpsc::Sender<(Bytes, u64, crate::agent::ForwardHint)>,
         seen: Arc<ShardedSeen>,
         max_ttl: u8,
     ) -> (Arc<watch::Sender<bool>>, tokio::task::JoinHandle<Result<(), GossipError>>) {
@@ -149,7 +149,7 @@ mod tests {
         let node_id = NodeId::new("127.0.0.1", 0).unwrap();
         let (shutdown_tx, _) = watch::channel(false);
         let shutdown_tx = Arc::new(shutdown_tx);
-        let gossip_txs: Arc<[mpsc::Sender<(Bytes, u64)>]> =
+        let gossip_txs: Arc<[mpsc::Sender<(Bytes, u64, crate::agent::ForwardHint)>]> =
             (0..N_GOSSIP_SHARDS).map(|_| gossip_tx.clone()).collect::<Vec<_>>().into();
         let ctx = ConnContext {
             node_id: node_id.clone(),
@@ -484,7 +484,7 @@ mod tests {
     async fn test_deduplication() {
         let (mut writer, reader) = loopback_pair().await;
         let store: Arc<papaya::HashMap<Arc<str>, StoreEntry>> = Arc::new(papaya::HashMap::new());
-        let (tx, mut rx) = mpsc::channel::<(Bytes, u64)>(10);
+        let (tx, mut rx) = mpsc::channel::<(Bytes, u64, crate::agent::ForwardHint)>(10);
         let seen = Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS));
         let _ = spawn_handler(reader, store.clone(), Arc::new(papaya::HashMap::new()), tx, seen,
                               GossipConfig::default().default_ttl);
@@ -568,7 +568,7 @@ mod tests {
     async fn test_inbound_ttl_clamped_to_max() {
         let (mut writer, reader) = loopback_pair().await;
         let store: Arc<papaya::HashMap<Arc<str>, StoreEntry>> = Arc::new(papaya::HashMap::new());
-        let (tx, mut rx) = mpsc::channel::<(Bytes, u64)>(10);
+        let (tx, mut rx) = mpsc::channel::<(Bytes, u64, crate::agent::ForwardHint)>(10);
         let _ = spawn_handler(reader, store.clone(), Arc::new(papaya::HashMap::new()), tx,
                               Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)), 5);
 
@@ -579,7 +579,7 @@ mod tests {
         let s = store.clone();
         poll_until(|| s.pin().get("k").is_some(), 200).await;
 
-        let (fwd_bytes, _) = rx.try_recv().expect("should have forwarded once");
+        let (fwd_bytes, _, _) = rx.try_recv().expect("should have forwarded once");
         assert_eq!(fwd_bytes[TTL_OFFSET], 4, "forwarded TTL must be clamped to max_ttl - 1");
     }
 
@@ -587,7 +587,7 @@ mod tests {
     async fn test_inbound_ttl_above_max_not_forwarded_when_clamped_to_one() {
         let (mut writer, reader) = loopback_pair().await;
         let store: Arc<papaya::HashMap<Arc<str>, StoreEntry>> = Arc::new(papaya::HashMap::new());
-        let (tx, mut rx) = mpsc::channel::<(Bytes, u64)>(10);
+        let (tx, mut rx) = mpsc::channel::<(Bytes, u64, crate::agent::ForwardHint)>(10);
         let _ = spawn_handler(reader, store.clone(), Arc::new(papaya::HashMap::new()), tx,
                               Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)), 1);
 
@@ -774,7 +774,7 @@ mod tests {
         let store: Arc<papaya::HashMap<Arc<str>, StoreEntry>> = Arc::new(papaya::HashMap::new());
         let subs: Arc<papaya::HashMap<Arc<str>, watch::Sender<Option<Bytes>>>> =
             Arc::new(papaya::HashMap::new());
-        let (gossip_tx, _) = mpsc::channel::<(Bytes, u64)>(10);
+        let (gossip_tx, _) = mpsc::channel::<(Bytes, u64, crate::agent::ForwardHint)>(10);
         let (shutdown_tx, _sd) = watch::channel(false);
         let shutdown_tx = Arc::new(shutdown_tx);
 
@@ -783,7 +783,7 @@ mod tests {
         sub_rx.borrow_and_update();
         subs.pin().insert(Arc::from("gossip_key"), sub_tx);
 
-        let gossip_txs: Arc<[mpsc::Sender<(Bytes, u64)>]> =
+        let gossip_txs: Arc<[mpsc::Sender<(Bytes, u64, crate::agent::ForwardHint)>]> =
             (0..N_GOSSIP_SHARDS).map(|_| gossip_tx.clone()).collect::<Vec<_>>().into();
         {
             use crate::signal::{Boundary, SignalHandlers};
@@ -1431,6 +1431,67 @@ mod tests {
 
         agent_a.shutdown().await;
         agent_b.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_group_signal_only_reaches_members() {
+        // 3-node cluster: A and B join group "team"; C does not.
+        // With group_aware_forwarding enabled, A's shard forwards Group("team")
+        // signals only to known members + EPIDEMIC_K random others.
+        // Regardless of forwarding, C's Boundary must block local delivery
+        // (C never joined "team") — its handler must not fire.
+        let (port_a, port_b, port_c) = (alloc_port(), alloc_port(), alloc_port());
+
+        let make_cfg = |port: u16, peers: Vec<NodeId>| {
+            let mut cfg = GossipConfig::default();
+            cfg.bind_port                = port;
+            cfg.health_check_interval_secs = 1;
+            cfg.group_aware_forwarding   = true;
+            cfg.bootstrap_peers          = peers;
+            cfg
+        };
+
+        let id_a = NodeId::new("127.0.0.1", port_a).unwrap();
+        let id_b = NodeId::new("127.0.0.1", port_b).unwrap();
+        let id_c = NodeId::new("127.0.0.1", port_c).unwrap();
+
+        let cfg_a = make_cfg(port_a, vec![id_b.clone(), id_c.clone()]);
+        let cfg_b = make_cfg(port_b, vec![id_a.clone(), id_c.clone()]);
+        let cfg_c = make_cfg(port_c, vec![id_a.clone(), id_b.clone()]);
+
+        let agent_a = Arc::new(GossipAgent::new(id_a, cfg_a));
+        let agent_b = Arc::new(GossipAgent::new(id_b, cfg_b));
+        let agent_c = Arc::new(GossipAgent::new(id_c, cfg_c));
+
+        agent_a.start().await.unwrap();
+        agent_b.start().await.unwrap();
+        agent_c.start().await.unwrap();
+
+        // A and B join the group; C does not.
+        agent_a.join_group("team");
+        agent_b.join_group("team");
+
+        // Wait for group membership KV entries to propagate and peers to discover each other.
+        time::sleep(Duration::from_millis(300)).await;
+
+        let mut rx_b = agent_b.signal_rx("team.event");
+        let mut rx_c = agent_c.signal_rx("team.event");
+
+        let _ = agent_a.emit("team.event", SignalScope::Group("team".into()), b"msg".to_vec());
+
+        // B must receive the signal — it's a group member.
+        tokio::time::timeout(Duration::from_millis(2_000), rx_b.recv())
+            .await
+            .expect("B (group member) should receive the Group signal within 2s")
+            .expect("B receiver closed");
+
+        // C must NOT receive the signal — its Boundary blocks delivery for Group("team").
+        let c_result = tokio::time::timeout(Duration::from_millis(200), rx_c.recv()).await;
+        assert!(c_result.is_err(), "C (non-member) must not receive the Group signal");
+
+        agent_a.shutdown().await;
+        agent_b.shutdown().await;
+        agent_c.shutdown().await;
     }
 
     #[tokio::test]

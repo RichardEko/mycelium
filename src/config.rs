@@ -118,6 +118,16 @@ pub struct GossipConfig {
     ///
     /// `0` = no timeout (default, existing behaviour — writers stay connected indefinitely).
     pub writer_idle_timeout_secs: u64,
+    /// When `true`, gossip shards apply scope-aware forwarding for Signal frames:
+    /// Group-scoped signals are forwarded only to known group members (plus up to 3
+    /// random peers for epidemic coverage), and Individual-scoped signals are forwarded
+    /// only to the target peer. System signals and Data frames are always broadcast to
+    /// all targets regardless of this setting.
+    ///
+    /// Requires that group membership be published to the KV store (via `join_group`)
+    /// so shards can determine the member set. When `false` (default), all signals fan
+    /// out to all forwarding targets — the pre-Fix-2 behaviour.
+    pub group_aware_forwarding: bool,
 }
 
 impl Default for GossipConfig {
@@ -145,6 +155,7 @@ impl Default for GossipConfig {
             tcp_accept_backlog: 1024,
             max_peers: i64::MAX as usize,
             writer_idle_timeout_secs: 0,
+            group_aware_forwarding: false,
         }
     }
 }
@@ -257,7 +268,7 @@ impl GossipConfig {
     /// **Note:** this method does _not_ call [`validate`](Self::validate). Callers
     /// must invoke `validate()` separately after all overrides are applied.
     ///
-    /// All 19 fields can be overridden: `GOSSIP_BIND_ADDRESS`, `GOSSIP_BIND_PORT`,
+    /// All 20 fields can be overridden: `GOSSIP_BIND_ADDRESS`, `GOSSIP_BIND_PORT`,
     /// `GOSSIP_PROPAGATION_WINDOW_SECS`, `GOSSIP_HEALTH_CHECK_INTERVAL_SECS`,
     /// `GOSSIP_DEFAULT_TTL`, `GOSSIP_MAX_CONNECTIONS`, `GOSSIP_WRITER_CHANNEL_DEPTH`,
     /// `GOSSIP_MAX_FORWARDING_PEERS`, `GOSSIP_RECONNECT_BACKOFF_SECS`,
@@ -266,7 +277,8 @@ impl GossipConfig {
     /// `GOSSIP_INTERN_KEYS` (`true`/`false`/`1`/`0`), `GOSSIP_INTERN_MAX_KEYS`,
     /// `GOSSIP_BOOTSTRAP_PEERS` (comma-separated
     /// `ip:port` list), `GOSSIP_PING_PEER_SAMPLE_SIZE`, `GOSSIP_TCP_ACCEPT_BACKLOG`,
-    /// `GOSSIP_MAX_PEERS`, `GOSSIP_WRITER_IDLE_TIMEOUT_SECS`.
+    /// `GOSSIP_MAX_PEERS`, `GOSSIP_WRITER_IDLE_TIMEOUT_SECS`,
+    /// `GOSSIP_GROUP_AWARE_FORWARDING` (`true`/`false`/`1`/`0`).
     pub fn apply_env_overrides(&mut self) -> Result<(), GossipError> {
         if let Ok(v) = env::var("GOSSIP_BIND_ADDRESS") {
             self.bind_address = v;
@@ -337,6 +349,15 @@ impl GossipConfig {
         }
         if let Ok(v) = env::var("GOSSIP_WRITER_IDLE_TIMEOUT_SECS") {
             self.writer_idle_timeout_secs = v.parse().map_err(GossipError::Parse)?;
+        }
+        if let Ok(v) = env::var("GOSSIP_GROUP_AWARE_FORWARDING") {
+            self.group_aware_forwarding = match v.as_str() {
+                "true" | "1" => true,
+                "false" | "0" => false,
+                _ => return Err(GossipError::Config(
+                    "GOSSIP_GROUP_AWARE_FORWARDING must be true/false/1/0".into(),
+                )),
+            };
         }
         Ok(())
     }

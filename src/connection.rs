@@ -1,3 +1,4 @@
+use crate::agent::ForwardHint;
 use crate::error::GossipError;
 use crate::framing::{
     bincode_cfg, bincode_cfg_prev, is_connection_closed, read_frame, shard_for_key,
@@ -31,9 +32,9 @@ pub(crate) struct ConnContext {
     pub(crate) node_id:          NodeId,
     pub(crate) store:            Arc<PapayaMap<Arc<str>, StoreEntry>>,
     pub(crate) peers:            Arc<PapayaMap<NodeId, Instant>>,
-    /// One sender per gossip shard; carries pre-encoded frame bytes + sender id_hash.
+    /// One sender per gossip shard; carries pre-encoded frame bytes + sender id_hash + forward hint.
     /// The shard fans out bytes directly — no re-encoding per hop (zero-copy forwarding).
-    pub(crate) gossip_txs:       Arc<[mpsc::Sender<(Bytes, u64)>]>,
+    pub(crate) gossip_txs:       Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]>,
     pub(crate) seen:             Arc<ShardedSeen>,
     pub(crate) shutdown:         Arc<watch::Sender<bool>>,
     pub(crate) max_ttl:          u8,
@@ -270,6 +271,11 @@ pub(crate) async fn handle_connection(
                 // Signal frames have variable-length scope so TTL cannot be decremented
                 // in-place at a fixed offset (unlike Data frames). Full re-encode required.
                 if ttl > 1 {
+                    let hint = match &scope {
+                        SignalScope::System           => ForwardHint::All,
+                        SignalScope::Group(name)      => ForwardHint::Group(name.clone()),
+                        SignalScope::Individual(peer) => ForwardHint::Individual(peer.clone()),
+                    };
                     let shard = shard_for_key(&kind, n_shards);
                     let mut fwd_buf = BytesMut::with_capacity(recv_buf.len());
                     match bincode::serde::encode_into_std_write(
@@ -282,7 +288,7 @@ pub(crate) async fn handle_connection(
                     ) {
                         Ok(_) => {
                             let fwd_data = fwd_buf.freeze();
-                            match gossip_txs[shard].try_send((fwd_data, sender.id_hash())) {
+                            match gossip_txs[shard].try_send((fwd_data, sender.id_hash(), hint)) {
                                 Ok(()) => {}
                                 Err(TrySendError::Full(_)) => {
                                     warn!("Gossip shard {} full, dropping signal forward from {}", shard, peer_addr);
@@ -318,7 +324,7 @@ pub(crate) async fn handle_connection(
                         // (fixed layout, v6 wire format). split().freeze() is O(1).
                         recv_buf[TTL_OFFSET] = fwd_ttl - 1;
                         let data = recv_buf.split().freeze();
-                        match gossip_txs[shard].try_send((data, update.sender)) {
+                        match gossip_txs[shard].try_send((data, update.sender, ForwardHint::All)) {
                             Ok(()) => {}
                             Err(TrySendError::Full(_)) => {
                                 warn!("Gossip shard {} channel full, dropping forward from {}", shard, peer_addr);
@@ -338,7 +344,7 @@ pub(crate) async fn handle_connection(
                             bincode_cfg(),
                         ) {
                             Ok(_) => {
-                                match gossip_txs[shard].try_send((fwd_buf.freeze(), update.sender)) {
+                                match gossip_txs[shard].try_send((fwd_buf.freeze(), update.sender, ForwardHint::All)) {
                                     Ok(()) => {}
                                     Err(TrySendError::Full(_)) => {
                                         warn!("Gossip shard {} channel full, dropping v{} forward from {}",
