@@ -26,7 +26,10 @@
 //!   [`GossipAgent::declare_trust`]. The basic protocol uses simple majority;
 //!   trust-slice-based quorum intersection is a future extension.
 
-use crate::framing::{bincode_cfg, shard_for_key, ForwardHint, GossipUpdate, WireMessage};
+use crate::framing::{
+    bincode_cfg, dispatch_gossip_send, dispatch_gossip_try_send, ForwardHint, GossipUpdate,
+    WireMessage,
+};
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
 use crate::signal::{decode_load_state, kv_ns, Signal, SignalHandlers, SignalScope, Boundary};
@@ -42,11 +45,10 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
-    sync::{mpsc, mpsc::error::TrySendError, oneshot, watch},
+    sync::{mpsc, oneshot, watch},
     task::JoinHandle,
     time,
 };
-use tracing::{error, warn};
 
 /// Configuration for a single consensus round.
 ///
@@ -254,68 +256,38 @@ impl ConsensusEngine {
         self.get(ballot_key).map(|b| decode_ballot(&b)).unwrap_or(0)
     }
 
-    /// Applies a KV update from within a consensus task.
-    /// Uses `try_send` for gossip dispatch — dropped frames recovered via anti-entropy.
-    fn kv_set(&self, key: String, value: Bytes) {
-        let key: Arc<str> = Arc::from(key.as_str());
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-        let update = GossipUpdate {
+    fn make_kv_update(&self, key: Arc<str>, value: Bytes) -> GossipUpdate {
+        GossipUpdate {
             nonce:        fastrand::u64(1..),
             sender:       self.node_id.id_hash(),
             ttl:          self.default_ttl,
             is_tombstone: false,
-            timestamp,
+            timestamp:    SystemTime::now()
+                .duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
             key,
             value,
-        };
-        apply_and_notify(&self.store, &self.subscriptions, &update);
-        let shard  = shard_for_key(&update.key, self.gossip_txs.len());
-        let sender = update.sender;
-        let mut buf = BytesMut::with_capacity(256);
-        if bincode::serde::encode_into_std_write(
-            WireMessage::Data(update), &mut (&mut buf).writer(), bincode_cfg(),
-        ).is_ok() {
-            match self.gossip_txs[shard].try_send((buf.freeze(), sender, ForwardHint::All)) {
-                Ok(()) => {}
-                Err(TrySendError::Full(_)) => {
-                    self.dropped_frames.fetch_add(1, Ordering::Relaxed);
-                    warn!("Consensus KV: gossip shard {} full; frame dropped", shard);
-                }
-                Err(TrySendError::Closed(_)) => {
-                    warn!("Consensus KV: gossip shard {} dead", shard);
-                }
-            }
         }
+    }
+
+    /// Applies a KV update from within a consensus task.
+    /// Uses `try_send` for gossip dispatch — dropped frames recovered via anti-entropy.
+    fn kv_set(&self, key: String, value: Bytes) {
+        let upd = self.make_kv_update(Arc::from(key.as_str()), value);
+        apply_and_notify(&self.store, &self.subscriptions, &upd);
+        dispatch_gossip_try_send(
+            &self.gossip_txs, WireMessage::Data(upd),
+            self.node_id.id_hash(), ForwardHint::All, &self.dropped_frames,
+        );
     }
 
     /// Like `kv_set` but awaits channel capacity (used by the proposer).
     async fn set_async(&self, key: &str, value: Bytes) {
-        let key: Arc<str> = Arc::from(key);
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-        let update = GossipUpdate {
-            nonce:        fastrand::u64(1..),
-            sender:       self.node_id.id_hash(),
-            ttl:          self.default_ttl,
-            is_tombstone: false,
-            timestamp,
-            key,
-            value,
-        };
-        apply_and_notify(&self.store, &self.subscriptions, &update);
-        let shard  = shard_for_key(&update.key, self.gossip_txs.len());
-        let sender = update.sender;
-        let mut buf = BytesMut::with_capacity(256);
-        if bincode::serde::encode_into_std_write(
-            WireMessage::Data(update), &mut (&mut buf).writer(), bincode_cfg(),
-        ).is_ok() {
-            let _ = self.gossip_txs[shard].send((buf.freeze(), sender, ForwardHint::All)).await;
-        }
+        let upd = self.make_kv_update(Arc::from(key), value);
+        apply_and_notify(&self.store, &self.subscriptions, &upd);
+        dispatch_gossip_send(
+            &self.gossip_txs, WireMessage::Data(upd),
+            self.node_id.id_hash(), ForwardHint::All,
+        ).await;
     }
 
     // ── Signal helpers ───────────────────────────────────────────────────────
@@ -325,7 +297,6 @@ impl ConsensusEngine {
         let nonce = fastrand::u64(1..);
         let ts = self.current_ts.load(Ordering::Relaxed);
         let _ = self.seen.is_duplicate(nonce, ts);
-
         if self.signal_boundary.read().admits(&scope) {
             let admit = match &scope {
                 SignalScope::Individual(_) => true,
@@ -341,36 +312,16 @@ impl ConsensusEngine {
                 });
             }
         }
-
         let hint = match &scope {
             SignalScope::System           => ForwardHint::All,
             SignalScope::Group(name)      => ForwardHint::Group(name.clone()),
             SignalScope::Individual(peer) => ForwardHint::Individual(peer.clone()),
         };
-        let shard = shard_for_key(&kind, self.gossip_txs.len());
-        let sender_hash = self.node_id.id_hash();
-        let mut buf = BytesMut::with_capacity(256);
-        if bincode::serde::encode_into_std_write(
-            WireMessage::Signal {
-                ttl: self.default_ttl, nonce,
-                sender: self.node_id.clone(), scope, kind, payload,
-            },
-            &mut (&mut buf).writer(),
-            bincode_cfg(),
-        ).is_err() {
-            error!("Signal encode failed");
-            return;
-        }
-        match self.gossip_txs[shard].try_send((buf.freeze(), sender_hash, hint)) {
-            Ok(()) => {}
-            Err(TrySendError::Full(_)) => {
-                self.dropped_frames.fetch_add(1, Ordering::Relaxed);
-                warn!("Gossip channel full for shard {}; signal dropped", shard);
-            }
-            Err(TrySendError::Closed(_)) => {
-                warn!("Gossip shard {} not available; signal will not propagate", shard);
-            }
-        }
+        dispatch_gossip_try_send(
+            &self.gossip_txs,
+            WireMessage::Signal { ttl: self.default_ttl, nonce, sender: self.node_id.clone(), scope, kind, payload },
+            self.node_id.id_hash(), hint, &self.dropped_frames,
+        );
     }
 
     /// Emits a signal; awaits channel capacity (used by the proposer).
@@ -379,7 +330,6 @@ impl ConsensusEngine {
         let nonce = fastrand::u64(1..);
         let ts = self.current_ts.load(Ordering::Relaxed);
         let _ = self.seen.is_duplicate(nonce, ts);
-
         if self.signal_boundary.read().admits(&scope) {
             let admit = match &scope {
                 SignalScope::Individual(_) => true,
@@ -395,27 +345,16 @@ impl ConsensusEngine {
                 });
             }
         }
-
         let hint = match &scope {
             SignalScope::System           => ForwardHint::All,
             SignalScope::Group(name)      => ForwardHint::Group(name.clone()),
             SignalScope::Individual(peer) => ForwardHint::Individual(peer.clone()),
         };
-        let shard = shard_for_key(&kind, self.gossip_txs.len());
-        let sender_hash = self.node_id.id_hash();
-        let mut buf = BytesMut::with_capacity(256);
-        if bincode::serde::encode_into_std_write(
-            WireMessage::Signal {
-                ttl: self.default_ttl, nonce,
-                sender: self.node_id.clone(), scope, kind, payload,
-            },
-            &mut (&mut buf).writer(),
-            bincode_cfg(),
-        ).is_err() {
-            error!("Signal encode failed");
-            return;
-        }
-        let _ = self.gossip_txs[shard].send((buf.freeze(), sender_hash, hint)).await;
+        dispatch_gossip_send(
+            &self.gossip_txs,
+            WireMessage::Signal { ttl: self.default_ttl, nonce, sender: self.node_id.clone(), scope, kind, payload },
+            self.node_id.id_hash(), hint,
+        ).await;
     }
 
     // ── Proposer ─────────────────────────────────────────────────────────────

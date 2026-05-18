@@ -3,8 +3,14 @@ use crate::node_id::NodeId;
 use crate::signal::SignalScope;
 use ahash::RandomState;
 use bytes::{BufMut, Bytes, BytesMut};
-use std::sync::{Arc, OnceLock};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, OnceLock,
+};
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    sync::{mpsc, mpsc::error::TrySendError},
+};
 
 pub(crate) const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
 /// Framing-level protocol version. Written before every serialized payload.
@@ -183,6 +189,54 @@ pub(crate) fn bincode_cfg() -> impl bincode::config::Config {
 #[inline(always)]
 pub(crate) fn bincode_cfg_prev() -> impl bincode::config::Config {
     bincode::config::standard().with_fixed_int_encoding()
+}
+
+/// Extracts the gossip shard routing key from a wire message.
+fn wire_msg_key(msg: &WireMessage) -> &str {
+    match msg {
+        WireMessage::Data(u)             => &u.key,
+        WireMessage::Signal { kind, .. } => kind,
+        _                                => "",
+    }
+}
+
+/// Encodes `msg`, routes to the correct shard, and dispatches via `try_send`.
+/// Returns `false` if the channel is full (increments `dropped`) or closed.
+pub(crate) fn dispatch_gossip_try_send(
+    gossip_txs:  &[mpsc::Sender<(Bytes, u64, ForwardHint)>],
+    msg:         WireMessage,
+    sender_hash: u64,
+    hint:        ForwardHint,
+    dropped:     &AtomicU64,
+) -> bool {
+    let shard = shard_for_key(wire_msg_key(&msg), gossip_txs.len());
+    let mut buf = BytesMut::with_capacity(256);
+    if bincode::serde::encode_into_std_write(msg, &mut (&mut buf).writer(), bincode_cfg()).is_err() {
+        return false;
+    }
+    match gossip_txs[shard].try_send((buf.freeze(), sender_hash, hint)) {
+        Ok(())                     => true,
+        Err(TrySendError::Full(_)) => {
+            dropped.fetch_add(1, Ordering::Relaxed);
+            false
+        }
+        Err(TrySendError::Closed(_)) => false,
+    }
+}
+
+/// Like [`dispatch_gossip_try_send`] but awaits channel capacity instead of dropping.
+pub(crate) async fn dispatch_gossip_send(
+    gossip_txs:  &[mpsc::Sender<(Bytes, u64, ForwardHint)>],
+    msg:         WireMessage,
+    sender_hash: u64,
+    hint:        ForwardHint,
+) -> bool {
+    let shard = shard_for_key(wire_msg_key(&msg), gossip_txs.len());
+    let mut buf = BytesMut::with_capacity(256);
+    if bincode::serde::encode_into_std_write(msg, &mut (&mut buf).writer(), bincode_cfg()).is_err() {
+        return false;
+    }
+    gossip_txs[shard].send((buf.freeze(), sender_hash, hint)).await.is_ok()
 }
 
 /// Wire envelope for `PREV_WIRE_VERSION` (v6) frames.

@@ -2,7 +2,8 @@ use crate::config::GossipConfig;
 use crate::connection::{handle_connection, ConnContext};
 use crate::error::GossipError;
 use crate::framing::{
-    bincode_cfg, shard_for_key, ForwardHint, GossipUpdate, WireMessage,
+    bincode_cfg, dispatch_gossip_send, dispatch_gossip_try_send,
+    ForwardHint, GossipUpdate, WireMessage,
 };
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
@@ -737,29 +738,14 @@ impl GossipAgent {
             SignalScope::Group(name)      => ForwardHint::Group(name.clone()),
             SignalScope::Individual(peer) => ForwardHint::Individual(peer.clone()),
         };
-        let shard = shard_for_key(&kind, self.gossip_txs.len());
-        let sender_hash = self.node_id.id_hash();
-        let mut buf = BytesMut::with_capacity(256);
-        if bincode::serde::encode_into_std_write(
+        dispatch_gossip_send(
+            &self.gossip_txs,
             WireMessage::Signal {
                 ttl: self.config.default_ttl, nonce,
                 sender: self.node_id.clone(), scope, kind, payload,
             },
-            &mut (&mut buf).writer(),
-            bincode_cfg(),
-        ).is_err() {
-            error!("Signal encode failed");
-            return false;
-        }
-        match self.gossip_txs[shard].send((buf.freeze(), sender_hash, hint)).await {
-            Ok(()) => true,
-            Err(_) => {
-                if self.state.load(Ordering::Relaxed) == STATE_RUNNING {
-                    error!("Gossip shard {} is dead; signal will not propagate", shard);
-                }
-                false
-            }
-        }
+            self.node_id.id_hash(), hint,
+        ).await
     }
 
     /// Joins a named boundary group.
@@ -962,15 +948,10 @@ impl GossipAgent {
                             value: payload,
                         };
                         apply_and_notify(&store, &subscriptions, &update);
-                        let shard = shard_for_key(&kv_key, gossip_txs.len());
-                        let mut buf = BytesMut::with_capacity(256);
-                        if bincode::serde::encode_into_std_write(
-                            WireMessage::Data(update), &mut (&mut buf).writer(), bincode_cfg(),
-                        ).is_ok() {
-                            let _ = gossip_txs[shard].try_send((
-                                buf.freeze(), node_id.id_hash(), ForwardHint::All,
-                            ));
-                        }
+                        dispatch_gossip_try_send(
+                            &gossip_txs, WireMessage::Data(update),
+                            node_id.id_hash(), ForwardHint::All, &dropped_frames,
+                        );
                     }
                 }
             }
@@ -988,15 +969,10 @@ impl GossipAgent {
                 value: Bytes::new(),
             };
             apply_and_notify(&store, &subscriptions, &tombstone);
-            let shard = shard_for_key(&kv_key, gossip_txs.len());
-            let mut buf = BytesMut::with_capacity(64);
-            if bincode::serde::encode_into_std_write(
-                WireMessage::Data(tombstone), &mut (&mut buf).writer(), bincode_cfg(),
-            ).is_ok() {
-                let _ = gossip_txs[shard].try_send((
-                    buf.freeze(), node_id.id_hash(), ForwardHint::All,
-                ));
-            }
+            dispatch_gossip_try_send(
+                &gossip_txs, WireMessage::Data(tombstone),
+                node_id.id_hash(), ForwardHint::All, &dropped_frames,
+            );
         });
         {
             let mut handles = self.task_handles.lock().unwrap_or_else(|e| e.into_inner());
@@ -1298,16 +1274,10 @@ impl GossipAgent {
                                     }),
                                 };
                                 apply_and_notify(&store, &subscriptions, &pheromone_update);
-                                let shard = shard_for_key(&load_key, gossip_txs.len());
-                                let mut buf = BytesMut::with_capacity(64);
-                                if bincode::serde::encode_into_std_write(
-                                    WireMessage::Data(pheromone_update),
-                                    &mut (&mut buf).writer(), bincode_cfg(),
-                                ).is_ok() {
-                                    let _ = gossip_txs[shard].try_send((
-                                        buf.freeze(), node_id.id_hash(), ForwardHint::All,
-                                    ));
-                                }
+                                dispatch_gossip_try_send(
+                                    &gossip_txs, WireMessage::Data(pheromone_update),
+                                    node_id.id_hash(), ForwardHint::All, &dropped_frames,
+                                );
                             }
                         } else if is_opaque && fill_ratio < eff - hint.hysteresis {
                             emit_signal(
@@ -1334,16 +1304,10 @@ impl GossipAgent {
                                 value:        Bytes::new(),
                             };
                             apply_and_notify(&store, &subscriptions, &tombstone_update);
-                            let shard = shard_for_key(&load_key, gossip_txs.len());
-                            let mut buf = BytesMut::with_capacity(64);
-                            if bincode::serde::encode_into_std_write(
-                                WireMessage::Data(tombstone_update),
-                                &mut (&mut buf).writer(), bincode_cfg(),
-                            ).is_ok() {
-                                let _ = gossip_txs[shard].try_send((
-                                    buf.freeze(), node_id.id_hash(), ForwardHint::All,
-                                ));
-                            }
+                            dispatch_gossip_try_send(
+                                &gossip_txs, WireMessage::Data(tombstone_update),
+                                node_id.id_hash(), ForwardHint::All, &dropped_frames,
+                            );
                         }
                     }
                 }
@@ -1717,53 +1681,18 @@ impl GossipAgent {
     /// Encodes `update` and delivers it to the correct gossip shard via `try_send`.
     /// Returns `false` if the channel is full or the shard has died.
     fn dispatch_update(&self, update: GossipUpdate) -> bool {
-        let shard  = shard_for_key(&update.key, self.gossip_txs.len());
-        let sender = update.sender;
-        let mut buf = BytesMut::with_capacity(256);
-        if bincode::serde::encode_into_std_write(
-            WireMessage::Data(update), &mut (&mut buf).writer(), bincode_cfg(),
-        ).is_err() {
-            error!("Gossip shard {}: encode failed", shard);
-            return false;
-        }
-        match self.gossip_txs[shard].try_send((buf.freeze(), sender, ForwardHint::All)) {
-            Ok(()) => true,
-            Err(TrySendError::Full(_)) => {
-                self.dropped_frames.fetch_add(1, Ordering::Relaxed);
-                warn!("Gossip channel full for shard {}; frame dropped", shard);
-                false
-            }
-            Err(TrySendError::Closed(_)) => {
-                if self.state.load(Ordering::Relaxed) == STATE_RUNNING {
-                    error!("Gossip shard {} is dead; update will not propagate", shard);
-                } else {
-                    warn!("Gossip shard {} not started; update stored locally only", shard);
-                }
-                false
-            }
-        }
+        dispatch_gossip_try_send(
+            &self.gossip_txs, WireMessage::Data(update),
+            self.node_id.id_hash(), ForwardHint::All, &self.dropped_frames,
+        )
     }
 
     /// Like `dispatch_update` but awaits channel capacity rather than dropping.
     async fn dispatch_update_async(&self, update: GossipUpdate) -> bool {
-        let shard  = shard_for_key(&update.key, self.gossip_txs.len());
-        let sender = update.sender;
-        let mut buf = BytesMut::with_capacity(256);
-        if bincode::serde::encode_into_std_write(
-            WireMessage::Data(update), &mut (&mut buf).writer(), bincode_cfg(),
-        ).is_err() {
-            error!("Gossip shard {}: encode failed", shard);
-            return false;
-        }
-        match self.gossip_txs[shard].send((buf.freeze(), sender, ForwardHint::All)).await {
-            Ok(()) => true,
-            Err(_) => {
-                if self.state.load(Ordering::Relaxed) == STATE_RUNNING {
-                    error!("Gossip shard {} is dead; update will not propagate", shard);
-                }
-                false
-            }
-        }
+        dispatch_gossip_send(
+            &self.gossip_txs, WireMessage::Data(update),
+            self.node_id.id_hash(), ForwardHint::All,
+        ).await
     }
 
     fn make_update(&self, key: Arc<str>, value: Bytes, is_tombstone: bool) -> GossipUpdate {
@@ -1880,29 +1809,11 @@ pub(crate) fn emit_signal(
         SignalScope::Group(name)      => ForwardHint::Group(name.clone()),
         SignalScope::Individual(peer) => ForwardHint::Individual(peer.clone()),
     };
-    let shard = shard_for_key(&kind, gossip_txs.len());
-    let sender_hash = node_id.id_hash();
-    let mut buf = BytesMut::with_capacity(256);
-    if bincode::serde::encode_into_std_write(
+    dispatch_gossip_try_send(
+        gossip_txs,
         WireMessage::Signal { ttl: default_ttl, nonce, sender: node_id.clone(), scope, kind, payload },
-        &mut (&mut buf).writer(),
-        bincode_cfg(),
-    ).is_err() {
-        error!("Signal encode failed");
-        return false;
-    }
-    match gossip_txs[shard].try_send((buf.freeze(), sender_hash, hint)) {
-        Ok(()) => true,
-        Err(TrySendError::Full(_)) => {
-            dropped_frames.fetch_add(1, Ordering::Relaxed);
-            warn!("Gossip channel full for shard {}; signal dropped", shard);
-            false
-        }
-        Err(TrySendError::Closed(_)) => {
-            warn!("Gossip shard {} not available; signal will not propagate", shard);
-            false
-        }
-    }
+        node_id.id_hash(), hint, dropped_frames,
+    )
 }
 
 // ── Background task implementations ──────────────────────────────────────────
