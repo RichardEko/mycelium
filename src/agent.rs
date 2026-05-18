@@ -634,12 +634,12 @@ impl GossipAgent {
     #[must_use]
     pub fn peer_load_rx(&self, node_id: &NodeId, kind: &str) -> watch::Receiver<Option<LoadState>> {
         let mut raw_rx = self.subscribe(format!("load/{}/{}", node_id, kind));
-        let initial = raw_rx.borrow().as_ref().and_then(|b| decode_load_state(b));
+        let initial = raw_rx.borrow().as_ref().and_then(decode_load_state);
         let (tx, rx) = watch::channel(initial);
         tokio::spawn(async move {
             loop {
                 if raw_rx.changed().await.is_err() { break; }
-                let decoded = raw_rx.borrow().as_ref().and_then(|b| decode_load_state(b));
+                let decoded = raw_rx.borrow().as_ref().and_then(decode_load_state);
                 if tx.send(decoded).is_err() { break; }
             }
         });
@@ -1012,6 +1012,32 @@ impl GossipAgent {
     /// ```
     pub fn quorum(&self, kind: &str, min_senders: usize, window: Duration) -> bool {
         self.signal_handlers.quorum(kind, min_senders, window)
+    }
+
+    /// Like [`quorum`](Self::quorum) but only counts senders that are current members
+    /// of `group` according to Layer I (`grp/{group}/`).
+    ///
+    /// Prevents ex-members from satisfying quorum after they call [`leave_group`](Self::leave_group).
+    /// A node is considered a current member if its `grp/{group}/{node_id}` key is live
+    /// (not tombstoned) in the store.
+    pub fn group_quorum(
+        &self,
+        group: &str,
+        kind: &str,
+        min_senders: usize,
+        window: Duration,
+    ) -> bool {
+        let prefix = format!("grp/{}/", group);
+        let member_hashes: AHashSet<u64> = self
+            .scan_prefix(&prefix)
+            .into_iter()
+            .filter_map(|(key, _)| {
+                key.strip_prefix(&prefix)
+                    .and_then(|s| s.parse::<NodeId>().ok())
+                    .map(|n| n.id_hash())
+            })
+            .collect();
+        self.signal_handlers.quorum_for_group(kind, &member_hashes, min_senders, window)
     }
 
     /// Starts an adaptive opacity governor for `kind`.

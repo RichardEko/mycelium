@@ -2560,6 +2560,46 @@ mod tests {
         agent_b.shutdown().await;
     }
 
+    // ── H4: group_quorum filters by current Layer I membership ────────────────
+
+    #[test]
+    fn test_group_quorum_excludes_ex_member() {
+        let agent = make_agent();
+
+        // Join the group so the boundary admits the signal and grp/workers/{node_id}
+        // is written to Layer I.
+        agent.join_group("workers");
+
+        // Emit a signal — deliver() records the sender in the sender_log.
+        // (deliver() always updates sender_log before checking handler registration.)
+        let _ = agent.emit("heartbeat", SignalScope::Group("workers".into()), Bytes::new());
+
+        // Raw quorum is satisfied (1 sender, 1 required).
+        assert!(
+            agent.quorum("heartbeat", 1, Duration::from_secs(60)),
+            "raw quorum should be satisfied"
+        );
+        // group_quorum should also be satisfied while the node is still a member.
+        assert!(
+            agent.group_quorum("workers", "heartbeat", 1, Duration::from_secs(60)),
+            "node is a current member — group_quorum should count it"
+        );
+
+        // Leave the group — tombstones grp/workers/{node_id} in Layer I.
+        agent.leave_group("workers");
+
+        // Raw quorum is still satisfied (sender_log entry remains).
+        assert!(
+            agent.quorum("heartbeat", 1, Duration::from_secs(60)),
+            "raw quorum still sees the sender_log entry"
+        );
+        // But group_quorum must exclude the ex-member.
+        assert!(
+            !agent.group_quorum("workers", "heartbeat", 1, Duration::from_secs(60)),
+            "ex-member must not satisfy group_quorum after leave_group"
+        );
+    }
+
     // ── H10: peer_load_rx yields typed LoadState ──────────────────────────────
 
     #[tokio::test]

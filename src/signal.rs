@@ -287,6 +287,26 @@ impl SignalHandlers {
             .len();
         distinct >= min_senders
     }
+
+    /// Like [`quorum`](Self::quorum) but only counts senders whose `id_hash()` is in
+    /// `member_hashes`. Prevents ex-members from satisfying quorum after they leave a group.
+    pub(crate) fn quorum_for_group(
+        &self,
+        kind: &str,
+        member_hashes: &AHashSet<u64>,
+        min_senders: usize,
+        window: Duration,
+    ) -> bool {
+        let Some(log) = self.sender_log.get(kind) else { return false };
+        let distinct = log.iter()
+            .filter(|(sender, received_at)| {
+                received_at.elapsed() <= window && member_hashes.contains(&sender.id_hash())
+            })
+            .map(|(sender, _)| sender.id_hash())
+            .collect::<AHashSet<u64>>()
+            .len();
+        distinct >= min_senders
+    }
 }
 
 // ── Pheromone trail ───────────────────────────────────────────────────────────
