@@ -196,7 +196,7 @@ impl GossipAgent {
             for (key, entry) in guard.iter() {
                 let Some(inner) = key.strip_prefix("grp/") else { continue };
                 let Some(slash) = inner.rfind('/') else { continue };
-                if &inner[slash..] != suffix { continue }
+                if inner[slash..] != suffix { continue }
                 let group = &inner[..slash];
                 if entry.data.is_some() {
                     to_insert.push(Arc::from(group));
