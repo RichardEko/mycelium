@@ -1446,8 +1446,15 @@ impl GossipAgent {
         value:  Bytes,
         config: ConsensusConfig,
     ) -> ConsensusResult {
-        // Overloaded nodes defer proportionally, giving healthier peers a head start.
-        let local_opacity = self.opacity(consensus_kind::PROPOSE);
+        // Defer if overloaded: prefer the durable pheromone trail (Layer I) as the primary
+        // signal since that is the same source voters use to abstain; fall back to the
+        // in-memory channel fill for the case where manage_opacity hasn't written a trail yet.
+        let pheromone_fill = self
+            .get(&format!("load/{}/{}", self.node_id, consensus_kind::PROPOSE))
+            .and_then(|b| decode_load_state(&b))
+            .map(|s| s.fill_ratio)
+            .unwrap_or(0.0);
+        let local_opacity = pheromone_fill.max(self.opacity(consensus_kind::PROPOSE));
         if local_opacity > 0.0 && config.ballot_retry_jitter_ms > 0 {
             let defer_ms = (local_opacity * config.ballot_retry_jitter_ms as f32 * 2.0) as u64;
             tokio::time::sleep(Duration::from_millis(defer_ms)).await;
@@ -1494,8 +1501,15 @@ impl GossipAgent {
         value:  Bytes,
         config: ConsensusConfig,
     ) -> ConsensusResult {
-        // Overloaded nodes defer proportionally, giving healthier peers a head start.
-        let local_opacity = self.opacity(consensus_kind::PROPOSE);
+        // Defer if overloaded: prefer the durable pheromone trail (Layer I) as the primary
+        // signal since that is the same source voters use to abstain; fall back to the
+        // in-memory channel fill for the case where manage_opacity hasn't written a trail yet.
+        let pheromone_fill = self
+            .get(&format!("load/{}/{}", self.node_id, consensus_kind::PROPOSE))
+            .and_then(|b| decode_load_state(&b))
+            .map(|s| s.fill_ratio)
+            .unwrap_or(0.0);
+        let local_opacity = pheromone_fill.max(self.opacity(consensus_kind::PROPOSE));
         if local_opacity > 0.0 && config.ballot_retry_jitter_ms > 0 {
             let defer_ms = (local_opacity * config.ballot_retry_jitter_ms as f32 * 2.0) as u64;
             tokio::time::sleep(Duration::from_millis(defer_ms)).await;
