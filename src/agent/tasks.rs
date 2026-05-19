@@ -3,13 +3,11 @@ use crate::error::GossipError;
 use crate::framing::{bincode_cfg, ForwardHint, WireMessage};
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
-use crate::signal::{parse_own_grp_key, SignalHandlers};
+use crate::signal::SignalHandlers;
 use crate::store::{intern_pool_len, StoreEntry};
 use crate::writer::{evict_peer_writer, get_or_spawn_writer, request_state, WriterEntry};
 use ahash::{AHashMap, AHashSet};
 use bytes::{BufMut, Bytes, BytesMut};
-use dashmap::DashMap;
-use parking_lot::RwLock;
 use std::{
     net::SocketAddr,
     sync::{
@@ -137,7 +135,7 @@ pub(super) async fn run_gossip_shard(
     shard_idx:             usize,
     mut gossip_rx:         mpsc::Receiver<(Bytes, u64, ForwardHint)>,
     bootstrap_peers:       Arc<[NodeId]>,
-    peer_writers:          Arc<DashMap<NodeId, WriterEntry>>,
+    peer_writers:          Arc<papaya::HashMap<NodeId, WriterEntry>>,
     shutdown_tx:           Arc<watch::Sender<bool>>,
     mut peer_list_rx:      watch::Receiver<Arc<[NodeId]>>,
     alive:                 Arc<AtomicBool>,
@@ -283,7 +281,7 @@ pub(super) async fn run_health_monitor(
     node_id:               NodeId,
     bootstrap_peers:       Arc<[NodeId]>,
     peers:                 Arc<papaya::HashMap<NodeId, Instant>>,
-    peer_writers:          Arc<DashMap<NodeId, WriterEntry>>,
+    peer_writers:          Arc<papaya::HashMap<NodeId, WriterEntry>>,
     peer_list_tx:          watch::Sender<Arc<[NodeId]>>,
     shutdown_tx:           Arc<watch::Sender<bool>>,
     current_ts:            Arc<AtomicU64>,
@@ -313,7 +311,7 @@ pub(super) async fn run_health_monitor(
     }
 
     for peer in &bootstrap_set {
-        request_state(peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &node_id, &hash_acc, &dropped_frames);
+        request_state(peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &node_id, &hash_acc, &dropped_frames, vec![]);
     }
 
     let mut ticker = time::interval(Duration::from_secs(interval_secs));
@@ -475,12 +473,10 @@ pub(super) async fn run_gc_task(
     seen:              Arc<ShardedSeen>,
     max_seen_entries:  usize,
     gc_alive:          Arc<AtomicBool>,
-    signal_handlers:   Arc<SignalHandlers>,
-    peer_writers:      Arc<DashMap<NodeId, WriterEntry>>,
+    peer_writers:      Arc<papaya::HashMap<NodeId, WriterEntry>>,
     intern_max_keys:   usize,
-    signal_boundary:   Arc<RwLock<crate::signal::Boundary>>,
+    signal_boundary:   Arc<parking_lot::RwLock<crate::signal::Boundary>>,
     node_id:           NodeId,
-    signal_window_secs: u64,
 ) {
     gc_alive.store(true, Ordering::Relaxed);
     let _alive_guard = AliveGuard(gc_alive.clone());
@@ -536,8 +532,6 @@ pub(super) async fn run_gc_task(
                     );
                 }
 
-                signal_handlers.trim_sender_log(Duration::from_secs(signal_window_secs));
-
                 {
                     let sub_guard = subscriptions.pin();
                     let stale: Vec<Arc<str>> = sub_guard
@@ -569,27 +563,23 @@ pub(super) async fn run_gc_task(
                     warn!("Seen-set emergency trim; {} entries remain", seen.len());
                 }
 
-                peer_writers.retain(|_, entry| !entry.handle.is_finished());
+                {
+                    let finished: Vec<NodeId> = {
+                        let guard = peer_writers.pin();
+                        guard.iter()
+                            .filter(|(_, e)| e.abort_handle.is_finished())
+                            .map(|(k, _)| k.clone())
+                            .collect()
+                    };
+                    let guard = peer_writers.pin();
+                    for id in finished { guard.remove(&id); }
+                }
 
                 // Boundary reconcile — catch-all for updates missed by the push-based path.
                 {
                     let node_id_str = node_id.to_string();
-                    let mut to_insert: Vec<Arc<str>> = Vec::new();
-                    let mut to_remove: Vec<Arc<str>> = Vec::new();
-                    {
-                        let guard = store.pin();
-                        for (key, entry) in guard.iter() {
-                            let Some(group) = parse_own_grp_key(key, &node_id_str) else { continue };
-                            if entry.data.is_some() {
-                                to_insert.push(Arc::from(group));
-                            } else {
-                                to_remove.push(Arc::from(group));
-                            }
-                        }
-                    }
                     let mut bnd = signal_boundary.write();
-                    for g in to_insert { bnd.groups.insert(g); }
-                    for g in &to_remove { bnd.groups.remove(g.as_ref()); }
+                    crate::signal::reconcile_boundary_from_store(&store, &mut bnd, &node_id_str);
                 }
             }
             _ = shutdown_rx.wait_for(|v| *v) => break,

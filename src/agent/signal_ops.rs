@@ -413,7 +413,7 @@ impl GossipAgent {
                                 let prefix = format!("{}{}/", kv_ns::QUORUM, &*kind);
                                 let store = kv_watch.store.pin();
                                 let idx   = kv_watch.prefix_index.pin();
-                                let found = if let Some(bucket) = idx.get("sys") {
+                                let found = if let Some(bucket) = idx.get(kv_ns::QUORUM.split_once('/').map_or(kv_ns::QUORUM, |(s, _)| s)) {
                                     bucket.pin().iter().any(|(k, _)| {
                                         if !k.starts_with(&*prefix) { return false; }
                                         store.get(k.as_ref())

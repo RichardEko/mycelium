@@ -5,7 +5,7 @@ use crate::consensus::{
 use super::opacity::{count_opaque_members_in_kv, count_opaque_all_in_kv};
 use crate::framing::bincode_cfg;
 use crate::node_id::NodeId;
-use crate::signal::{decode_load_state, kv_ns, SignalScope};
+use crate::signal::SignalScope;
 use ahash::{AHashMap, AHashSet};
 use bytes::{BufMut, Bytes, BytesMut};
 use std::{
@@ -89,13 +89,7 @@ impl GossipAgent {
     /// `max_age` is used for pheromone evaporation — entries older than this are
     /// treated as transparent. Ties are broken deterministically by `id_hash()`.
     pub fn suggest_leader(&self, group: &str, kind: &str, max_age: Duration) -> NodeId {
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH).unwrap_or_default()
-            .as_millis() as u64;
-        let max_age_ms = max_age.as_millis() as u64;
-
         let members: Vec<NodeId> = self.group_members(group);
-
         if members.is_empty() {
             return self.node_id.clone();
         }
@@ -113,13 +107,19 @@ impl GossipAgent {
             }
         }
 
+        // Use Layer II peer_load() instead of reading sys/load/{n}/{kind} directly.
+        // peer_load() handles freshness filtering and deserialization; only this
+        // kind's entries are kept, keyed by node_id string for O(1) lookup below.
+        let load_by_node: AHashMap<Arc<str>, f32> = self.peer_load(max_age)
+            .into_iter()
+            .filter(|(_, k, _)| k.as_ref() == kind)
+            .map(|(n, _, s)| (n, s.fill_ratio))
+            .collect();
+
         let best = members.iter().min_by(|a, b| {
             let score = |n: &NodeId| -> f32 {
-                let fill = self.get(&format!("{}{}/{}", kv_ns::LOAD, n, kind))
-                    .and_then(|b| decode_load_state(&b))
-                    .filter(|s| now_ms.saturating_sub(s.written_at_ms) <= max_age_ms)
-                    .map(|s| s.fill_ratio)
-                    .unwrap_or(0.0);
+                let n_str = n.to_string();
+                let fill = load_by_node.get(n_str.as_str()).copied().unwrap_or(0.0);
                 let trust = *trust_counts.get(&n.id_hash()).unwrap_or(&0) as f32;
                 fill / (1.0 + trust)
             };

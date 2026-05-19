@@ -26,35 +26,38 @@ pub(crate) const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
 ///     cannot decode a struct with missing trailing fields; v6 frames are decoded into
 ///     `WireMessageV6` and converted via `From`, producing `store_hash = 0` — the "no
 ///     digest" sentinel that always triggers a full snapshot (correct graceful downgrade).
+/// v8: WireMessage::StateRequest gained `key_timestamps: Vec<(Arc<str>, u64)>` for two-round
+///     delta anti-entropy. The sender includes its full key→timestamp index so the responder
+///     only sends entries that are newer or absent on the sender's side. v7 peers send
+///     StateRequest without this field; they are decoded via `WireMessageV7` and converted
+///     with `key_timestamps = vec![]` — the "no digest" sentinel that triggers a full snapshot.
 ///
 /// Rolling-upgrade policy: `read_frame` accepts frames at both `WIRE_VERSION` and
 /// `PREV_WIRE_VERSION`. When bumping WIRE_VERSION to N+1:
 ///   1. Add a `WireMessageVN` / `GossipUpdateVN` struct with the *old* field layout if
-///      the binary layout of existing variants changed. For v7 only a new field was appended
-///      to StateRequest, which is backward-compatible via the hash=0 sentinel — no struct
-///      needed. If field ORDER changes, a conversion struct IS required.
+///      the binary layout of existing variants changed.
 ///   2. Set `PREV_WIRE_VERSION = old WIRE_VERSION` (N).
-///   3. In the `FrameVersion::Previous` Data decode path, deserialize into `GossipUpdateVN`
-///      and convert to `GossipUpdate` — this avoids silent field-mapping corruption.
+///   3. In the `FrameVersion::Previous` decode path, deserialize into `WireMessageVN`
+///      and convert to `WireMessage` via `From`.
 ///   4. Forwarding always re-encodes at `WIRE_VERSION` so the cluster converges quickly.
 ///   5. After all nodes are upgraded, set `PREV_WIRE_VERSION = WIRE_VERSION` to close
 ///      the acceptance window.
 ///
-/// **Current state**: `PREV_WIRE_VERSION = 6` (one-version legacy window open).
-/// v6 peers are accepted; their StateRequest is decoded with store_hash=0 (full snapshot).
-/// When all nodes are on v7, set `PREV_WIRE_VERSION = WIRE_VERSION` to close the window.
-pub(crate) const WIRE_VERSION: u8 = 7;
+/// **Current state**: `PREV_WIRE_VERSION = 7` (one-version legacy window open).
+/// v7 peers are accepted; their StateRequest is decoded with key_timestamps=[] (full snapshot).
+/// When all nodes are on v8, set `PREV_WIRE_VERSION = WIRE_VERSION` to close the window.
+pub(crate) const WIRE_VERSION: u8 = 8;
 /// Previous wire version accepted during rolling upgrades.
 ///
-/// Set to 6 so nodes still running v6 can exchange gossip during rolling upgrades.
-/// The only wire-format difference between v6 and v7 is the extra `store_hash: u64`
-/// field in `StateRequest`; all other variants are identical. v6 `StateRequest` frames
-/// are decoded via `WireMessageV6` and converted with `store_hash = 0` (the "no digest"
-/// sentinel that triggers a full snapshot — correct and safe).
+/// Set to 7 so nodes still running v7 can exchange gossip during rolling upgrades.
+/// The only wire-format difference between v7 and v8 is the extra `key_timestamps` field
+/// in `StateRequest`; all other variants are identical. v7 `StateRequest` frames are
+/// decoded via `WireMessageV7` and converted with `key_timestamps = vec![]` (the "no
+/// delta" sentinel that triggers a full snapshot — correct and safe).
 ///
-/// After all cluster nodes are upgraded to v7, set this to `WIRE_VERSION` to close
-/// the acceptance window and reject stale v6 connections with a clear error.
-pub(crate) const PREV_WIRE_VERSION: u8 = 6;
+/// After all cluster nodes are upgraded to v8, set this to `WIRE_VERSION` to close
+/// the acceptance window and reject stale v7 connections with a clear error.
+pub(crate) const PREV_WIRE_VERSION: u8 = 7;
 
 /// Which wire version a received frame was encoded with.
 /// Used by `handle_connection` to select the appropriate decoder and to decide
@@ -128,14 +131,18 @@ pub(crate) enum WireMessage {
     Data(GossipUpdate),
     /// `known_peers` carries the sender's current peer table for passive peer discovery.
     Ping { sender: NodeId, known_peers: Vec<NodeId> },
-    /// Anti-entropy probe: ask the receiver to reply with its full store snapshot.
+    /// Anti-entropy probe: ask the receiver to reply with a delta of its store.
     ///
     /// `store_hash` is the sender's current XOR-hash of {key, timestamp} pairs (see
     /// `store::store_hash`). If the receiver's own hash matches, it replies with an
     /// empty `StateResponse` (fast-path skip). Hash `0` means "no digest" — the
-    /// receiver always sends a full snapshot. This is the sentinel value used when
-    /// decoding v6 frames that lack the field (backward-compatible rolling upgrade).
-    StateRequest { sender: NodeId, store_hash: u64 },
+    /// receiver always sends a full snapshot.
+    ///
+    /// `key_timestamps` is the sender's full (key, timestamp) index. The receiver
+    /// computes a delta: entries whose timestamp is newer than the sender's, plus any
+    /// entries absent from the sender's index. An empty vec means "no delta info" —
+    /// the receiver sends a full snapshot (backward-compat sentinel for v7 peers).
+    StateRequest { sender: NodeId, store_hash: u64, key_timestamps: Vec<(Arc<str>, u64)> },
     /// Response to `StateRequest`; contains the responder's current store.
     StateResponse { entries: Vec<SyncEntry> },
     /// An ephemeral signal propagated epidemically (Layer 2).
@@ -239,19 +246,20 @@ pub(crate) async fn dispatch_gossip_send(
     gossip_txs[shard].send((buf.freeze(), sender_hash, hint)).await.is_ok()
 }
 
-/// Wire envelope for `PREV_WIRE_VERSION` (v6) frames.
+/// Wire envelope for `PREV_WIRE_VERSION` (v7) frames.
 ///
-/// Identical to [`WireMessage`] except `StateRequest` has no `store_hash` field.
-/// Bincode fixed-int encoding has no optional/missing-field concept; decoding a v6
-/// `StateRequest` as v7 `WireMessage::StateRequest` would attempt to read 8 bytes
-/// that are not present and return an error. This struct gives the decoder the correct
-/// layout, after which [`From<WireMessageV6>`] upgrades it to a `WireMessage`.
+/// Identical to [`WireMessage`] except `StateRequest` has no `key_timestamps` field.
+/// Bincode fixed-int encoding has no optional/missing-field concept; decoding a v7
+/// `StateRequest` as v8 `WireMessage::StateRequest` would attempt to read a Vec field
+/// that is not present and error. This struct gives the decoder the correct v7 layout,
+/// after which [`From<WireMessageV7>`] upgrades it to a `WireMessage` with
+/// `key_timestamps = vec![]` (the "no delta info" sentinel — full snapshot).
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub(crate) enum WireMessageV6 {
+pub(crate) enum WireMessageV7 {
     Data(GossipUpdate),
     Ping { sender: NodeId, known_peers: Vec<NodeId> },
-    /// v6 variant — no `store_hash` field.
-    StateRequest { sender: NodeId },
+    /// v7 variant — has `store_hash` but no `key_timestamps`.
+    StateRequest { sender: NodeId, store_hash: u64 },
     StateResponse { entries: Vec<SyncEntry> },
     Signal {
         ttl:     u8,
@@ -263,17 +271,17 @@ pub(crate) enum WireMessageV6 {
     },
 }
 
-impl From<WireMessageV6> for WireMessage {
-    fn from(m: WireMessageV6) -> Self {
+impl From<WireMessageV7> for WireMessage {
+    fn from(m: WireMessageV7) -> Self {
         match m {
-            WireMessageV6::Data(u) => WireMessage::Data(u),
-            WireMessageV6::Ping { sender, known_peers } =>
+            WireMessageV7::Data(u) => WireMessage::Data(u),
+            WireMessageV7::Ping { sender, known_peers } =>
                 WireMessage::Ping { sender, known_peers },
-            WireMessageV6::StateRequest { sender } =>
-                WireMessage::StateRequest { sender, store_hash: 0 },
-            WireMessageV6::StateResponse { entries } =>
+            WireMessageV7::StateRequest { sender, store_hash } =>
+                WireMessage::StateRequest { sender, store_hash, key_timestamps: vec![] },
+            WireMessageV7::StateResponse { entries } =>
                 WireMessage::StateResponse { entries },
-            WireMessageV6::Signal { ttl, nonce, sender, scope, kind, payload } =>
+            WireMessageV7::Signal { ttl, nonce, sender, scope, kind, payload } =>
                 WireMessage::Signal { ttl, nonce, sender, scope, kind, payload },
         }
     }

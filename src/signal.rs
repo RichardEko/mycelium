@@ -14,9 +14,9 @@
 //! All signal APIs are exposed directly on [`GossipAgent`](crate::GossipAgent) — there is no
 //! separate Layer 2 wrapper type.
 
-use crate::framing::{bincode_cfg, dispatch_gossip_try_send, make_gossip_update, ForwardHint, WireMessage};
+use crate::framing::bincode_cfg;
 use crate::node_id::NodeId;
-use crate::store::{apply_and_notify, KvState};
+use crate::store::{KvState, StoreEntry};
 use ahash::AHashSet;
 use bytes::{BufMut, Bytes, BytesMut};
 use papaya::HashMap as PapayaMap;
@@ -410,28 +410,21 @@ impl SignalHandlers {
         false
     }
 
-    #[allow(clippy::type_complexity)]
-    /// Writes quorum evidence for an admitted signal to Layer I and gossips the update.
+    /// Returns the quorum-evidence key and value to write, or `None` if the existing
+    /// entry is less than 1 second old (rate-limit to prevent gossip churn).
     ///
-    /// Key: `sys/quorum/{kind}/{sender}` (see [`kv_ns::QUORUM`]). Value: 8-byte
-    /// little-endian Unix millisecond timestamp of the admission time. Rate-limited:
-    /// skips the write if an existing entry is less than 1 second old, preventing
-    /// O(signal_rate) gossip churn in busy clusters.
+    /// Key format: `sys/quorum/{kind}/{sender}` (see [`kv_ns::QUORUM`]).
+    /// Value: 8-byte little-endian Unix millisecond timestamp of the admission time.
     ///
-    /// Centralising the quorum key format here (alongside `kv_ns::QUORUM` and
-    /// `seed_sender_log`) ensures all readers and writers agree on the namespace
-    /// convention. The connection handler calls this after every admitted signal delivery
-    /// so that [`GossipAgent::quorum_persistent`] can reconstruct quorum evidence after
-    /// a process restart via anti-entropy.
-    pub(crate) fn record_quorum_evidence(
+    /// The caller is responsible for writing the entry to Layer I
+    /// (`apply_and_notify`) and gossip-dispatching it. Separating the write from
+    /// the decision keeps transport and KV-write concerns out of `SignalHandlers`.
+    pub(crate) fn quorum_evidence_payload(
         &self,
-        kind:       &Arc<str>,
-        sender:     &NodeId,
-        kv_state:   &KvState,
-        node_id:    &NodeId,
-        max_ttl:    u8,
-        gossip_txs: &Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]>,
-    ) {
+        kind:     &Arc<str>,
+        sender:   &NodeId,
+        kv_state: &KvState,
+    ) -> Option<(Arc<str>, Bytes)> {
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH).unwrap_or_default()
             .as_millis() as u64;
@@ -447,17 +440,43 @@ impl SignalHandlers {
                 .unwrap_or(true)
         };
         if should_write {
-            let upd = make_gossip_update(
-                node_id, max_ttl, quorum_key,
-                Bytes::copy_from_slice(&now_ms.to_le_bytes()), false,
-            );
-            apply_and_notify(kv_state, &upd);
-            dispatch_gossip_try_send(
-                gossip_txs, WireMessage::Data(upd),
-                node_id.id_hash(), ForwardHint::All, &kv_state.dropped_frames,
-            );
+            Some((quorum_key, Bytes::copy_from_slice(&now_ms.to_le_bytes())))
+        } else {
+            None
         }
     }
+}
+
+// ── Boundary reconciliation ───────────────────────────────────────────────────
+
+/// Reconciles `Boundary::groups` from `grp/{group}/{node_id_str}` entries in the store.
+///
+/// Live entries insert into `groups`; tombstoned entries remove. Called at startup
+/// (`rehydrate_boundary_from_kv`) and periodically by the GC task as a catch-all
+/// for membership updates missed by the push-based path in the connection handler.
+///
+/// The caller holds the `RwLock` write guard and passes `&mut Boundary` directly,
+/// keeping locking policy with the caller.
+pub(crate) fn reconcile_boundary_from_store(
+    store:       &PapayaMap<Arc<str>, StoreEntry>,
+    boundary:    &mut Boundary,
+    node_id_str: &str,
+) {
+    let mut to_insert: Vec<Arc<str>> = Vec::new();
+    let mut to_remove: Vec<Arc<str>> = Vec::new();
+    {
+        let guard = store.pin();
+        for (key, entry) in guard.iter() {
+            let Some(group) = parse_own_grp_key(key, node_id_str) else { continue };
+            if entry.data.is_some() {
+                to_insert.push(Arc::from(group));
+            } else {
+                to_remove.push(Arc::from(group));
+            }
+        }
+    }
+    for g in to_insert { boundary.groups.insert(g); }
+    for g in &to_remove { boundary.groups.remove(g.as_ref()); }
 }
 
 // ── Pheromone trail ───────────────────────────────────────────────────────────

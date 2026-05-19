@@ -2,7 +2,6 @@ use crate::framing::{bincode_cfg, write_frame, WireMessage};
 use crate::node_id::NodeId;
 use crate::store::store_hash_acc;
 use bytes::{BufMut, Bytes, BytesMut};
-use dashmap::DashMap;
 use std::{
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -14,7 +13,6 @@ use tokio::{
     io::{AsyncWriteExt, BufWriter},
     net::TcpStream,
     sync::{mpsc, watch},
-    task::JoinHandle,
     time as ttime,
 };
 use tracing::{debug, warn};
@@ -140,10 +138,15 @@ pub(crate) async fn run_peer_writer(
 
 /// Peer writer map entry. Keeps writer lifecycle co-located with peer state, bounding the
 /// global task_handles vec to the small fixed set of system tasks (listener, shards, health).
+///
+/// `abort_handle` is `Clone` (unlike `JoinHandle`), satisfying papaya's `V: Clone` bound
+/// for `compute()`. The task runs as a detached tokio task; it exits via `peer_shutdown`
+/// or the global shutdown signal. `abort_handle.is_finished()` tracks liveness.
+#[derive(Clone)]
 pub(crate) struct WriterEntry {
     pub(crate) tx:            mpsc::Sender<Bytes>,
     pub(crate) peer_shutdown: Arc<watch::Sender<bool>>,
-    pub(crate) handle:        JoinHandle<()>,
+    pub(crate) abort_handle:  tokio::task::AbortHandle,
     /// Cumulative frames dropped to this peer during reconnect backoff.
     /// Subset of the global `dropped_frames` counter; useful for identifying slow peers.
     pub(crate) dropped:       Arc<AtomicU64>,
@@ -152,77 +155,81 @@ pub(crate) struct WriterEntry {
 /// Returns the frame sender for `peer`'s writer task, spawning a new task on first use.
 ///
 /// If the existing writer task has finished (idle timeout, disconnect, or eviction),
-/// the stale map entry is replaced atomically using `and_modify` so the next caller
-/// gets a fresh sender rather than a closed one.
+/// the stale map entry is replaced. A new task is spawned OUTSIDE the papaya `compute()`
+/// callback to avoid spawning multiple tasks when the callback retries due to concurrent
+/// map mutations. A CAS-style `compute()` then installs the new entry, aborting if
+/// another racing caller already inserted a live writer — in which case the just-spawned
+/// task is immediately shut down.
 pub(crate) fn get_or_spawn_writer(
     peer: &NodeId,
-    writers: &DashMap<NodeId, WriterEntry>,
+    writers: &papaya::HashMap<NodeId, WriterEntry>,
     chan_depth: usize,
     backoff: Duration,
     idle_timeout: Duration,
     shutdown_tx: &Arc<watch::Sender<bool>>,
     dropped_frames: &Arc<AtomicU64>,
 ) -> mpsc::Sender<Bytes> {
-    writers
-        .entry(peer.clone())
-        .and_modify(|e| {
-            // Replace in-place when the writer task has finished so callers don't
-            // get a closed sender. This covers idle timeout, write failure, and eviction.
-            if e.handle.is_finished() {
-                let (tx, rx) = mpsc::channel(chan_depth);
-                let (peer_shutdown_tx, peer_shutdown_rx) = watch::channel(false);
-                let dropped = Arc::new(AtomicU64::new(0));
-                let handle = tokio::spawn(run_peer_writer(
-                    peer.clone(),
-                    rx,
-                    backoff,
-                    idle_timeout,
-                    shutdown_tx.subscribe(),
-                    peer_shutdown_rx,
-                    dropped_frames.clone(),
-                    dropped.clone(),
-                ));
-                *e = WriterEntry { tx, peer_shutdown: Arc::new(peer_shutdown_tx), handle, dropped };
-            }
-        })
-        .or_insert_with(|| {
-            let (tx, rx) = mpsc::channel(chan_depth);
-            let (peer_shutdown_tx, peer_shutdown_rx) = watch::channel(false);
-            let dropped = Arc::new(AtomicU64::new(0));
-            let handle = tokio::spawn(run_peer_writer(
-                peer.clone(),
-                rx,
-                backoff,
-                idle_timeout,
-                shutdown_tx.subscribe(),
-                peer_shutdown_rx,
-                dropped_frames.clone(),
-                dropped.clone(),
-            ));
-            WriterEntry { tx, peer_shutdown: Arc::new(peer_shutdown_tx), handle, dropped }
-        })
-        .tx
-        .clone()
+    let guard = writers.pin();
+
+    // Fast path: live writer already exists.
+    if let Some(entry) = guard.get(peer) {
+        if !entry.abort_handle.is_finished() {
+            return entry.tx.clone();
+        }
+    }
+
+    // Slow path: spawn outside compute() so retries don't create duplicate tasks.
+    let (tx, rx) = mpsc::channel(chan_depth);
+    let (peer_shutdown_tx, peer_shutdown_rx) = watch::channel(false);
+    let peer_shutdown = Arc::new(peer_shutdown_tx);
+    let dropped = Arc::new(AtomicU64::new(0));
+    let join_handle = tokio::spawn(run_peer_writer(
+        peer.clone(),
+        rx,
+        backoff,
+        idle_timeout,
+        shutdown_tx.subscribe(),
+        peer_shutdown_rx,
+        dropped_frames.clone(),
+        dropped.clone(),
+    ));
+    let abort_handle = join_handle.abort_handle();
+    drop(join_handle); // detach — task exits via peer_shutdown or global shutdown signal
+    let new_entry = WriterEntry { tx: tx.clone(), peer_shutdown: peer_shutdown.clone(), abort_handle, dropped };
+
+    // CAS insert: if a racing caller already installed a live writer, use theirs and
+    // abort the task we just spawned.
+    match guard.compute(peer.clone(), |existing| match existing {
+        Some((_, e)) if !e.abort_handle.is_finished() => papaya::Operation::Abort(e.tx.clone()),
+        _ => papaya::Operation::Insert(new_entry.clone()),
+    }) {
+        papaya::Compute::Aborted(winner_tx) => {
+            new_entry.abort_handle.abort();
+            winner_tx
+        }
+        _ => tx,
+    }
 }
 
 /// Removes `peer`'s writer from the map and signals its task to exit.
-/// Dropping the JoinHandle detaches the task; it exits shortly via peer_shutdown signal.
-pub(crate) fn evict_peer_writer(writers: &DashMap<NodeId, WriterEntry>, peer: &NodeId) {
-    if let Some((_, entry)) = writers.remove(peer) {
+pub(crate) fn evict_peer_writer(writers: &papaya::HashMap<NodeId, WriterEntry>, peer: &NodeId) {
+    let guard = writers.pin();
+    if let Some(entry) = guard.get(peer) {
         let _ = entry.peer_shutdown.send(true);
-        // handle is dropped here; the task exits shortly via peer_shutdown signal.
     }
+    guard.remove(peer);
 }
 
 /// Serialises and enqueues a `StateRequest` into `peer`'s writer channel,
 /// spawning the writer task if needed.
 ///
-/// Reads `hash_acc` (O(1)) so the receiver can skip sending a full snapshot
-/// if its store is already in sync (anti-entropy fast-path).
+/// `key_timestamps` is the sender's full (key, timestamp) index, used by the receiver
+/// to compute a delta response (v8+ delta sync). Pass `vec![]` for a full-dump request
+/// (e.g. health monitor calls, or when the local store is empty).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn request_state(
     peer: &NodeId,
-    peer_writers: &Arc<DashMap<NodeId, WriterEntry>>,
+    peer_writers: &papaya::HashMap<NodeId, WriterEntry>,
     writer_depth: usize,
     backoff: Duration,
     idle_timeout: Duration,
@@ -230,11 +237,12 @@ pub(crate) fn request_state(
     sender: &NodeId,
     hash_acc: &AtomicU64,
     dropped_frames: &Arc<AtomicU64>,
+    key_timestamps: Vec<(std::sync::Arc<str>, u64)>,
 ) {
     let hash = store_hash_acc(hash_acc);
     let mut buf = BytesMut::with_capacity(64);
     if let Err(e) = bincode::serde::encode_into_std_write(
-        WireMessage::StateRequest { sender: sender.clone(), store_hash: hash },
+        WireMessage::StateRequest { sender: sender.clone(), store_hash: hash, key_timestamps },
         &mut (&mut buf).writer(),
         bincode_cfg(),
     ) {

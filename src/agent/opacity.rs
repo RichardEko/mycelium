@@ -385,6 +385,26 @@ pub(super) fn count_opaque_members_in_kv(
     }
 }
 
+/// Returns `true` if this node has any `sys/load/{node_id}/*` entry marking `is_opaque`.
+///
+/// Encapsulates the Layer I prefix scan here in Layer II (opacity.rs) so that
+/// `ConsensusEngine` (Layer III) does not read `KvState` directly for this query.
+pub(crate) fn is_self_opaque(kv_state: &KvState, node_id: &crate::node_id::NodeId) -> bool {
+    let load_prefix = format!("{}{}/", kv_ns::LOAD, node_id);
+    let seg = kv_ns::LOAD.split_once('/').map_or(kv_ns::LOAD, |(s, _)| s);
+    let idx = kv_state.prefix_index.pin();
+    idx.get(seg).map(|bucket| {
+        let store = kv_state.store.pin();
+        bucket.pin().iter()
+            .filter(|(k, _)| k.starts_with(&*load_prefix))
+            .any(|(k, _)| store.get(k.as_ref())
+                .and_then(|e| e.data.as_ref().and_then(decode_load_state))
+                .map(|s| s.is_opaque)
+                .unwrap_or(false)
+            )
+    }).unwrap_or(false)
+}
+
 /// Counts all nodes with any opaque load entry fresher than `max_age_ms`.
 ///
 /// Used by `system_propose` to build the mid-ballot opaque-recompute callback.

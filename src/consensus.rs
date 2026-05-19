@@ -31,7 +31,7 @@ use crate::framing::{
     bincode_cfg, dispatch_gossip_send, dispatch_gossip_try_send, ForwardHint, WireMessage,
 };
 use crate::node_id::NodeId;
-use crate::signal::{decode_load_state, kv_ns, signal_kind, SignalScope};
+use crate::signal::{signal_kind, SignalScope};
 use crate::store::apply_and_notify;
 use ahash::{AHashMap, AHashSet};
 use bytes::{BufMut, Bytes, BytesMut};
@@ -317,20 +317,11 @@ impl ConsensusEngine {
     // ── Layer II bridge helpers ──────────────────────────────────────────────
 
     /// True if any `sys/load/{node_id}/*` pheromone entry is `is_opaque`.
+    ///
+    /// Delegates to the Layer II helper in `agent::opacity` so this Layer III type
+    /// does not scan `KvState` directly.
     fn is_overloaded(&self) -> bool {
-        let tc = &self.task_ctx;
-        let load_prefix = format!("{}{}/", kv_ns::LOAD, tc.node_id);
-        let idx = tc.kv_state.prefix_index.pin();
-        idx.get("sys").map(|bucket| {
-            let store = tc.kv_state.store.pin();
-            bucket.pin().iter()
-                .filter(|(k, _)| k.starts_with(&*load_prefix))
-                .any(|(k, _)| store.get(k.as_ref())
-                    .and_then(|e| e.data.as_ref().and_then(decode_load_state))
-                    .map(|s| s.is_opaque)
-                    .unwrap_or(false)
-                )
-        }).unwrap_or(false)
+        crate::agent::is_self_opaque(&self.task_ctx.kv_state, &self.task_ctx.node_id)
     }
 
     fn emit(&self, kind: Arc<str>, scope: SignalScope, payload: Bytes) {

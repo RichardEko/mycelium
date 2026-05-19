@@ -1,7 +1,7 @@
 use crate::error::GossipError;
 use crate::framing::{
-    bincode_cfg, bincode_cfg_prev, is_connection_closed,
-    read_frame, shard_for_key, ForwardHint, FrameVersion, GossipUpdate,
+    bincode_cfg, bincode_cfg_prev, dispatch_gossip_try_send, is_connection_closed,
+    make_gossip_update, read_frame, shard_for_key, ForwardHint, FrameVersion, GossipUpdate,
     SyncEntry, WireMessage, WireMessageV7, ANTI_ENTROPY_NONCE, DATA_TAG, NONCE_OFFSET, TTL_OFFSET,
 };
 use crate::signal::{parse_own_grp_key, Boundary, Signal, SignalHandlers, SignalScope};
@@ -317,9 +317,21 @@ pub(crate) async fn handle_connection(
                             sender: sender.clone(),
                             nonce,
                         });
-                        signal_handlers.record_quorum_evidence(
-                            &kind, &sender, &kv_state, &node_id, max_ttl, &gossip_txs,
-                        );
+                        // Quorum evidence: write sys/quorum/{kind}/{sender} to Layer I.
+                        // Rate-limited by quorum_evidence_payload — skips write if entry
+                        // is less than 1 s old. The write and gossip dispatch are done
+                        // here rather than inside SignalHandlers to keep transport and
+                        // KV-write concerns out of the Layer II type.
+                        if let Some((q_key, q_val)) = signal_handlers.quorum_evidence_payload(
+                            &kind, &sender, &kv_state,
+                        ) {
+                            let upd = make_gossip_update(&node_id, max_ttl, q_key, q_val, false);
+                            apply_and_notify(&kv_state, &upd);
+                            dispatch_gossip_try_send(
+                                &gossip_txs, WireMessage::Data(upd),
+                                node_id.id_hash(), ForwardHint::All, &kv_state.dropped_frames,
+                            );
+                        }
                     }
                 }
                 // Always forward — epidemic propagation regardless of scope.

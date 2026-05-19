@@ -27,6 +27,7 @@ mod tasks;
 pub(crate) use helpers::emit_signal;
 pub(crate) use helpers::emit_signal_async;
 pub(crate) use helpers::make_gossip_update;
+pub(crate) use opacity::is_self_opaque;
 
 type RosterCache = Arc<papaya::HashMap<Arc<str>, Arc<(Vec<NodeId>, std::time::Instant)>>>;
 

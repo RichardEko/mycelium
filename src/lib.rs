@@ -78,13 +78,12 @@ mod tests {
     use crate::connection::ConnContext;
     use crate::framing::{
         bincode_cfg, bincode_cfg_prev, read_frame, write_frame, GossipUpdate, SyncEntry,
-        WireMessage, WireMessageV6,
+        WireMessage, WireMessageV7,
         N_GOSSIP_SHARDS, NONCE_OFFSET, PREV_WIRE_VERSION, TTL_OFFSET,
     };
     use crate::seen::ShardedSeen;
     use crate::store::{apply_to_store, store_hash, KvState, StoreEntry};
     use bytes::{Bytes, BytesMut};
-    use dashmap::DashMap;
     use std::{
         sync::{
             atomic::{AtomicU64, Ordering},
@@ -124,9 +123,9 @@ mod tests {
         write_frame(writer, &data).await.unwrap();
     }
 
-    /// Send a raw frame tagged with `PREV_WIRE_VERSION` (v6), bypassing `write_frame`
+    /// Send a raw frame tagged with `PREV_WIRE_VERSION` (v7), bypassing `write_frame`
     /// which always stamps `WIRE_VERSION`. Used to test backward-compat decode paths.
-    async fn send_wire_v6(writer: &mut TcpStream, msg: &WireMessageV6) {
+    async fn send_wire_prev(writer: &mut TcpStream, msg: &WireMessageV7) {
         use tokio::io::AsyncWriteExt;
         let payload = bincode::serde::encode_to_vec(msg, bincode_cfg_prev()).unwrap();
         let total = (1 + payload.len()) as u32;
@@ -176,7 +175,7 @@ mod tests {
             shutdown: shutdown_tx.clone(),
             max_ttl,
             current_ts: Arc::new(AtomicU64::new(0)),
-            peer_writers: Arc::new(DashMap::new()),
+            peer_writers: Arc::new(papaya::HashMap::new()),
             writer_depth: 64,
             backoff: Duration::ZERO,
             n_shards: N_GOSSIP_SHARDS,
@@ -390,6 +389,7 @@ mod tests {
         send_wire(&mut writer, &WireMessage::StateRequest {
             sender: "127.0.0.1:4444".parse().unwrap(),
             store_hash: 0,
+            key_timestamps: vec![],
         }).await;
 
         // Give the handler time to process the message.
@@ -820,7 +820,7 @@ mod tests {
                 shutdown: shutdown_tx,
                 max_ttl: 5,
                 current_ts: Arc::new(AtomicU64::new(0)),
-                peer_writers: Arc::new(DashMap::new()),
+                peer_writers: Arc::new(papaya::HashMap::new()),
                 writer_depth: 64,
                 backoff: Duration::ZERO,
                 n_shards: N_GOSSIP_SHARDS,
@@ -1152,6 +1152,7 @@ mod tests {
         send_wire(&mut writer, &WireMessage::StateRequest {
             sender: sender_id,
             store_hash: expected_hash,
+            key_timestamps: vec![],
         }).await;
 
         let mut response_sock = accept_task.await.unwrap();
@@ -1179,14 +1180,14 @@ mod tests {
         }
     }
 
-    // A v6 StateRequest (no store_hash bytes) must be decoded correctly and trigger
-    // a full StateResponse — not a decode error that silently drops the request.
+    // A v7 StateRequest (has store_hash but no key_timestamps) must be decoded correctly
+    // and trigger a full StateResponse — not a decode error that silently drops the request.
     #[tokio::test]
-    async fn test_v6_state_request_decoded_as_no_digest() {
+    async fn test_v7_state_request_decoded_as_full_snapshot() {
         let store: Arc<papaya::HashMap<Arc<str>, StoreEntry>> = Arc::new(papaya::HashMap::new());
         store.pin().insert(
-            Arc::from("v6_key"),
-            StoreEntry { data: Some(Bytes::from_static(b"v6_val")), timestamp: 10 },
+            Arc::from("v7_key"),
+            StoreEntry { data: Some(Bytes::from_static(b"v7_val")), timestamp: 10 },
         );
 
         let response_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1209,8 +1210,8 @@ mod tests {
             sock
         });
 
-        // Send a v6-format StateRequest (no store_hash field).
-        send_wire_v6(&mut writer, &WireMessageV6::StateRequest { sender: sender_id }).await;
+        // Send a v7-format StateRequest (store_hash but no key_timestamps).
+        send_wire_prev(&mut writer, &WireMessageV7::StateRequest { sender: sender_id, store_hash: 0 }).await;
 
         let mut response_sock = accept_task.await.unwrap();
         let mut buf = BytesMut::new();
@@ -1219,14 +1220,14 @@ mod tests {
             read_frame(&mut response_sock, &mut buf),
         )
         .await
-        .expect("timed out — v6 StateRequest was likely dropped instead of decoded")
+        .expect("timed out — v7 StateRequest was likely dropped instead of decoded")
         .expect("read_frame error");
 
         let (msg, _): (WireMessage, _) = bincode::serde::decode_from_slice(&buf, bincode_cfg()).unwrap();
         match msg {
             WireMessage::StateResponse { entries } => assert!(
                 !entries.is_empty(),
-                "v6 StateRequest (store_hash=0) must trigger full snapshot, got empty response",
+                "v7 StateRequest (key_timestamps=[]) must trigger full snapshot, got empty response",
             ),
             other => panic!("expected StateResponse, got {:?}", other),
         }

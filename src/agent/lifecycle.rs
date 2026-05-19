@@ -1,5 +1,5 @@
 use crate::error::GossipError;
-use crate::signal::parse_own_grp_key;
+use crate::signal::reconcile_boundary_from_store;
 use std::{
     net::{IpAddr, SocketAddr},
     sync::{
@@ -184,12 +184,10 @@ impl GossipAgent {
             self.task_ctx.seen.clone(),
             self.config.max_seen_entries,
             self.gc_alive.clone(),
-            self.task_ctx.signal_handlers.clone(),
             self.peer_writers.clone(),
             self.config.intern_max_keys,
             self.task_ctx.signal_boundary.clone(),
             self.node_id.clone(),
-            self.config.signal_window_secs,
         ));
         self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).push(handle);
     }
@@ -225,22 +223,8 @@ impl GossipAgent {
 
     pub(crate) fn rehydrate_boundary_from_kv(&self) {
         let node_id_str = self.node_id.to_string();
-        let mut to_insert: Vec<Arc<str>> = Vec::new();
-        let mut to_remove: Vec<Arc<str>> = Vec::new();
-        {
-            let guard = self.kv_state.store.pin();
-            for (key, entry) in guard.iter() {
-                let Some(group) = parse_own_grp_key(key, &node_id_str) else { continue };
-                if entry.data.is_some() {
-                    to_insert.push(Arc::from(group));
-                } else {
-                    to_remove.push(Arc::from(group));
-                }
-            }
-        }
         let mut bnd = self.task_ctx.signal_boundary.write();
-        for g in to_insert { bnd.groups.insert(g); }
-        for g in &to_remove { bnd.groups.remove(g.as_ref()); }
+        reconcile_boundary_from_store(&self.kv_state.store, &mut bnd, &node_id_str);
     }
 
     /// Signals all background tasks to stop and waits up to `timeout` for them to exit.
