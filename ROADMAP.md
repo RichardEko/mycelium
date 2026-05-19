@@ -1,7 +1,7 @@
 # Mycelium — Engineering Roadmap
 
-> **Status:** Layer 1 complete. Layer 2 complete. Layers 3–5 planned.
-> **Last updated:** 2026-05-14
+> **Status:** Layer 1 complete. Layer 2 complete. Layer III (Consensus) complete. Layers 3–5 (Service Patterns / AI / Observability) planned.
+> **Last updated:** 2026-05-19
 
 ---
 
@@ -76,14 +76,21 @@ is a guardrail on the path to that.
 │  Streaming LLM calls · service routing · connection management     │
 │  Signal carries a ticket; HTTP carries the weight                  │
 ├────────────────────────────────────────────────────────────────────┤
+│  Layer III: Consensus                                [COMPLETE]    │
+│  ConsensusEngine · epidemic two-phase voting · OpaqueRecompute     │
+│  group_propose · system_propose · ConsensusResult                  │
+│  KV-backed committed slots · ballot loop · opaque-member aware     │
+├────────────────────────────────────────────────────────────────────┤
 │  Layer 2: Signal / Boundary Mesh                     [COMPLETE]    │
-│  advertise · signal_once · last_signal · opacity                   │
-│  watch · quorum · suppress/unsuppress · manage_opacity             │
+│  advertise · advertise_persistent · signal_once · last_signal      │
+│  watch · quorum · quorum_persistent · suppress · manage_opacity    │
 │  System / Group / Individual scopes · heartbeat-driven retry       │
+│  epidemic_extra_peers · listener auto-restart · peer_drop_counts   │
 ├────────────────────────────────────────────────────────────────────┤
 │  Layer 1: Gossip Transport                           [COMPLETE]    │
 │  GossipAgent · LWW KV · anti-entropy · zero-copy fan-out           │
 │  max_forwarding_peers · max_peers · dropped_frames counter         │
+│  prefix_index · gossip_shard_fill · shutdown-race protection       │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -114,18 +121,29 @@ The substrate. Lock-free epidemic KV propagation. This layer knows nothing about
 agents, signals, or scopes. It is intentionally general — a high-performance replication
 primitive any layer can build on.
 
-**What was hardened in 2026-05-14:**
-- `max_forwarding_peers` config field — caps gossip fan-out targets. Set to
-  `bootstrap_peers.len()` for fixed-topology meshes to prevent O(N²) forwarding traffic.
-- `max_peers` config field — caps the peer *table* (piggybacked peer discovery via Ping). Without
-  this cap, every agent in a 256-node cluster eventually learns all 256 others and the health
-  monitor opens persistent connections to each, accumulating ~65,000 file descriptors and
-  saturating the tokio runtime. Set to `bootstrap_peers.len()` for grid/ring topologies.
-- `dropped_frames: u64` in `SystemStats` — cumulative counter of silently-dropped gossip frames
-  (channel-full). Previously invisible; now the first diagnostic to check when writes fail to
-  propagate. Incremented at both the agent→shard and shard→peer-writer drop sites.
-- `writer_channel_depth` doc clarified as a **correctness threshold**, not a performance knob.
+**What was hardened through 2026-05-19:**
+- `max_forwarding_peers` — caps gossip fan-out targets per shard. Set to `bootstrap_peers.len()`
+  for fixed-topology meshes to prevent O(N²) forwarding traffic.
+- `max_peers` — caps the peer *table* (piggybacked peer discovery via Ping). Without this cap,
+  every agent in a 256-node cluster eventually learns all 256 others and the health monitor opens
+  persistent connections to each. Set to `bootstrap_peers.len()` for grid/ring topologies.
+- `dropped_frames: u64` in `SystemStats` — cumulative counter of silently-dropped gossip frames.
+  Incremented at both the agent→shard and shard→peer-writer drop sites. A saturation warning
+  (`WARN`) fires every 1 000th cumulative drop to surface channel backpressure in logs.
+- `writer_channel_depth` default raised to `256` and documented as a **correctness threshold**.
   When full, frames are silently dropped. Sizing formula documented on the field.
+- `epidemic_extra_peers` — replaces the former hardcoded `EPIDEMIC_K = 3` constant. Configurable
+  per-deployment; raise to 5–7 for clusters > 1 000 nodes, lower to 1–2 for small clusters.
+- Listener auto-restart with exponential backoff (100 ms → 30 s cap) on fatal TCP accept errors.
+  Previously a listener crash left the node unreachable until the process was restarted.
+- `get_or_spawn_writer` shutdown race fix: checks `*shutdown_tx.borrow()` before spawning a new
+  peer writer, returning a dead sender immediately if shutdown is already active. In-flight
+  connection handlers can no longer insert unkillable writer tasks after `shutdown_with_timeout`.
+- `peer_drop_counts()` — returns per-peer cumulative frame-drop counters, allowing operators to
+  identify which specific peers are slow or unreachable rather than just seeing the global total.
+- `quorum_written` in-memory rate-limit on `SignalHandlers` — tracks when each `sys/quorum/` key
+  was last written (max once/second), replacing a per-call KV store read with an in-memory check.
+  Evicted in `trim_sender_log` when entries age past `signal_window_secs`.
 
 **Performance characteristics:**
 - Lock-free hot path: `papaya::HashMap` for store, peers, subscriptions; no mutex on the
@@ -165,10 +183,16 @@ agent.system_stats() -> SystemStats     // includes dropped_frames
 | Field | Default | Purpose |
 |---|---|---|
 | `max_forwarding_peers` | `i64::MAX` | Cap gossip targets; set to `bootstrap_peers.len()` for fixed-topology meshes |
-| `writer_channel_depth` | `64` | Per-peer outbound channel depth (ring buffer). **Correctness threshold** — size to `N × fan_out` |
+| `writer_channel_depth` | `256` | Per-peer outbound channel depth (ring buffer). **Correctness threshold** — size to `N × fan_out` |
 | `health_check_interval_secs` | `10` | Peer liveness ping interval |
 | `default_ttl` | `5` | Hops before a message stops propagating |
 | `gossip_shards` | `min(CPU, 16)` | Gossip worker tasks; set to `1` for demo/debug to cut task count |
+| `epidemic_extra_peers` | `3` | Random non-member peers added to Group-scoped signal fan-out. Raise to 5–7 for clusters > 1 000 nodes |
+| `group_aware_forwarding` | `true` | Route Group signals to members + `epidemic_extra_peers`. `false` = broadcast all |
+| `max_peers` | `i64::MAX` | Cap the peer table; set to `bootstrap_peers.len()` for grid/ring topologies |
+| `writer_idle_timeout_secs` | `0` | Close idle peer TCP connections after N seconds (`0` = no timeout) |
+| `signal_window_secs` | `600` | Sender-log and `quorum_written` retention window |
+| `max_store_entries` | `0` | Hard cap on live KV entries (`0` = unlimited) |
 
 **Future Layer 1 improvement (not blocking):**
 Activity-weighted forwarding — prefer recently-active peers over randomly-discovered ones.
@@ -203,6 +227,9 @@ agent.signal_once(kind, timeout, predicate).await -> Option<Signal>
 
 // ── Periodic heartbeat ───────────────────────────────────────────────────
 agent.advertise(kind, scope, interval, payload_fn) -> AdvertiseHandle
+// Like advertise, but also writes payload to Layer I (key: svc/{kind}/{node_id}).
+// Tombstoned automatically on drop/shutdown. Lets late joiners discover via scan_prefix.
+agent.advertise_persistent(kind, scope, interval, payload_fn) -> AdvertiseHandle
 
 // ── Fault detection ───────────────────────────────────────────────────────
 agent.last_signal(kind) -> Option<Instant>       // when was kind last delivered here?
@@ -210,6 +237,8 @@ agent.watch(kind, threshold, on_stale) -> WatchHandle  // calls on_stale() when 
 
 // ── Threshold activation ─────────────────────────────────────────────────
 agent.quorum(kind, min_senders, window) -> bool  // ≥ min_senders distinct nodes in window?
+// Same as quorum but reads from sys/quorum/ in Layer I — survives process restarts.
+agent.quorum_persistent(kind, window) -> usize   // count of distinct senders in window
 
 // ── Inhibition / refractory period ──────────────────────────────────────
 agent.suppress(kind, duration)                   // block kind delivery for duration
@@ -233,12 +262,14 @@ The mesh is not a black box. Every observable dimension has a dedicated query:
 | Was a kind heard recently? | `last_signal(kind)` | Last delivery timestamp |
 | Has a kind gone silent? | `watch(kind, threshold, cb)` | Calls `cb` when silent > threshold |
 | Have K distinct nodes checked in? | `quorum(kind, K, window)` | Consensus-adjacent readiness |
+| Have K nodes checked in (restart-safe)? | `quorum_persistent(kind, window)` | Reads `sys/quorum/` from Layer I |
 | Is this node refusing a kind? | `is_suppressed(kind)` | Active inhibition in effect |
 | How loaded is this node's intake? | `opacity(kind)` | Fill ratio 0.0–1.0 |
 | Are peers notified of overload? | `manage_opacity(...)` | Emits `boundary.opaque` to peers |
 | What groups is this node in? | `groups()` | Current boundary memberships |
 | How many workers are alive? | `scan_prefix("load/")` | Pheromone trail count (Layer 1) |
 | Are gossip writes being lost? | `system_stats().dropped_frames` | Cumulative drop counter |
+| Which peers are dropping frames? | `peer_drop_counts()` | Per-peer cumulative drop count |
 
 **Observability scenario — diagnosing a stalled worker pool:**
 
@@ -651,7 +682,9 @@ Weeks:  0         2          4          6          8         10        12
 |---|---|---|
 | Layer 1 | Gossip transport + KV, topology controls, diagnostics | **Complete** |
 | Layer 2 | Signal/Boundary Mesh, advertise, signal_once, opacity | **Complete** |
-| Layer 2 | watch, quorum, suppress/unsuppress, manage_opacity | **Complete** |
+| Layer 2 | watch, quorum, quorum_persistent, suppress/unsuppress, manage_opacity | **Complete** |
+| Layer 2 | advertise_persistent, epidemic_extra_peers, listener auto-restart | **Complete** |
+| Layer III | ConsensusEngine, epidemic two-phase voting, group_propose | **Complete** |
 | Phase 3 | Actor/Event, RPC, bulk HTTP, streaming | Planned |
 | Phase 4 | MCP bridge, AI coordination, supervision trees | Planned |
 | Phase 5 | Metrics, Prometheus exporter | Planned |
@@ -671,7 +704,7 @@ hot-path only — no network I/O.
 | `kv/get` (hit) | 16 ns | Lock-free papaya read |
 | `kv/get` (miss) | 13 ns | Same path, no allocation on miss |
 
-### Layer 1 — `scan_prefix` (O(n))
+### Layer 1 — `scan_prefix` (prefix-indexed fast path)
 
 | Store size | Matching entries | Median |
 |---|---|---|
@@ -681,9 +714,10 @@ hot-path only — no network I/O.
 | 10,000 | 100 | 49 µs |
 | 100,000 | 10 | 622 µs |
 
-`scan_prefix` is a full store scan. At typical pheromone-trail store sizes (100–1,000 entries)
-the cost is negligible relative to network latency. The 1 ms threshold falls around 100,000
-entries — introduce a prefix index if Layer 3/4 activity grows the store to that scale.
+`scan_prefix` uses a `prefix_index` for an O(|segment_keys|) fast path when the first path
+segment is a known prefix (e.g. `"load/"`, `"grp/"`, `"svc/"`, `"sys/"`). Unknown prefixes
+fall back to an O(store_size) full scan. At typical pheromone-trail sizes (100–1,000 entries
+per segment) the cost is negligible relative to network latency.
 
 ### Layer 2 — Signal Fan-out
 

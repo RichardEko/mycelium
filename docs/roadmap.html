@@ -612,6 +612,7 @@
   <div class="hero-badges">
     <span class="badge"><span class="dot dot-live"></span> Layer 1: Transport — Complete</span>
     <span class="badge"><span class="dot dot-live"></span> Layer 2: Signal / Boundary Mesh — Complete · 107 tests</span>
+    <span class="badge"><span class="dot dot-live"></span> Layer III: Consensus — Complete</span>
     <span class="badge"><span class="dot dot-planned"></span> Layer 3: Service Patterns — Next</span>
     <span class="badge"><span class="dot dot-future"></span> Layers 4–5: AI Integration + Observability — Planned</span>
   </div>
@@ -757,19 +758,35 @@
         </div>
       </div>
       <div class="stack-row">
+        <div class="stack-num sn-2" style="background:rgba(210,168,255,0.05);color:var(--accent3);border-right:2px solid var(--accent3);">Layer<br>III</div>
+        <div class="stack-body">
+          <div class="stack-title">Consensus <span class="phase-tag tag-done">Complete</span></div>
+          <p class="stack-desc">Lightweight epidemic two-phase agreement on top of the signal mesh — no extra wire format, no separate consensus port. All consensus messages ride existing Signal frames. Committed values are written to <code>consensus/committed/{slot}</code> and anti-entropy-synced to late joiners. Opacity-aware: opaque members are excluded from quorum calculation.</p>
+          <div class="chips">
+            <span class="chip">ConsensusEngine</span>
+            <span class="chip">group_propose · system_propose</span>
+            <span class="chip">ConsensusResult</span>
+            <span class="chip">OpaqueRecompute</span>
+            <span class="chip">epidemic two-phase voting</span>
+            <span class="chip">consensus_kind · consensus_ns</span>
+          </div>
+        </div>
+      </div>
+      <div class="stack-row">
         <div class="stack-num sn-2">Layer<br>2</div>
         <div class="stack-body">
           <div class="stack-title">Signal / Boundary Mesh <span class="phase-tag tag-done">Complete · 107 tests</span></div>
-          <p class="stack-desc">Ephemeral events propagate epidemically. Boundaries (local receptors) decide action. Variable opacity creates emergent backpressure under load. Active inhibition provides refractory periods. Fault detection, threshold activation, and proactive peer notification round out the layer.</p>
+          <p class="stack-desc">Ephemeral events propagate epidemically. Boundaries (local receptors) decide action. Variable opacity creates emergent backpressure under load. Active inhibition provides refractory periods. Fault detection, threshold activation, proactive peer notification, and persistent advertisement round out the layer.</p>
           <div class="chips">
             <span class="chip">signal_rx · emit · signal_once</span>
-            <span class="chip">advertise · last_signal</span>
-            <span class="chip">watch · quorum</span>
+            <span class="chip">advertise · advertise_persistent</span>
+            <span class="chip">last_signal · watch</span>
+            <span class="chip">quorum · quorum_persistent</span>
             <span class="chip">suppress · unsuppress</span>
             <span class="chip">manage_opacity · opacity()</span>
             <span class="chip">System / Group / Individual</span>
-            <span class="chip">pheromone trails</span>
-            <span class="chip">boundary.opaque</span>
+            <span class="chip">epidemic_extra_peers</span>
+            <span class="chip">pheromone trails · boundary.opaque</span>
           </div>
         </div>
       </div>
@@ -777,15 +794,17 @@
         <div class="stack-num sn-1">Layer<br>1</div>
         <div class="stack-body">
           <div class="stack-title">Gossip Transport <span class="phase-tag tag-done">Complete</span></div>
-          <p class="stack-desc">Lock-free epidemic KV propagation. LWW conflict resolution, anti-entropy sync, zero-copy fan-out. The bloodstream — intentionally general, knows nothing about contracts or signals. <code>system_stats().dropped_frames</code> is the primary propagation health indicator.</p>
+          <p class="stack-desc">Lock-free epidemic KV propagation. LWW conflict resolution, anti-entropy sync, zero-copy fan-out. The bloodstream — intentionally general, knows nothing about contracts or signals. <code>system_stats().dropped_frames</code> is the primary propagation health indicator. Listener auto-restarts transparently on fatal accept errors.</p>
           <div class="chips">
             <span class="chip">GossipAgent</span>
             <span class="chip">papaya lock-free</span>
             <span class="chip">ShardedSeen</span>
             <span class="chip">zero-copy TTL</span>
             <span class="chip">16KB coalesce</span>
+            <span class="chip">prefix_index</span>
             <span class="chip">max_peers · max_forwarding_peers</span>
-            <span class="chip">dropped_frames counter</span>
+            <span class="chip">dropped_frames · peer_drop_counts</span>
+            <span class="chip">listener auto-restart</span>
           </div>
         </div>
       </div>
@@ -852,17 +871,15 @@ agent.<span class="fn">leave_group</span>(<span class="str">"nlp"</span>);
 <span class="kw">let</span> groups: <span class="ty">Vec</span>&lt;<span class="ty">Arc</span>&lt;<span class="ty">str</span>&gt;&gt; = agent.<span class="fn">groups</span>();  <span class="cmt">// current boundary memberships</span>
 
 <span class="cmt">// ── Periodic heartbeat + pheromone trail ──────────────────────────────────</span>
-<span class="kw">let</span> load_key = <span class="mac">format!</span>(<span class="str">"load/{}"</span>, agent.<span class="fn">node_id</span>());
 <span class="kw">let</span> _advert = agent.<span class="fn">advertise</span>(
     signal_kind::<span class="ty">CONTRACT_AVAILABLE</span>,
     <span class="ty">SignalScope</span>::<span class="ty">Group</span>(<span class="str">"nlp"</span>.<span class="fn">into</span>()),
     <span class="ty">Duration</span>::<span class="fn">from_secs</span>(<span class="lit">10</span>),
-    <span class="kw">move</span> || {
-        <span class="kw">let</span> state = <span class="ty">LoadState</span> { queue_depth: QUEUE.<span class="fn">len</span>(), written_at_ms: <span class="fn">unix_ms_now</span>() };
-        agent2.<span class="fn">set</span>(load_key.<span class="fn">clone</span>(), <span class="fn">encode</span>(&amp;state));  <span class="cmt">// pheromone trail — persists</span>
-        <span class="fn">encode</span>(&amp;state)                                    <span class="cmt">// signal payload — fast delivery</span>
-    },
+    <span class="kw">move</span> || <span class="fn">encode</span>(&amp;<span class="ty">LoadState</span> { .. }),
 );
+<span class="cmt">// advertise_persistent also writes svc/{kind}/{node_id} to Layer I on every tick.</span>
+<span class="cmt">// Late joiners discover via scan_prefix("svc/"); tombstoned on drop/shutdown.</span>
+<span class="kw">let</span> _advert = agent.<span class="fn">advertise_persistent</span>(kind, scope, interval, payload_fn);
 
 <span class="cmt">// ── Emit / receive ────────────────────────────────────────────────────────</span>
 agent.<span class="fn">emit</span>(<span class="str">"invoke"</span>, <span class="ty">SignalScope</span>::<span class="ty">Group</span>(<span class="str">"nlp"</span>.<span class="fn">into</span>()), payload);
@@ -882,6 +899,8 @@ agent.<span class="fn">emit</span>(<span class="str">"invoke"</span>, <span clas
 <span class="cmt">// Returns true when ≥ min_senders distinct NodeIds heard in window.</span>
 <span class="kw">if</span> agent.<span class="fn">quorum</span>(signal_kind::<span class="ty">CLUSTER_EVENT</span>, <span class="lit">3</span>, <span class="ty">Duration</span>::<span class="fn">from_secs</span>(<span class="lit">10</span>)) {
     <span class="fn">start_leader_election</span>();
+<span class="cmt">// quorum_persistent reads sys/quorum/ from Layer I — survives restarts.</span>
+<span class="kw">let</span> n = agent.<span class="fn">quorum_persistent</span>(signal_kind::<span class="ty">CLUSTER_EVENT</span>, <span class="ty">Duration</span>::<span class="fn">from_secs</span>(<span class="lit">60</span>));
 }
 
 <span class="cmt">// ── Inhibition — refractory period ───────────────────────────────────────</span>
@@ -1634,7 +1653,7 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
 
   <!-- ── Footer ── -->
   <div style="margin-top:72px; padding-top:24px; border-top:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
-    <span style="font-size:12px; color:var(--muted);">gossip_protocol · Engineering Roadmap · 2026-05-14</span>
+    <span style="font-size:12px; color:var(--muted);">gossip_protocol · Engineering Roadmap · 2026-05-19</span>
     <span style="font-size:12px; color:var(--muted);">Layers 1 &amp; 2 complete · Layer 3 next · Chemical signalling + stigmergy + threshold activation</span>
   </div>
 
