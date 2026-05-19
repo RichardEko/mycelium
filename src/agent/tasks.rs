@@ -24,7 +24,6 @@ use tokio::{
 };
 use tracing::{debug, error, warn};
 
-use super::EPIDEMIC_K;
 
 // ── Liveness guards ────────────────────────────────────────────────────────────
 
@@ -68,17 +67,23 @@ pub(super) struct ListenerContext {
     pub(super) conn_sem:       Arc<Semaphore>,
     pub(super) listener_alive: Arc<AtomicUsize>,
     pub(super) max_conn:       usize,
+    /// Bind address for listener restart on fatal accept error.
+    pub(super) addr:           SocketAddr,
+    /// TCP accept-queue depth used when recreating the listener socket.
+    pub(super) tcp_backlog:    u32,
 }
 
 // ── Task implementations ───────────────────────────────────────────────────────
 
-pub(super) async fn run_listener_task(listener: TcpListener, lctx: ListenerContext) {
-    let ListenerContext { conn, conn_sem, listener_alive, max_conn } = lctx;
+pub(super) async fn run_listener_task(mut listener: TcpListener, lctx: ListenerContext) {
+    let ListenerContext { conn, conn_sem, listener_alive, max_conn, addr, tcp_backlog } = lctx;
     let mut shutdown_rx = conn.shutdown.subscribe();
     let mut conn_set: JoinSet<()> = JoinSet::new();
     let mut retry_delay = false;
+    let mut need_restart = false;
     listener_alive.fetch_add(1, Ordering::Relaxed);
     let _guard = ListenerGuard { count: listener_alive.clone(), shutdown_tx: conn.shutdown.clone() };
+    let mut restart_backoff = Duration::from_millis(100);
 
     loop {
         if retry_delay {
@@ -89,36 +94,59 @@ pub(super) async fn run_listener_task(listener: TcpListener, lctx: ListenerConte
             }
         }
 
+        // Restart path: backoff sleep then rebind the socket.
+        // Handled at the top of the loop (outside any select!) to avoid nested borrows.
+        if need_restart {
+            need_restart = false;
+            if *shutdown_rx.borrow() { break; }
+            time::sleep(restart_backoff).await;
+            if *shutdown_rx.borrow() { break; }
+            restart_backoff = (restart_backoff * 2).min(Duration::from_secs(30));
+            match new_listener(addr, tcp_backlog).await {
+                Ok(new) => {
+                    listener = new;
+                    error!("Listener on {} restarted successfully", addr);
+                }
+                Err(e) => {
+                    error!("Listener restart failed for {}: {}; retrying", addr, e);
+                    need_restart = true;
+                }
+            }
+            continue;
+        }
+
         tokio::select! {
             result = listener.accept() => {
                 match result {
-                    Ok((socket, addr)) => {
+                    Ok((socket, peer_addr)) => {
+                        restart_backoff = Duration::from_millis(100);
                         if let Err(e) = socket.set_nodelay(true) {
-                            warn!("set_nodelay failed for {}: {}", addr, e);
+                            warn!("set_nodelay failed for {}: {}", peer_addr, e);
                         }
                         match conn_sem.clone().try_acquire_owned() {
                             Ok(permit) => {
                                 let ctx = conn.clone();
                                 conn_set.spawn(async move {
                                     let _permit = permit;
-                                    if let Err(e) = handle_connection(socket, addr, ctx).await {
-                                        warn!("Connection error from {}: {}", addr, e);
+                                    if let Err(e) = handle_connection(socket, peer_addr, ctx).await {
+                                        warn!("Connection error from {}: {}", peer_addr, e);
                                     }
                                 });
                             }
                             Err(_) => {
-                                warn!("Connection limit ({}) reached, dropping {}", max_conn, addr);
+                                warn!("Connection limit ({}) reached, dropping {}", max_conn, peer_addr);
                             }
                         }
                     }
                     Err(e) => {
                         use std::io::ErrorKind;
                         if matches!(e.kind(), ErrorKind::InvalidInput | ErrorKind::InvalidData) {
-                            error!("Fatal accept error: {}; listener stopping", e);
-                            break;
+                            error!("Fatal accept error on {}: {}; restarting in {:?}", addr, e, restart_backoff);
+                            need_restart = true;
+                        } else {
+                            warn!("Accept error (transient, retrying in 50ms): {}", e);
+                            retry_delay = true;
                         }
-                        warn!("Accept error (transient, retrying in 50ms): {}", e);
-                        retry_delay = true;
                     }
                 }
                 while conn_set.try_join_next().is_some() {}
@@ -132,20 +160,21 @@ pub(super) async fn run_listener_task(listener: TcpListener, lctx: ListenerConte
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_gossip_shard(
-    shard_idx:             usize,
-    mut gossip_rx:         mpsc::Receiver<(Bytes, u64, ForwardHint)>,
-    bootstrap_peers:       Arc<[NodeId]>,
-    peer_writers:          Arc<papaya::HashMap<NodeId, WriterEntry>>,
-    shutdown_tx:           Arc<watch::Sender<bool>>,
-    mut peer_list_rx:      watch::Receiver<Arc<[NodeId]>>,
-    alive:                 Arc<AtomicBool>,
-    writer_depth:          usize,
-    backoff:               Duration,
-    idle_timeout:          Duration,
-    max_forwarding_peers:  usize,
-    dropped_frames:        Arc<AtomicU64>,
+    shard_idx:              usize,
+    mut gossip_rx:          mpsc::Receiver<(Bytes, u64, ForwardHint)>,
+    bootstrap_peers:        Arc<[NodeId]>,
+    peer_writers:           Arc<papaya::HashMap<NodeId, WriterEntry>>,
+    shutdown_tx:            Arc<watch::Sender<bool>>,
+    mut peer_list_rx:       watch::Receiver<Arc<[NodeId]>>,
+    alive:                  Arc<AtomicBool>,
+    writer_depth:           usize,
+    backoff:                Duration,
+    idle_timeout:           Duration,
+    max_forwarding_peers:   usize,
+    dropped_frames:         Arc<AtomicU64>,
     group_aware_forwarding: bool,
-    prefix_index:          Arc<crate::store::PrefixIndex>,
+    epidemic_extra_peers:   usize,
+    prefix_index:           Arc<crate::store::PrefixIndex>,
 ) {
     alive.store(true, Ordering::Relaxed);
     let _alive_guard = AliveGuard(alive.clone());
@@ -256,7 +285,7 @@ pub(super) async fn run_gossip_shard(
                                 .filter(|p| p.id_hash() != sender_hash && !members.contains(*p))
                                 .collect();
                             if !non_members.is_empty() {
-                                let k = EPIDEMIC_K.min(non_members.len());
+                                let k = epidemic_extra_peers.min(non_members.len());
                                 let start = fastrand::usize(0..non_members.len());
                                 for i in 0..k {
                                     let peer = non_members[(start + i) % non_members.len()];

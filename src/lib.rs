@@ -1520,7 +1520,7 @@ mod tests {
     async fn test_group_signal_only_reaches_members() {
         // 3-node cluster: A and B join group "team"; C does not.
         // With group_aware_forwarding enabled, A's shard forwards Group("team")
-        // signals only to known members + EPIDEMIC_K random others.
+        // signals only to known members + epidemic_extra_peers random others.
         // Regardless of forwarding, C's Boundary must block local delivery
         // (C never joined "team") — its handler must not fire.
         let (port_a, port_b, port_c) = (alloc_port(), alloc_port(), alloc_port());

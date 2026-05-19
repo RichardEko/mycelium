@@ -302,10 +302,7 @@ pub(crate) async fn handle_connection(
                         SignalScope::Individual(_) => true,
                         _ => {
                             let handler_fill = signal_handlers.fill_ratio(&kind);
-                            let shard_fill: f32 = gossip_txs.iter()
-                                .map(|tx| { let max = tx.max_capacity(); if max == 0 { 0.0_f32 } else { 1.0 - tx.capacity() as f32 / max as f32 } })
-                                .fold(0.0_f32, f32::max);
-                            let combined = handler_fill.max(shard_fill);
+                            let combined = handler_fill.max(crate::framing::gossip_shard_fill(&gossip_txs));
                             combined == 0.0 || fastrand::f32() >= combined
                         }
                     };
@@ -323,7 +320,7 @@ pub(crate) async fn handle_connection(
                         // here rather than inside SignalHandlers to keep transport and
                         // KV-write concerns out of the Layer II type.
                         if let Some((q_key, q_val)) = signal_handlers.quorum_evidence_payload(
-                            &kind, &sender, &kv_state,
+                            &kind, &sender,
                         ) {
                             let upd = make_gossip_update(&node_id, max_ttl, q_key, q_val, false);
                             apply_and_notify(&kv_state, &upd);

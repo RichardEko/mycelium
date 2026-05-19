@@ -8,7 +8,7 @@ use std::{
 };
 use tokio::{sync::watch, time};
 
-use super::{emit_signal, GossipAgent, SystemStats, STATE_RUNNING};
+use super::{emit_signal, AgentState, GossipAgent, SystemStats};
 
 impl GossipAgent {
     /// Returns this node's identifier.
@@ -246,7 +246,7 @@ impl GossipAgent {
             );
         });
         {
-            let mut handles = self.task_handles.lock().unwrap_or_else(|e| e.into_inner());
+            let mut handles = self.task_handles_lock();
             handles.retain(|h| !h.is_finished());
             handles.push(handle);
         }
@@ -321,7 +321,7 @@ impl GossipAgent {
     /// window between `start()` returning and the shard tasks being scheduled by
     /// the tokio runtime. This is normal and resolves on the next call.
     pub fn system_stats(&self) -> SystemStats {
-        let running = self.state.load(Ordering::Relaxed) == STATE_RUNNING;
+        let running = AgentState::from_u8(self.state.load(Ordering::Relaxed)) == AgentState::Running;
         let gossip_shard_queue_depths: Vec<usize> = self.task_ctx.gossip_txs.iter()
             .map(|tx| tx.max_capacity() - tx.capacity())
             .collect();

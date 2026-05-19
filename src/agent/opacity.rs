@@ -166,13 +166,7 @@ impl GossipAgent {
                         // Shard backpressure: a saturated gossip shard means signals are
                         // being dropped before they reach any handler. Include it in the
                         // load metric so opacity triggers before handlers see the pressure.
-                        let shard_fill: f32 = ctx.gossip_txs.iter()
-                            .map(|tx| {
-                                let max = tx.max_capacity();
-                                if max == 0 { 0.0_f32 } else { 1.0 - tx.capacity() as f32 / max as f32 }
-                            })
-                            .fold(0.0_f32, f32::max);
-                        let fill_ratio   = handler_fill.max(shard_fill);
+                        let fill_ratio = handler_fill.max(crate::framing::gossip_shard_fill(&ctx.gossip_txs));
                         // trend_factor in [0, 0.4]: rising 0.2/tick reduces threshold by 40%.
                         let trend        = fill_ratio - prev_fill;
                         let trend_factor = (trend.max(0.0) * 2.0).min(0.4);
@@ -243,7 +237,7 @@ impl GossipAgent {
             }
         });
         {
-            let mut handles = self.task_handles.lock().unwrap_or_else(|e| e.into_inner());
+            let mut handles = self.task_handles_lock();
             handles.retain(|h| !h.is_finished());
             handles.push(handle);
         }
@@ -261,13 +255,7 @@ impl GossipAgent {
     /// fill ratio, so opacity triggers before signals are shed at the transport layer.
     pub fn opacity(&self, kind: &str) -> f32 {
         let handler_fill = self.task_ctx.signal_handlers.fill_ratio(&Arc::from(kind));
-        let shard_fill: f32 = self.task_ctx.gossip_txs.iter()
-            .map(|tx| {
-                let max = tx.max_capacity();
-                if max == 0 { 0.0_f32 } else { 1.0 - tx.capacity() as f32 / max as f32 }
-            })
-            .fold(0.0_f32, f32::max);
-        handler_fill.max(shard_fill)
+        handler_fill.max(crate::framing::gossip_shard_fill(&self.task_ctx.gossip_txs))
     }
 
     /// True if this node's own pheromone trail for `kind` records `is_opaque`.

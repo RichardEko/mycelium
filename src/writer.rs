@@ -169,6 +169,14 @@ pub(crate) fn get_or_spawn_writer(
     shutdown_tx: &Arc<watch::Sender<bool>>,
     dropped_frames: &Arc<AtomicU64>,
 ) -> mpsc::Sender<Bytes> {
+    // Guard: refuse to spawn during shutdown. In-flight connection handlers can call
+    // get_or_spawn_writer after shutdown_with_timeout has drained peer_writers — without
+    // this check a new writer would be inserted and never receive a shutdown signal.
+    if *shutdown_tx.borrow() {
+        let (tx, _rx) = mpsc::channel(1);
+        return tx; // immediately dropped receiver; sends to this channel will fail
+    }
+
     let guard = writers.pin();
 
     // Fast path: live writer already exists.

@@ -1,6 +1,6 @@
 use crate::consensus::{
     consensus_kind, consensus_ns, ConsensusConfig, ConsensusHandle,
-    ConsensusResult,
+    ConsensusResult, OpaqueRecompute,
 };
 use super::opacity::{count_opaque_members_in_kv, count_opaque_all_in_kv};
 use crate::framing::bincode_cfg;
@@ -176,7 +176,7 @@ impl GossipAgent {
         // at most health_check_interval_secs stale, which is acceptable for ballot setup.
         let roster_ttl = Duration::from_secs(self.config.health_check_interval_secs);
         let cached = self.cached_group_members(group, roster_ttl);
-        let member_ids: AHashSet<String> = cached.0
+        let member_ids: AHashSet<String> = cached.members
             .iter()
             .map(NodeId::to_string)
             .collect();
@@ -205,7 +205,7 @@ impl GossipAgent {
                     .as_millis() as u64;
                 count_opaque_members_in_kv(&kv_cb, &ids_cb, freshness_ms, now_ms)
             });
-            Some((raw_members, config.quorum_size, count_opaque))
+            Some(OpaqueRecompute { total_members: raw_members, config_quorum: config.quorum_size, count_opaque })
         } else {
             None
         };
@@ -267,7 +267,7 @@ impl GossipAgent {
                     .as_millis() as u64;
                 count_opaque_all_in_kv(&kv_cb, freshness_ms, now_ms)
             });
-            Some((n_nodes, config.quorum_size, count_opaque))
+            Some(OpaqueRecompute { total_members: n_nodes, config_quorum: config.quorum_size, count_opaque })
         } else {
             None
         };
@@ -297,7 +297,7 @@ impl GossipAgent {
             config.max_abstain_ballots,
         ).spawn_listener(cancel_rx, shutdown_rx);
         {
-            let mut handles = self.task_handles.lock().unwrap_or_else(|e| e.into_inner());
+            let mut handles = self.task_handles_lock();
             handles.retain(|h| !h.is_finished());
             handles.push(handle);
         }

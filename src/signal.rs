@@ -16,7 +16,7 @@
 
 use crate::framing::bincode_cfg;
 use crate::node_id::NodeId;
-use crate::store::{KvState, StoreEntry};
+use crate::store::StoreEntry;
 use ahash::AHashSet;
 use bytes::{BufMut, Bytes, BytesMut};
 use papaya::HashMap as PapayaMap;
@@ -156,16 +156,21 @@ pub(crate) struct SignalHandlers {
     /// Mirrors [`GossipConfig::signal_window_secs`] so `deliver()` inline eviction
     /// agrees with `trim_sender_log` instead of hardcoding `SENDER_LOG_WINDOW`.
     sender_log_window: Duration,
+    /// Tracks the last time a `sys/quorum/` entry was written for each `{kind}/{sender}` key.
+    /// Used by [`quorum_evidence_payload`](Self::quorum_evidence_payload) to rate-limit writes
+    /// to one per second without reading `KvState`.
+    quorum_written: PapayaMap<Arc<str>, Instant>,
 }
 
 impl SignalHandlers {
     pub(crate) fn new(sender_log_window: Duration) -> Self {
         Self {
-            map:        PapayaMap::new(),
-            last_seen:  PapayaMap::new(),
-            suppressed: PapayaMap::new(),
-            sender_log: PapayaMap::new(),
+            map:            PapayaMap::new(),
+            last_seen:      PapayaMap::new(),
+            suppressed:     PapayaMap::new(),
+            sender_log:     PapayaMap::new(),
             sender_log_window,
+            quorum_written: PapayaMap::new(),
         }
     }
 
@@ -320,7 +325,10 @@ impl SignalHandlers {
     /// kind count (removes kinds no longer seen), preventing unbounded growth when
     /// dynamic or high-cardinality kind strings are used.
     pub(crate) fn trim_sender_log(&self, window: Duration) {
-        let cutoff = Instant::now() - window;
+        let now = Instant::now();
+        let cutoff = now - window;
+
+        // Evict stale sender_log entries.
         let to_remove: Vec<Arc<str>> = {
             let guard = self.sender_log.pin();
             guard.iter()
@@ -333,9 +341,24 @@ impl SignalHandlers {
                 })
                 .collect()
         };
-        let guard = self.sender_log.pin();
-        for kind in to_remove {
-            guard.remove(&kind);
+        {
+            let guard = self.sender_log.pin();
+            for kind in to_remove {
+                guard.remove(&kind);
+            }
+        }
+
+        // Evict quorum_written entries older than the window.
+        // Prevents unbounded growth when many distinct (kind, sender) pairs are seen.
+        let qw_stale: Vec<Arc<str>> = self.quorum_written.pin()
+            .iter()
+            .filter_map(|(k, last)| {
+                if now.duration_since(*last) > window { Some(k.clone()) } else { None }
+            })
+            .collect();
+        let qw_guard = self.quorum_written.pin();
+        for k in qw_stale {
+            qw_guard.remove(&k);
         }
     }
 
@@ -421,25 +444,22 @@ impl SignalHandlers {
     /// the decision keeps transport and KV-write concerns out of `SignalHandlers`.
     pub(crate) fn quorum_evidence_payload(
         &self,
-        kind:     &Arc<str>,
-        sender:   &NodeId,
-        kv_state: &KvState,
+        kind:   &Arc<str>,
+        sender: &NodeId,
     ) -> Option<(Arc<str>, Bytes)> {
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH).unwrap_or_default()
-            .as_millis() as u64;
         let quorum_key: Arc<str> = Arc::from(
             format!("{}{}/{}", kv_ns::QUORUM, kind, sender).as_str()
         );
-        let should_write = {
-            let guard = kv_state.store.pin();
-            guard.get(&*quorum_key)
-                .and_then(|e| e.data.as_ref())
-                .and_then(|v| v.get(..8).and_then(|b| b.try_into().ok()))
-                .map(|b: [u8; 8]| now_ms.saturating_sub(u64::from_le_bytes(b)) > 1_000)
-                .unwrap_or(true)
-        };
+        let now = Instant::now();
+        let should_write = self.quorum_written.pin()
+            .get(&quorum_key)
+            .map(|last| now.duration_since(*last) > Duration::from_secs(1))
+            .unwrap_or(true);
         if should_write {
+            self.quorum_written.pin().insert(quorum_key.clone(), now);
+            let now_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH).unwrap_or_default()
+                .as_millis() as u64;
             Some((quorum_key, Bytes::copy_from_slice(&now_ms.to_le_bytes())))
         } else {
             None

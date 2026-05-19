@@ -122,16 +122,16 @@ impl GossipAgent {
         &self,
         group: &str,
         ttl: std::time::Duration,
-    ) -> Arc<(Vec<crate::node_id::NodeId>, std::time::Instant)> {
+    ) -> Arc<super::RosterEntry> {
         let group_key: Arc<str> = Arc::from(group);
         let guard = self.group_roster_cache.pin();
         if let Some(entry) = guard.get(&group_key) {
-            if entry.1.elapsed() < ttl {
+            if entry.fetched_at.elapsed() < ttl {
                 return entry.clone();
             }
         }
         let members = self.group_members(group);
-        let fresh = Arc::new((members, std::time::Instant::now()));
+        let fresh = Arc::new(super::RosterEntry { members, fetched_at: std::time::Instant::now() });
         guard.insert(group_key, fresh.clone());
         fresh
     }
@@ -279,7 +279,7 @@ impl GossipAgent {
             }
         });
         {
-            let mut handles = self.task_handles.lock().unwrap_or_else(|e| e.into_inner());
+            let mut handles = self.task_handles_lock();
             handles.retain(|h| !h.is_finished());
             handles.push(handle);
         }
@@ -436,7 +436,7 @@ impl GossipAgent {
             }
         });
         {
-            let mut handles = self.task_handles.lock().unwrap_or_else(|e| e.into_inner());
+            let mut handles = self.task_handles_lock();
             handles.retain(|h| !h.is_finished());
             handles.push(handle);
         }

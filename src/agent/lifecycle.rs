@@ -16,7 +16,7 @@ use tokio::{
 use tracing::{info, warn};
 
 use crate::connection::ConnContext;
-use super::{GossipAgent, STATE_IDLE, STATE_RUNNING, STATE_STOPPED};
+use super::{GossipAgent, AgentState};
 use super::tasks::{
     ListenerContext, run_gossip_shard, run_health_monitor, run_gc_task, run_listener_task, new_listener,
 };
@@ -37,11 +37,11 @@ impl GossipAgent {
         }
 
         match self.state.compare_exchange(
-            STATE_IDLE, STATE_RUNNING,
+            AgentState::Idle as u8, AgentState::Running as u8,
             Ordering::AcqRel, Ordering::Acquire,
         ) {
             Ok(_) => {}
-            Err(STATE_RUNNING) => {
+            Err(v) if v == AgentState::Running as u8 => {
                 return Err(GossipError::State("Agent already running".into()));
             }
             Err(_) => {
@@ -53,7 +53,7 @@ impl GossipAgent {
         self.rehydrate_boundary_from_kv();
         self.warm_quorum_from_layer1();
         self.start_listener(bind_addr).await.inspect_err(|_| {
-            self.state.store(STATE_IDLE, Ordering::Release);
+            self.state.store(AgentState::Idle as u8, Ordering::Release);
         })?;
         self.start_gossip_loop();
         self.start_health_monitor();
@@ -101,25 +101,28 @@ impl GossipAgent {
             conn_sem:       Arc::new(Semaphore::new(self.config.max_connections)),
             listener_alive: self.listener_alive.clone(),
             max_conn:       self.config.max_connections,
+            addr,
+            tcp_backlog:    self.config.tcp_accept_backlog,
         };
 
         let mut new_handles = Vec::with_capacity(n_listeners);
         for listener in listeners {
             new_handles.push(tokio::spawn(run_listener_task(listener, lctx.clone())));
         }
-        self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).extend(new_handles);
+        self.task_handles_lock().extend(new_handles);
         Ok(())
     }
 
     fn start_gossip_loop(&self) {
-        let bootstrap_peers       = self.bootstrap_peers.clone();
-        let peer_writers          = self.peer_writers.clone();
-        let shutdown_tx           = self.shutdown_tx.clone();
-        let writer_depth          = self.config.writer_channel_depth;
-        let backoff               = Duration::from_secs(self.config.reconnect_backoff_secs);
-        let idle_timeout          = Duration::from_secs(self.config.writer_idle_timeout_secs);
+        let bootstrap_peers        = self.bootstrap_peers.clone();
+        let peer_writers           = self.peer_writers.clone();
+        let shutdown_tx            = self.shutdown_tx.clone();
+        let writer_depth           = self.config.writer_channel_depth;
+        let backoff                = Duration::from_secs(self.config.reconnect_backoff_secs);
+        let idle_timeout           = Duration::from_secs(self.config.writer_idle_timeout_secs);
         let group_aware_forwarding = self.config.group_aware_forwarding;
-        let prefix_index          = self.kv_state.prefix_index.clone();
+        let epidemic_extra_peers   = self.config.epidemic_extra_peers;
+        let prefix_index           = self.kv_state.prefix_index.clone();
 
         let rxs = self.gossip_rxs
             .lock()
@@ -141,9 +144,10 @@ impl GossipAgent {
                 self.config.max_forwarding_peers,
                 self.kv_state.dropped_frames.clone(),
                 group_aware_forwarding,
+                epidemic_extra_peers,
                 prefix_index.clone(),
             ));
-            self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).push(handle);
+            self.task_handles_lock().push(handle);
         }
     }
 
@@ -169,7 +173,7 @@ impl GossipAgent {
             self.task_ctx.signal_handlers.clone(),
             self.config.signal_window_secs,
         ));
-        self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).push(handle);
+        self.task_handles_lock().push(handle);
     }
 
     fn start_gc_task(&self) {
@@ -189,7 +193,7 @@ impl GossipAgent {
             self.task_ctx.signal_boundary.clone(),
             self.node_id.clone(),
         ));
-        self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).push(handle);
+        self.task_handles_lock().push(handle);
     }
 
     /// Seeds `signal_handlers.sender_log` from `sys/quorum/` Layer I entries written
@@ -242,12 +246,12 @@ impl GossipAgent {
             let _ = self.delete(key);
         }
         let _ = self.state.compare_exchange(
-            STATE_RUNNING, STATE_STOPPED,
+            AgentState::Running as u8, AgentState::Stopped as u8,
             Ordering::AcqRel, Ordering::Acquire,
         );
         let _ = self.shutdown_tx.send(true);
         let mut set: JoinSet<()> = JoinSet::new();
-        for h in self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).drain(..) {
+        for h in self.task_handles_lock().drain(..) {
             set.spawn(async move { let _ = h.await; });
         }
         // Signal all peer writer tasks to exit. They run as detached tasks and exit

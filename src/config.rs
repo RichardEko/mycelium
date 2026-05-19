@@ -119,16 +119,29 @@ pub struct GossipConfig {
     /// `0` = no timeout (default, existing behaviour — writers stay connected indefinitely).
     pub writer_idle_timeout_secs: u64,
     /// When `true`, gossip shards apply scope-aware forwarding for Signal frames:
-    /// Group-scoped signals are forwarded only to known group members (plus up to 3
-    /// random peers for epidemic coverage), and Individual-scoped signals are forwarded
-    /// only to the target peer. System signals and Data frames are always broadcast to
-    /// all targets regardless of this setting.
+    /// Group-scoped signals are forwarded only to known group members (plus up to
+    /// `epidemic_extra_peers` random non-members for epidemic coverage), and
+    /// Individual-scoped signals are forwarded only to the target peer. System signals
+    /// and Data frames are always broadcast to all targets regardless of this setting.
     ///
     /// Requires that group membership be published to the KV store (via `join_group`)
     /// so shards can determine the member set. Defaults to `true`. Set to `false` to
     /// revert to pre-v0.2 broadcast forwarding (all signals fan out to all peers
     /// regardless of group scope), which may be useful for debugging topology issues.
     pub group_aware_forwarding: bool,
+
+    /// Number of random non-member peers added to Group-scoped signal fan-out when
+    /// `group_aware_forwarding = true`. These extra hops give epidemic coverage to
+    /// nodes that are not in the group's member set, ensuring signals reach the full
+    /// cluster over time even for narrow groups.
+    ///
+    /// Tune to cluster size: 3 is appropriate for clusters of up to ~100 nodes.
+    /// Raise to 5–7 on very large clusters (> 1 000 nodes) where 3 hops may be
+    /// insufficient for timely convergence; lower to 1–2 on small clusters (< 10
+    /// nodes) where 3 random peers may flood non-members unnecessarily.
+    ///
+    /// Default: `3`.
+    pub epidemic_extra_peers: usize,
     /// Hard cap on the one-shot startup jitter before the first health-check ping (ms).
     ///
     /// Jitter prevents a thundering herd when many nodes start simultaneously. The default
@@ -192,6 +205,7 @@ impl Default for GossipConfig {
             max_peers: i64::MAX as usize,
             writer_idle_timeout_secs: 0,
             group_aware_forwarding: true,
+            epidemic_extra_peers:   3,
             health_check_max_jitter_ms: 0,
             signal_window_secs: 600,
             max_store_entries: 0,

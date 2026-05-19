@@ -11,6 +11,7 @@ use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::{mpsc, mpsc::error::TrySendError},
 };
+use tracing::warn;
 
 pub(crate) const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
 /// Framing-level protocol version. Written before every serialized payload.
@@ -224,7 +225,10 @@ pub(crate) fn dispatch_gossip_try_send(
     match gossip_txs[shard].try_send((buf.freeze(), sender_hash, hint)) {
         Ok(())                     => true,
         Err(TrySendError::Full(_)) => {
-            dropped.fetch_add(1, Ordering::Relaxed);
+            let n = dropped.fetch_add(1, Ordering::Relaxed) + 1;
+            if n % 1_000 == 0 {
+                warn!("Gossip channel saturation: {} cumulative frames dropped", n);
+            }
             false
         }
         Err(TrySendError::Closed(_)) => false,
@@ -375,7 +379,7 @@ where
 pub(crate) enum ForwardHint {
     /// Forward to all targets — System signals and Data frames.
     All,
-    /// Forward to known group members plus up to `EPIDEMIC_K` random non-members.
+    /// Forward to known group members plus up to `epidemic_extra_peers` random non-members.
     Group(Arc<str>),
     /// Forward only to the named target peer.
     Individual(crate::node_id::NodeId),
@@ -405,6 +409,20 @@ pub(crate) fn make_gossip_update(
         key,
         value,
     }
+}
+
+/// Returns the worst-case fill ratio across all gossip shard channels.
+///
+/// `0.0` = all channels empty. `1.0` = at least one shard fully saturated.
+/// Used by admission-control paths that need to account for gossip backpressure
+/// independently of handler channel fill ratios.
+pub(crate) fn gossip_shard_fill(txs: &[mpsc::Sender<(Bytes, u64, ForwardHint)>]) -> f32 {
+    txs.iter()
+        .map(|tx| {
+            let max = tx.max_capacity();
+            if max == 0 { 0.0_f32 } else { 1.0 - tx.capacity() as f32 / max as f32 }
+        })
+        .fold(0.0_f32, f32::max)
 }
 
 pub(crate) fn is_connection_closed(e: &GossipError) -> bool {

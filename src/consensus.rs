@@ -237,13 +237,19 @@ pub mod consensus_ns {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Closure type injected by `group_propose` or `system_propose` for mid-ballot
-/// opaque-member recomputation.
+/// Context for mid-ballot opaque-member recomputation.
 ///
-/// `(total_member_count, config_quorum_size, count_opaque_fn)`.
-/// `count_opaque_fn()` returns the current number of opaque members. Built at
-/// the Layer II call site so `propose` does not read `KvState` directly.
-type OpaqueRecompute = Option<(usize, usize, Arc<dyn Fn() -> usize + Send + Sync>)>;
+/// Injected by `group_propose` / `system_propose` at the Layer II call site so
+/// `propose` (Layer III) does not read `KvState` directly — the opacity query
+/// strategy is an injected dependency, not a Layer III concern.
+pub(crate) struct OpaqueRecompute {
+    /// Total group/system member count at proposal time (before opacity exclusions).
+    pub(crate) total_members: usize,
+    /// Operator-configured quorum size (0 = auto-majority from active count).
+    pub(crate) config_quorum: usize,
+    /// Callback that returns the current number of opaque members on each call.
+    pub(crate) count_opaque:  Arc<dyn Fn() -> usize + Send + Sync>,
+}
 
 // ── ConsensusEngine ──────────────────────────────────────────────────────────
 //
@@ -270,6 +276,24 @@ pub(crate) struct ConsensusEngine {
 
 impl ConsensusEngine {
     // ── KV helpers ───────────────────────────────────────────────────────────
+    //
+    // ConsensusEngine writes directly to Layer I (`apply_and_notify`,
+    // `dispatch_gossip_*`, `make_gossip_update`) for its own `consensus/ballot/*`
+    // and `consensus/committed/*` namespace. This is an intentional design choice,
+    // not a layer violation:
+    //
+    // 1. `GossipAgent::set` cannot be used here — it would create a reference cycle
+    //    (`ConsensusEngine` → `GossipAgent` → task handles → `ConsensusEngine`),
+    //    so `ConsensusEngine` receives only `Arc<TaskCtx>` with no agent back-reference.
+    //
+    // 2. Ownership of the `consensus/*` namespace is analogous to the opacity governor
+    //    owning `sys/load/*` — a Layer II module that writes directly to its own KV
+    //    namespace because the data is architectural state, not user data.
+    //
+    // 3. This module is documented as a "Layer 2 extension" (see crate-level doc comment):
+    //    consensus is a higher-order capability built on Layer II signals, and its KV
+    //    writes use exactly the same primitives (`make_gossip_update` + `apply_and_notify`)
+    //    that the rest of Layer II uses — no additional coupling to Layer I is introduced.
 
     fn get(&self, key: &str) -> Option<Bytes> {
         self.task_ctx.kv_state.store.pin().get(key).and_then(|e| e.data.clone())
@@ -338,11 +362,10 @@ impl ConsensusEngine {
     ///
     /// Called by `GossipAgent::group_propose` and `GossipAgent::system_propose`.
     ///
-    /// `opaque_recompute` — when `Some((member_ids, freshness, config_quorum_size, count_opaque))`,
-    /// `propose` registers for `BOUNDARY_OPAQUE` signals and re-evaluates the effective quorum
-    /// size mid-ballot when any member transitions. `count_opaque` is a callback built by the
-    /// Layer II call site (`group_propose`) so `propose` does not read `KvState` directly —
-    /// the opacity query strategy is an injected dependency, not a Layer III concern.
+    /// `opaque_recompute` — when `Some`, `propose` registers for `BOUNDARY_OPAQUE` signals
+    /// and re-evaluates the effective quorum size mid-ballot when any member transitions.
+    /// The callback is built by the Layer II call site so `propose` does not read `KvState`
+    /// directly — the opacity query strategy is an injected dependency, not a Layer III concern.
     pub(crate) async fn propose(
         &self,
         scope:             SignalScope,
@@ -350,7 +373,7 @@ impl ConsensusEngine {
         value:             Bytes,
         quorum_size:       usize,
         config:            ConsensusConfig,
-        opaque_recompute:  OpaqueRecompute,
+        opaque_recompute:  Option<OpaqueRecompute>,
     ) -> ConsensusResult {
         let ballot_key = format!("{}{}", consensus_ns::BALLOT, &*slot);
         let commit_key = format!("{}{}", consensus_ns::COMMITTED, &*slot);
@@ -391,6 +414,19 @@ impl ConsensusEngine {
                     slot,
                     ballot: self.read_ballot(&ballot_key),
                 };
+            }
+
+            // Early exit when all members are opaque — waiting for votes is futile.
+            if let Some(ref or) = opaque_recompute {
+                let opaque = (or.count_opaque)();
+                if opaque >= or.total_members {
+                    return ConsensusResult::Timeout {
+                        slot,
+                        ballots_tried: 0,
+                        votes_last_ballot: 0,
+                        quorum_required: quorum_size,
+                    };
+                }
             }
 
             self.set_async(ballot_key.as_str(), encode_ballot(ballot)).await;
@@ -485,10 +521,10 @@ impl ConsensusEngine {
                             None => std::future::pending().await,
                         }
                     } => {
-                        if let Some((total_members, config_qs, ref count_opaque)) = opaque_recompute {
-                            let opaque = count_opaque();
-                            let active = total_members.saturating_sub(opaque).max(1);
-                            quorum_size = if config_qs > 0 { config_qs } else { active / 2 + 1 };
+                        if let Some(ref or) = opaque_recompute {
+                            let opaque = (or.count_opaque)();
+                            let active = or.total_members.saturating_sub(opaque).max(1);
+                            quorum_size = if or.config_quorum > 0 { or.config_quorum } else { active / 2 + 1 };
                             // Check immediately — we may already have enough votes.
                             if voters.len() >= quorum_size {
                                 let commit = ConsensusMsg::Commit {

@@ -90,13 +90,11 @@ pub(crate) fn emit_signal(
     let ts = ctx.current_ts.load(Ordering::Relaxed);
     let _ = ctx.seen.is_duplicate(nonce, ts);
     let handler_fill = ctx.signal_handlers.fill_ratio(&kind);
-    let shard_fill: f32 = ctx.gossip_txs.iter()
-        .map(|tx| { let max = tx.max_capacity(); if max == 0 { 0.0_f32 } else { 1.0 - tx.capacity() as f32 / max as f32 } })
-        .fold(0.0_f32, f32::max);
+    let combined = handler_fill.max(crate::framing::gossip_shard_fill(&ctx.gossip_txs));
     deliver_locally(&ctx.signal_boundary, &ctx.signal_handlers, &Signal {
         kind: kind.clone(), scope: scope.clone(),
         payload: payload.clone(), sender: ctx.node_id.clone(), nonce,
-    }, handler_fill.max(shard_fill));
+    }, combined);
     let hint = match &scope {
         SignalScope::System           => ForwardHint::All,
         SignalScope::Group(name)      => ForwardHint::Group(name.clone()),
@@ -124,13 +122,11 @@ pub(crate) async fn emit_signal_async(
     let ts = ctx.current_ts.load(Ordering::Relaxed);
     let _ = ctx.seen.is_duplicate(nonce, ts);
     let handler_fill = ctx.signal_handlers.fill_ratio(&kind);
-    let shard_fill: f32 = ctx.gossip_txs.iter()
-        .map(|tx| { let max = tx.max_capacity(); if max == 0 { 0.0_f32 } else { 1.0 - tx.capacity() as f32 / max as f32 } })
-        .fold(0.0_f32, f32::max);
+    let combined = handler_fill.max(crate::framing::gossip_shard_fill(&ctx.gossip_txs));
     deliver_locally(&ctx.signal_boundary, &ctx.signal_handlers, &Signal {
         kind: kind.clone(), scope: scope.clone(),
         payload: payload.clone(), sender: ctx.node_id.clone(), nonce,
-    }, handler_fill.max(shard_fill));
+    }, combined);
     let hint = match &scope {
         SignalScope::System           => ForwardHint::All,
         SignalScope::Group(name)      => ForwardHint::Group(name.clone()),

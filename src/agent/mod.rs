@@ -29,15 +29,35 @@ pub(crate) use helpers::emit_signal_async;
 pub(crate) use helpers::make_gossip_update;
 pub(crate) use opacity::is_self_opaque;
 
-type RosterCache = Arc<papaya::HashMap<Arc<str>, Arc<(Vec<NodeId>, std::time::Instant)>>>;
+/// Cached roster entry for a single group, held in the short-lived `group_roster_cache`.
+pub(super) struct RosterEntry {
+    pub(super) members:    Vec<NodeId>,
+    pub(super) fetched_at: Instant,
+}
 
-pub(super) const STATE_IDLE:    u8 = 0;
-pub(super) const STATE_RUNNING: u8 = 1;
-pub(super) const STATE_STOPPED: u8 = 2;
+type RosterCache = Arc<papaya::HashMap<Arc<str>, Arc<RosterEntry>>>;
 
-/// Number of random non-member peers added to Group-scoped signal fan-out
-/// for epidemic coverage even when `group_aware_forwarding = true`.
-pub(super) const EPIDEMIC_K: usize = 3;
+/// Gossip shard channel receivers, taken once by `start_gossip_loop`.
+type GossipRxs = std::sync::Mutex<Option<Vec<mpsc::Receiver<(Bytes, u64, ForwardHint)>>>>;
+
+/// Agent lifecycle state stored in an `AtomicU8`.
+#[repr(u8)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum AgentState {
+    Idle    = 0,
+    Running = 1,
+    Stopped = 2,
+}
+
+impl AgentState {
+    pub(super) fn from_u8(v: u8) -> Self {
+        match v {
+            0 => Self::Idle,
+            1 => Self::Running,
+            _ => Self::Stopped,
+        }
+    }
+}
 
 /// Snapshot of live protocol state.
 #[derive(Debug)]
@@ -118,8 +138,7 @@ pub struct GossipAgent {
     pub(super) peers: Arc<papaya::HashMap<NodeId, Instant>>,
     pub(super) peer_list_tx: watch::Sender<Arc<[NodeId]>>,
     pub(super) bootstrap_peers: Arc<[NodeId]>,
-    #[allow(clippy::type_complexity)]
-    pub(super) gossip_rxs: std::sync::Mutex<Option<Vec<mpsc::Receiver<(Bytes, u64, ForwardHint)>>>>,
+    pub(super) gossip_rxs: GossipRxs,
     pub(super) peer_writers: Arc<papaya::HashMap<NodeId, WriterEntry>>,
     /// Cached count of live (non-tombstone) store entries. Updated by the GC task;
     /// up to one GC interval stale but O(1) to read via system_stats().
@@ -153,6 +172,11 @@ impl GossipAgent {
     /// so the evaporation window respects the operator's [`GossipConfig::signal_window_secs`].
     pub fn signal_window(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.config.signal_window_secs)
+    }
+
+    /// Acquires the task-handles lock, recovering from poison.
+    pub(super) fn task_handles_lock(&self) -> std::sync::MutexGuard<Vec<JoinHandle<()>>> {
+        self.task_handles.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Creates a new agent. Call [`start`](Self::start) to begin listening.
@@ -206,7 +230,7 @@ impl GossipAgent {
             gossip_rxs: std::sync::Mutex::new(Some(gossip_rxs_inner)),
             peer_writers: Arc::new(papaya::HashMap::new()),
             live_entries: Arc::new(AtomicUsize::new(0)),
-            state: AtomicU8::new(STATE_IDLE),
+            state: AtomicU8::new(AgentState::Idle as u8),
             shutdown_tx: Arc::new(shutdown_tx),
             shard_alive,
             listener_alive: Arc::new(AtomicUsize::new(0)),
