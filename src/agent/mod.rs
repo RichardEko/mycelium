@@ -33,6 +33,9 @@ pub(crate) use opacity::is_self_opaque;
 pub(super) struct RosterEntry {
     pub(super) members:    Vec<NodeId>,
     pub(super) fetched_at: Instant,
+    /// Value of `KvState::grp_generation` at the time this entry was fetched.
+    /// If the generation counter has advanced, the roster is stale and must be re-fetched.
+    pub(super) grp_gen:    u64,
 }
 
 type RosterCache = Arc<papaya::HashMap<Arc<str>, Arc<RosterEntry>>>;

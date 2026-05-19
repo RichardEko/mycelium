@@ -547,18 +547,28 @@ pub(super) async fn run_gc_task(
                 live_entries.store(live, Ordering::Relaxed);
 
                 let pool_len = intern_pool_len();
-                let pool_warn = if intern_max_keys > 0 {
-                    intern_max_keys.saturating_mul(2)
-                } else {
-                    100_000
-                };
-                if pool_len > pool_warn {
-                    warn!(
-                        "Key intern pool has {} entries (warn threshold {}). \
-                         High key churn detected — set intern_max_keys or intern_keys=false \
-                         to prevent unbounded memory growth.",
-                        pool_len, pool_warn
+                if intern_max_keys > 0 && pool_len > intern_max_keys {
+                    // Pool exceeded cap: evict entries with no external holders so new keys
+                    // can be interned rather than falling back to unshared allocations.
+                    crate::store::shrink_intern_pool(intern_max_keys);
+                    debug!(
+                        "Intern pool shrunk from {} to {} entries (cap {})",
+                        pool_len, intern_pool_len(), intern_max_keys
                     );
+                } else {
+                    let pool_warn = if intern_max_keys > 0 {
+                        intern_max_keys.saturating_mul(2)
+                    } else {
+                        100_000
+                    };
+                    if pool_len > pool_warn {
+                        warn!(
+                            "Key intern pool has {} entries (warn threshold {}). \
+                             High key churn detected — set intern_max_keys or intern_keys=false \
+                             to prevent unbounded memory growth.",
+                            pool_len, pool_warn
+                        );
+                    }
                 }
 
                 {
@@ -596,7 +606,7 @@ pub(super) async fn run_gc_task(
                     let finished: Vec<NodeId> = {
                         let guard = peer_writers.pin();
                         guard.iter()
-                            .filter(|(_, e)| e.abort_handle.is_finished())
+                            .filter(|(_, e)| !e.is_live())
                             .map(|(k, _)| k.clone())
                             .collect()
                     };

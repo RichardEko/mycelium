@@ -192,6 +192,7 @@ mod tests {
                 hash_acc:          Arc::new(AtomicU64::new(initial_hash)),
                 dropped_frames:    Arc::new(AtomicU64::new(0)),
                 max_store_entries: 0,
+                grp_generation:    Arc::new(AtomicU64::new(0)),
             }),
         };
         let handle = tokio::spawn(handle_connection(
@@ -837,6 +838,7 @@ mod tests {
                     hash_acc:          Arc::new(AtomicU64::new(0)),
                     dropped_frames:    Arc::new(AtomicU64::new(0)),
                     max_store_entries: 0,
+                    grp_generation:    Arc::new(AtomicU64::new(0)),
                 }),
             };
             use crate::connection::handle_connection;

@@ -341,7 +341,7 @@ impl GossipAgent {
             },
             cached_connections: self.peer_writers.pin()
                 .iter()
-                .filter(|(_, e)| !e.abort_handle.is_finished())
+                .filter(|(_, e)| e.is_live())
                 .count(),
             gossip_shard_queue_depths,
             dead_shards,

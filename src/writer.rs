@@ -141,25 +141,39 @@ pub(crate) async fn run_peer_writer(
 ///
 /// `abort_handle` is `Clone` (unlike `JoinHandle`), satisfying papaya's `V: Clone` bound
 /// for `compute()`. The task runs as a detached tokio task; it exits via `peer_shutdown`
-/// or the global shutdown signal. `abort_handle.is_finished()` tracks liveness.
+/// or the global shutdown signal.
+///
+/// `abort_handle = None` is the *pending* sentinel: a caller has claimed the spawn slot
+/// and installed the channel, but the writer task has not been spawned yet. Concurrent
+/// callers that see `None` return the pre-installed `tx` directly — they share the same
+/// channel and their frames will be drained once the task starts.
 #[derive(Clone)]
 pub(crate) struct WriterEntry {
     pub(crate) tx:            mpsc::Sender<Bytes>,
     pub(crate) peer_shutdown: Arc<watch::Sender<bool>>,
-    pub(crate) abort_handle:  tokio::task::AbortHandle,
+    /// `None` = spawn in progress (pending sentinel); `Some` = task running or finished.
+    pub(crate) abort_handle:  Option<tokio::task::AbortHandle>,
     /// Cumulative frames dropped to this peer during reconnect backoff.
     /// Subset of the global `dropped_frames` counter; useful for identifying slow peers.
     pub(crate) dropped:       Arc<AtomicU64>,
 }
 
+impl WriterEntry {
+    /// Returns `true` if the writer task is alive or its spawn is still pending.
+    pub(crate) fn is_live(&self) -> bool {
+        self.abort_handle.as_ref().map_or(true, |h| !h.is_finished())
+    }
+}
+
 /// Returns the frame sender for `peer`'s writer task, spawning a new task on first use.
 ///
-/// If the existing writer task has finished (idle timeout, disconnect, or eviction),
-/// the stale map entry is replaced. A new task is spawned OUTSIDE the papaya `compute()`
-/// callback to avoid spawning multiple tasks when the callback retries due to concurrent
-/// map mutations. A CAS-style `compute()` then installs the new entry, aborting if
-/// another racing caller already inserted a live writer — in which case the just-spawned
-/// task is immediately shut down.
+/// Uses a *claim-then-spawn* protocol to ensure exactly one task is spawned per peer:
+///
+/// 1. **Fast path** — if a live entry (or a pending spawn) exists, return its `tx`.
+/// 2. **Claim** — atomically insert a pending sentinel (`abort_handle = None`) with a
+///    pre-created channel. Concurrent callers that lose the CAS return the winner's `tx`.
+/// 3. **Spawn** — the claim winner spawns the writer task outside `compute()` (so papaya
+///    retry loops don't create duplicate tasks), then updates the entry with the real handle.
 pub(crate) fn get_or_spawn_writer(
     peer: &NodeId,
     writers: &papaya::HashMap<NodeId, WriterEntry>,
@@ -169,28 +183,45 @@ pub(crate) fn get_or_spawn_writer(
     shutdown_tx: &Arc<watch::Sender<bool>>,
     dropped_frames: &Arc<AtomicU64>,
 ) -> mpsc::Sender<Bytes> {
-    // Guard: refuse to spawn during shutdown. In-flight connection handlers can call
-    // get_or_spawn_writer after shutdown_with_timeout has drained peer_writers — without
-    // this check a new writer would be inserted and never receive a shutdown signal.
+    // Guard: refuse to spawn during shutdown.
     if *shutdown_tx.borrow() {
         let (tx, _rx) = mpsc::channel(1);
-        return tx; // immediately dropped receiver; sends to this channel will fail
+        return tx;
     }
 
     let guard = writers.pin();
 
-    // Fast path: live writer already exists.
+    // Fast path: live writer or pending spawn already exists.
     if let Some(entry) = guard.get(peer) {
-        if !entry.abort_handle.is_finished() {
+        if entry.is_live() {
             return entry.tx.clone();
         }
     }
 
-    // Slow path: spawn outside compute() so retries don't create duplicate tasks.
+    // Claim the spawn slot by installing a pending sentinel atomically.
+    // Creating the channel here is O(1) (no OS resources); the task only runs if we win.
     let (tx, rx) = mpsc::channel(chan_depth);
     let (peer_shutdown_tx, peer_shutdown_rx) = watch::channel(false);
     let peer_shutdown = Arc::new(peer_shutdown_tx);
     let dropped = Arc::new(AtomicU64::new(0));
+    let pending = WriterEntry {
+        tx: tx.clone(),
+        peer_shutdown: peer_shutdown.clone(),
+        abort_handle: None,
+        dropped: dropped.clone(),
+    };
+
+    let claim = guard.compute(peer.clone(), |existing| match existing {
+        Some((_, e)) if e.is_live() => papaya::Operation::Abort(e.tx.clone()),
+        _                           => papaya::Operation::Insert(pending.clone()),
+    });
+
+    if let papaya::Compute::Aborted(winner_tx) = claim {
+        // Another caller already holds the slot (live writer or pending spawn). Use theirs.
+        return winner_tx;
+    }
+
+    // We won the claim. Spawn the task (outside compute so retries don't duplicate it).
     let join_handle = tokio::spawn(run_peer_writer(
         peer.clone(),
         rx,
@@ -199,24 +230,23 @@ pub(crate) fn get_or_spawn_writer(
         shutdown_tx.subscribe(),
         peer_shutdown_rx,
         dropped_frames.clone(),
-        dropped.clone(),
+        dropped,
     ));
     let abort_handle = join_handle.abort_handle();
     drop(join_handle); // detach — task exits via peer_shutdown or global shutdown signal
-    let new_entry = WriterEntry { tx: tx.clone(), peer_shutdown: peer_shutdown.clone(), abort_handle, dropped };
 
-    // CAS insert: if a racing caller already installed a live writer, use theirs and
-    // abort the task we just spawned.
-    match guard.compute(peer.clone(), |existing| match existing {
-        Some((_, e)) if !e.abort_handle.is_finished() => papaya::Operation::Abort(e.tx.clone()),
-        _ => papaya::Operation::Insert(new_entry.clone()),
-    }) {
-        papaya::Compute::Aborted(winner_tx) => {
-            new_entry.abort_handle.abort();
-            winner_tx
-        }
-        _ => tx,
-    }
+    // Upgrade the pending entry to a live entry with the real abort handle.
+    guard.compute(peer.clone(), |existing| match existing {
+        Some((_, e)) if e.abort_handle.is_none() => papaya::Operation::Insert(WriterEntry {
+            tx: tx.clone(),
+            peer_shutdown: peer_shutdown.clone(),
+            abort_handle: Some(abort_handle.clone()),
+            dropped: e.dropped.clone(),
+        }),
+        _ => papaya::Operation::Abort(()),
+    });
+
+    tx
 }
 
 /// Removes `peer`'s writer from the map and signals its task to exit.

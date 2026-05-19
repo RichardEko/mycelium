@@ -34,6 +34,10 @@ pub(crate) struct KvState {
     pub hash_acc:          Arc<AtomicU64>,
     pub dropped_frames:    Arc<AtomicU64>,
     pub max_store_entries: usize,
+    /// Monotonic counter bumped whenever a `grp/` key is written or tombstoned.
+    /// `cached_group_members` uses this to detect remote membership changes without
+    /// scanning the store — the cached roster is stale if the counter has advanced.
+    pub grp_generation:    Arc<AtomicU64>,
 }
 
 impl KvState {
@@ -49,6 +53,7 @@ impl KvState {
             hash_acc:          Arc::new(AtomicU64::new(0)),
             dropped_frames:    Arc::new(AtomicU64::new(0)),
             max_store_entries,
+            grp_generation:    Arc::new(AtomicU64::new(0)),
         })
     }
 }
@@ -105,13 +110,39 @@ fn key_pool() -> &'static papaya::HashMap<Arc<str>, Arc<str>> {
 
 /// Returns the current number of entries in the intern pool.
 /// Zero if `intern_keys = false` and no key has ever been interned.
-/// The pool grows with the number of **distinct keys ever observed** — including
-/// keys that have since been tombstoned and GC'd from the store — and is never
-/// trimmed. Monitor this in `SystemStats::intern_pool_size` on long-running
-/// clusters with high key churn; disable interning with `GossipConfig::intern_keys
-/// = false` if the pool grows without bound.
+/// Returns the current number of entries in the intern pool.
 pub(crate) fn intern_pool_len() -> usize {
     KEY_POOL.get().map_or(0, |p| p.len())
+}
+
+/// Evicts pool entries that have no external holders (pool-only `Arc` references).
+///
+/// Iterates the pool and removes any entry whose value `Arc::strong_count` is 1 —
+/// meaning only the pool itself holds the allocation and no caller is currently
+/// using it. Stops once the pool shrinks to `target` entries.
+///
+/// Called from the GC task when `intern_max_keys > 0` and `pool_len > intern_max_keys`,
+/// allowing the pool to reclaim unused keys rather than simply refusing new inserts.
+pub(crate) fn shrink_intern_pool(target: usize) {
+    let pool = key_pool();
+    if pool.len() <= target { return; }
+    let guard = pool.pin();
+    let candidates: Vec<Arc<str>> = guard
+        .iter()
+        .filter_map(|(k, v)| {
+            // strong_count == 1 means only the pool holds this Arc — safe to evict.
+            if Arc::strong_count(v) == 1 { Some(k.clone()) } else { None }
+        })
+        .take(pool.len().saturating_sub(target))
+        .collect();
+    for key in candidates {
+        guard.compute(key.clone(), |existing| match existing {
+            // Re-check inside compute: abort if someone grabbed the Arc since we sampled.
+            Some((_, v)) if Arc::strong_count(v) == 1 => papaya::Operation::Remove,
+            _ => papaya::Operation::Abort(()),
+        });
+        if pool.len() <= target { break; }
+    }
 }
 
 /// Process-wide key interning pool. Returns a shared `Arc<str>` for a given
@@ -282,6 +313,11 @@ pub(crate) fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
         }
         if !is_tombstone {
             kv.hash_acc.fetch_xor(key_hash ^ ts, Ordering::Relaxed);
+        }
+        // Bump the group-roster generation counter so cached_group_members knows
+        // to re-fetch when any peer joins or leaves a group.
+        if update.key.starts_with("grp/") {
+            kv.grp_generation.fetch_add(1, Ordering::Relaxed);
         }
         // Maintain the secondary prefix index.
         if is_tombstone {

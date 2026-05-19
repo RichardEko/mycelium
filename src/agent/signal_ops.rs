@@ -79,7 +79,8 @@ impl GossipAgent {
         let group: Arc<str> = group.into();
         let inserted = self.task_ctx.signal_boundary.write().groups.insert(group.clone());
         if inserted {
-            self.group_roster_cache.pin().remove(&group);
+            // Cache invalidation happens automatically: self.set() calls apply_and_notify,
+            // which bumps grp_generation — cached_group_members detects the stale entry.
             let key = crate::signal::grp_member_key(&group, &self.node_id);
             let _ = self.set(key, b"1".to_vec());
         }
@@ -93,7 +94,7 @@ impl GossipAgent {
         let group: Arc<str> = group.into();
         let removed = self.task_ctx.signal_boundary.write().groups.remove(&group);
         if removed {
-            self.group_roster_cache.pin().remove(&group);
+            // Cache invalidation happens automatically via grp_generation bump in apply_and_notify.
             let key = crate::signal::grp_member_key(&group, &self.node_id);
             let _ = self.delete(key);
         }
@@ -115,23 +116,29 @@ impl GossipAgent {
     }
 
     /// Like [`group_members`](Self::group_members) but returns a cached result when
-    /// the roster was fetched within `ttl`. The cache is eagerly invalidated whenever
-    /// this node calls `join_group` or `leave_group`, so it only goes stale for remote
-    /// membership changes — acceptable for consensus ballot setup.
+    /// the roster is still current. The cache is invalidated whenever any `grp/` key
+    /// changes in the store — including remote membership changes propagated via gossip —
+    /// by comparing against `KvState::grp_generation`. The TTL is a safety backstop only.
     pub(super) fn cached_group_members(
         &self,
         group: &str,
         ttl: std::time::Duration,
     ) -> Arc<super::RosterEntry> {
+        use std::sync::atomic::Ordering;
         let group_key: Arc<str> = Arc::from(group);
+        let current_gen = self.task_ctx.kv_state.grp_generation.load(Ordering::Relaxed);
         let guard = self.group_roster_cache.pin();
         if let Some(entry) = guard.get(&group_key) {
-            if entry.fetched_at.elapsed() < ttl {
+            if entry.grp_gen == current_gen && entry.fetched_at.elapsed() < ttl {
                 return entry.clone();
             }
         }
         let members = self.group_members(group);
-        let fresh = Arc::new(super::RosterEntry { members, fetched_at: std::time::Instant::now() });
+        let fresh = Arc::new(super::RosterEntry {
+            members,
+            fetched_at: std::time::Instant::now(),
+            grp_gen: current_gen,
+        });
         guard.insert(group_key, fresh.clone());
         fresh
     }
