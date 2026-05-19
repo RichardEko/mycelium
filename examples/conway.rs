@@ -50,7 +50,7 @@ const BASE_PORT: u16 = 52000;
 const HTTP_PORT: u16 = 8090;
 const TICK_MS: u64 = 300;
 const RENDER_OFFSET_MS: u64 = 180;
-const SETTLE_MS: u64 = 10_000;
+const SETTLE_MS: u64 = 3_000;
 // Two-phase update: read phase → WRITE_DELAY_MS → write phase.
 // All 256 agents read neighbours before any agent writes. Timer jitter on a
 // single Tokio runtime is <1ms, well within the 100ms write delay.
@@ -246,6 +246,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             //   the tokio runtime and makes the HTTP server unresponsive.
             cfg.max_forwarding_peers     = cfg.bootstrap_peers.len();
             cfg.max_peers                = cfg.bootstrap_peers.len();
+            // Cap startup jitter to 100ms. Default is up to health_check_interval_secs×500ms
+            // (5s) — acceptable for production but makes the demo settle slowly when all 256
+            // agents start simultaneously. 100ms spreads first pings without a thundering herd.
+            cfg.health_check_max_jitter_ms = 100;
             agents.push(Arc::new(GossipAgent::new(nid, cfg)));
         }
     }
@@ -362,5 +366,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for a in &agents {
         a.shutdown().await;
     }
+
+    // Confirm channel depth was adequate — non-zero means writer_channel_depth
+    // should be raised for this cluster size / tick rate.
+    let stats = viewer.system_stats();
+    if stats.dropped_frames > 0 {
+        eprintln!("dropped_frames: {} — consider raising writer_channel_depth", stats.dropped_frames);
+        for (peer, n) in viewer.peer_drop_counts() {
+            eprintln!("  {peer}: {n} drops");
+        }
+    }
+
     Ok(())
 }

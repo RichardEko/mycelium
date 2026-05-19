@@ -44,7 +44,7 @@ const FULL:      usize = MESH * TILE;  // 512: full GPU grid width/height
 const BASE_PORT: u16   = 52100;
 const HTTP_PORT: u16   = 8091;
 const TICK_MS:   u64   = 100;          // GPU tick — fast because compute is free
-const SETTLE_MS: u64   = 10_000;
+const SETTLE_MS: u64   = 3_000;
 
 fn port(x: usize, y: usize) -> u16 { BASE_PORT + (y * MESH + x) as u16 }
 fn tile_key(x: usize, y: usize) -> String { format!("tile/{x}/{y}") }
@@ -399,7 +399,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut cfg = GossipConfig::default();
             cfg.bind_address    = "127.0.0.1".to_string();
             cfg.bind_port       = p;
-            cfg.bootstrap_peers = vec![seed_id.clone()];
+            cfg.bootstrap_peers            = vec![seed_id.clone()];
+            cfg.health_check_max_jitter_ms = 100;
             agents.push(Arc::new(GossipAgent::new(nid, cfg)));
         }
     }
@@ -476,5 +477,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     eprintln!("\nShutting down…");
     for a in &agents { a.shutdown().await; }
+
+    let stats = agents[0].system_stats();
+    if stats.dropped_frames > 0 {
+        eprintln!("dropped_frames: {} — consider raising writer_channel_depth", stats.dropped_frames);
+        for (peer, n) in agents[0].peer_drop_counts() {
+            eprintln!("  {peer}: {n} drops");
+        }
+    }
+
     Ok(())
 }
