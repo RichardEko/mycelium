@@ -88,7 +88,7 @@ pub(crate) fn emit_signal(
 ) -> bool {
     let nonce = fastrand::u64(1..);
     let ts = ctx.current_ts.load(Ordering::Relaxed);
-    let _ = ctx.seen.is_duplicate(nonce, ts);
+    ctx.seen.mark_and_check(nonce, ts);
     let handler_fill = ctx.signal_handlers.fill_ratio(&kind);
     let combined = handler_fill.max(crate::framing::gossip_shard_fill(&ctx.gossip_txs));
     deliver_locally(&ctx.signal_boundary, &ctx.signal_handlers, &Signal {
@@ -120,7 +120,7 @@ pub(crate) async fn emit_signal_async(
 ) -> bool {
     let nonce = fastrand::u64(1..);
     let ts = ctx.current_ts.load(Ordering::Relaxed);
-    let _ = ctx.seen.is_duplicate(nonce, ts);
+    ctx.seen.mark_and_check(nonce, ts);
     let handler_fill = ctx.signal_handlers.fill_ratio(&kind);
     let combined = handler_fill.max(crate::framing::gossip_shard_fill(&ctx.gossip_txs));
     deliver_locally(&ctx.signal_boundary, &ctx.signal_handlers, &Signal {

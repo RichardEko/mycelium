@@ -190,14 +190,6 @@ pub(crate) fn bincode_cfg() -> impl bincode::config::Config {
     bincode::config::standard().with_fixed_int_encoding()
 }
 
-/// Returns the bincode configuration for `PREV_WIRE_VERSION` frames.
-///
-/// Identical encoding config to [`bincode_cfg`]; struct-layout differences between v6
-/// and v7 are handled by deserializing into [`WireMessageV6`] (not `WireMessage` directly).
-#[inline(always)]
-pub(crate) fn bincode_cfg_prev() -> impl bincode::config::Config {
-    bincode::config::standard().with_fixed_int_encoding()
-}
 
 /// Extracts the gossip shard routing key from a wire message.
 fn wire_msg_key(msg: &WireMessage) -> &str {

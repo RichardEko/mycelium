@@ -31,11 +31,8 @@ impl ShardedSeen {
 
     /// Records `nonce` with receive timestamp `ts`.
     /// Returns `true` if the nonce was **already present** (duplicate — caller should drop).
-    ///
-    /// Named `is_duplicate` rather than `insert` to avoid confusion with the Rust std
-    /// convention where `insert` returns `true` for *new* insertions.
     #[inline]
-    pub(crate) fn is_duplicate(&self, nonce: u64, ts: u64) -> bool {
+    pub(crate) fn mark_and_check(&self, nonce: u64, ts: u64) -> bool {
         self.shard(nonce).pin().insert(nonce, ts).is_some()
     }
 

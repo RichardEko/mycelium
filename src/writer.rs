@@ -182,11 +182,10 @@ pub(crate) fn get_or_spawn_writer(
     idle_timeout: Duration,
     shutdown_tx: &Arc<watch::Sender<bool>>,
     dropped_frames: &Arc<AtomicU64>,
-) -> mpsc::Sender<Bytes> {
+) -> Option<mpsc::Sender<Bytes>> {
     // Guard: refuse to spawn during shutdown.
     if *shutdown_tx.borrow() {
-        let (tx, _rx) = mpsc::channel(1);
-        return tx;
+        return None;
     }
 
     let guard = writers.pin();
@@ -194,7 +193,7 @@ pub(crate) fn get_or_spawn_writer(
     // Fast path: live writer or pending spawn already exists.
     if let Some(entry) = guard.get(peer) {
         if entry.is_live() {
-            return entry.tx.clone();
+            return Some(entry.tx.clone());
         }
     }
 
@@ -218,7 +217,7 @@ pub(crate) fn get_or_spawn_writer(
 
     if let papaya::Compute::Aborted(winner_tx) = claim {
         // Another caller already holds the slot (live writer or pending spawn). Use theirs.
-        return winner_tx;
+        return Some(winner_tx);
     }
 
     // We won the claim. Spawn the task (outside compute so retries don't duplicate it).
@@ -246,7 +245,7 @@ pub(crate) fn get_or_spawn_writer(
         _ => papaya::Operation::Abort(()),
     });
 
-    tx
+    Some(tx)
 }
 
 /// Removes `peer`'s writer from the map and signals its task to exit.
@@ -288,7 +287,7 @@ pub(crate) fn request_state(
         return;
     }
     let data: Bytes = buf.freeze();
-    let tx = get_or_spawn_writer(peer, peer_writers, writer_depth, backoff, idle_timeout, shutdown_tx, dropped_frames);
+    let Some(tx) = get_or_spawn_writer(peer, peer_writers, writer_depth, backoff, idle_timeout, shutdown_tx, dropped_frames) else { return; };
     if tx.try_send(data).is_err() {
         warn!("StateRequest writer for {}: channel full or closed; state sync skipped", peer);
     }

@@ -255,11 +255,16 @@ impl GossipAgent {
                 .collect();
             for key in keys { guard.remove(&key); }
         }
-        // Drain the JoinSet. Completed tasks are already removed by JoinSet automatically;
-        // this awaits the ones still running with a timeout.
+        // Drain the JoinSet. Swap it out first so the std::sync::Mutex is not held
+        // across any await point (clippy::await_holding_lock).
         let drain = async {
-            let mut handles = self.task_handles_lock();
-            while handles.join_next().await.is_some() {}
+            let mut owned = {
+                let mut handles = self.task_handles_lock();
+                let mut empty = tokio::task::JoinSet::new();
+                std::mem::swap(&mut *handles, &mut empty);
+                empty
+            };
+            while owned.join_next().await.is_some() {}
         };
         if time::timeout(timeout, drain).await.is_err() {
             let mut handles = self.task_handles_lock();

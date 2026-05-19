@@ -196,9 +196,9 @@ pub(super) async fn run_gossip_shard(
             let tx = if let Some(t) = sender_cache.get(peer) {
                 t.clone()
             } else {
-                let t = get_or_spawn_writer(
+                let Some(t) = get_or_spawn_writer(
                     peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &dropped_frames,
-                );
+                ) else { continue; };
                 sender_cache.insert(peer.clone(), t.clone());
                 t
             };
@@ -211,9 +211,9 @@ pub(super) async fn run_gossip_shard(
                 Err(TrySendError::Closed(_)) => {
                     debug!("Peer writer for {} closed; respawning and retrying", peer);
                     sender_cache.remove(peer);
-                    let new_tx = get_or_spawn_writer(
+                    let Some(new_tx) = get_or_spawn_writer(
                         peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &dropped_frames,
-                    );
+                    ) else { continue; };
                     sender_cache.insert(peer.clone(), new_tx.clone());
                     match new_tx.try_send($data.clone()) {
                         Ok(()) => {}
@@ -406,9 +406,9 @@ pub(super) async fn run_health_monitor(
                     let tx = if let Some(t) = ping_sender_cache.get(peer) {
                         t.clone()
                     } else {
-                        let t = get_or_spawn_writer(
+                        let Some(t) = get_or_spawn_writer(
                             peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &dropped_frames,
-                        );
+                        ) else { continue; };
                         ping_sender_cache.insert(peer.clone(), t.clone());
                         t
                     };
@@ -420,9 +420,9 @@ pub(super) async fn run_health_monitor(
                         Err(TrySendError::Closed(_)) => {
                             debug!("Peer writer for {} closed; respawning for ping retry", peer);
                             ping_sender_cache.remove(peer);
-                            let new_tx = get_or_spawn_writer(
+                            let Some(new_tx) = get_or_spawn_writer(
                                 peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &dropped_frames,
-                            );
+                            ) else { continue; };
                             ping_sender_cache.insert(peer.clone(), new_tx.clone());
                             match new_tx.try_send(ping_data.clone()) {
                                 Ok(()) => {}
@@ -632,7 +632,7 @@ pub(super) async fn run_gc_task(
                 {
                     let node_id_str = node_id.to_string();
                     let mut bnd = signal_boundary.write();
-                    crate::signal::reconcile_boundary_from_store(&store, &mut bnd, &node_id_str);
+                    crate::signal::reconcile_boundary_from_store(store, &mut bnd, &node_id_str);
                 }
             }
             _ = shutdown_rx.wait_for(|v| *v) => break,

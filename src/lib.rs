@@ -77,7 +77,7 @@ mod tests {
     use super::*;
     use crate::connection::ConnContext;
     use crate::framing::{
-        bincode_cfg, bincode_cfg_prev, read_frame, write_frame, GossipUpdate, SyncEntry,
+        bincode_cfg, read_frame, write_frame, GossipUpdate, SyncEntry,
         WireMessage, WireMessageV7,
         N_GOSSIP_SHARDS, NONCE_OFFSET, PREV_WIRE_VERSION, TTL_OFFSET,
     };
@@ -127,7 +127,7 @@ mod tests {
     /// which always stamps `WIRE_VERSION`. Used to test backward-compat decode paths.
     async fn send_wire_prev(writer: &mut TcpStream, msg: &WireMessageV7) {
         use tokio::io::AsyncWriteExt;
-        let payload = bincode::serde::encode_to_vec(msg, bincode_cfg_prev()).unwrap();
+        let payload = bincode::serde::encode_to_vec(msg, bincode_cfg()).unwrap();
         let total = (1 + payload.len()) as u32;
         let mut header = [0u8; 5];
         header[..4].copy_from_slice(&total.to_be_bytes());

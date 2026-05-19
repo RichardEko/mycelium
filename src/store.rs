@@ -82,15 +82,18 @@ pub(crate) fn prefix_index_insert(index: &PrefixIndex, key: Arc<str>) {
         bucket.pin().insert(key, ());
         return;
     }
-    // Create and install a new bucket, tolerating a concurrent racer.
+    // Pre-insert the key so it lands atomically with bucket creation when we win.
     let new_bucket: Arc<papaya::HashMap<Arc<str>, ()>> = Arc::new(papaya::HashMap::new());
-    guard.compute(Arc::from(seg), |existing| match existing {
+    new_bucket.pin().insert(key.clone(), ());
+    let result = guard.compute(Arc::from(seg), |existing| match existing {
         Some(_) => papaya::Operation::Abort(()),
         None    => papaya::Operation::Insert(new_bucket.clone()),
     });
-    // After compute, the bucket definitely exists (ours or the racer's).
-    if let Some(bucket) = guard.get(seg) {
-        bucket.pin().insert(key, ());
+    // Concurrent racer installed their bucket first; insert into theirs.
+    if let papaya::Compute::Aborted(_) = result {
+        if let Some(bucket) = guard.get(seg) {
+            bucket.pin().insert(key, ());
+        }
     }
 }
 

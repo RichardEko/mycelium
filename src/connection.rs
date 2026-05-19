@@ -1,6 +1,6 @@
 use crate::error::GossipError;
 use crate::framing::{
-    bincode_cfg, bincode_cfg_prev, dispatch_gossip_try_send, is_connection_closed,
+    bincode_cfg, dispatch_gossip_try_send, is_connection_closed,
     make_gossip_update, read_frame, shard_for_key, ForwardHint, FrameVersion, GossipUpdate,
     SyncEntry, WireMessage, WireMessageV7, ANTI_ENTROPY_NONCE, DATA_TAG, NONCE_OFFSET, TTL_OFFSET,
 };
@@ -99,7 +99,7 @@ pub(crate) async fn handle_connection(
             let nonce = u64::from_le_bytes(
                 recv_buf[NONCE_OFFSET..NONCE_OFFSET + 8].try_into().unwrap(),
             );
-            if seen.is_duplicate(nonce, current_ts.load(Ordering::Relaxed)) {
+            if seen.mark_and_check(nonce, current_ts.load(Ordering::Relaxed)) {
                 continue;
             }
         }
@@ -119,7 +119,9 @@ pub(crate) async fn handle_connection(
                 }
             }
         } else {
-            match bincode::serde::decode_from_slice::<WireMessageV7, _>(&recv_buf, bincode_cfg_prev()) {
+            // v7 encoding config is identical to v8; only the struct layout differs
+            // (handled by WireMessageV7, which converts to WireMessage via From).
+            match bincode::serde::decode_from_slice::<WireMessageV7, _>(&recv_buf, bincode_cfg()) {
                 Ok((m, _)) => WireMessage::from(m),
                 Err(e) => {
                     warn!("Malformed v7 message from {}: {}", peer_addr, e);
@@ -163,7 +165,7 @@ pub(crate) async fn handle_connection(
                 }
             }
 
-            WireMessage::StateRequest { sender, store_hash: their_hash, key_timestamps } => {
+            WireMessage::StateRequest { sender, store_hash: their_hash, mut key_timestamps } => {
                 // Trusted-domain check: sender must be a known peer. We do not verify that
                 // peer_addr matches sender.to_socket_addr() — that would reject NAT'd topologies.
                 // In the trusted domain a connected node could spoof the sender field; the
@@ -186,12 +188,13 @@ pub(crate) async fn handle_connection(
                     ) {
                         Ok(_) => {
                             let data: Bytes = fast_buf.freeze();
-                            let tx = get_or_spawn_writer(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &kv_state.dropped_frames);
-                            tokio::spawn(async move {
-                                if tx.send(data).await.is_err() {
-                                    tracing::error!("Fast-path StateResponse writer for {} has exited", sender);
-                                }
-                            });
+                            if let Some(tx) = get_or_spawn_writer(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &kv_state.dropped_frames) {
+                                tokio::spawn(async move {
+                                    if tx.send(data).await.is_err() {
+                                        tracing::error!("Fast-path StateResponse writer for {} has exited", sender);
+                                    }
+                                });
+                            }
                         }
                         Err(e) => warn!("Fast-path StateResponse serialize failed for {}: {}", sender, e),
                     }
@@ -213,15 +216,15 @@ pub(crate) async fn handle_connection(
                             })
                             .collect()
                     } else {
-                        // Delta: build their index, then emit only entries they're missing/stale.
-                        let their_index: ahash::AHashMap<&str, u64> = key_timestamps.iter()
-                            .map(|(k, ts)| (k.as_ref(), *ts))
-                            .collect();
+                        // Delta: sort their index once, then binary-search per local key.
+                        // O(N log N) sort + O(M log N) lookups vs O(N) map build + O(M) lookups;
+                        // avoids an O(N) heap allocation for the map.
+                        key_timestamps.sort_unstable_by(|a, b| a.0.as_ref().cmp(b.0.as_ref()));
                         guard.iter()
                             .filter(|(k, v)| {
-                                match their_index.get(k.as_ref()) {
-                                    None => true,               // sender lacks this key entirely
-                                    Some(&their_ts) => v.timestamp > their_ts, // ours is newer
+                                match key_timestamps.binary_search_by(|(kk, _)| kk.as_ref().cmp(k.as_ref())) {
+                                    Err(_) => true,                              // sender lacks this key
+                                    Ok(i) => v.timestamp > key_timestamps[i].1, // ours is newer
                                 }
                             })
                             .map(|(k, v)| SyncEntry {
@@ -253,17 +256,18 @@ pub(crate) async fn handle_connection(
                             );
                             continue;
                         }
-                        let tx = get_or_spawn_writer(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &kv_state.dropped_frames);
                         // Use send().await (not try_send) — StateResponse is a rare,
                         // join-time message. Dropping it causes permanent divergence
                         // because StateRequest is only sent on first contact; there is
                         // no automatic retry. Wrap in spawn so the connection handler
                         // is not blocked waiting for the writer to drain.
-                        tokio::spawn(async move {
-                            if tx.send(data).await.is_err() {
-                                error!("StateResponse writer for {} has exited", sender);
-                            }
-                        });
+                        if let Some(tx) = get_or_spawn_writer(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &kv_state.dropped_frames) {
+                            tokio::spawn(async move {
+                                if tx.send(data).await.is_err() {
+                                    error!("StateResponse writer for {} has exited", sender);
+                                }
+                            });
+                        }
                     }
                 }
             }
@@ -289,7 +293,7 @@ pub(crate) async fn handle_connection(
 
             WireMessage::Signal { ttl, nonce, sender, scope, kind, payload } => {
                 let ts = current_ts.load(Ordering::Relaxed);
-                if seen.is_duplicate(nonce, ts) {
+                if seen.mark_and_check(nonce, ts) {
                     continue;
                 }
                 // Boundary check: act if admitted (forwarding is unconditional below).
@@ -372,7 +376,7 @@ pub(crate) async fn handle_connection(
                 // for FrameVersion::Current. For FrameVersion::Previous, check now.
                 if frame_version == FrameVersion::Previous {
                     let ts = current_ts.load(Ordering::Relaxed);
-                    if seen.is_duplicate(update.nonce, ts) {
+                    if seen.mark_and_check(update.nonce, ts) {
                         continue;
                     }
                 }
