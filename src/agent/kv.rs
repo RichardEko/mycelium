@@ -1,4 +1,4 @@
-use crate::framing::{dispatch_gossip_try_send, ForwardHint, WireMessage};
+use crate::framing::{dispatch_gossip_send, dispatch_gossip_try_send, ForwardHint, WireMessage};
 use crate::signal::{AdvertiseHandle, SignalScope};
 use crate::store::{apply_and_notify, intern_pool_len};
 use bytes::Bytes;
@@ -215,7 +215,7 @@ impl GossipAgent {
         let kind: Arc<str>   = kind.into();
         let kv_key: Arc<str> = Arc::from(format!("svc/{}/{}", kind, ctx.node_id).as_str());
 
-        let handle = tokio::spawn(async move {
+        self.spawn_task(async move {
             let mut ticker = time::interval(interval);
             ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
             loop {
@@ -240,16 +240,13 @@ impl GossipAgent {
                 &ctx.node_id, ctx.default_ttl, kv_key.clone(), Bytes::new(), true,
             );
             apply_and_notify(&ctx.kv_state, &tombstone);
-            dispatch_gossip_try_send(
+            // Use the async send variant: the task is exiting and can afford to wait
+            // for channel capacity so the tombstone is never silently dropped.
+            dispatch_gossip_send(
                 &ctx.gossip_txs, WireMessage::Data(tombstone),
-                ctx.node_id.id_hash(), ForwardHint::All, &ctx.kv_state.dropped_frames,
-            );
+                ctx.node_id.id_hash(), ForwardHint::All,
+            ).await;
         });
-        {
-            let mut handles = self.task_handles_lock();
-            handles.retain(|h| !h.is_finished());
-            handles.push(handle);
-        }
 
         AdvertiseHandle { _cancel: cancel_tx }
     }

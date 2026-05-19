@@ -10,7 +10,6 @@ use std::{
 };
 use tokio::{
     sync::Semaphore,
-    task::JoinSet,
     time,
 };
 use tracing::{info, warn};
@@ -105,11 +104,10 @@ impl GossipAgent {
             tcp_backlog:    self.config.tcp_accept_backlog,
         };
 
-        let mut new_handles = Vec::with_capacity(n_listeners);
+        let mut handles = self.task_handles_lock();
         for listener in listeners {
-            new_handles.push(tokio::spawn(run_listener_task(listener, lctx.clone())));
+            handles.spawn(run_listener_task(listener, lctx.clone()));
         }
-        self.task_handles_lock().extend(new_handles);
         Ok(())
     }
 
@@ -123,6 +121,7 @@ impl GossipAgent {
         let group_aware_forwarding = self.config.group_aware_forwarding;
         let epidemic_extra_peers   = self.config.epidemic_extra_peers;
         let prefix_index           = self.kv_state.prefix_index.clone();
+        let grp_generation         = self.kv_state.grp_generation.clone();
 
         let rxs = self.gossip_rxs
             .lock()
@@ -130,7 +129,7 @@ impl GossipAgent {
             .take()
             .expect("gossip loop started twice");
         for (shard_idx, gossip_rx) in rxs.into_iter().enumerate() {
-            let handle = tokio::spawn(run_gossip_shard(
+            self.spawn_task(run_gossip_shard(
                 shard_idx,
                 gossip_rx,
                 bootstrap_peers.clone(),
@@ -146,13 +145,13 @@ impl GossipAgent {
                 group_aware_forwarding,
                 epidemic_extra_peers,
                 prefix_index.clone(),
+                grp_generation.clone(),
             ));
-            self.task_handles_lock().push(handle);
         }
     }
 
     fn start_health_monitor(&self) {
-        let handle = tokio::spawn(run_health_monitor(
+        self.spawn_task(run_health_monitor(
             self.node_id.clone(),
             self.bootstrap_peers.clone(),
             self.peers.clone(),
@@ -173,13 +172,11 @@ impl GossipAgent {
             self.task_ctx.signal_handlers.clone(),
             self.config.signal_window_secs,
         ));
-        self.task_handles_lock().push(handle);
     }
 
     fn start_gc_task(&self) {
-        let handle = tokio::spawn(run_gc_task(
-            self.kv_state.store.clone(),
-            self.kv_state.subscriptions.clone(),
+        self.spawn_task(run_gc_task(
+            self.kv_state.clone(),
             self.shutdown_tx.clone(),
             self.config.health_check_interval_secs,
             self.config.default_ttl,
@@ -193,7 +190,6 @@ impl GossipAgent {
             self.task_ctx.signal_boundary.clone(),
             self.node_id.clone(),
         ));
-        self.task_handles_lock().push(handle);
     }
 
     /// Seeds `signal_handlers.sender_log` from `sys/quorum/` Layer I entries written
@@ -250,10 +246,6 @@ impl GossipAgent {
             Ordering::AcqRel, Ordering::Acquire,
         );
         let _ = self.shutdown_tx.send(true);
-        let mut set: JoinSet<()> = JoinSet::new();
-        for h in self.task_handles_lock().drain(..) {
-            set.spawn(async move { let _ = h.await; });
-        }
         // Signal all peer writer tasks to exit. They run as detached tasks and exit
         // via peer_shutdown or the global shutdown signal already sent above.
         {
@@ -263,11 +255,17 @@ impl GossipAgent {
                 .collect();
             for key in keys { guard.remove(&key); }
         }
-        let drain = async { while set.join_next().await.is_some() {} };
+        // Drain the JoinSet. Completed tasks are already removed by JoinSet automatically;
+        // this awaits the ones still running with a timeout.
+        let drain = async {
+            let mut handles = self.task_handles_lock();
+            while handles.join_next().await.is_some() {}
+        };
         if time::timeout(timeout, drain).await.is_err() {
-            let remaining = set.len();
+            let mut handles = self.task_handles_lock();
+            let remaining = handles.len();
             warn!("shutdown: {} task(s) did not exit within {:?}; abandoning", remaining, timeout);
-            set.abort_all();
+            handles.abort_all();
         }
     }
 

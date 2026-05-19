@@ -41,7 +41,6 @@ use std::{
 };
 use tokio::{
     sync::{oneshot, watch},
-    task::JoinHandle,
     time,
 };
 
@@ -567,18 +566,6 @@ impl ConsensusEngine {
         }
     }
 
-    // ── Listener ─────────────────────────────────────────────────────────────
-
-    /// Spawns the voter/listener task.
-    ///
-    /// Called by `GossipAgent::start_consensus_listener`. Consumes `self`.
-    pub(crate) fn spawn_listener(
-        self,
-        cancel_rx:   oneshot::Receiver<()>,
-        shutdown_rx: watch::Receiver<bool>,
-    ) -> JoinHandle<()> {
-        tokio::spawn(run_consensus_listener(self, cancel_rx, shutdown_rx))
-    }
 }
 
 // ── Wire encoding ─────────────────────────────────────────────────────────────
@@ -613,7 +600,7 @@ pub(crate) fn decode_ballot(bytes: &Bytes) -> u64 {
 /// votes, nacks, and KV commit writes on behalf of this node.
 ///
 /// Spawned by [`GossipAgent::start_consensus_listener`] via [`ConsensusEngine::spawn_listener`].
-async fn run_consensus_listener(
+pub(crate) async fn run_consensus_listener(
     ctx:             ConsensusEngine,
     mut cancel:      oneshot::Receiver<()>,
     mut shutdown_rx: watch::Receiver<bool>,
@@ -679,7 +666,9 @@ async fn run_consensus_listener(
 
                 let current = *seen_ballot.get(&slot).unwrap_or(&0);
                 if ballot >= current {
-                    seen_ballot.insert(slot.clone(), ballot);
+                    // Remove instead of insert: once a slot is committed it cannot
+                    // receive a valid higher ballot, so we don't need to track it.
+                    seen_ballot.remove(&slot);
                 }
                 ctx.kv_set(
                     format!("{}{}", consensus_ns::COMMITTED, &*slot),

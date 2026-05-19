@@ -150,7 +150,7 @@ impl GossipAgent {
             .map(|ls| (ls.is_opaque, ls.fill_ratio))
             .unwrap_or((false, ctx.signal_handlers.fill_ratio(&kind)));
 
-        let handle = tokio::spawn(async move {
+        self.spawn_task(async move {
             let mut ticker = time::interval(Duration::from_millis(100));
             ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
 
@@ -236,11 +236,6 @@ impl GossipAgent {
                 }
             }
         });
-        {
-            let mut handles = self.task_handles_lock();
-            handles.retain(|h| !h.is_finished());
-            handles.push(handle);
-        }
 
         OpacityHandle { _cancel: cancel_tx }
     }

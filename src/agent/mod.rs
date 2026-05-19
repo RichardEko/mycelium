@@ -14,7 +14,7 @@ use std::{
     },
     time::Instant,
 };
-use tokio::{sync::{mpsc, watch}, task::JoinHandle};
+use tokio::{sync::{mpsc, watch}, task::JoinSet};
 
 mod lifecycle;
 mod kv;
@@ -153,7 +153,7 @@ pub struct GossipAgent {
     pub(super) listener_alive: Arc<AtomicUsize>,
     pub(super) health_monitor_alive: Arc<AtomicBool>,
     pub(super) gc_alive: Arc<AtomicBool>,
-    pub(super) task_handles: std::sync::Mutex<Vec<JoinHandle<()>>>,
+    pub(super) task_handles: std::sync::Mutex<JoinSet<()>>,
     /// Bundled KV-path state (store + subscriptions + prefix_index + hash_acc +
     /// dropped_frames + max_store_entries). Access fields via `self.kv_state.x`.
     pub(super) kv_state: Arc<KvState>,
@@ -178,8 +178,18 @@ impl GossipAgent {
     }
 
     /// Acquires the task-handles lock, recovering from poison.
-    pub(super) fn task_handles_lock(&self) -> std::sync::MutexGuard<Vec<JoinHandle<()>>> {
+    pub(super) fn task_handles_lock(&self) -> std::sync::MutexGuard<JoinSet<()>> {
         self.task_handles.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Spawns `fut` onto the Tokio runtime and tracks it in the task-handles `JoinSet`.
+    /// Replaces the `tokio::spawn` + `task_handles_lock().push(handle)` pattern so
+    /// completed tasks are automatically reaped by the `JoinSet` rather than accumulating.
+    pub(super) fn spawn_task<F>(&self, fut: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.task_handles_lock().spawn(fut);
     }
 
     /// Creates a new agent. Call [`start`](Self::start) to begin listening.
@@ -239,7 +249,7 @@ impl GossipAgent {
             listener_alive: Arc::new(AtomicUsize::new(0)),
             health_monitor_alive: Arc::new(AtomicBool::new(false)),
             gc_alive: Arc::new(AtomicBool::new(false)),
-            task_handles: std::sync::Mutex::new(Vec::new()),
+            task_handles: std::sync::Mutex::new(JoinSet::new()),
             kv_state,
             task_ctx,
             group_roster_cache: Arc::new(papaya::HashMap::new()),

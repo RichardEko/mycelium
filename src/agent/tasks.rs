@@ -4,7 +4,7 @@ use crate::framing::{bincode_cfg, ForwardHint, WireMessage};
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
 use crate::signal::SignalHandlers;
-use crate::store::{intern_pool_len, StoreEntry};
+use crate::store::intern_pool_len;
 use crate::writer::{evict_peer_writer, get_or_spawn_writer, request_state, WriterEntry};
 use ahash::{AHashMap, AHashSet};
 use bytes::{BufMut, Bytes, BytesMut};
@@ -175,6 +175,7 @@ pub(super) async fn run_gossip_shard(
     group_aware_forwarding: bool,
     epidemic_extra_peers:   usize,
     prefix_index:           Arc<crate::store::PrefixIndex>,
+    grp_generation:         Arc<AtomicU64>,
 ) {
     alive.store(true, Ordering::Relaxed);
     let _alive_guard = AliveGuard(alive.clone());
@@ -185,6 +186,9 @@ pub(super) async fn run_gossip_shard(
     let remaining = max_forwarding_peers.saturating_sub(targets.len());
     targets.extend(cached_peer_list.iter().take(remaining).cloned());
     let mut sender_cache: AHashMap<NodeId, mpsc::Sender<Bytes>> = AHashMap::new();
+    // Per-group member set cache. Keyed by group name; value is (generation, member set).
+    // Invalidated whenever grp_generation advances (any grp/ KV change).
+    let mut group_member_cache: AHashMap<Arc<str>, (u64, AHashSet<NodeId>)> = AHashMap::new();
 
     macro_rules! send_to_peer {
         ($peer:expr, $data:expr) => {{
@@ -262,18 +266,27 @@ pub(super) async fn run_gossip_shard(
                             }
                         }
                         ForwardHint::Group(name) => {
-                            let prefix = crate::signal::grp_prefix(name);
-                            let idx_guard = prefix_index.pin();
-                            let members: AHashSet<NodeId> = idx_guard.get("grp")
-                                .map(|bucket| {
-                                    bucket.pin().iter()
-                                        .filter_map(|(key, _)| {
-                                            if !key.starts_with(&*prefix) { return None; }
-                                            key[prefix.len()..].parse::<NodeId>().ok()
+                            let current_gen = grp_generation.load(Ordering::Relaxed);
+                            let members: &AHashSet<NodeId> = {
+                                let entry = group_member_cache.entry(name.clone());
+                                let (gen, set) = entry.or_insert((u64::MAX, AHashSet::new()));
+                                if *gen != current_gen {
+                                    let prefix = crate::signal::grp_prefix(name);
+                                    let idx_guard = prefix_index.pin();
+                                    *set = idx_guard.get("grp")
+                                        .map(|bucket| {
+                                            bucket.pin().iter()
+                                                .filter_map(|(key, _)| {
+                                                    if !key.starts_with(&*prefix) { return None; }
+                                                    key[prefix.len()..].parse::<NodeId>().ok()
+                                                })
+                                                .collect()
                                         })
-                                        .collect()
-                                })
-                                .unwrap_or_default();
+                                        .unwrap_or_default();
+                                    *gen = current_gen;
+                                }
+                                set
+                            };
 
                             for peer in targets.iter()
                                 .filter(|p| p.id_hash() != sender_hash && members.contains(*p))
@@ -492,8 +505,7 @@ pub(super) async fn new_listener(addr: SocketAddr, backlog: u32) -> Result<TcpLi
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_gc_task(
-    store:             Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
-    subscriptions:     Arc<papaya::HashMap<Arc<str>, watch::Sender<Option<Bytes>>>>,
+    kv_state:          Arc<crate::store::KvState>,
     shutdown_tx:       Arc<watch::Sender<bool>>,
     interval_secs:     u64,
     default_ttl:       u8,
@@ -507,6 +519,8 @@ pub(super) async fn run_gc_task(
     signal_boundary:   Arc<parking_lot::RwLock<crate::signal::Boundary>>,
     node_id:           NodeId,
 ) {
+    let store         = &kv_state.store;
+    let subscriptions = &kv_state.subscriptions;
     gc_alive.store(true, Ordering::Relaxed);
     let _alive_guard = AliveGuard(gc_alive.clone());
     let mut shutdown_rx = shutdown_tx.subscribe();

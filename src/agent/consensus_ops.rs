@@ -291,16 +291,12 @@ impl GossipAgent {
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
         let shutdown_rx = self.shutdown_tx.subscribe();
 
-        let handle = self.make_consensus_engine(
+        let engine = self.make_consensus_engine(
             config.abstain_when_opaque,
             config.use_trust_slices,
             config.max_abstain_ballots,
-        ).spawn_listener(cancel_rx, shutdown_rx);
-        {
-            let mut handles = self.task_handles_lock();
-            handles.retain(|h| !h.is_finished());
-            handles.push(handle);
-        }
+        );
+        self.spawn_task(crate::consensus::run_consensus_listener(engine, cancel_rx, shutdown_rx));
         ConsensusHandle { _cancel: cancel_tx }
     }
 }

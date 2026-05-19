@@ -335,7 +335,7 @@ impl GossipConfig {
     /// **Note:** this method does _not_ call [`validate`](Self::validate). Callers
     /// must invoke `validate()` separately after all overrides are applied.
     ///
-    /// All 21 fields can be overridden: `GOSSIP_BIND_ADDRESS`, `GOSSIP_BIND_PORT`,
+    /// All 24 fields can be overridden: `GOSSIP_BIND_ADDRESS`, `GOSSIP_BIND_PORT`,
     /// `GOSSIP_PROPAGATION_WINDOW_SECS`, `GOSSIP_HEALTH_CHECK_INTERVAL_SECS`,
     /// `GOSSIP_DEFAULT_TTL`, `GOSSIP_MAX_CONNECTIONS`, `GOSSIP_WRITER_CHANNEL_DEPTH`,
     /// `GOSSIP_MAX_FORWARDING_PEERS`, `GOSSIP_RECONNECT_BACKOFF_SECS`,
@@ -346,7 +346,8 @@ impl GossipConfig {
     /// `ip:port` list), `GOSSIP_PING_PEER_SAMPLE_SIZE`, `GOSSIP_TCP_ACCEPT_BACKLOG`,
     /// `GOSSIP_MAX_PEERS`, `GOSSIP_WRITER_IDLE_TIMEOUT_SECS`,
     /// `GOSSIP_GROUP_AWARE_FORWARDING` (`true`/`false`/`1`/`0`),
-    /// `GOSSIP_HEALTH_CHECK_MAX_JITTER_MS`.
+    /// `GOSSIP_HEALTH_CHECK_MAX_JITTER_MS`, `GOSSIP_SIGNAL_WINDOW_SECS`,
+    /// `GOSSIP_MAX_STORE_ENTRIES`, `GOSSIP_EPIDEMIC_EXTRA_PEERS`.
     pub fn apply_env_overrides(&mut self) -> Result<(), GossipError> {
         if let Ok(v) = env::var("GOSSIP_BIND_ADDRESS") {
             self.bind_address = v;
@@ -432,6 +433,12 @@ impl GossipConfig {
         }
         if let Ok(v) = env::var("GOSSIP_SIGNAL_WINDOW_SECS") {
             self.signal_window_secs = v.parse().map_err(GossipError::Parse)?;
+        }
+        if let Ok(v) = env::var("GOSSIP_MAX_STORE_ENTRIES") {
+            self.max_store_entries = v.parse().map_err(GossipError::Parse)?;
+        }
+        if let Ok(v) = env::var("GOSSIP_EPIDEMIC_EXTRA_PEERS") {
+            self.epidemic_extra_peers = v.parse().map_err(GossipError::Parse)?;
         }
         Ok(())
     }

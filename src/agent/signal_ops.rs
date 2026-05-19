@@ -272,7 +272,7 @@ impl GossipAgent {
         let ctx:           Arc<super::TaskCtx> = Arc::clone(&self.task_ctx);
         let kind: Arc<str> = kind.into();
 
-        let handle = tokio::spawn(async move {
+        self.spawn_task(async move {
             let mut ticker = time::interval(interval);
             ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
             loop {
@@ -285,11 +285,6 @@ impl GossipAgent {
                 }
             }
         });
-        {
-            let mut handles = self.task_handles_lock();
-            handles.retain(|h| !h.is_finished());
-            handles.push(handle);
-        }
 
         AdvertiseHandle { _cancel: cancel_tx }
     }
@@ -396,7 +391,7 @@ impl GossipAgent {
         let kind: Arc<str>  = kind.into();
         let check_interval  = (threshold / 4).max(Duration::from_millis(100));
 
-        let handle = tokio::spawn(async move {
+        self.spawn_task(async move {
             let mut ticker = time::interval(check_interval);
             ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
             loop {
@@ -442,11 +437,6 @@ impl GossipAgent {
                 }
             }
         });
-        {
-            let mut handles = self.task_handles_lock();
-            handles.retain(|h| !h.is_finished());
-            handles.push(handle);
-        }
 
         WatchHandle { _cancel: cancel_tx }
     }
