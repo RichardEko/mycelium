@@ -81,6 +81,19 @@
   .code-snippet .tp  { color: var(--accent3); }
 
   footer { text-align: center; padding: 32px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--border); }
+
+  /* Guide panel */
+  .guide-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+  .guide-layers { display: flex; flex-direction: column; gap: 5px; }
+  .guide-layer { display: flex; align-items: baseline; gap: 7px; }
+  .guide-layer-badge { font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 10px; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; }
+  .guide-layer-desc { font-size: 10px; color: var(--muted); line-height: 1.5; }
+  .guide-divider { border: none; border-top: 1px solid var(--border); margin: 2px 0; }
+  .guide-steps { margin: 0; padding-left: 16px; }
+  .guide-steps li { font-size: 11px; color: var(--muted); line-height: 1.65; margin-bottom: 5px; }
+  .guide-steps li:last-child { margin-bottom: 0; }
+  .guide-steps li strong { color: var(--text2); }
+  .guide-steps li code { font-size: 10px; background: var(--surface3); padding: 1px 4px; border-radius: 3px; color: var(--text2); }
 </style>
 </head>
 <body>
@@ -141,6 +154,29 @@
   </div>
 
   <div class="right-col">
+    <div class="panel">
+      <div class="panel-hdr">Guide — what to observe</div>
+      <div class="guide-body">
+        <div class="guide-layers">
+          <div class="guide-layer">
+            <span class="guide-layer-badge" style="background:rgba(63,185,80,0.12);color:var(--accent2)">Layer I</span>
+            <span class="guide-layer-desc">Committed values land in KV at <code style="font-size:9px;background:var(--surface3);padding:1px 3px;border-radius:3px">consensus/committed/{slot}</code> and gossip-replicate to all peers automatically.</span>
+          </div>
+          <div class="guide-layer">
+            <span class="guide-layer-badge" style="background:rgba(255,166,87,0.12);color:var(--accent4)">Layer III</span>
+            <span class="guide-layer-desc">Two-phase epidemic voting — <code style="font-size:9px;background:var(--surface3);padding:1px 3px;border-radius:3px">group_propose</code> broadcasts a ballot, waits for ≥4/7 ACKs, then commits. Competing proposals are superseded; unresolved rounds timeout and retry.</span>
+          </div>
+        </div>
+        <hr class="guide-divider">
+        <ol class="guide-steps">
+          <li>Watch the <strong>round-robin proposer</strong> change each cycle — each node takes a turn proposing its own value; quorum of 4/7 decides the winner.</li>
+          <li>A <strong>committed</strong> row (green) means ≥4 ACKs matched on the same ballot; the value appears in "Committed values" and is KV-synced to all peers.</li>
+          <li>Click <strong>Force propose (node 0)</strong> mid-round — node 0 races the scheduled proposer; the slower proposal gets <strong>superseded</strong> (purple) rather than committed.</li>
+          <li>A <strong>timeout</strong> row (amber) means max ballots were exhausted with no quorum — jitter prevents livelock and the next scheduled proposer tries a fresh slot.</li>
+        </ol>
+      </div>
+    </div>
+
     <div class="panel" style="flex:1">
       <div class="panel-hdr">Ballot history — most recent first <div class="dot-live"></div></div>
       <div style="overflow-x:auto">

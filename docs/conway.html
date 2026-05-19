@@ -268,6 +268,22 @@
     text-align: center; padding: 32px; font-size: 11px; color: var(--muted);
     border-top: 1px solid var(--border);
   }
+
+  /* ── Guide panel ─────────────────────────────────────────── */
+  .guide-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+  .guide-layers { display: flex; flex-direction: column; gap: 5px; }
+  .guide-layer { display: flex; align-items: baseline; gap: 7px; }
+  .guide-layer-badge {
+    font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 10px;
+    text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap;
+  }
+  .guide-layer-desc { font-size: 10px; color: var(--muted); line-height: 1.5; }
+  .guide-divider { border: none; border-top: 1px solid var(--border); margin: 2px 0; }
+  .guide-steps { margin: 0; padding-left: 16px; }
+  .guide-steps li { font-size: 11px; color: var(--muted); line-height: 1.65; margin-bottom: 5px; }
+  .guide-steps li:last-child { margin-bottom: 0; }
+  .guide-steps li strong { color: var(--text2); }
+  .guide-steps li code { font-size: 10px; background: var(--surface3); padding: 1px 4px; border-radius: 3px; color: var(--text2); }
 </style>
 </head>
 <body>
@@ -358,6 +374,30 @@
 
   <!-- ── Right column ─────────────────────────────────────── -->
   <div class="right-col">
+
+    <!-- Guide -->
+    <div class="panel">
+      <div class="panel-hdr">Guide — what to observe</div>
+      <div class="guide-body">
+        <div class="guide-layers">
+          <div class="guide-layer">
+            <span class="guide-layer-badge" style="background:rgba(63,185,80,0.12);color:var(--accent2)">Layer I</span>
+            <span class="guide-layer-desc">Epidemic KV store — each cell writes only its own key; gossip delivers it to peers. No central server holds ground truth.</span>
+          </div>
+          <div class="guide-layer">
+            <span class="guide-layer-badge" style="background:rgba(210,168,255,0.12);color:var(--accent3)">Layer II</span>
+            <span class="guide-layer-desc">Signal Boundary Mesh — every node forwards every signal unconditionally; only nodes that joined the right group act on it.</span>
+          </div>
+        </div>
+        <hr class="guide-divider">
+        <ol class="guide-steps">
+          <li>Enable <strong>Gossip delay</strong>, switch to <strong>KV freshness</strong> — watch the green write-wave ripple outward from each cell that is born or dies.</li>
+          <li>Switch to <strong>Signal flow</strong>, click any cell — <span style="color:var(--accent3)">purple</span> = acting (member of that <code>nb_x_y</code> group), <span style="color:var(--accent)">blue</span> = forwarding only.</li>
+          <li>Hover a cell — the inspector shows all 8 neighbour groups it joined; those are the exact groups whose signals it acts on.</li>
+          <li>Enable Gossip delay and watch the <strong>Stale reads</strong> counter climb — cells computed from a neighbour snapshot that hadn't arrived yet; they self-correct once gossip catches up.</li>
+        </ol>
+      </div>
+    </div>
 
     <!-- Stats -->
     <div class="panel">

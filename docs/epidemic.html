@@ -103,6 +103,19 @@
   .code-snippet .tp  { color: var(--accent3); }
 
   footer { text-align: center; padding: 32px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--border); }
+
+  /* Guide panel */
+  .guide-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+  .guide-layers { display: flex; flex-direction: column; gap: 5px; }
+  .guide-layer { display: flex; align-items: baseline; gap: 7px; }
+  .guide-layer-badge { font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 10px; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; }
+  .guide-layer-desc { font-size: 10px; color: var(--muted); line-height: 1.5; }
+  .guide-divider { border: none; border-top: 1px solid var(--border); margin: 2px 0; }
+  .guide-steps { margin: 0; padding-left: 16px; }
+  .guide-steps li { font-size: 11px; color: var(--muted); line-height: 1.65; margin-bottom: 5px; }
+  .guide-steps li:last-child { margin-bottom: 0; }
+  .guide-steps li strong { color: var(--text2); }
+  .guide-steps li code { font-size: 10px; background: var(--surface3); padding: 1px 4px; border-radius: 3px; color: var(--text2); }
 </style>
 </head>
 <body>
@@ -139,6 +152,26 @@
   </div>
 
   <div class="right-col">
+
+    <!-- Guide -->
+    <div class="panel">
+      <div class="panel-hdr">Guide — what to observe</div>
+      <div class="guide-body">
+        <div class="guide-layers">
+          <div class="guide-layer">
+            <span class="guide-layer-badge" style="background:rgba(210,168,255,0.12);color:var(--accent3)">Layer II</span>
+            <span class="guide-layer-desc">Signal Boundary Mesh — signals flood the ring hop-by-hop; <em>scope</em> determines which nodes act vs which only forward.</span>
+          </div>
+        </div>
+        <hr class="guide-divider">
+        <ol class="guide-steps">
+          <li><strong>System pulse</strong> — all 16 nodes light up green. The wave spreads both clockwise and counter-clockwise from node 0; node 8 (8 hops away) receives last.</li>
+          <li><strong>Alpha group pulse</strong> — nodes 0–7 act (green); nodes 8–15 receive and <em>forward</em> the packet but stay dark — their boundary rejects it.</li>
+          <li><strong>Beta group pulse</strong> — only nodes 8–15 act; the alpha half stays dark despite the packet passing through them.</li>
+          <li>Watch the delay column — far nodes receive the signal measurably later than near nodes; each hop adds ~50–200 ms of gossip latency.</li>
+        </ol>
+      </div>
+    </div>
 
     <div class="panel">
       <div class="panel-hdr">Mesh stats <div class="dot-live"></div></div>

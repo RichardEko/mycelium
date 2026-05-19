@@ -91,6 +91,19 @@
   .code-snippet .tp  { color: var(--accent3); }
 
   footer { text-align: center; padding: 32px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--border); }
+
+  /* Guide panel */
+  .guide-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+  .guide-layers { display: flex; flex-direction: column; gap: 5px; }
+  .guide-layer { display: flex; align-items: baseline; gap: 7px; }
+  .guide-layer-badge { font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 10px; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; }
+  .guide-layer-desc { font-size: 10px; color: var(--muted); line-height: 1.5; }
+  .guide-divider { border: none; border-top: 1px solid var(--border); margin: 2px 0; }
+  .guide-steps { margin: 0; padding-left: 16px; }
+  .guide-steps li { font-size: 11px; color: var(--muted); line-height: 1.65; margin-bottom: 5px; }
+  .guide-steps li:last-child { margin-bottom: 0; }
+  .guide-steps li strong { color: var(--text2); }
+  .guide-steps li code { font-size: 10px; background: var(--surface3); padding: 1px 4px; border-radius: 3px; color: var(--text2); }
 </style>
 </head>
 <body>
@@ -127,6 +140,27 @@
   </div>
 
   <div class="right-col">
+
+    <!-- Guide -->
+    <div class="panel">
+      <div class="panel-hdr">Guide — what to observe</div>
+      <div class="guide-body">
+        <div class="guide-layers">
+          <div class="guide-layer">
+            <span class="guide-layer-badge" style="background:rgba(210,168,255,0.12);color:var(--accent3)">Layer II</span>
+            <span class="guide-layer-desc">Opacity Governor — workers self-report channel saturation via pheromone trails in Layer I KV; dispatchers read <code>peer_load</code> and route around saturated nodes.</span>
+          </div>
+        </div>
+        <hr class="guide-divider">
+        <ol class="guide-steps">
+          <li>Watch at rest — dispatchers share load evenly; fast workers (0–3, 150 ms/task) and slow workers (4–7, 700 ms/task) both stay green.</li>
+          <li>Click <strong>Inject burst</strong> — slow workers fill their channels immediately; bars turn red and the OPAQUE badge appears.</li>
+          <li>Within ~300 ms, dispatchers detect opaque workers via <code>peer_load</code> and stop routing to them — fast workers absorb all new tasks.</li>
+          <li>Slow workers drain passively (no new tasks arrive); bars turn green once fill drops below the 60% threshold, then dispatchers resume routing to them.</li>
+        </ol>
+      </div>
+    </div>
+
     <div class="panel">
       <div class="panel-hdr">Cluster stats <div class="dot-live"></div></div>
       <div class="stats-grid">

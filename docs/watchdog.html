@@ -98,6 +98,19 @@
   .code-snippet .tp  { color: var(--accent3); }
 
   footer { text-align: center; padding: 32px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--border); }
+
+  /* Guide panel */
+  .guide-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+  .guide-layers { display: flex; flex-direction: column; gap: 5px; }
+  .guide-layer { display: flex; align-items: baseline; gap: 7px; }
+  .guide-layer-badge { font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 10px; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; }
+  .guide-layer-desc { font-size: 10px; color: var(--muted); line-height: 1.5; }
+  .guide-divider { border: none; border-top: 1px solid var(--border); margin: 2px 0; }
+  .guide-steps { margin: 0; padding-left: 16px; }
+  .guide-steps li { font-size: 11px; color: var(--muted); line-height: 1.65; margin-bottom: 5px; }
+  .guide-steps li:last-child { margin-bottom: 0; }
+  .guide-steps li strong { color: var(--text2); }
+  .guide-steps li code { font-size: 10px; background: var(--surface3); padding: 1px 4px; border-radius: 3px; color: var(--text2); }
 </style>
 </head>
 <body>
@@ -146,6 +159,29 @@
   </div>
 
   <div class="right-col">
+
+    <div class="panel">
+      <div class="panel-hdr">Guide — what to observe</div>
+      <div class="guide-body">
+        <div class="guide-layers">
+          <div class="guide-layer">
+            <span class="guide-layer-badge" style="background:rgba(63,185,80,0.12);color:var(--accent2)">Layer I</span>
+            <span class="guide-layer-desc">KV store — each heartbeat writes evidence to <code style="font-size:9px;background:var(--surface3);padding:1px 3px;border-radius:3px">sys/quorum/heartbeat/{id}</code>; entries outlive the process that wrote them.</span>
+          </div>
+          <div class="guide-layer">
+            <span class="guide-layer-badge" style="background:rgba(88,166,255,0.12);color:var(--accent)">Layer II</span>
+            <span class="guide-layer-desc"><code style="font-size:9px;background:var(--surface3);padding:1px 3px;border-radius:3px">quorum_persistent</code> — counts distinct heartbeat senders in Layer I KV within a rolling window; circuit opens when count falls below threshold.</span>
+          </div>
+        </div>
+        <hr class="guide-divider">
+        <ol class="guide-steps">
+          <li>Click <strong>Kill</strong> on any three services — the quorum bar drops below threshold and the circuit <strong>opens</strong> within 3 s as KV entries expire.</li>
+          <li>Click <strong>Restart</strong> on killed services — heartbeats resume, KV evidence accumulates, circuit <strong>closes</strong> once 4+ senders are seen in the window.</li>
+          <li>Kill 3+ services and <em>wait</em> without restarting — the circuit opens automatically once old KV evidence ages past the 3 s window, with no extra signal needed.</li>
+          <li>Notice the supervisor reads <strong>Layer I KV</strong>, not in-memory counters — stop and restart the whole example and the circuit state is correct immediately.</li>
+        </ol>
+      </div>
+    </div>
 
     <div class="panel">
       <div class="panel-hdr">Quorum stats <div class="dot-live"></div></div>
