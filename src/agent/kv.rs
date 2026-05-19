@@ -125,7 +125,7 @@ impl GossipAgent {
     /// data such as pheromone trails or group rosters:
     ///
     /// ```ignore
-    /// use gossip_protocol::kv_ns;
+    /// use mycelium::kv_ns;
     /// let trails = agent.scan_prefix(kv_ns::LOAD);
     /// for (key, bytes) in trails {
     ///     // decode bytes into LoadState, check written_at_ms for evaporation

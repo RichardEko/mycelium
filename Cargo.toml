@@ -1,9 +1,9 @@
 [package]
-name = "gossip_protocol"
+name = "mycelium"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.76"
-authors = ["gossip-protocol contributors"]
+authors = ["mycelium contributors"]
 description = "Gossip protocol implementation with resource management"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/RichardEko/mycelium"

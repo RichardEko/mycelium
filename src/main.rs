@@ -1,6 +1,6 @@
-use gossip_protocol::{GossipAgent, NodeId};
-use gossip_protocol::config::GossipConfig;
-use gossip_protocol::error::GossipError;
+use mycelium::{GossipAgent, NodeId};
+use mycelium::config::GossipConfig;
+use mycelium::error::GossipError;
 use std::{error::Error, sync::Arc};
 
 #[tokio::main]
@@ -120,7 +120,7 @@ async fn await_shutdown_signal() -> Result<(), std::io::Error> {
 
 fn print_usage() {
     eprintln!(
-        "Usage: gossip_protocol [OPTIONS]\n\
+        "Usage: mycelium [OPTIONS]\n\
          \n\
          Options:\n\
          -c, --config <file>      Load configuration from a TOML file\n\

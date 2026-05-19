@@ -14,7 +14,7 @@
 
 use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use gossip_protocol::{GossipAgent, GossipConfig, NodeId, SignalScope};
+use mycelium::{GossipAgent, GossipConfig, NodeId, SignalScope};
 use std::sync::Arc;
 
 fn bench_agent() -> Arc<GossipAgent> {

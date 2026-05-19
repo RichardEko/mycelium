@@ -587,31 +587,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gossip_protocol"
-version = "0.1.0"
-dependencies = [
- "ahash",
- "bincode",
- "bytemuck",
- "bytes",
- "criterion",
- "dashmap",
- "fastrand",
- "libc",
- "papaya",
- "parking_lot",
- "pollster",
- "serde",
- "socket2",
- "thiserror",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
- "wgpu",
-]
-
-[[package]]
 name = "gpu-alloc"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -910,6 +885,31 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys",
+]
+
+[[package]]
+name = "mycelium"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "bincode",
+ "bytemuck",
+ "bytes",
+ "criterion",
+ "dashmap",
+ "fastrand",
+ "libc",
+ "papaya",
+ "parking_lot",
+ "pollster",
+ "serde",
+ "socket2",
+ "thiserror",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "wgpu",
 ]
 
 [[package]]

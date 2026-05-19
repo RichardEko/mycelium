@@ -12,7 +12,7 @@
 //! Then open http://127.0.0.1:8095
 
 use bytes::Bytes;
-use gossip_protocol::{
+use mycelium::{
     ConsensusConfig, ConsensusResult, GossipAgent, GossipConfig, NodeId,
 };
 use std::sync::{Arc, Mutex};

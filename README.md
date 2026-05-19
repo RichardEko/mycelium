@@ -47,7 +47,7 @@ exit                shut down the node
 ## Layer I — Gossip KV Transport
 
 ```rust
-use gossip_protocol::{GossipAgent, GossipConfig, NodeId};
+use mycelium::{GossipAgent, GossipConfig, NodeId};
 use std::sync::Arc;
 
 let mut config = GossipConfig::default();
@@ -140,7 +140,7 @@ holds a local **boundary** — a set of group memberships — that decides wheth
 incoming signal. Forwarding is always unconditional; the boundary only controls local delivery.
 
 ```rust
-use gossip_protocol::{signal_kind, SignalScope, OpacityHint};
+use mycelium::{signal_kind, SignalScope, OpacityHint};
 use std::time::Duration;
 
 // ── Group membership ──────────────────────────────────────────────────────
@@ -475,7 +475,7 @@ late joiners automatically via the existing KV mechanism.
 ### API
 
 ```rust
-use gossip_protocol::{ConsensusConfig, ConsensusResult};
+use mycelium::{ConsensusConfig, ConsensusResult};
 use bytes::Bytes;
 
 // Every node that should vote calls this once.

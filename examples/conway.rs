@@ -23,7 +23,7 @@
 //! Toroidal edges — the grid wraps on all sides.
 
 use bytes::Bytes;
-use gossip_protocol::{GossipAgent, GossipConfig, NodeId};
+use mycelium::{GossipAgent, GossipConfig, NodeId};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

@@ -15,7 +15,7 @@
 //! ## Quick start
 //!
 //! ```rust,no_run
-//! use gossip_protocol::{GossipAgent, GossipConfig, NodeId, SignalScope, signal_kind};
+//! use mycelium::{GossipAgent, GossipConfig, NodeId, SignalScope, signal_kind};
 //! use bytes::Bytes;
 //! use std::{sync::Arc, time::Duration};
 //!

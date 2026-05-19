@@ -16,7 +16,7 @@
 //! Then open http://127.0.0.1:8091
 
 use bytes::Bytes;
-use gossip_protocol::{GossipAgent, GossipConfig, NodeId};
+use mycelium::{GossipAgent, GossipConfig, NodeId};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
