@@ -1,8 +1,8 @@
 use crate::error::GossipError;
 use crate::framing::{
-    bincode_cfg, bincode_cfg_prev, dispatch_gossip_try_send, is_connection_closed,
-    make_gossip_update, read_frame, shard_for_key, ForwardHint, FrameVersion, GossipUpdate,
-    SyncEntry, WireMessage, WireMessageV6, ANTI_ENTROPY_NONCE, DATA_TAG, NONCE_OFFSET, TTL_OFFSET,
+    bincode_cfg, bincode_cfg_prev, is_connection_closed,
+    read_frame, shard_for_key, ForwardHint, FrameVersion, GossipUpdate,
+    SyncEntry, WireMessage, WireMessageV7, ANTI_ENTROPY_NONCE, DATA_TAG, NONCE_OFFSET, TTL_OFFSET,
 };
 use crate::signal::{parse_own_grp_key, Boundary, Signal, SignalHandlers, SignalScope};
 use crate::store::{apply_and_notify, intern_key, store_hash_acc, KvState};
@@ -10,7 +10,6 @@ use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
 use crate::writer::{get_or_spawn_writer, request_state, WriterEntry};
 use bytes::{BufMut, Bytes, BytesMut};
-use dashmap::DashMap;
 use parking_lot::RwLock;
 use std::{
     net::SocketAddr,
@@ -18,7 +17,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 use tokio::{io::BufReader, net::TcpStream, sync::{mpsc, mpsc::error::TrySendError, watch}};
 use tracing::{error, warn};
@@ -36,7 +35,7 @@ pub(crate) struct ConnContext {
     pub(crate) max_ttl:          u8,
     /// Unix-millisecond clock shared with the health monitor.
     pub(crate) current_ts:       Arc<AtomicU64>,
-    pub(crate) peer_writers:     Arc<DashMap<NodeId, WriterEntry>>,
+    pub(crate) peer_writers:     Arc<papaya::HashMap<NodeId, WriterEntry>>,
     pub(crate) writer_depth:     usize,
     pub(crate) backoff:          Duration,
     pub(crate) n_shards:         usize,
@@ -106,23 +105,24 @@ pub(crate) async fn handle_connection(
         }
 
         // Decode with the layout matching the sender's wire version.
-        // Previous-version frames use WireMessageV6 to correctly handle the
-        // missing `store_hash` field in StateRequest (bincode fixed-int cannot
-        // decode a struct with fewer bytes than expected; WireMessageV6 has the
-        // correct v6 layout and converts to WireMessage via From).
+        // Previous-version frames use WireMessageV7 to correctly handle the
+        // missing `key_timestamps` field in StateRequest (bincode fixed-int cannot
+        // decode a struct with missing trailing fields; WireMessageV7 has the
+        // correct v7 layout and converts to WireMessage via From, filling
+        // key_timestamps with vec![] — the "full snapshot" sentinel).
         let msg: WireMessage = if frame_version == FrameVersion::Current {
             match bincode::serde::decode_from_slice::<WireMessage, _>(&recv_buf, bincode_cfg()) {
                 Ok((m, _)) => m,
                 Err(e) => {
-                    warn!("Malformed v7 message from {}: {}", peer_addr, e);
+                    warn!("Malformed v8 message from {}: {}", peer_addr, e);
                     continue;
                 }
             }
         } else {
-            match bincode::serde::decode_from_slice::<WireMessageV6, _>(&recv_buf, bincode_cfg_prev()) {
+            match bincode::serde::decode_from_slice::<WireMessageV7, _>(&recv_buf, bincode_cfg_prev()) {
                 Ok((m, _)) => WireMessage::from(m),
                 Err(e) => {
-                    warn!("Malformed v6 message from {}: {}", peer_addr, e);
+                    warn!("Malformed v7 message from {}: {}", peer_addr, e);
                     continue;
                 }
             }
@@ -137,19 +137,33 @@ pub(crate) async fn handle_connection(
                     // Only add piggybacked peers while the table has room.
                     // The direct sender is always admitted (inserted above); only
                     // the forwarded list is capped.
+                    let mut dropped_peers = 0usize;
                     for peer in known_peers {
-                        if peer != node_id && guard.len() < max_peers {
+                        if peer == node_id { continue; }
+                        if guard.len() < max_peers {
                             guard.get_or_insert(peer, now);
+                        } else {
+                            dropped_peers += 1;
                         }
+                    }
+                    if dropped_peers > 0 {
+                        warn!(
+                            from = %sender, dropped = dropped_peers, max_peers,
+                            "Ping: max_peers reached; dropped piggybacked peers"
+                        );
                     }
                     is_new
                 };
                 if sender_is_new {
-                    request_state(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &node_id, &kv_state.hash_acc, &kv_state.dropped_frames);
+                    let key_timestamps: Vec<(std::sync::Arc<str>, u64)> = {
+                        let guard = kv_state.store.pin();
+                        guard.iter().map(|(k, v)| (k.clone(), v.timestamp)).collect()
+                    };
+                    request_state(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &node_id, &kv_state.hash_acc, &kv_state.dropped_frames, key_timestamps);
                 }
             }
 
-            WireMessage::StateRequest { sender, store_hash: their_hash } => {
+            WireMessage::StateRequest { sender, store_hash: their_hash, key_timestamps } => {
                 // Trusted-domain check: sender must be a known peer. We do not verify that
                 // peer_addr matches sender.to_socket_addr() — that would reject NAT'd topologies.
                 // In the trusted domain a connected node could spoof the sender field; the
@@ -159,7 +173,7 @@ pub(crate) async fn handle_connection(
                     continue;
                 }
                 // Anti-entropy fast-path: if the sender's store hash matches ours and is
-                // non-zero (zero = "no digest" sentinel from v6 peers), send an empty
+                // non-zero (zero = "no digest" sentinel from v7 peers), send an empty
                 // StateResponse to acknowledge we're alive without transferring entries.
                 let my_hash = store_hash_acc(&kv_state.hash_acc);
                 if their_hash != 0 && their_hash == my_hash {
@@ -183,16 +197,41 @@ pub(crate) async fn handle_connection(
                     }
                     continue;
                 }
+                // Delta sync (v8+): build a map of the sender's key→timestamp index.
+                // If key_timestamps is empty (v7 peer or first contact), we do a full dump.
+                // Otherwise, only send entries that the sender is missing or has stale.
                 let entries: Vec<SyncEntry> = {
                     let guard = kv_state.store.pin();
-                    guard.iter()
-                        .map(|(k, v)| SyncEntry {
-                            key:          k.clone(),
-                            value:        v.data.clone().unwrap_or_default(),
-                            timestamp:    v.timestamp,
-                            is_tombstone: v.data.is_none(),
-                        })
-                        .collect()
+                    if key_timestamps.is_empty() {
+                        // Full dump: v7 peer or sender sent no digest.
+                        guard.iter()
+                            .map(|(k, v)| SyncEntry {
+                                key:          k.clone(),
+                                value:        v.data.clone().unwrap_or_default(),
+                                timestamp:    v.timestamp,
+                                is_tombstone: v.data.is_none(),
+                            })
+                            .collect()
+                    } else {
+                        // Delta: build their index, then emit only entries they're missing/stale.
+                        let their_index: ahash::AHashMap<&str, u64> = key_timestamps.iter()
+                            .map(|(k, ts)| (k.as_ref(), *ts))
+                            .collect();
+                        guard.iter()
+                            .filter(|(k, v)| {
+                                match their_index.get(k.as_ref()) {
+                                    None => true,               // sender lacks this key entirely
+                                    Some(&their_ts) => v.timestamp > their_ts, // ours is newer
+                                }
+                            })
+                            .map(|(k, v)| SyncEntry {
+                                key:          k.clone(),
+                                value:        v.data.clone().unwrap_or_default(),
+                                timestamp:    v.timestamp,
+                                is_tombstone: v.data.is_none(),
+                            })
+                            .collect()
+                    }
                 };
                 let mut buf = BytesMut::new();
                 match bincode::serde::encode_into_std_write(
@@ -274,36 +313,9 @@ pub(crate) async fn handle_connection(
                             sender: sender.clone(),
                             nonce,
                         });
-                        // Write quorum evidence to Layer I so quorum_persistent() can
-                        // reconstruct "who sent signal K" after a process restart via
-                        // anti-entropy. Key: quorum/{kind}/{sender}; value: 8-byte LE ms.
-                        // Rate-limited: skip if an entry written within the last 1 s already
-                        // exists — prevents O(signal_rate) gossip churn in busy clusters.
-                        let now_ms = SystemTime::now()
-                            .duration_since(UNIX_EPOCH).unwrap_or_default()
-                            .as_millis() as u64;
-                        let quorum_key: Arc<str> = Arc::from(
-                            format!("sys/quorum/{}/{}", kind, sender).as_str()
+                        signal_handlers.record_quorum_evidence(
+                            &kind, &sender, &kv_state, &node_id, max_ttl, &gossip_txs,
                         );
-                        let write_quorum = {
-                            let guard = kv_state.store.pin();
-                            guard.get(&*quorum_key)
-                                .and_then(|e| e.data.as_ref())
-                                .and_then(|v| v.get(..8).and_then(|b| b.try_into().ok()))
-                                .map(|b: [u8; 8]| now_ms.saturating_sub(u64::from_le_bytes(b)) > 1_000)
-                                .unwrap_or(true)
-                        };
-                        if write_quorum {
-                            let quorum_update = make_gossip_update(
-                                &node_id, max_ttl, quorum_key,
-                                Bytes::copy_from_slice(&now_ms.to_le_bytes()), false,
-                            );
-                            apply_and_notify(&kv_state, &quorum_update);
-                            dispatch_gossip_try_send(
-                                &gossip_txs, WireMessage::Data(quorum_update),
-                                node_id.id_hash(), ForwardHint::All, &kv_state.dropped_frames,
-                            );
-                        }
                     }
                 }
                 // Always forward — epidemic propagation regardless of scope.

@@ -14,15 +14,16 @@
 //! All signal APIs are exposed directly on [`GossipAgent`](crate::GossipAgent) — there is no
 //! separate Layer 2 wrapper type.
 
-use crate::framing::bincode_cfg;
+use crate::framing::{bincode_cfg, dispatch_gossip_try_send, make_gossip_update, ForwardHint, WireMessage};
 use crate::node_id::NodeId;
+use crate::store::{apply_and_notify, KvState};
 use ahash::AHashSet;
 use bytes::{BufMut, Bytes, BytesMut};
-use dashmap::DashMap;
 use papaya::HashMap as PapayaMap;
+use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 use tracing::warn;
@@ -124,6 +125,9 @@ impl Boundary {
     }
 }
 
+/// Per-kind sender history shard type alias.
+type SenderLog = PapayaMap<Arc<str>, Arc<Mutex<VecDeque<(NodeId, Instant)>>>>;
+
 /// Fan-out registry: maps signal kind to a list of `mpsc::Sender<Signal>`.
 ///
 /// Multiple tasks may register receivers for the same kind. All registered
@@ -140,14 +144,14 @@ pub(crate) struct SignalHandlers {
     suppressed:  PapayaMap<Arc<str>, Instant>,
     /// Per-kind sender history for [`quorum`](Self::quorum) queries.
     /// Each entry is `(sender, received_at)`. Updated unconditionally in `deliver()`,
-    /// including during suppression. Entries older than 10 minutes are evicted lazily.
+    /// including during suppression. Entries older than `sender_log_window` are evicted lazily.
     ///
-    /// **DashMap, not papaya**: the update path in `deliver()` mutates a `Vec` in-place
-    /// via `entry().or_default()` + `retain()` + `push()`. papaya's only mutation
-    /// primitive is `compute()`, which requires cloning the entire value on every write —
-    /// an O(window-entries) allocation on every signal delivery. DashMap's per-shard
-    /// lock is the correct trade-off for this write-heavy, Vec-typed field.
-    sender_log:  DashMap<Arc<str>, VecDeque<(NodeId, Instant)>>,
+    /// Outer map: papaya (lock-free epoch-pinned reads/inserts on the hot delivery path).
+    /// Inner value: `Arc<Mutex<VecDeque>>` so deliver() can mutate the deque in-place
+    /// without cloning the entire collection via papaya's `compute()`. The Mutex is taken
+    /// only for the deque update; the outer papaya epoch is released immediately after
+    /// cloning the `Arc`.
+    sender_log:  SenderLog,
     /// Operator-configured retention window for sender log entries.
     /// Mirrors [`GossipConfig::signal_window_secs`] so `deliver()` inline eviction
     /// agrees with `trim_sender_log` instead of hardcoding `SENDER_LOG_WINDOW`.
@@ -160,7 +164,7 @@ impl SignalHandlers {
             map:        PapayaMap::new(),
             last_seen:  PapayaMap::new(),
             suppressed: PapayaMap::new(),
-            sender_log: DashMap::new(),
+            sender_log: PapayaMap::new(),
             sender_log_window,
         }
     }
@@ -226,7 +230,19 @@ impl SignalHandlers {
         // quorum() counts all received signals, not just delivered ones.
         {
             let window = self.sender_log_window;
-            let mut log = self.sender_log.entry(signal.kind.clone()).or_default();
+            let guard = self.sender_log.pin();
+            let arc = if let Some(existing) = guard.get(signal.kind.as_ref()) {
+                existing.clone()
+            } else {
+                let new_arc = Arc::new(Mutex::new(VecDeque::<(NodeId, Instant)>::new()));
+                let mut result: Option<Arc<Mutex<VecDeque<_>>>> = None;
+                guard.compute(signal.kind.clone(), |existing| match existing {
+                    Some((_, arc)) => { result = Some(arc.clone()); papaya::Operation::Abort(()) }
+                    None => { result = Some(new_arc.clone()); papaya::Operation::Insert(new_arc.clone()) }
+                });
+                result.unwrap()
+            };
+            let mut log = arc.lock();
             while log.front().map(|(_, t)| t.elapsed() >= window).unwrap_or(false) {
                 log.pop_front();
             }
@@ -305,12 +321,22 @@ impl SignalHandlers {
     /// dynamic or high-cardinality kind strings are used.
     pub(crate) fn trim_sender_log(&self, window: Duration) {
         let cutoff = Instant::now() - window;
-        self.sender_log.retain(|_, log| {
-            while log.front().map(|(_, t)| *t <= cutoff).unwrap_or(false) {
-                log.pop_front();
-            }
-            !log.is_empty()
-        });
+        let to_remove: Vec<Arc<str>> = {
+            let guard = self.sender_log.pin();
+            guard.iter()
+                .filter_map(|(kind, arc)| {
+                    let mut log = arc.lock();
+                    while log.front().map(|(_, t)| *t <= cutoff).unwrap_or(false) {
+                        log.pop_front();
+                    }
+                    if log.is_empty() { Some(kind.clone()) } else { None }
+                })
+                .collect()
+        };
+        let guard = self.sender_log.pin();
+        for kind in to_remove {
+            guard.remove(&kind);
+        }
     }
 
     /// Seeds the sender log with a past entry reconstructed from a `sys/quorum/` Layer I record.
@@ -324,10 +350,19 @@ impl SignalHandlers {
         let received_at = Instant::now()
             .checked_sub(Duration::from_millis(age_ms))
             .unwrap_or_else(Instant::now);
-        self.sender_log
-            .entry(kind)
-            .or_default()
-            .push_back((sender, received_at));
+        let guard = self.sender_log.pin();
+        let arc = if let Some(existing) = guard.get(kind.as_ref()) {
+            existing.clone()
+        } else {
+            let new_arc = Arc::new(Mutex::new(VecDeque::<(NodeId, Instant)>::new()));
+            let mut result: Option<Arc<Mutex<VecDeque<_>>>> = None;
+            guard.compute(kind.clone(), |existing| match existing {
+                Some((_, arc)) => { result = Some(arc.clone()); papaya::Operation::Abort(()) }
+                None => { result = Some(new_arc.clone()); papaya::Operation::Insert(new_arc.clone()) }
+            });
+            result.unwrap()
+        };
+        arc.lock().push_back((sender, received_at));
     }
 
     /// Returns `true` when at least `min_senders` distinct [`NodeId`]s have had a
@@ -336,7 +371,8 @@ impl SignalHandlers {
     /// Synchronous read; does not start a background task. Short-circuits as soon as
     /// `min_senders` distinct senders are found — O(min_senders) average case.
     pub(crate) fn quorum(&self, kind: &str, min_senders: usize, window: Duration) -> bool {
-        let Some(log) = self.sender_log.get(kind) else { return false };
+        let Some(arc) = self.sender_log.pin().get(kind).map(Arc::clone) else { return false };
+        let log = arc.lock();
         let mut distinct: AHashSet<u64> = AHashSet::with_capacity(min_senders + 1);
         for (sender, received_at) in log.iter() {
             if received_at.elapsed() > window { continue; }
@@ -361,7 +397,8 @@ impl SignalHandlers {
         min_senders: usize,
         window: Duration,
     ) -> bool {
-        let Some(log) = self.sender_log.get(kind) else { return false };
+        let Some(arc) = self.sender_log.pin().get(kind).map(Arc::clone) else { return false };
+        let log = arc.lock();
         let mut distinct: AHashSet<u64> = AHashSet::with_capacity(min_senders + 1);
         for (sender, received_at) in log.iter() {
             if received_at.elapsed() > window { continue; }
@@ -371,6 +408,55 @@ impl SignalHandlers {
             if distinct.len() >= min_senders { return true; }
         }
         false
+    }
+
+    #[allow(clippy::type_complexity)]
+    /// Writes quorum evidence for an admitted signal to Layer I and gossips the update.
+    ///
+    /// Key: `sys/quorum/{kind}/{sender}` (see [`kv_ns::QUORUM`]). Value: 8-byte
+    /// little-endian Unix millisecond timestamp of the admission time. Rate-limited:
+    /// skips the write if an existing entry is less than 1 second old, preventing
+    /// O(signal_rate) gossip churn in busy clusters.
+    ///
+    /// Centralising the quorum key format here (alongside `kv_ns::QUORUM` and
+    /// `seed_sender_log`) ensures all readers and writers agree on the namespace
+    /// convention. The connection handler calls this after every admitted signal delivery
+    /// so that [`GossipAgent::quorum_persistent`] can reconstruct quorum evidence after
+    /// a process restart via anti-entropy.
+    pub(crate) fn record_quorum_evidence(
+        &self,
+        kind:       &Arc<str>,
+        sender:     &NodeId,
+        kv_state:   &KvState,
+        node_id:    &NodeId,
+        max_ttl:    u8,
+        gossip_txs: &Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]>,
+    ) {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH).unwrap_or_default()
+            .as_millis() as u64;
+        let quorum_key: Arc<str> = Arc::from(
+            format!("{}{}/{}", kv_ns::QUORUM, kind, sender).as_str()
+        );
+        let should_write = {
+            let guard = kv_state.store.pin();
+            guard.get(&*quorum_key)
+                .and_then(|e| e.data.as_ref())
+                .and_then(|v| v.get(..8).and_then(|b| b.try_into().ok()))
+                .map(|b: [u8; 8]| now_ms.saturating_sub(u64::from_le_bytes(b)) > 1_000)
+                .unwrap_or(true)
+        };
+        if should_write {
+            let upd = make_gossip_update(
+                node_id, max_ttl, quorum_key,
+                Bytes::copy_from_slice(&now_ms.to_le_bytes()), false,
+            );
+            apply_and_notify(kv_state, &upd);
+            dispatch_gossip_try_send(
+                gossip_txs, WireMessage::Data(upd),
+                node_id.id_hash(), ForwardHint::All, &kv_state.dropped_frames,
+            );
+        }
     }
 }
 

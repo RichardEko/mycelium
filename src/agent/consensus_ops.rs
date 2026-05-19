@@ -1,5 +1,6 @@
 use crate::consensus::{
-    consensus_kind, consensus_ns, ConsensusConfig, ConsensusHandle, ConsensusResult,
+    consensus_kind, consensus_ns, count_opaque_members_in_kv, ConsensusConfig, ConsensusHandle,
+    ConsensusResult,
 };
 use crate::framing::bincode_cfg;
 use crate::node_id::NodeId;
@@ -164,7 +165,17 @@ impl GossipAgent {
             }
         }
         // Collect member ids once; used for both the count and the opaque filter.
-        let member_ids: AHashSet<String> = self.group_members(group)
+        // Note: membership changes after this point are not reflected in the current
+        // ballot's quorum threshold — new joiners' votes don't count, and departed
+        // members' votes still do. This is a deliberate non-goal; see propose() in
+        // consensus.rs for the full rationale.
+        //
+        // Use cached_group_members to avoid a full prefix-scan on every propose call.
+        // The cache is invalidated on local join/leave; remote membership changes are
+        // at most health_check_interval_secs stale, which is acceptable for ballot setup.
+        let roster_ttl = Duration::from_secs(self.config.health_check_interval_secs);
+        let cached = self.cached_group_members(group, roster_ttl);
+        let member_ids: AHashSet<String> = cached.0
             .iter()
             .map(NodeId::to_string)
             .collect();
@@ -180,7 +191,19 @@ impl GossipAgent {
         };
         let quorum = compute_quorum_size(config.quorum_size, active_members);
         let opaque_recompute = if config.count_opaque_as_absent {
-            Some((member_ids, freshness, config.quorum_size))
+            // Build the opacity query callback at the Layer II call site so that
+            // propose() (Layer III) does not read KvState directly. The callback
+            // captures only the Arcs needed for the scan — no GossipAgent reference.
+            let kv_cb  = Arc::clone(&self.task_ctx.kv_state);
+            let ids_cb = member_ids.clone();
+            let count_opaque: Arc<dyn Fn() -> usize + Send + Sync> = Arc::new(move || {
+                let now_ms = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                count_opaque_members_in_kv(&kv_cb, &ids_cb, freshness.as_millis() as u64, now_ms)
+            });
+            Some((member_ids, freshness, config.quorum_size, count_opaque))
         } else {
             None
         };

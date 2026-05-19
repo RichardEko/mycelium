@@ -9,6 +9,13 @@ use std::sync::{
 use tokio::sync::watch;
 use tracing::warn;
 
+/// Layer II watch-channel map. Maps a key to a `watch::Sender` that fires whenever
+/// the key's value changes in the store. Written by `GossipAgent::subscribe` (Layer II)
+/// and notified by `apply_and_notify` (Layer I/II bridge). Co-located in `KvState`
+/// because subscriptions share KvState's lifetime and are always distributed together —
+/// separating them would require threading a second Arc through every context struct.
+pub(crate) type KvSubscriptions = Arc<papaya::HashMap<Arc<str>, watch::Sender<Option<Bytes>>>>;
+
 /// Bundled KV-path state shared across connection handlers, consensus tasks,
 /// and opacity governors.
 ///
@@ -16,9 +23,13 @@ use tracing::warn;
 /// the blast-radius of future additions: new KV fields require only one struct
 /// change and one construction-site change rather than edits in every intermediate
 /// context struct (`ListenerContext`, `ConnContext`, `ConsensusEngine`, etc.).
+///
+/// `subscriptions` is a Layer II concern co-located here for lifecycle convenience.
+/// See [`KvSubscriptions`] for the full rationale.
 pub(crate) struct KvState {
     pub store:             Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
-    pub subscriptions:     Arc<papaya::HashMap<Arc<str>, watch::Sender<Option<Bytes>>>>,
+    /// Layer II watch channels. See [`KvSubscriptions`] for design notes.
+    pub subscriptions:     KvSubscriptions,
     pub prefix_index:      Arc<PrefixIndex>,
     pub hash_acc:          Arc<AtomicU64>,
     pub dropped_frames:    Arc<AtomicU64>,

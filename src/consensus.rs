@@ -238,9 +238,12 @@ pub mod consensus_ns {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Counts group members with any opaque load entry fresher than `max_age_ms`.
-/// Mirrors `GossipAgent::count_opaque_members` using `KvState` directly so that
-/// `ConsensusEngine::propose` can recompute quorum without an agent reference.
-fn count_opaque_members_in_kv(
+///
+/// Exposed as `pub(crate)` so `consensus_ops.rs` can capture it in the opaque-recompute
+/// callback without duplicating the KV-scan logic. The callback pattern in `propose()`
+/// means Layer III no longer reads `KvState` directly — it calls the closure that
+/// `group_propose` (Layer II) assembles at the call site.
+pub(crate) fn count_opaque_members_in_kv(
     kv_state:     &KvState,
     member_ids:   &AHashSet<String>,
     max_age_ms:   u64,
@@ -271,6 +274,13 @@ fn count_opaque_members_in_kv(
             .count()
     }
 }
+
+/// Closure type injected by `group_propose` for mid-ballot opaque-member recomputation.
+///
+/// `(member_ids, freshness, config_quorum_size, count_opaque_fn)`.
+/// `count_opaque_fn()` returns the current number of opaque group members. Built at
+/// the Layer II call site so `propose` does not read `KvState` directly.
+type OpaqueRecompute = Option<(AHashSet<String>, Duration, usize, Arc<dyn Fn() -> usize + Send + Sync>)>;
 
 // ── ConsensusEngine ──────────────────────────────────────────────────────────
 //
@@ -374,11 +384,11 @@ impl ConsensusEngine {
     ///
     /// Called by `GossipAgent::group_propose` and `GossipAgent::system_propose`.
     ///
-    /// `opaque_recompute` — when `Some((member_ids, freshness, config_quorum_size))`,
-    /// `propose` registers for `BOUNDARY_TRANSPARENT` signals and re-evaluates the
-    /// effective quorum size mid-ballot when any member reports a transition back to
-    /// transparent. This allows a ballot to commit earlier when previously-opaque
-    /// members become available during the collection window.
+    /// `opaque_recompute` — when `Some((member_ids, freshness, config_quorum_size, count_opaque))`,
+    /// `propose` registers for `BOUNDARY_OPAQUE` signals and re-evaluates the effective quorum
+    /// size mid-ballot when any member transitions. `count_opaque` is a callback built by the
+    /// Layer II call site (`group_propose`) so `propose` does not read `KvState` directly —
+    /// the opacity query strategy is an injected dependency, not a Layer III concern.
     pub(crate) async fn propose(
         &self,
         scope:             SignalScope,
@@ -386,7 +396,7 @@ impl ConsensusEngine {
         value:             Bytes,
         quorum_size:       usize,
         config:            ConsensusConfig,
-        opaque_recompute:  Option<(AHashSet<String>, Duration, usize)>,
+        opaque_recompute:  OpaqueRecompute,
     ) -> ConsensusResult {
         let ballot_key = format!("{}{}", consensus_ns::BALLOT, &*slot);
         let commit_key = format!("{}{}", consensus_ns::COMMITTED, &*slot);
@@ -450,6 +460,13 @@ impl ConsensusEngine {
             // Local dedup per (slot, ballot). Cannot use signal_handlers.quorum_for_group
             // here: the sender_log records (sender, received_at) without slot/ballot
             // correlation, so it would conflate votes from different rounds.
+            //
+            // Membership changes mid-ballot are intentionally ignored. The group member
+            // set is captured once before the ballot loop (in group_propose) and the quorum
+            // threshold is fixed for that ballot's lifetime. A joining member's votes do not
+            // count toward this ballot; a leaving member's existing vote remains counted.
+            // This is a known non-goal: supporting live membership changes mid-ballot would
+            // require distributed coordination that exceeds the protocol's scope.
             let mut voters: AHashSet<u64> = AHashSet::new();
             voters.insert(self.task_ctx.node_id.id_hash());
             if voters.len() >= quorum_size {
@@ -514,16 +531,8 @@ impl ConsensusEngine {
                             None => std::future::pending().await,
                         }
                     } => {
-                        if let Some((ref ids, freshness, config_qs)) = opaque_recompute {
-                            use std::time::{SystemTime, UNIX_EPOCH};
-                            let now_ms = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_millis() as u64;
-                            let opaque = count_opaque_members_in_kv(
-                                &self.task_ctx.kv_state, ids,
-                                freshness.as_millis() as u64, now_ms,
-                            );
+                        if let Some((ref ids, _freshness, config_qs, ref count_opaque)) = opaque_recompute {
+                            let opaque = count_opaque();
                             let active = ids.len().saturating_sub(opaque).max(1);
                             quorum_size = if config_qs > 0 { config_qs } else { active / 2 + 1 };
                             // Check immediately — we may already have enough votes.

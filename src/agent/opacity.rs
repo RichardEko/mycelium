@@ -162,7 +162,17 @@ impl GossipAgent {
                     _ = &mut cancel_rx               => break,
                     _ = shutdown_rx.wait_for(|v| *v) => break,
                     _ = ticker.tick() => {
-                        let fill_ratio = ctx.signal_handlers.fill_ratio(&kind);
+                        let handler_fill = ctx.signal_handlers.fill_ratio(&kind);
+                        // Shard backpressure: a saturated gossip shard means signals are
+                        // being dropped before they reach any handler. Include it in the
+                        // load metric so opacity triggers before handlers see the pressure.
+                        let shard_fill: f32 = ctx.gossip_txs.iter()
+                            .map(|tx| {
+                                let max = tx.max_capacity();
+                                if max == 0 { 0.0_f32 } else { 1.0 - tx.capacity() as f32 / max as f32 }
+                            })
+                            .fold(0.0_f32, f32::max);
+                        let fill_ratio   = handler_fill.max(shard_fill);
                         // trend_factor in [0, 0.4]: rising 0.2/tick reduces threshold by 40%.
                         let trend        = fill_ratio - prev_fill;
                         let trend_factor = (trend.max(0.0) * 2.0).min(0.4);
