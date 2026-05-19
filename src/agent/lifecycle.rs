@@ -15,6 +15,7 @@ use tokio::{
 };
 use tracing::{info, warn};
 
+use crate::connection::ConnContext;
 use super::{GossipAgent, STATE_IDLE, STATE_RUNNING, STATE_STOPPED};
 use super::tasks::{
     ListenerContext, run_gossip_shard, run_health_monitor, run_gc_task, run_listener_task, new_listener,
@@ -75,18 +76,15 @@ impl GossipAgent {
             listeners.push(new_listener(addr, self.config.tcp_accept_backlog).await?);
         }
 
-        let lctx = ListenerContext {
+        let conn = ConnContext {
             node_id:         self.node_id.clone(),
             peers:           self.peers.clone(),
             gossip_txs:      self.gossip_txs.clone(),
             seen:            self.seen.clone(),
-            shutdown_tx:     self.shutdown_tx.clone(),
+            shutdown:        self.shutdown_tx.clone(),
+            max_ttl:         self.config.default_ttl,
             current_ts:      self.current_ts.clone(),
             peer_writers:    self.peer_writers.clone(),
-            conn_sem:        Arc::new(Semaphore::new(self.config.max_connections)),
-            listener_alive:  self.listener_alive.clone(),
-            max_conn:        self.config.max_connections,
-            max_ttl:         self.config.default_ttl,
             writer_depth:    self.config.writer_channel_depth,
             backoff:         Duration::from_secs(self.config.reconnect_backoff_secs),
             n_shards:        self.gossip_txs.len(),
@@ -97,6 +95,12 @@ impl GossipAgent {
             max_peers:           self.config.max_peers,
             writer_idle_timeout: Duration::from_secs(self.config.writer_idle_timeout_secs),
             kv_state:            self.kv_state.clone(),
+        };
+        let lctx = ListenerContext {
+            conn,
+            conn_sem:       Arc::new(Semaphore::new(self.config.max_connections)),
+            listener_alive: self.listener_alive.clone(),
+            max_conn:       self.config.max_connections,
         };
 
         let mut new_handles = Vec::with_capacity(n_listeners);

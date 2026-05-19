@@ -24,6 +24,7 @@ use tokio::{io::BufReader, net::TcpStream, sync::{mpsc, mpsc::error::TrySendErro
 use tracing::{error, warn};
 
 /// Shared state threaded into every inbound connection handler.
+#[derive(Clone)]
 pub(crate) struct ConnContext {
     pub(crate) node_id:          NodeId,
     pub(crate) peers:            Arc<papaya::HashMap<NodeId, Instant>>,

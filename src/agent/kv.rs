@@ -1,4 +1,4 @@
-use crate::framing::{dispatch_gossip_try_send, ForwardHint, GossipUpdate, WireMessage};
+use crate::framing::{dispatch_gossip_try_send, ForwardHint, WireMessage};
 use crate::signal::{AdvertiseHandle, SignalScope};
 use crate::store::{apply_and_notify, intern_pool_len};
 use bytes::Bytes;
@@ -211,16 +211,9 @@ impl GossipAgent {
         let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
         let mut shutdown_rx = self.shutdown_tx.subscribe();
 
-        let node_id         = self.node_id.clone();
-        let seen            = self.seen.clone();
-        let current_ts      = self.current_ts.clone();
-        let signal_boundary = self.signal_boundary.clone();
-        let signal_handlers = self.signal_handlers.clone();
-        let gossip_txs      = self.gossip_txs.clone();
-        let default_ttl     = self.config.default_ttl;
-        let kv_state        = self.kv_state.clone();
-        let kind: Arc<str>  = kind.into();
-        let kv_key: Arc<str> = Arc::from(format!("svc/{}/{}", kind, node_id).as_str());
+        let ctx:             Arc<super::TaskCtx> = Arc::clone(&self.task_ctx);
+        let kind: Arc<str>   = kind.into();
+        let kv_key: Arc<str> = Arc::from(format!("svc/{}/{}", kind, ctx.node_id).as_str());
 
         let handle = tokio::spawn(async move {
             let mut ticker = time::interval(interval);
@@ -231,47 +224,25 @@ impl GossipAgent {
                     _ = shutdown_rx.wait_for(|v| *v)     => break,
                     _ = ticker.tick() => {
                         let payload = payload_fn();
-                        emit_signal(
-                            &node_id, &seen, &current_ts, &signal_boundary,
-                            &signal_handlers, &gossip_txs, default_ttl,
-                            &kv_state.dropped_frames, kind.clone(), scope.clone(), payload.clone(),
+                        emit_signal(&ctx, kind.clone(), scope.clone(), payload.clone());
+                        let update = crate::framing::make_gossip_update(
+                            &ctx.node_id, ctx.default_ttl, kv_key.clone(), payload, false,
                         );
-                        let ts = SystemTime::now()
-                            .duration_since(UNIX_EPOCH).unwrap_or_default()
-                            .as_millis() as u64;
-                        let update = GossipUpdate {
-                            nonce: fastrand::u64(1..),
-                            sender: node_id.id_hash(),
-                            ttl: default_ttl,
-                            is_tombstone: false,
-                            timestamp: ts,
-                            key: kv_key.clone(),
-                            value: payload,
-                        };
-                        apply_and_notify(&kv_state, &update);
+                        apply_and_notify(&ctx.kv_state, &update);
                         dispatch_gossip_try_send(
-                            &gossip_txs, WireMessage::Data(update),
-                            node_id.id_hash(), ForwardHint::All, &kv_state.dropped_frames,
+                            &ctx.gossip_txs, WireMessage::Data(update),
+                            ctx.node_id.id_hash(), ForwardHint::All, &ctx.kv_state.dropped_frames,
                         );
                     }
                 }
             }
-            let ts = SystemTime::now()
-                .duration_since(UNIX_EPOCH).unwrap_or_default()
-                .as_millis() as u64;
-            let tombstone = GossipUpdate {
-                nonce: fastrand::u64(1..),
-                sender: node_id.id_hash(),
-                ttl: default_ttl,
-                is_tombstone: true,
-                timestamp: ts,
-                key: kv_key.clone(),
-                value: Bytes::new(),
-            };
-            apply_and_notify(&kv_state, &tombstone);
+            let tombstone = crate::framing::make_gossip_update(
+                &ctx.node_id, ctx.default_ttl, kv_key.clone(), Bytes::new(), true,
+            );
+            apply_and_notify(&ctx.kv_state, &tombstone);
             dispatch_gossip_try_send(
-                &gossip_txs, WireMessage::Data(tombstone),
-                node_id.id_hash(), ForwardHint::All, &kv_state.dropped_frames,
+                &ctx.gossip_txs, WireMessage::Data(tombstone),
+                ctx.node_id.id_hash(), ForwardHint::All, &ctx.kv_state.dropped_frames,
             );
         });
         {

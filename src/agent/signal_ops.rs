@@ -50,12 +50,7 @@ impl GossipAgent {
         scope:   SignalScope,
         payload: impl Into<Bytes>,
     ) -> bool {
-        emit_signal(
-            &self.node_id, &self.seen, &self.current_ts,
-            &self.signal_boundary, &self.signal_handlers, &self.gossip_txs,
-            self.config.default_ttl, &self.dropped_frames,
-            kind.into(), scope, payload.into(),
-        )
+        emit_signal(&self.task_ctx, kind.into(), scope, payload.into())
     }
 
     /// Like [`emit`](Self::emit), but awaits channel capacity instead of dropping
@@ -72,11 +67,7 @@ impl GossipAgent {
         scope:   SignalScope,
         payload: impl Into<Bytes>,
     ) -> bool {
-        super::helpers::emit_signal_async(
-            &self.node_id, &self.seen, &self.current_ts, &self.signal_boundary,
-            &self.signal_handlers, &self.gossip_txs, self.config.default_ttl,
-            &self.dropped_frames, kind.into(), scope, payload.into(),
-        ).await
+        super::helpers::emit_signal_async(&self.task_ctx, kind.into(), scope, payload.into()).await
     }
 
     /// Joins a named boundary group.
@@ -247,15 +238,8 @@ impl GossipAgent {
         let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
         let mut shutdown_rx = self.shutdown_tx.subscribe();
 
-        let node_id         = self.node_id.clone();
-        let seen            = self.seen.clone();
-        let current_ts      = self.current_ts.clone();
-        let signal_boundary = self.signal_boundary.clone();
-        let signal_handlers = self.signal_handlers.clone();
-        let gossip_txs      = self.gossip_txs.clone();
-        let default_ttl     = self.config.default_ttl;
-        let dropped_frames  = self.dropped_frames.clone();
-        let kind: Arc<str>  = kind.into();
+        let ctx:           Arc<super::TaskCtx> = Arc::clone(&self.task_ctx);
+        let kind: Arc<str> = kind.into();
 
         let handle = tokio::spawn(async move {
             let mut ticker = time::interval(interval);
@@ -265,11 +249,7 @@ impl GossipAgent {
                     _ = &mut cancel_rx                   => break,
                     _ = shutdown_rx.wait_for(|v| *v)     => break,
                     _ = ticker.tick() => {
-                        emit_signal(
-                            &node_id, &seen, &current_ts, &signal_boundary,
-                            &signal_handlers, &gossip_txs, default_ttl,
-                            &dropped_frames, kind.clone(), scope.clone(), payload_fn(),
-                        );
+                        emit_signal(&ctx, kind.clone(), scope.clone(), payload_fn());
                     }
                 }
             }

@@ -3,8 +3,8 @@ use crate::error::GossipError;
 use crate::framing::{bincode_cfg, ForwardHint, WireMessage};
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
-use crate::signal::{parse_own_grp_key, Boundary, SignalHandlers};
-use crate::store::{intern_pool_len, KvState, StoreEntry};
+use crate::signal::{parse_own_grp_key, SignalHandlers};
+use crate::store::{intern_pool_len, StoreEntry};
 use crate::writer::{evict_peer_writer, get_or_spawn_writer, request_state, WriterEntry};
 use ahash::{AHashMap, AHashSet};
 use bytes::{BufMut, Bytes, BytesMut};
@@ -60,47 +60,27 @@ impl Drop for ListenerGuard {
 // ── Listener context ───────────────────────────────────────────────────────────
 
 /// Bundled context cloned into every listener task.
+///
+/// Embeds a [`ConnContext`] for the 17 fields shared with connection handlers,
+/// plus 4 listener-only fields. This eliminates the structural duplication that
+/// existed when both structs listed the same Arcs independently.
 #[derive(Clone)]
 pub(super) struct ListenerContext {
-    pub(super) node_id:        NodeId,
-    pub(super) peers:          Arc<papaya::HashMap<NodeId, Instant>>,
-    pub(super) gossip_txs:     Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]>,
-    pub(super) seen:           Arc<ShardedSeen>,
-    pub(super) shutdown_tx:    Arc<watch::Sender<bool>>,
-    pub(super) current_ts:     Arc<AtomicU64>,
-    pub(super) peer_writers:   Arc<DashMap<NodeId, WriterEntry>>,
+    pub(super) conn:           ConnContext,
     pub(super) conn_sem:       Arc<Semaphore>,
     pub(super) listener_alive: Arc<AtomicUsize>,
     pub(super) max_conn:       usize,
-    pub(super) max_ttl:        u8,
-    pub(super) writer_depth:   usize,
-    pub(super) backoff:        Duration,
-    pub(super) n_shards:        usize,
-    pub(super) intern_keys:     bool,
-    pub(super) intern_max_keys: usize,
-    pub(super) signal_boundary: Arc<RwLock<Boundary>>,
-    pub(super) signal_handlers: Arc<SignalHandlers>,
-    pub(super) max_peers:           usize,
-    pub(super) writer_idle_timeout: Duration,
-    /// Bundled KV-path state (replaces store, subscriptions, prefix_index,
-    /// hash_acc, dropped_frames, max_store_entries individual fields).
-    pub(super) kv_state:            Arc<KvState>,
 }
 
 // ── Task implementations ───────────────────────────────────────────────────────
 
 pub(super) async fn run_listener_task(listener: TcpListener, lctx: ListenerContext) {
-    let ListenerContext {
-        node_id, peers, gossip_txs, seen, shutdown_tx,
-        current_ts, peer_writers, conn_sem, listener_alive,
-        max_conn, max_ttl, writer_depth, backoff, n_shards, intern_keys, intern_max_keys,
-        signal_boundary, signal_handlers, max_peers, writer_idle_timeout, kv_state,
-    } = lctx;
-    let mut shutdown_rx = shutdown_tx.subscribe();
+    let ListenerContext { conn, conn_sem, listener_alive, max_conn } = lctx;
+    let mut shutdown_rx = conn.shutdown.subscribe();
     let mut conn_set: JoinSet<()> = JoinSet::new();
     let mut retry_delay = false;
     listener_alive.fetch_add(1, Ordering::Relaxed);
-    let _guard = ListenerGuard { count: listener_alive.clone(), shutdown_tx: shutdown_tx.clone() };
+    let _guard = ListenerGuard { count: listener_alive.clone(), shutdown_tx: conn.shutdown.clone() };
 
     loop {
         if retry_delay {
@@ -120,27 +100,9 @@ pub(super) async fn run_listener_task(listener: TcpListener, lctx: ListenerConte
                         }
                         match conn_sem.clone().try_acquire_owned() {
                             Ok(permit) => {
-                                let node_id          = node_id.clone();
-                                let peers            = peers.clone();
-                                let gossip_txs       = gossip_txs.clone();
-                                let seen             = seen.clone();
-                                let shutdown         = shutdown_tx.clone();
-                                let current_ts       = current_ts.clone();
-                                let peer_writers     = peer_writers.clone();
-                                let signal_boundary  = signal_boundary.clone();
-                                let signal_handlers  = signal_handlers.clone();
-                                let kv_state         = kv_state.clone();
+                                let ctx = conn.clone();
                                 conn_set.spawn(async move {
                                     let _permit = permit;
-                                    let ctx = ConnContext {
-                                        node_id, peers, gossip_txs,
-                                        seen, shutdown, max_ttl,
-                                        current_ts, peer_writers,
-                                        writer_depth, backoff, n_shards,
-                                        intern_keys, intern_max_keys, signal_boundary,
-                                        signal_handlers, max_peers, writer_idle_timeout,
-                                        kv_state,
-                                    };
                                     if let Err(e) = handle_connection(socket, addr, ctx).await {
                                         warn!("Connection error from {}: {}", addr, e);
                                     }

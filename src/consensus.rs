@@ -361,21 +361,11 @@ impl ConsensusEngine {
     }
 
     fn emit(&self, kind: Arc<str>, scope: SignalScope, payload: Bytes) {
-        let tc = &self.task_ctx;
-        emit_signal(
-            &tc.node_id, &tc.seen, &tc.current_ts, &tc.signal_boundary,
-            &tc.signal_handlers, &tc.gossip_txs, tc.default_ttl,
-            &tc.kv_state.dropped_frames, kind, scope, payload,
-        );
+        emit_signal(&self.task_ctx, kind, scope, payload);
     }
 
     async fn emit_async(&self, kind: Arc<str>, scope: SignalScope, payload: Bytes) -> bool {
-        let tc = &self.task_ctx;
-        emit_signal_async(
-            &tc.node_id, &tc.seen, &tc.current_ts, &tc.signal_boundary,
-            &tc.signal_handlers, &tc.gossip_txs, tc.default_ttl,
-            &tc.kv_state.dropped_frames, kind, scope, payload,
-        ).await
+        emit_signal_async(&self.task_ctx, kind, scope, payload).await
     }
 
     // ── Proposer ─────────────────────────────────────────────────────────────

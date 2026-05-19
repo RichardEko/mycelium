@@ -182,9 +182,7 @@ impl GossipAgent {
                                 .unwrap_or(true);
                             if gate_ok || fill_ratio >= 1.0 {
                                 emit_signal(
-                                    &ctx.node_id, &ctx.seen, &ctx.current_ts, &ctx.signal_boundary,
-                                    &ctx.signal_handlers, &ctx.gossip_txs, ctx.default_ttl,
-                                    &ctx.kv_state.dropped_frames,
+                                    &ctx,
                                     Arc::from(crate::signal::signal_kind::BOUNDARY_OPAQUE),
                                     scope.clone(), hint.payload.clone(),
                                 );
@@ -212,9 +210,7 @@ impl GossipAgent {
                             }
                         } else if is_opaque && fill_ratio < eff - hint.hysteresis {
                             emit_signal(
-                                &ctx.node_id, &ctx.seen, &ctx.current_ts, &ctx.signal_boundary,
-                                &ctx.signal_handlers, &ctx.gossip_txs, ctx.default_ttl,
-                                &ctx.kv_state.dropped_frames,
+                                &ctx,
                                 Arc::from(crate::signal::signal_kind::BOUNDARY_TRANSPARENT),
                                 scope.clone(), Bytes::new(),
                             );

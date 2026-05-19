@@ -197,20 +197,12 @@ impl GossipAgent {
         let seen_shards = n_shards.max(16);
 
         let signal_window = std::time::Duration::from_secs(config.signal_window_secs);
-        let store        = Arc::new(papaya::HashMap::new());
-        let subscriptions = Arc::new(papaya::HashMap::new());
-        let prefix_index = Arc::new(PrefixIndex::new());
-        let hash_acc     = Arc::new(AtomicU64::new(0));
-        let dropped_frames = Arc::new(AtomicU64::new(0));
-        let max_store_entries = config.max_store_entries;
-        let kv_state = Arc::new(KvState {
-            store:             store.clone(),
-            subscriptions:     subscriptions.clone(),
-            prefix_index:      prefix_index.clone(),
-            hash_acc:          hash_acc.clone(),
-            dropped_frames:    dropped_frames.clone(),
-            max_store_entries,
-        });
+        let kv_state     = KvState::new(config.max_store_entries);
+        let store         = kv_state.store.clone();
+        let subscriptions = kv_state.subscriptions.clone();
+        let prefix_index  = kv_state.prefix_index.clone();
+        let hash_acc      = kv_state.hash_acc.clone();
+        let dropped_frames = kv_state.dropped_frames.clone();
 
         let default_ttl     = config.default_ttl;
         let seen            = Arc::new(ShardedSeen::new(seen_shards));

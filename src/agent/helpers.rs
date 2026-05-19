@@ -2,18 +2,15 @@ use crate::consensus::ConsensusEngine;
 use crate::framing::{
     dispatch_gossip_send, dispatch_gossip_try_send, ForwardHint, GossipUpdate, WireMessage,
 };
-use crate::node_id::NodeId;
-use crate::seen::ShardedSeen;
 use crate::signal::{Boundary, Signal, SignalHandlers, SignalScope};
 use bytes::Bytes;
 use parking_lot::RwLock;
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
+    atomic::Ordering,
     Arc,
 };
-use tokio::sync::mpsc;
 
-use super::GossipAgent;
+use super::{GossipAgent, TaskCtx};
 
 // ── Private impl helpers ──────────────────────────────────────────────────────
 
@@ -84,26 +81,18 @@ fn deliver_locally(
 /// encodes the wire frame, and routes to the correct gossip shard via `try_send`.
 ///
 /// Shared by [`GossipAgent::emit`] and the [`advertise`](GossipAgent::advertise) task.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_signal(
-    node_id:         &NodeId,
-    seen:            &ShardedSeen,
-    current_ts:      &AtomicU64,
-    signal_boundary: &RwLock<Boundary>,
-    signal_handlers: &SignalHandlers,
-    gossip_txs:      &[mpsc::Sender<(Bytes, u64, ForwardHint)>],
-    default_ttl:     u8,
-    dropped_frames:  &AtomicU64,
-    kind:            Arc<str>,
-    scope:           SignalScope,
-    payload:         Bytes,
+    ctx:     &TaskCtx,
+    kind:    Arc<str>,
+    scope:   SignalScope,
+    payload: Bytes,
 ) -> bool {
     let nonce = fastrand::u64(1..);
-    let ts = current_ts.load(Ordering::Relaxed);
-    let _ = seen.is_duplicate(nonce, ts);
-    deliver_locally(signal_boundary, signal_handlers, &Signal {
+    let ts = ctx.current_ts.load(Ordering::Relaxed);
+    let _ = ctx.seen.is_duplicate(nonce, ts);
+    deliver_locally(&ctx.signal_boundary, &ctx.signal_handlers, &Signal {
         kind: kind.clone(), scope: scope.clone(),
-        payload: payload.clone(), sender: node_id.clone(), nonce,
+        payload: payload.clone(), sender: ctx.node_id.clone(), nonce,
     });
     let hint = match &scope {
         SignalScope::System           => ForwardHint::All,
@@ -111,9 +100,9 @@ pub(crate) fn emit_signal(
         SignalScope::Individual(peer) => ForwardHint::Individual(peer.clone()),
     };
     dispatch_gossip_try_send(
-        gossip_txs,
-        WireMessage::Signal { ttl: default_ttl, nonce, sender: node_id.clone(), scope, kind, payload },
-        node_id.id_hash(), hint, dropped_frames,
+        &ctx.gossip_txs,
+        WireMessage::Signal { ttl: ctx.default_ttl, nonce, sender: ctx.node_id.clone(), scope, kind, payload },
+        ctx.node_id.id_hash(), hint, &ctx.kv_state.dropped_frames,
     )
 }
 
@@ -122,26 +111,18 @@ pub(crate) fn emit_signal(
 /// Used by consensus tasks that must not silently lose PROPOSE/COMMIT signals
 /// under backpressure. Signal delivery to local handlers is still synchronous.
 /// Returns `false` only if the shard task has crashed.
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn emit_signal_async(
-    node_id:         &NodeId,
-    seen:            &ShardedSeen,
-    current_ts:      &AtomicU64,
-    signal_boundary: &RwLock<Boundary>,
-    signal_handlers: &SignalHandlers,
-    gossip_txs:      &[mpsc::Sender<(Bytes, u64, ForwardHint)>],
-    default_ttl:     u8,
-    _dropped_frames: &AtomicU64,
-    kind:            Arc<str>,
-    scope:           SignalScope,
-    payload:         Bytes,
+    ctx:     &TaskCtx,
+    kind:    Arc<str>,
+    scope:   SignalScope,
+    payload: Bytes,
 ) -> bool {
     let nonce = fastrand::u64(1..);
-    let ts = current_ts.load(Ordering::Relaxed);
-    let _ = seen.is_duplicate(nonce, ts);
-    deliver_locally(signal_boundary, signal_handlers, &Signal {
+    let ts = ctx.current_ts.load(Ordering::Relaxed);
+    let _ = ctx.seen.is_duplicate(nonce, ts);
+    deliver_locally(&ctx.signal_boundary, &ctx.signal_handlers, &Signal {
         kind: kind.clone(), scope: scope.clone(),
-        payload: payload.clone(), sender: node_id.clone(), nonce,
+        payload: payload.clone(), sender: ctx.node_id.clone(), nonce,
     });
     let hint = match &scope {
         SignalScope::System           => ForwardHint::All,
@@ -149,9 +130,9 @@ pub(crate) async fn emit_signal_async(
         SignalScope::Individual(peer) => ForwardHint::Individual(peer.clone()),
     };
     dispatch_gossip_send(
-        gossip_txs,
-        WireMessage::Signal { ttl: default_ttl, nonce, sender: node_id.clone(), scope, kind, payload },
-        node_id.id_hash(), hint,
+        &ctx.gossip_txs,
+        WireMessage::Signal { ttl: ctx.default_ttl, nonce, sender: ctx.node_id.clone(), scope, kind, payload },
+        ctx.node_id.id_hash(), hint,
     ).await
 }
 

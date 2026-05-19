@@ -25,6 +25,23 @@ pub(crate) struct KvState {
     pub max_store_entries: usize,
 }
 
+impl KvState {
+    /// Constructs a new, empty `KvState` wrapped in an `Arc`.
+    ///
+    /// All sub-Arcs are created here so callers own a single `Arc<KvState>` rather
+    /// than building five independent Arcs and threading them separately.
+    pub(crate) fn new(max_store_entries: usize) -> Arc<Self> {
+        Arc::new(Self {
+            store:             Arc::new(papaya::HashMap::new()),
+            subscriptions:     Arc::new(papaya::HashMap::new()),
+            prefix_index:      Arc::new(PrefixIndex::new()),
+            hash_acc:          Arc::new(AtomicU64::new(0)),
+            dropped_frames:    Arc::new(AtomicU64::new(0)),
+            max_store_entries,
+        })
+    }
+}
+
 /// Secondary index for O(1) bucket + O(k) prefix scan.
 ///
 /// Maps the first path segment of a key (e.g. `"grp"`, `"load"`, `"svc"`) to
@@ -97,22 +114,19 @@ pub(crate) fn intern_pool_len() -> usize {
 pub(crate) fn intern_key(key: Arc<str>, max_keys: usize) -> Arc<str> {
     let pool = key_pool();
     let guard = pool.pin();
+    // Fast path: already interned.
     if let Some(existing) = guard.get(&*key) {
         return existing.clone();
     }
-    // Pool cap: return without inserting when the limit is reached.
+    // Pool cap: skip insertion once the limit is reached.
     if max_keys > 0 && pool.len() >= max_keys {
         return key;
     }
-    // `slot` is taken inside the compute callback. papaya may retry the callback
-    // on CAS contention; the second call must not unwrap an already-taken slot.
-    let mut slot = Some(key.clone());
+    // Slow path: CAS-insert. The callback may retry on contention; each attempt
+    // clones `key` cheaply (O(1) Arc refcount bump), so no Option-slot trick is needed.
     match guard.compute(key.clone(), |existing| match existing {
         Some(_) => papaya::Operation::Abort(()),
-        None => match slot.take() {
-            Some(v) => papaya::Operation::Insert(v),
-            None    => papaya::Operation::Abort(()),
-        },
+        None    => papaya::Operation::Insert(key.clone()),
     }) {
         papaya::Compute::Inserted(_, v) => v.clone(),
         _ => guard.get(&*key).cloned().unwrap_or(key),

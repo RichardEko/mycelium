@@ -67,6 +67,10 @@ impl ShardedSeen {
         let mut removed = 0usize;
         for shard in self.shards.iter() {
             let guard = shard.pin();
+            // Two-pass scan: papaya does not expose mutable iteration, so stale keys
+            // must be collected into a Vec before removal. At max_seen_entries = 100k
+            // this allocates O(max_seen_entries / n_shards) u64s per GC tick.
+            // TODO: upstream a papaya `drain_if` / `retain` API to eliminate this Vec.
             let stale: Vec<u64> = guard
                 .iter()
                 .filter_map(|(&k, &v)| if v <= cutoff { Some(k) } else { None })
