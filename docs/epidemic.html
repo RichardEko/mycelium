@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Epidemic Wave — Gossip Signal Propagation</title>
+<style>
+  :root {
+    --bg:         #0d1117;
+    --surface:    #161b22;
+    --surface2:   #1c2128;
+    --surface3:   #21262d;
+    --border:     #30363d;
+    --accent:     #58a6ff;
+    --accent2:    #3fb950;
+    --accent3:    #d2a8ff;
+    --accent4:    #ffa657;
+    --accent5:    #ff7b72;
+    --muted:      #8b949e;
+    --text:       #e6edf3;
+    --text2:      #c9d1d9;
+    --radius:     8px;
+    --radius-lg:  14px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; line-height: 1.6; }
+
+  .header {
+    background: radial-gradient(ellipse at 60% 0%, rgba(88,166,255,0.07) 0%, transparent 55%), var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 28px 36px 22px;
+    display: flex; align-items: flex-start; gap: 16px;
+  }
+  .header-badge { font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent3); background: rgba(210,168,255,0.1); border: 1px solid rgba(210,168,255,0.25); border-radius: 20px; padding: 4px 12px; white-space: nowrap; margin-top: 4px; }
+  .header-text { flex: 1; }
+  .header-title { font-size: 21px; font-weight: 700; letter-spacing: -0.02em; }
+  .header-title em { font-style: normal; color: var(--accent); }
+  .header-sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .header-links a { font-size: 12px; color: var(--accent); text-decoration: none; opacity: 0.7; }
+  .header-links a:hover { opacity: 1; }
+
+  .layout { display: grid; grid-template-columns: auto 1fr; gap: 24px; padding: 24px 32px; max-width: 1060px; margin: 0 auto; }
+  .left-col { display: flex; flex-direction: column; gap: 14px; }
+  .right-col { display: flex; flex-direction: column; gap: 16px; min-width: 280px; max-width: 310px; }
+
+  #ring-canvas { border: 1px solid var(--border); border-radius: var(--radius); display: block; background: var(--surface); }
+
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .btn { padding: 6px 14px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface2); color: var(--text); font-size: 12px; font-weight: 500; cursor: pointer; transition: background 0.12s, border-color 0.12s; }
+  .btn:hover { background: var(--surface3); border-color: var(--muted); }
+  .btn.sys   { background: rgba(88,166,255,0.12); border-color: rgba(88,166,255,0.3); color: var(--accent); }
+  .btn.alpha { background: rgba(63,185,80,0.12);  border-color: rgba(63,185,80,0.3);  color: var(--accent2); }
+  .btn.beta  { background: rgba(255,166,87,0.12); border-color: rgba(255,166,87,0.3); color: var(--accent4); }
+  .btn.sys:hover   { background: rgba(88,166,255,0.22); }
+  .btn.alpha:hover { background: rgba(63,185,80,0.22);  }
+  .btn.beta:hover  { background: rgba(255,166,87,0.22); }
+
+  .scope-pill { display: inline-block; font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+  .scope-pill.sys   { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .scope-pill.alpha { background: rgba(63,185,80,0.15);  color: var(--accent2); }
+  .scope-pill.beta  { background: rgba(255,166,87,0.15); color: var(--accent4); }
+
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+  .panel-hdr { padding: 10px 14px 8px; border-bottom: 1px solid var(--border); font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); display: flex; justify-content: space-between; align-items: center; }
+  .dot-live { width: 6px; height: 6px; border-radius: 50%; background: var(--accent2); box-shadow: 0 0 5px var(--accent2); animation: blink 1.6s ease-in-out infinite; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
+
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; }
+  .stat-item { padding: 12px 14px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  .stat-item:nth-child(2n) { border-right: none; }
+  .stat-item:nth-last-child(-n+2) { border-bottom: none; }
+  .stat-label { font-size: 10px; color: var(--muted); margin-bottom: 3px; }
+  .stat-val { font-size: 20px; font-weight: 700; line-height: 1; font-family: "SF Mono", "Fira Code", monospace; }
+
+  .signal-log { height: 200px; overflow-y: auto; padding: 6px 0; font-family: "SF Mono", "Fira Code", monospace; font-size: 10px; }
+  .signal-log::-webkit-scrollbar { width: 3px; }
+  .signal-log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .log-entry { padding: 2px 12px; display: flex; gap: 6px; align-items: baseline; animation: fadeIn 0.2s ease-out; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateX(-3px); } to { opacity: 1; } }
+  .log-entry:hover { background: var(--surface2); }
+  .log-ts { color: var(--muted); min-width: 24px; }
+  .log-scope { font-size: 9px; padding: 1px 4px; border-radius: 2px; white-space: nowrap; }
+  .log-scope.sys   { background: rgba(88,166,255,0.12); color: var(--accent); }
+  .log-scope.alpha { background: rgba(63,185,80,0.12);  color: var(--accent2); }
+  .log-scope.beta  { background: rgba(255,166,87,0.12); color: var(--accent4); }
+  .log-kind { color: var(--text2); }
+  .log-detail { color: var(--muted); font-size: 9px; margin-left: auto; }
+
+  .legend { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; font-size: 11px; }
+  .legend-row { display: flex; align-items: center; gap: 8px; }
+  .legend-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+
+  .concepts { max-width: 1060px; margin: 8px auto 0; padding: 0 32px 40px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .concept-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px 18px; }
+  .concept-num { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; }
+  .concept-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  .concept-body { font-size: 11px; color: var(--muted); line-height: 1.65; margin-bottom: 8px; }
+  .code-snippet { font-size: 10px; font-family: "SF Mono", "Fira Code", monospace; background: var(--surface2); border: 1px solid var(--border); border-radius: 5px; padding: 8px 10px; color: var(--text2); line-height: 1.7; overflow-x: auto; white-space: pre; margin-top: 4px; }
+  .code-snippet .kw  { color: var(--accent5); }
+  .code-snippet .fn  { color: var(--accent); }
+  .code-snippet .str { color: var(--accent2); }
+  .code-snippet .cm  { color: var(--muted); font-style: italic; }
+  .code-snippet .tp  { color: var(--accent3); }
+
+  footer { text-align: center; padding: 32px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--border); }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <span class="header-badge">Layer 2 — Signal Mesh</span>
+  <div class="header-text">
+    <div class="header-title">Epidemic Wave — <em>Signal Propagation</em></div>
+    <div class="header-sub">
+      16 agents · ring topology · System scope vs Group scope · forwarding unconditional, acting filtered
+    </div>
+  </div>
+  <div class="header-links"><a href="roadmap.html">← Roadmap</a></div>
+</header>
+
+<div class="layout">
+  <div class="left-col">
+
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <div style="font-size:12px;color:var(--muted);">Last pulse:</div>
+      <span class="scope-pill sys" id="scope-pill">—</span>
+      <div style="font-size:12px;color:var(--muted);" id="conn-status">connecting…</div>
+    </div>
+
+    <canvas id="ring-canvas" width="540" height="540"></canvas>
+
+    <div class="controls">
+      <button class="btn sys"   onclick="firePulse('sys')">⚡ System pulse</button>
+      <button class="btn alpha" onclick="firePulse('alpha')">● Alpha group pulse</button>
+      <button class="btn beta"  onclick="firePulse('beta')">● Beta group pulse</button>
+      <div style="font-size:11px;color:var(--muted);">Auto-cycles sys → alpha → beta every 6 s</div>
+    </div>
+
+  </div>
+
+  <div class="right-col">
+
+    <div class="panel">
+      <div class="panel-hdr">Mesh stats <div class="dot-live"></div></div>
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div class="stat-label">Pulses fired</div>
+          <div class="stat-val" style="color:var(--accent)" id="s-pulses">0</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Max delay</div>
+          <div class="stat-val" style="color:var(--accent4)" id="s-maxdelay">—</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Nodes lit</div>
+          <div class="stat-val" style="color:var(--accent2)" id="s-lit">0</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Scope</div>
+          <div class="stat-val" style="color:var(--accent3);font-size:14px" id="s-scope">—</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-hdr">Legend</div>
+      <div class="legend">
+        <div class="legend-row">
+          <div class="legend-dot" style="background:#3fb950;box-shadow:0 0 8px #3fb950"></div>
+          <span style="color:var(--text2)">Just received (&lt;200 ms)</span>
+        </div>
+        <div class="legend-row">
+          <div class="legend-dot" style="background:#85c46c"></div>
+          <span style="color:var(--muted)">Received 200–800 ms ago</span>
+        </div>
+        <div class="legend-row">
+          <div class="legend-dot" style="background:#ffa657"></div>
+          <span style="color:var(--muted)">Received &gt;800 ms ago</span>
+        </div>
+        <div class="legend-row">
+          <div class="legend-dot" style="background:#21262d;border:1px solid #30363d"></div>
+          <span style="color:var(--muted)">Not in scope / not yet received</span>
+        </div>
+        <div style="margin-top:4px;font-size:10px;color:var(--muted);line-height:1.6">
+          <span style="color:var(--accent2)">●</span> Alpha (0–7) &nbsp;
+          <span style="color:var(--accent4)">●</span> Beta (8–15) &nbsp;
+          Ring edges show gossip hops.
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-hdr">Signal log <div class="dot-live"></div></div>
+      <div class="signal-log" id="log"></div>
+    </div>
+
+  </div>
+</div>
+
+<div class="concepts">
+  <div class="concept-card">
+    <div class="concept-num" style="color:var(--accent3)">Layer 2 — Boundary Mesh</div>
+    <div class="concept-title">Forwarding is unconditional</div>
+    <div class="concept-body">
+      Every node forwards every gossip packet regardless of whether it is in scope.
+      Only nodes that have <em>joined the right group</em> act on the signal — the boundary
+      is purely local state. Watch the beta group (<span style="color:var(--accent4)">amber</span>)
+      during an <strong>Alpha group pulse</strong>: the packet hops through beta nodes but they
+      do not record a receive — they only forward it onward.
+    </div>
+    <div class="code-snippet"><span class="cm">// node joins its group — acts on Group signals</span>
+agent.<span class="fn">join_group</span>(<span class="str">"alpha"</span>);
+
+<span class="cm">// System scope — every node acts</span>
+agent.<span class="fn">emit</span>(<span class="str">"sys.pulse"</span>,
+    <span class="tp">SignalScope</span>::<span class="tp">System</span>, payload);
+
+<span class="cm">// Group scope — only "alpha" members act</span>
+agent.<span class="fn">emit</span>(<span class="str">"alpha.pulse"</span>,
+    <span class="tp">SignalScope</span>::<span class="tp">Group</span>(<span class="str">"alpha"</span>.into()), payload);</div>
+  </div>
+
+  <div class="concept-card">
+    <div class="concept-num" style="color:var(--accent)">Epidemic propagation</div>
+    <div class="concept-title">Each hop adds latency</div>
+    <div class="concept-body">
+      The ring topology has max 8 hops between any two nodes. With each gossip
+      forward taking ~50–200 ms, a System pulse from node 0 takes up to ~1.6 s
+      to reach the far side. The colour gradient encodes delay: watch the
+      <span style="color:var(--accent2)">green</span> wave spread from node 0 clockwise and
+      counter-clockwise, meeting at node 8 last.
+    </div>
+    <div class="code-snippet"><span class="cm">// subscribe — channel fires on each delivery</span>
+<span class="kw">let mut</span> rx = agent.<span class="fn">signal_rx</span>(<span class="str">"sys.pulse"</span>);
+<span class="kw">while let</span> <span class="tp">Some</span>(sig) = rx.<span class="fn">recv</span>().<span class="fn">await</span> {
+    <span class="cm">// sig.sender, sig.scope, sig.payload</span>
+    record_receive_time(<span class="fn">now_ms</span>());
+}</div>
+  </div>
+
+  <div class="concept-card">
+    <div class="concept-num" style="color:var(--accent4)">Scope comparison</div>
+    <div class="concept-title">Same packet — different reach</div>
+    <div class="concept-body">
+      Fire each pulse type and compare: <strong>System pulse</strong> lights all 16 nodes.
+      <strong>Alpha group pulse</strong> lights only nodes 0–7 (green ring half).
+      <strong>Beta group pulse</strong> lights only nodes 8–15 (amber ring half).
+      The gossip fan-out is identical — the difference is purely in the local
+      boundary check each node applies on delivery.
+    </div>
+    <div class="code-snippet"><span class="cm">// Receiver: local boundary decides acting</span>
+<span class="kw">match</span> sig.scope {
+    <span class="tp">System</span>        =&gt; <span class="cm">/* always act */</span>,
+    <span class="tp">Group</span>(name)   =&gt; <span class="cm">/* act if joined */</span>,
+    <span class="tp">Individual</span>(id) =&gt; <span class="cm">/* act if self */</span>,
+}
+<span class="cm">// Forwarding happens before this check.</span></div>
+  </div>
+</div>
+
+<footer>gossip-protocol · Layers 1, 2, and III (Consensus) complete · 2026-05-19</footer>
+
+<script>
+const POLL_MS = 150;
+const MAX_LOG = 80;
+let logSeq    = 0;
+let state     = null;
+let connected = false;
+let lastEmitMs = 0;
+
+const canvas = document.getElementById('ring-canvas');
+const ctx    = canvas.getContext('2d');
+const W      = canvas.width;
+const H      = canvas.height;
+const CX     = W / 2, CY = H / 2;
+const RING_R = 200;
+const NODE_R = 20;
+const N      = 16;
+
+// ── Node positions ─────────────────────────────────────────────────────
+function nodePos(i) {
+  const angle = (i / N) * Math.PI * 2 - Math.PI / 2;
+  return { x: CX + RING_R * Math.cos(angle), y: CY + RING_R * Math.sin(angle) };
+}
+
+// ── Colour helpers ─────────────────────────────────────────────────────
+function lerpC([r1,g1,b1],[r2,g2,b2],t) {
+  t = t<0?0:t>1?1:t;
+  return [(r1+(r2-r1)*t)|0,(g1+(g2-g1)*t)|0,(b1+(b2-b1)*t)|0];
+}
+function rgb([r,g,b]) { return `rgb(${r},${g},${b})`; }
+
+const C_DEAD  = [33, 38, 45];
+const C_FRESH = [63, 185, 80];   // green — just received
+const C_MID   = [133, 196, 108]; // mid-green
+const C_STALE = [255, 166, 87];  // amber — old
+
+function nodeColor(node, lastEmitMs, nowMs) {
+  const scope = state ? state.last_scope : 'sys';
+  const lastMs = scope === 'alpha' ? node.last_alpha_ms
+               : scope === 'beta'  ? node.last_beta_ms
+               : node.last_sys_ms;
+  if (!lastMs || lastMs < lastEmitMs) return [...C_DEAD];
+  const age = nowMs - lastMs;
+  if (age < 200)  return lerpC(C_FRESH, C_FRESH, 0);
+  if (age < 800)  return lerpC(C_FRESH, C_MID, (age - 200) / 600);
+  if (age < 3000) return lerpC(C_MID, C_STALE, (age - 800) / 2200);
+  return [...C_STALE];
+}
+
+function groupColor(group) {
+  return group === 'alpha' ? 'rgba(63,185,80,0.55)' : 'rgba(255,166,87,0.55)';
+}
+
+// ── Draw ───────────────────────────────────────────────────────────────
+let animNodes = [];  // per-node pulse animation t ∈ [0,1]
+let animRaf   = 0;
+let lastRafTs = 0;
+
+function draw(ts) {
+  const dt = Math.min((ts - lastRafTs) / 1000, 0.15);
+  lastRafTs = ts;
+
+  ctx.clearRect(0, 0, W, H);
+
+  if (!state) {
+    ctx.fillStyle = '#8b949e';
+    ctx.font = '14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Connecting to http://127.0.0.1:8092…', CX, CY);
+    animRaf = requestAnimationFrame(draw);
+    return;
+  }
+
+  const nowMs = Date.now();
+
+  // Ring edges
+  for (let i = 0; i < N; i++) {
+    const a = nodePos(i), b = nodePos((i + 1) % N);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.strokeStyle = '#30363d';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
+  // Nodes
+  for (let i = 0; i < N; i++) {
+    const { x, y } = nodePos(i);
+    const node = state.nodes[i];
+    const c    = nodeColor(node, state.last_emit_ms, nowMs);
+    const t    = animNodes[i] || 0;
+
+    // Outer ring (group membership colour)
+    ctx.beginPath();
+    ctx.arc(x, y, NODE_R + 5, 0, Math.PI * 2);
+    ctx.fillStyle = groupColor(node.group);
+    ctx.fill();
+
+    // Pulse ring animation
+    if (t > 0) {
+      ctx.beginPath();
+      ctx.arc(x, y, NODE_R + 5 + t * 14, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(255,255,255,${0.35 * (1 - t)})`;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      animNodes[i] = Math.max(0, t - dt * 1.4);
+    }
+
+    // Main circle
+    ctx.beginPath();
+    ctx.arc(x, y, NODE_R, 0, Math.PI * 2);
+    ctx.fillStyle = rgb(c);
+    ctx.fill();
+
+    // Glow for fresh nodes
+    const isFresh = (nowMs - Math.max(node.last_sys_ms, node.last_alpha_ms, node.last_beta_ms)) < 400;
+    if (isFresh) {
+      ctx.save();
+      ctx.globalAlpha = 0.4;
+      ctx.shadowColor = rgb(c);
+      ctx.shadowBlur  = 18;
+      ctx.beginPath();
+      ctx.arc(x, y, NODE_R, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Node label
+    ctx.fillStyle = '#e6edf3';
+    ctx.font = 'bold 11px "SF Mono","Fira Code",monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(i, x, y);
+
+    // Group label below node
+    ctx.font = '9px sans-serif';
+    ctx.fillStyle = '#8b949e';
+    const labelAngle = (i / N) * Math.PI * 2 - Math.PI / 2;
+    const lx = CX + (RING_R + NODE_R + 16) * Math.cos(labelAngle);
+    const ly = CY + (RING_R + NODE_R + 16) * Math.sin(labelAngle);
+    ctx.fillText(node.group, lx, ly);
+  }
+
+  animRaf = requestAnimationFrame(draw);
+}
+
+// ── Stats + log ────────────────────────────────────────────────────────
+const sPulses   = document.getElementById('s-pulses');
+const sMaxdelay = document.getElementById('s-maxdelay');
+const sLit      = document.getElementById('s-lit');
+const sScope    = document.getElementById('s-scope');
+const scopePill = document.getElementById('scope-pill');
+const connStatus = document.getElementById('conn-status');
+const logEl     = document.getElementById('log');
+
+function updateStats() {
+  if (!state) return;
+  sPulses.textContent = state.pulse_count;
+  sScope.textContent  = state.last_scope.toUpperCase();
+
+  const scope = state.last_scope;
+  scopePill.className = `scope-pill ${scope}`;
+  scopePill.textContent = scope === 'sys' ? 'System' : scope === 'alpha' ? 'Group · alpha' : 'Group · beta';
+
+  const nowMs = Date.now();
+  let maxDelay = 0, lit = 0;
+  for (const n of state.nodes) {
+    const lastMs = scope === 'alpha' ? n.last_alpha_ms : scope === 'beta' ? n.last_beta_ms : n.last_sys_ms;
+    const d = lastMs > state.last_emit_ms ? lastMs - state.last_emit_ms : 0;
+    if (d > maxDelay) maxDelay = d;
+    if (lastMs >= state.last_emit_ms && state.last_emit_ms > 0) lit++;
+  }
+  sMaxdelay.textContent = maxDelay > 0 ? maxDelay + 'ms' : '—';
+  sLit.textContent      = lit + ' / ' + N;
+}
+
+function addLog(scope, kind, detail) {
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  const labels = { sys: 'System', alpha: 'Group·α', beta: 'Group·β' };
+  entry.innerHTML =
+    `<span class="log-ts">${String(logSeq++ % 1000).padStart(3,'0')}</span>` +
+    `<span class="log-scope ${scope}">${labels[scope] || scope}</span>` +
+    `<span class="log-kind">${kind}</span>` +
+    `<span class="log-detail">${detail}</span>`;
+  logEl.prepend(entry);
+  while (logEl.children.length > MAX_LOG) logEl.lastChild.remove();
+}
+
+// ── HTTP polling ───────────────────────────────────────────────────────
+async function poll() {
+  try {
+    const res  = await fetch('http://127.0.0.1:8092/state', { signal: AbortSignal.timeout(2000) });
+    const data = await res.json();
+    const wasEmpty = !state;
+    const prevEmit = state ? state.last_emit_ms : 0;
+    state = data;
+
+    if (!connected) {
+      connected = true;
+      connStatus.textContent  = 'connected';
+      connStatus.style.color  = 'var(--accent2)';
+    }
+
+    if (data.last_emit_ms !== prevEmit && data.last_emit_ms > 0) {
+      // New pulse fired — trigger node animations at the emitter (node 0)
+      if (!animNodes.length) animNodes = new Array(N).fill(0);
+      animNodes[0] = 1.0;
+      addLog(data.last_scope, data.last_scope + '.pulse', `pulse #${data.pulse_count} from node-0`);
+    }
+
+    // Animate nodes that just received (last_recv changed)
+    if (state && prevEmit > 0) {
+      for (let i = 0; i < N; i++) {
+        const n = state.nodes[i];
+        const lastMs = data.last_scope === 'alpha' ? n.last_alpha_ms
+                     : data.last_scope === 'beta'  ? n.last_beta_ms
+                     : n.last_sys_ms;
+        if (lastMs >= data.last_emit_ms && lastMs > prevEmit) {
+          if (!animNodes[i] || animNodes[i] < 0.5) animNodes[i] = 1.0;
+        }
+      }
+    }
+
+    updateStats();
+  } catch {
+    if (connected) {
+      connected = false;
+      connStatus.textContent = 'disconnected — run: cargo run --example epidemic';
+      connStatus.style.color = 'var(--accent4)';
+    }
+  }
+}
+
+// ── Trigger ────────────────────────────────────────────────────────────
+async function firePulse(scope) {
+  await fetch(`http://127.0.0.1:8092/trigger?scope=${scope}`,
+              { signal: AbortSignal.timeout(2000) }).catch(() => {});
+  await poll();
+}
+
+// ── Init ───────────────────────────────────────────────────────────────
+animNodes = new Array(N).fill(0);
+requestAnimationFrame(draw);
+poll();
+setInterval(poll, POLL_MS);
+</script>
+</body>
+</html>

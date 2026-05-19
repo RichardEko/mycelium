@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Circuit Breaker Watchdog — Gossip Quorum Health</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --surface2: #1c2128; --surface3: #21262d;
+    --border: #30363d; --accent: #58a6ff; --accent2: #3fb950; --accent3: #d2a8ff;
+    --accent4: #ffa657; --accent5: #ff7b72; --muted: #8b949e; --text: #e6edf3; --text2: #c9d1d9;
+    --radius: 8px; --radius-lg: 14px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; line-height: 1.6; }
+
+  .header { background: radial-gradient(ellipse at 60% 0%, rgba(88,166,255,0.07) 0%, transparent 55%), var(--bg); border-bottom: 1px solid var(--border); padding: 28px 36px 22px; display: flex; align-items: flex-start; gap: 16px; }
+  .header-badge { font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent5); background: rgba(255,123,114,0.1); border: 1px solid rgba(255,123,114,0.25); border-radius: 20px; padding: 4px 12px; white-space: nowrap; margin-top: 4px; }
+  .header-text { flex: 1; }
+  .header-title { font-size: 21px; font-weight: 700; letter-spacing: -0.02em; }
+  .header-title em { font-style: normal; color: var(--accent); }
+  .header-sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .header-links a { font-size: 12px; color: var(--accent); text-decoration: none; opacity: 0.7; }
+  .header-links a:hover { opacity: 1; }
+
+  .layout { display: grid; grid-template-columns: 1fr 300px; gap: 24px; padding: 24px 32px; max-width: 1060px; margin: 0 auto; }
+  .left-col { display: flex; flex-direction: column; gap: 16px; }
+  .right-col { display: flex; flex-direction: column; gap: 16px; }
+
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+  .panel-hdr { padding: 10px 14px 8px; border-bottom: 1px solid var(--border); font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); display: flex; justify-content: space-between; align-items: center; }
+  .dot-live { width: 6px; height: 6px; border-radius: 50%; background: var(--accent2); box-shadow: 0 0 5px var(--accent2); animation: blink 1.6s ease-in-out infinite; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
+
+  /* Service nodes */
+  .services-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 16px; }
+  .service-card { background: var(--surface2); border: 2px solid var(--border); border-radius: var(--radius); padding: 14px; text-align: center; transition: border-color 0.3s, background 0.3s; }
+  .service-card.alive  { border-color: rgba(63,185,80,0.5); }
+  .service-card.dead   { border-color: rgba(255,123,114,0.4); background: rgba(255,123,114,0.05); }
+  .service-icon { font-size: 28px; margin-bottom: 6px; }
+  .service-name { font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+  .service-status { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+  .service-status.alive { background: rgba(63,185,80,0.15); color: var(--accent2); }
+  .service-status.dead  { background: rgba(255,123,114,0.15); color: var(--accent5); }
+  .service-count { font-size: 10px; color: var(--muted); margin-top: 4px; }
+  .svc-btns { display: flex; gap: 4px; justify-content: center; margin-top: 8px; }
+  .svc-btn { padding: 3px 9px; font-size: 10px; border-radius: 5px; border: 1px solid var(--border); background: var(--surface3); color: var(--muted); cursor: pointer; }
+  .svc-btn.kill    { border-color: rgba(255,123,114,0.3); color: var(--accent5); }
+  .svc-btn.restart { border-color: rgba(63,185,80,0.3); color: var(--accent2); }
+  .svc-btn:hover   { background: var(--surface); }
+
+  /* Circuit breaker */
+  .circuit-wrap { padding: 24px; display: flex; flex-direction: column; align-items: center; gap: 16px; }
+  .circuit-visual { width: 160px; height: 160px; border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 4px solid var(--border); transition: border-color 0.4s, background 0.4s, box-shadow 0.4s; }
+  .circuit-visual.closed { border-color: rgba(63,185,80,0.7); background: rgba(63,185,80,0.07); box-shadow: 0 0 30px rgba(63,185,80,0.2); }
+  .circuit-visual.open   { border-color: rgba(255,123,114,0.7); background: rgba(255,123,114,0.07); box-shadow: 0 0 30px rgba(255,123,114,0.25); animation: pulse-red 1s ease-in-out infinite; }
+  @keyframes pulse-red { 0%,100%{box-shadow:0 0 20px rgba(255,123,114,0.2)} 50%{box-shadow:0 0 40px rgba(255,123,114,0.4)} }
+  .circuit-label { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; }
+  .circuit-count { font-size: 36px; font-weight: 800; font-family: monospace; line-height: 1; }
+  .circuit-sub { font-size: 10px; color: var(--muted); }
+  .circuit-state-txt { font-size: 13px; font-weight: 600; }
+
+  /* Quorum bar */
+  .quorum-bar-wrap { width: 100%; height: 10px; background: var(--surface2); border-radius: 5px; border: 1px solid var(--border); overflow: hidden; }
+  .quorum-bar { height: 100%; border-radius: 5px; transition: width 0.4s, background 0.4s; }
+  .quorum-bar.ok  { background: var(--accent2); }
+  .quorum-bar.low { background: var(--accent5); }
+  .quorum-info { display: flex; justify-content: space-between; font-size: 10px; color: var(--muted); margin-top: 3px; }
+
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; }
+  .stat-item { padding: 12px 14px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  .stat-item:nth-child(2n) { border-right: none; }
+  .stat-item:nth-last-child(-n+2) { border-bottom: none; }
+  .stat-label { font-size: 10px; color: var(--muted); margin-bottom: 3px; }
+  .stat-val { font-size: 20px; font-weight: 700; line-height: 1; font-family: "SF Mono", "Fira Code", monospace; }
+
+  .signal-log { height: 200px; overflow-y: auto; padding: 6px 0; font-family: "SF Mono", "Fira Code", monospace; font-size: 10px; }
+  .signal-log::-webkit-scrollbar { width: 3px; }
+  .signal-log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .log-entry { padding: 3px 12px; display: flex; gap: 6px; align-items: baseline; animation: fadeIn 0.2s ease-out; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateX(-3px); } to { opacity: 1; } }
+  .log-entry:hover { background: var(--surface2); }
+  .log-ts { color: var(--muted); min-width: 60px; font-size: 9px; }
+  .log-msg { color: var(--text2); }
+  .log-msg.circuit-open   { color: var(--accent5); font-weight: 600; }
+  .log-msg.circuit-closed { color: var(--accent2); font-weight: 600; }
+
+  .concepts { max-width: 1060px; margin: 8px auto 0; padding: 0 32px 40px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .concept-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px 18px; }
+  .concept-num { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; }
+  .concept-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  .concept-body { font-size: 11px; color: var(--muted); line-height: 1.65; margin-bottom: 8px; }
+  .code-snippet { font-size: 10px; font-family: "SF Mono", "Fira Code", monospace; background: var(--surface2); border: 1px solid var(--border); border-radius: 5px; padding: 8px 10px; color: var(--text2); line-height: 1.7; overflow-x: auto; white-space: pre; margin-top: 4px; }
+  .code-snippet .kw  { color: var(--accent5); }
+  .code-snippet .fn  { color: var(--accent); }
+  .code-snippet .str { color: var(--accent2); }
+  .code-snippet .cm  { color: var(--muted); font-style: italic; }
+  .code-snippet .tp  { color: var(--accent3); }
+
+  footer { text-align: center; padding: 32px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--border); }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <span class="header-badge">Layer 2 — quorum_persistent</span>
+  <div class="header-text">
+    <div class="header-title">Circuit Breaker Watchdog — <em>Quorum Health</em></div>
+    <div class="header-sub">
+      6 services · 1 supervisor · heartbeat signals · quorum_persistent survives restarts · circuit opens at &lt;4/6
+    </div>
+  </div>
+  <div class="header-links"><a href="roadmap.html">← Roadmap</a></div>
+</header>
+
+<div class="layout">
+  <div class="left-col">
+
+    <div class="panel">
+      <div class="panel-hdr">Services — heartbeat emitters <div class="dot-live"></div></div>
+      <div class="services-grid" id="services-grid"></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-hdr">Supervisor — circuit breaker</div>
+      <div class="circuit-wrap">
+        <div class="circuit-visual closed" id="circuit-visual">
+          <div class="circuit-label" id="circuit-label">CLOSED</div>
+          <div class="circuit-count" id="circuit-count" style="color:var(--accent2)">6</div>
+          <div class="circuit-sub">alive / 6</div>
+        </div>
+        <div style="width:100%;max-width:280px">
+          <div class="quorum-bar-wrap">
+            <div class="quorum-bar ok" id="quorum-bar" style="width:100%"></div>
+          </div>
+          <div class="quorum-info">
+            <span>0 alive</span>
+            <span id="quorum-detail">threshold: 4</span>
+            <span>6 alive</span>
+          </div>
+        </div>
+        <div class="circuit-state-txt" id="circuit-state">Circuit closed — all services healthy</div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="right-col">
+
+    <div class="panel">
+      <div class="panel-hdr">Quorum stats <div class="dot-live"></div></div>
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div class="stat-label">Quorum count</div>
+          <div class="stat-val" style="color:var(--accent2)" id="s-quorum">6</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Checks run</div>
+          <div class="stat-val" style="color:var(--accent)" id="s-checks">0</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Circuit</div>
+          <div class="stat-val" style="color:var(--accent2);font-size:13px" id="s-circuit">CLOSED</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Window</div>
+          <div class="stat-val" style="color:var(--muted);font-size:13px">3 s</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-hdr">Event log <div class="dot-live"></div></div>
+      <div class="signal-log" id="log"></div>
+    </div>
+
+    <div class="panel" style="padding:12px 14px;">
+      <div style="font-size:10px;color:var(--muted);line-height:1.7">
+        <strong style="color:var(--text2)">quorum_persistent</strong> reads
+        <code style="background:var(--surface3);padding:1px 4px;border-radius:3px;color:var(--accent2)">sys/quorum/heartbeat/</code>
+        from Layer 1 KV — evidence that survives supervisor restarts. Kill 3 or more services and watch the circuit open.
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="concepts">
+  <div class="concept-card">
+    <div class="concept-num" style="color:var(--accent)">quorum_persistent</div>
+    <div class="concept-title">Restart-safe health evidence</div>
+    <div class="concept-body">
+      Unlike <code style="font-size:10px">quorum()</code> which reads in-memory counters reset on
+      restart, <code style="font-size:10px">quorum_persistent(kind, window)</code> counts distinct
+      senders whose heartbeat evidence is still in the Layer 1 KV store within the window.
+      Kill the supervisor and restart it — the circuit breaker reads immediately from KV,
+      not from a cold in-memory counter.
+    </div>
+    <div class="code-snippet"><span class="kw">let</span> window = Duration::from_secs(3);
+<span class="kw">let</span> count = supervisor
+    .<span class="fn">quorum_persistent</span>(<span class="str">"heartbeat"</span>, window);
+
+<span class="cm">// count = distinct senders in sys/quorum/</span>
+<span class="cm">// heartbeat/ within the last 3 seconds</span>
+<span class="kw">let</span> open = count &lt; THRESHOLD;</div>
+  </div>
+
+  <div class="concept-card">
+    <div class="concept-num" style="color:var(--accent2)">Service heartbeats</div>
+    <div class="concept-title">System-scope signals</div>
+    <div class="concept-body">
+      Each service emits a System-scope "heartbeat" signal every second. The supervisor's
+      signal handler records sender identity and timestamp; the Layer 2 quorum track in
+      <code style="font-size:10px">sys/quorum/heartbeat/{sender}</code> is updated by the signal
+      layer automatically. Kill a service to stop its heartbeat — the evidence expires
+      after 3 seconds and the quorum count drops.
+    </div>
+    <div class="code-snippet"><span class="cm">// service emits every second</span>
+service.<span class="fn">emit</span>(
+    <span class="str">"heartbeat"</span>,
+    <span class="tp">SignalScope</span>::<span class="tp">System</span>,
+    <span class="tp">Bytes</span>::<span class="fn">copy_from_slice</span>(
+        &amp;now_ms().<span class="fn">to_le_bytes</span>()
+    ),
+);</div>
+  </div>
+
+  <div class="concept-card">
+    <div class="concept-num" style="color:var(--accent5)">Circuit breaker</div>
+    <div class="concept-title">Kill services, watch it open</div>
+    <div class="concept-body">
+      Click <strong>Kill</strong> on 3 services. The quorum counter drops below 4 within 3
+      seconds as their evidence expires from the KV window. The circuit opens immediately.
+      Click <strong>Restart</strong> to bring them back — the first heartbeat each sends updates
+      its KV evidence and the count climbs back up. The circuit closes once quorum is restored.
+    </div>
+    <div class="code-snippet"><span class="cm">// supervisor checks every 500 ms</span>
+<span class="kw">let</span> count = sup.<span class="fn">quorum_persistent</span>(
+    <span class="str">"heartbeat"</span>, window);
+<span class="kw">if</span> count &lt; THRESHOLD {
+    open_circuit(); <span class="cm">// reject incoming requests</span>
+} <span class="kw">else</span> {
+    close_circuit();
+}</div>
+  </div>
+</div>
+
+<footer>gossip-protocol · Layers 1, 2, and III (Consensus) complete · 2026-05-19</footer>
+
+<script>
+const POLL_MS  = 400;
+const MAX_LOG  = 60;
+let logSeq     = 0;
+let state      = null;
+let connected  = false;
+let prevEvents = 0;
+
+const logEl    = document.getElementById('log');
+const sQuorum  = document.getElementById('s-quorum');
+const sChecks  = document.getElementById('s-checks');
+const sCircuit = document.getElementById('s-circuit');
+
+function renderServices(data) {
+  const grid = document.getElementById('services-grid');
+  grid.innerHTML = '';
+  data.services.forEach(svc => {
+    const alive = svc.alive;
+    const card = document.createElement('div');
+    card.className = `service-card ${alive ? 'alive' : 'dead'}`;
+    const ageSec = svc.last_heartbeat_ms
+      ? ((Date.now() - svc.last_heartbeat_ms) / 1000).toFixed(1)
+      : '—';
+    card.innerHTML = `
+      <div class="service-icon">${alive ? '🟢' : '🔴'}</div>
+      <div class="service-name">service-${svc.id}</div>
+      <div><span class="service-status ${alive ? 'alive' : 'dead'}">${alive ? 'ALIVE' : 'DEAD'}</span></div>
+      <div class="service-count">${svc.emit_count} beats · ${ageSec}s ago</div>
+      <div class="svc-btns">
+        <button class="svc-btn kill"    onclick="cmd('kill',${svc.id})">Kill</button>
+        <button class="svc-btn restart" onclick="cmd('restart',${svc.id})">Restart</button>
+      </div>`;
+    grid.appendChild(card);
+  });
+}
+
+function renderCircuit(data) {
+  const sup = data.supervisor;
+  const open = sup.circuit_open;
+  const pct  = Math.round((sup.quorum_count / 6) * 100);
+
+  const vis  = document.getElementById('circuit-visual');
+  const lbl  = document.getElementById('circuit-label');
+  const cnt  = document.getElementById('circuit-count');
+  const stxt = document.getElementById('circuit-state');
+  const bar  = document.getElementById('quorum-bar');
+  const det  = document.getElementById('quorum-detail');
+
+  vis.className  = `circuit-visual ${open ? 'open' : 'closed'}`;
+  lbl.textContent = open ? 'OPEN' : 'CLOSED';
+  cnt.textContent = sup.quorum_count;
+  cnt.style.color = open ? 'var(--accent5)' : 'var(--accent2)';
+  stxt.textContent = open
+    ? `Circuit OPEN — only ${sup.quorum_count}/${sup.threshold} quorum (need ≥${sup.threshold})`
+    : `Circuit closed — quorum ${sup.quorum_count}/6`;
+  stxt.style.color = open ? 'var(--accent5)' : 'var(--accent2)';
+
+  bar.style.width      = pct + '%';
+  bar.className        = `quorum-bar ${open ? 'low' : 'ok'}`;
+  det.textContent      = `threshold: ${sup.threshold}`;
+
+  sQuorum.textContent  = sup.quorum_count;
+  sChecks.textContent  = sup.check_count;
+  sCircuit.textContent = open ? 'OPEN' : 'CLOSED';
+  sCircuit.style.color = open ? 'var(--accent5)' : 'var(--accent2)';
+}
+
+function addLog(msg, cls) {
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  const t = new Date().toTimeString().slice(0, 8);
+  entry.innerHTML =
+    `<span class="log-ts">${t}</span>` +
+    `<span class="log-msg ${cls || ''}">${msg}</span>`;
+  logEl.prepend(entry);
+  while (logEl.children.length > MAX_LOG) logEl.lastChild.remove();
+}
+
+function syncEvents(data) {
+  if (!data.events) return;
+  const newEvts = data.events.slice(prevEvents);
+  prevEvents = data.events.length;
+  newEvts.forEach(e => {
+    const cls = e.message.includes('OPEN') ? 'circuit-open'
+              : e.message.includes('closed') ? 'circuit-closed' : '';
+    addLog(e.message, cls);
+  });
+}
+
+async function poll() {
+  try {
+    const res  = await fetch('http://127.0.0.1:8094/state', { signal: AbortSignal.timeout(2000) });
+    const data = await res.json();
+    state = data;
+    if (!connected) {
+      connected = true;
+      document.getElementById('services-grid').parentElement.querySelector('.panel-hdr .dot-live') &&
+        null; // dot already there
+    }
+    renderServices(data);
+    renderCircuit(data);
+    syncEvents(data);
+  } catch {
+    if (connected) {
+      connected = false;
+      addLog('disconnected — run: cargo run --example watchdog', 'circuit-open');
+    }
+  }
+}
+
+async function cmd(op, node) {
+  await fetch(`http://127.0.0.1:8094/cmd?op=${op}&node=${node}`, { signal: AbortSignal.timeout(2000) }).catch(() => {});
+  await poll();
+}
+
+poll();
+setInterval(poll, POLL_MS);
+</script>
+</body>
+</html>
