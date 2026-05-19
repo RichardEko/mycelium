@@ -19,15 +19,15 @@ impl GossipAgent {
     /// Returns `false` if the channel is full or the shard has died.
     pub(super) fn dispatch_update(&self, update: GossipUpdate) -> bool {
         dispatch_gossip_try_send(
-            &self.gossip_txs, WireMessage::Data(update),
-            self.node_id.id_hash(), ForwardHint::All, &self.dropped_frames,
+            &self.task_ctx.gossip_txs, WireMessage::Data(update),
+            self.node_id.id_hash(), ForwardHint::All, &self.kv_state.dropped_frames,
         )
     }
 
     /// Like `dispatch_update` but awaits channel capacity rather than dropping.
     pub(super) async fn dispatch_update_async(&self, update: GossipUpdate) -> bool {
         dispatch_gossip_send(
-            &self.gossip_txs, WireMessage::Data(update),
+            &self.task_ctx.gossip_txs, WireMessage::Data(update),
             self.node_id.id_hash(), ForwardHint::All,
         ).await
     }
@@ -58,19 +58,18 @@ impl GossipAgent {
 // ── Free helpers ──────────────────────────────────────────────────────────────
 
 /// Checks the boundary and opacity gate, then delivers `signal` locally.
-/// Extracted from `emit_signal` and `emit_signal_async` to avoid a duplicated block.
+/// `combined_fill` is `max(handler_fill, shard_fill)` — pre-computed by the caller
+/// so both `emit_signal` and the connection handler use the same combined metric.
 fn deliver_locally(
     signal_boundary: &RwLock<Boundary>,
     signal_handlers: &SignalHandlers,
     signal: &Signal,
+    combined_fill: f32,
 ) {
     if !signal_boundary.read().admits(&signal.scope) { return; }
     let admit = match &signal.scope {
         SignalScope::Individual(_) => true,
-        _ => {
-            let opacity = signal_handlers.fill_ratio(&signal.kind);
-            opacity == 0.0 || fastrand::f32() >= opacity
-        }
+        _ => combined_fill == 0.0 || fastrand::f32() >= combined_fill,
     };
     if admit {
         signal_handlers.deliver(signal);
@@ -90,10 +89,14 @@ pub(crate) fn emit_signal(
     let nonce = fastrand::u64(1..);
     let ts = ctx.current_ts.load(Ordering::Relaxed);
     let _ = ctx.seen.is_duplicate(nonce, ts);
+    let handler_fill = ctx.signal_handlers.fill_ratio(&kind);
+    let shard_fill: f32 = ctx.gossip_txs.iter()
+        .map(|tx| { let max = tx.max_capacity(); if max == 0 { 0.0_f32 } else { 1.0 - tx.capacity() as f32 / max as f32 } })
+        .fold(0.0_f32, f32::max);
     deliver_locally(&ctx.signal_boundary, &ctx.signal_handlers, &Signal {
         kind: kind.clone(), scope: scope.clone(),
         payload: payload.clone(), sender: ctx.node_id.clone(), nonce,
-    });
+    }, handler_fill.max(shard_fill));
     let hint = match &scope {
         SignalScope::System           => ForwardHint::All,
         SignalScope::Group(name)      => ForwardHint::Group(name.clone()),
@@ -120,10 +123,14 @@ pub(crate) async fn emit_signal_async(
     let nonce = fastrand::u64(1..);
     let ts = ctx.current_ts.load(Ordering::Relaxed);
     let _ = ctx.seen.is_duplicate(nonce, ts);
+    let handler_fill = ctx.signal_handlers.fill_ratio(&kind);
+    let shard_fill: f32 = ctx.gossip_txs.iter()
+        .map(|tx| { let max = tx.max_capacity(); if max == 0 { 0.0_f32 } else { 1.0 - tx.capacity() as f32 / max as f32 } })
+        .fold(0.0_f32, f32::max);
     deliver_locally(&ctx.signal_boundary, &ctx.signal_handlers, &Signal {
         kind: kind.clone(), scope: scope.clone(),
         payload: payload.clone(), sender: ctx.node_id.clone(), nonce,
-    });
+    }, handler_fill.max(shard_fill));
     let hint = match &scope {
         SignalScope::System           => ForwardHint::All,
         SignalScope::Group(name)      => ForwardHint::Group(name.clone()),

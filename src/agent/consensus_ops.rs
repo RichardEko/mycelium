@@ -1,7 +1,8 @@
 use crate::consensus::{
-    consensus_kind, consensus_ns, count_opaque_members_in_kv, ConsensusConfig, ConsensusHandle,
+    consensus_kind, consensus_ns, ConsensusConfig, ConsensusHandle,
     ConsensusResult,
 };
+use super::opacity::{count_opaque_members_in_kv, count_opaque_all_in_kv};
 use crate::framing::bincode_cfg;
 use crate::node_id::NodeId;
 use crate::signal::{decode_load_state, kv_ns, SignalScope};
@@ -196,14 +197,15 @@ impl GossipAgent {
             // captures only the Arcs needed for the scan — no GossipAgent reference.
             let kv_cb  = Arc::clone(&self.task_ctx.kv_state);
             let ids_cb = member_ids.clone();
+            let freshness_ms = freshness.as_millis() as u64;
             let count_opaque: Arc<dyn Fn() -> usize + Send + Sync> = Arc::new(move || {
                 let now_ms = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as u64;
-                count_opaque_members_in_kv(&kv_cb, &ids_cb, freshness.as_millis() as u64, now_ms)
+                count_opaque_members_in_kv(&kv_cb, &ids_cb, freshness_ms, now_ms)
             });
-            Some((member_ids, freshness, config.quorum_size, count_opaque))
+            Some((raw_members, config.quorum_size, count_opaque))
         } else {
             None
         };
@@ -246,18 +248,31 @@ impl GossipAgent {
             }
         }
         let n_nodes = (self.system_stats().peers + 1).max(1);
+        let freshness_ms = self.config.health_check_interval_secs * 2 * 1000;
         let active_n = if config.count_opaque_as_absent {
-            let freshness = Duration::from_millis(
-                self.config.health_check_interval_secs * 2 * 1000,
+            let opaque_count = self.count_opaque_system(
+                Duration::from_millis(freshness_ms),
             );
-            let opaque_count = self.count_opaque_system(freshness);
             n_nodes.saturating_sub(opaque_count).max(1)
         } else {
             n_nodes
         };
         let quorum = compute_quorum_size(config.quorum_size, active_n);
+        let opaque_recompute = if config.count_opaque_as_absent {
+            let kv_cb = Arc::clone(&self.task_ctx.kv_state);
+            let count_opaque: Arc<dyn Fn() -> usize + Send + Sync> = Arc::new(move || {
+                let now_ms = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                count_opaque_all_in_kv(&kv_cb, freshness_ms, now_ms)
+            });
+            Some((n_nodes, config.quorum_size, count_opaque))
+        } else {
+            None
+        };
         self.make_consensus_engine(config.abstain_when_opaque, config.use_trust_slices, config.max_abstain_ballots)
-            .propose(SignalScope::System, Arc::from(slot), value, quorum, config, None)
+            .propose(SignalScope::System, Arc::from(slot), value, quorum, config, opaque_recompute)
             .await
     }
 

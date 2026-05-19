@@ -3,7 +3,7 @@ use crate::signal::{
     decode_load_state, encode_load_state, kv_ns, LoadState, OpacityHandle, OpacityHint,
     OpacityState,
 };
-use crate::store::apply_and_notify;
+use crate::store::{apply_and_notify, KvState};
 use ahash::AHashSet;
 use bytes::Bytes;
 use std::{
@@ -251,17 +251,23 @@ impl GossipAgent {
         OpacityHandle { _cancel: cancel_tx }
     }
 
-    /// Returns the current fill ratio of handler channels for `kind`.
+    /// Returns the combined load signal for `kind`.
     ///
     /// `0.0` = all channels empty (boundary fully transparent for this kind).
-    /// `1.0` = at least one channel full (boundary fully opaque — signals being shed).
-    /// Returns `0.0` when no handlers are registered.
+    /// `1.0` = at least one channel fully saturated.
+    /// Returns `0.0` when no handlers are registered and all gossip shards are empty.
     ///
-    /// The value reflects the **most-loaded** registered handler. If any one handler
-    /// is saturated, this returns 1.0 even if others still have capacity — consistent
-    /// with the opacity shedding model where a fully saturated handler would drop signals.
+    /// Takes the maximum of the handler-channel fill ratio and the worst gossip-shard
+    /// fill ratio, so opacity triggers before signals are shed at the transport layer.
     pub fn opacity(&self, kind: &str) -> f32 {
-        self.signal_handlers.fill_ratio(&Arc::from(kind))
+        let handler_fill = self.task_ctx.signal_handlers.fill_ratio(&Arc::from(kind));
+        let shard_fill: f32 = self.task_ctx.gossip_txs.iter()
+            .map(|tx| {
+                let max = tx.max_capacity();
+                if max == 0 { 0.0_f32 } else { 1.0 - tx.capacity() as f32 / max as f32 }
+            })
+            .fold(0.0_f32, f32::max);
+        handler_fill.max(shard_fill)
     }
 
     /// True if this node's own pheromone trail for `kind` records `is_opaque`.
@@ -338,6 +344,73 @@ impl GossipAgent {
                         && now_ms.saturating_sub(s.written_at_ms) <= max_age_ms)
                     .unwrap_or(false)
             })
+            .count()
+    }
+}
+
+// ── Free helpers for opaque-count callbacks ───────────────────────────────────
+
+/// Counts group members with any opaque load entry fresher than `max_age_ms`.
+///
+/// Used by `group_propose` to build the mid-ballot opaque-recompute callback so that
+/// the `propose()` function (Layer III) doesn't read `KvState` directly.
+pub(super) fn count_opaque_members_in_kv(
+    kv_state:   &KvState,
+    member_ids: &ahash::AHashSet<String>,
+    max_age_ms: u64,
+    now_ms:     u64,
+) -> usize {
+    let prefix = kv_ns::LOAD;
+    let seg = prefix.find('/').map_or(prefix, |i| &prefix[..i]);
+    let store = kv_state.store.pin();
+    let idx   = kv_state.prefix_index.pin();
+
+    let is_opaque_member = |key: &Arc<str>| -> bool {
+        if !key.starts_with(prefix) { return false; }
+        let tail = key.strip_prefix(prefix).unwrap_or("");
+        let slash = tail.find('/').unwrap_or(tail.len());
+        if !member_ids.contains(&tail[..slash]) { return false; }
+        store.get(key.as_ref())
+            .and_then(|e| e.data.as_ref().and_then(decode_load_state))
+            .map(|s| s.is_opaque && now_ms.saturating_sub(s.written_at_ms) <= max_age_ms)
+            .unwrap_or(false)
+    };
+
+    if let Some(bucket) = idx.get(seg) {
+        bucket.pin().iter().filter(|(k, _)| is_opaque_member(k)).count()
+    } else {
+        store.iter()
+            .filter(|(k, v)| k.starts_with(prefix) && v.data.is_some() && is_opaque_member(k))
+            .count()
+    }
+}
+
+/// Counts all nodes with any opaque load entry fresher than `max_age_ms`.
+///
+/// Used by `system_propose` to build the mid-ballot opaque-recompute callback.
+pub(super) fn count_opaque_all_in_kv(
+    kv_state:   &KvState,
+    max_age_ms: u64,
+    now_ms:     u64,
+) -> usize {
+    let prefix = kv_ns::LOAD;
+    let seg = prefix.find('/').map_or(prefix, |i| &prefix[..i]);
+    let store = kv_state.store.pin();
+    let idx   = kv_state.prefix_index.pin();
+
+    let is_opaque = |key: &Arc<str>| -> bool {
+        if !key.starts_with(prefix) { return false; }
+        store.get(key.as_ref())
+            .and_then(|e| e.data.as_ref().and_then(decode_load_state))
+            .map(|s| s.is_opaque && now_ms.saturating_sub(s.written_at_ms) <= max_age_ms)
+            .unwrap_or(false)
+    };
+
+    if let Some(bucket) = idx.get(seg) {
+        bucket.pin().iter().filter(|(k, _)| is_opaque(k)).count()
+    } else {
+        store.iter()
+            .filter(|(k, v)| k.starts_with(prefix) && v.data.is_some() && is_opaque(k))
             .count()
     }
 }

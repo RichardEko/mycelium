@@ -64,7 +64,7 @@ impl GossipAgent {
 
     async fn start_listener(&self, addr: SocketAddr) -> Result<(), GossipError> {
         #[cfg(unix)]
-        let n_listeners = self.gossip_txs.len().clamp(1, 4);
+        let n_listeners = self.task_ctx.gossip_txs.len().clamp(1, 4);
         #[cfg(not(unix))]
         let n_listeners: usize = 1;
 
@@ -79,19 +79,19 @@ impl GossipAgent {
         let conn = ConnContext {
             node_id:         self.node_id.clone(),
             peers:           self.peers.clone(),
-            gossip_txs:      self.gossip_txs.clone(),
-            seen:            self.seen.clone(),
+            gossip_txs:      self.task_ctx.gossip_txs.clone(),
+            seen:            self.task_ctx.seen.clone(),
             shutdown:        self.shutdown_tx.clone(),
             max_ttl:         self.config.default_ttl,
-            current_ts:      self.current_ts.clone(),
+            current_ts:      self.task_ctx.current_ts.clone(),
             peer_writers:    self.peer_writers.clone(),
             writer_depth:    self.config.writer_channel_depth,
             backoff:         Duration::from_secs(self.config.reconnect_backoff_secs),
-            n_shards:        self.gossip_txs.len(),
+            n_shards:        self.task_ctx.gossip_txs.len(),
             intern_keys:     self.config.intern_keys,
             intern_max_keys: self.config.intern_max_keys,
-            signal_boundary: self.signal_boundary.clone(),
-            signal_handlers: self.signal_handlers.clone(),
+            signal_boundary: self.task_ctx.signal_boundary.clone(),
+            signal_handlers: self.task_ctx.signal_handlers.clone(),
             max_peers:           self.config.max_peers,
             writer_idle_timeout: Duration::from_secs(self.config.writer_idle_timeout_secs),
             kv_state:            self.kv_state.clone(),
@@ -119,7 +119,7 @@ impl GossipAgent {
         let backoff               = Duration::from_secs(self.config.reconnect_backoff_secs);
         let idle_timeout          = Duration::from_secs(self.config.writer_idle_timeout_secs);
         let group_aware_forwarding = self.config.group_aware_forwarding;
-        let prefix_index          = self.prefix_index.clone();
+        let prefix_index          = self.kv_state.prefix_index.clone();
 
         let rxs = self.gossip_rxs
             .lock()
@@ -139,7 +139,7 @@ impl GossipAgent {
                 backoff,
                 idle_timeout,
                 self.config.max_forwarding_peers,
-                self.dropped_frames.clone(),
+                self.kv_state.dropped_frames.clone(),
                 group_aware_forwarding,
                 prefix_index.clone(),
             ));
@@ -155,7 +155,7 @@ impl GossipAgent {
             self.peer_writers.clone(),
             self.peer_list_tx.clone(),
             self.shutdown_tx.clone(),
-            self.current_ts.clone(),
+            self.task_ctx.current_ts.clone(),
             self.config.health_check_interval_secs,
             self.config.writer_channel_depth,
             Duration::from_secs(self.config.reconnect_backoff_secs),
@@ -164,9 +164,9 @@ impl GossipAgent {
             self.health_monitor_alive.clone(),
             self.config.ping_peer_sample_size,
             self.config.health_check_max_jitter_ms,
-            self.hash_acc.clone(),
-            self.dropped_frames.clone(),
-            self.signal_handlers.clone(),
+            self.kv_state.hash_acc.clone(),
+            self.kv_state.dropped_frames.clone(),
+            self.task_ctx.signal_handlers.clone(),
             self.config.signal_window_secs,
         ));
         self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).push(handle);
@@ -174,20 +174,20 @@ impl GossipAgent {
 
     fn start_gc_task(&self) {
         let handle = tokio::spawn(run_gc_task(
-            self.store.clone(),
-            self.subscriptions.clone(),
+            self.kv_state.store.clone(),
+            self.kv_state.subscriptions.clone(),
             self.shutdown_tx.clone(),
             self.config.health_check_interval_secs,
             self.config.default_ttl,
             self.config.propagation_window_secs,
             self.live_entries.clone(),
-            self.seen.clone(),
+            self.task_ctx.seen.clone(),
             self.config.max_seen_entries,
             self.gc_alive.clone(),
-            self.signal_handlers.clone(),
+            self.task_ctx.signal_handlers.clone(),
             self.peer_writers.clone(),
             self.config.intern_max_keys,
-            self.signal_boundary.clone(),
+            self.task_ctx.signal_boundary.clone(),
             self.node_id.clone(),
             self.config.signal_window_secs,
         ));
@@ -205,7 +205,8 @@ impl GossipAgent {
             .unwrap_or_default()
             .as_millis() as u64;
         let window_ms = self.config.signal_window_secs * 1000;
-        let prefix = "sys/quorum/";
+        use crate::signal::kv_ns;
+        let prefix = kv_ns::QUORUM;
         for (key, bytes) in self.scan_prefix(prefix) {
             let Some(tail) = key.strip_prefix(prefix) else { continue };
             // Key format: sys/quorum/{kind}/{sender_id}
@@ -218,7 +219,7 @@ impl GossipAgent {
             let written_at_ms = u64::from_le_bytes(bytes[..8].try_into().unwrap());
             let age_ms = now_ms.saturating_sub(written_at_ms);
             if age_ms > window_ms { continue; }
-            self.signal_handlers.seed_sender_log(kind, sender, age_ms);
+            self.task_ctx.signal_handlers.seed_sender_log(kind, sender, age_ms);
         }
     }
 
@@ -227,7 +228,7 @@ impl GossipAgent {
         let mut to_insert: Vec<Arc<str>> = Vec::new();
         let mut to_remove: Vec<Arc<str>> = Vec::new();
         {
-            let guard = self.store.pin();
+            let guard = self.kv_state.store.pin();
             for (key, entry) in guard.iter() {
                 let Some(group) = parse_own_grp_key(key, &node_id_str) else { continue };
                 if entry.data.is_some() {
@@ -237,7 +238,7 @@ impl GossipAgent {
                 }
             }
         }
-        let mut bnd = self.signal_boundary.write();
+        let mut bnd = self.task_ctx.signal_boundary.write();
         for g in to_insert { bnd.groups.insert(g); }
         for g in &to_remove { bnd.groups.remove(g.as_ref()); }
     }
@@ -248,7 +249,7 @@ impl GossipAgent {
     /// Passing `Duration::MAX` replicates the old unbounded-wait behaviour.
     pub async fn shutdown_with_timeout(&self, timeout: Duration) {
         let my_load_prefix = format!("sys/load/{}/", self.node_id);
-        let load_keys: Vec<String> = self.store.pin()
+        let load_keys: Vec<String> = self.kv_state.store.pin()
             .iter()
             .filter(|(k, v)| k.starts_with(&*my_load_prefix) && v.data.is_some())
             .map(|(k, _)| k.to_string())
@@ -265,11 +266,14 @@ impl GossipAgent {
         for h in self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).drain(..) {
             set.spawn(async move { let _ = h.await; });
         }
-        let writer_keys: Vec<crate::node_id::NodeId> = self.peer_writers.iter().map(|e| e.key().clone()).collect();
-        for key in writer_keys {
-            if let Some((_, entry)) = self.peer_writers.remove(&key) {
-                set.spawn(async move { let _ = entry.handle.await; });
-            }
+        // Signal all peer writer tasks to exit. They run as detached tasks and exit
+        // via peer_shutdown or the global shutdown signal already sent above.
+        {
+            let guard = self.peer_writers.pin();
+            let keys: Vec<crate::node_id::NodeId> = guard.iter()
+                .map(|(k, v)| { let _ = v.peer_shutdown.send(true); k.clone() })
+                .collect();
+            for key in keys { guard.remove(&key); }
         }
         let drain = async { while set.join_next().await.is_some() {} };
         if time::timeout(timeout, drain).await.is_err() {

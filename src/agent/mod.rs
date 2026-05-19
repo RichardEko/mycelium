@@ -3,14 +3,13 @@ use crate::framing::ForwardHint;
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
 use crate::signal::{Boundary, SignalHandlers};
-use crate::store::{KvState, PrefixIndex, StoreEntry};
+use crate::store::KvState;
 use crate::writer::WriterEntry;
 use bytes::Bytes;
-use dashmap::DashMap;
 use parking_lot::RwLock;
 use std::{
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering},
         Arc,
     },
     time::Instant,
@@ -28,6 +27,8 @@ mod tasks;
 pub(crate) use helpers::emit_signal;
 pub(crate) use helpers::emit_signal_async;
 pub(crate) use helpers::make_gossip_update;
+
+type RosterCache = Arc<papaya::HashMap<Arc<str>, Arc<(Vec<NodeId>, std::time::Instant)>>>;
 
 pub(super) const STATE_IDLE:    u8 = 0;
 pub(super) const STATE_RUNNING: u8 = 1;
@@ -113,18 +114,12 @@ pub(crate) struct TaskCtx {
 pub struct GossipAgent {
     pub(super) node_id: NodeId,
     pub(super) config: GossipConfig,
-    pub(super) store: Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
     pub(super) peers: Arc<papaya::HashMap<NodeId, Instant>>,
     pub(super) peer_list_tx: watch::Sender<Arc<[NodeId]>>,
     pub(super) bootstrap_peers: Arc<[NodeId]>,
-    /// Pre-encoded frame bytes + sender id_hash + forwarding hint; shards fan out without re-encoding.
-    pub(super) gossip_txs: Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]>,
     #[allow(clippy::type_complexity)]
     pub(super) gossip_rxs: std::sync::Mutex<Option<Vec<mpsc::Receiver<(Bytes, u64, ForwardHint)>>>>,
-    pub(super) seen: Arc<ShardedSeen>,
-    pub(super) current_ts: Arc<AtomicU64>,
-    pub(super) peer_writers: Arc<DashMap<NodeId, WriterEntry>>,
-    pub(super) subscriptions: Arc<papaya::HashMap<Arc<str>, watch::Sender<Option<Bytes>>>>,
+    pub(super) peer_writers: Arc<papaya::HashMap<NodeId, WriterEntry>>,
     /// Cached count of live (non-tombstone) store entries. Updated by the GC task;
     /// up to one GC interval stale but O(1) to read via system_stats().
     pub(super) live_entries: Arc<AtomicUsize>,
@@ -136,26 +131,16 @@ pub struct GossipAgent {
     pub(super) health_monitor_alive: Arc<AtomicBool>,
     pub(super) gc_alive: Arc<AtomicBool>,
     pub(super) task_handles: std::sync::Mutex<Vec<JoinHandle<()>>>,
-    /// Local boundary filter — which scopes this node acts on.
-    pub(super) signal_boundary: Arc<RwLock<Boundary>>,
-    /// Fan-out registry for local signal delivery.
-    pub(super) signal_handlers: Arc<SignalHandlers>,
-    /// Cumulative count of gossip frames silently dropped due to full channels.
-    pub(super) dropped_frames: Arc<AtomicU64>,
-    /// Secondary index: first path segment → live key set.
-    /// Maintained by `apply_and_notify`; used by `scan_prefix` for O(bucket) scans.
-    pub(super) prefix_index: Arc<PrefixIndex>,
-    /// Incremental XOR hash accumulator for the store; maintained by `apply_and_notify`.
-    /// Allows `store_hash_acc` to return the current digest in O(1) instead of O(store).
-    pub(super) hash_acc: Arc<AtomicU64>,
     /// Bundled KV-path state (store + subscriptions + prefix_index + hash_acc +
-    /// dropped_frames + max_store_entries) for passing to `apply_and_notify` and
-    /// threading into `ListenerContext` / `ConnContext` / `ConsensusEngine` as a
-    /// single Arc rather than five separate fields.
+    /// dropped_frames + max_store_entries). Access fields via `self.kv_state.x`.
     pub(super) kv_state: Arc<KvState>,
     /// Infrastructure bundle shared with `ConsensusEngine` and long-lived task helpers.
-    /// Avoids cloning 8 individual fields every time a task is spawned.
+    /// Access fields via `self.task_ctx.x`.
     pub(super) task_ctx: Arc<TaskCtx>,
+    /// Short-lived cache of group membership lists, keyed by group name.
+    /// Entries expire after `health_check_interval_secs` and are eagerly invalidated
+    /// by `join_group`/`leave_group`. Avoids a full prefix-scan per `group_propose` call.
+    pub(super) group_roster_cache: RosterCache,
 }
 
 impl GossipAgent {
@@ -197,26 +182,16 @@ impl GossipAgent {
         let seen_shards = n_shards.max(16);
 
         let signal_window = std::time::Duration::from_secs(config.signal_window_secs);
-        let kv_state     = KvState::new(config.max_store_entries);
-        let store         = kv_state.store.clone();
-        let subscriptions = kv_state.subscriptions.clone();
-        let prefix_index  = kv_state.prefix_index.clone();
-        let hash_acc      = kv_state.hash_acc.clone();
-        let dropped_frames = kv_state.dropped_frames.clone();
-
-        let default_ttl     = config.default_ttl;
-        let seen            = Arc::new(ShardedSeen::new(seen_shards));
-        let current_ts      = Arc::new(AtomicU64::new(init_ts));
+        let kv_state      = KvState::new(config.max_store_entries);
+        let default_ttl   = config.default_ttl;
         let gossip_txs: Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]> = gossip_txs_vec.into();
-        let signal_boundary = Arc::new(RwLock::new(Boundary::new(node_id.clone())));
-        let signal_handlers = Arc::new(SignalHandlers::new(signal_window));
         let task_ctx = Arc::new(TaskCtx {
             node_id:         node_id.clone(),
-            seen:            seen.clone(),
-            current_ts:      current_ts.clone(),
-            signal_boundary: signal_boundary.clone(),
-            signal_handlers: signal_handlers.clone(),
-            gossip_txs:      gossip_txs.clone(),
+            seen:            Arc::new(ShardedSeen::new(seen_shards)),
+            current_ts:      Arc::new(AtomicU64::new(init_ts)),
+            signal_boundary: Arc::new(RwLock::new(Boundary::new(node_id.clone()))),
+            signal_handlers: Arc::new(SignalHandlers::new(signal_window)),
+            gossip_txs,
             default_ttl,
             kv_state:        kv_state.clone(),
         });
@@ -224,16 +199,11 @@ impl GossipAgent {
         Self {
             node_id,
             config,
-            store,
             peers: Arc::new(papaya::HashMap::new()),
             bootstrap_peers,
             peer_list_tx,
-            gossip_txs,
             gossip_rxs: std::sync::Mutex::new(Some(gossip_rxs_inner)),
-            seen,
-            current_ts,
-            peer_writers: Arc::new(DashMap::new()),
-            subscriptions,
+            peer_writers: Arc::new(papaya::HashMap::new()),
             live_entries: Arc::new(AtomicUsize::new(0)),
             state: AtomicU8::new(STATE_IDLE),
             shutdown_tx: Arc::new(shutdown_tx),
@@ -242,13 +212,9 @@ impl GossipAgent {
             health_monitor_alive: Arc::new(AtomicBool::new(false)),
             gc_alive: Arc::new(AtomicBool::new(false)),
             task_handles: std::sync::Mutex::new(Vec::new()),
-            signal_boundary,
-            signal_handlers,
-            dropped_frames,
-            prefix_index,
-            hash_acc,
             kv_state,
             task_ctx,
+            group_roster_cache: Arc::new(papaya::HashMap::new()),
         }
     }
 }
@@ -269,7 +235,7 @@ impl std::fmt::Debug for GossipAgent {
             .field("node_id", &self.node_id)
             .field("state", &self.state.load(Ordering::Relaxed))
             .field("peers", &self.peers.len())
-            .field("store_entries", &self.store.len())
+            .field("store_entries", &self.kv_state.store.len())
             .finish_non_exhaustive()
     }
 }

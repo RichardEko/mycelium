@@ -30,7 +30,7 @@ impl GossipAgent {
     /// Reflects the local [`Boundary`] state at the moment of the call. Useful for
     /// diagnostics and Layer 3 routing decisions that depend on group membership.
     pub fn groups(&self) -> Vec<Arc<str>> {
-        self.signal_boundary.read().groups.iter().cloned().collect()
+        self.task_ctx.signal_boundary.read().groups.iter().cloned().collect()
     }
 
     /// Stores `value` under `key` locally and queues it for gossip to peers.
@@ -59,7 +59,7 @@ impl GossipAgent {
 
     /// Returns the current value for `key`, or `None` if absent or tombstoned.
     pub fn get(&self, key: &str) -> Option<Bytes> {
-        self.store.pin().get(key).and_then(|e| e.data.clone())
+        self.kv_state.store.pin().get(key).and_then(|e| e.data.clone())
     }
 
     /// Removes `key` locally and queues a tombstone for gossip to peers.
@@ -111,7 +111,7 @@ impl GossipAgent {
     /// Keys are returned as `Arc<str>` — clone is O(1). Callers that need `String`
     /// can call `.to_string()` on each element.
     pub fn keys(&self) -> Vec<Arc<str>> {
-        let guard = self.store.pin();
+        let guard = self.kv_state.store.pin();
         guard.iter()
             .filter(|(_, v)| v.data.is_some())
             .map(|(k, _)| k.clone())
@@ -133,8 +133,8 @@ impl GossipAgent {
     /// ```
     pub fn scan_prefix(&self, prefix: &str) -> Vec<(Arc<str>, Bytes)> {
         let seg = prefix.find('/').map_or(prefix, |i| &prefix[..i]);
-        let store_guard = self.store.pin();
-        let idx_guard = self.prefix_index.pin();
+        let store_guard = self.kv_state.store.pin();
+        let idx_guard = self.kv_state.prefix_index.pin();
         if let Some(bucket) = idx_guard.get(seg) {
             // O(|bucket|) fast path: only iterate keys in this segment.
             bucket.pin().iter()
@@ -166,13 +166,13 @@ impl GossipAgent {
     pub fn subscribe<K: Into<Arc<str>>>(&self, key: K) -> watch::Receiver<Option<Bytes>> {
         let key_arc: Arc<str> = key.into();
         loop {
-            let guard = self.subscriptions.pin();
+            let guard = self.kv_state.subscriptions.pin();
             if let Some(tx) = guard.get(&key_arc) {
                 if !tx.is_closed() {
                     return tx.subscribe();
                 }
             }
-            let current = self.store.pin().get(&*key_arc).and_then(|e| e.data.clone());
+            let current = self.kv_state.store.pin().get(&*key_arc).and_then(|e| e.data.clone());
             let (new_tx, rx) = watch::channel(current);
             let mut slot = Some(new_tx);
             let result = guard.compute(key_arc.clone(), |existing| match existing {
@@ -308,8 +308,9 @@ impl GossipAgent {
     /// slow or unreachable peers that inflate the global `dropped_frames` counter.
     pub fn peer_drop_counts(&self) -> Vec<(crate::node_id::NodeId, u64)> {
         use std::sync::atomic::Ordering;
-        self.peer_writers.iter()
-            .map(|e| (e.key().clone(), e.value().dropped.load(Ordering::Relaxed)))
+        self.peer_writers.pin()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.dropped.load(Ordering::Relaxed)))
             .filter(|(_, n)| *n > 0)
             .collect()
     }
@@ -321,7 +322,7 @@ impl GossipAgent {
     /// the tokio runtime. This is normal and resolves on the next call.
     pub fn system_stats(&self) -> SystemStats {
         let running = self.state.load(Ordering::Relaxed) == STATE_RUNNING;
-        let gossip_shard_queue_depths: Vec<usize> = self.gossip_txs.iter()
+        let gossip_shard_queue_depths: Vec<usize> = self.task_ctx.gossip_txs.iter()
             .map(|tx| tx.max_capacity() - tx.capacity())
             .collect();
         let dead_shards = if running {
@@ -336,17 +337,18 @@ impl GossipAgent {
             store_entries: if running {
                 self.live_entries.load(Ordering::Relaxed)
             } else {
-                self.store.pin().iter().filter(|(_, v)| v.data.is_some()).count()
+                self.kv_state.store.pin().iter().filter(|(_, v)| v.data.is_some()).count()
             },
-            cached_connections: self.peer_writers.iter()
-                .filter(|e| !e.value().handle.is_finished())
+            cached_connections: self.peer_writers.pin()
+                .iter()
+                .filter(|(_, e)| !e.abort_handle.is_finished())
                 .count(),
             gossip_shard_queue_depths,
             dead_shards,
             gc_alive:             !running || self.gc_alive.load(Ordering::Relaxed),
             health_monitor_alive: !running || self.health_monitor_alive.load(Ordering::Relaxed),
             intern_pool_size:     intern_pool_len(),
-            dropped_frames:       self.dropped_frames.load(Ordering::Relaxed),
+            dropped_frames:       self.kv_state.dropped_frames.load(Ordering::Relaxed),
         }
     }
 }

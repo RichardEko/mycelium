@@ -32,7 +32,7 @@ use crate::framing::{
 };
 use crate::node_id::NodeId;
 use crate::signal::{decode_load_state, kv_ns, signal_kind, SignalScope};
-use crate::store::{apply_and_notify, KvState};
+use crate::store::apply_and_notify;
 use ahash::{AHashMap, AHashSet};
 use bytes::{BufMut, Bytes, BytesMut};
 use std::{
@@ -237,50 +237,13 @@ pub mod consensus_ns {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Counts group members with any opaque load entry fresher than `max_age_ms`.
+/// Closure type injected by `group_propose` or `system_propose` for mid-ballot
+/// opaque-member recomputation.
 ///
-/// Exposed as `pub(crate)` so `consensus_ops.rs` can capture it in the opaque-recompute
-/// callback without duplicating the KV-scan logic. The callback pattern in `propose()`
-/// means Layer III no longer reads `KvState` directly — it calls the closure that
-/// `group_propose` (Layer II) assembles at the call site.
-pub(crate) fn count_opaque_members_in_kv(
-    kv_state:     &KvState,
-    member_ids:   &AHashSet<String>,
-    max_age_ms:   u64,
-    now_ms:       u64,
-) -> usize {
-    let prefix = kv_ns::LOAD;
-    let seg = prefix.find('/').map_or(prefix, |i| &prefix[..i]);
-    let store = kv_state.store.pin();
-    let idx   = kv_state.prefix_index.pin();
-
-    let is_opaque_member = |key: &Arc<str>| -> bool {
-        if !key.starts_with(prefix) { return false; }
-        let tail = key.strip_prefix(prefix).unwrap_or("");
-        let slash = tail.find('/').unwrap_or(tail.len());
-        if !member_ids.contains(&tail[..slash]) { return false; }
-        store.get(key.as_ref())
-            .and_then(|e| e.data.as_ref().and_then(decode_load_state))
-            .map(|s| s.is_opaque && now_ms.saturating_sub(s.written_at_ms) <= max_age_ms)
-            .unwrap_or(false)
-    };
-
-    if let Some(bucket) = idx.get(seg) {
-        bucket.pin().iter().filter(|(k, _)| is_opaque_member(k)).count()
-    } else {
-        store.iter()
-            .filter(|(k, v)| k.starts_with(prefix) && v.data.is_some())
-            .filter(|(k, _)| is_opaque_member(k))
-            .count()
-    }
-}
-
-/// Closure type injected by `group_propose` for mid-ballot opaque-member recomputation.
-///
-/// `(member_ids, freshness, config_quorum_size, count_opaque_fn)`.
-/// `count_opaque_fn()` returns the current number of opaque group members. Built at
+/// `(total_member_count, config_quorum_size, count_opaque_fn)`.
+/// `count_opaque_fn()` returns the current number of opaque members. Built at
 /// the Layer II call site so `propose` does not read `KvState` directly.
-type OpaqueRecompute = Option<(AHashSet<String>, Duration, usize, Arc<dyn Fn() -> usize + Send + Sync>)>;
+type OpaqueRecompute = Option<(usize, usize, Arc<dyn Fn() -> usize + Send + Sync>)>;
 
 // ── ConsensusEngine ──────────────────────────────────────────────────────────
 //
@@ -531,9 +494,9 @@ impl ConsensusEngine {
                             None => std::future::pending().await,
                         }
                     } => {
-                        if let Some((ref ids, _freshness, config_qs, ref count_opaque)) = opaque_recompute {
+                        if let Some((total_members, config_qs, ref count_opaque)) = opaque_recompute {
                             let opaque = count_opaque();
-                            let active = ids.len().saturating_sub(opaque).max(1);
+                            let active = total_members.saturating_sub(opaque).max(1);
                             quorum_size = if config_qs > 0 { config_qs } else { active / 2 + 1 };
                             // Check immediately — we may already have enough votes.
                             if voters.len() >= quorum_size {

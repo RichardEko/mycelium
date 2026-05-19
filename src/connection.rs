@@ -301,8 +301,12 @@ pub(crate) async fn handle_connection(
                     let admit = match &scope {
                         SignalScope::Individual(_) => true,
                         _ => {
-                            let opacity = signal_handlers.fill_ratio(&kind);
-                            opacity == 0.0 || fastrand::f32() >= opacity
+                            let handler_fill = signal_handlers.fill_ratio(&kind);
+                            let shard_fill: f32 = gossip_txs.iter()
+                                .map(|tx| { let max = tx.max_capacity(); if max == 0 { 0.0_f32 } else { 1.0 - tx.capacity() as f32 / max as f32 } })
+                                .fold(0.0_f32, f32::max);
+                            let combined = handler_fill.max(shard_fill);
+                            combined == 0.0 || fastrand::f32() >= combined
                         }
                     };
                     if admit {

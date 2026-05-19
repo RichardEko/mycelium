@@ -1,4 +1,4 @@
-use crate::signal::{AdvertiseHandle, Signal, SignalScope, WatchHandle};
+use crate::signal::{kv_ns, AdvertiseHandle, Signal, SignalScope, WatchHandle};
 use bytes::{BufMut, Bytes, BytesMut};
 use std::{
     sync::Arc,
@@ -23,7 +23,7 @@ impl GossipAgent {
     /// the signal is dropped without retry.
     #[must_use]
     pub fn signal_rx(&self, kind: impl Into<Arc<str>>) -> mpsc::Receiver<Signal> {
-        self.signal_handlers.register(kind.into())
+        self.task_ctx.signal_handlers.register(kind.into())
     }
 
     /// Like [`signal_rx`](Self::signal_rx) with an explicit channel depth.
@@ -32,7 +32,7 @@ impl GossipAgent {
     /// or when the handler task cannot drain immediately.
     #[must_use]
     pub fn signal_rx_with_capacity(&self, kind: impl Into<Arc<str>>, cap: usize) -> mpsc::Receiver<Signal> {
-        self.signal_handlers.register_with_capacity(kind.into(), cap)
+        self.task_ctx.signal_handlers.register_with_capacity(kind.into(), cap)
     }
 
     /// Emits a signal to the cluster.
@@ -77,8 +77,9 @@ impl GossipAgent {
     /// observe it and subscribe to group roster changes.
     pub fn join_group(&self, group: impl Into<Arc<str>>) {
         let group: Arc<str> = group.into();
-        let inserted = self.signal_boundary.write().groups.insert(group.clone());
+        let inserted = self.task_ctx.signal_boundary.write().groups.insert(group.clone());
         if inserted {
+            self.group_roster_cache.pin().remove(&group);
             let key = crate::signal::grp_member_key(&group, &self.node_id);
             let _ = self.set(key, b"1".to_vec());
         }
@@ -90,8 +91,9 @@ impl GossipAgent {
     /// `grp/<name>/<node_id>` is published into the gossip store.
     pub fn leave_group(&self, group: impl Into<Arc<str>>) {
         let group: Arc<str> = group.into();
-        let removed = self.signal_boundary.write().groups.remove(&group);
+        let removed = self.task_ctx.signal_boundary.write().groups.remove(&group);
         if removed {
+            self.group_roster_cache.pin().remove(&group);
             let key = crate::signal::grp_member_key(&group, &self.node_id);
             let _ = self.delete(key);
         }
@@ -110,6 +112,28 @@ impl GossipAgent {
                     .and_then(|s| s.parse::<crate::node_id::NodeId>().ok())
             })
             .collect()
+    }
+
+    /// Like [`group_members`](Self::group_members) but returns a cached result when
+    /// the roster was fetched within `ttl`. The cache is eagerly invalidated whenever
+    /// this node calls `join_group` or `leave_group`, so it only goes stale for remote
+    /// membership changes — acceptable for consensus ballot setup.
+    pub(super) fn cached_group_members(
+        &self,
+        group: &str,
+        ttl: std::time::Duration,
+    ) -> Arc<(Vec<crate::node_id::NodeId>, std::time::Instant)> {
+        let group_key: Arc<str> = Arc::from(group);
+        let guard = self.group_roster_cache.pin();
+        if let Some(entry) = guard.get(&group_key) {
+            if entry.1.elapsed() < ttl {
+                return entry.clone();
+            }
+        }
+        let members = self.group_members(group);
+        let fresh = Arc::new((members, std::time::Instant::now()));
+        guard.insert(group_key, fresh.clone());
+        fresh
     }
 
     /// Awaits the first locally-admitted signal of `kind` satisfying `predicate`.
@@ -137,7 +161,7 @@ impl GossipAgent {
     where
         F: Fn(&Signal) -> bool,
     {
-        let mut rx = self.signal_handlers.register_with_capacity(kind.into(), 256);
+        let mut rx = self.task_ctx.signal_handlers.register_with_capacity(kind.into(), 256);
         async move {
             let deadline = time::Instant::now() + timeout;
             loop {
@@ -193,7 +217,7 @@ impl GossipAgent {
         buf.put_u64_le(nonce);
         buf.put(payload_bytes);
         let frozen = buf.freeze();
-        let mut rx = self.signal_handlers.register_with_capacity(result_kind.into(), 256);
+        let mut rx = self.task_ctx.signal_handlers.register_with_capacity(result_kind.into(), 256);
         let _ = self.emit(kind.into(), scope, frozen);
         async move {
             let deadline = time::Instant::now() + timeout;
@@ -270,7 +294,7 @@ impl GossipAgent {
     /// call to `deliver()` regardless of whether a handler is registered.
     /// Updated even while the kind is suppressed.
     pub fn last_signal(&self, kind: &str) -> Option<Instant> {
-        self.signal_handlers.last_signal(kind)
+        self.task_ctx.signal_handlers.last_signal(kind)
     }
 
     /// Returns how long ago `kind` was last observed by *any* peer, reading from
@@ -289,7 +313,7 @@ impl GossipAgent {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        let prefix = format!("sys/quorum/{}/", kind);
+        let prefix = format!("{}{}/", kv_ns::QUORUM, kind);
         self.scan_prefix(&prefix)
             .into_iter()
             .filter_map(|(_, bytes)| {
@@ -317,17 +341,17 @@ impl GossipAgent {
     /// }
     /// ```
     pub fn suppress(&self, kind: impl Into<Arc<str>>, duration: Duration) {
-        self.signal_handlers.suppress(kind.into(), Instant::now() + duration);
+        self.task_ctx.signal_handlers.suppress(kind.into(), Instant::now() + duration);
     }
 
     /// Lifts a suppression set by [`suppress`](Self::suppress) before it expires.
     pub fn unsuppress(&self, kind: &str) {
-        self.signal_handlers.unsuppress(kind);
+        self.task_ctx.signal_handlers.unsuppress(kind);
     }
 
     /// Returns `true` if `kind` is currently suppressed on this node.
     pub fn is_suppressed(&self, kind: &str) -> bool {
-        self.signal_handlers.is_suppressed(kind)
+        self.task_ctx.signal_handlers.is_suppressed(kind)
     }
 
     /// Watches `kind` for staleness, calling `on_stale` whenever the signal has not
@@ -360,7 +384,8 @@ impl GossipAgent {
     {
         let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
         let mut shutdown_rx = self.shutdown_tx.subscribe();
-        let signal_handlers = self.signal_handlers.clone();
+        let signal_handlers = Arc::clone(&self.task_ctx.signal_handlers);
+        let kv_watch        = Arc::clone(&self.kv_state);
         let kind: Arc<str>  = kind.into();
         let check_interval  = (threshold / 4).max(Duration::from_millis(100));
 
@@ -372,10 +397,39 @@ impl GossipAgent {
                     _ = &mut cancel_rx               => break,
                     _ = shutdown_rx.wait_for(|v| *v) => break,
                     _ = ticker.tick() => {
-                        let stale = signal_handlers
-                            .last_signal(&kind)
-                            .map(|t| t.elapsed() > threshold)
-                            .unwrap_or(true);
+                        let elapsed = signal_handlers.last_signal(&kind).map(|t| t.elapsed());
+                        let stale = match elapsed {
+                            Some(dur) if dur <= threshold => false,
+                            Some(_) => true,
+                            // No in-memory record: check Layer I quorum evidence so that a
+                            // recently-restarted node doesn't fire on_stale spuriously when
+                            // sys/quorum/ entries prove the kind was active before the restart.
+                            None => {
+                                use std::time::{SystemTime, UNIX_EPOCH};
+                                let now_ms = SystemTime::now()
+                                    .duration_since(UNIX_EPOCH).unwrap_or_default()
+                                    .as_millis() as u64;
+                                let threshold_ms = threshold.as_millis() as u64;
+                                let prefix = format!("{}{}/", kv_ns::QUORUM, &*kind);
+                                let store = kv_watch.store.pin();
+                                let idx   = kv_watch.prefix_index.pin();
+                                let found = if let Some(bucket) = idx.get("sys") {
+                                    bucket.pin().iter().any(|(k, _)| {
+                                        if !k.starts_with(&*prefix) { return false; }
+                                        store.get(k.as_ref())
+                                            .and_then(|e| e.data.as_ref())
+                                            .and_then(|b| b.get(..8))
+                                            .and_then(|b| b.try_into().ok())
+                                            .map(|b: [u8; 8]| u64::from_le_bytes(b))
+                                            .map(|ts| now_ms.saturating_sub(ts) <= threshold_ms)
+                                            .unwrap_or(false)
+                                    })
+                                } else {
+                                    false
+                                };
+                                !found
+                            }
+                        };
                         if stale { on_stale(); }
                     }
                 }
@@ -430,7 +484,7 @@ impl GossipAgent {
     /// }
     /// ```
     pub fn quorum(&self, kind: &str, min_senders: usize, window: Duration) -> bool {
-        self.signal_handlers.quorum(kind, min_senders, window)
+        self.task_ctx.signal_handlers.quorum(kind, min_senders, window)
     }
 
     /// Like [`quorum`](Self::quorum) but only counts senders that are current members
@@ -455,7 +509,7 @@ impl GossipAgent {
             .iter()
             .map(|n| n.id_hash())
             .collect();
-        self.signal_handlers.quorum_for_group(kind, &member_hashes, min_senders, window)
+        self.task_ctx.signal_handlers.quorum_for_group(kind, &member_hashes, min_senders, window)
     }
 
     /// Like [`group_quorum`](Self::group_quorum) but accepts a pre-built member hash set.
@@ -476,7 +530,7 @@ impl GossipAgent {
         min_senders: usize,
         window: Duration,
     ) -> bool {
-        self.signal_handlers.quorum_for_group(kind, member_hashes, min_senders, window)
+        self.task_ctx.signal_handlers.quorum_for_group(kind, member_hashes, min_senders, window)
     }
 
 }
