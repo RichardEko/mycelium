@@ -328,26 +328,38 @@ async fn call_tool(app: &AppState, tool_name: &str, args: serde_json::Value) -> 
 fn state_json(app: &AppState) -> String {
     let nodes_snap: Vec<Arc<NodeSlot>> = app.nodes.read().unwrap().clone();
 
-    // Collect every advertised capability currently in the KV mesh as "ns/name".
-    // Used for requirement satisfaction checks without holding a GossipAgent ref.
-    let advertised_caps: std::collections::HashSet<String> = {
+    // Single cap/ KV scan: build both the satisfied-cap set and a cap→ports map.
+    // Using live KV (not static struct fields) ensures killed nodes drop out immediately.
+    let (advertised_caps, cap_port_map): (
+        std::collections::HashSet<String>,
+        std::collections::HashMap<String, Vec<u16>>,
+    ) = {
         let scanner = nodes_snap.iter()
             .filter(|s| s.alive.load(Ordering::Relaxed))
             .find_map(|s| s.agent.lock().unwrap().clone());
         match scanner {
             None => Default::default(),
-            Some(a) => a.scan_prefix("cap/").into_iter()
-                .filter_map(|(key, _)| {
-                    // key = "cap/{ip:port}/{ns}/{name}" — node_id has no '/'
+            Some(a) => {
+                let mut caps_set: std::collections::HashSet<String> = Default::default();
+                let mut port_map: std::collections::HashMap<String, Vec<u16>> = Default::default();
+                // key = "cap/{ip:port}/{ns}/{name}" — node_id has no '/'
+                for (key, _) in a.scan_prefix("cap/") {
                     let mut parts = key.splitn(4, '/');
                     let _ = parts.next(); // "cap"
-                    let _ = parts.next(); // ip:port
-                    let ns   = parts.next()?.to_string();
-                    let name = parts.next()?.to_string();
-                    if ns == "locality" { return None; }
-                    Some(format!("{ns}/{name}"))
-                })
-                .collect(),
+                    let node_str = match parts.next() { Some(s) => s, None => continue };
+                    let ns   = match parts.next() { Some(s) => s, None => continue };
+                    let name = match parts.next() { Some(s) => s, None => continue };
+                    if ns == "locality" { continue; }
+                    let cap_key = format!("{ns}/{name}");
+                    caps_set.insert(cap_key.clone());
+                    let port: u16 = node_str.split(':').last()
+                        .and_then(|s| s.parse().ok()).unwrap_or(0);
+                    if port > 0 {
+                        port_map.entry(cap_key).or_default().push(port);
+                    }
+                }
+                (caps_set, port_map)
+            }
         }
     };
 
@@ -386,13 +398,16 @@ fn state_json(app: &AppState) -> String {
         let req_json: Vec<String> = s.reqs_def.iter().map(|(ns, name)| {
             let key = format!("{ns}/{name}");
             let sat = advertised_caps.contains(&key);
-            // Find which node pos provides it.
-            let provider_pos: i64 = nodes_snap.iter().enumerate()
-                .find(|(_, other)| {
-                    other.tools.iter().any(|&t| format!("mcp/{t}") == key)
-                        || other.caps_def.iter().any(|(n2, nm2)| format!("{n2}/{nm2}") == key)
+            // Derive provider_pos from the live KV cap→port map so it tracks
+            // reality: killed nodes have tombstoned their caps and drop out here.
+            let provider_pos: i64 = cap_port_map.get(&key)
+                .and_then(|ports| {
+                    ports.iter().find_map(|&port| {
+                        nodes_snap.iter().enumerate()
+                            .find(|(_, s)| s.port == port)
+                            .map(|(p, _)| p as i64)
+                    })
                 })
-                .map(|(p, _)| p as i64)
                 .unwrap_or(-1);
             format!(r#"{{"key":"{key}","satisfied":{sat},"provider_pos":{provider_pos}}}"#)
         }).collect();
