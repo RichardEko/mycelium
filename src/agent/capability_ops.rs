@@ -232,13 +232,13 @@ impl GossipAgent {
             ctx, cancel_rx, shutdown_rx, kv_key, interval, payload_fn, None,
         ));
 
-        // Auto-opacity watcher.
-        let mut prefix_rx = self.subscribe_prefix(Arc::<str>::from("cap/"));
-        let kv_state = Arc::clone(&self.kv_state);
+        // Auto-opacity watcher. The merged `run_filter_opacity_watcher` task
+        // creates its own prefix subscriptions internally based on the
+        // evaluator variant (Requirement: cap/ only).
         let filter_for_watch = Arc::clone(&filter_arc);
-        self.spawn_task(run_requirement_opacity_watcher(
+        self.spawn_task(run_filter_opacity_watcher(
             opacity_ctx, op_cancel_rx, op_shutdown_rx,
-            opacity_key, filter_for_watch, prefix_rx_recv_box(&mut prefix_rx), kv_state,
+            opacity_key, filter_for_watch, OpacityEvaluator::Requirement,
         ));
         // Keep the opacity-cancel sender alive alongside the main one — both fire
         // when the requirement is retracted.
@@ -905,12 +905,6 @@ fn aggregate_fill(kv_state: &crate::store::KvState, node: &NodeId) -> f32 {
     total
 }
 
-/// Wrapper around a `watch::Receiver<u64>` that lets us pass a "boxed"
-/// receiver into a spawned task without naming the concrete generics.
-fn prefix_rx_recv_box(rx: &mut watch::Receiver<u64>) -> watch::Receiver<u64> {
-    rx.clone()
-}
-
 /// Composes two oneshot::Sender<()> into one so dropping the outer fires both.
 fn build_paired_retract(
     a: oneshot::Sender<()>,
@@ -937,25 +931,56 @@ fn build_paired_retract(
     a
 }
 
-/// Background task: watches whether `filter` is currently satisfied. While
-/// it is NOT satisfied, writes a `LoadState { fill_ratio: 1.0, is_opaque: true }`
+/// Selects how a `run_filter_opacity_watcher` evaluates its filter and which
+/// prefix subscriptions it holds. Phase 3 (`declare_requirement`) uses
+/// `Requirement` — only `cap/` matters because direct-cap providers are the
+/// only thing satisfying a node-level requirement. Phase 7
+/// (group-req opacity) uses `GroupReq` — both `cap/` (standalone providers)
+/// and `gcap/` (group projections) count.
+enum OpacityEvaluator {
+    Requirement,
+    GroupReq,
+}
+
+/// Background task: watches whether `filter` is currently satisfied. While it
+/// is NOT satisfied, writes `LoadState { fill_ratio: 1.0, is_opaque: true }`
 /// to `opacity_key`. When it becomes satisfied, tombstones `opacity_key`.
-async fn run_requirement_opacity_watcher(
+/// Always tombstones at exit if the entry is currently set, so cancel /
+/// shutdown leave KV clean.
+async fn run_filter_opacity_watcher(
     ctx:             Arc<TaskCtx>,
     mut cancel_rx:   oneshot::Receiver<()>,
     mut shutdown_rx: watch::Receiver<bool>,
     opacity_key:     Arc<str>,
     filter:          Arc<CapFilter>,
-    mut prefix_rx:   watch::Receiver<u64>,
-    kv_state:        Arc<crate::store::KvState>,
+    evaluator:       OpacityEvaluator,
 ) {
     use crate::framing::{dispatch_gossip_try_send, ForwardHint, WireMessage, make_gossip_update};
     use crate::store::apply_and_notify;
 
+    // Subscribe to `cap/` always; subscribe to `gcap/` only for GroupReq.
+    // The Requirement variant could be optimised to skip `gcap/` entirely; we
+    // unconditionally subscribe so the single select! shape stays simple. A
+    // `gcap/` change in the Requirement path triggers one extra evaluation
+    // but cannot change the answer, so correctness is preserved.
+    let mut cap_rx  = subscribe_prefix_on_kv(&ctx.kv_state, Arc::<str>::from("cap/"));
+    let mut gcap_rx = match evaluator {
+        OpacityEvaluator::Requirement => None,
+        OpacityEvaluator::GroupReq    => Some(subscribe_prefix_on_kv(
+            &ctx.kv_state,
+            Arc::<str>::from("gcap/"),
+        )),
+    };
+
     let mut opaque_written = false;
 
-    let evaluate = |kv: &crate::store::KvState| -> bool {
-        !resolve_filter_against_kv(kv, &filter).is_empty()
+    let is_satisfied = |kv: &crate::store::KvState| -> bool {
+        match evaluator {
+            OpacityEvaluator::Requirement =>
+                !resolve_filter_against_kv(kv, &filter).is_empty(),
+            OpacityEvaluator::GroupReq =>
+                !matches!(wiring_snapshot(kv, &filter), WiringStatus::Unwired { .. }),
+        }
     };
 
     let write_opaque = |ctx: &TaskCtx| {
@@ -986,24 +1011,31 @@ async fn run_requirement_opacity_watcher(
     };
 
     // Initial evaluation.
-    if !evaluate(&kv_state) {
+    if !is_satisfied(&ctx.kv_state) {
         write_opaque(&ctx);
         opaque_written = true;
     }
 
     loop {
+        // The `gcap_rx` arm uses `std::future::pending` when the evaluator
+        // does not subscribe to gcap, so a single select! handles both
+        // variants without a Vec-of-receivers + select_all dependency.
         tokio::select! { biased;
-            _ = &mut cancel_rx               => break,
-            _ = shutdown_rx.wait_for(|v| *v) => break,
-            changed = prefix_rx.changed() => {
-                if changed.is_err() { break; }
-                let satisfied = evaluate(&kv_state);
-                match (opaque_written, satisfied) {
-                    (false, false) => { write_opaque(&ctx); opaque_written = true; }
-                    (true,  true)  => { clear_opaque(&ctx); opaque_written = false; }
-                    _ => {}
+            _ = &mut cancel_rx                   => break,
+            _ = await_shutdown(&mut shutdown_rx) => break,
+            r = cap_rx.changed() => { if r.is_err() { break; } }
+            r = async {
+                match gcap_rx.as_mut() {
+                    Some(rx) => rx.changed().await,
+                    None     => std::future::pending().await,
                 }
-            }
+            } => { if r.is_err() { break; } }
+        }
+        let satisfied = is_satisfied(&ctx.kv_state);
+        match (opaque_written, satisfied) {
+            (false, false) => { write_opaque(&ctx); opaque_written = true; }
+            (true,  true)  => { clear_opaque(&ctx); opaque_written = false; }
+            _ => {}
         }
     }
 
@@ -1214,17 +1246,14 @@ fn spawn_group_req_watchers(
         let opacity_key: Arc<str> = Arc::from(format!(
             "sys/load/{}/group-req/{}/{}", own, group, idx,
         ).as_str());
-        let cap_rx  = subscribe_prefix_on_kv(&ctx.kv_state, Arc::<str>::from("cap/"));
-        let gcap_rx = subscribe_prefix_on_kv(&ctx.kv_state, Arc::<str>::from("gcap/"));
         let filter_arc = Arc::new(filter.clone());
-        tokio::spawn(run_group_req_opacity_watcher(
+        tokio::spawn(run_filter_opacity_watcher(
             Arc::clone(ctx),
             cancel_rx,
             shutdown_rx.clone(),
             opacity_key,
             filter_arc,
-            cap_rx,
-            gcap_rx,
+            OpacityEvaluator::GroupReq,
         ));
         handles.push(cancel_tx);
     }
@@ -1257,84 +1286,6 @@ fn subscribe_prefix_on_kv(
         if matches!(result, papaya::Compute::Inserted(..) | papaya::Compute::Updated { .. }) {
             return rx;
         }
-    }
-}
-
-/// Background task: composes Phase-3's auto-opacity pattern with
-/// Phase-4's wiring resolution. While the filter resolves to `Unwired`,
-/// keeps `sys/load/{self}/group-req/{group}/{idx}` set to
-/// `LoadState { fill_ratio: 1.0, is_opaque: true }`. Tombstones the entry
-/// the moment a provider (cap/ or gcap/) appears.
-///
-/// Composes with load-based opacity via `is_self_opaque`'s scanner over
-/// `sys/load/{self}/*` — no new opacity mechanism required.
-async fn run_group_req_opacity_watcher(
-    ctx:             Arc<TaskCtx>,
-    mut cancel_rx:   oneshot::Receiver<()>,
-    mut shutdown_rx: watch::Receiver<bool>,
-    opacity_key:     Arc<str>,
-    filter:          Arc<CapFilter>,
-    mut cap_rx:      watch::Receiver<u64>,
-    mut gcap_rx:     watch::Receiver<u64>,
-) {
-    use crate::framing::{dispatch_gossip_try_send, ForwardHint, WireMessage, make_gossip_update};
-    use crate::store::apply_and_notify;
-
-    let mut opaque_written = false;
-
-    let write_opaque = |ctx: &TaskCtx| {
-        let payload = encode_load_state(&LoadState {
-            fill_ratio:    1.0,
-            is_opaque:     true,
-            written_at_ms: now_ms(),
-        });
-        let upd = make_gossip_update(
-            &ctx.node_id, ctx.default_ttl, opacity_key.clone(), payload, false, &ctx.hlc,
-        );
-        apply_and_notify(&ctx.kv_state, &upd);
-        dispatch_gossip_try_send(
-            &ctx.gossip_txs, WireMessage::Data(upd),
-            ctx.node_id.id_hash(), ForwardHint::All, &ctx.kv_state.dropped_frames,
-        );
-    };
-
-    let clear_opaque = |ctx: &TaskCtx| {
-        let upd = make_gossip_update(
-            &ctx.node_id, ctx.default_ttl, opacity_key.clone(), Bytes::new(), true, &ctx.hlc,
-        );
-        apply_and_notify(&ctx.kv_state, &upd);
-        dispatch_gossip_try_send(
-            &ctx.gossip_txs, WireMessage::Data(upd),
-            ctx.node_id.id_hash(), ForwardHint::All, &ctx.kv_state.dropped_frames,
-        );
-    };
-
-    let evaluate = |kv: &crate::store::KvState| -> bool {
-        !matches!(wiring_snapshot(kv, &filter), WiringStatus::Unwired { .. })
-    };
-
-    if !evaluate(&ctx.kv_state) {
-        write_opaque(&ctx);
-        opaque_written = true;
-    }
-
-    loop {
-        tokio::select! { biased;
-            _ = &mut cancel_rx               => break,
-            _ = await_shutdown(&mut shutdown_rx) => break,
-            r = cap_rx.changed()  => { if r.is_err() { break; } }
-            r = gcap_rx.changed() => { if r.is_err() { break; } }
-        }
-        let satisfied = evaluate(&ctx.kv_state);
-        match (opaque_written, satisfied) {
-            (false, false) => { write_opaque(&ctx); opaque_written = true; }
-            (true,  true)  => { clear_opaque(&ctx); opaque_written = false; }
-            _ => {}
-        }
-    }
-
-    if opaque_written {
-        clear_opaque(&ctx);
     }
 }
 
