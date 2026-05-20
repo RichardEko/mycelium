@@ -32,8 +32,8 @@ use tracing::warn;
 
 use super::{GossipAgent, TaskCtx};
 use super::capability_ops::{
-    await_shutdown, now_ms, scan_prefix_kv, subscribe_prefix_on_kv,
-    WATCHER_DEBOUNCE_WINDOW,
+    await_shutdown, is_cap_locality_key, now_ms, scan_prefix_kv,
+    subscribe_prefix_on_kv, WATCHER_DEBOUNCE_WINDOW,
 };
 use super::kv::{run_kv_persist_task, PersistPayloadFn};
 use super::wiring::wiring_snapshot;
@@ -162,6 +162,7 @@ fn reconcile_emergent_groups(
     let mut own_caps: Vec<Capability> = Vec::new();
     let own_prefix = format!("cap/{}/", own);
     for (key, bytes) in scan_prefix_kv(&ctx.kv_state, &own_prefix) {
+        if is_cap_locality_key(&key) { continue; }
         match Capability::decode(&bytes) {
             Some(cap) => own_caps.push(cap),
             None      => warn!(key = %key, "malformed own Capability — local cap/ entry did not decode"),

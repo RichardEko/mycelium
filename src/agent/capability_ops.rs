@@ -66,6 +66,19 @@ pub(super) fn parse_cap_key_or_warn(prefix: &str, key: &str) -> Option<(NodeId, 
     parsed
 }
 
+/// Returns `true` when `key` lives under the `cap/` prefix but is **not** a
+/// bincode-encoded `Capability` — currently the only case is
+/// `cap/{node}/locality/self`, which carries a `LocalityPath::encode` payload.
+///
+/// Every scanner of the `cap/` prefix must skip these keys before calling
+/// `Capability::decode`. Without the skip, a multi-segment LocalityPath byte
+/// stream can pattern-match enough of bincode's Capability layout that
+/// `decode` reads a giant Vec length prefix and allocates terabytes of RAM
+/// before failing.
+pub(super) fn is_cap_locality_key(key: &str) -> bool {
+    key.ends_with("/locality/self")
+}
+
 /// Splits `cap/{node_id}/{ns}/{name}` (or `req/...`) into its three components.
 /// Returns `None` if the key has the wrong shape or contains too many segments.
 fn parse_cap_key(prefix: &str, key: &str) -> Option<(NodeId, Arc<str>, Arc<str>)> {
@@ -114,6 +127,7 @@ impl GossipAgent {
     pub fn resolve(&self, filter: &CapFilter) -> Vec<(NodeId, Capability)> {
         let mut out = Vec::new();
         for (key, bytes) in self.scan_prefix("cap/") {
+            if is_cap_locality_key(&key) { continue; }
             let Some((node_id, _ns, _name)) = parse_cap_key_or_warn("cap/", &key) else { continue };
             let Some(cap) = Capability::decode(&bytes) else {
             warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");
@@ -182,6 +196,7 @@ impl GossipAgent {
                         // Re-scan and diff against `known`.
                         let mut current: AHashMap<(NodeId, Arc<str>, Arc<str>), Capability> = AHashMap::new();
                         for (key, bytes) in scan_prefix_kv(&kv_state, "cap/") {
+                            if is_cap_locality_key(&key) { continue; }
                             let Some((node_id, ns, name)) = parse_cap_key_or_warn("cap/", &key) else { continue };
                             let Some(cap) = Capability::decode(&bytes) else {
             warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");
@@ -387,6 +402,7 @@ pub(super) fn resolve_filter_against_kv(
 ) -> Vec<(NodeId, Capability)> {
     let mut out = Vec::new();
     for (key, bytes) in scan_prefix_kv(kv_state, "cap/") {
+        if is_cap_locality_key(&key) { continue; }
         let Some((node_id, _ns, _name)) = parse_cap_key_or_warn("cap/", &key) else { continue };
         let Some(cap) = Capability::decode(&bytes) else {
             warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");

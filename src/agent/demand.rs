@@ -13,7 +13,7 @@ use tokio::{sync::watch, time};
 use tracing::warn;
 
 use super::GossipAgent;
-use super::capability_ops::{await_shutdown, parse_cap_key_or_warn, scan_prefix_kv, WATCHER_DEBOUNCE_WINDOW};
+use super::capability_ops::{await_shutdown, is_cap_locality_key, parse_cap_key_or_warn, scan_prefix_kv, WATCHER_DEBOUNCE_WINDOW};
 use super::wiring::parse_gcap_key;
 
 impl GossipAgent {
@@ -110,6 +110,7 @@ pub(super) fn demand_snapshot(
     // Providers: union of direct cap/ matches and gcap/ contributors.
     let mut providers: AHashSet<NodeId> = AHashSet::new();
     for (key, bytes) in scan_prefix_kv(kv_state, "cap/") {
+        if is_cap_locality_key(&key) { continue; }
         let Some((node_id, _ns, _name)) = parse_cap_key_or_warn("cap/", &key) else { continue };
         let Some(cap) = Capability::decode(&bytes) else {
             warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");
