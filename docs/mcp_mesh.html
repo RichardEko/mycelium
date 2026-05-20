@@ -43,13 +43,44 @@
   .left-col  { display: flex; flex-direction: column; gap: 14px; }
   .right-col { display: flex; flex-direction: column; gap: 14px; min-width: 290px; max-width: 320px; }
 
-  #mesh-canvas { border: 1px solid var(--border); border-radius: var(--radius); display: block; background: var(--surface); }
+  .canvas-wrap { position: relative; display: inline-block; }
+  #mesh-canvas { border: 1px solid var(--border); border-radius: var(--radius); display: block; background: var(--surface); cursor: crosshair; }
+
+  /* Node hover tooltip */
+  #node-tooltip {
+    display: none;
+    position: absolute;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    pointer-events: none;
+    z-index: 20;
+    min-width: 160px;
+    max-width: 230px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+  }
+  .tt-title  { font-family: "SF Mono","Fira Code",monospace; font-size: 11px; font-weight: 700; margin-bottom: 7px; }
+  .tt-section { font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+  .tt-pills  { display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 8px; }
+  .tt-pills:last-child { margin-bottom: 0; }
+  .tt-cap-pill {
+    font-size: 9px; padding: 2px 7px; border-radius: 10px; font-weight: 600;
+    border: 1px solid; white-space: nowrap;
+  }
+  .tt-req-pill {
+    font-size: 9px; padding: 2px 7px; border-radius: 10px; font-weight: 600;
+    border: 1px solid; display: inline-flex; align-items: center; gap: 3px; white-space: nowrap;
+  }
+  .tt-empty { font-size: 10px; color: var(--muted); }
 
   .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
   .btn { padding: 6px 14px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface2); color: var(--text); font-size: 12px; font-weight: 500; cursor: pointer; transition: background 0.12s, border-color 0.12s; }
   .btn:hover { background: var(--surface3); border-color: var(--muted); }
   .btn-call  { background: rgba(88,166,255,0.1); border-color: rgba(88,166,255,0.25); color: var(--accent); }
   .btn-call:hover  { background: rgba(88,166,255,0.2); }
+  .btn-deps  { }
+  .btn-deps.active { background: rgba(210,168,255,0.15); border-color: rgba(210,168,255,0.4); color: var(--accent3); }
 
   .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
   .panel-hdr { padding: 9px 14px 7px; border-bottom: 1px solid var(--border); font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); display: flex; justify-content: space-between; align-items: center; }
@@ -146,7 +177,7 @@
   <div class="header-text">
     <div class="header-title">MCP Mesh — <em>Adaptive Tool Routing</em></div>
     <div class="header-sub">
-      Add nodes from a palette · duplicate tools for load balancing · kill and restart providers · zero reconfiguration
+      Add nodes from a palette · duplicate tools for load balancing · kill and restart providers · hover to inspect caps/reqs
     </div>
   </div>
   <div class="header-links"><a href="roadmap.html">← Roadmap</a></div>
@@ -161,7 +192,10 @@
       <div id="conn-status" style="font-size:12px;color:var(--muted)">connecting…</div>
     </div>
 
-    <canvas id="mesh-canvas" width="500" height="480"></canvas>
+    <div class="canvas-wrap">
+      <canvas id="mesh-canvas" width="500" height="480"></canvas>
+      <div id="node-tooltip"></div>
+    </div>
 
     <div class="controls">
       <button class="btn btn-call" onclick="callTool('weather')">☁ weather</button>
@@ -170,6 +204,7 @@
       <button class="btn btn-call" onclick="callTool('calculate')">∑ calculate</button>
       <button class="btn btn-call" onclick="callTool('translate')">🌐 translate</button>
       <button class="btn btn-call" onclick="callTool('summarize')">✦ summarize</button>
+      <button class="btn btn-deps" id="deps-btn" onclick="toggleDeps()">Deps</button>
       <span style="font-size:11px;color:var(--muted)">Auto-cycles every 6 s</span>
     </div>
 
@@ -315,13 +350,39 @@ const TOOL_COLOR = {
   search:    '#d2a8ff', calculate: '#ffa657',
   translate: '#3fb950', summarize: '#56d364',
 };
-function tc(name) { return TOOL_COLOR[name] || '#8b949e'; }
+const NS_COLOR = {
+  mcp:      null,       // delegated to TOOL_COLOR
+  compute:  '#ffa657',
+  data:     '#58a6ff',
+  llm:      '#d2a8ff',
+};
+
+function tc(name)    { return TOOL_COLOR[name] || '#8b949e'; }
+function capColor(cap) {
+  const slash = cap.indexOf('/');
+  if (slash < 0) return '#8b949e';
+  const ns   = cap.slice(0, slash);
+  const name = cap.slice(slash + 1);
+  if (ns === 'mcp') return tc(name);
+  return NS_COLOR[ns] || '#8b949e';
+}
+function colorWithAlpha(hex, alpha) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha.toFixed(3)})`;
+}
 
 // ── canvas ────────────────────────────────────────────────────────────────────
-const canvas = document.getElementById('mesh-canvas');
-const ctx    = canvas.getContext('2d');
+const canvas  = document.getElementById('mesh-canvas');
+const ctx     = canvas.getContext('2d');
+const tooltip = document.getElementById('node-tooltip');
 const W = canvas.width, H = canvas.height;
 const CX = W / 2 - 8, CY = H / 2 + 4;
+
+function nodeRadius(n) {
+  return Math.max(20, Math.min(26, 80 / Math.max(n, 3)));
+}
 
 function nodePos(i, n) {
   const r     = Math.min(165, Math.max(80, 420 / Math.max(n, 3)));
@@ -331,11 +392,12 @@ function nodePos(i, n) {
 
 // ── arc / pulse animation ─────────────────────────────────────────────────────
 const arcs   = [];
-const pulses = [];   // indexed by array position; grown as nodes are added
+const pulses = [];
 
-let logSeq  = 0;
-let state   = null;
-let connected = false;
+let showDeps   = false;
+let logSeq     = 0;
+let state      = null;
+let connected  = false;
 let prevLastMs = 0;
 let lastRafTs  = 0;
 
@@ -365,7 +427,44 @@ function draw(ts) {
     for (let j = i + 1; j < n; j++) {
       const a = nodePos(i, n), b = nodePos(j, n);
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+      ctx.setLineDash([]);
       ctx.strokeStyle = 'rgba(48,54,61,0.6)'; ctx.lineWidth = 1; ctx.stroke();
+    }
+  }
+
+  // Dependency edges (when toggle is active)
+  if (showDeps) {
+    const NODE_R = nodeRadius(n);
+    for (let i = 0; i < n; i++) {
+      const node = state.nodes[i];
+      if (!node.alive || !node.reqs || node.reqs.length === 0) continue;
+      for (const req of node.reqs) {
+        const pp = req.provider_pos;
+        if (pp < 0 || pp >= n) continue;
+        const from  = nodePos(i, n);
+        const to    = nodePos(pp, n);
+        const sat   = req.satisfied;
+        const angle = Math.atan2(to.y - from.y, to.x - from.x);
+        // Shorten both ends to the node radius
+        const sx = from.x + Math.cos(angle) * (NODE_R + 3);
+        const sy = from.y + Math.sin(angle) * (NODE_R + 3);
+        const ex = to.x   - Math.cos(angle) * (NODE_R + 3);
+        const ey = to.y   - Math.sin(angle) * (NODE_R + 3);
+        // Dashed line
+        ctx.setLineDash([5, 4]);
+        ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey);
+        ctx.strokeStyle = sat ? 'rgba(63,185,80,0.45)' : 'rgba(255,123,114,0.4)';
+        ctx.lineWidth   = 1.5; ctx.stroke();
+        ctx.setLineDash([]);
+        // Arrowhead
+        ctx.beginPath();
+        ctx.moveTo(ex, ey);
+        ctx.lineTo(ex - Math.cos(angle - 0.38) * 8, ey - Math.sin(angle - 0.38) * 8);
+        ctx.moveTo(ex, ey);
+        ctx.lineTo(ex - Math.cos(angle + 0.38) * 8, ey - Math.sin(angle + 0.38) * 8);
+        ctx.strokeStyle = sat ? 'rgba(63,185,80,0.7)' : 'rgba(255,123,114,0.65)';
+        ctx.lineWidth   = 1.5; ctx.stroke();
+      }
     }
   }
 
@@ -375,7 +474,6 @@ function draw(ts) {
     arc.t += dt * 0.85;
     if (arc.t >= 1.0) continue;
     keepArcs.push(arc);
-    // Bezier
     const mx = (arc.fx + arc.tx) / 2, my = (arc.fy + arc.ty) / 2;
     const dx = arc.tx - arc.fx, dy = arc.ty - arc.fy;
     const len = Math.sqrt(dx * dx + dy * dy) || 1;
@@ -391,10 +489,9 @@ function draw(ts) {
       if (first) { ctx.moveTo(bx, by); first = false; } else ctx.lineTo(bx, by);
     }
     const alpha = Math.max(0, 1 - arc.t * 1.2);
-    ctx.strokeStyle = arc.color.replace('rgb(', 'rgba(').replace(')', `,${alpha})`)
-                             .replace(/^#(\w{6})/, (_, h) => `rgba(${parseInt(h.slice(0,2),16)},${parseInt(h.slice(2,4),16)},${parseInt(h.slice(4,6),16)},${alpha})`);
+    ctx.strokeStyle = colorWithAlpha(arc.color, alpha);
     ctx.lineWidth = 2.5; ctx.stroke();
-    // dot at head
+    // Dot at head
     const u = arc.t;
     const hx = (1-u)*(1-u)*arc.fx + 2*(1-u)*u*cpx + u*u*arc.tx;
     const hy = (1-u)*(1-u)*arc.fy + 2*(1-u)*u*cpy + u*u*arc.ty;
@@ -408,14 +505,14 @@ function draw(ts) {
     const { x, y } = nodePos(i, n);
     const node  = state.nodes[i];
     const alive = node.alive;
-    const NODE_R = Math.max(20, Math.min(26, 80 / Math.max(n, 3)));
+    const NODE_R = nodeRadius(n);
 
     // Pulse ring
     while (pulses.length <= i) pulses.push(0);
     const pt = pulses[i] || 0;
     if (pt > 0) {
       ctx.beginPath(); ctx.arc(x, y, NODE_R + 4 + pt * 16, 0, Math.PI*2);
-      ctx.strokeStyle = `rgba(88,166,255,${0.4*(1-pt)})`; ctx.lineWidth = 2; ctx.stroke();
+      ctx.strokeStyle = `rgba(88,166,255,${(0.4*(1-pt)).toFixed(3)})`; ctx.lineWidth = 2; ctx.stroke();
       pulses[i] = Math.max(0, pt - dt * 1.5);
     }
 
@@ -444,6 +541,12 @@ function draw(ts) {
       ctx.fillText(node.call_count, x, y + NODE_R * 0.35);
     }
 
+    // Requirement satisfaction dots (small ring if any req is unsatisfied)
+    if (alive && node.reqs && node.reqs.some(r => !r.satisfied)) {
+      ctx.beginPath(); ctx.arc(x + NODE_R * 0.72, y - NODE_R * 0.72, 4, 0, Math.PI*2);
+      ctx.fillStyle = '#ff7b72'; ctx.fill();
+    }
+
     // Tool badges
     if (alive && node.tools.length > 0) {
       const as = node.tools.length;
@@ -467,6 +570,69 @@ function draw(ts) {
   requestAnimationFrame(draw);
 }
 
+// ── tooltip ───────────────────────────────────────────────────────────────────
+canvas.addEventListener('mousemove', (e) => {
+  if (!state || state.nodes.length === 0) { tooltip.style.display = 'none'; return; }
+  const rect   = canvas.getBoundingClientRect();
+  const mx     = (e.clientX - rect.left) * (W / rect.width);
+  const my     = (e.clientY - rect.top)  * (H / rect.height);
+  const n      = state.nodes.length;
+  const NODE_R = nodeRadius(n);
+
+  let closest = -1, minDist = Infinity;
+  for (let i = 0; i < n; i++) {
+    const { x, y } = nodePos(i, n);
+    const dist = Math.hypot(mx - x, my - y);
+    if (dist < NODE_R + 14 && dist < minDist) { minDist = dist; closest = i; }
+  }
+
+  if (closest < 0) { tooltip.style.display = 'none'; return; }
+
+  const node = state.nodes[closest];
+  const { x, y } = nodePos(closest, n);
+
+  const capPills = (node.caps || []).map(cap => {
+    const color = capColor(cap);
+    return `<span class="tt-cap-pill" style="background:${color}18;color:${color};border-color:${color}44">${cap}</span>`;
+  }).join('');
+
+  const reqPills = (node.reqs || []).map(req => {
+    const sat = req.satisfied;
+    const provRef = (sat && req.provider_pos >= 0 && req.provider_pos < n)
+      ? ` → n-${state.nodes[req.provider_pos].idx}` : '';
+    const bgColor  = sat ? 'rgba(63,185,80,0.12)'  : 'rgba(255,123,114,0.12)';
+    const fgColor  = sat ? 'var(--accent2)'         : 'var(--accent5)';
+    const bdColor  = sat ? 'rgba(63,185,80,0.3)'    : 'rgba(255,123,114,0.3)';
+    return `<span class="tt-req-pill" style="background:${bgColor};color:${fgColor};border-color:${bdColor}">${sat ? '✓' : '✗'} ${req.key}${provRef}</span>`;
+  }).join('');
+
+  const stateIcon = node.alive ? '<span style="color:var(--accent2)">●</span>' : '<span style="color:var(--accent5)">✕</span>';
+  tooltip.innerHTML =
+    `<div class="tt-title">${stateIcon} n-${node.idx} <span style="color:var(--muted);font-weight:400">:${node.port}</span></div>` +
+    (capPills ? `<div class="tt-section">Capabilities</div><div class="tt-pills">${capPills}</div>` : '') +
+    (reqPills ? `<div class="tt-section">Requirements</div><div class="tt-pills">${reqPills}</div>` : '') +
+    (!capPills && !reqPills ? '<div class="tt-empty">No capabilities or requirements</div>' : '');
+
+  // Position: prefer right of node, avoid canvas edge
+  const TW = 230, TH = tooltip.offsetHeight || 120;
+  let tx = x + NODE_R + 10;
+  let ty = y - 20;
+  if (tx + TW > W - 4) tx = x - NODE_R - TW - 10;
+  if (ty + TH > H - 4) ty = H - TH - 4;
+  if (ty < 4) ty = 4;
+  tooltip.style.left    = tx + 'px';
+  tooltip.style.top     = ty + 'px';
+  tooltip.style.display = 'block';
+});
+
+canvas.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+
+// ── deps toggle ───────────────────────────────────────────────────────────────
+function toggleDeps() {
+  showDeps = !showDeps;
+  document.getElementById('deps-btn').classList.toggle('active', showDeps);
+}
+
 // ── palette ───────────────────────────────────────────────────────────────────
 function buildPalette() {
   const el = document.getElementById('palette');
@@ -488,7 +654,7 @@ function renderNodeList() {
   if (!state) return;
   const el = document.getElementById('node-list');
   if (state.nodes.length === 0) { el.innerHTML = '<div style="padding:10px 14px;font-size:11px;color:var(--muted)">No nodes</div>'; return; }
-  el.innerHTML = state.nodes.map((node, pos) => {
+  el.innerHTML = state.nodes.map((node) => {
     const dot   = node.alive ? '#3fb950' : '#ff7b72';
     const label = node.alive
       ? `<button class="na-btn na-kill"    onclick="killNode(${node.idx})">kill</button>`
@@ -496,9 +662,12 @@ function renderNodeList() {
     const tools = node.tools.map(t =>
       `<span class="ntag" style="background:${tc(t)}18;color:${tc(t)};border:1px solid ${tc(t)}44">${t}</span>`
     ).join('');
+    // Unsatisfied req indicator
+    const hasUnsatReq = node.alive && node.reqs && node.reqs.some(r => !r.satisfied);
+    const reqWarning  = hasUnsatReq ? ' <span title="Unsatisfied requirements" style="color:var(--accent5);font-size:10px">!</span>' : '';
     return `<div class="node-row">
       <div class="node-dot" style="background:${dot}"></div>
-      <span class="node-name" style="color:${node.alive?'var(--text2)':'var(--muted)'}">${node.idx}·${node.port}</span>
+      <span class="node-name" style="color:${node.alive?'var(--text2)':'var(--muted)'}">${node.idx}·${node.port}${reqWarning}</span>
       <div class="node-tools-row">${tools}</div>
       <span class="node-cnt">${node.call_count}</span>
       <div class="node-actions">
@@ -534,10 +703,10 @@ function updateStats() {
 
   const pill = document.getElementById('last-tool-pill');
   if (state.last_tool) {
-    pill.textContent = state.last_tool;
-    pill.style.color = tc(state.last_tool);
-    pill.style.background   = tc(state.last_tool) + '18';
-    pill.style.borderColor  = tc(state.last_tool) + '44';
+    pill.textContent         = state.last_tool;
+    pill.style.color         = tc(state.last_tool);
+    pill.style.background    = tc(state.last_tool) + '18';
+    pill.style.borderColor   = tc(state.last_tool) + '44';
   }
 
   const rb = document.getElementById('last-result');
@@ -571,7 +740,6 @@ async function poll() {
   try {
     const res  = await fetch('http://127.0.0.1:8099/state', { signal: AbortSignal.timeout(2000) });
     const data = await res.json();
-    const prev = state;
     state = data;
 
     if (!connected) {
@@ -579,7 +747,6 @@ async function poll() {
       connEl.textContent = 'connected'; connEl.style.color = 'var(--accent2)';
     }
 
-    // New call detected
     if (data.last_call_ms !== prevLastMs && data.last_call_ms > 0) {
       prevLastMs = data.last_call_ms;
       const tool = data.last_tool || '?';
@@ -645,12 +812,6 @@ async function removeNode(idx) {
     { method:'POST', signal: AbortSignal.timeout(5000) }).catch(()=>{});
   await poll();
 }
-
-// ── strokeStyle hex helper ─────────────────────────────────────────────────────
-// Fix arc color: convert #rrggbb to rgba
-(function patchArcDraw(){
-  const orig = arcs; // already patched inline above
-})();
 
 // ── init ──────────────────────────────────────────────────────────────────────
 buildPalette();
