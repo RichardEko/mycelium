@@ -1,9 +1,13 @@
-//! MCP (Model Context Protocol) bridge — Layer 4 server role.
+//! MCP (Model Context Protocol) bridge — Layer 4 server + client roles.
 //!
-//! Tools are registered under `tools/{name}/{node_id}` in the KV store so any
-//! node can discover them via `scan_prefix("tools/")`. The HTTP `/mcp` endpoint
-//! (Phase 2, in `http.rs`) scans this prefix for `tools/list` and routes
-//! `tools/call` invocations to the provider node via `rpc_call`.
+//! **Server role** (`register_mcp_tool`): tools are registered under
+//! `tools/{name}/{node_id}` in the KV store. The HTTP `/mcp` endpoint
+//! (Phase 2, `http.rs`) scans this prefix for `tools/list` and routes
+//! `tools/call` invocations to the provider via `rpc_call`.
+//!
+//! **Client role** (`connect_mcp_server`): bridges an external MCP server's
+//! tools into the Mycelium mesh. Discovered tools are written to KV under the
+//! same `tools/` namespace and calls are proxied outbound to the remote server.
 
 use crate::framing::{dispatch_gossip_send, make_gossip_update, ForwardHint, WireMessage};
 use crate::signal::{Signal, SignalScope, signal_kind};
@@ -221,6 +225,203 @@ async fn await_shutdown(rx: &mut watch::Receiver<bool>) {
     }
 }
 
+// ── MCP client role ───────────────────────────────────────────────────────────
+
+/// Handle returned by [`GossipAgent::connect_mcp_server`].
+///
+/// Dropping this handle tombstones all KV entries registered on behalf of the
+/// remote server and stops the proxy task. While live, the remote server's
+/// tools are visible in `scan_prefix("tools/")` and callable from anywhere in
+/// the Mycelium cluster.
+#[must_use = "dropping McpClientHandle immediately retracts all bridged tools"]
+pub struct McpClientHandle {
+    _cancel: oneshot::Sender<()>,
+}
+
+impl GossipAgent {
+    /// Connects to an external MCP server at `server_url`, discovers its tools,
+    /// and bridges them into the Mycelium mesh.
+    ///
+    /// 1. Sends `initialize` to handshake with the server.
+    /// 2. Sends `tools/list` to enumerate available tools.
+    /// 3. Writes each tool's schema under `tools/{name}/{node_id}` in the KV store.
+    /// 4. Subscribes to `"mcp.invoke"` and proxies matching calls to the server
+    ///    via HTTP `tools/call`.
+    ///
+    /// Drop the returned [`McpClientHandle`] to tombstone all KV entries and
+    /// stop the proxy task.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(McpError::Transport(...))` if the HTTP handshake or tool
+    /// discovery fails. Individual call failures after connection are logged and
+    /// reported as JSON-RPC errors to the caller.
+    pub async fn connect_mcp_server(
+        &self,
+        server_url: impl Into<String>,
+    ) -> Result<McpClientHandle, McpError> {
+        let server_url = server_url.into();
+        let http_client = reqwest::Client::new();
+
+        // ── Handshake ─────────────────────────────────────────────────────────
+        let init_req = json!({
+            "jsonrpc": "2.0", "id": 0, "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "mycelium", "version": env!("CARGO_PKG_VERSION")},
+            },
+        });
+        http_client
+            .post(&server_url)
+            .json(&init_req)
+            .send()
+            .await
+            .map_err(|e| McpError::Transport(e.to_string()))?;
+
+        // ── Tool discovery ────────────────────────────────────────────────────
+        let list_req = json!({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}});
+        let list_resp: serde_json::Value = http_client
+            .post(&server_url)
+            .json(&list_req)
+            .send()
+            .await
+            .map_err(|e| McpError::Transport(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| McpError::SerdeJson(e.to_string()))?;
+
+        let tools = list_resp["result"]["tools"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+
+        // ── Register tool KV entries ──────────────────────────────────────────
+        let node_id = self.task_ctx.node_id.clone();
+        let mut kv_keys: Vec<Arc<str>> = Vec::with_capacity(tools.len());
+        let mut tool_names: Vec<Arc<str>> = Vec::with_capacity(tools.len());
+
+        for tool in &tools {
+            let name = match tool["name"].as_str() {
+                Some(n) => n,
+                None    => continue,
+            };
+            let schema = tool.get("inputSchema").cloned().unwrap_or(json!({}));
+            let kv_key: Arc<str> = Arc::from(format!("tools/{name}/{node_id}").as_str());
+            let _ = self.set(kv_key.clone(), schema.to_string().into_bytes());
+            kv_keys.push(kv_key);
+            tool_names.push(Arc::from(name));
+        }
+
+        if kv_keys.is_empty() {
+            tracing::warn!(url = %server_url, "MCP server advertised no tools");
+        }
+
+        // ── Spawn proxy task ──────────────────────────────────────────────────
+        let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+        let shutdown_rx = self.shutdown_tx.subscribe();
+        let ctx         = Arc::clone(&self.task_ctx);
+        let rx          = self.signal_rx(signal_kind::MCP_INVOKE);
+
+        self.spawn_task(run_mcp_client_task(
+            ctx,
+            cancel_rx,
+            shutdown_rx,
+            kv_keys,
+            tool_names,
+            rx,
+            server_url,
+            http_client,
+        ));
+
+        Ok(McpClientHandle { _cancel: cancel_tx })
+    }
+}
+
+async fn run_mcp_client_task(
+    ctx:             Arc<TaskCtx>,
+    mut cancel_rx:   oneshot::Receiver<()>,
+    mut shutdown_rx: watch::Receiver<bool>,
+    kv_keys:         Vec<Arc<str>>,
+    tool_names:      Vec<Arc<str>>,
+    mut rx:          mpsc::Receiver<Signal>,
+    server_url:      String,
+    http_client:     reqwest::Client,
+) {
+    loop {
+        let req = tokio::select! { biased;
+            _ = &mut cancel_rx => break,
+            _ = await_shutdown(&mut shutdown_rx) => break,
+            result = rx.recv() => match result {
+                Some(req) => req,
+                None => break,
+            },
+        };
+
+        if req.payload.len() < 8 { continue; }
+
+        let rpc_req: serde_json::Value = match serde_json::from_slice(&req.payload[8..]) {
+            Ok(v)  => v,
+            Err(_) => continue,
+        };
+
+        let req_name = rpc_req["params"]["name"].as_str().unwrap_or("");
+        if !tool_names.iter().any(|n| n.as_ref() == req_name) {
+            continue;
+        }
+
+        let arguments = rpc_req["params"]["arguments"].clone();
+        let call_req  = json!({
+            "jsonrpc": "2.0",
+            "id": rpc_req["id"],
+            "method": "tools/call",
+            "params": {"name": req_name, "arguments": arguments},
+        });
+
+        let response: serde_json::Value = match http_client
+            .post(&server_url)
+            .json(&call_req)
+            .send()
+            .await
+        {
+            Ok(resp) => match resp.json().await {
+                Ok(v)  => v,
+                Err(e) => json!({"jsonrpc":"2.0","id":rpc_req["id"],
+                                 "error":{"code":-32603,"message":e.to_string()}}),
+            },
+            Err(e) => json!({"jsonrpc":"2.0","id":rpc_req["id"],
+                             "error":{"code":-32000,"message":e.to_string()}}),
+        };
+
+        let nonce = req.payload.slice(..8);
+        let resp_bytes = Bytes::from(response.to_string().into_bytes());
+        let mut buf = BytesMut::with_capacity(8 + resp_bytes.len());
+        buf.put_slice(&nonce);
+        buf.put(resp_bytes);
+        emit_signal(
+            &ctx,
+            Arc::from(signal_kind::RPC_RESULT),
+            SignalScope::Individual(req.sender.clone()),
+            buf.freeze(),
+        );
+    }
+
+    // Tombstone all KV entries for bridged tools.
+    for kv_key in kv_keys {
+        let tombstone = make_gossip_update(
+            &ctx.node_id, ctx.default_ttl, kv_key, Bytes::new(), true, &ctx.hlc,
+        );
+        apply_and_notify(&ctx.kv_state, &tombstone);
+        dispatch_gossip_send(
+            &ctx.gossip_txs,
+            WireMessage::Data(tombstone),
+            ctx.node_id.id_hash(),
+            ForwardHint::All,
+        )
+        .await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -400,5 +601,134 @@ mod tests {
 
         agent_a.shutdown().await;
         agent_b.shutdown().await;
+    }
+
+    // ── MCP client tests (Phase 3) ────────────────────────────────────────────
+
+    /// Minimal in-process mock MCP server using axum.
+    async fn spawn_mock_mcp_server(tools: Vec<serde_json::Value>) -> (u16, tokio::task::JoinHandle<()>) {
+        use axum::{Router, extract::Json as AJson, routing::post};
+        let tools = std::sync::Arc::new(tools);
+        let app = Router::new().route("/", post({
+            let tools = tools.clone();
+            move |AJson(req): AJson<serde_json::Value>| {
+                let tools = tools.clone();
+                async move {
+                    let method = req["method"].as_str().unwrap_or("");
+                    let id     = req["id"].clone();
+                    let resp = match method {
+                        "initialize" => serde_json::json!({
+                            "jsonrpc": "2.0", "id": id,
+                            "result": {
+                                "protocolVersion": "2024-11-05",
+                                "capabilities": {"tools": {}},
+                                "serverInfo": {"name": "mock", "version": "0"},
+                            },
+                        }),
+                        "tools/list" => serde_json::json!({
+                            "jsonrpc": "2.0", "id": id,
+                            "result": {"tools": *tools},
+                        }),
+                        "tools/call" => {
+                            let name = req["params"]["name"].as_str().unwrap_or("unknown");
+                            serde_json::json!({
+                                "jsonrpc": "2.0", "id": id,
+                                "result": {"content": [{"type": "text",
+                                           "text": format!("echo:{name}")}]},
+                            })
+                        }
+                        _ => serde_json::json!({
+                            "jsonrpc": "2.0", "id": id,
+                            "error": {"code": -32601, "message": "method not found"},
+                        }),
+                    };
+                    AJson(resp)
+                }
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (port, handle)
+    }
+
+    #[tokio::test]
+    async fn test_mcp_client_discovers_tools() {
+        let mock_tools = vec![
+            serde_json::json!({
+                "name": "remote-echo",
+                "inputSchema": {"type": "object", "properties": {"msg": {"type": "string"}}},
+            }),
+        ];
+        let (mock_port, _mock_server) = spawn_mock_mcp_server(mock_tools).await;
+
+        let port = alloc_port();
+        let id   = NodeId::new("127.0.0.1", port).unwrap();
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = port;
+        let agent = Arc::new(GossipAgent::new(id.clone(), cfg));
+        agent.start().await.unwrap();
+
+        let server_url = format!("http://127.0.0.1:{mock_port}/");
+        let _handle = agent
+            .connect_mcp_server(server_url)
+            .await
+            .expect("connect_mcp_server failed");
+
+        // The bridged tool should now appear in scan_prefix("tools/").
+        let keys = agent.scan_prefix("tools/");
+        let found = keys.iter().any(|(k, _)| k.contains("remote-echo"));
+        assert!(found, "remote-echo not in tools/ after connect: {:?}", keys);
+
+        agent.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_mcp_client_proxies_call() {
+        let mock_tools = vec![
+            serde_json::json!({
+                "name": "proxy-target",
+                "inputSchema": {"type": "object", "properties": {}},
+            }),
+        ];
+        let (mock_port, _mock_server) = spawn_mock_mcp_server(mock_tools).await;
+
+        // Agent with HTTP enabled so we can drive the call via POST /mcp.
+        let gossip_port = alloc_port();
+        let http_port   = alloc_port();
+        let id = NodeId::new("127.0.0.1", gossip_port).unwrap();
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = gossip_port;
+        cfg.http_port = Some(http_port);
+        let agent = Arc::new(GossipAgent::new(id, cfg));
+        agent.start().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let server_url = format!("http://127.0.0.1:{mock_port}/");
+        let _handle = agent
+            .connect_mcp_server(&server_url)
+            .await
+            .expect("connect_mcp_server failed");
+
+        // Call the bridged tool via the HTTP /mcp endpoint.
+        let resp = reqwest::Client::new()
+            .post(format!("http://127.0.0.1:{http_port}/mcp"))
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 99, "method": "tools/call",
+                "params": {"name": "proxy-target", "arguments": {}},
+            }))
+            .send()
+            .await
+            .expect("tools/call to proxied tool failed");
+
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(body.get("error").is_none(), "unexpected error: {body}");
+        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("proxy-target"), "expected echo, got '{text}'");
+
+        agent.shutdown().await;
     }
 }

@@ -96,7 +96,7 @@ mod seen;
 mod store;
 mod writer;
 
-pub use agent::{GossipAgent, McpError, McpToolHandle, RpcError, SystemStats};
+pub use agent::{GossipAgent, McpClientHandle, McpError, McpToolHandle, RpcError, SystemStats};
 pub use capability::{
     CapConstraint, CapFilter, CapRanking, CapValue, Capability, CapabilityEvent,
     CapabilityGroupDef, CapabilityGroupHandle, CapabilityHandle,

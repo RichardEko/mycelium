@@ -35,7 +35,7 @@ pub(crate) use helpers::emit_signal;
 pub(crate) use helpers::emit_signal_async;
 pub(crate) use helpers::make_gossip_update;
 pub(crate) use opacity::is_self_opaque;
-pub use mcp::{McpError, McpToolHandle};
+pub use mcp::{McpClientHandle, McpError, McpToolHandle};
 pub use rpc::RpcError;
 
 /// Cached roster entry for a single group, held in the short-lived `group_roster_cache`.
