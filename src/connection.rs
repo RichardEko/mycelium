@@ -92,6 +92,11 @@ pub(crate) async fn handle_connection(
         // every duplicate. A malformed frame whose first 12 bytes look like a
         // valid Data header may poison that nonce in the seen-set; since nonces
         // are random u64s the collision probability is negligible (< 1 in 2^64).
+        //
+        // Non-Data variants fall through with no logging — that's intentional.
+        // Signal, Ping, StateRequest, and StateResponse have variable-length
+        // payloads ahead of any nonce, so we let the full decoder below handle
+        // their dedup and dispatch. Logging here would be noisy on every Ping.
         if frame_version == FrameVersion::Current
             && recv_buf.len() >= NONCE_OFFSET + 8
             && recv_buf[..4] == DATA_TAG

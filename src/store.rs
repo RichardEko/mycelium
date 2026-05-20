@@ -40,9 +40,6 @@ pub(crate) struct KvState {
     /// `cached_group_members` uses this to detect remote membership changes without
     /// scanning the store — the cached roster is stale if the counter has advanced.
     pub grp_generation:    Arc<AtomicU64>,
-    /// Monotonic counter bumped whenever a `cap/` or `req/` key is written or tombstoned.
-    /// Used by capability watchers to detect changes without polling.
-    pub cap_generation: Arc<AtomicU64>,
     /// Push-based prefix watch channels. `apply_and_notify` increments the `u64` counter
     /// for any registered prefix that matches a changed key. Watchers use `changed().await`
     /// rather than polling. Created lazily via `GossipAgent::subscribe_prefix`.
@@ -67,7 +64,6 @@ impl KvState {
             dropped_frames:    Arc::new(AtomicU64::new(0)),
             max_store_entries,
             grp_generation:    Arc::new(AtomicU64::new(0)),
-            cap_generation:    Arc::new(AtomicU64::new(0)),
             prefix_watchers:   Arc::new(papaya::HashMap::new()),
             peer_localities:   Arc::new(papaya::HashMap::new()),
         })
@@ -338,11 +334,9 @@ pub(crate) fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
         if update.key.starts_with("grp/") {
             kv.grp_generation.fetch_add(1, Ordering::Relaxed);
         }
-        // Bump the capability/requirement generation counter so capability watchers
-        // know to re-evaluate when any peer advertises or retracts a cap or req.
-        if update.key.starts_with("cap/") || update.key.starts_with("req/") {
-            kv.cap_generation.fetch_add(1, Ordering::Relaxed);
-        }
+        // (Capability/requirement watchers use `prefix_watchers` below, not a
+        // generation counter — a previous design held a `cap_generation` here
+        // but it had no readers and was removed.)
         // Maintain the peer_localities cache from cap/{node_id}/locality/self entries.
         // Locality is treated as a capability for KV-path uniformity but is also cached
         // in decoded form so hot gossip-forwarding paths don't re-decode per message.
@@ -353,8 +347,14 @@ pub(crate) fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
                         let guard = kv.peer_localities.pin();
                         if is_tombstone {
                             guard.remove(&node_id);
-                        } else if let Some(loc) = LocalityPath::decode(&update.value) {
-                            guard.insert(node_id, loc);
+                        } else {
+                            match LocalityPath::decode(&update.value) {
+                                Some(loc) => { guard.insert(node_id, loc); }
+                                None      => warn!(
+                                    key = %update.key,
+                                    "malformed LocalityPath — peer sent bytes under cap/*/locality/self that did not decode",
+                                ),
+                            }
                         }
                     }
                 }

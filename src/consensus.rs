@@ -437,6 +437,13 @@ impl ConsensusEngine {
     /// - `policy_meta`: `Some((spread_depth, spread_min_distinct))` only when a
     ///   Hard policy is actually being enforced — used to populate
     ///   `ConsensusResult::TopologyUnsatisfied`.
+    ///
+    /// **`sys/topology-override/{group}` value format**: the override is active
+    /// when the KV value is exactly the ASCII bytes `b"true"`. Any other value
+    /// (including absent) leaves Hard enforcement in effect. Operators writing
+    /// `b"false"` or empty bytes will *not* disable enforcement — this guards
+    /// against fat-finger overrides where the presence of the key alone would
+    /// otherwise be load-bearing.
     fn topology_check(
         &self,
         voters:     &AHashMap<NodeId, Option<LocalityPath>>,
@@ -446,9 +453,11 @@ impl ConsensusEngine {
         if policy.enforcement != TopologyEnforcement::Hard { return (true, 0, None); }
         if let Some(name) = group_name {
             let override_key = format!("sys/topology-override/{}", name);
-            if self.get(&override_key).is_some() {
-                // Operator override — degrade to no-gate behaviour.
-                return (true, 0, None);
+            if let Some(value) = self.get(&override_key) {
+                if value.as_ref() == b"true" {
+                    // Operator override — degrade to no-gate behaviour.
+                    return (true, 0, None);
+                }
             }
         }
         let (passes, distinct) = evaluate_topology_gate(voters, policy);

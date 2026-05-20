@@ -28,6 +28,7 @@ use ahash::{AHashMap, AHashSet};
 use bytes::Bytes;
 use std::{sync::Arc, time::Duration};
 use tokio::sync::{mpsc, oneshot, watch};
+use tracing::warn;
 
 use super::{GossipAgent, TaskCtx};
 use super::kv::run_kv_persist_task;
@@ -40,6 +41,17 @@ async fn await_shutdown(rx: &mut watch::Receiver<bool>) {
     while !*rx.borrow() {
         if rx.changed().await.is_err() { return; }
     }
+}
+
+/// Like `parse_cap_key` but emits a `warn!` on the unhappy path. Use at scan
+/// sites where a malformed key is genuinely surprising (we only scan prefixes
+/// whose entries are well-formed by convention).
+fn parse_cap_key_or_warn(prefix: &str, key: &str) -> Option<(NodeId, Arc<str>, Arc<str>)> {
+    let parsed = parse_cap_key(prefix, key);
+    if parsed.is_none() {
+        warn!(prefix = %prefix, key = %key, "malformed key under capability/requirement prefix");
+    }
+    parsed
 }
 
 /// Splits `cap/{node_id}/{ns}/{name}` (or `req/...`) into its three components.
@@ -90,8 +102,11 @@ impl GossipAgent {
     pub fn resolve(&self, filter: &CapFilter) -> Vec<(NodeId, Capability)> {
         let mut out = Vec::new();
         for (key, bytes) in self.scan_prefix("cap/") {
-            let Some((node_id, _ns, _name)) = parse_cap_key("cap/", &key) else { continue };
-            let Some(cap) = Capability::decode(&bytes) else { continue };
+            let Some((node_id, _ns, _name)) = parse_cap_key_or_warn("cap/", &key) else { continue };
+            let Some(cap) = Capability::decode(&bytes) else {
+            warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");
+            continue;
+        };
             if filter.matches(&cap) {
                 out.push((node_id, cap));
             }
@@ -138,8 +153,11 @@ impl GossipAgent {
                         // Re-scan and diff against `known`.
                         let mut current: AHashMap<(NodeId, Arc<str>, Arc<str>), Capability> = AHashMap::new();
                         for (key, bytes) in scan_prefix_kv(&kv_state, "cap/") {
-                            let Some((node_id, ns, name)) = parse_cap_key("cap/", &key) else { continue };
-                            let Some(cap) = Capability::decode(&bytes) else { continue };
+                            let Some((node_id, ns, name)) = parse_cap_key_or_warn("cap/", &key) else { continue };
+                            let Some(cap) = Capability::decode(&bytes) else {
+            warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");
+            continue;
+        };
                             if !filter.matches(&cap) { continue; }
                             current.insert((node_id, ns, name), cap);
                         }
@@ -570,8 +588,11 @@ fn resolve_filter_against_kv(
 ) -> Vec<(NodeId, Capability)> {
     let mut out = Vec::new();
     for (key, bytes) in scan_prefix_kv(kv_state, "cap/") {
-        let Some((node_id, _ns, _name)) = parse_cap_key("cap/", &key) else { continue };
-        let Some(cap) = Capability::decode(&bytes) else { continue };
+        let Some((node_id, _ns, _name)) = parse_cap_key_or_warn("cap/", &key) else { continue };
+        let Some(cap) = Capability::decode(&bytes) else {
+            warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");
+            continue;
+        };
         if filter.matches(&cap) {
             out.push((node_id, cap));
         }
@@ -595,8 +616,11 @@ fn wiring_snapshot(kv_state: &crate::store::KvState, filter: &CapFilter) -> Wiri
 
     // Standalone-node providers from cap/.
     for (key, bytes) in scan_prefix_kv(kv_state, "cap/") {
-        let Some((node_id, _ns, _name)) = parse_cap_key("cap/", &key) else { continue };
-        let Some(cap) = Capability::decode(&bytes) else { continue };
+        let Some((node_id, _ns, _name)) = parse_cap_key_or_warn("cap/", &key) else { continue };
+        let Some(cap) = Capability::decode(&bytes) else {
+            warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");
+            continue;
+        };
         if !filter.matches(&cap) { continue; }
         let sort_value = filter.ranking.as_ref()
             .and_then(|r| cap.attributes.get(&r.attribute).cloned());
@@ -614,7 +638,10 @@ fn wiring_snapshot(kv_state: &crate::store::KvState, filter: &CapFilter) -> Wiri
     let mut groups: AHashMap<Arc<str>, (Vec<NodeId>, Option<CapValue>)> = AHashMap::new();
     for (key, bytes) in scan_prefix_kv(kv_state, "gcap/") {
         let Some((group, contributor)) = parse_gcap_key(&key, filter) else { continue };
-        let Some(cap) = Capability::decode(&bytes) else { continue };
+        let Some(cap) = Capability::decode(&bytes) else {
+            warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");
+            continue;
+        };
         if !filter.matches(&cap) { continue; }
         let candidate = filter.ranking.as_ref()
             .and_then(|r| cap.attributes.get(&r.attribute).cloned());
@@ -773,27 +800,36 @@ fn demand_snapshot(kv_state: &crate::store::KvState, filter: &CapFilter) -> Dema
     // are scoring demand for.
     let mut demanding: AHashSet<NodeId> = AHashSet::new();
     for (key, bytes) in scan_prefix_kv(kv_state, "req/") {
-        let Some((node_id, ns, name)) = parse_cap_key("req/", &key) else { continue };
+        let Some((node_id, ns, name)) = parse_cap_key_or_warn("req/", &key) else { continue };
         if ns != filter.namespace || name != filter.name { continue; }
         // Optionally also decode and check filter equality — for v1 we treat
         // namespace/name as sufficient evidence of declared need. The
         // bytes-decode is still useful to skip malformed entries.
-        if CapFilter::decode(&bytes).is_none() { continue; }
+        if CapFilter::decode(&bytes).is_none() {
+            warn!(key = %key, "malformed CapFilter under req/ — peer sent bytes that did not decode");
+            continue;
+        }
         demanding.insert(node_id);
     }
 
     // Providers: union of direct cap/ matches and gcap/ contributors.
     let mut providers: AHashSet<NodeId> = AHashSet::new();
     for (key, bytes) in scan_prefix_kv(kv_state, "cap/") {
-        let Some((node_id, _ns, _name)) = parse_cap_key("cap/", &key) else { continue };
-        let Some(cap) = Capability::decode(&bytes) else { continue };
+        let Some((node_id, _ns, _name)) = parse_cap_key_or_warn("cap/", &key) else { continue };
+        let Some(cap) = Capability::decode(&bytes) else {
+            warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");
+            continue;
+        };
         if filter.matches(&cap) {
             providers.insert(node_id);
         }
     }
     for (key, bytes) in scan_prefix_kv(kv_state, "gcap/") {
         let Some((_group, contributor)) = parse_gcap_key(&key, filter) else { continue };
-        let Some(cap) = Capability::decode(&bytes) else { continue };
+        let Some(cap) = Capability::decode(&bytes) else {
+            warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");
+            continue;
+        };
         if filter.matches(&cap) {
             providers.insert(contributor);
         }
@@ -810,11 +846,18 @@ fn demand_snapshot(kv_state: &crate::store::KvState, filter: &CapFilter) -> Dema
     }
 }
 
-/// Splits `gcap/{group}/{ns}/{name}/{contributor}` into `(group, contributor)`
-/// when `(ns, name)` match the filter's `(namespace, name)`. Returns `None`
-/// for misshapen keys or non-matching namespace/name pairs (the attribute
-/// constraint is checked later against the decoded capability).
-fn parse_gcap_key(key: &str, filter: &CapFilter) -> Option<(Arc<str>, NodeId)> {
+/// Parsed shape of a `gcap/{group}/{ns}/{name}/{contributor}` key.
+struct GcapKeyShape {
+    group:       Arc<str>,
+    namespace:   Arc<str>,
+    name:        Arc<str>,
+    contributor: NodeId,
+}
+
+/// Parses the shape of a `gcap/` key. Returns `None` only when the key is
+/// genuinely malformed (wrong segment count, contributor not a `NodeId`, etc.).
+/// Filter matching is a separate concern handled by the caller.
+fn parse_gcap_key_shape(key: &str) -> Option<GcapKeyShape> {
     let rest = key.strip_prefix("gcap/")?;
     let mut parts = rest.splitn(4, '/');
     let group       = parts.next()?;
@@ -822,11 +865,31 @@ fn parse_gcap_key(key: &str, filter: &CapFilter) -> Option<(Arc<str>, NodeId)> {
     let name        = parts.next()?;
     let contributor = parts.next()?;
     if contributor.contains('/') { return None; }
-    if namespace != filter.namespace.as_ref() || name != filter.name.as_ref() {
+    let contributor = contributor.parse::<NodeId>().ok()?;
+    Some(GcapKeyShape {
+        group:       Arc::from(group),
+        namespace:   Arc::from(namespace),
+        name:        Arc::from(name),
+        contributor,
+    })
+}
+
+/// Splits `gcap/{group}/{ns}/{name}/{contributor}` into `(group, contributor)`
+/// when `(ns, name)` match the filter's `(namespace, name)`. Returns `None`
+/// for misshapen keys (logged as warn) or non-matching namespace/name pairs
+/// (silent — that's normal flow).
+fn parse_gcap_key(key: &str, filter: &CapFilter) -> Option<(Arc<str>, NodeId)> {
+    let shape = match parse_gcap_key_shape(key) {
+        Some(s) => s,
+        None => {
+            warn!(key = %key, "malformed gcap/ key — could not parse shape");
+            return None;
+        }
+    };
+    if shape.namespace != filter.namespace || shape.name != filter.name {
         return None;
     }
-    let contributor = contributor.parse::<NodeId>().ok()?;
-    Some((Arc::from(group), contributor))
+    Some((shape.group, shape.contributor))
 }
 
 /// Aggregates `sys/load/{node}/*` fill ratios for ranking in
@@ -1046,9 +1109,10 @@ fn reconcile_emergent_groups(
     // the group's collective assertion, not a per-member echo of its own caps).
     let mut own_caps: Vec<Capability> = Vec::new();
     let own_prefix = format!("cap/{}/", own);
-    for (_, bytes) in scan_prefix_kv(&ctx.kv_state, &own_prefix) {
-        if let Some(cap) = Capability::decode(&bytes) {
-            own_caps.push(cap);
+    for (key, bytes) in scan_prefix_kv(&ctx.kv_state, &own_prefix) {
+        match Capability::decode(&bytes) {
+            Some(cap) => own_caps.push(cap),
+            None      => warn!(key = %key, "malformed own Capability — local cap/ entry did not decode"),
         }
     }
 
@@ -1056,7 +1120,10 @@ fn reconcile_emergent_groups(
     let mut defs: AHashMap<Arc<str>, CapabilityGroupDef> = AHashMap::new();
     for (key, bytes) in scan_prefix_kv(&ctx.kv_state, "cap-group/") {
         let Some(group_name) = key.strip_prefix("cap-group/") else { continue };
-        let Some(def) = CapabilityGroupDef::decode(&bytes) else { continue };
+        let Some(def) = CapabilityGroupDef::decode(&bytes) else {
+            warn!(key = %key, "malformed CapabilityGroupDef under cap-group/ — peer sent bytes that did not decode");
+            continue;
+        };
         defs.insert(Arc::from(group_name), def);
     }
 
