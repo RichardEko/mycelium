@@ -38,6 +38,13 @@ pub(crate) struct KvState {
     /// `cached_group_members` uses this to detect remote membership changes without
     /// scanning the store — the cached roster is stale if the counter has advanced.
     pub grp_generation:    Arc<AtomicU64>,
+    /// Monotonic counter bumped whenever a `cap/` or `req/` key is written or tombstoned.
+    /// Used by capability watchers to detect changes without polling.
+    pub cap_generation: Arc<AtomicU64>,
+    /// Push-based prefix watch channels. `apply_and_notify` increments the `u64` counter
+    /// for any registered prefix that matches a changed key. Watchers use `changed().await`
+    /// rather than polling. Created lazily via `GossipAgent::subscribe_prefix`.
+    pub prefix_watchers: Arc<papaya::HashMap<Arc<str>, Arc<watch::Sender<u64>>>>,
 }
 
 impl KvState {
@@ -54,6 +61,8 @@ impl KvState {
             dropped_frames:    Arc::new(AtomicU64::new(0)),
             max_store_entries,
             grp_generation:    Arc::new(AtomicU64::new(0)),
+            cap_generation:    Arc::new(AtomicU64::new(0)),
+            prefix_watchers:   Arc::new(papaya::HashMap::new()),
         })
     }
 }
@@ -322,6 +331,11 @@ pub(crate) fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
         if update.key.starts_with("grp/") {
             kv.grp_generation.fetch_add(1, Ordering::Relaxed);
         }
+        // Bump the capability/requirement generation counter so capability watchers
+        // know to re-evaluate when any peer advertises or retracts a cap or req.
+        if update.key.starts_with("cap/") || update.key.starts_with("req/") {
+            kv.cap_generation.fetch_add(1, Ordering::Relaxed);
+        }
         // Maintain the secondary prefix index.
         if is_tombstone {
             prefix_index_remove(&kv.prefix_index, &update.key);
@@ -339,6 +353,25 @@ pub(crate) fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
                 let notif = if is_tombstone { None } else { Some(update.value.clone()) };
                 let _ = tx.send(notif);
             }
+        }
+        // Notify any prefix watchers whose registered prefix matches the changed key.
+        // Closed senders are evicted lazily to avoid unbounded growth from churn.
+        let prefix_guard = kv.prefix_watchers.pin();
+        let mut to_evict: Vec<Arc<str>> = Vec::new();
+        for (prefix, tx) in prefix_guard.iter() {
+            if update.key.starts_with(prefix.as_ref()) {
+                if tx.is_closed() {
+                    to_evict.push(prefix.clone());
+                } else {
+                    tx.send_modify(|n| *n = n.wrapping_add(1));
+                }
+            }
+        }
+        for p in to_evict {
+            prefix_guard.compute(p, |existing| match existing {
+                Some((_, tx)) if tx.is_closed() => Operation::Remove,
+                _ => Operation::Abort(()),
+            });
         }
     }
 }
