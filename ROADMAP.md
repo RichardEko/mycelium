@@ -59,6 +59,46 @@ is a guardrail on the path to that.
 
 ---
 
+## The Structural Inversion: Consistency as a Service, Not a Foundation
+
+This is Mycelium's defining architectural decision, and it is the reverse of nearly every
+production distributed system built in the last two decades.
+
+**How Raft-based systems work.** Consistency is the foundation. Every operation — read, write,
+membership change — flows through the consensus log. Consul, etcd, CockroachDB, and TiKV share
+this model. The benefit is strong guarantees everywhere. The cost is that *everything* pays
+consensus latency, including the 95% of operations that don't need it.
+
+**How Kafka works.** The broker log is the foundation. Every event pays broker round-trip and
+partition coordination overhead, including ephemeral signals that are immediately processed and
+discarded.
+
+**How Akka works.** The actor model is the foundation. Every message flows through a mailbox and
+a supervision tree, including fire-and-forget notifications between co-located agents.
+
+**How Mycelium works.** The epidemic gossip substrate is the foundation — always available,
+sub-millisecond, zero coordination overhead. Consistency, ordering, and reliable delivery are
+*services* built on top of that substrate, invoked only by the operations that need them.
+
+The `ConsensusEngine` itself is proof of this: it is built *over* the gossip KV, not the other
+way around. An agent that never calls `consistent_set` pays zero overhead for its existence.
+
+The consequence is **per-operation guarantee selection**:
+
+| Operation | Guarantee | Cost |
+|---|---|---|
+| `emit(signal)` | Best-effort, epidemic | sub-ms, zero coordination |
+| `append("events/orders", bytes)` | Causally ordered, durable | HLC stamp only — no broker |
+| `consistent_set("config/x", val)` | Linearizable | consensus round-trip for *this call only* |
+| `distributed_lock("migration")` | Mutual exclusion | consensus for *this call only* |
+
+The same cluster. The same embedded binary. No separate infrastructure for each tier.
+
+Consul, Kafka, and Akka each pick one position on the consistency/availability tradeoff and
+apply it *uniformly across your whole system*. Mycelium picks *per operation*.
+
+---
+
 ## Architecture: Five Layers
 
 ```
@@ -107,12 +147,10 @@ is a guardrail on the path to that.
 └────────────────────────────────────────────────────────────────────┘
 ```
 
-**Design principle — consistency and ordering as opt-in layers, not foundations.**
-Every operation defaults to epidemic (fast, available, zero coordination overhead). You escalate
-to stronger guarantees only for the specific operation that requires them. A node that never calls
-`consistent_set` pays zero overhead for its existence. The same cluster simultaneously supports
-sub-millisecond epidemic signals, causally-ordered log streams, and linearizable writes — different
-operations choosing different guarantees, no separate infrastructure for each tier.
+**Design principle — consistency as a service, not a foundation.** See *The Structural Inversion*
+above. The Opt-In Overlay row in the stack is cross-cutting precisely because it is not a layer
+imposed on everything beneath it — it is a set of higher-guarantee entry points that any agent
+may call without affecting agents that don't.
 
 **Fundamental separation of concerns:**
 
@@ -1141,16 +1179,17 @@ one agent upgrades its format.
 **5. NodeId as the only contract address.** No HTTP endpoint to manage, no service registry to
 run. The gossip identity *is* the address.
 
-**6. Consistency and ordering as opt-in layers, not foundations.** Every traditional distributed
-framework picks one position on the CAP triangle and applies it uniformly — Consul/etcd pay Raft
-latency on every read/write; Kafka pays broker coordination on every publish; Akka pays ack
-overhead on every message. Here, the epidemic substrate is the foundation — always available,
-always fast — and you escalate to linearizability (`consistent_set`), ordered logging (`append` /
-`subscribe_log`), reliable delivery (`emit_reliable`), or cluster sharding (`shard_for`) only for
-the specific operations that require it. Most agent-to-agent coordination doesn't need
-linearizability; it needs fast and available. The rare operations that do need it call
-`consistent_set` and pay consensus latency only for that call. Same cluster, same binary, no
-separate infrastructure for each tier.
+**6. Consistency as a service, not a foundation — the structural inversion.** Raft-based systems
+make consistency the foundation and everything else pays that cost uniformly. Mycelium inverts
+this: the epidemic substrate is the foundation; consistency, ordering, and reliable delivery are
+services layered on top. The `ConsensusEngine` is built *over* the gossip KV, not the other way
+around — this is not a theoretical claim, it is the current architecture. An agent that never
+calls `consistent_set` pays zero overhead for its existence. The result is per-operation guarantee
+selection: epidemic signals (sub-ms), causally-ordered logs (`append`/`subscribe_log`),
+linearizable writes (`consistent_set`), distributed locks, and leader election all coexist on the
+same cluster, the same binary, with no separate infrastructure for each tier. Consul, Kafka, and
+Akka each pick one position on the tradeoff and apply it uniformly. This architecture picks per
+operation. (See *The Structural Inversion* section above.)
 
 ### Closest Comparison: NATS.io
 

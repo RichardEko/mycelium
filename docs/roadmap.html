@@ -707,6 +707,92 @@
     </table>
   </div>
 
+  <!-- ── Structural Inversion ── -->
+  <div class="section">
+    <div class="section-head">
+      <h2>The Structural Inversion: Consistency as a Service, Not a Foundation</h2>
+      <p style="margin-top:0.6rem;color:#94a3b8;font-size:0.95rem;">
+        Mycelium's defining architectural decision — and the reverse of nearly every production
+        distributed system built in the last two decades.
+      </p>
+    </div>
+
+    <div class="philosophy" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
+      <div class="phil-item">
+        <span class="phil-icon">⛓</span>
+        <div class="phil-title">How Raft systems work</div>
+        <p class="phil-body">Consistency is the foundation. Every operation flows through the
+        consensus log. Consul, etcd, CockroachDB, TiKV. The benefit: strong guarantees everywhere.
+        The cost: <em>everything</em> pays consensus latency, including the 95% of operations
+        that don't need it.</p>
+      </div>
+      <div class="phil-item">
+        <span class="phil-icon">📦</span>
+        <div class="phil-title">How Kafka works</div>
+        <p class="phil-body">The broker log is the foundation. Every event pays broker round-trip
+        and partition coordination — including ephemeral signals that are immediately processed
+        and discarded.</p>
+      </div>
+      <div class="phil-item">
+        <span class="phil-icon">📮</span>
+        <div class="phil-title">How Akka works</div>
+        <p class="phil-body">The actor model is the foundation. Every message flows through a
+        mailbox and supervision tree — including fire-and-forget notifications between
+        co-located agents.</p>
+      </div>
+      <div class="phil-item" style="border:1px solid #4ade80;background:rgba(74,222,128,0.06)">
+        <span class="phil-icon">🌿</span>
+        <div class="phil-title">How Mycelium works</div>
+        <p class="phil-body">The epidemic gossip substrate is the foundation — always available,
+        sub-millisecond, zero coordination overhead. Consistency, ordering, and reliable delivery
+        are <strong>services built on top</strong>. The <code>ConsensusEngine</code> is built
+        <em>over</em> the gossip KV, not the other way around. An agent that never calls
+        <code>consistent_set</code> pays zero overhead for its existence.</p>
+      </div>
+    </div>
+
+    <div style="margin:1.5rem 0 0.5rem;font-weight:600;color:#e2e8f0;">
+      Per-operation guarantee selection — same cluster, same binary, no separate infrastructure:
+    </div>
+    <table class="compare">
+      <thead>
+        <tr>
+          <th>Operation</th>
+          <th>Guarantee</th>
+          <th>Cost</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>emit(signal)</code></td>
+          <td>Best-effort, epidemic</td>
+          <td>sub-ms — zero coordination</td>
+        </tr>
+        <tr>
+          <td><code>append("events/orders", bytes)</code></td>
+          <td>Causally ordered, durable</td>
+          <td>HLC stamp only — no broker</td>
+        </tr>
+        <tr>
+          <td><code>consistent_set("config/x", val)</code></td>
+          <td>Linearizable</td>
+          <td>consensus round-trip for <em>this call only</em></td>
+        </tr>
+        <tr>
+          <td><code>distributed_lock("migration")</code></td>
+          <td>Mutual exclusion</td>
+          <td>consensus for <em>this call only</em></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div style="margin-top:1.2rem;padding:1rem 1.2rem;background:rgba(99,102,241,0.1);border-left:3px solid #6366f1;border-radius:0 6px 6px 0;color:#c7d2fe;font-size:0.95rem;line-height:1.6">
+      Consul, Kafka, and Akka each pick <strong>one position</strong> on the
+      consistency/availability tradeoff and apply it <strong>uniformly across your entire
+      system</strong>. Mycelium picks <strong>per operation</strong>.
+    </div>
+  </div>
+
   <!-- ── Architecture Stack ── -->
   <div class="section">
     <div class="section-head">
