@@ -51,6 +51,7 @@ impl GossipAgent {
         }
         self.rehydrate_boundary_from_kv();
         self.warm_quorum_from_layer1();
+        self.prewarm_peer_localities();
         self.advertise_locality();
         self.start_listener(bind_addr).await.inspect_err(|_| {
             self.state.store(AgentState::Idle as u8, Ordering::Release);
@@ -258,6 +259,27 @@ impl GossipAgent {
         let loc = crate::locality::LocalityPath::new(self.config.locality_path.iter().cloned());
         let key = format!("cap/{}/locality/self", self.node_id);
         let _ = self.set(key, loc.encode());
+    }
+
+    /// Walks `cap/*/locality/self` in the local KV view once at startup and
+    /// populates `kv_state.peer_localities` from any entries already present.
+    /// Without this, the `peer_localities` cache is cold until the first
+    /// fresh write or anti-entropy round, which means locality-aware
+    /// resolution (`resolve_with_locality`, `signal_wired_via_locality`)
+    /// silently scores every provider at depth 0 in the warm-up window.
+    pub(crate) fn prewarm_peer_localities(&self) {
+        let prefix = "cap/";
+        let suffix = "/locality/self";
+        let guard = self.kv_state.peer_localities.pin();
+        for (key, bytes) in self.scan_prefix(prefix) {
+            // Same shape-check that apply_and_notify does for live writes.
+            let Some(rest) = key.strip_prefix(prefix) else { continue };
+            let Some(node_id_str) = rest.strip_suffix(suffix) else { continue };
+            if node_id_str.contains('/') { continue; }
+            let Ok(node_id) = node_id_str.parse::<crate::node_id::NodeId>() else { continue };
+            let Some(loc) = crate::locality::LocalityPath::decode(&bytes) else { continue };
+            guard.insert(node_id, loc);
+        }
     }
 
     /// Signals all background tasks to stop and waits up to `timeout` for them to exit.
