@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MCP Mesh — Broker-less AI Tool Routing</title>
+<style>
+  :root {
+    --bg:         #0d1117;
+    --surface:    #161b22;
+    --surface2:   #1c2128;
+    --surface3:   #21262d;
+    --border:     #30363d;
+    --accent:     #58a6ff;
+    --accent2:    #3fb950;
+    --accent3:    #d2a8ff;
+    --accent4:    #ffa657;
+    --accent5:    #ff7b72;
+    --muted:      #8b949e;
+    --text:       #e6edf3;
+    --text2:      #c9d1d9;
+    --radius:     8px;
+    --radius-lg:  14px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; line-height: 1.6; }
+
+  .header {
+    background: radial-gradient(ellipse at 60% 0%, rgba(88,166,255,0.07) 0%, transparent 55%), var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 28px 36px 22px;
+    display: flex; align-items: flex-start; gap: 16px;
+  }
+  .header-badge { font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent3); background: rgba(210,168,255,0.1); border: 1px solid rgba(210,168,255,0.25); border-radius: 20px; padding: 4px 12px; white-space: nowrap; margin-top: 4px; }
+  .header-text { flex: 1; }
+  .header-title { font-size: 21px; font-weight: 700; letter-spacing: -0.02em; }
+  .header-title em { font-style: normal; color: var(--accent); }
+  .header-sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .header-links a { font-size: 12px; color: var(--accent); text-decoration: none; opacity: 0.7; }
+  .header-links a:hover { opacity: 1; }
+
+  .layout { display: grid; grid-template-columns: auto 1fr; gap: 24px; padding: 24px 32px; max-width: 1060px; margin: 0 auto; }
+  .left-col { display: flex; flex-direction: column; gap: 14px; }
+  .right-col { display: flex; flex-direction: column; gap: 16px; min-width: 280px; max-width: 320px; }
+
+  #mesh-canvas { border: 1px solid var(--border); border-radius: var(--radius); display: block; background: var(--surface); }
+
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .btn { padding: 6px 14px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface2); color: var(--text); font-size: 12px; font-weight: 500; cursor: pointer; transition: background 0.12s, border-color 0.12s; }
+  .btn:hover { background: var(--surface3); border-color: var(--muted); }
+  .btn-call { background: rgba(88,166,255,0.12); border-color: rgba(88,166,255,0.3); color: var(--accent); }
+  .btn-call:hover { background: rgba(88,166,255,0.22); }
+  .btn-kill { background: rgba(255,123,114,0.1); border-color: rgba(255,123,114,0.3); color: var(--accent5); }
+  .btn-kill:hover { background: rgba(255,123,114,0.2); }
+  .btn-restart { background: rgba(63,185,80,0.1); border-color: rgba(63,185,80,0.3); color: var(--accent2); }
+  .btn-restart:hover { background: rgba(63,185,80,0.2); }
+
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+  .panel-hdr { padding: 10px 14px 8px; border-bottom: 1px solid var(--border); font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); display: flex; justify-content: space-between; align-items: center; }
+  .dot-live { width: 6px; height: 6px; border-radius: 50%; background: var(--accent2); box-shadow: 0 0 5px var(--accent2); animation: blink 1.6s ease-in-out infinite; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
+
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; }
+  .stat-item { padding: 12px 14px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  .stat-item:nth-child(2n) { border-right: none; }
+  .stat-item:nth-last-child(-n+2) { border-bottom: none; }
+  .stat-label { font-size: 10px; color: var(--muted); margin-bottom: 3px; }
+  .stat-val { font-size: 20px; font-weight: 700; line-height: 1; font-family: "SF Mono", "Fira Code", monospace; }
+
+  .tool-list { padding: 10px 12px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .tool-pill { font-size: 10px; padding: 3px 9px; border-radius: 12px; font-weight: 600; border: 1px solid; white-space: nowrap; }
+  .tool-pill.live    { background: rgba(63,185,80,0.12);  border-color: rgba(63,185,80,0.3);  color: var(--accent2); }
+  .tool-pill.dead    { background: rgba(139,148,158,0.08); border-color: rgba(139,148,158,0.2); color: var(--muted); text-decoration: line-through; }
+
+  .signal-log { height: 220px; overflow-y: auto; padding: 6px 0; font-family: "SF Mono", "Fira Code", monospace; font-size: 10px; }
+  .signal-log::-webkit-scrollbar { width: 3px; }
+  .signal-log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .log-entry { padding: 2px 12px; display: flex; gap: 6px; align-items: baseline; animation: fadeIn 0.2s ease-out; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateX(-3px); } to { opacity: 1; } }
+  .log-entry:hover { background: var(--surface2); }
+  .log-ts { color: var(--muted); min-width: 24px; }
+  .log-badge { font-size: 9px; padding: 1px 5px; border-radius: 3px; white-space: nowrap; font-weight: 600; }
+  .log-badge.ok  { background: rgba(63,185,80,0.12);  color: var(--accent2); }
+  .log-badge.err { background: rgba(255,123,114,0.12); color: var(--accent5); }
+  .log-badge.sys { background: rgba(88,166,255,0.12);  color: var(--accent); }
+  .log-tool { color: var(--text2); }
+  .log-detail { color: var(--muted); font-size: 9px; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 110px; }
+
+  .node-grid { display: flex; flex-direction: column; gap: 0; }
+  .node-row { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  .node-row:last-child { border-bottom: none; }
+  .node-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .node-name { font-family: "SF Mono","Fira Code",monospace; font-size: 11px; font-weight: 600; min-width: 56px; }
+  .node-tools-inline { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; }
+  .node-tool-tag { font-size: 9px; padding: 1px 5px; border-radius: 3px; }
+  .node-calls { font-family: "SF Mono","Fira Code",monospace; font-size: 10px; color: var(--muted); min-width: 28px; text-align: right; }
+  .node-actions { display: flex; gap: 4px; }
+  .node-btn { font-size: 10px; padding: 2px 7px; border-radius: 4px; border: 1px solid; cursor: pointer; transition: background 0.1s; }
+  .node-btn-kill    { border-color: rgba(255,123,114,0.3); color: var(--accent5); background: rgba(255,123,114,0.07); }
+  .node-btn-kill:hover    { background: rgba(255,123,114,0.15); }
+  .node-btn-restart { border-color: rgba(63,185,80,0.3);  color: var(--accent2); background: rgba(63,185,80,0.07); }
+  .node-btn-restart:hover { background: rgba(63,185,80,0.15); }
+
+  .concepts { max-width: 1060px; margin: 8px auto 0; padding: 0 32px 40px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .concept-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px 18px; }
+  .concept-num { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; }
+  .concept-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  .concept-body { font-size: 11px; color: var(--muted); line-height: 1.65; margin-bottom: 8px; }
+  .code-snippet { font-size: 10px; font-family: "SF Mono", "Fira Code", monospace; background: var(--surface2); border: 1px solid var(--border); border-radius: 5px; padding: 8px 10px; color: var(--text2); line-height: 1.7; overflow-x: auto; white-space: pre; margin-top: 4px; }
+  .code-snippet .kw  { color: var(--accent5); }
+  .code-snippet .fn  { color: var(--accent); }
+  .code-snippet .str { color: var(--accent2); }
+  .code-snippet .cm  { color: var(--muted); font-style: italic; }
+  .code-snippet .tp  { color: var(--accent3); }
+
+  footer { text-align: center; padding: 32px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--border); }
+
+  .guide-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+  .guide-steps { margin: 0; padding-left: 16px; }
+  .guide-steps li { font-size: 11px; color: var(--muted); line-height: 1.65; margin-bottom: 5px; }
+  .guide-steps li:last-child { margin-bottom: 0; }
+  .guide-steps li strong { color: var(--text2); }
+  .guide-steps li code { font-size: 10px; background: var(--surface3); padding: 1px 4px; border-radius: 3px; color: var(--text2); }
+
+  .result-box { padding: 8px 12px; font-family: "SF Mono","Fira Code",monospace; font-size: 10px; color: var(--text2); word-break: break-all; min-height: 36px; line-height: 1.6; }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <span class="header-badge">Layer 4 — MCP Bridge</span>
+  <div class="header-text">
+    <div class="header-title">MCP Mesh — <em>Broker-less AI Tool Routing</em></div>
+    <div class="header-sub">
+      5 agents · full-mesh topology · epidemic KV discovery · no central registry · self-healing on node failure
+    </div>
+  </div>
+  <div class="header-links"><a href="roadmap.html">← Roadmap</a></div>
+</header>
+
+<div class="layout">
+  <div class="left-col">
+
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <div style="font-size:12px;color:var(--muted);">Last call:</div>
+      <span id="last-tool-pill" style="font-size:11px;font-family:monospace;background:rgba(88,166,255,0.1);border:1px solid rgba(88,166,255,0.25);border-radius:10px;padding:2px 9px;color:var(--accent)">—</span>
+      <div id="conn-status" style="font-size:12px;color:var(--muted);">connecting…</div>
+    </div>
+
+    <canvas id="mesh-canvas" width="500" height="460"></canvas>
+
+    <div class="controls">
+      <button class="btn btn-call" onclick="callTool('weather')">☁ weather</button>
+      <button class="btn btn-call" onclick="callTool('ping')">⚡ ping</button>
+      <button class="btn btn-call" onclick="callTool('search')">🔍 search</button>
+      <button class="btn btn-call" onclick="callTool('calculate')">∑ calculate</button>
+      <button class="btn btn-call" onclick="callTool('translate')">🌐 translate</button>
+      <button class="btn btn-call" onclick="callTool('summarize')">✦ summarize</button>
+      <div style="font-size:11px;color:var(--muted);">Auto-cycles all tools every 8 s</div>
+    </div>
+
+  </div>
+
+  <div class="right-col">
+
+    <div class="panel">
+      <div class="panel-hdr">Guide — the demo moment</div>
+      <div class="guide-body">
+        <ol class="guide-steps">
+          <li><strong>Kill node-0</strong> — drops "weather" and "ping" from the mesh via KV tombstones. Other nodes see the change within one gossip round.</li>
+          <li><strong>Call "weather"</strong> — returns <code>tool not found</code>. No node hosts it now.</li>
+          <li><strong>Restart node-0</strong> — re-registers both tools; KV propagates cluster-wide.</li>
+          <li><strong>Call "weather" again</strong> — succeeds. <em>Zero reconfiguration anywhere.</em></li>
+          <li>Any node can call any tool — watch the arcs on the canvas. The caller and provider are often different nodes.</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-hdr">Mesh stats <div class="dot-live"></div></div>
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div class="stat-label">Total calls</div>
+          <div class="stat-val" style="color:var(--accent)" id="s-calls">0</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Errors</div>
+          <div class="stat-val" style="color:var(--accent5)" id="s-errors">0</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Live tools</div>
+          <div class="stat-val" style="color:var(--accent2)" id="s-live-tools">0</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Live nodes</div>
+          <div class="stat-val" style="color:var(--accent3)" id="s-live-nodes">0</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-hdr">Last result</div>
+      <div class="result-box" id="last-result">—</div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-hdr">Nodes</div>
+      <div class="node-grid" id="node-grid">
+        <!-- populated by JS -->
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-hdr">Live tools (KV scan) <div class="dot-live"></div></div>
+      <div class="tool-list" id="live-tool-list">—</div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-hdr">Call log <div class="dot-live"></div></div>
+      <div class="signal-log" id="log"></div>
+    </div>
+
+  </div>
+</div>
+
+<div class="concepts">
+  <div class="concept-card">
+    <div class="concept-num" style="color:var(--accent3)">Layer 4 — MCP Bridge</div>
+    <div class="concept-title">No registry. No broker.</div>
+    <div class="concept-body">
+      Every tool is written under <code>tools/{name}/{node_id}</code> in the gossip KV store.
+      Any node can discover any tool by scanning that prefix — the substrate <em>is</em> the
+      registry. Kill a node and its tools vanish from the mesh in one gossip round; restart
+      and they reappear. No operator action needed.
+    </div>
+    <div class="code-snippet"><span class="cm">// Register a tool — writes KV entry</span>
+<span class="kw">let</span> _handle = agent.<span class="fn">register_mcp_tool</span>(
+    <span class="str">"weather"</span>,
+    schema,
+    |args| <span class="kw">async move</span> { <span class="cm">/* handler */</span> },
+);
+<span class="cm">// Drop handle → tombstone propagates</span></div>
+  </div>
+
+  <div class="concept-card">
+    <div class="concept-num" style="color:var(--accent)">Epidemic discovery</div>
+    <div class="concept-title">Any caller, any provider</div>
+    <div class="concept-body">
+      A <code>tools/call</code> request arrives at any node. That node scans the gossip KV
+      for a provider, extracts its <code>NodeId</code>, and issues an RPC directly — a
+      point-to-point <code>mcp.invoke</code> signal routed through the mesh. Watch the arcs:
+      the caller and the provider are almost never the same node.
+    </div>
+    <div class="code-snippet"><span class="cm">// Caller scans for any provider</span>
+<span class="kw">let</span> entries = agent.<span class="fn">scan_prefix</span>(<span class="str">"tools/weather/"</span>);
+<span class="kw">let</span> provider = entries[0].0.<span class="fn">parse</span>::&lt;<span class="tp">NodeId</span>&gt;()?;
+
+<span class="cm">// Point-to-point RPC through mesh</span>
+<span class="kw">let</span> reply = agent.<span class="fn">rpc_call</span>(
+    provider, <span class="str">"mcp.invoke"</span>,
+    request_bytes, timeout,
+).<span class="fn">await</span>?;</div>
+  </div>
+
+  <div class="concept-card">
+    <div class="concept-num" style="color:var(--accent4)">Self-healing</div>
+    <div class="concept-title">Kill it. Restart it. Done.</div>
+    <div class="concept-body">
+      There is no configuration to update, no service to notify. When node-0 dies its
+      <code>McpToolHandle</code> is dropped, which fires a cancel channel, which runs
+      the tombstone path: a KV delete entry propagates to every peer. When node-0 restarts
+      it re-registers — the same KV path, a newer HLC timestamp — and the mesh self-corrects.
+    </div>
+    <div class="code-snippet"><span class="cm">// Kill: just drop the handle</span>
+drop(tool_handle);  <span class="cm">// tombstone fires</span>
+
+<span class="cm">// Restart: new agent, new handle</span>
+<span class="kw">let</span> agent = <span class="tp">GossipAgent</span>::<span class="fn">new</span>(id, cfg);
+agent.<span class="fn">start</span>().<span class="fn">await</span>?;
+<span class="kw">let</span> _h = agent.<span class="fn">register_mcp_tool</span>(
+    <span class="str">"weather"</span>, schema, handler);</div>
+  </div>
+</div>
+
+<footer>mycelium · Layer 4 MCP bridge complete · 2026-05-20</footer>
+
+<script>
+const POLL_MS = 150;
+const MAX_LOG = 100;
+let logSeq = 0;
+let state  = null;
+let connected = false;
+let prevTotalCalls = 0;
+let prevLastCallMs = 0;
+
+const canvas = document.getElementById('mesh-canvas');
+const ctx    = canvas.getContext('2d');
+const W      = canvas.width;
+const H      = canvas.height;
+const CX     = W / 2 - 10;
+const CY     = H / 2 + 10;
+const RING_R = 165;
+const NODE_R = 26;
+const N      = 5;
+
+// Tool colours by name
+const TOOL_COLORS = {
+  weather:   '#58a6ff',
+  ping:      '#79c0ff',
+  search:    '#d2a8ff',
+  calculate: '#ffa657',
+  translate: '#3fb950',
+  summarize: '#56d364',
+};
+
+function toolColor(name) {
+  return TOOL_COLORS[name] || '#8b949e';
+}
+
+// Pentagon positions — flat top
+function nodePos(i) {
+  const angle = (i / N) * Math.PI * 2 - Math.PI / 2;
+  return { x: CX + RING_R * Math.cos(angle), y: CY + RING_R * Math.sin(angle) };
+}
+
+// ── Arc animations for RPC calls ──────────────────────────────────────────────
+const arcs = [];   // { fromX, fromY, toX, toY, color, t, tool }
+
+function addArc(fromIdx, toIdx, tool) {
+  const from = nodePos(fromIdx);
+  const to   = nodePos(toIdx);
+  arcs.push({ fromX: from.x, fromY: from.y, toX: to.x, toY: to.y,
+              color: toolColor(tool), t: 0, tool });
+}
+
+// ── Node pulse animations ─────────────────────────────────────────────────────
+const pulses = new Array(N).fill(0);
+
+// ── Draw ───────────────────────────────────────────────────────────────────────
+let lastRafTs = 0;
+let animRaf   = 0;
+
+function draw(ts) {
+  const dt = Math.min((ts - lastRafTs) / 1000, 0.15);
+  lastRafTs = ts;
+  ctx.clearRect(0, 0, W, H);
+
+  if (!state) {
+    ctx.fillStyle = '#8b949e';
+    ctx.font = '13px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Connecting to http://127.0.0.1:8099…', CX, CY);
+    animRaf = requestAnimationFrame(draw);
+    return;
+  }
+
+  // Full-mesh edges (muted)
+  for (let i = 0; i < N; i++) {
+    for (let j = i + 1; j < N; j++) {
+      const a = nodePos(i), b = nodePos(j);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.strokeStyle = 'rgba(48,54,61,0.7)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+  }
+
+  // Animated RPC arcs
+  const alive_arcs = [];
+  for (const arc of arcs) {
+    arc.t += dt * 0.9;
+    if (arc.t >= 1.0) continue;
+    alive_arcs.push(arc);
+
+    // Bezier control point (lifted above the midpoint)
+    const mx = (arc.fromX + arc.toX) / 2;
+    const my = (arc.fromY + arc.toY) / 2;
+    const dx = arc.toX - arc.fromX;
+    const dy = arc.toY - arc.fromY;
+    const len = Math.sqrt(dx * dx + dy * dy) || 1;
+    const lift = Math.min(len * 0.35, 80);
+    const cpx  = mx - (dy / len) * lift;
+    const cpy  = my + (dx / len) * lift;
+
+    // Draw trail up to arc.t
+    const steps = 32;
+    ctx.beginPath();
+    let firstPoint = true;
+    for (let s = 0; s <= steps; s++) {
+      const u = (s / steps) * arc.t;
+      const bx = (1-u)*(1-u)*arc.fromX + 2*(1-u)*u*cpx + u*u*arc.toX;
+      const by = (1-u)*(1-u)*arc.fromY + 2*(1-u)*u*cpy + u*u*arc.toY;
+      if (firstPoint) { ctx.moveTo(bx, by); firstPoint = false; }
+      else ctx.lineTo(bx, by);
+    }
+    const alpha = Math.max(0, 1 - arc.t * 1.1);
+    ctx.strokeStyle = arc.color.replace(')', `,${alpha})`).replace('rgb', 'rgba');
+    ctx.lineWidth   = 2.5;
+    ctx.stroke();
+
+    // Dot at head
+    const u   = arc.t;
+    const hx  = (1-u)*(1-u)*arc.fromX + 2*(1-u)*u*cpx + u*u*arc.toX;
+    const hy  = (1-u)*(1-u)*arc.fromY + 2*(1-u)*u*cpy + u*u*arc.toY;
+    ctx.beginPath();
+    ctx.arc(hx, hy, 4, 0, Math.PI * 2);
+    ctx.fillStyle = arc.color;
+    ctx.fill();
+  }
+  arcs.length = 0;
+  arcs.push(...alive_arcs);
+
+  // Nodes
+  for (let i = 0; i < N; i++) {
+    const { x, y } = nodePos(i);
+    const node = state.nodes[i];
+    const alive = node.alive;
+    const pt    = pulses[i] || 0;
+
+    // Pulse ring
+    if (pt > 0) {
+      ctx.beginPath();
+      ctx.arc(x, y, NODE_R + 6 + pt * 18, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(88,166,255,${0.4 * (1 - pt)})`;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      pulses[i] = Math.max(0, pt - dt * 1.5);
+    }
+
+    // Node circle
+    const nodeColor = alive ? '#1c2128' : '#0d1117';
+    const borderColor = alive ? '#3fb950' : '#ff7b72';
+    const borderWidth = alive ? 2.5 : 1.5;
+
+    ctx.beginPath();
+    ctx.arc(x, y, NODE_R, 0, Math.PI * 2);
+    ctx.fillStyle = nodeColor;
+    ctx.fill();
+    ctx.strokeStyle = borderColor;
+    ctx.lineWidth   = borderWidth;
+    ctx.stroke();
+
+    if (!alive) {
+      // X cross for dead nodes
+      ctx.strokeStyle = '#ff7b72';
+      ctx.lineWidth   = 2;
+      const d = 8;
+      ctx.beginPath(); ctx.moveTo(x - d, y - d); ctx.lineTo(x + d, y + d); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x + d, y - d); ctx.lineTo(x - d, y + d); ctx.stroke();
+    }
+
+    // Node label
+    ctx.fillStyle = alive ? '#e6edf3' : '#484f58';
+    ctx.font = 'bold 11px "SF Mono","Fira Code",monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`n-${i}`, x, y - 3);
+
+    // Call count below label
+    if (alive) {
+      ctx.font = '9px sans-serif';
+      ctx.fillStyle = '#8b949e';
+      ctx.fillText(`${node.call_count}`, x, y + 9);
+    }
+
+    // Tool badges around the node
+    if (alive) {
+      const tools = node.tools;
+      const angleStep = tools.length > 1 ? 0.4 : 0;
+      const startAngle = (i / N) * Math.PI * 2 - Math.PI / 2;
+      const badgeR = NODE_R + 22;
+      tools.forEach((t, ti) => {
+        const bAngle = startAngle + (ti - (tools.length - 1) / 2) * angleStep;
+        const bx = x + badgeR * Math.cos(bAngle);
+        const by = y + badgeR * Math.sin(bAngle);
+        ctx.font = 'bold 8px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        // Badge background
+        const tw = ctx.measureText(t).width + 8;
+        ctx.fillStyle = 'rgba(22,27,34,0.9)';
+        ctx.beginPath();
+        ctx.roundRect(bx - tw/2, by - 7, tw, 14, 3);
+        ctx.fill();
+        ctx.strokeStyle = toolColor(t) + '55';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        ctx.fillStyle = toolColor(t);
+        ctx.fillText(t, bx, by);
+      });
+    }
+  }
+
+  animRaf = requestAnimationFrame(draw);
+}
+
+// ── Node grid (sidebar) ───────────────────────────────────────────────────────
+const nodeGrid = document.getElementById('node-grid');
+
+function renderNodeGrid() {
+  if (!state) return;
+  nodeGrid.innerHTML = '';
+  state.nodes.forEach((node, i) => {
+    const row = document.createElement('div');
+    row.className = 'node-row';
+    const dotColor  = node.alive ? '#3fb950' : '#ff7b72';
+    const toolsHtml = node.tools.map(t =>
+      `<span class="node-tool-tag" style="background:${toolColor(t)}22;color:${toolColor(t)};border:1px solid ${toolColor(t)}44">${t}</span>`
+    ).join('');
+    row.innerHTML = `
+      <div class="node-dot" style="background:${dotColor}"></div>
+      <span class="node-name" style="color:${node.alive?'var(--text2)':'var(--muted)'}">node-${i}</span>
+      <div class="node-tools-inline">${toolsHtml}</div>
+      <span class="node-calls">${node.call_count}</span>
+      <div class="node-actions">
+        ${node.alive
+          ? `<button class="node-btn node-btn-kill" onclick="killNode(${i})">kill</button>`
+          : `<button class="node-btn node-btn-restart" onclick="restartNode(${i})">restart</button>`
+        }
+      </div>`;
+    nodeGrid.appendChild(row);
+  });
+}
+
+// ── Live tool list (sidebar) ──────────────────────────────────────────────────
+const liveToolList = document.getElementById('live-tool-list');
+
+function renderLiveTools() {
+  if (!state) return;
+  if (!state.live_tools || state.live_tools.length === 0) {
+    liveToolList.innerHTML = '<span style="color:var(--muted);font-size:11px">no tools registered</span>';
+    return;
+  }
+  liveToolList.innerHTML = state.live_tools.map(t =>
+    `<span class="tool-pill live">${t.name} <span style="font-weight:400;opacity:0.6">·n${t.node}</span></span>`
+  ).join('');
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+const sCalls     = document.getElementById('s-calls');
+const sErrors    = document.getElementById('s-errors');
+const sLiveTools = document.getElementById('s-live-tools');
+const sLiveNodes = document.getElementById('s-live-nodes');
+const lastToolPill = document.getElementById('last-tool-pill');
+const lastResult   = document.getElementById('last-result');
+
+function updateStats() {
+  if (!state) return;
+  sCalls.textContent     = state.total_calls;
+  sErrors.textContent    = state.call_errors;
+  sLiveTools.textContent = state.live_tools ? state.live_tools.length : 0;
+  sLiveNodes.textContent = state.nodes.filter(n => n.alive).length;
+  if (state.last_tool) {
+    lastToolPill.textContent = state.last_tool;
+    lastToolPill.style.color        = toolColor(state.last_tool);
+    lastToolPill.style.background   = toolColor(state.last_tool) + '18';
+    lastToolPill.style.borderColor  = toolColor(state.last_tool) + '44';
+  }
+  if (state.last_result && state.last_result !== 'null') {
+    try {
+      const r = typeof state.last_result === 'string'
+        ? JSON.parse(state.last_result) : state.last_result;
+      lastResult.textContent = JSON.stringify(r, null, 2);
+    } catch { lastResult.textContent = String(state.last_result); }
+  }
+}
+
+// ── Log ────────────────────────────────────────────────────────────────────────
+const logEl = document.getElementById('log');
+
+function addLog(tool, detail, isErr) {
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  const badge = isErr ? 'err' : 'ok';
+  const label = isErr ? 'ERR' : 'OK';
+  entry.innerHTML =
+    `<span class="log-ts">${String(logSeq++ % 1000).padStart(3,'0')}</span>` +
+    `<span class="log-badge ${badge}">${label}</span>` +
+    `<span class="log-tool" style="color:${toolColor(tool)}">${tool}</span>` +
+    `<span class="log-detail">${detail}</span>`;
+  logEl.prepend(entry);
+  while (logEl.children.length > MAX_LOG) logEl.lastChild.remove();
+}
+
+// ── Polling ────────────────────────────────────────────────────────────────────
+const connStatus = document.getElementById('conn-status');
+
+async function poll() {
+  try {
+    const res  = await fetch('http://127.0.0.1:8099/state', { signal: AbortSignal.timeout(2000) });
+    const data = await res.json();
+
+    const prevState = state;
+    state = data;
+
+    if (!connected) {
+      connected = true;
+      connStatus.textContent = 'connected';
+      connStatus.style.color = 'var(--accent2)';
+    }
+
+    // Detect new call
+    if (data.last_call_ms !== prevLastCallMs && data.last_call_ms > 0) {
+      prevLastCallMs = data.last_call_ms;
+      const tool = data.last_tool || '?';
+      let isErr = false;
+      let detail = '';
+      try {
+        const r = typeof data.last_result === 'string'
+          ? JSON.parse(data.last_result) : data.last_result;
+        if (r && r.error) { isErr = true; detail = r.error; }
+        else detail = JSON.stringify(r).slice(0, 60);
+      } catch { detail = String(data.last_result).slice(0, 60); }
+      addLog(tool, detail, isErr);
+
+      // Trigger animation: pick caller (any node) and provider (node with tool)
+      const providerIdx = data.nodes.findIndex(n => n.alive && n.tools.includes(tool));
+      const liveIdxs    = data.nodes.map((n,i) => n.alive ? i : -1).filter(i => i >= 0);
+      if (liveIdxs.length > 0 && providerIdx >= 0) {
+        const callerIdx = liveIdxs[Math.floor(Math.random() * liveIdxs.length)];
+        if (callerIdx !== providerIdx) {
+          addArc(callerIdx, providerIdx, tool);
+          pulses[providerIdx] = 1.0;
+        } else {
+          pulses[providerIdx] = 1.0;
+        }
+      }
+    }
+
+    updateStats();
+    renderNodeGrid();
+    renderLiveTools();
+  } catch {
+    if (connected) {
+      connected = false;
+      connStatus.textContent = 'disconnected — run: cargo run --example mcp_mesh';
+      connStatus.style.color = 'var(--accent4)';
+    }
+  }
+}
+
+// ── User actions ──────────────────────────────────────────────────────────────
+async function callTool(name) {
+  await fetch(`http://127.0.0.1:8099/call?tool=${name}`,
+    { method: 'POST', signal: AbortSignal.timeout(8000) }).catch(() => {});
+  await poll();
+}
+
+async function killNode(idx) {
+  await fetch(`http://127.0.0.1:8099/kill?node=${idx}`,
+    { method: 'POST', signal: AbortSignal.timeout(2000) }).catch(() => {});
+  await poll();
+}
+
+async function restartNode(idx) {
+  await fetch(`http://127.0.0.1:8099/restart?node=${idx}`,
+    { method: 'POST', signal: AbortSignal.timeout(2000) }).catch(() => {});
+  await poll();
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────────
+requestAnimationFrame(draw);
+poll();
+setInterval(poll, POLL_MS);
+</script>
+</body>
+</html>
