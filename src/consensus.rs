@@ -27,9 +27,11 @@
 //!   trust-slice-based quorum intersection is a future extension.
 
 use crate::agent::{emit_signal, emit_signal_async, make_gossip_update, TaskCtx};
+use crate::config::{GroupTopologyPolicy, TopologyEnforcement};
 use crate::framing::{
     bincode_cfg, dispatch_gossip_send, dispatch_gossip_try_send, ForwardHint, WireMessage,
 };
+use crate::locality::LocalityPath;
 use crate::node_id::NodeId;
 use crate::signal::{signal_kind, SignalScope};
 use crate::store::apply_and_notify;
@@ -171,6 +173,23 @@ pub enum ConsensusResult {
         slot:   Arc<str>,
         ballot: u64,
     },
+    /// Quorum size was met but the Hard topology gate was not satisfied — too
+    /// few distinct domains at `spread_depth`. The proposal is **not** committed.
+    /// The caller decides whether to retry, wait for more diverse voters to
+    /// come online, or surface the failure.
+    ///
+    /// Hard enforcement never silently degrades: it is better to refuse a
+    /// fault-isolated write than to commit one that doesn't satisfy the
+    /// operator-stated redundancy contract.
+    TopologyUnsatisfied {
+        slot:             Arc<str>,
+        ballot:           u64,
+        voters_seen:      usize,
+        quorum_required:  usize,
+        distinct_domains: usize,
+        domains_required: usize,
+        spread_depth:     usize,
+    },
 }
 
 /// Wire payload carried inside `Signal.payload` for all consensus messages.
@@ -197,6 +216,20 @@ pub(crate) enum ConsensusMsg {
     Nack {
         slot:        Arc<str>,
         seen_ballot: u64,
+    },
+    /// Voter response carrying the voter's `LocalityPath` so the proposer can
+    /// evaluate topology gates (Hard enforcement). Voters that have no
+    /// configured locality send `locality: None`; their vote still counts
+    /// toward quorum but contributes zero topology diversity.
+    ///
+    /// Added after `Nack` so old proposers (which decode unknown variants as
+    /// `None` and drop the message) silently lose these votes rather than
+    /// misinterpreting them. Mixed-version clusters cannot run Hard policies.
+    VoteWithLocality {
+        slot:     Arc<str>,
+        ballot:   u64,
+        voter:    NodeId,
+        locality: Option<LocalityPath>,
     },
 }
 
@@ -236,6 +269,43 @@ pub mod consensus_ns {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/// Counts how many distinct segment values appear at `depth` across `voters`.
+/// Voters whose locality is `None`, or whose path is shorter than `depth + 1`,
+/// contribute zero. Order-independent and unbiased.
+pub(crate) fn distinct_domains_at_depth(
+    voters: &AHashMap<NodeId, Option<LocalityPath>>,
+    depth: usize,
+) -> usize {
+    let mut seen: AHashSet<&str> = AHashSet::new();
+    for loc in voters.values().flatten() {
+        if let Some(seg) = loc.value_at(depth) {
+            seen.insert(seg.as_ref());
+        }
+    }
+    seen.len()
+}
+
+/// Returns whether a Hard topology policy is satisfied by the current voter
+/// set. Soft and policy-less calls always pass. The returned `usize` is the
+/// current `distinct_domains` count — useful for populating
+/// `ConsensusResult::TopologyUnsatisfied`.
+pub(crate) fn evaluate_topology_gate(
+    voters: &AHashMap<NodeId, Option<LocalityPath>>,
+    policy: &GroupTopologyPolicy,
+) -> (bool, usize) {
+    if policy.enforcement != TopologyEnforcement::Hard {
+        return (true, 0);
+    }
+    let Some(depth) = policy.spread_depth else {
+        // Hard with no spread_depth is invalid config; validate() rejects this
+        // at startup. Treat as pass to avoid stalling production after a
+        // hot-reload bug.
+        return (true, 0);
+    };
+    let distinct = distinct_domains_at_depth(voters, depth);
+    (distinct >= policy.spread_min_distinct, distinct)
+}
+
 /// Context for mid-ballot opaque-member recomputation.
 ///
 /// Injected by `group_propose` / `system_propose` at the Layer II call site so
@@ -271,6 +341,15 @@ pub(crate) struct ConsensusEngine {
     /// trust slice for the group (`consensus/trust/{group}/{node_id}`).
     pub(crate) use_trust_slices:    bool,
     pub(crate) max_abstain_ballots: u32,
+    /// This node's locality, captured at engine-construction time from
+    /// `GossipConfig::locality_path`. Used by the voter task to populate
+    /// `VoteWithLocality`. `None` when the node has no configured locality.
+    pub(crate) self_locality:       Option<LocalityPath>,
+    /// Per-group topology policy for the proposer side. `None` means no
+    /// policy: ballots commit on quorum without a diversity check.
+    /// `Some(Soft)` policies still skip the gate — they affect fan-out
+    /// scoring only. `Some(Hard)` enables the topology gate in `propose`.
+    pub(crate) topology_policy:     Option<GroupTopologyPolicy>,
 }
 
 impl ConsensusEngine {
@@ -351,6 +430,32 @@ impl ConsensusEngine {
         emit_signal(&self.task_ctx, kind, scope, payload);
     }
 
+    /// Evaluates the Hard topology gate against the current voter set, honouring
+    /// any `sys/topology-override/{group}` operator override. Returns:
+    /// - `passes`: whether the proposer may commit on this voter set
+    /// - `distinct_domains`: count at `spread_depth` (0 when no Hard policy)
+    /// - `policy_meta`: `Some((spread_depth, spread_min_distinct))` only when a
+    ///   Hard policy is actually being enforced — used to populate
+    ///   `ConsensusResult::TopologyUnsatisfied`.
+    fn topology_check(
+        &self,
+        voters:     &AHashMap<NodeId, Option<LocalityPath>>,
+        group_name: Option<&str>,
+    ) -> (bool, usize, Option<(usize, usize)>) {
+        let Some(policy) = self.topology_policy.as_ref() else { return (true, 0, None); };
+        if policy.enforcement != TopologyEnforcement::Hard { return (true, 0, None); }
+        if let Some(name) = group_name {
+            let override_key = format!("sys/topology-override/{}", name);
+            if self.get(&override_key).is_some() {
+                // Operator override — degrade to no-gate behaviour.
+                return (true, 0, None);
+            }
+        }
+        let (passes, distinct) = evaluate_topology_gate(voters, policy);
+        let meta = (policy.spread_depth.unwrap_or(0), policy.spread_min_distinct);
+        (passes, distinct, Some(meta))
+    }
+
     async fn emit_async(&self, kind: Arc<str>, scope: SignalScope, payload: Bytes) -> bool {
         emit_signal_async(&self.task_ctx, kind, scope, payload).await
     }
@@ -406,6 +511,17 @@ impl ConsensusEngine {
 
         let mut ballot = self.read_ballot(&ballot_key) + 1;
         let mut votes_last_ballot: usize = 0;
+        // Captured topology-gate failure from the most recent ballot that
+        // reached quorum-by-count but failed the Hard gate. Used to surface
+        // `TopologyUnsatisfied` after all ballots are exhausted.
+        let mut topology_failed: Option<(usize, usize, usize)> = None;
+
+        // Extract the group name once for `sys/topology-override/{group}` lookups
+        // and for completing the TopologyUnsatisfied return.
+        let group_name: Option<Arc<str>> = match &scope {
+            SignalScope::Group(g) => Some(g.clone()),
+            _                     => None,
+        };
 
         for _attempt in 0..config.max_ballots {
             if self.get(&commit_key).is_some() {
@@ -446,7 +562,9 @@ impl ConsensusEngine {
                 Arc::from(consensus_kind::PROPOSE), scope.clone(), encode_consensus_msg(&propose_msg),
             ).await;
 
-            // Local dedup per (slot, ballot). Cannot use signal_handlers.quorum_for_group
+            // Voter dedup map per (slot, ballot). NodeId-keyed so each voter contributes
+            // exactly once even if they re-emit; the Option<LocalityPath> value is required
+            // for Hard topology gate evaluation. Cannot use signal_handlers.quorum_for_group
             // here: the sender_log records (sender, received_at) without slot/ballot
             // correlation, so it would conflate votes from different rounds.
             //
@@ -454,20 +572,21 @@ impl ConsensusEngine {
             // set is captured once before the ballot loop (in group_propose) and the quorum
             // threshold is fixed for that ballot's lifetime. A joining member's votes do not
             // count toward this ballot; a leaving member's existing vote remains counted.
-            // This is a known non-goal: supporting live membership changes mid-ballot would
-            // require distributed coordination that exceeds the protocol's scope.
-            let mut voters: AHashSet<u64> = AHashSet::new();
-            voters.insert(self.task_ctx.node_id.id_hash());
+            let mut voters: AHashMap<NodeId, Option<LocalityPath>> = AHashMap::new();
+            voters.insert(self.task_ctx.node_id.clone(), self.self_locality.clone());
             if voters.len() >= quorum_size {
-                let commit = ConsensusMsg::Commit {
-                    slot: slot.clone(), ballot, value: value.clone(),
-                };
-                self.emit_async(
-                    Arc::from(consensus_kind::COMMIT), scope.clone(), encode_consensus_msg(&commit),
-                ).await;
-                self.set_async(commit_key.as_str(), value.clone()).await;
-                self.kv_delete(&ballot_key);
-                return ConsensusResult::Committed { slot, value, ballot };
+                let (passes, _, _) = self.topology_check(&voters, group_name.as_deref());
+                if passes {
+                    let commit = ConsensusMsg::Commit {
+                        slot: slot.clone(), ballot, value: value.clone(),
+                    };
+                    self.emit_async(
+                        Arc::from(consensus_kind::COMMIT), scope.clone(), encode_consensus_msg(&commit),
+                    ).await;
+                    self.set_async(commit_key.as_str(), value.clone()).await;
+                    self.kv_delete(&ballot_key);
+                    return ConsensusResult::Committed { slot, value, ballot };
+                }
             }
 
             let sleep = time::sleep_until(time::Instant::now() + config.phase1_timeout);
@@ -478,16 +597,24 @@ impl ConsensusEngine {
                 tokio::select! { biased;
                     _ = &mut sleep => break 'collect,
                     Some(sig) = vote_rx.recv() => {
-                        if let Some(ConsensusMsg::Vote { slot: s, ballot: b, voter }) =
-                            decode_consensus_msg(&sig.payload)
-                        {
-                            if s == slot && b == ballot {
-                                // Trust-slice filtering: only count votes from declared peers.
-                                if let Some(ref ts) = trust_set {
-                                    if !ts.contains(&voter.id_hash()) { continue; }
-                                }
-                                voters.insert(voter.id_hash());
-                                if voters.len() >= quorum_size {
+                        // Accept both Vote (legacy, no locality) and VoteWithLocality.
+                        // Legacy votes contribute to quorum but to zero topology diversity.
+                        let (s, b, voter, locality) = match decode_consensus_msg(&sig.payload) {
+                            Some(ConsensusMsg::Vote { slot: s, ballot: b, voter }) =>
+                                (s, b, voter, None),
+                            Some(ConsensusMsg::VoteWithLocality { slot: s, ballot: b, voter, locality }) =>
+                                (s, b, voter, locality),
+                            _ => continue,
+                        };
+                        if s == slot && b == ballot {
+                            // Trust-slice filtering: only count votes from declared peers.
+                            if let Some(ref ts) = trust_set {
+                                if !ts.contains(&voter.id_hash()) { continue; }
+                            }
+                            voters.insert(voter, locality);
+                            if voters.len() >= quorum_size {
+                                let (passes, _, _) = self.topology_check(&voters, group_name.as_deref());
+                                if passes {
                                     let commit = ConsensusMsg::Commit {
                                         slot: slot.clone(), ballot, value: value.clone(),
                                     };
@@ -498,6 +625,9 @@ impl ConsensusEngine {
                                     self.kv_delete(&ballot_key);
                                     return ConsensusResult::Committed { slot, value, ballot };
                                 }
+                                // Quorum count met but topology gate failed — keep
+                                // collecting until timeout in case a more diverse
+                                // voter arrives.
                             }
                         }
                     }
@@ -526,16 +656,19 @@ impl ConsensusEngine {
                             quorum_size = if or.config_quorum > 0 { or.config_quorum } else { active / 2 + 1 };
                             // Check immediately — we may already have enough votes.
                             if voters.len() >= quorum_size {
-                                let commit = ConsensusMsg::Commit {
-                                    slot: slot.clone(), ballot, value: value.clone(),
-                                };
-                                self.emit_async(
-                                    Arc::from(consensus_kind::COMMIT), scope.clone(),
-                                    encode_consensus_msg(&commit),
-                                ).await;
-                                self.set_async(commit_key.as_str(), value.clone()).await;
-                                self.kv_delete(&ballot_key);
-                                return ConsensusResult::Committed { slot, value, ballot };
+                                let (passes, _, _) = self.topology_check(&voters, group_name.as_deref());
+                                if passes {
+                                    let commit = ConsensusMsg::Commit {
+                                        slot: slot.clone(), ballot, value: value.clone(),
+                                    };
+                                    self.emit_async(
+                                        Arc::from(consensus_kind::COMMIT), scope.clone(),
+                                        encode_consensus_msg(&commit),
+                                    ).await;
+                                    self.set_async(commit_key.as_str(), value.clone()).await;
+                                    self.kv_delete(&ballot_key);
+                                    return ConsensusResult::Committed { slot, value, ballot };
+                                }
                             }
                         }
                     }
@@ -550,12 +683,37 @@ impl ConsensusEngine {
             }
 
             votes_last_ballot = voters.len();
+            // If this ballot reached quorum-by-count but failed the Hard gate,
+            // remember it for the final TopologyUnsatisfied return.
+            if voters.len() >= quorum_size {
+                let (passes, distinct, meta) = self.topology_check(&voters, group_name.as_deref());
+                if !passes {
+                    if let Some((depth, required)) = meta {
+                        topology_failed = Some((distinct, required, depth));
+                    }
+                }
+            }
 
             if config.ballot_retry_jitter_ms > 0 {
                 let jitter = fastrand::u64(0..config.ballot_retry_jitter_ms);
                 tokio::time::sleep(Duration::from_millis(jitter)).await;
             }
             ballot = nack_ballot.max(self.read_ballot(&ballot_key)).max(ballot) + 1;
+        }
+
+        // After exhausting max_ballots: prefer TopologyUnsatisfied over Timeout
+        // when the last attempt reached quorum but failed the gate — the caller
+        // needs to distinguish "not enough voters" from "voters not diverse enough."
+        if let Some((distinct, required, depth)) = topology_failed {
+            return ConsensusResult::TopologyUnsatisfied {
+                slot,
+                ballot,
+                voters_seen:      votes_last_ballot,
+                quorum_required:  quorum_size,
+                distinct_domains: distinct,
+                domains_required: required,
+                spread_depth:     depth,
+            };
         }
 
         ConsensusResult::Timeout {
@@ -649,8 +807,15 @@ pub(crate) async fn run_consensus_listener(
                         format!("{}{}", consensus_ns::BALLOT, &*slot),
                         encode_ballot(ballot),
                     );
-                    let vote = ConsensusMsg::Vote {
-                        slot: slot.clone(), ballot, voter: ctx.task_ctx.node_id.clone(),
+                    // Always emit VoteWithLocality (carrying None when locality is
+                    // unspecified). Topology gates only count voters that arrived
+                    // via this variant — Soft policies and gate-less proposals
+                    // count every voter regardless.
+                    let vote = ConsensusMsg::VoteWithLocality {
+                        slot:     slot.clone(),
+                        ballot,
+                        voter:    ctx.task_ctx.node_id.clone(),
+                        locality: ctx.self_locality.clone(),
                     };
                     ctx.emit(
                         Arc::from(consensus_kind::VOTE),
@@ -677,5 +842,111 @@ pub(crate) async fn run_consensus_listener(
                 ctx.kv_delete(&format!("{}{}", consensus_ns::BALLOT, &*slot));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod topology_tests {
+    use super::*;
+    use crate::locality::LocalityPath;
+
+    fn nid(port: u16) -> NodeId {
+        NodeId::new("127.0.0.1", port).expect("valid loopback NodeId")
+    }
+
+    fn loc(segs: &[&str]) -> LocalityPath {
+        LocalityPath::new(segs.iter().copied())
+    }
+
+    #[test]
+    fn distinct_domains_counts_unique_segments() {
+        let mut voters: AHashMap<NodeId, Option<LocalityPath>> = AHashMap::new();
+        voters.insert(nid(1), Some(loc(&["eu", "az1"])));
+        voters.insert(nid(2), Some(loc(&["eu", "az2"])));
+        voters.insert(nid(3), Some(loc(&["eu", "az1"])));
+        // depth 0 (region): all "eu" → 1 domain
+        assert_eq!(distinct_domains_at_depth(&voters, 0), 1);
+        // depth 1 (az): "az1" + "az2" → 2 domains
+        assert_eq!(distinct_domains_at_depth(&voters, 1), 2);
+        // depth 2 (out of bounds for all): 0 domains
+        assert_eq!(distinct_domains_at_depth(&voters, 2), 0);
+    }
+
+    #[test]
+    fn distinct_domains_ignores_unknown_locality() {
+        let mut voters: AHashMap<NodeId, Option<LocalityPath>> = AHashMap::new();
+        voters.insert(nid(1), Some(loc(&["eu"])));
+        voters.insert(nid(2), None); // legacy Vote, no locality
+        voters.insert(nid(3), Some(loc(&["us"])));
+        assert_eq!(distinct_domains_at_depth(&voters, 0), 2);
+    }
+
+    #[test]
+    fn evaluate_gate_soft_always_passes() {
+        let voters: AHashMap<NodeId, Option<LocalityPath>> = AHashMap::new();
+        let policy = GroupTopologyPolicy {
+            prefer_shared_depth: 0,
+            spread_depth:        Some(1),
+            spread_min_distinct: 3,
+            enforcement:         TopologyEnforcement::Soft,
+        };
+        let (passes, _) = evaluate_topology_gate(&voters, &policy);
+        assert!(passes, "Soft enforcement must never block");
+    }
+
+    #[test]
+    fn evaluate_gate_hard_requires_distinct_domains() {
+        let mut voters: AHashMap<NodeId, Option<LocalityPath>> = AHashMap::new();
+        voters.insert(nid(1), Some(loc(&["eu", "az1"])));
+        voters.insert(nid(2), Some(loc(&["eu", "az1"])));
+        let policy = GroupTopologyPolicy {
+            prefer_shared_depth: 0,
+            spread_depth:        Some(1),
+            spread_min_distinct: 2,
+            enforcement:         TopologyEnforcement::Hard,
+        };
+        let (passes, distinct) = evaluate_topology_gate(&voters, &policy);
+        assert!(!passes, "two voters in the same AZ must fail spread_min_distinct=2");
+        assert_eq!(distinct, 1);
+
+        voters.insert(nid(3), Some(loc(&["eu", "az2"])));
+        let (passes, distinct) = evaluate_topology_gate(&voters, &policy);
+        assert!(passes, "adding a voter in a different AZ should satisfy the gate");
+        assert_eq!(distinct, 2);
+    }
+
+    #[test]
+    fn evaluate_gate_hard_missing_spread_depth_passes() {
+        // Hard with spread_depth = None should never be constructable via
+        // GossipConfig::validate, but if it somehow appears at runtime (hot-reload
+        // bug), the gate falls through to pass rather than stall production.
+        let voters: AHashMap<NodeId, Option<LocalityPath>> = AHashMap::new();
+        let policy = GroupTopologyPolicy {
+            prefer_shared_depth: 0,
+            spread_depth:        None,
+            spread_min_distinct: 2,
+            enforcement:         TopologyEnforcement::Hard,
+        };
+        let (passes, _) = evaluate_topology_gate(&voters, &policy);
+        assert!(passes);
+    }
+
+    #[test]
+    fn evaluate_gate_hard_legacy_vote_doesnt_contribute_diversity() {
+        // A voter with locality: None (sent via legacy ConsensusMsg::Vote on a
+        // mixed-version cluster) cannot contribute to the diversity count.
+        let mut voters: AHashMap<NodeId, Option<LocalityPath>> = AHashMap::new();
+        voters.insert(nid(1), Some(loc(&["eu"])));
+        voters.insert(nid(2), None);
+        voters.insert(nid(3), None);
+        let policy = GroupTopologyPolicy {
+            prefer_shared_depth: 0,
+            spread_depth:        Some(0),
+            spread_min_distinct: 2,
+            enforcement:         TopologyEnforcement::Hard,
+        };
+        let (passes, distinct) = evaluate_topology_gate(&voters, &policy);
+        assert!(!passes);
+        assert_eq!(distinct, 1, "only the EU voter contributes diversity; the two legacy votes do not");
     }
 }

@@ -45,12 +45,20 @@ impl GossipAgent {
         abstain_when_opaque: bool,
         use_trust_slices:    bool,
         max_abstain_ballots: u32,
+        topology_policy:     Option<crate::config::GroupTopologyPolicy>,
     ) -> ConsensusEngine {
+        let self_locality = if self.config.locality_path.is_empty() {
+            None
+        } else {
+            Some(crate::locality::LocalityPath::new(self.config.locality_path.iter().cloned()))
+        };
         ConsensusEngine {
             task_ctx: Arc::clone(&self.task_ctx),
             abstain_when_opaque,
             use_trust_slices,
             max_abstain_ballots,
+            self_locality,
+            topology_policy,
         }
     }
 }

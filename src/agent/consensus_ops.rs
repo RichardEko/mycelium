@@ -209,7 +209,14 @@ impl GossipAgent {
         } else {
             None
         };
-        self.make_consensus_engine(config.abstain_when_opaque, config.use_trust_slices, config.max_abstain_ballots)
+        // Topology policy precedence: config takes precedence; CapabilityGroupDef
+        // KV fallback will be added in Phase 3 when emergent groups land. For now
+        // an absent config entry means no policy (no diversity gate).
+        let topology_policy = self.config.topology_policies.get(group).cloned();
+        self.make_consensus_engine(
+            config.abstain_when_opaque, config.use_trust_slices, config.max_abstain_ballots,
+            topology_policy,
+        )
             .propose(SignalScope::Group(Arc::from(group)), Arc::from(slot), value, quorum, config, opaque_recompute)
             .await
     }
@@ -271,7 +278,10 @@ impl GossipAgent {
         } else {
             None
         };
-        self.make_consensus_engine(config.abstain_when_opaque, config.use_trust_slices, config.max_abstain_ballots)
+        self.make_consensus_engine(
+            config.abstain_when_opaque, config.use_trust_slices, config.max_abstain_ballots,
+            None, // system-wide proposals have no per-group topology policy
+        )
             .propose(SignalScope::System, Arc::from(slot), value, quorum, config, opaque_recompute)
             .await
     }
@@ -295,6 +305,7 @@ impl GossipAgent {
             config.abstain_when_opaque,
             config.use_trust_slices,
             config.max_abstain_ballots,
+            None, // listener emits votes for any group; per-group policy is proposer-side
         );
         self.spawn_task(crate::consensus::run_consensus_listener(engine, cancel_rx, shutdown_rx));
         ConsensusHandle { _cancel: cancel_tx }

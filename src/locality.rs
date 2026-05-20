@@ -11,12 +11,13 @@
 //! [`decode`](LocalityPath::decode).
 
 use bytes::Bytes;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// Hierarchical topology address. Segments run coarse → fine (region → AZ → rack
 /// → host, or whatever the deployment chooses to model). An empty path means
 /// "unspecified" and shares zero prefix with any other path.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) struct LocalityPath {
     pub(crate) segments: Vec<Arc<str>>,
 }
