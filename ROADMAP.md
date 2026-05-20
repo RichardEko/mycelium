@@ -67,14 +67,18 @@ is a guardrail on the path to that.
 │  Prometheus metrics · latency histograms · dropped_frames alerts   │
 ├────────────────────────────────────────────────────────────────────┤
 │  Layer 4: AI Integration                             [Phase 4]     │
-│  MCP server/client bridge · multi-agent coordination               │
-│  Actor supervision trees · conversation-scoped routing             │
-│  Serialisation at need: JSON (MCP) / bincode / protobuf per agent  │
+│  MCP server/client bridge · Python + TypeScript language bridges   │
+│  HTTP gateway sidecar · supervision trees · credential context     │
 ├────────────────────────────────────────────────────────────────────┤
 │  Layer 3: Service Patterns                           [Phase 3]     │
-│  RPC over gossip · Actor/Event mailboxes · bulk HTTP               │
-│  Streaming LLM calls · service routing · connection management     │
-│  Signal carries a ticket; HTTP carries the weight                  │
+│  Embedded HTTP · SSE streaming · rpc_call/rpc_respond              │
+│  invoke.bulk ticket · Actor/Event mailboxes · scatter-gather       │
+├────────────────────────────────────────────────────────────────────┤
+│  Opt-In Consistency & Ordering Overlay               [Planned]     │  ← cross-cutting
+│  consistent_set · consistent_get · distributed_lock · elect_leader │
+│  append · subscribe_log · scan_log · compact_log (ordered log)     │
+│  subscribe_log_group (consumer groups) · emit_reliable             │
+│  shard_for · emit_sharded (cluster sharding)                       │
 ├────────────────────────────────────────────────────────────────────┤
 │  Capability & Discovery Subsystem                    [COMPLETE]    │
 │  advertise_capability · resolve · watch_capabilities               │
@@ -102,6 +106,13 @@ is a guardrail on the path to that.
 │  prefix_index · gossip_shard_fill · shutdown-race protection       │
 └────────────────────────────────────────────────────────────────────┘
 ```
+
+**Design principle — consistency and ordering as opt-in layers, not foundations.**
+Every operation defaults to epidemic (fast, available, zero coordination overhead). You escalate
+to stronger guarantees only for the specific operation that requires them. A node that never calls
+`consistent_set` pays zero overhead for its existence. The same cluster simultaneously supports
+sub-millisecond epidemic signals, causally-ordered log streams, and linearizable writes — different
+operations choosing different guarantees, no separate infrastructure for each tier.
 
 **Fundamental separation of concerns:**
 
@@ -839,6 +850,113 @@ bulk_transfer_bytes{direction}
 
 ---
 
+## Opt-In Consistency and Ordering Overlay (Planned)
+
+The epidemic substrate is always available and always fast. These APIs escalate to stronger
+guarantees only for the specific operation that demands them — nothing in the fast path becomes
+slower or more complex because they exist.
+
+This is **CAP theorem applied selectively, not globally.** Traditional systems pick one position
+and apply it uniformly. Here you choose per operation. The same cluster, the same embedded
+library, with no separate infrastructure.
+
+### Linearizable KV and Coordination — Consul / etcd parity
+
+Built over the existing `ConsensusEngine` (`group_propose`). The gossip KV remains the fast
+path; `consistent_*` operations pay consensus latency only when called.
+
+```rust
+// Consistent write — ConsensusEngine agrees before gossiping the value
+agent.consistent_set("config/feature-flags", value).await?;
+agent.consistent_get("config/feature-flags").await?  // reads the committed value
+
+// Distributed lock — mutual exclusion via consensus; releases on drop
+let _guard = agent.distributed_lock("migration-lock", Duration::from_secs(30)).await?;
+
+// Leader election — thin wrapper over group_propose with a NodeId payload
+let leader: NodeId = agent.elect_leader("worker-group").await?;
+```
+
+**Foundation already exists:** `ConsensusEngine`, `group_propose`, `KV-backed committed slots`.
+Implementation is primarily clean API wrappers over existing machinery.
+
+### Ordered Durable Log — Kafka parity
+
+Append-only namespace keyed by HLC timestamp. The gossip KV handles replication and anti-entropy
+sync to late joiners; the HLC provides causal ordering without a broker.
+
+```rust
+// Append — writes log/{stream}/{hlc} to gossip KV; entries never tombstoned
+agent.append("events/orders", entry_bytes);
+
+// Subscribe from a position — reactive, ordered by HLC key, fires on new entries
+let mut rx: watch::Receiver<Vec<(Hlc, Bytes)>> = agent.subscribe_log("events/orders", since_hlc);
+
+// Range scan — replay a window or from a checkpoint
+let entries = agent.scan_log("events/orders", from_hlc, to_hlc);
+
+// Compaction — tombstones entries older than a watermark
+agent.compact_log("events/orders", before_hlc);
+```
+
+**Consumer groups** — each consumer tracks its position as a KV entry:
+`consumer/{group}/{stream}/offset` = last-processed HLC. `subscribe_log_group` delivers each
+entry to exactly one member; `distributed_lock` or `elect_leader` coordinates claim when needed.
+
+**Foundation already exists:** HLC (hybrid logical clock), gossip KV, prefix scan, tombstone
+mechanism. This is new API surface over existing primitives, not new infrastructure.
+
+### Reliable Delivery — Akka parity
+
+ACK retry over `rpc_call` (Layer 3). The HLC and signal reorder buffer (already designed)
+handle causal ordering and dedup on the receiver side.
+
+```rust
+// Fire-and-forget with ACK — retries until acknowledged or timeout
+let result = agent.emit_reliable(
+    "actor.msg",
+    SignalScope::Individual(target),
+    payload,
+    Duration::from_secs(5),
+).await?;  // → AckResult::Acknowledged | AckResult::Timeout
+```
+
+**Foundation:** `rpc_call` (Layer 3), signal reorder buffer (planned).
+
+### Cluster Sharding — Akka Cluster Sharding parity
+
+Deterministic placement via consistent hash ring over the sorted NodeId space, combined with
+`resolve_with_locality` for topology-awareness. No central shard coordinator.
+
+```rust
+// Deterministic owner for a shard key — consistent across all nodes seeing the same provider set
+let owner: NodeId = agent.shard_for("user-12345", &CapFilter::new("actor", "user"))?;
+
+// Route directly to the consistent-hash owner matching the capability filter
+agent.emit_sharded("actor.msg", "user-12345", &CapFilter::new("actor", "user"), payload).await;
+```
+
+**Foundation:** `resolve_with_locality`, `NodeId` ordering, capability subsystem.
+
+### What Each Competitor Advantage Maps To
+
+| Competitor | Their advantage | Mycelium equivalent | Foundation |
+|---|---|---|---|
+| Consul / etcd | Linearizable KV | `consistent_set` / `consistent_get` | ConsensusEngine ✓ |
+| Consul | Distributed locks | `distributed_lock` | ConsensusEngine ✓ |
+| Consul | Leader election | `elect_leader` | `group_propose` ✓ |
+| Kafka | Ordered log | `append` / `subscribe_log` / `scan_log` | HLC + gossip KV ✓ |
+| Kafka | Consumer groups | `subscribe_log_group` + offset KV | `consistent_set` + capability groups ✓ |
+| Kafka | Log compaction | `compact_log` | tombstone mechanism ✓ |
+| Akka | Reliable delivery | `emit_reliable` | `rpc_call` (Layer 3) |
+| Akka | Cluster sharding | `shard_for` / `emit_sharded` | `resolve_with_locality` + NodeId ✓ |
+
+The key difference: these are **additive**. A node using only epidemic gossip pays zero overhead
+for the existence of these APIs. The consistency and ordering mechanisms are escalation paths
+you call when the operation demands it — not the substrate everything else is built on top of.
+
+---
+
 ## Phase Timeline
 
 ```
@@ -872,6 +990,11 @@ Weeks:  0         2          4          6          8         10        12
 | Layer 4 | Python language bridge: HTTP gateway + `mycelium` SDK | Planned |
 | Layer 4 | TypeScript language bridge | Planned |
 | Layer 5 | Metrics, Prometheus exporter | Planned |
+| Consistency overlay | `consistent_set`, `consistent_get`, `distributed_lock`, `elect_leader` | Planned |
+| Ordering overlay | `append`, `subscribe_log`, `scan_log`, `compact_log` (ordered log) | Planned |
+| Ordering overlay | `subscribe_log_group` + consumer group offset tracking | Planned |
+| Reliable delivery | `emit_reliable` + ACK retry (requires Layer 3 `rpc_call`) | Planned |
+| Cluster sharding | `shard_for`, `emit_sharded` (consistent hash + locality) | Planned |
 
 ---
 
@@ -1017,6 +1140,17 @@ one agent upgrades its format.
 
 **5. NodeId as the only contract address.** No HTTP endpoint to manage, no service registry to
 run. The gossip identity *is* the address.
+
+**6. Consistency and ordering as opt-in layers, not foundations.** Every traditional distributed
+framework picks one position on the CAP triangle and applies it uniformly — Consul/etcd pay Raft
+latency on every read/write; Kafka pays broker coordination on every publish; Akka pays ack
+overhead on every message. Here, the epidemic substrate is the foundation — always available,
+always fast — and you escalate to linearizability (`consistent_set`), ordered logging (`append` /
+`subscribe_log`), reliable delivery (`emit_reliable`), or cluster sharding (`shard_for`) only for
+the specific operations that require it. Most agent-to-agent coordination doesn't need
+linearizability; it needs fast and available. The rare operations that do need it call
+`consistent_set` and pay consensus latency only for that call. Same cluster, same binary, no
+separate infrastructure for each tier.
 
 ### Closest Comparison: NATS.io
 

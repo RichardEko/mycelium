@@ -763,6 +763,22 @@
         </div>
       </div>
       <div class="stack-row">
+        <div class="stack-num" style="background:rgba(255,166,87,0.06);color:var(--accent4);border-right:2px solid var(--accent4);font-size:9px;letter-spacing:0.08em;">Opt-In<br>Overlay</div>
+        <div class="stack-body">
+          <div class="stack-title">Consistency &amp; Ordering Overlay <span class="phase-tag tag-horizon">Planned</span></div>
+          <p class="stack-desc">The epidemic substrate is the default — always available, always fast, zero coordination overhead. This overlay adds opt-in escalation paths for the operations that need stronger guarantees. Linearizable writes (<code>consistent_set</code>), ordered logs (<code>append</code>/<code>subscribe_log</code>), reliable delivery (<code>emit_reliable</code>), and cluster sharding (<code>shard_for</code>) are all built over foundations already in the stack — no new infrastructure. The same cluster simultaneously supports sub-millisecond epidemic signals and linearizable writes; different operations choose different guarantees.</p>
+          <div class="chips">
+            <span class="chip">consistent_set · consistent_get</span>
+            <span class="chip">distributed_lock · elect_leader</span>
+            <span class="chip">append · subscribe_log</span>
+            <span class="chip">scan_log · compact_log</span>
+            <span class="chip">subscribe_log_group (consumer groups)</span>
+            <span class="chip">emit_reliable + ACK retry</span>
+            <span class="chip">shard_for · emit_sharded</span>
+          </div>
+        </div>
+      </div>
+      <div class="stack-row">
         <div class="stack-num" style="background:rgba(57,211,83,0.06);color:var(--accent6);border-right:2px solid var(--accent6);">Cap<br>Layer</div>
         <div class="stack-body">
           <div class="stack-title">Capability &amp; Discovery <span class="phase-tag tag-done">Complete</span></div>
@@ -1281,6 +1297,89 @@ agent.<span class="fn">define_capability_group</span>(
 
 <span class="cmt">// Locality path set in config — coarse to fine</span>
 config.locality_path = <span class="fn">vec!</span>[<span class="str">"az1"</span>.<span class="fn">into</span>(), <span class="str">"rack2"</span>.<span class="fn">into</span>(), <span class="str">"host3"</span>.<span class="fn">into</span>()];</code></pre>
+  </div>
+
+  <!-- ── Opt-In Consistency & Ordering Overlay ── -->
+  <div class="section">
+    <div class="section-head">
+      <h2>Consistency &amp; Ordering — Opt-In Overlay</h2>
+      <span class="phase-tag tag-horizon">Planned</span>
+    </div>
+
+    <p>Traditional distributed frameworks pick one position on the CAP triangle and apply it
+    uniformly. Consul/etcd pay Raft latency on every read/write. Kafka pays broker coordination
+    on every publish. Akka pays ack overhead on every message. This architecture inverts that:
+    the epidemic substrate is the foundation — always available, always fast — and you escalate
+    to stronger guarantees only for the specific operation that demands it.</p>
+
+    <div class="quote-block">
+      <p>Most agent-to-agent coordination doesn't need linearizability — it needs fast and available.
+      The rare operations that do need linearizability call <code>consistent_set</code> and pay
+      consensus latency only for that call. Same cluster, same binary, no separate infrastructure
+      for each tier.</p>
+    </div>
+
+    <div class="three-col">
+      <div class="card c4">
+        <div class="card-title">Linearizable KV &amp; Coordination</div>
+        <div class="card-sub">Consul / etcd parity · over ConsensusEngine</div>
+        <ul>
+          <li><code>consistent_set</code> / <code>consistent_get</code></li>
+          <li><code>distributed_lock</code> — releases on drop</li>
+          <li><code>elect_leader("group")</code> → NodeId</li>
+          <li>Foundation: ConsensusEngine already exists</li>
+        </ul>
+      </div>
+      <div class="card c4">
+        <div class="card-title">Ordered Log</div>
+        <div class="card-sub">Kafka parity · over HLC + gossip KV</div>
+        <ul>
+          <li><code>append(stream, bytes)</code> — HLC-keyed, never tombstoned</li>
+          <li><code>subscribe_log(stream, since_hlc)</code></li>
+          <li><code>scan_log(stream, from, to)</code> — replay</li>
+          <li><code>subscribe_log_group</code> — consumer groups</li>
+          <li>Foundation: HLC + gossip KV already exist</li>
+        </ul>
+      </div>
+      <div class="card c4">
+        <div class="card-title">Reliable Delivery &amp; Sharding</div>
+        <div class="card-sub">Akka parity · over rpc_call + locality</div>
+        <ul>
+          <li><code>emit_reliable</code> — ACK retry until acknowledged</li>
+          <li><code>shard_for(key, filter)</code> → NodeId owner</li>
+          <li><code>emit_sharded</code> — routes to hash-ring owner</li>
+          <li>Foundation: rpc_call (Layer 3), resolve_with_locality</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3>What Each Competitor Advantage Maps To</h3>
+    <table class="compare">
+      <thead><tr><th>Competitor advantage</th><th>Mycelium equivalent</th><th>Foundation</th></tr></thead>
+      <tbody>
+        <tr><td>Consul: linearizable KV</td><td><code>consistent_set</code> / <code>consistent_get</code></td><td>ConsensusEngine ✓</td></tr>
+        <tr><td>Consul: distributed locks</td><td><code>distributed_lock</code></td><td>ConsensusEngine ✓</td></tr>
+        <tr><td>Consul: leader election</td><td><code>elect_leader</code></td><td><code>group_propose</code> ✓</td></tr>
+        <tr><td>Kafka: ordered log</td><td><code>append</code> / <code>subscribe_log</code> / <code>scan_log</code></td><td>HLC + gossip KV ✓</td></tr>
+        <tr><td>Kafka: consumer groups</td><td><code>subscribe_log_group</code> + offset KV</td><td><code>consistent_set</code> + capability groups ✓</td></tr>
+        <tr><td>Kafka: log compaction</td><td><code>compact_log</code></td><td>tombstone mechanism ✓</td></tr>
+        <tr><td>Akka: reliable delivery</td><td><code>emit_reliable</code></td><td><code>rpc_call</code> (Layer 3)</td></tr>
+        <tr><td>Akka: cluster sharding</td><td><code>shard_for</code> / <code>emit_sharded</code></td><td><code>resolve_with_locality</code> + NodeId ✓</td></tr>
+      </tbody>
+    </table>
+
+<pre><code><span class="cmt">// Three consistency tiers in the same cluster — no separate infrastructure</span>
+
+<span class="cmt">// Tier 1: epidemic (default) — sub-millisecond, zero coordination</span>
+agent.<span class="fn">set</span>(<span class="str">"load/my-node"</span>, encode(&amp;state));  <span class="cmt">// always this fast</span>
+
+<span class="cmt">// Tier 2: ordered log — causal ordering via HLC, anti-entropy synced</span>
+agent.<span class="fn">append</span>(<span class="str">"events/orders"</span>, encode(&amp;order));
+<span class="kw">let mut</span> rx = agent.<span class="fn">subscribe_log</span>(<span class="str">"events/orders"</span>, since_hlc);
+
+<span class="cmt">// Tier 3: linearizable — consensus latency only for this call</span>
+agent.<span class="fn">consistent_set</span>(<span class="str">"config/feature-flags"</span>, flags).<span class="kw">await</span>?;
+<span class="kw">let</span> _guard = agent.<span class="fn">distributed_lock</span>(<span class="str">"migration"</span>, timeout).<span class="kw">await</span>?;</code></pre>
   </div>
 
   <!-- ── Converging on a Reactive Capability Cell ── -->
