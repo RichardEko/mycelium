@@ -102,6 +102,11 @@ struct AppState {
     last_caller_pos:     Mutex<i64>,
     last_provider_pos:   Mutex<i64>,
     auto_call_idx:       AtomicU64,
+    /// Incremented at call *start*; used with `last_display_seq` to ensure the
+    /// most-recently-initiated call always wins the display state, even when an
+    /// older concurrent call finishes later.
+    call_seq:            AtomicU64,
+    last_display_seq:    AtomicU64,
 }
 
 // ── Tool handlers ─────────────────────────────────────────────────────────────
@@ -271,7 +276,12 @@ fn sample_args(tool: &str) -> serde_json::Value {
 
 // ── Call tool ─────────────────────────────────────────────────────────────────
 
-async fn call_tool(app: &AppState, tool_name: &str, args: serde_json::Value) -> Result<serde_json::Value, String> {
+/// Returns `(result, caller_pos, provider_pos)`.
+/// Does NOT write to any AppState display fields — the caller owns that update
+/// so it can apply seq-based priority ordering.
+async fn call_tool(app: &AppState, tool_name: &str, args: serde_json::Value)
+    -> Result<(serde_json::Value, i64, i64), String>
+{
     let live: Vec<(u16, Arc<GossipAgent>)> = {
         let nodes = app.nodes.read().unwrap();
         nodes.iter()
@@ -295,13 +305,12 @@ async fn call_tool(app: &AppState, tool_name: &str, args: serde_json::Value) -> 
         .map_err(|e| format!("bad provider id '{provider_str}': {e}"))?;
     let provider_port = provider.to_socket_addr().port();
 
-    {
+    let (caller_pos, provider_pos) = {
         let nodes = app.nodes.read().unwrap();
         let cp = nodes.iter().position(|s| s.port == caller_port)   .map(|i| i as i64).unwrap_or(-1);
         let pp = nodes.iter().position(|s| s.port == provider_port) .map(|i| i as i64).unwrap_or(-1);
-        *app.last_caller_pos.lock().unwrap()   = cp;
-        *app.last_provider_pos.lock().unwrap() = pp;
-    }
+        (cp, pp)
+    };
 
     let rpc_req = json!({ "jsonrpc":"2.0","id":1,"method":"tools/call",
                            "params":{"name":tool_name,"arguments":args} });
@@ -320,7 +329,7 @@ async fn call_tool(app: &AppState, tool_name: &str, args: serde_json::Value) -> 
             slot.call_count.fetch_add(1, Ordering::Relaxed);
         }
     }
-    Ok(resp["result"].clone())
+    Ok((resp["result"].clone(), caller_pos, provider_pos))
 }
 
 // ── State JSON ────────────────────────────────────────────────────────────────
@@ -508,15 +517,26 @@ async fn serve_http(app: Arc<AppState>) {
             if req.starts_with("POST /call") {
                 let tool = parse_query_param(req, "tool").unwrap_or_default();
                 if tool.is_empty() { respond!(b""); }
+                // Claim a sequence number *before* the async call so this
+                // manual click always beats any auto-call that started earlier.
+                let my_seq = app.call_seq.fetch_add(1, Ordering::SeqCst);
                 let result = call_tool(&app, &tool, sample_args(&tool)).await;
                 app.total_calls.fetch_add(1, Ordering::Relaxed);
-                app.last_call_ms.store(now_ms(), Ordering::Relaxed);
-                *app.last_call_tool.lock().unwrap() = tool.clone();
-                let body = match result {
-                    Ok(v)  => v.to_string(),
-                    Err(e) => { app.call_errors.fetch_add(1, Ordering::Relaxed); json!({"error":e}).to_string() },
+                let (body, cp, pp) = match result {
+                    Ok((v, cp, pp)) => (v.to_string(), cp, pp),
+                    Err(e) => {
+                        app.call_errors.fetch_add(1, Ordering::Relaxed);
+                        (json!({"error":e}).to_string(), -1i64, -1i64)
+                    },
                 };
-                *app.last_call_result.lock().unwrap() = body.clone();
+                // Only update the display state if no newer call was initiated.
+                if app.last_display_seq.fetch_max(my_seq, Ordering::SeqCst) <= my_seq {
+                    app.last_call_ms.store(now_ms(), Ordering::Relaxed);
+                    *app.last_call_tool.lock().unwrap()    = tool.clone();
+                    *app.last_call_result.lock().unwrap()  = body.clone();
+                    *app.last_caller_pos.lock().unwrap()   = cp;
+                    *app.last_provider_pos.lock().unwrap() = pp;
+                }
                 respond_json!(body);
             }
 
@@ -659,6 +679,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         last_caller_pos:   Mutex::new(-1),
         last_provider_pos: Mutex::new(-1),
         auto_call_idx:     AtomicU64::new(0),
+        call_seq:          AtomicU64::new(0),
+        last_display_seq:  AtomicU64::new(0),
     });
 
     tokio::spawn(serve_http(app.clone()));
@@ -676,17 +698,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let args = sample_args(tool);
             let app2 = auto_app.clone();
             let tool_owned = tool.to_string();
+            // Claim seq before spawn so the ordering is deterministic.
+            let my_seq = auto_app.call_seq.fetch_add(1, Ordering::SeqCst);
             tokio::spawn(async move {
                 let result = call_tool(&app2, &tool_owned, args).await;
                 app2.total_calls.fetch_add(1, Ordering::Relaxed);
-                app2.last_call_ms.store(now_ms(), Ordering::Relaxed);
-                *app2.last_call_tool.lock().unwrap() = tool_owned.clone();
-                match result {
-                    Ok(v)  => *app2.last_call_result.lock().unwrap() = v.to_string(),
+                let (body, cp, pp) = match result {
+                    Ok((v, cp, pp)) => (v.to_string(), cp, pp),
                     Err(e) => {
                         app2.call_errors.fetch_add(1, Ordering::Relaxed);
-                        *app2.last_call_result.lock().unwrap() = json!({"error":e}).to_string();
-                    }
+                        (json!({"error":e}).to_string(), -1i64, -1i64)
+                    },
+                };
+                if app2.last_display_seq.fetch_max(my_seq, Ordering::SeqCst) <= my_seq {
+                    app2.last_call_ms.store(now_ms(), Ordering::Relaxed);
+                    *app2.last_call_tool.lock().unwrap()    = tool_owned.clone();
+                    *app2.last_call_result.lock().unwrap()  = body;
+                    *app2.last_caller_pos.lock().unwrap()   = cp;
+                    *app2.last_provider_pos.lock().unwrap() = pp;
                 }
             });
         }
