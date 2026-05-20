@@ -460,12 +460,14 @@ async fn serve_http(app: Arc<AppState>) {
                 let idx = parse_node_idx(req);
                 if let Some(i) = idx {
                     let slot = &app.nodes[i];
-                    // Drop handles first (tombstones KV), then shut down agent.
+                    // Drop handles first (tombstones KV), then await shutdown so the
+                    // TCP port is fully released before we respond. Without await the
+                    // port may still be bound when restart fires.
                     slot.handles.lock().unwrap().clear();
                     let agent = slot.agent.lock().unwrap().take();
                     slot.alive.store(false, Ordering::Relaxed);
                     if let Some(a) = agent {
-                        tokio::spawn(async move { a.shutdown().await; });
+                        a.shutdown().await;
                     }
                 }
                 let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\nok").await;
@@ -478,15 +480,27 @@ async fn serve_http(app: Arc<AppState>) {
                 if let Some(i) = idx {
                     let app2 = app.clone();
                     tokio::spawn(async move {
-                        // Brief delay so any in-flight tombstones propagate first.
-                        time::sleep(Duration::from_millis(500)).await;
                         let slot = &app2.nodes[i];
                         let agent = build_agent(i);
-                        if agent.start().await.is_ok() {
+                        // Retry start up to 5 times — the OS may keep the port in
+                        // TIME_WAIT briefly even after shutdown completes.
+                        let mut started = false;
+                        for attempt in 0..5u32 {
+                            if attempt > 0 {
+                                time::sleep(Duration::from_millis(300)).await;
+                            }
+                            match agent.start().await {
+                                Ok(()) => { started = true; break; }
+                                Err(e) => eprintln!("restart node-{i} attempt {attempt}: {e}"),
+                            }
+                        }
+                        if started {
                             let handles = register_tools(&agent, i);
                             *slot.agent.lock().unwrap()   = Some(agent);
                             *slot.handles.lock().unwrap() = handles;
                             slot.alive.store(true, Ordering::Relaxed);
+                        } else {
+                            eprintln!("restart node-{i}: failed after 5 attempts");
                         }
                     });
                 }
