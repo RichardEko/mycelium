@@ -36,9 +36,20 @@ impl GossipAgent {
     pub fn watch_demand(&self, filter: CapFilter) -> watch::Receiver<DemandStatus> {
         let initial         = demand_snapshot(&self.kv_state, &filter);
         let (tx, rx)        = watch::channel(initial);
-        let mut req_rx      = self.subscribe_prefix(Arc::<str>::from("req/"));
-        let mut cap_rx      = self.subscribe_prefix(Arc::<str>::from("cap/"));
-        let mut gcap_rx     = self.subscribe_prefix(Arc::<str>::from("gcap/"));
+        // C1: narrow all three watchers to this filter's (ns, name). req/ and
+        // cap/ keys end in /{ns}/{name}; gcap/{group}/{ns}/{name}/{contributor}
+        // contains /{ns}/{name}/ as a substring.
+        let needle_endswith = format!("/{}/{}",  filter.namespace, filter.name);
+        let needle_contains = format!("/{}/{}/", filter.namespace, filter.name);
+        let req_needle  = needle_endswith.clone();
+        let cap_needle  = needle_endswith;
+        let gcap_needle = needle_contains;
+        let mut req_rx  = self.subscribe_prefix_with_predicate(
+            Arc::<str>::from("req/"),  move |k| k.ends_with(&req_needle));
+        let mut cap_rx  = self.subscribe_prefix_with_predicate(
+            Arc::<str>::from("cap/"),  move |k| k.ends_with(&cap_needle));
+        let mut gcap_rx = self.subscribe_prefix_with_predicate(
+            Arc::<str>::from("gcap/"), move |k| k.contains(&gcap_needle));
         let mut shutdown_rx = self.shutdown_tx.subscribe();
         let kv_state        = Arc::clone(&self.kv_state);
         self.spawn_task(async move {

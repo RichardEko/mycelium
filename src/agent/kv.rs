@@ -196,6 +196,42 @@ impl GossipAgent {
         }
     }
 
+    /// Per-subscriber variant of [`subscribe_prefix`](Self::subscribe_prefix)
+    /// that only fires when both the prefix matches AND `predicate(&key)`
+    /// returns `true`.
+    ///
+    /// Two semantic differences from `subscribe_prefix`:
+    /// 1. No sharing: every call returns a new sender. Two callers with
+    ///    identical predicates each get an independent receiver.
+    /// 2. Per-call cost in `apply_and_notify`: the predicate is invoked once
+    ///    per registered entry whose prefix matches the changed key. Keep the
+    ///    predicate cheap — a few `str` comparisons, not allocations.
+    ///
+    /// Use this when a watcher only cares about a narrow slice of a busy
+    /// prefix (e.g. `cap/` with traffic across many `(ns, name)` pairs but
+    /// the watcher only reacts to one). Cuts wake-up amplification.
+    #[must_use]
+    pub fn subscribe_prefix_with_predicate<P, F>(
+        &self,
+        prefix:    P,
+        predicate: F,
+    ) -> watch::Receiver<u64>
+    where
+        P: Into<Arc<str>>,
+        F: Fn(&str) -> bool + Send + Sync + 'static,
+    {
+        let prefix_arc: Arc<str> = prefix.into();
+        let (tx, rx)             = watch::channel(0u64);
+        let entry = crate::store::PrefixPredicateWatcher {
+            prefix:    prefix_arc,
+            predicate: Arc::new(predicate),
+            tx:        Arc::new(tx),
+        };
+        let id = self.kv_state.next_pred_watcher_id.fetch_add(1, Ordering::Relaxed);
+        self.kv_state.prefix_predicate_watchers.pin().insert(id, entry);
+        rx
+    }
+
     /// Subscribes to changes for `key`.
     ///
     /// `key` accepts `&str`, `Arc<str>`, or anything that converts to `Arc<str>`.

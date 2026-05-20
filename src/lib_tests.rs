@@ -113,8 +113,10 @@ fn spawn_handler(
             dropped_frames:    Arc::new(AtomicU64::new(0)),
             max_store_entries: 0,
             grp_generation:    Arc::new(AtomicU64::new(0)),
-            prefix_watchers:   Arc::new(papaya::HashMap::new()),
-            peer_localities:   Arc::new(papaya::HashMap::new()),
+            prefix_watchers:           Arc::new(papaya::HashMap::new()),
+            prefix_predicate_watchers: Arc::new(papaya::HashMap::new()),
+            next_pred_watcher_id:      Arc::new(AtomicU64::new(0)),
+            peer_localities:           Arc::new(papaya::HashMap::new()),
         }),
     };
     let handle = tokio::spawn(handle_connection(
@@ -671,6 +673,29 @@ fn test_keys_empty_on_new_agent() {
 // ── subscribe() ───────────────────────────────────────────────────────────
 
 #[tokio::test]
+async fn test_subscribe_prefix_with_predicate_skips_non_matching_keys() {
+    let agent = make_agent();
+    // Predicate fires only for keys ending in "/compute/gpu".
+    let mut rx = agent.subscribe_prefix_with_predicate(
+        Arc::<str>::from("cap/"),
+        |k: &str| k.ends_with("/compute/gpu"),
+    );
+    let mark = *rx.borrow();
+    // Write under cap/ but not matching predicate.
+    let _ = agent.set("cap/127.0.0.1:1/storage/disk", b"x".to_vec());
+    // Give the notifier a tick; the receiver should NOT have advanced.
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(*rx.borrow(), mark, "predicate must suppress non-matching keys");
+    // Write a key that matches.
+    let _ = agent.set("cap/127.0.0.1:1/compute/gpu", b"y".to_vec());
+    tokio::time::timeout(Duration::from_millis(100), rx.changed())
+        .await
+        .expect("predicate-matching write should fire within 100 ms")
+        .unwrap();
+    assert_ne!(*rx.borrow(), mark, "counter must advance after matching write");
+}
+
+#[tokio::test]
 async fn test_subscribe_initial_value_absent() {
     let agent = make_agent();
     let rx = agent.subscribe("missing");
@@ -761,8 +786,10 @@ async fn test_subscribe_notified_via_gossip() {
                 dropped_frames:    Arc::new(AtomicU64::new(0)),
                 max_store_entries: 0,
                 grp_generation:    Arc::new(AtomicU64::new(0)),
-                prefix_watchers:   Arc::new(papaya::HashMap::new()),
-                peer_localities:   Arc::new(papaya::HashMap::new()),
+                prefix_watchers:           Arc::new(papaya::HashMap::new()),
+                prefix_predicate_watchers: Arc::new(papaya::HashMap::new()),
+                next_pred_watcher_id:      Arc::new(AtomicU64::new(0)),
+                peer_localities:           Arc::new(papaya::HashMap::new()),
             }),
         };
         use crate::connection::handle_connection;

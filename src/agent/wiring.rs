@@ -101,8 +101,15 @@ impl GossipAgent {
     pub fn watch_wiring(&self, filter: CapFilter) -> watch::Receiver<WiringStatus> {
         let initial         = wiring_snapshot(&self.kv_state, &filter);
         let (tx, rx)        = watch::channel(initial);
-        let mut cap_rx      = self.subscribe_prefix(Arc::<str>::from("cap/"));
-        let mut gcap_rx     = self.subscribe_prefix(Arc::<str>::from("gcap/"));
+        // C1: narrow both watchers to this filter's (ns, name). cap/ keys end
+        // in /{ns}/{name}; gcap/ keys (cf. gcap/{group}/{ns}/{name}/{contributor})
+        // contain /{ns}/{name}/ as a substring.
+        let cap_needle  = format!("/{}/{}",  filter.namespace, filter.name);
+        let gcap_needle = format!("/{}/{}/", filter.namespace, filter.name);
+        let mut cap_rx  = self.subscribe_prefix_with_predicate(
+            Arc::<str>::from("cap/"),  move |k| k.ends_with(&cap_needle));
+        let mut gcap_rx = self.subscribe_prefix_with_predicate(
+            Arc::<str>::from("gcap/"), move |k| k.contains(&gcap_needle));
         let mut shutdown_rx = self.shutdown_tx.subscribe();
         let kv_state        = Arc::clone(&self.kv_state);
         self.spawn_task(async move {

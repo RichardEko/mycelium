@@ -44,10 +44,27 @@ pub(crate) struct KvState {
     /// for any registered prefix that matches a changed key. Watchers use `changed().await`
     /// rather than polling. Created lazily via `GossipAgent::subscribe_prefix`.
     pub prefix_watchers: Arc<papaya::HashMap<Arc<str>, Arc<watch::Sender<u64>>>>,
+    /// Per-subscriber prefix watch channels with per-entry predicates.
+    /// `apply_and_notify` wakes an entry only if `update.key.starts_with(prefix)`
+    /// AND `predicate(&update.key)` returns `true`. Keyed by a monotonic id
+    /// allocated from [`KvState::next_pred_watcher_id`]; one entry per
+    /// registration (no sharing).
+    pub prefix_predicate_watchers: Arc<papaya::HashMap<u64, PrefixPredicateWatcher>>,
+    /// Monotonic id allocator for [`KvState::prefix_predicate_watchers`].
+    pub next_pred_watcher_id: Arc<AtomicU64>,
     /// Cache of peer `LocalityPath`s populated by `apply_and_notify` from
     /// `cap/{node_id}/locality/self` writes. Used on hot gossip-forwarding paths
     /// (locality-aware fan-out scoring) without re-decoding the KV entry per message.
     pub peer_localities: Arc<papaya::HashMap<NodeId, LocalityPath>>,
+}
+
+/// One per-subscriber predicate registration in [`KvState::prefix_predicate_watchers`].
+/// `prefix` gates the cheap `starts_with` first; `predicate` runs only when the
+/// prefix matches and is allowed to be more expensive.
+pub struct PrefixPredicateWatcher {
+    pub prefix:    Arc<str>,
+    pub predicate: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+    pub tx:        Arc<watch::Sender<u64>>,
 }
 
 impl KvState {
@@ -64,8 +81,10 @@ impl KvState {
             dropped_frames:    Arc::new(AtomicU64::new(0)),
             max_store_entries,
             grp_generation:    Arc::new(AtomicU64::new(0)),
-            prefix_watchers:   Arc::new(papaya::HashMap::new()),
-            peer_localities:   Arc::new(papaya::HashMap::new()),
+            prefix_watchers:           Arc::new(papaya::HashMap::new()),
+            prefix_predicate_watchers: Arc::new(papaya::HashMap::new()),
+            next_pred_watcher_id:      Arc::new(AtomicU64::new(0)),
+            peer_localities:           Arc::new(papaya::HashMap::new()),
         })
     }
 }
@@ -399,6 +418,25 @@ pub(crate) fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
         for p in to_evict {
             prefix_guard.compute(p, |existing| match existing {
                 Some((_, tx)) if tx.is_closed() => Operation::Remove,
+                _ => Operation::Abort(()),
+            });
+        }
+        // Notify per-subscriber predicate watchers. starts_with is the cheap
+        // gate; predicate is run only when the prefix matches.
+        let pred_guard = kv.prefix_predicate_watchers.pin();
+        let mut pred_evict: Vec<u64> = Vec::new();
+        for (id, w) in pred_guard.iter() {
+            if w.tx.is_closed() {
+                pred_evict.push(*id);
+                continue;
+            }
+            if update.key.starts_with(w.prefix.as_ref()) && (w.predicate)(&update.key) {
+                w.tx.send_modify(|n| *n = n.wrapping_add(1));
+            }
+        }
+        for id in pred_evict {
+            pred_guard.compute(id, |existing| match existing {
+                Some((_, w)) if w.tx.is_closed() => Operation::Remove,
                 _ => Operation::Abort(()),
             });
         }

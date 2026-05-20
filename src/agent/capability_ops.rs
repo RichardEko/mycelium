@@ -138,7 +138,15 @@ impl GossipAgent {
     /// drains the queue.
     pub fn watch_capabilities(&self, filter: CapFilter) -> mpsc::Receiver<CapabilityEvent> {
         let (tx, rx) = mpsc::channel::<CapabilityEvent>(64);
-        let mut prefix_rx = self.subscribe_prefix(Arc::<str>::from("cap/"));
+        // C1: narrow the cap/ prefix watcher to (namespace, name) of this
+        // filter. cap/{node}/{ns}/{name} — predicate fires only when the
+        // changed key ends in /{ns}/{name}. False positives are still
+        // re-screened by the post-debounce reconcile.
+        let needle = format!("/{}/{}", filter.namespace, filter.name);
+        let mut prefix_rx = self.subscribe_prefix_with_predicate(
+            Arc::<str>::from("cap/"),
+            move |k| k.ends_with(&needle),
+        );
         let kv_state = Arc::clone(&self.kv_state);
         let mut shutdown_rx = self.shutdown_tx.subscribe();
 
@@ -280,7 +288,12 @@ impl GossipAgent {
             RequirementStatus::Satisfied { providers: initial }
         };
         let (tx, rx) = watch::channel(initial_status);
-        let mut prefix_rx = self.subscribe_prefix(Arc::<str>::from("cap/"));
+        // C1: narrow the cap/ prefix watcher to this filter's (ns, name).
+        let needle = format!("/{}/{}", filter.namespace, filter.name);
+        let mut prefix_rx = self.subscribe_prefix_with_predicate(
+            Arc::<str>::from("cap/"),
+            move |k| k.ends_with(&needle),
+        );
         let kv_state = Arc::clone(&self.kv_state);
         let mut shutdown_rx = self.shutdown_tx.subscribe();
         self.spawn_task(async move {
