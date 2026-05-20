@@ -285,16 +285,18 @@ impl GossipAgent {
         // per-handle persist tasks already tombstone individual keys on drop,
         // but the agent may shut down before user handles are dropped — the
         // sweep here is a safety net.
-        let cap_prefix      = format!("cap/{}/",       self.node_id);
-        let req_prefix      = format!("req/{}/",       self.node_id);
-        let req_load_prefix = format!("sys/load/{}/req/", self.node_id);
+        let cap_prefix            = format!("cap/{}/",             self.node_id);
+        let req_prefix            = format!("req/{}/",             self.node_id);
+        let req_load_prefix       = format!("sys/load/{}/req/",       self.node_id);
+        let group_req_load_prefix = format!("sys/load/{}/group-req/", self.node_id);
         let agent_owned_keys: Vec<String> = self.kv_state.store.pin()
             .iter()
             .filter(|(k, v)| {
                 v.data.is_some() && (
                     k.starts_with(&*cap_prefix) ||
                     k.starts_with(&*req_prefix) ||
-                    k.starts_with(&*req_load_prefix)
+                    k.starts_with(&*req_load_prefix) ||
+                    k.starts_with(&*group_req_load_prefix)
                 )
             })
             .map(|(k, _)| k.to_string())
