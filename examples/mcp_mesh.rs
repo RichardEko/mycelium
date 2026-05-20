@@ -5,10 +5,11 @@
 //! see load-balancing, kill providers to watch failover, and restart them to
 //! see the mesh self-heal — all with zero reconfiguration.
 //!
-//! Initial topology (ports 55000–55002):
+//! Initial topology (ports 55000–55003):
 //!   node-0 · 55000 — weather, ping
 //!   node-1 · 55001 — search, calculate
 //!   node-2 · 55002 — translate, summarize
+//!   node-3 · 55003 — calculate          ← duplicate; balancing visible immediately
 //!
 //! Run:
 //!   cargo run --example mcp_mesh
@@ -49,11 +50,13 @@ const VALID_TOOLS: &[&str] = &[
     "weather", "ping", "search", "calculate", "translate", "summarize",
 ];
 
-/// Initial 3-node topology.
+/// Initial topology — 4 nodes. node-1 and node-3 both provide "calculate"
+/// so load-balancing arcs are visible from the first auto-cycle.
 const INITIAL: &[&[&str]] = &[
     &["weather", "ping"],
     &["search", "calculate"],
     &["translate", "summarize"],
+    &["calculate"],
 ];
 
 fn now_ms() -> u64 {
