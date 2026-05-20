@@ -9,11 +9,11 @@ use crate::capability::{Capability, CapFilter, DemandStatus};
 use crate::node_id::NodeId;
 use ahash::AHashSet;
 use std::sync::Arc;
-use tokio::sync::watch;
+use tokio::{sync::watch, time};
 use tracing::warn;
 
 use super::GossipAgent;
-use super::capability_ops::{await_shutdown, parse_cap_key_or_warn, scan_prefix_kv};
+use super::capability_ops::{await_shutdown, parse_cap_key_or_warn, scan_prefix_kv, WATCHER_DEBOUNCE_WINDOW};
 use super::wiring::parse_gcap_key;
 
 impl GossipAgent {
@@ -48,6 +48,17 @@ impl GossipAgent {
                     r = req_rx.changed()  => { if r.is_err() { return; } }
                     r = cap_rx.changed()  => { if r.is_err() { return; } }
                     r = gcap_rx.changed() => { if r.is_err() { return; } }
+                }
+                // Debounce burst writes: drain further fires for the next
+                // WATCHER_DEBOUNCE_WINDOW before computing a new snapshot.
+                let deadline = time::Instant::now() + WATCHER_DEBOUNCE_WINDOW;
+                loop {
+                    tokio::select! { biased;
+                        _ = time::sleep_until(deadline) => break,
+                        r = req_rx.changed()  => { if r.is_err() { return; } }
+                        r = cap_rx.changed()  => { if r.is_err() { return; } }
+                        r = gcap_rx.changed() => { if r.is_err() { return; } }
+                    }
                 }
                 let next = demand_snapshot(&kv_state, &filter);
                 let unchanged = { *tx.borrow() == next };

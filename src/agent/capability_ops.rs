@@ -26,7 +26,7 @@ use crate::signal::{LoadState, encode_load_state};
 use ahash::AHashMap;
 use bytes::Bytes;
 use std::{sync::Arc, time::Duration};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::{sync::{mpsc, oneshot, watch}, time};
 use tracing::warn;
 
 use super::{GossipAgent, TaskCtx};
@@ -42,6 +42,19 @@ pub(super) async fn await_shutdown(rx: &mut watch::Receiver<bool>) {
         if rx.changed().await.is_err() { return; }
     }
 }
+
+/// Idle window after the first prefix-watcher fire before a watcher runs its
+/// reaction. Anti-entropy sync, partition heal, bulk-config push, and any
+/// other burst of writes within this window are coalesced into one reaction
+/// instead of N. 50 ms is a deliberate trade-off: small enough that single
+/// writes still feel snappy (interactive operations stay sub-100 ms
+/// end-to-end), large enough to cover typical kernel-level batching and
+/// tokio scheduler granularity.
+///
+/// Used by every watcher that follows the "wait → reconcile" pattern:
+/// `watch_capabilities`, `watch_requirement`, `watch_wiring`, `watch_demand`,
+/// `watch_capability_group_definitions`, and the opacity watcher.
+pub(super) const WATCHER_DEBOUNCE_WINDOW: Duration = Duration::from_millis(50);
 
 /// Like `parse_cap_key` but emits a `warn!` on the unhappy path. Use at scan
 /// sites where a malformed key is genuinely surprising (we only scan prefixes
@@ -150,6 +163,15 @@ impl GossipAgent {
                     _ = await_shutdown(&mut shutdown_rx) => return,
                     changed = prefix_rx.changed() => {
                         if changed.is_err() { return; }
+                        // Coalesce burst writes within WATCHER_DEBOUNCE_WINDOW
+                        // into a single reconcile pass.
+                        let deadline = time::Instant::now() + WATCHER_DEBOUNCE_WINDOW;
+                        loop {
+                            tokio::select! { biased;
+                                _ = time::sleep_until(deadline) => break,
+                                r = prefix_rx.changed() => { if r.is_err() { return; } }
+                            }
+                        }
                         // Re-scan and diff against `known`.
                         let mut current: AHashMap<(NodeId, Arc<str>, Arc<str>), Capability> = AHashMap::new();
                         for (key, bytes) in scan_prefix_kv(&kv_state, "cap/") {
@@ -267,6 +289,15 @@ impl GossipAgent {
                     _ = await_shutdown(&mut shutdown_rx) => return,
                     changed = prefix_rx.changed() => {
                         if changed.is_err() { return; }
+                        // Coalesce burst writes within WATCHER_DEBOUNCE_WINDOW
+                        // into a single status recompute.
+                        let deadline = time::Instant::now() + WATCHER_DEBOUNCE_WINDOW;
+                        loop {
+                            tokio::select! { biased;
+                                _ = time::sleep_until(deadline) => break,
+                                r = prefix_rx.changed() => { if r.is_err() { return; } }
+                            }
+                        }
                         let providers = resolve_filter_against_kv(&kv_state, &filter);
                         let status = if providers.is_empty() {
                             RequirementStatus::Unsatisfied { filter: filter.clone() }

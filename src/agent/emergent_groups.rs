@@ -21,11 +21,15 @@ use crate::node_id::NodeId;
 use ahash::{AHashMap, AHashSet};
 use bytes::Bytes;
 use std::{sync::Arc, time::Duration};
-use tokio::sync::{oneshot, watch};
+use tokio::{sync::{oneshot, watch}, time};
 use tracing::warn;
 
 use super::{GossipAgent, TaskCtx};
-use super::capability_ops::{await_shutdown, scan_prefix_kv, OpacityEvaluator, run_filter_opacity_watcher};
+use super::capability_ops::{
+    await_shutdown, scan_prefix_kv,
+    OpacityEvaluator, run_filter_opacity_watcher,
+    WATCHER_DEBOUNCE_WINDOW,
+};
 use super::kv::{run_kv_persist_task, PersistPayloadFn};
 
 impl GossipAgent {
@@ -109,18 +113,24 @@ pub(crate) async fn watch_capability_group_definitions(
     // Initial reconciliation in case definitions or own caps already exist.
     reconcile_emergent_groups(&ctx, &own_node_id, &shutdown_rx, &mut joined);
 
-    loop {
+    'outer: loop {
         tokio::select! { biased;
-            _ = await_shutdown(&mut shutdown_rx) => break,
-            r = def_rx.changed() => {
-                if r.is_err() { break; }
-                reconcile_emergent_groups(&ctx, &own_node_id, &shutdown_rx, &mut joined);
-            }
-            r = own_rx.changed() => {
-                if r.is_err() { break; }
-                reconcile_emergent_groups(&ctx, &own_node_id, &shutdown_rx, &mut joined);
+            _ = await_shutdown(&mut shutdown_rx) => break 'outer,
+            r = def_rx.changed() => { if r.is_err() { break 'outer; } }
+            r = own_rx.changed() => { if r.is_err() { break 'outer; } }
+        }
+        // Coalesce burst writes (anti-entropy sync, bulk cap-group push)
+        // into a single reconcile pass. See WATCHER_DEBOUNCE_WINDOW.
+        let deadline = time::Instant::now() + WATCHER_DEBOUNCE_WINDOW;
+        loop {
+            tokio::select! { biased;
+                _ = await_shutdown(&mut shutdown_rx) => break 'outer,
+                _ = time::sleep_until(deadline) => break,
+                r = def_rx.changed() => { if r.is_err() { break 'outer; } }
+                r = own_rx.changed() => { if r.is_err() { break 'outer; } }
             }
         }
+        reconcile_emergent_groups(&ctx, &own_node_id, &shutdown_rx, &mut joined);
     }
 
     // Best-effort: tombstone any memberships we hold so peers see us leave

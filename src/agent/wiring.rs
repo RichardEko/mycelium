@@ -18,11 +18,11 @@ use crate::node_id::NodeId;
 use ahash::AHashMap;
 use bytes::Bytes;
 use std::sync::Arc;
-use tokio::sync::watch;
+use tokio::{sync::watch, time};
 use tracing::warn;
 
 use super::GossipAgent;
-use super::capability_ops::{await_shutdown, parse_cap_key_or_warn, scan_prefix_kv};
+use super::capability_ops::{await_shutdown, parse_cap_key_or_warn, scan_prefix_kv, WATCHER_DEBOUNCE_WINDOW};
 
 impl GossipAgent {
     /// Snapshot scan of provider groups (via `gcap/`) and standalone nodes
@@ -112,8 +112,18 @@ impl GossipAgent {
                     r = cap_rx.changed()  => { if r.is_err() { return; } }
                     r = gcap_rx.changed() => { if r.is_err() { return; } }
                 }
+                // Coalesce burst writes (anti-entropy sync, partition heal)
+                // into one reaction. See WATCHER_DEBOUNCE_WINDOW.
+                let deadline = time::Instant::now() + WATCHER_DEBOUNCE_WINDOW;
+                loop {
+                    tokio::select! { biased;
+                        _ = time::sleep_until(deadline) => break,
+                        r = cap_rx.changed()  => { if r.is_err() { return; } }
+                        r = gcap_rx.changed() => { if r.is_err() { return; } }
+                    }
+                }
                 let next = wiring_snapshot(&kv_state, &filter);
-                // Debounce: skip when the resolved status is unchanged.
+                // Result-equality dedup: skip when the resolved status is unchanged.
                 let unchanged = {
                     let current = tx.borrow();
                     *current == next
