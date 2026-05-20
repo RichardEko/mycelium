@@ -168,6 +168,24 @@ pub enum WiringStatus {
     Unwired { filter:    CapFilter },
 }
 
+/// Outcome of a `signal_wired_via` / `signal_wired_via_locality` call.
+/// Distinguishes the two empty-set cases at the type level so the caller
+/// doesn't have to query wiring separately to tell them apart:
+///
+/// - `Emitted { providers }` — wiring resolved; one signal was dispatched
+///   per listed provider (the `providers` Vec can be empty only when a
+///   locality preference filtered every candidate out — i.e., the filter
+///   matched at least one provider in the raw scan but `LocalityPreference::Strict`
+///   rejected all of them).
+/// - `Unwired { filter }` — no `cap/` or `gcap/` entries matched the filter
+///   at the moment of the call. The signal was not dispatched. Caller can
+///   subscribe to `watch_wiring(filter)` to react when wiring restores.
+#[derive(Clone, Debug, PartialEq)]
+pub enum WiredEmitOutcome {
+    Emitted { providers: Vec<WiringProvider> },
+    Unwired { filter:    CapFilter },
+}
+
 /// Aggregate "how many want this vs. how many offer it" view, computed across
 /// the local KV state. Surfaced by `watch_demand` / `demand` so application
 /// code can decide whether to spin up a new provider, scale down, or rebalance.

@@ -68,7 +68,7 @@ pub use capability::{
     CapConstraint, CapFilter, CapRanking, CapValue, Capability, CapabilityEvent,
     CapabilityGroupDef, CapabilityGroupHandle, CapabilityHandle,
     DemandStatus, RankingOrder, RequirementHandle, RequirementStatus,
-    WiringProvider, WiringStatus,
+    WiredEmitOutcome, WiringProvider, WiringStatus,
 };
 pub use config::{GossipConfig, GroupTopologyPolicy, TopologyEnforcement};
 pub use locality::LocalityPreference;

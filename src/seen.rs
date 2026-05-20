@@ -47,6 +47,16 @@ impl ShardedSeen {
     ///
     /// Returns `true` if the set **still** exceeds `max_entries` after eviction,
     /// signalling that the caller should run `emergency_trim`.
+    ///
+    /// **Clock-jump safety.** Timestamps stored here are physical milliseconds
+    /// (extracted from the HLC via `crate::hlc::physical_ms` at insert time).
+    /// A wall-clock backward jump keeps stored ts values ahead of any
+    /// freshly-computed cutoff — the `<= cutoff` check is false, no
+    /// entries evict spuriously. A wall-clock forward jump moves the cutoff
+    /// suddenly ahead and may evict the entire set; the only consequence is
+    /// a brief window where duplicate frames are admitted until peer traffic
+    /// repopulates the seen-set. Documented in `crate::hlc`'s module
+    /// header.
     pub(crate) fn evict(&self, max_entries: usize, seen_cutoff: u64, half_window: u64) -> bool {
         let len_before = self.len();
         let cutoff = if len_before > max_entries { half_window } else { seen_cutoff };

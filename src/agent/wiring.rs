@@ -11,7 +11,7 @@
 
 use crate::capability::{
     Capability, CapFilter, CapRanking, CapValue, RankingOrder,
-    WiringProvider, WiringStatus, partial_cmp_cap,
+    WiredEmitOutcome, WiringProvider, WiringStatus, partial_cmp_cap,
 };
 use crate::locality::{LocalityPath, LocalityPreference};
 use crate::node_id::NodeId;
@@ -126,12 +126,15 @@ impl GossipAgent {
     }
 
     /// Emits `payload` as a signal of `kind` to every provider that satisfies
-    /// `filter` at the moment of the call. Groups (from `gcap/`) receive via
-    /// `SignalScope::Group(name)`; standalone matching nodes (from `cap/`)
-    /// receive via `SignalScope::Individual(node_id)`. The returned vec lists
-    /// the recipient identifiers in the order they were dispatched; it is
-    /// empty when no provider currently matches (caller can detect via
-    /// `watch_wiring` to await wiring restoration).
+    /// `filter` at the moment of the call. Returns
+    /// [`WiredEmitOutcome::Emitted`] with the recipient list, or
+    /// [`WiredEmitOutcome::Unwired`] when no provider currently matches.
+    /// Pattern-match on the outcome to distinguish "signal dispatched" from
+    /// "no wiring" without re-querying `resolve_wiring`.
+    ///
+    /// Groups (from `gcap/`) receive via `SignalScope::Group(name)`;
+    /// standalone matching nodes (from `cap/`) receive via
+    /// `SignalScope::Individual(node_id)`.
     ///
     /// Re-wiring is implicit: a subsequent call re-resolves against the
     /// current KV state. There is no stored binding.
@@ -140,29 +143,16 @@ impl GossipAgent {
         filter:  &CapFilter,
         kind:    impl Into<Arc<str>>,
         payload: impl Into<Bytes>,
-    ) -> Vec<WiringProvider> {
+    ) -> WiredEmitOutcome {
         let kind:    Arc<str> = kind.into();
         let payload: Bytes    = payload.into();
         let status = wiring_snapshot(&self.kv_state, filter);
         let providers = match status {
             WiringStatus::Wired { providers } => providers,
-            WiringStatus::Unwired { .. }      => return Vec::new(),
+            WiringStatus::Unwired { filter }  => return WiredEmitOutcome::Unwired { filter },
         };
-        let mut emitted = Vec::with_capacity(providers.len());
-        for provider in providers {
-            let scope = match &provider {
-                WiringProvider::Group { name, .. }    => crate::signal::SignalScope::Group(name.clone()),
-                WiringProvider::Node  { node_id, .. } => crate::signal::SignalScope::Individual(node_id.clone()),
-            };
-            // Use the existing public emit() which generates a nonce, delivers
-            // locally if admitted, and queues for gossip. Return value (queued
-            // vs dropped) is ignored — the caller observes successful routing
-            // via the returned recipient list and per-receiver acknowledgement
-            // if their protocol provides one.
-            let _ = self.emit(kind.clone(), scope, payload.clone());
-            emitted.push(provider);
-        }
-        emitted
+        let emitted = dispatch_to_providers(self, kind, payload, providers);
+        WiredEmitOutcome::Emitted { providers: emitted }
     }
 
     /// Locality-aware variant of
@@ -172,31 +162,52 @@ impl GossipAgent {
     /// to each surviving provider in iteration order. Useful when the
     /// caller wants to confine signals to a topology region — e.g. a
     /// storage cohort that should not bleed traffic across AZs.
+    ///
+    /// Returns [`WiredEmitOutcome::Unwired`] when the locality-filtered
+    /// provider set is empty. `WiredEmitOutcome::Emitted { providers }`
+    /// can carry an empty `providers` vec only when `pref` is
+    /// `LocalityPreference::Strict(d)` and every match was below the
+    /// threshold — strictly, the raw wiring was satisfied but the locality
+    /// gate rejected all candidates.
     pub fn signal_wired_via_locality(
         &self,
         filter:  &CapFilter,
         pref:    LocalityPreference,
         kind:    impl Into<Arc<str>>,
         payload: impl Into<Bytes>,
-    ) -> Vec<WiringProvider> {
+    ) -> WiredEmitOutcome {
         let kind:    Arc<str> = kind.into();
         let payload: Bytes    = payload.into();
         let status = self.resolve_wiring_with_locality(filter, pref);
         let providers = match status {
             WiringStatus::Wired { providers } => providers,
-            WiringStatus::Unwired { .. }      => return Vec::new(),
+            WiringStatus::Unwired { filter }  => return WiredEmitOutcome::Unwired { filter },
         };
-        let mut emitted = Vec::with_capacity(providers.len());
-        for provider in providers {
-            let scope = match &provider {
-                WiringProvider::Group { name, .. }    => crate::signal::SignalScope::Group(name.clone()),
-                WiringProvider::Node  { node_id, .. } => crate::signal::SignalScope::Individual(node_id.clone()),
-            };
-            let _ = self.emit(kind.clone(), scope, payload.clone());
-            emitted.push(provider);
-        }
-        emitted
+        let emitted = dispatch_to_providers(self, kind, payload, providers);
+        WiredEmitOutcome::Emitted { providers: emitted }
     }
+}
+
+/// Helper shared by `signal_wired_via` and `signal_wired_via_locality`:
+/// emits one signal per provider via the existing public `emit()` (which
+/// generates a nonce, delivers locally if admitted, and queues for
+/// gossip), returning the providers in dispatch order.
+fn dispatch_to_providers(
+    agent:     &GossipAgent,
+    kind:      Arc<str>,
+    payload:   Bytes,
+    providers: Vec<WiringProvider>,
+) -> Vec<WiringProvider> {
+    let mut emitted = Vec::with_capacity(providers.len());
+    for provider in providers {
+        let scope = match &provider {
+            WiringProvider::Group { name, .. }    => crate::signal::SignalScope::Group(name.clone()),
+            WiringProvider::Node  { node_id, .. } => crate::signal::SignalScope::Individual(node_id.clone()),
+        };
+        let _ = agent.emit(kind.clone(), scope, payload.clone());
+        emitted.push(provider);
+    }
+    emitted
 }
 
 // ── Free helpers ─────────────────────────────────────────────────────────────

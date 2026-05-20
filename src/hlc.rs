@@ -38,6 +38,30 @@
 //! This guarantees that any locally-originated update following an observed
 //! remote update has a strictly greater HLC than the remote one — so causal
 //! happens-before is preserved even under wall-clock skew.
+//!
+//! ## Documented limits
+//!
+//! - **Logical counter saturation.** The low 16 bits cap the logical at
+//!   `65 535` events per ms per node. `tick()` saturates rather than
+//!   wrapping, so on a node sustained at >65 k local events/ms the
+//!   physical part takes over (every saturating-tick acts as if the wall
+//!   clock advanced by 1 ms). Ordering stays correct; resolution degrades
+//!   gracefully. Widening to a larger logical (e.g. 44+20) would require a
+//!   wire-version bump and is deferred.
+//!
+//! - **Wall-clock forward jump.** Accepted unconditionally:
+//!   `next.phys = max(prev.phys, wall_now_ms)` will jump the HLC ahead.
+//!   Correctness for causal happens-before is unaffected. The
+//!   `crate::seen` TTL eviction is keyed by `physical_ms`; a large
+//!   forward jump can briefly age out the entire seen-set, allowing one
+//!   round of duplicate admissions until the seen-set repopulates.
+//!
+//! - **Wall-clock backward jump.** `prev.phys` wins via `max`, so the HLC
+//!   never goes backwards. Subsequent `wall_now_ms` reads return values
+//!   smaller than `prev.phys`; the logical counter increments instead,
+//!   maintaining strict monotonicity. The HLC is "self-correcting" against
+//!   transient backward jumps but cannot recover lost time once the clock
+//!   resyncs forward again.
 
 use std::{
     sync::atomic::{AtomicU64, Ordering},
