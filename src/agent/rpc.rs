@@ -14,7 +14,7 @@ use crate::signal::{Signal, SignalScope, signal_kind};
 use bytes::{BufMut, Bytes, BytesMut};
 use std::{sync::Arc, time::Duration};
 
-use super::GossipAgent;
+use super::{GossipAgent, TaskCtx};
 use super::emit_signal;
 
 /// Error returned by [`GossipAgent::rpc_call`].
@@ -33,6 +33,55 @@ impl std::fmt::Display for RpcError {
 }
 
 impl std::error::Error for RpcError {}
+
+/// Core `rpc_call` logic operating on [`TaskCtx`] directly.
+///
+/// Exposed as `pub(crate)` so HTTP handlers that hold only `Arc<TaskCtx>` (not a
+/// full `GossipAgent`) can issue RPC calls. [`GossipAgent::rpc_call`] delegates here.
+pub(crate) async fn rpc_call_ctx(
+    ctx:     &TaskCtx,
+    target:  NodeId,
+    kind:    Arc<str>,
+    payload: Bytes,
+    timeout: Duration,
+) -> Result<Bytes, RpcError> {
+    let target_clone = target.clone();
+    let nonce: u64   = fastrand::u64(1..);
+
+    let mut buf = BytesMut::with_capacity(8 + payload.len());
+    buf.put_u64_le(nonce);
+    buf.put(payload);
+    let framed = buf.freeze();
+
+    let mut rx = ctx.signal_handlers.register_with_capacity(
+        Arc::from(signal_kind::RPC_RESULT),
+        256,
+    );
+    emit_signal(ctx, kind, SignalScope::Individual(target), framed);
+
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        match tokio::time::timeout_at(deadline, rx.recv()).await {
+            Ok(Some(sig)) => {
+                let nonce_matches = sig.payload.get(..8)
+                    .and_then(|b| b.try_into().ok())
+                    .map(|b: [u8; 8]| u64::from_le_bytes(b) == nonce)
+                    .unwrap_or(false);
+                if !nonce_matches { continue; }
+                if sig.sender == target_clone {
+                    return Ok(sig.payload.slice(8..));
+                }
+                tracing::warn!(
+                    target = %target_clone,
+                    actual_sender = %sig.sender,
+                    "rpc_call_ctx: rpc.result sender mismatch — treating as timeout"
+                );
+                return Err(RpcError::Timeout);
+            }
+            _ => return Err(RpcError::Timeout),
+        }
+    }
+}
 
 impl GossipAgent {
     /// Sends a point-to-point RPC request to `target` and awaits the reply.
@@ -66,32 +115,7 @@ impl GossipAgent {
         payload: impl Into<Bytes>,
         timeout: Duration,
     ) -> Result<Bytes, RpcError> {
-        let target_clone = target.clone();
-        let reply = self.request(
-            kind,
-            SignalScope::Individual(target),
-            payload,
-            signal_kind::RPC_RESULT,
-            timeout,
-        ).await;
-
-        match reply {
-            Some(sig) if sig.sender == target_clone => {
-                // Strip the echoed 8-byte nonce prefix; caller gets the bare result.
-                Ok(sig.payload.slice(8..))
-            }
-            Some(sig) => {
-                // rpc.result arrived from a different sender — nonce matched by chance
-                // (extremely unlikely) or a bug. Treat as timeout.
-                tracing::warn!(
-                    target = %target_clone,
-                    actual_sender = %sig.sender,
-                    "rpc_call: rpc.result sender mismatch — treating as timeout"
-                );
-                Err(RpcError::Timeout)
-            }
-            None => Err(RpcError::Timeout),
-        }
+        rpc_call_ctx(&self.task_ctx, target, kind.into(), payload.into(), timeout).await
     }
 
     /// Sends a reply to an incoming RPC request.

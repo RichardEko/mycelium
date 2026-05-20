@@ -442,3 +442,31 @@ pub(crate) fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
         }
     }
 }
+
+/// Returns all live (non-tombstone) key-value pairs whose key starts with `prefix`.
+///
+/// Uses the prefix index for O(|bucket|) access when the first path segment is
+/// known; falls back to a full O(|store|) scan for unknown prefixes.
+///
+/// Exposed as a free function so modules that hold only `Arc<KvState>` (e.g. HTTP
+/// handlers) can perform prefix scans without going through `GossipAgent`.
+pub(crate) fn scan_kv_prefix(kv: &KvState, prefix: &str) -> Vec<(Arc<str>, Bytes)> {
+    let seg         = prefix.find('/').map_or(prefix, |i| &prefix[..i]);
+    let store_guard = kv.store.pin();
+    let idx_guard   = kv.prefix_index.pin();
+    if let Some(bucket) = idx_guard.get(seg) {
+        bucket.pin().iter()
+            .filter_map(|(key, _)| {
+                if !key.starts_with(prefix) { return None; }
+                let entry = store_guard.get(key.as_ref())?;
+                let data  = entry.data.clone()?;
+                Some((key.clone(), data))
+            })
+            .collect()
+    } else {
+        store_guard.iter()
+            .filter(|(k, v)| v.data.is_some() && k.starts_with(prefix))
+            .map(|(k, v)| (k.clone(), v.data.clone().unwrap()))
+            .collect()
+    }
+}
