@@ -115,6 +115,18 @@ pub struct CapabilityGroupDef {
     /// Optional per-group topology policy. Subordinate to
     /// `config.topology_policies[group]` — config always wins.
     pub topology_policy: Option<GroupTopologyPolicy>,
+    /// Group-level capabilities the group asserts when it has any cap-joined
+    /// members. Each member writes its own per-member projection under
+    /// `gcap/{group}/{ns}/{name}/{member_node_id}`. Used by
+    /// `signal_wired_via` and `watch_wiring` to discover provider groups.
+    #[serde(default)]
+    pub provides:        Vec<Capability>,
+    /// Filters that the group's signal-flow depends on. Phase 4 uses these
+    /// informationally — `signal_wired_via(filter)` is the actual send
+    /// primitive. Phase 7 will couple unsatisfied requirements to per-member
+    /// opacity.
+    #[serde(default)]
+    pub requires:        Vec<CapFilter>,
 }
 
 /// Drop to tombstone `cap-group/{group}`. All matching members will see the
@@ -122,6 +134,37 @@ pub struct CapabilityGroupDef {
 pub struct CapabilityGroupHandle {
     pub(crate) _retract: oneshot::Sender<()>,
     pub(crate) group:    Arc<str>,
+}
+
+/// Output of `resolve_wiring` / `watch_wiring`. The `Wired` variant lists every
+/// provider that currently satisfies the filter — both group-level projections
+/// (`gcap/`) and standalone node capabilities (`cap/`). `shared_locality_depth`
+/// is computed in Phase 5 and is `0` for Phase 4-only matches.
+#[derive(Clone, Debug, PartialEq)]
+pub enum WiringStatus {
+    Wired   { providers: Vec<WiringProvider> },
+    Unwired { filter:    CapFilter },
+}
+
+/// One discovered provider for a wiring filter.
+#[derive(Clone, Debug, PartialEq)]
+pub enum WiringProvider {
+    /// An emergent group whose collective `provides` projection matches the
+    /// filter. `contributors` lists every member whose `gcap/{group}/...`
+    /// entry contributed to the match — useful for retraction tracking but
+    /// not required by `signal_wired_via` (which routes via group scope).
+    Group {
+        name:                  Arc<str>,
+        contributors:          Vec<NodeId>,
+        shared_locality_depth: usize,
+    },
+    /// A standalone node whose direct `cap/{node_id}/{ns}/{name}` entry
+    /// satisfies the filter without going through a group projection.
+    Node {
+        node_id:               NodeId,
+        capability:            Capability,
+        shared_locality_depth: usize,
+    },
 }
 
 impl CapabilityGroupHandle {
@@ -328,6 +371,27 @@ mod tests {
         let def = CapabilityGroupDef {
             filter:          filter.clone(),
             topology_policy: None,
+            provides:        Vec::new(),
+            requires:        Vec::new(),
+        };
+        let bytes = def.encode();
+        let decoded = CapabilityGroupDef::decode(&bytes).expect("decode");
+        assert_eq!(def, decoded);
+    }
+
+    #[test]
+    fn capability_group_def_with_provides_roundtrip() {
+        let filter = CapFilter::new("compute", "gpu");
+        let def = CapabilityGroupDef {
+            filter,
+            topology_policy: None,
+            provides: vec![
+                Capability::new("storage", "durable")
+                    .with("replication", CapValue::Integer(3)),
+            ],
+            requires: vec![
+                CapFilter::new("logging", "sink"),
+            ],
         };
         let bytes = def.encode();
         let decoded = CapabilityGroupDef::decode(&bytes).expect("decode");

@@ -66,7 +66,7 @@ pub use agent::{GossipAgent, SystemStats};
 pub use capability::{
     CapConstraint, CapFilter, CapValue, Capability, CapabilityEvent,
     CapabilityGroupDef, CapabilityGroupHandle, CapabilityHandle,
-    RequirementHandle, RequirementStatus,
+    RequirementHandle, RequirementStatus, WiringProvider, WiringStatus,
 };
 pub use config::{GossipConfig, GroupTopologyPolicy, TopologyEnforcement};
 pub use consensus::{ConsensusConfig, ConsensusHandle, ConsensusResult, consensus_kind, consensus_ns};

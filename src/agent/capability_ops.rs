@@ -18,7 +18,7 @@
 use crate::capability::{
     Capability, CapFilter, CapabilityEvent,
     CapabilityHandle, CapabilityGroupDef, CapabilityGroupHandle,
-    RequirementHandle, RequirementStatus,
+    RequirementHandle, RequirementStatus, WiringProvider, WiringStatus,
 };
 use crate::node_id::NodeId;
 use crate::signal::{LoadState, encode_load_state};
@@ -286,6 +286,90 @@ impl GossipAgent {
         candidates.into_iter().next()
     }
 
+    /// Snapshot scan of provider groups (via `gcap/`) and standalone nodes
+    /// (via `cap/`) that currently satisfy `filter`. Returns
+    /// [`WiringStatus::Wired`] with the discovered providers, or
+    /// [`WiringStatus::Unwired`] if neither source has a match.
+    ///
+    /// `shared_locality_depth` is hard-coded to `0` here; Phase 5
+    /// (`resolve_wiring_with_locality`) computes the real depth against
+    /// this node's locality and exposes it for caller-side ranking.
+    pub fn resolve_wiring(&self, filter: &CapFilter) -> WiringStatus {
+        wiring_snapshot(&self.kv_state, filter)
+    }
+
+    /// Push-based view of the wiring state for `filter`. The returned receiver
+    /// fires whenever a `cap/` or `gcap/` write or tombstone causes the
+    /// resolved provider set to change. The initial value is a snapshot at
+    /// subscription time; subsequent values are debounced — identical
+    /// statuses are not re-broadcast.
+    pub fn watch_wiring(&self, filter: CapFilter) -> watch::Receiver<WiringStatus> {
+        let initial         = wiring_snapshot(&self.kv_state, &filter);
+        let (tx, rx)        = watch::channel(initial);
+        let mut cap_rx      = self.subscribe_prefix(Arc::<str>::from("cap/"));
+        let mut gcap_rx     = self.subscribe_prefix(Arc::<str>::from("gcap/"));
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
+        let kv_state        = Arc::clone(&self.kv_state);
+        self.spawn_task(async move {
+            loop {
+                tokio::select! { biased;
+                    _ = await_shutdown(&mut shutdown_rx) => return,
+                    r = cap_rx.changed()  => { if r.is_err() { return; } }
+                    r = gcap_rx.changed() => { if r.is_err() { return; } }
+                }
+                let next = wiring_snapshot(&kv_state, &filter);
+                // Debounce: skip when the resolved status is unchanged.
+                let unchanged = {
+                    let current = tx.borrow();
+                    *current == next
+                };
+                if unchanged { continue; }
+                if tx.send(next).is_err() { return; }
+            }
+        });
+        rx
+    }
+
+    /// Emits `payload` as a signal of `kind` to every provider that satisfies
+    /// `filter` at the moment of the call. Groups (from `gcap/`) receive via
+    /// `SignalScope::Group(name)`; standalone matching nodes (from `cap/`)
+    /// receive via `SignalScope::Individual(node_id)`. The returned vec lists
+    /// the recipient identifiers in the order they were dispatched; it is
+    /// empty when no provider currently matches (caller can detect via
+    /// `watch_wiring` to await wiring restoration).
+    ///
+    /// Re-wiring is implicit: a subsequent call re-resolves against the
+    /// current KV state. There is no stored binding.
+    pub fn signal_wired_via(
+        &self,
+        filter:  &CapFilter,
+        kind:    impl Into<Arc<str>>,
+        payload: impl Into<Bytes>,
+    ) -> Vec<crate::capability::WiringProvider> {
+        let kind:    Arc<str> = kind.into();
+        let payload: Bytes    = payload.into();
+        let status = wiring_snapshot(&self.kv_state, filter);
+        let providers = match status {
+            WiringStatus::Wired { providers } => providers,
+            WiringStatus::Unwired { .. }      => return Vec::new(),
+        };
+        let mut emitted = Vec::with_capacity(providers.len());
+        for provider in providers {
+            let scope = match &provider {
+                WiringProvider::Group { name, .. }    => crate::signal::SignalScope::Group(name.clone()),
+                WiringProvider::Node  { node_id, .. } => crate::signal::SignalScope::Individual(node_id.clone()),
+            };
+            // Use the existing public emit() which generates a nonce, delivers
+            // locally if admitted, and queues for gossip. Return value (queued
+            // vs dropped) is ignored — the caller observes successful routing
+            // via the returned recipient list and per-receiver acknowledgement
+            // if their protocol provides one.
+            let _ = self.emit(kind.clone(), scope, payload.clone());
+            emitted.push(provider);
+        }
+        emitted
+    }
+
     /// Publishes a [`CapabilityGroupDef`] under `cap-group/{group}`. Any node
     /// whose own `cap/{self}/*` advertisements match `def.filter` will
     /// self-join the named group via `join_group` once
@@ -356,6 +440,73 @@ fn resolve_filter_against_kv(
         }
     }
     out
+}
+
+/// Computes the current [`WiringStatus`] for `filter` by scanning both
+/// `cap/` (standalone providers) and `gcap/` (group projections). The
+/// `shared_locality_depth` field is left as `0` here; Phase 5 will populate
+/// it from `peer_localities`.
+fn wiring_snapshot(kv_state: &crate::store::KvState, filter: &CapFilter) -> WiringStatus {
+    // Standalone-node providers from cap/.
+    let mut node_providers: Vec<WiringProvider> = Vec::new();
+    for (key, bytes) in scan_prefix_kv(kv_state, "cap/") {
+        let Some((node_id, _ns, _name)) = parse_cap_key("cap/", &key) else { continue };
+        let Some(cap) = Capability::decode(&bytes) else { continue };
+        if filter.matches(&cap) {
+            node_providers.push(WiringProvider::Node {
+                node_id,
+                capability:            cap,
+                shared_locality_depth: 0,
+            });
+        }
+    }
+
+    // Group providers from gcap/. Key format: gcap/{group}/{ns}/{name}/{contributor}.
+    // One matching contributor entry is enough for the group to count as a
+    // provider; we collect every contributor so callers can observe partial
+    // coverage if they want.
+    let mut groups: AHashMap<Arc<str>, Vec<NodeId>> = AHashMap::new();
+    for (key, bytes) in scan_prefix_kv(kv_state, "gcap/") {
+        let Some((group, contributor)) = parse_gcap_key(&key, filter) else { continue };
+        let Some(cap) = Capability::decode(&bytes) else { continue };
+        if filter.matches(&cap) {
+            groups.entry(group).or_default().push(contributor);
+        }
+    }
+    let group_providers: Vec<WiringProvider> = groups.into_iter()
+        .map(|(name, contributors)| WiringProvider::Group {
+            name,
+            contributors,
+            shared_locality_depth: 0,
+        })
+        .collect();
+
+    let mut providers = group_providers;
+    providers.append(&mut node_providers);
+    if providers.is_empty() {
+        WiringStatus::Unwired { filter: filter.clone() }
+    } else {
+        WiringStatus::Wired { providers }
+    }
+}
+
+/// Splits `gcap/{group}/{ns}/{name}/{contributor}` into `(group, contributor)`
+/// when `(ns, name)` match the filter's `(namespace, name)`. Returns `None`
+/// for misshapen keys or non-matching namespace/name pairs (the attribute
+/// constraint is checked later against the decoded capability).
+fn parse_gcap_key(key: &str, filter: &CapFilter) -> Option<(Arc<str>, NodeId)> {
+    let rest = key.strip_prefix("gcap/")?;
+    let mut parts = rest.splitn(4, '/');
+    let group       = parts.next()?;
+    let namespace   = parts.next()?;
+    let name        = parts.next()?;
+    let contributor = parts.next()?;
+    if contributor.contains('/') { return None; }
+    if namespace != filter.namespace.as_ref() || name != filter.name.as_ref() {
+        return None;
+    }
+    let contributor = contributor.parse::<NodeId>().ok()?;
+    Some((Arc::from(group), contributor))
 }
 
 /// Aggregates `sys/load/{node}/*` fill ratios for ranking in
@@ -487,86 +638,182 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+/// Interval at which group-level `gcap/` projections are re-asserted by each
+/// cap-joined member. Conservative default chosen to amortise gossip cost;
+/// the projection KV entry itself only expires on tombstone, so a slow
+/// re-advertise still keeps late joiners in sync via anti-entropy.
+const GCAP_REASSERT_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Per-group bookkeeping for the emergent-group watcher: every cap-joined
+/// group tracks the `provides` set we currently project and the cancel
+/// senders for the `kv_persist_loop` tasks writing the `gcap/` entries.
+struct GroupProjection {
+    provides: Vec<Capability>,
+    /// Cancel senders for the spawned `run_kv_persist_task`s; dropping these
+    /// closes the oneshot which makes each persist task tombstone its
+    /// `gcap/{group}/{ns}/{name}/{self}` key. Never read directly — the
+    /// `Drop` side-effect is the whole purpose.
+    #[allow(dead_code)]
+    handles:  Vec<oneshot::Sender<()>>,
+}
+
 /// Background task: watches `cap-group/` for emergent group definitions and
 /// keeps this node's `grp/` membership in sync with whether its own
 /// capabilities match each def's filter. See plan section
 /// "`watch_capability_group_definitions` Dual Subscription".
 pub(crate) async fn watch_capability_group_definitions(
-    ctx:           Arc<TaskCtx>,
-    own_node_id:   NodeId,
-    mut def_rx:    watch::Receiver<u64>,
-    mut own_rx:    watch::Receiver<u64>,
+    ctx:             Arc<TaskCtx>,
+    own_node_id:     NodeId,
+    mut def_rx:      watch::Receiver<u64>,
+    mut own_rx:      watch::Receiver<u64>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
-    // Tracks which emergent groups we are currently cap-joined to so we know
-    // which `grp/` keys to tombstone on a non-match.
-    let mut cap_joined: AHashMap<Arc<str>, ()> = AHashMap::new();
-
-    let reconcile = |joined: &mut AHashMap<Arc<str>, ()>, ctx: &Arc<TaskCtx>, own: &NodeId| {
-        // Own capabilities snapshot.
-        let mut own_caps: Vec<Capability> = Vec::new();
-        let own_prefix = format!("cap/{}/", own);
-        for (_, bytes) in scan_prefix_kv(&ctx.kv_state, &own_prefix) {
-            if let Some(cap) = Capability::decode(&bytes) {
-                own_caps.push(cap);
-            }
-        }
-        // Current set of cap-group definitions.
-        let mut want_joined: AHashSet<Arc<str>> = AHashSet::new();
-        let mut all_groups: AHashSet<Arc<str>>  = AHashSet::new();
-        for (key, bytes) in scan_prefix_kv(&ctx.kv_state, "cap-group/") {
-            let Some(group_name) = key.strip_prefix("cap-group/") else { continue };
-            let group: Arc<str>  = Arc::from(group_name);
-            all_groups.insert(group.clone());
-            let Some(def) = CapabilityGroupDef::decode(&bytes) else { continue };
-            // Match: any of our own caps satisfies the def's filter.
-            if own_caps.iter().any(|c| def.filter.matches(c)) {
-                want_joined.insert(group);
-            }
-        }
-        // Join newly-matching groups.
-        for g in &want_joined {
-            if !joined.contains_key(g.as_ref()) {
-                emit_membership(ctx, own, g, false);
-                joined.insert(g.clone(), ());
-            }
-        }
-        // Leave groups we were in but no longer match — either because the def
-        // tombstoned or our caps changed. `all_groups` lets us also tombstone
-        // memberships when the def disappeared entirely.
-        let to_leave: Vec<Arc<str>> = joined.keys()
-            .filter(|g| !want_joined.contains(g.as_ref()))
-            .cloned()
-            .collect();
-        for g in to_leave {
-            emit_membership(ctx, own, &g, true);
-            joined.remove(&g);
-            let _ = all_groups.contains(&g); // suppress unused warning
-        }
-    };
+    // Tracks which emergent groups we are currently cap-joined to AND the
+    // `gcap/` projections we are persisting for each. Dropping a `GroupProjection`
+    // closes its cancel senders, which the persist tasks observe and exit
+    // gracefully via a tombstone.
+    let mut joined: AHashMap<Arc<str>, GroupProjection> = AHashMap::new();
 
     // Initial reconciliation in case definitions or own caps already exist.
-    reconcile(&mut cap_joined, &ctx, &own_node_id);
+    reconcile_emergent_groups(&ctx, &own_node_id, &shutdown_rx, &mut joined);
 
     loop {
         tokio::select! { biased;
-            _ = shutdown_rx.wait_for(|v| *v) => break,
+            _ = await_shutdown(&mut shutdown_rx) => break,
             r = def_rx.changed() => {
                 if r.is_err() { break; }
-                reconcile(&mut cap_joined, &ctx, &own_node_id);
+                reconcile_emergent_groups(&ctx, &own_node_id, &shutdown_rx, &mut joined);
             }
             r = own_rx.changed() => {
                 if r.is_err() { break; }
-                reconcile(&mut cap_joined, &ctx, &own_node_id);
+                reconcile_emergent_groups(&ctx, &own_node_id, &shutdown_rx, &mut joined);
             }
         }
     }
 
     // Best-effort: tombstone any memberships we hold so peers see us leave
-    // the emergent groups cleanly.
-    for (g, ()) in cap_joined.into_iter() {
+    // the emergent groups cleanly. Dropping `joined` also fires the persist
+    // task cancel senders, which tombstone the `gcap/` entries.
+    let exit_groups: Vec<Arc<str>> = joined.keys().cloned().collect();
+    for g in exit_groups {
         emit_membership(&ctx, &own_node_id, &g, true);
     }
+    drop(joined);
+}
+
+/// One reconciliation pass: snapshot own caps + every `cap-group/` def, decide
+/// which groups we should be in, and update both `grp/{group}/{self}`
+/// membership and `gcap/{group}/{ns}/{name}/{self}` projections accordingly.
+fn reconcile_emergent_groups(
+    ctx:         &Arc<TaskCtx>,
+    own:         &NodeId,
+    shutdown_rx: &watch::Receiver<bool>,
+    joined:      &mut AHashMap<Arc<str>, GroupProjection>,
+) {
+    // Own capabilities snapshot (used both for filter matching and for the
+    // provides decision; we project everything the def specifies, regardless
+    // of whether we hold the same direct capability ourselves — the def is
+    // the group's collective assertion, not a per-member echo of its own caps).
+    let mut own_caps: Vec<Capability> = Vec::new();
+    let own_prefix = format!("cap/{}/", own);
+    for (_, bytes) in scan_prefix_kv(&ctx.kv_state, &own_prefix) {
+        if let Some(cap) = Capability::decode(&bytes) {
+            own_caps.push(cap);
+        }
+    }
+
+    // Current cap-group definitions, keyed by group name.
+    let mut defs: AHashMap<Arc<str>, CapabilityGroupDef> = AHashMap::new();
+    for (key, bytes) in scan_prefix_kv(&ctx.kv_state, "cap-group/") {
+        let Some(group_name) = key.strip_prefix("cap-group/") else { continue };
+        let Some(def) = CapabilityGroupDef::decode(&bytes) else { continue };
+        defs.insert(Arc::from(group_name), def);
+    }
+
+    // Compute want_joined: every group whose filter is satisfied by at least
+    // one of our own capabilities.
+    let mut want_joined: AHashSet<Arc<str>> = AHashSet::new();
+    for (group, def) in &defs {
+        if own_caps.iter().any(|c| def.filter.matches(c)) {
+            want_joined.insert(group.clone());
+        }
+    }
+
+    // Join newly-matching groups; spawn their `gcap/` persist tasks.
+    for group in &want_joined {
+        if !joined.contains_key(group.as_ref()) {
+            emit_membership(ctx, own, group, false);
+            let def      = defs.get(group).expect("present, scanned above");
+            let provides = def.provides.clone();
+            let handles  = spawn_gcap_projections(ctx, own, group, &provides, shutdown_rx);
+            joined.insert(group.clone(), GroupProjection { provides, handles });
+            continue;
+        }
+        // Already joined — refresh `gcap/` projections if the def's `provides`
+        // changed. Filter changes that DON'T remove us are handled by leaving
+        // membership untouched and just reconciling projections.
+        let def         = defs.get(group).expect("present, scanned above");
+        let want_provides = &def.provides;
+        let current     = joined.get(group).expect("just checked");
+        if &current.provides != want_provides {
+            // Drop old persist tasks (closes their cancel senders → tombstones).
+            let new_handles = spawn_gcap_projections(ctx, own, group, want_provides, shutdown_rx);
+            joined.insert(group.clone(), GroupProjection {
+                provides: want_provides.clone(),
+                handles:  new_handles,
+            });
+        }
+    }
+
+    // Leave groups we were in but no longer match — either because the def
+    // disappeared or our caps changed. Dropping the `GroupProjection`
+    // tombstones the gcap entries; `emit_membership(leaving = true)` tombstones
+    // `grp/`.
+    let to_leave: Vec<Arc<str>> = joined.keys()
+        .filter(|g| !want_joined.contains(g.as_ref()))
+        .cloned()
+        .collect();
+    for g in to_leave {
+        emit_membership(ctx, own, &g, true);
+        joined.remove(&g);
+    }
+}
+
+/// Spawns one `run_kv_persist_task` per provided capability under
+/// `gcap/{group}/{ns}/{name}/{self}`. Returns the cancel senders so the caller
+/// can drop them when membership ends — closing the senders causes each
+/// persist task to tombstone its key.
+fn spawn_gcap_projections(
+    ctx:         &Arc<TaskCtx>,
+    own:         &NodeId,
+    group:       &Arc<str>,
+    provides:    &[Capability],
+    shutdown_rx: &watch::Receiver<bool>,
+) -> Vec<oneshot::Sender<()>> {
+    let mut handles = Vec::with_capacity(provides.len());
+    for cap in provides {
+        let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+        let key: Arc<str> = Arc::from(format!(
+            "gcap/{}/{}/{}/{}",
+            group, cap.namespace, cap.name, own,
+        ).as_str());
+        let cap_arc = Arc::new(cap.clone());
+        let payload_fn: super::kv::PersistPayloadFn = {
+            let cap = Arc::clone(&cap_arc);
+            Arc::new(move || cap.encode())
+        };
+        tokio::spawn(super::kv::run_kv_persist_task(
+            Arc::clone(ctx),
+            cancel_rx,
+            shutdown_rx.clone(),
+            key,
+            GCAP_REASSERT_INTERVAL,
+            payload_fn,
+            None,
+        ));
+        handles.push(cancel_tx);
+    }
+    handles
 }
 
 /// Writes (or tombstones) `grp/{group}/{node_id}` for this node, mirroring the
@@ -616,5 +863,30 @@ mod tests {
     fn parse_cap_key_rejects_bad_node_id() {
         let key = "cap/not-a-socket/compute/gpu";
         assert!(parse_cap_key("cap/", key).is_none());
+    }
+
+    #[test]
+    fn parse_gcap_key_extracts_group_and_contributor() {
+        let filter = CapFilter::new("compute", "gpu");
+        let key = "gcap/gpu-workers/compute/gpu/127.0.0.1:8080";
+        let (group, contributor) = parse_gcap_key(key, &filter).expect("parse");
+        assert_eq!(group.as_ref(), "gpu-workers");
+        assert_eq!(contributor.to_string(), "127.0.0.1:8080");
+    }
+
+    #[test]
+    fn parse_gcap_key_rejects_wrong_namespace_or_name() {
+        let key = "gcap/gpu-workers/compute/gpu/127.0.0.1:8080";
+        let wrong_ns   = CapFilter::new("storage", "gpu");
+        let wrong_name = CapFilter::new("compute", "tpu");
+        assert!(parse_gcap_key(key, &wrong_ns).is_none());
+        assert!(parse_gcap_key(key, &wrong_name).is_none());
+    }
+
+    #[test]
+    fn parse_gcap_key_rejects_truncated() {
+        let filter = CapFilter::new("compute", "gpu");
+        assert!(parse_gcap_key("gcap/gpu-workers/compute/gpu", &filter).is_none());
+        assert!(parse_gcap_key("gcap/gpu-workers/compute", &filter).is_none());
     }
 }
