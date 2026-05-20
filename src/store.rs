@@ -280,6 +280,11 @@ pub(crate) fn apply_to_store(store: &papaya::HashMap<Arc<str>, StoreEntry>, upda
 /// callback, eliminating the TOCTOU window that existed when the old entry was read
 /// before the CAS in a separate step. The callback resets its capture on each retry
 /// so the final (successful) invocation always leaves the correct value.
+///
+/// Callers construct the [`GossipUpdate`] via
+/// [`crate::framing::make_gossip_update`], which is the canonical write-side
+/// factory for every higher layer — see that function's doc comment for the
+/// placement rationale and the layers it serves.
 pub(crate) fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
     if kv.max_store_entries > 0 && !update.is_tombstone && kv.store.len() >= kv.max_store_entries {
         warn!(

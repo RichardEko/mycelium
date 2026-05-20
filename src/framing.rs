@@ -382,9 +382,25 @@ pub(crate) enum ForwardHint {
 }
 
 /// Constructs a [`GossipUpdate`] for a locally-originated KV write or tombstone.
+/// Calls `hlc.tick()` so every locally-originated write gets a strictly-greater
+/// HLC timestamp than every previous local write and every observed remote
+/// stamp — see `crate::hlc` for the causal-ordering rationale.
 ///
-/// Uses `SystemTime::now()` (not a cached tick) so every call gets a distinct
-/// timestamp, preserving LWW determinism under concurrent cross-node writes.
+/// ## Placement note
+///
+/// This function lives in `framing.rs` (the lowest layer) but is the canonical
+/// write-side factory for every higher layer: capability and emergent-group
+/// machinery in `agent::capability_ops` / `agent::wiring` /
+/// `agent::emergent_groups`, opacity governors in `agent::opacity`, consensus
+/// in `consensus.rs`, and the connection handler's persistent-quorum writes.
+/// The home is correct — the function owns the wire encoding shape (nonce,
+/// sender hash, ttl, tombstone flag, timestamp, key, value) and the byte
+/// offsets that the zero-copy forwarding path in `connection.rs` depends on
+/// (TTL_OFFSET, NONCE_OFFSET). Placing it higher would force `framing.rs` to
+/// depend on the agent layer or on `Hlc`, breaking the dependency direction.
+///
+/// Callers obtain an `&Hlc` from whichever context holds it
+/// (`TaskCtx::hlc`, `ConnContext::hlc`, or `GossipAgent::task_ctx.hlc`).
 pub(crate) fn make_gossip_update(
     node_id:      &crate::node_id::NodeId,
     ttl:          u8,

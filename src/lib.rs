@@ -44,6 +44,38 @@
 //! See [`GossipAgent`] for the full API. See [`GossipConfig`] for all tunable parameters.
 //! See [ROADMAP.md](https://github.com/RichardEko/mycelium/blob/main/ROADMAP.md) for the
 //! layer-by-layer architecture and higher-layer design.
+//!
+//! ## KV namespace ownership
+//!
+//! The KV store is the single substrate; higher layers own dedicated key
+//! prefixes. Higher layers write directly to their prefix via
+//! `make_gossip_update` + `apply_and_notify`. This is intentional and not a
+//! layer violation: ownership is documented, encoding is shared, and no
+//! foreign writer ever touches another layer's prefix.
+//!
+//! | Prefix                              | Owner / purpose                                              |
+//! |-------------------------------------|--------------------------------------------------------------|
+//! | `grp/{group}/{node}`                | Layer II group membership                                    |
+//! | `sys/load/{node}/{kind}`            | Layer II opacity (load + auto-opacity composition)           |
+//! | `sys/load/{node}/req/{ns}/{name}`   | Phase 3 requirement opacity (composes via `is_self_opaque`)  |
+//! | `sys/load/{node}/group-req/{g}/{i}` | Phase 7 group-requirement opacity (same composition)         |
+//! | `sys/quorum/{kind}/{sender}`        | Persistent quorum evidence                                   |
+//! | `sys/topology-override/{group}`     | Layer III operator escape hatch (value: `b"true"`)           |
+//! | `consensus/committed/{slot}`        | Layer III consensus state                                    |
+//! | `consensus/ballot/{slot}`           | Layer III ballot tracking                                    |
+//! | `consensus/trust/{group}/{node}`    | Layer III trust slices                                       |
+//! | `cap/{node}/{ns}/{name}`            | Node-level capability advertisements                         |
+//! | `cap/{node}/locality/self`          | Locality (also a capability — single namespace, single shape)|
+//! | `req/{node}/{ns}/{name}`            | Node-level requirement declarations                          |
+//! | `cap-group/{group}`                 | Emergent capability-group definitions                        |
+//! | `gcap/{group}/{ns}/{name}/{contrib}`| Group-level capability projections                           |
+//!
+//! Layer-III writes that read or write KV (consensus engine,
+//! `sys/topology-override` reads) are documented at their call sites as
+//! deliberate escape hatches, not layer violations — the consensus engine
+//! owns the `consensus/` prefix and reads `sys/topology-override` as a
+//! policy input, both of which are explicitly part of its namespace
+//! contract.
 
 #![forbid(unsafe_code)]
 

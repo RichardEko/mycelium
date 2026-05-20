@@ -29,11 +29,13 @@ impl GossipAgent {
         ).await
     }
 
+    /// Constructs a [`GossipUpdate`] for a write that originates from
+    /// `GossipAgent`'s public KV methods (`set`, `delete`,
+    /// `advertise_*`, `join_group`, etc.). Thin wrapper over the canonical
+    /// [`make_gossip_update`] factory in `crate::framing` — see that
+    /// function's doc for the placement rationale and the HLC's
+    /// causal-ordering guarantees.
     pub(super) fn make_update(&self, key: Arc<str>, value: Bytes, is_tombstone: bool) -> GossipUpdate {
-        // The HLC `tick()` inside make_gossip_update guarantees this write
-        // gets a strictly-greater timestamp than every previous local write
-        // and every observed remote stamp — fixing the wall-clock LWW
-        // determinism issue that two same-millisecond writes used to have.
         make_gossip_update(&self.node_id, self.config.default_ttl, key, value, is_tombstone, &self.task_ctx.hlc)
     }
 
