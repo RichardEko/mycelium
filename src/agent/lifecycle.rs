@@ -51,6 +51,7 @@ impl GossipAgent {
         }
         self.rehydrate_boundary_from_kv();
         self.warm_quorum_from_layer1();
+        self.advertise_locality();
         self.start_listener(bind_addr).await.inspect_err(|_| {
             self.state.store(AgentState::Idle as u8, Ordering::Release);
         })?;
@@ -122,6 +123,12 @@ impl GossipAgent {
         let epidemic_extra_peers   = self.config.epidemic_extra_peers;
         let prefix_index           = self.kv_state.prefix_index.clone();
         let grp_generation         = self.kv_state.grp_generation.clone();
+        let peer_localities        = self.kv_state.peer_localities.clone();
+        let self_locality          = if self.config.locality_path.is_empty() {
+            None
+        } else {
+            Some(crate::locality::LocalityPath::new(self.config.locality_path.iter().cloned()))
+        };
 
         let rxs = self.gossip_rxs
             .lock()
@@ -146,6 +153,8 @@ impl GossipAgent {
                 epidemic_extra_peers,
                 prefix_index.clone(),
                 grp_generation.clone(),
+                self_locality.clone(),
+                peer_localities.clone(),
             ));
         }
     }
@@ -227,6 +236,18 @@ impl GossipAgent {
         reconcile_boundary_from_store(&self.kv_state.store, &mut bnd, &node_id_str);
     }
 
+    /// Publishes this node's [`LocalityPath`](crate::locality::LocalityPath) under
+    /// `cap/{node_id}/locality/self` so peers can discover its topology address.
+    ///
+    /// Skipped when `config.locality_path` is empty — there is no point gossiping
+    /// "unspecified locality." Tombstoned at shutdown via [`Self::shutdown_with_timeout`].
+    pub(crate) fn advertise_locality(&self) {
+        if self.config.locality_path.is_empty() { return; }
+        let loc = crate::locality::LocalityPath::new(self.config.locality_path.iter().cloned());
+        let key = format!("cap/{}/locality/self", self.node_id);
+        let _ = self.set(key, loc.encode());
+    }
+
     /// Signals all background tasks to stop and waits up to `timeout` for them to exit.
     ///
     /// Tasks that have not exited within the timeout are logged as warnings and abandoned.
@@ -240,6 +261,11 @@ impl GossipAgent {
             .collect();
         for key in load_keys {
             let _ = self.delete(key);
+        }
+        // Retract our locality advertisement so peers stop using a stale entry
+        // for topology-aware fan-out and quorum diversity.
+        if !self.config.locality_path.is_empty() {
+            let _ = self.delete(format!("cap/{}/locality/self", self.node_id));
         }
         let _ = self.state.compare_exchange(
             AgentState::Running as u8, AgentState::Stopped as u8,

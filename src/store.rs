@@ -1,4 +1,6 @@
 use crate::framing::GossipUpdate;
+use crate::locality::LocalityPath;
+use crate::node_id::NodeId;
 use ahash::RandomState;
 use bytes::Bytes;
 use papaya::Operation;
@@ -45,6 +47,10 @@ pub(crate) struct KvState {
     /// for any registered prefix that matches a changed key. Watchers use `changed().await`
     /// rather than polling. Created lazily via `GossipAgent::subscribe_prefix`.
     pub prefix_watchers: Arc<papaya::HashMap<Arc<str>, Arc<watch::Sender<u64>>>>,
+    /// Cache of peer `LocalityPath`s populated by `apply_and_notify` from
+    /// `cap/{node_id}/locality/self` writes. Used on hot gossip-forwarding paths
+    /// (locality-aware fan-out scoring) without re-decoding the KV entry per message.
+    pub peer_localities: Arc<papaya::HashMap<NodeId, LocalityPath>>,
 }
 
 impl KvState {
@@ -63,6 +69,7 @@ impl KvState {
             grp_generation:    Arc::new(AtomicU64::new(0)),
             cap_generation:    Arc::new(AtomicU64::new(0)),
             prefix_watchers:   Arc::new(papaya::HashMap::new()),
+            peer_localities:   Arc::new(papaya::HashMap::new()),
         })
     }
 }
@@ -335,6 +342,23 @@ pub(crate) fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
         // know to re-evaluate when any peer advertises or retracts a cap or req.
         if update.key.starts_with("cap/") || update.key.starts_with("req/") {
             kv.cap_generation.fetch_add(1, Ordering::Relaxed);
+        }
+        // Maintain the peer_localities cache from cap/{node_id}/locality/self entries.
+        // Locality is treated as a capability for KV-path uniformity but is also cached
+        // in decoded form so hot gossip-forwarding paths don't re-decode per message.
+        if let Some(rest) = update.key.strip_prefix("cap/") {
+            if let Some(node_id_str) = rest.strip_suffix("/locality/self") {
+                if !node_id_str.contains('/') {
+                    if let Ok(node_id) = node_id_str.parse::<NodeId>() {
+                        let guard = kv.peer_localities.pin();
+                        if is_tombstone {
+                            guard.remove(&node_id);
+                        } else if let Some(loc) = LocalityPath::decode(&update.value) {
+                            guard.insert(node_id, loc);
+                        }
+                    }
+                }
+            }
         }
         // Maintain the secondary prefix index.
         if is_tombstone {

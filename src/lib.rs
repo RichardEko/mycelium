@@ -55,6 +55,7 @@ mod agent;
 mod connection;
 mod consensus;
 mod framing;
+mod locality;
 mod node_id;
 mod seen;
 mod store;
@@ -195,6 +196,7 @@ mod tests {
                 grp_generation:    Arc::new(AtomicU64::new(0)),
                 cap_generation:    Arc::new(AtomicU64::new(0)),
                 prefix_watchers:   Arc::new(papaya::HashMap::new()),
+                peer_localities:   Arc::new(papaya::HashMap::new()),
             }),
         };
         let handle = tokio::spawn(handle_connection(
@@ -843,6 +845,7 @@ mod tests {
                     grp_generation:    Arc::new(AtomicU64::new(0)),
                     cap_generation:    Arc::new(AtomicU64::new(0)),
                     prefix_watchers:   Arc::new(papaya::HashMap::new()),
+                    peer_localities:   Arc::new(papaya::HashMap::new()),
                 }),
             };
             use crate::connection::handle_connection;

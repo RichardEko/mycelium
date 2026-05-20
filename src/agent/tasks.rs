@@ -1,6 +1,7 @@
 use crate::connection::{handle_connection, ConnContext};
 use crate::error::GossipError;
 use crate::framing::{bincode_cfg, ForwardHint, WireMessage};
+use crate::locality::LocalityPath;
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
 use crate::signal::SignalHandlers;
@@ -176,6 +177,8 @@ pub(super) async fn run_gossip_shard(
     epidemic_extra_peers:   usize,
     prefix_index:           Arc<crate::store::PrefixIndex>,
     grp_generation:         Arc<AtomicU64>,
+    self_locality:          Option<LocalityPath>,
+    peer_localities:        Arc<papaya::HashMap<NodeId, LocalityPath>>,
 ) {
     alive.store(true, Ordering::Relaxed);
     let _alive_guard = AliveGuard(alive.clone());
@@ -294,15 +297,28 @@ pub(super) async fn run_gossip_shard(
                                 send_to_peer!(peer, data);
                             }
 
-                            let non_members: Vec<&NodeId> = targets.iter()
+                            let mut non_members: Vec<&NodeId> = targets.iter()
                                 .filter(|p| p.id_hash() != sender_hash && !members.contains(*p))
                                 .collect();
                             if !non_members.is_empty() {
                                 let k = epidemic_extra_peers.min(non_members.len());
-                                let start = fastrand::usize(0..non_members.len());
-                                for i in 0..k {
-                                    let peer = non_members[(start + i) % non_members.len()];
-                                    send_to_peer!(peer, data);
+                                // Shuffle first so that peers with equal locality scores
+                                // (or no known locality) are picked uniformly across
+                                // emissions. When a self_locality is configured, a stable
+                                // sort by shared_prefix_len then biases toward topology-
+                                // closer peers while preserving random tie-breaking.
+                                fastrand::shuffle(&mut non_members);
+                                if let Some(self_loc) = self_locality.as_ref() {
+                                    let pl_guard = peer_localities.pin();
+                                    non_members.sort_by_key(|p| {
+                                        let score = pl_guard.get(*p)
+                                            .map(|loc| loc.shared_prefix_len(self_loc))
+                                            .unwrap_or(0);
+                                        std::cmp::Reverse(score)
+                                    });
+                                }
+                                for peer in non_members.iter().take(k) {
+                                    send_to_peer!(*peer, data);
                                 }
                             }
                         }

@@ -8,9 +8,54 @@
 //! at runtime via `GOSSIP_*` environment variables.
 
 use serde::{Deserialize, Serialize};
-use std::{env, fs, path::Path};
+use std::{collections::HashMap, env, fs, path::Path};
 use crate::error::GossipError;
 use crate::NodeId;
+
+/// Enforcement strength for a [`GroupTopologyPolicy`].
+///
+/// **Soft**: topology is a preference for fan-out scoring and leader selection
+/// but never gates a quorum. Quorums commit as long as the active-member count
+/// is met — diversity, if any, emerges from preference.
+///
+/// **Hard**: quorum commit requires the policy's diversity condition to be met.
+/// When the condition is not met, [`ConsensusEngine::propose`] returns
+/// `ConsensusResult::TopologyUnsatisfied` — never silently degrades. The caller
+/// decides whether to wait, retry, or surface an error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum TopologyEnforcement {
+    #[default]
+    Soft,
+    Hard,
+}
+
+/// How a group's quorum must be distributed across [`LocalityPath`](crate::locality::LocalityPath) levels.
+///
+/// `prefer_shared_depth` biases fan-out and leader selection toward nodes sharing
+/// locality at the named depth. `spread_depth` + `spread_min_distinct` define the
+/// diversity gate evaluated when `enforcement = Hard`.
+///
+/// Validation: when `enforcement = Hard`, `spread_depth` must be `Some` and
+/// `spread_min_distinct` must be `>= 2`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GroupTopologyPolicy {
+    pub prefer_shared_depth: usize,
+    pub spread_depth:        Option<usize>,
+    pub spread_min_distinct: usize,
+    pub enforcement:         TopologyEnforcement,
+}
+
+impl Default for GroupTopologyPolicy {
+    fn default() -> Self {
+        Self {
+            prefer_shared_depth: 0,
+            spread_depth:        None,
+            spread_min_distinct: 1,
+            enforcement:         TopologyEnforcement::Soft,
+        }
+    }
+}
 
 /// Unified configuration for all protocol components.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -177,6 +222,27 @@ pub struct GossipConfig {
     /// `system_stats().store_entries` to detect saturation and raise the limit before
     /// it becomes active in production.
     pub max_store_entries: usize,
+
+    /// Hierarchical locality address for this node, coarse → fine.
+    ///
+    /// Typical: `["eu-west-1", "az-1a", "rack-14"]`. Segments are opaque strings;
+    /// the protocol never interprets values, only equality at each level. Empty
+    /// (the default) means "unspecified" — the node shares zero locality with any
+    /// peer, and topology-aware features degrade to a no-op for that node.
+    ///
+    /// Written to `cap/{node_id}/locality/self` at startup; tombstoned at shutdown.
+    /// Other nodes see this via gossip and use it for [`topology_policies`](Self::topology_policies)
+    /// scoring and Hard-enforcement quorum gates.
+    pub locality_path: Vec<String>,
+
+    /// Per-group topology policy. Looked up by group name when constructing a
+    /// consensus engine. Absent entries default to no policy (Soft enforcement,
+    /// no diversity gate).
+    ///
+    /// **Precedence over `CapabilityGroupDef.topology_policy`**: config entries here
+    /// always win. Emergent-group definitions can suggest a policy, but operator
+    /// config in this map overrides it.
+    pub topology_policies: HashMap<String, GroupTopologyPolicy>,
 }
 
 impl Default for GossipConfig {
@@ -209,6 +275,8 @@ impl Default for GossipConfig {
             health_check_max_jitter_ms: 0,
             signal_window_secs: 600,
             max_store_entries: 0,
+            locality_path:     Vec::new(),
+            topology_policies: HashMap::new(),
         }
     }
 }
@@ -321,6 +389,29 @@ impl GossipConfig {
                 "max_forwarding_peers is unlimited with a large bootstrap set; \
                  consider capping it (e.g. 32) to avoid O(N²) gossip traffic",
             );
+        }
+        for seg in &self.locality_path {
+            if seg.is_empty() {
+                return Err(GossipError::Config(
+                    "locality_path segments must be non-empty".into(),
+                ));
+            }
+        }
+        for (group, policy) in &self.topology_policies {
+            if policy.enforcement == TopologyEnforcement::Hard {
+                if policy.spread_depth.is_none() {
+                    return Err(GossipError::Config(format!(
+                        "topology_policies[{}] requires spread_depth when enforcement = Hard",
+                        group,
+                    )));
+                }
+                if policy.spread_min_distinct < 2 {
+                    return Err(GossipError::Config(format!(
+                        "topology_policies[{}] requires spread_min_distinct >= 2 when enforcement = Hard",
+                        group,
+                    )));
+                }
+            }
         }
         Ok(())
     }
@@ -439,6 +530,13 @@ impl GossipConfig {
         }
         if let Ok(v) = env::var("GOSSIP_EPIDEMIC_EXTRA_PEERS") {
             self.epidemic_extra_peers = v.parse().map_err(GossipError::Parse)?;
+        }
+        if let Ok(v) = env::var("GOSSIP_LOCALITY_PATH") {
+            self.locality_path = v
+                .split('/')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect();
         }
         Ok(())
     }
