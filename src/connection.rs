@@ -13,10 +13,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use parking_lot::RwLock;
 use std::{
     net::SocketAddr,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
+    sync::Arc,
     time::{Duration, Instant},
 };
 use tokio::{io::BufReader, net::TcpStream, sync::{mpsc, mpsc::error::TrySendError, watch}};
@@ -33,8 +30,11 @@ pub(crate) struct ConnContext {
     pub(crate) seen:             Arc<ShardedSeen>,
     pub(crate) shutdown:         Arc<watch::Sender<bool>>,
     pub(crate) max_ttl:          u8,
-    /// Unix-millisecond clock shared with the health monitor.
-    pub(crate) current_ts:       Arc<AtomicU64>,
+    /// Hybrid Logical Clock for causal LWW ordering. Incoming timestamps are
+    /// fed through `observe()` so locally-originated writes that follow
+    /// strictly dominate the observed remote stamp. Used as `current_ts` for
+    /// seen-set TTL eviction via `crate::hlc::physical_ms`.
+    pub(crate) hlc:              Arc<crate::hlc::Hlc>,
     pub(crate) peer_writers:     Arc<papaya::HashMap<NodeId, WriterEntry>>,
     pub(crate) writer_depth:     usize,
     pub(crate) backoff:          Duration,
@@ -61,7 +61,7 @@ pub(crate) async fn handle_connection(
 ) -> Result<(), GossipError> {
     let ConnContext {
         node_id, peers, gossip_txs, seen, shutdown, max_ttl,
-        current_ts, peer_writers, writer_depth, backoff, n_shards,
+        hlc, peer_writers, writer_depth, backoff, n_shards,
         intern_keys, intern_max_keys, signal_boundary, signal_handlers, max_peers,
         writer_idle_timeout, kv_state,
     } = ctx;
@@ -99,7 +99,10 @@ pub(crate) async fn handle_connection(
             let nonce = u64::from_le_bytes(
                 recv_buf[NONCE_OFFSET..NONCE_OFFSET + 8].try_into().unwrap(),
             );
-            if seen.mark_and_check(nonce, current_ts.load(Ordering::Relaxed)) {
+            // Seen-set TTL eviction is keyed by physical milliseconds — extract
+            // the high 48 bits of the packed HLC so the "age" math the seen-set
+            // does internally still maps to real time.
+            if seen.mark_and_check(nonce, crate::hlc::physical_ms(hlc.current())) {
                 continue;
             }
         }
@@ -274,6 +277,10 @@ pub(crate) async fn handle_connection(
 
             WireMessage::StateResponse { entries } => {
                 for entry in entries {
+                    // Absorb the remote HLC stamp so our clock dominates anything
+                    // anti-entropy hands us, even on a fresh restart where the
+                    // local clock is otherwise far behind any prior cluster state.
+                    hlc.observe(entry.timestamp);
                     // Intern keys from anti-entropy the same way as Data messages so
                     // both paths share the same Arc<str> allocation for the same key.
                     let key = if intern_keys { intern_key(entry.key, intern_max_keys) } else { entry.key };
@@ -292,7 +299,7 @@ pub(crate) async fn handle_connection(
             }
 
             WireMessage::Signal { ttl, nonce, sender, scope, kind, payload } => {
-                let ts = current_ts.load(Ordering::Relaxed);
+                let ts = crate::hlc::physical_ms(hlc.current());
                 if seen.mark_and_check(nonce, ts) {
                     continue;
                 }
@@ -326,7 +333,7 @@ pub(crate) async fn handle_connection(
                         if let Some((q_key, q_val)) = signal_handlers.quorum_evidence_payload(
                             &kind, &sender,
                         ) {
-                            let upd = make_gossip_update(&node_id, max_ttl, q_key, q_val, false);
+                            let upd = make_gossip_update(&node_id, max_ttl, q_key, q_val, false, &hlc);
                             apply_and_notify(&kv_state, &upd);
                             dispatch_gossip_try_send(
                                 &gossip_txs, WireMessage::Data(upd),
@@ -375,11 +382,15 @@ pub(crate) async fn handle_connection(
                 // Nonce was already checked and inserted by the early-dedup path above
                 // for FrameVersion::Current. For FrameVersion::Previous, check now.
                 if frame_version == FrameVersion::Previous {
-                    let ts = current_ts.load(Ordering::Relaxed);
+                    let ts = crate::hlc::physical_ms(hlc.current());
                     if seen.mark_and_check(update.nonce, ts) {
                         continue;
                     }
                 }
+                // Absorb the remote HLC stamp so any locally-originated update we
+                // emit afterwards strictly dominates this one — preserves causal
+                // happens-before across the cluster even under wall-clock skew.
+                hlc.observe(update.timestamp);
                 if intern_keys { update.key = intern_key(update.key, intern_max_keys); }
                 apply_and_notify(&kv_state, &update);
 

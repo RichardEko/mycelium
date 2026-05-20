@@ -32,6 +32,16 @@ pub(crate) const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
 ///     only sends entries that are newer or absent on the sender's side. v7 peers send
 ///     StateRequest without this field; they are decoded via `WireMessageV7` and converted
 ///     with `key_timestamps = vec![]` — the "no digest" sentinel that triggers a full snapshot.
+/// v9: `GossipUpdate.timestamp` is now a Hybrid Logical Clock value packed as
+///     `(physical_ms_48 << 16) | logical_16` rather than a raw wall-clock millisecond.
+///     LWW comparisons are unchanged — `>` on the packed `u64` is still equivalent to
+///     `(phys, logical)` lex order. Receivers feed every incoming timestamp through
+///     `Hlc::observe` so locally-originated updates after an observed remote always
+///     have a strictly greater HLC, preserving causal happens-before under clock skew.
+///     v8 timestamps cannot be safely reinterpreted as HLC (they'd parse as a far-past
+///     physical with logical=0 and lose every LWW comparison), so v8 acceptance was
+///     closed when v9 shipped — `PREV_WIRE_VERSION = WIRE_VERSION = 9`. Mixed-version
+///     clusters must perform a stop-the-world upgrade.
 ///
 /// Rolling-upgrade policy: `read_frame` accepts frames at both `WIRE_VERSION` and
 /// `PREV_WIRE_VERSION`. When bumping WIRE_VERSION to N+1:
@@ -44,21 +54,15 @@ pub(crate) const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
 ///   5. After all nodes are upgraded, set `PREV_WIRE_VERSION = WIRE_VERSION` to close
 ///      the acceptance window.
 ///
-/// **Current state**: `PREV_WIRE_VERSION = 7` (one-version legacy window open).
-/// v7 peers are accepted; their StateRequest is decoded with key_timestamps=[] (full snapshot).
-/// When all nodes are on v8, set `PREV_WIRE_VERSION = WIRE_VERSION` to close the window.
-pub(crate) const WIRE_VERSION: u8 = 8;
-/// Previous wire version accepted during rolling upgrades.
-///
-/// Set to 7 so nodes still running v7 can exchange gossip during rolling upgrades.
-/// The only wire-format difference between v7 and v8 is the extra `key_timestamps` field
-/// in `StateRequest`; all other variants are identical. v7 `StateRequest` frames are
-/// decoded via `WireMessageV7` and converted with `key_timestamps = vec![]` (the "no
-/// delta" sentinel that triggers a full snapshot — correct and safe).
-///
-/// After all cluster nodes are upgraded to v8, set this to `WIRE_VERSION` to close
-/// the acceptance window and reject stale v7 connections with a clear error.
-pub(crate) const PREV_WIRE_VERSION: u8 = 7;
+/// **Current state**: `PREV_WIRE_VERSION = WIRE_VERSION = 9`. The v8→v9 jump introduced
+/// HLC semantics on the timestamp field; old wall-clock stamps cannot be soundly
+/// converted, so v8 acceptance was closed at the cut-over rather than opening a
+/// legacy window.
+pub(crate) const WIRE_VERSION: u8 = 9;
+/// Previous wire version accepted during rolling upgrades. Equal to `WIRE_VERSION`
+/// here because the v8→v9 transition redefines timestamp semantics; no safe v8
+/// conversion path exists.
+pub(crate) const PREV_WIRE_VERSION: u8 = 9;
 
 /// Which wire version a received frame was encoded with.
 /// Used by `handle_connection` to select the appropriate decoder and to decide
@@ -387,17 +391,14 @@ pub(crate) fn make_gossip_update(
     key:          Arc<str>,
     value:        bytes::Bytes,
     is_tombstone: bool,
+    hlc:          &crate::hlc::Hlc,
 ) -> GossipUpdate {
-    use std::time::{SystemTime, UNIX_EPOCH};
     GossipUpdate {
-        nonce:     fastrand::u64(1..),
-        sender:    node_id.id_hash(),
+        nonce:        fastrand::u64(1..),
+        sender:       node_id.id_hash(),
         ttl,
         is_tombstone,
-        timestamp: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64,
+        timestamp:    hlc.tick(),
         key,
         value,
     }

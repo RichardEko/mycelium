@@ -205,6 +205,7 @@ impl GossipAgent {
                                         written_at_ms,
                                     }),
                                     false,
+                                    &ctx.hlc,
                                 );
                                 apply_and_notify(&ctx.kv_state, &upd);
                                 dispatch_gossip_try_send(
@@ -224,7 +225,7 @@ impl GossipAgent {
                                 format!("{}{}/{}", kv_ns::LOAD, ctx.node_id, kind).as_str()
                             );
                             let upd = make_gossip_update(
-                                &ctx.node_id, ctx.default_ttl, load_key, Bytes::new(), true,
+                                &ctx.node_id, ctx.default_ttl, load_key, Bytes::new(), true, &ctx.hlc,
                             );
                             apply_and_notify(&ctx.kv_state, &upd);
                             dispatch_gossip_try_send(

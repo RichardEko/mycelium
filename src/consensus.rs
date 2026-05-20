@@ -385,7 +385,7 @@ impl ConsensusEngine {
     /// Uses `try_send` for gossip dispatch — dropped frames recovered via anti-entropy.
     fn kv_set(&self, key: String, value: Bytes) {
         let tc = &self.task_ctx;
-        let upd = make_gossip_update(&tc.node_id, tc.default_ttl, Arc::from(key.as_str()), value, false);
+        let upd = make_gossip_update(&tc.node_id, tc.default_ttl, Arc::from(key.as_str()), value, false, &tc.hlc);
         apply_and_notify(&tc.kv_state, &upd);
         dispatch_gossip_try_send(
             &tc.gossip_txs, WireMessage::Data(upd),
@@ -397,7 +397,7 @@ impl ConsensusEngine {
     /// Used to clean up ballot entries once a slot has committed.
     fn kv_delete(&self, key: &str) {
         let tc = &self.task_ctx;
-        let upd = make_gossip_update(&tc.node_id, tc.default_ttl, Arc::from(key), Bytes::new(), true);
+        let upd = make_gossip_update(&tc.node_id, tc.default_ttl, Arc::from(key), Bytes::new(), true, &tc.hlc);
         apply_and_notify(&tc.kv_state, &upd);
         dispatch_gossip_try_send(
             &tc.gossip_txs, WireMessage::Data(upd),
@@ -408,7 +408,7 @@ impl ConsensusEngine {
     /// Like `kv_set` but awaits channel capacity (used by the proposer).
     async fn set_async(&self, key: &str, value: Bytes) {
         let tc = &self.task_ctx;
-        let upd = make_gossip_update(&tc.node_id, tc.default_ttl, Arc::from(key), value, false);
+        let upd = make_gossip_update(&tc.node_id, tc.default_ttl, Arc::from(key), value, false, &tc.hlc);
         apply_and_notify(&tc.kv_state, &upd);
         dispatch_gossip_send(
             &tc.gossip_txs, WireMessage::Data(upd),

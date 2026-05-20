@@ -9,7 +9,7 @@ use bytes::Bytes;
 use parking_lot::RwLock;
 use std::{
     sync::{
-        atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
         Arc,
     },
     time::Instant,
@@ -105,7 +105,11 @@ pub struct SystemStats {
 pub(crate) struct TaskCtx {
     pub(crate) node_id:          NodeId,
     pub(crate) seen:             Arc<ShardedSeen>,
-    pub(crate) current_ts:       Arc<AtomicU64>,
+    /// Hybrid Logical Clock for causal LWW ordering. `make_gossip_update`
+    /// calls `tick()` for every locally-originated write; the connection
+    /// handler calls `observe()` for every incoming timestamp so the local
+    /// clock dominates any remote stamp it has seen.
+    pub(crate) hlc:              Arc<crate::hlc::Hlc>,
     pub(crate) signal_boundary:  Arc<RwLock<Boundary>>,
     pub(crate) signal_handlers:  Arc<SignalHandlers>,
     pub(crate) gossip_txs:       Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]>,
@@ -210,11 +214,6 @@ impl GossipAgent {
         bootstrap_peers.retain(|p| p != &node_id);
         let bootstrap_peers: Arc<[NodeId]> = bootstrap_peers.into();
         let (peer_list_tx, _) = watch::channel(bootstrap_peers.clone());
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let init_ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
         let shard_alive = (0..n_shards)
             .map(|_| Arc::new(AtomicBool::new(false)))
             .collect();
@@ -227,7 +226,7 @@ impl GossipAgent {
         let task_ctx = Arc::new(TaskCtx {
             node_id:         node_id.clone(),
             seen:            Arc::new(ShardedSeen::new(seen_shards)),
-            current_ts:      Arc::new(AtomicU64::new(init_ts)),
+            hlc:             Arc::new(crate::hlc::Hlc::new()),
             signal_boundary: Arc::new(RwLock::new(Boundary::new(node_id.clone()))),
             signal_handlers: Arc::new(SignalHandlers::new(signal_window)),
             gossip_txs,

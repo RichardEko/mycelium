@@ -5,10 +5,7 @@ use crate::framing::{
 use crate::signal::{Boundary, Signal, SignalHandlers, SignalScope};
 use bytes::Bytes;
 use parking_lot::RwLock;
-use std::sync::{
-    atomic::Ordering,
-    Arc,
-};
+use std::sync::Arc;
 
 use super::{GossipAgent, TaskCtx};
 
@@ -33,11 +30,11 @@ impl GossipAgent {
     }
 
     pub(super) fn make_update(&self, key: Arc<str>, value: Bytes, is_tombstone: bool) -> GossipUpdate {
-        // SystemTime::now() — not cached current_ts — so each locally-originated write
-        // gets a fresh timestamp. Two set() calls in the same health-monitor tick interval
-        // would otherwise share a timestamp and lose LWW determinism for concurrent
-        // cross-node writes to the same key.
-        make_gossip_update(&self.node_id, self.config.default_ttl, key, value, is_tombstone)
+        // The HLC `tick()` inside make_gossip_update guarantees this write
+        // gets a strictly-greater timestamp than every previous local write
+        // and every observed remote stamp — fixing the wall-clock LWW
+        // determinism issue that two same-millisecond writes used to have.
+        make_gossip_update(&self.node_id, self.config.default_ttl, key, value, is_tombstone, &self.task_ctx.hlc)
     }
 
     pub(super) fn make_consensus_engine(
@@ -104,7 +101,9 @@ pub(crate) fn emit_signal(
     payload: Bytes,
 ) -> bool {
     let nonce = fastrand::u64(1..);
-    let ts = ctx.current_ts.load(Ordering::Relaxed);
+    // Seen-set TTL eviction uses physical milliseconds; extract from the
+    // packed HLC so the seen-set's age math still operates in real time.
+    let ts = crate::hlc::physical_ms(ctx.hlc.current());
     ctx.seen.mark_and_check(nonce, ts);
     let handler_fill = ctx.signal_handlers.fill_ratio(&kind);
     let combined = handler_fill.max(crate::framing::gossip_shard_fill(&ctx.gossip_txs));
@@ -136,7 +135,9 @@ pub(crate) async fn emit_signal_async(
     payload: Bytes,
 ) -> bool {
     let nonce = fastrand::u64(1..);
-    let ts = ctx.current_ts.load(Ordering::Relaxed);
+    // Seen-set TTL eviction uses physical milliseconds; extract from the
+    // packed HLC so the seen-set's age math still operates in real time.
+    let ts = crate::hlc::physical_ms(ctx.hlc.current());
     ctx.seen.mark_and_check(nonce, ts);
     let handler_fill = ctx.signal_handlers.fill_ratio(&kind);
     let combined = handler_fill.max(crate::framing::gossip_shard_fill(&ctx.gossip_txs));

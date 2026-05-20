@@ -342,7 +342,7 @@ pub(super) async fn run_health_monitor(
     peer_writers:          Arc<papaya::HashMap<NodeId, WriterEntry>>,
     peer_list_tx:          watch::Sender<Arc<[NodeId]>>,
     shutdown_tx:           Arc<watch::Sender<bool>>,
-    current_ts:            Arc<AtomicU64>,
+    hlc:                   Arc<crate::hlc::Hlc>,
     interval_secs:         u64,
     writer_depth:          usize,
     backoff:               Duration,
@@ -450,11 +450,12 @@ pub(super) async fn run_health_monitor(
                     }
                 }
 
-                let wall_ts = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64;
-                current_ts.store(wall_ts, Ordering::Relaxed);
+                // Advance the HLC's physical floor by ticking it; if wall time
+                // has moved past the previous physical, the logical resets to
+                // 0. This keeps the clock fresh for seen-set TTL eviction
+                // even when this node has no outbound traffic and would
+                // otherwise let its HLC drift behind real time.
+                let _ = hlc.tick();
 
                 signal_handlers.trim_sender_log(Duration::from_secs(signal_window_secs));
 

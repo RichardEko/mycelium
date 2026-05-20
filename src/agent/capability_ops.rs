@@ -902,7 +902,7 @@ async fn run_requirement_opacity_watcher(
             written_at_ms: now_ms(),
         });
         let upd = make_gossip_update(
-            &ctx.node_id, ctx.default_ttl, opacity_key.clone(), payload, false,
+            &ctx.node_id, ctx.default_ttl, opacity_key.clone(), payload, false, &ctx.hlc,
         );
         apply_and_notify(&ctx.kv_state, &upd);
         dispatch_gossip_try_send(
@@ -913,7 +913,7 @@ async fn run_requirement_opacity_watcher(
 
     let clear_opaque = |ctx: &TaskCtx| {
         let upd = make_gossip_update(
-            &ctx.node_id, ctx.default_ttl, opacity_key.clone(), Bytes::new(), true,
+            &ctx.node_id, ctx.default_ttl, opacity_key.clone(), Bytes::new(), true, &ctx.hlc,
         );
         apply_and_notify(&ctx.kv_state, &upd);
         dispatch_gossip_try_send(
@@ -1222,7 +1222,7 @@ async fn run_group_req_opacity_watcher(
             written_at_ms: now_ms(),
         });
         let upd = make_gossip_update(
-            &ctx.node_id, ctx.default_ttl, opacity_key.clone(), payload, false,
+            &ctx.node_id, ctx.default_ttl, opacity_key.clone(), payload, false, &ctx.hlc,
         );
         apply_and_notify(&ctx.kv_state, &upd);
         dispatch_gossip_try_send(
@@ -1233,7 +1233,7 @@ async fn run_group_req_opacity_watcher(
 
     let clear_opaque = |ctx: &TaskCtx| {
         let upd = make_gossip_update(
-            &ctx.node_id, ctx.default_ttl, opacity_key.clone(), Bytes::new(), true,
+            &ctx.node_id, ctx.default_ttl, opacity_key.clone(), Bytes::new(), true, &ctx.hlc,
         );
         apply_and_notify(&ctx.kv_state, &upd);
         dispatch_gossip_try_send(
@@ -1317,7 +1317,7 @@ fn emit_membership(ctx: &TaskCtx, own: &NodeId, group: &Arc<str>, leaving: bool)
     let key: Arc<str> = Arc::from(format!("grp/{}/{}", group, own).as_str());
     let payload = if leaving { Bytes::new() } else { Bytes::from_static(&[1u8]) };
     let upd = make_gossip_update(
-        &ctx.node_id, ctx.default_ttl, key, payload, leaving,
+        &ctx.node_id, ctx.default_ttl, key, payload, leaving, &ctx.hlc,
     );
     apply_and_notify(&ctx.kv_state, &upd);
     dispatch_gossip_try_send(
@@ -1488,10 +1488,12 @@ mod tests {
     // ── demand_snapshot ─────────────────────────────────────────────────────
 
     use crate::framing::make_gossip_update;
+    use crate::hlc::Hlc;
     use crate::store::{apply_and_notify, KvState};
 
     fn write(kv: &KvState, sender: &NodeId, key: &str, value: Bytes) {
-        let upd = make_gossip_update(sender, 5, Arc::from(key), value, false);
+        let hlc = Hlc::new();
+        let upd = make_gossip_update(sender, 5, Arc::from(key), value, false, &hlc);
         apply_and_notify(kv, &upd);
     }
 

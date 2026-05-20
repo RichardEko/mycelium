@@ -56,6 +56,7 @@ mod agent;
 mod connection;
 mod consensus;
 mod framing;
+mod hlc;
 mod locality;
 mod node_id;
 mod seen;
@@ -87,8 +88,8 @@ mod tests {
     use crate::connection::ConnContext;
     use crate::framing::{
         bincode_cfg, read_frame, write_frame, GossipUpdate, SyncEntry,
-        WireMessage, WireMessageV7,
-        N_GOSSIP_SHARDS, NONCE_OFFSET, PREV_WIRE_VERSION, TTL_OFFSET,
+        WireMessage,
+        N_GOSSIP_SHARDS, NONCE_OFFSET, TTL_OFFSET,
     };
     use crate::seen::ShardedSeen;
     use crate::store::{apply_to_store, store_hash, KvState, StoreEntry};
@@ -132,19 +133,6 @@ mod tests {
         write_frame(writer, &data).await.unwrap();
     }
 
-    /// Send a raw frame tagged with `PREV_WIRE_VERSION` (v7), bypassing `write_frame`
-    /// which always stamps `WIRE_VERSION`. Used to test backward-compat decode paths.
-    async fn send_wire_prev(writer: &mut TcpStream, msg: &WireMessageV7) {
-        use tokio::io::AsyncWriteExt;
-        let payload = bincode::serde::encode_to_vec(msg, bincode_cfg()).unwrap();
-        let total = (1 + payload.len()) as u32;
-        let mut header = [0u8; 5];
-        header[..4].copy_from_slice(&total.to_be_bytes());
-        header[4] = PREV_WIRE_VERSION;
-        writer.write_all(&header).await.unwrap();
-        writer.write_all(&payload).await.unwrap();
-    }
-
     fn data_update(key: &str, value: &[u8], nonce: u64, is_tombstone: bool) -> GossipUpdate {
         GossipUpdate {
             sender:       NodeId::new("127.0.0.1", 9999).unwrap().id_hash(),
@@ -183,7 +171,7 @@ mod tests {
             seen,
             shutdown: shutdown_tx.clone(),
             max_ttl,
-            current_ts: Arc::new(AtomicU64::new(0)),
+            hlc: Arc::new(crate::hlc::Hlc::new()),
             peer_writers: Arc::new(papaya::HashMap::new()),
             writer_depth: 64,
             backoff: Duration::ZERO,
@@ -832,7 +820,7 @@ mod tests {
                 seen: Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)),
                 shutdown: shutdown_tx,
                 max_ttl: 5,
-                current_ts: Arc::new(AtomicU64::new(0)),
+                hlc: Arc::new(crate::hlc::Hlc::new()),
                 peer_writers: Arc::new(papaya::HashMap::new()),
                 writer_depth: 64,
                 backoff: Duration::ZERO,
@@ -1192,59 +1180,6 @@ mod tests {
                 entries.is_empty(),
                 "anti-entropy fast-path: StateResponse must be empty when hashes match; got {} entries",
                 entries.len(),
-            ),
-            other => panic!("expected StateResponse, got {:?}", other),
-        }
-    }
-
-    // A v7 StateRequest (has store_hash but no key_timestamps) must be decoded correctly
-    // and trigger a full StateResponse — not a decode error that silently drops the request.
-    #[tokio::test]
-    async fn test_v7_state_request_decoded_as_full_snapshot() {
-        let store: Arc<papaya::HashMap<Arc<str>, StoreEntry>> = Arc::new(papaya::HashMap::new());
-        store.pin().insert(
-            Arc::from("v7_key"),
-            StoreEntry { data: Some(Bytes::from_static(b"v7_val")), timestamp: 10 },
-        );
-
-        let response_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let sender_port = response_listener.local_addr().unwrap().port();
-        let sender_id = NodeId::new("127.0.0.1", sender_port).unwrap();
-
-        let peers: Arc<papaya::HashMap<NodeId, Instant>> = Arc::new(papaya::HashMap::new());
-        peers.pin().insert(sender_id.clone(), Instant::now());
-
-        let (mut writer, reader) = loopback_pair().await;
-        let (tx, _rx) = mpsc::channel(10);
-        let (_shutdown, _handle) = spawn_handler(
-            reader, store, peers, tx,
-            Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)),
-            GossipConfig::default().default_ttl,
-        );
-
-        let accept_task = tokio::spawn(async move {
-            let (sock, _) = response_listener.accept().await.unwrap();
-            sock
-        });
-
-        // Send a v7-format StateRequest (store_hash but no key_timestamps).
-        send_wire_prev(&mut writer, &WireMessageV7::StateRequest { sender: sender_id, store_hash: 0 }).await;
-
-        let mut response_sock = accept_task.await.unwrap();
-        let mut buf = BytesMut::new();
-        tokio::time::timeout(
-            Duration::from_millis(500),
-            read_frame(&mut response_sock, &mut buf),
-        )
-        .await
-        .expect("timed out — v7 StateRequest was likely dropped instead of decoded")
-        .expect("read_frame error");
-
-        let (msg, _): (WireMessage, _) = bincode::serde::decode_from_slice(&buf, bincode_cfg()).unwrap();
-        match msg {
-            WireMessage::StateResponse { entries } => assert!(
-                !entries.is_empty(),
-                "v7 StateRequest (key_timestamps=[]) must trigger full snapshot, got empty response",
             ),
             other => panic!("expected StateResponse, got {:?}", other),
         }
