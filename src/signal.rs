@@ -128,60 +128,36 @@ impl Boundary {
 /// Per-kind sender history shard type alias.
 type SenderLog = PapayaMap<Arc<str>, Arc<Mutex<VecDeque<(NodeId, Instant)>>>>;
 
-/// Fan-out registry: maps signal kind to a list of `mpsc::Sender<Signal>`.
+// ── SignalHandlers sub-types ──────────────────────────────────────────────────
+//
+// SignalHandlers used to bundle five concerns into one struct (handler-table
+// fan-out, last-seen tracking, suppression, sender-log for quorum queries,
+// and per-(kind, sender) rate-limiting for sys/quorum/ writes). Split into
+// four focused types below so each owns one cluster of fields + methods:
+//
+//   HandlerTable      — register / fill_ratio / fan-out (the admission path)
+//   SignalLog         — last_seen + sender_log + quorum + seed + trim
+//   SuppressionTable  — refractory-period table (suppress / unsuppress / check)
+//   QuorumEvidence    — sys/quorum/ rate-limited payload + trim
+//
+// `SignalHandlers` (further down) holds one of each and delegates. `deliver`
+// orchestrates across them in a fixed order: record → suppression-check →
+// fan-out. No behaviour change vs. the pre-split implementation.
+
+/// Handler fan-out registry: maps signal kind → list of `mpsc::Sender<Signal>`.
 ///
-/// Multiple tasks may register receivers for the same kind. All registered
-/// channels receive the signal on delivery. Closed channels are evicted lazily.
-pub(crate) struct SignalHandlers {
-    /// papaya::HashMap for lock-free epoch-pinned reads on the hot delivery path.
-    /// Value is `Arc<Vec<Sender>>` so the snapshot in `deliver()` is an O(1) refcount
-    /// increment. Registration (cold path) rebuilds the Vec+Arc via `compute()`.
-    map:         PapayaMap<Arc<str>, Arc<Vec<mpsc::Sender<Signal>>>>,
-    /// Lock-free reads via papaya epoch pinning — hot on every `last_signal` query.
-    last_seen:   PapayaMap<Arc<str>, Instant>,
-    /// Active refractory periods. Value is the `Instant` at which suppression expires.
-    /// Read on every `deliver()` call — papaya epoch pinning keeps this lock-free.
-    suppressed:  PapayaMap<Arc<str>, Instant>,
-    /// Per-kind sender history for [`quorum`](Self::quorum) queries.
-    /// Each entry is `(sender, received_at)`. Updated unconditionally in `deliver()`,
-    /// including during suppression. Entries older than `sender_log_window` are evicted lazily.
-    ///
-    /// Outer map: papaya (lock-free epoch-pinned reads/inserts on the hot delivery path).
-    /// Inner value: `Arc<Mutex<VecDeque>>` so deliver() can mutate the deque in-place
-    /// without cloning the entire collection via papaya's `compute()`. The Mutex is taken
-    /// only for the deque update; the outer papaya epoch is released immediately after
-    /// cloning the `Arc`.
-    sender_log:  SenderLog,
-    /// Operator-configured retention window for sender log entries.
-    /// Mirrors [`GossipConfig::signal_window_secs`] so `deliver()` inline eviction
-    /// agrees with `trim_sender_log` instead of hardcoding `SENDER_LOG_WINDOW`.
-    sender_log_window: Duration,
-    /// Tracks the last time a `sys/quorum/` entry was written for each `{kind}/{sender}` key.
-    /// Used by [`quorum_evidence_payload`](Self::quorum_evidence_payload) to rate-limit writes
-    /// to one per second without reading `KvState`.
-    quorum_written: PapayaMap<Arc<str>, Instant>,
+/// papaya is the hot map type because `deliver` runs on every received signal
+/// and registrations happen rarely. Value is `Arc<Vec<Sender>>` so the snapshot
+/// in `deliver_to_handlers` is a single atomic refcount increment; the guard
+/// drops before the per-sender try_send loop.
+struct HandlerTable {
+    map: PapayaMap<Arc<str>, Arc<Vec<mpsc::Sender<Signal>>>>,
 }
 
-impl SignalHandlers {
-    pub(crate) fn new(sender_log_window: Duration) -> Self {
-        Self {
-            map:            PapayaMap::new(),
-            last_seen:      PapayaMap::new(),
-            suppressed:     PapayaMap::new(),
-            sender_log:     PapayaMap::new(),
-            sender_log_window,
-            quorum_written: PapayaMap::new(),
-        }
-    }
+impl HandlerTable {
+    fn new() -> Self { Self { map: PapayaMap::new() } }
 
-    /// Returns a new `mpsc::Receiver<Signal>` for `kind` with the default channel depth (256).
-    /// Multiple calls for the same kind produce independent receivers.
-    pub(crate) fn register(&self, kind: Arc<str>) -> mpsc::Receiver<Signal> {
-        self.register_with_capacity(kind, 256)
-    }
-
-    /// Returns a new `mpsc::Receiver<Signal>` for `kind` with a caller-specified channel depth.
-    pub(crate) fn register_with_capacity(&self, kind: Arc<str>, cap: usize) -> mpsc::Receiver<Signal> {
+    fn register_with_capacity(&self, kind: Arc<str>, cap: usize) -> mpsc::Receiver<Signal> {
         let (tx, rx) = mpsc::channel(cap);
         let mut slot = Some(tx);
         self.map.pin().compute(kind, |existing| -> papaya::Operation<Arc<Vec<mpsc::Sender<Signal>>>, ()> {
@@ -197,18 +173,7 @@ impl SignalHandlers {
         rx
     }
 
-    /// Returns the maximum fill ratio across all open senders for `kind`.
-    ///
-    /// 0.0 = all channels empty (boundary fully transparent).
-    /// 1.0 = at least one channel full (boundary fully opaque).
-    /// Returns 0.0 when no handlers are registered — `deliver` would be a no-op anyway.
-    ///
-    /// Using the maximum means the opacity reading reflects the most-loaded handler.
-    /// If any one handler is saturated, signals addressed to this node are shed at
-    /// the boundary — consistent with the intent of load-adaptive admission control.
-    /// (The previous minimum aggregation reported 0.0 opacity even when all but one
-    /// handler were full, causing `opacity()` to mislead diagnostics.)
-    pub(crate) fn fill_ratio(&self, kind: &Arc<str>) -> f32 {
+    fn fill_ratio(&self, kind: &Arc<str>) -> f32 {
         let guard = self.map.pin();
         let Some(senders) = guard.get(kind.as_ref()) else { return 0.0 };
         let mut max_ratio: f32 = 0.0;
@@ -219,55 +184,15 @@ impl SignalHandlers {
         max_ratio.min(1.0)
     }
 
-    /// Fans out `signal` to all receivers registered for `signal.kind`.
-    /// Closed senders are removed lazily. Full channels log a warning and drop the signal.
-    /// Records the delivery time for [`last_signal`](Self::last_signal) regardless
-    /// of whether any handlers are registered.
-    ///
-    /// Hot-path design: epoch-pins the papaya map to get an `Arc<Vec<Sender>>` snapshot
-    /// (one atomic refcount increment), then unpins before iterating. The guard is held
-    /// for the absolute minimum time. Closed-sender eviction uses a CAS `compute()` write
-    /// and only occurs when at least one sender was found closed.
-    pub(crate) fn deliver(&self, signal: &Signal) {
-        let now = Instant::now();
-        self.last_seen.pin().insert(signal.kind.clone(), now);
-        // Track sender history unconditionally — not gated by suppression so that
-        // quorum() counts all received signals, not just delivered ones.
-        {
-            let window = self.sender_log_window;
-            let guard = self.sender_log.pin();
-            let arc = if let Some(existing) = guard.get(signal.kind.as_ref()) {
-                existing.clone()
-            } else {
-                let new_arc = Arc::new(Mutex::new(VecDeque::<(NodeId, Instant)>::new()));
-                let mut result: Option<Arc<Mutex<VecDeque<_>>>> = None;
-                guard.compute(signal.kind.clone(), |existing| match existing {
-                    Some((_, arc)) => { result = Some(arc.clone()); papaya::Operation::Abort(()) }
-                    None => { result = Some(new_arc.clone()); papaya::Operation::Insert(new_arc.clone()) }
-                });
-                result.unwrap()
-            };
-            let mut log = arc.lock();
-            while log.front().map(|(_, t)| t.elapsed() >= window).unwrap_or(false) {
-                log.pop_front();
-            }
-            log.push_back((signal.sender.clone(), now));
-        }
-        // Refractory period: record timestamp but do not fan-out to handlers.
-        // Forwarding (epidemic propagation) is unconditional and happens before deliver().
-        if self.suppressed.pin().get(&signal.kind)
-            .map(|until| now < *until)
-            .unwrap_or(false)
-        {
-            return;
-        }
+    /// Fans out a snapshot of senders for `signal.kind`. Closed senders are
+    /// evicted lazily via a CAS write only when at least one was found closed.
+    fn deliver_to_handlers(&self, signal: &Signal) {
         let snapshot: Arc<Vec<mpsc::Sender<Signal>>> = {
             let guard = self.map.pin();
             match guard.get(&*signal.kind) {
-                Some(arc) => Arc::clone(arc),   // O(1) atomic refcount increment; guard released below
+                Some(arc) => Arc::clone(arc),
                 None => return,
             }
-            // guard drops here — epoch unpinned before the send loop
         };
         let mut has_closed = false;
         for tx in snapshot.iter() {
@@ -298,77 +223,93 @@ impl SignalHandlers {
             });
         }
     }
+}
 
-    /// Returns when this node last admitted a signal of `kind`, or `None` if never.
-    pub(crate) fn last_signal(&self, kind: &str) -> Option<Instant> {
+/// Per-kind history of admitted signals: when a kind was last seen and a
+/// rolling window of `(sender, received_at)` for `quorum*` queries.
+///
+/// Distinct from `HandlerTable` because writes happen unconditionally — even
+/// during suppression — so `quorum()` counts all received signals, not just
+/// delivered ones.
+struct SignalLog {
+    last_seen:         PapayaMap<Arc<str>, Instant>,
+    sender_log:        SenderLog,
+    sender_log_window: Duration,
+}
+
+impl SignalLog {
+    fn new(sender_log_window: Duration) -> Self {
+        Self {
+            last_seen:  PapayaMap::new(),
+            sender_log: PapayaMap::new(),
+            sender_log_window,
+        }
+    }
+
+    /// Records that `signal` was seen at `now`, updating both `last_seen` and
+    /// the sender history. Lazy retention prunes the deque front while the
+    /// oldest entry is older than `sender_log_window`.
+    fn record(&self, kind: &Arc<str>, sender: NodeId, now: Instant) {
+        self.last_seen.pin().insert(kind.clone(), now);
+        let window = self.sender_log_window;
+        let arc = {
+            let guard = self.sender_log.pin();
+            if let Some(existing) = guard.get(kind.as_ref()) {
+                existing.clone()
+            } else {
+                let new_arc = Arc::new(Mutex::new(VecDeque::<(NodeId, Instant)>::new()));
+                let mut result: Option<Arc<Mutex<VecDeque<_>>>> = None;
+                guard.compute(kind.clone(), |existing| match existing {
+                    Some((_, arc)) => { result = Some(arc.clone()); papaya::Operation::Abort(()) }
+                    None => { result = Some(new_arc.clone()); papaya::Operation::Insert(new_arc.clone()) }
+                });
+                result.unwrap()
+            }
+        };
+        let mut log = arc.lock();
+        while log.front().map(|(_, t)| t.elapsed() >= window).unwrap_or(false) {
+            log.pop_front();
+        }
+        log.push_back((sender, now));
+    }
+
+    fn last_signal(&self, kind: &str) -> Option<Instant> {
         self.last_seen.pin().get(kind).copied()
     }
 
-    pub(crate) fn suppress(&self, kind: Arc<str>, until: Instant) {
-        self.suppressed.pin().insert(kind, until);
-    }
-
-    pub(crate) fn unsuppress(&self, kind: &str) {
-        self.suppressed.pin().remove(kind);
-    }
-
-    pub(crate) fn is_suppressed(&self, kind: &str) -> bool {
-        self.suppressed.pin().get(kind)
-            .map(|until| Instant::now() < *until)
-            .unwrap_or(false)
-    }
-
-    /// Removes all sender-log entries older than 10 minutes and drops kinds whose
-    /// log has become empty. Called from the GC task on each GC tick.
-    ///
-    /// Bounds both per-kind entry count (lazy retention inside `deliver`) and total
-    /// kind count (removes kinds no longer seen), preventing unbounded growth when
-    /// dynamic or high-cardinality kind strings are used.
-    pub(crate) fn trim_sender_log(&self, window: Duration) {
-        let now = Instant::now();
-        let cutoff = now - window;
-
-        // Evict stale sender_log entries.
-        let to_remove: Vec<Arc<str>> = {
-            let guard = self.sender_log.pin();
-            guard.iter()
-                .filter_map(|(kind, arc)| {
-                    let mut log = arc.lock();
-                    while log.front().map(|(_, t)| *t <= cutoff).unwrap_or(false) {
-                        log.pop_front();
-                    }
-                    if log.is_empty() { Some(kind.clone()) } else { None }
-                })
-                .collect()
-        };
-        {
-            let guard = self.sender_log.pin();
-            for kind in to_remove {
-                guard.remove(&kind);
-            }
+    fn quorum(&self, kind: &str, min_senders: usize, window: Duration) -> bool {
+        let Some(arc) = self.sender_log.pin().get(kind).map(Arc::clone) else { return false };
+        let log = arc.lock();
+        let mut distinct: AHashSet<u64> = AHashSet::with_capacity(min_senders + 1);
+        for (sender, received_at) in log.iter() {
+            if received_at.elapsed() > window { continue; }
+            distinct.insert(sender.id_hash());
+            if distinct.len() >= min_senders { return true; }
         }
-
-        // Evict quorum_written entries older than the window.
-        // Prevents unbounded growth when many distinct (kind, sender) pairs are seen.
-        let qw_stale: Vec<Arc<str>> = self.quorum_written.pin()
-            .iter()
-            .filter_map(|(k, last)| {
-                if now.duration_since(*last) > window { Some(k.clone()) } else { None }
-            })
-            .collect();
-        let qw_guard = self.quorum_written.pin();
-        for k in qw_stale {
-            qw_guard.remove(&k);
-        }
+        false
     }
 
-    /// Seeds the sender log with a past entry reconstructed from a `sys/quorum/` Layer I record.
-    ///
-    /// Called from `GossipAgent::warm_quorum_from_layer1()` at startup to restore quorum
-    /// state across process restarts. Entries older than `sender_log_window` are silently
-    /// discarded; entries within the window are inserted with an approximated `Instant`
-    /// so `quorum()` counts them correctly on the first call.
-    pub(crate) fn seed_sender_log(&self, kind: Arc<str>, sender: NodeId, age_ms: u64) {
+    fn quorum_for_group(
+        &self,
+        kind:          &str,
+        member_hashes: &AHashSet<u64>,
+        min_senders:   usize,
+        window:        Duration,
+    ) -> bool {
+        let Some(arc) = self.sender_log.pin().get(kind).map(Arc::clone) else { return false };
+        let log = arc.lock();
+        let mut distinct: AHashSet<u64> = AHashSet::with_capacity(min_senders + 1);
+        for (sender, received_at) in log.iter() {
+            if received_at.elapsed() > window { continue; }
+            let hash = sender.id_hash();
+            if !member_hashes.contains(&hash) { continue; }
+            distinct.insert(hash);
+            if distinct.len() >= min_senders { return true; }
+        }
+        false
+    }
+
+    fn seed(&self, kind: Arc<str>, sender: NodeId, age_ms: u64) {
         if age_ms > self.sender_log_window.as_millis() as u64 { return; }
         let received_at = Instant::now()
             .checked_sub(Duration::from_millis(age_ms))
@@ -388,65 +329,71 @@ impl SignalHandlers {
         arc.lock().push_back((sender, received_at));
     }
 
-    /// Returns `true` when at least `min_senders` distinct [`NodeId`]s have had a
-    /// signal of `kind` delivered within `window`.
-    ///
-    /// Synchronous read; does not start a background task. Short-circuits as soon as
-    /// `min_senders` distinct senders are found — O(min_senders) average case.
-    pub(crate) fn quorum(&self, kind: &str, min_senders: usize, window: Duration) -> bool {
-        let Some(arc) = self.sender_log.pin().get(kind).map(Arc::clone) else { return false };
-        let log = arc.lock();
-        let mut distinct: AHashSet<u64> = AHashSet::with_capacity(min_senders + 1);
-        for (sender, received_at) in log.iter() {
-            if received_at.elapsed() > window { continue; }
-            distinct.insert(sender.id_hash());
-            if distinct.len() >= min_senders { return true; }
+    /// Evicts sender_log entries older than `window`; drops kinds whose deque
+    /// becomes empty.
+    fn trim(&self, window: Duration) {
+        let cutoff = Instant::now() - window;
+        let to_remove: Vec<Arc<str>> = {
+            let guard = self.sender_log.pin();
+            guard.iter()
+                .filter_map(|(kind, arc)| {
+                    let mut log = arc.lock();
+                    while log.front().map(|(_, t)| *t <= cutoff).unwrap_or(false) {
+                        log.pop_front();
+                    }
+                    if log.is_empty() { Some(kind.clone()) } else { None }
+                })
+                .collect()
+        };
+        let guard = self.sender_log.pin();
+        for kind in to_remove {
+            guard.remove(&kind);
         }
-        false
+    }
+}
+
+/// Per-kind refractory periods. `is_suppressed_at` is called once per
+/// `deliver` so the path is on the hot side; papaya keeps reads lock-free.
+struct SuppressionTable {
+    suppressed: PapayaMap<Arc<str>, Instant>,
+}
+
+impl SuppressionTable {
+    fn new() -> Self { Self { suppressed: PapayaMap::new() } }
+
+    fn suppress(&self, kind: Arc<str>, until: Instant) {
+        self.suppressed.pin().insert(kind, until);
     }
 
-    /// Like [`quorum`](Self::quorum) but only counts senders whose `id_hash()` is in
-    /// `member_hashes`. Prevents ex-members from satisfying quorum after they leave a group.
-    ///
-    /// **Not suitable for per-ballot consensus vote counting**, which requires
-    /// `(slot, ballot)` correlation filters that this method does not provide —
-    /// the sender log records `(sender, received_at)` without a slot or ballot dimension.
-    /// For consensus voting, maintain a local `AHashSet<u64>` in the ballot collection
-    /// loop instead (see `ConsensusEngine::propose`).
-    pub(crate) fn quorum_for_group(
-        &self,
-        kind: &str,
-        member_hashes: &AHashSet<u64>,
-        min_senders: usize,
-        window: Duration,
-    ) -> bool {
-        let Some(arc) = self.sender_log.pin().get(kind).map(Arc::clone) else { return false };
-        let log = arc.lock();
-        let mut distinct: AHashSet<u64> = AHashSet::with_capacity(min_senders + 1);
-        for (sender, received_at) in log.iter() {
-            if received_at.elapsed() > window { continue; }
-            let hash = sender.id_hash();
-            if !member_hashes.contains(&hash) { continue; }
-            distinct.insert(hash);
-            if distinct.len() >= min_senders { return true; }
-        }
-        false
+    fn unsuppress(&self, kind: &str) {
+        self.suppressed.pin().remove(kind);
     }
 
-    /// Returns the quorum-evidence key and value to write, or `None` if the existing
-    /// entry is less than 1 second old (rate-limit to prevent gossip churn).
-    ///
-    /// Key format: `sys/quorum/{kind}/{sender}` (see [`kv_ns::QUORUM`]).
-    /// Value: 8-byte little-endian Unix millisecond timestamp of the admission time.
-    ///
-    /// The caller is responsible for writing the entry to Layer I
-    /// (`apply_and_notify`) and gossip-dispatching it. Separating the write from
-    /// the decision keeps transport and KV-write concerns out of `SignalHandlers`.
-    pub(crate) fn quorum_evidence_payload(
-        &self,
-        kind:   &Arc<str>,
-        sender: &NodeId,
-    ) -> Option<(Arc<str>, Bytes)> {
+    /// `now` is plumbed in so `deliver` uses the same instant for both the
+    /// log record and the suppression check, avoiding two `Instant::now()`
+    /// reads per delivery.
+    fn is_suppressed_at(&self, kind: &str, now: Instant) -> bool {
+        self.suppressed.pin().get(kind)
+            .map(|until| now < *until)
+            .unwrap_or(false)
+    }
+
+    fn is_suppressed(&self, kind: &str) -> bool {
+        self.is_suppressed_at(kind, Instant::now())
+    }
+}
+
+/// Tracks the last time a `sys/quorum/` entry was written for each
+/// `{kind}/{sender}` key. Used to rate-limit Layer-I quorum-evidence writes
+/// to one per second per pair without reading `KvState`.
+struct QuorumEvidence {
+    quorum_written: PapayaMap<Arc<str>, Instant>,
+}
+
+impl QuorumEvidence {
+    fn new() -> Self { Self { quorum_written: PapayaMap::new() } }
+
+    fn payload(&self, kind: &Arc<str>, sender: &NodeId) -> Option<(Arc<str>, Bytes)> {
         let quorum_key: Arc<str> = Arc::from(
             format!("{}{}/{}", kv_ns::QUORUM, kind, sender).as_str()
         );
@@ -464,6 +411,139 @@ impl SignalHandlers {
         } else {
             None
         }
+    }
+
+    fn trim(&self, window: Duration, now: Instant) {
+        let stale: Vec<Arc<str>> = self.quorum_written.pin()
+            .iter()
+            .filter_map(|(k, last)| {
+                if now.duration_since(*last) > window { Some(k.clone()) } else { None }
+            })
+            .collect();
+        let guard = self.quorum_written.pin();
+        for k in stale {
+            guard.remove(&k);
+        }
+    }
+}
+
+// ── SignalHandlers façade ─────────────────────────────────────────────────────
+
+/// Fan-out registry plus auxiliary state for signal delivery.
+///
+/// Internally composed of four focused sub-types ([`HandlerTable`],
+/// [`SignalLog`], [`SuppressionTable`], [`QuorumEvidence`]). The pub(crate)
+/// surface stays unchanged: every method delegates to the appropriate
+/// sub-type. `deliver` orchestrates across all four in a fixed order:
+/// record → suppression-check → fan-out.
+pub(crate) struct SignalHandlers {
+    handlers:    HandlerTable,
+    log:         SignalLog,
+    suppression: SuppressionTable,
+    evidence:    QuorumEvidence,
+}
+
+impl SignalHandlers {
+    pub(crate) fn new(sender_log_window: Duration) -> Self {
+        Self {
+            handlers:    HandlerTable::new(),
+            log:         SignalLog::new(sender_log_window),
+            suppression: SuppressionTable::new(),
+            evidence:    QuorumEvidence::new(),
+        }
+    }
+
+    /// Returns a new `mpsc::Receiver<Signal>` for `kind` with the default channel depth (256).
+    /// Multiple calls for the same kind produce independent receivers.
+    pub(crate) fn register(&self, kind: Arc<str>) -> mpsc::Receiver<Signal> {
+        self.handlers.register_with_capacity(kind, 256)
+    }
+
+    /// Returns a new `mpsc::Receiver<Signal>` for `kind` with a caller-specified channel depth.
+    pub(crate) fn register_with_capacity(&self, kind: Arc<str>, cap: usize) -> mpsc::Receiver<Signal> {
+        self.handlers.register_with_capacity(kind, cap)
+    }
+
+    /// Returns the maximum fill ratio across all open senders for `kind`.
+    pub(crate) fn fill_ratio(&self, kind: &Arc<str>) -> f32 {
+        self.handlers.fill_ratio(kind)
+    }
+
+    /// Fans out `signal` to all receivers registered for `signal.kind`.
+    /// Closed senders are removed lazily. Full channels log a warning and drop the signal.
+    /// Records the delivery time for [`last_signal`](Self::last_signal) regardless
+    /// of whether any handlers are registered.
+    ///
+    /// Hot-path design: records into [`SignalLog`] first (unconditional —
+    /// quorum counting includes suppressed kinds), checks the
+    /// [`SuppressionTable`] using the same `now` (one `Instant::now()` call
+    /// per delivery), then delegates fan-out to [`HandlerTable`].
+    pub(crate) fn deliver(&self, signal: &Signal) {
+        let now = Instant::now();
+        self.log.record(&signal.kind, signal.sender.clone(), now);
+        if self.suppression.is_suppressed_at(&signal.kind, now) { return; }
+        self.handlers.deliver_to_handlers(signal);
+    }
+
+    /// Returns when this node last admitted a signal of `kind`, or `None` if never.
+    pub(crate) fn last_signal(&self, kind: &str) -> Option<Instant> {
+        self.log.last_signal(kind)
+    }
+
+    pub(crate) fn suppress(&self, kind: Arc<str>, until: Instant) {
+        self.suppression.suppress(kind, until);
+    }
+
+    pub(crate) fn unsuppress(&self, kind: &str) {
+        self.suppression.unsuppress(kind);
+    }
+
+    pub(crate) fn is_suppressed(&self, kind: &str) -> bool {
+        self.suppression.is_suppressed(kind)
+    }
+
+    /// Removes sender-log entries and rate-limit entries older than `window`,
+    /// then drops kinds whose log has become empty. Called from the GC task
+    /// on each GC tick.
+    pub(crate) fn trim_sender_log(&self, window: Duration) {
+        self.log.trim(window);
+        self.evidence.trim(window, Instant::now());
+    }
+
+    /// Seeds the sender log with a past entry reconstructed from a
+    /// `sys/quorum/` Layer I record (used by
+    /// `GossipAgent::warm_quorum_from_layer1`).
+    pub(crate) fn seed_sender_log(&self, kind: Arc<str>, sender: NodeId, age_ms: u64) {
+        self.log.seed(kind, sender, age_ms);
+    }
+
+    /// Returns `true` when at least `min_senders` distinct [`NodeId`]s have had a
+    /// signal of `kind` delivered within `window`.
+    pub(crate) fn quorum(&self, kind: &str, min_senders: usize, window: Duration) -> bool {
+        self.log.quorum(kind, min_senders, window)
+    }
+
+    /// Like [`quorum`](Self::quorum) but only counts senders whose `id_hash()` is in
+    /// `member_hashes`. **Not suitable for per-ballot consensus vote counting** —
+    /// the sender log is keyed by `(kind, sender)` only, not `(slot, ballot)`.
+    pub(crate) fn quorum_for_group(
+        &self,
+        kind:          &str,
+        member_hashes: &AHashSet<u64>,
+        min_senders:   usize,
+        window:        Duration,
+    ) -> bool {
+        self.log.quorum_for_group(kind, member_hashes, min_senders, window)
+    }
+
+    /// Returns the quorum-evidence key and value to write, or `None` if the existing
+    /// entry is less than 1 second old (rate-limit to prevent gossip churn).
+    pub(crate) fn quorum_evidence_payload(
+        &self,
+        kind:   &Arc<str>,
+        sender: &NodeId,
+    ) -> Option<(Arc<str>, Bytes)> {
+        self.evidence.payload(kind, sender)
     }
 }
 
