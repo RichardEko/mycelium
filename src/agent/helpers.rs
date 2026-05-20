@@ -47,18 +47,27 @@ impl GossipAgent {
         max_abstain_ballots: u32,
         topology_policy:     Option<crate::config::GroupTopologyPolicy>,
     ) -> ConsensusEngine {
-        let self_locality = if self.config.locality_path.is_empty() {
-            None
-        } else {
-            Some(crate::locality::LocalityPath::new(self.config.locality_path.iter().cloned()))
-        };
         ConsensusEngine {
             task_ctx: Arc::clone(&self.task_ctx),
             abstain_when_opaque,
             use_trust_slices,
             max_abstain_ballots,
-            self_locality,
+            self_locality: self.self_locality(),
             topology_policy,
+        }
+    }
+
+    /// This node's `LocalityPath`, derived from `config.locality_path`. Returns
+    /// `None` when locality is unconfigured. Shared helper used by the
+    /// consensus engine builder, the gossip-shard start path, and the
+    /// Phase 5 locality-aware resolution methods.
+    pub(crate) fn self_locality(&self) -> Option<crate::locality::LocalityPath> {
+        if self.config.locality_path.is_empty() {
+            None
+        } else {
+            Some(crate::locality::LocalityPath::new(
+                self.config.locality_path.iter().cloned(),
+            ))
         }
     }
 }

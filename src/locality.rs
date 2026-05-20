@@ -22,6 +22,32 @@ pub(crate) struct LocalityPath {
     pub(crate) segments: Vec<Arc<str>>,
 }
 
+/// How locality should influence a `resolve` or `signal_wired_via` call.
+///
+/// - `Any`: ignore locality entirely (the pre-Phase-5 behaviour).
+/// - `PreferShared(_)`: keep every match but sort by `shared_prefix_len`
+///   descending, so callers see topologically-nearest providers first. The
+///   `usize` is reserved for future tie-breaking semantics and is not used
+///   as a threshold today.
+/// - `Strict(depth)`: only providers with `shared_prefix_len >= depth`
+///   survive — drop anyone who diverges before `depth`. Use this when the
+///   correctness model demands locality alignment (e.g. storage replication
+///   that must stay in the same region).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LocalityPreference {
+    Any,
+    PreferShared(usize),
+    Strict(usize),
+}
+
+/// Free helper for the common pattern of "how close is this peer to me?" —
+/// returns `shared_prefix_len(own, other)`. Centralised so call sites don't
+/// re-roll the comparison.
+#[allow(dead_code)] // Phase 6+ callers
+pub(crate) fn score(own: &LocalityPath, other: &LocalityPath) -> usize {
+    own.shared_prefix_len(other)
+}
+
 impl LocalityPath {
     /// Builds a path from any iterator of segment names.
     pub(crate) fn new<I, S>(segments: I) -> Self

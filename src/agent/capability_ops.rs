@@ -20,6 +20,7 @@ use crate::capability::{
     CapabilityHandle, CapabilityGroupDef, CapabilityGroupHandle,
     RequirementHandle, RequirementStatus, WiringProvider, WiringStatus,
 };
+use crate::locality::{LocalityPath, LocalityPreference};
 use crate::node_id::NodeId;
 use crate::signal::{LoadState, encode_load_state};
 use ahash::{AHashMap, AHashSet};
@@ -291,11 +292,67 @@ impl GossipAgent {
     /// [`WiringStatus::Wired`] with the discovered providers, or
     /// [`WiringStatus::Unwired`] if neither source has a match.
     ///
-    /// `shared_locality_depth` is hard-coded to `0` here; Phase 5
-    /// (`resolve_wiring_with_locality`) computes the real depth against
-    /// this node's locality and exposes it for caller-side ranking.
+    /// `shared_locality_depth` is hard-coded to `0` here; use
+    /// [`resolve_wiring_with_locality`](Self::resolve_wiring_with_locality)
+    /// for topology-aware variants.
     pub fn resolve_wiring(&self, filter: &CapFilter) -> WiringStatus {
         wiring_snapshot(&self.kv_state, filter)
+    }
+
+    /// Like [`resolve`](Self::resolve) but annotates each provider with its
+    /// `shared_prefix_len` against this node's own locality, then applies
+    /// the requested [`LocalityPreference`]:
+    ///
+    /// - `Any`: returns matches in scan order with depth `0`.
+    /// - `PreferShared(_)`: keeps every match and sorts by depth descending.
+    /// - `Strict(depth)`: drops providers with `shared_prefix_len < depth`.
+    ///
+    /// When this node has no configured locality (empty `locality_path`),
+    /// every provider reports depth `0`; `Strict(d)` with `d > 0` therefore
+    /// returns an empty result.
+    pub fn resolve_with_locality(
+        &self,
+        filter: &CapFilter,
+        pref:   LocalityPreference,
+    ) -> Vec<(NodeId, Capability, usize)> {
+        let self_loc = self.self_locality();
+        let mut annotated: Vec<(NodeId, Capability, usize)> = self.resolve(filter)
+            .into_iter()
+            .map(|(node_id, cap)| {
+                let depth = locality_depth(&self.kv_state, self_loc.as_ref(), &node_id);
+                (node_id, cap, depth)
+            })
+            .collect();
+        apply_locality_pref(&mut annotated, pref, |(_, _, d)| *d);
+        annotated
+    }
+
+    /// Locality-aware version of [`resolve_wiring`](Self::resolve_wiring).
+    /// Each `WiringProvider` is annotated with `shared_locality_depth`:
+    /// - `Node`: shared prefix length against this node's locality.
+    /// - `Group`: the **maximum** shared prefix length across the group's
+    ///   contributors — a group counts as "close" if any one of its members
+    ///   is close to us.
+    ///
+    /// The preference is then applied to the combined provider list. An
+    /// `Unwired` status is returned unchanged.
+    pub fn resolve_wiring_with_locality(
+        &self,
+        filter: &CapFilter,
+        pref:   LocalityPreference,
+    ) -> WiringStatus {
+        let self_loc = self.self_locality();
+        let raw = wiring_snapshot(&self.kv_state, filter);
+        let WiringStatus::Wired { providers } = raw else { return raw; };
+        let mut annotated: Vec<WiringProvider> = providers.into_iter()
+            .map(|p| annotate_provider_with_locality(p, &self.kv_state, self_loc.as_ref()))
+            .collect();
+        apply_locality_pref(&mut annotated, pref, provider_depth);
+        if annotated.is_empty() {
+            WiringStatus::Unwired { filter: filter.clone() }
+        } else {
+            WiringStatus::Wired { providers: annotated }
+        }
     }
 
     /// Push-based view of the wiring state for `filter`. The returned receiver
@@ -364,6 +421,39 @@ impl GossipAgent {
             // vs dropped) is ignored — the caller observes successful routing
             // via the returned recipient list and per-receiver acknowledgement
             // if their protocol provides one.
+            let _ = self.emit(kind.clone(), scope, payload.clone());
+            emitted.push(provider);
+        }
+        emitted
+    }
+
+    /// Locality-aware variant of
+    /// [`signal_wired_via`](Self::signal_wired_via): resolves wiring with
+    /// [`resolve_wiring_with_locality`](Self::resolve_wiring_with_locality)
+    /// (so `pref` filters or reorders providers before dispatch), then emits
+    /// to each surviving provider in iteration order. Useful when the
+    /// caller wants to confine signals to a topology region — e.g. a
+    /// storage cohort that should not bleed traffic across AZs.
+    pub fn signal_wired_via_locality(
+        &self,
+        filter:  &CapFilter,
+        pref:    LocalityPreference,
+        kind:    impl Into<Arc<str>>,
+        payload: impl Into<Bytes>,
+    ) -> Vec<crate::capability::WiringProvider> {
+        let kind:    Arc<str> = kind.into();
+        let payload: Bytes    = payload.into();
+        let status = self.resolve_wiring_with_locality(filter, pref);
+        let providers = match status {
+            WiringStatus::Wired { providers } => providers,
+            WiringStatus::Unwired { .. }      => return Vec::new(),
+        };
+        let mut emitted = Vec::with_capacity(providers.len());
+        for provider in providers {
+            let scope = match &provider {
+                WiringProvider::Group { name, .. }    => crate::signal::SignalScope::Group(name.clone()),
+                WiringProvider::Node  { node_id, .. } => crate::signal::SignalScope::Individual(node_id.clone()),
+            };
             let _ = self.emit(kind.clone(), scope, payload.clone());
             emitted.push(provider);
         }
@@ -487,6 +577,73 @@ fn wiring_snapshot(kv_state: &crate::store::KvState, filter: &CapFilter) -> Wiri
         WiringStatus::Unwired { filter: filter.clone() }
     } else {
         WiringStatus::Wired { providers }
+    }
+}
+
+/// Looks up `peer_localities[node]` and returns `shared_prefix_len` against
+/// `self_loc`. Returns `0` when either side has no known locality — that's
+/// the correct "no known sharing" answer and matches the semantics of
+/// `LocalityPath::shared_prefix_len` when one path is empty.
+fn locality_depth(
+    kv_state: &crate::store::KvState,
+    self_loc: Option<&LocalityPath>,
+    node:     &NodeId,
+) -> usize {
+    let Some(self_loc) = self_loc else { return 0; };
+    let guard = kv_state.peer_localities.pin();
+    match guard.get(node) {
+        Some(other) => self_loc.shared_prefix_len(other),
+        None        => 0,
+    }
+}
+
+/// Replaces a provider's `shared_locality_depth` with the value computed
+/// against our own locality. For groups, the value is the **maximum** across
+/// the listed contributors.
+fn annotate_provider_with_locality(
+    provider: WiringProvider,
+    kv_state: &crate::store::KvState,
+    self_loc: Option<&LocalityPath>,
+) -> WiringProvider {
+    match provider {
+        WiringProvider::Node { node_id, capability, .. } => {
+            let depth = locality_depth(kv_state, self_loc, &node_id);
+            WiringProvider::Node { node_id, capability, shared_locality_depth: depth }
+        }
+        WiringProvider::Group { name, contributors, .. } => {
+            let depth = contributors.iter()
+                .map(|n| locality_depth(kv_state, self_loc, n))
+                .max()
+                .unwrap_or(0);
+            WiringProvider::Group { name, contributors, shared_locality_depth: depth }
+        }
+    }
+}
+
+#[inline]
+fn provider_depth(p: &WiringProvider) -> usize {
+    match p {
+        WiringProvider::Node  { shared_locality_depth, .. } => *shared_locality_depth,
+        WiringProvider::Group { shared_locality_depth, .. } => *shared_locality_depth,
+    }
+}
+
+/// Applies a [`LocalityPreference`] to an annotated provider list in place.
+/// `depth_of` extracts the integer depth from each element. Stable sort so
+/// providers of equal depth retain their original ordering (scan order).
+fn apply_locality_pref<T, F>(items: &mut Vec<T>, pref: LocalityPreference, depth_of: F)
+where
+    F: Fn(&T) -> usize,
+{
+    match pref {
+        LocalityPreference::Any => {}
+        LocalityPreference::PreferShared(_) => {
+            items.sort_by_key(|item| std::cmp::Reverse(depth_of(item)));
+        }
+        LocalityPreference::Strict(threshold) => {
+            items.retain(|item| depth_of(item) >= threshold);
+            items.sort_by_key(|item| std::cmp::Reverse(depth_of(item)));
+        }
     }
 }
 
@@ -888,5 +1045,33 @@ mod tests {
         let filter = CapFilter::new("compute", "gpu");
         assert!(parse_gcap_key("gcap/gpu-workers/compute/gpu", &filter).is_none());
         assert!(parse_gcap_key("gcap/gpu-workers/compute", &filter).is_none());
+    }
+
+    #[test]
+    fn apply_locality_pref_any_preserves_order() {
+        let mut v = vec![5usize, 1, 3, 0];
+        apply_locality_pref(&mut v, LocalityPreference::Any, |x| *x);
+        assert_eq!(v, vec![5, 1, 3, 0]);
+    }
+
+    #[test]
+    fn apply_locality_pref_prefer_shared_sorts_descending() {
+        let mut v = vec![0usize, 3, 1, 2];
+        apply_locality_pref(&mut v, LocalityPreference::PreferShared(0), |x| *x);
+        assert_eq!(v, vec![3, 2, 1, 0]);
+    }
+
+    #[test]
+    fn apply_locality_pref_strict_filters_and_sorts() {
+        let mut v = vec![0usize, 3, 1, 2];
+        apply_locality_pref(&mut v, LocalityPreference::Strict(2), |x| *x);
+        assert_eq!(v, vec![3, 2]);
+    }
+
+    #[test]
+    fn apply_locality_pref_strict_can_empty() {
+        let mut v = vec![0usize, 1];
+        apply_locality_pref(&mut v, LocalityPreference::Strict(5), |x| *x);
+        assert!(v.is_empty());
     }
 }

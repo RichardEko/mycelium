@@ -69,6 +69,7 @@ pub use capability::{
     RequirementHandle, RequirementStatus, WiringProvider, WiringStatus,
 };
 pub use config::{GossipConfig, GroupTopologyPolicy, TopologyEnforcement};
+pub use locality::LocalityPreference;
 pub use consensus::{ConsensusConfig, ConsensusHandle, ConsensusResult, consensus_kind, consensus_ns};
 pub use error::GossipError;
 pub use node_id::NodeId;

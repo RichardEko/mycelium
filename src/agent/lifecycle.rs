@@ -140,11 +140,7 @@ impl GossipAgent {
         let prefix_index           = self.kv_state.prefix_index.clone();
         let grp_generation         = self.kv_state.grp_generation.clone();
         let peer_localities        = self.kv_state.peer_localities.clone();
-        let self_locality          = if self.config.locality_path.is_empty() {
-            None
-        } else {
-            Some(crate::locality::LocalityPath::new(self.config.locality_path.iter().cloned()))
-        };
+        let self_locality          = self.self_locality();
 
         let rxs = self.gossip_rxs
             .lock()
