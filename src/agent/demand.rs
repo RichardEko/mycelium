@@ -13,7 +13,8 @@ use tokio::sync::watch;
 use tracing::warn;
 
 use super::GossipAgent;
-use super::capability_ops::{await_shutdown, parse_cap_key_or_warn, parse_gcap_key, scan_prefix_kv};
+use super::capability_ops::{await_shutdown, parse_cap_key_or_warn, scan_prefix_kv};
+use super::wiring::parse_gcap_key;
 
 impl GossipAgent {
     /// Snapshot count of declared demand vs. available providers for `filter`.

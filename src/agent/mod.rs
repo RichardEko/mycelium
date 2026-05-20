@@ -23,6 +23,7 @@ mod opacity;
 mod consensus_ops;
 mod capability_ops;
 mod demand;
+mod wiring;
 pub(crate) mod helpers;
 mod tasks;
 
