@@ -66,7 +66,8 @@ pub use agent::{GossipAgent, SystemStats};
 pub use capability::{
     CapConstraint, CapFilter, CapRanking, CapValue, Capability, CapabilityEvent,
     CapabilityGroupDef, CapabilityGroupHandle, CapabilityHandle,
-    RankingOrder, RequirementHandle, RequirementStatus, WiringProvider, WiringStatus,
+    DemandStatus, RankingOrder, RequirementHandle, RequirementStatus,
+    WiringProvider, WiringStatus,
 };
 pub use config::{GossipConfig, GroupTopologyPolicy, TopologyEnforcement};
 pub use locality::LocalityPreference;

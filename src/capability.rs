@@ -168,6 +168,23 @@ pub enum WiringStatus {
     Unwired { filter:    CapFilter },
 }
 
+/// Aggregate "how many want this vs. how many offer it" view, computed across
+/// the local KV state. Surfaced by `watch_demand` / `demand` so application
+/// code can decide whether to spin up a new provider, scale down, or rebalance.
+/// The library itself never auto-advertises in response to high demand —
+/// turning pressure into action is an application-layer decision.
+///
+/// `demand_pressure` is `demanding_nodes.len() / max(providers.len(), 1)` as
+/// an `f32`. A pressure of `1.0` means "one declared requirement per
+/// available provider"; values much above `1.0` indicate undersupply.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DemandStatus {
+    pub filter:          CapFilter,
+    pub demanding_nodes: Vec<NodeId>,
+    pub providers:       Vec<NodeId>,
+    pub demand_pressure: f32,
+}
+
 /// One discovered provider for a wiring filter.
 #[derive(Clone, Debug, PartialEq)]
 pub enum WiringProvider {
