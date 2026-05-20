@@ -7,17 +7,23 @@
 //! reconciles whether this node should self-join each emergent group based
 //! on whether its own capabilities match the group's filter.
 //!
-//! When the node joins, the watcher additionally spawns:
-//! - one `run_kv_persist_task` per `provides` capability under
-//!   `gcap/{group}/{ns}/{name}/{self}` — the group-level projection that
-//!   inter-group wiring (see `super::wiring`) discovers and routes to;
-//! - one `run_filter_opacity_watcher(OpacityEvaluator::GroupReq)` per
-//!   `requires` filter that writes `sys/load/{self}/group-req/{group}/{idx}`
-//!   while the requirement is unsatisfied, composing with load-based
-//!   opacity through the existing `is_self_opaque` scanner.
+//! When the node joins, the watcher spawns one consolidated
+//! `run_group_membership_task` per group that internally:
+//! - re-asserts `gcap/{group}/{ns}/{name}/{self}` for every `provides`
+//!   capability on a `GCAP_REASSERT_INTERVAL` ticker — the group-level
+//!   projection that inter-group wiring (see `super::wiring`) discovers
+//!   and routes to;
+//! - tracks `sys/load/{self}/group-req/{group}/{idx}` opacity for every
+//!   `requires` filter, writing when unsatisfied and tombstoning when
+//!   satisfied, composing with load-based opacity through the existing
+//!   `is_self_opaque` scanner.
+//!
+//! Pre-C3 each provide + each requirement was its own spawned tokio task.
+//! After C3 it is one task per group, regardless of provides/requires count.
 
-use crate::capability::{Capability, CapFilter, CapabilityGroupDef, CapabilityGroupHandle};
+use crate::capability::{Capability, CapFilter, CapabilityGroupDef, CapabilityGroupHandle, WiringStatus};
 use crate::node_id::NodeId;
+use crate::signal::{LoadState, encode_load_state};
 use ahash::{AHashMap, AHashSet};
 use bytes::Bytes;
 use std::{sync::Arc, time::Duration};
@@ -26,11 +32,11 @@ use tracing::warn;
 
 use super::{GossipAgent, TaskCtx};
 use super::capability_ops::{
-    await_shutdown, scan_prefix_kv,
-    OpacityEvaluator, run_filter_opacity_watcher,
+    await_shutdown, now_ms, scan_prefix_kv, subscribe_prefix_on_kv,
     WATCHER_DEBOUNCE_WINDOW,
 };
 use super::kv::{run_kv_persist_task, PersistPayloadFn};
+use super::wiring::wiring_snapshot;
 
 impl GossipAgent {
     /// Publishes a [`CapabilityGroupDef`] under `cap-group/{group}`. Any node
@@ -71,26 +77,23 @@ impl GossipAgent {
 const GCAP_REASSERT_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Per-group bookkeeping for the emergent-group watcher: every cap-joined
-/// group tracks the `provides` set we currently project and the cancel
-/// senders for the `kv_persist_loop` tasks writing the `gcap/` entries.
+/// group has one consolidated `run_group_membership_task` (C3) that owns
+/// both the `gcap/` reassertion loop and per-requirement opacity tracking.
+/// Dropping the projection closes `_cancel`, which the membership task
+/// observes and exits gracefully — tombstoning every `gcap/` and
+/// `sys/load/{self}/group-req/{group}/{idx}` key it owns.
 struct GroupProjection {
+    /// Snapshot of the def's `provides` used to detect changes during
+    /// reconciliation. When this differs from a new def, the projection
+    /// is rebuilt (cancel old, spawn new).
     provides: Vec<Capability>,
-    /// Cancel senders for the spawned `run_kv_persist_task`s; dropping these
-    /// closes the oneshot which makes each persist task tombstone its
-    /// `gcap/{group}/{ns}/{name}/{self}` key. Never read directly — the
-    /// `Drop` side-effect is the whole purpose.
+    /// Snapshot of the def's `requires`, used the same way.
+    requires: Vec<CapFilter>,
+    /// Cancel sender for the consolidated membership task. Drop or
+    /// `send(())` to make the task tombstone everything it wrote and
+    /// return.
     #[allow(dead_code)]
-    handles:     Vec<oneshot::Sender<()>>,
-    /// The `requires` list snapshotted from the def when we last spawned
-    /// group-req opacity watchers. Tracked separately from `provides` so we
-    /// only respawn the watchers when the def's requires actually changes.
-    requires:    Vec<CapFilter>,
-    /// Cancel senders for the Phase-7 group-req opacity watchers; one per
-    /// requirement filter, in `requires` index order. Dropping clears the
-    /// `sys/load/{self}/group-req/{group}/{idx}` opacity entry via the
-    /// watcher's exit path.
-    #[allow(dead_code)]
-    req_handles: Vec<oneshot::Sender<()>>,
+    _cancel:  oneshot::Sender<()>,
 }
 
 /// Background task: watches `cap-group/` for emergent group definitions and
@@ -185,8 +188,8 @@ fn reconcile_emergent_groups(
         }
     }
 
-    // Join newly-matching groups; spawn their `gcap/` persist tasks AND their
-    // Phase-7 group-req opacity watchers.
+    // Join newly-matching groups; spawn one consolidated membership task per
+    // group (provides + requires handled internally).
     for group in &want_joined {
         let def      = defs.get(group).expect("present, scanned above");
         let provides = def.provides.clone();
@@ -194,41 +197,29 @@ fn reconcile_emergent_groups(
 
         if !joined.contains_key(group.as_ref()) {
             emit_membership(ctx, own, group, false);
-            let handles     = spawn_gcap_projections(ctx, own, group, &provides, shutdown_rx);
-            let req_handles = spawn_group_req_watchers(ctx, own, group, &requires, shutdown_rx);
+            let _cancel = spawn_group_membership(
+                ctx, own, group, &provides, &requires, shutdown_rx,
+            );
             joined.insert(group.clone(), GroupProjection {
-                provides, handles, requires, req_handles,
+                provides, requires, _cancel,
             });
             continue;
         }
-        // Already joined — refresh projections / watchers when the def changed
-        // on either axis. Re-snapshot the current state outside the borrow so
-        // we can re-insert without holding two refs to `joined`.
+        // Already joined — rebuild the membership task only when the def
+        // actually changed.
         let (current_provides, current_requires) = {
             let current = joined.get(group).expect("just checked");
             (current.provides.clone(), current.requires.clone())
         };
-        let provides_changed = current_provides != provides;
-        let requires_changed = current_requires != requires;
-        if !provides_changed && !requires_changed { continue; }
-        // Take ownership of the old projection so we can preserve whichever
-        // side did not change. Dropping the cancel oneshots we discard
-        // signals their persist/watcher tasks to tombstone on the way out.
-        let old = joined.remove(group.as_ref()).expect("just checked above");
-        let handles = if provides_changed {
-            drop(old.handles);
-            spawn_gcap_projections(ctx, own, group, &provides, shutdown_rx)
-        } else {
-            old.handles
-        };
-        let req_handles = if requires_changed {
-            drop(old.req_handles);
-            spawn_group_req_watchers(ctx, own, group, &requires, shutdown_rx)
-        } else {
-            old.req_handles
-        };
+        if current_provides == provides && current_requires == requires { continue; }
+        // Drop old projection (cancels old membership task → tombstones
+        // its keys) then spawn a fresh one with the new def.
+        let _ = joined.remove(group.as_ref());
+        let _cancel = spawn_group_membership(
+            ctx, own, group, &provides, &requires, shutdown_rx,
+        );
         joined.insert(group.clone(), GroupProjection {
-            provides, handles, requires, req_handles,
+            provides, requires, _cancel,
         });
     }
 
@@ -246,72 +237,172 @@ fn reconcile_emergent_groups(
     }
 }
 
-/// Spawns one Phase-7 group-req opacity watcher per requirement filter. Each
-/// watcher subscribes to `cap/` and `gcap/` prefix changes and writes
-/// `sys/load/{self}/group-req/{group}/{idx}` opacity whenever its filter is
-/// unsatisfied; tombstones the entry the moment a provider appears.
-fn spawn_group_req_watchers(
-    ctx:         &Arc<TaskCtx>,
-    own:         &NodeId,
-    group:       &Arc<str>,
-    requires:    &[CapFilter],
-    shutdown_rx: &watch::Receiver<bool>,
-) -> Vec<oneshot::Sender<()>> {
-    let mut handles = Vec::with_capacity(requires.len());
-    for (idx, filter) in requires.iter().enumerate() {
-        let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
-        let opacity_key: Arc<str> = Arc::from(format!(
-            "sys/load/{}/group-req/{}/{}", own, group, idx,
-        ).as_str());
-        let filter_arc = Arc::new(filter.clone());
-        tokio::spawn(run_filter_opacity_watcher(
-            Arc::clone(ctx),
-            cancel_rx,
-            shutdown_rx.clone(),
-            opacity_key,
-            filter_arc,
-            OpacityEvaluator::GroupReq,
-        ));
-        handles.push(cancel_tx);
-    }
-    handles
-}
-
-/// Spawns one `run_kv_persist_task` per provided capability under
-/// `gcap/{group}/{ns}/{name}/{self}`. Returns the cancel senders so the caller
-/// can drop them when membership ends — closing the senders causes each
-/// persist task to tombstone its key.
-fn spawn_gcap_projections(
+/// Spawns the single consolidated membership task for `group` and returns its
+/// cancel sender. The task owns both the `gcap/` reassertion loop for every
+/// `provides` capability AND opacity tracking for every `requires` filter.
+/// Pre-C3 this was `provides.len() + requires.len()` separate tokio tasks
+/// per group; after C3 it is one.
+fn spawn_group_membership(
     ctx:         &Arc<TaskCtx>,
     own:         &NodeId,
     group:       &Arc<str>,
     provides:    &[Capability],
+    requires:    &[CapFilter],
     shutdown_rx: &watch::Receiver<bool>,
-) -> Vec<oneshot::Sender<()>> {
-    let mut handles = Vec::with_capacity(provides.len());
-    for cap in provides {
-        let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
-        let key: Arc<str> = Arc::from(format!(
-            "gcap/{}/{}/{}/{}",
-            group, cap.namespace, cap.name, own,
-        ).as_str());
-        let cap_arc = Arc::new(cap.clone());
-        let payload_fn: PersistPayloadFn = {
-            let cap = Arc::clone(&cap_arc);
-            Arc::new(move || cap.encode())
-        };
-        tokio::spawn(run_kv_persist_task(
-            Arc::clone(ctx),
-            cancel_rx,
-            shutdown_rx.clone(),
-            key,
-            GCAP_REASSERT_INTERVAL,
-            payload_fn,
-            None,
-        ));
-        handles.push(cancel_tx);
+) -> oneshot::Sender<()> {
+    let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+    tokio::spawn(run_group_membership_task(
+        Arc::clone(ctx),
+        own.clone(),
+        Arc::clone(group),
+        provides.to_vec(),
+        requires.to_vec(),
+        cancel_rx,
+        shutdown_rx.clone(),
+    ));
+    cancel_tx
+}
+
+/// Consolidated per-group membership task. Owns:
+/// - the reassertion ticker that re-writes every `gcap/{group}/{ns}/{name}/{self}`
+///   on `GCAP_REASSERT_INTERVAL`;
+/// - the opacity tracker that writes/clears `sys/load/{self}/group-req/{group}/{idx}`
+///   for every requirement filter as wiring status changes.
+///
+/// Wakes on cancel, shutdown, the reassert ticker, or any `cap/`/`gcap/`
+/// change (debounced by [`WATCHER_DEBOUNCE_WINDOW`]). On exit, tombstones
+/// every `gcap/` and any opacity key it had written.
+async fn run_group_membership_task(
+    ctx:             Arc<TaskCtx>,
+    own:             NodeId,
+    group:           Arc<str>,
+    provides:        Vec<Capability>,
+    requires:        Vec<CapFilter>,
+    mut cancel_rx:   oneshot::Receiver<()>,
+    mut shutdown_rx: watch::Receiver<bool>,
+) {
+    use crate::framing::{
+        dispatch_gossip_send, dispatch_gossip_try_send, ForwardHint, WireMessage,
+        make_gossip_update,
+    };
+    use crate::store::apply_and_notify;
+
+    let gcap_keys: Vec<Arc<str>> = provides.iter().map(|c| {
+        Arc::from(format!("gcap/{}/{}/{}/{}", group, c.namespace, c.name, own).as_str())
+    }).collect();
+    let opacity_keys: Vec<Arc<str>> = (0..requires.len()).map(|i| {
+        Arc::from(format!("sys/load/{}/group-req/{}/{}", own, group, i).as_str())
+    }).collect();
+    let mut opaque_written = vec![false; requires.len()];
+
+    let write_provide = |key: &Arc<str>, cap: &Capability| {
+        let upd = make_gossip_update(
+            &ctx.node_id, ctx.default_ttl, key.clone(), cap.encode(), false, &ctx.hlc,
+        );
+        apply_and_notify(&ctx.kv_state, &upd);
+        dispatch_gossip_try_send(
+            &ctx.gossip_txs, WireMessage::Data(upd),
+            ctx.node_id.id_hash(), ForwardHint::All, &ctx.kv_state.dropped_frames,
+        );
+    };
+    let write_opaque = |key: &Arc<str>| {
+        let payload = encode_load_state(&LoadState {
+            fill_ratio:    1.0,
+            is_opaque:     true,
+            written_at_ms: now_ms(),
+        });
+        let upd = make_gossip_update(
+            &ctx.node_id, ctx.default_ttl, key.clone(), payload, false, &ctx.hlc,
+        );
+        apply_and_notify(&ctx.kv_state, &upd);
+        dispatch_gossip_try_send(
+            &ctx.gossip_txs, WireMessage::Data(upd),
+            ctx.node_id.id_hash(), ForwardHint::All, &ctx.kv_state.dropped_frames,
+        );
+    };
+    let clear_opaque = |key: &Arc<str>| {
+        let upd = make_gossip_update(
+            &ctx.node_id, ctx.default_ttl, key.clone(), Bytes::new(), true, &ctx.hlc,
+        );
+        apply_and_notify(&ctx.kv_state, &upd);
+        dispatch_gossip_try_send(
+            &ctx.gossip_txs, WireMessage::Data(upd),
+            ctx.node_id.id_hash(), ForwardHint::All, &ctx.kv_state.dropped_frames,
+        );
+    };
+    let is_satisfied = |filter: &CapFilter| -> bool {
+        !matches!(wiring_snapshot(&ctx.kv_state, filter), WiringStatus::Unwired { .. })
+    };
+
+    // Initial writes: project all provides and evaluate every requirement.
+    for (key, cap) in gcap_keys.iter().zip(&provides) {
+        write_provide(key, cap);
     }
-    handles
+    for (i, filter) in requires.iter().enumerate() {
+        if !is_satisfied(filter) {
+            write_opaque(&opacity_keys[i]);
+            opaque_written[i] = true;
+        }
+    }
+
+    let mut cap_rx  = subscribe_prefix_on_kv(&ctx.kv_state, Arc::<str>::from("cap/"));
+    let mut gcap_rx = subscribe_prefix_on_kv(&ctx.kv_state, Arc::<str>::from("gcap/"));
+
+    let mut ticker = time::interval(GCAP_REASSERT_INTERVAL);
+    ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+    ticker.tick().await; // Consume the immediate first tick — we just wrote.
+
+    'main: loop {
+        tokio::select! { biased;
+            _ = &mut cancel_rx                   => break 'main,
+            _ = await_shutdown(&mut shutdown_rx) => break 'main,
+            _ = ticker.tick() => {
+                for (key, cap) in gcap_keys.iter().zip(&provides) {
+                    write_provide(key, cap);
+                }
+                continue 'main;
+            }
+            r = cap_rx.changed()  => { if r.is_err() { break 'main; } }
+            r = gcap_rx.changed() => { if r.is_err() { break 'main; } }
+        }
+        // Coalesce: drain further cap/gcap fires for the debounce window
+        // before recomputing every requirement's satisfaction once.
+        let deadline = time::Instant::now() + WATCHER_DEBOUNCE_WINDOW;
+        loop {
+            tokio::select! { biased;
+                _ = time::sleep_until(deadline) => break,
+                r = cap_rx.changed()  => { if r.is_err() { break 'main; } }
+                r = gcap_rx.changed() => { if r.is_err() { break 'main; } }
+            }
+        }
+        for (i, filter) in requires.iter().enumerate() {
+            let satisfied = is_satisfied(filter);
+            match (opaque_written[i], satisfied) {
+                (false, false) => { write_opaque(&opacity_keys[i]); opaque_written[i] = true; }
+                (true,  true)  => { clear_opaque(&opacity_keys[i]); opaque_written[i] = false; }
+                _ => {}
+            }
+        }
+    }
+
+    // Tombstone every gcap projection (use ordered send so the final
+    // tombstones actually leave the agent before the task is dropped),
+    // and clear any still-opaque requirement entries.
+    for key in &gcap_keys {
+        let upd = make_gossip_update(
+            &ctx.node_id, ctx.default_ttl, key.clone(), Bytes::new(), true, &ctx.hlc,
+        );
+        apply_and_notify(&ctx.kv_state, &upd);
+        dispatch_gossip_send(
+            &ctx.gossip_txs, WireMessage::Data(upd),
+            ctx.node_id.id_hash(), ForwardHint::All,
+        ).await;
+    }
+    for (i, key) in opacity_keys.iter().enumerate() {
+        if opaque_written[i] {
+            clear_opaque(key);
+        }
+    }
 }
 
 /// Writes (or tombstones) `grp/{group}/{node_id}` for this node, mirroring the
