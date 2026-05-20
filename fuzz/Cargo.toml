@@ -1,0 +1,35 @@
+[package]
+name = "mycelium-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+rust-version = "1.76"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Standalone workspace — this crate is not part of the parent's package graph.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.mycelium]
+path = ".."
+default-features = false
+features = ["fuzz-internals"]
+
+# Each fuzz_target is its own binary. `cargo fuzz init` writes the same layout.
+[[bin]]
+name             = "wire_decode"
+path             = "fuzz_targets/wire_decode.rs"
+test             = false
+doc              = false
+bench            = false
+
+[[bin]]
+name             = "capability_decode"
+path             = "fuzz_targets/capability_decode.rs"
+test             = false
+doc              = false
+bench            = false

@@ -112,6 +112,46 @@ pub use signal::{
     Signal, SignalScope, WatchHandle, signal_kind, kv_ns,
 };
 
+/// Re-exports for the cargo-fuzz harness under `fuzz/`. Gated by the
+/// `fuzz-internals` cargo feature so normal builds do not widen the
+/// public API. The functions here wrap internal `pub(crate)` decoders
+/// (`WireMessage`, `Capability::decode`, …) into `&[u8] -> _` calls that
+/// fuzz targets can hammer directly.
+///
+/// **Not stable.** Any item here can move or change shape between
+/// patch releases; if you depend on these from outside `fuzz/`, expect
+/// breakage.
+#[cfg(feature = "fuzz-internals")]
+pub mod fuzz_internals {
+    use bincode::serde::decode_from_slice;
+    use bytes::Bytes;
+
+    /// Attempts to decode `data` as a `WireMessage` using the same bincode
+    /// configuration as the live decoder. Returns whether decoding succeeded;
+    /// the actual message is discarded.
+    pub fn wire_message_decode(data: &[u8]) -> bool {
+        let cfg = crate::framing::bincode_cfg();
+        decode_from_slice::<crate::framing::WireMessage, _>(data, cfg).is_ok()
+    }
+
+    pub fn capability_decode(bytes: &[u8]) -> bool {
+        crate::Capability::decode(bytes).is_some()
+    }
+    pub fn cap_filter_decode(bytes: &[u8]) -> bool {
+        crate::CapFilter::decode(bytes).is_some()
+    }
+    pub fn capability_group_def_decode(bytes: &[u8]) -> bool {
+        crate::CapabilityGroupDef::decode(bytes).is_some()
+    }
+    pub fn locality_path_decode(bytes: &[u8]) -> bool {
+        crate::locality::LocalityPath::decode(bytes).is_some()
+    }
+    pub fn load_state_decode(bytes: &[u8]) -> bool {
+        let b = Bytes::copy_from_slice(bytes);
+        crate::signal::decode_load_state(&b).is_some()
+    }
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 

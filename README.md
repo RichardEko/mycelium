@@ -14,6 +14,17 @@ async RPC, and MCP AI tool routing on top — each agent chooses its own payload
 cargo build --release
 ```
 
+### Fuzz harness
+
+`fuzz/` is a standalone cargo-fuzz crate covering the wire-format decoder and
+every capability subsystem decoder. Requires nightly and `cargo install
+cargo-fuzz`:
+
+```
+cargo +nightly fuzz run wire_decode        -- -max_total_time=60
+cargo +nightly fuzz run capability_decode  -- -max_total_time=60
+```
+
 ## Run
 
 Start a bootstrap node:

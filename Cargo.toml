@@ -14,6 +14,15 @@ categories = ["network-programming", "asynchronous"]
 [features]
 default = ["cli"]
 cli = ["dep:tracing-subscriber"]
+# Exposes the `fuzz_internals` module re-exporting internal decoders to the
+# cargo-fuzz harness under `fuzz/`. NOT part of the stable public API — only
+# enable when building fuzz targets.
+fuzz-internals = []
+
+# The `fuzz/` directory is its own cargo-fuzz crate; keep it out of any
+# implicit-workspace traversal from this parent manifest.
+[workspace]
+exclude = ["fuzz"]
 
 [dependencies]
 # Core
