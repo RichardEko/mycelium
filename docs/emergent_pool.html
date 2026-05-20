@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Emergent Pool — cap-groups + signal_wired_via</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --surface2: #1c2128; --surface3: #21262d;
+    --border: #30363d; --accent: #58a6ff; --accent2: #3fb950; --accent3: #d2a8ff;
+    --accent4: #ffa657; --accent5: #ff7b72; --muted: #8b949e; --text: #e6edf3; --text2: #c9d1d9;
+    --radius: 8px; --radius-lg: 14px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; line-height: 1.6; }
+
+  .header { background: radial-gradient(ellipse at 50% 0%, rgba(63,185,80,0.06) 0%, transparent 55%), var(--bg); border-bottom: 1px solid var(--border); padding: 28px 36px 22px; display: flex; align-items: flex-start; gap: 16px; }
+  .header-badge { font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent2); background: rgba(63,185,80,0.1); border: 1px solid rgba(63,185,80,0.25); border-radius: 20px; padding: 4px 12px; white-space: nowrap; margin-top: 4px; }
+  .header-text { flex: 1; }
+  .header-title { font-size: 21px; font-weight: 700; letter-spacing: -0.02em; }
+  .header-title em { font-style: normal; color: var(--accent); }
+  .header-sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .header-links a { font-size: 12px; color: var(--accent); text-decoration: none; opacity: 0.7; }
+  .header-links a:hover { opacity: 1; }
+
+  .layout { display: grid; grid-template-columns: 1fr 320px; gap: 24px; padding: 24px 32px; max-width: 1260px; margin: 0 auto; }
+  .left-col  { display: flex; flex-direction: column; gap: 16px; }
+  .right-col { display: flex; flex-direction: column; gap: 16px; }
+
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+  .panel-hdr { padding: 10px 14px 8px; border-bottom: 1px solid var(--border); font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); display: flex; justify-content: space-between; align-items: center; }
+  .dot-live { width: 6px; height: 6px; border-radius: 50%; background: var(--accent2); box-shadow: 0 0 5px var(--accent2); animation: blink 1.6s ease-in-out infinite; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
+
+  /* Stage = pool ring + SVG overlay for flashes. */
+  .stage-wrap { position: relative; background: radial-gradient(ellipse at 50% 35%, rgba(63,185,80,0.05) 0%, transparent 50%), var(--surface2); }
+  .stage     { position: relative; width: 100%; height: 540px; }
+  .stage svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+  .pool-ring {
+    position: absolute; left: 50%; top: 35%;
+    transform: translate(-50%, -50%);
+    width: 320px; height: 320px;
+    border-radius: 50%;
+    border: 3px solid rgba(63,185,80,0.45);
+    background: rgba(63,185,80,0.04);
+    box-shadow: 0 0 60px rgba(63,185,80,0.07) inset, 0 0 20px rgba(63,185,80,0.06);
+    display: flex; align-items: center; justify-content: center;
+    flex-direction: column;
+  }
+  .pool-label { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent2); }
+  .pool-count { font-size: 36px; font-weight: 800; font-family: "SF Mono", monospace; color: var(--accent2); margin-top: 4px; line-height: 1; }
+  .pool-sub   { font-size: 9px; color: var(--muted); margin-top: 4px; letter-spacing: 0.06em; }
+
+  .worker {
+    position: absolute;
+    width: 56px; height: 56px;
+    border-radius: 50%;
+    background: var(--surface3);
+    border: 2px solid var(--border);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    cursor: pointer;
+    transition: left 0.55s cubic-bezier(0.22, 1, 0.36, 1), top 0.55s cubic-bezier(0.22, 1, 0.36, 1), border-color 0.3s, background 0.3s, box-shadow 0.3s;
+    font-size: 9px; font-family: "SF Mono", monospace; color: var(--text2);
+    transform: translate(-50%, -50%);
+  }
+  .worker.in-pool { border-color: rgba(63,185,80,0.7); background: rgba(63,185,80,0.08); color: var(--accent2); }
+  .worker.out     { border-color: rgba(139,148,158,0.35); background: var(--surface3); color: var(--muted); }
+  .worker.signaled { animation: signal-pulse 0.6s ease-out; }
+  @keyframes signal-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(88,166,255,0.7); }
+    100% { box-shadow: 0 0 0 18px rgba(88,166,255,0); }
+  }
+  .worker .w-num { font-size: 11px; font-weight: 800; color: inherit; }
+  .worker .w-cnt { font-size: 8px; color: var(--muted); margin-top: 1px; }
+
+  .consumer {
+    position: absolute;
+    bottom: 18px;
+    width: 96px; height: 64px;
+    border-radius: 10px;
+    background: var(--surface3);
+    border: 2px solid rgba(88,166,255,0.55);
+    transform: translateX(-50%);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    color: var(--accent);
+  }
+  .consumer .c-num { font-size: 11px; font-weight: 800; font-family: "SF Mono", monospace; }
+  .consumer .c-cnt { font-size: 10px; color: var(--muted); margin-top: 3px; font-family: "SF Mono", monospace; }
+
+  .legend { padding: 10px 14px; border-top: 1px solid var(--border); display: flex; gap: 18px; font-size: 11px; color: var(--muted); }
+  .legend .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 5px; vertical-align: -2px; }
+
+  /* Stats / events / guide right column */
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; }
+  .stat-item { padding: 12px 14px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  .stat-item:nth-child(2n) { border-right: none; }
+  .stat-item:nth-last-child(-n+2) { border-bottom: none; }
+  .stat-label { font-size: 10px; color: var(--muted); margin-bottom: 3px; }
+  .stat-val { font-size: 20px; font-weight: 700; line-height: 1; font-family: "SF Mono", "Fira Code", monospace; }
+
+  .event-log { max-height: 220px; overflow-y: auto; padding: 6px 0; font-family: "SF Mono", "Fira Code", monospace; font-size: 10px; }
+  .event-log::-webkit-scrollbar { width: 3px; }
+  .event-log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .log-entry { padding: 3px 12px; display: flex; gap: 6px; align-items: baseline; animation: fadeIn 0.2s ease-out; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateX(-3px); } to { opacity: 1; } }
+  .log-entry:hover { background: var(--surface2); }
+  .log-ts { color: var(--muted); min-width: 60px; font-size: 9px; }
+  .log-msg { color: var(--text2); }
+  .log-msg.adv   { color: var(--accent2); }
+  .log-msg.ret   { color: var(--accent4); }
+
+  .guide-body { padding: 12px 14px; font-size: 11px; color: var(--muted); line-height: 1.65; }
+  .guide-body ol { margin: 0; padding-left: 16px; }
+  .guide-body li { margin-bottom: 5px; }
+  .guide-body strong { color: var(--text2); }
+  .guide-body code { font-size: 10px; background: var(--surface3); padding: 1px 4px; border-radius: 3px; color: var(--text2); }
+
+  .concepts { max-width: 1260px; margin: 6px auto 0; padding: 0 32px 32px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .concept-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px 18px; }
+  .concept-num { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; }
+  .concept-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  .concept-body { font-size: 11px; color: var(--muted); line-height: 1.65; margin-bottom: 8px; }
+  .code-snippet { font-size: 10px; font-family: "SF Mono", "Fira Code", monospace; background: var(--surface2); border: 1px solid var(--border); border-radius: 5px; padding: 8px 10px; color: var(--text2); line-height: 1.7; overflow-x: auto; white-space: pre; }
+  .code-snippet .kw  { color: var(--accent5); }
+  .code-snippet .fn  { color: var(--accent); }
+  .code-snippet .str { color: var(--accent2); }
+  .code-snippet .cm  { color: var(--muted); font-style: italic; }
+  .code-snippet .tp  { color: var(--accent3); }
+
+  footer { text-align: center; padding: 32px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--border); }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <span class="header-badge">Phase 3g/3h + Phase 4</span>
+  <div class="header-text">
+    <div class="header-title">Emergent Pool — <em>cap-groups &amp; signal_wired_via</em></div>
+    <div class="header-sub">
+      20 workers · 2 consumers · workers that advertise <code style="font-size:11px;color:var(--accent4)">compute/gpu</code> auto-join the <code style="font-size:11px;color:var(--accent2)">gpu-pool</code> · consumers fire wired signals every 700 ms · resolver picks one provider per send
+    </div>
+  </div>
+  <div class="header-links"><a href="roadmap.html">← Roadmap</a></div>
+</header>
+
+<div class="layout">
+
+  <div class="left-col">
+    <div class="panel">
+      <div class="panel-hdr">gpu-pool · click a worker to toggle <code style="font-size:10px;color:var(--accent4)">compute/gpu</code> <div class="dot-live"></div></div>
+      <div class="stage-wrap">
+        <div class="stage" id="stage">
+          <svg id="flash-svg" viewBox="0 0 1000 540" preserveAspectRatio="none"></svg>
+          <div class="pool-ring">
+            <div class="pool-label">gpu-pool</div>
+            <div class="pool-count" id="pool-count">0</div>
+            <div class="pool-sub">members in emergent group</div>
+          </div>
+        </div>
+        <div class="legend">
+          <span><span class="swatch" style="background:rgba(63,185,80,0.5);border:1px solid rgba(63,185,80,0.7)"></span>in pool (advertising)</span>
+          <span><span class="swatch" style="background:var(--surface3);border:1px solid rgba(139,148,158,0.35)"></span>idle</span>
+          <span><span class="swatch" style="background:rgba(88,166,255,0.15);border:1px solid rgba(88,166,255,0.55);border-radius:3px"></span>consumer</span>
+          <span><span class="swatch" style="background:rgba(88,166,255,0.7);box-shadow:0 0 6px rgba(88,166,255,0.6)"></span>flash = signal_wired_via dispatched here</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="right-col">
+    <div class="panel">
+      <div class="panel-hdr">Pool stats <div class="dot-live"></div></div>
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div class="stat-label">In pool</div>
+          <div class="stat-val" style="color:var(--accent2)" id="s-in">0</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Idle</div>
+          <div class="stat-val" style="color:var(--muted)" id="s-idle">0</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Signals/s</div>
+          <div class="stat-val" style="color:var(--accent)" id="s-rate">0</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Total dispatched</div>
+          <div class="stat-val" style="color:var(--accent3)" id="s-sent">0</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-hdr">Guide</div>
+      <div class="guide-body">
+        <ol>
+          <li>Click any worker to toggle its <code>compute/gpu</code> capability. Workers with the cap glide inside the pool ring; workers without slide back out.</li>
+          <li>The pool count is computed from <code>gcap/gpu-pool/compute/gpu/{member}</code> entries — written by the single C3 membership task running on each member.</li>
+          <li>Each blue flash is one <code>signal_wired_via("render-job", …)</code> from a consumer. The resolver picks one or more pool members; the chosen one's tile pulses.</li>
+          <li>Drain the pool to <strong>zero</strong> by retracting every worker — consumer outcome flips to <code>Unwired</code> until you add a member back.</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-hdr">Event log <div class="dot-live"></div></div>
+      <div class="event-log" id="event-log"></div>
+    </div>
+  </div>
+
+</div>
+
+<div class="concepts">
+  <div class="concept-card">
+    <div class="concept-num" style="color:var(--accent2)">define_capability_group</div>
+    <div class="concept-title">Emergent groups</div>
+    <div class="concept-body">
+      <code>cap-group/{name}</code> publishes a filter. Every node whose own <code>cap/</code>
+      advertisements satisfy the filter self-joins via <code>watch_capability_group_definitions</code>
+      and starts writing <code>gcap/{name}/{ns}/{name}/{self}</code>.
+    </div>
+    <div class="code-snippet"><span class="kw">let</span> def = <span class="tp">CapabilityGroupDef</span> {
+    filter:   <span class="tp">CapFilter</span>::<span class="fn">new</span>(<span class="str">"compute"</span>, <span class="str">"gpu"</span>),
+    provides: <span class="kw">vec</span>![<span class="tp">Capability</span>::<span class="fn">new</span>(<span class="str">"compute"</span>, <span class="str">"gpu"</span>)],
+    requires: <span class="kw">vec</span>![],
+    topology_policy: <span class="tp">None</span>,
+};
+<span class="kw">let</span> h = agent.<span class="fn">define_capability_group</span>(
+    <span class="str">"gpu-pool"</span>, def, <span class="tp">Duration</span>::<span class="fn">from_secs</span>(30),
+);</div>
+  </div>
+
+  <div class="concept-card">
+    <div class="concept-num" style="color:var(--accent)">signal_wired_via</div>
+    <div class="concept-title">Resolver picks the provider</div>
+    <div class="concept-body">
+      One call resolves the wiring AND dispatches the signal. Returns <code>Emitted</code>
+      with the list of providers actually routed to, or <code>Unwired</code> if no provider
+      currently matches the filter.
+    </div>
+    <div class="code-snippet"><span class="kw">match</span> agent.<span class="fn">signal_wired_via</span>(
+    &amp;filter, <span class="str">"render-job"</span>, payload,
+) {
+    <span class="tp">Emitted</span> { providers } =&gt; { .. }
+    <span class="tp">Unwired</span> { filter }    =&gt; {
+        <span class="cm">// no provider — queue, retry, alert</span>
+    }
+}</div>
+  </div>
+
+  <div class="concept-card">
+    <div class="concept-num" style="color:var(--accent3)">C3 — task consolidation</div>
+    <div class="concept-title">One task per group</div>
+    <div class="concept-body">
+      Each pool member runs a single <code>run_group_membership_task</code> that owns both
+      the <code>gcap/</code> reassertion ticker AND any group-requirement opacity tracking.
+      Pre-C3 it would have been one task per (provide × require) per group — here, with 10
+      members each providing one capability and zero requirements, that's a flat 10 tasks
+      instead of 10× anything.
+    </div>
+    <div class="code-snippet"><span class="cm">// Each member tombstones every gcap/</span>
+<span class="cm">// key it wrote when the task exits.</span>
+<span class="kw">async fn</span> <span class="fn">run_group_membership_task</span>(
+    .. provides: <span class="tp">Vec</span>&lt;<span class="tp">Capability</span>&gt;,
+       requires: <span class="tp">Vec</span>&lt;<span class="tp">CapFilter</span>&gt;,
+    ..
+);</div>
+  </div>
+</div>
+
+<footer>mycelium &middot; emergent groups &middot; wired signals &middot; C3 consolidated membership task</footer>
+
+<script>
+const POLL_MS = 350;
+const MAX_LOG = 80;
+const STAGE_W = 1000;
+const STAGE_H = 540;
+const POOL_CX = 500;
+const POOL_CY = 190;   // matches CSS top: 35% of 540 ≈ 189
+const POOL_R  = 160;   // CSS 320×320 / 2
+const RING_IN_R  = 100;
+const RING_OUT_R = 240;
+let prevEvents = 0;
+let connected  = false;
+let lastTick   = Date.now();
+let lastSent   = 0;
+let rateSent   = 0;
+let prevWorkerSig = new Map();
+let stageEl = document.getElementById('stage');
+let svgEl   = document.getElementById('flash-svg');
+
+function workerEl(id) {
+  let el = document.getElementById(`w-${id}`);
+  if (!el) {
+    el = document.createElement('div');
+    el.id = `w-${id}`;
+    el.className = 'worker out';
+    el.innerHTML = `<div class="w-num">${id}</div><div class="w-cnt" id="w-cnt-${id}">0</div>`;
+    el.onclick = () => toggle(id);
+    stageEl.appendChild(el);
+  }
+  return el;
+}
+
+function consumerEl(id) {
+  let el = document.getElementById(`c-${id}`);
+  if (!el) {
+    el = document.createElement('div');
+    el.id = `c-${id}`;
+    el.className = 'consumer';
+    el.innerHTML = `<div class="c-num">consumer-${id}</div><div class="c-cnt" id="c-cnt-${id}">0 sent</div>`;
+    stageEl.appendChild(el);
+  }
+  return el;
+}
+
+function placeWorkers(workers) {
+  const n = workers.length;
+  // Two rings: inner = in-pool, outer = idle. Position by global slot index so
+  // each worker has a stable angle and can ride between rings on toggle.
+  workers.forEach((w, i) => {
+    const angle = (i / n) * 2 * Math.PI - Math.PI / 2;
+    const r = w.has_cap ? RING_IN_R : RING_OUT_R;
+    const x = POOL_CX + Math.cos(angle) * r;
+    const y = POOL_CY + Math.sin(angle) * r;
+    const el = workerEl(w.id);
+    el.className = `worker ${w.has_cap ? 'in-pool' : 'out'}`;
+    el.style.left = `${(x / STAGE_W) * 100}%`;
+    el.style.top  = `${(y / STAGE_H) * 100}%`;
+    const cnt = document.getElementById(`w-cnt-${w.id}`);
+    if (cnt) cnt.textContent = w.signals_in;
+    // Pulse on signal increment.
+    const prev = prevWorkerSig.get(w.id) ?? w.signals_in;
+    if (w.signals_in > prev) {
+      el.classList.remove('signaled');
+      void el.offsetWidth;
+      el.classList.add('signaled');
+    }
+    prevWorkerSig.set(w.id, w.signals_in);
+  });
+}
+
+function placeConsumers(consumers) {
+  consumers.forEach((c, i) => {
+    const el = consumerEl(c.id);
+    const xPct = consumers.length === 1 ? 50 : (25 + (50 * i / (consumers.length - 1)));
+    el.style.left = `${xPct}%`;
+    const cnt = document.getElementById(`c-cnt-${c.id}`);
+    if (cnt) {
+      const tgt = c.last_target >= 0 ? ` → w-${c.last_target}` : '';
+      cnt.textContent = `${c.signals_sent} sent${tgt}`;
+    }
+  });
+}
+
+function drawFlashes(flashes) {
+  // Each flash: line from consumer (bottom) to worker (current position).
+  svgEl.innerHTML = '';
+  const now = Date.now();
+  flashes.forEach(f => {
+    const wEl = document.getElementById(`w-${f.to}`);
+    const cEl = document.getElementById(`c-${f.from}`);
+    if (!wEl || !cEl) return;
+    const stageRect = stageEl.getBoundingClientRect();
+    const wRect = wEl.getBoundingClientRect();
+    const cRect = cEl.getBoundingClientRect();
+    const x1 = ((cRect.left + cRect.width / 2 - stageRect.left) / stageRect.width) * STAGE_W;
+    const y1 = ((cRect.top  + cRect.height / 2 - stageRect.top)  / stageRect.height) * STAGE_H;
+    const x2 = ((wRect.left + wRect.width / 2 - stageRect.left) / stageRect.width) * STAGE_W;
+    const y2 = ((wRect.top  + wRect.height / 2 - stageRect.top)  / stageRect.height) * STAGE_H;
+    const age = (now - f.ts) / 1500;
+    if (age >= 1) return;
+    const alpha = 1 - age;
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', x1); line.setAttribute('y1', y1);
+    line.setAttribute('x2', x2); line.setAttribute('y2', y2);
+    line.setAttribute('stroke', `rgba(88,166,255,${alpha.toFixed(2)})`);
+    line.setAttribute('stroke-width', '2');
+    line.setAttribute('stroke-linecap', 'round');
+    svgEl.appendChild(line);
+  });
+}
+
+function addLog(msg, ts) {
+  const cls = msg.includes('advertise') ? 'adv'
+            : msg.includes('retract')   ? 'ret' : '';
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  const t = new Date(ts).toTimeString().slice(0, 8);
+  entry.innerHTML = `<span class="log-ts">${t}</span><span class="log-msg ${cls}">${msg}</span>`;
+  const logEl = document.getElementById('event-log');
+  logEl.prepend(entry);
+  while (logEl.children.length > MAX_LOG) logEl.lastChild.remove();
+}
+
+function syncEvents(events) {
+  if (!events || !events.length) return;
+  const fresh = events.slice(0, events.length - prevEvents).reverse();
+  prevEvents = events.length;
+  fresh.forEach(e => addLog(e.message, e.ts_ms));
+}
+
+async function poll() {
+  try {
+    const res  = await fetch('/state', { signal: AbortSignal.timeout(2000) });
+    const data = await res.json();
+    if (!connected) { connected = true; addLog('connected', Date.now()); }
+    placeWorkers(data.workers);
+    placeConsumers(data.consumers);
+    drawFlashes(data.flashes || []);
+
+    const inPool = data.workers.filter(w => w.has_cap).length;
+    const idle   = data.workers.length - inPool;
+    document.getElementById('pool-count').textContent = inPool;
+    document.getElementById('s-in').textContent   = inPool;
+    document.getElementById('s-idle').textContent = idle;
+
+    const sent = data.consumers.reduce((a, c) => a + c.signals_sent, 0);
+    const now  = Date.now();
+    const dt   = (now - lastTick) / 1000;
+    if (dt > 0) rateSent = ((sent - lastSent) / dt) * 0.4 + rateSent * 0.6;
+    lastTick = now;
+    lastSent = sent;
+    document.getElementById('s-rate').textContent = rateSent.toFixed(1);
+    document.getElementById('s-sent').textContent = sent;
+
+    syncEvents(data.events);
+  } catch {
+    if (connected) { connected = false; addLog('disconnected — run: cargo run --example emergent_pool', Date.now()); }
+  }
+}
+
+async function toggle(id) {
+  await fetch(`/cmd?op=toggle&node=${id}`, { signal: AbortSignal.timeout(2000) }).catch(() => {});
+  await poll();
+}
+
+poll();
+setInterval(poll, POLL_MS);
+</script>
+</body>
+</html>
