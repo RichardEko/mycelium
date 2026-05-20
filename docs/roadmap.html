@@ -611,8 +611,9 @@
   it is the bloodstream the application runs on.</p>
   <div class="hero-badges">
     <span class="badge"><span class="dot dot-live"></span> Layer 1: Transport — Complete</span>
-    <span class="badge"><span class="dot dot-live"></span> Layer 2: Signal / Boundary Mesh — Complete · 107 tests</span>
+    <span class="badge"><span class="dot dot-live"></span> Layer 2: Signal / Boundary Mesh — Complete · 179 tests</span>
     <span class="badge"><span class="dot dot-live"></span> Layer III: Consensus — Complete</span>
+    <span class="badge"><span class="dot dot-live"></span> Capability &amp; Discovery — Complete</span>
     <span class="badge"><span class="dot dot-planned"></span> Layer 3: Service Patterns — Next</span>
     <span class="badge"><span class="dot dot-future"></span> Layers 4–5: AI Integration + Observability — Planned</span>
   </div>
@@ -758,6 +759,27 @@
         </div>
       </div>
       <div class="stack-row">
+        <div class="stack-num" style="background:rgba(57,211,83,0.06);color:var(--accent6);border-right:2px solid var(--accent6);">Cap<br>Layer</div>
+        <div class="stack-body">
+          <div class="stack-title">Capability &amp; Discovery <span class="phase-tag tag-done">Complete</span></div>
+          <p class="stack-desc">First-class capability advertisement, discovery, demand pressure, and locality-aware routing — all on the Layer I KV store. Nodes declare capabilities (<code>cap/</code>), requirements (<code>req/</code>), and self-assemble into emergent groups (<code>gcap/</code>). Wiring connects consumer requirements to provider groups; locality-aware resolution routes to the topologically closest provider first. Three browser-visual examples: <a href="capability_market.html" style="color:var(--accent)">capability_market</a> · <a href="emergent_pool.html" style="color:var(--accent)">emergent_pool</a> · <a href="locality_wiring.html" style="color:var(--accent)">locality_wiring</a>.</p>
+          <div class="chips">
+            <span class="chip">advertise_capability</span>
+            <span class="chip">resolve · watch_capabilities</span>
+            <span class="chip">declare_requirement · watch_requirement</span>
+            <span class="chip">demand · watch_demand · DemandStatus</span>
+            <span class="chip">define_capability_group</span>
+            <span class="chip">gcap/ projections</span>
+            <span class="chip">resolve_wiring · signal_wired_via</span>
+            <span class="chip">resolve_with_locality</span>
+            <span class="chip">signal_wired_via_locality</span>
+            <span class="chip">LocalityPreference</span>
+            <span class="chip">predicate-narrowed watchers</span>
+            <span class="chip">50 ms debounce · O(groups) tasks</span>
+          </div>
+        </div>
+      </div>
+      <div class="stack-row">
         <div class="stack-num sn-2" style="background:rgba(210,168,255,0.05);color:var(--accent3);border-right:2px solid var(--accent3);">Layer<br>III</div>
         <div class="stack-body">
           <div class="stack-title">Consensus <span class="phase-tag tag-done">Complete</span></div>
@@ -775,7 +797,7 @@
       <div class="stack-row">
         <div class="stack-num sn-2">Layer<br>2</div>
         <div class="stack-body">
-          <div class="stack-title">Signal / Boundary Mesh <span class="phase-tag tag-done">Complete · 107 tests</span></div>
+          <div class="stack-title">Signal / Boundary Mesh <span class="phase-tag tag-done">Complete · 179 tests</span></div>
           <p class="stack-desc">Ephemeral events propagate epidemically. Boundaries (local receptors) decide action. Variable opacity creates emergent backpressure under load. Active inhibition provides refractory periods. Fault detection, threshold activation, proactive peer notification, and persistent advertisement round out the layer.</p>
           <div class="chips">
             <span class="chip">signal_rx · emit · signal_once</span>
@@ -815,7 +837,7 @@
   <div class="section">
     <div class="section-head">
       <h2>Layer 2 — Signal / Boundary Mesh</h2>
-      <span class="phase-tag tag-done">Complete · 107 tests</span>
+      <span class="phase-tag tag-done">Complete · 179 tests</span>
     </div>
 
     <!-- Scope diagram -->
@@ -1134,6 +1156,129 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
     </table>
   </div>
 
+  <!-- ── Capability & Discovery Subsystem ── -->
+  <div class="section">
+    <div class="section-head">
+      <h2>Capability &amp; Discovery Subsystem</h2>
+      <span class="phase-tag tag-done">Complete</span>
+    </div>
+
+    <p>First-class capability advertisement, discovery, demand pressure, and locality-aware routing —
+    all built on the Layer I KV store with no separate registry and no coordination overhead. Three
+    browser-visual examples make the whole subsystem interactive:</p>
+
+    <div class="three-col">
+      <div class="card c1">
+        <div class="card-title">capability_market</div>
+        <div class="card-sub"><a href="capability_market.html" style="color:var(--accent)">Open demo</a> · port 8097</div>
+        <ul>
+          <li>4 capability types: compute/gpu, compute/cpu, storage/disk, ai/agent</li>
+          <li>Toggle primary and backup providers on and off</li>
+          <li>Per-capability demand-pressure bars (green ≤1.0, amber ≤2.0, red >2.0)</li>
+          <li>Watch <code>RequirementStatus</code> updates in real time on requirers</li>
+        </ul>
+      </div>
+      <div class="card c1">
+        <div class="card-title">emergent_pool</div>
+        <div class="card-sub"><a href="emergent_pool.html" style="color:var(--accent)">Open demo</a> · port 8098</div>
+        <ul>
+          <li>20 workers + 2 consumers; workers join/leave the gpu-pool group</li>
+          <li><code>define_capability_group</code> assembles the pool automatically</li>
+          <li><code>signal_wired_via</code> fans out to all pool members per dispatch</li>
+          <li>Flash lines show consumer → worker signal delivery live</li>
+        </ul>
+      </div>
+      <div class="card c1">
+        <div class="card-title">locality_wiring</div>
+        <div class="card-sub"><a href="locality_wiring.html" style="color:var(--accent)">Open demo</a> · port 8099</div>
+        <ul>
+          <li>12 nodes across 2 AZs × 2 racks × 3 hosts</li>
+          <li>Concentric rings: inner = same rack, outer = different AZ</li>
+          <li>Kill the closest provider — resolver shifts to the next ring</li>
+          <li>Click any node to make it the consumer; topology recomputes from that vantage</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3>Capability Advertisement and Resolution</h3>
+    <p>Nodes advertise what they offer and watch the matching set for changes. All state lives in
+    the Layer I KV store under <code>cap/{node_id}/{ns}/{name}</code> — visible to any node at any
+    time via <code>scan_prefix("cap/")</code> and anti-entropy-synced to late joiners.</p>
+
+<pre><code><span class="cmt">// Advertise — reasserts cap/{node_id}/{ns}/{name} on an interval</span>
+<span class="kw">let</span> _handle = agent.<span class="fn">advertise_capability</span>(
+    <span class="ty">Capability</span>::<span class="fn">new</span>(<span class="str">"compute"</span>, <span class="str">"gpu"</span>),
+    <span class="ty">Duration</span>::<span class="fn">from_secs</span>(<span class="lit">30</span>),
+);
+
+<span class="cmt">// Resolve — snapshot of every node currently advertising a matching capability</span>
+<span class="kw">let</span> filter = <span class="ty">CapFilter</span>::<span class="fn">new</span>(<span class="str">"compute"</span>, <span class="str">"gpu"</span>);
+<span class="kw">let</span> matches: <span class="ty">Vec</span>&lt;(<span class="ty">NodeId</span>, <span class="ty">Capability</span>)&gt; = agent.<span class="fn">resolve</span>(&amp;filter);
+
+<span class="cmt">// Watch — push-based; debounced to a 50 ms idle window before firing</span>
+<span class="kw">let mut</span> rx = agent.<span class="fn">watch_capabilities</span>(filter);
+rx.<span class="fn">changed</span>().<span class="kw">await</span>?;</code></pre>
+
+    <h3>Requirements and Demand Pressure</h3>
+    <p><code>declare_requirement</code> writes the node's declared need into <code>req/</code>.
+    <code>demand</code> and <code>watch_demand</code> surface how many nodes want a capability versus
+    how many provide it. <code>demand_pressure = demanding / max(providers, 1)</code>. Pressure
+    above 1.0 means demand outstrips supply. The library never auto-responds — this is a signal
+    for orchestrators and autoscalers.</p>
+
+<pre><code><span class="cmt">// Declare requirement — writes req/{node_id}/{ns}/{name} on an interval</span>
+<span class="kw">let</span> _h = agent.<span class="fn">declare_requirement</span>(<span class="ty">CapFilter</span>::<span class="fn">new</span>(<span class="str">"compute"</span>, <span class="str">"gpu"</span>), <span class="ty">Duration</span>::<span class="fn">from_secs</span>(<span class="lit">30</span>));
+
+<span class="cmt">// Demand snapshot — pressure = demanding / max(providers, 1)</span>
+<span class="kw">let</span> s: <span class="ty">DemandStatus</span> = agent.<span class="fn">demand</span>(&amp;<span class="ty">CapFilter</span>::<span class="fn">new</span>(<span class="str">"compute"</span>, <span class="str">"gpu"</span>));
+<span class="mac">println!</span>(<span class="str">"{} demanding, {} providing, pressure {:.2}"</span>,
+    s.demanding_nodes.<span class="fn">len</span>(), s.providers.<span class="fn">len</span>(), s.demand_pressure);
+
+<span class="cmt">// Push-based demand watch — fires on req/, cap/, or gcap/ changes matching filter</span>
+<span class="kw">let mut</span> rx = agent.<span class="fn">watch_demand</span>(<span class="ty">CapFilter</span>::<span class="fn">new</span>(<span class="str">"compute"</span>, <span class="str">"gpu"</span>));
+rx.<span class="fn">changed</span>().<span class="kw">await</span>?;
+<span class="kw">if</span> rx.<span class="fn">borrow</span>().demand_pressure &gt; <span class="lit">2.0</span> { <span class="fn">scale_up_gpu_workers</span>(); }</code></pre>
+
+    <h3>Emergent Capability Groups</h3>
+    <p>Nodes that share a capability self-assemble into a named group. The library projects their
+    collective capability under <code>gcap/{group}/{ns}/{name}/{contributor}</code> and handles
+    group-level requirement wiring. One consolidated task per group (not per member) keeps task
+    count O(active groups).</p>
+
+<pre><code><span class="cmt">// Any node advertising compute/gpu joins "gpu-pool" automatically.</span>
+<span class="cmt">// The library maintains gcap/ projections and group-level wiring.</span>
+agent.<span class="fn">define_capability_group</span>(
+    <span class="str">"gpu-pool"</span>,
+    <span class="ty">CapabilityGroupDef</span> {
+        filter:   <span class="ty">CapFilter</span>::<span class="fn">new</span>(<span class="str">"compute"</span>, <span class="str">"gpu"</span>),
+        provides: <span class="fn">vec!</span>[<span class="ty">Capability</span>::<span class="fn">new</span>(<span class="str">"compute"</span>, <span class="str">"gpu"</span>)],
+        requires: <span class="fn">vec!</span>[],
+    },
+    <span class="ty">Duration</span>::<span class="fn">from_secs</span>(<span class="lit">60</span>),
+);</code></pre>
+
+    <h3>Inter-Group Wiring and Locality-Aware Routing</h3>
+    <p>Wiring connects a consumer to provider groups without naming individual nodes.
+    <code>resolve_with_locality</code> orders providers by shared topology prefix depth —
+    same rack before same AZ before cross-AZ — and <code>signal_wired_via_locality</code>
+    combines wiring and locality in one call.</p>
+
+<pre><code><span class="cmt">// Signal via wiring — dispatches to all matching providers (direct + group members)</span>
+<span class="kw">let</span> outcome = agent.<span class="fn">signal_wired_via</span>(
+    &amp;<span class="ty">CapFilter</span>::<span class="fn">new</span>(<span class="str">"compute"</span>, <span class="str">"gpu"</span>), <span class="str">"render-job"</span>, payload,
+).<span class="kw">await</span>;
+
+<span class="cmt">// resolve_with_locality — (NodeId, Capability, depth) sorted by depth desc</span>
+<span class="cmt">// depth = length of shared locality prefix (e.g. 2 = same rack, 1 = same AZ)</span>
+<span class="kw">let</span> candidates = agent.<span class="fn">resolve_with_locality</span>(
+    &amp;<span class="ty">CapFilter</span>::<span class="fn">new</span>(<span class="str">"render"</span>, <span class="str">"job"</span>),
+    <span class="ty">LocalityPreference</span>::<span class="ty">PreferShared</span>(<span class="lit">0</span>),  <span class="cmt">// prefer closest; fall back to any</span>
+);
+
+<span class="cmt">// Locality path set in config — coarse to fine</span>
+config.locality_path = <span class="fn">vec!</span>[<span class="str">"az1"</span>.<span class="fn">into</span>(), <span class="str">"rack2"</span>.<span class="fn">into</span>(), <span class="str">"host3"</span>.<span class="fn">into</span>()];</code></pre>
+  </div>
+
   <!-- ── Converging on a Reactive Capability Cell ── -->
   <div class="section">
     <div class="section-head">
@@ -1300,8 +1445,8 @@ agent.<span class="fn">emit</span>(
       <h2>Delivery Timeline</h2>
     </div>
     <div class="timeline-wrap">
-      <div class="tl-bar"><div class="tl-bar-fill" style="width:40%;"></div></div>
-      <div class="tl-cols">
+      <div class="tl-bar"><div class="tl-bar-fill" style="width:60%;"></div></div>
+      <div class="tl-cols" style="grid-template-columns: repeat(6, 1fr);">
         <div class="tl-card">
           <div class="tl-num" style="color:var(--accent2)">Layer 1</div>
           <div class="tl-title">Gossip Transport</div>
@@ -1311,7 +1456,19 @@ agent.<span class="fn">emit</span>(
         <div class="tl-card">
           <div class="tl-num" style="color:var(--accent2)">Layer 2</div>
           <div class="tl-title">Signal / Boundary</div>
-          <div class="tl-weeks">Complete · 107 tests</div>
+          <div class="tl-weeks">Complete · 179 tests</div>
+          <span class="tl-badge tl-done">Done ✓</span>
+        </div>
+        <div class="tl-card">
+          <div class="tl-num" style="color:var(--accent2)">Layer III</div>
+          <div class="tl-title">Consensus</div>
+          <div class="tl-weeks">Complete</div>
+          <span class="tl-badge tl-done">Done ✓</span>
+        </div>
+        <div class="tl-card">
+          <div class="tl-num" style="color:var(--accent6)">Cap</div>
+          <div class="tl-title">Capability &amp; Discovery</div>
+          <div class="tl-weeks">Complete · 3 examples</div>
           <span class="tl-badge tl-done">Done ✓</span>
         </div>
         <div class="tl-card">
@@ -1321,16 +1478,10 @@ agent.<span class="fn">emit</span>(
           <span class="tl-badge tl-medium">3–4 weeks</span>
         </div>
         <div class="tl-card">
-          <div class="tl-num" style="color:var(--accent4)">Layer 4</div>
-          <div class="tl-title">AI Integration</div>
-          <div class="tl-weeks">MCP · Supervision</div>
-          <span class="tl-badge tl-future">Parallel w/ L3</span>
-        </div>
-        <div class="tl-card">
-          <div class="tl-num" style="color:var(--muted)">Layer 5</div>
-          <div class="tl-title">Observability</div>
-          <div class="tl-weeks">Prometheus · Metrics</div>
-          <span class="tl-badge tl-horizon">Phase 5</span>
+          <div class="tl-num" style="color:var(--accent4)">Layer 4–5</div>
+          <div class="tl-title">AI + Observability</div>
+          <div class="tl-weeks">MCP · Prometheus</div>
+          <span class="tl-badge tl-future">Planned</span>
         </div>
       </div>
     </div>
@@ -1653,8 +1804,8 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
 
   <!-- ── Footer ── -->
   <div style="margin-top:72px; padding-top:24px; border-top:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
-    <span style="font-size:12px; color:var(--muted);">mycelium · Engineering Roadmap · 2026-05-19</span>
-    <span style="font-size:12px; color:var(--muted);">Layers 1 &amp; 2 complete · Layer 3 next · Chemical signalling + stigmergy + threshold activation</span>
+    <span style="font-size:12px; color:var(--muted);">mycelium · Engineering Roadmap · 2026-05-20</span>
+    <span style="font-size:12px; color:var(--muted);">Layers 1 &amp; 2 + Capability &amp; Discovery complete · Layer 3 next · Chemical signalling + stigmergy + threshold activation</span>
   </div>
 
 </div>

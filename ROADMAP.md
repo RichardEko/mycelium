@@ -1,7 +1,7 @@
 # Mycelium — Engineering Roadmap
 
-> **Status:** Layer 1 complete. Layer 2 complete. Layer III (Consensus) complete. Layers 3–5 (Service Patterns / AI / Observability) planned.
-> **Last updated:** 2026-05-19
+> **Status:** Layer 1 complete. Layer 2 complete. Layer III (Consensus) complete. Capability & Discovery subsystem complete. Layers 3–5 (Service Patterns / AI / Observability) planned.
+> **Last updated:** 2026-05-20
 
 ---
 
@@ -75,6 +75,15 @@ is a guardrail on the path to that.
 │  RPC over gossip · Actor/Event mailboxes · bulk HTTP               │
 │  Streaming LLM calls · service routing · connection management     │
 │  Signal carries a ticket; HTTP carries the weight                  │
+├────────────────────────────────────────────────────────────────────┤
+│  Capability & Discovery Subsystem                    [COMPLETE]    │
+│  advertise_capability · resolve · watch_capabilities               │
+│  declare_requirement · watch_requirement · RequirementStatus       │
+│  demand · watch_demand · DemandStatus (pressure surface)           │
+│  define_capability_group · gcap/ projections (emergent groups)     │
+│  resolve_wiring · watch_wiring · signal_wired_via                  │
+│  resolve_with_locality · signal_wired_via_locality                 │
+│  LocalityPreference · locality_path config field                   │
 ├────────────────────────────────────────────────────────────────────┤
 │  Layer III: Consensus                                [COMPLETE]    │
 │  ConsensusEngine · epidemic two-phase voting · OpaqueRecompute     │
@@ -522,6 +531,123 @@ pub mod signal_kind {
 
 ---
 
+## Capability & Discovery Subsystem (Complete)
+
+First-class capability advertisement, discovery, demand pressure, and locality-aware routing,
+built entirely on the Layer I KV store. No separate registry, no coordination overhead; all
+capability state lives under `cap/`, `req/`, and `gcap/` namespaces and is anti-entropy-synced
+to late joiners automatically.
+
+Three browser-visual examples demonstrate the subsystem end-to-end:
+- **[`examples/capability_market.rs`](examples/capability_market.rs)** (port 8097) — four
+  capability types, providers and requirers, demand-pressure bars, live toggle
+- **[`examples/emergent_pool.rs`](examples/emergent_pool.rs)** (port 8098) — 20-node worker
+  pool assembling via `define_capability_group`, consumers dispatching via `signal_wired_via`
+- **[`examples/locality_wiring.rs`](examples/locality_wiring.rs)** (port 8099) — 12 nodes
+  across two AZs, concentric rings showing locality depth, resolver shifting in real time
+
+### Direct Capability (Phases 0–3)
+
+```rust
+// Advertise — reasserts cap/{node_id}/{ns}/{name} on an interval; tombstones on drop.
+let _handle = agent.advertise_capability(Capability::new("compute", "gpu"), Duration::from_secs(30));
+
+// Resolve — snapshot of all currently-advertising nodes matching the filter.
+let matches: Vec<(NodeId, Capability)> = agent.resolve(&CapFilter::new("compute", "gpu"));
+
+// Watch — push-based, debounced to 50 ms idle window before firing.
+let mut rx = agent.watch_capabilities(CapFilter::new("compute", "gpu"));
+```
+
+### Requirements and Demand Pressure (Phases 4, 9)
+
+```rust
+// Declare — writes req/{node_id}/{ns}/{name}; visible to orchestrators on any node.
+let _handle = agent.declare_requirement(CapFilter::new("compute", "gpu"), Duration::from_secs(30));
+
+// Watch requirement status — fires when provider set changes relative to declared need.
+let mut rx = agent.watch_requirement(CapFilter::new("compute", "gpu"));
+
+// Demand snapshot — pressure = demanding / max(providers, 1). Library never auto-responds.
+let status: DemandStatus = agent.demand(&CapFilter::new("compute", "gpu"));
+println!("pressure: {:.2}", status.demand_pressure);  // > 1.0 = supply gap
+
+// Push-based demand — debounced, fires on req/, cap/, or gcap/ changes.
+let mut rx = agent.watch_demand(CapFilter::new("compute", "gpu"));
+```
+
+### Emergent Capability Groups (Phases 3g, 3h)
+
+Nodes that share a capability self-assemble into a named group. The library projects their
+collective capability under `gcap/{group}/{ns}/{name}/{contributor}` and handles group-level
+requirement wiring. One consolidated `run_group_membership_task` per group (not per member)
+keeps the task count O(active groups).
+
+```rust
+agent.define_capability_group(
+    "gpu-pool",
+    CapabilityGroupDef {
+        filter:   CapFilter::new("compute", "gpu"),
+        provides: vec![Capability::new("compute", "gpu")],
+        requires: vec![],
+    },
+    Duration::from_secs(60),
+);
+```
+
+### Inter-Group Wiring (Phase 4)
+
+Wiring connects a consumer's declared requirement to provider groups without the consumer needing
+to enumerate group members or know their node IDs.
+
+```rust
+// Resolve wiring — WiringStatus::Wired{providers} or WiringStatus::Unwired{filter}
+let status = agent.resolve_wiring(&CapFilter::new("compute", "gpu"));
+
+// Watch wiring — push-based, fires when provider set changes
+let mut rx = agent.watch_wiring(CapFilter::new("compute", "gpu"));
+
+// Signal via wiring — dispatches to all matching providers
+let outcome = agent.signal_wired_via(&CapFilter::new("compute", "gpu"), "render-job", payload).await;
+```
+
+### Locality-Aware Resolution (Phase 6)
+
+```rust
+// Set once before agent.start():
+config.locality_path = vec!["az1".to_string(), "rack2".to_string(), "host3".to_string()];
+
+// Returns (NodeId, Capability, depth) sorted by shared-prefix depth descending.
+let candidates = agent.resolve_with_locality(
+    &CapFilter::new("render", "job"),
+    LocalityPreference::PreferShared(0),
+);
+
+// Locality-aware wiring dispatch
+agent.signal_wired_via_locality(
+    &CapFilter::new("render", "job"),
+    LocalityPreference::PreferShared(0),
+    "render-job",
+    payload,
+).await;
+```
+
+### Watcher Scalability
+
+The capability watchers have three scalability properties built in:
+
+- **Predicate-narrowed subscriptions** (`subscribe_prefix_with_predicate`): each watcher registers
+  a closure that the KV store evaluates before waking it. A `watch_capabilities("compute", "gpu")`
+  watcher only wakes when a `cap/*/compute/gpu` entry changes — not on every `cap/` write.
+- **50 ms debounce window**: all five watcher kinds (capabilities, requirement, wiring, demand,
+  group definitions) drain burst writes for 50 ms before recomputing a snapshot, collapsing O(N)
+  burst fires into one reconcile.
+- **One task per emergent group**: `run_group_membership_task` owns all gcap projection reasserts
+  and requirement opacity watchers for a group, so task count scales with active groups, not with
+  members × capabilities.
+
+---
+
 ## Layer 3 — Service Patterns (Phase 3)
 
 Layer 3 builds idiomatic service patterns on top of the Layer 1 and 2 substrate. Three paradigms
@@ -685,6 +811,13 @@ Weeks:  0         2          4          6          8         10        12
 | Layer 2 | watch, quorum, quorum_persistent, suppress/unsuppress, manage_opacity | **Complete** |
 | Layer 2 | advertise_persistent, epidemic_extra_peers, listener auto-restart | **Complete** |
 | Layer III | ConsensusEngine, epidemic two-phase voting, group_propose | **Complete** |
+| Capability | advertise_capability, resolve, watch_capabilities | **Complete** |
+| Capability | declare_requirement, watch_requirement, RequirementStatus | **Complete** |
+| Capability | define_capability_group, gcap/ projections, emergent groups | **Complete** |
+| Capability | resolve_wiring, watch_wiring, signal_wired_via, inter-group wiring | **Complete** |
+| Capability | resolve_with_locality, signal_wired_via_locality, locality paths | **Complete** |
+| Capability | demand, watch_demand, DemandStatus (demand pressure surface) | **Complete** |
+| Capability | Predicate-narrowed watchers, 50 ms debounce, one-task-per-group | **Complete** |
 | Phase 3 | Actor/Event, RPC, bulk HTTP, streaming | Planned |
 | Phase 4 | MCP bridge, AI coordination, supervision trees | Planned |
 | Phase 5 | Metrics, Prometheus exporter | Planned |

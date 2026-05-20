@@ -534,6 +534,175 @@ let slices = agent.group_trust("workers");
 `quorum_size = 0` uses `floor(N/2) + 1` (simple majority). `max_peers` cap and
 `phase1_timeout` are tunable via `ConsensusConfig`.
 
+## Capability Subsystem
+
+First-class capability advertisement, discovery, demand pressure, and locality-aware routing — all
+built on the Layer I KV store. Nodes declare what they offer (`advertise_capability`), what they
+need (`declare_requirement`), and how much demand exists relative to supply (`demand`). No external
+registry; everything lives under the `cap/`, `req/`, and `gcap/` namespaces and anti-entropy-syncs
+to late joiners automatically.
+
+→ See [`examples/capability_market.rs`](examples/capability_market.rs) for a live browser demo
+(port 8097) showing providers, requirers, and per-capability demand-pressure bars across four
+capability types.
+
+### Advertising and Resolving Capabilities
+
+```rust
+use mycelium::{Capability, CapFilter, CapabilityHandle};
+use std::time::Duration;
+
+// Advertise — periodically reasserts cap/{node_id}/{ns}/{name} in the KV store.
+// Drop the handle to stop advertising; the tombstone propagates automatically.
+let handle: CapabilityHandle = agent.advertise_capability(
+    Capability::new("compute", "gpu"),
+    Duration::from_secs(30),  // reassert interval
+);
+
+// Resolve — snapshot of every node currently advertising a matching capability.
+let filter = CapFilter::new("compute", "gpu");
+let matches: Vec<(NodeId, Capability)> = agent.resolve(&filter);
+
+// Watch — push-based; fires when the matching set changes.
+// Debounced: burst KV writes within 50 ms collapse to one notification.
+let mut rx: watch::Receiver<Vec<(NodeId, Capability)>> = agent.watch_capabilities(filter);
+rx.changed().await?;
+let current = rx.borrow().clone();
+```
+
+### Requirements — Declare What You Need
+
+```rust
+// Declare — periodically writes req/{node_id}/{ns}/{name} to the KV store.
+// Visible to demand watchers on any node; used by orchestrators and autoscalers.
+let _handle = agent.declare_requirement(
+    CapFilter::new("compute", "gpu"),
+    Duration::from_secs(30),
+);
+
+// Watch requirement status — fires when the provider set changes relative to this
+// node's declared need.
+let mut rx = agent.watch_requirement(CapFilter::new("compute", "gpu"));
+rx.changed().await?;
+let status = rx.borrow();
+println!("satisfied: {}", status.is_satisfied());
+for provider in &status.providers {
+    println!("  provider: {}", provider.node_id);
+}
+```
+
+### Demand Pressure
+
+`demand_pressure` is `demanding_nodes.len() / max(providers.len(), 1)`. Pressure > 1.0 means
+demand outstrips supply. The library never auto-responds to high pressure — this is a signal
+for orchestrators, autoscalers, and dashboards.
+
+```rust
+let filter = CapFilter::new("compute", "gpu");
+
+// Snapshot
+let status: DemandStatus = agent.demand(&filter);
+println!("{} demanding, {} providing, pressure {:.2}",
+    status.demanding_nodes.len(), status.providers.len(), status.demand_pressure);
+
+// Push-based — debounced, fires on req/, cap/, or gcap/ changes matching filter
+let mut rx = agent.watch_demand(filter);
+rx.changed().await?;
+let s = rx.borrow();
+if s.demand_pressure > 2.0 {
+    eprintln!("demand critical: {:.2}", s.demand_pressure);
+}
+```
+
+### Emergent Capability Groups
+
+Nodes that share a capability automatically form a named group via `define_capability_group`.
+The library projects their collective capability under `gcap/{group}/{ns}/{name}/{contributor}`
+and handles group-level requirement wiring. One consolidated task per group keeps task count
+O(groups), not O(groups × members).
+
+→ See [`examples/emergent_pool.rs`](examples/emergent_pool.rs) for a live browser demo (port 8098)
+of a 20-node worker pool that assembles dynamically, accepts signals via `signal_wired_via`, and
+fans out to all members as nodes join and leave.
+
+```rust
+use mycelium::{CapabilityGroupDef, CapFilter, Capability};
+use std::time::Duration;
+
+// Any node that advertises compute/gpu joins the "gpu-pool" group automatically.
+// The library maintains gcap/ projections and group-level wiring.
+agent.define_capability_group(
+    "gpu-pool",
+    CapabilityGroupDef {
+        filter:   CapFilter::new("compute", "gpu"),
+        provides: vec![Capability::new("compute", "gpu")],
+        requires: vec![],
+    },
+    Duration::from_secs(60),  // reassert interval
+);
+```
+
+### Inter-Group Wiring
+
+Wiring connects a consumer's declared requirement to provider groups without the consumer needing
+to know which nodes are in the group or how many there are. `signal_wired_via` dispatches a signal
+to all matching providers in one call.
+
+```rust
+use mycelium::CapFilter;
+
+let filter = CapFilter::new("compute", "gpu");
+
+// Snapshot of wiring state — WiringStatus::Wired or WiringStatus::Unwired
+let wiring: WiringStatus = agent.resolve_wiring(&filter);
+
+// Push-based wiring watch
+let mut rx = agent.watch_wiring(filter.clone());
+
+// Dispatch to all wired providers — returns Emitted{providers} or Unwired{filter}
+let outcome = agent.signal_wired_via(&filter, "render-job", payload).await;
+```
+
+### Locality-Aware Resolution
+
+Each node declares a `locality_path` in its config (coarse → fine: `["az1", "rack2", "host3"]`).
+`resolve_with_locality` sorts providers by shared-prefix depth with the caller — topologically
+closest first. `signal_wired_via_locality` combines wiring with locality preference in one call.
+
+→ See [`examples/locality_wiring.rs`](examples/locality_wiring.rs) for a browser demo (port 8099)
+of 12 nodes across two availability zones: kill a close provider and the resolver visibly shifts to
+the next ring; bring it back and the choice snaps inward.
+
+```rust
+// Config — set once before agent.start()
+config.locality_path = vec!["az1".to_string(), "rack2".to_string(), "host3".to_string()];
+
+// resolve_with_locality returns (NodeId, Capability, depth) sorted by depth desc.
+// depth = length of shared locality prefix between this node and the provider.
+let candidates = agent.resolve_with_locality(
+    &CapFilter::new("render", "job"),
+    LocalityPreference::PreferShared(0),  // prefer closest; fall back to any
+);
+for (node_id, _cap, depth) in &candidates {
+    println!("  {node_id} depth={depth}");
+}
+
+// Route to locality-closest provider via wiring
+agent.signal_wired_via_locality(
+    &CapFilter::new("render", "job"),
+    LocalityPreference::PreferShared(0),
+    "render-job",
+    payload,
+).await;
+```
+
+`LocalityPreference` variants:
+- `Any` — no locality preference; returns all providers
+- `PreferShared(min_depth)` — prefer providers at shared depth ≥ min_depth; fall back to any
+- `Strict(min_depth)` — only providers at depth ≥ min_depth; empty if none qualify
+
+---
+
 ## Service Layer — Bulk Transfer / Eventing (Planned)
 
 Layer 3 introduces HTTP transport for large payloads and a distinct `Event` type for
