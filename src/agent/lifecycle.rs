@@ -58,8 +58,24 @@ impl GossipAgent {
         self.start_gossip_loop();
         self.start_health_monitor();
         self.start_gc_task();
+        self.start_capability_group_watcher();
         info!("Gossip agent started: {}", self.node_id);
         Ok(())
+    }
+
+    /// Spawns the background task that keeps this node's `grp/` membership in
+    /// sync with the `cap-group/` definitions whose filter matches its own
+    /// capabilities (Phase 3h dual-subscription watcher).
+    fn start_capability_group_watcher(&self) {
+        let def_rx      = self.subscribe_prefix(Arc::<str>::from("cap-group/"));
+        let own_prefix  = Arc::<str>::from(format!("cap/{}/", self.node_id).as_str());
+        let own_rx      = self.subscribe_prefix(own_prefix);
+        let shutdown_rx = self.shutdown_tx.subscribe();
+        let ctx         = Arc::clone(&self.task_ctx);
+        let own_node_id = self.node_id.clone();
+        self.spawn_task(super::capability_ops::watch_capability_group_definitions(
+            ctx, own_node_id, def_rx, own_rx, shutdown_rx,
+        ));
     }
 
     async fn start_listener(&self, addr: SocketAddr) -> Result<(), GossipError> {
@@ -267,6 +283,34 @@ impl GossipAgent {
         if !self.config.locality_path.is_empty() {
             let _ = self.delete(format!("cap/{}/locality/self", self.node_id));
         }
+
+        // Retract our capability/requirement/group-def advertisements so peers
+        // do not see stale providers, requirers, or niche definitions. The
+        // per-handle persist tasks already tombstone individual keys on drop,
+        // but the agent may shut down before user handles are dropped — the
+        // sweep here is a safety net.
+        let cap_prefix      = format!("cap/{}/",       self.node_id);
+        let req_prefix      = format!("req/{}/",       self.node_id);
+        let req_load_prefix = format!("sys/load/{}/req/", self.node_id);
+        let agent_owned_keys: Vec<String> = self.kv_state.store.pin()
+            .iter()
+            .filter(|(k, v)| {
+                v.data.is_some() && (
+                    k.starts_with(&*cap_prefix) ||
+                    k.starts_with(&*req_prefix) ||
+                    k.starts_with(&*req_load_prefix)
+                )
+            })
+            .map(|(k, _)| k.to_string())
+            .collect();
+        for key in agent_owned_keys {
+            let _ = self.delete(key);
+        }
+        // `cap-group/{name}` definitions are gossiped by whichever node
+        // currently owns the CapabilityGroupHandle. We cannot tell ownership
+        // from the key alone; rely on the persist task's own tombstone path
+        // for graceful retract. On crash the def persists until TTL — this
+        // is intentional (the niche outlives one individual).
         let _ = self.state.compare_exchange(
             AgentState::Running as u8, AgentState::Stopped as u8,
             Ordering::AcqRel, Ordering::Acquire,

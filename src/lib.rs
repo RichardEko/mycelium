@@ -47,6 +47,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod capability;
 pub mod config;
 pub mod error;
 pub mod signal;
@@ -62,7 +63,12 @@ mod store;
 mod writer;
 
 pub use agent::{GossipAgent, SystemStats};
-pub use config::GossipConfig;
+pub use capability::{
+    CapConstraint, CapFilter, CapValue, Capability, CapabilityEvent,
+    CapabilityGroupDef, CapabilityGroupHandle, CapabilityHandle,
+    RequirementHandle, RequirementStatus,
+};
+pub use config::{GossipConfig, GroupTopologyPolicy, TopologyEnforcement};
 pub use consensus::{ConsensusConfig, ConsensusHandle, ConsensusResult, consensus_kind, consensus_ns};
 pub use error::GossipError;
 pub use node_id::NodeId;

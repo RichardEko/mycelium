@@ -10,6 +10,11 @@ use tokio::{sync::watch, time};
 
 use super::{emit_signal, AgentState, GossipAgent, SystemStats};
 
+/// Closure that produces the payload bytes for one tick of `run_kv_persist_task`.
+pub(crate) type PersistPayloadFn = Arc<dyn Fn() -> Bytes + Send + Sync>;
+/// Optional per-tick side-effect (e.g. signal emission) invoked before the KV write.
+pub(crate) type PersistOnTickFn  = Arc<dyn Fn(&Arc<super::TaskCtx>, &Bytes) + Send + Sync>;
+
 impl GossipAgent {
     /// Returns this node's identifier.
     pub fn node_id(&self) -> &crate::node_id::NodeId {
@@ -245,45 +250,23 @@ impl GossipAgent {
     where
         F: Fn() -> Bytes + Send + Sync + 'static,
     {
-        let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
-        let mut shutdown_rx = self.shutdown_tx.subscribe();
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        let shutdown_rx = self.shutdown_tx.subscribe();
 
         let ctx:             Arc<super::TaskCtx> = Arc::clone(&self.task_ctx);
         let kind: Arc<str>   = kind.into();
         let kv_key: Arc<str> = Arc::from(format!("svc/{}/{}", kind, ctx.node_id).as_str());
+        let payload_arc: PersistPayloadFn = Arc::new(payload_fn);
+        let on_tick: PersistOnTickFn = {
+            let kind = kind.clone();
+            Arc::new(move |ctx, payload| {
+                emit_signal(ctx, kind.clone(), scope.clone(), payload.clone());
+            })
+        };
 
-        self.spawn_task(async move {
-            let mut ticker = time::interval(interval);
-            ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
-            loop {
-                tokio::select! { biased;
-                    _ = &mut cancel_rx                   => break,
-                    _ = shutdown_rx.wait_for(|v| *v)     => break,
-                    _ = ticker.tick() => {
-                        let payload = payload_fn();
-                        emit_signal(&ctx, kind.clone(), scope.clone(), payload.clone());
-                        let update = crate::framing::make_gossip_update(
-                            &ctx.node_id, ctx.default_ttl, kv_key.clone(), payload, false,
-                        );
-                        apply_and_notify(&ctx.kv_state, &update);
-                        dispatch_gossip_try_send(
-                            &ctx.gossip_txs, WireMessage::Data(update),
-                            ctx.node_id.id_hash(), ForwardHint::All, &ctx.kv_state.dropped_frames,
-                        );
-                    }
-                }
-            }
-            let tombstone = crate::framing::make_gossip_update(
-                &ctx.node_id, ctx.default_ttl, kv_key.clone(), Bytes::new(), true,
-            );
-            apply_and_notify(&ctx.kv_state, &tombstone);
-            // Use the async send variant: the task is exiting and can afford to wait
-            // for channel capacity so the tombstone is never silently dropped.
-            dispatch_gossip_send(
-                &ctx.gossip_txs, WireMessage::Data(tombstone),
-                ctx.node_id.id_hash(), ForwardHint::All,
-            ).await;
-        });
+        self.spawn_task(run_kv_persist_task(
+            ctx, cancel_rx, shutdown_rx, kv_key, interval, payload_arc, Some(on_tick),
+        ));
 
         AdvertiseHandle { _cancel: cancel_tx }
     }
@@ -385,4 +368,53 @@ impl GossipAgent {
             dropped_frames:       self.kv_state.dropped_frames.load(Ordering::Relaxed),
         }
     }
+}
+
+/// Shared persist-loop primitive: ticks at `interval` and writes `payload_fn()`
+/// to `kv_key` (Layer I) plus gossips it. Optional `on_tick` runs synchronously
+/// before the KV write — used by [`GossipAgent::advertise_persistent`] to emit a
+/// matching signal, and by capability ops to do nothing.
+///
+/// Tombstones `kv_key` at exit (cancel, shutdown, or sender drop), awaiting
+/// channel capacity so the retraction is never silently dropped.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_kv_persist_task(
+    ctx:             Arc<super::TaskCtx>,
+    mut cancel_rx:   tokio::sync::oneshot::Receiver<()>,
+    mut shutdown_rx: watch::Receiver<bool>,
+    kv_key:          Arc<str>,
+    interval:        Duration,
+    payload_fn:      PersistPayloadFn,
+    on_tick:         Option<PersistOnTickFn>,
+) {
+    let mut ticker = time::interval(interval);
+    ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! { biased;
+            _ = &mut cancel_rx               => break,
+            _ = shutdown_rx.wait_for(|v| *v) => break,
+            _ = ticker.tick() => {
+                let payload = payload_fn();
+                if let Some(ref f) = on_tick {
+                    f(&ctx, &payload);
+                }
+                let update = crate::framing::make_gossip_update(
+                    &ctx.node_id, ctx.default_ttl, kv_key.clone(), payload, false,
+                );
+                apply_and_notify(&ctx.kv_state, &update);
+                dispatch_gossip_try_send(
+                    &ctx.gossip_txs, WireMessage::Data(update),
+                    ctx.node_id.id_hash(), ForwardHint::All, &ctx.kv_state.dropped_frames,
+                );
+            }
+        }
+    }
+    let tombstone = crate::framing::make_gossip_update(
+        &ctx.node_id, ctx.default_ttl, kv_key.clone(), Bytes::new(), true,
+    );
+    apply_and_notify(&ctx.kv_state, &tombstone);
+    dispatch_gossip_send(
+        &ctx.gossip_txs, WireMessage::Data(tombstone),
+        ctx.node_id.id_hash(), ForwardHint::All,
+    ).await;
 }
