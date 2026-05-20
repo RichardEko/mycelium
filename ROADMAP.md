@@ -650,35 +650,33 @@ The capability watchers have three scalability properties built in:
 
 ## Layer 3 — Service Patterns (Phase 3)
 
-Layer 3 builds idiomatic service patterns on top of the Layer 1 and 2 substrate. Three paradigms
-converge here — they share the same underlying operations (advertise / route / correlate) and can
-coexist on the same mesh.
+Layer 3 delivers the transport primitives that unblock Layer 4. Three deliverables are **required
+before MCP or language bridges can ship**; the Actor/Event and scatter-gather work follows.
 
-### Actor / Event
+### Required for Layer 4 (blocking)
 
-Actors are gossip agents with a defined key namespace (their mailbox state in the KV store) and
-a signal handler (their message loop). Location transparency comes from `NodeId`-based addressing
-— callers emit to `Individual(node_id)` without knowing the actor's network location.
+**1. Embedded HTTP server** — both the MCP bridge and the language gateway need an HTTP surface
+inside the agent binary. This is the foundation for bulk payloads, SSE streaming, and the Python
+sidecar gateway. No external web framework dependency; a minimal `tokio`-based server sufficient
+for the bridge use cases.
 
+**2. SSE / streaming** — MCP's primary value for LLM workloads is streaming token responses.
+A tool call that returns a token stream via SSE is the default pattern for any non-trivial AI
+integration. Without this, MCP is limited to short synchronous tool calls.
+
+**3. Formalised RPC primitive** — `signal_once` + nonce correlation already works as a pattern.
+Layer 3 codifies it as a named primitive (`rpc_call` / `rpc_respond`) so the Python SDK and MCP
+bridge don't each re-derive it:
+
+```rust
+// Layer 3 formalises the pattern that's already implicit in signal_once + nonce
+let response = agent.rpc_call(
+    target_node_id,
+    "mcp.invoke",
+    json_request_bytes,
+    Duration::from_secs(30),
+).await?;  // → Bytes or RpcError::Timeout / RpcError::NodeGone
 ```
-actor registration: set("actors/<name>/<node_id>", metadata)
-message send:       emit("actor.msg", Individual(target_node_id), payload)
-reply:              emit("actor.reply", Individual(sender_node_id), result)
-state read:         get("actors/<name>/<node_id>/state")
-```
-
-Supervision is Layer 2's `watch()` primitive (see Layer 2 completion): a supervisor watches a
-worker's heartbeat kind and triggers restart when stale.
-
-### Async Services / RPC
-
-RPC over gossip: invoker registers `signal_once` before emitting; worker handles via `signal_rx`
-and responds with `Individual` scope. Load balancing is emergent from opacity. Circuit breaking
-is `last_signal` staleness. Retries use the heartbeat-driven model.
-
-Each RPC service chooses its own serialisation — bincode for internal Rust services, JSON for
-MCP-compatible interfaces, protobuf for external-facing endpoints. The substrate carries `Bytes`
-and routes by `kind` string; payload format is transparent to the gossip layer.
 
 ### Bulk Payloads
 
@@ -697,17 +695,6 @@ Caller  ←  fetches result if referenced
 
 HTTP is a Layer 3 concern only. Agents handling small payloads need no HTTP server.
 
-### Streaming
-
-Token-by-token LLM responses ride HTTP chunked transfer or SSE. A Layer 2 `invoke.result`
-signal fires when streaming ends, carrying the correlation ID for cleanup.
-
-```toml
-# Added at Layer 3
-reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"],
-            default-features = false }
-```
-
 ### Layer 3 Events vs Layer 2 Signals
 
 Layer 3 introduces a distinct `Event` type for transport-bound, connection-scoped, ordered
@@ -723,48 +710,108 @@ delivery — conceptually related to signals but with fundamentally different gu
 A `Signal` can be silently dropped. An `Event` on an open stream will not be missed. Sharing a
 type would obscure this — `Event` is explicitly distinct.
 
+### Actor / Event and Scatter-Gather (follow-on)
+
+Actor/Event mailboxes and scatter-gather (parallel sub-task dispatch + collection) are useful
+but not blocking for Layer 4. They land after the MCP bridge ships.
+
 ---
 
 ## Layer 4 — AI Integration (Phase 4)
 
-Layer 4 bridges the gossip substrate to the AI ecosystem.
+Layer 4 delivers two concrete systems: an **MCP bridge** and **language bridges** (Python first,
+TypeScript next). Graph-based orchestration frameworks (LangGraph, AutoGen, CrewAI) are
+explicitly out of scope — their centralized execution model conflicts with Mycelium's epidemic
+routing and provides no integration benefit over using MCP at the boundary.
 
-### MCP (Model Context Protocol)
+### MCP Bridge
 
-MCP is request-response: tool discovery → tool invocation → structured result. The gossip layer
-provides discovery and routing; MCP provides the wire format and schema contract.
+MCP is request-response: tool discovery → tool invocation → structured result. The bridge has
+two distinct roles.
+
+**Mycelium as MCP server** — capability providers expose themselves as MCP tools. Any external
+MCP client (Claude, a Python agent, a CLI tool) can discover and call Mycelium-hosted tools:
 
 ```
-Tool registry:   set("tools/<tool_name>/<node_id>", tool_schema_json)
-Tool discovery:  scan_prefix("tools/") → list available tools + their schemas
-Tool invocation: emit("mcp.invoke", Individual(node_id), json_request)
-Tool result:     signal_once("mcp.result", timeout, |s| s.nonce == req_nonce)
+Tool registration:  advertise_capability() + set("tools/{name}/{node_id}", json_schema_bytes)
+Tool discovery:     scan_prefix("tools/") → tool name + schema + NodeId per provider
+Tool invocation:    rpc_call(node_id, "mcp.invoke", json_rpc_request, timeout)
+Tool result:        rpc_respond("mcp.result", json_rpc_response)
+Streaming result:   SSE over embedded HTTP (requires Layer 3 streaming)
 ```
 
-An MCP server running as a gossip agent advertises its tools to the mesh. Clients discover
-tools via KV scan. Routing is emergent. The MCP JSON payload is opaque to the gossip layer —
-the substrate carries it as `Bytes`, identified by `kind` string.
+**Mycelium as MCP client** — agents call external MCP tool servers (Claude, 3rd-party providers).
+The bridge holds the outbound connection; inbound results re-enter the mesh as capability
+interactions. The agent sees no difference between a local Mycelium tool and a remote MCP server.
 
-Multi-agent coordination: an orchestrator agent discovers worker agents via tool scan, routes
-MCP requests to appropriate workers, aggregates results. All state flows through the KV store;
-conversation context (multi-turn) lives in a KV namespace per conversation ID.
+**Credentials architecture** — API keys and OAuth tokens are held by the bridge layer, not the
+substrate. Mycelium carries opaque `Bytes`; credentials are a bridge-level concern injected per
+call context. Keys must not appear in signal payloads.
+
+**KV namespace conventions for MCP:**
+
+```
+tools/{tool_name}/{node_id}     → JSON Schema bytes (tool advertisement)
+tools/{tool_name}/{node_id}/loc → locality path (for locality-aware tool routing)
+conv/{conv_id}/context          → multi-turn conversation context (per-conversation namespace)
+```
+
+### Language Bridges
+
+Python is the priority. TypeScript follows (LLM tooling ecosystem assumption).
+LangGraph is not a target — see rationale below.
+
+**Architecture: HTTP gateway sidecar** (not PyO3 FFI). LLM inference runs at hundreds of
+milliseconds; a loopback HTTP call adds ~1 ms, which is invisible. PyO3 couples the Python
+version to the Rust build and complicates streaming. The gateway pattern is simpler, not
+version-coupled, and supports SSE natively.
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Python / TypeScript agent process                  │
+│  (DSPy program, custom agent, AutoGen agent, etc.)  │
+│                                                     │
+│  mycelium.advertise_capability("compute", "gpu")    │
+│  mycelium.on_signal("render-job", handler)          │
+│  mycelium.emit("result", scope, payload)            │
+└────────────────┬────────────────────────────────────┘
+                 │  HTTP + SSE (loopback)
+┌────────────────▼────────────────────────────────────┐
+│  Mycelium Rust node (embedded HTTP gateway)         │
+│  translates HTTP calls ↔ gossip signals             │
+└─────────────────────────────────────────────────────┘
+```
+
+**Minimum Python SDK surface:**
+
+```python
+agent = MyceliumAgent(host="127.0.0.1", port=7946)
+
+agent.advertise_capability("compute", "gpu", interval_secs=30)
+agent.declare_requirement("compute", "gpu", interval_secs=30)
+
+@agent.on_signal("render-job")
+async def handle(payload: bytes) -> None: ...
+
+agent.emit("render-job", scope="group:gpu-pool", payload=b"...")
+status = agent.demand("compute", "gpu")  # → DemandStatus
+```
+
+Everything else (`watch_capabilities`, `resolve_with_locality`, wiring) comes in a later pass.
+
+**Why not LangGraph** — LangGraph assumes a central scheduler that directs graph execution:
+"call agent B now, wait for result, then call agent C." This is orthogonal to Mycelium's
+epidemic model. Integrating the two means one of them is doing the coordination and the other
+is just a message bus. Using Mycelium under LangGraph gives you none of the adaptive routing,
+demand pressure, or locality-aware dispatch benefits. The clean boundary is MCP: LangGraph
+calls into the Mycelium cluster via MCP tool calls; Mycelium handles capability routing,
+load balancing, and fault tolerance within the provider tier.
 
 ### Supervision
 
-Layer 4 supervision trees use Layer 2's `watch()` primitive to monitor AI agent liveness.
-A supervisor watches `contract.available` heartbeats from worker agents; on stale, triggers
-respawn, failover, or escalation. No separate monitoring infrastructure needed.
-
-### Serialisation Autonomy
-
-Each agent at Layer 4 picks its serialisation independently:
-- MCP bridge agents: JSON (MCP wire format requirement)
-- Internal compute agents: bincode (fast, Rust-native, already a dependency)
-- External-facing agents: protobuf or JSON-Schema
-- Hybrid agents: JSON at the MCP boundary, bincode internally
-
-The substrate routes by `kind` string. Payload format is a contract between the emitter and
-its intended receivers, not a substrate concern.
+Layer 4 supervision uses Layer 2's `watch()` to monitor AI agent liveness — no separate
+monitoring infrastructure. A supervisor watches `contract.available` heartbeats; on stale,
+triggers respawn, failover, or escalation. The Python bridge exposes this as `on_stale(kind, threshold, callback)`.
 
 ---
 
@@ -818,9 +865,13 @@ Weeks:  0         2          4          6          8         10        12
 | Capability | resolve_with_locality, signal_wired_via_locality, locality paths | **Complete** |
 | Capability | demand, watch_demand, DemandStatus (demand pressure surface) | **Complete** |
 | Capability | Predicate-narrowed watchers, 50 ms debounce, one-task-per-group | **Complete** |
-| Phase 3 | Actor/Event, RPC, bulk HTTP, streaming | Planned |
-| Phase 4 | MCP bridge, AI coordination, supervision trees | Planned |
-| Phase 5 | Metrics, Prometheus exporter | Planned |
+| Layer 3 | Embedded HTTP server, SSE streaming, `rpc_call`/`rpc_respond` primitive | **Blocking for Layer 4** |
+| Layer 3 | Bulk payload / `invoke.bulk` ticket, Actor/Event mailboxes, scatter-gather | Planned |
+| Layer 4 | MCP bridge: server role (tools/ KV + rpc_call dispatch) | Planned |
+| Layer 4 | MCP bridge: client role (outbound to external MCP servers) | Planned |
+| Layer 4 | Python language bridge: HTTP gateway + `mycelium` SDK | Planned |
+| Layer 4 | TypeScript language bridge | Planned |
+| Layer 5 | Metrics, Prometheus exporter | Planned |
 
 ---
 

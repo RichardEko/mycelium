@@ -733,13 +733,16 @@
         <div class="stack-num sn-4">Layer<br>4</div>
         <div class="stack-body">
           <div class="stack-title">AI Integration <span class="phase-tag tag-p4">Phase 4</span></div>
-          <p class="stack-desc">MCP server/client bridge. Tool discovery via gossip KV scan. Actor supervision trees using <code>watch()</code> for fault detection. Multi-agent conversation routing. Serialisation at need: JSON at the MCP boundary, bincode internally, protobuf for external contracts.</p>
+          <p class="stack-desc">MCP bridge (server + client roles) and language bridges (Python first, TypeScript next). Mycelium-hosted tools expose as MCP servers; agents can also call external MCP tool servers. Python and TypeScript agents connect via an HTTP gateway sidecar — no FFI, no version coupling, SSE streaming native. LangGraph and graph-orchestration frameworks are out of scope: their centralized scheduler model conflicts with Mycelium's epidemic routing. The clean boundary is MCP — external orchestrators call in via MCP tool calls.</p>
           <div class="chips">
-            <span class="chip">MCP tool registry</span>
-            <span class="chip">scan_prefix("tools/")</span>
-            <span class="chip">supervision trees</span>
-            <span class="chip">conversation-scoped routing</span>
-            <span class="chip">JSON / bincode / protobuf</span>
+            <span class="chip">MCP server role</span>
+            <span class="chip">MCP client role</span>
+            <span class="chip">tools/ KV namespace</span>
+            <span class="chip">rpc_call · rpc_respond</span>
+            <span class="chip">Python SDK (HTTP gateway)</span>
+            <span class="chip">TypeScript SDK</span>
+            <span class="chip">credential context (bridge-layer)</span>
+            <span class="chip">supervision · watch()</span>
           </div>
         </div>
       </div>
@@ -747,13 +750,14 @@
         <div class="stack-num sn-3">Layer<br>3</div>
         <div class="stack-body">
           <div class="stack-title">Service Patterns <span class="phase-tag tag-p3">Phase 3</span></div>
-          <p class="stack-desc">Actor/Event mailboxes (Akka-style), async RPC, and bulk HTTP for large payloads. All three reduce to the same three substrate operations: advertise capability, route a request, return a correlated result. Signal carries the ticket; HTTP carries the weight for payloads too large for signals.</p>
+          <p class="stack-desc">Three deliverables block Layer 4 and ship first: an embedded HTTP server (required by the MCP bridge and language gateway), SSE streaming (required for MCP token responses), and a formalised <code>rpc_call</code>/<code>rpc_respond</code> primitive (so language SDKs don't re-derive the nonce-correlation pattern). Bulk payloads, Actor/Event mailboxes, and scatter-gather follow.</p>
           <div class="chips">
+            <span class="chip">embedded HTTP server ⚠ blocks L4</span>
+            <span class="chip">SSE streaming ⚠ blocks L4</span>
+            <span class="chip">rpc_call · rpc_respond ⚠ blocks L4</span>
+            <span class="chip">invoke.bulk ticket</span>
             <span class="chip">Actor mailboxes</span>
-            <span class="chip">async RPC / signal_once</span>
-            <span class="chip">BulkTransfer ticket</span>
-            <span class="chip">invoke.bulk</span>
-            <span class="chip">SSE streaming</span>
+            <span class="chip">scatter-gather</span>
             <span class="chip">Event (distinct from Signal)</span>
           </div>
         </div>
@@ -1359,20 +1363,26 @@ agent.<span class="fn">emit</span>(<span class="str">"actor.msg"</span>, <span c
     interfaces, protobuf for external-facing endpoints. The substrate routes by <code>kind</code>
     string; payload format is transparent to the gossip layer.</p>
 
-    <h3>MCP AI Tool Routing</h3>
-    <p>MCP is request-response: tool discovery → tool invocation → structured result. The gossip
-    layer provides discovery and routing; MCP provides the wire format and schema contract. An MCP
-    bridge agent uses the gossip substrate exactly like any other agent — it just happens to
-    serialize JSON at its boundary.</p>
+    <h3>MCP — Server and Client Roles</h3>
+    <p>The MCP bridge has two roles. <strong>Server role</strong>: Mycelium capability providers
+    expose themselves as MCP tools — any external MCP client (Claude, a Python agent, a CLI) can
+    discover and call them. <strong>Client role</strong>: Mycelium agents call external MCP tool
+    servers; the bridge holds the outbound connection and re-enters results into the mesh as
+    capability interactions. Credentials (API keys, OAuth) are held by the bridge layer, not the
+    substrate. LangGraph is explicitly not a target — use MCP as the boundary instead.</p>
 
-<pre><code><span class="cmt">// Tool registry — any node can discover all available tools</span>
-agent.<span class="fn">set</span>(<span class="mac">format!</span>(<span class="str">"tools/summarise/{}"</span>, agent.<span class="fn">node_id</span>()), tool_schema_json);
+<pre><code><span class="cmt">// MCP server role — register a tool in the KV store</span>
+agent.<span class="fn">advertise_capability</span>(<span class="ty">Capability</span>::<span class="fn">new</span>(<span class="str">"nlp"</span>, <span class="str">"summarise"</span>), interval);
+agent.<span class="fn">set</span>(<span class="mac">format!</span>(<span class="str">"tools/summarise/{}"</span>, agent.<span class="fn">node_id</span>()), json_schema_bytes);
 
-<span class="cmt">// Tool discovery — late joiners get the full picture via anti-entropy</span>
-<span class="kw">let</span> available_tools = agent.<span class="fn">scan_prefix</span>(<span class="str">"tools/"</span>);
+<span class="cmt">// MCP client discovery — any node sees all registered tools</span>
+<span class="kw">let</span> tools = agent.<span class="fn">scan_prefix</span>(<span class="str">"tools/"</span>);
 
-<span class="cmt">// Tool invocation — routed via Individual scope to a specific tool server</span>
-agent.<span class="fn">emit</span>(<span class="str">"mcp.invoke"</span>, <span class="ty">SignalScope</span>::<span class="ty">Individual</span>(tool_server_id), json_request);</code></pre>
+<span class="cmt">// MCP tool invocation — Layer 3 rpc_call formalises the signal_once + nonce pattern</span>
+<span class="kw">let</span> result = agent.<span class="fn">rpc_call</span>(tool_node_id, <span class="str">"mcp.invoke"</span>, json_rpc_bytes, timeout).<span class="kw">await</span>?;
+
+<span class="cmt">// Python agent calling via the language bridge gateway</span>
+<span class="cmt">// mycelium.emit("nlp.summarise", scope="capability:nlp/summarise", payload=text)</span></code></pre>
 
     <h3>Serialisation — Chosen at Need, Not Mandated</h3>
     <p>A new agent can join the mesh speaking a different serialisation format than its neighbours,
@@ -1396,9 +1406,14 @@ agent.<span class="fn">emit</span>(<span class="str">"mcp.invoke"</span>, <span 
   <!-- ── Phase 3: Bulk Transfer ── -->
   <div class="section">
     <div class="section-head">
-      <h2>Phase 3 — Bulk Transfer / Streaming</h2>
+      <h2>Phase 3 — Service Patterns</h2>
       <span class="phase-tag tag-p3">Next</span>
     </div>
+
+    <p>Three deliverables are required before Layer 4 can ship: an <strong>embedded HTTP server</strong>,
+    <strong>SSE streaming</strong> (for MCP token responses), and a formalised <strong><code>rpc_call</code>
+    / <code>rpc_respond</code></strong> primitive so language SDKs don't re-derive the nonce-correlation
+    pattern. Bulk payloads and Actor/Event mailboxes follow.</p>
 
     <p>When payloads exceed practical signal size — multi-KB prompts, model outputs,
     streaming token responses — a Layer 2 signal carries a <em>ticket</em>. HTTP carries
@@ -1474,14 +1489,14 @@ agent.<span class="fn">emit</span>(
         <div class="tl-card">
           <div class="tl-num" style="color:var(--accent3)">Layer 3</div>
           <div class="tl-title">Service Patterns</div>
-          <div class="tl-weeks">Next · Actor/RPC/Bulk</div>
-          <span class="tl-badge tl-medium">3–4 weeks</span>
+          <div class="tl-weeks">HTTP · SSE · rpc_call</div>
+          <span class="tl-badge tl-medium">Next</span>
         </div>
         <div class="tl-card">
-          <div class="tl-num" style="color:var(--accent4)">Layer 4–5</div>
-          <div class="tl-title">AI + Observability</div>
-          <div class="tl-weeks">MCP · Prometheus</div>
-          <span class="tl-badge tl-future">Planned</span>
+          <div class="tl-num" style="color:var(--accent4)">Layer 4</div>
+          <div class="tl-title">MCP + Language Bridges</div>
+          <div class="tl-weeks">Python SDK · TS SDK</div>
+          <span class="tl-badge tl-future">After L3</span>
         </div>
       </div>
     </div>
