@@ -69,6 +69,7 @@
 //! | `req/{node}/{ns}/{name}`            | Node-level requirement declarations                          |
 //! | `cap-group/{group}`                 | Emergent capability-group definitions                        |
 //! | `gcap/{group}/{ns}/{name}/{contrib}`| Group-level capability projections                           |
+//! | `tools/{name}/{node}`              | Layer IV MCP tool registrations (value: JSON Schema bytes)   |
 //!
 //! Layer-III writes that read or write KV (consensus engine,
 //! `sys/topology-override` reads) are documented at their call sites as
@@ -95,7 +96,7 @@ mod seen;
 mod store;
 mod writer;
 
-pub use agent::{GossipAgent, SystemStats};
+pub use agent::{GossipAgent, McpError, McpToolHandle, RpcError, SystemStats};
 pub use capability::{
     CapConstraint, CapFilter, CapRanking, CapValue, Capability, CapabilityEvent,
     CapabilityGroupDef, CapabilityGroupHandle, CapabilityHandle,

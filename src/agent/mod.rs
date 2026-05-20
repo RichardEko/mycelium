@@ -21,6 +21,7 @@ mod kv;
 mod signal_ops;
 mod rpc;
 mod http;
+mod mcp;
 mod opacity;
 mod consensus_ops;
 mod capability_ops;
@@ -34,6 +35,8 @@ pub(crate) use helpers::emit_signal;
 pub(crate) use helpers::emit_signal_async;
 pub(crate) use helpers::make_gossip_update;
 pub(crate) use opacity::is_self_opaque;
+pub use mcp::{McpError, McpToolHandle};
+pub use rpc::RpcError;
 
 /// Cached roster entry for a single group, held in the short-lived `group_roster_cache`.
 pub(super) struct RosterEntry {
