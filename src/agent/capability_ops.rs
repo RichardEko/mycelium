@@ -18,7 +18,7 @@
 use crate::capability::{
     Capability, CapFilter, CapValue, CapRanking, CapabilityEvent,
     CapabilityHandle, CapabilityGroupDef, CapabilityGroupHandle,
-    DemandStatus, RankingOrder, RequirementHandle, RequirementStatus,
+    RankingOrder, RequirementHandle, RequirementStatus,
     WiringProvider, WiringStatus, partial_cmp_cap,
 };
 use crate::locality::{LocalityPath, LocalityPreference};
@@ -37,7 +37,7 @@ use super::kv::run_kv_persist_task;
 /// (or its sender drops). Unlike `watch::Receiver::wait_for`, this returns
 /// only `()` so no `Ref<'_, bool>` is held across the .await, which keeps
 /// the surrounding `tokio::select!` future `Send`.
-async fn await_shutdown(rx: &mut watch::Receiver<bool>) {
+pub(super) async fn await_shutdown(rx: &mut watch::Receiver<bool>) {
     while !*rx.borrow() {
         if rx.changed().await.is_err() { return; }
     }
@@ -46,7 +46,7 @@ async fn await_shutdown(rx: &mut watch::Receiver<bool>) {
 /// Like `parse_cap_key` but emits a `warn!` on the unhappy path. Use at scan
 /// sites where a malformed key is genuinely surprising (we only scan prefixes
 /// whose entries are well-formed by convention).
-fn parse_cap_key_or_warn(prefix: &str, key: &str) -> Option<(NodeId, Arc<str>, Arc<str>)> {
+pub(super) fn parse_cap_key_or_warn(prefix: &str, key: &str) -> Option<(NodeId, Arc<str>, Arc<str>)> {
     let parsed = parse_cap_key(prefix, key);
     if parsed.is_none() {
         warn!(prefix = %prefix, key = %key, "malformed key under capability/requirement prefix");
@@ -484,47 +484,6 @@ impl GossipAgent {
         emitted
     }
 
-    /// Snapshot count of declared demand vs. available providers for `filter`.
-    /// Demand = unique nodes whose `req/{node}/{ns}/{name}` entry shares the
-    /// filter's `(namespace, name)`. Providers = unique nodes either
-    /// directly advertising a matching capability (`cap/`) or contributing
-    /// to a matching group projection (`gcap/`). Pressure =
-    /// `demanding.len() / max(providers.len(), 1)`.
-    ///
-    /// The library does NOT auto-respond to high pressure — this is a
-    /// surfaced signal for orchestrators / autoscalers / dashboards.
-    pub fn demand(&self, filter: &CapFilter) -> DemandStatus {
-        demand_snapshot(&self.kv_state, filter)
-    }
-
-    /// Push-based view of demand pressure for `filter`. Fires whenever a
-    /// matching `req/`, `cap/`, or `gcap/` entry is written or tombstoned.
-    /// Debounced — identical `DemandStatus` values are not re-broadcast.
-    pub fn watch_demand(&self, filter: CapFilter) -> watch::Receiver<DemandStatus> {
-        let initial         = demand_snapshot(&self.kv_state, &filter);
-        let (tx, rx)        = watch::channel(initial);
-        let mut req_rx      = self.subscribe_prefix(Arc::<str>::from("req/"));
-        let mut cap_rx      = self.subscribe_prefix(Arc::<str>::from("cap/"));
-        let mut gcap_rx     = self.subscribe_prefix(Arc::<str>::from("gcap/"));
-        let mut shutdown_rx = self.shutdown_tx.subscribe();
-        let kv_state        = Arc::clone(&self.kv_state);
-        self.spawn_task(async move {
-            loop {
-                tokio::select! { biased;
-                    _ = await_shutdown(&mut shutdown_rx) => return,
-                    r = req_rx.changed()  => { if r.is_err() { return; } }
-                    r = cap_rx.changed()  => { if r.is_err() { return; } }
-                    r = gcap_rx.changed() => { if r.is_err() { return; } }
-                }
-                let next = demand_snapshot(&kv_state, &filter);
-                let unchanged = { *tx.borrow() == next };
-                if unchanged { continue; }
-                if tx.send(next).is_err() { return; }
-            }
-        });
-        rx
-    }
-
     /// Publishes a [`CapabilityGroupDef`] under `cap-group/{group}`. Any node
     /// whose own `cap/{self}/*` advertisements match `def.filter` will
     /// self-join the named group via `join_group` once
@@ -560,7 +519,7 @@ impl GossipAgent {
 
 /// Like `GossipAgent::scan_prefix`, but for a `KvState` reference held by a
 /// spawned task that doesn't carry a `GossipAgent` handle.
-fn scan_prefix_kv(kv_state: &crate::store::KvState, prefix: &str) -> Vec<(Arc<str>, Bytes)> {
+pub(super) fn scan_prefix_kv(kv_state: &crate::store::KvState, prefix: &str) -> Vec<(Arc<str>, Bytes)> {
     let seg = prefix.find('/').map_or(prefix, |i| &prefix[..i]);
     let store_guard = kv_state.store.pin();
     let idx_guard   = kv_state.prefix_index.pin();
@@ -789,63 +748,6 @@ where
     }
 }
 
-/// Computes the current [`DemandStatus`] for `filter`. Deduplicates both
-/// demanding nodes and providers — a node contributing to multiple matching
-/// groups still counts once, and a node with both a direct match and a group
-/// contribution counts once.
-fn demand_snapshot(kv_state: &crate::store::KvState, filter: &CapFilter) -> DemandStatus {
-    // Demanders: nodes whose req/{node}/{ns}/{name} entry shares the filter's
-    // (namespace, name). We don't deep-compare filter contents — the
-    // namespace/name pair is the declared "need shape," and that's what we
-    // are scoring demand for.
-    let mut demanding: AHashSet<NodeId> = AHashSet::new();
-    for (key, bytes) in scan_prefix_kv(kv_state, "req/") {
-        let Some((node_id, ns, name)) = parse_cap_key_or_warn("req/", &key) else { continue };
-        if ns != filter.namespace || name != filter.name { continue; }
-        // Optionally also decode and check filter equality — for v1 we treat
-        // namespace/name as sufficient evidence of declared need. The
-        // bytes-decode is still useful to skip malformed entries.
-        if CapFilter::decode(&bytes).is_none() {
-            warn!(key = %key, "malformed CapFilter under req/ — peer sent bytes that did not decode");
-            continue;
-        }
-        demanding.insert(node_id);
-    }
-
-    // Providers: union of direct cap/ matches and gcap/ contributors.
-    let mut providers: AHashSet<NodeId> = AHashSet::new();
-    for (key, bytes) in scan_prefix_kv(kv_state, "cap/") {
-        let Some((node_id, _ns, _name)) = parse_cap_key_or_warn("cap/", &key) else { continue };
-        let Some(cap) = Capability::decode(&bytes) else {
-            warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");
-            continue;
-        };
-        if filter.matches(&cap) {
-            providers.insert(node_id);
-        }
-    }
-    for (key, bytes) in scan_prefix_kv(kv_state, "gcap/") {
-        let Some((_group, contributor)) = parse_gcap_key(&key, filter) else { continue };
-        let Some(cap) = Capability::decode(&bytes) else {
-            warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");
-            continue;
-        };
-        if filter.matches(&cap) {
-            providers.insert(contributor);
-        }
-    }
-
-    let demanding_nodes: Vec<NodeId> = demanding.into_iter().collect();
-    let providers_vec:   Vec<NodeId> = providers.into_iter().collect();
-    let demand_pressure = demanding_nodes.len() as f32 / providers_vec.len().max(1) as f32;
-    DemandStatus {
-        filter:          filter.clone(),
-        demanding_nodes,
-        providers:       providers_vec,
-        demand_pressure,
-    }
-}
-
 /// Parsed shape of a `gcap/{group}/{ns}/{name}/{contributor}` key.
 struct GcapKeyShape {
     group:       Arc<str>,
@@ -878,7 +780,7 @@ fn parse_gcap_key_shape(key: &str) -> Option<GcapKeyShape> {
 /// when `(ns, name)` match the filter's `(namespace, name)`. Returns `None`
 /// for misshapen keys (logged as warn) or non-matching namespace/name pairs
 /// (silent — that's normal flow).
-fn parse_gcap_key(key: &str, filter: &CapFilter) -> Option<(Arc<str>, NodeId)> {
+pub(super) fn parse_gcap_key(key: &str, filter: &CapFilter) -> Option<(Arc<str>, NodeId)> {
     let shape = match parse_gcap_key_shape(key) {
         Some(s) => s,
         None => {
@@ -1503,62 +1405,4 @@ mod tests {
         );
     }
 
-    // ── demand_snapshot ─────────────────────────────────────────────────────
-
-    use crate::framing::make_gossip_update;
-    use crate::hlc::Hlc;
-    use crate::store::{apply_and_notify, KvState};
-
-    fn write(kv: &KvState, sender: &NodeId, key: &str, value: Bytes) {
-        let hlc = Hlc::new();
-        let upd = make_gossip_update(sender, 5, Arc::from(key), value, false, &hlc);
-        apply_and_notify(kv, &upd);
-    }
-
-    #[test]
-    fn demand_snapshot_counts_unique_demand_and_providers() {
-        let kv = KvState::new(0);
-        let sender = nid(99);
-        let filter = CapFilter::new("compute", "gpu");
-        // Two demanders.
-        write(&kv, &sender, "req/127.0.0.1:1/compute/gpu", filter.encode());
-        write(&kv, &sender, "req/127.0.0.1:2/compute/gpu", filter.encode());
-        // One direct cap provider + one group projection contributor.
-        let cap = Capability::new("compute", "gpu");
-        write(&kv, &sender, "cap/127.0.0.1:3/compute/gpu", cap.encode());
-        write(&kv, &sender, "gcap/gpu-pool/compute/gpu/127.0.0.1:4", cap.encode());
-        let status = demand_snapshot(&kv, &filter);
-        assert_eq!(status.demanding_nodes.len(), 2);
-        assert_eq!(status.providers.len(), 2);
-        // 2 demanders / 2 providers = 1.0
-        assert!((status.demand_pressure - 1.0).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn demand_snapshot_zero_providers_yields_pressure_equal_to_demand() {
-        let kv = KvState::new(0);
-        let sender = nid(99);
-        let filter = CapFilter::new("ai", "agent");
-        write(&kv, &sender, "req/127.0.0.1:1/ai/agent", filter.encode());
-        write(&kv, &sender, "req/127.0.0.1:2/ai/agent", filter.encode());
-        write(&kv, &sender, "req/127.0.0.1:3/ai/agent", filter.encode());
-        let status = demand_snapshot(&kv, &filter);
-        assert_eq!(status.demanding_nodes.len(), 3);
-        assert_eq!(status.providers.len(), 0);
-        // Division floors providers to 1 → pressure = demanders.
-        assert!((status.demand_pressure - 3.0).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn demand_snapshot_dedupes_provider_appearing_in_cap_and_gcap() {
-        let kv = KvState::new(0);
-        let sender = nid(99);
-        let filter = CapFilter::new("compute", "gpu");
-        let cap = Capability::new("compute", "gpu");
-        // One node that's both a direct provider AND a contributor to a group.
-        write(&kv, &sender, "cap/127.0.0.1:7/compute/gpu", cap.encode());
-        write(&kv, &sender, "gcap/gpu-pool/compute/gpu/127.0.0.1:7", cap.encode());
-        let status = demand_snapshot(&kv, &filter);
-        assert_eq!(status.providers.len(), 1, "should dedupe by NodeId");
-    }
 }
