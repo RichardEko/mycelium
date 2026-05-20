@@ -73,7 +73,7 @@ impl GossipAgent {
         let shutdown_rx = self.shutdown_tx.subscribe();
         let ctx         = Arc::clone(&self.task_ctx);
         let own_node_id = self.node_id.clone();
-        self.spawn_task(super::capability_ops::watch_capability_group_definitions(
+        self.spawn_task(super::emergent_groups::watch_capability_group_definitions(
             ctx, own_node_id, def_rx, own_rx, shutdown_rx,
         ));
     }
