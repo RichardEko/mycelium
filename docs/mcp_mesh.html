@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MCP Mesh — Broker-less AI Tool Routing</title>
+<title>MCP Mesh — Adaptive Broker-less AI Tool Routing</title>
 <style>
   :root {
     --bg:         #0d1117;
@@ -39,90 +39,104 @@
   .header-links a { font-size: 12px; color: var(--accent); text-decoration: none; opacity: 0.7; }
   .header-links a:hover { opacity: 1; }
 
-  .layout { display: grid; grid-template-columns: auto 1fr; gap: 24px; padding: 24px 32px; max-width: 1060px; margin: 0 auto; }
-  .left-col { display: flex; flex-direction: column; gap: 14px; }
-  .right-col { display: flex; flex-direction: column; gap: 16px; min-width: 280px; max-width: 320px; }
+  .layout { display: grid; grid-template-columns: auto 1fr; gap: 24px; padding: 24px 32px; max-width: 1080px; margin: 0 auto; }
+  .left-col  { display: flex; flex-direction: column; gap: 14px; }
+  .right-col { display: flex; flex-direction: column; gap: 14px; min-width: 290px; max-width: 320px; }
 
   #mesh-canvas { border: 1px solid var(--border); border-radius: var(--radius); display: block; background: var(--surface); }
 
   .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
   .btn { padding: 6px 14px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface2); color: var(--text); font-size: 12px; font-weight: 500; cursor: pointer; transition: background 0.12s, border-color 0.12s; }
   .btn:hover { background: var(--surface3); border-color: var(--muted); }
-  .btn-call { background: rgba(88,166,255,0.12); border-color: rgba(88,166,255,0.3); color: var(--accent); }
-  .btn-call:hover { background: rgba(88,166,255,0.22); }
-  .btn-kill { background: rgba(255,123,114,0.1); border-color: rgba(255,123,114,0.3); color: var(--accent5); }
-  .btn-kill:hover { background: rgba(255,123,114,0.2); }
-  .btn-restart { background: rgba(63,185,80,0.1); border-color: rgba(63,185,80,0.3); color: var(--accent2); }
-  .btn-restart:hover { background: rgba(63,185,80,0.2); }
+  .btn-call  { background: rgba(88,166,255,0.1); border-color: rgba(88,166,255,0.25); color: var(--accent); }
+  .btn-call:hover  { background: rgba(88,166,255,0.2); }
 
   .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
-  .panel-hdr { padding: 10px 14px 8px; border-bottom: 1px solid var(--border); font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); display: flex; justify-content: space-between; align-items: center; }
+  .panel-hdr { padding: 9px 14px 7px; border-bottom: 1px solid var(--border); font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); display: flex; justify-content: space-between; align-items: center; }
   .dot-live { width: 6px; height: 6px; border-radius: 50%; background: var(--accent2); box-shadow: 0 0 5px var(--accent2); animation: blink 1.6s ease-in-out infinite; }
   @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
 
+  /* Stats */
   .stats-grid { display: grid; grid-template-columns: 1fr 1fr; }
-  .stat-item { padding: 12px 14px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  .stat-item { padding: 10px 14px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
   .stat-item:nth-child(2n) { border-right: none; }
   .stat-item:nth-last-child(-n+2) { border-bottom: none; }
-  .stat-label { font-size: 10px; color: var(--muted); margin-bottom: 3px; }
-  .stat-val { font-size: 20px; font-weight: 700; line-height: 1; font-family: "SF Mono", "Fira Code", monospace; }
+  .stat-label { font-size: 10px; color: var(--muted); margin-bottom: 2px; }
+  .stat-val { font-size: 18px; font-weight: 700; line-height: 1; font-family: "SF Mono","Fira Code",monospace; }
 
-  .tool-list { padding: 10px 12px; display: flex; flex-wrap: wrap; gap: 6px; }
-  .tool-pill { font-size: 10px; padding: 3px 9px; border-radius: 12px; font-weight: 600; border: 1px solid; white-space: nowrap; }
-  .tool-pill.live    { background: rgba(63,185,80,0.12);  border-color: rgba(63,185,80,0.3);  color: var(--accent2); }
-  .tool-pill.dead    { background: rgba(139,148,158,0.08); border-color: rgba(139,148,158,0.2); color: var(--muted); text-decoration: line-through; }
+  /* Add-node palette */
+  .palette-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .palette-tools { display: flex; flex-wrap: wrap; gap: 5px; }
+  .tool-toggle { display: none; }
+  .tool-toggle-label {
+    font-size: 10px; padding: 4px 10px; border-radius: 12px; border: 1px solid var(--border);
+    background: var(--surface2); color: var(--muted); cursor: pointer; user-select: none;
+    transition: all 0.12s; font-weight: 600;
+  }
+  .tool-toggle:checked + .tool-toggle-label {
+    background: rgba(88,166,255,0.15); border-color: rgba(88,166,255,0.4); color: var(--accent);
+  }
+  .tool-toggle-label:hover { border-color: var(--muted); color: var(--text2); }
+  .palette-footer { display: flex; justify-content: flex-end; }
+  #add-btn { padding: 5px 14px; border-radius: var(--radius); border: 1px solid rgba(63,185,80,0.35); background: rgba(63,185,80,0.1); color: var(--accent2); font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.12s; }
+  #add-btn:hover:not(:disabled) { background: rgba(63,185,80,0.2); }
+  #add-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
-  .signal-log { height: 220px; overflow-y: auto; padding: 6px 0; font-family: "SF Mono", "Fira Code", monospace; font-size: 10px; }
+  /* Node list */
+  .node-row { display: flex; align-items: center; gap: 6px; padding: 7px 12px; border-bottom: 1px solid var(--border); }
+  .node-row:last-child { border-bottom: none; }
+  .node-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .node-name { font-family: "SF Mono","Fira Code",monospace; font-size: 10px; font-weight: 600; min-width: 54px; }
+  .node-tools-row { display: flex; flex-wrap: wrap; gap: 3px; flex: 1; }
+  .ntag { font-size: 9px; padding: 1px 5px; border-radius: 3px; }
+  .node-cnt { font-family: "SF Mono","Fira Code",monospace; font-size: 10px; color: var(--muted); min-width: 22px; text-align: right; }
+  .node-actions { display: flex; gap: 3px; }
+  .na-btn { font-size: 9px; padding: 2px 6px; border-radius: 4px; border: 1px solid; cursor: pointer; transition: background 0.1s; }
+  .na-kill    { border-color: rgba(255,123,114,0.3); color: var(--accent5); background: rgba(255,123,114,0.07); }
+  .na-kill:hover    { background: rgba(255,123,114,0.16); }
+  .na-restart { border-color: rgba(63,185,80,0.3);  color: var(--accent2); background: rgba(63,185,80,0.07); }
+  .na-restart:hover { background: rgba(63,185,80,0.16); }
+  .na-remove  { border-color: rgba(139,148,158,0.25); color: var(--muted); background: transparent; }
+  .na-remove:hover  { border-color: var(--accent5); color: var(--accent5); }
+
+  /* Live tools */
+  .live-tools-body { padding: 10px 12px; display: flex; flex-wrap: wrap; gap: 5px; min-height: 34px; }
+  .lt-pill { font-size: 10px; padding: 3px 8px; border-radius: 12px; border: 1px solid; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
+  .lt-pill.single { background: rgba(63,185,80,0.1); border-color: rgba(63,185,80,0.3); color: var(--accent2); }
+  .lt-pill.multi  { background: rgba(255,166,87,0.1); border-color: rgba(255,166,87,0.3); color: var(--accent4); }
+  .lt-count { font-size: 9px; opacity: 0.8; }
+
+  /* Result box */
+  .result-box { padding: 8px 12px; font-family: "SF Mono","Fira Code",monospace; font-size: 10px; color: var(--text2); word-break: break-all; min-height: 34px; line-height: 1.6; max-height: 80px; overflow-y: auto; }
+
+  /* Call log */
+  .signal-log { height: 200px; overflow-y: auto; padding: 4px 0; font-family: "SF Mono","Fira Code",monospace; font-size: 10px; }
   .signal-log::-webkit-scrollbar { width: 3px; }
   .signal-log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-  .log-entry { padding: 2px 12px; display: flex; gap: 6px; align-items: baseline; animation: fadeIn 0.2s ease-out; }
-  @keyframes fadeIn { from { opacity: 0; transform: translateX(-3px); } to { opacity: 1; } }
+  .log-entry { padding: 2px 12px; display: flex; gap: 5px; align-items: baseline; animation: fadeIn 0.2s; }
+  @keyframes fadeIn { from { opacity:0; transform:translateX(-3px); } to { opacity:1; } }
   .log-entry:hover { background: var(--surface2); }
-  .log-ts { color: var(--muted); min-width: 24px; }
-  .log-badge { font-size: 9px; padding: 1px 5px; border-radius: 3px; white-space: nowrap; font-weight: 600; }
+  .log-ts    { color: var(--muted); min-width: 22px; }
+  .log-badge { font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 600; white-space: nowrap; }
   .log-badge.ok  { background: rgba(63,185,80,0.12);  color: var(--accent2); }
   .log-badge.err { background: rgba(255,123,114,0.12); color: var(--accent5); }
-  .log-badge.sys { background: rgba(88,166,255,0.12);  color: var(--accent); }
-  .log-tool { color: var(--text2); }
-  .log-detail { color: var(--muted); font-size: 9px; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 110px; }
+  .log-tool  { color: var(--text2); flex: 1; }
+  .log-route { font-size: 9px; color: var(--muted); white-space: nowrap; }
 
-  .node-grid { display: flex; flex-direction: column; gap: 0; }
-  .node-row { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
-  .node-row:last-child { border-bottom: none; }
-  .node-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-  .node-name { font-family: "SF Mono","Fira Code",monospace; font-size: 11px; font-weight: 600; min-width: 56px; }
-  .node-tools-inline { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; }
-  .node-tool-tag { font-size: 9px; padding: 1px 5px; border-radius: 3px; }
-  .node-calls { font-family: "SF Mono","Fira Code",monospace; font-size: 10px; color: var(--muted); min-width: 28px; text-align: right; }
-  .node-actions { display: flex; gap: 4px; }
-  .node-btn { font-size: 10px; padding: 2px 7px; border-radius: 4px; border: 1px solid; cursor: pointer; transition: background 0.1s; }
-  .node-btn-kill    { border-color: rgba(255,123,114,0.3); color: var(--accent5); background: rgba(255,123,114,0.07); }
-  .node-btn-kill:hover    { background: rgba(255,123,114,0.15); }
-  .node-btn-restart { border-color: rgba(63,185,80,0.3);  color: var(--accent2); background: rgba(63,185,80,0.07); }
-  .node-btn-restart:hover { background: rgba(63,185,80,0.15); }
-
-  .concepts { max-width: 1060px; margin: 8px auto 0; padding: 0 32px 40px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  /* Concepts */
+  .concepts { max-width: 1080px; margin: 8px auto 0; padding: 0 32px 40px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
   .concept-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px 18px; }
   .concept-num { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; }
   .concept-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
   .concept-body { font-size: 11px; color: var(--muted); line-height: 1.65; margin-bottom: 8px; }
-  .code-snippet { font-size: 10px; font-family: "SF Mono", "Fira Code", monospace; background: var(--surface2); border: 1px solid var(--border); border-radius: 5px; padding: 8px 10px; color: var(--text2); line-height: 1.7; overflow-x: auto; white-space: pre; margin-top: 4px; }
+  .code-snippet { font-size: 10px; font-family: "SF Mono","Fira Code",monospace; background: var(--surface2); border: 1px solid var(--border); border-radius: 5px; padding: 8px 10px; color: var(--text2); line-height: 1.7; overflow-x: auto; white-space: pre; }
   .code-snippet .kw  { color: var(--accent5); }
   .code-snippet .fn  { color: var(--accent); }
   .code-snippet .str { color: var(--accent2); }
   .code-snippet .cm  { color: var(--muted); font-style: italic; }
   .code-snippet .tp  { color: var(--accent3); }
 
-  footer { text-align: center; padding: 32px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--border); }
-
-  .guide-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
-  .guide-steps { margin: 0; padding-left: 16px; }
-  .guide-steps li { font-size: 11px; color: var(--muted); line-height: 1.65; margin-bottom: 5px; }
-  .guide-steps li:last-child { margin-bottom: 0; }
-  .guide-steps li strong { color: var(--text2); }
-  .guide-steps li code { font-size: 10px; background: var(--surface3); padding: 1px 4px; border-radius: 3px; color: var(--text2); }
-
-  .result-box { padding: 8px 12px; font-family: "SF Mono","Fira Code",monospace; font-size: 10px; color: var(--text2); word-break: break-all; min-height: 36px; line-height: 1.6; }
+  footer { text-align: center; padding: 28px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--border); }
 </style>
 </head>
 <body>
@@ -130,9 +144,9 @@
 <header class="header">
   <span class="header-badge">Layer 4 — MCP Bridge</span>
   <div class="header-text">
-    <div class="header-title">MCP Mesh — <em>Broker-less AI Tool Routing</em></div>
+    <div class="header-title">MCP Mesh — <em>Adaptive Tool Routing</em></div>
     <div class="header-sub">
-      5 agents · full-mesh topology · epidemic KV discovery · no central registry · self-healing on node failure
+      Add nodes from a palette · duplicate tools for load balancing · kill and restart providers · zero reconfiguration
     </div>
   </div>
   <div class="header-links"><a href="roadmap.html">← Roadmap</a></div>
@@ -142,12 +156,12 @@
   <div class="left-col">
 
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-      <div style="font-size:12px;color:var(--muted);">Last call:</div>
+      <div style="font-size:12px;color:var(--muted)">Last call:</div>
       <span id="last-tool-pill" style="font-size:11px;font-family:monospace;background:rgba(88,166,255,0.1);border:1px solid rgba(88,166,255,0.25);border-radius:10px;padding:2px 9px;color:var(--accent)">—</span>
-      <div id="conn-status" style="font-size:12px;color:var(--muted);">connecting…</div>
+      <div id="conn-status" style="font-size:12px;color:var(--muted)">connecting…</div>
     </div>
 
-    <canvas id="mesh-canvas" width="500" height="460"></canvas>
+    <canvas id="mesh-canvas" width="500" height="480"></canvas>
 
     <div class="controls">
       <button class="btn btn-call" onclick="callTool('weather')">☁ weather</button>
@@ -156,26 +170,14 @@
       <button class="btn btn-call" onclick="callTool('calculate')">∑ calculate</button>
       <button class="btn btn-call" onclick="callTool('translate')">🌐 translate</button>
       <button class="btn btn-call" onclick="callTool('summarize')">✦ summarize</button>
-      <div style="font-size:11px;color:var(--muted);">Auto-cycles all tools every 8 s</div>
+      <span style="font-size:11px;color:var(--muted)">Auto-cycles every 6 s</span>
     </div>
 
-  </div>
+  </div><!-- .left-col -->
 
   <div class="right-col">
 
-    <div class="panel">
-      <div class="panel-hdr">Guide — the demo moment</div>
-      <div class="guide-body">
-        <ol class="guide-steps">
-          <li><strong>Kill node-0</strong> — drops "weather" and "ping" from the mesh via KV tombstones. Other nodes see the change within one gossip round.</li>
-          <li><strong>Call "weather"</strong> — returns <code>tool not found</code>. No node hosts it now.</li>
-          <li><strong>Restart node-0</strong> — re-registers both tools; KV propagates cluster-wide.</li>
-          <li><strong>Call "weather" again</strong> — succeeds. <em>Zero reconfiguration anywhere.</em></li>
-          <li>Any node can call any tool — watch the arcs on the canvas. The caller and provider are often different nodes.</li>
-        </ol>
-      </div>
-    </div>
-
+    <!-- Stats -->
     <div class="panel">
       <div class="panel-hdr">Mesh stats <div class="dot-live"></div></div>
       <div class="stats-grid">
@@ -189,156 +191,160 @@
         </div>
         <div class="stat-item">
           <div class="stat-label">Live tools</div>
-          <div class="stat-val" style="color:var(--accent2)" id="s-live-tools">0</div>
+          <div class="stat-val" style="color:var(--accent2)" id="s-lt">0</div>
         </div>
         <div class="stat-item">
           <div class="stat-label">Live nodes</div>
-          <div class="stat-val" style="color:var(--accent3)" id="s-live-nodes">0</div>
+          <div class="stat-val" style="color:var(--accent3)" id="s-ln">0</div>
         </div>
       </div>
     </div>
 
+    <!-- Add-node palette -->
+    <div class="panel">
+      <div class="panel-hdr">Add node</div>
+      <div class="palette-body">
+        <div class="palette-tools" id="palette">
+          <!-- checkboxes rendered here -->
+        </div>
+        <div class="palette-footer">
+          <button id="add-btn" disabled onclick="addNode()">+ Add Node</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Live tools (KV scan) -->
+    <div class="panel">
+      <div class="panel-hdr">Live tools <span style="font-size:9px;color:var(--muted);font-weight:400;letter-spacing:0">(amber = multiple providers)</span></div>
+      <div class="live-tools-body" id="live-tools-body">—</div>
+    </div>
+
+    <!-- Last result -->
     <div class="panel">
       <div class="panel-hdr">Last result</div>
       <div class="result-box" id="last-result">—</div>
     </div>
 
+    <!-- Node list -->
     <div class="panel">
-      <div class="panel-hdr">Nodes</div>
-      <div class="node-grid" id="node-grid">
-        <!-- populated by JS -->
-      </div>
+      <div class="panel-hdr">Nodes <div class="dot-live"></div></div>
+      <div id="node-list"><!-- rendered by JS --></div>
     </div>
 
-    <div class="panel">
-      <div class="panel-hdr">Live tools (KV scan) <div class="dot-live"></div></div>
-      <div class="tool-list" id="live-tool-list">—</div>
-    </div>
-
+    <!-- Call log -->
     <div class="panel">
       <div class="panel-hdr">Call log <div class="dot-live"></div></div>
       <div class="signal-log" id="log"></div>
     </div>
 
-  </div>
-</div>
+  </div><!-- .right-col -->
+</div><!-- .layout -->
 
 <div class="concepts">
   <div class="concept-card">
-    <div class="concept-num" style="color:var(--accent3)">Layer 4 — MCP Bridge</div>
-    <div class="concept-title">No registry. No broker.</div>
+    <div class="concept-num" style="color:var(--accent3)">Epidemic discovery</div>
+    <div class="concept-title">KV is the registry</div>
     <div class="concept-body">
-      Every tool is written under <code>tools/{name}/{node_id}</code> in the gossip KV store.
-      Any node can discover any tool by scanning that prefix — the substrate <em>is</em> the
-      registry. Kill a node and its tools vanish from the mesh in one gossip round; restart
-      and they reappear. No operator action needed.
+      Every <code>register_mcp_tool</code> call writes
+      <code>tools/{name}/{node_id}</code> into the gossip KV store.
+      Any node can discover any tool by scanning that prefix — no central registry,
+      no configuration file. Add a node and its tools appear within one gossip round.
+      Kill it and the tombstone propagates automatically.
     </div>
-    <div class="code-snippet"><span class="cm">// Register a tool — writes KV entry</span>
-<span class="kw">let</span> _handle = agent.<span class="fn">register_mcp_tool</span>(
-    <span class="str">"weather"</span>,
-    schema,
-    |args| <span class="kw">async move</span> { <span class="cm">/* handler */</span> },
-);
-<span class="cm">// Drop handle → tombstone propagates</span></div>
-  </div>
-
-  <div class="concept-card">
-    <div class="concept-num" style="color:var(--accent)">Epidemic discovery</div>
-    <div class="concept-title">Any caller, any provider</div>
-    <div class="concept-body">
-      A <code>tools/call</code> request arrives at any node. That node scans the gossip KV
-      for a provider, extracts its <code>NodeId</code>, and issues an RPC directly — a
-      point-to-point <code>mcp.invoke</code> signal routed through the mesh. Watch the arcs:
-      the caller and the provider are almost never the same node.
-    </div>
-    <div class="code-snippet"><span class="cm">// Caller scans for any provider</span>
-<span class="kw">let</span> entries = agent.<span class="fn">scan_prefix</span>(<span class="str">"tools/weather/"</span>);
-<span class="kw">let</span> provider = entries[0].0.<span class="fn">parse</span>::&lt;<span class="tp">NodeId</span>&gt;()?;
-
-<span class="cm">// Point-to-point RPC through mesh</span>
-<span class="kw">let</span> reply = agent.<span class="fn">rpc_call</span>(
-    provider, <span class="str">"mcp.invoke"</span>,
-    request_bytes, timeout,
-).<span class="fn">await</span>?;</div>
-  </div>
-
-  <div class="concept-card">
-    <div class="concept-num" style="color:var(--accent4)">Self-healing</div>
-    <div class="concept-title">Kill it. Restart it. Done.</div>
-    <div class="concept-body">
-      There is no configuration to update, no service to notify. When node-0 dies its
-      <code>McpToolHandle</code> is dropped, which fires a cancel channel, which runs
-      the tombstone path: a KV delete entry propagates to every peer. When node-0 restarts
-      it re-registers — the same KV path, a newer HLC timestamp — and the mesh self-corrects.
-    </div>
-    <div class="code-snippet"><span class="cm">// Kill: just drop the handle</span>
-drop(tool_handle);  <span class="cm">// tombstone fires</span>
-
-<span class="cm">// Restart: new agent, new handle</span>
-<span class="kw">let</span> agent = <span class="tp">GossipAgent</span>::<span class="fn">new</span>(id, cfg);
-agent.<span class="fn">start</span>().<span class="fn">await</span>?;
+    <div class="code-snippet"><span class="cm">// writes tools/weather/127.0.0.1:55003</span>
 <span class="kw">let</span> _h = agent.<span class="fn">register_mcp_tool</span>(
-    <span class="str">"weather"</span>, schema, handler);</div>
+    <span class="str">"weather"</span>, schema, handler);
+
+<span class="cm">// any node discovers it</span>
+<span class="kw">let</span> entries = agent.<span class="fn">scan_prefix</span>(
+    <span class="str">"tools/weather/"</span>);
+<span class="cm">// returns all provider node_ids</span></div>
+  </div>
+
+  <div class="concept-card">
+    <div class="concept-num" style="color:var(--accent4)">Load balancing</div>
+    <div class="concept-title">Multiple providers = automatic spread</div>
+    <div class="concept-body">
+      Add a second node with the same tool. The caller scans
+      <code>tools/{name}/</code> and gets <em>multiple</em> entries — one per
+      provider. It picks randomly among them. No coordinator needed. Kill one
+      provider and calls drain to the survivor. Restart and load re-balances
+      automatically — the KV mesh is the only state.
+    </div>
+    <div class="code-snippet"><span class="cm">// KV scan returns all providers</span>
+<span class="kw">let</span> entries = caller.<span class="fn">scan_prefix</span>(
+    <span class="str">"tools/calculate/"</span>);
+<span class="cm">// 2 entries → 2 live providers</span>
+
+<span class="cm">// pick one uniformly at random</span>
+<span class="kw">let</span> pick = now_ms() % entries.len();
+<span class="kw">let</span> provider = entries[pick].parse()?;</div>
+  </div>
+
+  <div class="concept-card">
+    <div class="concept-num" style="color:var(--accent)">Broker-less routing</div>
+    <div class="concept-title">Caller → provider direct</div>
+    <div class="concept-body">
+      There is no router, no load-balancer, no service mesh proxy. The caller
+      node reads the KV store locally (O(1)), emits an
+      <code>mcp.invoke</code> signal directly to the provider via
+      <code>rpc_call</code>, and awaits the reply. The arc on the canvas is the
+      actual signal path — watch it change as different callers and providers
+      are selected each cycle.
+    </div>
+    <div class="code-snippet"><span class="cm">// direct point-to-point — no hop</span>
+<span class="kw">let</span> reply = caller.<span class="fn">rpc_call</span>(
+    provider,
+    <span class="str">"mcp.invoke"</span>,
+    request_bytes,
+    <span class="tp">Duration</span>::<span class="fn">from_secs</span>(5),
+).<span class="fn">await</span>?;
+<span class="cm">// reply arrives from provider directly</span></div>
   </div>
 </div>
 
-<footer>mycelium · Layer 4 MCP bridge complete · 2026-05-20</footer>
+<footer>mycelium · Layer 4 MCP bridge · 2026-05-20</footer>
 
 <script>
-const POLL_MS = 150;
-const MAX_LOG = 100;
-let logSeq = 0;
-let state  = null;
-let connected = false;
-let prevTotalCalls = 0;
-let prevLastCallMs = 0;
+const POLL_MS  = 150;
+const MAX_LOG  = 100;
+const ALL_TOOLS = ['weather','ping','search','calculate','translate','summarize'];
 
+const TOOL_COLOR = {
+  weather:   '#58a6ff', ping:      '#79c0ff',
+  search:    '#d2a8ff', calculate: '#ffa657',
+  translate: '#3fb950', summarize: '#56d364',
+};
+function tc(name) { return TOOL_COLOR[name] || '#8b949e'; }
+
+// ── canvas ────────────────────────────────────────────────────────────────────
 const canvas = document.getElementById('mesh-canvas');
 const ctx    = canvas.getContext('2d');
-const W      = canvas.width;
-const H      = canvas.height;
-const CX     = W / 2 - 10;
-const CY     = H / 2 + 10;
-const RING_R = 165;
-const NODE_R = 26;
-const N      = 5;
+const W = canvas.width, H = canvas.height;
+const CX = W / 2 - 8, CY = H / 2 + 4;
 
-// Tool colours by name
-const TOOL_COLORS = {
-  weather:   '#58a6ff',
-  ping:      '#79c0ff',
-  search:    '#d2a8ff',
-  calculate: '#ffa657',
-  translate: '#3fb950',
-  summarize: '#56d364',
-};
-
-function toolColor(name) {
-  return TOOL_COLORS[name] || '#8b949e';
+function nodePos(i, n) {
+  const r     = Math.min(165, Math.max(80, 420 / Math.max(n, 3)));
+  const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
+  return { x: CX + r * Math.cos(angle), y: CY + r * Math.sin(angle) };
 }
 
-// Pentagon positions — flat top
-function nodePos(i) {
-  const angle = (i / N) * Math.PI * 2 - Math.PI / 2;
-  return { x: CX + RING_R * Math.cos(angle), y: CY + RING_R * Math.sin(angle) };
+// ── arc / pulse animation ─────────────────────────────────────────────────────
+const arcs   = [];
+const pulses = [];   // indexed by array position; grown as nodes are added
+
+let logSeq  = 0;
+let state   = null;
+let connected = false;
+let prevLastMs = 0;
+let lastRafTs  = 0;
+
+function addArc(fromPos, toPos, tool, n) {
+  if (fromPos < 0 || toPos < 0 || fromPos === toPos) return;
+  const from = nodePos(fromPos, n);
+  const to   = nodePos(toPos,   n);
+  arcs.push({ fx: from.x, fy: from.y, tx: to.x, ty: to.y, color: tc(tool), t: 0 });
 }
-
-// ── Arc animations for RPC calls ──────────────────────────────────────────────
-const arcs = [];   // { fromX, fromY, toX, toY, color, t, tool }
-
-function addArc(fromIdx, toIdx, tool) {
-  const from = nodePos(fromIdx);
-  const to   = nodePos(toIdx);
-  arcs.push({ fromX: from.x, fromY: from.y, toX: to.x, toY: to.y,
-              color: toolColor(tool), t: 0, tool });
-}
-
-// ── Node pulse animations ─────────────────────────────────────────────────────
-const pulses = new Array(N).fill(0);
-
-// ── Draw ───────────────────────────────────────────────────────────────────────
-let lastRafTs = 0;
-let animRaf   = 0;
 
 function draw(ts) {
   const dt = Math.min((ts - lastRafTs) / 1000, 0.15);
@@ -346,323 +352,308 @@ function draw(ts) {
   ctx.clearRect(0, 0, W, H);
 
   if (!state) {
-    ctx.fillStyle = '#8b949e';
-    ctx.font = '13px sans-serif';
-    ctx.textAlign = 'center';
+    ctx.fillStyle = '#8b949e'; ctx.font = '13px sans-serif'; ctx.textAlign = 'center';
     ctx.fillText('Connecting to http://127.0.0.1:8099…', CX, CY);
-    animRaf = requestAnimationFrame(draw);
-    return;
+    requestAnimationFrame(draw); return;
   }
 
-  // Full-mesh edges (muted)
-  for (let i = 0; i < N; i++) {
-    for (let j = i + 1; j < N; j++) {
-      const a = nodePos(i), b = nodePos(j);
-      ctx.beginPath();
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-      ctx.strokeStyle = 'rgba(48,54,61,0.7)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
+  const n = state.nodes.length;
+  if (n === 0) { requestAnimationFrame(draw); return; }
+
+  // Mesh edges (muted)
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const a = nodePos(i, n), b = nodePos(j, n);
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+      ctx.strokeStyle = 'rgba(48,54,61,0.6)'; ctx.lineWidth = 1; ctx.stroke();
     }
   }
 
-  // Animated RPC arcs
-  const alive_arcs = [];
+  // Arcs
+  const keepArcs = [];
   for (const arc of arcs) {
-    arc.t += dt * 0.9;
+    arc.t += dt * 0.85;
     if (arc.t >= 1.0) continue;
-    alive_arcs.push(arc);
-
-    // Bezier control point (lifted above the midpoint)
-    const mx = (arc.fromX + arc.toX) / 2;
-    const my = (arc.fromY + arc.toY) / 2;
-    const dx = arc.toX - arc.fromX;
-    const dy = arc.toY - arc.fromY;
+    keepArcs.push(arc);
+    // Bezier
+    const mx = (arc.fx + arc.tx) / 2, my = (arc.fy + arc.ty) / 2;
+    const dx = arc.tx - arc.fx, dy = arc.ty - arc.fy;
     const len = Math.sqrt(dx * dx + dy * dy) || 1;
-    const lift = Math.min(len * 0.35, 80);
-    const cpx  = mx - (dy / len) * lift;
-    const cpy  = my + (dx / len) * lift;
-
-    // Draw trail up to arc.t
-    const steps = 32;
+    const lift = Math.min(len * 0.35, 90);
+    const cpx = mx - (dy / len) * lift, cpy = my + (dx / len) * lift;
+    const steps = 28;
     ctx.beginPath();
-    let firstPoint = true;
+    let first = true;
     for (let s = 0; s <= steps; s++) {
       const u = (s / steps) * arc.t;
-      const bx = (1-u)*(1-u)*arc.fromX + 2*(1-u)*u*cpx + u*u*arc.toX;
-      const by = (1-u)*(1-u)*arc.fromY + 2*(1-u)*u*cpy + u*u*arc.toY;
-      if (firstPoint) { ctx.moveTo(bx, by); firstPoint = false; }
-      else ctx.lineTo(bx, by);
+      const bx = (1-u)*(1-u)*arc.fx + 2*(1-u)*u*cpx + u*u*arc.tx;
+      const by = (1-u)*(1-u)*arc.fy + 2*(1-u)*u*cpy + u*u*arc.ty;
+      if (first) { ctx.moveTo(bx, by); first = false; } else ctx.lineTo(bx, by);
     }
-    const alpha = Math.max(0, 1 - arc.t * 1.1);
-    ctx.strokeStyle = arc.color.replace(')', `,${alpha})`).replace('rgb', 'rgba');
-    ctx.lineWidth   = 2.5;
-    ctx.stroke();
-
-    // Dot at head
-    const u   = arc.t;
-    const hx  = (1-u)*(1-u)*arc.fromX + 2*(1-u)*u*cpx + u*u*arc.toX;
-    const hy  = (1-u)*(1-u)*arc.fromY + 2*(1-u)*u*cpy + u*u*arc.toY;
-    ctx.beginPath();
-    ctx.arc(hx, hy, 4, 0, Math.PI * 2);
-    ctx.fillStyle = arc.color;
-    ctx.fill();
+    const alpha = Math.max(0, 1 - arc.t * 1.2);
+    ctx.strokeStyle = arc.color.replace('rgb(', 'rgba(').replace(')', `,${alpha})`)
+                             .replace(/^#(\w{6})/, (_, h) => `rgba(${parseInt(h.slice(0,2),16)},${parseInt(h.slice(2,4),16)},${parseInt(h.slice(4,6),16)},${alpha})`);
+    ctx.lineWidth = 2.5; ctx.stroke();
+    // dot at head
+    const u = arc.t;
+    const hx = (1-u)*(1-u)*arc.fx + 2*(1-u)*u*cpx + u*u*arc.tx;
+    const hy = (1-u)*(1-u)*arc.fy + 2*(1-u)*u*cpy + u*u*arc.ty;
+    ctx.beginPath(); ctx.arc(hx, hy, 3.5, 0, Math.PI*2);
+    ctx.fillStyle = arc.color; ctx.fill();
   }
-  arcs.length = 0;
-  arcs.push(...alive_arcs);
+  arcs.length = 0; arcs.push(...keepArcs);
 
   // Nodes
-  for (let i = 0; i < N; i++) {
-    const { x, y } = nodePos(i);
-    const node = state.nodes[i];
+  for (let i = 0; i < n; i++) {
+    const { x, y } = nodePos(i, n);
+    const node  = state.nodes[i];
     const alive = node.alive;
-    const pt    = pulses[i] || 0;
+    const NODE_R = Math.max(20, Math.min(26, 80 / Math.max(n, 3)));
 
     // Pulse ring
+    while (pulses.length <= i) pulses.push(0);
+    const pt = pulses[i] || 0;
     if (pt > 0) {
-      ctx.beginPath();
-      ctx.arc(x, y, NODE_R + 6 + pt * 18, 0, Math.PI * 2);
-      ctx.strokeStyle = `rgba(88,166,255,${0.4 * (1 - pt)})`;
-      ctx.lineWidth = 2;
-      ctx.stroke();
+      ctx.beginPath(); ctx.arc(x, y, NODE_R + 4 + pt * 16, 0, Math.PI*2);
+      ctx.strokeStyle = `rgba(88,166,255,${0.4*(1-pt)})`; ctx.lineWidth = 2; ctx.stroke();
       pulses[i] = Math.max(0, pt - dt * 1.5);
     }
 
-    // Node circle
-    const nodeColor = alive ? '#1c2128' : '#0d1117';
-    const borderColor = alive ? '#3fb950' : '#ff7b72';
-    const borderWidth = alive ? 2.5 : 1.5;
+    // Circle
+    ctx.beginPath(); ctx.arc(x, y, NODE_R, 0, Math.PI*2);
+    ctx.fillStyle = alive ? '#1c2128' : '#0d1117'; ctx.fill();
+    ctx.strokeStyle = alive ? '#3fb950' : '#ff7b72';
+    ctx.lineWidth   = alive ? 2.5 : 1.5; ctx.stroke();
 
-    ctx.beginPath();
-    ctx.arc(x, y, NODE_R, 0, Math.PI * 2);
-    ctx.fillStyle = nodeColor;
-    ctx.fill();
-    ctx.strokeStyle = borderColor;
-    ctx.lineWidth   = borderWidth;
-    ctx.stroke();
-
+    // Dead X
     if (!alive) {
-      // X cross for dead nodes
-      ctx.strokeStyle = '#ff7b72';
-      ctx.lineWidth   = 2;
-      const d = 8;
-      ctx.beginPath(); ctx.moveTo(x - d, y - d); ctx.lineTo(x + d, y + d); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(x + d, y - d); ctx.lineTo(x - d, y + d); ctx.stroke();
+      ctx.strokeStyle = '#ff7b72'; ctx.lineWidth = 2;
+      const d = 7;
+      ctx.beginPath(); ctx.moveTo(x-d, y-d); ctx.lineTo(x+d, y+d); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x+d, y-d); ctx.lineTo(x-d, y+d); ctx.stroke();
     }
 
-    // Node label
+    // Label
     ctx.fillStyle = alive ? '#e6edf3' : '#484f58';
-    ctx.font = 'bold 11px "SF Mono","Fira Code",monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(`n-${i}`, x, y - 3);
-
-    // Call count below label
+    ctx.font = `bold ${Math.max(9,NODE_R*0.45)|0}px "SF Mono","Fira Code",monospace`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(`n-${node.idx}`, x, y - NODE_R * 0.18);
     if (alive) {
-      ctx.font = '9px sans-serif';
+      ctx.font = `${Math.max(8, NODE_R * 0.35)|0}px sans-serif`;
       ctx.fillStyle = '#8b949e';
-      ctx.fillText(`${node.call_count}`, x, y + 9);
+      ctx.fillText(node.call_count, x, y + NODE_R * 0.35);
     }
 
-    // Tool badges around the node
-    if (alive) {
-      const tools = node.tools;
-      const angleStep = tools.length > 1 ? 0.4 : 0;
-      const startAngle = (i / N) * Math.PI * 2 - Math.PI / 2;
+    // Tool badges
+    if (alive && node.tools.length > 0) {
+      const as = node.tools.length;
+      const baseAngle = (i / n) * Math.PI * 2 - Math.PI / 2;
       const badgeR = NODE_R + 22;
-      tools.forEach((t, ti) => {
-        const bAngle = startAngle + (ti - (tools.length - 1) / 2) * angleStep;
+      node.tools.forEach((t, ti) => {
+        const span = Math.min(0.5 * (as - 1), 0.5);
+        const bAngle = as > 1 ? baseAngle + (ti / (as - 1) - 0.5) * span * 2 : baseAngle;
         const bx = x + badgeR * Math.cos(bAngle);
         const by = y + badgeR * Math.sin(bAngle);
-        ctx.font = 'bold 8px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-
-        // Badge background
-        const tw = ctx.measureText(t).width + 8;
-        ctx.fillStyle = 'rgba(22,27,34,0.9)';
-        ctx.beginPath();
-        ctx.roundRect(bx - tw/2, by - 7, tw, 14, 3);
-        ctx.fill();
-        ctx.strokeStyle = toolColor(t) + '55';
-        ctx.lineWidth = 1;
-        ctx.stroke();
-
-        ctx.fillStyle = toolColor(t);
-        ctx.fillText(t, bx, by);
+        ctx.font = 'bold 8px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        const tw = ctx.measureText(t).width + 7;
+        ctx.fillStyle = 'rgba(22,27,34,0.92)';
+        ctx.beginPath(); ctx.roundRect(bx - tw/2, by - 7, tw, 14, 3); ctx.fill();
+        ctx.strokeStyle = tc(t) + '50'; ctx.lineWidth = 1; ctx.stroke();
+        ctx.fillStyle = tc(t); ctx.fillText(t, bx, by);
       });
     }
   }
 
-  animRaf = requestAnimationFrame(draw);
+  requestAnimationFrame(draw);
 }
 
-// ── Node grid (sidebar) ───────────────────────────────────────────────────────
-const nodeGrid = document.getElementById('node-grid');
-
-function renderNodeGrid() {
-  if (!state) return;
-  nodeGrid.innerHTML = '';
-  state.nodes.forEach((node, i) => {
-    const row = document.createElement('div');
-    row.className = 'node-row';
-    const dotColor  = node.alive ? '#3fb950' : '#ff7b72';
-    const toolsHtml = node.tools.map(t =>
-      `<span class="node-tool-tag" style="background:${toolColor(t)}22;color:${toolColor(t)};border:1px solid ${toolColor(t)}44">${t}</span>`
-    ).join('');
-    row.innerHTML = `
-      <div class="node-dot" style="background:${dotColor}"></div>
-      <span class="node-name" style="color:${node.alive?'var(--text2)':'var(--muted)'}">node-${i}</span>
-      <div class="node-tools-inline">${toolsHtml}</div>
-      <span class="node-calls">${node.call_count}</span>
-      <div class="node-actions">
-        ${node.alive
-          ? `<button class="node-btn node-btn-kill" onclick="killNode(${i})">kill</button>`
-          : `<button class="node-btn node-btn-restart" onclick="restartNode(${i})">restart</button>`
-        }
-      </div>`;
-    nodeGrid.appendChild(row);
-  });
-}
-
-// ── Live tool list (sidebar) ──────────────────────────────────────────────────
-const liveToolList = document.getElementById('live-tool-list');
-
-function renderLiveTools() {
-  if (!state) return;
-  if (!state.live_tools || state.live_tools.length === 0) {
-    liveToolList.innerHTML = '<span style="color:var(--muted);font-size:11px">no tools registered</span>';
-    return;
-  }
-  liveToolList.innerHTML = state.live_tools.map(t =>
-    `<span class="tool-pill live">${t.name} <span style="font-weight:400;opacity:0.6">·n${t.node}</span></span>`
+// ── palette ───────────────────────────────────────────────────────────────────
+function buildPalette() {
+  const el = document.getElementById('palette');
+  el.innerHTML = ALL_TOOLS.map(t =>
+    `<span>
+      <input class="tool-toggle" type="checkbox" id="tc-${t}" value="${t}" onchange="updateAddBtn()">
+      <label class="tool-toggle-label" for="tc-${t}" style="border-color:${tc(t)}44;color:${tc(t)}88">${t}</label>
+    </span>`
   ).join('');
 }
 
-// ── Stats ─────────────────────────────────────────────────────────────────────
-const sCalls     = document.getElementById('s-calls');
-const sErrors    = document.getElementById('s-errors');
-const sLiveTools = document.getElementById('s-live-tools');
-const sLiveNodes = document.getElementById('s-live-nodes');
-const lastToolPill = document.getElementById('last-tool-pill');
-const lastResult   = document.getElementById('last-result');
+function updateAddBtn() {
+  const any = Array.from(document.querySelectorAll('.tool-toggle:checked')).length > 0;
+  document.getElementById('add-btn').disabled = !any;
+}
 
+// ── node list ─────────────────────────────────────────────────────────────────
+function renderNodeList() {
+  if (!state) return;
+  const el = document.getElementById('node-list');
+  if (state.nodes.length === 0) { el.innerHTML = '<div style="padding:10px 14px;font-size:11px;color:var(--muted)">No nodes</div>'; return; }
+  el.innerHTML = state.nodes.map((node, pos) => {
+    const dot   = node.alive ? '#3fb950' : '#ff7b72';
+    const label = node.alive
+      ? `<button class="na-btn na-kill"    onclick="killNode(${node.idx})">kill</button>`
+      : `<button class="na-btn na-restart" onclick="restartNode(${node.idx})">restart</button>`;
+    const tools = node.tools.map(t =>
+      `<span class="ntag" style="background:${tc(t)}18;color:${tc(t)};border:1px solid ${tc(t)}44">${t}</span>`
+    ).join('');
+    return `<div class="node-row">
+      <div class="node-dot" style="background:${dot}"></div>
+      <span class="node-name" style="color:${node.alive?'var(--text2)':'var(--muted)'}">${node.idx}·${node.port}</span>
+      <div class="node-tools-row">${tools}</div>
+      <span class="node-cnt">${node.call_count}</span>
+      <div class="node-actions">
+        ${label}
+        <button class="na-btn na-remove" onclick="removeNode(${node.idx})" title="Remove permanently">×</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── live tools ────────────────────────────────────────────────────────────────
+function renderLiveTools() {
+  if (!state) return;
+  const el = document.getElementById('live-tools-body');
+  if (!state.live_tools || state.live_tools.length === 0) {
+    el.innerHTML = '<span style="color:var(--muted);font-size:11px">no tools registered</span>'; return;
+  }
+  el.innerHTML = state.live_tools.map(lt => {
+    const multi = lt.providers.length > 1;
+    const cls   = multi ? 'multi' : 'single';
+    const count = multi ? `<span class="lt-count">×${lt.providers.length}</span>` : '';
+    return `<span class="lt-pill ${cls}">${lt.name}${count}</span>`;
+  }).join('');
+}
+
+// ── stats ─────────────────────────────────────────────────────────────────────
 function updateStats() {
   if (!state) return;
-  sCalls.textContent     = state.total_calls;
-  sErrors.textContent    = state.call_errors;
-  sLiveTools.textContent = state.live_tools ? state.live_tools.length : 0;
-  sLiveNodes.textContent = state.nodes.filter(n => n.alive).length;
+  document.getElementById('s-calls').textContent  = state.total_calls;
+  document.getElementById('s-errors').textContent = state.call_errors;
+  document.getElementById('s-lt').textContent     = state.live_tools ? state.live_tools.length : 0;
+  document.getElementById('s-ln').textContent     = state.nodes.filter(n => n.alive).length;
+
+  const pill = document.getElementById('last-tool-pill');
   if (state.last_tool) {
-    lastToolPill.textContent = state.last_tool;
-    lastToolPill.style.color        = toolColor(state.last_tool);
-    lastToolPill.style.background   = toolColor(state.last_tool) + '18';
-    lastToolPill.style.borderColor  = toolColor(state.last_tool) + '44';
+    pill.textContent = state.last_tool;
+    pill.style.color = tc(state.last_tool);
+    pill.style.background   = tc(state.last_tool) + '18';
+    pill.style.borderColor  = tc(state.last_tool) + '44';
   }
+
+  const rb = document.getElementById('last-result');
   if (state.last_result && state.last_result !== 'null') {
     try {
-      const r = typeof state.last_result === 'string'
-        ? JSON.parse(state.last_result) : state.last_result;
-      lastResult.textContent = JSON.stringify(r, null, 2);
-    } catch { lastResult.textContent = String(state.last_result); }
+      const r = typeof state.last_result === 'string' ? JSON.parse(state.last_result) : state.last_result;
+      rb.textContent = JSON.stringify(r, null, 2);
+    } catch { rb.textContent = String(state.last_result); }
   }
 }
 
-// ── Log ────────────────────────────────────────────────────────────────────────
+// ── log ───────────────────────────────────────────────────────────────────────
 const logEl = document.getElementById('log');
 
-function addLog(tool, detail, isErr) {
+function addLog(tool, routeStr, isErr) {
   const entry = document.createElement('div');
   entry.className = 'log-entry';
-  const badge = isErr ? 'err' : 'ok';
-  const label = isErr ? 'ERR' : 'OK';
   entry.innerHTML =
     `<span class="log-ts">${String(logSeq++ % 1000).padStart(3,'0')}</span>` +
-    `<span class="log-badge ${badge}">${label}</span>` +
-    `<span class="log-tool" style="color:${toolColor(tool)}">${tool}</span>` +
-    `<span class="log-detail">${detail}</span>`;
+    `<span class="log-badge ${isErr?'err':'ok'}">${isErr?'ERR':'OK'}</span>` +
+    `<span class="log-tool" style="color:${tc(tool)}">${tool}</span>` +
+    `<span class="log-route">${routeStr}</span>`;
   logEl.prepend(entry);
   while (logEl.children.length > MAX_LOG) logEl.lastChild.remove();
 }
 
-// ── Polling ────────────────────────────────────────────────────────────────────
-const connStatus = document.getElementById('conn-status');
+// ── polling ───────────────────────────────────────────────────────────────────
+const connEl = document.getElementById('conn-status');
 
 async function poll() {
   try {
     const res  = await fetch('http://127.0.0.1:8099/state', { signal: AbortSignal.timeout(2000) });
     const data = await res.json();
-
-    const prevState = state;
+    const prev = state;
     state = data;
 
     if (!connected) {
       connected = true;
-      connStatus.textContent = 'connected';
-      connStatus.style.color = 'var(--accent2)';
+      connEl.textContent = 'connected'; connEl.style.color = 'var(--accent2)';
     }
 
-    // Detect new call
-    if (data.last_call_ms !== prevLastCallMs && data.last_call_ms > 0) {
-      prevLastCallMs = data.last_call_ms;
+    // New call detected
+    if (data.last_call_ms !== prevLastMs && data.last_call_ms > 0) {
+      prevLastMs = data.last_call_ms;
       const tool = data.last_tool || '?';
-      let isErr = false;
-      let detail = '';
+      const cp   = data.last_caller_pos;
+      const pp   = data.last_provider_pos;
+      const n    = data.nodes.length;
+      let isErr  = false;
+      let route  = '';
       try {
-        const r = typeof data.last_result === 'string'
-          ? JSON.parse(data.last_result) : data.last_result;
-        if (r && r.error) { isErr = true; detail = r.error; }
-        else detail = JSON.stringify(r).slice(0, 60);
-      } catch { detail = String(data.last_result).slice(0, 60); }
-      addLog(tool, detail, isErr);
-
-      // Trigger animation: pick caller (any node) and provider (node with tool)
-      const providerIdx = data.nodes.findIndex(n => n.alive && n.tools.includes(tool));
-      const liveIdxs    = data.nodes.map((n,i) => n.alive ? i : -1).filter(i => i >= 0);
-      if (liveIdxs.length > 0 && providerIdx >= 0) {
-        const callerIdx = liveIdxs[Math.floor(Math.random() * liveIdxs.length)];
-        if (callerIdx !== providerIdx) {
-          addArc(callerIdx, providerIdx, tool);
-          pulses[providerIdx] = 1.0;
-        } else {
-          pulses[providerIdx] = 1.0;
-        }
-      }
+        const r = typeof data.last_result === 'string' ? JSON.parse(data.last_result) : data.last_result;
+        if (r && r.error) { isErr = true; route = r.error.slice(0, 40); }
+        else { route = cp >= 0 && pp >= 0 ? `n-${data.nodes[cp]?.idx}→n-${data.nodes[pp]?.idx}` : ''; }
+      } catch { route = ''; }
+      addLog(tool, route, isErr);
+      addArc(cp, pp, tool, n);
+      if (pp >= 0) { while (pulses.length <= pp) pulses.push(0); pulses[pp] = 1.0; }
     }
 
     updateStats();
-    renderNodeGrid();
+    renderNodeList();
     renderLiveTools();
   } catch {
     if (connected) {
       connected = false;
-      connStatus.textContent = 'disconnected — run: cargo run --example mcp_mesh';
-      connStatus.style.color = 'var(--accent4)';
+      connEl.textContent = 'disconnected — run: cargo run --example mcp_mesh';
+      connEl.style.color = 'var(--accent4)';
     }
   }
 }
 
-// ── User actions ──────────────────────────────────────────────────────────────
+// ── actions ───────────────────────────────────────────────────────────────────
 async function callTool(name) {
   await fetch(`http://127.0.0.1:8099/call?tool=${name}`,
-    { method: 'POST', signal: AbortSignal.timeout(8000) }).catch(() => {});
+    { method:'POST', signal: AbortSignal.timeout(8000) }).catch(()=>{});
+  await poll();
+}
+
+async function addNode() {
+  const tools = Array.from(document.querySelectorAll('.tool-toggle:checked')).map(c => c.value);
+  if (!tools.length) return;
+  document.getElementById('add-btn').disabled = true;
+  await fetch(`http://127.0.0.1:8099/add?tools=${tools.join(',')}`,
+    { method:'POST', signal: AbortSignal.timeout(8000) }).catch(()=>{});
+  document.querySelectorAll('.tool-toggle').forEach(c => c.checked = false);
+  updateAddBtn();
   await poll();
 }
 
 async function killNode(idx) {
   await fetch(`http://127.0.0.1:8099/kill?node=${idx}`,
-    { method: 'POST', signal: AbortSignal.timeout(2000) }).catch(() => {});
+    { method:'POST', signal: AbortSignal.timeout(5000) }).catch(()=>{});
   await poll();
 }
 
 async function restartNode(idx) {
   await fetch(`http://127.0.0.1:8099/restart?node=${idx}`,
-    { method: 'POST', signal: AbortSignal.timeout(2000) }).catch(() => {});
+    { method:'POST', signal: AbortSignal.timeout(5000) }).catch(()=>{});
   await poll();
 }
 
-// ── Init ───────────────────────────────────────────────────────────────────────
+async function removeNode(idx) {
+  await fetch(`http://127.0.0.1:8099/remove?node=${idx}`,
+    { method:'POST', signal: AbortSignal.timeout(5000) }).catch(()=>{});
+  await poll();
+}
+
+// ── strokeStyle hex helper ─────────────────────────────────────────────────────
+// Fix arc color: convert #rrggbb to rgba
+(function patchArcDraw(){
+  const orig = arcs; // already patched inline above
+})();
+
+// ── init ──────────────────────────────────────────────────────────────────────
+buildPalette();
 requestAnimationFrame(draw);
 poll();
 setInterval(poll, POLL_MS);
