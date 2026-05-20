@@ -19,6 +19,7 @@ use tokio::{sync::{mpsc, watch}, task::JoinSet};
 mod lifecycle;
 mod kv;
 mod signal_ops;
+mod rpc;
 mod opacity;
 mod consensus_ops;
 mod capability_ops;
@@ -154,7 +155,8 @@ pub(crate) struct TaskCtx {
 /// - **KV (Layer I)**: `set`, `set_async`, `get`, `delete`, `delete_async`,
 ///   `keys`, `scan_prefix`, `subscribe`, `subscribe_prefix`.
 /// - **Signals (Layer II) — emit/receive**: `emit`, `emit_async`, `signal_rx`,
-///   `signal_rx_with_capacity`, `signal_once`, `advertise`, `advertise_persistent`.
+///   `signal_rx_with_capacity`, `signal_once`, `request`, `advertise`, `advertise_persistent`.
+/// - **RPC (Layer III)**: `rpc_call`, `rpc_respond`.
 /// - **Groups (static)**: `join_group`, `leave_group`, `group_members`,
 ///   `cached_group_members`, `group_quorum`, `group_quorum_prehashed`.
 /// - **Opacity & load (Layer II)**: `manage_opacity`, `manage_opacity_gated`,

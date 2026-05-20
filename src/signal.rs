@@ -722,6 +722,15 @@ pub mod signal_kind {
     /// Node has cleared its load and resumed normal signal admission.
     /// The pheromone trail (`sys/load/{node_id}/{kind}`) is tombstoned immediately.
     pub const BOUNDARY_TRANSPARENT: &str = "boundary.transparent";
+    /// Generic RPC reply. The correlation nonce in the first 8 bytes of the
+    /// originating request payload is echoed at the start of this payload.
+    /// Use [`GossipAgent::rpc_call`](crate::GossipAgent::rpc_call) /
+    /// [`GossipAgent::rpc_respond`](crate::GossipAgent::rpc_respond) to handle
+    /// the nonce automatically.
+    pub const RPC_RESULT: &str = "rpc.result";
+    /// MCP tool invocation — payload is a JSON-RPC 2.0 request body.
+    /// Replies are sent as [`RPC_RESULT`] signals back to the caller.
+    pub const MCP_INVOKE: &str = "mcp.invoke";
 }
 
 /// Well-known KV key namespace prefixes for pheromone trail and membership state.
