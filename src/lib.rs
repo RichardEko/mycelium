@@ -64,9 +64,9 @@ mod writer;
 
 pub use agent::{GossipAgent, SystemStats};
 pub use capability::{
-    CapConstraint, CapFilter, CapValue, Capability, CapabilityEvent,
+    CapConstraint, CapFilter, CapRanking, CapValue, Capability, CapabilityEvent,
     CapabilityGroupDef, CapabilityGroupHandle, CapabilityHandle,
-    RequirementHandle, RequirementStatus, WiringProvider, WiringStatus,
+    RankingOrder, RequirementHandle, RequirementStatus, WiringProvider, WiringStatus,
 };
 pub use config::{GossipConfig, GroupTopologyPolicy, TopologyEnforcement};
 pub use locality::LocalityPreference;

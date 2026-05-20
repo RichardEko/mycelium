@@ -48,14 +48,36 @@ pub enum CapConstraint {
     Lte(CapValue),
 }
 
+/// Sort direction for [`CapRanking`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RankingOrder {
+    Ascending,
+    Descending,
+}
+
+/// Optional ranking applied to filter matches after the attribute constraints
+/// have all been satisfied. Sorts providers by the named attribute using
+/// [`partial_cmp_cap`]; providers missing the attribute (or whose value is
+/// incomparable, e.g. `Float(NaN)`) sort to the end deterministically.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CapRanking {
+    pub attribute: Arc<str>,
+    pub order:     RankingOrder,
+}
+
 /// Discriminated filter over a `{namespace, name}` capability shape plus zero
 /// or more attribute constraints. All constraints must match for the filter
-/// to match a capability.
+/// to match a capability. An optional [`CapRanking`] post-orders the matches
+/// without affecting which matches are selected.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CapFilter {
     pub namespace:  Arc<str>,
     pub name:       Arc<str>,
     pub attributes: BTreeMap<Arc<str>, CapConstraint>,
+    /// `#[serde(default)]` so encoded filters that pre-date Phase 6 still
+    /// decode (treating absence as "no ranking").
+    #[serde(default)]
+    pub ranking:    Option<CapRanking>,
 }
 
 /// What a node advertises it can provide.
@@ -233,12 +255,19 @@ impl CapFilter {
             namespace:  namespace.into(),
             name:       name.into(),
             attributes: BTreeMap::new(),
+            ranking:    None,
         }
     }
 
     /// Builder-style attribute addition.
     pub fn with<A: Into<Arc<str>>>(mut self, attribute: A, constraint: CapConstraint) -> Self {
         self.attributes.insert(attribute.into(), constraint);
+        self
+    }
+
+    /// Builder-style ranking attachment. Replaces any previously-set ranking.
+    pub fn with_ranking<A: Into<Arc<str>>>(mut self, attribute: A, order: RankingOrder) -> Self {
+        self.ranking = Some(CapRanking { attribute: attribute.into(), order });
         self
     }
 }

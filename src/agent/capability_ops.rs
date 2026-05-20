@@ -16,9 +16,10 @@
 //!   group's filter self-joins via `join_group`.
 
 use crate::capability::{
-    Capability, CapFilter, CapabilityEvent,
+    Capability, CapFilter, CapValue, CapRanking, CapabilityEvent,
     CapabilityHandle, CapabilityGroupDef, CapabilityGroupHandle,
-    RequirementHandle, RequirementStatus, WiringProvider, WiringStatus,
+    RankingOrder, RequirementHandle, RequirementStatus, WiringProvider, WiringStatus,
+    partial_cmp_cap,
 };
 use crate::locality::{LocalityPath, LocalityPreference};
 use crate::node_id::NodeId;
@@ -83,7 +84,9 @@ impl GossipAgent {
     }
 
     /// Snapshot scan: returns every live capability in the local KV view that
-    /// satisfies `filter`. Order is unspecified.
+    /// satisfies `filter`. If `filter.ranking` is set, results are sorted by
+    /// the named attribute (providers missing the attribute or with
+    /// incomparable values sort to the end). Otherwise order is unspecified.
     pub fn resolve(&self, filter: &CapFilter) -> Vec<(NodeId, Capability)> {
         let mut out = Vec::new();
         for (key, bytes) in self.scan_prefix("cap/") {
@@ -92,6 +95,9 @@ impl GossipAgent {
             if filter.matches(&cap) {
                 out.push((node_id, cap));
             }
+        }
+        if let Some(ranking) = &filter.ranking {
+            rank_node_matches(&mut out, ranking);
         }
         out
     }
@@ -534,49 +540,117 @@ fn resolve_filter_against_kv(
 
 /// Computes the current [`WiringStatus`] for `filter` by scanning both
 /// `cap/` (standalone providers) and `gcap/` (group projections). The
-/// `shared_locality_depth` field is left as `0` here; Phase 5 will populate
-/// it from `peer_localities`.
+/// `shared_locality_depth` field is left as `0` here; locality is layered
+/// on by `resolve_wiring_with_locality`.
+///
+/// When `filter.ranking` is set, providers are sorted by the named attribute
+/// — Nodes by their own attribute value, Groups by the **best**-ranking
+/// contributor's value (largest for `Descending`, smallest for `Ascending`).
+/// Missing or incomparable values sort to the end deterministically.
 fn wiring_snapshot(kv_state: &crate::store::KvState, filter: &CapFilter) -> WiringStatus {
+    // (provider, sort_value_if_any) tuples — we keep the sort key alongside
+    // each provider so the final sort doesn't need a second lookup.
+    let mut keyed: Vec<(WiringProvider, Option<CapValue>)> = Vec::new();
+
     // Standalone-node providers from cap/.
-    let mut node_providers: Vec<WiringProvider> = Vec::new();
     for (key, bytes) in scan_prefix_kv(kv_state, "cap/") {
         let Some((node_id, _ns, _name)) = parse_cap_key("cap/", &key) else { continue };
         let Some(cap) = Capability::decode(&bytes) else { continue };
-        if filter.matches(&cap) {
-            node_providers.push(WiringProvider::Node {
-                node_id,
-                capability:            cap,
-                shared_locality_depth: 0,
-            });
-        }
+        if !filter.matches(&cap) { continue; }
+        let sort_value = filter.ranking.as_ref()
+            .and_then(|r| cap.attributes.get(&r.attribute).cloned());
+        keyed.push((
+            WiringProvider::Node { node_id, capability: cap, shared_locality_depth: 0 },
+            sort_value,
+        ));
     }
 
     // Group providers from gcap/. Key format: gcap/{group}/{ns}/{name}/{contributor}.
     // One matching contributor entry is enough for the group to count as a
     // provider; we collect every contributor so callers can observe partial
-    // coverage if they want.
-    let mut groups: AHashMap<Arc<str>, Vec<NodeId>> = AHashMap::new();
+    // coverage if they want. The per-group best ranking value is the
+    // most-ranking-favoured value across contributors.
+    let mut groups: AHashMap<Arc<str>, (Vec<NodeId>, Option<CapValue>)> = AHashMap::new();
     for (key, bytes) in scan_prefix_kv(kv_state, "gcap/") {
         let Some((group, contributor)) = parse_gcap_key(&key, filter) else { continue };
         let Some(cap) = Capability::decode(&bytes) else { continue };
-        if filter.matches(&cap) {
-            groups.entry(group).or_default().push(contributor);
+        if !filter.matches(&cap) { continue; }
+        let candidate = filter.ranking.as_ref()
+            .and_then(|r| cap.attributes.get(&r.attribute).cloned());
+        let entry = groups.entry(group).or_default();
+        entry.0.push(contributor);
+        if let Some(ranking) = &filter.ranking {
+            entry.1 = better_value(entry.1.take(), candidate, ranking.order);
         }
     }
-    let group_providers: Vec<WiringProvider> = groups.into_iter()
-        .map(|(name, contributors)| WiringProvider::Group {
-            name,
-            contributors,
-            shared_locality_depth: 0,
-        })
-        .collect();
+    for (name, (contributors, sort_value)) in groups {
+        keyed.push((
+            WiringProvider::Group { name, contributors, shared_locality_depth: 0 },
+            sort_value,
+        ));
+    }
 
-    let mut providers = group_providers;
-    providers.append(&mut node_providers);
+    if let Some(ranking) = &filter.ranking {
+        keyed.sort_by(|a, b| cmp_optional_capvalues(&a.1, &b.1, ranking.order));
+    }
+
+    let providers: Vec<WiringProvider> = keyed.into_iter().map(|(p, _)| p).collect();
     if providers.is_empty() {
         WiringStatus::Unwired { filter: filter.clone() }
     } else {
         WiringStatus::Wired { providers }
+    }
+}
+
+/// Ranks `(NodeId, Capability)` matches from `resolve()` by `ranking.attribute`.
+/// Stable sort; entries missing the ranked attribute land at the end.
+fn rank_node_matches(matches: &mut [(NodeId, Capability)], ranking: &CapRanking) {
+    matches.sort_by(|a, b| {
+        let av = a.1.attributes.get(&ranking.attribute);
+        let bv = b.1.attributes.get(&ranking.attribute);
+        cmp_optional_capvalues(&av.cloned(), &bv.cloned(), ranking.order)
+    });
+}
+
+/// Picks the more-favoured `CapValue` under `order`. Used to track each group's
+/// best ranking value as we scan `gcap/` contributors.
+fn better_value(current: Option<CapValue>, candidate: Option<CapValue>, order: RankingOrder) -> Option<CapValue> {
+    match (current, candidate) {
+        (None, c)            => c,
+        (Some(prev), None)   => Some(prev),
+        (Some(prev), Some(c)) => {
+            let cmp = partial_cmp_cap(&c, &prev).unwrap_or(std::cmp::Ordering::Equal);
+            let prefer_new = match order {
+                RankingOrder::Descending => cmp == std::cmp::Ordering::Greater,
+                RankingOrder::Ascending  => cmp == std::cmp::Ordering::Less,
+            };
+            Some(if prefer_new { c } else { prev })
+        }
+    }
+}
+
+/// Compares two optional `CapValue`s under `order`. Some-vs-None: Some wins
+/// (entries with the ranked attribute sort before entries without). Some-vs-Some
+/// that are incomparable (e.g. across types, or `Float(NaN)` vs a finite float)
+/// fall through to `Ordering::Equal` so the surrounding stable sort preserves
+/// insertion order — deterministic across runs.
+fn cmp_optional_capvalues(
+    a:     &Option<CapValue>,
+    b:     &Option<CapValue>,
+    order: RankingOrder,
+) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (a, b) {
+        (Some(av), Some(bv)) => {
+            let raw = partial_cmp_cap(av, bv).unwrap_or(Ordering::Equal);
+            match order {
+                RankingOrder::Ascending  => raw,
+                RankingOrder::Descending => raw.reverse(),
+            }
+        }
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None)    => Ordering::Equal,
     }
 }
 
@@ -1073,5 +1147,80 @@ mod tests {
         let mut v = vec![0usize, 1];
         apply_locality_pref(&mut v, LocalityPreference::Strict(5), |x| *x);
         assert!(v.is_empty());
+    }
+
+    fn nid(port: u16) -> NodeId {
+        NodeId::new("127.0.0.1", port).expect("valid loopback NodeId")
+    }
+
+    #[test]
+    fn rank_node_matches_sorts_descending() {
+        let mut matches = vec![
+            (nid(1), Capability::new("compute", "gpu").with("vram_gb", CapValue::Integer(24))),
+            (nid(2), Capability::new("compute", "gpu").with("vram_gb", CapValue::Integer(80))),
+            (nid(3), Capability::new("compute", "gpu").with("vram_gb", CapValue::Integer(48))),
+        ];
+        let ranking = CapRanking {
+            attribute: Arc::from("vram_gb"),
+            order:     RankingOrder::Descending,
+        };
+        rank_node_matches(&mut matches, &ranking);
+        let order: Vec<u16> = matches.iter()
+            .map(|(n, _)| n.to_string().split(':').nth(1).unwrap().parse().unwrap())
+            .collect();
+        assert_eq!(order, vec![2, 3, 1]);
+    }
+
+    #[test]
+    fn rank_node_matches_missing_attribute_sorts_last() {
+        let mut matches = vec![
+            (nid(1), Capability::new("ai", "agent")),
+            (nid(2), Capability::new("ai", "agent").with("model_size", CapValue::Integer(70))),
+            (nid(3), Capability::new("ai", "agent")),
+        ];
+        let ranking = CapRanking {
+            attribute: Arc::from("model_size"),
+            order:     RankingOrder::Descending,
+        };
+        rank_node_matches(&mut matches, &ranking);
+        // Node 2 first (has attribute); 1 and 3 follow in scan-order (stable sort).
+        let first_port: u16 = matches[0].0.to_string().split(':').nth(1).unwrap().parse().unwrap();
+        assert_eq!(first_port, 2);
+    }
+
+    #[test]
+    fn better_value_prefers_larger_for_descending() {
+        let result = better_value(
+            Some(CapValue::Integer(5)),
+            Some(CapValue::Integer(10)),
+            RankingOrder::Descending,
+        );
+        assert_eq!(result, Some(CapValue::Integer(10)));
+    }
+
+    #[test]
+    fn better_value_prefers_smaller_for_ascending() {
+        let result = better_value(
+            Some(CapValue::Integer(5)),
+            Some(CapValue::Integer(10)),
+            RankingOrder::Ascending,
+        );
+        assert_eq!(result, Some(CapValue::Integer(5)));
+    }
+
+    #[test]
+    fn better_value_handles_missing_inputs() {
+        assert_eq!(
+            better_value(None, Some(CapValue::Integer(3)), RankingOrder::Descending),
+            Some(CapValue::Integer(3)),
+        );
+        assert_eq!(
+            better_value(Some(CapValue::Integer(7)), None, RankingOrder::Descending),
+            Some(CapValue::Integer(7)),
+        );
+        assert_eq!(
+            better_value(None, None, RankingOrder::Ascending),
+            None,
+        );
     }
 }
