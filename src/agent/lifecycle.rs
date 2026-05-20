@@ -59,6 +59,21 @@ impl GossipAgent {
         self.start_gossip_loop();
         self.start_health_monitor();
         self.start_gc_task();
+        if let Some(port) = self.config.http_port {
+            let http_addr: std::net::IpAddr = self.config.http_addr.parse().map_err(|_| {
+                GossipError::Config(format!(
+                    "http_addr '{}' is not a valid IP address", self.config.http_addr
+                ))
+            })?;
+            let http_bind = SocketAddr::new(http_addr, port);
+            let ctx  = Arc::clone(&self.task_ctx);
+            let srx  = self.shutdown_tx.subscribe();
+            self.spawn_task(async move {
+                if let Err(e) = super::http::run_http_server(http_bind, ctx, srx).await {
+                    tracing::error!("HTTP server exited: {e}");
+                }
+            });
+        }
         self.start_capability_group_watcher();
         info!("Gossip agent started: {}", self.node_id);
         Ok(())

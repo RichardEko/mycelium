@@ -20,6 +20,7 @@ mod lifecycle;
 mod kv;
 mod signal_ops;
 mod rpc;
+mod http;
 mod opacity;
 mod consensus_ops;
 mod capability_ops;

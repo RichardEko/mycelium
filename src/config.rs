@@ -243,6 +243,22 @@ pub struct GossipConfig {
     /// always win. Emergent-group definitions can suggest a policy, but operator
     /// config in this map overrides it.
     pub topology_policies: HashMap<String, GroupTopologyPolicy>,
+
+    /// TCP port for the embedded HTTP server (Layer 3 gateway).
+    ///
+    /// `None` (the default) disables the HTTP server entirely — existing deployments
+    /// are unaffected unless this is set. When set, the server binds on startup and
+    /// provides `/health`, `/stats`, and `/signals/{kind}` (SSE) endpoints, and will
+    /// serve the MCP bridge and language gateway in Layer 4.
+    ///
+    /// Must be non-zero and must differ from `bind_port`.
+    pub http_port: Option<u16>,
+
+    /// Bind address for the embedded HTTP server.
+    ///
+    /// Defaults to `"127.0.0.1"` (loopback only). Set to `"0.0.0.0"` to accept
+    /// connections on all interfaces. Only meaningful when `http_port` is `Some`.
+    pub http_addr: String,
 }
 
 impl Default for GossipConfig {
@@ -277,6 +293,8 @@ impl Default for GossipConfig {
             max_store_entries: 0,
             locality_path:     Vec::new(),
             topology_policies: HashMap::new(),
+            http_port:         None,
+            http_addr:         "127.0.0.1".to_string(),
         }
     }
 }
@@ -389,6 +407,24 @@ impl GossipConfig {
                 "max_forwarding_peers is unlimited with a large bootstrap set; \
                  consider capping it (e.g. 32) to avoid O(N²) gossip traffic",
             );
+        }
+        if let Some(p) = self.http_port {
+            if p == 0 {
+                return Err(GossipError::Config("http_port cannot be zero".into()));
+            }
+            if p == self.bind_port {
+                return Err(GossipError::Config(
+                    "http_port must differ from bind_port".into(),
+                ));
+            }
+            if self.http_addr.is_empty() {
+                return Err(GossipError::Config("http_addr cannot be empty".into()));
+            }
+            self.http_addr.parse::<std::net::IpAddr>().map_err(|_| {
+                GossipError::Config(format!(
+                    "http_addr '{}' is not a valid IP address", self.http_addr
+                ))
+            })?;
         }
         for seg in &self.locality_path {
             if seg.is_empty() {
@@ -537,6 +573,12 @@ impl GossipConfig {
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_string())
                 .collect();
+        }
+        if let Ok(v) = env::var("GOSSIP_HTTP_PORT") {
+            self.http_port = Some(v.parse().map_err(GossipError::Parse)?);
+        }
+        if let Ok(v) = env::var("GOSSIP_HTTP_ADDR") {
+            self.http_addr = v;
         }
         Ok(())
     }
