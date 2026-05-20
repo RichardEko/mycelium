@@ -33,7 +33,7 @@ use crate::framing::{
 };
 use crate::locality::LocalityPath;
 use crate::node_id::NodeId;
-use crate::signal::{signal_kind, SignalScope};
+use crate::signal::{signal_kind, Signal, SignalScope};
 use crate::store::apply_and_notify;
 use ahash::{AHashMap, AHashSet};
 use bytes::{BufMut, Bytes, BytesMut};
@@ -42,7 +42,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    sync::{oneshot, watch},
+    sync::{mpsc, oneshot, watch},
     time,
 };
 
@@ -583,105 +583,33 @@ impl ConsensusEngine {
             // count toward this ballot; a leaving member's existing vote remains counted.
             let mut voters: AHashMap<NodeId, Option<LocalityPath>> = AHashMap::new();
             voters.insert(self.task_ctx.node_id.clone(), self.self_locality.clone());
-            if voters.len() >= quorum_size {
-                let (passes, _, _) = self.topology_check(&voters, group_name.as_deref());
-                if passes {
-                    let commit = ConsensusMsg::Commit {
-                        slot: slot.clone(), ballot, value: value.clone(),
-                    };
-                    self.emit_async(
-                        Arc::from(consensus_kind::COMMIT), scope.clone(), encode_consensus_msg(&commit),
-                    ).await;
-                    self.set_async(commit_key.as_str(), value.clone()).await;
-                    self.kv_delete(&ballot_key);
-                    return ConsensusResult::Committed { slot, value, ballot };
-                }
+
+            // Single-node quorum check before entering the collect loop.
+            if let Some(res) = self.try_commit_if_ready(
+                &voters, quorum_size, group_name.as_deref(),
+                &scope, &slot, ballot, &value, &ballot_key, &commit_key,
+            ).await {
+                return res;
             }
 
-            let sleep = time::sleep_until(time::Instant::now() + config.phase1_timeout);
-            tokio::pin!(sleep);
-            let mut nack_ballot = 0u64;
+            // Drive one ballot attempt.
+            let deadline = time::Instant::now() + config.phase1_timeout;
+            let outcome = self.collect_one_ballot(
+                &mut voters, &mut quorum_size,
+                &mut vote_rx, &mut nack_rx, &mut opaque_rx,
+                deadline,
+                &slot, ballot, &value, &scope,
+                &ballot_key, &commit_key,
+                group_name.as_deref(),
+                trust_set.as_ref(),
+                opaque_recompute.as_ref(),
+            ).await;
 
-            'collect: loop {
-                tokio::select! { biased;
-                    _ = &mut sleep => break 'collect,
-                    Some(sig) = vote_rx.recv() => {
-                        // Accept both Vote (legacy, no locality) and VoteWithLocality.
-                        // Legacy votes contribute to quorum but to zero topology diversity.
-                        let (s, b, voter, locality) = match decode_consensus_msg(&sig.payload) {
-                            Some(ConsensusMsg::Vote { slot: s, ballot: b, voter }) =>
-                                (s, b, voter, None),
-                            Some(ConsensusMsg::VoteWithLocality { slot: s, ballot: b, voter, locality }) =>
-                                (s, b, voter, locality),
-                            _ => continue,
-                        };
-                        if s == slot && b == ballot {
-                            // Trust-slice filtering: only count votes from declared peers.
-                            if let Some(ref ts) = trust_set {
-                                if !ts.contains(&voter.id_hash()) { continue; }
-                            }
-                            voters.insert(voter, locality);
-                            if voters.len() >= quorum_size {
-                                let (passes, _, _) = self.topology_check(&voters, group_name.as_deref());
-                                if passes {
-                                    let commit = ConsensusMsg::Commit {
-                                        slot: slot.clone(), ballot, value: value.clone(),
-                                    };
-                                    self.emit_async(
-                                        Arc::from(consensus_kind::COMMIT), scope.clone(), encode_consensus_msg(&commit),
-                                    ).await;
-                                    self.set_async(commit_key.as_str(), value.clone()).await;
-                                    self.kv_delete(&ballot_key);
-                                    return ConsensusResult::Committed { slot, value, ballot };
-                                }
-                                // Quorum count met but topology gate failed — keep
-                                // collecting until timeout in case a more diverse
-                                // voter arrives.
-                            }
-                        }
-                    }
-                    Some(sig) = nack_rx.recv() => {
-                        if let Some(ConsensusMsg::Nack { slot: s, seen_ballot }) =
-                            decode_consensus_msg(&sig.payload)
-                        {
-                            if s == slot && seen_ballot > ballot {
-                                nack_ballot = seen_ballot;
-                                break 'collect;
-                            }
-                        }
-                    }
-                    // Re-evaluate quorum when a member turns opaque mid-ballot.
-                    // BOUNDARY_OPAQUE means the sender is now excluded from active_members,
-                    // shrinking the quorum threshold. If we already have enough votes, commit.
-                    Some(_) = async {
-                        match opaque_rx.as_mut() {
-                            Some(rx) => rx.recv().await,
-                            None => std::future::pending().await,
-                        }
-                    } => {
-                        if let Some(ref or) = opaque_recompute {
-                            let opaque = (or.count_opaque)();
-                            let active = or.total_members.saturating_sub(opaque).max(1);
-                            quorum_size = if or.config_quorum > 0 { or.config_quorum } else { active / 2 + 1 };
-                            // Check immediately — we may already have enough votes.
-                            if voters.len() >= quorum_size {
-                                let (passes, _, _) = self.topology_check(&voters, group_name.as_deref());
-                                if passes {
-                                    let commit = ConsensusMsg::Commit {
-                                        slot: slot.clone(), ballot, value: value.clone(),
-                                    };
-                                    self.emit_async(
-                                        Arc::from(consensus_kind::COMMIT), scope.clone(),
-                                        encode_consensus_msg(&commit),
-                                    ).await;
-                                    self.set_async(commit_key.as_str(), value.clone()).await;
-                                    self.kv_delete(&ballot_key);
-                                    return ConsensusResult::Committed { slot, value, ballot };
-                                }
-                            }
-                        }
-                    }
-                }
+            let mut nack_ballot = 0u64;
+            match outcome {
+                BallotOutcome::Committed(res) => return res,
+                BallotOutcome::NackHigher(b)  => nack_ballot = b,
+                BallotOutcome::Timeout        => {}
             }
 
             if self.get(&commit_key).is_some() {
@@ -733,6 +661,149 @@ impl ConsensusEngine {
         }
     }
 
+    /// Evaluates quorum-by-count + topology gate. When both pass, dispatches
+    /// the commit (emit `COMMIT`, write `consensus/committed/{slot}`,
+    /// tombstone `consensus/ballot/{slot}`) and returns
+    /// `Some(ConsensusResult::Committed)`. Returns `None` when either gate
+    /// fails — caller keeps collecting.
+    #[allow(clippy::too_many_arguments)]
+    async fn try_commit_if_ready(
+        &self,
+        voters:      &AHashMap<NodeId, Option<LocalityPath>>,
+        quorum_size: usize,
+        group_name:  Option<&str>,
+        scope:       &SignalScope,
+        slot:        &Arc<str>,
+        ballot:      u64,
+        value:       &Bytes,
+        ballot_key:  &str,
+        commit_key:  &str,
+    ) -> Option<ConsensusResult> {
+        if voters.len() < quorum_size { return None; }
+        let (passes, _, _) = self.topology_check(voters, group_name);
+        if !passes { return None; }
+
+        let commit = ConsensusMsg::Commit {
+            slot: slot.clone(), ballot, value: value.clone(),
+        };
+        self.emit_async(
+            Arc::from(consensus_kind::COMMIT), scope.clone(), encode_consensus_msg(&commit),
+        ).await;
+        self.set_async(commit_key, value.clone()).await;
+        self.kv_delete(ballot_key);
+        Some(ConsensusResult::Committed {
+            slot:   slot.clone(),
+            value:  value.clone(),
+            ballot,
+        })
+    }
+
+    /// Drives one ballot's `'collect` loop: accept votes (Vote or
+    /// VoteWithLocality, with optional trust-slice filtering), accept
+    /// nacks, re-evaluate quorum on opacity recompute, all until
+    /// `deadline` expires. Returns the outcome.
+    ///
+    /// `voters` and `quorum_size` are passed `&mut` so callers can read
+    /// final state after a `Timeout` outcome (for the
+    /// `TopologyUnsatisfied`-vs-`Timeout` decision at the end of
+    /// `propose`).
+    #[allow(clippy::too_many_arguments)]
+    async fn collect_one_ballot(
+        &self,
+        voters:           &mut AHashMap<NodeId, Option<LocalityPath>>,
+        quorum_size:      &mut usize,
+        vote_rx:          &mut mpsc::Receiver<Signal>,
+        nack_rx:          &mut mpsc::Receiver<Signal>,
+        opaque_rx:        &mut Option<mpsc::Receiver<Signal>>,
+        deadline:         time::Instant,
+        slot:             &Arc<str>,
+        ballot:           u64,
+        value:            &Bytes,
+        scope:            &SignalScope,
+        ballot_key:       &str,
+        commit_key:       &str,
+        group_name:       Option<&str>,
+        trust_set:        Option<&AHashSet<u64>>,
+        opaque_recompute: Option<&OpaqueRecompute>,
+    ) -> BallotOutcome {
+        let sleep = time::sleep_until(deadline);
+        tokio::pin!(sleep);
+
+        loop {
+            tokio::select! { biased;
+                _ = &mut sleep => return BallotOutcome::Timeout,
+                Some(sig) = vote_rx.recv() => {
+                    // Accept both Vote (legacy, no locality) and VoteWithLocality.
+                    // Legacy votes contribute to quorum but to zero topology diversity.
+                    let (s, b, voter, locality) = match decode_consensus_msg(&sig.payload) {
+                        Some(ConsensusMsg::Vote { slot: s, ballot: b, voter }) =>
+                            (s, b, voter, None),
+                        Some(ConsensusMsg::VoteWithLocality { slot: s, ballot: b, voter, locality }) =>
+                            (s, b, voter, locality),
+                        _ => continue,
+                    };
+                    if s == *slot && b == ballot {
+                        // Trust-slice filtering: only count votes from declared peers.
+                        if let Some(ts) = trust_set {
+                            if !ts.contains(&voter.id_hash()) { continue; }
+                        }
+                        voters.insert(voter, locality);
+                        if let Some(res) = self.try_commit_if_ready(
+                            voters, *quorum_size, group_name,
+                            scope, slot, ballot, value, ballot_key, commit_key,
+                        ).await {
+                            return BallotOutcome::Committed(res);
+                        }
+                        // Quorum count met but topology gate failed — keep
+                        // collecting until timeout in case a more diverse voter
+                        // arrives. (try_commit_if_ready returned None.)
+                    }
+                }
+                Some(sig) = nack_rx.recv() => {
+                    if let Some(ConsensusMsg::Nack { slot: s, seen_ballot }) =
+                        decode_consensus_msg(&sig.payload)
+                    {
+                        if s == *slot && seen_ballot > ballot {
+                            return BallotOutcome::NackHigher(seen_ballot);
+                        }
+                    }
+                }
+                // Re-evaluate quorum when a member turns opaque mid-ballot.
+                // BOUNDARY_OPAQUE means the sender is now excluded from active_members,
+                // shrinking the quorum threshold. If we already have enough votes, commit.
+                Some(_) = async {
+                    match opaque_rx.as_mut() {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    if let Some(or) = opaque_recompute {
+                        let opaque = (or.count_opaque)();
+                        let active = or.total_members.saturating_sub(opaque).max(1);
+                        *quorum_size = if or.config_quorum > 0 { or.config_quorum } else { active / 2 + 1 };
+                        if let Some(res) = self.try_commit_if_ready(
+                            voters, *quorum_size, group_name,
+                            scope, slot, ballot, value, ballot_key, commit_key,
+                        ).await {
+                            return BallotOutcome::Committed(res);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Outcome of `ConsensusEngine::collect_one_ballot`.
+enum BallotOutcome {
+    /// Quorum + topology gate satisfied; commit dispatched.
+    Committed(ConsensusResult),
+    /// A NACK arrived with a strictly higher seen_ballot. Caller must
+    /// re-issue at `>= seen_ballot + 1` to win on the next attempt.
+    NackHigher(u64),
+    /// `phase1_timeout` elapsed. Caller may retry or surface TopologyUnsatisfied
+    /// based on whether voters reached quorum-by-count.
+    Timeout,
 }
 
 // ── Wire encoding ─────────────────────────────────────────────────────────────
