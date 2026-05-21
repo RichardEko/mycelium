@@ -48,6 +48,13 @@ Open **http://127.0.0.1:8100** in your browser.
 | Locality Mesh | East/west providers — `resolve_with_locality` picks nearest |
 | Watchdog Cluster | Heartbeat services + `quorum_persistent` circuit breaker |
 
+**Conway's Game of Life** — a separate standalone demo that shows the epidemic substrate itself rather than a service topology. 256 gossip agents (one per cell in a 16×16 grid) coordinate cell state via gossip KV; a tick signal drives each generation.
+
+```sh
+cargo run --example conway          # CPU renderer (terminal / HTTP canvas)
+cargo run --example conway_gpu      # GPU-accelerated renderer (Metal / wgpu)
+```
+
 ---
 
 ## Build
