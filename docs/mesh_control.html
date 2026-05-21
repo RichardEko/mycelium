@@ -234,6 +234,63 @@
   .preset-ver { font-size: 10px; color: var(--light); font-variant-numeric: tabular-nums; }
   .preset-status { font-size: 10px; color: var(--muted); min-height: 14px; }
 
+  /* ── Live view ── */
+  .node-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 10px;
+  }
+  .node-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .node-card.dead { opacity: 0.55; }
+  .node-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+  }
+  .node-label { font-weight: 700; font-size: 13px; letter-spacing: -0.01em; }
+  .node-state { font-size: 10px; font-weight: 600; padding: 1px 7px;
+                border-radius: 99px; white-space: nowrap; }
+  .node-state.idle       { background: var(--slate-bg);   color: var(--slate);   }
+  .node-state.planning   { background: var(--violet-bg);  color: var(--violet);  }
+  .node-state.invoking   { background: var(--amber-bg);   color: var(--amber);   }
+  .node-state.reflecting { background: var(--amber-bg);   color: var(--amber);   }
+  .node-state.done       { background: var(--emerald-bg); color: var(--emerald); }
+  .node-state.failed     { background: var(--rose-bg);    color: var(--rose);    }
+  .node-section-label {
+    font-size: 9px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--light); margin-top: 4px;
+  }
+  .node-tag-row { display: flex; flex-wrap: wrap; gap: 3px; min-height: 16px; }
+  .node-tag {
+    font-size: 10px; padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--panel); border: 1px solid var(--border);
+    color: var(--muted); white-space: nowrap;
+  }
+  .last-call-row {
+    display: flex; align-items: flex-start; gap: 8px;
+    font-size: 11px; line-height: 1.4;
+    padding: 10px 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+  .last-call-label { color: var(--light); flex-shrink: 0; }
+  .last-call-name  { font-weight: 600; color: var(--violet); flex-shrink: 0; }
+  .last-call-sep   { color: var(--light); flex-shrink: 0; }
+  .last-call-result{ color: var(--muted); font-family: "SFMono-Regular",Menlo,monospace;
+                     font-size: 10px; overflow: hidden; text-overflow: ellipsis;
+                     white-space: nowrap; }
+
   /* ── Upload section ── */
   .upload-row {
     display: flex;
@@ -335,6 +392,25 @@
 <div id="redirect-banner">Manager changed — redirecting&hellip;</div>
 
 <div class="main">
+
+  <!-- Live View -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Live</span>
+      <span id="live-call-count" style="font-size:10px;color:var(--muted);"></span>
+    </div>
+    <div class="card-body" style="display:flex;flex-direction:column;gap:12px;">
+      <div class="node-grid" id="node-grid">
+        <div class="empty">Connecting&hellip;</div>
+      </div>
+      <div id="last-call-row" style="display:none;" class="last-call-row">
+        <span class="last-call-label">Last:</span>
+        <span class="last-call-name" id="last-call-name"></span>
+        <span class="last-call-sep">&rarr;</span>
+        <span class="last-call-result" id="last-call-result"></span>
+      </div>
+    </div>
+  </div>
 
   <!-- System Controls -->
   <div class="card">
@@ -440,6 +516,7 @@ async function poll() {
     if (stateRes && stateRes.ok) {
       const state = await stateRes.json();
       if (state.log) renderLog(state.log);
+      renderLive(state);
     }
 
     // Refresh mesh name/version from manifest
@@ -533,6 +610,49 @@ function renderStatus(status) {
       </td>
     </tr>`;
   }).join('');
+}
+
+// ── Live view ─────────────────────────────────────────────────────────────────
+function renderLive(state) {
+  if (!state) return;
+
+  // Node grid
+  const grid = document.getElementById('node-grid');
+  if (state.nodes && state.nodes.length) {
+    grid.innerHTML = state.nodes.map(n => {
+      const stateKey = (n.state || 'Idle').toLowerCase().split(' ')[0]; // "Invoking {tool}" → "invoking"
+      const stateLabel = n.state || 'Idle';
+      const caps = (n.caps || []).map(c =>
+        `<span class="node-tag">${esc(c.ns)}/${esc(c.name)}</span>`
+      ).join('');
+      const tools = (n.tools || []).map(t =>
+        `<span class="node-tag">${esc(t)}</span>`
+      ).join('');
+      return `<div class="node-card${n.alive ? '' : ' dead'}">
+        <div class="node-header">
+          <span class="node-label">${esc(n.label)}</span>
+          <span class="node-state ${stateKey}">${esc(stateLabel)}</span>
+        </div>
+        ${caps ? `<div class="node-section-label">Capabilities</div><div class="node-tag-row">${caps}</div>` : ''}
+        ${tools ? `<div class="node-section-label">Tools</div><div class="node-tag-row">${tools}</div>` : ''}
+      </div>`;
+    }).join('');
+  }
+
+  // Call counter
+  const cc = document.getElementById('live-call-count');
+  if (state.total_calls != null)
+    cc.textContent = state.total_calls + ' tool call' + (state.total_calls !== 1 ? 's' : '');
+
+  // Last tool call
+  const row = document.getElementById('last-call-row');
+  if (state.last_tool) {
+    row.style.display = 'flex';
+    document.getElementById('last-call-name').textContent = state.last_tool;
+    const res = state.last_result;
+    document.getElementById('last-call-result').textContent =
+      res && typeof res === 'object' ? JSON.stringify(res) : (res || '—');
+  }
 }
 
 function renderLog(entries) {

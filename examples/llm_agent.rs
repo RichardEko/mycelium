@@ -607,6 +607,25 @@ fn port_to_node_label(port: u16) -> Option<&'static str> {
     }
 }
 
+/// Advertise every capability declared in `manifest` on the three nodes.
+/// Groups are assigned round-robin: group[i % 3] → agents[i % 3].
+/// Returns the resulting handles; caller stores them in `AppState::manifest_caps`
+/// and drops the previous Vec to tombstone the old advertisements.
+fn advertise_manifest_caps(
+    manifest: &MeshManifest,
+    agents:   [&Arc<GossipAgent>; 3],
+) -> Vec<CapabilityHandle> {
+    manifest.groups.iter().enumerate().flat_map(|(i, group)| {
+        let agent = agents[i % 3];
+        group.capabilities.iter().map(move |cap| {
+            agent.advertise_capability(
+                Capability::new(cap.ns.as_str(), cap.name.as_str()),
+                Duration::from_secs(30),
+            )
+        }).collect::<Vec<_>>()
+    }).collect()
+}
+
 // ── Agent planning loop ───────────────────────────────────────────────────────
 
 struct AppState {
@@ -626,6 +645,10 @@ struct AppState {
     group_node:   Arc<HashMap<String, &'static str>>,
     /// current elected manager's HTTP port (None while electing)
     manager_port: Arc<Mutex<Option<u16>>>,
+    /// Dynamic capability handles derived from the live manifest.
+    /// Replaced atomically whenever the manifest changes so the mesh always
+    /// reflects the current topology intent.
+    manifest_caps: Arc<Mutex<Vec<CapabilityHandle>>>,
 }
 
 async fn run_agent_loop(app: Arc<AppState>, cfg: LlmConfig) {
@@ -1301,8 +1324,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pause_n0:    Arc::clone(&pause_n0),
         pause_n1:    Arc::clone(&pause_n1),
         pause_n2:    Arc::clone(&pause_n2),
-        group_node:   Arc::new(group_node),
-        manager_port: Arc::new(Mutex::new(None)),
+        group_node:    Arc::new(group_node),
+        manager_port:  Arc::new(Mutex::new(None)),
+        manifest_caps: Arc::new(Mutex::new(Vec::new())),
+    });
+
+    // ── Seed initial manifest capabilities ───────────────────────────────────
+    // Advertise the capabilities declared in the initial manifest so the mesh
+    // shows HEALTHY immediately rather than waiting for the first manifest upload.
+    {
+        let m = app.manifest.read().unwrap().clone();
+        let handles = advertise_manifest_caps(&m, [&agent_n0, &agent_n1, &agent_n2]);
+        *app.manifest_caps.lock().unwrap() = handles;
+    }
+
+    // ── Manifest content watcher ──────────────────────────────────────────────
+    // When manifest/current changes (new upload or preset apply), refresh the
+    // dynamic capability handles so the mesh immediately reflects the new topology.
+    tokio::spawn({
+        let app        = Arc::clone(&app);
+        let agent      = Arc::clone(&agent_n2);
+        let agent_n0_w = Arc::clone(&agent_n0);
+        let agent_n1_w = Arc::clone(&agent_n1);
+        let agent_n2_w = Arc::clone(&agent_n2);
+        async move {
+            let mut rx = agent.subscribe_prefix("manifest/current");
+            loop {
+                if rx.changed().await.is_err() { break; }
+                let m = app.manifest.read().unwrap().clone();
+                let new_handles = advertise_manifest_caps(
+                    &m, [&agent_n0_w, &agent_n1_w, &agent_n2_w],
+                );
+                *app.manifest_caps.lock().unwrap() = new_handles;
+                push_log(&app.log, "Manifest", format!("topology v{} deployed to mesh", m.mesh.version));
+            }
+        }
     });
 
     // ── Manifest control watcher ──────────────────────────────────────────────
