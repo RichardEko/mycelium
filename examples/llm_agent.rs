@@ -122,6 +122,19 @@ fn push_log(log: &SharedLog, event: impl Into<String>, detail: impl Into<String>
     l.push(LogEntry { time_ms: now_ms(), event: event.into(), detail: detail.into() });
 }
 
+// ── Traffic events (inter-node gossip visualisation) ──────────────────────────
+
+#[derive(Clone)]
+struct TrafficEvent { from_idx: i32, to_idx: i32, ts_ms: u64, kind: &'static str }
+
+type SharedTraffic = Arc<Mutex<Vec<TrafficEvent>>>;
+
+fn push_traffic(t: &SharedTraffic, from: i32, to: i32, kind: &'static str) {
+    let mut v = t.lock().unwrap();
+    v.push(TrafficEvent { from_idx: from, to_idx: to, ts_ms: now_ms(), kind });
+    if v.len() > 80 { v.drain(0..30); }
+}
+
 /// Build an `on_event` closure for [`run_capability_probes`] that forwards
 /// probe state changes into the shared log.
 fn probe_logger(log: SharedLog, node_label: &'static str) -> impl Fn(ProbeEvent) + Send + 'static {
@@ -675,6 +688,10 @@ struct AppState {
     spare_caps0:     Arc<Mutex<Vec<CapabilityHandle>>>,
     spare_caps1:     Arc<Mutex<Vec<CapabilityHandle>>>,
     spare_caps2:     Arc<Mutex<Vec<CapabilityHandle>>>,
+    /// Inter-node traffic events for topology edge animation
+    traffic:         SharedTraffic,
+    /// True while a demo trigger sequence is running (prevents concurrent triggers)
+    trigger_active:  Arc<AtomicBool>,
 }
 
 async fn run_agent_loop(app: Arc<AppState>, cfg: LlmConfig) {
@@ -897,6 +914,13 @@ fn build_state_json(app: &AppState) -> String {
     }).collect();
 
     let mgr_port = *app.manager_port.lock().unwrap();
+    let traffic: Vec<Value> = {
+        let t = app.traffic.lock().unwrap();
+        t.iter().rev().take(20).map(|e| json!({
+            "from": e.from_idx, "to": e.to_idx, "ts": e.ts_ms, "kind": e.kind,
+        })).collect()
+    };
+    let preset_name = app.manifest.read().unwrap().mesh.name.clone();
     json!({
         "nodes":       nodes,
         "spares":      spares,
@@ -913,6 +937,8 @@ fn build_state_json(app: &AppState) -> String {
             "port": mgr_port,
             "node": mgr_port.and_then(port_to_node_label),
         },
+        "traffic":     traffic,
+        "preset_name": preset_name,
     }).to_string()
 }
 
@@ -1178,6 +1204,87 @@ async fn handle_preset_apply(app: &AppState, preset_id: &str) -> (u16, &'static 
     (200, "application/json", json!({"ok":true,"version":new_ver}).to_string())
 }
 
+// ── Demo trigger handler ──────────────────────────────────────────────────────
+
+async fn handle_demo_trigger(app: Arc<AppState>, body: &[u8]) -> (u16, &'static str, String) {
+    let Ok(req) = serde_json::from_slice::<Value>(body) else {
+        return (400, "application/json", json!({"error":"invalid JSON"}).to_string());
+    };
+    let action = req["action"].as_str().unwrap_or("").to_string();
+    if app.trigger_active.swap(true, Ordering::Relaxed) {
+        return (409, "application/json", json!({"error":"trigger already running"}).to_string());
+    }
+    let app2 = Arc::clone(&app);
+    match action.as_str() {
+        "watchdog-fail" => {
+            tokio::spawn(async move {
+                push_log(&app2.log, "Demo", "watchdog: n-0 heartbeat active — running 3 normal cycles");
+                for _ in 0..3 {
+                    push_traffic(&app2.traffic, 0, 1, "heartbeat");
+                    push_traffic(&app2.traffic, 2, 1, "heartbeat");
+                    time::sleep(Duration::from_millis(600)).await;
+                }
+                app2.pause_n0.store(true, Ordering::Relaxed);
+                push_log(&app2.log, "Demo", "watchdog: n-0 DOWN — supervisor circuit-breaker alert");
+                time::sleep(Duration::from_millis(400)).await;
+                push_traffic(&app2.traffic, 1, 0, "alert");
+                push_traffic(&app2.traffic, 1, 2, "alert");
+                for _ in 0..5 {
+                    push_traffic(&app2.traffic, 2, 1, "heartbeat");
+                    time::sleep(Duration::from_secs(2)).await;
+                }
+                app2.pause_n0.store(false, Ordering::Relaxed);
+                push_log(&app2.log, "Demo", "watchdog: n-0 restored — circuit closed");
+                push_traffic(&app2.traffic, 0, 1, "heartbeat");
+                app2.trigger_active.store(false, Ordering::Relaxed);
+            });
+        }
+        "consensus-propose" => {
+            tokio::spawn(async move {
+                push_log(&app2.log, "Demo", "consensus: n-2 broadcasting prepare");
+                push_traffic(&app2.traffic, 2, 0, "propose");
+                push_traffic(&app2.traffic, 2, 1, "propose");
+                time::sleep(Duration::from_millis(450)).await;
+                push_traffic(&app2.traffic, 0, 2, "vote");
+                push_log(&app2.log, "Demo", "consensus: n-0 voted");
+                time::sleep(Duration::from_millis(250)).await;
+                push_traffic(&app2.traffic, 1, 2, "vote");
+                push_log(&app2.log, "Demo", "consensus: n-1 voted — quorum reached, committing");
+                time::sleep(Duration::from_millis(300)).await;
+                push_traffic(&app2.traffic, 2, 0, "commit");
+                push_traffic(&app2.traffic, 2, 1, "commit");
+                push_log(&app2.log, "Demo", "consensus: committed");
+                app2.trigger_active.store(false, Ordering::Relaxed);
+            });
+        }
+        "dispatch-batch" => {
+            tokio::spawn(async move {
+                push_log(&app2.log, "Demo", "dispatch: 6 jobs submitted to pool");
+                for i in 0..3usize {
+                    push_traffic(&app2.traffic, 2, 0, "dispatch");
+                    push_traffic(&app2.traffic, 2, 1, "dispatch");
+                    time::sleep(Duration::from_millis(350)).await;
+                    push_traffic(&app2.traffic, 0, 2, "result");
+                    push_traffic(&app2.traffic, 1, 2, "result");
+                    push_log(&app2.log, "Demo", format!("dispatch: wave {} complete", i + 1));
+                    time::sleep(Duration::from_millis(450)).await;
+                }
+                app2.trigger_active.store(false, Ordering::Relaxed);
+            });
+        }
+        "llm-task" => {
+            push_log(&app2.log, "Demo", "LLM task: manual trigger — planning cycle will fire on next idle");
+            app2.trigger_active.store(false, Ordering::Relaxed);
+        }
+        _ => {
+            app2.trigger_active.store(false, Ordering::Relaxed);
+            return (400, "application/json",
+                    json!({"error": format!("unknown action: {action}")}).to_string());
+        }
+    }
+    (200, "application/json", json!({"ok": true, "action": action}).to_string())
+}
+
 // ── HTTP server ───────────────────────────────────────────────────────────────
 
 async fn handle_http(mut stream: tokio::net::TcpStream, app: Arc<AppState>, my_port: u16) {
@@ -1228,6 +1335,8 @@ async fn handle_http(mut stream: tokio::net::TcpStream, app: Arc<AppState>, my_p
             handle_system_stop(&app).await,
         ("POST", "/system/start") =>
             handle_system_start(&app).await,
+        ("POST", "/demo/trigger") =>
+            handle_demo_trigger(Arc::clone(&app), body_bytes).await,
         ("GET",  "/presets") =>
             handle_presets_list(),
         _ if is_post && path.starts_with("/presets/") && path.ends_with("/apply") => {
@@ -1543,6 +1652,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         spare_caps0:   Arc::new(Mutex::new(Vec::new())),
         spare_caps1:   Arc::new(Mutex::new(Vec::new())),
         spare_caps2:   Arc::new(Mutex::new(Vec::new())),
+        traffic:        Arc::new(Mutex::new(Vec::new())),
+        trigger_active: Arc::new(AtomicBool::new(false)),
     });
 
     // ── Seed initial manifest capabilities ───────────────────────────────────
@@ -1657,6 +1768,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Some(p) => push_log(&app.log, "Manager",
                             format!("elected → :{p} ({})", port_to_node_label(p).unwrap_or("?"))),
                         None    => push_log(&app.log, "Manager", "no candidates — re-electing"),
+                    }
+                }
+            }
+        }
+    });
+
+    // ── Background gossip traffic simulation ─────────────────────────────────
+    // Generates lightweight traffic events every 2 s to keep the topology
+    // visually alive. Pattern depends on the active preset's topology intent.
+    tokio::spawn({
+        let app = Arc::clone(&app);
+        async move {
+            let mut tick = 0u64;
+            loop {
+                time::sleep(Duration::from_secs(2)).await;
+                tick += 1;
+                if app.trigger_active.load(Ordering::Relaxed) { continue; }
+                let all_paused = app.pause_n0.load(Ordering::Relaxed)
+                    && app.pause_n1.load(Ordering::Relaxed)
+                    && app.pause_n2.load(Ordering::Relaxed);
+                if all_paused { continue; }
+                let name = app.manifest.read().unwrap().mesh.name.clone();
+                match name.as_str() {
+                    "watchdog-cluster" => {
+                        if !app.pause_n0.load(Ordering::Relaxed) {
+                            push_traffic(&app.traffic, 0, 1, "heartbeat");
+                        }
+                        if !app.pause_n2.load(Ordering::Relaxed) {
+                            push_traffic(&app.traffic, 2, 1, "heartbeat");
+                        }
+                    }
+                    "consensus-cluster" => {
+                        if tick % 3 == 0 {
+                            push_traffic(&app.traffic, 2, 0, "gossip");
+                            push_traffic(&app.traffic, 2, 1, "gossip");
+                        } else {
+                            push_traffic(&app.traffic, 0, 1, "gossip");
+                        }
+                    }
+                    "dispatch-pool" => {
+                        push_traffic(&app.traffic, if tick % 2 == 0 { 0 } else { 1 }, 2, "gossip");
+                    }
+                    "llm-agent-demo" | "mcp-tool-mesh" => {
+                        // Quiet: already animated by real tool-call events
+                    }
+                    _ => {
+                        let pairs = [(0i32, 1i32), (1, 2), (0, 2)];
+                        let (a, b) = pairs[(tick as usize) % 3];
+                        push_traffic(&app.traffic, a, b, "gossip");
                     }
                 }
             }

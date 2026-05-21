@@ -294,6 +294,17 @@
     border-radius: 99px; font-size: 12px; font-weight: 500;
     box-shadow: var(--shadow-md); z-index: 100; white-space: nowrap;
   }
+  /* Warm gossip edge (softer than hot amber) */
+  .topo-edge.warm {
+    stroke: #10b981; stroke-width: 2.2;
+    filter: drop-shadow(0 0 3px #10b98155);
+    transition: stroke 0.15s, stroke-width 0.15s, filter 0.15s;
+  }
+  .demo-about { font-size: 11px; color: var(--muted); line-height: 1.6; margin-bottom: 6px; }
+  .demo-watch { font-size: 10px; color: var(--light); }
+  .demo-watch strong { color: var(--slate); font-weight: 600; }
+  .btn-trigger { background: var(--violet-bg); color: var(--violet); border: 1px solid var(--violet-bd); }
+  .btn-trigger:hover { background: var(--violet); color: #fff; }
 </style>
 </head>
 <body>
@@ -326,6 +337,27 @@
 
 <!-- ── LIVE TAB ── -->
 <div class="pane" id="pane-live">
+
+  <!-- Demo info (shown when a named preset is active) -->
+  <div class="card" id="demo-info-card" style="display:none;">
+    <div class="card-header">
+      <span class="card-title" id="demo-info-title">—</span>
+      <span class="pill neutral" style="font-size:10px;padding:1px 6px;" id="demo-preset-tag"></span>
+    </div>
+    <div class="card-body">
+      <p class="demo-about" id="demo-info-about"></p>
+      <p class="demo-watch"><strong>Watch for: </strong><span id="demo-info-watch"></span></p>
+    </div>
+  </div>
+
+  <!-- Demo trigger controls -->
+  <div class="card" id="demo-controls-card" style="display:none;">
+    <div class="card-header">
+      <span class="card-title">Demo Controls</span>
+      <span id="demo-trigger-status" style="font-size:10px;color:var(--muted);"></span>
+    </div>
+    <div class="card-body" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;" id="demo-controls-body"></div>
+  </div>
 
   <!-- Topology graph -->
   <div class="card">
@@ -455,6 +487,130 @@
 let redirecting  = false;
 let prevLastTool = null;
 let activeTab    = 'live';
+let prevTrafficTs = 0;
+
+// ── Per-preset demo metadata ──────────────────────────────────────────────────
+const PRESET_INFO = {
+  'llm-agent-demo': {
+    title: 'LLM Agent Demo',
+    about: 'n-2 runs a planning loop that discovers tools advertised on the mesh, dispatches calls via gossip RPC, and synthesises results. n-0 provides real-time data tools; n-1 provides compute tools and hosts a provisioned vector-search engine.',
+    watch: 'Edges flash on every tool call. The state badge on n-2 cycles Planning → Invoking → Reflecting → Done.',
+    triggers: [{ label: 'Log task trigger', action: 'llm-task', tip: 'Log a manual task trigger' }],
+  },
+  'watchdog-cluster': {
+    title: 'Watchdog Cluster',
+    about: 'Service nodes (n-0, n-2) emit periodic heartbeat capabilities. The supervisor (n-1) watches for missing heartbeats and fires a circuit-breaker alert when any service goes dark.',
+    watch: 'Green edges pulse with heartbeat signals from services to supervisor. Trigger a failure to see the alert path and automatic recovery.',
+    triggers: [{ label: 'Drop n-0 heartbeat', action: 'watchdog-fail', tip: 'Simulate n-0 going offline for ~12 s — watch supervisor alert and recovery' }],
+  },
+  'consensus-cluster': {
+    title: 'Consensus Cluster',
+    about: 'Nodes run a two-phase ballot protocol. A proposer (n-2) broadcasts a value, voters respond, and the proposer commits once quorum is reached. Uses epidemic gossip — no dedicated leader or coordinator needed.',
+    watch: 'Propose → Vote → Commit traffic pulses along edges. Add spares to meet the 3-voter minimum before proposing.',
+    triggers: [{ label: 'Propose ballot', action: 'consensus-propose', tip: 'Run one propose / vote / commit round and watch the edge animation' }],
+  },
+  'dispatch-pool': {
+    title: 'Dispatch Pool',
+    about: 'n-2 acts as a dispatcher that reads live worker capacity from the mesh. Fast-tier workers (n-0, n-1) handle short tasks; slow-tier handles heavy batch work. The dispatcher routes each job to the appropriate tier.',
+    watch: 'Job traffic fans out from n-2 to workers; result signals flow back. Watch the edge weights shift as load balances.',
+    triggers: [{ label: 'Dispatch batch', action: 'dispatch-batch', tip: 'Send 6 jobs in 3 waves through the pool' }],
+  },
+  'mcp-tool-mesh': {
+    title: 'MCP Tool Mesh',
+    about: 'Tool providers (n-0) advertise callable functions, data sources (n-1) expose query capabilities, and LLM reasoning nodes (n-2) discover and invoke them via the mesh.',
+    watch: 'Tool-discovery gossip flows continuously. n-2\'s state badge tracks the reasoning cycle.',
+    triggers: [],
+  },
+  'compute-cluster': {
+    title: 'Compute Cluster',
+    about: 'Workers advertise compute capabilities with metadata (CPU cores, memory). A data-feed node broadcasts live data; compute workers pick up tasks and emit results via signals.',
+    watch: 'Data-feed traffic from n-0, compute fan-out to n-1 and n-2, and result signals returning.',
+    triggers: [],
+  },
+  'epidemic-ring': {
+    title: 'Epidemic Ring',
+    about: 'A ring divided into alpha and beta partitions. Gossip propagation is visible as capabilities spread epidemically — each node infects its neighbours until the entire partition converges.',
+    watch: 'Edges animate as gossip spreads. Watch convergence time vs partition size.',
+    triggers: [],
+  },
+  'locality-mesh': {
+    title: 'Locality Mesh',
+    about: 'East and west render providers expose the same capability. resolve_with_locality() routes each request to the nearest provider first, falling back to remote only when the local zone is saturated.',
+    watch: 'Traffic clustering near n-0 (local) vs spill-over to n-1/n-2 (remote) as load increases.',
+    triggers: [],
+  },
+};
+
+
+// ── Demo info ────────────────────────────────────────────────────────────────
+function renderDemoInfo(presetName) {
+  const info = PRESET_INFO[presetName];
+  const ic = document.getElementById('demo-info-card');
+  const cc = document.getElementById('demo-controls-card');
+  if (!info) { ic.style.display = 'none'; cc.style.display = 'none'; return; }
+  ic.style.display = '';
+  document.getElementById('demo-info-title').textContent  = info.title;
+  document.getElementById('demo-preset-tag').textContent  = presetName;
+  document.getElementById('demo-info-about').textContent  = info.about;
+  document.getElementById('demo-info-watch').textContent  = info.watch;
+  const body = document.getElementById('demo-controls-body');
+  if (info.triggers && info.triggers.length) {
+    cc.style.display = '';
+    body.innerHTML = info.triggers.map(t =>
+      `<button class="btn btn-trigger" onclick="fireTrigger('${esc(t.action)}')" title="${esc(t.tip)}">${esc(t.label)}</button>`
+    ).join('');
+  } else {
+    cc.style.display = 'none';
+  }
+}
+
+async function fireTrigger(action) {
+  const status = document.getElementById('demo-trigger-status');
+  status.textContent = 'Running…'; status.style.color = 'var(--amber)';
+  try {
+    const r = await fetch('/demo/trigger', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action }),
+    });
+    const j = await r.json();
+    if (r.ok) {
+      status.textContent = '✓ triggered'; status.style.color = 'var(--emerald)';
+      // Fast-poll for 16 s to capture animated traffic events
+      const ft = setInterval(poll, 350);
+      setTimeout(() => { clearInterval(ft); status.textContent = ''; }, 16000);
+    } else {
+      status.textContent = '✗ ' + (j.error || 'failed'); status.style.color = 'var(--rose)';
+      setTimeout(() => { status.textContent = ''; }, 4000);
+    }
+  } catch(e) {
+    status.textContent = '✗ failed'; status.style.color = 'var(--rose)';
+    setTimeout(() => { status.textContent = ''; }, 4000);
+  }
+}
+
+// ── Traffic animation ────────────────────────────────────────────────────────
+function softFlash(eid) {
+  const el = document.getElementById(eid);
+  if (!el || !linksVisible) return;
+  el.classList.add('warm');
+  setTimeout(() => el.classList.remove('warm'), 650);
+}
+
+function animateTraffic(traffic) {
+  if (!traffic || !traffic.length) return;
+  const fresh = traffic.filter(e => e.ts > prevTrafficTs);
+  fresh.forEach(e => {
+    if (e.from < 0 || e.to < 0 || e.from > 2 || e.to > 2 || e.from === e.to) return;
+    const eid = edgeId(e.from, e.to);
+    if (['propose','commit','alert','vote','dispatch','result'].includes(e.kind)) {
+      flashEdge(eid);
+    } else {
+      softFlash(eid);
+    }
+  });
+  if (fresh.length) prevTrafficTs = Math.max(...fresh.map(e => e.ts));
+}
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
 function showTab(id) {
@@ -480,7 +636,9 @@ async function poll() {
     if (stateRes && stateRes.ok) {
       const state = await stateRes.json();
       renderTopology(state);
-      if (state.log) renderLog(state.log);
+      if (state.log)         renderLog(state.log);
+      if (state.preset_name) renderDemoInfo(state.preset_name);
+      if (state.traffic)     animateTraffic(state.traffic);
     }
 
     fetch('/manifest').then(r => r.ok ? r.json() : null).then(m => {
