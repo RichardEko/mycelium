@@ -152,6 +152,22 @@
     stroke: var(--amber); stroke-width: 2.5;
     filter: drop-shadow(0 0 5px #f59e0b88);
   }
+  .topo-edge.broken {
+    stroke: #e11d48; stroke-width: 2.5;
+    filter: drop-shadow(0 0 4px #e11d4866);
+    animation: edge-break-pulse 0.9s ease-in-out infinite alternate;
+  }
+  .topo-edge.hidden { visibility: hidden; }
+  @keyframes edge-break-pulse {
+    from { opacity: 0.45; }
+    to   { opacity: 1.0; }
+  }
+  .link-toggle {
+    font-size: 10px; padding: 2px 8px; border-radius: 4px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--bg); color: var(--muted);
+    line-height: 16px;
+  }
+  .link-toggle.active { background: #eff6ff; color: #2563eb; border-color: #93c5fd; }
 
   .topo-node-circle {
     transition: fill 0.35s, stroke 0.35s;
@@ -311,7 +327,8 @@
   <div class="card">
     <div class="card-header">
       <span class="card-title">Topology</span>
-      <span id="live-call-count" style="font-size:10px;color:var(--muted);"></span>
+      <button class="link-toggle active" id="link-toggle-btn" onclick="toggleLinks()">Hide links</button>
+      <span id="live-call-count" style="font-size:10px;color:var(--muted);margin-left:auto;"></span>
     </div>
     <div class="topo-wrap">
       <svg id="topo-svg" viewBox="0 0 760 430" preserveAspectRatio="xMidYMid meet">
@@ -560,6 +577,7 @@ function _animStep(now) {
       `translate(${(a.fx + (a.tx - a.fx) * e).toFixed(1)},${(a.fy + (a.ty - a.fy) * e).toFixed(1)})`);
     if (t < 1) any = true; else delete _anims[id];
   }
+  _syncEdgeState(); // keep edge colours in sync every frame + on final completion
   if (any) requestAnimationFrame(_animStep);
 }
 function animateTo(id, fx, fy, tx, ty, dur=700) {
@@ -569,6 +587,33 @@ function animateTo(id, fx, fy, tx, ty, dur=700) {
 
 let prevSparesCovering = [null, null, null];
 const nodeAtPool = [false, false, false]; // true while active node has been swapped to pool
+
+// ── Edge toggle + broken-dependency state ─────────────────────────────────────
+let linksVisible = true;
+
+function toggleLinks() {
+  linksVisible = !linksVisible;
+  const btn = document.getElementById('link-toggle-btn');
+  btn.textContent = linksVisible ? 'Hide links' : 'Show links';
+  btn.classList.toggle('active', linksVisible);
+  _syncEdgeState();
+}
+
+// edge-0i is connected to active positions 0 and 1/2; broken while the
+// spare for the dead node is still mid-flight to the active slot.
+const _EDGE_NODES = [['edge-01',0,1],['edge-02',0,2],['edge-12',1,2]];
+function _syncEdgeState() {
+  _EDGE_NODES.forEach(([id, a, b]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.toggle('hidden', !linksVisible);
+    if (!linksVisible) { el.classList.remove('broken'); return; }
+    // broken = node is in pool AND its spare is still animating to active slot
+    const broken = (nodeAtPool[a] && !!_anims['topo-spare-' + a]) ||
+                   (nodeAtPool[b] && !!_anims['topo-spare-' + b]);
+    el.classList.toggle('broken', broken);
+  });
+}
 
 const STATE_COLOR = s => {
   const k = (s || '').toLowerCase().split(/[\s:]/)[0];
@@ -763,6 +808,9 @@ function renderTopology(state) {
       ${isDeployed && scaps ? `<text y="68" class="topo-caps">${esc(scaps)}</text>` : ''}
     `;
   });
+
+  // Sync edge colours once per poll (handles page reload with spare already deployed)
+  _syncEdgeState();
 }
 
 
