@@ -1,0 +1,33 @@
+[mesh]
+name    = "locality-mesh"
+version = "0.1"
+
+[[group]]
+name        = "render-east"
+description = "Render providers in AZ east — preferred by co-located consumers"
+min_agents  = 2
+max_agents  = 6
+
+  [[group.capability]]
+  ns   = "render"
+  name = "job"
+
+[[group]]
+name        = "render-west"
+description = "Render providers in AZ west — fallback for cross-AZ routing"
+min_agents  = 2
+max_agents  = 6
+
+  [[group.capability]]
+  ns   = "render"
+  name = "job"
+
+[[group]]
+name        = "consumers"
+description = "Render job consumers — resolve_with_locality picks nearest provider"
+min_agents  = 1
+max_agents  = 3
+
+  [[group.capability]]
+  ns   = "render"
+  name = "consumer"

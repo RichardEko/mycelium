@@ -1,0 +1,23 @@
+[mesh]
+name    = "epidemic-ring"
+version = "0.1"
+
+[[group]]
+name        = "alpha-ring"
+description = "Alpha partition — signal propagation nodes 0–7"
+min_agents  = 4
+max_agents  = 8
+
+  [[group.capability]]
+  ns   = "signal"
+  name = "propagate"
+
+[[group]]
+name        = "beta-ring"
+description = "Beta partition — signal propagation nodes 8–15"
+min_agents  = 4
+max_agents  = 8
+
+  [[group.capability]]
+  ns   = "signal"
+  name = "propagate"

@@ -28,6 +28,9 @@
     --slate:      #475569;
     --slate-bg:   #f1f5f9;
     --slate-bd:   #e2e8f0;
+    --violet:     #7c3aed;
+    --violet-bg:  #ede9fe;
+    --violet-bd:  #c4b5fd;
 
     --radius:     6px;
     --radius-lg:  10px;
@@ -60,7 +63,8 @@
     height: 48px;
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
+    flex-wrap: nowrap;
   }
   .logo {
     font-size: 13px;
@@ -70,6 +74,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
+    flex-shrink: 0;
   }
   .logo-dot {
     width: 8px; height: 8px;
@@ -77,13 +82,14 @@
     background: var(--emerald);
     flex-shrink: 0;
   }
-  .header-sep { width: 1px; height: 16px; background: var(--border); }
-  .mesh-name  { color: var(--muted); font-size: 11px; }
-  .header-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .header-sep { width: 1px; height: 16px; background: var(--border); flex-shrink: 0; }
+  .mesh-name  { color: var(--muted); font-size: 11px; flex-shrink: 0; }
+  .header-right { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
   .refresh-indicator {
     font-size: 10px;
     color: var(--light);
     letter-spacing: 0.03em;
+    white-space: nowrap;
   }
 
   /* ── Pill / badge ── */
@@ -104,6 +110,7 @@
   .pill.deficit { background: var(--rose-bg);    color: var(--rose);    border-color: var(--rose-bd); }
   .pill.stopped { background: var(--amber-bg);   color: var(--amber);   border-color: var(--amber-bd); }
   .pill.neutral { background: var(--slate-bg);   color: var(--slate);   border-color: var(--slate-bd); }
+  .pill.mgr     { background: var(--violet-bg);  color: var(--violet);  border-color: var(--violet-bd); }
 
   /* ── Layout ── */
   .main {
@@ -155,12 +162,14 @@
     white-space: nowrap;
   }
   .btn:disabled { opacity: 0.45; cursor: not-allowed; }
-  .btn-stop  { background: var(--rose-bg);    color: var(--rose);    border-color: var(--rose-bd); }
-  .btn-start { background: var(--emerald-bg); color: var(--emerald); border-color: var(--emerald-bd); }
-  .btn-upload{ background: var(--slate-bg);   color: var(--slate);   border-color: var(--slate-bd); }
-  .btn-stop:hover:not(:disabled)  { background: #fecdd3; }
-  .btn-start:hover:not(:disabled) { background: #a7f3d0; }
-  .btn-upload:hover:not(:disabled){ background: #e2e8f0; }
+  .btn-stop    { background: var(--rose-bg);    color: var(--rose);    border-color: var(--rose-bd); }
+  .btn-start   { background: var(--emerald-bg); color: var(--emerald); border-color: var(--emerald-bd); }
+  .btn-upload  { background: var(--slate-bg);   color: var(--slate);   border-color: var(--slate-bd); }
+  .btn-apply   { background: var(--violet-bg);  color: var(--violet);  border-color: var(--violet-bd); }
+  .btn-stop:hover:not(:disabled)   { background: #fecdd3; }
+  .btn-start:hover:not(:disabled)  { background: #a7f3d0; }
+  .btn-upload:hover:not(:disabled) { background: #e2e8f0; }
+  .btn-apply:hover:not(:disabled)  { background: #ddd6fe; }
   .btn-sm { padding: 3px 8px; font-size: 10px; }
 
   /* ── System actions row ── */
@@ -196,6 +205,34 @@
   .count-cell { font-variant-numeric: tabular-nums; }
   .count-sep  { color: var(--light); }
   .controls-cell { display: flex; gap: 4px; }
+
+  /* ── Preset grid ── */
+  .presets-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 10px;
+  }
+  .preset-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    transition: border-color 0.12s, box-shadow 0.12s;
+  }
+  .preset-card:hover { border-color: var(--violet-bd); box-shadow: 0 0 0 3px var(--violet-bg); }
+  .preset-name { font-weight: 600; font-size: 12px; }
+  .preset-desc { font-size: 10px; color: var(--muted); line-height: 1.4; flex: 1; }
+  .preset-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 4px;
+  }
+  .preset-ver { font-size: 10px; color: var(--light); font-variant-numeric: tabular-nums; }
+  .preset-status { font-size: 10px; color: var(--muted); min-height: 14px; }
 
   /* ── Upload section ── */
   .upload-row {
@@ -248,20 +285,6 @@
   .upload-status.err     { color: var(--rose); }
   .upload-status.pending { color: var(--muted); }
 
-  /* ── Manifest history ── */
-  .history-list { display: flex; flex-direction: column; gap: 4px; }
-  .history-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 5px 8px;
-    border-radius: var(--radius);
-    background: var(--bg);
-    font-size: 11px;
-  }
-  .history-ver { font-weight: 600; font-variant-numeric: tabular-nums; }
-  .history-label { color: var(--muted); }
-
   /* ── Log ── */
   .log-list { display: flex; flex-direction: column; gap: 2px; max-height: 200px; overflow-y: auto; }
   .log-row { display: flex; gap: 8px; font-size: 11px; padding: 2px 0; }
@@ -271,6 +294,21 @@
 
   /* ── Empty state ── */
   .empty { color: var(--light); font-size: 11px; font-style: italic; padding: 8px 0; }
+
+  /* ── Redirect banner ── */
+  #redirect-banner {
+    display: none;
+    position: fixed;
+    bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: var(--violet); color: #fff;
+    padding: 8px 20px;
+    border-radius: 99px;
+    font-size: 12px;
+    font-weight: 500;
+    box-shadow: var(--shadow-md);
+    z-index: 100;
+    white-space: nowrap;
+  }
 </style>
 </head>
 <body>
@@ -286,11 +324,15 @@
     <span class="mesh-name" id="mesh-name">—</span>
     <span id="mesh-version" class="pill neutral" style="font-size:10px;padding:1px 6px;">—</span>
     <span id="health-pill" class="pill neutral">—</span>
+    <span id="manager-pill" class="pill mgr" style="display:none;">—</span>
     <div class="header-right">
-      <span class="refresh-indicator" id="refresh-indicator">↺ polling</span>
+      <span class="refresh-indicator" id="refresh-indicator">&#8635; polling</span>
     </div>
   </div>
 </header>
+
+<!-- Auto-redirect banner -->
+<div id="redirect-banner">Manager changed — redirecting&hellip;</div>
 
 <div class="main">
 
@@ -325,9 +367,22 @@
           </tr>
         </thead>
         <tbody id="groups-tbody">
-          <tr><td colspan="4" class="empty" style="padding:14px 0;">Loading…</td></tr>
+          <tr><td colspan="4" class="empty" style="padding:14px 0;">Loading&hellip;</td></tr>
         </tbody>
       </table>
+    </div>
+  </div>
+
+  <!-- Preset Gallery -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Examples / Presets</span>
+      <span style="font-size:10px;color:var(--muted);">Apply a topology and it propagates to all nodes</span>
+    </div>
+    <div class="card-body">
+      <div class="presets-grid" id="presets-grid">
+        <div class="empty">Loading presets&hellip;</div>
+      </div>
     </div>
   </div>
 
@@ -352,16 +407,6 @@
     </div>
   </div>
 
-  <!-- Manifest History -->
-  <div class="card" id="history-card" style="display:none;">
-    <div class="card-header">
-      <span class="card-title">Version History</span>
-    </div>
-    <div class="card-body">
-      <div class="history-list" id="history-list"></div>
-    </div>
-  </div>
-
   <!-- Event Log -->
   <div class="card">
     <div class="card-header">
@@ -378,8 +423,8 @@
 
 <script>
 // ── State ─────────────────────────────────────────────────────────────────────
-let lastStatus = null;
-let pollTimer  = null;
+let lastManagerPort = null;
+let redirecting     = false;
 
 // ── Polling ───────────────────────────────────────────────────────────────────
 async function poll() {
@@ -390,12 +435,20 @@ async function poll() {
     ]);
     const status = await statusRes.json();
     renderStatus(status);
+    checkManagerRedirect(status);
 
     if (stateRes && stateRes.ok) {
       const state = await stateRes.json();
       if (state.log) renderLog(state.log);
-      if (state.mesh_status) renderManifestMeta(state.mesh_status);
     }
+
+    // Refresh mesh name/version from manifest
+    fetch('/manifest').then(r => r.ok ? r.json() : null).then(m => {
+      if (!m) return;
+      document.getElementById('mesh-name').textContent = m.name || '—';
+      const vPill = document.getElementById('mesh-version');
+      vPill.textContent = m.version ? 'v' + m.version : '—';
+    }).catch(() => {});
 
     document.getElementById('refresh-indicator').textContent = '↺ ' + fmtTime(Date.now());
   } catch (e) {
@@ -405,22 +458,48 @@ async function poll() {
 
 function startPolling() {
   poll();
-  pollTimer = setInterval(poll, 3000);
+  setInterval(poll, 3000);
+}
+
+// ── Manager redirect ──────────────────────────────────────────────────────────
+// When the gossip mesh elects a new manager, the browser auto-follows to the
+// new port so the user always sees the manager's authoritative view.
+function checkManagerRedirect(status) {
+  if (redirecting) return;
+  const mp = status.manager_port;
+  if (!mp) return;
+  const myPort = parseInt(window.location.port, 10) || 80;
+  if (mp !== myPort) {
+    redirecting = true;
+    document.getElementById('redirect-banner').style.display = 'block';
+    // Short delay so the banner is visible before navigation
+    setTimeout(() => {
+      window.location.href = 'http://' + window.location.hostname + ':' + mp + '/';
+    }, 800);
+  }
 }
 
 // ── Render helpers ────────────────────────────────────────────────────────────
 function renderStatus(status) {
-  lastStatus = status;
   const healthy = status.healthy;
 
-  // Header
+  // Health pill
   const dot = document.getElementById('health-dot');
   const pill = document.getElementById('health-pill');
   dot.style.background = healthy ? 'var(--emerald)' : 'var(--rose)';
   pill.className = 'pill ' + (healthy ? 'ok' : 'deficit');
   pill.textContent = healthy ? '● HEALTHY' : '● DEGRADED';
 
-  // Summary
+  // Manager pill
+  const mgr = document.getElementById('manager-pill');
+  if (status.manager_node) {
+    mgr.style.display = '';
+    mgr.textContent = '★ mgr: ' + status.manager_node;
+  } else {
+    mgr.style.display = 'none';
+  }
+
+  // Groups summary
   const satisfied = status.groups.filter(g => g.satisfied).length;
   document.getElementById('groups-summary').textContent =
     satisfied + '/' + status.groups.length + ' groups satisfied';
@@ -432,7 +511,7 @@ function renderStatus(status) {
     return;
   }
   tbody.innerHTML = status.groups.map(g => {
-    const cls = g.satisfied ? 'ok' : 'deficit';
+    const cls   = g.satisfied ? 'ok' : 'deficit';
     const label = g.satisfied ? '✓ OK' : '✗ DEFICIT';
     const maxStr = g.max_agents != null ? '/' + g.max_agents : '';
     return `<tr>
@@ -448,23 +527,12 @@ function renderStatus(status) {
       <td><span class="pill ${cls}">${label}</span></td>
       <td>
         <div class="controls-cell">
-          <button class="btn btn-stop btn-sm"  onclick="groupAction('${esc(g.name)}','stop')">■</button>
-          <button class="btn btn-start btn-sm" onclick="groupAction('${esc(g.name)}','start')">▶</button>
+          <button class="btn btn-stop btn-sm"  onclick="groupAction('${esc(g.name)}','stop')">&#9632;</button>
+          <button class="btn btn-start btn-sm" onclick="groupAction('${esc(g.name)}','start')">&#9654;</button>
         </div>
       </td>
     </tr>`;
   }).join('');
-}
-
-function renderManifestMeta(meshStatus) {
-  // Prefer /manifest endpoint for name/version; /state mesh_status for healthy
-  fetch('/manifest').then(r => r.ok ? r.json() : null).then(m => {
-    if (!m) return;
-    document.getElementById('mesh-name').textContent = m.name || '—';
-    const vPill = document.getElementById('mesh-version');
-    vPill.textContent = m.version ? 'v' + m.version : '—';
-    vPill.className = 'pill neutral';
-  }).catch(() => {});
 }
 
 function renderLog(entries) {
@@ -479,7 +547,50 @@ function renderLog(entries) {
   ).join('');
 }
 
-// ── Actions ───────────────────────────────────────────────────────────────────
+// ── Preset gallery ────────────────────────────────────────────────────────────
+async function loadPresets() {
+  try {
+    const r = await fetch('/presets');
+    if (!r.ok) return;
+    const presets = await r.json();
+    const grid = document.getElementById('presets-grid');
+    if (!presets.length) { grid.innerHTML = '<div class="empty">No presets available.</div>'; return; }
+    grid.innerHTML = presets.map(p => `
+      <div class="preset-card" id="preset-card-${esc(p.id)}">
+        <div class="preset-name">${esc(p.name)}</div>
+        <div class="preset-desc">${esc(p.description)}</div>
+        <div class="preset-footer">
+          <span class="preset-ver">v${esc(p.version)}</span>
+          <button class="btn btn-apply btn-sm" onclick="applyPreset('${esc(p.id)}')">Apply</button>
+        </div>
+        <div class="preset-status" id="preset-status-${esc(p.id)}"></div>
+      </div>`
+    ).join('');
+  } catch (e) {
+    document.getElementById('presets-grid').innerHTML =
+      '<div class="empty">Could not load presets.</div>';
+  }
+}
+
+async function applyPreset(id) {
+  const statusEl = document.getElementById('preset-status-' + id);
+  if (statusEl) { statusEl.textContent = 'Applying…'; statusEl.style.color = 'var(--muted)'; }
+  try {
+    const r = await fetch('/presets/' + encodeURIComponent(id) + '/apply', { method: 'POST' });
+    const j = await r.json();
+    if (r.ok) {
+      if (statusEl) { statusEl.textContent = '✓ Applied as v' + j.version; statusEl.style.color = 'var(--emerald)'; }
+      setTimeout(poll, 500);
+    } else {
+      if (statusEl) { statusEl.textContent = '✗ ' + (j.error || 'Error'); statusEl.style.color = 'var(--rose)'; }
+    }
+  } catch (e) {
+    if (statusEl) { statusEl.textContent = '✗ Request failed'; statusEl.style.color = 'var(--rose)'; }
+  }
+  if (statusEl) setTimeout(() => { statusEl.textContent = ''; }, 4000);
+}
+
+// ── System / group actions ────────────────────────────────────────────────────
 async function systemAction(action) {
   const el = document.getElementById('system-action-status');
   el.textContent = action === 'stop' ? 'Stopping…' : 'Starting…';
@@ -516,9 +627,7 @@ function onFileChosen(e) {
   if (!file) return;
   document.getElementById('file-name').textContent = file.name;
   const reader = new FileReader();
-  reader.onload = ev => {
-    document.getElementById('manifest-textarea').value = ev.target.result;
-  };
+  reader.onload = ev => { document.getElementById('manifest-textarea').value = ev.target.result; };
   reader.readAsText(file);
 }
 
@@ -562,11 +671,7 @@ function fmtTime(ms) {
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 startPolling();
-
-// Load current manifest into textarea on page load
-fetch('/manifest').then(r => r.ok ? r.text() : null).then(t => {
-  // /manifest returns JSON; textarea wants TOML — skip pre-fill, user loads file
-}).catch(() => {});
+loadPresets();
 </script>
 </body>
 </html>

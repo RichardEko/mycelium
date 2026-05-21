@@ -1,0 +1,33 @@
+[mesh]
+name    = "llm-agent-demo"
+version = "0.1"
+
+[[group]]
+name        = "realtime-data"
+description = "Weather and real-time data tools"
+min_agents  = 1
+max_agents  = 3
+
+  [[group.capability]]
+  ns   = "data"
+  name = "realtime"
+
+[[group]]
+name        = "compute"
+description = "Search and arithmetic tools"
+min_agents  = 1
+max_agents  = 4
+
+  [[group.capability]]
+  ns   = "compute"
+  name = "cpu"
+
+[[group]]
+name        = "llm-inference"
+description = "LLM planning and inference"
+min_agents  = 1
+max_agents  = 2
+
+  [[group.capability]]
+  ns   = "llm"
+  name = "inference"

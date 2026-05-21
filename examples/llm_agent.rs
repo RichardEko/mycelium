@@ -70,7 +70,9 @@ use tokio::time;
 const PORT_N0:         u16 = 56000;
 const PORT_N1:         u16 = 56001;
 const PORT_N2:         u16 = 56002;
-const HTTP_PORT:       u16 = 8100;
+const HTTP_PORT_N0:    u16 = 8100;
+const HTTP_PORT_N1:    u16 = 8101;
+const HTTP_PORT_N2:    u16 = 8102;
 const SETTLE_MS:       u64 = 2_000;
 const HEALTH_SECS:     u64 = 10;
 const FAILURE_ONSET_S: u64 = 35;
@@ -498,6 +500,113 @@ async fn llm_plan_step(
     }
 }
 
+// ── Preset manifests ──────────────────────────────────────────────────────────
+
+struct Preset {
+    id:          &'static str,
+    name:        &'static str,
+    description: &'static str,
+    toml:        &'static str,
+}
+
+const PRESETS: &[Preset] = &[
+    // ── Current-generation examples ───────────────────────────────────────────
+    Preset {
+        id:          "llm-agent",
+        name:        "LLM Agent Demo",
+        description: "Three nodes: real-time data, compute tools, LLM inference",
+        toml:        include_str!("presets/llm_agent.toml"),
+    },
+    Preset {
+        id:          "mcp-mesh",
+        name:        "MCP Tool Mesh",
+        description: "Tool providers, data sources, and LLM reasoning nodes",
+        toml:        include_str!("presets/mcp_mesh.toml"),
+    },
+    Preset {
+        id:          "compute-cluster",
+        name:        "Compute Cluster",
+        description: "Parallel compute workers with real-time data feed",
+        toml:        include_str!("presets/compute_cluster.toml"),
+    },
+    Preset {
+        id:          "minimal",
+        name:        "Minimal Mesh",
+        description: "Single data node — ideal for development and testing",
+        toml:        include_str!("presets/minimal.toml"),
+    },
+    // ── Topology presets (from archived standalone demos) ─────────────────────
+    Preset {
+        id:          "epidemic-ring",
+        name:        "Epidemic Ring",
+        description: "16-node ring split into alpha/beta partitions for signal propagation demos",
+        toml:        include_str!("presets/epidemic_ring.toml"),
+    },
+    Preset {
+        id:          "consensus-cluster",
+        name:        "Consensus Cluster",
+        description: "7 voters + rotating proposers — epidemic two-phase ballot matrix",
+        toml:        include_str!("presets/consensus_cluster.toml"),
+    },
+    Preset {
+        id:          "dispatch-pool",
+        name:        "Dispatch Pool",
+        description: "Fast and slow worker tiers with adaptive load-balancing dispatchers",
+        toml:        include_str!("presets/dispatch_pool.toml"),
+    },
+    Preset {
+        id:          "emergent-pool",
+        name:        "Emergent GPU Pool",
+        description: "20 GPU workers self-assemble via cap-groups; render jobs route via signal_wired_via",
+        toml:        include_str!("presets/emergent_pool.toml"),
+    },
+    Preset {
+        id:          "capability-market",
+        name:        "Capability Market",
+        description: "12 nodes across 4 capability kinds — demand pressure and dynamic advertisement",
+        toml:        include_str!("presets/capability_market.toml"),
+    },
+    Preset {
+        id:          "locality-mesh",
+        name:        "Locality Mesh",
+        description: "East/west render providers — resolve_with_locality routes to nearest first",
+        toml:        include_str!("presets/locality_mesh.toml"),
+    },
+    Preset {
+        id:          "watchdog-cluster",
+        name:        "Watchdog Cluster",
+        description: "6 heartbeat services monitored by a quorum_persistent circuit-breaker supervisor",
+        toml:        include_str!("presets/watchdog_cluster.toml"),
+    },
+];
+
+// ── Emergent manager election ─────────────────────────────────────────────────
+//
+// Every node permanently advertises cap/{self}/system/manager with its HTTP
+// port. The active manager is the node with the lexicographically smallest
+// node-id among all live candidates — a deterministic function every node
+// computes independently from shared gossip state (no consensus needed).
+// When the current minimum's TTL expires (node died), all survivors converge
+// to the new minimum within one gossip round.
+
+fn compute_manager_port(candidates: &[(NodeId, Capability)]) -> Option<u16> {
+    candidates.iter()
+        .min_by_key(|(nid, _)| nid.to_string())
+        .and_then(|(_, cap)| {
+            cap.attributes.get("http_port")
+                .and_then(|v| if let CapValue::Integer(p) = v { Some(*p as u16) } else { None })
+        })
+}
+
+fn port_to_node_label(port: u16) -> Option<&'static str> {
+    match port {
+        HTTP_PORT_N0 => Some("n-0"),
+        HTTP_PORT_N1 => Some("n-1"),
+        HTTP_PORT_N2 => Some("n-2"),
+        _ => None,
+    }
+}
+
 // ── Agent planning loop ───────────────────────────────────────────────────────
 
 struct AppState {
@@ -514,7 +623,9 @@ struct AppState {
     pause_n1:    Arc<AtomicBool>,
     pause_n2:    Arc<AtomicBool>,
     /// group name → which node's pause flag to flip
-    group_node:  Arc<HashMap<String, &'static str>>,
+    group_node:   Arc<HashMap<String, &'static str>>,
+    /// current elected manager's HTTP port (None while electing)
+    manager_port: Arc<Mutex<Option<u16>>>,
 }
 
 async fn run_agent_loop(app: Arc<AppState>, cfg: LlmConfig) {
@@ -682,6 +793,7 @@ fn build_state_json(app: &AppState) -> String {
         "deficit":     g.deficit,
     })).collect();
 
+    let mgr_port = *app.manager_port.lock().unwrap();
     json!({
         "nodes":       nodes,
         "log":         log,
@@ -692,6 +804,10 @@ fn build_state_json(app: &AppState) -> String {
             "healthy":        ms.is_healthy(),
             "total_deficit":  ms.total_deficit(),
             "groups":         mesh_groups,
+        },
+        "manager": {
+            "port": mgr_port,
+            "node": mgr_port.and_then(port_to_node_label),
         },
     }).to_string()
 }
@@ -768,10 +884,13 @@ fn handle_system_status(app: &AppState) -> (u16, &'static str, String) {
         "satisfied":   g.satisfied,
         "deficit":     g.deficit,
     })).collect();
+    let mgr_port = *app.manager_port.lock().unwrap();
     let body = json!({
-        "healthy":       ms.is_healthy(),
-        "total_deficit": ms.total_deficit(),
-        "groups":        groups,
+        "healthy":        ms.is_healthy(),
+        "total_deficit":  ms.total_deficit(),
+        "groups":         groups,
+        "manager_port":   mgr_port,
+        "manager_node":   mgr_port.and_then(port_to_node_label),
     }).to_string();
     (200, "application/json", body)
 }
@@ -805,9 +924,60 @@ async fn handle_group_control(app: &AppState, path: &str, is_stop: bool) -> (u16
     (200, "application/json", json!({"ok": true, "group": group}).to_string())
 }
 
+// ── Preset handlers ──────────────────────────────────────────────────────────
+
+fn handle_presets_list() -> (u16, &'static str, String) {
+    let list: Vec<Value> = PRESETS.iter().map(|p| {
+        let ver = MeshManifest::from_toml_bytes(p.toml.as_bytes())
+            .map(|m| m.mesh.version)
+            .unwrap_or_else(|| "0.1".into());
+        json!({ "id": p.id, "name": p.name, "description": p.description, "version": ver })
+    }).collect();
+    (200, "application/json", json!(list).to_string())
+}
+
+async fn handle_preset_apply(app: &AppState, preset_id: &str) -> (u16, &'static str, String) {
+    let Some(preset) = PRESETS.iter().find(|p| p.id == preset_id) else {
+        return (404, "application/json", json!({"error":"preset not found"}).to_string());
+    };
+    let Some(mut new_m) = MeshManifest::from_toml_bytes(preset.toml.as_bytes()) else {
+        return (500, "application/json", json!({"error":"preset parse failed"}).to_string());
+    };
+    let cur_ver = app.agent_n2.get(manifest_keys::VERSION)
+        .and_then(|b| String::from_utf8(b.to_vec()).ok())
+        .unwrap_or_else(|| "0.0.0".into());
+
+    // Use the preset version if it's greater; otherwise bump the current patch
+    let new_ver = if semver_gt(&new_m.mesh.version, &cur_ver) {
+        new_m.mesh.version.clone()
+    } else {
+        let parse = |s: &str| -> (u64, u64, u64) {
+            let mut p = s.trim_start_matches('v').split('.');
+            (p.next().and_then(|x| x.parse().ok()).unwrap_or(0),
+             p.next().and_then(|x| x.parse().ok()).unwrap_or(0),
+             p.next().and_then(|x| x.parse().ok()).unwrap_or(0))
+        };
+        let (maj, min, pat) = parse(&cur_ver);
+        format!("{maj}.{min}.{}", pat + 1)
+    };
+    new_m.mesh.version = new_ver.clone();
+
+    if let Some(old) = app.agent_n2.get(manifest_keys::CURRENT) {
+        let _ = app.agent_n2.set(manifest_keys::history(&cur_ver), old);
+    }
+    let Ok(toml_str) = new_m.to_toml() else {
+        return (500, "application/json", json!({"error":"re-serialization failed"}).to_string());
+    };
+    let _ = app.agent_n2.set(manifest_keys::CURRENT, Bytes::from(toml_str.into_bytes()));
+    let _ = app.agent_n2.set(manifest_keys::VERSION,  Bytes::from(new_ver.clone().into_bytes()));
+    if let Ok(mut w) = app.manifest.write() { *w = new_m; }
+    push_log(&app.log, "Preset", format!("'{}' applied as v{new_ver}", preset_id));
+    (200, "application/json", json!({"ok":true,"version":new_ver}).to_string())
+}
+
 // ── HTTP server ───────────────────────────────────────────────────────────────
 
-async fn handle_http(mut stream: tokio::net::TcpStream, app: Arc<AppState>) {
+async fn handle_http(mut stream: tokio::net::TcpStream, app: Arc<AppState>, my_port: u16) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut buf = [0u8; 16384];
     let Ok(n) = stream.read(&mut buf).await else { return };
@@ -828,6 +998,20 @@ async fn handle_http(mut stream: tokio::net::TcpStream, app: Arc<AppState>) {
 
     let is_post = method == "POST";
 
+    // Non-manager: 307-redirect all requests to the elected manager
+    let manager_port = *app.manager_port.lock().unwrap();
+    if manager_port != Some(my_port) {
+        let response = if let Some(port) = manager_port {
+            format!(
+                "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://127.0.0.1:{port}{path}\r\nContent-Length: 0\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n"
+            )
+        } else {
+            "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 25\r\nRetry-After: 2\r\nConnection: close\r\n\r\nElecting management node.".to_string()
+        };
+        stream.write_all(response.as_bytes()).await.ok();
+        return;
+    }
+
     let (status, ct, body) = match (method, path) {
         (_, "/state") =>
             (200, "application/json", build_state_json(&app)),
@@ -841,6 +1025,12 @@ async fn handle_http(mut stream: tokio::net::TcpStream, app: Arc<AppState>) {
             handle_system_stop(&app).await,
         ("POST", "/system/start") =>
             handle_system_start(&app).await,
+        ("GET",  "/presets") =>
+            handle_presets_list(),
+        _ if is_post && path.starts_with("/presets/") && path.ends_with("/apply") => {
+            let id = path.trim_start_matches("/presets/").trim_end_matches("/apply");
+            handle_preset_apply(&app, id).await
+        }
         _ if is_post && path.starts_with("/system/groups/") => {
             let is_stop = path.ends_with("/stop");
             handle_group_control(&app, path, is_stop).await
@@ -908,6 +1098,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pause_n1 = Arc::new(AtomicBool::new(false));
     let pause_n2 = Arc::new(AtomicBool::new(false));
 
+    // ── Manager candidacy handles ─────────────────────────────────────────────
+    // Every node advertises itself as a system/manager candidate (TTL 15 s).
+    // The elected manager is the node with the lexicographically smallest
+    // node-id among all live candidates — a deterministic rule every node
+    // computes independently from gossip state; no consensus or coordinator.
+    //
+    // n-0's handle is held behind Arc<Mutex<Option>> so the failure injector
+    // can drop it (tombstoning the capability) and restore it on recovery.
+    // n-1 and n-2 never fail in this demo so plain handles suffice.
+    let mgr_h_n0 = Arc::new(Mutex::new(Some(agent_n0.advertise_capability(
+        Capability::new("system", "manager")
+            .with("http_port", CapValue::Integer(HTTP_PORT_N0 as i64)),
+        Duration::from_secs(15),
+    ))));
+    let _mgr_h_n1 = agent_n1.advertise_capability(
+        Capability::new("system", "manager")
+            .with("http_port", CapValue::Integer(HTTP_PORT_N1 as i64)),
+        Duration::from_secs(15),
+    );
+    let _mgr_h_n2 = agent_n2.advertise_capability(
+        Capability::new("system", "manager")
+            .with("http_port", CapValue::Integer(HTTP_PORT_N2 as i64)),
+        Duration::from_secs(15),
+    );
+
     // ── n-0: probe loop + fixed tools + simulated failure ─────────────────────
     let fail_flag_n0 = Arc::new(AtomicBool::new(false));
     {
@@ -942,24 +1157,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
         tokio::spawn(run_fixed_tool_node(Arc::clone(&node)));
 
-        // Failure injector: flip fail_flag at T+35s for 15s
-        let flag = Arc::clone(&fail_flag_n0);
-        let log  = Arc::clone(&shared_log);
+        // Failure injector: flip fail_flag at T+35s for 15s.
+        // Also drops n-0's manager candidacy so n-1 wins the election during
+        // the outage, then restores it on recovery so n-0 reclaims the role.
+        let flag  = Arc::clone(&fail_flag_n0);
+        let log   = Arc::clone(&shared_log);
+        let mgr   = Arc::clone(&mgr_h_n0);
+        let agent = Arc::clone(&agent_n0);
         tokio::spawn(async move {
             time::sleep(Duration::from_secs(FAILURE_ONSET_S)).await;
             flag.store(true, Ordering::Relaxed);
-            {
-                let mut l = log.lock().unwrap();
-                l.push(LogEntry { time_ms: now_ms(), event: "Failure".into(),
-                                  detail: "n-0 simulated failure injected".into() });
-            }
+            *mgr.lock().unwrap() = None; // drop candidacy → gossip tombstone
+            push_log(&log, "Failure", "n-0 failure injected — n-1 will become manager");
+
             time::sleep(Duration::from_secs(FAILURE_HOLD_S)).await;
             flag.store(false, Ordering::Relaxed);
-            {
-                let mut l = log.lock().unwrap();
-                l.push(LogEntry { time_ms: now_ms(), event: "Failure".into(),
-                                  detail: "n-0 failure cleared — health loop will re-register".into() });
-            }
+            *mgr.lock().unwrap() = Some(agent.advertise_capability(
+                Capability::new("system", "manager")
+                    .with("http_port", CapValue::Integer(HTTP_PORT_N0 as i64)),
+                Duration::from_secs(15),
+            ));
+            push_log(&log, "Failure", "n-0 recovered — reclaiming manager role");
         });
     }
 
@@ -1083,7 +1301,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pause_n0:    Arc::clone(&pause_n0),
         pause_n1:    Arc::clone(&pause_n1),
         pause_n2:    Arc::clone(&pause_n2),
-        group_node:  Arc::new(group_node),
+        group_node:   Arc::new(group_node),
+        manager_port: Arc::new(Mutex::new(None)),
     });
 
     // ── Manifest control watcher ──────────────────────────────────────────────
@@ -1138,18 +1357,64 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // ── Manager election watcher ──────────────────────────────────────────────
+    // Watches live system/manager candidates in gossip. Re-computes the elected
+    // manager (lexicographically smallest node-id) whenever the candidate set
+    // changes (TTL expiry, new advertiser, recovery).
+    tokio::spawn({
+        let app   = Arc::clone(&app);
+        let agent = Arc::clone(&agent_n0);
+        async move {
+            // Bootstrap: compute initial state before entering the watch loop
+            {
+                let candidates = agent.resolve(&CapFilter::new("system", "manager"));
+                *app.manager_port.lock().unwrap() = compute_manager_port(&candidates);
+            }
+            let mut rx = agent.watch_capabilities(CapFilter::new("system", "manager"));
+            loop {
+                match rx.recv().await {
+                    None    => break,
+                    Some(_) => {}
+                }
+                let candidates = agent.resolve(&CapFilter::new("system", "manager"));
+                let new_port   = compute_manager_port(&candidates);
+                let mut guard  = app.manager_port.lock().unwrap();
+                if *guard != new_port {
+                    *guard = new_port;
+                    match new_port {
+                        Some(p) => push_log(&app.log, "Manager",
+                            format!("elected → :{p} ({})", port_to_node_label(p).unwrap_or("?"))),
+                        None    => push_log(&app.log, "Manager", "no candidates — re-electing"),
+                    }
+                }
+            }
+        }
+    });
+
     tokio::spawn({
         let app2 = Arc::clone(&app);
         async move { run_agent_loop(app2, llm_cfg).await }
     });
 
-    // ── HTTP server ───────────────────────────────────────────────────────────
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", HTTP_PORT)).await?;
-    println!("Serving http://127.0.0.1:{HTTP_PORT}");
-
-    loop {
-        let Ok((stream, _)) = listener.accept().await else { continue };
+    // ── HTTP servers (one per node) ───────────────────────────────────────────
+    // Each node listens on its own port. Non-manager nodes 307-redirect to the
+    // elected manager. All three must listen so redirects resolve correctly
+    // even when n-0 (port 8100) fails and n-1 (8101) becomes the manager.
+    for port in [HTTP_PORT_N0, HTTP_PORT_N1, HTTP_PORT_N2] {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
+        println!("Serving http://127.0.0.1:{port}");
         let app = Arc::clone(&app);
-        tokio::spawn(async move { handle_http(stream, app).await });
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else { continue };
+                let app = Arc::clone(&app);
+                tokio::spawn(async move { handle_http(stream, app, port).await });
+            }
+        });
     }
+
+    // Keep main alive
+    tokio::signal::ctrl_c().await?;
+    println!("\nShutting down.");
+    Ok(())
 }

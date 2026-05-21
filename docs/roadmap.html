@@ -868,7 +868,7 @@
         <div class="stack-num" style="background:rgba(57,211,83,0.06);color:var(--accent6);border-right:2px solid var(--accent6);">Cap<br>Layer</div>
         <div class="stack-body">
           <div class="stack-title">Capability &amp; Discovery <span class="phase-tag tag-done">Complete</span></div>
-          <p class="stack-desc">First-class capability advertisement, discovery, demand pressure, and locality-aware routing — all on the Layer I KV store. Nodes declare capabilities (<code>cap/</code>), requirements (<code>req/</code>), and self-assemble into emergent groups (<code>gcap/</code>). Wiring connects consumer requirements to provider groups; locality-aware resolution routes to the topologically closest provider first. Three browser-visual examples: <a href="capability_market.html" style="color:var(--accent)">capability_market</a> · <a href="emergent_pool.html" style="color:var(--accent)">emergent_pool</a> · <a href="locality_wiring.html" style="color:var(--accent)">locality_wiring</a>.</p>
+          <p class="stack-desc">First-class capability advertisement, discovery, demand pressure, and locality-aware routing — all on the Layer I KV store. Nodes declare capabilities (<code>cap/</code>), requirements (<code>req/</code>), and self-assemble into emergent groups (<code>gcap/</code>). Wiring connects consumer requirements to provider groups; locality-aware resolution routes to the topologically closest provider first. Topology presets — <strong>capability-market</strong>, <strong>emergent-pool</strong>, <strong>locality-mesh</strong> — are selectable from the <a href="mesh_control.html" style="color:var(--accent)">Mesh Control UI</a>.</p>
           <div class="chips">
             <span class="chip">advertise_capability</span>
             <span class="chip">resolve · watch_capabilities</span>
@@ -1273,35 +1273,34 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
     all built on the Layer I KV store with no separate registry and no coordination overhead. Three
     browser-visual examples make the whole subsystem interactive:</p>
 
-    <div class="three-col">
+    <p style="margin-top:12px;">These topologies are now available as one-click presets in the
+    <a href="mesh_control.html" style="color:var(--accent)">Mesh Control UI</a> (port 8100):
+    <strong>Capability Market</strong>, <strong>Emergent GPU Pool</strong>, and <strong>Locality Mesh</strong>.
+    Select a preset, click Apply, and the manifest propagates epidemically to every node.</p>
+
+    <div class="three-col" style="margin-top:14px;">
       <div class="card c1">
-        <div class="card-title">capability_market</div>
-        <div class="card-sub"><a href="capability_market.html" style="color:var(--accent)">Open demo</a> · port 8097</div>
+        <div class="card-title">capability-market</div>
+        <div class="card-sub">4 cap types — compute/gpu · compute/cpu · storage/disk · ai/agent</div>
         <ul>
-          <li>4 capability types: compute/gpu, compute/cpu, storage/disk, ai/agent</li>
-          <li>Toggle primary and backup providers on and off</li>
-          <li>Per-capability demand-pressure bars (green ≤1.0, amber ≤2.0, red >2.0)</li>
-          <li>Watch <code>RequirementStatus</code> updates in real time on requirers</li>
+          <li>Toggle providers on/off; demand-pressure bars update in real time</li>
+          <li><code>RequirementStatus</code> visible on requirers via gossip KV</li>
         </ul>
       </div>
       <div class="card c1">
-        <div class="card-title">emergent_pool</div>
-        <div class="card-sub"><a href="emergent_pool.html" style="color:var(--accent)">Open demo</a> · port 8098</div>
+        <div class="card-title">emergent-pool</div>
+        <div class="card-sub">20 GPU workers self-assemble via <code>define_capability_group</code></div>
         <ul>
-          <li>20 workers + 2 consumers; workers join/leave the gpu-pool group</li>
-          <li><code>define_capability_group</code> assembles the pool automatically</li>
-          <li><code>signal_wired_via</code> fans out to all pool members per dispatch</li>
-          <li>Flash lines show consumer → worker signal delivery live</li>
+          <li><code>signal_wired_via</code> fans out render jobs to all live pool members</li>
+          <li>Workers join/leave; pool membership converges epidemically</li>
         </ul>
       </div>
       <div class="card c1">
-        <div class="card-title">locality_wiring</div>
-        <div class="card-sub"><a href="locality_wiring.html" style="color:var(--accent)">Open demo</a> · port 8099</div>
+        <div class="card-title">locality-mesh</div>
+        <div class="card-sub">12 nodes · 2 AZs · 2 racks · <code>resolve_with_locality</code></div>
         <ul>
-          <li>12 nodes across 2 AZs × 2 racks × 3 hosts</li>
-          <li>Concentric rings: inner = same rack, outer = different AZ</li>
-          <li>Kill the closest provider — resolver shifts to the next ring</li>
-          <li>Click any node to make it the consumer; topology recomputes from that vantage</li>
+          <li>East/west render providers; consumer routes to nearest first</li>
+          <li>Kill closest — resolver shifts ring automatically</li>
         </ul>
       </div>
     </div>

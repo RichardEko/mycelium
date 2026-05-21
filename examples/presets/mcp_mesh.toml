@@ -1,0 +1,33 @@
+[mesh]
+name    = "mcp-tool-mesh"
+version = "0.1"
+
+[[group]]
+name        = "tool-providers"
+description = "MCP tool servers — search, compute, data"
+min_agents  = 2
+max_agents  = 8
+
+  [[group.capability]]
+  ns   = "compute"
+  name = "cpu"
+
+[[group]]
+name        = "data-providers"
+description = "Real-time and vector data sources"
+min_agents  = 1
+max_agents  = 4
+
+  [[group.capability]]
+  ns   = "data"
+  name = "realtime"
+
+[[group]]
+name        = "reasoning"
+description = "LLM reasoning and planning nodes"
+min_agents  = 1
+max_agents  = 3
+
+  [[group.capability]]
+  ns   = "llm"
+  name = "inference"

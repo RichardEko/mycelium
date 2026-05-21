@@ -1,0 +1,23 @@
+[mesh]
+name    = "compute-cluster"
+version = "0.1"
+
+[[group]]
+name        = "compute"
+description = "Parallel search and arithmetic workers"
+min_agents  = 2
+max_agents  = 6
+
+  [[group.capability]]
+  ns   = "compute"
+  name = "cpu"
+
+[[group]]
+name        = "data"
+description = "Real-time data feed"
+min_agents  = 1
+max_agents  = 2
+
+  [[group.capability]]
+  ns   = "data"
+  name = "realtime"
