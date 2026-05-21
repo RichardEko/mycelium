@@ -300,9 +300,13 @@
     filter: drop-shadow(0 0 3px #10b98155);
     transition: stroke 0.15s, stroke-width 0.15s, filter 0.15s;
   }
-  .demo-about { font-size: 11px; color: var(--muted); line-height: 1.6; margin-bottom: 6px; }
-  .demo-watch { font-size: 10px; color: var(--light); }
-  .demo-watch strong { color: var(--slate); font-weight: 600; }
+  #demo-card { border-left: 3px solid #7c3aed; background: linear-gradient(135deg,#faf5ff,#f8fafc); }
+  .demo-section { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.09em;
+    font-weight: 700; color: var(--muted); margin: 0 0 4px; }
+  .demo-about { font-size: 13px; color: var(--body); line-height: 1.65; margin: 0 0 10px; }
+  .demo-watch-row { font-size: 12px; color: var(--slate); line-height: 1.55; margin: 0 0 10px; }
+  .demo-watch-row strong { color: #7c3aed; font-weight: 600; }
+  .demo-controls-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:4px; }
   .btn-trigger { background: var(--violet-bg); color: var(--violet); border: 1px solid var(--violet-bd); }
   .btn-trigger:hover { background: var(--violet); color: #fff; }
 </style>
@@ -338,25 +342,22 @@
 <!-- ── LIVE TAB ── -->
 <div class="pane" id="pane-live">
 
-  <!-- Demo info (shown when a named preset is active) -->
-  <div class="card" id="demo-info-card" style="display:none;">
+  <!-- Demo description — always visible, filled by renderDemoInfo() on each poll -->
+  <div class="card" id="demo-card">
     <div class="card-header">
-      <span class="card-title" id="demo-info-title">—</span>
+      <span class="card-title" id="demo-info-title">Demo</span>
       <span class="pill neutral" style="font-size:10px;padding:1px 6px;" id="demo-preset-tag"></span>
+      <span id="demo-trigger-status" style="font-size:10px;color:var(--muted);margin-left:auto;"></span>
     </div>
     <div class="card-body">
-      <p class="demo-about" id="demo-info-about"></p>
-      <p class="demo-watch"><strong>Watch for: </strong><span id="demo-info-watch"></span></p>
+      <p class="demo-section">About this demo</p>
+      <p class="demo-about" id="demo-info-about">Loading…</p>
+      <div id="demo-watch-wrap" style="display:none;">
+        <p class="demo-section">What to watch for</p>
+        <p class="demo-watch-row" id="demo-info-watch"></p>
+      </div>
+      <div class="demo-controls-row" id="demo-controls-body"></div>
     </div>
-  </div>
-
-  <!-- Demo trigger controls -->
-  <div class="card" id="demo-controls-card" style="display:none;">
-    <div class="card-header">
-      <span class="card-title">Demo Controls</span>
-      <span id="demo-trigger-status" style="font-size:10px;color:var(--muted);"></span>
-    </div>
-    <div class="card-body" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;" id="demo-controls-body"></div>
   </div>
 
   <!-- Topology graph -->
@@ -557,22 +558,26 @@ const PRESET_INFO = {
 // ── Demo info ────────────────────────────────────────────────────────────────
 function renderDemoInfo(presetName) {
   const info = PRESET_INFO[presetName];
-  const ic = document.getElementById('demo-info-card');
-  const cc = document.getElementById('demo-controls-card');
-  if (!info) { ic.style.display = 'none'; cc.style.display = 'none'; return; }
-  ic.style.display = '';
-  document.getElementById('demo-info-title').textContent  = info.title;
-  document.getElementById('demo-preset-tag').textContent  = presetName;
-  document.getElementById('demo-info-about').textContent  = info.about;
-  document.getElementById('demo-info-watch').textContent  = info.watch;
+  document.getElementById('demo-info-title').textContent =
+    info ? info.title : (presetName || 'Demo');
+  document.getElementById('demo-preset-tag').textContent = presetName || '';
+  document.getElementById('demo-info-about').textContent = info
+    ? info.about
+    : 'Switch to the Manage tab and apply a named preset to see what it demonstrates.';
+  const watchWrap = document.getElementById('demo-watch-wrap');
+  if (info && info.watch) {
+    document.getElementById('demo-info-watch').textContent = info.watch;
+    watchWrap.style.display = '';
+  } else {
+    watchWrap.style.display = 'none';
+  }
   const body = document.getElementById('demo-controls-body');
-  if (info.triggers && info.triggers.length) {
-    cc.style.display = '';
+  if (info && info.triggers && info.triggers.length) {
     body.innerHTML = info.triggers.map(t =>
       `<button class="btn btn-trigger" onclick="fireTrigger('${esc(t.action)}')" title="${esc(t.tip)}">${esc(t.label)}</button>`
     ).join('');
   } else {
-    cc.style.display = 'none';
+    body.innerHTML = '';
   }
 }
 
@@ -646,9 +651,9 @@ async function poll() {
     if (stateRes && stateRes.ok) {
       const state = await stateRes.json();
       renderTopology(state);
-      if (state.log)         renderLog(state.log);
-      if (state.preset_name) renderDemoInfo(state.preset_name);
-      if (state.traffic)     animateTraffic(state.traffic);
+      if (state.log)     renderLog(state.log);
+      renderDemoInfo(state.preset_name || '');
+      if (state.traffic) animateTraffic(state.traffic);
     }
 
     fetch('/manifest').then(r => r.ok ? r.json() : null).then(m => {
