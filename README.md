@@ -8,6 +8,48 @@ Built on TCP epidemic propagation with last-write-wins conflict resolution. Laye
 persistent state; Layer 2 carries ephemeral events. Higher layers build Actor/Event systems,
 async RPC, and MCP AI tool routing on top — each agent chooses its own payload serialisation.
 
+## Demo — Mesh Control UI
+
+A three-node gossip mesh with a live management UI. No dependencies beyond Rust.
+
+```sh
+# Quick start — no Ollama needed
+MOCK_LLM=1 cargo run --example llm_agent
+
+# With a real LLM (Ollama default, or set OPENAI_BASE_URL / OPENAI_MODEL)
+cargo run --example llm_agent
+```
+
+Open **http://127.0.0.1:8100** in your browser.
+
+| What you get | Detail |
+|---|---|
+| Three gossip nodes | Ports 56000 – 56002, fully meshed |
+| Management UI | http://127.0.0.1:8100 – 8102 |
+| Emergent manager election | Lexicographically smallest live node-id becomes manager; browser auto-redirects |
+| Simulated failure | n-0 fails at T+35 s; n-1 becomes manager; n-0 recovers at T+50 s |
+| Preset gallery | 11 topology presets — click **Apply** and the manifest propagates to all nodes via gossip |
+| Manifest upload | Paste or load any TOML manifest; semver-gated, gossip-propagated |
+| Soft stop/start | Stop a group or the whole system; capabilities tombstone within one health interval |
+
+**Preset topologies available in the UI:**
+
+| Preset | Description |
+|---|---|
+| LLM Agent Demo | Real-time data · compute tools · LLM inference |
+| MCP Tool Mesh | Tool providers · data sources · LLM reasoning |
+| Compute Cluster | Parallel compute workers with real-time data feed |
+| Minimal Mesh | Single data node — development and testing |
+| Epidemic Ring | 16-node ring split into alpha/beta signal partitions |
+| Consensus Cluster | 7 voters + rotating proposers — two-phase ballot |
+| Dispatch Pool | Fast/slow worker tiers with adaptive dispatchers |
+| Emergent GPU Pool | 20 workers self-assemble; jobs route via `signal_wired_via` |
+| Capability Market | 4 capability kinds — compute/gpu, cpu, storage, ai/agent |
+| Locality Mesh | East/west providers — `resolve_with_locality` picks nearest |
+| Watchdog Cluster | Heartbeat services + `quorum_persistent` circuit breaker |
+
+---
+
 ## Build
 
 ```
@@ -542,9 +584,9 @@ need (`declare_requirement`), and how much demand exists relative to supply (`de
 registry; everything lives under the `cap/`, `req/`, and `gcap/` namespaces and anti-entropy-syncs
 to late joiners automatically.
 
-→ See [`examples/capability_market.rs`](examples/capability_market.rs) for a live browser demo
-(port 8097) showing providers, requirers, and per-capability demand-pressure bars across four
-capability types.
+→ The **Capability Market** preset in the [Mesh Control UI](docs/mesh_control.html) demonstrates
+providers, requirers, and per-capability demand-pressure bars across four capability types.
+(Standalone source archived at [`examples/archived/capability_market.rs`](examples/archived/capability_market.rs).)
 
 ### Advertising and Resolving Capabilities
 
@@ -621,9 +663,9 @@ The library projects their collective capability under `gcap/{group}/{ns}/{name}
 and handles group-level requirement wiring. One consolidated task per group keeps task count
 O(groups), not O(groups × members).
 
-→ See [`examples/emergent_pool.rs`](examples/emergent_pool.rs) for a live browser demo (port 8098)
-of a 20-node worker pool that assembles dynamically, accepts signals via `signal_wired_via`, and
-fans out to all members as nodes join and leave.
+→ The **Emergent GPU Pool** preset in the [Mesh Control UI](docs/mesh_control.html) shows a
+20-node worker pool that assembles dynamically and fans out render jobs to all members.
+(Standalone source archived at [`examples/archived/emergent_pool.rs`](examples/archived/emergent_pool.rs).)
 
 ```rust
 use mycelium::{CapabilityGroupDef, CapFilter, Capability};
@@ -669,9 +711,9 @@ Each node declares a `locality_path` in its config (coarse → fine: `["az1", "r
 `resolve_with_locality` sorts providers by shared-prefix depth with the caller — topologically
 closest first. `signal_wired_via_locality` combines wiring with locality preference in one call.
 
-→ See [`examples/locality_wiring.rs`](examples/locality_wiring.rs) for a browser demo (port 8099)
-of 12 nodes across two availability zones: kill a close provider and the resolver visibly shifts to
-the next ring; bring it back and the choice snaps inward.
+→ The **Locality Mesh** preset in the [Mesh Control UI](docs/mesh_control.html) covers 12 nodes
+across two availability zones: remove a close provider and the resolver shifts to the next ring.
+(Standalone source archived at [`examples/archived/locality_wiring.rs`](examples/archived/locality_wiring.rs).)
 
 ```rust
 // Config — set once before agent.start()
