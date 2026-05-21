@@ -181,8 +181,9 @@
 
   .topo-label { text-anchor: middle; font-weight: 700; font-size: 14px; fill: #0f172a; }
   .topo-state { text-anchor: middle; font-size: 10px; font-weight: 600; }
-  .topo-caps  { text-anchor: middle; font-size: 9.5px; fill: #64748b; }
-  .topo-tools { text-anchor: middle; font-size: 9.5px; fill: #94a3b8; }
+  .topo-caps  { text-anchor: middle; font-size: 9.5px; }
+  .topo-tools { text-anchor: middle; font-size: 9.5px; }
+  .topo-row-label { font-size: 7.5px; fill: #94a3b8; letter-spacing: 0.04em; }
 
   /* Animated call dot travelling along edge */
   .call-dot { fill: var(--amber); }
@@ -748,8 +749,8 @@ function renderTopology(state) {
       <text y="${inPool ? -7 : -12}" class="topo-label" font-size="${inPool ? 10 : 11}">${esc(n.label)}</text>
       <text y="${inPool ?  6 :   5}" class="topo-state"  fill="${color}" font-size="${inPool ? 9 : 11}">${esc(stateLabel)}</text>
       ${btnHtml}
-      ${caps  ? `<text y="68" class="topo-caps">${esc(caps)}</text>`   : ''}
-      ${tools ? `<text y="80" class="topo-tools">${esc(tools)}</text>` : ''}
+      ${caps  ? `<text y="68" text-anchor="middle" font-size="9.5"><tspan class="topo-row-label">caps  </tspan><tspan fill="#3b82f6">${esc(caps)}</tspan></text>` : ''}
+      ${tools ? `<text y="82" text-anchor="middle" font-size="9.5"><tspan class="topo-row-label">tools  </tspan><tspan fill="#d97706">${esc(tools)}</tspan></text>` : ''}
     `;
   });
 
@@ -805,7 +806,7 @@ function renderTopology(state) {
               stroke="${color}" stroke-width="${sw}" ${dash}/>
       <text class="topo-label" y="${isDeployed ? -12 : -7}" font-size="${isDeployed ? 11 : 10}">${esc(s.label)}</text>
       <text class="topo-state" y="${isDeployed ?   5 :  8}" fill="${color}" font-size="${isDeployed ? 11 : 9}">${note}</text>
-      ${isDeployed && scaps ? `<text y="68" class="topo-caps">${esc(scaps)}</text>` : ''}
+      ${isDeployed && scaps ? `<text y="68" text-anchor="middle" font-size="9.5"><tspan class="topo-row-label">caps  </tspan><tspan fill="#3b82f6">${esc(scaps)}</tspan></text>` : ''}
     `;
   });
 
