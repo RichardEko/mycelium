@@ -1,0 +1,61 @@
+# Cluster manifest for the llm_agent example.
+#
+# Describes the expected anatomy of the 3-node demonstration mesh.
+# Load with MeshManifest::load_from_file, then call check_status(&agent)
+# to compare declared groups against the live capability KV view.
+#
+# The first [[group.capability]] entry in each group is the "membership
+# indicator" — check_status() counts how many nodes currently advertise
+# that (ns, name) pair and compares the count against min_agents.
+
+[mesh]
+name    = "llm-agent-demo"
+version = "0.1"
+
+# ── Group 1: real-time data ───────────────────────────────────────────────────
+#
+# n-0 hosts weather and ping tools and advertises data/realtime.
+
+[[group]]
+name        = "realtime-data"
+description = "Weather and real-time data tools"
+min_agents  = 1
+max_agents  = 3
+
+  [[group.capability]]
+  ns   = "data"
+  name = "realtime"
+
+# ── Group 2: compute ──────────────────────────────────────────────────────────
+#
+# n-1 hosts search and calculate tools and advertises compute/cpu.
+# Also accepts cap.provision requests for vector-search (data/installable).
+
+[[group]]
+name        = "compute"
+description = "Search and arithmetic tools"
+min_agents  = 1
+max_agents  = 4
+
+  [[group.capability]]
+  ns   = "compute"
+  name = "cpu"
+
+  [[group.capability]]
+  ns   = "data"
+  name = "installable"
+
+# ── Group 3: LLM inference ────────────────────────────────────────────────────
+#
+# n-2 hosts the LLM planning loop. llm/inference is advertised once the
+# Ollama probe passes (or immediately in mock mode).
+
+[[group]]
+name        = "llm-inference"
+description = "LLM planning and inference"
+min_agents  = 1
+max_agents  = 2
+
+  [[group.capability]]
+  ns   = "llm"
+  name = "inference"

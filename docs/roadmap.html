@@ -1999,13 +1999,91 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
       <strong style="color:var(--text);font-style:normal;">has no direct precedent in the distributed systems literature.</strong>
       The two-timescale coordination model (neural signals + hormonal trails) applied to
       distributed AI agent orchestration is the differentiated position.</p>
+      <p style="margin-top:14px;">The substrate is architecturally novel and coherent. The ideas are well-executed and
+      genuinely more sophisticated than anything in the current AI agent framework landscape at
+      the gossip/capability layer. The gap between <strong style="color:var(--text);font-style:normal;">credible research prototype</strong>
+      and <strong style="color:var(--text);font-style:normal;">credible production system</strong>
+      is clearly scoped below — none of it is architectural; it is engineering work on a sound foundation.</p>
     </div>
+  </div>
+
+  <!-- ── Production Readiness Gap ── -->
+  <div class="section" id="production-gap">
+    <h2>Production Readiness Gap</h2>
+    <p style="color:var(--muted); margin-bottom:24px;">What separates the current state from a system deployable in a real multi-machine AI fleet.
+    None of these require architectural changes — the substrate is sound. They are engineering completions.</p>
+
+    <div class="two-col" style="grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px;">
+
+      <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:18px;">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+          <span style="font-size:20px;">🔴</span>
+          <span style="font-weight:700; font-size:14px;">Single-machine only in practice</span>
+        </div>
+        <p style="font-size:13px; color:var(--text2); margin-bottom:10px;">The TCP gossip protocol is multi-machine capable but has never been exercised across physical nodes.
+        No multi-machine integration tests, no deployment manifests, no operator runbook for bootstrapping a real cluster.</p>
+        <p style="font-size:12px; color:var(--muted);"><strong style="color:var(--text2);">Needs:</strong> 3-node integration test suite across real processes · reference Docker Compose topology · sizing guidance for 10/100/1 000-node clusters</p>
+      </div>
+
+      <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:18px;">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+          <span style="font-size:20px;">🔴</span>
+          <span style="font-weight:700; font-size:14px;">No persistence</span>
+        </div>
+        <p style="font-size:13px; color:var(--text2); margin-bottom:10px;">KV store is entirely in-memory. Agent state, capability history, group membership, and consensus ballots vanish on process restart.
+        A node that restarts has no memory of what it was doing or what it committed.</p>
+        <p style="font-size:12px; color:var(--muted);"><strong style="color:var(--text2);">Needs:</strong> Pluggable persistence backend (WAL + snapshot/replay on startup) · ConsensusEngine committed slots must survive restart for safety</p>
+      </div>
+
+      <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:18px;">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+          <span style="font-size:20px;">🔴</span>
+          <span style="font-weight:700; font-size:14px;">No security layer</span>
+        </div>
+        <p style="font-size:13px; color:var(--text2); margin-bottom:10px;">No authentication, no encryption, no payload integrity checking.
+        Any node that can reach the TCP port can join the mesh, read all KV state, inject signals, and forge capability advertisements.
+        The only protection is a comment.</p>
+        <p style="font-size:12px; color:var(--muted);"><strong style="color:var(--text2);">Needs:</strong> mTLS peer connections · NodeId backed by a keypair (identity signing) · payload HMAC/signing for consensus ballots at minimum</p>
+      </div>
+
+      <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:18px;">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+          <span style="font-size:20px;">🟡</span>
+          <span style="font-weight:700; font-size:14px;">Language bridges not built</span>
+        </div>
+        <p style="font-size:13px; color:var(--text2); margin-bottom:10px;">Python and TypeScript language bridges are designed but not implemented.
+        Only Rust agents can join the mesh natively. Python/TS agents can call in via MCP tool calls but cannot advertise capabilities, declare requirements, join groups, or observe full mesh state.</p>
+        <p style="font-size:12px; color:var(--muted);"><strong style="color:var(--text2);">Needs:</strong> HTTP gateway sidecar + <code>mycelium-py</code> SDK covering <code>advertise_capability</code>, <code>on_signal</code>, <code>emit</code>, <code>resolve</code>, <code>demand</code></p>
+      </div>
+
+      <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:18px; grid-column: 1 / -1;">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+          <span style="font-size:20px;">🟡</span>
+          <span style="font-weight:700; font-size:14px;">Observability is shallow</span>
+        </div>
+        <p style="font-size:13px; color:var(--text2); margin-bottom:10px;"><code>tracing</code> is wired in and <code>dropped_frames</code> / <code>peer_drop_counts()</code> provide basic diagnostics, but there is no structured metrics export.
+        An operator running a real cluster has no Prometheus endpoint to scrape, no dashboards, and no alerting surface beyond parsing log lines.</p>
+        <p style="font-size:12px; color:var(--muted);"><strong style="color:var(--text2);">Needs:</strong> <code>metrics</code> facade integration emitting <code>gossip_frames_dropped_total</code>, <code>signal_delivered_total</code>, <code>gossip_store_entries</code>, <code>contract_invocation_latency_ms</code> etc. · reference Grafana dashboard</p>
+      </div>
+
+    </div>
+
+    <table>
+      <thead><tr><th>Gap</th><th>Severity</th><th>Est. effort</th></tr></thead>
+      <tbody>
+        <tr><td>Multi-machine integration tests + deployment docs</td><td style="color:#ff7b72; font-weight:600;">Blocking</td><td>1–2 weeks</td></tr>
+        <tr><td>KV persistence (WAL + snapshot/replay)</td><td style="color:#ff7b72; font-weight:600;">Blocking</td><td>2–3 weeks</td></tr>
+        <tr><td>mTLS + node identity signing</td><td style="color:#ff7b72; font-weight:600;">Blocking</td><td>2–3 weeks</td></tr>
+        <tr><td>Python language bridge (<code>mycelium-py</code>)</td><td style="color:#ffa657; font-weight:600;">High</td><td>2–3 weeks</td></tr>
+        <tr><td>Prometheus metrics export + dashboards</td><td style="color:#e3b341; font-weight:600;">Medium</td><td>1 week</td></tr>
+      </tbody>
+    </table>
   </div>
 
   <!-- ── Footer ── -->
   <div style="margin-top:72px; padding-top:24px; border-top:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
-    <span style="font-size:12px; color:var(--muted);">mycelium · Engineering Roadmap · 2026-05-20</span>
-    <span style="font-size:12px; color:var(--muted);">Layers 1 &amp; 2 + Capability &amp; Discovery complete · Layer 3 next · Chemical signalling + stigmergy + threshold activation</span>
+    <span style="font-size:12px; color:var(--muted);">mycelium · Engineering Roadmap · 2026-05-21</span>
+    <span style="font-size:12px; color:var(--muted);">Layers 1 &amp; 2 + Capability &amp; Discovery + Agent State Machine complete · Language bridges + persistence + security next</span>
   </div>
 
 </div>

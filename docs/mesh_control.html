@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mycelium — Mesh Control</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:         #f8fafc;
+    --panel:      #ffffff;
+    --border:     #e2e8f0;
+    --border-mid: rgba(0,0,0,0.08);
+    --text:       #0f172a;
+    --muted:      #64748b;
+    --light:      #94a3b8;
+
+    --emerald:    #059669;
+    --emerald-bg: #d1fae5;
+    --emerald-bd: #a7f3d0;
+    --rose:       #e11d48;
+    --rose-bg:    #ffe4e6;
+    --rose-bd:    #fecdd3;
+    --amber:      #d97706;
+    --amber-bg:   #fef3c7;
+    --amber-bd:   #fde68a;
+    --slate:      #475569;
+    --slate-bg:   #f1f5f9;
+    --slate-bd:   #e2e8f0;
+
+    --radius:     6px;
+    --radius-lg:  10px;
+    --shadow-sm:  0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+    --shadow-md:  0 4px 12px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04);
+  }
+
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 12px;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+
+  /* ── Header ── */
+  .header {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    background: rgba(255,255,255,0.85);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border-mid);
+  }
+  .header-inner {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 0 16px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .logo {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .logo-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--emerald);
+    flex-shrink: 0;
+  }
+  .header-sep { width: 1px; height: 16px; background: var(--border); }
+  .mesh-name  { color: var(--muted); font-size: 11px; }
+  .header-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .refresh-indicator {
+    font-size: 10px;
+    color: var(--light);
+    letter-spacing: 0.03em;
+  }
+
+  /* ── Pill / badge ── */
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 99px;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.4;
+    border: 1px solid transparent;
+    white-space: nowrap;
+  }
+  .pill-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .pill.ok      { background: var(--emerald-bg); color: var(--emerald); border-color: var(--emerald-bd); }
+  .pill.deficit { background: var(--rose-bg);    color: var(--rose);    border-color: var(--rose-bd); }
+  .pill.stopped { background: var(--amber-bg);   color: var(--amber);   border-color: var(--amber-bd); }
+  .pill.neutral { background: var(--slate-bg);   color: var(--slate);   border-color: var(--slate-bd); }
+
+  /* ── Layout ── */
+  .main {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 20px 16px 48px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  /* ── Card / panel ── */
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+  }
+  .card-header {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .card-title {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+  }
+  .card-body { padding: 14px 16px; }
+
+  /* ── Buttons ── */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 12px;
+    border-radius: var(--radius);
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+    white-space: nowrap;
+  }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .btn-stop  { background: var(--rose-bg);    color: var(--rose);    border-color: var(--rose-bd); }
+  .btn-start { background: var(--emerald-bg); color: var(--emerald); border-color: var(--emerald-bd); }
+  .btn-upload{ background: var(--slate-bg);   color: var(--slate);   border-color: var(--slate-bd); }
+  .btn-stop:hover:not(:disabled)  { background: #fecdd3; }
+  .btn-start:hover:not(:disabled) { background: #a7f3d0; }
+  .btn-upload:hover:not(:disabled){ background: #e2e8f0; }
+  .btn-sm { padding: 3px 8px; font-size: 10px; }
+
+  /* ── System actions row ── */
+  .system-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  /* ── Groups table ── */
+  .groups-table { width: 100%; border-collapse: collapse; }
+  .groups-table th {
+    text-align: left;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--light);
+    padding: 0 8px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .groups-table th:first-child { padding-left: 0; }
+  .groups-table td {
+    padding: 10px 8px;
+    border-bottom: 1px solid var(--bg);
+    vertical-align: middle;
+  }
+  .groups-table td:first-child { padding-left: 0; }
+  .groups-table tr:last-child td { border-bottom: none; }
+  .group-name { font-weight: 500; font-size: 12px; }
+  .group-desc { font-size: 10px; color: var(--muted); margin-top: 1px; }
+  .count-cell { font-variant-numeric: tabular-nums; }
+  .count-sep  { color: var(--light); }
+  .controls-cell { display: flex; gap: 4px; }
+
+  /* ── Upload section ── */
+  .upload-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+  }
+  .file-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--panel);
+    font-size: 11px;
+    color: var(--muted);
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .file-label:hover { background: var(--bg); }
+  #file-input { display: none; }
+  .file-name { font-size: 11px; color: var(--muted); font-style: italic; }
+
+  textarea {
+    width: 100%;
+    font-family: "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 11px;
+    line-height: 1.6;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    resize: vertical;
+    min-height: 140px;
+    outline: none;
+  }
+  textarea:focus { border-color: #94a3b8; box-shadow: 0 0 0 2px rgba(148,163,184,0.2); }
+
+  .upload-status {
+    margin-top: 8px;
+    font-size: 11px;
+    min-height: 18px;
+    transition: color 0.15s;
+  }
+  .upload-status.ok      { color: var(--emerald); }
+  .upload-status.err     { color: var(--rose); }
+  .upload-status.pending { color: var(--muted); }
+
+  /* ── Manifest history ── */
+  .history-list { display: flex; flex-direction: column; gap: 4px; }
+  .history-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    border-radius: var(--radius);
+    background: var(--bg);
+    font-size: 11px;
+  }
+  .history-ver { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .history-label { color: var(--muted); }
+
+  /* ── Log ── */
+  .log-list { display: flex; flex-direction: column; gap: 2px; max-height: 200px; overflow-y: auto; }
+  .log-row { display: flex; gap: 8px; font-size: 11px; padding: 2px 0; }
+  .log-time { color: var(--light); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+  .log-event{ color: var(--muted); font-weight: 500; flex-shrink: 0; min-width: 72px; }
+  .log-detail{ color: var(--text); }
+
+  /* ── Empty state ── */
+  .empty { color: var(--light); font-size: 11px; font-style: italic; padding: 8px 0; }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header class="header">
+  <div class="header-inner">
+    <div class="logo">
+      <div class="logo-dot" id="health-dot"></div>
+      mycelium
+    </div>
+    <div class="header-sep"></div>
+    <span class="mesh-name" id="mesh-name">—</span>
+    <span id="mesh-version" class="pill neutral" style="font-size:10px;padding:1px 6px;">—</span>
+    <span id="health-pill" class="pill neutral">—</span>
+    <div class="header-right">
+      <span class="refresh-indicator" id="refresh-indicator">↺ polling</span>
+    </div>
+  </div>
+</header>
+
+<div class="main">
+
+  <!-- System Controls -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">System</span>
+    </div>
+    <div class="card-body">
+      <div class="system-actions">
+        <button class="btn btn-stop"  onclick="systemAction('stop')">&#9632; Stop System</button>
+        <button class="btn btn-start" onclick="systemAction('start')">&#9654; Start System</button>
+        <span id="system-action-status" style="font-size:11px;color:var(--muted);"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Groups -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Groups</span>
+      <span id="groups-summary" style="font-size:10px;color:var(--muted);"></span>
+    </div>
+    <div class="card-body" style="padding:0 16px;">
+      <table class="groups-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Agents</th>
+            <th>Status</th>
+            <th>Controls</th>
+          </tr>
+        </thead>
+        <tbody id="groups-tbody">
+          <tr><td colspan="4" class="empty" style="padding:14px 0;">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Upload Manifest -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Upload Manifest</span>
+    </div>
+    <div class="card-body">
+      <div class="upload-row">
+        <label class="file-label" for="file-input">
+          &#128196; Choose file
+        </label>
+        <input type="file" id="file-input" accept=".toml,text/plain" onchange="onFileChosen(event)">
+        <span class="file-name" id="file-name">No file chosen</span>
+      </div>
+      <textarea id="manifest-textarea" placeholder="# Paste or load a TOML manifest here&#10;[mesh]&#10;name    = &quot;...&quot;&#10;version = &quot;0.2&quot;&#10;&#10;[[group]]&#10;..."></textarea>
+      <div style="margin-top:8px;display:flex;align-items:center;gap:8px;">
+        <button class="btn btn-upload" onclick="uploadManifest()">&#8593; Upload</button>
+        <div class="upload-status" id="upload-status"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Manifest History -->
+  <div class="card" id="history-card" style="display:none;">
+    <div class="card-header">
+      <span class="card-title">Version History</span>
+    </div>
+    <div class="card-body">
+      <div class="history-list" id="history-list"></div>
+    </div>
+  </div>
+
+  <!-- Event Log -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Event Log</span>
+    </div>
+    <div class="card-body" style="padding:8px 16px;">
+      <div class="log-list" id="log-list">
+        <div class="empty">No events yet.</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+let lastStatus = null;
+let pollTimer  = null;
+
+// ── Polling ───────────────────────────────────────────────────────────────────
+async function poll() {
+  try {
+    const [statusRes, stateRes] = await Promise.all([
+      fetch('/system/status'),
+      fetch('/state').catch(() => null),
+    ]);
+    const status = await statusRes.json();
+    renderStatus(status);
+
+    if (stateRes && stateRes.ok) {
+      const state = await stateRes.json();
+      if (state.log) renderLog(state.log);
+      if (state.mesh_status) renderManifestMeta(state.mesh_status);
+    }
+
+    document.getElementById('refresh-indicator').textContent = '↺ ' + fmtTime(Date.now());
+  } catch (e) {
+    document.getElementById('refresh-indicator').textContent = '⚠ offline';
+  }
+}
+
+function startPolling() {
+  poll();
+  pollTimer = setInterval(poll, 3000);
+}
+
+// ── Render helpers ────────────────────────────────────────────────────────────
+function renderStatus(status) {
+  lastStatus = status;
+  const healthy = status.healthy;
+
+  // Header
+  const dot = document.getElementById('health-dot');
+  const pill = document.getElementById('health-pill');
+  dot.style.background = healthy ? 'var(--emerald)' : 'var(--rose)';
+  pill.className = 'pill ' + (healthy ? 'ok' : 'deficit');
+  pill.textContent = healthy ? '● HEALTHY' : '● DEGRADED';
+
+  // Summary
+  const satisfied = status.groups.filter(g => g.satisfied).length;
+  document.getElementById('groups-summary').textContent =
+    satisfied + '/' + status.groups.length + ' groups satisfied';
+
+  // Groups table
+  const tbody = document.getElementById('groups-tbody');
+  if (!status.groups.length) {
+    tbody.innerHTML = '<tr><td colspan="4" class="empty" style="padding:14px 0;">No groups defined.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = status.groups.map(g => {
+    const cls = g.satisfied ? 'ok' : 'deficit';
+    const label = g.satisfied ? '✓ OK' : '✗ DEFICIT';
+    const maxStr = g.max_agents != null ? '/' + g.max_agents : '';
+    return `<tr>
+      <td>
+        <div class="group-name">${esc(g.name)}</div>
+        ${g.description ? `<div class="group-desc">${esc(g.description)}</div>` : ''}
+      </td>
+      <td class="count-cell">
+        <span style="font-weight:600;">${g.actual}</span>
+        <span class="count-sep"> / </span>
+        <span>${g.min_agents}${maxStr}</span>
+      </td>
+      <td><span class="pill ${cls}">${label}</span></td>
+      <td>
+        <div class="controls-cell">
+          <button class="btn btn-stop btn-sm"  onclick="groupAction('${esc(g.name)}','stop')">■</button>
+          <button class="btn btn-start btn-sm" onclick="groupAction('${esc(g.name)}','start')">▶</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function renderManifestMeta(meshStatus) {
+  // Prefer /manifest endpoint for name/version; /state mesh_status for healthy
+  fetch('/manifest').then(r => r.ok ? r.json() : null).then(m => {
+    if (!m) return;
+    document.getElementById('mesh-name').textContent = m.name || '—';
+    const vPill = document.getElementById('mesh-version');
+    vPill.textContent = m.version ? 'v' + m.version : '—';
+    vPill.className = 'pill neutral';
+  }).catch(() => {});
+}
+
+function renderLog(entries) {
+  const el = document.getElementById('log-list');
+  if (!entries.length) { el.innerHTML = '<div class="empty">No events yet.</div>'; return; }
+  el.innerHTML = entries.slice(0, 30).map(e =>
+    `<div class="log-row">
+      <span class="log-time">${esc(e.time)}</span>
+      <span class="log-event">${esc(e.event)}</span>
+      <span class="log-detail">${esc(e.detail)}</span>
+    </div>`
+  ).join('');
+}
+
+// ── Actions ───────────────────────────────────────────────────────────────────
+async function systemAction(action) {
+  const el = document.getElementById('system-action-status');
+  el.textContent = action === 'stop' ? 'Stopping…' : 'Starting…';
+  el.style.color = 'var(--muted)';
+  try {
+    const r = await fetch('/system/' + action, { method: 'POST' });
+    const j = await r.json();
+    if (r.ok) {
+      el.textContent = action === 'stop'
+        ? 'Stopped — capabilities will tombstone within 10 s'
+        : 'Started — capabilities will re-advertise within 10 s';
+      el.style.color = 'var(--emerald)';
+    } else {
+      el.textContent = '✗ ' + (j.error || 'Error');
+      el.style.color = 'var(--rose)';
+    }
+  } catch (e) {
+    el.textContent = '✗ Request failed';
+    el.style.color = 'var(--rose)';
+  }
+  setTimeout(poll, 500);
+}
+
+async function groupAction(name, action) {
+  try {
+    await fetch('/system/groups/' + encodeURIComponent(name) + '/' + action, { method: 'POST' });
+    setTimeout(poll, 500);
+  } catch (e) {}
+}
+
+// ── Manifest upload ───────────────────────────────────────────────────────────
+function onFileChosen(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  document.getElementById('file-name').textContent = file.name;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    document.getElementById('manifest-textarea').value = ev.target.result;
+  };
+  reader.readAsText(file);
+}
+
+async function uploadManifest() {
+  const body = document.getElementById('manifest-textarea').value.trim();
+  const status = document.getElementById('upload-status');
+  if (!body) { status.textContent = 'Paste a TOML manifest first.'; status.className = 'upload-status err'; return; }
+
+  status.textContent = 'Uploading…';
+  status.className = 'upload-status pending';
+  try {
+    const r = await fetch('/manifest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body,
+    });
+    const j = await r.json();
+    if (r.ok) {
+      status.textContent = '✓ Accepted — v' + j.version + ' now active';
+      status.className = 'upload-status ok';
+      setTimeout(poll, 500);
+    } else {
+      status.textContent = '✗ ' + (j.error || 'Upload failed');
+      status.className = 'upload-status err';
+    }
+  } catch (e) {
+    status.textContent = '✗ Request failed — is the node running?';
+    status.className = 'upload-status err';
+  }
+}
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s ?? '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+function fmtTime(ms) {
+  return new Date(ms).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+startPolling();
+
+// Load current manifest into textarea on page load
+fetch('/manifest').then(r => r.ok ? r.text() : null).then(t => {
+  // /manifest returns JSON; textarea wants TOML — skip pre-fill, user loads file
+}).catch(() => {});
+</script>
+</body>
+</html>

@@ -30,6 +30,7 @@ mod emergent_groups;
 mod wiring;
 pub(crate) mod helpers;
 mod tasks;
+mod state_machine;
 
 pub(crate) use helpers::emit_signal;
 pub(crate) use helpers::emit_signal_async;
@@ -37,6 +38,7 @@ pub(crate) use helpers::make_gossip_update;
 pub(crate) use opacity::is_self_opaque;
 pub use mcp::{McpClientHandle, McpError, McpToolHandle};
 pub use rpc::RpcError;
+pub use state_machine::{AgentPolicy, ExecutionState, AgentStateMachine, PolicyViolation};
 
 /// Cached roster entry for a single group, held in the short-lived `group_roster_cache`.
 pub(super) struct RosterEntry {
@@ -302,6 +304,21 @@ impl GossipAgent {
             task_ctx,
             group_roster_cache: Arc::new(papaya::HashMap::new()),
         }
+    }
+}
+
+impl GossipAgent {
+    /// Creates an [`AgentStateMachine`] bound to this node.
+    ///
+    /// The state machine writes every committed transition to `agent/{node}/state`
+    /// in the gossip KV store (visible to the whole mesh) and emits an
+    /// `agent.state` signal. Policy guards in `policy` are checked synchronously
+    /// (and asynchronously for approval flows) before each transition.
+    ///
+    /// Turn and tool-call counters are reset when the state machine enters
+    /// `Idle`, `Done`, or `Failed` — i.e., at the start of each new task.
+    pub fn agent_state_machine(&self, policy: AgentPolicy) -> Arc<AgentStateMachine> {
+        AgentStateMachine::new(Arc::clone(&self.task_ctx), policy)
     }
 }
 

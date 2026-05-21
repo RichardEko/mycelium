@@ -1,7 +1,7 @@
 # Mycelium — Engineering Roadmap
 
-> **Status:** Layer 1 complete. Layer 2 complete. Layer III (Consensus) complete. Capability & Discovery subsystem complete. Layers 3–5 (Service Patterns / AI / Observability) planned.
-> **Last updated:** 2026-05-20
+> **Status:** Layer 1 complete. Layer 2 complete. Layer III (Consensus) complete. Capability & Discovery subsystem complete. Agent state machine (Layer V) complete. MCP bridge (server + client) complete. Config-driven capability probing complete. Layers 3–5 (Service Patterns / AI / Observability) planned.
+> **Last updated:** 2026-05-21
 
 ---
 
@@ -1021,13 +1021,18 @@ Weeks:  0         2          4          6          8         10        12
 | Capability | resolve_with_locality, signal_wired_via_locality, locality paths | **Complete** |
 | Capability | demand, watch_demand, DemandStatus (demand pressure surface) | **Complete** |
 | Capability | Predicate-narrowed watchers, 50 ms debounce, one-task-per-group | **Complete** |
-| Layer 3 | Embedded HTTP server, SSE streaming, `rpc_call`/`rpc_respond` primitive | **Blocking for Layer 4** |
+| Layer 3 | Embedded HTTP server, SSE streaming, `rpc_call`/`rpc_respond` primitive | **Complete** |
 | Layer 3 | Bulk payload / `invoke.bulk` ticket, Actor/Event mailboxes, scatter-gather | Planned |
-| Layer 4 | MCP bridge: server role (tools/ KV + rpc_call dispatch) | Planned |
-| Layer 4 | MCP bridge: client role (outbound to external MCP servers) | Planned |
-| Layer 4 | Python language bridge: HTTP gateway + `mycelium` SDK | Planned |
+| Layer 4 | MCP bridge: server role (tools/ KV + rpc_call dispatch) | **Complete** |
+| Layer 4 | MCP bridge: client role (outbound to external MCP servers) | **Complete** |
+| Layer 4 | Agent state machine: policy-guarded transitions, turn/call budgets, state_timeouts | **Complete** |
+| Layer 4 | `NodeCapabilityConfig`: declarative local capability declaration + probe loop | **Complete** |
+| Layer 4 | Python language bridge: HTTP gateway + `mycelium-py` SDK | Planned |
 | Layer 4 | TypeScript language bridge | Planned |
-| Layer 5 | Metrics, Prometheus exporter | Planned |
+| Layer 5 | Metrics, Prometheus exporter, Grafana dashboard | Planned |
+| **Production** | Multi-machine integration tests + Docker Compose reference topology | **Blocking** |
+| **Production** | KV persistence: WAL + snapshot/replay; consensus committed-slot durability | **Blocking** |
+| **Production** | Security: mTLS peer connections + NodeId keypair + consensus payload signing | **Blocking** |
 | Consistency overlay | `consistent_set`, `consistent_get`, `distributed_lock`, `elect_leader` | Planned |
 | Ordering overlay | `append`, `subscribe_log`, `scan_log`, `compact_log` (ordered log) | Planned |
 | Ordering overlay | `subscribe_log_group` + consumer group offset tracking | Planned |
@@ -1211,4 +1216,96 @@ contract-based capability advertisement — specifically targeting adaptive AI a
 minimising operational overhead and maximising evolvability matter. None of the individual
 components is new; the particular assembly, grounded in the biological receptor metaphor as a
 first-class design principle, is the differentiated position.
+
+The substrate is architecturally novel and coherent relative to the current AI agent framework
+landscape. The ideas are well-executed. The gap between **credible research prototype** and
+**credible production system** is clearly scoped below — none of it is architectural; it is
+engineering work on a sound foundation.
+
+---
+
+## Production Readiness Gap
+
+The following gaps are the difference between what exists today and a system that could be
+deployed in a real multi-machine AI fleet. They are ordered by blocking severity.
+
+### 1. Single-machine only in practice
+
+The TCP gossip protocol is fully multi-machine capable — `GossipConfig` accepts arbitrary
+`bind_address` and `bootstrap_peers` — but it has never been exercised across physical nodes.
+There are no multi-machine integration tests, no deployment manifests, and no documented
+operator runbook for bootstrapping a real cluster.
+
+**What is needed:** A 3-node integration test suite that actually opens TCP connections across
+processes (not in-process via loopback ports). A reference Docker Compose topology. Documented
+`max_peers`, `max_forwarding_peers`, and `epidemic_extra_peers` sizing guidance for clusters
+of 10, 100, and 1,000 nodes.
+
+### 2. No persistence
+
+The KV store is entirely in-memory. Agent state, capability history, group membership, and
+consensus ballots vanish on process restart. For any real fleet this is blocking: a node that
+restarts has no memory of what it was doing, what capabilities it advertised, or what groups
+it belonged to.
+
+**What is needed:** A pluggable persistence backend for the KV store. The minimum viable form
+is append-only WAL flush to disk (RocksDB or SQLite), with snapshot + replay on startup. The
+`ConsensusEngine`'s committed slots must survive restart for safety. Anti-entropy sync
+recovers the rest from peers, but the node needs its own committed state to avoid re-proposing
+slots that already committed.
+
+### 3. No security layer
+
+There is no authentication, no encryption, and no payload integrity checking. The only
+protection is a comment: "do not expose gossip ports to untrusted networks." Any node that
+can reach the TCP port can join the mesh, read all KV state, inject signals, and forge
+capability advertisements.
+
+**What is needed:**
+- **mTLS** for peer connections — each node presents a certificate; mutual verification on
+  connect. The `socket2` dependency is already present; `rustls` is the natural addition.
+- **Node identity signing** — `NodeId` should be backed by a keypair so that capability
+  advertisements and consensus ballots can be verified as originating from the claimed node.
+- **Payload HMAC or signing** — at minimum for consensus ballots; ideally for all KV writes.
+
+### 4. Language bridges not built
+
+The Python and TypeScript language bridges are designed (HTTP gateway sidecar, `mycelium`
+Python SDK surface documented in the roadmap) but not implemented. Until they exist, only
+Rust agents can join the mesh natively. Python and TypeScript agents can call in via MCP tool
+calls but cannot advertise capabilities, declare requirements, join groups, or observe the
+full mesh state.
+
+**What is needed:** The HTTP gateway sidecar (the `axum` server is already embedded) plus a
+minimal Python SDK (`mycelium-py`) covering: `advertise_capability`, `declare_requirement`,
+`on_signal`, `emit`, `resolve`, `demand`. TypeScript follows the same gateway pattern.
+
+### 5. Observability is shallow
+
+The `tracing` crate is wired in and `dropped_frames` / `peer_drop_counts()` provide basic
+diagnostics, but there is no structured metrics export. An operator running a real cluster
+has no Prometheus endpoint to scrape, no dashboards, and no alerting surface beyond parsing
+log lines.
+
+**What is needed:** A `metrics` facade integration (zero-cost when no recorder is installed)
+emitting the counters already identified in the Layer 5 section:
+`gossip_frames_dropped_total`, `signal_delivered_total`, `gossip_store_entries`,
+`gossip_peers_connected`, `contract_invocations_total`, `contract_invocation_latency_ms`.
+A reference Grafana dashboard JSON. A `METRICS.md` documenting what each counter means and
+what thresholds should trigger alerts.
+
+---
+
+### Gap Summary
+
+| Gap | Severity | Estimated effort |
+|-----|----------|-----------------|
+| Multi-machine integration tests + deployment docs | **Blocking** | 1–2 weeks |
+| KV persistence (WAL + snapshot/replay) | **Blocking** | 2–3 weeks |
+| mTLS + node identity signing | **Blocking** | 2–3 weeks |
+| Python language bridge (`mycelium-py`) | High | 2–3 weeks |
+| Prometheus metrics export + dashboards | Medium | 1 week |
+
+None of these require architectural changes. The substrate is sound; these are engineering
+completions on top of it.
 

@@ -1,0 +1,14 @@
+# Capability declarations for n-0 (weather + ping tool node)
+#
+# No probe_url: these capabilities are always-alive because the tools
+# run in-process alongside the agent.  They will be advertised immediately
+# on startup and will not be tombstoned unless the process exits.
+
+[[capability]]
+ns       = "data"
+name     = "realtime"
+ttl_secs = 60
+
+  [capability.attrs]
+  provider = "n-0"
+  tools    = "weather,ping"

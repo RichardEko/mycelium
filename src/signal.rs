@@ -731,6 +731,23 @@ pub mod signal_kind {
     /// MCP tool invocation — payload is a JSON-RPC 2.0 request body.
     /// Replies are sent as [`RPC_RESULT`] signals back to the caller.
     pub const MCP_INVOKE: &str = "mcp.invoke";
+
+    /// Agent state transition notification.
+    /// Payload: `{"node": "<id>", "from": "<state>", "to": "<state>"}`.
+    /// Emitted by [`AgentStateMachine::transition`](crate::AgentStateMachine::transition)
+    /// after every committed transition.
+    pub const AGENT_STATE: &str = "agent.state";
+
+    /// Agent requesting supervisor approval before an `Invoking` transition.
+    /// Payload: `{"node": "<id>", "tool": "<name>"}`.
+    /// Supervisors reply with [`AGENT_VETO`] to block the transition or stay
+    /// silent to approve (default — no reply within 30 s = approved).
+    pub const AGENT_APPROVE: &str = "agent.approve";
+
+    /// Supervisor veto of a pending `Invoking` transition.
+    /// Payload: `{"tool": "<name>"}`. Must arrive within 30 s of the
+    /// corresponding [`AGENT_APPROVE`] signal.
+    pub const AGENT_VETO: &str = "agent.veto";
 }
 
 /// Well-known KV key namespace prefixes for pheromone trail and membership state.

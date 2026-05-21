@@ -143,10 +143,11 @@ pub struct CapabilityGroupDef {
     /// `signal_wired_via` and `watch_wiring` to discover provider groups.
     #[serde(default)]
     pub provides:        Vec<Capability>,
-    /// Filters that the group's signal-flow depends on. Phase 4 uses these
-    /// informationally — `signal_wired_via(filter)` is the actual send
-    /// primitive. Phase 7 will couple unsatisfied requirements to per-member
-    /// opacity.
+    /// Filters that the group's signal-flow depends on. When a filter is
+    /// unsatisfied the group membership task writes a
+    /// `sys/load/{node}/group-req/{group}/{idx}` opacity entry, making the
+    /// node opaque until the requirement is met. `signal_wired_via(filter)`
+    /// is the actual send primitive.
     #[serde(default)]
     pub requires:        Vec<CapFilter>,
 }
@@ -336,7 +337,7 @@ macro_rules! impl_bincode_codec {
                 buf.freeze()
             }
             #[allow(dead_code)]
-            pub(crate) fn decode(bytes: &[u8]) -> Option<Self> {
+            pub fn decode(bytes: &[u8]) -> Option<Self> {
                 bincode::serde::decode_from_slice(bytes, bincode_cfg()).ok().map(|(v, _)| v)
             }
         }

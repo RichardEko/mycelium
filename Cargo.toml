@@ -26,7 +26,7 @@ exclude = ["fuzz"]
 
 [dependencies]
 # Core
-tokio = { version = "1.35", features = ["full"] }
+tokio = { version = "1.35", features = ["full", "test-util"] }
 fastrand = "2"
 
 # Data structures
@@ -64,12 +64,13 @@ base64       = "0.22"
 reqwest      = { version = "0.12", features = ["json"] }
 
 [dev-dependencies]
-tokio     = { version = "1.35", features = ["full"] }
-criterion = { version = "0.5", features = ["async_tokio"] }
-libc      = "0.2"
-wgpu      = "22"
-pollster  = "0.3"
-bytemuck  = { version = "1", features = ["derive"] }
+tokio        = { version = "1.35", features = ["full"] }
+criterion    = { version = "0.5", features = ["async_tokio"] }
+libc         = "0.2"
+wgpu         = "22"
+pollster     = "0.3"
+bytemuck     = { version = "1", features = ["derive"] }
+async-openai = "0.28"
 
 [[bench]]
 name    = "throughput"

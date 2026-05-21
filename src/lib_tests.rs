@@ -43,6 +43,15 @@ fn make_agent() -> GossipAgent {
     )
 }
 
+/// Agent for state-machine tests — uses port 0 (no networking) but a non-zero
+/// port in the NodeId so `agent/{node}/state` KV keys parse correctly.
+pub(crate) fn make_agent_for_sm_tests() -> GossipAgent {
+    GossipAgent::new(
+        NodeId::new("127.0.0.1", 19876).unwrap(),
+        GossipConfig::default(),
+    )
+}
+
 async fn loopback_pair() -> (TcpStream, TcpStream) {
     let listener    = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr        = listener.local_addr().unwrap();

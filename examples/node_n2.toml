@@ -1,0 +1,56 @@
+# Capability declarations for n-2 (LLM agent node)
+#
+# llm/inference has a probe_url: it is only advertised on the mesh when Ollama
+# is running at the configured address.  If Ollama is not running at startup the
+# probe loop retries every 10 s and advertises as soon as it recovers.
+#
+# llm/installable entries have no probe_url: they declare which models *can* be
+# pulled, regardless of which are currently hot.  Another node can send a
+# "cap.provision" RPC to trigger a pull; n-2's provision handler then drives
+# the loading tier (llm/loading) → inference tier (llm/inference) lifecycle.
+#
+# To override for mock mode, the application sets probe_url = None and
+# backend = "mock" on the inference entry before calling run_capability_probes.
+
+[[capability]]
+ns                 = "llm"
+name               = "inference"
+probe_url          = "http://localhost:11434/api/tags"
+probe_timeout_secs = 3
+ttl_secs           = 30
+
+  [capability.attrs]
+  model    = "llama3.2"
+  context  = 8192
+  backend  = "ollama"
+  endpoint = "http://localhost:11434/v1"
+
+[[capability]]
+ns       = "llm"
+name     = "installable"
+ttl_secs = 300
+
+  [capability.attrs]
+  model    = "llama3.2:1b"
+  size_gb  = 1.3
+  est_mins = 1
+
+[[capability]]
+ns       = "llm"
+name     = "installable"
+ttl_secs = 300
+
+  [capability.attrs]
+  model    = "llama3.2"
+  size_gb  = 2.0
+  est_mins = 3
+
+[[capability]]
+ns       = "llm"
+name     = "installable"
+ttl_secs = 300
+
+  [capability.attrs]
+  model    = "mistral"
+  size_gb  = 4.1
+  est_mins = 5

@@ -1,0 +1,27 @@
+# Capability declarations for n-1 (search + calculate tool node)
+#
+# compute/cpu is always-alive (in-process tools, no external dependency).
+#
+# data/installable declares that vector-search can be provisioned on this node
+# via a "cap.provision" RPC.  Also always-alive — the node can always accept
+# a provision request; whether the install succeeds is a runtime concern.
+
+[[capability]]
+ns       = "compute"
+name     = "cpu"
+ttl_secs = 60
+
+  [capability.attrs]
+  provider = "n-1"
+  tools    = "search,calculate"
+
+[[capability]]
+ns       = "data"
+name     = "installable"
+ttl_secs = 300
+
+  [capability.attrs]
+  name           = "vector-search"
+  install_method = "pip"
+  est_secs       = 15
+  size_mb        = 45

@@ -58,7 +58,7 @@
 //! | `grp/{group}/{node}`                | Layer II group membership                                    |
 //! | `sys/load/{node}/{kind}`            | Layer II opacity (load + auto-opacity composition)           |
 //! | `sys/load/{node}/req/{ns}/{name}`   | Phase 3 requirement opacity (composes via `is_self_opaque`)  |
-//! | `sys/load/{node}/group-req/{g}/{i}` | Phase 7 group-requirement opacity (same composition)         |
+//! | `sys/load/{node}/group-req/{g}/{i}` | Group-requirement opacity; written by the emergent-group membership task when a `CapabilityGroupDef::requires` filter is unsatisfied |
 //! | `sys/quorum/{kind}/{sender}`        | Persistent quorum evidence                                   |
 //! | `sys/topology-override/{group}`     | Layer III operator escape hatch (value: `b"true"`)           |
 //! | `consensus/committed/{slot}`        | Layer III consensus state                                    |
@@ -70,6 +70,16 @@
 //! | `cap-group/{group}`                 | Emergent capability-group definitions                        |
 //! | `gcap/{group}/{ns}/{name}/{contrib}`| Group-level capability projections                           |
 //! | `tools/{name}/{node}`              | Layer IV MCP tool registrations (value: JSON Schema bytes)   |
+//! | `agent/{node}/state`               | Layer V agent state machine — current state string (gossips to mesh) |
+//! | `agent/{node}/policy`              | Layer V serialised AgentPolicy (readable by monitors/supervisors) |
+//! | `agent/{node}/task/{id}/turn`      | Layer V turn counter for `max_turns` enforcement              |
+//! | `agent/{node}/task/{id}/calls`     | Layer V tool-call counter for `tool_budget` enforcement       |
+//! | `agent/{node}/provision/{item}/error` | Last provisioning failure — written by the **application** provisioning handler, not the substrate |
+//! | `cap/{node}/llm/inference`         | LLM backend capability (model, context, backend, endpoint attrs) |
+//! | `cap/{node}/llm/installable`       | LLM models that can be pulled (model, size_gb, est_mins attrs) |
+//! | `cap/{node}/llm/loading`           | LLM model pull in progress (model, progress 0–100 attrs)     |
+//! | `cap/{node}/{ns}/installable`      | Any dynamically provisionable software capability             |
+//! | `cap/{node}/{ns}/loading`          | Provisioning in progress; `progress` attr 0–100              |
 //!
 //! Layer-III writes that read or write KV (consensus engine,
 //! `sys/topology-override` reads) are documented at their call sites as
@@ -81,8 +91,10 @@
 #![forbid(unsafe_code)]
 
 pub mod capability;
+pub mod capability_config;
 pub mod config;
 pub mod error;
+pub mod mesh_manifest;
 pub mod signal;
 
 mod agent;
@@ -96,12 +108,23 @@ mod seen;
 mod store;
 mod writer;
 
-pub use agent::{GossipAgent, McpClientHandle, McpError, McpToolHandle, RpcError, SystemStats};
+pub use agent::{
+    AgentPolicy, ExecutionState, AgentStateMachine, PolicyViolation,
+    GossipAgent, McpClientHandle, McpError, McpToolHandle, RpcError, SystemStats,
+};
 pub use capability::{
     CapConstraint, CapFilter, CapRanking, CapValue, Capability, CapabilityEvent,
     CapabilityGroupDef, CapabilityGroupHandle, CapabilityHandle,
     DemandStatus, RankingOrder, RequirementHandle, RequirementStatus,
     WiredEmitOutcome, WiringProvider, WiringStatus,
+};
+pub use capability_config::{
+    CapabilityProbeEntry, NodeCapabilityConfig, ProbeEvent, ProbeState,
+    TomlCapValue, run_capability_probes,
+};
+pub use mesh_manifest::{
+    GroupManifest, GroupStatus, MeshManifest, MeshMeta, MeshStatus,
+    manifest_keys, semver_gt,
 };
 pub use config::{GossipConfig, GroupTopologyPolicy, TopologyEnforcement};
 pub use locality::LocalityPreference;
