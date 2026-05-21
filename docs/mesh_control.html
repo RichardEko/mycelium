@@ -893,9 +893,12 @@ function renderTopology(state) {
 
     const color    = STATE_COLOR(n.state);
     const stateRaw = n.state || 'Ready';
-    const stateLabel = stateRaw.includes(':')
-      ? stateRaw.split(':')[0] + ' ' + stateRaw.split(':')[1]
-      : stateRaw;
+    const stateVerb = stateRaw.includes(':') ? stateRaw.split(':')[0] : stateRaw;
+    const stateTool = stateRaw.includes(':') ? stateRaw.split(':')[1] : null;
+    // Truncate long tool names so they fit in the pill
+    const toolShort = stateTool ? (stateTool.length > 12 ? stateTool.slice(0,11) + '…' : stateTool) : null;
+    const stateLabel = toolShort ? stateVerb + ' ' + toolShort : stateVerb;
+    const isActive = !['ready','running','offline','paused'].includes(stateVerb.toLowerCase());
     const inPool = nodeAtPool[i];
     const r  = inPool ? 30 : 44;
     const sw = inPool ? 1.5 : 2.5;
@@ -927,11 +930,22 @@ function renderTopology(state) {
       </g>`;
     }
 
+    // State pill: solid background badge for active states, plain text for idle
+    const pillW = inPool ? 48 : 62;
+    const stateHtml = inPool
+      ? `<text y="6" class="topo-state" fill="${color}" font-size="9">${esc(stateLabel)}</text>`
+      : isActive
+        ? `<g>
+            <rect x="${-(pillW/2)}" y="-10" width="${pillW}" height="15" rx="7"
+              fill="${color}" opacity="0.9"/>
+            <text y="2" text-anchor="middle" font-size="9" fill="#fff" font-weight="700">${esc(stateLabel)}</text>
+          </g>`
+        : `<text y="-1" class="topo-state" fill="${color}" font-size="11">${esc(stateLabel)}</text>`;
     g.innerHTML = `
       <circle id="tnode-circle-${i}" class="topo-node-circle"
         r="${r}" fill="${color}1a" stroke="${color}" stroke-width="${sw}" ${dash}/>
       <text y="${inPool ? -7 : -14}" class="topo-label" font-size="${inPool ? 10 : 11}">${esc(n.label)}</text>
-      <text y="${inPool ?  6 :  -1}" class="topo-state"  fill="${color}" font-size="${inPool ? 9 : 11}">${esc(stateLabel)}</text>
+      ${stateHtml}
       ${hasRole ? `<text y="11" text-anchor="middle" font-size="8" fill="#0d9488" font-style="italic">${esc(n.role)}</text>` : ''}
       ${btnHtml}
       ${caps  ? `<text y="68" text-anchor="middle" font-size="9.5"><tspan class="topo-row-label">caps  </tspan><tspan fill="#3b82f6">${esc(caps)}</tspan></text>` : ''}
@@ -1192,7 +1206,7 @@ function fmtTime(ms) {
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 poll();
-setInterval(poll, 3000);
+setInterval(poll, 900);
 loadPresets();
 </script>
 </body>
