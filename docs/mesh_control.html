@@ -260,10 +260,14 @@
   .node-state { font-size: 10px; font-weight: 600; padding: 1px 7px;
                 border-radius: 99px; white-space: nowrap; }
   .node-state.idle       { background: var(--slate-bg);   color: var(--slate);   }
+  .node-state.ready      { background: var(--emerald-bg); color: var(--emerald); }
+  .node-state.running    { background: var(--emerald-bg); color: var(--emerald); }
   .node-state.planning   { background: var(--violet-bg);  color: var(--violet);  }
   .node-state.invoking   { background: var(--amber-bg);   color: var(--amber);   }
   .node-state.reflecting { background: var(--amber-bg);   color: var(--amber);   }
   .node-state.done       { background: var(--emerald-bg); color: var(--emerald); }
+  .node-state.paused     { background: var(--amber-bg);   color: var(--amber);   }
+  .node-state.offline    { background: var(--slate-bg);   color: var(--light);   }
   .node-state.failed     { background: var(--rose-bg);    color: var(--rose);    }
   .node-section-label {
     font-size: 9px; font-weight: 600; text-transform: uppercase;
@@ -620,8 +624,11 @@ function renderLive(state) {
   const grid = document.getElementById('node-grid');
   if (state.nodes && state.nodes.length) {
     grid.innerHTML = state.nodes.map(n => {
-      const stateKey = (n.state || 'Idle').toLowerCase().split(' ')[0]; // "Invoking {tool}" → "invoking"
-      const stateLabel = n.state || 'Idle';
+      const stateRaw  = n.state || 'Ready';
+      const stateKey  = stateRaw.toLowerCase().split(/[\s:]/)[0];
+      const stateLabel = stateRaw.includes(':')
+        ? stateRaw.split(':')[0] + ' ' + stateRaw.split(':')[1]
+        : stateRaw;
       const caps = (n.caps || []).map(c =>
         `<span class="node-tag">${esc(c.ns)}/${esc(c.name)}</span>`
       ).join('');

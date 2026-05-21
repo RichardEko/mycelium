@@ -789,8 +789,24 @@ fn build_state_json(app: &AppState) -> String {
         (&app.agent_n2, "n-2"),
     ].iter().map(|(agent, label)| {
         let nid   = agent.node_id();
-        let state = if *label == "n-2" { app.sm.state().to_kv_str() } else { "Idle".into() };
         let alive = agent.peers().len() > 0 || *label == "n-2";
+        let paused = match *label {
+            "n-0" => app.pause_n0.load(Ordering::Relaxed),
+            "n-1" => app.pause_n1.load(Ordering::Relaxed),
+            _     => app.pause_n2.load(Ordering::Relaxed),
+        };
+        let state: String = if *label == "n-2" {
+            // n-2 runs the planning loop — show the real SM state
+            let s = app.sm.state().to_kv_str();
+            // "Idle" between cycles means "waiting for next task", not "off"
+            if s == "Idle" { "Ready".into() } else { s }
+        } else if !alive {
+            "Offline".into()
+        } else if paused {
+            "Paused".into()
+        } else {
+            "Running".into()
+        };
         json!({
             "label": label, "state": state, "alive": alive,
             "tools": tools_for_node(reporter, nid),
