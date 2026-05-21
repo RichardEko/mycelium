@@ -587,39 +587,46 @@ function renderDemoInfo(presetName) {
 }
 
 // Presets where we want to surface node states in the demo card
+const STATE_PRESETS_WITH_PLANNER = new Set(['llm-agent-demo']);
 const STATE_PRESET_NODES = {
-  'llm-agent-demo':    [{ idx: 2, label: 'n-2 (planner)' }],
   'consensus-cluster': [{ idx: 2, label: 'n-2 (proposer)' }],
   'watchdog-cluster':  [{ idx: 1, label: 'n-1 (supervisor)' }],
 };
 
-function updateDemoState(presetName, nodes) {
+function statePill(stateRaw) {
+  const verb  = stateRaw.includes(':') ? stateRaw.split(':')[0] : stateRaw;
+  const tool  = stateRaw.includes(':') ? stateRaw.split(':')[1] : null;
+  const color = STATE_COLOR(stateRaw);
+  const pill  = `<span style="display:inline-flex;align-items:center;gap:5px;
+      background:${color};color:#fff;padding:5px 14px;border-radius:20px;
+      font-size:13px;font-weight:700;letter-spacing:0.01em;
+      box-shadow:0 2px 6px ${color}55;">${esc(verb)}</span>`;
+  const toolSpan = tool ? `<span style="font-size:11px;color:var(--slate);">${esc(tool)}</span>` : '';
+  return pill + toolSpan;
+}
+
+function updateDemoState(presetName, nodes, plannerState, plannerNode) {
   const row   = document.getElementById('demo-state-row');
   const badge = document.getElementById('demo-state-badge');
   const lbl   = document.getElementById('demo-state-label');
-  if (!row || !badge || !nodes) return;
+  if (!row || !badge) return;
+
+  // llm-agent-demo: use server-side planner_state/planner_node (follows failover)
+  if (STATE_PRESETS_WITH_PLANNER.has(presetName)) {
+    row.style.display = '';
+    lbl.textContent   = (plannerNode || 'n-2') + ' (planner) state';
+    badge.innerHTML   = statePill(plannerState || 'Ready');
+    return;
+  }
 
   const tracked = STATE_PRESET_NODES[presetName];
   if (!tracked) { row.style.display = 'none'; return; }
 
   row.style.display = '';
   lbl.textContent = tracked.length === 1 ? tracked[0].label + ' state' : 'Agent states';
-
   badge.innerHTML = tracked.map(({ idx, label }) => {
     const n = nodes[idx];
-    if (!n) return '';
-    const stateRaw = n.state || 'Ready';
-    const verb  = stateRaw.includes(':') ? stateRaw.split(':')[0] : stateRaw;
-    const tool  = stateRaw.includes(':') ? stateRaw.split(':')[1] : null;
-    const color = STATE_COLOR(stateRaw);
-    const pill  = `<span style="display:inline-flex;align-items:center;gap:5px;
-        background:${color};color:#fff;padding:5px 14px;border-radius:20px;
-        font-size:13px;font-weight:700;letter-spacing:0.01em;
-        box-shadow:0 2px 6px ${color}55;">${esc(verb)}</span>`;
-    const toolSpan = tool
-      ? `<span style="font-size:11px;color:var(--slate);">${esc(tool)}</span>`
-      : '';
-    return pill + toolSpan;
+    return n ? statePill(n.state || 'Ready') : '';
   }).join('');
 }
 
@@ -695,7 +702,8 @@ async function poll() {
       renderTopology(state);
       if (state.log)     renderLog(state.log);
       renderDemoInfo(state.preset_name || '');
-      updateDemoState(state.preset_name || '', state.nodes || []);
+      updateDemoState(state.preset_name || '', state.nodes || [],
+                      state.planner_state, state.planner_node);
       if (state.traffic) animateTraffic(state.traffic);
     }
 
@@ -1038,23 +1046,40 @@ function renderTopology(state) {
     prevSpareGroup[i]     = s.group;
 
     const isCapacity = s.mode === 'capacity';
+    const isPlanner  = !!(s.sm_state);  // server marks spare if it's the active planner
 
-    // Spare visual: full-size failover (emerald), solid amber for capacity, small dashed idle
-    const color  = isDeployed ? '#059669' : isCapacity ? '#d97706' : '#94a3b8';
-    const r      = isDeployed ? 44 : 30;
-    const sw     = (isDeployed || isCapacity) ? 2 : 1.5;
-    const dash   = (isDeployed || isCapacity) ? '' : 'stroke-dasharray="5,3"';
-    const note   = isDeployed ? '→ ' + s.covering : isCapacity ? '+' + s.group : 'spare';
-    const scaps  = (s.caps || []).map(c => `${c.ns}/${c.name}`).join(' ·') || '';
-    const relBtn = isCapacity ? `<g onclick="releaseSpare('${s.label}')" style="cursor:pointer">
+    // When spare is the active planner its circle follows the SM state colour
+    const baseColor  = isDeployed ? '#059669' : isCapacity ? '#d97706' : '#94a3b8';
+    const color      = isPlanner ? STATE_COLOR(s.sm_state) : baseColor;
+    const r          = isDeployed ? 44 : 30;
+    const sw         = (isDeployed || isCapacity) ? 2 : 1.5;
+    const dash       = (isDeployed || isCapacity) ? '' : 'stroke-dasharray="5,3"';
+    const scaps      = (s.caps || []).map(c => `${c.ns}/${c.name}`).join(' ·') || '';
+    const relBtn     = isCapacity ? `<g onclick="releaseSpare('${s.label}')" style="cursor:pointer">
       <rect x="-22" y="14" width="44" height="14" rx="3" fill="#fef3c7" stroke="#fde68a" stroke-width="1"/>
       <text y="24" text-anchor="middle" font-size="8.5" fill="#d97706" font-weight="600">release</text>
     </g>` : '';
+
+    // State: planner spare gets solid pill; others get plain text
+    const spareStateHtml = isPlanner
+      ? (() => {
+          const smVerb  = s.sm_state.includes(':') ? s.sm_state.split(':')[0] : s.sm_state;
+          const smTool  = s.sm_state.includes(':') ? s.sm_state.split(':')[1] : null;
+          const smShort = smTool ? (smTool.length > 12 ? smTool.slice(0,11)+'…' : smTool) : null;
+          const lbl     = smShort ? smVerb+' '+smShort : smVerb;
+          return `<g>
+            <rect x="-31" y="-10" width="62" height="15" rx="7" fill="${color}" opacity="0.9"/>
+            <text y="2" text-anchor="middle" font-size="9" fill="#fff" font-weight="700">${esc(lbl)}</text>
+          </g>`;
+        })()
+      : `<text class="topo-state" y="${isDeployed ? 5 : 8}" fill="${color}"
+             font-size="${isDeployed ? 11 : 9}">${isDeployed ? '→ '+s.covering : isCapacity ? '+'+s.group : 'spare'}</text>`;
+
     g.innerHTML = `
       <circle r="${r}" fill="${color}${isDeployed ? '1a' : isCapacity ? '18' : '0d'}"
               stroke="${color}" stroke-width="${sw}" ${dash}/>
-      <text class="topo-label" y="${isDeployed ? -12 : -7}" font-size="${isDeployed ? 11 : 10}">${esc(s.label)}</text>
-      <text class="topo-state" y="${isDeployed ?   5 :  8}" fill="${color}" font-size="${isDeployed ? 11 : 9}">${note}</text>
+      <text class="topo-label" y="${isDeployed ? -14 : -7}" font-size="${isDeployed ? 11 : 10}">${esc(s.label)}</text>
+      ${spareStateHtml}
       ${relBtn}
       ${isDeployed && scaps ? `<text y="68" text-anchor="middle" font-size="9.5"><tspan class="topo-row-label">caps  </tspan><tspan fill="#3b82f6">${esc(scaps)}</tspan></text>` : ''}
     `;

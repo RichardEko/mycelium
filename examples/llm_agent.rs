@@ -874,15 +874,12 @@ fn build_state_json(app: &AppState) -> String {
             "n-1" => app.pause_n1.load(Ordering::Relaxed),
             _     => app.pause_n2.load(Ordering::Relaxed),
         };
-        let state: String = if *label == "n-2" {
-            // n-2 runs the planning loop — show the real SM state
+        let state: String = if *label == "n-2" && !paused {
+            // n-2 is alive and running the planning loop
             let s = app.sm.state().to_kv_str();
-            // "Idle" between cycles means "waiting for next task", not "off"
             if s == "Idle" { "Ready".into() } else { s }
-        } else if !alive {
+        } else if !alive || paused {
             "Offline".into()
-        } else if paused {
-            "Paused".into()
         } else {
             "Running".into()
         };
@@ -940,12 +937,23 @@ fn build_state_json(app: &AppState) -> String {
         let mode = if covering.is_some() { "failover" }
                    else if group.is_some() { "capacity" }
                    else { "idle" };
+        // If this spare is the active planner, expose the SM state so the UI
+        // can show the planning badge on the spare node, not the dead original
+        let is_planner = {
+            let a = app.active_planner.lock().unwrap();
+            Arc::ptr_eq(&*a, agent)
+        };
+        let sm_state: String = if is_planner {
+            let s = app.sm.state().to_kv_str();
+            if s == "Idle" { "Ready".into() } else { s }
+        } else { String::new() };
         json!({
             "label":    label,
             "covering": covering,
             "group":    group,
             "mode":     mode,
             "caps":     caps_for_node(reporter, agent.node_id()),
+            "sm_state": sm_state,
         })
     }).collect();
 
@@ -957,9 +965,17 @@ fn build_state_json(app: &AppState) -> String {
         })).collect()
     };
     let preset_name = app.manifest.read().unwrap().mesh.name.clone();
+    let sm_raw = app.sm.state().to_kv_str();
+    let planner_state = if sm_raw == "Idle" { "Ready".to_string() } else { sm_raw };
+    let planner_node: &str = {
+        let a = app.active_planner.lock().unwrap();
+        if Arc::ptr_eq(&*a, &app.agent_spare2) { "spare-2" } else { "n-2" }
+    };
     json!({
-        "nodes":       nodes,
-        "spares":      spares,
+        "nodes":         nodes,
+        "spares":        spares,
+        "planner_state": planner_state,
+        "planner_node":  planner_node,
         "log":         log,
         "total_calls": app.call_count.load(Ordering::Relaxed),
         "last_tool":   *app.last_tool.lock().unwrap(),
