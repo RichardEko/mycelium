@@ -572,13 +572,25 @@ function renderTopology(state) {
     const caps  = (n.caps || []).map(c => `${c.ns}/${c.name}`).join(' · ') || '';
     const tools = (n.tools || []).join(', ') || '';
 
+    const isOff = stateRaw === 'Offline' || stateRaw === 'Paused';
+    const btnFill   = isOff ? '#dcfce7' : '#fee2e2';
+    const btnStroke = isOff ? '#86efac' : '#fca5a5';
+    const btnColor  = isOff ? '#16a34a' : '#e11d48';
+    const btnLabel  = isOff ? '▶ Start'  : '■ Kill';
+    const btnAction = isOff ? 'start'    : 'kill';
     g.innerHTML = `
       <circle id="tnode-circle-${i}" class="topo-node-circle"
         r="44" fill="${color}1a" stroke="${color}" stroke-width="2.5"/>
-      <text y="-9" class="topo-label">${esc(n.label)}</text>
-      <text y="9"  class="topo-state" fill="${color}">${esc(stateLabel)}</text>
-      ${caps  ? `<text y="60" class="topo-caps">${esc(caps)}</text>`   : ''}
-      ${tools ? `<text y="74" class="topo-tools">${esc(tools)}</text>` : ''}
+      <text y="-12" class="topo-label">${esc(n.label)}</text>
+      <text y="5"   class="topo-state" fill="${color}">${esc(stateLabel)}</text>
+      <g onclick="nodeAction('${n.label}','${btnAction}')" style="cursor:pointer">
+        <rect x="-26" y="14" width="52" height="16" rx="4"
+              fill="${btnFill}" stroke="${btnStroke}" stroke-width="1"/>
+        <text y="26" text-anchor="middle" font-size="9.5"
+              fill="${btnColor}" font-weight="600">${btnLabel}</text>
+      </g>
+      ${caps  ? `<text y="68" class="topo-caps">${esc(caps)}</text>`   : ''}
+      ${tools ? `<text y="80" class="topo-tools">${esc(tools)}</text>` : ''}
     `;
   });
 }
@@ -653,6 +665,15 @@ async function applyPreset(id) {
 }
 
 // ── System / group actions ────────────────────────────────────────────────────
+async function nodeAction(label, action) {
+  try {
+    const r = await fetch('/nodes/' + encodeURIComponent(label) + '/' + action, { method: 'POST' });
+    const j = await r.json();
+    if (!r.ok) console.warn('nodeAction error:', j.error);
+  } catch(e) { console.warn('nodeAction failed', e); }
+  setTimeout(poll, 400);
+}
+
 async function systemAction(action) {
   const el = document.getElementById('system-action-status');
   el.textContent = action === 'stop' ? 'Stopping…' : 'Starting…';

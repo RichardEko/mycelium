@@ -649,6 +649,11 @@ struct AppState {
     /// Replaced atomically whenever the manifest changes so the mesh always
     /// reflects the current topology intent.
     manifest_caps: Arc<Mutex<Vec<CapabilityHandle>>>,
+    /// Manager candidacy handles — held so the operator kill/start endpoints
+    /// can drop and restore each node's system/manager advertisement.
+    mgr_h_n0: Arc<Mutex<Option<CapabilityHandle>>>,
+    mgr_h_n1: Arc<Mutex<Option<CapabilityHandle>>>,
+    mgr_h_n2: Arc<Mutex<Option<CapabilityHandle>>>,
 }
 
 async fn run_agent_loop(app: Arc<AppState>, cfg: LlmConfig) {
@@ -946,6 +951,36 @@ async fn handle_system_start(app: &AppState) -> (u16, &'static str, String) {
     (200, "application/json", json!({"ok": true}).to_string())
 }
 
+fn handle_node_kill(app: &AppState, label: &str) -> (u16, &'static str, String) {
+    let (pause, mgr_h, port) = match label {
+        "n-0" => (&app.pause_n0, &app.mgr_h_n0, HTTP_PORT_N0),
+        "n-1" => (&app.pause_n1, &app.mgr_h_n1, HTTP_PORT_N1),
+        "n-2" => (&app.pause_n2, &app.mgr_h_n2, HTTP_PORT_N2),
+        _ => return (400, "application/json", json!({"error":"unknown node"}).to_string()),
+    };
+    pause.store(true, Ordering::Relaxed);
+    *mgr_h.lock().unwrap() = None;
+    push_log(&app.log, "NodeKill", format!("{label} (:{port}) killed by operator"));
+    (200, "application/json", json!({"ok": true}).to_string())
+}
+
+fn handle_node_start(app: &AppState, label: &str) -> (u16, &'static str, String) {
+    let (pause, mgr_h, agent, port) = match label {
+        "n-0" => (&app.pause_n0, &app.mgr_h_n0, &app.agent_n0, HTTP_PORT_N0),
+        "n-1" => (&app.pause_n1, &app.mgr_h_n1, &app.agent_n1, HTTP_PORT_N1),
+        "n-2" => (&app.pause_n2, &app.mgr_h_n2, &app.agent_n2, HTTP_PORT_N2),
+        _ => return (400, "application/json", json!({"error":"unknown node"}).to_string()),
+    };
+    pause.store(false, Ordering::Relaxed);
+    *mgr_h.lock().unwrap() = Some(agent.advertise_capability(
+        Capability::new("system", "manager")
+            .with("http_port", CapValue::Integer(port as i64)),
+        Duration::from_secs(15),
+    ));
+    push_log(&app.log, "NodeStart", format!("{label} (:{port}) restarted by operator"));
+    (200, "application/json", json!({"ok": true}).to_string())
+}
+
 async fn handle_group_control(app: &AppState, path: &str, is_stop: bool) -> (u16, &'static str, String) {
     // path is like /system/groups/compute/stop
     let group = path
@@ -1074,6 +1109,14 @@ async fn handle_http(mut stream: tokio::net::TcpStream, app: Arc<AppState>, my_p
             let is_stop = path.ends_with("/stop");
             handle_group_control(&app, path, is_stop).await
         }
+        _ if is_post && path.starts_with("/nodes/") && path.ends_with("/kill") => {
+            let label = path.trim_start_matches("/nodes/").trim_end_matches("/kill");
+            handle_node_kill(&app, label)
+        }
+        _ if is_post && path.starts_with("/nodes/") && path.ends_with("/start") => {
+            let label = path.trim_start_matches("/nodes/").trim_end_matches("/start");
+            handle_node_start(&app, label)
+        }
         _ =>
             (200, "text/html; charset=utf-8",
              include_str!("../docs/mesh_control.html").to_string()),
@@ -1151,16 +1194,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with("http_port", CapValue::Integer(HTTP_PORT_N0 as i64)),
         Duration::from_secs(15),
     ))));
-    let _mgr_h_n1 = agent_n1.advertise_capability(
+    let mgr_h_n1 = Arc::new(Mutex::new(Some(agent_n1.advertise_capability(
         Capability::new("system", "manager")
             .with("http_port", CapValue::Integer(HTTP_PORT_N1 as i64)),
         Duration::from_secs(15),
-    );
-    let _mgr_h_n2 = agent_n2.advertise_capability(
+    ))));
+    let mgr_h_n2 = Arc::new(Mutex::new(Some(agent_n2.advertise_capability(
         Capability::new("system", "manager")
             .with("http_port", CapValue::Integer(HTTP_PORT_N2 as i64)),
         Duration::from_secs(15),
-    );
+    ))));
 
     // ── n-0: probe loop + fixed tools + simulated failure ─────────────────────
     let fail_flag_n0 = Arc::new(AtomicBool::new(false));
@@ -1343,6 +1386,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         group_node:    Arc::new(group_node),
         manager_port:  Arc::new(Mutex::new(None)),
         manifest_caps: Arc::new(Mutex::new(Vec::new())),
+        mgr_h_n0:      Arc::clone(&mgr_h_n0),
+        mgr_h_n1:      Arc::clone(&mgr_h_n1),
+        mgr_h_n2:      Arc::clone(&mgr_h_n2),
     });
 
     // ── Seed initial manifest capabilities ───────────────────────────────────
