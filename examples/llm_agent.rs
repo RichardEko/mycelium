@@ -618,8 +618,14 @@ fn advertise_manifest_caps(
     manifest: &MeshManifest,
     agents:   [&Arc<GossipAgent>; 3],
 ) -> Vec<CapabilityHandle> {
-    manifest.groups.iter().enumerate().flat_map(|(i, group)| {
-        let agent = agents[i % 3];
+    let n = manifest.groups.len();
+    if n == 0 { return vec![]; }
+    // Each agent[i] serves group[i % n_groups].
+    // When groups < 3, surplus nodes wrap: e.g. with 2 groups n-2 → group[0].
+    // When groups >= 3, each agent gets a distinct group (same as before).
+    (0..3).flat_map(|i| {
+        let group = &manifest.groups[i % n];
+        let agent = agents[i];
         group.capabilities.iter().map(move |cap| {
             agent.advertise_capability(
                 Capability::new(cap.ns.as_str(), cap.name.as_str()),
@@ -662,8 +668,10 @@ struct AppState {
     agent_spare0:    Arc<GossipAgent>,
     agent_spare1:    Arc<GossipAgent>,
     agent_spare2:    Arc<GossipAgent>,
-    /// spare_covering[i] = Some("n-X") while spare-i is covering node n-X
+    /// spare_covering[i] = Some("n-X") while spare-i is in failover for node n-X
     spare_covering:  Arc<Mutex<[Option<&'static str>; 3]>>,
+    /// spare_group[i] = Some("voters") while spare-i is augmenting a deficit group
+    spare_group:     Arc<Mutex<[Option<String>; 3]>>,
     spare_caps0:     Arc<Mutex<Vec<CapabilityHandle>>>,
     spare_caps1:     Arc<Mutex<Vec<CapabilityHandle>>>,
     spare_caps2:     Arc<Mutex<Vec<CapabilityHandle>>>,
@@ -825,10 +833,21 @@ fn build_state_json(app: &AppState) -> String {
         } else {
             "Running".into()
         };
+        // Derive the manifest group(s) this node is assigned (round-robin i%3)
+        let node_idx = [&app.agent_n0, &app.agent_n1, &app.agent_n2]
+            .iter().position(|a| Arc::ptr_eq(a, agent)).unwrap_or(99);
+        let role: String = {
+            let manifest_r = app.manifest.read().unwrap();
+            let n = manifest_r.groups.len();
+            if n == 0 { String::new() }
+            else { manifest_r.groups[node_idx % n].name.clone() }
+        };
+
         json!({
             "label": label, "state": state, "alive": alive,
             "tools": tools_for_node(reporter, nid),
             "caps":  caps_for_node(reporter, nid),
+            "role":  role,
         })
     }).collect();
 
@@ -839,26 +858,40 @@ fn build_state_json(app: &AppState) -> String {
         })).collect()
     };
 
-    let ms = app.manifest.read().unwrap().check_status(&app.agent_n2);
-    let mesh_groups: Vec<Value> = ms.groups.iter().map(|g| json!({
-        "name":        g.name,
-        "description": g.description,
-        "min_agents":  g.min_agents,
-        "max_agents":  g.max_agents,
-        "actual":      g.actual,
-        "satisfied":   g.satisfied,
-        "deficit":     g.deficit,
+    let (ms, group_caps_list) = {
+        let manifest = app.manifest.read().unwrap();
+        let ms = manifest.check_status(&app.agent_n2);
+        let caps_list: Vec<Vec<Value>> = manifest.groups.iter().map(|g| {
+            g.capabilities.iter().map(|c| json!({"ns": c.ns, "name": c.name})).collect()
+        }).collect();
+        (ms, caps_list)
+    };
+    let mesh_groups: Vec<Value> = ms.groups.iter().zip(group_caps_list.iter()).map(|(g, caps)| json!({
+        "name":         g.name,
+        "description":  g.description,
+        "min_agents":   g.min_agents,
+        "max_agents":   g.max_agents,
+        "actual":       g.actual,
+        "satisfied":    g.satisfied,
+        "deficit":      g.deficit,
+        "capabilities": caps,
     })).collect();
 
     let spare_covering = *app.spare_covering.lock().unwrap();
+    let spare_group    = app.spare_group.lock().unwrap().clone();
     let spares: Vec<Value> = [
-        (&app.agent_spare0, "spare-0", spare_covering[0]),
-        (&app.agent_spare1, "spare-1", spare_covering[1]),
-        (&app.agent_spare2, "spare-2", spare_covering[2]),
-    ].iter().map(|(agent, label, covering)| {
+        (&app.agent_spare0, "spare-0", spare_covering[0], &spare_group[0]),
+        (&app.agent_spare1, "spare-1", spare_covering[1], &spare_group[1]),
+        (&app.agent_spare2, "spare-2", spare_covering[2], &spare_group[2]),
+    ].iter().map(|(agent, label, covering, group)| {
+        let mode = if covering.is_some() { "failover" }
+                   else if group.is_some() { "capacity" }
+                   else { "idle" };
         json!({
             "label":    label,
             "covering": covering,
+            "group":    group,
+            "mode":     mode,
             "caps":     caps_for_node(reporter, agent.node_id()),
         })
     }).collect();
@@ -979,24 +1012,71 @@ async fn handle_system_start(app: &AppState) -> (u16, &'static str, String) {
 }
 
 fn caps_for_node_index(manifest: &MeshManifest, node_idx: usize, agent: &Arc<GossipAgent>) -> Vec<CapabilityHandle> {
-    manifest.groups.iter().enumerate()
-        .filter(|(i, _)| i % 3 == node_idx)
-        .flat_map(|(_, group)| {
-            group.capabilities.iter().map(|cap| {
-                agent.advertise_capability(
-                    Capability::new(cap.ns.as_str(), cap.name.as_str()),
-                    Duration::from_secs(30),
-                )
-            }).collect::<Vec<_>>()
-        })
-        .collect()
+    let n = manifest.groups.len();
+    if n == 0 { return vec![]; }
+    manifest.groups[node_idx % n].capabilities.iter().map(|cap| {
+        agent.advertise_capability(
+            Capability::new(cap.ns.as_str(), cap.name.as_str()),
+            Duration::from_secs(30),
+        )
+    }).collect()
+}
+
+fn handle_group_add_capacity(app: &AppState, group_name: &str) -> (u16, &'static str, String) {
+    // Find first spare not in failover AND not already doing capacity work
+    let covering = app.spare_covering.lock().unwrap();
+    let groups   = app.spare_group.lock().unwrap();
+    let idle = (0..3usize).find(|&i| covering[i].is_none() && groups[i].is_none());
+    drop(covering); drop(groups);
+
+    let Some(i) = idle else {
+        return (409, "application/json", json!({"error":"no idle spares available"}).to_string());
+    };
+
+    let manifest = app.manifest.read().unwrap().clone();
+    let Some(grp) = manifest.groups.iter().find(|g| g.name == group_name) else {
+        return (404, "application/json", json!({"error":"group not found"}).to_string());
+    };
+
+    let (spare_agent, spare_caps) = match i {
+        0 => (&app.agent_spare0, &app.spare_caps0),
+        1 => (&app.agent_spare1, &app.spare_caps1),
+        _ => (&app.agent_spare2, &app.spare_caps2),
+    };
+    *spare_caps.lock().unwrap() = grp.capabilities.iter().map(|cap| {
+        spare_agent.advertise_capability(
+            Capability::new(cap.ns.as_str(), cap.name.as_str()),
+            Duration::from_secs(30),
+        )
+    }).collect();
+    app.spare_group.lock().unwrap()[i] = Some(group_name.to_string());
+
+    push_log(&app.log, "Capacity", format!("spare-{i} deployed to '{group_name}'"));
+    (200, "application/json", json!({"ok":true,"spare":format!("spare-{i}")}).to_string())
+}
+
+fn handle_spare_release(app: &AppState, spare_label: &str) -> (u16, &'static str, String) {
+    let i = match spare_label {
+        "spare-0" => 0usize, "spare-1" => 1, "spare-2" => 2,
+        _ => return (400, "application/json", json!({"error":"unknown spare"}).to_string()),
+    };
+    let spare_caps = [&app.spare_caps0, &app.spare_caps1, &app.spare_caps2][i];
+    let mut groups = app.spare_group.lock().unwrap();
+    if groups[i].is_none() {
+        return (409, "application/json",
+                json!({"error":"spare is not in capacity mode — use node restore for failover"}).to_string());
+    }
+    let grp = groups[i].take().unwrap_or_default();
+    *spare_caps.lock().unwrap() = vec![];
+    push_log(&app.log, "Capacity", format!("spare-{i} released from '{grp}'"));
+    (200, "application/json", json!({"ok":true}).to_string())
 }
 
 fn handle_node_kill(app: &AppState, label: &str) -> (u16, &'static str, String) {
-    let (node_idx, pause, mgr_h, spare_agent, spare_caps, port): (usize, _, _, _, _, u16) = match label {
-        "n-0" => (0, &app.pause_n0, &app.mgr_h_n0, &app.agent_spare0, &app.spare_caps0, HTTP_PORT_N0),
-        "n-1" => (1, &app.pause_n1, &app.mgr_h_n1, &app.agent_spare1, &app.spare_caps1, HTTP_PORT_N1),
-        "n-2" => (2, &app.pause_n2, &app.mgr_h_n2, &app.agent_spare2, &app.spare_caps2, HTTP_PORT_N2),
+    let (node_idx, pause, mgr_h, spare_agent, spare_caps): (usize, _, _, _, _) = match label {
+        "n-0" => (0, &app.pause_n0, &app.mgr_h_n0, &app.agent_spare0, &app.spare_caps0),
+        "n-1" => (1, &app.pause_n1, &app.mgr_h_n1, &app.agent_spare1, &app.spare_caps1),
+        "n-2" => (2, &app.pause_n2, &app.mgr_h_n2, &app.agent_spare2, &app.spare_caps2),
         _ => return (400, "application/json", json!({"error":"unknown node"}).to_string()),
     };
     pause.store(true, Ordering::Relaxed);
@@ -1154,7 +1234,8 @@ async fn handle_http(mut stream: tokio::net::TcpStream, app: Arc<AppState>, my_p
             let id = path.trim_start_matches("/presets/").trim_end_matches("/apply");
             handle_preset_apply(&app, id).await
         }
-        _ if is_post && path.starts_with("/system/groups/") => {
+        _ if is_post && path.starts_with("/system/groups/")
+             && (path.ends_with("/stop") || path.ends_with("/start")) => {
             let is_stop = path.ends_with("/stop");
             handle_group_control(&app, path, is_stop).await
         }
@@ -1165,6 +1246,14 @@ async fn handle_http(mut stream: tokio::net::TcpStream, app: Arc<AppState>, my_p
         _ if is_post && path.starts_with("/nodes/") && path.ends_with("/start") => {
             let label = path.trim_start_matches("/nodes/").trim_end_matches("/start");
             handle_node_start(&app, label)
+        }
+        _ if is_post && path.starts_with("/system/groups/") && path.ends_with("/add-capacity") => {
+            let group = path.trim_start_matches("/system/groups/").trim_end_matches("/add-capacity");
+            handle_group_add_capacity(&app, group)
+        }
+        _ if is_post && path.starts_with("/spares/") && path.ends_with("/release") => {
+            let label = path.trim_start_matches("/spares/").trim_end_matches("/release");
+            handle_spare_release(&app, label)
         }
         _ =>
             (200, "text/html; charset=utf-8",
@@ -1450,6 +1539,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         agent_spare1:  Arc::clone(&agent_spare1),
         agent_spare2:  Arc::clone(&agent_spare2),
         spare_covering: Arc::new(Mutex::new([None; 3])),
+        spare_group:    Arc::new(Mutex::new([None, None, None])),
         spare_caps0:   Arc::new(Mutex::new(Vec::new())),
         spare_caps1:   Arc::new(Mutex::new(Vec::new())),
         spare_caps2:   Arc::new(Mutex::new(Vec::new())),
