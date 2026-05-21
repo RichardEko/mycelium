@@ -1206,11 +1206,8 @@ async fn handle_preset_apply(app: &AppState, preset_id: &str) -> (u16, &'static 
 
 // ── Demo trigger handler ──────────────────────────────────────────────────────
 
-async fn handle_demo_trigger(app: Arc<AppState>, body: &[u8]) -> (u16, &'static str, String) {
-    let Ok(req) = serde_json::from_slice::<Value>(body) else {
-        return (400, "application/json", json!({"error":"invalid JSON"}).to_string());
-    };
-    let action = req["action"].as_str().unwrap_or("").to_string();
+async fn handle_demo_trigger(app: Arc<AppState>, action: &str) -> (u16, &'static str, String) {
+    let action = action.to_string();
     if app.trigger_active.swap(true, Ordering::Relaxed) {
         return (409, "application/json", json!({"error":"trigger already running"}).to_string());
     }
@@ -1335,8 +1332,10 @@ async fn handle_http(mut stream: tokio::net::TcpStream, app: Arc<AppState>, my_p
             handle_system_stop(&app).await,
         ("POST", "/system/start") =>
             handle_system_start(&app).await,
-        ("POST", "/demo/trigger") =>
-            handle_demo_trigger(Arc::clone(&app), body_bytes).await,
+        _ if is_post && path.starts_with("/demo/trigger/") => {
+            let action = path.trim_start_matches("/demo/trigger/");
+            handle_demo_trigger(Arc::clone(&app), action).await
+        }
         ("GET",  "/presets") =>
             handle_presets_list(),
         _ if is_post && path.starts_with("/presets/") && path.ends_with("/apply") => {

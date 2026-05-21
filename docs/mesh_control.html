@@ -568,10 +568,8 @@ async function fireTrigger(action) {
   const status = document.getElementById('demo-trigger-status');
   status.textContent = 'Running…'; status.style.color = 'var(--amber)';
   try {
-    const r = await fetch('/demo/trigger', {
+    const r = await fetch('/demo/trigger/' + encodeURIComponent(action), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action }),
     });
     const j = await r.json();
     if (r.ok) {
