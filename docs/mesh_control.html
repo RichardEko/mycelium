@@ -501,7 +501,7 @@ const PRESET_INFO = {
     title: 'LLM Agent Demo',
     about: 'n-2 runs a planning loop that discovers tools advertised on the mesh, dispatches calls via gossip RPC, and synthesises results. n-0 provides real-time data tools; n-1 provides compute tools and hosts a provisioned vector-search engine.',
     watch: 'Edges flash on every tool call. The state badge on n-2 cycles Planning → Invoking → Reflecting → Done.',
-    triggers: [{ label: 'Log task trigger', action: 'llm-task', tip: 'Log a manual task trigger' }],
+    triggers: [{ label: 'Run planning cycle', action: 'llm-task', tip: 'Skip the wait and start a planning cycle immediately — watch the state badge cycle through Planning → Invoking → Reflecting → Done' }],
   },
   'watchdog-cluster': {
     title: 'Watchdog Cluster',

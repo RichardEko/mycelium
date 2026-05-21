@@ -692,6 +692,8 @@ struct AppState {
     traffic:         SharedTraffic,
     /// True while a demo trigger sequence is running (prevents concurrent triggers)
     trigger_active:  Arc<AtomicBool>,
+    /// Set true by the "Run task" button; planning loop reacts immediately
+    trigger_requested: Arc<AtomicBool>,
 }
 
 async fn run_agent_loop(app: Arc<AppState>, cfg: LlmConfig) {
@@ -705,13 +707,20 @@ async fn run_agent_loop(app: Arc<AppState>, cfg: LlmConfig) {
             continue;
         }
 
-        time::sleep(Duration::from_secs(3)).await;
+        // Wait 3 s between cycles, but skip wait if the UI triggered a manual run
+        if app.trigger_requested.swap(false, Ordering::Relaxed) {
+            push_log(&app.log, "Task", "Manual trigger — starting planning cycle now");
+        } else {
+            time::sleep(Duration::from_secs(3)).await;
+        }
         push_log(&app.log, "Task", TASK_TEXT);
 
         match sm.transition(ExecutionState::Planning).await {
-            Ok(())  => push_log(&app.log, "State", "Idle → Planning"),
+            Ok(())  => push_log(&app.log, "State", "Planning"),
             Err(e)  => { push_log(&app.log, "PolicyViolation", e.to_string()); continue; }
         }
+        // In mock mode hold each state long enough for the UI to observe it
+        if cfg.mock { time::sleep(Duration::from_millis(900)).await; }
 
         let tools = discover_tools(&agent);
         if tools.is_empty() {
@@ -749,8 +758,10 @@ async fn run_agent_loop(app: Arc<AppState>, cfg: LlmConfig) {
                 }
                 Ok(None) => {
                     sm.transition(ExecutionState::Reflecting).await.ok();
+                    if cfg.mock { time::sleep(Duration::from_millis(700)).await; }
                     sm.transition(ExecutionState::Done).await.ok();
                     push_log(&app.log, "State", "Done");
+                    if cfg.mock { time::sleep(Duration::from_millis(800)).await; }
                     break;
                 }
                 Ok(Some((tool_name, args))) => {
@@ -762,8 +773,10 @@ async fn run_agent_loop(app: Arc<AppState>, cfg: LlmConfig) {
                         }
                         Ok(()) => push_log(&app.log, "Invoking", format!("{tool_name}({args})")),
                     }
+                    if cfg.mock { time::sleep(Duration::from_millis(900)).await; }
                     let result = invoke_tool(&agent, &tool_name, args.clone()).await;
                     sm.transition(ExecutionState::Reflecting).await.ok();
+                    if cfg.mock { time::sleep(Duration::from_millis(700)).await; }
                     match result {
                         Err(e) => {
                             push_log(&app.log, "ToolError", format!("{tool_name}: {e}"));
@@ -1270,7 +1283,9 @@ async fn handle_demo_trigger(app: Arc<AppState>, action: &str) -> (u16, &'static
             });
         }
         "llm-task" => {
-            push_log(&app2.log, "Demo", "LLM task: manual trigger — planning cycle will fire on next idle");
+            // Signal the planning loop to skip its inter-cycle sleep and run immediately
+            app2.trigger_requested.store(true, Ordering::Relaxed);
+            push_log(&app2.log, "Demo", "Task triggered — n-2 will start planning immediately");
             app2.trigger_active.store(false, Ordering::Relaxed);
         }
         _ => {
@@ -1651,8 +1666,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         spare_caps0:   Arc::new(Mutex::new(Vec::new())),
         spare_caps1:   Arc::new(Mutex::new(Vec::new())),
         spare_caps2:   Arc::new(Mutex::new(Vec::new())),
-        traffic:        Arc::new(Mutex::new(Vec::new())),
-        trigger_active: Arc::new(AtomicBool::new(false)),
+        traffic:           Arc::new(Mutex::new(Vec::new())),
+        trigger_active:    Arc::new(AtomicBool::new(false)),
+        trigger_requested: Arc::new(AtomicBool::new(false)),
     });
 
     // ── Seed initial manifest capabilities ───────────────────────────────────
