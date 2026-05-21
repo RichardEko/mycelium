@@ -356,6 +356,11 @@
         <p class="demo-section">What to watch for</p>
         <p class="demo-watch-row" id="demo-info-watch"></p>
       </div>
+      <!-- Agent state row — shown for presets where node state is meaningful -->
+      <div id="demo-state-row" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid #e2e8f0;">
+        <p class="demo-section" style="margin-bottom:6px;" id="demo-state-label">Agent State</p>
+        <div id="demo-state-badge" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;"></div>
+      </div>
       <div class="demo-controls-row" id="demo-controls-body"></div>
     </div>
   </div>
@@ -581,6 +586,43 @@ function renderDemoInfo(presetName) {
   }
 }
 
+// Presets where we want to surface node states in the demo card
+const STATE_PRESET_NODES = {
+  'llm-agent-demo':    [{ idx: 2, label: 'n-2 (planner)' }],
+  'consensus-cluster': [{ idx: 2, label: 'n-2 (proposer)' }],
+  'watchdog-cluster':  [{ idx: 1, label: 'n-1 (supervisor)' }],
+};
+
+function updateDemoState(presetName, nodes) {
+  const row   = document.getElementById('demo-state-row');
+  const badge = document.getElementById('demo-state-badge');
+  const lbl   = document.getElementById('demo-state-label');
+  if (!row || !badge || !nodes) return;
+
+  const tracked = STATE_PRESET_NODES[presetName];
+  if (!tracked) { row.style.display = 'none'; return; }
+
+  row.style.display = '';
+  lbl.textContent = tracked.length === 1 ? tracked[0].label + ' state' : 'Agent states';
+
+  badge.innerHTML = tracked.map(({ idx, label }) => {
+    const n = nodes[idx];
+    if (!n) return '';
+    const stateRaw = n.state || 'Ready';
+    const verb  = stateRaw.includes(':') ? stateRaw.split(':')[0] : stateRaw;
+    const tool  = stateRaw.includes(':') ? stateRaw.split(':')[1] : null;
+    const color = STATE_COLOR(stateRaw);
+    const pill  = `<span style="display:inline-flex;align-items:center;gap:5px;
+        background:${color};color:#fff;padding:5px 14px;border-radius:20px;
+        font-size:13px;font-weight:700;letter-spacing:0.01em;
+        box-shadow:0 2px 6px ${color}55;">${esc(verb)}</span>`;
+    const toolSpan = tool
+      ? `<span style="font-size:11px;color:var(--slate);">${esc(tool)}</span>`
+      : '';
+    return pill + toolSpan;
+  }).join('');
+}
+
 async function fireTrigger(action) {
   const status = document.getElementById('demo-trigger-status');
   status.textContent = 'Running…'; status.style.color = 'var(--amber)';
@@ -653,6 +695,7 @@ async function poll() {
       renderTopology(state);
       if (state.log)     renderLog(state.log);
       renderDemoInfo(state.preset_name || '');
+      updateDemoState(state.preset_name || '', state.nodes || []);
       if (state.traffic) animateTraffic(state.traffic);
     }
 
