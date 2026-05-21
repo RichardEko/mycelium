@@ -539,6 +539,18 @@ const PRESET_INFO = {
     watch: 'Traffic clustering near n-0 (local) vs spill-over to n-1/n-2 (remote) as load increases.',
     triggers: [],
   },
+  'emergent-pool': {
+    title: 'Emergent Pool',
+    about: 'GPU compute workers self-assemble into a dynamic pool. Active nodes advertise compute/gpu; render consumers discover available workers automatically. Add spare nodes from the pool to scale up capacity.',
+    watch: 'The gpu-workers count climbs as you add spares. Render-consumer edges light up as job routing adapts to the enlarged pool.',
+    triggers: [],
+  },
+  'capability-market': {
+    title: 'Capability Market',
+    about: 'Four capability groups share a fixed pool of compute resources. gpu-compute, cpu-compute, and storage are pre-allocated; ai-agents has no permanent allocation and must acquire a spare from the pool on demand.',
+    watch: 'ai-agents starts in DEFICIT — click + spare to deploy one node there. Each spare can serve only one group; the market fills on a first-come basis.',
+    triggers: [],
+  },
 };
 
 
@@ -1100,9 +1112,13 @@ async function addSpare(groupName) {
   try {
     const r = await fetch('/system/groups/' + encodeURIComponent(groupName) + '/add-capacity', { method: 'POST' });
     const j = await r.json();
-    if (!r.ok) console.warn('addSpare error:', j.error);
-    else setTimeout(poll, 400);
-  } catch(e) { console.warn('addSpare failed', e); }
+    if (!r.ok) {
+      showToast('✗ ' + (j.error || 'Failed to add spare'), true);
+    } else {
+      showToast('✓ Spare deployed to ' + groupName, false);
+      setTimeout(poll, 400);
+    }
+  } catch(e) { showToast('✗ Request failed', true); }
 }
 
 async function releaseSpare(spareLabel) {
@@ -1143,6 +1159,21 @@ async function uploadManifest() {
   } catch(e) {
     status.textContent = '✗ Request failed'; status.className = 'upload-status err';
   }
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function showToast(msg, isError) {
+  const t = document.createElement('div');
+  t.textContent = msg;
+  Object.assign(t.style, {
+    position:'fixed', bottom:'24px', left:'50%', transform:'translateX(-50%)',
+    background: isError ? '#e11d48' : '#059669', color:'#fff',
+    padding:'8px 18px', borderRadius:'8px', fontSize:'12px', fontWeight:'600',
+    boxShadow:'0 4px 12px rgba(0,0,0,0.18)', zIndex:'9999',
+    opacity:'1', transition:'opacity 0.4s',
+  });
+  document.body.appendChild(t);
+  setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 420); }, 2600);
 }
 
 // ── Utils ─────────────────────────────────────────────────────────────────────

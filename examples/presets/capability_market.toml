@@ -5,8 +5,8 @@ version = "0.1"
 [[group]]
 name        = "gpu-compute"
 description = "GPU accelerators — high-demand, scarce resource"
-min_agents  = 2
-max_agents  = 5
+min_agents  = 1
+max_agents  = 3
 
   [[group.capability]]
   ns   = "compute"
@@ -15,8 +15,8 @@ max_agents  = 5
 [[group]]
 name        = "cpu-compute"
 description = "General-purpose CPU workers"
-min_agents  = 3
-max_agents  = 6
+min_agents  = 1
+max_agents  = 3
 
   [[group.capability]]
   ns   = "compute"
@@ -26,7 +26,7 @@ max_agents  = 6
 name        = "storage"
 description = "Disk-backed storage nodes"
 min_agents  = 1
-max_agents  = 4
+max_agents  = 3
 
   [[group.capability]]
   ns   = "storage"
@@ -34,9 +34,9 @@ max_agents  = 4
 
 [[group]]
 name        = "ai-agents"
-description = "Autonomous AI agent nodes"
-min_agents  = 2
-max_agents  = 4
+description = "Autonomous AI agent nodes — no permanent allocation; must acquire from spare pool"
+min_agents  = 1
+max_agents  = 3
 
   [[group.capability]]
   ns   = "ai"

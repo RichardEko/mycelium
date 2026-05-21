@@ -5,8 +5,8 @@ version = "0.1"
 [[group]]
 name        = "gpu-workers"
 description = "GPU compute nodes — self-assemble into emergent pool via cap-group"
-min_agents  = 8
-max_agents  = 20
+min_agents  = 2
+max_agents  = 5
 
   [[group.capability]]
   ns   = "compute"

@@ -4,9 +4,9 @@ version = "0.1"
 
 [[group]]
 name        = "alpha-ring"
-description = "Alpha partition — signal propagation nodes 0–7"
-min_agents  = 4
-max_agents  = 8
+description = "Alpha partition — primary gossip propagation nodes"
+min_agents  = 2
+max_agents  = 4
 
   [[group.capability]]
   ns   = "signal"
@@ -14,9 +14,9 @@ max_agents  = 8
 
 [[group]]
 name        = "beta-ring"
-description = "Beta partition — signal propagation nodes 8–15"
-min_agents  = 4
-max_agents  = 8
+description = "Beta partition — receives epidemic spread from alpha"
+min_agents  = 2
+max_agents  = 4
 
   [[group.capability]]
   ns   = "signal"
