@@ -202,6 +202,15 @@
   .group-desc { font-size: 10px; color: var(--muted); margin-top: 1px; }
   .count-sep  { color: var(--light); }
   .controls-cell { display: flex; gap: 4px; }
+  .info-icon  { cursor: help; font-size: 10px; color: var(--muted); margin-left: 3px; font-style: normal; }
+  .pill-sm    { font-size: 10px; padding: 2px 8px; line-height: 16px; }
+  .cap-health-row {
+    display: flex; align-items: center; gap: 14px;
+    padding: 7px 16px; border-top: 1px solid var(--border);
+  }
+  .cap-health-row:first-child { border-top: none; }
+  .cap-group-name { font-size: 12px; font-weight: 500; min-width: 130px; }
+  .cap-count      { font-size: 12px; color: var(--text); min-width: 56px; font-variant-numeric: tabular-nums; cursor: help; }
 
   /* ── Preset grid ── */
   .presets-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(190px,1fr)); gap: 10px; }
@@ -322,6 +331,15 @@
     </div>
   </div>
 
+  <!-- Capability group health (bridges Live ↔ Manage — same data, inline view) -->
+  <div class="card" id="cap-health-card" style="display:none;">
+    <div class="card-header">
+      <span class="card-title">Capability Groups</span>
+      <span style="font-size:10px;color:var(--muted);">live agents vs. manifest minimum</span>
+    </div>
+    <div id="cap-health-rows"></div>
+  </div>
+
   <!-- Event log (compact) -->
   <div class="card">
     <div class="card-header"><span class="card-title">Event Log</span></div>
@@ -356,7 +374,10 @@
     <div class="card-body" style="padding:0 16px;">
       <table class="groups-table">
         <thead><tr>
-          <th>Name</th><th>Agents</th><th>Status</th><th>Controls</th>
+          <th>Name</th>
+          <th>Agents <span class="info-icon" title="Actual live agents advertising this group's capabilities  ·  minimum required  ·  maximum allowed">ⓘ</span></th>
+          <th>Status <span class="info-icon" title="OK = actual ≥ min required  ·  DEFICIT = below minimum — the system needs more agents advertising these capabilities">ⓘ</span></th>
+          <th>Controls</th>
         </tr></thead>
         <tbody id="groups-tbody">
           <tr><td colspan="4" class="empty" style="padding:14px 0;">Loading&hellip;</td></tr>
@@ -474,18 +495,31 @@ function renderGroups(status) {
     return;
   }
   tbody.innerHTML = status.groups.map(g => {
-    const cls   = g.satisfied ? 'ok' : 'deficit';
-    const label = g.satisfied ? '✓ OK' : '✗ DEFICIT';
+    const cls    = g.satisfied ? 'ok' : 'deficit';
+    const label  = g.satisfied ? '✓ OK' : '✗ DEFICIT';
     const maxStr = g.max_agents != null ? '/' + g.max_agents : '';
+
+    const agentsTip = [
+      `${g.actual} live agent${g.actual !== 1 ? 's' : ''} currently advertising this group's capabilities`,
+      `Minimum required: ${g.min_agents}`,
+      g.max_agents != null ? `Maximum allowed: ${g.max_agents}` : null,
+      !g.satisfied ? `⚠ ${g.deficit} more agent${g.deficit !== 1 ? 's' : ''} needed to reach minimum` : null,
+    ].filter(Boolean).join('  ·  ');
+
+    const statusTip = g.satisfied
+      ? `${g.actual} of ${g.min_agents} required agents online — requirement met`
+      : `Only ${g.actual} of ${g.min_agents} required agents online — ${g.deficit} more needed to satisfy this group`;
+
     return `<tr>
       <td>
         <div class="group-name">${esc(g.name)}</div>
         ${g.description ? `<div class="group-desc">${esc(g.description)}</div>` : ''}
       </td>
-      <td style="font-variant-numeric:tabular-nums;">
+      <td style="font-variant-numeric:tabular-nums;" title="${esc(agentsTip)}">
         <b>${g.actual}</b><span class="count-sep"> / </span>${g.min_agents}${maxStr}
+        <span class="info-icon" title="${esc(agentsTip)}">ⓘ</span>
       </td>
-      <td><span class="pill ${cls}">${label}</span></td>
+      <td><span class="pill ${cls}" title="${esc(statusTip)}">${label}</span></td>
       <td><div class="controls-cell">
         <button class="btn btn-stop btn-sm"  onclick="groupAction('${esc(g.name)}','stop')">&#9632;</button>
         <button class="btn btn-start btn-sm" onclick="groupAction('${esc(g.name)}','start')">&#9654;</button>
@@ -558,6 +592,29 @@ function renderTopology(state) {
     const res = state.last_result;
     document.getElementById('lc-result').textContent =
       (res && typeof res === 'object') ? JSON.stringify(res) : (res || '—');
+  }
+
+  // Capability health card (bridges Live/Manage — same data surfaced inline)
+  const capGroups = (state.mesh_status || {}).groups || [];
+  const capCard   = document.getElementById('cap-health-card');
+  const capRows   = document.getElementById('cap-health-rows');
+  if (capGroups.length) {
+    capCard.style.display = '';
+    capRows.innerHTML = capGroups.map(g => {
+      const cls    = g.satisfied ? 'ok' : 'deficit';
+      const maxStr = g.max_agents != null ? '/' + g.max_agents : '';
+      const note   = g.satisfied ? '✓ OK' : `✗ DEFICIT — need ${g.deficit} more`;
+      const tip    = g.satisfied
+        ? `${g.actual} live agents · minimum ${g.min_agents} · requirement met`
+        : `${g.actual} live agents · minimum ${g.min_agents} · ${g.deficit} short`;
+      return `<div class="cap-health-row">
+        <span class="cap-group-name">${esc(g.name)}</span>
+        <span class="cap-count" title="${esc(tip)}">${g.actual}<span class="count-sep"> / </span>${g.min_agents}${maxStr}</span>
+        <span class="pill ${cls} pill-sm" title="${esc(tip)}">${note}</span>
+      </div>`;
+    }).join('');
+  } else {
+    capCard.style.display = 'none';
   }
 
   // Update each node group
