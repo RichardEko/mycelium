@@ -48,327 +48,219 @@
 
   /* ── Header ── */
   .header {
-    position: sticky;
-    top: 0;
-    z-index: 40;
+    position: sticky; top: 0; z-index: 40;
     background: rgba(255,255,255,0.85);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
     border-bottom: 1px solid var(--border-mid);
   }
   .header-inner {
-    max-width: 900px;
-    margin: 0 auto;
-    padding: 0 16px;
-    height: 48px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: nowrap;
+    max-width: 900px; margin: 0 auto; padding: 0 16px;
+    height: 48px; display: flex; align-items: center; gap: 10px;
   }
-  .logo {
-    font-size: 13px;
-    font-weight: 700;
-    letter-spacing: -0.02em;
-    color: var(--text);
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-shrink: 0;
-  }
-  .logo-dot {
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    background: var(--emerald);
-    flex-shrink: 0;
-  }
+  .logo { font-size: 13px; font-weight: 700; letter-spacing: -0.02em;
+          display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  .logo-dot { width: 8px; height: 8px; border-radius: 50%;
+              background: var(--emerald); flex-shrink: 0; }
   .header-sep { width: 1px; height: 16px; background: var(--border); flex-shrink: 0; }
   .mesh-name  { color: var(--muted); font-size: 11px; flex-shrink: 0; }
-  .header-right { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-  .refresh-indicator {
-    font-size: 10px;
-    color: var(--light);
-    letter-spacing: 0.03em;
-    white-space: nowrap;
-  }
+  .header-right { margin-left: auto; display: flex; align-items: center;
+                  gap: 8px; flex-shrink: 0; }
+  .refresh-indicator { font-size: 10px; color: var(--light); white-space: nowrap; }
 
-  /* ── Pill / badge ── */
+  /* ── Pills ── */
   .pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 2px 8px;
-    border-radius: 99px;
-    font-size: 11px;
-    font-weight: 500;
-    line-height: 1.4;
-    border: 1px solid transparent;
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px; border-radius: 99px; font-size: 11px;
+    font-weight: 500; line-height: 1.4; border: 1px solid transparent;
     white-space: nowrap;
   }
-  .pill-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
   .pill.ok      { background: var(--emerald-bg); color: var(--emerald); border-color: var(--emerald-bd); }
   .pill.deficit { background: var(--rose-bg);    color: var(--rose);    border-color: var(--rose-bd); }
-  .pill.stopped { background: var(--amber-bg);   color: var(--amber);   border-color: var(--amber-bd); }
   .pill.neutral { background: var(--slate-bg);   color: var(--slate);   border-color: var(--slate-bd); }
   .pill.mgr     { background: var(--violet-bg);  color: var(--violet);  border-color: var(--violet-bd); }
 
-  /* ── Layout ── */
-  .main {
-    max-width: 900px;
-    margin: 0 auto;
-    padding: 20px 16px 48px;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-
-  /* ── Card / panel ── */
-  .card {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-sm);
-    overflow: hidden;
-  }
-  .card-header {
-    padding: 10px 16px;
+  /* ── Tab bar ── */
+  .tab-bar {
+    position: sticky; top: 48px; z-index: 39;
+    background: rgba(255,255,255,0.92);
+    backdrop-filter: blur(8px);
     border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
+    display: flex; gap: 0;
+    max-width: 100%;
   }
-  .card-title {
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--muted);
+  .tab-bar-inner {
+    max-width: 900px; margin: 0 auto; padding: 0 16px;
+    display: flex; gap: 2px; height: 38px; align-items: flex-end;
   }
-  .card-body { padding: 14px 16px; }
+  .tab-btn {
+    padding: 6px 18px 7px;
+    font-size: 12px; font-weight: 500;
+    color: var(--muted); background: none; border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer; white-space: nowrap;
+    transition: color 0.12s, border-color 0.12s;
+    margin-bottom: -1px;
+  }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active { color: var(--violet); border-bottom-color: var(--violet); font-weight: 600; }
+
+  /* ── Layout ── */
+  .pane { max-width: 900px; margin: 0 auto; padding: 20px 16px 48px;
+          display: flex; flex-direction: column; gap: 16px; }
+  .pane.hidden { display: none; }
+
+  /* ── Card ── */
+  .card { background: var(--panel); border: 1px solid var(--border);
+          border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); overflow: hidden; }
+  .card-header { padding: 10px 16px; border-bottom: 1px solid var(--border);
+                 display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .card-title { font-size: 10px; font-weight: 600; text-transform: uppercase;
+                letter-spacing: 0.08em; color: var(--muted); }
+  .card-body  { padding: 14px 16px; }
 
   /* ── Buttons ── */
   .btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 5px 12px;
-    border-radius: var(--radius);
-    font-size: 11px;
-    font-weight: 500;
-    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 5px 12px; border-radius: var(--radius);
+    font-size: 11px; font-weight: 500; cursor: pointer;
     border: 1px solid transparent;
     transition: background 0.12s, color 0.12s, border-color 0.12s;
     white-space: nowrap;
   }
   .btn:disabled { opacity: 0.45; cursor: not-allowed; }
-  .btn-stop    { background: var(--rose-bg);    color: var(--rose);    border-color: var(--rose-bd); }
-  .btn-start   { background: var(--emerald-bg); color: var(--emerald); border-color: var(--emerald-bd); }
-  .btn-upload  { background: var(--slate-bg);   color: var(--slate);   border-color: var(--slate-bd); }
-  .btn-apply   { background: var(--violet-bg);  color: var(--violet);  border-color: var(--violet-bd); }
+  .btn-stop  { background: var(--rose-bg);    color: var(--rose);    border-color: var(--rose-bd); }
+  .btn-start { background: var(--emerald-bg); color: var(--emerald); border-color: var(--emerald-bd); }
+  .btn-upload{ background: var(--slate-bg);   color: var(--slate);   border-color: var(--slate-bd); }
+  .btn-apply { background: var(--violet-bg);  color: var(--violet);  border-color: var(--violet-bd); }
   .btn-stop:hover:not(:disabled)   { background: #fecdd3; }
   .btn-start:hover:not(:disabled)  { background: #a7f3d0; }
   .btn-upload:hover:not(:disabled) { background: #e2e8f0; }
   .btn-apply:hover:not(:disabled)  { background: #ddd6fe; }
   .btn-sm { padding: 3px 8px; font-size: 10px; }
 
-  /* ── System actions row ── */
-  .system-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
+  /* ── SVG Topology ── */
+  .topo-wrap { padding: 8px 8px 14px; }
+  #topo-svg  { width: 100%; height: auto; display: block; overflow: visible; }
+
+  .topo-edge {
+    stroke: #cbd5e1; stroke-width: 1.5;
+    stroke-linecap: round;
+    transition: stroke 0.25s, stroke-width 0.25s, filter 0.25s;
+  }
+  .topo-edge.hot {
+    stroke: var(--amber); stroke-width: 2.5;
+    filter: drop-shadow(0 0 5px #f59e0b88);
+  }
+
+  .topo-node-circle {
+    transition: fill 0.35s, stroke 0.35s;
+  }
+  @keyframes node-pulse {
+    0%   { r: 44; opacity: 1; }
+    50%  { r: 50; opacity: 0.6; }
+    100% { r: 44; opacity: 1; }
+  }
+  .topo-node-circle.pulse { animation: node-pulse 0.45s ease-out; }
+
+  .topo-label { text-anchor: middle; font-weight: 700; font-size: 14px; fill: #0f172a; }
+  .topo-state { text-anchor: middle; font-size: 10px; font-weight: 600; }
+  .topo-caps  { text-anchor: middle; font-size: 9.5px; fill: #64748b; }
+  .topo-tools { text-anchor: middle; font-size: 9.5px; fill: #94a3b8; }
+
+  /* Animated call dot travelling along edge */
+  .call-dot { fill: var(--amber); }
+  @keyframes travel { from { offset-distance: 0%; } to { offset-distance: 100%; } }
+
+  /* ── Last call row ── */
+  .last-call {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; background: var(--bg);
+    border: 1px solid var(--border); border-radius: var(--radius);
+    font-size: 11px; margin: 0 8px 12px;
+  }
+  .last-call-label  { color: var(--light); flex-shrink: 0; }
+  .last-call-name   { font-weight: 600; color: var(--violet); flex-shrink: 0; }
+  .last-call-arrow  { color: var(--light); flex-shrink: 0; }
+  .last-call-result {
+    color: var(--muted); font-family: "SFMono-Regular",Menlo,monospace;
+    font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
 
   /* ── Groups table ── */
   .groups-table { width: 100%; border-collapse: collapse; }
   .groups-table th {
-    text-align: left;
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--light);
-    padding: 0 8px 8px;
-    border-bottom: 1px solid var(--border);
+    text-align: left; font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.08em; color: var(--light);
+    padding: 0 8px 8px; border-bottom: 1px solid var(--border);
   }
   .groups-table th:first-child { padding-left: 0; }
-  .groups-table td {
-    padding: 10px 8px;
-    border-bottom: 1px solid var(--bg);
-    vertical-align: middle;
-  }
+  .groups-table td { padding: 10px 8px; border-bottom: 1px solid var(--bg); vertical-align: middle; }
   .groups-table td:first-child { padding-left: 0; }
   .groups-table tr:last-child td { border-bottom: none; }
-  .group-name { font-weight: 500; font-size: 12px; }
+  .group-name { font-weight: 500; }
   .group-desc { font-size: 10px; color: var(--muted); margin-top: 1px; }
-  .count-cell { font-variant-numeric: tabular-nums; }
   .count-sep  { color: var(--light); }
   .controls-cell { display: flex; gap: 4px; }
 
   /* ── Preset grid ── */
-  .presets-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-    gap: 10px;
-  }
+  .presets-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(190px,1fr)); gap: 10px; }
   .preset-card {
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 12px;
-    background: var(--bg);
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 12px; background: var(--bg);
+    display: flex; flex-direction: column; gap: 6px;
     transition: border-color 0.12s, box-shadow 0.12s;
   }
   .preset-card:hover { border-color: var(--violet-bd); box-shadow: 0 0 0 3px var(--violet-bg); }
-  .preset-name { font-weight: 600; font-size: 12px; }
-  .preset-desc { font-size: 10px; color: var(--muted); line-height: 1.4; flex: 1; }
-  .preset-footer {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-top: 4px;
-  }
-  .preset-ver { font-size: 10px; color: var(--light); font-variant-numeric: tabular-nums; }
+  .preset-name   { font-weight: 600; font-size: 12px; }
+  .preset-desc   { font-size: 10px; color: var(--muted); line-height: 1.4; flex: 1; }
+  .preset-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+  .preset-ver    { font-size: 10px; color: var(--light); }
   .preset-status { font-size: 10px; color: var(--muted); min-height: 14px; }
 
-  /* ── Live view ── */
-  .node-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 10px;
-  }
-  .node-card {
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 12px;
-    background: var(--bg);
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-  }
-  .node-card.dead { opacity: 0.55; }
-  .node-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 6px;
-  }
-  .node-label { font-weight: 700; font-size: 13px; letter-spacing: -0.01em; }
-  .node-state { font-size: 10px; font-weight: 600; padding: 1px 7px;
-                border-radius: 99px; white-space: nowrap; }
-  .node-state.idle       { background: var(--slate-bg);   color: var(--slate);   }
-  .node-state.ready      { background: var(--emerald-bg); color: var(--emerald); }
-  .node-state.running    { background: var(--emerald-bg); color: var(--emerald); }
-  .node-state.planning   { background: var(--violet-bg);  color: var(--violet);  }
-  .node-state.invoking   { background: var(--amber-bg);   color: var(--amber);   }
-  .node-state.reflecting { background: var(--amber-bg);   color: var(--amber);   }
-  .node-state.done       { background: var(--emerald-bg); color: var(--emerald); }
-  .node-state.paused     { background: var(--amber-bg);   color: var(--amber);   }
-  .node-state.offline    { background: var(--slate-bg);   color: var(--light);   }
-  .node-state.failed     { background: var(--rose-bg);    color: var(--rose);    }
-  .node-section-label {
-    font-size: 9px; font-weight: 600; text-transform: uppercase;
-    letter-spacing: 0.08em; color: var(--light); margin-top: 4px;
-  }
-  .node-tag-row { display: flex; flex-wrap: wrap; gap: 3px; min-height: 16px; }
-  .node-tag {
-    font-size: 10px; padding: 1px 6px;
-    border-radius: 4px;
-    background: var(--panel); border: 1px solid var(--border);
-    color: var(--muted); white-space: nowrap;
-  }
-  .last-call-row {
-    display: flex; align-items: flex-start; gap: 8px;
-    font-size: 11px; line-height: 1.4;
-    padding: 10px 12px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-  }
-  .last-call-label { color: var(--light); flex-shrink: 0; }
-  .last-call-name  { font-weight: 600; color: var(--violet); flex-shrink: 0; }
-  .last-call-sep   { color: var(--light); flex-shrink: 0; }
-  .last-call-result{ color: var(--muted); font-family: "SFMono-Regular",Menlo,monospace;
-                     font-size: 10px; overflow: hidden; text-overflow: ellipsis;
-                     white-space: nowrap; }
-
-  /* ── Upload section ── */
-  .upload-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 10px;
-    flex-wrap: wrap;
-  }
+  /* ── Upload ── */
+  .upload-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
   .file-label {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 5px 10px;
-    border-radius: var(--radius);
-    border: 1px solid var(--border);
-    background: var(--panel);
-    font-size: 11px;
-    color: var(--muted);
-    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 5px 10px; border-radius: var(--radius);
+    border: 1px solid var(--border); background: var(--panel);
+    font-size: 11px; color: var(--muted); cursor: pointer;
     transition: background 0.12s;
   }
   .file-label:hover { background: var(--bg); }
   #file-input { display: none; }
-  .file-name { font-size: 11px; color: var(--muted); font-style: italic; }
-
+  .file-name  { font-size: 11px; color: var(--muted); font-style: italic; }
   textarea {
-    width: 100%;
-    font-family: "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
-    font-size: 11px;
-    line-height: 1.6;
-    color: var(--text);
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 10px 12px;
-    resize: vertical;
-    min-height: 140px;
-    outline: none;
+    width: 100%; font-family: "SFMono-Regular",Menlo,Consolas,monospace;
+    font-size: 11px; line-height: 1.6; color: var(--text);
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 10px 12px;
+    resize: vertical; min-height: 140px; outline: none;
   }
   textarea:focus { border-color: #94a3b8; box-shadow: 0 0 0 2px rgba(148,163,184,0.2); }
-
-  .upload-status {
-    margin-top: 8px;
-    font-size: 11px;
-    min-height: 18px;
-    transition: color 0.15s;
-  }
+  .upload-status { margin-top: 8px; font-size: 11px; min-height: 18px; }
   .upload-status.ok      { color: var(--emerald); }
   .upload-status.err     { color: var(--rose); }
   .upload-status.pending { color: var(--muted); }
 
   /* ── Log ── */
   .log-list { display: flex; flex-direction: column; gap: 2px; max-height: 200px; overflow-y: auto; }
-  .log-row { display: flex; gap: 8px; font-size: 11px; padding: 2px 0; }
-  .log-time { color: var(--light); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+  .log-row  { display: flex; gap: 8px; font-size: 11px; padding: 2px 0; }
+  .log-time { color: var(--light); flex-shrink: 0; font-variant-numeric: tabular-nums; }
   .log-event{ color: var(--muted); font-weight: 500; flex-shrink: 0; min-width: 72px; }
   .log-detail{ color: var(--text); }
 
-  /* ── Empty state ── */
-  .empty { color: var(--light); font-size: 11px; font-style: italic; padding: 8px 0; }
+  .empty  { color: var(--light); font-size: 11px; font-style: italic; padding: 8px 0; }
+
+  /* ── System actions ── */
+  .system-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
   /* ── Redirect banner ── */
   #redirect-banner {
-    display: none;
-    position: fixed;
-    bottom: 20px; left: 50%; transform: translateX(-50%);
-    background: var(--violet); color: #fff;
-    padding: 8px 20px;
-    border-radius: 99px;
-    font-size: 12px;
-    font-weight: 500;
-    box-shadow: var(--shadow-md);
-    z-index: 100;
-    white-space: nowrap;
+    display: none; position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: var(--violet); color: #fff; padding: 8px 20px;
+    border-radius: 99px; font-size: 12px; font-weight: 500;
+    box-shadow: var(--shadow-md); z-index: 100; white-space: nowrap;
   }
 </style>
 </head>
@@ -377,14 +269,11 @@
 <!-- Header -->
 <header class="header">
   <div class="header-inner">
-    <div class="logo">
-      <div class="logo-dot" id="health-dot"></div>
-      mycelium
-    </div>
+    <div class="logo"><div class="logo-dot" id="health-dot"></div>mycelium</div>
     <div class="header-sep"></div>
     <span class="mesh-name" id="mesh-name">—</span>
     <span id="mesh-version" class="pill neutral" style="font-size:10px;padding:1px 6px;">—</span>
-    <span id="health-pill" class="pill neutral">—</span>
+    <span id="health-pill"  class="pill neutral">—</span>
     <span id="manager-pill" class="pill mgr" style="display:none;">—</span>
     <div class="header-right">
       <span class="refresh-indicator" id="refresh-indicator">&#8635; polling</span>
@@ -392,35 +281,63 @@
   </div>
 </header>
 
-<!-- Auto-redirect banner -->
-<div id="redirect-banner">Manager changed — redirecting&hellip;</div>
+<!-- Tab bar -->
+<div class="tab-bar">
+  <div class="tab-bar-inner">
+    <button class="tab-btn active" onclick="showTab('live')"  id="tab-btn-live">&#9679; Live</button>
+    <button class="tab-btn"        onclick="showTab('manage')" id="tab-btn-manage">&#9881; Manage</button>
+  </div>
+</div>
 
-<div class="main">
+<!-- Redirect banner -->
+<div id="redirect-banner">Manager changed &mdash; redirecting&hellip;</div>
 
-  <!-- Live View -->
+<!-- ── LIVE TAB ── -->
+<div class="pane" id="pane-live">
+
+  <!-- Topology graph -->
   <div class="card">
     <div class="card-header">
-      <span class="card-title">Live</span>
+      <span class="card-title">Topology</span>
       <span id="live-call-count" style="font-size:10px;color:var(--muted);"></span>
     </div>
-    <div class="card-body" style="display:flex;flex-direction:column;gap:12px;">
-      <div class="node-grid" id="node-grid">
-        <div class="empty">Connecting&hellip;</div>
-      </div>
-      <div id="last-call-row" style="display:none;" class="last-call-row">
-        <span class="last-call-label">Last:</span>
-        <span class="last-call-name" id="last-call-name"></span>
-        <span class="last-call-sep">&rarr;</span>
-        <span class="last-call-result" id="last-call-result"></span>
+    <div class="topo-wrap">
+      <svg id="topo-svg" viewBox="0 0 720 340" preserveAspectRatio="xMidYMid meet">
+        <!-- Edges (static positions, classes updated by JS) -->
+        <line id="edge-01" class="topo-edge" x1="140" y1="258" x2="580" y2="258"/>
+        <line id="edge-02" class="topo-edge" x1="140" y1="258" x2="360" y2="82"/>
+        <line id="edge-12" class="topo-edge" x1="580" y1="258" x2="360" y2="82"/>
+        <!-- Node groups (content written by JS) -->
+        <g id="topo-node-0" transform="translate(140,258)"></g>
+        <g id="topo-node-1" transform="translate(580,258)"></g>
+        <g id="topo-node-2" transform="translate(360,82)"></g>
+      </svg>
+      <!-- Last call row (hidden until first call) -->
+      <div id="last-call" class="last-call" style="display:none;">
+        <span class="last-call-label">Last</span>
+        <span class="last-call-name"  id="lc-name"></span>
+        <span class="last-call-arrow">&rarr;</span>
+        <span class="last-call-result" id="lc-result"></span>
       </div>
     </div>
   </div>
 
+  <!-- Event log (compact) -->
+  <div class="card">
+    <div class="card-header"><span class="card-title">Event Log</span></div>
+    <div class="card-body" style="padding:8px 16px;">
+      <div class="log-list" id="log-list"><div class="empty">No events yet.</div></div>
+    </div>
+  </div>
+
+</div><!-- /pane-live -->
+
+<!-- ── MANAGE TAB ── -->
+<div class="pane hidden" id="pane-manage">
+
   <!-- System Controls -->
   <div class="card">
-    <div class="card-header">
-      <span class="card-title">System</span>
-    </div>
+    <div class="card-header"><span class="card-title">System</span></div>
     <div class="card-body">
       <div class="system-actions">
         <button class="btn btn-stop"  onclick="systemAction('stop')">&#9632; Stop System</button>
@@ -438,14 +355,9 @@
     </div>
     <div class="card-body" style="padding:0 16px;">
       <table class="groups-table">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Agents</th>
-            <th>Status</th>
-            <th>Controls</th>
-          </tr>
-        </thead>
+        <thead><tr>
+          <th>Name</th><th>Agents</th><th>Status</th><th>Controls</th>
+        </tr></thead>
         <tbody id="groups-tbody">
           <tr><td colspan="4" class="empty" style="padding:14px 0;">Loading&hellip;</td></tr>
         </tbody>
@@ -457,7 +369,7 @@
   <div class="card">
     <div class="card-header">
       <span class="card-title">Examples / Presets</span>
-      <span style="font-size:10px;color:var(--muted);">Apply a topology and it propagates to all nodes</span>
+      <span style="font-size:10px;color:var(--muted);">Apply a topology — propagates to all nodes</span>
     </div>
     <div class="card-body">
       <div class="presets-grid" id="presets-grid">
@@ -468,18 +380,15 @@
 
   <!-- Upload Manifest -->
   <div class="card">
-    <div class="card-header">
-      <span class="card-title">Upload Manifest</span>
-    </div>
+    <div class="card-header"><span class="card-title">Upload Manifest</span></div>
     <div class="card-body">
       <div class="upload-row">
-        <label class="file-label" for="file-input">
-          &#128196; Choose file
-        </label>
+        <label class="file-label" for="file-input">&#128196; Choose file</label>
         <input type="file" id="file-input" accept=".toml,text/plain" onchange="onFileChosen(event)">
         <span class="file-name" id="file-name">No file chosen</span>
       </div>
-      <textarea id="manifest-textarea" placeholder="# Paste or load a TOML manifest here&#10;[mesh]&#10;name    = &quot;...&quot;&#10;version = &quot;0.2&quot;&#10;&#10;[[group]]&#10;..."></textarea>
+      <textarea id="manifest-textarea"
+        placeholder="# Paste or load a TOML manifest&#10;[mesh]&#10;name    = &quot;...&quot;&#10;version = &quot;0.2&quot;&#10;&#10;[[group]]&#10;..."></textarea>
       <div style="margin-top:8px;display:flex;align-items:center;gap:8px;">
         <button class="btn btn-upload" onclick="uploadManifest()">&#8593; Upload</button>
         <div class="upload-status" id="upload-status"></div>
@@ -487,26 +396,24 @@
     </div>
   </div>
 
-  <!-- Event Log -->
-  <div class="card">
-    <div class="card-header">
-      <span class="card-title">Event Log</span>
-    </div>
-    <div class="card-body" style="padding:8px 16px;">
-      <div class="log-list" id="log-list">
-        <div class="empty">No events yet.</div>
-      </div>
-    </div>
-  </div>
-
-</div>
+</div><!-- /pane-manage -->
 
 <script>
 // ── State ─────────────────────────────────────────────────────────────────────
-let lastManagerPort = null;
-let redirecting     = false;
+let redirecting  = false;
+let prevLastTool = null;
+let activeTab    = 'live';
 
-// ── Polling ───────────────────────────────────────────────────────────────────
+// ── Tab switching ─────────────────────────────────────────────────────────────
+function showTab(id) {
+  activeTab = id;
+  ['live','manage'].forEach(t => {
+    document.getElementById('pane-' + t).classList.toggle('hidden', t !== id);
+    document.getElementById('tab-btn-' + t).classList.toggle('active', t === id);
+  });
+}
+
+// ── Poll ──────────────────────────────────────────────────────────────────────
 async function poll() {
   try {
     const [statusRes, stateRes] = await Promise.all([
@@ -514,78 +421,53 @@ async function poll() {
       fetch('/state').catch(() => null),
     ]);
     const status = await statusRes.json();
-    renderStatus(status);
+    renderHeader(status);
+    renderGroups(status);
     checkManagerRedirect(status);
 
     if (stateRes && stateRes.ok) {
       const state = await stateRes.json();
+      renderTopology(state);
       if (state.log) renderLog(state.log);
-      renderLive(state);
     }
 
-    // Refresh mesh name/version from manifest
     fetch('/manifest').then(r => r.ok ? r.json() : null).then(m => {
       if (!m) return;
       document.getElementById('mesh-name').textContent = m.name || '—';
-      const vPill = document.getElementById('mesh-version');
-      vPill.textContent = m.version ? 'v' + m.version : '—';
+      const vp = document.getElementById('mesh-version');
+      vp.textContent = m.version ? 'v' + m.version : '—';
     }).catch(() => {});
 
     document.getElementById('refresh-indicator').textContent = '↺ ' + fmtTime(Date.now());
-  } catch (e) {
+  } catch(e) {
     document.getElementById('refresh-indicator').textContent = '⚠ offline';
   }
 }
 
-function startPolling() {
-  poll();
-  setInterval(poll, 3000);
-}
-
-// ── Manager redirect ──────────────────────────────────────────────────────────
-// When the gossip mesh elects a new manager, the browser auto-follows to the
-// new port so the user always sees the manager's authoritative view.
-function checkManagerRedirect(status) {
-  if (redirecting) return;
-  const mp = status.manager_port;
-  if (!mp) return;
-  const myPort = parseInt(window.location.port, 10) || 80;
-  if (mp !== myPort) {
-    redirecting = true;
-    document.getElementById('redirect-banner').style.display = 'block';
-    // Short delay so the banner is visible before navigation
-    setTimeout(() => {
-      window.location.href = 'http://' + window.location.hostname + ':' + mp + '/';
-    }, 800);
-  }
-}
-
-// ── Render helpers ────────────────────────────────────────────────────────────
-function renderStatus(status) {
+// ── Header ────────────────────────────────────────────────────────────────────
+function renderHeader(status) {
   const healthy = status.healthy;
+  document.getElementById('health-dot').style.background =
+    healthy ? 'var(--emerald)' : 'var(--rose)';
+  const hp = document.getElementById('health-pill');
+  hp.className = 'pill ' + (healthy ? 'ok' : 'deficit');
+  hp.textContent = healthy ? '● HEALTHY' : '● DEGRADED';
 
-  // Health pill
-  const dot = document.getElementById('health-dot');
-  const pill = document.getElementById('health-pill');
-  dot.style.background = healthy ? 'var(--emerald)' : 'var(--rose)';
-  pill.className = 'pill ' + (healthy ? 'ok' : 'deficit');
-  pill.textContent = healthy ? '● HEALTHY' : '● DEGRADED';
-
-  // Manager pill
-  const mgr = document.getElementById('manager-pill');
+  const mp = document.getElementById('manager-pill');
   if (status.manager_node) {
-    mgr.style.display = '';
-    mgr.textContent = '★ mgr: ' + status.manager_node;
+    mp.style.display = '';
+    mp.textContent = '★ ' + status.manager_node;
   } else {
-    mgr.style.display = 'none';
+    mp.style.display = 'none';
   }
+}
 
-  // Groups summary
-  const satisfied = status.groups.filter(g => g.satisfied).length;
+// ── Groups table ──────────────────────────────────────────────────────────────
+function renderGroups(status) {
+  const sat = status.groups.filter(g => g.satisfied).length;
   document.getElementById('groups-summary').textContent =
-    satisfied + '/' + status.groups.length + ' groups satisfied';
+    sat + '/' + status.groups.length + ' satisfied';
 
-  // Groups table
   const tbody = document.getElementById('groups-tbody');
   if (!status.groups.length) {
     tbody.innerHTML = '<tr><td colspan="4" class="empty" style="padding:14px 0;">No groups defined.</td></tr>';
@@ -600,68 +482,108 @@ function renderStatus(status) {
         <div class="group-name">${esc(g.name)}</div>
         ${g.description ? `<div class="group-desc">${esc(g.description)}</div>` : ''}
       </td>
-      <td class="count-cell">
-        <span style="font-weight:600;">${g.actual}</span>
-        <span class="count-sep"> / </span>
-        <span>${g.min_agents}${maxStr}</span>
+      <td style="font-variant-numeric:tabular-nums;">
+        <b>${g.actual}</b><span class="count-sep"> / </span>${g.min_agents}${maxStr}
       </td>
       <td><span class="pill ${cls}">${label}</span></td>
-      <td>
-        <div class="controls-cell">
-          <button class="btn btn-stop btn-sm"  onclick="groupAction('${esc(g.name)}','stop')">&#9632;</button>
-          <button class="btn btn-start btn-sm" onclick="groupAction('${esc(g.name)}','start')">&#9654;</button>
-        </div>
-      </td>
+      <td><div class="controls-cell">
+        <button class="btn btn-stop btn-sm"  onclick="groupAction('${esc(g.name)}','stop')">&#9632;</button>
+        <button class="btn btn-start btn-sm" onclick="groupAction('${esc(g.name)}','start')">&#9654;</button>
+      </div></td>
     </tr>`;
   }).join('');
 }
 
-// ── Live view ─────────────────────────────────────────────────────────────────
-function renderLive(state) {
-  if (!state) return;
+// ── SVG Topology ──────────────────────────────────────────────────────────────
+const STATE_COLOR = s => {
+  const k = (s || '').toLowerCase().split(/[\s:]/)[0];
+  if (['running','ready','done'].includes(k))      return '#059669';
+  if (k === 'planning')                            return '#7c3aed';
+  if (['invoking','reflecting'].includes(k))       return '#d97706';
+  if (k === 'paused')                              return '#f59e0b';
+  if (['offline','failed'].includes(k))            return '#e11d48';
+  return '#94a3b8';
+};
 
-  // Node grid
-  const grid = document.getElementById('node-grid');
-  if (state.nodes && state.nodes.length) {
-    grid.innerHTML = state.nodes.map(n => {
-      const stateRaw  = n.state || 'Ready';
-      const stateKey  = stateRaw.toLowerCase().split(/[\s:]/)[0];
-      const stateLabel = stateRaw.includes(':')
-        ? stateRaw.split(':')[0] + ' ' + stateRaw.split(':')[1]
-        : stateRaw;
-      const caps = (n.caps || []).map(c =>
-        `<span class="node-tag">${esc(c.ns)}/${esc(c.name)}</span>`
-      ).join('');
-      const tools = (n.tools || []).map(t =>
-        `<span class="node-tag">${esc(t)}</span>`
-      ).join('');
-      return `<div class="node-card${n.alive ? '' : ' dead'}">
-        <div class="node-header">
-          <span class="node-label">${esc(n.label)}</span>
-          <span class="node-state ${stateKey}">${esc(stateLabel)}</span>
-        </div>
-        ${caps ? `<div class="node-section-label">Capabilities</div><div class="node-tag-row">${caps}</div>` : ''}
-        ${tools ? `<div class="node-section-label">Tools</div><div class="node-tag-row">${tools}</div>` : ''}
-      </div>`;
-    }).join('');
-  }
+// Tool → which node index provides it (read from state)
+function toolProviderIndex(state, toolName) {
+  if (!state.nodes) return -1;
+  return state.nodes.findIndex(n => (n.tools || []).includes(toolName));
+}
+
+// Which edge id connects node i to node j?
+function edgeId(i, j) {
+  const [a,b] = [Math.min(i,j), Math.max(i,j)];
+  return `edge-${a}${b}`;
+}
+
+function flashEdge(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.add('hot');
+  setTimeout(() => el.classList.remove('hot'), 1100);
+}
+
+function pulseNode(i) {
+  const circle = document.getElementById(`tnode-circle-${i}`);
+  if (!circle) return;
+  circle.classList.remove('pulse');
+  void circle.offsetWidth; // reflow to restart animation
+  circle.classList.add('pulse');
+  circle.addEventListener('animationend', () => circle.classList.remove('pulse'), { once: true });
+}
+
+function renderTopology(state) {
+  if (!state || !state.nodes) return;
 
   // Call counter
   const cc = document.getElementById('live-call-count');
   if (state.total_calls != null)
-    cc.textContent = state.total_calls + ' tool call' + (state.total_calls !== 1 ? 's' : '');
+    cc.textContent = state.total_calls + ' call' + (state.total_calls !== 1 ? 's' : '');
 
-  // Last tool call
-  const row = document.getElementById('last-call-row');
-  if (state.last_tool) {
+  // Detect new tool call → flash edge + pulse node
+  if (state.last_tool && state.last_tool !== prevLastTool) {
+    const provIdx = toolProviderIndex(state, state.last_tool);
+    const callerIdx = state.nodes.findIndex(n => n.label === 'n-2');
+    if (provIdx >= 0 && callerIdx >= 0 && provIdx !== callerIdx) {
+      flashEdge(edgeId(provIdx, callerIdx));
+      pulseNode(provIdx);
+    }
+    prevLastTool = state.last_tool;
+
+    // Last call row
+    const row = document.getElementById('last-call');
     row.style.display = 'flex';
-    document.getElementById('last-call-name').textContent = state.last_tool;
+    document.getElementById('lc-name').textContent = state.last_tool;
     const res = state.last_result;
-    document.getElementById('last-call-result').textContent =
-      res && typeof res === 'object' ? JSON.stringify(res) : (res || '—');
+    document.getElementById('lc-result').textContent =
+      (res && typeof res === 'object') ? JSON.stringify(res) : (res || '—');
   }
+
+  // Update each node group
+  state.nodes.forEach((n, i) => {
+    const g = document.getElementById('topo-node-' + i);
+    if (!g) return;
+    const color = STATE_COLOR(n.state);
+    const stateRaw = n.state || 'Ready';
+    const stateLabel = stateRaw.includes(':')
+      ? stateRaw.split(':')[0] + ' ' + stateRaw.split(':')[1]
+      : stateRaw;
+    const caps  = (n.caps || []).map(c => `${c.ns}/${c.name}`).join(' · ') || '';
+    const tools = (n.tools || []).join(', ') || '';
+
+    g.innerHTML = `
+      <circle id="tnode-circle-${i}" class="topo-node-circle"
+        r="44" fill="${color}1a" stroke="${color}" stroke-width="2.5"/>
+      <text y="-9" class="topo-label">${esc(n.label)}</text>
+      <text y="9"  class="topo-state" fill="${color}">${esc(stateLabel)}</text>
+      ${caps  ? `<text y="60" class="topo-caps">${esc(caps)}</text>`   : ''}
+      ${tools ? `<text y="74" class="topo-tools">${esc(tools)}</text>` : ''}
+    `;
+  });
 }
 
+// ── Log ───────────────────────────────────────────────────────────────────────
 function renderLog(entries) {
   const el = document.getElementById('log-list');
   if (!entries.length) { el.innerHTML = '<div class="empty">No events yet.</div>'; return; }
@@ -674,6 +596,21 @@ function renderLog(entries) {
   ).join('');
 }
 
+// ── Manager redirect ──────────────────────────────────────────────────────────
+function checkManagerRedirect(status) {
+  if (redirecting) return;
+  const mp = status.manager_port;
+  if (!mp) return;
+  const myPort = parseInt(window.location.port, 10) || 80;
+  if (mp !== myPort) {
+    redirecting = true;
+    document.getElementById('redirect-banner').style.display = 'block';
+    setTimeout(() => {
+      window.location.href = 'http://' + window.location.hostname + ':' + mp + '/';
+    }, 800);
+  }
+}
+
 // ── Preset gallery ────────────────────────────────────────────────────────────
 async function loadPresets() {
   try {
@@ -681,7 +618,7 @@ async function loadPresets() {
     if (!r.ok) return;
     const presets = await r.json();
     const grid = document.getElementById('presets-grid');
-    if (!presets.length) { grid.innerHTML = '<div class="empty">No presets available.</div>'; return; }
+    if (!presets.length) { grid.innerHTML = '<div class="empty">No presets.</div>'; return; }
     grid.innerHTML = presets.map(p => `
       <div class="preset-card" id="preset-card-${esc(p.id)}">
         <div class="preset-name">${esc(p.name)}</div>
@@ -691,30 +628,28 @@ async function loadPresets() {
           <button class="btn btn-apply btn-sm" onclick="applyPreset('${esc(p.id)}')">Apply</button>
         </div>
         <div class="preset-status" id="preset-status-${esc(p.id)}"></div>
-      </div>`
-    ).join('');
-  } catch (e) {
-    document.getElementById('presets-grid').innerHTML =
-      '<div class="empty">Could not load presets.</div>';
+      </div>`).join('');
+  } catch(e) {
+    document.getElementById('presets-grid').innerHTML = '<div class="empty">Could not load presets.</div>';
   }
 }
 
 async function applyPreset(id) {
-  const statusEl = document.getElementById('preset-status-' + id);
-  if (statusEl) { statusEl.textContent = 'Applying…'; statusEl.style.color = 'var(--muted)'; }
+  const s = document.getElementById('preset-status-' + id);
+  if (s) { s.textContent = 'Applying…'; s.style.color = 'var(--muted)'; }
   try {
     const r = await fetch('/presets/' + encodeURIComponent(id) + '/apply', { method: 'POST' });
     const j = await r.json();
     if (r.ok) {
-      if (statusEl) { statusEl.textContent = '✓ Applied as v' + j.version; statusEl.style.color = 'var(--emerald)'; }
+      if (s) { s.textContent = '✓ v' + j.version; s.style.color = 'var(--emerald)'; }
       setTimeout(poll, 500);
     } else {
-      if (statusEl) { statusEl.textContent = '✗ ' + (j.error || 'Error'); statusEl.style.color = 'var(--rose)'; }
+      if (s) { s.textContent = '✗ ' + (j.error || 'error'); s.style.color = 'var(--rose)'; }
     }
-  } catch (e) {
-    if (statusEl) { statusEl.textContent = '✗ Request failed'; statusEl.style.color = 'var(--rose)'; }
+  } catch(e) {
+    if (s) { s.textContent = '✗ failed'; s.style.color = 'var(--rose)'; }
   }
-  if (statusEl) setTimeout(() => { statusEl.textContent = ''; }, 4000);
+  if (s) setTimeout(() => { s.textContent = ''; }, 4000);
 }
 
 // ── System / group actions ────────────────────────────────────────────────────
@@ -725,18 +660,14 @@ async function systemAction(action) {
   try {
     const r = await fetch('/system/' + action, { method: 'POST' });
     const j = await r.json();
-    if (r.ok) {
-      el.textContent = action === 'stop'
-        ? 'Stopped — capabilities will tombstone within 10 s'
-        : 'Started — capabilities will re-advertise within 10 s';
-      el.style.color = 'var(--emerald)';
-    } else {
-      el.textContent = '✗ ' + (j.error || 'Error');
-      el.style.color = 'var(--rose)';
-    }
-  } catch (e) {
-    el.textContent = '✗ Request failed';
-    el.style.color = 'var(--rose)';
+    el.textContent = r.ok
+      ? (action === 'stop'
+          ? 'Stopped — capabilities tombstone within 10 s'
+          : 'Started — re-advertising within 10 s')
+      : '✗ ' + (j.error || 'Error');
+    el.style.color = r.ok ? 'var(--emerald)' : 'var(--rose)';
+  } catch(e) {
+    el.textContent = '✗ Request failed'; el.style.color = 'var(--rose)';
   }
   setTimeout(poll, 500);
 }
@@ -745,13 +676,12 @@ async function groupAction(name, action) {
   try {
     await fetch('/system/groups/' + encodeURIComponent(name) + '/' + action, { method: 'POST' });
     setTimeout(poll, 500);
-  } catch (e) {}
+  } catch(e) {}
 }
 
 // ── Manifest upload ───────────────────────────────────────────────────────────
 function onFileChosen(e) {
-  const file = e.target.files[0];
-  if (!file) return;
+  const file = e.target.files[0]; if (!file) return;
   document.getElementById('file-name').textContent = file.name;
   const reader = new FileReader();
   reader.onload = ev => { document.getElementById('manifest-textarea').value = ev.target.result; };
@@ -759,45 +689,39 @@ function onFileChosen(e) {
 }
 
 async function uploadManifest() {
-  const body = document.getElementById('manifest-textarea').value.trim();
+  const body   = document.getElementById('manifest-textarea').value.trim();
   const status = document.getElementById('upload-status');
   if (!body) { status.textContent = 'Paste a TOML manifest first.'; status.className = 'upload-status err'; return; }
-
-  status.textContent = 'Uploading…';
-  status.className = 'upload-status pending';
+  status.textContent = 'Uploading…'; status.className = 'upload-status pending';
   try {
-    const r = await fetch('/manifest', {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain' },
-      body,
-    });
+    const r = await fetch('/manifest', { method: 'POST',
+      headers: {'Content-Type': 'text/plain'}, body });
     const j = await r.json();
     if (r.ok) {
-      status.textContent = '✓ Accepted — v' + j.version + ' now active';
+      status.textContent = '✓ Accepted — v' + j.version + ' active';
       status.className = 'upload-status ok';
       setTimeout(poll, 500);
     } else {
       status.textContent = '✗ ' + (j.error || 'Upload failed');
       status.className = 'upload-status err';
     }
-  } catch (e) {
-    status.textContent = '✗ Request failed — is the node running?';
-    status.className = 'upload-status err';
+  } catch(e) {
+    status.textContent = '✗ Request failed'; status.className = 'upload-status err';
   }
 }
 
 // ── Utils ─────────────────────────────────────────────────────────────────────
 function esc(s) {
   return String(s ?? '')
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/"/g,'&quot;');
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 function fmtTime(ms) {
   return new Date(ms).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
-startPolling();
+poll();
+setInterval(poll, 3000);
 loadPresets();
 </script>
 </body>
