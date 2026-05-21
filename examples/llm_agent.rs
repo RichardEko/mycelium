@@ -70,6 +70,9 @@ use tokio::time;
 const PORT_N0:         u16 = 56000;
 const PORT_N1:         u16 = 56001;
 const PORT_N2:         u16 = 56002;
+const PORT_SPARE0:     u16 = 56003;
+const PORT_SPARE1:     u16 = 56004;
+const PORT_SPARE2:     u16 = 56005;
 const HTTP_PORT_N0:    u16 = 8100;
 const HTTP_PORT_N1:    u16 = 8101;
 const HTTP_PORT_N2:    u16 = 8102;
@@ -654,6 +657,16 @@ struct AppState {
     mgr_h_n0: Arc<Mutex<Option<CapabilityHandle>>>,
     mgr_h_n1: Arc<Mutex<Option<CapabilityHandle>>>,
     mgr_h_n2: Arc<Mutex<Option<CapabilityHandle>>>,
+    /// Spare pool — 3 agents that start idle and are activated when the
+    /// matching active node is killed, advertising its capabilities instead.
+    agent_spare0:    Arc<GossipAgent>,
+    agent_spare1:    Arc<GossipAgent>,
+    agent_spare2:    Arc<GossipAgent>,
+    /// spare_covering[i] = Some("n-X") while spare-i is covering node n-X
+    spare_covering:  Arc<Mutex<[Option<&'static str>; 3]>>,
+    spare_caps0:     Arc<Mutex<Vec<CapabilityHandle>>>,
+    spare_caps1:     Arc<Mutex<Vec<CapabilityHandle>>>,
+    spare_caps2:     Arc<Mutex<Vec<CapabilityHandle>>>,
 }
 
 async fn run_agent_loop(app: Arc<AppState>, cfg: LlmConfig) {
@@ -837,9 +850,23 @@ fn build_state_json(app: &AppState) -> String {
         "deficit":     g.deficit,
     })).collect();
 
+    let spare_covering = *app.spare_covering.lock().unwrap();
+    let spares: Vec<Value> = [
+        (&app.agent_spare0, "spare-0", spare_covering[0]),
+        (&app.agent_spare1, "spare-1", spare_covering[1]),
+        (&app.agent_spare2, "spare-2", spare_covering[2]),
+    ].iter().map(|(agent, label, covering)| {
+        json!({
+            "label":    label,
+            "covering": covering,
+            "caps":     caps_for_node(reporter, agent.node_id()),
+        })
+    }).collect();
+
     let mgr_port = *app.manager_port.lock().unwrap();
     json!({
         "nodes":       nodes,
+        "spares":      spares,
         "log":         log,
         "total_calls": app.call_count.load(Ordering::Relaxed),
         "last_tool":   *app.last_tool.lock().unwrap(),
@@ -951,24 +978,43 @@ async fn handle_system_start(app: &AppState) -> (u16, &'static str, String) {
     (200, "application/json", json!({"ok": true}).to_string())
 }
 
+fn caps_for_node_index(manifest: &MeshManifest, node_idx: usize, agent: &Arc<GossipAgent>) -> Vec<CapabilityHandle> {
+    manifest.groups.iter().enumerate()
+        .filter(|(i, _)| i % 3 == node_idx)
+        .flat_map(|(_, group)| {
+            group.capabilities.iter().map(|cap| {
+                agent.advertise_capability(
+                    Capability::new(cap.ns.as_str(), cap.name.as_str()),
+                    Duration::from_secs(30),
+                )
+            }).collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 fn handle_node_kill(app: &AppState, label: &str) -> (u16, &'static str, String) {
-    let (pause, mgr_h, port) = match label {
-        "n-0" => (&app.pause_n0, &app.mgr_h_n0, HTTP_PORT_N0),
-        "n-1" => (&app.pause_n1, &app.mgr_h_n1, HTTP_PORT_N1),
-        "n-2" => (&app.pause_n2, &app.mgr_h_n2, HTTP_PORT_N2),
+    let (node_idx, pause, mgr_h, spare_agent, spare_caps, port): (usize, _, _, _, _, u16) = match label {
+        "n-0" => (0, &app.pause_n0, &app.mgr_h_n0, &app.agent_spare0, &app.spare_caps0, HTTP_PORT_N0),
+        "n-1" => (1, &app.pause_n1, &app.mgr_h_n1, &app.agent_spare1, &app.spare_caps1, HTTP_PORT_N1),
+        "n-2" => (2, &app.pause_n2, &app.mgr_h_n2, &app.agent_spare2, &app.spare_caps2, HTTP_PORT_N2),
         _ => return (400, "application/json", json!({"error":"unknown node"}).to_string()),
     };
     pause.store(true, Ordering::Relaxed);
     *mgr_h.lock().unwrap() = None;
-    push_log(&app.log, "NodeKill", format!("{label} (:{port}) killed by operator"));
+    // Activate spare: advertise the same capabilities as the killed node
+    let manifest = app.manifest.read().unwrap().clone();
+    *spare_caps.lock().unwrap() = caps_for_node_index(&manifest, node_idx, spare_agent);
+    let static_label: &'static str = ["n-0", "n-1", "n-2"][node_idx];
+    app.spare_covering.lock().unwrap()[node_idx] = Some(static_label);
+    push_log(&app.log, "NodeKill", format!("{label} killed — spare-{node_idx} deployed"));
     (200, "application/json", json!({"ok": true}).to_string())
 }
 
 fn handle_node_start(app: &AppState, label: &str) -> (u16, &'static str, String) {
-    let (pause, mgr_h, agent, port) = match label {
-        "n-0" => (&app.pause_n0, &app.mgr_h_n0, &app.agent_n0, HTTP_PORT_N0),
-        "n-1" => (&app.pause_n1, &app.mgr_h_n1, &app.agent_n1, HTTP_PORT_N1),
-        "n-2" => (&app.pause_n2, &app.mgr_h_n2, &app.agent_n2, HTTP_PORT_N2),
+    let (node_idx, pause, mgr_h, agent, spare_caps, port): (usize, _, _, _, _, u16) = match label {
+        "n-0" => (0, &app.pause_n0, &app.mgr_h_n0, &app.agent_n0, &app.spare_caps0, HTTP_PORT_N0),
+        "n-1" => (1, &app.pause_n1, &app.mgr_h_n1, &app.agent_n1, &app.spare_caps1, HTTP_PORT_N1),
+        "n-2" => (2, &app.pause_n2, &app.mgr_h_n2, &app.agent_n2, &app.spare_caps2, HTTP_PORT_N2),
         _ => return (400, "application/json", json!({"error":"unknown node"}).to_string()),
     };
     pause.store(false, Ordering::Relaxed);
@@ -977,7 +1023,10 @@ fn handle_node_start(app: &AppState, label: &str) -> (u16, &'static str, String)
             .with("http_port", CapValue::Integer(port as i64)),
         Duration::from_secs(15),
     ));
-    push_log(&app.log, "NodeStart", format!("{label} (:{port}) restarted by operator"));
+    // Return spare to pool
+    *spare_caps.lock().unwrap() = vec![];
+    app.spare_covering.lock().unwrap()[node_idx] = None;
+    push_log(&app.log, "NodeStart", format!("{label} restarted — spare-{node_idx} returned to pool"));
     (200, "application/json", json!({"ok": true}).to_string())
 }
 
@@ -1172,6 +1221,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     agent_n0.start().await?;
     agent_n1.start().await?;
     agent_n2.start().await?;
+
+    // Spare pool — join the gossip ring but start idle (no capabilities advertised)
+    let agent_spare0 = make_agent(PORT_SPARE0, &[PORT_N0, PORT_N1, PORT_N2]);
+    let agent_spare1 = make_agent(PORT_SPARE1, &[PORT_N0, PORT_N1, PORT_N2]);
+    let agent_spare2 = make_agent(PORT_SPARE2, &[PORT_N0, PORT_N1, PORT_N2]);
+    agent_spare0.start().await?;
+    agent_spare1.start().await?;
+    agent_spare2.start().await?;
 
     let shared_log: SharedLog = Arc::new(Mutex::new(Vec::new()));
 
@@ -1389,6 +1446,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         mgr_h_n0:      Arc::clone(&mgr_h_n0),
         mgr_h_n1:      Arc::clone(&mgr_h_n1),
         mgr_h_n2:      Arc::clone(&mgr_h_n2),
+        agent_spare0:  Arc::clone(&agent_spare0),
+        agent_spare1:  Arc::clone(&agent_spare1),
+        agent_spare2:  Arc::clone(&agent_spare2),
+        spare_covering: Arc::new(Mutex::new([None; 3])),
+        spare_caps0:   Arc::new(Mutex::new(Vec::new())),
+        spare_caps1:   Arc::new(Mutex::new(Vec::new())),
+        spare_caps2:   Arc::new(Mutex::new(Vec::new())),
     });
 
     // ── Seed initial manifest capabilities ───────────────────────────────────

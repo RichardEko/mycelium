@@ -202,7 +202,10 @@
   .group-desc { font-size: 10px; color: var(--muted); margin-top: 1px; }
   .count-sep  { color: var(--light); }
   .controls-cell { display: flex; gap: 4px; }
-  .info-icon  { cursor: help; font-size: 10px; color: var(--muted); margin-left: 3px; font-style: normal; }
+  .info-icon  { cursor: help; font-size: 12px; color: var(--muted); margin-left: 3px; font-style: normal; }
+  .topo-pool-div   { stroke: var(--border); stroke-width: 1; stroke-dasharray: 4,3; }
+  .topo-pool-label { text-anchor: middle; font-size: 9px; fill: var(--muted); font-family: inherit;
+                     letter-spacing: 0.08em; text-transform: uppercase; }
   .pill-sm    { font-size: 10px; padding: 2px 8px; line-height: 16px; }
   .cap-health-row {
     display: flex; align-items: center; gap: 14px;
@@ -311,15 +314,22 @@
       <span id="live-call-count" style="font-size:10px;color:var(--muted);"></span>
     </div>
     <div class="topo-wrap">
-      <svg id="topo-svg" viewBox="0 0 720 340" preserveAspectRatio="xMidYMid meet">
-        <!-- Edges (static positions, classes updated by JS) -->
-        <line id="edge-01" class="topo-edge" x1="184" y1="258" x2="536" y2="258"/>
-        <line id="edge-02" class="topo-edge" x1="174" y1="231" x2="326" y2="109"/>
-        <line id="edge-12" class="topo-edge" x1="546" y1="231" x2="394" y2="109"/>
-        <!-- Node groups (content written by JS) -->
-        <g id="topo-node-0" transform="translate(140,258)"></g>
-        <g id="topo-node-1" transform="translate(580,258)"></g>
-        <g id="topo-node-2" transform="translate(360,82)"></g>
+      <svg id="topo-svg" viewBox="0 0 760 430" preserveAspectRatio="xMidYMid meet">
+        <!-- Active-node edges -->
+        <line id="edge-01" class="topo-edge" x1="184" y1="225" x2="576" y2="225"/>
+        <line id="edge-02" class="topo-edge" x1="177" y1="201" x2="343" y2="89"/>
+        <line id="edge-12" class="topo-edge" x1="583" y1="201" x2="417" y2="89"/>
+        <!-- Pool divider -->
+        <line class="topo-pool-div" x1="50" y1="318" x2="710" y2="318"/>
+        <text class="topo-pool-label" x="380" y="313">SPARE POOL</text>
+        <!-- Active node groups (content written by JS) -->
+        <g id="topo-node-0" transform="translate(140,225)"></g>
+        <g id="topo-node-1" transform="translate(620,225)"></g>
+        <g id="topo-node-2" transform="translate(380,65)"></g>
+        <!-- Spare pool groups (JS animates transform on deploy/return) -->
+        <g id="topo-spare-0" transform="translate(165,385)"></g>
+        <g id="topo-spare-1" transform="translate(380,385)"></g>
+        <g id="topo-spare-2" transform="translate(595,385)"></g>
       </svg>
       <!-- Last call row (hidden until first call) -->
       <div id="last-call" class="last-call" style="display:none;">
@@ -529,6 +539,36 @@ function renderGroups(status) {
 }
 
 // ── SVG Topology ──────────────────────────────────────────────────────────────
+
+// Node layout constants (must match SVG transform attributes)
+const ACTIVE_POS = [{x:140,y:225},{x:620,y:225},{x:380,y:65}];
+const POOL_POS   = [{x:165,y:385},{x:380,y:385},{x:595,y:385}];
+
+// rAF-driven SVG transform animation
+const _anims = {};
+function _easeOutBack(t) {
+  const c1 = 1.70158, c3 = c1 + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+}
+function _animStep(now) {
+  let any = false;
+  for (const [id, a] of Object.entries(_anims)) {
+    const t = Math.min((now - a.t0) / a.dur, 1);
+    const e = t < 1 ? _easeOutBack(t) : 1;
+    const g = document.getElementById(id);
+    if (g) g.setAttribute('transform',
+      `translate(${(a.fx + (a.tx - a.fx) * e).toFixed(1)},${(a.fy + (a.ty - a.fy) * e).toFixed(1)})`);
+    if (t < 1) any = true; else delete _anims[id];
+  }
+  if (any) requestAnimationFrame(_animStep);
+}
+function animateTo(id, fx, fy, tx, ty, dur=700) {
+  _anims[id] = {t0: performance.now(), fx, fy, tx, ty, dur};
+  requestAnimationFrame(_animStep);
+}
+
+let prevSparesCovering = [null, null, null];
+
 const STATE_COLOR = s => {
   const k = (s || '').toLowerCase().split(/[\s:]/)[0];
   if (['running','ready','done'].includes(k))      return '#059669';
@@ -648,6 +688,39 @@ function renderTopology(state) {
       </g>
       ${caps  ? `<text y="68" class="topo-caps">${esc(caps)}</text>`   : ''}
       ${tools ? `<text y="80" class="topo-tools">${esc(tools)}</text>` : ''}
+    `;
+  });
+
+  // Spare pool nodes
+  (state.spares || []).forEach((s, i) => {
+    const wasDeployed = prevSparesCovering[i] != null;
+    const isDeployed  = s.covering != null;
+    const g = document.getElementById('topo-spare-' + i);
+    if (!g) return;
+
+    if (!wasDeployed && isDeployed) {
+      // Deploy: fly from pool to active node's position
+      const ai = ['n-0','n-1','n-2'].indexOf(s.covering);
+      animateTo('topo-spare-' + i, POOL_POS[i].x, POOL_POS[i].y, ACTIVE_POS[ai].x, ACTIVE_POS[ai].y);
+    } else if (wasDeployed && !isDeployed) {
+      // Return: fly back to pool
+      const ai = ['n-0','n-1','n-2'].indexOf(prevSparesCovering[i]);
+      animateTo('topo-spare-' + i, ACTIVE_POS[ai].x, ACTIVE_POS[ai].y, POOL_POS[i].x, POOL_POS[i].y);
+    } else if (!isDeployed && !_anims['topo-spare-' + i]) {
+      // Snap to pool if no animation running (initial render)
+      g.setAttribute('transform', `translate(${POOL_POS[i].x},${POOL_POS[i].y})`);
+    }
+    prevSparesCovering[i] = s.covering;
+
+    const color = isDeployed ? '#059669' : '#94a3b8';
+    const dash  = isDeployed ? '' : 'stroke-dasharray="5,3"';
+    const note  = isDeployed ? `→ ${s.covering}` : 'spare';
+    const caps  = (s.caps || []).map(c => `${c.ns}/${c.name}`).join(' ·') || '';
+    g.innerHTML = `
+      <circle r="30" fill="${color}0d" stroke="${color}" stroke-width="1.5" ${dash}/>
+      <text class="topo-label" y="-7" font-size="10">${esc(s.label)}</text>
+      <text class="topo-state" y="8" fill="${color}" font-size="9">${esc(note)}</text>
+      ${caps ? `<text y="48" class="topo-caps" font-size="8.5">${esc(caps)}</text>` : ''}
     `;
   });
 }
