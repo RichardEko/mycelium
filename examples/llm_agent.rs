@@ -694,32 +694,38 @@ struct AppState {
     trigger_active:  Arc<AtomicBool>,
     /// Set true by the "Run task" button; planning loop reacts immediately
     trigger_requested: Arc<AtomicBool>,
+    /// Which agent the planning loop currently runs on (n-2 normally, spare-2 after failover)
+    active_planner:  Arc<Mutex<Arc<GossipAgent>>>,
+    /// Set true to abort the in-progress cycle and restart on the new active_planner
+    restart_planner: Arc<AtomicBool>,
 }
 
 async fn run_agent_loop(app: Arc<AppState>, cfg: LlmConfig) {
-    let sm    = Arc::clone(&app.sm);
-    let agent = Arc::clone(&app.agent_n2);
+    let sm = Arc::clone(&app.sm);
 
     loop {
-        // Respect system/group pause from manifest control
-        if app.pause_n2.load(Ordering::Relaxed) {
-            time::sleep(Duration::from_secs(2)).await;
-            continue;
-        }
-
-        // Wait 3 s between cycles, but skip wait if the UI triggered a manual run
+        // Inter-cycle wait — 3 s normally, skipped on manual trigger or agent swap.
+        // Polls every 100 ms so a restart_planner signal wakes the loop quickly.
         if app.trigger_requested.swap(false, Ordering::Relaxed) {
             push_log(&app.log, "Task", "Manual trigger — starting planning cycle now");
         } else {
-            time::sleep(Duration::from_secs(3)).await;
+            for _ in 0..30u8 {
+                if app.restart_planner.load(Ordering::Relaxed) { break; }
+                time::sleep(Duration::from_millis(100)).await;
+            }
         }
+
+        // Snapshot which agent is active right now and clear the restart flag.
+        let agent = app.active_planner.lock().unwrap().clone();
+        app.restart_planner.store(false, Ordering::Relaxed);
+        app.trigger_requested.store(false, Ordering::Relaxed);
+
         push_log(&app.log, "Task", TASK_TEXT);
 
         match sm.transition(ExecutionState::Planning).await {
             Ok(())  => push_log(&app.log, "State", "Planning"),
             Err(e)  => { push_log(&app.log, "PolicyViolation", e.to_string()); continue; }
         }
-        // In mock mode hold each state long enough for the UI to observe it
         if cfg.mock { time::sleep(Duration::from_millis(900)).await; }
 
         let tools = discover_tools(&agent);
@@ -736,12 +742,21 @@ async fn run_agent_loop(app: Arc<AppState>, cfg: LlmConfig) {
             json!({"role":"user","content": TASK_TEXT}),
         ];
         let mut turn = 0usize;
+        let mut restarted = false;
 
-        loop {
+        'inner: loop {
+            // Agent was swapped mid-cycle — abandon and restart fresh on the new one
+            if app.restart_planner.load(Ordering::Relaxed) {
+                push_log(&app.log, "Planner", "agent swapped mid-cycle — restarting on new node");
+                sm.transition(ExecutionState::Idle).await.ok();
+                restarted = true;
+                break 'inner;
+            }
+
             if turn >= 8 {
                 sm.transition(ExecutionState::Failed { reason: "max turns".into() }).await.ok();
                 push_log(&app.log, "State", "Failed: max turns");
-                break;
+                break 'inner;
             }
 
             let step = if cfg.mock {
@@ -754,7 +769,7 @@ async fn run_agent_loop(app: Arc<AppState>, cfg: LlmConfig) {
                 Err(e) => {
                     push_log(&app.log, "LLM error", &e);
                     sm.transition(ExecutionState::Failed { reason: e }).await.ok();
-                    break;
+                    break 'inner;
                 }
                 Ok(None) => {
                     sm.transition(ExecutionState::Reflecting).await.ok();
@@ -762,14 +777,14 @@ async fn run_agent_loop(app: Arc<AppState>, cfg: LlmConfig) {
                     sm.transition(ExecutionState::Done).await.ok();
                     push_log(&app.log, "State", "Done");
                     if cfg.mock { time::sleep(Duration::from_millis(800)).await; }
-                    break;
+                    break 'inner;
                 }
                 Ok(Some((tool_name, args))) => {
                     match sm.transition(ExecutionState::Invoking { tool: tool_name.clone() }).await {
                         Err(e) => {
                             push_log(&app.log, "PolicyViolation", e.to_string());
                             sm.transition(ExecutionState::Failed { reason: e.to_string() }).await.ok();
-                            break;
+                            break 'inner;
                         }
                         Ok(()) => push_log(&app.log, "Invoking", format!("{tool_name}({args})")),
                     }
@@ -793,13 +808,21 @@ async fn run_agent_loop(app: Arc<AppState>, cfg: LlmConfig) {
                         }
                     }
                     sm.transition(ExecutionState::Planning).await.ok();
+                    if cfg.mock { time::sleep(Duration::from_millis(900)).await; }
                     turn += 1;
                 }
             }
         }
+
+        if restarted { continue; }
+
         sm.transition(ExecutionState::Idle).await.ok();
         push_log(&app.log, "State", "Idle — waiting for next task");
-        time::sleep(Duration::from_secs(8)).await;
+        // 8 s idle wait, interruptible by agent swap
+        for _ in 0..80u8 {
+            if app.restart_planner.load(Ordering::Relaxed) { break; }
+            time::sleep(Duration::from_millis(100)).await;
+        }
     }
 }
 
@@ -1125,6 +1148,11 @@ fn handle_node_kill(app: &AppState, label: &str) -> (u16, &'static str, String) 
     *spare_caps.lock().unwrap() = caps_for_node_index(&manifest, node_idx, spare_agent);
     let static_label: &'static str = ["n-0", "n-1", "n-2"][node_idx];
     app.spare_covering.lock().unwrap()[node_idx] = Some(static_label);
+    // If the planner node was killed, migrate the planning loop to the spare
+    if label == "n-2" {
+        *app.active_planner.lock().unwrap() = Arc::clone(&app.agent_spare2);
+        app.restart_planner.store(true, Ordering::Relaxed);
+    }
     push_log(&app.log, "NodeKill", format!("{label} killed — spare-{node_idx} deployed"));
     (200, "application/json", json!({"ok": true}).to_string())
 }
@@ -1145,6 +1173,11 @@ fn handle_node_start(app: &AppState, label: &str) -> (u16, &'static str, String)
     // Return spare to pool
     *spare_caps.lock().unwrap() = vec![];
     app.spare_covering.lock().unwrap()[node_idx] = None;
+    // If the planner node is being restored, move the planning loop back to it
+    if label == "n-2" {
+        *app.active_planner.lock().unwrap() = Arc::clone(&app.agent_n2);
+        app.restart_planner.store(true, Ordering::Relaxed);
+    }
     push_log(&app.log, "NodeStart", format!("{label} restarted — spare-{node_idx} returned to pool"));
     (200, "application/json", json!({"ok": true}).to_string())
 }
@@ -1669,6 +1702,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         traffic:           Arc::new(Mutex::new(Vec::new())),
         trigger_active:    Arc::new(AtomicBool::new(false)),
         trigger_requested: Arc::new(AtomicBool::new(false)),
+        active_planner:    Arc::new(Mutex::new(Arc::clone(&agent_n2))),
+        restart_planner:   Arc::new(AtomicBool::new(false)),
     });
 
     // ── Seed initial manifest capabilities ───────────────────────────────────
