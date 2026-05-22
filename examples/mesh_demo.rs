@@ -43,14 +43,36 @@ fn alloc_spare_label() -> String { format!("spare-{}", NEXT_SPARE.fetch_add(1, O
 /// (GPU hardware, fibre-channel, proprietary data feed, ML model on disk).
 /// These cannot be conferred by the management agent alone — only a node that
 /// was provisioned with the underlying resource may be promoted to such a role.
-fn is_intrinsic(ns: &str, name: &str) -> bool {
-    ns == "locality" ||             // zone is a physical fact, always intrinsic
+/// Returns true if `(ns, name)` is a **platform capability** — one that is
+/// inherited from the host the node is deployed on, not dynamically acquired
+/// at runtime by the management service.
+///
+/// # Platform vs acquirable capabilities
+///
+/// **Platform capabilities** are physical or infrastructural facts about the
+/// host: its network zone, attached GPU, fibre-channel storage connection, a
+/// pre-installed LLM, a licensed data-feed endpoint.  The management layer
+/// cannot confer these on an arbitrary node — only a spare that already runs
+/// on a suitably equipped host qualifies to fill a vacancy of this kind.
+///
+/// In production each host declares its own platform capabilities via a
+/// `NodeCapabilityConfig` file (`NodeCapabilityConfig::load_from_file` +
+/// `run_capability_probes` in `src/capability_config.rs`), and management
+/// discovers them by observing the mesh.  In this demo the management service
+/// simulates that by pre-marking spare nodes at provision time based on the
+/// group's declared capabilities.
+///
+/// **Acquirable capabilities** are behavioral roles that management can
+/// dynamically install on any willing node: a signal handler, a consensus
+/// voter, a heartbeat emitter.  Any blank spare can fill these.
+fn is_platform_cap(ns: &str, name: &str) -> bool {
+    ns == "locality" ||             // network zone — fixed by host deployment location
     matches!((ns, name),
-        ("compute", "gpu") | ("compute", "gpu-heavy") |
-        ("data",    "realtime")                        |
-        ("llm",     "inference")                       |
-        ("storage", "disk")                            |
-        ("render",  "job")
+        ("compute", "gpu") | ("compute", "gpu-heavy") | // GPU hardware on the host
+        ("data",    "realtime")                        | // licensed external data feed
+        ("llm",     "inference")                       | // pre-installed model on the host
+        ("storage", "disk")                            | // fibre-channel / attached storage
+        ("render",  "job")                               // dedicated render hardware
     )
 }
 
@@ -76,15 +98,16 @@ fn parse_zone_fallbacks(toml_str: &str) -> std::collections::HashMap<String, Vec
     map
 }
 
-/// Find the first spare that satisfies all required intrinsic caps.
-/// If `required` is empty, only blank spares (no intrinsic_caps) qualify.
+/// Find the first spare whose declared platform capabilities satisfy every
+/// entry in `required`.  If `required` is empty, only blank spares (no
+/// platform caps) qualify — they can be promoted to any acquirable role.
 fn find_matching_spare(nodes: &[MeshNode], required: &[String]) -> Option<usize> {
     nodes.iter().position(|n| {
         n.is_spare && !n.failed &&
         if required.is_empty() {
-            n.intrinsic_caps.is_empty()
+            n.platform_caps.is_empty()
         } else {
-            required.iter().all(|k| n.intrinsic_caps.contains(k))
+            required.iter().all(|k| n.platform_caps.contains(k))
         }
     })
 }
@@ -274,16 +297,20 @@ async fn spawn_fresh_node(
         ns: ns.to_string(), cap_name: cap_name.to_string(),
         behavior, cap_handles: vec![cap_h], tool_handles,
         pause_flag: Arc::new(AtomicBool::new(false)),
-        is_spare: false, failed: false, intrinsic_caps: vec![],
+        is_spare: false, failed: false, platform_caps: vec![],
     }
 }
 
 /// Provision a standby spare node: connected to the gossip mesh, no capability
-/// advertised, no behavior running.  `intrinsic_caps` lists "ns/name" strings
-/// for hardware capabilities this node is physically wired for; empty = generic
-/// (can be promoted to any acquirable role).
+/// advertised, no behavior running.
+///
+/// `platform_caps` is the set of capabilities this node inherits from its host
+/// platform (zone, GPU, data feed, pre-installed model, etc.) expressed as
+/// "ns/name" strings.  These are fixed at spawn time and never change on
+/// promotion — they reflect physical facts about the host, not the node's role.
+/// Empty = generic host; this spare can fill any acquirable vacancy.
 async fn spawn_spare_node(
-    intrinsic_caps: Vec<String>,
+    platform_caps: Vec<String>,
     _state:         &MgmtState,
 ) -> MeshNode {
     let port  = alloc_port();
@@ -301,7 +328,7 @@ async fn spawn_spare_node(
         pause_flag:     Arc::new(AtomicBool::new(false)),
         is_spare:       true,
         failed:         false,
-        intrinsic_caps,
+        platform_caps,
     }
 }
 
@@ -324,7 +351,7 @@ fn promote_spare(
         Duration::from_secs(30),
     )];
     // Advertise any locality caps this spare carries (its physical zone)
-    for ic in &node.intrinsic_caps {
+    for ic in &node.platform_caps {
         if let Some(zone) = ic.strip_prefix("locality/") {
             handles.push(node.agent.advertise_capability(
                 Capability::new("locality", zone),
@@ -351,7 +378,7 @@ fn promote_spare(
 
     node.is_spare = false;
     node.failed   = false;
-    // intrinsic_caps intentionally kept — the spare's physical facts don't change on promotion
+    // platform_caps intentionally kept — the spare's physical facts don't change on promotion
 }
 
 // ── LLM config + planning ─────────────────────────────────────────────────────
@@ -533,10 +560,18 @@ struct MeshNode {
     /// True when a formerly-active node has been killed.  Stays visible in the
     /// spare-pool UI as a "Failed" tombstone.
     failed:        bool,
-    /// For intrinsic-capability spares: the "ns/name" this node is pre-wired
-    /// for (e.g. "compute/gpu" for a node with GPU hardware).  Empty means the
-    /// node can be promoted to any acquirable role.
-    intrinsic_caps: Vec<String>,
+    /// Platform capabilities inherited from the host this node is deployed on —
+    /// e.g. `["render/job", "locality/east-0"]` for a render host in the east-0
+    /// zone.  Set at spawn time to reflect what the host provides; never
+    /// overwritten on promotion (the host's physical facts don't change).
+    ///
+    /// Empty = generic node; can be promoted to any acquirable role.
+    ///
+    /// In production these would be self-declared by the node via
+    /// `NodeCapabilityConfig` / `run_capability_probes` (`src/capability_config.rs`).
+    /// This demo simulates that by pre-marking spares from the group's manifest
+    /// capability list during provisioning.
+    platform_caps: Vec<String>,
 }
 
 struct MeshInstance {
@@ -972,11 +1007,11 @@ async fn provision_from_manifest(state: Arc<MgmtState>, mut manifest: MeshManife
         let spare_count = group.max_agents.unwrap_or(group.min_agents).saturating_sub(group.min_agents).min(3);
 
         // All intrinsic caps declared by this group (primary + extras like locality/*)
-        let group_intrinsic_caps: Vec<String> = group.capabilities.iter()
-            .filter(|c| is_intrinsic(c.ns.as_str(), c.name.as_str()))
+        let group_platform_caps: Vec<String> = group.capabilities.iter()
+            .filter(|c| is_platform_cap(c.ns.as_str(), c.name.as_str()))
             .map(|c| format!("{}/{}", c.ns, c.name))
             .collect();
-        let any_intrinsic = !group_intrinsic_caps.is_empty();
+        let any_intrinsic = !group_platform_caps.is_empty();
 
         // Active nodes — primary cap drives behavior; all caps are advertised
         for i in 0..group.min_agents {
@@ -995,7 +1030,7 @@ async fn provision_from_manifest(state: Arc<MgmtState>, mut manifest: MeshManife
                 );
                 node.cap_handles.push(h);
             }
-            node.intrinsic_caps = group_intrinsic_caps.clone();
+            node.platform_caps = group_platform_caps.clone();
 
             let cap_desc = if group.capabilities.len() > 1 {
                 format!("{}/{} + {} extra", cap.ns, cap.name, group.capabilities.len() - 1)
@@ -1007,11 +1042,11 @@ async fn provision_from_manifest(state: Arc<MgmtState>, mut manifest: MeshManife
         }
 
         // Spare nodes for this group.
-        //   All intrinsic → pre-mark spares with the full group intrinsic set
-        //                   (capability + locality); only matching spares may fill this vacancy.
-        //   All acquirable → blank spare; any unassigned spare may fill this vacancy.
+        //   Platform caps present → pre-mark spare with the host's declared caps
+        //     (capability + locality); only a spare on an equivalent host qualifies.
+        //   All acquirable → blank spare; any generic node may fill this vacancy.
         for _ in 0..spare_count {
-            let ic   = group_intrinsic_caps.clone(); // empty if all acquirable
+            let ic   = group_platform_caps.clone(); // empty if all acquirable
             let node = spawn_spare_node(ic.clone(), &state).await;
             push_log(&state.log, "Spare", format!(
                 "{} standby ({})", node.label,
@@ -1072,25 +1107,27 @@ async fn run_group_watchdog(state: Arc<MgmtState>) {
             let inst = match inst.as_ref() { Some(i) => i, None => continue };
 
             let have = inst.nodes.iter()
-                .filter(|n| n.is_spare && !n.failed && n.intrinsic_caps.is_empty())
+                .filter(|n| n.is_spare && !n.failed && n.platform_caps.is_empty())
                 .count();
             let need: usize = group_defs.iter()
-                .filter(|(_, _, _, ns, cap_name)| !is_intrinsic(ns, cap_name))
+                .filter(|(_, _, _, ns, cap_name)| !is_platform_cap(ns, cap_name))
                 .map(|(_, min, max, _, _)| max.saturating_sub(*min).min(3))
                 .sum();
 
-            // Warn on depleted intrinsic spare pools (can't replenish — hardware constraint)
+            // Warn on depleted platform-cap spare pools — cannot auto-replenish,
+            // because no amount of spawning generic nodes gives them the host's
+            // physical properties (zone, GPU, data feed, pre-installed model, etc.)
             for (_, min, max, ns, cap_name) in &group_defs {
-                if !is_intrinsic(ns, cap_name) { continue; }
-                let cap_key = format!("{ns}/{cap_name}");
-                let have_intrinsic = inst.nodes.iter()
-                    .filter(|n| n.is_spare && !n.failed && n.intrinsic_caps.contains(&cap_key))
+                if !is_platform_cap(ns, cap_name) { continue; }
+                let cap_key  = format!("{ns}/{cap_name}");
+                let have = inst.nodes.iter()
+                    .filter(|n| n.is_spare && !n.failed && n.platform_caps.contains(&cap_key))
                     .count();
                 let target = max.saturating_sub(*min).min(3);
-                if have_intrinsic < target {
+                if have < target {
                     push_log(&state.log, "Warning", format!(
-                        "intrinsic spare pool depleted for {cap_key} \
-                         ({have_intrinsic}/{target}) — hardware constraint, cannot auto-replenish"
+                        "platform spare pool depleted for {cap_key} \
+                         ({have}/{target}) — host platform constraint, cannot auto-replenish"
                     ));
                 }
             }
@@ -1150,7 +1187,7 @@ fn build_state_json(state: &MgmtState) -> String {
                 "group":          node.group,
                 "ns":             node.ns,
                 "cap_name":       node.cap_name,
-                "intrinsic_caps": node.intrinsic_caps,
+                "platform_caps": node.platform_caps,
                 "alive":          !paused && !node.failed,
                 "paused":         paused,
                 "is_spare":       node.is_spare,
@@ -1313,7 +1350,7 @@ fn handle_node_kill(state: &MgmtState, label: &str) -> (u16, &'static str, Strin
     let killed_ns      = inst.nodes[pos].ns.clone();
     let killed_cap     = inst.nodes[pos].cap_name.clone();
     let cap_key        = format!("{killed_ns}/{killed_cap}");
-    let cap_intrinsic  = is_intrinsic(&killed_ns, &killed_cap);
+    let cap_is_platform = is_platform_cap(&killed_ns, &killed_cap);
 
     // Abort behavior and tombstone capability — but keep the node in the list
     // as a Failed entry so the UI can display it in the spare pool.
@@ -1329,7 +1366,7 @@ fn handle_node_kill(state: &MgmtState, label: &str) -> (u16, &'static str, Strin
         format!("{label} failed — capability {cap_key} lost"));
 
     // Full intrinsic set of the killed node (includes locality/* if applicable)
-    let killed_intrinsics = inst.nodes[pos].intrinsic_caps.clone();
+    let killed_intrinsics = inst.nodes[pos].platform_caps.clone();
     let zone_fallbacks    = inst.zone_fallbacks.clone();
 
     // 1. Try exact match: spare must satisfy ALL of the killed node's intrinsic caps
@@ -1385,7 +1422,7 @@ fn handle_node_kill(state: &MgmtState, label: &str) -> (u16, &'static str, Strin
             .unwrap_or_default();
         push_log(&state.log, "Warning", format!(
             "no spare{locality_hint} for {cap_key} — {}",
-            if cap_intrinsic { "hardware/locality constraint" } else { "watchdog will replenish" }
+            if cap_is_platform { "host platform constraint — cannot auto-replenish" } else { "watchdog will replenish" }
         ));
     }
 

@@ -627,7 +627,7 @@ function nodeCard(n, staged) {
     capLine = `<div class="node-cap" style="color:var(--rose)">✕ ${esc(cap)}</div>`;
   } else {
     // Standby spare: show intrinsic caps if any, else "unassigned"
-    const ic = n.intrinsic_caps || [];
+    const ic = n.platform_caps || [];
     capLine = ic.length
       ? `<div class="node-cap" style="color:#b45309">has: ${esc(ic.join(', '))}</div>`
       : `<div class="node-cap" style="color:var(--muted)">unassigned</div>`;
@@ -814,10 +814,10 @@ function renderGroups(s, running) {
     return;
   }
   // Count available (non-failed) spares per group:
-  //   Intrinsic cap → spares with matching intrinsic_caps entry
-  //   Acquirable cap → blank spares (intrinsic_caps empty)
+  //   Platform cap → spares whose host provides the required capability
+  //   Acquirable cap → blank spares (no platform_caps declared)
   const allNodes = s.nodes || [];
-  const blankSpares = allNodes.filter(n => n.is_spare && !n.failed && !(n.intrinsic_caps||[]).length).length;
+  const blankSpares = allNodes.filter(n => n.is_spare && !n.failed && !(n.platform_caps||[]).length).length;
   function sparesForGroup(g) {
     const cap = `${g.ns || ''}/${g.cap_name || ''}`;  // not in group JSON, use lookup below
     return blankSpares;  // default; overridden per-group below
@@ -834,7 +834,7 @@ function renderGroups(s, running) {
       <td>${(() => {
           const cap = groupCapMap[g.name] || '';
           if (INTRINSIC_CAPS.has(cap)) {
-            const n = allNodes.filter(nd => nd.is_spare && !nd.failed && (nd.intrinsic_caps||[]).includes(cap)).length;
+            const n = allNodes.filter(nd => nd.is_spare && !nd.failed && (nd.platform_caps||[]).includes(cap)).length;
             return `${n} <span style="color:var(--muted);font-size:9px">(intrinsic)</span>`;
           }
           return `${blankSpares} <span style="color:var(--muted);font-size:9px">(shared)</span>`;
