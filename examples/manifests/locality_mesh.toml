@@ -1,33 +1,91 @@
 [mesh]
 name    = "locality-mesh"
-version = "0.1"
+version = "0.2"
+
+# ── Active groups (2 AZs × 2 sub-zones) ─────────────────────────────────────
 
 [[group]]
-name        = "render-east"
-description = "Render providers in AZ east — preferred by co-located consumers"
-min_agents  = 2
-max_agents  = 6
+name        = "render-east-0"
+description = "Render providers — AZ east, zone 0 (primary east)"
+min_agents  = 1
+max_agents  = 2
 
   [[group.capability]]
   ns   = "render"
   name = "job"
 
+  [[group.capability]]
+  ns   = "locality"
+  name = "east-0"
+
 [[group]]
-name        = "render-west"
-description = "Render providers in AZ west — fallback for cross-AZ routing"
-min_agents  = 2
-max_agents  = 6
+name        = "render-east-1"
+description = "Render providers — AZ east, zone 1 (secondary east)"
+min_agents  = 1
+max_agents  = 2
 
   [[group.capability]]
   ns   = "render"
   name = "job"
+
+  [[group.capability]]
+  ns   = "locality"
+  name = "east-1"
+
+[[group]]
+name        = "render-west-0"
+description = "Render providers — AZ west, zone 0 (primary west)"
+min_agents  = 1
+max_agents  = 2
+
+  [[group.capability]]
+  ns   = "render"
+  name = "job"
+
+  [[group.capability]]
+  ns   = "locality"
+  name = "west-0"
+
+[[group]]
+name        = "render-west-1"
+description = "Render providers — AZ west, zone 1 (secondary west)"
+min_agents  = 1
+max_agents  = 2
+
+  [[group.capability]]
+  ns   = "render"
+  name = "job"
+
+  [[group.capability]]
+  ns   = "locality"
+  name = "west-1"
 
 [[group]]
 name        = "consumers"
-description = "Render job consumers — resolve_with_locality picks nearest provider"
+description = "Render consumers — resolve_with_locality picks nearest provider"
 min_agents  = 1
-max_agents  = 3
+max_agents  = 2
 
   [[group.capability]]
   ns   = "render"
   name = "consumer"
+
+# ── Zone fallback policy (read by management service only) ───────────────────
+# Defines which zones may supply a spare when the exact zone has none.
+# Fallback stays within the same AZ; cross-AZ is NOT permitted.
+
+[[management.zone]]
+name     = "east-0"
+fallback = ["east-1"]
+
+[[management.zone]]
+name     = "east-1"
+fallback = ["east-0"]
+
+[[management.zone]]
+name     = "west-0"
+fallback = ["west-1"]
+
+[[management.zone]]
+name     = "west-1"
+fallback = ["west-0"]

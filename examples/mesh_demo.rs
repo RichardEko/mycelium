@@ -44,6 +44,7 @@ fn alloc_spare_label() -> String { format!("spare-{}", NEXT_SPARE.fetch_add(1, O
 /// These cannot be conferred by the management agent alone — only a node that
 /// was provisioned with the underlying resource may be promoted to such a role.
 fn is_intrinsic(ns: &str, name: &str) -> bool {
+    ns == "locality" ||             // zone is a physical fact, always intrinsic
     matches!((ns, name),
         ("compute", "gpu") | ("compute", "gpu-heavy") |
         ("data",    "realtime")                        |
@@ -51,6 +52,41 @@ fn is_intrinsic(ns: &str, name: &str) -> bool {
         ("storage", "disk")                            |
         ("render",  "job")
     )
+}
+
+/// Parse the `[[management.zone]]` fallback table from raw manifest TOML.
+/// The library parser ignores this section; we read it separately here.
+fn parse_zone_fallbacks(toml_str: &str) -> std::collections::HashMap<String, Vec<String>> {
+    let mut map = std::collections::HashMap::new();
+    let Ok(val) = toml::from_str::<toml::Value>(toml_str) else { return map };
+    let Some(zones) = val.get("management")
+        .and_then(|m| m.get("zone"))
+        .and_then(|z| z.as_array()) else { return map };
+    for zone in zones {
+        if let (Some(name), Some(fallbacks)) = (
+            zone.get("name").and_then(|n| n.as_str()),
+            zone.get("fallback").and_then(|f| f.as_array()),
+        ) {
+            let fbs = fallbacks.iter()
+                .filter_map(|f| f.as_str().map(|s| s.to_string()))
+                .collect();
+            map.insert(name.to_string(), fbs);
+        }
+    }
+    map
+}
+
+/// Find the first spare that satisfies all required intrinsic caps.
+/// If `required` is empty, only blank spares (no intrinsic_caps) qualify.
+fn find_matching_spare(nodes: &[MeshNode], required: &[String]) -> Option<usize> {
+    nodes.iter().position(|n| {
+        n.is_spare && !n.failed &&
+        if required.is_empty() {
+            n.intrinsic_caps.is_empty()
+        } else {
+            required.iter().all(|k| n.intrinsic_caps.contains(k))
+        }
+    })
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -282,10 +318,21 @@ fn promote_spare(
         _ => vec![],
     };
 
-    node.cap_handles = vec![node.agent.advertise_capability(
+    // Advertise primary capability
+    let mut handles = vec![node.agent.advertise_capability(
         Capability::new(node.ns.as_str(), node.cap_name.as_str()),
         Duration::from_secs(30),
     )];
+    // Advertise any locality caps this spare carries (its physical zone)
+    for ic in &node.intrinsic_caps {
+        if let Some(zone) = ic.strip_prefix("locality/") {
+            handles.push(node.agent.advertise_capability(
+                Capability::new("locality", zone),
+                Duration::from_secs(30),
+            ));
+        }
+    }
+    node.cap_handles = handles;
 
     let run_loop = !(
         (node.ns == "data"    && node.cap_name == "realtime") ||
@@ -302,9 +349,9 @@ fn promote_spare(
         );
     }
 
-    node.is_spare       = false;
-    node.failed         = false;
-    node.intrinsic_caps = vec![];
+    node.is_spare = false;
+    node.failed   = false;
+    // intrinsic_caps intentionally kept — the spare's physical facts don't change on promotion
 }
 
 // ── LLM config + planning ─────────────────────────────────────────────────────
@@ -493,8 +540,11 @@ struct MeshNode {
 }
 
 struct MeshInstance {
-    nodes:    Vec<MeshNode>,
-    watchdog: AbortHandle,
+    nodes:          Vec<MeshNode>,
+    watchdog:       AbortHandle,
+    /// Zone fallback chains parsed from `[[management.zone]]` in the manifest.
+    /// Key = zone name (e.g. "east-0"), value = ordered fallback list (e.g. ["east-1"]).
+    zone_fallbacks: std::collections::HashMap<String, Vec<String>>,
 }
 
 impl Drop for MeshInstance {
@@ -514,6 +564,8 @@ struct MgmtState {
     manifest:          RwLock<MeshManifest>,
     /// The manifest loaded for the next Activate — may differ from `manifest`.
     loaded:            Mutex<Option<MeshManifest>>,
+    /// Raw TOML of the loaded manifest, kept so we can parse management sections.
+    loaded_toml:       Mutex<Option<String>>,
     instance:          Mutex<Option<MeshInstance>>,
     log:               SharedLog,
     traffic:           SharedTraffic,
@@ -909,38 +961,61 @@ async fn provision_from_manifest(state: Arc<MgmtState>, mut manifest: MeshManife
         None
     };
 
-    // 3. Provision nodes per group via shared helper
+    // 3. Parse zone fallbacks from raw TOML (management section, ignored by library)
+    let zone_fallbacks = state.loaded_toml.lock().unwrap()
+        .as_deref().map(parse_zone_fallbacks).unwrap_or_default();
+
+    // 4. Provision nodes per group
     let mut nodes = Vec::new();
     for group in &manifest.groups {
-        let cap   = group.capabilities.first().expect("group must have at least one capability");
+        let cap         = group.capabilities.first().expect("group must have at least one capability");
         let spare_count = group.max_agents.unwrap_or(group.min_agents).saturating_sub(group.min_agents).min(3);
 
-        // Active nodes
+        // All intrinsic caps declared by this group (primary + extras like locality/*)
+        let group_intrinsic_caps: Vec<String> = group.capabilities.iter()
+            .filter(|c| is_intrinsic(c.ns.as_str(), c.name.as_str()))
+            .map(|c| format!("{}/{}", c.ns, c.name))
+            .collect();
+        let any_intrinsic = !group_intrinsic_caps.is_empty();
+
+        // Active nodes — primary cap drives behavior; all caps are advertised
         for i in 0..group.min_agents {
             let label = format!("{}-{i}", group.name);
-            let node = spawn_fresh_node(
+            let mut node = spawn_fresh_node(
                 label.clone(), &group.name,
                 cap.ns.as_str(), cap.name.as_str(),
                 &mesh_name, &state, sm.clone(),
             ).await;
-            push_log(&state.log, "Provision",
-                format!("{label} → {}/{}", cap.ns, cap.name));
+
+            // Advertise secondary capabilities (e.g. locality/*) and record intrinsics
+            for extra in group.capabilities.iter().skip(1) {
+                let h = node.agent.advertise_capability(
+                    Capability::new(extra.ns.as_str(), extra.name.as_str()),
+                    Duration::from_secs(30),
+                );
+                node.cap_handles.push(h);
+            }
+            node.intrinsic_caps = group_intrinsic_caps.clone();
+
+            let cap_desc = if group.capabilities.len() > 1 {
+                format!("{}/{} + {} extra", cap.ns, cap.name, group.capabilities.len() - 1)
+            } else {
+                format!("{}/{}", cap.ns, cap.name)
+            };
+            push_log(&state.log, "Provision", format!("{label} → {cap_desc}"));
             nodes.push(node);
         }
 
-        // Spare nodes: shared standby pool.
-        //   Acquirable caps → blank spares (can fill any acquirable vacancy).
-        //   Intrinsic caps  → spares pre-marked with this physical capability;
-        //                     only they can fill this specific vacancy.
-        let cap_key     = format!("{}/{}", cap.ns, cap.name);
-        let intrinsic   = is_intrinsic(cap.ns.as_str(), cap.name.as_str());
+        // Spare nodes for this group.
+        //   All intrinsic → pre-mark spares with the full group intrinsic set
+        //                   (capability + locality); only matching spares may fill this vacancy.
+        //   All acquirable → blank spare; any unassigned spare may fill this vacancy.
         for _ in 0..spare_count {
-            let ic   = if intrinsic { vec![cap_key.clone()] } else { vec![] };
-            let node = spawn_spare_node(ic, &state).await;
+            let ic   = group_intrinsic_caps.clone(); // empty if all acquirable
+            let node = spawn_spare_node(ic.clone(), &state).await;
             push_log(&state.log, "Spare", format!(
-                "{} standby ({})",
-                node.label,
-                if intrinsic { format!("has: {cap_key}") } else { "unassigned".into() }
+                "{} standby ({})", node.label,
+                if any_intrinsic { format!("has: {}", ic.join(", ")) } else { "unassigned".into() }
             ));
             nodes.push(node);
         }
@@ -949,7 +1024,7 @@ async fn provision_from_manifest(state: Arc<MgmtState>, mut manifest: MeshManife
     // Watchdog: replenishes the spare pool if spares are exhausted
     let watchdog = tokio::spawn(run_group_watchdog(Arc::clone(&state))).abort_handle();
 
-    // 4. Push manifest to gossip KV
+    // 5. Push manifest to gossip KV
     if let Ok(toml_str) = manifest.to_toml() {
         let ver = manifest.mesh.version.clone();
         let _ = state.mgmt_agent.set(manifest_keys::CURRENT,
@@ -958,11 +1033,12 @@ async fn provision_from_manifest(state: Arc<MgmtState>, mut manifest: MeshManife
                                       Bytes::from(ver.into_bytes()));
     }
 
-    // 5. Update manifest + store instance
+    // 6. Update manifest + store instance
     *state.manifest.write().unwrap() = manifest;
-    *state.instance.lock().unwrap() = Some(MeshInstance { nodes, watchdog });
-    // 6. Clear loaded — the instance now owns the active manifest
-    *state.loaded.lock().unwrap() = None;
+    *state.instance.lock().unwrap() = Some(MeshInstance { nodes, watchdog, zone_fallbacks });
+    // 7. Clear loaded state — the instance now owns the active manifest
+    *state.loaded.lock().unwrap()      = None;
+    *state.loaded_toml.lock().unwrap() = None;
     push_log(&state.log, "Mesh", format!("system '{mesh_name}' activated"));
 }
 
@@ -1174,7 +1250,8 @@ fn handle_system_load(state: &MgmtState, system_id: &str) -> (u16, &'static str,
         "name":    manifest.mesh.name,
         "version": manifest.mesh.version,
     });
-    *state.loaded.lock().unwrap() = Some(manifest);
+    *state.loaded.lock().unwrap()      = Some(manifest);
+    *state.loaded_toml.lock().unwrap() = Some(entry.toml.to_string());
     push_log(&state.log, "Loaded",
         format!("'{system_id}' ready — click ▶ Activate to deploy"));
     (200, "application/json", summary.to_string())
@@ -1187,6 +1264,7 @@ async fn handle_manifest_activate(state: Arc<MgmtState>, system_id: &str) -> (u1
     let Some(manifest) = MeshManifest::from_toml_bytes(entry.toml.as_bytes()) else {
         return (500, "application/json", json!({"error":"manifest parse failed"}).to_string());
     };
+    *state.loaded_toml.lock().unwrap() = Some(entry.toml.to_string());
     let ver = manifest.mesh.version.clone();
     provision_from_manifest(state, manifest).await;
     (200, "application/json", json!({"ok":true,"version":ver}).to_string())
@@ -1208,7 +1286,9 @@ async fn handle_manifest_post(state: Arc<MgmtState>, body: &[u8]) -> (u16, &'sta
     if let Some(old) = state.mgmt_agent.get(manifest_keys::CURRENT) {
         let _ = state.mgmt_agent.set(manifest_keys::history(&cur_ver), old);
     }
-    let new_ver = new_m.mesh.version.clone();
+    let new_ver  = new_m.mesh.version.clone();
+    let body_str = std::str::from_utf8(body).unwrap_or("").to_string();
+    *state.loaded_toml.lock().unwrap() = Some(body_str);
     push_log(&state.log, "Manifest", format!("uploaded v{new_ver} (was v{cur_ver})"));
     provision_from_manifest(state, new_m).await;
     (200, "application/json", json!({"ok":true,"version":new_ver}).to_string())
@@ -1248,32 +1328,64 @@ fn handle_node_kill(state: &MgmtState, label: &str) -> (u16, &'static str, Strin
     push_log(&state.log, "Kill",
         format!("{label} failed — capability {cap_key} lost"));
 
-    // Find the best available spare:
-    //   Intrinsic cap → must have matching entry in intrinsic_caps.
-    //   Acquirable cap → any blank spare (no intrinsic_caps) will do.
-    let spare_pos = inst.nodes.iter().position(|n| {
-        n.is_spare && !n.failed &&
-        if cap_intrinsic {
-            n.intrinsic_caps.contains(&cap_key)
-        } else {
-            n.intrinsic_caps.is_empty()
+    // Full intrinsic set of the killed node (includes locality/* if applicable)
+    let killed_intrinsics = inst.nodes[pos].intrinsic_caps.clone();
+    let zone_fallbacks    = inst.zone_fallbacks.clone();
+
+    // 1. Try exact match: spare must satisfy ALL of the killed node's intrinsic caps
+    let spare_pos = find_matching_spare(&inst.nodes, &killed_intrinsics);
+
+    // 2. If no exact match and the killed node had a locality cap, try fallback zones
+    //    (stays within the same AZ; cross-AZ is only permitted if declared in fallback)
+    let (spare_pos, zone_note) = if spare_pos.is_some() {
+        (spare_pos, String::new())
+    } else {
+        let killed_zone = killed_intrinsics.iter()
+            .find_map(|k| k.strip_prefix("locality/").map(|z| z.to_string()));
+        let mut found      = None;
+        let mut found_zone = String::new();
+        if let Some(ref zone) = killed_zone {
+            for fb in zone_fallbacks.get(zone).map(|v| v.as_slice()).unwrap_or(&[]) {
+                // Replace exact locality with the fallback zone in the requirement set
+                let candidate: Vec<String> = killed_intrinsics.iter()
+                    .map(|k| if k.starts_with("locality/") {
+                        format!("locality/{fb}")
+                    } else {
+                        k.clone()
+                    })
+                    .collect();
+                if let Some(p) = find_matching_spare(&inst.nodes, &candidate) {
+                    found      = Some(p);
+                    found_zone = fb.clone();
+                    break;
+                }
+            }
         }
-    });
+        let note = if found_zone.is_empty() {
+            String::new()
+        } else {
+            format!(" [zone fallback: {} → {}]",
+                killed_zone.as_deref().unwrap_or("?"), found_zone)
+        };
+        (found, note)
+    };
 
     if let Some(sp) = spare_pos {
         let spare_label = inst.nodes[sp].label.clone();
-        // Assign the role before calling promote_spare
         inst.nodes[sp].group    = killed_group.clone();
         inst.nodes[sp].ns       = killed_ns.clone();
         inst.nodes[sp].cap_name = killed_cap.clone();
         promote_spare(&mut inst.nodes[sp], &mesh_name, state, sm);
         push_log(&state.log, "Promoted",
-            format!("▲ {spare_label} → {killed_group} ({cap_key})"));
+            format!("▲ {spare_label} → {killed_group} ({cap_key}){zone_note}"));
     } else {
+        let locality_hint = killed_intrinsics.iter()
+            .find(|k| k.starts_with("locality/"))
+            .map(|k| format!(" in zone {}", k.trim_start_matches("locality/")))
+            .unwrap_or_default();
         push_log(&state.log, "Warning", format!(
-            "no {} spare for {cap_key}{}",
-            if cap_intrinsic { "intrinsic" } else { "unassigned" },
-            if cap_intrinsic { " — hardware constraint" } else { " — watchdog will replenish" }
+            "no spare{locality_hint} for {cap_key} — {}",
+            if cap_intrinsic { "hardware/locality constraint" } else { "watchdog will replenish" }
         ));
     }
 
@@ -1498,6 +1610,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         mgmt_agent:        Arc::clone(&mgmt_agent),
         manifest:          RwLock::new(MeshManifest::default()),
         loaded:            Mutex::new(None),
+        loaded_toml:       Mutex::new(None),
         instance:          Mutex::new(None),
         log:               Arc::new(Mutex::new(Vec::new())),
         traffic:           Arc::new(Mutex::new(Vec::new())),
@@ -1512,7 +1625,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let default = LIBRARY.iter().find(|p| p.id == "llm-agent").unwrap();
         if let Some(m) = MeshManifest::from_toml_bytes(default.toml.as_bytes()) {
             println!("Loaded default system : {}", m.mesh.name);
-            *state.loaded.lock().unwrap() = Some(m);
+            *state.loaded.lock().unwrap()      = Some(m);
+            *state.loaded_toml.lock().unwrap() = Some(default.toml.to_string());
         }
         push_log(&state.log, "Ready", "LLM Agent Demo loaded — select a system from the library and activate it");
     }
