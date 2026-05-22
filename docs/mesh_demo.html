@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mycelium Mesh Demo</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:       #f8fafc;
+  --card:     #ffffff;
+  --border:   #e2e8f0;
+  --text:     #0f172a;
+  --muted:    #64748b;
+  --em:       #059669; --em-bg: #d1fae5;
+  --warn:     #d97706; --warn-bg: #fef3c7;
+  --violet:   #7c3aed; --violet-bg: #ede9fe;
+  --blue:     #2563eb; --blue-bg: #dbeafe;
+  --rose:     #e11d48; --rose-bg: #ffe4e6;
+  --gray:     #6b7280; --gray-bg: #f3f4f6;
+  --radius:   6px;
+  --shadow:   0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.04);
+}
+
+body { background: var(--bg); font-family: system-ui,-apple-system,"Segoe UI",sans-serif;
+       font-size: 12px; color: var(--text); }
+
+/* ── Header ── */
+header {
+  position: sticky; top: 0; z-index: 40;
+  background: rgba(255,255,255,.85); backdrop-filter: blur(8px);
+  border-bottom: 1px solid rgba(0,0,0,.08);
+  padding: 0 20px; height: 44px;
+  display: flex; align-items: center; gap: 14px;
+}
+.logo { font-weight: 700; font-size: 13px; letter-spacing: -.3px; }
+.logo span { color: var(--em); }
+.sep { color: var(--border); }
+#hdr-preset { font-weight: 600; }
+#hdr-ver    { color: var(--muted); }
+#hdr-health { margin-left: 4px; }
+.pill { display:inline-flex; align-items:center; gap:4px;
+        padding: 2px 8px; border-radius: 99px; font-size: 11px; font-weight: 600; }
+.pill.ok   { background: var(--em-bg);   color: var(--em);   }
+.pill.warn { background: var(--rose-bg); color: var(--rose); }
+.refresh-btn { margin-left: auto; background: none; border: 1px solid var(--border);
+               border-radius: var(--radius); padding: 3px 10px; cursor: pointer; font-size: 11px;
+               color: var(--muted); }
+.refresh-btn:hover { background: var(--bg); }
+
+/* ── Layout ── */
+main { max-width: 1100px; margin: 0 auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+
+section { background: var(--card); border: 1px solid var(--border);
+          border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); }
+.sec-title { text-transform: uppercase; font-size: 0.65rem; letter-spacing: .08em;
+             font-weight: 700; color: var(--muted); padding: 10px 14px 0; }
+
+/* ── Presets ── */
+.preset-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px; }
+.preset-btn { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+              padding: 4px 10px; cursor: pointer; font-size: 11px; transition: background .12s; }
+.preset-btn:hover  { background: var(--blue-bg); border-color: var(--blue); color: var(--blue); }
+.preset-btn.active { background: var(--blue-bg); border-color: var(--blue); color: var(--blue); font-weight: 600; }
+
+/* ── Topology ── */
+.topo { padding: 12px 14px; display: flex; flex-wrap: wrap; gap: 16px; }
+.topo-group { display: flex; flex-direction: column; gap: 6px; min-width: 110px; }
+.group-label { font-size: 10px; text-transform: uppercase; letter-spacing: .07em;
+               font-weight: 700; color: var(--muted); }
+.node-card {
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 8px 10px;
+  display: flex; flex-direction: column; gap: 3px; min-width: 100px;
+}
+.node-label { font-weight: 600; font-size: 11px; }
+.node-cap   { color: var(--muted); font-size: 10px; }
+.node-state { font-size: 10px; font-weight: 600; border-radius: 4px; padding: 1px 5px;
+              display: inline-block; margin-top: 2px; }
+.node-actions { display: flex; gap: 4px; margin-top: 4px; }
+.node-btn { background: none; border: 1px solid var(--border); border-radius: 4px;
+            padding: 2px 6px; cursor: pointer; font-size: 10px; color: var(--muted); }
+.node-btn:hover { background: var(--bg); }
+.node-btn.kill:hover  { border-color: var(--rose); color: var(--rose); }
+.node-btn.start:hover { border-color: var(--em); color: var(--em); }
+
+/* node-state colors */
+.ns-running    { background: var(--em-bg);     color: var(--em);     }
+.ns-suppressed { background: var(--warn-bg);   color: var(--warn);   }
+.ns-emitting   { background: var(--violet-bg); color: var(--violet); }
+.ns-planning   { background: var(--blue-bg);   color: var(--blue);   }
+.ns-invoking   { background: var(--blue-bg);   color: var(--blue);   }
+.ns-reflecting { background: var(--blue-bg);   color: var(--blue);   }
+.ns-ready      { background: var(--em-bg);     color: var(--em);     }
+.ns-offline    { background: var(--gray-bg);   color: var(--gray);   }
+.ns-default    { background: var(--gray-bg);   color: var(--gray);   }
+
+/* ── Groups table ── */
+.groups-tbl { width: 100%; border-collapse: collapse; }
+.groups-tbl th { text-align: left; padding: 6px 14px; font-size: 10px; text-transform: uppercase;
+                 letter-spacing: .07em; color: var(--muted); border-bottom: 1px solid var(--border); }
+.groups-tbl td { padding: 7px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.groups-tbl tr:last-child td { border-bottom: none; }
+.group-ctrl { display: flex; gap: 6px; }
+.ctrl-btn { background: none; border: 1px solid var(--border); border-radius: 4px;
+            padding: 2px 8px; cursor: pointer; font-size: 10px; color: var(--muted); }
+.ctrl-btn:hover { background: var(--bg); }
+.ctrl-btn.stop:hover  { border-color: var(--rose); color: var(--rose); }
+.ctrl-btn.start:hover { border-color: var(--em); color: var(--em); }
+
+/* ── System controls ── */
+.sys-ctrl { display: flex; gap: 8px; padding: 10px 14px; }
+.sys-btn { border: 1px solid var(--border); border-radius: var(--radius);
+           padding: 5px 14px; cursor: pointer; font-size: 11px; background: var(--card); }
+.sys-btn.stop:hover  { background: var(--rose-bg); border-color: var(--rose); color: var(--rose); }
+.sys-btn.start:hover { background: var(--em-bg); border-color: var(--em); color: var(--em); }
+.sys-btn.trigger:hover { background: var(--blue-bg); border-color: var(--blue); color: var(--blue); }
+
+/* ── Event log ── */
+.log-area { padding: 8px 14px 12px; max-height: 200px; overflow-y: auto; }
+.log-row { display: flex; gap: 10px; padding: 2px 0; font-size: 11px;
+           border-bottom: 1px solid var(--border); }
+.log-row:last-child { border-bottom: none; }
+.log-time  { color: var(--muted); white-space: nowrap; min-width: 90px; }
+.log-event { font-weight: 600; min-width: 90px; color: var(--blue); }
+.log-detail { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 600px; }
+
+/* ── Upload ── */
+.upload-area { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.upload-row  { display: flex; gap: 8px; align-items: center; }
+textarea.manifest-ta { font-family: monospace; font-size: 11px; width: 100%; height: 80px;
+                        border: 1px solid var(--border); border-radius: var(--radius);
+                        padding: 6px 8px; resize: vertical; background: var(--bg); }
+.upload-btn { border: 1px solid var(--border); border-radius: var(--radius);
+              padding: 5px 14px; cursor: pointer; font-size: 11px; background: var(--card); }
+.upload-btn:hover { background: var(--blue-bg); border-color: var(--blue); color: var(--blue); }
+.upload-msg { font-size: 11px; }
+.upload-msg.ok  { color: var(--em); }
+.upload-msg.err { color: var(--rose); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><span>◉</span> mycelium</div>
+  <div class="sep">|</div>
+  <div id="hdr-preset">—</div>
+  <div id="hdr-ver" style="color:var(--muted)"></div>
+  <div id="hdr-health"></div>
+  <button class="refresh-btn" onclick="poll()">↺ refresh</button>
+</header>
+
+<main>
+
+  <!-- Presets -->
+  <section>
+    <div class="sec-title">PRESETS</div>
+    <div class="preset-bar" id="preset-bar">Loading…</div>
+  </section>
+
+  <!-- Topology -->
+  <section>
+    <div class="sec-title">TOPOLOGY</div>
+    <div class="topo" id="topo">—</div>
+  </section>
+
+  <!-- Groups -->
+  <section>
+    <div class="sec-title">GROUPS</div>
+    <table class="groups-tbl">
+      <thead><tr>
+        <th>NAME</th><th>ACTUAL/MIN</th><th>STATUS</th><th>CONTROLS</th>
+      </tr></thead>
+      <tbody id="groups-body"></tbody>
+    </table>
+  </section>
+
+  <!-- System controls -->
+  <section>
+    <div class="sec-title">SYSTEM</div>
+    <div class="sys-ctrl">
+      <button class="sys-btn stop"  onclick="post('/system/stop')">■ Stop All</button>
+      <button class="sys-btn start" onclick="post('/system/start')">▶ Start All</button>
+      <button class="sys-btn trigger" id="trigger-btn" onclick="post('/demo/trigger')" style="display:none">
+        ▷ Run Task
+      </button>
+    </div>
+  </section>
+
+  <!-- Event log -->
+  <section>
+    <div class="sec-title">EVENT LOG</div>
+    <div class="log-area" id="log-area"></div>
+  </section>
+
+  <!-- Manifest upload -->
+  <section>
+    <div class="sec-title">UPLOAD MANIFEST</div>
+    <div class="upload-area">
+      <div class="upload-row">
+        <input type="file" accept=".toml,text/plain" id="file-input" style="font-size:11px">
+        <button class="upload-btn" onclick="uploadManifest()">↑ Upload</button>
+        <span class="upload-msg" id="upload-msg"></span>
+      </div>
+      <textarea class="manifest-ta" id="manifest-ta"
+                placeholder="Paste TOML manifest here, or choose a file above…"></textarea>
+    </div>
+  </section>
+
+</main>
+
+<script>
+const STATE_COLOR = {
+  Running:    'ns-running',
+  Ready:      'ns-ready',
+  Suppressed: 'ns-suppressed',
+  Emitting:   'ns-emitting',
+  Planning:   'ns-planning',
+  Invoking:   'ns-invoking',
+  Reflecting: 'ns-reflecting',
+  Offline:    'ns-offline',
+};
+
+let currentPreset = null;
+
+// ── Fetch helpers ─────────────────────────────────────────────────────────────
+async function get(url) {
+  const r = await fetch(url);
+  return r.json();
+}
+async function post(url, body) {
+  const opts = body
+    ? { method:'POST', headers:{'Content-Type':'text/plain'}, body }
+    : { method:'POST' };
+  return fetch(url, opts).then(r => r.json());
+}
+
+// ── Render state ──────────────────────────────────────────────────────────────
+function renderState(s) {
+  // Header
+  document.getElementById('hdr-preset').textContent = s.preset || '—';
+  document.getElementById('hdr-ver').textContent    = s.version ? `v${s.version}` : '';
+  const hh = document.getElementById('hdr-health');
+  hh.innerHTML = s.healthy
+    ? '<span class="pill ok">● HEALTHY</span>'
+    : '<span class="pill warn">● DEGRADED</span>';
+
+  // Trigger button visibility (llm-agent-demo only)
+  const trigBtn = document.getElementById('trigger-btn');
+  trigBtn.style.display = (s.preset === 'llm-agent-demo') ? '' : 'none';
+
+  // Topology — group nodes by group name
+  const groups = {};
+  (s.nodes || []).forEach(n => {
+    if (!groups[n.group]) groups[n.group] = [];
+    groups[n.group].push(n);
+  });
+  const topo = document.getElementById('topo');
+  if (Object.keys(groups).length === 0) {
+    topo.innerHTML = '<span style="color:var(--muted);padding:8px">No nodes provisioned</span>';
+  } else {
+    topo.innerHTML = Object.entries(groups).map(([grp, nodes]) => `
+      <div class="topo-group">
+        <div class="group-label">${esc(grp)}</div>
+        ${nodes.map(n => {
+          const cls = STATE_COLOR[n.state] || 'ns-default';
+          const cap = `${esc(n.ns)}/${esc(n.cap_name)}`;
+          return `
+          <div class="node-card">
+            <div class="node-label">${esc(n.label)}</div>
+            <div class="node-cap">${cap}</div>
+            <span class="node-state ${cls}">${esc(n.state)}</span>
+            <div class="node-actions">
+              ${n.alive
+                ? `<button class="node-btn kill" onclick="nodeAction('${esc(n.label)}','kill')">✕ Kill</button>`
+                : `<button class="node-btn start" onclick="nodeAction('${esc(n.label)}','start')">↑ Start</button>`}
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`
+    ).join('');
+  }
+
+  // Groups table
+  const tbody = document.getElementById('groups-body');
+  tbody.innerHTML = (s.groups || []).map(g => `
+    <tr>
+      <td><strong>${esc(g.name)}</strong>${g.description ? `<br><span style="color:var(--muted)">${esc(g.description)}</span>` : ''}</td>
+      <td>${g.actual}/${g.min_agents}${g.max_agents ? `/${g.max_agents}` : ''}</td>
+      <td>${g.satisfied
+            ? '<span class="pill ok">✓ OK</span>'
+            : `<span class="pill warn">✗ DEFICIT ${g.deficit}</span>`}</td>
+      <td><div class="group-ctrl">
+        <button class="ctrl-btn stop"  onclick="groupAction('${esc(g.name)}','stop')">■ Stop</button>
+        <button class="ctrl-btn start" onclick="groupAction('${esc(g.name)}','start')">▶ Start</button>
+      </div></td>
+    </tr>`).join('');
+
+  // Log
+  const logArea = document.getElementById('log-area');
+  logArea.innerHTML = (s.log || []).map(e => `
+    <div class="log-row">
+      <span class="log-time">${esc(e.time)}</span>
+      <span class="log-event">${esc(e.event)}</span>
+      <span class="log-detail" title="${esc(e.detail)}">${esc(e.detail)}</span>
+    </div>`).join('');
+}
+
+// ── Actions ───────────────────────────────────────────────────────────────────
+async function nodeAction(label, action) {
+  await post(`/nodes/${encodeURIComponent(label)}/${action}`);
+  poll();
+}
+
+async function groupAction(name, action) {
+  await post(`/system/groups/${encodeURIComponent(name)}/${action}`);
+  poll();
+}
+
+async function applyPreset(id) {
+  currentPreset = id;
+  updatePresetBar();
+  await post(`/presets/${encodeURIComponent(id)}/apply`);
+  setTimeout(poll, 800);
+}
+
+async function uploadManifest() {
+  const ta  = document.getElementById('manifest-ta');
+  const msg = document.getElementById('upload-msg');
+  const body = ta.value.trim();
+  if (!body) { msg.className = 'upload-msg err'; msg.textContent = 'Nothing to upload'; return; }
+  try {
+    const r = await post('/manifest', body);
+    if (r.ok) {
+      msg.className = 'upload-msg ok';
+      msg.textContent = `✓ Accepted — v${r.version} now active`;
+      poll();
+    } else {
+      msg.className = 'upload-msg err';
+      msg.textContent = `✗ ${r.error || 'rejected'}`;
+    }
+  } catch (e) {
+    msg.className = 'upload-msg err';
+    msg.textContent = `✗ ${e.message}`;
+  }
+}
+
+// ── Preset bar ────────────────────────────────────────────────────────────────
+async function loadPresets() {
+  const bar = document.getElementById('preset-bar');
+  try {
+    const list = await get('/presets');
+    bar.innerHTML = list.map(p => `
+      <button class="preset-btn${currentPreset === p.id ? ' active' : ''}"
+              title="${esc(p.description)}"
+              onclick="applyPreset('${esc(p.id)}')">${esc(p.name)}</button>`
+    ).join('');
+  } catch(e) {
+    bar.textContent = 'Failed to load presets';
+  }
+}
+
+function updatePresetBar() {
+  document.querySelectorAll('.preset-btn').forEach(btn => {
+    const id = btn.getAttribute('onclick').match(/'([^']+)'/)?.[1];
+    btn.classList.toggle('active', id === currentPreset);
+  });
+}
+
+// ── Poll ──────────────────────────────────────────────────────────────────────
+async function poll() {
+  try {
+    const s = await get('/state');
+    currentPreset = presetIdFromName(s.preset);
+    updatePresetBar();
+    renderState(s);
+  } catch(e) {
+    console.warn('poll failed', e);
+  }
+}
+
+function presetIdFromName(name) {
+  // reverse-lookup preset id from mesh name
+  const map = {
+    'llm-agent-demo':    'llm-agent',
+    'signal-suppress':   'signal-suppress',
+    'multi-agent-mesh':  'multi-agent-mesh',
+    'consensus-cluster': 'consensus-cluster',
+    'watchdog-cluster':  'watchdog-cluster',
+    'dispatch-pool':     'dispatch-pool',
+    'epidemic-ring':     'epidemic-ring',
+    'minimal-mesh':      'minimal',
+    'emergent-pool':     'emergent-pool',
+    'capability-market': 'capability-market',
+    'locality-mesh':     'locality-mesh',
+  };
+  return map[name] || null;
+}
+
+// ── File input → textarea ────────────────────────────────────────────────────
+document.getElementById('file-input').addEventListener('change', function() {
+  const f = this.files[0];
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    document.getElementById('manifest-ta').value = e.target.result;
+    document.getElementById('upload-msg').textContent = '';
+  };
+  reader.readAsText(f);
+});
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                         .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+loadPresets();
+poll();
+setInterval(poll, 3000);
+</script>
+</body>
+</html>
