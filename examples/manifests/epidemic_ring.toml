@@ -1,0 +1,23 @@
+[mesh]
+name    = "epidemic-ring"
+version = "0.1"
+
+[[group]]
+name        = "alpha-ring"
+description = "Alpha partition — primary gossip propagation nodes"
+min_agents  = 2
+max_agents  = 4
+
+  [[group.capability]]
+  ns   = "signal"
+  name = "propagate"
+
+[[group]]
+name        = "beta-ring"
+description = "Beta partition — receives epidemic spread from alpha"
+min_agents  = 2
+max_agents  = 4
+
+  [[group.capability]]
+  ns   = "signal"
+  name = "propagate"

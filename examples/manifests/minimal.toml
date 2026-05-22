@@ -1,0 +1,13 @@
+[mesh]
+name    = "minimal-mesh"
+version = "0.1"
+
+[[group]]
+name        = "data"
+description = "Single data node — development and testing"
+min_agents  = 1
+max_agents  = 3
+
+  [[group.capability]]
+  ns   = "data"
+  name = "realtime"

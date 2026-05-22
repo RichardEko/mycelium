@@ -1,0 +1,23 @@
+[mesh]
+name    = "signal-suppress"
+version = "0.1"
+
+[[group]]
+name        = "workers"
+description = "Handler nodes — process one invocation then suppress for 3 s (refractory period)"
+min_agents  = 2
+max_agents  = 5
+
+  [[group.capability]]
+  ns   = "compute"
+  name = "cpu"
+
+[[group]]
+name        = "emitters"
+description = "Request generators — fire rapid-burst invocations without knowing which worker is ready"
+min_agents  = 1
+max_agents  = 2
+
+  [[group.capability]]
+  ns   = "routing"
+  name = "emitter"

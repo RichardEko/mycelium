@@ -1,0 +1,23 @@
+[mesh]
+name    = "emergent-pool"
+version = "0.1"
+
+[[group]]
+name        = "gpu-workers"
+description = "GPU compute nodes — self-assemble into emergent pool via cap-group"
+min_agents  = 2
+max_agents  = 5
+
+  [[group.capability]]
+  ns   = "compute"
+  name = "gpu"
+
+[[group]]
+name        = "render-consumers"
+description = "Consumers — signal_wired_via routes render jobs to live pool members"
+min_agents  = 1
+max_agents  = 2
+
+  [[group.capability]]
+  ns   = "render"
+  name = "consumer"

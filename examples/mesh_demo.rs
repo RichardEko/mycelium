@@ -33,10 +33,25 @@ use tokio::{task::AbortHandle, time};
 
 const MGMT_PORT: u16 = 56000;
 const HTTP_PORT: u16 = 8100;
-const SETTLE_MS: u64 = 1_200;
 
-static NEXT_PORT: AtomicU16 = AtomicU16::new(56001);
-fn alloc_port() -> u16 { NEXT_PORT.fetch_add(1, Ordering::Relaxed) }
+static NEXT_PORT:  AtomicU16 = AtomicU16::new(56001);
+static NEXT_SPARE: AtomicU64 = AtomicU64::new(0);
+fn alloc_port()        -> u16    { NEXT_PORT.fetch_add(1, Ordering::Relaxed) }
+fn alloc_spare_label() -> String { format!("spare-{}", NEXT_SPARE.fetch_add(1, Ordering::Relaxed)) }
+
+/// Capabilities that require physical/structural facts about the node itself
+/// (GPU hardware, fibre-channel, proprietary data feed, ML model on disk).
+/// These cannot be conferred by the management agent alone — only a node that
+/// was provisioned with the underlying resource may be promoted to such a role.
+fn is_intrinsic(ns: &str, name: &str) -> bool {
+    matches!((ns, name),
+        ("compute", "gpu") | ("compute", "gpu-heavy") |
+        ("data",    "realtime")                        |
+        ("llm",     "inference")                       |
+        ("storage", "disk")                            |
+        ("render",  "job")
+    )
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -174,6 +189,124 @@ fn register_compute_tools(agent: &Arc<GossipAgent>) -> Vec<McpToolHandle> {
     ]
 }
 
+// ── Node provisioning helper ──────────────────────────────────────────────────
+
+/// Provision a fully-active node (capability advertised, behavior running).
+async fn spawn_fresh_node(
+    label:     String,
+    group:     &str,
+    ns:        &str,
+    cap_name:  &str,
+    mesh_name: &str,
+    state:     &MgmtState,
+    sm:        Option<Arc<AgentStateMachine>>,
+) -> MeshNode {
+    let port  = alloc_port();
+    let agent = make_agent(port, &[MGMT_PORT]);
+    agent.start().await.expect("agent start");
+
+    let tool_handles = match (ns, cap_name) {
+        ("data", "realtime") => register_realtime_tools(&agent),
+        ("compute", "cpu") if mesh_name == "llm-agent-demo" => register_compute_tools(&agent),
+        _ => vec![],
+    };
+
+    let cap_h = agent.advertise_capability(
+        Capability::new(ns, cap_name),
+        Duration::from_secs(30),
+    );
+
+    let run_loop = !(
+        (ns == "data"    && cap_name == "realtime") ||
+        (ns == "compute" && cap_name == "cpu" && mesh_name == "llm-agent-demo")
+    );
+
+    let behavior = if run_loop {
+        spawn_behavior(
+            Arc::clone(&agent), ns, cap_name,
+            state.log.clone(), state.traffic.clone(),
+            Arc::clone(&state.llm_cfg), sm,
+            Arc::clone(&state.trigger_requested),
+            Arc::clone(&state.call_count),
+        )
+    } else {
+        None
+    };
+
+    MeshNode {
+        agent, label, group: group.to_string(),
+        ns: ns.to_string(), cap_name: cap_name.to_string(),
+        behavior, cap_handles: vec![cap_h], tool_handles,
+        pause_flag: Arc::new(AtomicBool::new(false)),
+        is_spare: false, failed: false, intrinsic_caps: vec![],
+    }
+}
+
+/// Provision a standby spare node: connected to the gossip mesh, no capability
+/// advertised, no behavior running.  `intrinsic_caps` lists "ns/name" strings
+/// for hardware capabilities this node is physically wired for; empty = generic
+/// (can be promoted to any acquirable role).
+async fn spawn_spare_node(
+    intrinsic_caps: Vec<String>,
+    _state:         &MgmtState,
+) -> MeshNode {
+    let port  = alloc_port();
+    let agent = make_agent(port, &[MGMT_PORT]);
+    agent.start().await.expect("agent start");
+    MeshNode {
+        agent,
+        label:          alloc_spare_label(),
+        group:          String::new(),
+        ns:             String::new(),
+        cap_name:       String::new(),
+        behavior:       None,
+        cap_handles:    vec![],
+        tool_handles:   vec![],
+        pause_flag:     Arc::new(AtomicBool::new(false)),
+        is_spare:       true,
+        failed:         false,
+        intrinsic_caps,
+    }
+}
+
+/// Promote a spare node to active: advertise capability and start behavior.
+fn promote_spare(
+    node:      &mut MeshNode,
+    mesh_name: &str,
+    state:     &MgmtState,
+    sm:        Option<Arc<AgentStateMachine>>,
+) {
+    node.tool_handles = match (node.ns.as_str(), node.cap_name.as_str()) {
+        ("data", "realtime") => register_realtime_tools(&node.agent),
+        ("compute", "cpu") if mesh_name == "llm-agent-demo" => register_compute_tools(&node.agent),
+        _ => vec![],
+    };
+
+    node.cap_handles = vec![node.agent.advertise_capability(
+        Capability::new(node.ns.as_str(), node.cap_name.as_str()),
+        Duration::from_secs(30),
+    )];
+
+    let run_loop = !(
+        (node.ns == "data"    && node.cap_name == "realtime") ||
+        (node.ns == "compute" && node.cap_name == "cpu" && mesh_name == "llm-agent-demo")
+    );
+    if run_loop {
+        node.behavior = spawn_behavior(
+            Arc::clone(&node.agent),
+            &node.ns, &node.cap_name,
+            state.log.clone(), state.traffic.clone(),
+            Arc::clone(&state.llm_cfg), sm,
+            Arc::clone(&state.trigger_requested),
+            Arc::clone(&state.call_count),
+        );
+    }
+
+    node.is_spare       = false;
+    node.failed         = false;
+    node.intrinsic_caps = vec![];
+}
+
 // ── LLM config + planning ─────────────────────────────────────────────────────
 
 struct LlmConfig {
@@ -282,89 +415,105 @@ async fn llm_plan_step(
     }
 }
 
-// ── Preset list ───────────────────────────────────────────────────────────────
+// ── System library ────────────────────────────────────────────────────────────
 
-struct Preset { id: &'static str, name: &'static str, description: &'static str, toml: &'static str }
+struct SystemEntry { id: &'static str, name: &'static str, description: &'static str, toml: &'static str }
 
-const PRESETS: &[Preset] = &[
-    Preset { id: "llm-agent",
+const LIBRARY: &[SystemEntry] = &[
+    SystemEntry { id: "llm-agent",
              name: "LLM Agent Demo",
              description: "Three nodes: real-time data, compute tools, LLM inference",
-             toml: include_str!("presets/llm_agent.toml") },
-    Preset { id: "signal-suppress",
+             toml: include_str!("manifests/llm_agent.toml") },
+    SystemEntry { id: "signal-suppress",
              name: "Signal Suppression",
              description: "Workers suppress after each invocation — emergent load balancing with no dispatcher",
-             toml: include_str!("presets/compute_cluster.toml") },
-    Preset { id: "multi-agent-mesh",
+             toml: include_str!("manifests/compute_cluster.toml") },
+    SystemEntry { id: "multi-agent-mesh",
              name: "Multi-Agent Mesh",
              description: "Planners, fact-checkers, and synthesizers collaborate via gossip RPC",
-             toml: include_str!("presets/mcp_mesh.toml") },
-    Preset { id: "consensus-cluster",
+             toml: include_str!("manifests/mcp_mesh.toml") },
+    SystemEntry { id: "consensus-cluster",
              name: "Consensus Cluster",
              description: "Voters + rotating proposers — epidemic two-phase ballot matrix",
-             toml: include_str!("presets/consensus_cluster.toml") },
-    Preset { id: "watchdog-cluster",
+             toml: include_str!("manifests/consensus_cluster.toml") },
+    SystemEntry { id: "watchdog-cluster",
              name: "Watchdog Cluster",
              description: "Heartbeat services monitored by a quorum_persistent circuit-breaker",
-             toml: include_str!("presets/watchdog_cluster.toml") },
-    Preset { id: "dispatch-pool",
+             toml: include_str!("manifests/watchdog_cluster.toml") },
+    SystemEntry { id: "dispatch-pool",
              name: "Dispatch Pool",
              description: "Fast and slow worker tiers with adaptive load-balancing dispatchers",
-             toml: include_str!("presets/dispatch_pool.toml") },
-    Preset { id: "epidemic-ring",
+             toml: include_str!("manifests/dispatch_pool.toml") },
+    SystemEntry { id: "epidemic-ring",
              name: "Epidemic Ring",
              description: "Alpha/beta ring partitions for signal propagation demos",
-             toml: include_str!("presets/epidemic_ring.toml") },
-    Preset { id: "minimal",
+             toml: include_str!("manifests/epidemic_ring.toml") },
+    SystemEntry { id: "minimal",
              name: "Minimal Mesh",
              description: "Single data node — development and testing",
-             toml: include_str!("presets/minimal.toml") },
-    Preset { id: "emergent-pool",
+             toml: include_str!("manifests/minimal.toml") },
+    SystemEntry { id: "emergent-pool",
              name: "Emergent GPU Pool",
              description: "GPU workers self-assemble; render jobs route via signal_wired_via",
-             toml: include_str!("presets/emergent_pool.toml") },
-    Preset { id: "capability-market",
+             toml: include_str!("manifests/emergent_pool.toml") },
+    SystemEntry { id: "capability-market",
              name: "Capability Market",
              description: "Four capability kinds — demand pressure and dynamic advertisement",
-             toml: include_str!("presets/capability_market.toml") },
-    Preset { id: "locality-mesh",
+             toml: include_str!("manifests/capability_market.toml") },
+    SystemEntry { id: "locality-mesh",
              name: "Locality Mesh",
              description: "East/west render providers — resolve_with_locality routes to nearest",
-             toml: include_str!("presets/locality_mesh.toml") },
+             toml: include_str!("manifests/locality_mesh.toml") },
 ];
 
 // ── Core types ────────────────────────────────────────────────────────────────
 
 struct MeshNode {
-    agent:        Arc<GossipAgent>,
-    label:        String,
-    group:        String,
-    ns:           String,
-    cap_name:     String,
-    behavior:     Option<AbortHandle>,
-    cap_handles:  Vec<CapabilityHandle>,
-    tool_handles: Vec<McpToolHandle>,
-    pause_flag:   Arc<AtomicBool>,
+    agent:         Arc<GossipAgent>,
+    label:         String,
+    /// Active group name; empty for spare-pool nodes until promoted.
+    group:         String,
+    /// Capability ns/name; empty for unassigned spares until promoted.
+    ns:            String,
+    cap_name:      String,
+    behavior:      Option<AbortHandle>,
+    cap_handles:   Vec<CapabilityHandle>,
+    tool_handles:  Vec<McpToolHandle>,
+    pause_flag:    Arc<AtomicBool>,
+    /// Standby spare: connected to mesh, no capability advertised, no behavior.
+    /// Set false on promotion.  Set true+failed=true when an active node dies.
+    is_spare:      bool,
+    /// True when a formerly-active node has been killed.  Stays visible in the
+    /// spare-pool UI as a "Failed" tombstone.
+    failed:        bool,
+    /// For intrinsic-capability spares: the "ns/name" this node is pre-wired
+    /// for (e.g. "compute/gpu" for a node with GPU hardware).  Empty means the
+    /// node can be promoted to any acquirable role.
+    intrinsic_caps: Vec<String>,
 }
 
 struct MeshInstance {
-    nodes: Vec<MeshNode>,
+    nodes:    Vec<MeshNode>,
+    watchdog: AbortHandle,
 }
 
 impl Drop for MeshInstance {
     fn drop(&mut self) {
+        self.watchdog.abort();
         for node in &mut self.nodes {
             if let Some(h) = node.behavior.take() { h.abort(); }
             node.cap_handles.clear();
             node.tool_handles.clear();
-            // node.agent dropped here via MeshNode — sends shutdown_tx signal
         }
     }
 }
 
 struct MgmtState {
     mgmt_agent:        Arc<GossipAgent>,
+    /// The manifest currently running (agents provisioned).
     manifest:          RwLock<MeshManifest>,
+    /// The manifest loaded for the next Activate — may differ from `manifest`.
+    loaded:            Mutex<Option<MeshManifest>>,
     instance:          Mutex<Option<MeshInstance>>,
     log:               SharedLog,
     traffic:           SharedTraffic,
@@ -760,65 +909,45 @@ async fn provision_from_manifest(state: Arc<MgmtState>, mut manifest: MeshManife
         None
     };
 
-    // 3. Provision nodes per group
+    // 3. Provision nodes per group via shared helper
     let mut nodes = Vec::new();
     for group in &manifest.groups {
-        let cap = group.capabilities.first().expect("group must have at least one capability");
+        let cap   = group.capabilities.first().expect("group must have at least one capability");
+        let spare_count = group.max_agents.unwrap_or(group.min_agents).saturating_sub(group.min_agents).min(3);
+
+        // Active nodes
         for i in 0..group.min_agents {
-            let port  = alloc_port();
             let label = format!("{}-{i}", group.name);
-            let agent = make_agent(port, &[MGMT_PORT]);
-            agent.start().await.expect("provisioned agent start failed");
-
-            // Register tools for data/compute roles
-            let tool_handles = match (cap.ns.as_str(), cap.name.as_str()) {
-                ("data", "realtime") => register_realtime_tools(&agent),
-                ("compute", "cpu") if mesh_name == "llm-agent-demo" =>
-                    register_compute_tools(&agent),
-                _ => vec![],
-            };
-
-            // Advertise primary capability
-            let cap_h = agent.advertise_capability(
-                Capability::new(cap.ns.as_str(), cap.name.as_str()),
-                Duration::from_secs(30),
-            );
-
-            // Decide whether to spawn a behavior loop
-            let run_loop = !(
-                (cap.ns == "data" && cap.name == "realtime") ||
-                (cap.ns == "compute" && cap.name == "cpu" && mesh_name == "llm-agent-demo")
-            );
-
-            let behavior = if run_loop {
-                spawn_behavior(
-                    Arc::clone(&agent),
-                    cap.ns.as_str(), cap.name.as_str(),
-                    state.log.clone(), state.traffic.clone(),
-                    Arc::clone(&state.llm_cfg), sm.clone(),
-                    Arc::clone(&state.trigger_requested),
-                    Arc::clone(&state.call_count),
-                )
-            } else {
-                None
-            };
-
+            let node = spawn_fresh_node(
+                label.clone(), &group.name,
+                cap.ns.as_str(), cap.name.as_str(),
+                &mesh_name, &state, sm.clone(),
+            ).await;
             push_log(&state.log, "Provision",
                 format!("{label} → {}/{}", cap.ns, cap.name));
+            nodes.push(node);
+        }
 
-            nodes.push(MeshNode {
-                agent,
-                label,
-                group:        group.name.clone(),
-                ns:           cap.ns.clone(),
-                cap_name:     cap.name.clone(),
-                behavior,
-                cap_handles:  vec![cap_h],
-                tool_handles,
-                pause_flag:   Arc::new(AtomicBool::new(false)),
-            });
+        // Spare nodes: shared standby pool.
+        //   Acquirable caps → blank spares (can fill any acquirable vacancy).
+        //   Intrinsic caps  → spares pre-marked with this physical capability;
+        //                     only they can fill this specific vacancy.
+        let cap_key     = format!("{}/{}", cap.ns, cap.name);
+        let intrinsic   = is_intrinsic(cap.ns.as_str(), cap.name.as_str());
+        for _ in 0..spare_count {
+            let ic   = if intrinsic { vec![cap_key.clone()] } else { vec![] };
+            let node = spawn_spare_node(ic, &state).await;
+            push_log(&state.log, "Spare", format!(
+                "{} standby ({})",
+                node.label,
+                if intrinsic { format!("has: {cap_key}") } else { "unassigned".into() }
+            ));
+            nodes.push(node);
         }
     }
+
+    // Watchdog: replenishes the spare pool if spares are exhausted
+    let watchdog = tokio::spawn(run_group_watchdog(Arc::clone(&state))).abort_handle();
 
     // 4. Push manifest to gossip KV
     if let Ok(toml_str) = manifest.to_toml() {
@@ -831,8 +960,80 @@ async fn provision_from_manifest(state: Arc<MgmtState>, mut manifest: MeshManife
 
     // 5. Update manifest + store instance
     *state.manifest.write().unwrap() = manifest;
-    *state.instance.lock().unwrap() = Some(MeshInstance { nodes });
-    push_log(&state.log, "Mesh", format!("preset '{mesh_name}' provisioned"));
+    *state.instance.lock().unwrap() = Some(MeshInstance { nodes, watchdog });
+    // 6. Clear loaded — the instance now owns the active manifest
+    *state.loaded.lock().unwrap() = None;
+    push_log(&state.log, "Mesh", format!("system '{mesh_name}' activated"));
+}
+
+// ── Group watchdog — auto-heal killed nodes ───────────────────────────────────
+
+/// Replenishes the shared spare pool every 5 s.
+///   Blank spares  (acquirable caps): spawned freely when pool drops below target.
+///   Intrinsic spares (hardware caps): only log a warning — hardware can't be conjured.
+/// Does NOT add new active nodes; that is handle_node_kill's job via promote_spare.
+async fn run_group_watchdog(state: Arc<MgmtState>) {
+    loop {
+        time::sleep(Duration::from_secs(5)).await;
+        if state.instance.lock().unwrap().is_none() { continue; }
+
+        let mesh_name = state.manifest.read().unwrap().mesh.name.clone();
+        if mesh_name.is_empty() { continue; }
+
+        // Snapshot group definitions without holding the manifest lock across .await
+        let group_defs: Vec<(String, usize, usize, String, String)> = {
+            let m = state.manifest.read().unwrap();
+            m.groups.iter().map(|g| {
+                let cap = g.capabilities.first().expect("cap");
+                let max = g.max_agents.unwrap_or(g.min_agents);
+                (g.name.clone(), g.min_agents, max, cap.ns.clone(), cap.name.clone())
+            }).collect()
+        };
+
+        // How many blank spares do we have / need?
+        let (blank_have, blank_need): (usize, usize) = {
+            let inst = state.instance.lock().unwrap();
+            let inst = match inst.as_ref() { Some(i) => i, None => continue };
+
+            let have = inst.nodes.iter()
+                .filter(|n| n.is_spare && !n.failed && n.intrinsic_caps.is_empty())
+                .count();
+            let need: usize = group_defs.iter()
+                .filter(|(_, _, _, ns, cap_name)| !is_intrinsic(ns, cap_name))
+                .map(|(_, min, max, _, _)| max.saturating_sub(*min).min(3))
+                .sum();
+
+            // Warn on depleted intrinsic spare pools (can't replenish — hardware constraint)
+            for (_, min, max, ns, cap_name) in &group_defs {
+                if !is_intrinsic(ns, cap_name) { continue; }
+                let cap_key = format!("{ns}/{cap_name}");
+                let have_intrinsic = inst.nodes.iter()
+                    .filter(|n| n.is_spare && !n.failed && n.intrinsic_caps.contains(&cap_key))
+                    .count();
+                let target = max.saturating_sub(*min).min(3);
+                if have_intrinsic < target {
+                    push_log(&state.log, "Warning", format!(
+                        "intrinsic spare pool depleted for {cap_key} \
+                         ({have_intrinsic}/{target}) — hardware constraint, cannot auto-replenish"
+                    ));
+                }
+            }
+
+            (have, need)
+        };
+
+        // Spawn blank spares to fill the gap (no lock held across .await)
+        let to_spawn = blank_need.saturating_sub(blank_have);
+        for _ in 0..to_spawn {
+            let node = spawn_spare_node(vec![], &state).await;
+            let label = node.label.clone();
+            if let Some(inst) = state.instance.lock().unwrap().as_mut() {
+                inst.nodes.push(node);
+            }
+            push_log(&state.log, "Spare",
+                format!("{label} (pool replenished — unassigned)"));
+        }
+    }
 }
 
 // ── State JSON ────────────────────────────────────────────────────────────────
@@ -847,9 +1048,12 @@ fn build_state_json(state: &MgmtState) -> String {
 
     let nodes: Vec<Value> = inst_guard.as_ref().map(|inst| {
         inst.nodes.iter().map(|node| {
-            let alive  = !node.pause_flag.load(Ordering::Relaxed);
-            let paused = !alive;
-            let state_str: String = if paused {
+            let paused = node.pause_flag.load(Ordering::Relaxed);
+            let state_str: String = if node.failed {
+                "Failed".into()
+            } else if node.is_spare {
+                "Standby".into()
+            } else if paused {
                 "Offline".into()
             } else if node.ns == "llm" && node.cap_name == "inference" {
                 sm_guard.as_ref()
@@ -866,13 +1070,16 @@ fn build_state_json(state: &MgmtState) -> String {
                 "Running".into()
             };
             json!({
-                "label":    node.label,
-                "group":    node.group,
-                "ns":       node.ns,
-                "cap_name": node.cap_name,
-                "alive":    alive,
-                "paused":   paused,
-                "state":    state_str,
+                "label":          node.label,
+                "group":          node.group,
+                "ns":             node.ns,
+                "cap_name":       node.cap_name,
+                "intrinsic_caps": node.intrinsic_caps,
+                "alive":          !paused && !node.failed,
+                "paused":         paused,
+                "is_spare":       node.is_spare,
+                "failed":         node.failed,
+                "state":          state_str,
             })
         }).collect()
     }).unwrap_or_default();
@@ -901,23 +1108,53 @@ fn build_state_json(state: &MgmtState) -> String {
             .collect()
     };
 
+    let running = inst_guard.is_some();
+    drop(inst_guard);
+    drop(sm_guard);
+
+    // Loaded topology: nodes the next Activate would provision, derived from loaded manifest
+    let loaded_guard = state.loaded.lock().unwrap();
+    let loaded_nodes: Vec<Value> = loaded_guard.as_ref().map(|sm| {
+        let mut out = Vec::new();
+        for group in &sm.groups {
+            let cap = group.capabilities.first().unwrap();
+            for i in 0..group.min_agents {
+                out.push(json!({
+                    "label":    format!("{}-{i}", group.name),
+                    "group":    group.name,
+                    "ns":       cap.ns,
+                    "cap_name": cap.name,
+                    "state":    "Loaded",
+                }));
+            }
+        }
+        out
+    }).unwrap_or_default();
+    let loaded_system  = loaded_guard.as_ref().map(|sm| sm.mesh.name.clone());
+    let loaded_version = loaded_guard.as_ref().map(|sm| sm.mesh.version.clone());
+    drop(loaded_guard);
+
     let manifest = state.manifest.read().unwrap();
     json!({
-        "preset":       manifest.mesh.name,
-        "version":      manifest.mesh.version,
-        "healthy":      mesh_status.is_healthy(),
-        "total_calls":  state.call_count.load(Ordering::Relaxed),
-        "nodes":        nodes,
-        "groups":       groups,
-        "log":          log,
-        "traffic":      traffic,
+        "system":         manifest.mesh.name,
+        "version":        manifest.mesh.version,
+        "healthy":        mesh_status.is_healthy(),
+        "running":        running,
+        "total_calls":    state.call_count.load(Ordering::Relaxed),
+        "nodes":          nodes,
+        "groups":         groups,
+        "loaded_system":  loaded_system,
+        "loaded_version": loaded_version,
+        "loaded_nodes":   loaded_nodes,
+        "log":            log,
+        "traffic":        traffic,
     }).to_string()
 }
 
 // ── HTTP handlers ─────────────────────────────────────────────────────────────
 
-fn handle_presets_list() -> (u16, &'static str, String) {
-    let list: Vec<Value> = PRESETS.iter().map(|p| {
+fn handle_library_list() -> (u16, &'static str, String) {
+    let list: Vec<Value> = LIBRARY.iter().map(|p| {
         let ver = MeshManifest::from_toml_bytes(p.toml.as_bytes())
             .map(|m| m.mesh.version).unwrap_or_else(|| "0.1".into());
         json!({ "id": p.id, "name": p.name, "description": p.description, "version": ver })
@@ -925,12 +1162,30 @@ fn handle_presets_list() -> (u16, &'static str, String) {
     (200, "application/json", json!(list).to_string())
 }
 
-async fn handle_preset_apply(state: Arc<MgmtState>, preset_id: &str) -> (u16, &'static str, String) {
-    let Some(preset) = PRESETS.iter().find(|p| p.id == preset_id) else {
-        return (404, "application/json", json!({"error":"preset not found"}).to_string());
+fn handle_system_load(state: &MgmtState, system_id: &str) -> (u16, &'static str, String) {
+    let Some(entry) = LIBRARY.iter().find(|p| p.id == system_id) else {
+        return (404, "application/json", json!({"error":"system not found"}).to_string());
     };
-    let Some(manifest) = MeshManifest::from_toml_bytes(preset.toml.as_bytes()) else {
-        return (500, "application/json", json!({"error":"preset parse failed"}).to_string());
+    let Some(manifest) = MeshManifest::from_toml_bytes(entry.toml.as_bytes()) else {
+        return (500, "application/json", json!({"error":"manifest parse failed"}).to_string());
+    };
+    let summary = json!({
+        "id":      system_id,
+        "name":    manifest.mesh.name,
+        "version": manifest.mesh.version,
+    });
+    *state.loaded.lock().unwrap() = Some(manifest);
+    push_log(&state.log, "Loaded",
+        format!("'{system_id}' ready — click ▶ Activate to deploy"));
+    (200, "application/json", summary.to_string())
+}
+
+async fn handle_manifest_activate(state: Arc<MgmtState>, system_id: &str) -> (u16, &'static str, String) {
+    let Some(entry) = LIBRARY.iter().find(|p| p.id == system_id) else {
+        return (404, "application/json", json!({"error":"system not found"}).to_string());
+    };
+    let Some(manifest) = MeshManifest::from_toml_bytes(entry.toml.as_bytes()) else {
+        return (500, "application/json", json!({"error":"manifest parse failed"}).to_string());
     };
     let ver = manifest.mesh.version.clone();
     provision_from_manifest(state, manifest).await;
@@ -960,18 +1215,68 @@ async fn handle_manifest_post(state: Arc<MgmtState>, body: &[u8]) -> (u16, &'sta
 }
 
 fn handle_node_kill(state: &MgmtState, label: &str) -> (u16, &'static str, String) {
+    let mesh_name = state.manifest.read().unwrap().mesh.name.clone();
+    let sm        = state.sm.lock().unwrap().clone();
+
     let mut inst_guard = state.instance.lock().unwrap();
     let Some(inst) = inst_guard.as_mut() else {
         return (404, "application/json", json!({"error":"no active instance"}).to_string());
     };
-    let Some(node) = inst.nodes.iter_mut().find(|n| n.label == label) else {
+
+    // Only active (non-spare, non-failed) nodes can be killed
+    let Some(pos) = inst.nodes.iter().position(|n| n.label == label && !n.is_spare && !n.failed)
+    else {
         return (404, "application/json", json!({"error":"node not found"}).to_string());
     };
-    node.pause_flag.store(true, Ordering::Relaxed);
-    if let Some(h) = node.behavior.take() { h.abort(); }
-    node.cap_handles.clear();
-    node.tool_handles.clear();
-    push_log(&state.log, "NodeKill", format!("{label} capabilities tombstoned"));
+
+    let killed_group   = inst.nodes[pos].group.clone();
+    let killed_ns      = inst.nodes[pos].ns.clone();
+    let killed_cap     = inst.nodes[pos].cap_name.clone();
+    let cap_key        = format!("{killed_ns}/{killed_cap}");
+    let cap_intrinsic  = is_intrinsic(&killed_ns, &killed_cap);
+
+    // Abort behavior and tombstone capability — but keep the node in the list
+    // as a Failed entry so the UI can display it in the spare pool.
+    {
+        let node = &mut inst.nodes[pos];
+        if let Some(h) = node.behavior.take() { h.abort(); }
+        node.cap_handles.clear();   // drop → gossip tombstone propagates
+        node.tool_handles.clear();
+        node.is_spare = true;
+        node.failed   = true;
+    }
+    push_log(&state.log, "Kill",
+        format!("{label} failed — capability {cap_key} lost"));
+
+    // Find the best available spare:
+    //   Intrinsic cap → must have matching entry in intrinsic_caps.
+    //   Acquirable cap → any blank spare (no intrinsic_caps) will do.
+    let spare_pos = inst.nodes.iter().position(|n| {
+        n.is_spare && !n.failed &&
+        if cap_intrinsic {
+            n.intrinsic_caps.contains(&cap_key)
+        } else {
+            n.intrinsic_caps.is_empty()
+        }
+    });
+
+    if let Some(sp) = spare_pos {
+        let spare_label = inst.nodes[sp].label.clone();
+        // Assign the role before calling promote_spare
+        inst.nodes[sp].group    = killed_group.clone();
+        inst.nodes[sp].ns       = killed_ns.clone();
+        inst.nodes[sp].cap_name = killed_cap.clone();
+        promote_spare(&mut inst.nodes[sp], &mesh_name, state, sm);
+        push_log(&state.log, "Promoted",
+            format!("▲ {spare_label} → {killed_group} ({cap_key})"));
+    } else {
+        push_log(&state.log, "Warning", format!(
+            "no {} spare for {cap_key}{}",
+            if cap_intrinsic { "intrinsic" } else { "unassigned" },
+            if cap_intrinsic { " — hardware constraint" } else { " — watchdog will replenish" }
+        ));
+    }
+
     (200, "application/json", json!({"ok":true}).to_string())
 }
 
@@ -981,7 +1286,7 @@ fn handle_node_start(state: &MgmtState, label: &str) -> (u16, &'static str, Stri
     let Some(inst) = inst_guard.as_mut() else {
         return (404, "application/json", json!({"error":"no active instance"}).to_string());
     };
-    let Some(node) = inst.nodes.iter_mut().find(|n| n.label == label) else {
+    let Some(node) = inst.nodes.iter_mut().find(|n| n.label == label && !n.failed) else {
         return (404, "application/json", json!({"error":"node not found"}).to_string());
     };
 
@@ -1028,11 +1333,11 @@ async fn handle_system_stop(state: &MgmtState) -> (u16, &'static str, String) {
     let _ = state.mgmt_agent.set(manifest_keys::CONTROL_SYSTEM, Bytes::from_static(b"stopped"));
     let inst_guard = state.instance.lock().unwrap();
     if let Some(inst) = inst_guard.as_ref() {
-        for node in &inst.nodes {
+        for node in inst.nodes.iter().filter(|n| !n.is_spare) {
             node.pause_flag.store(true, Ordering::Relaxed);
         }
     }
-    push_log(&state.log, "Control", "system stopped");
+    push_log(&state.log, "Control", "system stopped (spares unaffected)");
     (200, "application/json", json!({"ok":true}).to_string())
 }
 
@@ -1040,7 +1345,7 @@ async fn handle_system_start(state: &MgmtState) -> (u16, &'static str, String) {
     let _ = state.mgmt_agent.set(manifest_keys::CONTROL_SYSTEM, Bytes::from_static(b"running"));
     let inst_guard = state.instance.lock().unwrap();
     if let Some(inst) = inst_guard.as_ref() {
-        for node in &inst.nodes {
+        for node in inst.nodes.iter().filter(|n| !n.is_spare) {
             node.pause_flag.store(false, Ordering::Relaxed);
         }
     }
@@ -1053,7 +1358,8 @@ async fn handle_group_control(state: &MgmtState, group: &str, stop: bool) -> (u1
     let Some(inst) = inst_guard.as_ref() else {
         return (404, "application/json", json!({"error":"no active instance"}).to_string());
     };
-    let matching: Vec<&MeshNode> = inst.nodes.iter().filter(|n| n.group == group).collect();
+    let matching: Vec<&MeshNode> = inst.nodes.iter()
+        .filter(|n| n.group == group && !n.is_spare && !n.failed).collect();
     if matching.is_empty() {
         return (404, "application/json", json!({"error":"group not found"}).to_string());
     }
@@ -1067,6 +1373,25 @@ fn handle_demo_trigger(state: &MgmtState) -> (u16, &'static str, String) {
     state.trigger_requested.store(true, Ordering::Relaxed);
     push_log(&state.log, "Demo", "Task triggered");
     (200, "application/json", json!({"ok":true}).to_string())
+}
+
+fn handle_system_deactivate(state: &MgmtState) -> (u16, &'static str, String) {
+    let old = state.instance.lock().unwrap().take();
+    drop(old);
+    *state.sm.lock().unwrap() = None;
+    push_log(&state.log, "Stop", "system deactivated — select a system from the library and activate it");
+    (200, "application/json", json!({"ok":true}).to_string())
+}
+
+async fn handle_system_activate(state: Arc<MgmtState>) -> (u16, &'static str, String) {
+    let manifest = state.loaded.lock().unwrap().take();
+    let Some(manifest) = manifest else {
+        return (400, "application/json",
+                json!({"error":"no system loaded — select a system from the library first"}).to_string());
+    };
+    let ver = manifest.mesh.version.clone();
+    provision_from_manifest(Arc::clone(&state), manifest).await;
+    (200, "application/json", json!({"ok":true,"version":ver}).to_string())
 }
 
 // ── HTTP server ───────────────────────────────────────────────────────────────
@@ -1092,11 +1417,11 @@ async fn handle_http(mut stream: tokio::net::TcpStream, state: Arc<MgmtState>) {
     let (status, ct, body_str) = match (method, path) {
         (_, "/state") =>
             (200, "application/json", build_state_json(&state)),
-        ("GET", "/presets") =>
-            handle_presets_list(),
-        _ if is_post && path.starts_with("/presets/") && path.ends_with("/apply") => {
-            let id = path.trim_start_matches("/presets/").trim_end_matches("/apply");
-            handle_preset_apply(Arc::clone(&state), id).await
+        ("GET", "/library") =>
+            handle_library_list(),
+        _ if is_post && path.starts_with("/manifests/") && path.ends_with("/activate") => {
+            let id = path.trim_start_matches("/manifests/").trim_end_matches("/activate");
+            handle_manifest_activate(Arc::clone(&state), id).await
         }
         ("GET", "/manifest") => {
             let m = state.manifest.read().unwrap();
@@ -1118,6 +1443,14 @@ async fn handle_http(mut stream: tokio::net::TcpStream, state: Arc<MgmtState>) {
             handle_system_start(&state).await,
         ("POST", "/demo/trigger") =>
             handle_demo_trigger(&state),
+        ("POST", "/system/deactivate") =>
+            handle_system_deactivate(&state),
+        ("POST", "/system/activate") =>
+            handle_system_activate(Arc::clone(&state)).await,
+        _ if is_post && path.starts_with("/manifests/") && path.ends_with("/load") => {
+            let id = path.trim_start_matches("/manifests/").trim_end_matches("/load");
+            handle_system_load(&state, id)
+        }
         _ if is_post && path.starts_with("/nodes/") && path.ends_with("/kill") => {
             let label = path.trim_start_matches("/nodes/").trim_end_matches("/kill");
             handle_node_kill(&state, label)
@@ -1164,6 +1497,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = Arc::new(MgmtState {
         mgmt_agent:        Arc::clone(&mgmt_agent),
         manifest:          RwLock::new(MeshManifest::default()),
+        loaded:            Mutex::new(None),
         instance:          Mutex::new(None),
         log:               Arc::new(Mutex::new(Vec::new())),
         traffic:           Arc::new(Mutex::new(Vec::new())),
@@ -1173,26 +1507,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         call_count:        Arc::new(AtomicU64::new(0)),
     });
 
-    // Bootstrap with the default LLM-agent preset
-    let default_preset = PRESETS.iter().find(|p| p.id == "llm-agent").unwrap();
-    let default_manifest = MeshManifest::from_toml_bytes(default_preset.toml.as_bytes())
-        .expect("default preset parseable");
-    println!("Provisioning default preset: {}", default_manifest.mesh.name);
-
-    provision_from_manifest(Arc::clone(&state), default_manifest).await;
-
-    println!("\nWaiting {SETTLE_MS}ms for mesh to settle…");
-    time::sleep(Duration::from_millis(SETTLE_MS)).await;
-
+    // Load the default system — user clicks ▶ Activate to deploy
     {
-        let manifest = state.manifest.read().unwrap();
-        let status   = manifest.check_status(&state.mgmt_agent);
-        println!("Mesh: {} (deficit: {})", manifest.mesh.name, status.total_deficit());
-        for g in &status.groups {
-            println!("  {:22} {}/{} {}", g.name, g.actual, g.min_agents,
-                     if g.satisfied { "✓" } else { "✗" });
+        let default = LIBRARY.iter().find(|p| p.id == "llm-agent").unwrap();
+        if let Some(m) = MeshManifest::from_toml_bytes(default.toml.as_bytes()) {
+            println!("Loaded default system : {}", m.mesh.name);
+            *state.loaded.lock().unwrap() = Some(m);
         }
-        println!();
+        push_log(&state.log, "Ready", "LLM Agent Demo loaded — select a system from the library and activate it");
     }
 
     // HTTP server

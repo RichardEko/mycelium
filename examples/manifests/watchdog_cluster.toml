@@ -1,0 +1,23 @@
+[mesh]
+name    = "watchdog-cluster"
+version = "0.1"
+
+[[group]]
+name        = "services"
+description = "Monitored services — emit heartbeat signals every second"
+min_agents  = 4
+max_agents  = 6
+
+  [[group.capability]]
+  ns   = "health"
+  name = "heartbeat"
+
+[[group]]
+name        = "supervisors"
+description = "Watchdog supervisor — quorum_persistent triggers circuit breaker"
+min_agents  = 1
+max_agents  = 1
+
+  [[group.capability]]
+  ns   = "health"
+  name = "watchdog"
