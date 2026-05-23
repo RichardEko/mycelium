@@ -434,7 +434,7 @@ async fn test_tombstone_nullifies_value() {
     send_wire(&mut writer, &WireMessage::Data(data_update("k", b"", 2, true))).await;
 
     let s = store.clone();
-    poll_until(|| s.pin().get("k").map_or(false, |e| e.data.is_none()), 200).await;
+    poll_until(|| s.pin().get("k").is_some_and(|e| e.data.is_none()), 200).await;
     assert!(store.pin().get("k").is_some(), "tombstone entry must remain in store for LWW");
 }
 
@@ -841,7 +841,7 @@ fn test_ttl_offset_matches_wire_layout() {
         value:        Bytes::new(),
     };
     let encoded = bincode::serde::encode_to_vec(
-        &WireMessage::Data(update), bincode_cfg(),
+        WireMessage::Data(update), bincode_cfg(),
     ).unwrap();
     assert_eq!(
         encoded[TTL_OFFSET], 0xAA,
@@ -862,7 +862,7 @@ fn test_nonce_offset_matches_wire_layout() {
         value:        Bytes::new(),
     };
     let encoded = bincode::serde::encode_to_vec(
-        &WireMessage::Data(update), bincode_cfg(),
+        WireMessage::Data(update), bincode_cfg(),
     ).unwrap();
     let nonce = u64::from_le_bytes(
         encoded[NONCE_OFFSET..NONCE_OFFSET + 8].try_into().unwrap(),
@@ -1006,7 +1006,7 @@ async fn test_state_response_applies_entries_to_store() {
     ).await;
 
     assert!(
-        store.pin().get("c:v2").map_or(false, |e| e.data.is_none()),
+        store.pin().get("c:v2").is_some_and(|e| e.data.is_none()),
         "tombstone entry must land as data=None"
     );
 }
@@ -1730,7 +1730,7 @@ async fn test_advertise_stops_on_handle_drop() {
         kind.clone(),
         SignalScope::System,
         Duration::from_millis(20),
-        || Bytes::new(),
+        Bytes::new,
     );
 
     // Confirm it emits at least once.
