@@ -742,7 +742,7 @@ async fn run_node(agent: Arc<GossipAgent>, role: &str, http_port: u16) {
     let state = Arc::new(NodeState { agent });
     let router = Router::new()
         .route("/health",     get(node_health))
-        .route("/kv/*key",    get(node_kv_get).put(node_kv_put))
+        .route("/kv/{*key}",  get(node_kv_get).put(node_kv_put))
         .route("/emit/:kind", post(node_emit))
         .with_state(state);
 
