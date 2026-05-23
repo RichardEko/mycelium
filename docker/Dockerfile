@@ -36,7 +36,9 @@ COPY --from=builder \
 
 # Gossip port (TCP, peer-to-peer)
 EXPOSE 57000
-# HTTP gateway (REST + SSE, language bridges + observability)
+# Mycelium HTTP gateway (REST + SSE, language bridges + observability)
 EXPOSE 8300
+# Interactive chat UI (llm role only)
+EXPOSE 8080
 
 ENTRYPOINT ["mycelium-demo"]

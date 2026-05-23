@@ -1,4 +1,4 @@
-//! Three-node real-world demo — Docker edition.
+//! Three-node real-world demo — Docker edition with interactive chat UI.
 //!
 //! One binary, three roles selected by `MYCELIUM_ROLE`:
 //!
@@ -9,23 +9,23 @@
 //!   tool-b  ─── calculate(expr) — safe arithmetic evaluator
 //!               wiki(topic)     — calls Wikipedia REST summary API
 //!
-//!   llm     ─── discovers all tools over gossip, plans with a real LLM,
+//!   llm     ─── browser chat UI at http://localhost:8080
+//!               plans with local Ollama (llama3.2)
 //!               routes each tool call to whichever container hosts it
 //! ```
 //!
 //! # Environment variables
 //!
-//! | Variable              | Default                              | Used by      |
-//! |-----------------------|--------------------------------------|--------------|
-//! | `MYCELIUM_ROLE`       | *(required)*                         | all          |
-//! | `MYCELIUM_PEERS`      | *(required, comma-sep host:port)*    | all          |
-//! | `MYCELIUM_HOSTNAME`   | value of `HOSTNAME` env var          | all          |
-//! | `MYCELIUM_PORT`       | `57000`                              | all          |
-//! | `MYCELIUM_HTTP_PORT`  | `8300`                               | all          |
-//! | `OPENAI_BASE_URL`     | `https://api.openai.com/v1`          | llm          |
-//! | `OPENAI_API_KEY`      | *(required for llm role)*            | llm          |
-//! | `OPENAI_MODEL`        | `gpt-4o-mini`                        | llm          |
-//! | `DEMO_TASK`           | see below                            | llm          |
+//! | Variable             | Default                      | Used by |
+//! |----------------------|------------------------------|---------|
+//! | `MYCELIUM_ROLE`      | *(required)*                 | all     |
+//! | `MYCELIUM_PEERS`     | *(required, comma-sep h:p)*  | all     |
+//! | `MYCELIUM_HOSTNAME`  | value of `HOSTNAME` env var  | all     |
+//! | `MYCELIUM_PORT`      | `57000`                      | all     |
+//! | `MYCELIUM_HTTP_PORT` | `8300`                       | all     |
+//! | `OLLAMA_BASE_URL`    | `http://ollama:11434/v1`     | llm     |
+//! | `OLLAMA_MODEL`       | `llama3.2`                   | llm     |
+//! | `CHAT_PORT`          | `8080`                       | llm     |
 //!
 //! # Quick start (local, no Docker)
 //! ```sh
@@ -37,33 +37,91 @@
 //! MYCELIUM_ROLE=tool-b MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57002 \
 //!   MYCELIUM_PORT=57001 cargo run --example three_node_demo
 //!
-//! # terminal 3
+//! # terminal 3 — requires Ollama running on localhost:11434 with llama3.2 pulled
 //! MYCELIUM_ROLE=llm MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001 \
-//!   MYCELIUM_PORT=57002 OPENAI_API_KEY=sk-... cargo run --example three_node_demo
+//!   MYCELIUM_PORT=57002 OLLAMA_BASE_URL=http://localhost:11434/v1 \
+//!   cargo run --example three_node_demo
+//! # Then open http://localhost:8080
 //! ```
 
+use axum::{
+    Json, Router,
+    extract::State,
+    http::StatusCode,
+    response::{Html, IntoResponse, Response},
+    response::sse::{Event, KeepAlive, Sse},
+    routing::{get, post},
+};
 use bytes::Bytes;
+use futures_util::StreamExt;
 use mycelium::{GossipAgent, GossipConfig, McpToolHandle, NodeId, signal_kind};
-use serde_json::{json, Value};
-use std::{sync::Arc, time::Duration};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::convert::Infallible;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::time::Duration;
+use tokio::sync::{Mutex, broadcast};
 use tokio::time;
+use tokio_stream::wrappers::BroadcastStream;
 use tracing::{error, info, warn};
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// ── Constants ──────────────────────────────────────────────────────────────────
 
 const GOSSIP_PORT_DEFAULT: u16 = 57000;
 const HTTP_PORT_DEFAULT:   u16 = 8300;
-const TOOL_SETTLE_SECS:    u64 = 8;   // wait for mesh convergence before planning
-const MAX_TURNS:           usize = 10;
-const DEFAULT_TASK: &str =
-    "What is the current weather in London? \
-     Also, how tall is the Eiffel Tower in metres according to Wikipedia? \
-     Finally, what is that height multiplied by 1024?";
+const CHAT_PORT_DEFAULT:   u16 = 8080;
+const TOOL_SETTLE_SECS:    u64 = 8;
+const MAX_TURNS:           usize = 12;
 
-// ── Startup helpers ───────────────────────────────────────────────────────────
+// ── Chat events (broadcast to all SSE clients) ────────────────────────────────
 
-/// Resolve a hostname to its first IPv4/v6 address string.
-/// In Docker containers this turns service names like "tool-a" into IPs.
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ChatEvent {
+    UserMessage { content: String },
+    Thinking    { content: String },
+    ToolCall    { tool: String, node_id: String, args: Value },
+    ToolResult  { tool: String, result: Value },
+    ToolError   { tool: String, error: String },
+    Assistant   { content: String },
+    Error       { message: String },
+    Idle,
+}
+
+// ── Shared state ───────────────────────────────────────────────────────────────
+
+struct AppState {
+    agent:   Arc<GossipAgent>,
+    cfg:     LlmCfg,
+    history: Mutex<Vec<Value>>,
+    tx:      broadcast::Sender<ChatEvent>,
+    busy:    AtomicBool,
+}
+
+// ── LLM config ─────────────────────────────────────────────────────────────────
+
+#[derive(Clone)]
+struct LlmCfg {
+    base_url: String,
+    api_key:  String,
+    model:    String,
+}
+
+impl LlmCfg {
+    fn from_env() -> Self {
+        Self {
+            base_url: std::env::var("OLLAMA_BASE_URL")
+                .unwrap_or_else(|_| "http://ollama:11434/v1".into()),
+            api_key:  std::env::var("OLLAMA_API_KEY")
+                .unwrap_or_else(|_| "ollama".into()),
+            model:    std::env::var("OLLAMA_MODEL")
+                .unwrap_or_else(|_| "llama3.2".into()),
+        }
+    }
+}
+
+// ── Startup helpers ────────────────────────────────────────────────────────────
+
 async fn resolve_ip(hostname: &str) -> Result<String, String> {
     use tokio::net::lookup_host;
     let mut addrs = lookup_host(format!("{hostname}:0"))
@@ -74,8 +132,6 @@ async fn resolve_ip(hostname: &str) -> Result<String, String> {
         .ok_or_else(|| format!("no address resolved for '{hostname}'"))
 }
 
-/// Resolve a comma-separated list of `host:port` peer strings into `NodeId`s,
-/// skipping any that fail (peers may not be up yet; reconnect handles it).
 async fn resolve_peers(peer_list: &str) -> Vec<NodeId> {
     let mut out = Vec::new();
     for entry in peer_list.split(',').map(str::trim).filter(|s| !s.is_empty()) {
@@ -98,13 +154,7 @@ async fn resolve_peers(peer_list: &str) -> Vec<NodeId> {
     out
 }
 
-/// Build and start a GossipAgent from the standard env vars.
-async fn make_agent(
-    my_ip:    &str,
-    peers:    Vec<NodeId>,
-    port:     u16,
-    http_port: u16,
-) -> Arc<GossipAgent> {
+async fn make_agent(my_ip: &str, peers: Vec<NodeId>, port: u16, http_port: u16) -> Arc<GossipAgent> {
     let nid = NodeId::new(my_ip, port).expect("valid self NodeId");
     let mut cfg = GossipConfig::default();
     cfg.bind_address               = my_ip.to_string();
@@ -121,12 +171,18 @@ async fn make_agent(
     agent
 }
 
-// ── Tool handler types ────────────────────────────────────────────────────────
+// ── Tool handler types ─────────────────────────────────────────────────────────
 
 type BoxFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'static>>;
-type ToolHandler = Arc<dyn Fn(Value) -> BoxFuture<Result<Value, String>> + Send + Sync + 'static>;
+type ToolHandler  = Arc<dyn Fn(Value) -> BoxFuture<Result<Value, String>> + Send + Sync + 'static>;
 
-fn register(agent: &Arc<GossipAgent>, name: &str, description: &str, params: Value, handler: ToolHandler) -> McpToolHandle {
+fn register(
+    agent:       &Arc<GossipAgent>,
+    name:        &str,
+    description: &str,
+    params:      Value,
+    handler:     ToolHandler,
+) -> McpToolHandle {
     let schema = json!({ "description": description, "inputSchema": params });
     agent.register_mcp_tool(name, schema, move |args| {
         let h = Arc::clone(&handler);
@@ -134,7 +190,7 @@ fn register(agent: &Arc<GossipAgent>, name: &str, description: &str, params: Val
     })
 }
 
-// ── Real tool implementations ─────────────────────────────────────────────────
+// ── Tool implementations ───────────────────────────────────────────────────────
 
 async fn tool_weather(args: Value) -> Result<Value, String> {
     let city = args["city"].as_str().unwrap_or("London").to_string();
@@ -145,15 +201,14 @@ async fn tool_weather(args: Value) -> Result<Value, String> {
         .timeout(Duration::from_secs(10))
         .send().await.map_err(|e| format!("weather request failed: {e}"))?
         .json::<Value>().await.map_err(|e| format!("weather parse failed: {e}"))?;
-
     let current = &resp["current_condition"][0];
     Ok(json!({
-        "city":        city,
-        "temp_c":      current["temp_C"].as_str().unwrap_or("?"),
+        "city":         city,
+        "temp_c":       current["temp_C"].as_str().unwrap_or("?"),
         "feels_like_c": current["FeelsLikeC"].as_str().unwrap_or("?"),
-        "description": current["weatherDesc"][0]["value"].as_str().unwrap_or("unknown"),
+        "description":  current["weatherDesc"][0]["value"].as_str().unwrap_or("unknown"),
         "humidity_pct": current["humidity"].as_str().unwrap_or("?"),
-        "wind_kmph":   current["windspeedKmph"].as_str().unwrap_or("?"),
+        "wind_kmph":    current["windspeedKmph"].as_str().unwrap_or("?"),
     }))
 }
 
@@ -161,15 +216,12 @@ async fn tool_web_fetch(args: Value) -> Result<Value, String> {
     let url = args["url"].as_str()
         .ok_or_else(|| "missing url parameter".to_string())?
         .to_string();
-
     let body = reqwest::Client::new()
         .get(&url)
         .header("User-Agent", "mycelium-demo/0.1")
         .timeout(Duration::from_secs(15))
         .send().await.map_err(|e| format!("fetch failed: {e}"))?
         .text().await.map_err(|e| format!("body read failed: {e}"))?;
-
-    // Strip HTML tags with a simple pass; return first 2 KB
     let stripped: String = {
         let mut out = String::with_capacity(body.len().min(4096));
         let mut in_tag = false;
@@ -184,13 +236,11 @@ async fn tool_web_fetch(args: Value) -> Result<Value, String> {
         }
         out.split_whitespace().collect::<Vec<_>>().join(" ")
     };
-
     Ok(json!({ "url": url, "content": stripped }))
 }
 
 async fn tool_calculate(args: Value) -> Result<Value, String> {
     let expr = args["expression"].as_str().unwrap_or("").trim().to_string();
-
     fn eval(tokens: &[&str]) -> Option<f64> {
         if tokens.len() == 3 {
             let a: f64 = tokens[0].parse().ok()?;
@@ -207,20 +257,15 @@ async fn tool_calculate(args: Value) -> Result<Value, String> {
         }
         None
     }
-
     let tokens: Vec<&str> = expr.split_whitespace().collect();
-    let result = eval(&tokens).ok_or_else(|| {
-        format!("cannot evaluate '{expr}' — expected 'a op b' (e.g. '330 * 1024')")
-    })?;
-
+    let result = eval(&tokens)
+        .ok_or_else(|| format!("cannot evaluate '{expr}' — expected 'a op b' (e.g. '330 * 1024')"))?;
     Ok(json!({ "expression": expr, "result": result }))
 }
 
 async fn tool_wiki(args: Value) -> Result<Value, String> {
     let topic = args["topic"].as_str().unwrap_or("").trim().to_string();
     if topic.is_empty() { return Err("missing topic parameter".into()); }
-
-    // Wikipedia REST summary API — no auth required
     let encoded = topic.replace(' ', "_");
     let url = format!("https://en.wikipedia.org/api/rest_v1/page/summary/{encoded}");
     let resp = reqwest::Client::new()
@@ -229,7 +274,6 @@ async fn tool_wiki(args: Value) -> Result<Value, String> {
         .timeout(Duration::from_secs(10))
         .send().await.map_err(|e| format!("wiki request failed: {e}"))?
         .json::<Value>().await.map_err(|e| format!("wiki parse failed: {e}"))?;
-
     if resp["type"].as_str() == Some("disambiguation") || resp["extract"].is_null() {
         return Err(format!("'{topic}' is ambiguous or not found — try a more specific title"));
     }
@@ -240,7 +284,7 @@ async fn tool_wiki(args: Value) -> Result<Value, String> {
     }))
 }
 
-// ── Tool-node runners ─────────────────────────────────────────────────────────
+// ── Tool node runners ──────────────────────────────────────────────────────────
 
 async fn run_tool_a(agent: Arc<GossipAgent>, role: &str) {
     let _weather = register(
@@ -255,8 +299,7 @@ async fn run_tool_a(agent: Arc<GossipAgent>, role: &str) {
         json!({"type":"object","properties":{"url":{"type":"string","description":"URL to fetch"}},"required":["url"]}),
         Arc::new(|args| Box::pin(tool_web_fetch(args))),
     );
-    info!("[{role}] registered tools: weather, web_fetch — listening");
-    // Block forever (tools are served by the MCP signal handler in the background)
+    info!("[{role}] tools: weather, web_fetch — listening");
     loop { time::sleep(Duration::from_secs(60)).await; }
 }
 
@@ -273,49 +316,39 @@ async fn run_tool_b(agent: Arc<GossipAgent>, role: &str) {
         json!({"type":"object","properties":{"topic":{"type":"string","description":"Wikipedia article title"}},"required":["topic"]}),
         Arc::new(|args| Box::pin(tool_wiki(args))),
     );
-    info!("[{role}] registered tools: calculate, wiki — listening");
+    info!("[{role}] tools: calculate, wiki — listening");
     loop { time::sleep(Duration::from_secs(60)).await; }
 }
 
-// ── LLM planning loop ─────────────────────────────────────────────────────────
+// ── Mesh helpers ───────────────────────────────────────────────────────────────
 
-struct LlmCfg {
-    base_url: String,
-    api_key:  String,
-    model:    String,
-}
-
-impl LlmCfg {
-    fn from_env() -> Self {
-        Self {
-            base_url: std::env::var("OPENAI_BASE_URL")
-                .unwrap_or_else(|_| "https://api.openai.com/v1".into()),
-            api_key:  std::env::var("OPENAI_API_KEY").unwrap_or_default(),
-            model:    std::env::var("OPENAI_MODEL")
-                .unwrap_or_else(|_| "gpt-4o-mini".into()),
-        }
-    }
-}
-
-fn discover_tools(agent: &GossipAgent) -> Vec<(String, NodeId, Value)> {
+fn discover_tools(agent: &GossipAgent) -> Vec<(String, String, Value)> {
     let mut seen: std::collections::HashSet<String> = Default::default();
     let mut tools = Vec::new();
     for (key, schema_bytes) in agent.scan_prefix("tools/") {
         let parts: Vec<&str> = key.splitn(3, '/').collect();
         if parts.len() != 3 { continue; }
-        let tool_name = parts[1].to_string();
+        let tool_name    = parts[1].to_string();
+        let node_id_str  = parts[2].to_string();
         if !seen.insert(tool_name.clone()) { continue; }
-        let Ok(nid) = parts[2].parse::<NodeId>() else { continue };
         let Ok(schema) = serde_json::from_slice::<Value>(&schema_bytes) else { continue };
         let input_schema = schema.get("inputSchema").cloned()
             .unwrap_or_else(|| json!({"type":"object","properties":{}}));
         let description = schema["description"].as_str().unwrap_or("").to_string();
-        tools.push((tool_name.clone(), nid, json!({
+        tools.push((tool_name.clone(), node_id_str, json!({
             "type": "function",
             "function": { "name": tool_name, "description": description, "parameters": input_schema }
         })));
     }
     tools
+}
+
+fn find_tool_node(agent: &GossipAgent, tool_name: &str) -> Option<String> {
+    let entries = agent.scan_prefix(&format!("tools/{tool_name}/"));
+    let (key, _) = entries.into_iter().next()?;
+    let parts: Vec<&str> = key.splitn(3, '/').collect();
+    if parts.len() < 3 { return None; }
+    Some(parts[2].to_string())
 }
 
 async fn invoke_tool(agent: &GossipAgent, tool_name: &str, args: Value) -> Result<Value, String> {
@@ -324,20 +357,16 @@ async fn invoke_tool(agent: &GossipAgent, tool_name: &str, args: Value) -> Resul
         .ok_or_else(|| format!("no provider for tool '{tool_name}'"))?;
     let parts: Vec<&str> = key.splitn(3, '/').collect();
     let nid: NodeId = parts[2].parse().map_err(|e: mycelium::GossipError| e.to_string())?;
-
     let rpc_req = json!({
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": { "name": tool_name, "arguments": args }
     });
-
-    info!("[llm] → {tool_name}({args})  via {nid}");
-
+    info!("[llm] → {tool_name}({args}) via {nid}");
     let reply = agent.rpc_call(
         nid, signal_kind::MCP_INVOKE,
         Bytes::from(rpc_req.to_string()),
         Duration::from_secs(30),
     ).await.map_err(|e| e.to_string())?;
-
     let resp: Value = serde_json::from_slice(&reply).map_err(|e| e.to_string())?;
     if let Some(err) = resp.get("error") {
         return Err(err["message"].as_str().unwrap_or("tool error").to_string());
@@ -345,147 +374,370 @@ async fn invoke_tool(agent: &GossipAgent, tool_name: &str, args: Value) -> Resul
     Ok(resp["result"].clone())
 }
 
-async fn llm_step(
-    cfg:      &LlmCfg,
-    messages: &[Value],
-    tools:    &[(String, NodeId, Value)],
-) -> Result<Option<(String, Value)>, String> {
-    let tool_defs: Vec<Value> = tools.iter().map(|(_, _, d)| d.clone()).collect();
+// ── LLM step ───────────────────────────────────────────────────────────────────
+
+struct ToolCallReq {
+    id:   String,
+    name: String,
+    args: Value,
+}
+
+enum LlmStep {
+    ToolCalls(Vec<ToolCallReq>),
+    Answer(String),
+}
+
+async fn llm_step(cfg: &LlmCfg, messages: &[Value], tool_defs: &[Value]) -> Result<LlmStep, String> {
+    let mut req_body = json!({ "model": cfg.model, "messages": messages });
+    if !tool_defs.is_empty() {
+        req_body["tools"]       = json!(tool_defs);
+        req_body["tool_choice"] = json!("auto");
+    }
     let resp = reqwest::Client::new()
         .post(format!("{}/chat/completions", cfg.base_url))
         .bearer_auth(&cfg.api_key)
-        .json(&json!({
-            "model":       cfg.model,
-            "messages":    messages,
-            "tools":       tool_defs,
-            "tool_choice": "auto",
-        }))
-        .timeout(Duration::from_secs(60))
+        .json(&req_body)
+        .timeout(Duration::from_secs(120))
         .send().await.map_err(|e| format!("LLM request failed: {e}"))?
-        .json::<Value>().await.map_err(|e| format!("LLM response parse failed: {e}"))?;
+        .json::<Value>().await.map_err(|e| format!("LLM parse failed: {e}"))?;
 
     if let Some(err) = resp.get("error") {
-        return Err(format!("LLM API error: {}", err["message"].as_str().unwrap_or("unknown")));
+        return Err(format!("LLM error: {}", err["message"].as_str().unwrap_or("unknown")));
     }
-
-    let choice = resp["choices"].get(0).ok_or("empty choices from LLM")?;
-    if choice["finish_reason"].as_str() == Some("tool_calls") {
-        let tc   = &choice["message"]["tool_calls"][0];
-        let name = tc["function"]["name"].as_str().unwrap_or("").to_string();
-        let args: Value = serde_json::from_str(
-            tc["function"]["arguments"].as_str().unwrap_or("{}"),
-        ).unwrap_or(json!({}));
-        Ok(Some((name, args)))
-    } else {
-        Ok(None)
+    let msg = &resp["choices"][0]["message"];
+    if let Some(tcs) = msg["tool_calls"].as_array() {
+        if !tcs.is_empty() {
+            let calls: Vec<ToolCallReq> = tcs.iter().filter_map(|tc| {
+                let id   = tc["id"].as_str()?.to_string();
+                let name = tc["function"]["name"].as_str()?.to_string();
+                let args: Value = serde_json::from_str(
+                    tc["function"]["arguments"].as_str().unwrap_or("{}"),
+                ).unwrap_or(json!({}));
+                Some(ToolCallReq { id, name, args })
+            }).collect();
+            if !calls.is_empty() {
+                return Ok(LlmStep::ToolCalls(calls));
+            }
+        }
     }
+    Ok(LlmStep::Answer(msg["content"].as_str().unwrap_or("").to_string()))
 }
 
-async fn run_llm(agent: Arc<GossipAgent>, cfg: LlmCfg, task: String) {
-    // Wait for tool nodes to join the mesh
-    info!("[llm] waiting {TOOL_SETTLE_SECS}s for tool nodes to advertise...");
-    time::sleep(Duration::from_secs(TOOL_SETTLE_SECS)).await;
+// ── Planning cycle (spawned per user message) ──────────────────────────────────
 
-    loop {
-        let tools = discover_tools(&agent);
-        if tools.is_empty() {
-            warn!("[llm] no tools discovered yet, retrying in 3s...");
-            time::sleep(Duration::from_secs(3)).await;
-            continue;
+async fn planning_cycle(state: Arc<AppState>) {
+    // If tool nodes aren't visible yet, wait briefly
+    if discover_tools(&state.agent).is_empty() {
+        let _ = state.tx.send(ChatEvent::Thinking {
+            content: "Waiting for tool nodes to join the mesh...".into(),
+        });
+        for _ in 0..10u8 {
+            time::sleep(Duration::from_secs(2)).await;
+            if !discover_tools(&state.agent).is_empty() { break; }
         }
-        let tool_names: Vec<&str> = tools.iter().map(|(n, _, _)| n.as_str()).collect();
-        info!("[llm] discovered {} tools: {}", tools.len(), tool_names.join(", "));
-        break;
     }
 
-    let tools = discover_tools(&agent);
-    info!("[llm] task: {task}");
+    let tools_info = discover_tools(&state.agent);
+    let tool_defs: Vec<Value> = tools_info.iter().map(|(_, _, d)| d.clone()).collect();
+    let _ = state.tx.send(ChatEvent::Thinking {
+        content: format!("Planning with {} tool(s)...", tools_info.len()),
+    });
 
-    let mut messages = vec![
-        json!({"role":"system","content":
-            "You are a helpful assistant. Use the available tools to answer the user's question \
-             step by step. Stop calling tools once you have all the information needed."}),
-        json!({"role":"user","content": task}),
-    ];
+    let mut messages: Vec<Value> = state.history.lock().await.clone();
 
     let mut turn = 0usize;
     loop {
         if turn >= MAX_TURNS {
-            error!("[llm] reached max turns ({MAX_TURNS}) — aborting");
+            let _ = state.tx.send(ChatEvent::Error {
+                message: format!("Reached max turns ({MAX_TURNS}) without a final answer."),
+            });
             break;
         }
-
-        match llm_step(&cfg, &messages, &tools).await {
+        match llm_step(&state.cfg, &messages, &tool_defs).await {
             Err(e) => {
-                error!("[llm] LLM error: {e}");
+                let _ = state.tx.send(ChatEvent::Error { message: e });
                 break;
             }
-            Ok(None) => {
-                // LLM is done — extract and print the final answer
-                let final_msg = match llm_step_final_content(&cfg, &messages).await {
-                    Ok(content) => content,
-                    Err(e) => { error!("[llm] final message error: {e}"); break; }
-                };
-                info!("[llm] ✓ DONE after {turn} tool call(s)");
-                println!("\n╔═══════════════════════════════════════════════╗");
-                println!("║  TASK:  {task}");
-                println!("╠═══════════════════════════════════════════════╣");
-                println!("║  ANSWER:\n");
-                for line in final_msg.lines() {
-                    println!("  {line}");
-                }
-                println!("╚═══════════════════════════════════════════════╝\n");
+            Ok(LlmStep::Answer(content)) => {
+                messages.push(json!({"role": "assistant", "content": &content}));
+                let _ = state.tx.send(ChatEvent::Assistant { content });
                 break;
             }
-            Ok(Some((tool_name, args))) => {
-                match invoke_tool(&agent, &tool_name, args.clone()).await {
-                    Err(e) => {
-                        error!("[llm] ← tool error from {tool_name}: {e}");
-                        messages.push(json!({"role":"assistant","content":null,"tool_calls":[{
-                            "id":"c0","type":"function",
-                            "function":{"name":tool_name,"arguments":args.to_string()}
-                        }]}));
-                        messages.push(json!({"role":"tool","tool_call_id":"c0",
-                            "content":format!("Error: {e}")}));
-                    }
-                    Ok(result) => {
-                        info!("[llm] ← {} result: {}", tool_name,
-                            serde_json::to_string_pretty(&result).unwrap_or_default());
-                        messages.push(json!({"role":"assistant","content":null,"tool_calls":[{
-                            "id":"c0","type":"function",
-                            "function":{"name":tool_name,"arguments":args.to_string()}
-                        }]}));
-                        messages.push(json!({"role":"tool","tool_call_id":"c0",
-                            "content":result.to_string()}));
+            Ok(LlmStep::ToolCalls(calls)) => {
+                let tc_array: Vec<Value> = calls.iter().map(|tc| json!({
+                    "id": tc.id, "type": "function",
+                    "function": {"name": tc.name, "arguments": tc.args.to_string()}
+                })).collect();
+                messages.push(json!({"role": "assistant", "content": null, "tool_calls": tc_array}));
+
+                for tc in &calls {
+                    let node_id = find_tool_node(&state.agent, &tc.name)
+                        .unwrap_or_else(|| "unknown".into());
+                    let _ = state.tx.send(ChatEvent::ToolCall {
+                        tool: tc.name.clone(), node_id, args: tc.args.clone(),
+                    });
+                    match invoke_tool(&state.agent, &tc.name, tc.args.clone()).await {
+                        Ok(result) => {
+                            let _ = state.tx.send(ChatEvent::ToolResult {
+                                tool: tc.name.clone(), result: result.clone(),
+                            });
+                            messages.push(json!({
+                                "role": "tool", "tool_call_id": tc.id,
+                                "content": result.to_string()
+                            }));
+                        }
+                        Err(e) => {
+                            let _ = state.tx.send(ChatEvent::ToolError {
+                                tool: tc.name.clone(), error: e.clone(),
+                            });
+                            messages.push(json!({
+                                "role": "tool", "tool_call_id": tc.id,
+                                "content": format!("Error: {e}")
+                            }));
+                        }
                     }
                 }
                 turn += 1;
             }
         }
     }
+
+    // Persist final conversation state for multi-turn follow-ups
+    *state.history.lock().await = messages;
+    state.busy.store(false, Ordering::SeqCst);
+    let _ = state.tx.send(ChatEvent::Idle);
 }
 
-// A follow-up call without tools to get the final text answer.
-async fn llm_step_final_content(cfg: &LlmCfg, messages: &[Value]) -> Result<String, String> {
-    let resp = reqwest::Client::new()
-        .post(format!("{}/chat/completions", cfg.base_url))
-        .bearer_auth(&cfg.api_key)
-        .json(&json!({ "model": cfg.model, "messages": messages }))
-        .timeout(Duration::from_secs(60))
-        .send().await.map_err(|e| format!("LLM final request failed: {e}"))?
-        .json::<Value>().await.map_err(|e| format!("LLM final parse failed: {e}"))?;
+// ── HTTP handlers ──────────────────────────────────────────────────────────────
 
-    Ok(resp["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("(no response)")
-        .to_string())
+async fn handle_root() -> Response {
+    Html(chat_html()).into_response()
 }
 
-// ── main ──────────────────────────────────────────────────────────────────────
+#[derive(Deserialize)]
+struct ChatReq { message: String }
+
+async fn handle_chat(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ChatReq>,
+) -> Response {
+    if req.message.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "empty message"}))).into_response();
+    }
+    if state.busy.swap(true, Ordering::SeqCst) {
+        return (StatusCode::CONFLICT, Json(json!({"error": "busy — please wait for the current reply"}))).into_response();
+    }
+    let content = req.message.trim().to_string();
+    state.history.lock().await.push(json!({"role": "user", "content": &content}));
+    let _ = state.tx.send(ChatEvent::UserMessage { content });
+    tokio::spawn(planning_cycle(Arc::clone(&state)));
+    (StatusCode::ACCEPTED, Json(json!({"ok": true}))).into_response()
+}
+
+async fn handle_stream(
+    State(state): State<Arc<AppState>>,
+) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+    let rx = state.tx.subscribe();
+    let stream = BroadcastStream::new(rx).filter_map(|msg| async move {
+        let event = msg.ok()?;
+        let data  = serde_json::to_string(&event).ok()?;
+        Some(Ok::<_, Infallible>(Event::default().data(data)))
+    });
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+async fn handle_mesh(State(state): State<Arc<AppState>>) -> Json<Value> {
+    let tools: Vec<Value> = discover_tools(&state.agent)
+        .into_iter()
+        .map(|(name, node_id, def)| json!({
+            "name":        name,
+            "node_id":     node_id,
+            "description": def["function"]["description"].as_str().unwrap_or("")
+        }))
+        .collect();
+    Json(json!({ "tools": tools, "model": state.cfg.model }))
+}
+
+// ── Chat server ────────────────────────────────────────────────────────────────
+
+async fn run_chat_server(agent: Arc<GossipAgent>, cfg: LlmCfg, chat_port: u16) {
+    info!("[llm] waiting {TOOL_SETTLE_SECS}s for mesh to converge...");
+    time::sleep(Duration::from_secs(TOOL_SETTLE_SECS)).await;
+
+    let (tx, _) = broadcast::channel::<ChatEvent>(512);
+    let state = Arc::new(AppState {
+        agent,
+        cfg: cfg.clone(),
+        history: Mutex::new(vec![json!({"role": "system", "content":
+            "You are a helpful assistant with access to tools for weather lookups, \
+             arithmetic calculations, Wikipedia summaries, and web page fetching. \
+             Use the available tools whenever they help answer the user's question. \
+             Keep answers concise and factual."})]),
+        tx,
+        busy: AtomicBool::new(false),
+    });
+
+    let router = Router::new()
+        .route("/",       get(handle_root))
+        .route("/chat",   post(handle_chat))
+        .route("/stream", get(handle_stream))
+        .route("/mesh",   get(handle_mesh))
+        .with_state(Arc::clone(&state));
+
+    let addr = format!("0.0.0.0:{chat_port}");
+    info!("[llm] Chat UI ready → http://{addr}/  (model: {})", cfg.model);
+    let listener = tokio::net::TcpListener::bind(&addr).await
+        .expect("bind chat port");
+    axum::serve(listener, router).await.expect("serve chat");
+}
+
+// ── Inline chat UI ─────────────────────────────────────────────────────────────
+
+fn chat_html() -> &'static str {
+    r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mycelium Chat</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:#0f0f1a;color:#e2e8f0;height:100vh;display:flex;flex-direction:column}
+header{background:#1a1a2e;border-bottom:1px solid #2d2d4e;padding:12px 20px;display:flex;align-items:center;gap:12px;flex-shrink:0}
+header h1{font-size:1.05rem;font-weight:600;color:#a78bfa}
+#mesh-info{font-size:0.72rem;color:#64748b;margin-left:auto;text-align:right;line-height:1.4}
+#chat{flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:10px}
+.bubble{max-width:76%;padding:10px 14px;border-radius:14px;line-height:1.6;font-size:0.88rem;white-space:pre-wrap;word-break:break-word}
+.bubble.user{align-self:flex-end;background:#4c1d95;color:#ede9fe;border-bottom-right-radius:4px}
+.bubble.assistant{align-self:flex-start;background:#1e293b;color:#e2e8f0;border-bottom-left-radius:4px}
+.bubble.thinking{align-self:flex-start;background:#0f172a;color:#475569;font-style:italic;border:1px dashed #2d2d4e;border-bottom-left-radius:4px;font-size:0.8rem}
+.bubble.error-msg{align-self:center;background:#2d1a1a;color:#f87171;border:1px solid #7f1d1d;font-size:0.82rem;text-align:center;border-radius:8px}
+.tool-card{align-self:flex-start;background:#0d1117;border:1px solid #21262d;border-radius:10px;padding:10px 14px;font-size:0.78rem;max-width:84%;font-family:monospace}
+.tool-name{color:#79c0ff;font-weight:700;font-size:0.82rem}
+.tool-node{color:#6e7681;font-size:0.68rem;margin-top:2px}
+.tool-args{color:#adbac7;margin-top:6px;opacity:0.85;white-space:pre-wrap}
+.tool-result{color:#56d364;margin-top:6px;white-space:pre-wrap}
+.tool-err{color:#f85149;margin-top:6px}
+#input-area{background:#1a1a2e;border-top:1px solid #2d2d4e;padding:12px 16px;display:flex;gap:8px;flex-shrink:0}
+#msg{flex:1;background:#0d1117;border:1px solid #2d2d4e;border-radius:10px;padding:10px 14px;color:#e2e8f0;font-size:0.88rem;outline:none;resize:none;font-family:inherit;line-height:1.4;max-height:140px;overflow-y:auto}
+#msg:focus{border-color:#6d28d9}
+#msg::placeholder{color:#475569}
+#msg:disabled,#send:disabled{opacity:0.45;cursor:not-allowed}
+#send{background:#6d28d9;color:#ede9fe;border:none;border-radius:10px;padding:10px 22px;cursor:pointer;font-size:0.88rem;transition:background .15s;white-space:nowrap;align-self:flex-end}
+#send:hover:not(:disabled){background:#7c3aed}
+::-webkit-scrollbar{width:5px}
+::-webkit-scrollbar-track{background:#0f0f1a}
+::-webkit-scrollbar-thumb{background:#2d2d4e;border-radius:3px}
+</style>
+</head>
+<body>
+<header>
+  <h1>&#127812; Mycelium Chat</h1>
+  <div id="mesh-info">connecting…</div>
+</header>
+<div id="chat"></div>
+<div id="input-area">
+  <textarea id="msg" rows="1" placeholder="Ask anything — weather, maths, Wikipedia, web…"></textarea>
+  <button id="send">Send</button>
+</div>
+<script>
+(function(){
+var chat=document.getElementById('chat');
+var msg=document.getElementById('msg');
+var send=document.getElementById('send');
+var lastCard=null;
+
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+function addBubble(cls,text){
+  var d=document.createElement('div');
+  d.className='bubble '+cls;
+  d.textContent=text;
+  chat.appendChild(d);
+  chat.scrollTop=chat.scrollHeight;
+  return d;
+}
+
+function addCard(tool,nodeId,args){
+  var d=document.createElement('div');
+  d.className='tool-card';
+  d.innerHTML='<div class="tool-name">&#9889; '+esc(tool)+'()</div>'
+    +'<div class="tool-node">node: '+esc(nodeId)+'</div>'
+    +'<div class="tool-args">'+esc(JSON.stringify(args,null,2))+'</div>';
+  chat.appendChild(d);
+  chat.scrollTop=chat.scrollHeight;
+  return d;
+}
+
+function appendToCard(card,cls,content){
+  var d=document.createElement('div');
+  d.className=cls;
+  d.textContent=content;
+  card.appendChild(d);
+  chat.scrollTop=chat.scrollHeight;
+}
+
+function setBusy(v){
+  msg.disabled=v;
+  send.disabled=v;
+  if(!v){msg.focus();}
+}
+
+var es=new EventSource('/stream');
+es.onmessage=function(e){
+  var ev=JSON.parse(e.data);
+  if(ev.type==='user_message'){addBubble('user',ev.content);lastCard=null;}
+  else if(ev.type==='thinking'){addBubble('thinking',ev.content);}
+  else if(ev.type==='tool_call'){lastCard=addCard(ev.tool,ev.node_id,ev.args);}
+  else if(ev.type==='tool_result'){if(lastCard)appendToCard(lastCard,'tool-result',JSON.stringify(ev.result,null,2));}
+  else if(ev.type==='tool_error'){if(lastCard)appendToCard(lastCard,'tool-err','Error: '+ev.error);}
+  else if(ev.type==='assistant'){addBubble('assistant',ev.content);lastCard=null;}
+  else if(ev.type==='error'){addBubble('error-msg',ev.message);}
+  else if(ev.type==='idle'){setBusy(false);}
+};
+es.onerror=function(){
+  document.getElementById('mesh-info').textContent='stream disconnected — reload to reconnect';
+};
+
+function doSend(){
+  var text=msg.value.trim();
+  if(!text||send.disabled)return;
+  msg.value='';
+  msg.style.height='auto';
+  setBusy(true);
+  fetch('/chat',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({message:text})
+  }).then(function(r){
+    if(!r.ok){r.json().then(function(j){addBubble('error-msg',j.error||'Send failed');setBusy(false);});}
+  }).catch(function(e){addBubble('error-msg','Network error: '+e);setBusy(false);});
+}
+
+send.addEventListener('click',doSend);
+msg.addEventListener('keydown',function(e){
+  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();doSend();}
+});
+msg.addEventListener('input',function(){
+  this.style.height='auto';
+  this.style.height=Math.min(this.scrollHeight,140)+'px';
+});
+
+fetch('/mesh').then(function(r){return r.json();}).then(function(d){
+  var names=d.tools.map(function(t){return t.name;}).join(', ');
+  document.getElementById('mesh-info').textContent=
+    d.tools.length+' tools: '+names+'\nmodel: '+d.model;
+}).catch(function(){});
+})();
+</script>
+</body>
+</html>"##
+}
+
+// ── main ───────────────────────────────────────────────────────────────────────
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialise tracing — uses RUST_LOG env var (default: info)
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_env("RUST_LOG")
@@ -493,21 +745,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    let role = std::env::var("MYCELIUM_ROLE")
-        .unwrap_or_else(|_| "tool-a".to_string());
+    let role = std::env::var("MYCELIUM_ROLE").unwrap_or_else(|_| "tool-a".to_string());
     let port: u16 = std::env::var("MYCELIUM_PORT")
-        .ok().and_then(|v| v.parse().ok())
-        .unwrap_or(GOSSIP_PORT_DEFAULT);
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(GOSSIP_PORT_DEFAULT);
     let http_port: u16 = std::env::var("MYCELIUM_HTTP_PORT")
-        .ok().and_then(|v| v.parse().ok())
-        .unwrap_or(HTTP_PORT_DEFAULT);
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(HTTP_PORT_DEFAULT);
+    let chat_port: u16 = std::env::var("CHAT_PORT")
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(CHAT_PORT_DEFAULT);
     let peer_list = std::env::var("MYCELIUM_PEERS").unwrap_or_default();
 
-    // Resolve own IP — Docker containers set HOSTNAME to the service name
     let hostname = std::env::var("MYCELIUM_HOSTNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "127.0.0.1".to_string());
-
     let my_ip = if hostname.parse::<std::net::IpAddr>().is_ok() {
         hostname.clone()
     } else {
@@ -521,38 +770,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let peers = resolve_peers(&peer_list).await;
-
-    info!(
-        role = %role,
-        my_ip = %my_ip,
-        port,
-        http_port,
-        peers = peers.len(),
-        "starting"
-    );
-
+    info!(role=%role, my_ip=%my_ip, port, http_port, peers=peers.len(), "starting");
     let agent = make_agent(&my_ip, peers, port, http_port).await;
-    info!("[{role}] node started — node_id={} — gateway http://0.0.0.0:{http_port}",
-          agent.node_id());
+    info!("[{role}] node_id={} gateway=http://0.0.0.0:{http_port}", agent.node_id());
 
     match role.as_str() {
         "tool-a" => run_tool_a(agent, &role).await,
         "tool-b" => run_tool_b(agent, &role).await,
-        "llm"    => {
-            let cfg  = LlmCfg::from_env();
-            if cfg.api_key.is_empty() {
-                error!("OPENAI_API_KEY is not set — LLM role requires it");
-                std::process::exit(1);
-            }
-            let task = std::env::var("DEMO_TASK")
-                .unwrap_or_else(|_| DEFAULT_TASK.to_string());
-            run_llm(agent, cfg, task).await;
-        }
-        other => {
+        "llm"    => run_chat_server(agent, LlmCfg::from_env(), chat_port).await,
+        other    => {
             error!("Unknown MYCELIUM_ROLE='{other}' — expected tool-a, tool-b, or llm");
             std::process::exit(1);
         }
     }
-
     Ok(())
 }
