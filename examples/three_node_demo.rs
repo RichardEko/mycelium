@@ -179,7 +179,9 @@ async fn make_agent(
     if let Some(dir) = data_dir {
         cfg.persistence = Some(PersistenceConfig {
             base_path:              dir,
-            sync_mode:              SyncMode::Async,
+            // Flush guarantees every WAL entry is fsynced before returning,
+            // so data survives an unclean shutdown (SIGTERM with no explicit fsync).
+            sync_mode:              SyncMode::Flush,
             snapshot_wal_threshold: 10_000,
             snapshot_interval_secs: 300,
         });
