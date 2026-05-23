@@ -87,6 +87,20 @@
 //! owns the `consensus/` prefix and reads `sys/topology-override` as a
 //! policy input, both of which are explicitly part of its namespace
 //! contract.
+//!
+//! ## Durability contract
+//!
+//! Gossip is the only replication mechanism; there is no quorum acknowledgement.
+//! For a key to survive a full-cluster restart, **at least one node that holds
+//! the key must have `PersistenceConfig` set** so the WAL survives process exit.
+//! Nodes without persistence recover via anti-entropy from live peers; they
+//! cannot contribute to full-cluster recovery.
+//!
+//! Capability and soft-state keys (`cap/`, `sys/load/`, `grp/`, `req/`) are
+//! **not** WAL-persisted by design — they regenerate via `advertise_capability`
+//! within seconds of reconnection. Hard-state application keys (`test/`,
+//! `agent/`, `consensus/`, `tools/`) should be written via `set_async` on at
+//! least one persistent node per write if restart durability is required.
 
 #![forbid(unsafe_code)]
 

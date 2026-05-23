@@ -128,6 +128,11 @@ pub(crate) struct TaskCtx {
     /// WAL handle for durable KV writes. Unset when persistence is disabled.
     /// Written once by `start()` after replay; read-only afterwards.
     pub(crate) wal: std::sync::OnceLock<Arc<crate::persistence::WalHandle>>,
+    /// Set to `true` by the first tick of any `run_kv_persist_task` (capability
+    /// or locality advertisement). Until this is `true`, soft-state keys have
+    /// not yet been written to the local store after a restart, so `/ready`
+    /// returns 503.
+    pub(crate) caps_advertised: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Core gossip agent.
@@ -286,6 +291,7 @@ impl GossipAgent {
             default_ttl,
             kv_state:        kv_state.clone(),
             wal:             std::sync::OnceLock::new(),
+            caps_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         });
 
         Self {

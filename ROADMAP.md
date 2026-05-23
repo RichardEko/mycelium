@@ -1570,7 +1570,42 @@ full mesh state.
 minimal Python SDK (`mycelium-py`) covering: `advertise_capability`, `declare_requirement`,
 `on_signal`, `emit`, `resolve`, `demand`. TypeScript follows the same gateway pattern.
 
-### 5. Observability is shallow
+### 5. No write-durability confirmation API
+
+`set_async` returns as soon as the value is written locally and handed to the
+gossip shard. There is no acknowledgement that any peer received it. A
+write-then-stop race — where the originating node is killed before gossip
+has reached a persistent peer — results in data loss if no other node holds
+the key.
+
+**What is needed:**
+
+A `set_quorum(key, value, min_acks, timeout)` API that:
+
+1. Writes the key locally and to WAL (as `set_async` does today).
+2. Subscribes to the KV watcher for the key (already exists).
+3. Waits until `min_acks` *distinct* nodes have echoed the key back via
+   anti-entropy (observable as a `subscribe` event where the echoed
+   timestamp ≥ the local write timestamp and the update's sender is a
+   different node).
+4. Returns `Ok(n_acks)` on success or `Err(Timeout)` if fewer than
+   `min_acks` nodes confirmed within `timeout`.
+
+No new wire messages are required: the existing `StateResponse` path already
+delivers the key back to the originator when a peer runs anti-entropy. The
+only additions are a per-key in-memory ACK tracker and a waker.
+
+**Interaction with persistence:** callers should pass `min_acks` equal to the
+number of persistent nodes they require to hold the key, not the total cluster
+size. Non-persistent peers can serve as ACK sources for availability but not
+for restart durability.
+
+**Scope note:** this is Layer I only; it does not replace or overlap the
+Layer III consensus API which provides total-order agreement. `set_quorum` is
+best-effort quorum write — "at least N nodes saw it" — not "all nodes agree
+on the same value at the same logical position."
+
+### 6. Observability is shallow
 
 The `tracing` crate is wired in and `dropped_frames` / `peer_drop_counts()` provide basic
 diagnostics, but there is no structured metrics export. An operator running a real cluster
@@ -1594,6 +1629,7 @@ what thresholds should trigger alerts.
 | KV persistence (WAL + snapshot/replay) | **Blocking** | **Complete** 2026-05-23 |
 | mTLS + node identity signing | **Blocking** | Pending |
 | Python language bridge (`mycelium-py`) | High | Pending |
+| `set_quorum` write-durability confirmation API | Medium | Pending |
 | Prometheus metrics export + dashboards | Medium | Pending |
 
 None of these require architectural changes. The substrate is sound; these are engineering

@@ -307,7 +307,7 @@ async fn tool_wiki(args: Value) -> Result<Value, String> {
 // ── Tool node runners ──────────────────────────────────────────────────────────
 
 async fn run_tool_a(agent: Arc<GossipAgent>, role: &str) {
-    let _role_cap = agent.advertise_capability(Capability::new("role", "tool-a"), Duration::from_secs(30));
+    let _role_cap = agent.advertise_capability(Capability::new("role", "tool-a"), Duration::from_secs(5));
     let _weather = register(
         &agent, "weather",
         "Get current weather conditions for a city. Input: {\"city\": \"London\"}",
@@ -325,7 +325,7 @@ async fn run_tool_a(agent: Arc<GossipAgent>, role: &str) {
 }
 
 async fn run_tool_b(agent: Arc<GossipAgent>, role: &str) {
-    let _role_cap = agent.advertise_capability(Capability::new("role", "tool-b"), Duration::from_secs(30));
+    let _role_cap = agent.advertise_capability(Capability::new("role", "tool-b"), Duration::from_secs(5));
     let _calc = register(
         &agent, "calculate",
         "Evaluate a simple arithmetic expression. Input: {\"expression\": \"330 * 1024\"}",
@@ -583,7 +583,7 @@ async fn handle_mesh(State(state): State<Arc<AppState>>) -> Json<Value> {
 // ── Chat server ────────────────────────────────────────────────────────────────
 
 async fn run_chat_server(agent: Arc<GossipAgent>, cfg: LlmCfg, chat_port: u16) {
-    let _role_cap = agent.advertise_capability(Capability::new("role", "llm"), Duration::from_secs(30));
+    let _role_cap = agent.advertise_capability(Capability::new("role", "llm"), Duration::from_secs(5));
     info!("[llm] waiting {TOOL_SETTLE_SECS}s for mesh to converge...");
     time::sleep(Duration::from_secs(TOOL_SETTLE_SECS)).await;
 
@@ -673,7 +673,7 @@ async fn mgmt_handle_state(State(s): State<Arc<MgmtState>>) -> Json<Value> {
 }
 
 async fn run_mgmt_server(agent: Arc<GossipAgent>, mgmt_port: u16) {
-    let _role_cap = agent.advertise_capability(Capability::new("role", "mgmt"), Duration::from_secs(30));
+    let _role_cap = agent.advertise_capability(Capability::new("role", "mgmt"), Duration::from_secs(5));
 
     let state = Arc::new(MgmtState { agent });
     let router = Router::new()
@@ -696,6 +696,10 @@ struct NodeState {
 
 async fn node_health() -> StatusCode {
     StatusCode::OK
+}
+
+async fn node_ready(State(s): State<Arc<NodeState>>) -> StatusCode {
+    if s.agent.is_ready() { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE }
 }
 
 async fn node_kv_get(
@@ -727,7 +731,7 @@ async fn node_emit(
 }
 
 async fn run_node(agent: Arc<GossipAgent>, role: &str, http_port: u16) {
-    let _role_cap = agent.advertise_capability(Capability::new("role", "node"), Duration::from_secs(30));
+    let _role_cap = agent.advertise_capability(Capability::new("role", "node"), Duration::from_secs(5));
 
     // Record test.signal arrivals under a per-hostname key so each node's
     // reception can be queried independently in integration tests.
@@ -743,8 +747,9 @@ async fn run_node(agent: Arc<GossipAgent>, role: &str, http_port: u16) {
 
     let state = Arc::new(NodeState { agent });
     let router = Router::new()
-        .route("/health",     get(node_health))
-        .route("/kv/{*key}",  get(node_kv_get).put(node_kv_put))
+        .route("/health",      get(node_health))
+        .route("/ready",       get(node_ready))
+        .route("/kv/{*key}",   get(node_kv_get).put(node_kv_put))
         .route("/emit/{kind}", post(node_emit))
         .with_state(state);
 

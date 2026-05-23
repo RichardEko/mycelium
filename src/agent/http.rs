@@ -74,6 +74,7 @@ pub(super) async fn run_http_server(
     let app = Router::new()
         // ── Library endpoints ──────────────────────────────────────────────
         .route("/health",          get(health_handler))
+        .route("/ready",           get(ready_handler))
         .route("/stats",           get(stats_handler))
         .route("/signals/{kind}",  get(signal_sse_handler))
         .route("/mcp",             post(mcp_handler))
@@ -107,6 +108,21 @@ async fn health_handler(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
         "status":  "ok",
         "node_id": ctx.agent_ctx.node_id.to_string(),
     }))
+}
+
+/// Readiness probe: returns 200 once soft-state keys (capabilities, locality)
+/// have been written to the local store after startup or restart.
+/// Returns 503 while WAL replay is still pending or the first advertisement
+/// tick has not yet fired.
+///
+/// Use `/health` for liveness; use `/ready` before sending traffic that
+/// depends on accurate capability or membership state.
+async fn ready_handler(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
+    if ctx.agent_ctx.caps_advertised.load(std::sync::atomic::Ordering::Acquire) {
+        (StatusCode::OK, Json(json!({ "status": "ready", "node_id": ctx.agent_ctx.node_id.to_string() }))).into_response()
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "status": "starting", "node_id": ctx.agent_ctx.node_id.to_string() }))).into_response()
+    }
 }
 
 async fn stats_handler(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {

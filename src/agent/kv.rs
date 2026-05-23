@@ -390,6 +390,22 @@ impl GossipAgent {
     /// Note: `dead_shards` may transiently report all shards as dead in the brief
     /// window between `start()` returning and the shard tasks being scheduled by
     /// the tokio runtime. This is normal and resolves on the next call.
+    /// Returns `true` once the first soft-state advertisement tick has fired
+    /// after startup or restart.
+    ///
+    /// Hard state (WAL replay) completes before `start()` returns, so
+    /// `get`/`scan_prefix` are accurate immediately. Soft state — capability
+    /// keys, locality, and other periodically re-advertised keys — is only
+    /// written after the first advertisement tick. Use this to implement a
+    /// readiness probe that distinguishes "process up" from "fully hydrated."
+    ///
+    /// Returns `false` until the first call to `advertise_capability`,
+    /// `advertise_locality`, or any other `run_kv_persist_task`-driven
+    /// advertisement has completed its initial tick.
+    pub fn is_ready(&self) -> bool {
+        self.task_ctx.caps_advertised.load(std::sync::atomic::Ordering::Acquire)
+    }
+
     pub fn system_stats(&self) -> SystemStats {
         let running = AgentState::from_u8(self.state.load(Ordering::Relaxed)) == AgentState::Running;
         let gossip_shard_queue_depths: Vec<usize> = self.task_ctx.gossip_txs.iter()
@@ -442,6 +458,7 @@ pub(crate) async fn run_kv_persist_task(
 ) {
     let mut ticker = time::interval(interval);
     ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+    let mut first_tick = true;
     loop {
         tokio::select! { biased;
             _ = &mut cancel_rx               => break,
@@ -455,6 +472,10 @@ pub(crate) async fn run_kv_persist_task(
                     &ctx.node_id, ctx.default_ttl, kv_key.clone(), payload, false, &ctx.hlc,
                 );
                 apply_and_notify(&ctx.kv_state, &update);
+                if first_tick {
+                    ctx.caps_advertised.store(true, std::sync::atomic::Ordering::Release);
+                    first_tick = false;
+                }
                 dispatch_gossip_try_send(
                     &ctx.gossip_txs, WireMessage::Data(update),
                     ctx.node_id.id_hash(), ForwardHint::All, &ctx.kv_state.dropped_frames,

@@ -409,6 +409,15 @@ pub(super) async fn run_health_monitor(
                 let ping_data: Bytes = ping_buf.split().freeze();
 
                 if current_peer_set != last_peer_set {
+                    // Trigger anti-entropy with every newly-visible peer so
+                    // soft-state keys (capabilities, locality) propagate on
+                    // reconnection without waiting for the next advertisement
+                    // tick.
+                    for peer in current_peer_set.difference(&last_peer_set) {
+                        request_state(peer, &peer_writers, writer_depth, backoff,
+                            idle_timeout, &shutdown_tx, &node_id, &hash_acc,
+                            &dropped_frames, vec![]);
+                    }
                     let peer_list: Arc<[NodeId]> = current_peer_set.iter().cloned().collect();
                     let _ = peer_list_tx.send(peer_list);
                     cached_ping_targets.clear();
