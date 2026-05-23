@@ -626,22 +626,29 @@ async fn mgmt_handle_state(State(s): State<Arc<MgmtState>>) -> Json<Value> {
     let my_id = agent.node_id().to_string();
     node_roles.entry(my_id.clone()).or_insert_with(|| "mgmt".into());
 
-    // union all known node IDs
+    // direct TCP peers this node has open connections to right now
+    let tcp_peers: std::collections::HashSet<String> =
+        agent.peers().iter().map(|n| n.to_string()).collect();
+
+    // union all known node IDs (from role caps, tool registrations, TCP peers)
     let mut all_ids: std::collections::HashSet<String> = node_roles.keys().cloned().collect();
     all_ids.extend(node_tools.keys().cloned());
+    all_ids.extend(tcp_peers.iter().cloned());
+    all_ids.insert(my_id.clone());
 
     let mut nodes: Vec<Value> = all_ids.into_iter().map(|id| {
-        let role  = node_roles.get(&id).cloned().unwrap_or_else(|| "unknown".into());
-        let tools = node_tools.get(&id).cloned().unwrap_or_default();
-        json!({ "id": id, "role": role, "tools": tools, "is_self": id == my_id })
+        let role        = node_roles.get(&id).cloned().unwrap_or_else(|| "unknown".into());
+        let tools       = node_tools.get(&id).cloned().unwrap_or_default();
+        let tcp_live    = id == my_id || tcp_peers.contains(&id);
+        json!({ "id": id, "role": role, "tools": tools, "is_self": id == my_id, "tcp": tcp_live })
     }).collect();
-    // stable order: tool-a, tool-b, llm, mgmt, rest
     let order = |r: &str| match r { "tool-a"=>0, "tool-b"=>1, "llm"=>2, "mgmt"=>3, _=>4 };
     nodes.sort_by_key(|n| order(n["role"].as_str().unwrap_or("")));
 
     Json(json!({
         "nodes":      nodes,
         "tool_count": tools_info.len(),
+        "tcp_peers":  tcp_peers.len(),
         "self_id":    my_id,
     }))
 }
@@ -849,7 +856,8 @@ h2{font-size:0.78rem;font-weight:600;color:#475569;text-transform:uppercase;lett
 </header>
 <main>
   <div id="summary">
-    <div class="stat"><div class="stat-val" id="s-nodes">—</div><div class="stat-label">Nodes</div></div>
+    <div class="stat"><div class="stat-val" id="s-nodes">—</div><div class="stat-label">Nodes (gossip)</div></div>
+    <div class="stat"><div class="stat-val" id="s-tcp">—</div><div class="stat-label">TCP peers (live)</div></div>
     <div class="stat"><div class="stat-val" id="s-tools">—</div><div class="stat-label">Tools</div></div>
     <div class="stat"><div class="stat-val" id="s-refresh">—</div><div class="stat-label">Last refresh</div></div>
   </div>
@@ -871,17 +879,24 @@ async function refresh(){
     if(!r.ok)throw new Error('status '+r.status);
     var d=await r.json();
     document.getElementById('s-nodes').textContent=d.nodes.length;
+    document.getElementById('s-tcp').textContent=d.tcp_peers+' / '+(d.nodes.length-1);
     document.getElementById('s-tools').textContent=d.tool_count;
     document.getElementById('s-refresh').textContent=fmtTime(new Date());
-    document.getElementById('status').textContent='&#10003; connected · refreshes every 3s';
+    var allTcp=d.tcp_peers>=(d.nodes.length-1);
+    document.getElementById('status').textContent=(allTcp?'&#10003;':'&#9888;')+' '
+      +d.tcp_peers+'/'+(d.nodes.length-1)+' TCP peers connected · refreshes every 3s';
 
     var grid=document.getElementById('nodes');
     grid.innerHTML=d.nodes.map(function(n){
       var tools=n.tools.length
         ?n.tools.map(function(t){return '<span class="tool-chip">'+esc(t)+'</span>';}).join('')
         :'<span class="no-tools">no tools</span>';
+      var tcpDot=n.is_self?''
+        :(n.tcp?'<span style="color:#56d364;font-size:0.7rem;">&#11044; TCP</span>'
+               :'<span style="color:#f85149;font-size:0.7rem;">&#11044; TCP</span>');
       var self=n.is_self?'<div class="self-label">&#9654; this node</div>':'';
       return '<div class="node-card'+(n.is_self?' self':'')+'"><span class="role-badge '+roleClass(n.role)+'">'+esc(n.role)+'</span>'
+        +tcpDot
         +'<div class="node-id">'+esc(n.id)+'</div>'
         +'<div class="tool-list">'+tools+'</div>'
         +self+'</div>';
