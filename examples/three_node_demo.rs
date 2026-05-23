@@ -54,7 +54,7 @@ use axum::{
 };
 use bytes::Bytes;
 use futures_util::StreamExt;
-use mycelium::{GossipAgent, GossipConfig, McpToolHandle, NodeId, signal_kind};
+use mycelium::{Capability, CapFilter, GossipAgent, GossipConfig, McpToolHandle, NodeId, signal_kind};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::convert::Infallible;
@@ -70,6 +70,7 @@ use tracing::{error, info, warn};
 const GOSSIP_PORT_DEFAULT: u16 = 57000;
 const HTTP_PORT_DEFAULT:   u16 = 8300;
 const CHAT_PORT_DEFAULT:   u16 = 8080;
+const MGMT_PORT_DEFAULT:   u16 = 8090;
 const TOOL_SETTLE_SECS:    u64 = 8;
 const MAX_TURNS:           usize = 12;
 
@@ -287,6 +288,7 @@ async fn tool_wiki(args: Value) -> Result<Value, String> {
 // ── Tool node runners ──────────────────────────────────────────────────────────
 
 async fn run_tool_a(agent: Arc<GossipAgent>, role: &str) {
+    let _role_cap = agent.advertise_capability(Capability::new("role", "tool-a"), Duration::from_secs(30));
     let _weather = register(
         &agent, "weather",
         "Get current weather conditions for a city. Input: {\"city\": \"London\"}",
@@ -304,6 +306,7 @@ async fn run_tool_a(agent: Arc<GossipAgent>, role: &str) {
 }
 
 async fn run_tool_b(agent: Arc<GossipAgent>, role: &str) {
+    let _role_cap = agent.advertise_capability(Capability::new("role", "tool-b"), Duration::from_secs(30));
     let _calc = register(
         &agent, "calculate",
         "Evaluate a simple arithmetic expression. Input: {\"expression\": \"330 * 1024\"}",
@@ -561,6 +564,7 @@ async fn handle_mesh(State(state): State<Arc<AppState>>) -> Json<Value> {
 // ── Chat server ────────────────────────────────────────────────────────────────
 
 async fn run_chat_server(agent: Arc<GossipAgent>, cfg: LlmCfg, chat_port: u16) {
+    let _role_cap = agent.advertise_capability(Capability::new("role", "llm"), Duration::from_secs(30));
     info!("[llm] waiting {TOOL_SETTLE_SECS}s for mesh to converge...");
     time::sleep(Duration::from_secs(TOOL_SETTLE_SECS)).await;
 
@@ -589,6 +593,72 @@ async fn run_chat_server(agent: Arc<GossipAgent>, cfg: LlmCfg, chat_port: u16) {
     let listener = tokio::net::TcpListener::bind(&addr).await
         .expect("bind chat port");
     axum::serve(listener, router).await.expect("serve chat");
+}
+
+// ── Management dashboard ───────────────────────────────────────────────────────
+
+struct MgmtState {
+    agent: Arc<GossipAgent>,
+}
+
+async fn mgmt_handle_root() -> Response {
+    Html(mgmt_html()).into_response()
+}
+
+async fn mgmt_handle_state(State(s): State<Arc<MgmtState>>) -> Json<Value> {
+    let agent = &s.agent;
+
+    // tools/ → which node hosts which tool
+    let tools_info = discover_tools(agent);
+    let mut node_tools: std::collections::HashMap<String, Vec<String>> = Default::default();
+    for (tool_name, node_id_str, _) in &tools_info {
+        node_tools.entry(node_id_str.clone()).or_default().push(tool_name.clone());
+    }
+
+    // role/* capabilities → map node_id → role label
+    let mut node_roles: std::collections::HashMap<String, String> = Default::default();
+    for role_name in &["tool-a", "tool-b", "llm", "mgmt"] {
+        for (nid, _cap) in agent.resolve(&CapFilter::new("role", *role_name)) {
+            node_roles.insert(nid.to_string(), role_name.to_string());
+        }
+    }
+
+    let my_id = agent.node_id().to_string();
+    node_roles.entry(my_id.clone()).or_insert_with(|| "mgmt".into());
+
+    // union all known node IDs
+    let mut all_ids: std::collections::HashSet<String> = node_roles.keys().cloned().collect();
+    all_ids.extend(node_tools.keys().cloned());
+
+    let mut nodes: Vec<Value> = all_ids.into_iter().map(|id| {
+        let role  = node_roles.get(&id).cloned().unwrap_or_else(|| "unknown".into());
+        let tools = node_tools.get(&id).cloned().unwrap_or_default();
+        json!({ "id": id, "role": role, "tools": tools, "is_self": id == my_id })
+    }).collect();
+    // stable order: tool-a, tool-b, llm, mgmt, rest
+    let order = |r: &str| match r { "tool-a"=>0, "tool-b"=>1, "llm"=>2, "mgmt"=>3, _=>4 };
+    nodes.sort_by_key(|n| order(n["role"].as_str().unwrap_or("")));
+
+    Json(json!({
+        "nodes":      nodes,
+        "tool_count": tools_info.len(),
+        "self_id":    my_id,
+    }))
+}
+
+async fn run_mgmt_server(agent: Arc<GossipAgent>, mgmt_port: u16) {
+    let _role_cap = agent.advertise_capability(Capability::new("role", "mgmt"), Duration::from_secs(30));
+
+    let state = Arc::new(MgmtState { agent });
+    let router = Router::new()
+        .route("/",          get(mgmt_handle_root))
+        .route("/api/state", get(mgmt_handle_state))
+        .with_state(Arc::clone(&state));
+
+    let addr = format!("0.0.0.0:{mgmt_port}");
+    info!("[mgmt] Dashboard: http://{addr}/");
+    let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind mgmt port");
+    axum::serve(listener, router).await.expect("serve mgmt");
 }
 
 // ── Inline chat UI ─────────────────────────────────────────────────────────────
@@ -734,6 +804,100 @@ fetch('/mesh').then(function(r){return r.json();}).then(function(d){
 </html>"##
 }
 
+fn mgmt_html() -> &'static str {
+    r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mycelium — Mesh Dashboard</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:#0f0f1a;color:#e2e8f0;min-height:100vh}
+header{background:#1a1a2e;border-bottom:1px solid #2d2d4e;padding:14px 24px;display:flex;align-items:center;gap:12px}
+header h1{font-size:1.05rem;font-weight:700;color:#a78bfa}
+#status{font-size:0.75rem;color:#64748b;margin-left:auto}
+main{max-width:900px;margin:0 auto;padding:24px 20px}
+h2{font-size:0.78rem;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:12px}
+#nodes{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px;margin-bottom:32px}
+.node-card{background:#1e293b;border:1px solid #2d2d4e;border-radius:12px;padding:16px}
+.node-card.self{border-color:#4c1d95}
+.role-badge{display:inline-block;font-size:0.7rem;font-weight:700;padding:2px 9px;border-radius:99px;margin-bottom:10px;text-transform:uppercase;letter-spacing:.06em}
+.role-tool-a{background:#0f3460;color:#60a5fa}
+.role-tool-b{background:#0f3450;color:#34d399}
+.role-llm{background:#3b0764;color:#c084fc}
+.role-mgmt{background:#1e3a5f;color:#f59e0b}
+.role-unknown{background:#1e293b;color:#64748b}
+.node-id{font-family:monospace;font-size:0.72rem;color:#475569;word-break:break-all;margin-bottom:8px}
+.tool-list{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.tool-chip{font-size:0.68rem;background:#0d1117;border:1px solid #21262d;color:#79c0ff;border-radius:6px;padding:2px 7px;font-family:monospace}
+.no-tools{font-size:0.75rem;color:#334155;font-style:italic}
+.self-label{font-size:0.68rem;color:#f59e0b;margin-top:8px}
+#summary{background:#1e293b;border:1px solid #2d2d4e;border-radius:10px;padding:14px 18px;display:flex;gap:28px;margin-bottom:24px;flex-wrap:wrap}
+.stat{display:flex;flex-direction:column;gap:2px}
+.stat-val{font-size:1.4rem;font-weight:700;color:#a78bfa;line-height:1}
+.stat-label{font-size:0.72rem;color:#64748b}
+.chat-link{display:inline-block;margin-top:16px;background:#6d28d9;color:#ede9fe;border-radius:8px;padding:9px 20px;text-decoration:none;font-size:0.85rem;transition:background .15s}
+.chat-link:hover{background:#7c3aed}
+::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:#0f0f1a}::-webkit-scrollbar-thumb{background:#2d2d4e;border-radius:3px}
+</style>
+</head>
+<body>
+<header>
+  <h1>&#127812; Mycelium Mesh Dashboard</h1>
+  <div id="status">connecting…</div>
+</header>
+<main>
+  <div id="summary">
+    <div class="stat"><div class="stat-val" id="s-nodes">—</div><div class="stat-label">Nodes</div></div>
+    <div class="stat"><div class="stat-val" id="s-tools">—</div><div class="stat-label">Tools</div></div>
+    <div class="stat"><div class="stat-val" id="s-refresh">—</div><div class="stat-label">Last refresh</div></div>
+  </div>
+  <h2>Active Nodes</h2>
+  <div id="nodes"><div style="color:#475569;font-size:0.85rem">Loading…</div></div>
+  <a href="http://localhost:8080" target="_blank" class="chat-link">&#128172; Open Chat UI</a>
+</main>
+<script>
+(function(){
+var ROLE_LABELS={'tool-a':'tool-a','tool-b':'tool-b','llm':'llm','mgmt':'mgmt','unknown':'?'};
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function pad2(n){return n<10?'0'+n:String(n);}
+function fmtTime(d){return pad2(d.getHours())+':'+pad2(d.getMinutes())+':'+pad2(d.getSeconds());}
+function roleClass(r){var m={'tool-a':'role-tool-a','tool-b':'role-tool-b','llm':'role-llm','mgmt':'role-mgmt'};return m[r]||'role-unknown';}
+
+async function refresh(){
+  try{
+    var r=await fetch('/api/state');
+    if(!r.ok)throw new Error('status '+r.status);
+    var d=await r.json();
+    document.getElementById('s-nodes').textContent=d.nodes.length;
+    document.getElementById('s-tools').textContent=d.tool_count;
+    document.getElementById('s-refresh').textContent=fmtTime(new Date());
+    document.getElementById('status').textContent='&#10003; connected · refreshes every 3s';
+
+    var grid=document.getElementById('nodes');
+    grid.innerHTML=d.nodes.map(function(n){
+      var tools=n.tools.length
+        ?n.tools.map(function(t){return '<span class="tool-chip">'+esc(t)+'</span>';}).join('')
+        :'<span class="no-tools">no tools</span>';
+      var self=n.is_self?'<div class="self-label">&#9654; this node</div>':'';
+      return '<div class="node-card'+(n.is_self?' self':'')+'"><span class="role-badge '+roleClass(n.role)+'">'+esc(n.role)+'</span>'
+        +'<div class="node-id">'+esc(n.id)+'</div>'
+        +'<div class="tool-list">'+tools+'</div>'
+        +self+'</div>';
+    }).join('');
+  }catch(e){
+    document.getElementById('status').textContent='&#9888; offline — retrying';
+  }
+}
+refresh();
+setInterval(refresh,3000);
+})();
+</script>
+</body>
+</html>"##
+}
+
 // ── main ───────────────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -752,6 +916,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok().and_then(|v| v.parse().ok()).unwrap_or(HTTP_PORT_DEFAULT);
     let chat_port: u16 = std::env::var("CHAT_PORT")
         .ok().and_then(|v| v.parse().ok()).unwrap_or(CHAT_PORT_DEFAULT);
+    let mgmt_port: u16 = std::env::var("MGMT_PORT")
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(MGMT_PORT_DEFAULT);
     let peer_list = std::env::var("MYCELIUM_PEERS").unwrap_or_default();
 
     let hostname = std::env::var("MYCELIUM_HOSTNAME")
@@ -778,6 +944,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "tool-a" => run_tool_a(agent, &role).await,
         "tool-b" => run_tool_b(agent, &role).await,
         "llm"    => run_chat_server(agent, LlmCfg::from_env(), chat_port).await,
+        "mgmt"   => run_mgmt_server(agent, mgmt_port).await,
         other    => {
             error!("Unknown MYCELIUM_ROLE='{other}' — expected tool-a, tool-b, or llm");
             std::process::exit(1);

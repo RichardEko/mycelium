@@ -40,5 +40,7 @@ EXPOSE 57000
 EXPOSE 8300
 # Interactive chat UI (llm role only)
 EXPOSE 8080
+# Management dashboard (mgmt role only)
+EXPOSE 8090
 
 ENTRYPOINT ["mycelium-demo"]

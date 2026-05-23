@@ -63,7 +63,7 @@ services:
       MYCELIUM_ROLE:      tool-a
       MYCELIUM_PORT:      "57000"
       MYCELIUM_HTTP_PORT: "8300"
-      MYCELIUM_PEERS:     "tool-b:57000,llm:57000"
+      MYCELIUM_PEERS:     "tool-b:57000,llm:57000,mgmt:57000"
       RUST_LOG:           "info,mycelium=info"
     ports:
       - "8300:8300"
@@ -80,12 +80,34 @@ services:
       MYCELIUM_ROLE:      tool-b
       MYCELIUM_PORT:      "57000"
       MYCELIUM_HTTP_PORT: "8300"
-      MYCELIUM_PEERS:     "tool-a:57000,llm:57000"
+      MYCELIUM_PEERS:     "tool-a:57000,llm:57000,mgmt:57000"
       RUST_LOG:           "info,mycelium=info"
     ports:
       - "8301:8300"
     networks:
       - mesh
+    restart: unless-stopped
+
+  # ── Management dashboard node ────────────────────────────────────────────────
+  mgmt:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: mgmt
+    environment:
+      MYCELIUM_ROLE:      mgmt
+      MYCELIUM_PORT:      "57000"
+      MYCELIUM_HTTP_PORT: "8300"
+      MYCELIUM_PEERS:     "tool-a:57000,tool-b:57000,llm:57000"
+      RUST_LOG:           "info,mycelium=info"
+      MGMT_PORT:          "8090"
+    ports:
+      - "8090:8090"   # management dashboard — open http://localhost:8090
+    networks:
+      - mesh
+    depends_on:
+      - tool-a
+      - tool-b
     restart: unless-stopped
 
   # ── LLM + chat UI node ───────────────────────────────────────────────────────
@@ -98,7 +120,7 @@ services:
       MYCELIUM_ROLE:      llm
       MYCELIUM_PORT:      "57000"
       MYCELIUM_HTTP_PORT: "8300"
-      MYCELIUM_PEERS:     "tool-a:57000,tool-b:57000"
+      MYCELIUM_PEERS:     "tool-a:57000,tool-b:57000,mgmt:57000"
       RUST_LOG:           "info,mycelium=info"
       OLLAMA_BASE_URL:    "http://ollama:11434/v1"
       OLLAMA_MODEL:       "llama3.2"
