@@ -78,6 +78,17 @@ pub struct CapFilter {
     /// decode (treating absence as "no ranking").
     #[serde(default)]
     pub ranking:    Option<CapRanking>,
+    /// If set, `resolve` skips capabilities whose KV entry has not been
+    /// refreshed within this window. Useful for crash-detection: a node
+    /// that dies without sending tombstones will have its capabilities
+    /// age out of `resolve` results after `max_age`. Must be larger than
+    /// the `interval` passed to `advertise_capability` to avoid false
+    /// positives — a multiple of 4–6× is typical.
+    ///
+    /// Not serialised (runtime-only filter; stored group requirements
+    /// do not carry liveness constraints).
+    #[serde(skip)]
+    pub max_age:    Option<std::time::Duration>,
 }
 
 /// What a node advertises it can provide.
@@ -328,7 +339,15 @@ impl CapFilter {
             name:       name.into(),
             attributes: BTreeMap::new(),
             ranking:    None,
+            max_age:    None,
         }
+    }
+
+    /// Require that each matched capability was refreshed within `window`.
+    /// Set to 4–6× the `interval` you pass to `advertise_capability`.
+    pub fn with_max_age(mut self, window: std::time::Duration) -> Self {
+        self.max_age = Some(window);
+        self
     }
 
     /// Builder-style attribute addition.

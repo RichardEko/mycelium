@@ -138,9 +138,13 @@ impl GossipAgent {
         filter: &CapFilter,
         ctx:    &CallerContext,
     ) -> Vec<(NodeId, Capability)> {
+        let now_ms = age_now_ms();
         let mut out = Vec::new();
-        for (key, bytes) in self.scan_prefix("cap/") {
+        for (key, bytes, hlc_ts) in scan_prefix_kv_with_ts(&self.kv_state, "cap/") {
             if is_cap_locality_key(&key) { continue; }
+            if let Some(max_age) = filter.max_age {
+                if is_stale(hlc_ts, now_ms, max_age) { continue; }
+            }
             let Some((node_id, _ns, _name)) = parse_cap_key_or_warn("cap/", &key) else { continue };
             let Some(cap) = Capability::decode(&bytes) else {
                 warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");
@@ -388,6 +392,15 @@ impl GossipAgent {
 /// Like `GossipAgent::scan_prefix`, but for a `KvState` reference held by a
 /// spawned task that doesn't carry a `GossipAgent` handle.
 pub(super) fn scan_prefix_kv(kv_state: &crate::store::KvState, prefix: &str) -> Vec<(Arc<str>, Bytes)> {
+    scan_prefix_kv_with_ts(kv_state, prefix)
+        .into_iter()
+        .map(|(k, v, _ts)| (k, v))
+        .collect()
+}
+
+/// Like `scan_prefix_kv`, but also returns each entry's HLC timestamp so
+/// callers can apply `CapFilter::max_age` liveness checks.
+pub(super) fn scan_prefix_kv_with_ts(kv_state: &crate::store::KvState, prefix: &str) -> Vec<(Arc<str>, Bytes, u64)> {
     let seg = prefix.find('/').map_or(prefix, |i| &prefix[..i]);
     let store_guard = kv_state.store.pin();
     let idx_guard   = kv_state.prefix_index.pin();
@@ -397,15 +410,31 @@ pub(super) fn scan_prefix_kv(kv_state: &crate::store::KvState, prefix: &str) -> 
                 if !key.starts_with(prefix) { return None; }
                 let entry = store_guard.get(key.as_ref())?;
                 let data  = entry.data.clone()?;
-                Some((key.clone(), data))
+                Some((key.clone(), data, entry.timestamp))
             })
             .collect()
     } else {
         store_guard.iter()
             .filter(|(k, v)| v.data.is_some() && k.starts_with(prefix))
-            .map(|(k, v)| (k.clone(), v.data.clone().unwrap()))
+            .map(|(k, v)| (k.clone(), v.data.clone().unwrap(), v.timestamp))
             .collect()
     }
+}
+
+/// Returns current wall-clock milliseconds for max_age comparisons.
+#[inline]
+fn age_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// True if the capability entry is older than `max_age` based on its HLC timestamp.
+#[inline]
+fn is_stale(hlc_ts: u64, now_ms: u64, max_age: std::time::Duration) -> bool {
+    let entry_physical_ms = crate::hlc::physical_ms(hlc_ts);
+    now_ms.saturating_sub(entry_physical_ms) > max_age.as_millis() as u64
 }
 
 /// Snapshot resolve from a `KvState` (used inside spawned tasks).
@@ -413,9 +442,13 @@ pub(super) fn resolve_filter_against_kv(
     kv_state: &crate::store::KvState,
     filter:   &CapFilter,
 ) -> Vec<(NodeId, Capability)> {
+    let now_ms = age_now_ms();
     let mut out = Vec::new();
-    for (key, bytes) in scan_prefix_kv(kv_state, "cap/") {
+    for (key, bytes, hlc_ts) in scan_prefix_kv_with_ts(kv_state, "cap/") {
         if is_cap_locality_key(&key) { continue; }
+        if let Some(max_age) = filter.max_age {
+            if is_stale(hlc_ts, now_ms, max_age) { continue; }
+        }
         let Some((node_id, _ns, _name)) = parse_cap_key_or_warn("cap/", &key) else { continue };
         let Some(cap) = Capability::decode(&bytes) else {
             warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");

@@ -646,11 +646,16 @@ async fn mgmt_handle_state(State(s): State<Arc<MgmtState>>) -> Json<Value> {
         node_tools.entry(node_id_str.clone()).or_default().push(tool_name.clone());
     }
 
-    // role/* capabilities → map node_id → role label
+    // role/* capabilities → map node_id → role label.
+    // Use with_max_age so crashed nodes (no tombstone) age out after 30s.
+    // Iterate highest-priority roles first and use entry().or_insert() so a
+    // node that briefly held two roles (e.g. during a restart race) keeps the
+    // first-seen (higher-priority) label rather than the last-inserted one.
+    let liveness = Duration::from_secs(30); // 6× the 5s re-advertisement interval
     let mut node_roles: std::collections::HashMap<String, String> = Default::default();
-    for role_name in &["tool-a", "tool-b", "llm", "mgmt", "node"] {
-        for (nid, _cap) in agent.resolve(&CapFilter::new("role", *role_name)) {
-            node_roles.insert(nid.to_string(), role_name.to_string());
+    for role_name in &["mgmt", "tool-a", "tool-b", "llm", "node"] {
+        for (nid, _cap) in agent.resolve(&CapFilter::new("role", *role_name).with_max_age(liveness)) {
+            node_roles.entry(nid.to_string()).or_insert_with(|| role_name.to_string());
         }
     }
 
