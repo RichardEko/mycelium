@@ -1,7 +1,7 @@
 # Mycelium — Engineering Roadmap
 
-> **Status:** Layer 1 complete. Layer 2 complete. Layer III (Consensus) complete. Capability & Discovery subsystem complete. Agent state machine (Layer V) complete. MCP bridge (server + client) complete. Config-driven capability probing complete. Layers 3–5 (Service Patterns / AI / Observability) planned.
-> **Last updated:** 2026-05-21
+> **Status:** Layer 1 complete. Layer 2 complete. Layer III (Consensus) complete. Capability & Discovery subsystem complete. Agent state machine (Layer V) complete. MCP bridge (server + client) complete. Config-driven capability probing complete. KV persistence (WAL + snapshot, all sync modes) complete. Layers 3–5 (Service Patterns / AI / Observability) planned.
+> **Last updated:** 2026-05-23
 
 ---
 
@@ -256,6 +256,98 @@ agent.system_stats() -> SystemStats     // includes dropped_frames
 Activity-weighted forwarding — prefer recently-active peers over randomly-discovered ones.
 Currently `max_forwarding_peers` caps the target count; a follow-on pass would weight selection
 by last-received-from timestamp so the topology self-organises around actual traffic patterns.
+
+---
+
+## Layer 1 — KV Persistence (Complete)
+
+Per-node append-only WAL plus periodic snapshot/compaction. Nodes survive process restarts and
+full-cluster cold restarts without loss of hard state. Anti-entropy sync remains the replication
+mechanism — persistence is purely local recovery.
+
+### Enabling persistence
+
+```rust
+use mycelium::{GossipConfig, PersistenceConfig, SyncMode};
+use std::path::PathBuf;
+
+let config = GossipConfig {
+    persistence: Some(PersistenceConfig {
+        base_path:               PathBuf::from("/var/lib/mycelium"),
+        sync_mode:               SyncMode::Async,   // default; Flush for hard durability
+        snapshot_wal_threshold:  10_000,             // default
+        snapshot_interval_secs:  300,                // default
+    }),
+    ..GossipConfig::default()
+};
+```
+
+`persistence: None` (the default) preserves the previous fully-in-memory behaviour.
+
+### Directory layout
+
+```
+{base_path}/{node_id}/kv/
+    wal.bin         append-only WAL  ([u32-LE-length][bincode SyncEntry])
+    snapshot.bin    last compacted full-store snapshot
+    snapshot.tmp    in-progress write; atomically renamed on completion
+```
+
+The `node_id` subdirectory gives each node its own namespace when multiple agents run on the
+same machine. The directory is created automatically on first start.
+
+### Sync modes
+
+| Mode | Durability | Cost | When to use |
+|---|---|---|---|
+| `Flush` | Survives hard crash + power loss | ~0.1–2 ms extra latency per `set_async` write | Production, consensus-heavy workloads |
+| `Async` (default) | Survives process crash; may lose last few writes on hard crash | Negligible | Most production deployments |
+| `Os` | No explicit syncs — OS decides when to flush | Zero overhead | Development / testing only |
+
+### Durability contract
+
+| Call | Durability |
+|---|---|
+| `set(key, value)` | Fire-and-forget WAL (best-effort; crash during OS flush may lose it) |
+| `delete(key)` | Same as `set` |
+| `set_async(key, value).await` | Awaits fsync in `Flush` mode; fire-and-forget in `Async`/`Os` |
+| `delete_async(key).await` | Same as `set_async` |
+| Consensus committed slot | Always fsynced (`append_sync`) regardless of `sync_mode` |
+
+### Startup replay
+
+On `agent.start()`, before the gossip loop begins:
+
+1. Load `snapshot.bin` if present — applies all entries via `apply_and_notify`
+2. Replay `wal.bin` entries with `timestamp > snapshot_hlc`
+3. Observe max replayed HLC — ensures post-restart writes strictly dominate persisted state
+4. Trigger an immediate post-replay snapshot — bounds the replay window on next restart
+5. Spawn WAL writer task; store handle for all subsequent writes
+
+### Snapshot opacity
+
+During the snapshot window the node writes `sys/load/{node_id}/persistence` with
+`is_opaque = true` so other nodes route new work elsewhere. The key is tombstoned when the
+snapshot completes. This composes automatically with all other opacity causes via the existing
+`is_self_opaque()` prefix scan — no new mechanism is required.
+
+Snapshot triggers:
+- WAL threshold reached (`snapshot_wal_threshold` entries)
+- Periodic timer (`snapshot_interval_secs`; deferred 30 s if already opaque for another reason)
+- Graceful shutdown
+
+### What is persisted vs regenerated
+
+| State | Persisted | Why |
+|---|---|---|
+| Application KV writes (`set`, `set_async`) | Yes | Hard state — must survive restart |
+| Received gossip (anti-entropy, Data frames) | Yes | Hard state — needed before anti-entropy round completes |
+| Quorum evidence (`sys/quorum/`) | Yes | Restart-safe `quorum_persistent` depends on it |
+| Consensus committed slots (`consensus/committed/`) | Yes — always fsynced | Safety: must not re-propose committed slots |
+| Opacity keys (`sys/load/*/…`) | No | Regenerated on restart (opacity governor re-advertises) |
+| Capability advertisements (`cap/`, `req/`, `gcap/`) | No | Re-advertised by `advertise_capability` handles on restart |
+| Group membership (`grp/`) | No | Re-joined via `join_group` and emergent-group watcher |
+| Consensus ballots (`consensus/ballot/`) | No | In-flight ballots abandoned on restart; peers time out cleanly |
 
 ---
 
@@ -1221,7 +1313,7 @@ Weeks:  0         2          4          6          8         10        12
 | Layer 4 | A2A wire-protocol adapter (language bridge — after MCP) | Planned |
 | Layer 5 | Metrics, Prometheus exporter, Grafana dashboard | Planned |
 | **Production** | Multi-machine integration tests + Docker Compose reference topology | **Blocking** |
-| **Production** | KV persistence: WAL + snapshot/replay; consensus committed-slot durability | **Blocking** |
+| **Production** | KV persistence: WAL + snapshot/replay; consensus committed-slot durability | **Complete** |
 | **Production** | Security: mTLS peer connections + NodeId keypair + consensus payload signing | **Blocking** |
 | Consistency overlay | `consistent_set`, `consistent_get`, `distributed_lock`, `elect_leader` | Planned |
 | Ordering overlay | `append`, `subscribe_log`, `scan_log`, `compact_log` (ordered log) | Planned |
@@ -1431,18 +1523,12 @@ processes (not in-process via loopback ports). A reference Docker Compose topolo
 `max_peers`, `max_forwarding_peers`, and `epidemic_extra_peers` sizing guidance for clusters
 of 10, 100, and 1,000 nodes.
 
-### 2. No persistence
+### 2. KV persistence — Complete (2026-05-23)
 
-The KV store is entirely in-memory. Agent state, capability history, group membership, and
-consensus ballots vanish on process restart. For any real fleet this is blocking: a node that
-restarts has no memory of what it was doing, what capabilities it advertised, or what groups
-it belonged to.
-
-**What is needed:** A pluggable persistence backend for the KV store. The minimum viable form
-is append-only WAL flush to disk (RocksDB or SQLite), with snapshot + replay on startup. The
-`ConsensusEngine`'s committed slots must survive restart for safety. Anti-entropy sync
-recovers the rest from peers, but the node needs its own committed state to avoid re-proposing
-slots that already committed.
+Per-node WAL + snapshot persistence is implemented. Nodes survive process restarts and
+full-cluster cold restarts. Consensus committed slots are always fsynced regardless of
+`sync_mode`. See the **Layer 1 — KV Persistence** section above for the full configuration
+reference.
 
 ### 3. No security layer
 
@@ -1488,13 +1574,13 @@ what thresholds should trigger alerts.
 
 ### Gap Summary
 
-| Gap | Severity | Estimated effort |
-|-----|----------|-----------------|
-| Multi-machine integration tests + deployment docs | **Blocking** | 1–2 weeks |
-| KV persistence (WAL + snapshot/replay) | **Blocking** | 2–3 weeks |
-| mTLS + node identity signing | **Blocking** | 2–3 weeks |
-| Python language bridge (`mycelium-py`) | High | 2–3 weeks |
-| Prometheus metrics export + dashboards | Medium | 1 week |
+| Gap | Severity | Status |
+|-----|----------|--------|
+| Multi-machine integration tests + deployment docs | **Blocking** | Pending |
+| KV persistence (WAL + snapshot/replay) | **Blocking** | **Complete** 2026-05-23 |
+| mTLS + node identity signing | **Blocking** | Pending |
+| Python language bridge (`mycelium-py`) | High | Pending |
+| Prometheus metrics export + dashboards | Medium | Pending |
 
 None of these require architectural changes. The substrate is sound; these are engineering
 completions on top of it.

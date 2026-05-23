@@ -2269,14 +2269,15 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
         <p style="font-size:12px; color:var(--muted);"><strong style="color:var(--text2);">Needs:</strong> 3-node integration test suite across real processes · reference Docker Compose topology · sizing guidance for 10/100/1 000-node clusters</p>
       </div>
 
-      <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:18px;">
+      <div style="background:var(--surface2); border:1px solid rgba(63,185,80,0.3); border-radius:var(--radius); padding:18px;">
         <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
-          <span style="font-size:20px;">🔴</span>
-          <span style="font-weight:700; font-size:14px;">No persistence</span>
+          <span style="font-size:20px;">🟢</span>
+          <span style="font-weight:700; font-size:14px;">KV persistence — Complete</span>
+          <span style="font-size:11px; font-weight:600; color:var(--accent2); background:rgba(63,185,80,0.1); border:1px solid rgba(63,185,80,0.3); border-radius:20px; padding:2px 10px; margin-left:auto;">shipped 2026-05-23</span>
         </div>
-        <p style="font-size:13px; color:var(--text2); margin-bottom:10px;">KV store is entirely in-memory. Agent state, capability history, group membership, and consensus ballots vanish on process restart.
-        A node that restarts has no memory of what it was doing or what it committed.</p>
-        <p style="font-size:12px; color:var(--muted);"><strong style="color:var(--text2);">Needs:</strong> Pluggable persistence backend (WAL + snapshot/replay on startup) · ConsensusEngine committed slots must survive restart for safety</p>
+        <p style="font-size:13px; color:var(--text2); margin-bottom:10px;">Per-node append-only WAL + periodic snapshot/compaction. Nodes survive process restarts and full-cluster cold restarts.
+        Consensus committed slots are always fsynced. Anti-entropy sync recovers the rest from peers after restart.</p>
+        <p style="font-size:12px; color:var(--muted);"><strong style="color:var(--text2);">Implemented:</strong> <code>PersistenceConfig</code> · <code>SyncMode</code> (Flush / Async / Os) · startup replay · post-replay snapshot · opacity during snapshot window · <code>append_sync</code> for consensus committed slots</p>
       </div>
 
       <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:18px;">
@@ -2316,7 +2317,7 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
       <thead><tr><th>Gap</th><th>Severity</th><th>Est. effort</th></tr></thead>
       <tbody>
         <tr><td>Multi-machine integration tests + deployment docs</td><td style="color:#ff7b72; font-weight:600;">Blocking</td><td>1–2 weeks</td></tr>
-        <tr><td>KV persistence (WAL + snapshot/replay)</td><td style="color:#ff7b72; font-weight:600;">Blocking</td><td>2–3 weeks</td></tr>
+        <tr><td>KV persistence (WAL + snapshot/replay)</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-23</td></tr>
         <tr><td>mTLS + node identity signing</td><td style="color:#ff7b72; font-weight:600;">Blocking</td><td>2–3 weeks</td></tr>
         <tr><td>Python language bridge (<code>mycelium-py</code>)</td><td style="color:#ffa657; font-weight:600;">High</td><td>2–3 weeks</td></tr>
         <tr><td>Prometheus metrics export + dashboards</td><td style="color:#e3b341; font-weight:600;">Medium</td><td>1 week</td></tr>
@@ -2324,24 +2325,120 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
     </table>
   </div>
 
-  <!-- ── Operator Guide (stub) ── -->
+  <!-- ── Operator Guide ── -->
   <div class="section" id="operator-guide">
     <div class="section-head">
       <h2>Operator Guide — How to Deploy</h2>
       <p style="margin-top:0.6rem;color:#94a3b8;font-size:0.95rem;">
-        This section will be filled out once the three production blockers (persistence, mTLS, multi-machine tests)
-        are resolved. Stubs below mark what will be covered.
+        KV persistence is complete and fully documented below. Sections marked <em>pending</em> will be
+        filled out when mTLS and multi-machine integration tests ship.
       </p>
     </div>
 
     <div style="background:rgba(255,166,87,0.06); border:1px solid rgba(255,166,87,0.25); border-radius:var(--radius); padding:16px 20px; margin-bottom:28px; font-size:13px; color:var(--accent4);">
-      <strong>Draft / incomplete.</strong> Content will be authored once KV persistence, mTLS, and multi-machine integration tests ship.
+      <strong>Partially complete.</strong> KV persistence configuration below is authoritative. Security (mTLS) and multi-machine deployment sections remain stubs until those blockers ship.
     </div>
 
+    <!-- ── KV Persistence — Full content ── -->
+    <div style="background:var(--surface2); border:1px solid rgba(63,185,80,0.3); border-radius:var(--radius); padding:24px; margin-bottom:28px;">
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
+        <span style="font-size:22px;">🟢</span>
+        <div style="font-weight:700; font-size:15px; color:var(--text);">KV Persistence Configuration</div>
+        <span style="font-size:11px; font-weight:600; color:var(--accent2); background:rgba(63,185,80,0.1); border:1px solid rgba(63,185,80,0.3); border-radius:20px; padding:2px 10px; margin-left:auto;">Complete — 2026-05-23</span>
+      </div>
+
+      <p style="font-size:13px; color:var(--text2); margin-bottom:18px;">
+        Add a <code>PersistenceConfig</code> to <code>GossipConfig</code> to enable per-node WAL + snapshot recovery.
+        <code>persistence: None</code> (the default) preserves fully-in-memory behaviour.
+      </p>
+
+      <pre style="background:var(--surface3); border:1px solid var(--border); border-radius:var(--radius); padding:16px; font-size:12px; color:var(--text2); overflow-x:auto; margin-bottom:18px;"><code>use mycelium::{GossipConfig, PersistenceConfig, SyncMode};
+use std::path::PathBuf;
+
+let config = GossipConfig {
+    persistence: Some(PersistenceConfig {
+        base_path:              PathBuf::from("/var/lib/mycelium"),
+        sync_mode:              SyncMode::Async,   // default; use Flush for hard durability
+        snapshot_wal_threshold: 10_000,            // default: snapshot after 10k WAL entries
+        snapshot_interval_secs: 300,               // default: periodic snapshot every 5 min
+    }),
+    ..GossipConfig::default()
+};</code></pre>
+
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-bottom:18px;">
+
+        <div>
+          <div style="font-size:13px; font-weight:600; color:var(--text); margin-bottom:8px;">Sync modes</div>
+          <table style="font-size:12px; width:100%;">
+            <thead><tr style="color:var(--muted);">
+              <th style="text-align:left; padding:4px 8px 4px 0;">Mode</th>
+              <th style="text-align:left; padding:4px 8px;">Durability</th>
+              <th style="text-align:left; padding:4px 0;">Cost</th>
+            </tr></thead>
+            <tbody>
+              <tr><td style="padding:4px 8px 4px 0; color:var(--accent);">Flush</td><td style="padding:4px 8px; color:var(--text2);">Survives hard crash + power loss</td><td style="padding:4px 0; color:var(--muted);">~0.1–2 ms per write</td></tr>
+              <tr><td style="padding:4px 8px 4px 0; color:var(--accent2);">Async</td><td style="padding:4px 8px; color:var(--text2);">Survives process crash; may lose last few writes on power loss</td><td style="padding:4px 0; color:var(--muted);">Negligible</td></tr>
+              <tr><td style="padding:4px 8px 4px 0; color:var(--muted);">Os</td><td style="padding:4px 8px; color:var(--muted);">No explicit syncs — OS decides</td><td style="padding:4px 0; color:var(--muted);">Zero overhead</td></tr>
+            </tbody>
+          </table>
+          <p style="font-size:11px; color:var(--muted); margin-top:6px;"><code>Os</code> is for development and testing only.</p>
+        </div>
+
+        <div>
+          <div style="font-size:13px; font-weight:600; color:var(--text); margin-bottom:8px;">Durability contract per call</div>
+          <table style="font-size:12px; width:100%;">
+            <thead><tr style="color:var(--muted);">
+              <th style="text-align:left; padding:4px 8px 4px 0;">API call</th>
+              <th style="text-align:left; padding:4px 0;">Guarantee</th>
+            </tr></thead>
+            <tbody>
+              <tr><td style="padding:4px 8px 4px 0; color:var(--accent);"><code>set()</code> / <code>delete()</code></td><td style="padding:4px 0; color:var(--text2);">Fire-and-forget WAL (best-effort)</td></tr>
+              <tr><td style="padding:4px 8px 4px 0; color:var(--accent);"><code>set_async()</code> / <code>delete_async()</code></td><td style="padding:4px 0; color:var(--text2);">Awaits fsync in <code>Flush</code> mode</td></tr>
+              <tr><td style="padding:4px 8px 4px 0; color:var(--accent);">Consensus committed slot</td><td style="padding:4px 0; color:var(--text2);">Always fsynced regardless of mode</td></tr>
+            </tbody>
+          </table>
+          <p style="font-size:11px; color:var(--muted); margin-top:6px;">For hard durability guarantees use <code>set_async</code> with <code>SyncMode::Flush</code>.</p>
+        </div>
+
+      </div>
+
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:18px;">
+
+        <div>
+          <div style="font-size:13px; font-weight:600; color:var(--text); margin-bottom:8px;">Directory layout</div>
+          <pre style="background:var(--surface3); border:1px solid var(--border); border-radius:var(--radius); padding:12px; font-size:11px; color:var(--text2); overflow-x:auto;">{base_path}/{node_id}/kv/
+  wal.bin        append-only WAL
+  snapshot.bin   last compacted snapshot
+  snapshot.tmp   in-progress (renamed atomically)</pre>
+          <p style="font-size:11px; color:var(--muted); margin-top:6px;">Directory created automatically. Multiple nodes on the same machine each get their own subdirectory via <code>node_id</code>.</p>
+        </div>
+
+        <div>
+          <div style="font-size:13px; font-weight:600; color:var(--text); margin-bottom:8px;">What is persisted vs regenerated</div>
+          <table style="font-size:12px; width:100%;">
+            <tbody>
+              <tr><td style="padding:3px 8px 3px 0; color:var(--accent2);">✓ persisted</td><td style="padding:3px 0; color:var(--text2);">Application KV writes, received gossip, quorum evidence, consensus committed slots</td></tr>
+              <tr><td style="padding:3px 8px 3px 0; color:var(--muted);">↺ regenerated</td><td style="padding:3px 0; color:var(--muted);">Opacity keys, capability ads, group membership, in-flight ballots</td></tr>
+            </tbody>
+          </table>
+          <p style="font-size:11px; color:var(--muted); margin-top:6px;">Soft state regenerates via <code>advertise_capability</code>, <code>join_group</code>, and the emergent-group watcher on restart.</p>
+        </div>
+
+      </div>
+
+      <div style="margin-top:16px; padding:12px 16px; background:rgba(88,166,255,0.06); border:1px solid rgba(88,166,255,0.15); border-radius:var(--radius); font-size:12px; color:var(--muted);">
+        <strong style="color:var(--text2);">Opacity during snapshot:</strong> The node writes <code>sys/load/{node_id}/persistence</code> with <code>is_opaque=true</code> while a snapshot is in progress. This routes new work to other nodes automatically via the existing opacity mechanism — no application-level coordination needed.
+      </div>
+    </div>
+
+    <!-- ── Stub cards ── -->
     <div class="two-col" style="gap:20px; margin-bottom:28px;">
 
       <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:18px;">
-        <div style="font-weight:700; font-size:14px; margin-bottom:8px; color:var(--text);">1 — Adding Mycelium to your binary</div>
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+          <div style="font-weight:700; font-size:14px; color:var(--text);">1 — Adding Mycelium to your binary</div>
+          <span style="font-size:10px; color:var(--muted); border:1px solid var(--border); border-radius:10px; padding:1px 8px;">pending</span>
+        </div>
         <ul style="font-size:13px; color:var(--muted); padding-left:18px; line-height:1.8;">
           <li>Cargo dependency and feature flags</li>
           <li>Constructing <code>GossipConfig</code>: node ID, listen address, seed peers</li>
@@ -2351,7 +2448,10 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
       </div>
 
       <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:18px;">
-        <div style="font-weight:700; font-size:14px; margin-bottom:8px; color:var(--text);">2 — Cluster bootstrap and peer discovery</div>
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+          <div style="font-weight:700; font-size:14px; color:var(--text);">2 — Cluster bootstrap and peer discovery</div>
+          <span style="font-size:10px; color:var(--muted); border:1px solid var(--border); border-radius:10px; padding:1px 8px;">pending</span>
+        </div>
         <ul style="font-size:13px; color:var(--muted); padding-left:18px; line-height:1.8;">
           <li>Static seed-peer list (simplest; suitable for small fixed clusters)</li>
           <li>DNS-based discovery (headless Kubernetes Service, AWS Route53)</li>
@@ -2361,7 +2461,10 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
       </div>
 
       <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:18px;">
-        <div style="font-weight:700; font-size:14px; margin-bottom:8px; color:var(--text);">3 — Platform-specific deployment patterns</div>
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+          <div style="font-weight:700; font-size:14px; color:var(--text);">3 — Platform-specific deployment patterns</div>
+          <span style="font-size:10px; color:var(--muted); border:1px solid var(--border); border-radius:10px; padding:1px 8px;">pending</span>
+        </div>
         <ul style="font-size:13px; color:var(--muted); padding-left:18px; line-height:1.8;">
           <li>Kubernetes: StatefulSet vs Deployment, headless service for peer DNS, PodDisruptionBudget</li>
           <li>AWS ECS: service discovery via Cloud Map, task networking modes</li>
@@ -2372,7 +2475,10 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
       </div>
 
       <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:18px;">
-        <div style="font-weight:700; font-size:14px; margin-bottom:8px; color:var(--text);">4 — Security configuration</div>
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+          <div style="font-weight:700; font-size:14px; color:var(--text);">4 — Security configuration</div>
+          <span style="font-size:10px; color:var(--muted); border:1px solid var(--border); border-radius:10px; padding:1px 8px;">pending mTLS</span>
+        </div>
         <ul style="font-size:13px; color:var(--muted); padding-left:18px; line-height:1.8;">
           <li>Generating node keypairs and the cluster CA</li>
           <li>mTLS configuration in <code>GossipConfig</code></li>
@@ -2382,7 +2488,10 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
       </div>
 
       <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:18px;">
-        <div style="font-weight:700; font-size:14px; margin-bottom:8px; color:var(--text);">5 — Wiring into your observability stack</div>
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+          <div style="font-weight:700; font-size:14px; color:var(--text);">5 — Wiring into your observability stack</div>
+          <span style="font-size:10px; color:var(--muted); border:1px solid var(--border); border-radius:10px; padding:1px 8px;">pending</span>
+        </div>
         <ul style="font-size:13px; color:var(--muted); padding-left:18px; line-height:1.8;">
           <li>Enabling the <code>/metrics</code> Prometheus scrape endpoint per cluster</li>
           <li>Key metrics to alert on: <code>gossip_peers_connected</code>, <code>gossip_frames_dropped_total</code>, <code>contract_invocation_latency_ms</code></li>
@@ -2393,13 +2502,18 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
       </div>
 
       <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:18px;">
-        <div style="font-weight:700; font-size:14px; margin-bottom:8px; color:var(--text);">6 — Sizing and tuning</div>
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+          <div style="font-weight:700; font-size:14px; color:var(--text);">6 — Sizing and tuning</div>
+          <span style="font-size:10px; color:var(--muted); border:1px solid var(--border); border-radius:10px; padding:1px 8px;">pending</span>
+        </div>
         <ul style="font-size:13px; color:var(--muted); padding-left:18px; line-height:1.8;">
           <li>Gossip fan-out and convergence time at 10 / 100 / 1 000 nodes</li>
           <li>KV store memory footprint per entry count</li>
           <li>Anti-entropy interval tuning vs bandwidth cost</li>
           <li>TTL selection for capability advertisements and load state</li>
           <li>When to shard into multiple independent clusters vs scaling a single one</li>
+          <li>Persistence: NVMe vs spinning — <code>Flush</code> adds ~0.1–0.2 ms on NVMe, ~1–2 ms on HDD</li>
+          <li>Snapshot threshold: lower for write-heavy workloads; higher (or increase interval) for read-heavy</li>
         </ul>
       </div>
 
@@ -2408,8 +2522,8 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
 
   <!-- ── Footer ── -->
   <div style="margin-top:72px; padding-top:24px; border-top:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
-    <span style="font-size:12px; color:var(--muted);">mycelium · Engineering Roadmap · 2026-05-21</span>
-    <span style="font-size:12px; color:var(--muted);">Layers 1 &amp; 2 + Capability &amp; Discovery + Agent State Machine complete · Language bridges + persistence + security next</span>
+    <span style="font-size:12px; color:var(--muted);">mycelium · Engineering Roadmap · 2026-05-23</span>
+    <span style="font-size:12px; color:var(--muted);">Layers 1 &amp; 2 + Capability &amp; Discovery + Agent State Machine + KV Persistence complete · mTLS + multi-machine tests next</span>
   </div>
 
 </div>
