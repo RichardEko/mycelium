@@ -376,18 +376,13 @@ impl AgentStateMachine {
             Bytes::from(payload.to_string()),
         );
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-        loop {
-            match tokio::time::timeout_at(deadline, veto_rx.recv()).await {
-                Ok(Some(sig)) => {
-                    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&sig.payload) {
-                        if v.get("tool").and_then(|t| t.as_str()) == Some(tool) {
-                            return Err(PolicyViolation::ApprovalVetoed(tool.to_string()));
-                        }
-                    }
-                    // Veto for a different tool — keep waiting
+        while let Ok(Some(sig)) = tokio::time::timeout_at(deadline, veto_rx.recv()).await {
+            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&sig.payload) {
+                if v.get("tool").and_then(|t| t.as_str()) == Some(tool) {
+                    return Err(PolicyViolation::ApprovalVetoed(tool.to_string()));
                 }
-                Ok(None) | Err(_) => break, // channel closed or timeout → approved
             }
+            // Veto for a different tool — keep waiting
         }
         Ok(())
     }

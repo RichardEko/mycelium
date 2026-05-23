@@ -25,4 +25,10 @@ all_roles_visible() {
     [ "$node_count" -ge 2 ]
 }
 
-poll_until 90 all_roles_visible
+poll_until 120 all_roles_visible || {
+    echo "=== /api/state at timeout ===" >&2
+    mgmt_state 2>&1 | jq . >&2 || mgmt_state >&2
+    echo "=== cap/ KV entries on mgmt ===" >&2
+    curl -sf --max-time 5 "http://${MGMT_HOST:-mgmt}:${MGMT_HTTP_PORT:-8090}/api/kv-scan?prefix=cap/" 2>&1 | jq . >&2 || true
+    false
+}

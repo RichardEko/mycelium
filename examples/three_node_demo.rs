@@ -624,6 +624,18 @@ async fn mgmt_handle_root() -> Response {
     Html(mgmt_html()).into_response()
 }
 
+async fn mgmt_kv_scan(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    State(s): State<Arc<MgmtState>>,
+) -> Json<Value> {
+    let prefix = params.get("prefix").map(|s| s.as_str()).unwrap_or("cap/");
+    let entries: Vec<Value> = s.agent.scan_prefix(prefix)
+        .into_iter()
+        .map(|(k, v)| json!({ "key": k.as_ref(), "bytes": v.len() }))
+        .collect();
+    Json(json!({ "prefix": prefix, "count": entries.len(), "entries": entries }))
+}
+
 async fn mgmt_handle_state(State(s): State<Arc<MgmtState>>) -> Json<Value> {
     let agent = &s.agent;
 
@@ -677,9 +689,10 @@ async fn run_mgmt_server(agent: Arc<GossipAgent>, mgmt_port: u16) {
 
     let state = Arc::new(MgmtState { agent });
     let router = Router::new()
-        .route("/",          get(mgmt_handle_root))
-        .route("/health",    get(|| async { StatusCode::OK }))
-        .route("/api/state", get(mgmt_handle_state))
+        .route("/",              get(mgmt_handle_root))
+        .route("/health",        get(|| async { StatusCode::OK }))
+        .route("/api/state",     get(mgmt_handle_state))
+        .route("/api/kv-scan",   get(mgmt_kv_scan))
         .with_state(Arc::clone(&state));
 
     let addr = format!("0.0.0.0:{mgmt_port}");

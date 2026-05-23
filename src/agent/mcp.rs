@@ -104,7 +104,6 @@ impl GossipAgent {
     ///     },
     /// );
     /// ```
-    #[must_use]
     pub fn register_mcp_tool<F, Fut>(
         &self,
         name:    impl Into<Arc<str>>,
@@ -338,6 +337,7 @@ impl GossipAgent {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_mcp_client_task(
     ctx:             Arc<TaskCtx>,
     mut cancel_rx:   oneshot::Receiver<()>,
