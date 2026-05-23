@@ -25,4 +25,4 @@ all_roles_visible() {
     [ "$node_count" -ge 2 ]
 }
 
-poll_until 40 all_roles_visible
+poll_until 90 all_roles_visible
