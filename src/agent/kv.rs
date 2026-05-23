@@ -54,10 +54,18 @@ impl GossipAgent {
     /// Returns `true` if the update was queued for gossip; `false` if the gossip
     /// channel was full (backpressure) or the shard has died — the update was
     /// applied locally but will not propagate to peers.
+    ///
+    /// **Durability**: when persistence is enabled, this method enqueues the write
+    /// into the WAL channel (fire-and-forget). The write is durable only if the
+    /// WAL writer drains the channel before a crash. For hard `Flush`-mode
+    /// durability use [`set_async`](Self::set_async) instead.
     #[must_use]
     pub fn set<K: Into<Arc<str>>>(&self, key: K, value: impl Into<Bytes>) -> bool {
         let key: Arc<str> = key.into();
         let update = self.make_update(key, value.into(), false);
+        if let Some(wal) = self.task_ctx.wal.get() {
+            wal.append_try(crate::framing::sync_entry_from(&update));
+        }
         apply_and_notify(&self.kv_state, &update);
         self.dispatch_update(update)
     }
@@ -77,6 +85,9 @@ impl GossipAgent {
     pub fn delete<K: Into<Arc<str>>>(&self, key: K) -> bool {
         let key: Arc<str> = key.into();
         let update = self.make_update(key, Bytes::new(), true);
+        if let Some(wal) = self.task_ctx.wal.get() {
+            wal.append_try(crate::framing::sync_entry_from(&update));
+        }
         apply_and_notify(&self.kv_state, &update);
         self.dispatch_update(update)
     }
@@ -92,6 +103,9 @@ impl GossipAgent {
     pub async fn set_async<K: Into<Arc<str>>>(&self, key: K, value: impl Into<Bytes>) -> bool {
         let key: Arc<str> = key.into();
         let update = self.make_update(key, value.into(), false);
+        if let Some(wal) = self.task_ctx.wal.get() {
+            let _ = wal.append(crate::framing::sync_entry_from(&update)).await;
+        }
         apply_and_notify(&self.kv_state, &update);
         self.dispatch_update_async(update).await
     }
@@ -107,6 +121,9 @@ impl GossipAgent {
     pub async fn delete_async<K: Into<Arc<str>>>(&self, key: K) -> bool {
         let key: Arc<str> = key.into();
         let update = self.make_update(key, Bytes::new(), true);
+        if let Some(wal) = self.task_ctx.wal.get() {
+            let _ = wal.append(crate::framing::sync_entry_from(&update)).await;
+        }
         apply_and_notify(&self.kv_state, &update);
         self.dispatch_update_async(update).await
     }

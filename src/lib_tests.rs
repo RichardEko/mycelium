@@ -127,6 +127,7 @@ fn spawn_handler(
             next_pred_watcher_id:      Arc::new(AtomicU64::new(0)),
             peer_localities:           Arc::new(papaya::HashMap::new()),
         }),
+        wal: None,
     };
     let handle = tokio::spawn(handle_connection(
         socket,
@@ -800,6 +801,7 @@ async fn test_subscribe_notified_via_gossip() {
                 next_pred_watcher_id:      Arc::new(AtomicU64::new(0)),
                 peer_localities:           Arc::new(papaya::HashMap::new()),
             }),
+            wal: None,
         };
         use crate::connection::handle_connection;
         tokio::spawn(handle_connection(reader, "127.0.0.1:0".parse().unwrap(), ctx));

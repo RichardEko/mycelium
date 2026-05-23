@@ -125,6 +125,9 @@ pub(crate) struct TaskCtx {
     pub(crate) gossip_txs:       Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]>,
     pub(crate) default_ttl:      u8,
     pub(crate) kv_state:         Arc<KvState>,
+    /// WAL handle for durable KV writes. Unset when persistence is disabled.
+    /// Written once by `start()` after replay; read-only afterwards.
+    pub(crate) wal: std::sync::OnceLock<Arc<crate::persistence::WalHandle>>,
 }
 
 /// Core gossip agent.
@@ -282,6 +285,7 @@ impl GossipAgent {
             gossip_txs,
             default_ttl,
             kv_state:        kv_state.clone(),
+            wal:             std::sync::OnceLock::new(),
         });
 
         Self {

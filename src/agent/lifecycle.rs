@@ -1,5 +1,7 @@
 use crate::error::GossipError;
 use crate::signal::reconcile_boundary_from_store;
+use crate::store::{apply_and_notify, intern_key};
+use crate::framing::GossipUpdate;
 use std::{
     net::{IpAddr, SocketAddr},
     sync::{
@@ -9,6 +11,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
+    fs as tfs,
     sync::Semaphore,
     time,
 };
@@ -49,6 +52,67 @@ impl GossipAgent {
                 ));
             }
         }
+        // Replay WAL + snapshot before any boundary/quorum warm-up reads the store.
+        if let Some(ref pcfg) = self.config.persistence {
+            let dir = pcfg.base_path.join(self.node_id.to_string()).join("kv");
+            if let Err(e) = tfs::create_dir_all(&dir).await {
+                warn!("persistence: failed to create data dir {:?}: {e}", dir);
+            } else {
+                let kv_state     = self.kv_state.clone();
+                let intern_keys  = self.config.intern_keys;
+                let intern_max   = self.config.intern_max_keys;
+                let hlc          = self.task_ctx.hlc.clone();
+                let node_id      = self.node_id.clone();
+                let default_ttl  = self.config.default_ttl;
+                let sync_mode    = pcfg.sync_mode;
+                let threshold    = pcfg.snapshot_wal_threshold;
+                let interval     = pcfg.snapshot_interval_secs;
+
+                let apply_fn = {
+                    let kv_state = kv_state.clone();
+                    move |entry: crate::framing::SyncEntry| {
+                        let key = if intern_keys {
+                            intern_key(entry.key, intern_max)
+                        } else {
+                            entry.key
+                        };
+                        let upd = GossipUpdate {
+                            nonce:        crate::framing::ANTI_ENTROPY_NONCE,
+                            sender:       0,
+                            ttl:          1,
+                            is_tombstone: entry.is_tombstone,
+                            timestamp:    entry.timestamp,
+                            key,
+                            value:        entry.value,
+                        };
+                        apply_and_notify(&kv_state, &upd);
+                    }
+                };
+
+                match crate::persistence::replay(&dir, apply_fn).await {
+                    Ok(max_ts) => {
+                        if max_ts > 0 { hlc.observe(max_ts); }
+                    }
+                    Err(e) => warn!("persistence: replay failed: {e}"),
+                }
+
+                let handle = crate::persistence::spawn_wal_writer(
+                    dir.clone(),
+                    sync_mode,
+                    threshold,
+                    interval,
+                    kv_state.clone(),
+                    node_id,
+                    hlc.clone(),
+                    default_ttl,
+                );
+                let handle = Arc::new(handle);
+                // Compact immediately so next restart has a bounded replay window.
+                let _ = handle.trigger_snapshot().await;
+                let _ = self.task_ctx.wal.set(handle);
+            }
+        }
+
         self.rehydrate_boundary_from_kv();
         self.warm_quorum_from_layer1();
         self.prewarm_peer_localities();
@@ -127,6 +191,7 @@ impl GossipAgent {
             max_peers:           self.config.max_peers,
             writer_idle_timeout: Duration::from_secs(self.config.writer_idle_timeout_secs),
             kv_state:            self.kv_state.clone(),
+            wal:                 self.task_ctx.wal.get().cloned(),
         };
         let lctx = ListenerContext {
             conn,

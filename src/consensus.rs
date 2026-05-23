@@ -29,7 +29,8 @@
 use crate::agent::{emit_signal, emit_signal_async, make_gossip_update, TaskCtx};
 use crate::config::{GroupTopologyPolicy, TopologyEnforcement};
 use crate::framing::{
-    bincode_cfg, dispatch_gossip_send, dispatch_gossip_try_send, ForwardHint, WireMessage,
+    bincode_cfg, dispatch_gossip_send, dispatch_gossip_try_send, sync_entry_from,
+    ForwardHint, GossipUpdate, WireMessage,
 };
 use crate::locality::LocalityPath;
 use crate::node_id::NodeId;
@@ -406,14 +407,16 @@ impl ConsensusEngine {
     }
 
     /// Like `kv_set` but awaits channel capacity (used by the proposer).
-    async fn set_async(&self, key: &str, value: Bytes) {
+    /// Returns the applied update so the caller can WAL-append the exact entry.
+    async fn set_async(&self, key: &str, value: Bytes) -> GossipUpdate {
         let tc = &self.task_ctx;
         let upd = make_gossip_update(&tc.node_id, tc.default_ttl, Arc::from(key), value, false, &tc.hlc);
         apply_and_notify(&tc.kv_state, &upd);
         dispatch_gossip_send(
-            &tc.gossip_txs, WireMessage::Data(upd),
+            &tc.gossip_txs, WireMessage::Data(upd.clone()),
             tc.node_id.id_hash(), ForwardHint::All,
         ).await;
+        upd
     }
 
     // ── Layer II bridge helpers ──────────────────────────────────────────────
@@ -689,7 +692,10 @@ impl ConsensusEngine {
         self.emit_async(
             Arc::from(consensus_kind::COMMIT), scope.clone(), encode_consensus_msg(&commit),
         ).await;
-        self.set_async(commit_key, value.clone()).await;
+        let committed_upd = self.set_async(commit_key, value.clone()).await;
+        if let Some(wal) = self.task_ctx.wal.get() {
+            let _ = wal.append_sync(sync_entry_from(&committed_upd)).await;
+        }
         self.kv_delete(ballot_key);
         Some(ConsensusResult::Committed {
             slot:   slot.clone(),

@@ -1,8 +1,9 @@
 use crate::error::GossipError;
 use crate::framing::{
     bincode_cfg, dispatch_gossip_try_send, is_connection_closed,
-    make_gossip_update, read_frame, shard_for_key, ForwardHint, FrameVersion, GossipUpdate,
-    SyncEntry, WireMessage, WireMessageV7, ANTI_ENTROPY_NONCE, DATA_TAG, NONCE_OFFSET, TTL_OFFSET,
+    make_gossip_update, read_frame, shard_for_key, sync_entry_from, ForwardHint, FrameVersion,
+    GossipUpdate, SyncEntry, WireMessage, WireMessageV7, ANTI_ENTROPY_NONCE, DATA_TAG,
+    NONCE_OFFSET, TTL_OFFSET,
 };
 use crate::signal::{parse_own_grp_key, Boundary, Signal, SignalHandlers, SignalScope};
 use crate::store::{apply_and_notify, intern_key, store_hash_acc, KvState};
@@ -52,6 +53,8 @@ pub(crate) struct ConnContext {
     /// Bundled KV-path state (store, subscriptions, prefix_index, hash_acc,
     /// dropped_frames, max_store_entries). Replaces five individual Arc fields.
     pub(crate) kv_state:         Arc<KvState>,
+    /// WAL handle for durable KV writes. `None` when persistence is disabled.
+    pub(crate) wal:              Option<Arc<crate::persistence::WalHandle>>,
 }
 
 pub(crate) async fn handle_connection(
@@ -63,7 +66,7 @@ pub(crate) async fn handle_connection(
         node_id, peers, gossip_txs, seen, shutdown, max_ttl,
         hlc, peer_writers, writer_depth, backoff, n_shards,
         intern_keys, intern_max_keys, signal_boundary, signal_handlers, max_peers,
-        writer_idle_timeout, kv_state,
+        writer_idle_timeout, kv_state, wal,
     } = ctx;
     let mut socket = BufReader::with_capacity(8_192, socket);
     let mut shutdown_rx = shutdown.subscribe();
@@ -299,6 +302,9 @@ pub(crate) async fn handle_connection(
                         key,
                         value:        entry.value,
                     };
+                    if let Some(ref wal) = wal {
+                        let _ = wal.append(sync_entry_from(&update)).await;
+                    }
                     apply_and_notify(&kv_state, &update);
                 }
             }
@@ -339,6 +345,9 @@ pub(crate) async fn handle_connection(
                             &kind, &sender,
                         ) {
                             let upd = make_gossip_update(&node_id, max_ttl, q_key, q_val, false, &hlc);
+                            if let Some(ref wal) = wal {
+                                let _ = wal.append(sync_entry_from(&upd)).await;
+                            }
                             apply_and_notify(&kv_state, &upd);
                             dispatch_gossip_try_send(
                                 &gossip_txs, WireMessage::Data(upd),
@@ -397,6 +406,9 @@ pub(crate) async fn handle_connection(
                 // happens-before across the cluster even under wall-clock skew.
                 hlc.observe(update.timestamp);
                 if intern_keys { update.key = intern_key(update.key, intern_max_keys); }
+                if let Some(ref wal) = wal {
+                    let _ = wal.append(sync_entry_from(&update)).await;
+                }
                 apply_and_notify(&kv_state, &update);
 
                 // Push-based boundary sync: if the received key is grp/{group}/{this_node},

@@ -8,9 +8,54 @@
 //! at runtime via `GOSSIP_*` environment variables.
 
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, env, fs, path::Path};
+use std::{collections::HashMap, env, fs, path::{Path, PathBuf}};
 use crate::error::GossipError;
 use crate::NodeId;
+
+/// Controls if and how a node persists its KV store to local disk.
+///
+/// Set `GossipConfig::persistence` to `Some(PersistenceConfig { .. })` to opt in.
+/// `None` (the default) keeps the current in-memory-only behaviour.
+///
+/// Data is stored under `{base_path}/{node_id}/kv/`, giving collision-free layout
+/// when multiple nodes run on the same machine.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PersistenceConfig {
+    /// Root directory for persistence files.
+    /// Actual data lives under `{base_path}/{node_id}/kv/`.
+    pub base_path: PathBuf,
+
+    /// Controls `fdatasync` behaviour on WAL appends.
+    ///
+    /// Does not affect snapshot writes — snapshots always `fdatasync` before
+    /// the atomic rename regardless of this setting.
+    #[serde(default)]
+    pub sync_mode: SyncMode,
+
+    /// Trigger a snapshot when the WAL reaches this many entries.
+    /// Prevents unbounded WAL growth. Default: `10_000`.
+    #[serde(default = "default_snapshot_wal_threshold")]
+    pub snapshot_wal_threshold: usize,
+
+    /// Also trigger a snapshot on this timer interval (seconds). Default: `300`.
+    #[serde(default = "default_snapshot_interval_secs")]
+    pub snapshot_interval_secs: u64,
+}
+
+fn default_snapshot_wal_threshold() -> usize { 10_000 }
+fn default_snapshot_interval_secs()  -> u64  { 300 }
+
+/// Controls how aggressively WAL appends are flushed to durable storage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum SyncMode {
+    /// `fdatasync` after every WAL append. Safest; ~1 ms overhead per write on SSD.
+    Flush,
+    /// OS-buffered writes. Fast; last few writes may be lost on power failure.
+    #[default]
+    Async,
+    /// No explicit sync. For development and tests only.
+    Os,
+}
 
 /// Enforcement strength for a [`GroupTopologyPolicy`].
 ///
@@ -259,6 +304,17 @@ pub struct GossipConfig {
     /// Defaults to `"127.0.0.1"` (loopback only). Set to `"0.0.0.0"` to accept
     /// connections on all interfaces. Only meaningful when `http_port` is `Some`.
     pub http_addr: String,
+
+    /// Local KV persistence configuration.
+    ///
+    /// `None` (the default) keeps the current in-memory-only behaviour — no files
+    /// are written and a restart loses all KV state. Set to `Some(PersistenceConfig
+    /// { base_path, .. })` to enable an append-only WAL and periodic snapshots.
+    ///
+    /// Each node writes under `{base_path}/{node_id}/kv/`, so multiple nodes on
+    /// the same machine never collide. If `base_path` is not writable at startup,
+    /// a warning is logged and the node falls back to in-memory-only mode.
+    pub persistence: Option<PersistenceConfig>,
 }
 
 impl Default for GossipConfig {
@@ -295,6 +351,7 @@ impl Default for GossipConfig {
             topology_policies: HashMap::new(),
             http_port:         None,
             http_addr:         "127.0.0.1".to_string(),
+            persistence:       None,
         }
     }
 }
@@ -446,6 +503,30 @@ impl GossipConfig {
                         "topology_policies[{}] requires spread_min_distinct >= 2 when enforcement = Hard",
                         group,
                     )));
+                }
+            }
+        }
+        if let Some(p) = &self.persistence {
+            if p.snapshot_wal_threshold == 0 {
+                return Err(GossipError::Config(
+                    "persistence.snapshot_wal_threshold cannot be zero".into(),
+                ));
+            }
+            if p.snapshot_interval_secs == 0 {
+                return Err(GossipError::Config(
+                    "persistence.snapshot_interval_secs cannot be zero".into(),
+                ));
+            }
+            // Writability check: warn and the caller falls back to None at startup.
+            // We don't hard-fail here because validate() is also called in load_from_file
+            // before the node_id is known, so we can only check the base path itself.
+            if !p.base_path.as_os_str().is_empty() {
+                if let Err(e) = fs::create_dir_all(&p.base_path) {
+                    tracing::warn!(
+                        path = %p.base_path.display(),
+                        error = %e,
+                        "persistence.base_path is not writable; node will run in-memory-only mode",
+                    );
                 }
             }
         }

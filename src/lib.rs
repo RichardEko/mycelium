@@ -104,6 +104,7 @@ mod framing;
 mod hlc;
 mod locality;
 mod node_id;
+mod persistence;
 mod seen;
 mod store;
 mod writer;

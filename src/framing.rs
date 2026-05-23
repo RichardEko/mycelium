@@ -420,6 +420,18 @@ pub(crate) fn make_gossip_update(
     }
 }
 
+/// Projects the persistence-relevant fields from a [`GossipUpdate`] into a
+/// [`SyncEntry`], stripping wire-only fields (`nonce`, `sender`, `ttl`).
+/// Used by WAL call sites to record exactly what the store contains.
+pub(crate) fn sync_entry_from(u: &GossipUpdate) -> SyncEntry {
+    SyncEntry {
+        key:          u.key.clone(),
+        value:        u.value.clone(),
+        timestamp:    u.timestamp,
+        is_tombstone: u.is_tombstone,
+    }
+}
+
 /// Returns the worst-case fill ratio across all gossip shard channels.
 ///
 /// `0.0` = all channels empty. `1.0` = at least one shard fully saturated.
