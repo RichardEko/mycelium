@@ -1,6 +1,6 @@
 # Mycelium — Engineering Roadmap
 
-> **Status:** Layer 1 complete. Layer 2 complete. Layer III (Consensus) complete. Capability & Discovery subsystem complete. Agent state machine (Layer V) complete. MCP bridge (server + client) complete. Config-driven capability probing complete. KV persistence (WAL + snapshot, all sync modes) complete. Layers 3–5 (Service Patterns / AI / Observability) planned.
+> **Status:** Layer 1 complete. Layer 2 complete. Layer III (Consensus) complete. Capability & Discovery subsystem complete. Agent state machine (Layer V) complete. MCP bridge (server + client) complete. Config-driven capability probing complete. KV persistence (WAL + snapshot, all sync modes) complete. Multi-machine integration tests (Docker Compose, 7 unattended scenarios) complete. Layers 3–5 (Service Patterns / AI / Observability) planned.
 > **Last updated:** 2026-05-23
 
 ---
@@ -1511,17 +1511,31 @@ engineering work on a sound foundation.
 The following gaps are the difference between what exists today and a system that could be
 deployed in a real multi-machine AI fleet. They are ordered by blocking severity.
 
-### 1. Single-machine only in practice
+### 1. Multi-machine integration tests — Complete (2026-05-23)
 
-The TCP gossip protocol is fully multi-machine capable — `GossipConfig` accepts arbitrary
-`bind_address` and `bootstrap_peers` — but it has never been exercised across physical nodes.
-There are no multi-machine integration tests, no deployment manifests, and no documented
-operator runbook for bootstrapping a real cluster.
+A Docker Compose-based integration test suite exercises real TCP connections across containers.
+Seven unattended scenarios run automatically via `make test`:
 
-**What is needed:** A 3-node integration test suite that actually opens TCP connections across
-processes (not in-process via loopback ports). A reference Docker Compose topology. Documented
-`max_peers`, `max_forwarding_peers`, and `epidemic_extra_peers` sizing guidance for clusters
-of 10, 100, and 1,000 nodes.
+| # | Scenario | What it covers |
+|---|---|---|
+| 01 | Mesh convergence | KV write on node-a propagates to node-b via epidemic gossip |
+| 02 | Management API + dashboard | `/api/state` JSON validity, HTML dashboard rendered |
+| 03 | KV persistence — single restart | WAL replay restores state before anti-entropy kicks in |
+| 04 | Full-cluster restart | node-a restores from WAL; node-b recovers via anti-entropy |
+| 05 | Anti-entropy late joiner | node-c starts 25 s late; receives all prior keys |
+| 06 | Signal propagation | `test.signal` emitted on node-a received by node-b |
+| 07 | Capability discovery | mgmt `/api/state` shows all nodes with correct roles |
+
+**Scenario 8** (LLM demo smoke test) is a manual scenario started with `make test-llm-demo` —
+it requires Ollama with `llama3.2` installed locally.
+
+The test infrastructure lives in `tests/integration/`. The `node` role added to
+`examples/three_node_demo.rs` provides `/health`, `GET/PUT /kv/*key`, and `POST /emit/:kind`
+endpoints — thin wrappers over the library API with no added test-only logic in the library
+itself.
+
+Operator sizing guidance for `max_peers` / `max_forwarding_peers` / `epidemic_extra_peers`
+at 10 / 100 / 1,000 nodes is deferred to the production deployment guide.
 
 ### 2. KV persistence — Complete (2026-05-23)
 
@@ -1576,7 +1590,7 @@ what thresholds should trigger alerts.
 
 | Gap | Severity | Status |
 |-----|----------|--------|
-| Multi-machine integration tests + deployment docs | **Blocking** | Pending |
+| Multi-machine integration tests + deployment docs | **Blocking** | **Complete** 2026-05-23 |
 | KV persistence (WAL + snapshot/replay) | **Blocking** | **Complete** 2026-05-23 |
 | mTLS + node identity signing | **Blocking** | Pending |
 | Python language bridge (`mycelium-py`) | High | Pending |

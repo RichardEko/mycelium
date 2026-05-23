@@ -1,0 +1,10 @@
+FROM alpine:3.19
+
+RUN apk add --no-cache \
+    bash \
+    curl \
+    jq \
+    docker-cli
+
+WORKDIR /tests
+ENTRYPOINT ["/bin/bash", "/tests/run.sh"]

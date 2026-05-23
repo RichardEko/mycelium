@@ -1,0 +1,122 @@
+# Mycelium integration test cluster
+#
+# Topology
+#   node-a  — role=node, gossip port 57000, HTTP 8300, KV persistence on /data volume
+#   node-b  — role=node, gossip port 57000, HTTP 8300, no persistence
+#   node-c  — role=node, gossip port 57000, HTTP 8300, starts 25 s late (late-joiner test)
+#   mgmt    — role=mgmt, gossip port 57000, dashboard 8090
+#   runner  — Alpine + curl + jq + docker-cli; mounts Docker socket for container restarts
+#
+# Usage:
+#   cd tests/integration
+#   docker compose -f docker-compose.test.yml up --build --abort-on-container-exit \
+#       --exit-code-from runner
+
+services:
+
+  # ── Mesh nodes ────────────────────────────────────────────────────────────────
+
+  node-a:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    container_name: mycelium-test-node-a
+    hostname: node-a
+    environment:
+      MYCELIUM_ROLE:      node
+      MYCELIUM_PORT:      "57000"
+      MYCELIUM_HTTP_PORT: "8300"
+      MYCELIUM_PEERS:     "node-b:57000,node-c:57000,mgmt:57000"
+      MYCELIUM_DATA_DIR:  /data
+      RUST_LOG:           "info,mycelium=info"
+    volumes:
+      - node-a-data:/data
+    networks:
+      - mesh
+    restart: "no"
+
+  node-b:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    container_name: mycelium-test-node-b
+    hostname: node-b
+    environment:
+      MYCELIUM_ROLE:      node
+      MYCELIUM_PORT:      "57000"
+      MYCELIUM_HTTP_PORT: "8300"
+      MYCELIUM_PEERS:     "node-a:57000,node-c:57000,mgmt:57000"
+      RUST_LOG:           "info,mycelium=info"
+    networks:
+      - mesh
+    restart: "no"
+
+  node-c:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    container_name: mycelium-test-node-c
+    hostname: node-c
+    # Sleeps 25 s before starting — simulates a late joiner for anti-entropy test.
+    entrypoint: ["sh", "-c", "sleep 25 && exec /usr/local/bin/mycelium-demo"]
+    environment:
+      MYCELIUM_ROLE:      node
+      MYCELIUM_PORT:      "57000"
+      MYCELIUM_HTTP_PORT: "8300"
+      MYCELIUM_PEERS:     "node-a:57000,node-b:57000,mgmt:57000"
+      RUST_LOG:           "info,mycelium=info"
+    networks:
+      - mesh
+    restart: "no"
+
+  # ── Management dashboard ──────────────────────────────────────────────────────
+
+  mgmt:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    container_name: mycelium-test-mgmt
+    hostname: mgmt
+    environment:
+      MYCELIUM_ROLE:      mgmt
+      MYCELIUM_PORT:      "57000"
+      MYCELIUM_HTTP_PORT: "8300"
+      MYCELIUM_PEERS:     "node-a:57000,node-b:57000,node-c:57000"
+      MGMT_PORT:          "8090"
+      RUST_LOG:           "info,mycelium=info"
+    networks:
+      - mesh
+    restart: "no"
+
+  # ── Test runner ───────────────────────────────────────────────────────────────
+
+  runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test-runner
+    container_name: mycelium-test-runner
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:/tests:ro
+    environment:
+      NODE_A_HOST:    node-a
+      NODE_B_HOST:    node-b
+      NODE_C_HOST:    node-c
+      MGMT_HOST:      mgmt
+      NODE_HTTP_PORT: "8300"
+      MGMT_HTTP_PORT: "8090"
+    depends_on:
+      - node-a
+      - node-b
+      - node-c
+      - mgmt
+    networks:
+      - mesh
+    restart: "no"
+
+networks:
+  mesh:
+    driver: bridge
+
+volumes:
+  node-a-data:

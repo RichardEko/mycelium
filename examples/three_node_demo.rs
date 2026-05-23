@@ -46,7 +46,7 @@
 
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Path, State},
     http::StatusCode,
     response::{Html, IntoResponse, Response},
     response::sse::{Event, KeepAlive, Sse},
@@ -54,7 +54,10 @@ use axum::{
 };
 use bytes::Bytes;
 use futures_util::StreamExt;
-use mycelium::{Capability, CapFilter, GossipAgent, GossipConfig, McpToolHandle, NodeId, signal_kind};
+use mycelium::{
+    Capability, CapFilter, GossipAgent, GossipConfig, McpToolHandle, NodeId,
+    PersistenceConfig, SignalScope, SyncMode, signal_kind,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::convert::Infallible;
@@ -155,18 +158,32 @@ async fn resolve_peers(peer_list: &str) -> Vec<NodeId> {
     out
 }
 
-async fn make_agent(my_ip: &str, peers: Vec<NodeId>, port: u16, http_port: u16) -> Arc<GossipAgent> {
+async fn make_agent(
+    my_ip:    &str,
+    peers:    Vec<NodeId>,
+    port:     u16,
+    http_port: Option<u16>,
+    data_dir:  Option<std::path::PathBuf>,
+) -> Arc<GossipAgent> {
     let nid = NodeId::new(my_ip, port).expect("valid self NodeId");
     let mut cfg = GossipConfig::default();
     cfg.bind_address               = my_ip.to_string();
     cfg.bind_port                  = port;
-    cfg.http_port                  = Some(http_port);
+    cfg.http_port                  = http_port;
     cfg.http_addr                  = "0.0.0.0".to_string();
     cfg.bootstrap_peers            = peers;
     cfg.default_ttl                = 10;
     cfg.reconnect_backoff_secs     = 2;
     cfg.gossip_shards              = 2;
     cfg.health_check_max_jitter_ms = 200;
+    if let Some(dir) = data_dir {
+        cfg.persistence = Some(PersistenceConfig {
+            base_path:              dir,
+            sync_mode:              SyncMode::Async,
+            snapshot_wal_threshold: 10_000,
+            snapshot_interval_secs: 300,
+        });
+    }
     let agent = Arc::new(GossipAgent::new(nid, cfg));
     agent.start().await.expect("agent start");
     agent
@@ -617,7 +634,7 @@ async fn mgmt_handle_state(State(s): State<Arc<MgmtState>>) -> Json<Value> {
 
     // role/* capabilities → map node_id → role label
     let mut node_roles: std::collections::HashMap<String, String> = Default::default();
-    for role_name in &["tool-a", "tool-b", "llm", "mgmt"] {
+    for role_name in &["tool-a", "tool-b", "llm", "mgmt", "node"] {
         for (nid, _cap) in agent.resolve(&CapFilter::new("role", *role_name)) {
             node_roles.insert(nid.to_string(), role_name.to_string());
         }
@@ -659,6 +676,7 @@ async fn run_mgmt_server(agent: Arc<GossipAgent>, mgmt_port: u16) {
     let state = Arc::new(MgmtState { agent });
     let router = Router::new()
         .route("/",          get(mgmt_handle_root))
+        .route("/health",    get(|| async { StatusCode::OK }))
         .route("/api/state", get(mgmt_handle_state))
         .with_state(Arc::clone(&state));
 
@@ -666,6 +684,72 @@ async fn run_mgmt_server(agent: Arc<GossipAgent>, mgmt_port: u16) {
     info!("[mgmt] Dashboard: http://{addr}/");
     let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind mgmt port");
     axum::serve(listener, router).await.expect("serve mgmt");
+}
+
+// ── Test node role ─────────────────────────────────────────────────────────────
+
+struct NodeState {
+    agent: Arc<GossipAgent>,
+}
+
+async fn node_health() -> StatusCode {
+    StatusCode::OK
+}
+
+async fn node_kv_get(
+    State(s): State<Arc<NodeState>>,
+    Path(key): Path<String>,
+) -> Response {
+    match s.agent.get(&key) {
+        Some(val) => (StatusCode::OK, val.to_vec()).into_response(),
+        None      => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn node_kv_put(
+    State(s): State<Arc<NodeState>>,
+    Path(key): Path<String>,
+    body: String,
+) -> StatusCode {
+    let _ = s.agent.set_async(key, Bytes::from(body.into_bytes())).await;
+    StatusCode::NO_CONTENT
+}
+
+async fn node_emit(
+    State(s): State<Arc<NodeState>>,
+    Path(kind): Path<String>,
+    body: String,
+) -> StatusCode {
+    let _ = s.agent.emit(kind.as_str(), SignalScope::System, Bytes::from(body.into_bytes()));
+    StatusCode::ACCEPTED
+}
+
+async fn run_node(agent: Arc<GossipAgent>, role: &str, http_port: u16) {
+    let _role_cap = agent.advertise_capability(Capability::new("role", "node"), Duration::from_secs(30));
+
+    // Record test.signal arrivals under a per-hostname key so each node's
+    // reception can be queried independently in integration tests.
+    let hostname   = std::env::var("HOSTNAME").unwrap_or_else(|_| agent.node_id().to_string());
+    let sig_key    = format!("sig-received/{}", hostname);
+    let mut sig_rx = agent.signal_rx("test.signal");
+    let sig_agent  = Arc::clone(&agent);
+    tokio::spawn(async move {
+        while let Some(sig) = sig_rx.recv().await {
+            let _ = sig_agent.set(sig_key.clone(), sig.payload.clone());
+        }
+    });
+
+    let state = Arc::new(NodeState { agent });
+    let router = Router::new()
+        .route("/health",     get(node_health))
+        .route("/kv/*key",    get(node_kv_get).put(node_kv_put))
+        .route("/emit/:kind", post(node_emit))
+        .with_state(state);
+
+    let addr = format!("0.0.0.0:{http_port}");
+    info!("[{role}] HTTP ready → http://{addr}/");
+    let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind node http");
+    axum::serve(listener, router).await.expect("serve node http");
 }
 
 // ── Inline chat UI ─────────────────────────────────────────────────────────────
@@ -950,18 +1034,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    let data_dir   = std::env::var("MYCELIUM_DATA_DIR").ok().map(std::path::PathBuf::from);
+    // node role owns its own HTTP server; skip the embedded gateway to avoid port conflict.
+    let agent_http = if role == "node" { None } else { Some(http_port) };
+
     let peers = resolve_peers(&peer_list).await;
     info!(role=%role, my_ip=%my_ip, port, http_port, peers=peers.len(), "starting");
-    let agent = make_agent(&my_ip, peers, port, http_port).await;
-    info!("[{role}] node_id={} gateway=http://0.0.0.0:{http_port}", agent.node_id());
+    let agent = make_agent(&my_ip, peers, port, agent_http, data_dir).await;
+    info!("[{role}] node_id={}", agent.node_id());
 
     match role.as_str() {
         "tool-a" => run_tool_a(agent, &role).await,
         "tool-b" => run_tool_b(agent, &role).await,
         "llm"    => run_chat_server(agent, LlmCfg::from_env(), chat_port).await,
         "mgmt"   => run_mgmt_server(agent, mgmt_port).await,
+        "node"   => run_node(agent, &role, http_port).await,
         other    => {
-            error!("Unknown MYCELIUM_ROLE='{other}' — expected tool-a, tool-b, or llm");
+            error!("Unknown MYCELIUM_ROLE='{other}' — expected tool-a, tool-b, llm, mgmt, or node");
             std::process::exit(1);
         }
     }
