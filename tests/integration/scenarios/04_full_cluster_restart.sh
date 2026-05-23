@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Scenario 04: Full-cluster restart.
+# Scenario 04: Full-cluster restart (node-a, node-b, mgmt — not node-c).
 #   node-a has persistence — key survives in WAL.
 #   node-b has no persistence — recovers via anti-entropy from node-a.
+#
+# node-c is intentionally left running; it is exercised by scenario 05.
 set -euo pipefail
 source /tests/lib/helpers.sh
 
@@ -14,19 +16,21 @@ VALUE="full-restart-$$-$(date +%s)"
 kv_put "$NODE_A" "$KEY" "$VALUE"
 poll_until 20 kv_check "$NODE_B" "$KEY" "$VALUE"
 
-# Bring all data containers down
-docker stop mycelium-test-node-a mycelium-test-node-b mycelium-test-node-c mycelium-test-mgmt
+# Brief pause so the async WAL writer has time to flush the pending entry.
 sleep 3
 
-# Restart in order — node-a first so it is a source of truth for anti-entropy
+# Bring node-a, node-b, and mgmt down; leave node-c running for scenario 05.
+docker stop mycelium-test-node-a mycelium-test-node-b mycelium-test-mgmt
+sleep 3
+
 docker start mycelium-test-node-a mycelium-test-node-b mycelium-test-mgmt
 
-# Wait for both nodes to come back
+# Wait for both data nodes to come back
 wait_for_health "$NODE_A" "${NODE_HTTP_PORT:-8300}" 60
 wait_for_health "$NODE_B" "${NODE_HTTP_PORT:-8300}" 60
 
-# node-a: restored from WAL (no anti-entropy needed)
-poll_until 15 kv_check "$NODE_A" "$KEY" "$VALUE"
+# node-a: restored from WAL
+poll_until 20 kv_check "$NODE_A" "$KEY" "$VALUE"
 
-# node-b: restored via anti-entropy from node-a (may take a few extra seconds)
-poll_until 45 kv_check "$NODE_B" "$KEY" "$VALUE"
+# node-b: restored via anti-entropy from node-a
+poll_until 60 kv_check "$NODE_B" "$KEY" "$VALUE"

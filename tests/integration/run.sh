@@ -30,6 +30,14 @@ banner "Waiting for cluster to be ready"
 wait_for_health "${NODE_A_HOST:-node-a}" "${NODE_HTTP_PORT:-8300}" 60
 wait_for_health "${NODE_B_HOST:-node-b}" "${NODE_HTTP_PORT:-8300}" 60
 wait_for_health "${MGMT_HOST:-mgmt}"     "${MGMT_HTTP_PORT:-8090}" 60
+
+# Wait for capability advertisements to propagate to mgmt before running scenarios.
+converged() {
+    count=$(curl -sf --max-time 3 "http://${MGMT_HOST:-mgmt}:${MGMT_HTTP_PORT:-8090}/api/state" \
+        2>/dev/null | jq '.nodes | length' 2>/dev/null || echo 0)
+    [ "$count" -ge 3 ]
+}
+poll_until 30 converged || true  # warn but don't block; scenario 02 will fail descriptively
 echo "  Core nodes healthy — starting scenarios"
 
 # ── Scenarios ─────────────────────────────────────────────────────────────────
