@@ -8,7 +8,11 @@ COMPOSE_LLM  = docker compose -f docker/docker-compose.yml
 ## test — build the cluster and run all 7 unattended integration scenarios
 test:
 	$(COMPOSE) down -v --remove-orphans 2>/dev/null || true
-	$(COMPOSE) up --build --abort-on-container-exit --exit-code-from runner
+	$(COMPOSE) up -d --build
+	@$(COMPOSE) logs -f runner & \
+	EXIT=$$(docker wait mycelium-test-runner); \
+	$(COMPOSE) down -v --remove-orphans 2>/dev/null || true; \
+	exit $$EXIT
 
 ## test-clean — tear down the test cluster and remove volumes
 test-clean:
