@@ -1,0 +1,88 @@
+# Mycelium three-node demo
+#
+# Three containers form a gossip mesh:
+#   tool-a  —  weather + web_fetch tools (calls wttr.in / any URL)
+#   tool-b  —  calculator + Wikipedia lookup tools
+#   llm     —  discovers tools over gossip, plans with a real LLM
+#
+# Prerequisites:
+#   cp docker/.env.example docker/.env
+#   # Edit .env — set OPENAI_API_KEY (and optionally OPENAI_BASE_URL/MODEL)
+#
+# Run:
+#   cd docker
+#   docker compose up --build
+#
+# The llm container logs the final answer to stdout.
+# The HTTP gateway on each node is also reachable from the host:
+#   curl http://localhost:8300/health   # tool-a gateway
+#   curl http://localhost:8301/health   # tool-b gateway
+#   curl http://localhost:8302/health   # llm gateway
+#   curl http://localhost:8302/gateway/capability/resolve?ns=compute&name=cpu
+
+services:
+
+  tool-a:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: tool-a
+    environment:
+      MYCELIUM_ROLE:      tool-a
+      MYCELIUM_PORT:      "57000"
+      MYCELIUM_HTTP_PORT: "8300"
+      # Bootstrap peers — tool-a learns the mesh from tool-b and llm
+      MYCELIUM_PEERS:     "tool-b:57000,llm:57000"
+      RUST_LOG:           "info,mycelium=info"
+    ports:
+      - "8300:8300"   # expose gateway to host for inspection
+    networks:
+      - mesh
+    restart: unless-stopped
+
+  tool-b:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: tool-b
+    environment:
+      MYCELIUM_ROLE:      tool-b
+      MYCELIUM_PORT:      "57000"
+      MYCELIUM_HTTP_PORT: "8300"
+      MYCELIUM_PEERS:     "tool-a:57000,llm:57000"
+      RUST_LOG:           "info,mycelium=info"
+    ports:
+      - "8301:8300"
+    networks:
+      - mesh
+    restart: unless-stopped
+
+  llm:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: llm
+    environment:
+      MYCELIUM_ROLE:      llm
+      MYCELIUM_PORT:      "57000"
+      MYCELIUM_HTTP_PORT: "8300"
+      MYCELIUM_PEERS:     "tool-a:57000,tool-b:57000"
+      RUST_LOG:           "info,mycelium=info"
+      # LLM credentials — required
+      OPENAI_API_KEY:     ${OPENAI_API_KEY}
+      OPENAI_BASE_URL:    ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_MODEL:       ${OPENAI_MODEL:-gpt-4o-mini}
+      # Override the default task if you like
+      DEMO_TASK:          ${DEMO_TASK:-What is the current weather in London? Also, how tall is the Eiffel Tower in metres according to Wikipedia? Finally, what is that height multiplied by 1024?}
+    ports:
+      - "8302:8300"
+    networks:
+      - mesh
+    depends_on:
+      - tool-a
+      - tool-b
+    restart: unless-stopped
+
+networks:
+  mesh:
+    driver: bridge
