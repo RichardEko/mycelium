@@ -16,7 +16,7 @@
 //!   group's filter self-joins via `join_group`.
 
 use crate::capability::{
-    Capability, CapFilter, CapabilityEvent,
+    CallerContext, Capability, CapFilter, CapabilityEvent,
     CapabilityHandle,
     RequirementHandle, RequirementStatus,
 };
@@ -125,15 +125,28 @@ impl GossipAgent {
     /// the named attribute (providers missing the attribute or with
     /// incomparable values sort to the end). Otherwise order is unspecified.
     pub fn resolve(&self, filter: &CapFilter) -> Vec<(NodeId, Capability)> {
+        self.resolve_for_caller(filter, &CallerContext::unrestricted())
+    }
+
+    /// Like `resolve`, but also enforces `Capability::authorized_callers`.
+    /// A capability with a non-empty `authorized_callers` list is returned
+    /// only when `ctx.caller_id` is in that list. Use this for language-bridge
+    /// and SkillRunner tool-discovery to prevent token-bloat and confused-deputy
+    /// issues — see the Layer 4 security primitive design in ROADMAP.md.
+    pub fn resolve_for_caller(
+        &self,
+        filter: &CapFilter,
+        ctx:    &CallerContext,
+    ) -> Vec<(NodeId, Capability)> {
         let mut out = Vec::new();
         for (key, bytes) in self.scan_prefix("cap/") {
             if is_cap_locality_key(&key) { continue; }
             let Some((node_id, _ns, _name)) = parse_cap_key_or_warn("cap/", &key) else { continue };
             let Some(cap) = Capability::decode(&bytes) else {
-            warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");
-            continue;
-        };
-            if filter.matches(&cap) {
+                warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");
+                continue;
+            };
+            if filter.matches(&cap) && ctx.can_see(&cap) {
                 out.push((node_id, cap));
             }
         }

@@ -113,7 +113,7 @@ pub use agent::{
     GossipAgent, McpClientHandle, McpError, McpToolHandle, RpcError, SystemStats,
 };
 pub use capability::{
-    CapConstraint, CapFilter, CapRanking, CapValue, Capability, CapabilityEvent,
+    CallerContext, CapConstraint, CapFilter, CapRanking, CapValue, Capability, CapabilityEvent,
     CapabilityGroupDef, CapabilityGroupHandle, CapabilityHandle,
     DemandStatus, RankingOrder, RequirementHandle, RequirementStatus,
     WiredEmitOutcome, WiringProvider, WiringStatus,

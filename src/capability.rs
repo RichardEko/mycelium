@@ -86,9 +86,45 @@ pub struct CapFilter {
 /// `attributes` carries the typed values that filters match against.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Capability {
-    pub namespace:  Arc<str>,
-    pub name:       Arc<str>,
-    pub attributes: BTreeMap<Arc<str>, CapValue>,
+    pub namespace:          Arc<str>,
+    pub name:               Arc<str>,
+    pub attributes:         BTreeMap<Arc<str>, CapValue>,
+    /// Allowlist of caller identities that may resolve this capability.
+    /// Empty = unrestricted. Non-empty = `resolve_for_caller` returns this
+    /// entry only when `CallerContext::caller_id` is in the list.
+    #[serde(default)]
+    pub authorized_callers: Vec<Arc<str>>,
+}
+
+/// Caller identity passed to [`GossipAgent::resolve_for_caller`].
+///
+/// For unauthenticated internal callers use `CallerContext::unrestricted()`.
+/// For language-bridge or SkillRunner callers set `caller_id` to the
+/// identity string declared in `[capability.policy].authorized_callers`.
+#[derive(Clone, Debug, Default)]
+pub struct CallerContext {
+    /// Opaque identity string for the caller. Compared against
+    /// `Capability::authorized_callers` at resolve time.
+    pub caller_id: Option<Arc<str>>,
+}
+
+impl CallerContext {
+    /// No restriction — equivalent to the bare `resolve()` call.
+    pub fn unrestricted() -> Self { Self { caller_id: None } }
+
+    /// Named identity; only capabilities that list this ID (or are unrestricted) are returned.
+    pub fn for_caller(id: impl Into<Arc<str>>) -> Self {
+        Self { caller_id: Some(id.into()) }
+    }
+
+    /// Returns `true` if `cap` is visible to this caller context.
+    pub(crate) fn can_see(&self, cap: &Capability) -> bool {
+        if cap.authorized_callers.is_empty() { return true; }
+        match &self.caller_id {
+            None     => false,
+            Some(id) => cap.authorized_callers.iter().any(|a| a.as_ref() == id.as_ref()),
+        }
+    }
 }
 
 /// Push notification delivered by `watch_capabilities`.
@@ -312,15 +348,25 @@ impl Capability {
     /// Convenience constructor without attributes.
     pub fn new<N: Into<Arc<str>>, S: Into<Arc<str>>>(namespace: N, name: S) -> Self {
         Self {
-            namespace:  namespace.into(),
-            name:       name.into(),
-            attributes: BTreeMap::new(),
+            namespace:          namespace.into(),
+            name:               name.into(),
+            attributes:         BTreeMap::new(),
+            authorized_callers: Vec::new(),
         }
     }
 
     /// Builder-style attribute addition.
     pub fn with<A: Into<Arc<str>>>(mut self, attribute: A, value: CapValue) -> Self {
         self.attributes.insert(attribute.into(), value);
+        self
+    }
+
+    /// Restrict resolution to the named callers. Pass an empty slice to clear.
+    pub fn with_authorized_callers<S: Into<Arc<str>>>(
+        mut self,
+        callers: impl IntoIterator<Item = S>,
+    ) -> Self {
+        self.authorized_callers = callers.into_iter().map(Into::into).collect();
         self
     }
 }

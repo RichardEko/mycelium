@@ -1212,12 +1212,12 @@ Weeks:  0         2          4          6          8         10        12
 | Layer 4 | MCP bridge: client role (outbound to external MCP servers) | **Complete** |
 | Layer 4 | Agent state machine: policy-guarded transitions, turn/call budgets, state_timeouts | **Complete** |
 | Layer 4 | `NodeCapabilityConfig`: declarative local capability declaration + probe loop | **Complete** |
-| Layer 4 | Python language bridge: HTTP gateway + `mycelium-py` SDK | Planned |
+| Layer 4 | Python language bridge: HTTP gateway + `mycelium-py` SDK | **Complete** |
 | Layer 4 | TypeScript language bridge | Planned |
 | Layer 4 | `SkillRunner` node + `.skill.toml` capability-as-skill definition format | Planned |
 | Layer 4 | Invocation audit trail: HLC-keyed causal log + OTEL span export | Planned |
-| Layer 4 | Capability authorization scoping: `[capability.policy]` in manifest + `resolve_capability` gate | Planned |
-| Layer 4 | Session-scoped mesh views: per-caller capability slice at `resolve_capability` | Planned |
+| Layer 4 | Capability authorization scoping: `[capability.policy]` in manifest + `resolve_capability` gate | **Complete** |
+| Layer 4 | Session-scoped mesh views: per-caller capability slice at `resolve_capability` | **Complete** |
 | Layer 4 | A2A wire-protocol adapter (language bridge — after MCP) | Planned |
 | Layer 5 | Metrics, Prometheus exporter, Grafana dashboard | Planned |
 | **Production** | Multi-machine integration tests + Docker Compose reference topology | **Blocking** |

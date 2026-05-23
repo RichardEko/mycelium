@@ -1,22 +1,46 @@
-//! Embedded HTTP server — Layer 3 gateway.
+//! Embedded HTTP server — Layer 3 + Layer 4 gateway.
 //!
-//! Provides `/health`, `/stats`, and `/signals/{kind}` (SSE streaming) endpoints.
+//! ## Library-level endpoints
+//! - `GET  /health`              — liveness probe
+//! - `GET  /stats`               — KV store metrics
+//! - `GET  /signals/{kind}`      — SSE stream of admitted signals
+//! - `POST /mcp`                 — JSON-RPC 2.0 MCP protocol bridge
+//!
+//! ## Language-bridge gateway endpoints (`/gateway/*`)
+//! These endpoints let Python/TypeScript agents participate in the mesh
+//! without a Rust dependency. The gateway is the HTTP sidecar described in
+//! the Layer 4 architecture.
+//!
+//! - `POST   /gateway/capability/advertise`    — advertise a capability; returns handle_id
+//! - `DELETE /gateway/capability/{handle_id}`  — retract (tombstone) a capability
+//! - `GET    /gateway/capability/resolve`      — filter-match with optional caller_id scoping
+//! - `POST   /gateway/signal/emit`             — fire a signal into the mesh
+//! - `GET    /gateway/signal/sse/{kind}`       — SSE stream for a signal kind
+//! - `GET    /gateway/demand`                  — demand pressure for a capability filter
+//! - `POST   /gateway/rpc/call`               — blocking RPC call to a named node
+//!
 //! Started when `GossipConfig::http_port` is `Some(port)`. Shuts down cleanly
 //! when the agent's broadcast shutdown signal fires.
-//!
-//! Layer 4 (MCP bridge, language gateway) will add routes to this router.
 
 use axum::{
     Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
+    http::StatusCode,
     response::{IntoResponse, Json, Sse},
     response::sse::{Event, KeepAlive},
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use bytes::Bytes;
+use serde::Deserialize;
 use serde_json::json;
-use std::{convert::Infallible, net::SocketAddr, sync::Arc, time::Duration};
-use tokio::sync::watch;
+use std::{
+    collections::HashMap,
+    convert::Infallible,
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+use tokio::sync::{oneshot, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt as _;
 use tracing::info;
@@ -25,7 +49,13 @@ use super::TaskCtx;
 
 /// Shared state passed to every HTTP handler.
 struct HttpCtx {
-    agent_ctx: Arc<TaskCtx>,
+    agent_ctx:       Arc<TaskCtx>,
+    /// Capability handle table for the language gateway.
+    /// Key: opaque handle_id string returned to the caller.
+    /// Value: cancel sender — dropping it tombstones the capability.
+    gateway_caps:    Arc<Mutex<HashMap<String, oneshot::Sender<()>>>>,
+    /// Shutdown receiver used when spawning gateway advertisement tasks.
+    shutdown_rx:     watch::Receiver<bool>,
 }
 
 /// Starts the axum HTTP server on `addr`. Returns when the agent shuts down
@@ -35,13 +65,26 @@ pub(super) async fn run_http_server(
     ctx:         Arc<TaskCtx>,
     shutdown_rx: watch::Receiver<bool>,
 ) -> Result<(), std::io::Error> {
-    let state = Arc::new(HttpCtx { agent_ctx: ctx });
+    let state = Arc::new(HttpCtx {
+        agent_ctx:    ctx,
+        gateway_caps: Arc::new(Mutex::new(HashMap::new())),
+        shutdown_rx:  shutdown_rx.clone(),
+    });
 
     let app = Router::new()
+        // ── Library endpoints ──────────────────────────────────────────────
         .route("/health",          get(health_handler))
         .route("/stats",           get(stats_handler))
         .route("/signals/{kind}",  get(signal_sse_handler))
         .route("/mcp",             post(mcp_handler))
+        // ── Language-bridge gateway ────────────────────────────────────────
+        .route("/gateway/capability/advertise",   post(gw_cap_advertise))
+        .route("/gateway/capability/{handle_id}", delete(gw_cap_drop))
+        .route("/gateway/capability/resolve",     get(gw_cap_resolve))
+        .route("/gateway/signal/emit",            post(gw_signal_emit))
+        .route("/gateway/signal/sse/{kind}",      get(gw_signal_sse))
+        .route("/gateway/demand",                 get(gw_demand))
+        .route("/gateway/rpc/call",               post(gw_rpc_call))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -232,6 +275,321 @@ async fn mcp_handler(
             "jsonrpc": "2.0", "id": id,
             "error": {"code": -32601, "message": format!("method not found: {method}")},
         })).into_response(),
+    }
+}
+
+// ── Language-bridge gateway handlers ─────────────────────────────────────────
+//
+// These seven endpoints form the HTTP sidecar API for Python/TypeScript agents.
+// All inputs and outputs use JSON. Binary payloads are base64-encoded.
+
+/// `POST /gateway/capability/advertise`
+///
+/// Advertises a capability on behalf of a language-bridge agent. The
+/// returned `handle_id` must be supplied to `DELETE /gateway/capability/{id}`
+/// to retract the advertisement (tombstone the KV entry).
+///
+/// Request body:
+/// ```json
+/// { "ns": "compute", "name": "gpu",
+///   "interval_secs": 30,
+///   "attributes": { "model": "A100" },
+///   "authorized_callers": ["orchestrator"] }
+/// ```
+/// Response: `{ "handle_id": "<uuid>" }`
+async fn gw_cap_advertise(
+    State(ctx): State<Arc<HttpCtx>>,
+    Json(body):  Json<serde_json::Value>,
+) -> impl IntoResponse {
+    use crate::capability::{Capability, CapValue};
+
+    let ns   = match body["ns"].as_str()   { Some(s) => s.to_string(), None => return (StatusCode::BAD_REQUEST, Json(json!({"error":"missing ns"}))).into_response() };
+    let name = match body["name"].as_str() { Some(s) => s.to_string(), None => return (StatusCode::BAD_REQUEST, Json(json!({"error":"missing name"}))).into_response() };
+    let interval_secs = body["interval_secs"].as_u64().unwrap_or(30);
+
+    let mut cap = Capability::new(ns.as_str(), name.as_str());
+
+    if let Some(attrs) = body["attributes"].as_object() {
+        for (k, v) in attrs {
+            let cv = match v {
+                serde_json::Value::String(s) => CapValue::Text(Arc::from(s.as_str())),
+                serde_json::Value::Number(n) => {
+                    if let Some(i) = n.as_i64() { CapValue::Integer(i) }
+                    else if let Some(f) = n.as_f64() { CapValue::Float(f) }
+                    else { continue }
+                }
+                serde_json::Value::Bool(b) => CapValue::Bool(*b),
+                _ => continue,
+            };
+            cap = cap.with(k.as_str(), cv);
+        }
+    }
+
+    if let Some(callers) = body["authorized_callers"].as_array() {
+        let list: Vec<Arc<str>> = callers.iter()
+            .filter_map(|v| v.as_str())
+            .map(Arc::from)
+            .collect();
+        cap = cap.with_authorized_callers(list);
+    }
+
+    let interval = Duration::from_secs(interval_secs.max(1));
+    let kv_key: Arc<str> = Arc::from(
+        format!("cap/{}/{}/{}", ctx.agent_ctx.node_id, cap.namespace, cap.name).as_str()
+    );
+    let cap_arc = Arc::new(cap);
+    let payload_fn: super::kv::PersistPayloadFn = {
+        let cap = Arc::clone(&cap_arc);
+        Arc::new(move || cap.encode())
+    };
+
+    let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+    let shutdown_rx = ctx.shutdown_rx.clone();
+    tokio::spawn(super::kv::run_kv_persist_task(
+        Arc::clone(&ctx.agent_ctx), cancel_rx, shutdown_rx, kv_key, interval, payload_fn, None,
+    ));
+
+    let handle_id = format!("{:x}", fastrand::u128(..));
+    ctx.gateway_caps.lock().unwrap().insert(handle_id.clone(), cancel_tx);
+
+    Json(json!({ "handle_id": handle_id })).into_response()
+}
+
+/// `DELETE /gateway/capability/{handle_id}`
+///
+/// Retracts a previously-advertised capability. Drops the cancel sender,
+/// which causes the persist task to tombstone the KV entry.
+async fn gw_cap_drop(
+    Path(handle_id): Path<String>,
+    State(ctx):      State<Arc<HttpCtx>>,
+) -> impl IntoResponse {
+    let removed = ctx.gateway_caps.lock().unwrap().remove(&handle_id).is_some();
+    if removed {
+        Json(json!({ "ok": true })).into_response()
+    } else {
+        (StatusCode::NOT_FOUND, Json(json!({ "error": "handle not found" }))).into_response()
+    }
+}
+
+/// `GET /gateway/capability/resolve?ns=X&name=Y[&caller_id=Z]`
+///
+/// Snapshot filter-match over the local `cap/` KV view. If `caller_id` is
+/// supplied, capabilities with non-empty `authorized_callers` are filtered
+/// to only those that list the caller's identity.
+#[derive(Deserialize)]
+struct ResolveQuery {
+    ns:        String,
+    name:      String,
+    caller_id: Option<String>,
+}
+
+async fn gw_cap_resolve(
+    Query(q):   Query<ResolveQuery>,
+    State(ctx): State<Arc<HttpCtx>>,
+) -> impl IntoResponse {
+    use crate::capability::{CallerContext, CapFilter, Capability};
+
+    let filter     = CapFilter::new(q.ns.as_str(), q.name.as_str());
+    let caller_ctx = match q.caller_id {
+        Some(id) => CallerContext::for_caller(id.as_str()),
+        None     => CallerContext::unrestricted(),
+    };
+
+    let mut results = Vec::new();
+    for (key, bytes) in crate::store::scan_kv_prefix(&ctx.agent_ctx.kv_state, "cap/") {
+        if super::capability_ops::is_cap_locality_key(&key) { continue; }
+        let Some((node_id, _ns, _name)) =
+            super::capability_ops::parse_cap_key_or_warn("cap/", &key)
+            else { continue };
+        let Some(cap) = Capability::decode(&bytes) else { continue };
+        if filter.matches(&cap) && caller_ctx.can_see(&cap) {
+            let attrs: serde_json::Map<String, serde_json::Value> = cap.attributes.iter()
+                .map(|(k, v)| (k.as_ref().to_string(), capvalue_to_json(v)))
+                .collect();
+            results.push(json!({
+                "node_id":    node_id.to_string(),
+                "ns":         cap.namespace.as_ref(),
+                "name":       cap.name.as_ref(),
+                "attributes": attrs,
+            }));
+        }
+    }
+
+    Json(json!({ "providers": results })).into_response()
+}
+
+fn capvalue_to_json(v: &crate::capability::CapValue) -> serde_json::Value {
+    use crate::capability::CapValue;
+    match v {
+        CapValue::Text(s)    => serde_json::Value::String(s.as_ref().to_string()),
+        CapValue::Integer(n) => json!(n),
+        CapValue::Float(f)   => json!(f),
+        CapValue::Bool(b)    => json!(b),
+        CapValue::Version(v) => serde_json::Value::String(format!("{}.{}.{}", v[0], v[1], v[2])),
+    }
+}
+
+/// `POST /gateway/signal/emit`
+///
+/// Fires a signal into the mesh. `scope` is `"system"`, `"group:NAME"`, or
+/// `"node:IP:PORT"`. `payload_b64` is the base64-encoded signal payload.
+async fn gw_signal_emit(
+    State(ctx): State<Arc<HttpCtx>>,
+    Json(body):  Json<serde_json::Value>,
+) -> impl IntoResponse {
+    use base64::Engine as _;
+    use crate::signal::SignalScope;
+
+    let kind = match body["kind"].as_str() {
+        Some(k) => Arc::from(k),
+        None    => return (StatusCode::BAD_REQUEST, Json(json!({"error":"missing kind"}))).into_response(),
+    };
+
+    let scope_str = body["scope"].as_str().unwrap_or("system");
+    let scope = if scope_str == "system" {
+        SignalScope::System
+    } else if let Some(rest) = scope_str.strip_prefix("group:") {
+        SignalScope::Group(Arc::from(rest))
+    } else if let Some(rest) = scope_str.strip_prefix("node:") {
+        match rest.parse::<crate::node_id::NodeId>() {
+            Ok(nid) => SignalScope::Individual(nid),
+            Err(_)  => return (StatusCode::BAD_REQUEST, Json(json!({"error":"invalid node id"}))).into_response(),
+        }
+    } else {
+        SignalScope::System
+    };
+
+    let payload = if let Some(b64) = body["payload_b64"].as_str() {
+        match base64::engine::general_purpose::STANDARD.decode(b64) {
+            Ok(v)  => Bytes::from(v),
+            Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({"error":"invalid base64 payload"}))).into_response(),
+        }
+    } else {
+        Bytes::new()
+    };
+
+    // Same code path as GossipAgent::emit — local delivery + gossip fan-out
+    let ok = super::helpers::emit_signal(&ctx.agent_ctx, kind, scope, payload);
+    Json(json!({ "ok": ok })).into_response()
+}
+
+/// `GET /gateway/signal/sse/{kind}` — SSE stream of admitted signals for a kind.
+///
+/// Each event has `event: <kind>` and `data: {"sender":"…","payload_b64":"…","nonce":…}`.
+async fn gw_signal_sse(
+    Path(kind):  Path<String>,
+    State(ctx):  State<Arc<HttpCtx>>,
+) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+    let rx = ctx.agent_ctx.signal_handlers.register_with_capacity(
+        Arc::from(kind.as_str()),
+        256,
+    );
+
+    let stream = ReceiverStream::new(rx).map(|sig: crate::signal::Signal| {
+        use base64::Engine as _;
+        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&sig.payload);
+        let data = json!({
+            "sender":      sig.sender.to_string(),
+            "payload_b64": payload_b64,
+            "nonce":       sig.nonce,
+        });
+        Ok(Event::default()
+            .event(sig.kind.as_ref())
+            .data(data.to_string()))
+    });
+
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+/// `GET /gateway/demand?ns=X&name=Y`
+///
+/// Returns the demand-pressure snapshot for a capability filter.
+#[derive(Deserialize)]
+struct DemandQuery { ns: String, name: String }
+
+async fn gw_demand(
+    Query(q):   Query<DemandQuery>,
+    State(ctx): State<Arc<HttpCtx>>,
+) -> impl IntoResponse {
+    use crate::capability::CapFilter;
+
+    let filter   = CapFilter::new(q.ns.as_str(), q.name.as_str());
+    let kv       = &ctx.agent_ctx.kv_state;
+
+    let providers = crate::store::scan_kv_prefix(kv, "cap/")
+        .into_iter()
+        .filter(|(k, v)| {
+            if super::capability_ops::is_cap_locality_key(k) { return false; }
+            crate::capability::Capability::decode(v)
+                .map(|c| filter.matches(&c))
+                .unwrap_or(false)
+        })
+        .count();
+
+    let requirers = crate::store::scan_kv_prefix(kv, "req/")
+        .into_iter()
+        .filter(|(_, v)| {
+            crate::capability::CapFilter::decode(v)
+                .map(|f| f.namespace == filter.namespace && f.name == filter.name)
+                .unwrap_or(false)
+        })
+        .count();
+
+    let pressure = (requirers as f64) / (providers.max(1) as f64);
+
+    Json(json!({
+        "ns":              q.ns,
+        "name":            q.name,
+        "providers":       providers,
+        "requirers":       requirers,
+        "demand_pressure": pressure,
+    })).into_response()
+}
+
+/// `POST /gateway/rpc/call`
+///
+/// Sends a blocking RPC call to a named node. `payload_b64` is base64.
+/// Returns `{ "ok": true, "result_b64": "…" }` or `{ "ok": false, "error": "timeout" }`.
+async fn gw_rpc_call(
+    State(ctx): State<Arc<HttpCtx>>,
+    Json(body):  Json<serde_json::Value>,
+) -> impl IntoResponse {
+    use base64::Engine as _;
+
+    let target_str = match body["target"].as_str() {
+        Some(s) => s.to_string(),
+        None    => return (StatusCode::BAD_REQUEST, Json(json!({"error":"missing target"}))).into_response(),
+    };
+    let target: crate::node_id::NodeId = match target_str.parse() {
+        Ok(n)  => n,
+        Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({"error":"invalid target node id"}))).into_response(),
+    };
+
+    let method = match body["method"].as_str() {
+        Some(m) => Arc::from(m),
+        None    => return (StatusCode::BAD_REQUEST, Json(json!({"error":"missing method"}))).into_response(),
+    };
+
+    let payload = if let Some(b64) = body["payload_b64"].as_str() {
+        match base64::engine::general_purpose::STANDARD.decode(b64) {
+            Ok(v)  => Bytes::from(v),
+            Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({"error":"invalid base64 payload"}))).into_response(),
+        }
+    } else {
+        Bytes::new()
+    };
+
+    let timeout_secs = body["timeout_secs"].as_u64().unwrap_or(30);
+    let timeout      = Duration::from_secs(timeout_secs.clamp(1, 300));
+
+    match super::rpc::rpc_call_ctx(&ctx.agent_ctx, target, method, payload, timeout).await {
+        Ok(result) => {
+            let result_b64 = base64::engine::general_purpose::STANDARD.encode(&result);
+            Json(json!({ "ok": true, "result_b64": result_b64 })).into_response()
+        }
+        Err(super::rpc::RpcError::Timeout) => {
+            (StatusCode::GATEWAY_TIMEOUT, Json(json!({ "ok": false, "error": "timeout" }))).into_response()
+        }
     }
 }
 
