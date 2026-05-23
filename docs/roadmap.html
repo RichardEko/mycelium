@@ -819,16 +819,21 @@
         <div class="stack-num sn-4">Layer<br>4</div>
         <div class="stack-body">
           <div class="stack-title">AI Integration <span class="phase-tag tag-p4">Phase 4</span></div>
-          <p class="stack-desc">MCP bridge (server + client roles) and language bridges (Python first, TypeScript next). Mycelium-hosted tools expose as MCP servers; agents can also call external MCP tool servers. Python and TypeScript agents connect via an HTTP gateway sidecar — no FFI, no version coupling, SSE streaming native. LangGraph and graph-orchestration frameworks are out of scope: their centralized scheduler model conflicts with Mycelium's epidemic routing. The clean boundary is MCP — external orchestrators call in via MCP tool calls.</p>
+          <p class="stack-desc">MCP bridge (server + client roles) and language bridges (Python first, TypeScript next). Mycelium-hosted tools expose as MCP servers; agents can also call external MCP tool servers. Python and TypeScript agents connect via an HTTP gateway sidecar — no FFI, no version coupling, SSE streaming native. LangGraph and graph-orchestration frameworks are out of scope: their centralized scheduler model conflicts with Mycelium's epidemic routing. The clean boundary is MCP — external orchestrators call in via MCP tool calls. <strong>Skills are capabilities</strong> — a <code>.skill.toml</code> file defines the JSON Schema contract, platform constraints, LLM prompt, and authorization policy for a <code>SkillRunner</code> node. Plans are not a Mycelium primitive — planning is LLM-internal; the mesh provides the execution substrate. Three security primitives ship alongside MCP: invocation audit trail (HLC causal log + OTEL), capability authorization scoping, and session-scoped mesh views.</p>
           <div class="chips">
             <span class="chip">MCP server role</span>
             <span class="chip">MCP client role</span>
-            <span class="chip">tools/ KV namespace</span>
+            <span class="chip">tools/ · skills/ KV namespace</span>
             <span class="chip">rpc_call · rpc_respond</span>
+            <span class="chip">SkillRunner · .skill.toml</span>
             <span class="chip">Python SDK (HTTP gateway)</span>
             <span class="chip">TypeScript SDK</span>
+            <span class="chip">A2A adapter (post-MCP)</span>
             <span class="chip">credential context (bridge-layer)</span>
             <span class="chip">supervision · watch()</span>
+            <span class="chip">invocation audit trail (HLC + OTEL)</span>
+            <span class="chip">capability authorization scoping</span>
+            <span class="chip">session-scoped mesh views</span>
           </div>
         </div>
       </div>
@@ -1634,6 +1639,143 @@ agent.<span class="fn">emit</span>(
         <tr><td>Reliability</td><td>Best-effort — can be silently dropped</td><td>At-least-once on open stream; failure is explicit</td></tr>
         <tr><td>Flow control</td><td>Probabilistic opacity shedding</td><td>HTTP/2 flow control, TCP backpressure</td></tr>
         <tr><td>Use cases</td><td>Work routing, load coordination</td><td>Streaming tokens, cancel signals, progress events</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ── Phase 4: AI Integration ── -->
+  <div class="section">
+    <div class="section-head">
+      <h2>Phase 4 — AI Integration</h2>
+      <span class="phase-tag tag-p4">After L3</span>
+    </div>
+
+    <h3>Skills = Capabilities — no new primitive needed</h3>
+    <p>The industry term "skill" maps directly onto <code>advertise_capability</code> with a
+    richer JSON Schema attachment in KV. A skill is a named, discoverable, invocable unit of
+    behavior — exactly what a capability already is. No separate skill registry, no skill
+    execution engine, no new API surface.</p>
+
+    <p>A <strong>Skill Definition File</strong> (<code>.skill.toml</code>) declares the full
+    contract for registering a capability and driving an LLM node:</p>
+
+<pre><code><span class="cmt"># code_review.skill.toml</span>
+[capability]
+ns          = <span class="str">"dev"</span>
+name        = <span class="str">"code-review"</span>
+description = <span class="str">"Reviews a PR diff and returns structured feedback"</span>
+ttl_secs    = 300
+
+[capability.input]
+type = <span class="str">"object"</span>
+required = [<span class="str">"pr_number"</span>]
+[capability.input.properties]
+pr_number = { type = <span class="str">"integer"</span> }
+focus     = { type = <span class="str">"string"</span>, enum = [<span class="str">"security"</span>, <span class="str">"performance"</span>, <span class="str">"all"</span>] }
+
+[capability.output]
+type = <span class="str">"object"</span>
+[capability.output.properties]
+summary = { type = <span class="str">"string"</span> }
+issues  = { type = <span class="str">"array"</span>, items = { type = <span class="str">"string"</span> } }
+verdict = { type = <span class="str">"string"</span>, enum = [<span class="str">"approve"</span>, <span class="str">"request-changes"</span>, <span class="str">"comment"</span>] }
+
+[capability.policy]
+max_concurrent     = 2
+authorized_callers = [<span class="str">"orchestrator"</span>, <span class="str">"planner"</span>]   <span class="cmt"># capability authorization scoping</span>
+
+[capability.platform]
+requires = []       <span class="cmt"># e.g. ["gpu", "locality/east-0"] for platform-constrained skills</span>
+
+[skill]
+prompt = <span class="str">"""
+You are reviewing a pull request. Given the PR number and focus area:
+1. Fetch the diff via the gh tool
+2. Analyse for the specified focus area
+3. Return structured JSON matching the output schema
+"""</span>
+tools = [<span class="str">"gh"</span>, <span class="str">"read_file"</span>]   <span class="cmt"># mesh capabilities this skill may resolve and invoke</span></code></pre>
+
+    <p>A <strong><code>SkillRunner</code></strong> node loads the file at startup, advertises
+    the capability with schema in KV, and runs a <code>signal_rx</code> loop. On each
+    invocation: deserialise input → run LLM with skill prompt → serialise output → respond via
+    nonce RPC. One binary, any skill. Swap the file, get different mesh-visible behavior.</p>
+
+    <p><strong>Skill composition is emergent.</strong> The <code>tools</code> list is resolved
+    via <code>resolve_capability</code> at call time — not hardcoded at authoring time. Skills
+    can invoke skills; the mesh routes the sub-invocation; the audit trail captures the causal
+    chain. LLM credentials are held by the runner, not the substrate.</p>
+
+    <table class="compare">
+      <thead><tr><th>Concept</th><th>Mycelium form</th></tr></thead>
+      <tbody>
+        <tr><td>MCP tool</td><td>skill capability + schema at <code>skills/{ns}/{name}/{node_id}</code></td></tr>
+        <tr><td>MCP tool invocation</td><td><code>signal_wired_via</code> + nonce RPC</td></tr>
+        <tr><td>Skill permissions</td><td><code>[capability.policy].authorized_callers</code></td></tr>
+        <tr><td>Skill platform constraints</td><td><code>[capability.platform].requires</code></td></tr>
+        <tr><td>Skill reuse / load balancing</td><td>multiple SkillRunner nodes, same skill file — mesh picks one</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Plans — Not a Primitive</h3>
+    <p>The industry term "plan" is not a Mycelium primitive. <strong>Planning is LLM-internal
+    reasoning.</strong> Mycelium provides the execution substrate that makes any plan
+    executable. Storing a plan as a first-class mesh object reintroduces a central scheduler —
+    the same architectural problem as LangGraph.</p>
+
+<pre><code><span class="cmt">// The "plan" lives in the LLM's context window, not the mesh</span>
+<span class="cmt">// LLM reasons → decides to invoke "dev/code-review"</span>
+<span class="kw">let</span> node = agent.<span class="fn">resolve_capability</span>(&amp;<span class="ty">CapFilter</span>::<span class="fn">new</span>(<span class="str">"dev"</span>, <span class="str">"code-review"</span>));
+<span class="kw">let</span> result = agent.<span class="fn">signal_wired_via</span>(&amp;filter, <span class="str">"skill.invoke"</span>, json_payload).<span class="kw">await</span>;
+<span class="cmt">// → result arrives via Individual scope nonce</span>
+<span class="cmt">// → LLM reasons again with result added to context</span>
+<span class="cmt">// → audit trail records the full causal chain keyed by HLC</span></code></pre>
+
+    <p>The plan is the LLM's internal monologue. The audit trail is the post-hoc record.
+    The mesh is the execution engine for both.</p>
+
+    <h3>Layer 4 Security Primitives</h3>
+    <p>Required alongside MCP and SkillRunner work — not a follow-up. Multi-agent MCP
+    environments create threat models origin-based security (SOP, CORS) never covered.
+    All three primitives address this at the mesh layer, not the transport layer.</p>
+
+    <table class="compare">
+      <thead><tr><th>Primitive</th><th>What it does</th><th>Mycelium hook</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>Invocation audit trail</strong></td>
+          <td>Append-only causal log: which signal triggered which invocation, which agent emitted it. Detects prompt-injection → cross-service pivot chains.</td>
+          <td>HLC-keyed KV at <code>audit/{hlc}/{node_id}</code>; OTEL span export (trace ID = nonce, parent = causal HLC)</td>
+        </tr>
+        <tr>
+          <td><strong>Capability authorization scoping</strong></td>
+          <td>Per-caller/session gate at <code>resolve_capability</code>. Only return capabilities the calling agent's context is authorized to see. Closes the confused deputy gap.</td>
+          <td><code>[capability.policy].authorized_callers</code> in skill/manifest; affects <code>advertise_capability</code> + <code>resolve_capability</code> signatures</td>
+        </tr>
+        <tr>
+          <td><strong>Session-scoped mesh views</strong></td>
+          <td>LLM agent executing a task sees only capabilities authorized for that task's context — not the full capability space. Prevents cross-session leakage.<br><br>
+          <strong>Token bloat and security scoping are the same design problem.</strong> A naive <code>scan_prefix("tools/")</code> dumps every capability schema into the LLM's context window — burning tokens on irrelevant tools and widening the confused deputy surface simultaneously. The fix is identical for both: tool discovery returns a <em>filtered</em> <code>resolve_capability</code> scoped to the caller's authorized context. One implementation, two benefits. Do not implement language bridge tool discovery as a raw scan and patch scoping in later.</td>
+          <td>Scoping declaration constrains <code>resolve_capability</code> output per caller context; built on existing capability TTL. Language bridge tool-discovery endpoint must accept caller context from day one — not retrofittable.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p><strong>Why mesh-level, not transport-level:</strong> Origin isolation, OAuth, and user
+    confirmation are application-layer concerns. The confused deputy problem is about what an
+    LLM <em>decides</em> to do within its legitimate access — that requires a capability gate,
+    not a network boundary.</p>
+
+    <h3>Landscape Survey — What Not to Take, What to Borrow</h3>
+    <p>From surveying agentgateway (Solo.io), Gloo Mesh, and LiteLLM:</p>
+    <table class="compare">
+      <thead><tr><th>Pattern</th><th>Verdict</th><th>Rationale</th></tr></thead>
+      <tbody>
+        <tr><td>Centralised proxy / router (agentgateway, LiteLLM)</td><td style="color:var(--accent5)">Do not adopt</td><td>Reduces Mycelium to a fancy HTTP client — loses adaptive routing, demand pressure, locality dispatch. Same trap as LangGraph.</td></tr>
+        <tr><td>Sidecar injection (Istio / Gloo Mesh)</td><td style="color:var(--accent5)">Do not adopt</td><td>Mycelium is a library. No daemon injection needed.</td></tr>
+        <tr><td>OTEL export from audit trail</td><td style="color:var(--accent2)">Adopt — implement alongside</td><td>Makes Mycelium observable with existing Grafana/Jaeger/Honeycomb stacks. Low cost, high operational value.</td></tr>
+        <tr><td>Declarative capability policy in manifest</td><td style="color:var(--accent2)">Adopt — it's the auth scoping hook</td><td>Policy-as-data (Envoy/Istio pattern) — authorization envelope declared at provision time, visible in manifest diff, enforced by the substrate.</td></tr>
+        <tr><td>A2A wire-protocol adapter</td><td style="color:var(--accent)">Design now, implement post-MCP</td><td>Mycelium is a native A2A implementation but opaque externally. Adapter lets AutoGen/LangChain agents participate without knowing they're on Mycelium.</td></tr>
       </tbody>
     </table>
   </div>

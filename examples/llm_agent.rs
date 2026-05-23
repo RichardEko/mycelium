@@ -534,15 +534,15 @@ const PRESETS: &[Preset] = &[
         toml:        include_str!("presets/llm_agent.toml"),
     },
     Preset {
-        id:          "mcp-mesh",
-        name:        "MCP Tool Mesh",
-        description: "Tool providers, data sources, and LLM reasoning nodes",
+        id:          "multi-agent-mesh",
+        name:        "Multi-Agent Mesh",
+        description: "Planners, fact-checkers, and synthesizers collaborate via gossip RPC — no central coordinator",
         toml:        include_str!("presets/mcp_mesh.toml"),
     },
     Preset {
-        id:          "compute-cluster",
-        name:        "Compute Cluster",
-        description: "Parallel compute workers with real-time data feed",
+        id:          "signal-suppress",
+        name:        "Signal Suppression",
+        description: "Workers apply a refractory suppress() after each invocation — emergent load balancing with no dispatcher",
         toml:        include_str!("presets/compute_cluster.toml"),
     },
     Preset {
@@ -861,7 +861,8 @@ fn tools_for_node(reporter: &GossipAgent, target: &NodeId) -> Vec<String> {
 }
 
 fn build_state_json(app: &AppState) -> String {
-    let reporter = &app.agent_n2;
+    let reporter    = &app.agent_n2;
+    let preset_name = app.manifest.read().unwrap().mesh.name.clone();
     let nodes: Vec<Value> = [
         (&app.agent_n0, "n-0"),
         (&app.agent_n1, "n-1"),
@@ -874,8 +875,8 @@ fn build_state_json(app: &AppState) -> String {
             "n-1" => app.pause_n1.load(Ordering::Relaxed),
             _     => app.pause_n2.load(Ordering::Relaxed),
         };
-        let state: String = if *label == "n-2" && !paused {
-            // n-2 is alive and running the planning loop
+        let state: String = if *label == "n-2" && !paused && preset_name == "llm-agent-demo" {
+            // SM state (Planning/Invoking/Reflecting) is only meaningful for the LLM demo
             let s = app.sm.state().to_kv_str();
             if s == "Idle" { "Ready".into() } else { s }
         } else if !alive || paused {
@@ -902,10 +903,14 @@ fn build_state_json(app: &AppState) -> String {
     }).collect();
 
     let log: Vec<Value> = {
+        const LLM_EVENTS: &[&str] = &["State", "Task", "Invoking", "Result", "Tools"];
+        let is_llm = preset_name == "llm-agent-demo";
         let l = app.log.lock().unwrap();
-        l.iter().rev().take(30).map(|e| json!({
-            "time": fmt_time(e.time_ms), "event": e.event, "detail": e.detail,
-        })).collect()
+        l.iter().rev()
+            .filter(|e| is_llm || !LLM_EVENTS.contains(&e.event.as_str()))
+            .take(30)
+            .map(|e| json!({"time": fmt_time(e.time_ms), "event": e.event, "detail": e.detail}))
+            .collect()
     };
 
     let (ms, group_caps_list) = {
@@ -964,7 +969,6 @@ fn build_state_json(app: &AppState) -> String {
             "from": e.from_idx, "to": e.to_idx, "ts": e.ts_ms, "kind": e.kind,
         })).collect()
     };
-    let preset_name = app.manifest.read().unwrap().mesh.name.clone();
     let sm_raw = app.sm.state().to_kv_str();
     let planner_state = if sm_raw == "Idle" { "Ready".to_string() } else { sm_raw };
     let planner_node: &str = {
@@ -1041,15 +1045,16 @@ async fn handle_manifest_post(app: &AppState, body: &[u8]) -> (u16, &'static str
     let Ok(toml_str) = new_m.to_toml() else {
         return (500, "application/json", json!({"error":"manifest re-serialization failed"}).to_string());
     };
+    if let Ok(mut w) = app.manifest.write() { *w = new_m; }
+    {
+        let m = app.manifest.read().unwrap().clone();
+        let new_handles = advertise_manifest_caps(&m, [&app.agent_n0, &app.agent_n1, &app.agent_n2]);
+        *app.manifest_caps.lock().unwrap() = new_handles;
+    }
     let _ = app.agent_n2.set(manifest_keys::CURRENT,
                               Bytes::from(toml_str.into_bytes()));
     let _ = app.agent_n2.set(manifest_keys::VERSION,
                               Bytes::from(new_ver.clone().into_bytes()));
-
-    // Update local manifest reference so check_status() reflects the new manifest immediately
-    if let Ok(mut w) = app.manifest.write() {
-        *w = new_m;
-    }
 
     push_log(&app.log, "Manifest", format!("uploaded v{new_ver} (was v{cur_ver})"));
     (200, "application/json", json!({"ok": true, "version": new_ver}).to_string())
@@ -1164,8 +1169,8 @@ fn handle_node_kill(app: &AppState, label: &str) -> (u16, &'static str, String) 
     *spare_caps.lock().unwrap() = caps_for_node_index(&manifest, node_idx, spare_agent);
     let static_label: &'static str = ["n-0", "n-1", "n-2"][node_idx];
     app.spare_covering.lock().unwrap()[node_idx] = Some(static_label);
-    // If the planner node was killed, migrate the planning loop to the spare
-    if label == "n-2" {
+    // Migrate the planning loop only for the LLM demo — other presets don't run a planner on n-2
+    if label == "n-2" && app.manifest.read().unwrap().mesh.name == "llm-agent-demo" {
         *app.active_planner.lock().unwrap() = Arc::clone(&app.agent_spare2);
         app.restart_planner.store(true, Ordering::Relaxed);
     }
@@ -1189,8 +1194,8 @@ fn handle_node_start(app: &AppState, label: &str) -> (u16, &'static str, String)
     // Return spare to pool
     *spare_caps.lock().unwrap() = vec![];
     app.spare_covering.lock().unwrap()[node_idx] = None;
-    // If the planner node is being restored, move the planning loop back to it
-    if label == "n-2" {
+    // Restore the planning loop only for the LLM demo
+    if label == "n-2" && app.manifest.read().unwrap().mesh.name == "llm-agent-demo" {
         *app.active_planner.lock().unwrap() = Arc::clone(&app.agent_n2);
         app.restart_planner.store(true, Ordering::Relaxed);
     }
@@ -1259,9 +1264,14 @@ async fn handle_preset_apply(app: &AppState, preset_id: &str) -> (u16, &'static 
     let Ok(toml_str) = new_m.to_toml() else {
         return (500, "application/json", json!({"error":"re-serialization failed"}).to_string());
     };
+    if let Ok(mut w) = app.manifest.write() { *w = new_m; }
+    {
+        let m = app.manifest.read().unwrap().clone();
+        let new_handles = advertise_manifest_caps(&m, [&app.agent_n0, &app.agent_n1, &app.agent_n2]);
+        *app.manifest_caps.lock().unwrap() = new_handles;
+    }
     let _ = app.agent_n2.set(manifest_keys::CURRENT, Bytes::from(toml_str.into_bytes()));
     let _ = app.agent_n2.set(manifest_keys::VERSION,  Bytes::from(new_ver.clone().into_bytes()));
-    if let Ok(mut w) = app.manifest.write() { *w = new_m; }
     push_log(&app.log, "Preset", format!("'{}' applied as v{new_ver}", preset_id));
     (200, "application/json", json!({"ok":true,"version":new_ver}).to_string())
 }
@@ -1336,6 +1346,50 @@ async fn handle_demo_trigger(app: Arc<AppState>, action: &str) -> (u16, &'static
             app2.trigger_requested.store(true, Ordering::Relaxed);
             push_log(&app2.log, "Demo", "Task triggered — n-2 will start planning immediately");
             app2.trigger_active.store(false, Ordering::Relaxed);
+        }
+        "coalition-task" => {
+            tokio::spawn(async move {
+                push_log(&app2.log, "Demo", "coalition: planner (n-0) delegating to fact-checker (n-1)");
+                push_traffic(&app2.traffic, 0, 1, "delegate");
+                time::sleep(Duration::from_millis(500)).await;
+                push_traffic(&app2.traffic, 1, 0, "verified");
+                push_log(&app2.log, "Demo", "coalition: fact-checker verified — forwarding to synthesizer");
+                time::sleep(Duration::from_millis(350)).await;
+                push_traffic(&app2.traffic, 0, 2, "aggregate");
+                push_traffic(&app2.traffic, 1, 2, "aggregate");
+                time::sleep(Duration::from_millis(700)).await;
+                push_traffic(&app2.traffic, 2, 0, "result");
+                push_log(&app2.log, "Demo", "coalition: synthesis complete — result returned to planner");
+                app2.trigger_active.store(false, Ordering::Relaxed);
+            });
+        }
+        "suppress-burst" => {
+            tokio::spawn(async move {
+                push_log(&app2.log, "Demo", "suppress: burst of 6 invocations — both workers handle first wave");
+                push_traffic(&app2.traffic, 2, 0, "invoke");
+                push_traffic(&app2.traffic, 2, 1, "invoke");
+                time::sleep(Duration::from_millis(350)).await;
+                push_traffic(&app2.traffic, 0, 2, "result");
+                push_traffic(&app2.traffic, 1, 2, "result");
+                push_log(&app2.log, "Demo", "suppress: n-0 and n-1 suppressed (3 s refractory)");
+                time::sleep(Duration::from_millis(700)).await;
+                push_log(&app2.log, "Demo", "suppress: n-0 recovered first — next two invocations route there");
+                push_traffic(&app2.traffic, 2, 0, "invoke");
+                time::sleep(Duration::from_millis(350)).await;
+                push_traffic(&app2.traffic, 0, 2, "result");
+                time::sleep(Duration::from_millis(350)).await;
+                push_traffic(&app2.traffic, 2, 0, "invoke");
+                time::sleep(Duration::from_millis(350)).await;
+                push_traffic(&app2.traffic, 0, 2, "result");
+                push_log(&app2.log, "Demo", "suppress: n-1 recovered — load distributes again");
+                time::sleep(Duration::from_millis(300)).await;
+                push_traffic(&app2.traffic, 2, 0, "invoke");
+                push_traffic(&app2.traffic, 2, 1, "invoke");
+                time::sleep(Duration::from_millis(350)).await;
+                push_traffic(&app2.traffic, 0, 2, "result");
+                push_traffic(&app2.traffic, 1, 2, "result");
+                app2.trigger_active.store(false, Ordering::Relaxed);
+            });
         }
         _ => {
             app2.trigger_active.store(false, Ordering::Relaxed);
@@ -1732,28 +1786,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // ── Manifest content watcher ──────────────────────────────────────────────
-    // When manifest/current changes (new upload or preset apply), refresh the
-    // dynamic capability handles so the mesh immediately reflects the new topology.
-    tokio::spawn({
-        let app        = Arc::clone(&app);
-        let agent      = Arc::clone(&agent_n2);
-        let agent_n0_w = Arc::clone(&agent_n0);
-        let agent_n1_w = Arc::clone(&agent_n1);
-        let agent_n2_w = Arc::clone(&agent_n2);
-        async move {
-            let mut rx = agent.subscribe_prefix("manifest/current");
-            loop {
-                if rx.changed().await.is_err() { break; }
-                let m = app.manifest.read().unwrap().clone();
-                let new_handles = advertise_manifest_caps(
-                    &m, [&agent_n0_w, &agent_n1_w, &agent_n2_w],
-                );
-                *app.manifest_caps.lock().unwrap() = new_handles;
-                push_log(&app.log, "Manifest", format!("topology v{} deployed to mesh", m.mesh.version));
-            }
-        }
-    });
-
     // ── Manifest control watcher ──────────────────────────────────────────────
     // Watches manifest/control/ prefix via gossip KV subscription.
     // System stop/start flips all node pause flags; group stop/start targets

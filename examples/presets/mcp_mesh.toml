@@ -1,33 +1,33 @@
 [mesh]
-name    = "mcp-tool-mesh"
+name    = "multi-agent-mesh"
 version = "0.1"
 
 [[group]]
-name        = "tool-providers"
-description = "MCP tool servers — search, compute, data"
-min_agents  = 2
-max_agents  = 8
+name        = "planners"
+description = "Planning agents — decompose goals and delegate sub-tasks via gossip RPC"
+min_agents  = 1
+max_agents  = 2
 
   [[group.capability]]
-  ns   = "compute"
-  name = "cpu"
+  ns   = "reasoning"
+  name = "planner"
 
 [[group]]
-name        = "data-providers"
-description = "Real-time and vector data sources"
+name        = "fact-checkers"
+description = "Verification agents — receive delegated claims, return evidence or refutation"
 min_agents  = 1
-max_agents  = 4
+max_agents  = 2
 
   [[group.capability]]
-  ns   = "data"
-  name = "realtime"
+  ns   = "reasoning"
+  name = "fact-checker"
 
 [[group]]
-name        = "reasoning"
-description = "LLM reasoning and planning nodes"
+name        = "synthesizers"
+description = "Synthesis agents — aggregate outputs from planners and fact-checkers into a final result"
 min_agents  = 1
-max_agents  = 3
+max_agents  = 2
 
   [[group.capability]]
-  ns   = "llm"
-  name = "inference"
+  ns   = "reasoning"
+  name = "synthesizer"

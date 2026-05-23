@@ -709,6 +709,15 @@ inside the agent binary. This is the foundation for bulk payloads, SSE streaming
 sidecar gateway. No external web framework dependency; a minimal `tokio`-based server sufficient
 for the bridge use cases.
 
+> **Note from example development:** The library's HTTP server (`src/agent/http.rs`) serves only
+> library-level endpoints (`/health`, `/stats`, `/mcp`, `/signals/{kind}`) and is not exposed as
+> an application-level HTTP helper. The `llm_agent` example had to build its own raw TCP HTTP
+> server to serve its management UI and control endpoints. The single-read body parsing in that
+> server could not handle POST bodies that arrived in a separate TCP packet from the headers —
+> a class of bug that a proper HTTP library prevents entirely. Exposing the embedded HTTP server
+> as an application-level primitive (so examples and bridges can register their own route handlers)
+> would eliminate this failure mode. Not a bug; worth tracking for the Layer 3 follow-on pass.
+
 **2. SSE / streaming** — MCP's primary value for LLM workloads is streaming token responses.
 A tool call that returns a token stream via SSE is the default pattern for any non-trivial AI
 integration. Without this, MCP is limited to short synchronous tool calls.
@@ -861,6 +870,182 @@ load balancing, and fault tolerance within the provider tier.
 Layer 4 supervision uses Layer 2's `watch()` to monitor AI agent liveness — no separate
 monitoring infrastructure. A supervisor watches `contract.available` heartbeats; on stale,
 triggers respawn, failover, or escalation. The Python bridge exposes this as `on_stale(kind, threshold, callback)`.
+
+### Skills as Capabilities — SkillRunner
+
+The industry term "skill" maps directly onto `advertise_capability` with a richer JSON Schema
+attachment in KV. There is no new primitive. A skill is a named, discoverable, invocable unit
+of behavior — exactly what a capability already is.
+
+A **Skill Definition File** (`.skill.toml`) declares everything needed to register a capability
+and drive an LLM execution node:
+
+```toml
+[capability]
+ns          = "dev"
+name        = "code-review"
+description = "Reviews a PR diff and returns structured feedback"
+ttl_secs    = 300
+
+[capability.input]
+type = "object"
+required = ["pr_number"]
+[capability.input.properties]
+pr_number = { type = "integer" }
+focus     = { type = "string", enum = ["security", "performance", "all"] }
+
+[capability.output]
+type = "object"
+[capability.output.properties]
+summary = { type = "string" }
+issues  = { type = "array", items = { type = "string" } }
+verdict = { type = "string", enum = ["approve", "request-changes", "comment"] }
+
+[capability.policy]
+max_concurrent     = 2
+authorized_callers = ["orchestrator", "planner"]   # capability authorization scoping
+
+[capability.platform]
+requires = []       # e.g. ["gpu", "locality/east-0"] for platform-constrained skills
+
+[skill]
+prompt = """
+You are reviewing a pull request. Given the PR number and focus area:
+1. Fetch the diff via the gh tool
+2. Analyse for the specified focus area
+3. Return structured JSON matching the output schema
+"""
+tools = ["gh", "read_file"]   # mesh capabilities this skill may resolve and invoke
+```
+
+A **`SkillRunner`** node loads the file at startup:
+
+1. Advertises `capability(ns, name)` with schema pushed to `skills/{ns}/{name}/{node_id}` in KV
+2. Runs a `signal_rx` loop — waits for invocations
+3. On invocation: deserialises input per schema → runs LLM with skill prompt + input →
+   serialises output per schema → responds via nonce RPC
+4. Respects `max_concurrent` via the `suppress` primitive
+
+One `SkillRunner` binary hosts any skill. Swap the file, get different mesh-visible behavior.
+LLM credentials are held by the runner, not the substrate — consistent with the credentials
+architecture above. Multiple `SkillRunner` nodes loading the same skill file are load-balanced
+by the mesh automatically via capability resolution.
+
+**Skill composition is emergent.** The `tools` list in the skill file is itself a capability
+resolution list. During execution the LLM is handed a tool set derived from `resolve_capability`
+at call time, not hardcoded at authoring time. If a `gh` capability is on the mesh, it appears
+in the LLM's tool list. Skills can invoke skills; the mesh routes the sub-invocation; the audit
+trail captures the causal chain.
+
+**MCP mapping:**
+
+| Concept | Mycelium form |
+|---|---|
+| MCP tool | skill capability with schema in `skills/{ns}/{name}/{node_id}` |
+| MCP tool invocation | `signal_wired_via` + nonce RPC |
+| Skill permissions | `[capability.policy].authorized_callers` |
+| Skill platform constraints | `[capability.platform].requires` |
+
+### Plans — Not a Primitive
+
+The industry term "plan" is not a Mycelium primitive. **Planning is LLM-internal reasoning.**
+Mycelium provides the execution substrate that makes any plan executable: capability discovery,
+signal delivery, and causal audit trail. It does not store or schedule plans.
+
+A planning agent emits signals that trigger sequential capability resolutions. The "plan" lives
+in the LLM's context window during execution and in the HLC-keyed audit trail after the fact.
+Storing a plan as a first-class mesh object reintroduces a central scheduler — the same
+architectural problem as LangGraph.
+
+```
+LLM reasons → decides to invoke "dev/code-review"
+→ resolve_capability("dev", "code-review") → node_id
+→ signal_wired_via(filter, "skill.invoke", json_payload)
+→ result arrives via Individual scope nonce
+→ LLM reasons again with result added to context
+→ audit trail captures the full causal chain (HLC-keyed)
+```
+
+The plan is the LLM's internal monologue. The audit trail is the post-hoc record.
+The mesh is the execution engine for both.
+
+### Layer 4 Security Primitives
+
+Required alongside the MCP and SkillRunner work — not a follow-up. Multi-agent MCP
+environments create new threat models that origin-based security (SOP, CORS) never covered.
+The three primitives below address this at the mesh layer, not the transport layer.
+
+**1. Invocation audit trail**
+Append-only causal log of capability resolutions and skill invocations, propagated via gossip
+and keyed by HLC. Captures not just "agent X called skill Y" but the full causal chain: which
+signal triggered the invocation, which agent emitted that signal. Enables post-hoc detection
+of prompt-injection → cross-service pivot patterns. KV namespace: `audit/{hlc}/{node_id}`.
+
+Exports OTEL spans (trace ID = request nonce, parent span = causal predecessor HLC) so
+operators can use existing Grafana / Jaeger / Honeycomb stacks without learning Mycelium
+internals. Implement alongside the audit trail, not after.
+
+**2. Capability authorization scoping**
+`resolve_capability` today returns any matching capability on the mesh — any caller, any
+context. For skill/tool exposure this is the confused deputy gap: an LLM manipulated via
+prompt injection has the same resolution power as legitimate code. Need a per-caller/session
+authorization layer at the `resolve_capability` call site. Expressed declaratively in the
+skill or manifest:
+
+```toml
+[capability.policy]
+max_concurrent     = 3
+authorized_callers = ["orchestrator", "planner"]
+```
+
+This field affects both `advertise_capability` and `resolve_capability` API signatures — design
+before finalising either.
+
+**3. Session-scoped mesh views**
+When an LLM agent executes a task via a skill, it should see only capabilities authorized for
+that task's context — not the full capability space. Prevents cross-session capability leakage.
+Mycelium's capability TTL + `advertise_capability` are already the right primitives; what's
+missing is the scoping declaration that constrains what `resolve_capability` returns for a
+given caller context.
+
+> **Token bloat and security scoping are the same design problem.**
+> When a language bridge (Python/TS) or SkillRunner asks the mesh for available tools, a naive
+> `scan_prefix("tools/")` dumps every capability schema on the mesh into the LLM's context
+> window — burning tokens on irrelevant tools and widening the confused deputy surface at the
+> same time. The fix is identical for both concerns: tool discovery for an LLM agent is a
+> *filtered* `resolve_capability` scoped to the caller's authorized context, not a full mesh
+> scan. Design the language bridge tool-discovery endpoint to accept a caller context and return
+> only the capabilities that context is permitted to see. Session-scoped mesh views is the
+> security primitive; filtered tool schemas is the UX/token outcome. One implementation, two
+> benefits. Do not implement language bridge tool discovery as a raw `scan_prefix` and patch
+> scoping in later — the filtering must be first-class from the start.
+
+**Why mesh-level, not transport-level:** Origin isolation (SOP/CORS), OAuth enhancements, and
+user confirmation checkpoints are application-layer concerns. The confused deputy problem is
+about what an LLM *decides* to do within its legitimate access — that requires a mesh-level
+capability gate, not a network boundary.
+
+**Sequencing:** Design alongside the SkillRunner and MCP server role work. The
+`[capability.policy]` field in the skill definition is the natural hook point; the authorization
+scoping implementation lives at `resolve_capability`. Retrofitting it after those APIs are
+finalised is expensive.
+
+### Landscape Survey — What Not to Take, What to Borrow
+
+From surveying agentgateway (Solo.io / Rust MCP proxy), Gloo Mesh (Istio-based), and LiteLLM:
+
+**Centralised proxy / router model** — do not adopt. agentgateway and LiteLLM solve routing
+through a single control plane. Applying that to Mycelium reduces it to a fancy HTTP client,
+losing adaptive routing, demand pressure, and locality-aware dispatch. Same trap as LangGraph.
+
+**Sidecar injection (Istio style)** — unnecessary. Mycelium is a library; agents don't need a
+daemon injected alongside them.
+
+**A2A wire-protocol adapter (post-MCP)** — agentgateway supports the A2A (Agent-to-Agent)
+protocol alongside MCP. Mycelium's signal mesh is a native A2A implementation but opaque to
+non-Mycelium agents. An explicit A2A adapter in the language bridge would let external agents
+(AutoGen, LangChain) participate without knowing they're on Mycelium. Lower priority than MCP;
+the A2A spec is stable enough to design for in the bridge layer alongside MCP work.
 
 ---
 
@@ -1029,6 +1214,11 @@ Weeks:  0         2          4          6          8         10        12
 | Layer 4 | `NodeCapabilityConfig`: declarative local capability declaration + probe loop | **Complete** |
 | Layer 4 | Python language bridge: HTTP gateway + `mycelium-py` SDK | Planned |
 | Layer 4 | TypeScript language bridge | Planned |
+| Layer 4 | `SkillRunner` node + `.skill.toml` capability-as-skill definition format | Planned |
+| Layer 4 | Invocation audit trail: HLC-keyed causal log + OTEL span export | Planned |
+| Layer 4 | Capability authorization scoping: `[capability.policy]` in manifest + `resolve_capability` gate | Planned |
+| Layer 4 | Session-scoped mesh views: per-caller capability slice at `resolve_capability` | Planned |
+| Layer 4 | A2A wire-protocol adapter (language bridge — after MCP) | Planned |
 | Layer 5 | Metrics, Prometheus exporter, Grafana dashboard | Planned |
 | **Production** | Multi-machine integration tests + Docker Compose reference topology | **Blocking** |
 | **Production** | KV persistence: WAL + snapshot/replay; consensus committed-slot durability | **Blocking** |

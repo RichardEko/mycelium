@@ -521,17 +521,17 @@ const PRESET_INFO = {
     watch: 'Job traffic fans out from n-2 to workers; result signals flow back. Watch the edge weights shift as load balances.',
     triggers: [{ label: 'Dispatch batch', action: 'dispatch-batch', tip: 'Send 6 jobs in 3 waves through the pool' }],
   },
-  'mcp-tool-mesh': {
-    title: 'MCP Tool Mesh',
-    about: 'Tool providers (n-0) advertise callable functions, data sources (n-1) expose query capabilities, and LLM reasoning nodes (n-2) discover and invoke them via the mesh.',
-    watch: 'Tool-discovery gossip flows continuously. n-2\'s state badge tracks the reasoning cycle.',
-    triggers: [],
+  'multi-agent-mesh': {
+    title: 'Multi-Agent Mesh',
+    about: 'Three autonomous agent roles share a gossip mesh with no central coordinator. Planners (n-0) decompose goals and delegate sub-tasks; fact-checkers (n-1) verify claims and return evidence; synthesizers (n-2) aggregate outputs from both into a final result. Each role discovers the others purely through capability advertisement — no hardcoded addresses.',
+    watch: 'Trigger a coalition task to see the full delegation chain: planner → fact-checker → both feed synthesizer → result returns to planner. Each hop is a gossip RPC call.',
+    triggers: [{ label: 'Run coalition task', action: 'coalition-task', tip: 'Trigger a 3-stage workflow: delegate → verify → synthesize, routed across all three agent types via gossip RPC' }],
   },
-  'compute-cluster': {
-    title: 'Compute Cluster',
-    about: 'Workers advertise compute capabilities with metadata (CPU cores, memory). A data-feed node broadcasts live data; compute workers pick up tasks and emit results via signals.',
-    watch: 'Data-feed traffic from n-0, compute fan-out to n-1 and n-2, and result signals returning.',
-    triggers: [],
+  'signal-suppress': {
+    title: 'Signal Suppression',
+    about: 'Workers process one invocation then call suppress() for 3 seconds — Mycelium\'s refractory period mechanism, modelled on biological inhibition. The emitter (n-2) fires rapid bursts without knowing which worker is ready; work routes naturally to whichever node just recovered. No dispatcher, no load-balancer — emergent fairness from local inhibition.',
+    watch: 'Trigger a burst and watch request edges bounce between workers as each suppresses after handling. After the first wave both workers suppress; traffic concentrates on n-0 until it recovers, then spreads again when n-1 recovers.',
+    triggers: [{ label: 'Fire rapid burst', action: 'suppress-burst', tip: 'Send 6 rapid invocations and watch them distribute via the refractory suppress() cycle — no central routing decision' }],
   },
   'epidemic-ring': {
     title: 'Epidemic Ring',
