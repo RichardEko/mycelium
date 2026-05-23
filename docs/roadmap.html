@@ -707,6 +707,109 @@
     </table>
   </div>
 
+  <!-- ── Deployment Model ── -->
+  <div class="section">
+    <div class="section-head">
+      <h2>Deployment Model — Library, Not Platform</h2>
+      <p style="margin-top:0.6rem;color:#94a3b8;font-size:0.95rem;">
+        Understanding what Mycelium <em>is</em> determines who owns what and how a fleet is observed.
+      </p>
+    </div>
+
+    <div class="philosophy" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); margin-bottom:32px;">
+
+      <div class="phil-item">
+        <span class="phil-icon">📦</span>
+        <div class="phil-title">It is a linked library</div>
+        <p class="phil-body">Mycelium is compiled into your binary. There is no Mycelium daemon,
+        no control plane process, no central broker to operate. When the process starts, the node
+        joins the mesh. When it stops, it leaves. Deployment is entirely the operator's
+        concern — Kubernetes, AWS ECS, GCP Cloud Run, Puppet-managed VMs, bare metal;
+        Mycelium has no opinion.</p>
+      </div>
+
+      <div class="phil-item">
+        <span class="phil-icon">🔵</span>
+        <div class="phil-title">A cluster is emergent</div>
+        <p class="phil-body">There is no cluster object to create or join. A "cluster" is simply
+        the set of process instances that embed Mycelium <em>and</em> can reach each other over
+        TCP. Topology is the product of network reachability and seed-peer configuration —
+        nothing else. Two groups of nodes that cannot reach each other form two independent
+        clusters automatically.</p>
+      </div>
+
+      <div class="phil-item">
+        <span class="phil-icon">🧱</span>
+        <div class="phil-title">Each cluster is isolated by construction</div>
+        <p class="phil-body">There is no cross-cluster Mycelium view. The management dashboard
+        (port 8090) is itself just another node in the same cluster — it sees exactly what the
+        gossip mesh exposes and nothing beyond it. If you run ten independent services, each
+        embedding Mycelium, you have ten independent clusters with no shared state.</p>
+      </div>
+
+      <div class="phil-item">
+        <span class="phil-icon">📡</span>
+        <div class="phil-title">Fleet-wide visibility is your stack's job</div>
+        <p class="phil-body">Datacenter or fleet-wide observability comes from wiring each
+        cluster's metrics and log endpoints into the operator's existing tooling — Prometheus
+        scraping each cluster's <code>/metrics</code>, Grafana aggregating across them,
+        Datadog, Dynatrace, or whatever is already in place. Mycelium's Layer 5 work (planned)
+        provides the scrape-compatible metrics endpoint each cluster exposes; aggregation and
+        alerting remain in the operator's stack.</p>
+      </div>
+
+    </div>
+
+    <table class="compare">
+      <thead>
+        <tr>
+          <th>Concern</th>
+          <th>Who owns it</th>
+          <th>How</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Process lifecycle (start, stop, restart, scaling)</td>
+          <td>Operator / devops tooling</td>
+          <td>Kubernetes Deployment, ECS task, systemd unit, Puppet manifest — whatever the team already uses</td>
+        </tr>
+        <tr>
+          <td>Network reachability between nodes</td>
+          <td>Operator</td>
+          <td>Seed-peer addresses or DNS-based discovery passed to <code>GossipConfig</code>; Mycelium dials out on startup</td>
+        </tr>
+        <tr>
+          <td>Within-cluster state and routing</td>
+          <td>Mycelium</td>
+          <td>Epidemic gossip, LWW KV, signal mesh, capability resolution — all in-process</td>
+        </tr>
+        <tr>
+          <td>Within-cluster dashboard</td>
+          <td>Mycelium mgmt node</td>
+          <td>Optional observer node on port 8090; sees only its own cluster's gossip mesh</td>
+        </tr>
+        <tr>
+          <td>Cross-cluster / fleet-wide observability</td>
+          <td>Operator's observability stack</td>
+          <td>Prometheus scrapes <code>/metrics</code> on each cluster; Grafana, Datadog, etc. aggregate across clusters</td>
+        </tr>
+        <tr>
+          <td>Cross-cluster coordination</td>
+          <td>Application layer</td>
+          <td>Not a Mycelium primitive — use your existing service mesh, message bus, or API gateway if clusters need to communicate</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p style="margin-top:24px; font-size:14px; color:var(--muted);">
+      The closest analogues are <strong>Hazelcast embedded</strong> and <strong>etcd embedded</strong>:
+      you ship the distributed system as part of your application binary, not as a separate service
+      your application depends on. The operator's job is network reachability and process lifecycle —
+      not operating a Mycelium cluster as an independent infrastructure tier.
+    </p>
+  </div>
+
   <!-- ── Structural Inversion ── -->
   <div class="section">
     <div class="section-head">
@@ -2219,6 +2322,88 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
         <tr><td>Prometheus metrics export + dashboards</td><td style="color:#e3b341; font-weight:600;">Medium</td><td>1 week</td></tr>
       </tbody>
     </table>
+  </div>
+
+  <!-- ── Operator Guide (stub) ── -->
+  <div class="section" id="operator-guide">
+    <div class="section-head">
+      <h2>Operator Guide — How to Deploy</h2>
+      <p style="margin-top:0.6rem;color:#94a3b8;font-size:0.95rem;">
+        This section will be filled out once the three production blockers (persistence, mTLS, multi-machine tests)
+        are resolved. Stubs below mark what will be covered.
+      </p>
+    </div>
+
+    <div style="background:rgba(255,166,87,0.06); border:1px solid rgba(255,166,87,0.25); border-radius:var(--radius); padding:16px 20px; margin-bottom:28px; font-size:13px; color:var(--accent4);">
+      <strong>Draft / incomplete.</strong> Content will be authored once KV persistence, mTLS, and multi-machine integration tests ship.
+    </div>
+
+    <div class="two-col" style="gap:20px; margin-bottom:28px;">
+
+      <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:18px;">
+        <div style="font-weight:700; font-size:14px; margin-bottom:8px; color:var(--text);">1 — Adding Mycelium to your binary</div>
+        <ul style="font-size:13px; color:var(--muted); padding-left:18px; line-height:1.8;">
+          <li>Cargo dependency and feature flags</li>
+          <li>Constructing <code>GossipConfig</code>: node ID, listen address, seed peers</li>
+          <li>Startup / shutdown sequence (spawn, await mesh ready, graceful leave)</li>
+          <li>Health check endpoint wiring</li>
+        </ul>
+      </div>
+
+      <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:18px;">
+        <div style="font-weight:700; font-size:14px; margin-bottom:8px; color:var(--text);">2 — Cluster bootstrap and peer discovery</div>
+        <ul style="font-size:13px; color:var(--muted); padding-left:18px; line-height:1.8;">
+          <li>Static seed-peer list (simplest; suitable for small fixed clusters)</li>
+          <li>DNS-based discovery (headless Kubernetes Service, AWS Route53)</li>
+          <li>First-node bootstrap: seeding from an empty peer list</li>
+          <li>Anti-entropy catch-up time for late joiners</li>
+        </ul>
+      </div>
+
+      <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:18px;">
+        <div style="font-weight:700; font-size:14px; margin-bottom:8px; color:var(--text);">3 — Platform-specific deployment patterns</div>
+        <ul style="font-size:13px; color:var(--muted); padding-left:18px; line-height:1.8;">
+          <li>Kubernetes: StatefulSet vs Deployment, headless service for peer DNS, PodDisruptionBudget</li>
+          <li>AWS ECS: service discovery via Cloud Map, task networking modes</li>
+          <li>GCP / GKE: equivalent patterns</li>
+          <li>Bare metal / Puppet / Chef / Ansible: static seed list, firewall rules</li>
+          <li>Docker Compose (local dev): reference topology from the three-node demo</li>
+        </ul>
+      </div>
+
+      <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:18px;">
+        <div style="font-weight:700; font-size:14px; margin-bottom:8px; color:var(--text);">4 — Security configuration</div>
+        <ul style="font-size:13px; color:var(--muted); padding-left:18px; line-height:1.8;">
+          <li>Generating node keypairs and the cluster CA</li>
+          <li>mTLS configuration in <code>GossipConfig</code></li>
+          <li>Rotating certificates without cluster disruption</li>
+          <li>Network policy: which ports to open, which to firewall</li>
+        </ul>
+      </div>
+
+      <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:18px;">
+        <div style="font-weight:700; font-size:14px; margin-bottom:8px; color:var(--text);">5 — Wiring into your observability stack</div>
+        <ul style="font-size:13px; color:var(--muted); padding-left:18px; line-height:1.8;">
+          <li>Enabling the <code>/metrics</code> Prometheus scrape endpoint per cluster</li>
+          <li>Key metrics to alert on: <code>gossip_peers_connected</code>, <code>gossip_frames_dropped_total</code>, <code>contract_invocation_latency_ms</code></li>
+          <li>Reference Grafana dashboard import</li>
+          <li>Structured log forwarding (tracing → Loki / Datadog / CloudWatch)</li>
+          <li>Each cluster is an independent scrape target — aggregation is in Grafana/Prometheus, not in Mycelium</li>
+        </ul>
+      </div>
+
+      <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:18px;">
+        <div style="font-weight:700; font-size:14px; margin-bottom:8px; color:var(--text);">6 — Sizing and tuning</div>
+        <ul style="font-size:13px; color:var(--muted); padding-left:18px; line-height:1.8;">
+          <li>Gossip fan-out and convergence time at 10 / 100 / 1 000 nodes</li>
+          <li>KV store memory footprint per entry count</li>
+          <li>Anti-entropy interval tuning vs bandwidth cost</li>
+          <li>TTL selection for capability advertisements and load state</li>
+          <li>When to shard into multiple independent clusters vs scaling a single one</li>
+        </ul>
+      </div>
+
+    </div>
   </div>
 
   <!-- ── Footer ── -->
