@@ -2,24 +2,27 @@
 # Scenario 07: Capability discovery via the management API.
 #   node-a, node-b, node-c each advertise role=node.
 #   mgmt advertises role=mgmt.
-#   /api/state must show all four nodes with correct roles.
+#   /api/state must converge to show 4+ nodes with at least one mgmt
+#   and two node roles.  Uses poll_until so post-restart gossip
+#   propagation latency does not cause spurious failures.
 set -euo pipefail
 source /tests/lib/helpers.sh
 
-# Allow time for capabilities to propagate after any prior restarts
-sleep 3
+all_roles_visible() {
+    local state
+    state=$(mgmt_state 2>/dev/null) || return 1
 
-state=$(mgmt_state)
+    local total
+    total=$(echo "$state" | jq '.nodes | length' 2>/dev/null || echo 0)
+    [ "$total" -ge 4 ] || return 1
 
-total=$(echo "$state" | jq '.nodes | length')
-assert_ge "$total" 4 "total node count"
+    local roles
+    roles=$(echo "$state" | jq -r '.nodes[].role' 2>/dev/null)
+    echo "$roles" | grep -q "^mgmt$"  || return 1
 
-node_roles=$(echo "$state" | jq -r '.nodes[].role')
+    local node_count
+    node_count=$(echo "$roles" | grep -c "^node$" || true)
+    [ "$node_count" -ge 2 ]
+}
 
-# At least one mgmt node visible
-echo "$node_roles" | grep -q "^mgmt$" || \
-    { echo "FAIL: no node with role=mgmt found" >&2; exit 1; }
-
-# At least two nodes with role=node visible (node-a and node-b always up)
-node_count=$(echo "$node_roles" | grep -c "^node$" || true)
-assert_ge "$node_count" 2 "nodes with role=node"
+poll_until 40 all_roles_visible
