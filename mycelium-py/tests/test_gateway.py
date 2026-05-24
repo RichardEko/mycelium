@@ -17,7 +17,7 @@ import asyncio
 import os
 import pytest
 
-from mycelium import MyceliumAgent, DemandStatus
+from mycelium import MyceliumAgent, DemandStatus, RpcRequest, MailboxEvent
 
 # Default to n-0's HTTP port; override with MYCELIUM_TEST_PORT env var.
 TEST_HOST = os.getenv("MYCELIUM_TEST_HOST", "127.0.0.1")
@@ -146,3 +146,117 @@ class TestDemandGateway:
             status = agent.demand("test", "pressure-probe")
             assert status.providers >= 1
             assert status.demand_pressure == pytest.approx(0.0, abs=0.1)
+
+
+class TestKvGateway:
+    def test_set_and_get(self, agent: MyceliumAgent) -> None:
+        agent.set("gw-test/key1", b"hello-world")
+        val = agent.get("gw-test/key1")
+        assert val == b"hello-world"
+
+    def test_get_missing_returns_none(self, agent: MyceliumAgent) -> None:
+        val = agent.get("gw-test/does-not-exist-xyz")
+        assert val is None
+
+    def test_delete_tombstones_key(self, agent: MyceliumAgent) -> None:
+        import time
+        agent.set("gw-test/delete-me", b"to-be-deleted")
+        time.sleep(0.05)
+        assert agent.get("gw-test/delete-me") is not None
+        agent.delete("gw-test/delete-me")
+        assert agent.get("gw-test/delete-me") is None
+
+    def test_keys_lists_written_keys(self, agent: MyceliumAgent) -> None:
+        import time
+        agent.set("gw-test/k-list-a", b"a")
+        agent.set("gw-test/k-list-b", b"b")
+        time.sleep(0.05)
+        ks = agent.keys(prefix="gw-test/k-list-")
+        assert "gw-test/k-list-a" in ks
+        assert "gw-test/k-list-b" in ks
+
+    def test_scan_prefix_returns_values(self, agent: MyceliumAgent) -> None:
+        import time
+        agent.set("gw-test/scan-x", b"val-x")
+        agent.set("gw-test/scan-y", b"val-y")
+        time.sleep(0.05)
+        result = agent.scan_prefix("gw-test/scan-")
+        assert result.get("gw-test/scan-x") == b"val-x"
+        assert result.get("gw-test/scan-y") == b"val-y"
+
+
+class TestRpcGatewayServe:
+    @pytest.mark.asyncio
+    async def test_rpc_serve_receives_request(self, agent: MyceliumAgent) -> None:
+        """Verify rpc_serve yields a request and rpc_respond completes the loop."""
+        node_id = agent.health()["node_id"]
+
+        received: list[RpcRequest] = []
+
+        async def serve_once() -> None:
+            async for req in agent.rpc_serve("gw-test.echo"):
+                received.append(req)
+                agent.rpc_respond(req, req.payload + b"-reply")
+                break
+
+        import asyncio
+        server_task = asyncio.create_task(serve_once())
+        await asyncio.sleep(0.05)
+
+        # Issue a call to self via rpc_call so we don't need a second node.
+        loop = asyncio.get_event_loop()
+        reply = await loop.run_in_executor(
+            None,
+            lambda: agent.rpc_call(node_id, "gw-test.echo", b"ping", timeout_secs=5),
+        )
+        await asyncio.wait_for(server_task, timeout=5.0)
+
+        assert len(received) == 1
+        assert received[0].payload == b"ping"
+        assert reply == b"ping-reply"
+
+
+class TestMailboxGateway:
+    @pytest.mark.asyncio
+    async def test_deliver_and_receive(self, agent: MyceliumAgent) -> None:
+        """Deliver a mailbox event to self and receive it via the SSE stream."""
+        import asyncio
+        node_id = agent.health()["node_id"]
+        received: list[MailboxEvent] = []
+
+        async def recv_one() -> None:
+            async for event in agent.mailbox("gw-test.task"):
+                received.append(event)
+                break
+
+        recv_task = asyncio.create_task(recv_one())
+        await asyncio.sleep(0.05)
+
+        agent.deliver_event(node_id, "gw-test.task", b"task-payload")
+        await asyncio.wait_for(recv_task, timeout=10.0)
+
+        assert len(received) == 1
+        assert received[0].payload == b"task-payload"
+        assert received[0].kind == "gw-test.task"
+
+
+class TestScatterGateway:
+    def test_scatter_to_self_returns_reply(self, agent: MyceliumAgent) -> None:
+        """Scatter to a single target (self) using an echo RPC registered externally.
+
+        This test requires the test node to have an RPC handler for
+        ``"gw-test.scatter-echo"`` registered. Since the integration fixture
+        doesn't start one, this test is marked xfail when no handler is
+        present (504 response).
+        """
+        import pytest as _pytest
+        node_id = agent.health()["node_id"]
+        try:
+            replies = agent.scatter_gather(
+                [node_id], "gw-test.scatter-echo", b"scatter-ping",
+                min_ok=1, timeout_secs=2,
+            )
+            assert len(replies) >= 1
+            assert replies[0]["sender"] == node_id
+        except TimeoutError:
+            _pytest.xfail("No scatter-echo handler registered on the test node")

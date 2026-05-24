@@ -18,6 +18,15 @@
 //! - `GET    /gateway/signal/sse/{kind}`       — SSE stream for a signal kind
 //! - `GET    /gateway/demand`                  — demand pressure for a capability filter
 //! - `POST   /gateway/rpc/call`               — blocking RPC call to a named node
+//! - `GET    /gateway/rpc/serve/{kind}`        — SSE stream of incoming RPC requests
+//! - `POST   /gateway/rpc/respond`             — send reply to an in-flight RPC request
+//! - `POST   /gateway/scatter`                 — scatter-gather RPC to multiple targets
+//! - `GET    /gateway/kv?key=K`                — read a KV key
+//! - `POST   /gateway/kv`                      — write a KV key
+//! - `DELETE /gateway/kv?key=K`                — delete (tombstone) a KV key
+//! - `GET    /gateway/kv/keys?prefix=P`        — list live keys (optionally filtered)
+//! - `GET    /gateway/mailbox/{kind}`          — SSE stream of mailbox events for this node
+//! - `POST   /gateway/mailbox/deliver`         — deliver an event to a target's mailbox
 //!
 //! Started when `GossipConfig::http_port` is `Some(port)`. Shuts down cleanly
 //! when the agent's broadcast shutdown signal fires.
@@ -30,7 +39,7 @@ use axum::{
     response::sse::{Event, KeepAlive},
     routing::{delete, get, post},
 };
-use bytes::Bytes;
+use bytes::{BufMut, Bytes, BytesMut};
 use serde::Deserialize;
 use serde_json::json;
 use std::{
@@ -87,6 +96,13 @@ pub(super) async fn run_http_server(
         .route("/gateway/signal/sse/{kind}",      get(gw_signal_sse))
         .route("/gateway/demand",                 get(gw_demand))
         .route("/gateway/rpc/call",               post(gw_rpc_call))
+        .route("/gateway/rpc/serve/{kind}",       get(gw_rpc_serve))
+        .route("/gateway/rpc/respond",            post(gw_rpc_respond))
+        .route("/gateway/scatter",                post(gw_scatter))
+        .route("/gateway/kv",                     get(gw_kv_get).post(gw_kv_set).delete(gw_kv_delete))
+        .route("/gateway/kv/keys",                get(gw_kv_keys))
+        .route("/gateway/mailbox/deliver",        post(gw_mailbox_deliver))
+        .route("/gateway/mailbox/{kind}",         get(gw_mailbox_subscribe))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -627,6 +643,340 @@ async fn gw_rpc_call(
             (StatusCode::GATEWAY_TIMEOUT, Json(json!({ "ok": false, "error": "timeout" }))).into_response()
         }
     }
+}
+
+// ── KV gateway handlers ───────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct KvKeyQuery { key: String }
+
+/// `GET /gateway/kv?key=K` — read a single KV entry.
+///
+/// Returns `{"found": true, "value_b64": "…"}` or `{"found": false}`.
+async fn gw_kv_get(
+    Query(q):   Query<KvKeyQuery>,
+    State(ctx): State<Arc<HttpCtx>>,
+) -> impl IntoResponse {
+    match ctx.agent_ctx.kv_state.store.pin().get(q.key.as_str()).and_then(|e| e.data.clone()) {
+        Some(bytes) => {
+            use base64::Engine as _;
+            let v = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            Json(json!({ "found": true, "value_b64": v })).into_response()
+        }
+        None => Json(json!({ "found": false })).into_response(),
+    }
+}
+
+/// `POST /gateway/kv` — write a KV entry.
+///
+/// Body: `{"key": "…", "value_b64": "…"}`. Returns `{"ok": true}`.
+async fn gw_kv_set(
+    State(ctx): State<Arc<HttpCtx>>,
+    Json(body):  Json<serde_json::Value>,
+) -> impl IntoResponse {
+    use base64::Engine as _;
+
+    let key = match body["key"].as_str() {
+        Some(k) => Arc::from(k),
+        None    => return (StatusCode::BAD_REQUEST, Json(json!({"error":"missing key"}))).into_response(),
+    };
+    let value = if let Some(b64) = body["value_b64"].as_str() {
+        match base64::engine::general_purpose::STANDARD.decode(b64) {
+            Ok(v)  => Bytes::from(v),
+            Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({"error":"invalid base64"}))).into_response(),
+        }
+    } else {
+        Bytes::new()
+    };
+
+    kv_write(&ctx.agent_ctx, key, value, false);
+    Json(json!({ "ok": true })).into_response()
+}
+
+/// `DELETE /gateway/kv?key=K` — tombstone a KV entry.
+///
+/// Returns `{"ok": true}`.
+async fn gw_kv_delete(
+    Query(q):   Query<KvKeyQuery>,
+    State(ctx): State<Arc<HttpCtx>>,
+) -> impl IntoResponse {
+    kv_write(&ctx.agent_ctx, Arc::from(q.key.as_str()), Bytes::new(), true);
+    Json(json!({ "ok": true })).into_response()
+}
+
+#[derive(Deserialize)]
+struct KvKeysQuery { prefix: Option<String> }
+
+/// `GET /gateway/kv/keys?prefix=P` — list live KV keys, optionally filtered by prefix.
+///
+/// Returns `{"keys": ["key1", "key2", …]}`.
+async fn gw_kv_keys(
+    Query(q):   Query<KvKeysQuery>,
+    State(ctx): State<Arc<HttpCtx>>,
+) -> impl IntoResponse {
+    let keys: Vec<String> = if let Some(ref pfx) = q.prefix {
+        crate::store::scan_kv_prefix(&ctx.agent_ctx.kv_state, pfx.as_str())
+            .into_iter()
+            .map(|(k, _)| k.as_ref().to_string())
+            .collect()
+    } else {
+        ctx.agent_ctx.kv_state.store.pin()
+            .iter()
+            .filter(|(_, v)| v.data.is_some())
+            .map(|(k, _)| k.as_ref().to_string())
+            .collect()
+    };
+    Json(json!({ "keys": keys })).into_response()
+}
+
+/// Applies a KV write (set or delete) and fans out to gossip peers.
+fn kv_write(ctx: &Arc<TaskCtx>, key: Arc<str>, value: Bytes, tombstone: bool) -> bool {
+    use crate::framing::{dispatch_gossip_try_send, make_gossip_update, ForwardHint, WireMessage};
+    use crate::store::apply_and_notify;
+    let update = make_gossip_update(&ctx.node_id, ctx.default_ttl, key, value, tombstone, &ctx.hlc);
+    if let Some(wal) = ctx.wal.get() {
+        wal.append_try(crate::framing::sync_entry_from(&update));
+    }
+    apply_and_notify(&ctx.kv_state, &update);
+    dispatch_gossip_try_send(
+        &ctx.gossip_txs,
+        WireMessage::Data(update),
+        ctx.node_id.id_hash(),
+        ForwardHint::All,
+        &ctx.kv_state.dropped_frames,
+    )
+}
+
+// ── RPC serve / respond gateway handlers ─────────────────────────────────────
+
+/// `GET /gateway/rpc/serve/{kind}` — SSE stream of incoming RPC requests.
+///
+/// Streams requests as `{"nonce_hex": "…", "sender": "IP:PORT", "payload_b64": "…"}`.
+/// The receiver must call `POST /gateway/rpc/respond` with the same `nonce_hex` and
+/// `sender` to complete the round-trip.
+async fn gw_rpc_serve(
+    Path(kind):  Path<String>,
+    State(ctx):  State<Arc<HttpCtx>>,
+) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+    let rx = ctx.agent_ctx.signal_handlers.register_with_capacity(
+        Arc::from(kind.as_str()),
+        256,
+    );
+
+    let stream = ReceiverStream::new(rx).filter_map(|sig: crate::signal::Signal| {
+        use base64::Engine as _;
+        if sig.payload.len() < 8 { return None; }
+        let nonce = u64::from_le_bytes(sig.payload[..8].try_into().unwrap());
+        let app_payload = sig.payload.slice(8..);
+        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&app_payload);
+        let data = json!({
+            "nonce_hex":   format!("{:016x}", nonce),
+            "sender":      sig.sender.to_string(),
+            "payload_b64": payload_b64,
+        });
+        Some(Ok(Event::default()
+            .event(sig.kind.as_ref())
+            .data(data.to_string())))
+    });
+
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+/// `POST /gateway/rpc/respond` — send a reply to an in-flight RPC request.
+///
+/// Body: `{"nonce_hex": "…", "sender": "IP:PORT", "result_b64": "…"}`.
+/// Returns `{"ok": true}`.
+async fn gw_rpc_respond(
+    State(ctx): State<Arc<HttpCtx>>,
+    Json(body):  Json<serde_json::Value>,
+) -> impl IntoResponse {
+    use base64::Engine as _;
+    use crate::signal::SignalScope;
+
+    let nonce_hex = match body["nonce_hex"].as_str() {
+        Some(s) => s,
+        None    => return (StatusCode::BAD_REQUEST, Json(json!({"error":"missing nonce_hex"}))).into_response(),
+    };
+    let nonce = match u64::from_str_radix(nonce_hex, 16) {
+        Ok(n)  => n,
+        Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({"error":"invalid nonce_hex"}))).into_response(),
+    };
+    let sender: crate::node_id::NodeId = match body["sender"].as_str().and_then(|s| s.parse().ok()) {
+        Some(n) => n,
+        None    => return (StatusCode::BAD_REQUEST, Json(json!({"error":"missing or invalid sender"}))).into_response(),
+    };
+    let result = if let Some(b64) = body["result_b64"].as_str() {
+        match base64::engine::general_purpose::STANDARD.decode(b64) {
+            Ok(v)  => Bytes::from(v),
+            Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({"error":"invalid base64 result"}))).into_response(),
+        }
+    } else {
+        Bytes::new()
+    };
+
+    let mut buf = BytesMut::with_capacity(8 + result.len());
+    buf.put_u64_le(nonce);
+    buf.put(result);
+    super::helpers::emit_signal(
+        &ctx.agent_ctx,
+        Arc::from(crate::signal::signal_kind::RPC_RESULT),
+        SignalScope::Individual(sender),
+        buf.freeze(),
+    );
+
+    Json(json!({ "ok": true })).into_response()
+}
+
+// ── Scatter-gather gateway handler ────────────────────────────────────────────
+
+/// `POST /gateway/scatter` — fan-out RPC to multiple targets, collect replies.
+///
+/// Body:
+/// ```json
+/// {
+///   "targets":       ["IP:PORT", …],
+///   "method":        "signal-kind",
+///   "payload_b64":   "…",
+///   "timeout_secs":  10,
+///   "min_ok":        1
+/// }
+/// ```
+/// Returns `{"ok": true, "replies": [{"sender": "…", "result_b64": "…"}, …]}` once
+/// `min_ok` replies arrive, or `{"ok": false, "error": "…", "replies": […]}` on timeout.
+async fn gw_scatter(
+    State(ctx): State<Arc<HttpCtx>>,
+    Json(body):  Json<serde_json::Value>,
+) -> impl IntoResponse {
+    use base64::Engine as _;
+
+    let targets: Vec<crate::node_id::NodeId> = match body["targets"].as_array() {
+        Some(arr) => arr.iter()
+            .filter_map(|v| v.as_str()?.parse().ok())
+            .collect(),
+        None => return (StatusCode::BAD_REQUEST, Json(json!({"error":"missing targets"}))).into_response(),
+    };
+    let method: Arc<str> = match body["method"].as_str() {
+        Some(m) => Arc::from(m),
+        None    => return (StatusCode::BAD_REQUEST, Json(json!({"error":"missing method"}))).into_response(),
+    };
+    let payload = if let Some(b64) = body["payload_b64"].as_str() {
+        match base64::engine::general_purpose::STANDARD.decode(b64) {
+            Ok(v)  => Bytes::from(v),
+            Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({"error":"invalid base64 payload"}))).into_response(),
+        }
+    } else {
+        Bytes::new()
+    };
+    let timeout_secs = body["timeout_secs"].as_u64().unwrap_or(10).clamp(1, 300);
+    let timeout      = Duration::from_secs(timeout_secs);
+    let min_ok       = body["min_ok"].as_u64().unwrap_or(1) as usize;
+
+    let mut js: tokio::task::JoinSet<(crate::node_id::NodeId, Result<Bytes, super::rpc::RpcError>)>
+        = tokio::task::JoinSet::new();
+    for target in targets {
+        let c = Arc::clone(&ctx.agent_ctx);
+        let k = Arc::clone(&method);
+        let p = payload.clone();
+        let t = target.clone();
+        js.spawn(async move {
+            let res = super::rpc::rpc_call_ctx(&c, t.clone(), k, p, timeout).await;
+            (t, res)
+        });
+    }
+
+    let mut replies: Vec<serde_json::Value> = Vec::new();
+    while let Some(res) = js.join_next().await {
+        if let Ok((nid, Ok(bytes))) = res {
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            replies.push(json!({ "sender": nid.to_string(), "result_b64": b64 }));
+            if replies.len() >= min_ok {
+                js.abort_all();
+                break;
+            }
+        }
+    }
+
+    if replies.len() >= min_ok {
+        Json(json!({ "ok": true, "replies": replies })).into_response()
+    } else {
+        (StatusCode::GATEWAY_TIMEOUT,
+         Json(json!({ "ok": false, "error": "insufficient replies", "replies": replies })))
+            .into_response()
+    }
+}
+
+// ── Mailbox gateway handlers ──────────────────────────────────────────────────
+
+/// `GET /gateway/mailbox/{kind}` — SSE stream of mailbox events for this node.
+///
+/// Streams events as `{"sender": "IP:PORT", "kind": "…", "payload_b64": "…"}`.
+/// The subscription is torn down when the client disconnects.
+async fn gw_mailbox_subscribe(
+    Path(kind):  Path<String>,
+    State(ctx):  State<Arc<HttpCtx>>,
+) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+    let kind_arc: Arc<str> = Arc::from(kind.as_str());
+    let (handle, rx) = super::mailbox::open_mailbox_ctx(
+        Arc::clone(&ctx.agent_ctx),
+        &ctx.agent_ctx.node_id,
+        Arc::clone(&kind_arc),
+        256,
+        ctx.shutdown_rx.clone(),
+    );
+
+    let stream = ReceiverStream::new(rx).map(move |event: super::mailbox::MeshEvent| {
+        use base64::Engine as _;
+        let _ = &handle; // keep the MailboxHandle alive for the duration of the stream
+        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&event.payload);
+        let data = json!({
+            "sender":      event.sender.to_string(),
+            "kind":        event.kind.as_ref(),
+            "payload_b64": payload_b64,
+        });
+        Ok(Event::default()
+            .event(event.kind.as_ref())
+            .data(data.to_string()))
+    });
+
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+/// `POST /gateway/mailbox/deliver` — deliver an event to a target node's mailbox.
+///
+/// Body: `{"target": "IP:PORT", "kind": "…", "payload_b64": "…"}`.
+/// Returns `{"ok": true}`.
+async fn gw_mailbox_deliver(
+    State(ctx): State<Arc<HttpCtx>>,
+    Json(body):  Json<serde_json::Value>,
+) -> impl IntoResponse {
+    use base64::Engine as _;
+
+    let target: crate::node_id::NodeId = match body["target"].as_str().and_then(|s| s.parse().ok()) {
+        Some(n) => n,
+        None    => return (StatusCode::BAD_REQUEST, Json(json!({"error":"missing or invalid target"}))).into_response(),
+    };
+    let kind: Arc<str> = match body["kind"].as_str() {
+        Some(k) => Arc::from(k),
+        None    => return (StatusCode::BAD_REQUEST, Json(json!({"error":"missing kind"}))).into_response(),
+    };
+    let payload = if let Some(b64) = body["payload_b64"].as_str() {
+        match base64::engine::general_purpose::STANDARD.decode(b64) {
+            Ok(v)  => Bytes::from(v),
+            Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({"error":"invalid base64 payload"}))).into_response(),
+        }
+    } else {
+        Bytes::new()
+    };
+
+    super::mailbox::deliver_event_ctx(
+        &ctx.agent_ctx,
+        &ctx.agent_ctx.node_id,
+        &target,
+        kind,
+        payload,
+    );
+
+    Json(json!({ "ok": true })).into_response()
 }
 
 #[cfg(test)]

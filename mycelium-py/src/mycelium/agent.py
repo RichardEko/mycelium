@@ -3,7 +3,8 @@ mycelium.agent — HTTP gateway client for the Mycelium gossip mesh.
 
 Connects to a running Rust Mycelium node's HTTP gateway (``/gateway/*``
 endpoints) and exposes a Python-native API for capability advertisement,
-signal emission, signal subscription, demand pressure, and RPC calls.
+signal emission, signal subscription, demand pressure, RPC calls, KV
+operations, scatter-gather, and mailbox event delivery.
 
 The gateway is the sidecar described in the Layer 4 architecture:
 
@@ -11,7 +12,10 @@ The gateway is the sidecar described in the Layer 4 architecture:
                          /gateway/capability/*
                          /gateway/signal/*
                          /gateway/demand
-                         /gateway/rpc/call
+                         /gateway/rpc/*
+                         /gateway/scatter
+                         /gateway/kv[/keys]
+                         /gateway/mailbox/*
 
 Example::
 
@@ -110,6 +114,28 @@ class DemandStatus:
     providers:        int
     requirers:        int
     demand_pressure:  float  # requirers / max(providers, 1)
+
+
+@dataclass
+class RpcRequest:
+    """An incoming RPC request received via :meth:`MyceliumAgent.rpc_serve`.
+
+    Pass this to :meth:`MyceliumAgent.rpc_respond` to complete the round-trip.
+    """
+
+    kind:        str
+    nonce_hex:   str
+    sender:      str
+    payload:     bytes
+
+
+@dataclass
+class MailboxEvent:
+    """An event received from this node's mailbox via :meth:`MyceliumAgent.mailbox`."""
+
+    kind:        str
+    sender:      str
+    payload:     bytes
 
 
 class MyceliumAgent:
@@ -323,6 +349,215 @@ class MyceliumAgent:
             if not data.get("ok"):
                 raise RuntimeError(f"rpc_call failed: {data.get('error')}")
             return base64.b64decode(data.get("result_b64", ""))
+
+    # ── KV store ────────────────────────────────────────────────────────────
+
+    def get(self, key: str) -> bytes | None:
+        """Read a KV entry by key.
+
+        Returns the raw bytes value, or ``None`` when the key is absent or
+        tombstoned.
+        """
+        with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
+            resp = c.get("/gateway/kv", params={"key": key})
+            resp.raise_for_status()
+            data = resp.json()
+            if not data.get("found"):
+                return None
+            return base64.b64decode(data.get("value_b64", ""))
+
+    def set(self, key: str, value: bytes) -> None:
+        """Write a KV entry.
+
+        The write is gossiped to all peers. Existing values are overwritten
+        when the local HLC timestamp is strictly greater (LWW semantics).
+        """
+        body = {
+            "key":       key,
+            "value_b64": base64.b64encode(value).decode(),
+        }
+        with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
+            c.post("/gateway/kv", json=body).raise_for_status()
+
+    def delete(self, key: str) -> None:
+        """Tombstone a KV entry.
+
+        The tombstone is gossiped so all live nodes remove the key.
+        """
+        with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
+            c.delete("/gateway/kv", params={"key": key}).raise_for_status()
+
+    def keys(self, prefix: str | None = None) -> list[str]:
+        """Return all live KV keys, optionally filtered by prefix.
+
+        Args:
+            prefix: When given, only keys starting with this string are returned.
+        """
+        params: dict[str, str] = {}
+        if prefix is not None:
+            params["prefix"] = prefix
+        with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
+            resp = c.get("/gateway/kv/keys", params=params)
+            resp.raise_for_status()
+            return resp.json()["keys"]
+
+    def scan_prefix(self, prefix: str) -> dict[str, bytes]:
+        """Return all live KV entries whose key starts with ``prefix``.
+
+        Returns a ``{key: value_bytes}`` dict. Requires one HTTP call per key
+        (keys + individual gets) — use sparingly for large keyspaces.
+        """
+        result: dict[str, bytes] = {}
+        for key in self.keys(prefix=prefix):
+            val = self.get(key)
+            if val is not None:
+                result[key] = val
+        return result
+
+    # ── RPC serve / respond ─────────────────────────────────────────────────
+
+    async def rpc_serve(self, kind: str) -> "AsyncIterator[RpcRequest]":
+        """Async generator that yields incoming RPC requests of ``kind``.
+
+        For each yielded :class:`RpcRequest`, call :meth:`rpc_respond` to
+        complete the round-trip before processing the next request::
+
+            async for req in agent.rpc_serve("my.method"):
+                result = process(req.payload)
+                agent.rpc_respond(req, result)
+        """
+        url = f"{self._base_url}/gateway/rpc/serve/{kind}"
+        async with httpx.AsyncClient(timeout=None) as client:
+            async with aconnect_sse(client, "GET", url) as event_source:
+                async for event in event_source.aiter_sse():
+                    import json as _json
+                    data    = _json.loads(event.data)
+                    payload = base64.b64decode(data.get("payload_b64", ""))
+                    yield RpcRequest(
+                        kind      = event.event or kind,
+                        nonce_hex = data.get("nonce_hex", ""),
+                        sender    = data.get("sender", ""),
+                        payload   = payload,
+                    )
+
+    def rpc_respond(self, request: "RpcRequest", result: bytes = b"") -> None:
+        """Send a reply to an incoming RPC request.
+
+        Args:
+            request: The :class:`RpcRequest` received from :meth:`rpc_serve`.
+            result:  Raw bytes reply payload.
+        """
+        body = {
+            "nonce_hex":  request.nonce_hex,
+            "sender":     request.sender,
+            "result_b64": base64.b64encode(result).decode(),
+        }
+        with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
+            c.post("/gateway/rpc/respond", json=body).raise_for_status()
+
+    # ── Scatter-gather ──────────────────────────────────────────────────────
+
+    def scatter_gather(
+        self,
+        targets:      list[str],
+        method:       str,
+        payload:      bytes = b"",
+        *,
+        min_ok:       int   = 1,
+        timeout_secs: int   = 10,
+    ) -> list[dict[str, Any]]:
+        """Fan-out an RPC to multiple targets and collect at least ``min_ok`` replies.
+
+        Args:
+            targets:      List of target node IDs (``"IP:PORT"``).
+            method:       Signal kind (e.g. ``"echo"``).
+            payload:      Request payload bytes.
+            min_ok:       Minimum number of successful replies to wait for.
+            timeout_secs: Maximum wait time.
+
+        Returns:
+            List of ``{"sender": "IP:PORT", "result_b64": "…"}`` dicts.
+
+        Raises:
+            TimeoutError: Fewer than ``min_ok`` replies arrived.
+            httpx.HTTPStatusError: For other HTTP errors.
+        """
+        body = {
+            "targets":      targets,
+            "method":       method,
+            "payload_b64":  base64.b64encode(payload).decode(),
+            "timeout_secs": timeout_secs,
+            "min_ok":       min_ok,
+        }
+        with httpx.Client(base_url=self._base_url, timeout=timeout_secs + 5.0) as c:
+            resp = c.post("/gateway/scatter", json=body)
+            if resp.status_code == 504:
+                raise TimeoutError(
+                    f"scatter_gather: fewer than {min_ok} replies in {timeout_secs}s"
+                )
+            resp.raise_for_status()
+            data = resp.json()
+            if not data.get("ok"):
+                raise TimeoutError(
+                    f"scatter_gather: {data.get('error', 'insufficient replies')}"
+                )
+            return [
+                {
+                    "sender":    r["sender"],
+                    "result":    base64.b64decode(r.get("result_b64", "")),
+                }
+                for r in data.get("replies", [])
+            ]
+
+    # ── Mailbox ─────────────────────────────────────────────────────────────
+
+    async def mailbox(self, kind: str) -> "AsyncIterator[MailboxEvent]":
+        """Async generator that yields mailbox events of ``kind`` for this node.
+
+        Events are delivered in HLC-causal order and tombstoned after delivery
+        (at-least-once within the gossip TTL window)::
+
+            async for event in agent.mailbox("task.result"):
+                print(event.sender, event.payload)
+        """
+        url = f"{self._base_url}/gateway/mailbox/{kind}"
+        async with httpx.AsyncClient(timeout=None) as client:
+            async with aconnect_sse(client, "GET", url) as event_source:
+                async for event in event_source.aiter_sse():
+                    import json as _json
+                    data    = _json.loads(event.data)
+                    payload = base64.b64decode(data.get("payload_b64", ""))
+                    yield MailboxEvent(
+                        kind    = data.get("kind", kind),
+                        sender  = data.get("sender", ""),
+                        payload = payload,
+                    )
+
+    def deliver_event(
+        self,
+        target:  str,
+        kind:    str,
+        payload: bytes = b"",
+    ) -> None:
+        """Deliver a mailbox event to a target node.
+
+        The event is written to the gossip KV store at
+        ``mailbox/{target}/{kind}/{hlc_ts}`` and gossiped to all peers.
+        The target's :meth:`mailbox` watcher picks it up and tombstones it
+        on delivery (at-least-once within the gossip TTL).
+
+        Args:
+            target:  Target node ID (``"IP:PORT"``).
+            kind:    Event kind string.
+            payload: Raw bytes payload.
+        """
+        body = {
+            "target":      target,
+            "kind":        kind,
+            "payload_b64": base64.b64encode(payload).decode(),
+        }
+        with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
+            c.post("/gateway/mailbox/deliver", json=body).raise_for_status()
 
     # ── Health / introspection ──────────────────────────────────────────────
 

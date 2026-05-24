@@ -209,6 +209,57 @@ impl GossipAgent {
     }
 }
 
+/// Delivers an event to `target`'s mailbox on behalf of `self_node_id`.
+///
+/// Free-function variant of [`GossipAgent::deliver_event`] for callers that
+/// hold only `Arc<TaskCtx>` (e.g. the HTTP gateway handler).
+pub(crate) fn deliver_event_ctx(
+    ctx:          &Arc<TaskCtx>,
+    self_node_id: &NodeId,
+    target:       &NodeId,
+    kind:         Arc<str>,
+    payload:      Bytes,
+) -> bool {
+    let ts  = ctx.hlc.tick();
+    let key: Arc<str> = Arc::from(
+        format!("mailbox/{}/{}/{:016x}", target, kind, ts).as_str(),
+    );
+    let value = encode_value(self_node_id, &payload);
+    let update = make_gossip_update(self_node_id, ctx.default_ttl, key, value, false, &ctx.hlc);
+    if let Some(wal) = ctx.wal.get() {
+        wal.append_try(crate::framing::sync_entry_from(&update));
+    }
+    apply_and_notify(&ctx.kv_state, &update);
+    dispatch_gossip_try_send(
+        &ctx.gossip_txs, WireMessage::Data(update),
+        self_node_id.id_hash(), ForwardHint::All, &ctx.kv_state.dropped_frames,
+    )
+}
+
+/// Opens a mailbox for events of `kind` addressed to `self_node_id`.
+///
+/// Free-function variant of [`GossipAgent::open_mailbox`] for callers that
+/// hold only `Arc<TaskCtx>`. The `shutdown_rx` must come from the owning
+/// agent's broadcast (available on `HttpCtx::shutdown_rx`).
+pub(crate) fn open_mailbox_ctx(
+    ctx:          Arc<TaskCtx>,
+    self_node_id: &NodeId,
+    kind:         Arc<str>,
+    capacity:     usize,
+    shutdown_rx:  tokio::sync::watch::Receiver<bool>,
+) -> (MailboxHandle, mpsc::Receiver<MeshEvent>) {
+    let prefix: Arc<str> = Arc::from(
+        format!("mailbox/{}/{}/", self_node_id, kind).as_str(),
+    );
+    let (cancel_tx, cancel_rx) = oneshot::channel();
+    let (tx, rx)               = mpsc::channel(capacity);
+    let watcher = super::capability_ops::subscribe_prefix_on_kv(
+        &ctx.kv_state, Arc::clone(&prefix),
+    );
+    tokio::spawn(mailbox_task(ctx, prefix, kind, tx, cancel_rx, shutdown_rx, watcher));
+    (MailboxHandle { _cancel: cancel_tx }, rx)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
