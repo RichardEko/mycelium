@@ -188,7 +188,11 @@ where
         },
         Message {
             role:         "user".into(),
-            content:      Some(req.user_input.clone()),
+            // OpenAI API requires string content; coerce object/array inputs to JSON text
+            content:      Some(Value::String(match &req.user_input {
+                Value::String(s) => s.clone(),
+                other => serde_json::to_string_pretty(other).unwrap_or_default(),
+            })),
             tool_calls:   None,
             tool_call_id: None,
             name:         None,
@@ -223,7 +227,16 @@ where
             request_builder = request_builder.header("Authorization", auth.as_str());
         }
 
-        let resp: ChatResponse = request_builder.send().await?.json().await?;
+        let http_resp = request_builder.send().await?;
+        let status = http_resp.status();
+        let body = http_resp.bytes().await?;
+        let resp: ChatResponse = serde_json::from_slice(&body).map_err(|e| {
+            // Surface the raw API error if the server returned one
+            let api_err = serde_json::from_slice::<Value>(&body)
+                .ok()
+                .and_then(|v| v.get("error")?.get("message")?.as_str().map(String::from));
+            LlmError::Parse(api_err.unwrap_or_else(|| format!("HTTP {status}: {e}")))
+        })?;
 
         if let Some(u) = resp.usage { tokens_used = u.total_tokens; }
 
