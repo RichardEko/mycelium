@@ -710,11 +710,10 @@ async fn run_mgmt_server(agent: Arc<GossipAgent>, mgmt_port: u16) {
 // ── Test node role ─────────────────────────────────────────────────────────────
 
 struct NodeState {
-    agent:          Arc<GossipAgent>,
-    http_port:      u16,
-    mailbox_count:  Arc<std::sync::atomic::AtomicUsize>,
-    _bulk_handle:   BulkServeHandle,
-    _mbox_handle:   MailboxHandle,
+    agent:         Arc<GossipAgent>,
+    mailbox_count: Arc<std::sync::atomic::AtomicUsize>,
+    _bulk_handle:  BulkServeHandle,
+    _mbox_handle:  MailboxHandle,
 }
 
 async fn node_health() -> StatusCode {
@@ -853,10 +852,9 @@ async fn run_node(agent: Arc<GossipAgent>, role: &str, http_port: u16) {
 
     let state = Arc::new(NodeState {
         agent,
-        http_port,
         mailbox_count,
-        _bulk_handle:  bulk_handle,
-        _mbox_handle:  mbox_handle,
+        _bulk_handle: bulk_handle,
+        _mbox_handle: mbox_handle,
     });
 
     let router = Router::new()
