@@ -739,9 +739,16 @@ async fn node_scatter(State(s): State<Arc<NodeState>>) -> Json<Value> {
 }
 
 async fn node_bulk_echo_peer(State(s): State<Arc<NodeState>>) -> Json<Value> {
-    let peers = s.agent.peers();
-    let Some(target) = peers.into_iter().next() else {
-        return Json(json!({ "ok": false, "reason": "no peers" }));
+    // Only bulk-call node-role peers — other roles (mgmt, etc.) don't register bulk_serve.
+    let self_id = s.agent.node_id().clone();
+    let liveness = std::time::Duration::from_secs(30);
+    let Some(target) = s.agent
+        .resolve(&CapFilter::new("role", "node").with_max_age(liveness))
+        .into_iter()
+        .map(|(nid, _)| nid)
+        .find(|nid| *nid != self_id)
+    else {
+        return Json(json!({ "ok": false, "reason": "no node-role peers" }));
     };
     let payload = Bytes::from(vec![b'x'; 4096]);
     match s.agent.bulk_call(target.clone(), "echo-bulk", payload, Duration::from_secs(10)).await {
