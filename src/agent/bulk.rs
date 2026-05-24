@@ -236,18 +236,21 @@ where
     let sender_ip = sig.sender.to_socket_addr().ip();
     let url = format!("http://{sender_ip}:{http_port}/bulk/{nonce:016x}");
 
+    tracing::debug!(kind=%sig_kind, %url, "bulk_serve: dispatching fetch");
+
     let handler_clone = Arc::clone(handler);
     let sender        = sig.sender.clone();
     let ctx_clone     = Arc::clone(ctx);
 
     tokio::spawn(async move {
         let payload = match ctx_clone.bulk_transport.fetch(&url).await {
-            Ok(b)  => b,
+            Ok(b)  => { tracing::debug!(%url, bytes=b.len(), "bulk_serve: fetch ok"); b }
             Err(e) => { warn!(%url, "bulk_serve: fetch failed: {e}"); return; }
         };
 
         let result = handler_clone(sender.clone(), payload).await;
 
+        tracing::debug!(sender=%sender, result_bytes=result.len(), "bulk_serve: sending bulk.result");
         let mut buf = BytesMut::with_capacity(8 + result.len());
         buf.put_u64_le(nonce);
         buf.put(result);
