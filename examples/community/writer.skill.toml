@@ -1,0 +1,58 @@
+# Writer skill — given research findings, produces a well-written article.
+#
+# Part of the 3-skill community example. Start with start.sh.
+
+[node]
+bind_address    = "127.0.0.1"
+bind_port       = 7953
+bootstrap_peers = ["127.0.0.1:7950"]
+
+[capability]
+ns          = "llm"
+name        = "writer"
+description = "Writes a polished article from structured research findings"
+ttl_secs    = 60
+
+[capability.input]
+type     = "object"
+required = ["findings", "topic"]
+[capability.input.properties]
+topic    = { type = "string" }
+findings = { type = "array",  items = { type = "string" } }
+summary  = { type = "string" }
+style    = { type = "string", enum = ["technical", "casual", "executive"] }
+
+[capability.output]
+type = "object"
+[capability.output.properties]
+title   = { type = "string" }
+article = { type = "string" }
+tldr    = { type = "string", description = "One-sentence summary" }
+
+[capability.policy]
+max_concurrent = 2
+authorized_callers = []
+
+[skill]
+prompt = """
+You are a skilled technical writer. Given research findings and a topic, write a
+clear, engaging article.
+
+Return ONLY valid JSON:
+{
+  "title":   "Article title",
+  "article": "Full article text (2-4 paragraphs)",
+  "tldr":    "One-sentence summary"
+}
+
+Match the requested style (default: technical). Use the provided findings as your
+source material — do not invent facts not present in the findings.
+"""
+tools = []
+
+[skill.llm]
+endpoint    = "http://localhost:11434/v1"
+model       = "llama3.2"
+api_key     = ""
+max_tokens  = 2048
+temperature = 0.7   # higher temperature for creative writing

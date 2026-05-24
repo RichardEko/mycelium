@@ -1,0 +1,59 @@
+# Orchestrator skill — given a topic, coordinates researcher + writer to
+# produce a finished article. Demonstrates skill composition: this skill
+# calls two other skills as tools.
+#
+# Part of the 3-skill community example. Start with start.sh.
+
+[node]
+bind_address    = "127.0.0.1"
+bind_port       = 7950
+bootstrap_peers = []   # orchestrator is the seed node; others bootstrap off it
+http_port       = 9050  # optional: enables HTTP gateway for Python/curl access
+
+[capability]
+ns          = "llm"
+name        = "orchestrator"
+description = "Coordinates research and writing to produce articles on any topic"
+ttl_secs    = 60
+
+[capability.input]
+type     = "object"
+required = ["topic"]
+[capability.input.properties]
+topic      = { type = "string", description = "Topic to write about" }
+style      = { type = "string", enum = ["technical", "casual", "executive"] }
+max_points = { type = "integer", description = "Max research findings (default 5)" }
+
+[capability.output]
+type = "object"
+[capability.output.properties]
+title   = { type = "string" }
+article = { type = "string" }
+tldr    = { type = "string" }
+
+[capability.policy]
+max_concurrent = 4
+authorized_callers = []   # open to any caller
+
+[skill]
+prompt = """
+You are an editorial orchestrator. Given a topic:
+
+1. Call llm/researcher to gather findings on the topic
+2. Call llm/writer with those findings to produce a polished article
+3. Return the writer's output directly
+
+The input JSON will have a "topic" field. Pass it to the researcher.
+Pass the researcher's "findings", "summary", and the original "topic"
+to the writer. Return the writer's full output as your own output.
+
+You MUST use the tools — do not write the article yourself.
+"""
+tools = ["llm/researcher", "llm/writer"]
+
+[skill.llm]
+endpoint    = "http://localhost:11434/v1"
+model       = "llama3.2"
+api_key     = ""
+max_tokens  = 512    # orchestrator just coordinates; the sub-skills do the heavy lifting
+temperature = 0.1    # deterministic coordination

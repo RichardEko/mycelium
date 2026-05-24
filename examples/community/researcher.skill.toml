@@ -1,0 +1,57 @@
+# Researcher skill — given a topic, finds relevant facts and returns
+# a structured list of findings.
+#
+# Part of the 3-skill community example. Start with start.sh.
+
+[node]
+bind_address    = "127.0.0.1"
+bind_port       = 7952
+bootstrap_peers = ["127.0.0.1:7950"]   # orchestrator bootstraps the cluster
+
+[capability]
+ns          = "llm"
+name        = "researcher"
+description = "Researches a topic and returns structured findings"
+ttl_secs    = 60
+
+[capability.input]
+type     = "object"
+required = ["topic"]
+[capability.input.properties]
+topic       = { type = "string", description = "The topic to research" }
+max_points  = { type = "integer", description = "Maximum number of findings to return" }
+
+[capability.output]
+type = "object"
+[capability.output.properties]
+findings = { type = "array",  items = { type = "string" } }
+sources  = { type = "array",  items = { type = "string" } }
+summary  = { type = "string", description = "One-paragraph summary" }
+
+[capability.policy]
+max_concurrent = 4
+authorized_callers = []   # orchestrator can call without restriction
+
+[skill]
+prompt = """
+You are a thorough research assistant. Given a topic:
+1. Identify the most important facts, concepts, and recent developments
+2. Return your findings as structured JSON
+
+Return ONLY valid JSON matching this schema:
+{
+  "findings": ["fact 1", "fact 2", ...],
+  "sources": ["source or domain 1", ...],
+  "summary": "A concise one-paragraph overview"
+}
+
+Be factual, concise, and limit findings to the requested max_points (default 5).
+"""
+tools = []   # pure LLM reasoning; no sub-skill calls
+
+[skill.llm]
+endpoint    = "http://localhost:11434/v1"
+model       = "llama3.2"
+api_key     = ""
+max_tokens  = 1024
+temperature = 0.3   # lower temperature for factual research

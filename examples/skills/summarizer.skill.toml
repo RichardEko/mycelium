@@ -1,0 +1,55 @@
+# Summarizer skill — condenses any text into a concise summary.
+# Standalone (no sub-skills required).
+#
+# Usage:
+#   ./target/debug/skillrunner --skill examples/skills/summarizer.skill.toml
+
+[node]
+bind_address    = "127.0.0.1"
+bind_port       = 7951
+bootstrap_peers = []    # standalone; add peers to join a cluster
+
+[capability]
+ns          = "llm"
+name        = "summarizer"
+description = "Summarizes text into a concise paragraph and key points"
+ttl_secs    = 60
+
+[capability.input]
+type     = "object"
+required = ["text"]
+[capability.input.properties]
+text        = { type = "string",  description = "Text to summarize" }
+max_bullets = { type = "integer", description = "Max bullet points (default 5)" }
+style       = { type = "string",  enum = ["brief", "detailed"], description = "Summary depth" }
+
+[capability.output]
+type = "object"
+[capability.output.properties]
+summary = { type = "string", description = "One-paragraph summary" }
+bullets = { type = "array",  items = { type = "string" }, description = "Key points" }
+
+[capability.policy]
+max_concurrent = 8    # lightweight — can handle high concurrency
+authorized_callers = []
+
+[skill]
+prompt = """
+You are a precise summarization assistant. Given text, produce a clear summary.
+
+Return ONLY valid JSON:
+{
+  "summary": "One concise paragraph",
+  "bullets": ["Key point 1", "Key point 2", ...]
+}
+
+Keep the summary to 2-3 sentences. Limit bullets to max_bullets (default 5).
+"""
+tools = []
+
+[skill.llm]
+endpoint    = "http://localhost:11434/v1"
+model       = "llama3.2"
+api_key     = ""
+max_tokens  = 512
+temperature = 0.2

@@ -863,6 +863,104 @@ See [`mycelium-py/README.md`](mycelium-py/README.md) for the full API reference.
 
 ---
 
+## SkillRunner — local LLMs as mesh capabilities
+
+`skillrunner` is a standalone binary that turns a `.skill.toml` file into a
+live capability node on the mesh. No Rust required — write a manifest, point
+it at any OpenAI-compatible LLM server, and the node self-advertises,
+handles invocations via nonce RPC, and writes an audit trail.
+
+```sh
+cargo build --bin skillrunner
+./target/debug/skillrunner --skill examples/skills/hello.skill.toml
+```
+
+Requires Ollama (or any OpenAI-compatible endpoint). The `hello.skill.toml`
+example uses `llama3.2`; swap `model` to use any model you have pulled.
+
+### Minimal skill manifest
+
+```toml
+[node]
+bind_port       = 7947
+bootstrap_peers = ["127.0.0.1:7946"]   # address of any existing mesh node
+
+[capability]
+ns   = "llm"
+name = "chat"
+
+[capability.input]
+type = "object"
+[capability.input.properties]
+message = { type = "string" }
+
+[capability.output]
+type = "object"
+[capability.output.properties]
+reply = { type = "string" }
+
+[skill]
+prompt = "You are a helpful assistant. Return JSON: {\"reply\": \"<response>\"}."
+tools  = []
+
+[skill.llm]
+endpoint = "http://localhost:11434/v1"   # Ollama OpenAI-compatible endpoint
+model    = "llama3.2"
+```
+
+### Calling a skill from another node
+
+Any node on the mesh — Rust, Python, or another skillrunner — can invoke a
+skill via `rpc_call`:
+
+**Rust:**
+```rust
+// Discover the skill
+let filter = CapFilter::new("llm", "chat");
+let (node_id, _) = agent.resolve(&filter)[0];
+
+// Invoke it
+let payload = serde_json::to_vec(&json!({"message": "Hello!"}))?;
+let result = agent.rpc_call(node_id, "skill.invoke", payload, Duration::from_secs(30)).await?;
+let reply: serde_json::Value = serde_json::from_slice(&result)?;
+```
+
+**Python (`mycelium-py`):**
+```python
+import json
+from mycelium import MyceliumAgent
+
+agent = MyceliumAgent("127.0.0.1", 8300)   # HTTP port of any mesh node
+
+providers = agent.resolve_capability("llm", "chat")
+result = agent.rpc_call(providers[0].node_id, "skill.invoke",
+                        json.dumps({"message": "Hello!"}).encode())
+print(json.loads(result))
+```
+
+### Multi-skill community
+
+Run multiple skills on the same machine — each on its own port, all
+bootstrapping off each other:
+
+```sh
+./skillrunner --skill examples/skills/hello.skill.toml &   # port 7950
+./skillrunner --skill examples/skills/summarizer.skill.toml &  # port 7951
+./skillrunner --skill examples/skills/researcher.skill.toml &  # port 7952
+```
+
+Skills listed in a manifest's `tools` array can call other skills by name at
+inference time — the mesh routes sub-invocations automatically and the audit
+trail captures the full causal chain.
+
+See [`docs/skillrunner.md`](docs/skillrunner.md) for the full manifest
+reference, OTEL integration, concurrency controls, and the audit trail format.
+
+See [`examples/skills/`](examples/skills/) for ready-to-run manifests and
+[`examples/community/`](examples/community/) for a 3-skill community walkthrough.
+
+---
+
 ## Configuration
 
 Pass a TOML config file with `-c <path>`. CLI flags override file values.
