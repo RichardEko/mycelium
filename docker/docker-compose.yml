@@ -59,6 +59,9 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     hostname: tool-a
+    # Use kernel-reported IP so Mycelium binds to the actual container address
+    # rather than a Docker DNS name that may not resolve during simultaneous startup.
+    entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
     environment:
       MYCELIUM_ROLE:      tool-a
       MYCELIUM_PORT:      "57000"
@@ -70,12 +73,19 @@ services:
     networks:
       - mesh
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8300/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
 
   tool-b:
     build:
       context: ..
       dockerfile: docker/Dockerfile
     hostname: tool-b
+    entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
     environment:
       MYCELIUM_ROLE:      tool-b
       MYCELIUM_PORT:      "57000"
@@ -87,6 +97,12 @@ services:
     networks:
       - mesh
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8300/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
 
   # ── Management dashboard node ────────────────────────────────────────────────
   mgmt:
@@ -94,6 +110,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     hostname: mgmt
+    entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
     environment:
       MYCELIUM_ROLE:      mgmt
       MYCELIUM_PORT:      "57000"
@@ -106,8 +123,10 @@ services:
     networks:
       - mesh
     depends_on:
-      - tool-a
-      - tool-b
+      tool-a:
+        condition: service_healthy
+      tool-b:
+        condition: service_healthy
     restart: unless-stopped
 
   # ── LLM + chat UI node ───────────────────────────────────────────────────────
@@ -116,6 +135,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     hostname: llm
+    entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
     environment:
       MYCELIUM_ROLE:      llm
       MYCELIUM_PORT:      "57000"
@@ -134,9 +154,9 @@ services:
       model-init:
         condition: service_completed_successfully
       tool-a:
-        condition: service_started
+        condition: service_healthy
       tool-b:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
 
 networks:
