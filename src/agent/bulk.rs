@@ -3,15 +3,15 @@
 //! Regular [`rpc_call`](super::GossipAgent::rpc_call) encodes the entire
 //! payload inside the gossip signal, which floods every intermediate node.
 //! `bulk_call` stages the payload in a node-local HTTP endpoint and sends
-//! only a lightweight ticket (nonce + http_port + kind) over the signal mesh;
+//! only a lightweight ticket (nonce + kind) over the signal mesh;
 //! the responder fetches the payload directly from the caller's HTTP server.
 //!
 //! ## Wire format (INVOKE_BULK signal payload)
 //!
 //! ```text
-//! ┌────────────────┬────────────┬───────────────────┐
-//! │ nonce  (8 B LE)│ port (2 LE)│ kind (UTF-8 bytes) │
-//! └────────────────┴────────────┴───────────────────┘
+//! ┌────────────────┬───────────────────┐
+//! │ nonce  (8 B LE)│ kind (UTF-8 bytes) │
+//! └────────────────┴───────────────────┘
 //! ```
 //!
 //! The caller stages the payload at `GET /bulk/{nonce:016x}` on its own HTTP
@@ -24,6 +24,14 @@
 //! The embedded HTTP gateway (`src/agent/http.rs`) exposes `GET /bulk/{id}`.
 //! Applications that run their own HTTP server must add an equivalent route
 //! using [`GossipAgent::bulk_staging_get`].
+//!
+//! ## Transport configuration
+//!
+//! All bulk-transport configuration (HTTP port, fetch timeout, pooled HTTP
+//! client) is encapsulated in [`BulkTransport`], which is constructed once
+//! in [`GossipAgent::new`] from [`GossipConfig`](crate::GossipConfig) and
+//! stored in [`TaskCtx`](super::TaskCtx). Call sites do not pass `http_port`
+//! explicitly; they read it from the configured transport.
 
 use crate::node_id::NodeId;
 use crate::signal::{Signal, SignalScope, signal_kind};
@@ -35,6 +43,63 @@ use tracing::warn;
 use super::{GossipAgent, TaskCtx};
 use super::emit_signal;
 
+// ── Transport adapter ─────────────────────────────────────────────────────────
+
+/// Encapsulates all bulk-transport concerns: staging map, HTTP port, fetch
+/// timeout, and the pooled HTTP client used by `bulk_serve` to retrieve
+/// staged payloads from remote callers.
+pub struct BulkTransport {
+    staging:           papaya::HashMap<u64, Bytes>,
+    pub(crate) http_port: u16,
+    client:            reqwest::Client,
+}
+
+impl BulkTransport {
+    pub fn new(http_port: u16, fetch_timeout: Duration) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(fetch_timeout)
+            .build()
+            .expect("reqwest::Client build should never fail with valid config");
+        Self {
+            staging: papaya::HashMap::new(),
+            http_port,
+            client,
+        }
+    }
+
+    /// Stages `payload` under `nonce` and returns a [`StagedGuard`] that
+    /// removes the entry on drop (cancellation-safe cleanup).
+    fn stage(&self, nonce: u64, payload: Bytes) -> StagedGuard<'_> {
+        self.staging.pin().insert(nonce, payload);
+        StagedGuard { nonce, staging: &self.staging }
+    }
+
+    /// Returns the staged payload for `nonce`, without removing it.
+    pub fn get(&self, nonce: u64) -> Option<Bytes> {
+        self.staging.pin().get(&nonce).cloned()
+    }
+
+    /// Fetches a staged payload from a remote node's HTTP endpoint.
+    pub async fn fetch(&self, url: &str) -> Result<Bytes, reqwest::Error> {
+        self.client.get(url).send().await?.error_for_status()?.bytes().await
+    }
+}
+
+// ── RAII guard ────────────────────────────────────────────────────────────────
+
+struct StagedGuard<'a> {
+    nonce:   u64,
+    staging: &'a papaya::HashMap<u64, Bytes>,
+}
+
+impl Drop for StagedGuard<'_> {
+    fn drop(&mut self) {
+        self.staging.pin().remove(&self.nonce);
+    }
+}
+
+// ── Error type ────────────────────────────────────────────────────────────────
+
 /// Error returned by [`GossipAgent::bulk_call`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BulkError {
@@ -42,8 +107,8 @@ pub enum BulkError {
     Timeout,
     /// The caller does not have an HTTP server port configured.
     ///
-    /// Pass a non-zero `http_port` to `bulk_call`, or configure
-    /// `GossipConfig::http_port` before starting the agent.
+    /// Set `GossipConfig::http_port` before starting the agent, or call
+    /// `GossipConfig::set_http_port`.
     NoHttpPort,
     /// The target replied with an unexpected sender.
     SenderMismatch,
@@ -52,8 +117,8 @@ pub enum BulkError {
 impl std::fmt::Display for BulkError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BulkError::Timeout       => f.write_str("bulk_call timed out — no reply from target"),
-            BulkError::NoHttpPort    => f.write_str("bulk_call requires an http_port"),
+            BulkError::Timeout        => f.write_str("bulk_call timed out — no reply from target"),
+            BulkError::NoHttpPort     => f.write_str("bulk_call requires an http_port in GossipConfig"),
             BulkError::SenderMismatch => f.write_str("bulk_call: reply came from unexpected sender"),
         }
     }
@@ -66,25 +131,28 @@ pub struct BulkServeHandle {
     pub(crate) _cancel: oneshot::Sender<()>,
 }
 
+// ── Core logic ────────────────────────────────────────────────────────────────
+
 /// Core `bulk_call` logic.
 pub(crate) async fn bulk_call_ctx(
-    ctx:       &TaskCtx,
-    target:    NodeId,
-    kind:      Arc<str>,
-    payload:   Bytes,
-    http_port: u16,
-    timeout:   Duration,
+    ctx:     &TaskCtx,
+    target:  NodeId,
+    kind:    Arc<str>,
+    payload: Bytes,
+    timeout: Duration,
 ) -> Result<Bytes, BulkError> {
+    let http_port = ctx.bulk_transport.http_port;
+    if http_port == 0 { return Err(BulkError::NoHttpPort); }
+
     let nonce: u64 = fastrand::u64(1..);
 
-    // Stage the payload so the target can fetch it.
-    ctx.bulk_staging.pin().insert(nonce, payload);
+    // Stage the payload; _guard removes it on any exit (timeout, cancel, success).
+    let _guard = ctx.bulk_transport.stage(nonce, payload);
 
-    // Build the ticket: nonce(8) | http_port(2) | kind_bytes
+    // Build the ticket: nonce(8) | kind_bytes  (port is no longer in-band)
     let kind_bytes = kind.as_bytes();
-    let mut buf = BytesMut::with_capacity(10 + kind_bytes.len());
+    let mut buf = BytesMut::with_capacity(8 + kind_bytes.len());
     buf.put_u64_le(nonce);
-    buf.put_u16_le(http_port);
     buf.put(kind_bytes);
     let ticket = buf.freeze();
 
@@ -96,7 +164,7 @@ pub(crate) async fn bulk_call_ctx(
     emit_signal(ctx, Arc::from(signal_kind::INVOKE_BULK), SignalScope::Individual(target.clone()), ticket);
 
     let deadline = tokio::time::Instant::now() + timeout;
-    let result = loop {
+    loop {
         match tokio::time::timeout_at(deadline, rx.recv()).await {
             Ok(Some(sig)) => {
                 let nonce_matches = sig.payload.get(..8)
@@ -105,16 +173,13 @@ pub(crate) async fn bulk_call_ctx(
                     .unwrap_or(false);
                 if !nonce_matches { continue; }
                 if sig.sender == target {
-                    break Ok(sig.payload.slice(8..));
+                    return Ok(sig.payload.slice(8..));
                 }
-                break Err(BulkError::SenderMismatch);
+                return Err(BulkError::SenderMismatch);
             }
-            _ => break Err(BulkError::Timeout),
+            _ => return Err(BulkError::Timeout),
         }
-    };
-
-    ctx.bulk_staging.pin().remove(&nonce);
-    result
+    }
 }
 
 /// Background task that handles incoming `INVOKE_BULK` signals for a given kind.
@@ -158,17 +223,21 @@ where
     F: Fn(NodeId, Bytes) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = Bytes> + Send + 'static,
 {
-    // Wire: nonce(8) | http_port(2) | kind_bytes
-    if sig.payload.len() < 10 { return; }
-    let nonce     = u64::from_le_bytes(sig.payload[..8].try_into().unwrap());
-    let http_port = u16::from_le_bytes(sig.payload[8..10].try_into().unwrap());
-    let sig_kind  = match std::str::from_utf8(&sig.payload[10..]) {
+    // Wire: nonce(8) | kind_bytes  (port dropped from in-band format)
+    if sig.payload.len() < 8 { return; }
+    let nonce    = u64::from_le_bytes(sig.payload[..8].try_into().unwrap());
+    let sig_kind = match std::str::from_utf8(&sig.payload[8..]) {
         Ok(s)  => s,
         Err(_) => return,
     };
     if sig_kind != kind.as_ref() { return; }
 
     let sender_ip = sig.sender.to_socket_addr().ip();
+    let http_port = ctx.bulk_transport.http_port;
+    if http_port == 0 {
+        warn!("bulk_serve: no http_port configured — cannot fetch payload from {sender_ip}");
+        return;
+    }
     let url = format!("http://{sender_ip}:{http_port}/bulk/{nonce:016x}");
 
     let handler_clone = Arc::clone(handler);
@@ -176,13 +245,9 @@ where
     let ctx_clone     = Arc::clone(ctx);
 
     tokio::spawn(async move {
-        let payload = match reqwest::get(&url).await {
-            Ok(resp) if resp.status().is_success() => match resp.bytes().await {
-                Ok(b)  => b,
-                Err(e) => { warn!(%url, "bulk_serve: read body: {e}"); return; }
-            },
-            Ok(resp) => { warn!(%url, status = %resp.status(), "bulk_serve: HTTP error"); return; }
-            Err(e)   => { warn!(%url, "bulk_serve: fetch failed: {e}"); return; }
+        let payload = match ctx_clone.bulk_transport.fetch(&url).await {
+            Ok(b)  => b,
+            Err(e) => { warn!(%url, "bulk_serve: fetch failed: {e}"); return; }
         };
 
         let result = handler_clone(sender.clone(), payload).await;
@@ -199,30 +264,27 @@ where
     });
 }
 
+// ── GossipAgent API ───────────────────────────────────────────────────────────
+
 impl GossipAgent {
     /// Sends a large `payload` to `target` via the bulk-call protocol.
     ///
     /// The payload is staged at `GET /bulk/{nonce}` on the caller's HTTP server
-    /// (`http_port`). A lightweight ticket is sent over the signal mesh;
-    /// the target fetches the payload directly and sends back a reply.
+    /// (configured via `GossipConfig::http_port`). A lightweight ticket is sent
+    /// over the signal mesh; the target fetches the payload directly and sends
+    /// back a reply.
     ///
     /// Returns `Ok(Bytes)` with the reply, or an error on timeout or
     /// configuration problems.
-    ///
-    /// # Panics
-    ///
-    /// None. Returning `Err(BulkError::NoHttpPort)` when `http_port == 0`.
     pub async fn bulk_call(
         &self,
-        target:    NodeId,
-        kind:      impl Into<Arc<str>>,
-        payload:   impl Into<Bytes>,
-        http_port: u16,
-        timeout:   Duration,
+        target:  NodeId,
+        kind:    impl Into<Arc<str>>,
+        payload: impl Into<Bytes>,
+        timeout: Duration,
     ) -> Result<Bytes, BulkError> {
-        if http_port == 0 { return Err(BulkError::NoHttpPort); }
         bulk_call_ctx(
-            &self.task_ctx, target, kind.into(), payload.into(), http_port, timeout,
+            &self.task_ctx, target, kind.into(), payload.into(), timeout,
         ).await
     }
 
@@ -232,7 +294,7 @@ impl GossipAgent {
     /// from bulk-call targets. Returns `None` when the nonce is not found or
     /// has already been cleaned up.
     pub fn bulk_staging_get(&self, nonce: u64) -> Option<Bytes> {
-        self.task_ctx.bulk_staging.pin().get(&nonce).cloned()
+        self.task_ctx.bulk_transport.get(nonce)
     }
 
     /// Registers a handler for incoming bulk calls of a given `kind`.
@@ -284,12 +346,12 @@ mod tests {
 
         // Manually stage and retrieve a payload.
         let nonce: u64 = 42;
-        agent.task_ctx.bulk_staging.pin().insert(nonce, Bytes::from_static(b"test-payload"));
+        agent.task_ctx.bulk_transport.staging.pin().insert(nonce, Bytes::from_static(b"test-payload"));
         let got = agent.bulk_staging_get(nonce);
         assert_eq!(got, Some(Bytes::from_static(b"test-payload")));
 
         // Simulate cleanup.
-        agent.task_ctx.bulk_staging.pin().remove(&nonce);
+        agent.task_ctx.bulk_transport.staging.pin().remove(&nonce);
         assert!(agent.bulk_staging_get(nonce).is_none());
 
         agent.shutdown().await;
@@ -304,7 +366,7 @@ mod tests {
         agent.start().await.unwrap();
 
         let ghost = NodeId::new("127.0.0.1", 19993).unwrap();
-        let err = agent.bulk_call(ghost, "noop", Bytes::new(), 0, Duration::from_millis(100)).await;
+        let err = agent.bulk_call(ghost, "noop", Bytes::new(), Duration::from_millis(100)).await;
         assert_eq!(err, Err(BulkError::NoHttpPort));
         agent.shutdown().await;
     }

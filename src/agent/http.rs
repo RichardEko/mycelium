@@ -139,7 +139,7 @@ async fn bulk_staging_handler(
         Ok(n)  => n,
         Err(_) => return StatusCode::BAD_REQUEST.into_response(),
     };
-    match ctx.agent_ctx.bulk_staging.pin().get(&nonce).cloned() {
+    match ctx.agent_ctx.bulk_transport.get(nonce) {
         Some(bytes) => (StatusCode::OK, bytes.to_vec()).into_response(),
         None        => StatusCode::NOT_FOUND.into_response(),
     }

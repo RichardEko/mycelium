@@ -315,6 +315,16 @@ pub struct GossipConfig {
     /// the same machine never collide. If `base_path` is not writable at startup,
     /// a warning is logged and the node falls back to in-memory-only mode.
     pub persistence: Option<PersistenceConfig>,
+
+    /// Timeout (seconds) for the HTTP fetch issued by `bulk_serve` when a target
+    /// node retrieves a staged bulk payload from the caller's HTTP endpoint.
+    ///
+    /// If the caller's HTTP server does not respond within this window the
+    /// `bulk_serve` handler logs a warning and discards the in-flight call,
+    /// preventing orphaned tasks from accumulating when a caller is unreachable.
+    ///
+    /// Default: `30`.
+    pub bulk_fetch_timeout_secs: u64,
 }
 
 impl Default for GossipConfig {
@@ -349,9 +359,10 @@ impl Default for GossipConfig {
             max_store_entries: 0,
             locality_path:     Vec::new(),
             topology_policies: HashMap::new(),
-            http_port:         None,
-            http_addr:         "127.0.0.1".to_string(),
-            persistence:       None,
+            http_port:               None,
+            http_addr:               "127.0.0.1".to_string(),
+            persistence:             None,
+            bulk_fetch_timeout_secs: 30,
         }
     }
 }

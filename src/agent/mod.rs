@@ -139,10 +139,8 @@ pub(crate) struct TaskCtx {
     /// not yet been written to the local store after a restart, so `/ready`
     /// returns 503.
     pub(crate) caps_advertised: Arc<std::sync::atomic::AtomicBool>,
-    /// Staging area for in-flight `bulk_call` payloads.
-    /// Keyed by nonce (u64); inserted before the INVOKE_BULK signal is emitted,
-    /// removed after the reply arrives (or on timeout). Served at `GET /bulk/{nonce:016x}`.
-    pub(crate) bulk_staging: Arc<papaya::HashMap<u64, Bytes>>,
+    /// Bulk-transport adapter: staging map, HTTP port, pooled HTTP client.
+    pub(crate) bulk_transport: Arc<bulk::BulkTransport>,
 }
 
 /// Core gossip agent.
@@ -302,7 +300,10 @@ impl GossipAgent {
             kv_state:        kv_state.clone(),
             wal:             std::sync::OnceLock::new(),
             caps_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            bulk_staging:    Arc::new(papaya::HashMap::new()),
+            bulk_transport:  Arc::new(bulk::BulkTransport::new(
+                config.http_port.unwrap_or(0),
+                std::time::Duration::from_secs(config.bulk_fetch_timeout_secs),
+            )),
         });
 
         Self {

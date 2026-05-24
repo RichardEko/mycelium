@@ -745,7 +745,7 @@ async fn node_bulk_echo_peer(State(s): State<Arc<NodeState>>) -> Json<Value> {
         return Json(json!({ "ok": false, "reason": "no peers" }));
     };
     let payload = Bytes::from(vec![b'x'; 4096]);
-    match s.agent.bulk_call(target.clone(), "echo-bulk", payload, s.http_port, Duration::from_secs(10)).await {
+    match s.agent.bulk_call(target.clone(), "echo-bulk", payload, Duration::from_secs(10)).await {
         Ok(result) => Json(json!({ "ok": true, "target": target.to_string(), "echoed_size": result.len() })),
         Err(e)     => Json(json!({ "ok": false, "reason": e.to_string() })),
     }
