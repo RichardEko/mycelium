@@ -1,4 +1,4 @@
-//! Consensus — Layer 2 extension.
+//! Consensus — epidemic two-phase agreement built on the signal mesh.
 //!
 //! Lightweight Group-level and System-level agreement built on top of the
 //! epidemic signal layer. Uses a two-phase gossip voting protocol:
@@ -309,9 +309,9 @@ pub(crate) fn evaluate_topology_gate(
 
 /// Context for mid-ballot opaque-member recomputation.
 ///
-/// Injected by `group_propose` / `system_propose` at the Layer II call site so
-/// `propose` (Layer III) does not read `KvState` directly — the opacity query
-/// strategy is an injected dependency, not a Layer III concern.
+/// Injected by `group_propose` / `system_propose` at the signal-mesh call site so
+/// `propose` does not read `KvState` directly — the opacity query strategy is an
+/// injected dependency, not a consensus-engine concern.
 pub(crate) struct OpaqueRecompute {
     /// Total group/system member count at proposal time (before opacity exclusions).
     pub(crate) total_members: usize,
@@ -356,23 +356,21 @@ pub(crate) struct ConsensusEngine {
 impl ConsensusEngine {
     // ── KV helpers ───────────────────────────────────────────────────────────
     //
-    // ConsensusEngine writes directly to Layer I (`apply_and_notify`,
+    // ConsensusEngine writes directly to the KV substrate (`apply_and_notify`,
     // `dispatch_gossip_*`, `make_gossip_update`) for its own `consensus/ballot/*`
-    // and `consensus/committed/*` namespace. This is an intentional design choice,
-    // not a layer violation:
+    // and `consensus/committed/*` namespace. This is intentional, not a layer violation:
     //
     // 1. `GossipAgent::set` cannot be used here — it would create a reference cycle
     //    (`ConsensusEngine` → `GossipAgent` → task handles → `ConsensusEngine`),
     //    so `ConsensusEngine` receives only `Arc<TaskCtx>` with no agent back-reference.
     //
-    // 2. Ownership of the `consensus/*` namespace is analogous to the opacity governor
-    //    owning `sys/load/*` — a Layer II module that writes directly to its own KV
-    //    namespace because the data is architectural state, not user data.
+    // 2. Ownership of `consensus/*` is analogous to the opacity governor owning
+    //    `sys/load/*`: the module writes directly to its documented KV prefix because
+    //    the data is architectural state, not user data.
     //
-    // 3. This module is documented as a "Layer 2 extension" (see crate-level doc comment):
-    //    consensus is a higher-order capability built on Layer II signals, and its KV
-    //    writes use exactly the same primitives (`make_gossip_update` + `apply_and_notify`)
-    //    that the rest of Layer II uses — no additional coupling to Layer I is introduced.
+    // 3. Consensus uses exactly the same KV primitives (`make_gossip_update` +
+    //    `apply_and_notify`) that every other subsystem uses — no additional coupling
+    //    to the transport layer is introduced.
 
     fn get(&self, key: &str) -> Option<Bytes> {
         self.task_ctx.kv_state.store.pin().get(key).and_then(|e| e.data.clone())
@@ -419,11 +417,11 @@ impl ConsensusEngine {
         upd
     }
 
-    // ── Layer II bridge helpers ──────────────────────────────────────────────
+    // ── Signal-mesh bridge helpers ───────────────────────────────────────────
 
     /// True if any `sys/load/{node_id}/*` pheromone entry is `is_opaque`.
     ///
-    /// Delegates to the Layer II helper in `agent::opacity` so this Layer III type
+    /// Delegates to the opacity helper in `agent::opacity` so this type
     /// does not scan `KvState` directly.
     fn is_overloaded(&self) -> bool {
         crate::agent::is_self_opaque(&self.task_ctx.kv_state, &self.task_ctx.node_id)
@@ -480,8 +478,8 @@ impl ConsensusEngine {
     ///
     /// `opaque_recompute` — when `Some`, `propose` registers for `BOUNDARY_OPAQUE` signals
     /// and re-evaluates the effective quorum size mid-ballot when any member transitions.
-    /// The callback is built by the Layer II call site so `propose` does not read `KvState`
-    /// directly — the opacity query strategy is an injected dependency, not a Layer III concern.
+    /// The callback is built by the call site so `propose` does not read `KvState`
+    /// directly — the opacity query strategy is an injected dependency.
     pub(crate) async fn propose(
         &self,
         scope:             SignalScope,

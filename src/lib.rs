@@ -55,21 +55,21 @@
 //!
 //! | Prefix                              | Owner / purpose                                              |
 //! |-------------------------------------|--------------------------------------------------------------|
-//! | `grp/{group}/{node}`                | Layer II group membership                                    |
-//! | `sys/load/{node}/{kind}`            | Layer II opacity (load + auto-opacity composition)           |
+//! | `grp/{group}/{node}`                | Signal Mesh — group membership                               |
+//! | `sys/load/{node}/{kind}`            | Signal Mesh — opacity (load + auto-opacity composition)      |
 //! | `sys/load/{node}/req/{ns}/{name}`   | Phase 3 requirement opacity (composes via `is_self_opaque`)  |
 //! | `sys/load/{node}/group-req/{g}/{i}` | Group-requirement opacity; written by the emergent-group membership task when a `CapabilityGroupDef::requires` filter is unsatisfied |
 //! | `sys/quorum/{kind}/{sender}`        | Persistent quorum evidence                                   |
-//! | `sys/topology-override/{group}`     | Layer III operator escape hatch (value: `b"true"`)           |
-//! | `consensus/committed/{slot}`        | Layer III consensus state                                    |
-//! | `consensus/ballot/{slot}`           | Layer III ballot tracking                                    |
-//! | `consensus/trust/{group}/{node}`    | Layer III trust slices                                       |
+//! | `sys/topology-override/{group}`     | Consensus — operator escape hatch (value: `b"true"`)         |
+//! | `consensus/committed/{slot}`        | Consensus — committed slot state                             |
+//! | `consensus/ballot/{slot}`           | Consensus — ballot tracking                                  |
+//! | `consensus/trust/{group}/{node}`    | Consensus — trust slices                                     |
 //! | `cap/{node}/{ns}/{name}`            | Node-level capability advertisements                         |
 //! | `cap/{node}/locality/self`          | Locality (also a capability — single namespace, single shape)|
 //! | `req/{node}/{ns}/{name}`            | Node-level requirement declarations                          |
 //! | `cap-group/{group}`                 | Emergent capability-group definitions                        |
 //! | `gcap/{group}/{ns}/{name}/{contrib}`| Group-level capability projections                           |
-//! | `mailbox/{target}/{kind}/{hlc_hex}` | Layer III event mailbox entries (value: `sender_len(2LE) | sender_bytes | payload`) |
+//! | `mailbox/{target}/{kind}/{hlc_hex}` | Service Patterns — event mailbox entries (value: `sender_len(2LE) | sender_bytes | payload`) |
 //! | `tools/{name}/{node}`              | Layer IV MCP tool registrations (value: JSON Schema bytes)   |
 //! | `agent/{node}/state`               | Layer V agent state machine — current state string (gossips to mesh) |
 //! | `agent/{node}/policy`              | Layer V serialised AgentPolicy (readable by monitors/supervisors) |
