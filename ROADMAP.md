@@ -1662,7 +1662,7 @@ what thresholds should trigger alerts.
 | Multi-machine integration tests + deployment docs (10 scenarios) | **Blocking** | **Complete** 2026-05-23 |
 | KV persistence (WAL + snapshot/replay) | **Blocking** | **Complete** 2026-05-23 |
 | mTLS + node identity signing + consensus signing | **Blocking** | **Complete** 2026-05-24 |
-| Python language bridge (`mycelium-py`) | High | Pending |
+| Python language bridge (`mycelium-py`) | High | **Complete** 2026-05-24 |
 | `set_quorum` write-durability confirmation API | Medium | Pending |
 | Prometheus metrics export + dashboards | Medium | Pending |
 
