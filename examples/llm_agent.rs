@@ -49,6 +49,7 @@
 //! ```sh
 //! MOCK_LLM=1 cargo run --example llm_agent   # no Ollama needed
 //! cargo run --example llm_agent               # real Ollama
+//! make test-llm-agent                         # automated Docker test (11 scenarios, MOCK_LLM=1)
 //! ```
 //! Then open **http://127.0.0.1:8100**
 

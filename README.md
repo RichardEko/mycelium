@@ -8,15 +8,17 @@ Built on TCP epidemic propagation with last-write-wins conflict resolution. Laye
 persistent state; Layer 2 carries ephemeral events. Higher layers build Actor/Event systems,
 async RPC, and MCP AI tool routing on top — each agent chooses its own payload serialisation.
 
-## Demo — Mesh Control UI
+## Demos
 
-A three-node gossip mesh with a live management UI. No dependencies beyond Rust.
+### Mesh Control UI — `llm_agent`
+
+A three-node gossip mesh with a live management UI. No Ollama required for the quick start.
 
 ```sh
-# Quick start — no Ollama needed
+# Quick start — mock LLM, no Ollama needed
 MOCK_LLM=1 cargo run --example llm_agent
 
-# With a real LLM (Ollama default, or set OPENAI_BASE_URL / OPENAI_MODEL)
+# With a real LLM (set OPENAI_BASE_URL / OPENAI_MODEL for non-Ollama endpoints)
 cargo run --example llm_agent
 ```
 
@@ -31,6 +33,7 @@ Open **http://127.0.0.1:8100** in your browser.
 | Preset gallery | 11 topology presets — click **Apply** and the manifest propagates to all nodes via gossip |
 | Manifest upload | Paste or load any TOML manifest; semver-gated, gossip-propagated |
 | Soft stop/start | Stop a group or the whole system; capabilities tombstone within one health interval |
+| Hybrid tool discovery | MCP tools (`register_mcp_tool`) and SkillRunner skills (`.skill.toml` nodes) are merged automatically — any skill joining the mesh is immediately available to the LLM planner |
 
 **Preset topologies available in the UI:**
 
@@ -48,7 +51,64 @@ Open **http://127.0.0.1:8100** in your browser.
 | Locality Mesh | East/west providers — `resolve_with_locality` picks nearest |
 | Watchdog Cluster | Heartbeat services + `quorum_persistent` circuit breaker |
 
-**Conway's Game of Life** — a separate standalone demo that shows the epidemic substrate itself rather than a service topology. 256 gossip agents (one per cell in a 16×16 grid) coordinate cell state via gossip KV; a tick signal drives each generation.
+**Automated Docker test (no Ollama needed):**
+
+```sh
+make test-llm-agent   # 11 scenarios: mesh health · tool discovery · planning cycle · spare failover
+```
+
+---
+
+### Interactive Chat — `three_node_demo`
+
+Three nodes with distinct roles — two tool providers and one LLM node with a real-time browser chat UI. The LLM plans tool calls across nodes using the gossip mesh for discovery and routing.
+
+| Role | Tools | HTTP port |
+|---|---|---|
+| `tool-a` | `weather(city)`, `web_fetch(url)` | 8300 |
+| `tool-b` | `calculate(expr)`, `wiki(topic)` | 8300 |
+| `llm` | Browser chat UI + LLM planner | 8080 |
+
+**HTTP endpoints on the `llm` node:**
+
+| Endpoint | Description |
+|---|---|
+| `GET /` | Browser chat UI (HTML) |
+| `POST /chat` | Send `{"message":"..."}` — returns 202, planning runs async |
+| `GET /stream` | SSE stream: `Thinking`, `ToolCall`, `ToolResult`, `Assistant`, `Idle` events |
+| `GET /mesh` | Tool list visible to the planner + current model name |
+
+**Docker (recommended):**
+
+```sh
+make test-llm-demo     # interactive — open http://localhost:8080 to chat (requires Ollama)
+make test-three-node   # automated test — 4 scenarios, uses real llama3.2 via Ollama
+                       # (~2 GB model download on first run; cached in ollama-models volume)
+```
+
+**Local quick start (no Docker):**
+
+```sh
+# terminal 1
+MYCELIUM_ROLE=tool-a MYCELIUM_PEERS=127.0.0.1:57001,127.0.0.1:57002 \
+  MYCELIUM_PORT=57000 cargo run --example three_node_demo
+
+# terminal 2
+MYCELIUM_ROLE=tool-b MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57002 \
+  MYCELIUM_PORT=57001 cargo run --example three_node_demo
+
+# terminal 3 — requires Ollama running on localhost:11434 with llama3.2 pulled
+MYCELIUM_ROLE=llm MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001 \
+  MYCELIUM_PORT=57002 OLLAMA_BASE_URL=http://localhost:11434/v1 \
+  cargo run --example three_node_demo
+# open http://localhost:8080
+```
+
+---
+
+### Conway's Game of Life
+
+A separate standalone demo that shows the epidemic substrate itself rather than a service topology. 256 gossip agents (one per cell in a 16×16 grid) coordinate cell state via gossip KV; a tick signal drives each generation.
 
 ```sh
 cargo run --example conway          # CPU renderer (terminal / HTTP canvas)

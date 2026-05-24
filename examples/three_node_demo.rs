@@ -1,18 +1,29 @@
-//! Three-node real-world demo — Docker edition with interactive chat UI.
+//! Three-node real-world demo — two tool providers + one LLM chat node.
 //!
 //! One binary, three roles selected by `MYCELIUM_ROLE`:
 //!
-//! ```
+//! ```text
 //!   tool-a  ─── weather(city)   — calls wttr.in
 //!               web_fetch(url)  — fetches any URL, returns first 2 KB
 //!
 //!   tool-b  ─── calculate(expr) — safe arithmetic evaluator
 //!               wiki(topic)     — calls Wikipedia REST summary API
 //!
-//!   llm     ─── browser chat UI at http://localhost:8080
+//!   llm     ─── browser chat UI at CHAT_PORT (default 8080)
 //!               plans with local Ollama (llama3.2)
 //!               routes each tool call to whichever container hosts it
 //! ```
+//!
+//! # HTTP endpoints (llm node)
+//!
+//! | Endpoint      | Description |
+//! |---------------|-------------|
+//! | `GET /`       | Browser chat UI (HTML) |
+//! | `POST /chat`  | Send `{"message":"..."}` — 202 Accepted; planning runs async |
+//! | `GET /stream` | SSE stream of `ChatEvent`: Thinking, ToolCall, ToolResult, Assistant, Idle |
+//! | `GET /mesh`   | Tool list visible to the planner and current model name |
+//!
+//! Tool nodes expose `GET /ready` and `GET /health` on `MYCELIUM_HTTP_PORT`.
 //!
 //! # Environment variables
 //!
@@ -27,7 +38,13 @@
 //! | `OLLAMA_MODEL`       | `llama3.2`                   | llm     |
 //! | `CHAT_PORT`          | `8080`                       | llm     |
 //!
-//! # Quick start (local, no Docker)
+//! # Docker (recommended)
+//! ```sh
+//! make test-llm-demo     # interactive — open http://localhost:8080 to chat
+//! make test-three-node   # automated test (4 scenarios, real llama3.2)
+//! ```
+//!
+//! # Local quick start (no Docker)
 //! ```sh
 //! # terminal 1
 //! MYCELIUM_ROLE=tool-a MYCELIUM_PEERS=127.0.0.1:57001,127.0.0.1:57002 \
@@ -41,7 +58,7 @@
 //! MYCELIUM_ROLE=llm MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001 \
 //!   MYCELIUM_PORT=57002 OLLAMA_BASE_URL=http://localhost:11434/v1 \
 //!   cargo run --example three_node_demo
-//! # Then open http://localhost:8080
+//! # open http://localhost:8080
 //! ```
 
 use axum::{

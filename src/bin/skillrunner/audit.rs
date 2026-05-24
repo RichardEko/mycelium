@@ -85,10 +85,10 @@ pub(crate) mod otel {
     use super::AuditRecord;
 
     pub(crate) fn init_tracer(cfg: &OtelSection) -> Result<TracerProvider, Box<dyn std::error::Error>> {
-        let exporter = opentelemetry_otlp::new_exporter()
-            .tonic()
+        let exporter = opentelemetry_otlp::SpanExporter::builder()
+            .with_tonic()
             .with_endpoint(&cfg.endpoint)
-            .build_span_exporter()?;
+            .build()?;
 
         let provider = TracerProvider::builder()
             .with_simple_exporter(exporter)

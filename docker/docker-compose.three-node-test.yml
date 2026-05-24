@@ -1,0 +1,133 @@
+# three_node_demo — automated Docker integration test
+#
+# Identical topology to docker-compose.yml (minus the mgmt dashboard) but with
+# the runner container added and no interactive ports exposed.
+#
+# llama3.2 is pulled on first run and cached in the ollama-models volume.
+# Subsequent runs reuse the cached model and start in seconds.
+#
+# Usage:
+#   make test-three-node   # automated test (requires ~2 GB for llama3.2 on first run)
+
+services:
+
+  # ── Ollama (local LLM runtime) ───────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-models:/root/.ollama
+    networks:
+      - three-node-test
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # ── One-shot model pull (exits 0 when done) ──────────────────────────────────
+  model-init:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - three-node-test
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["ollama", "pull", "llama3.2"]
+    restart: "no"
+
+  # ── Mycelium tool nodes ───────────────────────────────────────────────────────
+  tool-a:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: tool-a
+    entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
+    environment:
+      MYCELIUM_ROLE:      tool-a
+      MYCELIUM_PORT:      "57000"
+      MYCELIUM_HTTP_PORT: "8300"
+      MYCELIUM_PEERS:     "tool-b:57000,llm:57000"
+      RUST_LOG:           "warn"
+    networks:
+      - three-node-test
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8300/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  tool-b:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: tool-b
+    entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
+    environment:
+      MYCELIUM_ROLE:      tool-b
+      MYCELIUM_PORT:      "57000"
+      MYCELIUM_HTTP_PORT: "8300"
+      MYCELIUM_PEERS:     "tool-a:57000,llm:57000"
+      RUST_LOG:           "warn"
+    networks:
+      - three-node-test
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8300/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  # ── LLM + chat UI node ───────────────────────────────────────────────────────
+  llm:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: llm
+    entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
+    environment:
+      MYCELIUM_ROLE:      llm
+      MYCELIUM_PORT:      "57000"
+      MYCELIUM_HTTP_PORT: "8300"
+      MYCELIUM_PEERS:     "tool-a:57000,tool-b:57000"
+      RUST_LOG:           "warn"
+      OLLAMA_BASE_URL:    "http://ollama:11434/v1"
+      OLLAMA_MODEL:       "llama3.2"
+      CHAT_PORT:          "8080"
+    networks:
+      - three-node-test
+    depends_on:
+      model-init:
+        condition: service_completed_successfully
+      tool-a:
+        condition: service_healthy
+      tool-b:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Test runner ──────────────────────────────────────────────────────────────
+  runner:
+    build:
+      context: three-node-runner
+    container_name: mycelium-three-node-runner
+    environment:
+      LLM_HOST:      llm
+      LLM_CHAT_PORT: "8080"
+    depends_on:
+      - llm
+    networks:
+      - three-node-test
+    restart: "no"
+
+networks:
+  three-node-test:
+    driver: bridge
+
+volumes:
+  ollama-models:

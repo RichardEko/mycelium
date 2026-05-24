@@ -1,0 +1,982 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mycelium — Embedded Gossip Library for AI Agent Fleets</title>
+<style>
+  :root {
+    --bg:        #0d1117;
+    --surface:   #161b22;
+    --surface2:  #1c2128;
+    --surface3:  #21262d;
+    --border:    #30363d;
+    --accent:    #58a6ff;
+    --accent2:   #3fb950;
+    --accent3:   #d2a8ff;
+    --accent4:   #ffa657;
+    --accent5:   #ff7b72;
+    --muted:     #8b949e;
+    --text:      #e6edf3;
+    --text2:     #c9d1d9;
+    --radius:    8px;
+    --radius-lg: 14px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif;
+    font-size: 15px;
+    line-height: 1.7;
+  }
+
+  /* ── Hero ─────────────────────────────────────────────────────────── */
+  .hero {
+    background: radial-gradient(ellipse at 65% 0%,  rgba(88,166,255,0.08)  0%, transparent 55%),
+                radial-gradient(ellipse at 10% 80%, rgba(63,185,80,0.05)   0%, transparent 50%),
+                var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 64px 40px 52px;
+    text-align: center;
+  }
+  .eyebrow {
+    display: inline-block;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--accent2);
+    background: rgba(63,185,80,0.08); border: 1px solid rgba(63,185,80,0.22);
+    border-radius: 20px; padding: 5px 16px; margin-bottom: 22px;
+  }
+  .hero h1 {
+    font-size: 46px; font-weight: 800; letter-spacing: -0.025em; line-height: 1.1;
+    margin-bottom: 16px;
+    background: linear-gradient(135deg, #e6edf3 0%, #8b949e 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+  }
+  .hero h1 em {
+    font-style: normal;
+    background: linear-gradient(135deg, #58a6ff 0%, #d2a8ff 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+  }
+  .hero-sub { font-size: 17px; color: var(--muted); max-width: 640px; margin: 0 auto 36px; line-height: 1.65; }
+  .hero-badges { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .badge {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; color: var(--text2);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 20px; padding: 6px 14px;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .dot-green  { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); animation: pulse 2s ease-in-out infinite; }
+  .dot-blue   { background: var(--accent); }
+  .dot-purple { background: var(--accent3); }
+  .dot-orange { background: var(--accent4); }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+  /* ── Layer pill ───────────────────────────────────────────────────── */
+  .layer-pills { display: flex; gap: 10px; flex-wrap: wrap; margin: 0 0 28px; }
+  .pill {
+    font-size: 12px; font-weight: 600; padding: 5px 14px;
+    border-radius: 20px; border: 1px solid; cursor: default;
+  }
+  .pill-i   { background: rgba(88,166,255,0.08);  border-color: rgba(88,166,255,0.25); color: var(--accent); }
+  .pill-ii  { background: rgba(63,185,80,0.08);   border-color: rgba(63,185,80,0.25);  color: var(--accent2); }
+  .pill-iii { background: rgba(210,168,255,0.08); border-color: rgba(210,168,255,0.25);color: var(--accent3); }
+  .pill-sec { background: rgba(255,166,87,0.08);  border-color: rgba(255,166,87,0.25); color: var(--accent4); }
+
+  /* ── Layout ───────────────────────────────────────────────────────── */
+  .layout { display: grid; grid-template-columns: 224px 1fr; gap: 0; max-width: 1180px; margin: 0 auto; }
+
+  /* ── Sidebar ──────────────────────────────────────────────────────── */
+  .sidebar {
+    position: sticky; top: 0; height: 100vh; overflow-y: auto;
+    padding: 36px 0 40px 28px; border-right: 1px solid var(--border);
+    scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+  }
+  .sidebar-title {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--muted); padding-bottom: 10px;
+    margin-bottom: 8px; border-bottom: 1px solid var(--border);
+  }
+  .nav-group { margin-bottom: 2px; }
+  .nav-group summary {
+    font-size: 12px; font-weight: 600; color: var(--text2);
+    cursor: pointer; padding: 5px 0; list-style: none; user-select: none;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .nav-group summary::before { content: "›"; color: var(--muted); font-size: 14px; transition: transform .15s; }
+  .nav-group[open] summary::before { transform: rotate(90deg); }
+  .nav-links { padding-left: 12px; }
+  .nav-links a {
+    display: block; font-size: 12px; color: var(--muted); text-decoration: none;
+    padding: 3px 0; transition: color .15s;
+  }
+  .nav-links a:hover { color: var(--accent); }
+
+  /* ── Content ──────────────────────────────────────────────────────── */
+  .content { padding: 52px 48px 100px 48px; min-width: 0; }
+  .section { margin-bottom: 72px; }
+  .section-head {
+    display: flex; align-items: center; gap: 14px;
+    padding-bottom: 16px; border-bottom: 1px solid var(--border); margin-bottom: 32px;
+  }
+  .section-icon { font-size: 22px; }
+  .section-head h2 { font-size: 22px; font-weight: 700; color: var(--text); }
+  .sec-tag {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 3px 10px; border-radius: 20px; margin-left: auto;
+  }
+  .tag-i   { background: rgba(88,166,255,0.1);  color: var(--accent);  border: 1px solid rgba(88,166,255,0.25); }
+  .tag-ii  { background: rgba(63,185,80,0.1);   color: var(--accent2); border: 1px solid rgba(63,185,80,0.25); }
+  .tag-iii { background: rgba(210,168,255,0.1); color: var(--accent3); border: 1px solid rgba(210,168,255,0.25); }
+  .tag-ref { background: rgba(88,166,255,0.1);  color: var(--accent);  border: 1px solid rgba(88,166,255,0.25); }
+
+  h3 { font-size: 16px; font-weight: 700; color: var(--text); margin: 36px 0 12px; }
+  h4 { font-size: 12px; font-weight: 700; color: var(--muted); margin: 20px 0 8px; text-transform: uppercase; letter-spacing: 0.08em; }
+  p  { color: var(--text2); margin-bottom: 14px; }
+  ul, ol { color: var(--text2); padding-left: 20px; margin-bottom: 14px; }
+  li { margin-bottom: 4px; }
+  a  { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  strong { color: var(--text); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 32px 0; }
+
+  /* ── Code blocks ──────────────────────────────────────────────────── */
+  pre {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 18px 22px; overflow-x: auto;
+    font-family: "SF Mono","Fira Mono","Cascadia Code",monospace;
+    font-size: 12.5px; line-height: 1.65; margin: 14px 0 20px; position: relative;
+  }
+  code { font-family: "SF Mono","Fira Mono","Cascadia Code",monospace; font-size: 12.5px; }
+  p code, li code, td code {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 6px; font-size: 12px; color: var(--accent3);
+  }
+  .lang-tag {
+    position: absolute; top: 10px; right: 14px;
+    font-size: 10px; font-weight: 600; color: var(--muted); letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .kw  { color: #ff7b72; }
+  .str { color: #a5d6ff; }
+  .cmt { color: #8b949e; font-style: italic; }
+  .num { color: #ffa657; }
+  .fn  { color: #d2a8ff; }
+  .var { color: #79c0ff; }
+  .toml-key { color: #79c0ff; }
+  .toml-hdr { color: #ffa657; font-weight: 600; }
+  .toml-str { color: #a5d6ff; }
+  .toml-cmt { color: #8b949e; font-style: italic; }
+
+  /* ── Tables ───────────────────────────────────────────────────────── */
+  .tbl-wrap { overflow-x: auto; margin: 16px 0 24px; border-radius: var(--radius); border: 1px solid var(--border); }
+  table { width: 100%; border-collapse: collapse; }
+  thead tr { background: var(--surface2); }
+  th {
+    text-align: left; padding: 10px 16px; font-size: 11px; font-weight: 700;
+    color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase;
+    border-bottom: 1px solid var(--border);
+  }
+  td { padding: 10px 16px; font-size: 13px; color: var(--text2); border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+  td:first-child code { color: var(--accent4); }
+
+  /* ── Callout boxes ────────────────────────────────────────────────── */
+  .callout {
+    display: flex; gap: 14px; align-items: flex-start;
+    padding: 14px 18px; border-radius: var(--radius);
+    margin: 18px 0; border: 1px solid;
+  }
+  .callout-icon { font-size: 16px; flex-shrink: 0; margin-top: 2px; }
+  .callout-body { font-size: 13px; color: var(--text2); line-height: 1.6; }
+  .callout-body strong { color: var(--text); }
+  .callout-tip  { background: rgba(63,185,80,0.06);  border-color: rgba(63,185,80,0.2); }
+  .callout-info { background: rgba(88,166,255,0.06); border-color: rgba(88,166,255,0.2); }
+  .callout-warn { background: rgba(255,166,87,0.06); border-color: rgba(255,166,87,0.2); }
+
+  /* ── Demo cards ───────────────────────────────────────────────────── */
+  .demo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 0 0 28px; }
+  .demo-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 22px 24px;
+  }
+  .demo-card h3 { margin: 0 0 8px; font-size: 15px; }
+  .demo-card p  { font-size: 13px; color: var(--muted); margin: 0 0 14px; }
+  .demo-label {
+    display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase; padding: 2px 10px; border-radius: 20px; margin-bottom: 10px;
+  }
+  .demo-llm   { background: rgba(88,166,255,0.1); color: var(--accent); border: 1px solid rgba(88,166,255,0.25); }
+  .demo-chat  { background: rgba(63,185,80,0.1);  color: var(--accent2);border: 1px solid rgba(63,185,80,0.25); }
+  .demo-conway{ background: rgba(210,168,255,0.1);color: var(--accent3);border: 1px solid rgba(210,168,255,0.25); }
+
+  /* ── Endpoint list ────────────────────────────────────────────────── */
+  .ep-list { margin: 0; padding: 0; list-style: none; }
+  .ep-list li { display: flex; gap: 12px; align-items: baseline; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .ep-list li:last-child { border-bottom: none; }
+  .ep-method { font-family: "SF Mono","Fira Mono",monospace; font-size: 11px; font-weight: 700; color: var(--accent4); min-width: 44px; }
+  .ep-path   { font-family: "SF Mono","Fira Mono",monospace; font-size: 12px; color: var(--accent3); min-width: 120px; }
+  .ep-desc   { color: var(--muted); }
+
+  /* ── Perf table badges ────────────────────────────────────────────── */
+  .perf-val { font-family: "SF Mono","Fira Mono",monospace; color: var(--accent2); font-weight: 600; }
+
+  /* ── Responsive ───────────────────────────────────────────────────── */
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; }
+    .sidebar { display: none; }
+    .content { padding: 32px 20px 80px; }
+    .hero { padding: 48px 20px 40px; }
+    .hero h1 { font-size: 32px; }
+    .demo-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Hero ──────────────────────────────────────────────────────────── -->
+<div class="hero">
+  <div class="eyebrow">Embedded · Broker-less · Rust</div>
+  <h1><em>Mycelium</em> — gossip substrate<br>for AI agent fleets</h1>
+  <p class="hero-sub">
+    Agents discover each other's capabilities through a shared KV medium, signal intent through
+    scope-filtered epidemic events, and evolve their topology without a coordinator, central
+    registry, or single point of failure.
+  </p>
+  <div class="hero-badges">
+    <div class="badge"><span class="dot dot-green"></span>TCP epidemic propagation</div>
+    <div class="badge"><span class="dot dot-blue"></span>Last-write-wins KV</div>
+    <div class="badge"><span class="dot dot-purple"></span>Emergent capability groups</div>
+    <div class="badge"><span class="dot dot-orange"></span>OpenAI-compatible skills</div>
+  </div>
+</div>
+
+<div class="layout">
+
+<!-- ── Sidebar ───────────────────────────────────────────────────────── -->
+<nav class="sidebar">
+  <div class="sidebar-title">Contents</div>
+
+  <details class="nav-group" open>
+    <summary>Demos</summary>
+    <div class="nav-links">
+      <a href="#demo-llm-agent">Mesh Control UI</a>
+      <a href="#demo-chat">Interactive Chat</a>
+      <a href="#demo-conway">Conway's Game of Life</a>
+    </div>
+  </details>
+
+  <details class="nav-group" open>
+    <summary>Getting Started</summary>
+    <div class="nav-links">
+      <a href="#build">Build</a>
+      <a href="#run">Run</a>
+    </div>
+  </details>
+
+  <details class="nav-group" open>
+    <summary>Layers</summary>
+    <div class="nav-links">
+      <a href="#layer-1">Layer I — KV Transport</a>
+      <a href="#layer-2">Layer II — Signal Mesh</a>
+      <a href="#layer-3">Layer III — Consensus</a>
+    </div>
+  </details>
+
+  <details class="nav-group" open>
+    <summary>Capabilities</summary>
+    <div class="nav-links">
+      <a href="#cap-advertise">Advertise &amp; Resolve</a>
+      <a href="#cap-requirements">Requirements</a>
+      <a href="#cap-demand">Demand Pressure</a>
+      <a href="#cap-groups">Emergent Groups</a>
+      <a href="#cap-locality">Locality Routing</a>
+    </div>
+  </details>
+
+  <details class="nav-group" open>
+    <summary>Service Layer</summary>
+    <div class="nav-links">
+      <a href="#rpc">Point-to-Point RPC</a>
+      <a href="#bulk">Bulk Transfer</a>
+      <a href="#scatter">Scatter-Gather</a>
+      <a href="#mailbox">Mailboxes</a>
+    </div>
+  </details>
+
+  <details class="nav-group" open>
+    <summary>Integrations</summary>
+    <div class="nav-links">
+      <a href="#python">Python Bridge</a>
+      <a href="#skillrunner">SkillRunner</a>
+    </div>
+  </details>
+
+  <details class="nav-group" open>
+    <summary>Reference</summary>
+    <div class="nav-links">
+      <a href="#security">Security</a>
+      <a href="#perf">Performance</a>
+      <a href="#config">Configuration</a>
+    </div>
+  </details>
+</nav>
+
+<!-- ── Main content ──────────────────────────────────────────────────── -->
+<main class="content">
+
+<!-- ── Demos ─────────────────────────────────────────────────────────── -->
+<section class="section" id="demos">
+  <div class="section-head">
+    <span class="section-icon">🎮</span>
+    <h2>Demos</h2>
+  </div>
+
+  <!-- llm_agent -->
+  <h3 id="demo-llm-agent">Mesh Control UI — <code>llm_agent</code></h3>
+  <p>A three-node gossip mesh with a live management UI. No Ollama required for the quick start.</p>
+
+  <pre><span class="cmt"># Quick start — mock LLM, no Ollama needed</span>
+MOCK_LLM=1 cargo run --example llm_agent
+
+<span class="cmt"># With a real LLM (set OPENAI_BASE_URL / OPENAI_MODEL for non-Ollama endpoints)</span>
+cargo run --example llm_agent
+
+<span class="cmt"># Automated Docker test (11 scenarios, MOCK_LLM=1)</span>
+make test-llm-agent</pre>
+
+  <p>Open <strong>http://127.0.0.1:8100</strong> in your browser.</p>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>What you get</th><th>Detail</th></tr></thead>
+      <tbody>
+        <tr><td>Three gossip nodes</td><td>Ports 56000–56002, fully meshed</td></tr>
+        <tr><td>Management UI</td><td>http://127.0.0.1:8100–8102</td></tr>
+        <tr><td>Emergent manager election</td><td>Lexicographically smallest live node-id becomes manager; browser auto-redirects</td></tr>
+        <tr><td>Simulated failure</td><td>n-0 fails at T+35 s; n-1 becomes manager; n-0 recovers at T+50 s</td></tr>
+        <tr><td>Preset gallery</td><td>11 topology presets — click <strong>Apply</strong> and the manifest propagates to all nodes via gossip</td></tr>
+        <tr><td>Manifest upload</td><td>Paste or load any TOML manifest; semver-gated, gossip-propagated</td></tr>
+        <tr><td>Soft stop/start</td><td>Stop a group or the whole system; capabilities tombstone within one health interval</td></tr>
+        <tr><td>Hybrid tool discovery</td><td>MCP tools (<code>register_mcp_tool</code>) and SkillRunner skills (<code>.skill.toml</code> nodes) are merged automatically — any skill joining the mesh is immediately available to the LLM planner</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h4>Preset topologies</h4>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Preset</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td>LLM Agent Demo</td><td>Real-time data · compute tools · LLM inference</td></tr>
+        <tr><td>MCP Tool Mesh</td><td>Tool providers · data sources · LLM reasoning</td></tr>
+        <tr><td>Compute Cluster</td><td>Parallel compute workers with real-time data feed</td></tr>
+        <tr><td>Minimal Mesh</td><td>Single data node — development and testing</td></tr>
+        <tr><td>Epidemic Ring</td><td>16-node ring split into alpha/beta signal partitions</td></tr>
+        <tr><td>Consensus Cluster</td><td>7 voters + rotating proposers — two-phase ballot</td></tr>
+        <tr><td>Dispatch Pool</td><td>Fast/slow worker tiers with adaptive dispatchers</td></tr>
+        <tr><td>Emergent GPU Pool</td><td>20 workers self-assemble; jobs route via <code>signal_wired_via</code></td></tr>
+        <tr><td>Capability Market</td><td>4 capability kinds — compute/gpu, cpu, storage, ai/agent</td></tr>
+        <tr><td>Locality Mesh</td><td>East/west providers — <code>resolve_with_locality</code> picks nearest</td></tr>
+        <tr><td>Watchdog Cluster</td><td>Heartbeat services + <code>quorum_persistent</code> circuit breaker</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- three_node_demo -->
+  <h3 id="demo-chat">Interactive Chat — <code>three_node_demo</code></h3>
+  <p>
+    Three nodes with distinct roles — two tool providers and one LLM node with a real-time
+    browser chat UI. The LLM plans tool calls across nodes using the gossip mesh for discovery
+    and routing.
+  </p>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Role</th><th>Tools</th><th>HTTP port</th></tr></thead>
+      <tbody>
+        <tr><td><code>tool-a</code></td><td><code>weather(city)</code>, <code>web_fetch(url)</code></td><td>8300</td></tr>
+        <tr><td><code>tool-b</code></td><td><code>calculate(expr)</code>, <code>wiki(topic)</code></td><td>8300</td></tr>
+        <tr><td><code>llm</code></td><td>Browser chat UI + LLM planner</td><td>8080</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h4>HTTP endpoints — llm node</h4>
+  <ul class="ep-list">
+    <li><span class="ep-method">GET</span><span class="ep-path">/</span><span class="ep-desc">Browser chat UI (HTML)</span></li>
+    <li><span class="ep-method">POST</span><span class="ep-path">/chat</span><span class="ep-desc">Send <code>{"message":"..."}</code> — 202 Accepted; planning runs async</span></li>
+    <li><span class="ep-method">GET</span><span class="ep-path">/stream</span><span class="ep-desc">SSE stream: <code>Thinking</code>, <code>ToolCall</code>, <code>ToolResult</code>, <code>Assistant</code>, <code>Idle</code> events</span></li>
+    <li><span class="ep-method">GET</span><span class="ep-path">/mesh</span><span class="ep-desc">Tool list visible to the planner + current model name</span></li>
+  </ul>
+
+  <pre><span class="cmt"># Interactive — open http://localhost:8080 to chat (requires Ollama)</span>
+make test-llm-demo
+
+<span class="cmt"># Automated test — 4 scenarios, real llama3.2 via Ollama</span>
+<span class="cmt"># (~2 GB model download on first run; cached in ollama-models volume)</span>
+make test-three-node</pre>
+
+  <pre><span class="cmt"># Local quick start (no Docker) — terminal 1</span>
+MYCELIUM_ROLE=tool-a MYCELIUM_PEERS=127.0.0.1:57001,127.0.0.1:57002 \
+  MYCELIUM_PORT=57000 cargo run --example three_node_demo
+
+<span class="cmt"># terminal 2</span>
+MYCELIUM_ROLE=tool-b MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57002 \
+  MYCELIUM_PORT=57001 cargo run --example three_node_demo
+
+<span class="cmt"># terminal 3 — requires Ollama + llama3.2</span>
+MYCELIUM_ROLE=llm MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001 \
+  MYCELIUM_PORT=57002 OLLAMA_BASE_URL=http://localhost:11434/v1 \
+  cargo run --example three_node_demo
+<span class="cmt"># open http://localhost:8080</span></pre>
+
+  <!-- Conway -->
+  <h3 id="demo-conway">Conway's Game of Life</h3>
+  <p>
+    256 gossip agents (one per cell in a 16×16 grid) coordinate cell state via gossip KV;
+    a tick signal drives each generation. Shows the epidemic substrate directly rather than a
+    service topology.
+  </p>
+  <pre>cargo run --example conway          <span class="cmt"># CPU renderer (terminal / HTTP canvas)</span>
+cargo run --example conway_gpu      <span class="cmt"># GPU-accelerated renderer (Metal / wgpu)</span></pre>
+</section>
+
+<!-- ── Build & Run ────────────────────────────────────────────────────── -->
+<section class="section" id="build">
+  <div class="section-head">
+    <span class="section-icon">🔨</span>
+    <h2>Build &amp; Run</h2>
+  </div>
+
+  <pre>cargo build --release<span class="lang-tag">sh</span></pre>
+
+  <h3>Fuzz harness</h3>
+  <p><code>fuzz/</code> is a standalone cargo-fuzz crate covering the wire-format decoder and every capability subsystem decoder. Requires nightly and <code>cargo install cargo-fuzz</code>.</p>
+  <pre>cargo +nightly fuzz run wire_decode        -- -max_total_time=60
+cargo +nightly fuzz run capability_decode  -- -max_total_time=60<span class="lang-tag">sh</span></pre>
+
+  <h3 id="run">CLI nodes</h3>
+  <pre><span class="cmt"># Bootstrap node</span>
+cargo run -- --port 7946
+
+<span class="cmt"># Second node joining via bootstrap</span>
+cargo run -- --port 7947 --peers 127.0.0.1:7946
+
+<span class="cmt"># Interactive mode — set/get/delete keys</span>
+cargo run -- --port 7947 --peers 127.0.0.1:7946 --interactive<span class="lang-tag">sh</span></pre>
+
+  <h4>Interactive commands</h4>
+  <pre>set &lt;key&gt; &lt;value&gt;   store a value and gossip it to peers
+get &lt;key&gt;           retrieve a value from the local store
+delete &lt;key&gt;        remove a value and gossip the tombstone
+stats               show peer count, store size, and open connections
+exit                shut down the node</pre>
+</section>
+
+<!-- ── Layer I ────────────────────────────────────────────────────────── -->
+<section class="section" id="layer-1">
+  <div class="section-head">
+    <span class="section-icon">📦</span>
+    <h2>Layer I — Gossip KV Transport</h2>
+    <span class="sec-tag tag-i">Layer 1</span>
+  </div>
+
+  <p>TCP epidemic propagation with last-write-wins conflict resolution. Every key has a TTL. Anti-entropy sync delivers missed updates to late joiners automatically.</p>
+
+  <pre><span class="kw">use</span> mycelium::{<span class="fn">GossipAgent</span>, <span class="fn">GossipConfig</span>, <span class="fn">NodeId</span>};
+<span class="kw">use</span> std::sync::Arc;
+<span class="lang-tag">rust</span>
+<span class="kw">let mut</span> config = GossipConfig::default();
+config.bootstrap_peers = vec![<span class="str">"127.0.0.1:7947"</span>.parse()?];
+
+<span class="kw">let</span> agent = Arc::new(GossipAgent::new(NodeId::new(<span class="str">"127.0.0.1"</span>, <span class="num">7946</span>)?, config));
+agent.start().await?;
+
+<span class="cmt">// Write — local store always updated; returns false if gossip channel full</span>
+agent.set(<span class="str">"key"</span>, Bytes::from(<span class="str">"value"</span>));
+
+<span class="cmt">// Read</span>
+<span class="kw">if let</span> Some(bytes) = agent.get(<span class="str">"key"</span>) { <span class="cmt">/* ... */</span> }
+
+<span class="cmt">// Delete (propagates a tombstone)</span>
+agent.delete(<span class="str">"key"</span>);
+
+<span class="cmt">// Scan by prefix — capability discovery, pheromone trail reads</span>
+<span class="kw">let</span> entries = agent.scan_prefix(<span class="str">"load/"</span>);
+
+<span class="cmt">// Subscribe — fires on every local or gossiped change</span>
+<span class="kw">let mut</span> rx = agent.subscribe(<span class="str">"load/my-node"</span>);
+rx.changed().await?;
+
+agent.shutdown().await;</pre>
+
+  <h3>Observability</h3>
+  <pre><span class="kw">let</span> stats = agent.system_stats();<span class="lang-tag">rust</span>
+
+<span class="cmt">// dropped_frames &gt; 0 → gossip writes silently lost; raise writer_channel_depth</span>
+assert_eq!(stats.dropped_frames, <span class="num">0</span>);
+
+println!(<span class="str">"peers: {}"</span>,  stats.peers);          <span class="cmt">// live peers in ping table</span>
+println!(<span class="str">"store: {}"</span>,  stats.store_entries);   <span class="cmt">// live KV entries</span>
+assert!(stats.gc_alive);                      <span class="cmt">// tombstone + subscription cleanup</span>
+assert!(stats.health_monitor_alive);          <span class="cmt">// peer pings and eviction</span></pre>
+
+  <div class="callout callout-warn">
+    <span class="callout-icon">⚠️</span>
+    <div class="callout-body">
+      <strong>Dropped frames diagnostic:</strong> <code>dropped_frames &gt; 0</code> means gossip writes were silently lost.
+      Size <code>writer_channel_depth</code> to <code>N_agents × fan_out</code> (default fan_out = 4).
+      Non-zero <code>shard_queue_depths</code> means gossip workers are falling behind — increase <code>gossip_shards</code>.
+    </div>
+  </div>
+</section>
+
+<!-- ── Layer II ───────────────────────────────────────────────────────── -->
+<section class="section" id="layer-2">
+  <div class="section-head">
+    <span class="section-icon">📡</span>
+    <h2>Layer II — Signal / Boundary Mesh</h2>
+    <span class="sec-tag tag-ii">Layer 2</span>
+  </div>
+
+  <p>Signals are ephemeral events that propagate epidemically to every node. Each node holds a local <strong>boundary</strong> — group memberships — that decides whether it <em>acts</em> on an incoming signal. Forwarding is always unconditional; the boundary only controls local delivery.</p>
+
+  <pre><span class="kw">use</span> mycelium::{signal_kind, <span class="fn">SignalScope</span>};<span class="lang-tag">rust</span>
+
+<span class="cmt">// Group membership</span>
+agent.join_group(<span class="str">"nlp"</span>);
+agent.leave_group(<span class="str">"nlp"</span>);
+
+<span class="cmt">// Emit</span>
+agent.emit(<span class="str">"invoke"</span>, SignalScope::Group(<span class="str">"nlp"</span>), payload);      <span class="cmt">// non-blocking</span>
+agent.emit_async(<span class="str">"invoke"</span>, SignalScope::Group(<span class="str">"nlp"</span>), payload).await;
+
+<span class="cmt">// Receive</span>
+<span class="kw">let mut</span> rx = agent.signal_rx(signal_kind::INVOKE);
+tokio::spawn(<span class="kw">async move</span> {
+    <span class="kw">while let</span> Some(sig) = rx.recv().await {
+        <span class="cmt">// sig.sender, sig.payload, sig.scope, sig.nonce</span>
+    }
+});
+
+<span class="cmt">// One-shot request/response</span>
+<span class="kw">let</span> reply = agent.signal_once(<span class="str">"invoke.result"</span>, Duration::from_secs(<span class="num">5</span>), |s| {
+    s.nonce == request_nonce
+}).await; <span class="cmt">// Option&lt;Signal&gt;; None on timeout</span></pre>
+
+  <h4>Signal scopes</h4>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Scope</th><th>Delivery</th></tr></thead>
+      <tbody>
+        <tr><td><code>SignalScope::System</code></td><td>Every node acts; shed under load by opacity</td></tr>
+        <tr><td><code>SignalScope::Group("name")</code></td><td>Nodes that called <code>join_group("name")</code></td></tr>
+        <tr><td><code>SignalScope::Individual(node_id)</code></td><td>Exactly one node; bypasses opacity shedding</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Mesh Observation</h3>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Question</th><th>Tool</th></tr></thead>
+      <tbody>
+        <tr><td>Has a worker been seen recently?</td><td><code>last_signal</code></td></tr>
+        <tr><td>Has a worker gone silent? (trigger action)</td><td><code>watch</code></td></tr>
+        <tr><td>Have enough distinct nodes checked in?</td><td><code>quorum</code></td></tr>
+        <tr><td>Is this node actively refusing a kind?</td><td><code>is_suppressed</code></td></tr>
+        <tr><td>How saturated is this node's intake?</td><td><code>opacity</code> (0.0–1.0)</td></tr>
+        <tr><td>Are peers aware this node is overloaded?</td><td><code>manage_opacity</code> governor</td></tr>
+        <tr><td>How many live workers are in the pool?</td><td><code>scan_prefix("load/")</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Opacity vs Inhibition</h3>
+
+  <h4>Opacity — passive, automatic</h4>
+  <p>
+    Opacity is not a feature you call. When handler channels fill under load,
+    <code>admit_prob = 1.0 - fill_ratio</code>. At 60% fill, 60% of System/Group signals are shed.
+    The node still <strong>forwards every signal</strong> — it simply stops <em>reacting</em> to new arrivals.
+    <code>Individual</code> scope always bypasses opacity.
+  </p>
+  <p><code>manage_opacity</code> and <code>OpacityHint</code> add a governor task that <em>tells peers</em> when this node is becoming saturated — they do not change the shedding itself.</p>
+
+  <h4>Inhibition — active, deterministic</h4>
+  <p><code>suppress(kind, duration)</code> is called deliberately by your code. For the duration, <strong>no signals of that kind are delivered</strong> — 100% blocked, not probabilistic. Use for refractory periods and rate limiting.</p>
+
+  <pre><span class="cmt">// Refractory period — block next invocation for 500ms after handling one</span><span class="lang-tag">rust</span>
+<span class="kw">while let</span> Some(sig) = invoke_rx.recv().await {
+    agent.suppress(signal_kind::INVOKE, Duration::from_millis(<span class="num">500</span>));
+    handle_invocation(sig).await;
+}
+
+<span class="cmt">// Rate limit — prevent sync storms</span>
+agent.suppress(signal_kind::DATA_SYNC, Duration::from_secs(<span class="num">5</span>));
+
+<span class="cmt">// Lift early</span>
+agent.unsuppress(signal_kind::INVOKE);</pre>
+</section>
+
+<!-- ── Layer III ──────────────────────────────────────────────────────── -->
+<section class="section" id="layer-3">
+  <div class="section-head">
+    <span class="section-icon">🗳️</span>
+    <h2>Layer III — Consensus</h2>
+    <span class="sec-tag tag-iii">Layer 3</span>
+  </div>
+
+  <p>
+    Lightweight epidemic two-phase agreement built directly on the signal mesh — no extra wire format,
+    no separate consensus port. Committed values are written to <code>consensus/committed/{slot}</code>
+    and anti-entropy-synced to late joiners automatically.
+  </p>
+  <p><strong>Protocol:</strong> <code>Propose → (votes from group) → Commit → KV committed/{slot}</code></p>
+
+  <pre><span class="kw">use</span> mycelium::{<span class="fn">ConsensusConfig</span>, <span class="fn">ConsensusResult</span>};<span class="lang-tag">rust</span>
+
+<span class="kw">let</span> _listener = agent.start_consensus_listener();
+
+<span class="kw">let</span> cfg = ConsensusConfig { quorum_size: <span class="num">0</span>, ..ConsensusConfig::default() };
+<span class="kw">match</span> agent.group_propose(<span class="str">"workers"</span>, <span class="str">"coordinator"</span>, Bytes::from(<span class="str">"node-7"</span>), cfg).await {
+    ConsensusResult::Committed { slot, value, ballot } => { <span class="cmt">/* ... */</span> }
+    ConsensusResult::Timeout { .. }    => { <span class="cmt">/* no quorum */</span> }
+    ConsensusResult::Superseded { .. } => { <span class="cmt">/* another node won */</span> }
+}
+
+<span class="cmt">// System-wide proposal</span>
+agent.system_propose(<span class="str">"global/epoch"</span>, Bytes::from(<span class="str">"42"</span>), ConsensusConfig::default()).await;
+
+<span class="cmt">// Subscribe to a slot</span>
+<span class="kw">let mut</span> rx = agent.consensus_rx(<span class="str">"coordinator"</span>);</pre>
+
+  <div class="callout callout-info">
+    <span class="callout-icon">ℹ️</span>
+    <div class="callout-body">
+      <code>quorum_size = 0</code> uses <code>floor(N/2) + 1</code> (simple majority).
+      With the <code>tls</code> feature all consensus payloads are Ed25519-signed; forged ballots are dropped.
+      Without TLS, consensus assumes a trusted domain.
+    </div>
+  </div>
+</section>
+
+<!-- ── Capabilities ───────────────────────────────────────────────────── -->
+<section class="section" id="capabilities">
+  <div class="section-head">
+    <span class="section-icon">🔌</span>
+    <h2>Capability Subsystem</h2>
+  </div>
+
+  <p>
+    First-class capability advertisement, discovery, demand pressure, and locality-aware routing —
+    all built on the Layer I KV store. No external registry; everything lives under <code>cap/</code>,
+    <code>req/</code>, and <code>gcap/</code> namespaces and anti-entropy-syncs to late joiners automatically.
+  </p>
+
+  <h3 id="cap-advertise">Advertising and Resolving</h3>
+  <pre><span class="kw">use</span> mycelium::{<span class="fn">Capability</span>, <span class="fn">CapFilter</span>, <span class="fn">CapabilityHandle</span>};<span class="lang-tag">rust</span>
+
+<span class="cmt">// Advertise — periodically reasserts cap/{node_id}/{ns}/{name} in KV.</span>
+<span class="cmt">// Drop the handle to stop; tombstone propagates automatically.</span>
+<span class="kw">let</span> handle: CapabilityHandle = agent.advertise_capability(
+    Capability::new(<span class="str">"compute"</span>, <span class="str">"gpu"</span>),
+    Duration::from_secs(<span class="num">30</span>),
+);
+
+<span class="cmt">// Resolve — snapshot of all matching nodes</span>
+<span class="kw">let</span> matches: Vec&lt;(NodeId, Capability)&gt; = agent.resolve(&amp;CapFilter::new(<span class="str">"compute"</span>, <span class="str">"gpu"</span>));
+
+<span class="cmt">// Watch — debounced push-based; fires when the matching set changes</span>
+<span class="kw">let mut</span> rx = agent.watch_capabilities(CapFilter::new(<span class="str">"compute"</span>, <span class="str">"gpu"</span>));
+rx.changed().await?;</pre>
+
+  <h3 id="cap-requirements">Requirements</h3>
+  <pre><span class="cmt">// Declare need — writes req/{node_id}/{ns}/{name} to KV</span><span class="lang-tag">rust</span>
+<span class="kw">let</span> _handle = agent.declare_requirement(
+    CapFilter::new(<span class="str">"compute"</span>, <span class="str">"gpu"</span>),
+    Duration::from_secs(<span class="num">30</span>),
+);
+
+<span class="kw">let mut</span> rx = agent.watch_requirement(CapFilter::new(<span class="str">"compute"</span>, <span class="str">"gpu"</span>));
+rx.changed().await?;
+println!(<span class="str">"satisfied: {}"</span>, rx.borrow().is_satisfied());</pre>
+
+  <h3 id="cap-demand">Demand Pressure</h3>
+  <p><code>demand_pressure</code> = <code>demanding_nodes.len() / max(providers.len(), 1)</code>. Pressure &gt; 1.0 means demand outstrips supply. The library never auto-responds — this is a signal for orchestrators and autoscalers.</p>
+  <pre><span class="kw">let</span> status = agent.demand(&amp;CapFilter::new(<span class="str">"compute"</span>, <span class="str">"gpu"</span>));<span class="lang-tag">rust</span>
+println!(<span class="str">"pressure: {:.2}"</span>, status.demand_pressure);
+
+<span class="kw">let mut</span> rx = agent.watch_demand(CapFilter::new(<span class="str">"compute"</span>, <span class="str">"gpu"</span>));
+rx.changed().await?;</pre>
+
+  <h3 id="cap-groups">Emergent Capability Groups</h3>
+  <p>Nodes that share a capability automatically form a named group. The library projects their collective capability under <code>gcap/{group}/…</code> and handles group-level requirement wiring.</p>
+  <pre>agent.define_capability_group(<span class="lang-tag">rust</span>
+    <span class="str">"gpu-pool"</span>,
+    CapabilityGroupDef {
+        filter:   CapFilter::new(<span class="str">"compute"</span>, <span class="str">"gpu"</span>),
+        provides: vec![Capability::new(<span class="str">"compute"</span>, <span class="str">"gpu"</span>)],
+        requires: vec![],
+    },
+    Duration::from_secs(<span class="num">60</span>),
+);</pre>
+
+  <h3 id="cap-locality">Locality-Aware Resolution</h3>
+  <p>Each node declares a <code>locality_path</code> (<code>["az1", "rack2", "host3"]</code> coarse→fine). <code>resolve_with_locality</code> sorts providers by shared-prefix depth — closest first.</p>
+  <pre>config.locality_path = vec![<span class="str">"az1"</span>.into(), <span class="str">"rack2"</span>.into(), <span class="str">"host3"</span>.into()];<span class="lang-tag">rust</span>
+
+<span class="cmt">// Returns (NodeId, Capability, depth) sorted depth desc</span>
+<span class="kw">let</span> candidates = agent.resolve_with_locality(
+    &amp;CapFilter::new(<span class="str">"render"</span>, <span class="str">"job"</span>),
+    LocalityPreference::PreferShared(<span class="num">0</span>),  <span class="cmt">// prefer closest; fall back to any</span>
+);
+
+<span class="cmt">// Route to locality-closest provider via wiring</span>
+agent.signal_wired_via_locality(
+    &amp;CapFilter::new(<span class="str">"render"</span>, <span class="str">"job"</span>),
+    LocalityPreference::PreferShared(<span class="num">0</span>),
+    <span class="str">"render-job"</span>, payload,
+).await;</pre>
+</section>
+
+<!-- ── Service Layer ──────────────────────────────────────────────────── -->
+<section class="section" id="service">
+  <div class="section-head">
+    <span class="section-icon">🔗</span>
+    <h2>Service Layer</h2>
+  </div>
+  <p>RPC, bulk transfer, scatter-gather, and durable mailboxes — the service primitives used by language bridges and the MCP integration.</p>
+
+  <h3 id="rpc">Point-to-Point RPC</h3>
+  <pre><span class="cmt">// Caller</span><span class="lang-tag">rust</span>
+<span class="kw">let</span> reply = agent.rpc_call(target, <span class="str">"echo"</span>, payload, Duration::from_secs(<span class="num">5</span>)).await?;
+
+<span class="cmt">// Responder</span>
+<span class="kw">let mut</span> rx = agent.rpc_rx(<span class="str">"echo"</span>);
+<span class="kw">while let</span> Some(req) = rx.recv().await {
+    agent.rpc_respond(&amp;req, req.payload());
+}</pre>
+
+  <h3 id="bulk">Bulk Payload Transfer</h3>
+  <p>For payloads too large to gossip through every node, <code>bulk_call</code> stages data at a local HTTP endpoint and sends only a lightweight ticket over the mesh.</p>
+  <pre><span class="cmt">// Requires http_port set in GossipConfig</span><span class="lang-tag">rust</span>
+<span class="kw">let</span> reply = agent.bulk_call(target, <span class="str">"process"</span>, large_bytes, Duration::from_secs(<span class="num">30</span>)).await?;</pre>
+
+  <h3 id="scatter">Scatter-Gather</h3>
+  <p>Fan out an identical request to multiple targets concurrently; return as soon as <code>min_ok</code> replies arrive.</p>
+  <pre><span class="kw">let</span> results = agent.scatter_gather(targets, <span class="str">"vote"</span>, payload, Duration::from_secs(<span class="num">5</span>), <span class="num">2</span>).await?;<span class="lang-tag">rust</span></pre>
+
+  <h3 id="mailbox">Actor/Event Mailboxes</h3>
+  <p>KV-backed durable event delivery. Events survive crashes and are delivered in HLC-causal order.</p>
+  <pre><span class="cmt">// Sender (any node)</span><span class="lang-tag">rust</span>
+agent.deliver_event(&amp;target_id, <span class="str">"task.result"</span>, result_bytes);
+
+<span class="cmt">// Receiver — at-least-once within TTL; tombstoned after delivery</span>
+<span class="kw">let</span> (handle, <span class="kw">mut</span> rx) = agent.open_mailbox(<span class="str">"task.result"</span>, <span class="num">64</span>);
+<span class="kw">while let</span> Some(event) = rx.recv().await {
+    process(&amp;event.payload);
+}</pre>
+</section>
+
+<!-- ── Python Bridge ──────────────────────────────────────────────────── -->
+<section class="section" id="python">
+  <div class="section-head">
+    <span class="section-icon">🐍</span>
+    <h2>Python Language Bridge</h2>
+  </div>
+  <p>Python agents connect to a running Mycelium node over loopback HTTP (~1 ms overhead). No PyO3 FFI — the sidecar pattern works with any language that can speak HTTP.</p>
+  <pre>cd mycelium-py &amp;&amp; pip install -e ".[dev]"<span class="lang-tag">sh</span></pre>
+  <pre><span class="kw">from</span> mycelium <span class="kw">import</span> MyceliumAgent<span class="lang-tag">python</span>
+
+agent = MyceliumAgent(<span class="str">"127.0.0.1"</span>, <span class="num">8300</span>)
+
+<span class="cmt"># Capabilities</span>
+handle = agent.advertise_capability(<span class="str">"compute"</span>, <span class="str">"gpu"</span>, attributes={<span class="str">"model"</span>: <span class="str">"A100"</span>})
+providers = agent.resolve_capability(<span class="str">"compute"</span>, <span class="str">"gpu"</span>)
+
+<span class="cmt"># Signals</span>
+agent.emit(<span class="str">"render-job"</span>, b<span class="str">"payload"</span>, scope=<span class="str">"system"</span>)
+<span class="kw">async for</span> sig <span class="kw">in</span> agent.on_signal(<span class="str">"render-job"</span>):
+    print(sig.sender, sig.payload)
+
+<span class="cmt"># RPC</span>
+result = agent.rpc_call(target_id, <span class="str">"echo"</span>, b<span class="str">"ping"</span>)
+<span class="kw">async for</span> req <span class="kw">in</span> agent.rpc_serve(<span class="str">"echo"</span>):
+    agent.rpc_respond(req, req.payload)
+
+<span class="cmt"># KV store</span>
+agent.set(<span class="str">"my/key"</span>, b<span class="str">"value"</span>)
+val = agent.get(<span class="str">"my/key"</span>)
+
+<span class="cmt"># Mailbox</span>
+agent.deliver_event(target_id, <span class="str">"task.result"</span>, b<span class="str">"done"</span>)
+<span class="kw">async for</span> event <span class="kw">in</span> agent.mailbox(<span class="str">"task.result"</span>):
+    print(event.payload)</pre>
+  <p>See <a href="../mycelium-py/README.md"><code>mycelium-py/README.md</code></a> for the full API reference.</p>
+</section>
+
+<!-- ── SkillRunner ────────────────────────────────────────────────────── -->
+<section class="section" id="skillrunner">
+  <div class="section-head">
+    <span class="section-icon">🤖</span>
+    <h2>SkillRunner — local LLMs as mesh capabilities</h2>
+  </div>
+  <p>
+    <code>skillrunner</code> turns a <code>.skill.toml</code> file into a live capability node. No Rust required —
+    write a manifest, point it at any OpenAI-compatible LLM server, and the node self-advertises,
+    handles invocations via nonce RPC, and writes an audit trail.
+  </p>
+  <pre>cargo build --bin skillrunner<span class="lang-tag">sh</span>
+./target/debug/skillrunner --skill examples/skills/hello.skill.toml</pre>
+
+  <h3>Minimal manifest</h3>
+  <pre><span class="toml-hdr">[node]</span><span class="lang-tag">toml</span>
+<span class="toml-key">bind_port</span>       = <span class="num">7947</span>
+<span class="toml-key">bootstrap_peers</span> = [<span class="toml-str">"127.0.0.1:7946"</span>]
+
+<span class="toml-hdr">[capability]</span>
+<span class="toml-key">ns</span>   = <span class="toml-str">"llm"</span>
+<span class="toml-key">name</span> = <span class="toml-str">"chat"</span>
+
+<span class="toml-hdr">[capability.input]</span>
+<span class="toml-key">type</span> = <span class="toml-str">"object"</span>
+<span class="toml-hdr">[capability.input.properties]</span>
+<span class="toml-key">message</span> = { <span class="toml-key">type</span> = <span class="toml-str">"string"</span> }
+
+<span class="toml-hdr">[skill]</span>
+<span class="toml-key">prompt</span> = <span class="toml-str">"You are a helpful assistant."</span>
+<span class="toml-key">tools</span>  = []
+
+<span class="toml-hdr">[skill.llm]</span>
+<span class="toml-key">endpoint</span> = <span class="toml-str">"http://localhost:11434/v1"</span>
+<span class="toml-key">model</span>    = <span class="toml-str">"llama3.2"</span></pre>
+
+  <h3>Invoking a skill</h3>
+  <pre><span class="cmt">// Discover and invoke from Rust</span><span class="lang-tag">rust</span>
+<span class="kw">let</span> (node_id, _) = agent.resolve(&amp;CapFilter::new(<span class="str">"llm"</span>, <span class="str">"chat"</span>))[<span class="num">0</span>];
+<span class="kw">let</span> payload = serde_json::to_vec(&amp;json!({<span class="str">"message"</span>: <span class="str">"Hello!"</span>}))?;
+<span class="kw">let</span> result  = agent.rpc_call(node_id, <span class="str">"skill.invoke"</span>, payload, Duration::from_secs(<span class="num">30</span>)).await?;</pre>
+
+  <pre><span class="cmt"># Invoke from Python</span><span class="lang-tag">python</span>
+providers = agent.resolve_capability(<span class="str">"llm"</span>, <span class="str">"chat"</span>)
+result = agent.rpc_call(providers[<span class="num">0</span>].node_id, <span class="str">"skill.invoke"</span>,
+                        json.dumps({<span class="str">"message"</span>: <span class="str">"Hello!"</span>}).encode())</pre>
+
+  <h3>Multi-skill community</h3>
+  <p>Each skill runs on its own port; all bootstrap off each other. Skills listed in a manifest's <code>tools</code> array can call other skills at inference time — the mesh routes sub-invocations automatically.</p>
+  <pre>./skillrunner --skill examples/skills/hello.skill.toml &amp;       <span class="cmt"># port 7950</span><span class="lang-tag">sh</span>
+./skillrunner --skill examples/skills/summarizer.skill.toml &amp;  <span class="cmt"># port 7951</span>
+./skillrunner --skill examples/skills/researcher.skill.toml &amp;  <span class="cmt"># port 7952</span></pre>
+
+  <p>See <a href="skillrunner.html"><code>docs/skillrunner.html</code></a> for the full manifest reference, OTEL integration, concurrency controls, and the audit trail format.</p>
+</section>
+
+<!-- ── Security ──────────────────────────────────────────────────────── -->
+<section class="section" id="security">
+  <div class="section-head">
+    <span class="section-icon">🔒</span>
+    <h2>Security Model</h2>
+  </div>
+
+  <p>Mycelium supports <strong>mutual TLS</strong> (mTLS) on the gossip TCP port via the optional <code>tls</code> cargo feature. When enabled, every peer connection requires a valid cluster-CA-signed Ed25519 certificate.</p>
+
+  <pre><span class="cmt"># Cargo.toml</span><span class="lang-tag">toml</span>
+<span class="toml-key">mycelium</span> = { <span class="toml-key">version</span> = <span class="toml-str">"…"</span>, <span class="toml-key">features</span> = [<span class="toml-str">"tls"</span>] }</pre>
+  <pre>config.tls = Some(TlsConfig::default()); <span class="cmt">// auto-generates CA + certs in ./mycelium-tls/</span><span class="lang-tag">rust</span></pre>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>What <code>tls</code> provides</th><th>Detail</th></tr></thead>
+      <tbody>
+        <tr><td>mTLS transport</td><td><code>tokio-rustls</code> mTLS on every gossip TCP connection; plain nodes cannot connect</td></tr>
+        <tr><td>Ed25519 node identity</td><td>TLS cert key = identity keypair; 32-byte verifying key gossiped to <code>sys/identity/{node}</code></td></tr>
+        <tr><td>Signed consensus payloads</td><td>All <code>Propose</code>, <code>Vote</code>, <code>Nack</code>, <code>Commit</code> messages are Ed25519-signed; forged ballots dropped</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout callout-warn">
+    <span class="callout-icon">⚠️</span>
+    <div class="callout-body">
+      <strong>Without the <code>tls</code> feature</strong>, Mycelium operates in a <em>trusted domain</em>.
+      A connected peer can send crafted frames to inject KV entries, claim any NodeId, or poison the nonce dedup set.
+      Do not expose gossip ports to untrusted networks without TLS or a network-layer control (firewall, WireGuard, VPC security groups).
+    </div>
+  </div>
+</section>
+
+<!-- ── Performance ───────────────────────────────────────────────────── -->
+<section class="section" id="perf">
+  <div class="section-head">
+    <span class="section-icon">⚡</span>
+    <h2>Performance Baselines</h2>
+  </div>
+  <p>Measured on the development machine, release build (<code>cargo bench</code>). Local hot-path only — no network I/O.</p>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Benchmark</th><th>Median</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>kv/set</code></td><td class="perf-val">151 ns</td><td>Local store write + gossip channel dispatch</td></tr>
+        <tr><td><code>kv/get</code> hit</td><td class="perf-val">16 ns</td><td>Lock-free papaya read</td></tr>
+        <tr><td><code>kv/get</code> miss</td><td class="perf-val">13 ns</td><td>Same path, no allocation</td></tr>
+        <tr><td><code>scan_prefix</code> 100 entries</td><td class="perf-val">332 ns</td><td>Typical pheromone-trail store size</td></tr>
+        <tr><td><code>scan_prefix</code> 1,000 entries</td><td class="perf-val">2.7 µs</td><td></td></tr>
+        <tr><td><code>scan_prefix</code> 10,000 entries</td><td class="perf-val">41 µs</td><td></td></tr>
+        <tr><td><code>scan_prefix</code> 100,000 entries</td><td class="perf-val">622 µs</td><td>~1 ms — monitor if store grows here</td></tr>
+        <tr><td><code>signal_fanout</code> 1 handler</td><td class="perf-val">~700 ns</td><td>emit + boundary check + deliver + drain</td></tr>
+        <tr><td><code>signal_fanout</code> 16 handlers</td><td class="perf-val">~1.4 µs</td><td>Very flat — mpsc try_send is cheap</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p><code>scan_prefix</code> uses a prefix index for an O(|segment_keys|) fast path when the prefix segment is known (e.g. <code>"load/"</code>, <code>"cap/"</code>). Unknown prefixes fall back to O(store_size). At typical pheromone-trail sizes (100–1 000 entries) the cost is negligible relative to network latency.</p>
+</section>
+
+<!-- ── Configuration ─────────────────────────────────────────────────── -->
+<section class="section" id="config">
+  <div class="section-head">
+    <span class="section-icon">⚙️</span>
+    <h2>Configuration</h2>
+  </div>
+  <p>Pass a TOML config file with <code>-c &lt;path&gt;</code>. CLI flags override file values. Environment variables override both — <code>GOSSIP_&lt;FIELD_NAME&gt;</code> for every field.</p>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Field</th><th>Default</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>bind_address</code></td><td><code>127.0.0.1</code></td><td>TCP listen address</td></tr>
+        <tr><td><code>bind_port</code></td><td><code>8080</code></td><td>TCP listen port</td></tr>
+        <tr><td><code>bootstrap_peers</code></td><td><code>[]</code></td><td>Peers to contact on startup</td></tr>
+        <tr><td><code>default_ttl</code></td><td><code>5</code></td><td>Hops before a message expires</td></tr>
+        <tr><td><code>health_check_interval_secs</code></td><td><code>10</code></td><td>Ping interval and peer eviction cadence</td></tr>
+        <tr><td><code>propagation_window_secs</code></td><td><code>60</code></td><td>Tombstone retention window</td></tr>
+        <tr><td><code>max_connections</code></td><td><code>1024</code></td><td>Inbound connection limit</td></tr>
+        <tr><td><code>writer_channel_depth</code></td><td><code>256</code></td><td>Per-peer outbound channel depth. <strong>Correctness threshold</strong> — frames silently dropped when full. Size to <code>N × fan_out</code>.</td></tr>
+        <tr><td><code>max_forwarding_peers</code></td><td>unlimited</td><td>Cap gossip fan-out targets. Set to <code>bootstrap_peers.len()</code> for fixed-topology meshes</td></tr>
+        <tr><td><code>max_peers</code></td><td>unlimited</td><td>Cap the peer table. Set to <code>bootstrap_peers.len()</code> for grid or ring topologies</td></tr>
+        <tr><td><code>gossip_channel_capacity</code></td><td><code>1024</code></td><td>Per-shard gossip channel depth</td></tr>
+        <tr><td><code>gossip_shards</code></td><td><code>min(CPU,16)</code></td><td>Gossip worker tasks. Set to <code>1</code> for demos/debug</td></tr>
+        <tr><td><code>max_seen_entries</code></td><td><code>100000</code></td><td>Dedup cache size before eviction</td></tr>
+        <tr><td><code>peer_eviction_intervals</code></td><td><code>3</code></td><td>Missed ping intervals before peer eviction</td></tr>
+        <tr><td><code>reconnect_backoff_secs</code></td><td><code>5</code></td><td>Cooldown after a failed connect</td></tr>
+        <tr><td><code>epidemic_extra_peers</code></td><td><code>3</code></td><td>Extra random peers added to Group signal fan-out. Raise to 5–7 for clusters &gt; 1 000 nodes</td></tr>
+        <tr><td><code>group_aware_forwarding</code></td><td><code>true</code></td><td>Forward Group signals only to known group members + extra peers</td></tr>
+        <tr><td><code>writer_idle_timeout_secs</code></td><td><code>0</code> (off)</td><td>Seconds of inactivity before closing a peer writer TCP connection</td></tr>
+        <tr><td><code>max_store_entries</code></td><td><code>0</code> (unlimited)</td><td>Hard cap on live KV entries; new live writes silently dropped once reached</td></tr>
+        <tr><td><code>intern_keys</code></td><td><code>true</code></td><td>Intern received keys process-wide. Disable for unbounded key spaces (e.g. UUID keys)</td></tr>
+        <tr><td><code>health_check_max_jitter_ms</code></td><td><code>0</code></td><td>Startup jitter cap before first health-check ping. Set to <code>50</code> in test configs</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+</main>
+</div><!-- /.layout -->
+
+</body>
+</html>
