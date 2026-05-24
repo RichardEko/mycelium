@@ -1,0 +1,953 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SkillRunner — Developer Reference · Mycelium</title>
+<style>
+  :root {
+    --bg:        #0d1117;
+    --surface:   #161b22;
+    --surface2:  #1c2128;
+    --surface3:  #21262d;
+    --border:    #30363d;
+    --accent:    #58a6ff;
+    --accent2:   #3fb950;
+    --accent3:   #d2a8ff;
+    --accent4:   #ffa657;
+    --accent5:   #ff7b72;
+    --muted:     #8b949e;
+    --text:      #e6edf3;
+    --text2:     #c9d1d9;
+    --radius:    8px;
+    --radius-lg: 14px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif;
+    font-size: 15px;
+    line-height: 1.7;
+  }
+
+  /* ── Hero ─────────────────────────────────────────────────────────── */
+  .hero {
+    background: radial-gradient(ellipse at 70% 0%,  rgba(88,166,255,0.07)  0%, transparent 60%),
+                radial-gradient(ellipse at 10% 90%, rgba(255,166,87,0.05)  0%, transparent 50%),
+                var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 64px 40px 52px;
+    text-align: center;
+  }
+  .eyebrow {
+    display: inline-block;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--accent4);
+    background: rgba(255,166,87,0.08); border: 1px solid rgba(255,166,87,0.22);
+    border-radius: 20px; padding: 5px 16px; margin-bottom: 22px;
+  }
+  .hero h1 {
+    font-size: 44px; font-weight: 800; letter-spacing: -0.025em; line-height: 1.1;
+    margin-bottom: 16px;
+    background: linear-gradient(135deg, #e6edf3 0%, #8b949e 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+  }
+  .hero h1 em {
+    font-style: normal;
+    background: linear-gradient(135deg, #ffa657 0%, #ff7b72 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+  }
+  .hero-sub { font-size: 17px; color: var(--muted); max-width: 620px; margin: 0 auto 36px; line-height: 1.65; }
+  .hero-badges { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+  .badge {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; color: var(--text2);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 20px; padding: 6px 14px;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .dot-green { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); animation: pulse 2s ease-in-out infinite; }
+  .dot-orange { background: var(--accent4); }
+  .dot-blue   { background: var(--accent); }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+  /* ── Layout ───────────────────────────────────────────────────────── */
+  .layout { display: grid; grid-template-columns: 220px 1fr; gap: 0; max-width: 1160px; margin: 0 auto; }
+
+  /* ── Sidebar ──────────────────────────────────────────────────────── */
+  .sidebar {
+    position: sticky; top: 0; height: 100vh; overflow-y: auto;
+    padding: 40px 0 40px 32px; border-right: 1px solid var(--border);
+    scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+  }
+  .sidebar-title {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--muted); padding-bottom: 12px;
+    margin-bottom: 8px; border-bottom: 1px solid var(--border);
+  }
+  .nav-group { margin-bottom: 4px; }
+  .nav-group summary {
+    font-size: 12px; font-weight: 600; color: var(--text2);
+    cursor: pointer; padding: 5px 0; list-style: none; user-select: none;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .nav-group summary::before { content: "›"; color: var(--muted); font-size: 14px; transition: transform .15s; }
+  .nav-group[open] summary::before { transform: rotate(90deg); }
+  .nav-links { padding-left: 12px; }
+  .nav-links a {
+    display: block; font-size: 12px; color: var(--muted); text-decoration: none;
+    padding: 3px 0; transition: color .15s;
+  }
+  .nav-links a:hover { color: var(--accent); }
+  .nav-links a.active { color: var(--accent4); }
+
+  /* ── Content ──────────────────────────────────────────────────────── */
+  .content { padding: 52px 48px 100px 48px; min-width: 0; }
+
+  .section { margin-bottom: 72px; }
+  .section-head {
+    display: flex; align-items: center; gap: 14px;
+    padding-bottom: 16px; border-bottom: 1px solid var(--border); margin-bottom: 32px;
+  }
+  .section-icon { font-size: 22px; }
+  .section-head h2 { font-size: 22px; font-weight: 700; color: var(--text); }
+  .sec-tag {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 3px 10px; border-radius: 20px; margin-left: auto;
+  }
+  .tag-ref   { background: rgba(88,166,255,0.1);  color: var(--accent);  border: 1px solid rgba(88,166,255,0.25); }
+  .tag-guide { background: rgba(255,166,87,0.1);  color: var(--accent4); border: 1px solid rgba(255,166,87,0.25); }
+  .tag-ops   { background: rgba(63,185,80,0.1);   color: var(--accent2); border: 1px solid rgba(63,185,80,0.25); }
+
+  h3 { font-size: 16px; font-weight: 700; color: var(--text); margin: 32px 0 12px; }
+  h4 { font-size: 13px; font-weight: 700; color: var(--text2); margin: 20px 0 8px; text-transform: uppercase; letter-spacing: 0.06em; }
+  p  { color: var(--text2); margin-bottom: 14px; }
+  ul, ol { color: var(--text2); padding-left: 20px; margin-bottom: 14px; }
+  li { margin-bottom: 4px; }
+  a  { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* ── Code blocks ──────────────────────────────────────────────────── */
+  pre {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px 24px; overflow-x: auto;
+    font-family: "SF Mono","Fira Mono","Cascadia Code",monospace;
+    font-size: 12.5px; line-height: 1.65; margin: 16px 0 20px; position: relative;
+  }
+  code { font-family: "SF Mono","Fira Mono","Cascadia Code",monospace; font-size: 12.5px; }
+  p code, li code, td code {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 6px; font-size: 12px; color: var(--accent3);
+  }
+  .lang-tag {
+    position: absolute; top: 10px; right: 14px;
+    font-size: 10px; font-weight: 600; color: var(--muted); letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  /* syntax colours */
+  .kw  { color: #ff7b72; }
+  .str { color: #a5d6ff; }
+  .cmt { color: #8b949e; font-style: italic; }
+  .num { color: #ffa657; }
+  .fn  { color: #d2a8ff; }
+  .var { color: #79c0ff; }
+  .toml-key   { color: #79c0ff; }
+  .toml-hdr   { color: #ffa657; font-weight: 600; }
+  .toml-str   { color: #a5d6ff; }
+  .toml-num   { color: #ffa657; }
+  .toml-cmt   { color: #8b949e; font-style: italic; }
+
+  /* ── Tables ───────────────────────────────────────────────────────── */
+  .tbl-wrap { overflow-x: auto; margin: 16px 0 24px; border-radius: var(--radius); border: 1px solid var(--border); }
+  table { width: 100%; border-collapse: collapse; }
+  thead tr { background: var(--surface2); }
+  th {
+    text-align: left; padding: 10px 16px; font-size: 11px; font-weight: 700;
+    color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase;
+    border-bottom: 1px solid var(--border);
+  }
+  td { padding: 10px 16px; font-size: 13px; color: var(--text2); border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+  td:first-child code { color: var(--accent4); }
+  .req { color: var(--accent5); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+
+  /* ── Callout boxes ────────────────────────────────────────────────── */
+  .callout {
+    display: flex; gap: 14px; align-items: flex-start;
+    padding: 16px 20px; border-radius: var(--radius);
+    margin: 20px 0; border: 1px solid;
+  }
+  .callout-icon { font-size: 18px; flex-shrink: 0; margin-top: 1px; }
+  .callout-body { font-size: 13px; color: var(--text2); line-height: 1.6; }
+  .callout-body strong { color: var(--text); }
+  .callout-tip   { background: rgba(63,185,80,0.06);  border-color: rgba(63,185,80,0.2); }
+  .callout-info  { background: rgba(88,166,255,0.06); border-color: rgba(88,166,255,0.2); }
+  .callout-warn  { background: rgba(255,166,87,0.06); border-color: rgba(255,166,87,0.2); }
+
+  /* ── Flow diagram ─────────────────────────────────────────────────── */
+  .flow {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 32px 28px; margin: 20px 0;
+  }
+  .flow-row { display: flex; align-items: center; gap: 0; margin: 10px 0; }
+  .flow-indent { display: flex; align-items: center; gap: 0; margin: 10px 0; padding-left: 40px; }
+  .fnode {
+    padding: 8px 18px; border-radius: 8px; font-size: 12.5px; font-weight: 600;
+    white-space: nowrap; border: 1px solid; text-align: center; min-width: 120px;
+    font-family: "SF Mono","Fira Mono",monospace;
+  }
+  .fn-caller { background: rgba(139,148,158,0.1);  border-color: rgba(139,148,158,0.3); color: var(--muted); }
+  .fn-orch   { background: rgba(255,166,87,0.1);   border-color: rgba(255,166,87,0.35); color: var(--accent4); }
+  .fn-skill  { background: rgba(88,166,255,0.1);   border-color: rgba(88,166,255,0.35); color: var(--accent); }
+  .fn-llm    { background: rgba(210,168,255,0.1);  border-color: rgba(210,168,255,0.35);color: var(--accent3); }
+  .farrow {
+    flex: 1; min-width: 24px; height: 2px; background: var(--border); position: relative; margin: 0 2px;
+  }
+  .farrow::after { content: "▶"; position: absolute; right: -6px; top: -8px; font-size: 10px; color: var(--muted); }
+  .farrow-lbl {
+    position: absolute; top: -18px; left: 50%; transform: translateX(-50%);
+    font-size: 10px; color: var(--muted); white-space: nowrap;
+    font-family: "SF Mono","Fira Mono",monospace;
+  }
+  .tree-line { font-family: "SF Mono","Fira Mono",monospace; font-size: 13px; color: var(--muted); margin: 4px 0; padding-left: 0; }
+  .tree-line code { background: none; border: none; padding: 0; color: var(--text2); }
+
+  /* ── Compat table ─────────────────────────────────────────────────── */
+  .compat-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 10px; margin: 16px 0 24px;
+  }
+  .compat-item {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 12px 14px; display: flex; align-items: center; gap: 10px;
+  }
+  .compat-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--accent2); }
+  .compat-name { font-size: 13px; font-weight: 600; color: var(--text2); }
+
+  /* ── Port convention table ────────────────────────────────────────── */
+  .port-row { display: flex; align-items: center; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .port-row:last-child { border-bottom: none; }
+  .port-badge {
+    font-family: "SF Mono","Fira Mono",monospace; font-size: 12px; font-weight: 600;
+    background: var(--surface2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 4px 10px; color: var(--accent4); white-space: nowrap; flex-shrink: 0; min-width: 90px; text-align: center;
+  }
+  .port-desc { font-size: 13px; color: var(--muted); }
+
+  /* ── Trouble items ────────────────────────────────────────────────── */
+  .trouble { margin-bottom: 28px; }
+  .trouble-q {
+    font-size: 14px; font-weight: 700; color: var(--accent5);
+    font-family: "SF Mono","Fira Mono",monospace; margin-bottom: 10px;
+    padding: 10px 14px; background: rgba(255,123,114,0.07); border-left: 3px solid var(--accent5);
+    border-radius: 0 var(--radius) var(--radius) 0;
+  }
+
+  /* ── Responsive ───────────────────────────────────────────────────── */
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; }
+    .sidebar { display: none; }
+    .content { padding: 32px 20px 80px; }
+    .hero { padding: 48px 20px 40px; }
+    .hero h1 { font-size: 32px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Hero ──────────────────────────────────────────────────────────── -->
+<div class="hero">
+  <div class="eyebrow">Layer 4 · SkillRunner</div>
+  <h1>Turn a <em>TOML file</em> into a mesh node</h1>
+  <p class="hero-sub">
+    <code>skillrunner</code> reads a <code>.skill.toml</code> manifest, joins the Mycelium gossip
+    mesh as a named capability, handles invocations via nonce RPC, drives any
+    OpenAI-compatible LLM, and writes a causal audit trail — all without writing Rust.
+  </p>
+  <div class="hero-badges">
+    <div class="badge"><span class="dot dot-green"></span>Shipped in main</div>
+    <div class="badge"><span class="dot dot-orange"></span>OpenAI-compatible HTTP</div>
+    <div class="badge"><span class="dot dot-blue"></span>Audit trail + OTEL</div>
+    <div class="badge"><span class="dot dot-blue"></span>Skills call skills</div>
+  </div>
+</div>
+
+<div class="layout">
+
+<!-- ── Sidebar ───────────────────────────────────────────────────────── -->
+<nav class="sidebar">
+  <div class="sidebar-title">Contents</div>
+
+  <details class="nav-group" open>
+    <summary>Getting started</summary>
+    <div class="nav-links">
+      <a href="#quickstart">Quick start</a>
+      <a href="#compat">LLM compatibility</a>
+    </div>
+  </details>
+
+  <details class="nav-group" open>
+    <summary>Manifest reference</summary>
+    <div class="nav-links">
+      <a href="#node-section">[node]</a>
+      <a href="#cap-section">[capability]</a>
+      <a href="#skill-section">[skill]</a>
+      <a href="#llm-section">[skill.llm]</a>
+    </div>
+  </details>
+
+  <details class="nav-group" open>
+    <summary>Invoking skills</summary>
+    <div class="nav-links">
+      <a href="#invoke-rust">From Rust</a>
+      <a href="#invoke-python">From Python</a>
+    </div>
+  </details>
+
+  <details class="nav-group" open>
+    <summary>Advanced</summary>
+    <div class="nav-links">
+      <a href="#composition">Skill composition</a>
+      <a href="#concurrency">Concurrency</a>
+      <a href="#audit">Audit trail</a>
+      <a href="#otel">OTEL export</a>
+      <a href="#tls">TLS &amp; persistence</a>
+    </div>
+  </details>
+
+  <details class="nav-group" open>
+    <summary>Operations</summary>
+    <div class="nav-links">
+      <a href="#community">Running a community</a>
+      <a href="#ports">Port conventions</a>
+      <a href="#trouble">Troubleshooting</a>
+    </div>
+  </details>
+</nav>
+
+<!-- ── Main content ──────────────────────────────────────────────────── -->
+<main class="content">
+
+<!-- ── Quick start ─────────────────────────────────────────────────── -->
+<section class="section" id="quickstart">
+  <div class="section-head">
+    <span class="section-icon">⚡</span>
+    <h2>Quick start</h2>
+    <span class="sec-tag tag-guide">Guide</span>
+  </div>
+
+  <p>Build the binary, write a manifest, run it.</p>
+
+  <pre><span class="cmt"># build once</span>
+cargo build --bin skillrunner
+
+<span class="cmt"># run (requires Ollama or any OpenAI-compatible server)</span>
+./target/debug/skillrunner --skill examples/skills/hello.skill.toml
+
+<span class="cmt"># smoke test from a second terminal</span>
+cargo run --example invoke_skill<div class="lang-tag">sh</div></pre>
+
+  <p>The skillrunner node starts, advertises <code>llm/hello</code> on the mesh, and waits
+  for <code>rpc_call("skill.invoke", json_payload)</code> invocations. The
+  <code>invoke_skill</code> example discovers it and calls it end-to-end.</p>
+
+  <div class="callout callout-tip">
+    <span class="callout-icon">💡</span>
+    <div class="callout-body">
+      <strong>Community example:</strong> <code>examples/community/</code> contains a
+      3-skill orchestrator&hairsp;→&hairsp;researcher&hairsp;→&hairsp;writer pipeline with
+      <code>./start.sh</code> and <code>./invoke.sh "your topic"</code>.
+    </div>
+  </div>
+</section>
+
+<!-- ── LLM compat ──────────────────────────────────────────────────── -->
+<section class="section" id="compat">
+  <div class="section-head">
+    <span class="section-icon">🤖</span>
+    <h2>LLM compatibility</h2>
+    <span class="sec-tag tag-ref">Reference</span>
+  </div>
+
+  <p>SkillRunner speaks the OpenAI <code>/v1/chat/completions</code> protocol. Any server
+  that implements this endpoint works:</p>
+
+  <div class="compat-grid">
+    <div class="compat-item"><span class="compat-dot"></span><span class="compat-name">Ollama</span></div>
+    <div class="compat-item"><span class="compat-dot"></span><span class="compat-name">llama.cpp</span></div>
+    <div class="compat-item"><span class="compat-dot"></span><span class="compat-name">LM Studio</span></div>
+    <div class="compat-item"><span class="compat-dot"></span><span class="compat-name">vLLM</span></div>
+    <div class="compat-item"><span class="compat-dot"></span><span class="compat-name">Jan</span></div>
+    <div class="compat-item"><span class="compat-dot"></span><span class="compat-name">OpenAI</span></div>
+    <div class="compat-item"><span class="compat-dot"></span><span class="compat-name">Anthropic*</span></div>
+    <div class="compat-item"><span class="compat-dot"></span><span class="compat-name">Groq</span></div>
+  </div>
+
+  <p style="font-size:12px;color:var(--muted)">* Anthropic requires an OpenAI-compatible adapter (e.g. <code>anthropic-sdk-compat</code>).</p>
+
+  <p>Tool calling (for skill composition) requires the server to support
+  <code>tool_choice: "auto"</code> and the standard <code>tool_calls</code> response field.
+  All servers in the list above support this except older llama.cpp builds — upgrade to
+  <code>llama-server</code> ≥ b3000.</p>
+</section>
+
+<!-- ── [node] ──────────────────────────────────────────────────────── -->
+<section class="section" id="node-section">
+  <div class="section-head">
+    <span class="section-icon">🔗</span>
+    <h2>[node] — mesh wiring</h2>
+    <span class="sec-tag tag-ref">Reference</span>
+  </div>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>bind_address</code></td><td>string</td><td><code>"127.0.0.1"</code></td><td>IP address to bind the gossip TCP port</td></tr>
+        <tr><td><code>bind_port</code></td><td>integer</td><td><span class="req">required</span></td><td>Gossip TCP port. Must be unique per process on a machine</td></tr>
+        <tr><td><code>bootstrap_peers</code></td><td><code>["ip:port"]</code></td><td><code>[]</code></td><td>Known peers for initial cluster discovery. Empty = standalone node</td></tr>
+        <tr><td><code>http_port</code></td><td>integer</td><td>—</td><td>Enables the embedded HTTP gateway (MCP bridge, SSE, KV API)</td></tr>
+        <tr><td><code>[node.persistence]</code></td><td>section</td><td>—</td><td>Enables WAL + snapshot KV durability</td></tr>
+        <tr><td><code>[node.tls]</code></td><td>section</td><td>—</td><td>Enables mutual TLS. Auto-generates certs if paths omitted</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <pre><span class="toml-hdr">[node]</span>
+<span class="toml-key">bind_address</span>    = <span class="toml-str">"0.0.0.0"</span>
+<span class="toml-key">bind_port</span>       = <span class="toml-num">7947</span>
+<span class="toml-key">bootstrap_peers</span> = [<span class="toml-str">"10.0.0.1:7946"</span>, <span class="toml-str">"10.0.0.2:7946"</span>]
+<span class="toml-key">http_port</span>       = <span class="toml-num">9000</span>  <span class="toml-cmt"># optional HTTP gateway</span>
+
+<span class="toml-hdr">[node.persistence]</span>
+<span class="toml-key">base_path</span>  = <span class="toml-str">"/var/lib/mycelium/my-skill"</span>
+<span class="toml-key">sync_flush</span> = <span class="kw">false</span>   <span class="toml-cmt"># true = fdatasync every WAL write</span>
+
+<span class="toml-hdr">[node.tls]</span>
+<span class="toml-key">auto_cert_dir</span> = <span class="toml-str">"./mycelium-tls/"</span>   <span class="toml-cmt"># auto-generated CA + node cert</span><div class="lang-tag">toml</div></pre>
+</section>
+
+<!-- ── [capability] ─────────────────────────────────────────────────── -->
+<section class="section" id="cap-section">
+  <div class="section-head">
+    <span class="section-icon">📡</span>
+    <h2>[capability] — mesh advertisement</h2>
+    <span class="sec-tag tag-ref">Reference</span>
+  </div>
+
+  <p>Declares what this skill advertises on the mesh. Other nodes discover it via
+  <code>resolve(CapFilter::new(ns, name))</code>.</p>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>ns</code></td><td>string</td><td><span class="req">required</span></td><td>Namespace — group related skills (e.g. <code>"llm"</code>, <code>"dev"</code>)</td></tr>
+        <tr><td><code>name</code></td><td>string</td><td><span class="req">required</span></td><td>Skill name within the namespace</td></tr>
+        <tr><td><code>description</code></td><td>string</td><td>—</td><td>Human-readable description; gossiped as a capability attribute</td></tr>
+        <tr><td><code>ttl_secs</code></td><td>integer</td><td><code>60</code></td><td>Refresh interval. The capability ages out after <code>3×</code> this value if the node dies</td></tr>
+        <tr><td><code>[capability.input]</code></td><td>JSON Schema</td><td>—</td><td>Input schema, pushed to <code>skills/{ns}/{name}/{node}/input</code> in KV</td></tr>
+        <tr><td><code>[capability.output]</code></td><td>JSON Schema</td><td>—</td><td>Output schema, pushed to <code>skills/{ns}/{name}/{node}/output</code> in KV</td></tr>
+        <tr><td><code>[capability.policy]</code></td><td>section</td><td>—</td><td>Concurrency limit and access control</td></tr>
+        <tr><td><code>[capability.platform]</code></td><td>section</td><td>—</td><td>Hardware requirements, advertised as capability attributes</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <pre><span class="toml-hdr">[capability]</span>
+<span class="toml-key">ns</span>          = <span class="toml-str">"llm"</span>
+<span class="toml-key">name</span>        = <span class="toml-str">"code-review"</span>
+<span class="toml-key">description</span> = <span class="toml-str">"Reviews PR diffs for security and correctness"</span>
+<span class="toml-key">ttl_secs</span>    = <span class="toml-num">120</span>
+
+<span class="toml-hdr">[capability.input]</span>
+<span class="toml-key">type</span>     = <span class="toml-str">"object"</span>
+<span class="toml-key">required</span> = [<span class="toml-str">"pr_number"</span>]
+<span class="toml-hdr">[capability.input.properties]</span>
+<span class="toml-key">pr_number</span> = { <span class="toml-key">type</span> = <span class="toml-str">"integer"</span> }
+<span class="toml-key">focus</span>     = { <span class="toml-key">type</span> = <span class="toml-str">"string"</span>, <span class="toml-key">enum</span> = [<span class="toml-str">"security"</span>, <span class="toml-str">"performance"</span>, <span class="toml-str">"all"</span>] }
+
+<span class="toml-hdr">[capability.output]</span>
+<span class="toml-key">type</span> = <span class="toml-str">"object"</span>
+<span class="toml-hdr">[capability.output.properties]</span>
+<span class="toml-key">summary</span> = { <span class="toml-key">type</span> = <span class="toml-str">"string"</span> }
+<span class="toml-key">verdict</span> = { <span class="toml-key">type</span> = <span class="toml-str">"string"</span>, <span class="toml-key">enum</span> = [<span class="toml-str">"approve"</span>, <span class="toml-str">"request-changes"</span>] }
+
+<span class="toml-hdr">[capability.policy]</span>
+<span class="toml-key">max_concurrent</span>     = <span class="toml-num">2</span>               <span class="toml-cmt"># reject beyond this; "skill saturated"</span>
+<span class="toml-key">authorized_callers</span> = [<span class="toml-str">"orchestrator"</span>] <span class="toml-cmt"># empty = unrestricted</span>
+
+<span class="toml-hdr">[capability.platform]</span>
+<span class="toml-key">requires</span> = [<span class="toml-str">"gpu"</span>]  <span class="toml-cmt"># advertised as attribute "requires.gpu = true"</span><div class="lang-tag">toml</div></pre>
+</section>
+
+<!-- ── [skill] ──────────────────────────────────────────────────────── -->
+<section class="section" id="skill-section">
+  <div class="section-head">
+    <span class="section-icon">🧠</span>
+    <h2>[skill] — execution</h2>
+    <span class="sec-tag tag-ref">Reference</span>
+  </div>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>prompt</code></td><td>string</td><td><span class="req">required</span></td><td>System prompt injected into every LLM call</td></tr>
+        <tr><td><code>tools</code></td><td><code>["ns/name"]</code></td><td><code>[]</code></td><td>Mesh capabilities the LLM may invoke. Resolved from the mesh at call time</td></tr>
+        <tr><td><code>[skill.llm]</code></td><td>section</td><td><span class="req">required</span></td><td>LLM backend configuration</td></tr>
+        <tr><td><code>[skill.otel]</code></td><td>section</td><td>—</td><td>OTEL span export. Requires <code>--features otel</code> at build time</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ── [skill.llm] ──────────────────────────────────────────────────── -->
+<section class="section" id="llm-section">
+  <div class="section-head">
+    <span class="section-icon">⚙️</span>
+    <h2>[skill.llm] — backend</h2>
+    <span class="sec-tag tag-ref">Reference</span>
+  </div>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>endpoint</code></td><td>string</td><td><span class="req">required</span></td><td>Base URL of the OpenAI-compatible server. No trailing <code>/</code></td></tr>
+        <tr><td><code>model</code></td><td>string</td><td><span class="req">required</span></td><td>Model name as recognised by the server</td></tr>
+        <tr><td><code>api_key</code></td><td>string</td><td><code>""</code></td><td>Bearer token. Leave empty for local servers (Ollama, llama.cpp)</td></tr>
+        <tr><td><code>max_tokens</code></td><td>integer</td><td>—</td><td>Maximum completion tokens. Unset = server default</td></tr>
+        <tr><td><code>temperature</code></td><td>float</td><td><code>0.7</code></td><td>Sampling temperature. 0 = deterministic, 1 = creative</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <pre><span class="toml-hdr">[skill.llm]</span>
+<span class="toml-key">endpoint</span>    = <span class="toml-str">"http://localhost:11434/v1"</span>  <span class="toml-cmt"># Ollama</span>
+<span class="toml-key">model</span>       = <span class="toml-str">"llama3.2"</span>
+<span class="toml-key">api_key</span>     = <span class="toml-str">""</span>
+<span class="toml-key">max_tokens</span>  = <span class="toml-num">2048</span>
+<span class="toml-key">temperature</span> = <span class="toml-num">0.7</span>
+
+<span class="toml-cmt"># OpenAI</span>
+<span class="toml-cmt"># endpoint = "https://api.openai.com/v1"</span>
+<span class="toml-cmt"># model    = "gpt-4o"</span>
+<span class="toml-cmt"># api_key  = "sk-..."</span>
+
+<span class="toml-cmt"># llama.cpp / llama-server</span>
+<span class="toml-cmt"># endpoint = "http://localhost:8080/v1"</span>
+<span class="toml-cmt"># model    = "local"</span><div class="lang-tag">toml</div></pre>
+</section>
+
+<!-- ── Invoking from Rust ────────────────────────────────────────────── -->
+<section class="section" id="invoke-rust">
+  <div class="section-head">
+    <span class="section-icon">🦀</span>
+    <h2>Invoking from Rust</h2>
+    <span class="sec-tag tag-guide">Guide</span>
+  </div>
+
+  <p>Any <code>GossipAgent</code> on the mesh can discover and call a skill.
+  The full example is in <code>examples/invoke_skill.rs</code>.</p>
+
+  <pre><span class="kw">use</span> std::time::Duration;
+<span class="kw">use</span> bytes::Bytes;
+<span class="kw">use</span> mycelium::{<span class="var">CapFilter</span>, <span class="var">GossipAgent</span>, <span class="var">GossipConfig</span>, <span class="var">NodeId</span>};
+
+<span class="cmt">// 1. Start a caller node</span>
+<span class="kw">let</span> node_id = <span class="var">NodeId</span>::<span class="fn">new</span>(<span class="str">"127.0.0.1"</span>, <span class="num">7955</span>)?;
+<span class="kw">let mut</span> cfg = <span class="var">GossipConfig</span>::<span class="fn">default</span>();
+cfg.bind_port = <span class="num">7955</span>;
+cfg.bootstrap_peers = <span class="fn">vec!</span>[<span class="var">NodeId</span>::<span class="fn">new</span>(<span class="str">"127.0.0.1"</span>, <span class="num">7947</span>)?];
+<span class="kw">let</span> agent = std::sync::<span class="var">Arc</span>::<span class="fn">new</span>(<span class="var">GossipAgent</span>::<span class="fn">new</span>(node_id, cfg));
+agent.<span class="fn">start</span>().await?;
+
+<span class="cmt">// 2. Discover the skill</span>
+<span class="kw">let</span> filter = <span class="var">CapFilter</span>::<span class="fn">new</span>(<span class="str">"llm"</span>, <span class="str">"chat"</span>);
+<span class="kw">let</span> (skill_node, _) = agent.<span class="fn">resolve</span>(&amp;filter)
+    .into_iter().<span class="fn">next</span>()
+    .expect(<span class="str">"no skill on mesh"</span>);
+
+<span class="cmt">// 3. Invoke it</span>
+<span class="kw">let</span> payload = serde_json::<span class="fn">to_vec</span>(&amp;serde_json::<span class="fn">json!</span>({
+    <span class="str">"message"</span>: <span class="str">"What is a gossip protocol?"</span>
+}))?;
+<span class="kw">let</span> result = agent.<span class="fn">rpc_call</span>(
+    skill_node, <span class="str">"skill.invoke"</span>,
+    <span class="var">Bytes</span>::<span class="fn">from</span>(payload),
+    <span class="var">Duration</span>::<span class="fn">from_secs</span>(<span class="num">30</span>),
+).await?;
+
+<span class="kw">let</span> reply: serde_json::<span class="var">Value</span> = serde_json::<span class="fn">from_slice</span>(&amp;result)?;
+<span class="fn">println!</span>(<span class="str">"{}"</span>, reply[<span class="str">"reply"</span>]);<div class="lang-tag">rust</div></pre>
+</section>
+
+<!-- ── Invoking from Python ──────────────────────────────────────────── -->
+<section class="section" id="invoke-python">
+  <div class="section-head">
+    <span class="section-icon">🐍</span>
+    <h2>Invoking from Python</h2>
+    <span class="sec-tag tag-guide">Guide</span>
+  </div>
+
+  <p>The <code>mycelium-py</code> bridge connects to any node's HTTP gateway
+  (<code>http_port</code> in <code>[node]</code>). Set <code>http_port = 9000</code>
+  on the skillrunner node and connect Python to it.</p>
+
+  <pre><span class="kw">import</span> json
+<span class="kw">from</span> mycelium <span class="kw">import</span> <span class="var">MyceliumAgent</span>
+
+<span class="cmt"># Connect to the HTTP gateway of any mesh node</span>
+agent = <span class="var">MyceliumAgent</span>(<span class="str">"127.0.0.1"</span>, <span class="num">9000</span>)
+
+<span class="cmt"># Discover</span>
+providers = agent.<span class="fn">resolve_capability</span>(<span class="str">"llm"</span>, <span class="str">"chat"</span>)
+node_id   = providers[<span class="num">0</span>].node_id
+
+<span class="cmt"># Invoke</span>
+payload = json.<span class="fn">dumps</span>({<span class="str">"message"</span>: <span class="str">"Hello!"</span>}).<span class="fn">encode</span>()
+result  = agent.<span class="fn">rpc_call</span>(node_id, <span class="str">"skill.invoke"</span>, payload, timeout_secs=<span class="num">30</span>)
+<span class="fn">print</span>(json.<span class="fn">loads</span>(result)[<span class="str">"reply"</span>])<div class="lang-tag">python</div></pre>
+
+  <pre><span class="cmt"># pip install -e mycelium-py/</span>
+cd mycelium-py
+pip install -e <span class="str">".[dev]"</span><div class="lang-tag">sh</div></pre>
+</section>
+
+<!-- ── Skill composition ─────────────────────────────────────────────── -->
+<section class="section" id="composition">
+  <div class="section-head">
+    <span class="section-icon">🕸️</span>
+    <h2>Skill composition</h2>
+    <span class="sec-tag tag-guide">Guide</span>
+  </div>
+
+  <p>A skill's <code>tools</code> array names other mesh capabilities the LLM may invoke.
+  SkillRunner resolves them from the KV store at call time, hands their schemas to the
+  model as OpenAI function tools, and dispatches any <code>tool_calls</code> the model
+  returns back through the mesh as nested <code>rpc_call("skill.invoke", …)</code>.</p>
+
+  <pre><span class="toml-hdr">[skill]</span>
+<span class="toml-key">prompt</span> = <span class="toml-str">"Research the topic then write a polished article."</span>
+<span class="toml-key">tools</span>  = [<span class="toml-str">"llm/researcher"</span>, <span class="toml-str">"llm/writer"</span>]   <span class="toml-cmt"># resolved at call time</span><div class="lang-tag">toml</div></pre>
+
+  <h3>Call graph</h3>
+  <div class="flow">
+    <div class="tree-line"><code>Caller</code></div>
+    <div class="tree-line">  └─ rpc_call("skill.invoke") ──▶ <code style="color:var(--accent4)">llm/orchestrator</code> (port 7950)</div>
+    <div class="tree-line">       ├─ tool_call ──▶ <code style="color:var(--accent)">llm/researcher</code> (port 7952)</div>
+    <div class="tree-line">       │    └─ LLM inference → result ──────────────────────┐</div>
+    <div class="tree-line">       └─ tool_call ──▶ <code style="color:var(--accent)">llm/writer</code> (port 7953) ◀────────┘</div>
+    <div class="tree-line">            └─ LLM inference → result ──▶ <code style="color:var(--accent4)">orchestrator</code> ──▶ <code>Caller</code></div>
+  </div>
+
+  <div class="callout callout-info">
+    <span class="callout-icon">ℹ️</span>
+    <div class="callout-body">
+      <strong>Load balancing is automatic.</strong> If two nodes both advertise
+      <code>llm/researcher</code>, <code>resolve()</code> returns both. SkillRunner picks
+      the first result; add <code>CapFilter::with_ranking</code> in library code to
+      route by attribute.
+    </div>
+  </div>
+
+  <div class="callout callout-warn">
+    <span class="callout-icon">⚠️</span>
+    <div class="callout-body">
+      <strong>Depth limit:</strong> the tool-call loop runs up to 5 rounds per invocation.
+      Deep chains work if the model converges quickly. If it issues more than 5 tool calls
+      without a final response, the runner returns
+      <code>{"error": "exceeded maximum tool-call rounds"}</code>.
+    </div>
+  </div>
+</section>
+
+<!-- ── Concurrency ──────────────────────────────────────────────────── -->
+<section class="section" id="concurrency">
+  <div class="section-head">
+    <span class="section-icon">⚖️</span>
+    <h2>Concurrency and load management</h2>
+    <span class="sec-tag tag-ref">Reference</span>
+  </div>
+
+  <p><code>max_concurrent</code> limits simultaneous in-flight LLM calls per node. Requests
+  beyond the limit receive <code>{"error": "skill saturated"}</code> immediately.</p>
+
+  <pre><span class="toml-hdr">[capability.policy]</span>
+<span class="toml-key">max_concurrent</span> = <span class="toml-num">2</span>   <span class="toml-cmt"># GPU-bound: only 2 parallel inferences</span><div class="lang-tag">toml</div></pre>
+
+  <p>The mesh sees saturation automatically. When all slots are occupied, the node's load
+  state is visible via <code>sys/load/{node}/…</code> in the gossip KV store.
+  Upstream callers using <code>is_node_opaque()</code> or the demand subsystem route
+  around it.</p>
+
+  <p>To scale out, run a second instance with the same <code>[capability]</code> block on a
+  different <code>bind_port</code>. <code>resolve()</code> returns both; callers
+  automatically distribute load.</p>
+</section>
+
+<!-- ── Audit trail ──────────────────────────────────────────────────── -->
+<section class="section" id="audit">
+  <div class="section-head">
+    <span class="section-icon">📋</span>
+    <h2>Audit trail</h2>
+    <span class="sec-tag tag-ref">Reference</span>
+  </div>
+
+  <p>Every invocation writes one record to the gossip KV store. Because the record is
+  gossiped, <em>every node in the cluster</em> can read it.</p>
+
+  <h3>Key format</h3>
+  <pre>audit/{unix_nanos}/{node_id}  →  JSON<div class="lang-tag">key</div></pre>
+
+  <p>Lexicographic key ordering gives time-sorted prefix scans across the whole cluster.</p>
+
+  <h3>Record schema</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>skill_ns</code> / <code>skill_name</code></td><td>string</td><td>The invoked capability</td></tr>
+        <tr><td><code>caller</code></td><td>string</td><td>NodeId of the requesting node</td></tr>
+        <tr><td><code>nonce</code></td><td>u64</td><td>RPC correlation nonce — use as trace ID to correlate with OTEL spans</td></tr>
+        <tr><td><code>success</code></td><td>bool</td><td>Whether the LLM call completed without error</td></tr>
+        <tr><td><code>duration_ms</code></td><td>u64</td><td>Wall-clock time of the full invocation including tool calls</td></tr>
+        <tr><td><code>tool_calls</code></td><td>array</td><td>Names of sub-skills invoked during tool-call rounds</td></tr>
+        <tr><td><code>ts_unix_nanos</code></td><td>u128</td><td>Invocation timestamp (also the key prefix)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Reading audit records from Rust</h3>
+  <pre><span class="kw">let</span> records = agent.<span class="fn">scan_prefix</span>(<span class="str">"audit/"</span>);
+<span class="kw">for</span> (key, val) <span class="kw">in</span> &amp;records {
+    <span class="kw">let</span> rec: serde_json::<span class="var">Value</span> = serde_json::<span class="fn">from_slice</span>(val)?;
+    <span class="fn">println!</span>(<span class="str">"{}: {} ms  success={}"</span>,
+        rec[<span class="str">"skill_name"</span>], rec[<span class="str">"duration_ms"</span>], rec[<span class="str">"success"</span>]);
+}<div class="lang-tag">rust</div></pre>
+</section>
+
+<!-- ── OTEL ─────────────────────────────────────────────────────────── -->
+<section class="section" id="otel">
+  <div class="section-head">
+    <span class="section-icon">📡</span>
+    <h2>OTEL span export</h2>
+    <span class="sec-tag tag-ref">Reference</span>
+  </div>
+
+  <p>Build with <code>--features otel</code> and add <code>[skill.otel]</code> to the
+  manifest. Each invocation emits one OTEL span exported via OTLP gRPC.</p>
+
+  <pre><span class="cmt"># Build with OTEL support</span>
+cargo build --bin skillrunner --features otel<div class="lang-tag">sh</div></pre>
+
+  <pre><span class="toml-hdr">[skill.otel]</span>
+<span class="toml-key">endpoint</span>     = <span class="toml-str">"http://localhost:4317"</span>   <span class="toml-cmt"># OTLP gRPC collector</span>
+<span class="toml-key">service_name</span> = <span class="toml-str">"my-skill"</span><div class="lang-tag">toml</div></pre>
+
+  <h3>Span attributes</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Attribute</th><th>Value</th></tr></thead>
+      <tbody>
+        <tr><td><code>skill.ns</code> / <code>skill.name</code></td><td>Capability identity</td></tr>
+        <tr><td><code>caller</code></td><td>Requesting NodeId string</td></tr>
+        <tr><td><code>nonce</code></td><td>RPC correlation nonce — matches the audit trail record</td></tr>
+        <tr><td><code>success</code></td><td>Boolean</td></tr>
+        <tr><td><code>duration_ms</code></td><td>Wall-clock duration including tool calls</td></tr>
+        <tr><td><code>tool_calls</code></td><td>Count of sub-skill invocations</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout callout-tip">
+    <span class="callout-icon">💡</span>
+    <div class="callout-body">
+      The span's trace ID is derived from the RPC nonce. Audit KV records and OTEL spans
+      cross-correlate on the <strong>nonce</strong> field — one lookup finds both.
+    </div>
+  </div>
+</section>
+
+<!-- ── TLS & persistence ─────────────────────────────────────────────── -->
+<section class="section" id="tls">
+  <div class="section-head">
+    <span class="section-icon">🔒</span>
+    <h2>TLS and persistence</h2>
+    <span class="sec-tag tag-ref">Reference</span>
+  </div>
+
+  <h3>mTLS</h3>
+  <p>Set <code>[node.tls]</code> to enable mutual TLS on the gossip TCP port. On first run
+  SkillRunner auto-generates a cluster CA and a per-node certificate in
+  <code>auto_cert_dir</code>. All nodes in the cluster must share the same CA.</p>
+
+  <pre><span class="toml-hdr">[node.tls]</span>
+<span class="toml-key">auto_cert_dir</span> = <span class="toml-str">"./mycelium-tls/"</span>   <span class="toml-cmt"># shared CA, unique cert per node</span>
+
+<span class="toml-cmt"># Or supply externally-issued certificates:</span>
+<span class="toml-cmt"># cert_pem    = "/etc/mycelium/node.crt"</span>
+<span class="toml-cmt"># key_pem     = "/etc/mycelium/node.key"</span>
+<span class="toml-cmt"># ca_cert_pem = "/etc/mycelium/ca.crt"</span><div class="lang-tag">toml</div></pre>
+
+  <h3>KV persistence</h3>
+  <p>Enables WAL + snapshot durability. The node survives unclean shutdown and replays
+  its KV state on restart. Data lives under <code>{base_path}/{node_id}/kv/</code>.</p>
+
+  <pre><span class="toml-hdr">[node.persistence]</span>
+<span class="toml-key">base_path</span>  = <span class="toml-str">"/var/lib/mycelium/my-skill"</span>
+<span class="toml-key">sync_flush</span> = <span class="kw">true</span>   <span class="toml-cmt"># fdatasync on every WAL write — safest</span><div class="lang-tag">toml</div></pre>
+</section>
+
+<!-- ── Running a community ───────────────────────────────────────────── -->
+<section class="section" id="community">
+  <div class="section-head">
+    <span class="section-icon">🌐</span>
+    <h2>Running a community</h2>
+    <span class="sec-tag tag-ops">Operations</span>
+  </div>
+
+  <p>Each SkillRunner process is one node. Run multiple processes — each with its own
+  <code>bind_port</code> and overlapping <code>bootstrap_peers</code> — and the mesh
+  assembles itself through gossip.</p>
+
+  <pre><span class="cmt"># 3-skill community — see examples/community/</span>
+./skillrunner --skill examples/community/orchestrator.skill.toml &amp;   <span class="cmt"># port 7950</span>
+./skillrunner --skill examples/community/researcher.skill.toml   &amp;   <span class="cmt"># port 7952</span>
+./skillrunner --skill examples/community/writer.skill.toml       &amp;   <span class="cmt"># port 7953</span>
+
+<span class="cmt"># Or use the provided script:</span>
+cd examples/community &amp;&amp; ./start.sh
+./invoke.sh "gossip protocols in distributed systems"
+./stop.sh<div class="lang-tag">sh</div></pre>
+
+  <div class="callout callout-tip">
+    <span class="callout-icon">💡</span>
+    <div class="callout-body">
+      Adding a second <strong>researcher</strong> node is automatic load-balancing. Both nodes
+      advertise the same <code>llm/researcher</code> capability; the orchestrator's
+      <code>resolve()</code> call returns whichever responds first.
+    </div>
+  </div>
+
+  <p>The mesh converges via gossip within one health interval (default 10 s). For a faster
+  initial convergence, set all nodes' <code>bootstrap_peers</code> to include one stable
+  seed node (the orchestrator is a natural choice).</p>
+</section>
+
+<!-- ── Port conventions ─────────────────────────────────────────────── -->
+<section class="section" id="ports">
+  <div class="section-head">
+    <span class="section-icon">🔢</span>
+    <h2>Port conventions</h2>
+    <span class="sec-tag tag-ops">Operations</span>
+  </div>
+
+  <p>Each SkillRunner needs a unique <code>bind_port</code>. Suggested ranges:</p>
+
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px 24px;margin:16px 0;">
+    <div class="port-row">
+      <div class="port-badge">7940–7949</div>
+      <div class="port-desc">Primary mesh seed nodes and non-skill services</div>
+    </div>
+    <div class="port-row">
+      <div class="port-badge">7950–7999</div>
+      <div class="port-desc">SkillRunner skill nodes</div>
+    </div>
+    <div class="port-row">
+      <div class="port-badge">9000–9099</div>
+      <div class="port-desc">HTTP gateways (<code>http_port</code>)</div>
+    </div>
+  </div>
+
+  <h3>Environment variable overrides</h3>
+  <p>All <code>GossipConfig</code> fields can be overridden without touching the manifest:</p>
+
+  <pre>GOSSIP_BIND_PORT=<span class="num">7951</span> GOSSIP_BOOTSTRAP_PEERS=<span class="str">"10.0.0.1:7946"</span> \
+    ./skillrunner --skill my.skill.toml<div class="lang-tag">sh</div></pre>
+</section>
+
+<!-- ── Troubleshooting ───────────────────────────────────────────────── -->
+<section class="section" id="trouble">
+  <div class="section-head">
+    <span class="section-icon">🔧</span>
+    <h2>Troubleshooting</h2>
+    <span class="sec-tag tag-ops">Operations</span>
+  </div>
+
+  <div class="trouble">
+    <div class="trouble-q">{"error": "HTTP error: ..."}</div>
+    <p>The LLM server returned an error or was unreachable.</p>
+    <ul>
+      <li>Check Ollama is running: <code>curl http://localhost:11434/api/tags</code></li>
+      <li>Check the model is pulled: <code>ollama pull llama3.2</code></li>
+      <li>Check <code>endpoint</code> in <code>[skill.llm]</code> — no trailing <code>/</code></li>
+    </ul>
+    <pre>RUST_LOG=skillrunner=debug ./skillrunner --skill my.skill.toml<div class="lang-tag">sh</div></pre>
+  </div>
+
+  <div class="trouble">
+    <div class="trouble-q">timed out waiting for capability on mesh</div>
+    <p>The skill node isn't visible to the caller.</p>
+    <ul>
+      <li>Check the skill process is running and the port is open: <code>nc -zv 127.0.0.1 7950</code></li>
+      <li>Check <code>bootstrap_peers</code> in the caller's config points at the skill's <code>bind_port</code></li>
+      <li>Wait one TTL interval (default 60 s) for gossip to converge, or lower <code>ttl_secs</code></li>
+    </ul>
+    <pre>RUST_LOG=mycelium=debug ./skillrunner --skill my.skill.toml<div class="lang-tag">sh</div></pre>
+  </div>
+
+  <div class="trouble">
+    <div class="trouble-q">{"error": "skill saturated"}</div>
+    <p>All <code>max_concurrent</code> slots are occupied.</p>
+    <ul>
+      <li>Increase <code>max_concurrent</code> in <code>[capability.policy]</code></li>
+      <li>Run a second instance on a different port — the mesh load-balances automatically</li>
+      <li>Add retry logic in the caller with brief exponential back-off</li>
+    </ul>
+  </div>
+
+  <div class="trouble">
+    <div class="trouble-q">{"error": "exceeded maximum tool-call rounds"}</div>
+    <p>The LLM issued more than 5 tool calls without producing a final response.</p>
+    <ul>
+      <li>Add an explicit instruction to the prompt: <em>"Make at most 2 tool calls then return your final answer."</em></li>
+      <li>Reduce the number of tools in the <code>tools</code> array</li>
+      <li>Use a more instruction-following model (e.g. <code>qwen3:14b</code> instead of <code>llama3.2</code>)</li>
+    </ul>
+  </div>
+
+  <div class="trouble">
+    <div class="trouble-q">Port already in use</div>
+    <p>Each SkillRunner instance needs a unique <code>bind_port</code>. Check for leftover
+    processes: <code>lsof -i :7950</code>. Use <code>./stop.sh</code> or <code>pkill -f skillrunner</code>
+    to clean up.</p>
+  </div>
+
+</section>
+
+</main>
+</div>
+
+<script>
+  // Highlight active nav link on scroll
+  const sections = document.querySelectorAll('section[id]');
+  const links    = document.querySelectorAll('.nav-links a');
+  const obs = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const a = document.querySelector(`.nav-links a[href="#${e.target.id}"]`);
+        if (a) { a.classList.add('active'); a.closest('details').open = true; }
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+  sections.forEach(s => obs.observe(s));
+</script>
+
+</body>
+</html>
