@@ -47,6 +47,7 @@ use tracing::warn;
 
 use super::{GossipAgent, TaskCtx};
 use super::emit_signal;
+use super::rpc::{await_nonce_reply, NonceReply};
 
 // ── Transport adapter ─────────────────────────────────────────────────────────
 
@@ -175,29 +176,17 @@ pub(crate) async fn bulk_call_ctx(
     buf.put(kind_bytes);
     let ticket = buf.freeze();
 
-    // Register result handler BEFORE emitting, so no reply can be missed.
+    // Register BEFORE emitting so no reply is missed even for co-located targets.
     let mut rx = ctx.signal_handlers.register_with_capacity(
-        Arc::from(signal_kind::BULK_RESULT),
-        256,
+        Arc::from(signal_kind::BULK_RESULT), 256,
     );
     emit_signal(ctx, Arc::from(signal_kind::INVOKE_BULK), SignalScope::Individual(target.clone()), ticket);
 
     let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        match tokio::time::timeout_at(deadline, rx.recv()).await {
-            Ok(Some(sig)) => {
-                let nonce_matches = sig.payload.get(..8)
-                    .and_then(|b| b.try_into().ok())
-                    .map(|b: [u8; 8]| u64::from_le_bytes(b) == nonce)
-                    .unwrap_or(false);
-                if !nonce_matches { continue; }
-                if sig.sender == target {
-                    return Ok(sig.payload.slice(8..));
-                }
-                return Err(BulkError::SenderMismatch);
-            }
-            _ => return Err(BulkError::Timeout),
-        }
+    match await_nonce_reply(&mut rx, nonce, &target, deadline).await {
+        NonceReply::Ok(b)          => Ok(b),
+        NonceReply::SenderMismatch => Err(BulkError::SenderMismatch),
+        NonceReply::Timeout        => Err(BulkError::Timeout),
     }
 }
 

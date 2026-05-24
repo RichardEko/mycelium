@@ -128,7 +128,7 @@ pub use agent::{
     AgentPolicy, ExecutionState, AgentStateMachine, PolicyViolation,
     BulkError, BulkServeHandle,
     GossipAgent, MailboxHandle, McpClientHandle, McpError, McpToolHandle,
-    MeshEvent, RpcError, ScatterError, ScatterResult, SystemStats,
+    MeshEvent, RpcError, RpcRequest, RpcRequestRx, ScatterError, ScatterResult, SystemStats,
 };
 pub use capability::{
     CallerContext, CapConstraint, CapFilter, CapRanking, CapValue, Capability, CapabilityEvent,

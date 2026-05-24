@@ -10,15 +10,16 @@
 //! same `tools/` namespace and calls are proxied outbound to the remote server.
 
 use crate::framing::{dispatch_gossip_send, make_gossip_update, ForwardHint, WireMessage};
-use crate::signal::{Signal, SignalScope, signal_kind};
+use crate::signal::{Signal, signal_kind};
+use super::rpc::{RpcRequest, rpc_respond_ctx};
 use crate::store::apply_and_notify;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::Bytes;
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::warn;
 
-use super::{emit_signal, GossipAgent, TaskCtx};
+use super::{GossipAgent, TaskCtx};
 
 /// Handle returned by [`GossipAgent::register_mcp_tool`].
 ///
@@ -155,12 +156,8 @@ where
             },
         };
 
-        if req.payload.len() < 8 {
-            warn!(tool = %tool_name, len = req.payload.len(), "mcp.invoke signal too short — skipping");
-            continue;
-        }
-
-        let rpc_req: serde_json::Value = match serde_json::from_slice(&req.payload[8..]) {
+        let req = RpcRequest::from(req);
+        let rpc_req: serde_json::Value = match serde_json::from_slice(&req.payload()) {
             Ok(v)  => v,
             Err(e) => {
                 warn!(tool = %tool_name, err = %e, "mcp.invoke: malformed JSON-RPC — skipping");
@@ -189,17 +186,7 @@ where
             }),
         };
 
-        let nonce = req.payload.slice(..8);
-        let resp_bytes = Bytes::from(response.to_string().into_bytes());
-        let mut buf = BytesMut::with_capacity(8 + resp_bytes.len());
-        buf.put_slice(&nonce);
-        buf.put(resp_bytes);
-        emit_signal(
-            &ctx,
-            Arc::from(signal_kind::RPC_RESULT),
-            SignalScope::Individual(req.sender.clone()),
-            buf.freeze(),
-        );
+        rpc_respond_ctx(&ctx, &req, Bytes::from(response.to_string().into_bytes()));
     }
 
     // Tombstone the KV entry whether we exited via cancel or shutdown.
@@ -358,9 +345,8 @@ async fn run_mcp_client_task(
             },
         };
 
-        if req.payload.len() < 8 { continue; }
-
-        let rpc_req: serde_json::Value = match serde_json::from_slice(&req.payload[8..]) {
+        let req = RpcRequest::from(req);
+        let rpc_req: serde_json::Value = match serde_json::from_slice(&req.payload()) {
             Ok(v)  => v,
             Err(_) => continue,
         };
@@ -393,17 +379,7 @@ async fn run_mcp_client_task(
                              "error":{"code":-32000,"message":e.to_string()}}),
         };
 
-        let nonce = req.payload.slice(..8);
-        let resp_bytes = Bytes::from(response.to_string().into_bytes());
-        let mut buf = BytesMut::with_capacity(8 + resp_bytes.len());
-        buf.put_slice(&nonce);
-        buf.put(resp_bytes);
-        emit_signal(
-            &ctx,
-            Arc::from(signal_kind::RPC_RESULT),
-            SignalScope::Individual(req.sender.clone()),
-            buf.freeze(),
-        );
+        rpc_respond_ctx(&ctx, &req, Bytes::from(response.to_string().into_bytes()));
     }
 
     // Tombstone all KV entries for bridged tools.

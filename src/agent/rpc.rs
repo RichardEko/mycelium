@@ -13,15 +13,99 @@ use crate::node_id::NodeId;
 use crate::signal::{Signal, SignalScope, signal_kind};
 use bytes::{BufMut, Bytes, BytesMut};
 use std::{sync::Arc, time::Duration};
+use tokio::sync::mpsc;
 
 use super::{GossipAgent, TaskCtx};
 use super::emit_signal;
+
+// ── RpcRequest newtype ────────────────────────────────────────────────────────
+
+/// A received RPC request signal with the 8-byte correlation nonce hidden.
+///
+/// Obtained from [`GossipAgent::rpc_rx`] or by wrapping a [`Signal`] with
+/// `RpcRequest::from`. The nonce is used internally by [`GossipAgent::rpc_respond`];
+/// callers work only with `payload()` and `sender()`.
+#[derive(Clone, Debug)]
+pub struct RpcRequest(pub(crate) Signal);
+
+impl RpcRequest {
+    /// Application payload with the 8-byte nonce prefix stripped.
+    pub fn payload(&self) -> Bytes   { self.0.payload.slice(8..) }
+    /// NodeId of the node that sent the request.
+    pub fn sender(&self)  -> &NodeId { &self.0.sender }
+    /// Signal kind (e.g. `"mcp.invoke"`).
+    pub fn kind(&self)    -> &Arc<str> { &self.0.kind }
+}
+
+impl From<Signal> for RpcRequest {
+    fn from(s: Signal) -> Self { RpcRequest(s) }
+}
+
+/// A signal receiver that yields [`RpcRequest`] values.
+///
+/// Returned by [`GossipAgent::rpc_rx`]. Thin wrapper around
+/// `mpsc::Receiver<Signal>` that applies `RpcRequest::from` on each message.
+pub struct RpcRequestRx(pub(crate) mpsc::Receiver<Signal>);
+
+impl RpcRequestRx {
+    /// Receives the next RPC request. Returns `None` when the agent shuts down.
+    pub async fn recv(&mut self) -> Option<RpcRequest> {
+        self.0.recv().await.map(RpcRequest)
+    }
+}
 
 /// Error returned by [`GossipAgent::rpc_call`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RpcError {
     /// No reply arrived before the timeout elapsed.
     Timeout,
+}
+
+/// Outcome of [`await_nonce_reply`].
+pub(crate) enum NonceReply {
+    /// Reply received from the expected sender; nonce prefix is already stripped.
+    Ok(Bytes),
+    /// Deadline elapsed with no matching reply.
+    Timeout,
+    /// Nonce matched but the reply arrived from an unexpected sender.
+    SenderMismatch,
+}
+
+/// Awaits a nonce-correlated reply on a pre-registered signal receiver.
+///
+/// The caller must register `rx` **before** emitting the request signal so
+/// that no reply is missed even when the responder is co-located. The typical
+/// pattern is:
+/// ```ignore
+/// let mut rx = ctx.signal_handlers.register_with_capacity(kind, 256);
+/// emit_signal(ctx, request_kind, scope, payload);
+/// let result = await_nonce_reply(&mut rx, nonce, &target, deadline).await;
+/// ```
+///
+/// Returns [`NonceReply::Ok`] with the payload stripped of its 8-byte nonce
+/// prefix, [`NonceReply::SenderMismatch`] if the nonce matched but the reply
+/// came from an unexpected sender, or [`NonceReply::Timeout`] if the deadline
+/// elapsed or the channel was closed.
+pub(crate) async fn await_nonce_reply(
+    rx:       &mut tokio::sync::mpsc::Receiver<Signal>,
+    nonce:    u64,
+    target:   &NodeId,
+    deadline: tokio::time::Instant,
+) -> NonceReply {
+    loop {
+        match tokio::time::timeout_at(deadline, rx.recv()).await {
+            Ok(Some(sig)) => {
+                let nonce_ok = sig.payload.get(..8)
+                    .and_then(|b| b.try_into().ok())
+                    .map(|b: [u8; 8]| u64::from_le_bytes(b) == nonce)
+                    .unwrap_or(false);
+                if !nonce_ok { continue; }
+                if sig.sender == *target { return NonceReply::Ok(sig.payload.slice(8..)); }
+                return NonceReply::SenderMismatch;
+            }
+            _ => return NonceReply::Timeout,
+        }
+    }
 }
 
 impl std::fmt::Display for RpcError {
@@ -34,6 +118,24 @@ impl std::fmt::Display for RpcError {
 
 impl std::error::Error for RpcError {}
 
+/// `rpc_respond` logic operating on [`TaskCtx`] directly.
+///
+/// Used by callers that hold an `Arc<TaskCtx>` rather than a full `GossipAgent`
+/// (e.g. MCP task functions). [`GossipAgent::rpc_respond`] delegates here.
+pub(crate) fn rpc_respond_ctx(ctx: &TaskCtx, request: &RpcRequest, result: impl Into<Bytes>) {
+    let nonce_bytes = request.0.payload.slice(..8);
+    let result_bytes: Bytes = result.into();
+    let mut buf = BytesMut::with_capacity(8 + result_bytes.len());
+    buf.put_slice(&nonce_bytes);
+    buf.put(result_bytes);
+    emit_signal(
+        ctx,
+        Arc::from(signal_kind::RPC_RESULT),
+        SignalScope::Individual(request.0.sender.clone()),
+        buf.freeze(),
+    );
+}
+
 /// Core `rpc_call` logic operating on [`TaskCtx`] directly.
 ///
 /// Exposed as `pub(crate)` so HTTP handlers that hold only `Arc<TaskCtx>` (not a
@@ -45,41 +147,29 @@ pub(crate) async fn rpc_call_ctx(
     payload: Bytes,
     timeout: Duration,
 ) -> Result<Bytes, RpcError> {
-    let target_clone = target.clone();
-    let nonce: u64   = fastrand::u64(1..);
+    let nonce: u64 = fastrand::u64(1..);
 
     let mut buf = BytesMut::with_capacity(8 + payload.len());
     buf.put_u64_le(nonce);
     buf.put(payload);
-    let framed = buf.freeze();
 
+    // Register BEFORE emitting so no reply is missed even for co-located targets.
     let mut rx = ctx.signal_handlers.register_with_capacity(
-        Arc::from(signal_kind::RPC_RESULT),
-        256,
+        Arc::from(signal_kind::RPC_RESULT), 256,
     );
-    emit_signal(ctx, kind, SignalScope::Individual(target), framed);
+    emit_signal(ctx, kind, SignalScope::Individual(target.clone()), buf.freeze());
 
     let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        match tokio::time::timeout_at(deadline, rx.recv()).await {
-            Ok(Some(sig)) => {
-                let nonce_matches = sig.payload.get(..8)
-                    .and_then(|b| b.try_into().ok())
-                    .map(|b: [u8; 8]| u64::from_le_bytes(b) == nonce)
-                    .unwrap_or(false);
-                if !nonce_matches { continue; }
-                if sig.sender == target_clone {
-                    return Ok(sig.payload.slice(8..));
-                }
-                tracing::warn!(
-                    target = %target_clone,
-                    actual_sender = %sig.sender,
-                    "rpc_call_ctx: rpc.result sender mismatch — treating as timeout"
-                );
-                return Err(RpcError::Timeout);
-            }
-            _ => return Err(RpcError::Timeout),
+    match await_nonce_reply(&mut rx, nonce, &target, deadline).await {
+        NonceReply::Ok(b) => Ok(b),
+        NonceReply::SenderMismatch => {
+            tracing::warn!(
+                target = %target,
+                "rpc_call_ctx: rpc.result sender mismatch — treating as timeout"
+            );
+            Err(RpcError::Timeout)
         }
+        NonceReply::Timeout => Err(RpcError::Timeout),
     }
 }
 
@@ -120,41 +210,27 @@ impl GossipAgent {
 
     /// Sends a reply to an incoming RPC request.
     ///
-    /// Extracts the 8-byte correlation nonce from `request.payload[..8]`, prepends
-    /// it to `result`, and emits `"rpc.result"` as
-    /// `SignalScope::Individual(request.sender)`.
-    ///
-    /// Calling this with a signal that was not originated by [`rpc_call`](Self::rpc_call)
-    /// (i.e. whose payload is shorter than 8 bytes) is a no-op — the missing nonce
-    /// means the caller's correlation will never match and the reply is silently dropped.
+    /// Echoes the correlation nonce from `request` back to the caller and emits
+    /// `"rpc.result"` as `SignalScope::Individual(request.sender())`.
     ///
     /// # Example
     /// ```ignore
-    /// let mut rx = agent.signal_rx("mcp.invoke");
+    /// let mut rx = agent.rpc_rx("mcp.invoke");
     /// while let Some(req) = rx.recv().await {
-    ///     let result = compute_result(&req.payload[8..]);
+    ///     let result = compute_result(req.payload());
     ///     agent.rpc_respond(&req, result);
     /// }
     /// ```
-    pub fn rpc_respond(&self, request: &Signal, result: impl Into<Bytes>) {
-        let Some(nonce_bytes) = request.payload.get(..8) else {
-            tracing::warn!(
-                sender = %request.sender,
-                kind   = %request.kind,
-                "rpc_respond called on signal with payload shorter than 8 bytes — no nonce to echo"
-            );
-            return;
-        };
-        let result_bytes: Bytes = result.into();
-        let mut buf = BytesMut::with_capacity(8 + result_bytes.len());
-        buf.put_slice(nonce_bytes);
-        buf.put(result_bytes);
-        emit_signal(
-            &self.task_ctx,
-            Arc::from(signal_kind::RPC_RESULT),
-            SignalScope::Individual(request.sender.clone()),
-            buf.freeze(),
-        );
+    pub fn rpc_respond(&self, request: &RpcRequest, result: impl Into<Bytes>) {
+        rpc_respond_ctx(&self.task_ctx, request, result);
+    }
+
+    /// Returns a typed receiver for incoming RPC requests of `kind`.
+    ///
+    /// Equivalent to `signal_rx(kind)` but yields [`RpcRequest`] values with
+    /// the nonce already stripped from `payload()`.
+    pub fn rpc_rx(&self, kind: impl Into<Arc<str>>) -> RpcRequestRx {
+        RpcRequestRx(self.signal_rx(kind))
     }
 }
 
@@ -204,10 +280,9 @@ mod tests {
 
         let responder = Arc::clone(&agent_b);
         tokio::spawn(async move {
-            let mut rx = responder.signal_rx("echo");
+            let mut rx = responder.rpc_rx("echo");
             if let Some(req) = rx.recv().await {
-                let body = req.payload.slice(8..);
-                responder.rpc_respond(&req, body);
+                responder.rpc_respond(&req, req.payload());
             }
         });
 
@@ -257,10 +332,9 @@ mod tests {
 
         let responder = Arc::clone(&agent_b);
         tokio::spawn(async move {
-            let mut rx = responder.signal_rx("tagged");
+            let mut rx = responder.rpc_rx("tagged");
             while let Some(req) = rx.recv().await {
-                let body = req.payload.slice(8..);
-                responder.rpc_respond(&req, body);
+                responder.rpc_respond(&req, req.payload());
             }
         });
 

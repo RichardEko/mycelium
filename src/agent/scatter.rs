@@ -129,10 +129,9 @@ mod tests {
         // Register an "echo-scatter" responder on node-b
         let responder = Arc::clone(&agent_b);
         tokio::spawn(async move {
-            let mut rx = responder.signal_rx("echo-scatter");
+            let mut rx = responder.rpc_rx("echo-scatter");
             while let Some(req) = rx.recv().await {
-                let body = req.payload.slice(8..);
-                responder.rpc_respond(&req, body);
+                responder.rpc_respond(&req, req.payload());
             }
         });
 

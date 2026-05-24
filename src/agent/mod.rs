@@ -40,7 +40,7 @@ pub(crate) use helpers::emit_signal_async;
 pub(crate) use helpers::make_gossip_update;
 pub(crate) use opacity::is_self_opaque;
 pub use mcp::{McpClientHandle, McpError, McpToolHandle};
-pub use rpc::RpcError;
+pub use rpc::{RpcError, RpcRequest, RpcRequestRx};
 pub use state_machine::{AgentPolicy, ExecutionState, AgentStateMachine, PolicyViolation};
 pub use scatter::{ScatterError, ScatterResult};
 pub use bulk::{BulkError, BulkServeHandle};

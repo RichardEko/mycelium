@@ -832,8 +832,8 @@ async fn run_node(agent: Arc<GossipAgent>, role: &str, http_port: u16) {
     tokio::spawn(async move {
         let mut rx = sc_agent.signal_rx("echo-scatter");
         while let Some(req) = rx.recv().await {
-            let body = req.payload.slice(8..); // strip nonce
-            sc_agent.rpc_respond(&req, body);
+            let req = mycelium::RpcRequest::from(req);
+            sc_agent.rpc_respond(&req, req.payload());
         }
     });
 
