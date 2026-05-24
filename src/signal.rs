@@ -728,6 +728,10 @@ pub mod signal_kind {
     /// [`GossipAgent::rpc_respond`](crate::GossipAgent::rpc_respond) to handle
     /// the nonce automatically.
     pub const RPC_RESULT: &str = "rpc.result";
+    /// Reply to an [`INVOKE_BULK`] call. Same nonce-prefix convention as
+    /// [`RPC_RESULT`] but on a dedicated kind so bulk and RPC reply handlers
+    /// do not compete for the same signal dispatch slot.
+    pub const BULK_RESULT: &str = "bulk.result";
     /// MCP tool invocation — payload is a JSON-RPC 2.0 request body.
     /// Replies are sent as [`RPC_RESULT`] signals back to the caller.
     pub const MCP_INVOKE: &str = "mcp.invoke";

@@ -15,9 +15,9 @@
 //! ```
 //!
 //! The caller stages the payload at `GET /bulk/{nonce:016x}` on its own HTTP
-//! server. The target fetches it there, processes it, and replies via the
-//! standard `rpc.result` / nonce protocol so the caller's reply-await loop is
-//! identical to `rpc_call_ctx`.
+//! server. The target fetches it there, processes it, and replies via
+//! `bulk.result` (a dedicated signal kind, separate from `rpc.result`) so
+//! bulk reply handlers do not compete with RPC reply handlers.
 //!
 //! ## Endpoints
 //!
@@ -90,7 +90,7 @@ pub(crate) async fn bulk_call_ctx(
 
     // Register result handler BEFORE emitting, so no reply can be missed.
     let mut rx = ctx.signal_handlers.register_with_capacity(
-        Arc::from(signal_kind::RPC_RESULT),
+        Arc::from(signal_kind::BULK_RESULT),
         256,
     );
     emit_signal(ctx, Arc::from(signal_kind::INVOKE_BULK), SignalScope::Individual(target.clone()), ticket);
@@ -192,7 +192,7 @@ where
         buf.put(result);
         emit_signal(
             &ctx_clone,
-            Arc::from(signal_kind::RPC_RESULT),
+            Arc::from(signal_kind::BULK_RESULT),
             SignalScope::Individual(sender),
             buf.freeze(),
         );
