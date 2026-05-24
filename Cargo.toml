@@ -21,6 +21,8 @@ fuzz-internals = []
 # Enables mTLS on the gossip TCP port, keypair-backed node identity, and
 # consensus payload signing. Adds tokio-rustls, rcgen, and ed25519-dalek.
 tls = ["dep:tokio-rustls", "dep:rustls", "dep:rcgen", "dep:rustls-pemfile", "dep:ed25519-dalek"]
+# Enables OTEL span export from SkillRunner (opentelemetry-otlp gRPC).
+otel = ["dep:opentelemetry", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry", "dep:opentelemetry_sdk"]
 
 # The `fuzz/` directory is its own cargo-fuzz crate; keep it out of any
 # implicit-workspace traversal from this parent manifest.
@@ -73,6 +75,12 @@ rcgen          = { version = "0.13", optional = true }
 rustls-pemfile = { version = "2",    optional = true }
 ed25519-dalek  = { version = "2",    features = ["rand_core", "pkcs8"], optional = true }
 
+# OTEL (optional — enabled by the "otel" feature, used by skillrunner)
+opentelemetry          = { version = "0.27", optional = true }
+opentelemetry_sdk      = { version = "0.27", optional = true }
+opentelemetry-otlp     = { version = "0.27", optional = true, features = ["grpc-tonic"] }
+tracing-opentelemetry  = { version = "0.28", optional = true }
+
 [dev-dependencies]
 tokio        = { version = "1.35", features = ["full"] }
 criterion    = { version = "0.5", features = ["async_tokio"] }
@@ -81,6 +89,10 @@ wgpu         = "22"
 pollster     = "0.3"
 bytemuck     = { version = "1", features = ["derive"] }
 async-openai = "0.28"
+
+[[bin]]
+name = "skillrunner"
+path = "src/bin/skillrunner/main.rs"
 
 [[bench]]
 name    = "throughput"

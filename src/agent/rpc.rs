@@ -35,6 +35,13 @@ impl RpcRequest {
     pub fn sender(&self)  -> &NodeId { &self.0.sender }
     /// Signal kind (e.g. `"mcp.invoke"`).
     pub fn kind(&self)    -> &Arc<str> { &self.0.kind }
+    /// RPC correlation nonce (the 8 bytes prepended by `rpc_call`). Useful as
+    /// a per-invocation trace correlator in audit records.
+    pub fn nonce(&self) -> u64 {
+        let b: [u8; 8] = self.0.payload.slice(..8).as_ref().try_into()
+            .unwrap_or([0u8; 8]);
+        u64::from_le_bytes(b)
+    }
 }
 
 impl From<Signal> for RpcRequest {

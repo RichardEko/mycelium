@@ -1,0 +1,50 @@
+# Echo skill for mesh-only testing — no LLM required.
+#
+# This skill intentionally points at a non-existent LLM endpoint.
+# Its primary purpose is to test the mesh wiring, capability advertisement,
+# and RPC round-trip without an LLM dependency.
+#
+# The skill will return an error payload when invoked (LLM unreachable),
+# but capability advertisement and audit KV writes still exercise the full path.
+#
+# Usage:
+#   cargo build --bin skillrunner
+#   ./target/debug/skillrunner --skill examples/skills/echo.skill.toml
+#
+# Invoke from another node:
+#   agent.rpc_call(echo_node_id, "skill.invoke", json!({"input": "hello"}), 5s)
+
+[node]
+bind_address    = "127.0.0.1"
+bind_port       = 7951
+bootstrap_peers = []    # standalone; add peers to join a cluster
+
+[capability]
+ns          = "test"
+name        = "echo"
+description = "Echo skill for mesh connectivity testing (no LLM)"
+ttl_secs    = 30
+
+[capability.input]
+type = "object"
+[capability.input.properties]
+input = { type = "string" }
+
+[capability.output]
+type = "object"
+[capability.output.properties]
+output = { type = "string" }
+
+[capability.policy]
+max_concurrent = 16
+authorized_callers = []
+
+[skill]
+prompt = "Return the input unchanged as JSON: {\"output\": \"<input value>\"}"
+tools  = []
+
+[skill.llm]
+endpoint    = "http://127.0.0.1:1"    # intentionally unreachable
+model       = "echo"
+max_tokens  = 64
+temperature = 0.0
