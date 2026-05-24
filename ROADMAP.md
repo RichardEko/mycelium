@@ -1,7 +1,7 @@
 # Mycelium — Engineering Roadmap
 
-> **Status:** Layer 1 complete. Layer 2 complete. Layer III (Consensus) complete. Capability & Discovery subsystem complete. Agent state machine (Layer V) complete. MCP bridge (server + client) complete. Config-driven capability probing complete. KV persistence (WAL + snapshot, all sync modes) complete. Multi-machine integration tests (Docker Compose, 7 unattended scenarios) complete. Layers 3–5 (Service Patterns / AI / Observability) planned.
-> **Last updated:** 2026-05-23
+> **Status:** Layer 1 complete. Layer 2 complete. Consensus complete. Capability & Discovery subsystem complete. Agent state machine (Layer V) complete. MCP bridge (server + client) complete. Config-driven capability probing complete. KV persistence (WAL + snapshot, all sync modes) complete. Layer 3 Service Patterns complete (HTTP server, SSE, rpc_call/rpc_respond, invoke.bulk, Actor/Event mailboxes, scatter-gather). Multi-machine integration tests (Docker Compose, 10 unattended scenarios) complete. Layers 4–5 (AI Integration / Observability) planned.
+> **Last updated:** 2026-05-24
 
 ---
 
@@ -129,7 +129,7 @@ apply it *uniformly across your whole system*. Mycelium picks *per operation*.
 │  resolve_with_locality · signal_wired_via_locality                 │
 │  LocalityPreference · locality_path config field                   │
 ├────────────────────────────────────────────────────────────────────┤
-│  Layer III: Consensus                                [COMPLETE]    │
+│  Consensus                                           [COMPLETE]    │
 │  ConsensusEngine · epidemic two-phase voting · OpaqueRecompute     │
 │  group_propose · system_propose · ConsensusResult                  │
 │  KV-backed committed slots · ballot loop · opaque-member aware     │
@@ -1290,7 +1290,7 @@ Weeks:  0         2          4          6          8         10        12
 | Layer 2 | Signal/Boundary Mesh, advertise, signal_once, opacity | **Complete** |
 | Layer 2 | watch, quorum, quorum_persistent, suppress/unsuppress, manage_opacity | **Complete** |
 | Layer 2 | advertise_persistent, epidemic_extra_peers, listener auto-restart | **Complete** |
-| Layer III | ConsensusEngine, epidemic two-phase voting, group_propose | **Complete** |
+| Consensus | ConsensusEngine, epidemic two-phase voting, group_propose | **Complete** |
 | Capability | advertise_capability, resolve, watch_capabilities | **Complete** |
 | Capability | declare_requirement, watch_requirement, RequirementStatus | **Complete** |
 | Capability | define_capability_group, gcap/ projections, emergent groups | **Complete** |
@@ -1299,7 +1299,7 @@ Weeks:  0         2          4          6          8         10        12
 | Capability | demand, watch_demand, DemandStatus (demand pressure surface) | **Complete** |
 | Capability | Predicate-narrowed watchers, 50 ms debounce, one-task-per-group | **Complete** |
 | Layer 3 | Embedded HTTP server, SSE streaming, `rpc_call`/`rpc_respond` primitive | **Complete** |
-| Layer 3 | Bulk payload / `invoke.bulk` ticket, Actor/Event mailboxes, scatter-gather | Planned |
+| Layer 3 | Bulk payload / `invoke.bulk` ticket, Actor/Event mailboxes, scatter-gather | **Complete** |
 | Layer 4 | MCP bridge: server role (tools/ KV + rpc_call dispatch) | **Complete** |
 | Layer 4 | MCP bridge: client role (outbound to external MCP servers) | **Complete** |
 | Layer 4 | Agent state machine: policy-guarded transitions, turn/call budgets, state_timeouts | **Complete** |
@@ -1514,7 +1514,7 @@ deployed in a real multi-machine AI fleet. They are ordered by blocking severity
 ### 1. Multi-machine integration tests — Complete (2026-05-23)
 
 A Docker Compose-based integration test suite exercises real TCP connections across containers.
-Seven unattended scenarios run automatically via `make test`:
+Ten unattended scenarios run automatically via `make test`:
 
 | # | Scenario | What it covers |
 |---|---|---|
@@ -1525,8 +1525,11 @@ Seven unattended scenarios run automatically via `make test`:
 | 05 | Anti-entropy late joiner | node-c starts 25 s late; receives all prior keys |
 | 06 | Signal propagation | `test.signal` emitted on node-a received by node-b |
 | 07 | Capability discovery | mgmt `/api/state` shows all nodes with correct roles |
+| 08 | Scatter-gather fan-out | `POST /scatter` fans out to all peers; at least 1 responder required |
+| 09 | invoke.bulk large payload | 4 096-byte payload staged over HTTP; echoed back with `ok=true` |
+| 10 | Actor/Event mailbox delivery | self-addressed event delivered and counted via open_mailbox watcher |
 
-**Scenario 8** (LLM demo smoke test) is a manual scenario started with `make test-llm-demo` —
+**LLM demo smoke test** is a manual scenario started with `make test-llm-demo` —
 it requires Ollama with `llama3.2` installed locally.
 
 The test infrastructure lives in `tests/integration/`. The `node` role added to
@@ -1601,7 +1604,7 @@ size. Non-persistent peers can serve as ACK sources for availability but not
 for restart durability.
 
 **Scope note:** this is Layer I only; it does not replace or overlap the
-Layer III consensus API which provides total-order agreement. `set_quorum` is
+Consensus API which provides total-order agreement. `set_quorum` is
 best-effort quorum write — "at least N nodes saw it" — not "all nodes agree
 on the same value at the same logical position."
 
@@ -1625,7 +1628,7 @@ what thresholds should trigger alerts.
 
 | Gap | Severity | Status |
 |-----|----------|--------|
-| Multi-machine integration tests + deployment docs | **Blocking** | **Complete** 2026-05-23 |
+| Multi-machine integration tests + deployment docs (10 scenarios) | **Blocking** | **Complete** 2026-05-23 |
 | KV persistence (WAL + snapshot/replay) | **Blocking** | **Complete** 2026-05-23 |
 | mTLS + node identity signing | **Blocking** | Pending |
 | Python language bridge (`mycelium-py`) | High | Pending |
