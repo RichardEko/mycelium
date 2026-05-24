@@ -78,6 +78,7 @@ pub(super) async fn run_http_server(
         .route("/stats",           get(stats_handler))
         .route("/signals/{kind}",  get(signal_sse_handler))
         .route("/mcp",             post(mcp_handler))
+        .route("/bulk/{corr_id}",  get(bulk_staging_handler))
         // ── Language-bridge gateway ────────────────────────────────────────
         .route("/gateway/capability/advertise",   post(gw_cap_advertise))
         .route("/gateway/capability/{handle_id}", delete(gw_cap_drop))
@@ -122,6 +123,25 @@ async fn ready_handler(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
         (StatusCode::OK, Json(json!({ "status": "ready", "node_id": ctx.agent_ctx.node_id.to_string() }))).into_response()
     } else {
         (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "status": "starting", "node_id": ctx.agent_ctx.node_id.to_string() }))).into_response()
+    }
+}
+
+/// `GET /bulk/{corr_id}`
+///
+/// Serves a staged bulk-call payload by nonce (hex-encoded 16-char string).
+/// Used by the `bulk_serve` target to fetch the caller's staged data over HTTP.
+/// Returns 200 + raw bytes on hit, 404 when the nonce is not found.
+async fn bulk_staging_handler(
+    Path(corr_id): Path<String>,
+    State(ctx):    State<Arc<HttpCtx>>,
+) -> impl IntoResponse {
+    let nonce = match u64::from_str_radix(corr_id.trim_start_matches("0x"), 16) {
+        Ok(n)  => n,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    match ctx.agent_ctx.bulk_staging.pin().get(&nonce).cloned() {
+        Some(bytes) => (StatusCode::OK, bytes.to_vec()).into_response(),
+        None        => StatusCode::NOT_FOUND.into_response(),
     }
 }
 

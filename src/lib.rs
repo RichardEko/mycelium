@@ -69,6 +69,7 @@
 //! | `req/{node}/{ns}/{name}`            | Node-level requirement declarations                          |
 //! | `cap-group/{group}`                 | Emergent capability-group definitions                        |
 //! | `gcap/{group}/{ns}/{name}/{contrib}`| Group-level capability projections                           |
+//! | `mailbox/{target}/{kind}/{hlc_hex}` | Layer III event mailbox entries (value: `sender_len(2LE) | sender_bytes | payload`) |
 //! | `tools/{name}/{node}`              | Layer IV MCP tool registrations (value: JSON Schema bytes)   |
 //! | `agent/{node}/state`               | Layer V agent state machine — current state string (gossips to mesh) |
 //! | `agent/{node}/policy`              | Layer V serialised AgentPolicy (readable by monitors/supervisors) |
@@ -125,7 +126,9 @@ mod writer;
 
 pub use agent::{
     AgentPolicy, ExecutionState, AgentStateMachine, PolicyViolation,
-    GossipAgent, McpClientHandle, McpError, McpToolHandle, RpcError, SystemStats,
+    BulkError, BulkServeHandle,
+    GossipAgent, MailboxHandle, McpClientHandle, McpError, McpToolHandle,
+    MeshEvent, RpcError, ScatterError, ScatterResult, SystemStats,
 };
 pub use capability::{
     CallerContext, CapConstraint, CapFilter, CapRanking, CapValue, Capability, CapabilityEvent,

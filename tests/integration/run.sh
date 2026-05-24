@@ -50,6 +50,9 @@ run_scenario "04 full-cluster restart"       "$SCENARIOS_DIR/04_full_cluster_res
 run_scenario "05 anti-entropy late joiner"   "$SCENARIOS_DIR/05_late_joiner.sh"
 run_scenario "06 signal propagation"         "$SCENARIOS_DIR/06_signal_propagation.sh"
 run_scenario "07 capability discovery"       "$SCENARIOS_DIR/07_capability_discovery.sh"
+run_scenario "08 scatter-gather fan-out"     "$SCENARIOS_DIR/08_scatter_gather.sh"
+run_scenario "09 invoke.bulk large payload"  "$SCENARIOS_DIR/09_invoke_bulk.sh"
+run_scenario "10 event mailbox delivery"     "$SCENARIOS_DIR/10_event_mailbox.sh"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 banner "Results"

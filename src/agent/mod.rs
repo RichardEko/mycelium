@@ -31,6 +31,9 @@ mod wiring;
 pub(crate) mod helpers;
 mod tasks;
 mod state_machine;
+mod scatter;
+mod bulk;
+mod mailbox;
 
 pub(crate) use helpers::emit_signal;
 pub(crate) use helpers::emit_signal_async;
@@ -39,6 +42,9 @@ pub(crate) use opacity::is_self_opaque;
 pub use mcp::{McpClientHandle, McpError, McpToolHandle};
 pub use rpc::RpcError;
 pub use state_machine::{AgentPolicy, ExecutionState, AgentStateMachine, PolicyViolation};
+pub use scatter::{ScatterError, ScatterResult};
+pub use bulk::{BulkError, BulkServeHandle};
+pub use mailbox::{MailboxHandle, MeshEvent};
 
 /// Cached roster entry for a single group, held in the short-lived `group_roster_cache`.
 pub(super) struct RosterEntry {
@@ -133,6 +139,10 @@ pub(crate) struct TaskCtx {
     /// not yet been written to the local store after a restart, so `/ready`
     /// returns 503.
     pub(crate) caps_advertised: Arc<std::sync::atomic::AtomicBool>,
+    /// Staging area for in-flight `bulk_call` payloads.
+    /// Keyed by nonce (u64); inserted before the INVOKE_BULK signal is emitted,
+    /// removed after the reply arrives (or on timeout). Served at `GET /bulk/{nonce:016x}`.
+    pub(crate) bulk_staging: Arc<papaya::HashMap<u64, Bytes>>,
 }
 
 /// Core gossip agent.
@@ -292,6 +302,7 @@ impl GossipAgent {
             kv_state:        kv_state.clone(),
             wal:             std::sync::OnceLock::new(),
             caps_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            bulk_staging:    Arc::new(papaya::HashMap::new()),
         });
 
         Self {

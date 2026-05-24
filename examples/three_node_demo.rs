@@ -55,7 +55,8 @@ use axum::{
 use bytes::Bytes;
 use futures_util::StreamExt;
 use mycelium::{
-    Capability, CapFilter, GossipAgent, GossipConfig, McpToolHandle, NodeId,
+    BulkServeHandle, Capability, CapFilter, GossipAgent, GossipConfig,
+    MailboxHandle, McpToolHandle, NodeId,
     PersistenceConfig, SignalScope, SyncMode, signal_kind,
 };
 use serde::{Deserialize, Serialize};
@@ -709,11 +710,71 @@ async fn run_mgmt_server(agent: Arc<GossipAgent>, mgmt_port: u16) {
 // ── Test node role ─────────────────────────────────────────────────────────────
 
 struct NodeState {
-    agent: Arc<GossipAgent>,
+    agent:          Arc<GossipAgent>,
+    http_port:      u16,
+    mailbox_count:  Arc<std::sync::atomic::AtomicUsize>,
+    _bulk_handle:   BulkServeHandle,
+    _mbox_handle:   MailboxHandle,
 }
 
 async fn node_health() -> StatusCode {
     StatusCode::OK
+}
+
+async fn node_scatter(State(s): State<Arc<NodeState>>) -> Json<Value> {
+    let peers = s.agent.peers();
+    if peers.is_empty() {
+        return Json(json!({ "ok": false, "reason": "no peers", "responders": 0 }));
+    }
+    let targets = peers.clone();
+    match s.agent.scatter_gather(
+        targets,
+        "echo-scatter",
+        Bytes::from_static(b"ping"),
+        Duration::from_secs(5),
+        1,
+    ).await {
+        Ok(results) => Json(json!({ "ok": true, "responders": results.len() })),
+        Err(e)      => Json(json!({ "ok": false, "reason": e.to_string(), "responders": 0 })),
+    }
+}
+
+async fn node_bulk_echo_peer(State(s): State<Arc<NodeState>>) -> Json<Value> {
+    let peers = s.agent.peers();
+    let Some(target) = peers.into_iter().next() else {
+        return Json(json!({ "ok": false, "reason": "no peers" }));
+    };
+    let payload = Bytes::from(vec![b'x'; 4096]);
+    match s.agent.bulk_call(target.clone(), "echo-bulk", payload, s.http_port, Duration::from_secs(10)).await {
+        Ok(result) => Json(json!({ "ok": true, "target": target.to_string(), "echoed_size": result.len() })),
+        Err(e)     => Json(json!({ "ok": false, "reason": e.to_string() })),
+    }
+}
+
+/// Serves staged bulk payloads to bulk_serve targets.
+async fn node_bulk_fetch(
+    Path(corr_id): Path<String>,
+    State(s):      State<Arc<NodeState>>,
+) -> impl axum::response::IntoResponse {
+    let nonce = match u64::from_str_radix(corr_id.trim_start_matches("0x"), 16) {
+        Ok(n)  => n,
+        Err(_) => return (StatusCode::BAD_REQUEST, vec![]).into_response(),
+    };
+    match s.agent.bulk_staging_get(nonce) {
+        Some(bytes) => (StatusCode::OK, bytes.to_vec()).into_response(),
+        None        => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn node_deliver_to_self(State(s): State<Arc<NodeState>>) -> Json<Value> {
+    let self_id = s.agent.node_id().clone();
+    let ok = s.agent.deliver_event(&self_id, "test-mailbox", Bytes::from_static(b"hello-mailbox"));
+    Json(json!({ "ok": ok }))
+}
+
+async fn node_mailbox_count(State(s): State<Arc<NodeState>>) -> Json<Value> {
+    let count = s.mailbox_count.load(std::sync::atomic::Ordering::Acquire);
+    Json(json!({ "count": count }))
 }
 
 async fn node_ready(State(s): State<Arc<NodeState>>) -> StatusCode {
@@ -763,12 +824,47 @@ async fn run_node(agent: Arc<GossipAgent>, role: &str, http_port: u16) {
         }
     });
 
-    let state = Arc::new(NodeState { agent });
+    // Register an echo-scatter responder so scatter_gather works from peers.
+    let sc_agent = Arc::clone(&agent);
+    tokio::spawn(async move {
+        let mut rx = sc_agent.signal_rx("echo-scatter");
+        while let Some(req) = rx.recv().await {
+            let body = req.payload.slice(8..); // strip nonce
+            sc_agent.rpc_respond(&req, body);
+        }
+    });
+
+    // Register a bulk echo handler (echo the received payload back to caller).
+    let bulk_handle = agent.bulk_serve("echo-bulk", |_sender, payload| async move { payload });
+
+    // Open a mailbox for "test-mailbox" and count received events.
+    let mailbox_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (mbox_handle, mut mbox_rx) = agent.open_mailbox("test-mailbox", 64);
+    let mc = Arc::clone(&mailbox_count);
+    tokio::spawn(async move {
+        while mbox_rx.recv().await.is_some() {
+            mc.fetch_add(1, std::sync::atomic::Ordering::Release);
+        }
+    });
+
+    let state = Arc::new(NodeState {
+        agent,
+        http_port,
+        mailbox_count,
+        _bulk_handle:  bulk_handle,
+        _mbox_handle:  mbox_handle,
+    });
+
     let router = Router::new()
-        .route("/health",      get(node_health))
-        .route("/ready",       get(node_ready))
-        .route("/kv/{*key}",   get(node_kv_get).put(node_kv_put))
-        .route("/emit/{kind}", post(node_emit))
+        .route("/health",            get(node_health))
+        .route("/ready",             get(node_ready))
+        .route("/kv/{*key}",         get(node_kv_get).put(node_kv_put))
+        .route("/emit/{kind}",       post(node_emit))
+        .route("/scatter",           post(node_scatter))
+        .route("/bulk-echo-peer",    post(node_bulk_echo_peer))
+        .route("/bulk/{corr_id}",    get(node_bulk_fetch))
+        .route("/deliver-to-self",   post(node_deliver_to_self))
+        .route("/mailbox-count",     get(node_mailbox_count))
         .with_state(state);
 
     let addr = format!("0.0.0.0:{http_port}");
