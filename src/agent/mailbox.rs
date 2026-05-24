@@ -81,26 +81,45 @@ fn tombstone(ctx: &Arc<TaskCtx>, key: Arc<str>) {
     );
 }
 
-/// Scans the mailbox prefix, sorts by key (= HLC order), delivers each entry,
-/// and tombstones it. Stops if the channel is closed.
+/// Maximum entries delivered (and tombstoned) per `drain_prefix` call.
+///
+/// Bounding the batch prevents the watcher task from blocking indefinitely
+/// when a large backlog accumulates (e.g. after a long network partition).
+/// After each chunk the watcher yields to the runtime; if more entries remain
+/// the prefix watcher fires again immediately and the next chunk is processed.
+const DRAIN_CHUNK: usize = 64;
+
+/// Delivers up to `DRAIN_CHUNK` mailbox entries in HLC key order, tombstoning
+/// each on delivery. Yields between chunks so the tokio runtime can run other
+/// tasks. Stops early if the receiver has been dropped.
 async fn drain_prefix(
     ctx:    &Arc<TaskCtx>,
     prefix: &Arc<str>,
     kind:   &Arc<str>,
     tx:     &mpsc::Sender<MeshEvent>,
 ) {
-    let mut entries = scan_kv_prefix(&ctx.kv_state, prefix.as_ref());
-    entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+    loop {
+        let mut entries = scan_kv_prefix(&ctx.kv_state, prefix.as_ref());
+        if entries.is_empty() { break; }
+        // sort_unstable is fine — keys are unique HLC timestamps.
+        entries.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
-    for (key, value) in entries {
-        let Some((sender, payload)) = decode_value(&value) else { continue };
-        let ts_hex = key.strip_prefix(prefix.as_ref()).unwrap_or("");
-        let hlc_ts = u64::from_str_radix(ts_hex, 16).unwrap_or(0);
-        let event  = MeshEvent { kind: Arc::clone(kind), sender, payload, hlc_ts };
-        if tx.send(event).await.is_err() {
-            return; // receiver dropped
+        let chunk: Vec<_> = entries.drain(..entries.len().min(DRAIN_CHUNK)).collect();
+        for (key, value) in chunk {
+            let Some((sender, payload)) = decode_value(&value) else {
+                tombstone(ctx, key);  // malformed — evict silently
+                continue;
+            };
+            let ts_hex = key.strip_prefix(prefix.as_ref()).unwrap_or("");
+            let hlc_ts = u64::from_str_radix(ts_hex, 16).unwrap_or(0);
+            let event  = MeshEvent { kind: Arc::clone(kind), sender, payload, hlc_ts };
+            if tx.send(event).await.is_err() {
+                return; // receiver dropped
+            }
+            tombstone(ctx, key);
         }
-        tombstone(ctx, key);
+        // Yield so the runtime can service other tasks between chunks.
+        tokio::task::yield_now().await;
     }
 }
 
@@ -252,6 +271,40 @@ mod tests {
             received.push(event.payload[0]);
         }
         assert_eq!(received, vec![0, 1, 2], "events not in causal order");
+
+        drop(handle);
+        agent.shutdown().await;
+    }
+
+    /// Delivers more than DRAIN_CHUNK events in one shot to verify chunked drain
+    /// processes all of them in causal order without blocking.
+    #[tokio::test]
+    async fn drain_large_burst_in_order() {
+        let port = alloc_port();
+        let id   = NodeId::new("127.0.0.1", port).unwrap();
+        let mut cfg = GossipConfig::default(); cfg.bind_port = port;
+        let agent = Arc::new(GossipAgent::new(id.clone(), cfg));
+        agent.start().await.unwrap();
+
+        // Use a channel large enough to hold all events without back-pressure.
+        let n: usize = DRAIN_CHUNK * 3;
+        let (handle, mut rx) = agent.open_mailbox("burst-test", n + 16);
+
+        // Deliver n events before opening the watcher — they land in KV first.
+        for i in 0..n {
+            agent.deliver_event(&id, "burst-test", Bytes::from(i.to_be_bytes().to_vec()));
+        }
+
+        let mut received: Vec<usize> = Vec::with_capacity(n);
+        for _ in 0..n {
+            let event = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+                .await.expect("timeout").expect("channel closed");
+            let arr: [u8; 8] = event.payload.as_ref().try_into().unwrap();
+            received.push(usize::from_be_bytes(arr));
+        }
+
+        let expected: Vec<usize> = (0..n).collect();
+        assert_eq!(received, expected, "burst events not delivered in causal order");
 
         drop(handle);
         agent.shutdown().await;
