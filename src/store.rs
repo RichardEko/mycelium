@@ -525,3 +525,74 @@ pub(crate) fn scan_kv_prefix(kv: &KvState, prefix: &str) -> Vec<(Arc<str>, Bytes
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::framing::GossipUpdate;
+    use bytes::Bytes;
+
+    #[test]
+    fn lww_newer_wins() {
+        let store: papaya::HashMap<Arc<str>, StoreEntry> = papaya::HashMap::new();
+        apply_to_store(&store, &GossipUpdate {
+            sender: 0, key: "k".into(),
+            value: Bytes::from_static(b"old"),
+            timestamp: 100, nonce: 1, ttl: 1, is_tombstone: false,
+        });
+        apply_to_store(&store, &GossipUpdate {
+            sender: 0, key: "k".into(),
+            value: Bytes::from_static(b"new"),
+            timestamp: 200, nonce: 2, ttl: 1, is_tombstone: false,
+        });
+        assert_eq!(store.pin().get("k").unwrap().data, Some(Bytes::from_static(b"new")));
+    }
+
+    #[test]
+    fn lww_stale_ignored() {
+        let store: papaya::HashMap<Arc<str>, StoreEntry> = papaya::HashMap::new();
+        apply_to_store(&store, &GossipUpdate {
+            sender: 0, key: "k".into(),
+            value: Bytes::from_static(b"new"),
+            timestamp: 200, nonce: 1, ttl: 1, is_tombstone: false,
+        });
+        apply_to_store(&store, &GossipUpdate {
+            sender: 0, key: "k".into(),
+            value: Bytes::from_static(b"old"),
+            timestamp: 100, nonce: 2, ttl: 1, is_tombstone: false,
+        });
+        assert_eq!(store.pin().get("k").unwrap().data, Some(Bytes::from_static(b"new")));
+    }
+
+    #[test]
+    fn lww_tombstone_wins_tie() {
+        let store: papaya::HashMap<Arc<str>, StoreEntry> = papaya::HashMap::new();
+        apply_to_store(&store, &GossipUpdate {
+            sender: 0, key: "k".into(),
+            value: Bytes::from_static(b"v"),
+            timestamp: 100, nonce: 1, ttl: 1, is_tombstone: false,
+        });
+        apply_to_store(&store, &GossipUpdate {
+            sender: 0, key: "k".into(),
+            value: Bytes::new(),
+            timestamp: 100, nonce: 2, ttl: 1, is_tombstone: true,
+        });
+        assert_eq!(store.pin().get("k").unwrap().data, None, "tombstone must win equal-timestamp tie");
+    }
+
+    #[test]
+    fn lww_data_does_not_resurrect_after_tombstone_tie() {
+        let store: papaya::HashMap<Arc<str>, StoreEntry> = papaya::HashMap::new();
+        apply_to_store(&store, &GossipUpdate {
+            sender: 0, key: "k".into(),
+            value: Bytes::new(),
+            timestamp: 100, nonce: 1, ttl: 1, is_tombstone: true,
+        });
+        apply_to_store(&store, &GossipUpdate {
+            sender: 0, key: "k".into(),
+            value: Bytes::from_static(b"v"),
+            timestamp: 100, nonce: 2, ttl: 1, is_tombstone: false,
+        });
+        assert_eq!(store.pin().get("k").unwrap().data, None, "same-timestamp data must not resurrect tombstone");
+    }
+}

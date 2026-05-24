@@ -35,6 +35,7 @@ mod scatter;
 mod bulk;
 mod mailbox;
 
+#[allow(unused_imports)]
 pub(crate) use bulk::BulkTransport;
 pub(crate) use helpers::emit_signal;
 pub(crate) use helpers::emit_signal_async;

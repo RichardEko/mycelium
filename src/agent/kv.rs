@@ -492,3 +492,188 @@ pub(crate) async fn run_kv_persist_task(
         ctx.node_id.id_hash(), ForwardHint::All,
     ).await;
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{GossipAgent, GossipConfig, NodeId};
+    use bytes::Bytes;
+    use std::sync::Arc;
+
+    fn make_agent() -> GossipAgent {
+        GossipAgent::new(NodeId::new("127.0.0.1", 0).unwrap(), GossipConfig::default())
+    }
+
+    #[test]
+    fn create_agent() {
+        let agent = make_agent();
+        assert_eq!(agent.node_id(), &NodeId::new("127.0.0.1", 0).unwrap());
+    }
+
+    #[test]
+    fn set_get() {
+        let agent = make_agent();
+        let _ = agent.set("hello", b"world".to_vec());
+        assert_eq!(agent.get("hello"), Some(Bytes::from_static(b"world")));
+    }
+
+    #[test]
+    fn set_returns_true_when_channel_has_capacity() {
+        let agent = make_agent();
+        assert!(agent.set("k", b"v".to_vec()), "set should succeed with live receiver");
+    }
+
+    #[test]
+    fn delete_local() {
+        let agent = make_agent();
+        let _ = agent.set("key", b"val".to_vec());
+        let _ = agent.delete("key");
+        assert_eq!(agent.get("key"), None);
+    }
+
+    #[test]
+    fn keys_returns_live_keys_only() {
+        let agent = make_agent();
+        let _ = agent.set("a", b"1".to_vec());
+        let _ = agent.set("b", b"2".to_vec());
+        let _ = agent.set("c", b"3".to_vec());
+        let _ = agent.delete("b");
+        let mut keys = agent.keys();
+        keys.sort();
+        assert_eq!(keys, vec![Arc::from("a"), Arc::from("c")]);
+    }
+
+    #[test]
+    fn keys_empty_on_new_agent() {
+        assert!(make_agent().keys().is_empty());
+    }
+
+    #[test]
+    fn scan_prefix_returns_matching_live_entries() {
+        let agent = make_agent();
+        let _ = agent.set("load/node-a", b"state-a".to_vec());
+        let _ = agent.set("load/node-b", b"state-b".to_vec());
+        let _ = agent.set("other/key",   b"other".to_vec());
+        let mut entries = agent.scan_prefix("load/");
+        entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+        assert_eq!(entries.len(), 2);
+        assert_eq!(&*entries[0].0, "load/node-a");
+        assert_eq!(entries[0].1, Bytes::from_static(b"state-a"));
+        assert_eq!(&*entries[1].0, "load/node-b");
+        assert_eq!(entries[1].1, Bytes::from_static(b"state-b"));
+    }
+
+    #[test]
+    fn scan_prefix_excludes_tombstones() {
+        let agent = make_agent();
+        let _ = agent.set("load/node-a", b"alive".to_vec());
+        let _ = agent.set("load/node-b", b"alive".to_vec());
+        let _ = agent.delete("load/node-a");
+        let entries = agent.scan_prefix("load/");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(&*entries[0].0, "load/node-b");
+    }
+
+    #[test]
+    fn scan_prefix_no_match_returns_empty() {
+        let agent = make_agent();
+        let _ = agent.set("load/node-a", b"x".to_vec());
+        assert_eq!(agent.scan_prefix("grp/").len(), 0);
+    }
+
+    #[tokio::test]
+    async fn system_stats_reflect_state() {
+        let agent = make_agent();
+        let _ = agent.set("a", b"1".to_vec());
+        let _ = agent.set("b", b"2".to_vec());
+        let _ = agent.delete("b");
+        let stats = agent.system_stats();
+        assert_eq!(stats.peers, 0);
+        assert_eq!(stats.store_entries, 1);
+        assert_eq!(stats.cached_connections, 0);
+    }
+
+    #[tokio::test]
+    async fn set_async_stores_and_queues() {
+        let agent = make_agent();
+        assert!(agent.set_async("k", b"v".to_vec()).await, "set_async should return true");
+        assert_eq!(agent.get("k"), Some(Bytes::from_static(b"v")));
+    }
+
+    #[tokio::test]
+    async fn delete_async_tombstones_key() {
+        let agent = make_agent();
+        assert!(agent.set_async("k", b"v".to_vec()).await);
+        assert!(agent.delete_async("k").await, "delete_async should return true");
+        assert_eq!(agent.get("k"), None);
+    }
+
+    #[tokio::test]
+    async fn subscribe_initial_value_absent() {
+        let agent = make_agent();
+        let rx = agent.subscribe("missing");
+        assert_eq!(*rx.borrow(), None);
+    }
+
+    #[tokio::test]
+    async fn subscribe_initial_value_present() {
+        let agent = make_agent();
+        let _ = agent.set("k", b"hello".to_vec());
+        let rx = agent.subscribe("k");
+        assert_eq!(*rx.borrow(), Some(Bytes::from_static(b"hello")));
+    }
+
+    #[tokio::test]
+    async fn subscribe_notified_on_set() {
+        let agent = make_agent();
+        let mut rx = agent.subscribe("k");
+        rx.borrow_and_update();
+        let _ = agent.set("k", b"world".to_vec());
+        tokio::time::timeout(std::time::Duration::from_millis(100), rx.changed())
+            .await
+            .expect("should fire within 100 ms")
+            .unwrap();
+        assert_eq!(*rx.borrow(), Some(Bytes::from_static(b"world")));
+    }
+
+    #[tokio::test]
+    async fn subscribe_notified_on_delete() {
+        let agent = make_agent();
+        let _ = agent.set("k", b"v".to_vec());
+        let mut rx = agent.subscribe("k");
+        rx.borrow_and_update();
+        let _ = agent.delete("k");
+        tokio::time::timeout(std::time::Duration::from_millis(100), rx.changed())
+            .await
+            .expect("should fire within 100 ms")
+            .unwrap();
+        assert_eq!(*rx.borrow(), None, "tombstone should appear as None");
+    }
+
+    #[tokio::test]
+    async fn subscribe_prefix_with_predicate_skips_non_matching_keys() {
+        let agent = make_agent();
+        let mut rx = agent.subscribe_prefix_with_predicate(
+            Arc::<str>::from("cap/"),
+            |k: &str| k.ends_with("/compute/gpu"),
+        );
+        let mark = *rx.borrow();
+        let _ = agent.set("cap/127.0.0.1:1/storage/disk", b"x".to_vec());
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert_eq!(*rx.borrow(), mark, "predicate must suppress non-matching keys");
+        let _ = agent.set("cap/127.0.0.1:1/compute/gpu", b"y".to_vec());
+        tokio::time::timeout(std::time::Duration::from_millis(100), rx.changed())
+            .await
+            .expect("predicate-matching write should fire within 100 ms")
+            .unwrap();
+        assert_ne!(*rx.borrow(), mark, "counter must advance after matching write");
+    }
+
+    #[test]
+    fn gossip_channel_capacity_used_by_agent() {
+        let mut cfg = GossipConfig::default();
+        cfg.gossip_channel_capacity = 1;
+        let agent = GossipAgent::new(NodeId::new("127.0.0.1", 0).unwrap(), cfg);
+        assert!(agent.set("k1", b"v1".to_vec()), "first send fits in capacity-1 shard");
+        assert!(!agent.set("k1", b"v2".to_vec()), "second send to same shard should fail");
+    }
+}

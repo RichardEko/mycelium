@@ -122,3 +122,45 @@ impl<'de> serde::Deserialize<'de> for NodeId {
         s.parse::<NodeId>().map_err(serde::de::Error::custom)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display() {
+        assert_eq!(NodeId::new("127.0.0.1", 7946).unwrap().to_string(), "127.0.0.1:7946");
+    }
+
+    #[test]
+    fn socket_addr_port() {
+        assert_eq!(NodeId::new("127.0.0.1", 7946).unwrap().to_socket_addr().port(), 7946);
+    }
+
+    #[test]
+    fn from_str_valid() {
+        let id: NodeId = "127.0.0.1:8080".parse().unwrap();
+        assert_eq!(id.as_str(), "127.0.0.1:8080");
+    }
+
+    #[test]
+    fn from_str_invalid() {
+        assert!("not-an-address".parse::<NodeId>().is_err());
+    }
+
+    #[test]
+    fn deserialize_valid() {
+        #[derive(serde::Deserialize)]
+        struct W { id: NodeId }
+        let w: W = toml::from_str(r#"id = "127.0.0.1:7946""#).unwrap();
+        assert_eq!(w.id.as_str(), "127.0.0.1:7946");
+    }
+
+    #[test]
+    fn deserialize_invalid() {
+        #[allow(dead_code)]
+        #[derive(serde::Deserialize)]
+        struct W { id: NodeId }
+        assert!(toml::from_str::<W>(r#"id = "not-an-address""#).is_err());
+    }
+}

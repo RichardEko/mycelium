@@ -418,3 +418,64 @@ pub(super) fn count_opaque_all_in_kv(
             .count()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::signal::{Signal, SignalHandlers, SignalScope};
+    use crate::{GossipAgent, GossipConfig, NodeId};
+    use bytes::Bytes;
+    use std::{sync::Arc, time::Duration};
+
+    fn make_agent() -> GossipAgent {
+        GossipAgent::new(NodeId::new("127.0.0.1", 0).unwrap(), GossipConfig::default())
+    }
+
+    #[test]
+    fn opacity_zero_when_channel_empty() {
+        let handlers = SignalHandlers::new(Duration::from_secs(600));
+        let kind: Arc<str> = Arc::from("probe");
+        let _rx = handlers.register_with_capacity(kind.clone(), 8);
+        assert_eq!(handlers.fill_ratio(&kind), 0.0);
+    }
+
+    #[test]
+    fn opacity_one_when_channel_full() {
+        let handlers = SignalHandlers::new(Duration::from_secs(600));
+        let kind: Arc<str> = Arc::from("probe");
+        let _rx = handlers.register_with_capacity(kind.clone(), 4);
+        let sender = NodeId::new("127.0.0.1", 1).unwrap();
+        let sig = Signal {
+            kind: kind.clone(),
+            scope: SignalScope::System,
+            payload: Bytes::new(),
+            sender,
+            nonce: 1,
+        };
+        for _ in 0..4 {
+            handlers.deliver(&sig);
+        }
+        assert_eq!(handlers.fill_ratio(&kind), 1.0);
+    }
+
+    #[tokio::test]
+    async fn individual_scope_bypasses_opacity() {
+        let node_id = NodeId::new("127.0.0.1", 1).unwrap();
+        let agent = GossipAgent::new(node_id.clone(), GossipConfig::default());
+        let mut agent_rx = agent.signal_rx_with_capacity("invoke", 4);
+        let admitted = agent.emit("invoke", SignalScope::Individual(node_id.clone()), Bytes::from_static(b"req"));
+        let _ = admitted;
+        let result = tokio::time::timeout(Duration::from_millis(100), agent_rx.recv()).await;
+        assert!(result.is_ok() && result.unwrap().is_some(),
+            "Individual signal must be delivered regardless of opacity");
+    }
+
+    #[test]
+    fn opacity_exposed_on_agent() {
+        let agent = make_agent();
+        assert_eq!(agent.opacity("task"), 0.0, "no handler: fully transparent");
+        let _rx = agent.signal_rx_with_capacity("task", 1);
+        assert_eq!(agent.opacity("task"), 0.0, "empty channel: fully transparent");
+        let _ = agent.emit("task", SignalScope::System, Bytes::new());
+        assert_eq!(agent.opacity("task"), 1.0, "full channel: fully opaque");
+    }
+}

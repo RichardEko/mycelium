@@ -12,10 +12,10 @@ use crate::connection::ConnContext;
 use crate::framing::{
     bincode_cfg, read_frame, write_frame, GossipUpdate, SyncEntry,
     WireMessage,
-    N_GOSSIP_SHARDS, NONCE_OFFSET, TTL_OFFSET,
+    N_GOSSIP_SHARDS, TTL_OFFSET,
 };
 use crate::seen::ShardedSeen;
-use crate::store::{apply_to_store, store_hash, KvState, StoreEntry};
+use crate::store::{store_hash, KvState, StoreEntry};
 use bytes::{Bytes, BytesMut};
 use std::{
     sync::{
@@ -25,7 +25,6 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
-    io::AsyncWriteExt,
     net::{TcpListener, TcpStream},
     sync::{mpsc, watch},
     time,
@@ -174,145 +173,14 @@ fn alloc_port() -> u16 {
         .port()
 }
 
-// ── NodeId ────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_node_id_display() {
-    assert_eq!(NodeId::new("127.0.0.1", 7946).unwrap().to_string(), "127.0.0.1:7946");
-}
-
-#[test]
-fn test_node_id_socket_addr() {
-    assert_eq!(
-        NodeId::new("127.0.0.1", 7946).unwrap().to_socket_addr().port(),
-        7946
-    );
-}
-
-#[test]
-fn test_node_id_from_str_valid() {
-    let id: NodeId = "127.0.0.1:8080".parse().unwrap();
-    assert_eq!(id.as_str(), "127.0.0.1:8080");
-}
-
-#[test]
-fn test_node_id_from_str_invalid() {
-    assert!("not-an-address".parse::<NodeId>().is_err());
-}
-
-#[test]
-fn test_node_id_deserialize_valid() {
-    #[derive(serde::Deserialize)]
-    struct W { id: NodeId }
-    let w: W = toml::from_str(r#"id = "127.0.0.1:7946""#).unwrap();
-    assert_eq!(w.id.as_str(), "127.0.0.1:7946");
-}
-
-#[test]
-fn test_node_id_deserialize_invalid() {
-    #[allow(dead_code)]
-    #[derive(serde::Deserialize)]
-    struct W { id: NodeId }
-    assert!(toml::from_str::<W>(r#"id = "not-an-address""#).is_err());
-}
-
-// ── Config validation ─────────────────────────────────────────────────────
-
-#[test]
-fn test_config_validate_rejects_empty_bind_address() {
-    let mut cfg = GossipConfig::default();
-    cfg.bind_address = String::new();
-    assert!(cfg.validate().is_err());
-}
-
-#[test]
-fn test_config_validate_rejects_zero_port() {
-    let mut cfg = GossipConfig::default();
-    cfg.bind_port = 0;
-    assert!(cfg.validate().is_err());
-}
-
-#[test]
-fn test_config_validate_rejects_zero_ttl() {
-    let mut cfg = GossipConfig::default();
-    cfg.default_ttl = 0;
-    assert!(cfg.validate().is_err());
-}
-
-#[test]
-fn test_config_validate_rejects_zero_writer_channel_depth() {
-    let mut cfg = GossipConfig::default();
-    cfg.writer_channel_depth = 0;
-    assert!(cfg.validate().is_err());
-}
-
-#[test]
-fn test_config_validate_default_is_valid() {
-    assert!(GossipConfig::default().validate().is_ok());
-}
 
 // ── Agent API ─────────────────────────────────────────────────────────────
-
-#[test]
-fn test_create_agent() {
-    let agent = make_agent();
-    assert_eq!(agent.node_id(), &NodeId::new("127.0.0.1", 0).unwrap());
-}
-
-#[test]
-fn test_set_get() {
-    let agent = make_agent();
-    let _ = agent.set("hello", b"world".to_vec());
-    assert_eq!(agent.get("hello"), Some(Bytes::from_static(b"world")));
-}
-
-#[test]
-fn test_set_returns_true_when_channel_has_capacity() {
-    let agent = make_agent();
-    assert!(agent.set("k", b"v".to_vec()), "set should succeed with live receiver");
-}
-
-#[test]
-fn test_delete_local() {
-    let agent = make_agent();
-    let _ = agent.set("key", b"val".to_vec());
-    let _ = agent.delete("key");
-    assert_eq!(agent.get("key"), None);
-}
-
-#[tokio::test]
-async fn test_system_stats_reflect_state() {
-    let agent = make_agent();
-    let _ = agent.set("a", b"1".to_vec());
-    let _ = agent.set("b", b"2".to_vec());
-    let _ = agent.delete("b");
-
-    let stats = agent.system_stats();
-    assert_eq!(stats.peers, 0);
-    assert_eq!(stats.store_entries, 1);
-    assert_eq!(stats.cached_connections, 0);
-}
 
 // Compile-time proof that GossipAgent is Send + Sync so it can be wrapped in Arc.
 #[allow(dead_code)]
 fn assert_gossip_agent_is_send_sync() {
     fn check<T: Send + Sync>() {}
     check::<GossipAgent>();
-}
-
-#[tokio::test]
-async fn test_set_async_stores_and_queues() {
-    let agent = make_agent();
-    assert!(agent.set_async("k", b"v".to_vec()).await, "set_async should return true");
-    assert_eq!(agent.get("k"), Some(Bytes::from_static(b"v")));
-}
-
-#[tokio::test]
-async fn test_delete_async_tombstones_key() {
-    let agent = make_agent();
-    assert!(agent.set_async("k", b"v".to_vec()).await);
-    assert!(agent.delete_async("k").await, "delete_async should return true");
-    assert_eq!(agent.get("k"), None);
 }
 
 #[tokio::test]
@@ -346,72 +214,6 @@ async fn test_state_request_ignored_from_unknown_peer() {
         Some(Bytes::from_static(b"payload")),
     );
     let _ = shutdown_tx.send(true);
-}
-
-// ── LWW conflict resolution ───────────────────────────────────────────────
-
-#[test]
-fn test_lww_newer_wins() {
-    let store: papaya::HashMap<Arc<str>, StoreEntry> = papaya::HashMap::new();
-    apply_to_store(&store, &GossipUpdate {
-        sender: 0, key: "k".into(),
-        value: Bytes::from_static(b"old"),
-        timestamp: 100, nonce: 1, ttl: 1, is_tombstone: false,
-    });
-    apply_to_store(&store, &GossipUpdate {
-        sender: 0, key: "k".into(),
-        value: Bytes::from_static(b"new"),
-        timestamp: 200, nonce: 2, ttl: 1, is_tombstone: false,
-    });
-    assert_eq!(store.pin().get("k").unwrap().data, Some(Bytes::from_static(b"new")));
-}
-
-#[test]
-fn test_lww_stale_ignored() {
-    let store: papaya::HashMap<Arc<str>, StoreEntry> = papaya::HashMap::new();
-    apply_to_store(&store, &GossipUpdate {
-        sender: 0, key: "k".into(),
-        value: Bytes::from_static(b"new"),
-        timestamp: 200, nonce: 1, ttl: 1, is_tombstone: false,
-    });
-    apply_to_store(&store, &GossipUpdate {
-        sender: 0, key: "k".into(),
-        value: Bytes::from_static(b"old"),
-        timestamp: 100, nonce: 2, ttl: 1, is_tombstone: false,
-    });
-    assert_eq!(store.pin().get("k").unwrap().data, Some(Bytes::from_static(b"new")));
-}
-
-#[test]
-fn test_lww_tombstone_wins_tie() {
-    let store: papaya::HashMap<Arc<str>, StoreEntry> = papaya::HashMap::new();
-    apply_to_store(&store, &GossipUpdate {
-        sender: 0, key: "k".into(),
-        value: Bytes::from_static(b"v"),
-        timestamp: 100, nonce: 1, ttl: 1, is_tombstone: false,
-    });
-    apply_to_store(&store, &GossipUpdate {
-        sender: 0, key: "k".into(),
-        value: Bytes::new(),
-        timestamp: 100, nonce: 2, ttl: 1, is_tombstone: true,
-    });
-    assert_eq!(store.pin().get("k").unwrap().data, None, "tombstone must win equal-timestamp tie");
-}
-
-#[test]
-fn test_lww_data_does_not_resurrect_after_tombstone_tie() {
-    let store: papaya::HashMap<Arc<str>, StoreEntry> = papaya::HashMap::new();
-    apply_to_store(&store, &GossipUpdate {
-        sender: 0, key: "k".into(),
-        value: Bytes::new(),
-        timestamp: 100, nonce: 1, ttl: 1, is_tombstone: true,
-    });
-    apply_to_store(&store, &GossipUpdate {
-        sender: 0, key: "k".into(),
-        value: Bytes::from_static(b"v"),
-        timestamp: 100, nonce: 2, ttl: 1, is_tombstone: false,
-    });
-    assert_eq!(store.pin().get("k").unwrap().data, None, "same-timestamp data must not resurrect tombstone");
 }
 
 // ── handle_connection behaviour ───────────────────────────────────────────
@@ -611,152 +413,8 @@ async fn test_two_node_propagation() {
     agent_b.shutdown().await;
 }
 
-// ── Config: gossip_channel_capacity / max_seen_entries ────────────────────
-
-#[test]
-fn test_config_validate_rejects_zero_gossip_channel_capacity() {
-    let mut cfg = GossipConfig::default();
-    cfg.gossip_channel_capacity = 0;
-    assert!(cfg.validate().is_err());
-}
-
-#[test]
-fn test_config_validate_rejects_zero_max_seen_entries() {
-    let mut cfg = GossipConfig::default();
-    cfg.max_seen_entries = 0;
-    assert!(cfg.validate().is_err());
-}
-
-#[test]
-fn test_config_validate_rejects_zero_peer_eviction_intervals() {
-    let mut cfg = GossipConfig::default();
-    cfg.peer_eviction_intervals = 0;
-    assert!(cfg.validate().is_err());
-}
-
-#[test]
-fn test_config_validate_rejects_zero_gossip_shards() {
-    let mut cfg = GossipConfig::default();
-    cfg.gossip_shards = 0;
-    assert!(cfg.validate().is_err());
-}
-
-#[test]
-fn test_config_roundtrip_toml() {
-    let mut original = GossipConfig::default();
-    original.bind_port = 9100;
-    original.bind_address = "0.0.0.0".to_string();
-    original.default_ttl = 7;
-    original.health_check_interval_secs = 3;
-    original.bootstrap_peers = vec![
-        NodeId::new("127.0.0.1", 9101).unwrap(),
-        NodeId::new("127.0.0.1", 9102).unwrap(),
-    ];
-    let toml_str = toml::to_string(&original).expect("serialise to TOML");
-    let roundtripped: GossipConfig = toml::from_str(&toml_str).expect("deserialise from TOML");
-    assert_eq!(roundtripped, original, "all 18 fields must survive a TOML round-trip");
-}
-
-#[test]
-fn test_gossip_channel_capacity_used_by_agent() {
-    let mut cfg = GossipConfig::default();
-    cfg.gossip_channel_capacity = 1;
-    let agent = GossipAgent::new(
-        NodeId::new("127.0.0.1", 0).unwrap(),
-        cfg,
-    );
-    assert!(agent.set("k1", b"v1".to_vec()), "first send fits in capacity-1 shard");
-    assert!(!agent.set("k1", b"v2".to_vec()), "second send to same shard should fail");
-}
-
-// ── keys() ────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_keys_returns_live_keys_only() {
-    let agent = make_agent();
-    let _ = agent.set("a", b"1".to_vec());
-    let _ = agent.set("b", b"2".to_vec());
-    let _ = agent.set("c", b"3".to_vec());
-    let _ = agent.delete("b");
-
-    let mut keys = agent.keys();
-    keys.sort();
-    assert_eq!(keys, vec![Arc::from("a"), Arc::from("c")]);
-}
-
-#[test]
-fn test_keys_empty_on_new_agent() {
-    assert!(make_agent().keys().is_empty());
-}
 
 // ── subscribe() ───────────────────────────────────────────────────────────
-
-#[tokio::test]
-async fn test_subscribe_prefix_with_predicate_skips_non_matching_keys() {
-    let agent = make_agent();
-    // Predicate fires only for keys ending in "/compute/gpu".
-    let mut rx = agent.subscribe_prefix_with_predicate(
-        Arc::<str>::from("cap/"),
-        |k: &str| k.ends_with("/compute/gpu"),
-    );
-    let mark = *rx.borrow();
-    // Write under cap/ but not matching predicate.
-    let _ = agent.set("cap/127.0.0.1:1/storage/disk", b"x".to_vec());
-    // Give the notifier a tick; the receiver should NOT have advanced.
-    tokio::time::sleep(Duration::from_millis(20)).await;
-    assert_eq!(*rx.borrow(), mark, "predicate must suppress non-matching keys");
-    // Write a key that matches.
-    let _ = agent.set("cap/127.0.0.1:1/compute/gpu", b"y".to_vec());
-    tokio::time::timeout(Duration::from_millis(100), rx.changed())
-        .await
-        .expect("predicate-matching write should fire within 100 ms")
-        .unwrap();
-    assert_ne!(*rx.borrow(), mark, "counter must advance after matching write");
-}
-
-#[tokio::test]
-async fn test_subscribe_initial_value_absent() {
-    let agent = make_agent();
-    let rx = agent.subscribe("missing");
-    assert_eq!(*rx.borrow(), None);
-}
-
-#[tokio::test]
-async fn test_subscribe_initial_value_present() {
-    let agent = make_agent();
-    let _ = agent.set("k", b"hello".to_vec());
-    let rx = agent.subscribe("k");
-    assert_eq!(*rx.borrow(), Some(Bytes::from_static(b"hello")));
-}
-
-#[tokio::test]
-async fn test_subscribe_notified_on_set() {
-    let agent = make_agent();
-    let mut rx = agent.subscribe("k");
-    rx.borrow_and_update();
-
-    let _ = agent.set("k", b"world".to_vec());
-    tokio::time::timeout(Duration::from_millis(100), rx.changed())
-        .await
-        .expect("should fire within 100 ms")
-        .unwrap();
-    assert_eq!(*rx.borrow(), Some(Bytes::from_static(b"world")));
-}
-
-#[tokio::test]
-async fn test_subscribe_notified_on_delete() {
-    let agent = make_agent();
-    let _ = agent.set("k", b"v".to_vec());
-    let mut rx = agent.subscribe("k");
-    rx.borrow_and_update();
-
-    let _ = agent.delete("k");
-    tokio::time::timeout(Duration::from_millis(100), rx.changed())
-        .await
-        .expect("should fire within 100 ms")
-        .unwrap();
-    assert_eq!(*rx.borrow(), None, "tombstone should appear as None");
-}
 
 #[tokio::test]
 async fn test_subscribe_notified_via_gossip() {
@@ -842,86 +500,6 @@ fn test_subscribe_multiple_receivers_same_key() {
     let _ = agent.set("k", b"shared".to_vec());
     assert_eq!(*rx1.borrow(), Some(Bytes::from_static(b"shared")));
     assert_eq!(*rx2.borrow(), Some(Bytes::from_static(b"shared")));
-}
-
-// ── TTL_OFFSET layout verification ───────────────────────────────────────
-
-#[test]
-fn test_ttl_offset_matches_wire_layout() {
-    // Encode a WireMessage::Data and verify TTL_OFFSET points at the ttl byte.
-    let update = GossipUpdate {
-        nonce:        0xABCD_EF01_2345_6789,
-        sender:       0x1111_2222_3333_4444,
-        ttl:          0xAA,
-        is_tombstone: false,
-        timestamp:    0,
-        key:          Arc::from("k"),
-        value:        Bytes::new(),
-    };
-    let encoded = bincode::serde::encode_to_vec(
-        WireMessage::Data(update), bincode_cfg(),
-    ).unwrap();
-    assert_eq!(
-        encoded[TTL_OFFSET], 0xAA,
-        "TTL_OFFSET={} does not point at ttl byte; wire layout may have changed",
-        TTL_OFFSET,
-    );
-}
-
-#[test]
-fn test_nonce_offset_matches_wire_layout() {
-    let update = GossipUpdate {
-        nonce:        0xABCD_EF01_2345_6789,
-        sender:       0x1111_2222_3333_4444,
-        ttl:          5,
-        is_tombstone: false,
-        timestamp:    0,
-        key:          Arc::from("k"),
-        value:        Bytes::new(),
-    };
-    let encoded = bincode::serde::encode_to_vec(
-        WireMessage::Data(update), bincode_cfg(),
-    ).unwrap();
-    let nonce = u64::from_le_bytes(
-        encoded[NONCE_OFFSET..NONCE_OFFSET + 8].try_into().unwrap(),
-    );
-    assert_eq!(
-        nonce, 0xABCD_EF01_2345_6789,
-        "NONCE_OFFSET={} does not point at the nonce field; wire layout may have changed",
-        NONCE_OFFSET,
-    );
-}
-
-// ── Wire version byte ─────────────────────────────────────────────────────
-
-#[tokio::test]
-async fn test_read_frame_rejects_wrong_version() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let mut writer = TcpStream::connect(addr).await.unwrap();
-    let (mut reader, _) = listener.accept().await.unwrap();
-
-    let payload = b"test";
-    let total = (1u32 + payload.len() as u32).to_be_bytes();
-    writer.write_all(&total).await.unwrap();
-    writer.write_all(&[0u8]).await.unwrap();
-    writer.write_all(payload).await.unwrap();
-
-    let mut buf = BytesMut::new();
-    let result = read_frame(&mut reader, &mut buf).await;
-    assert!(result.is_err(), "wrong version should be rejected");
-    let msg = result.unwrap_err().to_string();
-    assert!(msg.contains("wire version"), "error should mention wire version: {}", msg);
-}
-
-#[tokio::test]
-async fn test_read_frame_accepts_correct_version() {
-    let (mut writer, mut reader) = loopback_pair().await;
-    let payload = b"hello";
-    write_frame(&mut writer, payload).await.unwrap();
-    let mut buf = BytesMut::new();
-    read_frame(&mut reader, &mut buf).await.unwrap();
-    assert_eq!(&buf[..], payload);
 }
 
 // ── Peer-list piggybacking ────────────────────────────────────────────────
@@ -1186,74 +764,6 @@ async fn test_system_stats_liveness_flags_while_running() {
     assert!(stats.health_monitor_alive, "health_monitor_alive should read true after clean shutdown");
 }
 
-// ── apply_env_overrides ───────────────────────────────────────────────────
-
-#[test]
-fn test_apply_env_overrides_sets_field() {
-    // RAII guard restores env state even if the assertion panics, preventing
-    // leakage into other tests running in the same process.
-    struct EnvGuard(&'static str, Option<String>);
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match &self.1 {
-                Some(v) => std::env::set_var(self.0, v),
-                None    => std::env::remove_var(self.0),
-            }
-        }
-    }
-    let var = "GOSSIP_MAX_SEEN_ENTRIES";
-    let _guard = EnvGuard(var, std::env::var(var).ok());
-    std::env::set_var(var, "12345");
-    let mut cfg = GossipConfig::default();
-    cfg.apply_env_overrides().expect("apply_env_overrides must not fail");
-    assert_eq!(cfg.max_seen_entries, 12345);
-}
-
-// ── max_connections upper bound ───────────────────────────────────────────
-
-#[test]
-fn test_config_validate_rejects_max_connections_above_limit() {
-    let mut cfg = GossipConfig::default();
-    cfg.max_connections = 65536;
-    assert!(cfg.validate().is_err(), "max_connections = 65536 should fail validation");
-}
-
-// ── reconnect_backoff_secs upper bound ────────────────────────────────────
-
-#[test]
-fn test_config_validate_rejects_reconnect_backoff_above_limit() {
-    let mut cfg = GossipConfig::default();
-    cfg.reconnect_backoff_secs = 301;
-    assert!(cfg.validate().is_err(), "reconnect_backoff_secs = 301 should fail validation");
-}
-
-// ── ping_peer_sample_size validation ──────────────────────────────────────
-
-#[test]
-fn test_config_validate_rejects_zero_ping_peer_sample_size() {
-    let mut cfg = GossipConfig::default();
-    cfg.ping_peer_sample_size = 0;
-    assert!(cfg.validate().is_err());
-}
-
-// ── tcp_accept_backlog validation ─────────────────────────────────────────
-
-#[test]
-fn test_config_validate_rejects_zero_tcp_accept_backlog() {
-    let mut cfg = GossipConfig::default();
-    cfg.tcp_accept_backlog = 0;
-    assert!(cfg.validate().is_err());
-}
-
-// ── health_check_interval_secs upper bound ────────────────────────────────
-
-#[test]
-fn test_config_validate_rejects_excessive_health_check_interval() {
-    let mut cfg = GossipConfig::default();
-    cfg.health_check_interval_secs = 3601;
-    assert!(cfg.validate().is_err(), "health_check_interval_secs = 3601 should fail validation");
-}
-
 // ── shutdown_with_timeout ─────────────────────────────────────────────────
 
 #[tokio::test]
@@ -1360,47 +870,6 @@ async fn test_signal_rx_with_capacity() {
         .expect("first signal should arrive")
         .expect("receiver closed");
     assert_eq!(first.payload, Bytes::from_static(b"first"));
-}
-
-#[test]
-fn test_join_group_idempotent() {
-    let agent = make_agent();
-    agent.join_group("nlp");
-    agent.join_group("nlp"); // second call must not panic or corrupt boundary
-    // Still admitted after double join.
-    // Register a receiver so the emit path has a live sender to exercise.
-    let _rx = agent.signal_rx("t");
-    let _ = agent.emit("t", SignalScope::Group(Arc::from("nlp")), b"ok".to_vec());
-    // Can't await in a sync test, but we can verify the boundary state via gossip store.
-    let key = format!("grp/nlp/{}", agent.node_id());
-    assert_eq!(agent.get(&key), Some(Bytes::from_static(b"1")), "join is still reflected in store");
-}
-
-#[test]
-fn test_leave_group_idempotent() {
-    let agent = make_agent();
-    agent.join_group("compute");
-    agent.leave_group("compute");
-    agent.leave_group("compute"); // second call must be a no-op
-    let key = format!("grp/compute/{}", agent.node_id());
-    assert_eq!(agent.get(&key), None, "tombstone stands after double leave");
-}
-
-#[tokio::test]
-async fn test_join_group_published_to_store() {
-    let agent = make_agent();
-    agent.join_group("compute");
-    let key = format!("grp/compute/{}", agent.node_id());
-    assert_eq!(agent.get(&key), Some(Bytes::from_static(b"1")));
-}
-
-#[tokio::test]
-async fn test_leave_group_tombstones_store_entry() {
-    let agent = make_agent();
-    agent.join_group("compute");
-    agent.leave_group("compute");
-    let key = format!("grp/compute/{}", agent.node_id());
-    assert_eq!(agent.get(&key), None, "leave_group should tombstone the membership key");
 }
 
 #[tokio::test]
@@ -1574,86 +1043,6 @@ async fn test_state_response_interns_keys() {
         crate::store::intern_pool_len() > pool_before,
         "StateResponse should intern the key when intern_keys = true",
     );
-}
-
-// ── Variable boundary opacity ─────────────────────────────────────────────
-
-#[test]
-fn test_opacity_zero_when_channel_empty() {
-    use crate::signal::SignalHandlers;
-    let handlers = SignalHandlers::new(Duration::from_secs(600));
-    let kind: Arc<str> = Arc::from("probe");
-    let _rx = handlers.register_with_capacity(kind.clone(), 8);
-    // Channel is empty: fill_ratio must be exactly 0.0.
-    assert_eq!(handlers.fill_ratio(&kind), 0.0);
-}
-
-#[test]
-fn test_opacity_one_when_channel_full() {
-    use crate::signal::{Signal, SignalHandlers};
-    let handlers = SignalHandlers::new(Duration::from_secs(600));
-    let kind: Arc<str> = Arc::from("probe");
-    let _rx = handlers.register_with_capacity(kind.clone(), 4);
-    let sender = NodeId::new("127.0.0.1", 1).unwrap();
-    let sig = Signal {
-        kind: kind.clone(),
-        scope: SignalScope::System,
-        payload: Bytes::new(),
-        sender: sender.clone(),
-        nonce: 1,
-    };
-    // Fill all 4 slots.
-    for _ in 0..4 {
-        handlers.deliver(&sig);
-    }
-    // Channel is full: fill_ratio must be exactly 1.0.
-    assert_eq!(handlers.fill_ratio(&kind), 1.0);
-}
-
-#[tokio::test]
-async fn test_individual_scope_bypasses_opacity() {
-    use crate::signal::{Signal, SignalHandlers};
-    let handlers = SignalHandlers::new(Duration::from_secs(600));
-    let kind: Arc<str> = Arc::from("invoke");
-    let node_id = NodeId::new("127.0.0.1", 1).unwrap();
-    // Register with depth 1 and immediately fill it.
-    let mut rx = handlers.register_with_capacity(kind.clone(), 1);
-    let filler = Signal {
-        kind: kind.clone(),
-        scope: SignalScope::System,
-        payload: Bytes::new(),
-        sender: node_id.clone(),
-        nonce: 99,
-    };
-    handlers.deliver(&filler);
-    assert_eq!(handlers.fill_ratio(&kind), 1.0, "channel must be full before opacity test");
-
-    // Drain the fill signal so there is room for the Individual signal.
-    let _ = rx.recv().await;
-
-    // Now emit an Individual-scoped signal via a real agent so the opacity path
-    // in emit() is exercised. Opacity is 0.0 after drain, so this is a clean
-    // baseline check — the important property is that Individual scope never
-    // *skips* delivery even when opacity would otherwise reject it.
-    let agent = GossipAgent::new(node_id.clone(), GossipConfig::default());
-    let mut agent_rx = agent.signal_rx_with_capacity("invoke", 4);
-    // Fill the agent's handler channel (depth 4) completely.
-    let fill_sig = Signal {
-        kind: kind.clone(),
-        scope: SignalScope::System,
-        payload: Bytes::new(),
-        sender: node_id.clone(),
-        nonce: 100,
-    };
-    // Access internal handlers via emit() paths by constructing the test directly
-    // on the public API: emit Individual to self — must always be delivered.
-    let admitted = agent.emit("invoke", SignalScope::Individual(node_id.clone()), Bytes::from_static(b"req"));
-    // admitted may be false (no gossip shard running) but local delivery must happen.
-    let _ = admitted;
-    let result = tokio::time::timeout(Duration::from_millis(100), agent_rx.recv()).await;
-    assert!(result.is_ok() && result.unwrap().is_some(),
-        "Individual signal must be delivered regardless of opacity");
-    drop(fill_sig);
 }
 
 // ── signal_once ───────────────────────────────────────────────────────────
@@ -1892,54 +1281,6 @@ async fn test_watch_stops_on_handle_drop() {
     assert_eq!(fired.load(Ordering::Relaxed), count_at_drop, "no fires after handle drop");
 }
 
-// ── quorum ────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_quorum_false_initially() {
-    let agent = make_agent();
-    assert!(!agent.quorum("contract.available", 1, Duration::from_secs(10)));
-}
-
-#[test]
-fn test_quorum_true_after_delivery() {
-    let agent = make_agent();
-    // emit() → deliver() is synchronous; no sleep needed.
-    let _ = agent.emit("contract.available", SignalScope::System, Bytes::new());
-    assert!(
-        agent.quorum("contract.available", 1, Duration::from_secs(10)),
-        "quorum(k, 1, 10s) must be true after one delivery",
-    );
-}
-
-#[test]
-fn test_quorum_distinct_senders() {
-    use crate::signal::{Signal, SignalHandlers};
-    let handlers = SignalHandlers::new(Duration::from_secs(600));
-    let kind: Arc<str> = Arc::from("test.quorum.distinct");
-    let sender_a = NodeId::new("127.0.0.1", 1001).unwrap();
-    let sender_b = NodeId::new("127.0.0.1", 1002).unwrap();
-
-    let sig = |sender: NodeId, nonce: u64| Signal {
-        kind: kind.clone(), scope: SignalScope::System,
-        payload: Bytes::new(), sender, nonce,
-    };
-
-    // Two signals from sender_a — still only one distinct sender.
-    handlers.deliver(&sig(sender_a.clone(), 1));
-    handlers.deliver(&sig(sender_a.clone(), 2));
-    assert!(
-        !handlers.quorum(&kind, 2, Duration::from_secs(10)),
-        "two signals from the same sender must not satisfy quorum(k, 2)",
-    );
-
-    // Add sender_b — now two distinct senders.
-    handlers.deliver(&sig(sender_b, 3));
-    assert!(
-        handlers.quorum(&kind, 2, Duration::from_secs(10)),
-        "two distinct senders must satisfy quorum(k, 2)",
-    );
-}
-
 // ── manage_opacity governor ───────────────────────────────────────────────
 
 #[tokio::test]
@@ -2035,86 +1376,6 @@ async fn test_manage_opacity_gate_vetoes_then_library_overrides() {
         result.is_ok() && result.unwrap().is_some(),
         "library must override gate and emit BOUNDARY_OPAQUE when fill == 1.0",
     );
-}
-
-// ── scan_prefix ───────────────────────────────────────────────────────────
-
-#[test]
-fn test_scan_prefix_returns_matching_live_entries() {
-    let agent = make_agent();
-    let _ = agent.set("load/node-a", b"state-a".to_vec());
-    let _ = agent.set("load/node-b", b"state-b".to_vec());
-    let _ = agent.set("other/key",   b"other".to_vec());
-
-    let mut entries = agent.scan_prefix("load/");
-    entries.sort_by(|(a, _), (b, _)| a.cmp(b));
-    assert_eq!(entries.len(), 2);
-    assert_eq!(&*entries[0].0, "load/node-a");
-    assert_eq!(entries[0].1, Bytes::from_static(b"state-a"));
-    assert_eq!(&*entries[1].0, "load/node-b");
-    assert_eq!(entries[1].1, Bytes::from_static(b"state-b"));
-}
-
-#[test]
-fn test_scan_prefix_excludes_tombstones() {
-    let agent = make_agent();
-    let _ = agent.set("load/node-a", b"alive".to_vec());
-    let _ = agent.set("load/node-b", b"alive".to_vec());
-    let _ = agent.delete("load/node-a");
-
-    let entries = agent.scan_prefix("load/");
-    assert_eq!(entries.len(), 1);
-    assert_eq!(&*entries[0].0, "load/node-b");
-}
-
-#[test]
-fn test_scan_prefix_no_match_returns_empty() {
-    let agent = make_agent();
-    let _ = agent.set("load/node-a", b"x".to_vec());
-    assert_eq!(agent.scan_prefix("grp/").len(), 0);
-}
-
-// ── opacity ───────────────────────────────────────────────────────────────
-
-#[test]
-fn test_opacity_exposed_on_agent() {
-    let agent = make_agent();
-    assert_eq!(agent.opacity("task"), 0.0, "no handler: fully transparent");
-
-    // Cap=1: at opacity=0.0 the first emit is always admitted, filling the slot.
-    // Avoids the probabilistic mid-fill window that exists with larger capacities.
-    let _rx = agent.signal_rx_with_capacity("task", 1);
-    assert_eq!(agent.opacity("task"), 0.0, "empty channel: fully transparent");
-
-    let _ = agent.emit("task", SignalScope::System, Bytes::new());
-    assert_eq!(agent.opacity("task"), 1.0, "full channel: fully opaque");
-}
-
-// ── pheromone trail ───────────────────────────────────────────────────────
-
-#[test]
-fn test_pheromone_trail_write_read_and_evaporate() {
-    let agent = make_agent();
-    let load_key = format!("{}worker-1", kv_ns::LOAD);
-
-    // Worker writes its trail.
-    let _ = agent.set(load_key.clone(), b"queue=0".to_vec());
-    let trails = agent.scan_prefix(kv_ns::LOAD);
-    assert_eq!(trails.len(), 1);
-    assert_eq!(trails[0].1, Bytes::from_static(b"queue=0"));
-
-    // State update on next tick — LWW keeps exactly one entry per worker key.
-    // We do not assert the specific winning value: two writes within the same
-    // millisecond have equal timestamps and LWW retains the first. The critical
-    // invariant is that the store holds exactly one entry, not N.
-    let _ = agent.set(load_key.clone(), b"queue=3".to_vec());
-    assert_eq!(agent.scan_prefix(kv_ns::LOAD).len(), 1,
-               "update overwrites in place — store has one entry per worker");
-
-    // Graceful shutdown: tombstone evaporates the trail immediately.
-    let _ = agent.delete(load_key);
-    assert_eq!(agent.scan_prefix(kv_ns::LOAD).len(), 0,
-               "tombstone evaporates pheromone trail");
 }
 
 // ── competitive response ──────────────────────────────────────────────────
@@ -2539,75 +1800,6 @@ async fn test_advertise_persistent_late_joiner_discovers_capability() {
         agent.scan_prefix(kv_ns::ADVERTISE).is_empty(),
         "capability should be tombstoned after handle drop"
     );
-}
-
-// ── H3: suggest_leader wired into group_propose ───────────────────────────
-
-#[test]
-fn test_suggest_leader_weighs_trust_over_load() {
-    use crate::signal::{encode_load_state, LoadState};
-    use crate::consensus_ns;
-
-    let agent = make_agent();
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
-
-    let node_b = NodeId::new("127.0.0.1", 7011).unwrap();
-    let node_c = NodeId::new("127.0.0.1", 7012).unwrap();
-    let _ = agent.set(format!("grp/workers/{}", node_b), Bytes::from_static(b"1"));
-    let _ = agent.set(format!("grp/workers/{}", node_c), Bytes::from_static(b"1"));
-
-    // B is moderately loaded (0.6) but is trusted by 2 members.
-    // C is lightly loaded (0.2) but has no trust declarations.
-    // Score B = 0.6 / (1.0 + 2.0) = 0.20
-    // Score C = 0.2 / (1.0 + 0.0) = 0.20  (tie; without trust C wins)
-    // Use B with load 0.6, trust=2 vs C with load 0.1, trust=0.
-    // Score B = 0.6 / 3 = 0.20; Score C = 0.1 / 1 = 0.10 → C still wins.
-    // Instead: B load=0.6 trust=3 → 0.6/4=0.15; C load=0.1 trust=0 → 0.1/1=0.10 → C wins still.
-    // Let's make B trusted enough: B load=0.8 trust=4 → 0.8/5=0.16; C load=0.2 trust=0 → 0.20 → B wins.
-    let b_state = LoadState { fill_ratio: 0.8, is_opaque: false, written_at_ms: now_ms };
-    let c_state = LoadState { fill_ratio: 0.2, is_opaque: false, written_at_ms: now_ms };
-    let _ = agent.set(format!("sys/load/{}/task", node_b), encode_load_state(&b_state));
-    let _ = agent.set(format!("sys/load/{}/task", node_c), encode_load_state(&c_state));
-
-    // Declare 4 trust-slice entries that all name B (simulating 4 group members trusting B).
-    let trusted_b = vec![node_b.clone()];
-    for port in [7020u16, 7021, 7022, 7023] {
-        let voter = NodeId::new("127.0.0.1", port).unwrap();
-        let encoded = bincode::serde::encode_to_vec(&trusted_b, crate::framing::bincode_cfg()).unwrap();
-        let _ = agent.set(
-            format!("{}{}/{}", consensus_ns::TRUST, "workers", voter),
-            encoded,
-        );
-    }
-
-    // B score = 0.8 / (1 + 4) = 0.16; C score = 0.2 / (1 + 0) = 0.20 → B preferred.
-    let suggested = agent.suggest_leader("workers", "task", Duration::from_secs(600));
-    assert_eq!(suggested, node_b, "B should be preferred despite higher load because it has higher trust");
-}
-
-#[test]
-fn test_suggest_leader_returns_least_loaded_member() {
-    use crate::signal::{encode_load_state, LoadState};
-
-    let agent = make_agent();
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
-
-    // Register two group members via Layer I.
-    let node_a = NodeId::new("127.0.0.1", 7001).unwrap();
-    let node_b = NodeId::new("127.0.0.1", 7002).unwrap();
-    let _ = agent.set(format!("grp/workers/{}", node_a), Bytes::from_static(b"1"));
-    let _ = agent.set(format!("grp/workers/{}", node_b), Bytes::from_static(b"1"));
-
-    // A is heavily loaded; B is idle.
-    let heavy = LoadState { fill_ratio: 0.9, is_opaque: true,  written_at_ms: now_ms };
-    let light = LoadState { fill_ratio: 0.1, is_opaque: false, written_at_ms: now_ms };
-    let _ = agent.set(format!("sys/load/{}/task", node_a), encode_load_state(&heavy));
-    let _ = agent.set(format!("sys/load/{}/task", node_b), encode_load_state(&light));
-
-    let suggested = agent.suggest_leader("workers", "task", Duration::from_secs(600));
-    assert_eq!(suggested, node_b, "suggest_leader should pick the lighter-loaded member");
 }
 
 // ── H4: group_quorum filters by current Layer I membership ────────────────

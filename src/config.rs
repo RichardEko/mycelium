@@ -688,3 +688,140 @@ impl GossipConfig {
         Ok(config)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::node_id::NodeId;
+
+    #[test]
+    fn validate_rejects_empty_bind_address() {
+        let mut cfg = GossipConfig::default();
+        cfg.bind_address = String::new();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_zero_port() {
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = 0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_zero_ttl() {
+        let mut cfg = GossipConfig::default();
+        cfg.default_ttl = 0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_zero_writer_channel_depth() {
+        let mut cfg = GossipConfig::default();
+        cfg.writer_channel_depth = 0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_default_is_valid() {
+        assert!(GossipConfig::default().validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_zero_gossip_channel_capacity() {
+        let mut cfg = GossipConfig::default();
+        cfg.gossip_channel_capacity = 0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_zero_max_seen_entries() {
+        let mut cfg = GossipConfig::default();
+        cfg.max_seen_entries = 0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_zero_peer_eviction_intervals() {
+        let mut cfg = GossipConfig::default();
+        cfg.peer_eviction_intervals = 0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_zero_gossip_shards() {
+        let mut cfg = GossipConfig::default();
+        cfg.gossip_shards = 0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn roundtrip_toml() {
+        let mut original = GossipConfig::default();
+        original.bind_port = 9100;
+        original.bind_address = "0.0.0.0".to_string();
+        original.default_ttl = 7;
+        original.health_check_interval_secs = 3;
+        original.bootstrap_peers = vec![
+            NodeId::new("127.0.0.1", 9101).unwrap(),
+            NodeId::new("127.0.0.1", 9102).unwrap(),
+        ];
+        let toml_str = toml::to_string(&original).expect("serialise to TOML");
+        let roundtripped: GossipConfig = toml::from_str(&toml_str).expect("deserialise from TOML");
+        assert_eq!(roundtripped, original, "all fields must survive a TOML round-trip");
+    }
+
+    #[test]
+    fn apply_env_overrides_sets_field() {
+        struct EnvGuard(&'static str, Option<String>);
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                match &self.1 {
+                    Some(v) => std::env::set_var(self.0, v),
+                    None    => std::env::remove_var(self.0),
+                }
+            }
+        }
+        let var = "GOSSIP_MAX_SEEN_ENTRIES";
+        let _guard = EnvGuard(var, std::env::var(var).ok());
+        std::env::set_var(var, "12345");
+        let mut cfg = GossipConfig::default();
+        cfg.apply_env_overrides().expect("apply_env_overrides must not fail");
+        assert_eq!(cfg.max_seen_entries, 12345);
+    }
+
+    #[test]
+    fn validate_rejects_max_connections_above_limit() {
+        let mut cfg = GossipConfig::default();
+        cfg.max_connections = 65536;
+        assert!(cfg.validate().is_err(), "max_connections = 65536 should fail validation");
+    }
+
+    #[test]
+    fn validate_rejects_reconnect_backoff_above_limit() {
+        let mut cfg = GossipConfig::default();
+        cfg.reconnect_backoff_secs = 301;
+        assert!(cfg.validate().is_err(), "reconnect_backoff_secs = 301 should fail validation");
+    }
+
+    #[test]
+    fn validate_rejects_zero_ping_peer_sample_size() {
+        let mut cfg = GossipConfig::default();
+        cfg.ping_peer_sample_size = 0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_zero_tcp_accept_backlog() {
+        let mut cfg = GossipConfig::default();
+        cfg.tcp_accept_backlog = 0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_excessive_health_check_interval() {
+        let mut cfg = GossipConfig::default();
+        cfg.health_check_interval_secs = 3601;
+        assert!(cfg.validate().is_err(), "health_check_interval_secs = 3601 should fail validation");
+    }
+}

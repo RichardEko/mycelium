@@ -458,3 +458,90 @@ pub(crate) fn is_connection_closed(e: &GossipError) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::{Bytes, BytesMut};
+    use std::sync::Arc;
+    use tokio::{io::AsyncWriteExt, net::{TcpListener, TcpStream}};
+
+    #[test]
+    fn ttl_offset_matches_wire_layout() {
+        let update = GossipUpdate {
+            nonce:        0xABCD_EF01_2345_6789,
+            sender:       0x1111_2222_3333_4444,
+            ttl:          0xAA,
+            is_tombstone: false,
+            timestamp:    0,
+            key:          Arc::from("k"),
+            value:        Bytes::new(),
+        };
+        let encoded = bincode::serde::encode_to_vec(
+            WireMessage::Data(update), bincode_cfg(),
+        ).unwrap();
+        assert_eq!(
+            encoded[TTL_OFFSET], 0xAA,
+            "TTL_OFFSET={} does not point at ttl byte; wire layout may have changed",
+            TTL_OFFSET,
+        );
+    }
+
+    #[test]
+    fn nonce_offset_matches_wire_layout() {
+        let update = GossipUpdate {
+            nonce:        0xABCD_EF01_2345_6789,
+            sender:       0x1111_2222_3333_4444,
+            ttl:          5,
+            is_tombstone: false,
+            timestamp:    0,
+            key:          Arc::from("k"),
+            value:        Bytes::new(),
+        };
+        let encoded = bincode::serde::encode_to_vec(
+            WireMessage::Data(update), bincode_cfg(),
+        ).unwrap();
+        let nonce = u64::from_le_bytes(
+            encoded[NONCE_OFFSET..NONCE_OFFSET + 8].try_into().unwrap(),
+        );
+        assert_eq!(
+            nonce, 0xABCD_EF01_2345_6789,
+            "NONCE_OFFSET={} does not point at the nonce field; wire layout may have changed",
+            NONCE_OFFSET,
+        );
+    }
+
+    #[tokio::test]
+    async fn read_frame_rejects_wrong_version() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut writer = TcpStream::connect(addr).await.unwrap();
+        let (mut reader, _) = listener.accept().await.unwrap();
+        let payload = b"test";
+        let total = (1u32 + payload.len() as u32).to_be_bytes();
+        writer.write_all(&total).await.unwrap();
+        writer.write_all(&[0u8]).await.unwrap();
+        writer.write_all(payload).await.unwrap();
+        let mut buf = BytesMut::new();
+        let result = read_frame(&mut reader, &mut buf).await;
+        assert!(result.is_err(), "wrong version should be rejected");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("wire version"), "error should mention wire version: {}", msg);
+    }
+
+    #[tokio::test]
+    async fn read_frame_accepts_correct_version() {
+        let (mut writer, mut reader) = {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let w = TcpStream::connect(addr).await.unwrap();
+            let (r, _) = listener.accept().await.unwrap();
+            (w, r)
+        };
+        let payload = b"hello";
+        write_frame(&mut writer, payload).await.unwrap();
+        let mut buf = BytesMut::new();
+        read_frame(&mut reader, &mut buf).await.unwrap();
+        assert_eq!(&buf[..], payload);
+    }
+}

@@ -16,7 +16,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::{io::BufReader, net::TcpStream, sync::{mpsc, mpsc::error::TrySendError, watch}};
+use tokio::{io::BufReader, net::TcpStream, sync::{mpsc::error::TrySendError, watch}};
 use tracing::{error, warn};
 
 /// Shared state threaded into every inbound connection handler.

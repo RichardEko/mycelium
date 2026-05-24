@@ -612,4 +612,62 @@ mod tests {
             None,
         );
     }
+
+    // ── suggest_leader ────────────────────────────────────────────────────
+
+    fn make_agent_for_suggest() -> crate::GossipAgent {
+        crate::GossipAgent::new(nid(0), crate::GossipConfig::default())
+    }
+
+    #[test]
+    fn suggest_leader_weighs_trust_over_load() {
+        use crate::signal::{encode_load_state, LoadState};
+        use crate::consensus_ns;
+
+        let agent = make_agent_for_suggest();
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+
+        let node_b = nid(7011);
+        let node_c = nid(7012);
+        let _ = agent.set(format!("grp/workers/{}", node_b), bytes::Bytes::from_static(b"1"));
+        let _ = agent.set(format!("grp/workers/{}", node_c), bytes::Bytes::from_static(b"1"));
+
+        let b_state = LoadState { fill_ratio: 0.8, is_opaque: false, written_at_ms: now_ms };
+        let c_state = LoadState { fill_ratio: 0.2, is_opaque: false, written_at_ms: now_ms };
+        let _ = agent.set(format!("sys/load/{}/task", node_b), encode_load_state(&b_state));
+        let _ = agent.set(format!("sys/load/{}/task", node_c), encode_load_state(&c_state));
+
+        let trusted_b = vec![node_b.clone()];
+        for port in [7020u16, 7021, 7022, 7023] {
+            let voter = nid(port);
+            let encoded = bincode::serde::encode_to_vec(&trusted_b, crate::framing::bincode_cfg()).unwrap();
+            let _ = agent.set(format!("{}{}/{}", consensus_ns::TRUST, "workers", voter), encoded);
+        }
+
+        let suggested = agent.suggest_leader("workers", "task", std::time::Duration::from_secs(600));
+        assert_eq!(suggested, node_b, "B should be preferred despite higher load because it has higher trust");
+    }
+
+    #[test]
+    fn suggest_leader_returns_least_loaded_member() {
+        use crate::signal::{encode_load_state, LoadState};
+
+        let agent = make_agent_for_suggest();
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+
+        let node_a = nid(7001);
+        let node_b = nid(7002);
+        let _ = agent.set(format!("grp/workers/{}", node_a), bytes::Bytes::from_static(b"1"));
+        let _ = agent.set(format!("grp/workers/{}", node_b), bytes::Bytes::from_static(b"1"));
+
+        let heavy = LoadState { fill_ratio: 0.9, is_opaque: true,  written_at_ms: now_ms };
+        let light = LoadState { fill_ratio: 0.1, is_opaque: false, written_at_ms: now_ms };
+        let _ = agent.set(format!("sys/load/{}/task", node_a), encode_load_state(&heavy));
+        let _ = agent.set(format!("sys/load/{}/task", node_b), encode_load_state(&light));
+
+        let suggested = agent.suggest_leader("workers", "task", std::time::Duration::from_secs(600));
+        assert_eq!(suggested, node_b, "suggest_leader should pick the lighter-loaded member");
+    }
 }
