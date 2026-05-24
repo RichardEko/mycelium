@@ -16,8 +16,8 @@
 //!   group's filter self-joins via `join_group`.
 
 use crate::capability::{
-    CallerContext, Capability, CapFilter, CapabilityEvent,
-    CapabilityHandle,
+    CallerContext, CapEntry, Capability, CapFilter, CapabilityEvent,
+    CapabilityHandle, ReqEntry,
     RequirementHandle, RequirementStatus,
 };
 use crate::node_id::NodeId;
@@ -109,10 +109,11 @@ impl GossipAgent {
         let kv_key: Arc<str>       = Arc::from(format!(
             "cap/{}/{}/{}", ctx.node_id, capability.namespace, capability.name,
         ).as_str());
-        let cap_arc                = Arc::new(capability);
+        let interval_ms = interval.as_millis() as u64;
+        let entry = Arc::new(CapEntry { capability, refresh_interval_ms: interval_ms });
         let payload_fn: super::kv::PersistPayloadFn = {
-            let cap = Arc::clone(&cap_arc);
-            Arc::new(move || cap.encode())
+            let e = Arc::clone(&entry);
+            Arc::new(move || e.encode())
         };
         self.spawn_task(run_kv_persist_task(
             ctx, cancel_rx, shutdown_rx, kv_key, interval, payload_fn, None,
@@ -142,14 +143,18 @@ impl GossipAgent {
         let mut out = Vec::new();
         for (key, bytes, hlc_ts) in scan_prefix_kv_with_ts(&self.kv_state, "cap/") {
             if is_cap_locality_key(&key) { continue; }
-            if let Some(max_age) = filter.max_age {
-                if is_stale(hlc_ts, now_ms, max_age) { continue; }
-            }
             let Some((node_id, _ns, _name)) = parse_cap_key_or_warn("cap/", &key) else { continue };
-            let Some(cap) = Capability::decode(&bytes) else {
+            let Some(entry) = CapEntry::decode(&bytes)
+                .or_else(|| Capability::decode(&bytes).map(|cap| CapEntry { capability: cap, refresh_interval_ms: 60_000 }))
+            else {
                 warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");
                 continue;
             };
+            if !entry.is_fresh(hlc_ts, now_ms) { continue; }
+            if let Some(max_age) = filter.max_age {
+                if is_stale(hlc_ts, now_ms, max_age) { continue; }
+            }
+            let cap = entry.capability;
             if filter.matches(&cap) && ctx.can_see(&cap) {
                 out.push((node_id, cap));
             }
@@ -211,14 +216,19 @@ impl GossipAgent {
                             }
                         }
                         // Re-scan and diff against `known`.
+                        let now_ms = age_now_ms();
                         let mut current: AHashMap<(NodeId, Arc<str>, Arc<str>), Capability> = AHashMap::new();
-                        for (key, bytes) in scan_prefix_kv(&kv_state, "cap/") {
+                        for (key, bytes, hlc_ts) in scan_prefix_kv_with_ts(&kv_state, "cap/") {
                             if is_cap_locality_key(&key) { continue; }
                             let Some((node_id, ns, name)) = parse_cap_key_or_warn("cap/", &key) else { continue };
-                            let Some(cap) = Capability::decode(&bytes) else {
-            warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");
-            continue;
-        };
+                            let Some(entry) = CapEntry::decode(&bytes)
+                                .or_else(|| Capability::decode(&bytes).map(|cap| CapEntry { capability: cap, refresh_interval_ms: 60_000 }))
+                            else {
+                                warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");
+                                continue;
+                            };
+                            if !entry.is_fresh(hlc_ts, now_ms) { continue; }
+                            let cap = entry.capability;
                             if !filter.matches(&cap) { continue; }
                             current.insert((node_id, ns, name), cap);
                         }
@@ -284,11 +294,15 @@ impl GossipAgent {
         let opacity_key: Arc<str> = Arc::from(format!(
             "sys/load/{}/req/{}/{}", ctx.node_id, filter.namespace, filter.name,
         ).as_str());
+        let interval_ms = interval.as_millis() as u64;
         let filter_arc = Arc::new(filter);
-        let filter_for_payload = Arc::clone(&filter_arc);
-        let payload_fn: super::kv::PersistPayloadFn = Arc::new(move || {
-            filter_for_payload.encode()
-        });
+        let payload_fn: super::kv::PersistPayloadFn = {
+            let e = Arc::new(ReqEntry {
+                filter:              (*filter_arc).clone(),
+                refresh_interval_ms: interval_ms,
+            });
+            Arc::new(move || e.encode())
+        };
         self.spawn_task(run_kv_persist_task(
             ctx, cancel_rx, shutdown_rx, kv_key, interval, payload_fn, None,
         ));
@@ -446,14 +460,18 @@ pub(super) fn resolve_filter_against_kv(
     let mut out = Vec::new();
     for (key, bytes, hlc_ts) in scan_prefix_kv_with_ts(kv_state, "cap/") {
         if is_cap_locality_key(&key) { continue; }
-        if let Some(max_age) = filter.max_age {
-            if is_stale(hlc_ts, now_ms, max_age) { continue; }
-        }
         let Some((node_id, _ns, _name)) = parse_cap_key_or_warn("cap/", &key) else { continue };
-        let Some(cap) = Capability::decode(&bytes) else {
+        let Some(entry) = CapEntry::decode(&bytes)
+            .or_else(|| Capability::decode(&bytes).map(|cap| CapEntry { capability: cap, refresh_interval_ms: 60_000 }))
+        else {
             warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");
             continue;
         };
+        if !entry.is_fresh(hlc_ts, now_ms) { continue; }
+        if let Some(max_age) = filter.max_age {
+            if is_stale(hlc_ts, now_ms, max_age) { continue; }
+        }
+        let cap = entry.capability;
         if filter.matches(&cap) {
             out.push((node_id, cap));
         }

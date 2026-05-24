@@ -10,7 +10,7 @@
 //! [`WiringStatus`].
 
 use crate::capability::{
-    Capability, CapFilter, CapRanking, CapValue, RankingOrder,
+    CapEntry, Capability, CapFilter, CapRanking, CapValue, RankingOrder,
     WiredEmitOutcome, WiringProvider, WiringStatus, partial_cmp_cap,
 };
 use crate::locality::{LocalityPath, LocalityPreference};
@@ -23,7 +23,7 @@ use tracing::warn;
 
 use super::GossipAgent;
 use super::capability_ops::{
-    await_shutdown, is_cap_locality_key, parse_cap_key_or_warn, scan_prefix_kv,
+    await_shutdown, is_cap_locality_key, now_ms, parse_cap_key_or_warn, scan_prefix_kv_with_ts,
     WATCHER_DEBOUNCE_WINDOW,
 };
 
@@ -248,15 +248,20 @@ pub(super) fn wiring_snapshot(
     // (provider, sort_value_if_any) tuples — we keep the sort key alongside
     // each provider so the final sort doesn't need a second lookup.
     let mut keyed: Vec<(WiringProvider, Option<CapValue>)> = Vec::new();
+    let now = now_ms();
 
     // Standalone-node providers from cap/.
-    for (key, bytes) in scan_prefix_kv(kv_state, "cap/") {
+    for (key, bytes, hlc_ts) in scan_prefix_kv_with_ts(kv_state, "cap/") {
         if is_cap_locality_key(&key) { continue; }
         let Some((node_id, _ns, _name)) = parse_cap_key_or_warn("cap/", &key) else { continue };
-        let Some(cap) = Capability::decode(&bytes) else {
+        let Some(cap_entry) = CapEntry::decode(&bytes)
+            .or_else(|| Capability::decode(&bytes).map(|cap| CapEntry { capability: cap, refresh_interval_ms: 60_000 }))
+        else {
             warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");
             continue;
         };
+        if !cap_entry.is_fresh(hlc_ts, now) { continue; }
+        let cap = cap_entry.capability;
         if !filter.matches(&cap) { continue; }
         let sort_value = filter.ranking.as_ref()
             .and_then(|r| cap.attributes.get(&r.attribute).cloned());
@@ -272,12 +277,16 @@ pub(super) fn wiring_snapshot(
     // coverage if they want. The per-group best ranking value is the
     // most-ranking-favoured value across contributors.
     let mut groups: AHashMap<Arc<str>, (Vec<NodeId>, Option<CapValue>)> = AHashMap::new();
-    for (key, bytes) in scan_prefix_kv(kv_state, "gcap/") {
+    for (key, bytes, hlc_ts) in scan_prefix_kv_with_ts(kv_state, "gcap/") {
         let Some((group, contributor)) = parse_gcap_key(&key, filter) else { continue };
-        let Some(cap) = Capability::decode(&bytes) else {
+        let Some(cap_entry) = CapEntry::decode(&bytes)
+            .or_else(|| Capability::decode(&bytes).map(|cap| CapEntry { capability: cap, refresh_interval_ms: 60_000 }))
+        else {
             warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");
             continue;
         };
+        if !cap_entry.is_fresh(hlc_ts, now) { continue; }
+        let cap = cap_entry.capability;
         if !filter.matches(&cap) { continue; }
         let candidate = filter.ranking.as_ref()
             .and_then(|r| cap.attributes.get(&r.attribute).cloned());

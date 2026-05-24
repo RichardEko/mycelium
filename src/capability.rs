@@ -390,6 +390,42 @@ impl Capability {
     }
 }
 
+/// KV-wire wrapper for `cap/` and `gcap/` entries. Carries the advertiser's
+/// intended refresh interval so any reader can apply the 3× evaporation
+/// threshold without any global configuration.
+///
+/// Old-format entries (raw `Capability` bytes from pre-pheromone nodes) decode
+/// via the `Capability::decode` fallback with `refresh_interval_ms = 60_000`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CapEntry {
+    pub capability:          Capability,
+    pub refresh_interval_ms: u64,
+}
+
+impl CapEntry {
+    /// True when the entry was refreshed (per its HLC timestamp) within the
+    /// 3× evaporation window: `now_ms − written_ms ≤ 3 × refresh_interval_ms`.
+    pub fn is_fresh(&self, hlc_ts: u64, now_ms: u64) -> bool {
+        let written_ms = crate::hlc::physical_ms(hlc_ts);
+        now_ms.saturating_sub(written_ms) <= 3 * self.refresh_interval_ms
+    }
+}
+
+/// KV-wire wrapper for `req/` entries. Mirrors `CapEntry`'s pheromone model
+/// so stale requirement declarations from crashed nodes age out automatically.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ReqEntry {
+    pub filter:              CapFilter,
+    pub refresh_interval_ms: u64,
+}
+
+impl ReqEntry {
+    pub fn is_fresh(&self, hlc_ts: u64, now_ms: u64) -> bool {
+        let written_ms = crate::hlc::physical_ms(hlc_ts);
+        now_ms.saturating_sub(written_ms) <= 3 * self.refresh_interval_ms
+    }
+}
+
 // ── Encode/decode (bincode) ─────────────────────────────────────────────────
 
 macro_rules! impl_bincode_codec {
@@ -412,6 +448,8 @@ macro_rules! impl_bincode_codec {
 impl_bincode_codec!(Capability);
 impl_bincode_codec!(CapFilter);
 impl_bincode_codec!(CapabilityGroupDef);
+impl_bincode_codec!(CapEntry);
+impl_bincode_codec!(ReqEntry);
 
 #[cfg(test)]
 mod tests {
@@ -507,6 +545,38 @@ mod tests {
         let bytes = def.encode();
         let decoded = CapabilityGroupDef::decode(&bytes).expect("decode");
         assert_eq!(def, decoded);
+    }
+
+    #[test]
+    fn cap_entry_encode_decode() {
+        let cap   = Capability::new("compute", "gpu").with("vram_gb", iv(80));
+        let entry = CapEntry { capability: cap.clone(), refresh_interval_ms: 5_000 };
+        let bytes   = entry.encode();
+        let decoded = CapEntry::decode(&bytes).expect("decode");
+        assert_eq!(decoded.capability, cap);
+        assert_eq!(decoded.refresh_interval_ms, 5_000);
+    }
+
+    #[test]
+    fn cap_entry_freshness() {
+        use crate::hlc::Hlc;
+        let entry = CapEntry { capability: Capability::new("ai", "llm"), refresh_interval_ms: 1_000 };
+        let hlc        = Hlc::new();
+        let ts         = hlc.tick();
+        let written_ms = crate::hlc::physical_ms(ts);
+        assert!( entry.is_fresh(ts, written_ms + 2_500)); // 2.5 s < 3×1 s = 3 s
+        assert!(!entry.is_fresh(ts, written_ms + 4_000)); // 4.0 s > 3 s
+    }
+
+    #[test]
+    fn req_entry_freshness() {
+        use crate::hlc::Hlc;
+        let entry = ReqEntry { filter: CapFilter::new("ai", "llm"), refresh_interval_ms: 500 };
+        let hlc        = Hlc::new();
+        let ts         = hlc.tick();
+        let written_ms = crate::hlc::physical_ms(ts);
+        assert!( entry.is_fresh(ts, written_ms + 1_400)); // 1.4 s < 3×0.5 s = 1.5 s
+        assert!(!entry.is_fresh(ts, written_ms + 1_600)); // 1.6 s > 1.5 s
     }
 
     #[test]

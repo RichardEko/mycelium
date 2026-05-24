@@ -5,7 +5,7 @@
 //! the library never auto-advertises in response to high demand — that's an
 //! application-layer decision (orchestrators, autoscalers, dashboards).
 
-use crate::capability::{Capability, CapFilter, DemandStatus};
+use crate::capability::{CapEntry, Capability, CapFilter, DemandStatus, ReqEntry};
 use crate::node_id::NodeId;
 use ahash::AHashSet;
 use std::sync::Arc;
@@ -13,7 +13,7 @@ use tokio::{sync::watch, time};
 use tracing::warn;
 
 use super::GossipAgent;
-use super::capability_ops::{await_shutdown, is_cap_locality_key, parse_cap_key_or_warn, scan_prefix_kv, WATCHER_DEBOUNCE_WINDOW};
+use super::capability_ops::{await_shutdown, is_cap_locality_key, now_ms, parse_cap_key_or_warn, scan_prefix_kv_with_ts, WATCHER_DEBOUNCE_WINDOW};
 use super::wiring::parse_gcap_key;
 
 impl GossipAgent {
@@ -93,40 +93,47 @@ pub(super) fn demand_snapshot(
     // (namespace, name). We don't deep-compare filter contents — the
     // namespace/name pair is the declared "need shape," and that's what we
     // are scoring demand for.
+    let now = now_ms();
     let mut demanding: AHashSet<NodeId> = AHashSet::new();
-    for (key, bytes) in scan_prefix_kv(kv_state, "req/") {
+    for (key, bytes, hlc_ts) in scan_prefix_kv_with_ts(kv_state, "req/") {
         let Some((node_id, ns, name)) = parse_cap_key_or_warn("req/", &key) else { continue };
         if ns != filter.namespace || name != filter.name { continue; }
-        // Optionally also decode and check filter equality — for v1 we treat
-        // namespace/name as sufficient evidence of declared need. The
-        // bytes-decode is still useful to skip malformed entries.
-        if CapFilter::decode(&bytes).is_none() {
+        let Some(req_entry) = ReqEntry::decode(&bytes)
+            .or_else(|| CapFilter::decode(&bytes).map(|f| ReqEntry { filter: f, refresh_interval_ms: 60_000 }))
+        else {
             warn!(key = %key, "malformed CapFilter under req/ — peer sent bytes that did not decode");
             continue;
-        }
+        };
+        if !req_entry.is_fresh(hlc_ts, now) { continue; }
         demanding.insert(node_id);
     }
 
     // Providers: union of direct cap/ matches and gcap/ contributors.
     let mut providers: AHashSet<NodeId> = AHashSet::new();
-    for (key, bytes) in scan_prefix_kv(kv_state, "cap/") {
+    for (key, bytes, hlc_ts) in scan_prefix_kv_with_ts(kv_state, "cap/") {
         if is_cap_locality_key(&key) { continue; }
         let Some((node_id, _ns, _name)) = parse_cap_key_or_warn("cap/", &key) else { continue };
-        let Some(cap) = Capability::decode(&bytes) else {
+        let Some(cap_entry) = CapEntry::decode(&bytes)
+            .or_else(|| Capability::decode(&bytes).map(|cap| CapEntry { capability: cap, refresh_interval_ms: 60_000 }))
+        else {
             warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");
             continue;
         };
-        if filter.matches(&cap) {
+        if !cap_entry.is_fresh(hlc_ts, now) { continue; }
+        if filter.matches(&cap_entry.capability) {
             providers.insert(node_id);
         }
     }
-    for (key, bytes) in scan_prefix_kv(kv_state, "gcap/") {
+    for (key, bytes, hlc_ts) in scan_prefix_kv_with_ts(kv_state, "gcap/") {
         let Some((_group, contributor)) = parse_gcap_key(&key, filter) else { continue };
-        let Some(cap) = Capability::decode(&bytes) else {
+        let Some(cap_entry) = CapEntry::decode(&bytes)
+            .or_else(|| Capability::decode(&bytes).map(|cap| CapEntry { capability: cap, refresh_interval_ms: 60_000 }))
+        else {
             warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");
             continue;
         };
-        if filter.matches(&cap) {
+        if !cap_entry.is_fresh(hlc_ts, now) { continue; }
+        if filter.matches(&cap_entry.capability) {
             providers.insert(contributor);
         }
     }

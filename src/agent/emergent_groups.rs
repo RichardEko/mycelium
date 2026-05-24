@@ -21,7 +21,7 @@
 //! Pre-C3 each provide + each requirement was its own spawned tokio task.
 //! After C3 it is one task per group, regardless of provides/requires count.
 
-use crate::capability::{Capability, CapFilter, CapabilityGroupDef, CapabilityGroupHandle, WiringStatus};
+use crate::capability::{CapEntry, Capability, CapFilter, CapabilityGroupDef, CapabilityGroupHandle, WiringStatus};
 use crate::node_id::NodeId;
 use crate::signal::{LoadState, encode_load_state};
 use ahash::{AHashMap, AHashSet};
@@ -163,7 +163,9 @@ fn reconcile_emergent_groups(
     let own_prefix = format!("cap/{}/", own);
     for (key, bytes) in scan_prefix_kv(&ctx.kv_state, &own_prefix) {
         if is_cap_locality_key(&key) { continue; }
-        match Capability::decode(&bytes) {
+        let cap = CapEntry::decode(&bytes).map(|e| e.capability)
+            .or_else(|| Capability::decode(&bytes));
+        match cap {
             Some(cap) => own_caps.push(cap),
             None      => warn!(key = %key, "malformed own Capability — local cap/ entry did not decode"),
         }
@@ -297,8 +299,12 @@ async fn run_group_membership_task(
     let mut opaque_written = vec![false; requires.len()];
 
     let write_provide = |key: &Arc<str>, cap: &Capability| {
+        let payload = CapEntry {
+            capability:          cap.clone(),
+            refresh_interval_ms: GCAP_REASSERT_INTERVAL.as_millis() as u64,
+        }.encode();
         let upd = make_gossip_update(
-            &ctx.node_id, ctx.default_ttl, key.clone(), cap.encode(), false, &ctx.hlc,
+            &ctx.node_id, ctx.default_ttl, key.clone(), payload, false, &ctx.hlc,
         );
         apply_and_notify(&ctx.kv_state, &upd);
         dispatch_gossip_try_send(
