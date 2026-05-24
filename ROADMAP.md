@@ -932,22 +932,47 @@ version-coupled, and supports SSE natively.
 └─────────────────────────────────────────────────────┘
 ```
 
-**Minimum Python SDK surface:**
+**Shipped Python SDK surface (`mycelium-py`):**
 
 ```python
+from mycelium import MyceliumAgent
+
 agent = MyceliumAgent(host="127.0.0.1", port=7946)
 
-agent.advertise_capability("compute", "gpu", interval_secs=30)
-agent.declare_requirement("compute", "gpu", interval_secs=30)
+# Capability advertisement & discovery
+handle = agent.advertise_capability("compute", "gpu", interval_secs=30,
+                                    attributes={"model": "A100"},
+                                    authorized_callers=["orchestrator"])
+providers = agent.resolve_capability("compute", "gpu", caller_id="orchestrator")
+status = agent.demand("compute", "gpu")          # → DemandStatus
 
-@agent.on_signal("render-job")
-async def handle(payload: bytes) -> None: ...
+# Signal mesh
+agent.emit("render-job", b"payload", scope="group:gpu-pool")
+async for sig in agent.on_signal("render-job"):  # → Signal
+    print(sig.sender, sig.payload)
 
-agent.emit("render-job", scope="group:gpu-pool", payload=b"...")
-status = agent.demand("compute", "gpu")  # → DemandStatus
+# RPC — caller side
+result = agent.rpc_call(target_node_id, "echo", b"ping", timeout_secs=5)
+replies = agent.scatter_gather([n1, n2], "echo", b"ping", min_ok=1)
+
+# RPC — server side (SSE stream of incoming requests)
+async for req in agent.rpc_serve("echo"):        # → RpcRequest
+    agent.rpc_respond(req, req.payload)
+
+# Gossip KV
+agent.set("my/key", b"value")
+val  = agent.get("my/key")                       # → bytes | None
+agent.delete("my/key")
+keys = agent.keys(prefix="my/")                  # → list[str]
+data = agent.scan_prefix("my/")                  # → dict[str, bytes]
+
+# Actor/Event mailbox
+agent.deliver_event(target_node_id, "task.result", b"payload")
+async for event in agent.mailbox("task.result"): # → MailboxEvent
+    print(event.sender, event.payload)
 ```
 
-Everything else (`watch_capabilities`, `resolve_with_locality`, wiring) comes in a later pass.
+See [`mycelium-py/README.md`](mycelium-py/README.md) for installation and full API reference.
 
 **Why not LangGraph** — LangGraph assumes a central scheduler that directs graph execution:
 "call agent B now, wait for result, then call agent C." This is orthogonal to Mycelium's
@@ -1312,7 +1337,7 @@ Weeks:  0         2          4          6          8         10        12
 | Layer 4 | Session-scoped mesh views: per-caller capability slice at `resolve_capability` | **Complete** |
 | Layer 4 | A2A wire-protocol adapter (language bridge — after MCP) | Planned |
 | Layer 5 | Metrics, Prometheus exporter, Grafana dashboard | Planned |
-| **Production** | Multi-machine integration tests + Docker Compose reference topology | **Blocking** |
+| **Production** | Multi-machine integration tests + Docker Compose reference topology | **Complete** |
 | **Production** | KV persistence: WAL + snapshot/replay; consensus committed-slot durability | **Complete** |
 | **Production** | Security: mTLS peer connections + NodeId keypair + consensus payload signing | **Blocking** |
 | Consistency overlay | `consistent_set`, `consistent_get`, `distributed_lock`, `elect_leader` | Planned |

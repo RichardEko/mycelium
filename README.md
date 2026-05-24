@@ -752,22 +752,99 @@ agent.signal_wired_via_locality(
 
 ---
 
-## Service Layer — Bulk Transfer / Eventing (Planned)
+## Service Layer — RPC, Bulk, Scatter-Gather, Mailbox
 
-Layer 3 introduces HTTP transport for large payloads and a distinct `Event` type for
-transport-bound, connection-scoped, ordered events.
+Layer 3 delivers the service primitives used by the language bridges and the MCP integration.
 
-**Why a distinct `Event` type rather than reusing `Signal`**: the delivery guarantees differ
-fundamentally. A `Signal` is epidemic and best-effort — it can be silently dropped. A Layer 3
-`Event` rides an open transport connection and will not be missed while that connection is live.
-Sharing a type would obscure this difference.
+### Point-to-Point RPC
 
-**Pattern reuse**: the *model* from Layer 2 transfers. Event kinds use the same string constants
-(`invoke.result`, `boundary.opaque`). The "emit to scope, receivers with matching state act"
-principle applies. Only the delivery substrate changes.
+```rust
+// Caller
+let reply = agent.rpc_call(target, "echo", payload, Duration::from_secs(5)).await?;
 
-Layer 3 events are used for streaming token responses, upstream cancel signals on active
-requests, and heartbeats on long-lived transport connections.
+// Responder
+let mut rx = agent.rpc_rx("echo");
+while let Some(req) = rx.recv().await {
+    agent.rpc_respond(&req, req.payload());
+}
+```
+
+### Bulk Payload Transfer
+
+For payloads too large to gossip through every node, `bulk_call` stages the data at a local
+HTTP endpoint and sends only a lightweight ticket over the mesh:
+
+```rust
+// Set http_port in GossipConfig so the target can fetch the staged bytes
+let reply = agent.bulk_call(target, "process", large_bytes, Duration::from_secs(30)).await?;
+```
+
+### Scatter-Gather
+
+Fan out an identical request to multiple targets concurrently; return as soon as `min_ok` replies arrive:
+
+```rust
+let results = agent.scatter_gather(targets, "vote", payload, Duration::from_secs(5), 2).await?;
+```
+
+### Actor/Event Mailboxes
+
+KV-backed durable event delivery. Events survive crashes and are delivered in HLC-causal order:
+
+```rust
+// Sender (any node)
+agent.deliver_event(&target_id, "task.result", result_bytes);
+
+// Receiver — events delivered at-least-once within TTL, tombstoned after delivery
+let (handle, mut rx) = agent.open_mailbox("task.result", 64);
+while let Some(event) = rx.recv().await {
+    process(&event.payload);
+}
+// drop(handle) to cancel the watcher
+```
+
+## Python Language Bridge (`mycelium-py`)
+
+Python agents connect to a running Mycelium node over loopback HTTP (~1 ms overhead).
+No PyO3 FFI — the sidecar pattern works with any language that can speak HTTP.
+
+```sh
+cd mycelium-py
+pip install -e ".[dev]"
+```
+
+```python
+from mycelium import MyceliumAgent
+
+agent = MyceliumAgent("127.0.0.1", 8300)
+
+# Capabilities
+handle = agent.advertise_capability("compute", "gpu", attributes={"model": "A100"})
+providers = agent.resolve_capability("compute", "gpu")
+
+# Signals
+agent.emit("render-job", b"payload", scope="system")
+async for sig in agent.on_signal("render-job"):
+    print(sig.sender, sig.payload)
+
+# RPC
+result = agent.rpc_call(target_id, "echo", b"ping")
+async for req in agent.rpc_serve("echo"):
+    agent.rpc_respond(req, req.payload)
+
+# KV store
+agent.set("my/key", b"value")
+val = agent.get("my/key")   # bytes | None
+
+# Mailbox
+agent.deliver_event(target_id, "task.result", b"done")
+async for event in agent.mailbox("task.result"):
+    print(event.payload)
+```
+
+See [`mycelium-py/README.md`](mycelium-py/README.md) for the full API reference.
+
+---
 
 ## Configuration
 
