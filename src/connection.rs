@@ -6,7 +6,7 @@ use crate::framing::{
     GossipUpdate, SyncEntry, WireMessage, WireMessageV7, ANTI_ENTROPY_NONCE, DATA_TAG,
     NONCE_OFFSET, TTL_OFFSET,
 };
-use crate::signal::{parse_own_grp_key, Signal, SignalScope};
+use crate::signal::{parse_own_grp_key, Signal, SignalScope, signal_kind};
 use crate::store::{apply_and_notify, intern_key, store_hash_acc};
 use crate::node_id::NodeId;
 use crate::writer::{get_or_spawn_writer, request_state, WriterEntry};
@@ -320,13 +320,40 @@ pub(crate) async fn handle_connection(
                         }
                     };
                     if admit {
-                        signal_handlers.deliver(&Signal {
-                            kind: kind.clone(),
-                            scope: scope.clone(),
-                            payload: payload.clone(),
-                            sender: sender.clone(),
-                            nonce,
-                        });
+                        // O(1) fast-path for correlated rpc.result / bulk.result:
+                        // if the correlation nonce is registered in rpc_pending,
+                        // fire the oneshot and skip the signal_handlers fan-out.
+                        let nonce_claimed = if payload.len() >= 8
+                            && (kind.as_ref() == signal_kind::RPC_RESULT
+                                || kind.as_ref() == signal_kind::BULK_RESULT)
+                        {
+                            let call_nonce = u64::from_le_bytes(
+                                payload[..8].try_into().unwrap(),
+                            );
+                            if let Some(tx) = task_ctx.rpc_pending.lock().unwrap().remove(&call_nonce) {
+                                let _ = tx.send(Signal {
+                                    kind: kind.clone(),
+                                    scope: scope.clone(),
+                                    payload: payload.clone(),
+                                    sender: sender.clone(),
+                                    nonce,
+                                });
+                                true
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+                        if !nonce_claimed {
+                            signal_handlers.deliver(&Signal {
+                                kind: kind.clone(),
+                                scope: scope.clone(),
+                                payload: payload.clone(),
+                                sender: sender.clone(),
+                                nonce,
+                            });
+                        }
                         // Quorum evidence: write sys/quorum/{kind}/{sender} to Layer I.
                         // Rate-limited by quorum_evidence_payload — skips write if entry
                         // is less than 1 s old. The write and gossip dispatch are done

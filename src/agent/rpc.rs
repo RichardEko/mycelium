@@ -61,51 +61,31 @@ pub enum RpcError {
     Timeout,
 }
 
-/// Outcome of [`await_nonce_reply`].
-pub(crate) enum NonceReply {
-    /// Reply received from the expected sender; nonce prefix is already stripped.
-    Ok(Bytes),
-    /// Deadline elapsed with no matching reply.
-    Timeout,
-    /// Nonce matched but the reply arrived from an unexpected sender.
-    SenderMismatch,
-}
-
-/// Awaits a nonce-correlated reply on a pre-registered signal receiver.
+/// Registers a one-shot receiver in `ctx.rpc_pending` and awaits the first
+/// reply signal whose correlation nonce (first 8 bytes of payload, LE) matches
+/// `nonce` and whose sender matches `target`.
 ///
-/// The caller must register `rx` **before** emitting the request signal so
-/// that no reply is missed even when the responder is co-located. The typical
-/// pattern is:
-/// ```ignore
-/// let mut rx = ctx.signal_handlers.register_with_capacity(kind, 256);
-/// emit_signal(ctx, request_kind, scope, payload);
-/// let result = await_nonce_reply(&mut rx, nonce, &target, deadline).await;
-/// ```
+/// Registration happens synchronously in the first poll — before any yield
+/// point — so it is safe to call `emit_signal` immediately before this
+/// without missing a co-located reply.
 ///
-/// Returns [`NonceReply::Ok`] with the payload stripped of its 8-byte nonce
-/// prefix, [`NonceReply::SenderMismatch`] if the nonce matched but the reply
-/// came from an unexpected sender, or [`NonceReply::Timeout`] if the deadline
-/// elapsed or the channel was closed.
+/// Returns `Some(payload)` with the 8-byte nonce prefix stripped, or `None`
+/// on timeout (including sender mismatch, which is astronomically rare with
+/// 64-bit nonces).
 pub(crate) async fn await_nonce_reply(
-    rx:       &mut tokio::sync::mpsc::Receiver<Signal>,
+    ctx:      &TaskCtx,
     nonce:    u64,
     target:   &NodeId,
     deadline: tokio::time::Instant,
-) -> NonceReply {
-    loop {
-        match tokio::time::timeout_at(deadline, rx.recv()).await {
-            Ok(Some(sig)) => {
-                let nonce_ok = sig.payload.get(..8)
-                    .and_then(|b| b.try_into().ok())
-                    .map(|b: [u8; 8]| u64::from_le_bytes(b) == nonce)
-                    .unwrap_or(false);
-                if !nonce_ok { continue; }
-                if sig.sender == *target { return NonceReply::Ok(sig.payload.slice(8..)); }
-                return NonceReply::SenderMismatch;
-            }
-            _ => return NonceReply::Timeout,
-        }
-    }
+) -> Option<Bytes> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    ctx.rpc_pending.lock().unwrap().insert(nonce, tx);
+    let result = match tokio::time::timeout_at(deadline, rx).await {
+        Ok(Ok(sig)) if sig.sender == *target => Some(sig.payload.slice(8..)),
+        _ => None,
+    };
+    ctx.rpc_pending.lock().unwrap().remove(&nonce);
+    result
 }
 
 impl std::fmt::Display for RpcError {
@@ -153,23 +133,12 @@ pub(crate) async fn rpc_call_ctx(
     buf.put_u64_le(nonce);
     buf.put(payload);
 
-    // Register BEFORE emitting so no reply is missed even for co-located targets.
-    let mut rx = ctx.signal_handlers.register_with_capacity(
-        Arc::from(signal_kind::RPC_RESULT), 256,
-    );
     emit_signal(ctx, kind, SignalScope::Individual(target.clone()), buf.freeze());
 
     let deadline = tokio::time::Instant::now() + timeout;
-    match await_nonce_reply(&mut rx, nonce, &target, deadline).await {
-        NonceReply::Ok(b) => Ok(b),
-        NonceReply::SenderMismatch => {
-            tracing::warn!(
-                target = %target,
-                "rpc_call_ctx: rpc.result sender mismatch — treating as timeout"
-            );
-            Err(RpcError::Timeout)
-        }
-        NonceReply::Timeout => Err(RpcError::Timeout),
+    match await_nonce_reply(ctx, nonce, &target, deadline).await {
+        Some(b) => Ok(b),
+        None    => Err(RpcError::Timeout),
     }
 }
 

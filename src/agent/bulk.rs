@@ -47,7 +47,7 @@ use tracing::warn;
 
 use super::{GossipAgent, TaskCtx};
 use super::emit_signal;
-use super::rpc::{await_nonce_reply, NonceReply};
+use super::rpc::await_nonce_reply;
 
 // ── Transport adapter ─────────────────────────────────────────────────────────
 
@@ -129,16 +129,13 @@ pub enum BulkError {
     /// Set `GossipConfig::http_port` before starting the agent, or call
     /// `GossipConfig::set_http_port`.
     NoHttpPort,
-    /// The target replied with an unexpected sender.
-    SenderMismatch,
 }
 
 impl std::fmt::Display for BulkError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BulkError::Timeout        => f.write_str("bulk_call timed out — no reply from target"),
-            BulkError::NoHttpPort     => f.write_str("bulk_call requires an http_port in GossipConfig"),
-            BulkError::SenderMismatch => f.write_str("bulk_call: reply came from unexpected sender"),
+            BulkError::Timeout    => f.write_str("bulk_call timed out — no reply from target"),
+            BulkError::NoHttpPort => f.write_str("bulk_call requires an http_port in GossipConfig"),
         }
     }
 }
@@ -176,17 +173,12 @@ pub(crate) async fn bulk_call_ctx(
     buf.put(kind_bytes);
     let ticket = buf.freeze();
 
-    // Register BEFORE emitting so no reply is missed even for co-located targets.
-    let mut rx = ctx.signal_handlers.register_with_capacity(
-        Arc::from(signal_kind::BULK_RESULT), 256,
-    );
     emit_signal(ctx, Arc::from(signal_kind::INVOKE_BULK), SignalScope::Individual(target.clone()), ticket);
 
     let deadline = tokio::time::Instant::now() + timeout;
-    match await_nonce_reply(&mut rx, nonce, &target, deadline).await {
-        NonceReply::Ok(b)          => Ok(b),
-        NonceReply::SenderMismatch => Err(BulkError::SenderMismatch),
-        NonceReply::Timeout        => Err(BulkError::Timeout),
+    match await_nonce_reply(ctx, nonce, &target, deadline).await {
+        Some(b) => Ok(b),
+        None    => Err(BulkError::Timeout),
     }
 }
 

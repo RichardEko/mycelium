@@ -142,6 +142,11 @@ pub(crate) struct TaskCtx {
     pub(crate) caps_advertised: Arc<std::sync::atomic::AtomicBool>,
     /// Bulk-transport adapter: staging map, HTTP port, pooled HTTP client.
     pub(crate) bulk_transport: Arc<bulk::BulkTransport>,
+    /// In-flight RPC/bulk correlation map for O(1) reply dispatch.
+    /// Key: correlation nonce (first 8 bytes of result payload, LE).
+    /// The connection handler's fast-path removes the entry and fires the
+    /// oneshot instead of fanning out through signal_handlers.
+    pub(crate) rpc_pending: Arc<std::sync::Mutex<std::collections::HashMap<u64, tokio::sync::oneshot::Sender<crate::signal::Signal>>>>,
 }
 
 /// Core gossip agent.
@@ -305,6 +310,7 @@ impl GossipAgent {
                 config.http_port.unwrap_or(0),
                 std::time::Duration::from_secs(config.bulk_fetch_timeout_secs),
             )),
+            rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         });
 
         Self {

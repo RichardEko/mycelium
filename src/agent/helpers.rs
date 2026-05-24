@@ -2,7 +2,7 @@ use crate::consensus::ConsensusEngine;
 use crate::framing::{
     dispatch_gossip_send, dispatch_gossip_try_send, ForwardHint, GossipUpdate, WireMessage,
 };
-use crate::signal::{Boundary, Signal, SignalHandlers, SignalScope};
+use crate::signal::{Boundary, Signal, SignalHandlers, SignalScope, signal_kind};
 use bytes::Bytes;
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -107,12 +107,30 @@ pub(crate) fn emit_signal(
     // packed HLC so the seen-set's age math still operates in real time.
     let ts = crate::hlc::physical_ms(ctx.hlc.current());
     ctx.seen.mark_and_check(nonce, ts);
-    let handler_fill = ctx.signal_handlers.fill_ratio(&kind);
-    let combined = handler_fill.max(crate::framing::gossip_shard_fill(&ctx.gossip_txs));
-    deliver_locally(&ctx.signal_boundary, &ctx.signal_handlers, &Signal {
+    let sig = Signal {
         kind: kind.clone(), scope: scope.clone(),
         payload: payload.clone(), sender: ctx.node_id.clone(), nonce,
-    }, combined);
+    };
+    // Fast-path for co-located rpc.result / bulk.result: fire the waiting
+    // oneshot directly rather than fanning out through signal_handlers.
+    let nonce_claimed = if payload.len() >= 8
+        && (kind.as_ref() == signal_kind::RPC_RESULT || kind.as_ref() == signal_kind::BULK_RESULT)
+    {
+        let call_nonce = u64::from_le_bytes(payload[..8].try_into().unwrap());
+        if let Some(tx) = ctx.rpc_pending.lock().unwrap().remove(&call_nonce) {
+            let _ = tx.send(sig.clone());
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    if !nonce_claimed {
+        let handler_fill = ctx.signal_handlers.fill_ratio(&kind);
+        let combined = handler_fill.max(crate::framing::gossip_shard_fill(&ctx.gossip_txs));
+        deliver_locally(&ctx.signal_boundary, &ctx.signal_handlers, &sig, combined);
+    }
     let hint = match &scope {
         SignalScope::System           => ForwardHint::All,
         SignalScope::Group(name)      => ForwardHint::Group(name.clone()),

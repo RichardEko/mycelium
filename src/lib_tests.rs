@@ -122,6 +122,7 @@ fn spawn_handler(
         wal: std::sync::OnceLock::new(),
         caps_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         bulk_transport: Arc::new(BulkTransport::new(0, Duration::from_secs(5))),
+        rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     });
     let ctx = ConnContext {
         task_ctx,
@@ -803,6 +804,7 @@ async fn test_subscribe_notified_via_gossip() {
             wal: std::sync::OnceLock::new(),
             caps_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             bulk_transport: Arc::new(BulkTransport::new(0, Duration::from_secs(5))),
+            rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         });
         let ctx = ConnContext {
             task_ctx,
