@@ -12,6 +12,40 @@ use std::{collections::HashMap, env, fs, path::{Path, PathBuf}};
 use crate::error::GossipError;
 use crate::NodeId;
 
+/// TLS configuration for mTLS peer connections and node identity signing.
+///
+/// All fields are optional: when `cert_pem` / `key_pem` are absent, certificates
+/// are auto-generated into `auto_cert_dir`. The auto-generated CA cert
+/// (`ca-cert.pem`) must be copied to all peers so they can verify each other.
+///
+/// Only meaningful when the `tls` crate feature is enabled. Has no effect when
+/// the feature is disabled.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TlsConfig {
+    /// Path to a PEM-encoded node certificate. `None` = auto-generate on startup.
+    pub cert_pem: Option<PathBuf>,
+    /// Path to a PEM-encoded (PKCS8) node private key. `None` = auto-generate.
+    pub key_pem: Option<PathBuf>,
+    /// Path to the PEM-encoded cluster CA certificate used to verify peers.
+    /// `None` = look for `{auto_cert_dir}/ca-cert.pem`; generate if absent.
+    pub ca_cert_pem: Option<PathBuf>,
+    /// Directory where auto-generated cert/key/CA files are stored.
+    /// Defaults to `"./mycelium-tls/"` relative to the working directory.
+    pub auto_cert_dir: PathBuf,
+}
+
+impl Default for TlsConfig {
+    fn default() -> Self {
+        Self {
+            cert_pem:     None,
+            key_pem:      None,
+            ca_cert_pem:  None,
+            auto_cert_dir: PathBuf::from("./mycelium-tls/"),
+        }
+    }
+}
+
 /// Controls if and how a node persists its KV store to local disk.
 ///
 /// Set `GossipConfig::persistence` to `Some(PersistenceConfig { .. })` to opt in.
@@ -325,6 +359,16 @@ pub struct GossipConfig {
     ///
     /// Default: `30`.
     pub bulk_fetch_timeout_secs: u64,
+
+    /// Mutual TLS configuration.
+    ///
+    /// `None` (the default) disables TLS — the gossip TCP port accepts plain
+    /// connections with no authentication. Set to `Some(TlsConfig { .. })` to
+    /// require mTLS: all peers must present a certificate signed by the cluster CA.
+    ///
+    /// Requires the `tls` crate feature. Has no effect when the feature is
+    /// disabled even if set to `Some(...)`.
+    pub tls: Option<TlsConfig>,
 }
 
 impl Default for GossipConfig {
@@ -363,6 +407,7 @@ impl Default for GossipConfig {
             http_addr:               "127.0.0.1".to_string(),
             persistence:             None,
             bulk_fetch_timeout_secs: 30,
+            tls:                     None,
         }
     }
 }

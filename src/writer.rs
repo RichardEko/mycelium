@@ -1,6 +1,8 @@
 use crate::framing::{bincode_cfg, write_frame, WireMessage};
 use crate::node_id::NodeId;
 use crate::store::store_hash_acc;
+use crate::stream::GossipStream;
+use crate::tls::NodeTls;
 use bytes::{BufMut, Bytes, BytesMut};
 use std::{
     sync::{
@@ -42,8 +44,9 @@ pub(crate) async fn run_peer_writer(
     mut peer_shutdown_rx: watch::Receiver<bool>,
     dropped_frames: Arc<AtomicU64>,
     peer_dropped: Arc<AtomicU64>,
+    tls: Option<Arc<NodeTls>>,
 ) {
-    let mut conn: Option<BufWriter<TcpStream>> = None;
+    let mut conn: Option<BufWriter<GossipStream>> = None;
     // Stores (fail_time, actual_backoff) where actual_backoff is jittered so
     // simultaneous reconnects after a partition don't all fire at the same instant.
     let mut last_fail: Option<(Instant, Duration)> = None;
@@ -97,10 +100,21 @@ pub(crate) async fn run_peer_writer(
                             .with_interval(Duration::from_secs(10));
                         let _ = SockRef::from(&s).set_tcp_keepalive(&ka);
                     }
-                    // 16 KB buffer coalesces a full burst of small gossip frames into
-                    // one or two kernel write calls; explicit flush sends after drain.
-                    conn = Some(BufWriter::with_capacity(16_384, s));
-                    last_fail = None;
+                    // Optional TLS upgrade before buffering.
+                    let stream = tls_connect(s, &peer, &tls).await;
+                    match stream {
+                        Ok(gs) => {
+                            // 16 KB buffer coalesces a full burst of small gossip frames into
+                            // one or two kernel write calls; explicit flush sends after drain.
+                            conn = Some(BufWriter::with_capacity(16_384, gs));
+                            last_fail = None;
+                        }
+                        Err(e) => {
+                            last_fail = Some((Instant::now(), jittered(backoff)));
+                            warn!("TLS handshake to {} failed: {}", peer, e);
+                            continue;
+                        }
+                    }
                 }
                 Err(e) => {
                     last_fail = Some((Instant::now(), jittered(backoff)));
@@ -174,6 +188,7 @@ impl WriterEntry {
 ///    pre-created channel. Concurrent callers that lose the CAS return the winner's `tx`.
 /// 3. **Spawn** — the claim winner spawns the writer task outside `compute()` (so papaya
 ///    retry loops don't create duplicate tasks), then updates the entry with the real handle.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn get_or_spawn_writer(
     peer: &NodeId,
     writers: &papaya::HashMap<NodeId, WriterEntry>,
@@ -182,6 +197,7 @@ pub(crate) fn get_or_spawn_writer(
     idle_timeout: Duration,
     shutdown_tx: &Arc<watch::Sender<bool>>,
     dropped_frames: &Arc<AtomicU64>,
+    tls: Option<Arc<NodeTls>>,
 ) -> Option<mpsc::Sender<Bytes>> {
     // Guard: refuse to spawn during shutdown.
     if *shutdown_tx.borrow() {
@@ -230,6 +246,7 @@ pub(crate) fn get_or_spawn_writer(
         peer_shutdown_rx,
         dropped_frames.clone(),
         dropped,
+        tls,
     ));
     let abort_handle = join_handle.abort_handle();
     drop(join_handle); // detach — task exits via peer_shutdown or global shutdown signal
@@ -275,6 +292,7 @@ pub(crate) fn request_state(
     hash_acc: &AtomicU64,
     dropped_frames: &Arc<AtomicU64>,
     key_timestamps: Vec<(std::sync::Arc<str>, u64)>,
+    tls: Option<Arc<NodeTls>>,
 ) {
     let hash = store_hash_acc(hash_acc);
     let mut buf = BytesMut::with_capacity(64);
@@ -287,8 +305,30 @@ pub(crate) fn request_state(
         return;
     }
     let data: Bytes = buf.freeze();
-    let Some(tx) = get_or_spawn_writer(peer, peer_writers, writer_depth, backoff, idle_timeout, shutdown_tx, dropped_frames) else { return; };
+    let Some(tx) = get_or_spawn_writer(peer, peer_writers, writer_depth, backoff, idle_timeout, shutdown_tx, dropped_frames, tls) else { return; };
     if tx.try_send(data).is_err() {
         warn!("StateRequest writer for {}: channel full or closed; state sync skipped", peer);
     }
+}
+
+/// Upgrades a plain `TcpStream` to a `GossipStream`, performing a TLS client
+/// handshake when `tls` is `Some`. Returns the plain stream unchanged otherwise.
+async fn tls_connect(
+    stream: TcpStream,
+    #[allow(unused_variables)] peer: &NodeId,
+    tls: &Option<Arc<NodeTls>>,
+) -> Result<GossipStream, std::io::Error> {
+    #[cfg(feature = "tls")]
+    if let Some(ref node_tls) = tls {
+        use rustls::pki_types::ServerName;
+        let ip = peer.to_socket_addr().ip();
+        let server_name = ServerName::try_from(ip.to_string().as_str())
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?
+            .to_owned();
+        let connector = tokio_rustls::TlsConnector::from(Arc::clone(&node_tls.client_config));
+        let tls_stream = connector.connect(server_name, stream).await?;
+        return Ok(GossipStream::TlsClient(tls_stream));
+    }
+    let _ = tls; // suppress unused warning when feature is disabled
+    Ok(GossipStream::Plain(stream))
 }

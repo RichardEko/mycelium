@@ -18,6 +18,9 @@ cli = ["dep:tracing-subscriber"]
 # cargo-fuzz harness under `fuzz/`. NOT part of the stable public API — only
 # enable when building fuzz targets.
 fuzz-internals = []
+# Enables mTLS on the gossip TCP port, keypair-backed node identity, and
+# consensus payload signing. Adds tokio-rustls, rcgen, and ed25519-dalek.
+tls = ["dep:tokio-rustls", "dep:rustls", "dep:rcgen", "dep:rustls-pemfile", "dep:ed25519-dalek"]
 
 # The `fuzz/` directory is its own cargo-fuzz crate; keep it out of any
 # implicit-workspace traversal from this parent manifest.
@@ -62,6 +65,13 @@ futures-util = "0.3"
 base64       = "0.22"
 # HTTP client — used by MCP client role (connect_mcp_server) at library runtime
 reqwest      = { version = "0.12", features = ["json"] }
+
+# TLS (optional — enabled by the "tls" feature)
+tokio-rustls   = { version = "0.26", optional = true }
+rustls         = { version = "0.23", default-features = false, features = ["ring"], optional = true }
+rcgen          = { version = "0.13", optional = true }
+rustls-pemfile = { version = "2",    optional = true }
+ed25519-dalek  = { version = "2",    features = ["rand_core", "pkcs8"], optional = true }
 
 [dev-dependencies]
 tokio        = { version = "1.35", features = ["full"] }

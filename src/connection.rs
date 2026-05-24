@@ -16,7 +16,8 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::{io::BufReader, net::TcpStream, sync::{mpsc::error::TrySendError, watch}};
+use crate::stream::GossipStream;
+use tokio::{io::BufReader, sync::{mpsc::error::TrySendError, watch}};
 use tracing::{error, warn};
 
 /// Shared state threaded into every inbound connection handler.
@@ -42,7 +43,7 @@ pub(crate) struct ConnContext {
 }
 
 pub(crate) async fn handle_connection(
-    socket: TcpStream,
+    socket: GossipStream,
     peer_addr: SocketAddr,
     ctx: ConnContext,
 ) -> Result<(), GossipError> {
@@ -59,6 +60,7 @@ pub(crate) async fn handle_connection(
     let signal_handlers = task_ctx.signal_handlers.clone();
     let kv_state        = task_ctx.kv_state.clone();
     let wal             = task_ctx.wal.get().cloned();
+    let tls             = task_ctx.tls.get().cloned();
     let mut socket = BufReader::with_capacity(8_192, socket);
     let mut shutdown_rx = shutdown.subscribe();
     // BytesMut: recv_buf.split().freeze() at TTL_OFFSET is O(1) for zero-copy forwarding.
@@ -163,7 +165,7 @@ pub(crate) async fn handle_connection(
                         let guard = kv_state.store.pin();
                         guard.iter().map(|(k, v)| (k.clone(), v.timestamp)).collect()
                     };
-                    request_state(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &node_id, &kv_state.hash_acc, &kv_state.dropped_frames, key_timestamps);
+                    request_state(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &node_id, &kv_state.hash_acc, &kv_state.dropped_frames, key_timestamps, tls.clone());
                 }
             }
 
@@ -190,7 +192,7 @@ pub(crate) async fn handle_connection(
                     ) {
                         Ok(_) => {
                             let data: Bytes = fast_buf.freeze();
-                            if let Some(tx) = get_or_spawn_writer(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &kv_state.dropped_frames) {
+                            if let Some(tx) = get_or_spawn_writer(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &kv_state.dropped_frames, tls.clone()) {
                                 tokio::spawn(async move {
                                     if tx.send(data).await.is_err() {
                                         tracing::error!("Fast-path StateResponse writer for {} has exited", sender);
@@ -263,7 +265,7 @@ pub(crate) async fn handle_connection(
                         // because StateRequest is only sent on first contact; there is
                         // no automatic retry. Wrap in spawn so the connection handler
                         // is not blocked waiting for the writer to drain.
-                        if let Some(tx) = get_or_spawn_writer(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &kv_state.dropped_frames) {
+                        if let Some(tx) = get_or_spawn_writer(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &kv_state.dropped_frames, tls.clone()) {
                             tokio::spawn(async move {
                                 if tx.send(data).await.is_err() {
                                     error!("StateResponse writer for {} has exited", sender);

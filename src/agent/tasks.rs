@@ -1,4 +1,6 @@
 use crate::connection::{handle_connection, ConnContext};
+use crate::stream::GossipStream;
+use crate::tls::NodeTls;
 use crate::error::GossipError;
 use crate::framing::{bincode_cfg, ForwardHint, WireMessage};
 use crate::locality::LocalityPath;
@@ -72,12 +74,14 @@ pub(super) struct ListenerContext {
     pub(super) addr:           SocketAddr,
     /// TCP accept-queue depth used when recreating the listener socket.
     pub(super) tcp_backlog:    u32,
+    /// Optional TLS server config for mTLS peer connections.
+    pub(super) tls:            Option<Arc<NodeTls>>,
 }
 
 // ── Task implementations ───────────────────────────────────────────────────────
 
 pub(super) async fn run_listener_task(mut listener: TcpListener, lctx: ListenerContext) {
-    let ListenerContext { conn, conn_sem, listener_alive, max_conn, addr, tcp_backlog } = lctx;
+    let ListenerContext { conn, conn_sem, listener_alive, max_conn, addr, tcp_backlog, tls } = lctx;
     let mut shutdown_rx = conn.shutdown.subscribe();
     let mut conn_set: JoinSet<()> = JoinSet::new();
     let mut retry_delay = false;
@@ -127,10 +131,19 @@ pub(super) async fn run_listener_task(mut listener: TcpListener, lctx: ListenerC
                         match conn_sem.clone().try_acquire_owned() {
                             Ok(permit) => {
                                 let ctx = conn.clone();
+                                let tls = tls.clone();
                                 conn_set.spawn(async move {
                                     let _permit = permit;
-                                    if let Err(e) = handle_connection(socket, peer_addr, ctx).await {
-                                        warn!("Connection error from {}: {}", peer_addr, e);
+                                    let gs = tls_accept(socket, &tls).await;
+                                    match gs {
+                                        Ok(gs) => {
+                                            if let Err(e) = handle_connection(gs, peer_addr, ctx).await {
+                                                warn!("Connection error from {}: {}", peer_addr, e);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            warn!("TLS accept from {}: {}", peer_addr, e);
+                                        }
                                     }
                                 });
                             }
@@ -179,6 +192,7 @@ pub(super) async fn run_gossip_shard(
     grp_generation:         Arc<AtomicU64>,
     self_locality:          Option<LocalityPath>,
     peer_localities:        Arc<papaya::HashMap<NodeId, LocalityPath>>,
+    tls:                    Option<Arc<NodeTls>>,
 ) {
     alive.store(true, Ordering::Relaxed);
     let _alive_guard = AliveGuard(alive.clone());
@@ -200,7 +214,7 @@ pub(super) async fn run_gossip_shard(
                 t.clone()
             } else {
                 let Some(t) = get_or_spawn_writer(
-                    peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &dropped_frames,
+                    peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &dropped_frames, tls.clone(),
                 ) else { continue; };
                 sender_cache.insert(peer.clone(), t.clone());
                 t
@@ -215,7 +229,7 @@ pub(super) async fn run_gossip_shard(
                     debug!("Peer writer for {} closed; respawning and retrying", peer);
                     sender_cache.remove(peer);
                     let Some(new_tx) = get_or_spawn_writer(
-                        peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &dropped_frames,
+                        peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &dropped_frames, tls.clone(),
                     ) else { continue; };
                     sender_cache.insert(peer.clone(), new_tx.clone());
                     match new_tx.try_send($data.clone()) {
@@ -355,6 +369,7 @@ pub(super) async fn run_health_monitor(
     dropped_frames:          Arc<AtomicU64>,
     signal_handlers:         Arc<SignalHandlers>,
     signal_window_secs:      u64,
+    tls:                     Option<Arc<NodeTls>>,
 ) {
     let bootstrap_set: AHashSet<NodeId> = bootstrap_peers.iter().cloned().collect();
     let mut shutdown_rx = shutdown_tx.subscribe();
@@ -369,7 +384,7 @@ pub(super) async fn run_health_monitor(
     }
 
     for peer in &bootstrap_set {
-        request_state(peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &node_id, &hash_acc, &dropped_frames, vec![]);
+        request_state(peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &node_id, &hash_acc, &dropped_frames, vec![], tls.clone());
     }
 
     let mut ticker = time::interval(Duration::from_secs(interval_secs));
@@ -416,7 +431,7 @@ pub(super) async fn run_health_monitor(
                     for peer in current_peer_set.difference(&last_peer_set) {
                         request_state(peer, &peer_writers, writer_depth, backoff,
                             idle_timeout, &shutdown_tx, &node_id, &hash_acc,
-                            &dropped_frames, vec![]);
+                            &dropped_frames, vec![], tls.clone());
                     }
                     let peer_list: Arc<[NodeId]> = current_peer_set.iter().cloned().collect();
                     let _ = peer_list_tx.send(peer_list);
@@ -432,7 +447,7 @@ pub(super) async fn run_health_monitor(
                         t.clone()
                     } else {
                         let Some(t) = get_or_spawn_writer(
-                            peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &dropped_frames,
+                            peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &dropped_frames, tls.clone(),
                         ) else { continue; };
                         ping_sender_cache.insert(peer.clone(), t.clone());
                         t
@@ -446,7 +461,7 @@ pub(super) async fn run_health_monitor(
                             debug!("Peer writer for {} closed; respawning for ping retry", peer);
                             ping_sender_cache.remove(peer);
                             let Some(new_tx) = get_or_spawn_writer(
-                                peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &dropped_frames,
+                                peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &dropped_frames, tls.clone(),
                             ) else { continue; };
                             ping_sender_cache.insert(peer.clone(), new_tx.clone());
                             match new_tx.try_send(ping_data.clone()) {
@@ -668,4 +683,20 @@ pub(super) async fn run_gc_task(
     if !*shutdown_rx.borrow() {
         error!("GC task exited unexpectedly; tombstone expiry and subscription eviction have stopped");
     }
+}
+
+/// Upgrades a plain `TcpStream` to a `GossipStream` by performing a TLS server
+/// handshake when `tls` is `Some`. Returns the plain stream unchanged otherwise.
+async fn tls_accept(
+    stream: tokio::net::TcpStream,
+    tls: &Option<Arc<NodeTls>>,
+) -> Result<GossipStream, std::io::Error> {
+    #[cfg(feature = "tls")]
+    if let Some(ref node_tls) = tls {
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::clone(&node_tls.server_config));
+        let tls_stream = acceptor.accept(stream).await?;
+        return Ok(GossipStream::TlsServer(tls_stream));
+    }
+    let _ = tls;
+    Ok(GossipStream::Plain(stream))
 }

@@ -470,6 +470,58 @@ impl ConsensusEngine {
         emit_signal_async(&self.task_ctx, kind, scope, payload).await
     }
 
+    // ── Payload signing / verification ───────────────────────────────────────
+
+    /// Wraps `bytes` in a `SignedConsensusMsg` when TLS is active; returns
+    /// `bytes` unchanged when TLS is disabled (zero overhead on the non-TLS path).
+    fn sign_payload(&self, bytes: Bytes) -> Bytes {
+        #[cfg(feature = "tls")]
+        if let Some(tls) = self.task_ctx.tls.get() {
+            let sig = crate::tls::sign_bytes(&tls.signing_key, &bytes);
+            let signed = SignedConsensusMsg {
+                msg_bytes:  bytes,
+                signer:     self.task_ctx.node_id.clone(),
+                signature:  sig,
+            };
+            let mut buf = BytesMut::new();
+            if bincode::serde::encode_into_std_write(
+                &signed, &mut (&mut buf).writer(), bincode_cfg(),
+            ).is_ok() {
+                return buf.freeze();
+            }
+        }
+        bytes
+    }
+
+    /// Decodes `payload` as a `ConsensusMsg`, verifying its Ed25519 signature
+    /// first when TLS is enabled. Returns `None` on bad signature or decode failure.
+    fn decode_verify(&self, payload: &Bytes) -> Option<ConsensusMsg> {
+        #[cfg(feature = "tls")]
+        if self.task_ctx.tls.get().is_some() {
+            let (signed, _): (SignedConsensusMsg, _) =
+                bincode::serde::decode_from_slice(payload, bincode_cfg()).ok()?;
+            // Look up the sender's verifying key: try the in-memory cache first,
+            // then fall back to the `sys/identity/` KV entry.
+            let key_bytes = self.task_ctx.peer_keys.pin().get(&signed.signer).copied()
+                .or_else(|| {
+                    let kv_key = format!("{}{}", crate::signal::kv_ns::IDENTITY, signed.signer);
+                    let b = self.task_ctx.kv_state.store.pin()
+                        .get(kv_key.as_str())?.data.clone()?;
+                    (b.len() == 32).then(|| {
+                        let mut arr = [0u8; 32];
+                        arr.copy_from_slice(&b);
+                        arr
+                    })
+                })?;
+            if !crate::tls::verify_bytes(&key_bytes, &signed.msg_bytes, &signed.signature) {
+                tracing::warn!("dropping consensus msg: bad signature from {}", signed.signer);
+                return None;
+            }
+            return decode_consensus_msg(&signed.msg_bytes);
+        }
+        decode_consensus_msg(payload)
+    }
+
     // ── Proposer ─────────────────────────────────────────────────────────────
 
     /// Runs one full proposal attempt sequence for `slot`.
@@ -569,7 +621,7 @@ impl ConsensusEngine {
                 proposer: self.task_ctx.node_id.clone(),
             };
             self.emit_async(
-                Arc::from(consensus_kind::PROPOSE), scope.clone(), encode_consensus_msg(&propose_msg),
+                Arc::from(consensus_kind::PROPOSE), scope.clone(), self.sign_payload(encode_consensus_msg(&propose_msg)),
             ).await;
 
             // Voter dedup map per (slot, ballot). NodeId-keyed so each voter contributes
@@ -688,7 +740,7 @@ impl ConsensusEngine {
             slot: slot.clone(), ballot, value: value.clone(),
         };
         self.emit_async(
-            Arc::from(consensus_kind::COMMIT), scope.clone(), encode_consensus_msg(&commit),
+            Arc::from(consensus_kind::COMMIT), scope.clone(), self.sign_payload(encode_consensus_msg(&commit)),
         ).await;
         let committed_upd = self.set_async(commit_key, value.clone()).await;
         if let Some(wal) = self.task_ctx.wal.get() {
@@ -739,7 +791,7 @@ impl ConsensusEngine {
                 Some(sig) = vote_rx.recv() => {
                     // Accept both Vote (legacy, no locality) and VoteWithLocality.
                     // Legacy votes contribute to quorum but to zero topology diversity.
-                    let (s, b, voter, locality) = match decode_consensus_msg(&sig.payload) {
+                    let (s, b, voter, locality) = match self.decode_verify(&sig.payload) {
                         Some(ConsensusMsg::Vote { slot: s, ballot: b, voter }) =>
                             (s, b, voter, None),
                         Some(ConsensusMsg::VoteWithLocality { slot: s, ballot: b, voter, locality }) =>
@@ -765,7 +817,7 @@ impl ConsensusEngine {
                 }
                 Some(sig) = nack_rx.recv() => {
                     if let Some(ConsensusMsg::Nack { slot: s, seen_ballot }) =
-                        decode_consensus_msg(&sig.payload)
+                        self.decode_verify(&sig.payload)
                     {
                         if s == *slot && seen_ballot > ballot {
                             return BallotOutcome::NackHigher(seen_ballot);
@@ -836,6 +888,21 @@ pub(crate) fn decode_ballot(bytes: &Bytes) -> u64 {
     }
 }
 
+/// Wrapper used when `tls` is enabled: the raw `ConsensusMsg` bytes plus an
+/// Ed25519 signature over them, so forged ballots can be detected and dropped.
+/// Encoded/decoded with the same `bincode_cfg()` as `ConsensusMsg` itself.
+///
+/// The TLS transport already prevents unauthenticated TCP connections; this
+/// adds a second layer so a compromised insider node cannot inject false
+/// consensus messages into an established connection.
+#[cfg(feature = "tls")]
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct SignedConsensusMsg {
+    pub msg_bytes: Bytes,
+    pub signer:    NodeId,
+    pub signature: [u8; 64],
+}
+
 // ── Voter task ───────────────────────────────────────────────────────────────
 
 /// Background voter task — processes incoming consensus signals and emits
@@ -874,7 +941,7 @@ pub(crate) async fn run_consensus_listener(
                 consecutive_abstains = 0;
 
                 let Some(ConsensusMsg::Propose { slot, ballot, value: _, proposer }) =
-                    decode_consensus_msg(&sig.payload)
+                    ctx.decode_verify(&sig.payload)
                 else { continue };
 
                 let local = *seen_ballot.get(&slot).unwrap_or(&0);
@@ -883,7 +950,7 @@ pub(crate) async fn run_consensus_listener(
                     ctx.emit(
                         Arc::from(consensus_kind::NACK),
                         SignalScope::Individual(proposer),
-                        encode_consensus_msg(&nack),
+                        ctx.sign_payload(encode_consensus_msg(&nack)),
                     );
                 } else {
                     seen_ballot.insert(slot.clone(), ballot);
@@ -904,13 +971,13 @@ pub(crate) async fn run_consensus_listener(
                     ctx.emit(
                         Arc::from(consensus_kind::VOTE),
                         sig.scope,
-                        encode_consensus_msg(&vote),
+                        ctx.sign_payload(encode_consensus_msg(&vote)),
                     );
                 }
             }
             Some(sig) = rx_commit.recv() => {
                 let Some(ConsensusMsg::Commit { slot, ballot, value }) =
-                    decode_consensus_msg(&sig.payload)
+                    ctx.decode_verify(&sig.payload)
                 else { continue };
 
                 let current = *seen_ballot.get(&slot).unwrap_or(&0);

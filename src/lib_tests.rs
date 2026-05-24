@@ -123,6 +123,8 @@ fn spawn_handler(
         caps_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         bulk_transport: Arc::new(BulkTransport::new(0, Duration::from_secs(5))),
         rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        tls: std::sync::OnceLock::new(),
+        peer_keys: Arc::new(papaya::HashMap::new()),
     });
     let ctx = ConnContext {
         task_ctx,
@@ -138,7 +140,7 @@ fn spawn_handler(
         writer_idle_timeout: Duration::ZERO,
     };
     let handle = tokio::spawn(handle_connection(
-        socket,
+        crate::stream::GossipStream::Plain(socket),
         "127.0.0.1:0".parse().unwrap(),
         ctx,
     ));
@@ -465,6 +467,8 @@ async fn test_subscribe_notified_via_gossip() {
             caps_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             bulk_transport: Arc::new(BulkTransport::new(0, Duration::from_secs(5))),
             rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            tls: std::sync::OnceLock::new(),
+            peer_keys: Arc::new(papaya::HashMap::new()),
         });
         let ctx = ConnContext {
             task_ctx,
@@ -480,7 +484,7 @@ async fn test_subscribe_notified_via_gossip() {
             writer_idle_timeout: Duration::ZERO,
         };
         use crate::connection::handle_connection;
-        tokio::spawn(handle_connection(reader, "127.0.0.1:0".parse().unwrap(), ctx));
+        tokio::spawn(handle_connection(crate::stream::GossipStream::Plain(reader), "127.0.0.1:0".parse().unwrap(), ctx));
     }
 
     send_wire(&mut writer, &WireMessage::Data(data_update("gossip_key", b"gossip_val", 42, false))).await;

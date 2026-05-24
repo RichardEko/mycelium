@@ -1,7 +1,9 @@
 use crate::error::GossipError;
 use crate::signal::reconcile_boundary_from_store;
+#[cfg(feature = "tls")] use crate::signal::kv_ns;
 use crate::store::{apply_and_notify, intern_key};
 use crate::framing::GossipUpdate;
+#[cfg(feature = "tls")] use bytes::Bytes;
 use std::{
     net::{IpAddr, SocketAddr},
     sync::{
@@ -117,6 +119,27 @@ impl GossipAgent {
         self.warm_quorum_from_layer1();
         self.prewarm_peer_localities();
         self.advertise_locality();
+
+        // Initialise TLS context if configured.
+        #[cfg(feature = "tls")]
+        if let Some(ref tls_cfg) = self.config.tls {
+            match crate::tls::load_or_generate(tls_cfg, &self.node_id) {
+                Ok(node_tls) => {
+                    let arc_tls = Arc::new(node_tls);
+                    // Publish Ed25519 verifying key so peers can verify signed consensus messages.
+                    let vk = arc_tls.signing_key.verifying_key().to_bytes();
+                    let id_key = format!("sys/identity/{}", self.node_id);
+                    let _ = self.set(id_key, Bytes::copy_from_slice(&vk));
+                    let _ = self.task_ctx.tls.set(arc_tls);
+                    // Seed peer_keys from any sys/identity/ entries already in the local store.
+                    self.prewarm_peer_keys();
+                    // Watch for future identity publications from peers.
+                    self.start_identity_watcher();
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
         self.start_listener(bind_addr).await.inspect_err(|_| {
             self.state.store(AgentState::Idle as u8, Ordering::Release);
         })?;
@@ -192,6 +215,7 @@ impl GossipAgent {
             max_conn:       self.config.max_connections,
             addr,
             tcp_backlog:    self.config.tcp_accept_backlog,
+            tls:            self.task_ctx.tls.get().cloned(),
         };
 
         let mut handles = self.task_handles_lock();
@@ -240,6 +264,7 @@ impl GossipAgent {
                 grp_generation.clone(),
                 self_locality.clone(),
                 peer_localities.clone(),
+                self.task_ctx.tls.get().cloned(),
             ));
         }
     }
@@ -265,6 +290,7 @@ impl GossipAgent {
             self.kv_state.dropped_frames.clone(),
             self.task_ctx.signal_handlers.clone(),
             self.config.signal_window_secs,
+            self.task_ctx.tls.get().cloned(),
         ));
     }
 
@@ -352,6 +378,60 @@ impl GossipAgent {
             let Some(loc) = crate::locality::LocalityPath::decode(&bytes) else { continue };
             guard.insert(node_id, loc);
         }
+    }
+
+    /// Reads all `sys/identity/{node_id}` KV entries already in the local store
+    /// and inserts their 32-byte public keys into `task_ctx.peer_keys`.
+    /// Called at startup after TLS is initialised, before listeners are spawned.
+    #[cfg(feature = "tls")]
+    fn prewarm_peer_keys(&self) {
+        let prefix = kv_ns::IDENTITY;
+        let guard  = self.task_ctx.peer_keys.pin();
+        for (key, bytes) in self.scan_prefix(prefix) {
+            let Some(node_id_str) = key.strip_prefix(prefix) else { continue };
+            let Ok(node_id) = node_id_str.parse::<crate::node_id::NodeId>() else { continue };
+            if bytes.len() == 32 {
+                let mut arr = [0u8; 32];
+                arr.copy_from_slice(&bytes);
+                guard.insert(node_id, arr);
+            }
+        }
+    }
+
+    /// Subscribes to `sys/identity/` prefix changes and mirrors verifying keys
+    /// into `task_ctx.peer_keys` as peers publish them via anti-entropy gossip.
+    /// On each notification, re-scans the full prefix so removals (tombstones) are
+    /// also caught; the prefix is small (one entry per cluster node).
+    #[cfg(feature = "tls")]
+    fn start_identity_watcher(&self) {
+        let mut rx      = self.subscribe_prefix(Arc::<str>::from(kv_ns::IDENTITY));
+        let shutdown_rx = self.shutdown_tx.subscribe();
+        let peer_keys   = self.task_ctx.peer_keys.clone();
+        let kv_state    = self.kv_state.clone();
+        self.spawn_task(async move {
+            let mut shutdown_rx = shutdown_rx;
+            loop {
+                tokio::select! { biased;
+                    _ = shutdown_rx.wait_for(|v| *v) => break,
+                    res = rx.changed() => { if res.is_err() { break; } }
+                }
+                // Re-sync peer_keys from the current store snapshot.
+                let guard       = peer_keys.pin();
+                let store_guard = kv_state.store.pin();
+                for (key, entry) in store_guard.iter() {
+                    let Some(suffix) = key.strip_prefix(kv_ns::IDENTITY) else { continue };
+                    let Ok(node_id) = suffix.parse::<crate::node_id::NodeId>() else { continue };
+                    match &entry.data {
+                        Some(b) if b.len() == 32 => {
+                            let mut arr = [0u8; 32];
+                            arr.copy_from_slice(b);
+                            guard.insert(node_id, arr);
+                        }
+                        _ => { guard.remove(&node_id); }
+                    }
+                }
+            }
+        });
     }
 
     /// Signals all background tasks to stop and waits up to `timeout` for them to exit.

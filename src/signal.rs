@@ -791,6 +791,13 @@ pub mod kv_ns {
     /// without waiting for the next advertise tick.
     pub const ADVERTISE: &str = "svc/";
 
+    /// Node identity namespace (library-internal — do not write from application code).
+    ///
+    /// Key: `sys/identity/{node_id}`. Value: 32-byte Ed25519 public key (raw bytes).
+    /// Written at startup by nodes running with TLS enabled; used by peers to verify
+    /// signed consensus messages when a mTLS cert extract is not yet available.
+    pub const IDENTITY: &str = "sys/identity/";
+
     /// Persistent quorum evidence namespace (library-internal — do not write from application code).
     ///
     /// Key: `sys/quorum/{kind}/{sender_node_id}`. Value: 8-byte little-endian Unix millisecond

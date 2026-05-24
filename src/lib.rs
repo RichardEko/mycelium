@@ -76,6 +76,7 @@
 //! | `agent/{node}/task/{id}/turn`      | Layer V turn counter for `max_turns` enforcement              |
 //! | `agent/{node}/task/{id}/calls`     | Layer V tool-call counter for `tool_budget` enforcement       |
 //! | `agent/{node}/provision/{item}/error` | Last provisioning failure — written by the **application** provisioning handler, not the substrate |
+//! | `sys/identity/{node}`              | mTLS — 32-byte Ed25519 verifying key; written at startup by TLS-enabled nodes |
 //! | `cap/{node}/llm/inference`         | LLM backend capability (model, context, backend, endpoint attrs) |
 //! | `cap/{node}/llm/installable`       | LLM models that can be pulled (model, size_gb, est_mins attrs) |
 //! | `cap/{node}/llm/loading`           | LLM model pull in progress (model, progress 0–100 attrs)     |
@@ -122,6 +123,8 @@ mod node_id;
 mod persistence;
 mod seen;
 mod store;
+mod stream;
+mod tls;
 mod writer;
 
 pub use agent::{
@@ -144,7 +147,7 @@ pub use mesh_manifest::{
     GroupManifest, GroupStatus, MeshManifest, MeshMeta, MeshStatus,
     manifest_keys, semver_gt,
 };
-pub use config::{GossipConfig, GroupTopologyPolicy, PersistenceConfig, SyncMode, TopologyEnforcement};
+pub use config::{GossipConfig, GroupTopologyPolicy, PersistenceConfig, SyncMode, TlsConfig, TopologyEnforcement};
 pub use locality::LocalityPreference;
 pub use consensus::{ConsensusConfig, ConsensusHandle, ConsensusResult, consensus_kind, consensus_ns};
 pub use error::GossipError;

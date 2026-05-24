@@ -148,6 +148,15 @@ pub(crate) struct TaskCtx {
     /// The connection handler's fast-path removes the entry and fires the
     /// oneshot instead of fanning out through signal_handlers.
     pub(crate) rpc_pending: Arc<std::sync::Mutex<std::collections::HashMap<u64, tokio::sync::oneshot::Sender<crate::signal::Signal>>>>,
+    /// TLS context (server + client configs + signing key). Unset when the
+    /// `tls` feature is disabled or when `GossipConfig::tls` is `None`.
+    /// Written once by `start()` before any task is spawned; read-only afterwards.
+    pub(crate) tls: std::sync::OnceLock<Arc<crate::tls::NodeTls>>,
+    /// Map from peer NodeId → 32-byte Ed25519 public key, populated from two
+    /// sources: (a) the mTLS handshake cert, (b) `sys/identity/` KV entries
+    /// gossiped by peers. Used to verify signed consensus messages.
+    #[cfg_attr(not(feature = "tls"), allow(dead_code))]
+    pub(crate) peer_keys: Arc<papaya::HashMap<NodeId, [u8; 32]>>,
 }
 
 /// Core gossip agent.
@@ -312,6 +321,8 @@ impl GossipAgent {
                 std::time::Duration::from_secs(config.bulk_fetch_timeout_secs),
             )),
             rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            tls: std::sync::OnceLock::new(),
+            peer_keys: Arc::new(papaya::HashMap::new()),
         });
 
         Self {
