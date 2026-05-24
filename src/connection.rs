@@ -1,3 +1,4 @@
+use crate::agent::TaskCtx;
 use crate::error::GossipError;
 use crate::framing::{
     bincode_cfg, dispatch_gossip_try_send, is_connection_closed,
@@ -5,13 +6,11 @@ use crate::framing::{
     GossipUpdate, SyncEntry, WireMessage, WireMessageV7, ANTI_ENTROPY_NONCE, DATA_TAG,
     NONCE_OFFSET, TTL_OFFSET,
 };
-use crate::signal::{parse_own_grp_key, Boundary, Signal, SignalHandlers, SignalScope};
-use crate::store::{apply_and_notify, intern_key, store_hash_acc, KvState};
+use crate::signal::{parse_own_grp_key, Signal, SignalScope};
+use crate::store::{apply_and_notify, intern_key, store_hash_acc};
 use crate::node_id::NodeId;
-use crate::seen::ShardedSeen;
 use crate::writer::{get_or_spawn_writer, request_state, WriterEntry};
 use bytes::{BufMut, Bytes, BytesMut};
-use parking_lot::RwLock;
 use std::{
     net::SocketAddr,
     sync::Arc,
@@ -23,38 +22,23 @@ use tracing::{error, warn};
 /// Shared state threaded into every inbound connection handler.
 #[derive(Clone)]
 pub(crate) struct ConnContext {
-    pub(crate) node_id:          NodeId,
-    pub(crate) peers:            Arc<papaya::HashMap<NodeId, Instant>>,
-    /// One sender per gossip shard; carries pre-encoded frame bytes + sender id_hash + forward hint.
-    /// The shard fans out bytes directly — no re-encoding per hop (zero-copy forwarding).
-    pub(crate) gossip_txs:       Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]>,
-    pub(crate) seen:             Arc<ShardedSeen>,
-    pub(crate) shutdown:         Arc<watch::Sender<bool>>,
-    pub(crate) max_ttl:          u8,
-    /// Hybrid Logical Clock for causal LWW ordering. Incoming timestamps are
-    /// fed through `observe()` so locally-originated writes that follow
-    /// strictly dominate the observed remote stamp. Used as `current_ts` for
-    /// seen-set TTL eviction via `crate::hlc::physical_ms`.
-    pub(crate) hlc:              Arc<crate::hlc::Hlc>,
-    pub(crate) peer_writers:     Arc<papaya::HashMap<NodeId, WriterEntry>>,
-    pub(crate) writer_depth:     usize,
-    pub(crate) backoff:          Duration,
-    pub(crate) n_shards:         usize,
-    pub(crate) intern_keys:      bool,
-    pub(crate) intern_max_keys:  usize,
-    pub(crate) signal_boundary:  Arc<RwLock<Boundary>>,
-    pub(crate) signal_handlers:  Arc<SignalHandlers>,
+    /// Shared infrastructure bundle (node_id, gossip_txs, seen, hlc,
+    /// signal_boundary, signal_handlers, kv_state, wal, default_ttl).
+    pub(crate) task_ctx:            Arc<TaskCtx>,
+    pub(crate) peers:               Arc<papaya::HashMap<NodeId, Instant>>,
+    pub(crate) shutdown:            Arc<watch::Sender<bool>>,
+    pub(crate) peer_writers:        Arc<papaya::HashMap<NodeId, WriterEntry>>,
+    pub(crate) writer_depth:        usize,
+    pub(crate) backoff:             Duration,
+    pub(crate) n_shards:            usize,
+    pub(crate) intern_keys:         bool,
+    pub(crate) intern_max_keys:     usize,
     /// Cap on the peer table. Piggybacked peers are silently ignored once this
     /// is reached; bootstrap peers and direct senders are always admitted.
-    pub(crate) max_peers:        usize,
+    pub(crate) max_peers:           usize,
     /// Idle timeout forwarded to `get_or_spawn_writer` / `request_state`.
     /// Zero means no timeout (default).
     pub(crate) writer_idle_timeout: Duration,
-    /// Bundled KV-path state (store, subscriptions, prefix_index, hash_acc,
-    /// dropped_frames, max_store_entries). Replaces five individual Arc fields.
-    pub(crate) kv_state:         Arc<KvState>,
-    /// WAL handle for durable KV writes. `None` when persistence is disabled.
-    pub(crate) wal:              Option<Arc<crate::persistence::WalHandle>>,
 }
 
 pub(crate) async fn handle_connection(
@@ -63,11 +47,18 @@ pub(crate) async fn handle_connection(
     ctx: ConnContext,
 ) -> Result<(), GossipError> {
     let ConnContext {
-        node_id, peers, gossip_txs, seen, shutdown, max_ttl,
-        hlc, peer_writers, writer_depth, backoff, n_shards,
-        intern_keys, intern_max_keys, signal_boundary, signal_handlers, max_peers,
-        writer_idle_timeout, kv_state, wal,
+        task_ctx, peers, shutdown, peer_writers, writer_depth, backoff, n_shards,
+        intern_keys, intern_max_keys, max_peers, writer_idle_timeout,
     } = ctx;
+    let node_id         = task_ctx.node_id.clone();
+    let gossip_txs      = task_ctx.gossip_txs.clone();
+    let seen            = task_ctx.seen.clone();
+    let max_ttl         = task_ctx.default_ttl;
+    let hlc             = task_ctx.hlc.clone();
+    let signal_boundary = task_ctx.signal_boundary.clone();
+    let signal_handlers = task_ctx.signal_handlers.clone();
+    let kv_state        = task_ctx.kv_state.clone();
+    let wal             = task_ctx.wal.get().cloned();
     let mut socket = BufReader::with_capacity(8_192, socket);
     let mut shutdown_rx = shutdown.subscribe();
     // BytesMut: recv_buf.split().freeze() at TTL_OFFSET is O(1) for zero-copy forwarding.

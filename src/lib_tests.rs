@@ -87,6 +87,7 @@ fn spawn_handler(
 ) -> (Arc<watch::Sender<bool>>, tokio::task::JoinHandle<Result<(), GossipError>>) {
     use crate::connection::handle_connection;
     use crate::signal::{Boundary, SignalHandlers};
+    use crate::agent::{TaskCtx, BulkTransport};
     use parking_lot::RwLock;
     let node_id = NodeId::new("127.0.0.1", 0).unwrap();
     let (shutdown_tx, _) = watch::channel(false);
@@ -96,38 +97,44 @@ fn spawn_handler(
     // Seed the hash accumulator from the store's current state so the
     // anti-entropy fast-path works correctly for pre-populated test stores.
     let initial_hash = store_hash(&store);
-    let ctx = ConnContext {
+    let kv_state = Arc::new(KvState {
+        store,
+        subscriptions:     Arc::new(papaya::HashMap::new()),
+        prefix_index:      Arc::new(crate::store::PrefixIndex::new()),
+        hash_acc:          Arc::new(AtomicU64::new(initial_hash)),
+        dropped_frames:    Arc::new(AtomicU64::new(0)),
+        max_store_entries: 0,
+        grp_generation:    Arc::new(AtomicU64::new(0)),
+        prefix_watchers:           Arc::new(papaya::HashMap::new()),
+        prefix_predicate_watchers: Arc::new(papaya::HashMap::new()),
+        next_pred_watcher_id:      Arc::new(AtomicU64::new(0)),
+        peer_localities:           Arc::new(papaya::HashMap::new()),
+    });
+    let task_ctx = Arc::new(TaskCtx {
         node_id: node_id.clone(),
-        peers,
-        gossip_txs,
         seen,
-        shutdown: shutdown_tx.clone(),
-        max_ttl,
         hlc: Arc::new(crate::hlc::Hlc::new()),
+        signal_boundary: Arc::new(RwLock::new(Boundary::new(node_id))),
+        signal_handlers: Arc::new(SignalHandlers::new(Duration::from_secs(600))),
+        gossip_txs,
+        default_ttl: max_ttl,
+        kv_state,
+        wal: std::sync::OnceLock::new(),
+        caps_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        bulk_transport: Arc::new(BulkTransport::new(0, Duration::from_secs(5))),
+    });
+    let ctx = ConnContext {
+        task_ctx,
+        peers,
+        shutdown: shutdown_tx.clone(),
         peer_writers: Arc::new(papaya::HashMap::new()),
         writer_depth: 64,
         backoff: Duration::ZERO,
         n_shards: N_GOSSIP_SHARDS,
         intern_keys: true,
         intern_max_keys: 0,
-        signal_boundary: Arc::new(RwLock::new(Boundary::new(node_id))),
-        signal_handlers: Arc::new(SignalHandlers::new(Duration::from_secs(600))),
         max_peers: usize::MAX,
         writer_idle_timeout: Duration::ZERO,
-        kv_state: Arc::new(KvState {
-            store,
-            subscriptions:     Arc::new(papaya::HashMap::new()),
-            prefix_index:      Arc::new(crate::store::PrefixIndex::new()),
-            hash_acc:          Arc::new(AtomicU64::new(initial_hash)),
-            dropped_frames:    Arc::new(AtomicU64::new(0)),
-            max_store_entries: 0,
-            grp_generation:    Arc::new(AtomicU64::new(0)),
-            prefix_watchers:           Arc::new(papaya::HashMap::new()),
-            prefix_predicate_watchers: Arc::new(papaya::HashMap::new()),
-            next_pred_watcher_id:      Arc::new(AtomicU64::new(0)),
-            peer_localities:           Arc::new(papaya::HashMap::new()),
-        }),
-        wal: None,
     };
     let handle = tokio::spawn(handle_connection(
         socket,
@@ -768,40 +775,47 @@ async fn test_subscribe_notified_via_gossip() {
         (0..N_GOSSIP_SHARDS).map(|_| gossip_tx.clone()).collect::<Vec<_>>().into();
     {
         use crate::signal::{Boundary, SignalHandlers};
+        use crate::agent::{TaskCtx, BulkTransport};
         use parking_lot::RwLock;
         let node_id = NodeId::new("127.0.0.1", 0).unwrap();
-        let ctx = ConnContext {
+        let kv_state = Arc::new(KvState {
+            store: store.clone(),
+            subscriptions:     subs,
+            prefix_index:      Arc::new(crate::store::PrefixIndex::new()),
+            hash_acc:          Arc::new(AtomicU64::new(0)),
+            dropped_frames:    Arc::new(AtomicU64::new(0)),
+            max_store_entries: 0,
+            grp_generation:    Arc::new(AtomicU64::new(0)),
+            prefix_watchers:           Arc::new(papaya::HashMap::new()),
+            prefix_predicate_watchers: Arc::new(papaya::HashMap::new()),
+            next_pred_watcher_id:      Arc::new(AtomicU64::new(0)),
+            peer_localities:           Arc::new(papaya::HashMap::new()),
+        });
+        let task_ctx = Arc::new(TaskCtx {
             node_id: node_id.clone(),
-            peers: Arc::new(papaya::HashMap::new()),
-            gossip_txs,
             seen: Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)),
-            shutdown: shutdown_tx,
-            max_ttl: 5,
             hlc: Arc::new(crate::hlc::Hlc::new()),
+            signal_boundary: Arc::new(RwLock::new(Boundary::new(node_id))),
+            signal_handlers: Arc::new(SignalHandlers::new(Duration::from_secs(600))),
+            gossip_txs,
+            default_ttl: 5,
+            kv_state,
+            wal: std::sync::OnceLock::new(),
+            caps_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            bulk_transport: Arc::new(BulkTransport::new(0, Duration::from_secs(5))),
+        });
+        let ctx = ConnContext {
+            task_ctx,
+            peers: Arc::new(papaya::HashMap::new()),
+            shutdown: shutdown_tx,
             peer_writers: Arc::new(papaya::HashMap::new()),
             writer_depth: 64,
             backoff: Duration::ZERO,
             n_shards: N_GOSSIP_SHARDS,
             intern_keys: true,
             intern_max_keys: 0,
-            signal_boundary: Arc::new(RwLock::new(Boundary::new(node_id))),
-            signal_handlers: Arc::new(SignalHandlers::new(Duration::from_secs(600))),
             max_peers: usize::MAX,
             writer_idle_timeout: Duration::ZERO,
-            kv_state: Arc::new(KvState {
-                store: store.clone(),
-                subscriptions:     subs,
-                prefix_index:      Arc::new(crate::store::PrefixIndex::new()),
-                hash_acc:          Arc::new(AtomicU64::new(0)),
-                dropped_frames:    Arc::new(AtomicU64::new(0)),
-                max_store_entries: 0,
-                grp_generation:    Arc::new(AtomicU64::new(0)),
-                prefix_watchers:           Arc::new(papaya::HashMap::new()),
-                prefix_predicate_watchers: Arc::new(papaya::HashMap::new()),
-                next_pred_watcher_id:      Arc::new(AtomicU64::new(0)),
-                peer_localities:           Arc::new(papaya::HashMap::new()),
-            }),
-            wal: None,
         };
         use crate::connection::handle_connection;
         tokio::spawn(handle_connection(reader, "127.0.0.1:0".parse().unwrap(), ctx));

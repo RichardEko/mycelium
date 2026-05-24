@@ -173,25 +173,17 @@ impl GossipAgent {
         }
 
         let conn = ConnContext {
-            node_id:         self.node_id.clone(),
+            task_ctx:        Arc::clone(&self.task_ctx),
             peers:           self.peers.clone(),
-            gossip_txs:      self.task_ctx.gossip_txs.clone(),
-            seen:            self.task_ctx.seen.clone(),
             shutdown:        self.shutdown_tx.clone(),
-            max_ttl:         self.config.default_ttl,
-            hlc:             self.task_ctx.hlc.clone(),
             peer_writers:    self.peer_writers.clone(),
             writer_depth:    self.config.writer_channel_depth,
             backoff:         Duration::from_secs(self.config.reconnect_backoff_secs),
             n_shards:        self.task_ctx.gossip_txs.len(),
             intern_keys:     self.config.intern_keys,
             intern_max_keys: self.config.intern_max_keys,
-            signal_boundary: self.task_ctx.signal_boundary.clone(),
-            signal_handlers: self.task_ctx.signal_handlers.clone(),
             max_peers:           self.config.max_peers,
             writer_idle_timeout: Duration::from_secs(self.config.writer_idle_timeout_secs),
-            kv_state:            self.kv_state.clone(),
-            wal:                 self.task_ctx.wal.get().cloned(),
         };
         let lctx = ListenerContext {
             conn,

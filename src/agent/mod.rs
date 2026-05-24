@@ -35,6 +35,7 @@ mod scatter;
 mod bulk;
 mod mailbox;
 
+pub(crate) use bulk::BulkTransport;
 pub(crate) use helpers::emit_signal;
 pub(crate) use helpers::emit_signal_async;
 pub(crate) use helpers::make_gossip_update;
