@@ -13,7 +13,7 @@ use tokio::{sync::watch, time};
 use tracing::warn;
 
 use super::GossipAgent;
-use super::capability_ops::{await_shutdown, is_cap_locality_key, now_ms, parse_cap_key_or_warn, scan_prefix_kv_with_ts, WATCHER_DEBOUNCE_WINDOW};
+use super::capability_ops::{await_shutdown, is_cap_locality_key, now_ms, parse_cap_key_or_warn, scan_cap_by_ns_name, scan_prefix_kv_with_ts, WATCHER_DEBOUNCE_WINDOW};
 use super::wiring::parse_gcap_key;
 
 impl GossipAgent {
@@ -95,9 +95,8 @@ pub(super) fn demand_snapshot(
     // are scoring demand for.
     let now = now_ms();
     let mut demanding: AHashSet<NodeId> = AHashSet::new();
-    for (key, bytes, hlc_ts) in scan_prefix_kv_with_ts(kv_state, "req/") {
-        let Some((node_id, ns, name)) = parse_cap_key_or_warn("req/", &key) else { continue };
-        if ns != filter.namespace || name != filter.name { continue; }
+    for (key, bytes, hlc_ts) in scan_cap_by_ns_name(kv_state, "req", &filter.namespace, &filter.name) {
+        let Some((node_id, _ns, _name)) = parse_cap_key_or_warn("req/", &key) else { continue };
         let Some(req_entry) = ReqEntry::decode(&bytes)
             .or_else(|| CapFilter::decode(&bytes).map(|f| ReqEntry { filter: f, refresh_interval_ms: 60_000 }))
         else {
@@ -110,7 +109,7 @@ pub(super) fn demand_snapshot(
 
     // Providers: union of direct cap/ matches and gcap/ contributors.
     let mut providers: AHashSet<NodeId> = AHashSet::new();
-    for (key, bytes, hlc_ts) in scan_prefix_kv_with_ts(kv_state, "cap/") {
+    for (key, bytes, hlc_ts) in scan_cap_by_ns_name(kv_state, "cap", &filter.namespace, &filter.name) {
         if is_cap_locality_key(&key) { continue; }
         let Some((node_id, _ns, _name)) = parse_cap_key_or_warn("cap/", &key) else { continue };
         let Some(cap_entry) = CapEntry::decode(&bytes)

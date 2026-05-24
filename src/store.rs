@@ -33,6 +33,11 @@ pub(crate) struct KvState {
     /// Layer II watch channels. See [`KvSubscriptions`] for design notes.
     pub subscriptions:     KvSubscriptions,
     pub prefix_index:      Arc<PrefixIndex>,
+    /// Secondary index for O(1) cap/req lookups by (namespace, name).
+    /// Outer key: `"{seg}/{ns}/{name}"` (e.g. `"cap/compute/text-gen"`).
+    /// Inner key: the full store key (`"cap/{node}/{ns}/{name}"`).
+    /// Maintained alongside `prefix_index` in `apply_and_notify`.
+    pub cap_ns_index:      Arc<PrefixIndex>,
     pub hash_acc:          Arc<AtomicU64>,
     pub dropped_frames:    Arc<AtomicU64>,
     pub max_store_entries: usize,
@@ -77,6 +82,7 @@ impl KvState {
             store:             Arc::new(papaya::HashMap::new()),
             subscriptions:     Arc::new(papaya::HashMap::new()),
             prefix_index:      Arc::new(PrefixIndex::new()),
+            cap_ns_index:      Arc::new(PrefixIndex::new()),
             hash_acc:          Arc::new(AtomicU64::new(0)),
             dropped_frames:    Arc::new(AtomicU64::new(0)),
             max_store_entries,
@@ -133,6 +139,47 @@ pub(crate) fn prefix_index_remove(index: &PrefixIndex, key: &Arc<str>) {
     let Some(seg) = prefix_seg(key) else { return };
     if let Some(bucket) = index.pin().get(seg) {
         bucket.pin().remove(key.as_ref());
+    }
+}
+
+/// Extracts the cap-ns identity key from a full `cap/` or `req/` store key.
+/// `cap/{node}/{ns}/{name}` → `"cap/{ns}/{name}"` (and similarly for `req/`).
+/// Returns `None` for keys with a different prefix or malformed shape.
+pub(crate) fn cap_ns_index_key(key: &str) -> Option<Arc<str>> {
+    let mut parts = key.splitn(4, '/');
+    let seg  = parts.next()?;
+    if seg != "cap" && seg != "req" { return None; }
+    let _node = parts.next()?;
+    let ns   = parts.next()?;
+    let name = parts.next()?;
+    Some(Arc::from(format!("{seg}/{ns}/{name}").as_str()))
+}
+
+/// Inserts `inner_key` into the `outer` bucket of `index`, creating the bucket if absent.
+pub(crate) fn index_bucket_insert(index: &PrefixIndex, outer: Arc<str>, inner: Arc<str>) {
+    let guard = index.pin();
+    if let Some(bucket) = guard.get(outer.as_ref()) {
+        bucket.pin().insert(inner, ());
+        return;
+    }
+    let new_bucket: Arc<papaya::HashMap<Arc<str>, ()>> = Arc::new(papaya::HashMap::new());
+    new_bucket.pin().insert(inner.clone(), ());
+    let outer_clone = outer.clone();
+    let result = guard.compute(outer, |existing| match existing {
+        Some(_) => papaya::Operation::Abort(()),
+        None    => papaya::Operation::Insert(new_bucket.clone()),
+    });
+    if let papaya::Compute::Aborted(_) = result {
+        if let Some(bucket) = guard.get(outer_clone.as_ref()) {
+            bucket.pin().insert(inner, ());
+        }
+    }
+}
+
+/// Removes `inner_key` from the `outer` bucket (no-op if absent).
+pub(crate) fn index_bucket_remove(index: &PrefixIndex, outer: &str, inner: &str) {
+    if let Some(bucket) = index.pin().get(outer) {
+        bucket.pin().remove(inner);
     }
 }
 
@@ -389,6 +436,14 @@ pub(crate) fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
             prefix_index_remove(&kv.prefix_index, &update.key);
         } else {
             prefix_index_insert(&kv.prefix_index, update.key.clone());
+        }
+        // Maintain cap_ns_index for cap/ and req/ keys.
+        if let Some(identity) = cap_ns_index_key(&update.key) {
+            if is_tombstone {
+                index_bucket_remove(&kv.cap_ns_index, &identity, &update.key);
+            } else {
+                index_bucket_insert(&kv.cap_ns_index, identity, update.key.clone());
+            }
         }
         let subs_guard = kv.subscriptions.pin();
         if let Some(tx) = subs_guard.get(&update.key) {

@@ -435,6 +435,30 @@ pub(super) fn scan_prefix_kv_with_ts(kv_state: &crate::store::KvState, prefix: &
     }
 }
 
+/// Scans `cap_ns_index` for entries matching `"{seg}/{ns}/{name}"` and returns
+/// the corresponding store entries. O(k) where k is the number of nodes that
+/// advertise this specific (seg, ns, name) combination — avoids a full bucket
+/// scan when only one (ns, name) pair is queried.
+pub(super) fn scan_cap_by_ns_name(
+    kv_state: &crate::store::KvState,
+    seg: &str,
+    ns: &str,
+    name: &str,
+) -> Vec<(Arc<str>, Bytes, u64)> {
+    let identity = format!("{seg}/{ns}/{name}");
+    let store_guard = kv_state.store.pin();
+    let idx_guard   = kv_state.cap_ns_index.pin();
+    let Some(bucket) = idx_guard.get(identity.as_str()) else { return Vec::new() };
+    let result: Vec<_> = bucket.pin().iter()
+        .filter_map(|(key, _)| {
+            let entry = store_guard.get(key.as_ref())?;
+            let data  = entry.data.clone()?;
+            Some((key.clone(), data, entry.timestamp))
+        })
+        .collect();
+    result
+}
+
 /// Returns current wall-clock milliseconds for max_age comparisons.
 #[inline]
 fn age_now_ms() -> u64 {
