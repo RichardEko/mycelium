@@ -9,6 +9,11 @@
 //! (or bypassed in mock mode). All capability advertisement is config-driven —
 //! no capability is hardcoded in the application.
 //!
+//! Tool discovery is hybrid: the planning loop merges MCP tools (registered via
+//! `register_mcp_tool`, stored under `tools/`) with SkillRunner skills (from
+//! `.skill.toml` nodes, stored under `skills/`). Any skill running on the gossip
+//! mesh is automatically available to the LLM planner — no configuration needed.
+//!
 //! # Topology (all localhost)
 //! ```text
 //!   n-0 · 56000  fixed tools: weather, ping       caps: from node_n0.toml
@@ -268,17 +273,16 @@ async fn run_fixed_tool_node(node: Arc<FixedToolNode>) {
 // ── n-1 vector-search provision handler ──────────────────────────────────────
 
 async fn run_vector_search_provision_handler(agent: Arc<GossipAgent>, log: SharedLog) {
-    let mut rx = agent.signal_rx("cap.provision");
+    let mut rx = agent.rpc_rx("cap.provision");
     let mut _tool_h:  Option<McpToolHandle>    = None;
     let mut _ready_h: Option<CapabilityHandle> = None;
 
-    while let Some(sig) = rx.recv().await {
-        if sig.payload.len() < 8 { continue; }
-        let Ok(body) = serde_json::from_slice::<Value>(&sig.payload[8..]) else { continue };
+    while let Some(req) = rx.recv().await {
+        let Ok(body) = serde_json::from_slice::<Value>(&req.payload()) else { continue };
         if body["ns"].as_str() != Some("data") || body["name"].as_str() != Some("vector-search") {
             continue;
         }
-        agent.rpc_respond(&sig, Bytes::from_static(b"accepted"));
+        agent.rpc_respond(&req, Bytes::from_static(b"accepted"));
         push_log(&log, "Provision", "vector-search accepted");
 
         // loading tier — 2 s re-assertion so progress updates stay fresh
@@ -323,17 +327,16 @@ async fn run_vector_search_provision_handler(agent: Arc<GossipAgent>, log: Share
 // ── n-2 LLM provision handler (model pulls) ───────────────────────────────────
 
 async fn run_llm_provision_handler(agent: Arc<GossipAgent>, base_url: String, log: SharedLog) {
-    let mut rx = agent.signal_rx("cap.provision");
+    let mut rx = agent.rpc_rx("cap.provision");
     let mut _extra_inference: Vec<CapabilityHandle> = Vec::new();
 
-    while let Some(sig) = rx.recv().await {
-        if sig.payload.len() < 8 { continue; }
-        let Ok(body) = serde_json::from_slice::<Value>(&sig.payload[8..]) else { continue };
+    while let Some(req) = rx.recv().await {
+        let Ok(body) = serde_json::from_slice::<Value>(&req.payload()) else { continue };
         if body["ns"].as_str() != Some("llm") { continue; }
         let model = body["model"].as_str().unwrap_or("").to_string();
         if model.is_empty() { continue; }
 
-        agent.rpc_respond(&sig, Bytes::from_static(b"pulling"));
+        agent.rpc_respond(&req, Bytes::from_static(b"pulling"));
         push_log(&log, "LLM Provision", format!("pulling model={model}"));
 
         let mut loading_h = agent.advertise_capability(
@@ -417,12 +420,56 @@ fn discover_tools(agent: &GossipAgent) -> Vec<(String, NodeId, Value)> {
             "function": { "name": tool_name, "description": description, "parameters": input_schema }
         })));
     }
+    // SkillRunner skills: keys are skills/{ns}/{name}/{node}/input
+    for (key, schema_bytes) in agent.scan_prefix("skills/") {
+        if !key.ends_with("/input") { continue; }
+        let parts: Vec<&str> = key.splitn(5, '/').collect();
+        if parts.len() != 5 { continue; }
+        let (ns, name) = (parts[1], parts[2]);
+        let Ok(node_id) = parts[3].parse::<NodeId>() else { continue };
+        let Ok(schema)  = serde_json::from_slice::<Value>(&schema_bytes) else { continue };
+        let fn_name = format!("{ns}__{name}");
+        let description = agent.resolve(&CapFilter::new(ns, name))
+            .into_iter()
+            .find(|(nid, _)| *nid == node_id)
+            .and_then(|(_, cap)| cap.attributes.get("description" as &str)
+                .and_then(|v| if let CapValue::Text(s) = v { Some(s.as_ref().to_string()) } else { None }))
+            .unwrap_or_else(|| format!("{ns}/{name}"));
+        tools.push((fn_name.clone(), node_id, json!({
+            "type": "function",
+            "function": { "name": fn_name, "description": description, "parameters": schema }
+        })));
+    }
+
     let mut seen = std::collections::HashSet::new();
     tools.retain(|(name, _, _)| seen.insert(name.clone()));
     tools
 }
 
 async fn invoke_tool(agent: &GossipAgent, tool_name: &str, args: Value) -> Result<Value, String> {
+    // SkillRunner skill: tool name uses ns__name encoding (e.g. "llm__summarizer")
+    if let Some((ns, name)) = tool_name.split_once("__") {
+        let prefix = format!("skills/{ns}/{name}/");
+        let (key, _) = agent.scan_prefix(&prefix).into_iter()
+            .find(|(k, _)| k.ends_with("/input"))
+            .ok_or_else(|| format!("no provider for skill {ns}/{name}"))?;
+        let parts: Vec<&str> = key.splitn(5, '/').collect();
+        if parts.len() < 4 { return Err(format!("malformed skill key: {key}")); }
+        let node_id: NodeId = parts[3].parse().map_err(|e: mycelium::GossipError| e.to_string())?;
+        let reply = agent.rpc_call(
+            node_id, "skill.invoke",
+            Bytes::from(serde_json::to_vec(&args).map_err(|e| e.to_string())?),
+            Duration::from_secs(60),
+        ).await.map_err(|e| e.to_string())?;
+        let resp: Value = serde_json::from_slice(&reply).map_err(|e| e.to_string())?;
+        return if let Some(err) = resp.get("error") {
+            Err(err.as_str().unwrap_or("skill error").to_string())
+        } else {
+            Ok(resp)
+        };
+    }
+
+    // MCP tool (registered via register_mcp_tool)
     let entries = agent.scan_prefix(&format!("tools/{tool_name}/"));
     let (key, _) = entries.into_iter().next()
         .ok_or_else(|| format!("no provider for {tool_name}"))?;
@@ -969,6 +1016,20 @@ fn build_state_json(app: &AppState) -> String {
             "from": e.from_idx, "to": e.to_idx, "ts": e.ts_ms, "kind": e.kind,
         })).collect()
     };
+    let audit: Vec<Value> = {
+        let mut entries: Vec<(Arc<str>, Value)> = reporter.scan_prefix("audit/")
+            .into_iter()
+            .filter_map(|(k, v)| serde_json::from_slice::<Value>(&v).ok().map(|j| (k, j)))
+            .collect();
+        entries.sort_by(|(a, _), (b, _)| b.cmp(a));
+        entries.truncate(10);
+        entries.into_iter().map(|(_, r)| json!({
+            "skill":       format!("{}/{}", r["skill_ns"].as_str().unwrap_or("?"), r["skill_name"].as_str().unwrap_or("?")),
+            "success":     r["success"],
+            "duration_ms": r["duration_ms"],
+        })).collect()
+    };
+
     let sm_raw = app.sm.state().to_kv_str();
     let planner_state = if sm_raw == "Idle" { "Ready".to_string() } else { sm_raw };
     let planner_node: &str = {
@@ -995,6 +1056,7 @@ fn build_state_json(app: &AppState) -> String {
         },
         "traffic":     traffic,
         "preset_name": preset_name,
+        "audit":       audit,
     }).to_string()
 }
 
