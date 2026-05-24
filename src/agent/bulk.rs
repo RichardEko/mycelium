@@ -9,15 +9,20 @@
 //! ## Wire format (INVOKE_BULK signal payload)
 //!
 //! ```text
-//! ┌────────────────┬───────────────────┐
-//! │ nonce  (8 B LE)│ kind (UTF-8 bytes) │
-//! └────────────────┴───────────────────┘
+//! ┌────────────────┬────────────┬───────────────────┐
+//! │ nonce  (8 B LE)│ port (2 LE)│ kind (UTF-8 bytes) │
+//! └────────────────┴────────────┴───────────────────┘
 //! ```
 //!
 //! The caller stages the payload at `GET /bulk/{nonce:016x}` on its own HTTP
-//! server. The target fetches it there, processes it, and replies via
-//! `bulk.result` (a dedicated signal kind, separate from `rpc.result`) so
-//! bulk reply handlers do not compete with RPC reply handlers.
+//! server. The target fetches it there using the caller's IP (from the signal
+//! envelope) and the caller's `port` (from the ticket), processes it, and
+//! replies via `bulk.result` (a dedicated signal kind, separate from
+//! `rpc.result`) so bulk reply handlers do not compete with RPC reply handlers.
+//!
+//! The port is per-ticket (not per-node configuration) because the caller's
+//! HTTP port must be communicated to the serving node; the server's own
+//! `BulkTransport::http_port` is irrelevant to the fetch.
 //!
 //! ## Endpoints
 //!
@@ -36,7 +41,7 @@
 use crate::node_id::NodeId;
 use crate::signal::{Signal, SignalScope, signal_kind};
 use bytes::{BufMut, Bytes, BytesMut};
-use std::{sync::Arc, time::Duration};
+use std::{sync::{Arc, atomic::{AtomicU16, Ordering}}, time::Duration};
 use tokio::sync::oneshot;
 use tracing::warn;
 
@@ -49,9 +54,9 @@ use super::emit_signal;
 /// timeout, and the pooled HTTP client used by `bulk_serve` to retrieve
 /// staged payloads from remote callers.
 pub struct BulkTransport {
-    staging:           papaya::HashMap<u64, Bytes>,
-    pub(crate) http_port: u16,
-    client:            reqwest::Client,
+    staging:   papaya::HashMap<u64, Bytes>,
+    http_port: AtomicU16,
+    client:    reqwest::Client,
 }
 
 impl BulkTransport {
@@ -61,10 +66,23 @@ impl BulkTransport {
             .build()
             .expect("reqwest::Client build should never fail with valid config");
         Self {
-            staging: papaya::HashMap::new(),
-            http_port,
+            staging:   papaya::HashMap::new(),
+            http_port: AtomicU16::new(http_port),
             client,
         }
+    }
+
+    pub fn http_port(&self) -> u16 {
+        self.http_port.load(Ordering::Relaxed)
+    }
+
+    /// Overrides the HTTP port used when advertising staged payloads to peers.
+    ///
+    /// Call this when using a custom HTTP server instead of the embedded gateway
+    /// (`GossipConfig::http_port`). The port is stored atomically so it can be
+    /// updated at any time after agent construction.
+    pub fn set_http_port(&self, port: u16) {
+        self.http_port.store(port, Ordering::Relaxed);
     }
 
     /// Stages `payload` under `nonce` and returns a [`StagedGuard`] that
@@ -141,7 +159,7 @@ pub(crate) async fn bulk_call_ctx(
     payload: Bytes,
     timeout: Duration,
 ) -> Result<Bytes, BulkError> {
-    let http_port = ctx.bulk_transport.http_port;
+    let http_port = ctx.bulk_transport.http_port();
     if http_port == 0 { return Err(BulkError::NoHttpPort); }
 
     let nonce: u64 = fastrand::u64(1..);
@@ -149,10 +167,11 @@ pub(crate) async fn bulk_call_ctx(
     // Stage the payload; _guard removes it on any exit (timeout, cancel, success).
     let _guard = ctx.bulk_transport.stage(nonce, payload);
 
-    // Build the ticket: nonce(8) | kind_bytes  (port is no longer in-band)
+    // Build the ticket: nonce(8) | http_port(2) | kind_bytes
     let kind_bytes = kind.as_bytes();
-    let mut buf = BytesMut::with_capacity(8 + kind_bytes.len());
+    let mut buf = BytesMut::with_capacity(10 + kind_bytes.len());
     buf.put_u64_le(nonce);
+    buf.put_u16_le(http_port);
     buf.put(kind_bytes);
     let ticket = buf.freeze();
 
@@ -223,21 +242,17 @@ where
     F: Fn(NodeId, Bytes) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = Bytes> + Send + 'static,
 {
-    // Wire: nonce(8) | kind_bytes  (port dropped from in-band format)
-    if sig.payload.len() < 8 { return; }
-    let nonce    = u64::from_le_bytes(sig.payload[..8].try_into().unwrap());
-    let sig_kind = match std::str::from_utf8(&sig.payload[8..]) {
+    // Wire: nonce(8) | http_port(2) | kind_bytes
+    if sig.payload.len() < 10 { return; }
+    let nonce     = u64::from_le_bytes(sig.payload[..8].try_into().unwrap());
+    let http_port = u16::from_le_bytes(sig.payload[8..10].try_into().unwrap());
+    let sig_kind  = match std::str::from_utf8(&sig.payload[10..]) {
         Ok(s)  => s,
         Err(_) => return,
     };
     if sig_kind != kind.as_ref() { return; }
 
     let sender_ip = sig.sender.to_socket_addr().ip();
-    let http_port = ctx.bulk_transport.http_port;
-    if http_port == 0 {
-        warn!("bulk_serve: no http_port configured — cannot fetch payload from {sender_ip}");
-        return;
-    }
     let url = format!("http://{sender_ip}:{http_port}/bulk/{nonce:016x}");
 
     let handler_clone = Arc::clone(handler);
@@ -295,6 +310,15 @@ impl GossipAgent {
     /// has already been cleaned up.
     pub fn bulk_staging_get(&self, nonce: u64) -> Option<Bytes> {
         self.task_ctx.bulk_transport.get(nonce)
+    }
+
+    /// Overrides the HTTP port used when advertising staged bulk payloads.
+    ///
+    /// Use this when running a custom HTTP server (not the embedded gateway)
+    /// that serves `GET /bulk/{nonce}` via [`bulk_staging_get`](Self::bulk_staging_get).
+    /// Must be called before the first [`bulk_call`](Self::bulk_call).
+    pub fn set_bulk_serving_port(&self, port: u16) {
+        self.task_ctx.bulk_transport.set_http_port(port);
     }
 
     /// Registers a handler for incoming bulk calls of a given `kind`.

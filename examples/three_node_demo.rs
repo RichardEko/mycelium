@@ -810,6 +810,10 @@ async fn node_emit(
 }
 
 async fn run_node(agent: Arc<GossipAgent>, role: &str, http_port: u16) {
+    // Tell the bulk transport which port this node's own HTTP server is on,
+    // since node roles skip the embedded gateway (agent_http = None).
+    agent.set_bulk_serving_port(http_port);
+
     let _role_cap = agent.advertise_capability(Capability::new("role", "node"), Duration::from_secs(5));
 
     // Record test.signal arrivals under a per-hostname key so each node's
