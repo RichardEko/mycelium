@@ -611,11 +611,12 @@
   it is the bloodstream the application runs on.</p>
   <div class="hero-badges">
     <span class="badge"><span class="dot dot-live"></span> Layer 1: Gossip Transport — Complete</span>
-    <span class="badge"><span class="dot dot-live"></span> Layer 2: Signal / Boundary Mesh — Complete · 212 tests</span>
+    <span class="badge"><span class="dot dot-live"></span> Layer 2: Signal / Boundary Mesh — Complete · 213 tests</span>
     <span class="badge"><span class="dot dot-live"></span> Consensus — Complete</span>
     <span class="badge"><span class="dot dot-live"></span> Capability &amp; Discovery — Complete</span>
     <span class="badge"><span class="dot dot-live"></span> Layer 3: Service Patterns — Complete · 10 integration tests</span>
-    <span class="badge"><span class="dot dot-future"></span> Layers 4–5: AI Integration + Observability — Planned</span>
+    <span class="badge"><span class="dot dot-live"></span> Layer 4: Python Bridge (mycelium-py) — Complete</span>
+    <span class="badge"><span class="dot dot-future"></span> Layer 4 (cont.): MCP + TypeScript SDK — Planned</span>
   </div>
 </div>
 
@@ -939,7 +940,7 @@
             <span class="chip">tools/ · skills/ KV namespace</span>
             <span class="chip">rpc_call · rpc_respond</span>
             <span class="chip">SkillRunner · .skill.toml</span>
-            <span class="chip">Python SDK (HTTP gateway)</span>
+            <span class="chip">Python SDK (HTTP gateway) ✓</span>
             <span class="chip">TypeScript SDK</span>
             <span class="chip">A2A adapter (post-MCP)</span>
             <span class="chip">credential context (bridge-layer)</span>
@@ -1021,7 +1022,7 @@
       <div class="stack-row">
         <div class="stack-num sn-2">Layer<br>2</div>
         <div class="stack-body">
-          <div class="stack-title">Signal / Boundary Mesh <span class="phase-tag tag-done">Complete · 212 tests</span></div>
+          <div class="stack-title">Signal / Boundary Mesh <span class="phase-tag tag-done">Complete · 213 tests</span></div>
           <p class="stack-desc">Ephemeral events propagate epidemically. Boundaries (local receptors) decide action. Variable opacity creates emergent backpressure under load. Active inhibition provides refractory periods. Fault detection, threshold activation, proactive peer notification, and persistent advertisement round out the layer.</p>
           <div class="chips">
             <span class="chip">signal_rx · emit · signal_once</span>
@@ -1936,8 +1937,8 @@ tools = [<span class="str">"gh"</span>, <span class="str">"read_file"</span>]   
         <div class="tl-card">
           <div class="tl-num" style="color:var(--accent4)">Layer 4</div>
           <div class="tl-title">MCP + Language Bridges</div>
-          <div class="tl-weeks">Python SDK · TS SDK</div>
-          <span class="tl-badge tl-future">Next</span>
+          <div class="tl-weeks">Python SDK ✓ · TS SDK next</div>
+          <span class="tl-badge tl-done">Partial ✓</span>
         </div>
       </div>
     </div>
@@ -2304,14 +2305,21 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
         <p style="font-size:12px; color:var(--muted);"><strong style="color:var(--text2);">Needs:</strong> mTLS peer connections · NodeId backed by a keypair (identity signing) · payload HMAC/signing for consensus ballots at minimum</p>
       </div>
 
-      <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:18px;">
+      <div style="background:var(--surface2); border:1px solid rgba(63,185,80,0.3); border-radius:var(--radius); padding:18px;">
         <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
-          <span style="font-size:20px;">🟡</span>
-          <span style="font-weight:700; font-size:14px;">Language bridges not built</span>
+          <span style="font-size:20px;">🟢</span>
+          <span style="font-weight:700; font-size:14px;">Python language bridge shipped (<code>mycelium-py</code>)</span>
         </div>
-        <p style="font-size:13px; color:var(--text2); margin-bottom:10px;">Python and TypeScript language bridges are designed but not implemented.
-        Only Rust agents can join the mesh natively. Python/TS agents can call in via MCP tool calls but cannot advertise capabilities, declare requirements, join groups, or observe full mesh state.</p>
-        <p style="font-size:12px; color:var(--muted);"><strong style="color:var(--text2);">Needs:</strong> HTTP gateway sidecar + <code>mycelium-py</code> SDK covering <code>advertise_capability</code>, <code>on_signal</code>, <code>emit</code>, <code>resolve</code>, <code>demand</code></p>
+        <p style="font-size:13px; color:var(--text2); margin-bottom:10px;">The <code>mycelium-py</code> SDK is complete and published alongside the Rust node. Python agents connect over loopback HTTP to the embedded gateway sidecar — no native extension, no FFI. The full mesh surface is exposed:</p>
+        <p style="font-size:12px; color:var(--muted);">
+          <strong style="color:var(--text2);">Shipped:</strong>
+          <code>advertise_capability</code> · <code>resolve_capability</code> · <code>demand</code> ·
+          <code>emit</code> · <code>on_signal</code> ·
+          <code>rpc_call</code> · <code>rpc_serve</code> · <code>rpc_respond</code> · <code>scatter_gather</code> ·
+          <code>get</code> / <code>set</code> / <code>delete</code> / <code>keys</code> / <code>scan_prefix</code> ·
+          <code>deliver_event</code> · <code>mailbox</code> · <code>health</code> · <code>stats</code>
+        </p>
+        <p style="font-size:12px; color:var(--muted); margin-top:8px;"><strong style="color:var(--text2);">Remaining:</strong> TypeScript SDK (same gateway, same pattern) · MCP server/client roles · SkillRunner</p>
       </div>
 
       <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:18px; grid-column: 1 / -1;">
@@ -2332,7 +2340,7 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
         <tr><td>Multi-machine integration tests + deployment docs (10 scenarios)</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-23</td></tr>
         <tr><td>KV persistence (WAL + snapshot/replay)</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-23</td></tr>
         <tr><td>mTLS + node identity signing</td><td style="color:#ff7b72; font-weight:600;">Blocking</td><td>2–3 weeks</td></tr>
-        <tr><td>Python language bridge (<code>mycelium-py</code>)</td><td style="color:#ffa657; font-weight:600;">High</td><td>2–3 weeks</td></tr>
+        <tr><td>Python language bridge (<code>mycelium-py</code>)</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-24</td></tr>
         <tr><td>Prometheus metrics export + dashboards</td><td style="color:#e3b341; font-weight:600;">Medium</td><td>1 week</td></tr>
       </tbody>
     </table>
@@ -2344,7 +2352,7 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
       <h2>Operator Guide — How to Deploy</h2>
       <p style="margin-top:0.6rem;color:#94a3b8;font-size:0.95rem;">
         KV persistence is complete and fully documented below. Sections marked <em>pending</em> will be
-        filled out when mTLS and multi-machine integration tests ship.
+        filled out when mTLS ships.
       </p>
     </div>
 
