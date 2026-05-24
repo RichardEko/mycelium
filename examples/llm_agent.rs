@@ -1993,8 +1993,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // elected manager. All three must listen so redirects resolve correctly
     // even when n-0 (port 8100) fails and n-1 (8101) becomes the manager.
     for port in [HTTP_PORT_N0, HTTP_PORT_N1, HTTP_PORT_N2] {
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
-        println!("Serving http://127.0.0.1:{port}");
+        let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
+        println!("Serving http://0.0.0.0:{port}");
         let app = Arc::clone(&app);
         tokio::spawn(async move {
             loop {

@@ -1,11 +1,12 @@
 ## Mycelium — convenience targets
 
-COMPOSE      = docker compose -f tests/integration/docker-compose.test.yml
-COMPOSE_LLM  = docker compose -f docker/docker-compose.yml
+COMPOSE          = docker compose -f tests/integration/docker-compose.test.yml
+COMPOSE_LLM      = docker compose -f docker/docker-compose.yml
+COMPOSE_LLM_DEMO = docker compose -f docker/docker-compose.llm-agent.yml
 
-.PHONY: build test test-clean test-llm-demo help
+.PHONY: build test test-clean test-llm-demo test-llm-agent llm-agent-interactive help
 
-## test — build the cluster and run all 7 unattended integration scenarios
+## test — build the cluster and run all integration scenarios
 test:
 	$(COMPOSE) down -v --remove-orphans 2>/dev/null || true
 	$(COMPOSE) up -d --build
@@ -18,11 +19,25 @@ test:
 test-clean:
 	$(COMPOSE) down -v --remove-orphans
 
-## test-llm-demo — manual scenario 8: start the LLM demo cluster
-## Requires Ollama installed locally (llama3.2 will be pulled on first run).
-## Open http://localhost:8080 to start chatting.
+## test-llm-demo — manual scenario: start the three_node_demo LLM cluster
+## Requires Ollama installed locally. Open http://localhost:8080 to chat.
 test-llm-demo:
 	$(COMPOSE_LLM) up --build
+
+## test-llm-agent — automated Docker test of the llm_agent example (MOCK_LLM=1)
+## Builds the container, runs 6 scenarios, tears down. No Ollama needed.
+test-llm-agent:
+	$(COMPOSE_LLM_DEMO) down -v --remove-orphans 2>/dev/null || true
+	$(COMPOSE_LLM_DEMO) up -d --build
+	@$(COMPOSE_LLM_DEMO) logs -f runner & \
+	EXIT=$$(docker wait mycelium-llm-agent-runner); \
+	$(COMPOSE_LLM_DEMO) down -v --remove-orphans 2>/dev/null || true; \
+	exit $$EXIT
+
+## llm-agent-interactive — start the llm_agent demo with real Ollama
+## Open http://localhost:8100 for the mesh control UI.
+llm-agent-interactive:
+	MOCK_LLM=0 $(COMPOSE_LLM_DEMO) up --build llm-agent
 
 ## build — compile the library and the demo binary
 build:

@@ -1,0 +1,39 @@
+# ── Build stage ───────────────────────────────────────────────────────────────
+FROM rust:1.85-slim AS builder
+
+RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Cache dependency compilation: stub llm_agent so Cargo fetches + compiles all
+# deps on the first pass; source overwrite on the second pass only relinks.
+COPY Cargo.toml Cargo.lock ./
+RUN mkdir -p src examples && \
+    echo 'fn main(){}' > examples/llm_agent.rs && \
+    echo '' > src/lib.rs && \
+    cargo build --release --example llm_agent 2>/dev/null || true
+
+COPY . .
+RUN touch examples/llm_agent.rs && cargo build --release --example llm_agent
+
+# ── Runtime stage ─────────────────────────────────────────────────────────────
+FROM debian:bookworm-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates libssl3 curl && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/target/release/examples/llm_agent /usr/local/bin/llm-agent
+
+# Config files read at runtime from CWD (examples/mesh.toml, examples/node_n*.toml)
+COPY examples/mesh.toml      /app/examples/mesh.toml
+COPY examples/node_n0.toml   /app/examples/node_n0.toml
+COPY examples/node_n1.toml   /app/examples/node_n1.toml
+COPY examples/node_n2.toml   /app/examples/node_n2.toml
+
+WORKDIR /app
+
+# n-0 HTTP UI (manager); n-1 and n-2 redirect here while n-0 is the leader
+EXPOSE 8100 8101 8102
+
+ENTRYPOINT ["/usr/local/bin/llm-agent"]
