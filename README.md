@@ -504,19 +504,36 @@ Measured on the development machine, release build (`cargo bench`). Local hot-pa
 
 ## Security Model
 
-mycelium operates in a **trusted domain** — all nodes on the gossip mesh are assumed to be
-cooperative. There is no TLS, no peer authentication, and no payload encryption.
+mycelium supports **mutual TLS** (mTLS) on the gossip TCP port via the optional `tls` cargo
+feature. When enabled, every peer connection requires a valid cluster-CA-signed Ed25519
+certificate. Nodes without the shared CA are rejected at the TLS handshake before any data
+is exchanged.
 
-A connected peer can:
+**Enable with:**
+```toml
+[dependencies]
+mycelium = { version = "…", features = ["tls"] }
+```
+```rust
+config.tls = Some(TlsConfig::default()); // auto-generates CA + certs in ./mycelium-tls/
+```
+
+**What the `tls` feature provides:**
+- **mTLS transport** — `tokio-rustls` mTLS on every gossip TCP connection; plain nodes cannot connect.
+- **Ed25519 node identity** — each node's TLS cert key is its identity keypair; the 32-byte
+  verifying key is gossiped to `sys/identity/{node}` and cached in `peer_keys`.
+- **Signed consensus payloads** — all `Propose`, `Vote`, `Nack`, and `Commit` messages are
+  Ed25519-signed by the sender; forged ballots are dropped on receipt.
+
+**Without the `tls` feature** (default), mycelium operates in a **trusted domain** — all nodes
+on the gossip mesh are assumed to be cooperative. A connected peer can:
 - Send crafted frames to inject arbitrary KV entries (limited by LWW timestamps)
 - Claim any `NodeId` in a `StateRequest` (consequence: misdirected `StateResponse`, harmless)
 - Poison a nonce in the dedup seen-set (probability: < 1/2⁶⁴ per collision)
 
-**Do not expose gossip ports to untrusted networks.** Use a network-layer control (firewall
-rules, WireGuard, VPC security groups) to restrict access to the gossip port to trusted peers
-only.
-
-TLS and mutual authentication are planned at Layer 3 for external-facing service endpoints.
+**Do not expose gossip ports to untrusted networks** when running without TLS. Use a
+network-layer control (firewall rules, WireGuard, VPC security groups) to restrict access
+to the gossip port to trusted peers only.
 
 ## Layer III — Consensus
 
@@ -578,7 +595,7 @@ let slices = agent.group_trust("workers");
 | Proposer self-votes | Proposer always counts as one voter; no listener required for single-node quorum |
 | LWW commit idempotency | Two simultaneous commits of the same value are safe; higher-ballot commit wins via LWW timestamp |
 | No ordering log | Each slot is an independent KV entry (CASPaxos-style); no WAL required |
-| Trusted domain | No signing or FBA quorum intersection; Byzantine fault tolerance is out of scope |
+| Signing | With `tls` feature: all consensus payloads are Ed25519-signed; forged ballots are dropped. Without: trusted-domain only; Byzantine fault tolerance is out of scope |
 
 `quorum_size = 0` uses `floor(N/2) + 1` (simple majority). `max_peers` cap and
 `phase1_timeout` are tunable via `ConsensusConfig`.

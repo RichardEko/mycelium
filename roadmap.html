@@ -615,6 +615,7 @@
     <span class="badge"><span class="dot dot-live"></span> Consensus — Complete</span>
     <span class="badge"><span class="dot dot-live"></span> Capability &amp; Discovery — Complete</span>
     <span class="badge"><span class="dot dot-live"></span> Layer 3: Service Patterns — Complete · 10 integration tests</span>
+    <span class="badge"><span class="dot dot-live"></span> mTLS + Node Identity + Consensus Signing — Complete</span>
     <span class="badge"><span class="dot dot-live"></span> Layer 4: Python Bridge (mycelium-py) — Complete</span>
     <span class="badge"><span class="dot dot-future"></span> Layer 4 (cont.): MCP + TypeScript SDK — Planned</span>
   </div>
@@ -1062,7 +1063,7 @@
   <div class="section">
     <div class="section-head">
       <h2>Layer 2 — Signal / Boundary Mesh</h2>
-      <span class="phase-tag tag-done">Complete · 212 tests</span>
+      <span class="phase-tag tag-done">Complete · 213 tests</span>
     </div>
 
     <!-- Scope diagram -->
@@ -2294,15 +2295,23 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
         <p style="font-size:12px; color:var(--muted);"><strong style="color:var(--text2);">Implemented:</strong> <code>PersistenceConfig</code> · <code>SyncMode</code> (Flush / Async / Os) · startup replay · post-replay snapshot · opacity during snapshot window · <code>append_sync</code> for consensus committed slots</p>
       </div>
 
-      <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:18px;">
+      <div style="background:var(--surface2); border:1px solid rgba(63,185,80,0.3); border-radius:var(--radius); padding:18px;">
         <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
-          <span style="font-size:20px;">🔴</span>
-          <span style="font-weight:700; font-size:14px;">No security layer</span>
+          <span style="font-size:20px;">🟢</span>
+          <span style="font-weight:700; font-size:14px;">Security layer shipped</span>
+          <span style="font-size:11px; font-weight:600; color:var(--accent2); background:rgba(63,185,80,0.1); border:1px solid rgba(63,185,80,0.3); border-radius:20px; padding:2px 10px; margin-left:auto;">shipped 2026-05-24</span>
         </div>
-        <p style="font-size:13px; color:var(--text2); margin-bottom:10px;">No authentication, no encryption, no payload integrity checking.
-        Any node that can reach the TCP port can join the mesh, read all KV state, inject signals, and forge capability advertisements.
-        The only protection is a comment.</p>
-        <p style="font-size:12px; color:var(--muted);"><strong style="color:var(--text2);">Needs:</strong> mTLS peer connections · NodeId backed by a keypair (identity signing) · payload HMAC/signing for consensus ballots at minimum</p>
+        <p style="font-size:13px; color:var(--text2); margin-bottom:10px;">mTLS peer connections, Ed25519 node identity keypairs, and signed consensus ballots are implemented under the <code>tls</code> cargo feature. A node without a matching cluster CA cert is rejected at the TCP handshake before any data is exchanged.</p>
+        <p style="font-size:12px; color:var(--muted);">
+          <strong style="color:var(--text2);">Implemented:</strong>
+          <code>TlsConfig</code> on <code>GossipConfig</code> ·
+          auto-generate CA + per-node Ed25519 cert (<code>rcgen</code>) or load from PEM paths ·
+          mutual TLS on every gossip TCP connection (<code>tokio-rustls</code>) ·
+          <code>sys/identity/{node}</code> KV entry (32-byte verifying key) ·
+          <code>peer_keys</code> cache seeded from KV + live prefix watcher ·
+          <code>SignedConsensusMsg</code> — all <code>Propose</code>, <code>Vote</code>, <code>Nack</code>, <code>Commit</code> payloads Ed25519-signed on emit, verified on recv; forged ballots dropped with <code>warn!</code>
+        </p>
+        <p style="font-size:12px; color:var(--muted); margin-top:8px;"><strong style="color:var(--text2);">Remaining:</strong> KV write signing (each hop would need to re-sign; deferred) · certificate rotation without cluster disruption</p>
       </div>
 
       <div style="background:var(--surface2); border:1px solid rgba(63,185,80,0.3); border-radius:var(--radius); padding:18px;">
@@ -2339,7 +2348,7 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
       <tbody>
         <tr><td>Multi-machine integration tests + deployment docs (10 scenarios)</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-23</td></tr>
         <tr><td>KV persistence (WAL + snapshot/replay)</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-23</td></tr>
-        <tr><td>mTLS + node identity signing</td><td style="color:#ff7b72; font-weight:600;">Blocking</td><td>2–3 weeks</td></tr>
+        <tr><td>mTLS + node identity signing + consensus signing</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-24</td></tr>
         <tr><td>Python language bridge (<code>mycelium-py</code>)</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-24</td></tr>
         <tr><td>Prometheus metrics export + dashboards</td><td style="color:#e3b341; font-weight:600;">Medium</td><td>1 week</td></tr>
       </tbody>
@@ -2351,13 +2360,8 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
     <div class="section-head">
       <h2>Operator Guide — How to Deploy</h2>
       <p style="margin-top:0.6rem;color:#94a3b8;font-size:0.95rem;">
-        KV persistence is complete and fully documented below. Sections marked <em>pending</em> will be
-        filled out when mTLS ships.
+        KV persistence and mTLS are complete and fully documented below.
       </p>
-    </div>
-
-    <div style="background:rgba(255,166,87,0.06); border:1px solid rgba(255,166,87,0.25); border-radius:var(--radius); padding:16px 20px; margin-bottom:28px; font-size:13px; color:var(--accent4);">
-      <strong>Partially complete.</strong> KV persistence configuration below is authoritative. Security (mTLS) and multi-machine deployment sections remain stubs until those blockers ship.
     </div>
 
     <!-- ── KV Persistence — Full content ── -->
@@ -2495,16 +2499,32 @@ let config = GossipConfig {
         </ul>
       </div>
 
-      <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:18px;">
-        <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+      <div style="background:var(--surface2); border:1px solid rgba(63,185,80,0.3); border-radius:var(--radius); padding:18px;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
           <div style="font-weight:700; font-size:14px; color:var(--text);">4 — Security configuration</div>
-          <span style="font-size:10px; color:var(--muted); border:1px solid var(--border); border-radius:10px; padding:1px 8px;">pending mTLS</span>
+          <span style="font-size:10px; font-weight:600; color:var(--accent2); background:rgba(63,185,80,0.1); border:1px solid rgba(63,185,80,0.3); border-radius:10px; padding:1px 8px;">Complete — 2026-05-24</span>
         </div>
-        <ul style="font-size:13px; color:var(--muted); padding-left:18px; line-height:1.8;">
-          <li>Generating node keypairs and the cluster CA</li>
-          <li>mTLS configuration in <code>GossipConfig</code></li>
-          <li>Rotating certificates without cluster disruption</li>
-          <li>Network policy: which ports to open, which to firewall</li>
+        <p style="font-size:13px; color:var(--text2); margin-bottom:10px;">Enable the <code>tls</code> cargo feature and set <code>GossipConfig::tls</code>. TLS is opt-in; omitting the field leaves all existing plain-TCP behaviour unchanged.</p>
+        <p style="font-size:12px; color:var(--muted); margin-bottom:8px;"><strong style="color:var(--text2);">Quick start (auto-generate):</strong></p>
+        <pre style="font-size:12px; background:var(--surface1); border:1px solid var(--border); border-radius:6px; padding:10px 14px; overflow-x:auto; margin-bottom:12px;">[dependencies]
+mycelium = { version = "…", features = ["tls"] }</pre>
+        <pre style="font-size:12px; background:var(--surface1); border:1px solid var(--border); border-radius:6px; padding:10px 14px; overflow-x:auto; margin-bottom:12px;">// Auto-generates CA + per-node Ed25519 cert on first start.
+// Certs are saved in ./mycelium-tls/ and reused on restart.
+config.tls = Some(TlsConfig::default());</pre>
+        <p style="font-size:12px; color:var(--muted); margin-bottom:8px;"><strong style="color:var(--text2);">Manual PEM paths:</strong></p>
+        <pre style="font-size:12px; background:var(--surface1); border:1px solid var(--border); border-radius:6px; padding:10px 14px; overflow-x:auto; margin-bottom:12px;">config.tls = Some(TlsConfig {
+    cert_pem:     Some("/etc/mycelium/node.crt".into()),
+    key_pem:      Some("/etc/mycelium/node.key".into()),
+    ca_cert_pem:  Some("/etc/mycelium/ca.crt".into()),
+    ..TlsConfig::default()
+});</pre>
+        <ul style="font-size:13px; color:var(--muted); padding-left:18px; line-height:1.8; margin-top:8px;">
+          <li><strong style="color:var(--text2);">Auto-generate flow:</strong> on first start each node writes <code>auto_cert_dir/{node_id}.key</code> (raw 32-byte Ed25519 key) and shares a cluster CA. Distribute <code>ca-cert.pem</code> to all nodes before starting the cluster; each node re-generates its own cert from the shared CA on every start.</li>
+          <li><strong style="color:var(--text2);">Identity publication:</strong> the 32-byte Ed25519 verifying key is gossiped to <code>sys/identity/{node}</code> so peers can verify signed consensus messages even before a direct mTLS handshake has occurred.</li>
+          <li><strong style="color:var(--text2);">Consensus signing:</strong> all <code>Propose</code>, <code>Vote</code>, <code>Nack</code>, and <code>Commit</code> payloads are Ed25519-signed by the sender and verified on receipt. Forged ballots are silently dropped.</li>
+          <li><strong style="color:var(--text2);">Mixed-mode:</strong> a node without a matching cluster CA is rejected at the TCP handshake. Plain (no-TLS) nodes and TLS nodes cannot interoperate — this is intentional.</li>
+          <li><strong style="color:var(--text2);">Network policy:</strong> only the gossip TCP port needs to be open between cluster nodes; the mTLS handshake is the access control boundary. No other ports are required.</li>
+          <li><strong style="color:var(--text2);">Not yet implemented:</strong> hot certificate rotation without cluster disruption; KV write signing (each gossip hop would need to re-sign — deferred).</li>
         </ul>
       </div>
 
@@ -2544,7 +2564,7 @@ let config = GossipConfig {
   <!-- ── Footer ── -->
   <div style="margin-top:72px; padding-top:24px; border-top:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
     <span style="font-size:12px; color:var(--muted);">mycelium · Engineering Roadmap · 2026-05-24</span>
-    <span style="font-size:12px; color:var(--muted);">Layers 1–3 + Capability &amp; Discovery + Agent State Machine + KV Persistence + 10 integration scenarios complete · mTLS + Language Bridges next</span>
+    <span style="font-size:12px; color:var(--muted);">Layers 1–3 + Capability &amp; Discovery + Agent State Machine + KV Persistence + mTLS + 10 integration scenarios complete · MCP bridge + TypeScript SDK next</span>
   </div>
 
 </div>

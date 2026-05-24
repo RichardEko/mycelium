@@ -1,6 +1,6 @@
 # Mycelium — Engineering Roadmap
 
-> **Status:** Layer 1 complete. Layer 2 complete. Consensus complete. Capability & Discovery subsystem complete. Agent state machine (Layer V) complete. MCP bridge (server + client) complete. Config-driven capability probing complete. KV persistence (WAL + snapshot, all sync modes) complete. Layer 3 Service Patterns complete (HTTP server, SSE, rpc_call/rpc_respond, invoke.bulk, Actor/Event mailboxes, scatter-gather). Multi-machine integration tests (Docker Compose, 10 unattended scenarios) complete. Layers 4–5 (AI Integration / Observability) planned.
+> **Status:** Layer 1 complete. Layer 2 complete. Consensus complete. Capability & Discovery subsystem complete. Agent state machine (Layer V) complete. MCP bridge (server + client) complete. Config-driven capability probing complete. KV persistence (WAL + snapshot, all sync modes) complete. Layer 3 Service Patterns complete (HTTP server, SSE, rpc_call/rpc_respond, invoke.bulk, Actor/Event mailboxes, scatter-gather). Multi-machine integration tests (Docker Compose, 10 unattended scenarios) complete. **mTLS peer connections + Ed25519 node identity + consensus payload signing complete** (`tls` feature). Python language bridge (`mycelium-py`) complete. Layers 4–5 (AI Integration / Observability) planned.
 > **Last updated:** 2026-05-24
 
 ---
@@ -1339,7 +1339,7 @@ Weeks:  0         2          4          6          8         10        12
 | Layer 5 | Metrics, Prometheus exporter, Grafana dashboard | Planned |
 | **Production** | Multi-machine integration tests + Docker Compose reference topology | **Complete** |
 | **Production** | KV persistence: WAL + snapshot/replay; consensus committed-slot durability | **Complete** |
-| **Production** | Security: mTLS peer connections + NodeId keypair + consensus payload signing | **Blocking** |
+| **Production** | Security: mTLS peer connections + NodeId keypair + consensus payload signing | **Complete** |
 | Consistency overlay | `consistent_set`, `consistent_get`, `distributed_lock`, `elect_leader` | Planned |
 | Ordering overlay | `append`, `subscribe_log`, `scan_log`, `compact_log` (ordered log) | Planned |
 | Ordering overlay | `subscribe_log_group` + consumer group offset tracking | Planned |
@@ -1572,19 +1572,25 @@ full-cluster cold restarts. Consensus committed slots are always fsynced regardl
 `sync_mode`. See the **Layer 1 — KV Persistence** section above for the full configuration
 reference.
 
-### 3. No security layer
+### 3. Security layer — Complete (2026-05-24)
 
-There is no authentication, no encryption, and no payload integrity checking. The only
-protection is a comment: "do not expose gossip ports to untrusted networks." Any node that
-can reach the TCP port can join the mesh, read all KV state, inject signals, and forge
-capability advertisements.
+mTLS peer connections, Ed25519 node identity keypairs, and signed consensus payloads are
+implemented under the optional `tls` cargo feature. Enabling `GossipConfig::tls` is sufficient;
+certificates auto-generate on first start.
 
-**What is needed:**
-- **mTLS** for peer connections — each node presents a certificate; mutual verification on
-  connect. The `socket2` dependency is already present; `rustls` is the natural addition.
-- **Node identity signing** — `NodeId` should be backed by a keypair so that capability
-  advertisements and consensus ballots can be verified as originating from the claimed node.
-- **Payload HMAC or signing** — at minimum for consensus ballots; ideally for all KV writes.
+**What was implemented:**
+- **mTLS** — every gossip TCP connection requires a valid cluster CA-signed cert. A node without
+  the shared CA cert is rejected at the TLS handshake before any data is exchanged.
+- **Node identity keypair** — each node generates an Ed25519 signing key (same key as its TLS
+  cert). The 32-byte verifying key is gossiped to `sys/identity/{node}` and cached in
+  `peer_keys` so peers can verify signed messages.
+- **Consensus payload signing** — all `Propose`, `Vote`, `Nack`, and `Commit` payloads are
+  signed by the sender and verified on receipt via `SignedConsensusMsg`. Forged ballots are
+  silently dropped with a `warn!` log entry.
+
+**Not yet implemented:**
+- KV write signing — each gossip hop would need to re-sign; deferred.
+- Hot certificate rotation without cluster disruption.
 
 ### 4. Language bridges not built
 
@@ -1655,7 +1661,7 @@ what thresholds should trigger alerts.
 |-----|----------|--------|
 | Multi-machine integration tests + deployment docs (10 scenarios) | **Blocking** | **Complete** 2026-05-23 |
 | KV persistence (WAL + snapshot/replay) | **Blocking** | **Complete** 2026-05-23 |
-| mTLS + node identity signing | **Blocking** | Pending |
+| mTLS + node identity signing + consensus signing | **Blocking** | **Complete** 2026-05-24 |
 | Python language bridge (`mycelium-py`) | High | Pending |
 | `set_quorum` write-durability confirmation API | Medium | Pending |
 | Prometheus metrics export + dashboards | Medium | Pending |

@@ -14,6 +14,7 @@ three-layer substrate for AI agent fleets and storage replication:
 | **I — KV store** | Last-write-wins state propagation over TCP; anti-entropy synced; every key has a TTL. | `src/store.rs`, `src/connection.rs`, `src/framing.rs`, `src/writer.rs`, `src/seen.rs` |
 | **II — Signal mesh** | Ephemeral scoped events with per-node admission boundaries; pheromone-style opacity composition. | `src/signal.rs`, `src/agent/signal_ops.rs`, `src/agent/opacity.rs` |
 | **III — Consensus** | Epidemic group / system proposals with optional Hard topology enforcement. | `src/consensus.rs`, `src/agent/consensus_ops.rs` |
+| **Security (tls feature)** | mTLS transport, Ed25519 node identity, signed consensus payloads. | `src/tls.rs`, `src/stream.rs` |
 
 Plus a capability / requirement subsystem with emergent groups, inter-group
 wiring, locality-aware resolution, ranking, group-level opacity, and demand
@@ -67,6 +68,12 @@ And Hybrid Logical Clocks for causal LWW ordering: [`src/hlc.rs`](src/hlc.rs).
 5. **Inter-group wiring is per-emission.** `signal_wired_via(filter)`
    resolves wiring at the moment of the call. There is no stored
    binding; re-wiring is implicit because each call re-resolves.
+
+6. **TLS is opt-in and transport-only.** `GossipConfig::tls = Some(TlsConfig::default())`
+   enables mTLS on the gossip TCP port. The same Ed25519 keypair is reused for identity
+   (`sys/identity/{node}`) and consensus signing (`SignedConsensusMsg`). Without the `tls`
+   feature flag, all TLS code compiles away and behaviour is unchanged. `NodeTls` is always
+   defined (zero-size without the feature) so function signatures stay uniform.
 
 ## Active follow-up plans (memory)
 
