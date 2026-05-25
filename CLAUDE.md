@@ -78,8 +78,8 @@ And Hybrid Logical Clocks for causal LWW ordering: [`src/hlc.rs`](src/hlc.rs).
 ## Active follow-up plans (memory)
 
 These are real work items captured in the memory directory at
-`~/.claude/projects/-Volumes-Scratch-Gossip/memory/`. Anyone resuming
-should read [`MEMORY.md`](~/.claude/projects/-Volumes-Scratch-Gossip/memory/MEMORY.md)
+`~/.claude/projects/-Volumes-Scratch-Mycelium/memory/`. Anyone resuming
+should read [`MEMORY.md`](~/.claude/projects/-Volumes-Scratch-Mycelium/memory/MEMORY.md)
 for the index.
 
 | Plan | What's pending |
