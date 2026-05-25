@@ -1,4 +1,4 @@
-# mycelium
+# Mycelium
 
 An embedded gossip protocol library for adaptive AI agent systems. Agents discover each other's
 capabilities through a shared KV medium, signal intent through scope-filtered epidemic events,
@@ -670,7 +670,6 @@ to late joiners automatically.
 
 → The **Capability Market** preset in the [Mesh Control UI](docs/mesh_control.html) demonstrates
 providers, requirers, and per-capability demand-pressure bars across four capability types.
-(Standalone source archived at [`examples/archived/capability_market.rs`](examples/archived/capability_market.rs).)
 
 ### Advertising and Resolving Capabilities
 
@@ -749,7 +748,6 @@ O(groups), not O(groups × members).
 
 → The **Emergent GPU Pool** preset in the [Mesh Control UI](docs/mesh_control.html) shows a
 20-node worker pool that assembles dynamically and fans out render jobs to all members.
-(Standalone source archived at [`examples/archived/emergent_pool.rs`](examples/archived/emergent_pool.rs).)
 
 ```rust
 use mycelium::{CapabilityGroupDef, CapFilter, Capability};
@@ -797,7 +795,6 @@ closest first. `signal_wired_via_locality` combines wiring with locality prefere
 
 → The **Locality Mesh** preset in the [Mesh Control UI](docs/mesh_control.html) covers 12 nodes
 across two availability zones: remove a close provider and the resolver shifts to the next ring.
-(Standalone source archived at [`examples/archived/locality_wiring.rs`](examples/archived/locality_wiring.rs).)
 
 ```rust
 // Config — set once before agent.start()
@@ -1013,7 +1010,7 @@ Skills listed in a manifest's `tools` array can call other skills by name at
 inference time — the mesh routes sub-invocations automatically and the audit
 trail captures the full causal chain.
 
-See [`docs/skillrunner.md`](docs/skillrunner.md) for the full manifest
+See [`docs/skillrunner.html`](docs/skillrunner.html) for the full manifest
 reference, OTEL integration, concurrency controls, and the audit trail format.
 
 See [`examples/skills/`](examples/skills/) for ready-to-run manifests and
