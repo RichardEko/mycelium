@@ -1,12 +1,13 @@
 # Mycelium
 
-An embedded gossip protocol library for adaptive AI agent systems. Agents discover each other's
-capabilities through a shared KV medium, signal intent through scope-filtered epidemic events,
-and evolve their topology without a coordinator, central registry, or single point of failure.
+A broker-less mesh runtime for AI agent fleets, embedded as a Rust library. Agents discover
+each other's capabilities, route tool calls, exchange events, and reach consensus — all without
+a coordinator, central registry, or single point of failure.
 
 Built on TCP epidemic propagation with last-write-wins conflict resolution. Layer 1 carries
-persistent state; Layer 2 carries ephemeral events. Higher layers build Actor/Event systems,
-async RPC, and MCP AI tool routing on top — each agent chooses its own payload serialisation.
+persistent state; Layer 2 carries ephemeral events. Higher layers provide async RPC, Actor/Event
+mailboxes, MCP tool routing, SkillRunner LLM nodes, and a Python bridge — each agent chooses
+its own payload serialisation.
 
 ## Demos
 
