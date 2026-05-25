@@ -8,6 +8,7 @@ from .agent import (
     LogEntry,
     LockGuard,
 )
+from .a2a import A2aClient
 
 __all__ = [
     "MyceliumAgent",
@@ -18,4 +19,5 @@ __all__ = [
     "MailboxEvent",
     "LogEntry",
     "LockGuard",
+    "A2aClient",
 ]

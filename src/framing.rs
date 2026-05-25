@@ -42,6 +42,16 @@ pub(crate) const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
 ///     physical with logical=0 and lose every LWW comparison), so v8 acceptance was
 ///     closed when v9 shipped — `PREV_WIRE_VERSION = WIRE_VERSION = 9`. Mixed-version
 ///     clusters must perform a stop-the-world upgrade.
+/// v10: Ed25519 signatures on locally-originated KV writes under the `tls` feature.
+///     A new `WireMessage::SignedData { update: GossipUpdate, signer: u64, signature: [u8; 64] }`
+///     variant carries the originator's Ed25519 signature over the hop-invariant fields
+///     (nonce, sender, is_tombstone, timestamp, key, value — excludes TTL). Receivers
+///     that know the signer's public key drop frames whose signature does not verify;
+///     receivers that have not yet received the signer's identity key accept the frame
+///     (fail-open). `WireMessage::Data` continues to be accepted unconditionally for
+///     non-TLS clusters and during rolling upgrades. v9 peers send only `Data` frames
+///     (never `SignedData`); since `Data` is variant 0 and `SignedData` is variant 5,
+///     no WireMessageV9 shim is needed — v9 frames decode cleanly with the v10 decoder.
 ///
 /// Rolling-upgrade policy: `read_frame` accepts frames at both `WIRE_VERSION` and
 /// `PREV_WIRE_VERSION`. When bumping WIRE_VERSION to N+1:
@@ -54,14 +64,13 @@ pub(crate) const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
 ///   5. After all nodes are upgraded, set `PREV_WIRE_VERSION = WIRE_VERSION` to close
 ///      the acceptance window.
 ///
-/// **Current state**: `PREV_WIRE_VERSION = WIRE_VERSION = 9`. The v8→v9 jump introduced
-/// HLC semantics on the timestamp field; old wall-clock stamps cannot be soundly
-/// converted, so v8 acceptance was closed at the cut-over rather than opening a
-/// legacy window.
-pub(crate) const WIRE_VERSION: u8 = 9;
-/// Previous wire version accepted during rolling upgrades. Equal to `WIRE_VERSION`
-/// here because the v8→v9 transition redefines timestamp semantics; no safe v8
-/// conversion path exists.
+/// **Current state**: `PREV_WIRE_VERSION = 9`, `WIRE_VERSION = 10`. v9 peers send only
+/// `Data` frames; the v10 decoder handles these without a shim because `SignedData` (the
+/// only new v10 variant) can never appear in a v9 frame.
+pub(crate) const WIRE_VERSION: u8 = 10;
+/// Previous wire version accepted during rolling upgrades.
+/// v9 peers send only `WireMessage::Data` frames (never `SignedData`), so both versions
+/// decode cleanly with the same `WireMessage` type — no `WireMessageV9` shim needed.
 pub(crate) const PREV_WIRE_VERSION: u8 = 9;
 
 /// Which wire version a received frame was encoded with.
@@ -163,6 +172,17 @@ pub(crate) enum WireMessage {
         kind:    Arc<str>,
         payload: bytes::Bytes,
     },
+    /// An Ed25519-signed KV write (`tls` feature). Carries the originator's signature
+    /// over the hop-invariant fields of `update` (see `canonical_sign_bytes`).
+    ///
+    /// `signer` is the originator's `NodeId::id_hash()`. Receivers that know the
+    /// corresponding public key verify and drop on failure; unknown signers are
+    /// accepted (fail-open). TTL is excluded from the signed bytes so the signature
+    /// remains valid through all forwarding hops.
+    ///
+    /// The 64-byte Ed25519 signature is split into two `[u8; 32]` halves because
+    /// serde only supports fixed arrays up to size 32.
+    SignedData { update: GossipUpdate, signer: u64, signature: ([u8; 32], [u8; 32]) },
 }
 
 /// A single key-value record carried inside `WireMessage::StateResponse`.
@@ -198,9 +218,10 @@ pub(crate) fn bincode_cfg() -> impl bincode::config::Config {
 /// Extracts the gossip shard routing key from a wire message.
 fn wire_msg_key(msg: &WireMessage) -> &str {
     match msg {
-        WireMessage::Data(u)             => &u.key,
-        WireMessage::Signal { kind, .. } => kind,
-        _                                => "",
+        WireMessage::Data(u)                    => &u.key,
+        WireMessage::SignedData { update, .. }  => &update.key,
+        WireMessage::Signal { kind, .. }        => kind,
+        _                                       => "",
     }
 }
 
@@ -420,6 +441,45 @@ pub(crate) fn make_gossip_update(
     }
 }
 
+/// Returns the canonical byte representation of `update` for Ed25519 signing and
+/// verification. Covers all hop-invariant fields: `nonce`, `sender`, `is_tombstone`,
+/// `timestamp`, `key`, `value`. TTL is intentionally excluded because it is
+/// decremented on each forwarding hop — the originator's signature must remain valid
+/// through the entire propagation path.
+#[cfg_attr(not(feature = "tls"), allow(dead_code))]
+pub(crate) fn canonical_sign_bytes(u: &GossipUpdate) -> Vec<u8> {
+    bincode::serde::encode_to_vec(
+        (u.nonce, u.sender, u.is_tombstone, u.timestamp, u.key.as_ref(), u.value.as_ref()),
+        bincode_cfg(),
+    ).unwrap_or_default()
+}
+
+/// Wraps `update` in the appropriate `WireMessage` variant for local-origination dispatch.
+///
+/// When `tls` is `Some` (i.e. the `tls` feature is enabled and TLS is configured),
+/// signs the hop-invariant fields with the node's Ed25519 key and returns
+/// `WireMessage::SignedData`. Otherwise returns `WireMessage::Data`.
+///
+/// Used by `dispatch_update`, `dispatch_update_async`, and the consensus engine's
+/// KV write helpers so signing is applied consistently at every locally-originated
+/// write site.
+pub(crate) fn make_kv_wire_msg(
+    update:      GossipUpdate,
+    sender_hash: u64,
+    tls:         Option<&crate::tls::NodeTls>,
+) -> WireMessage {
+    #[cfg(feature = "tls")]
+    if let Some(t) = tls {
+        let canonical  = canonical_sign_bytes(&update);
+        let sig_bytes  = crate::tls::sign_bytes(&t.signing_key, &canonical);
+        let sig_lo: [u8; 32] = sig_bytes[..32].try_into().expect("signature is 64 bytes");
+        let sig_hi: [u8; 32] = sig_bytes[32..].try_into().expect("signature is 64 bytes");
+        return WireMessage::SignedData { update, signer: sender_hash, signature: (sig_lo, sig_hi) };
+    }
+    let _ = (sender_hash, tls);
+    WireMessage::Data(update)
+}
+
 /// Projects the persistence-relevant fields from a [`GossipUpdate`] into a
 /// [`SyncEntry`], stripping wire-only fields (`nonce`, `sender`, `ttl`).
 /// Used by WAL call sites to record exactly what the store contains.
@@ -543,5 +603,78 @@ mod tests {
         let mut buf = BytesMut::new();
         read_frame(&mut reader, &mut buf).await.unwrap();
         assert_eq!(&buf[..], payload);
+    }
+
+    #[test]
+    fn canonical_sign_bytes_excludes_ttl() {
+        let u1 = GossipUpdate {
+            nonce: 1, sender: 2, ttl: 5, is_tombstone: false,
+            timestamp: 100, key: Arc::from("k"), value: Bytes::from_static(b"v"),
+        };
+        let u2 = GossipUpdate { ttl: 3, ..u1.clone() };
+        assert_eq!(
+            canonical_sign_bytes(&u1), canonical_sign_bytes(&u2),
+            "TTL must not affect canonical signed bytes",
+        );
+    }
+
+    #[test]
+    fn canonical_sign_bytes_differs_on_value_change() {
+        let u = GossipUpdate {
+            nonce: 1, sender: 2, ttl: 5, is_tombstone: false,
+            timestamp: 100, key: Arc::from("k"), value: Bytes::from_static(b"original"),
+        };
+        let tampered = GossipUpdate { value: Bytes::from_static(b"injected"), ..u.clone() };
+        assert_ne!(
+            canonical_sign_bytes(&u), canonical_sign_bytes(&tampered),
+            "Different values must produce different canonical bytes",
+        );
+    }
+
+    #[cfg(feature = "tls")]
+    #[test]
+    fn sign_and_verify_gossip_update() {
+        use ed25519_dalek::SigningKey;
+        use rand_core::OsRng;
+        let sk  = SigningKey::generate(&mut OsRng);
+        let vk  = sk.verifying_key().to_bytes();
+        let u   = GossipUpdate {
+            nonce: 42, sender: 99, ttl: 5, is_tombstone: false,
+            timestamp: 1000, key: Arc::from("test-key"), value: Bytes::from_static(b"hello"),
+        };
+        let canonical = canonical_sign_bytes(&u);
+        let sig_bytes = crate::tls::sign_bytes(&sk, &canonical);
+        assert!(crate::tls::verify_bytes(&vk, &canonical, &sig_bytes), "valid signature must verify");
+    }
+
+    #[cfg(feature = "tls")]
+    #[test]
+    fn tampered_value_fails_verification() {
+        use ed25519_dalek::SigningKey;
+        use rand_core::OsRng;
+        let sk        = SigningKey::generate(&mut OsRng);
+        let vk        = sk.verifying_key().to_bytes();
+        let u         = GossipUpdate {
+            nonce: 1, sender: 2, ttl: 1, is_tombstone: false,
+            timestamp: 50, key: Arc::from("k"), value: Bytes::from_static(b"legit"),
+        };
+        let canonical = canonical_sign_bytes(&u);
+        let sig_bytes = crate::tls::sign_bytes(&sk, &canonical);
+        let tampered  = GossipUpdate { value: Bytes::from_static(b"injected"), ..u.clone() };
+        assert!(
+            !crate::tls::verify_bytes(&vk, &canonical_sign_bytes(&tampered), &sig_bytes),
+            "tampered value must not verify",
+        );
+    }
+
+
+    #[test]
+    fn make_kv_wire_msg_no_tls_returns_data() {
+        let u = GossipUpdate {
+            nonce: 1, sender: 2, ttl: 5, is_tombstone: false,
+            timestamp: 0, key: Arc::from("k"), value: Bytes::new(),
+        };
+        let msg = make_kv_wire_msg(u, 2, None);
+        assert!(matches!(msg, WireMessage::Data(_)), "no-tls path must return Data variant");
     }
 }

@@ -18,6 +18,7 @@ use tokio::{sync::{mpsc, watch}, task::JoinSet};
 
 mod lifecycle;
 mod kv;
+pub(crate) mod kv_quorum;
 mod overlay_consistent;
 mod overlay_log;
 mod overlay_reliable;
@@ -37,6 +38,10 @@ mod state_machine;
 mod scatter;
 mod bulk;
 mod mailbox;
+mod sharding;
+mod shard_ops;
+#[cfg(feature = "a2a")]
+pub(crate) mod a2a;
 
 #[allow(unused_imports)]
 pub(crate) use bulk::BulkTransport;
@@ -51,8 +56,10 @@ pub use scatter::{ScatterError, ScatterResult};
 pub use bulk::{BulkError, BulkServeHandle};
 pub use mailbox::{MailboxHandle, MeshEvent};
 pub use overlay_consistent::{ConsistencyError, LockGuard};
+pub use kv_quorum::QuorumError;
 pub use overlay_log::LogEntry;
 pub use overlay_reliable::AckResult;
+pub use sharding::ShardError;
 
 /// Cached roster entry for a single group, held in the short-lived `group_roster_cache`.
 pub(super) struct RosterEntry {
@@ -196,7 +203,7 @@ pub(crate) struct TaskCtx {
 /// `GossipAgent` exposes a wide surface; the methods cluster as follows.
 /// Use this index to find the family of methods you want.
 ///
-/// - **Lifecycle**: `new`, `start`, `shutdown`, `shutdown_with_timeout`,
+/// - **Lifecycle**: `new`, `with_http_routes`, `start`, `shutdown`, `shutdown_with_timeout`,
 ///   `system_stats`, `peers`, `groups`, `peer_drop_counts`.
 /// - **KV (Layer I)**: `set`, `set_async`, `get`, `delete`, `delete_async`,
 ///   `keys`, `scan_prefix`, `subscribe`, `subscribe_prefix`.
@@ -259,6 +266,9 @@ pub struct GossipAgent {
     /// Entries expire after `health_check_interval_secs` and are eagerly invalidated
     /// by `join_group`/`leave_group`. Avoids a full prefix-scan per `group_propose` call.
     pub(super) group_roster_cache: RosterCache,
+    /// Application-supplied axum routes merged into the embedded gateway at [`start`](Self::start) time.
+    /// Taken once by the HTTP server task; subsequent calls to `with_http_routes` are no-ops after start.
+    pub(super) extra_routes: std::sync::Mutex<Option<axum::Router>>,
 }
 
 impl GossipAgent {
@@ -354,7 +364,49 @@ impl GossipAgent {
             kv_state,
             task_ctx,
             group_roster_cache: Arc::new(papaya::HashMap::new()),
+            extra_routes: std::sync::Mutex::new(None),
         }
+    }
+}
+
+impl GossipAgent {
+    /// Registers application-level axum routes to be merged into the embedded HTTP gateway.
+    ///
+    /// Call this after [`new`](Self::new) and before [`start`](Self::start).
+    /// The supplied `routes` must already have their state attached (call `.with_state(…)`
+    /// on them before passing here so they are `Router<()>`). Routes registered after
+    /// `start` is called are silently ignored.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let extra = axum::Router::new()
+    ///     .route("/my-endpoint", axum::routing::get(my_handler))
+    ///     .with_state(my_state);
+    /// agent.with_http_routes(extra);
+    /// agent.start().await?;
+    /// ```
+    pub fn with_http_routes(&self, routes: axum::Router) {
+        *self.extra_routes.lock().unwrap_or_else(|e| e.into_inner()) = Some(routes);
+    }
+
+    /// Registers the A2A (Agent-to-Agent protocol) endpoints on this node's HTTP gateway.
+    ///
+    /// Adds `GET /.well-known/agent.json` (discovery) and `POST /a2a` (JSON-RPC) to the
+    /// embedded HTTP server. The AgentCard is built dynamically from the live `cap/` KV
+    /// prefix so skills become visible as capabilities are advertised.
+    ///
+    /// Must be called before [`start`](Self::start).
+    ///
+    /// Requires the `a2a` cargo feature.
+    #[cfg(feature = "a2a")]
+    pub fn with_a2a(self) -> Self {
+        let ctx   = Arc::clone(&self.task_ctx);
+        let tasks = Arc::new(papaya::HashMap::<String, a2a::A2aTask>::new());
+        a2a::spawn_cleanup(Arc::clone(&tasks));
+        let router = a2a::a2a_router_full(ctx, tasks);
+        self.with_http_routes(router);
+        self
     }
 }
 

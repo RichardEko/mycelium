@@ -6,6 +6,8 @@ use crate::framing::{
     GossipUpdate, SyncEntry, WireMessage, WireMessageV7, ANTI_ENTROPY_NONCE, DATA_TAG,
     NONCE_OFFSET, TTL_OFFSET,
 };
+#[cfg(feature = "tls")]
+use crate::framing::canonical_sign_bytes;
 use crate::signal::{parse_own_grp_key, Signal, SignalScope, signal_kind};
 use crate::store::{apply_and_notify, intern_key, store_hash_acc};
 use crate::node_id::NodeId;
@@ -300,6 +302,8 @@ pub(crate) async fn handle_connection(
                     }
                     apply_and_notify(&kv_state, &update);
                 }
+                #[cfg(feature = "metrics")]
+                metrics::counter!("gossip_anti_entropy_rounds_total").increment(1);
             }
 
             WireMessage::Signal { ttl, nonce, sender, scope, kind, payload } => {
@@ -430,6 +434,8 @@ pub(crate) async fn handle_connection(
                     let _ = wal.append(sync_entry_from(&update)).await;
                 }
                 apply_and_notify(&kv_state, &update);
+                #[cfg(feature = "metrics")]
+                metrics::counter!("gossip_messages_received_total").increment(1);
 
                 // Push-based boundary sync: if the received key is grp/{group}/{this_node},
                 // update the boundary immediately rather than waiting for the GC-tick reconcile.
@@ -486,6 +492,76 @@ pub(crate) async fn handle_connection(
                             Err(e) => warn!("Re-encode of v{} Data frame failed: {}",
                                 crate::framing::PREV_WIRE_VERSION, e),
                         }
+                    }
+                }
+            }
+
+            WireMessage::SignedData { mut update, signer, signature } => {
+                // Dedup by nonce (no early fast-path — SignedData has a non-zero variant tag).
+                let ts = crate::hlc::physical_ms(hlc.current());
+                if seen.mark_and_check(update.nonce, ts) {
+                    continue;
+                }
+
+                // Signature verification — fail-open: accept frames whose signer's public
+                // key is not yet in peer_keys (key hasn't gossiped yet).
+                #[cfg(feature = "tls")]
+                {
+                    let guard = task_ctx.peer_keys.pin();
+                    if let Some((_, pub_bytes)) = guard.iter().find(|(k, _)| k.id_hash() == signer) {
+                        let canonical = canonical_sign_bytes(&update);
+                        let (lo, hi)  = &signature;
+                        let mut sig_bytes = [0u8; 64];
+                        sig_bytes[..32].copy_from_slice(lo);
+                        sig_bytes[32..].copy_from_slice(hi);
+                        if !crate::tls::verify_bytes(pub_bytes, &canonical, &sig_bytes) {
+                            warn!(
+                                "SignedData from {} (signer={:#x}) failed Ed25519 verification, dropping",
+                                peer_addr, signer
+                            );
+                            continue;
+                        }
+                    }
+                    // Unknown signer → fail-open, proceed to apply.
+                }
+
+                // Absorb HLC and apply to local store.
+                hlc.observe(update.timestamp);
+                if intern_keys { update.key = intern_key(update.key, intern_max_keys); }
+                if let Some(ref wal) = wal {
+                    let _ = wal.append(sync_entry_from(&update)).await;
+                }
+                apply_and_notify(&kv_state, &update);
+                #[cfg(feature = "metrics")]
+                metrics::counter!("gossip_messages_received_total").increment(1);
+
+                // Forward with TTL-1, preserving the originator's signature.
+                // TTL is excluded from the signed bytes so the signature is still valid
+                // after decrement. Re-encode (no zero-copy — no fixed TTL_OFFSET for SignedData).
+                let fwd_ttl = update.ttl.min(max_ttl);
+                if fwd_ttl > 1 {
+                    let shard = shard_for_key(&update.key, n_shards);
+                    let mut fwd_buf = BytesMut::with_capacity(256);
+                    let fwd_msg = WireMessage::SignedData {
+                        update: GossipUpdate { ttl: fwd_ttl - 1, ..update.clone() },
+                        signer,
+                        signature,
+                    };
+                    match bincode::serde::encode_into_std_write(
+                        fwd_msg, &mut (&mut fwd_buf).writer(), bincode_cfg(),
+                    ) {
+                        Ok(_) => {
+                            match gossip_txs[shard].try_send((fwd_buf.freeze(), update.sender, ForwardHint::All)) {
+                                Ok(()) => {}
+                                Err(TrySendError::Full(_)) => {
+                                    warn!("Gossip shard {} full, dropping SignedData forward from {}", shard, peer_addr);
+                                }
+                                Err(TrySendError::Closed(_)) => {
+                                    error!("Gossip shard {} dead, dropping SignedData forward from {}", shard, peer_addr);
+                                }
+                            }
+                        }
+                        Err(e) => warn!("SignedData re-encode failed from {}: {}", peer_addr, e),
                     }
                 }
             }

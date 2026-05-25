@@ -249,6 +249,8 @@
     <div class="badge"><span class="dot dot-blue"></span>Last-write-wins KV</div>
     <div class="badge"><span class="dot dot-purple"></span>Emergent capability groups</div>
     <div class="badge"><span class="dot dot-orange"></span>OpenAI-compatible skills</div>
+    <div class="badge"><span class="dot dot-blue"></span>TypeScript &amp; Python SDKs</div>
+    <div class="badge"><span class="dot dot-purple"></span>Prometheus metrics</div>
   </div>
 </div>
 
@@ -306,16 +308,30 @@
   </details>
 
   <details class="nav-group" open>
+    <summary>Overlay</summary>
+    <div class="nav-links">
+      <a href="#overlay-kv">Consistent KV &amp; Locks</a>
+      <a href="#overlay-log">Distributed Log</a>
+      <a href="#overlay-leader">Leader Election</a>
+      <a href="#overlay-reliable">Reliable Signals</a>
+      <a href="#overlay-sharding">Cluster Sharding</a>
+    </div>
+  </details>
+
+  <details class="nav-group" open>
     <summary>Integrations</summary>
     <div class="nav-links">
       <a href="#python">Python Bridge</a>
+      <a href="#typescript">TypeScript Bridge</a>
       <a href="#skillrunner">SkillRunner</a>
+      <a href="#a2a">A2A Adapter</a>
     </div>
   </details>
 
   <details class="nav-group" open>
     <summary>Reference</summary>
     <div class="nav-links">
+      <a href="#metrics">Prometheus Metrics</a>
       <a href="#security">Security</a>
       <a href="#perf">Performance</a>
       <a href="#config">Configuration</a>
@@ -531,6 +547,29 @@ assert!(stats.health_monitor_alive);          <span class="cmt">// peer pings an
       Non-zero <code>shard_queue_depths</code> means gossip workers are falling behind — increase <code>gossip_shards</code>.
     </div>
   </div>
+
+  <h3>Durability-Confirmed Writes — <code>set_quorum</code></h3>
+  <p>
+    <code>set_async</code> returns after the local write; gossip propagates to peers asynchronously.
+    <code>set_quorum</code> waits until <code>min_acks</code> distinct peers have applied the key,
+    giving a durable acknowledgement before returning.
+  </p>
+  <pre><span class="cmt">// Returns the number of peers that confirmed the write.</span><span class="lang-tag">rust</span>
+<span class="cmt">// Err(QuorumError::Timeout { acks_received }) if &lt; min_acks acked before timeout.</span>
+<span class="kw">let</span> n = agent.set_quorum(
+    <span class="str">"cfg/cluster-epoch"</span>,
+    Bytes::from(<span class="str">"42"</span>),
+    <span class="num">2</span>,                           <span class="cmt">// min_acks from distinct peers</span>
+    Duration::from_secs(<span class="num">5</span>),     <span class="cmt">// timeout</span>
+).await?;
+println!(<span class="str">"confirmed by {} peers"</span>, n);</pre>
+
+  <p>The HTTP gateway exposes the same operation:</p>
+  <pre>POST /gateway/kv/quorum<span class="lang-tag">json</span>
+{ "key": "cfg/cluster-epoch", "value_b64": "NDI=", "min_acks": 2, "timeout_secs": 5 }
+
+<span class="cmt">// Success:</span>  { "ok": true,  "acks_received": 2 }
+<span class="cmt">// Timeout:</span>  { "ok": false, "error": "timeout", "acks_received": 0 }</pre>
 </section>
 
 <!-- ── Layer II ───────────────────────────────────────────────────────── -->
@@ -782,6 +821,122 @@ agent.deliver_event(&amp;target_id, <span class="str">"task.result"</span>, resu
 }</pre>
 </section>
 
+<!-- ── Consistency & Ordering Overlay ────────────────────────────────── -->
+<section class="section" id="overlay">
+  <div class="section-head">
+    <span class="section-icon">🔐</span>
+    <h2>Consistency &amp; Ordering Overlay</h2>
+    <span class="sec-tag tag-ref">Overlay</span>
+  </div>
+  <p>
+    Higher-level coordination primitives — consistent KV, distributed locks, leader election, a
+    replicated append-only log, and reliable signal delivery — all layered on top of the Gossip
+    KV substrate and exposed through the HTTP gateway.
+  </p>
+  <div class="callout callout-info">
+    <span class="callout-icon">ℹ️</span>
+    <div class="callout-body">
+      All overlay operations are available via the HTTP gateway at <code>/gateway/…</code> and
+      are wrapped by both the Python and TypeScript SDKs. No extra ports or services required.
+    </div>
+  </div>
+
+  <h3 id="overlay-kv">Consistent KV &amp; Distributed Locks</h3>
+  <p>
+    <code>consistent_set</code> / <code>consistent_get</code> use a consensus round to guarantee
+    linearisable reads and writes. <code>acquire_lock</code> returns a guard whose token must be
+    passed with every protected write — the lock is released automatically when the guard is dropped
+    or its TTL expires.
+  </p>
+  <pre><span class="cmt">// HTTP — consistent linearisable write</span><span class="lang-tag">json</span>
+POST /gateway/consistent/set
+{ "key": "cfg/leader", "value_b64": "bm9kZS0x", "timeout_secs": 5 }
+
+<span class="cmt">// HTTP — distributed lock (returns guard_id + token)</span>
+POST /gateway/lock/acquire
+{ "lock_name": "deploy-lock", "ttl_secs": 30 }
+
+DELETE /gateway/lock/release/&lt;guard_id&gt;</pre>
+
+  <pre><span class="cmt"># Python</span><span class="lang-tag">python</span>
+agent.consistent_set(<span class="str">"cfg/leader"</span>, b<span class="str">"node-1"</span>)
+val = agent.consistent_get(<span class="str">"cfg/leader"</span>)
+
+<span class="kw">with</span> agent.acquire_lock(<span class="str">"deploy-lock"</span>, ttl_secs=<span class="num">30</span>) <span class="kw">as</span> lock:
+    agent.consistent_set(<span class="str">"deploy/state"</span>, b<span class="str">"running"</span>)</pre>
+
+  <h3 id="overlay-log">Distributed Log</h3>
+  <p>
+    An HLC-ordered append-only log per namespace. <code>append</code> assigns a monotonic HLC
+    sequence number. <code>scan_log</code> reads a range. <code>subscribe_log</code> streams new
+    entries as an SSE feed.
+  </p>
+  <pre>POST /gateway/log/append         { "ns": "audit", "value_b64": "…" }<span class="lang-tag">json</span>
+GET  /gateway/log/scan/audit?from=0&amp;to=1000
+GET  /gateway/log/subscribe/audit     <span class="cmt"># SSE stream</span>
+POST /gateway/log/compact         { "ns": "audit", "before_hlc": 1000 }</pre>
+
+  <pre><span class="cmt"># Python</span><span class="lang-tag">python</span>
+hlc = agent.append_log(<span class="str">"audit"</span>, b<span class="str">"event data"</span>)
+entries = agent.scan_log(<span class="str">"audit"</span>, from_hlc=<span class="num">0</span>, to_hlc=<span class="num">1000</span>)
+<span class="kw">for</span> entry <span class="kw">in</span> agent.subscribe_log(<span class="str">"audit"</span>):
+    print(entry.hlc, entry.value)</pre>
+
+  <h3 id="overlay-leader">Leader Election</h3>
+  <p>Consensus-backed single-leader election per slot. Returns the winning node-id and the ballot round.</p>
+  <pre>POST /gateway/elect  { "slot": "cluster-leader", "candidate": "&lt;node_id&gt;", "timeout_secs": 5 }<span class="lang-tag">json</span></pre>
+
+  <pre><span class="cmt"># Python</span><span class="lang-tag">python</span>
+leader = agent.elect_leader(<span class="str">"cluster-leader"</span>, candidate=agent.node_id)</pre>
+
+  <h3 id="overlay-reliable">Reliable Signal Delivery</h3>
+  <p>
+    <code>emit_reliable</code> wraps a signal in a KV-backed envelope with an ACK counter.
+    Recipients confirm delivery; the envelope is cleaned up once all expected ACKs arrive.
+  </p>
+  <pre>POST /gateway/signal/reliable  { "kind": "deploy", "payload_b64": "…", "scope": "system" }<span class="lang-tag">json</span></pre>
+
+  <pre><span class="cmt"># Python</span><span class="lang-tag">python</span>
+agent.emit_reliable(<span class="str">"deploy"</span>, b<span class="str">"payload"</span>, scope=<span class="str">"system"</span>)</pre>
+
+  <h3 id="overlay-sharding">Cluster Sharding</h3>
+  <p>
+    <code>shard_for</code> maps a shard key to a deterministic owner node using a consistent hash
+    ring over advertised capability providers. <code>emit_sharded</code> combines the lookup with a
+    targeted signal dispatch — equivalent to Akka Cluster Sharding without a coordinator.
+  </p>
+  <pre><span class="cmt">// Rust</span><span class="lang-tag">rust</span>
+<span class="cmt">// Find the deterministic owner for a shard key</span>
+<span class="kw">let</span> owner = agent.shard_for(<span class="str">"user-12345"</span>, &amp;CapFilter::new(<span class="str">"session"</span>, <span class="str">"store"</span>));
+
+<span class="cmt">// Emit to the shard owner in one call</span>
+<span class="kw">let</span> owner = agent.emit_sharded(<span class="str">"write"</span>, <span class="str">"user-12345"</span>, &amp;CapFilter::new(<span class="str">"session"</span>, <span class="str">"store"</span>), payload).<span class="kw">await</span>?;</pre>
+
+  <pre><span class="cmt"># HTTP gateway</span><span class="lang-tag">sh</span>
+curl "http://localhost:8300/gateway/shard/session/store?key=user-12345"
+<span class="cmt"># → {"owner":"10.0.0.3:8300"}</span>
+
+curl -X POST http://localhost:8300/gateway/shard/emit \
+  -d '{"kind":"write","ns":"session","name":"store","shard_key":"user-12345","payload_b64":"…"}'</pre>
+
+  <pre><span class="cmt"># Python</span><span class="lang-tag">python</span>
+owner = agent.shard_for(<span class="str">"session"</span>, <span class="str">"store"</span>, <span class="str">"user-12345"</span>)
+owner = await agent.emit_sharded(<span class="str">"write"</span>, <span class="str">"session"</span>, <span class="str">"store"</span>, <span class="str">"user-12345"</span>, b<span class="str">"payload"</span>)</pre>
+
+  <pre><span class="cmt">// TypeScript</span><span class="lang-tag">typescript</span>
+<span class="kw">const</span> owner = <span class="kw">await</span> agent.shardFor(<span class="str">"session"</span>, <span class="str">"store"</span>, <span class="str">"user-12345"</span>);
+<span class="kw">const</span> owner = <span class="kw">await</span> agent.emitSharded(<span class="str">"write"</span>, <span class="str">"session"</span>, <span class="str">"store"</span>, <span class="str">"user-12345"</span>, payload);</pre>
+
+  <div class="callout callout-info">
+    <span class="callout-icon">ℹ️</span>
+    <div class="callout-body">
+      The hash ring is rebuilt on every <code>shard_for</code> call from the live
+      <code>cap/</code> KV prefix — no coordinator, no rebalance protocol. All nodes seeing
+      the same provider set resolve the same owner deterministically.
+    </div>
+  </div>
+</section>
+
 <!-- ── Python Bridge ──────────────────────────────────────────────────── -->
 <section class="section" id="python">
   <div class="section-head">
@@ -817,6 +972,71 @@ agent.deliver_event(target_id, <span class="str">"task.result"</span>, b<span cl
 <span class="kw">async for</span> event <span class="kw">in</span> agent.mailbox(<span class="str">"task.result"</span>):
     print(event.payload)</pre>
   <p>See <a href="../mycelium-py/README.md"><code>mycelium-py/README.md</code></a> for the full API reference.</p>
+</section>
+
+<!-- ── TypeScript Bridge ─────────────────────────────────────────────── -->
+<section class="section" id="typescript">
+  <div class="section-head">
+    <span class="section-icon">🟦</span>
+    <h2>TypeScript Language Bridge</h2>
+  </div>
+  <p>The <code>mycelium-ts</code> package mirrors the Python SDK — all 28 gateway endpoints, SSE streaming via <code>eventsource-parser</code>, full overlay support, and idiomatic TypeScript types. Works with Node.js ≥ 18; zero native dependencies.</p>
+  <pre>cd mycelium-ts &amp;&amp; npm install<span class="lang-tag">sh</span></pre>
+  <pre><span class="kw">import</span> { <span class="fn">MyceliumAgent</span> } <span class="kw">from</span> <span class="str">"mycelium-ts"</span>;<span class="lang-tag">typescript</span>
+
+<span class="kw">const</span> agent = <span class="kw">new</span> <span class="fn">MyceliumAgent</span>(<span class="str">"127.0.0.1"</span>, <span class="num">8300</span>);
+
+<span class="cmt">// Capabilities</span>
+<span class="kw">const</span> handle = <span class="kw">await</span> agent.<span class="fn">advertiseCapability</span>(<span class="str">"compute"</span>, <span class="str">"gpu"</span>, { model: <span class="str">"A100"</span> });
+<span class="kw">const</span> providers = <span class="kw">await</span> agent.<span class="fn">resolveCapability</span>(<span class="str">"compute"</span>, <span class="str">"gpu"</span>);
+
+<span class="cmt">// Signals (SSE stream)</span>
+<span class="kw">await</span> agent.<span class="fn">emit</span>(<span class="str">"render-job"</span>, Buffer.<span class="fn">from</span>(<span class="str">"payload"</span>), { scope: <span class="str">"system"</span> });
+<span class="kw">for await</span> (<span class="kw">const</span> sig <span class="kw">of</span> agent.<span class="fn">onSignal</span>(<span class="str">"render-job"</span>)) {
+    console.<span class="fn">log</span>(sig.sender, sig.payload.<span class="fn">toString</span>());
+}
+
+<span class="cmt">// KV store</span>
+<span class="kw">await</span> agent.<span class="fn">set</span>(<span class="str">"my/key"</span>, Buffer.<span class="fn">from</span>(<span class="str">"value"</span>));
+<span class="kw">const</span> val = <span class="kw">await</span> agent.<span class="fn">get</span>(<span class="str">"my/key"</span>);
+<span class="kw">const</span> acks = <span class="kw">await</span> agent.<span class="fn">setQuorum</span>(<span class="str">"cfg/epoch"</span>, Buffer.<span class="fn">from</span>(<span class="str">"42"</span>), <span class="num">2</span>, { timeoutSecs: <span class="num">5</span> });
+
+<span class="cmt">// RPC</span>
+<span class="kw">const</span> reply = <span class="kw">await</span> agent.<span class="fn">rpcCall</span>(targetId, <span class="str">"echo"</span>, Buffer.<span class="fn">from</span>(<span class="str">"ping"</span>));
+<span class="kw">for await</span> (<span class="kw">const</span> req <span class="kw">of</span> agent.<span class="fn">rpcServe</span>(<span class="str">"echo"</span>)) {
+    <span class="kw">await</span> agent.<span class="fn">rpcRespond</span>(req, req.payload);
+}
+
+<span class="cmt">// Overlay — consistent KV, lock, log, leader election</span>
+<span class="kw">await</span> agent.<span class="fn">consistentSet</span>(<span class="str">"cfg/leader"</span>, Buffer.<span class="fn">from</span>(<span class="str">"node-1"</span>));
+<span class="kw">const</span> lock = <span class="kw">await</span> agent.<span class="fn">acquireLock</span>(<span class="str">"deploy-lock"</span>, <span class="num">30</span>);
+<span class="kw">await using</span> _ = lock; <span class="cmt">// auto-releases via Symbol.asyncDispose</span>
+<span class="kw">await</span> agent.<span class="fn">appendLog</span>(<span class="str">"audit"</span>, Buffer.<span class="fn">from</span>(<span class="str">"event"</span>));
+<span class="kw">const</span> winner = <span class="kw">await</span> agent.<span class="fn">electLeader</span>(<span class="str">"cluster-leader"</span>);</pre>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Method</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>set / get / delete / keys / scan</code></td><td>KV store operations</td></tr>
+        <tr><td><code>setQuorum</code></td><td>Write with peer-count durability confirmation</td></tr>
+        <tr><td><code>advertiseCapability / resolveCapability / watchCapabilities</code></td><td>Capability advertisement and discovery</td></tr>
+        <tr><td><code>declareRequirement / demandStatus</code></td><td>Requirement tracking and demand pressure</td></tr>
+        <tr><td><code>emit / onSignal / emitReliable</code></td><td>Signal mesh (SSE stream for receive)</td></tr>
+        <tr><td><code>rpcCall / rpcServe / rpcRespond</code></td><td>Point-to-point RPC</td></tr>
+        <tr><td><code>deliverEvent / mailbox</code></td><td>Durable mailboxes (SSE stream for receive)</td></tr>
+        <tr><td><code>consistentSet / consistentGet</code></td><td>Linearisable overlay KV</td></tr>
+        <tr><td><code>acquireLock / releaseLock</code></td><td>Distributed lock with auto-release</td></tr>
+        <tr><td><code>appendLog / scanLog / compactLog / subscribeLog</code></td><td>Distributed append-only log</td></tr>
+        <tr><td><code>electLeader</code></td><td>Consensus-backed leader election</td></tr>
+        <tr><td><code>health / stats</code></td><td>Node diagnostics</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <pre><span class="cmt"># Run the test suite (requires a live node at MYCELIUM_TEST_HOST)</span><span class="lang-tag">sh</span>
+MYCELIUM_TEST_HOST=127.0.0.1:8300 npm test</pre>
+  <p>See <a href="../mycelium-ts/README.md"><code>mycelium-ts/README.md</code></a> for the full API reference and endpoint table.</p>
 </section>
 
 <!-- ── SkillRunner ────────────────────────────────────────────────────── -->
@@ -875,6 +1095,130 @@ result = agent.rpc_call(providers[<span class="num">0</span>].node_id, <span cla
   <p>See <a href="skillrunner.html"><code>skillrunner.html</code></a> for the full manifest reference, OTEL integration, concurrency controls, and the audit trail format.</p>
 </section>
 
+<!-- ── A2A Adapter ───────────────────────────────────────────────────── -->
+<section class="section" id="a2a">
+  <div class="section-head">
+    <span class="section-icon">🤝</span>
+    <h2>A2A Adapter</h2>
+    <span class="sec-tag tag-ref">Optional</span>
+  </div>
+  <p>
+    Enable the <code>a2a</code> cargo feature and call <code>.with_a2a()</code> on the agent
+    builder to expose a standard <a href="https://google.github.io/A2A/">Google Agent-to-Agent</a>
+    interface. AutoGen, LangChain, and any A2A-speaking client can then discover and invoke
+    Mycelium-hosted skills without knowing they're on Mycelium.
+  </p>
+
+  <pre><span class="cmt"># Cargo.toml</span><span class="lang-tag">toml</span>
+<span class="toml-key">mycelium</span> = { <span class="toml-key">version</span> = <span class="toml-str">"…"</span>, <span class="toml-key">features</span> = [<span class="toml-str">"a2a"</span>] }</pre>
+
+  <pre><span class="cmt">// Rust — add A2A surface to an existing agent</span><span class="lang-tag">rust</span>
+<span class="kw">let</span> agent = <span class="ty">GossipAgent</span>::<span class="fn">builder</span>(node_id, config)
+    .<span class="fn">with_http</span>(<span class="num">8300</span>)
+    .<span class="fn">with_a2a</span>()           <span class="cmt">// adds /.well-known/agent.json + /a2a</span>
+    .<span class="fn">build</span>()
+    .<span class="fn">start</span>().<span class="kw">await</span>?;</pre>
+
+  <pre><span class="cmt"># Discover skills</span><span class="lang-tag">sh</span>
+curl http://localhost:8300/.well-known/agent.json
+
+<span class="cmt"># Call a skill (tasks/send)</span>
+curl -X POST http://localhost:8300/a2a \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tasks/send",
+       "params":{"id":"t1","skillId":"llm/chat",
+                 "message":{"role":"user","parts":[{"type":"text","text":"Hello!"}]}}}'</pre>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Endpoint</th><th>Method</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>/.well-known/agent.json</code></td><td>GET</td><td>AgentCard — name, version, skill list (built from live <code>cap/</code> KV prefix)</td></tr>
+        <tr><td><code>/a2a</code></td><td>POST</td><td>JSON-RPC 2.0: <code>tasks/send</code>, <code>tasks/sendSubscribe</code> (SSE), <code>tasks/get</code>, <code>tasks/cancel</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Outbound clients</h3>
+  <p>Both language SDKs include an outbound <code>A2aClient</code> for calling external A2A nodes:</p>
+
+  <pre><span class="cmt"># Python</span><span class="lang-tag">python</span>
+<span class="kw">from</span> mycelium <span class="kw">import</span> A2aClient
+
+client = A2aClient(<span class="str">"http://localhost:8300"</span>)
+card   = client.fetch_card()
+reply  = client.send(<span class="str">"llm/chat"</span>, <span class="str">"Hello!"</span>)
+
+<span class="kw">for</span> event <span class="kw">in</span> client.stream(<span class="str">"llm/chat"</span>, <span class="str">"Hello!"</span>):
+    print(event[<span class="str">"status"</span>][<span class="str">"state"</span>])</pre>
+
+  <pre><span class="cmt">// TypeScript</span><span class="lang-tag">typescript</span>
+<span class="kw">import</span> { A2aClient } <span class="kw">from</span> <span class="str">"mycelium-ts"</span>;
+
+<span class="kw">const</span> client = <span class="kw">new</span> A2aClient(<span class="str">"http://localhost:8300"</span>);
+<span class="kw">const</span> card   = <span class="kw">await</span> client.fetchCard();
+<span class="kw">const</span> reply  = <span class="kw">await</span> client.send(<span class="str">"llm/chat"</span>, <span class="str">"Hello!"</span>);
+
+<span class="kw">for await</span> (<span class="kw">const</span> event <span class="kw">of</span> client.stream(<span class="str">"llm/chat"</span>, <span class="str">"Hello!"</span>)) {
+    console.log(event.status.state);
+}</pre>
+</section>
+
+<!-- ── Prometheus Metrics ─────────────────────────────────────────────── -->
+<section class="section" id="metrics">
+  <div class="section-head">
+    <span class="section-icon">📊</span>
+    <h2>Prometheus Metrics</h2>
+    <span class="sec-tag tag-ref">Optional</span>
+  </div>
+  <p>
+    Enable the <code>metrics</code> cargo feature to expose a Prometheus scrape endpoint at
+    <code>GET /metrics</code> on the existing HTTP gateway port. All instrumentation is
+    zero-cost when the feature is absent — the <code>metrics</code> facade compiles macro calls to
+    no-ops without the flag.
+  </p>
+  <pre><span class="cmt"># Cargo.toml</span><span class="lang-tag">toml</span>
+<span class="toml-key">mycelium</span> = { <span class="toml-key">version</span> = <span class="toml-str">"…"</span>, <span class="toml-key">features</span> = [<span class="toml-str">"metrics"</span>] }</pre>
+  <pre>cargo build --lib --features metrics<span class="lang-tag">sh</span>
+curl http://localhost:8300/metrics</pre>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Metric</th><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>gossip_kv_writes_total</code></td><td>counter</td><td>KV <code>set</code> / <code>set_async</code> calls</td></tr>
+        <tr><td><code>gossip_kv_deletes_total</code></td><td>counter</td><td>KV <code>delete</code> / <code>delete_async</code> calls</td></tr>
+        <tr><td><code>gossip_store_entries</code></td><td>gauge</td><td>Live entries in the local KV store</td></tr>
+        <tr><td><code>gossip_messages_received_total</code></td><td>counter</td><td>Gossip <code>Data</code> frames received from peers</td></tr>
+        <tr><td><code>gossip_anti_entropy_rounds_total</code></td><td>counter</td><td><code>StateResponse</code> anti-entropy rounds received</td></tr>
+        <tr><td><code>gossip_frames_dropped_total</code></td><td>counter</td><td>Outbound frames dropped due to full writer channel</td></tr>
+        <tr><td><code>gossip_signals_emitted_total{scope}</code></td><td>counter</td><td>Signals emitted, labelled by scope (system/group/node)</td></tr>
+        <tr><td><code>gossip_signals_delivered_total{kind}</code></td><td>counter</td><td>Signals delivered to local handlers, labelled by kind</td></tr>
+        <tr><td><code>gossip_signals_rejected_total</code></td><td>counter</td><td>Signals suppressed by local inhibition rules</td></tr>
+        <tr><td><code>gossip_rpc_latency_ms</code></td><td>histogram</td><td>End-to-end RPC round-trip latency in milliseconds</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Prometheus scrape config</h3>
+  <pre>scrape_configs:<span class="lang-tag">yaml</span>
+  - job_name: mycelium
+    static_configs:
+      - targets: ["localhost:8300"]
+    metrics_path: /metrics</pre>
+
+  <h3>Grafana dashboard</h3>
+  <p>A pre-built Grafana dashboard is included at <code>dashboards/mycelium-grafana.json</code>. Import it via <strong>Dashboards → Import → Upload JSON</strong>. Panels cover KV throughput, store size, anti-entropy activity, dropped frames, signal rates, and RPC latency p50/p95/p99.</p>
+
+  <div class="callout callout-tip">
+    <span class="callout-icon">💡</span>
+    <div class="callout-body">
+      <code>gossip_frames_dropped_total &gt; 0</code> means gossip writes are being silently lost — see the
+      <strong>Dropped frames diagnostic</strong> callout in the Layer I section for tuning guidance.
+    </div>
+  </div>
+</section>
+
 <!-- ── Security ──────────────────────────────────────────────────────── -->
 <section class="section" id="security">
   <div class="section-head">
@@ -895,6 +1239,7 @@ result = agent.rpc_call(providers[<span class="num">0</span>].node_id, <span cla
         <tr><td>mTLS transport</td><td><code>tokio-rustls</code> mTLS on every gossip TCP connection; plain nodes cannot connect</td></tr>
         <tr><td>Ed25519 node identity</td><td>TLS cert key = identity keypair; 32-byte verifying key gossiped to <code>sys/identity/{node}</code></td></tr>
         <tr><td>Signed consensus payloads</td><td>All <code>Propose</code>, <code>Vote</code>, <code>Nack</code>, <code>Commit</code> messages are Ed25519-signed; forged ballots dropped</td></tr>
+        <tr><td>KV write signing (wire v10)</td><td><code>WireMessage::SignedData</code> — Ed25519 over hop-invariant fields (excludes TTL); a compromised forwarding node cannot inject or modify KV entries; fail-open for unknown signers (key not yet gossiped)</td></tr>
       </tbody>
     </table>
   </div>

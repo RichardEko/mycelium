@@ -1,6 +1,6 @@
 # Mycelium — Engineering Roadmap
 
-> **Status:** Layer 1 complete. Layer 2 complete. Consensus complete. Capability & Discovery subsystem complete. Agent state machine (Layer V) complete. MCP bridge (server + client) complete. Config-driven capability probing complete. KV persistence (WAL + snapshot, all sync modes) complete. Layer 3 Service Patterns complete (HTTP server, SSE, rpc_call/rpc_respond, invoke.bulk, Actor/Event mailboxes, scatter-gather). Multi-machine integration tests (Docker Compose, 10 unattended scenarios) complete. **mTLS peer connections + Ed25519 node identity + consensus payload signing complete** (`tls` feature). Python language bridge (`mycelium-py`) complete. **SkillRunner** (`.skill.toml` capability-as-skill, OpenAI-compatible LLM driver, HLC audit trail + OTEL) complete. **Opt-In Consistency & Ordering Overlay complete** (`consistent_set/get`, `distributed_lock`, `elect_leader`, `append`/`scan_log`/`compact_log`/`subscribe_log`/`subscribe_log_group`, `emit_reliable` — all exposed via HTTP gateway and Python SDK). Layer 5 (Observability / Prometheus metrics) planned.
+> **Status:** Layer 1 complete. Layer 2 complete. Consensus complete. Capability & Discovery subsystem complete. Agent state machine (Layer V) complete. MCP bridge (server + client) complete. Config-driven capability probing complete. KV persistence (WAL + snapshot, all sync modes) complete. Layer 3 Service Patterns complete (HTTP server, SSE, rpc_call/rpc_respond, invoke.bulk, Actor/Event mailboxes, scatter-gather). Multi-machine integration tests (Docker Compose, 10 unattended scenarios) complete. **mTLS peer connections + Ed25519 node identity + consensus payload signing complete** (`tls` feature). Python language bridge (`mycelium-py`) complete. **SkillRunner** (`.skill.toml` capability-as-skill, OpenAI-compatible LLM driver, HLC audit trail + OTEL) complete. **Opt-In Consistency & Ordering Overlay complete** (`consistent_set/get`, `distributed_lock`, `elect_leader`, `append`/`scan_log`/`compact_log`/`subscribe_log`/`subscribe_log_group`, `emit_reliable` — all exposed via HTTP gateway and Python SDK). **Layer 5 Observability complete** (`metrics` feature — Prometheus scrape endpoint at `/metrics`, 10 counters/gauge/histogram, Grafana dashboard at `dashboards/mycelium-grafana.json`). **TypeScript language bridge complete** (`mycelium-ts` — 28 methods, SSE streaming, all overlay endpoints, mirrors Python SDK). **Cluster Sharding complete** (`shard_for`/`emit_sharded` + HTTP gateway + Python & TS SDKs). **KV Write Signing complete** (Ed25519 `WireMessage::SignedData`, wire v10). **A2A Adapter complete** (`a2a` feature — `/.well-known/agent.json`, `/a2a` JSON-RPC, Python & TS `A2aClient`).
 > **Last updated:** 2026-05-25
 
 ---
@@ -1329,21 +1329,23 @@ Weeks:  0         2          4          6          8         10        12
 | Layer 4 | Agent state machine: policy-guarded transitions, turn/call budgets, state_timeouts | **Complete** |
 | Layer 4 | `NodeCapabilityConfig`: declarative local capability declaration + probe loop | **Complete** |
 | Layer 4 | Python language bridge: HTTP gateway + `mycelium-py` SDK | **Complete** |
-| Layer 4 | TypeScript language bridge | Planned |
+| Layer 4 | TypeScript language bridge | **Complete** |
 | Layer 4 | `SkillRunner` node + `.skill.toml` capability-as-skill definition format | **Complete** |
 | Layer 4 | Invocation audit trail: HLC-keyed causal log + OTEL span export | **Complete** |
 | Layer 4 | Capability authorization scoping: `[capability.policy]` in manifest + `resolve_capability` gate | **Complete** |
 | Layer 4 | Session-scoped mesh views: per-caller capability slice at `resolve_capability` | **Complete** |
-| Layer 4 | A2A wire-protocol adapter (language bridge — after MCP) | Planned |
-| Layer 5 | Metrics, Prometheus exporter, Grafana dashboard | Planned |
+| Layer 4 | A2A wire-protocol adapter (`a2a` feature — `GET /.well-known/agent.json`, `POST /a2a` JSON-RPC) | **Complete** |
+| Layer 4 | A2A outbound clients: Python `A2aClient`, TypeScript `A2aClient` | **Complete** |
+| Layer 5 | Metrics, Prometheus exporter, Grafana dashboard | **Complete** |
 | **Production** | Multi-machine integration tests + Docker Compose reference topology | **Complete** |
 | **Production** | KV persistence: WAL + snapshot/replay; consensus committed-slot durability | **Complete** |
 | **Production** | Security: mTLS peer connections + NodeId keypair + consensus payload signing | **Complete** |
+| **Production** | KV write signing: Ed25519-signed gossip frames (`WireMessage::SignedData`, v10 wire) | **Complete** |
 | Consistency overlay | `consistent_set`, `consistent_get`, `distributed_lock`, `elect_leader` | **Complete** |
 | Ordering overlay | `append`, `subscribe_log`, `scan_log`, `compact_log` (ordered log) | **Complete** |
 | Ordering overlay | `subscribe_log_group` + consumer group offset tracking | **Complete** |
 | Reliable delivery | `emit_reliable` + ACK retry (requires Layer 3 `rpc_call`) | **Complete** |
-| Cluster sharding | `shard_for`, `emit_sharded` (consistent hash + locality) | Planned |
+| Cluster sharding | `shard_for`, `emit_sharded` (consistent hash ring over `NodeId::id_hash()`) | **Complete** |
 
 ---
 
@@ -1587,8 +1589,14 @@ certificates auto-generate on first start.
   signed by the sender and verified on receipt via `SignedConsensusMsg`. Forged ballots are
   silently dropped with a `warn!` log entry.
 
+**Implemented in v10 wire:**
+- **KV write signing** — `WireMessage::SignedData` variant carries an Ed25519 signature over
+  hop-invariant fields (nonce, sender, is_tombstone, timestamp, key, value — TTL excluded so
+  the signature survives forwarding hops). Active at `set`/`delete`/`set_async`/`delete_async`
+  and consensus KV writes when the `tls` feature is enabled. Receivers fail-open on unknown
+  signers (key hasn't gossiped yet) and drop + warn on verification failure.
+
 **Not yet implemented:**
-- KV write signing — each gossip hop would need to re-sign; deferred.
 - Hot certificate rotation without cluster disruption.
 
 ### 4. Language bridges not built
@@ -1664,8 +1672,8 @@ what thresholds should trigger alerts.
 | Python language bridge (`mycelium-py`) | High | **Complete** 2026-05-24 |
 | `SkillRunner` + `.skill.toml` + invocation audit trail + OTEL | High | **Complete** 2026-05-25 |
 | Opt-In Consistency & Ordering Overlay | High | **Complete** 2026-05-25 |
-| `set_quorum` write-durability confirmation API | Medium | Pending |
-| Prometheus metrics export + dashboards | Medium | Pending |
+| `set_quorum` write-durability confirmation API | Medium | **Complete** 2026-05-25 |
+| Prometheus metrics export + dashboards | Medium | **Complete** 2026-05-25 |
 
 None of these require architectural changes. The substrate is sound; these are engineering
 completions on top of it.

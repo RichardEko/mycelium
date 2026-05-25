@@ -143,10 +143,15 @@ pub(crate) async fn rpc_call_ctx(
     emit_signal(ctx, kind, SignalScope::Individual(target.clone()), buf.freeze());
 
     let deadline = tokio::time::Instant::now() + timeout;
-    match await_nonce_reply(ctx, nonce, &target, deadline).await {
+    #[cfg(feature = "metrics")]
+    let rpc_start = std::time::Instant::now();
+    let result = match await_nonce_reply(ctx, nonce, &target, deadline).await {
         Some(b) => Ok(b),
         None    => Err(RpcError::Timeout),
-    }
+    };
+    #[cfg(feature = "metrics")]
+    metrics::histogram!("gossip_rpc_latency_ms").record(rpc_start.elapsed().as_secs_f64() * 1000.0);
+    result
 }
 
 impl GossipAgent {

@@ -481,7 +481,13 @@ impl SignalHandlers {
     pub(crate) fn deliver(&self, signal: &Signal) {
         let now = Instant::now();
         self.log.record(&signal.kind, signal.sender.clone(), now);
-        if self.suppression.is_suppressed_at(&signal.kind, now) { return; }
+        if self.suppression.is_suppressed_at(&signal.kind, now) {
+            #[cfg(feature = "metrics")]
+            metrics::counter!("gossip_signals_rejected_total").increment(1);
+            return;
+        }
+        #[cfg(feature = "metrics")]
+        metrics::counter!("gossip_signals_delivered_total", "kind" => signal.kind.to_string()).increment(1);
         self.handlers.deliver_to_handlers(signal);
     }
 

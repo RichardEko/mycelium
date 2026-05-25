@@ -1,3 +1,4 @@
+use crate::agent::kv_quorum::QuorumAckTracker;
 use crate::framing::GossipUpdate;
 use crate::locality::LocalityPath;
 use crate::node_id::NodeId;
@@ -61,6 +62,10 @@ pub(crate) struct KvState {
     /// `cap/{node_id}/locality/self` writes. Used on hot gossip-forwarding paths
     /// (locality-aware fan-out scoring) without re-decoding the KV entry per message.
     pub peer_localities: Arc<papaya::HashMap<NodeId, LocalityPath>>,
+    /// Per-key durability trackers installed by `set_quorum`. `apply_and_notify`
+    /// calls `tracker.observe(sender, timestamp)` for every incoming update so
+    /// the waiter learns when enough distinct peers have confirmed the write.
+    pub quorum_trackers: Arc<papaya::HashMap<Arc<str>, Arc<QuorumAckTracker>>>,
 }
 
 /// One per-subscriber predicate registration in [`KvState::prefix_predicate_watchers`].
@@ -91,6 +96,7 @@ impl KvState {
             prefix_predicate_watchers: Arc::new(papaya::HashMap::new()),
             next_pred_watcher_id:      Arc::new(AtomicU64::new(0)),
             peer_localities:           Arc::new(papaya::HashMap::new()),
+            quorum_trackers:           Arc::new(papaya::HashMap::new()),
         })
     }
 }
@@ -495,6 +501,12 @@ pub(crate) fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
                 _ => Operation::Abort(()),
             });
         }
+        // Notify any in-flight set_quorum waiters tracking this key.
+        if let Some(tracker) = kv.quorum_trackers.pin().get(&update.key) {
+            tracker.observe(update.sender, update.timestamp);
+        }
+        #[cfg(feature = "metrics")]
+        metrics::gauge!("gossip_store_entries").set(kv.store.len() as f64);
     }
 }
 

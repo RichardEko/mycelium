@@ -67,6 +67,8 @@ impl GossipAgent {
             wal.append_try(crate::framing::sync_entry_from(&update));
         }
         apply_and_notify(&self.kv_state, &update);
+        #[cfg(feature = "metrics")]
+        metrics::counter!("gossip_kv_writes_total").increment(1);
         self.dispatch_update(update)
     }
 
@@ -89,6 +91,8 @@ impl GossipAgent {
             wal.append_try(crate::framing::sync_entry_from(&update));
         }
         apply_and_notify(&self.kv_state, &update);
+        #[cfg(feature = "metrics")]
+        metrics::counter!("gossip_kv_deletes_total").increment(1);
         self.dispatch_update(update)
     }
 
@@ -107,6 +111,8 @@ impl GossipAgent {
             let _ = wal.append(crate::framing::sync_entry_from(&update)).await;
         }
         apply_and_notify(&self.kv_state, &update);
+        #[cfg(feature = "metrics")]
+        metrics::counter!("gossip_kv_writes_total").increment(1);
         self.dispatch_update_async(update).await
     }
 
@@ -125,7 +131,64 @@ impl GossipAgent {
             let _ = wal.append(crate::framing::sync_entry_from(&update)).await;
         }
         apply_and_notify(&self.kv_state, &update);
+        #[cfg(feature = "metrics")]
+        metrics::counter!("gossip_kv_deletes_total").increment(1);
         self.dispatch_update_async(update).await
+    }
+
+    /// Writes `value` under `key` and waits for at least `min_acks` distinct peers
+    /// to confirm receipt before returning.
+    ///
+    /// Confirmation is detected when a peer's anti-entropy or gossip reflection of the
+    /// key arrives at this node with a timestamp ≥ the write timestamp. Returns the
+    /// number of peers that confirmed. Returns `Ok(0)` immediately when `min_acks = 0`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QuorumError::Timeout`] when fewer than `min_acks` peers confirm
+    /// within `timeout`. The write is **not** rolled back; it has already been applied
+    /// locally and gossiped.
+    pub async fn set_quorum(
+        &self,
+        key:      impl Into<Arc<str>>,
+        value:    impl Into<Bytes>,
+        min_acks: usize,
+        timeout:  Duration,
+    ) -> Result<usize, super::kv_quorum::QuorumError> {
+        use super::kv_quorum::{QuorumAckTracker, QuorumError};
+
+        let key:   Arc<str> = key.into();
+        let value: Bytes    = value.into();
+
+        if min_acks == 0 {
+            let _ = self.set_async(key, value).await;
+            return Ok(0);
+        }
+
+        // Pre-tick HLC to establish the minimum timestamp for ACK eligibility.
+        // set_async ticks again immediately after, so actual write_ts > write_ts_min.
+        let write_ts_min = self.task_ctx.hlc.tick();
+        let self_hash    = self.task_ctx.node_id.id_hash();
+        let (tracker, mut rx) = QuorumAckTracker::new(write_ts_min, self_hash);
+        self.kv_state.quorum_trackers.pin().insert(key.clone(), Arc::clone(&tracker));
+
+        let _ = self.set_async(key.clone(), value).await;
+
+        let result = tokio::time::timeout(timeout, async {
+            loop {
+                let n = *rx.borrow();
+                if n >= min_acks { return n; }
+                if rx.changed().await.is_err() { return *rx.borrow(); }
+            }
+        })
+        .await;
+
+        self.kv_state.quorum_trackers.pin().remove(&key);
+
+        match result {
+            Ok(n)  => Ok(n),
+            Err(_) => Err(QuorumError::Timeout { acks_received: *rx.borrow() }),
+        }
     }
 
     /// Returns a snapshot of all keys that have a live (non-tombstone) value.
@@ -675,5 +738,66 @@ mod tests {
         let agent = GossipAgent::new(NodeId::new("127.0.0.1", 0).unwrap(), cfg);
         assert!(agent.set("k1", b"v1".to_vec()), "first send fits in capacity-1 shard");
         assert!(!agent.set("k1", b"v2".to_vec()), "second send to same shard should fail");
+    }
+
+    // ── set_quorum tests ──────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn set_quorum_min_acks_zero() {
+        let agent = make_agent();
+        let result = agent
+            .set_quorum("sq-key", b"val".to_vec(), 0, std::time::Duration::from_secs(5))
+            .await;
+        assert_eq!(result, Ok(0), "min_acks=0 must return Ok(0) immediately");
+        assert_eq!(agent.get("sq-key"), Some(Bytes::from_static(b"val")),
+            "value must be written to the local store");
+    }
+
+    #[tokio::test]
+    async fn set_quorum_timeout_no_peers() {
+        use crate::agent::kv_quorum::QuorumError;
+        let agent = make_agent();
+        let result = agent
+            .set_quorum("sq-key2", b"val".to_vec(), 1, std::time::Duration::from_millis(50))
+            .await;
+        match result {
+            Err(QuorumError::Timeout { acks_received }) =>
+                assert_eq!(acks_received, 0, "no peers means 0 acks received"),
+            Ok(n) => panic!("expected Timeout, got Ok({n})"),
+        }
+    }
+
+    #[tokio::test]
+    async fn quorum_tracker_observe_counts_distinct_peers() {
+        use crate::agent::kv_quorum::QuorumAckTracker;
+        let write_ts:  u64 = 1000;
+        let self_hash: u64 = 1;
+        let peer_a:    u64 = 2;
+        let peer_b:    u64 = 3;
+
+        let (tracker, mut rx) = QuorumAckTracker::new(write_ts, self_hash);
+
+        // Self-write must not count.
+        tracker.observe(self_hash, write_ts + 1);
+        assert_eq!(*rx.borrow(), 0, "self-write must not increment acked_by");
+
+        // Stale timestamp must not count.
+        tracker.observe(peer_a, write_ts - 1);
+        assert_eq!(*rx.borrow(), 0, "stale ts must not count");
+
+        // First peer ACK.
+        tracker.observe(peer_a, write_ts + 1);
+        let _ = rx.changed().await;
+        assert_eq!(*rx.borrow(), 1);
+
+        // Duplicate from same peer must not double-count.
+        tracker.observe(peer_a, write_ts + 2);
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        assert_eq!(*rx.borrow(), 1, "duplicate peer must not increment count");
+
+        // Second distinct peer.
+        tracker.observe(peer_b, write_ts + 1);
+        let _ = rx.changed().await;
+        assert_eq!(*rx.borrow(), 2);
     }
 }

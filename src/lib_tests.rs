@@ -109,6 +109,7 @@ fn spawn_handler(
         prefix_predicate_watchers: Arc::new(papaya::HashMap::new()),
         next_pred_watcher_id:      Arc::new(AtomicU64::new(0)),
         peer_localities:           Arc::new(papaya::HashMap::new()),
+        quorum_trackers:           Arc::new(papaya::HashMap::new()),
     });
     let task_ctx = Arc::new(TaskCtx {
         node_id: node_id.clone(),
@@ -454,6 +455,7 @@ async fn test_subscribe_notified_via_gossip() {
             prefix_predicate_watchers: Arc::new(papaya::HashMap::new()),
             next_pred_watcher_id:      Arc::new(AtomicU64::new(0)),
             peer_localities:           Arc::new(papaya::HashMap::new()),
+            quorum_trackers:           Arc::new(papaya::HashMap::new()),
         });
         let task_ctx = Arc::new(TaskCtx {
             node_id: node_id.clone(),

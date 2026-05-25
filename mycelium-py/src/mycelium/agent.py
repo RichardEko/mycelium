@@ -455,6 +455,52 @@ class MyceliumAgent:
             resp.raise_for_status()
             return resp.json()["keys"]
 
+    def set_quorum(
+        self,
+        key: str,
+        value: bytes,
+        min_acks: int,
+        *,
+        timeout_secs: float = 5.0,
+    ) -> int:
+        """Write ``value`` under ``key`` and wait for ``min_acks`` peers to confirm.
+
+        Returns the number of peers that acknowledged the write (always ≥ ``min_acks``
+        on success). Raises :class:`TimeoutError` when fewer than ``min_acks`` peers
+        confirm within ``timeout_secs``.
+
+        The write is **not** rolled back on timeout — it has been applied locally and
+        gossiped. ``min_acks=0`` returns ``0`` immediately without contacting peers.
+
+        Args:
+            key:          KV key to write.
+            value:        Bytes to store.
+            min_acks:     Minimum number of distinct peers that must confirm receipt.
+            timeout_secs: Maximum seconds to wait for confirmations.
+
+        Raises:
+            TimeoutError: When fewer than ``min_acks`` peers confirmed in time.
+        """
+        import base64
+        body = {
+            "key":          key,
+            "value_b64":    base64.b64encode(value).decode(),
+            "min_acks":     min_acks,
+            "timeout_secs": timeout_secs,
+        }
+        with httpx.Client(
+            base_url=self._base_url,
+            timeout=timeout_secs + 2.0,
+        ) as c:
+            resp = c.post("/gateway/kv/quorum", json=body)
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("ok"):
+                return int(data["acks_received"])
+            raise TimeoutError(
+                f"set_quorum timed out ({data.get('acks_received', 0)} peer(s) acknowledged)"
+            )
+
     def scan_prefix(self, prefix: str) -> dict[str, bytes]:
         """Return all live KV entries whose key starts with ``prefix``.
 
@@ -757,6 +803,47 @@ class MyceliumAgent:
         with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
             data = c.post("/gateway/overlay/emit_reliable", json=body).raise_for_status().json()
         return data["ack"]
+
+    # ── Cluster sharding ───────────────────────────────────────────────────
+
+    def shard_for(self, ns: str, name: str, key: str) -> str:
+        """Return the consistent-hash owner node-id for ``key`` among providers of ``ns/name``.
+
+        Raises :class:`KeyError` when no providers match the filter.
+        """
+        with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
+            r = c.get(f"/gateway/shard/{ns}/{name}", params={"key": key})
+            if r.status_code == 404:
+                raise KeyError(f"no providers for {ns}/{name}")
+            r.raise_for_status()
+            return r.json()["owner"]
+
+    def emit_sharded(
+        self,
+        kind:      str,
+        ns:        str,
+        name:      str,
+        key:       str,
+        payload:   bytes = b"",
+    ) -> str:
+        """Emit ``kind`` signal to the consistent-hash owner for ``key``.
+
+        Returns the owner node-id string.
+        Raises :class:`KeyError` when no providers match the filter.
+        """
+        body = {
+            "kind":        kind,
+            "ns":          ns,
+            "name":        name,
+            "shard_key":   key,
+            "payload_b64": base64.b64encode(payload).decode(),
+        }
+        with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
+            r = c.post("/gateway/shard/emit", json=body)
+            if r.status_code == 404:
+                raise KeyError(f"no providers for {ns}/{name}")
+            r.raise_for_status()
+            return r.json()["owner"]
 
     # ── Health / introspection ──────────────────────────────────────────────
 

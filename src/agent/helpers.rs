@@ -13,18 +13,24 @@ use super::{GossipAgent, TaskCtx};
 
 impl GossipAgent {
     /// Encodes `update` and delivers it to the correct gossip shard via `try_send`.
+    /// When TLS is configured the frame is signed with the node's Ed25519 key.
     /// Returns `false` if the channel is full or the shard has died.
     pub(super) fn dispatch_update(&self, update: GossipUpdate) -> bool {
+        let tls = self.task_ctx.tls.get().map(std::sync::Arc::as_ref);
+        let msg = crate::framing::make_kv_wire_msg(update, self.node_id.id_hash(), tls);
         dispatch_gossip_try_send(
-            &self.task_ctx.gossip_txs, WireMessage::Data(update),
+            &self.task_ctx.gossip_txs, msg,
             self.node_id.id_hash(), ForwardHint::All, &self.kv_state.dropped_frames,
         )
     }
 
     /// Like `dispatch_update` but awaits channel capacity rather than dropping.
+    /// When TLS is configured the frame is signed with the node's Ed25519 key.
     pub(super) async fn dispatch_update_async(&self, update: GossipUpdate) -> bool {
+        let tls = self.task_ctx.tls.get().map(std::sync::Arc::as_ref);
+        let msg = crate::framing::make_kv_wire_msg(update, self.node_id.id_hash(), tls);
         dispatch_gossip_send(
-            &self.task_ctx.gossip_txs, WireMessage::Data(update),
+            &self.task_ctx.gossip_txs, msg,
             self.node_id.id_hash(), ForwardHint::All,
         ).await
     }
@@ -136,6 +142,15 @@ pub(crate) fn emit_signal(
         SignalScope::Group(name)      => ForwardHint::Group(name.clone()),
         SignalScope::Individual(peer) => ForwardHint::Individual(peer.clone()),
     };
+    #[cfg(feature = "metrics")]
+    {
+        let scope_label = match &scope {
+            SignalScope::System        => "system",
+            SignalScope::Group(_)      => "group",
+            SignalScope::Individual(_) => "node",
+        };
+        metrics::counter!("gossip_signals_emitted_total", "scope" => scope_label).increment(1);
+    }
     dispatch_gossip_try_send(
         &ctx.gossip_txs,
         WireMessage::Signal { ttl: ctx.default_ttl, nonce, sender: ctx.node_id.clone(), scope, kind, payload },

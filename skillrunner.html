@@ -304,6 +304,7 @@
     <div class="nav-links">
       <a href="#invoke-rust">From Rust</a>
       <a href="#invoke-python">From Python</a>
+      <a href="#invoke-typescript">From TypeScript</a>
     </div>
   </details>
 
@@ -616,6 +617,36 @@ result  = agent.<span class="fn">rpc_call</span>(node_id, <span class="str">"ski
   <pre><span class="cmt"># pip install -e mycelium-py/</span>
 cd mycelium-py
 pip install -e <span class="str">".[dev]"</span><div class="lang-tag">sh</div></pre>
+</section>
+
+<!-- ── Invoking from TypeScript ──────────────────────────────────────── -->
+<section class="section" id="invoke-typescript">
+  <div class="section-head">
+    <span class="section-icon">🟦</span>
+    <h2>Invoking from TypeScript</h2>
+    <span class="sec-tag tag-guide">Guide</span>
+  </div>
+
+  <p>The <code>mycelium-ts</code> package exposes the same gateway API as the Python bridge.
+  Set <code>http_port = 9000</code> on the skillrunner node and connect Node.js to it.</p>
+
+  <pre><span class="kw">import</span> { <span class="fn">MyceliumAgent</span> } <span class="kw">from</span> <span class="str">"mycelium-ts"</span>;
+<span class="kw">import</span> { Buffer } <span class="kw">from</span> <span class="str">"buffer"</span>;<div class="lang-tag">typescript</div>
+
+<span class="cmt">// Connect to the HTTP gateway of any mesh node</span>
+<span class="kw">const</span> agent = <span class="kw">new</span> <span class="fn">MyceliumAgent</span>(<span class="str">"127.0.0.1"</span>, <span class="num">9000</span>);
+
+<span class="cmt">// Discover</span>
+<span class="kw">const</span> providers = <span class="kw">await</span> agent.<span class="fn">resolveCapability</span>(<span class="str">"llm"</span>, <span class="str">"chat"</span>);
+<span class="kw">const</span> nodeId = providers[<span class="num">0</span>].nodeId;
+
+<span class="cmt">// Invoke</span>
+<span class="kw">const</span> payload = Buffer.<span class="fn">from</span>(JSON.<span class="fn">stringify</span>({ message: <span class="str">"Hello!"</span> }));
+<span class="kw">const</span> result = <span class="kw">await</span> agent.<span class="fn">rpcCall</span>(nodeId, <span class="str">"skill.invoke"</span>, payload);
+console.<span class="fn">log</span>(JSON.<span class="fn">parse</span>(result.<span class="fn">toString</span>()).reply);</pre>
+
+  <pre>cd mycelium-ts &amp;&amp; npm install<div class="lang-tag">sh</div></pre>
+  <p>See <a href="../mycelium-ts/README.md"><code>mycelium-ts/README.md</code></a> for the full API reference.</p>
 </section>
 
 <!-- ── Skill composition ─────────────────────────────────────────────── -->

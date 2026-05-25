@@ -23,6 +23,12 @@ fuzz-internals = []
 tls = ["dep:tokio-rustls", "dep:rustls", "dep:rcgen", "dep:rustls-pemfile", "dep:ed25519-dalek"]
 # Enables OTEL span export from SkillRunner (opentelemetry-otlp gRPC).
 otel = ["dep:opentelemetry", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry", "dep:opentelemetry_sdk"]
+# Exposes a Prometheus /metrics endpoint on the gateway HTTP port.
+# Zero-cost when absent: all counter!/histogram!/gauge! calls compile to no-ops.
+metrics = ["dep:metrics", "dep:metrics-exporter-prometheus"]
+# Exposes A2A (Agent-to-Agent protocol) endpoints: GET /.well-known/agent.json
+# and POST /a2a JSON-RPC. Adds no new dependencies — server-side only.
+a2a = []
 
 # The `fuzz/` directory is its own cargo-fuzz crate; keep it out of any
 # implicit-workspace traversal from this parent manifest.
@@ -80,6 +86,10 @@ opentelemetry          = { version = "0.27", optional = true }
 opentelemetry_sdk      = { version = "0.27", optional = true }
 opentelemetry-otlp     = { version = "0.27", optional = true, features = ["grpc-tonic"] }
 tracing-opentelemetry  = { version = "0.28", optional = true }
+
+# Prometheus metrics (optional — enabled by the "metrics" feature)
+metrics                     = { version = "0.24", optional = true }
+metrics-exporter-prometheus = { version = "0.16", optional = true }
 
 [dev-dependencies]
 tokio        = { version = "1.35", features = ["full"] }

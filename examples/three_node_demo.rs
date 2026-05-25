@@ -116,7 +116,7 @@ use axum::{
 use bytes::Bytes;
 use futures_util::StreamExt;
 use mycelium::{
-    BulkServeHandle, Capability, CapFilter, GossipAgent, GossipConfig,
+    BulkServeHandle, CapabilityHandle, Capability, CapFilter, GossipAgent, GossipConfig,
     MailboxHandle, McpToolHandle, NodeId,
     PersistenceConfig, SignalScope, SyncMode, signal_kind,
 };
@@ -249,9 +249,7 @@ async fn make_agent(
             snapshot_interval_secs: 300,
         });
     }
-    let agent = Arc::new(GossipAgent::new(nid, cfg));
-    agent.start().await.expect("agent start");
-    agent
+    Arc::new(GossipAgent::new(nid, cfg))
 }
 
 // ── Tool handler types ─────────────────────────────────────────────────────────
@@ -776,10 +774,7 @@ struct NodeState {
     mailbox_count: Arc<std::sync::atomic::AtomicUsize>,
     _bulk_handle:  BulkServeHandle,
     _mbox_handle:  MailboxHandle,
-}
-
-async fn node_health() -> StatusCode {
-    StatusCode::OK
+    _role_cap:     CapabilityHandle,
 }
 
 async fn node_scatter(State(s): State<Arc<NodeState>>) -> Json<Value> {
@@ -845,10 +840,6 @@ async fn node_mailbox_count(State(s): State<Arc<NodeState>>) -> Json<Value> {
     Json(json!({ "count": count }))
 }
 
-async fn node_ready(State(s): State<Arc<NodeState>>) -> StatusCode {
-    if s.agent.is_ready() { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE }
-}
-
 async fn node_kv_get(
     State(s): State<Arc<NodeState>>,
     Path(key): Path<String>,
@@ -877,17 +868,17 @@ async fn node_emit(
     StatusCode::ACCEPTED
 }
 
-async fn run_node(agent: Arc<GossipAgent>, role: &str, http_port: u16) {
-    // Tell the bulk transport which port this node's own HTTP server is on,
-    // since node roles skip the embedded gateway (agent_http = None).
-    agent.set_bulk_serving_port(http_port);
-
-    let _role_cap = agent.advertise_capability(Capability::new("role", "node"), Duration::from_secs(5));
+/// Builds node-role axum routes and wires up background handlers.
+///
+/// Returns a `Router<()>` ready to be passed to [`GossipAgent::with_http_routes`].
+/// Must be called before [`GossipAgent::start`].
+fn init_node_routes(agent: Arc<GossipAgent>) -> axum::Router {
+    let role_cap = agent.advertise_capability(Capability::new("role", "node"), Duration::from_secs(5));
 
     // Record test.signal arrivals under a per-hostname key so each node's
     // reception can be queried independently in integration tests.
-    let hostname   = std::env::var("HOSTNAME").unwrap_or_else(|_| agent.node_id().to_string());
-    let sig_key    = format!("sig-received/{}", hostname);
+    let hostname  = std::env::var("HOSTNAME").unwrap_or_else(|_| agent.node_id().to_string());
+    let sig_key   = format!("sig-received/{}", hostname);
     let mut sig_rx = agent.signal_rx("test.signal");
     let sig_agent  = Arc::clone(&agent);
     tokio::spawn(async move {
@@ -906,10 +897,8 @@ async fn run_node(agent: Arc<GossipAgent>, role: &str, http_port: u16) {
         }
     });
 
-    // Register a bulk echo handler (echo the received payload back to caller).
     let bulk_handle = agent.bulk_serve("echo-bulk", |_sender, payload| async move { payload });
 
-    // Open a mailbox for "test-mailbox" and count received events.
     let mailbox_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let (mbox_handle, mut mbox_rx) = agent.open_mailbox("test-mailbox", 64);
     let mc = Arc::clone(&mailbox_count);
@@ -924,24 +913,25 @@ async fn run_node(agent: Arc<GossipAgent>, role: &str, http_port: u16) {
         mailbox_count,
         _bulk_handle: bulk_handle,
         _mbox_handle: mbox_handle,
+        _role_cap:    role_cap,
     });
 
-    let router = Router::new()
-        .route("/health",            get(node_health))
-        .route("/ready",             get(node_ready))
+    // /health and /ready are omitted — the embedded gateway already provides them.
+    // /bulk/{corr_id} is also omitted — bulk_staging_handler in the gateway is equivalent.
+    Router::new()
         .route("/kv/{*key}",         get(node_kv_get).put(node_kv_put))
         .route("/emit/{kind}",       post(node_emit))
         .route("/scatter",           post(node_scatter))
         .route("/bulk-echo-peer",    post(node_bulk_echo_peer))
-        .route("/bulk/{corr_id}",    get(node_bulk_fetch))
         .route("/deliver-to-self",   post(node_deliver_to_self))
         .route("/mailbox-count",     get(node_mailbox_count))
-        .with_state(state);
+        .with_state(state)
+}
 
-    let addr = format!("0.0.0.0:{http_port}");
-    info!("[{role}] HTTP ready → http://{addr}/");
-    let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind node http");
-    axum::serve(listener, router).await.expect("serve node http");
+async fn run_node(_agent: Arc<GossipAgent>, role: &str) {
+    info!("[{role}] HTTP routes registered in embedded gateway");
+    // All work runs in the background tasks and axum handlers registered via init_node_routes.
+    loop { tokio::time::sleep(Duration::from_secs(60)).await; }
 }
 
 // ── Inline chat UI ─────────────────────────────────────────────────────────────
@@ -1226,13 +1216,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let data_dir   = std::env::var("MYCELIUM_DATA_DIR").ok().map(std::path::PathBuf::from);
-    // node role owns its own HTTP server; skip the embedded gateway to avoid port conflict.
-    let agent_http = if role == "node" { None } else { Some(http_port) };
+    let data_dir = std::env::var("MYCELIUM_DATA_DIR").ok().map(std::path::PathBuf::from);
 
     let peers = resolve_peers(&peer_list).await;
     info!(role=%role, my_ip=%my_ip, port, http_port, peers=peers.len(), "starting");
-    let agent = make_agent(&my_ip, peers, port, agent_http, data_dir).await;
+    let agent = make_agent(&my_ip, peers, port, Some(http_port), data_dir).await;
+
+    // For the node role, register application routes into the embedded gateway before start.
+    if role == "node" {
+        agent.set_bulk_serving_port(http_port);
+        let extra = init_node_routes(Arc::clone(&agent));
+        agent.with_http_routes(extra);
+    }
+
+    agent.start().await.expect("agent start");
     info!("[{role}] node_id={}", agent.node_id());
 
     match role.as_str() {
@@ -1240,7 +1237,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "tool-b" => run_tool_b(agent, &role).await,
         "llm"    => run_chat_server(agent, LlmCfg::from_env(), chat_port).await,
         "mgmt"   => run_mgmt_server(agent, mgmt_port).await,
-        "node"    => run_node(agent, &role, http_port).await,
+        "node"    => run_node(agent, &role).await,
         "overlay" => {
             let _consensus = agent.start_consensus_listener(ConsensusConfig::default());
             info!("[overlay] consensus listener started; HTTP gateway ready on :{http_port}");

@@ -132,7 +132,7 @@ pub use agent::{
     BulkError, BulkServeHandle,
     GossipAgent, MailboxHandle, McpClientHandle, McpError, McpToolHandle,
     MeshEvent, RpcError, RpcRequest, RpcRequestRx, ScatterError, ScatterResult, SystemStats,
-    AckResult, ConsistencyError, LockGuard, LogEntry,
+    AckResult, ConsistencyError, LockGuard, LogEntry, QuorumError, ShardError,
 };
 pub use capability::{
     CallerContext, CapConstraint, CapFilter, CapRanking, CapValue, Capability, CapabilityEvent,

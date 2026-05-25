@@ -1056,6 +1056,102 @@ See [`mycelium-py/README.md`](mycelium-py/README.md) for the full API reference.
 
 ---
 
+## TypeScript Language Bridge (`mycelium-ts`)
+
+TypeScript agents connect to a running Mycelium node over loopback HTTP.
+No native extension — same sidecar pattern as the Python SDK.
+
+```sh
+cd mycelium-ts
+npm install
+npm run build
+```
+
+```typescript
+import { MyceliumAgent } from "mycelium-ts";
+
+const agent = new MyceliumAgent("127.0.0.1", 8300);
+
+// Capabilities
+const handle = await agent.advertiseCapability("compute", "gpu", {
+  attributes: { model: "A100" },
+});
+const providers = await agent.resolveCapability("compute", "gpu");
+
+// Signals
+await agent.emit("render-job", Buffer.from("payload"), { scope: "system" });
+for await (const sig of agent.onSignal("render-job")) {
+  console.log(sig.sender, sig.payload);
+  break;
+}
+
+// KV store
+await agent.set("my/key", Buffer.from("value"));
+const val = await agent.get("my/key");  // Buffer | null
+
+// RPC
+const reply = await agent.rpcCall(target, "echo", Buffer.from("hi"));
+for await (const req of agent.rpcServe("echo")) {
+  await agent.rpcRespond(req, req.payload);
+}
+
+await handle.drop();
+```
+
+**Requires Node.js ≥ 18.** See [`mycelium-ts/README.md`](mycelium-ts/README.md) for the full API reference.
+
+---
+
+## Observability — Prometheus Metrics
+
+Enable the `metrics` feature to expose a Prometheus scrape endpoint on every node's HTTP gateway port:
+
+```toml
+# Cargo.toml
+mycelium = { version = "0.1", features = ["metrics"] }
+```
+
+```sh
+# Build
+cargo build --features metrics
+
+# Scrape
+curl http://127.0.0.1:8300/metrics
+```
+
+### Metrics reference
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `gossip_kv_writes_total` | Counter | Local KV writes (all nodes, including `set_quorum`) |
+| `gossip_kv_deletes_total` | Counter | Local KV tombstones |
+| `gossip_store_entries` | Gauge | Current live KV entry count |
+| `gossip_messages_received_total` | Counter | Inbound gossip Data frames applied |
+| `gossip_anti_entropy_rounds_total` | Counter | Anti-entropy StateResponse rounds received |
+| `gossip_frames_dropped_total` | Counter | Frames dropped during peer reconnect backoff |
+| `gossip_signals_emitted_total{scope}` | Counter | Signals emitted, labelled by scope (`system` / `group` / `node`) |
+| `gossip_signals_delivered_total{kind}` | Counter | Signals delivered to local handlers, labelled by kind |
+| `gossip_signals_rejected_total` | Counter | Signals suppressed by the load-shedding boundary |
+| `gossip_rpc_latency_ms` | Histogram | Full round-trip latency for `rpc_call` calls |
+
+### Prometheus scrape config
+
+```yaml
+scrape_configs:
+  - job_name: mycelium
+    static_configs:
+      - targets:
+          - "node1:8300"
+          - "node2:8300"
+          - "node3:8300"
+    metrics_path: /metrics
+```
+
+A pre-built Grafana dashboard is available at [`dashboards/mycelium-grafana.json`](dashboards/mycelium-grafana.json).
+Import it via **Dashboards → Import** in the Grafana UI and select your Prometheus datasource.
+
+---
+
 ## SkillRunner — local LLMs as mesh capabilities
 
 `skillrunner` is a standalone binary that turns a `.skill.toml` file into a

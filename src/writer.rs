@@ -82,6 +82,8 @@ pub(crate) async fn run_peer_writer(
             if fail_time.elapsed() < fail_backoff {
                 dropped_frames.fetch_add(1, Ordering::Relaxed);
                 peer_dropped.fetch_add(1, Ordering::Relaxed);
+                #[cfg(feature = "metrics")]
+                metrics::counter!("gossip_frames_dropped_total").increment(1);
                 debug!("Dropping frame to {} during reconnect backoff", peer);
                 continue;
             }

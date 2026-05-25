@@ -25,8 +25,11 @@
 //! - `POST   /gateway/kv`                      — write a KV key
 //! - `DELETE /gateway/kv?key=K`                — delete (tombstone) a KV key
 //! - `GET    /gateway/kv/keys?prefix=P`        — list live keys (optionally filtered)
+//! - `POST   /gateway/kv/quorum`               — write + wait for N peer ACKs
 //! - `GET    /gateway/mailbox/{kind}`          — SSE stream of mailbox events for this node
 //! - `POST   /gateway/mailbox/deliver`         — deliver an event to a target's mailbox
+//! - `GET    /gateway/shard/{ns}/{name}?key=K` — deterministic shard owner for a key
+//! - `POST   /gateway/shard/emit`              — emit signal to consistent-hash owner
 //!
 //! Started when `GossipConfig::http_port` is `Some(port)`. Shuts down cleanly
 //! when the agent's broadcast shutdown signal fires.
@@ -72,20 +75,47 @@ struct HttpCtx {
     lock_guards:     Arc<Mutex<HashMap<String, LockGuard>>>,
     /// Shutdown receiver used when spawning gateway advertisement tasks.
     shutdown_rx:     watch::Receiver<bool>,
+    /// Prometheus scrape handle (only present when the `metrics` feature is enabled).
+    #[cfg(feature = "metrics")]
+    prometheus:      metrics_exporter_prometheus::PrometheusHandle,
+}
+
+/// Returns the process-wide Prometheus scrape handle, installing the recorder
+/// the first time it is called. Safe to call from multiple agents in the same
+/// process (e.g. in tests) — subsequent calls return a clone of the same handle.
+#[cfg(feature = "metrics")]
+fn prometheus_handle() -> metrics_exporter_prometheus::PrometheusHandle {
+    use std::sync::OnceLock;
+    static HANDLE: OnceLock<metrics_exporter_prometheus::PrometheusHandle> = OnceLock::new();
+    HANDLE.get_or_init(|| {
+        metrics_exporter_prometheus::PrometheusBuilder::new()
+            .install_recorder()
+            .expect("Prometheus recorder install failed")
+    }).clone()
 }
 
 /// Starts the axum HTTP server on `addr`. Returns when the agent shuts down
 /// (shutdown_rx fires) or if the listener fails to bind.
+///
+/// `extra_routes` is an optional `Router<()>` (state already attached by the
+/// caller) that is merged into the library router so application-level
+/// handlers share the same port without a second TCP listener.
 pub(super) async fn run_http_server(
-    addr:        SocketAddr,
-    ctx:         Arc<TaskCtx>,
-    shutdown_rx: watch::Receiver<bool>,
+    addr:         SocketAddr,
+    ctx:          Arc<TaskCtx>,
+    shutdown_rx:  watch::Receiver<bool>,
+    extra_routes: Option<axum::Router>,
 ) -> Result<(), std::io::Error> {
+    #[cfg(feature = "metrics")]
+    let prometheus = prometheus_handle();
+
     let state = Arc::new(HttpCtx {
         agent_ctx:    ctx,
         gateway_caps: Arc::new(Mutex::new(HashMap::new())),
         lock_guards:  Arc::new(Mutex::new(HashMap::new())),
         shutdown_rx:  shutdown_rx.clone(),
+        #[cfg(feature = "metrics")]
+        prometheus,
     });
 
     let app = Router::new()
@@ -93,6 +123,7 @@ pub(super) async fn run_http_server(
         .route("/health",          get(health_handler))
         .route("/ready",           get(ready_handler))
         .route("/stats",           get(stats_handler))
+        .route("/metrics",         get(metrics_handler))
         .route("/signals/{kind}",  get(signal_sse_handler))
         .route("/mcp",             post(mcp_handler))
         .route("/bulk/{corr_id}",  get(bulk_staging_handler))
@@ -109,6 +140,7 @@ pub(super) async fn run_http_server(
         .route("/gateway/scatter",                post(gw_scatter))
         .route("/gateway/kv",                     get(gw_kv_get).post(gw_kv_set).delete(gw_kv_delete))
         .route("/gateway/kv/keys",                get(gw_kv_keys))
+        .route("/gateway/kv/quorum",              post(gw_kv_quorum))
         .route("/gateway/mailbox/deliver",        post(gw_mailbox_deliver))
         .route("/gateway/mailbox/{kind}",         get(gw_mailbox_subscribe))
         // ── Overlay: consistency, locks, elections ────────────────────────
@@ -125,7 +157,16 @@ pub(super) async fn run_http_server(
         .route("/gateway/overlay/log/group/subscribe",    get(gw_overlay_log_group_subscribe))
         // ── Overlay: reliable delivery ────────────────────────────────────
         .route("/gateway/overlay/emit_reliable",          post(gw_overlay_emit_reliable))
+        // ── Cluster sharding ──────────────────────────────────────────────
+        .route("/gateway/shard/{ns}/{name}",               get(gw_shard_owner))
+        .route("/gateway/shard/emit",                     post(gw_shard_emit))
         .with_state(state);
+
+    let app = if let Some(extra) = extra_routes {
+        app.merge(extra)
+    } else {
+        app
+    };
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     info!(addr = %listener.local_addr().unwrap(), "HTTP server listening");
@@ -141,6 +182,28 @@ async fn shutdown_signal(mut rx: watch::Receiver<bool>) {
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
+
+/// `GET /metrics` — Prometheus text-format scrape endpoint.
+///
+/// Available when the `metrics` cargo feature is enabled. Returns
+/// `text/plain; version=0.0.4` as expected by Prometheus scrapers.
+/// When the feature is disabled, returns 404.
+async fn metrics_handler(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
+    #[cfg(feature = "metrics")]
+    {
+        let body = ctx.prometheus.render();
+        (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+            body,
+        ).into_response()
+    }
+    #[cfg(not(feature = "metrics"))]
+    {
+        let _ = ctx;
+        (StatusCode::NOT_FOUND, "metrics feature not enabled").into_response()
+    }
+}
 
 async fn health_handler(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
     Json(json!({
@@ -749,6 +812,75 @@ async fn gw_kv_keys(
             .collect()
     };
     Json(json!({ "keys": keys })).into_response()
+}
+
+/// `POST /gateway/kv/quorum` — write + wait for peer durability acknowledgements.
+///
+/// Request body:
+/// ```json
+/// { "key": "...", "value_b64": "<base64>", "min_acks": 2, "timeout_secs": 5.0 }
+/// ```
+/// Success: `{ "ok": true, "acks_received": 2 }`
+/// Timeout: `{ "ok": false, "error": "timeout", "acks_received": 0 }`
+#[derive(Deserialize)]
+struct KvQuorumBody {
+    key:         String,
+    #[serde(default)]
+    value_b64:   String,
+    min_acks:    usize,
+    #[serde(default = "default_quorum_timeout")]
+    timeout_secs: f64,
+}
+
+fn default_quorum_timeout() -> f64 { 5.0 }
+
+async fn gw_kv_quorum(
+    State(ctx): State<Arc<HttpCtx>>,
+    Json(body): Json<KvQuorumBody>,
+) -> impl IntoResponse {
+    use base64::Engine as _;
+    use super::kv_quorum::QuorumAckTracker;
+
+    let value = match base64::engine::general_purpose::STANDARD.decode(&body.value_b64) {
+        Ok(v)  => Bytes::from(v),
+        Err(_) => return (StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid base64" }))).into_response(),
+    };
+
+    let key: Arc<str> = Arc::from(body.key.as_str());
+    let timeout        = Duration::from_secs_f64(body.timeout_secs);
+    let tc             = Arc::clone(&ctx.agent_ctx);
+
+    if body.min_acks == 0 {
+        kv_write(&tc, key, value, false);
+        return Json(json!({ "ok": true, "acks_received": 0 })).into_response();
+    }
+
+    let write_ts_min = tc.hlc.tick();
+    let self_hash    = tc.node_id.id_hash();
+    let (tracker, mut rx) = QuorumAckTracker::new(write_ts_min, self_hash);
+    tc.kv_state.quorum_trackers.pin().insert(key.clone(), Arc::clone(&tracker));
+
+    kv_write(&tc, key.clone(), value, false);
+
+    let result = tokio::time::timeout(timeout, async {
+        loop {
+            let n = *rx.borrow();
+            if n >= body.min_acks { return n; }
+            if rx.changed().await.is_err() { return *rx.borrow(); }
+        }
+    })
+    .await;
+
+    tc.kv_state.quorum_trackers.pin().remove(&key);
+
+    match result {
+        Ok(n)  => Json(json!({ "ok": true, "acks_received": n })).into_response(),
+        Err(_) => {
+            let n = *rx.borrow();
+            Json(json!({ "ok": false, "error": "timeout", "acks_received": n })).into_response()
+        }
+    }
 }
 
 /// Applies a KV write (set or delete) and fans out to gossip peers.
@@ -1500,6 +1632,112 @@ async fn gw_overlay_emit_reliable(
         Ok(_)                              => Json(json!({ "ack": "acknowledged" })).into_response(),
         Err(super::rpc::RpcError::Timeout) => Json(json!({ "ack": "timeout" })).into_response(),
     }
+}
+
+// ── Cluster sharding ──────────────────────────────────────────────────────────
+
+/// `GET /gateway/shard/{ns}/{name}?key=<shard_key>`
+///
+/// Returns the consistent-hash owner NodeId for `shard_key` among providers of
+/// capability `ns/name`. The result is deterministic: every node with the same
+/// provider view returns the same owner for the same key.
+///
+/// 200 `{"owner":"ip:port"}` — owner found.
+/// 404 `{"error":"no providers"}` — no live providers match the filter.
+#[derive(Deserialize)]
+struct ShardOwnerQuery { key: String }
+
+async fn gw_shard_owner(
+    Path((ns, name)): Path<(String, String)>,
+    Query(q):         Query<ShardOwnerQuery>,
+    State(ctx):       State<Arc<HttpCtx>>,
+) -> impl IntoResponse {
+    use crate::capability::CapFilter;
+    use super::sharding::shard_owner;
+
+    let filter = CapFilter::new(ns.as_str(), name.as_str());
+    let providers = resolve_cap_providers(&ctx.agent_ctx.kv_state, &filter);
+
+    match shard_owner(&q.key, &providers) {
+        Some(owner) => Json(json!({ "owner": owner.to_string() })).into_response(),
+        None        => (StatusCode::NOT_FOUND, Json(json!({ "error": "no providers" }))).into_response(),
+    }
+}
+
+/// `POST /gateway/shard/emit`
+///
+/// Emits `kind` signal to the consistent-hash owner for `shard_key` among
+/// providers of `ns/name`. Equivalent to calling `emit_sharded` from Rust.
+///
+/// Request body:
+/// ```json
+/// { "kind": "actor.msg", "ns": "actor", "name": "user",
+///   "shard_key": "user-12345", "payload_b64": "<base64>" }
+/// ```
+/// Response 200: `{"ok":true,"owner":"ip:port"}`
+/// Response 404: `{"ok":false,"error":"no providers"}`
+async fn gw_shard_emit(
+    State(ctx): State<Arc<HttpCtx>>,
+    Json(body):  Json<serde_json::Value>,
+) -> impl IntoResponse {
+    use base64::Engine as _;
+    use crate::capability::CapFilter;
+    use super::sharding::shard_owner;
+    use crate::signal::SignalScope;
+
+    let kind = match body["kind"].as_str() {
+        Some(k) => Arc::from(k),
+        None    => return (StatusCode::BAD_REQUEST, Json(json!({"error":"missing kind"}))).into_response(),
+    };
+    let ns   = match body["ns"].as_str()   { Some(s) => s.to_string(), None => return (StatusCode::BAD_REQUEST, Json(json!({"error":"missing ns"}))).into_response() };
+    let name = match body["name"].as_str() { Some(s) => s.to_string(), None => return (StatusCode::BAD_REQUEST, Json(json!({"error":"missing name"}))).into_response() };
+    let shard_key = match body["shard_key"].as_str() {
+        Some(s) => s.to_string(),
+        None    => return (StatusCode::BAD_REQUEST, Json(json!({"error":"missing shard_key"}))).into_response(),
+    };
+    let payload = if let Some(b64) = body["payload_b64"].as_str() {
+        match base64::engine::general_purpose::STANDARD.decode(b64) {
+            Ok(b)  => Bytes::from(b),
+            Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({"error":"invalid base64"}))).into_response(),
+        }
+    } else {
+        Bytes::new()
+    };
+
+    let filter    = CapFilter::new(ns.as_str(), name.as_str());
+    let providers = resolve_cap_providers(&ctx.agent_ctx.kv_state, &filter);
+
+    match shard_owner(&shard_key, &providers) {
+        Some(owner) => {
+            super::helpers::emit_signal_async(
+                &ctx.agent_ctx, kind, SignalScope::Individual(owner.clone()), payload,
+            ).await;
+            Json(json!({ "ok": true, "owner": owner.to_string() })).into_response()
+        }
+        None => (StatusCode::NOT_FOUND, Json(json!({ "ok": false, "error": "no providers" }))).into_response(),
+    }
+}
+
+/// Shared helper: scan `cap/` KV and return providers matching `filter`.
+/// Mirrors the scan in `gw_cap_resolve` (no freshness check — same as the HTTP resolve endpoint).
+fn resolve_cap_providers(
+    kv_state: &crate::store::KvState,
+    filter:   &crate::capability::CapFilter,
+) -> Vec<(crate::node_id::NodeId, crate::capability::Capability)> {
+    use crate::capability::Capability;
+    use crate::store::scan_kv_prefix;
+    use super::capability_ops::{is_cap_locality_key, parse_cap_key_or_warn};
+
+    let mut out = Vec::new();
+    for (key, bytes) in scan_kv_prefix(kv_state, "cap/") {
+        if is_cap_locality_key(&key) { continue; }
+        let Some((node_id, _ns, _name)) = parse_cap_key_or_warn("cap/", &key) else { continue };
+        let Some(cap) = Capability::decode(&bytes) else { continue };
+        if filter.matches(&cap) {
+            out.push((node_id, cap));
+        }
+    }
+    out
 }
 
 #[cfg(test)]

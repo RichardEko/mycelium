@@ -619,8 +619,11 @@
     <span class="badge"><span class="dot dot-live"></span> Layer 4: Python Bridge (mycelium-py) — Complete</span>
     <span class="badge"><span class="dot dot-live"></span> Layer 4: SkillRunner + Audit Trail — Complete</span>
     <span class="badge"><span class="dot dot-live"></span> Opt-In Consistency &amp; Ordering Overlay — Complete</span>
-    <span class="badge"><span class="dot dot-future"></span> Layer 4 (cont.): TypeScript SDK + A2A adapter — Planned</span>
-    <span class="badge"><span class="dot dot-future"></span> Layer 5: Observability (Prometheus / Grafana) — Planned</span>
+    <span class="badge"><span class="dot dot-live"></span> Layer 4 (cont.): TypeScript SDK — Complete</span>
+    <span class="badge"><span class="dot dot-live"></span> Cluster Sharding (<code>shard_for</code> / <code>emit_sharded</code>) — Complete</span>
+    <span class="badge"><span class="dot dot-live"></span> KV Write Signing (wire v10, Ed25519) — Complete</span>
+    <span class="badge"><span class="dot dot-live"></span> Layer 4: A2A Adapter (<code>a2a</code> feature) — Complete</span>
+    <span class="badge"><span class="dot dot-live"></span> Layer 5: Observability (Prometheus / Grafana) — Complete</span>
   </div>
 </div>
 
@@ -921,22 +924,24 @@
       <div class="stack-row">
         <div class="stack-num sn-5">Layer<br>5</div>
         <div class="stack-body">
-          <div class="stack-title">Observability <span class="phase-tag tag-horizon">Phase 5</span></div>
-          <p class="stack-desc">Prometheus-compatible metrics via a single scrape endpoint. The <code>metrics</code> facade is zero-cost when no recorder is installed; Layers 1–4 emit calls without a hard runtime dependency. Signal throughput, boundary hit rates, invocation latency histograms.</p>
+          <div class="stack-title">Observability <span class="phase-tag tag-live">Complete</span></div>
+          <p class="stack-desc">Prometheus-compatible metrics via <code>GET /metrics</code> on the existing gateway port. The <code>metrics</code> cargo feature is zero-cost when disabled; Layers 1–4 emit calls that compile to no-ops without the feature. Grafana dashboard at <code>dashboards/mycelium-grafana.json</code>.</p>
           <div class="chips">
             <span class="chip">metrics facade</span>
             <span class="chip">prometheus exporter</span>
-            <span class="chip">signal_delivered_total</span>
-            <span class="chip">boundary_rejected_total</span>
+            <span class="chip">gossip_signals_delivered_total</span>
+            <span class="chip">gossip_signals_rejected_total</span>
             <span class="chip">gossip_frames_dropped_total</span>
-            <span class="chip">contract_invocation_latency_ms</span>
+            <span class="chip">gossip_rpc_latency_ms</span>
+            <span class="chip">gossip_store_entries</span>
+            <span class="chip">Grafana dashboard</span>
           </div>
         </div>
       </div>
       <div class="stack-row">
         <div class="stack-num sn-4">Layer<br>4</div>
         <div class="stack-body">
-          <div class="stack-title">AI Integration <span class="phase-tag tag-p4">Phase 4 — Mostly Complete</span></div>
+          <div class="stack-title">AI Integration <span class="phase-tag tag-done">Phase 4 — Complete</span></div>
           <p class="stack-desc">MCP bridge (server + client roles) and language bridges (Python first, TypeScript next). Mycelium-hosted tools expose as MCP servers; agents can also call external MCP tool servers. Python and TypeScript agents connect via an HTTP gateway sidecar — no FFI, no version coupling, SSE streaming native. LangGraph and graph-orchestration frameworks are out of scope: their centralized scheduler model conflicts with Mycelium's epidemic routing. The clean boundary is MCP — external orchestrators call in via MCP tool calls. <strong>Skills are capabilities</strong> — a <code>.skill.toml</code> file defines the JSON Schema contract, platform constraints, LLM prompt, and authorization policy for a <code>SkillRunner</code> node. Plans are not a Mycelium primitive — planning is LLM-internal; the mesh provides the execution substrate. Three security primitives ship alongside MCP: invocation audit trail (HLC causal log + OTEL), capability authorization scoping, and session-scoped mesh views.</p>
           <div class="chips">
             <span class="chip">MCP server role</span>
@@ -946,7 +951,7 @@
             <span class="chip">SkillRunner · .skill.toml ✓</span>
             <span class="chip">Python SDK (HTTP gateway) ✓</span>
             <span class="chip">TypeScript SDK</span>
-            <span class="chip">A2A adapter (post-MCP)</span>
+            <span class="chip">A2A adapter (<code>a2a</code> feature) ✓</span>
             <span class="chip">credential context (bridge-layer)</span>
             <span class="chip">supervision · watch()</span>
             <span class="chip">invocation audit trail (HLC + OTEL) ✓</span>
@@ -983,7 +988,7 @@
             <span class="chip">scan_log · compact_log ✓</span>
             <span class="chip">subscribe_log_group (consumer groups) ✓</span>
             <span class="chip">emit_reliable + ACK retry ✓</span>
-            <span class="chip">shard_for · emit_sharded</span>
+            <span class="chip">shard_for · emit_sharded ✓</span>
           </div>
         </div>
       </div>
@@ -1895,7 +1900,7 @@ tools = [<span class="str">"gh"</span>, <span class="str">"read_file"</span>]   
         <tr><td>Sidecar injection (Istio / Gloo Mesh)</td><td style="color:var(--accent5)">Do not adopt</td><td>Mycelium is a library. No daemon injection needed.</td></tr>
         <tr><td>OTEL export from audit trail</td><td style="color:var(--accent2)">Adopt — implement alongside</td><td>Makes Mycelium observable with existing Grafana/Jaeger/Honeycomb stacks. Low cost, high operational value.</td></tr>
         <tr><td>Declarative capability policy in manifest</td><td style="color:var(--accent2)">Adopt — it's the auth scoping hook</td><td>Policy-as-data (Envoy/Istio pattern) — authorization envelope declared at provision time, visible in manifest diff, enforced by the substrate.</td></tr>
-        <tr><td>A2A wire-protocol adapter</td><td style="color:var(--accent)">Design now, implement post-MCP</td><td>Mycelium is a native A2A implementation but opaque externally. Adapter lets AutoGen/LangChain agents participate without knowing they're on Mycelium.</td></tr>
+        <tr><td>A2A wire-protocol adapter</td><td style="color:#3fb950; font-weight:600;">Shipped — <code>a2a</code> cargo feature</td><td>Mycelium nodes expose <code>GET /.well-known/agent.json</code> + <code>POST /a2a</code> JSON-RPC. AutoGen/LangChain agents call skills by <code>ns/name</code> without knowing they're on Mycelium. Python and TypeScript <code>A2aClient</code> outbound clients included.</td></tr>
       </tbody>
     </table>
   </div>
@@ -1906,7 +1911,7 @@ tools = [<span class="str">"gh"</span>, <span class="str">"read_file"</span>]   
       <h2>Delivery Timeline</h2>
     </div>
     <div class="timeline-wrap">
-      <div class="tl-bar"><div class="tl-bar-fill" style="width:75%;"></div></div>
+      <div class="tl-bar"><div class="tl-bar-fill" style="width:100%;"></div></div>
       <div class="tl-cols" style="grid-template-columns: repeat(6, 1fr);">
         <div class="tl-card">
           <div class="tl-num" style="color:var(--accent2)">Layer 1</div>
@@ -1940,9 +1945,9 @@ tools = [<span class="str">"gh"</span>, <span class="str">"read_file"</span>]   
         </div>
         <div class="tl-card">
           <div class="tl-num" style="color:var(--accent4)">Layer 4</div>
-          <div class="tl-title">MCP + Language Bridges</div>
-          <div class="tl-weeks">Python SDK ✓ · TS SDK next</div>
-          <span class="tl-badge tl-done">Partial ✓</span>
+          <div class="tl-title">AI Integration</div>
+          <div class="tl-weeks">Complete · 233 tests · A2A</div>
+          <span class="tl-badge tl-done">Done ✓</span>
         </div>
       </div>
     </div>
@@ -2314,7 +2319,7 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
           <code>peer_keys</code> cache seeded from KV + live prefix watcher ·
           <code>SignedConsensusMsg</code> — all <code>Propose</code>, <code>Vote</code>, <code>Nack</code>, <code>Commit</code> payloads Ed25519-signed on emit, verified on recv; forged ballots dropped with <code>warn!</code>
         </p>
-        <p style="font-size:12px; color:var(--muted); margin-top:8px;"><strong style="color:var(--text2);">Remaining:</strong> KV write signing (each hop would need to re-sign; deferred) · certificate rotation without cluster disruption</p>
+        <p style="font-size:12px; color:var(--muted); margin-top:8px;"><strong style="color:var(--text2);">Also shipped (wire v10):</strong> KV write signing — <code>WireMessage::SignedData</code> carries an Ed25519 signature over hop-invariant fields; TTL excluded so signature survives forwarding; fail-open for unknown signers; <code>make_kv_wire_msg</code> dispatches conditionally under the <code>tls</code> feature. <strong style="color:var(--text2);">Remaining:</strong> certificate rotation without cluster disruption</p>
       </div>
 
       <div style="background:var(--surface2); border:1px solid rgba(63,185,80,0.3); border-radius:var(--radius); padding:18px;">
@@ -2331,17 +2336,16 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
           <code>get</code> / <code>set</code> / <code>delete</code> / <code>keys</code> / <code>scan_prefix</code> ·
           <code>deliver_event</code> · <code>mailbox</code> · <code>health</code> · <code>stats</code>
         </p>
-        <p style="font-size:12px; color:var(--muted); margin-top:8px;"><strong style="color:var(--text2);">Remaining:</strong> TypeScript SDK (same gateway, same pattern) · A2A adapter</p>
+        <p style="font-size:12px; color:var(--muted); margin-top:8px;"><strong style="color:var(--text2);">Also shipped:</strong> TypeScript SDK (<code>mycelium-ts</code> — 28 methods, SSE streaming, all overlay endpoints) · A2A adapter (<code>a2a</code> feature, Python + TypeScript <code>A2aClient</code>)</p>
       </div>
 
       <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:18px; grid-column: 1 / -1;">
         <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
-          <span style="font-size:20px;">🟡</span>
-          <span style="font-weight:700; font-size:14px;">Observability is shallow</span>
+          <span style="font-size:20px;">✅</span>
+          <span style="font-weight:700; font-size:14px;">Observability — Complete</span>
         </div>
-        <p style="font-size:13px; color:var(--text2); margin-bottom:10px;"><code>tracing</code> is wired in and <code>dropped_frames</code> / <code>peer_drop_counts()</code> provide basic diagnostics, but there is no structured metrics export.
-        An operator running a real cluster has no Prometheus endpoint to scrape, no dashboards, and no alerting surface beyond parsing log lines.</p>
-        <p style="font-size:12px; color:var(--muted);"><strong style="color:var(--text2);">Needs:</strong> <code>metrics</code> facade integration emitting <code>gossip_frames_dropped_total</code>, <code>signal_delivered_total</code>, <code>gossip_store_entries</code>, <code>contract_invocation_latency_ms</code> etc. · reference Grafana dashboard</p>
+        <p style="font-size:13px; color:var(--text2); margin-bottom:10px;">Enable the <code>metrics</code> cargo feature to expose <code>GET /metrics</code> (Prometheus text format) on every node's HTTP gateway port. 10 metrics covering KV writes/deletes/entries, gossip transport, signal throughput, and RPC latency. Import <code>dashboards/mycelium-grafana.json</code> for a ready-made Grafana dashboard.</p>
+        <p style="font-size:12px; color:var(--muted);"><strong style="color:var(--text2);">Ships:</strong> <code>gossip_kv_writes_total</code>, <code>gossip_kv_deletes_total</code>, <code>gossip_store_entries</code>, <code>gossip_messages_received_total</code>, <code>gossip_anti_entropy_rounds_total</code>, <code>gossip_frames_dropped_total</code>, <code>gossip_signals_emitted_total{scope}</code>, <code>gossip_signals_delivered_total{kind}</code>, <code>gossip_signals_rejected_total</code>, <code>gossip_rpc_latency_ms</code></p>
       </div>
 
     </div>
@@ -2355,7 +2359,11 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
         <tr><td>Python language bridge (<code>mycelium-py</code>)</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-24</td></tr>
         <tr><td><code>SkillRunner</code> + <code>.skill.toml</code> + invocation audit trail + OTEL</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-25</td></tr>
         <tr><td>Opt-In Consistency &amp; Ordering Overlay (<code>consistent_set/get</code>, <code>distributed_lock</code>, <code>elect_leader</code>, <code>append</code>/<code>scan_log</code>/<code>subscribe_log_group</code>, <code>emit_reliable</code>)</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-25</td></tr>
-        <tr><td>Prometheus metrics export + dashboards</td><td style="color:#e3b341; font-weight:600;">Medium</td><td>1 week</td></tr>
+        <tr><td><code>set_quorum</code> write-durability confirmation API</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-25</td></tr>
+        <tr><td>Prometheus metrics export + dashboards (<code>metrics</code> feature, <code>GET /metrics</code>, Grafana JSON)</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-25</td></tr>
+        <tr><td>Cluster Sharding (<code>shard_for</code> / <code>emit_sharded</code> — FNV-1a consistent hash ring, HTTP gateway, Python + TypeScript SDKs)</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-25</td></tr>
+        <tr><td>KV Write Signing (wire v10 · <code>WireMessage::SignedData</code> · Ed25519 over hop-invariant fields · fail-open for unknown signers)</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-25</td></tr>
+        <tr><td>A2A Adapter (<code>a2a</code> cargo feature · <code>GET /.well-known/agent.json</code> · <code>POST /a2a</code> JSON-RPC · SSE streaming · Python + TypeScript <code>A2aClient</code>)</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-25</td></tr>
       </tbody>
     </table>
   </div>
@@ -2569,7 +2577,7 @@ config.tls = Some(TlsConfig::default());</pre>
   <!-- ── Footer ── -->
   <div style="margin-top:72px; padding-top:24px; border-top:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
     <span style="font-size:12px; color:var(--muted);">mycelium · Engineering Roadmap · 2026-05-25</span>
-    <span style="font-size:12px; color:var(--muted);">Layers 1–4 + Capability &amp; Discovery + Agent State Machine + KV Persistence + mTLS + SkillRunner + Audit Trail + Consistency &amp; Ordering Overlay complete · TypeScript SDK + Observability next</span>
+    <span style="font-size:12px; color:var(--muted);">All features complete · 233 tests · Cluster Sharding · KV Write Signing (wire v10) · A2A Adapter shipped</span>
   </div>
 
 </div>

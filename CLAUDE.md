@@ -93,8 +93,9 @@ for the index.
 ## Working in this repo
 
 - `cargo build --lib`, `cargo test --lib`, `cargo clippy --lib --tests`
-- 218 tests at HEAD; clippy at baseline 62 (pre-existing
-  `field_reassign_with_default` in test code).
-- Wire version is currently **v9** with `PREV_WIRE_VERSION = 9`
-  (i.e., no legacy frames accepted). Bumping requires a follow-up
-  plan because timestamps are HLC-packed under v9.
+- `cargo build --lib --features metrics` to include the Prometheus scrape endpoint
+- `cargo build --lib --features a2a` to include the A2A protocol adapter
+- 233 tests at HEAD (with `--features a2a`); 229 without; clippy at baseline 61
+  (pre-existing `field_reassign_with_default` in test code).
+- Wire version is currently **v10** (`PREV_WIRE_VERSION = 9` — rolling upgrade window open).
+  v10 adds `WireMessage::SignedData` for Ed25519-signed KV writes under the `tls` feature.

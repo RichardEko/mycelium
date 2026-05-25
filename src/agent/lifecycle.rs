@@ -153,10 +153,11 @@ impl GossipAgent {
                 ))
             })?;
             let http_bind = SocketAddr::new(http_addr, port);
-            let ctx  = Arc::clone(&self.task_ctx);
-            let srx  = self.shutdown_tx.subscribe();
+            let ctx   = Arc::clone(&self.task_ctx);
+            let srx   = self.shutdown_tx.subscribe();
+            let extra = self.extra_routes.lock().unwrap_or_else(|e| e.into_inner()).take();
             self.spawn_task(async move {
-                if let Err(e) = super::http::run_http_server(http_bind, ctx, srx).await {
+                if let Err(e) = super::http::run_http_server(http_bind, ctx, srx, extra).await {
                     tracing::error!("HTTP server exited: {e}");
                 }
             });
