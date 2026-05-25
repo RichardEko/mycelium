@@ -1,7 +1,7 @@
 # Mycelium — Engineering Roadmap
 
-> **Status:** Layer 1 complete. Layer 2 complete. Consensus complete. Capability & Discovery subsystem complete. Agent state machine (Layer V) complete. MCP bridge (server + client) complete. Config-driven capability probing complete. KV persistence (WAL + snapshot, all sync modes) complete. Layer 3 Service Patterns complete (HTTP server, SSE, rpc_call/rpc_respond, invoke.bulk, Actor/Event mailboxes, scatter-gather). Multi-machine integration tests (Docker Compose, 10 unattended scenarios) complete. **mTLS peer connections + Ed25519 node identity + consensus payload signing complete** (`tls` feature). Python language bridge (`mycelium-py`) complete. Layers 4–5 (AI Integration / Observability) planned.
-> **Last updated:** 2026-05-24
+> **Status:** Layer 1 complete. Layer 2 complete. Consensus complete. Capability & Discovery subsystem complete. Agent state machine (Layer V) complete. MCP bridge (server + client) complete. Config-driven capability probing complete. KV persistence (WAL + snapshot, all sync modes) complete. Layer 3 Service Patterns complete (HTTP server, SSE, rpc_call/rpc_respond, invoke.bulk, Actor/Event mailboxes, scatter-gather). Multi-machine integration tests (Docker Compose, 10 unattended scenarios) complete. **mTLS peer connections + Ed25519 node identity + consensus payload signing complete** (`tls` feature). Python language bridge (`mycelium-py`) complete. **SkillRunner** (`.skill.toml` capability-as-skill, OpenAI-compatible LLM driver, HLC audit trail + OTEL) complete. Layer 5 (Observability / Prometheus metrics) planned.
+> **Last updated:** 2026-05-25
 
 ---
 
@@ -988,14 +988,14 @@ Layer 4 supervision uses Layer 2's `watch()` to monitor AI agent liveness — no
 monitoring infrastructure. A supervisor watches `contract.available` heartbeats; on stale,
 triggers respawn, failover, or escalation. The Python bridge exposes this as `on_stale(kind, threshold, callback)`.
 
-### Skills as Capabilities — SkillRunner
+### Skills as Capabilities — SkillRunner (Complete)
 
 The industry term "skill" maps directly onto `advertise_capability` with a richer JSON Schema
 attachment in KV. There is no new primitive. A skill is a named, discoverable, invocable unit
 of behavior — exactly what a capability already is.
 
-A **Skill Definition File** (`.skill.toml`) declares everything needed to register a capability
-and drive an LLM execution node:
+The `skillrunner` binary is shipped. A **Skill Definition File** (`.skill.toml`) declares
+everything needed to register a capability and drive an LLM execution node:
 
 ```toml
 [capability]
@@ -1088,11 +1088,10 @@ The mesh is the execution engine for both.
 
 ### Layer 4 Security Primitives
 
-Required alongside the MCP and SkillRunner work — not a follow-up. Multi-agent MCP
-environments create new threat models that origin-based security (SOP, CORS) never covered.
-The three primitives below address this at the mesh layer, not the transport layer.
+Multi-agent MCP environments create new threat models that origin-based security (SOP, CORS)
+never covered. The three primitives below address this at the mesh layer, not the transport layer.
 
-**1. Invocation audit trail**
+**1. Invocation audit trail** ✓ Complete
 Append-only causal log of capability resolutions and skill invocations, propagated via gossip
 and keyed by HLC. Captures not just "agent X called skill Y" but the full causal chain: which
 signal triggered the invocation, which agent emitted that signal. Enables post-hoc detection
@@ -1100,7 +1099,7 @@ of prompt-injection → cross-service pivot patterns. KV namespace: `audit/{hlc}
 
 Exports OTEL spans (trace ID = request nonce, parent span = causal predecessor HLC) so
 operators can use existing Grafana / Jaeger / Honeycomb stacks without learning Mycelium
-internals. Implement alongside the audit trail, not after.
+internals. OTEL export is gated on the `otel` cargo feature.
 
 **2. Capability authorization scoping**
 `resolve_capability` today returns any matching capability on the mesh — any caller, any
@@ -1331,8 +1330,8 @@ Weeks:  0         2          4          6          8         10        12
 | Layer 4 | `NodeCapabilityConfig`: declarative local capability declaration + probe loop | **Complete** |
 | Layer 4 | Python language bridge: HTTP gateway + `mycelium-py` SDK | **Complete** |
 | Layer 4 | TypeScript language bridge | Planned |
-| Layer 4 | `SkillRunner` node + `.skill.toml` capability-as-skill definition format | Planned |
-| Layer 4 | Invocation audit trail: HLC-keyed causal log + OTEL span export | Planned |
+| Layer 4 | `SkillRunner` node + `.skill.toml` capability-as-skill definition format | **Complete** |
+| Layer 4 | Invocation audit trail: HLC-keyed causal log + OTEL span export | **Complete** |
 | Layer 4 | Capability authorization scoping: `[capability.policy]` in manifest + `resolve_capability` gate | **Complete** |
 | Layer 4 | Session-scoped mesh views: per-caller capability slice at `resolve_capability` | **Complete** |
 | Layer 4 | A2A wire-protocol adapter (language bridge — after MCP) | Planned |
@@ -1663,6 +1662,7 @@ what thresholds should trigger alerts.
 | KV persistence (WAL + snapshot/replay) | **Blocking** | **Complete** 2026-05-23 |
 | mTLS + node identity signing + consensus signing | **Blocking** | **Complete** 2026-05-24 |
 | Python language bridge (`mycelium-py`) | High | **Complete** 2026-05-24 |
+| `SkillRunner` + `.skill.toml` + invocation audit trail + OTEL | High | **Complete** 2026-05-25 |
 | `set_quorum` write-durability confirmation API | Medium | Pending |
 | Prometheus metrics export + dashboards | Medium | Pending |
 
