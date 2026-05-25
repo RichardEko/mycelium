@@ -1339,10 +1339,10 @@ Weeks:  0         2          4          6          8         10        12
 | **Production** | Multi-machine integration tests + Docker Compose reference topology | **Complete** |
 | **Production** | KV persistence: WAL + snapshot/replay; consensus committed-slot durability | **Complete** |
 | **Production** | Security: mTLS peer connections + NodeId keypair + consensus payload signing | **Complete** |
-| Consistency overlay | `consistent_set`, `consistent_get`, `distributed_lock`, `elect_leader` | Planned |
-| Ordering overlay | `append`, `subscribe_log`, `scan_log`, `compact_log` (ordered log) | Planned |
-| Ordering overlay | `subscribe_log_group` + consumer group offset tracking | Planned |
-| Reliable delivery | `emit_reliable` + ACK retry (requires Layer 3 `rpc_call`) | Planned |
+| Consistency overlay | `consistent_set`, `consistent_get`, `distributed_lock`, `elect_leader` | **Complete** |
+| Ordering overlay | `append`, `subscribe_log`, `scan_log`, `compact_log` (ordered log) | **Complete** |
+| Ordering overlay | `subscribe_log_group` + consumer group offset tracking | **Complete** |
+| Reliable delivery | `emit_reliable` + ACK retry (requires Layer 3 `rpc_call`) | **Complete** |
 | Cluster sharding | `shard_for`, `emit_sharded` (consistent hash + locality) | Planned |
 
 ---

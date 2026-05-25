@@ -1,0 +1,95 @@
+# Mycelium overlay integration test cluster
+#
+# Topology
+#   overlay-a  — role=overlay, gossip 57000, HTTP 8300, consensus voter
+#   overlay-b  — role=overlay, gossip 57000, HTTP 8300, consensus voter
+#   overlay-c  — role=overlay, gossip 57000, HTTP 8300, consensus voter
+#   runner     — Python 3.11 + mycelium-py; exercises all 3 overlay scenarios
+#
+# Scenarios
+#   S11 — Task Auction: coordinator queues tasks; 2 workers race via distributed_lock
+#   S12 — Leader Election + Linearizable Config: concurrent elect_leader must converge
+#   S13 — Shared Reasoning Log: multi-writer append; verify HLC order + gossip convergence
+#
+# Usage:
+#   docker compose -f tests/overlay/docker-compose.test.yml up --build --abort-on-container-exit \
+#       --exit-code-from runner
+
+services:
+
+  # ── Overlay mesh nodes ───────────────────────────────────────────────────────
+
+  overlay-a:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    container_name: mycelium-overlay-a
+    hostname: overlay-a
+    entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
+    environment:
+      MYCELIUM_ROLE:      overlay
+      MYCELIUM_PORT:      "57000"
+      MYCELIUM_HTTP_PORT: "8300"
+      MYCELIUM_PEERS:     "overlay-b:57000,overlay-c:57000"
+      RUST_LOG:           "info,mycelium=info"
+    networks:
+      - mesh
+    restart: "no"
+
+  overlay-b:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    container_name: mycelium-overlay-b
+    hostname: overlay-b
+    entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
+    environment:
+      MYCELIUM_ROLE:      overlay
+      MYCELIUM_PORT:      "57000"
+      MYCELIUM_HTTP_PORT: "8300"
+      MYCELIUM_PEERS:     "overlay-a:57000,overlay-c:57000"
+      RUST_LOG:           "info,mycelium=info"
+    networks:
+      - mesh
+    restart: "no"
+
+  overlay-c:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    container_name: mycelium-overlay-c
+    hostname: overlay-c
+    entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
+    environment:
+      MYCELIUM_ROLE:      overlay
+      MYCELIUM_PORT:      "57000"
+      MYCELIUM_HTTP_PORT: "8300"
+      MYCELIUM_PEERS:     "overlay-a:57000,overlay-b:57000"
+      RUST_LOG:           "info,mycelium=info"
+    networks:
+      - mesh
+    restart: "no"
+
+  # ── Test runner ───────────────────────────────────────────────────────────────
+
+  runner:
+    build:
+      context: ../..
+      dockerfile: tests/overlay/Dockerfile.runner
+    container_name: mycelium-overlay-runner
+    environment:
+      NODE_A_HOST:    overlay-a
+      NODE_B_HOST:    overlay-b
+      NODE_C_HOST:    overlay-c
+      NODE_HTTP_PORT: "8300"
+    depends_on:
+      - overlay-a
+      - overlay-b
+      - overlay-c
+    networks:
+      - mesh
+    restart: "no"
+
+networks:
+  mesh:
+    driver: bridge

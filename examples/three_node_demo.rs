@@ -1,17 +1,26 @@
-//! Three-node real-world demo — two tool providers + one LLM chat node.
+//! Multi-role demo binary — LLM chat cluster and consistency overlay cluster.
 //!
-//! One binary, three roles selected by `MYCELIUM_ROLE`:
+//! One binary, six roles selected by `MYCELIUM_ROLE`:
 //!
 //! ```text
-//!   tool-a  ─── weather(city)   — calls wttr.in
-//!               web_fetch(url)  — fetches any URL, returns first 2 KB
+//!   tool-a   ─── weather(city)   — calls wttr.in
+//!                web_fetch(url)  — fetches any URL, returns first 2 KB
 //!
-//!   tool-b  ─── calculate(expr) — safe arithmetic evaluator
-//!               wiki(topic)     — calls Wikipedia REST summary API
+//!   tool-b   ─── calculate(expr) — safe arithmetic evaluator
+//!                wiki(topic)     — calls Wikipedia REST summary API
 //!
-//!   llm     ─── browser chat UI at CHAT_PORT (default 8080)
-//!               plans with local Ollama (llama3.2)
-//!               routes each tool call to whichever container hosts it
+//!   llm      ─── browser chat UI at CHAT_PORT (default 8080)
+//!                plans with local Ollama (llama3.2)
+//!                routes each tool call to whichever container hosts it
+//!
+//!   mgmt     ─── read-only management dashboard (JSON + SSE)
+//!
+//!   node     ─── generic gossip node (KV + signals, no tools or LLM)
+//!
+//!   overlay  ─── consistency overlay node: consensus voter + HTTP gateway
+//!                exposes consistent_set/get, distributed_lock, elect_leader,
+//!                append/scan_log/subscribe_log, emit_reliable — all via REST
+//!                used by the Python SDK overlay methods and tests/overlay/
 //! ```
 //!
 //! # HTTP endpoints (llm node)
@@ -23,28 +32,43 @@
 //! | `GET /stream` | SSE stream of `ChatEvent`: Thinking, ToolCall, ToolResult, Assistant, Idle |
 //! | `GET /mesh`   | Tool list visible to the planner and current model name |
 //!
-//! Tool nodes expose `GET /ready` and `GET /health` on `MYCELIUM_HTTP_PORT`.
+//! # HTTP endpoints (overlay node — full overlay API)
+//!
+//! | Endpoint | Method | Description |
+//! |---|---|---|
+//! | `/gateway/overlay/consistent/set` | POST | Linearizable KV write |
+//! | `/gateway/overlay/consistent/get` | GET  | Read committed value |
+//! | `/gateway/overlay/lock/acquire`   | POST | Acquire distributed lock |
+//! | `/gateway/overlay/lock/{id}`      | DELETE | Release lock guard |
+//! | `/gateway/overlay/elect`          | POST | Elect a group leader |
+//! | `/gateway/overlay/log/append`     | POST | Append to ordered log stream |
+//! | `/gateway/overlay/log/scan`       | GET  | Range scan log stream |
+//! | `/gateway/overlay/log/compact`    | POST | Tombstone old log entries |
+//! | `/gateway/overlay/log/subscribe`  | GET  | SSE live stream |
+//! | `/gateway/overlay/log/group/subscribe` | GET | SSE consumer-group stream |
+//! | `/gateway/overlay/emit_reliable`  | POST | Send with explicit ACK |
 //!
 //! # Environment variables
 //!
-//! | Variable             | Default                      | Used by |
-//! |----------------------|------------------------------|---------|
-//! | `MYCELIUM_ROLE`      | *(required)*                 | all     |
-//! | `MYCELIUM_PEERS`     | *(required, comma-sep h:p)*  | all     |
-//! | `MYCELIUM_HOSTNAME`  | value of `HOSTNAME` env var  | all     |
-//! | `MYCELIUM_PORT`      | `57000`                      | all     |
-//! | `MYCELIUM_HTTP_PORT` | `8300`                       | all     |
-//! | `OLLAMA_BASE_URL`    | `http://ollama:11434/v1`     | llm     |
-//! | `OLLAMA_MODEL`       | `llama3.2`                   | llm     |
-//! | `CHAT_PORT`          | `8080`                       | llm     |
+//! | Variable             | Default                      | Used by       |
+//! |----------------------|------------------------------|---------------|
+//! | `MYCELIUM_ROLE`      | *(required)*                 | all           |
+//! | `MYCELIUM_PEERS`     | *(required, comma-sep h:p)*  | all           |
+//! | `MYCELIUM_HOSTNAME`  | value of `HOSTNAME` env var  | all           |
+//! | `MYCELIUM_PORT`      | `57000`                      | all           |
+//! | `MYCELIUM_HTTP_PORT` | `8300`                       | all           |
+//! | `OLLAMA_BASE_URL`    | `http://ollama:11434/v1`     | llm           |
+//! | `OLLAMA_MODEL`       | `llama3.2`                   | llm           |
+//! | `CHAT_PORT`          | `8080`                       | llm           |
 //!
 //! # Docker (recommended)
 //! ```sh
 //! make test-llm-demo     # interactive — open http://localhost:8080 to chat
 //! make test-three-node   # automated test (4 scenarios, real llama3.2)
+//! make test-overlay      # overlay cluster: 3 nodes, 3 Python scenarios
 //! ```
 //!
-//! # Local quick start (no Docker)
+//! # Local quick start — LLM chat cluster (no Docker)
 //! ```sh
 //! # terminal 1
 //! MYCELIUM_ROLE=tool-a MYCELIUM_PEERS=127.0.0.1:57001,127.0.0.1:57002 \
@@ -59,6 +83,26 @@
 //!   MYCELIUM_PORT=57002 OLLAMA_BASE_URL=http://localhost:11434/v1 \
 //!   cargo run --example three_node_demo
 //! # open http://localhost:8080
+//! ```
+//!
+//! # Local quick start — overlay cluster (no Docker)
+//! ```sh
+//! # terminal 1
+//! MYCELIUM_ROLE=overlay MYCELIUM_PEERS=127.0.0.1:57001,127.0.0.1:57002 \
+//!   MYCELIUM_PORT=57000 MYCELIUM_HTTP_PORT=8300 cargo run --example three_node_demo
+//!
+//! # terminal 2
+//! MYCELIUM_ROLE=overlay MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57002 \
+//!   MYCELIUM_PORT=57001 MYCELIUM_HTTP_PORT=8301 cargo run --example three_node_demo
+//!
+//! # terminal 3
+//! MYCELIUM_ROLE=overlay MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001 \
+//!   MYCELIUM_PORT=57002 MYCELIUM_HTTP_PORT=8302 cargo run --example three_node_demo
+//!
+//! # Python SDK talks to any node's HTTP gateway, e.g.:
+//! #   agent = MyceliumAgent("127.0.0.1", 8300)
+//! #   agent.consistent_set("cfg/x", b"hello")
+//! #   leader = agent.elect_leader("my-group")
 //! ```
 
 use axum::{
@@ -76,6 +120,7 @@ use mycelium::{
     MailboxHandle, McpToolHandle, NodeId,
     PersistenceConfig, SignalScope, SyncMode, signal_kind,
 };
+use mycelium::ConsensusConfig;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::convert::Infallible;
@@ -1195,9 +1240,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "tool-b" => run_tool_b(agent, &role).await,
         "llm"    => run_chat_server(agent, LlmCfg::from_env(), chat_port).await,
         "mgmt"   => run_mgmt_server(agent, mgmt_port).await,
-        "node"   => run_node(agent, &role, http_port).await,
+        "node"    => run_node(agent, &role, http_port).await,
+        "overlay" => {
+            let _consensus = agent.start_consensus_listener(ConsensusConfig::default());
+            info!("[overlay] consensus listener started; HTTP gateway ready on :{http_port}");
+            loop { tokio::time::sleep(std::time::Duration::from_secs(60)).await; }
+        }
         other    => {
-            error!("Unknown MYCELIUM_ROLE='{other}' — expected tool-a, tool-b, llm, mgmt, or node");
+            error!("Unknown MYCELIUM_ROLE='{other}' — expected tool-a, tool-b, llm, mgmt, node, or overlay");
             std::process::exit(1);
         }
     }

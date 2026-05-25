@@ -207,6 +207,123 @@ agent.stats()   # → {"node_id": "...", "store_entries": N, "dropped_frames": N
 
 ---
 
+### Consistency & Ordering Overlay
+
+Opt-in strong guarantees layered on top of the epidemic substrate. Requires the Mycelium
+node to be started with `MYCELIUM_ROLE=overlay` (or any role that calls
+`start_consensus_listener`).
+
+#### `consistent_set(key, value)` / `consistent_get(key) → bytes | None`
+
+Linearizable KV: runs a consensus round before writing. All nodes observe the same value
+even under concurrent writes.
+
+```python
+agent.consistent_set("config/endpoint", b"https://api.v2/")
+val = agent.consistent_get("config/endpoint")  # → b"https://api.v2/"
+```
+
+#### `distributed_lock(name, *, ttl_secs=30) → LockGuard`
+
+Acquires a named cluster lock via consensus. Returns a `LockGuard`; use as a context
+manager or call `.release()`. The `.token` field is a monotonic fencing token.
+
+```python
+with agent.distributed_lock("job-42", ttl_secs=30) as lock:
+    print("fencing token:", lock.token)
+    # exclusive work here
+# released automatically on __exit__
+
+# async context manager also available:
+async with agent.distributed_lock("job-42") as lock:
+    ...
+```
+
+#### `elect_leader(group) → str`
+
+One-shot election for `group`. Returns the elected node's `"ip:port"` string.
+All nodes calling concurrently converge on the same winner.
+
+```python
+leader = agent.elect_leader("shard-0")
+if leader == agent.node_id:   # node_id property returns this node's id string
+    start_serving()
+```
+
+#### `append(stream, value) → int`
+
+Appends `value` to the named log stream. Returns the HLC timestamp (use as a cursor
+for `scan_log` or `subscribe_log`).
+
+```python
+hlc = agent.append("events", b"order-placed")
+```
+
+#### `scan_log(stream, *, from_hlc=0, to_hlc=2**64-1) → list[LogEntry]`
+
+Range scan over a log stream. Returns `LogEntry(hlc, value)` objects sorted by HLC.
+
+```python
+entries = agent.scan_log("events")                   # full log
+recent  = agent.scan_log("events", from_hlc=cursor)  # since cursor
+```
+
+#### `compact_log(stream, before_hlc)`
+
+Tombstones all entries with `hlc < before_hlc`. Gossips the tombstones to peers.
+
+```python
+agent.compact_log("events", checkpoint_hlc)
+```
+
+#### `subscribe_log(stream, *, since_hlc=0) → AsyncIterator[LogEntry]`
+
+Live SSE subscription. Yields new entries as they arrive, starting from `since_hlc`.
+
+```python
+async for entry in agent.subscribe_log("events"):
+    print(entry.hlc, entry.value)
+```
+
+#### `subscribe_log_group(stream, group) → AsyncIterator[LogEntry]`
+
+Consumer-group subscription: at most one consumer per group processes an entry at a time.
+The offset is persisted in the gossip KV so any node can take over if the holder fails.
+
+```python
+async for entry in agent.subscribe_log_group("events", "workers"):
+    process(entry.value)
+```
+
+#### `emit_reliable(target, kind, payload=b"", *, timeout_secs=5) → str`
+
+Sends `payload` to `target` and waits for an explicit application-level ACK
+(the receiver calls `rpc_respond`). Returns `"acknowledged"` or `"timeout"`.
+
+```python
+ack = agent.emit_reliable("127.0.0.1:57001", "task.assign", b"payload")
+if ack == "timeout":
+    retry_or_fail()
+```
+
+#### Dataclasses
+
+```python
+from mycelium import LogEntry, LockGuard
+
+# LogEntry
+entry.hlc    # int — HLC timestamp, use as cursor
+entry.value  # bytes
+
+# LockGuard
+guard.guard_id  # str — opaque ID used to release via HTTP
+guard.token     # int — monotonic fencing token (consensus ballot)
+guard.release()           # sync release
+await guard.arelease()    # async release
+```
+
+---
+
 ## Running the tests
 
 Tests require a live Mycelium node. Start one with the demo binary or a custom config:
@@ -244,3 +361,14 @@ All methods talk to the embedded HTTP gateway on the Rust node:
 | `deliver_event` | `POST /gateway/mailbox/deliver` | |
 | `health` | `GET /health` | |
 | `stats` | `GET /stats` | |
+| `consistent_set` | `POST /gateway/overlay/consistent/set` | |
+| `consistent_get` | `GET /gateway/overlay/consistent/get` | |
+| `distributed_lock` | `POST /gateway/overlay/lock/acquire` | |
+| *(lock release)* | `DELETE /gateway/overlay/lock/{id}` | |
+| `elect_leader` | `POST /gateway/overlay/elect` | |
+| `append` | `POST /gateway/overlay/log/append` | |
+| `scan_log` | `GET /gateway/overlay/log/scan` | |
+| `compact_log` | `POST /gateway/overlay/log/compact` | |
+| `subscribe_log` | `GET /gateway/overlay/log/subscribe` | SSE stream |
+| `subscribe_log_group` | `GET /gateway/overlay/log/group/subscribe` | SSE stream |
+| `emit_reliable` | `POST /gateway/overlay/emit_reliable` | |

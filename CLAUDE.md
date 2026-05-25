@@ -93,7 +93,7 @@ for the index.
 ## Working in this repo
 
 - `cargo build --lib`, `cargo test --lib`, `cargo clippy --lib --tests`
-- 213 tests at HEAD; clippy at baseline 61 (pre-existing
+- 218 tests at HEAD; clippy at baseline 62 (pre-existing
   `field_reassign_with_default` in test code).
 - Wire version is currently **v9** with `PREV_WIRE_VERSION = 9`
   (i.e., no legacy frames accepted). Bumping requires a follow-up

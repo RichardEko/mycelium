@@ -4,8 +4,9 @@ COMPOSE               = docker compose -f tests/integration/docker-compose.test.
 COMPOSE_LLM           = docker compose -f docker/docker-compose.yml
 COMPOSE_LLM_DEMO      = docker compose -f docker/docker-compose.llm-agent.yml
 COMPOSE_THREE_NODE    = docker compose -f docker/docker-compose.three-node-test.yml
+COMPOSE_OVERLAY       = docker compose -f tests/overlay/docker-compose.test.yml
 
-.PHONY: build test test-clean test-llm-demo test-llm-agent test-three-node llm-agent-interactive help
+.PHONY: build test test-clean test-llm-demo test-llm-agent test-three-node test-overlay llm-agent-interactive help
 
 ## test — build the cluster and run all integration scenarios
 test:
@@ -44,6 +45,16 @@ test-three-node:
 	@$(COMPOSE_THREE_NODE) logs -f runner & \
 	EXIT=$$(docker wait mycelium-three-node-runner); \
 	$(COMPOSE_THREE_NODE) down --remove-orphans 2>/dev/null || true; \
+	exit $$EXIT
+
+## test-overlay — 3-node overlay cluster: task auction, leader election, shared log
+## Builds Docker images, starts cluster, runs S11/S12/S13. ~3 min on warm cache.
+test-overlay:
+	$(COMPOSE_OVERLAY) down -v --remove-orphans 2>/dev/null || true
+	$(COMPOSE_OVERLAY) up -d --build
+	@$(COMPOSE_OVERLAY) logs -f runner & \
+	EXIT=$$(docker wait mycelium-overlay-runner); \
+	$(COMPOSE_OVERLAY) down -v --remove-orphans 2>/dev/null || true; \
 	exit $$EXIT
 
 ## llm-agent-interactive — start the llm_agent demo with real Ollama

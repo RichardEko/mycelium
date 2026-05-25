@@ -1,0 +1,17 @@
+FROM python:3.11-slim
+
+WORKDIR /runner
+
+# Install system deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+ && rm -rf /var/lib/apt/lists/*
+
+# Copy and install mycelium-py (the SDK under test)
+COPY mycelium-py/ /mycelium-py/
+RUN pip install --no-cache-dir /mycelium-py/
+
+# Copy scenarios
+COPY tests/overlay/ /runner/
+
+ENTRYPOINT ["python", "/runner/run.py"]

@@ -611,13 +611,14 @@
   it is the bloodstream the application runs on.</p>
   <div class="hero-badges">
     <span class="badge"><span class="dot dot-live"></span> Layer 1: Gossip Transport — Complete</span>
-    <span class="badge"><span class="dot dot-live"></span> Layer 2: Signal / Boundary Mesh — Complete · 213 tests</span>
+    <span class="badge"><span class="dot dot-live"></span> Layer 2: Signal / Boundary Mesh — Complete · 218 tests</span>
     <span class="badge"><span class="dot dot-live"></span> Consensus — Complete</span>
     <span class="badge"><span class="dot dot-live"></span> Capability &amp; Discovery — Complete</span>
     <span class="badge"><span class="dot dot-live"></span> Layer 3: Service Patterns — Complete · 10 integration tests</span>
     <span class="badge"><span class="dot dot-live"></span> mTLS + Node Identity + Consensus Signing — Complete</span>
     <span class="badge"><span class="dot dot-live"></span> Layer 4: Python Bridge (mycelium-py) — Complete</span>
     <span class="badge"><span class="dot dot-live"></span> Layer 4: SkillRunner + Audit Trail — Complete</span>
+    <span class="badge"><span class="dot dot-live"></span> Opt-In Consistency &amp; Ordering Overlay — Complete</span>
     <span class="badge"><span class="dot dot-future"></span> Layer 4 (cont.): TypeScript SDK + A2A adapter — Planned</span>
     <span class="badge"><span class="dot dot-future"></span> Layer 5: Observability (Prometheus / Grafana) — Planned</span>
   </div>
@@ -973,15 +974,15 @@
       <div class="stack-row">
         <div class="stack-num" style="background:rgba(255,166,87,0.06);color:var(--accent4);border-right:2px solid var(--accent4);font-size:9px;letter-spacing:0.08em;">Opt-In<br>Overlay</div>
         <div class="stack-body">
-          <div class="stack-title">Consistency &amp; Ordering Overlay <span class="phase-tag tag-horizon">Planned</span></div>
+          <div class="stack-title">Consistency &amp; Ordering Overlay <span class="phase-tag tag-done">Complete</span></div>
           <p class="stack-desc">The epidemic substrate is the default — always available, always fast, zero coordination overhead. This overlay adds opt-in escalation paths for the operations that need stronger guarantees. Linearizable writes (<code>consistent_set</code>), ordered logs (<code>append</code>/<code>subscribe_log</code>), reliable delivery (<code>emit_reliable</code>), and cluster sharding (<code>shard_for</code>) are all built over foundations already in the stack — no new infrastructure. The same cluster simultaneously supports sub-millisecond epidemic signals and linearizable writes; different operations choose different guarantees.</p>
           <div class="chips">
-            <span class="chip">consistent_set · consistent_get</span>
-            <span class="chip">distributed_lock · elect_leader</span>
-            <span class="chip">append · subscribe_log</span>
-            <span class="chip">scan_log · compact_log</span>
-            <span class="chip">subscribe_log_group (consumer groups)</span>
-            <span class="chip">emit_reliable + ACK retry</span>
+            <span class="chip">consistent_set · consistent_get ✓</span>
+            <span class="chip">distributed_lock · elect_leader ✓</span>
+            <span class="chip">append · subscribe_log ✓</span>
+            <span class="chip">scan_log · compact_log ✓</span>
+            <span class="chip">subscribe_log_group (consumer groups) ✓</span>
+            <span class="chip">emit_reliable + ACK retry ✓</span>
             <span class="chip">shard_for · emit_sharded</span>
           </div>
         </div>
@@ -1025,7 +1026,7 @@
       <div class="stack-row">
         <div class="stack-num sn-2">Layer<br>2</div>
         <div class="stack-body">
-          <div class="stack-title">Signal / Boundary Mesh <span class="phase-tag tag-done">Complete · 213 tests</span></div>
+          <div class="stack-title">Signal / Boundary Mesh <span class="phase-tag tag-done">Complete · 218 tests</span></div>
           <p class="stack-desc">Ephemeral events propagate epidemically. Boundaries (local receptors) decide action. Variable opacity creates emergent backpressure under load. Active inhibition provides refractory periods. Fault detection, threshold activation, proactive peer notification, and persistent advertisement round out the layer.</p>
           <div class="chips">
             <span class="chip">signal_rx · emit · signal_once</span>
@@ -1065,7 +1066,7 @@
   <div class="section">
     <div class="section-head">
       <h2>Layer 2 — Signal / Boundary Mesh</h2>
-      <span class="phase-tag tag-done">Complete · 213 tests</span>
+      <span class="phase-tag tag-done">Complete · 218 tests</span>
     </div>
 
     <!-- Scope diagram -->
@@ -1510,7 +1511,7 @@ config.locality_path = <span class="fn">vec!</span>[<span class="str">"az1"</spa
   <div class="section">
     <div class="section-head">
       <h2>Consistency &amp; Ordering — Opt-In Overlay</h2>
-      <span class="phase-tag tag-horizon">Planned</span>
+      <span class="phase-tag tag-done">Complete</span>
     </div>
 
     <p>Traditional distributed frameworks pick one position on the CAP triangle and apply it
@@ -1916,7 +1917,7 @@ tools = [<span class="str">"gh"</span>, <span class="str">"read_file"</span>]   
         <div class="tl-card">
           <div class="tl-num" style="color:var(--accent2)">Layer 2</div>
           <div class="tl-title">Signal / Boundary</div>
-          <div class="tl-weeks">Complete · 212 tests</div>
+          <div class="tl-weeks">Complete · 218 tests</div>
           <span class="tl-badge tl-done">Done ✓</span>
         </div>
         <div class="tl-card">
@@ -2353,6 +2354,7 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
         <tr><td>mTLS + node identity signing + consensus signing</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-24</td></tr>
         <tr><td>Python language bridge (<code>mycelium-py</code>)</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-24</td></tr>
         <tr><td><code>SkillRunner</code> + <code>.skill.toml</code> + invocation audit trail + OTEL</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-25</td></tr>
+        <tr><td>Opt-In Consistency &amp; Ordering Overlay (<code>consistent_set/get</code>, <code>distributed_lock</code>, <code>elect_leader</code>, <code>append</code>/<code>scan_log</code>/<code>subscribe_log_group</code>, <code>emit_reliable</code>)</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-25</td></tr>
         <tr><td>Prometheus metrics export + dashboards</td><td style="color:#e3b341; font-weight:600;">Medium</td><td>1 week</td></tr>
       </tbody>
     </table>
@@ -2567,7 +2569,7 @@ config.tls = Some(TlsConfig::default());</pre>
   <!-- ── Footer ── -->
   <div style="margin-top:72px; padding-top:24px; border-top:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
     <span style="font-size:12px; color:var(--muted);">mycelium · Engineering Roadmap · 2026-05-25</span>
-    <span style="font-size:12px; color:var(--muted);">Layers 1–4 + Capability &amp; Discovery + Agent State Machine + KV Persistence + mTLS + SkillRunner + Audit Trail complete · TypeScript SDK + Observability next</span>
+    <span style="font-size:12px; color:var(--muted);">Layers 1–4 + Capability &amp; Discovery + Agent State Machine + KV Persistence + mTLS + SkillRunner + Audit Trail + Consistency &amp; Ordering Overlay complete · TypeScript SDK + Observability next</span>
   </div>
 
 </div>

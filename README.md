@@ -107,6 +107,38 @@ MYCELIUM_ROLE=llm MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001 \
 
 ---
 
+### Consistency Overlay Cluster — `three_node_demo` (overlay role)
+
+Three consensus-voting nodes that expose the full overlay REST API. Designed as an
+integration test cluster and developer template — the Python scenario scripts are
+copy-paste starting points for production patterns.
+
+| Scenario | Pattern |
+|---|---|
+| S11 Task Auction | Exact-once delivery via `subscribe_log_group` |
+| S12 Leader Election | Concurrent `elect_leader` + linearizable `consistent_set` |
+| S13 Shared Reasoning Log | Multi-writer `append`, HLC ordering, `compact_log` |
+
+```sh
+make test-overlay   # Docker cluster — 3 nodes, 3 Python scenarios (~3 min, no Ollama needed)
+```
+
+```sh
+# Local — 3 terminals, no Docker
+MYCELIUM_ROLE=overlay MYCELIUM_PEERS=127.0.0.1:57001,127.0.0.1:57002 \
+  MYCELIUM_PORT=57000 MYCELIUM_HTTP_PORT=8300 cargo run --example three_node_demo
+# then talk to it: python -c "
+#   from mycelium import MyceliumAgent
+#   a = MyceliumAgent('127.0.0.1', 8300)
+#   a.consistent_set('x', b'hello')
+#   print(a.consistent_get('x'))
+# "
+```
+
+See [`tests/overlay/README.md`](tests/overlay/README.md) for the full developer guide.
+
+---
+
 ### Conway's Game of Life
 
 A separate standalone demo that shows the epidemic substrate itself rather than a service topology. 256 gossip agents (one per cell in a 16×16 grid) coordinate cell state via gossip KV; a tick signal drives each generation.
@@ -877,6 +909,109 @@ while let Some(event) = rx.recv().await {
 }
 // drop(handle) to cancel the watcher
 ```
+
+## Opt-In Consistency and Ordering Overlay
+
+Mycelium's thesis is **consistency as a service, not a foundation** — the epidemic substrate
+is always fast; stronger guarantees are opt-in per operation. The overlay layer surfaces these
+as first-class APIs without touching the gossip core.
+
+### Linearizable KV (`consistent_set` / `consistent_get`)
+
+Runs a consensus round before writing. All observers agree on the same value even under
+concurrent writes from different nodes.
+
+```rust
+// Any node can write; all nodes read the same value
+agent.consistent_set("config/endpoint", b"https://api.v2/").await?;
+let val = agent.consistent_get("config/endpoint"); // reads committed slot first
+```
+
+### Distributed Lock (`distributed_lock`)
+
+Consensus-backed named lock. The returned `LockGuard` releases (tombstones the lock key)
+on drop. The `token` field is a monotonic fencing token drawn from the ballot number.
+
+```rust
+let guard = agent.distributed_lock("job-42", Duration::from_secs(30)).await?;
+println!("fencing token: {}", guard.token);
+// exclusive work here
+drop(guard); // or guard.release()
+```
+
+### Leader Election (`elect_leader`)
+
+One-shot election per group. If this node loses it reads the committed winner and returns
+that `NodeId` — so all nodes converge on the same answer.
+
+```rust
+let leader = agent.elect_leader("shard-0").await?;
+if leader == *agent.node_id() {
+    // I won — start serving shard-0
+}
+```
+
+### Ordered Durable Log (`append` / `scan_log` / `subscribe_log`)
+
+HLC-keyed entries written to the gossip KV under `log/{stream}/{hlc:016x}`. Lexicographic
+key order equals causal time order.
+
+```rust
+// Producer
+let cursor = agent.append("events", b"order-placed");
+
+// Consumer — one-shot scan
+let entries = agent.scan_log("events", 0, u64::MAX);
+
+// Live subscriber — mpsc channel, new entries arrive on each gossip tick
+let mut rx = agent.subscribe_log("events", 0);
+while let Some(entry) = rx.recv().await {
+    println!("{} {:?}", entry.hlc, entry.value);
+}
+
+// Trim old entries
+agent.compact_log("events", checkpoint_hlc);
+```
+
+### Consumer Groups (`subscribe_log_group`)
+
+At most one consumer per group advances at a time. The offset (`clog/{stream}/{group}/offset`)
+is persisted in the gossip KV so any node can take over if the current holder fails.
+
+```rust
+let mut rx = agent.subscribe_log_group("events", "workers").await;
+while let Some(entry) = rx.recv().await {
+    process(&entry);
+    // offset committed before next entry is delivered
+}
+```
+
+### Reliable Delivery (`emit_reliable`)
+
+Send a payload to a specific node and wait for an explicit application-level ACK (the
+receiver calls `rpc_respond`). Returns `AckResult::Acknowledged` or `AckResult::Timeout`.
+
+```rust
+let ack = agent.emit_reliable(target, "task.assign", payload, Duration::from_secs(5)).await;
+```
+
+### Docker integration-test cluster (developer template)
+
+The overlay scenarios in `tests/overlay/` are designed as copy-paste templates:
+
+| Scenario | Pattern demonstrated |
+|---|---|
+| [`s11_task_auction.py`](tests/overlay/scenarios/s11_task_auction.py) | Exact-once task delivery — coordinator queues work, workers race via `subscribe_log_group` |
+| [`s12_leader_election.py`](tests/overlay/scenarios/s12_leader_election.py) | Leader election + linearizable config — 3 concurrent `elect_leader` calls must converge, winner writes `consistent_set` |
+| [`s13_shared_reasoning_log.py`](tests/overlay/scenarios/s13_shared_reasoning_log.py) | Multi-writer append — 3 nodes each write observations, all verify HLC ordering and gossip convergence |
+
+```sh
+make test-overlay   # 3-node Docker cluster, runs all three scenarios (~3 min on warm cache)
+```
+
+See [`tests/overlay/README.md`](tests/overlay/README.md) for the full developer guide.
+
+---
 
 ## Python Language Bridge (`mycelium-py`)
 
