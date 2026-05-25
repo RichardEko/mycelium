@@ -549,7 +549,7 @@ fn build_paired_retract(
 
 /// Free-function flavour of `GossipAgent::subscribe_prefix` for callers that
 /// only hold a `&KvState`. Lazy-creates the prefix watcher entry if absent.
-pub(super) fn subscribe_prefix_on_kv(
+pub(crate) fn subscribe_prefix_on_kv(
     kv_state: &crate::store::KvState,
     prefix:   Arc<str>,
 ) -> watch::Receiver<u64> {

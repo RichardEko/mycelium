@@ -1,6 +1,6 @@
 # Mycelium — Engineering Roadmap
 
-> **Status:** Layer 1 complete. Layer 2 complete. Consensus complete. Capability & Discovery subsystem complete. Agent state machine (Layer V) complete. MCP bridge (server + client) complete. Config-driven capability probing complete. KV persistence (WAL + snapshot, all sync modes) complete. Layer 3 Service Patterns complete (HTTP server, SSE, rpc_call/rpc_respond, invoke.bulk, Actor/Event mailboxes, scatter-gather). Multi-machine integration tests (Docker Compose, 10 unattended scenarios) complete. **mTLS peer connections + Ed25519 node identity + consensus payload signing complete** (`tls` feature). Python language bridge (`mycelium-py`) complete. **SkillRunner** (`.skill.toml` capability-as-skill, OpenAI-compatible LLM driver, HLC audit trail + OTEL) complete. Layer 5 (Observability / Prometheus metrics) planned.
+> **Status:** Layer 1 complete. Layer 2 complete. Consensus complete. Capability & Discovery subsystem complete. Agent state machine (Layer V) complete. MCP bridge (server + client) complete. Config-driven capability probing complete. KV persistence (WAL + snapshot, all sync modes) complete. Layer 3 Service Patterns complete (HTTP server, SSE, rpc_call/rpc_respond, invoke.bulk, Actor/Event mailboxes, scatter-gather). Multi-machine integration tests (Docker Compose, 10 unattended scenarios) complete. **mTLS peer connections + Ed25519 node identity + consensus payload signing complete** (`tls` feature). Python language bridge (`mycelium-py`) complete. **SkillRunner** (`.skill.toml` capability-as-skill, OpenAI-compatible LLM driver, HLC audit trail + OTEL) complete. **Opt-In Consistency & Ordering Overlay complete** (`consistent_set/get`, `distributed_lock`, `elect_leader`, `append`/`scan_log`/`compact_log`/`subscribe_log`/`subscribe_log_group`, `emit_reliable` — all exposed via HTTP gateway and Python SDK). Layer 5 (Observability / Prometheus metrics) planned.
 > **Last updated:** 2026-05-25
 
 ---
@@ -114,11 +114,11 @@ apply it *uniformly across your whole system*. Mycelium picks *per operation*.
 │  Embedded HTTP · SSE streaming · rpc_call/rpc_respond              │
 │  invoke.bulk ticket · Actor/Event mailboxes · scatter-gather       │
 ├────────────────────────────────────────────────────────────────────┤
-│  Opt-In Consistency & Ordering Overlay               [Planned]     │  ← cross-cutting
+│  Opt-In Consistency & Ordering Overlay               [COMPLETE]    │  ← cross-cutting
 │  consistent_set · consistent_get · distributed_lock · elect_leader │
 │  append · subscribe_log · scan_log · compact_log (ordered log)     │
 │  subscribe_log_group (consumer groups) · emit_reliable             │
-│  shard_for · emit_sharded (cluster sharding)                       │
+│  HTTP gateway + Python SDK (LogEntry, LockGuard dataclasses)       │
 ├────────────────────────────────────────────────────────────────────┤
 │  Capability & Discovery Subsystem                    [COMPLETE]    │
 │  advertise_capability · resolve · watch_capabilities               │
@@ -1189,7 +1189,7 @@ bulk_transfer_bytes{direction}
 
 ---
 
-## Opt-In Consistency and Ordering Overlay (Planned)
+## Opt-In Consistency and Ordering Overlay (Complete)
 
 The epidemic substrate is always available and always fast. These APIs escalate to stronger
 guarantees only for the specific operation that demands them — nothing in the fast path becomes
@@ -1663,6 +1663,7 @@ what thresholds should trigger alerts.
 | mTLS + node identity signing + consensus signing | **Blocking** | **Complete** 2026-05-24 |
 | Python language bridge (`mycelium-py`) | High | **Complete** 2026-05-24 |
 | `SkillRunner` + `.skill.toml` + invocation audit trail + OTEL | High | **Complete** 2026-05-25 |
+| Opt-In Consistency & Ordering Overlay | High | **Complete** 2026-05-25 |
 | `set_quorum` write-durability confirmation API | Medium | Pending |
 | Prometheus metrics export + dashboards | Medium | Pending |
 

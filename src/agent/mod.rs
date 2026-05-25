@@ -18,6 +18,9 @@ use tokio::{sync::{mpsc, watch}, task::JoinSet};
 
 mod lifecycle;
 mod kv;
+mod overlay_consistent;
+mod overlay_log;
+mod overlay_reliable;
 mod signal_ops;
 mod rpc;
 mod http;
@@ -47,6 +50,9 @@ pub use state_machine::{AgentPolicy, ExecutionState, AgentStateMachine, PolicyVi
 pub use scatter::{ScatterError, ScatterResult};
 pub use bulk::{BulkError, BulkServeHandle};
 pub use mailbox::{MailboxHandle, MeshEvent};
+pub use overlay_consistent::{ConsistencyError, LockGuard};
+pub use overlay_log::LogEntry;
+pub use overlay_reliable::AckResult;
 
 /// Cached roster entry for a single group, held in the short-lived `group_roster_cache`.
 pub(super) struct RosterEntry {
@@ -157,6 +163,8 @@ pub(crate) struct TaskCtx {
     /// gossiped by peers. Used to verify signed consensus messages.
     #[cfg_attr(not(feature = "tls"), allow(dead_code))]
     pub(crate) peer_keys: Arc<papaya::HashMap<NodeId, [u8; 32]>>,
+    /// Live peer table shared with the HTTP gateway for peer-count-based quorum sizing.
+    pub(crate) peers: Arc<papaya::HashMap<NodeId, std::time::Instant>>,
 }
 
 /// Core gossip agent.
@@ -305,6 +313,7 @@ impl GossipAgent {
         let kv_state      = KvState::new(config.max_store_entries);
         let default_ttl   = config.default_ttl;
         let gossip_txs: Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]> = gossip_txs_vec.into();
+        let peers_arc: Arc<papaya::HashMap<NodeId, std::time::Instant>> = Arc::new(papaya::HashMap::new());
         let task_ctx = Arc::new(TaskCtx {
             node_id:         node_id.clone(),
             seen:            Arc::new(ShardedSeen::new(seen_shards)),
@@ -323,12 +332,13 @@ impl GossipAgent {
             rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             tls: std::sync::OnceLock::new(),
             peer_keys: Arc::new(papaya::HashMap::new()),
+            peers: Arc::clone(&peers_arc),
         });
 
         Self {
             node_id,
             config,
-            peers: Arc::new(papaya::HashMap::new()),
+            peers: peers_arc,
             bootstrap_peers,
             peer_list_tx,
             gossip_rxs: std::sync::Mutex::new(Some(gossip_rxs_inner)),

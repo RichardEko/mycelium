@@ -138,6 +138,60 @@ class MailboxEvent:
     payload:     bytes
 
 
+@dataclass
+class LogEntry:
+    """A single entry in an ordered durable log stream.
+
+    :attr:`hlc` is the HLC timestamp — use as a cursor for
+    :meth:`MyceliumAgent.scan_log` and :meth:`MyceliumAgent.subscribe_log`.
+    """
+
+    hlc:    int    # u64 Hybrid Logical Clock timestamp
+    value:  bytes
+
+
+@dataclass
+class LockGuard:
+    """A distributed lock guard returned by :meth:`MyceliumAgent.distributed_lock`.
+
+    Releases the lock when dropped (or :meth:`release` / :meth:`arelease` called).
+    Supports both synchronous and async context-manager protocols::
+
+        with agent.distributed_lock("my-lock") as guard:
+            print("fencing token:", guard.token)
+
+        async with agent.distributed_lock_async("my-lock") as guard:
+            ...
+    """
+
+    _agent:   "MyceliumAgent"
+    guard_id: str
+    token:    int  # fencing token (consensus ballot)
+
+    def release(self) -> None:
+        """Release the lock synchronously."""
+        import httpx as _httpx
+        with _httpx.Client(base_url=self._agent._base_url, timeout=5.0) as c:
+            c.delete(f"/gateway/overlay/lock/{self.guard_id}")
+
+    async def arelease(self) -> None:
+        """Release the lock asynchronously."""
+        async with httpx.AsyncClient(base_url=self._agent._base_url, timeout=5.0) as c:
+            await c.delete(f"/gateway/overlay/lock/{self.guard_id}")
+
+    def __enter__(self) -> "LockGuard":
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        self.release()
+
+    async def __aenter__(self) -> "LockGuard":
+        return self
+
+    async def __aexit__(self, *_: Any) -> None:
+        await self.arelease()
+
+
 class MyceliumAgent:
     """HTTP gateway client for a Mycelium mesh node.
 
@@ -558,6 +612,151 @@ class MyceliumAgent:
         }
         with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
             c.post("/gateway/mailbox/deliver", json=body).raise_for_status()
+
+    # ── Overlay: consistent KV ─────────────────────────────────────────────
+
+    def consistent_set(self, key: str, value: bytes) -> None:
+        """Linearizable write. Runs a consensus round before writing ``key``."""
+        body = {"key": key, "value_b64": base64.b64encode(value).decode()}
+        with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
+            r = c.post("/gateway/overlay/consistent/set", json=body)
+            r.raise_for_status()
+            data = r.json()
+            if not data.get("ok"):
+                raise RuntimeError(data.get("error", "consistent_set failed"))
+
+    def consistent_get(self, key: str) -> Optional[bytes]:
+        """Read the latest linearizable value for ``key``. Returns ``None`` if not found."""
+        with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
+            data = c.get("/gateway/overlay/consistent/get", params={"key": key}).raise_for_status().json()
+        if data.get("found"):
+            return base64.b64decode(data["value_b64"])
+        return None
+
+    # ── Overlay: distributed lock ───────────────────────────────────────────
+
+    def distributed_lock(self, name: str, *, ttl_secs: int = 30) -> LockGuard:
+        """Acquire a named distributed lock via cluster consensus.
+
+        Returns a :class:`LockGuard` that releases the lock when dropped.
+        Use as a context manager for automatic release::
+
+            with agent.distributed_lock("my-lock") as guard:
+                print("fencing token:", guard.token)
+        """
+        body = {"name": name, "ttl_secs": ttl_secs}
+        with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
+            data = c.post("/gateway/overlay/lock/acquire", json=body).raise_for_status().json()
+        if not data.get("ok"):
+            raise RuntimeError(data.get("error", "lock acquisition failed"))
+        return LockGuard(_agent=self, guard_id=data["guard_id"], token=data["token"])
+
+    # ── Overlay: leader election ────────────────────────────────────────────
+
+    def elect_leader(self, group: str) -> str:
+        """Elect a leader for ``group`` via consensus. Returns the winner's ``"IP:PORT"``."""
+        body = {"group": group}
+        with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
+            data = c.post("/gateway/overlay/elect", json=body).raise_for_status().json()
+        if not data.get("ok"):
+            raise RuntimeError(data.get("error", "election failed"))
+        return data["leader"]
+
+    # ── Overlay: ordered log ────────────────────────────────────────────────
+
+    def append(self, stream: str, value: bytes) -> int:
+        """Append ``value`` to ``stream``. Returns the HLC timestamp of the entry."""
+        body = {"stream": stream, "value_b64": base64.b64encode(value).decode()}
+        with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
+            data = c.post("/gateway/overlay/log/append", json=body).raise_for_status().json()
+        return data["hlc"]
+
+    def scan_log(
+        self,
+        stream:   str,
+        *,
+        from_hlc: int = 0,
+        to_hlc:   int = 2**64 - 1,
+    ) -> list[LogEntry]:
+        """Range scan of ``stream``. Returns entries with HLC in ``[from_hlc, to_hlc)``."""
+        params: dict[str, Any] = {"stream": stream, "from": from_hlc, "to": to_hlc}
+        with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
+            data = c.get("/gateway/overlay/log/scan", params=params).raise_for_status().json()
+        return [LogEntry(hlc=e["hlc"], value=base64.b64decode(e["value_b64"])) for e in data]
+
+    def compact_log(self, stream: str, before_hlc: int) -> None:
+        """Tombstone all entries in ``stream`` with HLC < ``before_hlc``."""
+        body = {"stream": stream, "before_hlc": before_hlc}
+        with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
+            c.post("/gateway/overlay/log/compact", json=body).raise_for_status()
+
+    async def subscribe_log(
+        self,
+        stream:    str,
+        *,
+        since_hlc: int = 0,
+    ) -> AsyncIterator[LogEntry]:
+        """Subscribe to live entries in ``stream`` at or after ``since_hlc``.
+
+        Yields :class:`LogEntry` objects as they arrive::
+
+            async for entry in agent.subscribe_log("events"):
+                print(entry.hlc, entry.value)
+        """
+        params = {"stream": stream, "since": since_hlc}
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=None) as c:
+            async with aconnect_sse(c, "GET", "/gateway/overlay/log/subscribe", params=params) as es:
+                async for event in es.aiter_sse():
+                    import json as _json
+                    data = _json.loads(event.data)
+                    yield LogEntry(hlc=data["hlc"], value=base64.b64decode(data["value_b64"]))
+
+    async def subscribe_log_group(
+        self,
+        stream: str,
+        group:  str,
+    ) -> AsyncIterator[LogEntry]:
+        """Coordinated consumer-group subscription.
+
+        At most one consumer at a time processes entries; offset is persisted
+        in the mesh so work is not duplicated across concurrent consumers.
+        Yields :class:`LogEntry` objects::
+
+            async for entry in agent.subscribe_log_group("events", "workers"):
+                process(entry)
+        """
+        params = {"stream": stream, "group": group}
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=None) as c:
+            async with aconnect_sse(c, "GET", "/gateway/overlay/log/group/subscribe", params=params) as es:
+                async for event in es.aiter_sse():
+                    import json as _json
+                    data = _json.loads(event.data)
+                    yield LogEntry(hlc=data["hlc"], value=base64.b64decode(data["value_b64"]))
+
+    # ── Overlay: reliable delivery ──────────────────────────────────────────
+
+    def emit_reliable(
+        self,
+        target:       str,
+        kind:         str,
+        payload:      bytes = b"",
+        *,
+        timeout_secs: int = 5,
+    ) -> str:
+        """Send ``payload`` to ``target`` and wait for an explicit ACK.
+
+        Returns ``"acknowledged"`` or ``"timeout"``.
+        The receiver calls ``rpc_respond`` to acknowledge.
+        """
+        body = {
+            "target":       target,
+            "kind":         kind,
+            "payload_b64":  base64.b64encode(payload).decode(),
+            "timeout_secs": timeout_secs,
+        }
+        with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
+            data = c.post("/gateway/overlay/emit_reliable", json=body).raise_for_status().json()
+        return data["ack"]
 
     # ── Health / introspection ──────────────────────────────────────────────
 

@@ -810,4 +810,25 @@ pub mod kv_ns {
     /// queries — `quorum_persistent` is only needed when quorum evidence must survive
     /// crashes or restarts.
     pub const QUORUM: &str = "sys/quorum/";
+
+    /// Ordered durable log namespace.
+    ///
+    /// Key: `log/{stream}/{hlc:016x}`. The 16-char zero-padded hex HLC ensures
+    /// lexicographic order equals time order. Written by [`GossipAgent::append`];
+    /// compacted by [`GossipAgent::compact_log`].
+    pub const LOG: &str = "log/";
+
+    /// Consumer group offset cursors.
+    ///
+    /// Key: `clog/{stream}/{group}/offset`. Value: 16-char hex HLC of the last
+    /// processed entry. Written by [`GossipAgent::subscribe_log_group`] after each
+    /// entry is successfully delivered.
+    pub const CONSUMER_LOG: &str = "clog/";
+
+    /// Distributed lock state.
+    ///
+    /// Key: `lock/{name}`. Value: JSON `{"holder":"ip:port","token":u64,"expires_ms":u64}`.
+    /// Written by [`GossipAgent::distributed_lock`]; tombstoned when the returned
+    /// [`LockGuard`](crate::LockGuard) is dropped.
+    pub const LOCK: &str = "lock/";
 }

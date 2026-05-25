@@ -54,6 +54,9 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt as _;
 use tracing::info;
 
+use super::overlay_log::LogEntry;
+use super::overlay_consistent::LockGuard;
+
 use super::TaskCtx;
 
 /// Shared state passed to every HTTP handler.
@@ -63,6 +66,10 @@ struct HttpCtx {
     /// Key: opaque handle_id string returned to the caller.
     /// Value: cancel sender — dropping it tombstones the capability.
     gateway_caps:    Arc<Mutex<HashMap<String, oneshot::Sender<()>>>>,
+    /// Distributed lock guards held on behalf of HTTP clients.
+    /// Key: opaque guard_id returned to the caller.
+    /// Drop-on-remove tombstones `lock/{name}` in the gossip KV.
+    lock_guards:     Arc<Mutex<HashMap<String, LockGuard>>>,
     /// Shutdown receiver used when spawning gateway advertisement tasks.
     shutdown_rx:     watch::Receiver<bool>,
 }
@@ -77,6 +84,7 @@ pub(super) async fn run_http_server(
     let state = Arc::new(HttpCtx {
         agent_ctx:    ctx,
         gateway_caps: Arc::new(Mutex::new(HashMap::new())),
+        lock_guards:  Arc::new(Mutex::new(HashMap::new())),
         shutdown_rx:  shutdown_rx.clone(),
     });
 
@@ -103,6 +111,20 @@ pub(super) async fn run_http_server(
         .route("/gateway/kv/keys",                get(gw_kv_keys))
         .route("/gateway/mailbox/deliver",        post(gw_mailbox_deliver))
         .route("/gateway/mailbox/{kind}",         get(gw_mailbox_subscribe))
+        // ── Overlay: consistency, locks, elections ────────────────────────
+        .route("/gateway/overlay/consistent/set",         post(gw_overlay_consistent_set))
+        .route("/gateway/overlay/consistent/get",         get(gw_overlay_consistent_get))
+        .route("/gateway/overlay/lock/acquire",           post(gw_overlay_lock_acquire))
+        .route("/gateway/overlay/lock/{guard_id}",         delete(gw_overlay_lock_release))
+        .route("/gateway/overlay/elect",                  post(gw_overlay_elect))
+        // ── Overlay: ordered log ──────────────────────────────────────────
+        .route("/gateway/overlay/log/append",             post(gw_overlay_log_append))
+        .route("/gateway/overlay/log/scan",               get(gw_overlay_log_scan))
+        .route("/gateway/overlay/log/compact",            post(gw_overlay_log_compact))
+        .route("/gateway/overlay/log/subscribe",          get(gw_overlay_log_subscribe))
+        .route("/gateway/overlay/log/group/subscribe",    get(gw_overlay_log_group_subscribe))
+        // ── Overlay: reliable delivery ────────────────────────────────────
+        .route("/gateway/overlay/emit_reliable",          post(gw_overlay_emit_reliable))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -977,6 +999,507 @@ async fn gw_mailbox_deliver(
     );
 
     Json(json!({ "ok": true })).into_response()
+}
+
+// ── Overlay gateway helpers ───────────────────────────────────────────────────
+
+/// Build a `ConsensusEngine` from `TaskCtx`, skipping the opacity/load-balance
+/// heuristics used by `GossipAgent::system_propose` — those are performance
+/// hints, not correctness requirements, and are not available from `TaskCtx`.
+fn overlay_make_engine(ctx: &Arc<TaskCtx>) -> crate::consensus::ConsensusEngine {
+    crate::consensus::ConsensusEngine {
+        task_ctx:            Arc::clone(ctx),
+        abstain_when_opaque: false,
+        use_trust_slices:    false,
+        max_abstain_ballots: 3,
+        self_locality:       None,
+        topology_policy:     None,
+    }
+}
+
+/// Thin system-wide propose from `TaskCtx` (quorum = floor(N/2)+1 over live peers).
+async fn overlay_system_propose(
+    ctx:    &Arc<TaskCtx>,
+    slot:   &str,
+    value:  Bytes,
+    config: crate::consensus::ConsensusConfig,
+) -> crate::consensus::ConsensusResult {
+    let n_nodes = (ctx.peers.len() + 1).max(1);
+    let quorum  = super::helpers::compute_quorum_size(config.quorum_size, n_nodes);
+    overlay_make_engine(ctx)
+        .propose(
+            crate::signal::SignalScope::System,
+            Arc::from(slot),
+            value,
+            quorum,
+            config,
+            None,
+        )
+        .await
+}
+
+/// Thin group propose from `TaskCtx`.
+async fn overlay_group_propose(
+    ctx:    &Arc<TaskCtx>,
+    group:  &str,
+    slot:   &str,
+    value:  Bytes,
+    config: crate::consensus::ConsensusConfig,
+) -> crate::consensus::ConsensusResult {
+    let prefix  = crate::signal::grp_prefix(group);
+    let members = crate::store::scan_kv_prefix(ctx.kv_state.as_ref(), &prefix);
+    let n       = (members.len() + 1).max(1);
+    let quorum  = super::helpers::compute_quorum_size(config.quorum_size, n);
+    overlay_make_engine(ctx)
+        .propose(
+            crate::signal::SignalScope::Group(Arc::from(group)),
+            Arc::from(slot),
+            value,
+            quorum,
+            config,
+            None,
+        )
+        .await
+}
+
+// ── Overlay: consistent KV ────────────────────────────────────────────────────
+
+/// `POST /gateway/overlay/consistent/set` — linearizable KV write.
+///
+/// Body: `{"key": "K", "value_b64": "V"}`.
+async fn gw_overlay_consistent_set(
+    State(ctx): State<Arc<HttpCtx>>,
+    Json(body):  Json<serde_json::Value>,
+) -> impl IntoResponse {
+    use base64::Engine as _;
+    let key = match body["key"].as_str() {
+        Some(k) => k.to_string(),
+        None    => return (StatusCode::BAD_REQUEST, Json(json!({"error":"missing key"}))).into_response(),
+    };
+    let value = if let Some(b64) = body["value_b64"].as_str() {
+        match base64::engine::general_purpose::STANDARD.decode(b64) {
+            Ok(v)  => Bytes::from(v),
+            Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({"error":"invalid base64 value"}))).into_response(),
+        }
+    } else {
+        Bytes::new()
+    };
+
+    let slot = format!("consistent/{key}");
+    let result = overlay_system_propose(
+        &ctx.agent_ctx, &slot, value.clone(),
+        crate::consensus::ConsensusConfig::default(),
+    ).await;
+
+    match result {
+        crate::consensus::ConsensusResult::Committed { .. } => {
+            let key_arc: Arc<str> = Arc::from(key.as_str());
+            let update = crate::framing::make_gossip_update(
+                &ctx.agent_ctx.node_id, ctx.agent_ctx.default_ttl,
+                key_arc, value, false, &ctx.agent_ctx.hlc,
+            );
+            crate::store::apply_and_notify(&ctx.agent_ctx.kv_state, &update);
+            crate::framing::dispatch_gossip_try_send(
+                &ctx.agent_ctx.gossip_txs,
+                crate::framing::WireMessage::Data(update),
+                ctx.agent_ctx.node_id.id_hash(),
+                crate::framing::ForwardHint::All,
+                &ctx.agent_ctx.kv_state.dropped_frames,
+            );
+            Json(json!({ "ok": true })).into_response()
+        }
+        crate::consensus::ConsensusResult::Timeout { ballots_tried, .. } =>
+            (StatusCode::GATEWAY_TIMEOUT, Json(json!({ "ok": false, "error": format!("consensus timed out after {ballots_tried} ballot(s)") }))).into_response(),
+        crate::consensus::ConsensusResult::Superseded { .. } =>
+            (StatusCode::CONFLICT, Json(json!({ "ok": false, "error": "superseded" }))).into_response(),
+        crate::consensus::ConsensusResult::TopologyUnsatisfied { .. } =>
+            (StatusCode::CONFLICT, Json(json!({ "ok": false, "error": "topology_unsatisfied" }))).into_response(),
+    }
+}
+
+/// `GET /gateway/overlay/consistent/get?key=K` — read linearized value.
+async fn gw_overlay_consistent_get(
+    Query(q):   Query<KvKeyQuery>,
+    State(ctx): State<Arc<HttpCtx>>,
+) -> impl IntoResponse {
+    use base64::Engine as _;
+    let committed_key = format!("consensus/committed/consistent/{}", q.key);
+    let value = ctx.agent_ctx.kv_state.store.pin()
+        .get(committed_key.as_str())
+        .and_then(|e| e.data.clone())
+        .or_else(|| {
+            ctx.agent_ctx.kv_state.store.pin()
+                .get(q.key.as_str())
+                .and_then(|e| e.data.clone())
+        });
+    match value {
+        Some(v) => Json(json!({ "found": true, "value_b64": base64::engine::general_purpose::STANDARD.encode(&v) })).into_response(),
+        None    => Json(json!({ "found": false })).into_response(),
+    }
+}
+
+// ── Overlay: distributed lock ─────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct LockAcquireBody { name: String, ttl_secs: Option<u64> }
+
+/// `POST /gateway/overlay/lock/acquire` — acquire a named distributed lock.
+///
+/// Body: `{"name": "N", "ttl_secs": 30}`.
+/// Returns `{"guard_id": "…", "token": N}`.
+async fn gw_overlay_lock_acquire(
+    State(ctx): State<Arc<HttpCtx>>,
+    Json(body):  Json<LockAcquireBody>,
+) -> impl IntoResponse {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let ttl_secs = body.ttl_secs.unwrap_or(30).clamp(1, 3600);
+    let now_ms   = SystemTime::now().duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64).unwrap_or(0);
+    let lock_json = serde_json::json!({
+        "holder":     ctx.agent_ctx.node_id.to_string(),
+        "expires_ms": now_ms + ttl_secs * 1000,
+    });
+    let value = Bytes::from(serde_json::to_vec(&lock_json).unwrap_or_default());
+    let slot  = format!("lock/{}", body.name);
+
+    let result = overlay_system_propose(
+        &ctx.agent_ctx, &slot, value,
+        crate::consensus::ConsensusConfig::default(),
+    ).await;
+
+    match result {
+        crate::consensus::ConsensusResult::Committed { ballot, .. } => {
+            let guard = LockGuard {
+                ctx:      Arc::clone(&ctx.agent_ctx),
+                name:     Arc::from(body.name.as_str()),
+                token:    ballot,
+                released: false,
+            };
+            let guard_id = format!("{:016x}", fastrand::u64(..));
+            ctx.lock_guards.lock().unwrap().insert(guard_id.clone(), guard);
+            Json(json!({ "ok": true, "guard_id": guard_id, "token": ballot })).into_response()
+        }
+        crate::consensus::ConsensusResult::Timeout { ballots_tried, .. } =>
+            (StatusCode::GATEWAY_TIMEOUT, Json(json!({ "ok": false, "error": format!("timeout after {ballots_tried} ballot(s)") }))).into_response(),
+        crate::consensus::ConsensusResult::Superseded { .. } =>
+            (StatusCode::CONFLICT, Json(json!({ "ok": false, "error": "superseded" }))).into_response(),
+        crate::consensus::ConsensusResult::TopologyUnsatisfied { .. } =>
+            (StatusCode::CONFLICT, Json(json!({ "ok": false, "error": "topology_unsatisfied" }))).into_response(),
+    }
+}
+
+/// `DELETE /gateway/overlay/lock/:guard_id` — release a held lock.
+async fn gw_overlay_lock_release(
+    Path(guard_id): Path<String>,
+    State(ctx):     State<Arc<HttpCtx>>,
+) -> impl IntoResponse {
+    let removed = ctx.lock_guards.lock().unwrap().remove(&guard_id);
+    if removed.is_some() {
+        Json(json!({ "ok": true })).into_response()
+    } else {
+        (StatusCode::NOT_FOUND, Json(json!({ "ok": false, "error": "guard_not_found" }))).into_response()
+    }
+}
+
+// ── Overlay: leader election ──────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct ElectBody { group: String }
+
+/// `POST /gateway/overlay/elect` — elect a leader for `group`.
+///
+/// Body: `{"group": "G"}`.
+/// Returns `{"leader": "IP:PORT"}` on success.
+async fn gw_overlay_elect(
+    State(ctx): State<Arc<HttpCtx>>,
+    Json(body):  Json<ElectBody>,
+) -> impl IntoResponse {
+    let slot  = format!("leader/{}", body.group);
+    let value = Bytes::from(ctx.agent_ctx.node_id.to_string().into_bytes());
+
+    let result = overlay_group_propose(
+        &ctx.agent_ctx, &body.group, &slot, value,
+        crate::consensus::ConsensusConfig::default(),
+    ).await;
+
+    match result {
+        crate::consensus::ConsensusResult::Committed { .. } =>
+            Json(json!({ "ok": true, "leader": ctx.agent_ctx.node_id.to_string() })).into_response(),
+        crate::consensus::ConsensusResult::Superseded { .. } => {
+            let committed_key = format!("consensus/committed/{slot}");
+            if let Some(raw) = ctx.agent_ctx.kv_state.store.pin().get(committed_key.as_str()).and_then(|e| e.data.clone()) {
+                if let Ok(s) = std::str::from_utf8(&raw) {
+                    return Json(json!({ "ok": true, "leader": s.to_string() })).into_response();
+                }
+            }
+            (StatusCode::CONFLICT, Json(json!({ "ok": false, "error": "superseded" }))).into_response()
+        }
+        crate::consensus::ConsensusResult::Timeout { ballots_tried, .. } =>
+            (StatusCode::GATEWAY_TIMEOUT, Json(json!({ "ok": false, "error": format!("timeout after {ballots_tried} ballot(s)") }))).into_response(),
+        crate::consensus::ConsensusResult::TopologyUnsatisfied { .. } =>
+            (StatusCode::CONFLICT, Json(json!({ "ok": false, "error": "topology_unsatisfied" }))).into_response(),
+    }
+}
+
+// ── Overlay: ordered log ──────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct LogAppendBody { stream: String, value_b64: Option<String> }
+
+/// `POST /gateway/overlay/log/append` — append to `stream`.
+///
+/// Body: `{"stream": "S", "value_b64": "V"}`.
+/// Returns `{"hlc": N}`.
+async fn gw_overlay_log_append(
+    State(ctx): State<Arc<HttpCtx>>,
+    Json(body):  Json<LogAppendBody>,
+) -> impl IntoResponse {
+    use base64::Engine as _;
+    let value = if let Some(b64) = body.value_b64.as_deref() {
+        match base64::engine::general_purpose::STANDARD.decode(b64) {
+            Ok(v)  => Bytes::from(v),
+            Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({"error":"invalid base64 value"}))).into_response(),
+        }
+    } else {
+        Bytes::new()
+    };
+
+    let hlc = ctx.agent_ctx.hlc.tick();
+    let key: Arc<str> = Arc::from(format!("log/{}/{hlc:016x}", body.stream).as_str());
+    let update = crate::framing::make_gossip_update(
+        &ctx.agent_ctx.node_id, ctx.agent_ctx.default_ttl,
+        key, value, false, &ctx.agent_ctx.hlc,
+    );
+    crate::store::apply_and_notify(&ctx.agent_ctx.kv_state, &update);
+    crate::framing::dispatch_gossip_try_send(
+        &ctx.agent_ctx.gossip_txs,
+        crate::framing::WireMessage::Data(update),
+        ctx.agent_ctx.node_id.id_hash(),
+        crate::framing::ForwardHint::All,
+        &ctx.agent_ctx.kv_state.dropped_frames,
+    );
+    Json(json!({ "hlc": hlc })).into_response()
+}
+
+#[derive(Deserialize)]
+struct LogScanQuery { stream: String, from: Option<u64>, to: Option<u64> }
+
+/// `GET /gateway/overlay/log/scan?stream=S&from=0&to=MAX` — range scan.
+///
+/// Returns `[{"hlc": N, "value_b64": "…"}]`.
+async fn gw_overlay_log_scan(
+    Query(q):   Query<LogScanQuery>,
+    State(ctx): State<Arc<HttpCtx>>,
+) -> impl IntoResponse {
+    use base64::Engine as _;
+    let from = q.from.unwrap_or(0);
+    let to   = q.to.unwrap_or(u64::MAX);
+    let prefix = format!("log/{}/", q.stream);
+    let mut entries: Vec<LogEntry> = crate::store::scan_kv_prefix(&ctx.agent_ctx.kv_state, &prefix)
+        .into_iter()
+        .filter_map(|(k, v)| {
+            let suffix = k.strip_prefix(&prefix)?;
+            let hlc    = u64::from_str_radix(suffix, 16).ok()?;
+            if hlc >= from && hlc < to { Some(LogEntry { hlc, value: v }) } else { None }
+        })
+        .collect();
+    entries.sort_by_key(|e| e.hlc);
+    let arr: Vec<serde_json::Value> = entries.iter().map(|e| json!({
+        "hlc":       e.hlc,
+        "value_b64": base64::engine::general_purpose::STANDARD.encode(&e.value),
+    })).collect();
+    Json(arr).into_response()
+}
+
+#[derive(Deserialize)]
+struct LogCompactBody { stream: String, before_hlc: u64 }
+
+/// `POST /gateway/overlay/log/compact` — tombstone entries with HLC < `before_hlc`.
+async fn gw_overlay_log_compact(
+    State(ctx): State<Arc<HttpCtx>>,
+    Json(body):  Json<LogCompactBody>,
+) -> impl IntoResponse {
+    let prefix = format!("log/{}/", body.stream);
+    for (k, _) in crate::store::scan_kv_prefix(&ctx.agent_ctx.kv_state, &prefix) {
+        let suffix = k.strip_prefix(&prefix).unwrap_or("");
+        if let Ok(hlc) = u64::from_str_radix(suffix, 16) {
+            if hlc < body.before_hlc {
+                let update = crate::framing::make_gossip_update(
+                    &ctx.agent_ctx.node_id, ctx.agent_ctx.default_ttl,
+                    k, Bytes::new(), true, &ctx.agent_ctx.hlc,
+                );
+                crate::store::apply_and_notify(&ctx.agent_ctx.kv_state, &update);
+                crate::framing::dispatch_gossip_try_send(
+                    &ctx.agent_ctx.gossip_txs,
+                    crate::framing::WireMessage::Data(update),
+                    ctx.agent_ctx.node_id.id_hash(),
+                    crate::framing::ForwardHint::All,
+                    &ctx.agent_ctx.kv_state.dropped_frames,
+                );
+            }
+        }
+    }
+    Json(json!({ "ok": true })).into_response()
+}
+
+#[derive(Deserialize)]
+struct LogSubscribeQuery { stream: String, since: Option<u64> }
+
+/// `GET /gateway/overlay/log/subscribe?stream=S&since=0` — SSE stream of log entries.
+async fn gw_overlay_log_subscribe(
+    Query(q):   Query<LogSubscribeQuery>,
+    State(ctx): State<Arc<HttpCtx>>,
+) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+    let prefix      = format!("log/{}/", q.stream);
+    let prefix_arc: Arc<str> = Arc::from(prefix.as_str());
+    let mut watcher  = super::capability_ops::subscribe_prefix_on_kv(&ctx.agent_ctx.kv_state, Arc::clone(&prefix_arc));
+    let stream_name  = q.stream.clone();
+    let kv_state     = Arc::clone(&ctx.agent_ctx.kv_state);
+    let mut last_seen = q.since.unwrap_or(0);
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<Event>(256);
+    tokio::spawn(async move {
+        loop {
+            let entries = {
+                let mut es: Vec<LogEntry> = crate::store::scan_kv_prefix(&kv_state, &prefix)
+                    .into_iter()
+                    .filter_map(|(k, v)| {
+                        let suffix = k.strip_prefix(&prefix)?;
+                        let hlc    = u64::from_str_radix(suffix, 16).ok()?;
+                        if hlc >= last_seen { Some(LogEntry { hlc, value: v }) } else { None }
+                    })
+                    .collect();
+                es.sort_by_key(|e| e.hlc);
+                es
+            };
+            for entry in entries {
+                use base64::Engine as _;
+                last_seen = entry.hlc + 1;
+                let data  = json!({
+                    "stream":    stream_name,
+                    "hlc":       entry.hlc,
+                    "value_b64": base64::engine::general_purpose::STANDARD.encode(&entry.value),
+                });
+                if tx.send(Event::default().data(data.to_string())).await.is_err() { return; }
+            }
+            if watcher.changed().await.is_err() { return; }
+        }
+    });
+
+    Sse::new(ReceiverStream::new(rx).map(Ok::<_, Infallible>)).keep_alive(KeepAlive::default())
+}
+
+#[derive(Deserialize)]
+struct LogGroupSubscribeQuery { stream: String, group: String }
+
+/// `GET /gateway/overlay/log/group/subscribe?stream=S&group=G` — consumer-group SSE.
+async fn gw_overlay_log_group_subscribe(
+    Query(q):   Query<LogGroupSubscribeQuery>,
+    State(ctx): State<Arc<HttpCtx>>,
+) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+    let stream_name = q.stream.clone();
+    let group_name  = q.group.clone();
+    let kv_state    = Arc::clone(&ctx.agent_ctx.kv_state);
+    let task_ctx    = Arc::clone(&ctx.agent_ctx);
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<Event>(64);
+    tokio::spawn(async move {
+        let handle = super::overlay_log::SubscribeHandle::from_task_ctx(Arc::clone(&task_ctx));
+        loop {
+            let lock_name  = format!("clog/{stream_name}/{group_name}/claim");
+            let _guard = match handle.distributed_lock(&lock_name, Duration::from_secs(30)).await {
+                Ok(g)  => g,
+                Err(_) => {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    continue;
+                }
+            };
+            let offset_key = format!("clog/{stream_name}/{group_name}/offset");
+            let offset: u64 = kv_state.store.pin().get(offset_key.as_str())
+                .and_then(|e| e.data.clone())
+                .and_then(|b| std::str::from_utf8(&b).ok().and_then(|s| u64::from_str_radix(s, 16).ok()))
+                .unwrap_or(0);
+
+            let prefix = format!("log/{stream_name}/");
+            let mut entries: Vec<LogEntry> = crate::store::scan_kv_prefix(&kv_state, &prefix)
+                .into_iter()
+                .filter_map(|(k, v)| {
+                    let suffix = k.strip_prefix(&prefix)?;
+                    let hlc    = u64::from_str_radix(suffix, 16).ok()?;
+                    if hlc > offset { Some(LogEntry { hlc, value: v }) } else { None }
+                })
+                .collect();
+            entries.sort_by_key(|e| e.hlc);
+
+            if let Some(entry) = entries.into_iter().next() {
+                let new_offset = format!("{:016x}", entry.hlc);
+                let offset_key_arc: Arc<str> = Arc::from(offset_key.as_str());
+                let update = crate::framing::make_gossip_update(
+                    &task_ctx.node_id, task_ctx.default_ttl,
+                    offset_key_arc, Bytes::from(new_offset.into_bytes()), false, &task_ctx.hlc,
+                );
+                crate::store::apply_and_notify(&task_ctx.kv_state, &update);
+                crate::framing::dispatch_gossip_try_send(
+                    &task_ctx.gossip_txs,
+                    crate::framing::WireMessage::Data(update),
+                    task_ctx.node_id.id_hash(),
+                    crate::framing::ForwardHint::All,
+                    &task_ctx.kv_state.dropped_frames,
+                );
+                use base64::Engine as _;
+                let data = json!({
+                    "stream":    stream_name,
+                    "hlc":       entry.hlc,
+                    "value_b64": base64::engine::general_purpose::STANDARD.encode(&entry.value),
+                });
+                if tx.send(Event::default().data(data.to_string())).await.is_err() { return; }
+            } else {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    });
+
+    Sse::new(ReceiverStream::new(rx).map(Ok::<_, Infallible>)).keep_alive(KeepAlive::default())
+}
+
+// ── Overlay: reliable delivery ────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct EmitReliableBody {
+    target:       String,
+    kind:         String,
+    payload_b64:  Option<String>,
+    timeout_secs: Option<u64>,
+}
+
+/// `POST /gateway/overlay/emit_reliable` — send with explicit ACK.
+///
+/// Body: `{"target": "IP:PORT", "kind": "K", "payload_b64": "V", "timeout_secs": 5}`.
+/// Returns `{"ack": "acknowledged" | "timeout"}`.
+async fn gw_overlay_emit_reliable(
+    State(ctx): State<Arc<HttpCtx>>,
+    Json(body):  Json<EmitReliableBody>,
+) -> impl IntoResponse {
+    use base64::Engine as _;
+    let target: crate::node_id::NodeId = match body.target.parse() {
+        Ok(n)  => n,
+        Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({"error":"invalid target node id"}))).into_response(),
+    };
+    let payload = if let Some(b64) = body.payload_b64.as_deref() {
+        match base64::engine::general_purpose::STANDARD.decode(b64) {
+            Ok(v)  => Bytes::from(v),
+            Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({"error":"invalid base64 payload"}))).into_response(),
+        }
+    } else {
+        Bytes::new()
+    };
+    let timeout = Duration::from_secs(body.timeout_secs.unwrap_or(5).clamp(1, 300));
+    let kind: Arc<str> = Arc::from(body.kind.as_str());
+
+    match super::rpc::rpc_call_ctx(&ctx.agent_ctx, target, kind, payload, timeout).await {
+        Ok(_)                              => Json(json!({ "ack": "acknowledged" })).into_response(),
+        Err(super::rpc::RpcError::Timeout) => Json(json!({ "ack": "timeout" })).into_response(),
+    }
 }
 
 #[cfg(test)]

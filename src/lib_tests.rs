@@ -125,6 +125,7 @@ fn spawn_handler(
         rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         tls: std::sync::OnceLock::new(),
         peer_keys: Arc::new(papaya::HashMap::new()),
+        peers: Arc::new(papaya::HashMap::new()),
     });
     let ctx = ConnContext {
         task_ctx,
@@ -469,6 +470,7 @@ async fn test_subscribe_notified_via_gossip() {
             rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             tls: std::sync::OnceLock::new(),
             peer_keys: Arc::new(papaya::HashMap::new()),
+        peers: Arc::new(papaya::HashMap::new()),
         });
         let ctx = ConnContext {
             task_ctx,

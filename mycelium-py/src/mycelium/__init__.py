@@ -5,6 +5,8 @@ from .agent import (
     DemandStatus,
     RpcRequest,
     MailboxEvent,
+    LogEntry,
+    LockGuard,
 )
 
 __all__ = [
@@ -14,4 +16,6 @@ __all__ = [
     "DemandStatus",
     "RpcRequest",
     "MailboxEvent",
+    "LogEntry",
+    "LockGuard",
 ]
