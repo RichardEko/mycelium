@@ -1157,11 +1157,54 @@ losing adaptive routing, demand pressure, and locality-aware dispatch. Same trap
 **Sidecar injection (Istio style)** — unnecessary. Mycelium is a library; agents don't need a
 daemon injected alongside them.
 
-**A2A wire-protocol adapter (post-MCP)** — agentgateway supports the A2A (Agent-to-Agent)
-protocol alongside MCP. Mycelium's signal mesh is a native A2A implementation but opaque to
-non-Mycelium agents. An explicit A2A adapter in the language bridge would let external agents
-(AutoGen, LangChain) participate without knowing they're on Mycelium. Lower priority than MCP;
-the A2A spec is stable enough to design for in the bridge layer alongside MCP work.
+**A2A wire-protocol adapter (post-MCP)** — shipped. See `a2a` cargo feature.
+
+---
+
+### A2A Discovery Ecosystem — Positioning (2026-05-25)
+
+Concrete projects in the A2A discovery space and where Mycelium sits relative to each:
+
+| Project | Model | Mycelium vs. |
+|---|---|---|
+| **A2A Registry proposal** (community) | Centralised registry service; clients query by skill/tag | Mycelium *is* the registry — `cap/` KV gossips to every node; `/.well-known/agent.json` is built live from it. No registry process. |
+| **Gemini Enterprise A2A** | Admin-configured enterprise catalog, Google-hosted | Not competing. Enterprise product plane. Mycelium is the library underneath such a product. |
+| **EMQX A2A over MQTT** | MQTT broker indexes Agent Cards; topics = discovery bus | Closest structural analog. Both do distributed discovery + liveness. Key difference: EMQX requires a broker (SPOF); Mycelium is peer-to-peer — no broker. |
+| **AgentScope / Nacos** | Runtime plugin publishes cards to Nacos service registry | Centralised registry; same SPOF tradeoff as EMQX. Mycelium gossips directly without Nacos. |
+| **python-a2a discovery module** | Python library: AgentRegistry + DiscoveryClient + heartbeat | A client-side API wrapper, not infrastructure. `mycelium-py`'s `A2aClient` covers the same API surface; the Mycelium node is the actual registry. |
+| **ANS (IETF Internet-Draft)** | DNS-like, PKI-backed, protocol-agnostic, internet-scale | Complementary. ANS is cross-org/internet-scope; Mycelium is cluster-scope. A Mycelium cluster could register a single endpoint with ANS. |
+| **AGNTCY ADS** | DHT content routing, OCI/ORAS storage, OASF records, provenance/attestation | ADS targets static catalogs with content-addressed immutability. Mycelium is mutable LWW with TTL — better for ephemeral, dynamic agents. Complementary for different concerns. |
+| **NANDA / AgentFacts** | Open agentic-web infrastructure — identity, attestation, cross-protocol bridges | Internet-scale, cross-org identity layer. Mycelium doesn't do cross-org identity; NANDA doesn't do intra-cluster routing or epidemic dispatch. |
+| **Microsoft Agent 365 / Entra Agent ID** | Enterprise inventory + governance plane, Azure-integrated | Platform play. Mycelium is the library an operator would embed; Agent 365 is what an enterprise wraps around it. |
+| **MCP Registry** | App-store / static catalog for MCP servers | Static and human-curated. Mycelium's `tools/` KV namespace gossips MCP tool availability dynamically — no registration step. |
+
+**What Mycelium does that none of these do together:**
+
+1. **Discovery is a side-effect of membership.** `advertise_capability` writes a TTL'd KV entry
+   that propagates epidemically. There is no register/deregister lifecycle — the TTL handles it.
+   Every node has a complete, eventually-consistent view of the fleet.
+
+2. **Routing, not just lookup.** `resolve_with_locality`, `shard_for`, `emit_sharded`, demand
+   pressure — the routing decision happens at the substrate, not in application code layered on
+   top of a registry API.
+
+3. **No coordinator.** EMQX, Nacos, Gemini Enterprise, Agent 365 all have a service you depend
+   on. Mycelium's only failure mode is losing all nodes. Partial failures are transparent.
+
+4. **Execution substrate, not just a directory.** The same library that does discovery also does
+   RPC, signals, consensus, sharding, and reliable delivery.
+
+**Where Mycelium genuinely doesn't compete:**
+
+- **Internet-scale / cross-org discovery** — ANS and NANDA. Mycelium assumes a cluster you own.
+  Cross-org discovery needs PKI, trust anchors, and a public registry.
+- **Static provenance and attestation** — AGNTCY ADS. Mycelium's KV is mutable LWW; wrong model
+  for "what exact version of this agent was running at 14:32 UTC."
+- **Enterprise governance / compliance plane** — Agent 365/Entra. Mycelium has an audit trail
+  (HLC causal log + OTEL) but not an admin console or SSO integration.
+
+**Three-layer stack for a mature deployment:** Mycelium for intra-cluster routing and execution,
+ANS for cross-cluster resolution, AGNTCY ADS for auditable skill provenance.
 
 ---
 
