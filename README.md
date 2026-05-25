@@ -669,7 +669,7 @@ need (`declare_requirement`), and how much demand exists relative to supply (`de
 registry; everything lives under the `cap/`, `req/`, and `gcap/` namespaces and anti-entropy-syncs
 to late joiners automatically.
 
-→ The **Capability Market** preset in the [Mesh Control UI](docs/mesh_control.html) demonstrates
+→ The **Capability Market** preset in the [Mesh Control UI](examples/mesh_control.html) demonstrates
 providers, requirers, and per-capability demand-pressure bars across four capability types.
 
 ### Advertising and Resolving Capabilities
@@ -747,7 +747,7 @@ The library projects their collective capability under `gcap/{group}/{ns}/{name}
 and handles group-level requirement wiring. One consolidated task per group keeps task count
 O(groups), not O(groups × members).
 
-→ The **Emergent GPU Pool** preset in the [Mesh Control UI](docs/mesh_control.html) shows a
+→ The **Emergent GPU Pool** preset in the [Mesh Control UI](examples/mesh_control.html) shows a
 20-node worker pool that assembles dynamically and fans out render jobs to all members.
 
 ```rust
@@ -794,7 +794,7 @@ Each node declares a `locality_path` in its config (coarse → fine: `["az1", "r
 `resolve_with_locality` sorts providers by shared-prefix depth with the caller — topologically
 closest first. `signal_wired_via_locality` combines wiring with locality preference in one call.
 
-→ The **Locality Mesh** preset in the [Mesh Control UI](docs/mesh_control.html) covers 12 nodes
+→ The **Locality Mesh** preset in the [Mesh Control UI](examples/mesh_control.html) covers 12 nodes
 across two availability zones: remove a close provider and the resolver shifts to the next ring.
 
 ```rust
@@ -1011,7 +1011,7 @@ Skills listed in a manifest's `tools` array can call other skills by name at
 inference time — the mesh routes sub-invocations automatically and the audit
 trail captures the full causal chain.
 
-See [`docs/skillrunner.html`](docs/skillrunner.html) for the full manifest
+See [`skillrunner.html`](skillrunner.html) for the full manifest
 reference, OTEL integration, concurrency controls, and the audit trail format.
 
 See [`examples/skills/`](examples/skills/) for ready-to-run manifests and

@@ -342,7 +342,7 @@ async fn serve_http(state: Arc<Mutex<SharedState>>) {
                 );
                 let _ = stream.write_all(resp.as_bytes()).await;
             } else {
-                let html = include_str!("../docs/conway_gpu.html");
+                let html = include_str!("conway_gpu.html");
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\
                      Content-Length: {}\r\nConnection: close\r\n\r\n{}",

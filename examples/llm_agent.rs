@@ -1546,7 +1546,7 @@ async fn handle_http(mut stream: tokio::net::TcpStream, app: Arc<AppState>, my_p
         }
         _ =>
             (200, "text/html; charset=utf-8",
-             include_str!("../docs/mesh_control.html").to_string()),
+             include_str!("mesh_control.html").to_string()),
     };
 
     let response = format!(

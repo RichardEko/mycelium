@@ -147,8 +147,7 @@ async fn serve_http(snapshot: Arc<Mutex<GridSnapshot>>) {
                 );
                 let _ = stream.write_all(response.as_bytes()).await;
             } else {
-                // Serve the visualiser — embedded at compile time from docs/conway.html
-                let html = include_str!("../docs/conway.html");
+                let html = include_str!("conway.html");
                 let response = format!(
                     "HTTP/1.1 200 OK\r\n\
                      Content-Type: text/html; charset=utf-8\r\n\
