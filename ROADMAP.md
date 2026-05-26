@@ -1795,4 +1795,5 @@ built speculatively. Full design documents are in `docs/plans/`.
 | Pattern | File | Trigger to revisit |
 |---|---|---|
 | `mycelium-tuple-space` companion crate — single-copy pipeline buffer with blocking take, WAL, primary/secondary failover | [`docs/plans/mycelium-tuple-space.md`](docs/plans/mycelium-tuple-space.md) | A real workload hitting the AFN gossip fan-out ceiling (scatter-gather at thousands of items/second, or pipeline requiring WAL-backed restart recovery) |
+| Cross-group consensus federation — `cross_group_propose` where multiple capability groups each act as an independent voting bloc; commit requires all groups to reach quorum | [`docs/plans/cross_group_consensus.md`](docs/plans/cross_group_consensus.md) | Multi-AZ durability gates, human-in-the-loop ratification, compliance veto patterns, or multi-department agent fleets where no single group should dominate a vote |
 

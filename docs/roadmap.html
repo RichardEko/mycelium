@@ -2395,6 +2395,21 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
             thousands of items/second, or pipelines requiring WAL-backed restart recovery.
           </td>
         </tr>
+        <tr>
+          <td>
+            <strong>Cross-group consensus federation</strong> — <code>cross_group_propose</code>
+            where multiple capability groups each act as an independent voting bloc; the proposal
+            commits only when every group reaches its required quorum. Supports per-group quorum
+            fractions and veto rights. Built on the existing <code>ConsensusEngine</code>; modest
+            extension (~100 lines). Use cases: multi-AZ durability, human-in-the-loop ratification,
+            compliance veto, multi-department agent fleets.
+          </td>
+          <td><a href="plans/cross_group_consensus.md" style="color:var(--accent);">plans/cross_group_consensus.md</a></td>
+          <td style="color:#94a3b8; font-size:0.9em;">
+            Multi-AZ deployments requiring per-AZ quorum, compliance groups that must ratify
+            agent proposals, or multi-department fleets where no single group should dominate a vote.
+          </td>
+        </tr>
       </tbody>
     </table>
   </div>
