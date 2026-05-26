@@ -1,5 +1,7 @@
 # Cross-Group Consensus Federation — Design Reference
 
+> **HTML version:** [`docs/cross_group_consensus.html`](../cross_group_consensus.html)
+
 ## What this is
 
 **Phase 8** of the original locality/topology capabilities plan — deliberately deferred
