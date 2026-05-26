@@ -708,6 +708,44 @@ class MyceliumAgent:
             raise RuntimeError(data.get("error", "election failed"))
         return data["leader"]
 
+    # ── Cross-group consensus ───────────────────────────────────────────────
+
+    def cross_group_propose(
+        self,
+        slot: str,
+        value: bytes,
+        groups: list[dict],
+    ) -> None:
+        """Propose ``value`` for ``slot`` requiring independent quorum from each group.
+
+        ``groups`` is a list of dicts with keys ``group`` (str), ``quorum`` (float,
+        default ``0.5``), and ``veto`` (bool, default ``False``).  The proposal commits
+        only when **all** specified groups individually reach their quorum fraction.
+
+        Example::
+
+            agent.cross_group_propose(
+                "pipeline/config",
+                json.dumps(new_config).encode(),
+                [
+                    {"group": "llm-workers",  "quorum": 0.5, "veto": False},
+                    {"group": "compliance",   "quorum": 0.5, "veto": True},
+                ],
+            )
+        """
+        body: dict = {
+            "slot":      slot,
+            "value_b64": base64.b64encode(value).decode(),
+            "groups":    [
+                {"group": g["group"], "quorum": g.get("quorum", 0.5), "veto": g.get("veto", False)}
+                for g in groups
+            ],
+        }
+        with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
+            data = c.post("/gateway/consensus/cross_group_propose", json=body).raise_for_status().json()
+        if not data.get("ok"):
+            raise RuntimeError(data.get("error", "cross_group_propose failed"))
+
     # ── Overlay: ordered log ────────────────────────────────────────────────
 
     def append(self, stream: str, value: bytes) -> int:

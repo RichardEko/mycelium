@@ -286,6 +286,31 @@ impl GossipAgent {
             .await
     }
 
+    /// Proposes `value` for `slot` requiring independent quorum from each group in `groups`.
+    ///
+    /// Commits only when **all** specified groups individually reach their configured quorum
+    /// fraction. Uses a single ballot round — no group can commit without all others also
+    /// committing, so there is no window for partial commitment.
+    ///
+    /// This fills the gap between [`group_propose`](Self::group_propose) (one group) and
+    /// [`system_propose`](Self::system_propose) (all nodes): decisions that require
+    /// ratification from **multiple distinct groups**, each acting as an independent
+    /// voting bloc.
+    ///
+    /// **Use cases**: multi-AZ durability gates, hierarchical approval workflows,
+    /// compliance / ratification roles, cross-department agent fleets.
+    pub async fn cross_group_propose(
+        &self,
+        slot:   &str,
+        value:  Bytes,
+        groups: Vec<crate::GroupQuorum>,
+        config: ConsensusConfig,
+    ) -> ConsensusResult {
+        self.make_consensus_engine(false, false, 0, None)
+            .cross_propose(Arc::from(slot), value, &groups, config)
+            .await
+    }
+
     /// Starts the consensus voter/listener task.
     ///
     /// Nodes that call this participate as voters in all consensus rounds.

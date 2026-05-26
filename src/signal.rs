@@ -58,6 +58,11 @@ pub enum SignalScope {
     Group(Arc<str>),
     /// Only the named node acts.
     Individual(NodeId),
+    /// Only nodes that have joined **any** of the named groups act (union membership).
+    ///
+    /// Used by [`GossipAgent::cross_group_propose`](crate::GossipAgent::cross_group_propose)
+    /// to broadcast a ballot to all participants across multiple voting blocs in one shot.
+    Groups(Vec<Arc<str>>),
 }
 
 /// A signal delivered to a local handler.
@@ -121,6 +126,7 @@ impl Boundary {
             SignalScope::System => true,
             SignalScope::Group(name) => self.groups.contains(name),
             SignalScope::Individual(id) => *id == self.node_id,
+            SignalScope::Groups(names) => names.iter().any(|n| self.groups.contains(n)),
         }
     }
 }

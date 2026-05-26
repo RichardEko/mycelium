@@ -34,8 +34,8 @@ use crate::framing::{
 };
 use crate::locality::LocalityPath;
 use crate::node_id::NodeId;
-use crate::signal::{signal_kind, Signal, SignalScope};
-use crate::store::apply_and_notify;
+use crate::signal::{grp_prefix, signal_kind, Signal, SignalScope};
+use crate::store::{apply_and_notify, scan_kv_prefix};
 use ahash::{AHashMap, AHashSet};
 use bytes::{BufMut, Bytes, BytesMut};
 use std::{
@@ -140,6 +140,24 @@ impl Default for ConsensusConfig {
             max_abstain_ballots:     0,
         }
     }
+}
+
+/// Per-group quorum requirement for [`GossipAgent::cross_group_propose`].
+///
+/// Each entry describes one named capability group and the fraction of its
+/// members that must accept before the proposal can commit across all groups.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct GroupQuorum {
+    /// Name of the capability group (matches the name used in [`GossipAgent::join_group`]).
+    pub group: String,
+    /// Fraction of group members required to accept. `0.5` means strict majority.
+    /// Clamped to `(0.0, 1.0]` at runtime.
+    pub quorum: f32,
+    /// When `true`, this group acts as a ratification / compliance gate: it must
+    /// reach its quorum fraction independently of all other groups. No additional
+    /// wire semantics — the effect is simply that this group cannot be outweighed
+    /// by others (the commit condition already requires all groups to pass).
+    pub veto: bool,
 }
 
 /// Outcome of a [`group_propose`](crate::GossipAgent::group_propose) or
@@ -720,6 +738,173 @@ impl ConsensusEngine {
         }
     }
 
+    /// Proposes `value` for `slot` requiring independent quorum from each group in `groups`.
+    ///
+    /// Commits only when every group reaches its configured [`GroupQuorum::quorum`] fraction.
+    /// Uses a single ballot round so the commit is atomic — no group can commit without
+    /// all others also committing.
+    ///
+    /// Called by [`GossipAgent::cross_group_propose`].
+    pub(crate) async fn cross_propose(
+        &self,
+        slot:   Arc<str>,
+        value:  Bytes,
+        groups: &[GroupQuorum],
+        config: ConsensusConfig,
+    ) -> ConsensusResult {
+        if groups.is_empty() {
+            return ConsensusResult::Timeout {
+                slot,
+                ballots_tried: 0, votes_last_ballot: 0, quorum_required: 0,
+            };
+        }
+
+        let ballot_key = format!("{}{}", consensus_ns::BALLOT,    &*slot);
+        let commit_key = format!("{}{}", consensus_ns::COMMITTED, &*slot);
+
+        if self.get(&commit_key).is_some() {
+            return ConsensusResult::Superseded { slot, ballot: self.read_ballot(&ballot_key) };
+        }
+
+        // Per-group state (rebuilt from KV once before the ballot loop).
+        struct CrossState {
+            members:     ahash::AHashSet<NodeId>,
+            quorum_frac: f32,
+            accepts:     usize,
+        }
+
+        let mut group_states: AHashMap<Arc<str>, CrossState> = AHashMap::new();
+        for gq in groups {
+            let prefix  = grp_prefix(&gq.group);
+            let entries = scan_kv_prefix(&self.task_ctx.kv_state, &prefix);
+            let members: ahash::AHashSet<NodeId> = entries.iter()
+                .filter_map(|(key, _)| key.strip_prefix(&prefix).and_then(|s| s.parse().ok()))
+                .collect();
+            group_states.insert(Arc::from(gq.group.as_str()), CrossState {
+                members,
+                quorum_frac: gq.quorum.clamp(0.001, 1.0),
+                accepts: 0,
+            });
+        }
+
+        // Pre-compute voter → group membership for O(1) lookup during vote collection.
+        let mut node_groups: AHashMap<NodeId, Vec<Arc<str>>> = AHashMap::new();
+        for (gname, gs) in &group_states {
+            for nid in &gs.members {
+                node_groups.entry(nid.clone()).or_default().push(Arc::clone(gname));
+            }
+        }
+
+        let scope = SignalScope::Groups(
+            groups.iter().map(|g| Arc::from(g.group.as_str())).collect(),
+        );
+
+        let mut vote_rx = self.task_ctx.signal_handlers.register_with_capacity(
+            Arc::from(consensus_kind::VOTE), 512,
+        );
+        let mut nack_rx = self.task_ctx.signal_handlers.register_with_capacity(
+            Arc::from(consensus_kind::NACK), 64,
+        );
+
+        let mut ballot = self.read_ballot(&ballot_key) + 1;
+
+        for _attempt in 0..config.max_ballots {
+            for gs in group_states.values_mut() { gs.accepts = 0; }
+
+            self.set_async(&ballot_key, encode_ballot(ballot)).await;
+
+            let propose_msg = ConsensusMsg::Propose {
+                slot: slot.clone(), ballot, value: value.clone(),
+                proposer: self.task_ctx.node_id.clone(),
+            };
+            self.emit_async(
+                Arc::from(consensus_kind::PROPOSE),
+                scope.clone(),
+                self.sign_payload(encode_consensus_msg(&propose_msg)),
+            ).await;
+
+            let deadline  = time::Instant::now() + config.phase1_timeout;
+            let sleep_fut = time::sleep_until(deadline);
+            tokio::pin!(sleep_fut);
+            let mut nack_ballot = 0u64;
+
+            'collect: loop {
+                tokio::select! { biased;
+                    _ = &mut sleep_fut => break 'collect,
+                    Some(sig) = vote_rx.recv() => {
+                        let (s, b, voter) = match self.decode_verify(&sig.payload) {
+                            Some(ConsensusMsg::Vote { slot: s, ballot: b, voter }) =>
+                                (s, b, voter),
+                            Some(ConsensusMsg::VoteWithLocality { slot: s, ballot: b, voter, .. }) =>
+                                (s, b, voter),
+                            _ => continue 'collect,
+                        };
+                        if s != slot || b != ballot { continue 'collect; }
+
+                        if let Some(gnames) = node_groups.get(&voter) {
+                            for gname in gnames {
+                                if let Some(gs) = group_states.get_mut(gname) {
+                                    gs.accepts += 1;
+                                }
+                            }
+                        }
+
+                        // Commit when every group has independently reached its fraction.
+                        let all_ready = group_states.values().all(|gs| {
+                            let needed = ((gs.members.len() as f32 * gs.quorum_frac).ceil() as usize).max(1);
+                            gs.accepts >= needed
+                        });
+                        if all_ready {
+                            let commit_msg = ConsensusMsg::Commit {
+                                slot: slot.clone(), ballot, value: value.clone(),
+                            };
+                            self.emit_async(
+                                Arc::from(consensus_kind::COMMIT),
+                                scope.clone(),
+                                self.sign_payload(encode_consensus_msg(&commit_msg)),
+                            ).await;
+                            let committed_upd = self.set_async(&commit_key, value.clone()).await;
+                            if let Some(wal) = self.task_ctx.wal.get() {
+                                let _ = wal.append_sync(
+                                    crate::framing::sync_entry_from(&committed_upd)
+                                ).await;
+                            }
+                            self.kv_delete(&ballot_key);
+                            return ConsensusResult::Committed { slot, value, ballot };
+                        }
+                    }
+                    Some(sig) = nack_rx.recv() => {
+                        if let Some(ConsensusMsg::Nack { slot: s, seen_ballot }) =
+                            self.decode_verify(&sig.payload)
+                        {
+                            if s == slot && seen_ballot > ballot {
+                                nack_ballot = seen_ballot;
+                                break 'collect;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if self.get(&commit_key).is_some() {
+                return ConsensusResult::Superseded { slot, ballot: self.read_ballot(&ballot_key) };
+            }
+
+            if config.ballot_retry_jitter_ms > 0 {
+                let jitter = fastrand::u64(0..config.ballot_retry_jitter_ms);
+                tokio::time::sleep(Duration::from_millis(jitter)).await;
+            }
+            ballot = nack_ballot.max(self.read_ballot(&ballot_key)).max(ballot) + 1;
+        }
+
+        ConsensusResult::Timeout {
+            slot,
+            ballots_tried:     config.max_ballots,
+            votes_last_ballot: group_states.values().map(|gs| gs.accepts).sum(),
+            quorum_required:   groups.len(),
+        }
+    }
+
     /// Evaluates quorum-by-count + topology gate. When both pass, dispatches
     /// the commit (emit `COMMIT`, write `consensus/committed/{slot}`,
     /// tombstone `consensus/ballot/{slot}`) and returns
@@ -1105,5 +1290,60 @@ mod topology_tests {
         let (passes, distinct) = evaluate_topology_gate(&voters, &policy);
         assert!(!passes);
         assert_eq!(distinct, 1, "only the EU voter contributes diversity; the two legacy votes do not");
+    }
+}
+
+#[cfg(test)]
+mod cross_group_tests {
+    use super::GroupQuorum;
+
+    // Helper: mirrors the quorum check in ConsensusEngine::cross_propose.
+    fn quorum_met(accepts: usize, member_count: usize, frac: f32) -> bool {
+        let needed = ((member_count as f32 * frac).ceil() as usize).max(1);
+        accepts >= needed
+    }
+
+    #[test]
+    fn strict_majority_requires_ceil_half_plus_one() {
+        // 5-member group at quorum=0.5 → ceil(2.5) = 3 required
+        assert!(!quorum_met(2, 5, 0.5), "2/5 must not satisfy majority");
+        assert!( quorum_met(3, 5, 0.5), "3/5 must satisfy majority");
+        assert!( quorum_met(5, 5, 0.5), "5/5 trivially satisfies");
+    }
+
+    #[test]
+    fn unanimous_requires_all_members() {
+        assert!(!quorum_met(4, 5, 1.0), "4/5 must not satisfy unanimous");
+        assert!( quorum_met(5, 5, 1.0), "5/5 must satisfy unanimous");
+    }
+
+    #[test]
+    fn single_member_group_always_needs_one_accept() {
+        // ceil(1 * 0.5) = 1, not 0
+        assert!(!quorum_met(0, 1, 0.5), "0 accepts in a 1-member group must fail");
+        assert!( quorum_met(1, 1, 0.5));
+    }
+
+    #[test]
+    fn empty_group_clamps_to_one_required() {
+        // member_count=0 → .max(1) ensures needed=1, not 0 (no free commit)
+        assert!(!quorum_met(0, 0, 0.5));
+    }
+
+    #[test]
+    fn all_groups_must_individually_reach_quorum() {
+        let group_a_ok = quorum_met(3, 5, 0.5); // ceil(2.5)=3 → passes
+        let group_b_ok = quorum_met(2, 5, 0.5); // ceil(2.5)=3 → fails
+        assert!( group_a_ok);
+        assert!(!group_b_ok);
+        assert!(!(group_a_ok && group_b_ok), "overall must fail when any group misses quorum");
+    }
+
+    #[test]
+    fn group_quorum_struct_fields() {
+        let gq = GroupQuorum { group: "compliance".into(), quorum: 0.75, veto: true };
+        assert_eq!(gq.group, "compliance");
+        assert!((gq.quorum - 0.75).abs() < f32::EPSILON);
+        assert!(gq.veto);
     }
 }

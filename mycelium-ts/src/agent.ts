@@ -422,6 +422,40 @@ export class MyceliumAgent {
   }
 
   /**
+   * Proposes `value` for `slot` requiring independent quorum from each group.
+   *
+   * Commits only when **all** specified groups individually reach their
+   * `quorum` fraction. A single ballot round — no partial commitment possible.
+   *
+   * @param slot   - Consensus slot name (namespaced by the caller).
+   * @param value  - Payload bytes to commit.
+   * @param groups - Per-group quorum requirements.
+   *
+   * @example
+   * ```ts
+   * await agent.crossGroupPropose("pipeline/config", Buffer.from("v2"), [
+   *   { group: "llm-workers", quorum: 0.5, veto: false },
+   *   { group: "compliance",  quorum: 0.5, veto: true  },
+   * ]);
+   * ```
+   */
+  async crossGroupPropose(
+    slot: string,
+    value: Buffer | Uint8Array,
+    groups: Array<{ group: string; quorum?: number; veto?: boolean }>,
+  ): Promise<void> {
+    await this._post("/gateway/consensus/cross_group_propose", {
+      slot,
+      value_b64: b64(value),
+      groups: groups.map((g) => ({
+        group:  g.group,
+        quorum: g.quorum ?? 0.5,
+        veto:   g.veto   ?? false,
+      })),
+    });
+  }
+
+  /**
    * Appends `value` to the named log stream.
    * Returns the HLC timestamp (use as cursor for `scanLog` or `subscribeLog`).
    */

@@ -13,7 +13,7 @@ three-layer substrate for AI agent fleets and storage replication:
 |---|---|---|
 | **I — KV store** | Last-write-wins state propagation over TCP; anti-entropy synced; every key has a TTL. | `src/store.rs`, `src/connection.rs`, `src/framing.rs`, `src/writer.rs`, `src/seen.rs` |
 | **II — Signal mesh** | Ephemeral scoped events with per-node admission boundaries; pheromone-style opacity composition. | `src/signal.rs`, `src/agent/signal_ops.rs`, `src/agent/opacity.rs` |
-| **III — Consensus** | Epidemic group / system proposals with optional Hard topology enforcement. | `src/consensus.rs`, `src/agent/consensus_ops.rs` |
+| **III — Consensus** | Epidemic group / system / cross-group proposals with optional Hard topology enforcement. `GroupQuorum` + `cross_group_propose` for multi-voting-bloc decisions. | `src/consensus.rs`, `src/agent/consensus_ops.rs` |
 | **Security (tls feature)** | mTLS transport, Ed25519 node identity, signed consensus payloads. | `src/tls.rs`, `src/stream.rs` |
 
 Plus a capability / requirement subsystem with emergent groups, inter-group
@@ -95,7 +95,7 @@ for the index.
 - `cargo build --lib`, `cargo test --lib`, `cargo clippy --lib --tests`
 - `cargo build --lib --features metrics` to include the Prometheus scrape endpoint
 - `cargo build --lib --features a2a` to include the A2A protocol adapter
-- 233 tests at HEAD (with `--features a2a`); 229 without; clippy at baseline 61
+- 239 tests at HEAD (with `--features a2a`); 235 without; clippy at baseline 61
   (pre-existing `field_reassign_with_default` in test code).
 - Wire version is currently **v10** (`PREV_WIRE_VERSION = 9` — rolling upgrade window open).
   v10 adds `WireMessage::SignedData` for Ed25519-signed KV writes under the `tls` feature.

@@ -138,16 +138,18 @@ pub(crate) fn emit_signal(
         deliver_locally(&ctx.signal_boundary, &ctx.signal_handlers, &sig, combined);
     }
     let hint = match &scope {
-        SignalScope::System           => ForwardHint::All,
-        SignalScope::Group(name)      => ForwardHint::Group(name.clone()),
-        SignalScope::Individual(peer) => ForwardHint::Individual(peer.clone()),
+        SignalScope::System             => ForwardHint::All,
+        SignalScope::Group(name)        => ForwardHint::Group(name.clone()),
+        SignalScope::Individual(peer)   => ForwardHint::Individual(peer.clone()),
+        SignalScope::Groups(_)          => ForwardHint::All,
     };
     #[cfg(feature = "metrics")]
     {
         let scope_label = match &scope {
-            SignalScope::System        => "system",
-            SignalScope::Group(_)      => "group",
-            SignalScope::Individual(_) => "node",
+            SignalScope::System          => "system",
+            SignalScope::Group(_)        => "group",
+            SignalScope::Individual(_)   => "node",
+            SignalScope::Groups(_)       => "groups",
         };
         metrics::counter!("gossip_signals_emitted_total", "scope" => scope_label).increment(1);
     }
@@ -181,9 +183,10 @@ pub(crate) async fn emit_signal_async(
         payload: payload.clone(), sender: ctx.node_id.clone(), nonce,
     }, combined);
     let hint = match &scope {
-        SignalScope::System           => ForwardHint::All,
-        SignalScope::Group(name)      => ForwardHint::Group(name.clone()),
-        SignalScope::Individual(peer) => ForwardHint::Individual(peer.clone()),
+        SignalScope::System             => ForwardHint::All,
+        SignalScope::Group(name)        => ForwardHint::Group(name.clone()),
+        SignalScope::Individual(peer)   => ForwardHint::Individual(peer.clone()),
+        SignalScope::Groups(_)          => ForwardHint::All,
     };
     dispatch_gossip_send(
         &ctx.gossip_txs,

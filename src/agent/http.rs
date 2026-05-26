@@ -30,6 +30,7 @@
 //! - `POST   /gateway/mailbox/deliver`         — deliver an event to a target's mailbox
 //! - `GET    /gateway/shard/{ns}/{name}?key=K` — deterministic shard owner for a key
 //! - `POST   /gateway/shard/emit`              — emit signal to consistent-hash owner
+//! - `POST   /gateway/consensus/cross_group_propose` — multi-group independent-quorum proposal
 //!
 //! Started when `GossipConfig::http_port` is `Some(port)`. Shuts down cleanly
 //! when the agent's broadcast shutdown signal fires.
@@ -160,6 +161,8 @@ pub(super) async fn run_http_server(
         // ── Cluster sharding ──────────────────────────────────────────────
         .route("/gateway/shard/{ns}/{name}",               get(gw_shard_owner))
         .route("/gateway/shard/emit",                     post(gw_shard_emit))
+        // ── Cross-group consensus ─────────────────────────────────────────
+        .route("/gateway/consensus/cross_group_propose",  post(gw_cross_group_propose))
         .with_state(state);
 
     let app = if let Some(extra) = extra_routes {
@@ -1192,6 +1195,56 @@ async fn overlay_group_propose(
             None,
         )
         .await
+}
+
+// ── Cross-group consensus ─────────────────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct CrossGroupProposeBody {
+    slot:      String,
+    value_b64: Option<String>,
+    groups:    Vec<crate::consensus::GroupQuorum>,
+}
+
+/// `POST /gateway/consensus/cross_group_propose` — multi-group proposal.
+///
+/// Body: `{"slot": "S", "value_b64": "...", "groups": [{"group":"G","quorum":0.5,"veto":false}]}`
+/// Returns `{"ok":true}` on commit, or an error status.
+async fn gw_cross_group_propose(
+    State(ctx): State<Arc<HttpCtx>>,
+    Json(body):  Json<CrossGroupProposeBody>,
+) -> impl IntoResponse {
+    use base64::Engine as _;
+    let value = if let Some(b64) = body.value_b64.as_deref() {
+        match base64::engine::general_purpose::STANDARD.decode(b64) {
+            Ok(v)  => Bytes::from(v),
+            Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({"error":"invalid base64 value"}))).into_response(),
+        }
+    } else {
+        Bytes::new()
+    };
+    if body.groups.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error":"groups must not be empty"}))).into_response();
+    }
+
+    let engine = overlay_make_engine(&ctx.agent_ctx);
+    let result = engine.cross_propose(
+        Arc::from(body.slot.as_str()),
+        value,
+        &body.groups,
+        crate::consensus::ConsensusConfig::default(),
+    ).await;
+
+    match result {
+        crate::consensus::ConsensusResult::Committed { .. } =>
+            Json(json!({ "ok": true })).into_response(),
+        crate::consensus::ConsensusResult::Timeout { ballots_tried, .. } =>
+            (StatusCode::GATEWAY_TIMEOUT, Json(json!({ "ok": false, "error": format!("consensus timed out after {ballots_tried} ballot(s)") }))).into_response(),
+        crate::consensus::ConsensusResult::Superseded { .. } =>
+            (StatusCode::CONFLICT, Json(json!({ "ok": false, "error": "superseded" }))).into_response(),
+        crate::consensus::ConsensusResult::TopologyUnsatisfied { .. } =>
+            (StatusCode::CONFLICT, Json(json!({ "ok": false, "error": "topology_unsatisfied" }))).into_response(),
+    }
 }
 
 // ── Overlay: consistent KV ────────────────────────────────────────────────────

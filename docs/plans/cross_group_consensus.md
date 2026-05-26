@@ -1,5 +1,8 @@
 # Cross-Group Consensus Federation — Design Reference
 
+> **Status: IMPLEMENTED** — `cross_group_propose`, `GroupQuorum`, `SignalScope::Groups` are live as of 2026-05-26.
+> This document is retained as a design record and use-case reference.
+
 > **HTML version:** [`docs/cross_group_consensus.html`](../cross_group_consensus.html)
 
 ## What this is

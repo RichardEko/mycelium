@@ -385,9 +385,10 @@ pub(crate) async fn handle_connection(
                 // in-place at a fixed offset (unlike Data frames). Full re-encode required.
                 if ttl > 1 {
                     let hint = match &scope {
-                        SignalScope::System           => ForwardHint::All,
-                        SignalScope::Group(name)      => ForwardHint::Group(name.clone()),
-                        SignalScope::Individual(peer) => ForwardHint::Individual(peer.clone()),
+                        SignalScope::System             => ForwardHint::All,
+                        SignalScope::Group(name)        => ForwardHint::Group(name.clone()),
+                        SignalScope::Individual(peer)   => ForwardHint::Individual(peer.clone()),
+                        SignalScope::Groups(_)          => ForwardHint::All,
                     };
                     let shard = shard_for_key(&kind, n_shards);
                     let mut fwd_buf = BytesMut::with_capacity(recv_buf.len());
