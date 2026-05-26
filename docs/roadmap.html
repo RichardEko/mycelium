@@ -624,6 +624,7 @@
     <span class="badge"><span class="dot dot-live"></span> KV Write Signing (wire v10, Ed25519) — Complete</span>
     <span class="badge"><span class="dot dot-live"></span> Layer 4: A2A Adapter (<code>a2a</code> feature) — Complete</span>
     <span class="badge"><span class="dot dot-live"></span> Layer 5: Observability (Prometheus / Grafana) — Complete</span>
+    <span class="badge"><span class="dot dot-live"></span> Cross-Group Consensus (<code>cross_group_propose</code> · <code>GroupQuorum</code>) — Complete</span>
   </div>
 </div>
 
@@ -1017,14 +1018,15 @@
         <div class="stack-num sn-2" style="background:rgba(210,168,255,0.05);color:var(--accent3);border-right:2px solid var(--accent3);">Consen-<br>sus</div>
         <div class="stack-body">
           <div class="stack-title">Consensus <span class="phase-tag tag-done">Complete</span></div>
-          <p class="stack-desc">Lightweight epidemic two-phase agreement on top of the signal mesh — no extra wire format, no separate consensus port. All consensus messages ride existing Signal frames. Committed values are written to <code>consensus/committed/{slot}</code> and anti-entropy-synced to late joiners. Opacity-aware: opaque members are excluded from quorum calculation.</p>
+          <p class="stack-desc">Lightweight epidemic two-phase agreement on top of the signal mesh — no extra wire format, no separate consensus port. All consensus messages ride existing Signal frames. Committed values are written to <code>consensus/committed/{slot}</code> and anti-entropy-synced to late joiners. Opacity-aware: opaque members are excluded from quorum calculation. Cross-group federation allows multiple voting blocs to each independently reach quorum before a proposal commits.</p>
           <div class="chips">
             <span class="chip">ConsensusEngine</span>
             <span class="chip">group_propose · system_propose</span>
+            <span class="chip">cross_group_propose · GroupQuorum</span>
             <span class="chip">ConsensusResult</span>
             <span class="chip">OpaqueRecompute</span>
             <span class="chip">epidemic two-phase voting</span>
-            <span class="chip">consensus_kind · consensus_ns</span>
+            <span class="chip">SignalScope::Groups</span>
           </div>
         </div>
       </div>
@@ -1573,6 +1575,7 @@ config.locality_path = <span class="fn">vec!</span>[<span class="str">"az1"</spa
         <tr><td>Consul: linearizable KV</td><td><code>consistent_set</code> / <code>consistent_get</code></td><td>ConsensusEngine ✓</td></tr>
         <tr><td>Consul: distributed locks</td><td><code>distributed_lock</code></td><td>ConsensusEngine ✓</td></tr>
         <tr><td>Consul: leader election</td><td><code>elect_leader</code></td><td><code>group_propose</code> ✓</td></tr>
+        <tr><td>Multi-AZ / multi-role ratification</td><td><code>cross_group_propose</code> + <code>GroupQuorum</code></td><td><code>ConsensusEngine</code> + <code>SignalScope::Groups</code> ✓</td></tr>
         <tr><td>Kafka: ordered log</td><td><code>append</code> / <code>subscribe_log</code> / <code>scan_log</code></td><td>HLC + gossip KV ✓</td></tr>
         <tr><td>Kafka: consumer groups</td><td><code>subscribe_log_group</code> + offset KV</td><td><code>consistent_set</code> + capability groups ✓</td></tr>
         <tr><td>Kafka: log compaction</td><td><code>compact_log</code></td><td>tombstone mechanism ✓</td></tr>
@@ -2364,6 +2367,7 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
         <tr><td>Cluster Sharding (<code>shard_for</code> / <code>emit_sharded</code> — FNV-1a consistent hash ring, HTTP gateway, Python + TypeScript SDKs)</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-25</td></tr>
         <tr><td>KV Write Signing (wire v10 · <code>WireMessage::SignedData</code> · Ed25519 over hop-invariant fields · fail-open for unknown signers)</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-25</td></tr>
         <tr><td>A2A Adapter (<code>a2a</code> cargo feature · <code>GET /.well-known/agent.json</code> · <code>POST /a2a</code> JSON-RPC · SSE streaming · Python + TypeScript <code>A2aClient</code>)</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-25</td></tr>
+        <tr><td>Cross-Group Consensus Federation (<code>cross_group_propose</code> · <code>GroupQuorum { group, quorum, veto }</code> · <code>SignalScope::Groups</code> · single ballot round — atomic multi-bloc commit · <code>POST /gateway/consensus/cross_group_propose</code> · Python + TypeScript SDKs)</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-26</td></tr>
       </tbody>
     </table>
   </div>
@@ -2393,21 +2397,6 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
           <td style="color:#94a3b8; font-size:0.9em;">
             A real workload hitting the AFN gossip fan-out ceiling — scatter-gather at
             thousands of items/second, or pipelines requiring WAL-backed restart recovery.
-          </td>
-        </tr>
-        <tr>
-          <td>
-            <strong>Cross-group consensus federation</strong> — <code>cross_group_propose</code>
-            where multiple capability groups each act as an independent voting bloc; the proposal
-            commits only when every group reaches its required quorum. Supports per-group quorum
-            fractions and veto rights. Built on the existing <code>ConsensusEngine</code>; modest
-            extension (~100 lines). Use cases: multi-AZ durability, human-in-the-loop ratification,
-            compliance veto, multi-department agent fleets.
-          </td>
-          <td><a href="plans/cross_group_consensus.md" style="color:var(--accent);">plans/cross_group_consensus.md</a></td>
-          <td style="color:#94a3b8; font-size:0.9em;">
-            Multi-AZ deployments requiring per-AZ quorum, compliance groups that must ratify
-            agent proposals, or multi-department fleets where no single group should dominate a vote.
           </td>
         </tr>
       </tbody>
@@ -2622,8 +2611,8 @@ config.tls = Some(TlsConfig::default());</pre>
 
   <!-- ── Footer ── -->
   <div style="margin-top:72px; padding-top:24px; border-top:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
-    <span style="font-size:12px; color:var(--muted);">mycelium · Engineering Roadmap · 2026-05-25</span>
-    <span style="font-size:12px; color:var(--muted);">All features complete · 233 tests · Cluster Sharding · KV Write Signing (wire v10) · A2A Adapter shipped</span>
+    <span style="font-size:12px; color:var(--muted);">mycelium · Engineering Roadmap · 2026-05-26</span>
+    <span style="font-size:12px; color:var(--muted);">All features complete · 239 tests · Cluster Sharding · KV Write Signing (wire v10) · A2A Adapter · Cross-Group Consensus shipped</span>
   </div>
 
 </div>
