@@ -53,6 +53,7 @@ run_scenario "07 capability discovery"       "$SCENARIOS_DIR/07_capability_disco
 run_scenario "08 scatter-gather fan-out"     "$SCENARIOS_DIR/08_scatter_gather.sh"
 run_scenario "09 invoke.bulk large payload"  "$SCENARIOS_DIR/09_invoke_bulk.sh"
 run_scenario "10 event mailbox delivery"     "$SCENARIOS_DIR/10_event_mailbox.sh"
+run_scenario "11 agentic flow network (AFN)" "$SCENARIOS_DIR/11_afn_pipeline.sh"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 banner "Results"

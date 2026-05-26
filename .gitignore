@@ -1,5 +1,12 @@
 /target
 .DS_Store
+GO_TO_MARKET.md
+docs/go_to_market.html
+docs/presentation.html
+docs/v30_mycelium_strategy.html
+docs/fluid_pipeline_plan.html
+docs/fluid_pipeline_viz.html
+docs/flow_networks.html
 
 # Python
 __pycache__/

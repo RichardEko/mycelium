@@ -1242,7 +1242,7 @@ Skills listed in a manifest's `tools` array can call other skills by name at
 inference time — the mesh routes sub-invocations automatically and the audit
 trail captures the full causal chain.
 
-See [`skillrunner.html`](skillrunner.html) for the full manifest
+See [`skillrunner.html`](docs/skillrunner.html) for the full manifest
 reference, OTEL integration, concurrency controls, and the audit trail format.
 
 See [`examples/skills/`](examples/skills/) for ready-to-run manifests and

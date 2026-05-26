@@ -1,0 +1,78 @@
+# Agentic Flow Networks — Fluid Pipeline Demo
+#
+# Usage:
+#   cd examples/fluid_pipeline
+#   docker compose up --build --scale worker=10
+#
+# Topology:
+#   10 × worker    — identical fluid workers, each carries a Mycelium gossip node
+#                    + Python process serving all 4 stage skills concurrently
+#   1 × coordinator — seeds 200 work items, runs the drain-stage fan-out loops
+#   1 × postgres    — durable sink for stage-D results
+#
+# All workers peer through the coordinator node. Work flows:
+#   pipeline/stage-a/{id}  (parse)
+#   pipeline/stage-b/{id}  (enrich)
+#   pipeline/stage-c/{id}  (score — simulates LLM latency, configurable)
+#   pipeline/stage-d/{id}  (aggregate → postgres)
+#   pipeline/done/{id}
+
+services:
+
+  # ── Coordinator ───────────────────────────────────────────────────────────────
+  coordinator:
+    build:
+      context: ../..
+      dockerfile: examples/fluid_pipeline/coordinator/Dockerfile
+    container_name: afn-coordinator
+    hostname: coordinator
+    environment:
+      MYCELIUM_PEERS:     ""          # coordinator is the seed — no upstream peers
+      MYCELIUM_HTTP_PORT: "8300"
+      RUST_LOG:           "warn,mycelium=info"
+      POSTGRES_DSN:       "postgresql://pipeline:pipeline@postgres:5432/pipeline"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - afn
+    restart: "no"
+
+  # ── Fluid worker pool ─────────────────────────────────────────────────────────
+  worker:
+    build:
+      context: ../..
+      dockerfile: examples/fluid_pipeline/worker/Dockerfile
+    environment:
+      MYCELIUM_PEERS:     "coordinator:57000"
+      MYCELIUM_HTTP_PORT: "8300"
+      RUST_LOG:           "warn"
+      STAGE_C_SLEEP:      "0.3"    # seconds; increase to make bottleneck more visible
+      POSTGRES_DSN:       "postgresql://pipeline:pipeline@postgres:5432/pipeline"
+    depends_on:
+      - coordinator
+    networks:
+      - afn
+    restart: "no"
+
+  # ── PostgreSQL sink ───────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: afn-postgres
+    environment:
+      POSTGRES_DB:       pipeline
+      POSTGRES_USER:     pipeline
+      POSTGRES_PASSWORD: pipeline
+    volumes:
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test:     ["CMD-SHELL", "pg_isready -U pipeline -d pipeline"]
+      interval: 3s
+      timeout:  5s
+      retries:  10
+    networks:
+      - afn
+
+networks:
+  afn:
+    driver: bridge

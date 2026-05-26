@@ -99,3 +99,9 @@ for the index.
   (pre-existing `field_reassign_with_default` in test code).
 - Wire version is currently **v10** (`PREV_WIRE_VERSION = 9` — rolling upgrade window open).
   v10 adds `WireMessage::SignedData` for Ed25519-signed KV writes under the `tls` feature.
+- **Agentic Flow Networks demo**: `examples/fluid_pipeline/` — 10-worker fluid pool,
+  KV ring as distributed buffer, 4-stage news article pipeline. Run with
+  `docker compose up --build --scale worker=10`. See `docs/flow_networks.html` for the
+  concept document and `docs/fluid_pipeline_viz.html` for the visualisation.
+- Integration test count: **11 scenarios** (scenario 11 = AFN pipeline test: substrate
+  unity, topology emergence, and stage-transition pattern via `/gateway/kv` + `/gateway/capability/`).

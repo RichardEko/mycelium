@@ -1174,7 +1174,7 @@ Concrete projects in the A2A discovery space and where Mycelium sits relative to
 | **python-a2a discovery module** | Python library: AgentRegistry + DiscoveryClient + heartbeat | A client-side API wrapper, not infrastructure. `mycelium-py`'s `A2aClient` covers the same API surface; the Mycelium node is the actual registry. |
 | **ANS (IETF Internet-Draft)** | DNS-like, PKI-backed, protocol-agnostic, internet-scale | Complementary. ANS is cross-org/internet-scope; Mycelium is cluster-scope. A Mycelium cluster could register a single endpoint with ANS. |
 | **AGNTCY ADS** | DHT content routing, OCI/ORAS storage, OASF records, provenance/attestation | ADS targets static catalogs with content-addressed immutability. Mycelium is mutable LWW with TTL — better for ephemeral, dynamic agents. Complementary for different concerns. |
-| **NANDA / AgentFacts** | Open agentic-web infrastructure — identity, attestation, cross-protocol bridges | Internet-scale, cross-org identity layer. Mycelium doesn't do cross-org identity; NANDA doesn't do intra-cluster routing or epidemic dispatch. |
+| **NANDA / AgentFacts** | Three-layer internet-scale index: lean AgentAddr → W3C VC AgentFacts → dynamic resolver. "Quilt" federation of enterprise, gov, Web3, civil-society registries. | Natural federation layer above Mycelium. A single NANDA `AgentAddr` pointing at a cluster's `/.well-known/agent.json` is enough — no code changes. NANDA covers cross-org discovery and VC-signed attestation; Mycelium covers everything inside the cluster. |
 | **Microsoft Agent 365 / Entra Agent ID** | Enterprise inventory + governance plane, Azure-integrated | Platform play. Mycelium is the library an operator would embed; Agent 365 is what an enterprise wraps around it. |
 | **MCP Registry** | App-store / static catalog for MCP servers | Static and human-curated. Mycelium's `tools/` KV namespace gossips MCP tool availability dynamically — no registration step. |
 
@@ -1203,8 +1203,71 @@ Concrete projects in the A2A discovery space and where Mycelium sits relative to
 - **Enterprise governance / compliance plane** — Agent 365/Entra. Mycelium has an audit trail
   (HLC causal log + OTEL) but not an admin console or SSO integration.
 
-**Three-layer stack for a mature deployment:** Mycelium for intra-cluster routing and execution,
-ANS for cross-cluster resolution, AGNTCY ADS for auditable skill provenance.
+**The natural stack is two layers: Mycelium for the cluster, NANDA for the internet.**
+Mycelium's `/.well-known/agent.json` endpoint is already a conforming A2A server; a single NANDA
+`AgentAddr` record pointing at the cluster's A2A gateway is all that's needed to federate with the
+broader agent web. No intermediate layer required.
+
+ANS and AGNTCY ADS are niche alternatives, not required steps — and both niches are addressable
+inside Mycelium if needed:
+- **ANS** — targets DNS/PKI shops that won't adopt W3C VCs. Mycelium already has Ed25519 node
+  identity and mTLS; an ANS-compatible naming adapter would be a thin layer over existing
+  infrastructure, not a new dependency.
+- **AGNTCY ADS** — targets OCI/ORAS immutable artifact storage and OASF schema compliance.
+  Mycelium's `tools/` KV namespace already gossips skill availability dynamically; an OCI-backed
+  snapshot export (for provenance / audit) could be added as a feature without changing the
+  runtime model.
+
+In either case the two-layer stack holds: Mycelium handles it internally, NANDA federates it
+externally.
+
+#### NANDA — Paper Analysis (2026-05-25)
+
+Source papers: *"Upgrade or Switch: Do We Need a Next-Gen Trusted Architecture for the Internet
+of AI Agents?"* (2506.12003v2) and *"Beyond DNS: Unlocking the Internet of AI Agents via the
+NANDA Index and Verified AgentFacts"* (2507.14263v1).
+
+**1. NANDA's "Switch path" table is Mycelium's architecture spec.**
+Table 3 of 2506.12003 defines the desired Update/Revocation Latency for the clean-slate path as
+*"Gossip-based or CRDT ledger with millisecond write propagation and automatic tombstoning."* That
+is the exact description of Mycelium's KV substrate. Wire v10's `WireMessage::SignedData`
+(Ed25519-signed KV gossip) is the "trusted" extension NANDA identifies as mandatory for that path.
+
+**2. NANDA formally validates Mycelium's deployment scope.**
+Table 4 of 2507.14263 categorises A2A Agent Cards as *"best-fit for stable SaaS agents inside a
+single marketplace."* Mycelium is exactly that — a cluster-scoped deployment. The paper is not
+calling single-marketplace limited; it is saying that is where A2A Agent Cards belong. Mycelium's
+A2A adapter sits squarely in the intended niche.
+
+**3. Zero-change upgrade path from Mycelium A2A to NANDA AgentFacts.**
+2507.14263 states explicitly: *"any conforming A2A server can embed its existing card as a `skills`
+extension [in AgentFacts], gaining cryptographic attestation, privacy paths, and TTL-based routing
+without altering its runtime logic."* Mycelium's `/.well-known/agent.json` endpoint is already a
+conforming A2A server. Upgrading to NANDA registration requires no Mycelium code changes — just an
+external AgentFacts document pointing at the existing endpoint.
+
+**4. Mycelium as an enterprise "Quilt" shard.**
+NANDA's federation model (the "Quilt") explicitly includes enterprise registries as first-class
+participants alongside government, Web3, and civil-society registries. A Mycelium cluster can
+register as one enterprise shard: a single NANDA `AgentAddr` record pointing at the cluster's A2A
+gateway, with the full capability ring queryable by external resolvers. No Mycelium internals need
+to be exposed.
+
+**5. The "Capability Threshold" maps cleanly to Mycelium's scope boundary.**
+Paper 1 identifies a crossover point where DNS/PKI assumptions break at scale: 24-48 h propagation,
+CRL/OCSP revocation lag, missing capability metadata in RDAP/WHOIS. This threshold formalises where
+Mycelium's work ends and external infrastructure begins. Mycelium lives entirely below it —
+sub-millisecond local writes, no DNS, Ed25519 identity already in place. NANDA addresses what
+happens when you need to reach *across* that boundary to another cluster or org. The two projects
+are adjacent layers, not competing ones.
+
+**6. Boundary-Aware Naming ≈ Mycelium locality resolution.**
+Paper 1's "Configurable Search Paths" proposal (split-horizon DNS for agents — queries resolve
+differently depending on whether the caller is inside or outside the enterprise boundary) maps
+directly to Mycelium's locality-aware resolution and group-scoped signal boundaries. NANDA is
+building at DNS scale what Mycelium already does at cluster scale. If NANDA's Configurable Search
+Paths land, a Mycelium cluster could advertise itself as one named search-path scope, making
+intra-cluster fast-path resolution transparent to cross-org callers.
 
 ---
 
@@ -1720,4 +1783,16 @@ what thresholds should trigger alerts.
 
 None of these require architectural changes. The substrate is sound; these are engineering
 completions on top of it.
+
+---
+
+## Deferred Patterns
+
+These are well-designed ideas that were evaluated and deliberately shelved — not because
+they are wrong, but because they should be driven by real production demand rather than
+built speculatively. Full design documents are in `docs/plans/`.
+
+| Pattern | File | Trigger to revisit |
+|---|---|---|
+| `mycelium-tuple-space` companion crate — single-copy pipeline buffer with blocking take, WAL, primary/secondary failover | [`docs/plans/mycelium-tuple-space.md`](docs/plans/mycelium-tuple-space.md) | A real workload hitting the AFN gossip fan-out ceiling (scatter-gather at thousands of items/second, or pipeline requiring WAL-backed restart recovery) |
 
