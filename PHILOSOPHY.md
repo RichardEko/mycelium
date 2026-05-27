@@ -85,20 +85,33 @@ declare capabilities they provide and requirements they need; a resolver matches
 The primitive is correct: declarative matching between providers and consumers, with
 the resolver handling wiring.
 
-What OSGi got wrong: resolution is *static* — performed once at bundle-install time.
-This makes it unsuitable for dynamic systems where participants come and go.
+What OSGi got wrong — at least in mainstream adoption — was that resolution was treated
+as *static*: performed once at bundle-install time. This made it unsuitable for dynamic
+systems where participants come and go.
 
-Mycelium keeps the primitive (capabilities, requirements, filter-based matching) and
-makes evaluation *continuous*. Capabilities appear and disappear at runtime. Requirements
-are re-evaluated against the current mesh state. Emergent groups form and dissolve
-dynamically. The resolver runs on every relevant KV change, not once at startup.
+**Paremus Service Fabric** (circa 2010–2015) demonstrated that the OSGi Requirements &
+Capabilities model could be applied as a *continuous runtime* resolver — re-resolving
+dependencies as services appeared, disappeared, and changed, and adapting the running
+system accordingly rather than requiring a redeploy. The concept was sound and the
+implementation worked. The market was not ready for it: the industry reached instead for
+simpler container-based composition (Docker, Kubernetes), trading dynamic elegance for
+operational familiarity. Paremus proved the idea; the timing was wrong.
+
+Mycelium inherits this continuous-resolution model directly. Capabilities appear and
+disappear at runtime. Requirements are re-evaluated against the current mesh state.
+Emergent groups form and dissolve dynamically. The resolver runs on every relevant KV
+change, not once at startup. The difference from Paremus is substrate: Mycelium's
+resolution runs over a gossip KV layer rather than an OSGi container registry, making
+it broker-free, embeddable, and tolerant of network partition.
 
 ### Jini Leases
 
-Jini (Sun Microsystems, 1998) introduced the insight that distributed resource
-registrations should *decay* rather than persist indefinitely. A service holds a lease
-on its registration; if it does not renew, the registration expires. This provides
-implicit failure detection without requiring an explicit deregistration protocol.
+Jini (Sun Microsystems, 1998; see Waldo et al., *The Jini Specification*, Addison-Wesley
+1999, and the architectural overview white paper *Jini Architectural Overview*, Sun
+Microsystems Technical Report, January 1999) introduced the insight that distributed
+resource registrations should *decay* rather than persist indefinitely. A service holds
+a lease on its registration; if it does not renew, the registration expires. This
+provides implicit failure detection without requiring an explicit deregistration protocol.
 
 The insight is correct. The implementation was protocol-heavy: explicit `Lease` objects,
 `renew()` RPCs, a lease manager, explicit cancellation.
@@ -216,4 +229,7 @@ substrate properties — as Holland would have wanted.
 - John Holland — *Complexity: A Very Short Introduction* (Oxford, 2014)
 - Marco Dorigo & Thomas Stützle — *Ant Colony Optimization* (MIT Press, 2004) — stigmergy in detail
 - OSGi Alliance — *OSGi Core Release 8 Specification*, Chapter 27: Capabilities and Requirements
-- W. Keith Edwards — *Core Jini* (2nd ed., Prentice Hall, 2000) — lease model, Chapter 4
+- Jim Waldo et al. — *Jini Architectural Overview*, Sun Microsystems Technical Report (January 1999) — the founding white paper
+- Ken Arnold, Bryan O'Sullivan, Robert Scheifler, Jim Waldo, Ann Wollrath — *The Jini Specification* (Addison-Wesley, 1999) — lease model in full
+- W. Keith Edwards — *Core Jini* (2nd ed., Prentice Hall, 2000) — accessible treatment of the lease model, Chapter 4
+- Paremus Service Fabric — runtime OSGi Requirements & Capabilities resolution; the direct conceptual predecessor to Mycelium's continuous capability resolver, predating widespread agent infrastructure by a decade
