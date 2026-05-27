@@ -1,0 +1,1003 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mycelium — Architectural Philosophy</title>
+<style>
+  :root {
+    --bg:         #0d1117;
+    --surface:    #161b22;
+    --surface2:   #1c2128;
+    --surface3:   #21262d;
+    --border:     #30363d;
+    --accent:     #58a6ff;
+    --accent2:    #3fb950;
+    --accent3:    #d2a8ff;
+    --accent4:    #ffa657;
+    --accent5:    #ff7b72;
+    --muted:      #8b949e;
+    --text:       #e6edf3;
+    --text2:      #c9d1d9;
+    --radius:     8px;
+    --radius-lg:  14px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif;
+    font-size: 15px;
+    line-height: 1.75;
+    padding-bottom: 120px;
+  }
+
+  /* ── Hero ───────────────────────────────────────────────────────── */
+  .hero {
+    background: radial-gradient(ellipse at 70% 0%,   rgba(210,168,255,0.08) 0%, transparent 55%),
+                radial-gradient(ellipse at 15% 90%,  rgba(88,166,255,0.06)  0%, transparent 50%),
+                radial-gradient(ellipse at 50% 50%,  rgba(63,185,80,0.03)   0%, transparent 70%),
+                var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 80px 40px 64px;
+    text-align: center;
+  }
+  .hero-eyebrow {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent3);
+    background: rgba(210,168,255,0.08);
+    border: 1px solid rgba(210,168,255,0.2);
+    border-radius: 20px;
+    padding: 5px 16px;
+    margin-bottom: 28px;
+  }
+  .hero h1 {
+    font-size: clamp(34px, 5vw, 52px);
+    font-weight: 800;
+    letter-spacing: -0.025em;
+    line-height: 1.1;
+    margin-bottom: 20px;
+    background: linear-gradient(135deg, #e6edf3 0%, #8b949e 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .hero h1 em {
+    font-style: normal;
+    background: linear-gradient(135deg, #d2a8ff 0%, #58a6ff 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .hero-sub {
+    font-size: 17px;
+    color: var(--muted);
+    max-width: 620px;
+    margin: 0 auto 44px;
+    line-height: 1.7;
+  }
+  .hero-badges {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  .badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text2);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 6px 14px;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .dot-purple { background: var(--accent3); }
+  .dot-blue   { background: var(--accent); }
+  .dot-orange { background: var(--accent4); }
+  .dot-green  { background: var(--accent2); }
+
+  /* ── Layout ─────────────────────────────────────────────────────── */
+  .container { max-width: 900px; margin: 0 auto; padding: 0 32px; }
+
+  .section { margin-top: 80px; }
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 36px;
+  }
+  .section-head h2 {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--text);
+  }
+  .section-tag {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 4px 12px;
+    border-radius: 20px;
+  }
+  .tag-found   { background: rgba(210,168,255,0.1); color: var(--accent3); border: 1px solid rgba(210,168,255,0.25); }
+  .tag-layer   { background: rgba(88,166,255,0.1);  color: var(--accent);  border: 1px solid rgba(88,166,255,0.25); }
+  .tag-prior   { background: rgba(255,166,87,0.1);  color: var(--accent4); border: 1px solid rgba(255,166,87,0.25); }
+  .tag-heur    { background: rgba(63,185,80,0.1);   color: var(--accent2); border: 1px solid rgba(63,185,80,0.25); }
+  .tag-test    { background: rgba(255,123,114,0.1); color: var(--accent5); border: 1px solid rgba(255,123,114,0.25); }
+  .tag-not     { background: rgba(139,148,158,0.08);color: var(--muted);   border: 1px solid rgba(139,148,158,0.2); }
+  .tag-synth   { background: rgba(57,211,83,0.08);  color: #39d353;        border: 1px solid rgba(57,211,83,0.2); }
+
+  p { color: var(--text2); margin-bottom: 18px; }
+
+  h3 {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text);
+    margin: 36px 0 14px;
+  }
+
+  strong { color: var(--text); }
+
+  code {
+    font-family: "SF Mono","Fira Mono",monospace;
+    font-size: 12.5px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    color: var(--accent3);
+  }
+
+  /* ── Inversion block ────────────────────────────────────────────── */
+  .inversion {
+    display: grid;
+    grid-template-columns: 1fr 56px 1fr;
+    align-items: center;
+    gap: 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    margin: 28px 0;
+  }
+  .inv-col {
+    padding: 28px 24px;
+  }
+  .inv-col-left  { border-right: 1px solid var(--border); }
+  .inv-col-right { border-left: 1px solid var(--border); }
+  .inv-arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    color: var(--accent3);
+    padding: 20px 0;
+  }
+  .inv-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+  .inv-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 8px;
+  }
+  .inv-body {
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.6;
+    margin: 0;
+  }
+  .inv-bad  .inv-title { color: var(--accent5); }
+  .inv-good .inv-title { color: var(--accent2); }
+
+  /* ── Mapping table ──────────────────────────────────────────────── */
+  .map-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 24px 0;
+    font-size: 13px;
+  }
+  .map-table th {
+    background: var(--surface2);
+    color: var(--muted);
+    font-weight: 600;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 10px 16px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+  .map-table td {
+    padding: 11px 16px;
+    color: var(--text2);
+    border-bottom: 1px solid rgba(48,54,61,0.6);
+    vertical-align: top;
+    line-height: 1.55;
+  }
+  .map-table tr:last-child td { border-bottom: none; }
+  .map-table tbody tr:hover td { background: rgba(255,255,255,0.02); }
+  .map-table td:first-child { color: var(--accent3); font-style: italic; }
+  .map-table td:last-child  { color: var(--text2); }
+  .map-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    margin: 24px 0;
+  }
+
+  /* ── Callout ────────────────────────────────────────────────────── */
+  .callout {
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    margin: 24px 0;
+    font-size: 13.5px;
+    line-height: 1.65;
+  }
+  .callout p { margin: 0; }
+  .callout-purple { background: rgba(210,168,255,0.07); border-left: 3px solid var(--accent3); color: var(--text2); }
+  .callout-blue   { background: rgba(88,166,255,0.07);  border-left: 3px solid var(--accent);  color: var(--text2); }
+  .callout-green  { background: rgba(63,185,80,0.07);   border-left: 3px solid var(--accent2); color: var(--text2); }
+  .callout-orange { background: rgba(255,166,87,0.07);  border-left: 3px solid var(--accent4); color: var(--text2); }
+  .callout-red    { background: rgba(255,123,114,0.07); border-left: 3px solid var(--accent5); color: var(--text2); }
+
+  /* ── Lineage timeline ───────────────────────────────────────────── */
+  .lineage {
+    position: relative;
+    margin: 32px 0;
+    padding-left: 32px;
+  }
+  .lineage::before {
+    content: '';
+    position: absolute;
+    left: 11px;
+    top: 8px;
+    bottom: 8px;
+    width: 2px;
+    background: linear-gradient(to bottom, var(--accent3), var(--accent), var(--accent4), var(--accent2));
+    border-radius: 2px;
+  }
+  .lineage-item {
+    position: relative;
+    margin-bottom: 28px;
+  }
+  .lineage-item::before {
+    content: '';
+    position: absolute;
+    left: -25px;
+    top: 7px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--surface3);
+    border: 2px solid var(--accent3);
+  }
+  .lineage-item:nth-child(2)::before { border-color: var(--accent); }
+  .lineage-item:nth-child(3)::before { border-color: var(--accent4); }
+  .lineage-item:nth-child(4)::before { border-color: var(--accent2); box-shadow: 0 0 10px rgba(63,185,80,0.4); }
+  .lineage-date {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  .lineage-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 6px;
+  }
+  .lineage-body {
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.6;
+    margin: 0;
+  }
+  .lineage-tag {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 2px 9px;
+    border-radius: 20px;
+    margin-bottom: 6px;
+  }
+  .lt-concept  { background: rgba(210,168,255,0.1); color: var(--accent3); border: 1px solid rgba(210,168,255,0.2); }
+  .lt-osgijini { background: rgba(88,166,255,0.1);  color: var(--accent);  border: 1px solid rgba(88,166,255,0.2); }
+  .lt-paremus  { background: rgba(255,166,87,0.1);  color: var(--accent4); border: 1px solid rgba(255,166,87,0.2); }
+  .lt-mycelium { background: rgba(63,185,80,0.1);   color: var(--accent2); border: 1px solid rgba(63,185,80,0.2); }
+
+  /* ── Litmus cards ───────────────────────────────────────────────── */
+  .litmus-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 16px;
+    margin: 28px 0;
+  }
+  .litmus-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 24px 22px;
+  }
+  .litmus-num {
+    font-size: 28px;
+    font-weight: 800;
+    color: var(--accent5);
+    opacity: 0.5;
+    line-height: 1;
+    margin-bottom: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  .litmus-q {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 10px;
+    line-height: 1.4;
+  }
+  .litmus-body {
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.6;
+    margin: 0;
+  }
+  .litmus-fail {
+    display: inline-block;
+    margin-top: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent5);
+    background: rgba(255,123,114,0.08);
+    border: 1px solid rgba(255,123,114,0.2);
+    border-radius: 20px;
+    padding: 3px 10px;
+  }
+
+  /* ── Not grid ───────────────────────────────────────────────────── */
+  .not-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    margin: 28px 0;
+  }
+  .not-item {
+    background: var(--surface);
+    padding: 24px 20px;
+  }
+  .not-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent5);
+    margin-bottom: 8px;
+  }
+  .not-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 8px;
+  }
+  .not-body {
+    font-size: 12.5px;
+    color: var(--muted);
+    line-height: 1.6;
+    margin: 0;
+  }
+
+  /* ── Synthesis block ────────────────────────────────────────────── */
+  .synthesis {
+    background: linear-gradient(135deg,
+      rgba(63,185,80,0.06) 0%,
+      rgba(88,166,255,0.04) 50%,
+      rgba(210,168,255,0.06) 100%
+    );
+    border: 1px solid rgba(63,185,80,0.2);
+    border-radius: var(--radius-lg);
+    padding: 36px 32px;
+    margin: 28px 0;
+  }
+  .synthesis-title {
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 18px;
+  }
+  .synthesis-row {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 12px;
+    font-size: 13.5px;
+  }
+  .synthesis-row:last-child { margin-bottom: 0; }
+  .synthesis-src {
+    flex-shrink: 0;
+    width: 160px;
+    color: var(--muted);
+    font-style: italic;
+  }
+  .synthesis-arr { color: var(--accent2); flex-shrink: 0; }
+  .synthesis-out { color: var(--text2); }
+
+  /* ── Reading list ───────────────────────────────────────────────── */
+  .reading-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .reading-list li {
+    display: flex;
+    gap: 14px;
+    align-items: baseline;
+    padding: 14px 0;
+    border-bottom: 1px solid rgba(48,54,61,0.5);
+    font-size: 13.5px;
+  }
+  .reading-list li:last-child { border-bottom: none; }
+  .reading-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    margin-top: 6px;
+    background: var(--accent3);
+  }
+  .reading-list li:nth-child(2) .reading-dot { background: var(--accent3); }
+  .reading-list li:nth-child(3) .reading-dot { background: var(--muted); }
+  .reading-list li:nth-child(4) .reading-dot { background: var(--accent); }
+  .reading-list li:nth-child(5) .reading-dot { background: var(--accent); }
+  .reading-list li:nth-child(6) .reading-dot { background: var(--accent); }
+  .reading-list li:nth-child(7) .reading-dot { background: var(--accent4); }
+  .reading-title {
+    font-weight: 600;
+    color: var(--text);
+  }
+  .reading-note {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 3px;
+  }
+
+  /* ── Nav sidebar ────────────────────────────────────────────────── */
+  .nav-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 48px;
+    padding: 24px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-pill {
+    font-size: 12px;
+    color: var(--muted);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 5px 14px;
+    text-decoration: none;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .nav-pill:hover { color: var(--text); border-color: var(--accent3); }
+
+</style>
+</head>
+<body>
+
+<!-- ── Hero ────────────────────────────────────────────────────────── -->
+<div class="hero">
+  <div class="hero-eyebrow">Mycelium</div>
+  <h1>Architectural <em>Philosophy</em></h1>
+  <p class="hero-sub">
+    The conceptual foundations behind Mycelium's design — and the litmus tests for
+    evaluating changes against them. This is the reference document for maintaining
+    coherence over time.
+  </p>
+  <div class="hero-badges">
+    <span class="badge"><span class="dot dot-purple"></span> Holland — Signals &amp; Boundaries</span>
+    <span class="badge"><span class="dot dot-blue"></span> OSGi R&amp;C · Paremus Service Fabric</span>
+    <span class="badge"><span class="dot dot-orange"></span> Jini Leases</span>
+    <span class="badge"><span class="dot dot-green"></span> Library, not platform</span>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- ── Nav ─────────────────────────────────────────────────────── -->
+  <div class="nav-pills">
+    <a href="#foundations"  class="nav-pill">Foundational Model</a>
+    <a href="#layering"     class="nav-pill">Layering Principle</a>
+    <a href="#prior-art"    class="nav-pill">Prior Art</a>
+    <a href="#ceremony"     class="nav-pill">Strip the Ceremony</a>
+    <a href="#litmus"       class="nav-pill">Litmus Tests</a>
+    <a href="#not"          class="nav-pill">What This Is Not</a>
+    <a href="#synthesis"    class="nav-pill">The Novel Synthesis</a>
+    <a href="#reading"      class="nav-pill">Further Reading</a>
+  </div>
+
+  <!-- ── 1. Foundational Model ────────────────────────────────────── -->
+  <div class="section" id="foundations">
+    <div class="section-head">
+      <h2>Foundational Model</h2>
+      <span class="section-tag tag-found">Holland's Signals &amp; Boundaries</span>
+    </div>
+
+    <p>
+      The architecture is grounded in John Holland's framework for Complex Adaptive Systems
+      as formalised in <em>Signals and Boundaries: Building Blocks for Complex Adaptive
+      Systems</em> (MIT Press, 2012). Holland's core thesis: the behaviour of complex adaptive
+      systems emerges from two and only two primitives.
+    </p>
+
+    <div class="inversion">
+      <div class="inv-col inv-col-left inv-good">
+        <div class="inv-label">Primitive one</div>
+        <div class="inv-title">Signals — unconditional propagation</div>
+        <p class="inv-body">
+          Signals propagate through the medium unconditionally. No signal is withheld from
+          propagation on the basis of who might act on it. The medium floods.
+        </p>
+      </div>
+      <div class="inv-arrow">⟷</div>
+      <div class="inv-col inv-col-right inv-good">
+        <div class="inv-label">Primitive two</div>
+        <div class="inv-title">Boundaries — receptor sets controlling action</div>
+        <p class="inv-body">
+          Each agent holds a boundary — a set of conditions under which it <em>acts</em>
+          on a signal. The boundary controls acting, not receiving. Forwarding is always
+          unconditional.
+        </p>
+      </div>
+    </div>
+
+    <div class="callout callout-purple">
+      <p>
+        <strong>The key inversion.</strong> Conventional distributed systems route messages
+        to known recipients — A wants to affect B, so A sends to B. Holland's model changes
+        the medium and lets any agent whose boundary matches respond. The emitter does not
+        need to know who is listening. Topology does not need to be managed explicitly. The
+        system tolerates churn without stalling because there is no routing table to maintain.
+      </p>
+    </div>
+
+    <h3>Direct mapping to Mycelium</h3>
+    <div class="map-wrap">
+      <table class="map-table">
+        <thead>
+          <tr>
+            <th>Holland concept</th>
+            <th>Mycelium implementation</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Signal propagation — unconditional flooding</td><td>All nodes forward all <code>Signal</code> frames regardless of scope</td></tr>
+          <tr><td>Boundary — receptor set controlling action</td><td><code>Boundary::admits()</code> — controls delivery, never forwarding</td></tr>
+          <tr><td>Stigmergy — state left in the medium</td><td><code>sys/load/{node}/…</code> pheromone keys — opacity written to KV, read by others</td></tr>
+          <tr><td>Tag matching — signals find matching receptors</td><td><code>SignalScope::Group(name)</code> — receptor identity via group membership</td></tr>
+          <tr><td>Building blocks — small recombinable units</td><td><code>CapabilityGroupDef</code> composing filter + provides + requires</td></tr>
+          <tr><td>Meta-dynamics — agents forming coalitions</td><td>Emergent groups: nodes self-join by evaluating their own capabilities</td></tr>
+          <tr><td>Constraint satisfaction across agent coalitions</td><td><code>cross_group_propose</code> — all voting blocs must independently reach quorum</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── 2. Layering Principle ─────────────────────────────────────── -->
+  <div class="section" id="layering">
+    <div class="section-head">
+      <h2>Layering Principle</h2>
+      <span class="section-tag tag-layer">Substrate vs Emergent Concern</span>
+    </div>
+
+    <p>
+      Complexity must emerge from composition at higher layers. It must not be baked into
+      the substrate.
+    </p>
+    <p>
+      The substrate — Layers I and II (KV store and signal mesh) — has no concept of
+      agreement, coordination, or workflow. It propagates bytes and admits signals.
+      Everything else — consensus, capability wiring, sharding, RPC — is layered on top
+      and <em>uses</em> the substrate rather than bypassing it.
+    </p>
+
+    <div class="callout callout-blue">
+      <p>
+        <strong>Consensus is an emergent higher-order concern, not a substrate primitive.</strong>
+        <code>ConsensusEngine</code> is implemented entirely through the signal mesh.
+        <code>PROPOSE</code>, <code>VOTE</code>, and <code>COMMIT</code> are signal payloads
+        riding ordinary <code>Signal</code> frames. The commitment semantics — ballot numbering,
+        quorum checking, KV write on commit — are logic the proposer applies to the signal
+        stream. Layer II has no concept of "agreement." The substrate is unaware that consensus
+        is happening.
+      </p>
+    </div>
+
+    <p>
+      This is the correct separation. If consensus were a substrate primitive, you would
+      have over-specified the foundation for the 90% of interactions that do not require
+      commitment semantics, and you would have constrained what can be built on top.
+    </p>
+
+    <div class="callout callout-green">
+      <p>
+        <strong>The test for any proposed addition:</strong> does this belong in the substrate,
+        or is it a higher-order concern that should use the substrate? If it is higher-order,
+        it must not require changes to the signal propagation or KV replication machinery.
+      </p>
+    </div>
+  </div>
+
+  <!-- ── 3. Prior Art ──────────────────────────────────────────────── -->
+  <div class="section" id="prior-art">
+    <div class="section-head">
+      <h2>Cooptation of Prior Art</h2>
+      <span class="section-tag tag-prior">OSGi · Paremus · Jini</span>
+    </div>
+
+    <p>
+      Two prior frameworks contributed specific primitives that were retained, stripped of
+      their implementation ceremony, and re-expressed as substrate properties.
+    </p>
+
+    <div class="lineage">
+      <div class="lineage-item">
+        <span class="lineage-tag lt-concept">Conceptual framework</span>
+        <div class="lineage-date">2012</div>
+        <div class="lineage-title">John Holland — Signals &amp; Boundaries</div>
+        <p class="lineage-body">
+          Formalises CAS as signal propagation + boundary admission. Provides the theoretical
+          model that explains why unconditional propagation with selective acting is correct
+          for complex adaptive systems.
+        </p>
+      </div>
+      <div class="lineage-item">
+        <span class="lineage-tag lt-osgijini">Primitive: R&amp;C matching</span>
+        <div class="lineage-date">2003 – present</div>
+        <div class="lineage-title">OSGi Requirements &amp; Capabilities</div>
+        <p class="lineage-body">
+          Declarative matching between capability providers and requirement consumers.
+          Correct primitive; made static (deploy-time only) in mainstream adoption.
+        </p>
+      </div>
+      <div class="lineage-item">
+        <span class="lineage-tag lt-paremus">Proved at runtime</span>
+        <div class="lineage-date">2010 – 2015</div>
+        <div class="lineage-title">Paremus Service Fabric</div>
+        <p class="lineage-body">
+          Demonstrated OSGi R&amp;C applied as a <em>continuous runtime resolver</em> —
+          re-resolving as services appeared, disappeared, and changed. Proved the concept.
+          Positioned as infrastructure competing against VMware, Docker, Mesosphere with
+          a small self-funded UK team. The market reached for containers instead. The
+          concept was right; the timing and positioning were not.
+        </p>
+      </div>
+      <div class="lineage-item">
+        <span class="lineage-tag lt-osgijini">Primitive: lease decay</span>
+        <div class="lineage-date">1998</div>
+        <div class="lineage-title">Jini — Lease model</div>
+        <p class="lineage-body">
+          Distributed resource registrations should decay rather than persist indefinitely.
+          Correct insight; implemented as explicit <code>Lease</code> objects with
+          <code>renew()</code> RPCs, a lease manager, and explicit cancellation.
+        </p>
+      </div>
+    </div>
+
+    <h3>OSGi R&amp;C — what was kept and what was discarded</h3>
+    <p>
+      Mycelium keeps the R&amp;C primitive and makes evaluation <strong>continuous</strong>.
+      Capabilities appear and disappear at runtime. Requirements are re-evaluated against the
+      current mesh state. Emergent groups form and dissolve dynamically. The resolver runs on
+      every relevant KV change, not once at startup — exactly what Paremus demonstrated was
+      possible, now implemented over a gossip KV substrate rather than an OSGi container
+      registry, making it broker-free, embeddable, and partition-tolerant.
+    </p>
+
+    <h3>Jini leases — what was kept and what was discarded</h3>
+    <p>
+      Mycelium keeps the decay insight and discards the protocol. Capability KV entries carry
+      a TTL. They evaporate unless the agent keeps re-advertising. There is no lease object,
+      no renewal RPC, no lease manager. The act of remaining alive and active <em>is</em> the
+      renewal — the agent walks the same path and the pheromone trail stays fresh. A dead
+      node's capabilities simply fade.
+    </p>
+
+    <div class="callout callout-orange">
+      <p>
+        <strong>The Paremus lesson — library, not platform.</strong> Positioning Service Fabric
+        as runtime infrastructure placed it in direct competition with VMware, Docker, Mesosphere,
+        and later Kubernetes — companies with enormous resources, existing enterprise relationships,
+        and vast integration surface. A superior architecture cannot win that fight. Mycelium
+        draws the opposite conclusion: the substrate must be a library embedded in the caller's
+        process. No daemon, no control plane, no installer, no orchestrator. The operator's
+        existing infrastructure is irrelevant to Mycelium because Mycelium does not touch it.
+        The library <em>is</em> the infrastructure, running inside the process that needs it.
+      </p>
+    </div>
+  </div>
+
+  <!-- ── 4. Strip the Ceremony ─────────────────────────────────────── -->
+  <div class="section" id="ceremony">
+    <div class="section-head">
+      <h2>The "Strip the Ceremony" Heuristic</h2>
+      <span class="section-tag tag-heur">Design Pattern</span>
+    </div>
+
+    <p>
+      Both OSGi and Jini solved real problems correctly at the conceptual level but carried
+      too much implementation ceremony — explicit managers, lifecycle protocols, object
+      handles. The pattern that produces better architecture:
+    </p>
+
+    <div class="map-wrap" style="margin:24px 0;">
+      <table class="map-table">
+        <thead>
+          <tr><th>Prior art (ceremony)</th><th>Mycelium (substrate property)</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Jini: <code>Lease.renew()</code> RPC + lease manager</td><td>TTL as natural evaporation — re-advertisement is renewal</td></tr>
+          <tr><td>OSGi: static bundle-install resolver</td><td>Continuous evaluation against live KV state</td></tr>
+          <tr><td>Explicit routing tables</td><td>Unconditional propagation + boundary admission</td></tr>
+          <tr><td>Explicit failure detection + deregistration</td><td>Pheromone trail evaporation on TTL expiry</td></tr>
+          <tr><td>Jini: lease manager + explicit cancellation</td><td>Tombstone write + TTL — fading is failure</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout callout-green">
+      <p>
+        <strong>The three steps:</strong> (1) identify the correct <em>concept</em> in the
+        prior work; (2) ask what substrate <em>property</em> produces the same behaviour
+        without an explicit protocol; (3) implement the property and let the behaviour emerge.
+        When a proposed feature requires a manager, a coordinator, an explicit lifecycle
+        protocol, or a renewal RPC, apply this heuristic before accepting it.
+      </p>
+    </div>
+  </div>
+
+  <!-- ── 5. Litmus Tests ───────────────────────────────────────────── -->
+  <div class="section" id="litmus">
+    <div class="section-head">
+      <h2>Litmus Tests for Proposed Changes</h2>
+      <span class="section-tag tag-test">Evaluation Criteria</span>
+    </div>
+
+    <p>
+      Any significant proposed addition must be able to answer these three questions cleanly.
+      If the answers require contortion, the proposal is probably wrong at the architectural
+      level regardless of how useful it sounds.
+    </p>
+
+    <div class="litmus-grid">
+      <div class="litmus-card">
+        <div class="litmus-num">01</div>
+        <div class="litmus-q">Substrate or higher-order concern?</div>
+        <p class="litmus-body">
+          Does this belong in Layer I (KV replication) or Layer II (signal mesh), or is it a
+          higher-order pattern that should be built <em>using</em> those layers? If it is
+          higher-order, it must use the substrate rather than modify it.
+        </p>
+        <span class="litmus-fail">Fail: modifies signal propagation or KV replication</span>
+      </div>
+      <div class="litmus-card">
+        <div class="litmus-num">02</div>
+        <div class="litmus-q">New primitive or composition?</div>
+        <p class="litmus-body">
+          Is this genuinely a new primitive that cannot be expressed as a composition of
+          existing ones? New primitives raise the conceptual surface area for every user and
+          contributor. If the behaviour can be achieved by composing <code>emit</code>,
+          <code>advertise</code>, <code>resolve</code>, <code>propose</code>, or
+          <code>set</code>, it should be.
+        </p>
+        <span class="litmus-fail">Fail: adds a primitive achievable by composition</span>
+      </div>
+      <div class="litmus-card">
+        <div class="litmus-num">03</div>
+        <div class="litmus-q">Protocol or substrate property?</div>
+        <p class="litmus-body">
+          Does this require explicit protocol machinery — a manager, a lifecycle, a renewal
+          RPC, an explicit deregistration — that could instead be expressed as a substrate
+          property? If yes, find the evaporation equivalent.
+        </p>
+        <span class="litmus-fail">Fail: requires a manager, coordinator, or lifecycle RPC</span>
+      </div>
+    </div>
+
+    <div class="callout callout-purple">
+      <p>
+        <strong>The informal check:</strong> "Would Holland approve?" It compresses the whole
+        framework into one question: does this emerge from simple rules interacting, or does it
+        require a manager, a coordinator, or a lifecycle protocol? The latter almost always
+        signals a layer violation or a misidentified primitive.
+      </p>
+    </div>
+  </div>
+
+  <!-- ── 6. What This Is Not ───────────────────────────────────────── -->
+  <div class="section" id="not">
+    <div class="section-head">
+      <h2>What This Architecture Is Not</h2>
+      <span class="section-tag tag-not">Boundary Conditions</span>
+    </div>
+
+    <p>Understanding the boundaries matters as much as understanding the model.</p>
+
+    <div class="not-grid">
+      <div class="not-item">
+        <div class="not-label">Not</div>
+        <div class="not-title">A message broker</div>
+        <p class="not-body">No central broker, no topic registry, no persistent queue. Signals are ephemeral. A node that misses a signal misses it — intentionally. Durable delivery is higher-order, built on KV or consensus.</p>
+      </div>
+      <div class="not-item">
+        <div class="not-label">Not</div>
+        <div class="not-title">A service mesh</div>
+        <p class="not-body">No sidecar, no control plane, no external certificate authority. mTLS is peer-to-peer; the Ed25519 keypair is the node's identity. The mesh is the library.</p>
+      </div>
+      <div class="not-item">
+        <div class="not-label">Not</div>
+        <div class="not-title">An actor framework</div>
+        <p class="not-body">Actors have explicit addresses and explicit lifecycle management. Mycelium nodes have capabilities and boundaries. Topology emerges from capability matching rather than being managed explicitly.</p>
+      </div>
+      <div class="not-item">
+        <div class="not-label">Not</div>
+        <div class="not-title">A platform</div>
+        <p class="not-body">No daemon, no orchestrator, no installer, no control plane. A Rust crate embedded in the process that needs it. The operator's existing infrastructure is irrelevant — Mycelium does not touch it.</p>
+      </div>
+    </div>
+
+    <div class="callout callout-blue">
+      <p>
+        <strong>On consistency:</strong> the KV layer is last-write-wins with HLC causal
+        ordering. This is a deliberate choice, not a concession. For coordination requiring
+        strong agreement, the consensus layer exists. The two tiers are complementary, not
+        redundant — and the choice between them is always the caller's.
+      </p>
+    </div>
+  </div>
+
+  <!-- ── 7. The Novel Synthesis ────────────────────────────────────── -->
+  <div class="section" id="synthesis">
+    <div class="section-head">
+      <h2>The Novel Synthesis</h2>
+      <span class="section-tag tag-synth">Sum &gt; Parts</span>
+    </div>
+
+    <p>
+      No single element of Mycelium is without precedent. The novelty is in the synthesis —
+      and in recognising that ideas from different decades and different domains were all
+      pointing at the same underlying model.
+    </p>
+
+    <div class="synthesis">
+      <div class="synthesis-title">From prior art to synthesis</div>
+      <div class="synthesis-row">
+        <span class="synthesis-src">Holland (2012)</span>
+        <span class="synthesis-arr">→</span>
+        <span class="synthesis-out">Signal/boundary substrate; stigmergy; emergent coalition formation</span>
+      </div>
+      <div class="synthesis-row">
+        <span class="synthesis-src">OSGi R&amp;C (2003+)</span>
+        <span class="synthesis-arr">→</span>
+        <span class="synthesis-out">Capability/requirement matching primitive — made continuous, not static</span>
+      </div>
+      <div class="synthesis-row">
+        <span class="synthesis-src">Paremus (2010–15)</span>
+        <span class="synthesis-arr">→</span>
+        <span class="synthesis-out">Proof that runtime continuous resolution works — and the positioning lesson</span>
+      </div>
+      <div class="synthesis-row">
+        <span class="synthesis-src">Jini (1998)</span>
+        <span class="synthesis-arr">→</span>
+        <span class="synthesis-out">Lease insight re-expressed as TTL evaporation — no protocol, no manager</span>
+      </div>
+      <div class="synthesis-row">
+        <span class="synthesis-src">Synthesis</span>
+        <span class="synthesis-arr">→</span>
+        <span class="synthesis-out">Single embeddable Rust library — no broker, no coordinator, no external dependencies for the core substrate</span>
+      </div>
+    </div>
+
+    <p>
+      The sum is more than the parts because the parts were each solving the same underlying
+      problem from different directions. Holland described the model theoretically. OSGi and
+      Jini approached it pragmatically but with too much ceremony. Paremus proved runtime
+      resolution worked but fought the wrong competitive battle. Mycelium is what you get
+      when you take the concepts, strip the ceremony, position it as a library rather than a
+      platform, and let the behaviour emerge from substrate properties — as Holland would
+      have wanted.
+    </p>
+  </div>
+
+  <!-- ── 8. Further Reading ────────────────────────────────────────── -->
+  <div class="section" id="reading">
+    <div class="section-head">
+      <h2>Further Reading</h2>
+    </div>
+
+    <ul class="reading-list">
+      <li>
+        <span class="reading-dot"></span>
+        <div>
+          <div class="reading-title">John Holland — Signals and Boundaries: Building Blocks for Complex Adaptive Systems</div>
+          <div class="reading-note">MIT Press, 2012 — the primary theoretical reference; foundational for the signal/boundary substrate model</div>
+        </div>
+      </li>
+      <li>
+        <span class="reading-dot"></span>
+        <div>
+          <div class="reading-title">John Holland — Complexity: A Very Short Introduction</div>
+          <div class="reading-note">Oxford University Press, 2014 — tighter distillation of the same ideas; the best entry point</div>
+        </div>
+      </li>
+      <li>
+        <span class="reading-dot"></span>
+        <div>
+          <div class="reading-title">Marco Dorigo &amp; Thomas Stützle — Ant Colony Optimization</div>
+          <div class="reading-note">MIT Press, 2004 — stigmergy and pheromone trail mechanics in depth; the biological basis for opacity composition</div>
+        </div>
+      </li>
+      <li>
+        <span class="reading-dot"></span>
+        <div>
+          <div class="reading-title">OSGi Alliance — OSGi Core Release 8 Specification, Chapter 27: Capabilities and Requirements</div>
+          <div class="reading-note">The formal specification of the R&amp;C model Mycelium coopts for continuous runtime resolution</div>
+        </div>
+      </li>
+      <li>
+        <span class="reading-dot"></span>
+        <div>
+          <div class="reading-title">Jim Waldo et al. — Jini Architectural Overview</div>
+          <div class="reading-note">Sun Microsystems Technical Report, January 1999 — founding white paper; the lease model origin</div>
+        </div>
+      </li>
+      <li>
+        <span class="reading-dot"></span>
+        <div>
+          <div class="reading-title">Ken Arnold, Bryan O'Sullivan, Robert Scheifler, Jim Waldo, Ann Wollrath — The Jini Specification</div>
+          <div class="reading-note">Addison-Wesley, 1999 — full treatment of the lease model; Chapter 4 for the core protocol</div>
+        </div>
+      </li>
+      <li>
+        <span class="reading-dot"></span>
+        <div>
+          <div class="reading-title">Paremus Service Fabric</div>
+          <div class="reading-note">Runtime OSGi Requirements &amp; Capabilities resolution (2010–2015) — the direct conceptual predecessor to Mycelium's continuous capability resolver; proved the concept a decade before the agent infrastructure market was ready for it</div>
+        </div>
+      </li>
+    </ul>
+  </div>
+
+  <!-- ── Footer ───────────────────────────────────────────────────── -->
+  <div style="margin-top:80px; padding-top:24px; border-top:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+    <span style="font-size:12px; color:var(--muted);">mycelium · Architectural Philosophy · 2026-05-27</span>
+    <span style="font-size:12px; color:var(--muted);">Holland · OSGi · Paremus · Jini — stripped of ceremony · expressed as substrate properties</span>
+  </div>
+
+</div>
+</body>
+</html>
