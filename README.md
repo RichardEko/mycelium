@@ -1280,3 +1280,11 @@ Environment variables override both — `GOSSIP_<FIELD_NAME>` for every field.
 | `intern_keys` | `true` | Intern received keys in a process-wide pool so all connection handlers share one `Arc<str>` per distinct key. Disable for workloads with unbounded key spaces (e.g. UUID keys). |
 | `intern_max_keys` | `0` (unlimited) | Maximum keys in the intern pool. New keys bypass interning once reached. Only meaningful when `intern_keys = true`. |
 | `health_check_max_jitter_ms` | `0` | Startup jitter cap (ms) before the first health-check ping. `0` = up to `health_check_interval_secs × 500` ms. Set to a small value (e.g. `50`) in test configs. |
+
+## License
+
+Mycelium is released under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only).
+
+**Open use:** Any project distributed under a compatible open-source license may use Mycelium freely under the AGPL terms. Network-deployed applications using Mycelium must make their source available to users of that service.
+
+**Commercial embedding:** Organisations that need to embed Mycelium in a proprietary product without the AGPL copyleft obligation can obtain a commercial license. Contact [richard.nicholson64@protonmail.com](mailto:richard.nicholson64@protonmail.com) to discuss terms.
