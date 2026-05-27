@@ -1,0 +1,1311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Coordinator Trap — Mycelium Paper Draft</title>
+<style>
+  /* ── Design tokens ───────────────────────────────────────────────── */
+  :root {
+    --bg:        #0d1117;
+    --surface:   #161b22;
+    --surface2:  #1c2128;
+    --border:    #30363d;
+    --accent:    #58a6ff;
+    --accent2:   #3fb950;
+    --accent3:   #d2a8ff;
+    --accent4:   #ffa657;
+    --accent5:   #ff7b72;
+    --muted:     #8b949e;
+    --text:      #e6edf3;
+    --text2:     #c9d1d9;
+    --radius:    8px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Georgia", "Times New Roman", serif;
+    font-size: 16px;
+    line-height: 1.8;
+    padding-bottom: 120px;
+  }
+
+  /* ── Header ─────────────────────────────────────────────────────── */
+  .paper-header {
+    background: radial-gradient(ellipse at 60% 0%, rgba(88,166,255,0.07) 0%, transparent 55%),
+                radial-gradient(ellipse at 20% 80%, rgba(210,168,255,0.05) 0%, transparent 50%),
+                var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 72px 40px 56px;
+    text-align: center;
+    max-width: 860px;
+    margin: 0 auto;
+  }
+
+  .paper-tag {
+    display: inline-block;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: rgba(88,166,255,0.08);
+    border: 1px solid rgba(88,166,255,0.2);
+    border-radius: 20px;
+    padding: 5px 16px;
+    margin-bottom: 28px;
+  }
+
+  .paper-title {
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1.3;
+    color: var(--text);
+    margin-bottom: 12px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+
+  .paper-subtitle {
+    font-size: 15px;
+    color: var(--muted);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    margin-bottom: 32px;
+  }
+
+  .paper-meta {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 12px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 13px;
+  }
+
+  .meta-chip {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 4px 14px;
+    color: var(--text2);
+  }
+  .meta-chip span { color: var(--muted); margin-right: 4px; }
+
+  /* ── Layout ─────────────────────────────────────────────────────── */
+  .paper-body {
+    max-width: 740px;
+    margin: 0 auto;
+    padding: 0 32px;
+  }
+
+  /* ── Abstract ───────────────────────────────────────────────────── */
+  .abstract {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius);
+    padding: 28px 32px;
+    margin: 48px 0 56px;
+  }
+
+  .abstract-label {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 12px;
+  }
+
+  .abstract p {
+    font-size: 15px;
+    color: var(--text2);
+    line-height: 1.75;
+  }
+
+  /* ── Sections ───────────────────────────────────────────────────── */
+  .section { margin-bottom: 56px; }
+
+  h2 {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 10px;
+    margin-bottom: 24px;
+    margin-top: 56px;
+  }
+
+  h3 {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--accent3);
+    margin-top: 32px;
+    margin-bottom: 14px;
+  }
+
+  p { margin-bottom: 16px; color: var(--text2); }
+
+  strong { color: var(--text); }
+
+  em { color: var(--accent4); font-style: italic; }
+
+  /* ── Callouts ───────────────────────────────────────────────────── */
+  .callout {
+    border-radius: var(--radius);
+    padding: 20px 24px;
+    margin: 24px 0;
+    font-size: 15px;
+  }
+  .callout-blue  { background: rgba(88,166,255,0.07);  border-left: 3px solid var(--accent);  }
+  .callout-green { background: rgba(63,185,80,0.07);   border-left: 3px solid var(--accent2); }
+  .callout-amber { background: rgba(255,166,87,0.07);  border-left: 3px solid var(--accent4); }
+  .callout-red   { background: rgba(255,123,114,0.07); border-left: 3px solid var(--accent5); }
+
+  .callout p { margin-bottom: 0; }
+  .callout p + p { margin-top: 10px; }
+
+  /* ── Tables ─────────────────────────────────────────────────────── */
+  .table-wrap { overflow-x: auto; margin: 24px 0; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+
+  thead tr { background: var(--surface2); }
+
+  th {
+    text-align: left;
+    padding: 10px 14px;
+    color: var(--text);
+    font-weight: 600;
+    border-bottom: 2px solid var(--border);
+    white-space: nowrap;
+  }
+
+  td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text2);
+    vertical-align: top;
+  }
+
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  /* ── Code ───────────────────────────────────────────────────────── */
+  code {
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 13px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    color: var(--accent3);
+  }
+
+  /* ── Blockquote ─────────────────────────────────────────────────── */
+  blockquote {
+    border-left: 3px solid var(--accent3);
+    padding: 4px 20px;
+    margin: 20px 0;
+    color: var(--muted);
+    font-style: italic;
+  }
+
+  /* ── Section number badge ───────────────────────────────────────── */
+  .sec-num {
+    display: inline-block;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 8px;
+    color: var(--muted);
+    margin-right: 10px;
+    vertical-align: middle;
+  }
+
+  /* ── Part divider ───────────────────────────────────────────────── */
+  .part-divider {
+    text-align: center;
+    margin: 64px 0 48px;
+    position: relative;
+  }
+  .part-divider::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 0; right: 0;
+    height: 1px;
+    background: var(--border);
+  }
+  .part-label {
+    display: inline-block;
+    position: relative;
+    background: var(--bg);
+    padding: 0 20px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  /* ── Benchmark placeholder ──────────────────────────────────────── */
+  .benchmark {
+    background: rgba(255,166,87,0.06);
+    border: 1px dashed rgba(255,166,87,0.3);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    margin: 16px 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 13px;
+    color: var(--accent4);
+  }
+  .benchmark::before {
+    content: "⬡ BENCHMARK PLACEHOLDER  ";
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    font-size: 10px;
+    text-transform: uppercase;
+    opacity: 0.7;
+    display: block;
+    margin-bottom: 4px;
+  }
+
+  /* ── References ─────────────────────────────────────────────────── */
+  .references { margin-top: 64px; }
+
+  .ref-list {
+    list-style: none;
+    padding: 0;
+    font-size: 14px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+
+  .ref-list li {
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+    color: var(--text2);
+    display: flex;
+    gap: 12px;
+  }
+
+  .ref-key {
+    color: var(--accent);
+    white-space: nowrap;
+    font-weight: 600;
+    min-width: 160px;
+    font-size: 13px;
+  }
+
+  /* ── Footer ─────────────────────────────────────────────────────── */
+  .paper-footer {
+    text-align: center;
+    margin-top: 80px;
+    padding: 32px;
+    border-top: 1px solid var(--border);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  /* ── PRINT / PDF ────────────────────────────────────────────────── */
+  @media print {
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+    body {
+      background: #fff;
+      color: #111;
+      font-size: 11pt;
+      line-height: 1.65;
+      padding-bottom: 0;
+    }
+
+    .paper-header {
+      background: #fff;
+      border-bottom: 2px solid #111;
+      padding: 36pt 0 28pt;
+      text-align: left;
+      max-width: 100%;
+    }
+
+    .paper-tag { display: none; }
+
+    .paper-title {
+      font-size: 18pt;
+      color: #111;
+      font-family: "Georgia", serif;
+      margin-bottom: 8pt;
+    }
+
+    .paper-subtitle {
+      font-size: 11pt;
+      color: #555;
+      font-family: "Georgia", serif;
+      font-style: italic;
+    }
+
+    .paper-meta { justify-content: flex-start; gap: 20pt; }
+
+    .meta-chip {
+      background: none;
+      border: none;
+      border-radius: 0;
+      padding: 0;
+      color: #333;
+      font-size: 10pt;
+    }
+    .meta-chip span { color: #555; }
+
+    .paper-body { max-width: 100%; padding: 0; }
+
+    .abstract {
+      background: #f8f8f8;
+      border: 1px solid #ccc;
+      border-left: 3pt solid #333;
+      padding: 16pt 20pt;
+      margin: 28pt 0 36pt;
+    }
+
+    .abstract-label { color: #333; }
+    .abstract p { color: #222; font-size: 10pt; }
+
+    h2 {
+      font-size: 14pt;
+      color: #111;
+      border-bottom: 1pt solid #333;
+      margin-top: 28pt;
+      margin-bottom: 12pt;
+      padding-bottom: 4pt;
+      page-break-after: avoid;
+    }
+
+    h3 {
+      font-size: 11pt;
+      font-weight: bold;
+      color: #111;
+      margin-top: 16pt;
+      margin-bottom: 8pt;
+      page-break-after: avoid;
+    }
+
+    p { color: #111; margin-bottom: 10pt; }
+
+    strong { color: #000; }
+    em { color: #000; }
+
+    .sec-num {
+      background: none;
+      border: none;
+      color: #555;
+      font-size: 10pt;
+      padding: 0;
+    }
+
+    .callout {
+      background: #f5f5f5 !important;
+      border-left: 3pt solid #555 !important;
+      padding: 10pt 14pt;
+      margin: 12pt 0;
+    }
+
+    .callout p { color: #111; font-size: 10pt; }
+
+    .part-divider { margin: 32pt 0 24pt; }
+    .part-divider::before { background: #555; }
+    .part-label { background: #fff; color: #333; }
+
+    table { font-size: 9.5pt; }
+    th { background: #eee !important; color: #111; border-bottom: 1.5pt solid #555; }
+    td { color: #111; border-bottom: 0.5pt solid #ccc; }
+    tr:hover td { background: none; }
+
+    code {
+      background: #f0f0f0;
+      border: 0.5pt solid #ccc;
+      color: #333;
+      font-size: 9pt;
+    }
+
+    blockquote {
+      border-left: 2pt solid #555;
+      color: #444;
+    }
+
+    .benchmark {
+      background: #fffbf0;
+      border: 1pt dashed #aaa;
+      color: #555;
+    }
+
+    .ref-list li { border-bottom: 0.5pt solid #ccc; color: #111; }
+    .ref-key { color: #333; }
+
+    .paper-footer {
+      border-top: 1pt solid #333;
+      color: #555;
+      margin-top: 36pt;
+      padding: 16pt 0 0;
+      font-size: 9pt;
+    }
+
+    a { color: #111; text-decoration: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────────────────── -->
+<div class="paper-header">
+  <div class="paper-tag">Draft · AAMAS 2027 Submission</div>
+  <div class="paper-title">The Coordinator Trap: Why Mediated Multi-Agent<br>Architectures Cannot Scale and a Substrate-Based Alternative</div>
+  <div class="paper-subtitle">Emergent coordination for AI agent fleets via Holland's signal/boundary primitives</div>
+  <div class="paper-meta">
+    <div class="meta-chip"><span>Authors</span>TBD</div>
+    <div class="meta-chip"><span>Venue</span>AAMAS 2027</div>
+    <div class="meta-chip"><span>Status</span>First Draft</div>
+    <div class="meta-chip"><span>Date</span>2026-05-27</div>
+  </div>
+</div>
+
+<!-- ── Body ────────────────────────────────────────────────────────── -->
+<div class="paper-body">
+
+  <!-- Abstract -->
+  <div class="abstract">
+    <div class="abstract-label">Abstract</div>
+    <p>
+      Multi-agent coordination systems are converging on two dominant architectural patterns:
+      mediated hierarchies, in which a central engine aggregates agent outputs, decides, and
+      issues commands; and registry-based discovery, in which a global index brokers
+      introductions between agents. Both patterns introduce a coordinator — by different names
+      — that becomes a bottleneck, a single point of failure, and an unbounded audit obligation
+      as agent populations grow. We demonstrate that these failure modes are not implementation
+      deficiencies but structural consequences of the coordinator assumption itself.
+    </p>
+    <p>
+      Drawing on Holland's framework for Complex Adaptive Systems, we propose an alternative
+      in which coordination emerges from substrate properties rather than explicit protocols.
+      We present Mycelium, a working implementation of this model as an embeddable Rust library,
+      and show how its three-layer architecture — gossip KV store, signal mesh with boundary
+      admission, and epidemic consensus — structurally eliminates each failure mode rather than
+      ameliorating it. We further show that Mycelium and MIT's NANDA registry are complementary
+      layers at different scales, composing without modification to either.
+    </p>
+  </div>
+
+  <!-- ── 1. Introduction ──────────────────────────────────────────── -->
+  <div class="section" id="s1">
+    <h2><span class="sec-num">1</span>Introduction</h2>
+
+    <p>
+      The deployment of autonomous AI agent fleets is accelerating faster than the coordination
+      infrastructure beneath them can reliably support. Two recently published practitioner accounts
+      describe the resulting failure modes with unusual clarity.
+    </p>
+
+    <p>
+      Valenti [1] observes that AI has eliminated the friction cost of producing artifacts — code,
+      reports, bug analyses — without providing any substitute for the implicit quality gate that
+      friction provided. The result is an unbounded audit obligation: reviewers must evaluate every
+      artifact equally because all artifacts, regardless of the effort or reasoning behind them,
+      arrive with identical surface polish.
+    </p>
+
+    <blockquote>
+      "The three-hour issue and the five-second issue have the same voice, the same structure,
+      the same length." — Valenti [1]
+    </blockquote>
+
+    <p>
+      She correctly identifies the symptom but searches unsuccessfully for a solution, rejecting
+      knowledge graphs (they drift), agentic curation (it perpetuates noise), and spec-driven
+      development (specs fall out of sync). The solution she seeks — systems that tighten rather
+      than amplify — remains unnamed.
+    </p>
+
+    <p>
+      In a companion article [2], the same author documents a second failure mode: agents lose all
+      state between sessions, restart from zero, and re-litigate decisions that teammates have
+      already settled. The attempted fix — a filesystem-based shared memory organised as markdown
+      files with YAML frontmatter — introduces a knowledge graph that drifts, exactly the failure
+      mode already diagnosed.
+    </p>
+
+    <p>
+      We argue that both articles were written from inside a specific architectural pattern: a
+      <em>mediated hierarchy</em> in which a central CognitiveEngine aggregates agent outputs and
+      coordinates their behaviour. The failure modes Valenti describes are not bugs in her
+      implementation. They are structural consequences of the coordinator assumption: properties
+      that any mediated hierarchy must exhibit regardless of how carefully it is engineered. The
+      solution she cannot find is not a better mediator. It is the elimination of the mediator
+      from the architecture entirely.
+    </p>
+
+    <p>This paper makes four contributions:</p>
+
+    <p>
+      <strong>1.</strong> A precise causal account of how the mediated hierarchy produces each
+      documented failure mode, through an agent-theoretic lens.<br>
+      <strong>2.</strong> A theoretical foundation for coordinator-free multi-agent coordination
+      grounded in Holland's signal/boundary model [3].<br>
+      <strong>3.</strong> Mycelium — a working implementation as an embeddable Rust library —
+      demonstrating that each failure mode is structurally impossible in the coordinator-free
+      substrate.<br>
+      <strong>4.</strong> A composability result: Mycelium's existing A2A endpoint makes it a
+      zero-modification participant in MIT NANDA's internet-scale agent federation [4],
+      establishing a clean two-layer architecture from cluster to internet scale.
+    </p>
+  </div>
+
+  <!-- ── 2. Background ─────────────────────────────────────────────── -->
+  <div class="section" id="s2">
+    <h2><span class="sec-num">2</span>Background: The Two Dominant Patterns</h2>
+
+    <h3>2.1 Mediated Hierarchy</h3>
+
+    <p>
+      The most widely deployed pattern for multi-agent coordination is the mediated hierarchy.
+      A designated coordinator — variously called an orchestrator, a cognitive engine, or a manager
+      agent — receives outputs from all agents, synthesises them, and issues directives back to the
+      agent population.
+    </p>
+
+    <p>
+      Cisco's Mycelium project [5] is a well-documented contemporary instance. A CognitiveEngine
+      mediates all agent interaction — agents never communicate directly. When coordination is
+      required, the engine decomposes agents' natural-language positions into discrete issues, runs
+      a NegMAS Stacked Alternating Offers (SAO) negotiation protocol [6] over multiple rounds,
+      synthesises a result, compiles it into a plan, and broadcasts it to all participants. The
+      system includes a 300-second watchdog timeout to abort sessions where agents become
+      unresponsive, and explicitly notes that coordination state is held in memory and lost on
+      server restart.
+    </p>
+
+    <p>
+      Kubernetes [7] represents a more mature instance of the same structural pattern: a control
+      plane holds declared target state; reconciliation loops compare actual state to target and
+      issue corrective actions. The coordinator is more sophisticated, but the relationship is
+      identical — state is held above the runtime and correctness is enforced top-down.
+    </p>
+
+    <h3>2.2 Registry-Based Discovery</h3>
+
+    <p>
+      The second dominant pattern uses a persistent global registry to store agent capability
+      declarations. Agents query the registry to locate peers; the registry brokers introductions.
+    </p>
+
+    <p>
+      MIT's NANDA project [4] is the leading contemporary instance at internet scale. NANDA
+      implements a decentralised registry — "DNS for agents" — in which agents register structured
+      AgentFacts including capability declarations and credentials, anchored to W3C Decentralised
+      Identifiers (DIDs). An adapter layer handles protocol bridging across MCP, A2A, and NLWeb.
+    </p>
+
+    <h3>2.3 The Shared Assumption</h3>
+
+    <p>
+      Superficially, these patterns are different. A mediated hierarchy coordinates behaviour at
+      runtime; a registry brokers introductions at discovery time. But they share a single
+      structural assumption:
+    </p>
+
+    <div class="callout callout-amber">
+      <p>
+        <strong>The coordinator assumption:</strong> there exists a designated component that holds
+        authoritative state about the agent population and through which coordination passes. In the
+        mediated hierarchy this is the coordinator. In the registry model it is the registry. Both
+        are coordinators by different names and both inherit the same structural failure modes.
+      </p>
+    </div>
+  </div>
+
+  <!-- ── PART A ─────────────────────────────────────────────────────── -->
+  <div class="part-divider">
+    <span class="part-label">Part A — The Coordinator Trap</span>
+  </div>
+
+  <!-- ── 3. Causal Chain ──────────────────────────────────────────── -->
+  <div class="section" id="s3">
+    <h2><span class="sec-num">3</span>From Architecture to Symptom: The Causal Chain</h2>
+
+    <p>
+      We use the term <em>coordinator trap</em> to describe the set of failure modes that any
+      architecture inheriting the coordinator assumption must exhibit. These are not bugs; they are
+      structural properties. A better coordinator does not escape them. A smarter mediator does not
+      escape them. The trap is the coordinator's existence, not its quality.
+    </p>
+
+    <h3>3.1 The Mediated Hierarchy Described Precisely</h3>
+
+    <p>
+      In a mediated hierarchy, agents are workers in a fanout RPC system. They receive structured
+      payloads from the coordinator, produce responses, and return them. The coordinator aggregates
+      responses, applies its decision logic, and broadcasts results. The agent has no autonomy over
+      what signals it receives — it processes whatever the coordinator sends. Its "boundary" — the
+      set of signals it acts upon — is managed externally by the coordinator's routing decisions,
+      not declared internally by the agent itself.
+    </p>
+
+    <p>
+      This is a critical point. When we call these components "agents" we are importing a concept
+      from the Complex Adaptive Systems literature that implies agents hold their own receptor sets,
+      evaluate incoming signals against those sets, and act selectively. In a mediated hierarchy,
+      agents do none of this. They are passive processors of coordinator-routed payloads. We return
+      to this category error in Section 3.5.
+    </p>
+
+    <h3>3.2 Audit Burden: The Consequence of Post-Admission Broadcasting</h3>
+
+    <p>
+      Valenti's first problem — unbounded audit obligation — follows directly from the coordinator's
+      broadcast model.
+    </p>
+
+    <p>
+      The coordinator receives all agent outputs and produces a synthesised result. That result is
+      broadcast to all downstream consumers regardless of their domain relevance. Every agent output
+      passes through the coordinator and produces a coordinator-level artifact with identical
+      structure and apparent authority, regardless of the quality or validity of the underlying
+      agent reasoning.
+    </p>
+
+    <p>
+      This is <em>post-admission filtering</em>: artifacts are produced first; quality is assessed
+      after. The coordinator is the filter, but it operates after production, not before. A
+      coordinator that synthesised more carefully would reduce noise, but it could never eliminate
+      the audit obligation entirely, because quality assessment requires domain expertise that the
+      coordinator cannot possess for every domain it mediates. As agent populations grow, the
+      coordinator's cognitive load grows linearly with the number of domains. The audit burden
+      scales with the coordinator.
+    </p>
+
+    <p>
+      The three-hour issue and the five-second issue have the same voice because the coordinator
+      processes them identically. There is no mechanism in the architecture to distinguish them
+      before they produce output.
+    </p>
+
+    <h3>3.3 Context Loss: The Consequence of Coordinator-Held State</h3>
+
+    <p>
+      The second failure mode — agents restarting from zero, re-litigating settled decisions —
+      follows from the coordinator's role as the system's memory.
+    </p>
+
+    <p>
+      In a mediated hierarchy, shared state lives in or near the coordinator. Agents are stateless
+      workers; they hold no durable view of prior decisions. When the coordinator restarts, state
+      is gone. When a new agent joins, it must query the coordinator for a catchup briefing
+      synthesised from whatever logs survive.
+    </p>
+
+    <p>
+      This is the classic distributed systems mistake: centralising state simplifies the
+      coordinator's internal logic but makes every participant dependent on the coordinator's
+      availability and memory continuity. The agents are not resilient in isolation because they
+      were never designed to hold state independently.
+    </p>
+
+    <p>
+      Valenti's attempted fix — a filesystem-based shared memory — correctly identifies that state
+      should be held outside the coordinator. But it introduces a shared mutable store with no
+      eviction policy: entries persist indefinitely, accumulate, and drift from current system state.
+      This is not a solution to the coordinator trap; it is a redistribution of the same problem.
+    </p>
+
+    <h3>3.4 Output Format Mismatch: The Consequence of Absent Boundary Model</h3>
+
+    <p>
+      The third failure mode — agent logs structured for machines, routed into human channels and
+      failing to communicate — follows from the coordinator's undifferentiated broadcast.
+    </p>
+
+    <p>
+      When the coordinator synthesises and broadcasts, it has no model of its recipients'
+      boundaries — no representation of which consumers can act on which signals, in which form,
+      at which level of detail. All downstream consumers receive the same output because all are
+      equivalent downstream consumers from the coordinator's perspective.
+    </p>
+
+    <p>
+      A human reviewer is not equivalent to an agent as a consumer of a coordination decision.
+      But the coordinator cannot know this without a model of recipient boundaries — and building
+      and maintaining such a model grows without bound as the agent population grows.
+    </p>
+
+    <h3>3.5 The Category Error: Workers Dressed as Agents</h3>
+
+    <p>
+      The three failure modes share a common root: in a mediated hierarchy, components called
+      "agents" are not agents in any theoretically meaningful sense.
+    </p>
+
+    <p>
+      Holland [3] defines an agent as an entity that holds a <em>boundary</em> — a receptor set
+      specifying the conditions under which it acts on incoming signals. The boundary is the agent's
+      own declaration of its domain. It is intrinsic, not delegated. A component whose domain is
+      determined by the coordinator's routing decisions — which receives what the coordinator sends,
+      not what it declares itself competent to receive — is not an agent. It is a worker node in a
+      fanout RPC system.
+    </p>
+
+    <div class="callout callout-red">
+      <p>
+        <strong>The category error:</strong> calling components "agents" while designing them as
+        workers inherits none of the architectural properties that make genuine agents scalable.
+        It merely imports the vocabulary without the substance. Whether filtering is pre-admission
+        or post-production, whether state is distributed or centralised, whether the system tolerates
+        coordinator failure gracefully — all of these follow from whether the component is a genuine
+        agent or a coordinator-dependent worker.
+      </p>
+    </div>
+  </div>
+
+  <!-- ── PART B ─────────────────────────────────────────────────────── -->
+  <div class="part-divider">
+    <span class="part-label">Part B — The Substrate-Based Alternative</span>
+  </div>
+
+  <!-- ── 4. Holland ───────────────────────────────────────────────── -->
+  <div class="section" id="s4">
+    <h2><span class="sec-num">4</span>Theoretical Foundation: Holland's Signal/Boundary Model</h2>
+
+    <p>
+      John Holland's framework for Complex Adaptive Systems [3], formalised in <em>Signals and
+      Boundaries: Building Blocks for Complex Adaptive Systems</em> (MIT Press, 2012), provides the
+      theoretical basis for a coordinator-free architecture. Holland's thesis: the behaviour of
+      complex adaptive systems emerges from two and only two primitives.
+    </p>
+
+    <p>
+      <strong>Signals</strong> propagate through a medium unconditionally. No signal is withheld
+      from propagation on the basis of who might act on it. The medium floods.
+    </p>
+
+    <p>
+      <strong>Boundaries</strong> are receptor sets. Each agent holds a boundary — a set of
+      conditions under which it <em>acts</em> on a signal. The boundary controls acting, not
+      receiving. Forwarding is always unconditional.
+    </p>
+
+    <div class="callout callout-blue">
+      <p>
+        <strong>The key inversion.</strong> Conventional distributed systems route messages to
+        known recipients: the emitter must know who is listening; topology must be managed
+        explicitly. Holland's model changes the medium: any agent whose boundary matches a signal
+        responds. The emitter does not need to know who is listening. There is no routing table to
+        maintain, no coordinator to query, no registry to consult.
+      </p>
+    </div>
+
+    <p>
+      <strong>Stigmergy and TTL evaporation.</strong> Holland identifies stigmergy — state left in
+      the medium by agents, readable by others — as the mechanism through which agents coordinate
+      without direct communication. In biological systems this takes the form of pheromone trails:
+      a path walked frequently stays fresh; an unused path fades. Applied to distributed state
+      management: shared state should carry a time-to-live and evaporate unless actively refreshed.
+      A live agent keeps its state fresh; a dead agent's state fades. Failure is emergent — the
+      absence of refreshment <em>is</em> the failure signal.
+    </p>
+
+    <p>
+      <strong>The coordinator trap dissolved.</strong> In Holland's model there is no coordinator
+      because none is needed. Filtering is pre-admission: an agent whose boundary does not match a
+      signal produces no response to it — no artifact, no audit obligation. State is held
+      distributed inside each agent. Recipient heterogeneity is structural, not a routing problem.
+    </p>
+  </div>
+
+  <!-- ── 5. Prior Art ──────────────────────────────────────────────── -->
+  <div class="section" id="s5">
+    <h2><span class="sec-num">5</span>Prior Art: Correct Concepts, Wrong Implementation</h2>
+
+    <p>
+      Three prior systems identified the correct underlying concepts but implemented them with too
+      much protocol ceremony, or in the wrong deployment model, to achieve their full potential.
+    </p>
+
+    <h3>5.1 OSGi Requirements and Capabilities</h3>
+
+    <p>
+      The OSGi Alliance [8] formalised a dependency model in which software modules declare
+      capabilities they provide and requirements they need; a resolver matches providers to
+      consumers. The primitive is correct: declarative matching between providers and consumers,
+      with the resolver handling wiring. What mainstream adoption got wrong was treating resolution
+      as static — performed once at bundle-install time, unsuitable for dynamic systems where
+      participants come and go.
+    </p>
+
+    <h3>5.2 Paremus Service Fabric and the Reconciliation Engine</h3>
+
+    <p>
+      Paremus Service Fabric (circa 2010–2015) [9] demonstrated that the OSGi R&C model could be
+      applied as a <em>continuous runtime resolver</em> — re-resolving dependencies as services
+      appeared, disappeared, and changed.
+    </p>
+
+    <p>
+      To be precise about what Paremus achieved: the R&C graph was a <em>declared target state</em>.
+      The runtime was continuously monitored against that target, and deltas were driven back into
+      convergence whenever they appeared. This is closer to the Kubernetes control loop than to a
+      shared knowledge graph — drift from declared intent was structurally prevented, not merely
+      discouraged.
+    </p>
+
+    <p>
+      What Paremus still required was a <em>central reconciliation engine</em> holding that target
+      state. The engine computed deltas; the engine issued corrections; the engine was the
+      coordinator. If it went down, reconciliation stopped. The coordinator trap in a more
+      sophisticated form.
+    </p>
+
+    <div class="callout callout-amber">
+      <p>
+        <strong>The positional lesson.</strong> Service Fabric was deployed as runtime infrastructure
+        — a platform competing against VMware, Docker, Mesosphere, and Kubernetes. A superior
+        architecture cannot win that fight. The substrate must be a library embedded in the caller's
+        process: no daemon, no control plane, no installer. The operator's existing infrastructure
+        is irrelevant because the library does not touch it.
+      </p>
+    </div>
+
+    <h3>5.3 Jini and the Lease Insight</h3>
+
+    <p>
+      Jini [10, 11] introduced the insight that distributed resource registrations should <em>decay</em>
+      rather than persist indefinitely. A service holds a lease; if it does not renew, the
+      registration expires — implicit failure detection without explicit deregistration. The insight
+      is correct. The implementation was protocol-heavy: explicit <code>Lease</code> objects,
+      <code>renew()</code> RPCs, a lease manager, explicit cancellation. The ceremony obscures the
+      substrate property behind an explicit lifecycle protocol.
+    </p>
+
+    <h3>5.4 The Strip-the-Ceremony Pattern</h3>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Prior art</th>
+            <th>Correct concept</th>
+            <th>Implementation ceremony</th>
+            <th>Substrate property equivalent</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Jini</td>
+            <td>Registrations should decay</td>
+            <td><code>Lease.renew()</code> RPC + lease manager</td>
+            <td>TTL as natural evaporation</td>
+          </tr>
+          <tr>
+            <td>OSGi</td>
+            <td>Declarative capability matching</td>
+            <td>Static bundle-install resolver</td>
+            <td>Continuous evaluation against live state</td>
+          </tr>
+          <tr>
+            <td>Paremus</td>
+            <td>Continuous reconciliation toward target state</td>
+            <td>Central reconciliation engine + target state graph</td>
+            <td>Gossip mesh — every TTL refresh is a reconciliation tick</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── 6. Mycelium ───────────────────────────────────────────────── -->
+  <div class="section" id="s6">
+    <h2><span class="sec-num">6</span>Mycelium: A Coordinator-Free Substrate</h2>
+
+    <p>
+      Mycelium is an embeddable Rust library implementing Holland's signal/boundary model. It has
+      no daemon, no control plane, no installer, no orchestrator — it is a crate embedded in the
+      caller's process. The architecture is three layers. We present each alongside the failure mode
+      it structurally eliminates.
+    </p>
+
+    <h3>6.1 Layer I — KV Store: Eliminating Context Loss</h3>
+
+    <p>
+      Layer I is a gossip-replicated key-value store. Every entry carries a Hybrid Logical Clock
+      timestamp for causal last-write-wins ordering and a time-to-live. Entries are replicated via
+      epidemic gossip; anti-entropy reconciliation runs on peer reconnection. There is no primary,
+      no leader, no coordinator. Every node holds a full replica of the relevant key namespace.
+    </p>
+
+    <p>
+      <strong>Failure mode eliminated.</strong> Context loss in the mediated hierarchy arises
+      because shared state is held in or near the coordinator. In Mycelium's Layer I, there is no
+      coordinator memory to lose. A node that restarts reconnects to peers, runs anti-entropy, and
+      recovers full mesh state within one gossip cycle. A new node joining the cluster receives
+      capability and decision state directly from peers — no coordinator query required.
+    </p>
+
+    <div class="callout callout-green">
+      <p>
+        <strong>The key inversion from Paremus.</strong> In Paremus, the target state was held
+        <em>above</em> the runtime in a central graph and pushed down into components. In Mycelium,
+        the target state is <em>compiled into the runtime components themselves</em> — each node
+        carries its own fragment as capability and requirement declarations. There is nothing external
+        to converge toward. The mesh assembles the whole picture bottom-up from those fragments, and
+        convergence emerges upward. The application's intended topology is not a document; it is the
+        aggregate of what every node declares itself to be.
+      </p>
+    </div>
+
+    <p>
+      <strong>TTL evaporation as stigmergy.</strong> Every capability advertisement, group
+      membership record, and pheromone-style opacity flag is a KV entry with a TTL. A live node
+      continuously re-advertises; the trail stays fresh. A dead node stops re-advertising; its
+      entries evaporate. Failure is emergent: the absence of refreshment <em>is</em> the failure
+      signal. No explicit failure detection protocol required.
+    </p>
+
+    <h3>6.2 Layer II — Signal Mesh: Eliminating Audit Burden and Output Mismatch</h3>
+
+    <p>
+      Layer II is an ephemeral signal mesh implementing Holland's signal/boundary model directly.
+      Signals are emitted with a scope — <code>Individual</code>, <code>Group</code>,
+      <code>System</code>, or <code>Groups</code> (multi-group union) — and propagated
+      unconditionally to all reachable nodes. At each receiving node,
+      <code>Boundary::admits()</code> evaluates the signal against the node's declared receptor
+      set. Only nodes whose boundary matches act on it. Forwarding is always unconditional; acting
+      is always conditional on boundary admission.
+    </p>
+
+    <p>
+      <strong>Audit burden eliminated.</strong> A signal scoped to the <code>gpu-compute</code>
+      group only reaches nodes whose boundary includes that group membership. Agents in unrelated
+      groups forward the signal but produce no response to it — no artifact, no log entry, no audit
+      obligation. The three-hour problem and the five-second problem never land on a reviewer who
+      cannot evaluate them because the boundary prevents admission before any processing occurs.
+      Filtering is pre-admission, not post-production.
+    </p>
+
+    <p>
+      <strong>Output mismatch eliminated.</strong> Recipient heterogeneity is structural.
+      A signal emitted to a <code>human-review</code> group reaches only nodes whose boundary
+      includes human-review membership. Human-facing and agent-facing consumers self-differentiate
+      via their boundary declarations without any routing logic in the emitter.
+    </p>
+
+    <h3>6.3 Capability Declarations: Eliminating the Category Error</h3>
+
+    <p>
+      Each Mycelium node holds a <code>CapabilityGroupDef</code> — a declarative specification of
+      capabilities it provides and requirements it needs. The node independently evaluates whether
+      it should join each capability group by testing its own capabilities against the group's
+      filter, right now, against live KV state. Membership is self-assigned, not coordinator-assigned,
+      and re-evaluated on every relevant KV change.
+    </p>
+
+    <p>
+      <strong>Category error eliminated.</strong> In the mediated hierarchy, an agent's "boundary"
+      is determined by the coordinator's routing. In Mycelium, each node's boundary is determined
+      by its own capability declarations — compiled in at build time as the
+      <code>CapabilityGroupDef</code>. The boundary is intrinsic, not delegated. The node
+      <em>is</em> its boundary. This is a genuine agent in Holland's sense: a component that holds
+      its own receptor set and acts selectively.
+    </p>
+
+    <h3>6.4 Layer III — Consensus: Eliminating the Coordinator Bottleneck</h3>
+
+    <p>
+      Layer III provides epidemic consensus — <code>group_propose</code>,
+      <code>system_propose</code>, and <code>cross_group_propose</code> — implemented entirely
+      through the signal mesh. <code>PROPOSE</code>, <code>VOTE</code>, and <code>COMMIT</code>
+      are signal payloads riding ordinary Layer II Signal frames. The commitment semantics — ballot
+      numbering, quorum checking, KV write on commit — are logic the proposer applies to the signal
+      stream. Layer II has no concept of "agreement." The substrate is unaware that consensus is
+      happening. Consensus is an emergent higher-order concern, not a substrate primitive.
+    </p>
+
+    <p>
+      <strong>Cross-group consensus.</strong> <code>cross_group_propose</code> supports ballots
+      where multiple named capability groups act as independent voting blocs. A proposal commits
+      only when every group independently reaches its required quorum fraction. This supports
+      multi-AZ durability, compliance ratification with veto rights, and hierarchical AI pipelines
+      — all without a coordinator.
+    </p>
+
+    <p>
+      <strong>Coordinator bottleneck eliminated.</strong> There is no coordinator. Consensus
+      emerges from the signal exchange among participants. No single node's failure prevents other
+      ballots from proceeding. The system degrades gracefully — a reduced participant population
+      means reduced quorum, not coordination failure.
+    </p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Failure mode (Part A)</th>
+            <th>Root cause</th>
+            <th>Mycelium layer</th>
+            <th>Why impossible</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Audit burden</td>
+            <td>Post-admission broadcast</td>
+            <td>Layer II — boundary admission</td>
+            <td>Unmatched signals produce no action; no artifact to audit</td>
+          </tr>
+          <tr>
+            <td>Context loss</td>
+            <td>Coordinator-held state</td>
+            <td>Layer I — gossip KV + TTL</td>
+            <td>State is distributed; no coordinator memory to lose</td>
+          </tr>
+          <tr>
+            <td>Output mismatch</td>
+            <td>Absent boundary model</td>
+            <td>Layer II — scoped signal + boundary</td>
+            <td>Recipient heterogeneity is structural via declared receptor sets</td>
+          </tr>
+          <tr>
+            <td>Category error</td>
+            <td>Externally managed boundary</td>
+            <td>Capability declarations</td>
+            <td>Boundary is intrinsic — compiled into the component at build time</td>
+          </tr>
+          <tr>
+            <td>Coordinator bottleneck</td>
+            <td>Centralised decision point</td>
+            <td>Layer III — epidemic consensus</td>
+            <td>No coordinator; quorum emerges from signal exchange</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── 7. NANDA ──────────────────────────────────────────────────── -->
+  <div class="section" id="s7">
+    <h2><span class="sec-num">7</span>The Two-Layer Stack: Mycelium and NANDA</h2>
+
+    <p>
+      NANDA [4] and Mycelium are not competing architectures. They operate at different scales
+      and compose without modification to either.
+    </p>
+
+    <p>
+      NANDA addresses internet-scale cross-organisational discovery: how does an agent in one
+      organisation find and verify an agent in a completely different organisation across the open
+      internet? This requires external anchoring infrastructure to cross organisational boundaries.
+      NANDA's decentralised registry, DID-anchored AgentFacts, and protocol bridging (MCP, A2A,
+      NLWeb) are the right architecture for that scope.
+    </p>
+
+    <p>
+      Mycelium addresses intra-cluster coordination: how do agents within a cluster coordinate
+      without a broker? This does not require a registry because capability state is continuously
+      gossiped through the mesh — every node's view of the cluster is already local, sub-millisecond,
+      and always fresh.
+    </p>
+
+    <p>
+      <strong>The composability result.</strong> Mycelium exposes a
+      <code>/.well-known/agent.json</code> endpoint as a conforming A2A server. NANDA's paper [4]
+      identifies the A2A path as the standard entry point for internet-visible agents. A single
+      NANDA <code>AgentAddr</code> record pointing at a Mycelium cluster's A2A endpoint registers
+      the entire cluster on the agent internet. No Mycelium code changes are required. NANDA covers
+      cross-org discovery and VC-signed attestation; Mycelium covers everything inside the cluster.
+    </p>
+
+    <p>
+      NANDA's own analysis [4] identifies a "trusted intra-cluster path" requiring sub-millisecond
+      local writes, no external DNS, and Ed25519-signed state. Mycelium's Layer I gossip KV with
+      wire v10 Ed25519-signed updates is precisely that path. The two systems were designed
+      independently against the same requirements at their respective scales and compose naturally.
+    </p>
+  </div>
+
+  <!-- ── 8. Evaluation ─────────────────────────────────────────────── -->
+  <div class="section" id="s8">
+    <h2><span class="sec-num">8</span>Evaluation</h2>
+
+    <h3>8.1 Coordination Convergence Time</h3>
+
+    <div class="benchmark">
+      Single-ballot <code>group_propose</code> vs NegMAS SAO N-round negotiation for equivalent
+      3-agent coordination decision. Measure: wall clock from proposal emit to commit write in KV.
+      Expected: single round (&lt;100ms) vs up to 300s watchdog timeout.
+    </div>
+
+    <div class="benchmark">
+      <code>cross_group_propose</code> with 2 groups × 3 nodes each vs mediated hierarchy
+      equivalent multi-department decision. Measure: same. Expected: single ballot vs multiple
+      SAO rounds per group.
+    </div>
+
+    <h3>8.2 Failure Tolerance</h3>
+
+    <div class="benchmark">
+      Coordinator failure in mediated hierarchy vs random node failure in Mycelium cluster.
+      Measure: coordination availability before and after failure, recovery time. Expected:
+      mediated hierarchy coordination halts on coordinator failure; Mycelium degrades gracefully
+      to reduced quorum with remaining nodes able to continue coordination independently.
+    </div>
+
+    <h3>8.3 State Freshness Under Churn</h3>
+
+    <div class="benchmark">
+      TTL evaporation vs knowledge-graph drift rate. Introduce node departures at varying rates.
+      Measure: time from departure to stale-state detection. Expected: Mycelium evaporation within
+      one TTL period (~5s default); filesystem-based memory unbounded without explicit eviction.
+    </div>
+
+    <h3>8.4 Audit Obligation Under Load</h3>
+
+    <div class="benchmark">
+      Artifacts produced per coordination decision as agent population grows from 3 to 30.
+      Mediated hierarchy: O(N) — each agent's output passes through coordinator and generates an
+      artifact. Mycelium: O(matching) — only agents whose boundary matches the signal produce
+      responses. Measure: artifact count at each population size.
+    </div>
+
+    <h3>8.5 Existing Integration Evidence</h3>
+
+    <p>
+      Mycelium's correctness across its three-layer architecture is validated by 239 unit tests
+      and 11 integration scenarios run against a live 5-node Docker cluster. Scenarios cover KV
+      replication under partition and reconnection, signal delivery and boundary admission,
+      capability group formation and dissolution, consensus quorum under node failure, cross-group
+      voting, and the full Agentic Flow Networks pipeline. All 11 scenarios pass at HEAD.
+    </p>
+  </div>
+
+  <!-- ── 9. Discussion ─────────────────────────────────────────────── -->
+  <div class="section" id="s9">
+    <h2><span class="sec-num">9</span>Discussion</h2>
+
+    <h3>9.1 Why the Market Chooses Ceremony</h3>
+
+    <p>
+      Kubernetes won over Paremus Service Fabric not because it was architecturally superior but
+      because it was operationally familiar. Container-based composition mapped onto existing mental
+      models of processes and services. Paremus's continuous dynamic resolution was more powerful
+      and more correct, but it required operators to adopt a new conceptual framework. The market
+      chose "good enough and familiar" over "correct and novel."
+    </p>
+
+    <p>
+      The same dynamic is visible today. Mediated hierarchies for AI agents map onto existing
+      mental models of managers and workers. Registry-based discovery maps onto DNS — a metaphor
+      every network engineer already holds. Both are familiar; neither is correct at scale. The
+      purpose of this paper is to place the correct architectural argument on record before
+      "good enough and familiar" consolidates.
+    </p>
+
+    <h3>9.2 Limitations</h3>
+
+    <p>
+      Mycelium assumes a cluster the operator owns. Cross-organisational discovery is NANDA's
+      problem. Ephemeral signals are intentionally not durable — a node that misses a signal misses
+      it; durable delivery is a higher-order concern built on the KV layer or consensus, not a
+      substrate property. The gossip substrate assumes eventual connectivity; a fully partitioned
+      cluster cannot converge.
+    </p>
+
+    <p>
+      Boundary admission requires agents to declare their boundaries correctly. A misconfigured
+      boundary produces incorrect routing without any coordinator to catch the error. This places a
+      correctness obligation on capability declarations that the mediated hierarchy places on the
+      coordinator instead. Neither is strictly easier; the burden is different in character.
+    </p>
+
+    <h3>9.3 Future Work</h3>
+
+    <p>
+      Empirical comparison against a deployed mediated hierarchy at equivalent agent counts — the
+      benchmark placeholders in Section 8. Formal verification of the signal/boundary substrate
+      properties using TLA+ or similar. NANDA integration study: practical experience deploying a
+      Mycelium cluster as a NANDA-registered entity. Receiver-side per-(sender, kind) HLC-keyed
+      causal signal delivery for applications requiring strict ordering guarantees.
+    </p>
+  </div>
+
+  <!-- ── 10. Conclusion ────────────────────────────────────────────── -->
+  <div class="section" id="s10">
+    <h2><span class="sec-num">10</span>Conclusion</h2>
+
+    <p>
+      The coordinator is not a solution to the multi-agent coordination problem. It is a
+      restatement of the problem at a different scale. Mediated hierarchies make the coordinator
+      responsible for filtering, memory, routing differentiation, and fault tolerance — properties
+      that in a correctly designed substrate belong to the agents themselves. Registry-based systems
+      distribute discovery without eliminating the coordinator; the registry is a coordinator with
+      a narrower mandate.
+    </p>
+
+    <p>
+      The failure modes documented by Valenti — unbounded audit obligation, context loss across
+      restarts, output format mismatch between heterogeneous consumers — are not bugs in specific
+      implementations. They are structural consequences of the coordinator assumption, predictable
+      from first principles, and irreducible by improving the coordinator.
+    </p>
+
+    <p>
+      Holland's signal/boundary model provides the theoretical basis for a different architecture:
+      one in which coordination emerges from substrate properties rather than explicit protocols.
+      Mycelium implements this model as an embeddable library. Each of its three layers addresses a
+      mirrored failure mode — not by handling the failure gracefully but by making it structurally
+      impossible.
+    </p>
+
+    <p>
+      The target state for a Mycelium application is not a document held in a registry or a graph
+      maintained by a reconciliation engine. It is the aggregate of what every node declares itself
+      to be, compiled into the runtime components at build time, assembled bottom-up by the mesh at
+      runtime, and always current because anything not actively maintained evaporates. Coordination
+      emerges. No coordinator required.
+    </p>
+  </div>
+
+  <!-- ── References ───────────────────────────────────────────────── -->
+  <div class="references" id="refs">
+    <h2><span class="sec-num">Refs</span>References</h2>
+    <ol class="ref-list">
+      <li><span class="ref-key">[1] Valenti 2026a</span>J. Valenti, "Signal to Noise," juliavalenti.com, April 2026.</li>
+      <li><span class="ref-key">[2] Valenti 2026b</span>J. Valenti, "The Context Problem Nobody Talks About With Multi-Agent Teams," juliavalenti.com, 2026.</li>
+      <li><span class="ref-key">[3] Holland 2012</span>J. H. Holland, <em>Signals and Boundaries: Building Blocks for Complex Adaptive Systems</em>, MIT Press, 2012.</li>
+      <li><span class="ref-key">[4] Raskar et al. 2025</span>R. Raskar et al., "Unlocking the Internet of AI Agents via the NANDA Index," arXiv:2507.14263, 2025.</li>
+      <li><span class="ref-key">[5] Cisco Mycelium 2026</span>mycelium-io/mycelium, Outshift by Cisco, GitHub, 2026.</li>
+      <li><span class="ref-key">[6] NegMAS</span>Y. Mohammad et al., "NegMAS: A Platform for Automated Negotiations," 2020.</li>
+      <li><span class="ref-key">[7] Burns et al. 2016</span>B. Burns, B. Grant, D. Oppenheimer, E. Brewer, J. Wilkes, "Borg, Omega, and Kubernetes," <em>ACM Queue</em>, 14(1), 2016.</li>
+      <li><span class="ref-key">[8] OSGi Alliance</span>OSGi Alliance, <em>OSGi Core Release 8 Specification</em>, Chapter 27: Capabilities and Requirements, 2020.</li>
+      <li><span class="ref-key">[9] Paremus 2010</span>Paremus Ltd., <em>Paremus Service Fabric</em>, 2010–2015.</li>
+      <li><span class="ref-key">[10] Waldo 1999</span>J. Waldo, <em>Jini Architectural Overview</em>, Sun Microsystems Technical Report, January 1999.</li>
+      <li><span class="ref-key">[11] Arnold et al. 1999</span>K. Arnold, B. O'Sullivan, R. Scheifler, J. Waldo, A. Wollrath, <em>The Jini Specification</em>, Addison-Wesley, 1999.</li>
+      <li><span class="ref-key">[12] Holland 2014</span>J. H. Holland, <em>Complexity: A Very Short Introduction</em>, Oxford University Press, 2014.</li>
+      <li><span class="ref-key">[13] Dorigo &amp; Stützle 2004</span>M. Dorigo and T. Stützle, <em>Ant Colony Optimization</em>, MIT Press, 2004.</li>
+    </ol>
+  </div>
+
+  <div class="paper-footer">
+    Draft · 2026-05-27 · Target: AAMAS 2027 · Mycelium Project
+  </div>
+
+</div>
+</body>
+</html>
