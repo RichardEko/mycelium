@@ -124,6 +124,14 @@ This is the Holland-approved version of what Paremus was doing. Same intent — 
 resolution and adaptation — expressed as a substrate property rather than a coordinator
 behaviour. The reconciliation loop *is* the gossip mesh.
 
+> **The key inversion:** In Paremus, the target state was held *above* the runtime in a
+> central graph and pushed down into components. In Mycelium, the target state is
+> *compiled into the runtime components themselves* — each node carries its own fragment
+> as capability and requirement declarations. There is nothing external to converge toward.
+> The mesh assembles the whole picture bottom-up from those fragments, and convergence
+> emerges upward. The application's intended topology is not a document; it is the
+> aggregate of what every node declares itself to be.
+
 **The critical lesson from Paremus** — learnt firsthand — was not conceptual but
 positional. Service Fabric was deployed as *runtime infrastructure*: a platform that
 sat beneath your application and managed it. That placed it in direct competition with

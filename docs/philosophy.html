@@ -731,6 +731,19 @@
       degrading gracefully rather than failing catastrophically when any single component stops.
     </p>
 
+    <div class="callout callout-blue" style="margin:28px 0;">
+      <p>
+        <strong>The key inversion.</strong> In Paremus, the target state was held
+        <em>above</em> the runtime in a central graph and pushed down into components.
+        In Mycelium, the target state is <em>compiled into the runtime components
+        themselves</em> — each node carries its own fragment as capability and requirement
+        declarations. There is nothing external to converge toward. The mesh assembles
+        the whole picture bottom-up from those fragments, and convergence emerges upward.
+        The application's intended topology is not a document held somewhere; it is the
+        aggregate of what every node declares itself to be.
+      </p>
+    </div>
+
     <h3>Jini leases — what was kept and what was discarded</h3>
     <p>
       Mycelium keeps the decay insight and discards the protocol. Capability KV entries carry
