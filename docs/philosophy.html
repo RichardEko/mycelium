@@ -691,9 +691,13 @@
         <p class="lineage-body">
           Demonstrated OSGi R&amp;C applied as a <em>continuous runtime resolver</em> —
           re-resolving as services appeared, disappeared, and changed. Proved the concept.
+          Crucially: the R&amp;C graph was a <em>declared target state</em>. The runtime
+          was continuously monitored against it, and deltas were driven back into convergence.
+          Drift from declared intent was structurally prevented — not merely discouraged.
+          What remained was a central reconciliation engine holding that target state: if it
+          went down, reconciliation stopped. The coordinator trap in a more sophisticated form.
           Positioned as infrastructure competing against VMware, Docker, Mesosphere with
-          a small self-funded UK team. The market reached for containers instead. The
-          concept was right; the timing and positioning were not.
+          a small self-funded UK team. The market reached for containers instead.
         </p>
       </div>
       <div class="lineage-item">
@@ -708,14 +712,23 @@
       </div>
     </div>
 
-    <h3>OSGi R&amp;C — what was kept and what was discarded</h3>
+    <h3>OSGi R&amp;C and Paremus — what was kept and what was discarded</h3>
     <p>
       Mycelium keeps the R&amp;C primitive and makes evaluation <strong>continuous</strong>.
       Capabilities appear and disappear at runtime. Requirements are re-evaluated against the
       current mesh state. Emergent groups form and dissolve dynamically. The resolver runs on
-      every relevant KV change, not once at startup — exactly what Paremus demonstrated was
-      possible, now implemented over a gossip KV substrate rather than an OSGi container
-      registry, making it broker-free, embeddable, and partition-tolerant.
+      every relevant KV change, not once at startup.
+    </p>
+    <p>
+      From Paremus specifically, Mycelium inherits the insight that the R&amp;C graph should
+      represent a <em>target state</em> that the system continuously converges toward — not a
+      static snapshot consulted at deploy time. What Mycelium discards is the central
+      reconciliation engine that computed those deltas. In Mycelium there is no target state
+      graph held anywhere and no engine driving convergence. Each node independently evaluates
+      its own membership against live KV state. Every TTL refresh is a reconciliation tick.
+      Every capability advertisement is a node asserting its own current state. The
+      reconciliation loop <em>is</em> the gossip mesh — distributed, coordinator-free, and
+      degrading gracefully rather than failing catastrophically when any single component stops.
     </p>
 
     <h3>Jini leases — what was kept and what was discarded</h3>
@@ -765,6 +778,7 @@
           <tr><td>Explicit routing tables</td><td>Unconditional propagation + boundary admission</td></tr>
           <tr><td>Explicit failure detection + deregistration</td><td>Pheromone trail evaporation on TTL expiry</td></tr>
           <tr><td>Jini: lease manager + explicit cancellation</td><td>Tombstone write + TTL — fading is failure</td></tr>
+          <tr><td>Paremus: central reconciliation engine + target state graph</td><td>Gossip mesh — every node self-evaluates; reconciliation is emergent</td></tr>
         </tbody>
       </table>
     </div>

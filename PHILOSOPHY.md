@@ -97,10 +97,32 @@ implementation worked. The market was not ready for it: the industry reached ins
 simpler container-based composition (Docker, Kubernetes), trading dynamic elegance for
 operational familiarity. Paremus proved the idea; the timing was wrong.
 
-Mycelium inherits this continuous-resolution model directly. Capabilities appear and
-disappear at runtime. Requirements are re-evaluated against the current mesh state.
-Emergent groups form and dissolve dynamically. The resolver runs on every relevant KV
-change, not once at startup.
+To be precise about what Paremus got right and where it stopped: the Requirements &
+Capabilities graph was a *declared target state*. The runtime was continuously monitored
+against that target, and deltas were driven back into convergence whenever they appeared.
+This is closer to the Kubernetes control loop than to a shared knowledge graph — drift
+from declared intent was structurally prevented, not merely discouraged. Capabilities
+could not silently diverge from requirements because the reconciliation engine was always
+running.
+
+What Paremus still required, however, was a *central reconciliation engine* holding that
+target state. The engine computed deltas. The engine issued corrections. The engine was
+the coordinator — more sophisticated than a message broker, but a coordinator nonetheless.
+If it went down, reconciliation stopped. All the failure modes of centralisation applied:
+bottleneck, single point of failure, omniscience requirement.
+
+Mycelium inherits the continuous-resolution insight and departs from the coordinator.
+There is no target state graph held anywhere. There is no reconciliation engine. Each
+node independently evaluates whether it should join a group based on its own capabilities,
+right now, against live KV state. The "target state" is emergent and distributed: it is
+whatever the current capability population implies, re-evaluated continuously by every
+node independently. Every TTL refresh is a reconciliation tick. Every capability
+advertisement is a node asserting its own current state. No one computes deltas centrally
+because every node is the authoritative source of its own state.
+
+This is the Holland-approved version of what Paremus was doing. Same intent — continuous
+resolution and adaptation — expressed as a substrate property rather than a coordinator
+behaviour. The reconciliation loop *is* the gossip mesh.
 
 **The critical lesson from Paremus** — learnt firsthand — was not conceptual but
 positional. Service Fabric was deployed as *runtime infrastructure*: a platform that
