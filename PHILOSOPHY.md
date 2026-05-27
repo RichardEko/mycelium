@@ -100,9 +100,24 @@ operational familiarity. Paremus proved the idea; the timing was wrong.
 Mycelium inherits this continuous-resolution model directly. Capabilities appear and
 disappear at runtime. Requirements are re-evaluated against the current mesh state.
 Emergent groups form and dissolve dynamically. The resolver runs on every relevant KV
-change, not once at startup. The difference from Paremus is substrate: Mycelium's
-resolution runs over a gossip KV layer rather than an OSGi container registry, making
-it broker-free, embeddable, and tolerant of network partition.
+change, not once at startup.
+
+**The critical lesson from Paremus** — learnt firsthand — was not conceptual but
+positional. Service Fabric was deployed as *runtime infrastructure*: a platform that
+sat beneath your application and managed it. That placed it in direct competition with
+VMware, Docker, Mesosphere, and later Kubernetes — companies with enormous resources,
+existing enterprise relationships, and vast integration surface. A self-funded UK
+company with a superior architecture could not win that fight regardless of technical
+merit. The market chose "good enough and familiar" over "correct and novel."
+
+Mycelium draws the opposite conclusion: **the substrate must be a library, not a
+platform.** It is a Rust crate you embed in your process. It has no daemon, no control
+plane, no installer, no orchestrator. There is nothing to compete with and nothing to
+integrate against — it simply becomes part of your binary. The operator's existing
+infrastructure (Kubernetes, bare metal, cloud VMs, edge devices) is irrelevant to
+Mycelium because Mycelium does not touch it. This is not a compromise; it is the
+correct architectural boundary. The library *is* the infrastructure, running inside
+the process that needs it.
 
 ### Jini Leases
 
