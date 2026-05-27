@@ -537,6 +537,7 @@
     <a href="#litmus"       class="nav-pill">Litmus Tests</a>
     <a href="#not"          class="nav-pill">What This Is Not</a>
     <a href="#synthesis"    class="nav-pill">The Novel Synthesis</a>
+    <a href="#hayek"        class="nav-pill">The Hayek Parallel</a>
     <a href="#reading"      class="nav-pill">Further Reading</a>
   </div>
 
@@ -960,7 +961,80 @@
     </p>
   </div>
 
-  <!-- ── 8. Further Reading ────────────────────────────────────────── -->
+  <!-- ── 8. The Hayek Parallel ─────────────────────────────────────── -->
+  <div class="section" id="hayek">
+    <div class="section-head">
+      <h2>The Hayek Parallel</h2>
+      <span class="section-tag tag-found">Political Economy</span>
+    </div>
+
+    <p>
+      The coordinator trap is not a new discovery. Friedrich Hayek described it in 1945 — for
+      economies. In <em>"The Use of Knowledge in Society"</em> (American Economic Review, 1945),
+      Hayek argued that the central planning problem is not computational — it is epistemic. No
+      central planner can possess the distributed, local, tacit knowledge held by individual
+      market participants. Prices are not just numbers; they are signals that aggregate and
+      propagate dispersed knowledge without anyone needing to understand the whole. Attempts to
+      replace this with a central planning apparatus fail not because planners are incompetent
+      but because the knowledge required for correct decisions is <strong>structurally
+      inaccessible</strong> from any central point.
+    </p>
+
+    <div class="map-wrap" style="margin: 28px 0;">
+      <table class="map-table">
+        <thead>
+          <tr><th>Planned economy</th><th>Mediated hierarchy</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Central planner holds target state</td><td>Coordinator holds coordination state</td></tr>
+          <tr><td>Agents report up; planner decides; commands issue down</td><td>Agents submit output; mediator synthesises; directives broadcast</td></tr>
+          <tr><td>Planner cannot possess all local knowledge</td><td>Coordinator cannot possess domain expertise for every agent</td></tr>
+          <tr><td>Knowledge aggregation fails as economy grows</td><td>Audit burden grows linearly with agent population</td></tr>
+          <tr><td>Plan drifts from reality</td><td>Context lost on coordinator restart</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="map-wrap" style="margin: 28px 0;">
+      <table class="map-table">
+        <thead>
+          <tr><th>Market economy</th><th>Mycelium</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Prices propagate local knowledge unconditionally</td><td>Signals propagate unconditionally through the mesh</td></tr>
+          <tr><td>Firms act on prices that match their position</td><td>Agents act on signals that match their boundary</td></tr>
+          <tr><td>No central knowledge required</td><td>No coordinator required</td></tr>
+          <tr><td>Failure is local — firms exit, market continues</td><td>Node failure is local — TTL evaporates, mesh continues</td></tr>
+          <tr><td>Emergent order from local interactions</td><td>Emergent coordination from boundary admission</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      Hayek's market is a signal/boundary system. He just did not have Holland's vocabulary.
+    </p>
+
+    <p>
+      The intuition that a sufficiently intelligent coordinator — with enough information and
+      computing power — could outperform the distributed system is seductive precisely because it
+      <em>feels</em> like it should work. The appearance of control is reassuring even when it is
+      structurally impossible. Mediated agent hierarchies appeal for exactly the same reason: the
+      CognitiveEngine looks like it is in control. The appearance of coordination is reassuring
+      even as the audit burden accumulates, context is lost on every restart, and agents are
+      reduced to workers awaiting instructions from above.
+    </p>
+
+    <div class="callout callout-blue">
+      <p>
+        The insight is the same in all three cases — Hayek's economics (1945), Holland's complex
+        systems (2012), Mycelium's distributed agents: <strong>distributed local knowledge,
+        expressed through signals and boundaries, produces emergent order that no coordinator
+        can match.</strong>
+      </p>
+    </div>
+  </div>
+
+  <!-- ── 9. Further Reading ────────────────────────────────────────── -->
   <div class="section" id="reading">
     <div class="section-head">
       <h2>Further Reading</h2>
@@ -1016,13 +1090,20 @@
           <div class="reading-note">Runtime OSGi Requirements &amp; Capabilities resolution (2010–2015) — the direct conceptual predecessor to Mycelium's continuous capability resolver; proved the concept a decade before the agent infrastructure market was ready for it</div>
         </div>
       </li>
+      <li>
+        <span class="reading-dot" style="background:var(--accent4);"></span>
+        <div>
+          <div class="reading-title">F. A. Hayek — "The Use of Knowledge in Society"</div>
+          <div class="reading-note">American Economic Review, 35(4), September 1945 — the epistemic argument against central coordination; Hayek's price mechanism is a signal/boundary system; the coordinator trap described for economies 67 years before Holland formalised it for complex systems</div>
+        </div>
+      </li>
     </ul>
   </div>
 
   <!-- ── Footer ───────────────────────────────────────────────────── -->
   <div style="margin-top:80px; padding-top:24px; border-top:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
     <span style="font-size:12px; color:var(--muted);">mycelium · Architectural Philosophy · 2026-05-27</span>
-    <span style="font-size:12px; color:var(--muted);">Holland · OSGi · Paremus · Jini — stripped of ceremony · expressed as substrate properties</span>
+    <span style="font-size:12px; color:var(--muted);">Holland · OSGi · Paremus · Jini · Hayek — stripped of ceremony · expressed as substrate properties</span>
   </div>
 
 </div>

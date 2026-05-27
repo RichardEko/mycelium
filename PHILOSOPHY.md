@@ -268,6 +268,52 @@ substrate properties — as Holland would have wanted.
 
 ---
 
+## The Hayek Parallel
+
+The coordinator trap is not a new discovery. Friedrich Hayek described it in 1945 — for
+economies.
+
+In *"The Use of Knowledge in Society"* (American Economic Review, 1945), Hayek argued that
+the central planning problem is not computational — it is epistemic. No central planner can
+possess the distributed, local, tacit knowledge held by individual market participants. Prices
+are not just numbers; they are signals that aggregate and propagate dispersed knowledge through
+the economy without anyone needing to understand the whole. Attempts to replace this system
+with a central planning apparatus fail not because planners are incompetent but because the
+knowledge required for correct decisions is structurally inaccessible from any central point.
+
+The parallel to multi-agent coordination is exact:
+
+| Planned economy | Mediated hierarchy |
+|---|---|
+| Central planner holds target state | Coordinator holds coordination state |
+| Agents report up; planner decides; commands issue down | Agents submit output; mediator synthesises; directives broadcast |
+| Planner cannot possess all local knowledge | Coordinator cannot possess domain expertise for every agent |
+| Knowledge aggregation fails as economy grows | Audit burden grows linearly with agent population |
+| Plan drifts from reality | Context lost on coordinator restart |
+
+| Market economy | Mycelium |
+|---|---|
+| Prices propagate local knowledge unconditionally | Signals propagate unconditionally through the mesh |
+| Firms act on prices that match their position | Agents act on signals that match their boundary |
+| No central knowledge required | No coordinator required |
+| Failure is local — firms exit, market continues | Node failure is local — TTL evaporates, mesh continues |
+| Emergent order from local interactions | Emergent coordination from boundary admission |
+
+Hayek's market is a signal/boundary system. He just did not have Holland's vocabulary.
+
+The intuition that a sufficiently intelligent planner — with enough information and computing
+power — could outperform the market is seductive precisely because it *feels* like it should
+work. The appearance of control is reassuring even when it is structurally impossible. Mediated
+hierarchies appeal for exactly the same reason: the coordinator looks like it is in control.
+The appearance of coordination is reassuring even as the audit burden accumulates, context is
+lost on restart, and agents are reduced to workers awaiting instructions.
+
+The insight is the same in all three cases — Hayek's economics (1945), Holland's complex
+systems (2012), Mycelium's distributed agents: **distributed local knowledge, expressed through
+signals and boundaries, produces emergent order that no coordinator can match.**
+
+---
+
 ## Further Reading
 
 - John Holland — *Signals and Boundaries: Building Blocks for Complex Adaptive Systems* (MIT Press, 2012)
@@ -278,3 +324,4 @@ substrate properties — as Holland would have wanted.
 - Ken Arnold, Bryan O'Sullivan, Robert Scheifler, Jim Waldo, Ann Wollrath — *The Jini Specification* (Addison-Wesley, 1999) — lease model in full
 - W. Keith Edwards — *Core Jini* (2nd ed., Prentice Hall, 2000) — accessible treatment of the lease model, Chapter 4
 - Paremus Service Fabric — runtime OSGi Requirements & Capabilities resolution; the direct conceptual predecessor to Mycelium's continuous capability resolver, predating widespread agent infrastructure by a decade
+- F. A. Hayek — *"The Use of Knowledge in Society"*, American Economic Review, 35(4), 1945 — the epistemic argument against central coordination; the Hayek parallel to Holland's signal/boundary model

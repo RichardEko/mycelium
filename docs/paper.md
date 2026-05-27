@@ -265,13 +265,27 @@ The same dynamic is visible today. Mediated hierarchies for AI agents map onto e
 
 The purpose of this paper is to place the correct architectural argument on record before "good enough and familiar" consolidates. The academic literature is the appropriate venue for that argument: it establishes prior art, provides a citable reference for practitioners who encounter the coordinator trap, and invites empirical challenge.
 
-### 9.2 Limitations
+### 9.2 The Hayek Parallel
+
+The coordinator trap is not a new discovery. Friedrich Hayek described it in 1945 — for economies.
+
+In *"The Use of Knowledge in Society"* [14], Hayek argued that the central planning problem is not computational — it is epistemic. No central planner can possess the distributed, local, tacit knowledge held by individual market participants. Prices are not just numbers; they are signals that aggregate and propagate dispersed knowledge through the economy without anyone needing to understand the whole. Attempts to replace this with a central planning apparatus fail not because planners are incompetent but because the knowledge required for correct decisions is structurally inaccessible from any central point.
+
+The parallel to the coordinator trap is exact. A planned economy and a mediated hierarchy share the same failure mode: a central node that must aggregate knowledge it cannot fully possess, synthesise decisions on behalf of participants who understand their local context better than any coordinator can, and issue commands downward into a system whose ground truth is always more current at the edges than at the centre. A market economy and Mycelium share the same solution: signals propagate local knowledge unconditionally; participants act on signals that match their position; emergent order arises from those local interactions without any node needing a view of the whole.
+
+Hayek's market is a signal/boundary system. He just did not have Holland's vocabulary.
+
+The intuition that a sufficiently intelligent coordinator — with enough information and computing power — could outperform the distributed system is seductive precisely because it *feels* like it should work. The appearance of control is reassuring even when it is structurally impossible. This is why mediated hierarchies keep being built despite their failure modes: the coordinator looks like it is in control. The appearance of coordination is reassuring even as the audit burden accumulates and context is lost on every restart.
+
+The insight is the same in all three cases: **distributed local knowledge, expressed through signals and boundaries, produces emergent order that no coordinator can match.**
+
+### 9.3 Limitations
 
 Mycelium assumes a cluster the operator owns. Cross-organisational discovery is NANDA's problem, not Mycelium's. Ephemeral signals are intentionally not durable — a node that misses a signal misses it; durable delivery is a higher-order concern built on the KV layer or consensus, not a substrate property. The gossip substrate assumes eventual connectivity; a fully partitioned cluster cannot converge.
 
 Boundary admission requires agents to declare their boundaries correctly. A misconfigured boundary — too broad or too narrow — produces incorrect routing without any coordinator to catch the error. This places a correctness obligation on the capability declarations that the mediated hierarchy places on the coordinator instead. Neither is strictly easier; the burden is different in character.
 
-### 9.3 Future Work
+### 9.4 Future Work
 
 - **Empirical comparison** against a deployed mediated hierarchy at equivalent agent counts — the placeholder benchmarks in Section 8.
 - **Formal verification** of the signal/boundary substrate properties using TLA+ or similar.
@@ -289,6 +303,8 @@ The failure modes documented by practitioner experience — unbounded audit obli
 Holland's signal/boundary model provides the theoretical basis for a different architecture: one in which coordination emerges from substrate properties rather than explicit protocols. Mycelium implements this model as an embeddable library. Each of its three layers — gossip KV store, signal mesh with boundary admission, epidemic consensus — addresses a mirrored failure mode, not by handling the failure gracefully but by making it structurally impossible.
 
 The target state for a Mycelium application is not a document held in a registry or a graph maintained by a reconciliation engine. It is the aggregate of what every node declares itself to be, compiled into the runtime components at build time, assembled bottom-up by the mesh at runtime, and always current because anything not actively maintained evaporates. Coordination emerges. No coordinator required.
+
+The coordinator trap is not a new discovery. Hayek described it for economies in 1945. Holland formalised it for complex systems in 2012. Mycelium implements the solution for AI agent fleets. The insight is the same in all three cases: distributed local knowledge, expressed through signals and boundaries, produces emergent order that no coordinator can match.
 
 ---
 
@@ -319,3 +335,5 @@ The target state for a Mycelium application is not a document held in a registry
 [CITE-JINI-SPEC] K. Arnold, B. O'Sullivan, R. Scheifler, J. Waldo, and A. Wollrath, *The Jini Specification*, Addison-Wesley, 1999.
 
 [CITE-DORIGO] M. Dorigo and T. Stützle, *Ant Colony Optimization*, MIT Press, 2004.
+
+[14] F. A. Hayek, "The Use of Knowledge in Society," *American Economic Review*, 35(4):519–530, September 1945.
