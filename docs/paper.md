@@ -290,7 +290,7 @@ The benchmarks in §8.1–8.4 state expected outcomes against which Mycelium's c
 
 ### 8.5 Existing Integration Evidence
 
-Mycelium's correctness across its three-layer architecture is validated by 239 unit tests and 11 integration scenarios run against a live 5-node Docker cluster. Scenarios cover KV replication under partition and reconnection, signal delivery and boundary admission, capability group formation and dissolution, consensus quorum under node failure, cross-group voting, and the full Agentic Flow Networks pipeline. All 11 scenarios pass at HEAD.
+Mycelium's correctness across its three-layer architecture is validated by 243 unit tests and 12 integration scenarios run against a live 5-node Docker cluster. Scenarios cover KV replication under partition and reconnection, signal delivery and boundary admission, capability group formation and dissolution, consensus quorum under node failure, cross-group voting, the full Agentic Flow Networks pipeline, and Prompt Skills cross-node KV propagation with LLM invocation. All 12 scenarios pass at HEAD.
 
 ---
 

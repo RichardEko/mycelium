@@ -249,6 +249,7 @@
     <div class="badge"><span class="dot dot-blue"></span>Last-write-wins KV</div>
     <div class="badge"><span class="dot dot-purple"></span>Emergent capability groups</div>
     <div class="badge"><span class="dot dot-orange"></span>OpenAI-compatible skills</div>
+    <div class="badge"><span class="dot dot-green"></span>Prompt Skills — KV-stored LLM templates</div>
     <div class="badge"><span class="dot dot-blue"></span>TypeScript &amp; Python SDKs</div>
     <div class="badge"><span class="dot dot-purple"></span>Prometheus metrics</div>
   </div>
@@ -1093,6 +1094,85 @@ result = agent.rpc_call(providers[<span class="num">0</span>].node_id, <span cla
 ./skillrunner --skill examples/skills/researcher.skill.toml &amp;  <span class="cmt"># port 7952</span></pre>
 
   <p>See <a href="skillrunner.html"><code>skillrunner.html</code></a> for the full manifest reference, OTEL integration, concurrency controls, and the audit trail format.</p>
+</section>
+
+<!-- ── Prompt Skills ─────────────────────────────────────────────────── -->
+<section class="section" id="prompt-skills">
+  <div class="section-head">
+    <span class="section-icon">🧠</span>
+    <h2>Prompt Skills — LLM-backed capabilities via the KV substrate</h2>
+    <span class="sec-tag tag-ref">Optional · <code>llm</code> feature</span>
+  </div>
+  <p>
+    The <code>llm</code> cargo feature lets any <code>GossipAgent</code> host LLM-backed skills.
+    Prompt templates are stored in the gossip KV store (<code>prompts/{ns}/{name}</code>), replicated
+    cluster-wide, and served by whichever node has a matching backend registered. Callers discover
+    and invoke the skill through the ordinary capability ring — indistinguishable from any other
+    Mycelium skill.
+  </p>
+  <p>
+    The <code>model</code> field is <strong>not</strong> in <code>PromptTemplate</code>. Model availability
+    is node-local knowledge; it is baked into the <code>LlmBackend</code> at construction. The
+    <code>LlmResult.model_used</code> field reports what was actually used.
+  </p>
+
+  <pre><span class="cmt"># Cargo.toml</span><span class="lang-tag">toml</span>
+<span class="toml-key">mycelium</span> = { <span class="toml-key">version</span> = <span class="toml-str">"…"</span>, <span class="toml-key">features</span> = [<span class="toml-str">"llm"</span>] }</pre>
+
+  <h3>Registering a skill</h3>
+  <pre><span class="cmt">// Rust — register on this node; template written to cluster KV (TTL = 1 week)</span><span class="lang-tag">rust</span>
+<span class="kw">let</span> backend = <span class="ty">OpenAiBackend</span>::<span class="fn">new</span>(
+    <span class="str">"http://localhost:11434/v1"</span>, <span class="str">""</span>, <span class="str">"llama3.2"</span>,
+);
+<span class="kw">let</span> template = <span class="ty">PromptTemplate</span> {
+    system: <span class="str">"You are a helpful assistant."</span>.into(),
+    user_template: <span class="str">"{{input}}"</span>.into(),
+    max_tokens: <span class="num">512</span>,
+    temperature: <span class="num">0.7</span>,
+    metadata: Default::default(),
+};
+<span class="kw">let</span> _handle = agent.<span class="fn">register_prompt_skill</span>(<span class="str">"llm"</span>, <span class="str">"chat"</span>, template, backend).<span class="kw">await</span>?;
+<span class="cmt">// Drop _handle to retract the capability; template persists in KV until deleted.</span></pre>
+
+  <h3>Calling from Rust</h3>
+  <pre><span class="lang-tag">rust</span><span class="kw">let</span> output = agent.<span class="fn">call_prompt_skill</span>(
+    <span class="str">"llm"</span>, <span class="str">"chat"</span>, <span class="str">"Summarise this article…"</span>,
+    Default::default(), Duration::from_secs(<span class="num">30</span>),
+).<span class="kw">await</span>?;</pre>
+
+  <h3>HTTP gateway</h3>
+  <pre><span class="lang-tag">sh</span><span class="cmt"># List all templates visible to this node</span>
+curl http://localhost:8300/gateway/prompts
+
+<span class="cmt"># Write / update a template (propagates to all nodes via gossip KV)</span>
+curl -X PUT http://localhost:8300/gateway/prompts/llm/chat \
+     -H <span class="cv">'Content-Type: application/json'</span> \
+     -d <span class="cv">'{"system":"You are a helpful assistant.","user_template":"{{input}}","max_tokens":512,"temperature":0.7}'</span>
+
+<span class="cmt"># Invoke (blocking)</span>
+curl -X POST http://localhost:8300/gateway/llm/call \
+     -H <span class="cv">'Content-Type: application/json'</span> \
+     -d <span class="cv">'{"ns":"llm","name":"chat","input":"What is 2+2?"}'</span>
+
+<span class="cmt"># Invoke (SSE stream)</span>
+curl -N -X POST http://localhost:8300/gateway/llm/stream \
+     -H <span class="cv">'Content-Type: application/json'</span> \
+     -d <span class="cv">'{"ns":"llm","name":"chat","input":"Hello!"}'</span></pre>
+
+  <h3>Python SDK</h3>
+  <pre><span class="lang-tag">python</span><span class="kw">from</span> mycelium.prompt_skill <span class="kw">import</span> PromptSkillClient, PromptTemplate
+
+client = PromptSkillClient(<span class="str">"http://localhost:8300"</span>)
+template = PromptTemplate(system=<span class="str">"You are a helpful assistant."</span>,
+                          user_template=<span class="str">"{{input}}"</span>, max_tokens=<span class="num">512</span>)
+client.register(<span class="str">"llm"</span>, <span class="str">"chat"</span>, template)
+
+result = client.call(<span class="str">"llm"</span>, <span class="str">"chat"</span>, <span class="str">"What is 2+2?"</span>)
+print(result.output, result.model_used, result.tokens_used)</pre>
+
+  <h3>Try it — no LLM required</h3>
+  <pre><span class="lang-tag">sh</span>cargo run --example prompt_skill_demo --features llm
+<span class="cmt"># Two in-process nodes: registration, cross-node call, live template update</span></pre>
 </section>
 
 <!-- ── A2A Adapter ───────────────────────────────────────────────────── -->
