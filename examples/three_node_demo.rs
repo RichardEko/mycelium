@@ -121,6 +121,8 @@ use mycelium::{
     PersistenceConfig, SignalScope, SyncMode, signal_kind,
 };
 use mycelium::ConsensusConfig;
+#[cfg(feature = "llm")]
+use mycelium::{EchoBackend, LlmBackend, PromptSkillHandle, PromptTemplate};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::convert::Infallible;
@@ -1231,6 +1233,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     agent.start().await.expect("agent start");
     info!("[{role}] node_id={}", agent.node_id());
+
+    // For the `node` role, register a test/echo prompt skill backed by EchoBackend so
+    // integration scenario 12 can verify cross-node KV propagation and invocation.
+    #[cfg(feature = "llm")]
+    let _llm_skill_handle: Option<PromptSkillHandle> = if role == "node" {
+        let template = PromptTemplate {
+            system: "Mycelium test echo skill.".into(),
+            user_template: "{{input}}".into(),
+            max_tokens: 64,
+            temperature: 0.0,
+            metadata: std::collections::HashMap::new(),
+        };
+        let backend: std::sync::Arc<dyn LlmBackend> = std::sync::Arc::new(EchoBackend);
+        match Arc::clone(&agent).register_prompt_skill("test", "echo", template, backend).await {
+            Ok(h)  => { info!("[node] test/echo prompt skill registered"); Some(h) }
+            Err(e) => { warn!("[node] failed to register prompt skill: {e}"); None }
+        }
+    } else {
+        None
+    };
 
     match role.as_str() {
         "tool-a" => run_tool_a(agent, &role).await,

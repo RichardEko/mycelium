@@ -14,14 +14,14 @@ COPY Cargo.toml Cargo.lock ./
 RUN mkdir -p src examples && \
     echo 'fn main(){}' > examples/three_node_demo.rs && \
     echo '' > src/lib.rs && \
-    cargo build --release --example three_node_demo 2>/dev/null || true
+    cargo build --release --features llm --example three_node_demo 2>/dev/null || true
 
 # Build the real binary
 COPY . .
 # Touch the example so Cargo treats it as changed even though the timestamp
 # of the stub was already in the layer cache.
 RUN touch examples/three_node_demo.rs && \
-    cargo build --release --example three_node_demo
+    cargo build --release --features llm --example three_node_demo
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
