@@ -758,12 +758,16 @@
       <p>
         <strong>The Paremus lesson — library, not platform.</strong> Positioning Service Fabric
         as runtime infrastructure placed it in direct competition with VMware, Docker, Mesosphere,
-        and later Kubernetes — companies with enormous resources, existing enterprise relationships,
-        and vast integration surface. A superior architecture cannot win that fight. Mycelium
-        draws the opposite conclusion: the substrate must be a library embedded in the caller's
-        process. No daemon, no control plane, no installer, no orchestrator. The operator's
-        existing infrastructure is irrelevant to Mycelium because Mycelium does not touch it.
-        The library <em>is</em> the infrastructure, running inside the process that needs it.
+        and later Kubernetes. The commercial outcome had multiple causes — resource asymmetry,
+        existing enterprise relationships, the weight of familiar mental models. Those are market
+        realities, not architectural ones. The architectural lesson, however, stands independently:
+        a substrate that requires a deployment slot competes for infrastructure ownership and
+        inherits all the operational friction that comes with it. Mycelium draws the opposite
+        conclusion from first principles — the substrate must be a library embedded in the
+        caller's process. No daemon, no control plane, no installer, no orchestrator. The
+        operator's existing infrastructure is irrelevant to Mycelium because Mycelium does not
+        touch it. The library <em>is</em> the infrastructure, running inside the process that
+        needs it.
       </p>
     </div>
   </div>

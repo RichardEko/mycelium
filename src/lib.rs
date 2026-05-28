@@ -134,6 +134,8 @@ pub use agent::{
     MeshEvent, RpcError, RpcRequest, RpcRequestRx, ScatterError, ScatterResult, SystemStats,
     AckResult, ConsistencyError, LockGuard, LogEntry, QuorumError, ShardError,
 };
+#[cfg(feature = "llm")]
+pub use agent::{PromptTemplate, PromptSkillError, PromptSkillHandle, LlmBackend, LlmResult, LlmError, OpenAiBackend, EchoBackend};
 pub use capability::{
     CallerContext, CapConstraint, CapFilter, CapRanking, CapValue, Capability, CapabilityEvent,
     CapabilityGroupDef, CapabilityGroupHandle, CapabilityHandle,

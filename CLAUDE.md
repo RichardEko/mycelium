@@ -95,7 +95,8 @@ for the index.
 - `cargo build --lib`, `cargo test --lib`, `cargo clippy --lib --tests`
 - `cargo build --lib --features metrics` to include the Prometheus scrape endpoint
 - `cargo build --lib --features a2a` to include the A2A protocol adapter
-- 239 tests at HEAD (with `--features a2a`); 235 without; clippy at baseline 61
+- `cargo build --lib --features llm` to include the Prompt Skills LLM adapter
+- 243 tests at HEAD (with `--features llm`); 235 without any extra feature; clippy at baseline 61
   (pre-existing `field_reassign_with_default` in test code).
 - Wire version is currently **v10** (`PREV_WIRE_VERSION = 9` — rolling upgrade window open).
   v10 adds `WireMessage::SignedData` for Ed25519-signed KV writes under the `tls` feature.

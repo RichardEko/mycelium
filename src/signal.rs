@@ -748,6 +748,10 @@ pub mod signal_kind {
     /// Replies are sent as [`RPC_RESULT`] signals back to the caller.
     pub const MCP_INVOKE: &str = "mcp.invoke";
 
+    /// LLM prompt skill invocation — payload is JSON `{"prompt":"{ns}/{name}","input":"...","context":{...}}`.
+    /// Replies are sent as [`RPC_RESULT`] signals back to the caller.
+    pub const LLM_INVOKE: &str = "llm.invoke";
+
     /// Agent state transition notification.
     /// Payload: `{"node": "<id>", "from": "<state>", "to": "<state>"}`.
     /// Emitted by [`AgentStateMachine::transition`](crate::AgentStateMachine::transition)
@@ -843,4 +847,12 @@ pub mod kv_ns {
     /// Written by [`GossipAgent::distributed_lock`]; tombstoned when the returned
     /// [`LockGuard`](crate::LockGuard) is dropped.
     pub const LOCK: &str = "lock/";
+
+    /// Prompt template namespace.
+    ///
+    /// Key: `prompts/{ns}/{name}`. Value: JSON-encoded `PromptTemplate`.
+    /// TTL = 604800s (one week). Written once by `register_prompt_skill`; updated by
+    /// `update_prompt`; tombstoned by `delete_prompt`. No refresh task — this is
+    /// configuration, not a presence signal. The `cap/` entry is the presence heartbeat.
+    pub const PROMPTS: &str = "prompts/";
 }

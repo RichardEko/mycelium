@@ -1250,6 +1250,110 @@ See [`examples/skills/`](examples/skills/) for ready-to-run manifests and
 
 ---
 
+## Prompt Skills — LLM-backed capabilities via the KV substrate
+
+The `llm` feature turns any `GossipAgent` into a host for LLM-backed skills. Prompt templates
+are stored in the gossip KV store (`prompts/{ns}/{name}`) and replicated cluster-wide — any
+other node can call the skill without knowing which node hosts the model.
+
+```toml
+mycelium = { version = "…", features = ["llm"] }
+```
+
+### Registering a skill
+
+```rust
+use mycelium::{GossipAgent, PromptTemplate, OpenAiBackend};
+
+let backend = OpenAiBackend::new(
+    "http://localhost:11434/v1",   // any OpenAI-compatible endpoint
+    "",                             // API key (empty for Ollama)
+    "llama3.2",                    // model baked in at construction
+);
+
+let template = PromptTemplate {
+    system: "You are a helpful assistant. Reply concisely.".into(),
+    user_template: "{{input}}".into(),
+    max_tokens: 512,
+    temperature: 0.7,
+    metadata: Default::default(),
+};
+
+// Advertises cap `llm/chat` on the mesh; template stored in KV with TTL=1 week.
+let _handle = agent.register_prompt_skill("llm", "chat", template, backend).await?;
+// Drop _handle to retract the capability and stop the dispatch loop.
+```
+
+### Calling from Rust
+
+```rust
+let output = agent
+    .call_prompt_skill("llm", "chat", "Hello!", Default::default(), Duration::from_secs(30))
+    .await?;
+println!("{output}");
+```
+
+### HTTP gateway
+
+```sh
+# List all templates visible to this node
+curl http://localhost:8300/gateway/prompts
+
+# Read a specific template
+curl http://localhost:8300/gateway/prompts/llm/chat
+
+# Write / update a template
+curl -X PUT http://localhost:8300/gateway/prompts/llm/chat \
+     -H 'Content-Type: application/json' \
+     -d '{"system":"You are a helpful assistant.","user_template":"{{input}}","max_tokens":512,"temperature":0.7}'
+
+# Invoke (blocking)
+curl -X POST http://localhost:8300/gateway/llm/call \
+     -H 'Content-Type: application/json' \
+     -d '{"ns":"llm","name":"chat","input":"What is 2+2?"}'
+
+# Invoke (SSE stream — v1 emits a single `done` event)
+curl -N http://localhost:8300/gateway/llm/stream \
+     -H 'Content-Type: application/json' \
+     -d '{"ns":"llm","name":"chat","input":"Hello!"}'
+```
+
+### Python (`mycelium-py`)
+
+```python
+from mycelium.prompt_skill import PromptSkillClient, PromptTemplate
+
+client = PromptSkillClient("http://localhost:8300")
+
+template = PromptTemplate(
+    system="You are a helpful assistant.",
+    user_template="{{input}}",
+    max_tokens=512,
+    temperature=0.7,
+)
+client.register("llm", "chat", template)
+
+result = client.call("llm", "chat", "What is 2+2?")
+print(result.output)          # "4" or similar
+print(result.model_used)      # "llama3.2"
+print(result.tokens_used)     # 12
+```
+
+### Template variables
+
+In `user_template`, `{{input}}` is always replaced with the caller's input string.
+`{{node_id}}` and `{{skill_name}}` are injected automatically. Additional key-value
+pairs can be passed in the `context` map and referenced as `{{key}}`.
+
+### Model placement
+
+The `model` field is **not** in `PromptTemplate` — model availability is node-local knowledge
+that the template author cannot predict. Each hosting node bakes the model into its `LlmBackend`
+at construction. The `LlmResult.model_used` field reports what was actually used, so callers
+have full observability without requiring central coordination.
+
+---
+
 ## Configuration
 
 Pass a TOML config file with `-c <path>`. CLI flags override file values.

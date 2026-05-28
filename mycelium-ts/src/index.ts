@@ -19,3 +19,4 @@ export {
   Part,
   TaskStatusUpdate,
 } from "./a2a";
+export { PromptSkillClient, PromptTemplate, CallResult } from "./prompt_skill";

@@ -9,6 +9,7 @@ from .agent import (
     LockGuard,
 )
 from .a2a import A2aClient
+from .prompt_skill import PromptTemplate, PromptSkillClient
 
 __all__ = [
     "MyceliumAgent",
@@ -20,4 +21,6 @@ __all__ = [
     "LogEntry",
     "LockGuard",
     "A2aClient",
+    "PromptTemplate",
+    "PromptSkillClient",
 ]

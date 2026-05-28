@@ -29,6 +29,9 @@ metrics = ["dep:metrics", "dep:metrics-exporter-prometheus"]
 # Exposes A2A (Agent-to-Agent protocol) endpoints: GET /.well-known/agent.json
 # and POST /a2a JSON-RPC. Adds no new dependencies — server-side only.
 a2a = []
+# Adds LLM-backed prompt skills: store prompt templates in the cluster KV,
+# bind a node-local LLM backend, and expose as a callable capability.
+llm = []
 
 # The `fuzz/` directory is its own cargo-fuzz crate; keep it out of any
 # implicit-workspace traversal from this parent manifest.
@@ -56,6 +59,9 @@ socket2 = "0.5"
 
 # Synchronization
 parking_lot = "0.12"
+
+# Async trait support
+async-trait = "0.1"
 
 # Error handling
 thiserror = "1.0"

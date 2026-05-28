@@ -1,7 +1,7 @@
 # Mycelium — Engineering Roadmap
 
-> **Status:** Layer 1 complete. Layer 2 complete. Consensus complete. Capability & Discovery subsystem complete. Agent state machine (Layer V) complete. MCP bridge (server + client) complete. Config-driven capability probing complete. KV persistence (WAL + snapshot, all sync modes) complete. Layer 3 Service Patterns complete (HTTP server, SSE, rpc_call/rpc_respond, invoke.bulk, Actor/Event mailboxes, scatter-gather). Multi-machine integration tests (Docker Compose, 10 unattended scenarios) complete. **mTLS peer connections + Ed25519 node identity + consensus payload signing complete** (`tls` feature). Python language bridge (`mycelium-py`) complete. **SkillRunner** (`.skill.toml` capability-as-skill, OpenAI-compatible LLM driver, HLC audit trail + OTEL) complete. **Opt-In Consistency & Ordering Overlay complete** (`consistent_set/get`, `distributed_lock`, `elect_leader`, `append`/`scan_log`/`compact_log`/`subscribe_log`/`subscribe_log_group`, `emit_reliable` — all exposed via HTTP gateway and Python SDK). **Layer 5 Observability complete** (`metrics` feature — Prometheus scrape endpoint at `/metrics`, 10 counters/gauge/histogram, Grafana dashboard at `dashboards/mycelium-grafana.json`). **TypeScript language bridge complete** (`mycelium-ts` — 28 methods, SSE streaming, all overlay endpoints, mirrors Python SDK). **Cluster Sharding complete** (`shard_for`/`emit_sharded` + HTTP gateway + Python & TS SDKs). **KV Write Signing complete** (Ed25519 `WireMessage::SignedData`, wire v10). **A2A Adapter complete** (`a2a` feature — `/.well-known/agent.json`, `/a2a` JSON-RPC, Python & TS `A2aClient`). **Cross-Group Consensus complete** (`cross_group_propose` + `GroupQuorum` — multi-voting-bloc proposals with independent per-group quorum fractions, `SignalScope::Groups` variant, HTTP gateway + Python & TS SDKs).
-> **Last updated:** 2026-05-26
+> **Status:** Layer 1 complete. Layer 2 complete. Consensus complete. Capability & Discovery subsystem complete. Agent state machine (Layer V) complete. MCP bridge (server + client) complete. Config-driven capability probing complete. KV persistence (WAL + snapshot, all sync modes) complete. Layer 3 Service Patterns complete (HTTP server, SSE, rpc_call/rpc_respond, invoke.bulk, Actor/Event mailboxes, scatter-gather). Multi-machine integration tests (Docker Compose, 10 unattended scenarios) complete. **mTLS peer connections + Ed25519 node identity + consensus payload signing complete** (`tls` feature). Python language bridge (`mycelium-py`) complete. **SkillRunner** (`.skill.toml` capability-as-skill, OpenAI-compatible LLM driver, HLC audit trail + OTEL) complete. **Opt-In Consistency & Ordering Overlay complete** (`consistent_set/get`, `distributed_lock`, `elect_leader`, `append`/`scan_log`/`compact_log`/`subscribe_log`/`subscribe_log_group`, `emit_reliable` — all exposed via HTTP gateway and Python SDK). **Layer 5 Observability complete** (`metrics` feature — Prometheus scrape endpoint at `/metrics`, 10 counters/gauge/histogram, Grafana dashboard at `dashboards/mycelium-grafana.json`). **TypeScript language bridge complete** (`mycelium-ts` — 28 methods, SSE streaming, all overlay endpoints, mirrors Python SDK). **Cluster Sharding complete** (`shard_for`/`emit_sharded` + HTTP gateway + Python & TS SDKs). **KV Write Signing complete** (Ed25519 `WireMessage::SignedData`, wire v10). **A2A Adapter complete** (`a2a` feature — `/.well-known/agent.json`, `/a2a` JSON-RPC, Python & TS `A2aClient`). **Cross-Group Consensus complete** (`cross_group_propose` + `GroupQuorum` — multi-voting-bloc proposals with independent per-group quorum fractions, `SignalScope::Groups` variant, HTTP gateway + Python & TS SDKs). **Prompt Skills complete** (`llm` feature — `PromptTemplate` stored in KV, `register_prompt_skill`/`call_prompt_skill` on `GossipAgent`, `OpenAiBackend`/`EchoBackend`, HTTP gateway `/gateway/prompts` + `/gateway/llm/call` + `/gateway/llm/stream`, Python `PromptSkillClient`, TS `PromptSkillClient` — 243 tests). **Research paper in progress** — *"The Coordinator Trap: Why Mediated Multi-Agent Architectures Cannot Scale and a Substrate-Based Alternative"* — target AAMAS 2027; first draft + structural revision complete (2026-05-28); §8 evaluation benchmarks pending empirical runs.
+> **Last updated:** 2026-05-28
 
 ---
 
@@ -1452,6 +1452,7 @@ Weeks:  0         2          4          6          8         10        12
 | Ordering overlay | `subscribe_log_group` + consumer group offset tracking | **Complete** |
 | Reliable delivery | `emit_reliable` + ACK retry (requires Layer 3 `rpc_call`) | **Complete** |
 | Cluster sharding | `shard_for`, `emit_sharded` (consistent hash ring over `NodeId::id_hash()`) | **Complete** |
+| Research | AAMAS 2027 paper — *The Coordinator Trap* — first draft + structural revision complete; §8 benchmarks pending | **In Progress** |
 
 ---
 
@@ -1623,18 +1624,43 @@ NATS is the nearest existing production system. The gaps:
 
 ### Honest Verdict
 
-This is a well-designed product, not a research contribution. The novelty is the *combination*
-and the *context*: a single-dependency, embedded, broker-less system that unifies epidemic KV
-state, ephemeral scoped signals, dynamic group topology, adaptive topology control, and
-contract-based capability advertisement — specifically targeting adaptive AI agent swarms where
-minimising operational overhead and maximising evolvability matter. None of the individual
-components is new; the particular assembly, grounded in the biological receptor metaphor as a
-first-class design principle, is the differentiated position.
+This is a well-designed product whose novel combination of ideas is also the subject of a formal academic argument. The novelty is the *combination* and the *context*: a single-dependency, embedded, broker-less system that unifies epidemic KV state, ephemeral scoped signals, dynamic group topology, adaptive topology control, and contract-based capability advertisement — specifically targeting adaptive AI agent swarms where minimising operational overhead and maximising evolvability matter. None of the individual components is new; the particular assembly, grounded in Holland's signal/boundary model as a first-class design principle, is the differentiated position.
 
-The substrate is architecturally novel and coherent relative to the current AI agent framework
-landscape. The ideas are well-executed. The gap between **credible research prototype** and
-**credible production system** is clearly scoped below — none of it is architectural; it is
-engineering work on a sound foundation.
+The companion paper — *"The Coordinator Trap"* (target: AAMAS 2027) — argues that the coordinator assumption is not an implementation deficiency but a structural failure mode, that Holland's model provides the theoretical basis for its elimination, and that Mycelium is the working implementation demonstrating that each failure mode is structurally impossible. The substrate is architecturally novel and coherent relative to the current AI agent framework landscape. The engineering work is on a sound foundation.
+
+---
+
+## Research Paper — AAMAS 2027 (In Progress)
+
+**Title:** *The Coordinator Trap: Why Mediated Multi-Agent Architectures Cannot Scale and a Substrate-Based Alternative*
+
+**Status:** First draft complete; structural revision done 2026-05-28. §8 evaluation benchmarks are placeholders pending empirical runs.
+
+**Files:** [`docs/paper.md`](docs/paper.md) (source), [`docs/paper.html`](docs/paper.html) (rendered)
+
+### Core argument
+
+The paper makes four contributions:
+
+1. A historical account of how the coordinator assumption has persisted for fifty years — Blackboard, Actor model, Linda, BDI/FIPA, LLM orchestration — and why no prior system eliminated it.
+2. A causal analysis of three failure modes (audit burden, context loss, output format mismatch) traced to the coordinator assumption through an agent-theoretic lens. Key insight (§4.5): components called "agents" in mediated hierarchies are workers in a fanout RPC system — stripped of the intrinsic boundary property that makes genuine agents scalable. This is the *category error* at the root of all three failure modes.
+3. Holland's signal/boundary model (§5) as the theoretical foundation: two primitives, coordinator eliminated structurally rather than ameliorated.
+4. Mycelium (§7) as a working implementation — each of the three layers makes a mirrored failure mode structurally impossible. §7.5 adds a quadratic cost decomposition argument: M × (k/M)² = k²/M, showing coordinator-free decomposition is structurally cheaper as well as architecturally correct.
+
+Supporting arguments in Discussion: the Hayek epistemic parallel (central coordination fails structurally in any complex adaptive system, not just software), the Beinhocker organisational parallel, and the strip-the-ceremony pattern (§6) showing how Jini, OSGi, and Paremus each had the correct concept but the wrong implementation.
+
+### Remaining work before submission
+
+| Item | Status |
+|---|---|
+| §8.1 Coordination Convergence Time — Mycelium `group_propose` vs NegMAS SAO negotiation | Placeholder |
+| §8.2 Failure Tolerance — coordinator failure vs random node failure in Mycelium | Placeholder |
+| §8.3 State Freshness Under Churn — TTL evaporation rate vs knowledge graph drift | Placeholder |
+| §8.4 Audit Obligation Under Load — O(matching) vs O(N) artifact production | Placeholder |
+| Citation pass — resolve all `CITE-*` placeholders | Pending |
+| Author attribution | Pending |
+
+§8.5 (existing integration evidence: 239 tests, 11 scenarios) is already written. The structural argument is complete and does not depend on §8.1–8.4; those benchmarks provide falsifiable empirical grounding for the claims already made.
 
 ---
 
