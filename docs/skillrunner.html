@@ -332,6 +332,24 @@
 <!-- ── Main content ──────────────────────────────────────────────────── -->
 <main class="content">
 
+<!-- ── Two paths callout ─────────────────────────────────────────────── -->
+<div class="callout callout-info" style="margin-bottom:40px;">
+  <span class="callout-icon">ℹ️</span>
+  <div class="callout-body">
+    <strong>Two paths to LLM skills on Mycelium:</strong><br><br>
+    <strong>SkillRunner (this doc)</strong> — no Rust required. Define your skill in a
+    <code>.skill.toml</code> manifest, point it at any OpenAI-compatible LLM, and run the
+    binary. Best for deploying standalone agents or extending an existing mesh without
+    touching library code.<br><br>
+    <strong>Prompt Skills (<code>--features llm</code>)</strong> — library API. Call
+    <code>register_prompt_skill</code> / <code>call_prompt_skill</code> from Rust; templates
+    live in the KV ring at <code>prompts/{ns}/{name}</code>; Python and TypeScript callers
+    reach them through the HTTP gateway at <code>/gateway/llm/call</code> and
+    <code>/gateway/llm/stream</code>. Best when you are already embedding Mycelium and want
+    LLM capability without a separate binary.
+  </div>
+</div>
+
 <!-- ── Quick start ─────────────────────────────────────────────────── -->
 <section class="section" id="quickstart">
   <div class="section-head">
