@@ -104,4 +104,8 @@ for the index.
   KV ring as distributed buffer, 4-stage news article pipeline. Run with
   `docker compose up --build --scale worker=10`. See `docs/flow_networks.html` for the
   concept document and `docs/fluid_pipeline_viz.html` for the visualisation.
+- **A2A LangChain/AutoGen demo**: `examples/a2a_langchain/` — LangChain ReAct agent and
+  AutoGen v0.4 agent that auto-discover Mycelium skills via `/.well-known/agent.json` and
+  use them as native tools. Requires `cargo build --bin skillrunner --features a2a` then
+  `examples/community/start.sh`.
 - Integration test count: **12 scenarios** (scenario 11 = AFN pipeline; scenario 12 = Prompt Skills cross-node KV propagation + invocation).

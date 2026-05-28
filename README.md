@@ -1248,6 +1248,11 @@ reference, OTEL integration, concurrency controls, and the audit trail format.
 See [`examples/skills/`](examples/skills/) for ready-to-run manifests and
 [`examples/community/`](examples/community/) for a 3-skill community walkthrough.
 
+For an end-to-end integration with LangChain or AutoGen, see
+[`examples/a2a_langchain/`](examples/a2a_langchain/) — both agents auto-discover
+the community cluster's skills via A2A and use them as native tools with no
+hardcoded skill names. Build with `--features a2a` and run `start.sh` first.
+
 ---
 
 ## Prompt Skills — LLM-backed capabilities via the KV substrate
