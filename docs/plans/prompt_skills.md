@@ -1,7 +1,7 @@
 # Prompt Skills — Design Reference
 
-> **Status: PLANNED** — not yet implemented.
-> Target: next development phase after empirical benchmarks for AAMAS 2027 paper.
+> **Status: IMPLEMENTED** — `register_prompt_skill`, `call_prompt_skill`, `LlmBackend` (`OpenAiBackend`, `EchoBackend`), HTTP gateway `/gateway/prompts` + `/gateway/llm/call` + `/gateway/llm/stream`, Python `PromptSkillClient`, TS `PromptSkillClient` are live as of 2026-05-28.
+> This document is retained as a design record and use-case reference.
 
 ---
 
@@ -761,4 +761,4 @@ Adds to the existing 11-scenario integration suite:
 
 ---
 
-*Design authored 2026-05-28. Decisions resolved 2026-05-28. Implementation target: post-AAMAS 2027 paper submission.*
+*Design authored 2026-05-28. Decisions resolved 2026-05-28. Implemented 2026-05-28.*
