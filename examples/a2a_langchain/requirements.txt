@@ -1,0 +1,16 @@
+# Mycelium Python bridge (A2aClient lives here)
+# Install from repo root: pip install -e mycelium-py/
+mycelium @ file:../../mycelium-py
+
+# LangChain
+langchain>=0.2
+langchain-core>=0.2
+langchain-community>=0.2   # Ollama LLM
+langchain-openai>=0.1      # OpenAI / Azure (optional)
+
+# AutoGen v0.4
+autogen-agentchat>=0.4
+autogen-ext[openai]>=0.4
+
+# HTTP client (used by A2aClient)
+httpx>=0.27

@@ -47,7 +47,10 @@ async fn main() {
 async fn run(sf: Arc<SkillFile>) -> Result<(), Box<dyn std::error::Error>> {
     let node_id = NodeId::new(&sf.node.bind_address, sf.node.bind_port)?;
     let config  = build_gossip_config(&sf)?;
-    let agent   = Arc::new(GossipAgent::new(node_id, config));
+    let builder = GossipAgent::new(node_id, config);
+    #[cfg(feature = "a2a")]
+    let builder = if sf.node.http_port.is_some() { builder.with_a2a() } else { builder };
+    let agent   = Arc::new(builder);
 
     // Optional OTEL tracer
     #[cfg(feature = "otel")]
