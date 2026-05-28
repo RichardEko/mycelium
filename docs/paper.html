@@ -639,6 +639,37 @@
       inherit a common set of failure modes with a history that predates AI agents by decades.
       Section 3 traces that history; Section 4 dissects the failure modes themselves.
     </p>
+
+    <h3>2.4 The Separation Tax</h3>
+
+    <p>
+      The coordinator assumption has a concrete operational cost that the preceding architectural
+      analysis may understate. A representative conventional ML inference pipeline — the kind that
+      both patterns commonly sit atop — requires at minimum six separate infrastructure components:
+      a Redis instance for the task queue, a service registry (Consul or etcd) for worker
+      registration, a Celery or Sidekiq broker for task dispatch, a Kafka cluster (or RabbitMQ)
+      for stage-to-stage handoff, a dead-letter queue for failed item recovery, and a Prometheus
+      scrape target plus a Grafana dashboard for observability across the preceding five.
+    </p>
+
+    <p>
+      Each component is a separate operational surface: a separate failure mode, a separate scaling
+      policy, a separate upgrade cycle, and a conceptual translation layer that forces the developer
+      to map between the idioms of Redis, Kafka, Consul, and Prometheus while reasoning about the
+      system as a whole. The coordination work — route an item to a capable worker, throttle when
+      workers are saturated, clean up abandoned items, make topology visible — is the same abstract
+      work in all six systems. The <em>separation tax</em> is the cost of performing that work six
+      times in six different languages with six different failure modes, rather than once in a
+      unified substrate.
+    </p>
+
+    <p>
+      The two dominant patterns described in §§2.1–2.2 do not reduce this tax. They add a seventh
+      system — the mediated hierarchy's cognitive engine, or the registry's indexing service — on
+      top of the existing six. This paper's claim is that the separation tax is not a necessary cost
+      of multi-agent coordination. It is the cost of applying the coordinator assumption
+      independently at each layer of the stack.
+    </p>
   </div>
 
   <!-- ── PART A ─────────────────────────────────────────────────────── -->
@@ -970,7 +1001,7 @@
     <h2><span class="sec-num">6</span>Prior Art: Correct Concepts, Wrong Implementation</h2>
 
     <p>
-      Three prior systems identified the correct underlying concepts but implemented them with too
+      Four prior systems identified the correct underlying concepts but implemented them with too
       much protocol ceremony, or in the wrong deployment model, to achieve their full potential.
     </p>
 
@@ -1019,7 +1050,53 @@
       substrate property behind an explicit lifecycle protocol.
     </p>
 
-    <h3>6.4 The Strip-the-Ceremony Pattern</h3>
+    <h3>6.4 Flow-Based Programming (Morrison, c. 1971)</h3>
+
+    <p>
+      Flow-Based Programming [CITE-FBP], developed by J. Paul Morrison at IBM in the early 1970s,
+      conceived programs as networks of independent black-box processes communicating through bounded
+      connections. The model separates coordination — the network topology and its capacity
+      constraints — from computation — the component logic — and it is correct in this separation.
+      Three things FBP got right:
+    </p>
+
+    <p>
+      <strong>Reusable processes.</strong> A component knows nothing about its neighbours — only
+      its own input and output ports. This makes components genuinely reusable across different
+      topologies without modification.
+    </p>
+
+    <p>
+      <strong>Automatic backpressure.</strong> Bounded connections block writers when full. A fast
+      producer cannot overwhelm a slow consumer; the network self-regulates without any explicit
+      flow-control logic in the components.
+    </p>
+
+    <p>
+      <strong>Declarative topology.</strong> The wiring diagram — which component connects to which
+      — is expressed as a data structure separate from the component code, amenable to visual
+      inspection and offline analysis.
+    </p>
+
+    <p>
+      What FBP retained was an external medium to which all these properties belong. The bounded
+      connections, the port bindings, the network definition — all live in an FBP runtime outside
+      the component processes. The FBP runtime <em>is</em> the coordinator: it allocates
+      connections, manages backpressure, and resolves the wiring. Moving from an FBP runtime to a
+      Kafka cluster is an infrastructure substitution, not an architectural shift. The coordinator
+      trap remains.
+    </p>
+
+    <p>
+      The distinction that Section 7 realises: in FBP, backpressure is a runtime-managed property
+      of the connections. An alternative is for each agent to carry its own opacity declaration as
+      a local KV entry — "I am saturated; treat me as unavailable" — readable by any resolver in
+      the mesh without a shared runtime maintaining any state.
+    </p>
+
+    <h3>6.5 The Strip-the-Ceremony Pattern</h3>
+
+    <p>A pattern emerges across all four cases:</p>
 
     <div class="table-wrap">
       <table>
@@ -1049,6 +1126,12 @@
             <td>Continuous reconciliation toward target state</td>
             <td>Central reconciliation engine + target state graph</td>
             <td>Gossip mesh — every TTL refresh is a reconciliation tick</td>
+          </tr>
+          <tr>
+            <td>FBP</td>
+            <td>Backpressure, declarative topology, reusable processes</td>
+            <td>External FBP runtime managing connections</td>
+            <td>Opacity KV flag — agent self-declares saturation; resolvers skip it</td>
           </tr>
         </tbody>
       </table>
@@ -1177,7 +1260,71 @@
       means reduced quorum, not coordination failure.
     </p>
 
-    <h3>7.5 The Economic Case: Quadratic Cost Decomposition</h3>
+    <h3>7.5 Agentic Flow Networks</h3>
+
+    <p>
+      The three-layer architecture described in §§7.1–7.4 is sufficient to implement a distinct
+      multi-agent computational pattern that we term an <em>Agentic Flow Network</em> (AFN). An AFN
+      is a topology of capability-bounded agent groups in which work flows through the mesh as a
+      sequence of KV state transitions, each stage consuming from one key prefix and producing to
+      the next.
+    </p>
+
+    <p>An AFN has five structural properties:</p>
+
+    <p>
+      <strong>1. Substrate Unity.</strong> All coordination — capability advertisement, group
+      membership, backpressure, work items, completion signals — is carried by the same gossip KV
+      substrate. There is no separate message queue, registry, or coordination bus. A single
+      replicated data structure is the coordination medium.
+    </p>
+
+    <p>
+      <strong>2. Topology Emergence.</strong> Which nodes participate in which pipeline stages is
+      not configured by an operator. Each node evaluates its own capabilities against the group
+      definitions and self-joins the matching stages. A new node with a matching capability
+      automatically joins the appropriate stage. A failed node's advertisements evaporate; the
+      topology heals without intervention.
+    </p>
+
+    <p>
+      <strong>3. Fluid Allocation.</strong> There is no static assignment of workers to stages.
+      Any node capable of serving a stage joins its group; the group's size fluctuates with
+      available capacity. A stage that is undersupplied can be horizontally scaled by launching
+      nodes with the matching capability; no reconfiguration of existing nodes is required.
+    </p>
+
+    <p>
+      <strong>4. Opacity Backpressure.</strong> A saturated node writes an opacity flag to
+      <code>sys/load/{self}/capacity</code> (TTL ~5 s), making itself invisible to resolvers at
+      the next stage. The topology self-throttles without any flow-control protocol: saturation is
+      a KV entry that evaporates when load clears.
+    </p>
+
+    <p>
+      <strong>5. TTL-Native Cleanup.</strong> Work items written to the KV substrate carry TTLs.
+      Abandoned items — from failed workers or cancelled requests — evaporate automatically. There
+      is no dead-letter queue, no explicit cancellation protocol, no garbage collection task.
+      Absence of refreshment is the failure signal.
+    </p>
+
+    <p>
+      These five properties are validated empirically by <code>examples/fluid_pipeline/</code> —
+      a 10-worker, 4-stage news article pipeline (fetch → parse → score → publish) running over a
+      shared KV ring as distributed buffer, exercised end-to-end by integration scenario 11. The
+      topology assembles itself, the opacity backpressure mechanism is confirmed by direct
+      observation, and all work items are cleaned up on worker exit without explicit deregistration.
+    </p>
+
+    <div class="callout callout-green">
+      <p>
+        An AFN is not a new programming model layered on top of Mycelium. It is the name for the
+        pattern that naturally arises when a distributed application is built correctly on a
+        substrate that eliminates the coordinator.
+      </p>
+    </div>
+
+    <h3>7.6 The Economic Case: Quadratic Cost Decomposition</h3>
 
     <p>
       The architectural argument for coordinator-free design is independent of cost. There is also
@@ -1418,6 +1565,52 @@
       coordinator instead. Neither is strictly easier; the burden is different in character.
     </p>
 
+    <p>
+      <strong>When not to use Agentic Flow Networks.</strong> Five categories of requirement are
+      structurally mismatched with the AFN pattern:
+    </p>
+
+    <p>
+      <em>Strict ordering required.</em> The KV substrate uses last-write-wins under Hybrid
+      Logical Clock ordering. Items arriving out of causal order are resolved by timestamp, but
+      processing order within a stage is not preserved. Applications that require strict FIFO or
+      total-order delivery through a pipeline stage need a durable ordered append-only log (Apache
+      Kafka, NATS JetStream) at that stage boundary.
+    </p>
+
+    <p>
+      <em>Exactly-once delivery.</em> Gossip replication is at-least-once within a TTL window. A
+      worker that crashes mid-processing may leave a partially-processed item visible to another
+      worker. Applications requiring transactional exactly-once semantics — idempotency keys,
+      two-phase commit, offset management — should use a system designed for that guarantee (Kafka
+      transactional APIs, message brokers with acknowledgement semantics) for the affected stage
+      transitions.
+    </p>
+
+    <p>
+      <em>Complex DAG with cross-stage dependencies.</em> AFN stages are loosely coupled by KV
+      prefix convention. A pipeline where stage C requires outputs from both stage A and stage B,
+      with conditional branching and retry loops, maps poorly to the flat KV topology. Orchestrated
+      DAG execution (Apache Airflow, Dagster, Prefect) provides dependency tracking, conditional
+      execution, and human-in-the-loop approval gates that the AFN pattern does not.
+    </p>
+
+    <p>
+      <em>Long-term log retention.</em> TTL evaporation is a correctness property of the substrate,
+      not a configurable option. Work items that complete disappear. If the application requires an
+      audit log, a long-term event stream, or replay capability, those concerns must be handled by a
+      separate append-only store; the AFN substrate is not the appropriate vehicle.
+    </p>
+
+    <p>
+      <em>Cross-cluster or cross-datacenter fan-out at scale.</em> The gossip mesh operates within
+      a single cluster where every node can reach every other node within a bounded number of hops.
+      A deployment spanning multiple independent clusters — multi-cloud, multi-datacenter
+      active-active, or federated enterprise environments — requires a federation layer between
+      clusters. Mycelium's A2A adapter provides the protocol surface for this; the operational
+      deployment of that federation layer is outside Mycelium's scope.
+    </p>
+
     <h3>9.4 Future Work</h3>
 
     <p>
@@ -1492,6 +1685,7 @@
       <li><span class="ref-key">[12] Holland 2014</span>J. H. Holland, <em>Complexity: A Very Short Introduction</em>, Oxford University Press, 2014.</li>
       <li><span class="ref-key">[13] Dorigo &amp; Stützle 2004</span>M. Dorigo and T. Stützle, <em>Ant Colony Optimization</em>, MIT Press, 2004.</li>
       <li><span class="ref-key">[14] Hayek 1945</span>F. A. Hayek, "The Use of Knowledge in Society," <em>American Economic Review</em>, 35(4):519–530, September 1945.</li>
+      <li><span class="ref-key">[CITE-FBP]</span>J. P. Morrison, <em>Flow-Based Programming: A New Approach to Application Development</em>, 2nd ed., CreateSpace, 2010. First developed as an internal IBM paper, c. 1971.</li>
       <li><span class="ref-key">[CITE-OSGI-MOD]</span>R. Nicholson, "Modularity," OSGi Alliance / Eclipse Foundation, osgi.org/resources/modularity/.</li>
       <li><span class="ref-key">[CITE-OSGI-CMB]</span>R. Nicholson, "Complexity, Modularity and Business," OSGi Alliance / Eclipse Foundation, osgi.org/resources/complexity-modularity-and-business/.</li>
       <li><span class="ref-key">[CITE-BRAIN-IOT-1]</span>R. Nicholson et al., "BRAIN-IoT: Model-Based Framework for Dependable Sensing and Actuation in Intelligent Decentralized IoT Systems," <em>IEEE</em>, October 2019.</li>
