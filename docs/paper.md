@@ -14,28 +14,66 @@ Multi-agent coordination systems are converging on two dominant architectural pa
 
 ## 1. Introduction
 
-The deployment of autonomous AI agent fleets is accelerating faster than the coordination infrastructure beneath them can reliably support. Two recently published practitioner accounts describe the resulting failure modes with unusual clarity.
+The deployment of autonomous AI agent fleets is accelerating faster than the coordination infrastructure beneath them can reliably support. The academic literature is beginning to document the consequences. Silo-Bench [CITE-SILOBENCH], a 2025 empirical study of distributed multi-agent LLM systems, finds that "coordination overhead compounds with scale, eventually eliminating parallelization gains entirely" — adding more agents actively reduces system efficiency beyond a threshold population. A 2025 survey of multi-agent coordination architectures [CITE-MAS-SURVEY] concludes that the dominant paradigm — centralised orchestrators with predefined agent topologies — "introduces single points of failure and scalability bottlenecks" that are structural rather than incidental. The RAPS framework paper [CITE-RAPS] identifies predefined communication topologies as a fundamental architectural constraint, arguing that the community's reliance on manual orchestration "struggles to generalise across shifting task distributions" and represents an unresolved scalability dilemma. Carvalho [CITE-CARVALHO] observes that modern AI orchestration frameworks are independently rediscovering coordination solutions from the 1980s and 1990s without engaging with that literature — repeating the same architectural mistakes that were documented and, in some cases, partially solved forty years ago.
 
-Valenti [CITE-SIGNAL-NOISE] observes that AI has eliminated the friction cost of producing artifacts — code, reports, bug analyses — without providing any substitute for the implicit quality gate that friction provided. The result is an unbounded audit obligation: reviewers must evaluate every artifact equally because all artifacts, regardless of the effort or reasoning behind them, arrive with identical surface polish. She writes: *"The three-hour issue and the five-second issue have the same voice, the same structure, the same length."* She correctly identifies the symptom but searches unsuccessfully for a solution, rejecting knowledge graphs (they drift), agentic curation (it perpetuates noise), and spec-driven development (specs fall out of sync). The solution she seeks — systems that tighten rather than amplify — remains unnamed.
+These academic findings are confirmed in practitioner experience. Valenti [CITE-SIGNAL-NOISE] documents an unbounded audit obligation arising from AI-mediated agent coordination deployed at Cisco: all artifacts, regardless of the effort or reasoning behind them, arrive with identical surface polish, making quality assessment unsustainable at scale. She writes: *"The three-hour issue and the five-second issue have the same voice, the same structure, the same length."* In a companion account [CITE-CONTEXT-PROBLEM], the same author documents agents losing all state between sessions, restarting from zero, and re-litigating decisions already settled — and an attempted fix that introduces a shared knowledge graph that drifts, exactly the failure mode already diagnosed elsewhere.
 
-In a companion article [CITE-CONTEXT-PROBLEM], the same author documents a second failure mode: agents lose all state between sessions, restart from zero, and re-litigate decisions that teammates have already settled. The attempted fix — a filesystem-based shared memory organised as markdown files with YAML frontmatter — introduces a knowledge graph that drifts, exactly the failure mode already diagnosed.
-
-We argue that both articles were written from inside a specific architectural pattern: a mediated hierarchy in which a central CognitiveEngine aggregates agent outputs and coordinates their behaviour. The failure modes Valenti describes are not bugs in her implementation. They are structural consequences of the coordinator assumption: properties that any mediated hierarchy must exhibit regardless of how carefully it is engineered. The solution she cannot find is not a better mediator. It is the elimination of the mediator from the architecture entirely.
+We argue that these failure modes — documented independently by academic measurement and practitioner experience — are not bugs in specific implementations. They are structural consequences of a single shared assumption: that a designated component must hold authoritative state about the agent population and through which coordination passes. We call this the *coordinator assumption*, and we show that any architecture built on it must exhibit these failure modes regardless of how carefully it is engineered.
 
 This paper makes four contributions:
 
-1. **A precise causal account** of how the mediated hierarchy produces each documented failure mode, through an agent-theoretic lens.
-2. **A theoretical foundation** for coordinator-free multi-agent coordination grounded in Holland's signal/boundary model for Complex Adaptive Systems [CITE-HOLLAND].
-3. **Mycelium** — a working implementation of that model as an embeddable Rust library — demonstrating that each failure mode is structurally impossible in the coordinator-free substrate.
-4. **A composability result**: Mycelium's existing A2A endpoint makes it a zero-modification participant in MIT NANDA's internet-scale agent federation [CITE-NANDA], establishing a clean two-layer architecture for agent coordination from cluster to internet scale.
+1. **A historical account** of how the coordinator assumption has persisted across fifty years of distributed computing research — from actor models to blackboard systems to modern LLM orchestration frameworks — and why no prior system eliminated it.
+2. **A precise causal account** of how the coordinator assumption produces each documented failure mode, through an agent-theoretic lens.
+3. **A theoretical foundation** for coordinator-free multi-agent coordination grounded in Holland's signal/boundary model for Complex Adaptive Systems [CITE-HOLLAND].
+4. **Mycelium** — a working implementation of that model as an embeddable Rust library — demonstrating that each failure mode is structurally impossible in the coordinator-free substrate, and that it composes naturally with MIT NANDA [CITE-NANDA] for internet-scale federation.
 
-The remainder of this paper is organised as follows. Section 2 describes the two dominant coordination patterns. Section 3 traces the causal chain from mediated hierarchy to each observed failure mode. Section 4 presents Holland's theoretical framework. Section 5 situates Mycelium within the relevant prior art. Section 6 presents the Mycelium architecture layer by layer, showing how each layer addresses the mirrored failure mode. Section 7 addresses the NANDA composability result. Section 8 presents evaluation. Section 9 discusses implications, limitations, and future work.
+The remainder of this paper is organised as follows. Section 2 traces the history of the coordinator assumption across five decades. Section 3 describes its two dominant contemporary expressions. Section 4 traces the causal chain from mediated hierarchy to each observed failure mode. Section 5 presents Holland's theoretical framework. Section 6 situates Mycelium within the relevant prior art. Section 7 presents the Mycelium architecture layer by layer. Section 8 addresses NANDA composability. Section 9 presents evaluation. Section 10 discusses implications and future work.
 
 ---
 
-## 2. Background: The Two Dominant Patterns
+## 2. A History of the Coordinator Assumption
 
-### 2.1 Mediated Hierarchy
+The coordinator assumption — that a designated component must hold authoritative state and through which coordination passes — is not new. It has been the default in distributed computing for over fifty years. Each generation has recognised the problems it causes and attempted to mitigate them without eliminating the assumption itself.
+
+### 2.1 Blackboard Systems (1970s–80s)
+
+The blackboard model, most prominently realised in the HEARSAY-II speech understanding system [CITE-HEARSAY], organises coordination around a central shared data structure — the blackboard — and a set of specialised knowledge sources that read from and write to it. A control component monitors the blackboard and decides which knowledge source to activate next. The pattern is explicit: central state, central control. Knowledge sources do not communicate directly; they communicate via the coordinator. HEARSAY demonstrated that the model could solve hard problems. It also demonstrated the failure modes: the control component became a bottleneck and a single point of failure, and the blackboard accumulated stale entries as the system evolved.
+
+### 2.2 The Actor Model (Hewitt, 1973)
+
+Hewitt, Bishop and Steiger's Actor model [CITE-HEWITT] provided the first formal model of concurrent computation as communicating entities. Actors maintain private state and communicate exclusively via asynchronous message passing. The model eliminates shared mutable state — a genuine advance — but retains explicit addressing: to send a message, an actor must know the recipient's address. The emitter-must-know-who-is-listening assumption is structural. Topology must be managed explicitly. An actor that changes its role or capabilities cannot automatically re-wire the communication patterns of its senders. The Actor model correctly identified agents as the unit of composition; it did not identify boundaries as the mechanism for self-organising communication.
+
+### 2.3 Linda and the Tuple Space (Gelernter, 1985)
+
+Gelernter's Linda [CITE-LINDA] introduced generative communication via a shared tuple space. Processes write typed tuples to a shared medium; other processes match and retrieve them by pattern. This is the closest prior art to Holland's signal propagation model: the medium holds state; agents interact with the medium rather than with each other directly. Carriero and Gelernter's 1992 CACM paper [CITE-LINDA-COORD] established that coordination is a distinct language design concern, separable from computation — a correct and underappreciated insight.
+
+What Linda retained, however, is a shared coordinator: the tuple space itself must be accessible, consistent, and available to all participants. Fault-tolerant variants (FT-Linda, JavaSpaces) required replication schemes and consistency protocols for the shared space. The medium is the coordinator. The coordinator trap persists in a subtler form.
+
+### 2.4 BDI Agents and FIPA Standards (1990s)
+
+The Belief-Desire-Intention (BDI) agent architecture [CITE-BDI] and the FIPA agent communication standards [CITE-FIPA] brought deliberative reasoning to multi-agent systems. FIPA defined a Directory Facilitator (DF) — a registry where agents register capabilities and query for peers — and an Agent Management System (AMS) as lifecycle controller. The DF is precisely the registry-based pattern that MIT NANDA echoes today, four decades later: a designated component holds authoritative state about the agent population. The JADE framework [CITE-JADE], the dominant FIPA implementation, made the DF a hard architectural requirement.
+
+### 2.5 The Pattern That Persists
+
+Across five decades, each model correctly identified coordination as a concern distinct from computation. None eliminated the coordinator assumption:
+
+| Model | Coordinator retained |
+|---|---|
+| Blackboard (HEARSAY, 1980) | Central blackboard + control component |
+| Actor model (Hewitt, 1973) | Explicit addressing — sender must know recipient |
+| Linda (Gelernter, 1985) | Shared tuple space as coordinator |
+| BDI / FIPA / JADE (1990s) | Directory Facilitator as registry |
+| Modern LLM orchestration (2020s) | Central orchestrator / CognitiveEngine |
+
+Carvalho [CITE-CARVALHO] observes that modern AI agent frameworks are independently rediscovering Linda's tuple space pattern — implementing ad-hoc shared stores with task claiming, polling, and matching — without awareness of forty years of research on its failure modes and partial solutions. The community is not learning from history. It is repeating it.
+
+The missing step in all prior work is the same: the elimination of the coordinator from the substrate entirely, replaced by a substrate property — Holland's signal/boundary model — that makes coordinator-free coordination not merely possible but structurally necessary.
+
+---
+
+## 3. Background: The Two Dominant Patterns
+
+### 3.1 Mediated Hierarchy
 
 The most widely deployed pattern for multi-agent coordination is the mediated hierarchy. A designated coordinator — variously called an orchestrator, a cognitive engine, or a manager agent — receives outputs from all agents, synthesises them, and issues directives back to the agent population.
 
@@ -43,13 +81,13 @@ Cisco's internal Mycelium project [CITE-CISCO-MYCELIUM] is a well-documented con
 
 Kubernetes [CITE-K8S] represents a more mature instance of the same architectural pattern. A control plane holds the declared target state; reconciliation loops continuously compare actual cluster state to that target and issue corrective actions. The coordinator (the control plane) is more sophisticated than a negotiation engine, but the structural relationship is identical: state is held above the runtime, and correctness is enforced top-down.
 
-### 2.2 Registry-Based Discovery
+### 3.2 Registry-Based Discovery
 
 The second dominant pattern is registry-based discovery. Rather than a runtime coordinator, a persistent global registry stores agent capability declarations. Agents query the registry to locate peers with matching capabilities; the registry brokers the introduction.
 
 MIT's NANDA project [CITE-NANDA] is the leading contemporary instance at internet scale. NANDA implements a decentralised registry — described by its authors as "DNS for agents" — in which agents register structured AgentFacts including capability declarations, credentials, and behavioural history, anchored to W3C Decentralised Identifiers (DIDs). Other agents query the registry; NANDA's adapter layer handles protocol bridging across MCP, A2A, and NLWeb. The project envisions a "Quilt" federation of enterprise, government, Web3, and civil-society registries composing into an internet-scale agent discovery infrastructure.
 
-### 2.3 The Shared Assumption
+### 3.3 The Shared Assumption
 
 Superficially, these two patterns are different. A mediated hierarchy coordinates behaviour at runtime; a registry brokers introductions at discovery time. But they share a single structural assumption: **there exists a designated component that holds authoritative state about the agent population and through which coordination passes.**
 
@@ -57,19 +95,19 @@ In the mediated hierarchy, this component is the coordinator. In the registry mo
 
 ---
 
-## 3. The Coordinator Trap: From Architecture to Symptom
+## 4. The Coordinator Trap: From Architecture to Symptom
 
 We use the term *coordinator trap* to describe the set of failure modes that any architecture inheriting the coordinator assumption must exhibit. These are not bugs; they are structural properties. A better coordinator does not escape them. A smarter mediator does not escape them. The trap is the coordinator's existence, not its quality.
 
 We trace each failure mode through the agent lens — asking not merely what the system does wrong but what it implies about the agents' relationship to information, state, and decision.
 
-### 3.1 The Mediated Hierarchy Described Precisely
+### 4.1 The Mediated Hierarchy Described Precisely
 
 In a mediated hierarchy, agents are workers in a fanout RPC system. They receive structured payloads from the coordinator, produce responses, and return them. The coordinator aggregates responses, applies its decision logic, and broadcasts results. The agent has no autonomy over what signals it receives — it processes whatever the coordinator sends. Its "boundary" — the set of signals it acts upon — is managed externally by the coordinator's routing decisions, not declared internally by the agent itself.
 
 This is a critical point. When we call these components "agents" we are importing a concept from the Complex Adaptive Systems literature that implies agents hold their own receptor sets, evaluate incoming signals against those sets, and act selectively. In a mediated hierarchy, agents do none of this. They are passive processors of coordinator-routed payloads. We return to this category error in Section 3.5.
 
-### 3.2 Audit Burden: The Consequence of Post-Admission Broadcasting
+### 4.2 Audit Burden: The Consequence of Post-Admission Broadcasting
 
 Valenti's first problem — the unbounded audit obligation — follows directly from the coordinator's broadcast model.
 
@@ -79,7 +117,7 @@ This is post-admission filtering: artifacts are produced first; quality is asses
 
 The three-hour issue and the five-second issue have the same voice because the coordinator processes them identically. There is no mechanism in the architecture to distinguish them before they produce output. The distinction, if it is made at all, must be made by a human reviewer after the fact — which is precisely the unbounded obligation Valenti describes.
 
-### 3.3 Context Loss: The Consequence of Coordinator-Held State
+### 4.3 Context Loss: The Consequence of Coordinator-Held State
 
 The second failure mode — agents restarting from zero, re-litigating settled decisions — follows from the coordinator's role as the system's memory.
 
@@ -89,7 +127,7 @@ This is the classic distributed systems mistake: centralising state simplifies t
 
 Valenti's attempted fix — a filesystem-based shared memory — correctly identifies that state should be held outside the coordinator. But it introduces a shared mutable store with no eviction policy: entries persist indefinitely, accumulate, and drift from current system state. This is not a solution to the coordinator trap; it is a redistribution of the same problem.
 
-### 3.4 Output Format Mismatch: The Consequence of Absent Boundary Model
+### 4.4 Output Format Mismatch: The Consequence of Absent Boundary Model
 
 The third failure mode — agent logs structured for machines, routed into human channels and failing to communicate — follows from the coordinator's undifferentiated broadcast.
 
@@ -97,11 +135,11 @@ When the coordinator synthesises a result and broadcasts it, it has no model of 
 
 A human reviewer is not equivalent to an agent as a consumer of a coordination decision. A human can skim for significance, asks different questions, has a different attention budget and a different tolerance for structured verbosity. But the coordinator cannot know this without a model of recipient boundaries — and building and maintaining such a model is precisely the kind of overhead that grows without bound as the agent population grows.
 
-### 3.5 The Category Error: Workers Dressed as Agents
+### 4.5 The Category Error: Workers Dressed as Agents
 
 The three failure modes share a common root: in a mediated hierarchy, components called "agents" are not agents in any theoretically meaningful sense.
 
-Holland [CITE-HOLLAND] defines an agent as an entity that holds a *boundary* — a receptor set specifying the conditions under which it acts on incoming signals. The boundary is the agent's own declaration of its domain. It is intrinsic, not delegated. A component whose domain is determined by the coordinator's routing decisions — which receives what the coordinator sends, not what it declares itself competent to receive — is not an agent. It is a worker node in a fanout RPC system.
+Holland [CITE-HOLLAND] defines an agent — in the CAS sense established in Section 5 — as an entity that holds a *boundary* — a receptor set specifying the conditions under which it acts on incoming signals. The boundary is the agent's own declaration of its domain. It is intrinsic, not delegated. A component whose domain is determined by the coordinator's routing decisions — which receives what the coordinator sends, not what it declares itself competent to receive — is not an agent. It is a worker node in a fanout RPC system.
 
 This is not a semantic quibble. The distinction determines whether filtering happens before or after production (pre-admission vs post-production), whether state is held distributed or centralised (inside each agent vs inside the coordinator), and whether the system tolerates coordinator failure gracefully (yes, because agents hold their own state and boundaries) or catastrophically (yes, because agents are coordinator-dependent).
 
@@ -109,7 +147,7 @@ Calling these components "agents" while designing them as workers inherits none 
 
 ---
 
-## 4. Theoretical Foundation: Holland's Signal/Boundary Model
+## 5. Theoretical Foundation: Holland's Signal/Boundary Model
 
 John Holland's framework for Complex Adaptive Systems [CITE-HOLLAND], formalised in *Signals and Boundaries: Building Blocks for Complex Adaptive Systems* (MIT Press, 2012), provides the theoretical basis for a coordinator-free architecture.
 
@@ -127,17 +165,17 @@ This inversion is the key insight. Conventional distributed systems thinking rou
 
 ---
 
-## 5. Prior Art: Correct Concepts, Wrong Implementation
+## 6. Prior Art: Correct Concepts, Wrong Implementation
 
 Three prior systems identified the correct underlying concepts but implemented them with too much protocol ceremony, or in the wrong deployment model, to achieve their full potential.
 
-### 5.1 OSGi Requirements and Capabilities
+### 6.1 OSGi Requirements and Capabilities
 
 The OSGi Alliance [CITE-OSGI] formalised a dependency model in which software modules declare capabilities they provide and requirements they need; a resolver matches providers to consumers. The primitive is correct: declarative matching between providers and consumers, with the resolver handling wiring.
 
 What mainstream OSGi adoption got wrong was treating resolution as static — performed once at bundle-install time. This made it unsuitable for dynamic systems where participants come and go. The resolver ran at deploy time; a module that disappeared at runtime left a gap with no mechanism for repair.
 
-### 5.2 Paremus Service Fabric and the Reconciliation Engine
+### 6.2 Paremus Service Fabric and the Reconciliation Engine
 
 Paremus Service Fabric (circa 2010–2015) [CITE-PAREMUS] demonstrated that the OSGi Requirements and Capabilities model could be applied as a *continuous runtime* resolver — re-resolving dependencies as services appeared, disappeared, and changed, adapting the running system accordingly rather than requiring a redeploy.
 
@@ -147,13 +185,13 @@ What Paremus still required was a *central reconciliation engine* holding that t
 
 A second lesson from Paremus is positional rather than architectural: Service Fabric was deployed as *runtime infrastructure* — a platform that sat beneath the application and managed it. This placed it in direct competition with VMware, Docker, Mesosphere, and later Kubernetes — organisations with enormous resources, existing enterprise relationships, and vast integration surface. The architecture was superior; the market chose familiar and good-enough. The lesson: substrate must be a library embedded in the caller's process, not a platform competing for deployment slots.
 
-### 5.3 Jini and the Lease Insight
+### 6.3 Jini and the Lease Insight
 
 Jini [CITE-JINI-ARCH, CITE-JINI-SPEC] introduced the insight that distributed resource registrations should *decay* rather than persist indefinitely. A service holds a lease on its registration; if it does not renew, the registration expires. This provides implicit failure detection without requiring an explicit deregistration protocol.
 
 The insight is correct. The implementation was protocol-heavy: explicit `Lease` objects, `renew()` RPCs, a lease manager, explicit cancellation. The ceremony obscures the substrate property — that registrations should evaporate unless actively maintained — behind an explicit lifecycle protocol.
 
-### 5.4 The Strip-the-Ceremony Pattern
+### 6.4 The Strip-the-Ceremony Pattern
 
 A pattern emerges across all three cases:
 
@@ -167,13 +205,13 @@ The pattern that produces better architecture: identify the correct concept, fin
 
 ---
 
-## 6. Mycelium: A Coordinator-Free Substrate
+## 7. Mycelium: A Coordinator-Free Substrate
 
 Mycelium is an embeddable Rust library implementing Holland's signal/boundary model. It has no daemon, no control plane, no installer, no orchestrator. It is a crate embedded in the caller's process. The operator's existing infrastructure — Kubernetes, bare metal, cloud VMs, edge devices — is irrelevant because Mycelium does not touch it.
 
 The architecture is three layers. We present each layer alongside the failure mode it structurally eliminates.
 
-### 6.1 Layer I — KV Store: Eliminating Context Loss
+### 7.1 Layer I — KV Store: Eliminating Context Loss
 
 **The layer.** Layer I is a gossip-replicated key-value store. Every entry carries a Hybrid Logical Clock timestamp for causal last-write-wins ordering and a time-to-live. Entries are replicated across the cluster via epidemic gossip; anti-entropy reconciliation runs on peer reconnection. There is no primary, no leader, no coordinator. Every node holds a full replica of the key namespace relevant to it.
 
@@ -185,7 +223,7 @@ In Mycelium's Layer I, there is no coordinator memory to lose. State is distribu
 
 **The key inversion from Paremus.** In Paremus, the target state was held *above* the runtime in a central graph and pushed down into components. In Mycelium, the target state is *compiled into the runtime components themselves* — each node carries its own fragment as capability and requirement declarations. There is nothing external to converge toward. The mesh assembles the whole picture bottom-up from those fragments, and convergence emerges upward. The application's intended topology is not a document held somewhere; it is the aggregate of what every node declares itself to be.
 
-### 6.2 Layer II — Signal Mesh: Eliminating Audit Burden and Output Mismatch
+### 7.2 Layer II — Signal Mesh: Eliminating Audit Burden and Output Mismatch
 
 **The layer.** Layer II is an ephemeral signal mesh implementing Holland's signal/boundary model directly. Signals are emitted with a scope — `Individual`, `Group`, `System`, or `Groups` (multi-group union) — and propagated unconditionally to all reachable nodes. At each receiving node, `Boundary::admits()` evaluates the signal against the node's declared receptor set. Only nodes whose boundary matches the signal act on it. Forwarding is always unconditional; acting is always conditional on boundary admission.
 
@@ -197,7 +235,7 @@ In Layer II, filtering is pre-admission and intrinsic to each agent. A signal sc
 
 In Layer II, recipient heterogeneity is the design. A signal emitted to a `human-review` group reaches only nodes whose boundary includes human-review membership. A signal emitted to `automated-pipeline` reaches a different set of nodes. The emitter composes a signal for its intended audience; boundary admission ensures delivery to the matching receptor set. Human-facing and agent-facing consumers self-differentiate via their boundary declarations without any routing logic in the emitter.
 
-### 6.3 Capability and Requirement Declarations: Eliminating the Category Error
+### 7.3 Capability and Requirement Declarations: Eliminating the Category Error
 
 **The mechanism.** Each Mycelium node holds a `CapabilityGroupDef` — a declarative specification of capabilities it provides and requirements it needs. The node independently evaluates whether it should join each capability group by testing its own capabilities against the group's filter, right now, against live KV state. Membership is self-assigned, not coordinator-assigned. It is re-evaluated on every relevant KV change.
 
@@ -205,7 +243,7 @@ In Layer II, recipient heterogeneity is the design. A signal emitted to a `human
 
 This is a genuine agent in Holland's sense: a component that holds its own receptor set, evaluates signals against it, and acts selectively. The boundary is not managed externally; it is declared as part of the component's definition. The application's coordination topology — who talks to whom, who acts on what — emerges from the composition of these declarations across the live node population, not from a coordinator's routing table.
 
-### 6.4 Layer III — Consensus: Eliminating the Coordinator Bottleneck
+### 7.4 Layer III — Consensus: Eliminating the Coordinator Bottleneck
 
 **The layer.** Layer III provides epidemic consensus — `group_propose`, `system_propose`, and `cross_group_propose` — implemented entirely through the signal mesh. `PROPOSE`, `VOTE`, and `COMMIT` are signal payloads riding ordinary Layer II `Signal` frames. The commitment semantics — ballot numbering, quorum checking, KV write on commit — are logic that the proposer applies to the signal stream. Layer II has no concept of "agreement." The substrate is unaware that consensus is happening.
 
@@ -215,7 +253,7 @@ This is a genuine agent in Holland's sense: a component that holds its own recep
 
 ---
 
-## 7. The Two-Layer Stack: Mycelium and NANDA
+## 8. The Two-Layer Stack: Mycelium and NANDA
 
 NANDA [CITE-NANDA] and Mycelium are not competing architectures. They operate at different scales and compose without modification.
 
@@ -229,35 +267,35 @@ NANDA's own analysis [CITE-NANDA] identifies a "trusted intra-cluster path" requ
 
 ---
 
-## 8. Evaluation
+## 9. Evaluation
 
-### 8.1 Coordination Convergence Time
+### 9.1 Coordination Convergence Time
 
 [BENCHMARK: single-ballot `group_propose` vs NegMAS SAO N-round negotiation for equivalent 3-agent coordination decision. Expected: single round vs up to 300s. Measure: wall clock from proposal emit to commit write in KV.]
 
 [BENCHMARK: `cross_group_propose` with 2 groups × 3 nodes each vs mediated hierarchy equivalent. Measure: same.]
 
-### 8.2 Failure Tolerance
+### 9.2 Failure Tolerance
 
 [BENCHMARK: coordinator failure in mediated hierarchy vs random node failure in Mycelium cluster. Measure: coordination availability before and after failure, recovery time. Expected: mediated hierarchy coordination halts on coordinator failure; Mycelium degrades gracefully to reduced quorum.]
 
-### 8.3 State Freshness Under Churn
+### 9.3 State Freshness Under Churn
 
 [BENCHMARK: TTL evaporation vs knowledge graph drift rate. Introduce node departures at varying rates. Measure: time from departure to state evaporation in Mycelium (expected: TTL period, ~5s default) vs time to stale entry detection in filesystem-based memory (expected: unbounded without explicit eviction).]
 
-### 8.4 Audit Obligation Under Load
+### 9.4 Audit Obligation Under Load
 
 [BENCHMARK: artifacts produced per coordination decision as agent population grows from 3 to 30. Mediated hierarchy: O(N) — each agent's output passes through coordinator and generates artifact. Mycelium: O(matching) — only agents whose boundary matches the signal produce responses.]
 
-### 8.5 Existing Integration Evidence
+### 9.5 Existing Integration Evidence
 
 Mycelium's correctness across its three-layer architecture is validated by 239 unit tests and 11 integration scenarios run against a live 5-node Docker cluster. Scenarios cover KV replication under partition and reconnection, signal delivery and boundary admission, capability group formation and dissolution, consensus quorum under node failure, cross-group voting, and the full Agentic Flow Networks pipeline. All 11 scenarios pass at HEAD.
 
 ---
 
-## 9. Discussion
+## 10. Discussion
 
-### 9.1 Why the Market Chose Ceremony
+### 10.1 Why the Market Chose Ceremony
 
 Kubernetes won over Paremus Service Fabric not because it was architecturally superior but because it was operationally familiar. Container-based composition mapped onto existing mental models of processes, services, and deployments. Paremus's continuous dynamic resolution was more powerful and more correct, but it required operators to adopt a new conceptual framework. The market chose "good enough and familiar" over "correct and novel."
 
@@ -265,7 +303,7 @@ The same dynamic is visible today. Mediated hierarchies for AI agents map onto e
 
 The purpose of this paper is to place the correct architectural argument on record before "good enough and familiar" consolidates. The academic literature is the appropriate venue for that argument: it establishes prior art, provides a citable reference for practitioners who encounter the coordinator trap, and invites empirical challenge.
 
-### 9.2 The Hayek Parallel
+### 10.2 The Hayek Parallel
 
 The coordinator trap is not a new discovery. Friedrich Hayek described it in 1945 — for economies.
 
@@ -279,13 +317,21 @@ The intuition that a sufficiently intelligent coordinator — with enough inform
 
 The insight is the same in all three cases: **distributed local knowledge, expressed through signals and boundaries, produces emergent order that no coordinator can match.**
 
-### 9.3 Limitations
+### 10.3 The Beinhocker Parallel: Organisations as Complex Adaptive Systems
+
+The tension between centralised control and distributed adaptation is not confined to computer science or economics. Beinhocker's *The Origin of Wealth* [CITE-BEINHOCKER] — applying complexity economics to business strategy — argues that organisations face the same epistemic constraint Hayek identified for economies. Hierarchies that route decisions through central command chains cannot process environmental signals fast enough to remain adaptive: by the time local knowledge has been aggregated upward, synthesised centrally, and directives issued downward, the environment has changed. The hierarchy is always acting on a stale picture of the world.
+
+Beinhocker's prescription is structurally identical to Holland's: successful organisations are not machines with a central controller but ecosystems where agents experiment, adapt, and coordinate through local interactions. Strategy is not a plan issued from the top but an emergent property of many parallel experiments, each agent acting on the signals it receives in its local environment. The organisation that wins is not the one with the best central planner but the one whose agents are best equipped to act on local signals without waiting for central direction.
+
+This is the coordinator trap expressed at organisational scale. The CognitiveEngine coordinating AI agents is the same structure as the central command chain coordinating human organisations — and fails for the same reason. The solution Beinhocker prescribes for firms is the solution Holland prescribes for complex systems and Mycelium implements for agent fleets: move the intelligence to the boundary, let coordination emerge, abandon the fiction of central control.
+
+### 10.4 Limitations
 
 Mycelium assumes a cluster the operator owns. Cross-organisational discovery is NANDA's problem, not Mycelium's. Ephemeral signals are intentionally not durable — a node that misses a signal misses it; durable delivery is a higher-order concern built on the KV layer or consensus, not a substrate property. The gossip substrate assumes eventual connectivity; a fully partitioned cluster cannot converge.
 
 Boundary admission requires agents to declare their boundaries correctly. A misconfigured boundary — too broad or too narrow — produces incorrect routing without any coordinator to catch the error. This places a correctness obligation on the capability declarations that the mediated hierarchy places on the coordinator instead. Neither is strictly easier; the burden is different in character.
 
-### 9.4 Future Work
+### 10.5 Future Work
 
 - **Empirical comparison** against a deployed mediated hierarchy at equivalent agent counts — the placeholder benchmarks in Section 8.
 - **Formal verification** of the signal/boundary substrate properties using TLA+ or similar.
@@ -294,7 +340,7 @@ Boundary admission requires agents to declare their boundaries correctly. A misc
 
 ---
 
-## 10. Conclusion
+## 11. Conclusion
 
 The coordinator is not a solution to the multi-agent coordination problem. It is a restatement of the problem at a different scale. Mediated hierarchies make the coordinator responsible for filtering, memory, routing differentiation, and fault tolerance — properties that in a correctly designed substrate belong to the agents themselves. Registry-based systems distribute discovery without eliminating the coordinator; the registry is a coordinator with a narrower mandate.
 
@@ -309,6 +355,30 @@ The coordinator trap is not a new discovery. Hayek described it for economies in
 ---
 
 ## References
+
+[CITE-SILOBENCH] Silo-Bench: A Scalable Environment for Evaluating Distributed Coordination in Multi-Agent LLM Systems, arXiv:2603.01045, 2025.
+
+[CITE-MAS-SURVEY] Multi-Agent Coordination across Diverse Applications: A Survey, arXiv:2502.14743, 2025.
+
+[CITE-RAPS] Towards Adaptive, Scalable, and Robust Coordination of LLM Agents: A Dynamic Ad-Hoc Networking Perspective, arXiv:2602.08009, 2025.
+
+[CITE-CARVALHO] O. Carvalho, "Our AI Orchestration Frameworks Are Reinventing Linda (1985)," otavio.cat, 2025.
+
+[CITE-HEARSAY] L. D. Erman, F. Hayes-Roth, V. R. Lesser, and D. R. Raj Reddy, "The HEARSAY-II Speech Understanding System," *ACM Computing Surveys*, 12(2):213–253, 1980.
+
+[CITE-HEWITT] C. Hewitt, P. Bishop, and R. Steiger, "A Universal Modular ACTOR Formalism for Artificial Intelligence," *IJCAI*, pp. 235–245, 1973.
+
+[CITE-LINDA] D. Gelernter, "Generative Communication in Linda," *ACM Transactions on Programming Languages and Systems*, 7(1):80–112, 1985.
+
+[CITE-LINDA-COORD] N. Carriero and D. Gelernter, "Coordination Languages and Their Significance," *Communications of the ACM*, 35(2):97–107, 1992.
+
+[CITE-BDI] A. S. Rao and M. P. Georgeff, "BDI Agents: From Theory to Practice," *ICMAS*, pp. 312–319, 1995.
+
+[CITE-FIPA] FIPA (Foundation for Intelligent Physical Agents), *FIPA Agent Management Specification*, 2004.
+
+[CITE-JADE] F. Bellifemine, G. Caire, and D. Greenwood, *Developing Multi-Agent Systems with JADE*, Wiley, 2007.
+
+[CITE-BEINHOCKER] E. D. Beinhocker, *The Origin of Wealth: Evolution, Complexity and the Radical Remaking of Economics*, Harvard Business School Press, 2006. Chapter 16: "Organization: A Society of Minds," pp. 349–380.
 
 [CITE-SIGNAL-NOISE] J. Valenti, "Signal to Noise," juliavalenti.com, April 2026.
 
