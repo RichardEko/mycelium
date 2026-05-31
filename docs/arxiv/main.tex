@@ -164,12 +164,13 @@ failure mode to this assumption directly.
 \subsection{The Separation Tax}
 
 The coordinator assumption has a concrete operational cost. A representative
-conventional ML inference pipeline requires at minimum six separate infrastructure
-components: a Redis instance for the task queue, a service registry (Consul or
-etcd) for worker registration, a Celery or Sidekiq broker for task dispatch, a
-Kafka cluster for stage-to-stage handoff, a dead-letter queue for failed item
-recovery, and a Prometheus scrape target plus a Grafana dashboard for
-observability across the preceding five.
+conventional ML inference pipeline must address at minimum four distinct
+infrastructure concerns: task dispatch and queuing (Redis/Celery or Kafka
+depending on scale), worker registration and discovery (Consul, etcd, or a
+sidecar), failure recovery and dead-letter handling, and cross-component
+observability. Each concern requires a separately deployed, operated, and
+monitored service. The pipeline is not the model---it is the scaffolding around
+the model.
 
 Each component is a separate operational surface: a separate failure mode, a
 separate scaling policy, a separate upgrade cycle, and a conceptual translation
