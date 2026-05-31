@@ -703,7 +703,9 @@ complex adaptive system.
 
 \subsection{The Economic Case: Quadratic Cost Decomposition}
 
-For workloads in which context accumulates across iterations---the common case
+The architectural argument above is independent of cost. There is also a direct
+economic argument. For workloads in which context accumulates across
+iterations---the common case
 in long-running coordinator pipelines where each step appends to a growing
 history---LLM agent execution cost scales superlinearly with iteration count.
 Because each API call re-processes the entire accumulated context, the token
