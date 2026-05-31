@@ -1002,7 +1002,18 @@
       much protocol ceremony, or in the wrong deployment model, to achieve their full potential.
     </p>
 
-    <h3>6.1 OSGi Requirements and Capabilities</h3>
+    <h3>6.1 Jini and the Lease Insight (Sun Microsystems, 1998)</h3>
+
+    <p>
+      Jini [10, 11] introduced the insight that distributed resource registrations should <em>decay</em>
+      rather than persist indefinitely. A service holds a lease; if it does not renew, the
+      registration expires — implicit failure detection without explicit deregistration. The insight
+      is correct. The implementation was protocol-heavy: explicit <code>Lease</code> objects,
+      <code>renew()</code> RPCs, a lease manager, explicit cancellation. The ceremony obscures the
+      substrate property behind an explicit lifecycle protocol.
+    </p>
+
+    <h3>6.2 OSGi Requirements and Capabilities</h3>
 
     <p>
       The OSGi Alliance [8] formalised a dependency model in which software modules declare
@@ -1013,7 +1024,7 @@
       participants come and go. Paremus Service Fabric addressed this directly.
     </p>
 
-    <h3>6.2 Paremus Service Fabric and the Reconciliation Engine</h3>
+    <h3>6.3 Paremus Service Fabric and the Reconciliation Engine</h3>
 
     <p>
       Paremus Service Fabric (circa 2010–2015) [9] demonstrated that the OSGi R&C model could be
@@ -1047,17 +1058,6 @@
       state. The engine computed deltas; the engine issued corrections; the engine was the
       coordinator. If it went down, reconciliation stopped. The coordinator trap in a more
       sophisticated form.
-    </p>
-
-    <h3>6.3 Jini and the Lease Insight</h3>
-
-    <p>
-      Jini [10, 11] introduced the insight that distributed resource registrations should <em>decay</em>
-      rather than persist indefinitely. A service holds a lease; if it does not renew, the
-      registration expires — implicit failure detection without explicit deregistration. The insight
-      is correct. The implementation was protocol-heavy: explicit <code>Lease</code> objects,
-      <code>renew()</code> RPCs, a lease manager, explicit cancellation. The ceremony obscures the
-      substrate property behind an explicit lifecycle protocol.
     </p>
 
     <h3>6.4 Flow-Based Programming (Morrison, c. 1971)</h3>
@@ -1707,7 +1707,7 @@
       AI Transformation Officer at Novus-i2, a strategic transformation company based in the United
       Kingdom. He was the founder and CEO of Paremus Ltd., the company behind Paremus Service
       Fabric — the continuous OSGi Requirements and Capabilities runtime resolver discussed in
-      Section 6.2 as direct prior art to Mycelium's capability model. First-hand experience
+      Section 6.3 as direct prior art to Mycelium's capability model. First-hand experience
       designing and deploying Service Fabric over a decade of production use informed both the
       architectural critique presented in this paper and the design decisions made to move beyond it.
     </p>

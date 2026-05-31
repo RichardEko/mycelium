@@ -182,13 +182,19 @@ Applied to the failure modes diagnosed in Section 4: pre-admission filtering mak
 
 Three prior systems identified the correct underlying concepts but implemented them with too much protocol ceremony, or in the wrong deployment model, to achieve their full potential.
 
-### 6.1 OSGi Requirements and Capabilities
+### 6.1 Jini and the Lease Insight (Sun Microsystems, 1998)
+
+Jini [CITE-JINI-ARCH, CITE-JINI-SPEC] introduced the insight that distributed resource registrations should *decay* rather than persist indefinitely. A service holds a lease on its registration; if it does not renew, the registration expires. This provides implicit failure detection without requiring an explicit deregistration protocol.
+
+The insight is correct. The implementation was protocol-heavy: explicit `Lease` objects, `renew()` RPCs, a lease manager, explicit cancellation. The ceremony obscures the substrate property — that registrations should evaporate unless actively maintained — behind an explicit lifecycle protocol.
+
+### 6.2 OSGi Requirements and Capabilities
 
 The OSGi Alliance [CITE-OSGI] formalised a dependency model in which software modules declare capabilities they provide and requirements they need; a resolver matches providers to consumers. The primitive is correct: declarative matching between providers and consumers, with the resolver handling wiring.
 
 What mainstream OSGi adoption got wrong was treating resolution as static — performed once at bundle-install time. This made it unsuitable for dynamic systems where participants come and go. The resolver ran at deploy time; a module that disappeared at runtime left a gap with no mechanism for repair. Paremus Service Fabric addressed this directly.
 
-### 6.2 Paremus Service Fabric and the Reconciliation Engine
+### 6.3 Paremus Service Fabric and the Reconciliation Engine
 
 Paremus Service Fabric (circa 2010–2015) [CITE-PAREMUS] demonstrated that the OSGi Requirements and Capabilities model could be applied as a *continuous runtime* resolver — re-resolving dependencies as services appeared, disappeared, and changed, adapting the running system accordingly rather than requiring a redeploy.
 
@@ -197,12 +203,6 @@ To be precise about what Paremus achieved: the R&C graph was a *declared target 
 It is worth noting Paremus' own architectural trajectory. The platform began as a Jini runtime with OSGi components, using Jini's service discovery as the underlying discovery mechanism. Over time, Jini service discovery was replaced with the OSGi Remote Services specification backed by an in-house gossip-based implementation — decentralised discovery, TTL-managed registrations, no central lookup service. Paremus was, in other words, moving in the right direction at the substrate level. What did not change was the hermetic relationship between the gossip layer and the reconciliation engine: 'as above, so below' — the declared target state lived in the central engine above; the gossip layer revealed the landscape below; the engine held the authority to reconcile the two. The coordinator trap persisted not in the discovery mechanism but in the architectural layer that held the target.
 
 What Paremus still required was a *central reconciliation engine* holding that target state. The engine computed deltas; the engine issued corrections; the engine was the coordinator. If it went down, reconciliation stopped. The coordinator trap in a more sophisticated form.
-
-### 6.3 Jini and the Lease Insight
-
-Jini [CITE-JINI-ARCH, CITE-JINI-SPEC] introduced the insight that distributed resource registrations should *decay* rather than persist indefinitely. A service holds a lease on its registration; if it does not renew, the registration expires. This provides implicit failure detection without requiring an explicit deregistration protocol.
-
-The insight is correct. The implementation was protocol-heavy: explicit `Lease` objects, `renew()` RPCs, a lease manager, explicit cancellation. The ceremony obscures the substrate property — that registrations should evaporate unless actively maintained — behind an explicit lifecycle protocol.
 
 ### 6.4 Flow-Based Programming (Morrison, c. 1971)
 
@@ -456,7 +456,7 @@ The coordinator trap is not a new discovery. Hayek described it for economies in
 
 ## About the Author
 
-**Dr. Richard Nicholson** is CEO and founder of Tathata Systems Ltd and Chief AI Transformation Officer at Novus-i2, a strategic transformation company based in the United Kingdom. He was the founder and CEO of Paremus Ltd., the company behind Paremus Service Fabric — the continuous OSGi Requirements and Capabilities runtime resolver discussed in Section 6.2 as direct prior art to Mycelium's capability model. First-hand experience designing and deploying Service Fabric over a decade of production use informed both the architectural critique presented in this paper and the design decisions made to move beyond it.
+**Dr. Richard Nicholson** is CEO and founder of Tathata Systems Ltd and Chief AI Transformation Officer at Novus-i2, a strategic transformation company based in the United Kingdom. He was the founder and CEO of Paremus Ltd., the company behind Paremus Service Fabric — the continuous OSGi Requirements and Capabilities runtime resolver discussed in Section 6.3 as direct prior art to Mycelium's capability model. First-hand experience designing and deploying Service Fabric over a decade of production use informed both the architectural critique presented in this paper and the design decisions made to move beyond it.
 
 He served as President, Board Director, and Treasurer of the OSGi Alliance for approximately six years, the standards body responsible for the Requirements and Capabilities specification that provides the formal vocabulary for declarative capability matching at the core of Mycelium's design. During that tenure he authored two Alliance position papers — *Modularity* [CITE-OSGI-MOD] and *Complexity, Modularity and Business* [CITE-OSGI-CMB] — which develop the theoretical grounding in complexity and modularity that informs this work. He was awarded the OSGi Laureate (2019) for outstanding contributions to the Alliance and the adoption of OSGi technology, and the OSGi Leadership Award (2019) for his service as a board officer and advocate for OSGi modularity strategy. He was co-architectural lead for the EU Horizon 2020 Brain-IoT project, a federated platform for emergent coordination across heterogeneous IoT and edge devices, with two IEEE publications arising from that work [CITE-BRAIN-IOT-1, CITE-BRAIN-IOT-2].
 

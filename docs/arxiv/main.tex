@@ -371,6 +371,18 @@ Four prior systems identified the correct underlying concepts but implemented th
 with too much protocol ceremony, or in the wrong deployment model, to achieve
 their full potential.
 
+\subsection{Jini and the Lease Insight (Sun Microsystems, 1998)}
+
+Sun Microsystems' Java/Jini~\cite{jini-arch,jini-spec} introduced the insight
+that distributed resource registrations should \emph{decay} rather than persist
+indefinitely. A service holds a lease on its registration; if it does not renew,
+the registration expires. This provides implicit failure detection without
+requiring an explicit deregistration protocol. The insight is correct. The
+implementation was protocol-heavy: explicit \texttt{Lease} objects,
+\texttt{renew()} RPCs, a lease manager, explicit cancellation. The ceremony
+obscures the substrate property---that registrations should evaporate unless
+actively maintained---behind an explicit lifecycle protocol.
+
 \subsection{OSGi Requirements and Capabilities}
 
 The OSGi Alliance~\cite{osgi} formalised a dependency model in which software
@@ -418,18 +430,6 @@ Mycelium, the target state is \emph{compiled into the runtime components
 themselves}---each node carries its own fragment as capability and requirement
 declarations. There is nothing external to converge toward. Convergence emerges
 upward from those fragments.
-
-\subsection{Jini and the Lease Insight}
-
-Jini~\cite{jini-arch,jini-spec} introduced the insight that distributed resource
-registrations should \emph{decay} rather than persist indefinitely. A service
-holds a lease on its registration; if it does not renew, the registration expires.
-This provides implicit failure detection without requiring an explicit
-deregistration protocol. The insight is correct. The implementation was
-protocol-heavy: explicit \texttt{Lease} objects, \texttt{renew()} RPCs, a lease
-manager, explicit cancellation. The ceremony obscures the substrate
-property---that registrations should evaporate unless actively maintained---behind
-an explicit lifecycle protocol.
 
 \subsection{Flow-Based Programming (Morrison, c.~1971)}
 
