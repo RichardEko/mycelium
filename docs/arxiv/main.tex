@@ -79,7 +79,7 @@ outputs, decides, and issues commands; and \emph{registry-based discovery}, in
 which a global index brokers introductions between agents. Both patterns introduce
 a coordinator---by different names---that becomes a bottleneck, a single point of
 failure, and an unbounded audit obligation as agent populations grow. We
-argue by construction that these failure modes are not implementation deficiencies
+demonstrate by construction that these failure modes are not implementation deficiencies
 but structural consequences of the coordinator assumption itself. Drawing on
 Holland's framework for Complex Adaptive Systems, we propose an alternative in
 which coordination emerges from substrate properties rather than explicit
@@ -627,9 +627,12 @@ A mediated hierarchy cannot realise this saving without explicit orchestration
 overhead. The coordinator's synthesis step, where it aggregates $M$ subtask
 results into a combined output, recreates the full accumulated context and pays
 the quadratic penalty once more. Mycelium's capability-bounded groups implement
-decomposition automatically: each group's TTL bounds effective $k$, the quadratic
-cost accumulation resets at each group boundary, and no coordinator synthesis is
-required.
+decomposition automatically: each group's TTL constrains how long a work item
+remains live in that stage, which under typical workloads approximates a bound on
+effective $k$ for that group---a time bound rather than a strict iteration count
+bound, but one that produces the same practical effect when per-iteration latency
+is roughly constant. The quadratic cost accumulation resets at each group
+boundary, and no coordinator synthesis is required.
 
 The practical significance of this saving is reinforced by empirical energy
 measurements. White~\cite{white2025} demonstrates that inference energy per
