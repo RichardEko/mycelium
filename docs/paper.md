@@ -126,7 +126,7 @@ The coordinator receives all agent outputs and produces a synthesised result. Th
 
 This is post-admission filtering: artifacts are produced first; quality is assessed after. The coordinator is the filter, but it operates after production, not before. A coordinator that synthesised more carefully would reduce noise, but it could never eliminate the audit obligation entirely because quality assessment requires domain expertise that the coordinator cannot possess for every domain it mediates. As agent populations grow, the coordinator's cognitive load grows linearly with the number of domains it must evaluate. The audit burden scales with the coordinator.
 
-The three-hour issue and the five-second issue have the same voice because the coordinator processes them identically. There is no mechanism in the architecture to distinguish them before they produce output. The distinction, if it is made at all, must be made by a human reviewer after the fact — which is precisely the unbounded obligation Valenti describes.
+The three-hour issue and the five-second issue have the same voice because the coordinator processes them identically [CITE-SIGNAL-NOISE]. There is no mechanism in the architecture to distinguish them before they produce output. The distinction, if it is made at all, must be made by a human reviewer after the fact — which is precisely the unbounded obligation Valenti describes.
 
 ### 4.3 Context Loss: The Consequence of Coordinator-Held State
 
