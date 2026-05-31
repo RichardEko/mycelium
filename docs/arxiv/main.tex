@@ -456,12 +456,6 @@ What FBP retained was an external medium to which all these properties belong. T
 FBP runtime \emph{is} the coordinator: it allocates connections, manages
 backpressure, and resolves the wiring. The coordinator trap remains.
 
-The distinction that Section~\ref{sec:mycelium} realises: in FBP, backpressure is
-a runtime-managed property of the connections. An alternative is for each agent to
-carry its own opacity declaration as a local KV entry---``I am saturated; treat me
-as unavailable''---readable by any resolver in the mesh without a shared runtime
-maintaining any state.
-
 \subsection{The Strip-the-Ceremony Pattern}
 
 A pattern emerges across all four cases:

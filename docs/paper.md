@@ -216,8 +216,6 @@ Flow-Based Programming [CITE-FBP], developed by J. Paul Morrison at IBM in the e
 
 What FBP retained was an external medium to which all these properties belong. The bounded connections, the port bindings, the network definition — all live in an FBP runtime outside the component processes. Components are defined relative to their runtime; topology is managed by the runtime, not by the components themselves. The FBP runtime *is* the coordinator: it allocates connections, manages backpressure, and resolves the wiring. Moving from an FBP runtime to a Kafka cluster is an infrastructure substitution, not an architectural shift. The coordinator trap remains.
 
-The distinction that Section 7 realises: in FBP, backpressure is a runtime-managed property of the connections. An alternative is for each agent to carry its own opacity declaration as a local KV entry — "I am saturated; treat me as unavailable" — readable by any resolver in the mesh without a shared runtime maintaining any state.
-
 ### 6.5 The Strip-the-Ceremony Pattern
 
 A pattern emerges across all four cases:
