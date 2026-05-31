@@ -1373,7 +1373,7 @@
       A mediated hierarchy cannot realise this saving: the coordinator must aggregate M subtask
       results into a combined output, recreating the full accumulated context and paying the
       quadratic penalty once more, partially or entirely undoing the decomposition saving.
-      Mycelium's capability-bounded groups implement decomposition automatically — each group's TTL
+      However, Mycelium's capability-bounded groups implement decomposition automatically — each group's TTL
       constrains how long a work item remains live in that stage, which under typical workloads
       approximates a bound on effective <em>k</em> for that group — a time bound rather than a
       strict iteration count bound, but one that produces the same practical effect when

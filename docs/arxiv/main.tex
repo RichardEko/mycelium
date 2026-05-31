@@ -621,7 +621,7 @@ from a 4$\times$ decomposition.
 A mediated hierarchy cannot realise this saving without explicit orchestration
 overhead. The coordinator's synthesis step, where it aggregates $M$ subtask
 results into a combined output, recreates the full accumulated context and pays
-the quadratic penalty once more. Mycelium's capability-bounded groups implement
+the quadratic penalty once more. However, Mycelium's capability-bounded groups implement
 decomposition automatically: each group's TTL constrains how long a work item
 remains live in that stage, which under typical workloads approximates a bound on
 effective $k$ for that group---a time bound rather than a strict iteration count
