@@ -55,8 +55,8 @@
 \usepackage[hang, flushmargin]{footmisc}
 
 % ─────────────────────────────────────────────────────────────────────────────
-\title{\textbf{The Coordinator Trap: Why Mediated Multi-Agent\\
-Architectures Cannot Scale and a Substrate-Based Alternative}}
+\title{\textbf{The Coordinator Trap: Structural Scaling Liabilities in\\
+Mediated Multi-Agent Architectures and a Substrate-Based Alternative}}
 
 \author{%
   Dr.\ Richard Nicholson\\[4pt]
@@ -79,7 +79,7 @@ outputs, decides, and issues commands; and \emph{registry-based discovery}, in
 which a global index brokers introductions between agents. Both patterns introduce
 a coordinator---by different names---that becomes a bottleneck, a single point of
 failure, and an unbounded audit obligation as agent populations grow. We
-demonstrate by construction that these failure modes are not implementation deficiencies
+argue that these failure modes are not implementation deficiencies
 but structural consequences of the coordinator assumption itself. Drawing on
 Holland's framework for Complex Adaptive Systems, we propose an alternative in
 which coordination emerges from substrate properties rather than explicit
@@ -92,8 +92,9 @@ addresses each failure mode rather than ameliorating it.
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Introduction}
 
-Every major AI agent framework released between 2023 and 2026---LangChain,
-AutoGen, CrewAI, OpenAI Swarm, and their successors---converges on the same
+A dominant family of AI agent frameworks released between 2023 and 2026---the
+supervisor, manager, hierarchical orchestration, and router patterns found in
+LangChain, AutoGen, CrewAI, and their successors---converges on the same
 structural pattern: a central orchestrator receives requests, routes them to
 specialist sub-agents, aggregates their outputs, and returns a synthesised
 result~\cite{silobench,mas-survey,raps}. The orchestrator is the coordinator.
@@ -146,9 +147,17 @@ runtime, and correctness is enforced top-down.
 A registry-based system separates coordination from discovery. Agents register
 capabilities in a global index; other agents query the index to locate peers. The
 registry brokers introductions; agents communicate point-to-point thereafter.
-MIT~NANDA~\cite{nanda} and FIPA's Directory Facilitator~\cite{fipa,jade} exemplify
-this pattern. The registry is a coordinator with a narrower mandate: it holds
-authoritative state about agent capabilities and through which discovery passes.
+FIPA's Directory Facilitator~\cite{fipa,jade} is a canonical instance. MIT
+NANDA~\cite{nanda} represents a more sophisticated point on the same spectrum:
+it uses CRDT-based updates, cryptographically verifiable AgentFacts, and
+multi-endpoint routing rather than a static index. This spectrum runs from
+static centralised registries through federated and CRDT-verifiable designs to
+fully local self-admission substrates. The claim here applies to the common
+structural property they share: an authority-bearing component through which
+discovery passes and which holds canonical state about the agent population.
+Mycelium sits at the far end of this spectrum---no registry, no authority, no
+discovery component---but the critique does not apply equally to every design
+in the family.
 
 \subsection{The Shared Assumption}
 
@@ -481,7 +490,7 @@ crate embedded in the caller's process. The architecture is three layers; each d
 structural failure modes identified in Section~\ref{sec:trap}: audit burden
 (\S4.2), context loss (\S4.3), and output format mismatch (\S4.4).
 
-\subsection{Layer~I --- KV Store: Eliminating Context Loss}
+\subsection{Layer~I --- KV Store: Addressing Context Loss}
 
 Layer~I is a gossip-replicated key-value store. Every entry carries a Hybrid
 Logical Clock timestamp for causal last-write-wins ordering and a time-to-live.
@@ -489,10 +498,13 @@ Entries are replicated across the cluster via epidemic gossip; anti-entropy
 reconciliation runs on peer reconnection. There is no primary, no leader, no
 coordinator. Every node holds a full replica of the key namespace relevant to it.
 
-\textbf{Failure mode eliminated.} Context loss in the mediated hierarchy arises
-because shared state is held in or near the coordinator. In Mycelium's Layer~I,
-there is no coordinator memory to lose. A node that restarts reconnects to its
-peers, runs anti-entropy, and recovers full mesh state within one gossip cycle.
+\textbf{Context loss structurally highly improbable.} Context loss in the mediated
+hierarchy arises because shared state is held in or near the coordinator. In
+Mycelium's Layer~I, there is no coordinator memory to lose. A node that restarts
+reconnects to its peers, runs anti-entropy, and recovers full mesh state within
+one gossip cycle. State loss requires simultaneous TTL expiry across all
+replicas---possible under full-cluster failure, but structurally different from
+the single-point loss inherent in coordinator designs.
 
 \textbf{TTL evaporation as stigmergy.} Every capability advertisement, every group
 membership record, every opacity flag is a KV entry with a TTL. A live node
@@ -507,7 +519,7 @@ themselves}---each node carries its own fragment as capability and requirement
 declarations. There is nothing external to converge toward. Convergence emerges
 upward from those fragments.
 
-\subsection{Layer~II --- Signal Mesh: Eliminating Audit Burden and Output Mismatch}
+\subsection{Layer~II --- Signal Mesh: Addressing Audit Burden and Output Mismatch}
 
 Layer~II is an ephemeral signal mesh implementing Holland's signal/boundary model
 directly. Signals are emitted with a scope and propagated unconditionally to all
@@ -516,19 +528,27 @@ signal against the node's declared receptor set. Only nodes whose boundary match
 the signal act on it. Forwarding is always unconditional; acting is always
 conditional on boundary admission.
 
-\textbf{Audit burden eliminated.} A signal scoped to the \texttt{gpu-compute} group
-only activates nodes in that group. An agent in an unrelated group receives and
-forwards the signal but produces no artifact. The three-hour problem and the
-five-second problem never land on a reviewer who cannot evaluate them because the
-boundary prevents admission in the first place.
+\textbf{Audit burden structurally prevented.} A signal scoped to the
+\texttt{gpu-compute} group only activates nodes in that group. Signals propagate
+at the transport layer unconditionally---that is the substrate's routing
+mechanism---but an agent in an unrelated group produces no \emph{application-layer
+artifact}: it does not act, does not log, does not emit a downstream result. The
+audit burden that scales with a coordinator scales because every event passes
+through a single processing point that generates a record regardless of
+relevance. Here, the record is never created because the admission test fails
+before processing begins. The three-hour problem and the five-second problem
+never land on a reviewer who cannot evaluate them.
 
-\textbf{Output format mismatch eliminated.} A signal emitted to a
+\textbf{Output format mismatch structurally addressed.} A signal emitted to a
 \texttt{human-review} group reaches only nodes whose boundary includes
 human-review membership; a signal emitted to \texttt{automated-pipeline} reaches a
 different set. Human-facing and agent-facing consumers self-differentiate via their
-boundary declarations without any routing logic in the emitter.
+boundary declarations without any routing logic in the emitter. The
+representation design obligation---what a human-review signal should
+\emph{contain}---remains with the emitting agent; the substrate ensures it
+reaches the right consumers, not that its content is appropriate for them.
 
-\subsection{Capability and Requirement Declarations: Eliminating the Category Error}
+\subsection{Capability and Requirement Declarations: Addressing the Category Error}
 
 Each Mycelium node holds a \texttt{CapabilityGroupDef}---a declarative
 specification of capabilities it provides and requirements it needs. The node
@@ -539,7 +559,7 @@ boundary. The application's coordination topology emerges from the composition o
 these declarations across the live node population, not from a coordinator's
 routing table.
 
-\subsection{Layer~III --- Consensus: Eliminating the Coordinator Bottleneck}
+\subsection{Layer~III --- Consensus: Addressing the Coordinator Bottleneck}
 
 Layer~III provides epidemic consensus---\texttt{group\_propose},
 \texttt{system\_propose}, and \texttt{cross\_group\_propose}---implemented entirely
@@ -547,17 +567,33 @@ through the signal mesh. \texttt{PROPOSE}, \texttt{VOTE}, and \texttt{COMMIT} ar
 signal payloads riding ordinary Layer~II frames. The substrate is unaware that
 consensus is happening.
 
+\textbf{Fault model and guarantees.} The consensus layer is crash-fault tolerant;
+it does not provide Byzantine fault tolerance. A ballot commits when a configurable
+quorum fraction of group members---defaulting to a simple majority---has voted. A
+node that crashes mid-ballot simply stops voting; the ballot either reaches quorum
+without it or times out. Under network partition, liveness is not guaranteed: a
+minority partition will not commit. Safety---no two nodes commit conflicting values
+for the same ballot---holds as long as quorum is not simultaneously satisfied by
+two disjoint subsets, which a majority quorum prevents. Quorum membership is
+evaluated against the live capability-group population at ballot time, not a fixed
+initial roster; nodes that join or leave between proposal and commit may affect
+whether quorum is reachable, but cannot cause two conflicting values to commit.
+This is not a replacement for Raft, Paxos, or BFT consensus in high-assurance
+settings; it is a coordination primitive for capability-group decisions in
+homogeneous trusted clusters where crash-fault tolerance and leaderless operation
+are the primary requirements.
+
 \texttt{cross\_group\_propose} supports ballots where multiple named capability
 groups act as independent voting blocs. A proposal commits only when every group
 independently reaches its required quorum fraction. This supports multi-AZ
 durability requirements, compliance ratification, and hierarchical AI pipelines---all
 without a coordinator.
 
-\textbf{Failure mode eliminated.} In a mediated hierarchy, coordination throughput
-is bounded by the coordinator's capacity, and coordinator failure stops
-coordination entirely. In Layer~III, there is no coordinator. No single node's
-failure prevents other ballots from proceeding. The system degrades gracefully to
-reduced quorum, not coordination failure.
+\textbf{Coordinator bottleneck structurally addressed.} In a mediated hierarchy,
+coordination throughput is bounded by the coordinator's capacity, and coordinator
+failure stops coordination entirely. In Layer~III, there is no coordinator. No
+single node's failure prevents other ballots from proceeding. The system degrades
+gracefully to reduced quorum, not coordination failure.
 
 \subsection{Agentic Flow Networks}
 
@@ -603,11 +639,16 @@ correctly on a substrate that eliminates the coordinator.
 
 \subsection{The Economic Case: Quadratic Cost Decomposition}
 
-LLM agent execution cost scales superlinearly with iteration count. Because each
-API call re-processes the entire accumulated context, the token count at
-iteration~$k$ is $\Delta T + \tau k$ (where $\Delta T$ is the initial prompt and
-$\tau$ is context growth per iteration). Summing over $k$ iterations yields a
-total proportional to $k^2$: cost is quadratic in iteration count, not linear.
+For workloads in which context accumulates across iterations---the common case
+in long-running coordinator pipelines where each step appends to a growing
+history---LLM agent execution cost scales superlinearly with iteration count.
+Because each API call re-processes the entire accumulated context, the token
+count at iteration~$k$ is $\Delta T + \tau k$ (where $\Delta T$ is the initial
+prompt and $\tau$ is context growth per iteration). Summing over $k$ iterations
+yields a total proportional to $k^2$: cost is quadratic in iteration count, not
+linear. Systems that summarise, truncate, or selectively retrieve context can
+reduce but not eliminate this accumulation; the model below applies at its
+strongest to pipelines that maintain a running context window.
 
 The decomposition leverage is direct. Splitting a $k$-iteration task into $M$
 independent subtasks of $k/M$ iterations each reduces total cost by factor~$M$:
@@ -649,13 +690,14 @@ pipeline, and Prompt Skills cross-node KV propagation with LLM invocation. All
 12 scenarios pass at HEAD.
 
 The implementation is publicly available at
-\url{https://github.com/RichardEko/mycelium} under the AGPL-3.0 licence. The
-AGPL-3.0 licence is intentional: applications that deploy Mycelium as part of a
+\url{https://github.com/RichardEko/mycelium} (commit
+\texttt{1717d4e}, tag \texttt{paper-submission-v1}) under the AGPL-3.0 licence.
+The integration test harness is included in the repository and reproducible with a
+single \texttt{make test} invocation against a Docker-composed 5-node cluster.
+The AGPL-3.0 licence is intentional: applications that deploy Mycelium as part of a
 networked service must publish their source under the same terms, closing the
 SaaS loophole that permissive licences leave open. Organisations requiring
 proprietary embedding may obtain a commercial licence from Tathata Systems Ltd.
-The integration test harness is included in the repository and reproducible with a
-single \texttt{make test} invocation against a Docker-composed 5-node cluster.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Discussion}
@@ -672,12 +714,14 @@ market participants. Prices are not just numbers; they are signals that aggregat
 and propagate dispersed knowledge through the economy without anyone needing to
 understand the whole.
 
-The parallel to the coordinator trap is exact. A planned economy and a mediated
-hierarchy share the same failure mode: a central node that must aggregate
-knowledge it cannot fully possess, synthesise decisions on behalf of participants
-who understand their local context better than any coordinator can, and issue
-commands downward into a system whose ground truth is always more current at the
-edges than at the centre.
+The parallel to the coordinator trap is suggestive rather than exact---economies,
+biological systems, and distributed software are not identical. But all three
+expose the same cost of centralising knowledge that is generated and updated at
+the edge. A planned economy and a mediated hierarchy share a recognisable failure
+mode: a central node that must aggregate knowledge it cannot fully possess,
+synthesise decisions on behalf of participants who understand their local context
+better than any coordinator can, and issue commands downward into a system whose
+ground truth is always more current at the edges than at the centre.
 
 Hayek's market is a signal/boundary system. He just did not have Holland's
 vocabulary.
@@ -714,6 +758,21 @@ misconfigured boundary---too broad or too narrow---produces incorrect routing
 without any coordinator to catch the error. This places a correctness obligation
 on the capability declarations that the mediated hierarchy places on the
 coordinator instead.
+
+\textbf{Trust and adversarial behaviour.} Self-declared capability boundaries
+raise questions about false capability claims, malicious group admission, and
+poisoned KV entries. Mycelium's intra-cluster assumption---the operator owns the
+cluster---substantially reduces this surface, but owned clusters still contain
+buggy or compromised nodes. The \texttt{tls} feature addresses node identity:
+each node holds an Ed25519 keypair; mTLS authenticates every TCP connection;
+KV writes under the \texttt{tls} feature are Ed25519-signed at the frame level
+(wire version~10), making undetected mutation of replicated state infeasible for
+an attacker who has not compromised the originating node's private key. The
+current implementation does not provide capability-claim attestation---a node
+can declare capabilities it does not possess---and Byzantine-tolerant consensus
+is out of scope. These are correct tradeoffs for the target deployment model
+(trusted, operator-controlled clusters) but should be revisited before Mycelium
+is used in adversarial multi-tenant environments.
 
 The quadratic cost decomposition in \S7.6 assumes that the $k$-iteration task
 can be partitioned into $M$ independent subtasks. Many real agentic workloads
@@ -786,11 +845,12 @@ time, assembled bottom-up by the mesh at runtime, and always current because
 anything not actively maintained evaporates. Coordination emerges. No coordinator
 required.
 
-The coordinator trap is not a new discovery. Hayek described it for economies in
-1945. Holland formalised it for complex systems in 2012. Mycelium implements the
-solution for AI agent fleets. The insight is the same in all three cases:
-distributed local knowledge, expressed through signals and boundaries, produces
-emergent order that no coordinator can match.
+The coordinator trap is not a new discovery. Hayek described the epistemic cost
+of centralisation for economies in 1945. Holland formalised the signal/boundary
+model for complex systems in 2012. Mycelium applies both to AI agent fleets.
+The insight is the same in all three cases: distributed local knowledge,
+expressed through signals and boundaries, produces emergent order that
+centralised coordination consistently struggles to match.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \bibliography{references}
