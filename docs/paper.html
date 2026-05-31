@@ -1412,61 +1412,19 @@
     <h2><span class="sec-num">8</span>Evaluation</h2>
 
     <p>
-      The benchmarks in §8.1–8.4 state expected outcomes against which Mycelium's claims can be
-      falsified; formal empirical runs are the primary work remaining before submission. Section 8.5
-      provides existing integration evidence from the current implementation, establishing correctness
-      across the three-layer architecture independent of the comparative benchmarks.
-    </p>
-
-    <h3>8.1 Coordination Convergence Time</h3>
-
-    <div class="benchmark">
-      Single-ballot <code>group_propose</code> vs NegMAS SAO N-round negotiation for equivalent
-      3-agent coordination decision. Measure: wall clock from proposal emit to commit write in KV.
-      Expected: single round (&lt;100ms) vs up to 300s watchdog timeout.
-    </div>
-
-    <div class="benchmark">
-      <code>cross_group_propose</code> with 2 groups × 3 nodes each vs mediated hierarchy
-      equivalent multi-department decision. Measure: same. Expected: single ballot vs multiple
-      SAO rounds per group.
-    </div>
-
-    <h3>8.2 Failure Tolerance</h3>
-
-    <div class="benchmark">
-      Coordinator failure in mediated hierarchy vs random node failure in Mycelium cluster.
-      Measure: coordination availability before and after failure, recovery time. Expected:
-      mediated hierarchy coordination halts on coordinator failure; Mycelium degrades gracefully
-      to reduced quorum with remaining nodes able to continue coordination independently.
-    </div>
-
-    <h3>8.3 State Freshness Under Churn</h3>
-
-    <div class="benchmark">
-      TTL evaporation vs knowledge-graph drift rate. Introduce node departures at varying rates.
-      Measure: time from departure to stale-state detection. Expected: Mycelium evaporation within
-      one TTL period (~5s default); filesystem-based memory unbounded without explicit eviction.
-    </div>
-
-    <h3>8.4 Audit Obligation Under Load</h3>
-
-    <div class="benchmark">
-      Artifacts produced per coordination decision as agent population grows from 3 to 30.
-      Mediated hierarchy: O(N) — each agent's output passes through coordinator and generates an
-      artifact. Mycelium: O(matching) — only agents whose boundary matches the signal produce
-      responses. Measure: artifact count at each population size.
-    </div>
-
-    <h3>8.5 Existing Integration Evidence</h3>
-
-    <p>
       Mycelium's correctness across its three-layer architecture is validated by 243 unit tests
       and 12 integration scenarios run against a live 5-node Docker cluster. Scenarios cover KV
       replication under partition and reconnection, signal delivery and boundary admission,
       capability group formation and dissolution, consensus quorum under node failure, cross-group
       voting, the full Agentic Flow Networks pipeline, and Prompt Skills cross-node KV propagation
       with LLM invocation. All 12 scenarios pass at HEAD.
+    </p>
+    <p>
+      The implementation is publicly available at
+      <a href="https://github.com/RichardEko/mycelium">https://github.com/RichardEko/mycelium</a>
+      under the Apache&nbsp;2.0 licence. The integration test harness is included in the repository
+      and reproducible with a single <code>make test</code> invocation against a Docker-composed
+      5-node cluster.
     </p>
   </div>
 
@@ -1613,15 +1571,22 @@
 
     <h3>9.4 Future Work</h3>
 
-    <p>
-      Empirical comparison against a deployed mediated hierarchy at equivalent agent counts — the
-      benchmark placeholders in Section 8. Formal verification of the signal/boundary substrate
-      properties using TLA+ or similar. Cross-cluster federation: practical experience deploying
-      multiple independent Mycelium clusters registered with an internet-scale A2A gateway,
-      measuring discovery latency and trust propagation across organisational boundaries.
-      Receiver-side per-(sender, kind) HLC-keyed
-      causal signal delivery for applications requiring strict ordering guarantees.
-    </p>
+    <ul>
+      <li><strong>Empirical comparison</strong> against a deployed mediated hierarchy at equivalent
+      agent counts. Key measurements: (i)&nbsp;coordination convergence time — single-ballot
+      <code>group_propose</code> vs NegMAS SAO N-round negotiation; (ii)&nbsp;failure tolerance —
+      coordinator failure in a mediated hierarchy vs random node failure in Mycelium;
+      (iii)&nbsp;state freshness under churn — TTL evaporation latency vs knowledge-graph drift
+      rate; (iv)&nbsp;audit obligation under load — artifact count growth as agent population
+      scales from 3 to 30.</li>
+      <li><strong>Formal verification</strong> of the signal/boundary substrate properties using
+      TLA+ or similar.</li>
+      <li><strong>Cross-cluster federation</strong> — practical experience deploying multiple
+      independent Mycelium clusters registered with an internet-scale A2A gateway, measuring
+      discovery latency and trust propagation across organisational boundaries.</li>
+      <li><strong>Signal reorder buffer</strong> — receiver-side per-(sender, kind) HLC-keyed
+      causal delivery for applications requiring strict signal ordering.</li>
+    </ul>
   </div>
 
   <!-- ── 10. Conclusion ───────────────────────────────────────────── -->
