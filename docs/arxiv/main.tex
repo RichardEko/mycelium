@@ -86,7 +86,7 @@ which coordination emerges from substrate properties rather than explicit
 protocols. We present Mycelium, a working implementation of this model as an
 embeddable Rust library, and show how its three-layer architecture---gossip KV
 store, signal mesh with boundary admission, and epidemic consensus---structurally
-eliminates each failure mode rather than ameliorating it.
+addresses each failure mode rather than ameliorating it.
 \end{abstract}
 
 % ─────────────────────────────────────────────────────────────────────────────
@@ -435,13 +435,6 @@ What Paremus still required was a \emph{central reconciliation engine} holding
 that target state. If it went down, reconciliation stopped. The coordinator trap
 in a more sophisticated form.
 
-\textbf{The key inversion from Paremus.} In Paremus, the target state was held
-\emph{above} the runtime in a central graph and pushed down into components. In
-Mycelium, the target state is \emph{compiled into the runtime components
-themselves}---each node carries its own fragment as capability and requirement
-declarations. There is nothing external to converge toward. Convergence emerges
-upward from those fragments.
-
 \subsection{Flow-Based Programming (Morrison, c.~1971)}
 
 Flow-Based Programming~\cite{fbp}, developed by J.~Paul Morrison at IBM in the
@@ -506,6 +499,13 @@ membership record, every opacity flag is a KV entry with a TTL. A live node
 continuously re-advertises; the trail stays fresh. A dead node stops
 re-advertising; its entries evaporate. There is no explicit failure detection
 protocol because absence of refreshment \emph{is} the failure signal.
+
+\textbf{The key inversion from Paremus.} In Paremus, the target state was held
+\emph{above} the runtime in a central graph and pushed down into components. In
+Mycelium, the target state is \emph{compiled into the runtime components
+themselves}---each node carries its own fragment as capability and requirement
+declarations. There is nothing external to converge toward. Convergence emerges
+upward from those fragments.
 
 \subsection{Layer~II --- Signal Mesh: Eliminating Audit Burden and Output Mismatch}
 
