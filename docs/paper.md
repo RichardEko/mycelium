@@ -295,7 +295,7 @@ An AFN has five structural properties:
 
 5. **TTL-Native Cleanup.** Work items written to the KV substrate carry TTLs. Abandoned items — from failed workers or cancelled requests — evaporate automatically. There is no dead-letter queue, no explicit cancellation protocol, no garbage collection task. Absence of refreshment is the failure signal.
 
-These five properties are validated empirically by `examples/fluid_pipeline/` — a 10-worker, 4-stage news article pipeline (fetch → parse → score → publish) running over a shared KV ring as distributed buffer, exercised end-to-end by integration scenario 11. The topology assembles itself, the opacity backpressure mechanism is confirmed by direct observation, and all work items are cleaned up on worker exit without explicit deregistration.
+These five properties are validated empirically by `examples/fluid_pipeline/` — a 10-worker, 4-stage news article pipeline (fetch → parse → score → publish) running over a shared KV ring as distributed buffer, exercised end-to-end by integration scenario 11 (repository and test harness: §8). The topology assembles itself, the opacity backpressure mechanism is confirmed by direct observation, and all work items are cleaned up on worker exit without explicit deregistration.
 
 An AFN is not a new programming model layered on top of Mycelium. It is the name for the pattern that naturally arises when a distributed application is built correctly on a substrate that eliminates the coordinator.
 

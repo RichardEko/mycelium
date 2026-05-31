@@ -1355,7 +1355,8 @@
     <p>
       These five properties are validated empirically by <code>examples/fluid_pipeline/</code> —
       a 10-worker, 4-stage news article pipeline (fetch → parse → score → publish) running over a
-      shared KV ring as distributed buffer, exercised end-to-end by integration scenario 11. The
+      shared KV ring as distributed buffer, exercised end-to-end by integration scenario 11
+      (repository and test harness: §8). The
       topology assembles itself, the opacity backpressure mechanism is confirmed by direct
       observation, and all work items are cleaned up on worker exit without explicit deregistration.
     </p>
