@@ -383,34 +383,43 @@ their full potential.
 
 \subsection{Jini and the Lease Insight (Sun Microsystems, 1998)}
 
-Sun Microsystems' Java/Jini~\cite{jini-arch,jini-spec} introduced the insight
-that distributed resource registrations should \emph{decay} rather than persist
-indefinitely. A service holds a lease on its registration; if it does not renew,
-the registration expires. This provides implicit failure detection without
-requiring an explicit deregistration protocol. The insight is correct. The
-implementation was protocol-heavy: explicit \texttt{Lease} objects,
+Sun Microsystems' Java/Jini~\cite{jini-arch,jini-spec} was designed to address
+runtime dynamism: in a live network, services appear, depart, and change in ways
+no deployment manifest can anticipate, and a crashed service cannot explicitly
+deregister. The lease was Jini's answer---decay is the right primitive for an
+unpredictably dynamic world. A service holds a lease on its registration; if it
+does not renew, the registration expires, providing implicit failure detection
+without requiring an explicit deregistration protocol. The insight is correct.
+The implementation was protocol-heavy: explicit \texttt{Lease} objects,
 \texttt{renew()} RPCs, a lease manager, explicit cancellation. The ceremony
 obscures the substrate property---that registrations should evaporate unless
 actively maintained---behind an explicit lifecycle protocol.
 
 \subsection{OSGi Requirements and Capabilities}
 
-The OSGi Alliance~\cite{osgi} formalised a dependency model in which software
-modules declare capabilities they provide and requirements they need; a resolver
-matches providers to consumers. The primitive is correct: declarative matching
-between providers and consumers, with the resolver handling wiring. What mainstream
-OSGi adoption got wrong was treating resolution as static---performed once at
-bundle-install time. The resolver ran at deploy time; a module that disappeared at
-runtime left a gap with no mechanism for repair. Paremus Service Fabric
-addressed this directly.
+OSGi's insight was that software agility is a function of modular, dynamically
+assembleable components. Its answer to environmental change was DevOps-scale: if
+the runtime environment broke, re-resolve and redeploy at bundle granularity.
+Dynamic assembly was the goal; deploy-time resolution was where that ambition
+stopped. The OSGi Alliance~\cite{osgi} formalised a dependency model in which
+software modules declare capabilities they provide and requirements they need; a
+resolver matches providers to consumers. The primitive is correct: declarative
+matching between providers and consumers, with the resolver handling wiring. What
+mainstream OSGi adoption got wrong was treating resolution as static---performed
+once at bundle-install time. The resolver ran at deploy time; a module that
+disappeared at runtime left a gap with no mechanism for repair. Paremus Service
+Fabric addressed this directly.
 
 \subsection{Paremus Service Fabric and the Reconciliation Engine}
 
-Paremus Service Fabric (circa 2010--2015)~\cite{paremus} demonstrated that the
-OSGi Requirements and Capabilities model could be applied as a \emph{continuous
-runtime} resolver---re-resolving dependencies as services appeared, disappeared,
-and changed, adapting the running system accordingly rather than requiring a
-redeploy.
+Paremus Service Fabric (circa 2010--2015)~\cite{paremus} can be understood as a
+deliberate attempt to fuse Jini's runtime dynamism with OSGi's modular assembly
+model---retaining the R\&C graph as the declared target topology but making
+resolution continuous against a live, gossip-discovered environment rather than a
+static deployment manifest. The result demonstrated that the OSGi Requirements
+and Capabilities model could be applied as a \emph{continuous runtime}
+resolver---re-resolving dependencies as services appeared, disappeared, and
+changed, adapting the running system accordingly rather than requiring a redeploy.
 
 To be precise about what Paremus achieved: the R\&C graph was a \emph{declared
 target state}. The runtime was continuously monitored against that target, and

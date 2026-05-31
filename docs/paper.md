@@ -186,11 +186,13 @@ Three prior systems identified the correct underlying concepts but implemented t
 
 ### 6.1 Jini and the Lease Insight (Sun Microsystems, 1998)
 
-Jini [CITE-JINI-ARCH, CITE-JINI-SPEC] introduced the insight that distributed resource registrations should *decay* rather than persist indefinitely. A service holds a lease on its registration; if it does not renew, the registration expires. This provides implicit failure detection without requiring an explicit deregistration protocol.
+Jini [CITE-JINI-ARCH, CITE-JINI-SPEC] was designed to address runtime dynamism: in a live network, services appear, depart, and change in ways no deployment manifest can anticipate, and a crashed service cannot explicitly deregister. The lease was Jini's answer — decay is the right primitive for an unpredictably dynamic world. A service holds a lease on its registration; if it does not renew, the registration expires, providing implicit failure detection without requiring an explicit deregistration protocol.
 
 The insight is correct. The implementation was protocol-heavy: explicit `Lease` objects, `renew()` RPCs, a lease manager, explicit cancellation. The ceremony obscures the substrate property — that registrations should evaporate unless actively maintained — behind an explicit lifecycle protocol.
 
 ### 6.2 OSGi Requirements and Capabilities
+
+OSGi's insight was that software agility is a function of modular, dynamically assembleable components. Its answer to environmental change was DevOps-scale: if the runtime environment broke, re-resolve and redeploy at bundle granularity. Dynamic assembly was the goal; deploy-time resolution was where that ambition stopped.
 
 The OSGi Alliance [CITE-OSGI] formalised a dependency model in which software modules declare capabilities they provide and requirements they need; a resolver matches providers to consumers. The primitive is correct: declarative matching between providers and consumers, with the resolver handling wiring.
 
@@ -198,7 +200,7 @@ What mainstream OSGi adoption got wrong was treating resolution as static — pe
 
 ### 6.3 Paremus Service Fabric and the Reconciliation Engine
 
-Paremus Service Fabric (circa 2010–2015) [CITE-PAREMUS] demonstrated that the OSGi Requirements and Capabilities model could be applied as a *continuous runtime* resolver — re-resolving dependencies as services appeared, disappeared, and changed, adapting the running system accordingly rather than requiring a redeploy.
+Paremus Service Fabric (circa 2010–2015) [CITE-PAREMUS] can be understood as a deliberate attempt to fuse Jini's runtime dynamism with OSGi's modular assembly model — retaining the R&C graph as the declared target topology but making resolution continuous against a live, gossip-discovered environment rather than a static deployment manifest. The result demonstrated that the OSGi Requirements and Capabilities model could be applied as a *continuous runtime* resolver — re-resolving dependencies as services appeared, disappeared, and changed, adapting the running system accordingly rather than requiring a redeploy.
 
 To be precise about what Paremus achieved: the R&C graph was a *declared target state*. The runtime was continuously monitored against that target, and deltas were driven back into convergence whenever they appeared. This is closer to the Kubernetes control loop than to a shared knowledge graph — drift from declared intent was structurally prevented, not merely discouraged.
 

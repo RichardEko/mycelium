@@ -1017,15 +1017,24 @@
     <h3>6.1 Jini and the Lease Insight (Sun Microsystems, 1998)</h3>
 
     <p>
-      Jini [10, 11] introduced the insight that distributed resource registrations should <em>decay</em>
-      rather than persist indefinitely. A service holds a lease; if it does not renew, the
-      registration expires — implicit failure detection without explicit deregistration. The insight
-      is correct. The implementation was protocol-heavy: explicit <code>Lease</code> objects,
+      Jini [10, 11] was designed to address runtime dynamism: in a live network, services appear,
+      depart, and change in ways no deployment manifest can anticipate, and a crashed service cannot
+      explicitly deregister. The lease was Jini's answer — decay is the right primitive for an
+      unpredictably dynamic world. A service holds a lease; if it does not renew, the registration
+      expires — implicit failure detection without explicit deregistration. The insight is correct.
+      The implementation was protocol-heavy: explicit <code>Lease</code> objects,
       <code>renew()</code> RPCs, a lease manager, explicit cancellation. The ceremony obscures the
       substrate property behind an explicit lifecycle protocol.
     </p>
 
     <h3>6.2 OSGi Requirements and Capabilities</h3>
+
+    <p>
+      OSGi's insight was that software agility is a function of modular, dynamically assembleable
+      components. Its answer to environmental change was DevOps-scale: if the runtime environment
+      broke, re-resolve and redeploy at bundle granularity. Dynamic assembly was the goal;
+      deploy-time resolution was where that ambition stopped.
+    </p>
 
     <p>
       The OSGi Alliance [8] formalised a dependency model in which software modules declare
@@ -1039,9 +1048,12 @@
     <h3>6.3 Paremus Service Fabric and the Reconciliation Engine</h3>
 
     <p>
-      Paremus Service Fabric (circa 2010–2015) [9] demonstrated that the OSGi R&C model could be
-      applied as a <em>continuous runtime resolver</em> — re-resolving dependencies as services
-      appeared, disappeared, and changed.
+      Paremus Service Fabric (circa 2010–2015) [9] can be understood as a deliberate attempt to
+      fuse Jini's runtime dynamism with OSGi's modular assembly model — retaining the R&amp;C graph
+      as the declared target topology but making resolution continuous against a live,
+      gossip-discovered environment rather than a static deployment manifest. The result demonstrated
+      that the OSGi R&amp;C model could be applied as a <em>continuous runtime resolver</em> —
+      re-resolving dependencies as services appeared, disappeared, and changed.
     </p>
 
     <p>
