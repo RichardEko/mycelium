@@ -606,6 +606,14 @@ decomposition automatically: each group's TTL bounds effective $k$, the quadrati
 cost accumulation resets at each group boundary, and no coordinator synthesis is
 required.
 
+The practical significance of this saving is reinforced by empirical energy
+measurements. White~\cite{white2025} finds that inference energy per query
+varies by two orders of magnitude across model sizes, and that a 17$\times$
+energy cost increase between 7B and 72B parameter models yields no statistically
+significant accuracy improvement for mathematical code generation. When each
+coordinator iteration already carries this energy weight, quadratic accumulation
+is not a theoretical concern---it is an operational one.
+
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Evaluation}
 
