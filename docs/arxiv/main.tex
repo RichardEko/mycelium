@@ -110,12 +110,12 @@ coordinator is lost on restart, forcing agents to re-litigate settled decisions;
 and (iii)~output format mismatch, as the coordinator broadcasts undifferentiated
 results to heterogeneous consumers it has no model of.
 
-These failure modes have been documented in production deployments. Valenti's
-account of Cisco's Mycelium~v1 deployment~\cite{signal-noise,context-problem}
-provides a precise field diagnosis: the coordinator could not maintain context
-across restarts, produced three-hour and five-second problems with the same
-apparent authority, and generated structured machine logs that failed to
-communicate to human reviewers.
+These failure modes have been documented in production deployments. In the
+Cisco Mycelium project---an unrelated multi-agent orchestration system---the
+coordinator could not maintain context across restarts, produced three-hour
+and five-second problems with the same apparent authority, and generated
+structured machine logs that failed to communicate to human
+reviewers~\cite{signal-noise,context-problem}.
 
 We show that these failure modes are irreducible by improving the coordinator.
 They follow necessarily from its existence. We then derive a coordinator-free
