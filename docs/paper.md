@@ -311,29 +311,9 @@ A mediated hierarchy cannot realise this saving without explicit orchestration o
 
 ## 8. Evaluation
 
-The benchmarks in §8.1–8.4 state expected outcomes against which Mycelium's claims can be falsified; formal empirical runs are the primary work remaining before submission. Section 8.5 provides existing integration evidence from the current implementation, establishing correctness across the three-layer architecture independent of the comparative benchmarks.
-
-### 8.1 Coordination Convergence Time
-
-[BENCHMARK: single-ballot `group_propose` vs NegMAS SAO N-round negotiation for equivalent 3-agent coordination decision. Expected: single round vs up to 300s. Measure: wall clock from proposal emit to commit write in KV.]
-
-[BENCHMARK: `cross_group_propose` with 2 groups × 3 nodes each vs mediated hierarchy equivalent. Measure: same.]
-
-### 8.2 Failure Tolerance
-
-[BENCHMARK: coordinator failure in mediated hierarchy vs random node failure in Mycelium cluster. Measure: coordination availability before and after failure, recovery time. Expected: mediated hierarchy coordination halts on coordinator failure; Mycelium degrades gracefully to reduced quorum.]
-
-### 8.3 State Freshness Under Churn
-
-[BENCHMARK: TTL evaporation vs knowledge graph drift rate. Introduce node departures at varying rates. Measure: time from departure to state evaporation in Mycelium (expected: TTL period, ~5s default) vs time to stale entry detection in filesystem-based memory (expected: unbounded without explicit eviction).]
-
-### 8.4 Audit Obligation Under Load
-
-[BENCHMARK: artifacts produced per coordination decision as agent population grows from 3 to 30. Mediated hierarchy: O(N) — each agent's output passes through coordinator and generates artifact. Mycelium: O(matching) — only agents whose boundary matches the signal produce responses.]
-
-### 8.5 Existing Integration Evidence
-
 Mycelium's correctness across its three-layer architecture is validated by 243 unit tests and 12 integration scenarios run against a live 5-node Docker cluster. Scenarios cover KV replication under partition and reconnection, signal delivery and boundary admission, capability group formation and dissolution, consensus quorum under node failure, cross-group voting, the full Agentic Flow Networks pipeline, and Prompt Skills cross-node KV propagation with LLM invocation. All 12 scenarios pass at HEAD.
+
+The implementation is publicly available at https://github.com/RichardEko/mycelium under the Apache 2.0 licence. The integration test harness is included in the repository and reproducible with a single `make test` invocation against a Docker-composed 5-node cluster.
 
 ---
 
@@ -379,7 +359,7 @@ Boundary admission requires agents to declare their boundaries correctly. A misc
 
 ### 9.4 Future Work
 
-- **Empirical comparison** against a deployed mediated hierarchy at equivalent agent counts — the placeholder benchmarks in Section 8.
+- **Empirical comparison** against a deployed mediated hierarchy at equivalent agent counts. Key measurements: (i) coordination convergence time — single-ballot `group_propose` vs NegMAS SAO N-round negotiation; (ii) failure tolerance — coordinator failure in a mediated hierarchy vs random node failure in Mycelium; (iii) state freshness under churn — TTL evaporation latency vs knowledge-graph drift rate; (iv) audit obligation under load — artifact count growth as agent population scales from 3 to 30.
 - **Formal verification** of the signal/boundary substrate properties using TLA+ or similar.
 - **Cross-cluster federation** — practical experience deploying multiple independent Mycelium clusters registered with an internet-scale A2A gateway, measuring discovery latency and trust propagation across organisational boundaries.
 - **Signal reorder buffer** — receiver-side per-(sender, kind) HLC-keyed causal delivery for applications requiring strict signal ordering.
