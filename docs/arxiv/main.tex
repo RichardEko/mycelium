@@ -637,47 +637,6 @@ An AFN is not a new programming model layered on top of Mycelium. It is the name
 for the pattern that naturally arises when a distributed application is built
 correctly on a substrate that eliminates the coordinator.
 
-\subsection{The Economic Case: Quadratic Cost Decomposition}
-
-For workloads in which context accumulates across iterations---the common case
-in long-running coordinator pipelines where each step appends to a growing
-history---LLM agent execution cost scales superlinearly with iteration count.
-Because each API call re-processes the entire accumulated context, the token
-count at iteration~$k$ is $\Delta T + \tau k$ (where $\Delta T$ is the initial
-prompt and $\tau$ is context growth per iteration). Summing over $k$ iterations
-yields a total proportional to $k^2$: cost is quadratic in iteration count, not
-linear. Systems that summarise, truncate, or selectively retrieve context can
-reduce but not eliminate this accumulation; the model below applies at its
-strongest to pipelines that maintain a running context window.
-
-The decomposition leverage is direct. Splitting a $k$-iteration task into $M$
-independent subtasks of $k/M$ iterations each reduces total cost by factor~$M$:
-\[
-  M \times \left(\frac{k}{M}\right)^2 = \frac{k^2}{M}
-\]
-versus $k^2$ for the monolithic run. A 4-way decomposition of a 100-iteration task
-costs $4 \times 25^2 = 2{,}500$ versus $100^2 = 10{,}000$---a 4$\times$ saving
-from a 4$\times$ decomposition.
-
-A mediated hierarchy cannot realise this saving without explicit orchestration
-overhead. The coordinator's synthesis step, where it aggregates $M$ subtask
-results into a combined output, recreates the full accumulated context and pays
-the quadratic penalty once more. However, Mycelium's capability-bounded groups implement
-decomposition automatically: each group's TTL constrains how long a work item
-remains live in that stage, which under typical workloads approximates a bound on
-effective $k$ for that group---a time bound rather than a strict iteration count
-bound, but one that produces the same practical effect when per-iteration latency
-is roughly constant. The quadratic cost accumulation resets at each group
-boundary, and no coordinator synthesis is required.
-
-The practical significance of this saving is reinforced by empirical energy
-measurements. White~\cite{white2025} demonstrates that inference energy per
-query varies by two orders of magnitude across model families and sizes, and
-that energy cost is highly sensitive to input characteristics. Where the
-quadratic accumulation compounds an already expensive per-call baseline, the
-saving from decomposition is not a theoretical nicety---it is an operational
-necessity.
-
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Evaluation}
 
@@ -742,6 +701,47 @@ organisations. The coordinator trap is not a software engineering peculiarity. I
 is a structural consequence of centralising coordination in any sufficiently
 complex adaptive system.
 
+\subsection{The Economic Case: Quadratic Cost Decomposition}
+
+For workloads in which context accumulates across iterations---the common case
+in long-running coordinator pipelines where each step appends to a growing
+history---LLM agent execution cost scales superlinearly with iteration count.
+Because each API call re-processes the entire accumulated context, the token
+count at iteration~$k$ is $\Delta T + \tau k$ (where $\Delta T$ is the initial
+prompt and $\tau$ is context growth per iteration). Summing over $k$ iterations
+yields a total proportional to $k^2$: cost is quadratic in iteration count, not
+linear. Systems that summarise, truncate, or selectively retrieve context can
+reduce but not eliminate this accumulation; the model below applies at its
+strongest to pipelines that maintain a running context window.
+
+The decomposition leverage is direct. Splitting a $k$-iteration task into $M$
+independent subtasks of $k/M$ iterations each reduces total cost by factor~$M$:
+\[
+  M \times \left(\frac{k}{M}\right)^2 = \frac{k^2}{M}
+\]
+versus $k^2$ for the monolithic run. A 4-way decomposition of a 100-iteration task
+costs $4 \times 25^2 = 2{,}500$ versus $100^2 = 10{,}000$---a 4$\times$ saving
+from a 4$\times$ decomposition.
+
+A mediated hierarchy cannot realise this saving without explicit orchestration
+overhead. The coordinator's synthesis step, where it aggregates $M$ subtask
+results into a combined output, recreates the full accumulated context and pays
+the quadratic penalty once more. However, Mycelium's capability-bounded groups
+implement decomposition automatically: each group's TTL constrains how long a work
+item remains live in that stage, which under typical workloads approximates a bound
+on effective $k$ for that group---a time bound rather than a strict iteration count
+bound, but one that produces the same practical effect when per-iteration latency
+is roughly constant. The quadratic cost accumulation resets at each group boundary,
+and no coordinator synthesis is required.
+
+The practical significance of this saving is reinforced by empirical energy
+measurements. White~\cite{white2025} demonstrates that inference energy per
+query varies by two orders of magnitude across model families and sizes, and
+that energy cost is highly sensitive to input characteristics. Where the
+quadratic accumulation compounds an already expensive per-call baseline, the
+saving from decomposition is not a theoretical nicety---it is an operational
+necessity.
+
 \subsection{Limitations}
 
 Mycelium assumes a cluster the operator owns. Mycelium's scope is intra-cluster;
@@ -774,7 +774,7 @@ is out of scope. These are correct tradeoffs for the target deployment model
 (trusted, operator-controlled clusters) but should be revisited before Mycelium
 is used in adversarial multi-tenant environments.
 
-The quadratic cost decomposition in \S7.6 assumes that the $k$-iteration task
+The quadratic cost decomposition in \S9.3 assumes that the $k$-iteration task
 can be partitioned into $M$ independent subtasks. Many real agentic workloads
 are inherently sequential---multi-step reasoning chains, document drafting,
 iterative refinement---where each step depends causally on the prior and
