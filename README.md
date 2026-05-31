@@ -1396,4 +1396,4 @@ Mycelium is released under the [GNU Affero General Public License v3.0](LICENSE)
 
 **Open use:** Any project distributed under a compatible open-source license may use Mycelium freely under the AGPL terms. Network-deployed applications using Mycelium must make their source available to users of that service.
 
-**Commercial embedding:** Organisations that need to embed Mycelium in a proprietary product without the AGPL copyleft obligation can obtain a commercial license. Contact [richard.nicholson64@protonmail.com](mailto:richard.nicholson64@protonmail.com) to discuss terms.
+**Commercial embedding:** Organisations that need to embed Mycelium in a proprietary product without the AGPL copyleft obligation can obtain a commercial license. Contact [tathatasystems@proton.me](mailto:tathatasystems@proton.me) to discuss terms.
