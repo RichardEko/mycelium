@@ -79,8 +79,8 @@ outputs, decides, and issues commands; and \emph{registry-based discovery}, in
 which a global index brokers introductions between agents. Both patterns introduce
 a coordinator---by different names---that becomes a bottleneck, a single point of
 failure, and an unbounded audit obligation as agent populations grow. We
-demonstrate that these failure modes are not implementation deficiencies but
-structural consequences of the coordinator assumption itself. Drawing on
+argue by construction that these failure modes are not implementation deficiencies
+but structural consequences of the coordinator assumption itself. Drawing on
 Holland's framework for Complex Adaptive Systems, we propose an alternative in
 which coordination emerges from substrate properties rather than explicit
 protocols. We present Mycelium, a working implementation of this model as an
@@ -172,18 +172,19 @@ observability. Each concern requires a separately deployed, operated, and
 monitored service. The pipeline is not the model---it is the scaffolding around
 the model.
 
-Each component is a separate operational surface: a separate failure mode, a
+Each concern is a separate operational surface: a separate failure mode, a
 separate scaling policy, a separate upgrade cycle, and a conceptual translation
 layer. The coordination work---route an item to a capable worker, throttle when
 workers are saturated, clean up abandoned items, make topology visible---is the
-same abstract work in all six systems. The \emph{separation tax} is the cost of
-performing that work six times in six different languages with six different
-failure modes, rather than once in a unified substrate.
+same abstract work at every level. The \emph{separation tax} is the cost of
+performing that work redundantly at each concern boundary rather than once in a
+unified substrate.
 
 The two dominant patterns described in \S\S2.1--2.2 do not reduce this tax. They
-add a seventh system on top of the existing six. This paper's claim is that the
-separation tax is not a necessary cost of multi-agent coordination. It is the cost
-of applying the coordinator assumption independently at each layer of the stack.
+add another coordination system on top of the existing stack. This paper's claim
+is that the separation tax is not a necessary cost of multi-agent coordination. It
+is the cost of applying the coordinator assumption independently at each layer of
+the stack.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{A History of the Coordinator Assumption}
@@ -607,12 +608,12 @@ cost accumulation resets at each group boundary, and no coordinator synthesis is
 required.
 
 The practical significance of this saving is reinforced by empirical energy
-measurements. White~\cite{white2025} finds that inference energy per query
-varies by two orders of magnitude across model sizes, and that a 17$\times$
-energy cost increase between 7B and 72B parameter models yields no statistically
-significant accuracy improvement for mathematical code generation. When each
-coordinator iteration already carries this energy weight, quadratic accumulation
-is not a theoretical concern---it is an operational one.
+measurements. White~\cite{white2025} demonstrates that inference energy per
+query varies by two orders of magnitude across model families and sizes, and
+that energy cost is highly sensitive to input characteristics. Where the
+quadratic accumulation compounds an already expensive per-call baseline, the
+saving from decomposition is not a theoretical nicety---it is an operational
+necessity.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Evaluation}
@@ -691,6 +692,13 @@ misconfigured boundary---too broad or too narrow---produces incorrect routing
 without any coordinator to catch the error. This places a correctness obligation
 on the capability declarations that the mediated hierarchy places on the
 coordinator instead.
+
+The quadratic cost decomposition in \S7.6 assumes that the $k$-iteration task
+can be partitioned into $M$ independent subtasks. Many real agentic workloads
+are inherently sequential---multi-step reasoning chains, document drafting,
+iterative refinement---where each step depends causally on the prior and
+decomposition is not valid. The saving applies where subtask independence holds;
+it does not apply universally.
 
 \textbf{When not to use AFN.} Five cases warrant a different approach:
 \emph{Strict ordering}---where tasks must be processed in a guaranteed sequence,
