@@ -363,7 +363,7 @@ The quadratic cost decomposition in §7.6 assumes that the k-iteration task can 
 
 ### 9.4 Future Work
 
-- **Empirical comparison** against a deployed mediated hierarchy at equivalent agent counts. Key measurements: (i) coordination convergence time — single-ballot `group_propose` vs NegMAS SAO N-round negotiation; (ii) failure tolerance — coordinator failure in a mediated hierarchy vs random node failure in Mycelium; (iii) state freshness under churn — TTL evaporation latency vs knowledge-graph drift rate; (iv) audit obligation under load — artifact count growth as agent population scales from 3 to 30.
+- **Empirical comparison** against a deployed mediated hierarchy at equivalent agent counts. Key measurements: (i) coordination convergence time — single-ballot `group_propose` vs NegMAS SAO N-round negotiation; (ii) failure tolerance — coordinator failure in a mediated hierarchy vs random node failure in Mycelium; (iii) state freshness under churn — TTL evaporation latency vs knowledge-graph drift rate; (iv) audit obligation under load — artifact count growth as agent population scales.
 - **Formal verification** of the signal/boundary substrate properties using TLA+ or similar.
 - **Cross-cluster federation** — practical experience deploying multiple independent Mycelium clusters registered with an internet-scale A2A gateway, measuring discovery latency and trust propagation across organisational boundaries.
 - **Signal reorder buffer** — receiver-side per-(sender, kind) HLC-keyed causal delivery for applications requiring strict signal ordering.
