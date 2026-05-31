@@ -196,7 +196,7 @@ OSGi's insight was that software agility is a function of modular, dynamically a
 
 The OSGi Alliance [CITE-OSGI] formalised a dependency model in which software modules declare capabilities they provide and requirements they need; a resolver matches providers to consumers. The primitive is correct: declarative matching between providers and consumers, with the resolver handling wiring.
 
-What mainstream OSGi adoption got wrong was treating resolution as static — performed once at bundle-install time. This made it unsuitable for dynamic systems where participants come and go. The resolver ran at deploy time; a module that disappeared at runtime left a gap with no mechanism for repair. Paremus Service Fabric addressed this directly.
+What mainstream OSGi adoption got wrong was treating resolution as static — performed once at bundle-install time. This made it unsuitable for dynamic systems where participants come and go. The resolver ran at deploy time; a module that disappeared at runtime left a gap with no in-process mechanism for repair — closing it required a human DevOps intervention to rebuild and redeploy. Paremus Service Fabric addressed this directly.
 
 ### 6.3 Paremus Service Fabric and the Reconciliation Engine
 

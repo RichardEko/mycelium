@@ -1042,7 +1042,9 @@
       consumers. The primitive is correct: declarative matching between providers and consumers,
       with the resolver handling wiring. What mainstream adoption got wrong was treating resolution
       as static — performed once at bundle-install time, unsuitable for dynamic systems where
-      participants come and go. Paremus Service Fabric addressed this directly.
+      participants come and go. A module that disappeared at runtime left a gap with no in-process
+      mechanism for repair — closing it required a human DevOps intervention to rebuild and
+      redeploy. Paremus Service Fabric addressed this directly.
     </p>
 
     <h3>6.3 Paremus Service Fabric and the Reconciliation Engine</h3>
