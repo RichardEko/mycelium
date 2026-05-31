@@ -1031,52 +1031,44 @@
 
     <p>
       OSGi's insight was that software agility is a function of modular, dynamically assembleable
-      components. Its answer to environmental change was to operate at DevOps scale: when the
-      environment broke, a human rebuilt and redeployed at bundle granularity. Dynamic assembly was the goal;
-      deploy-time resolution was where that ambition stopped.
+      components. The OSGi Alliance [8] formalised this as a dependency model in which software
+      modules declare capabilities they provide and requirements they need; a resolver matches
+      providers to consumers. The primitive is correct: declarative matching between providers and
+      consumers, with the resolver handling wiring.
     </p>
 
     <p>
-      The OSGi Alliance [8] formalised a dependency model in which software modules declare
-      capabilities they provide and requirements they need; a resolver matches providers to
-      consumers. The primitive is correct: declarative matching between providers and consumers,
-      with the resolver handling wiring. What mainstream adoption got wrong was treating resolution
-      as static — performed once at bundle-install time, unsuitable for dynamic systems where
-      participants come and go. A module that disappeared at runtime left a gap with no in-process
-      mechanism for repair — closing it required a human DevOps intervention to rebuild and
-      redeploy. Paremus Service Fabric addressed this directly.
+      What mainstream adoption got wrong was treating resolution as static — performed once at
+      bundle-install time. A module that disappeared at runtime left a gap with no in-process
+      mechanism for repair; closing it required a human to rebuild and redeploy. Dynamic assembly
+      was the goal; deploy-time resolution was where that ambition stopped. Paremus Service Fabric
+      addressed this directly.
     </p>
 
     <h3>6.3 Paremus Service Fabric and the Reconciliation Engine</h3>
 
     <p>
-      Paremus Service Fabric (circa 2010–2015) [9] can be understood as a deliberate attempt to
-      fuse Jini's runtime dynamism with OSGi's modular assembly model — retaining the R&amp;C graph
-      as the declared target topology but making resolution continuous against a live,
-      gossip-discovered environment rather than a static deployment manifest. The result demonstrated
-      that the OSGi R&amp;C model could be applied as a <em>continuous runtime resolver</em> —
-      re-resolving dependencies as services appeared, disappeared, and changed.
+      Paremus Service Fabric (circa 2010–2015) [9] was a deliberate attempt to fuse Jini's runtime
+      dynamism with OSGi's modular assembly model — retaining the R&amp;C graph as the declared
+      target topology but making resolution continuous against a live, gossip-discovered environment
+      rather than a static deployment manifest. The R&amp;C graph became a <em>declared target
+      state</em>; the runtime was continuously monitored against that target and deltas driven back
+      into convergence — closer to the Kubernetes control loop than to a shared knowledge graph,
+      and requiring no human redeploy.
     </p>
 
     <p>
-      To be precise about what Paremus achieved: the R&C graph was a <em>declared target state</em>.
-      The runtime was continuously monitored against that target, and deltas were driven back into
-      convergence whenever they appeared. This is closer to the Kubernetes control loop than to a
-      shared knowledge graph — drift from declared intent was structurally prevented, not merely
-      discouraged.
-    </p>
-
-    <p>
-      It is worth noting Paremus' own architectural trajectory. The platform began as a Jini runtime
-      with OSGi components, using Jini's service discovery as the underlying discovery mechanism.
-      Over time, Jini service discovery was replaced with the OSGi Remote Services specification
-      backed by an in-house gossip-based implementation — decentralised discovery, TTL-managed
-      registrations, no central lookup service. Paremus was, in other words, moving in the right
-      direction at the substrate level. What did not change was the hermetic relationship between
-      the gossip layer and the reconciliation engine: 'as above, so below' — the declared
-      target state lived in the central engine above; the gossip layer revealed the landscape below;
-      the engine held the authority to reconcile the two. The coordinator trap persisted not in the
-      discovery mechanism but in the architectural layer that held the target.
+      Paremus' own architectural trajectory illustrates how directionally correct this was. The
+      platform began as a Jini runtime with OSGi components, using Jini's service discovery as the
+      underlying discovery mechanism. Over time, Jini service discovery was replaced with the OSGi
+      Remote Services specification backed by an in-house gossip-based implementation —
+      decentralised discovery, TTL-managed registrations, no central lookup service. At the
+      substrate level, Paremus was moving in exactly the right direction. What did not change was
+      the hermetic relationship between the gossip layer and the reconciliation engine: 'as above,
+      so below' — the declared target state lived in the central engine above; the gossip layer
+      revealed the landscape below; the engine held the authority to reconcile the two. The
+      coordinator trap persisted not in the discovery mechanism but in the architectural layer that
+      held the target.
     </p>
 
     <p>
