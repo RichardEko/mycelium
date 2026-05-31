@@ -384,7 +384,7 @@ Holland's signal/boundary model provides the theoretical basis for a different a
 
 The target state for a Mycelium application is not a document held in a registry or a graph maintained by a reconciliation engine. It is the aggregate of what every node declares itself to be, compiled into the runtime components at build time, assembled bottom-up by the mesh at runtime, and always current because anything not actively maintained evaporates. Coordination emerges. No coordinator required.
 
-The coordinator trap is not a new discovery. Hayek described the epistemic cost of centralisation for economies in 1945. Holland formalised the signal/boundary model for complex systems in 2012. Mycelium applies both to AI agent fleets. The insight is the same in all three cases: distributed local knowledge, expressed through signals and boundaries, produces emergent order that centralised coordination consistently struggles to match.
+The coordinator trap is not a new discovery. Hayek described the epistemic cost of centralisation for economies in 1945. Holland formalised the signal/boundary model for complex systems in 2012. Mycelium demonstrates that both insights transfer to AI agent fleets. The claim is the same in all three cases: distributed local knowledge, expressed through signals and boundaries, produces emergent order that no single coordination point can replicate — because the knowledge required is always more current at the edges than at the centre.
 
 ---
 
