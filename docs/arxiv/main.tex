@@ -213,6 +213,14 @@ managed explicitly by the sender. The Actor model correctly identified agents as
 the unit of composition; it did not identify boundaries as the mechanism for
 self-organising communication.
 
+Mature actor runtimes---most notably Erlang/OTP---address fault tolerance and
+process supervision without a central coordinator, and represent a genuine step
+beyond the original formulation. The addressing problem persists, however:
+Erlang's process registry is a coordinator with a narrower mandate, and OTP
+supervision trees impose a coordinator hierarchy for failure propagation. The
+addressing problem is resolved not by a more sophisticated registry but by
+boundary admission: the emitter declares scope; receivers self-select.
+
 \subsection{Linda and the Tuple Space (Gelernter, 1985)}
 
 Gelernter's Linda~\cite{linda} introduced generative communication via a shared
@@ -356,13 +364,15 @@ relevant keeps its state fresh; a dead agent's state simply fades. Failure is
 emergent: the absence of refreshment \emph{is} the failure signal.
 
 Applied to the failure modes of Section~\ref{sec:trap}: pre-admission filtering
-makes the audit burden structurally impossible---an agent whose boundary does not
-match a signal produces no artifact to audit. Distributed TTL state makes context
-loss structurally impossible---there is no coordinator memory to lose, only a mesh
-that always reflects the current live population. Self-differentiating boundaries
-make output format mismatch a design problem rather than a routing
-obligation. Each failure mode is not ameliorated; it is made structurally
-impossible.
+structurally prevents the audit burden---an agent whose boundary does not match a
+signal produces no artifact to audit. Distributed TTL state makes
+coordinator-type context loss structurally highly improbable---there is no
+coordinator memory to lose; state evaporation under simultaneous node failure
+remains possible but requires active failure of TTL renewal across all replicas
+simultaneously. Self-differentiating boundaries make output format mismatch a
+design problem rather than a routing obligation. Each failure mode is not
+ameliorated; it is either structurally prevented or made structurally highly
+improbable at the substrate level.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Prior Art: Correct Concepts, Wrong Implementation}
@@ -479,8 +489,9 @@ protocol, implement the property and let the behaviour emerge.
 
 Mycelium is an embeddable Rust library implementing Holland's signal/boundary
 model. It has no daemon, no control plane, no installer, no orchestrator. It is a
-crate embedded in the caller's process. The architecture is three layers. We
-present each layer alongside the failure mode it structurally eliminates.
+crate embedded in the caller's process. The architecture is three layers; each directly addresses one of the three
+structural failure modes identified in Section~\ref{sec:trap}: audit burden
+(\S4.2), context loss (\S4.3), and output format mismatch (\S4.4).
 
 \subsection{Layer~I --- KV Store: Eliminating Context Loss}
 
@@ -768,7 +779,8 @@ architecture: one in which coordination emerges from substrate properties rather
 than explicit protocols. Mycelium implements this model as an embeddable library.
 Each of its three layers---gossip KV store, signal mesh with boundary admission,
 epidemic consensus---addresses a mirrored failure mode, not by handling the
-failure gracefully but by making it structurally impossible.
+failure gracefully but by making each failure mode structurally prevented or,
+where substrate constraints apply, structurally highly improbable.
 
 The target state for a Mycelium application is not a document held in a registry
 or a graph maintained by a reconciliation engine. It is the aggregate of what
