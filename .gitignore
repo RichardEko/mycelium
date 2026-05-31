@@ -8,6 +8,9 @@ docs/fluid_pipeline_plan.html
 docs/fluid_pipeline_viz.html
 docs/flow_networks.html
 
+# arXiv submission artifacts
+docs/arxiv/*.zip
+
 # Python
 __pycache__/
 *.py[cod]
