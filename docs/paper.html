@@ -493,7 +493,7 @@
       issues commands; and registry-based discovery, in which a global index brokers
       introductions between agents. Both patterns introduce a coordinator — by different names
       — that becomes a bottleneck, a single point of failure, and an unbounded audit obligation
-      as agent populations grow. We argue by construction that these failure modes are not
+      as agent populations grow. We demonstrate by construction that these failure modes are not
       implementation deficiencies but structural consequences of the coordinator assumption itself.
     </p>
     <p>
@@ -564,7 +564,7 @@
       necessary in any system with genuine agents.<br>
       <strong>4.</strong> <strong>Mycelium</strong> — a working implementation of that model as
       an embeddable Rust library — demonstrating that each failure mode is structurally
-      impossible in the coordinator-free substrate.
+      prevented or structurally highly improbable in the coordinator-free substrate.
     </p>
   </div>
 
@@ -709,6 +709,15 @@
       agents as the unit of composition; it did not identify boundaries as the mechanism for
       self-organising communication, and it left explicit topology management as an unresolved
       obligation on the system designer.
+    </p>
+
+    <p>
+      Mature actor runtimes — most notably Erlang/OTP — address fault tolerance and process
+      supervision without a central coordinator, and represent a genuine step beyond the original
+      formulation. The addressing problem persists, however: Erlang's process registry is a
+      coordinator with a narrower mandate, and OTP supervision trees impose a coordinator hierarchy
+      for failure propagation. The addressing problem is resolved not by a more sophisticated
+      registry but by boundary admission: the emitter declares scope; receivers self-select.
     </p>
 
     <h3>3.3 Linda and the Tuple Space (Gelernter, 1985)</h3>
@@ -922,7 +931,8 @@
       the coordinator from the substrate. A substrate in which each agent holds its own receptor
       set — in which coordination emerges from the match between signals and declared boundaries,
       without any routing table, registry, or mediating component — would make the failure modes
-      structurally impossible. Not ameliorated; impossible. Such a substrate was described
+      structurally prevented or structurally highly improbable. Not ameliorated; structurally
+      prevented or highly improbable at the substrate level. Such a substrate was described
       theoretically by John Holland.
     </p>
   </div>
@@ -982,14 +992,16 @@
     </p>
 
     <p>
-      Applied to the failure modes diagnosed in Section 4: pre-admission filtering makes the audit
-      burden structurally impossible — an agent whose boundary does not match a signal produces no
-      artifact to audit. Distributed TTL state makes context loss structurally impossible — there is
-      no coordinator memory to lose, only a mesh that always reflects the current live population.
-      Self-differentiating boundaries make output format mismatch a design problem rather than a
-      routing obligation — human-facing and agent-facing consumers declare different boundaries and
-      self-select the signals relevant to them. Each failure mode is not ameliorated; it is made
-      structurally impossible.
+      Applied to the failure modes diagnosed in Section 4: pre-admission filtering structurally
+      prevents the audit burden — an agent whose boundary does not match a signal produces no
+      artifact to audit. Distributed TTL state makes coordinator-type context loss structurally
+      highly improbable — there is no coordinator memory to lose; state evaporation under
+      simultaneous node failure remains possible but requires active failure of TTL renewal across
+      all replicas simultaneously. Self-differentiating boundaries make output format mismatch a
+      design problem rather than a routing obligation — human-facing and agent-facing consumers
+      declare different boundaries and self-select the signals relevant to them. Each failure mode
+      is not ameliorated; it is either structurally prevented or made structurally highly improbable
+      at the substrate level.
     </p>
   </div>
 
@@ -1155,8 +1167,9 @@
     <p>
       Mycelium is an embeddable Rust library implementing Holland's signal/boundary model. It has
       no daemon, no control plane, no installer, no orchestrator — it is a crate embedded in the
-      caller's process. The architecture is three layers. We present each alongside the failure mode
-      it structurally eliminates.
+      caller's process. The architecture is three layers; each directly addresses one of the three
+      structural failure modes identified in Section 4: audit burden (§4.2), context loss (§4.3),
+      and output format mismatch (§4.4).
     </p>
 
     <h3>7.1 Layer I — KV Store: Eliminating Context Loss</h3>
@@ -1366,9 +1379,12 @@
       results into a combined output, recreating the full accumulated context and paying the
       quadratic penalty once more, partially or entirely undoing the decomposition saving.
       Mycelium's capability-bounded groups implement decomposition automatically — each group's TTL
-      bounds effective <em>k</em>, and the quadratic accumulation resets at each group boundary.
-      The coordinator-free design is therefore not merely structurally correct but structurally
-      cheaper.
+      constrains how long a work item remains live in that stage, which under typical workloads
+      approximates a bound on effective <em>k</em> for that group — a time bound rather than a
+      strict iteration count bound, but one that produces the same practical effect when
+      per-iteration latency is roughly constant. The quadratic accumulation resets at each group
+      boundary. The coordinator-free design is therefore not merely structurally correct but
+      structurally cheaper.
     </p>
 
     <p>
@@ -1642,8 +1658,8 @@
       Holland's signal/boundary model provides the theoretical basis for a different architecture:
       one in which coordination emerges from substrate properties rather than explicit protocols.
       Mycelium implements this model as an embeddable library. Each of its three layers addresses a
-      mirrored failure mode — not by handling the failure gracefully but by making it structurally
-      impossible.
+      mirrored failure mode — not by handling each failure gracefully but by making it structurally
+      prevented or, where substrate constraints apply, structurally highly improbable.
     </p>
 
     <p>
