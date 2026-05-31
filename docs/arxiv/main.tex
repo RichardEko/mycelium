@@ -395,6 +395,19 @@ target state}. The runtime was continuously monitored against that target, and
 deltas were driven back into convergence whenever they appeared. This is closer to
 the Kubernetes control loop than to a shared knowledge graph.
 
+It is worth noting Paremus' own architectural trajectory. The platform began as a
+Jini runtime with OSGi components, using Jini's service discovery as the
+underlying discovery mechanism. Over time, Jini service discovery was replaced
+with the OSGi Remote Services specification backed by an in-house gossip-based
+implementation---decentralised discovery, TTL-managed registrations, no central
+lookup service. Paremus was, in other words, moving in the right direction at the
+substrate level. What did not change was the hermetic relationship between the
+gossip layer and the reconciliation engine: \emph{as above, so below}---the
+declared target state lived in the central engine above; the gossip layer revealed
+the landscape below; the engine held the authority to reconcile the two. The
+coordinator trap persisted not in the discovery mechanism but in the architectural
+layer that held the target.
+
 What Paremus still required was a \emph{central reconciliation engine} holding
 that target state. If it went down, reconciliation stopped. The coordinator trap in
 a more sophisticated form.
