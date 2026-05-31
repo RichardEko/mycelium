@@ -493,8 +493,8 @@
       issues commands; and registry-based discovery, in which a global index brokers
       introductions between agents. Both patterns introduce a coordinator — by different names
       — that becomes a bottleneck, a single point of failure, and an unbounded audit obligation
-      as agent populations grow. We demonstrate that these failure modes are not implementation
-      deficiencies but structural consequences of the coordinator assumption itself.
+      as agent populations grow. We argue by construction that these failure modes are not
+      implementation deficiencies but structural consequences of the coordinator assumption itself.
     </p>
     <p>
       Drawing on Holland's framework for Complex Adaptive Systems, we propose an alternative
@@ -644,31 +644,28 @@
 
     <p>
       The coordinator assumption has a concrete operational cost that the preceding architectural
-      analysis may understate. A representative conventional ML inference pipeline — the kind that
-      both patterns commonly sit atop — requires at minimum six separate infrastructure components:
-      a Redis instance for the task queue, a service registry (Consul or etcd) for worker
-      registration, a Celery or Sidekiq broker for task dispatch, a Kafka cluster (or RabbitMQ)
-      for stage-to-stage handoff, a dead-letter queue for failed item recovery, and a Prometheus
-      scrape target plus a Grafana dashboard for observability across the preceding five.
+      analysis may understate. A representative conventional ML inference pipeline must address at
+      minimum four distinct infrastructure concerns: task dispatch and queuing (Redis/Celery or
+      Kafka depending on scale), worker registration and discovery (Consul, etcd, or a sidecar),
+      failure recovery and dead-letter handling, and cross-component observability. Each concern
+      requires a separately deployed, operated, and monitored service. The pipeline is not the
+      model — it is the scaffolding around the model.
     </p>
 
     <p>
-      Each component is a separate operational surface: a separate failure mode, a separate scaling
-      policy, a separate upgrade cycle, and a conceptual translation layer that forces the developer
-      to map between the idioms of Redis, Kafka, Consul, and Prometheus while reasoning about the
-      system as a whole. The coordination work — route an item to a capable worker, throttle when
-      workers are saturated, clean up abandoned items, make topology visible — is the same abstract
-      work in all six systems. The <em>separation tax</em> is the cost of performing that work six
-      times in six different languages with six different failure modes, rather than once in a
-      unified substrate.
+      Each concern is a separate operational surface: a separate failure mode, a separate scaling
+      policy, a separate upgrade cycle, and a conceptual translation layer. The coordination work
+      — route an item to a capable worker, throttle when workers are saturated, clean up abandoned
+      items, make topology visible — is the same abstract work at every level. The
+      <em>separation tax</em> is the cost of performing that work redundantly at each concern
+      boundary rather than once in a unified substrate.
     </p>
 
     <p>
-      The two dominant patterns described in §§2.1–2.2 do not reduce this tax. They add a seventh
-      system — the mediated hierarchy's cognitive engine, or the registry's indexing service — on
-      top of the existing six. This paper's claim is that the separation tax is not a necessary cost
-      of multi-agent coordination. It is the cost of applying the coordinator assumption
-      independently at each layer of the stack.
+      The two dominant patterns described in §§2.1–2.2 do not reduce this tax. They add another
+      coordination system on top of the existing stack. This paper's claim is that the separation
+      tax is not a necessary cost of multi-agent coordination. It is the cost of applying the
+      coordinator assumption independently at each layer of the stack.
     </p>
   </div>
 
@@ -803,9 +800,9 @@
       This is a critical point. When we call these components "agents" we are importing a concept
       from the Complex Adaptive Systems literature. Holland [3] defines an agent as an entity that
       holds a <em>boundary</em> — a receptor set specifying the conditions under which it acts on
-      incoming signals. The boundary is intrinsic to the agent, not delegated from outside. In a
-      mediated hierarchy, agents satisfy none of this definition: they receive what the coordinator
-      routes, not what they declare themselves competent to receive. They are passive processors of
+      incoming signals. The boundary is intrinsic to the agent, not delegated from outside.
+      However, in a mediated hierarchy, agents satisfy none of this definition: they receive what
+      the coordinator routes, not what they declare themselves competent to receive. They are passive processors of
       coordinator-routed payloads. We return to this category error in Section 4.5.
     </p>
 
@@ -1013,7 +1010,7 @@
       consumers. The primitive is correct: declarative matching between providers and consumers,
       with the resolver handling wiring. What mainstream adoption got wrong was treating resolution
       as static — performed once at bundle-install time, unsuitable for dynamic systems where
-      participants come and go.
+      participants come and go. Paremus Service Fabric addressed this directly.
     </p>
 
     <h3>6.2 Paremus Service Fabric and the Reconciliation Engine</h3>
@@ -1361,6 +1358,15 @@
       cheaper.
     </p>
 
+    <p>
+      The practical significance of this saving is reinforced by empirical energy measurements.
+      White [CITE-WHITE2025] demonstrates that inference energy per query varies by two orders of
+      magnitude across model families and sizes, and that energy cost is highly sensitive to input
+      characteristics. Where the quadratic accumulation compounds an already expensive per-call
+      baseline, the saving from decomposition is not a theoretical nicety — it is an operational
+      necessity.
+    </p>
+
     <div class="table-wrap">
       <table>
         <thead>
@@ -1422,9 +1428,12 @@
     <p>
       The implementation is publicly available at
       <a href="https://github.com/RichardEko/mycelium">https://github.com/RichardEko/mycelium</a>
-      under the Apache&nbsp;2.0 licence. The integration test harness is included in the repository
-      and reproducible with a single <code>make test</code> invocation against a Docker-composed
-      5-node cluster.
+      under the AGPL-3.0 licence. The AGPL-3.0 licence is intentional: applications that deploy
+      Mycelium as part of a networked service must publish their source under the same terms,
+      closing the SaaS loophole that permissive licences leave open. Organisations requiring
+      proprietary embedding may obtain a commercial licence from Tathata Systems Ltd.
+      The integration test harness is included in the repository and reproducible with a single
+      <code>make test</code> invocation against a Docker-composed 5-node cluster.
     </p>
   </div>
 
@@ -1521,6 +1530,14 @@
       boundary produces incorrect routing without any coordinator to catch the error. This places a
       correctness obligation on capability declarations that the mediated hierarchy places on the
       coordinator instead. Neither is strictly easier; the burden is different in character.
+    </p>
+
+    <p>
+      The quadratic cost decomposition in §7.6 assumes that the k-iteration task can be partitioned
+      into M independent subtasks. Many real agentic workloads are inherently sequential — multi-step
+      reasoning chains, document drafting, iterative refinement — where each step depends causally
+      on the prior and decomposition is not valid. The saving applies where subtask independence
+      holds; it does not apply universally.
     </p>
 
     <p>
@@ -1655,6 +1672,7 @@
       <li><span class="ref-key">[CITE-OSGI-CMB]</span>R. Nicholson, "Complexity, Modularity and Business," OSGi Alliance / Eclipse Foundation, osgi.org/resources/complexity-modularity-and-business/.</li>
       <li><span class="ref-key">[CITE-BRAIN-IOT-1]</span>R. Nicholson et al., "BRAIN-IoT: Model-Based Framework for Dependable Sensing and Actuation in Intelligent Decentralized IoT Systems," <em>IEEE</em>, October 2019.</li>
       <li><span class="ref-key">[CITE-BRAIN-IOT-2]</span>R. Nicholson et al., "Dynamic Fog Computing Platform for Event-Driven Deployment and Orchestration of Distributed Internet of Things Applications," <em>IEEE</em>, July 2019.</li>
+      <li><span class="ref-key">[CITE-WHITE2025]</span>M. J. White, "Inference Scaling Laws for Mathematical Code Generation: Family-Specific Behavior and Energy Analysis," November 2025. <a href="https://quantumzzxxyy.github.io/quantumzzxxyy/inference_scaling_final.pdf">https://quantumzzxxyy.github.io/quantumzzxxyy/inference_scaling_final.pdf</a></li>
       <li><span class="ref-key">[15] Silo-Bench 2025</span>Silo-Bench: A Scalable Environment for Evaluating Distributed Coordination in Multi-Agent LLM Systems, arXiv:2603.01045, 2025.</li>
       <li><span class="ref-key">[16] MAS Survey 2025</span>Multi-Agent Coordination across Diverse Applications: A Survey, arXiv:2502.14743, 2025.</li>
       <li><span class="ref-key">[17] Carvalho 2025</span>O. Carvalho, "Our AI Orchestration Frameworks Are Reinventing Linda (1985)," otavio.cat, 2025.</li>

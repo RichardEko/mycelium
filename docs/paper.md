@@ -8,7 +8,7 @@
 
 ## Abstract
 
-Multi-agent coordination systems are converging on two dominant architectural patterns: mediated hierarchies, in which a central engine aggregates agent outputs, decides, and issues commands; and registry-based discovery, in which a global index brokers introductions between agents. Both patterns introduce a coordinator — by different names — that becomes a bottleneck, a single point of failure, and an unbounded audit obligation as agent populations grow. We demonstrate that these failure modes are not implementation deficiencies but structural consequences of the coordinator assumption itself. Drawing on Holland's framework for Complex Adaptive Systems, we propose an alternative in which coordination emerges from substrate properties rather than explicit protocols. We present Mycelium, a working implementation of this model as an embeddable Rust library, and show how its three-layer architecture — gossip KV store, signal mesh with boundary admission, and epidemic consensus — structurally eliminates each failure mode rather than ameliorating it.
+Multi-agent coordination systems are converging on two dominant architectural patterns: mediated hierarchies, in which a central engine aggregates agent outputs, decides, and issues commands; and registry-based discovery, in which a global index brokers introductions between agents. Both patterns introduce a coordinator — by different names — that becomes a bottleneck, a single point of failure, and an unbounded audit obligation as agent populations grow. We argue by construction that these failure modes are not implementation deficiencies but structural consequences of the coordinator assumption itself. Drawing on Holland's framework for Complex Adaptive Systems, we propose an alternative in which coordination emerges from substrate properties rather than explicit protocols. We present Mycelium, a working implementation of this model as an embeddable Rust library, and show how its three-layer architecture — gossip KV store, signal mesh with boundary admission, and epidemic consensus — structurally eliminates each failure mode rather than ameliorating it.
 ---
 
 ## 1. Introduction
@@ -54,11 +54,11 @@ In the mediated hierarchy, this component is the coordinator. In the registry mo
 
 ### 2.4 The Separation Tax
 
-The coordinator assumption has a concrete operational cost that the preceding architectural analysis may understate. A representative conventional ML inference pipeline — the kind that both patterns commonly sit atop — requires at minimum six separate infrastructure components: a Redis instance for the task queue, a service registry (Consul or etcd) for worker registration, a Celery or Sidekiq broker for task dispatch, a Kafka cluster (or RabbitMQ) for stage-to-stage handoff, a dead-letter queue for failed item recovery, and a Prometheus scrape target plus a Grafana dashboard for observability across the preceding five.
+The coordinator assumption has a concrete operational cost that the preceding architectural analysis may understate. A representative conventional ML inference pipeline must address at minimum four distinct infrastructure concerns: task dispatch and queuing (Redis/Celery or Kafka depending on scale), worker registration and discovery (Consul, etcd, or a sidecar), failure recovery and dead-letter handling, and cross-component observability. Each concern requires a separately deployed, operated, and monitored service. The pipeline is not the model — it is the scaffolding around the model.
 
-Each component is a separate operational surface: a separate failure mode, a separate scaling policy, a separate upgrade cycle, and a conceptual translation layer that forces the developer to map between the idioms of Redis, Kafka, Consul, and Prometheus while reasoning about the system as a whole. The coordination work — route an item to a capable worker, throttle when workers are saturated, clean up abandoned items, make topology visible — is the same abstract work in all six systems. The *separation tax* is the cost of performing that work six times in six different languages with six different failure modes, rather than once in a unified substrate.
+Each concern is a separate operational surface: a separate failure mode, a separate scaling policy, a separate upgrade cycle, and a conceptual translation layer. The coordination work — route an item to a capable worker, throttle when workers are saturated, clean up abandoned items, make topology visible — is the same abstract work at every level. The *separation tax* is the cost of performing that work redundantly at each concern boundary rather than once in a unified substrate.
 
-The two dominant patterns described in §§2.1–2.2 do not reduce this tax. They add a seventh system — the mediated hierarchy's cognitive engine, or the registry's indexing service — on top of the existing six. This paper's claim is that the separation tax is not a necessary cost of multi-agent coordination. It is the cost of applying the coordinator assumption independently at each layer of the stack.
+The two dominant patterns described in §§2.1–2.2 do not reduce this tax. They add another coordination system on top of the existing stack. This paper's claim is that the separation tax is not a necessary cost of multi-agent coordination. It is the cost of applying the coordinator assumption independently at each layer of the stack.
 
 ---
 
@@ -114,7 +114,7 @@ We trace each failure mode through the agent lens — asking not merely what the
 
 In a mediated hierarchy, agents are workers in a fanout RPC system. They receive structured payloads from the coordinator, produce responses, and return them. The coordinator aggregates responses, applies its decision logic, and broadcasts results. The agent has no autonomy over what signals it receives — it processes whatever the coordinator sends. Its "boundary" — the set of signals it acts upon — is managed externally by the coordinator's routing decisions, not declared internally by the agent itself.
 
-This is a critical point. When we call these components "agents" we are importing a concept from the Complex Adaptive Systems literature. Holland [CITE-HOLLAND] defines an agent as an entity that holds a *boundary* — a receptor set specifying the conditions under which it acts on incoming signals. The boundary is intrinsic to the agent, not delegated from outside. In a mediated hierarchy, agents satisfy none of this definition: they receive what the coordinator routes, not what they declare themselves competent to receive. They are passive processors of coordinator-routed payloads. We return to this category error in Section 4.5.
+This is a critical point. When we call these components "agents" we are importing a concept from the Complex Adaptive Systems literature. Holland [CITE-HOLLAND] defines an agent as an entity that holds a *boundary* — a receptor set specifying the conditions under which it acts on incoming signals. The boundary is intrinsic to the agent, not delegated from outside. However, in a mediated hierarchy, agents satisfy none of this definition: they receive what the coordinator routes, not what they declare themselves competent to receive. They are passive processors of coordinator-routed payloads. We return to this category error in Section 4.5.
 
 ### 4.2 Audit Burden: The Consequence of Post-Admission Broadcasting
 
@@ -186,7 +186,7 @@ Three prior systems identified the correct underlying concepts but implemented t
 
 The OSGi Alliance [CITE-OSGI] formalised a dependency model in which software modules declare capabilities they provide and requirements they need; a resolver matches providers to consumers. The primitive is correct: declarative matching between providers and consumers, with the resolver handling wiring.
 
-What mainstream OSGi adoption got wrong was treating resolution as static — performed once at bundle-install time. This made it unsuitable for dynamic systems where participants come and go. The resolver ran at deploy time; a module that disappeared at runtime left a gap with no mechanism for repair.
+What mainstream OSGi adoption got wrong was treating resolution as static — performed once at bundle-install time. This made it unsuitable for dynamic systems where participants come and go. The resolver ran at deploy time; a module that disappeared at runtime left a gap with no mechanism for repair. Paremus Service Fabric addressed this directly.
 
 ### 6.2 Paremus Service Fabric and the Reconciliation Engine
 
@@ -307,13 +307,15 @@ The decomposition leverage is direct. Splitting a k-iteration task into M indepe
 
 A mediated hierarchy cannot realise this saving without explicit orchestration overhead. The coordinator must decompose the task, route subtasks, collect results, and synthesise — and the synthesis step, where the coordinator aggregates M subtask results into a combined output, recreates the full accumulated context and pays the quadratic penalty once more, partially or entirely undoing the decomposition saving. Mycelium's capability-bounded groups implement decomposition automatically: each group's TTL bounds effective k, the quadratic cost accumulation resets at each group boundary, and no coordinator synthesis is required. The coordinator-free design is therefore not merely structurally correct but structurally cheaper.
 
+The practical significance of this saving is reinforced by empirical energy measurements. White [CITE-WHITE2025] demonstrates that inference energy per query varies by two orders of magnitude across model families and sizes, and that energy cost is highly sensitive to input characteristics. Where the quadratic accumulation compounds an already expensive per-call baseline, the saving from decomposition is not a theoretical nicety — it is an operational necessity.
+
 ---
 
 ## 8. Evaluation
 
 Mycelium's correctness across its three-layer architecture is validated by 243 unit tests and 12 integration scenarios run against a live 5-node Docker cluster. Scenarios cover KV replication under partition and reconnection, signal delivery and boundary admission, capability group formation and dissolution, consensus quorum under node failure, cross-group voting, the full Agentic Flow Networks pipeline, and Prompt Skills cross-node KV propagation with LLM invocation. All 12 scenarios pass at HEAD.
 
-The implementation is publicly available at https://github.com/RichardEko/mycelium under the Apache 2.0 licence. The integration test harness is included in the repository and reproducible with a single `make test` invocation against a Docker-composed 5-node cluster.
+The implementation is publicly available at https://github.com/RichardEko/mycelium under the AGPL-3.0 licence. The AGPL-3.0 licence is intentional: applications that deploy Mycelium as part of a networked service must publish their source under the same terms, closing the SaaS loophole that permissive licences leave open. Organisations requiring proprietary embedding may obtain a commercial licence from Tathata Systems Ltd. The integration test harness is included in the repository and reproducible with a single `make test` invocation against a Docker-composed 5-node cluster.
 
 ---
 
@@ -344,6 +346,8 @@ Beinhocker's *The Origin of Wealth* [CITE-BEINHOCKER] reaches the same conclusio
 Mycelium assumes a cluster the operator owns. Mycelium's scope is intra-cluster; cross-organisational discovery requires external registry infrastructure. Mycelium's conforming A2A endpoint makes it reachable from any A2A-speaking registry without modification to either side. Ephemeral signals are intentionally not durable — a node that misses a signal misses it, and the TTL on capability entries enforces a hard iteration ceiling on any agent group. Both are deliberate: in systems where cost distributions have heavy tails under variable context growth, hard ceilings are the only reliable bound — no fixed contingency percentage contains the risk when the tail is severe. Durable delivery is a higher-order concern built on the KV layer or consensus, not a substrate property. The gossip substrate assumes eventual connectivity; a fully partitioned cluster cannot converge.
 
 Boundary admission requires agents to declare their boundaries correctly. A misconfigured boundary — too broad or too narrow — produces incorrect routing without any coordinator to catch the error. This places a correctness obligation on the capability declarations that the mediated hierarchy places on the coordinator instead. Neither is strictly easier; the burden is different in character.
+
+The quadratic cost decomposition in §7.6 assumes that the k-iteration task can be partitioned into M independent subtasks. Many real agentic workloads are inherently sequential — multi-step reasoning chains, document drafting, iterative refinement — where each step depends causally on the prior and decomposition is not valid. The saving applies where subtask independence holds; it does not apply universally.
 
 **When not to use Agentic Flow Networks.** Five categories of requirement are structurally mismatched with the AFN pattern:
 
@@ -443,6 +447,8 @@ The coordinator trap is not a new discovery. Hayek described it for economies in
 [CITE-BRAIN-IOT-1] R. Nicholson et al., "BRAIN-IoT: Model-Based Framework for Dependable Sensing and Actuation in Intelligent Decentralized IoT Systems," *IEEE*, October 2019.
 
 [CITE-BRAIN-IOT-2] R. Nicholson et al., "Dynamic Fog Computing Platform for Event-Driven Deployment and Orchestration of Distributed Internet of Things Applications," *IEEE*, July 2019.
+
+[CITE-WHITE2025] M. J. White, "Inference Scaling Laws for Mathematical Code Generation: Family-Specific Behavior and Energy Analysis," November 2025. https://quantumzzxxyy.github.io/quantumzzxxyy/inference_scaling_final.pdf
 
 ---
 
