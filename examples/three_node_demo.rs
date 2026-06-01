@@ -52,14 +52,15 @@
 //!
 //! | Variable             | Default                      | Used by       |
 //! |----------------------|------------------------------|---------------|
-//! | `MYCELIUM_ROLE`      | *(required)*                 | all           |
-//! | `MYCELIUM_PEERS`     | *(required, comma-sep h:p)*  | all           |
+//! | `MYCELIUM_ROLE`      | `tool-a`                     | all           |
+//! | `MYCELIUM_PEERS`     | *(comma-sep h:p)*            | all           |
 //! | `MYCELIUM_HOSTNAME`  | value of `HOSTNAME` env var  | all           |
 //! | `MYCELIUM_PORT`      | `57000`                      | all           |
 //! | `MYCELIUM_HTTP_PORT` | `8300`                       | all           |
 //! | `OLLAMA_BASE_URL`    | `http://ollama:11434/v1`     | llm           |
 //! | `OLLAMA_MODEL`       | `llama3.2`                   | llm           |
 //! | `CHAT_PORT`          | `8080`                       | llm           |
+//! | `MGMT_PORT`          | `8090`                       | mgmt          |
 //!
 //! # Docker (recommended)
 //! ```sh
@@ -71,18 +72,23 @@
 //! # Local quick start — LLM chat cluster (no Docker)
 //! ```sh
 //! # terminal 1
-//! MYCELIUM_ROLE=tool-a MYCELIUM_PEERS=127.0.0.1:57001,127.0.0.1:57002 \
+//! MYCELIUM_ROLE=tool-a MYCELIUM_PEERS=127.0.0.1:57001,127.0.0.1:57002,127.0.0.1:57003 \
 //!   MYCELIUM_PORT=57000 cargo run --example three_node_demo
 //!
 //! # terminal 2
-//! MYCELIUM_ROLE=tool-b MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57002 \
+//! MYCELIUM_ROLE=tool-b MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57002,127.0.0.1:57003 \
 //!   MYCELIUM_PORT=57001 cargo run --example three_node_demo
 //!
 //! # terminal 3 — requires Ollama running on localhost:11434 with llama3.2 pulled
-//! MYCELIUM_ROLE=llm MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001 \
+//! MYCELIUM_ROLE=llm MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57003 \
 //!   MYCELIUM_PORT=57002 OLLAMA_BASE_URL=http://localhost:11434/v1 \
 //!   cargo run --example three_node_demo
 //! # open http://localhost:8080
+//!
+//! # terminal 4 — management dashboard (optional)
+//! MYCELIUM_ROLE=mgmt MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57002 \
+//!   MYCELIUM_PORT=57003 cargo run --example three_node_demo
+//! # open http://localhost:8090
 //! ```
 //!
 //! # Local quick start — overlay cluster (no Docker)
