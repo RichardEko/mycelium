@@ -9,6 +9,10 @@
 //!   tool-b   ─── calculate(expr) — safe arithmetic evaluator
 //!                wiki(topic)     — calls Wikipedia REST summary API
 //!
+//!   tool-sf  ─── sf_lookup(query) — SF Encyclopedia (SFE3) scholarly lookup
+//!                                   author/series/theme entries; dynamically
+//!                                   discovered by the llm node when started
+//!
 //!   llm      ─── browser chat UI at CHAT_PORT (default 8080)
 //!                plans with local Ollama (llama3.2)
 //!                routes each tool call to whichever container hosts it
@@ -89,6 +93,12 @@
 //! MYCELIUM_ROLE=mgmt MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57002 \
 //!   MYCELIUM_PORT=57003 cargo run --example three_node_demo
 //! # open http://localhost:8090
+//!
+//! # terminal 5 — SF Encyclopedia tool (start any time; llm discovers it live)
+//! MYCELIUM_ROLE=tool-sf MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57002 \
+//!   MYCELIUM_PORT=57004 cargo run --example three_node_demo
+//! # once started, ask the llm about any SF author, series, or theme —
+//! # it will automatically prefer sf_lookup over wiki for SF queries
 //! ```
 //!
 //! # Local quick start — overlay cluster (no Docker)
@@ -389,6 +399,102 @@ async fn tool_wiki(args: Value) -> Result<Value, String> {
     }))
 }
 
+// ── SF Encyclopedia tool ───────────────────────────────────────────────────────
+
+fn sfe_candidate_slugs(query: &str) -> Vec<String> {
+    // Strip "by Author" and leading articles, then generate slug variants
+    let q = query.to_lowercase();
+    let q = if let Some(i) = q.find(" by ") { &q[..i] } else { q.as_str() };
+    let q = q.trim();
+    let stop = ["the", "a", "an", "of", "in", "and"];
+    let words: Vec<&str> = q.split_whitespace().filter(|w| !stop.contains(w)).collect();
+    if words.is_empty() { return vec![]; }
+
+    let fwd = words.join("_");
+    let mut out = vec![fwd.clone(), format!("{fwd}_series"), format!("{fwd}s")];
+
+    // Reversed order — lastname_firstname for author queries
+    if words.len() >= 2 {
+        let mut rev = words.clone();
+        rev.rotate_right(1);
+        let r = rev.join("_");
+        out.push(r.clone());
+        out.push(format!("{r}_series"));
+    }
+
+    // First word alone and plural
+    let first = words[0];
+    out.push(first.to_string());
+    out.push(format!("{first}_series"));
+    out.push(format!("{first}s"));
+    out
+}
+
+fn sfe_extract_text(html: &str) -> String {
+    // Pull paragraphs from the entryArticle section
+    let start = html.find("entryArticle").unwrap_or(0);
+    let chunk = &html[start..];
+    let mut out = String::new();
+    let mut in_tag = false;
+    for ch in chunk.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => { in_tag = false; out.push(' '); }
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    let out = out
+        .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+        .replace("&nbsp;", " ").replace("&#8217;", "'").replace("&#8216;", "'")
+        .replace("&#8220;", "\u{201c}").replace("&#8221;", "\u{201d}")
+        .replace("&#8212;", "—").replace("&#8211;", "–").replace("&ndash;", "–");
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+async fn tool_sf_lookup(args: Value) -> Result<Value, String> {
+    let query = args["query"].as_str().unwrap_or("").trim().to_string();
+    if query.is_empty() { return Err("missing query parameter".into()); }
+
+    let client = reqwest::Client::new();
+    let candidates = sfe_candidate_slugs(&query);
+
+    for slug in &candidates {
+        let url = format!("https://sf-encyclopedia.com/entry/{slug}");
+        let resp = client.get(&url)
+            .header("User-Agent", "mycelium-demo/0.1")
+            .timeout(Duration::from_secs(12))
+            .send().await.map_err(|e| format!("SFE3 request failed: {e}"))?;
+
+        if !resp.status().is_success() { continue; }
+
+        let html = resp.text().await.map_err(|e| format!("SFE3 read failed: {e}"))?;
+        if html.contains("Sorry! The page was not found") { continue; }
+
+        let text = sfe_extract_text(&html);
+        // Skip the header boilerplate (nav + search form) — content starts after "Tagged:"
+        let content = if let Some(i) = text.find("Tagged:") {
+            text[i..].splitn(2, '.').nth(1).unwrap_or(&text).trim().to_string()
+        } else {
+            text
+        };
+        let excerpt: String = content.chars().take(1800).collect();
+
+        return Ok(json!({
+            "source": "SF Encyclopedia (SFE3) — scholarly critical reference",
+            "title":  slug.replace('_', " "),
+            "url":    url,
+            "content": excerpt,
+        }));
+    }
+
+    Err(format!(
+        "No SFE3 entry found for '{}' — tried slugs: {}",
+        query,
+        candidates.join(", ")
+    ))
+}
+
 // ── Tool node runners ──────────────────────────────────────────────────────────
 
 async fn run_tool_a(agent: Arc<GossipAgent>, role: &str) {
@@ -424,6 +530,22 @@ async fn run_tool_b(agent: Arc<GossipAgent>, role: &str) {
         Arc::new(|args| Box::pin(tool_wiki(args))),
     );
     info!("[{role}] tools: calculate, wiki — listening");
+    loop { time::sleep(Duration::from_secs(60)).await; }
+}
+
+async fn run_tool_sf(agent: Arc<GossipAgent>, role: &str) {
+    let _role_cap = agent.advertise_capability(Capability::new("role", "tool-sf"), Duration::from_secs(5));
+    let _sf = register(
+        &agent, "sf_lookup",
+        "Look up science fiction and fantasy authors, novels, series, and themes in the \
+         SF Encyclopedia (SFE3) — a scholarly critical reference with literary analysis, \
+         historical context, and thematic depth well beyond Wikipedia. \
+         Prefer this over wiki for any SF/fantasy query. \
+         Input: {\"query\": \"Dan Simmons\"} or {\"query\": \"Hyperion Cantos\"}",
+        json!({"type":"object","properties":{"query":{"type":"string","description":"Author name, book/series title, or SF theme (e.g. 'cyberpunk', 'time travel')"}},"required":["query"]}),
+        Arc::new(|args| Box::pin(tool_sf_lookup(args))),
+    );
+    info!("[{role}] tools: sf_lookup — listening");
     loop { time::sleep(Duration::from_secs(60)).await; }
 }
 
@@ -1279,6 +1401,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match role.as_str() {
         "tool-a" => run_tool_a(agent, &role).await,
         "tool-b" => run_tool_b(agent, &role).await,
+        "tool-sf" => run_tool_sf(agent, &role).await,
         "llm"    => run_chat_server(agent, LlmCfg::from_env(), chat_port).await,
         "mgmt"   => run_mgmt_server(agent, mgmt_port).await,
         "node"    => run_node(agent, &role).await,

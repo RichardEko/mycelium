@@ -68,6 +68,7 @@ Three nodes with distinct roles — two tool providers and one LLM node with a r
 |---|---|---|
 | `tool-a` | `weather(city)`, `web_fetch(url)` | 8300 |
 | `tool-b` | `calculate(expr)`, `wiki(topic)` | 8300 |
+| `tool-sf` | `sf_lookup(query)` — SF Encyclopedia scholarly lookup | 8300 |
 | `llm` | Browser chat UI + LLM planner | 8080 |
 | `mgmt` | Management dashboard | 8090 |
 
@@ -92,15 +93,15 @@ make test-three-node   # automated test — 4 scenarios, uses real llama3.2 via 
 
 ```sh
 # terminal 1
-MYCELIUM_ROLE=tool-a MYCELIUM_PEERS=127.0.0.1:57001,127.0.0.1:57002,127.0.0.1:57003 \
+MYCELIUM_ROLE=tool-a MYCELIUM_PEERS=127.0.0.1:57001,127.0.0.1:57002,127.0.0.1:57003,127.0.0.1:57004 \
   MYCELIUM_PORT=57000 cargo run --example three_node_demo
 
 # terminal 2
-MYCELIUM_ROLE=tool-b MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57002,127.0.0.1:57003 \
+MYCELIUM_ROLE=tool-b MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57002,127.0.0.1:57003,127.0.0.1:57004 \
   MYCELIUM_PORT=57001 cargo run --example three_node_demo
 
 # terminal 3 — requires Ollama running on localhost:11434 with llama3.2 pulled
-MYCELIUM_ROLE=llm MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57003 \
+MYCELIUM_ROLE=llm MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57003,127.0.0.1:57004 \
   MYCELIUM_PORT=57002 OLLAMA_BASE_URL=http://localhost:11434/v1 \
   cargo run --example three_node_demo
 # open http://localhost:8080
@@ -109,6 +110,12 @@ MYCELIUM_ROLE=llm MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57003
 MYCELIUM_ROLE=mgmt MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57002 \
   MYCELIUM_PORT=57003 cargo run --example three_node_demo
 # open http://localhost:8090
+
+# terminal 5 — SF Encyclopedia tool (start any time; llm discovers it live)
+MYCELIUM_ROLE=tool-sf MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57002 \
+  MYCELIUM_PORT=57004 cargo run --example three_node_demo
+# once running, ask the llm about any SF author, series, or theme —
+# it automatically prefers sf_lookup over wiki for SF queries
 ```
 
 ---
