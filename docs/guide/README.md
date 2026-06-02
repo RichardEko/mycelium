@@ -5,6 +5,40 @@ process — there is no daemon, no sidecar, no coordinator to run. Each node is
 simultaneously a participant in the mesh and a full peer. The mesh is the
 registry, the bus, and the scheduler all at once.
 
+## Design philosophy
+
+Most distributed systems treat consistency as the default and availability as
+the thing you sacrifice during a partition. Mycelium inverts this. Eventual
+consistency is the default substrate — fast, partition-tolerant, no coordinator
+required. Strong consistency is an opt-in overlay you reach for only where your
+application actually needs it. You pay for guarantees only where they matter.
+
+This is what [ROADMAP.md](../../ROADMAP.md) calls **The Structural Inversion**:
+
+> _"Rather than building eventual consistency on top of consensus, build
+> consensus on top of eventual consistency. The gossip substrate is always
+> available; the consistency overlay is available when you need it."_
+
+The second principle is biological. Signals propagate like hormones in a
+circulatory system — epidemically, without routing tables, without a
+dispatcher. Each node holds a `Boundary` (its receptor set) that decides
+whether it *acts* on a signal; forwarding is always unconditional. Opacity,
+load-shedding, and demand pressure all emerge from the same mechanism: nodes
+write to their own `sys/load/` prefix, and anything scanning that prefix sees
+a consistent picture without any coordination. See
+[docs/philosophy.html](../philosophy.html) for the full argument.
+
+The third principle is substrate unity: every higher-layer feature — capability
+advertisements, consensus ballots, audit records, tool registrations — is
+stored as a key in the gossip KV store. There is one substrate, not a stack of
+separate systems. This means any node can inspect any layer's state, and the
+anti-entropy mechanism that heals KV partitions also heals capability routing
+and consensus voting.
+
+---
+
+## Layers
+
 The library is built in three layers, each complete and useful on its own:
 
 ```mermaid
@@ -43,6 +77,13 @@ provide (`ns/name` pairs with structured attributes), and any node can resolve
 providers at call time — with locality ranking, demand pressure, and emergent
 group formation — without knowing addresses in advance.
 
+> **Note on layer numbering.** This guide uses three layers (I, II, III) for
+> clarity. [ROADMAP.md](../../ROADMAP.md) describes five numbered layers (1–5)
+> plus the opt-in overlay and capability subsystem as distinct sections.
+> Layers 3–5 in ROADMAP correspond to the application patterns in chapters
+> 05–08 here. Both descriptions are correct; the guide simplifies for
+> newcomers.
+
 Four application patterns build on this substrate:
 
 | Pattern | What it does | Guide chapter |
@@ -66,9 +107,12 @@ Four application patterns build on this substrate:
 | [06](06-tool-discovery.md) | MCP tool discovery — LLM finds tools dynamically | `./examples/chat/demo.sh` | 5 min |
 | [07](07-pipelines.md) | Fluid pipelines — Agentic Flow Networks | `docker compose up --scale worker=10` | 3 min |
 | [08](08-a2a-interop.md) | A2A interop — LangChain / AutoGen integration | `python langchain_agent.py` | 3 min |
+| [09](09-security.md) | Security — mTLS, Ed25519, signed KV, audit trail | `--features tls` | — |
+| [10](10-language-bridges.md) | Language bridges — Python and TypeScript SDKs | `pip install mycelium-py` | 5 min |
 
 Read chapters 01–04 to build the mental model. Jump to 05–08 for the application
-pattern that matches your use case.
+pattern that matches your use case. Chapter 09 covers the security and compliance
+story; chapter 10 covers using Mycelium from Python or TypeScript.
 
 ---
 
@@ -96,4 +140,5 @@ let providers = agent.resolve(&CapFilter::new("llm", "inference"));
 ```
 
 See the [main README](../../README.md) for the full API surface and
-[ROADMAP.md](../../ROADMAP.md) for the architecture rationale.
+[ROADMAP.md](../../ROADMAP.md) for the architecture rationale and design
+decisions.
