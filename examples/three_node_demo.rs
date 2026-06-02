@@ -545,7 +545,7 @@ async fn tool_book_plot(args: Value) -> Result<Value, String> {
         .query(&[("action","query"),("list","search"),("srsearch",&query),
                  ("format","json"),("srlimit","1")])
         .header("User-Agent", "mycelium-demo/0.1")
-        .timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(6))
         .send().await.map_err(|e| format!("search failed: {e}"))?
         .json().await.map_err(|e| format!("search parse failed: {e}"))?;
 
@@ -554,13 +554,13 @@ async fn tool_book_plot(args: Value) -> Result<Value, String> {
         .unwrap_or(&query)
         .to_string();
 
-    // Fetch full article as plain text
+    // Fetch full article as plain text — both requests run under a single 20s budget
     let article: Value = client
         .get("https://en.wikipedia.org/w/api.php")
         .query(&[("action","query"),("titles",&title),("prop","extracts"),
-                 ("explaintext","true"),("format","json")])
+                 ("explaintext","true"),("exlimit","1"),("format","json")])
         .header("User-Agent", "mycelium-demo/0.1")
-        .timeout(Duration::from_secs(12))
+        .timeout(Duration::from_secs(14))
         .send().await.map_err(|e| format!("article fetch failed: {e}"))?
         .json().await.map_err(|e| format!("article parse failed: {e}"))?;
 
@@ -905,10 +905,19 @@ async fn run_chat_server(agent: Arc<GossipAgent>, cfg: LlmCfg, chat_port: u16) {
         agent,
         cfg: cfg.clone(),
         history: Mutex::new(vec![json!({"role": "system", "content":
-            "You are a helpful assistant with access to tools for weather lookups, \
-             arithmetic calculations, Wikipedia summaries, and web page fetching. \
-             Use the available tools whenever they help answer the user's question. \
-             Keep answers concise and factual."})]),
+            "You are a helpful assistant with access to external tools. \
+             Always call a tool to retrieve information before answering — \
+             do NOT answer from memory when a tool is available. \
+             Base your answer strictly on what the tools return; do not add \
+             facts, plot details, or character names that did not appear in \
+             the tool results. \
+             Tool selection guide: \
+             - wiki: quick facts, biographies, science, history — returns a short summary only. \
+             - sf_lookup: SF/fantasy author careers, literary themes, movements, awards, critical reception. \
+             - book_plot: plot details, characters, story events for a specific book or film. \
+             - weather: current weather for a city. \
+             - calculate: arithmetic. \
+             - web_fetch: fetch a URL."})]),
         tx,
         busy: AtomicBool::new(false),
     });
