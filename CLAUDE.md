@@ -78,18 +78,18 @@ And Hybrid Logical Clocks for causal LWW ordering: [`src/hlc.rs`](src/hlc.rs).
 
 ## Active follow-up plans (memory)
 
-These are real work items captured in the memory directory at
-`~/.claude/projects/-Volumes-Scratch-Mycelium/memory/`. Anyone resuming
-should read [`MEMORY.md`](~/.claude/projects/-Volumes-Scratch-Mycelium/memory/MEMORY.md)
-for the index.
+These are real work items. Anyone resuming should read
+[`MEMORY.md`](~/.claude/projects/-Volumes-Scratch-Mycelium/memory/MEMORY.md) for the index.
 
 | Plan | What's pending |
 |---|---|
-| `plan_signal_reorder_buffer.md` | Receiver-side per-(sender, kind) HLC-keyed reorder buffer for causal signal delivery |
-| `plan_watcher_scalability.md` | C1 predicate-based prefix subscribe + C2 reconcile debounce + C3 per-group task consolidation |
-| `plan_fuzz_harness.md` | cargo-fuzz targets for WireMessage + capability decoders |
-| `plan_layer_coherence_refactor.md` | E1 SignalHandlers split + E4 ConsensusEngine::propose extraction |
-| `plan_locality_topology_capabilities.md` | Original feature plan (Phases 0–9; Phase 8 cross-group consensus federation still deferred to its own follow-up) |
+| Signal reorder buffer | Receiver-side per-(sender, kind) HLC-keyed reorder buffer for causal signal delivery — not yet implemented |
+| Watcher scalability C2/C3 | C1 (predicate-based prefix subscribe) is shipped (`subscribe_prefix_with_predicate` in `store.rs`); C2 reconcile debounce + C3 per-group task consolidation still outstanding |
+| Cross-group consensus (Phase 8) | `cross_group_propose` for multi-voting-bloc decisions; design in `memory/cross_group_consensus.md` |
+| TupleSpace companion crate | Deferred; design at `~/.claude/plans/mycelium-tuple-space.md` |
+| Compliance feature (`--features compliance`) | Full plan at `~/.claude/plans/humble-twirling-comet.md`; not yet implemented |
+
+**Already shipped (removed from list):** fuzz harness (`fuzz/fuzz_targets/`), SignalHandlers split, ConsensusEngine::propose extraction, locality/topology Phases 0–7.
 
 ## Working in this repo
 
@@ -97,6 +97,7 @@ for the index.
 - `cargo build --lib --features metrics` to include the Prometheus scrape endpoint
 - `cargo build --lib --features a2a` to include the A2A protocol adapter
 - `cargo build --lib --features llm` to include the Prompt Skills LLM adapter
+- `cargo build --lib --features compliance` to include gateway auth, durable audit, RBAC (planned, not yet implemented)
 - 243 tests at HEAD (with `--features llm`); 235 without any extra feature; clippy at baseline 61
   (pre-existing `field_reassign_with_default` in test code).
 - Wire version is currently **v10** (`PREV_WIRE_VERSION = 9` — rolling upgrade window open).
