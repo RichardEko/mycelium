@@ -37,6 +37,7 @@ And Hybrid Logical Clocks for causal LWW ordering: [`src/hlc.rs`](src/hlc.rs).
 | Wire format + version negotiation | `src/framing.rs` (`WIRE_VERSION` policy at the top) |
 | HLC design + documented limits | `src/hlc.rs` module doc |
 | Capability/requirement model | `src/capability.rs` |
+| Example guide (concept → run → dev notes) | [`docs/guide/README.md`](docs/guide/README.md) |
 
 ## Core design rules to keep in mind
 

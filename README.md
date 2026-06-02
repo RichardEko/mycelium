@@ -9,6 +9,20 @@ persistent state; Layer 2 carries ephemeral events. Higher layers provide async 
 mailboxes, MCP tool routing, SkillRunner LLM nodes, and a Python bridge — each agent chooses
 its own payload serialisation.
 
+## Getting Started
+
+Mycelium is three layers: a broker-less gossip KV store (Layer I), an ephemeral
+scoped event mesh (Layer II), and an opt-in consensus overlay (Layer III). The
+capability system sits across all three layers and provides broker-less service
+discovery. Four application patterns build on this substrate: Skills (LLM agents
+as mesh nodes), MCP tool discovery (LLM finds tools dynamically from the KV
+store), fluid pipelines (Agentic Flow Networks), and A2A interop (LangChain /
+AutoGen).
+
+**[→ Developer guide with concept explanations, diagrams, and dev notes for each pattern](docs/guide/README.md)**
+
+---
+
 ## Demos
 
 ### Mesh Control UI — `llm_agent`
@@ -192,6 +206,7 @@ different problems and compose naturally together.
 | Discovered via | `tools/` KV prefix | Capability system (`ns`/`name`) |
 | Started with | Any binary / language | `skillrunner --skill manifest.toml` |
 | Live chat example | `three_node_demo` — `wiki`, `weather`, `calculate` | `examples/community/` — researcher, writer, orchestrator |
+| Guide | [06-tool-discovery.md](docs/guide/06-tool-discovery.md) | [05-skills.md](docs/guide/05-skills.md) |
 
 ### When to use each
 
