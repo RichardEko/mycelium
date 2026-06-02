@@ -355,14 +355,30 @@ async fn tool_calculate(args: Value) -> Result<Value, String> {
 async fn tool_wiki(args: Value) -> Result<Value, String> {
     let topic = args["topic"].as_str().unwrap_or("").trim().to_string();
     if topic.is_empty() { return Err("missing topic parameter".into()); }
-    let encoded = topic.replace(' ', "_");
-    let url = format!("https://en.wikipedia.org/api/rest_v1/page/summary/{encoded}");
-    let resp = reqwest::Client::new()
-        .get(&url)
+
+    let client = reqwest::Client::new();
+
+    // Search for the canonical article title so natural-language queries work.
+    let search: Value = client
+        .get("https://en.wikipedia.org/w/api.php")
+        .query(&[("action","query"),("list","search"),("srsearch",&topic),("format","json"),("srlimit","1")])
+        .header("User-Agent", "mycelium-demo/0.1")
+        .timeout(Duration::from_secs(10))
+        .send().await.map_err(|e| format!("wiki search failed: {e}"))?
+        .json().await.map_err(|e| format!("wiki search parse failed: {e}"))?;
+
+    let canonical = search["query"]["search"][0]["title"]
+        .as_str()
+        .unwrap_or(&topic)
+        .replace(' ', "_");
+
+    let summary_url = format!("https://en.wikipedia.org/api/rest_v1/page/summary/{canonical}");
+    let resp: Value = client.get(&summary_url)
         .header("User-Agent", "mycelium-demo/0.1")
         .timeout(Duration::from_secs(10))
         .send().await.map_err(|e| format!("wiki request failed: {e}"))?
-        .json::<Value>().await.map_err(|e| format!("wiki parse failed: {e}"))?;
+        .json().await.map_err(|e| format!("wiki parse failed: {e}"))?;
+
     if resp["type"].as_str() == Some("disambiguation") || resp["extract"].is_null() {
         return Err(format!("'{topic}' is ambiguous or not found — try a more specific title"));
     }
