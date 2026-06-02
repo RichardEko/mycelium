@@ -1,5 +1,23 @@
 //! Multi-role demo binary — LLM chat cluster and consistency overlay cluster.
 //!
+//! # What this demonstrates
+//!
+//! **MCP tool discovery** — the LLM node learns what tools are available by
+//! scanning the gossip KV store at call time. Start a new tool node mid-session
+//! (`tool-sf`, `tool-book`) and the LLM immediately finds it on the next message —
+//! no restart, no configuration change, no coordinator.
+//!
+//! **Specialised tool routing** — three tools serve SF queries with different depth:
+//! `wiki` (quick summary), `sf_lookup` (SFE3 scholarly analysis), `book_plot`
+//! (Wikipedia plot section). The LLM picks the right tool based on its description.
+//!
+//! **Broker-less architecture** — tool nodes advertise under `tools/{name}/{node_id}`
+//! in the gossip KV store. The planner resolves the right node at call time.
+//! No central registry; the mesh is the registry.
+//!
+//! For the Skills equivalent (LLM agents calling other LLM agents) see
+//! `examples/community/`.
+//!
 //! One binary, six roles selected by `MYCELIUM_ROLE`:
 //!
 //! ```text

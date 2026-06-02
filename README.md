@@ -168,6 +168,54 @@ cargo run --example conway_gpu      # GPU-accelerated renderer (Metal / wgpu)
 
 ---
 
+## Skills vs MCP Tools — Choosing the Right Primitive
+
+Mycelium supports two ways to extend what an LLM agent can do. They solve
+different problems and compose naturally together.
+
+### Mental model
+
+> **MCP tool** = a function in the mesh. The LLM calls it to look something
+> up, run a calculation, or fetch data. Written in any language.
+>
+> **Skill** = an LLM agent in the mesh. It has its own identity, prompt, and
+> capability declaration. It can be called by any node — including other skills.
+
+### Comparison
+
+| | MCP Tool | Skill |
+|---|---|---|
+| What it is | A function registered on a node | An LLM agent node |
+| Written in | Any language | TOML manifest — no code |
+| Calls an LLM | Optionally | Always |
+| Can call other skills | No | Yes — composition |
+| Discovered via | `tools/` KV prefix | Capability system (`ns`/`name`) |
+| Started with | Any binary / language | `skillrunner --skill manifest.toml` |
+| Live chat example | `three_node_demo` — `wiki`, `weather`, `calculate` | `examples/community/` — researcher, writer, orchestrator |
+
+### When to use each
+
+Use an **MCP tool** when:
+- You need to call an external API (weather, Wikipedia, a database)
+- You need deterministic computation (arithmetic, format conversion)
+- You want to write the tool in Python, TypeScript, Go, or any language
+- The operation is stateless and fast
+
+Use a **Skill** when:
+- You need an LLM reasoning step in a pipeline
+- You want to compose agents — an orchestrator that calls a researcher that calls a writer
+- You want a persistent, named agent role that any node on the mesh can discover and invoke
+- You want to scale a reasoning step horizontally (run two researchers; the orchestrator uses both)
+
+### They compose naturally
+
+The `three_node_demo` LLM node uses MCP tools for external lookups (`wiki`,
+`weather`, `sf_lookup`, `book_plot`). The `examples/community/` orchestrator
+uses Skills for LLM reasoning steps (`researcher`, `writer`). There is no
+conflict — a single planner can have both in scope simultaneously.
+
+---
+
 ## Build
 
 ```
@@ -1170,20 +1218,27 @@ Import it via **Dashboards → Import** in the Grafana UI and select your Promet
 
 ---
 
-## SkillRunner — local LLMs as mesh capabilities
+## SkillRunner — LLM Agents as Mesh Nodes
 
-`skillrunner` is a standalone binary that turns a `.skill.toml` file into a
-live capability node on the mesh. No Rust required — write a manifest, point
-it at any OpenAI-compatible LLM server, and the node self-advertises,
-handles invocations via nonce RPC, and writes an audit trail.
+`skillrunner` is a standalone binary that turns a `.skill.toml` manifest into
+a live LLM agent node on the mesh. No Rust required. Write a manifest, point it
+at any OpenAI-compatible LLM server, and the node self-advertises its capability,
+handles invocations via RPC, and writes a signed audit trail — all automatically.
 
 ```sh
 cargo build --bin skillrunner
 ./target/debug/skillrunner --skill examples/skills/hello.skill.toml
 ```
 
-Requires Ollama (or any OpenAI-compatible endpoint). The `hello.skill.toml`
-example uses `llama3.2`; swap `model` to use any model you have pulled.
+### How a skill works
+
+When a skill node starts:
+1. It joins the mesh and **advertises its capability** (`ns`/`name`) into the gossip KV store
+2. Any caller that wants `llm/chat` does `resolve("llm", "chat")` — the mesh returns the node's address
+3. The caller sends an RPC with the input JSON; the skill runs its LLM prompt with that input and returns the result
+4. An audit record (signed with the node's Ed25519 key, HLC-timestamped) is written to the mesh
+
+No service registry. No coordinator. The mesh *is* the registry.
 
 ### Minimal skill manifest
 
@@ -1193,13 +1248,15 @@ bind_port       = 7947
 bootstrap_peers = ["127.0.0.1:7946"]   # address of any existing mesh node
 
 [capability]
-ns   = "llm"
-name = "chat"
+ns          = "llm"
+name        = "chat"
+description = "Responds to any message"
 
 [capability.input]
 type = "object"
+required = ["message"]
 [capability.input.properties]
-message = { type = "string" }
+message = { type = "string", description = "The user's message" }
 
 [capability.output]
 type = "object"
@@ -1211,65 +1268,60 @@ prompt = "You are a helpful assistant. Return JSON: {\"reply\": \"<response>\"}.
 tools  = []
 
 [skill.llm]
-endpoint = "http://localhost:11434/v1"   # Ollama OpenAI-compatible endpoint
+endpoint = "http://localhost:11434/v1"   # Ollama or any OpenAI-compatible endpoint
 model    = "llama3.2"
 ```
 
-### Calling a skill from another node
+### Skill composition — skills calling skills
 
-Any node on the mesh — Rust, Python, or another skillrunner — can invoke a
-skill via `rpc_call`:
+A skill can declare other skills as `tools`. The orchestrator below calls a
+researcher and a writer without knowing their addresses:
+
+```toml
+[skill]
+prompt = "Coordinate llm/researcher and llm/writer to produce an article on the topic."
+tools  = ["llm/researcher", "llm/writer"]   # resolved at inference time via gossip
+```
+
+At inference time SkillRunner resolves `llm/researcher` against live capability
+advertisements in the KV store, dispatches the sub-invocation through the mesh,
+and injects the result back into the LLM context. Start a second researcher node
+and the orchestrator automatically load-balances across both.
+
+This is the composition story — see [`examples/community/`](examples/community/)
+for a full 3-skill walkthrough with live monitoring instructions.
+
+### Calling a skill from any node
 
 **Rust:**
 ```rust
-// Discover the skill
-let filter = CapFilter::new("llm", "chat");
-let (node_id, _) = agent.resolve(&filter)[0];
-
-// Invoke it
+let (node_id, _) = agent.resolve(&CapFilter::new("llm", "chat"))[0];
 let payload = serde_json::to_vec(&json!({"message": "Hello!"}))?;
 let result = agent.rpc_call(node_id, "skill.invoke", payload, Duration::from_secs(30)).await?;
-let reply: serde_json::Value = serde_json::from_slice(&result)?;
 ```
 
 **Python (`mycelium-py`):**
 ```python
-import json
 from mycelium import MyceliumAgent
+import json
 
-agent = MyceliumAgent("127.0.0.1", 8300)   # HTTP port of any mesh node
-
+agent = MyceliumAgent("127.0.0.1", 8300)
 providers = agent.resolve_capability("llm", "chat")
 result = agent.rpc_call(providers[0].node_id, "skill.invoke",
                         json.dumps({"message": "Hello!"}).encode())
-print(json.loads(result))
 ```
 
-### Multi-skill community
+### Ready-to-run examples
 
-Run multiple skills on the same machine — each on its own port, all
-bootstrapping off each other:
+| Example | What it shows |
+|---|---|
+| [`examples/skills/hello.skill.toml`](examples/skills/hello.skill.toml) | Minimal single-skill smoke test |
+| [`examples/skills/summarizer.skill.toml`](examples/skills/summarizer.skill.toml) | Structured JSON output with input schema |
+| [`examples/community/`](examples/community/) | 3-skill composition: orchestrator → researcher → writer |
+| [`examples/a2a_langchain/`](examples/a2a_langchain/) | LangChain + AutoGen auto-discovering skills via A2A |
 
-```sh
-./skillrunner --skill examples/skills/hello.skill.toml &   # port 7950
-./skillrunner --skill examples/skills/summarizer.skill.toml &  # port 7951
-./skillrunner --skill examples/skills/researcher.skill.toml &  # port 7952
-```
-
-Skills listed in a manifest's `tools` array can call other skills by name at
-inference time — the mesh routes sub-invocations automatically and the audit
-trail captures the full causal chain.
-
-See [`skillrunner.html`](docs/skillrunner.html) for the full manifest
+See [`docs/skillrunner.html`](docs/skillrunner.html) for the full manifest
 reference, OTEL integration, concurrency controls, and the audit trail format.
-
-See [`examples/skills/`](examples/skills/) for ready-to-run manifests and
-[`examples/community/`](examples/community/) for a 3-skill community walkthrough.
-
-For an end-to-end integration with LangChain or AutoGen, see
-[`examples/a2a_langchain/`](examples/a2a_langchain/) — both agents auto-discover
-the community cluster's skills via A2A and use them as native tools with no
-hardcoded skill names. Build with `--features a2a` and run `start.sh` first.
 
 ---
 
