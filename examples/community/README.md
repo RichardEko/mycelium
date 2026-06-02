@@ -62,6 +62,20 @@ Any OpenAI-compatible endpoint works — swap `endpoint` and `model` in the
 
 ## Quick Start
 
+### End-to-end demo (recommended)
+
+```sh
+cd examples/community
+./demo.sh
+```
+
+`demo.sh` does everything in one run: starts the cluster, waits for gossip convergence,
+invokes the pipeline, then adds a **second researcher live** to show automatic
+load-balancing — all in a single terminal. Open http://localhost:9050/mgmt in a
+browser while it runs to watch the mesh state update in real time.
+
+### Manual steps
+
 ```sh
 cd examples/community
 
@@ -140,6 +154,24 @@ of a new skillrunner starting.
 
 ---
 
+## Management Dashboard
+
+When `http_port` is set in the skill TOML (the orchestrator uses 9050), SkillRunner
+serves a live dashboard at `/mgmt`:
+
+```
+http://localhost:9050/mgmt
+```
+
+The dashboard shows every skill currently advertising on the mesh, how many provider
+nodes each skill has, and the recent invocation audit trail — all fetched from the local
+KV store without a separate backend. It auto-refreshes every 4 seconds.
+
+The orchestrator is the natural place to point a browser because it holds KV entries
+from all three skills (gossip propagates capability advertisements everywhere).
+
+---
+
 ## Scaling — Add a Second Researcher
 
 ```sh
@@ -190,6 +222,16 @@ receive an error without consuming any LLM quota.
 - Set `[skill.llm.endpoint]` to an OpenAI or Anthropic-compatible URL
 - Add `[skill.otel]` and build with `--features otel` for Jaeger/Grafana tracing
 - Add more skills to the `tools` array in the orchestrator to extend the pipeline
+
+---
+
+## Sample Output
+
+[`sample-output/gossip-protocols.md`](sample-output/gossip-protocols.md) and
+[`sample-output/rust-ownership.md`](sample-output/rust-ownership.md) show exactly what
+the pipeline produces — including the per-step trace and the final title, TL;DR, and
+article body. The rust-ownership article was produced with researcher2 active, showing
+load-balancing in the pipeline trace.
 
 ---
 

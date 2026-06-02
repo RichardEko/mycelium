@@ -557,41 +557,35 @@ async fn tool_book_plot(args: Value) -> Result<Value, String> {
 
     let client = reqwest::Client::new();
 
-    // Search for the canonical Wikipedia article title
-    let search: Value = client
+    // Single generator API call: search + full article text in one round-trip.
+    // This halves network round-trips and fits within the 30s RPC budget with margin.
+    let result: Value = client
         .get("https://en.wikipedia.org/w/api.php")
-        .query(&[("action","query"),("list","search"),("srsearch",&query),
-                 ("format","json"),("srlimit","1")])
+        .query(&[
+            ("action",      "query"),
+            ("generator",   "search"),
+            ("gsrsearch",   query.as_str()),
+            ("gsrlimit",    "1"),
+            ("prop",        "extracts"),
+            ("explaintext", "true"),
+            ("format",      "json"),
+        ])
         .header("User-Agent", "mycelium-demo/0.1")
-        .timeout(Duration::from_secs(6))
-        .send().await.map_err(|e| format!("search failed: {e}"))?
-        .json().await.map_err(|e| format!("search parse failed: {e}"))?;
+        .timeout(Duration::from_secs(15))
+        .send().await.map_err(|e| format!("Wikipedia request failed: {e}"))?
+        .json().await.map_err(|e| format!("Wikipedia parse failed: {e}"))?;
 
-    let title = search["query"]["search"][0]["title"]
-        .as_str()
-        .unwrap_or(&query)
-        .to_string();
-
-    // Fetch full article as plain text — both requests run under a single 20s budget
-    let article: Value = client
-        .get("https://en.wikipedia.org/w/api.php")
-        .query(&[("action","query"),("titles",&title),("prop","extracts"),
-                 ("explaintext","true"),("exlimit","1"),("format","json")])
-        .header("User-Agent", "mycelium-demo/0.1")
-        .timeout(Duration::from_secs(14))
-        .send().await.map_err(|e| format!("article fetch failed: {e}"))?
-        .json().await.map_err(|e| format!("article parse failed: {e}"))?;
-
-    let pages = &article["query"]["pages"];
-    let text = pages.as_object()
+    let pages = &result["query"]["pages"];
+    let page = pages.as_object()
         .and_then(|m| m.values().next())
-        .and_then(|p| p["extract"].as_str())
-        .unwrap_or("");
+        .ok_or_else(|| format!("no Wikipedia article found for '{query}'"))?;
 
+    let text = page["extract"].as_str().unwrap_or("");
     if text.is_empty() {
         return Err(format!("no Wikipedia article found for '{query}'"));
     }
 
+    let title = page["title"].as_str().unwrap_or(&query).to_string();
     let plot = extract_plot_section(text);
     let excerpt: String = plot.chars().take(2000).collect();
 
