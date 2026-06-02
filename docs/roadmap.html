@@ -614,7 +614,7 @@
     <span class="badge"><span class="dot dot-live"></span> Layer 2: Signal / Boundary Mesh — Complete · 218 tests</span>
     <span class="badge"><span class="dot dot-live"></span> Consensus — Complete</span>
     <span class="badge"><span class="dot dot-live"></span> Capability &amp; Discovery — Complete</span>
-    <span class="badge"><span class="dot dot-live"></span> Layer 3: Service Patterns — Complete · 10 integration tests</span>
+    <span class="badge"><span class="dot dot-live"></span> Layer 3: Service Patterns — Complete · 12 integration tests</span>
     <span class="badge"><span class="dot dot-live"></span> mTLS + Node Identity + Consensus Signing — Complete</span>
     <span class="badge"><span class="dot dot-live"></span> Layer 4: Python Bridge (mycelium-py) — Complete</span>
     <span class="badge"><span class="dot dot-live"></span> Layer 4: SkillRunner + Audit Trail — Complete</span>
@@ -966,7 +966,7 @@
         <div class="stack-num sn-3">Layer<br>3</div>
         <div class="stack-body">
           <div class="stack-title">Service Patterns <span class="phase-tag tag-done">Complete</span></div>
-          <p class="stack-desc">All Layer 3 deliverables complete: embedded HTTP server, SSE streaming, and <code>rpc_call</code>/<code>rpc_respond</code> unblock Layer 4. Bulk payloads (<code>invoke.bulk</code> HTTP staging), Actor/Event mailboxes (KV-backed, HLC-ordered), and scatter-gather (parallel fan-out via <code>JoinSet</code>) round out the layer. 10 integration scenarios validate the full stack.</p>
+          <p class="stack-desc">All Layer 3 deliverables complete: embedded HTTP server, SSE streaming, and <code>rpc_call</code>/<code>rpc_respond</code> unblock Layer 4. Bulk payloads (<code>invoke.bulk</code> HTTP staging), Actor/Event mailboxes (KV-backed, HLC-ordered), and scatter-gather (parallel fan-out via <code>JoinSet</code>) round out the layer. 12 integration scenarios validate the full stack.</p>
           <div class="chips">
             <span class="chip">embedded HTTP server ✓</span>
             <span class="chip">SSE streaming ✓</span>
@@ -1731,7 +1731,7 @@ agent.<span class="fn">set</span>(<span class="mac">format!</span>(<span class="
     / <code>rpc_respond</code></strong> unblocked Layer 4. <strong>invoke.bulk</strong>
     (large-payload HTTP staging), <strong>Actor/Event mailboxes</strong> (KV-backed,
     HLC-ordered), and <strong>scatter-gather</strong> (parallel fan-out) complete the layer.
-    Ten Docker Compose integration scenarios validate the full stack end-to-end.</p>
+    Twelve Docker Compose integration scenarios validate the full stack end-to-end.</p>
 
     <p>When payloads exceed practical signal size — multi-KB prompts, model outputs,
     streaming token responses — a Layer 2 signal carries a <em>ticket</em>. HTTP carries
@@ -2313,7 +2313,7 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
         <tr><td>§8.2 Failure Tolerance — coordinator failure vs random node failure in Mycelium</td><td style="color:#f0883e;">Placeholder</td></tr>
         <tr><td>§8.3 State Freshness Under Churn — TTL evaporation vs knowledge graph drift</td><td style="color:#f0883e;">Placeholder</td></tr>
         <tr><td>§8.4 Audit Obligation Under Load — O(matching) vs O(N) artifact production</td><td style="color:#f0883e;">Placeholder</td></tr>
-        <tr><td>§8.5 Existing integration evidence (239 tests, 11 scenarios)</td><td style="color:#3fb950; font-weight:600;">Complete</td></tr>
+        <tr><td>§8.5 Existing integration evidence (243 tests, 12 scenarios)</td><td style="color:#3fb950; font-weight:600;">Complete</td></tr>
         <tr><td>Citation pass — resolve all <code>CITE-*</code> placeholders</td><td style="color:#f0883e;">Pending</td></tr>
         <tr><td>Author attribution</td><td style="color:#f0883e;">Pending</td></tr>
       </tbody>
@@ -2335,9 +2335,9 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
           <span style="font-weight:700; font-size:14px;">Multi-machine integration tests — Complete</span>
           <span style="font-size:11px; font-weight:600; color:var(--accent2); background:rgba(63,185,80,0.1); border:1px solid rgba(63,185,80,0.3); border-radius:20px; padding:2px 10px; margin-left:auto;">shipped 2026-05-23</span>
         </div>
-        <p style="font-size:13px; color:var(--text2); margin-bottom:10px;">Docker Compose cluster with 5 containers (node-a, node-b, node-c, mgmt, runner). Ten
-        unattended scenarios run automatically via <code>make test</code>: mesh convergence, management API, KV persistence, full-cluster restart, anti-entropy late joiner, signal propagation, capability discovery, scatter-gather fan-out, invoke.bulk large payload, and Actor/Event mailbox delivery.</p>
-        <p style="font-size:12px; color:var(--muted);"><strong style="color:var(--text2);">Implemented:</strong> reference Docker Compose topology · 10 integration scenarios · <code>/health</code>, <code>/ready</code>, <code>GET/PUT /kv/*</code>, <code>POST /emit/:kind</code>, <code>POST /scatter</code>, <code>POST /bulk-echo-peer</code>, <code>POST /deliver-to-self</code>, <code>GET /mailbox-count</code> endpoints</p>
+        <p style="font-size:13px; color:var(--text2); margin-bottom:10px;">Docker Compose cluster with 5 containers (node-a, node-b, node-c, mgmt, runner). Twelve
+        unattended scenarios run automatically via <code>make test</code>: mesh convergence, management API, KV persistence, full-cluster restart, anti-entropy late joiner, signal propagation, capability discovery, scatter-gather fan-out, invoke.bulk large payload, Actor/Event mailbox delivery, Agentic Flow Networks pipeline, and Prompt Skills cross-node KV propagation and invocation.</p>
+        <p style="font-size:12px; color:var(--muted);"><strong style="color:var(--text2);">Implemented:</strong> reference Docker Compose topology · 12 integration scenarios · <code>/health</code>, <code>/ready</code>, <code>GET/PUT /kv/*</code>, <code>POST /emit/:kind</code>, <code>POST /scatter</code>, <code>POST /bulk-echo-peer</code>, <code>POST /deliver-to-self</code>, <code>GET /mailbox-count</code> endpoints</p>
       </div>
 
       <div style="background:var(--surface2); border:1px solid rgba(63,185,80,0.3); border-radius:var(--radius); padding:18px;">
@@ -2401,7 +2401,7 @@ tokio::<span class="fn">spawn</span>(<span class="kw">async move</span> {
     <table>
       <thead><tr><th>Gap</th><th>Severity</th><th>Est. effort</th></tr></thead>
       <tbody>
-        <tr><td>Multi-machine integration tests + deployment docs (10 scenarios)</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-23</td></tr>
+        <tr><td>Multi-machine integration tests + deployment docs (12 scenarios)</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-23</td></tr>
         <tr><td>KV persistence (WAL + snapshot/replay)</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-23</td></tr>
         <tr><td>mTLS + node identity signing + consensus signing</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-24</td></tr>
         <tr><td>Python language bridge (<code>mycelium-py</code>)</td><td style="color:#3fb950; font-weight:600;">Complete</td><td>2026-05-24</td></tr>

@@ -184,6 +184,15 @@ providers for `llm/researcher` and distributes calls across both.
 endpoints. Set `[skill.llm.endpoint]` to an OpenAI or Anthropic URL in any
 skill. The orchestrator and sub-skills need not use the same backend.
 
+**"Orchestrator" vs coordinator.** The orchestrator skill is an application-layer
+agent that routes a task — not an infrastructure coordinator. It advertises
+`llm/orchestrator` on the mesh like any other node, holds no cluster state, and
+can be scaled horizontally (run two orchestrator instances and callers
+automatically distribute across both via `resolve_capability`). If it dies,
+no other node's operation is affected. Mycelium's "no coordinator" principle
+applies to the *substrate* — no Raft leader, no registry daemon that every node
+depends on. Application agents that decide call order are a separate concern.
+
 **OTel tracing.** Build with `--features otel` and add `[skill.otel]` to any
 manifest for Jaeger/Grafana trace spans per invocation.
 
