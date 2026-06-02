@@ -69,6 +69,7 @@ Three nodes with distinct roles — two tool providers and one LLM node with a r
 | `tool-a` | `weather(city)`, `web_fetch(url)` | 8300 |
 | `tool-b` | `calculate(expr)`, `wiki(topic)` | 8300 |
 | `tool-sf` | `sf_lookup(query)` — SF Encyclopedia scholarly lookup | 8300 |
+| `tool-book` | `book_plot(query)` — Wikipedia full article, Plot section | 8300 |
 | `llm` | Browser chat UI + LLM planner | 8080 |
 | `mgmt` | Management dashboard | 8090 |
 
@@ -111,11 +112,15 @@ MYCELIUM_ROLE=mgmt MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:5700
   MYCELIUM_PORT=57003 cargo run --example three_node_demo
 # open http://localhost:8090
 
-# terminal 5 — SF Encyclopedia tool (start any time; llm discovers it live)
+# terminal 5 — SF Encyclopedia (start any time; llm discovers it live)
 MYCELIUM_ROLE=tool-sf MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57002 \
   MYCELIUM_PORT=57004 cargo run --example three_node_demo
-# once running, ask the llm about any SF author, series, or theme —
-# it automatically prefers sf_lookup over wiki for SF queries
+# ask: "how does Dan Simmons fit into 1990s SF?" → uses sf_lookup
+
+# terminal 6 — book plot tool (start any time; llm discovers it live)
+MYCELIUM_ROLE=tool-book MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57002 \
+  MYCELIUM_PORT=57005 cargo run --example three_node_demo
+# ask: "what happens in Hyperion?" → uses book_plot
 ```
 
 ---

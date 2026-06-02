@@ -9,9 +9,13 @@
 //!   tool-b   ─── calculate(expr) — safe arithmetic evaluator
 //!                wiki(topic)     — calls Wikipedia REST summary API
 //!
-//!   tool-sf  ─── sf_lookup(query) — SF Encyclopedia (SFE3) scholarly lookup
-//!                                   author/series/theme entries; dynamically
-//!                                   discovered by the llm node when started
+//!   tool-sf  ─── sf_lookup(query)  — SF Encyclopedia (SFE3) scholarly lookup
+//!                                    author careers, themes, critical reception
+//!
+//!   tool-book ── book_plot(query)  — Wikipedia full article, Plot section
+//!                                    character details, story events
+//!
+//! Both tool-sf and tool-book are discovered live by the llm node when started.
 //!
 //!   llm      ─── browser chat UI at CHAT_PORT (default 8080)
 //!                plans with local Ollama (llama3.2)
@@ -94,11 +98,15 @@
 //!   MYCELIUM_PORT=57003 cargo run --example three_node_demo
 //! # open http://localhost:8090
 //!
-//! # terminal 5 — SF Encyclopedia tool (start any time; llm discovers it live)
+//! # terminal 5 — SF Encyclopedia (start any time; llm discovers it live)
 //! MYCELIUM_ROLE=tool-sf MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57002 \
 //!   MYCELIUM_PORT=57004 cargo run --example three_node_demo
-//! # once started, ask the llm about any SF author, series, or theme —
-//! # it will automatically prefer sf_lookup over wiki for SF queries
+//! # ask: "how does Dan Simmons fit into 1990s SF?" → uses sf_lookup
+//!
+//! # terminal 6 — book plot tool (start any time; llm discovers it live)
+//! MYCELIUM_ROLE=tool-book MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57002 \
+//!   MYCELIUM_PORT=57005 cargo run --example three_node_demo
+//! # ask: "what happens in Hyperion?" → uses book_plot
 //! ```
 //!
 //! # Local quick start — overlay cluster (no Docker)
@@ -506,6 +514,77 @@ async fn tool_sf_lookup(args: Value) -> Result<Value, String> {
     ))
 }
 
+// ── Book plot tool (Wikipedia full article + Plot section) ────────────────────
+
+fn extract_plot_section(full_text: &str) -> &str {
+    // Full article is plain text with == Section == markers.
+    // Try to find a Plot/Synopsis/Story section and return it.
+    let lower = full_text.to_lowercase();
+    for header in &["== plot ==", "== synopsis ==", "== story ==", "== plot summary =="] {
+        if let Some(start) = lower.find(header) {
+            let body_start = start + header.len();
+            // End at the next == section == or end of string
+            let rest = &full_text[body_start..];
+            let end = rest.find("\n==").unwrap_or(rest.len());
+            return rest[..end].trim();
+        }
+    }
+    // No dedicated plot section — return the first 2000 chars of the article
+    full_text.trim()
+}
+
+async fn tool_book_plot(args: Value) -> Result<Value, String> {
+    let query = args["query"].as_str().unwrap_or("").trim().to_string();
+    if query.is_empty() { return Err("missing query parameter".into()); }
+
+    let client = reqwest::Client::new();
+
+    // Search for the canonical Wikipedia article title
+    let search: Value = client
+        .get("https://en.wikipedia.org/w/api.php")
+        .query(&[("action","query"),("list","search"),("srsearch",&query),
+                 ("format","json"),("srlimit","1")])
+        .header("User-Agent", "mycelium-demo/0.1")
+        .timeout(Duration::from_secs(10))
+        .send().await.map_err(|e| format!("search failed: {e}"))?
+        .json().await.map_err(|e| format!("search parse failed: {e}"))?;
+
+    let title = search["query"]["search"][0]["title"]
+        .as_str()
+        .unwrap_or(&query)
+        .to_string();
+
+    // Fetch full article as plain text
+    let article: Value = client
+        .get("https://en.wikipedia.org/w/api.php")
+        .query(&[("action","query"),("titles",&title),("prop","extracts"),
+                 ("explaintext","true"),("format","json")])
+        .header("User-Agent", "mycelium-demo/0.1")
+        .timeout(Duration::from_secs(12))
+        .send().await.map_err(|e| format!("article fetch failed: {e}"))?
+        .json().await.map_err(|e| format!("article parse failed: {e}"))?;
+
+    let pages = &article["query"]["pages"];
+    let text = pages.as_object()
+        .and_then(|m| m.values().next())
+        .and_then(|p| p["extract"].as_str())
+        .unwrap_or("");
+
+    if text.is_empty() {
+        return Err(format!("no Wikipedia article found for '{query}'"));
+    }
+
+    let plot = extract_plot_section(text);
+    let excerpt: String = plot.chars().take(2000).collect();
+
+    Ok(json!({
+        "source": "Wikipedia — detailed article",
+        "title":  title,
+        "url":    format!("https://en.wikipedia.org/wiki/{}", title.replace(' ', "_")),
+        "plot":   excerpt,
+    }))
+}
+
 // ── Tool node runners ──────────────────────────────────────────────────────────
 
 async fn run_tool_a(agent: Arc<GossipAgent>, role: &str) {
@@ -536,8 +615,11 @@ async fn run_tool_b(agent: Arc<GossipAgent>, role: &str) {
     );
     let _wiki = register(
         &agent, "wiki",
-        "Look up a Wikipedia article summary. Input: {\"topic\": \"Eiffel Tower\"}",
-        json!({"type":"object","properties":{"topic":{"type":"string","description":"Wikipedia article title"}},"required":["topic"]}),
+        "Brief Wikipedia introduction for any topic — good for quick facts, \
+         biographies, science, history, geography. Returns only the opening \
+         summary, NOT detailed plot content. For plot details use book_plot; \
+         for SF literary analysis use sf_lookup.",
+        json!({"type":"object","properties":{"topic":{"type":"string","description":"Topic to look up"}},"required":["topic"]}),
         Arc::new(|args| Box::pin(tool_wiki(args))),
     );
     info!("[{role}] tools: calculate, wiki — listening");
@@ -548,15 +630,28 @@ async fn run_tool_sf(agent: Arc<GossipAgent>, role: &str) {
     let _role_cap = agent.advertise_capability(Capability::new("role", "tool-sf"), Duration::from_secs(5));
     let _sf = register(
         &agent, "sf_lookup",
-        "Look up science fiction and fantasy authors, novels, series, and themes in the \
-         SF Encyclopedia (SFE3) — a scholarly critical reference with literary analysis, \
-         historical context, and thematic depth well beyond Wikipedia. \
-         Prefer this over wiki for any SF/fantasy query. \
-         Input: {\"query\": \"Dan Simmons\"} or {\"query\": \"Hyperion Cantos\"}",
+        "SF Encyclopedia (SFE3) scholarly reference. Use for SF/fantasy author careers, \
+         literary influences, thematic movements (cyberpunk, new wave, etc.), awards, \
+         and critical reception. NOT for plot summaries — use book_plot for those.",
         json!({"type":"object","properties":{"query":{"type":"string","description":"Author name, book/series title, or SF theme (e.g. 'cyberpunk', 'time travel')"}},"required":["query"]}),
         Arc::new(|args| Box::pin(tool_sf_lookup(args))),
     );
     info!("[{role}] tools: sf_lookup — listening");
+    loop { time::sleep(Duration::from_secs(60)).await; }
+}
+
+async fn run_tool_book(agent: Arc<GossipAgent>, role: &str) {
+    let _role_cap = agent.advertise_capability(Capability::new("role", "tool-book"), Duration::from_secs(5));
+    let _book = register(
+        &agent, "book_plot",
+        "Detailed plot summary and character information for a specific book, novel, \
+         film, or story from Wikipedia's full article. Use when asked what happens in \
+         a specific work, who the characters are, or for narrative details. \
+         Prefer over wiki for any plot or story question.",
+        json!({"type":"object","properties":{"query":{"type":"string","description":"Book or film title, optionally with author (e.g. 'Hyperion Dan Simmons')"}},"required":["query"]}),
+        Arc::new(|args| Box::pin(tool_book_plot(args))),
+    );
+    info!("[{role}] tools: book_plot — listening");
     loop { time::sleep(Duration::from_secs(60)).await; }
 }
 
@@ -1412,7 +1507,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match role.as_str() {
         "tool-a" => run_tool_a(agent, &role).await,
         "tool-b" => run_tool_b(agent, &role).await,
-        "tool-sf" => run_tool_sf(agent, &role).await,
+        "tool-sf"   => run_tool_sf(agent, &role).await,
+        "tool-book" => run_tool_book(agent, &role).await,
         "llm"    => run_chat_server(agent, LlmCfg::from_env(), chat_port).await,
         "mgmt"   => run_mgmt_server(agent, mgmt_port).await,
         "node"    => run_node(agent, &role).await,
