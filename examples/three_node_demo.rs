@@ -987,7 +987,7 @@ async fn mgmt_handle_state(State(s): State<Arc<MgmtState>>) -> Json<Value> {
     // first-seen (higher-priority) label rather than the last-inserted one.
     let liveness = Duration::from_secs(30); // 6× the 5s re-advertisement interval
     let mut node_roles: std::collections::HashMap<String, String> = Default::default();
-    for role_name in &["mgmt", "tool-a", "tool-b", "llm", "node"] {
+    for role_name in &["mgmt", "tool-a", "tool-b", "tool-sf", "tool-book", "llm", "node"] {
         for (nid, _cap) in agent.resolve(&CapFilter::new("role", *role_name).with_max_age(liveness)) {
             node_roles.entry(nid.to_string()).or_insert_with(|| role_name.to_string());
         }
@@ -1012,7 +1012,7 @@ async fn mgmt_handle_state(State(s): State<Arc<MgmtState>>) -> Json<Value> {
         let tcp_live    = id == my_id || tcp_peers.contains(&id);
         json!({ "id": id, "role": role, "tools": tools, "is_self": id == my_id, "tcp": tcp_live })
     }).collect();
-    let order = |r: &str| match r { "tool-a"=>0, "tool-b"=>1, "llm"=>2, "mgmt"=>3, _=>4 };
+    let order = |r: &str| match r { "tool-a"=>0, "tool-b"=>1, "tool-sf"=>2, "tool-book"=>3, "llm"=>4, "mgmt"=>5, _=>6 };
     nodes.sort_by_key(|n| order(n["role"].as_str().unwrap_or("")));
 
     Json(json!({
@@ -1371,6 +1371,8 @@ h2{font-size:0.78rem;font-weight:600;color:#475569;text-transform:uppercase;lett
 .role-badge{display:inline-block;font-size:0.7rem;font-weight:700;padding:2px 9px;border-radius:99px;margin-bottom:10px;text-transform:uppercase;letter-spacing:.06em}
 .role-tool-a{background:#0f3460;color:#60a5fa}
 .role-tool-b{background:#0f3450;color:#34d399}
+.role-tool-sf{background:#0f3830;color:#34d399}
+.role-tool-book{background:#2d1a0f;color:#f59e0b}
 .role-llm{background:#3b0764;color:#c084fc}
 .role-mgmt{background:#1e3a5f;color:#f59e0b}
 .role-unknown{background:#1e293b;color:#64748b}
@@ -1410,7 +1412,7 @@ var ROLE_LABELS={'tool-a':'tool-a','tool-b':'tool-b','llm':'llm','mgmt':'mgmt','
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function pad2(n){return n<10?'0'+n:String(n);}
 function fmtTime(d){return pad2(d.getHours())+':'+pad2(d.getMinutes())+':'+pad2(d.getSeconds());}
-function roleClass(r){var m={'tool-a':'role-tool-a','tool-b':'role-tool-b','llm':'role-llm','mgmt':'role-mgmt'};return m[r]||'role-unknown';}
+function roleClass(r){var m={'tool-a':'role-tool-a','tool-b':'role-tool-b','tool-sf':'role-tool-sf','tool-book':'role-tool-book','llm':'role-llm','mgmt':'role-mgmt'};return m[r]||'role-unknown';}
 
 async function refresh(){
   try{
