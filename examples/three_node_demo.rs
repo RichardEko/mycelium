@@ -410,23 +410,34 @@ fn sfe_candidate_slugs(query: &str) -> Vec<String> {
     let words: Vec<&str> = q.split_whitespace().filter(|w| !stop.contains(w)).collect();
     if words.is_empty() { return vec![]; }
 
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    let mut push = |s: String| { if seen.insert(s.clone()) { out.push(s); } };
+
+    // Full phrase first
     let fwd = words.join("_");
-    let mut out = vec![fwd.clone(), format!("{fwd}_series"), format!("{fwd}s")];
+    push(fwd.clone());
+    push(format!("{fwd}_series"));
 
-    // Reversed order — lastname_firstname for author queries
-    if words.len() >= 2 {
-        let mut rev = words.clone();
-        rev.rotate_right(1);
-        let r = rev.join("_");
-        out.push(r.clone());
-        out.push(format!("{r}_series"));
+    // All windows of size 2 and 3 — both forward and reversed.
+    // This catches "Dan Simmons Hyperion Cantos" → simmons_dan, hyperion_cantos, etc.
+    for size in [2usize, 3, 1] {
+        if size > words.len() { continue; }
+        for start in 0..=(words.len() - size) {
+            let w = &words[start..start + size];
+            let f = w.join("_");
+            let mut wr = w.to_vec();
+            wr.reverse();
+            let r = wr.join("_");
+            push(f.clone());
+            push(format!("{f}_series"));
+            push(format!("{f}s"));
+            if r != f {
+                push(r.clone());
+                push(format!("{r}_series"));
+            }
+        }
     }
-
-    // First word alone and plural
-    let first = words[0];
-    out.push(first.to_string());
-    out.push(format!("{first}_series"));
-    out.push(format!("{first}s"));
     out
 }
 
