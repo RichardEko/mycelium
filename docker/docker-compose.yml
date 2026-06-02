@@ -1,14 +1,16 @@
 # Mycelium MCP chat demo — local-LLM edition
 #
-# Six containers (all discovered dynamically — no central registry):
-#   ollama      —  local LLM runtime; pulls llama3.2 on first start
-#   model-init  —  one-shot: waits for Ollama, pulls llama3.2, then exits
-#   tool-a      —  weather + web_fetch tools
-#   tool-b      —  calculate + wiki tools
-#   tool-sf     —  SF Encyclopedia (SFE3) scholarly lookup  ← joins mesh live
-#   tool-book   —  Wikipedia full-article plot lookup       ← joins mesh live
-#   llm         —  discovers all tools over gossip, serves interactive chat UI
-#   mgmt        —  mesh dashboard at http://localhost:8090
+# Eight containers (all discovered dynamically — no central registry):
+#   ollama             —  local LLM runtime; pulls llama3.2 on first start
+#   model-init         —  one-shot: waits for Ollama, pulls llama3.2, then exits
+#   model-init-verify  —  one-shot: pulls llama3.1:8b for the claims verifier
+#   tool-a             —  weather + web_fetch tools
+#   tool-b             —  calculate + wiki tools
+#   tool-sf            —  SF Encyclopedia (SFE3) scholarly lookup  ← joins mesh live
+#   tool-book          —  Wikipedia full-article plot lookup       ← joins mesh live
+#   verifier           —  claims verifier: checks LLM answers against tool results
+#   llm                —  discovers all tools over gossip, serves interactive chat UI
+#   mgmt               —  mesh dashboard at http://localhost:8090
 #
 # No API key required — Ollama runs entirely on your machine.
 #
@@ -42,7 +44,7 @@ services:
       retries: 12
       start_period: 10s
 
-  # ── One-shot model pull (exits 0 when done) ──────────────────────────────────
+  # ── One-shot model pulls (exit 0 when done) ──────────────────────────────────
   model-init:
     image: ollama/ollama:latest
     depends_on:
@@ -53,6 +55,18 @@ services:
     environment:
       OLLAMA_HOST: http://ollama:11434
     entrypoint: ["ollama", "pull", "llama3.2"]
+    restart: "no"
+
+  model-init-verify:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - mesh
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["ollama", "pull", "llama3.1:8b"]
     restart: "no"
 
   # ── Mycelium tool nodes ───────────────────────────────────────────────────────
@@ -117,7 +131,7 @@ services:
       MYCELIUM_ROLE:      mgmt
       MYCELIUM_PORT:      "57000"
       MYCELIUM_HTTP_PORT: "8300"
-      MYCELIUM_PEERS:     "tool-a:57000,tool-b:57000,llm:57000,tool-sf:57000,tool-book:57000"
+      MYCELIUM_PEERS:     "tool-a:57000,tool-b:57000,llm:57000,tool-sf:57000,tool-book:57000,verifier:57000"
       RUST_LOG:           "info,mycelium=info"
       MGMT_PORT:          "8090"
     ports:
@@ -186,6 +200,38 @@ services:
       retries: 10
       start_period: 5s
 
+  # ── Claims verifier node ──────────────────────────────────────────────────────
+  verifier:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: verifier
+    entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
+    environment:
+      MYCELIUM_ROLE:      verifier
+      MYCELIUM_PORT:      "57000"
+      MYCELIUM_HTTP_PORT: "8300"
+      MYCELIUM_PEERS:     "tool-a:57000,tool-b:57000,llm:57000,mgmt:57000"
+      RUST_LOG:           "warn"
+      OLLAMA_BASE_URL:    "http://ollama:11434/v1"
+      VERIFIER_MODEL:     "llama3.1:8b"
+    ports:
+      - "8305:8300"
+    networks:
+      - mesh
+    depends_on:
+      model-init-verify:
+        condition: service_completed_successfully
+      tool-a:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8300/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
   # ── LLM + chat UI node ───────────────────────────────────────────────────────
   llm:
     build:
@@ -197,7 +243,7 @@ services:
       MYCELIUM_ROLE:      llm
       MYCELIUM_PORT:      "57000"
       MYCELIUM_HTTP_PORT: "8300"
-      MYCELIUM_PEERS:     "tool-a:57000,tool-b:57000,mgmt:57000,tool-sf:57000,tool-book:57000"
+      MYCELIUM_PEERS:     "tool-a:57000,tool-b:57000,mgmt:57000,tool-sf:57000,tool-book:57000,verifier:57000"
       RUST_LOG:           "info,mycelium=info"
       OLLAMA_BASE_URL:    "http://ollama:11434/v1"
       OLLAMA_MODEL:       "llama3.2"
@@ -217,6 +263,8 @@ services:
       tool-sf:
         condition: service_healthy
       tool-book:
+        condition: service_healthy
+      verifier:
         condition: service_healthy
     restart: unless-stopped
 

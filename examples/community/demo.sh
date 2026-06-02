@@ -2,8 +2,8 @@
 # demo.sh — end-to-end Skills dynamic discovery demo.
 #
 # What you will see:
-#   1. Three skills start and gossip converges in ~3s — no coordinator
-#   2. First invocation produces a full article via the pipeline
+#   1. Four skills start and gossip converges in ~3s — no coordinator
+#   2. First invocation produces a verified article: researcher → writer → verifier
 #   3. A second researcher joins the mesh live — zero restarts, zero config changes
 #   4. Second invocation routes to either researcher automatically (load-balanced)
 #   5. Management dashboard at http://localhost:9050/mgmt shows the live mesh state
@@ -11,6 +11,7 @@
 # Prerequisites:
 #   cargo build --bin skillrunner
 #   ollama pull llama3.2
+#   ollama pull llama3.1:8b   # verifier model
 
 set -euo pipefail
 
@@ -63,9 +64,9 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "  Mycelium Skills — Dynamic Discovery Demo"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# ── 1: start 3-skill cluster ──────────────────────────────────────────────────
+# ── 1: start 4-skill cluster ──────────────────────────────────────────────────
 echo ""
-echo "[1/5] Starting orchestrator + researcher + writer..."
+echo "[1/5] Starting orchestrator + researcher + writer + verifier..."
 "$BIN" --skill "$SCRIPT_DIR/orchestrator.skill.toml" > "$LOG_DIR/orchestrator.log" 2>&1 &
 echo $! > "$LOG_DIR/orchestrator.pid"
 sleep 0.5
@@ -73,13 +74,16 @@ sleep 0.5
 echo $! > "$LOG_DIR/researcher.pid"
 "$BIN" --skill "$SCRIPT_DIR/writer.skill.toml"      > "$LOG_DIR/writer.log"      2>&1 &
 echo $! > "$LOG_DIR/writer.pid"
+"$BIN" --skill "$SCRIPT_DIR/verifier.skill.toml"    > "$LOG_DIR/verifier.log"    2>&1 &
+echo $! > "$LOG_DIR/verifier.pid"
 
 # ── 2: gossip convergence ─────────────────────────────────────────────────────
 echo ""
 echo "[2/5] Waiting for gossip convergence..."
 echo "      (each skill's capability gossips to every peer within ~3s)"
-wait_for_keys "cap/" 3 "skills visible on mesh"
+wait_for_keys "cap/" 4 "skills visible on mesh"
 echo "      Management view: http://localhost:9050/mgmt"
+echo "      Pipeline: researcher → writer → verifier (claims check)"
 
 # ── 3: first invocation ───────────────────────────────────────────────────────
 echo ""
@@ -96,7 +100,7 @@ sed "s/bind_port *= *7952/bind_port = 7954/" \
     "$SCRIPT_DIR/researcher.skill.toml" > "$LOG_DIR/researcher2.skill.toml"
 "$BIN" --skill "$LOG_DIR/researcher2.skill.toml" > "$LOG_DIR/researcher2.log" 2>&1 &
 echo $! > "$LOG_DIR/researcher2.pid"
-wait_for_keys "cap/llm/researcher/" 2 "researchers on mesh"
+wait_for_keys "cap/llm/researcher/" 2 "second researcher on mesh"
 echo "      Orchestrator will now distribute research calls across both nodes."
 
 # ── 5: second invocation ──────────────────────────────────────────────────────

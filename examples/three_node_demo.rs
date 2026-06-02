@@ -35,6 +35,11 @@
 //!
 //! Both tool-sf and tool-book are discovered live by the llm node when started.
 //!
+//!   verifier ─── claims verifier (MS Research-style)
+//!                intercepts LLM draft answers after tool use,
+//!                decomposes into atomic claims, removes ungrounded ones
+//!                uses VERIFIER_MODEL (default llama3.1:8b)
+//!
 //!   llm      ─── browser chat UI at CHAT_PORT (default 8080)
 //!                plans with local Ollama (llama3.2)
 //!                routes each tool call to whichever container hosts it
@@ -83,8 +88,9 @@
 //! | `MYCELIUM_HOSTNAME`  | value of `HOSTNAME` env var  | all           |
 //! | `MYCELIUM_PORT`      | `57000`                      | all           |
 //! | `MYCELIUM_HTTP_PORT` | `8300`                       | all           |
-//! | `OLLAMA_BASE_URL`    | `http://ollama:11434/v1`     | llm           |
+//! | `OLLAMA_BASE_URL`    | `http://ollama:11434/v1`     | llm, verifier |
 //! | `OLLAMA_MODEL`       | `llama3.2`                   | llm           |
+//! | `VERIFIER_MODEL`     | `llama3.1:8b`                | verifier      |
 //! | `CHAT_PORT`          | `8080`                       | llm           |
 //! | `MGMT_PORT`          | `8090`                       | mgmt          |
 //!
@@ -608,6 +614,89 @@ async fn tool_book_plot(args: Value) -> Result<Value, String> {
     }))
 }
 
+// ── Claims verification tool ───────────────────────────────────────────────────
+
+/// Strip markdown code fences and return the outermost JSON object substring.
+fn extract_json_object(s: &str) -> &str {
+    let inner = if let Some(start) = s.find("```") {
+        let after_fence = &s[start + 3..];
+        let after_lang  = after_fence.find('\n').map(|i| &after_fence[i + 1..]).unwrap_or(after_fence);
+        if let Some(end) = after_lang.rfind("```") { &after_lang[..end] } else { after_lang }
+    } else {
+        s
+    };
+    let start = inner.find('{').unwrap_or(0);
+    let end   = inner.rfind('}').map(|i| i + 1).unwrap_or(inner.len());
+    &inner[start..end]
+}
+
+/// Claims verifier: decomposes a draft answer into atomic claims, checks each
+/// against the provided tool-result sources, and rewrites keeping only grounded
+/// claims. Uses VERIFIER_MODEL (default llama3.1:8b) via the local Ollama.
+async fn tool_verify_answer(args: Value) -> Result<Value, String> {
+    let query        = args["query"].as_str().unwrap_or("").to_string();
+    let draft_answer = args["draft_answer"].as_str().unwrap_or("").to_string();
+    let sources_str  = args["sources"].as_str().unwrap_or("[]");
+
+    if draft_answer.is_empty() {
+        return Err("missing draft_answer parameter".into());
+    }
+
+    let base_url = std::env::var("OLLAMA_BASE_URL")
+        .unwrap_or_else(|_| "http://ollama:11434/v1".into());
+    let api_key  = std::env::var("OLLAMA_API_KEY")
+        .unwrap_or_else(|_| "ollama".into());
+    let model    = std::env::var("VERIFIER_MODEL")
+        .or_else(|_| std::env::var("OLLAMA_MODEL"))
+        .unwrap_or_else(|_| "llama3.1:8b".into());
+
+    let system = "You are a factual claims verifier. Check whether each claim \
+        in the draft answer is directly supported by the provided tool results. \
+        Be strict: a claim is grounded only when its specific facts appear in the \
+        sources. Do NOT use your training knowledge to fill gaps. \
+        Respond ONLY with a valid JSON object, no other text.";
+
+    let user = format!(
+        "USER QUESTION: {query}\n\n\
+         TOOL RESULTS (sources):\n{sources_str}\n\n\
+         DRAFT ANSWER:\n{draft_answer}\n\n\
+         TASK:\n\
+         1. Decompose the draft into individual atomic factual claims.\n\
+         2. Mark each claim as grounded (supported by sources) or ungrounded.\n\
+         3. Rewrite the answer keeping only grounded claims; preserve tone.\n\n\
+         Respond with ONLY this JSON (no prose, no markdown fences):\n\
+         {{\n  \"verified_answer\": \"<rewritten answer>\",\n  \
+         \"grounded\": [\"<claim>\", ...],\n  \
+         \"ungrounded_claims\": [\"<ungrounded claim>\", ...]\n}}"
+    );
+
+    let req_body = json!({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user",   "content": user},
+        ],
+        "temperature": 0.1,
+    });
+
+    let resp = reqwest::Client::new()
+        .post(format!("{base_url}/chat/completions"))
+        .bearer_auth(&api_key)
+        .json(&req_body)
+        .timeout(Duration::from_secs(90))
+        .send().await.map_err(|e| format!("verifier request failed: {e}"))?
+        .json::<Value>().await.map_err(|e| format!("verifier parse failed: {e}"))?;
+
+    if let Some(err) = resp.get("error") {
+        return Err(format!("verifier LLM error: {}", err["message"].as_str().unwrap_or("unknown")));
+    }
+
+    let raw      = resp["choices"][0]["message"]["content"].as_str().unwrap_or("{}");
+    let json_str = extract_json_object(raw);
+    serde_json::from_str::<Value>(json_str)
+        .map_err(|e| format!("verifier response not valid JSON: {e}\nraw: {raw}"))
+}
+
 // ── Tool node runners ──────────────────────────────────────────────────────────
 
 async fn run_tool_a(agent: Arc<GossipAgent>, role: &str) {
@@ -678,6 +767,34 @@ async fn run_tool_book(agent: Arc<GossipAgent>, role: &str) {
     loop { time::sleep(Duration::from_secs(60)).await; }
 }
 
+async fn run_verifier(agent: Arc<GossipAgent>, role: &str) {
+    let model = std::env::var("VERIFIER_MODEL")
+        .or_else(|_| std::env::var("OLLAMA_MODEL"))
+        .unwrap_or_else(|_| "llama3.1:8b".into());
+    let _role_cap = agent.advertise_capability(Capability::new("role", "verifier"), Duration::from_secs(5));
+    let _verify = register(
+        &agent, "verify_answer",
+        // Description discourages direct LLM invocation — the planning cycle calls it
+        // as a pipeline guard after the draft answer, not as a user-facing tool.
+        "INTERNAL PIPELINE GUARD — do NOT call this directly. \
+         Invoked automatically after a draft answer is produced to decompose it \
+         into atomic claims, check each against tool results, and remove ungrounded \
+         assertions. Input: {\"query\":\"...\",\"draft_answer\":\"...\",\"sources\":\"...\"}",
+        json!({
+            "type": "object",
+            "properties": {
+                "query":        {"type":"string"},
+                "draft_answer": {"type":"string"},
+                "sources":      {"type":"string"}
+            },
+            "required": ["query","draft_answer","sources"]
+        }),
+        Arc::new(|args| Box::pin(tool_verify_answer(args))),
+    );
+    info!("[{role}] claims verifier ready (model: {model}) — listening");
+    loop { time::sleep(Duration::from_secs(60)).await; }
+}
+
 // ── Mesh helpers ───────────────────────────────────────────────────────────────
 
 fn discover_tools(agent: &GossipAgent) -> Vec<(String, String, Value)> {
@@ -710,6 +827,15 @@ fn find_tool_node(agent: &GossipAgent, tool_name: &str) -> Option<String> {
 }
 
 async fn invoke_tool(agent: &GossipAgent, tool_name: &str, args: Value) -> Result<Value, String> {
+    invoke_tool_timed(agent, tool_name, args, Duration::from_secs(30)).await
+}
+
+async fn invoke_tool_timed(
+    agent:     &GossipAgent,
+    tool_name: &str,
+    args:      Value,
+    timeout:   Duration,
+) -> Result<Value, String> {
     let entries = agent.scan_prefix(&format!("tools/{tool_name}/"));
     let (key, _) = entries.into_iter().next()
         .ok_or_else(|| format!("no provider for tool '{tool_name}'"))?;
@@ -723,7 +849,7 @@ async fn invoke_tool(agent: &GossipAgent, tool_name: &str, args: Value) -> Resul
     let reply = agent.rpc_call(
         nid, signal_kind::MCP_INVOKE,
         Bytes::from(rpc_req.to_string()),
-        Duration::from_secs(30),
+        timeout,
     ).await.map_err(|e| e.to_string())?;
     let resp: Value = serde_json::from_slice(&reply).map_err(|e| e.to_string())?;
     if let Some(err) = resp.get("error") {
@@ -796,12 +922,26 @@ async fn planning_cycle(state: Arc<AppState>) {
     }
 
     let tools_info = discover_tools(&state.agent);
-    let tool_defs: Vec<Value> = tools_info.iter().map(|(_, _, d)| d.clone()).collect();
+    // Exclude the verifier from the LLM's tool list — it is a pipeline guard, not
+    // an LLM-callable tool. The planning cycle invokes it directly after the answer.
+    let tool_defs: Vec<Value> = tools_info.iter()
+        .filter(|(name, _, _)| name != "verify_answer")
+        .map(|(_, _, d)| d.clone())
+        .collect();
     let _ = state.tx.send(ChatEvent::Thinking {
-        content: format!("Planning with {} tool(s)...", tools_info.len()),
+        content: format!("Planning with {} tool(s)...", tool_defs.len()),
     });
 
     let mut messages: Vec<Value> = state.history.lock().await.clone();
+    // Capture the current user query for the verifier.
+    let user_query = messages.iter().rev()
+        .find(|m| m["role"].as_str() == Some("user"))
+        .and_then(|m| m["content"].as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // Accumulate tool results so the verifier can check the draft against them.
+    let mut tool_evidence: Vec<Value> = Vec::new();
 
     let mut turn = 0usize;
     loop {
@@ -816,9 +956,51 @@ async fn planning_cycle(state: Arc<AppState>) {
                 let _ = state.tx.send(ChatEvent::Error { message: e });
                 break;
             }
-            Ok(LlmStep::Answer(content)) => {
-                messages.push(json!({"role": "assistant", "content": &content}));
-                let _ = state.tx.send(ChatEvent::Assistant { content });
+            Ok(LlmStep::Answer(draft)) => {
+                // ── Claims verification (optional pipeline stage) ──────────────
+                // If a verifier node is on the mesh and at least one tool was
+                // called, send the draft + evidence to the verifier before
+                // delivering the answer to the user.  Degrades gracefully:
+                // if the verifier is absent or fails, the draft is used as-is.
+                let final_answer = if !tool_evidence.is_empty()
+                    && find_tool_node(&state.agent, "verify_answer").is_some()
+                {
+                    let _ = state.tx.send(ChatEvent::Thinking {
+                        content: "Checking claims against tool results...".into(),
+                    });
+                    let verify_args = json!({
+                        "query":        user_query,
+                        "draft_answer": draft,
+                        "sources": serde_json::to_string(&tool_evidence)
+                                       .unwrap_or_default(),
+                    });
+                    match invoke_tool_timed(
+                        &state.agent, "verify_answer", verify_args,
+                        Duration::from_secs(120),
+                    ).await {
+                        Ok(v) => {
+                            let removed = v["ungrounded_claims"]
+                                .as_array().map(|a| a.len()).unwrap_or(0);
+                            let note = if removed > 0 {
+                                format!("Claims verified — {removed} ungrounded claim(s) removed")
+                            } else {
+                                "Claims verified — all claims grounded in tool results".into()
+                            };
+                            let _ = state.tx.send(ChatEvent::Thinking { content: note });
+                            v["verified_answer"].as_str()
+                                .unwrap_or(&draft).to_string()
+                        }
+                        Err(e) => {
+                            warn!("[llm] claims verifier failed ({e}) — using draft");
+                            draft
+                        }
+                    }
+                } else {
+                    draft
+                };
+
+                messages.push(json!({"role": "assistant", "content": &final_answer}));
+                let _ = state.tx.send(ChatEvent::Assistant { content: final_answer });
                 break;
             }
             Ok(LlmStep::ToolCalls(calls)) => {
@@ -836,6 +1018,8 @@ async fn planning_cycle(state: Arc<AppState>) {
                     });
                     match invoke_tool(&state.agent, &tc.name, tc.args.clone()).await {
                         Ok(result) => {
+                            // Accumulate for the verifier.
+                            tool_evidence.push(json!({"tool": &tc.name, "result": &result}));
                             let _ = state.tx.send(ChatEvent::ToolResult {
                                 tool: tc.name.clone(), result: result.clone(),
                             });
@@ -998,7 +1182,7 @@ async fn mgmt_handle_state(State(s): State<Arc<MgmtState>>) -> Json<Value> {
     // first-seen (higher-priority) label rather than the last-inserted one.
     let liveness = Duration::from_secs(30); // 6× the 5s re-advertisement interval
     let mut node_roles: std::collections::HashMap<String, String> = Default::default();
-    for role_name in &["mgmt", "tool-a", "tool-b", "tool-sf", "tool-book", "llm", "node"] {
+    for role_name in &["mgmt", "tool-a", "tool-b", "tool-sf", "tool-book", "verifier", "llm", "node"] {
         for (nid, _cap) in agent.resolve(&CapFilter::new("role", *role_name).with_max_age(liveness)) {
             node_roles.entry(nid.to_string()).or_insert_with(|| role_name.to_string());
         }
@@ -1023,7 +1207,7 @@ async fn mgmt_handle_state(State(s): State<Arc<MgmtState>>) -> Json<Value> {
         let tcp_live    = id == my_id || tcp_peers.contains(&id);
         json!({ "id": id, "role": role, "tools": tools, "is_self": id == my_id, "tcp": tcp_live })
     }).collect();
-    let order = |r: &str| match r { "tool-a"=>0, "tool-b"=>1, "tool-sf"=>2, "tool-book"=>3, "llm"=>4, "mgmt"=>5, _=>6 };
+    let order = |r: &str| match r { "tool-a"=>0, "tool-b"=>1, "tool-sf"=>2, "tool-book"=>3, "verifier"=>4, "llm"=>5, "mgmt"=>6, _=>7 };
     nodes.sort_by_key(|n| order(n["role"].as_str().unwrap_or("")));
 
     Json(json!({
@@ -1384,6 +1568,7 @@ h2{font-size:0.78rem;font-weight:600;color:#475569;text-transform:uppercase;lett
 .role-tool-b{background:#0f3450;color:#34d399}
 .role-tool-sf{background:#0f3830;color:#34d399}
 .role-tool-book{background:#2d1a0f;color:#f59e0b}
+.role-verifier{background:#1a2d1a;color:#86efac}
 .role-llm{background:#3b0764;color:#c084fc}
 .role-mgmt{background:#1e3a5f;color:#f59e0b}
 .role-unknown{background:#1e293b;color:#64748b}
@@ -1423,7 +1608,7 @@ var ROLE_LABELS={'tool-a':'tool-a','tool-b':'tool-b','llm':'llm','mgmt':'mgmt','
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function pad2(n){return n<10?'0'+n:String(n);}
 function fmtTime(d){return pad2(d.getHours())+':'+pad2(d.getMinutes())+':'+pad2(d.getSeconds());}
-function roleClass(r){var m={'tool-a':'role-tool-a','tool-b':'role-tool-b','tool-sf':'role-tool-sf','tool-book':'role-tool-book','llm':'role-llm','mgmt':'role-mgmt'};return m[r]||'role-unknown';}
+function roleClass(r){var m={'tool-a':'role-tool-a','tool-b':'role-tool-b','tool-sf':'role-tool-sf','tool-book':'role-tool-book','verifier':'role-verifier','llm':'role-llm','mgmt':'role-mgmt'};return m[r]||'role-unknown';}
 
 async function refresh(){
   try{
@@ -1543,6 +1728,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "tool-b" => run_tool_b(agent, &role).await,
         "tool-sf"   => run_tool_sf(agent, &role).await,
         "tool-book" => run_tool_book(agent, &role).await,
+        "verifier"  => run_verifier(agent, &role).await,
         "llm"    => run_chat_server(agent, LlmCfg::from_env(), chat_port).await,
         "mgmt"   => run_mgmt_server(agent, mgmt_port).await,
         "node"    => run_node(agent, &role).await,
@@ -1552,7 +1738,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             loop { tokio::time::sleep(std::time::Duration::from_secs(60)).await; }
         }
         other    => {
-            error!("Unknown MYCELIUM_ROLE='{other}' — expected tool-a, tool-b, llm, mgmt, node, or overlay");
+            error!("Unknown MYCELIUM_ROLE='{other}' — expected tool-a, tool-b, tool-sf, tool-book, verifier, llm, mgmt, node, or overlay");
             std::process::exit(1);
         }
     }

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Start the 3-skill community: orchestrator, researcher, writer.
+# Start the 4-skill community: orchestrator, researcher, writer, verifier.
 #
 # Prerequisites:
 #   cargo build --bin skillrunner
 #   ollama pull llama3.2
+#   ollama pull llama3.1:8b   # verifier uses a separate model for better precision
 #
 # Usage:
 #   cd examples/community
@@ -42,9 +43,16 @@ echo "Starting writer        (port 7953)..."
     > "$LOG_DIR/writer.log" 2>&1 &
 echo $! > "$LOG_DIR/writer.pid"
 
+echo "Starting verifier      (port 7955)..."
+"$BIN" --skill "$SCRIPT_DIR/verifier.skill.toml" \
+    > "$LOG_DIR/verifier.log" 2>&1 &
+echo $! > "$LOG_DIR/verifier.pid"
+
 echo ""
 echo "Community started. Logs: $LOG_DIR/"
-echo "Wait ~2 s for gossip to converge, then:"
+echo "Wait ~3 s for gossip to converge, then:"
 echo "  ./invoke.sh \"your topic here\""
+echo ""
+echo "Pipeline: researcher → writer → verifier (claims check)"
 echo ""
 echo "Stop with: ./stop.sh"

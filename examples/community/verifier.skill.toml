@@ -1,0 +1,70 @@
+# Verifier skill — intercepts a draft answer, decomposes it into atomic claims,
+# checks each against the provided research sources, and rewrites the answer
+# keeping only grounded claims (MS Research-style Claims verification).
+#
+# Part of the 4-skill community example. Start with start.sh.
+#
+# Uses llama3.1:8b by default for better instruction-following precision.
+# Falls back gracefully if that model is absent — set VERIFIER_MODEL env var.
+
+[node]
+bind_address    = "127.0.0.1"
+bind_port       = 7955
+bootstrap_peers = ["127.0.0.1:7950"]   # orchestrator bootstraps the cluster
+
+[capability]
+ns          = "llm"
+name        = "verifier"
+description = "Claims verifier: checks a draft answer against research sources and removes ungrounded assertions"
+ttl_secs    = 60
+
+[capability.input]
+type     = "object"
+required = ["query", "draft_answer", "sources"]
+[capability.input.properties]
+query        = { type = "string", description = "The original user question" }
+draft_answer = { type = "string", description = "The draft answer to verify" }
+sources      = { type = "string", description = "JSON-encoded array of research findings" }
+
+[capability.output]
+type = "object"
+[capability.output.properties]
+verified_answer   = { type = "string", description = "Rewritten answer with only grounded claims" }
+grounded          = { type = "array",  items = { type = "string" }, description = "Claims supported by sources" }
+ungrounded_claims = { type = "array",  items = { type = "string" }, description = "Claims removed as ungrounded" }
+
+[capability.policy]
+max_concurrent = 2
+authorized_callers = []   # orchestrator calls this after writer returns
+
+[skill]
+prompt = """
+You are a factual claims verifier. Your task is to check whether each claim in
+a draft answer is directly supported by the provided research sources.
+
+Rules:
+- A claim is GROUNDED only if its specific facts appear in the sources.
+- Do NOT use your training knowledge to fill gaps — only what the sources contain.
+- If a claim is partially supported, include only the supported part.
+- Preserve the tone and structure of the draft as much as possible.
+
+Input JSON fields:
+- "query": the original user question
+- "draft_answer": the article or answer to verify
+- "sources": JSON array of research findings used to write the draft
+
+Return ONLY valid JSON (no markdown, no prose):
+{
+  "verified_answer": "<rewritten answer keeping only grounded claims>",
+  "grounded": ["<claim that is supported>", ...],
+  "ungrounded_claims": ["<claim that was removed>", ...]
+}
+"""
+tools = []   # pure LLM reasoning; no sub-skill calls
+
+[skill.llm]
+endpoint    = "http://localhost:11434/v1"
+model       = "llama3.1:8b"
+api_key     = ""
+max_tokens  = 2048
+temperature = 0.1   # low temperature for consistent, strict verification

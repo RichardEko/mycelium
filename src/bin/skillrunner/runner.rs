@@ -133,17 +133,23 @@ impl SkillRunner {
         let mut schemas = Vec::new();
         for tool_name in &self.skill.skill.tools {
             // Tools are advertised under skills/{ns}/{name}/{node_id}/input
-            // Accept any ns prefix: scan skills/ and match on name segment
+            // tool_name is "ns/name"; the LM sees the bare name (slashes invalid in OpenAI function names)
             let entries = self.agent.scan_prefix("skills/");
+            let bare = tool_name.split_once('/').map(|x| x.1).unwrap_or(tool_name.as_str());
 
             for (key, val) in &entries {
                 // key: skills/{ns}/{name}/{node_id}/input
+                // parts[0]="skills", parts[1]={ns}, parts[2]={name}, parts[3]={node_id}, parts[4]="input"
                 let parts: Vec<&str> = key.split('/').collect();
-                if parts.len() >= 4 && parts[2] == tool_name.as_str() && parts.last() == Some(&"input") {
+                let mesh_ns_name = if parts.len() >= 5 {
+                    format!("{}/{}", parts[1], parts[2])
+                } else {
+                    continue;
+                };
+                if mesh_ns_name == *tool_name && parts.last() == Some(&"input") {
                     if let Ok(schema) = serde_json::from_slice::<Value>(val) {
-                        // Fetch description from capability (best-effort)
                         schemas.push(ToolSchema {
-                            name:        tool_name.clone(),
+                            name:        bare.to_string(),
                             description: format!("Mesh capability {}/{}", parts[1], parts[2]),
                             input:       schema,
                         });
@@ -153,8 +159,7 @@ impl SkillRunner {
             }
 
             // Fallback: try resolve() for a description attribute
-            if !schemas.iter().any(|s| &s.name == tool_name) {
-                // Check if any part of the name matches a known capability
+            if !schemas.iter().any(|s| s.name == bare) {
                 let parts: Vec<&str> = tool_name.splitn(2, '/').collect();
                 let (ns, cname) = if parts.len() == 2 {
                     (parts[0], parts[1])
@@ -166,9 +171,9 @@ impl SkillRunner {
                     if let Some((_, cap)) = self.agent.resolve(&filter).into_iter().next() {
                         let desc = cap.attributes.get("description")
                             .and_then(|v| if let CapValue::Text(t) = v { Some(t.as_ref().to_string()) } else { None })
-                            .unwrap_or_else(|| tool_name.clone());
+                            .unwrap_or_else(|| cname.to_string());
                         schemas.push(ToolSchema {
-                            name:        tool_name.clone(),
+                            name:        cname.to_string(),
                             description: desc,
                             input:       serde_json::json!({"type": "object"}),
                         });
@@ -191,12 +196,27 @@ async fn invoke_mesh_tool(
     let parts: Vec<&str> = tool_name.splitn(2, '/').collect();
     let (ns, cname) = if parts.len() == 2 { (parts[0], parts[1]) } else { ("", tool_name) };
 
-    let filter = if ns.is_empty() {
-        // Can't construct a filter without namespace; return error
-        return Value::String(format!("tool '{tool_name}': no namespace prefix (use ns/name)"));
+    // Resolve namespace: if the LLM called a bare name, scan skills/ KV to find the ns
+    let (resolved_ns, resolved_cname): (String, String) = if ns.is_empty() {
+        let entries = agent.scan_prefix("skills/");
+        let mut found: Option<(String, String)> = None;
+        for (key, _) in &entries {
+            let kparts: Vec<&str> = key.split('/').collect();
+            // skills/{ns}/{name}/{node_id}/input
+            if kparts.len() >= 5 && kparts[2] == cname && kparts.last() == Some(&"input") {
+                found = Some((kparts[1].to_string(), kparts[2].to_string()));
+                break;
+            }
+        }
+        match found {
+            Some(f) => f,
+            None => return Value::String(format!("tool '{tool_name}': not found on mesh")),
+        }
     } else {
-        CapFilter::new(ns, cname)
+        (ns.to_string(), cname.to_string())
     };
+
+    let filter = CapFilter::new(resolved_ns.as_str(), resolved_cname.as_str());
 
     let providers = agent.resolve(&filter);
     let Some((target, _)) = providers.into_iter().next() else {
@@ -208,7 +228,7 @@ async fn invoke_mesh_tool(
         Err(e) => return Value::String(format!("tool '{tool_name}': serialise error: {e}")),
     };
 
-    match agent.rpc_call(target, "skill.invoke", payload, std::time::Duration::from_secs(30)).await {
+    match agent.rpc_call(target, "skill.invoke", payload, std::time::Duration::from_secs(90)).await {
         Ok(resp) => serde_json::from_slice(&resp)
             .unwrap_or(Value::String(String::from_utf8_lossy(&resp).into_owned())),
         Err(e) => Value::String(format!("tool '{tool_name}': rpc error: {e:?}")),

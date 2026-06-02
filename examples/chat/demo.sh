@@ -104,19 +104,19 @@ echo "[1/4] Starting base cluster (tool-a, tool-b, llm, mgmt)..."
 start_node tool-a \
     env MYCELIUM_HOSTNAME=127.0.0.1 MYCELIUM_ROLE=tool-a \
         MYCELIUM_PORT=57000 MYCELIUM_HTTP_PORT=8300 \
-        MYCELIUM_PEERS="127.0.0.1:57001,127.0.0.1:57002,127.0.0.1:57003" \
+        MYCELIUM_PEERS="127.0.0.1:57001,127.0.0.1:57002,127.0.0.1:57003,127.0.0.1:57006" \
     "$BIN"
 
 start_node tool-b \
     env MYCELIUM_HOSTNAME=127.0.0.1 MYCELIUM_ROLE=tool-b \
         MYCELIUM_PORT=57001 MYCELIUM_HTTP_PORT=8301 \
-        MYCELIUM_PEERS="127.0.0.1:57000,127.0.0.1:57002,127.0.0.1:57003" \
+        MYCELIUM_PEERS="127.0.0.1:57000,127.0.0.1:57002,127.0.0.1:57003,127.0.0.1:57006" \
     "$BIN"
 
 start_node llm \
     env MYCELIUM_HOSTNAME=127.0.0.1 MYCELIUM_ROLE=llm \
         MYCELIUM_PORT=57002 MYCELIUM_HTTP_PORT=8302 CHAT_PORT=8080 \
-        MYCELIUM_PEERS="127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57003" \
+        MYCELIUM_PEERS="127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57003,127.0.0.1:57006" \
         OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://localhost:11434/v1}" \
         OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.2}" \
     "$BIN"
@@ -124,7 +124,15 @@ start_node llm \
 start_node mgmt \
     env MYCELIUM_HOSTNAME=127.0.0.1 MYCELIUM_ROLE=mgmt \
         MYCELIUM_PORT=57003 MYCELIUM_HTTP_PORT=8303 MGMT_PORT=8090 \
-        MYCELIUM_PEERS="127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57002" \
+        MYCELIUM_PEERS="127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57002,127.0.0.1:57006" \
+    "$BIN"
+
+start_node verifier \
+    env MYCELIUM_HOSTNAME=127.0.0.1 MYCELIUM_ROLE=verifier \
+        MYCELIUM_PORT=57006 MYCELIUM_HTTP_PORT=8306 \
+        MYCELIUM_PEERS="127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57002,127.0.0.1:57003" \
+        OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://localhost:11434/v1}" \
+        VERIFIER_MODEL="${VERIFIER_MODEL:-llama3.1:8b}" \
     "$BIN"
 
 # ── 2: wait for chat server ───────────────────────────────────────────────────
@@ -166,6 +174,8 @@ wait_for_tool "book_plot" $((n_before + 1))
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  All 4 tools live: $(mesh_tool_names)"
+echo ""
+echo "  Claims verifier active — answers checked against tool results."
 echo ""
 echo "  Try these in the chat UI (http://localhost:8080):"
 echo "    \"how does Dan Simmons fit into 1990s SF?\""

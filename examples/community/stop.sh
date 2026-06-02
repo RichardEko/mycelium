@@ -4,7 +4,7 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG_DIR="$SCRIPT_DIR/logs"
 
-for name in orchestrator researcher researcher2 writer; do
+for name in orchestrator researcher researcher2 writer verifier; do
     pid_file="$LOG_DIR/$name.pid"
     if [[ -f "$pid_file" ]]; then
         pid=$(cat "$pid_file")

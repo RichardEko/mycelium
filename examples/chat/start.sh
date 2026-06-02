@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
-# Start the full MCP chat cluster: tool-a, tool-b, llm, mgmt, tool-sf, tool-book.
+# Start the full MCP chat cluster: tool-a, tool-b, llm, mgmt, tool-sf, tool-book, verifier.
 #
 # All nodes run in the background. Open http://localhost:8080 to chat.
 # Live tool discovery: tool-sf and tool-book appear in the LLM's tool list within
 # a few seconds of this script running — no restart required.
 #
+# The verifier node intercepts LLM answers after tool use, decomposes them into
+# atomic claims, and removes any not grounded in tool results.
+#
 # Prerequisites:
 #   cargo build --example three_node_demo
 #   ollama serve   (in a separate terminal)
 #   ollama pull llama3.2
+#   ollama pull llama3.1:8b   # verifier model (optional; falls back to llama3.2)
 
 set -euo pipefail
 
@@ -33,12 +37,13 @@ fi
 mkdir -p "$LOG_DIR"
 
 # Port assignment:
-#   tool-a   gossip 57000  gateway 8300
-#   tool-b   gossip 57001  gateway 8301
-#   llm      gossip 57002  gateway 8302  chat 8080
-#   mgmt     gossip 57003  gateway 8303  dashboard 8090
-#   tool-sf  gossip 57004  gateway 8304
+#   tool-a    gossip 57000  gateway 8300
+#   tool-b    gossip 57001  gateway 8301
+#   llm       gossip 57002  gateway 8302  chat 8080
+#   mgmt      gossip 57003  gateway 8303  dashboard 8090
+#   tool-sf   gossip 57004  gateway 8304
 #   tool-book gossip 57005  gateway 8305
+#   verifier  gossip 57006  gateway 8306
 
 start_node() {
     local name="$1"; shift
@@ -46,7 +51,7 @@ start_node() {
     echo $! > "$LOG_DIR/${name}.pid"
 }
 
-ALL_PEERS="127.0.0.1:57001,127.0.0.1:57002,127.0.0.1:57003,127.0.0.1:57004,127.0.0.1:57005"
+ALL_PEERS="127.0.0.1:57001,127.0.0.1:57002,127.0.0.1:57003,127.0.0.1:57004,127.0.0.1:57005,127.0.0.1:57006"
 start_node tool-a \
     env MYCELIUM_HOSTNAME=127.0.0.1 MYCELIUM_ROLE=tool-a \
         MYCELIUM_PORT=57000 MYCELIUM_HTTP_PORT=8300 \
@@ -56,13 +61,13 @@ start_node tool-a \
 start_node tool-b \
     env MYCELIUM_HOSTNAME=127.0.0.1 MYCELIUM_ROLE=tool-b \
         MYCELIUM_PORT=57001 MYCELIUM_HTTP_PORT=8301 \
-        MYCELIUM_PEERS="127.0.0.1:57000,127.0.0.1:57002,127.0.0.1:57003,127.0.0.1:57004,127.0.0.1:57005" \
+        MYCELIUM_PEERS="127.0.0.1:57000,127.0.0.1:57002,127.0.0.1:57003,127.0.0.1:57004,127.0.0.1:57005,127.0.0.1:57006" \
     "$BIN"
 
 start_node llm \
     env MYCELIUM_HOSTNAME=127.0.0.1 MYCELIUM_ROLE=llm \
         MYCELIUM_PORT=57002 MYCELIUM_HTTP_PORT=8302 CHAT_PORT=8080 \
-        MYCELIUM_PEERS="127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57003,127.0.0.1:57004,127.0.0.1:57005" \
+        MYCELIUM_PEERS="127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57003,127.0.0.1:57004,127.0.0.1:57005,127.0.0.1:57006" \
         OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://localhost:11434/v1}" \
         OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.2}" \
     "$BIN"
@@ -70,7 +75,7 @@ start_node llm \
 start_node mgmt \
     env MYCELIUM_HOSTNAME=127.0.0.1 MYCELIUM_ROLE=mgmt \
         MYCELIUM_PORT=57003 MYCELIUM_HTTP_PORT=8303 MGMT_PORT=8090 \
-        MYCELIUM_PEERS="127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57002,127.0.0.1:57004,127.0.0.1:57005" \
+        MYCELIUM_PEERS="127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57002,127.0.0.1:57004,127.0.0.1:57005,127.0.0.1:57006" \
     "$BIN"
 
 start_node tool-sf \
@@ -85,12 +90,22 @@ start_node tool-book \
         MYCELIUM_PEERS="127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57002,127.0.0.1:57003" \
     "$BIN"
 
+start_node verifier \
+    env MYCELIUM_HOSTNAME=127.0.0.1 MYCELIUM_ROLE=verifier \
+        MYCELIUM_PORT=57006 MYCELIUM_HTTP_PORT=8306 \
+        MYCELIUM_PEERS="127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57002,127.0.0.1:57003" \
+        OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://localhost:11434/v1}" \
+        VERIFIER_MODEL="${VERIFIER_MODEL:-llama3.1:8b}" \
+    "$BIN"
+
 echo ""
-echo "Started 6 nodes — gossip converges in ~5s."
+echo "Started 7 nodes — gossip converges in ~5s."
 echo ""
 echo "  Chat UI:      http://localhost:8080"
 echo "  Mesh status:  http://localhost:8080/mesh"
 echo "  Dashboard:    http://localhost:8090"
+echo ""
+echo "  Verifier (claims check) active — answers backed by tool results only."
 echo ""
 echo "Logs: $LOG_DIR/"
 echo "Stop: ./stop.sh"

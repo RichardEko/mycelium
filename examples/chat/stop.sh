@@ -4,7 +4,7 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG_DIR="$SCRIPT_DIR/logs"
 
-for name in tool-a tool-b llm mgmt tool-sf tool-book; do
+for name in tool-a tool-b llm mgmt tool-sf tool-book verifier; do
     pid_file="$LOG_DIR/${name}.pid"
     if [[ -f "$pid_file" ]]; then
         pid=$(cat "$pid_file")

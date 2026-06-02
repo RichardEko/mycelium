@@ -11,17 +11,23 @@ use mycelium::{CapFilter, GossipAgent, GossipConfig, NodeId};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Caller node on port 7955, bootstrapping off the skillrunner on 7950
-    let node_id = NodeId::new("127.0.0.1", 7955)?;
-    let skill_node = NodeId::new("127.0.0.1", 7950)?;
+    // Caller node; bootstraps off the skillrunner seed on 7950.
+    // Use port 7970 to avoid conflicting with community example nodes (7950-7955).
+    let caller_port: u16 = std::env::var("SKILL_CALLER_PORT")
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(7970);
+    let node_port: u16 = std::env::var("SKILL_NODE_PORT")
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(7950);
+
+    let node_id   = NodeId::new("127.0.0.1", caller_port)?;
+    let skill_node = NodeId::new("127.0.0.1", node_port)?;
 
     let mut cfg = GossipConfig::default();
-    cfg.bind_port = 7955;
+    cfg.bind_port = caller_port;
     cfg.bootstrap_peers = vec![skill_node.clone()];
 
     let agent = Arc::new(GossipAgent::new(node_id, cfg));
     agent.start().await?;
-    println!("caller: started on :7955, waiting for llm/hello capability...");
+    println!("caller: started on :{caller_port}, waiting for llm/hello capability...");
 
     // Poll until the capability appears (up to 15 s)
     let skill_id = tokio::time::timeout(Duration::from_secs(15), async {

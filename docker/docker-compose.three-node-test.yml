@@ -1,9 +1,10 @@
 # three_node_demo — automated Docker integration test
 #
-# Six tool/LLM containers matching docker-compose.yml topology (minus mgmt dashboard).
+# Seven tool/LLM/verifier containers matching docker-compose.yml topology (minus mgmt).
 # Tests verify: all 4 tools discovered on /mesh, all /ready healthy, chat round-trip.
 #
 # llama3.2 is pulled on first run and cached in the ollama-models volume.
+# The verifier uses VERIFIER_MODEL=llama3.2 (same model) to avoid a second pull in CI.
 # Subsequent runs reuse the cached model and start in seconds.
 #
 # Usage:
@@ -134,6 +135,36 @@ services:
       retries: 12
       start_period: 5s
 
+  # ── Claims verifier node ──────────────────────────────────────────────────────
+  verifier:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: verifier
+    entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
+    environment:
+      MYCELIUM_ROLE:      verifier
+      MYCELIUM_PORT:      "57000"
+      MYCELIUM_HTTP_PORT: "8300"
+      MYCELIUM_PEERS:     "tool-a:57000,tool-b:57000,llm:57000"
+      RUST_LOG:           "warn"
+      OLLAMA_BASE_URL:    "http://ollama:11434/v1"
+      VERIFIER_MODEL:     "llama3.2"
+    networks:
+      - three-node-test
+    depends_on:
+      model-init:
+        condition: service_completed_successfully
+      tool-a:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8300/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
   # ── LLM + chat UI node ───────────────────────────────────────────────────────
   llm:
     build:
@@ -145,7 +176,7 @@ services:
       MYCELIUM_ROLE:      llm
       MYCELIUM_PORT:      "57000"
       MYCELIUM_HTTP_PORT: "8300"
-      MYCELIUM_PEERS:     "tool-a:57000,tool-b:57000,tool-sf:57000,tool-book:57000"
+      MYCELIUM_PEERS:     "tool-a:57000,tool-b:57000,tool-sf:57000,tool-book:57000,verifier:57000"
       RUST_LOG:           "warn"
       OLLAMA_BASE_URL:    "http://ollama:11434/v1"
       OLLAMA_MODEL:       "llama3.2"
@@ -162,6 +193,8 @@ services:
       tool-sf:
         condition: service_healthy
       tool-book:
+        condition: service_healthy
+      verifier:
         condition: service_healthy
     restart: unless-stopped
 
