@@ -95,7 +95,18 @@
 //! make test-overlay      # overlay cluster: 3 nodes, 3 Python scenarios
 //! ```
 //!
-//! # Local quick start — LLM chat cluster (no Docker)
+//! # Local quick start — scripts (recommended for local runs)
+//! ```sh
+//! cargo build --example three_node_demo   # build once
+//!
+//! cd examples/chat
+//! ./demo.sh    # full dynamic-discovery demo (starts nodes, shows tools appearing live)
+//! # — or —
+//! ./start.sh   # start all 6 nodes in background; open http://localhost:8080
+//! ./stop.sh    # graceful shutdown
+//! ```
+//!
+//! # Local quick start — manual (per-terminal)
 //! ```sh
 //! # terminal 1
 //! MYCELIUM_ROLE=tool-a MYCELIUM_PEERS=127.0.0.1:57001,127.0.0.1:57002,127.0.0.1:57003 \
@@ -111,7 +122,7 @@
 //!   cargo run --example three_node_demo
 //! # open http://localhost:8080
 //!
-//! # terminal 4 — management dashboard (optional)
+//! # terminal 4 — management dashboard
 //! MYCELIUM_ROLE=mgmt MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57002 \
 //!   MYCELIUM_PORT=57003 cargo run --example three_node_demo
 //! # open http://localhost:8090

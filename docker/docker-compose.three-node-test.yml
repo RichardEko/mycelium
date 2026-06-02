@@ -1,7 +1,7 @@
 # three_node_demo — automated Docker integration test
 #
-# Identical topology to docker-compose.yml (minus the mgmt dashboard) but with
-# the runner container added and no interactive ports exposed.
+# Six tool/LLM containers matching docker-compose.yml topology (minus mgmt dashboard).
+# Tests verify: all 4 tools discovered on /mesh, all /ready healthy, chat round-trip.
 #
 # llama3.2 is pulled on first run and cached in the ollama-models volume.
 # Subsequent runs reuse the cached model and start in seconds.
@@ -50,7 +50,7 @@ services:
       MYCELIUM_ROLE:      tool-a
       MYCELIUM_PORT:      "57000"
       MYCELIUM_HTTP_PORT: "8300"
-      MYCELIUM_PEERS:     "tool-b:57000,llm:57000"
+      MYCELIUM_PEERS:     "tool-b:57000,llm:57000,tool-sf:57000,tool-book:57000"
       RUST_LOG:           "warn"
     networks:
       - three-node-test
@@ -72,10 +72,60 @@ services:
       MYCELIUM_ROLE:      tool-b
       MYCELIUM_PORT:      "57000"
       MYCELIUM_HTTP_PORT: "8300"
-      MYCELIUM_PEERS:     "tool-a:57000,llm:57000"
+      MYCELIUM_PEERS:     "tool-a:57000,llm:57000,tool-sf:57000,tool-book:57000"
       RUST_LOG:           "warn"
     networks:
       - three-node-test
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8300/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  tool-sf:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: tool-sf
+    entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
+    environment:
+      MYCELIUM_ROLE:      tool-sf
+      MYCELIUM_PORT:      "57000"
+      MYCELIUM_HTTP_PORT: "8300"
+      MYCELIUM_PEERS:     "tool-a:57000,tool-b:57000"
+      RUST_LOG:           "warn"
+    networks:
+      - three-node-test
+    depends_on:
+      tool-a:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8300/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  tool-book:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: tool-book
+    entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
+    environment:
+      MYCELIUM_ROLE:      tool-book
+      MYCELIUM_PORT:      "57000"
+      MYCELIUM_HTTP_PORT: "8300"
+      MYCELIUM_PEERS:     "tool-a:57000,tool-b:57000"
+      RUST_LOG:           "warn"
+    networks:
+      - three-node-test
+    depends_on:
+      tool-b:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8300/ready"]
@@ -95,7 +145,7 @@ services:
       MYCELIUM_ROLE:      llm
       MYCELIUM_PORT:      "57000"
       MYCELIUM_HTTP_PORT: "8300"
-      MYCELIUM_PEERS:     "tool-a:57000,tool-b:57000"
+      MYCELIUM_PEERS:     "tool-a:57000,tool-b:57000,tool-sf:57000,tool-book:57000"
       RUST_LOG:           "warn"
       OLLAMA_BASE_URL:    "http://ollama:11434/v1"
       OLLAMA_MODEL:       "llama3.2"
@@ -108,6 +158,10 @@ services:
       tool-a:
         condition: service_healthy
       tool-b:
+        condition: service_healthy
+      tool-sf:
+        condition: service_healthy
+      tool-book:
         condition: service_healthy
     restart: unless-stopped
 

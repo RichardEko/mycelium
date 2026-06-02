@@ -51,32 +51,32 @@ echo "  Chat server ready — starting scenarios"
 # ── Scenarios ─────────────────────────────────────────────────────────────────
 banner "Running scenarios"
 
-# 01 — tool discovery: ≥2 tools visible on /mesh (weather, calculate, etc.)
+# 01 — tool discovery: all 4 tools visible on /mesh
 scenario_01() {
     local resp count i=0
-    # Gossip may still be converging; wait up to 30s for tools to propagate.
+    # Gossip may still be converging; wait up to 30s for all tools to propagate.
     while [ $i -lt 30 ]; do
         resp=$(curl -sf --max-time 5 "http://${HOST}:${CHAT_PORT}/mesh" 2>/dev/null \
                || echo '{"tools":[]}')
         count=$(echo "$resp" | jq '.tools | length')
-        [ "${count:-0}" -ge 2 ] && break
+        [ "${count:-0}" -ge 4 ] && break
         sleep 1
         i=$((i+1))
     done
-    [ "${count:-0}" -ge 2 ] || {
-        echo "expected ≥2 tools after 30s, got ${count:-0}" >&2; return 1
+    [ "${count:-0}" -ge 4 ] || {
+        echo "expected ≥4 tools after 30s, got ${count:-0}" >&2; return 1
     }
     echo "  tools ($count): $(echo "$resp" | jq -r '[.tools[].name] | join(", ")')" >&2
 }
 
-# 02 — tool nodes healthy: both /ready endpoints return 200
+# 02 — tool nodes healthy: all 4 tool /ready endpoints return 200
 scenario_02() {
-    local code_a; code_a=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
-                            "http://tool-a:8300/ready")
-    local code_b; code_b=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
-                            "http://tool-b:8300/ready")
-    [ "$code_a" = "200" ] || { echo "tool-a /ready returned HTTP $code_a" >&2; return 1; }
-    [ "$code_b" = "200" ] || { echo "tool-b /ready returned HTTP $code_b" >&2; return 1; }
+    local code
+    for svc in tool-a tool-b tool-sf tool-book; do
+        code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
+                    "http://${svc}:8300/ready")
+        [ "$code" = "200" ] || { echo "$svc /ready returned HTTP $code" >&2; return 1; }
+    done
 }
 
 # 03 — HTML chat UI: GET / returns text/html with >500 bytes of content
@@ -150,8 +150,8 @@ scenario_04() {
     rm -f "$sse_file"
 }
 
-run_scenario "01 mesh tool discovery (≥2 tools on /mesh)"      scenario_01
-run_scenario "02 tool nodes healthy (tool-a, tool-b /ready)"   scenario_02
+run_scenario "01 mesh tool discovery (≥4 tools on /mesh)"                scenario_01
+run_scenario "02 tool nodes healthy (tool-a, tool-b, tool-sf, tool-book)" scenario_02
 run_scenario "03 HTML chat UI (GET /)"                         scenario_03
 run_scenario "04 chat round-trip (POST /chat → SSE Assistant)" scenario_04
 

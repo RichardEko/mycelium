@@ -1,11 +1,14 @@
-# Mycelium three-node demo — local-LLM edition
+# Mycelium MCP chat demo — local-LLM edition
 #
-# Four containers:
+# Six containers (all discovered dynamically — no central registry):
 #   ollama      —  local LLM runtime; pulls llama3.2 on first start
 #   model-init  —  one-shot: waits for Ollama, pulls llama3.2, then exits
-#   tool-a      —  weather + web_fetch tools (calls wttr.in / any URL)
-#   tool-b      —  calculator + Wikipedia lookup tools
-#   llm         —  discovers tools over gossip, serves interactive chat UI
+#   tool-a      —  weather + web_fetch tools
+#   tool-b      —  calculate + wiki tools
+#   tool-sf     —  SF Encyclopedia (SFE3) scholarly lookup  ← joins mesh live
+#   tool-book   —  Wikipedia full-article plot lookup       ← joins mesh live
+#   llm         —  discovers all tools over gossip, serves interactive chat UI
+#   mgmt        —  mesh dashboard at http://localhost:8090
 #
 # No API key required — Ollama runs entirely on your machine.
 #
@@ -15,11 +18,10 @@
 #
 # Then open http://localhost:8080 in your browser and start chatting.
 #
-# Other useful endpoints:
-#   curl http://localhost:8080/mesh          # tool list + model info
-#   curl http://localhost:8300/health        # tool-a gateway
-#   curl http://localhost:8301/health        # tool-b gateway
-#   curl http://localhost:8302/health        # llm gateway
+# Useful endpoints:
+#   http://localhost:8080        # chat UI
+#   http://localhost:8080/mesh   # live tool list + model name
+#   http://localhost:8090        # mesh dashboard (nodes, tools, TCP peers)
 
 services:
 
@@ -66,7 +68,7 @@ services:
       MYCELIUM_ROLE:      tool-a
       MYCELIUM_PORT:      "57000"
       MYCELIUM_HTTP_PORT: "8300"
-      MYCELIUM_PEERS:     "tool-b:57000,llm:57000,mgmt:57000"
+      MYCELIUM_PEERS:     "tool-b:57000,llm:57000,mgmt:57000,tool-sf:57000,tool-book:57000"
       RUST_LOG:           "info,mycelium=info"
     ports:
       - "8300:8300"
@@ -90,7 +92,7 @@ services:
       MYCELIUM_ROLE:      tool-b
       MYCELIUM_PORT:      "57000"
       MYCELIUM_HTTP_PORT: "8300"
-      MYCELIUM_PEERS:     "tool-a:57000,llm:57000,mgmt:57000"
+      MYCELIUM_PEERS:     "tool-a:57000,llm:57000,mgmt:57000,tool-sf:57000,tool-book:57000"
       RUST_LOG:           "info,mycelium=info"
     ports:
       - "8301:8300"
@@ -115,7 +117,7 @@ services:
       MYCELIUM_ROLE:      mgmt
       MYCELIUM_PORT:      "57000"
       MYCELIUM_HTTP_PORT: "8300"
-      MYCELIUM_PEERS:     "tool-a:57000,tool-b:57000,llm:57000"
+      MYCELIUM_PEERS:     "tool-a:57000,tool-b:57000,llm:57000,tool-sf:57000,tool-book:57000"
       RUST_LOG:           "info,mycelium=info"
       MGMT_PORT:          "8090"
     ports:
@@ -129,6 +131,61 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # ── Specialist tool nodes (SF Encyclopedia + book plots) ─────────────────────
+  tool-sf:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: tool-sf
+    entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
+    environment:
+      MYCELIUM_ROLE:      tool-sf
+      MYCELIUM_PORT:      "57000"
+      MYCELIUM_HTTP_PORT: "8300"
+      MYCELIUM_PEERS:     "tool-a:57000,tool-b:57000,mgmt:57000"
+      RUST_LOG:           "warn"
+    ports:
+      - "8303:8300"
+    networks:
+      - mesh
+    depends_on:
+      tool-a:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8300/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  tool-book:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: tool-book
+    entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
+    environment:
+      MYCELIUM_ROLE:      tool-book
+      MYCELIUM_PORT:      "57000"
+      MYCELIUM_HTTP_PORT: "8300"
+      MYCELIUM_PEERS:     "tool-a:57000,tool-b:57000,mgmt:57000"
+      RUST_LOG:           "warn"
+    ports:
+      - "8304:8300"
+    networks:
+      - mesh
+    depends_on:
+      tool-b:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8300/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
   # ── LLM + chat UI node ───────────────────────────────────────────────────────
   llm:
     build:
@@ -140,7 +197,7 @@ services:
       MYCELIUM_ROLE:      llm
       MYCELIUM_PORT:      "57000"
       MYCELIUM_HTTP_PORT: "8300"
-      MYCELIUM_PEERS:     "tool-a:57000,tool-b:57000,mgmt:57000"
+      MYCELIUM_PEERS:     "tool-a:57000,tool-b:57000,mgmt:57000,tool-sf:57000,tool-book:57000"
       RUST_LOG:           "info,mycelium=info"
       OLLAMA_BASE_URL:    "http://ollama:11434/v1"
       OLLAMA_MODEL:       "llama3.2"
@@ -156,6 +213,10 @@ services:
       tool-a:
         condition: service_healthy
       tool-b:
+        condition: service_healthy
+      tool-sf:
+        condition: service_healthy
+      tool-book:
         condition: service_healthy
     restart: unless-stopped
 
