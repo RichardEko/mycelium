@@ -85,11 +85,10 @@ These are real work items. Anyone resuming should read
 |---|---|
 | Signal reorder buffer | `emit_ordered()` + wire v11 `hlc_seq` field + per-(sender,kind) buffer in connection.rs — plan at `~/.claude/plans/plan_signal_reorder_buffer.md` |
 | Watcher scalability C2 residual | Consolidate N `run_filter_opacity_watcher` tasks (one per requirement) into the existing `watch_requirement` task — plan at `~/.claude/plans/plan_watcher_scalability_c2.md` |
-| Cross-group consensus (Phase 8) | `cross_group_propose` for multi-voting-bloc decisions; design in `memory/cross_group_consensus.md` |
 | TupleSpace companion crate | Deferred; design at `~/.claude/plans/mycelium-tuple-space.md` |
 | Compliance feature (`--features compliance`) | Full plan at `~/.claude/plans/humble-twirling-comet.md`; not yet implemented |
 
-**Already shipped (removed from list):** fuzz harness (`fuzz/fuzz_targets/`), SignalHandlers split, ConsensusEngine::propose extraction, locality/topology Phases 0–7.
+**Already shipped (removed from list):** fuzz harness (`fuzz/fuzz_targets/`), SignalHandlers split, ConsensusEngine::propose extraction, locality/topology Phases 0–7, cross-group consensus Phase 8 (`cross_group_propose` + `GroupQuorum`).
 
 ## Working in this repo
 
