@@ -24,9 +24,38 @@ use crate::node_id::NodeId;
 use crate::signal::{LoadState, encode_load_state};
 use ahash::AHashMap;
 use bytes::Bytes;
-use std::{sync::Arc, time::Duration};
-use tokio::{sync::{mpsc, oneshot, watch}, time};
+use std::{
+    sync::{Arc, atomic::{AtomicBool, Ordering}},
+    time::Duration,
+};
+use tokio::{sync::{mpsc, oneshot, watch, Notify}, time};
 use tracing::warn;
+
+/// Shared registry for the consolidated opacity watcher spawned by
+/// `declare_requirement`. Exactly one background task reads from this registry;
+/// `declare_requirement` pushes entries and `notify`s the task, avoiding the
+/// N-tasks-per-N-requirements scalability issue (C2 fix).
+pub(crate) struct FilterOpacityRegistry {
+    pub(crate) entries: std::sync::Mutex<Vec<RegEntry>>,
+    pub(crate) notify:  Arc<Notify>,
+    spawned:            AtomicBool,
+}
+
+pub(crate) struct RegEntry {
+    pub(crate) opacity_key: Arc<str>,
+    pub(crate) filter:      Arc<CapFilter>,
+    pub(crate) cancelled:   Arc<AtomicBool>,
+}
+
+impl FilterOpacityRegistry {
+    pub(crate) fn new() -> Self {
+        Self {
+            entries: std::sync::Mutex::new(Vec::new()),
+            notify:  Arc::new(Notify::new()),
+            spawned: AtomicBool::new(false),
+        }
+    }
+}
 
 use super::{GossipAgent, TaskCtx};
 use super::kv::run_kv_persist_task;
@@ -282,11 +311,8 @@ impl GossipAgent {
         interval: Duration,
     ) -> RequirementHandle {
         let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
-        let (op_cancel_tx, op_cancel_rx) = oneshot::channel::<()>();
-        let shutdown_rx                  = self.shutdown_tx.subscribe();
-        let op_shutdown_rx               = self.shutdown_tx.subscribe();
-        let ctx: Arc<TaskCtx>            = Arc::clone(&self.task_ctx);
-        let opacity_ctx: Arc<TaskCtx>    = Arc::clone(&self.task_ctx);
+        let shutdown_rx             = self.shutdown_tx.subscribe();
+        let ctx: Arc<TaskCtx>       = Arc::clone(&self.task_ctx);
 
         let kv_key: Arc<str> = Arc::from(format!(
             "req/{}/{}/{}", ctx.node_id, filter.namespace, filter.name,
@@ -304,20 +330,33 @@ impl GossipAgent {
             Arc::new(move || e.encode())
         };
         self.spawn_task(run_kv_persist_task(
-            ctx, cancel_rx, shutdown_rx, kv_key, interval, payload_fn, None,
+            Arc::clone(&ctx), cancel_rx, shutdown_rx, kv_key, interval, payload_fn, None,
         ));
 
-        // Auto-opacity watcher: writes/clears opacity at `opacity_key` based
-        // on whether the filter is satisfied by any direct `cap/` provider.
-        let filter_for_watch = Arc::clone(&filter_arc);
-        self.spawn_task(run_filter_opacity_watcher(
-            opacity_ctx, op_cancel_rx, op_shutdown_rx,
-            opacity_key, filter_for_watch,
-        ));
-        // Keep the opacity-cancel sender alive alongside the main one — both fire
-        // when the requirement is retracted.
-        let retract = build_paired_retract(cancel_tx, op_cancel_tx);
-        RequirementHandle { _retract: retract }
+        // Register with the consolidated opacity watcher (C2 fix: one task for
+        // all requirements instead of N tasks subscribing to cap/ independently).
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let registry  = Arc::clone(&ctx.filter_opacity_registry);
+        registry.entries.lock().unwrap().push(RegEntry {
+            opacity_key,
+            filter:    Arc::clone(&filter_arc),
+            cancelled: Arc::clone(&cancelled),
+        });
+        registry.notify.notify_one();
+
+        // Spawn the consolidated task lazily on the first declare_requirement call.
+        if !registry.spawned.swap(true, Ordering::AcqRel) {
+            let reg_arc = Arc::clone(&registry);
+            let ctx2    = Arc::clone(&ctx);
+            let sd_rx   = self.shutdown_tx.subscribe();
+            self.spawn_task(run_consolidated_opacity_watcher(ctx2, sd_rx, reg_arc));
+        }
+
+        let opacity_drop = crate::capability::OpacityDropGuard {
+            cancelled,
+            notify: Arc::clone(&registry.notify),
+        };
+        RequirementHandle { _retract: cancel_tx, _opacity_drop: opacity_drop }
     }
 
     /// Push-based view of one requirement's current satisfaction status.
@@ -521,32 +560,6 @@ fn aggregate_fill(kv_state: &crate::store::KvState, node: &NodeId) -> f32 {
     total
 }
 
-/// Composes two oneshot::Sender<()> into one so dropping the outer fires both.
-fn build_paired_retract(
-    a: oneshot::Sender<()>,
-    b: oneshot::Sender<()>,
-) -> oneshot::Sender<()> {
-    // A small forwarder: we hold `b` alongside `a` by spawning nothing; just
-    // return `a` and rely on dropping order. To trigger both on drop we
-    // bundle them via a guard. tokio's oneshot::Sender<()> isn't Clone, so
-    // we move both into a small forwarder task: send on `a` when `b` is sent,
-    // but since we want them to fire together on retract, the simplest
-    // pattern is: store both in a Box that the handle owns. We don't have
-    // a "two-sender" handle type, so for now we attach the secondary cancel
-    // to the global shutdown_rx already wired into the opacity watcher.
-    // Drop semantics: dropping `RequirementHandle._retract` closes `a`'s
-    // channel, which the persist task notices. The opacity watcher exits
-    // via shutdown_rx when the agent shuts down; for early retract we
-    // additionally need to fire `b` — accomplished by sending on `b` here
-    // and returning `a` only.
-    //
-    // Since this is a one-shot helper invoked at retract time we cannot
-    // defer the send: just fire `b` immediately and return `a`. The opacity
-    // watcher exits as soon as it sees `b` close, equivalent to receiving.
-    let _ = b.send(());
-    a
-}
-
 /// Free-function flavour of `GossipAgent::subscribe_prefix` for callers that
 /// only hold a `&KvState`. Lazy-creates the prefix watcher entry if absent.
 pub(crate) fn subscribe_prefix_on_kv(
@@ -577,78 +590,144 @@ pub(crate) fn subscribe_prefix_on_kv(
 }
 
 /// Background task for the Phase-3 `declare_requirement` opacity coupling.
-/// Watches whether `filter` is currently satisfied by any direct `cap/`
-/// provider. While NOT satisfied, writes `LoadState { fill_ratio: 1.0,
-/// is_opaque: true }` to `opacity_key`. When it becomes satisfied,
-/// tombstones `opacity_key`. Always tombstones at exit so cancel /
-/// shutdown leave KV clean.
+/// Writes `LoadState { is_opaque: true }` to `opacity_key` in the local KV
+/// store and fans it out over gossip.
+fn write_opacity_key(ctx: &TaskCtx, opacity_key: &Arc<str>) {
+    use crate::framing::{dispatch_gossip_try_send, ForwardHint, WireMessage, make_gossip_update};
+    use crate::store::apply_and_notify;
+    let payload = encode_load_state(&LoadState {
+        fill_ratio: 1.0, is_opaque: true, written_at_ms: now_ms(),
+    });
+    let upd = make_gossip_update(
+        &ctx.node_id, ctx.default_ttl, opacity_key.clone(), payload, false, &ctx.hlc,
+    );
+    apply_and_notify(&ctx.kv_state, &upd);
+    dispatch_gossip_try_send(
+        &ctx.gossip_txs, WireMessage::Data(upd),
+        ctx.node_id.id_hash(), ForwardHint::All, &ctx.kv_state.dropped_frames,
+    );
+}
+
+/// Tombstones `opacity_key` in the local KV store and fans the tombstone over
+/// gossip. Used by the consolidated watcher when a requirement becomes
+/// satisfied or is retracted.
+fn clear_opacity_key(ctx: &TaskCtx, opacity_key: &Arc<str>) {
+    use crate::framing::{dispatch_gossip_try_send, ForwardHint, WireMessage, make_gossip_update};
+    use crate::store::apply_and_notify;
+    let upd = make_gossip_update(
+        &ctx.node_id, ctx.default_ttl, opacity_key.clone(), Bytes::new(), true, &ctx.hlc,
+    );
+    apply_and_notify(&ctx.kv_state, &upd);
+    dispatch_gossip_try_send(
+        &ctx.gossip_txs, WireMessage::Data(upd),
+        ctx.node_id.id_hash(), ForwardHint::All, &ctx.kv_state.dropped_frames,
+    );
+}
+
+/// Single background task that manages opacity for all declared requirements
+/// (C2 fix: replaces N per-requirement `run_filter_opacity_watcher` tasks with
+/// one task and one `cap/` subscription).
+///
+/// Wakes on any `cap/` change or on a `registry.notify` signal (fired when a
+/// requirement is added or retracted). On each wake, merges new entries from
+/// the registry into its local tracking list, then scans all live entries and
+/// updates opacity accordingly. Cancelled entries are cleaned up immediately.
 ///
 /// Phase-7 group-req opacity is handled inline by C3's
 /// `run_group_membership_task`, which co-locates it with the `gcap/`
 /// reassertion loop.
-async fn run_filter_opacity_watcher(
+async fn run_consolidated_opacity_watcher(
     ctx:             Arc<TaskCtx>,
-    mut cancel_rx:   oneshot::Receiver<()>,
     mut shutdown_rx: watch::Receiver<bool>,
-    opacity_key:     Arc<str>,
-    filter:          Arc<CapFilter>,
+    registry:        Arc<FilterOpacityRegistry>,
 ) {
-    use crate::framing::{dispatch_gossip_try_send, ForwardHint, WireMessage, make_gossip_update};
-    use crate::store::apply_and_notify;
+    struct LocalEntry {
+        opacity_key:    Arc<str>,
+        filter:         Arc<CapFilter>,
+        cancelled:      Arc<AtomicBool>,
+        opaque_written: bool,
+    }
 
+    let mut local: Vec<LocalEntry> = Vec::new();
     let mut cap_rx = subscribe_prefix_on_kv(&ctx.kv_state, Arc::<str>::from("cap/"));
-    let mut opaque_written = false;
 
-    let is_satisfied = |kv: &crate::store::KvState| -> bool {
-        !resolve_filter_against_kv(kv, &filter).is_empty()
-    };
-    let write_opaque = |ctx: &TaskCtx| {
-        let payload = encode_load_state(&LoadState {
-            fill_ratio:    1.0,
-            is_opaque:     true,
-            written_at_ms: now_ms(),
-        });
-        let upd = make_gossip_update(
-            &ctx.node_id, ctx.default_ttl, opacity_key.clone(), payload, false, &ctx.hlc,
-        );
-        apply_and_notify(&ctx.kv_state, &upd);
-        dispatch_gossip_try_send(
-            &ctx.gossip_txs, WireMessage::Data(upd),
-            ctx.node_id.id_hash(), ForwardHint::All, &ctx.kv_state.dropped_frames,
-        );
-    };
-    let clear_opaque = |ctx: &TaskCtx| {
-        let upd = make_gossip_update(
-            &ctx.node_id, ctx.default_ttl, opacity_key.clone(), Bytes::new(), true, &ctx.hlc,
-        );
-        apply_and_notify(&ctx.kv_state, &upd);
-        dispatch_gossip_try_send(
-            &ctx.gossip_txs, WireMessage::Data(upd),
-            ctx.node_id.id_hash(), ForwardHint::All, &ctx.kv_state.dropped_frames,
-        );
-    };
-
-    if !is_satisfied(&ctx.kv_state) {
-        write_opaque(&ctx);
-        opaque_written = true;
+    // Initial pass: pick up any entries registered before the task started.
+    {
+        let guard = registry.entries.lock().unwrap();
+        for reg in guard.iter() {
+            let satisfied = !resolve_filter_against_kv(&ctx.kv_state, &reg.filter).is_empty();
+            let opaque_written = if !satisfied {
+                write_opacity_key(&ctx, &reg.opacity_key);
+                true
+            } else {
+                false
+            };
+            local.push(LocalEntry {
+                opacity_key:    reg.opacity_key.clone(),
+                filter:         Arc::clone(&reg.filter),
+                cancelled:      Arc::clone(&reg.cancelled),
+                opaque_written,
+            });
+        }
     }
 
     loop {
         tokio::select! { biased;
-            _ = &mut cancel_rx                   => break,
-            _ = await_shutdown(&mut shutdown_rx) => break,
+            _ = await_shutdown(&mut shutdown_rx)  => break,
+            _ = registry.notify.notified()        => {},
             r = cap_rx.changed() => { if r.is_err() { break; } }
         }
-        let satisfied = is_satisfied(&ctx.kv_state);
-        match (opaque_written, satisfied) {
-            (false, false) => { write_opaque(&ctx); opaque_written = true; }
-            (true,  true)  => { clear_opaque(&ctx); opaque_written = false; }
-            _ => {}
+
+        // Merge entries added since last wake.
+        {
+            let guard = registry.entries.lock().unwrap();
+            for reg in guard.iter() {
+                if local.iter().any(|e| e.opacity_key == reg.opacity_key) {
+                    continue;
+                }
+                let satisfied = !resolve_filter_against_kv(&ctx.kv_state, &reg.filter).is_empty();
+                let opaque_written = if !satisfied {
+                    write_opacity_key(&ctx, &reg.opacity_key);
+                    true
+                } else {
+                    false
+                };
+                local.push(LocalEntry {
+                    opacity_key:    reg.opacity_key.clone(),
+                    filter:         Arc::clone(&reg.filter),
+                    cancelled:      Arc::clone(&reg.cancelled),
+                    opaque_written,
+                });
+            }
+        }
+
+        // Scan all live entries; remove cancelled ones after clearing their key.
+        let mut i = 0;
+        while i < local.len() {
+            if local[i].cancelled.load(Ordering::Acquire) {
+                if local[i].opaque_written {
+                    clear_opacity_key(&ctx, &local[i].opacity_key);
+                }
+                registry.entries.lock().unwrap()
+                    .retain(|e| e.opacity_key != local[i].opacity_key);
+                local.swap_remove(i);
+                continue;
+            }
+            let satisfied = !resolve_filter_against_kv(&ctx.kv_state, &local[i].filter).is_empty();
+            match (local[i].opaque_written, satisfied) {
+                (false, false) => { write_opacity_key(&ctx, &local[i].opacity_key); local[i].opaque_written = true; }
+                (true,  true)  => { clear_opacity_key(&ctx, &local[i].opacity_key); local[i].opaque_written = false; }
+                _ => {}
+            }
+            i += 1;
         }
     }
 
-    if opaque_written {
-        clear_opaque(&ctx);
+    // Shutdown: clear all remaining opacity keys so KV is left clean.
+    for entry in &local {
+        if entry.opaque_written {
+            clear_opacity_key(&ctx, &entry.opacity_key);
+        }
     }
 }
 

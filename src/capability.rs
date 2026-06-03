@@ -16,8 +16,8 @@ use crate::node_id::NodeId;
 use std::collections::BTreeMap;
 use bytes::{BufMut, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
-use std::{cmp::Ordering, sync::Arc};
-use tokio::sync::oneshot;
+use std::{cmp::Ordering, sync::{Arc, atomic::{AtomicBool, Ordering as AOrdering}}};
+use tokio::sync::{oneshot, Notify};
 
 /// A typed capability/requirement attribute value.
 ///
@@ -165,11 +165,26 @@ pub struct CapabilityHandle {
     pub(crate) _retract: oneshot::Sender<()>,
 }
 
+/// RAII guard that signals the consolidated opacity watcher when the
+/// `RequirementHandle` that owns it is dropped.
+pub(crate) struct OpacityDropGuard {
+    pub(crate) cancelled: Arc<AtomicBool>,
+    pub(crate) notify:    Arc<Notify>,
+}
+
+impl Drop for OpacityDropGuard {
+    fn drop(&mut self) {
+        self.cancelled.store(true, AOrdering::Release);
+        self.notify.notify_one();
+    }
+}
+
 /// Drop to retract a declared requirement. Tombstones both `req/{…}` and any
 /// `sys/load/{…}/req/{…}` opacity entry that this requirement may have
 /// written when unsatisfied (see Phase 3d auto-opacity).
 pub struct RequirementHandle {
-    pub(crate) _retract: oneshot::Sender<()>,
+    pub(crate) _retract:      oneshot::Sender<()>,
+    pub(crate) _opacity_drop: OpacityDropGuard,
 }
 
 /// Definition of an emergent capability group.

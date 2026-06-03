@@ -49,6 +49,8 @@ pub(crate) mod llm;
 
 #[allow(unused_imports)]
 pub(crate) use bulk::BulkTransport;
+#[allow(unused_imports)]
+pub(crate) use capability_ops::FilterOpacityRegistry;
 pub(crate) use helpers::emit_signal;
 pub(crate) use helpers::emit_signal_async;
 pub(crate) use helpers::make_gossip_update;
@@ -180,6 +182,9 @@ pub(crate) struct TaskCtx {
     pub(crate) peer_keys: Arc<papaya::HashMap<NodeId, [u8; 32]>>,
     /// Live peer table shared with the HTTP gateway for peer-count-based quorum sizing.
     pub(crate) peers: Arc<papaya::HashMap<NodeId, std::time::Instant>>,
+    /// Shared registry for the consolidated `declare_requirement` opacity watcher.
+    /// A single background task reads from this instead of one task per requirement.
+    pub(crate) filter_opacity_registry: Arc<capability_ops::FilterOpacityRegistry>,
 }
 
 /// Core gossip agent.
@@ -355,6 +360,7 @@ impl GossipAgent {
             tls: std::sync::OnceLock::new(),
             peer_keys: Arc::new(papaya::HashMap::new()),
             peers: Arc::clone(&peers_arc),
+            filter_opacity_registry: Arc::new(capability_ops::FilterOpacityRegistry::new()),
         });
 
         Self {
