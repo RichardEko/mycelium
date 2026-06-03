@@ -130,11 +130,19 @@ mod imp {
     }
 
     fn load_key_from_pkcs8_pem(path: &Path) -> Result<SigningKey, GossipError> {
+        use base64::{engine::general_purpose::STANDARD, Engine};
         use ed25519_dalek::pkcs8::DecodePrivateKey;
         let pem = fs::read_to_string(path)
             .map_err(|e| GossipError::Config(format!("TLS: read key PEM {:?}: {e}", path)))?;
-        SigningKey::from_pkcs8_pem(&pem)
-            .map_err(|e| GossipError::Config(format!("TLS: parse PKCS8 PEM: {e}")))
+        // Strip PEM armor and base64-decode to DER, then parse.
+        // Avoids requiring the `pem` feature flag on the pkcs8 crate.
+        let b64: String = pem.lines()
+            .filter(|l| !l.starts_with("-----"))
+            .collect();
+        let der = STANDARD.decode(b64.trim())
+            .map_err(|e| GossipError::Config(format!("TLS: decode key PEM: {e}")))?;
+        SigningKey::from_pkcs8_der(&der)
+            .map_err(|e| GossipError::Config(format!("TLS: parse PKCS8 key: {e}")))
     }
 
     fn generate_node_cert(
@@ -252,10 +260,11 @@ mod imp {
         key.sign(msg).to_bytes()
     }
 
-    pub(crate) fn verify_bytes(pub_key_bytes: &[u8; 32], msg: &[u8], sig: &[u8; 64]) -> bool {
+    pub(crate) fn verify_bytes(pub_key_bytes: &[u8; 32], msg: &[u8], sig: &[u8]) -> bool {
         use ed25519_dalek::Verifier;
         let Ok(vk) = VerifyingKey::from_bytes(pub_key_bytes) else { return false };
-        let sig = ed25519_dalek::Signature::from_bytes(sig);
+        let Ok(arr): Result<[u8; 64], _> = sig.try_into() else { return false };
+        let sig = ed25519_dalek::Signature::from_bytes(&arr);
         vk.verify_strict(msg, &sig).is_ok()
     }
 }

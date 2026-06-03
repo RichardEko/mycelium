@@ -2,7 +2,7 @@
 name = "mycelium"
 version = "1.0.0"
 edition = "2021"
-rust-version = "1.76"
+rust-version = "1.88"
 authors = ["mycelium contributors"]
 description = "Gossip protocol implementation with resource management"
 license = "AGPL-3.0-only"
@@ -20,7 +20,7 @@ cli = ["dep:tracing-subscriber"]
 fuzz-internals = []
 # Enables mTLS on the gossip TCP port, keypair-backed node identity, and
 # consensus payload signing. Adds tokio-rustls, rcgen, and ed25519-dalek.
-tls = ["dep:tokio-rustls", "dep:rustls", "dep:rcgen", "dep:rustls-pemfile", "dep:ed25519-dalek"]
+tls = ["dep:tokio-rustls", "dep:rustls", "dep:rcgen", "dep:rustls-pemfile", "dep:ed25519-dalek", "dep:rand_core"]
 # Enables OTEL span export from SkillRunner (opentelemetry-otlp gRPC).
 otel = ["dep:opentelemetry", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry", "dep:opentelemetry_sdk"]
 # Exposes a Prometheus /metrics endpoint on the gateway HTTP port.
@@ -86,6 +86,7 @@ rustls         = { version = "0.23", default-features = false, features = ["ring
 rcgen          = { version = "0.13", optional = true }
 rustls-pemfile = { version = "2",    optional = true }
 ed25519-dalek  = { version = "2",    features = ["rand_core", "pkcs8"], optional = true }
+rand_core      = { version = "0.6",  features = ["getrandom"],         optional = true }
 
 # OTEL (optional — enabled by the "otel" feature, used by skillrunner)
 opentelemetry          = { version = "0.27", optional = true }

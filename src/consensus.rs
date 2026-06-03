@@ -505,7 +505,7 @@ impl ConsensusEngine {
             let signed = SignedConsensusMsg {
                 msg_bytes:  bytes.clone(),
                 signer:     self.task_ctx.node_id.clone(),
-                signature:  sig,
+                signature:  sig.to_vec(),
             };
             let mut buf = BytesMut::new();
             if bincode::serde::encode_into_std_write(
@@ -1091,7 +1091,7 @@ pub(crate) fn decode_ballot(bytes: &Bytes) -> u64 {
 pub(crate) struct SignedConsensusMsg {
     pub msg_bytes: Bytes,
     pub signer:    NodeId,
-    pub signature: [u8; 64],
+    pub signature: Vec<u8>,
 }
 
 // ── Voter task ───────────────────────────────────────────────────────────────
