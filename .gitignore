@@ -1,18 +1,22 @@
 /target
 .DS_Store
 GO_TO_MARKET.md
-docs/go_to_market.html
 docs/presentation.html
-docs/v30_mycelium_strategy.html
 docs/fluid_pipeline_plan.html
 docs/fluid_pipeline_viz.html
 docs/flow_networks.html
 
+# Internal strategy docs (moved to docs/internal/)
+docs/internal/
+
 # arXiv submission artifacts
-docs/arxiv/*.zip
+docs/arxiv/
 
 # Python
 __pycache__/
 *.py[cod]
 *.pyo
 .venv/
+
+# Community example runtime artifacts
+examples/community/logs/
