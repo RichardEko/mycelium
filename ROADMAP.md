@@ -786,6 +786,11 @@ The capability watchers have three scalability properties built in:
 - **One task per emergent group**: `run_group_membership_task` owns all gcap projection reasserts
   and requirement opacity watchers for a group, so task count scales with active groups, not with
   members × capabilities.
+- **C2 — consolidated requirement opacity watcher**: `declare_requirement` previously spawned one
+  `run_filter_opacity_watcher` task per call, each with its own `cap/` subscription. A single
+  `run_consolidated_opacity_watcher` now handles all declared requirements — one task, one
+  subscription, one scan pass per `cap/` change. The `FilterOpacityRegistry` on `TaskCtx` is the
+  shared entry list; `OpacityDropGuard` on `RequirementHandle` signals cancellation on retract.
 
 ---
 
@@ -1428,6 +1433,7 @@ Weeks:  0         2          4          6          8         10        12
 | Capability | resolve_with_locality, signal_wired_via_locality, locality paths | **Complete** |
 | Capability | demand, watch_demand, DemandStatus (demand pressure surface) | **Complete** |
 | Capability | Predicate-narrowed watchers, 50 ms debounce, one-task-per-group | **Complete** |
+| Capability | C2: consolidated opacity watcher — one task + one cap/ subscription for all declared requirements | **Complete** |
 | Layer 3 | Embedded HTTP server, SSE streaming, `rpc_call`/`rpc_respond` primitive | **Complete** |
 | Layer 3 | Bulk payload / `invoke.bulk` ticket, Actor/Event mailboxes, scatter-gather | **Complete** |
 | Layer 4 | MCP bridge: server role (tools/ KV + rpc_call dispatch) | **Complete** |
