@@ -185,6 +185,21 @@ fn build_capability(sf: &SkillFile) -> Capability {
         }
     }
 
+    // Embed input/output schemas into the gossip-propagated Capability so peer
+    // nodes can inspect the contract from resolve() results without a separate
+    // KV lookup. The `skills/{ns}/{name}/{node}/input` KV keys written above
+    // are kept for backward compatibility with pre-schema-field peers.
+    if let Some(ref schema) = sf.capability.input {
+        if let Ok(json_str) = serde_json::to_string(schema) {
+            cap = cap.with_input_schema(json_str.as_str());
+        }
+    }
+    if let Some(ref schema) = sf.capability.output {
+        if let Ok(json_str) = serde_json::to_string(schema) {
+            cap = cap.with_output_schema(json_str.as_str());
+        }
+    }
+
     cap
 }
 

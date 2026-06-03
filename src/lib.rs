@@ -103,6 +103,36 @@
 //! within seconds of reconnection. Hard-state application keys (`test/`,
 //! `agent/`, `consensus/`, `tools/`) should be written via `set_async` on at
 //! least one persistent node per write if restart durability is required.
+//!
+//! ## Speech act patterns (FIPA-ACL → Mycelium)
+//!
+//! The table below maps the seven FIPA-ACL performatives to idiomatic Mycelium
+//! primitives. Use this as a vocabulary bridge when porting FIPA-based or A2A
+//! interaction protocols to the gossip substrate.
+//!
+//! | FIPA-ACL performative      | Mycelium primitive                                                          | Notes                                                                                      |
+//! |----------------------------|-----------------------------------------------------------------------------|--------------------------------------------------------------------------------------------|
+//! | `INFORM`                   | [`emit`] / [`emit_ordered`]                                                 | Epidemic broadcast; no acknowledgement. `emit_ordered` adds causal HLC sequencing.        |
+//! | `REQUEST`                  | [`rpc_call`] / [`rpc_respond`]                                              | Point-to-point call with correlation nonce; awaits reply or timeout.                       |
+//! | `QUERY-IF` / `QUERY-REF`   | [`resolve`] / [`watch_capabilities`]                                        | Snapshot or live-streaming capability satisfaction check.                                  |
+//! | `PROPOSE`                  | [`group_propose`] / [`system_propose`] / [`cross_group_propose`]            | Epidemic two-phase voting; `GroupQuorum` controls the acceptance fraction per group.       |
+//! | `AGREE` / `REFUSE`         | [`rpc_respond`] or [`emit`] with `SignalScope::Individual`                  | Point-to-point reply to a specific RPC request or correlation nonce.                       |
+//! | `SUBSCRIBE`                | [`signal_rx`] / [`signal_rx_from`] / [`watch_capabilities`]                 | Push channel; `signal_rx_from` restricts delivery to trusted senders.                     |
+//! | `CFP` (call-for-proposals) | [`advertise_capability`] + [`declare_requirement`]                          | Providers advertise; consumers declare needs. Emergent groups form without a coordinator.  |
+//!
+//! [`emit`]: GossipAgent::emit
+//! [`emit_ordered`]: GossipAgent::emit_ordered
+//! [`rpc_call`]: GossipAgent::rpc_call
+//! [`rpc_respond`]: GossipAgent::rpc_respond
+//! [`resolve`]: GossipAgent::resolve
+//! [`watch_capabilities`]: GossipAgent::watch_capabilities
+//! [`group_propose`]: GossipAgent::group_propose
+//! [`system_propose`]: GossipAgent::system_propose
+//! [`cross_group_propose`]: GossipAgent::cross_group_propose
+//! [`signal_rx`]: GossipAgent::signal_rx
+//! [`signal_rx_from`]: GossipAgent::signal_rx_from
+//! [`advertise_capability`]: GossipAgent::advertise_capability
+//! [`declare_requirement`]: GossipAgent::declare_requirement
 
 #![forbid(unsafe_code)]
 

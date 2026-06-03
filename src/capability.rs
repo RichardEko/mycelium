@@ -89,6 +89,12 @@ pub struct CapFilter {
     /// do not carry liveness constraints).
     #[serde(skip)]
     pub max_age:    Option<std::time::Duration>,
+    /// When set, `matches` only accepts capabilities whose `schema_id` equals
+    /// this value exactly. Gossip-propagated in `req/` KV entries so that
+    /// requirements can declare a schema preference cluster-wide. `None` means
+    /// accept any schema, including capabilities with no `schema_id` set.
+    #[serde(default)]
+    pub schema_id:  Option<Arc<str>>,
 }
 
 /// What a node advertises it can provide.
@@ -105,6 +111,21 @@ pub struct Capability {
     /// entry only when `CallerContext::caller_id` is in the list.
     #[serde(default)]
     pub authorized_callers: Vec<Arc<str>>,
+    /// Optional schema identifier for this capability's invocation contract.
+    /// Gossip-propagated. Callers can filter on this via `CapFilter::with_schema`
+    /// to ensure they only wire to providers whose contract matches their
+    /// expectations. Format is free-form — e.g. `"acme-ml/v1.2"` or a URN.
+    /// `None` means unversioned / no schema constraint.
+    #[serde(default)]
+    pub schema_id:          Option<Arc<str>>,
+    /// JSON Schema (as a JSON string) describing the expected request payload.
+    /// Gossip-propagated alongside the capability so callers can inspect the
+    /// input contract without a separate KV lookup.
+    #[serde(default)]
+    pub input_schema:       Option<Arc<str>>,
+    /// JSON Schema describing the response payload.
+    #[serde(default)]
+    pub output_schema:      Option<Arc<str>>,
 }
 
 /// Caller identity passed to [`GossipAgent::resolve_for_caller`].
@@ -333,9 +354,10 @@ impl CapConstraint {
 }
 
 impl CapFilter {
-    /// True iff `cap` shares the same `(namespace, name)` and every attribute
-    /// constraint in this filter matches a present attribute value on `cap`.
-    /// Missing attributes always fail.
+    /// True iff `cap` shares the same `(namespace, name)`, every attribute
+    /// constraint matches a present attribute value on `cap`, and — when
+    /// `self.schema_id` is set — the capability's `schema_id` matches exactly.
+    /// Missing attributes or mismatched schema always fail.
     pub fn matches(&self, cap: &Capability) -> bool {
         if self.namespace != cap.namespace || self.name != cap.name {
             return false;
@@ -343,6 +365,11 @@ impl CapFilter {
         for (attr, constraint) in &self.attributes {
             let Some(value) = cap.attributes.get(attr) else { return false; };
             if !constraint.matches(value) { return false; }
+        }
+        if let Some(ref sid) = self.schema_id {
+            if cap.schema_id.as_deref() != Some(sid.as_ref()) {
+                return false;
+            }
         }
         true
     }
@@ -355,6 +382,7 @@ impl CapFilter {
             attributes: BTreeMap::new(),
             ranking:    None,
             max_age:    None,
+            schema_id:  None,
         }
     }
 
@@ -376,6 +404,16 @@ impl CapFilter {
         self.ranking = Some(CapRanking { attribute: attribute.into(), order });
         self
     }
+
+    /// Constrains resolution to capabilities advertising the given `schema_id`.
+    ///
+    /// Capabilities with no `schema_id` set will not match — the constraint is
+    /// strict by design. Use this when you require a specific contract version
+    /// and want to avoid silently wiring to an older or incompatible provider.
+    pub fn with_schema(mut self, id: impl Into<Arc<str>>) -> Self {
+        self.schema_id = Some(id.into());
+        self
+    }
 }
 
 impl Capability {
@@ -386,6 +424,9 @@ impl Capability {
             name:               name.into(),
             attributes:         BTreeMap::new(),
             authorized_callers: Vec::new(),
+            schema_id:          None,
+            input_schema:       None,
+            output_schema:      None,
         }
     }
 
@@ -401,6 +442,31 @@ impl Capability {
         callers: impl IntoIterator<Item = S>,
     ) -> Self {
         self.authorized_callers = callers.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Sets the schema identifier for this capability's invocation contract.
+    ///
+    /// Peers that declare a requirement with `CapFilter::with_schema(id)` will
+    /// only resolve to providers whose `schema_id` matches exactly.
+    pub fn with_schema_id(mut self, id: impl Into<Arc<str>>) -> Self {
+        self.schema_id = Some(id.into());
+        self
+    }
+
+    /// Embeds the JSON Schema for this capability's input payload.
+    ///
+    /// The schema is gossip-propagated inside the `Capability` struct so callers
+    /// can inspect input shapes from `resolve()` results without a separate KV lookup.
+    /// Typically a compact JSON Schema object serialized as a string.
+    pub fn with_input_schema(mut self, schema: impl Into<Arc<str>>) -> Self {
+        self.input_schema = Some(schema.into());
+        self
+    }
+
+    /// Embeds the JSON Schema for this capability's output payload.
+    pub fn with_output_schema(mut self, schema: impl Into<Arc<str>>) -> Self {
+        self.output_schema = Some(schema.into());
         self
     }
 }
@@ -611,5 +677,41 @@ mod tests {
         let bytes = def.encode();
         let decoded = CapabilityGroupDef::decode(&bytes).expect("decode");
         assert_eq!(def, decoded);
+    }
+
+    #[test]
+    fn schema_id_filter_matching() {
+        let cap_v2 = Capability::new("compute", "gpu")
+            .with_schema_id("acme-ml/v2")
+            .with_input_schema(r#"{"type":"object"}"#)
+            .with_output_schema(r#"{"type":"string"}"#);
+        let cap_v1 = Capability::new("compute", "gpu")
+            .with_schema_id("acme-ml/v1");
+        let cap_none = Capability::new("compute", "gpu");
+
+        let filter_v2   = CapFilter::new("compute", "gpu").with_schema("acme-ml/v2");
+        let filter_any  = CapFilter::new("compute", "gpu");
+
+        // Strict match: filter_v2 accepts only v2.
+        assert!( filter_v2.matches(&cap_v2));
+        assert!(!filter_v2.matches(&cap_v1));
+        assert!(!filter_v2.matches(&cap_none)); // no schema_id = does not satisfy versioned filter
+
+        // Unversioned filter accepts all.
+        assert!(filter_any.matches(&cap_v2));
+        assert!(filter_any.matches(&cap_v1));
+        assert!(filter_any.matches(&cap_none));
+
+        // Schema fields survive encode/decode.
+        let bytes   = cap_v2.encode();
+        let decoded = Capability::decode(&bytes).expect("decode");
+        assert_eq!(decoded.schema_id.as_deref(), Some("acme-ml/v2"));
+        assert_eq!(decoded.input_schema.as_deref(), Some(r#"{"type":"object"}"#));
+        assert_eq!(decoded.output_schema.as_deref(), Some(r#"{"type":"string"}"#));
+
+        // CapFilter schema_id survives encode/decode.
+        let bytes   = filter_v2.encode();
+        let decoded = CapFilter::decode(&bytes).expect("decode");
+        assert_eq!(decoded.schema_id.as_deref(), Some("acme-ml/v2"));
     }
 }

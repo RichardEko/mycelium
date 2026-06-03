@@ -150,14 +150,37 @@ type SenderLog = PapayaMap<Arc<str>, Arc<Mutex<VecDeque<(NodeId, Instant)>>>>;
 // orchestrates across them in a fixed order: record → suppression-check →
 // fan-out. No behaviour change vs. the pre-split implementation.
 
-/// Handler fan-out registry: maps signal kind → list of `mpsc::Sender<Signal>`.
+/// A sender slot in [`HandlerTable`] with an optional sender-identity filter.
+///
+/// When `filter` is `None` the slot behaves like a bare `mpsc::Sender<Signal>`.
+/// When `filter` is `Some`, only signals whose `signal.sender` is present in
+/// the slice are forwarded to the channel. The `Arc<[NodeId]>` is shared across
+/// clones so filtered registration is O(1) per extra receiver.
+#[derive(Clone)]
+struct FilteredSender {
+    /// `None` = accept all senders. `Some(ids)` = accept only listed senders.
+    filter: Option<Arc<[NodeId]>>,
+    tx:     mpsc::Sender<Signal>,
+}
+
+impl FilteredSender {
+    fn unfiltered(tx: mpsc::Sender<Signal>) -> Self {
+        Self { filter: None, tx }
+    }
+    fn filtered(tx: mpsc::Sender<Signal>, trusted: Arc<[NodeId]>) -> Self {
+        Self { filter: Some(trusted), tx }
+    }
+    fn is_closed(&self) -> bool { self.tx.is_closed() }
+}
+
+/// Handler fan-out registry: maps signal kind → list of `FilteredSender`.
 ///
 /// papaya is the hot map type because `deliver` runs on every received signal
-/// and registrations happen rarely. Value is `Arc<Vec<Sender>>` so the snapshot
-/// in `deliver_to_handlers` is a single atomic refcount increment; the guard
-/// drops before the per-sender try_send loop.
+/// and registrations happen rarely. Value is `Arc<Vec<FilteredSender>>` so the
+/// snapshot in `deliver_to_handlers` is a single atomic refcount increment;
+/// the guard drops before the per-sender try_send loop.
 struct HandlerTable {
-    map: PapayaMap<Arc<str>, Arc<Vec<mpsc::Sender<Signal>>>>,
+    map: PapayaMap<Arc<str>, Arc<Vec<FilteredSender>>>,
 }
 
 impl HandlerTable {
@@ -165,8 +188,29 @@ impl HandlerTable {
 
     fn register_with_capacity(&self, kind: Arc<str>, cap: usize) -> mpsc::Receiver<Signal> {
         let (tx, rx) = mpsc::channel(cap);
-        let mut slot = Some(tx);
-        self.map.pin().compute(kind, |existing| -> papaya::Operation<Arc<Vec<mpsc::Sender<Signal>>>, ()> {
+        let mut slot = Some(FilteredSender::unfiltered(tx));
+        self.map.pin().compute(kind, |existing| -> papaya::Operation<Arc<Vec<FilteredSender>>, ()> {
+            match existing {
+                None => papaya::Operation::Insert(Arc::new(vec![slot.take().unwrap()])),
+                Some((_, arc)) => {
+                    let mut v = (**arc).clone();
+                    v.push(slot.take().unwrap());
+                    papaya::Operation::Insert(Arc::new(v))
+                }
+            }
+        });
+        rx
+    }
+
+    fn register_with_filter(
+        &self,
+        kind:    Arc<str>,
+        cap:     usize,
+        trusted: Arc<[NodeId]>,
+    ) -> mpsc::Receiver<Signal> {
+        let (tx, rx) = mpsc::channel(cap);
+        let mut slot = Some(FilteredSender::filtered(tx, trusted));
+        self.map.pin().compute(kind, |existing| -> papaya::Operation<Arc<Vec<FilteredSender>>, ()> {
             match existing {
                 None => papaya::Operation::Insert(Arc::new(vec![slot.take().unwrap()])),
                 Some((_, arc)) => {
@@ -183,17 +227,17 @@ impl HandlerTable {
         let guard = self.map.pin();
         let Some(senders) = guard.get(kind.as_ref()) else { return 0.0 };
         let mut max_ratio: f32 = 0.0;
-        for tx in senders.iter().filter(|tx| !tx.is_closed()) {
-            let ratio = 1.0_f32 - tx.capacity() as f32 / tx.max_capacity() as f32;
+        for fs in senders.iter().filter(|fs| !fs.is_closed()) {
+            let ratio = 1.0_f32 - fs.tx.capacity() as f32 / fs.tx.max_capacity() as f32;
             if ratio > max_ratio { max_ratio = ratio; }
         }
         max_ratio.min(1.0)
     }
 
-    /// Fans out a snapshot of senders for `signal.kind`. Closed senders are
-    /// evicted lazily via a CAS write only when at least one was found closed.
+    /// Fans out a snapshot of senders for `signal.kind`. Sender-identity filters
+    /// are checked per slot; closed senders are evicted lazily via CAS.
     fn deliver_to_handlers(&self, signal: &Signal) {
-        let snapshot: Arc<Vec<mpsc::Sender<Signal>>> = {
+        let snapshot: Arc<Vec<FilteredSender>> = {
             let guard = self.map.pin();
             match guard.get(&*signal.kind) {
                 Some(arc) => Arc::clone(arc),
@@ -201,8 +245,14 @@ impl HandlerTable {
             }
         };
         let mut has_closed = false;
-        for tx in snapshot.iter() {
-            match tx.try_send(signal.clone()) {
+        for fs in snapshot.iter() {
+            // Sender-identity filter: skip this slot if the sender is not trusted.
+            if let Some(ref trusted) = fs.filter {
+                if !trusted.iter().any(|id| id == &signal.sender) {
+                    continue;
+                }
+            }
+            match fs.tx.try_send(signal.clone()) {
                 Ok(()) => {}
                 Err(TrySendError::Full(_)) => {
                     warn!(
@@ -219,7 +269,7 @@ impl HandlerTable {
             self.map.pin().compute(signal.kind.clone(), |existing| match existing {
                 None => papaya::Operation::Abort(()),
                 Some((_, arc)) => {
-                    let filtered: Vec<_> = arc.iter().filter(|tx| !tx.is_closed()).cloned().collect();
+                    let filtered: Vec<_> = arc.iter().filter(|fs| !fs.is_closed()).cloned().collect();
                     if filtered.is_empty() {
                         papaya::Operation::Remove
                     } else {
@@ -468,6 +518,20 @@ impl SignalHandlers {
     /// Returns a new `mpsc::Receiver<Signal>` for `kind` with a caller-specified channel depth.
     pub(crate) fn register_with_capacity(&self, kind: Arc<str>, cap: usize) -> mpsc::Receiver<Signal> {
         self.handlers.register_with_capacity(kind, cap)
+    }
+
+    /// Returns a receiver that only delivers signals whose `sender` is in `trusted`.
+    /// An empty `trusted` list is equivalent to `register` — no filter overhead.
+    pub(crate) fn register_from(
+        &self,
+        kind:    Arc<str>,
+        trusted: Vec<NodeId>,
+    ) -> mpsc::Receiver<Signal> {
+        if trusted.is_empty() {
+            return self.handlers.register_with_capacity(kind, 256);
+        }
+        let trusted_arc: Arc<[NodeId]> = trusted.into();
+        self.handlers.register_with_filter(kind, 256, trusted_arc)
     }
 
     /// Returns the maximum fill ratio across all open senders for `kind`.

@@ -35,6 +35,33 @@ impl GossipAgent {
         self.task_ctx.signal_handlers.register_with_capacity(kind.into(), cap)
     }
 
+    /// Like [`signal_rx`](Self::signal_rx) but only delivers signals whose
+    /// `sender` is in the `trusted` list.
+    ///
+    /// An empty `trusted` list is equivalent to [`signal_rx`](Self::signal_rx) —
+    /// no filter overhead is incurred and all senders are accepted.
+    ///
+    /// Use this when a subscriber should only accept signals from known, authorised
+    /// senders — for example, an LLM agent accepting task instructions only from
+    /// designated orchestrator nodes. Signals from any sender not in `trusted` are
+    /// silently discarded at the fan-out layer before reaching the channel.
+    ///
+    /// # Security note
+    /// This filter operates on `Signal::sender`, which is the advertised [`NodeId`]
+    /// of the emitting node. Under the `tls` feature, node identity is backed by
+    /// an Ed25519 keypair; without TLS, `NodeId` is the TCP address and is
+    /// unauthenticated. Enable `--features tls` for cryptographic sender guarantees.
+    ///
+    /// [`NodeId`]: crate::NodeId
+    #[must_use]
+    pub fn signal_rx_from(
+        &self,
+        kind:    impl Into<Arc<str>>,
+        trusted: Vec<crate::node_id::NodeId>,
+    ) -> mpsc::Receiver<Signal> {
+        self.task_ctx.signal_handlers.register_from(kind.into(), trusted)
+    }
+
     /// Emits a signal to the cluster.
     ///
     /// The signal is delivered locally first (if admitted by this node's boundary),
