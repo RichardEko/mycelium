@@ -295,7 +295,7 @@ impl GossipAgent {
     }
 
     /// Acquires the task-handles lock, recovering from poison.
-    pub(super) fn task_handles_lock(&self) -> std::sync::MutexGuard<JoinSet<()>> {
+    pub(super) fn task_handles_lock(&self) -> std::sync::MutexGuard<'_, JoinSet<()>> {
         self.task_handles.lock().unwrap_or_else(|e| e.into_inner())
     }
 

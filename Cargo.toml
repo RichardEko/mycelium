@@ -120,3 +120,7 @@ codegen-units = 1
 opt-level = 3
 panic = "abort"
 incremental = false
+
+[lints.clippy]
+# Pre-existing pattern in test code — not worth refactoring 61 test initialisers
+field_reassign_with_default = "allow"
