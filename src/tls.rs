@@ -97,7 +97,7 @@ mod imp {
         }
 
         // ── 3. Node cert (regenerated every startup, signed by CA) ───────
-        let node_cert_der = generate_node_cert(node_id, &signing_key, &ca_cert_der, &ca_key_pair)?;
+        let node_cert_der = generate_node_cert(node_id, &signing_key, &ca_key_pair)?;
 
         // ── 4. Build rustls configs ───────────────────────────────────────
         let (server_config, client_config) =
@@ -140,7 +140,6 @@ mod imp {
     fn generate_node_cert(
         node_id: &NodeId,
         signing_key: &SigningKey,
-        ca_cert_der: &CertificateDer<'static>,
         ca_key_pair: &KeyPair,
     ) -> Result<CertificateDer<'static>, GossipError> {
         use ed25519_dalek::pkcs8::EncodePrivateKey;
@@ -160,12 +159,19 @@ mod imp {
         params.not_before = rcgen::date_time_ymd(2024, 1, 1);
         params.not_after  = rcgen::date_time_ymd(2099, 1, 1);
 
-        // Reconstruct the CA Certificate object from DER + key for signing
-        let ca_params = CertificateParams::from_ca_cert_der(ca_cert_der)
-            .map_err(|e| GossipError::Config(format!("TLS: parse CA cert DER: {e}")))?;
+        // Reconstruct the CA Certificate for signing from the key pair + known fixed params.
+        // rcgen 0.13 removed CertificateParams::from_ca_cert_der; since Mycelium always
+        // generates its own CA with these exact params, reconstruction is deterministic.
+        // Rustls verifies the chain via the SubjectKeyIdentifier (public-key hash), not the
+        // serial number, so the reconstructed cert's AKI matches the saved ca-cert.pem.
+        let mut ca_params = CertificateParams::new(vec![])
+            .map_err(|e| GossipError::Config(format!("TLS: CA params for signing: {e}")))?;
+        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        ca_params.not_before = rcgen::date_time_ymd(2024, 1, 1);
+        ca_params.not_after  = rcgen::date_time_ymd(2099, 1, 1);
         let signing_ca = ca_params
             .self_signed(ca_key_pair)
-            .map_err(|e| GossipError::Config(format!("TLS: reconstruct CA: {e}")))?;
+            .map_err(|e| GossipError::Config(format!("TLS: reconstruct CA for signing: {e}")))?;
 
         let node_cert = params
             .signed_by(&node_key_pair, &signing_ca, ca_key_pair)

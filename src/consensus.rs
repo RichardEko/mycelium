@@ -503,7 +503,7 @@ impl ConsensusEngine {
         if let Some(tls) = self.task_ctx.tls.get() {
             let sig = crate::tls::sign_bytes(&tls.signing_key, &bytes);
             let signed = SignedConsensusMsg {
-                msg_bytes:  bytes,
+                msg_bytes:  bytes.clone(),
                 signer:     self.task_ctx.node_id.clone(),
                 signature:  sig,
             };
