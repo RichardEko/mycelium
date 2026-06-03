@@ -243,7 +243,7 @@ pub(crate) fn dispatch_gossip_try_send(
         Ok(())                     => true,
         Err(TrySendError::Full(_)) => {
             let n = dropped.fetch_add(1, Ordering::Relaxed) + 1;
-            if n % 1_000 == 0 {
+            if n.is_multiple_of(1_000) {
                 warn!("Gossip channel saturation: {} cumulative frames dropped", n);
             }
             false

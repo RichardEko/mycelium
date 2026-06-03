@@ -177,7 +177,7 @@ pub(crate) struct WriterEntry {
 impl WriterEntry {
     /// Returns `true` if the writer task is alive or its spawn is still pending.
     pub(crate) fn is_live(&self) -> bool {
-        self.abort_handle.as_ref().map_or(true, |h| !h.is_finished())
+        self.abort_handle.as_ref().is_none_or(|h| !h.is_finished())
     }
 }
 
