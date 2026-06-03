@@ -155,7 +155,58 @@ pub(crate) fn emit_signal(
     }
     dispatch_gossip_try_send(
         &ctx.gossip_txs,
-        WireMessage::Signal { ttl: ctx.default_ttl, nonce, sender: ctx.node_id.clone(), scope, kind, payload },
+        WireMessage::Signal { ttl: ctx.default_ttl, nonce, sender: ctx.node_id.clone(), scope, kind, payload, hlc_seq: None },
+        ctx.node_id.id_hash(), hint, &ctx.kv_state.dropped_frames,
+    )
+}
+
+/// Like [`emit_signal`] but stamps a HLC sequence number so the receiver can
+/// buffer and deliver signals from this sender in causal order.
+///
+/// Calls `hlc.tick()` to obtain a strictly-monotonic timestamp and sets
+/// `hlc_seq = Some(ts)` on the wire frame. Receivers with
+/// `signal_ordered_delivery = true` buffer and deliver these signals in
+/// ascending HLC order per `(sender, kind)`.
+pub(crate) fn emit_signal_ordered(
+    ctx:     &TaskCtx,
+    kind:    Arc<str>,
+    scope:   SignalScope,
+    payload: Bytes,
+) -> bool {
+    let nonce  = fastrand::u64(1..);
+    let ts     = crate::hlc::physical_ms(ctx.hlc.current());
+    let hlc_seq = ctx.hlc.tick();
+    ctx.seen.mark_and_check(nonce, ts);
+    let sig = Signal {
+        kind: kind.clone(), scope: scope.clone(),
+        payload: payload.clone(), sender: ctx.node_id.clone(), nonce,
+    };
+    let nonce_claimed = if payload.len() >= 8
+        && (kind.as_ref() == signal_kind::RPC_RESULT || kind.as_ref() == signal_kind::BULK_RESULT)
+    {
+        let call_nonce = u64::from_le_bytes(payload[..8].try_into().unwrap());
+        if let Some(tx) = ctx.rpc_pending.lock().unwrap().remove(&call_nonce) {
+            let _ = tx.send(sig.clone());
+            true
+        } else { false }
+    } else { false };
+    if !nonce_claimed {
+        let handler_fill = ctx.signal_handlers.fill_ratio(&kind);
+        let combined = handler_fill.max(crate::framing::gossip_shard_fill(&ctx.gossip_txs));
+        deliver_locally(&ctx.signal_boundary, &ctx.signal_handlers, &sig, combined);
+    }
+    let hint = match &scope {
+        SignalScope::System           => ForwardHint::All,
+        SignalScope::Group(name)      => ForwardHint::Group(name.clone()),
+        SignalScope::Individual(peer) => ForwardHint::Individual(peer.clone()),
+        SignalScope::Groups(_)        => ForwardHint::All,
+    };
+    dispatch_gossip_try_send(
+        &ctx.gossip_txs,
+        WireMessage::Signal {
+            ttl: ctx.default_ttl, nonce, sender: ctx.node_id.clone(),
+            scope, kind, payload, hlc_seq: Some(hlc_seq),
+        },
         ctx.node_id.id_hash(), hint, &ctx.kv_state.dropped_frames,
     )
 }
@@ -190,7 +241,7 @@ pub(crate) async fn emit_signal_async(
     };
     dispatch_gossip_send(
         &ctx.gossip_txs,
-        WireMessage::Signal { ttl: ctx.default_ttl, nonce, sender: ctx.node_id.clone(), scope, kind, payload },
+        WireMessage::Signal { ttl: ctx.default_ttl, nonce, sender: ctx.node_id.clone(), scope, kind, payload, hlc_seq: None },
         ctx.node_id.id_hash(), hint,
     ).await
 }

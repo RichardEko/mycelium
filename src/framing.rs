@@ -64,14 +64,16 @@ pub(crate) const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
 ///   5. After all nodes are upgraded, set `PREV_WIRE_VERSION = WIRE_VERSION` to close
 ///      the acceptance window.
 ///
-/// **Current state**: `PREV_WIRE_VERSION = 9`, `WIRE_VERSION = 10`. v9 peers send only
-/// `Data` frames; the v10 decoder handles these without a shim because `SignedData` (the
-/// only new v10 variant) can never appear in a v9 frame.
-pub(crate) const WIRE_VERSION: u8 = 10;
+/// **Current state**: `PREV_WIRE_VERSION = 10`, `WIRE_VERSION = 11`. v11 adds
+/// `hlc_seq: Option<u64>` to `WireMessage::Signal` for causal ordering
+/// (`emit_ordered`). v10 peers emit Signal frames without this field; they are
+/// decoded via `WireMessageV10` and converted to `WireMessage` with
+/// `hlc_seq = None` — the "unordered" sentinel, which is identical to the old
+/// delivery path. A `WireMessageV10` shim is required because adding a field to
+/// an enum variant changes the bincode layout.
+pub(crate) const WIRE_VERSION: u8 = 11;
 /// Previous wire version accepted during rolling upgrades.
-/// v9 peers send only `WireMessage::Data` frames (never `SignedData`), so both versions
-/// decode cleanly with the same `WireMessage` type — no `WireMessageV9` shim needed.
-pub(crate) const PREV_WIRE_VERSION: u8 = 9;
+pub(crate) const PREV_WIRE_VERSION: u8 = 10;
 
 /// Which wire version a received frame was encoded with.
 /// Used by `handle_connection` to select the appropriate decoder and to decide
@@ -171,6 +173,10 @@ pub(crate) enum WireMessage {
         scope:   SignalScope,
         kind:    Arc<str>,
         payload: bytes::Bytes,
+        /// HLC timestamp stamped by the sender at `emit_ordered()` time.
+        /// `None` = unordered emission (v10 compat); receiver delivers immediately.
+        /// `Some(ts)` = ordered; receiver may buffer to ensure causal delivery.
+        hlc_seq: Option<u64>,
     },
     /// An Ed25519-signed KV write (`tls` feature). Carries the originator's signature
     /// over the hop-invariant fields of `update` (see `canonical_sign_bytes`).
@@ -303,7 +309,49 @@ impl From<WireMessageV7> for WireMessage {
             WireMessageV7::StateResponse { entries } =>
                 WireMessage::StateResponse { entries },
             WireMessageV7::Signal { ttl, nonce, sender, scope, kind, payload } =>
-                WireMessage::Signal { ttl, nonce, sender, scope, kind, payload },
+                WireMessage::Signal { ttl, nonce, sender, scope, kind, payload, hlc_seq: None },
+        }
+    }
+}
+
+/// v10 wire layout. Identical to `WireMessage` except `Signal` lacks `hlc_seq`.
+/// Used to decode frames from v10 peers during rolling upgrades; converted to
+/// `WireMessage` via `From`, filling `hlc_seq = None`.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) enum WireMessageV10 {
+    Data(GossipUpdate),
+    Ping { sender: NodeId, known_peers: Vec<NodeId> },
+    StateRequest { sender: NodeId, store_hash: u64, key_timestamps: Vec<(Arc<str>, u64)> },
+    StateResponse { entries: Vec<SyncEntry> },
+    /// v10 Signal — no `hlc_seq` field.
+    Signal {
+        ttl:     u8,
+        nonce:   u64,
+        sender:  NodeId,
+        scope:   SignalScope,
+        kind:    Arc<str>,
+        payload: bytes::Bytes,
+    },
+    /// Ed25519-signed KV write (tls feature). Layout unchanged from v10.
+    #[cfg(feature = "tls")]
+    SignedData { update: GossipUpdate, signer: u64, signature: ([u8; 32], [u8; 32]) },
+}
+
+impl From<WireMessageV10> for WireMessage {
+    fn from(m: WireMessageV10) -> Self {
+        match m {
+            WireMessageV10::Data(u) => WireMessage::Data(u),
+            WireMessageV10::Ping { sender, known_peers } =>
+                WireMessage::Ping { sender, known_peers },
+            WireMessageV10::StateRequest { sender, store_hash, key_timestamps } =>
+                WireMessage::StateRequest { sender, store_hash, key_timestamps },
+            WireMessageV10::StateResponse { entries } =>
+                WireMessage::StateResponse { entries },
+            WireMessageV10::Signal { ttl, nonce, sender, scope, kind, payload } =>
+                WireMessage::Signal { ttl, nonce, sender, scope, kind, payload, hlc_seq: None },
+            #[cfg(feature = "tls")]
+            WireMessageV10::SignedData { update, signer, signature } =>
+                WireMessage::SignedData { update, signer, signature },
         }
     }
 }

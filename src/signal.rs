@@ -855,4 +855,197 @@ pub mod kv_ns {
     /// `update_prompt`; tombstoned by `delete_prompt`. No refresh task — this is
     /// configuration, not a presence signal. The `cap/` entry is the presence heartbeat.
     pub const PROMPTS: &str = "prompts/";
+}  // end kv_ns
+
+// ── Reorder buffer ────────────────────────────────────────────────────────────
+
+use std::collections::{BinaryHeap, HashMap as StdHashMap};
+use std::cmp::Reverse;
+
+/// Per-`(sender, kind)` min-heap entry, ordered by ascending `hlc_seq`.
+struct PendingSignal {
+    hlc_seq:     u64,
+    signal:      Signal,
+    received_at: Instant,
+}
+
+impl PartialEq  for PendingSignal { fn eq(&self, o: &Self) -> bool { self.hlc_seq == o.hlc_seq } }
+impl Eq         for PendingSignal {}
+impl PartialOrd for PendingSignal {
+    fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(o)) }
+}
+impl Ord for PendingSignal {
+    fn cmp(&self, o: &Self) -> std::cmp::Ordering { self.hlc_seq.cmp(&o.hlc_seq) }
+}
+
+/// Receiver-side causal delivery buffer for signals emitted via `emit_ordered`.
+///
+/// Signals are buffered per `(sender, kind)` in a min-heap keyed by `hlc_seq`.
+/// Each call to `ingest` delivers everything in the heap in ascending HLC order,
+/// discarding entries at or below the current watermark (already delivered).
+/// `flush_expired` delivers signals that have been held longer than `max_hold`
+/// or when a buffer exceeds `max_depth`, preventing head-of-line blocking.
+pub(crate) struct SignalReorderBuffer {
+    pending:    StdHashMap<(NodeId, Arc<str>), BinaryHeap<Reverse<PendingSignal>>>,
+    watermarks: StdHashMap<(NodeId, Arc<str>), u64>,
+    max_hold:   Duration,
+    max_depth:  usize,
+}
+
+impl SignalReorderBuffer {
+    pub(crate) fn new(max_hold: Duration, max_depth: usize) -> Self {
+        Self {
+            pending:    StdHashMap::new(),
+            watermarks: StdHashMap::new(),
+            max_hold,
+            max_depth,
+        }
+    }
+
+    /// Ingests a signal with its HLC emission timestamp. Returns signals ready
+    /// to deliver in ascending HLC order. Signals at or below the watermark
+    /// (already delivered) are silently discarded.
+    pub(crate) fn ingest(&mut self, hlc_seq: u64, signal: Signal) -> Vec<Signal> {
+        let key = (signal.sender.clone(), signal.kind.clone());
+        if hlc_seq <= self.watermarks.get(&key).copied().unwrap_or(0) {
+            return vec![];
+        }
+        self.pending.entry(key.clone()).or_default()
+            .push(Reverse(PendingSignal { hlc_seq, signal, received_at: Instant::now() }));
+        self.drain(&key, false)
+    }
+
+    /// Delivers any signals older than `max_hold` or in buffers deeper than
+    /// `max_depth`. Call on each receive-loop iteration to bound latency.
+    pub(crate) fn flush_expired(&mut self) -> Vec<Signal> {
+        let keys: Vec<_> = self.pending.keys().cloned().collect();
+        let mut out = Vec::new();
+        for key in keys { out.extend(self.drain(&key, true)); }
+        out
+    }
+
+    fn drain(&mut self, key: &(NodeId, Arc<str>), force: bool) -> Vec<Signal> {
+        let Some(heap) = self.pending.get_mut(key) else { return vec![] };
+        let wm = self.watermarks.entry(key.clone()).or_insert(0);
+        let now = Instant::now();
+
+        // Determine flush policy once, before any pops change the depth.
+        let flush = force
+            || heap.len() > self.max_depth
+            || heap.peek().is_some_and(|Reverse(t)| {
+                now.duration_since(t.received_at) >= self.max_hold
+            });
+
+        if !flush {
+            return vec![];
+        }
+
+        let mut out = Vec::new();
+        loop {
+            match heap.peek() {
+                None => break,
+                Some(Reverse(top)) if top.hlc_seq <= *wm => { heap.pop(); } // stale
+                _ => {
+                    let Reverse(e) = heap.pop().unwrap();
+                    *wm = (*wm).max(e.hlc_seq);
+                    out.push(e.signal);
+                }
+            }
+        }
+
+        if heap.is_empty() { self.pending.remove(key); }
+        out
+    }
+}
+
+#[cfg(test)]
+mod reorder_tests {
+    use super::*;
+    use crate::node_id::NodeId;
+    use bytes::Bytes;
+    use std::time::Duration;
+
+    fn make_signal(sender: &NodeId, kind: &str, nonce: u64) -> Signal {
+        Signal {
+            kind:    Arc::from(kind),
+            scope:   crate::signal::SignalScope::System,
+            payload: Bytes::new(),
+            sender:  sender.clone(),
+            nonce,
+        }
+    }
+
+    fn node() -> NodeId { "127.0.0.1:9000".parse().unwrap() }
+
+    #[test]
+    fn inorder_delivered_at_zero_hold() {
+        // max_hold=0ms → age >= 0ms always true → signals drain immediately from ingest.
+        let mut buf = SignalReorderBuffer::new(Duration::from_millis(0), 64);
+        let n = node();
+        let out = buf.ingest(10, make_signal(&n, "test", 1));
+        assert_eq!(out.len(), 1);
+        let out = buf.ingest(20, make_signal(&n, "test", 2));
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn signals_held_until_max_hold_expires() {
+        // With a large max_hold, signals are held in the buffer.
+        let mut buf = SignalReorderBuffer::new(Duration::from_secs(60), 64);
+        let n = node();
+        let out = buf.ingest(10, make_signal(&n, "test", 1));
+        assert!(out.is_empty(), "signal should be held");
+        let out = buf.ingest(20, make_signal(&n, "test", 2));
+        assert!(out.is_empty(), "signal should be held");
+    }
+
+    #[test]
+    fn stale_signal_discarded() {
+        // max_hold=0ms so hlc_seq=20 is delivered immediately; hlc_seq=10 then stale.
+        let mut buf = SignalReorderBuffer::new(Duration::from_millis(0), 64);
+        let n = node();
+        let out = buf.ingest(20, make_signal(&n, "test", 1));
+        assert_eq!(out.len(), 1);
+        // hlc_seq=10 arrives after hlc_seq=20 was delivered — stale
+        let out = buf.ingest(10, make_signal(&n, "test", 2));
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn max_depth_forces_flush_in_hlc_order() {
+        // Signals arrive in reverse HLC order; third push exceeds max_depth=2 → flush all.
+        let mut buf = SignalReorderBuffer::new(Duration::from_secs(999), 2);
+        let n = node();
+        let r1 = buf.ingest(30, make_signal(&n, "test", 1)); // depth=1, held
+        let r2 = buf.ingest(20, make_signal(&n, "test", 2)); // depth=2, held
+        let out = buf.ingest(10, make_signal(&n, "test", 3)); // depth=3>max → flush in HLC order
+        assert!(r1.is_empty());
+        assert!(r2.is_empty());
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].nonce, 3); // hlc_seq=10 (smallest)
+        assert_eq!(out[1].nonce, 2); // hlc_seq=20
+        assert_eq!(out[2].nonce, 1); // hlc_seq=30 (largest)
+    }
+
+    #[test]
+    fn flush_expired_delivers_held_signals() {
+        // With a large max_hold, signals are held; flush_expired (force=true) releases them.
+        let mut buf = SignalReorderBuffer::new(Duration::from_secs(60), 64);
+        let n = node();
+        let out = buf.ingest(10, make_signal(&n, "test", 1));
+        assert!(out.is_empty(), "signal should be held before flush");
+        let out = buf.flush_expired();
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn hlc_seq_none_bypasses_buffer() {
+        // The buffer is only called when hlc_seq is Some — this test documents
+        // that the None path doesn't go through the buffer at all (enforced by
+        // the connection.rs call site, not by SignalReorderBuffer itself).
+        let mut buf = SignalReorderBuffer::new(Duration::from_secs(1), 64);
+        assert!(buf.pending.is_empty());
+        let _ = buf.flush_expired(); // no-op on empty buffer
+        assert!(buf.pending.is_empty());
+    }
 }

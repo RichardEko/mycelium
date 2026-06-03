@@ -128,6 +128,7 @@ fn spawn_handler(
         peer_keys: Arc::new(papaya::HashMap::new()),
         peers: Arc::new(papaya::HashMap::new()),
         filter_opacity_registry: Arc::new(crate::agent::FilterOpacityRegistry::new()),
+        reorder_buf: None,
     });
     let ctx = ConnContext {
         task_ctx,
@@ -475,6 +476,7 @@ async fn test_subscribe_notified_via_gossip() {
             peer_keys: Arc::new(papaya::HashMap::new()),
             peers: Arc::new(papaya::HashMap::new()),
             filter_opacity_registry: Arc::new(crate::agent::FilterOpacityRegistry::new()),
+            reorder_buf: None,
         });
         let ctx = ConnContext {
             task_ctx,

@@ -290,6 +290,34 @@ pub struct GossipConfig {
     /// Default: 600 (10 minutes).
     pub signal_window_secs: u64,
 
+    /// Enable causal delivery ordering for signals emitted via
+    /// [`emit_ordered`](crate::GossipAgent::emit_ordered).
+    ///
+    /// When `true`, received signals that carry an `hlc_seq` timestamp are
+    /// buffered in a per-`(sender, kind)` min-heap and delivered in ascending
+    /// HLC order. Signals without `hlc_seq` (unordered `emit`) bypass the
+    /// buffer entirely — zero cost to existing callers.
+    ///
+    /// When `false` (the default), `hlc_seq` is ignored and all signals are
+    /// delivered immediately in arrival order.
+    pub signal_ordered_delivery: bool,
+
+    /// Maximum time (ms) a signal may be held in the reorder buffer waiting
+    /// for earlier signals to arrive. After this deadline the signal is
+    /// delivered regardless of gaps. Only relevant when
+    /// `signal_ordered_delivery = true`.
+    ///
+    /// Default: 500.
+    pub signal_reorder_max_hold_ms: u64,
+
+    /// Maximum number of buffered signals per `(sender, kind)` pair before a
+    /// forced flush (delivered in HLC order). Prevents unbounded growth if a
+    /// sender emits many ordered signals faster than the buffer can drain.
+    /// Only relevant when `signal_ordered_delivery = true`.
+    ///
+    /// Default: 64.
+    pub signal_reorder_max_depth: usize,
+
     /// Maximum number of **live** (non-tombstone) entries in the KV store.
     ///
     /// When the live count reaches this limit, new live writes are silently dropped.
@@ -400,6 +428,9 @@ impl Default for GossipConfig {
             epidemic_extra_peers:   3,
             health_check_max_jitter_ms: 0,
             signal_window_secs: 600,
+            signal_ordered_delivery:     false,
+            signal_reorder_max_hold_ms:  500,
+            signal_reorder_max_depth:    64,
             max_store_entries: 0,
             locality_path:     Vec::new(),
             topology_policies: HashMap::new(),

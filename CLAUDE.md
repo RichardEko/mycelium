@@ -83,11 +83,10 @@ These are real work items. Anyone resuming should read
 
 | Plan | What's pending |
 |---|---|
-| Signal reorder buffer | `emit_ordered()` + wire v11 `hlc_seq` field + per-(sender,kind) buffer in connection.rs — plan at `~/.claude/plans/plan_signal_reorder_buffer.md` |
 | TupleSpace companion crate | Deferred; design at `~/.claude/plans/mycelium-tuple-space.md` |
 | Compliance feature (`--features compliance`) | Full plan at `~/.claude/plans/humble-twirling-comet.md`; not yet implemented |
 
-**Already shipped (removed from list):** fuzz harness (`fuzz/fuzz_targets/`), SignalHandlers split, ConsensusEngine::propose extraction, locality/topology Phases 0–7, cross-group consensus Phase 8 (`cross_group_propose` + `GroupQuorum`), watcher C2 (`run_consolidated_opacity_watcher` + `FilterOpacityRegistry`).
+**Already shipped (removed from list):** fuzz harness (`fuzz/fuzz_targets/`), SignalHandlers split, ConsensusEngine::propose extraction, locality/topology Phases 0–7, cross-group consensus Phase 8 (`cross_group_propose` + `GroupQuorum`), watcher C2 (`run_consolidated_opacity_watcher` + `FilterOpacityRegistry`), signal reorder buffer (`emit_ordered()` + wire v11 `hlc_seq`).
 
 ## Working in this repo
 
@@ -96,9 +95,10 @@ These are real work items. Anyone resuming should read
 - `cargo build --lib --features a2a` to include the A2A protocol adapter
 - `cargo build --lib --features llm` to include the Prompt Skills LLM adapter
 - `cargo build --lib --features compliance` to include gateway auth, durable audit, RBAC (planned, not yet implemented)
-- 243 tests at HEAD (with `--features llm`); 235 without any extra feature; clippy at baseline 61
+- 241 tests at HEAD (with `--features llm`); clippy at baseline 61
   (pre-existing `field_reassign_with_default` in test code).
-- Wire version is currently **v10** (`PREV_WIRE_VERSION = 9` — rolling upgrade window open).
+- Wire version is currently **v11** (`PREV_WIRE_VERSION = 10` — rolling upgrade window open).
+  v11 adds `hlc_seq: Option<u64>` to `WireMessage::Signal` for ordered delivery via `emit_ordered()`.
   v10 adds `WireMessage::SignedData` for Ed25519-signed KV writes under the `tls` feature.
 - **Agentic Flow Networks demo**: `examples/fluid_pipeline/` — 10-worker fluid pool,
   KV ring as distributed buffer, 4-stage news article pipeline. Run with

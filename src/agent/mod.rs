@@ -185,6 +185,9 @@ pub(crate) struct TaskCtx {
     /// Shared registry for the consolidated `declare_requirement` opacity watcher.
     /// A single background task reads from this instead of one task per requirement.
     pub(crate) filter_opacity_registry: Arc<capability_ops::FilterOpacityRegistry>,
+    /// Receiver-side causal reorder buffer for `emit_ordered` signals.
+    /// `None` when `config.signal_ordered_delivery = false` (the default).
+    pub(crate) reorder_buf: Option<Arc<std::sync::Mutex<crate::signal::SignalReorderBuffer>>>,
 }
 
 /// Core gossip agent.
@@ -361,6 +364,16 @@ impl GossipAgent {
             peer_keys: Arc::new(papaya::HashMap::new()),
             peers: Arc::clone(&peers_arc),
             filter_opacity_registry: Arc::new(capability_ops::FilterOpacityRegistry::new()),
+            reorder_buf: if config.signal_ordered_delivery {
+                Some(Arc::new(std::sync::Mutex::new(
+                    crate::signal::SignalReorderBuffer::new(
+                        std::time::Duration::from_millis(config.signal_reorder_max_hold_ms),
+                        config.signal_reorder_max_depth,
+                    )
+                )))
+            } else {
+                None
+            },
         });
 
         Self {

@@ -1,7 +1,7 @@
 # Mycelium — Engineering Roadmap
 
-> **Status:** Layer 1 complete. Layer 2 complete. Consensus complete. Capability & Discovery subsystem complete. Agent state machine (Layer V) complete. MCP bridge (server + client) complete. Config-driven capability probing complete. KV persistence (WAL + snapshot, all sync modes) complete. Layer 3 Service Patterns complete (HTTP server, SSE, rpc_call/rpc_respond, invoke.bulk, Actor/Event mailboxes, scatter-gather). Multi-machine integration tests (Docker Compose, 12 unattended scenarios) complete. **mTLS peer connections + Ed25519 node identity + consensus payload signing complete** (`tls` feature). Python language bridge (`mycelium-py`) complete. **SkillRunner** (`.skill.toml` capability-as-skill, OpenAI-compatible LLM driver, HLC audit trail + OTEL) complete. **Opt-In Consistency & Ordering Overlay complete** (`consistent_set/get`, `distributed_lock`, `elect_leader`, `append`/`scan_log`/`compact_log`/`subscribe_log`/`subscribe_log_group`, `emit_reliable` — all exposed via HTTP gateway and Python SDK). **Layer 5 Observability complete** (`metrics` feature — Prometheus scrape endpoint at `/metrics`, 10 counters/gauge/histogram, Grafana dashboard at `dashboards/mycelium-grafana.json`). **TypeScript language bridge complete** (`mycelium-ts` — 28 methods, SSE streaming, all overlay endpoints, mirrors Python SDK). **Cluster Sharding complete** (`shard_for`/`emit_sharded` + HTTP gateway + Python & TS SDKs). **KV Write Signing complete** (Ed25519 `WireMessage::SignedData`, wire v10). **A2A Adapter complete** (`a2a` feature — `/.well-known/agent.json`, `/a2a` JSON-RPC, Python & TS `A2aClient`). **Cross-Group Consensus complete** (`cross_group_propose` + `GroupQuorum` — multi-voting-bloc proposals with independent per-group quorum fractions, `SignalScope::Groups` variant, HTTP gateway + Python & TS SDKs). **Prompt Skills complete** (`llm` feature — `PromptTemplate` stored in KV, `register_prompt_skill`/`call_prompt_skill` on `GossipAgent`, `OpenAiBackend`/`EchoBackend`, HTTP gateway `/gateway/prompts` + `/gateway/llm/call` + `/gateway/llm/stream`, Python `PromptSkillClient`, TS `PromptSkillClient` — 243 tests). **Research paper in progress** — *"The Coordinator Trap: Why Mediated Multi-Agent Architectures Cannot Scale and a Substrate-Based Alternative"* — target AAMAS 2027; first draft + structural revision complete (2026-05-28); §8 evaluation benchmarks pending empirical runs.
-> **Last updated:** 2026-05-28
+> **Status:** Layer 1 complete. Layer 2 complete. Consensus complete. Capability & Discovery subsystem complete. Agent state machine (Layer V) complete. MCP bridge (server + client) complete. Config-driven capability probing complete. KV persistence (WAL + snapshot, all sync modes) complete. Layer 3 Service Patterns complete (HTTP server, SSE, rpc_call/rpc_respond, invoke.bulk, Actor/Event mailboxes, scatter-gather). Multi-machine integration tests (Docker Compose, 12 unattended scenarios) complete. **mTLS peer connections + Ed25519 node identity + consensus payload signing complete** (`tls` feature). Python language bridge (`mycelium-py`) complete. **SkillRunner** (`.skill.toml` capability-as-skill, OpenAI-compatible LLM driver, HLC audit trail + OTEL) complete. **Opt-In Consistency & Ordering Overlay complete** (`consistent_set/get`, `distributed_lock`, `elect_leader`, `append`/`scan_log`/`compact_log`/`subscribe_log`/`subscribe_log_group`, `emit_reliable` — all exposed via HTTP gateway and Python SDK). **Layer 5 Observability complete** (`metrics` feature — Prometheus scrape endpoint at `/metrics`, 10 counters/gauge/histogram, Grafana dashboard at `dashboards/mycelium-grafana.json`). **TypeScript language bridge complete** (`mycelium-ts` — 28 methods, SSE streaming, all overlay endpoints, mirrors Python SDK). **Cluster Sharding complete** (`shard_for`/`emit_sharded` + HTTP gateway + Python & TS SDKs). **KV Write Signing complete** (Ed25519 `WireMessage::SignedData`, wire v10). **A2A Adapter complete** (`a2a` feature — `/.well-known/agent.json`, `/a2a` JSON-RPC, Python & TS `A2aClient`). **Cross-Group Consensus complete** (`cross_group_propose` + `GroupQuorum` — multi-voting-bloc proposals with independent per-group quorum fractions, `SignalScope::Groups` variant, HTTP gateway + Python & TS SDKs). **Prompt Skills complete** (`llm` feature — `PromptTemplate` stored in KV, `register_prompt_skill`/`call_prompt_skill` on `GossipAgent`, `OpenAiBackend`/`EchoBackend`, HTTP gateway `/gateway/prompts` + `/gateway/llm/call` + `/gateway/llm/stream`, Python `PromptSkillClient`, TS `PromptSkillClient` — 241 tests). **Signal Reorder Buffer complete** (`emit_ordered()`, `hlc_seq` wire field, wire v11, per-`(sender,kind)` min-heap, `GossipConfig::signal_ordered_delivery`). **Watcher C2 complete** (consolidated requirement opacity watcher — one task, one `cap/` subscription for all declared requirements). **Research paper in progress** — *"The Coordinator Trap: Why Mediated Multi-Agent Architectures Cannot Scale and a Substrate-Based Alternative"* — target AAMAS 2027; first draft + structural revision complete (2026-05-28); §8 evaluation benchmarks pending empirical runs.
+> **Last updated:** 2026-06-03
 
 ---
 
@@ -1358,8 +1358,8 @@ mechanism. This is new API surface over existing primitives, not new infrastruct
 
 ### Reliable Delivery — Akka parity
 
-ACK retry over `rpc_call` (Layer 3). The HLC and signal reorder buffer (already designed)
-handle causal ordering and dedup on the receiver side.
+ACK retry over `rpc_call` (Layer 3). The HLC and signal reorder buffer handle causal ordering
+and dedup on the receiver side.
 
 ```rust
 // Fire-and-forget with ACK — retries until acknowledged or timeout
@@ -1371,7 +1371,7 @@ let result = agent.emit_reliable(
 ).await?;  // → AckResult::Acknowledged | AckResult::Timeout
 ```
 
-**Foundation:** `rpc_call` (Layer 3), signal reorder buffer (planned).
+**Foundation:** `rpc_call` (Layer 3), signal reorder buffer (complete).
 
 ### Cluster Sharding — Akka Cluster Sharding parity
 
@@ -1453,6 +1453,7 @@ Weeks:  0         2          4          6          8         10        12
 | **Production** | KV persistence: WAL + snapshot/replay; consensus committed-slot durability | **Complete** |
 | **Production** | Security: mTLS peer connections + NodeId keypair + consensus payload signing | **Complete** |
 | **Production** | KV write signing: Ed25519-signed gossip frames (`WireMessage::SignedData`, v10 wire) | **Complete** |
+| Layer 2 | Signal reorder buffer: `emit_ordered()`, `hlc_seq` wire field (v11), per-`(sender,kind)` min-heap, watermark dedup, config-driven | **Complete** |
 | Consistency overlay | `consistent_set`, `consistent_get`, `distributed_lock`, `elect_leader` | **Complete** |
 | Ordering overlay | `append`, `subscribe_log`, `scan_log`, `compact_log` (ordered log) | **Complete** |
 | Ordering overlay | `subscribe_log_group` + consumer group offset tracking | **Complete** |

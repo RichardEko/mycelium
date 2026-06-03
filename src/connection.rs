@@ -3,7 +3,7 @@ use crate::error::GossipError;
 use crate::framing::{
     bincode_cfg, dispatch_gossip_try_send, is_connection_closed,
     make_gossip_update, read_frame, shard_for_key, sync_entry_from, ForwardHint, FrameVersion,
-    GossipUpdate, SyncEntry, WireMessage, WireMessageV7, ANTI_ENTROPY_NONCE, DATA_TAG,
+    GossipUpdate, SyncEntry, WireMessage, WireMessageV10, ANTI_ENTROPY_NONCE, DATA_TAG,
     NONCE_OFFSET, TTL_OFFSET,
 };
 #[cfg(feature = "tls")]
@@ -111,26 +111,22 @@ pub(crate) async fn handle_connection(
         }
 
         // Decode with the layout matching the sender's wire version.
-        // Previous-version frames use WireMessageV7 to correctly handle the
-        // missing `key_timestamps` field in StateRequest (bincode fixed-int cannot
-        // decode a struct with missing trailing fields; WireMessageV7 has the
-        // correct v7 layout and converts to WireMessage via From, filling
-        // key_timestamps with vec![] — the "full snapshot" sentinel).
+        // Previous-version (v10) frames use WireMessageV10 to handle the missing
+        // `hlc_seq` field in Signal. The struct layout is otherwise identical;
+        // the From conversion fills hlc_seq = None (unordered delivery).
         let msg: WireMessage = if frame_version == FrameVersion::Current {
             match bincode::serde::decode_from_slice::<WireMessage, _>(&recv_buf, bincode_cfg()) {
                 Ok((m, _)) => m,
                 Err(e) => {
-                    warn!("Malformed v8 message from {}: {}", peer_addr, e);
+                    warn!("Malformed v11 message from {}: {}", peer_addr, e);
                     continue;
                 }
             }
         } else {
-            // v7 encoding config is identical to v8; only the struct layout differs
-            // (handled by WireMessageV7, which converts to WireMessage via From).
-            match bincode::serde::decode_from_slice::<WireMessageV7, _>(&recv_buf, bincode_cfg()) {
+            match bincode::serde::decode_from_slice::<WireMessageV10, _>(&recv_buf, bincode_cfg()) {
                 Ok((m, _)) => WireMessage::from(m),
                 Err(e) => {
-                    warn!("Malformed v7 message from {}: {}", peer_addr, e);
+                    warn!("Malformed v10 message from {}: {}", peer_addr, e);
                     continue;
                 }
             }
@@ -306,10 +302,15 @@ pub(crate) async fn handle_connection(
                 metrics::counter!("gossip_anti_entropy_rounds_total").increment(1);
             }
 
-            WireMessage::Signal { ttl, nonce, sender, scope, kind, payload } => {
+            WireMessage::Signal { ttl, nonce, sender, scope, kind, payload, hlc_seq } => {
                 let ts = crate::hlc::physical_ms(hlc.current());
                 if seen.mark_and_check(nonce, ts) {
                     continue;
+                }
+                // Advance HLC on ordered signals so local writes after this
+                // observation carry a strictly greater timestamp.
+                if let Some(seq) = hlc_seq {
+                    hlc.observe(seq);
                 }
                 // Boundary check: act if admitted (forwarding is unconditional below).
                 // Individual signals bypass opacity — no routing alternative exists.
@@ -326,24 +327,37 @@ pub(crate) async fn handle_connection(
                         }
                     };
                     if admit {
+                        let raw_signal = Signal {
+                            kind: kind.clone(), scope: scope.clone(),
+                            payload: payload.clone(), sender: sender.clone(), nonce,
+                        };
+                        // When ordered delivery is enabled and the signal carries an
+                        // hlc_seq, route through the reorder buffer; otherwise deliver
+                        // directly. Unordered signals (hlc_seq = None) always bypass.
+                        let signals_to_deliver: Vec<Signal> =
+                            if let (Some(seq), Some(ref rbuf)) = (hlc_seq, &task_ctx.reorder_buf) {
+                                // Drain any stale entries before ingesting the new one.
+                                let mut buf = rbuf.lock().unwrap();
+                                let mut out = buf.flush_expired();
+                                out.extend(buf.ingest(seq, raw_signal));
+                                out
+                            } else {
+                                vec![raw_signal]
+                            };
+
+                        for sig in signals_to_deliver {
                         // O(1) fast-path for correlated rpc.result / bulk.result:
                         // if the correlation nonce is registered in rpc_pending,
                         // fire the oneshot and skip the signal_handlers fan-out.
-                        let nonce_claimed = if payload.len() >= 8
-                            && (kind.as_ref() == signal_kind::RPC_RESULT
-                                || kind.as_ref() == signal_kind::BULK_RESULT)
+                        let nonce_claimed = if sig.payload.len() >= 8
+                            && (sig.kind.as_ref() == signal_kind::RPC_RESULT
+                                || sig.kind.as_ref() == signal_kind::BULK_RESULT)
                         {
                             let call_nonce = u64::from_le_bytes(
-                                payload[..8].try_into().unwrap(),
+                                sig.payload[..8].try_into().unwrap(),
                             );
                             if let Some(tx) = task_ctx.rpc_pending.lock().unwrap().remove(&call_nonce) {
-                                let _ = tx.send(Signal {
-                                    kind: kind.clone(),
-                                    scope: scope.clone(),
-                                    payload: payload.clone(),
-                                    sender: sender.clone(),
-                                    nonce,
-                                });
+                                let _ = tx.send(sig.clone());
                                 true
                             } else {
                                 false
@@ -352,13 +366,7 @@ pub(crate) async fn handle_connection(
                             false
                         };
                         if !nonce_claimed {
-                            signal_handlers.deliver(&Signal {
-                                kind: kind.clone(),
-                                scope: scope.clone(),
-                                payload: payload.clone(),
-                                sender: sender.clone(),
-                                nonce,
-                            });
+                            signal_handlers.deliver(&sig);
                         }
                         // Quorum evidence: write sys/quorum/{kind}/{sender} to Layer I.
                         // Rate-limited by quorum_evidence_payload — skips write if entry
@@ -366,7 +374,7 @@ pub(crate) async fn handle_connection(
                         // here rather than inside SignalHandlers to keep transport and
                         // KV-write concerns out of the Layer II type.
                         if let Some((q_key, q_val)) = signal_handlers.quorum_evidence_payload(
-                            &kind, &sender,
+                            &sig.kind, &sig.sender,
                         ) {
                             let upd = make_gossip_update(&node_id, max_ttl, q_key, q_val, false, &hlc);
                             if let Some(ref wal) = wal {
@@ -378,6 +386,7 @@ pub(crate) async fn handle_connection(
                                 node_id.id_hash(), ForwardHint::All, &kv_state.dropped_frames,
                             );
                         }
+                        } // end for sig in signals_to_deliver
                     }
                 }
                 // Always forward — epidemic propagation regardless of scope.
@@ -395,7 +404,7 @@ pub(crate) async fn handle_connection(
                     match bincode::serde::encode_into_std_write(
                         WireMessage::Signal {
                             ttl: ttl - 1, nonce,
-                            sender: sender.clone(), scope, kind, payload,
+                            sender: sender.clone(), scope, kind, payload, hlc_seq,
                         },
                         &mut (&mut fwd_buf).writer(),
                         bincode_cfg(),

@@ -53,6 +53,30 @@ impl GossipAgent {
         emit_signal(&self.task_ctx, kind.into(), scope, payload.into())
     }
 
+    /// Like [`emit`](Self::emit) but stamps an HLC sequence number so receivers
+    /// can deliver signals from this node in causal order.
+    ///
+    /// Each call increments the node's HLC clock (`hlc.tick()`) and embeds the
+    /// resulting timestamp in the wire frame as `hlc_seq`. Receivers with
+    /// [`signal_ordered_delivery`](crate::GossipConfig::signal_ordered_delivery)
+    /// enabled buffer these signals per `(sender, kind)` and deliver them in
+    /// ascending HLC order, regardless of network reordering.
+    ///
+    /// Receivers without ordered delivery enabled ignore `hlc_seq` and deliver
+    /// immediately — backward compatible with v10 behaviour.
+    ///
+    /// Local delivery always occurs immediately (the reorder buffer is
+    /// receiver-side only).
+    #[must_use]
+    pub fn emit_ordered(
+        &self,
+        kind:    impl Into<Arc<str>>,
+        scope:   SignalScope,
+        payload: impl Into<Bytes>,
+    ) -> bool {
+        super::helpers::emit_signal_ordered(&self.task_ctx, kind.into(), scope, payload.into())
+    }
+
     /// Like [`emit`](Self::emit), but awaits channel capacity instead of dropping
     /// the frame when the shard channel is full.
     ///
