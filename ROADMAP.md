@@ -1835,6 +1835,24 @@ None are required for v1.0.
 1. **Workspace split**: `mycelium-core` crate (gossip transport + KV only) extracted from `mycelium` (full substrate). Enables pure-KV embeds with a much smaller dep tree.
 2. **`#[cfg(feature = "consensus")]`** compile-time gate on the epidemic consensus engine. Currently consensus is always compiled; this would let minimal embeds drop the Paxos machinery entirely.
 3. **Owned standalone handles**: `KvHandle` / `MeshHandle` / `CapabilitiesHandle` as ownable values that do not require a live `GossipAgent` borrow. Currently handles hold `Arc<TaskCtx>` from a started agent; this would allow passing handles across crate boundaries without exposing `GossipAgent`.
+4. **Partial-mesh gossip** — practical cluster ceiling with current design is ~200–400 nodes.
+
+   Today peer-exchange (Pong messages) causes every node to learn about every other node and
+   establish a direct TCP connection to each. At N nodes the cluster has O(N²) total TCP
+   connections, O(N²) gossip forwarding traffic, and O(N) anti-entropy load per reconnect.
+   The 100-node scale test exposed this: seed accumulates ~200 ESTABLISHED connections (99
+   inbound from workers + ~99 outbound from peer-exchange) and the Docker bridge iptables
+   FORWARD chain — which is also O(N²) in rules — saturates.
+
+   `GOSSIP_PING_PEER_SAMPLE_SIZE` already limits which peers are *pinged* but does not limit
+   which peers receive TCP connections. The fix is to make connection maintenance match the
+   ping model: each node keeps connections only to a bounded random subset (target fan-out
+   `k = O(log N)`) and relies on multi-hop epidemic flooding to propagate writes across the
+   rest of the graph. Expected result: O(N·log N) total connections, O(log N) hop diameter,
+   bounded per-node memory regardless of cluster size.
+
+   **Trigger to start**: a real workload that needs > 300 nodes, or a benchmark showing
+   per-node RSS growing faster than O(1) as cluster size increases.
 
 ---
 
