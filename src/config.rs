@@ -397,6 +397,25 @@ pub struct GossipConfig {
     /// Default: `30`.
     pub bulk_fetch_timeout_secs: u64,
 
+    /// Optional bearer token that protects the language-bridge gateway endpoints.
+    ///
+    /// When set, every request to a `/gateway/**` path must include the header:
+    /// ```text
+    /// Authorization: Bearer <token>
+    /// ```
+    /// Requests without this header — or with the wrong token — receive `401 Unauthorized`.
+    ///
+    /// Health, readiness, stats, and metrics endpoints (`/health`, `/ready`,
+    /// `/stats`, `/metrics`, `/signals/{kind}`) are always public regardless of
+    /// this setting, so load-balancer probes keep working without credentials.
+    ///
+    /// `None` (the default) leaves the gateway unauthenticated — suitable for
+    /// loopback-only deployments (`http_addr = "127.0.0.1"`). Set to `Some(token)`
+    /// when the HTTP port is exposed beyond localhost.
+    ///
+    /// Can also be set via the `GOSSIP_GATEWAY_AUTH_TOKEN` environment variable.
+    pub gateway_auth_token: Option<String>,
+
     /// Mutual TLS configuration.
     ///
     /// `None` (the default) disables TLS — the gossip TCP port accepts plain
@@ -447,6 +466,7 @@ impl Default for GossipConfig {
             http_addr:               "127.0.0.1".to_string(),
             persistence:             None,
             bulk_fetch_timeout_secs: 30,
+            gateway_auth_token:      None,
             tls:                     None,
         }
     }
@@ -651,7 +671,8 @@ impl GossipConfig {
     /// `GOSSIP_MAX_PEERS`, `GOSSIP_WRITER_IDLE_TIMEOUT_SECS`,
     /// `GOSSIP_GROUP_AWARE_FORWARDING` (`true`/`false`/`1`/`0`),
     /// `GOSSIP_HEALTH_CHECK_MAX_JITTER_MS`, `GOSSIP_SIGNAL_WINDOW_SECS`,
-    /// `GOSSIP_MAX_STORE_ENTRIES`, `GOSSIP_EPIDEMIC_EXTRA_PEERS`.
+    /// `GOSSIP_MAX_STORE_ENTRIES`, `GOSSIP_EPIDEMIC_EXTRA_PEERS`,
+    /// `GOSSIP_GATEWAY_AUTH_TOKEN`.
     pub fn apply_env_overrides(&mut self) -> Result<(), GossipError> {
         if let Ok(v) = env::var("GOSSIP_BIND_ADDRESS") {
             self.bind_address = v;
@@ -756,6 +777,9 @@ impl GossipConfig {
         }
         if let Ok(v) = env::var("GOSSIP_HTTP_ADDR") {
             self.http_addr = v;
+        }
+        if let Ok(v) = env::var("GOSSIP_GATEWAY_AUTH_TOKEN") {
+            self.gateway_auth_token = Some(v);
         }
         Ok(())
     }

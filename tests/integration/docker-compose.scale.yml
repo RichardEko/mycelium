@@ -1,0 +1,117 @@
+# Mycelium scale test cluster (default 100 nodes: 1 seed + 99 workers + mgmt)
+#
+# Topology
+#   seed    — role=node, first contact point for all workers, HTTP 8300
+#   mgmt    — role=mgmt, dashboard 8090, connects to seed
+#   worker  — role=node; each bootstraps via seed only; scale freely
+#   runner  — Alpine test runner
+#
+# Usage:
+#   cd tests/integration
+#   docker compose -f docker-compose.scale.yml up --build --scale worker=99 \
+#       --abort-on-container-exit --exit-code-from runner
+#
+# Or via make (overridable):
+#   make test-scale                     # 100 nodes (default)
+#   make test-scale SCALE_WORKERS=49   # 50 nodes
+#
+# Resource note: each Mycelium node is ~20 MB RSS. 100 nodes ≈ 2 GB total.
+# Docker build cache must be warm — run `make test` first to prime it.
+
+services:
+
+  # ── Seed node (bootstrap contact for all workers) ─────────────────────────
+
+  seed:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    container_name: mycelium-scale-seed
+    hostname: seed
+    entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
+    environment:
+      MYCELIUM_ROLE:              node
+      MYCELIUM_PORT:              "57000"
+      MYCELIUM_HTTP_PORT:         "8300"
+      MYCELIUM_PEERS:             "mgmt:57000"
+      # At 100 nodes, startup burst is ~200 simultaneous capability advertisements.
+      # 2048 gives ~10× headroom over the worst-case burst.
+      GOSSIP_WRITER_CHANNEL_DEPTH: "2048"
+      GOSSIP_PING_PEER_SAMPLE_SIZE: "30"
+      RUST_LOG:                   "warn,mycelium=info"
+    networks:
+      - mesh
+    restart: "no"
+
+  # ── Management dashboard ─────────────────────────────────────────────────
+
+  mgmt:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    container_name: mycelium-scale-mgmt
+    hostname: mgmt
+    entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
+    environment:
+      MYCELIUM_ROLE:              mgmt
+      MYCELIUM_PORT:              "57000"
+      MYCELIUM_HTTP_PORT:         "8300"
+      MYCELIUM_PEERS:             "seed:57000"
+      MGMT_PORT:                  "8090"
+      GOSSIP_WRITER_CHANNEL_DEPTH: "2048"
+      GOSSIP_PING_PEER_SAMPLE_SIZE: "30"
+      RUST_LOG:                   "warn,mycelium=info"
+    networks:
+      - mesh
+    restart: "no"
+
+  # ── Worker nodes (default: scale to 99 via --scale worker=99) ───────────
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
+    environment:
+      MYCELIUM_ROLE:              node
+      MYCELIUM_PORT:              "57000"
+      MYCELIUM_HTTP_PORT:         "8300"
+      # Bootstrap via seed only; peer-exchange in Ping frames propagates the
+      # full topology over subsequent health-check rounds.
+      MYCELIUM_PEERS:             "seed:57000"
+      GOSSIP_WRITER_CHANNEL_DEPTH: "1024"
+      # Spread 99 simultaneous connects over 5 s to avoid a TCP storm on seed.
+      GOSSIP_HEALTH_CHECK_MAX_JITTER_MS: "5000"
+      RUST_LOG:                   "warn,mycelium=info"
+    networks:
+      - mesh
+    depends_on:
+      - seed
+    restart: "no"
+
+  # ── Test runner ──────────────────────────────────────────────────────────
+
+  runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test-runner
+    container_name: mycelium-scale-runner
+    volumes:
+      - .:/tests:ro
+    environment:
+      SEED_HOST:      seed
+      MGMT_HOST:      mgmt
+      NODE_HTTP_PORT: "8300"
+      MGMT_HTTP_PORT: "8090"
+      SCALE_TARGET:   "99"
+    entrypoint: ["/bin/bash", "/tests/run_scale.sh"]
+    depends_on:
+      - seed
+      - mgmt
+    networks:
+      - mesh
+    restart: "no"
+
+networks:
+  mesh:
+    driver: bridge

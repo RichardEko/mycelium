@@ -102,6 +102,26 @@ overhead when no signal handlers are registered.
 Planned for v2: extract `mycelium-core` crate (gossip transport + KV only) from
 `mycelium` (full substrate with signals, consensus, capabilities).
 
+### 100-node scale test — Docker bridge iptables constraint
+
+`make test-scale` (default 100 nodes) passes reliably. The test validates:
+cluster formation, KV write on seed, gossip propagation seed → mgmt, zero
+dropped frames.
+
+**Known infrastructure constraint (not a Mycelium bug):** at 100 nodes,
+peer-exchange causes each node to connect to ~100 peers, creating ~5 000 TCP
+connections in the Docker bridge network. The Linux bridge iptables FORWARD
+chain grows O(N²); after all inter-node connections form, new TCP connections
+from the runner to seed time out. The test works around this by:
+1. Verifying the KV key on seed *immediately* after write (before chain saturates).
+2. Verifying gossip propagation via mgmt using conntrack entries established
+   during Phase 1 polling (not a new connection).
+
+If Phase 2 hangs on a future run, the iptables chain is the first suspect.
+Mitigations for larger scales: switch the Docker network driver to `macvlan`,
+enable nftables (hash-table replacement for the linear iptables chain), or
+reduce `SCALE_WORKERS`.
+
 ### Gateway feature gate
 
 The `gateway` feature (on by default) enables the embedded Axum HTTP server. Disable

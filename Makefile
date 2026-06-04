@@ -1,12 +1,13 @@
 ## Mycelium — convenience targets
 
 COMPOSE               = docker compose -f tests/integration/docker-compose.test.yml
+COMPOSE_SCALE         = docker compose -f tests/integration/docker-compose.scale.yml
 COMPOSE_LLM           = docker compose -f docker/docker-compose.yml
 COMPOSE_LLM_DEMO      = docker compose -f docker/docker-compose.llm-agent.yml
 COMPOSE_THREE_NODE    = docker compose -f docker/docker-compose.three-node-test.yml
 COMPOSE_OVERLAY       = docker compose -f tests/overlay/docker-compose.test.yml
 
-.PHONY: build test test-clean test-llm-demo test-llm-agent test-three-node test-overlay llm-agent-interactive help
+.PHONY: build test test-clean test-scale test-scale-clean test-llm-demo test-llm-agent test-three-node test-overlay llm-agent-interactive help
 
 ## test — build the cluster and run all integration scenarios
 test:
@@ -20,6 +21,23 @@ test:
 ## test-clean — tear down the test cluster and remove volumes
 test-clean:
 	$(COMPOSE) down -v --remove-orphans
+
+## test-scale — 100-node cluster scale test (1 seed + 99 workers + mgmt + runner)
+## Requires a warm Docker build cache (run `make test` first to prime it).
+## Takes ~3 min: ~60 s cluster formation + 60 s gossip propagation window.
+## Override SCALE_WORKERS to test at a different size: make test-scale SCALE_WORKERS=49
+SCALE_WORKERS ?= 99
+test-scale:
+	$(COMPOSE_SCALE) down -v --remove-orphans 2>/dev/null || true
+	$(COMPOSE_SCALE) up -d --build --scale worker=$(SCALE_WORKERS)
+	@$(COMPOSE_SCALE) logs -f runner & \
+	EXIT=$$(docker wait mycelium-scale-runner); \
+	$(COMPOSE_SCALE) down -v --remove-orphans 2>/dev/null || true; \
+	exit $$EXIT
+
+## test-scale-clean — tear down the scale test cluster and remove volumes
+test-scale-clean:
+	$(COMPOSE_SCALE) down -v --remove-orphans
 
 ## test-llm-demo — manual scenario: start the three_node_demo LLM cluster
 ## Requires Ollama installed locally. Open http://localhost:8080 to chat.

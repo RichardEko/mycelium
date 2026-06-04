@@ -37,9 +37,10 @@
 
 use axum::{
     Router,
-    extract::{Path, Query, State},
-    http::StatusCode,
-    response::{IntoResponse, Json, Sse},
+    extract::{Path, Query, Request, State},
+    http::{StatusCode, header},
+    middleware::{self, Next},
+    response::{IntoResponse, Json, Response, Sse},
     response::sse::{Event, KeepAlive},
     routing::{delete, get, post},
 };
@@ -119,8 +120,61 @@ pub(super) async fn run_http_server(
         prometheus,
     });
 
+    // ── Language-bridge gateway routes (optionally auth-protected) ────────────
+    // Nested under /gateway so the auth middleware applies to all of them while
+    // leaving /health, /ready, /stats, /metrics, /signals, and /mcp public.
+    // route_layer is applied once at the end so all routes (including
+    // cfg-gated llm routes) are covered by a single middleware instance.
+    let gateway = Router::new()
+        .route("/capability/advertise",   post(gw_cap_advertise))
+        .route("/capability/{handle_id}", delete(gw_cap_drop))
+        .route("/capability/resolve",     get(gw_cap_resolve))
+        .route("/signal/emit",            post(gw_signal_emit))
+        .route("/signal/sse/{kind}",      get(gw_signal_sse))
+        .route("/demand",                 get(gw_demand))
+        .route("/rpc/call",               post(gw_rpc_call))
+        .route("/rpc/serve/{kind}",       get(gw_rpc_serve))
+        .route("/rpc/respond",            post(gw_rpc_respond))
+        .route("/scatter",                post(gw_scatter))
+        .route("/kv",                     get(gw_kv_get).post(gw_kv_set).delete(gw_kv_delete))
+        .route("/kv/keys",                get(gw_kv_keys))
+        .route("/kv/quorum",              post(gw_kv_quorum))
+        .route("/mailbox/deliver",        post(gw_mailbox_deliver))
+        .route("/mailbox/{kind}",         get(gw_mailbox_subscribe))
+        // ── Overlay: consistency, locks, elections ────────────────────────
+        .route("/overlay/consistent/set",         post(gw_overlay_consistent_set))
+        .route("/overlay/consistent/get",         get(gw_overlay_consistent_get))
+        .route("/overlay/lock/acquire",           post(gw_overlay_lock_acquire))
+        .route("/overlay/lock/{guard_id}",         delete(gw_overlay_lock_release))
+        .route("/overlay/elect",                  post(gw_overlay_elect))
+        // ── Overlay: ordered log ──────────────────────────────────────────
+        .route("/overlay/log/append",             post(gw_overlay_log_append))
+        .route("/overlay/log/scan",               get(gw_overlay_log_scan))
+        .route("/overlay/log/compact",            post(gw_overlay_log_compact))
+        .route("/overlay/log/subscribe",          get(gw_overlay_log_subscribe))
+        .route("/overlay/log/group/subscribe",    get(gw_overlay_log_group_subscribe))
+        // ── Overlay: reliable delivery ────────────────────────────────────
+        .route("/overlay/emit_reliable",          post(gw_overlay_emit_reliable))
+        // ── Cluster sharding ──────────────────────────────────────────────
+        .route("/shard/{ns}/{name}",               get(gw_shard_owner))
+        .route("/shard/emit",                     post(gw_shard_emit))
+        // ── Cross-group consensus ─────────────────────────────────────────
+        .route("/consensus/cross_group_propose",  post(gw_cross_group_propose));
+
+    #[cfg(feature = "llm")]
+    let gateway = gateway
+        .route("/prompts",             get(gw_prompts_list))
+        .route("/prompts/{ns}/{name}", get(gw_prompt_get).put(gw_prompt_put).delete(gw_prompt_delete))
+        .route("/llm/call",            post(gw_llm_call))
+        .route("/llm/stream",          post(gw_llm_stream));
+
+    // Apply auth middleware to all gateway routes in one shot.
+    let gateway = gateway
+        .route_layer(middleware::from_fn_with_state(Arc::clone(&state), gateway_auth));
+
+    // ── Main router ───────────────────────────────────────────────────────────
     let app = Router::new()
-        // ── Library endpoints ──────────────────────────────────────────────
+        // Library endpoints — always public
         .route("/health",          get(health_handler))
         .route("/ready",           get(ready_handler))
         .route("/stats",           get(stats_handler))
@@ -128,48 +182,8 @@ pub(super) async fn run_http_server(
         .route("/signals/{kind}",  get(signal_sse_handler))
         .route("/mcp",             post(mcp_handler))
         .route("/bulk/{corr_id}",  get(bulk_staging_handler))
-        // ── Language-bridge gateway ────────────────────────────────────────
-        .route("/gateway/capability/advertise",   post(gw_cap_advertise))
-        .route("/gateway/capability/{handle_id}", delete(gw_cap_drop))
-        .route("/gateway/capability/resolve",     get(gw_cap_resolve))
-        .route("/gateway/signal/emit",            post(gw_signal_emit))
-        .route("/gateway/signal/sse/{kind}",      get(gw_signal_sse))
-        .route("/gateway/demand",                 get(gw_demand))
-        .route("/gateway/rpc/call",               post(gw_rpc_call))
-        .route("/gateway/rpc/serve/{kind}",       get(gw_rpc_serve))
-        .route("/gateway/rpc/respond",            post(gw_rpc_respond))
-        .route("/gateway/scatter",                post(gw_scatter))
-        .route("/gateway/kv",                     get(gw_kv_get).post(gw_kv_set).delete(gw_kv_delete))
-        .route("/gateway/kv/keys",                get(gw_kv_keys))
-        .route("/gateway/kv/quorum",              post(gw_kv_quorum))
-        .route("/gateway/mailbox/deliver",        post(gw_mailbox_deliver))
-        .route("/gateway/mailbox/{kind}",         get(gw_mailbox_subscribe))
-        // ── Overlay: consistency, locks, elections ────────────────────────
-        .route("/gateway/overlay/consistent/set",         post(gw_overlay_consistent_set))
-        .route("/gateway/overlay/consistent/get",         get(gw_overlay_consistent_get))
-        .route("/gateway/overlay/lock/acquire",           post(gw_overlay_lock_acquire))
-        .route("/gateway/overlay/lock/{guard_id}",         delete(gw_overlay_lock_release))
-        .route("/gateway/overlay/elect",                  post(gw_overlay_elect))
-        // ── Overlay: ordered log ──────────────────────────────────────────
-        .route("/gateway/overlay/log/append",             post(gw_overlay_log_append))
-        .route("/gateway/overlay/log/scan",               get(gw_overlay_log_scan))
-        .route("/gateway/overlay/log/compact",            post(gw_overlay_log_compact))
-        .route("/gateway/overlay/log/subscribe",          get(gw_overlay_log_subscribe))
-        .route("/gateway/overlay/log/group/subscribe",    get(gw_overlay_log_group_subscribe))
-        // ── Overlay: reliable delivery ────────────────────────────────────
-        .route("/gateway/overlay/emit_reliable",          post(gw_overlay_emit_reliable))
-        // ── Cluster sharding ──────────────────────────────────────────────
-        .route("/gateway/shard/{ns}/{name}",               get(gw_shard_owner))
-        .route("/gateway/shard/emit",                     post(gw_shard_emit))
-        // ── Cross-group consensus ─────────────────────────────────────────
-        .route("/gateway/consensus/cross_group_propose",  post(gw_cross_group_propose));
-
-    #[cfg(feature = "llm")]
-    let app = app
-        .route("/gateway/prompts",             get(gw_prompts_list))
-        .route("/gateway/prompts/{ns}/{name}", get(gw_prompt_get).put(gw_prompt_put).delete(gw_prompt_delete))
-        .route("/gateway/llm/call",            post(gw_llm_call))
-        .route("/gateway/llm/stream",          post(gw_llm_stream));
+        // Gateway — auth-protected when gateway_auth_token is set
+        .nest("/gateway", gateway);
 
     let app = app.with_state(state);
 
@@ -190,6 +204,33 @@ pub(super) async fn run_http_server(
 
 async fn shutdown_signal(mut rx: watch::Receiver<bool>) {
     let _ = rx.wait_for(|v| *v).await;
+}
+
+/// Axum middleware applied to every `/gateway/**` route.
+///
+/// When `GossipConfig::gateway_auth_token` is set, every gateway request must
+/// carry `Authorization: Bearer <token>`. Health, stats, and metrics endpoints
+/// are NOT under `/gateway` and are therefore always public.
+async fn gateway_auth(
+    State(ctx): State<Arc<HttpCtx>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if let Some(expected) = ctx.agent_ctx.config.gateway_auth_token.as_deref() {
+        let ok = request.headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .map(|t| t == expected)
+            .unwrap_or(false);
+        if !ok {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "authentication required"})),
+            ).into_response();
+        }
+    }
+    next.run(request).await
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
