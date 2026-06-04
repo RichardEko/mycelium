@@ -548,6 +548,15 @@ representation design obligation---what a human-review signal should
 \emph{contain}---remains with the emitting agent; the substrate ensures it
 reaches the right consumers, not that its content is appropriate for them.
 
+\textbf{Causal ordering.} For applications requiring strict per-sender ordering,
+\texttt{emit\_ordered()} extends the signal mesh with a receiver-side causal
+reorder buffer. Each ordered message carries an HLC sequence counter in the wire
+frame (introduced at wire protocol version~11); the receiver reassembles messages
+per sender in HLC order before delivering them to handlers. Applications tolerating
+reorder use the standard \texttt{emit()}; those requiring strict causal delivery
+opt in via \texttt{emit\_ordered()}. The common case---ephemeral broadcast
+signals---pays no overhead, because ordering is applied only when explicitly requested.
+
 \subsection{Capability and Requirement Declarations: Addressing the Category Error}
 
 Each Mycelium node holds a \texttt{CapabilityGroupDef}---a declarative
@@ -640,7 +649,7 @@ correctly on a substrate that eliminates the coordinator.
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Evaluation}
 
-Mycelium's correctness across its three-layer architecture is validated by 243
+Mycelium's correctness across its three-layer architecture is validated by 263
 unit tests and 12 integration scenarios run against a live 5-node Docker cluster.
 Scenarios cover KV replication under partition and reconnection, signal delivery
 and boundary admission, capability group formation and dissolution, consensus
@@ -650,7 +659,7 @@ pipeline, and Prompt Skills cross-node KV propagation with LLM invocation. All
 
 The implementation is publicly available at
 \url{https://github.com/RichardEko/mycelium} (commit
-\texttt{1717d4e}, tag \texttt{paper-submission-v1}) under the AGPL-3.0 licence.
+\texttt{de1afe6}, tag \texttt{paper-v1.1}) under the AGPL-3.0 licence.
 The integration test harness is included in the repository and reproducible with a
 single \texttt{make test} invocation against a Docker-composed 5-node cluster.
 The AGPL-3.0 licence is intentional: applications that deploy Mycelium as part of a
@@ -768,7 +777,8 @@ cluster---substantially reduces this surface, but owned clusters still contain
 buggy or compromised nodes. The \texttt{tls} feature addresses node identity:
 each node holds an Ed25519 keypair; mTLS authenticates every TCP connection;
 KV writes under the \texttt{tls} feature are Ed25519-signed at the frame level
-(wire version~10), making undetected mutation of replicated state infeasible for
+(introduced at wire protocol version~10; current protocol version is~11),
+making undetected mutation of replicated state infeasible for
 an attacker who has not compromised the originating node's private key. The
 current implementation does not provide capability-claim attestation---a node
 can declare capabilities it does not possess---and Byzantine-tolerant consensus
@@ -814,8 +824,9 @@ single cluster; multi-cluster deployments require a federation layer.
   gateway~\cite{nanda}, measuring discovery latency and trust propagation across
   organisational boundaries.
 
-\item \textbf{Signal reorder buffer}---receiver-side per-(sender, kind)
-  HLC-keyed causal delivery for applications requiring strict signal ordering.
+\item \textbf{Byzantine fault tolerance}---the current consensus layer is
+  crash-fault tolerant only. Extending it to tolerate actively malicious nodes
+  while preserving the leaderless, coordinator-free property is an open problem.
 \end{itemize}
 
 % ─────────────────────────────────────────────────────────────────────────────
