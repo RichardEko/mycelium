@@ -376,8 +376,9 @@ export class MyceliumAgent {
   // ── Consistency & Ordering Overlay ────────────────────────────────────────
 
   /**
-   * Linearizable KV write: runs a consensus round before writing.
-   * All nodes observe the same value even under concurrent writes.
+   * Ballot-serialized (consensus-durable) write: runs a consensus round before writing.
+   * Concurrent writes to the same key are totally ordered by ballot number.
+   * `consistentGet` is a local read and may lag by up to one anti-entropy round.
    */
   async consistentSet(key: string, value: Buffer | Uint8Array): Promise<void> {
     await this._post("/gateway/overlay/consistent/set", {
@@ -386,7 +387,7 @@ export class MyceliumAgent {
     });
   }
 
-  /** Linearizable KV read. */
+  /** Read latest ballot-committed value visible to this node (local, eventually consistent). */
   async consistentGet(key: string): Promise<Buffer | null> {
     const data = await this._get("/gateway/overlay/consistent/get", { key }) as {
       value_b64: string | null;

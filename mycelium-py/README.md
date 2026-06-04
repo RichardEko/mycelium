@@ -230,8 +230,9 @@ node to be started with `MYCELIUM_ROLE=overlay` (or any role that calls
 
 #### `consistent_set(key, value)` / `consistent_get(key) → bytes | None`
 
-Linearizable KV: runs a consensus round before writing. All nodes observe the same value
-even under concurrent writes.
+Ballot-serialized (consensus-durable) write: runs a consensus round before writing. Concurrent
+writes to the same key are totally ordered by ballot number. `consistent_get` is a local read
+and may lag by up to one anti-entropy round.
 
 ```python
 agent.consistent_set("config/endpoint", b"https://api.v2/")

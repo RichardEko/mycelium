@@ -662,7 +662,9 @@ class MyceliumAgent:
     # ── Overlay: consistent KV ─────────────────────────────────────────────
 
     def consistent_set(self, key: str, value: bytes) -> None:
-        """Linearizable write. Runs a consensus round before writing ``key``."""
+        """Ballot-serialized (consensus-durable) write. Runs a consensus round before writing ``key``.
+        Concurrent writes to the same key are totally ordered by ballot number.
+        ``consistent_get`` is a local read and may lag by up to one anti-entropy round."""
         body = {"key": key, "value_b64": base64.b64encode(value).decode()}
         with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
             r = c.post("/gateway/overlay/consistent/set", json=body)
@@ -672,7 +674,7 @@ class MyceliumAgent:
                 raise RuntimeError(data.get("error", "consistent_set failed"))
 
     def consistent_get(self, key: str) -> Optional[bytes]:
-        """Read the latest linearizable value for ``key``. Returns ``None`` if not found."""
+        """Read the latest ballot-committed value for ``key`` visible to this node (local, eventually consistent). Returns ``None`` if not found."""
         with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
             data = c.get("/gateway/overlay/consistent/get", params={"key": key}).raise_for_status().json()
         if data.get("found"):

@@ -3,13 +3,13 @@
 ## Concept
 
 Mycelium's default is eventual consistency: fast, partition-tolerant, no
-coordinator. But some operations genuinely need linearizability — a counter
-that must not tick twice, a lock that must be held by exactly one node, a
-leader election that must produce exactly one winner.
+coordinator. But some operations need ballot-serialized ordering — a counter that must not
+tick twice, a lock that must be held by exactly one node, a leader election
+that must produce exactly one winner.
 
 Rather than making the whole system pay for consensus, Mycelium provides a
-thin **consistency overlay** that builds linearizable operations on top of the
-eventual-consistency substrate. You pay for consensus only where you actually
+thin **consistency overlay** that builds ballot-serialized operations on top
+of the eventual-consistency substrate. You pay for consensus only where you actually
 need it — and everything outside the overlay keeps its gossip-speed
 performance.
 
@@ -43,8 +43,8 @@ sequenceDiagram
 
 | Operation | Description |
 |-----------|-------------|
-| `consistent_set(key, value, quorum)` | Linearizable KV write — committed only after quorum accept |
-| `consistent_get(key)` | Read committed value (not gossip-lagged) |
+| `consistent_set(key, value, quorum)` | Ballot-serialized write — committed only after quorum accept; concurrent writes ordered by ballot number |
+| `consistent_get(key)` | Read latest ballot-committed value visible to this node (local, eventually consistent) |
 | `append(stream, entry)` | Append to an ordered log — monotonic sequence numbers |
 | `scan_log(stream, from, to)` | Range scan the log |
 | `distributed_lock(name, ttl)` | Acquire an exclusive lock; TTL prevents deadlock |

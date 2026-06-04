@@ -67,7 +67,7 @@
 //!
 //! | Endpoint | Method | Description |
 //! |---|---|---|
-//! | `/gateway/overlay/consistent/set` | POST | Linearizable KV write |
+//! | `/gateway/overlay/consistent/set` | POST | Ballot-serialized (consensus-durable) KV write |
 //! | `/gateway/overlay/consistent/get` | GET  | Read committed value |
 //! | `/gateway/overlay/lock/acquire`   | POST | Acquire distributed lock |
 //! | `/gateway/overlay/lock/{id}`      | DELETE | Release lock guard |

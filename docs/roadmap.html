@@ -898,7 +898,7 @@
         </tr>
         <tr>
           <td><code>consistent_set("config/x", val)</code></td>
-          <td>Linearizable</td>
+          <td>Ballot-serialized (consensus-durable)</td>
           <td>consensus round-trip for <em>this call only</em></td>
         </tr>
         <tr>
@@ -982,7 +982,7 @@
         <div class="stack-num" style="background:rgba(255,166,87,0.06);color:var(--accent4);border-right:2px solid var(--accent4);font-size:9px;letter-spacing:0.08em;">Opt-In<br>Overlay</div>
         <div class="stack-body">
           <div class="stack-title">Consistency &amp; Ordering Overlay <span class="phase-tag tag-done">Complete</span></div>
-          <p class="stack-desc">The epidemic substrate is the default — always available, always fast, zero coordination overhead. This overlay adds opt-in escalation paths for the operations that need stronger guarantees. Linearizable writes (<code>consistent_set</code>), ordered logs (<code>append</code>/<code>subscribe_log</code>), reliable delivery (<code>emit_reliable</code>), and cluster sharding (<code>shard_for</code>) are all built over foundations already in the stack — no new infrastructure. The same cluster simultaneously supports sub-millisecond epidemic signals and linearizable writes; different operations choose different guarantees.</p>
+          <p class="stack-desc">The epidemic substrate is the default — always available, always fast, zero coordination overhead. This overlay adds opt-in escalation paths for the operations that need stronger guarantees. Consensus-durable writes (<code>consistent_set</code>), ordered logs (<code>append</code>/<code>subscribe_log</code>), reliable delivery (<code>emit_reliable</code>), and cluster sharding (<code>shard_for</code>) are all built over foundations already in the stack — no new infrastructure. The same cluster simultaneously supports sub-millisecond epidemic signals and ballot-serialized writes; different operations choose different guarantees.</p>
           <div class="chips">
             <span class="chip">consistent_set · consistent_get ✓</span>
             <span class="chip">distributed_lock · elect_leader ✓</span>
@@ -1537,7 +1537,7 @@ config.locality_path = <span class="fn">vec!</span>[<span class="str">"az1"</spa
 
     <div class="three-col">
       <div class="card c4">
-        <div class="card-title">Linearizable KV &amp; Coordination</div>
+        <div class="card-title">Consensus KV &amp; Coordination</div>
         <div class="card-sub">Consul / etcd parity · over ConsensusEngine</div>
         <ul>
           <li><code>consistent_set</code> / <code>consistent_get</code></li>
@@ -1573,7 +1573,7 @@ config.locality_path = <span class="fn">vec!</span>[<span class="str">"az1"</spa
     <table class="compare">
       <thead><tr><th>Competitor advantage</th><th>Mycelium equivalent</th><th>Foundation</th></tr></thead>
       <tbody>
-        <tr><td>Consul: linearizable KV</td><td><code>consistent_set</code> / <code>consistent_get</code></td><td>ConsensusEngine ✓</td></tr>
+        <tr><td>Consul: consensus-durable KV</td><td><code>consistent_set</code> / <code>consistent_get</code></td><td>ConsensusEngine ✓</td></tr>
         <tr><td>Consul: distributed locks</td><td><code>distributed_lock</code></td><td>ConsensusEngine ✓</td></tr>
         <tr><td>Consul: leader election</td><td><code>elect_leader</code></td><td><code>group_propose</code> ✓</td></tr>
         <tr><td>Multi-AZ / multi-role ratification</td><td><code>cross_group_propose</code> + <code>GroupQuorum</code></td><td><code>ConsensusEngine</code> + <code>SignalScope::Groups</code> ✓</td></tr>
@@ -1594,7 +1594,7 @@ agent.<span class="fn">set</span>(<span class="str">"load/my-node"</span>, encod
 agent.<span class="fn">append</span>(<span class="str">"events/orders"</span>, encode(&amp;order));
 <span class="kw">let mut</span> rx = agent.<span class="fn">subscribe_log</span>(<span class="str">"events/orders"</span>, since_hlc);
 
-<span class="cmt">// Tier 3: linearizable — consensus latency only for this call</span>
+<span class="cmt">// Tier 3: ballot-serialized — consensus latency only for this call</span>
 agent.<span class="fn">consistent_set</span>(<span class="str">"config/feature-flags"</span>, flags).<span class="kw">await</span>?;
 <span class="kw">let</span> _guard = agent.<span class="fn">distributed_lock</span>(<span class="str">"migration"</span>, timeout).<span class="kw">await</span>?;</code></pre>
   </div>

@@ -59,11 +59,11 @@ async for entry in agent.subscribe_log_group("tasks", "workers"):
 
 ---
 
-## S12 — Leader Election + Linearizable Config
+## S12 — Leader Election + Consensus-Durable Config
 
 **File:** [`scenarios/s12_leader_election.py`](scenarios/s12_leader_election.py)
 
-**Pattern:** Concurrent election + winner writes a linearizable config value read by all nodes.
+**Pattern:** Concurrent election + winner writes a consensus-durable config value read by all nodes.
 
 ### What it does
 

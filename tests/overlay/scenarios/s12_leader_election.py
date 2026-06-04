@@ -1,4 +1,4 @@
-"""S12 — Leader Election + Linearizable Config.
+"""S12 — Leader Election + Consensus-Durable Config.
 
 All three nodes concurrently call elect_leader("demo") via the gossip consensus.
 The cluster must converge on exactly one leader — all nodes must return the same
@@ -54,7 +54,7 @@ def run() -> None:
         raise AssertionError("elect_leader returned empty string")
 
     # Step 2 — whichever node is the elected leader writes config
-    # (Use node-a as the writer regardless; consistent_set is linearizable
+    # (Use node-a as the writer regardless; consistent_set is ballot-serialized
     # from any node — it goes through consensus, not just the elected host.)
     agents[NODE_A_HOST].consistent_set(CONFIG_KEY, CONFIG_VAL)
 

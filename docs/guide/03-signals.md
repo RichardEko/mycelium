@@ -124,14 +124,20 @@ Joining a group makes a node eligible to receive group-scoped signals:
 agent.mesh().join_group("nlp");
 ```
 
-Setting opacity (marking yourself temporarily unavailable):
+Blocking signal delivery during a refractory period or maintenance window:
 
 ```rust
-// Write any key under sys/load/{self}/... with is_opaque=true
-agent.set_opaque("my-app/overloaded", true);
-// Clear it when ready again
-agent.set_opaque("my-app/overloaded", false);
+// suppress() blocks delivery of a kind for the given duration — deterministic, 100% block.
+// The node continues to forward signals; only local handler delivery is paused.
+agent.mesh().suppress(signal_kind::INVOKE, Duration::from_secs(30));
+
+// Lift early if the window ends sooner than expected
+agent.mesh().unsuppress(signal_kind::INVOKE);
 ```
+
+For proactive peer notification that this node is becoming overloaded, use
+`agent.mesh().manage_opacity()` — see the [README opacity section](../../README.md) for
+the full `OpacityHint` API and the opacity vs inhibition distinction.
 
 ---
 

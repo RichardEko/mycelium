@@ -17,7 +17,7 @@ RESET  = "\033[0m"
 
 SCENARIOS = [
     ("S11 task auction (exact-once delivery)",             s11_task_auction),
-    ("S12 leader election + linearizable config",          s12_leader_election),
+    ("S12 leader election + consensus-durable config",      s12_leader_election),
     ("S13 shared reasoning log (multi-writer + ordering)", s13_shared_reasoning_log),
 ]
 
