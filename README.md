@@ -718,6 +718,25 @@ on the gossip mesh are assumed to be cooperative. A connected peer can:
 network-layer control (firewall rules, WireGuard, VPC security groups) to restrict access
 to the gossip port to trusted peers only.
 
+### HTTP Gateway Security
+
+The embedded HTTP gateway (`/health`, `/stats`, `/gateway/*`) has **no authentication by
+default**. Treat it the same as the gossip port: bind it to a loopback or private interface,
+or restrict access at the network layer.
+
+For deployments where the gateway must be reachable on a shared interface, enable bearer-token
+authentication:
+
+```rust
+config.gateway_auth_token = Some("your-secret-token".to_string());
+// or via environment variable: GOSSIP_GATEWAY_AUTH_TOKEN=your-secret-token
+```
+
+When set, every request to the gateway must include `Authorization: Bearer <token>`.
+The `/health`, `/ready`, `/stats`, and `/metrics` endpoints remain public intentionally —
+they carry no sensitive data and are needed for load-balancer health probes and Prometheus
+scraping without credential configuration.
+
 ## Layer III — Consensus
 
 Lightweight epidemic two-phase agreement built directly on top of the signal mesh — no extra

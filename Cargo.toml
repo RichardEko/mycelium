@@ -45,7 +45,7 @@ exclude = ["fuzz"]
 
 [dependencies]
 # Core
-tokio = { version = "1.35", features = ["full", "test-util"] }
+tokio = { version = "1.35", features = ["full"] }
 fastrand = "2"
 
 # Data structures
@@ -83,7 +83,9 @@ futures-util = { version = "0.3",  optional = true }
 # JSON / HTTP utilities used beyond just the gateway
 serde_json   = "1.0"
 base64       = "0.22"
-# HTTP client — used by MCP client, bulk transport, and LLM backends at runtime
+# HTTP client — used by MCP client, bulk transport, and LLM backends at runtime.
+# Required (not optional) because bulk.rs and mcp.rs are always compiled; gating
+# these behind a feature is a v2 improvement tracked in ROADMAP.md § v2.0 Milestones.
 reqwest      = { version = "0.12", features = ["json"] }
 
 # TLS (optional — enabled by the "tls" feature)
@@ -105,7 +107,7 @@ metrics                     = { version = "0.24", optional = true }
 metrics-exporter-prometheus = { version = "0.16", optional = true }
 
 [dev-dependencies]
-tokio        = { version = "1.35", features = ["full"] }
+tokio        = { version = "1.35", features = ["full", "test-util"] }
 criterion    = { version = "0.5", features = ["async_tokio"] }
 libc         = "0.2"
 wgpu         = "22"

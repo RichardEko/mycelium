@@ -95,7 +95,7 @@ The consequence is **per-operation guarantee selection**:
 |---|---|---|
 | `emit(signal)` | Best-effort, epidemic | sub-ms, zero coordination |
 | `append("events/orders", bytes)` | Causally ordered, durable | HLC stamp only — no broker |
-| `consistent_set("config/x", val)` | Linearizable | consensus round-trip for *this call only* |
+| `consistent_set("config/x", val)` | Ballot-serialized (consensus-durable) | consensus round-trip for *this call only* |
 | `distributed_lock("migration")` | Mutual exclusion | consensus for *this call only* |
 
 The same cluster. The same embedded binary. No separate infrastructure for each tier.
@@ -1316,7 +1316,7 @@ This is **CAP theorem applied selectively, not globally.** Traditional systems p
 and apply it uniformly. Here you choose per operation. The same cluster, the same embedded
 library, with no separate infrastructure.
 
-### Linearizable KV and Coordination — Consul / etcd parity
+### Consensus KV and Coordination — Consul / etcd parity
 
 Built over the existing `ConsensusEngine` (`group_propose`). The gossip KV remains the fast
 path; `consistent_*` operations pay consensus latency only when called.
@@ -1398,7 +1398,7 @@ agent.emit_sharded("actor.msg", "user-12345", &CapFilter::new("actor", "user"), 
 
 | Competitor | Their advantage | Mycelium equivalent | Foundation |
 |---|---|---|---|
-| Consul / etcd | Linearizable KV | `consistent_set` / `consistent_get` | ConsensusEngine ✓ |
+| Consul / etcd | Consensus-durable KV | `consistent_set` / `consistent_get` | ConsensusEngine ✓ |
 | Consul | Distributed locks | `distributed_lock` | ConsensusEngine ✓ |
 | Consul | Leader election | `elect_leader` | `group_propose` ✓ |
 | Kafka | Ordered log | `append` / `subscribe_log` / `scan_log` | HLC + gossip KV ✓ |
@@ -1621,7 +1621,7 @@ services layered on top. The `ConsensusEngine` is built *over* the gossip KV, no
 around — this is not a theoretical claim, it is the current architecture. An agent that never
 calls `consistent_set` pays zero overhead for its existence. The result is per-operation guarantee
 selection: epidemic signals (sub-ms), causally-ordered logs (`append`/`subscribe_log`),
-linearizable writes (`consistent_set`), distributed locks, and leader election all coexist on the
+consensus-durable writes (`consistent_set`), distributed locks, and leader election all coexist on the
 same cluster, the same binary, with no separate infrastructure for each tier. Consul, Kafka, and
 Akka each pick one position on the tradeoff and apply it uniformly. This architecture picks per
 operation. (See *The Structural Inversion* section above.)
