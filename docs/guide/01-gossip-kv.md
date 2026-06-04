@@ -105,17 +105,17 @@ The cell key is `grid/{row}/{col}`. Each generation tick:
 ```rust
 // Read neighbour states from local KV (no network call)
 let live_neighbours = neighbour_coords(row, col).iter()
-    .filter(|(r, c)| agent.get(&format!("grid/{r}/{c}"))
+    .filter(|(r, c)| agent.kv().get(&format!("grid/{r}/{c}"))
         .map(|b| b.as_ref() == b"1")
         .unwrap_or(false))
     .count();
 
 // Apply Conway rules and write own cell
 let next = conway_rule(was_alive, live_neighbours);
-agent.set(&format!("grid/{row}/{col}"), Bytes::from(if next { "1" } else { "0" }));
+agent.kv().set(&format!("grid/{row}/{col}"), Bytes::from(if next { "1" } else { "0" }));
 ```
 
-`agent.get()` reads from the local in-memory store — no network hop. The
+`agent.kv().get()` reads from the local in-memory store — no network hop. The
 gossip layer ensures that store is a recent replica of the full mesh state.
 
 ---
@@ -136,7 +136,7 @@ rule of thumb. Too short and a slow node loses its claim before it finishes.
 **`scan_prefix` for bulk reads.** Rather than reading keys one by one, use:
 
 ```rust
-let cells = agent.scan_prefix("grid/");
+let cells = agent.kv().scan_prefix("grid/");
 // returns Vec<(String, Bytes)> — all keys under prefix, from local store
 ```
 

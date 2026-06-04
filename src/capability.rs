@@ -456,15 +456,27 @@ impl Capability {
 
     /// Embeds the JSON Schema for this capability's input payload.
     ///
-    /// The schema is gossip-propagated inside the `Capability` struct so callers
-    /// can inspect input shapes from `resolve()` results without a separate KV lookup.
-    /// Typically a compact JSON Schema object serialized as a string.
+    /// The schema string is gossip-propagated inside the `Capability` struct so
+    /// callers can inspect the input contract from `resolve()` results without a
+    /// separate KV lookup.
+    ///
+    /// # Size guidance
+    ///
+    /// Capability entries are reasserted on every TTL interval (typically 30–60 s)
+    /// and gossiped to all peers on each reassertion. Keep inline schemas compact
+    /// (≤ 512 bytes is a safe guideline). For larger schemas, publish the full
+    /// definition to the schema registry via
+    /// [`publish_schema`](crate::GossipAgent::publish_schema) and embed only a
+    /// summary or omit the inline field entirely — callers can retrieve the
+    /// authoritative bytes via [`get_schema`](crate::GossipAgent::get_schema).
     pub fn with_input_schema(mut self, schema: impl Into<Arc<str>>) -> Self {
         self.input_schema = Some(schema.into());
         self
     }
 
     /// Embeds the JSON Schema for this capability's output payload.
+    ///
+    /// See [`with_input_schema`](Self::with_input_schema) for size guidance.
     pub fn with_output_schema(mut self, schema: impl Into<Arc<str>>) -> Self {
         self.output_schema = Some(schema.into());
         self

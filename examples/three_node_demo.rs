@@ -800,7 +800,7 @@ async fn run_verifier(agent: Arc<GossipAgent>, role: &str) {
 fn discover_tools(agent: &GossipAgent) -> Vec<(String, String, Value)> {
     let mut seen: std::collections::HashSet<String> = Default::default();
     let mut tools = Vec::new();
-    for (key, schema_bytes) in agent.scan_prefix("tools/") {
+    for (key, schema_bytes) in agent.kv().scan_prefix("tools/") {
         let parts: Vec<&str> = key.splitn(3, '/').collect();
         if parts.len() != 3 { continue; }
         let tool_name    = parts[1].to_string();
@@ -819,7 +819,7 @@ fn discover_tools(agent: &GossipAgent) -> Vec<(String, String, Value)> {
 }
 
 fn find_tool_node(agent: &GossipAgent, tool_name: &str) -> Option<String> {
-    let entries = agent.scan_prefix(&format!("tools/{tool_name}/"));
+    let entries = agent.kv().scan_prefix(&format!("tools/{tool_name}/"));
     let (key, _) = entries.into_iter().next()?;
     let parts: Vec<&str> = key.splitn(3, '/').collect();
     if parts.len() < 3 { return None; }
@@ -836,7 +836,7 @@ async fn invoke_tool_timed(
     args:      Value,
     timeout:   Duration,
 ) -> Result<Value, String> {
-    let entries = agent.scan_prefix(&format!("tools/{tool_name}/"));
+    let entries = agent.kv().scan_prefix(&format!("tools/{tool_name}/"));
     let (key, _) = entries.into_iter().next()
         .ok_or_else(|| format!("no provider for tool '{tool_name}'"))?;
     let parts: Vec<&str> = key.splitn(3, '/').collect();
@@ -1158,7 +1158,7 @@ async fn mgmt_kv_scan(
     State(s): State<Arc<MgmtState>>,
 ) -> Json<Value> {
     let prefix = params.get("prefix").map(|s| s.as_str()).unwrap_or("cap/");
-    let entries: Vec<Value> = s.agent.scan_prefix(prefix)
+    let entries: Vec<Value> = s.agent.kv().scan_prefix(prefix)
         .into_iter()
         .map(|(k, v)| json!({ "key": k.as_ref(), "bytes": v.len() }))
         .collect();
@@ -1312,7 +1312,7 @@ async fn node_kv_get(
     State(s): State<Arc<NodeState>>,
     Path(key): Path<String>,
 ) -> Response {
-    match s.agent.get(&key) {
+    match s.agent.kv().get(&key) {
         Some(val) => (StatusCode::OK, val.to_vec()).into_response(),
         None      => StatusCode::NOT_FOUND.into_response(),
     }
@@ -1323,7 +1323,7 @@ async fn node_kv_put(
     Path(key): Path<String>,
     body: String,
 ) -> StatusCode {
-    let _ = s.agent.set_async(key, Bytes::from(body.into_bytes())).await;
+    let _ = s.agent.kv().set_async(key, Bytes::from(body.into_bytes())).await;
     StatusCode::NO_CONTENT
 }
 
@@ -1332,7 +1332,7 @@ async fn node_emit(
     Path(kind): Path<String>,
     body: String,
 ) -> StatusCode {
-    let _ = s.agent.emit(kind.as_str(), SignalScope::System, Bytes::from(body.into_bytes()));
+    let _ = s.agent.mesh().emit(kind.as_str(), SignalScope::System, Bytes::from(body.into_bytes()));
     StatusCode::ACCEPTED
 }
 
@@ -1347,18 +1347,18 @@ fn init_node_routes(agent: Arc<GossipAgent>) -> axum::Router {
     // reception can be queried independently in integration tests.
     let hostname  = std::env::var("HOSTNAME").unwrap_or_else(|_| agent.node_id().to_string());
     let sig_key   = format!("sig-received/{}", hostname);
-    let mut sig_rx = agent.signal_rx("test.signal");
+    let mut sig_rx = agent.mesh().signal_rx("test.signal");
     let sig_agent  = Arc::clone(&agent);
     tokio::spawn(async move {
         while let Some(sig) = sig_rx.recv().await {
-            let _ = sig_agent.set(sig_key.clone(), sig.payload.clone());
+            let _ = sig_agent.kv().set(sig_key.clone(), sig.payload.clone());
         }
     });
 
     // Register an echo-scatter responder so scatter_gather works from peers.
     let sc_agent = Arc::clone(&agent);
     tokio::spawn(async move {
-        let mut rx = sc_agent.signal_rx("echo-scatter");
+        let mut rx = sc_agent.mesh().signal_rx("echo-scatter");
         while let Some(req) = rx.recv().await {
             let req = mycelium::RpcRequest::from(req);
             sc_agent.rpc_respond(&req, req.payload());

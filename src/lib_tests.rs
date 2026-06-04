@@ -111,6 +111,7 @@ fn spawn_handler(
         peer_localities:           Arc::new(papaya::HashMap::new()),
         quorum_trackers:           Arc::new(papaya::HashMap::new()),
     });
+    let (shutdown_tx_inner, _) = tokio::sync::watch::channel(false);
     let task_ctx = Arc::new(TaskCtx {
         node_id: node_id.clone(),
         seen,
@@ -129,6 +130,10 @@ fn spawn_handler(
         peers: Arc::new(papaya::HashMap::new()),
         filter_opacity_registry: Arc::new(crate::agent::FilterOpacityRegistry::new()),
         reorder_buf: None,
+        shutdown_tx: Arc::new(shutdown_tx_inner),
+        task_handles: Arc::new(std::sync::Mutex::new(tokio::task::JoinSet::new())),
+        group_roster_cache: Arc::new(papaya::HashMap::new()),
+        config: Arc::new(crate::config::GossipConfig::default()),
     });
     let ctx = ConnContext {
         task_ctx,
@@ -404,16 +409,16 @@ async fn test_two_node_propagation() {
 
     time::sleep(Duration::from_millis(20)).await;
 
-    let _ = agent_a.set("x", b"hello".to_vec());
+    let _ = agent_a.kv().set("x", b"hello".to_vec());
     let b = agent_b.clone();
     poll_until(
-        || b.get("x") == Some(Bytes::from_static(b"hello")),
+        || b.kv().get("x") == Some(Bytes::from_static(b"hello")),
         2_000,
     ).await;
 
-    let _ = agent_a.delete("x");
+    let _ = agent_a.kv().delete("x");
     let b = agent_b.clone();
-    poll_until(|| b.get("x").is_none(), 2_000).await;
+    poll_until(|| b.kv().get("x").is_none(), 2_000).await;
 
     agent_a.shutdown().await;
     agent_b.shutdown().await;
@@ -459,6 +464,7 @@ async fn test_subscribe_notified_via_gossip() {
             peer_localities:           Arc::new(papaya::HashMap::new()),
             quorum_trackers:           Arc::new(papaya::HashMap::new()),
         });
+        let (shutdown_tx_inner2, _) = tokio::sync::watch::channel(false);
         let task_ctx = Arc::new(TaskCtx {
             node_id: node_id.clone(),
             seen: Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)),
@@ -477,6 +483,10 @@ async fn test_subscribe_notified_via_gossip() {
             peers: Arc::new(papaya::HashMap::new()),
             filter_opacity_registry: Arc::new(crate::agent::FilterOpacityRegistry::new()),
             reorder_buf: None,
+            shutdown_tx: Arc::new(shutdown_tx_inner2),
+            task_handles: Arc::new(std::sync::Mutex::new(tokio::task::JoinSet::new())),
+            group_roster_cache: Arc::new(papaya::HashMap::new()),
+            config: Arc::new(crate::config::GossipConfig::default()),
         });
         let ctx = ConnContext {
             task_ctx,
@@ -507,9 +517,9 @@ async fn test_subscribe_notified_via_gossip() {
 #[test]
 fn test_subscribe_multiple_receivers_same_key() {
     let agent = make_agent();
-    let rx1 = agent.subscribe("k");
-    let rx2 = agent.subscribe("k");
-    let _ = agent.set("k", b"shared".to_vec());
+    let rx1 = agent.kv().subscribe("k");
+    let rx2 = agent.kv().subscribe("k");
+    let _ = agent.kv().set("k", b"shared".to_vec());
     assert_eq!(*rx1.borrow(), Some(Bytes::from_static(b"shared")));
     assert_eq!(*rx2.borrow(), Some(Bytes::from_static(b"shared")));
 }
@@ -663,8 +673,8 @@ async fn test_anti_entropy_syncs_pre_existing_state() {
     agent_a.start().await.unwrap();
     time::sleep(Duration::from_millis(20)).await;
 
-    let _ = agent_a.set("contract:v1", b"spec_bytes".to_vec());
-    assert_eq!(agent_a.get("contract:v1"), Some(Bytes::from_static(b"spec_bytes")));
+    let _ = agent_a.kv().set("contract:v1", b"spec_bytes".to_vec());
+    assert_eq!(agent_a.kv().get("contract:v1"), Some(Bytes::from_static(b"spec_bytes")));
 
     cfg_b.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_a).unwrap()];
     let agent_b = Arc::new(GossipAgent::new(
@@ -675,7 +685,7 @@ async fn test_anti_entropy_syncs_pre_existing_state() {
 
     let b = agent_b.clone();
     poll_until(
-        || b.get("contract:v1") == Some(Bytes::from_static(b"spec_bytes")),
+        || b.kv().get("contract:v1") == Some(Bytes::from_static(b"spec_bytes")),
         3_000,
     ).await;
 
@@ -799,8 +809,8 @@ async fn test_shutdown_with_timeout_does_not_hang() {
 #[tokio::test]
 async fn test_signal_local_system_delivery() {
     let agent = make_agent();
-    let mut rx = agent.signal_rx(signal_kind::HEALTH_PROBE);
-    let _ = agent.emit(signal_kind::HEALTH_PROBE, SignalScope::System, b"ping".to_vec());
+    let mut rx = agent.mesh().signal_rx(signal_kind::HEALTH_PROBE);
+    let _ = agent.mesh().emit(signal_kind::HEALTH_PROBE, SignalScope::System, b"ping".to_vec());
     let sig = tokio::time::timeout(Duration::from_millis(100), rx.recv())
         .await
         .expect("signal should be delivered within 100ms")
@@ -813,9 +823,9 @@ async fn test_signal_local_system_delivery() {
 #[tokio::test]
 async fn test_signal_group_admitted_when_member() {
     let agent = make_agent();
-    agent.join_group("nlp");
-    let mut rx = agent.signal_rx("task");
-    let _ = agent.emit("task", SignalScope::Group(Arc::from("nlp")), b"work".to_vec());
+    agent.mesh().join_group("nlp");
+    let mut rx = agent.mesh().signal_rx("task");
+    let _ = agent.mesh().emit("task", SignalScope::Group(Arc::from("nlp")), b"work".to_vec());
     let sig = tokio::time::timeout(Duration::from_millis(100), rx.recv())
         .await
         .expect("member should receive group signal")
@@ -827,8 +837,8 @@ async fn test_signal_group_admitted_when_member() {
 async fn test_signal_group_blocked_when_not_member() {
     let agent = make_agent();
     // do NOT join "nlp"
-    let mut rx = agent.signal_rx("task");
-    let _ = agent.emit("task", SignalScope::Group(Arc::from("nlp")), b"ignored".to_vec());
+    let mut rx = agent.mesh().signal_rx("task");
+    let _ = agent.mesh().emit("task", SignalScope::Group(Arc::from("nlp")), b"ignored".to_vec());
     let result = tokio::time::timeout(Duration::from_millis(30), rx.recv()).await;
     assert!(result.is_err(), "non-member should not receive group signal");
 }
@@ -837,8 +847,8 @@ async fn test_signal_group_blocked_when_not_member() {
 async fn test_signal_individual_admitted_to_self() {
     let agent = make_agent();
     let self_id = agent.node_id().clone();
-    let mut rx = agent.signal_rx(signal_kind::INVOKE);
-    let _ = agent.emit(signal_kind::INVOKE, SignalScope::Individual(self_id), b"call".to_vec());
+    let mut rx = agent.mesh().signal_rx(signal_kind::INVOKE);
+    let _ = agent.mesh().emit(signal_kind::INVOKE, SignalScope::Individual(self_id), b"call".to_vec());
     let sig = tokio::time::timeout(Duration::from_millis(100), rx.recv())
         .await
         .expect("individual signal to self should be delivered")
@@ -849,9 +859,9 @@ async fn test_signal_individual_admitted_to_self() {
 #[tokio::test]
 async fn test_signal_multiple_receivers_same_kind() {
     let agent = make_agent();
-    let mut rx1 = agent.signal_rx("evt");
-    let mut rx2 = agent.signal_rx("evt");
-    let _ = agent.emit("evt", SignalScope::System, b"data".to_vec());
+    let mut rx1 = agent.mesh().signal_rx("evt");
+    let mut rx2 = agent.mesh().signal_rx("evt");
+    let _ = agent.mesh().emit("evt", SignalScope::System, b"data".to_vec());
     let s1 = tokio::time::timeout(Duration::from_millis(100), rx1.recv()).await;
     let s2 = tokio::time::timeout(Duration::from_millis(100), rx2.recv()).await;
     assert!(s1.is_ok() && s1.unwrap().is_some(), "rx1 should receive signal");
@@ -861,8 +871,8 @@ async fn test_signal_multiple_receivers_same_kind() {
 #[tokio::test]
 async fn test_emit_async_delivers_locally() {
     let agent = make_agent();
-    let mut rx = agent.signal_rx("async.evt");
-    assert!(agent.emit_async("async.evt", SignalScope::System, b"data".to_vec()).await);
+    let mut rx = agent.mesh().signal_rx("async.evt");
+    assert!(agent.mesh().emit_async("async.evt", SignalScope::System, b"data".to_vec()).await);
     let sig = tokio::time::timeout(Duration::from_millis(100), rx.recv())
         .await
         .expect("emit_async should deliver locally")
@@ -874,9 +884,9 @@ async fn test_emit_async_delivers_locally() {
 async fn test_signal_rx_with_capacity() {
     let agent = make_agent();
     // Custom depth of 1 — second signal should be dropped (channel full).
-    let mut rx = agent.signal_rx_with_capacity("burst", 1);
-    let _ = agent.emit("burst", SignalScope::System, b"first".to_vec());
-    let _ = agent.emit("burst", SignalScope::System, b"second".to_vec()); // drops on Full
+    let mut rx = agent.mesh().signal_rx_with_capacity("burst", 1);
+    let _ = agent.mesh().emit("burst", SignalScope::System, b"first".to_vec());
+    let _ = agent.mesh().emit("burst", SignalScope::System, b"second".to_vec()); // drops on Full
     let first = tokio::time::timeout(Duration::from_millis(100), rx.recv())
         .await
         .expect("first signal should arrive")
@@ -911,8 +921,8 @@ async fn test_signal_two_node_propagation() {
     // Wait for peers to discover each other.
     time::sleep(Duration::from_millis(100)).await;
 
-    let mut rx_b = agent_b.signal_rx("cluster.event");
-    let _ = agent_a.emit("cluster.event", SignalScope::System, b"hello".to_vec());
+    let mut rx_b = agent_b.mesh().signal_rx("cluster.event");
+    let _ = agent_a.mesh().emit("cluster.event", SignalScope::System, b"hello".to_vec());
 
     let sig = tokio::time::timeout(Duration::from_millis(2_000), rx_b.recv())
         .await
@@ -961,16 +971,16 @@ async fn test_group_signal_only_reaches_members() {
     agent_c.start().await.unwrap();
 
     // A and B join the group; C does not.
-    agent_a.join_group("team");
-    agent_b.join_group("team");
+    agent_a.mesh().join_group("team");
+    agent_b.mesh().join_group("team");
 
     // Wait for group membership KV entries to propagate and peers to discover each other.
     time::sleep(Duration::from_millis(300)).await;
 
-    let mut rx_b = agent_b.signal_rx("team.event");
-    let mut rx_c = agent_c.signal_rx("team.event");
+    let mut rx_b = agent_b.mesh().signal_rx("team.event");
+    let mut rx_c = agent_c.mesh().signal_rx("team.event");
 
-    let _ = agent_a.emit("team.event", SignalScope::Group("team".into()), b"msg".to_vec());
+    let _ = agent_a.mesh().emit("team.event", SignalScope::Group("team".into()), b"msg".to_vec());
 
     // B must receive the signal — it's a group member.
     tokio::time::timeout(Duration::from_millis(2_000), rx_b.recv())
@@ -1009,8 +1019,8 @@ async fn test_signal_not_delivered_twice_via_gossip() {
     agent_b.start().await.unwrap();
     time::sleep(Duration::from_millis(100)).await;
 
-    let mut rx_b = agent_b.signal_rx("ping");
-    let _ = agent_a.emit("ping", SignalScope::System, b"once".to_vec());
+    let mut rx_b = agent_b.mesh().signal_rx("ping");
+    let _ = agent_a.mesh().emit("ping", SignalScope::System, b"once".to_vec());
 
     // Receive the first signal.
     let first = tokio::time::timeout(Duration::from_millis(2_000), rx_b.recv()).await;
@@ -1068,17 +1078,17 @@ async fn test_signal_once_returns_on_match() {
     let recv = tokio::spawn({
         let kind = kind.clone();
         async move {
-            make_agent().signal_once(kind, Duration::from_millis(500), |_| true).await
+            make_agent().mesh().signal_once(kind, Duration::from_millis(500), |_| true).await
         }
     });
     // Brief pause so the receiver registers before the emit.
     time::sleep(Duration::from_millis(20)).await;
-    let _ = agent_ref.emit(kind.clone(), SignalScope::System, Bytes::new());
+    let _ = agent_ref.mesh().emit(kind.clone(), SignalScope::System, Bytes::new());
 
     // Use a fresh agent with a real handler.
     let agent2 = make_agent();
-    let mut rx = agent2.signal_rx_with_capacity(kind.clone(), 4);
-    let _ = agent2.emit(kind.clone(), SignalScope::System, Bytes::from_static(b"hi"));
+    let mut rx = agent2.mesh().signal_rx_with_capacity(kind.clone(), 4);
+    let _ = agent2.mesh().emit(kind.clone(), SignalScope::System, Bytes::from_static(b"hi"));
     let sig = tokio::time::timeout(Duration::from_millis(200), rx.recv()).await;
     assert!(sig.is_ok() && sig.unwrap().is_some());
     drop(recv);
@@ -1088,7 +1098,7 @@ async fn test_signal_once_returns_on_match() {
 async fn test_signal_once_timeout() {
     let agent = make_agent();
     let result = agent
-        .signal_once("no.such.signal", Duration::from_millis(50), |_| true)
+        .mesh().signal_once("no.such.signal", Duration::from_millis(50), |_| true)
         .await;
     assert!(result.is_none(), "should return None when nothing is emitted");
 }
@@ -1097,14 +1107,14 @@ async fn test_signal_once_timeout() {
 async fn test_signal_once_skips_non_matching() {
     let agent = make_agent();
     let kind: Arc<str> = Arc::from("invoke.result");
-    let mut rx = agent.signal_rx_with_capacity(kind.clone(), 16);
+    let mut rx = agent.mesh().signal_rx_with_capacity(kind.clone(), 16);
 
     // Individual scope bypasses the opacity shedding check so both signals
     // are guaranteed to land in the channel regardless of fill_ratio.
     let self_id = agent.node_id().clone();
     let target_nonce: u64 = 0xDEAD_BEEF;
-    let _ = agent.emit(kind.clone(), SignalScope::Individual(self_id.clone()), Bytes::from_static(b"wrong"));
-    let _ = agent.emit(kind.clone(), SignalScope::Individual(self_id.clone()), Bytes::from_static(b"right"));
+    let _ = agent.mesh().emit(kind.clone(), SignalScope::Individual(self_id.clone()), Bytes::from_static(b"wrong"));
+    let _ = agent.mesh().emit(kind.clone(), SignalScope::Individual(self_id.clone()), Bytes::from_static(b"right"));
 
     // Drain both into a Vec and find the one with "right" payload.
     let mut signals = Vec::new();
@@ -1125,9 +1135,9 @@ async fn test_signal_once_skips_non_matching() {
 async fn test_advertise_emits_on_interval() {
     let agent = make_agent();
     let kind: Arc<str> = Arc::from("capacity.available");
-    let mut rx = agent.signal_rx_with_capacity(kind.clone(), 8);
+    let mut rx = agent.mesh().signal_rx_with_capacity(kind.clone(), 8);
 
-    let _handle = agent.advertise(
+    let _handle = agent.mesh().advertise(
         kind.clone(),
         SignalScope::System,
         Duration::from_millis(30),
@@ -1143,9 +1153,9 @@ async fn test_advertise_emits_on_interval() {
 async fn test_advertise_stops_on_handle_drop() {
     let agent = make_agent();
     let kind: Arc<str> = Arc::from("capacity.probe");
-    let mut rx = agent.signal_rx_with_capacity(kind.clone(), 8);
+    let mut rx = agent.mesh().signal_rx_with_capacity(kind.clone(), 8);
 
-    let handle = agent.advertise(
+    let handle = agent.mesh().advertise(
         kind.clone(),
         SignalScope::System,
         Duration::from_millis(20),
@@ -1173,7 +1183,7 @@ async fn test_advertise_stops_on_handle_drop() {
 #[test]
 fn test_last_signal_none_initially() {
     let agent = make_agent();
-    assert!(agent.last_signal("never.seen").is_none());
+    assert!(agent.mesh().last_signal("never.seen").is_none());
 }
 
 #[tokio::test]
@@ -1181,10 +1191,10 @@ async fn test_last_signal_updates_after_deliver() {
     let agent = make_agent();
     let kind = "health.probe";
     let before = std::time::Instant::now();
-    let _ = agent.emit(kind, SignalScope::System, Bytes::new());
+    let _ = agent.mesh().emit(kind, SignalScope::System, Bytes::new());
     // Give the local deliver() call time to record.
     time::sleep(Duration::from_millis(5)).await;
-    let ts = agent.last_signal(kind);
+    let ts = agent.mesh().last_signal(kind);
     assert!(ts.is_some(), "last_signal should be Some after emit");
     assert!(ts.unwrap() >= before, "timestamp should be at or after emit time");
 }
@@ -1194,10 +1204,10 @@ async fn test_last_signal_updates_after_deliver() {
 #[tokio::test]
 async fn test_suppress_blocks_delivery() {
     let agent = make_agent();
-    let mut rx = agent.signal_rx_with_capacity("test.suppress", 8);
-    agent.suppress("test.suppress", Duration::from_secs(60));
-    assert!(agent.is_suppressed("test.suppress"));
-    let _ = agent.emit("test.suppress", SignalScope::System, Bytes::new());
+    let mut rx = agent.mesh().signal_rx_with_capacity("test.suppress", 8);
+    agent.mesh().suppress("test.suppress", Duration::from_secs(60));
+    assert!(agent.mesh().is_suppressed("test.suppress"));
+    let _ = agent.mesh().emit("test.suppress", SignalScope::System, Bytes::new());
     let result = time::timeout(Duration::from_millis(50), rx.recv()).await;
     assert!(result.is_err(), "suppressed kind must not be delivered to handlers");
 }
@@ -1205,11 +1215,11 @@ async fn test_suppress_blocks_delivery() {
 #[tokio::test]
 async fn test_suppress_allows_after_expiry() {
     let agent = make_agent();
-    let mut rx = agent.signal_rx_with_capacity("test.expiry", 8);
-    agent.suppress("test.expiry", Duration::from_millis(50));
+    let mut rx = agent.mesh().signal_rx_with_capacity("test.expiry", 8);
+    agent.mesh().suppress("test.expiry", Duration::from_millis(50));
     time::sleep(Duration::from_millis(100)).await;
-    assert!(!agent.is_suppressed("test.expiry"), "suppression should have expired");
-    let _ = agent.emit("test.expiry", SignalScope::System, Bytes::new());
+    assert!(!agent.mesh().is_suppressed("test.expiry"), "suppression should have expired");
+    let _ = agent.mesh().emit("test.expiry", SignalScope::System, Bytes::new());
     let result = time::timeout(Duration::from_millis(200), rx.recv()).await;
     assert!(result.is_ok() && result.unwrap().is_some(), "expired suppression must allow delivery");
 }
@@ -1217,11 +1227,11 @@ async fn test_suppress_allows_after_expiry() {
 #[tokio::test]
 async fn test_unsuppress_lifts_early() {
     let agent = make_agent();
-    let mut rx = agent.signal_rx_with_capacity("test.unsuppress", 8);
-    agent.suppress("test.unsuppress", Duration::from_secs(60));
-    agent.unsuppress("test.unsuppress");
-    assert!(!agent.is_suppressed("test.unsuppress"), "unsuppressed must not be suppressed");
-    let _ = agent.emit("test.unsuppress", SignalScope::System, Bytes::new());
+    let mut rx = agent.mesh().signal_rx_with_capacity("test.unsuppress", 8);
+    agent.mesh().suppress("test.unsuppress", Duration::from_secs(60));
+    agent.mesh().unsuppress("test.unsuppress");
+    assert!(!agent.mesh().is_suppressed("test.unsuppress"), "unsuppressed must not be suppressed");
+    let _ = agent.mesh().emit("test.unsuppress", SignalScope::System, Bytes::new());
     let result = time::timeout(Duration::from_millis(200), rx.recv()).await;
     assert!(result.is_ok() && result.unwrap().is_some(), "unsuppressed kind must deliver");
 }
@@ -1229,10 +1239,10 @@ async fn test_unsuppress_lifts_early() {
 #[tokio::test]
 async fn test_suppress_still_updates_last_signal() {
     let agent = make_agent();
-    agent.suppress("test.last_seen", Duration::from_secs(60));
-    let _ = agent.emit("test.last_seen", SignalScope::System, Bytes::new());
+    agent.mesh().suppress("test.last_seen", Duration::from_secs(60));
+    let _ = agent.mesh().emit("test.last_seen", SignalScope::System, Bytes::new());
     time::sleep(Duration::from_millis(10)).await;
-    assert!(agent.last_signal("test.last_seen").is_some(),
+    assert!(agent.mesh().last_signal("test.last_seen").is_some(),
         "last_signal must update even while kind is suppressed");
 }
 
@@ -1245,7 +1255,7 @@ async fn test_watch_fires_on_stale() {
     let fired_clone = fired.clone();
     // threshold = 50ms → check_interval = max(12ms, 100ms) = 100ms
     // No signal ever emitted → stale from the first check.
-    let _handle = agent.watch(
+    let _handle = agent.mesh().watch(
         "health.probe",
         Duration::from_millis(50),
         move || { fired_clone.fetch_add(1, Ordering::Relaxed); },
@@ -1260,9 +1270,9 @@ async fn test_watch_does_not_fire_when_fresh() {
     let fired = Arc::new(AtomicU64::new(0));
     let fired_clone = fired.clone();
     // Emit once so last_signal is fresh.
-    let _ = agent.emit("health.fresh", SignalScope::System, Bytes::new());
+    let _ = agent.mesh().emit("health.fresh", SignalScope::System, Bytes::new());
     // threshold = 500ms → first check at 125ms. At 250ms elapsed is ~250ms < 500ms.
-    let _handle = agent.watch(
+    let _handle = agent.mesh().watch(
         "health.fresh",
         Duration::from_millis(500),
         move || { fired_clone.fetch_add(1, Ordering::Relaxed); },
@@ -1276,7 +1286,7 @@ async fn test_watch_stops_on_handle_drop() {
     let agent = make_agent();
     let fired = Arc::new(AtomicU64::new(0));
     let fired_clone = fired.clone();
-    let handle = agent.watch(
+    let handle = agent.mesh().watch(
         "health.stop",
         Duration::from_millis(30),
         move || { fired_clone.fetch_add(1, Ordering::Relaxed); },
@@ -1300,8 +1310,8 @@ async fn test_manage_opacity_emits_opaque_when_threshold_crossed() {
     let agent = make_agent();
     // One handler for the monitored kind with cap=4.
     // fill_ratio = 0.75 after 3 signals; hint.threshold = 0.75.
-    let _work_rx      = agent.signal_rx_with_capacity("test.gov.invoke", 4);
-    let mut opaque_rx = agent.signal_rx_with_capacity(signal_kind::BOUNDARY_OPAQUE, 8);
+    let _work_rx      = agent.mesh().signal_rx_with_capacity("test.gov.invoke", 4);
+    let mut opaque_rx = agent.mesh().signal_rx_with_capacity(signal_kind::BOUNDARY_OPAQUE, 8);
 
     let _gov = agent.manage_opacity(
         "test.gov.invoke",
@@ -1313,7 +1323,7 @@ async fn test_manage_opacity_emits_opaque_when_threshold_crossed() {
     // all three signals reliably land in the channel and fill_ratio reaches 0.75.
     let self_id = agent.node_id().clone();
     for _ in 0..3 {
-        let _ = agent.emit("test.gov.invoke", SignalScope::Individual(self_id.clone()), Bytes::new());
+        let _ = agent.mesh().emit("test.gov.invoke", SignalScope::Individual(self_id.clone()), Bytes::new());
     }
 
     let result = time::timeout(Duration::from_millis(400), opaque_rx.recv()).await;
@@ -1326,9 +1336,9 @@ async fn test_manage_opacity_emits_opaque_when_threshold_crossed() {
 #[tokio::test]
 async fn test_manage_opacity_emits_transparent_after_drain() {
     let agent = make_agent();
-    let mut work_rx   = agent.signal_rx_with_capacity("test.gov.drain", 4);
-    let mut opaque_rx = agent.signal_rx_with_capacity(signal_kind::BOUNDARY_OPAQUE, 8);
-    let mut clear_rx  = agent.signal_rx_with_capacity(signal_kind::BOUNDARY_TRANSPARENT, 8);
+    let mut work_rx   = agent.mesh().signal_rx_with_capacity("test.gov.drain", 4);
+    let mut opaque_rx = agent.mesh().signal_rx_with_capacity(signal_kind::BOUNDARY_OPAQUE, 8);
+    let mut clear_rx  = agent.mesh().signal_rx_with_capacity(signal_kind::BOUNDARY_TRANSPARENT, 8);
 
     let _gov = agent.manage_opacity(
         "test.gov.drain",
@@ -1339,7 +1349,7 @@ async fn test_manage_opacity_emits_transparent_after_drain() {
     // Fill to 100% with Individual scope to avoid opacity shedding.
     let self_id = agent.node_id().clone();
     for _ in 0..4 {
-        let _ = agent.emit("test.gov.drain", SignalScope::Individual(self_id.clone()), Bytes::new());
+        let _ = agent.mesh().emit("test.gov.drain", SignalScope::Individual(self_id.clone()), Bytes::new());
     }
     let r = time::timeout(Duration::from_millis(400), opaque_rx.recv()).await;
     assert!(r.is_ok() && r.unwrap().is_some(), "should go opaque first");
@@ -1360,8 +1370,8 @@ async fn test_manage_opacity_emits_transparent_after_drain() {
 async fn test_manage_opacity_gate_vetoes_then_library_overrides() {
     let agent = make_agent();
     // cap=8: 6 signals → fill=0.75 (threshold met, gate vetoes), 8 → fill=1.0 (override).
-    let _work_rx      = agent.signal_rx_with_capacity("test.gov.gate", 8);
-    let mut opaque_rx = agent.signal_rx_with_capacity(signal_kind::BOUNDARY_OPAQUE, 8);
+    let _work_rx      = agent.mesh().signal_rx_with_capacity("test.gov.gate", 8);
+    let mut opaque_rx = agent.mesh().signal_rx_with_capacity(signal_kind::BOUNDARY_OPAQUE, 8);
 
     // Gate always vetoes — library must still override when fill == 1.0.
     let _gov = agent.manage_opacity_gated(
@@ -1374,14 +1384,14 @@ async fn test_manage_opacity_gate_vetoes_then_library_overrides() {
     // Fill to 75% with Individual scope. Gate should veto every tick.
     let self_id = agent.node_id().clone();
     for _ in 0..6 {
-        let _ = agent.emit("test.gov.gate", SignalScope::Individual(self_id.clone()), Bytes::new());
+        let _ = agent.mesh().emit("test.gov.gate", SignalScope::Individual(self_id.clone()), Bytes::new());
     }
     let premature = time::timeout(Duration::from_millis(250), opaque_rx.recv()).await;
     assert!(premature.is_err(), "gate veto must prevent emission below 100% fill");
 
     // Fill to 100% — library overrides the gate.
     for _ in 0..2 {
-        let _ = agent.emit("test.gov.gate", SignalScope::Individual(self_id.clone()), Bytes::new());
+        let _ = agent.mesh().emit("test.gov.gate", SignalScope::Individual(self_id.clone()), Bytes::new());
     }
     let result = time::timeout(Duration::from_millis(400), opaque_rx.recv()).await;
     assert!(
@@ -1395,18 +1405,18 @@ async fn test_manage_opacity_gate_vetoes_then_library_overrides() {
 #[tokio::test]
 async fn test_competitive_response_group_scope() {
     let agent = Arc::new(make_agent());
-    agent.join_group("work");
+    agent.mesh().join_group("work");
 
     // Register the reply receiver synchronously — before any emit, no race.
-    let mut result_rx = agent.signal_rx_with_capacity(signal_kind::INVOKE_RESULT, 4);
+    let mut result_rx = agent.mesh().signal_rx_with_capacity(signal_kind::INVOKE_RESULT, 4);
 
     // Worker: receives Group-scoped invoke, replies to sender via Individual scope.
-    let mut invoke_rx = agent.signal_rx(signal_kind::INVOKE);
+    let mut invoke_rx = agent.mesh().signal_rx(signal_kind::INVOKE);
     let agent_w = agent.clone();
     tokio::spawn(async move {
         if let Some(sig) = invoke_rx.recv().await {
             // Echo correlation payload so the invoker can identify its reply.
-            let _ = agent_w.emit(
+            let _ = agent_w.mesh().emit(
                 signal_kind::INVOKE_RESULT,
                 SignalScope::Individual(sig.sender),
                 sig.payload.clone(),
@@ -1416,7 +1426,7 @@ async fn test_competitive_response_group_scope() {
 
     // Emit to the group — no worker selected; routing emerges from opacity state.
     let corr = Bytes::from_static(b"corr-42");
-    let _ = agent.emit(signal_kind::INVOKE, SignalScope::Group(Arc::from("work")), corr.clone());
+    let _ = agent.mesh().emit(signal_kind::INVOKE, SignalScope::Group(Arc::from("work")), corr.clone());
 
     let reply = tokio::time::timeout(Duration::from_millis(500), result_rx.recv())
         .await
@@ -1437,7 +1447,7 @@ async fn test_competitive_response_group_scope() {
 async fn test_group_propose_single_voter() {
     let agent = make_agent();
     let _listener = agent.start_consensus_listener(ConsensusConfig::default());
-    agent.join_group("cg1");
+    agent.mesh().join_group("cg1");
 
     let config = ConsensusConfig { quorum_size: 1, ..ConsensusConfig::default() };
     let result = agent.group_propose("cg1", "sl1", Bytes::from_static(b"val1"), config).await;
@@ -1485,8 +1495,8 @@ async fn test_group_propose_two_node_quorum() {
     agent_b.start().await.unwrap();
     time::sleep(Duration::from_millis(150)).await;
 
-    agent_a.join_group("cgrp");
-    agent_b.join_group("cgrp");
+    agent_a.mesh().join_group("cgrp");
+    agent_b.mesh().join_group("cgrp");
     let _la = agent_a.start_consensus_listener(ConsensusConfig::default());
     let _lb = agent_b.start_consensus_listener(ConsensusConfig::default());
 
@@ -1701,8 +1711,8 @@ async fn test_trust_slice_filters_votes() {
     agent_b.start().await.unwrap();
     time::sleep(Duration::from_millis(200)).await;
 
-    agent_a.join_group("tg");
-    agent_b.join_group("tg");
+    agent_a.mesh().join_group("tg");
+    agent_b.mesh().join_group("tg");
 
     // A declares an empty trust slice — trusts nobody remotely.
     agent_a.declare_trust("tg", &[]);
@@ -1751,8 +1761,8 @@ async fn test_trust_slice_admits_trusted_vote() {
     agent_b.start().await.unwrap();
     time::sleep(Duration::from_millis(200)).await;
 
-    agent_a.join_group("tg2");
-    agent_b.join_group("tg2");
+    agent_a.mesh().join_group("tg2");
+    agent_b.mesh().join_group("tg2");
 
     // A explicitly trusts B.
     agent_a.declare_trust("tg2", &[node_b]);
@@ -1783,10 +1793,10 @@ async fn test_trust_slice_admits_trusted_vote() {
 #[tokio::test]
 async fn test_advertise_persistent_late_joiner_discovers_capability() {
     let agent = make_agent();
-    agent.join_group("workers");
+    agent.mesh().join_group("workers");
 
     // Start persistent advertise with a short tick so the first write happens quickly.
-    let _handle = agent.advertise_persistent(
+    let _handle = agent.mesh().advertise_persistent(
         "contract.available",
         SignalScope::Group("workers".into()),
         Duration::from_millis(20),
@@ -1795,11 +1805,11 @@ async fn test_advertise_persistent_late_joiner_discovers_capability() {
 
     // Wait for the first tick to fire and write to Layer I.
     poll_until(
-        || !agent.scan_prefix(kv_ns::ADVERTISE).is_empty(),
+        || !agent.kv().scan_prefix(kv_ns::ADVERTISE).is_empty(),
         500,
     ).await;
 
-    let entries = agent.scan_prefix(kv_ns::ADVERTISE);
+    let entries = agent.kv().scan_prefix(kv_ns::ADVERTISE);
     assert_eq!(entries.len(), 1);
     let (key, value) = &entries[0];
     assert!(key.starts_with("svc/contract.available/"), "key should be svc/{{kind}}/{{node_id}}");
@@ -1807,9 +1817,9 @@ async fn test_advertise_persistent_late_joiner_discovers_capability() {
 
     // Dropping the handle tombstones the Layer I entry.
     drop(_handle);
-    poll_until(|| agent.scan_prefix(kv_ns::ADVERTISE).is_empty(), 500).await;
+    poll_until(|| agent.kv().scan_prefix(kv_ns::ADVERTISE).is_empty(), 500).await;
     assert!(
-        agent.scan_prefix(kv_ns::ADVERTISE).is_empty(),
+        agent.kv().scan_prefix(kv_ns::ADVERTISE).is_empty(),
         "capability should be tombstoned after handle drop"
     );
 }
@@ -1822,34 +1832,34 @@ fn test_group_quorum_excludes_ex_member() {
 
     // Join the group so the boundary admits the signal and grp/workers/{node_id}
     // is written to Layer I.
-    agent.join_group("workers");
+    agent.mesh().join_group("workers");
 
     // Emit a signal — deliver() records the sender in the sender_log.
     // (deliver() always updates sender_log before checking handler registration.)
-    let _ = agent.emit("heartbeat", SignalScope::Group("workers".into()), Bytes::new());
+    let _ = agent.mesh().emit("heartbeat", SignalScope::Group("workers".into()), Bytes::new());
 
     // Raw quorum is satisfied (1 sender, 1 required).
     assert!(
-        agent.quorum("heartbeat", 1, Duration::from_secs(60)),
+        agent.mesh().quorum("heartbeat", 1, Duration::from_secs(60)),
         "raw quorum should be satisfied"
     );
     // group_quorum should also be satisfied while the node is still a member.
     assert!(
-        agent.group_quorum("workers", "heartbeat", 1, Duration::from_secs(60)),
+        agent.mesh().group_quorum("workers", "heartbeat", 1, Duration::from_secs(60)),
         "node is a current member — group_quorum should count it"
     );
 
     // Leave the group — tombstones grp/workers/{node_id} in Layer I.
-    agent.leave_group("workers");
+    agent.mesh().leave_group("workers");
 
     // Raw quorum is still satisfied (sender_log entry remains).
     assert!(
-        agent.quorum("heartbeat", 1, Duration::from_secs(60)),
+        agent.mesh().quorum("heartbeat", 1, Duration::from_secs(60)),
         "raw quorum still sees the sender_log entry"
     );
     // But group_quorum must exclude the ex-member.
     assert!(
-        !agent.group_quorum("workers", "heartbeat", 1, Duration::from_secs(60)),
+        !agent.mesh().group_quorum("workers", "heartbeat", 1, Duration::from_secs(60)),
         "ex-member must not satisfy group_quorum after leave_group"
     );
 }
@@ -1870,7 +1880,7 @@ async fn test_peer_load_rx_yields_decoded_state() {
     // Write a pheromone entry for that peer.
     let state = LoadState { fill_ratio: 0.75, is_opaque: true, written_at_ms: 0 };
     let key = format!("sys/load/{}/test", peer);
-    let _ = agent.set(key.clone(), encode_load_state(&state));
+    let _ = agent.kv().set(key.clone(), encode_load_state(&state));
 
     // Forwarding task should decode and push the typed value.
     let _ = tokio::time::timeout(Duration::from_millis(200), rx.changed()).await
@@ -1880,7 +1890,7 @@ async fn test_peer_load_rx_yields_decoded_state() {
     assert!(got.is_opaque);
 
     // Tombstone → None.
-    let _ = agent.delete(key);
+    let _ = agent.kv().delete(key);
     let _ = tokio::time::timeout(Duration::from_millis(200), rx.changed()).await
         .expect("watch should fire on tombstone");
     assert!(rx.borrow().is_none(), "tombstone should decode as None");
@@ -1893,7 +1903,7 @@ fn test_rehydrate_boundary_from_kv_inserts_group() {
     let agent = make_agent();
     let node_id = agent.node_id().to_string();
     let grp_key = format!("grp/workers/{}", node_id);
-    let _ = agent.set(grp_key, Bytes::from_static(b"1"));
+    let _ = agent.kv().set(grp_key, Bytes::from_static(b"1"));
     assert!(agent.groups().is_empty(), "group not yet in boundary");
     agent.rehydrate_boundary_from_kv();
     assert!(
@@ -1907,12 +1917,12 @@ fn test_rehydrate_boundary_from_kv_removes_tombstoned_group() {
     let agent = make_agent();
     let node_id = agent.node_id().to_string();
     let grp_key = format!("grp/workers/{}", node_id);
-    let _ = agent.set(grp_key.clone(), Bytes::from_static(b"1"));
+    let _ = agent.kv().set(grp_key.clone(), Bytes::from_static(b"1"));
     agent.rehydrate_boundary_from_kv();
     assert!(agent.groups().iter().any(|g| g.as_ref() == "workers"));
 
     // Tombstone the KV entry — simulates another node forcing this node out.
-    let _ = agent.delete(grp_key);
+    let _ = agent.kv().delete(grp_key);
     agent.rehydrate_boundary_from_kv();
     assert!(
         !agent.groups().iter().any(|g| g.as_ref() == "workers"),
@@ -1950,8 +1960,8 @@ async fn test_writer_evicted_after_idle_timeout() {
     time::sleep(Duration::from_millis(50)).await;
 
     // A single gossip write establishes a writer from A to B.
-    assert!(agent_a.set("idle_key", Bytes::from_static(b"v1")));
-    poll_until(|| agent_b.get("idle_key").is_some(), 5_000).await;
+    assert!(agent_a.kv().set("idle_key", Bytes::from_static(b"v1")));
+    poll_until(|| agent_b.kv().get("idle_key").is_some(), 5_000).await;
 
     // After 3 s of silence the writer task exits. system_stats() filters finished
     // handles, so cached_connections drops to 0 without waiting for the GC pass.
@@ -1963,9 +1973,9 @@ async fn test_writer_evicted_after_idle_timeout() {
     );
 
     // A new write must reconnect transparently and still reach B.
-    assert!(agent_a.set("idle_key", Bytes::from_static(b"v2")));
+    assert!(agent_a.kv().set("idle_key", Bytes::from_static(b"v2")));
     poll_until(
-        || agent_b.get("idle_key").map(|v| v == Bytes::from_static(b"v2")).unwrap_or(false),
+        || agent_b.kv().get("idle_key").map(|v| v == Bytes::from_static(b"v2")).unwrap_or(false),
         5_000,
     ).await;
 
@@ -2001,8 +2011,8 @@ async fn test_ballot_reacts_to_opacity_change() {
     agent_b.start().await.unwrap();
     time::sleep(Duration::from_millis(150)).await;
 
-    agent_a.join_group("ogrp");
-    agent_b.join_group("ogrp");
+    agent_a.mesh().join_group("ogrp");
+    agent_b.mesh().join_group("ogrp");
     time::sleep(Duration::from_millis(100)).await;
 
     // Both start as consensus listeners; B will not actually vote because it
@@ -2026,9 +2036,9 @@ async fn test_ballot_reacts_to_opacity_change() {
             written_at_ms: now_ms,
         });
         let pheromone_key = format!("sys/load/{}/test.kind", node_b);
-        let _ = aa.set(pheromone_key, opaque_bytes);
+        let _ = aa.kv().set(pheromone_key, opaque_bytes);
         // Emit BOUNDARY_OPAQUE locally on A so opaque_rx fires in propose().
-        let _ = aa.emit(signal_kind::BOUNDARY_OPAQUE, SignalScope::System, Bytes::new());
+        let _ = aa.mesh().emit(signal_kind::BOUNDARY_OPAQUE, SignalScope::System, Bytes::new());
     });
 
     // phase1_timeout = 2 s; the reactive arm should commit within ~150 ms.
@@ -2077,14 +2087,14 @@ fn test_warm_quorum_seeds_sender_log() {
         .as_millis() as u64;
     let written_at_ms = now_ms - 5_000;
     let key = format!("sys/quorum/my.kind/{}", node_b);
-    let _ = agent.set(key, Bytes::copy_from_slice(&written_at_ms.to_le_bytes()));
+    let _ = agent.kv().set(key, Bytes::copy_from_slice(&written_at_ms.to_le_bytes()));
 
     // Before seeding, the in-memory sender_log is empty.
-    assert!(!agent.quorum("my.kind", 1, Duration::from_secs(60)));
+    assert!(!agent.mesh().quorum("my.kind", 1, Duration::from_secs(60)));
 
     // After warm_quorum_from_layer1, the entry is seeded and quorum passes.
     agent.warm_quorum_from_layer1();
-    assert!(agent.quorum("my.kind", 1, Duration::from_secs(60)));
+    assert!(agent.mesh().quorum("my.kind", 1, Duration::from_secs(60)));
 }
 
 #[test]
@@ -2105,13 +2115,13 @@ fn test_last_signal_persistent_reads_layer1() {
         .as_millis() as u64;
     let written_at_ms = now_ms - 5_000;
     let key = format!("sys/quorum/my.kind/{}", node_b);
-    let _ = agent.set(key, Bytes::copy_from_slice(&written_at_ms.to_le_bytes()));
+    let _ = agent.kv().set(key, Bytes::copy_from_slice(&written_at_ms.to_le_bytes()));
 
-    let age = agent.last_signal_persistent("my.kind").expect("should find entry");
+    let age = agent.mesh().last_signal_persistent("my.kind").expect("should find entry");
     // Age should be approximately 5 s (allow ±2 s scheduling slack).
     assert!(age >= Duration::from_secs(3) && age <= Duration::from_secs(7),
         "expected ~5 s, got {:?}", age);
 
     // Non-existent kind returns None.
-    assert!(agent.last_signal_persistent("never.seen").is_none());
+    assert!(agent.mesh().last_signal_persistent("never.seen").is_none());
 }

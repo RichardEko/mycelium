@@ -21,6 +21,7 @@ use tracing::{info, warn};
 
 use crate::connection::ConnContext;
 use super::{GossipAgent, AgentState};
+use super::helpers::{kv_delete, kv_scan_prefix, kv_set, kv_subscribe_prefix};
 use super::tasks::{
     ListenerContext, run_gossip_shard, run_health_monitor, run_gc_task, run_listener_task, new_listener,
 };
@@ -129,7 +130,7 @@ impl GossipAgent {
                     // Publish Ed25519 verifying key so peers can verify signed consensus messages.
                     let vk = arc_tls.signing_key.verifying_key().to_bytes();
                     let id_key = format!("sys/identity/{}", self.node_id);
-                    let _ = self.set(id_key, Bytes::copy_from_slice(&vk));
+                    let _ = kv_set(&self.task_ctx, Arc::from(id_key.as_str()), Bytes::copy_from_slice(&vk));
                     let _ = self.task_ctx.tls.set(arc_tls);
                     // Seed peer_keys from any sys/identity/ entries already in the local store.
                     self.prewarm_peer_keys();
@@ -146,6 +147,7 @@ impl GossipAgent {
         self.start_gossip_loop();
         self.start_health_monitor();
         self.start_gc_task();
+        #[cfg(feature = "gateway")]
         if let Some(port) = self.config.http_port {
             let http_addr: std::net::IpAddr = self.config.http_addr.parse().map_err(|_| {
                 GossipError::Config(format!(
@@ -171,9 +173,9 @@ impl GossipAgent {
     /// sync with the `cap-group/` definitions whose filter matches its own
     /// capabilities (Phase 3h dual-subscription watcher).
     fn start_capability_group_watcher(&self) {
-        let def_rx      = self.subscribe_prefix(Arc::<str>::from("cap-group/"));
+        let def_rx      = kv_subscribe_prefix(&self.task_ctx, Arc::<str>::from("cap-group/"));
         let own_prefix  = Arc::<str>::from(format!("cap/{}/", self.node_id).as_str());
-        let own_rx      = self.subscribe_prefix(own_prefix);
+        let own_rx      = kv_subscribe_prefix(&self.task_ctx, own_prefix);
         let shutdown_rx = self.shutdown_tx.subscribe();
         let ctx         = Arc::clone(&self.task_ctx);
         let own_node_id = self.node_id.clone();
@@ -326,7 +328,7 @@ impl GossipAgent {
         let window_ms = self.config.signal_window_secs * 1000;
         use crate::signal::kv_ns;
         let prefix = kv_ns::QUORUM;
-        for (key, bytes) in self.scan_prefix(prefix) {
+        for (key, bytes) in kv_scan_prefix(&self.task_ctx, prefix) {
             let Some(tail) = key.strip_prefix(prefix) else { continue };
             // Key format: sys/quorum/{kind}/{sender_id}
             // rfind('/') splits on the last segment, which is always the sender_id.
@@ -357,7 +359,7 @@ impl GossipAgent {
         if self.config.locality_path.is_empty() { return; }
         let loc = crate::locality::LocalityPath::new(self.config.locality_path.iter().cloned());
         let key = format!("cap/{}/locality/self", self.node_id);
-        let _ = self.set(key, loc.encode());
+        let _ = kv_set(&self.task_ctx, Arc::from(key.as_str()), loc.encode());
     }
 
     /// Walks `cap/*/locality/self` in the local KV view once at startup and
@@ -370,7 +372,7 @@ impl GossipAgent {
         let prefix = "cap/";
         let suffix = "/locality/self";
         let guard = self.kv_state.peer_localities.pin();
-        for (key, bytes) in self.scan_prefix(prefix) {
+        for (key, bytes) in kv_scan_prefix(&self.task_ctx, prefix) {
             // Same shape-check that apply_and_notify does for live writes.
             let Some(rest) = key.strip_prefix(prefix) else { continue };
             let Some(node_id_str) = rest.strip_suffix(suffix) else { continue };
@@ -388,7 +390,7 @@ impl GossipAgent {
     fn prewarm_peer_keys(&self) {
         let prefix = kv_ns::IDENTITY;
         let guard  = self.task_ctx.peer_keys.pin();
-        for (key, bytes) in self.scan_prefix(prefix) {
+        for (key, bytes) in kv_scan_prefix(&self.task_ctx, prefix) {
             let Some(node_id_str) = key.strip_prefix(prefix) else { continue };
             let Ok(node_id) = node_id_str.parse::<crate::node_id::NodeId>() else { continue };
             if bytes.len() == 32 {
@@ -405,7 +407,7 @@ impl GossipAgent {
     /// also caught; the prefix is small (one entry per cluster node).
     #[cfg(feature = "tls")]
     fn start_identity_watcher(&self) {
-        let mut rx      = self.subscribe_prefix(Arc::<str>::from(kv_ns::IDENTITY));
+        let mut rx      = kv_subscribe_prefix(&self.task_ctx, Arc::<str>::from(kv_ns::IDENTITY));
         let shutdown_rx = self.shutdown_tx.subscribe();
         let peer_keys   = self.task_ctx.peer_keys.clone();
         let kv_state    = self.kv_state.clone();
@@ -447,12 +449,12 @@ impl GossipAgent {
             .map(|(k, _)| k.to_string())
             .collect();
         for key in load_keys {
-            let _ = self.delete(key);
+            let _ = kv_delete(&self.task_ctx, Arc::from(key.as_str()));
         }
         // Retract our locality advertisement so peers stop using a stale entry
         // for topology-aware fan-out and quorum diversity.
         if !self.config.locality_path.is_empty() {
-            let _ = self.delete(format!("cap/{}/locality/self", self.node_id));
+            let _ = kv_delete(&self.task_ctx, Arc::from(format!("cap/{}/locality/self", self.node_id).as_str()));
         }
 
         // Retract our capability/requirement/group-def advertisements so peers
@@ -477,7 +479,7 @@ impl GossipAgent {
             .map(|(k, _)| k.to_string())
             .collect();
         for key in agent_owned_keys {
-            let _ = self.delete(key);
+            let _ = kv_delete(&self.task_ctx, Arc::from(key.as_str()));
         }
         // `cap-group/{name}` definitions are gossiped by whichever node
         // currently owns the CapabilityGroupHandle. We cannot tell ownership

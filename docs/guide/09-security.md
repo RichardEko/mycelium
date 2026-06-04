@@ -102,7 +102,7 @@ other node's verifying key without a PKI or certificate authority.
 
 ```rust
 // Resolve another node's public key
-let key_bytes = agent.get(&format!("sys/identity/{}", target_node_id));
+let key_bytes = agent.kv().get(&format!("sys/identity/{}", target_node_id));
 ```
 
 The same keypair signs consensus proposals (`SignedConsensusMsg` in
@@ -162,7 +162,7 @@ Records are signed and HLC-ordered. Query them from any node:
 http://localhost:9050/mgmt   # shows audit trail
 
 # From Rust
-let records = agent.scan_prefix("audit/");
+let records = agent.kv().scan_prefix("audit/");
 ```
 
 ### Verifying chain integrity
@@ -173,7 +173,7 @@ order or back-dated:
 
 ```rust
 let mut prev_hlc = 0u64;
-for (key, val) in agent.scan_prefix("audit/") {
+for (key, val) in agent.kv().scan_prefix("audit/") {
     let hlc = u64::from_str_radix(key.split('/').nth(1).unwrap(), 16).unwrap();
     assert!(hlc > prev_hlc, "audit chain broken at {key}");
     prev_hlc = hlc;

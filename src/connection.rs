@@ -337,7 +337,7 @@ pub(crate) async fn handle_connection(
                         let signals_to_deliver: Vec<Signal> =
                             if let (Some(seq), Some(ref rbuf)) = (hlc_seq, &task_ctx.reorder_buf) {
                                 // Drain any stale entries before ingesting the new one.
-                                let mut buf = rbuf.lock().unwrap();
+                                let mut buf = rbuf.lock().unwrap_or_else(|e| e.into_inner());
                                 let mut out = buf.flush_expired();
                                 out.extend(buf.ingest(seq, raw_signal));
                                 out
@@ -356,7 +356,7 @@ pub(crate) async fn handle_connection(
                             let call_nonce = u64::from_le_bytes(
                                 sig.payload[..8].try_into().unwrap(),
                             );
-                            if let Some(tx) = task_ctx.rpc_pending.lock().unwrap().remove(&call_nonce) {
+                            if let Some(tx) = task_ctx.rpc_pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&call_nonce) {
                                 let _ = tx.send(sig.clone());
                                 true
                             } else {

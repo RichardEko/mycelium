@@ -573,7 +573,7 @@ mod tests {
         let sm = agent.agent_state_machine(AgentPolicy::default());
         sm.transition(ExecutionState::Planning).await.unwrap();
         let key = format!("agent/{}/state", agent.node_id());
-        let val = agent.get(&key);
+        let val = agent.kv().get(&key);
         assert_eq!(val.as_deref().map(|b| std::str::from_utf8(b).unwrap_or("")), Some("Planning"));
     }
 
@@ -590,8 +590,8 @@ mod tests {
         sm.transition(ExecutionState::Invoking { tool: "b".into() }).await.unwrap();
         sm.transition(ExecutionState::Done).await.unwrap();
 
-        let kv_turn  = agent.get(&format!("agent/{node}/task/current/turn"));
-        let kv_calls = agent.get(&format!("agent/{node}/task/current/calls"));
+        let kv_turn  = agent.kv().get(&format!("agent/{node}/task/current/turn"));
+        let kv_calls = agent.kv().get(&format!("agent/{node}/task/current/calls"));
         let read = |v: Option<bytes::Bytes>| -> usize {
             std::str::from_utf8(&v.unwrap()).unwrap().parse().unwrap()
         };
@@ -603,7 +603,7 @@ mod tests {
         let sm2 = agent.agent_state_machine(AgentPolicy::default());
         sm2.transition(ExecutionState::Planning).await.unwrap();
         sm2.transition(ExecutionState::Planning).await.unwrap();
-        let kv_turn2 = agent.get(&format!("agent/{node}/task/current/turn"));
+        let kv_turn2 = agent.kv().get(&format!("agent/{node}/task/current/turn"));
         assert_eq!(read(kv_turn2), 2);
     }
 
@@ -651,7 +651,7 @@ mod tests {
 
         // Initial policy is written to KV at construction
         let policy_key = format!("agent/{}/policy", agent.node_id());
-        assert!(agent.get(&policy_key).is_some(), "policy KV not written at construction");
+        assert!(agent.kv().get(&policy_key).is_some(), "policy KV not written at construction");
 
         // Tighten: deny "dangerous"
         sm.set_policy(AgentPolicy {
@@ -660,7 +660,7 @@ mod tests {
         });
 
         // KV is updated
-        let kv_bytes = agent.get(&policy_key).expect("policy KV missing after set_policy");
+        let kv_bytes = agent.kv().get(&policy_key).expect("policy KV missing after set_policy");
         let kv_policy: AgentPolicy = serde_json::from_slice(&kv_bytes).expect("policy KV not valid JSON");
         assert_eq!(kv_policy.denied_tools, vec!["dangerous".to_string()]);
 

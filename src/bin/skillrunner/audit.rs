@@ -67,7 +67,7 @@ impl AuditRecord {
 pub(crate) fn write_audit(agent: &Arc<GossipAgent>, rec: &AuditRecord) {
     let key = format!("audit/{}/{}", rec.ts_unix_nanos, agent.node_id());
     match serde_json::to_vec(rec) {
-        Ok(json) => { let _ = agent.set(key, Bytes::from(json)); }
+        Ok(json) => { let _ = agent.kv().set(key, Bytes::from(json)); }
         Err(e)   => tracing::warn!("audit: serialisation failed: {e}"),
     }
 }

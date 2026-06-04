@@ -84,9 +84,9 @@ describe_("MyceliumAgent — live node tests", () => {
     expect(ks.length).toBeGreaterThanOrEqual(2);
   });
 
-  it_("set_quorum with min_acks=0 returns 0 immediately", async () => {
+  it_("set_with_min_acks with min_acks=0 returns 0 immediately", async () => {
     const key = `test/ts/quorum/${Date.now()}`;
-    const n = await a.setQuorum(key, Buffer.from("v"), 0);
+    const n = await a.setWithMinAcks(key, Buffer.from("v"), 0);
     expect(n).toBe(0);
   });
 

@@ -1,152 +1,52 @@
-use crate::consensus::{
-    consensus_kind, consensus_ns, ConsensusConfig, ConsensusHandle,
-    ConsensusResult, OpaqueRecompute,
-};
-use super::opacity::{count_opaque_members_in_kv, count_opaque_all_in_kv};
-use crate::framing::bincode_cfg;
+use crate::consensus::{ConsensusConfig, ConsensusListenerHandle, ConsensusResult};
 use crate::node_id::NodeId;
-use crate::signal::SignalScope;
-use ahash::{AHashMap, AHashSet};
-use bytes::{BufMut, Bytes, BytesMut};
-use std::{
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use bytes::Bytes;
+use std::time::Duration;
 
 use super::GossipAgent;
-use super::helpers::compute_quorum_size;
+use super::helpers::suggest_leader_ctx;
 
 impl GossipAgent {
     /// Subscribes to committed values for a consensus slot.
     ///
-    /// Returns a `watch::Receiver` that fires whenever the slot is committed or
-    /// overwritten. Initial value is the current committed state (or `None`).
+    /// Use [`ConsensusHandle::consensus_rx`] via [`GossipAgent::consensus`] instead.
     #[must_use]
     pub fn consensus_rx(&self, slot: &str) -> tokio::sync::watch::Receiver<Option<Bytes>> {
-        self.subscribe(format!("{}{}", consensus_ns::COMMITTED, slot))
+        self.consensus().consensus_rx(slot)
     }
 
     /// Returns the last committed value for a consensus slot, or `None`.
+    ///
+    /// Use [`ConsensusHandle::consensus_get`] via [`GossipAgent::consensus`] instead.
     pub fn consensus_get(&self, slot: &str) -> Option<Bytes> {
-        self.get(&format!("{}{}", consensus_ns::COMMITTED, slot))
+        self.consensus().consensus_get(slot)
     }
 
-    /// Declares this node's quorum trust slice for `group` (SCP §3.1).
+    /// Declares this node's quorum trust slice for `group`.
     ///
-    /// Stored at `consensus/trust/{group}/{node_id}` and gossip-synced to all
-    /// peers. The current protocol uses simple majority regardless of slices;
-    /// this stores intent for future slice-aware quorum extensions.
+    /// Use [`ConsensusHandle::declare_trust`] via [`GossipAgent::consensus`] instead.
     pub fn declare_trust(&self, group: &str, trusted_peers: &[NodeId]) {
-        let key = format!("{}{}/{}", consensus_ns::TRUST, group, self.node_id);
-        let mut buf = BytesMut::new();
-        if bincode::serde::encode_into_std_write(
-            trusted_peers, &mut (&mut buf).writer(), bincode_cfg(),
-        ).is_ok() {
-            let _ = self.set(key, buf.freeze());
-        }
-        // Warn about trusted peers that are not current group members — with
-        // use_trust_slices=true this would cause ballots to time out indefinitely.
-        let member_prefix = crate::signal::grp_prefix(group);
-        let members: AHashSet<String> = self.scan_prefix(&member_prefix)
-            .into_iter()
-            .filter_map(|(k, _)| k.strip_prefix(&member_prefix).map(str::to_string))
-            .collect();
-        for peer in trusted_peers {
-            if !members.contains(&peer.to_string()) {
-                tracing::warn!(
-                    group, peer = %peer,
-                    "declare_trust: peer is not a current group member; \
-                     use_trust_slices=true will time out waiting for their vote"
-                );
-            }
-        }
+        self.consensus().declare_trust(group, trusted_peers)
     }
 
     /// Returns all declared trust slices for `group`, keyed by declaring node.
+    ///
+    /// Use [`ConsensusHandle::group_trust`] via [`GossipAgent::consensus`] instead.
     pub fn group_trust(&self, group: &str) -> Vec<(NodeId, Vec<NodeId>)> {
-        let prefix = format!("{}{}/", consensus_ns::TRUST, group);
-        self.scan_prefix(&prefix)
-            .into_iter()
-            .filter_map(|(key, bytes)| {
-                let node_str = key.strip_prefix(&prefix)?;
-                let node_id: NodeId = node_str.parse().ok()?;
-                let (peers, _) = bincode::serde::decode_from_slice::<Vec<NodeId>, _>(
-                    &bytes, bincode_cfg(),
-                ).ok()?;
-                Some((node_id, peers))
-            })
-            .collect()
+        self.consensus().group_trust(group)
     }
 
     /// Returns the group member with the lowest observed load for `kind`.
     ///
-    /// Iterates `grp/{group}/` for member NodeIds, then reads `load/{member}/{kind}`
-    /// from Layer I (written by [`manage_opacity`](Self::manage_opacity)) for each.
-    /// Members with no load entry are ranked lowest (transparent). Returns the
-    /// lowest-load member, or `self.node_id().clone()` when the group is empty or
-    /// no members have load data within `max_age`.
-    ///
-    /// `max_age` is used for pheromone evaporation — entries older than this are
-    /// treated as transparent. Ties are broken deterministically by `id_hash()`.
+    /// Thin stub — delegates to [`suggest_leader_ctx`](super::helpers::suggest_leader_ctx).
+    /// Available as [`ConsensusHandle::suggest_leader`] or [`CapabilityHandle::suggest_leader`].
     pub fn suggest_leader(&self, group: &str, kind: &str, max_age: Duration) -> NodeId {
-        let members: Vec<NodeId> = self.group_members(group);
-        if members.is_empty() {
-            return self.node_id.clone();
-        }
-
-        // Build trust_count map: candidate id_hash → number of current group members
-        // that have declared a trust slice including this candidate.
-        let trust_prefix = format!("{}{}/", consensus_ns::TRUST, group);
-        let mut trust_counts: AHashMap<u64, usize> = AHashMap::new();
-        for (_, bytes) in self.scan_prefix(&trust_prefix) {
-            let Ok((peers, _)) = bincode::serde::decode_from_slice::<Vec<NodeId>, _>(
-                &bytes, crate::framing::bincode_cfg()
-            ) else { continue };
-            for p in peers {
-                *trust_counts.entry(p.id_hash()).or_insert(0) += 1;
-            }
-        }
-
-        // Use Layer II peer_load() instead of reading sys/load/{n}/{kind} directly.
-        // peer_load() handles freshness filtering and deserialization; only this
-        // kind's entries are kept, keyed by node_id string for O(1) lookup below.
-        let load_by_node: AHashMap<Arc<str>, f32> = self.peer_load(max_age)
-            .into_iter()
-            .filter(|(_, k, _)| k.as_ref() == kind)
-            .map(|(n, _, s)| (n, s.fill_ratio))
-            .collect();
-
-        let best = members.iter().min_by(|a, b| {
-            let score = |n: &NodeId| -> f32 {
-                let n_str = n.to_string();
-                let fill = load_by_node.get(n_str.as_str()).copied().unwrap_or(0.0);
-                let trust = *trust_counts.get(&n.id_hash()).unwrap_or(&0) as f32;
-                fill / (1.0 + trust)
-            };
-            score(a).partial_cmp(&score(b))
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.id_hash().cmp(&b.id_hash()))
-        });
-
-        best.cloned().unwrap_or_else(|| self.node_id.clone())
+        suggest_leader_ctx(&self.task_ctx, group, kind, max_age)
     }
 
     /// Proposes `value` for a named `slot` within a group.
     ///
-    /// Blocks until quorum commits, another node commits first, or all ballot
-    /// attempts are exhausted. All group members that called
-    /// [`start_consensus_listener`](Self::start_consensus_listener) participate
-    /// as voters.
-    ///
-    /// Quorum defaults to `floor(N/2)+1` where N is the current group member
-    /// count. Set `config.quorum_size > 0` to override.
-    ///
-    /// **Partition safety**: committed values are stored in the LWW KV store at
-    /// `consensus/committed/{slot}`. During a network partition, both halves may
-    /// commit different values to the same slot. After partition healing,
-    /// anti-entropy's LWW merge silently retains the higher-timestamp value and
-    /// discards the other. For safety-critical slots, include a fencing token in
-    /// the committed value or use `consensus_rx` to detect competing commits.
+    /// Use [`ConsensusHandle::group_propose`] via [`GossipAgent::consensus`] instead.
     pub async fn group_propose(
         &self,
         group:  &str,
@@ -154,151 +54,24 @@ impl GossipAgent {
         value:  Bytes,
         config: ConsensusConfig,
     ) -> ConsensusResult {
-        let local_opacity = self.effective_opacity(consensus_kind::PROPOSE);
-        if local_opacity > 0.0 && config.ballot_retry_jitter_ms > 0 {
-            let defer_ms = (local_opacity * config.ballot_retry_jitter_ms as f32 * 2.0) as u64;
-            tokio::time::sleep(Duration::from_millis(defer_ms)).await;
-        }
-        if config.use_suggest_leader && config.ballot_retry_jitter_ms > 0 {
-            let suggested = self.suggest_leader(group, consensus_kind::PROPOSE, self.signal_window());
-            if suggested != self.node_id {
-                tokio::time::sleep(Duration::from_millis(config.ballot_retry_jitter_ms)).await;
-            }
-        }
-        // Collect member ids once; used for both the count and the opaque filter.
-        // Note: membership changes after this point are not reflected in the current
-        // ballot's quorum threshold — new joiners' votes don't count, and departed
-        // members' votes still do. This is a deliberate non-goal; see propose() in
-        // consensus.rs for the full rationale.
-        //
-        // Use cached_group_members to avoid a full prefix-scan on every propose call.
-        // The cache is invalidated on local join/leave; remote membership changes are
-        // at most health_check_interval_secs stale, which is acceptable for ballot setup.
-        let roster_ttl = Duration::from_secs(self.config.health_check_interval_secs);
-        let cached = self.cached_group_members(group, roster_ttl);
-        let member_ids: AHashSet<String> = cached.members
-            .iter()
-            .map(NodeId::to_string)
-            .collect();
-        let freshness = Duration::from_millis(
-            self.config.health_check_interval_secs * 2 * 1000,
-        );
-        let raw_members = member_ids.len().max(1);
-        let active_members = if config.count_opaque_as_absent {
-            let opaque_count = self.count_opaque_members(&member_ids, freshness);
-            raw_members.saturating_sub(opaque_count).max(1)
-        } else {
-            raw_members
-        };
-        let quorum = compute_quorum_size(config.quorum_size, active_members);
-        let opaque_recompute = if config.count_opaque_as_absent {
-            // Build the opacity query callback at the Layer II call site so that
-            // propose() (Layer III) does not read KvState directly. The callback
-            // captures only the Arcs needed for the scan — no GossipAgent reference.
-            let kv_cb  = Arc::clone(&self.task_ctx.kv_state);
-            let ids_cb = member_ids.clone();
-            let freshness_ms = freshness.as_millis() as u64;
-            let count_opaque: Arc<dyn Fn() -> usize + Send + Sync> = Arc::new(move || {
-                let now_ms = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64;
-                count_opaque_members_in_kv(&kv_cb, &ids_cb, freshness_ms, now_ms)
-            });
-            Some(OpaqueRecompute { total_members: raw_members, config_quorum: config.quorum_size, count_opaque })
-        } else {
-            None
-        };
-        // Topology policy precedence: config takes precedence; CapabilityGroupDef
-        // KV fallback will be added in Phase 3 when emergent groups land. For now
-        // an absent config entry means no policy (no diversity gate).
-        let topology_policy = self.config.topology_policies.get(group).cloned();
-        self.make_consensus_engine(
-            config.abstain_when_opaque, config.use_trust_slices, config.max_abstain_ballots,
-            topology_policy,
-        )
-            .propose(SignalScope::Group(Arc::from(group)), Arc::from(slot), value, quorum, config, opaque_recompute)
-            .await
+        self.consensus().group_propose(group, slot, value, config).await
     }
 
     /// Proposes `value` for system-wide consensus (all known peers vote).
     ///
-    /// Quorum defaults to `floor(N/2)+1` where N is `peers + 1` (including self).
-    /// Set `config.quorum_size > 0` to override.
-    ///
-    /// **Partition safety**: committed values are stored in the LWW KV store at
-    /// `consensus/committed/{slot}`. During a network partition, both halves may
-    /// commit different values to the same slot. After partition healing,
-    /// anti-entropy's LWW merge silently retains the higher-timestamp value and
-    /// discards the other. For safety-critical slots, include a fencing token in
-    /// the committed value or use `consensus_rx` to detect competing commits.
+    /// Use [`ConsensusHandle::system_propose`] via [`GossipAgent::consensus`] instead.
     pub async fn system_propose(
         &self,
         slot:   &str,
         value:  Bytes,
         config: ConsensusConfig,
     ) -> ConsensusResult {
-        let local_opacity = self.effective_opacity(consensus_kind::PROPOSE);
-        if local_opacity > 0.0 && config.ballot_retry_jitter_ms > 0 {
-            let defer_ms = (local_opacity * config.ballot_retry_jitter_ms as f32 * 2.0) as u64;
-            tokio::time::sleep(Duration::from_millis(defer_ms)).await;
-        }
-        // Defer if another peer has lower propose-trail load than this node.
-        if config.use_suggest_leader && config.ballot_retry_jitter_ms > 0 {
-            let my_fill = local_opacity;
-            let is_lightest = self.peer_load(self.signal_window())
-                .iter()
-                .filter(|(_, k, _)| k.as_ref() == consensus_kind::PROPOSE)
-                .all(|(_, _, s)| s.fill_ratio >= my_fill);
-            if !is_lightest {
-                tokio::time::sleep(Duration::from_millis(config.ballot_retry_jitter_ms)).await;
-            }
-        }
-        let n_nodes = (self.system_stats().peers + 1).max(1);
-        let freshness_ms = self.config.health_check_interval_secs * 2 * 1000;
-        let active_n = if config.count_opaque_as_absent {
-            let opaque_count = self.count_opaque_system(
-                Duration::from_millis(freshness_ms),
-            );
-            n_nodes.saturating_sub(opaque_count).max(1)
-        } else {
-            n_nodes
-        };
-        let quorum = compute_quorum_size(config.quorum_size, active_n);
-        let opaque_recompute = if config.count_opaque_as_absent {
-            let kv_cb = Arc::clone(&self.task_ctx.kv_state);
-            let count_opaque: Arc<dyn Fn() -> usize + Send + Sync> = Arc::new(move || {
-                let now_ms = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64;
-                count_opaque_all_in_kv(&kv_cb, freshness_ms, now_ms)
-            });
-            Some(OpaqueRecompute { total_members: n_nodes, config_quorum: config.quorum_size, count_opaque })
-        } else {
-            None
-        };
-        self.make_consensus_engine(
-            config.abstain_when_opaque, config.use_trust_slices, config.max_abstain_ballots,
-            None, // system-wide proposals have no per-group topology policy
-        )
-            .propose(SignalScope::System, Arc::from(slot), value, quorum, config, opaque_recompute)
-            .await
+        self.consensus().system_propose(slot, value, config).await
     }
 
     /// Proposes `value` for `slot` requiring independent quorum from each group in `groups`.
     ///
-    /// Commits only when **all** specified groups individually reach their configured quorum
-    /// fraction. Uses a single ballot round — no group can commit without all others also
-    /// committing, so there is no window for partial commitment.
-    ///
-    /// This fills the gap between [`group_propose`](Self::group_propose) (one group) and
-    /// [`system_propose`](Self::system_propose) (all nodes): decisions that require
-    /// ratification from **multiple distinct groups**, each acting as an independent
-    /// voting bloc.
-    ///
-    /// **Use cases**: multi-AZ durability gates, hierarchical approval workflows,
-    /// compliance / ratification roles, cross-department agent fleets.
+    /// Use [`ConsensusHandle::cross_group_propose`] via [`GossipAgent::consensus`] instead.
     pub async fn cross_group_propose(
         &self,
         slot:   &str,
@@ -306,33 +79,13 @@ impl GossipAgent {
         groups: Vec<crate::GroupQuorum>,
         config: ConsensusConfig,
     ) -> ConsensusResult {
-        self.make_consensus_engine(false, false, 0, None)
-            .cross_propose(Arc::from(slot), value, &groups, config)
-            .await
+        self.consensus().cross_group_propose(slot, value, groups, config).await
     }
 
     /// Starts the consensus voter/listener task.
     ///
-    /// Nodes that call this participate as voters in all consensus rounds.
-    /// Nodes that do not call this still receive committed values via anti-entropy
-    /// KV sync but their votes will not be counted.
-    ///
-    /// `config.abstain_when_opaque` controls whether this voter silently drops
-    /// PROPOSE messages while its pheromone trail shows `is_opaque: true`.
-    ///
-    /// Returns a [`ConsensusHandle`] whose drop stops the task. The task also
-    /// exits on [`shutdown`](Self::shutdown).
-    pub fn start_consensus_listener(&self, config: ConsensusConfig) -> ConsensusHandle {
-        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
-        let shutdown_rx = self.shutdown_tx.subscribe();
-
-        let engine = self.make_consensus_engine(
-            config.abstain_when_opaque,
-            config.use_trust_slices,
-            config.max_abstain_ballots,
-            None, // listener emits votes for any group; per-group policy is proposer-side
-        );
-        self.spawn_task(crate::consensus::run_consensus_listener(engine, cancel_rx, shutdown_rx));
-        ConsensusHandle { _cancel: cancel_tx }
+    /// Use [`ConsensusHandle::start_consensus_listener`] via [`GossipAgent::consensus`] instead.
+    pub fn start_consensus_listener(&self, config: ConsensusConfig) -> ConsensusListenerHandle {
+        self.consensus().start_consensus_listener(config)
     }
 }

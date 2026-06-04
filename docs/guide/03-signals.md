@@ -90,10 +90,13 @@ prompt_skill_demo: reply: "Hello, mesh!"
 Subscribing to signals uses a `Boundary` rule attached to a kind string:
 
 ```rust
-// src/agent/signal_ops.rs — subscribe pattern
-agent.subscribe(signal_kind::INVOKE, move |signal: Signal| {
-    let payload = signal.payload.clone();
-    tokio::spawn(async move { handle_invocation(payload).await });
+// register a handler channel, then drain it in a task
+let mut rx = agent.mesh().signal_rx(signal_kind::INVOKE);
+tokio::spawn(async move {
+    while let Some(signal) = rx.recv().await {
+        let payload = signal.payload.clone();
+        tokio::spawn(async move { handle_invocation(payload).await });
+    }
 });
 ```
 
@@ -101,14 +104,14 @@ Emitting floods the signal through the mesh:
 
 ```rust
 // Scoped to all nodes in group "nlp"
-agent.emit(
+agent.mesh().emit(
     signal_kind::INVOKE,
     SignalScope::Group("nlp".into()),
     Bytes::from(serde_json::to_vec(&request)?),
 );
 
 // Point-to-point to a specific node
-agent.emit(
+agent.mesh().emit(
     signal_kind::RESULT,
     SignalScope::Node(caller_node_id),
     Bytes::from(response_bytes),
@@ -118,7 +121,7 @@ agent.emit(
 Joining a group makes a node eligible to receive group-scoped signals:
 
 ```rust
-agent.join_group("nlp");
+agent.mesh().join_group("nlp");
 ```
 
 Setting opacity (marking yourself temporarily unavailable):

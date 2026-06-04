@@ -640,6 +640,54 @@ pub(super) async fn run_gc_task(
                     }
                 }
 
+                // Evict closed prefix_watchers and prefix_predicate_watchers whose
+                // subscribers have been dropped without a matching write ever hitting
+                // their prefix (the lazy write-path eviction doesn't fire in that case).
+                {
+                    let pw_guard = kv_state.prefix_watchers.pin();
+                    let stale: Vec<Arc<str>> = pw_guard
+                        .iter()
+                        .filter_map(|(k, tx)| if tx.is_closed() { Some(k.clone()) } else { None })
+                        .collect();
+                    for key in stale {
+                        pw_guard.compute(key, |existing| match existing {
+                            Some((_, tx)) if tx.is_closed() => papaya::Operation::Remove,
+                            _ => papaya::Operation::Abort(()),
+                        });
+                    }
+                }
+                {
+                    let ppw_guard = kv_state.prefix_predicate_watchers.pin();
+                    let stale: Vec<u64> = ppw_guard
+                        .iter()
+                        .filter_map(|(id, w)| if w.tx.is_closed() { Some(*id) } else { None })
+                        .collect();
+                    for id in stale {
+                        ppw_guard.compute(id, |existing| match existing {
+                            Some((_, w)) if w.tx.is_closed() => papaya::Operation::Remove,
+                            _ => papaya::Operation::Abort(()),
+                        });
+                    }
+                }
+
+                // Evict quorum trackers whose caller future was dropped mid-wait
+                // (Arc::strong_count == 1 means only the map holds the reference).
+                {
+                    let qt_guard = kv_state.quorum_trackers.pin();
+                    let orphaned: Vec<Arc<str>> = qt_guard
+                        .iter()
+                        .filter_map(|(k, v)| {
+                            if Arc::strong_count(v) == 1 { Some(k.clone()) } else { None }
+                        })
+                        .collect();
+                    for key in orphaned {
+                        qt_guard.compute(key, |existing| match existing {
+                            Some((_, v)) if Arc::strong_count(v) == 1 => papaya::Operation::Remove,
+                            _ => papaya::Operation::Abort(()),
+                        });
+                    }
+                }
+
                 let half_window = wall_ts.saturating_sub(
                     (default_ttl as u64)
                         .saturating_mul(propagation_window)

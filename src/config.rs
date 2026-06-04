@@ -328,6 +328,15 @@ pub struct GossipConfig {
     /// cardinality, but silently discards writes once the limit is hit. Monitor
     /// `system_stats().store_entries` to detect saturation and raise the limit before
     /// it becomes active in production.
+    ///
+    /// **Capability gossip overhead:** each call to
+    /// [`advertise_capability`](crate::GossipAgent::advertise_capability) writes one KV
+    /// entry that is re-asserted on every `interval` tick and gossiped to all peers on
+    /// each reassertion. With many capabilities per node, gossip bandwidth scales as
+    /// `capabilities_per_node × peers × reassertion_rate`. As a practical guideline,
+    /// keep per-node capability count below **200** for clusters of up to ~100 peers
+    /// on a default 30 s interval; above this threshold consider increasing the interval
+    /// or grouping fine-grained capabilities under a single coarser entry.
     pub max_store_entries: usize,
 
     /// Hierarchical locality address for this node, coarse → fine.

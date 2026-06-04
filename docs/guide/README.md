@@ -109,6 +109,8 @@ Four application patterns build on this substrate:
 | [08](08-a2a-interop.md) | A2A interop — LangChain / AutoGen integration | `python langchain_agent.py` | 3 min |
 | [09](09-security.md) | Security — mTLS, Ed25519, signed KV, audit trail | `--features tls` | — |
 | [10](10-language-bridges.md) | Language bridges — Python and TypeScript SDKs | `pip install mycelium-py` | 5 min |
+| [11](11-semantic-coordination.md) | Semantic coordination — schema versioning, payload schemas, sender auth | `cargo run --example semantic_coordination` | 5 min |
+| [12](12-schema-lifecycle.md) | Schema lifecycle — publish, conflict detection, CI gate, versioning | `agent.schemas().publish_schema(...)` | 10 min |
 
 Read chapters 01–04 to build the mental model. Jump to 05–08 for the application
 pattern that matches your use case. Chapter 09 covers the security and compliance
@@ -124,21 +126,39 @@ let agent = Arc::new(GossipAgent::new(node_id, config));
 agent.start().await?;
 
 // Layer I — shared state
-agent.set("my/key", Bytes::from("value"));
-let val = agent.get("my/key");
+agent.kv().set("my/key", Bytes::from("value"));
+let val = agent.kv().get("my/key");
 
 // Layer II — events
-agent.subscribe(signal_kind::INVOKE, |sig| { /* handle */ });
-agent.emit(signal_kind::INVOKE, SignalScope::Group("nlp".into()), payload);
+agent.mesh().signal_rx(signal_kind::INVOKE);  // returns mpsc::Receiver<Signal>
+agent.mesh().emit(signal_kind::INVOKE, SignalScope::Group("nlp".into()), payload);
 
 // Layer III — strong consistency (opt-in)
-agent.consistent_set("seq/counter", b"1", quorum).await?;
+agent.consensus().consistent_set("seq/counter", b"1").await?;
 
 // Capability system — discovery
-let cap = agent.advertise_capability(Capability::new("llm", "inference"), Duration::from_secs(60));
-let providers = agent.resolve(&CapFilter::new("llm", "inference"));
+let cap = agent.capabilities().advertise_capability(Capability::new("llm", "inference"), Duration::from_secs(60));
+let providers = agent.capabilities().resolve(&CapFilter::new("llm", "inference"));
 ```
 
 See the [main README](../../README.md) for the full API surface and
 [ROADMAP.md](../../ROADMAP.md) for the architecture rationale and design
 decisions.
+
+---
+
+## Glossary
+
+### Groups — two distinct concepts
+
+The word "group" appears in two unrelated APIs. They are independent mechanisms:
+
+| | Signal groups | Capability groups |
+|---|---|---|
+| **API** | `agent.mesh().join_group(name)` | `agent.capabilities().define_capability_group(name, def, interval)` |
+| **Controls** | **Routing** — `SignalScope::Group(name)` delivers only to members | **Discovery** — nodes self-join when their capabilities match the group's filter |
+| **Membership** | Explicit: you call `join_group` / `leave_group` | Emergent: each node independently evaluates the `CapabilityGroupDef` filter against its own capabilities |
+| **KV namespace** | `grp/{group}/{node}` | `cap-group/{group}` (definition) + `gcap/{group}/...` (projected capabilities) |
+| **Use case** | Scoping a signal to a runtime-defined subset of nodes | Making a set of nodes with matching capabilities visible as a wiring target |
+
+A node can be a member of both a signal group and a capability group with the same name — they are stored and evaluated independently.

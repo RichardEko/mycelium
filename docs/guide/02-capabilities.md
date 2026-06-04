@@ -89,7 +89,7 @@ stops the refresh loop and the advertisement ages out:
 
 ```rust
 // llm_agent.rs — advertise at startup
-let _cap = agent.advertise_capability(
+let _cap = agent.capabilities().advertise_capability(
     Capability::new("llm", "inference")
         .with_attr("model",   CapValue::Text("llama3.2".into()))
         .with_attr("ctx_len", CapValue::Int(8192)),
@@ -102,10 +102,10 @@ Resolving picks a live provider. The returned `NodeId` can be used directly
 for RPC:
 
 ```rust
-let providers = agent.resolve(&CapFilter::new("llm", "inference"));
+let providers = agent.capabilities().resolve(&CapFilter::new("llm", "inference"));
 if let Some((node_id, cap)) = providers.into_iter().next() {
     let model = cap.attributes.get("model"); // CapValue::Text
-    agent.rpc_call(node_id, "infer", payload, timeout).await?;
+    agent.service().rpc_call(node_id, "infer", payload, timeout).await?;
 }
 ```
 
@@ -145,8 +145,9 @@ let filter = CapFilter::new("llm", "inference")
 **GroupQuorum pattern.** For operations that require a quorum of a group:
 
 ```rust
-let quorum = agent.group_quorum("nlp-workers", 0.51); // 51% threshold
-agent.consistent_set_with_quorum("job/assigned", payload, quorum).await?;
+let quorum = agent.consensus().group_propose("nlp-workers", payload).await?;
+// or for a durable write with quorum confirmation:
+agent.consensus().consistent_set("job/assigned", payload).await?;
 ```
 
 **When NOT to use capabilities.** For a single well-known node (a seed, a

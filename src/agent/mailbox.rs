@@ -151,61 +151,25 @@ async fn mailbox_task(
 impl GossipAgent {
     /// Delivers `payload` to `target`'s mailbox under `kind`.
     ///
-    /// The event is written to `mailbox/{target}/{kind}/{hlc_ts:016x}` in the
-    /// gossip KV store and gossiped to all peers. The target's
-    /// [`open_mailbox`](Self::open_mailbox) watcher will pick it up and
-    /// tombstone it on delivery.
-    ///
-    /// Returns `true` if the event was queued for gossip; `false` on backpressure
-    /// (the event is still applied locally and will be delivered to the target
-    /// if it is co-located).
+    /// Use [`ServiceHandle::deliver_event`] via [`GossipAgent::service`] instead.
     pub fn deliver_event(
         &self,
         target:  &NodeId,
         kind:    impl Into<Arc<str>>,
         payload: impl Into<Bytes>,
     ) -> bool {
-        let kind:    Arc<str> = kind.into();
-        let payload: Bytes    = payload.into();
-        let ts  = self.task_ctx.hlc.tick();
-        let key: Arc<str> = Arc::from(
-            format!("mailbox/{}/{}/{:016x}", target, kind, ts).as_str(),
-        );
-        let value = encode_value(&self.node_id, &payload);
-        self.set(key, value)
+        self.service().deliver_event(target, kind, payload)
     }
 
     /// Opens a mailbox for events of `kind` addressed to this node.
     ///
-    /// Spawns a background watcher task. When events arrive (via gossip KV
-    /// propagation), the task drains them in HLC order into the returned
-    /// `Receiver<MeshEvent>` and tombstones each entry so it will not be
-    /// redelivered after a restart.
-    ///
-    /// The returned [`MailboxHandle`] cancels the watcher on drop. Drop it
-    /// only when you no longer need the mailbox; events will queue in the
-    /// KV store until the handle is live.
-    ///
-    /// `capacity` is the depth of the `mpsc` channel. Use a value large
-    /// enough to buffer bursts without stalling the watcher task.
+    /// Use [`ServiceHandle::open_mailbox`] via [`GossipAgent::service`] instead.
     pub fn open_mailbox(
         &self,
         kind:     impl Into<Arc<str>>,
         capacity: usize,
     ) -> (MailboxHandle, mpsc::Receiver<MeshEvent>) {
-        let kind: Arc<str> = kind.into();
-        let prefix: Arc<str> = Arc::from(
-            format!("mailbox/{}/{}/", self.node_id, kind).as_str(),
-        );
-        let (tx, rx)           = mpsc::channel(capacity);
-        let (cancel_tx, cancel_rx) = oneshot::channel();
-        let watcher    = self.subscribe_prefix(Arc::clone(&prefix));
-        let shutdown_rx = self.shutdown_tx.subscribe();
-        let ctx         = Arc::clone(&self.task_ctx);
-
-        tokio::spawn(mailbox_task(ctx, prefix, kind, tx, cancel_rx, shutdown_rx, watcher));
-
-        (MailboxHandle { _cancel: cancel_tx }, rx)
+        self.service().open_mailbox(kind, capacity)
     }
 }
 

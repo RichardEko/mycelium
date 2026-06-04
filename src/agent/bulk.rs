@@ -183,7 +183,7 @@ pub(crate) async fn bulk_call_ctx(
 }
 
 /// Background task that handles incoming `INVOKE_BULK` signals for a given kind.
-async fn bulk_serve_task<F, Fut>(
+pub(super) async fn bulk_serve_task<F, Fut>(
     ctx:         Arc<TaskCtx>,
     kind:        Arc<str>,
     handler:     Arc<F>,
@@ -268,13 +268,7 @@ where
 impl GossipAgent {
     /// Sends a large `payload` to `target` via the bulk-call protocol.
     ///
-    /// The payload is staged at `GET /bulk/{nonce}` on the caller's HTTP server
-    /// (configured via `GossipConfig::http_port`). A lightweight ticket is sent
-    /// over the signal mesh; the target fetches the payload directly and sends
-    /// back a reply.
-    ///
-    /// Returns `Ok(Bytes)` with the reply, or an error on timeout or
-    /// configuration problems.
+    /// Use [`ServiceHandle::bulk_call`] via [`GossipAgent::service`] instead.
     pub async fn bulk_call(
         &self,
         target:  NodeId,
@@ -282,36 +276,26 @@ impl GossipAgent {
         payload: impl Into<Bytes>,
         timeout: Duration,
     ) -> Result<Bytes, BulkError> {
-        bulk_call_ctx(
-            &self.task_ctx, target, kind.into(), payload.into(), timeout,
-        ).await
+        self.service().bulk_call(target, kind, payload, timeout).await
     }
 
     /// Reads a staged bulk payload by nonce, without removing it.
     ///
-    /// Used by application HTTP handlers to serve `GET /bulk/{nonce}` requests
-    /// from bulk-call targets. Returns `None` when the nonce is not found or
-    /// has already been cleaned up.
+    /// Use [`ServiceHandle::bulk_staging_get`] via [`GossipAgent::service`] instead.
     pub fn bulk_staging_get(&self, nonce: u64) -> Option<Bytes> {
-        self.task_ctx.bulk_transport.get(nonce)
+        self.service().bulk_staging_get(nonce)
     }
 
     /// Overrides the HTTP port used when advertising staged bulk payloads.
     ///
-    /// Use this when running a custom HTTP server (not the embedded gateway)
-    /// that serves `GET /bulk/{nonce}` via [`bulk_staging_get`](Self::bulk_staging_get).
-    /// Must be called before the first [`bulk_call`](Self::bulk_call).
+    /// Use [`ServiceHandle::set_bulk_serving_port`] via [`GossipAgent::service`] instead.
     pub fn set_bulk_serving_port(&self, port: u16) {
-        self.task_ctx.bulk_transport.set_http_port(port);
+        self.service().set_bulk_serving_port(port);
     }
 
     /// Registers a handler for incoming bulk calls of a given `kind`.
     ///
-    /// Spawns a background task that listens for `INVOKE_BULK` signals
-    /// matching `kind`, fetches the staged payload from the caller's HTTP
-    /// endpoint, passes it to `handler`, and sends the result back.
-    ///
-    /// The returned [`BulkServeHandle`] cancels the task when dropped.
+    /// Use [`ServiceHandle::bulk_serve`] via [`GossipAgent::service`] instead.
     pub fn bulk_serve<F, Fut>(
         &self,
         kind:    impl Into<Arc<str>>,
@@ -321,13 +305,7 @@ impl GossipAgent {
         F: Fn(NodeId, Bytes) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = Bytes> + Send + 'static,
     {
-        let (cancel_tx, cancel_rx) = oneshot::channel();
-        let ctx         = Arc::clone(&self.task_ctx);
-        let shutdown_rx = self.shutdown_tx.subscribe();
-        let kind: Arc<str> = kind.into();
-        let handler = Arc::new(handler);
-        tokio::spawn(bulk_serve_task(ctx, kind, handler, cancel_rx, shutdown_rx));
-        BulkServeHandle { _cancel: cancel_tx }
+        self.service().bulk_serve(kind, handler)
     }
 }
 

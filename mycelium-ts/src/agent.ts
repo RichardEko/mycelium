@@ -247,7 +247,7 @@ export class MyceliumAgent {
    * Writes `value` and waits for at least `minAcks` distinct peers to confirm.
    * Returns the confirmed peer count on success; throws `TimeoutError` on timeout.
    */
-  async setQuorum(
+  async setWithMinAcks(
     key: string,
     value: Buffer | Uint8Array,
     minAcks: number,
@@ -260,7 +260,7 @@ export class MyceliumAgent {
       timeout_secs: options.timeoutSecs ?? 5,
     }) as { ok: boolean; acks_received: number; error?: string };
     if (!data.ok) {
-      throw Object.assign(new Error(`set_quorum timeout (${data.acks_received} acks)`), {
+      throw Object.assign(new Error(`set_with_min_acks timeout (${data.acks_received} acks)`), {
         name: "TimeoutError",
         acksReceived: data.acks_received,
       });

@@ -179,7 +179,7 @@ fn toroidal_neighbours(x: usize, y: usize) -> [(usize, usize); 8] {
 }
 
 fn read_alive(agent: &GossipAgent, x: usize, y: usize) -> bool {
-    agent.get(&cell_key(x, y))
+    agent.kv().get(&cell_key(x, y))
         .map(|b| b.first() == Some(&1))
         .unwrap_or(false)
 }
@@ -267,7 +267,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for y in 0..GRID {
         for x in 0..GRID {
             let alive = GLIDER.contains(&(x, y));
-            let _ = agents[y * GRID + x].set(cell_key(x, y), Bytes::copy_from_slice(&[alive as u8]));
+            let _ = agents[y * GRID + x].kv().set(cell_key(x, y), Bytes::copy_from_slice(&[alive as u8]));
         }
     }
 
@@ -306,7 +306,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                     // Phase 2: after delay, write — all reads complete well before any write
                     time::sleep(Duration::from_millis(WRITE_DELAY_MS)).await;
-                    let _ = agent.set(key.clone(), Bytes::copy_from_slice(&[next_alive as u8]));
+                    let _ = agent.kv().set(key.clone(), Bytes::copy_from_slice(&[next_alive as u8]));
                 }
             });
         }

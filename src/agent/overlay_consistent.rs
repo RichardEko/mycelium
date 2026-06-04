@@ -1,11 +1,9 @@
-use std::{sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
+use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::Bytes;
 
-use crate::{
-    consensus::{ConsensusConfig, ConsensusResult},
-    node_id::NodeId,
-};
+use crate::node_id::NodeId;
 
 use super::{GossipAgent, helpers::make_gossip_update, TaskCtx};
 use crate::store::apply_and_notify;
@@ -86,101 +84,38 @@ impl Drop for LockGuard { fn drop(&mut self) { self.do_release(); } }
 impl GossipAgent {
     /// Linearizable write: runs a consensus round then gossips the value.
     ///
-    /// All nodes that observe the KV entry will agree on the same value.
-    /// Use [`set`](Self::set) for ordinary eventually-consistent writes.
+    /// Use [`ConsensusHandle::consistent_set`] via [`GossipAgent::consensus`] instead.
     pub async fn consistent_set(
         &self,
         key:   impl Into<Arc<str>>,
         value: impl Into<Bytes>,
     ) -> Result<(), ConsistencyError> {
-        let key: Arc<str> = key.into();
-        let value: Bytes   = value.into();
-        let slot = format!("consistent/{key}");
-
-        match self.system_propose(&slot, value.clone(), ConsensusConfig::default()).await {
-            ConsensusResult::Committed { .. } => {
-                let _ = self.set(key, value);
-                Ok(())
-            }
-            ConsensusResult::Timeout { ballots_tried, .. } =>
-                Err(ConsistencyError::Timeout { ballots_tried }),
-            ConsensusResult::Superseded { .. } =>
-                Err(ConsistencyError::Superseded),
-            ConsensusResult::TopologyUnsatisfied { .. } =>
-                Err(ConsistencyError::TopologyUnsatisfied),
-        }
+        self.consensus().consistent_set(key, value).await
     }
 
     /// Read the latest linearizable value for `key`.
     ///
-    /// Checks `consensus/committed/consistent/{key}` first; falls back to gossip KV.
+    /// Use [`ConsensusHandle::consistent_get`] via [`GossipAgent::consensus`] instead.
     pub fn consistent_get(&self, key: &str) -> Option<Bytes> {
-        self.get(&format!("consensus/committed/consistent/{key}"))
-            .or_else(|| self.get(key))
+        self.consensus().consistent_get(key)
     }
 
     /// Acquire a named distributed lock via cluster consensus.
     ///
-    /// Returns a [`LockGuard`] that releases the lock on drop.
-    /// `ttl` is advisory — stored in the lock record for fencing-token expiry checks.
+    /// Use [`ConsensusHandle::distributed_lock`] via [`GossipAgent::consensus`] instead.
     pub async fn distributed_lock(
         &self,
         name: &str,
         ttl:  Duration,
     ) -> Result<LockGuard, ConsistencyError> {
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-
-        let lock_json = serde_json::json!({
-            "holder":     self.node_id().to_string(),
-            "expires_ms": now_ms + ttl.as_millis() as u64,
-        });
-        let value = Bytes::from(serde_json::to_vec(&lock_json).unwrap_or_default());
-        let slot  = format!("lock/{name}");
-
-        match self.system_propose(&slot, value, ConsensusConfig::default()).await {
-            ConsensusResult::Committed { ballot, .. } => Ok(LockGuard {
-                ctx:      Arc::clone(&self.task_ctx),
-                name:     Arc::from(name),
-                token:    ballot,
-                released: false,
-            }),
-            ConsensusResult::Timeout { ballots_tried, .. } =>
-                Err(ConsistencyError::Timeout { ballots_tried }),
-            ConsensusResult::Superseded { .. } =>
-                Err(ConsistencyError::Superseded),
-            ConsensusResult::TopologyUnsatisfied { .. } =>
-                Err(ConsistencyError::TopologyUnsatisfied),
-        }
+        self.consensus().distributed_lock(name, ttl).await
     }
 
     /// Elect a leader for `group` via consensus.
     ///
-    /// If this node wins, returns its own `NodeId`. If another node committed first,
-    /// reads the winner from the committed KV slot and returns it (rather than failing).
+    /// Use [`ConsensusHandle::elect_leader`] via [`GossipAgent::consensus`] instead.
     pub async fn elect_leader(&self, group: &str) -> Result<NodeId, ConsistencyError> {
-        let slot  = format!("leader/{group}");
-        let value = Bytes::from(self.node_id().to_string().into_bytes());
-
-        match self.group_propose(group, &slot, value, ConsensusConfig::default()).await {
-            ConsensusResult::Committed { .. } => Ok(self.node_id().clone()),
-            ConsensusResult::Superseded { .. } => {
-                if let Some(raw) = self.get(&format!("consensus/committed/{slot}")) {
-                    if let Ok(s) = std::str::from_utf8(&raw) {
-                        if let Ok(id) = s.parse::<NodeId>() {
-                            return Ok(id);
-                        }
-                    }
-                }
-                Err(ConsistencyError::Superseded)
-            }
-            ConsensusResult::Timeout { ballots_tried, .. } =>
-                Err(ConsistencyError::Timeout { ballots_tried }),
-            ConsensusResult::TopologyUnsatisfied { .. } =>
-                Err(ConsistencyError::TopologyUnsatisfied),
-        }
+        self.consensus().elect_leader(group).await
     }
 }
 

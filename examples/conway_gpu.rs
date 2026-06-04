@@ -449,7 +449,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // density as 0–100 percent
                         let pct = (live * 100 / (TILE * TILE) as u32) as u8;
                         density[ty][tx] = pct;
-                        let _ = agents_arc[ty * MESH + tx].set(
+                        let _ = agents_arc[ty * MESH + tx].kv().set(
                             tile_key(tx, ty),
                             Bytes::copy_from_slice(&[pct]),
                         );

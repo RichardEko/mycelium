@@ -112,7 +112,7 @@ fn register(
 ```rust
 // three_node_demo.rs:discover_tools
 fn discover_tools(agent: &GossipAgent) -> Vec<(String, Value)> {
-    agent.scan_prefix("tools/")
+    agent.kv().scan_prefix("tools/")
         .into_iter()
         .filter_map(|(key, val)| {
             let name = key.split('/').nth(1)?.to_string();
@@ -141,7 +141,7 @@ fn discover_tools(agent: &GossipAgent) -> Vec<(String, Value)> {
 ```rust
 // three_node_demo.rs:planning_cycle
 if !tool_evidence.is_empty() {
-    if let Some((verifier_id, _)) = agent.resolve(&CapFilter::new("role","verifier"))
+    if let Some((verifier_id, _)) = agent.capabilities().resolve(&CapFilter::new("role","verifier"))
                                          .into_iter().next() {
         // call verify_answer — graceful fallback if absent or timeout
     }

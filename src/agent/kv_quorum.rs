@@ -1,12 +1,12 @@
-//! Per-write ACK tracker for [`GossipAgent::set_quorum`].
+//! Per-write ACK tracker for [`GossipAgent::set_with_min_acks`].
 //!
-//! `QuorumAckTracker` is installed by `set_quorum` just before the write and
+//! `QuorumAckTracker` is installed by `set_with_min_acks` just before the write and
 //! removed after the wait completes (success or timeout). It lives in
 //! `KvState::quorum_trackers` keyed by the key string.  `apply_and_notify`
 //! calls `observe` for every incoming update so the tracker learns when
 //! distinct peers have confirmed the value.
 //!
-//! The tracker is per-write, not per-key. Only one concurrent `set_quorum` per
+//! The tracker is per-write, not per-key. Only one concurrent `set_with_min_acks` per
 //! key is supported; a second call would overwrite the first tracker.
 
 use std::sync::Arc;
@@ -15,7 +15,7 @@ use tokio::sync::watch;
 
 /// Tracks how many distinct peers have confirmed a particular KV write.
 ///
-/// Created by `set_quorum` and observed by `apply_and_notify`.
+/// Created by `set_with_min_acks` and observed by `apply_and_notify`.
 pub(crate) struct QuorumAckTracker {
     /// Minimum HLC timestamp of the write we are waiting for. Any incoming
     /// update for the tracked key with `timestamp >= write_ts` from a peer
@@ -57,7 +57,7 @@ impl QuorumAckTracker {
     }
 }
 
-/// Error returned by [`GossipAgent::set_quorum`] when the durability threshold
+/// Error returned by [`GossipAgent::set_with_min_acks`] when the durability threshold
 /// is not reached within the timeout.
 #[derive(Debug, Clone, PartialEq)]
 pub enum QuorumError {
@@ -72,7 +72,7 @@ impl std::fmt::Display for QuorumError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             QuorumError::Timeout { acks_received } =>
-                write!(f, "set_quorum timed out ({acks_received} peer(s) acknowledged)"),
+                write!(f, "set_with_min_acks timed out ({acks_received} peer(s) acknowledged)"),
         }
     }
 }

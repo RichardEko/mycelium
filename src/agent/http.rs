@@ -58,7 +58,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt as _;
 use tracing::info;
 
-use super::overlay_log::LogEntry;
+use super::kv_handle::{LogEntry, SubscribeHandle};
 use super::overlay_consistent::LockGuard;
 
 use super::TaskCtx;
@@ -1597,7 +1597,7 @@ async fn gw_overlay_log_group_subscribe(
 
     let (tx, rx) = tokio::sync::mpsc::channel::<Event>(64);
     tokio::spawn(async move {
-        let handle = super::overlay_log::SubscribeHandle::from_task_ctx(Arc::clone(&task_ctx));
+        let handle = SubscribeHandle::from_task_ctx(Arc::clone(&task_ctx));
         loop {
             let lock_name  = format!("clog/{stream_name}/{group_name}/claim");
             let _guard = match handle.distributed_lock(&lock_name, Duration::from_secs(30)).await {
@@ -2096,7 +2096,7 @@ mod tests {
         cfg.http_port = Some(http_port);
         // Must be in the "test-sse" group to admit the signal.
         let agent = Arc::new(GossipAgent::new(id, cfg));
-        agent.join_group("test-sse");
+        agent.mesh().join_group("test-sse");
         agent.start().await.unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -2110,7 +2110,7 @@ mod tests {
         assert_eq!(resp.status(), 200);
 
         // Emit a signal to self.
-        let _ = agent.emit("sse-probe", SignalScope::System, Bytes::from_static(b"payload"));
+        let _ = agent.mesh().emit("sse-probe", SignalScope::System, Bytes::from_static(b"payload"));
 
         // Read SSE chunks until we see the expected event or timeout.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(2);

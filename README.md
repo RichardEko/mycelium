@@ -291,22 +291,22 @@ let agent = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", 7946)?, config));
 agent.start().await?;
 
 // Write — local store always updated; returns false if gossip channel full
-agent.set("key", Bytes::from("value"));
+agent.kv().set("key", Bytes::from("value"));
 
 // Read
-if let Some(bytes) = agent.get("key") { /* ... */ }
+if let Some(bytes) = agent.kv().get("key") { /* ... */ }
 
 // Delete (propagates a tombstone)
-agent.delete("key");
+agent.kv().delete("key");
 
 // Enumerate live keys
-let keys: Vec<Arc<str>> = agent.keys();
+let keys: Vec<Arc<str>> = agent.kv().keys();
 
 // Scan by prefix — capability discovery, pheromone trail reads
-let entries = agent.scan_prefix("load/");
+let entries = agent.kv().scan_prefix("load/");
 
 // Subscribe — watch::Receiver fires on every change (local or gossiped)
-let mut rx = agent.subscribe("load/my-node");
+let mut rx = agent.kv().subscribe("load/my-node");
 rx.changed().await?;
 println!("{:?}", *rx.borrow());  // None = tombstoned; Some(bytes) = current value
 
@@ -357,7 +357,7 @@ trail is visible from every other node via anti-entropy sync:
 
 ```rust
 // Count live workers in the "nlp" pool
-let live_workers: Vec<LoadState> = agent.scan_prefix("load/nlp/")
+let live_workers: Vec<LoadState> = agent.kv().scan_prefix("load/nlp/")
     .into_iter()
     .filter_map(|(_, b)| decode::<LoadState>(&b))
     .filter(|s| unix_ms_now() - s.written_at_ms < 30_000)  // evaporation window
@@ -378,27 +378,27 @@ use mycelium::{signal_kind, SignalScope, OpacityHint};
 use std::time::Duration;
 
 // ── Group membership ──────────────────────────────────────────────────────
-agent.join_group("nlp");
-agent.leave_group("nlp");
+agent.mesh().join_group("nlp");
+agent.mesh().leave_group("nlp");
 let groups: Vec<Arc<str>> = agent.groups();  // current memberships
 
 // ── Advertise — periodic heartbeat + pheromone trail ─────────────────────
 let load_key = format!("load/{}", agent.node_id());
 let agent2 = agent.clone();
-let _advert = agent.advertise(
+let _advert = agent.mesh().advertise(
     signal_kind::CONTRACT_AVAILABLE,
     SignalScope::Group("nlp"),
     Duration::from_secs(10),
     move || {
         let state = LoadState { queue_depth: QUEUE.len(), written_at_ms: unix_ms_now() };
-        agent2.set(load_key.clone(), encode(&state));  // pheromone trail — persists
+        agent2.kv().set(load_key.clone(), encode(&state));  // pheromone trail — persists
         encode(&state)                                  // signal payload — fast delivery
     },
 );
-// Drop _advert to stop advertising; call agent.delete(&load_key) on graceful shutdown
+// Drop _advert to stop advertising; call agent.kv().delete(&load_key) on graceful shutdown
 
 // ── Receive signals ────────────────────────────────────────────────────────
-let mut rx = agent.signal_rx(signal_kind::INVOKE);
+let mut rx = agent.mesh().signal_rx(signal_kind::INVOKE);
 tokio::spawn(async move {
     while let Some(sig) = rx.recv().await {
         // sig.sender, sig.payload, sig.scope, sig.nonce
@@ -407,15 +407,24 @@ tokio::spawn(async move {
 // Channel sizing: the default depth of 256 suits kinds that arrive at a few Hz
 // (health probes, contract advertisements). For kinds where N agents all emit
 // simultaneously (e.g. INVOKE to a group of N workers), use:
-//   agent.signal_rx_with_capacity(kind, N * expected_burst)
+//   agent.mesh().signal_rx_with_capacity(kind, N * expected_burst)
 // A full channel logs a warning and drops the signal — there is no retry.
 
+// ── Sender-filtered receive (signal sender authorization) ──────────────────
+// Only deliver signals whose sender is in the trusted list. Signals from any
+// other node are silently discarded before reaching the channel. Useful for
+// LLM-driven agents that process signal payloads as prompts — prevents
+// semantic injection from compromised or buggy peers.
+// With --features tls, sender identity is backed by an Ed25519 keypair.
+let orchestrator: NodeId = "10.0.1.1:7700".parse().unwrap();
+let mut rx = agent.mesh().signal_rx_from("task.assign", vec![orchestrator]);
+
 // ── Emit ───────────────────────────────────────────────────────────────────
-agent.emit("invoke", SignalScope::Group("nlp"), payload);       // non-blocking
-agent.emit_async("invoke", SignalScope::Group("nlp"), payload).await; // awaits capacity
+agent.mesh().emit("invoke", SignalScope::Group("nlp"), payload);       // non-blocking
+agent.mesh().emit_async("invoke", SignalScope::Group("nlp"), payload).await; // awaits capacity
 
 // ── One-shot request/response — register BEFORE emitting the request ───────
-let reply = agent.signal_once("invoke.result", Duration::from_secs(5), |s| {
+let reply = agent.mesh().signal_once("invoke.result", Duration::from_secs(5), |s| {
     s.nonce == request_nonce
 }).await;  // → Option<Signal>; None on timeout
 
@@ -433,13 +442,13 @@ Layer 2 provides several complementary lenses into mesh state. They answer diffe
 // ── When did I last hear a signal of this kind? ────────────────────────────
 // Useful for: circuit-breaker logic, retry decisions, fault detection.
 // Returns None if the kind has never been delivered to this node.
-let age: Option<Duration> = agent.last_signal(signal_kind::CONTRACT_AVAILABLE)
+let age: Option<Duration> = agent.mesh().last_signal(signal_kind::CONTRACT_AVAILABLE)
     .map(|t| t.elapsed());
 
 // ── Watch — fault detection / supervisor pattern ───────────────────────────
 // Calls on_stale() when last_signal(kind) has been silent for longer than threshold.
 // Checks every threshold/4 (minimum 100ms). Returns WatchHandle; drop to cancel.
-let _watcher = agent.watch(
+let _watcher = agent.mesh().watch(
     signal_kind::CONTRACT_AVAILABLE,
     Duration::from_secs(30),
     move || {
@@ -452,13 +461,13 @@ let _watcher = agent.watch(
 // Returns true when at least min_senders *distinct* NodeIds have had a signal
 // of kind delivered within window. Synchronous — no background task.
 // Use for: consensus-adjacent decisions, majority-activated state changes.
-if agent.quorum(signal_kind::CLUSTER_EVENT, 3, Duration::from_secs(10)) {
+if agent.mesh().quorum(signal_kind::CLUSTER_EVENT, 3, Duration::from_secs(10)) {
     // At least 3 distinct nodes checked in within the last 10 seconds
     start_leader_election();
 }
 
 // ── Is this node suppressing a kind? ──────────────────────────────────────
-let suppressing: bool = agent.is_suppressed(signal_kind::INVOKE);
+let suppressing: bool = agent.mesh().is_suppressed(signal_kind::INVOKE);
 
 // ── Current fill ratio for a kind's handler channel ───────────────────────
 // 0.0 = empty (no load); 1.0 = full (completely saturated, opacity = 100%).
@@ -496,15 +505,15 @@ let _governor = agent.manage_opacity_gated(
 
 | Question | Tool |
 |---|---|
-| Has a worker been seen recently? | `last_signal` |
-| Has a worker gone silent? (trigger action when silent) | `watch` |
-| Have enough distinct nodes checked in? | `quorum` |
-| Have K nodes checked in (survives restart)? | `quorum_persistent` |
-| Is this node actively refusing a kind? | `is_suppressed` |
+| Has a worker been seen recently? | `mesh().last_signal` |
+| Has a worker gone silent? (trigger action when silent) | `mesh().watch` |
+| Have enough distinct nodes checked in? | `mesh().quorum` |
+| Have K nodes checked in (survives restart)? | `kv().quorum_persistent` |
+| Is this node actively refusing a kind? | `mesh().is_suppressed` |
 | How saturated is this node's intake? | `opacity` |
 | Are peers aware this node is overloaded? | `manage_opacity` governor |
 | Which groups is this node a member of? | `groups()` |
-| How many live workers are in the pool? | `scan_prefix("load/")` |
+| How many live workers are in the pool? | `kv().scan_prefix("load/")` |
 | Which peers are dropping frames? | `peer_drop_counts()` |
 
 ### Opacity vs Inhibition — Knowing the Difference
@@ -557,10 +566,10 @@ and keeps updating `last_signal` timestamps; only handler delivery is blocked.
 // ── Refractory period after handling ──────────────────────────────────────
 // After accepting a work item, block the next invocation for 500ms.
 // Without this, all queued invocations pile into the handler concurrently.
-let mut invoke_rx = agent.signal_rx(signal_kind::INVOKE);
+let mut invoke_rx = agent.mesh().signal_rx(signal_kind::INVOKE);
 tokio::spawn(async move {
     while let Some(sig) = invoke_rx.recv().await {
-        agent.suppress(signal_kind::INVOKE, Duration::from_millis(500));
+        agent.mesh().suppress(signal_kind::INVOKE, Duration::from_millis(500));
         handle_invocation(sig).await;
     }
 });
@@ -568,15 +577,15 @@ tokio::spawn(async move {
 // ── Rate limiting ──────────────────────────────────────────────────────────
 // Suppress "data.sync" for 5s after processing one — prevents sync storms.
 agent.on_signal(signal_kind::DATA_SYNC, move |_sig| {
-    agent.suppress(signal_kind::DATA_SYNC, Duration::from_secs(5));
+    agent.mesh().suppress(signal_kind::DATA_SYNC, Duration::from_secs(5));
     trigger_sync();
 });
 
 // ── Lift early if needed ───────────────────────────────────────────────────
-agent.unsuppress(signal_kind::INVOKE);
+agent.mesh().unsuppress(signal_kind::INVOKE);
 
 // ── Check state for diagnostics ───────────────────────────────────────────
-if agent.is_suppressed(signal_kind::INVOKE) {
+if agent.mesh().is_suppressed(signal_kind::INVOKE) {
     tracing::debug!("invoke suppressed — in refractory period");
 }
 ```
@@ -611,10 +620,10 @@ now. It is a programmatic gate, not a load indicator.
 
 // 2. Inhibition (active): after accepting one invocation, block the next for 500ms.
 //    This prevents pile-up even if the channel is large enough to buffer many.
-let mut invoke_rx = agent.signal_rx_with_capacity(signal_kind::INVOKE, 64);
+let mut invoke_rx = agent.mesh().signal_rx_with_capacity(signal_kind::INVOKE, 64);
 tokio::spawn(async move {
     while let Some(sig) = invoke_rx.recv().await {
-        agent.suppress(signal_kind::INVOKE, Duration::from_millis(500));
+        agent.mesh().suppress(signal_kind::INVOKE, Duration::from_millis(500));
         handle_invocation(sig).await;
     }
 });
@@ -649,9 +658,9 @@ redundant for *discovery* — the trail is the authoritative record. Others are 
 | `contract.withdrawn` | Worker gone | **Yes** — tombstone / trail evaporation |
 | `cluster.event` | Join/leave events | **Yes** — `grp/<name>/<node_id>` entries |
 
-For routing decisions, always read the store (`scan_prefix("load/")`), not signal history. The
-store is visible to late joiners and survives missed signals. Signal history (`last_signal`,
-`quorum`) is the right tool for liveness and fault detection, not routing.
+For routing decisions, always read the store (`kv().scan_prefix("load/")`), not signal history. The
+store is visible to late joiners and survives missed signals. Signal history (`mesh().last_signal`,
+`mesh().quorum`) is the right tool for liveness and fault detection, not routing.
 
 See [ROADMAP.md](ROADMAP.md) for architecture, design rationale, and Layer 3/4 plans.
 
@@ -782,6 +791,14 @@ need (`declare_requirement`), and how much demand exists relative to supply (`de
 registry; everything lives under the `cap/`, `req/`, and `gcap/` namespaces and anti-entropy-syncs
 to late joiners automatically.
 
+**Schema versioning** — capabilities carry an optional `schema_id` (e.g. `"acme-ml/v2"`) that is
+gossip-propagated alongside the capability entry. Callers that need a specific contract version use
+`CapFilter::with_schema("acme-ml/v2")`; providers without that `schema_id` are silently excluded.
+This prevents silent semantic mismatches when multiple teams advertise the same `(namespace, name)`
+with incompatible payload shapes. Input and output JSON Schemas are also embeddable directly in the
+capability (`with_input_schema` / `with_output_schema`) so callers can inspect contracts from
+`resolve()` results without a separate KV lookup.
+
 → The **Capability Market** preset in the [Mesh Control UI](examples/mesh_control.html) demonstrates
 providers, requirers, and per-capability demand-pressure bars across four capability types.
 
@@ -794,13 +811,29 @@ use std::time::Duration;
 // Advertise — periodically reasserts cap/{node_id}/{ns}/{name} in the KV store.
 // Drop the handle to stop advertising; the tombstone propagates automatically.
 let handle: CapabilityHandle = agent.advertise_capability(
-    Capability::new("compute", "gpu"),
+    Capability::new("compute", "gpu")
+        .with_schema_id("acme-ml/v2")                      // optional contract version
+        .with_input_schema(r#"{"type":"object"}"#)          // gossip-propagated JSON Schema
+        .with_output_schema(r#"{"type":"string"}"#),
     Duration::from_secs(30),  // reassert interval
 );
 
 // Resolve — snapshot of every node currently advertising a matching capability.
+// Without with_schema: all providers regardless of schema_id.
 let filter = CapFilter::new("compute", "gpu");
 let matches: Vec<(NodeId, Capability)> = agent.resolve(&filter);
+
+// With schema constraint: only providers advertising schema "acme-ml/v2".
+// Providers with no schema_id or a different schema_id are excluded.
+let filter_v2 = CapFilter::new("compute", "gpu").with_schema("acme-ml/v2");
+let v2_providers = agent.resolve(&filter_v2);
+
+// Inspect the payload contract from the resolved capability.
+if let Some((node, cap)) = v2_providers.first() {
+    if let Some(schema) = &cap.input_schema {
+        // validate your payload against schema before rpc_call
+    }
+}
 
 // Watch — push-based; fires when the matching set changes.
 // Debounced: burst KV writes within 50 ms collapse to one notification.
@@ -808,6 +841,41 @@ let mut rx: watch::Receiver<Vec<(NodeId, Capability)>> = agent.watch_capabilitie
 rx.changed().await?;
 let current = rx.borrow().clone();
 ```
+
+### Schema Registry — Publish and Govern Contracts
+
+Schemas live in the gossip KV ring under `schemas/{schema_id}`. Any node can read
+them; they propagate via anti-entropy like all other KV state. The inline
+`input_schema` / `output_schema` fields on each capability are a gossip-propagated
+snapshot — callers inspect the contract from `resolve()` without a separate lookup.
+
+```rust
+use mycelium::SchemaPublishResult;
+
+// Publish once at startup (or seed a whole directory).
+// Returns Published / Unchanged / Conflict — never silently overwrites.
+let schema = br#"{"type":"object","required":["prompt"],"properties":{"prompt":{"type":"string"}}}"#;
+match agent.schemas().publish_schema("acme/ml-inference/v1", schema).await? {
+    SchemaPublishResult::Published          => println!("registered"),
+    SchemaPublishResult::Unchanged          => println!("already up to date"),
+    SchemaPublishResult::Conflict { existing } => eprintln!("conflict: {:?}", existing),
+}
+
+// Seed all *.json files from a directory; schema_id = relative path without extension.
+// schemas/acme/ml-inference/v1.json  →  schema_id "acme/ml-inference/v1"
+let results = agent.schemas().seed_schemas_from_dir("./schemas").await;
+
+// Look up and enumerate
+let bytes  = agent.schemas().get_schema("acme/ml-inference/v1");
+let all    = agent.schemas().list_schemas();  // Vec<(schema_id, json_bytes)> sorted by id
+
+// Force-overwrite (development / migration only — never use in production CI)
+agent.schemas().force_publish_schema("acme/ml-inference/v1", updated_schema).await?;
+```
+
+See [docs/guide/12-schema-lifecycle.md](docs/guide/12-schema-lifecycle.md) for the
+full lifecycle guide: naming conventions, CI/CD gate, rollout window, and the
+`v1 → v2` migration pattern.
 
 ### Requirements — Declare What You Need
 
@@ -1039,19 +1107,19 @@ key order equals causal time order.
 
 ```rust
 // Producer
-let cursor = agent.append("events", b"order-placed");
+let cursor = agent.kv().append("events", b"order-placed");
 
 // Consumer — one-shot scan
-let entries = agent.scan_log("events", 0, u64::MAX);
+let entries = agent.kv().scan_log("events", 0, u64::MAX);
 
 // Live subscriber — mpsc channel, new entries arrive on each gossip tick
-let mut rx = agent.subscribe_log("events", 0);
+let mut rx = agent.kv().subscribe_log("events", 0);
 while let Some(entry) = rx.recv().await {
     println!("{} {:?}", entry.hlc, entry.value);
 }
 
 // Trim old entries
-agent.compact_log("events", checkpoint_hlc);
+agent.kv().compact_log("events", checkpoint_hlc);
 ```
 
 ### Consumer Groups (`subscribe_log_group`)
@@ -1060,7 +1128,7 @@ At most one consumer per group advances at a time. The offset (`clog/{stream}/{g
 is persisted in the gossip KV so any node can take over if the current holder fails.
 
 ```rust
-let mut rx = agent.subscribe_log_group("events", "workers").await;
+let mut rx = agent.kv().subscribe_log_group("events", "workers").await;
 while let Some(entry) = rx.recv().await {
     process(&entry);
     // offset committed before next entry is delivered
@@ -1204,7 +1272,7 @@ curl http://127.0.0.1:8300/metrics
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `gossip_kv_writes_total` | Counter | Local KV writes (all nodes, including `set_quorum`) |
+| `gossip_kv_writes_total` | Counter | Local KV writes (all nodes, including `set_with_min_acks`) |
 | `gossip_kv_deletes_total` | Counter | Local KV tombstones |
 | `gossip_store_entries` | Gauge | Current live KV entry count |
 | `gossip_messages_received_total` | Counter | Inbound gossip Data frames applied |
@@ -1253,7 +1321,14 @@ When a skill node starts:
 3. The caller sends an RPC with the input JSON; the skill runs its LLM prompt with that input and returns the result
 4. An audit record (signed with the node's Ed25519 key, HLC-timestamped) is written to the mesh
 
-No service registry. No coordinator. The mesh *is* the registry.
+No service registry. No coordinator for discovery or routing. The mesh *is* the registry.
+
+> **Scope of "no coordinator":** The gossip KV layer and signal mesh are fully
+> coordinator-free. The opt-in consistency overlay (`consistent_set`, `distributed_lock`,
+> `elect_leader`) uses epidemic Paxos and requires a live majority — those specific
+> operations have a proposer and will stall under partition. `bootstrap_peers` acts as a
+> soft coordinator for initial cluster discovery; keep 2–3 long-lived seed nodes for
+> reliable join behaviour.
 
 ### Minimal skill manifest
 

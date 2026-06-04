@@ -4,7 +4,7 @@ version = "1.0.0"
 edition = "2021"
 rust-version = "1.88"
 authors = ["mycelium contributors"]
-description = "Gossip protocol implementation with resource management"
+description = "Broker-less gossip substrate for AI agent fleets: KV store, signal mesh, consensus, capability discovery"
 license = "AGPL-3.0-only"
 repository = "https://github.com/RichardEko/mycelium"
 readme = "README.md"
@@ -12,8 +12,12 @@ keywords = ["distributed-systems", "gossip", "p2p", "protocol"]
 categories = ["network-programming", "asynchronous"]
 
 [features]
-default = ["cli"]
+default = ["cli", "gateway"]
 cli = ["dep:tracing-subscriber"]
+# Embedded HTTP gateway: REST/SSE/WebSocket bridge, MCP over HTTP, bulk staging.
+# Pulls in Axum and related deps. Disable for bare-metal / WASM / no-std targets:
+#   mycelium = { version = "1", default-features = false }
+gateway = ["dep:axum", "dep:tower-http", "dep:tokio-stream", "dep:futures-util"]
 # Exposes the `fuzz_internals` module re-exporting internal decoders to the
 # cargo-fuzz harness under `fuzz/`. NOT part of the stable public API — only
 # enable when building fuzz targets.
@@ -27,11 +31,12 @@ otel = ["dep:opentelemetry", "dep:opentelemetry-otlp", "dep:tracing-opentelemetr
 # Zero-cost when absent: all counter!/histogram!/gauge! calls compile to no-ops.
 metrics = ["dep:metrics", "dep:metrics-exporter-prometheus"]
 # Exposes A2A (Agent-to-Agent protocol) endpoints: GET /.well-known/agent.json
-# and POST /a2a JSON-RPC. Adds no new dependencies — server-side only.
-a2a = []
+# and POST /a2a JSON-RPC. Requires the embedded gateway.
+a2a = ["gateway"]
 # Adds LLM-backed prompt skills: store prompt templates in the cluster KV,
 # bind a node-local LLM backend, and expose as a callable capability.
-llm = []
+# Requires the embedded gateway for the prompt HTTP endpoint.
+llm = ["gateway"]
 
 # The `fuzz/` directory is its own cargo-fuzz crate; keep it out of any
 # implicit-workspace traversal from this parent manifest.
@@ -70,14 +75,15 @@ thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 
-# HTTP server (Layer 3 — embedded gateway for MCP bridge and language bridges)
-axum         = "0.8"
-tower-http   = { version = "0.6", features = ["cors"] }
-tokio-stream = { version = "0.1", features = ["sync"] }
+# HTTP gateway (optional — enabled by the "gateway" feature)
+axum         = { version = "0.8",  optional = true }
+tower-http   = { version = "0.6",  features = ["cors"], optional = true }
+tokio-stream = { version = "0.1",  features = ["sync"], optional = true }
+futures-util = { version = "0.3",  optional = true }
+# JSON / HTTP utilities used beyond just the gateway
 serde_json   = "1.0"
-futures-util = "0.3"
 base64       = "0.22"
-# HTTP client — used by MCP client role (connect_mcp_server) at library runtime
+# HTTP client — used by MCP client, bulk transport, and LLM backends at runtime
 reqwest      = { version = "0.12", features = ["json"] }
 
 # TLS (optional — enabled by the "tls" feature)

@@ -523,19 +523,19 @@ config.bootstrap_peers = vec![<span class="str">"127.0.0.1:7947"</span>.parse()?
 agent.start().await?;
 
 <span class="cmt">// Write — local store always updated; returns false if gossip channel full</span>
-agent.set(<span class="str">"key"</span>, Bytes::from(<span class="str">"value"</span>));
+agent.kv().set(<span class="str">"key"</span>, Bytes::from(<span class="str">"value"</span>));
 
 <span class="cmt">// Read</span>
-<span class="kw">if let</span> Some(bytes) = agent.get(<span class="str">"key"</span>) { <span class="cmt">/* ... */</span> }
+<span class="kw">if let</span> Some(bytes) = agent.kv().get(<span class="str">"key"</span>) { <span class="cmt">/* ... */</span> }
 
 <span class="cmt">// Delete (propagates a tombstone)</span>
-agent.delete(<span class="str">"key"</span>);
+agent.kv().delete(<span class="str">"key"</span>);
 
 <span class="cmt">// Scan by prefix — capability discovery, pheromone trail reads</span>
-<span class="kw">let</span> entries = agent.scan_prefix(<span class="str">"load/"</span>);
+<span class="kw">let</span> entries = agent.kv().scan_prefix(<span class="str">"load/"</span>);
 
 <span class="cmt">// Subscribe — fires on every local or gossiped change</span>
-<span class="kw">let mut</span> rx = agent.subscribe(<span class="str">"load/my-node"</span>);
+<span class="kw">let mut</span> rx = agent.kv().subscribe(<span class="str">"load/my-node"</span>);
 rx.changed().await?;
 
 agent.shutdown().await;</pre>
@@ -560,15 +560,15 @@ assert!(stats.health_monitor_alive);          <span class="cmt">// peer pings an
     </div>
   </div>
 
-  <h3>Durability-Confirmed Writes — <code>set_quorum</code></h3>
+  <h3>Durability-Confirmed Writes — <code>set_with_min_acks</code></h3>
   <p>
     <code>set_async</code> returns after the local write; gossip propagates to peers asynchronously.
-    <code>set_quorum</code> waits until <code>min_acks</code> distinct peers have applied the key,
+    <code>set_with_min_acks</code> waits until <code>min_acks</code> distinct peers have applied the key,
     giving a durable acknowledgement before returning.
   </p>
   <pre><span class="cmt">// Returns the number of peers that confirmed the write.</span><span class="lang-tag">rust</span>
 <span class="cmt">// Err(QuorumError::Timeout { acks_received }) if &lt; min_acks acked before timeout.</span>
-<span class="kw">let</span> n = agent.set_quorum(
+<span class="kw">let</span> n = agent.kv().set_with_min_acks(
     <span class="str">"cfg/cluster-epoch"</span>,
     Bytes::from(<span class="str">"42"</span>),
     <span class="num">2</span>,                           <span class="cmt">// min_acks from distinct peers</span>
@@ -597,15 +597,15 @@ println!(<span class="str">"confirmed by {} peers"</span>, n);</pre>
   <pre><span class="kw">use</span> mycelium::{signal_kind, <span class="fn">SignalScope</span>};<span class="lang-tag">rust</span>
 
 <span class="cmt">// Group membership</span>
-agent.join_group(<span class="str">"nlp"</span>);
-agent.leave_group(<span class="str">"nlp"</span>);
+agent.mesh().join_group(<span class="str">"nlp"</span>);
+agent.mesh().leave_group(<span class="str">"nlp"</span>);
 
 <span class="cmt">// Emit</span>
-agent.emit(<span class="str">"invoke"</span>, SignalScope::Group(<span class="str">"nlp"</span>), payload);      <span class="cmt">// non-blocking</span>
-agent.emit_async(<span class="str">"invoke"</span>, SignalScope::Group(<span class="str">"nlp"</span>), payload).await;
+agent.mesh().emit(<span class="str">"invoke"</span>, SignalScope::Group(<span class="str">"nlp"</span>), payload);      <span class="cmt">// non-blocking</span>
+agent.mesh().emit_async(<span class="str">"invoke"</span>, SignalScope::Group(<span class="str">"nlp"</span>), payload).await;
 
 <span class="cmt">// Receive</span>
-<span class="kw">let mut</span> rx = agent.signal_rx(signal_kind::INVOKE);
+<span class="kw">let mut</span> rx = agent.mesh().signal_rx(signal_kind::INVOKE);
 tokio::spawn(<span class="kw">async move</span> {
     <span class="kw">while let</span> Some(sig) = rx.recv().await {
         <span class="cmt">// sig.sender, sig.payload, sig.scope, sig.nonce</span>
@@ -613,7 +613,7 @@ tokio::spawn(<span class="kw">async move</span> {
 });
 
 <span class="cmt">// One-shot request/response</span>
-<span class="kw">let</span> reply = agent.signal_once(<span class="str">"invoke.result"</span>, Duration::from_secs(<span class="num">5</span>), |s| {
+<span class="kw">let</span> reply = agent.mesh().signal_once(<span class="str">"invoke.result"</span>, Duration::from_secs(<span class="num">5</span>), |s| {
     s.nonce == request_nonce
 }).await; <span class="cmt">// Option&lt;Signal&gt;; None on timeout</span></pre>
 
@@ -662,15 +662,15 @@ tokio::spawn(<span class="kw">async move</span> {
 
   <pre><span class="cmt">// Refractory period — block next invocation for 500ms after handling one</span><span class="lang-tag">rust</span>
 <span class="kw">while let</span> Some(sig) = invoke_rx.recv().await {
-    agent.suppress(signal_kind::INVOKE, Duration::from_millis(<span class="num">500</span>));
+    agent.mesh().suppress(signal_kind::INVOKE, Duration::from_millis(<span class="num">500</span>));
     handle_invocation(sig).await;
 }
 
 <span class="cmt">// Rate limit — prevent sync storms</span>
-agent.suppress(signal_kind::DATA_SYNC, Duration::from_secs(<span class="num">5</span>));
+agent.mesh().suppress(signal_kind::DATA_SYNC, Duration::from_secs(<span class="num">5</span>));
 
 <span class="cmt">// Lift early</span>
-agent.unsuppress(signal_kind::INVOKE);</pre>
+agent.mesh().unsuppress(signal_kind::INVOKE);</pre>
 </section>
 
 <!-- ── Layer III ──────────────────────────────────────────────────────── -->
@@ -890,8 +890,8 @@ POST /gateway/log/compact         { "ns": "audit", "before_hlc": 1000 }</pre>
 
   <pre><span class="cmt"># Python</span><span class="lang-tag">python</span>
 hlc = agent.append_log(<span class="str">"audit"</span>, b<span class="str">"event data"</span>)
-entries = agent.scan_log(<span class="str">"audit"</span>, from_hlc=<span class="num">0</span>, to_hlc=<span class="num">1000</span>)
-<span class="kw">for</span> entry <span class="kw">in</span> agent.subscribe_log(<span class="str">"audit"</span>):
+entries = agent.kv().scan_log(<span class="str">"audit"</span>, from_hlc=<span class="num">0</span>, to_hlc=<span class="num">1000</span>)
+<span class="kw">for</span> entry <span class="kw">in</span> agent.kv().subscribe_log(<span class="str">"audit"</span>):
     print(entry.hlc, entry.value)</pre>
 
   <h3 id="overlay-leader">Leader Election</h3>
@@ -966,7 +966,7 @@ handle = agent.advertise_capability(<span class="str">"compute"</span>, <span cl
 providers = agent.resolve_capability(<span class="str">"compute"</span>, <span class="str">"gpu"</span>)
 
 <span class="cmt"># Signals</span>
-agent.emit(<span class="str">"render-job"</span>, b<span class="str">"payload"</span>, scope=<span class="str">"system"</span>)
+agent.mesh().emit(<span class="str">"render-job"</span>, b<span class="str">"payload"</span>, scope=<span class="str">"system"</span>)
 <span class="kw">async for</span> sig <span class="kw">in</span> agent.on_signal(<span class="str">"render-job"</span>):
     print(sig.sender, sig.payload)
 
@@ -976,8 +976,8 @@ result = agent.rpc_call(target_id, <span class="str">"echo"</span>, b<span class
     agent.rpc_respond(req, req.payload)
 
 <span class="cmt"># KV store</span>
-agent.set(<span class="str">"my/key"</span>, b<span class="str">"value"</span>)
-val = agent.get(<span class="str">"my/key"</span>)
+agent.kv().set(<span class="str">"my/key"</span>, b<span class="str">"value"</span>)
+val = agent.kv().get(<span class="str">"my/key"</span>)
 
 <span class="cmt"># Mailbox</span>
 agent.deliver_event(target_id, <span class="str">"task.result"</span>, b<span class="str">"done"</span>)

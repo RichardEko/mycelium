@@ -455,7 +455,7 @@ class MyceliumAgent:
             resp.raise_for_status()
             return resp.json()["keys"]
 
-    def set_quorum(
+    def set_with_min_acks(
         self,
         key: str,
         value: bytes,
@@ -498,7 +498,7 @@ class MyceliumAgent:
             if data.get("ok"):
                 return int(data["acks_received"])
             raise TimeoutError(
-                f"set_quorum timed out ({data.get('acks_received', 0)} peer(s) acknowledged)"
+                f"set_with_min_acks timed out ({data.get('acks_received', 0)} peer(s) acknowledged)"
             )
 
     def scan_prefix(self, prefix: str) -> dict[str, bytes]:

@@ -80,11 +80,11 @@ async fn run(sf: Arc<SkillFile>) -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(ref schema) = sf.capability.input {
         let key = format!("skills/{ns}/{name}/{node_id_str}/input");
-        let _ = agent.set(key, Bytes::from(serde_json::to_vec(schema)?));
+        let _ = agent.kv().set(key, Bytes::from(serde_json::to_vec(schema)?));
     }
     if let Some(ref schema) = sf.capability.output {
         let key = format!("skills/{ns}/{name}/{node_id_str}/output");
-        let _ = agent.set(key, Bytes::from(serde_json::to_vec(schema)?));
+        let _ = agent.kv().set(key, Bytes::from(serde_json::to_vec(schema)?));
     }
 
     // Advertise capability on the mesh

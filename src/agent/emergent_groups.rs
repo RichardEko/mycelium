@@ -35,17 +35,12 @@ use super::capability_ops::{
     await_shutdown, is_cap_locality_key, now_ms, scan_prefix_kv,
     subscribe_prefix_on_kv, WATCHER_DEBOUNCE_WINDOW,
 };
-use super::kv::{run_kv_persist_task, PersistPayloadFn};
 use super::wiring::wiring_snapshot;
 
 impl GossipAgent {
-    /// Publishes a [`CapabilityGroupDef`] under `cap-group/{group}`. Any node
-    /// whose own `cap/{self}/*` advertisements match `def.filter` will
-    /// self-join the named group via `join_group` once
-    /// [`watch_capability_group_definitions`] runs (started automatically by
-    /// `lifecycle::start`). Drop the returned handle to tombstone the
-    /// definition; all members will then receive the tombstone via gossip
-    /// and self-leave.
+    /// Publishes a [`CapabilityGroupDef`] under `cap-group/{group}`.
+    ///
+    /// Use [`CapabilitiesHandle::define_capability_group`] via [`GossipAgent::capabilities`] instead.
     #[must_use]
     pub fn define_capability_group(
         &self,
@@ -53,20 +48,7 @@ impl GossipAgent {
         def:      CapabilityGroupDef,
         interval: Duration,
     ) -> CapabilityGroupHandle {
-        let group: Arc<str> = group.into();
-        let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
-        let shutdown_rx            = self.shutdown_tx.subscribe();
-        let ctx: Arc<TaskCtx>      = Arc::clone(&self.task_ctx);
-        let kv_key: Arc<str>       = Arc::from(format!("cap-group/{}", group).as_str());
-        let def_arc                = Arc::new(def);
-        let payload_fn: PersistPayloadFn = {
-            let def = Arc::clone(&def_arc);
-            Arc::new(move || def.encode())
-        };
-        self.spawn_task(run_kv_persist_task(
-            ctx, cancel_rx, shutdown_rx, kv_key, interval, payload_fn, None,
-        ));
-        CapabilityGroupHandle { _retract: cancel_tx, group }
+        self.capabilities().define_capability_group(group, def, interval)
     }
 }
 

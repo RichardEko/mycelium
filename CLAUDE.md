@@ -12,7 +12,7 @@ three-layer substrate for AI agent fleets and storage replication:
 | Layer | What it does | Where it lives |
 |---|---|---|
 | **I — KV store** | Last-write-wins state propagation over TCP; anti-entropy synced; every key has a TTL. | `src/store.rs`, `src/connection.rs`, `src/framing.rs`, `src/writer.rs`, `src/seen.rs` |
-| **II — Signal mesh** | Ephemeral scoped events with per-node admission boundaries; pheromone-style opacity composition. | `src/signal.rs`, `src/agent/signal_ops.rs`, `src/agent/opacity.rs` |
+| **II — Signal mesh** | Ephemeral scoped events with per-node admission boundaries; pheromone-style opacity composition. | `src/signal.rs`, `src/agent/mesh_handle.rs`, `src/agent/opacity.rs` |
 | **III — Consensus** | Epidemic group / system / cross-group proposals with optional Hard topology enforcement. `GroupQuorum` + `cross_group_propose` for multi-voting-bloc decisions. | `src/consensus.rs`, `src/agent/consensus_ops.rs` |
 | **Security (tls feature)** | mTLS transport, Ed25519 node identity, signed consensus payloads. | `src/tls.rs`, `src/stream.rs` |
 
@@ -84,18 +84,46 @@ These are real work items. Anyone resuming should read
 | Plan | What's pending |
 |---|---|
 | TupleSpace companion crate | Deferred; design at `~/.claude/plans/mycelium-tuple-space.md` |
-| Compliance feature (`--features compliance`) | Full plan at `~/.claude/plans/humble-twirling-comet.md`; not yet implemented |
+| Pre-release arch remediation | **Complete.** All 9 steps done — plan at `~/.claude/plans/humble-twirling-comet.md`. |
 
-**Already shipped (removed from list):** fuzz harness (`fuzz/fuzz_targets/`), SignalHandlers split, ConsensusEngine::propose extraction, locality/topology Phases 0–7, cross-group consensus Phase 8 (`cross_group_propose` + `GroupQuorum`), watcher C2 (`run_consolidated_opacity_watcher` + `FilterOpacityRegistry`), signal reorder buffer (`emit_ordered()` + wire v11 `hlc_seq`).
+**Already shipped (removed from list):** fuzz harness (`fuzz/fuzz_targets/`), SignalHandlers split, ConsensusEngine::propose extraction, locality/topology Phases 0–7, cross-group consensus Phase 8 (`cross_group_propose` + `GroupQuorum`), watcher C2 (`run_consolidated_opacity_watcher` + `FilterOpacityRegistry`), signal reorder buffer (`emit_ordered()` + wire v11 `hlc_seq`), semantic coordination (capability schema versioning `with_schema_id`/`CapFilter::with_schema`, gossip-propagated skill payload schemas `with_input_schema`/`with_output_schema`, signal sender authorization `signal_rx_from`, FIPA-ACL speech act taxonomy — `examples/semantic_coordination.rs`), schema registry (`publish_schema`, `force_publish_schema`, `get_schema`, `list_schemas`, `seed_schemas_from_dir` — `src/agent/schema_ops.rs`), **pre-release arch remediation** (sub-handle facade — `KvHandle`, `MeshHandle`, `SchemaHandle`, `ConsensusHandle`, `ServiceHandle`, `CapabilitiesHandle` — plus `gateway` feature gate for Axum).
+
+## Architecture Constraints
+
+### Layer I/II entanglement (known, v2 roadmap item)
+
+`KvState` co-locates KV subscriptions with gossip storage. `apply_and_notify` writes
+to both the store and signals `SignalHandlers` on every inbound frame. The signal mesh
+cannot be disabled without losing `subscribe` / `subscribe_prefix` functionality.
+
+Users who only need KV semantics can simply never call `MeshHandle` methods — zero
+overhead when no signal handlers are registered.
+
+Planned for v2: extract `mycelium-core` crate (gossip transport + KV only) from
+`mycelium` (full substrate with signals, consensus, capabilities).
+
+### Gateway feature gate
+
+The `gateway` feature (on by default) enables the embedded Axum HTTP server. Disable
+it for bare-metal / WASM / no-std targets:
+
+```toml
+mycelium = { version = "1", default-features = false }
+```
+
+Without `gateway`, `with_http_routes`, `with_a2a`, the SSE/WebSocket endpoints, and
+the MCP-over-HTTP bridge are all compiled away. The gossip core, KV store, signal mesh,
+consensus, and all typed sub-handles (`KvHandle`, `MeshHandle`, etc.) remain available.
 
 ## Working in this repo
 
 - `cargo build --lib`, `cargo test --lib`, `cargo clippy --lib --tests`
+- `cargo build --lib --no-default-features` to verify the gateway-free embedded build
 - `cargo build --lib --features metrics` to include the Prometheus scrape endpoint
 - `cargo build --lib --features a2a` to include the A2A protocol adapter
 - `cargo build --lib --features llm` to include the Prompt Skills LLM adapter
 - `cargo build --lib --features compliance` to include gateway auth, durable audit, RBAC (planned, not yet implemented)
-- 241 tests at HEAD (with `--features llm`); clippy at baseline 61
+- 263 tests at HEAD; clippy at baseline 61
   (pre-existing `field_reassign_with_default` in test code).
 - Wire version is currently **v11** (`PREV_WIRE_VERSION = 10` — rolling upgrade window open).
   v11 adds `hlc_seq: Option<u64>` to `WireMessage::Signal` for ordered delivery via `emit_ordered()`.

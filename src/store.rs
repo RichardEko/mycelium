@@ -62,7 +62,7 @@ pub(crate) struct KvState {
     /// `cap/{node_id}/locality/self` writes. Used on hot gossip-forwarding paths
     /// (locality-aware fan-out scoring) without re-decoding the KV entry per message.
     pub peer_localities: Arc<papaya::HashMap<NodeId, LocalityPath>>,
-    /// Per-key durability trackers installed by `set_quorum`. `apply_and_notify`
+    /// Per-key durability trackers installed by `set_with_min_acks`. `apply_and_notify`
     /// calls `tracker.observe(sender, timestamp)` for every incoming update so
     /// the waiter learns when enough distinct peers have confirmed the write.
     pub quorum_trackers: Arc<papaya::HashMap<Arc<str>, Arc<QuorumAckTracker>>>,
@@ -501,7 +501,7 @@ pub(crate) fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
                 _ => Operation::Abort(()),
             });
         }
-        // Notify any in-flight set_quorum waiters tracking this key.
+        // Notify any in-flight set_with_min_acks waiters tracking this key.
         if let Some(tracker) = kv.quorum_trackers.pin().get(&update.key) {
             tracker.observe(update.sender, update.timestamp);
         }

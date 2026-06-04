@@ -86,12 +86,12 @@ pub(crate) async fn await_nonce_reply(
     deadline: tokio::time::Instant,
 ) -> Option<Bytes> {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    ctx.rpc_pending.lock().unwrap().insert(nonce, tx);
+    ctx.rpc_pending.lock().unwrap_or_else(|e| e.into_inner()).insert(nonce, tx);
     let result = match tokio::time::timeout_at(deadline, rx).await {
         Ok(Ok(sig)) if sig.sender == *target => Some(sig.payload.slice(8..)),
         _ => None,
     };
-    ctx.rpc_pending.lock().unwrap().remove(&nonce);
+    ctx.rpc_pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&nonce);
     result
 }
 
@@ -157,28 +157,7 @@ pub(crate) async fn rpc_call_ctx(
 impl GossipAgent {
     /// Sends a point-to-point RPC request to `target` and awaits the reply.
     ///
-    /// Generates a random 8-byte correlation nonce, prepends it to `payload`,
-    /// emits `kind` as `SignalScope::Individual(target)`, then awaits the first
-    /// `"rpc.result"` signal from `target` whose payload starts with the same nonce.
-    ///
-    /// Returns `Ok(Bytes)` with the reply payload (nonce prefix stripped), or
-    /// `Err(RpcError::Timeout)` if no reply arrives within `timeout`.
-    ///
-    /// The reply handler is registered **before** the request is emitted so no
-    /// reply can be lost even if the responder is co-located and responds synchronously.
-    ///
-    /// # Example
-    /// ```ignore
-    /// // Caller
-    /// let reply = agent.rpc_call(worker_id, "mcp.invoke", request_bytes, Duration::from_secs(30)).await?;
-    ///
-    /// // Responder (in a signal handler loop)
-    /// let mut rx = agent.signal_rx("mcp.invoke");
-    /// while let Some(req) = rx.recv().await {
-    ///     let result = handle_invoke(&req.payload[8..]);  // skip nonce
-    ///     agent.rpc_respond(&req, result);
-    /// }
-    /// ```
+    /// Use [`ServiceHandle::rpc_call`] via [`GossipAgent::service`] instead.
     pub async fn rpc_call(
         &self,
         target:  NodeId,
@@ -186,32 +165,21 @@ impl GossipAgent {
         payload: impl Into<Bytes>,
         timeout: Duration,
     ) -> Result<Bytes, RpcError> {
-        rpc_call_ctx(&self.task_ctx, target, kind.into(), payload.into(), timeout).await
+        self.service().rpc_call(target, kind, payload, timeout).await
     }
 
     /// Sends a reply to an incoming RPC request.
     ///
-    /// Echoes the correlation nonce from `request` back to the caller and emits
-    /// `"rpc.result"` as `SignalScope::Individual(request.sender())`.
-    ///
-    /// # Example
-    /// ```ignore
-    /// let mut rx = agent.rpc_rx("mcp.invoke");
-    /// while let Some(req) = rx.recv().await {
-    ///     let result = compute_result(req.payload());
-    ///     agent.rpc_respond(&req, result);
-    /// }
-    /// ```
+    /// Use [`ServiceHandle::rpc_respond`] via [`GossipAgent::service`] instead.
     pub fn rpc_respond(&self, request: &RpcRequest, result: impl Into<Bytes>) {
-        rpc_respond_ctx(&self.task_ctx, request, result);
+        self.service().rpc_respond(request, result);
     }
 
     /// Returns a typed receiver for incoming RPC requests of `kind`.
     ///
-    /// Equivalent to `signal_rx(kind)` but yields [`RpcRequest`] values with
-    /// the nonce already stripped from `payload()`.
+    /// Use [`ServiceHandle::rpc_rx`] via [`GossipAgent::service`] instead.
     pub fn rpc_rx(&self, kind: impl Into<Arc<str>>) -> RpcRequestRx {
-        RpcRequestRx(self.signal_rx(kind))
+        self.service().rpc_rx(kind)
     }
 }
 

@@ -171,7 +171,7 @@ data  = agent.scan_prefix("my/")          # → dict[str, bytes]
 
 All writes are gossiped to peers with last-write-wins (HLC) semantics.
 
-#### `set_quorum(key, value, min_acks, *, timeout_secs=5.0) → int`
+#### `set_with_min_acks(key, value, min_acks, *, timeout_secs=5.0) → int`
 
 Write `value` and wait for at least `min_acks` distinct peers to confirm receipt.
 Returns the confirmed peer count on success; raises `TimeoutError` on timeout.
@@ -179,11 +179,11 @@ The write is **not** rolled back on timeout.
 
 ```python
 # Wait for 2 peers to confirm before continuing.
-n = agent.set_quorum("config/endpoint", b"https://api.v2/", min_acks=2)
+n = agent.set_with_min_acks("config/endpoint", b"https://api.v2/", min_acks=2)
 print(f"{n} peers confirmed")
 
 # Immediate local-only write (no peer confirmation required).
-agent.set_quorum("key", b"value", min_acks=0)
+agent.set_with_min_acks("key", b"value", min_acks=0)
 ```
 
 ---
@@ -372,7 +372,7 @@ All methods talk to the embedded HTTP gateway on the Rust node:
 | `set` | `POST /gateway/kv` | |
 | `delete` | `DELETE /gateway/kv?key=K` | |
 | `keys` | `GET /gateway/kv/keys?prefix=P` | |
-| `set_quorum` | `POST /gateway/kv/quorum` | |
+| `set_with_min_acks` | `POST /gateway/kv/quorum` | |
 | `mailbox` | `GET /gateway/mailbox/{kind}` | SSE stream |
 | `deliver_event` | `POST /gateway/mailbox/deliver` | |
 | `health` | `GET /health` | |

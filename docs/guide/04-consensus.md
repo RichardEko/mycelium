@@ -118,14 +118,14 @@ curl -X POST http://localhost:8400/gateway/overlay/log/append \
 
 ## How It Works
 
-From within Rust code, the overlay operations are methods on `GossipAgent`:
+From within Rust code, the overlay operations are accessed via the consensus handle:
 
 ```rust
-// src/agent/consensus_ops.rs — consistent write
-agent.consistent_set("config/feature-flag", b"true", quorum).await?;
+// Consistent write via ConsensusHandle
+agent.consensus().consistent_set("config/feature-flag", b"true").await?;
 
 // Acquire a lock — returns a guard; drop the guard to release
-let guard = agent.distributed_lock("migration-lock", Duration::from_secs(30)).await?;
+let guard = agent.consensus().distributed_lock("migration-lock", Duration::from_secs(30)).await?;
 // ... do the critical section ...
 drop(guard);  // or let it expire after 30s
 
@@ -133,8 +133,8 @@ drop(guard);  // or let it expire after 30s
 let leader_id = agent.elect_leader("workers").await?;
 
 // Append to an ordered log
-let seq = agent.append("audit-log", entry_bytes).await?;
-let entries = agent.scan_log("audit-log", 0, 100).await?;
+let seq = agent.kv().append("audit-log", entry_bytes).await?;
+let entries = agent.kv().scan_log("audit-log", 0, 100).await?;
 ```
 
 Group definitions for consensus quorum:

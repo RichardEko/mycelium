@@ -134,7 +134,7 @@ impl SkillRunner {
         for tool_name in &self.skill.skill.tools {
             // Tools are advertised under skills/{ns}/{name}/{node_id}/input
             // tool_name is "ns/name"; the LM sees the bare name (slashes invalid in OpenAI function names)
-            let entries = self.agent.scan_prefix("skills/");
+            let entries = self.agent.kv().scan_prefix("skills/");
             let bare = tool_name.split_once('/').map(|x| x.1).unwrap_or(tool_name.as_str());
 
             for (key, val) in &entries {
@@ -198,7 +198,7 @@ async fn invoke_mesh_tool(
 
     // Resolve namespace: if the LLM called a bare name, scan skills/ KV to find the ns
     let (resolved_ns, resolved_cname): (String, String) = if ns.is_empty() {
-        let entries = agent.scan_prefix("skills/");
+        let entries = agent.kv().scan_prefix("skills/");
         let mut found: Option<(String, String)> = None;
         for (key, _) in &entries {
             let kparts: Vec<&str> = key.split('/').collect();

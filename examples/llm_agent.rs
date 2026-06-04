@@ -407,7 +407,7 @@ async fn request_vector_search(agent_n2: &Arc<GossipAgent>, n1_id: NodeId, log: 
 
 fn discover_tools(agent: &GossipAgent) -> Vec<(String, NodeId, Value)> {
     let mut tools = Vec::new();
-    for (key, schema_bytes) in agent.scan_prefix("tools/") {
+    for (key, schema_bytes) in agent.kv().scan_prefix("tools/") {
         let parts: Vec<&str> = key.splitn(3, '/').collect();
         if parts.len() != 3 { continue; }
         let tool_name = parts[1].to_string();
@@ -422,7 +422,7 @@ fn discover_tools(agent: &GossipAgent) -> Vec<(String, NodeId, Value)> {
         })));
     }
     // SkillRunner skills: keys are skills/{ns}/{name}/{node}/input
-    for (key, schema_bytes) in agent.scan_prefix("skills/") {
+    for (key, schema_bytes) in agent.kv().scan_prefix("skills/") {
         if !key.ends_with("/input") { continue; }
         let parts: Vec<&str> = key.splitn(5, '/').collect();
         if parts.len() != 5 { continue; }
@@ -451,7 +451,7 @@ async fn invoke_tool(agent: &GossipAgent, tool_name: &str, args: Value) -> Resul
     // SkillRunner skill: tool name uses ns__name encoding (e.g. "llm__summarizer")
     if let Some((ns, name)) = tool_name.split_once("__") {
         let prefix = format!("skills/{ns}/{name}/");
-        let (key, _) = agent.scan_prefix(&prefix).into_iter()
+        let (key, _) = agent.kv().scan_prefix(&prefix).into_iter()
             .find(|(k, _)| k.ends_with("/input"))
             .ok_or_else(|| format!("no provider for skill {ns}/{name}"))?;
         let parts: Vec<&str> = key.splitn(5, '/').collect();
@@ -471,7 +471,7 @@ async fn invoke_tool(agent: &GossipAgent, tool_name: &str, args: Value) -> Resul
     }
 
     // MCP tool (registered via register_mcp_tool)
-    let entries = agent.scan_prefix(&format!("tools/{tool_name}/"));
+    let entries = agent.kv().scan_prefix(&format!("tools/{tool_name}/"));
     let (key, _) = entries.into_iter().next()
         .ok_or_else(|| format!("no provider for {tool_name}"))?;
     let parts: Vec<&str> = key.splitn(3, '/').collect();
@@ -888,7 +888,7 @@ fn capvalue_to_json(v: &CapValue) -> Value {
 
 fn caps_for_node(reporter: &GossipAgent, target: &NodeId) -> Vec<Value> {
     let prefix = format!("cap/{target}/");
-    reporter.scan_prefix(&prefix).into_iter().filter_map(|(_, v)| {
+    reporter.kv().scan_prefix(&prefix).into_iter().filter_map(|(_, v)| {
         let cap = Capability::decode(&v)?;
         Some(json!({
             "ns":   cap.namespace,
@@ -902,7 +902,7 @@ fn caps_for_node(reporter: &GossipAgent, target: &NodeId) -> Vec<Value> {
 
 fn tools_for_node(reporter: &GossipAgent, target: &NodeId) -> Vec<String> {
     let target_str = target.to_string();
-    reporter.scan_prefix("tools/").into_iter().filter_map(|(k, _)| {
+    reporter.kv().scan_prefix("tools/").into_iter().filter_map(|(k, _)| {
         let parts: Vec<&str> = k.splitn(3, '/').collect();
         if parts.len() == 3 && parts[2] == target_str { Some(parts[1].to_string()) } else { None }
     }).collect()
@@ -1018,7 +1018,7 @@ fn build_state_json(app: &AppState) -> String {
         })).collect()
     };
     let audit: Vec<Value> = {
-        let mut entries: Vec<(Arc<str>, Value)> = reporter.scan_prefix("audit/")
+        let mut entries: Vec<(Arc<str>, Value)> = reporter.kv().scan_prefix("audit/")
             .into_iter()
             .filter_map(|(k, v)| serde_json::from_slice::<Value>(&v).ok().map(|j| (k, j)))
             .collect();
@@ -1064,7 +1064,7 @@ fn build_state_json(app: &AppState) -> String {
 // ── Manifest control HTTP handlers ───────────────────────────────────────────
 
 fn handle_manifest_get(app: &AppState) -> (u16, &'static str, String) {
-    match app.agent_n2.get(manifest_keys::CURRENT) {
+    match app.agent_n2.kv().get(manifest_keys::CURRENT) {
         Some(b) => match MeshManifest::from_toml_bytes(&b) {
             Some(m) => {
                 let groups: Vec<Value> = m.groups.iter().map(|g| json!({
@@ -1090,7 +1090,7 @@ async fn handle_manifest_post(app: &AppState, body: &[u8]) -> (u16, &'static str
     let Some(new_m) = MeshManifest::from_toml_bytes(body) else {
         return (400, "application/json", json!({"error":"invalid TOML"}).to_string());
     };
-    let cur_ver = app.agent_n2.get(manifest_keys::VERSION)
+    let cur_ver = app.agent_n2.kv().get(manifest_keys::VERSION)
         .and_then(|b| String::from_utf8(b.to_vec()).ok())
         .unwrap_or_else(|| "0.0.0".into());
 
@@ -1101,8 +1101,8 @@ async fn handle_manifest_post(app: &AppState, body: &[u8]) -> (u16, &'static str
     }
 
     // Archive old manifest
-    if let Some(old) = app.agent_n2.get(manifest_keys::CURRENT) {
-        let _ = app.agent_n2.set(manifest_keys::history(&cur_ver), old);
+    if let Some(old) = app.agent_n2.kv().get(manifest_keys::CURRENT) {
+        let _ = app.agent_n2.kv().set(manifest_keys::history(&cur_ver), old);
     }
     let new_ver = new_m.mesh.version.clone();
     let Ok(toml_str) = new_m.to_toml() else {
@@ -1114,9 +1114,9 @@ async fn handle_manifest_post(app: &AppState, body: &[u8]) -> (u16, &'static str
         let new_handles = advertise_manifest_caps(&m, [&app.agent_n0, &app.agent_n1, &app.agent_n2]);
         *app.manifest_caps.lock().unwrap() = new_handles;
     }
-    let _ = app.agent_n2.set(manifest_keys::CURRENT,
+    let _ = app.agent_n2.kv().set(manifest_keys::CURRENT,
                               Bytes::from(toml_str.into_bytes()));
-    let _ = app.agent_n2.set(manifest_keys::VERSION,
+    let _ = app.agent_n2.kv().set(manifest_keys::VERSION,
                               Bytes::from(new_ver.clone().into_bytes()));
 
     push_log(&app.log, "Manifest", format!("uploaded v{new_ver} (was v{cur_ver})"));
@@ -1146,13 +1146,13 @@ fn handle_system_status(app: &AppState) -> (u16, &'static str, String) {
 }
 
 async fn handle_system_stop(app: &AppState) -> (u16, &'static str, String) {
-    let _ = app.agent_n2.set(manifest_keys::CONTROL_SYSTEM, Bytes::from_static(b"stopped"));
+    let _ = app.agent_n2.kv().set(manifest_keys::CONTROL_SYSTEM, Bytes::from_static(b"stopped"));
     push_log(&app.log, "Control", "system stop requested via HTTP");
     (200, "application/json", json!({"ok": true}).to_string())
 }
 
 async fn handle_system_start(app: &AppState) -> (u16, &'static str, String) {
-    let _ = app.agent_n2.set(manifest_keys::CONTROL_SYSTEM, Bytes::from_static(b"running"));
+    let _ = app.agent_n2.kv().set(manifest_keys::CONTROL_SYSTEM, Bytes::from_static(b"running"));
     push_log(&app.log, "Control", "system start requested via HTTP");
     (200, "application/json", json!({"ok": true}).to_string())
 }
@@ -1277,7 +1277,7 @@ async fn handle_group_control(app: &AppState, path: &str, is_stop: bool) -> (u16
     }
     let key = manifest_keys::control_group(group);
     let val = if is_stop { Bytes::from_static(b"stopped") } else { Bytes::from_static(b"running") };
-    let _ = app.agent_n2.set(key, val);
+    let _ = app.agent_n2.kv().set(key, val);
     push_log(&app.log, "Control",
         format!("group {group} {} via HTTP", if is_stop { "stop" } else { "start" }));
     (200, "application/json", json!({"ok": true, "group": group}).to_string())
@@ -1302,7 +1302,7 @@ async fn handle_preset_apply(app: &AppState, preset_id: &str) -> (u16, &'static 
     let Some(mut new_m) = MeshManifest::from_toml_bytes(preset.toml.as_bytes()) else {
         return (500, "application/json", json!({"error":"preset parse failed"}).to_string());
     };
-    let cur_ver = app.agent_n2.get(manifest_keys::VERSION)
+    let cur_ver = app.agent_n2.kv().get(manifest_keys::VERSION)
         .and_then(|b| String::from_utf8(b.to_vec()).ok())
         .unwrap_or_else(|| "0.0.0".into());
 
@@ -1321,8 +1321,8 @@ async fn handle_preset_apply(app: &AppState, preset_id: &str) -> (u16, &'static 
     };
     new_m.mesh.version = new_ver.clone();
 
-    if let Some(old) = app.agent_n2.get(manifest_keys::CURRENT) {
-        let _ = app.agent_n2.set(manifest_keys::history(&cur_ver), old);
+    if let Some(old) = app.agent_n2.kv().get(manifest_keys::CURRENT) {
+        let _ = app.agent_n2.kv().set(manifest_keys::history(&cur_ver), old);
     }
     let Ok(toml_str) = new_m.to_toml() else {
         return (500, "application/json", json!({"error":"re-serialization failed"}).to_string());
@@ -1333,8 +1333,8 @@ async fn handle_preset_apply(app: &AppState, preset_id: &str) -> (u16, &'static 
         let new_handles = advertise_manifest_caps(&m, [&app.agent_n0, &app.agent_n1, &app.agent_n2]);
         *app.manifest_caps.lock().unwrap() = new_handles;
     }
-    let _ = app.agent_n2.set(manifest_keys::CURRENT, Bytes::from(toml_str.into_bytes()));
-    let _ = app.agent_n2.set(manifest_keys::VERSION,  Bytes::from(new_ver.clone().into_bytes()));
+    let _ = app.agent_n2.kv().set(manifest_keys::CURRENT, Bytes::from(toml_str.into_bytes()));
+    let _ = app.agent_n2.kv().set(manifest_keys::VERSION,  Bytes::from(new_ver.clone().into_bytes()));
     push_log(&app.log, "Preset", format!("'{}' applied as v{new_ver}", preset_id));
     (200, "application/json", json!({"ok":true,"version":new_ver}).to_string())
 }
@@ -1753,9 +1753,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Push initial manifest to gossip KV ───────────────────────────────────
     {
         let toml_str = manifest.to_toml().expect("manifest serializable");
-        let _ = agent_n2.set(manifest_keys::CURRENT,
+        let _ = agent_n2.kv().set(manifest_keys::CURRENT,
                               Bytes::from(toml_str.into_bytes()));
-        let _ = agent_n2.set(manifest_keys::VERSION,
+        let _ = agent_n2.kv().set(manifest_keys::VERSION,
                               Bytes::from(manifest.mesh.version.clone().into_bytes()));
         println!("Manifest v{} pushed to KV", manifest.mesh.version);
     }
@@ -1857,11 +1857,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let agent = Arc::clone(&agent_n2);
         let app   = Arc::clone(&app);
         async move {
-            let mut rx = agent.subscribe_prefix("manifest/control/");
+            let mut rx = agent.kv().subscribe_prefix("manifest/control/");
             loop {
                 // Wait for any change under manifest/control/
                 if rx.changed().await.is_err() { break; }
-                let entries = agent.scan_prefix("manifest/control/");
+                let entries = agent.kv().scan_prefix("manifest/control/");
 
                 // Pass 1 — system-level control establishes the baseline for all nodes.
                 // Must run before group overrides so alphabetic scan order ('g' < 's')

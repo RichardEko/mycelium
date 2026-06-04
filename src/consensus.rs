@@ -254,9 +254,9 @@ pub(crate) enum ConsensusMsg {
 
 /// Cancels the consensus listener task on drop.
 ///
-/// Obtain from [`GossipAgent::start_consensus_listener`].
+/// Obtain from [`ConsensusHandle::start_consensus_listener`].
 /// The task also exits when the agent shuts down even if this handle is live.
-pub struct ConsensusHandle {
+pub struct ConsensusListenerHandle {
     pub(crate) _cancel: oneshot::Sender<()>,
 }
 

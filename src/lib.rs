@@ -29,12 +29,12 @@
 //!     agent.start().await?;
 //!
 //!     // Layer 1 — KV state
-//!     agent.set("load/self", Bytes::from_static(b"queue=0"));
-//!     let val = agent.get("load/self");
+//!     agent.kv().set("load/self", Bytes::from_static(b"queue=0"));
+//!     let val = agent.kv().get("load/self");
 //!
 //!     // Layer 2 — signals
-//!     agent.join_group("nlp");
-//!     agent.emit(signal_kind::INVOKE, SignalScope::Group("nlp".into()), Bytes::new());
+//!     agent.mesh().join_group("nlp");
+//!     agent.mesh().emit(signal_kind::INVOKE, SignalScope::Group("nlp".into()), Bytes::new());
 //!
 //!     agent.shutdown().await;
 //!     Ok(())
@@ -70,6 +70,7 @@
 //! | `cap-group/{group}`                 | Emergent capability-group definitions                        |
 //! | `gcap/{group}/{ns}/{name}/{contrib}`| Group-level capability projections                           |
 //! | `mailbox/{target}/{kind}/{hlc_hex}` | Service Patterns — event mailbox entries (value: `sender_len(2LE) | sender_bytes | payload`) |
+//! | `schemas/{schema_id}`              | Schema registry — authoritative JSON Schema bytes for a capability `schema_id`; written via `publish_schema`; gossip-propagated and WAL-persisted |
 //! | `tools/{name}/{node}`              | Layer IV MCP tool registrations (value: JSON Schema bytes)   |
 //! | `agent/{node}/state`               | Layer V agent state machine — current state string (gossips to mesh) |
 //! | `agent/{node}/policy`              | Layer V serialised AgentPolicy (readable by monitors/supervisors) |
@@ -162,7 +163,9 @@ pub use agent::{
     BulkError, BulkServeHandle,
     GossipAgent, MailboxHandle, McpClientHandle, McpError, McpToolHandle,
     MeshEvent, RpcError, RpcRequest, RpcRequestRx, ScatterError, ScatterResult, SystemStats,
-    AckResult, ConsistencyError, LockGuard, LogEntry, QuorumError, ShardError,
+    AckResult, CapabilitiesHandle, ConsensusHandle, ConsistencyError, LockGuard, LogEntry,
+    KvHandle, MeshHandle, QuorumError, ServiceHandle, ShardError,
+    SchemaError, SchemaHandle, SchemaPublishResult,
 };
 #[cfg(feature = "llm")]
 pub use agent::{PromptTemplate, PromptSkillError, PromptSkillHandle, LlmBackend, LlmResult, LlmError, OpenAiBackend, EchoBackend};
@@ -182,7 +185,7 @@ pub use mesh_manifest::{
 };
 pub use config::{GossipConfig, GroupTopologyPolicy, PersistenceConfig, SyncMode, TlsConfig, TopologyEnforcement};
 pub use locality::LocalityPreference;
-pub use consensus::{ConsensusConfig, ConsensusHandle, ConsensusResult, GroupQuorum, consensus_kind, consensus_ns};
+pub use consensus::{ConsensusConfig, ConsensusListenerHandle, ConsensusResult, GroupQuorum, consensus_kind, consensus_ns};
 pub use error::GossipError;
 pub use node_id::NodeId;
 pub use signal::{

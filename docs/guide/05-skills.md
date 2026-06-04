@@ -203,7 +203,7 @@ has this record within seconds. Scan it with:
 ```bash
 curl http://localhost:9050/mgmt   # dashboard shows audit records
 # or from Rust:
-agent.scan_prefix("audit/")
+agent.kv().scan_prefix("audit/")
 ```
 
 → Next: [06-tool-discovery.md](06-tool-discovery.md) — the MCP-style alternative where tools are functions, not agents.

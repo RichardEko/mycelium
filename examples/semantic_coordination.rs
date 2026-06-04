@@ -181,10 +181,10 @@ async fn main() {
     let attacker     = NodeId::new("10.0.99.1", 7700).unwrap();
 
     // Unrestricted receiver — accepts signals from any sender.
-    let mut rx_all = agent_a.signal_rx("task.assign");
+    let mut rx_all = agent_a.mesh().signal_rx("task.assign");
 
     // Trust-filtered receiver — only accepts signals from the orchestrator.
-    let mut rx_trusted = agent_a.signal_rx_from(
+    let mut rx_trusted = agent_a.mesh().signal_rx_from(
         "task.assign",
         vec![orchestrator.clone()],
     );
@@ -207,7 +207,7 @@ async fn main() {
 
     // Emit from agent_a (sender = node_a) — admitted by rx_all, admitted by
     // rx_trusted only if node_a is in the trusted list.
-    let _ = agent_a.emit("task.assign", SignalScope::System, Bytes::from_static(b"legitimate task"));
+    let _ = agent_a.mesh().emit("task.assign", SignalScope::System, Bytes::from_static(b"legitimate task"));
 
     // For the attacker/orchestrator distinction, verify the filter directly
     // since in-process agents can only emit as themselves.
@@ -231,8 +231,8 @@ async fn main() {
     let _ = rx_trusted.try_recv();
 
     // empty-trusted-list delegates to unrestricted path (no FilteredSender overhead)
-    let mut rx_empty = agent_a.signal_rx_from("task.assign", vec![]);
-    let _ = agent_a.emit("task.assign", SignalScope::System, Bytes::from_static(b"test"));
+    let mut rx_empty = agent_a.mesh().signal_rx_from("task.assign", vec![]);
+    let _ = agent_a.mesh().emit("task.assign", SignalScope::System, Bytes::from_static(b"test"));
     tokio::time::sleep(Duration::from_millis(10)).await;
     let _ = rx_empty.try_recv(); // should receive (no filter)
 

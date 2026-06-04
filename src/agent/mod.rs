@@ -19,11 +19,13 @@ use tokio::{sync::{mpsc, watch}, task::JoinSet};
 mod lifecycle;
 mod kv;
 pub(crate) mod kv_quorum;
+mod kv_handle;
+mod mesh_handle;
+mod consensus_handle;
 mod overlay_consistent;
-mod overlay_log;
 mod overlay_reliable;
-mod signal_ops;
 mod rpc;
+#[cfg(feature = "gateway")]
 mod http;
 mod mcp;
 mod opacity;
@@ -40,6 +42,9 @@ mod bulk;
 mod mailbox;
 mod sharding;
 mod shard_ops;
+mod service_handle;
+mod capability_handle;
+mod schema_handle;
 #[cfg(feature = "a2a")]
 pub(crate) mod a2a;
 #[cfg(feature = "llm")]
@@ -54,6 +59,8 @@ pub(crate) use capability_ops::FilterOpacityRegistry;
 pub(crate) use helpers::emit_signal;
 pub(crate) use helpers::emit_signal_async;
 pub(crate) use helpers::make_gossip_update;
+#[cfg(feature = "llm")]
+use helpers::{kv_delete, kv_scan_prefix, kv_set};
 pub(crate) use opacity::is_self_opaque;
 pub use mcp::{McpClientHandle, McpError, McpToolHandle};
 pub use rpc::{RpcError, RpcRequest, RpcRequestRx};
@@ -62,10 +69,15 @@ pub use scatter::{ScatterError, ScatterResult};
 pub use bulk::{BulkError, BulkServeHandle};
 pub use mailbox::{MailboxHandle, MeshEvent};
 pub use overlay_consistent::{ConsistencyError, LockGuard};
+pub use consensus_handle::ConsensusHandle;
+pub use service_handle::ServiceHandle;
+pub use capability_handle::CapabilitiesHandle;
 pub use kv_quorum::QuorumError;
-pub use overlay_log::LogEntry;
+pub use kv_handle::{KvHandle, LogEntry};
+pub use mesh_handle::MeshHandle;
 pub use overlay_reliable::AckResult;
 pub use sharding::ShardError;
+pub use schema_handle::{SchemaError, SchemaHandle, SchemaPublishResult};
 #[cfg(feature = "llm")]
 pub use prompt::{PromptTemplate, PromptSkillError, PromptSkillHandle};
 #[cfg(feature = "llm")]
@@ -145,6 +157,10 @@ pub struct SystemStats {
 /// tasks would hold a reference back to the agent.
 pub(crate) struct TaskCtx {
     pub(crate) node_id:          NodeId,
+    /// Shared copy of the agent configuration. Available to typed handles so they
+    /// can access `signal_window_secs`, `health_check_interval_secs`, `locality_path`,
+    /// and `topology_policies` without borrowing `GossipAgent`.
+    pub(crate) config:           Arc<GossipConfig>,
     pub(crate) seen:             Arc<ShardedSeen>,
     /// Hybrid Logical Clock for causal LWW ordering. `make_gossip_update`
     /// calls `tick()` for every locally-originated write; the connection
@@ -188,6 +204,22 @@ pub(crate) struct TaskCtx {
     /// Receiver-side causal reorder buffer for `emit_ordered` signals.
     /// `None` when `config.signal_ordered_delivery = false` (the default).
     pub(crate) reorder_buf: Option<Arc<std::sync::Mutex<crate::signal::SignalReorderBuffer>>>,
+    /// Shutdown broadcast — sending `true` cancels all background tasks.
+    pub(crate) shutdown_tx: Arc<watch::Sender<bool>>,
+    /// All spawned background tasks. Reaping is automatic via `JoinSet`.
+    pub(crate) task_handles: Arc<std::sync::Mutex<JoinSet<()>>>,
+    /// Short-lived cache of group membership lists keyed by group name.
+    /// Invalidated generation-based by grp_generation counter in KvState.
+    pub(crate) group_roster_cache: RosterCache,
+}
+
+impl TaskCtx {
+    pub(crate) fn spawn_task<F>(&self, fut: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).spawn(fut);
+    }
 }
 
 /// Core gossip agent.
@@ -271,19 +303,15 @@ pub struct GossipAgent {
     pub(super) listener_alive: Arc<AtomicUsize>,
     pub(super) health_monitor_alive: Arc<AtomicBool>,
     pub(super) gc_alive: Arc<AtomicBool>,
-    pub(super) task_handles: std::sync::Mutex<JoinSet<()>>,
     /// Bundled KV-path state (store + subscriptions + prefix_index + hash_acc +
     /// dropped_frames + max_store_entries). Access fields via `self.kv_state.x`.
     pub(super) kv_state: Arc<KvState>,
     /// Infrastructure bundle shared with `ConsensusEngine` and long-lived task helpers.
     /// Access fields via `self.task_ctx.x`.
     pub(super) task_ctx: Arc<TaskCtx>,
-    /// Short-lived cache of group membership lists, keyed by group name.
-    /// Entries expire after `health_check_interval_secs` and are eagerly invalidated
-    /// by `join_group`/`leave_group`. Avoids a full prefix-scan per `group_propose` call.
-    pub(super) group_roster_cache: RosterCache,
     /// Application-supplied axum routes merged into the embedded gateway at [`start`](Self::start) time.
     /// Taken once by the HTTP server task; subsequent calls to `with_http_routes` are no-ops after start.
+    #[cfg(feature = "gateway")]
     pub(super) extra_routes: std::sync::Mutex<Option<axum::Router>>,
     /// LLM skill registry: maps `"{ns}/{name}"` → backend.
     /// Template is read from KV on every invocation (not cached here).
@@ -292,6 +320,87 @@ pub struct GossipAgent {
 }
 
 impl GossipAgent {
+    // ── Sub-handle accessors ──────────────────────────────────────────────────
+
+    /// Returns a typed handle for KV store operations (Layer I).
+    ///
+    /// Zero-cost: clones one `Arc` per call. The handle is `Clone + Send + Sync`
+    /// and can be stored, moved across tasks, or captured in closures.
+    ///
+    /// ```ignore
+    /// let kv = agent.kv();
+    /// kv.set("load/self", Bytes::from_static(b"queue=0"));
+    /// let val = kv.get("load/self");
+    /// ```
+    pub fn kv(&self) -> KvHandle {
+        KvHandle { ctx: Arc::clone(&self.task_ctx) }
+    }
+
+    /// Returns a typed handle for signal mesh operations (Layer II).
+    ///
+    /// Zero-cost: clones one `Arc` per call. The handle is `Clone + Send + Sync`
+    /// and can be stored, moved across tasks, or captured in closures.
+    ///
+    /// ```ignore
+    /// let mesh = agent.mesh();
+    /// mesh.join_group("nlp");
+    /// mesh.emit(signal_kind::INVOKE, SignalScope::Group("nlp".into()), Bytes::new());
+    /// let mut rx = mesh.signal_rx(signal_kind::INVOKE);
+    /// ```
+    pub fn mesh(&self) -> MeshHandle {
+        MeshHandle { ctx: Arc::clone(&self.task_ctx) }
+    }
+
+    /// Returns a typed handle for schema registry operations.
+    ///
+    /// Zero-cost: clones one `Arc` per call. The handle can be stored and moved
+    /// across tasks independently of the agent.
+    ///
+    /// ```ignore
+    /// let schemas = agent.schemas();
+    /// schemas.publish_schema("acme/v1", MY_SCHEMA_JSON).await?;
+    /// let bytes = schemas.get_schema("acme/v1");
+    /// ```
+    pub fn schemas(&self) -> SchemaHandle {
+        SchemaHandle { ctx: Arc::clone(&self.task_ctx) }
+    }
+
+    /// Returns a typed handle for consensus operations (Layer III).
+    ///
+    /// Zero-cost: clones one `Arc` per call. The handle is `Clone + Send + Sync`
+    /// and can be stored, moved across tasks, or captured in closures.
+    ///
+    /// ```ignore
+    /// let c = agent.consensus();
+    /// c.consistent_set("cfg/x", val).await?;
+    /// let _listener = c.start_consensus_listener(ConsensusConfig::default());
+    /// ```
+    pub fn consensus(&self) -> ConsensusHandle {
+        ConsensusHandle { ctx: Arc::clone(&self.task_ctx) }
+    }
+
+    /// Returns a typed handle for service / communication operations.
+    ///
+    /// Covers RPC, bulk transfer, scatter-gather, reliable delivery,
+    /// persistent mailboxes, and consistent-hash sharding.
+    ///
+    /// Zero-cost: clones one `Arc` per call.
+    pub fn service(&self) -> ServiceHandle {
+        ServiceHandle { ctx: Arc::clone(&self.task_ctx) }
+    }
+
+    /// Returns a typed handle for capability, opacity, wiring, and demand operations.
+    ///
+    /// Covers capability advertisement, requirement declaration, wiring resolution,
+    /// demand tracking, emergent group definitions, and the load pheromone trail API.
+    ///
+    /// Zero-cost: clones one `Arc` per call.
+    pub fn capabilities(&self) -> CapabilitiesHandle {
+        CapabilitiesHandle { ctx: Arc::clone(&self.task_ctx) }
+    }
+
+    // ── Signal window helper ──────────────────────────────────────────────────
+
     /// Returns the configured pheromone evaporation window as a `Duration`.
     ///
     /// Use this in calls to [`suggest_leader`](Self::suggest_leader),
@@ -304,7 +413,7 @@ impl GossipAgent {
 
     /// Acquires the task-handles lock, recovering from poison.
     pub(super) fn task_handles_lock(&self) -> std::sync::MutexGuard<'_, JoinSet<()>> {
-        self.task_handles.lock().unwrap_or_else(|e| e.into_inner())
+        self.task_ctx.task_handles.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Spawns `fut` onto the Tokio runtime and tracks it in the task-handles `JoinSet`.
@@ -314,7 +423,7 @@ impl GossipAgent {
     where
         F: std::future::Future<Output = ()> + Send + 'static,
     {
-        self.task_handles_lock().spawn(fut);
+        self.task_ctx.spawn_task(fut);
     }
 
     /// Creates a new agent. Call [`start`](Self::start) to begin listening.
@@ -329,7 +438,11 @@ impl GossipAgent {
             gossip_txs_vec.push(tx);
             gossip_rxs_inner.push(rx);
         }
-        let (shutdown_tx, _) = watch::channel(false);
+        let (shutdown_tx_inner, _) = watch::channel(false);
+        let shutdown_tx_arc = Arc::new(shutdown_tx_inner);
+        let task_handles_arc: Arc<std::sync::Mutex<JoinSet<()>>> =
+            Arc::new(std::sync::Mutex::new(JoinSet::new()));
+        let group_roster_cache: RosterCache = Arc::new(papaya::HashMap::new());
         let mut bootstrap_peers = config.bootstrap_peers.clone();
         bootstrap_peers.retain(|p| p != &node_id);
         let bootstrap_peers: Arc<[NodeId]> = bootstrap_peers.into();
@@ -344,8 +457,10 @@ impl GossipAgent {
         let default_ttl   = config.default_ttl;
         let gossip_txs: Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]> = gossip_txs_vec.into();
         let peers_arc: Arc<papaya::HashMap<NodeId, std::time::Instant>> = Arc::new(papaya::HashMap::new());
+        let config_arc = Arc::new(config.clone());
         let task_ctx = Arc::new(TaskCtx {
             node_id:         node_id.clone(),
+            config:          Arc::clone(&config_arc),
             seen:            Arc::new(ShardedSeen::new(seen_shards)),
             hlc:             Arc::new(crate::hlc::Hlc::new()),
             signal_boundary: Arc::new(RwLock::new(Boundary::new(node_id.clone()))),
@@ -374,6 +489,9 @@ impl GossipAgent {
             } else {
                 None
             },
+            shutdown_tx:         Arc::clone(&shutdown_tx_arc),
+            task_handles:        Arc::clone(&task_handles_arc),
+            group_roster_cache:  Arc::clone(&group_roster_cache),
         });
 
         Self {
@@ -386,15 +504,14 @@ impl GossipAgent {
             peer_writers: Arc::new(papaya::HashMap::new()),
             live_entries: Arc::new(AtomicUsize::new(0)),
             state: AtomicU8::new(AgentState::Idle as u8),
-            shutdown_tx: Arc::new(shutdown_tx),
+            shutdown_tx: shutdown_tx_arc,
             shard_alive,
             listener_alive: Arc::new(AtomicUsize::new(0)),
             health_monitor_alive: Arc::new(AtomicBool::new(false)),
             gc_alive: Arc::new(AtomicBool::new(false)),
-            task_handles: std::sync::Mutex::new(JoinSet::new()),
             kv_state,
             task_ctx,
-            group_roster_cache: Arc::new(papaya::HashMap::new()),
+            #[cfg(feature = "gateway")]
             extra_routes: std::sync::Mutex::new(None),
             #[cfg(feature = "llm")]
             llm_skills: std::sync::Arc::new(dashmap::DashMap::new()),
@@ -402,6 +519,7 @@ impl GossipAgent {
     }
 }
 
+#[cfg(feature = "gateway")]
 impl GossipAgent {
     /// Registers application-level axum routes to be merged into the embedded HTTP gateway.
     ///
@@ -463,7 +581,7 @@ impl GossipAgent {
         let kv_key = format!("{}{}/{}", kv_ns::PROMPTS, ns, name);
         let bytes  = serde_json::to_vec(&template)
             .map_err(|e| prompt::PromptSkillError::LlmError(e.to_string()))?;
-        let _ = self.set(kv_key, bytes::Bytes::from(bytes));
+        kv_set(&self.task_ctx, Arc::from(kv_key.as_str()), bytes::Bytes::from(bytes));
 
         // 2. Advertise capability — presence heartbeat, evaporates when node dies.
         let cap_handle = self.advertise_capability(
@@ -555,7 +673,7 @@ impl GossipAgent {
         let kv_key = format!("{}{}/{}", kv_ns::PROMPTS, ns, name);
         let bytes  = serde_json::to_vec(&template)
             .map_err(|e| prompt::PromptSkillError::LlmError(e.to_string()))?;
-        let _ = self.set(kv_key, bytes::Bytes::from(bytes));
+        kv_set(&self.task_ctx, Arc::from(kv_key.as_str()), bytes::Bytes::from(bytes));
         Ok(())
     }
 
@@ -572,7 +690,7 @@ impl GossipAgent {
     /// List all prompt skills currently visible in the local KV snapshot.
     pub fn list_prompts(&self) -> Vec<(String, String)> {
         use crate::signal::kv_ns;
-        self.scan_prefix(kv_ns::PROMPTS)
+        kv_scan_prefix(&self.task_ctx, kv_ns::PROMPTS)
             .into_iter()
             .filter_map(|(k, _)| {
                 let rest = k.strip_prefix(kv_ns::PROMPTS)?;
@@ -592,7 +710,7 @@ impl GossipAgent {
     pub fn delete_prompt(&self, ns: &str, name: &str) {
         use crate::signal::kv_ns;
         let key = format!("{}{}/{}", kv_ns::PROMPTS, ns, name);
-        let _ = self.delete(key);
+        kv_delete(&self.task_ctx, Arc::from(key.as_str()));
     }
 }
 

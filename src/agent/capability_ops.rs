@@ -17,18 +17,17 @@
 
 use crate::capability::{
     CallerContext, CapEntry, Capability, CapFilter, CapabilityEvent,
-    CapabilityHandle, ReqEntry,
+    CapabilityHandle,
     RequirementHandle, RequirementStatus,
 };
 use crate::node_id::NodeId;
 use crate::signal::{LoadState, encode_load_state};
-use ahash::AHashMap;
 use bytes::Bytes;
 use std::{
     sync::{Arc, atomic::{AtomicBool, Ordering}},
     time::Duration,
 };
-use tokio::{sync::{mpsc, oneshot, watch, Notify}, time};
+use tokio::{sync::{mpsc, watch, Notify}};
 use tracing::warn;
 
 /// Shared registry for the consolidated opacity watcher spawned by
@@ -38,7 +37,7 @@ use tracing::warn;
 pub(crate) struct FilterOpacityRegistry {
     pub(crate) entries: std::sync::Mutex<Vec<RegEntry>>,
     pub(crate) notify:  Arc<Notify>,
-    spawned:            AtomicBool,
+    pub(super) spawned: AtomicBool,
 }
 
 pub(crate) struct RegEntry {
@@ -58,8 +57,6 @@ impl FilterOpacityRegistry {
 }
 
 use super::{GossipAgent, TaskCtx};
-use super::kv::run_kv_persist_task;
-use super::wiring::rank_node_matches;
 
 /// Sendable shutdown-await helper: yields once `shutdown_rx`'s value is `true`
 /// (or its sender drops). Unlike `watch::Receiver::wait_for`, this returns
@@ -122,322 +119,72 @@ fn parse_cap_key(prefix: &str, key: &str) -> Option<(NodeId, Arc<str>, Arc<str>)
 }
 
 impl GossipAgent {
-    /// Advertises a [`Capability`] under `cap/{node_id}/{namespace}/{name}`,
-    /// re-asserting it on every `interval` tick so late joiners discover it
-    /// without an out-of-band sync. Drop the returned [`CapabilityHandle`] to
-    /// tombstone the entry; the shutdown path tombstones it automatically.
+    /// Advertises a [`Capability`] under `cap/{node_id}/{namespace}/{name}`.
+    ///
+    /// Use [`CapabilitiesHandle::advertise_capability`] via [`GossipAgent::capabilities`] instead.
     #[must_use]
     pub fn advertise_capability(
         &self,
         capability: Capability,
         interval:   Duration,
     ) -> CapabilityHandle {
-        let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
-        let shutdown_rx            = self.shutdown_tx.subscribe();
-        let ctx: Arc<TaskCtx>      = Arc::clone(&self.task_ctx);
-        let kv_key: Arc<str>       = Arc::from(format!(
-            "cap/{}/{}/{}", ctx.node_id, capability.namespace, capability.name,
-        ).as_str());
-        let interval_ms = interval.as_millis() as u64;
-        let entry = Arc::new(CapEntry { capability, refresh_interval_ms: interval_ms });
-        let payload_fn: super::kv::PersistPayloadFn = {
-            let e = Arc::clone(&entry);
-            Arc::new(move || e.encode())
-        };
-        self.spawn_task(run_kv_persist_task(
-            ctx, cancel_rx, shutdown_rx, kv_key, interval, payload_fn, None,
-        ));
-        CapabilityHandle { _retract: cancel_tx }
+        self.capabilities().advertise_capability(capability, interval)
     }
 
-    /// Snapshot scan: returns every live capability in the local KV view that
-    /// satisfies `filter`. If `filter.ranking` is set, results are sorted by
-    /// the named attribute (providers missing the attribute or with
-    /// incomparable values sort to the end). Otherwise order is unspecified.
+    /// Snapshot scan: returns every live capability matching `filter`.
+    ///
+    /// Use [`CapabilitiesHandle::resolve`] via [`GossipAgent::capabilities`] instead.
     pub fn resolve(&self, filter: &CapFilter) -> Vec<(NodeId, Capability)> {
-        self.resolve_for_caller(filter, &CallerContext::unrestricted())
+        self.capabilities().resolve(filter)
     }
 
     /// Like `resolve`, but also enforces `Capability::authorized_callers`.
-    /// A capability with a non-empty `authorized_callers` list is returned
-    /// only when `ctx.caller_id` is in that list. Use this for language-bridge
-    /// and SkillRunner tool-discovery to prevent token-bloat and confused-deputy
-    /// issues — see the Layer 4 security primitive design in ROADMAP.md.
+    ///
+    /// Use [`CapabilitiesHandle::resolve_for_caller`] via [`GossipAgent::capabilities`] instead.
     pub fn resolve_for_caller(
         &self,
         filter: &CapFilter,
         ctx:    &CallerContext,
     ) -> Vec<(NodeId, Capability)> {
-        let now_ms = age_now_ms();
-        let mut out = Vec::new();
-        for (key, bytes, hlc_ts) in scan_prefix_kv_with_ts(&self.kv_state, "cap/") {
-            if is_cap_locality_key(&key) { continue; }
-            let Some((node_id, _ns, _name)) = parse_cap_key_or_warn("cap/", &key) else { continue };
-            let Some(entry) = CapEntry::decode(&bytes)
-                .or_else(|| Capability::decode(&bytes).map(|cap| CapEntry { capability: cap, refresh_interval_ms: 60_000 }))
-            else {
-                warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");
-                continue;
-            };
-            if !entry.is_fresh(hlc_ts, now_ms) { continue; }
-            if let Some(max_age) = filter.max_age {
-                if is_stale(hlc_ts, now_ms, max_age) { continue; }
-            }
-            let cap = entry.capability;
-            if filter.matches(&cap) && ctx.can_see(&cap) {
-                out.push((node_id, cap));
-            }
-        }
-        if let Some(ranking) = &filter.ranking {
-            rank_node_matches(&mut out, ranking);
-        }
-        out
+        self.capabilities().resolve_for_caller(filter, ctx)
     }
 
-    /// Push-based stream of [`CapabilityEvent`]s for capabilities matching
-    /// `filter`. Internally maintains a snapshot of previously-matched
-    /// `(node_id, namespace, name)` keys so consecutive notifications emit
-    /// only the difference. The channel has a small fixed buffer; a slow
-    /// consumer that lets it fill will drop further notifications until it
-    /// drains the queue.
-    pub fn watch_capabilities(&self, filter: CapFilter) -> mpsc::Receiver<CapabilityEvent> {
-        let (tx, rx) = mpsc::channel::<CapabilityEvent>(64);
-        // C1: narrow the cap/ prefix watcher to (namespace, name) of this
-        // filter. cap/{node}/{ns}/{name} — predicate fires only when the
-        // changed key ends in /{ns}/{name}. False positives are still
-        // re-screened by the post-debounce reconcile.
-        let needle = format!("/{}/{}", filter.namespace, filter.name);
-        let mut prefix_rx = self.subscribe_prefix_with_predicate(
-            Arc::<str>::from("cap/"),
-            move |k| k.ends_with(&needle),
-        );
-        let kv_state = Arc::clone(&self.kv_state);
-        let mut shutdown_rx = self.shutdown_tx.subscribe();
-
-        // Emit Added for everything matching at subscription time. Then watch.
-        let initial = self.resolve(&filter);
-        let mut known: AHashMap<(NodeId, Arc<str>, Arc<str>), Capability> = AHashMap::new();
-        for (node_id, cap) in &initial {
-            known.insert((node_id.clone(), cap.namespace.clone(), cap.name.clone()), cap.clone());
-        }
-        let tx_initial = tx.clone();
-        let initial_owned = initial;
-        // Send initial Added events without blocking the agent's task graph; if
-        // the consumer is already gone we abandon the stream silently.
-        self.spawn_task(async move {
-            for (node_id, cap) in initial_owned {
-                if tx_initial.send(CapabilityEvent::Added { node_id, capability: cap }).await.is_err() {
-                    return;
-                }
-            }
-            loop {
-                tokio::select! { biased;
-                    _ = await_shutdown(&mut shutdown_rx) => return,
-                    changed = prefix_rx.changed() => {
-                        if changed.is_err() { return; }
-                        // Coalesce burst writes within WATCHER_DEBOUNCE_WINDOW
-                        // into a single reconcile pass.
-                        let deadline = time::Instant::now() + WATCHER_DEBOUNCE_WINDOW;
-                        loop {
-                            tokio::select! { biased;
-                                _ = time::sleep_until(deadline) => break,
-                                r = prefix_rx.changed() => { if r.is_err() { return; } }
-                            }
-                        }
-                        // Re-scan and diff against `known`.
-                        let now_ms = age_now_ms();
-                        let mut current: AHashMap<(NodeId, Arc<str>, Arc<str>), Capability> = AHashMap::new();
-                        for (key, bytes, hlc_ts) in scan_prefix_kv_with_ts(&kv_state, "cap/") {
-                            if is_cap_locality_key(&key) { continue; }
-                            let Some((node_id, ns, name)) = parse_cap_key_or_warn("cap/", &key) else { continue };
-                            let Some(entry) = CapEntry::decode(&bytes)
-                                .or_else(|| Capability::decode(&bytes).map(|cap| CapEntry { capability: cap, refresh_interval_ms: 60_000 }))
-                            else {
-                                warn!(key = %key, "malformed Capability — peer sent bytes that did not decode");
-                                continue;
-                            };
-                            if !entry.is_fresh(hlc_ts, now_ms) { continue; }
-                            let cap = entry.capability;
-                            if !filter.matches(&cap) { continue; }
-                            current.insert((node_id, ns, name), cap);
-                        }
-                        // Removed: in known but not in current.
-                        let removed: Vec<_> = known.keys()
-                            .filter(|k| !current.contains_key(*k))
-                            .cloned()
-                            .collect();
-                        for k in &removed {
-                            known.remove(k);
-                            let _ = tx.send(CapabilityEvent::Removed {
-                                node_id:   k.0.clone(),
-                                namespace: k.1.clone(),
-                                name:      k.2.clone(),
-                            }).await;
-                        }
-                        // Added or updated: in current and either new, or attributes changed.
-                        for (k, cap) in &current {
-                            let changed = match known.get(k) {
-                                None      => true,
-                                Some(old) => old != cap,
-                            };
-                            if changed {
-                                known.insert(k.clone(), cap.clone());
-                                let _ = tx.send(CapabilityEvent::Added {
-                                    node_id:    k.0.clone(),
-                                    capability: cap.clone(),
-                                }).await;
-                            }
-                        }
-                    }
-                }
-            }
-        });
-        rx
-    }
-
-    /// Declares a requirement and writes it to `req/{node_id}/{ns}/{name}`.
-    /// Spawns a satisfaction watcher that, while the requirement is unmet,
-    /// writes `sys/load/{node_id}/req/{ns}/{name}` with `is_opaque = true` —
-    /// composing with load-based opacity through `is_self_opaque`'s
-    /// existing `sys/load/{node_id}/*` scanner. The opacity entry is
-    /// tombstoned the moment the filter resolves to at least one provider.
+    /// Push-based stream of [`CapabilityEvent`]s for capabilities matching `filter`.
     ///
-    /// Drop the returned [`RequirementHandle`] to retract both the requirement
-    /// and any active opacity entry.
+    /// Use [`CapabilitiesHandle::watch_capabilities`] via [`GossipAgent::capabilities`] instead.
+    pub fn watch_capabilities(&self, filter: CapFilter) -> mpsc::Receiver<CapabilityEvent> {
+        self.capabilities().watch_capabilities(filter)
+    }
+
+    /// Declares a requirement and spawns an opacity watcher.
+    ///
+    /// Use [`CapabilitiesHandle::declare_requirement`] via [`GossipAgent::capabilities`] instead.
     #[must_use]
     pub fn declare_requirement(
         &self,
         filter:   CapFilter,
         interval: Duration,
     ) -> RequirementHandle {
-        let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
-        let shutdown_rx             = self.shutdown_tx.subscribe();
-        let ctx: Arc<TaskCtx>       = Arc::clone(&self.task_ctx);
-
-        let kv_key: Arc<str> = Arc::from(format!(
-            "req/{}/{}/{}", ctx.node_id, filter.namespace, filter.name,
-        ).as_str());
-        let opacity_key: Arc<str> = Arc::from(format!(
-            "sys/load/{}/req/{}/{}", ctx.node_id, filter.namespace, filter.name,
-        ).as_str());
-        let interval_ms = interval.as_millis() as u64;
-        let filter_arc = Arc::new(filter);
-        let payload_fn: super::kv::PersistPayloadFn = {
-            let e = Arc::new(ReqEntry {
-                filter:              (*filter_arc).clone(),
-                refresh_interval_ms: interval_ms,
-            });
-            Arc::new(move || e.encode())
-        };
-        self.spawn_task(run_kv_persist_task(
-            Arc::clone(&ctx), cancel_rx, shutdown_rx, kv_key, interval, payload_fn, None,
-        ));
-
-        // Register with the consolidated opacity watcher (C2 fix: one task for
-        // all requirements instead of N tasks subscribing to cap/ independently).
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let registry  = Arc::clone(&ctx.filter_opacity_registry);
-        registry.entries.lock().unwrap().push(RegEntry {
-            opacity_key,
-            filter:    Arc::clone(&filter_arc),
-            cancelled: Arc::clone(&cancelled),
-        });
-        registry.notify.notify_one();
-
-        // Spawn the consolidated task lazily on the first declare_requirement call.
-        if !registry.spawned.swap(true, Ordering::AcqRel) {
-            let reg_arc = Arc::clone(&registry);
-            let ctx2    = Arc::clone(&ctx);
-            let sd_rx   = self.shutdown_tx.subscribe();
-            self.spawn_task(run_consolidated_opacity_watcher(ctx2, sd_rx, reg_arc));
-        }
-
-        let opacity_drop = crate::capability::OpacityDropGuard {
-            cancelled,
-            notify: Arc::clone(&registry.notify),
-        };
-        RequirementHandle { _retract: cancel_tx, _opacity_drop: opacity_drop }
+        self.capabilities().declare_requirement(filter, interval)
     }
 
     /// Push-based view of one requirement's current satisfaction status.
-    /// The returned receiver's initial value is a snapshot taken at call time;
-    /// subsequent values arrive whenever a matching `cap/` entry is added,
-    /// updated, or removed.
+    ///
+    /// Use [`CapabilitiesHandle::watch_requirement`] via [`GossipAgent::capabilities`] instead.
     pub fn watch_requirement(&self, filter: CapFilter) -> watch::Receiver<RequirementStatus> {
-        let initial = self.resolve(&filter);
-        let initial_status = if initial.is_empty() {
-            RequirementStatus::Unsatisfied { filter: filter.clone() }
-        } else {
-            RequirementStatus::Satisfied { providers: initial }
-        };
-        let (tx, rx) = watch::channel(initial_status);
-        // C1: narrow the cap/ prefix watcher to this filter's (ns, name).
-        let needle = format!("/{}/{}", filter.namespace, filter.name);
-        let mut prefix_rx = self.subscribe_prefix_with_predicate(
-            Arc::<str>::from("cap/"),
-            move |k| k.ends_with(&needle),
-        );
-        let kv_state = Arc::clone(&self.kv_state);
-        let mut shutdown_rx = self.shutdown_tx.subscribe();
-        self.spawn_task(async move {
-            loop {
-                tokio::select! { biased;
-                    _ = await_shutdown(&mut shutdown_rx) => return,
-                    changed = prefix_rx.changed() => {
-                        if changed.is_err() { return; }
-                        // Coalesce burst writes within WATCHER_DEBOUNCE_WINDOW
-                        // into a single status recompute.
-                        let deadline = time::Instant::now() + WATCHER_DEBOUNCE_WINDOW;
-                        loop {
-                            tokio::select! { biased;
-                                _ = time::sleep_until(deadline) => break,
-                                r = prefix_rx.changed() => { if r.is_err() { return; } }
-                            }
-                        }
-                        let providers = resolve_filter_against_kv(&kv_state, &filter);
-                        let status = if providers.is_empty() {
-                            RequirementStatus::Unsatisfied { filter: filter.clone() }
-                        } else {
-                            RequirementStatus::Satisfied { providers }
-                        };
-                        if tx.send(status).is_err() { return; }
-                    }
-                }
-            }
-        });
-        rx
+        self.capabilities().watch_requirement(filter)
     }
 
-    /// Picks a group member that also satisfies every requirement filter.
-    /// Returns the first member with the lowest current load pheromone fill,
-    /// preferring lightly-loaded leaders. `None` if no group member matches
-    /// every requirement.
+    /// Picks a group member that satisfies every requirement filter with the lowest load.
+    ///
+    /// Use [`CapabilitiesHandle::suggest_leader_with_requirements`] via [`GossipAgent::capabilities`] instead.
     pub fn suggest_leader_with_requirements(
         &self,
         group:        &str,
         requirements: &[CapFilter],
     ) -> Option<NodeId> {
-        let members = self.group_members(group);
-        if members.is_empty() { return None; }
-        let mut candidates: Vec<NodeId> = members.into_iter()
-            .filter(|m| {
-                requirements.iter().all(|req| {
-                    self.resolve(req).iter().any(|(provider, _)| provider == m)
-                })
-            })
-            .collect();
-        if candidates.is_empty() { return None; }
-        // Lightest-load wins. effective_opacity is keyed by kind; here we use
-        // a coarse aggregate by summing the per-kind fill ratios from the
-        // pheromone trails for each candidate.
-        candidates.sort_by(|a, b| {
-            let la = aggregate_fill(&self.kv_state, a);
-            let lb = aggregate_fill(&self.kv_state, b);
-            la.partial_cmp(&lb).unwrap_or(std::cmp::Ordering::Equal)
-        });
-        candidates.into_iter().next()
+        self.capabilities().suggest_leader_with_requirements(group, requirements)
     }
-
 }
 
 // ── Free helpers (used by spawned tasks) ─────────────────────────────────────
@@ -549,7 +296,7 @@ pub(super) fn resolve_filter_against_kv(
 
 /// Aggregates `sys/load/{node}/*` fill ratios for ranking in
 /// `suggest_leader_with_requirements`.
-fn aggregate_fill(kv_state: &crate::store::KvState, node: &NodeId) -> f32 {
+pub(super) fn aggregate_fill(kv_state: &crate::store::KvState, node: &NodeId) -> f32 {
     let prefix = format!("sys/load/{}/", node);
     let mut total = 0.0_f32;
     for (_, bytes) in scan_prefix_kv(kv_state, &prefix) {
@@ -636,7 +383,7 @@ fn clear_opacity_key(ctx: &TaskCtx, opacity_key: &Arc<str>) {
 /// Phase-7 group-req opacity is handled inline by C3's
 /// `run_group_membership_task`, which co-locates it with the `gcap/`
 /// reassertion loop.
-async fn run_consolidated_opacity_watcher(
+pub(super) async fn run_consolidated_opacity_watcher(
     ctx:             Arc<TaskCtx>,
     mut shutdown_rx: watch::Receiver<bool>,
     registry:        Arc<FilterOpacityRegistry>,

@@ -407,7 +407,7 @@ const TASK_TEXT: &str =
 
 fn discover_tools(agent: &GossipAgent) -> Vec<(String, NodeId, Value)> {
     let mut tools = Vec::new();
-    for (key, schema_bytes) in agent.scan_prefix("tools/") {
+    for (key, schema_bytes) in agent.kv().scan_prefix("tools/") {
         let parts: Vec<&str> = key.splitn(3, '/').collect();
         if parts.len() != 3 { continue; }
         let tool_name = parts[1].to_string();
@@ -427,7 +427,7 @@ fn discover_tools(agent: &GossipAgent) -> Vec<(String, NodeId, Value)> {
 }
 
 async fn invoke_tool(agent: &GossipAgent, tool_name: &str, args: Value) -> Result<Value, String> {
-    let entries = agent.scan_prefix(&format!("tools/{tool_name}/"));
+    let entries = agent.kv().scan_prefix(&format!("tools/{tool_name}/"));
     let (key, _) = entries.into_iter().next()
         .ok_or_else(|| format!("no provider for {tool_name}"))?;
     let parts: Vec<&str> = key.splitn(3, '/').collect();
@@ -614,10 +614,10 @@ struct MgmtState {
 
 async fn run_worker_behavior(agent: Arc<GossipAgent>, suppress_secs: u64, log: SharedLog) {
     let label = agent.node_id().to_string();
-    let mut rx = agent.signal_rx("compute.invoke");
+    let mut rx = agent.mesh().signal_rx("compute.invoke");
     while let Some(_sig) = rx.recv().await {
         push_log(&log, "Worker", format!("{label} processing invoke"));
-        agent.suppress("compute.invoke", Duration::from_secs(suppress_secs));
+        agent.mesh().suppress("compute.invoke", Duration::from_secs(suppress_secs));
         push_log(&log, "Suppressed", format!("{label} refractory {suppress_secs}s"));
         time::sleep(Duration::from_millis(200)).await;
     }
@@ -627,7 +627,7 @@ async fn run_emitter_behavior(agent: Arc<GossipAgent>, log: SharedLog) {
     let label = agent.node_id().to_string();
     loop {
         time::sleep(Duration::from_millis(500)).await;
-        let _ = agent.emit("compute.invoke", SignalScope::System, Bytes::from_static(b"invoke"));
+        let _ = agent.mesh().emit("compute.invoke", SignalScope::System, Bytes::from_static(b"invoke"));
         push_log(&log, "Emitting", format!("{label} burst → compute.invoke"));
     }
 }
@@ -639,7 +639,7 @@ async fn run_dispatcher_behavior(agent: Arc<GossipAgent>, log: SharedLog) {
         let workers = agent.resolve(&CapFilter::new("compute", "cpu")).len()
             + agent.resolve(&CapFilter::new("compute", "cpu-heavy")).len();
         if workers > 0 {
-            let _ = agent.emit("compute.invoke", SignalScope::System, Bytes::from_static(b"dispatch"));
+            let _ = agent.mesh().emit("compute.invoke", SignalScope::System, Bytes::from_static(b"dispatch"));
             push_log(&log, "Dispatch", format!("{label} routed to {workers} worker(s)"));
         }
     }
@@ -651,10 +651,10 @@ async fn run_coalition_planner(agent: Arc<GossipAgent>, log: SharedLog,
     loop {
         time::sleep(Duration::from_secs(3)).await;
         push_log(&log, "Planner", format!("{label} decomposing goal → delegating claim"));
-        let _ = agent.emit("reasoning.task", SignalScope::System, Bytes::from_static(b"claim"));
+        let _ = agent.mesh().emit("reasoning.task", SignalScope::System, Bytes::from_static(b"claim"));
         push_traffic(&traffic, &label, "fact-checkers", "delegate");
         // wait briefly for synthesis result
-        let mut rx = agent.signal_rx("reasoning.result");
+        let mut rx = agent.mesh().signal_rx("reasoning.result");
         match time::timeout(Duration::from_secs(5), rx.recv()).await {
             Ok(Some(_)) => push_log(&log, "Planner", format!("{label} received synthesis result")),
             _ => push_log(&log, "Planner", format!("{label} synthesis pending")),
@@ -665,34 +665,34 @@ async fn run_coalition_planner(agent: Arc<GossipAgent>, log: SharedLog,
 async fn run_coalition_fact_checker(agent: Arc<GossipAgent>, log: SharedLog,
                                      traffic: SharedTraffic) {
     let label = agent.node_id().to_string();
-    let mut rx = agent.signal_rx("reasoning.task");
+    let mut rx = agent.mesh().signal_rx("reasoning.task");
     while let Some(_sig) = rx.recv().await {
         push_log(&log, "FactCheck", format!("{label} verifying claim"));
         push_traffic(&traffic, &label, "synthesizers", "verified");
         time::sleep(Duration::from_millis(800)).await;
-        let _ = agent.emit("reasoning.verified", SignalScope::System, Bytes::from_static(b"evidence"));
+        let _ = agent.mesh().emit("reasoning.verified", SignalScope::System, Bytes::from_static(b"evidence"));
     }
 }
 
 async fn run_coalition_synthesizer(agent: Arc<GossipAgent>, log: SharedLog,
                                     traffic: SharedTraffic) {
     let label = agent.node_id().to_string();
-    let mut rx = agent.signal_rx("reasoning.verified");
+    let mut rx = agent.mesh().signal_rx("reasoning.verified");
     while let Some(_sig) = rx.recv().await {
         push_log(&log, "Synthesizer", format!("{label} aggregating outputs"));
         push_traffic(&traffic, &label, "planners", "result");
         time::sleep(Duration::from_millis(400)).await;
-        let _ = agent.emit("reasoning.result", SignalScope::System, Bytes::from_static(b"summary"));
+        let _ = agent.mesh().emit("reasoning.result", SignalScope::System, Bytes::from_static(b"summary"));
     }
 }
 
 async fn run_voter_behavior(agent: Arc<GossipAgent>, log: SharedLog) {
     let label = agent.node_id().to_string();
-    let mut rx = agent.signal_rx("consensus.ballot");
+    let mut rx = agent.mesh().signal_rx("consensus.ballot");
     while let Some(_sig) = rx.recv().await {
         push_log(&log, "Vote", format!("{label} casting ballot"));
         time::sleep(Duration::from_millis(100)).await;
-        let _ = agent.emit("consensus.vote", SignalScope::System, Bytes::from_static(b"aye"));
+        let _ = agent.mesh().emit("consensus.vote", SignalScope::System, Bytes::from_static(b"aye"));
     }
 }
 
@@ -703,10 +703,10 @@ async fn run_proposer_behavior(agent: Arc<GossipAgent>, log: SharedLog,
         time::sleep(Duration::from_secs(4)).await;
         push_log(&log, "Proposer", format!("{label} broadcasting prepare"));
         push_traffic(&traffic, &label, "voters", "propose");
-        let _ = agent.emit("consensus.ballot", SignalScope::System, Bytes::from_static(b"prepare"));
+        let _ = agent.mesh().emit("consensus.ballot", SignalScope::System, Bytes::from_static(b"prepare"));
         // Collect votes
         let mut votes = 0usize;
-        let mut rx = agent.signal_rx("consensus.vote");
+        let mut rx = agent.mesh().signal_rx("consensus.vote");
         let deadline = time::sleep(Duration::from_secs(2));
         tokio::pin!(deadline);
         loop {
@@ -727,12 +727,12 @@ async fn run_proposer_behavior(agent: Arc<GossipAgent>, log: SharedLog,
 
 async fn run_propagation_behavior(agent: Arc<GossipAgent>, log: SharedLog) {
     let label = agent.node_id().to_string();
-    let mut rx = agent.signal_rx("epidemic.wave");
+    let mut rx = agent.mesh().signal_rx("epidemic.wave");
     while let Some(_sig) = rx.recv().await {
         let jitter = (now_ms() % 100) as u64;
         time::sleep(Duration::from_millis(50 + jitter)).await;
         push_log(&log, "Propagate", format!("{label} relaying epidemic wave"));
-        let _ = agent.emit("epidemic.wave", SignalScope::System, Bytes::from_static(b"wave"));
+        let _ = agent.mesh().emit("epidemic.wave", SignalScope::System, Bytes::from_static(b"wave"));
     }
 }
 
@@ -741,7 +741,7 @@ async fn run_heartbeat_behavior(agent: Arc<GossipAgent>, log: SharedLog,
     let label = agent.node_id().to_string();
     loop {
         time::sleep(Duration::from_secs(1)).await;
-        let _ = agent.emit("health.heartbeat", SignalScope::System, Bytes::from_static(b"ping"));
+        let _ = agent.mesh().emit("health.heartbeat", SignalScope::System, Bytes::from_static(b"ping"));
         push_log(&log, "Heartbeat", format!("{label} ♥"));
         push_traffic(&traffic, &label, "supervisors", "heartbeat");
     }
@@ -749,7 +749,7 @@ async fn run_heartbeat_behavior(agent: Arc<GossipAgent>, log: SharedLog,
 
 async fn run_watchdog_behavior(agent: Arc<GossipAgent>, log: SharedLog) {
     let label = agent.node_id().to_string();
-    let mut rx = agent.signal_rx("health.heartbeat");
+    let mut rx = agent.mesh().signal_rx("health.heartbeat");
     let mut last_beat = now_ms();
     loop {
         match time::timeout(Duration::from_secs(3), rx.recv()).await {
@@ -758,7 +758,7 @@ async fn run_watchdog_behavior(agent: Arc<GossipAgent>, log: SharedLog) {
             Err(_) => {
                 let gap_s = (now_ms() - last_beat) / 1000;
                 push_log(&log, "Alert", format!("{label} circuit-breaker: no heartbeat for {gap_s}s"));
-                let _ = agent.emit("health.alert", SignalScope::System, Bytes::from_static(b"breach"));
+                let _ = agent.mesh().emit("health.alert", SignalScope::System, Bytes::from_static(b"breach"));
             }
         }
     }
@@ -766,7 +766,7 @@ async fn run_watchdog_behavior(agent: Arc<GossipAgent>, log: SharedLog) {
 
 async fn run_render_worker(agent: Arc<GossipAgent>, log: SharedLog) {
     let label = agent.node_id().to_string();
-    let mut rx = agent.signal_rx("render.job");
+    let mut rx = agent.mesh().signal_rx("render.job");
     while let Some(_sig) = rx.recv().await {
         let ms = 50 + (now_ms() % 150);
         push_log(&log, "Render", format!("{label} processing job (~{ms}ms)"));
@@ -781,7 +781,7 @@ async fn run_render_consumer(agent: Arc<GossipAgent>, log: SharedLog) {
         time::sleep(Duration::from_secs(2)).await;
         if !agent.resolve(&CapFilter::new("render", "job")).is_empty() {
             push_log(&log, "Consumer", format!("{label} dispatching render job"));
-            let _ = agent.emit("render.job", SignalScope::System, Bytes::from_static(b"frame"));
+            let _ = agent.mesh().emit("render.job", SignalScope::System, Bytes::from_static(b"frame"));
         }
     }
 }
@@ -791,7 +791,7 @@ async fn run_ai_agent_behavior(agent: Arc<GossipAgent>, log: SharedLog) {
     loop {
         time::sleep(Duration::from_secs(3)).await;
         push_log(&log, "AI", format!("{label} emitting request"));
-        let _ = agent.emit("ai.request", SignalScope::System, Bytes::from_static(b"task"));
+        let _ = agent.mesh().emit("ai.request", SignalScope::System, Bytes::from_static(b"task"));
     }
 }
 
@@ -960,7 +960,7 @@ fn spawn_behavior(
 
 async fn provision_from_manifest(state: Arc<MgmtState>, mut manifest: MeshManifest) {
     // Bump version so the preset is always > whatever was stored previously
-    let cur_ver = state.mgmt_agent.get(manifest_keys::VERSION)
+    let cur_ver = state.mgmt_agent.kv().get(manifest_keys::VERSION)
         .and_then(|b| String::from_utf8(b.to_vec()).ok())
         .unwrap_or_else(|| "0.0.0".into());
     if !semver_gt(&manifest.mesh.version, &cur_ver) {
@@ -1062,9 +1062,9 @@ async fn provision_from_manifest(state: Arc<MgmtState>, mut manifest: MeshManife
     // 5. Push manifest to gossip KV
     if let Ok(toml_str) = manifest.to_toml() {
         let ver = manifest.mesh.version.clone();
-        let _ = state.mgmt_agent.set(manifest_keys::CURRENT,
+        let _ = state.mgmt_agent.kv().set(manifest_keys::CURRENT,
                                       Bytes::from(toml_str.into_bytes()));
-        let _ = state.mgmt_agent.set(manifest_keys::VERSION,
+        let _ = state.mgmt_agent.kv().set(manifest_keys::VERSION,
                                       Bytes::from(ver.into_bytes()));
     }
 
@@ -1177,7 +1177,7 @@ fn build_state_json(state: &MgmtState) -> String {
                     .unwrap_or_else(|| "Running".into())
             } else if node.ns == "routing" && node.cap_name == "emitter" {
                 "Emitting".into()
-            } else if node.agent.is_suppressed("compute.invoke") {
+            } else if node.agent.mesh().is_suppressed("compute.invoke") {
                 "Suppressed".into()
             } else {
                 "Running".into()
@@ -1311,7 +1311,7 @@ async fn handle_manifest_post(state: Arc<MgmtState>, body: &[u8]) -> (u16, &'sta
     let Some(new_m) = MeshManifest::from_toml_bytes(body) else {
         return (400, "application/json", json!({"error":"invalid TOML"}).to_string());
     };
-    let cur_ver = state.mgmt_agent.get(manifest_keys::VERSION)
+    let cur_ver = state.mgmt_agent.kv().get(manifest_keys::VERSION)
         .and_then(|b| String::from_utf8(b.to_vec()).ok())
         .unwrap_or_else(|| "0.0.0".into());
     if !semver_gt(&new_m.mesh.version, &cur_ver) {
@@ -1320,8 +1320,8 @@ async fn handle_manifest_post(state: Arc<MgmtState>, body: &[u8]) -> (u16, &'sta
         }).to_string());
     }
     // Archive old
-    if let Some(old) = state.mgmt_agent.get(manifest_keys::CURRENT) {
-        let _ = state.mgmt_agent.set(manifest_keys::history(&cur_ver), old);
+    if let Some(old) = state.mgmt_agent.kv().get(manifest_keys::CURRENT) {
+        let _ = state.mgmt_agent.kv().set(manifest_keys::history(&cur_ver), old);
     }
     let new_ver  = new_m.mesh.version.clone();
     let body_str = std::str::from_utf8(body).unwrap_or("").to_string();
@@ -1479,7 +1479,7 @@ fn handle_node_start(state: &MgmtState, label: &str) -> (u16, &'static str, Stri
 }
 
 async fn handle_system_stop(state: &MgmtState) -> (u16, &'static str, String) {
-    let _ = state.mgmt_agent.set(manifest_keys::CONTROL_SYSTEM, Bytes::from_static(b"stopped"));
+    let _ = state.mgmt_agent.kv().set(manifest_keys::CONTROL_SYSTEM, Bytes::from_static(b"stopped"));
     let inst_guard = state.instance.lock().unwrap();
     if let Some(inst) = inst_guard.as_ref() {
         for node in inst.nodes.iter().filter(|n| !n.is_spare) {
@@ -1491,7 +1491,7 @@ async fn handle_system_stop(state: &MgmtState) -> (u16, &'static str, String) {
 }
 
 async fn handle_system_start(state: &MgmtState) -> (u16, &'static str, String) {
-    let _ = state.mgmt_agent.set(manifest_keys::CONTROL_SYSTEM, Bytes::from_static(b"running"));
+    let _ = state.mgmt_agent.kv().set(manifest_keys::CONTROL_SYSTEM, Bytes::from_static(b"running"));
     let inst_guard = state.instance.lock().unwrap();
     if let Some(inst) = inst_guard.as_ref() {
         for node in inst.nodes.iter().filter(|n| !n.is_spare) {

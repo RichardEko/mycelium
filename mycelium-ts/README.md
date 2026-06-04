@@ -176,13 +176,13 @@ const data = await agent.scanPrefix("my/");        // → Record<string, Buffer>
 
 All writes are gossiped to peers with last-write-wins (HLC) semantics.
 
-#### `setQuorum(key, value, minAcks, options?) → Promise<number>`
+#### `setWithMinAcks(key, value, minAcks, options?) → Promise<number>`
 
 Write `value` and wait for at least `minAcks` distinct peers to confirm.
 Returns the confirmed peer count; throws `TimeoutError` on timeout.
 
 ```typescript
-const n = await agent.setQuorum("config/endpoint", Buffer.from("https://api.v2/"), 2);
+const n = await agent.setWithMinAcks("config/endpoint", Buffer.from("https://api.v2/"), 2);
 console.log(`${n} peers confirmed`);
 ```
 
@@ -308,7 +308,7 @@ MYCELIUM_TEST_HOST=127.0.0.1 MYCELIUM_TEST_PORT=8300 npm test
 | `set` | `POST /gateway/kv` | |
 | `delete` | `DELETE /gateway/kv?key=K` | |
 | `keys` | `GET /gateway/kv/keys?prefix=P` | |
-| `setQuorum` | `POST /gateway/kv/quorum` | |
+| `setWithMinAcks` | `POST /gateway/kv/quorum` | |
 | `mailbox` | `GET /gateway/mailbox/{kind}` | SSE stream |
 | `deliverEvent` | `POST /gateway/mailbox/deliver` | |
 | `health` | `GET /health` | |

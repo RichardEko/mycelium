@@ -854,7 +854,7 @@ pub mod kv_ns {
     /// on every `BOUNDARY_OPAQUE` transition; tombstoned on `BOUNDARY_TRANSPARENT`.
     /// Readers discard entries where `now_ms − written_at_ms` exceeds their evaporation window
     /// (no coordination needed). Graceful shutdown tombstones `sys/load/{node_id}/{kind}`
-    /// automatically; callers may also call `agent.delete(format!("sys/load/{}/{}", node_id, kind))`
+    /// automatically; callers may also call `agent.kv().delete(format!("sys/load/{}/{}", node_id, kind))`
     /// directly to force immediate evaporation.
     pub const LOAD:  &str = "sys/load/";
     /// Group membership namespace. Written automatically by `join_group`/`leave_group`.
@@ -994,14 +994,25 @@ impl SignalReorderBuffer {
         let now = Instant::now();
 
         // Determine flush policy once, before any pops change the depth.
+        let depth_overflow = heap.len() > self.max_depth;
         let flush = force
-            || heap.len() > self.max_depth
+            || depth_overflow
             || heap.peek().is_some_and(|Reverse(t)| {
                 now.duration_since(t.received_at) >= self.max_hold
             });
 
         if !flush {
             return vec![];
+        }
+
+        if depth_overflow && !force {
+            tracing::warn!(
+                sender = %key.0, kind = %key.1,
+                depth = heap.len(), max_depth = self.max_depth,
+                "signal reorder buffer exceeded max_depth; flushing early — \
+                 causal ordering guarantee lost for this burst. \
+                 Increase max_depth or reduce signal rate to avoid this.",
+            );
         }
 
         let mut out = Vec::new();

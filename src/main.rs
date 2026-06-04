@@ -166,7 +166,7 @@ async fn run_interactive(agent: Arc<GossipAgent>) -> Result<(), GossipError> {
                     None => { println!("Usage: set <key> <value>"); continue; }
                 };
                 let value = parts.collect::<Vec<_>>().join(" ");
-                if agent.set(key, value.into_bytes()) {
+                if agent.kv().set(key, value.into_bytes()) {
                     println!("Stored and queued for gossip.");
                 } else {
                     println!("Stored locally (gossip channel full or not running).");
@@ -177,7 +177,7 @@ async fn run_interactive(agent: Arc<GossipAgent>) -> Result<(), GossipError> {
                     Some(k) => k,
                     None => { println!("Usage: get <key>"); continue; }
                 };
-                match agent.get(key) {
+                match agent.kv().get(key) {
                     Some(v) => println!("{}", String::from_utf8_lossy(&v)),
                     None    => println!("(not found)"),
                 }
@@ -187,7 +187,7 @@ async fn run_interactive(agent: Arc<GossipAgent>) -> Result<(), GossipError> {
                     Some(k) => k,
                     None => { println!("Usage: delete <key>"); continue; }
                 };
-                if agent.delete(key) {
+                if agent.kv().delete(key) {
                     println!("Deleted and tombstone queued for gossip.");
                 } else {
                     println!("Deleted locally (gossip channel full or not running).");

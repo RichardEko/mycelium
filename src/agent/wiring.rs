@@ -18,177 +18,67 @@ use crate::node_id::NodeId;
 use ahash::AHashMap;
 use bytes::Bytes;
 use std::sync::Arc;
-use tokio::{sync::watch, time};
+use tokio::sync::watch;
 use tracing::warn;
 
-use super::GossipAgent;
+use super::{GossipAgent, TaskCtx};
+use super::helpers::emit_signal;
 use super::capability_ops::{
-    await_shutdown, is_cap_locality_key, now_ms, parse_cap_key_or_warn, scan_prefix_kv_with_ts,
-    WATCHER_DEBOUNCE_WINDOW,
+    is_cap_locality_key, now_ms, parse_cap_key_or_warn, scan_prefix_kv_with_ts,
 };
 
 impl GossipAgent {
-    /// Snapshot scan of provider groups (via `gcap/`) and standalone nodes
-    /// (via `cap/`) that currently satisfy `filter`. Returns
-    /// [`WiringStatus::Wired`] with the discovered providers, or
-    /// [`WiringStatus::Unwired`] if neither source has a match.
+    /// Snapshot scan of providers satisfying `filter`.
     ///
-    /// `shared_locality_depth` is hard-coded to `0` here; use
-    /// [`resolve_wiring_with_locality`](Self::resolve_wiring_with_locality)
-    /// for topology-aware variants.
+    /// Use [`CapabilitiesHandle::resolve_wiring`] via [`GossipAgent::capabilities`] instead.
     pub fn resolve_wiring(&self, filter: &CapFilter) -> WiringStatus {
-        wiring_snapshot(&self.kv_state, filter)
+        self.capabilities().resolve_wiring(filter)
     }
 
-    /// Like [`resolve`](Self::resolve) but annotates each provider with its
-    /// `shared_prefix_len` against this node's own locality, then applies
-    /// the requested [`LocalityPreference`]:
+    /// Like `resolve` but annotated with locality depth.
     ///
-    /// - `Any`: returns matches in scan order with depth `0`.
-    /// - `PreferShared(_)`: keeps every match and sorts by depth descending.
-    /// - `Strict(depth)`: drops providers with `shared_prefix_len < depth`.
-    ///
-    /// When this node has no configured locality (empty `locality_path`),
-    /// every provider reports depth `0`; `Strict(d)` with `d > 0` therefore
-    /// returns an empty result.
+    /// Use [`CapabilitiesHandle::resolve_with_locality`] via [`GossipAgent::capabilities`] instead.
     pub fn resolve_with_locality(
         &self,
         filter: &CapFilter,
         pref:   LocalityPreference,
     ) -> Vec<(NodeId, Capability, usize)> {
-        let self_loc = self.self_locality();
-        let mut annotated: Vec<(NodeId, Capability, usize)> = self.resolve(filter)
-            .into_iter()
-            .map(|(node_id, cap)| {
-                let depth = locality_depth(&self.kv_state, self_loc.as_ref(), &node_id);
-                (node_id, cap, depth)
-            })
-            .collect();
-        apply_locality_pref(&mut annotated, pref, |(_, _, d)| *d);
-        annotated
+        self.capabilities().resolve_with_locality(filter, pref)
     }
 
-    /// Locality-aware version of [`resolve_wiring`](Self::resolve_wiring).
-    /// Each `WiringProvider` is annotated with `shared_locality_depth`:
-    /// - `Node`: shared prefix length against this node's locality.
-    /// - `Group`: the **maximum** shared prefix length across the group's
-    ///   contributors — a group counts as "close" if any one of its members
-    ///   is close to us.
+    /// Locality-aware version of `resolve_wiring`.
     ///
-    /// The preference is then applied to the combined provider list. An
-    /// `Unwired` status is returned unchanged.
+    /// Use [`CapabilitiesHandle::resolve_wiring_with_locality`] via [`GossipAgent::capabilities`] instead.
     pub fn resolve_wiring_with_locality(
         &self,
         filter: &CapFilter,
         pref:   LocalityPreference,
     ) -> WiringStatus {
-        let self_loc = self.self_locality();
-        let raw = wiring_snapshot(&self.kv_state, filter);
-        let WiringStatus::Wired { providers } = raw else { return raw; };
-        let mut annotated: Vec<WiringProvider> = providers.into_iter()
-            .map(|p| annotate_provider_with_locality(p, &self.kv_state, self_loc.as_ref()))
-            .collect();
-        apply_locality_pref(&mut annotated, pref, provider_depth);
-        if annotated.is_empty() {
-            WiringStatus::Unwired { filter: filter.clone() }
-        } else {
-            WiringStatus::Wired { providers: annotated }
-        }
+        self.capabilities().resolve_wiring_with_locality(filter, pref)
     }
 
-    /// Push-based view of the wiring state for `filter`. The returned receiver
-    /// fires whenever a `cap/` or `gcap/` write or tombstone causes the
-    /// resolved provider set to change. The initial value is a snapshot at
-    /// subscription time; subsequent values are debounced — identical
-    /// statuses are not re-broadcast.
+    /// Push-based view of the wiring state for `filter`.
+    ///
+    /// Use [`CapabilitiesHandle::watch_wiring`] via [`GossipAgent::capabilities`] instead.
     pub fn watch_wiring(&self, filter: CapFilter) -> watch::Receiver<WiringStatus> {
-        let initial         = wiring_snapshot(&self.kv_state, &filter);
-        let (tx, rx)        = watch::channel(initial);
-        // C1: narrow both watchers to this filter's (ns, name). cap/ keys end
-        // in /{ns}/{name}; gcap/ keys (cf. gcap/{group}/{ns}/{name}/{contributor})
-        // contain /{ns}/{name}/ as a substring.
-        let cap_needle  = format!("/{}/{}",  filter.namespace, filter.name);
-        let gcap_needle = format!("/{}/{}/", filter.namespace, filter.name);
-        let mut cap_rx  = self.subscribe_prefix_with_predicate(
-            Arc::<str>::from("cap/"),  move |k| k.ends_with(&cap_needle));
-        let mut gcap_rx = self.subscribe_prefix_with_predicate(
-            Arc::<str>::from("gcap/"), move |k| k.contains(&gcap_needle));
-        let mut shutdown_rx = self.shutdown_tx.subscribe();
-        let kv_state        = Arc::clone(&self.kv_state);
-        self.spawn_task(async move {
-            loop {
-                tokio::select! { biased;
-                    _ = await_shutdown(&mut shutdown_rx) => return,
-                    r = cap_rx.changed()  => { if r.is_err() { return; } }
-                    r = gcap_rx.changed() => { if r.is_err() { return; } }
-                }
-                // Coalesce burst writes (anti-entropy sync, partition heal)
-                // into one reaction. See WATCHER_DEBOUNCE_WINDOW.
-                let deadline = time::Instant::now() + WATCHER_DEBOUNCE_WINDOW;
-                loop {
-                    tokio::select! { biased;
-                        _ = time::sleep_until(deadline) => break,
-                        r = cap_rx.changed()  => { if r.is_err() { return; } }
-                        r = gcap_rx.changed() => { if r.is_err() { return; } }
-                    }
-                }
-                let next = wiring_snapshot(&kv_state, &filter);
-                // Result-equality dedup: skip when the resolved status is unchanged.
-                let unchanged = {
-                    let current = tx.borrow();
-                    *current == next
-                };
-                if unchanged { continue; }
-                if tx.send(next).is_err() { return; }
-            }
-        });
-        rx
+        self.capabilities().watch_wiring(filter)
     }
 
-    /// Emits `payload` as a signal of `kind` to every provider that satisfies
-    /// `filter` at the moment of the call. Returns
-    /// [`WiredEmitOutcome::Emitted`] with the recipient list, or
-    /// [`WiredEmitOutcome::Unwired`] when no provider currently matches.
-    /// Pattern-match on the outcome to distinguish "signal dispatched" from
-    /// "no wiring" without re-querying `resolve_wiring`.
+    /// Emits `payload` to every provider satisfying `filter`.
     ///
-    /// Groups (from `gcap/`) receive via `SignalScope::Group(name)`;
-    /// standalone matching nodes (from `cap/`) receive via
-    /// `SignalScope::Individual(node_id)`.
-    ///
-    /// Re-wiring is implicit: a subsequent call re-resolves against the
-    /// current KV state. There is no stored binding.
+    /// Use [`CapabilitiesHandle::signal_wired_via`] via [`GossipAgent::capabilities`] instead.
     pub fn signal_wired_via(
         &self,
         filter:  &CapFilter,
         kind:    impl Into<Arc<str>>,
         payload: impl Into<Bytes>,
     ) -> WiredEmitOutcome {
-        let kind:    Arc<str> = kind.into();
-        let payload: Bytes    = payload.into();
-        let status = wiring_snapshot(&self.kv_state, filter);
-        let providers = match status {
-            WiringStatus::Wired { providers } => providers,
-            WiringStatus::Unwired { filter }  => return WiredEmitOutcome::Unwired { filter },
-        };
-        let emitted = dispatch_to_providers(self, kind, payload, providers);
-        WiredEmitOutcome::Emitted { providers: emitted }
+        self.capabilities().signal_wired_via(filter, kind, payload)
     }
 
-    /// Locality-aware variant of
-    /// [`signal_wired_via`](Self::signal_wired_via): resolves wiring with
-    /// [`resolve_wiring_with_locality`](Self::resolve_wiring_with_locality)
-    /// (so `pref` filters or reorders providers before dispatch), then emits
-    /// to each surviving provider in iteration order. Useful when the
-    /// caller wants to confine signals to a topology region — e.g. a
-    /// storage cohort that should not bleed traffic across AZs.
+    /// Locality-aware variant of `signal_wired_via`.
     ///
-    /// Returns [`WiredEmitOutcome::Unwired`] when the locality-filtered
-    /// provider set is empty. `WiredEmitOutcome::Emitted { providers }`
-    /// can carry an empty `providers` vec only when `pref` is
-    /// `LocalityPreference::Strict(d)` and every match was below the
-    /// threshold — strictly, the raw wiring was satisfied but the locality
-    /// gate rejected all candidates.
+    /// Use [`CapabilitiesHandle::signal_wired_via_locality`] via [`GossipAgent::capabilities`] instead.
     pub fn signal_wired_via_locality(
         &self,
         filter:  &CapFilter,
@@ -196,24 +86,14 @@ impl GossipAgent {
         kind:    impl Into<Arc<str>>,
         payload: impl Into<Bytes>,
     ) -> WiredEmitOutcome {
-        let kind:    Arc<str> = kind.into();
-        let payload: Bytes    = payload.into();
-        let status = self.resolve_wiring_with_locality(filter, pref);
-        let providers = match status {
-            WiringStatus::Wired { providers } => providers,
-            WiringStatus::Unwired { filter }  => return WiredEmitOutcome::Unwired { filter },
-        };
-        let emitted = dispatch_to_providers(self, kind, payload, providers);
-        WiredEmitOutcome::Emitted { providers: emitted }
+        self.capabilities().signal_wired_via_locality(filter, kind, payload, pref)
     }
 }
 
-/// Helper shared by `signal_wired_via` and `signal_wired_via_locality`:
-/// emits one signal per provider via the existing public `emit()` (which
-/// generates a nonce, delivers locally if admitted, and queues for
-/// gossip), returning the providers in dispatch order.
-fn dispatch_to_providers(
-    agent:     &GossipAgent,
+/// Free-function variant of `dispatch_to_providers` for callers that hold
+/// only `Arc<TaskCtx>` (e.g. `CapabilitiesHandle`).
+pub(super) fn dispatch_to_providers_ctx(
+    ctx:       &TaskCtx,
     kind:      Arc<str>,
     payload:   Bytes,
     providers: Vec<WiringProvider>,
@@ -224,10 +104,49 @@ fn dispatch_to_providers(
             WiringProvider::Group { name, .. }    => crate::signal::SignalScope::Group(name.clone()),
             WiringProvider::Node  { node_id, .. } => crate::signal::SignalScope::Individual(node_id.clone()),
         };
-        let _ = agent.emit(kind.clone(), scope, payload.clone());
+        let _ = emit_signal(ctx, kind.clone(), scope, payload.clone());
         emitted.push(provider);
     }
     emitted
+}
+
+/// Free-function variant of [`GossipAgent::signal_wired_via`] for callers
+/// that hold only `Arc<TaskCtx>` (e.g. `CapabilitiesHandle`).
+///
+/// When `pref` is `Some`, providers are annotated with locality depth and
+/// filtered/sorted before dispatch (same logic as `signal_wired_via_locality`).
+pub(super) fn signal_wired_via_ctx(
+    ctx:     &TaskCtx,
+    filter:  &CapFilter,
+    kind:    Arc<str>,
+    payload: Bytes,
+    pref:    Option<crate::locality::LocalityPreference>,
+) -> WiredEmitOutcome {
+    let status = if let Some(pref) = pref {
+        let self_loc = super::helpers::self_locality_ctx(ctx);
+        let raw = wiring_snapshot(&ctx.kv_state, filter);
+        let providers = match raw {
+            WiringStatus::Wired { providers } => providers,
+            WiringStatus::Unwired { filter }  => return WiredEmitOutcome::Unwired { filter },
+        };
+        let mut annotated: Vec<WiringProvider> = providers.into_iter()
+            .map(|p| annotate_provider_with_locality(p, &ctx.kv_state, self_loc.as_ref()))
+            .collect();
+        apply_locality_pref(&mut annotated, pref, provider_depth);
+        if annotated.is_empty() {
+            WiringStatus::Unwired { filter: filter.clone() }
+        } else {
+            WiringStatus::Wired { providers: annotated }
+        }
+    } else {
+        wiring_snapshot(&ctx.kv_state, filter)
+    };
+    let providers = match status {
+        WiringStatus::Wired { providers } => providers,
+        WiringStatus::Unwired { filter }  => return WiredEmitOutcome::Unwired { filter },
+    };
+    let emitted = dispatch_to_providers_ctx(ctx, kind, payload, providers);
+    WiredEmitOutcome::Emitted { providers: emitted }
 }
 
 // ── Free helpers ─────────────────────────────────────────────────────────────
@@ -371,7 +290,7 @@ fn cmp_optional_capvalues(
 /// `self_loc`. Returns `0` when either side has no known locality — that's
 /// the correct "no known sharing" answer and matches the semantics of
 /// `LocalityPath::shared_prefix_len` when one path is empty.
-fn locality_depth(
+pub(super) fn locality_depth(
     kv_state: &crate::store::KvState,
     self_loc: Option<&LocalityPath>,
     node:     &NodeId,
@@ -387,7 +306,7 @@ fn locality_depth(
 /// Replaces a provider's `shared_locality_depth` with the value computed
 /// against our own locality. For groups, the value is the **maximum** across
 /// the listed contributors.
-fn annotate_provider_with_locality(
+pub(super) fn annotate_provider_with_locality(
     provider: WiringProvider,
     kv_state: &crate::store::KvState,
     self_loc: Option<&LocalityPath>,
@@ -408,7 +327,7 @@ fn annotate_provider_with_locality(
 }
 
 #[inline]
-fn provider_depth(p: &WiringProvider) -> usize {
+pub(super) fn provider_depth(p: &WiringProvider) -> usize {
     match p {
         WiringProvider::Node  { shared_locality_depth, .. } => *shared_locality_depth,
         WiringProvider::Group { shared_locality_depth, .. } => *shared_locality_depth,
@@ -418,7 +337,7 @@ fn provider_depth(p: &WiringProvider) -> usize {
 /// Applies a [`LocalityPreference`] to an annotated provider list in place.
 /// `depth_of` extracts the integer depth from each element. Stable sort so
 /// providers of equal depth retain their original ordering (scan order).
-fn apply_locality_pref<T, F>(items: &mut Vec<T>, pref: LocalityPreference, depth_of: F)
+pub(super) fn apply_locality_pref<T, F>(items: &mut Vec<T>, pref: LocalityPreference, depth_of: F)
 where
     F: Fn(&T) -> usize,
 {
@@ -630,19 +549,19 @@ mod tests {
 
         let node_b = nid(7011);
         let node_c = nid(7012);
-        let _ = agent.set(format!("grp/workers/{}", node_b), bytes::Bytes::from_static(b"1"));
-        let _ = agent.set(format!("grp/workers/{}", node_c), bytes::Bytes::from_static(b"1"));
+        let _ = agent.kv().set(format!("grp/workers/{}", node_b), bytes::Bytes::from_static(b"1"));
+        let _ = agent.kv().set(format!("grp/workers/{}", node_c), bytes::Bytes::from_static(b"1"));
 
         let b_state = LoadState { fill_ratio: 0.8, is_opaque: false, written_at_ms: now_ms };
         let c_state = LoadState { fill_ratio: 0.2, is_opaque: false, written_at_ms: now_ms };
-        let _ = agent.set(format!("sys/load/{}/task", node_b), encode_load_state(&b_state));
-        let _ = agent.set(format!("sys/load/{}/task", node_c), encode_load_state(&c_state));
+        let _ = agent.kv().set(format!("sys/load/{}/task", node_b), encode_load_state(&b_state));
+        let _ = agent.kv().set(format!("sys/load/{}/task", node_c), encode_load_state(&c_state));
 
         let trusted_b = vec![node_b.clone()];
         for port in [7020u16, 7021, 7022, 7023] {
             let voter = nid(port);
             let encoded = bincode::serde::encode_to_vec(&trusted_b, crate::framing::bincode_cfg()).unwrap();
-            let _ = agent.set(format!("{}{}/{}", consensus_ns::TRUST, "workers", voter), encoded);
+            let _ = agent.kv().set(format!("{}{}/{}", consensus_ns::TRUST, "workers", voter), encoded);
         }
 
         let suggested = agent.suggest_leader("workers", "task", std::time::Duration::from_secs(600));
@@ -659,13 +578,13 @@ mod tests {
 
         let node_a = nid(7001);
         let node_b = nid(7002);
-        let _ = agent.set(format!("grp/workers/{}", node_a), bytes::Bytes::from_static(b"1"));
-        let _ = agent.set(format!("grp/workers/{}", node_b), bytes::Bytes::from_static(b"1"));
+        let _ = agent.kv().set(format!("grp/workers/{}", node_a), bytes::Bytes::from_static(b"1"));
+        let _ = agent.kv().set(format!("grp/workers/{}", node_b), bytes::Bytes::from_static(b"1"));
 
         let heavy = LoadState { fill_ratio: 0.9, is_opaque: true,  written_at_ms: now_ms };
         let light = LoadState { fill_ratio: 0.1, is_opaque: false, written_at_ms: now_ms };
-        let _ = agent.set(format!("sys/load/{}/task", node_a), encode_load_state(&heavy));
-        let _ = agent.set(format!("sys/load/{}/task", node_b), encode_load_state(&light));
+        let _ = agent.kv().set(format!("sys/load/{}/task", node_a), encode_load_state(&heavy));
+        let _ = agent.kv().set(format!("sys/load/{}/task", node_b), encode_load_state(&light));
 
         let suggested = agent.suggest_leader("workers", "task", std::time::Duration::from_secs(600));
         assert_eq!(suggested, node_b, "suggest_leader should pick the lighter-loaded member");

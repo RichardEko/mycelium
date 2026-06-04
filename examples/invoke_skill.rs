@@ -60,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Check audit trail arrived in KV
     tokio::time::sleep(Duration::from_millis(500)).await;
-    let audit = agent.scan_prefix("audit/");
+    let audit = agent.kv().scan_prefix("audit/");
     println!("\naudit records on mesh: {}", audit.len());
     for (k, _) in &audit {
         println!("  {k}");

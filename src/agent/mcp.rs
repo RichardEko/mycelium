@@ -20,6 +20,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tracing::warn;
 
 use super::{GossipAgent, TaskCtx};
+use super::helpers::kv_set;
 
 /// Handle returned by [`GossipAgent::register_mcp_tool`].
 ///
@@ -122,9 +123,9 @@ impl GossipAgent {
         let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
         let shutdown_rx = self.shutdown_tx.subscribe();
         let ctx         = Arc::clone(&self.task_ctx);
-        let rx          = self.signal_rx(signal_kind::MCP_INVOKE);
+        let rx          = self.task_ctx.signal_handlers.register(Arc::from(signal_kind::MCP_INVOKE));
 
-        let _ = self.set(kv_key.clone(), schema.to_string().into_bytes());
+        kv_set(&self.task_ctx, kv_key.clone(), Bytes::from(schema.to_string().into_bytes()));
 
         self.spawn_task(run_mcp_tool_task(
             ctx, cancel_rx, shutdown_rx, kv_key, name, rx, handler,
@@ -294,7 +295,7 @@ impl GossipAgent {
             };
             let schema = tool.get("inputSchema").cloned().unwrap_or(json!({}));
             let kv_key: Arc<str> = Arc::from(format!("tools/{name}/{node_id}").as_str());
-            let _ = self.set(kv_key.clone(), schema.to_string().into_bytes());
+            kv_set(&self.task_ctx, kv_key.clone(), Bytes::from(schema.to_string().into_bytes()));
             kv_keys.push(kv_key);
             tool_names.push(Arc::from(name));
         }
@@ -307,7 +308,7 @@ impl GossipAgent {
         let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
         let shutdown_rx = self.shutdown_tx.subscribe();
         let ctx         = Arc::clone(&self.task_ctx);
-        let rx          = self.signal_rx(signal_kind::MCP_INVOKE);
+        let rx          = self.task_ctx.signal_handlers.register(Arc::from(signal_kind::MCP_INVOKE));
 
         self.spawn_task(run_mcp_client_task(
             ctx,
@@ -499,7 +500,7 @@ mod tests {
         );
 
         assert!(
-            agent.get(&kv_key).is_some(),
+            agent.kv().get(&kv_key).is_some(),
             "tools/ping KV entry not found after registration"
         );
 
@@ -508,7 +509,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         assert!(
-            agent.get(&kv_key).is_none(),
+            agent.kv().get(&kv_key).is_none(),
             "tools/ping KV entry not tombstoned after handle drop"
         );
 
@@ -654,7 +655,7 @@ mod tests {
             .expect("connect_mcp_server failed");
 
         // The bridged tool should now appear in scan_prefix("tools/").
-        let keys = agent.scan_prefix("tools/");
+        let keys = agent.kv().scan_prefix("tools/");
         let found = keys.iter().any(|(k, _)| k.contains("remote-echo"));
         assert!(found, "remote-echo not in tools/ after connect: {:?}", keys);
 

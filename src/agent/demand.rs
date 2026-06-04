@@ -8,76 +8,26 @@
 use crate::capability::{CapEntry, Capability, CapFilter, DemandStatus, ReqEntry};
 use crate::node_id::NodeId;
 use ahash::AHashSet;
-use std::sync::Arc;
-use tokio::{sync::watch, time};
+use tokio::sync::watch;
 use tracing::warn;
 
 use super::GossipAgent;
-use super::capability_ops::{await_shutdown, is_cap_locality_key, now_ms, parse_cap_key_or_warn, scan_cap_by_ns_name, scan_prefix_kv_with_ts, WATCHER_DEBOUNCE_WINDOW};
+use super::capability_ops::{is_cap_locality_key, now_ms, parse_cap_key_or_warn, scan_cap_by_ns_name, scan_prefix_kv_with_ts};
 use super::wiring::parse_gcap_key;
 
 impl GossipAgent {
     /// Snapshot count of declared demand vs. available providers for `filter`.
-    /// Demand = unique nodes whose `req/{node}/{ns}/{name}` entry shares the
-    /// filter's `(namespace, name)`. Providers = unique nodes either
-    /// directly advertising a matching capability (`cap/`) or contributing
-    /// to a matching group projection (`gcap/`). Pressure =
-    /// `demanding.len() / max(providers.len(), 1)`.
     ///
-    /// The library does NOT auto-respond to high pressure — this is a
-    /// surfaced signal for orchestrators / autoscalers / dashboards.
+    /// Use [`CapabilitiesHandle::demand`] via [`GossipAgent::capabilities`] instead.
     pub fn demand(&self, filter: &CapFilter) -> DemandStatus {
-        demand_snapshot(&self.kv_state, filter)
+        self.capabilities().demand(filter)
     }
 
-    /// Push-based view of demand pressure for `filter`. Fires whenever a
-    /// matching `req/`, `cap/`, or `gcap/` entry is written or tombstoned.
-    /// Debounced — identical `DemandStatus` values are not re-broadcast.
+    /// Push-based view of demand pressure for `filter`.
+    ///
+    /// Use [`CapabilitiesHandle::watch_demand`] via [`GossipAgent::capabilities`] instead.
     pub fn watch_demand(&self, filter: CapFilter) -> watch::Receiver<DemandStatus> {
-        let initial         = demand_snapshot(&self.kv_state, &filter);
-        let (tx, rx)        = watch::channel(initial);
-        // C1: narrow all three watchers to this filter's (ns, name). req/ and
-        // cap/ keys end in /{ns}/{name}; gcap/{group}/{ns}/{name}/{contributor}
-        // contains /{ns}/{name}/ as a substring.
-        let needle_endswith = format!("/{}/{}",  filter.namespace, filter.name);
-        let needle_contains = format!("/{}/{}/", filter.namespace, filter.name);
-        let req_needle  = needle_endswith.clone();
-        let cap_needle  = needle_endswith;
-        let gcap_needle = needle_contains;
-        let mut req_rx  = self.subscribe_prefix_with_predicate(
-            Arc::<str>::from("req/"),  move |k| k.ends_with(&req_needle));
-        let mut cap_rx  = self.subscribe_prefix_with_predicate(
-            Arc::<str>::from("cap/"),  move |k| k.ends_with(&cap_needle));
-        let mut gcap_rx = self.subscribe_prefix_with_predicate(
-            Arc::<str>::from("gcap/"), move |k| k.contains(&gcap_needle));
-        let mut shutdown_rx = self.shutdown_tx.subscribe();
-        let kv_state        = Arc::clone(&self.kv_state);
-        self.spawn_task(async move {
-            loop {
-                tokio::select! { biased;
-                    _ = await_shutdown(&mut shutdown_rx) => return,
-                    r = req_rx.changed()  => { if r.is_err() { return; } }
-                    r = cap_rx.changed()  => { if r.is_err() { return; } }
-                    r = gcap_rx.changed() => { if r.is_err() { return; } }
-                }
-                // Debounce burst writes: drain further fires for the next
-                // WATCHER_DEBOUNCE_WINDOW before computing a new snapshot.
-                let deadline = time::Instant::now() + WATCHER_DEBOUNCE_WINDOW;
-                loop {
-                    tokio::select! { biased;
-                        _ = time::sleep_until(deadline) => break,
-                        r = req_rx.changed()  => { if r.is_err() { return; } }
-                        r = cap_rx.changed()  => { if r.is_err() { return; } }
-                        r = gcap_rx.changed() => { if r.is_err() { return; } }
-                    }
-                }
-                let next = demand_snapshot(&kv_state, &filter);
-                let unchanged = { *tx.borrow() == next };
-                if unchanged { continue; }
-                if tx.send(next).is_err() { return; }
-            }
-        });
-        rx
+        self.capabilities().watch_demand(filter)
     }
 }
 
@@ -156,6 +106,7 @@ mod tests {
     use crate::hlc::Hlc;
     use crate::store::{apply_and_notify, KvState};
     use bytes::Bytes;
+    use std::sync::Arc;
 
     fn nid(port: u16) -> NodeId {
         NodeId::new("127.0.0.1", port).expect("valid loopback NodeId")

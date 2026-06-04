@@ -10,9 +10,8 @@
 use crate::node_id::NodeId;
 use bytes::Bytes;
 use std::{sync::Arc, time::Duration};
-use tokio::task::JoinSet;
 
-use super::{GossipAgent, rpc::rpc_call_ctx};
+use super::GossipAgent;
 
 /// A single successful reply from a scatter-gather fan-out.
 #[derive(Debug)]
@@ -43,17 +42,7 @@ impl GossipAgent {
     /// Sends `payload` to every node in `targets` as a point-to-point RPC and
     /// collects replies.
     ///
-    /// All calls are issued concurrently. As soon as `min_ok` successful
-    /// replies arrive the remaining in-flight calls are cancelled and
-    /// `Ok(Vec<ScatterResult>)` is returned. The returned vector contains
-    /// **at least** `min_ok` entries; if more replies arrive before
-    /// cancellation takes effect the vector may be larger.
-    ///
-    /// Returns `Err(ScatterError::InsufficientReplies)` when fewer than
-    /// `min_ok` targets reply within `timeout`.
-    ///
-    /// The responder side is ordinary `rpc_respond`. See [`rpc_call`](Self::rpc_call)
-    /// for the signal-based correlation protocol.
+    /// Use [`ServiceHandle::scatter_gather`] via [`GossipAgent::service`] instead.
     pub async fn scatter_gather(
         &self,
         targets:  Vec<NodeId>,
@@ -62,38 +51,7 @@ impl GossipAgent {
         timeout:  Duration,
         min_ok:   usize,
     ) -> Result<Vec<ScatterResult>, ScatterError> {
-        let kind:    Arc<str> = kind.into();
-        let payload: Bytes    = payload.into();
-        let ctx = Arc::clone(&self.task_ctx);
-
-        let mut js: JoinSet<(NodeId, Result<Bytes, super::rpc::RpcError>)> = JoinSet::new();
-        for target in targets {
-            let c = Arc::clone(&ctx);
-            let k = Arc::clone(&kind);
-            let p = payload.clone();
-            let t = target.clone();
-            js.spawn(async move {
-                let res = rpc_call_ctx(&c, t.clone(), k, p, timeout).await;
-                (t, res)
-            });
-        }
-
-        let mut results = Vec::new();
-        while let Some(join_res) = js.join_next().await {
-            if let Ok((node_id, Ok(reply))) = join_res {
-                results.push(ScatterResult { node_id, payload: reply });
-                if results.len() >= min_ok {
-                    js.abort_all();
-                    break;
-                }
-            }
-        }
-
-        if results.len() >= min_ok {
-            Ok(results)
-        } else {
-            Err(ScatterError::InsufficientReplies { got: results.len(), needed: min_ok })
-        }
+        self.service().scatter_gather(targets, kind, payload, timeout, min_ok).await
     }
 }
 

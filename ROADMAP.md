@@ -1,6 +1,6 @@
 # Mycelium — Engineering Roadmap
 
-> **Status:** Layer 1 complete. Layer 2 complete. Consensus complete. Capability & Discovery subsystem complete. Agent state machine (Layer V) complete. MCP bridge (server + client) complete. Config-driven capability probing complete. KV persistence (WAL + snapshot, all sync modes) complete. Layer 3 Service Patterns complete (HTTP server, SSE, rpc_call/rpc_respond, invoke.bulk, Actor/Event mailboxes, scatter-gather). Multi-machine integration tests (Docker Compose, 12 unattended scenarios) complete. **mTLS peer connections + Ed25519 node identity + consensus payload signing complete** (`tls` feature). Python language bridge (`mycelium-py`) complete. **SkillRunner** (`.skill.toml` capability-as-skill, OpenAI-compatible LLM driver, HLC audit trail + OTEL) complete. **Opt-In Consistency & Ordering Overlay complete** (`consistent_set/get`, `distributed_lock`, `elect_leader`, `append`/`scan_log`/`compact_log`/`subscribe_log`/`subscribe_log_group`, `emit_reliable` — all exposed via HTTP gateway and Python SDK). **Layer 5 Observability complete** (`metrics` feature — Prometheus scrape endpoint at `/metrics`, 10 counters/gauge/histogram, Grafana dashboard at `dashboards/mycelium-grafana.json`). **TypeScript language bridge complete** (`mycelium-ts` — 28 methods, SSE streaming, all overlay endpoints, mirrors Python SDK). **Cluster Sharding complete** (`shard_for`/`emit_sharded` + HTTP gateway + Python & TS SDKs). **KV Write Signing complete** (Ed25519 `WireMessage::SignedData`, wire v10). **A2A Adapter complete** (`a2a` feature — `/.well-known/agent.json`, `/a2a` JSON-RPC, Python & TS `A2aClient`). **Cross-Group Consensus complete** (`cross_group_propose` + `GroupQuorum` — multi-voting-bloc proposals with independent per-group quorum fractions, `SignalScope::Groups` variant, HTTP gateway + Python & TS SDKs). **Prompt Skills complete** (`llm` feature — `PromptTemplate` stored in KV, `register_prompt_skill`/`call_prompt_skill` on `GossipAgent`, `OpenAiBackend`/`EchoBackend`, HTTP gateway `/gateway/prompts` + `/gateway/llm/call` + `/gateway/llm/stream`, Python `PromptSkillClient`, TS `PromptSkillClient` — 241 tests). **Signal Reorder Buffer complete** (`emit_ordered()`, `hlc_seq` wire field, wire v11, per-`(sender,kind)` min-heap, `GossipConfig::signal_ordered_delivery`). **Watcher C2 complete** (consolidated requirement opacity watcher — one task, one `cap/` subscription for all declared requirements). **Research paper in progress** — *"The Coordinator Trap: Why Mediated Multi-Agent Architectures Cannot Scale and a Substrate-Based Alternative"* — target AAMAS 2027; first draft + structural revision complete (2026-05-28); §8 evaluation benchmarks pending empirical runs.
+> **Status:** Layer 1 complete. Layer 2 complete. Consensus complete. Capability & Discovery subsystem complete. Agent state machine (Layer V) complete. MCP bridge (server + client) complete. Config-driven capability probing complete. KV persistence (WAL + snapshot, all sync modes) complete. Layer 3 Service Patterns complete (HTTP server, SSE, rpc_call/rpc_respond, invoke.bulk, Actor/Event mailboxes, scatter-gather). Multi-machine integration tests (Docker Compose, 12 unattended scenarios) complete. **mTLS peer connections + Ed25519 node identity + consensus payload signing complete** (`tls` feature). Python language bridge (`mycelium-py`) complete. **SkillRunner** (`.skill.toml` capability-as-skill, OpenAI-compatible LLM driver, HLC audit trail + OTEL) complete. **Opt-In Consistency & Ordering Overlay complete** (`consistent_set/get`, `distributed_lock`, `elect_leader`, `append`/`scan_log`/`compact_log`/`subscribe_log`/`subscribe_log_group`, `emit_reliable` — all exposed via HTTP gateway and Python SDK). **Layer 5 Observability complete** (`metrics` feature — Prometheus scrape endpoint at `/metrics`, 10 counters/gauge/histogram, Grafana dashboard at `dashboards/mycelium-grafana.json`). **TypeScript language bridge complete** (`mycelium-ts` — 28 methods, SSE streaming, all overlay endpoints, mirrors Python SDK). **Cluster Sharding complete** (`shard_for`/`emit_sharded` + HTTP gateway + Python & TS SDKs). **KV Write Signing complete** (Ed25519 `WireMessage::SignedData`, wire v10). **A2A Adapter complete** (`a2a` feature — `/.well-known/agent.json`, `/a2a` JSON-RPC, Python & TS `A2aClient`). **Cross-Group Consensus complete** (`cross_group_propose` + `GroupQuorum` — multi-voting-bloc proposals with independent per-group quorum fractions, `SignalScope::Groups` variant, HTTP gateway + Python & TS SDKs). **Prompt Skills complete** (`llm` feature — `PromptTemplate` stored in KV, `register_prompt_skill`/`call_prompt_skill` on `GossipAgent`, `OpenAiBackend`/`EchoBackend`, HTTP gateway `/gateway/prompts` + `/gateway/llm/call` + `/gateway/llm/stream`, Python `PromptSkillClient`, TS `PromptSkillClient` — 241 tests). **Signal Reorder Buffer complete** (`emit_ordered()`, `hlc_seq` wire field, wire v11, per-`(sender,kind)` min-heap, `GossipConfig::signal_ordered_delivery`). **Watcher C2 complete** (consolidated requirement opacity watcher — one task, one `cap/` subscription for all declared requirements). **Semantic coordination complete** (capability schema versioning — `with_schema_id`/`CapFilter::with_schema`; gossip-propagated skill payload schemas — `with_input_schema`/`with_output_schema`; signal sender authorization — `signal_rx_from`; FIPA-ACL speech act taxonomy in crate doc). **Schema registry complete** (`publish_schema`, `force_publish_schema`, `get_schema`, `list_schemas`, `seed_schemas_from_dir` — `schemas/` KV namespace, conflict detection, JSON validation). **Research paper in progress** — *"The Coordinator Trap: Why Mediated Multi-Agent Architectures Cannot Scale and a Substrate-Based Alternative"* — target AAMAS 2027; first draft + structural revision complete (2026-05-28); §8 evaluation benchmarks pending empirical runs.
 > **Last updated:** 2026-06-03
 
 ---
@@ -11,6 +11,12 @@ A substrate for **robust adaptive AI systems** — a swarm of agents that discov
 capabilities through a shared medium, signals intent through receptors that filter by scope, and
 evolves its topology in response to activity patterns. No coordinator, no central registry, no
 single point of failure.
+
+> **Scope of "no coordinator":** The gossip KV layer and signal mesh are coordinator-free.
+> The opt-in consistency overlay (`consistent_set`, `distributed_lock`, `elect_leader`) uses
+> epidemic Paxos and requires a live majority — those specific operations have a proposer and
+> will stall under partition. `bootstrap_peers` is a soft coordinator for initial cluster
+> discovery; keep 2–3 long-lived seed nodes for reliable join behaviour.
 
 The gossip protocol is not the application. It is the bloodstream the application runs on.
 
@@ -221,16 +227,16 @@ agent.start() -> Result<(), GossipError>
 agent.shutdown() -> ()
 
 // State
-agent.set(key, value) -> bool           // local always updated; false = channel full
-agent.set_async(key, value).await -> bool
-agent.get(key) -> Option<Bytes>
-agent.delete(key) -> bool               // gossips a tombstone
-agent.delete_async(key).await -> bool
-agent.keys() -> Vec<Arc<str>>
-agent.scan_prefix(prefix) -> Vec<(Arc<str>, Bytes)>
+agent.kv().set(key, value) -> bool           // local always updated; false = channel full
+agent.kv().set_async(key, value).await -> bool
+agent.kv().get(key) -> Option<Bytes>
+agent.kv().delete(key) -> bool               // gossips a tombstone
+agent.kv().delete_async(key).await -> bool
+agent.kv().keys() -> Vec<Arc<str>>
+agent.kv().scan_prefix(prefix) -> Vec<(Arc<str>, Bytes)>
 
 // Reactive
-agent.subscribe(key) -> watch::Receiver<Option<Bytes>>
+agent.kv().subscribe(key) -> watch::Receiver<Option<Bytes>>
 
 // Introspection
 agent.system_stats() -> SystemStats     // includes dropped_frames
@@ -362,38 +368,38 @@ The complete stable API is documented in the [Complete Layer 2 API](#complete-la
 
 ```rust
 // ── Group membership ─────────────────────────────────────────────────────
-agent.join_group(name)
-agent.leave_group(name)
+agent.mesh().join_group(name)
+agent.mesh().leave_group(name)
 agent.groups() -> Vec<Arc<str>>            // current memberships
 
 // ── Emit / receive ───────────────────────────────────────────────────────
-agent.emit(kind, scope, payload)           -> bool   // false = shard full
-agent.emit_async(kind, scope, payload).await -> bool // false = shard dead
-agent.signal_rx(kind)                      -> mpsc::Receiver<Signal>
-agent.signal_rx_with_capacity(kind, cap)   -> mpsc::Receiver<Signal>
+agent.mesh().emit(kind, scope, payload)           -> bool   // false = shard full
+agent.mesh().emit_async(kind, scope, payload).await -> bool // false = shard dead
+agent.mesh().signal_rx(kind)                      -> mpsc::Receiver<Signal>
+agent.mesh().signal_rx_with_capacity(kind, cap)   -> mpsc::Receiver<Signal>
 
 // ── One-shot request/response ────────────────────────────────────────────
-agent.signal_once(kind, timeout, predicate).await -> Option<Signal>
+agent.mesh().signal_once(kind, timeout, predicate).await -> Option<Signal>
 
 // ── Periodic heartbeat ───────────────────────────────────────────────────
-agent.advertise(kind, scope, interval, payload_fn) -> AdvertiseHandle
+agent.mesh().advertise(kind, scope, interval, payload_fn) -> AdvertiseHandle
 // Like advertise, but also writes payload to Layer I (key: svc/{kind}/{node_id}).
 // Tombstoned automatically on drop/shutdown. Lets late joiners discover via scan_prefix.
-agent.advertise_persistent(kind, scope, interval, payload_fn) -> AdvertiseHandle
+agent.mesh().advertise_persistent(kind, scope, interval, payload_fn) -> AdvertiseHandle
 
 // ── Fault detection ───────────────────────────────────────────────────────
-agent.last_signal(kind) -> Option<Instant>       // when was kind last delivered here?
-agent.watch(kind, threshold, on_stale) -> WatchHandle  // calls on_stale() when silent > threshold
+agent.mesh().last_signal(kind) -> Option<Instant>       // when was kind last delivered here?
+agent.mesh().watch(kind, threshold, on_stale) -> WatchHandle  // calls on_stale() when silent > threshold
 
 // ── Threshold activation ─────────────────────────────────────────────────
-agent.quorum(kind, min_senders, window) -> bool  // ≥ min_senders distinct nodes in window?
-// Same as quorum but reads from sys/quorum/ in Layer I — survives process restarts.
-agent.quorum_persistent(kind, window) -> usize   // count of distinct senders in window
+agent.mesh().quorum(kind, min_senders, window) -> bool  // ≥ min_senders distinct nodes in window?
+// quorum_persistent reads from sys/quorum/ in Layer I — survives process restarts.
+agent.kv().quorum_persistent(kind, window) -> usize   // count of distinct senders in window
 
 // ── Inhibition / refractory period ──────────────────────────────────────
-agent.suppress(kind, duration)                   // block kind delivery for duration
-agent.unsuppress(kind)                           // lift early
-agent.is_suppressed(kind) -> bool                // diagnostic
+agent.mesh().suppress(kind, duration)                   // block kind delivery for duration
+agent.mesh().unsuppress(kind)                           // lift early
+agent.mesh().is_suppressed(kind) -> bool                // diagnostic
 
 // ── Opacity — load-adaptive admission ────────────────────────────────────
 agent.opacity(kind) -> f32                       // fill ratio for kind's handler channel
@@ -409,15 +415,15 @@ The mesh is not a black box. Every observable dimension has a dedicated query:
 
 | Observable | API | What it answers |
 |---|---|---|
-| Was a kind heard recently? | `last_signal(kind)` | Last delivery timestamp |
-| Has a kind gone silent? | `watch(kind, threshold, cb)` | Calls `cb` when silent > threshold |
-| Have K distinct nodes checked in? | `quorum(kind, K, window)` | Consensus-adjacent readiness |
-| Have K nodes checked in (restart-safe)? | `quorum_persistent(kind, window)` | Reads `sys/quorum/` from Layer I |
-| Is this node refusing a kind? | `is_suppressed(kind)` | Active inhibition in effect |
+| Was a kind heard recently? | `mesh().last_signal(kind)` | Last delivery timestamp |
+| Has a kind gone silent? | `mesh().watch(kind, threshold, cb)` | Calls `cb` when silent > threshold |
+| Have K distinct nodes checked in? | `mesh().quorum(kind, K, window)` | Consensus-adjacent readiness |
+| Have K nodes checked in (restart-safe)? | `kv().quorum_persistent(kind, window)` | Reads `sys/quorum/` from Layer I |
+| Is this node refusing a kind? | `mesh().is_suppressed(kind)` | Active inhibition in effect |
 | How loaded is this node's intake? | `opacity(kind)` | Fill ratio 0.0–1.0 |
 | Are peers notified of overload? | `manage_opacity(...)` | Emits `boundary.opaque` to peers |
 | What groups is this node in? | `groups()` | Current boundary memberships |
-| How many workers are alive? | `scan_prefix("load/")` | Pheromone trail count (Layer 1) |
+| How many workers are alive? | `kv().scan_prefix("load/")` | Pheromone trail count (Layer 1) |
 | Are gossip writes being lost? | `system_stats().dropped_frames` | Cumulative drop counter |
 | Which peers are dropping frames? | `peer_drop_counts()` | Per-peer cumulative drop count |
 
@@ -433,17 +439,17 @@ if stats.dropped_frames > prev_dropped {
 }
 
 // 2. Check if any worker has been heard recently
-let fresh = supervisor.last_signal(signal_kind::CONTRACT_AVAILABLE)
+let fresh = supervisor.mesh().last_signal(signal_kind::CONTRACT_AVAILABLE)
     .map(|t| t.elapsed() < Duration::from_secs(30))
     .unwrap_or(false);
 
 // 3. Check if enough workers are present (quorum)
-let pool_ready = supervisor.quorum(
+let pool_ready = supervisor.mesh().quorum(
     signal_kind::CONTRACT_AVAILABLE, 2, Duration::from_secs(30)
 );
 
 // 4. Read the authoritative state from the pheromone trails
-let live_trails = supervisor.scan_prefix("load/nlp/")
+let live_trails = supervisor.kv().scan_prefix("load/nlp/")
     .into_iter()
     .filter_map(|(_, b)| decode::<LoadState>(&b))
     .filter(|s| unix_ms_now() - s.written_at_ms < 30_000)
@@ -578,7 +584,7 @@ assuming delivery. This gives at-least-once semantics without a broker.
 
 ```rust
 // Worker side
-let _handle = agent.advertise(
+let _handle = agent.mesh().advertise(
     signal_kind::CONTRACT_AVAILABLE,
     SignalScope::Group("nlp"),
     Duration::from_secs(5),
@@ -587,18 +593,18 @@ let _handle = agent.advertise(
 
 // Invoker side — register BEFORE emitting so no reply is missed
 let nonce = fastrand::u64(..);
-let reply_fut = agent.signal_once(
+let reply_fut = agent.mesh().signal_once(
     signal_kind::INVOKE_RESULT,
     Duration::from_secs(5),
     move |s| s.nonce == nonce,
 );
-agent.emit_async(signal_kind::INVOKE, SignalScope::Group("nlp"),
+agent.mesh().emit_async(signal_kind::INVOKE, SignalScope::Group("nlp"),
     encode(InvokeRequest { nonce, payload: input })).await;
 
 match reply_fut.await {
     Some(sig) => handle_result(sig),
     None => {
-        if agent.last_signal(signal_kind::CONTRACT_AVAILABLE)
+        if agent.mesh().last_signal(signal_kind::CONTRACT_AVAILABLE)
                .map(|t| t.elapsed() < Duration::from_secs(30))
                .unwrap_or(false)
         { retry_with_backoff() } else { Err("no workers") }
@@ -621,17 +627,17 @@ let _advert = agent.advertise(
     Duration::from_secs(10),
     move || {
         let state = LoadState { queue_depth: QUEUE.len(), written_at_ms: unix_ms_now() };
-        agent2.set(load_key.clone(), encode(&state));  // pheromone trail — persistent
+        agent2.kv().set(load_key.clone(), encode(&state));  // pheromone trail — persistent
         encode(&state)                                  // signal payload — fast delivery
     },
 );
-// On graceful shutdown: agent.delete(&load_key) — explicit evaporation
+// On graceful shutdown: agent.kv().delete(&load_key) — explicit evaporation
 ```
 
 Routing decisions read the store directly — no signal handler, no local cache:
 
 ```rust
-let load_picture = agent.scan_prefix("load/")
+let load_picture = agent.kv().scan_prefix("load/")
     .into_iter()
     .filter_map(|(k, b)| {
         let s: LoadState = decode(&b)?;
@@ -1337,16 +1343,16 @@ sync to late joiners; the HLC provides causal ordering without a broker.
 
 ```rust
 // Append — writes log/{stream}/{hlc} to gossip KV; entries never tombstoned
-agent.append("events/orders", entry_bytes);
+agent.kv().append("events/orders", entry_bytes);
 
 // Subscribe from a position — reactive, ordered by HLC key, fires on new entries
-let mut rx: watch::Receiver<Vec<(Hlc, Bytes)>> = agent.subscribe_log("events/orders", since_hlc);
+let mut rx: watch::Receiver<Vec<(Hlc, Bytes)>> = agent.kv().subscribe_log("events/orders", since_hlc);
 
 // Range scan — replay a window or from a checkpoint
-let entries = agent.scan_log("events/orders", from_hlc, to_hlc);
+let entries = agent.kv().scan_log("events/orders", from_hlc, to_hlc);
 
 // Compaction — tombstones entries older than a watermark
-agent.compact_log("events/orders", before_hlc);
+agent.kv().compact_log("events/orders", before_hlc);
 ```
 
 **Consumer groups** — each consumer tracks its position as a KV entry:
@@ -1454,6 +1460,8 @@ Weeks:  0         2          4          6          8         10        12
 | **Production** | Security: mTLS peer connections + NodeId keypair + consensus payload signing | **Complete** |
 | **Production** | KV write signing: Ed25519-signed gossip frames (`WireMessage::SignedData`, v10 wire) | **Complete** |
 | Layer 2 | Signal reorder buffer: `emit_ordered()`, `hlc_seq` wire field (v11), per-`(sender,kind)` min-heap, watermark dedup, config-driven | **Complete** |
+| Capability / Layer 2 | Semantic coordination: capability schema versioning (`with_schema_id`, `CapFilter::with_schema`), gossip-propagated payload schemas (`with_input_schema`, `with_output_schema`), signal sender auth (`signal_rx_from`), FIPA-ACL speech act taxonomy | **Complete** |
+| Capability | Schema registry: `publish_schema` / `force_publish_schema` / `get_schema` / `list_schemas` / `seed_schemas_from_dir` — `schemas/` KV namespace, conflict detection, JSON validation | **Complete** |
 | Consistency overlay | `consistent_set`, `consistent_get`, `distributed_lock`, `elect_leader` | **Complete** |
 | Ordering overlay | `append`, `subscribe_log`, `scan_log`, `compact_log` (ordered log) | **Complete** |
 | Ordering overlay | `subscribe_log_group` + consumer group offset tracking | **Complete** |
@@ -1513,27 +1521,27 @@ Run `cargo bench` to regenerate baselines on the target hardware.
 ```rust
 let agent = Arc::new(GossipAgent::new(node_id, config));
 agent.start().await?;
-agent.join_group("nlp");
+agent.mesh().join_group("nlp");
 
 let load_key = format!("load/{}", agent.node_id());
 let agent2 = agent.clone();
-let _advert = agent.advertise(
+let _advert = agent.mesh().advertise(
     signal_kind::CONTRACT_AVAILABLE,
     SignalScope::Group("nlp"),
     Duration::from_secs(10),
     move || {
         let state = LoadState { queue_depth: QUEUE.len(), written_at_ms: unix_ms_now() };
-        agent2.set(load_key.clone(), encode(&state));
+        agent2.kv().set(load_key.clone(), encode(&state));
         encode(&state)
     },
 );
 
-let mut invoke_rx = agent.signal_rx(signal_kind::INVOKE);
+let mut invoke_rx = agent.mesh().signal_rx(signal_kind::INVOKE);
 tokio::spawn(async move {
     while let Some(sig) = invoke_rx.recv().await {
         let req: InvokeRequest = decode(&sig.payload);
         let result = run_model(&req.payload).await;
-        agent.emit(
+        agent.mesh().emit(
             signal_kind::INVOKE_RESULT,
             SignalScope::Individual(sig.sender),
             encode(InvokeResponse { nonce: req.nonce, result }),
@@ -1546,12 +1554,12 @@ tokio::spawn(async move {
 
 ```rust
 let nonce = fastrand::u64(..);
-let reply_fut = agent.signal_once(
+let reply_fut = agent.mesh().signal_once(
     signal_kind::INVOKE_RESULT,
     Duration::from_secs(5),
     move |s| s.nonce == nonce,
 );
-agent.emit_async(
+agent.mesh().emit_async(
     signal_kind::INVOKE,
     SignalScope::Group("nlp"),
     encode(InvokeRequest { nonce, payload: input }),
@@ -1560,7 +1568,7 @@ agent.emit_async(
 match reply_fut.await {
     Some(sig) => decode(&sig.payload),
     None => {
-        let any_live = agent.scan_prefix("load/")
+        let any_live = agent.kv().scan_prefix("load/")
             .into_iter()
             .filter_map(|(_, b)| decode::<LoadState>(&b))
             .any(|s| unix_ms_now() - s.written_at_ms < 30_000);
@@ -1760,7 +1768,7 @@ the key.
 
 **What is needed:**
 
-A `set_quorum(key, value, min_acks, timeout)` API that:
+A `set_with_min_acks(key, value, min_acks, timeout)` API that:
 
 1. Writes the key locally and to WAL (as `set_async` does today).
 2. Subscribes to the KV watcher for the key (already exists).
@@ -1781,7 +1789,7 @@ size. Non-persistent peers can serve as ACK sources for availability but not
 for restart durability.
 
 **Scope note:** this is Layer I only; it does not replace or overlap the
-Consensus API which provides total-order agreement. `set_quorum` is
+Consensus API which provides total-order agreement. `set_with_min_acks` is
 best-effort quorum write — "at least N nodes saw it" — not "all nodes agree
 on the same value at the same logical position."
 
@@ -1811,11 +1819,22 @@ what thresholds should trigger alerts.
 | Python language bridge (`mycelium-py`) | High | **Complete** 2026-05-24 |
 | `SkillRunner` + `.skill.toml` + invocation audit trail + OTEL | High | **Complete** 2026-05-25 |
 | Opt-In Consistency & Ordering Overlay | High | **Complete** 2026-05-25 |
-| `set_quorum` write-durability confirmation API | Medium | **Complete** 2026-05-25 |
+| `set_with_min_acks` write-durability confirmation API | Medium | **Complete** 2026-05-25 |
 | Prometheus metrics export + dashboards | Medium | **Complete** 2026-05-25 |
 
 None of these require architectural changes. The substrate is sound; these are engineering
 completions on top of it.
+
+---
+
+## v2.0 Milestones
+
+These are architectural changes deferred until v1.x has production usage to inform decisions.
+None are required for v1.0.
+
+1. **Workspace split**: `mycelium-core` crate (gossip transport + KV only) extracted from `mycelium` (full substrate). Enables pure-KV embeds with a much smaller dep tree.
+2. **`#[cfg(feature = "consensus")]`** compile-time gate on the epidemic consensus engine. Currently consensus is always compiled; this would let minimal embeds drop the Paxos machinery entirely.
+3. **Owned standalone handles**: `KvHandle` / `MeshHandle` / `CapabilitiesHandle` as ownable values that do not require a live `GossipAgent` borrow. Currently handles hold `Arc<TaskCtx>` from a started agent; this would allow passing handles across crate boundaries without exposing `GossipAgent`.
 
 ---
 
