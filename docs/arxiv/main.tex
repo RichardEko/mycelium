@@ -628,9 +628,9 @@ An AFN has five structural properties:
   fluctuates with available capacity.
 
 \item \textbf{Opacity Backpressure.} A saturated node writes an opacity flag to
-  \texttt{sys/load/\{self\}/capacity} (TTL~$\approx$5\,s), making itself invisible
-  to resolvers at the next stage. The topology self-throttles without any
-  flow-control protocol.
+  \texttt{sys/load/\{self\}/\{kind\}} (TTL~$\approx$5\,s, where \texttt{kind} is
+  the application-defined opacity category), making itself invisible to resolvers
+  at the next stage. The topology self-throttles without any flow-control protocol.
 
 \item \textbf{TTL-Native Cleanup.} Work items written to the KV substrate carry
   TTLs. Abandoned items evaporate automatically. There is no dead-letter queue, no
