@@ -408,8 +408,11 @@ pub(crate) fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
         }
         // Bump the group-roster generation counter so cached_group_members knows
         // to re-fetch when any peer joins or leaves a group.
+        // Release: pairs with Acquire in the gossip-loop cache reader (tasks.rs).
+        // Guarantees that when the reader observes the new gen value, the grp/ KV
+        // write that caused the bump is already visible in the papaya store.
         if update.key.starts_with("grp/") {
-            kv.grp_generation.fetch_add(1, Ordering::Relaxed);
+            kv.grp_generation.fetch_add(1, Ordering::Release);
         }
         // (Capability/requirement watchers use `prefix_watchers` below, not a
         // generation counter — a previous design held a `cap_generation` here

@@ -148,7 +148,7 @@ copy-paste starting points for production patterns.
 | Scenario | Pattern |
 |---|---|
 | S11 Task Auction | Exact-once delivery via `subscribe_log_group` |
-| S12 Leader Election | Concurrent `elect_leader` + linearizable `consistent_set` |
+| S12 Leader Election | Concurrent `elect_leader` + consensus-durable `consistent_set` |
 | S13 Shared Reasoning Log | Multi-writer `append`, HLC ordering, `compact_log` |
 
 ```sh
@@ -1065,15 +1065,20 @@ Mycelium's thesis is **consistency as a service, not a foundation** — the epid
 is always fast; stronger guarantees are opt-in per operation. The overlay layer surfaces these
 as first-class APIs without touching the gossip core.
 
-### Linearizable KV (`consistent_set` / `consistent_get`)
+### Consensus KV (`consistent_set` / `consistent_get`)
 
-Runs a consensus round before writing. All observers agree on the same value even under
-concurrent writes from different nodes.
+Runs a ballot-voting round before writing. Concurrent writes to the same key are totally
+ordered by ballot number; the highest-ballot value is the authoritative committed entry.
+
+`consistent_get` is a **local read** — it returns the latest committed value that has
+anti-entropy-propagated to this node, which may lag by up to one gossip round. This is
+suitable for leader election and distributed locks where ballot-based fencing tokens protect
+against lower-ballot writers; it is not a substitute for linearizable reads.
 
 ```rust
-// Any node can write; all nodes read the same value
-agent.consistent_set("config/endpoint", b"https://api.v2/").await?;
-let val = agent.consistent_get("config/endpoint"); // reads committed slot first
+// Any node can write — concurrent writers are ordered by ballot number
+agent.consensus().consistent_set("config/endpoint", b"https://api.v2/").await?;
+let val = agent.consensus().consistent_get("config/endpoint"); // local read, eventually consistent
 ```
 
 ### Distributed Lock (`distributed_lock`)
@@ -1151,7 +1156,7 @@ The overlay scenarios in `tests/overlay/` are designed as copy-paste templates:
 | Scenario | Pattern demonstrated |
 |---|---|
 | [`s11_task_auction.py`](tests/overlay/scenarios/s11_task_auction.py) | Exact-once task delivery — coordinator queues work, workers race via `subscribe_log_group` |
-| [`s12_leader_election.py`](tests/overlay/scenarios/s12_leader_election.py) | Leader election + linearizable config — 3 concurrent `elect_leader` calls must converge, winner writes `consistent_set` |
+| [`s12_leader_election.py`](tests/overlay/scenarios/s12_leader_election.py) | Leader election + consensus-durable config — 3 concurrent `elect_leader` calls must converge, winner writes `consistent_set` |
 | [`s13_shared_reasoning_log.py`](tests/overlay/scenarios/s13_shared_reasoning_log.py) | Multi-writer append — 3 nodes each write observations, all verify HLC ordering and gossip convergence |
 
 ```sh

@@ -148,38 +148,86 @@ pub struct SystemStats {
     pub dropped_frames: u64,
 }
 
-/// Shared infrastructure fields extracted from `GossipAgent` so they can be
-/// bundled into a single `Arc` and handed to `ConsensusEngine` and long-lived
-/// task helpers without requiring each to clone 8 individual fields.
+/// Shared infrastructure extracted from `GossipAgent` into a single `Arc` so that
+/// `ConsensusEngine`, connection handlers, and long-lived task helpers can each hold
+/// a clone without creating a reference cycle back to the agent.
 ///
-/// `GossipAgent` cannot be passed directly to these helpers because doing so
-/// would create a reference cycle: the agent holds task handles, and those
-/// tasks would hold a reference back to the agent.
+/// ## Why this exists
+///
+/// `GossipAgent` spawns background tasks that need access to the same infrastructure
+/// the agent uses. If those tasks held an `Arc<GossipAgent>`, the agent could never be
+/// dropped (cycle: agent holds `JoinSet`, tasks hold agent). `TaskCtx` breaks the cycle
+/// by holding all the shared infrastructure in a separate struct; `GossipAgent` holds
+/// `Arc<TaskCtx>`, and so do the tasks — but `GossipAgent` is NOT in `TaskCtx`.
+///
+/// ## Field groups
+///
+/// Fields are grouped by layer. The six typed handles (`KvHandle`, `MeshHandle`, etc.)
+/// each hold `Arc<TaskCtx>` and access only their relevant subset.
+///
+/// | Group | Fields |
+/// |---|---|
+/// | Identity + config | `node_id`, `config`, `default_ttl` |
+/// | Layer I — KV | `seen`, `hlc`, `gossip_txs`, `kv_state`, `wal` |
+/// | Layer II — Signals | `signal_boundary`, `signal_handlers`, `reorder_buf` |
+/// | Capability subsystem | `caps_advertised`, `filter_opacity_registry`, `group_roster_cache` |
+/// | Service layer | `bulk_transport`, `rpc_pending` |
+/// | Security | `tls`, `peer_keys` |
+/// | Networking | `peers` |
+/// | Lifecycle | `shutdown_tx`, `task_handles` |
+///
+/// ## v2 roadmap
+///
+/// `TaskCtx` is a known God Object — see `CLAUDE.md § Layer I/II entanglement`. The
+/// planned fix is a workspace split (`mycelium-core` carrying Layers I+II, `mycelium`
+/// adding Layers III+). `TaskCtx` would split into `CoreCtx` (Layers I+II only) and a
+/// richer context that wraps it. That refactor is deferred until there is a real use
+/// case for embedding the core without the capability / consensus layers.
 pub(crate) struct TaskCtx {
+    // ── Identity + config ────────────────────────────────────────────────────────
     pub(crate) node_id:          NodeId,
     /// Shared copy of the agent configuration. Available to typed handles so they
     /// can access `signal_window_secs`, `health_check_interval_secs`, `locality_path`,
     /// and `topology_policies` without borrowing `GossipAgent`.
     pub(crate) config:           Arc<GossipConfig>,
+    pub(crate) default_ttl:      u8,
+
+    // ── Layer I — KV substrate ───────────────────────────────────────────────────
     pub(crate) seen:             Arc<ShardedSeen>,
     /// Hybrid Logical Clock for causal LWW ordering. `make_gossip_update`
     /// calls `tick()` for every locally-originated write; the connection
     /// handler calls `observe()` for every incoming timestamp so the local
     /// clock dominates any remote stamp it has seen.
     pub(crate) hlc:              Arc<crate::hlc::Hlc>,
-    pub(crate) signal_boundary:  Arc<RwLock<Boundary>>,
-    pub(crate) signal_handlers:  Arc<SignalHandlers>,
     pub(crate) gossip_txs:       Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]>,
-    pub(crate) default_ttl:      u8,
     pub(crate) kv_state:         Arc<KvState>,
     /// WAL handle for durable KV writes. Unset when persistence is disabled.
     /// Written once by `start()` after replay; read-only afterwards.
     pub(crate) wal: std::sync::OnceLock<Arc<crate::persistence::WalHandle>>,
+
+    // ── Layer II — Signal mesh ───────────────────────────────────────────────────
+    pub(crate) signal_boundary:  Arc<RwLock<Boundary>>,
+    pub(crate) signal_handlers:  Arc<SignalHandlers>,
+    /// Receiver-side causal reorder buffer for `emit_ordered` signals.
+    /// `None` when `config.signal_ordered_delivery = false` (the default).
+    pub(crate) reorder_buf: Option<Arc<std::sync::Mutex<crate::signal::SignalReorderBuffer>>>,
+
+    // ── Capability subsystem ─────────────────────────────────────────────────────
     /// Set to `true` by the first tick of any `run_kv_persist_task` (capability
     /// or locality advertisement). Until this is `true`, soft-state keys have
     /// not yet been written to the local store after a restart, so `/ready`
-    /// returns 503.
+    /// returns 503. Stored with Release; loaded with Acquire.
     pub(crate) caps_advertised: Arc<std::sync::atomic::AtomicBool>,
+    /// Shared registry for the consolidated `declare_requirement` opacity watcher.
+    /// A single background task reads from this instead of one task per requirement.
+    pub(crate) filter_opacity_registry: Arc<capability_ops::FilterOpacityRegistry>,
+    /// Short-lived cache of group membership lists keyed by group name.
+    /// Invalidated generation-based: `KvState::grp_generation` is bumped (Release)
+    /// whenever a `grp/` key changes; the cache reader loads it with Acquire so it
+    /// never sees a stale roster after observing the new generation value.
+    pub(crate) group_roster_cache: RosterCache,
+
+    // ── Service layer ────────────────────────────────────────────────────────────
     /// Bulk-transport adapter: staging map, HTTP port, pooled HTTP client.
     pub(crate) bulk_transport: Arc<bulk::BulkTransport>,
     /// In-flight RPC/bulk correlation map for O(1) reply dispatch.
@@ -187,6 +235,8 @@ pub(crate) struct TaskCtx {
     /// The connection handler's fast-path removes the entry and fires the
     /// oneshot instead of fanning out through signal_handlers.
     pub(crate) rpc_pending: Arc<std::sync::Mutex<std::collections::HashMap<u64, tokio::sync::oneshot::Sender<crate::signal::Signal>>>>,
+
+    // ── Security ─────────────────────────────────────────────────────────────────
     /// TLS context (server + client configs + signing key). Unset when the
     /// `tls` feature is disabled or when `GossipConfig::tls` is `None`.
     /// Written once by `start()` before any task is spawned; read-only afterwards.
@@ -196,21 +246,16 @@ pub(crate) struct TaskCtx {
     /// gossiped by peers. Used to verify signed consensus messages.
     #[cfg_attr(not(feature = "tls"), allow(dead_code))]
     pub(crate) peer_keys: Arc<papaya::HashMap<NodeId, [u8; 32]>>,
+
+    // ── Networking ───────────────────────────────────────────────────────────────
     /// Live peer table shared with the HTTP gateway for peer-count-based quorum sizing.
     pub(crate) peers: Arc<papaya::HashMap<NodeId, std::time::Instant>>,
-    /// Shared registry for the consolidated `declare_requirement` opacity watcher.
-    /// A single background task reads from this instead of one task per requirement.
-    pub(crate) filter_opacity_registry: Arc<capability_ops::FilterOpacityRegistry>,
-    /// Receiver-side causal reorder buffer for `emit_ordered` signals.
-    /// `None` when `config.signal_ordered_delivery = false` (the default).
-    pub(crate) reorder_buf: Option<Arc<std::sync::Mutex<crate::signal::SignalReorderBuffer>>>,
+
+    // ── Lifecycle ────────────────────────────────────────────────────────────────
     /// Shutdown broadcast — sending `true` cancels all background tasks.
     pub(crate) shutdown_tx: Arc<watch::Sender<bool>>,
     /// All spawned background tasks. Reaping is automatic via `JoinSet`.
     pub(crate) task_handles: Arc<std::sync::Mutex<JoinSet<()>>>,
-    /// Short-lived cache of group membership lists keyed by group name.
-    /// Invalidated generation-based by grp_generation counter in KvState.
-    pub(crate) group_roster_cache: RosterCache,
 }
 
 impl TaskCtx {

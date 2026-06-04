@@ -296,9 +296,28 @@ impl ConsensusHandle {
 
     // ── Consistent overlay ───────────────────────────────────────────────────
 
-    /// Linearizable write: runs a consensus round then gossips the value.
+    /// Consensus-durable write: runs a ballot-voting round before committing.
     ///
-    /// All nodes that observe the KV entry will agree on the same value.
+    /// Broadcasts a `Propose` message, waits for `floor(N/2)+1` peer votes, then
+    /// writes the value to `consensus/committed/consistent/{key}` (durable, anti-entropy-
+    /// synced to all nodes) and to the raw gossip KV key.
+    ///
+    /// **Guarantee: ballot serialization, not linearizability.** Concurrent writes to
+    /// the same key are totally ordered by ballot number — the highest-ballot committed
+    /// value is the authoritative entry in `consensus/committed/`. Two concurrent
+    /// proposers can each return `Ok(())` at different ballots; the higher-ballot value
+    /// wins via LWW. `consistent_get` is a local read and may lag the cluster-wide
+    /// committed value by up to one anti-entropy round.
+    ///
+    /// **Suitable for:** leader election, distributed locks, single-writer coordinator
+    /// patterns where "only one writer should commit first" is sufficient. Use ballot-based
+    /// fencing tokens (see `distributed_lock`) to protect downstream consumers from
+    /// lower-ballot writers.
+    ///
+    /// **Not suitable for:** read-after-write guarantees without polling. After calling
+    /// `consistent_set`, callers on other nodes should poll `consistent_get` until the
+    /// expected value appears (usually within one gossip round).
+    ///
     /// Use [`KvHandle::set`](crate::KvHandle::set) for ordinary eventually-consistent writes.
     pub async fn consistent_set(
         &self,
@@ -323,9 +342,14 @@ impl ConsensusHandle {
         }
     }
 
-    /// Read the latest linearizable value for `key`.
+    /// Read the latest ballot-committed value for `key` visible to this node.
     ///
-    /// Checks `consensus/committed/consistent/{key}` first; falls back to gossip KV.
+    /// Checks `consensus/committed/consistent/{key}` first (written on quorum commit
+    /// and anti-entropy-synced to all nodes); falls back to the raw gossip KV key.
+    ///
+    /// **Not a read quorum.** Returns whatever has anti-entropy-propagated to this node,
+    /// which may lag the cluster-wide committed value by up to one gossip round. For
+    /// read-after-write guarantees, poll until the expected value appears.
     pub fn consistent_get(&self, key: &str) -> Option<Bytes> {
         kv_get(&self.ctx, &format!("consensus/committed/consistent/{key}"))
             .or_else(|| kv_get(&self.ctx, key))

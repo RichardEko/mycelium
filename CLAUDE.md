@@ -122,6 +122,65 @@ Mitigations for larger scales: switch the Docker network driver to `macvlan`,
 enable nftables (hash-table replacement for the linear iptables chain), or
 reduce `SCALE_WORKERS`.
 
+### TaskCtx — the shared infrastructure bundle (known God Object)
+
+`src/agent/mod.rs::TaskCtx` is a 22-field struct held in a single `Arc` and cloned into
+every background task, typed handle, and connection handler. It exists to break the
+otherwise-circular reference between `GossipAgent` (which holds the task `JoinSet`) and
+the tasks themselves.
+
+**Field groups** (section comments are in the struct body):
+| Group | Key fields |
+|---|---|
+| Identity + config | `node_id`, `config`, `default_ttl` |
+| Layer I — KV | `seen`, `hlc`, `gossip_txs`, `kv_state`, `wal` |
+| Layer II — Signals | `signal_boundary`, `signal_handlers`, `reorder_buf` |
+| Capability subsystem | `caps_advertised`, `filter_opacity_registry`, `group_roster_cache` |
+| Service layer | `bulk_transport`, `rpc_pending` |
+| Security | `tls`, `peer_keys` |
+| Networking + Lifecycle | `peers`, `shutdown_tx`, `task_handles` |
+
+The v2 fix is a workspace split: `mycelium-core` (Layers I+II only, with `CoreCtx`) +
+`mycelium` (full substrate). Deferred until there is a real embedding use case that
+needs the core without consensus/capabilities.
+
+### Memory ordering policy for atomics
+
+The codebase uses atomic operations in two categories — follow the same pattern when
+adding new ones:
+
+**`Relaxed` — purely diagnostic counters**
+
+`dropped_frames`, `hash_acc`, `listener_count`, and the `AliveGuard` liveness flags
+use `Relaxed`. These are read-only by `system_stats()` or health-check logging; no
+control-flow decision depends on observing them at a precise point relative to any
+other memory write. A brief visibility lag is acceptable.
+
+**`Release` + `Acquire` — generation counters and readiness gates**
+
+`KvState::grp_generation` is bumped with `Release` whenever a `grp/` key is written.
+The gossip-loop cache reader loads it with `Acquire`. This guarantees that when the
+reader observes the new generation value, all `grp/` KV writes that happened-before
+the `Release` store are also visible — the cached roster is never invalidated too late.
+
+`TaskCtx::caps_advertised` is stored with `Release` (first capability advertisement
+tick) and loaded with `Acquire` (the `/ready` handler). This makes the readiness gate
+correct: when `/ready` sees `true`, the soft-state KV keys that preceded the store are
+visible to the same thread.
+
+**`AcqRel` + `Acquire` — agent lifecycle state**
+
+`GossipAgent::state` (an `AtomicU8` in `lifecycle.rs`) uses `AcqRel` on compare-and-
+swap transitions and `Acquire` on plain loads. The lifecycle state gates task spawning
+and public API calls; AcqRel gives both acquire and release semantics on the CAS.
+
+**Cancelled flags (`AtomicBool`)**
+
+`RegEntry::cancelled` is stored with `Release` (handle drop) and loaded with `Acquire`
+(consolidated opacity watcher loop). The Acquire load ensures that all work done by the
+caller before dropping the handle is visible to the watcher before it stops processing
+that registration.
+
 ### Gateway feature gate
 
 The `gateway` feature (on by default) enables the embedded Axum HTTP server. Disable

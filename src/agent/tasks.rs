@@ -34,6 +34,8 @@ use tracing::{debug, error, warn};
 pub(super) struct AliveGuard(pub(super) Arc<AtomicBool>);
 impl Drop for AliveGuard {
     fn drop(&mut self) {
+        // Relaxed: liveness flags are purely diagnostic (read by system_stats()).
+        // No ordering invariant depends on them — a brief observation lag is acceptable.
         self.0.store(false, Ordering::Relaxed);
     }
 }
@@ -46,6 +48,7 @@ pub(super) struct ListenerGuard {
 }
 impl Drop for ListenerGuard {
     fn drop(&mut self) {
+        // Relaxed: diagnostic counter read by system_stats(); no ordering dependency.
         let prev = self.count.fetch_sub(1, Ordering::Relaxed);
         if !*self.shutdown_tx.borrow() {
             if prev == 1 {
@@ -283,7 +286,11 @@ pub(super) async fn run_gossip_shard(
                             }
                         }
                         ForwardHint::Group(name) => {
-                            let current_gen = grp_generation.load(Ordering::Relaxed);
+                            // Acquire: pairs with Release in store.rs grp_generation.fetch_add.
+                            // Ensures that a new gen value is only observed after the grp/ KV
+                            // write that caused it is also visible, preventing a stale roster
+                            // from being used immediately after a membership change.
+                            let current_gen = grp_generation.load(Ordering::Acquire);
                             let members: &AHashSet<NodeId> = {
                                 let entry = group_member_cache.entry(name.clone());
                                 let (gen, set) = entry.or_insert((u64::MAX, AHashSet::new()));

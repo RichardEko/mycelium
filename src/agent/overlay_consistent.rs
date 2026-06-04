@@ -82,7 +82,7 @@ impl Drop for LockGuard { fn drop(&mut self) { self.do_release(); } }
 // ── GossipAgent methods ───────────────────────────────────────────────────────
 
 impl GossipAgent {
-    /// Linearizable write: runs a consensus round then gossips the value.
+    /// Consensus-durable write (ballot-serialized). See [`ConsensusHandle::consistent_set`].
     ///
     /// Use [`ConsensusHandle::consistent_set`] via [`GossipAgent::consensus`] instead.
     pub async fn consistent_set(
@@ -93,7 +93,7 @@ impl GossipAgent {
         self.consensus().consistent_set(key, value).await
     }
 
-    /// Read the latest linearizable value for `key`.
+    /// Read the latest ballot-committed value for `key` (local, eventually consistent).
     ///
     /// Use [`ConsensusHandle::consistent_get`] via [`GossipAgent::consensus`] instead.
     pub fn consistent_get(&self, key: &str) -> Option<Bytes> {

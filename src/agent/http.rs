@@ -1298,7 +1298,7 @@ async fn gw_cross_group_propose(
 
 // ── Overlay: consistent KV ────────────────────────────────────────────────────
 
-/// `POST /gateway/overlay/consistent/set` — linearizable KV write.
+/// `POST /gateway/overlay/consistent/set` — consensus-durable KV write (ballot-serialized).
 ///
 /// Body: `{"key": "K", "value_b64": "V"}`.
 async fn gw_overlay_consistent_set(
@@ -1351,7 +1351,7 @@ async fn gw_overlay_consistent_set(
     }
 }
 
-/// `GET /gateway/overlay/consistent/get?key=K` — read linearized value.
+/// `GET /gateway/overlay/consistent/get?key=K` — read latest ballot-committed value (local, eventually consistent).
 async fn gw_overlay_consistent_get(
     Query(q):   Query<KvKeyQuery>,
     State(ctx): State<Arc<HttpCtx>>,
