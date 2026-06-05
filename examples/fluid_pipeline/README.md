@@ -140,6 +140,32 @@ claim expires; the next drain pass requeues the item.
 
 ---
 
+## Demo assumption vs real deployment
+
+This demo uses **identical workers that each advertise all four stage
+capabilities**. That choice makes fluid allocation vivid — every worker can
+serve any stage, so the coordinator routes purely to whoever is free.
+
+**This is the demo's assumption, not Mycelium's.** The capability model does
+not require a monolithic worker. In a real deployment you could have:
+
+- **Specialist workers** — some nodes advertise only `stage_c.score` (the
+  expensive LLM step), others only `stage_a.parse`. Each team owns one image.
+- **Heterogeneous pools** — different capability sets deployed independently;
+  the mesh self-assembles the pipeline topology from whatever is running.
+  No coordinator change needed when a new capability comes online.
+- **Incremental rollout** — deploy `score_v2` capability alongside `score_v1`.
+  Resolvers start routing to `v2` workers as they appear; drain `v1` workers
+  by letting their capability advertisements expire (TTL). Zero-downtime
+  upgrade with no feature flags and no orchestrator involvement.
+
+The monolith demo *undersells* the capability model. The more powerful
+production case is a **heterogeneous fleet where pipeline topology emerges
+from whatever capabilities happen to be running** — assembled bottom-up by
+the mesh, not configured top-down by an operator.
+
+---
+
 ## Dev Notes
 
 **Adding a stage.** Add a handler in `worker/stages/`, register the new
