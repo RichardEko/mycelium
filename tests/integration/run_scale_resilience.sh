@@ -219,11 +219,13 @@ docker run -d \
     > /dev/null
 PROBE_STARTED=1
 
+# Check liveness via Docker socket (avoids the iptables FORWARD saturation
+# that blocks new TCP connections at 50-node scale — see CLAUDE.md §iptables).
 probe_healthy() {
-    curl -sf --max-time 3 "http://${PROBE_NAME}:${PORT}/health" > /dev/null 2>&1
+    docker inspect --format='{{.State.Running}}' "$PROBE_NAME" 2>/dev/null | grep -q true
 }
 if ! poll_until 60 probe_healthy; then
-    die "Late-joiner probe did not become healthy within 60 s"
+    die "Late-joiner probe container did not reach running state within 60 s"
 fi
 
 probe_in_cluster() { [ "$(mgmt_node_count)" -ge "$(( TOTAL_NODES + 1 ))" ]; }
@@ -235,10 +237,12 @@ fi
 
 # Anti-entropy inbound: probe must receive a key that was written before it
 # started.  resilience/baseline/0000 was written in Phase 1.
+# Use docker exec so the curl runs inside the probe (localhost — no iptables).
 probe_has_baseline_key() {
     local val
-    val=$(curl -sf --max-time 5 \
-        "http://${PROBE_NAME}:${PORT}/kv/resilience/baseline/0000" 2>/dev/null || echo "")
+    val=$(docker exec "$PROBE_NAME" \
+        curl -sf --max-time 5 "http://localhost:${PORT}/kv/resilience/baseline/0000" \
+        2>/dev/null || echo "")
     [ "$val" = "v0" ]
 }
 if poll_until 90 probe_has_baseline_key; then
@@ -248,9 +252,11 @@ else
 fi
 
 # Gossip outbound: write a key to the probe and verify it reaches mgmt.
+# Use docker exec so the PUT runs inside the probe (localhost — no iptables).
 PROBE_KEY="resilience/probe/$(date +%s)"
-curl -sf --max-time 5 -X PUT -d "probe-write" \
-    "http://${PROBE_NAME}:${PORT}/kv/${PROBE_KEY}" > /dev/null 2>&1 \
+docker exec "$PROBE_NAME" \
+    curl -sf --max-time 5 -X PUT -d "probe-write" \
+    "http://localhost:${PORT}/kv/${PROBE_KEY}" > /dev/null 2>&1 \
     || die "Failed to write key to probe HTTP endpoint"
 
 # Verify the probe-written key reached seed (seed has /kv GET via init_node_routes;
