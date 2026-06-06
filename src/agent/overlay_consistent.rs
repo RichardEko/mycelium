@@ -104,13 +104,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_consistent_set_and_get_two_nodes() {
+        use crate::consensus::ConsensusConfig;
         let p1 = alloc_port();
         let p2 = alloc_port();
         let a1 = make_agent(p1, &[p2]).await;
         let a2 = make_agent(p2, &[p1]).await;
-        // Poll until each node sees the other as a peer (up to 2 s) before
-        // attempting consensus — avoids the 300 ms fixed sleep being too tight
-        // under CI load.
+        // Both nodes need a consensus listener so that a2 can vote on a1's ballot.
+        // Without listeners, system_propose computes quorum=2 but only ever collects
+        // a1's own vote, timing out on all 3 ballot attempts.
+        let _l1 = a1.consensus().start_consensus_listener(ConsensusConfig::default());
+        let _l2 = a2.consensus().start_consensus_listener(ConsensusConfig::default());
+        // Poll until each node sees the other as a peer (up to 2 s) so quorum=2
+        // is actually reachable before consistent_set is called.
         for _ in 0..40 {
             if !a1.peers().is_empty() && !a2.peers().is_empty() { break; }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
