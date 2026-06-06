@@ -2,12 +2,13 @@
 
 COMPOSE               = docker compose -f tests/integration/docker-compose.test.yml
 COMPOSE_SCALE         = docker compose -f tests/integration/docker-compose.scale.yml
+COMPOSE_RESILIENCE    = docker compose -f tests/integration/docker-compose.scale-resilience.yml
 COMPOSE_LLM           = docker compose -f docker/docker-compose.yml
 COMPOSE_LLM_DEMO      = docker compose -f docker/docker-compose.llm-agent.yml
 COMPOSE_THREE_NODE    = docker compose -f docker/docker-compose.three-node-test.yml
 COMPOSE_OVERLAY       = docker compose -f tests/overlay/docker-compose.test.yml
 
-.PHONY: build test test-clean test-scale test-scale-clean test-llm-demo test-llm-agent test-three-node test-overlay llm-agent-interactive help
+.PHONY: build test test-clean test-scale test-scale-clean test-scale-resilience test-scale-resilience-clean test-llm-demo test-llm-agent test-three-node test-overlay llm-agent-interactive help
 
 ## test — build the cluster and run all integration scenarios
 test:
@@ -38,6 +39,23 @@ test-scale:
 ## test-scale-clean — tear down the scale test cluster and remove volumes
 test-scale-clean:
 	$(COMPOSE_SCALE) down -v --remove-orphans
+
+## test-scale-resilience — crash/rejoin/anti-entropy/churn test (~52 nodes: 1 seed + 50 workers + mgmt)
+## Tests: cluster formation, crash+recovery, late-joiner anti-entropy, and churn stability.
+## Requires a warm Docker build cache and Docker socket access.  ~10 min on warm cache.
+## Override RESILIENCE_WORKERS to test at a different size: make test-scale-resilience RESILIENCE_WORKERS=30
+RESILIENCE_WORKERS ?= 50
+test-scale-resilience:
+	$(COMPOSE_RESILIENCE) down -v --remove-orphans 2>/dev/null || true
+	$(COMPOSE_RESILIENCE) up -d --build --scale worker=$(RESILIENCE_WORKERS)
+	@$(COMPOSE_RESILIENCE) logs -f runner & \
+	EXIT=$$(docker wait mycelium-resilience-runner); \
+	$(COMPOSE_RESILIENCE) down -v --remove-orphans 2>/dev/null || true; \
+	exit $$EXIT
+
+## test-scale-resilience-clean — tear down the resilience test cluster and remove volumes
+test-scale-resilience-clean:
+	$(COMPOSE_RESILIENCE) down -v --remove-orphans
 
 ## test-llm-demo — manual scenario: start the three_node_demo LLM cluster
 ## Requires Ollama installed locally. Open http://localhost:8080 to chat.

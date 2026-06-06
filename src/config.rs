@@ -233,6 +233,24 @@ pub struct GossipConfig {
     ///
     /// Default: `i64::MAX as usize` (no effective cap — all discovered peers are tracked).
     pub max_peers: usize,
+    /// Maximum number of simultaneous outbound gossip connections this node maintains.
+    ///
+    /// Without a cap every node connects to every known peer, creating O(N²) TCP
+    /// connections cluster-wide. On a Docker bridge network this saturates the Linux
+    /// iptables FORWARD chain at around 50 nodes and causes new connections to time out.
+    ///
+    /// Bootstrap peers are always included; the remaining slots are filled with a random
+    /// selection from the full known-peer set, rotated on each topology change. Gossip
+    /// still propagates cluster-wide because Ping messages carry piggybacked peer lists
+    /// and inbound connections are not limited. For a cluster of N nodes with K active
+    /// connections per node, gossip diameter ≈ log(N)/log(K), which stays below 4 for
+    /// K=12 up to thousands of nodes.
+    ///
+    /// Recommended: 12–20 for clusters of 20+ nodes.
+    /// `0` = unlimited (default — full mesh, suitable for small clusters and unit tests).
+    ///
+    /// Set via `GOSSIP_MAX_ACTIVE_CONNECTIONS`.
+    pub max_active_connections: usize,
     /// Seconds of inactivity after which a peer writer closes its TCP connection.
     ///
     /// The connection is re-established transparently on the next frame destined for that
@@ -451,6 +469,7 @@ impl Default for GossipConfig {
             ping_peer_sample_size: 20,
             tcp_accept_backlog: 1024,
             max_peers: i64::MAX as usize,
+            max_active_connections: 0,
             writer_idle_timeout_secs: 0,
             group_aware_forwarding: true,
             epidemic_extra_peers:   3,
@@ -668,7 +687,7 @@ impl GossipConfig {
     /// `GOSSIP_INTERN_KEYS` (`true`/`false`/`1`/`0`), `GOSSIP_INTERN_MAX_KEYS`,
     /// `GOSSIP_BOOTSTRAP_PEERS` (comma-separated
     /// `ip:port` list), `GOSSIP_PING_PEER_SAMPLE_SIZE`, `GOSSIP_TCP_ACCEPT_BACKLOG`,
-    /// `GOSSIP_MAX_PEERS`, `GOSSIP_WRITER_IDLE_TIMEOUT_SECS`,
+    /// `GOSSIP_MAX_PEERS`, `GOSSIP_MAX_ACTIVE_CONNECTIONS`, `GOSSIP_WRITER_IDLE_TIMEOUT_SECS`,
     /// `GOSSIP_GROUP_AWARE_FORWARDING` (`true`/`false`/`1`/`0`),
     /// `GOSSIP_HEALTH_CHECK_MAX_JITTER_MS`, `GOSSIP_SIGNAL_WINDOW_SECS`,
     /// `GOSSIP_MAX_STORE_ENTRIES`, `GOSSIP_EPIDEMIC_EXTRA_PEERS`,
@@ -743,6 +762,9 @@ impl GossipConfig {
         }
         if let Ok(v) = env::var("GOSSIP_WRITER_IDLE_TIMEOUT_SECS") {
             self.writer_idle_timeout_secs = v.parse().map_err(GossipError::Parse)?;
+        }
+        if let Ok(v) = env::var("GOSSIP_MAX_ACTIVE_CONNECTIONS") {
+            self.max_active_connections = v.parse().map_err(GossipError::Parse)?;
         }
         if let Ok(v) = env::var("GOSSIP_GROUP_AWARE_FORWARDING") {
             self.group_aware_forwarding = match v.as_str() {

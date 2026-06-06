@@ -82,6 +82,8 @@ services:
       GOSSIP_WRITER_CHANNEL_DEPTH: "1024"
       # Spread 99 simultaneous connects over 5 s to avoid a TCP storm on seed.
       GOSSIP_HEALTH_CHECK_MAX_JITTER_MS: "5000"
+      # Cap outbound connections per node — prevents iptables saturation at 100 nodes.
+      GOSSIP_MAX_ACTIVE_CONNECTIONS:     "12"
       RUST_LOG:                   "warn,mycelium=info"
     networks:
       - mesh

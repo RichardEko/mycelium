@@ -288,6 +288,7 @@ impl GossipAgent {
             self.config.peer_eviction_intervals,
             self.health_monitor_alive.clone(),
             self.config.ping_peer_sample_size,
+            self.config.max_active_connections,
             self.config.health_check_max_jitter_ms,
             self.kv_state.hash_acc.clone(),
             self.kv_state.dropped_frames.clone(),

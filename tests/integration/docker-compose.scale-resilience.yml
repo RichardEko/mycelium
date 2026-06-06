@@ -1,0 +1,127 @@
+# Mycelium resilience scale test cluster (~52 nodes: 1 seed + 50 workers + mgmt + runner)
+#
+# Topology
+#   seed    — role=node, first contact point, HTTP 8300
+#   mgmt    — role=mgmt, dashboard 8090, standard HTTP 8300
+#   worker  — role=node; bootstrap via seed; default 50 replicas
+#   runner  — Alpine test runner with Docker socket for stop/start/run
+#
+# Usage:
+#   cd tests/integration
+#   docker compose -f docker-compose.scale-resilience.yml up --build --scale worker=50 \
+#       --abort-on-container-exit --exit-code-from runner
+#
+# Or via make:
+#   make test-scale-resilience              # 50 workers (default)
+#   make test-scale-resilience RESILIENCE_WORKERS=30
+#
+# Resource note: each Mycelium node is ~20 MB RSS. 52 nodes ≈ 1.1 GB total.
+# Docker build cache should be warm — run `make test` first to prime it.
+
+name: mycelium-resilience
+
+services:
+
+  # ── Seed node ────────────────────────────────────────────────────────────
+
+  seed:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    container_name: mycelium-resilience-seed
+    hostname: seed
+    entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
+    environment:
+      MYCELIUM_ROLE:               node
+      MYCELIUM_PORT:               "57000"
+      MYCELIUM_HTTP_PORT:          "8300"
+      MYCELIUM_PEERS:              "mgmt:57000"
+      GOSSIP_WRITER_CHANNEL_DEPTH: "2048"
+      GOSSIP_PING_PEER_SAMPLE_SIZE: "20"
+      RUST_LOG:                    "warn,mycelium=info"
+    networks:
+      - mesh
+    restart: "no"
+
+  # ── Management dashboard ─────────────────────────────────────────────────
+
+  mgmt:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    container_name: mycelium-resilience-mgmt
+    hostname: mgmt
+    entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
+    environment:
+      MYCELIUM_ROLE:               mgmt
+      MYCELIUM_PORT:               "57000"
+      MYCELIUM_HTTP_PORT:          "8300"
+      MYCELIUM_PEERS:              "seed:57000"
+      MGMT_PORT:                   "8090"
+      GOSSIP_WRITER_CHANNEL_DEPTH: "2048"
+      GOSSIP_PING_PEER_SAMPLE_SIZE: "20"
+      RUST_LOG:                    "warn,mycelium=info"
+    networks:
+      - mesh
+    restart: "no"
+
+  # ── Worker nodes (default: 50 replicas via --scale worker=50) ────────────
+  # image: tagged explicitly so the runner can `docker run` late-joiner probes
+  # from the same image without needing docker compose in the runner container.
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    image: mycelium-resilience-worker
+    entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
+    environment:
+      MYCELIUM_ROLE:                     node
+      MYCELIUM_PORT:                     "57000"
+      MYCELIUM_HTTP_PORT:                "8300"
+      MYCELIUM_PEERS:                    "seed:57000"
+      GOSSIP_WRITER_CHANNEL_DEPTH:       "1024"
+      GOSSIP_HEALTH_CHECK_MAX_JITTER_MS: "3000"
+      # Cap outbound connections to 12 per node (50 × 12 = 600 total vs 2500 without cap).
+      # Prevents Docker bridge iptables FORWARD chain saturation at this scale.
+      GOSSIP_MAX_ACTIVE_CONNECTIONS:     "12"
+      RUST_LOG:                          "warn,mycelium=info"
+    networks:
+      - mesh
+    depends_on:
+      - seed
+    restart: "no"
+
+  # ── Test runner ──────────────────────────────────────────────────────────
+  # Docker socket is mounted so the runner can stop/start/run containers
+  # for crash, late-joiner, and churn test phases.
+
+  runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test-runner
+    container_name: mycelium-resilience-runner
+    volumes:
+      - .:/tests:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      SEED_HOST:          seed
+      MGMT_HOST:          mgmt
+      NODE_HTTP_PORT:     "8300"
+      MGMT_HTTP_PORT:     "8090"
+      RESILIENCE_WORKERS: "50"
+      COMPOSE_PROJECT:    "mycelium-resilience"
+      # Docker network name: {project_name}_{network_name} (Compose v2 convention)
+      DOCKER_NETWORK:     "mycelium-resilience_mesh"
+      WORKER_IMAGE:       "mycelium-resilience-worker"
+    entrypoint: ["/bin/bash", "/tests/run_scale_resilience.sh"]
+    depends_on:
+      - seed
+      - mgmt
+    networks:
+      - mesh
+    restart: "no"
+
+networks:
+  mesh:
+    driver: bridge

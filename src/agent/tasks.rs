@@ -370,9 +370,10 @@ pub(super) async fn run_health_monitor(
     idle_timeout:          Duration,
     peer_eviction_intervals: u64,
     health_monitor_alive:    Arc<AtomicBool>,
-    ping_peer_sample_size:   usize,
-    health_check_max_jitter: u64,
-    hash_acc:                Arc<AtomicU64>,
+    ping_peer_sample_size:    usize,
+    max_active_connections:   usize,
+    health_check_max_jitter:  u64,
+    hash_acc:                 Arc<AtomicU64>,
     dropped_frames:          Arc<AtomicU64>,
     signal_handlers:         Arc<SignalHandlers>,
     signal_window_secs:      u64,
@@ -431,22 +432,49 @@ pub(super) async fn run_health_monitor(
                 let ping_data: Bytes = ping_buf.split().freeze();
 
                 if current_peer_set != last_peer_set {
-                    // Trigger anti-entropy with every newly-visible peer so
-                    // soft-state keys (capabilities, locality) propagate on
-                    // reconnection without waiting for the next advertisement
-                    // tick.
-                    for peer in current_peer_set.difference(&last_peer_set) {
+                    // peer_list_tx feeds signal fan-out; always send the full known set.
+                    let peer_list: Arc<[NodeId]> = current_peer_set.iter().cloned().collect();
+                    let _ = peer_list_tx.send(peer_list);
+
+                    // Build the new active-connection set: always include bootstrap peers,
+                    // then randomly sample from the rest up to max_active_connections.
+                    // When max_active_connections == 0 the cap is disabled (full mesh).
+                    let mut new_targets: AHashSet<NodeId> = bootstrap_set.clone();
+                    new_targets.extend(current_peer_set.iter().cloned());
+                    new_targets.remove(&node_id);
+
+                    if max_active_connections > 0 && new_targets.len() > max_active_connections {
+                        let slots = max_active_connections.saturating_sub(
+                            bootstrap_set.iter().filter(|p| **p != node_id).count()
+                        );
+                        let mut non_bootstrap: Vec<NodeId> = new_targets.iter()
+                            .filter(|p| !bootstrap_set.contains(*p))
+                            .cloned()
+                            .collect();
+                        // Fisher-Yates partial shuffle to select `slots` random peers.
+                        for i in 0..slots.min(non_bootstrap.len()) {
+                            let j = i + fastrand::usize(..non_bootstrap.len() - i);
+                            non_bootstrap.swap(i, j);
+                        }
+                        non_bootstrap.truncate(slots);
+                        new_targets = bootstrap_set.iter()
+                            .filter(|p| **p != node_id)
+                            .cloned()
+                            .collect();
+                        new_targets.extend(non_bootstrap);
+                    }
+
+                    // Trigger anti-entropy with every peer newly entering the active set so
+                    // soft-state keys (capabilities, locality) propagate on reconnection
+                    // without waiting for the next advertisement tick.
+                    for peer in new_targets.difference(&cached_ping_targets) {
                         request_state(peer, &peer_writers, writer_depth, backoff,
                             idle_timeout, &shutdown_tx, &node_id, &hash_acc,
                             &dropped_frames, vec![], tls.clone());
                     }
-                    let peer_list: Arc<[NodeId]> = current_peer_set.iter().cloned().collect();
-                    let _ = peer_list_tx.send(peer_list);
-                    cached_ping_targets.clear();
-                    cached_ping_targets.extend(bootstrap_set.iter().cloned());
-                    cached_ping_targets.extend(current_peer_set.iter().cloned());
-                    cached_ping_targets.remove(&node_id);
-                    ping_sender_cache.retain(|k, _| cached_ping_targets.contains(k));
+
+                    ping_sender_cache.retain(|k, _| new_targets.contains(k));
+                    cached_ping_targets = new_targets;
                     last_peer_set = current_peer_set;
                 }
                 for peer in &cached_ping_targets {
