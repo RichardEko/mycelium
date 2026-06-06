@@ -122,6 +122,15 @@ Mitigations for larger scales: switch the Docker network driver to `macvlan`,
 enable nftables (hash-table replacement for the linear iptables chain), or
 reduce `SCALE_WORKERS`.
 
+The v1 runtime mitigation is `GOSSIP_MAX_ACTIVE_CONNECTIONS` (caps outbound
+TCP connections per node to K random peers, reducing O(N²) → O(N×K)).
+
+**v2 structural fix:** hybrid TCP/UDP transport (SWIM-style) — gossip pings
+and capability heartbeats over UDP (no connection state, loss-tolerable),
+TCP reserved for anti-entropy data transfer. Eliminates the iptables problem
+at the source rather than managing it with a cap. Full design note in
+ROADMAP.md *v2.0 Milestones* item 5.
+
 ### TaskCtx — the shared infrastructure bundle (known God Object)
 
 `src/agent/mod.rs::TaskCtx` is a 22-field struct held in a single `Arc` and cloned into

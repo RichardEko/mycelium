@@ -258,10 +258,16 @@ agent.system_stats() -> SystemStats     // includes dropped_frames
 | `signal_window_secs` | `600` | Sender-log and `quorum_written` retention window |
 | `max_store_entries` | `0` | Hard cap on live KV entries (`0` = unlimited) |
 
-**Future Layer 1 improvement (not blocking):**
+**Future Layer 1 improvements (not blocking):**
 Activity-weighted forwarding — prefer recently-active peers over randomly-discovered ones.
 Currently `max_forwarding_peers` caps the target count; a follow-on pass would weight selection
 by last-received-from timestamp so the topology self-organises around actual traffic patterns.
+
+A second v2 consideration: hybrid TCP/UDP transport (SWIM-style) — UDP for gossip pings and
+capability heartbeats (loss-tolerant, no connection state), TCP reserved for anti-entropy data
+transfer (reliability required). This eliminates the iptables FORWARD chain saturation problem
+structurally rather than via the `GOSSIP_MAX_ACTIVE_CONNECTIONS` connection cap introduced in
+v1. See *v2.0 Milestones* below for the full design note.
 
 ---
 
@@ -1853,6 +1859,37 @@ None are required for v1.0.
 
    **Trigger to start**: a real workload that needs > 300 nodes, or a benchmark showing
    per-node RSS growing faster than O(1) as cluster size increases.
+
+5. **Hybrid TCP/UDP gossip transport (SWIM-style)** — keep TCP for anti-entropy data
+   transfer (where reliability matters); switch gossip pings and capability heartbeats to
+   UDP (where loss is tolerable and connection-free is ideal). This is precisely SWIM's
+   design: SWIM uses UDP for its periodic direct-ping / indirect-probe cycle and TCP only
+   for full state transfer.
+
+   **The structural fix for the iptables problem.** The `GOSSIP_MAX_ACTIVE_CONNECTIONS` cap
+   introduced in v1 reduces the O(N²) connection count to O(N×K), which is sufficient for
+   ~50–200 node clusters. But the root cause is that *health-check pings* require persistent
+   TCP connection state at all. UDP pings carry no connection state; the iptables FORWARD
+   chain never needs to track them. Loss on a ping round triggers an indirect probe (ask K
+   random peers to ping on your behalf) before marking a node suspect — structurally tolerant
+   of a small drop rate, not dependent on zero loss.
+
+   **What changes in the implementation:**
+   - `run_health_monitor` sends UDP datagrams to peers in `cached_ping_targets` instead of
+     maintaining persistent TCP connections for liveness checks.
+   - TCP connections are opened on-demand for anti-entropy (StateRequest/StateResponse) and
+     for Data/Signal frame delivery, then closed after the exchange.
+   - `get_or_spawn_writer` is retained for bulk data transfer; the health-check path becomes
+     fully stateless.
+
+   **Expected outcome:** zero persistent inter-node connections for gossip heartbeats;
+   iptables FORWARD chain saturation eliminated at the source; per-node connection-table
+   memory drops to O(1). TCP connections during an anti-entropy round: O(N × fanout),
+   short-lived, not O(N×K) persistent.
+
+   **Trigger to start**: validated need for > 500-node clusters, or a production deployment
+   where `GOSSIP_MAX_ACTIVE_CONNECTIONS` introduces unacceptable topology gaps (e.g. nodes
+   with low K miss peers whose keys they need for anti-entropy).
 
 ---
 
