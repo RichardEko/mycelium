@@ -8,28 +8,10 @@
 use crate::capability::{CapEntry, Capability, CapFilter, DemandStatus, ReqEntry};
 use crate::node_id::NodeId;
 use ahash::AHashSet;
-use tokio::sync::watch;
 use tracing::warn;
 
-use super::GossipAgent;
 use super::capability_ops::{is_cap_locality_key, now_ms, parse_cap_key_or_warn, scan_cap_by_ns_name, scan_prefix_kv_with_ts};
 use super::wiring::parse_gcap_key;
-
-impl GossipAgent {
-    /// Snapshot count of declared demand vs. available providers for `filter`.
-    ///
-    /// Use [`CapabilitiesHandle::demand`] via [`GossipAgent::capabilities`] instead.
-    pub fn demand(&self, filter: &CapFilter) -> DemandStatus {
-        self.capabilities().demand(filter)
-    }
-
-    /// Push-based view of demand pressure for `filter`.
-    ///
-    /// Use [`CapabilitiesHandle::watch_demand`] via [`GossipAgent::capabilities`] instead.
-    pub fn watch_demand(&self, filter: CapFilter) -> watch::Receiver<DemandStatus> {
-        self.capabilities().watch_demand(filter)
-    }
-}
 
 /// Computes the current [`DemandStatus`] for `filter`. Deduplicates both
 /// demanding nodes and providers — a node contributing to multiple matching

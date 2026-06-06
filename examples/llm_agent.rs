@@ -55,7 +55,7 @@
 
 use bytes::Bytes;
 use mycelium::{
-    AgentPolicy, AgentStateMachine, Capability, CapabilityEvent, CapabilityHandle,
+    AgentPolicy, AgentStateMachine, Capability, CapabilityEvent, CapabilityReg,
     CapConstraint, CapFilter, CapValue, ExecutionState, GossipAgent, GossipConfig,
     McpToolHandle, MeshManifest, NodeCapabilityConfig, NodeId, ProbeEvent, ProbeState,
     TomlCapValue, manifest_keys, semver_gt, run_capability_probes, signal_kind,
@@ -274,20 +274,20 @@ async fn run_fixed_tool_node(node: Arc<FixedToolNode>) {
 // ── n-1 vector-search provision handler ──────────────────────────────────────
 
 async fn run_vector_search_provision_handler(agent: Arc<GossipAgent>, log: SharedLog) {
-    let mut rx = agent.rpc_rx("cap.provision");
+    let mut rx = agent.service().rpc_rx("cap.provision");
     let mut _tool_h:  Option<McpToolHandle>    = None;
-    let mut _ready_h: Option<CapabilityHandle> = None;
+    let mut _ready_h: Option<CapabilityReg> = None;
 
     while let Some(req) = rx.recv().await {
         let Ok(body) = serde_json::from_slice::<Value>(&req.payload()) else { continue };
         if body["ns"].as_str() != Some("data") || body["name"].as_str() != Some("vector-search") {
             continue;
         }
-        agent.rpc_respond(&req, Bytes::from_static(b"accepted"));
+        agent.service().rpc_respond(&req, Bytes::from_static(b"accepted"));
         push_log(&log, "Provision", "vector-search accepted");
 
         // loading tier — 2 s re-assertion so progress updates stay fresh
-        let mut loading_h = agent.advertise_capability(
+        let mut loading_h = agent.capabilities().advertise_capability(
             Capability::new("data", "loading")
                 .with("name",     CapValue::Text("vector-search".into()))
                 .with("progress", CapValue::Integer(0)),
@@ -295,7 +295,7 @@ async fn run_vector_search_provision_handler(agent: Arc<GossipAgent>, log: Share
         );
         for pct in [20i64, 40, 60, 80, 100] {
             time::sleep(Duration::from_secs(3)).await;
-            loading_h = agent.advertise_capability(
+            loading_h = agent.capabilities().advertise_capability(
                 Capability::new("data", "loading")
                     .with("name",     CapValue::Text("vector-search".into()))
                     .with("progress", CapValue::Integer(pct)),
@@ -314,7 +314,7 @@ async fn run_vector_search_provision_handler(agent: Arc<GossipAgent>, log: Share
             },
             |args| Box::pin(handle_vector_search(args)),
         );
-        let ready = agent.advertise_capability(
+        let ready = agent.capabilities().advertise_capability(
             Capability::new("data", "ready")
                 .with("name", CapValue::Text("vector-search".into())),
             Duration::from_secs(120),
@@ -328,8 +328,8 @@ async fn run_vector_search_provision_handler(agent: Arc<GossipAgent>, log: Share
 // ── n-2 LLM provision handler (model pulls) ───────────────────────────────────
 
 async fn run_llm_provision_handler(agent: Arc<GossipAgent>, base_url: String, log: SharedLog) {
-    let mut rx = agent.rpc_rx("cap.provision");
-    let mut _extra_inference: Vec<CapabilityHandle> = Vec::new();
+    let mut rx = agent.service().rpc_rx("cap.provision");
+    let mut _extra_inference: Vec<CapabilityReg> = Vec::new();
 
     while let Some(req) = rx.recv().await {
         let Ok(body) = serde_json::from_slice::<Value>(&req.payload()) else { continue };
@@ -337,10 +337,10 @@ async fn run_llm_provision_handler(agent: Arc<GossipAgent>, base_url: String, lo
         let model = body["model"].as_str().unwrap_or("").to_string();
         if model.is_empty() { continue; }
 
-        agent.rpc_respond(&req, Bytes::from_static(b"pulling"));
+        agent.service().rpc_respond(&req, Bytes::from_static(b"pulling"));
         push_log(&log, "LLM Provision", format!("pulling model={model}"));
 
-        let mut loading_h = agent.advertise_capability(
+        let mut loading_h = agent.capabilities().advertise_capability(
             Capability::new("llm", "loading")
                 .with("model",    CapValue::Text(model.clone().into()))
                 .with("progress", CapValue::Integer(0)),
@@ -348,7 +348,7 @@ async fn run_llm_provision_handler(agent: Arc<GossipAgent>, base_url: String, lo
         );
         for pct in [20i64, 40, 60, 80, 100] {
             time::sleep(Duration::from_secs(4)).await;
-            loading_h = agent.advertise_capability(
+            loading_h = agent.capabilities().advertise_capability(
                 Capability::new("llm", "loading")
                     .with("model",    CapValue::Text(model.clone().into()))
                     .with("progress", CapValue::Integer(pct)),
@@ -358,7 +358,7 @@ async fn run_llm_provision_handler(agent: Arc<GossipAgent>, base_url: String, lo
         }
         drop(loading_h);
 
-        let inf_h = agent.advertise_capability(
+        let inf_h = agent.capabilities().advertise_capability(
             Capability::new("llm", "inference")
                 .with("model",    CapValue::Text(model.clone().into()))
                 .with("context",  CapValue::Integer(8192))
@@ -375,13 +375,13 @@ async fn run_llm_provision_handler(agent: Arc<GossipAgent>, base_url: String, lo
 
 async fn request_vector_search(agent_n2: &Arc<GossipAgent>, n1_id: NodeId, log: &SharedLog) {
     // Subscribe before sending to avoid race
-    let mut ready_rx = agent_n2.watch_capabilities(
+    let mut ready_rx = agent_n2.capabilities().watch_capabilities(
         CapFilter::new("data", "ready")
             .with("name", CapConstraint::Eq(CapValue::Text("vector-search".into()))),
     );
 
     let req = json!({"ns": "data", "name": "vector-search"}).to_string();
-    match agent_n2.rpc_call(n1_id, "cap.provision", Bytes::from(req), Duration::from_secs(10)).await {
+    match agent_n2.service().rpc_call(n1_id, "cap.provision", Bytes::from(req), Duration::from_secs(10)).await {
         Ok(_)  => push_log(log, "Provision", "vector-search requested from n-1"),
         Err(e) => {
             push_log(log, "Provision", format!("vector-search request failed: {e}"));
@@ -430,7 +430,7 @@ fn discover_tools(agent: &GossipAgent) -> Vec<(String, NodeId, Value)> {
         let Ok(node_id) = parts[3].parse::<NodeId>() else { continue };
         let Ok(schema)  = serde_json::from_slice::<Value>(&schema_bytes) else { continue };
         let fn_name = format!("{ns}__{name}");
-        let description = agent.resolve(&CapFilter::new(ns, name))
+        let description = agent.capabilities().resolve(&CapFilter::new(ns, name))
             .into_iter()
             .find(|(nid, _)| *nid == node_id)
             .and_then(|(_, cap)| cap.attributes.get("description" as &str)
@@ -457,7 +457,7 @@ async fn invoke_tool(agent: &GossipAgent, tool_name: &str, args: Value) -> Resul
         let parts: Vec<&str> = key.splitn(5, '/').collect();
         if parts.len() < 4 { return Err(format!("malformed skill key: {key}")); }
         let node_id: NodeId = parts[3].parse().map_err(|e: mycelium::GossipError| e.to_string())?;
-        let reply = agent.rpc_call(
+        let reply = agent.service().rpc_call(
             node_id, "skill.invoke",
             Bytes::from(serde_json::to_vec(&args).map_err(|e| e.to_string())?),
             Duration::from_secs(60),
@@ -480,7 +480,7 @@ async fn invoke_tool(agent: &GossipAgent, tool_name: &str, args: Value) -> Resul
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": { "name": tool_name, "arguments": args }
     });
-    let reply = agent.rpc_call(
+    let reply = agent.service().rpc_call(
         node_id, signal_kind::MCP_INVOKE,
         Bytes::from(rpc_req.to_string()), Duration::from_secs(10),
     ).await.map_err(|e| e.to_string())?;
@@ -533,7 +533,7 @@ async fn llm_plan_step(
     messages: &[Value],
     tools:    &[(String, NodeId, Value)],
 ) -> Result<Option<(String, Value)>, String> {
-    let providers = agent.resolve(
+    let providers = agent.capabilities().resolve(
         &CapFilter::new("llm", "inference")
             .with("model", CapConstraint::Eq(CapValue::Text(cfg.model.clone().into()))),
     );
@@ -678,7 +678,7 @@ fn port_to_node_label(port: u16) -> Option<&'static str> {
 fn advertise_manifest_caps(
     manifest: &MeshManifest,
     agents:   [&Arc<GossipAgent>; 3],
-) -> Vec<CapabilityHandle> {
+) -> Vec<CapabilityReg> {
     let n = manifest.groups.len();
     if n == 0 { return vec![]; }
     // Each agent[i] serves group[i % n_groups].
@@ -688,7 +688,7 @@ fn advertise_manifest_caps(
         let group = &manifest.groups[i % n];
         let agent = agents[i];
         group.capabilities.iter().map(move |cap| {
-            agent.advertise_capability(
+            agent.capabilities().advertise_capability(
                 Capability::new(cap.ns.as_str(), cap.name.as_str()),
                 Duration::from_secs(30),
             )
@@ -718,12 +718,12 @@ struct AppState {
     /// Dynamic capability handles derived from the live manifest.
     /// Replaced atomically whenever the manifest changes so the mesh always
     /// reflects the current topology intent.
-    manifest_caps: Arc<Mutex<Vec<CapabilityHandle>>>,
+    manifest_caps: Arc<Mutex<Vec<CapabilityReg>>>,
     /// Manager candidacy handles — held so the operator kill/start endpoints
     /// can drop and restore each node's system/manager advertisement.
-    mgr_h_n0: Arc<Mutex<Option<CapabilityHandle>>>,
-    mgr_h_n1: Arc<Mutex<Option<CapabilityHandle>>>,
-    mgr_h_n2: Arc<Mutex<Option<CapabilityHandle>>>,
+    mgr_h_n0: Arc<Mutex<Option<CapabilityReg>>>,
+    mgr_h_n1: Arc<Mutex<Option<CapabilityReg>>>,
+    mgr_h_n2: Arc<Mutex<Option<CapabilityReg>>>,
     /// Spare pool — 3 agents that start idle and are activated when the
     /// matching active node is killed, advertising its capabilities instead.
     agent_spare0:    Arc<GossipAgent>,
@@ -733,9 +733,9 @@ struct AppState {
     spare_covering:  Arc<Mutex<[Option<&'static str>; 3]>>,
     /// spare_group[i] = Some("voters") while spare-i is augmenting a deficit group
     spare_group:     Arc<Mutex<[Option<String>; 3]>>,
-    spare_caps0:     Arc<Mutex<Vec<CapabilityHandle>>>,
-    spare_caps1:     Arc<Mutex<Vec<CapabilityHandle>>>,
-    spare_caps2:     Arc<Mutex<Vec<CapabilityHandle>>>,
+    spare_caps0:     Arc<Mutex<Vec<CapabilityReg>>>,
+    spare_caps1:     Arc<Mutex<Vec<CapabilityReg>>>,
+    spare_caps2:     Arc<Mutex<Vec<CapabilityReg>>>,
     /// Inter-node traffic events for topology edge animation
     traffic:         SharedTraffic,
     /// True while a demo trigger sequence is running (prevents concurrent triggers)
@@ -1157,11 +1157,11 @@ async fn handle_system_start(app: &AppState) -> (u16, &'static str, String) {
     (200, "application/json", json!({"ok": true}).to_string())
 }
 
-fn caps_for_node_index(manifest: &MeshManifest, node_idx: usize, agent: &Arc<GossipAgent>) -> Vec<CapabilityHandle> {
+fn caps_for_node_index(manifest: &MeshManifest, node_idx: usize, agent: &Arc<GossipAgent>) -> Vec<CapabilityReg> {
     let n = manifest.groups.len();
     if n == 0 { return vec![]; }
     manifest.groups[node_idx % n].capabilities.iter().map(|cap| {
-        agent.advertise_capability(
+        agent.capabilities().advertise_capability(
             Capability::new(cap.ns.as_str(), cap.name.as_str()),
             Duration::from_secs(30),
         )
@@ -1190,7 +1190,7 @@ fn handle_group_add_capacity(app: &AppState, group_name: &str) -> (u16, &'static
         _ => (&app.agent_spare2, &app.spare_caps2),
     };
     *spare_caps.lock().unwrap() = grp.capabilities.iter().map(|cap| {
-        spare_agent.advertise_capability(
+        spare_agent.capabilities().advertise_capability(
             Capability::new(cap.ns.as_str(), cap.name.as_str()),
             Duration::from_secs(30),
         )
@@ -1249,7 +1249,7 @@ fn handle_node_start(app: &AppState, label: &str) -> (u16, &'static str, String)
         _ => return (400, "application/json", json!({"error":"unknown node"}).to_string()),
     };
     pause.store(false, Ordering::Relaxed);
-    *mgr_h.lock().unwrap() = Some(agent.advertise_capability(
+    *mgr_h.lock().unwrap() = Some(agent.capabilities().advertise_capability(
         Capability::new("system", "manager")
             .with("http_port", CapValue::Integer(port as i64)),
         Duration::from_secs(15),
@@ -1624,17 +1624,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // n-0's handle is held behind Arc<Mutex<Option>> so the failure injector
     // can drop it (tombstoning the capability) and restore it on recovery.
     // n-1 and n-2 never fail in this demo so plain handles suffice.
-    let mgr_h_n0 = Arc::new(Mutex::new(Some(agent_n0.advertise_capability(
+    let mgr_h_n0 = Arc::new(Mutex::new(Some(agent_n0.capabilities().advertise_capability(
         Capability::new("system", "manager")
             .with("http_port", CapValue::Integer(HTTP_PORT_N0 as i64)),
         Duration::from_secs(15),
     ))));
-    let mgr_h_n1 = Arc::new(Mutex::new(Some(agent_n1.advertise_capability(
+    let mgr_h_n1 = Arc::new(Mutex::new(Some(agent_n1.capabilities().advertise_capability(
         Capability::new("system", "manager")
             .with("http_port", CapValue::Integer(HTTP_PORT_N1 as i64)),
         Duration::from_secs(15),
     ))));
-    let mgr_h_n2 = Arc::new(Mutex::new(Some(agent_n2.advertise_capability(
+    let mgr_h_n2 = Arc::new(Mutex::new(Some(agent_n2.capabilities().advertise_capability(
         Capability::new("system", "manager")
             .with("http_port", CapValue::Integer(HTTP_PORT_N2 as i64)),
         Duration::from_secs(15),
@@ -1689,7 +1689,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             time::sleep(Duration::from_secs(FAILURE_HOLD_S)).await;
             flag.store(false, Ordering::Relaxed);
-            *mgr.lock().unwrap() = Some(agent.advertise_capability(
+            *mgr.lock().unwrap() = Some(agent.capabilities().advertise_capability(
                 Capability::new("system", "manager")
                     .with("http_port", CapValue::Integer(HTTP_PORT_N0 as i64)),
                 Duration::from_secs(15),
@@ -1911,16 +1911,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         async move {
             // Bootstrap: compute initial state before entering the watch loop
             {
-                let candidates = agent.resolve(&CapFilter::new("system", "manager"));
+                let candidates = agent.capabilities().resolve(&CapFilter::new("system", "manager"));
                 *app.manager_port.lock().unwrap() = compute_manager_port(&candidates);
             }
-            let mut rx = agent.watch_capabilities(CapFilter::new("system", "manager"));
+            let mut rx = agent.capabilities().watch_capabilities(CapFilter::new("system", "manager"));
             loop {
                 match rx.recv().await {
                     None    => break,
                     Some(_) => {}
                 }
-                let candidates = agent.resolve(&CapFilter::new("system", "manager"));
+                let candidates = agent.capabilities().resolve(&CapFilter::new("system", "manager"));
                 let new_port   = compute_manager_port(&candidates);
                 let mut guard  = app.manager_port.lock().unwrap();
                 if *guard != new_port {

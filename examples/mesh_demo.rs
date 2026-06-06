@@ -14,7 +14,7 @@
 
 use bytes::Bytes;
 use mycelium::{
-    AgentPolicy, AgentStateMachine, Capability, CapabilityHandle,
+    AgentPolicy, AgentStateMachine, Capability, CapabilityReg,
     CapFilter, CapValue, ExecutionState, GossipAgent, GossipConfig,
     McpToolHandle, MeshManifest, NodeId, manifest_keys, semver_gt,
     signal_kind, SignalScope,
@@ -270,7 +270,7 @@ async fn spawn_fresh_node(
         _ => vec![],
     };
 
-    let cap_h = agent.advertise_capability(
+    let cap_h = agent.capabilities().advertise_capability(
         Capability::new(ns, cap_name),
         Duration::from_secs(30),
     );
@@ -346,14 +346,14 @@ fn promote_spare(
     };
 
     // Advertise primary capability
-    let mut handles = vec![node.agent.advertise_capability(
+    let mut handles = vec![node.agent.capabilities().advertise_capability(
         Capability::new(node.ns.as_str(), node.cap_name.as_str()),
         Duration::from_secs(30),
     )];
     // Advertise any locality caps this spare carries (its physical zone)
     for ic in &node.platform_caps {
         if let Some(zone) = ic.strip_prefix("locality/") {
-            handles.push(node.agent.advertise_capability(
+            handles.push(node.agent.capabilities().advertise_capability(
                 Capability::new("locality", zone),
                 Duration::from_secs(30),
             ));
@@ -437,7 +437,7 @@ async fn invoke_tool(agent: &GossipAgent, tool_name: &str, args: Value) -> Resul
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": { "name": tool_name, "arguments": args }
     });
-    let reply = agent.rpc_call(
+    let reply = agent.service().rpc_call(
         node_id, signal_kind::MCP_INVOKE,
         Bytes::from(rpc_req.to_string()), Duration::from_secs(10),
     ).await.map_err(|e| e.to_string())?;
@@ -464,7 +464,7 @@ fn mock_plan_step(turn: usize, tools: &[(String, NodeId, Value)]) -> Option<(Str
 async fn llm_plan_step(
     agent: &GossipAgent, cfg: &LlmConfig, messages: &[Value], tools: &[(String, NodeId, Value)],
 ) -> Result<Option<(String, Value)>, String> {
-    let endpoint = agent.resolve(&CapFilter::new("llm", "inference")).first()
+    let endpoint = agent.capabilities().resolve(&CapFilter::new("llm", "inference")).first()
         .and_then(|(_, cap)| cap.attributes.get("endpoint"))
         .and_then(|v| if let CapValue::Text(s) = v { Some(s.as_ref().to_string()) } else { None })
         .unwrap_or_else(|| cfg.base_url.clone());
@@ -551,7 +551,7 @@ struct MeshNode {
     ns:            String,
     cap_name:      String,
     behavior:      Option<AbortHandle>,
-    cap_handles:   Vec<CapabilityHandle>,
+    cap_handles:   Vec<CapabilityReg>,
     tool_handles:  Vec<McpToolHandle>,
     pause_flag:    Arc<AtomicBool>,
     /// Standby spare: connected to mesh, no capability advertised, no behavior.
@@ -636,8 +636,8 @@ async fn run_dispatcher_behavior(agent: Arc<GossipAgent>, log: SharedLog) {
     let label = agent.node_id().to_string();
     loop {
         time::sleep(Duration::from_millis(800)).await;
-        let workers = agent.resolve(&CapFilter::new("compute", "cpu")).len()
-            + agent.resolve(&CapFilter::new("compute", "cpu-heavy")).len();
+        let workers = agent.capabilities().resolve(&CapFilter::new("compute", "cpu")).len()
+            + agent.capabilities().resolve(&CapFilter::new("compute", "cpu-heavy")).len();
         if workers > 0 {
             let _ = agent.mesh().emit("compute.invoke", SignalScope::System, Bytes::from_static(b"dispatch"));
             push_log(&log, "Dispatch", format!("{label} routed to {workers} worker(s)"));
@@ -779,7 +779,7 @@ async fn run_render_consumer(agent: Arc<GossipAgent>, log: SharedLog) {
     let label = agent.node_id().to_string();
     loop {
         time::sleep(Duration::from_secs(2)).await;
-        if !agent.resolve(&CapFilter::new("render", "job")).is_empty() {
+        if !agent.capabilities().resolve(&CapFilter::new("render", "job")).is_empty() {
             push_log(&log, "Consumer", format!("{label} dispatching render job"));
             let _ = agent.mesh().emit("render.job", SignalScope::System, Bytes::from_static(b"frame"));
         }
@@ -1024,7 +1024,7 @@ async fn provision_from_manifest(state: Arc<MgmtState>, mut manifest: MeshManife
 
             // Advertise secondary capabilities (e.g. locality/*) and record intrinsics
             for extra in group.capabilities.iter().skip(1) {
-                let h = node.agent.advertise_capability(
+                let h = node.agent.capabilities().advertise_capability(
                     Capability::new(extra.ns.as_str(), extra.name.as_str()),
                     Duration::from_secs(30),
                 );
@@ -1450,7 +1450,7 @@ fn handle_node_start(state: &MgmtState, label: &str) -> (u16, &'static str, Stri
     };
 
     // Re-advertise capability
-    node.cap_handles = vec![node.agent.advertise_capability(
+    node.cap_handles = vec![node.agent.capabilities().advertise_capability(
         Capability::new(node.ns.as_str(), node.cap_name.as_str()),
         Duration::from_secs(30),
     )];

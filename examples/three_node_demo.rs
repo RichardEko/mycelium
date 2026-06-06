@@ -175,7 +175,7 @@ use axum::{
 use bytes::Bytes;
 use futures_util::StreamExt;
 use mycelium::{
-    BulkServeHandle, CapabilityHandle, Capability, CapFilter, GossipAgent, GossipConfig,
+    BulkServeHandle, CapabilityReg, Capability, CapFilter, GossipAgent, GossipConfig,
     MailboxHandle, McpToolHandle, NodeId,
     PersistenceConfig, SignalScope, SyncMode, signal_kind,
 };
@@ -700,7 +700,7 @@ async fn tool_verify_answer(args: Value) -> Result<Value, String> {
 // ── Tool node runners ──────────────────────────────────────────────────────────
 
 async fn run_tool_a(agent: Arc<GossipAgent>, role: &str) {
-    let _role_cap = agent.advertise_capability(Capability::new("role", "tool-a"), Duration::from_secs(5));
+    let _role_cap = agent.capabilities().advertise_capability(Capability::new("role", "tool-a"), Duration::from_secs(5));
     let _weather = register(
         &agent, "weather",
         "Get current weather conditions for a city. Input: {\"city\": \"London\"}",
@@ -718,7 +718,7 @@ async fn run_tool_a(agent: Arc<GossipAgent>, role: &str) {
 }
 
 async fn run_tool_b(agent: Arc<GossipAgent>, role: &str) {
-    let _role_cap = agent.advertise_capability(Capability::new("role", "tool-b"), Duration::from_secs(5));
+    let _role_cap = agent.capabilities().advertise_capability(Capability::new("role", "tool-b"), Duration::from_secs(5));
     let _calc = register(
         &agent, "calculate",
         "Evaluate a simple arithmetic expression. Input: {\"expression\": \"330 * 1024\"}",
@@ -739,7 +739,7 @@ async fn run_tool_b(agent: Arc<GossipAgent>, role: &str) {
 }
 
 async fn run_tool_sf(agent: Arc<GossipAgent>, role: &str) {
-    let _role_cap = agent.advertise_capability(Capability::new("role", "tool-sf"), Duration::from_secs(5));
+    let _role_cap = agent.capabilities().advertise_capability(Capability::new("role", "tool-sf"), Duration::from_secs(5));
     let _sf = register(
         &agent, "sf_lookup",
         "SF Encyclopedia (SFE3) scholarly reference. Use for SF/fantasy author careers, \
@@ -753,7 +753,7 @@ async fn run_tool_sf(agent: Arc<GossipAgent>, role: &str) {
 }
 
 async fn run_tool_book(agent: Arc<GossipAgent>, role: &str) {
-    let _role_cap = agent.advertise_capability(Capability::new("role", "tool-book"), Duration::from_secs(5));
+    let _role_cap = agent.capabilities().advertise_capability(Capability::new("role", "tool-book"), Duration::from_secs(5));
     let _book = register(
         &agent, "book_plot",
         "Detailed plot summary and character information for a specific book, novel, \
@@ -771,7 +771,7 @@ async fn run_verifier(agent: Arc<GossipAgent>, role: &str) {
     let model = std::env::var("VERIFIER_MODEL")
         .or_else(|_| std::env::var("OLLAMA_MODEL"))
         .unwrap_or_else(|_| "llama3.1:8b".into());
-    let _role_cap = agent.advertise_capability(Capability::new("role", "verifier"), Duration::from_secs(5));
+    let _role_cap = agent.capabilities().advertise_capability(Capability::new("role", "verifier"), Duration::from_secs(5));
     let _verify = register(
         &agent, "verify_answer",
         // Description discourages direct LLM invocation — the planning cycle calls it
@@ -846,7 +846,7 @@ async fn invoke_tool_timed(
         "params": { "name": tool_name, "arguments": args }
     });
     info!("[llm] → {tool_name}({args}) via {nid}");
-    let reply = agent.rpc_call(
+    let reply = agent.service().rpc_call(
         nid, signal_kind::MCP_INVOKE,
         Bytes::from(rpc_req.to_string()),
         timeout,
@@ -1103,7 +1103,7 @@ async fn handle_mesh(State(state): State<Arc<AppState>>) -> Json<Value> {
 // ── Chat server ────────────────────────────────────────────────────────────────
 
 async fn run_chat_server(agent: Arc<GossipAgent>, cfg: LlmCfg, chat_port: u16) {
-    let _role_cap = agent.advertise_capability(Capability::new("role", "llm"), Duration::from_secs(5));
+    let _role_cap = agent.capabilities().advertise_capability(Capability::new("role", "llm"), Duration::from_secs(5));
     info!("[llm] waiting {TOOL_SETTLE_SECS}s for mesh to converge...");
     time::sleep(Duration::from_secs(TOOL_SETTLE_SECS)).await;
 
@@ -1219,7 +1219,7 @@ async fn mgmt_handle_state(State(s): State<Arc<MgmtState>>) -> Json<Value> {
 }
 
 async fn run_mgmt_server(agent: Arc<GossipAgent>, mgmt_port: u16) {
-    let _role_cap = agent.advertise_capability(Capability::new("role", "mgmt"), Duration::from_secs(5));
+    let _role_cap = agent.capabilities().advertise_capability(Capability::new("role", "mgmt"), Duration::from_secs(5));
 
     let state = Arc::new(MgmtState { agent });
     let router = Router::new()
@@ -1242,7 +1242,7 @@ struct NodeState {
     mailbox_count: Arc<std::sync::atomic::AtomicUsize>,
     _bulk_handle:  BulkServeHandle,
     _mbox_handle:  MailboxHandle,
-    _role_cap:     CapabilityHandle,
+    _role_cap:     CapabilityReg,
 }
 
 async fn node_scatter(State(s): State<Arc<NodeState>>) -> Json<Value> {
@@ -1251,7 +1251,7 @@ async fn node_scatter(State(s): State<Arc<NodeState>>) -> Json<Value> {
         return Json(json!({ "ok": false, "reason": "no peers", "responders": 0 }));
     }
     let targets = peers.clone();
-    match s.agent.scatter_gather(
+    match s.agent.service().scatter_gather(
         targets,
         "echo-scatter",
         Bytes::from_static(b"ping"),
@@ -1276,7 +1276,7 @@ async fn node_bulk_echo_peer(State(s): State<Arc<NodeState>>) -> Json<Value> {
         return Json(json!({ "ok": false, "reason": "no node-role peers" }));
     };
     let payload = Bytes::from(vec![b'x'; 4096]);
-    match s.agent.bulk_call(target.clone(), "echo-bulk", payload, Duration::from_secs(10)).await {
+    match s.agent.service().bulk_call(target.clone(), "echo-bulk", payload, Duration::from_secs(10)).await {
         Ok(result) => Json(json!({ "ok": true, "target": target.to_string(), "echoed_size": result.len() })),
         Err(e)     => Json(json!({ "ok": false, "reason": e.to_string() })),
     }
@@ -1291,7 +1291,7 @@ async fn node_bulk_fetch(
         Ok(n)  => n,
         Err(_) => return (StatusCode::BAD_REQUEST, vec![]).into_response(),
     };
-    match s.agent.bulk_staging_get(nonce) {
+    match s.agent.service().bulk_staging_get(nonce) {
         Some(bytes) => (StatusCode::OK, bytes.to_vec()).into_response(),
         None        => StatusCode::NOT_FOUND.into_response(),
     }
@@ -1299,7 +1299,7 @@ async fn node_bulk_fetch(
 
 async fn node_deliver_to_self(State(s): State<Arc<NodeState>>) -> Json<Value> {
     let self_id = s.agent.node_id().clone();
-    let ok = s.agent.deliver_event(&self_id, "test-mailbox", Bytes::from_static(b"hello-mailbox"));
+    let ok = s.agent.service().deliver_event(&self_id, "test-mailbox", Bytes::from_static(b"hello-mailbox"));
     Json(json!({ "ok": ok }))
 }
 
@@ -1341,7 +1341,7 @@ async fn node_emit(
 /// Returns a `Router<()>` ready to be passed to [`GossipAgent::with_http_routes`].
 /// Must be called before [`GossipAgent::start`].
 fn init_node_routes(agent: Arc<GossipAgent>) -> axum::Router {
-    let role_cap = agent.advertise_capability(Capability::new("role", "node"), Duration::from_secs(5));
+    let role_cap = agent.capabilities().advertise_capability(Capability::new("role", "node"), Duration::from_secs(5));
 
     // Record test.signal arrivals under a per-hostname key so each node's
     // reception can be queried independently in integration tests.
@@ -1361,7 +1361,7 @@ fn init_node_routes(agent: Arc<GossipAgent>) -> axum::Router {
         let mut rx = sc_agent.mesh().signal_rx("echo-scatter");
         while let Some(req) = rx.recv().await {
             let req = mycelium::RpcRequest::from(req);
-            sc_agent.rpc_respond(&req, req.payload());
+            sc_agent.service().rpc_respond(&req, req.payload());
         }
     });
 
@@ -1695,7 +1695,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // For the node role, register application routes into the embedded gateway before start.
     if role == "node" {
-        agent.set_bulk_serving_port(http_port);
+        agent.service().set_bulk_serving_port(http_port);
         let extra = init_node_routes(Arc::clone(&agent));
         agent.with_http_routes(extra);
     }
@@ -1733,7 +1733,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "mgmt"   => run_mgmt_server(agent, mgmt_port).await,
         "node"    => run_node(agent, &role).await,
         "overlay" => {
-            let _consensus = agent.start_consensus_listener(ConsensusConfig::default());
+            let _consensus = agent.consensus().start_consensus_listener(ConsensusConfig::default());
             info!("[overlay] consensus listener started; HTTP gateway ready on :{http_port}");
             loop { tokio::time::sleep(std::time::Duration::from_secs(60)).await; }
         }

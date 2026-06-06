@@ -15,11 +15,7 @@
 //!   emergent group formation: any node whose own capabilities match the
 //!   group's filter self-joins via `join_group`.
 
-use crate::capability::{
-    CallerContext, CapEntry, Capability, CapFilter, CapabilityEvent,
-    CapabilityHandle,
-    RequirementHandle, RequirementStatus,
-};
+use crate::capability::{CapEntry, Capability, CapFilter};
 use crate::node_id::NodeId;
 use crate::signal::{LoadState, encode_load_state};
 use bytes::Bytes;
@@ -27,7 +23,7 @@ use std::{
     sync::{Arc, atomic::{AtomicBool, Ordering}},
     time::Duration,
 };
-use tokio::{sync::{mpsc, watch, Notify}};
+use tokio::sync::{watch, Notify};
 use tracing::warn;
 
 /// Shared registry for the consolidated opacity watcher spawned by
@@ -56,7 +52,7 @@ impl FilterOpacityRegistry {
     }
 }
 
-use super::{GossipAgent, TaskCtx};
+use super::TaskCtx;
 
 /// Sendable shutdown-await helper: yields once `shutdown_rx`'s value is `true`
 /// (or its sender drops). Unlike `watch::Receiver::wait_for`, this returns
@@ -116,75 +112,6 @@ fn parse_cap_key(prefix: &str, key: &str) -> Option<(NodeId, Arc<str>, Arc<str>)
     if name.contains('/') { return None; }
     let node_id = node_id_str.parse::<NodeId>().ok()?;
     Some((node_id, Arc::from(namespace), Arc::from(name)))
-}
-
-impl GossipAgent {
-    /// Advertises a [`Capability`] under `cap/{node_id}/{namespace}/{name}`.
-    ///
-    /// Use [`CapabilitiesHandle::advertise_capability`] via [`GossipAgent::capabilities`] instead.
-    #[must_use]
-    pub fn advertise_capability(
-        &self,
-        capability: Capability,
-        interval:   Duration,
-    ) -> CapabilityHandle {
-        self.capabilities().advertise_capability(capability, interval)
-    }
-
-    /// Snapshot scan: returns every live capability matching `filter`.
-    ///
-    /// Use [`CapabilitiesHandle::resolve`] via [`GossipAgent::capabilities`] instead.
-    pub fn resolve(&self, filter: &CapFilter) -> Vec<(NodeId, Capability)> {
-        self.capabilities().resolve(filter)
-    }
-
-    /// Like `resolve`, but also enforces `Capability::authorized_callers`.
-    ///
-    /// Use [`CapabilitiesHandle::resolve_for_caller`] via [`GossipAgent::capabilities`] instead.
-    pub fn resolve_for_caller(
-        &self,
-        filter: &CapFilter,
-        ctx:    &CallerContext,
-    ) -> Vec<(NodeId, Capability)> {
-        self.capabilities().resolve_for_caller(filter, ctx)
-    }
-
-    /// Push-based stream of [`CapabilityEvent`]s for capabilities matching `filter`.
-    ///
-    /// Use [`CapabilitiesHandle::watch_capabilities`] via [`GossipAgent::capabilities`] instead.
-    pub fn watch_capabilities(&self, filter: CapFilter) -> mpsc::Receiver<CapabilityEvent> {
-        self.capabilities().watch_capabilities(filter)
-    }
-
-    /// Declares a requirement and spawns an opacity watcher.
-    ///
-    /// Use [`CapabilitiesHandle::declare_requirement`] via [`GossipAgent::capabilities`] instead.
-    #[must_use]
-    pub fn declare_requirement(
-        &self,
-        filter:   CapFilter,
-        interval: Duration,
-    ) -> RequirementHandle {
-        self.capabilities().declare_requirement(filter, interval)
-    }
-
-    /// Push-based view of one requirement's current satisfaction status.
-    ///
-    /// Use [`CapabilitiesHandle::watch_requirement`] via [`GossipAgent::capabilities`] instead.
-    pub fn watch_requirement(&self, filter: CapFilter) -> watch::Receiver<RequirementStatus> {
-        self.capabilities().watch_requirement(filter)
-    }
-
-    /// Picks a group member that satisfies every requirement filter with the lowest load.
-    ///
-    /// Use [`CapabilitiesHandle::suggest_leader_with_requirements`] via [`GossipAgent::capabilities`] instead.
-    pub fn suggest_leader_with_requirements(
-        &self,
-        group:        &str,
-        requirements: &[CapFilter],
-    ) -> Option<NodeId> {
-        self.capabilities().suggest_leader_with_requirements(group, requirements)
-    }
 }
 
 // ── Free helpers (used by spawned tasks) ─────────────────────────────────────

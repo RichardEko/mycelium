@@ -253,7 +253,7 @@ pub(super) fn count_opaque_all_in_kv(
     }
 }
 
-/// Free-function variant of `manage_opacity_impl` — used by `CapabilityHandle`.
+/// Free-function variant of `manage_opacity_impl` — used by `CapabilityReg`.
 #[allow(clippy::type_complexity)]
 #[allow(dead_code)]
 pub(super) fn manage_opacity_ctx(

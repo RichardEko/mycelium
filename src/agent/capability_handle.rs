@@ -8,7 +8,7 @@
 
 use crate::capability::{
     CallerContext, CapabilityGroupDef, CapabilityGroupHandle,
-    CapabilityHandle, Capability, CapEntry, CapFilter, CapabilityEvent,
+    CapabilityReg, Capability, CapEntry, CapFilter, CapabilityEvent,
     ReqEntry, RequirementHandle, RequirementStatus, WiringStatus, WiringProvider,
 };
 use crate::node_id::NodeId;
@@ -62,14 +62,14 @@ impl CapabilitiesHandle {
 
     /// Advertises a [`Capability`] under `cap/{node_id}/{namespace}/{name}`.
     ///
-    /// Re-asserts on every `interval` tick. Drop the returned [`CapabilityHandle`]
+    /// Re-asserts on every `interval` tick. Drop the returned [`CapabilityReg`]
     /// to tombstone the entry; shutdown tombstones it automatically.
     #[must_use]
     pub fn advertise_capability(
         &self,
         capability: Capability,
         interval:   Duration,
-    ) -> CapabilityHandle {
+    ) -> CapabilityReg {
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
         let shutdown_rx            = self.ctx.shutdown_tx.subscribe();
         let ctx: Arc<TaskCtx>      = Arc::clone(&self.ctx);
@@ -85,7 +85,7 @@ impl CapabilitiesHandle {
         self.ctx.spawn_task(run_kv_persist_task(
             ctx, cancel_rx, shutdown_rx, kv_key, interval, payload_fn, None,
         ));
-        CapabilityHandle { _retract: cancel_tx }
+        CapabilityReg { _retract: cancel_tx }
     }
 
     // ── Resolution ───────────────────────────────────────────────────────────

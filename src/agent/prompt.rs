@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
-use crate::capability::CapabilityHandle;
+use crate::capability::CapabilityReg;
 
 /// A prompt template stored in the cluster KV at `prompts/{ns}/{name}`.
 ///
@@ -43,12 +43,12 @@ pub enum PromptSkillError {
 /// Returned by `register_prompt_skill`. Dropping retracts the skill immediately.
 ///
 /// Holds:
-/// - `_cap`: the `CapabilityHandle` — dropping tombstones `cap/` and stops the 30s heartbeat
+/// - `_cap`: the `CapabilityReg` — dropping tombstones `cap/` and stops the 30s heartbeat
 /// - `_handler_cancel`: `oneshot::Sender<()>` — dropping signals the dispatch loop to
 ///   remove this entry from `GossipAgent::llm_skills`
 #[must_use = "dropping PromptSkillHandle retracts the skill immediately"]
 pub struct PromptSkillHandle {
-    pub(crate) _cap: CapabilityHandle,
+    pub(crate) _cap: CapabilityReg,
     pub(crate) _handler_cancel: tokio::sync::oneshot::Sender<()>,
 }
 

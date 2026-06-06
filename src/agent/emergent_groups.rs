@@ -21,7 +21,7 @@
 //! Pre-C3 each provide + each requirement was its own spawned tokio task.
 //! After C3 it is one task per group, regardless of provides/requires count.
 
-use crate::capability::{CapEntry, Capability, CapFilter, CapabilityGroupDef, CapabilityGroupHandle, WiringStatus};
+use crate::capability::{CapEntry, Capability, CapFilter, CapabilityGroupDef, WiringStatus};
 use crate::node_id::NodeId;
 use crate::signal::{LoadState, encode_load_state};
 use ahash::{AHashMap, AHashSet};
@@ -30,27 +30,12 @@ use std::{sync::Arc, time::Duration};
 use tokio::{sync::{oneshot, watch}, time};
 use tracing::warn;
 
-use super::{GossipAgent, TaskCtx};
+use super::TaskCtx;
 use super::capability_ops::{
     await_shutdown, is_cap_locality_key, now_ms, scan_prefix_kv,
     subscribe_prefix_on_kv, WATCHER_DEBOUNCE_WINDOW,
 };
 use super::wiring::wiring_snapshot;
-
-impl GossipAgent {
-    /// Publishes a [`CapabilityGroupDef`] under `cap-group/{group}`.
-    ///
-    /// Use [`CapabilitiesHandle::define_capability_group`] via [`GossipAgent::capabilities`] instead.
-    #[must_use]
-    pub fn define_capability_group(
-        &self,
-        group:    impl Into<Arc<str>>,
-        def:      CapabilityGroupDef,
-        interval: Duration,
-    ) -> CapabilityGroupHandle {
-        self.capabilities().define_capability_group(group, def, interval)
-    }
-}
 
 /// Interval at which group-level `gcap/` projections are re-asserted by each
 /// cap-joined member. Conservative default chosen to amortise gossip cost;

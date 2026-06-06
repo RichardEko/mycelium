@@ -41,7 +41,7 @@
 //! always-alive — useful for in-process capabilities (MCP tool handlers,
 //! compute functions) that don't have a separate health endpoint.
 
-use crate::{CapValue, Capability, CapabilityHandle, GossipAgent};
+use crate::{CapValue, Capability, CapabilityReg, GossipAgent};
 use crate::error::GossipError;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -183,7 +183,7 @@ const HEALTH_INTERVAL_SECS: u64 = 10;
 /// - Probes the declared URL immediately on startup (always-alive when no URL).
 /// - Calls [`GossipAgent::advertise_capability`] and fires
 ///   `on_event(ProbeEvent { state: Up })` when the probe passes.
-/// - Re-probes every 10 s; drops the [`CapabilityHandle`] (tombstoning the
+/// - Re-probes every 10 s; drops the [`CapabilityReg`] (tombstoning the
 ///   KV entry) and fires `on_event(ProbeEvent { state: Down })` on failure.
 /// - Re-advertises and fires `Up` on the next successful probe after a failure.
 ///
@@ -215,13 +215,13 @@ pub async fn run_capability_probes<F>(
 {
     let client = reqwest::Client::new();
     let n = config.capabilities.len();
-    let mut handles: Vec<Option<CapabilityHandle>> = (0..n).map(|_| None).collect();
+    let mut handles: Vec<Option<CapabilityReg>> = (0..n).map(|_| None).collect();
 
     // ── Initial probe pass ────────────────────────────────────────────────────
     if !pause_flag.load(Ordering::Relaxed) {
         for (i, entry) in config.capabilities.iter().enumerate() {
             if entry.passes_probe(&client).await {
-                handles[i] = Some(agent.advertise_capability(
+                handles[i] = Some(agent.capabilities().advertise_capability(
                     entry.build_capability(),
                     Duration::from_secs(entry.ttl_secs),
                 ));
@@ -275,7 +275,7 @@ pub async fn run_capability_probes<F>(
                     });
                 }
                 (false, true) => {
-                    handles[i] = Some(agent.advertise_capability(
+                    handles[i] = Some(agent.capabilities().advertise_capability(
                         entry.build_capability(),
                         Duration::from_secs(entry.ttl_secs),
                     ));

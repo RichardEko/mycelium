@@ -182,7 +182,7 @@ pub enum RequirementStatus {
 
 /// Drop to retract an advertised capability. The dropping side gossips a
 /// tombstone for `cap/{node_id}/{namespace}/{name}`.
-pub struct CapabilityHandle {
+pub struct CapabilityReg {
     pub(crate) _retract: oneshot::Sender<()>,
 }
 

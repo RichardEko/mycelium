@@ -22,7 +22,7 @@ impl GossipAgent {
         timeout:     Duration,
     ) -> impl std::future::Future<Output = Option<crate::signal::Signal>> {
         let kind_arc: Arc<str> = kind.into();
-        let target = self.suggest_leader(group, &kind_arc, max_age);
+        let target = self.consensus().suggest_leader(group, &kind_arc, max_age);
         self.mesh().request(kind_arc, SignalScope::Individual(target), payload, result_kind, timeout)
     }
 }

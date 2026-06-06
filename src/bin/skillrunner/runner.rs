@@ -31,7 +31,7 @@ impl SkillRunner {
             .unwrap_or(usize::MAX);
         let sem = Arc::new(Semaphore::new(max_conc));
 
-        let mut rx = self.agent.rpc_rx("skill.invoke");
+        let mut rx = self.agent.service().rpc_rx("skill.invoke");
         let runner = Arc::new(self);
 
         while let Some(req) = rx.recv().await {
@@ -40,7 +40,7 @@ impl SkillRunner {
                 Err(_) => {
                     let busy = serde_json::json!({"error": "skill saturated"});
                     let bytes = serde_json::to_vec(&busy).unwrap_or_default();
-                    runner.agent.rpc_respond(&req, Bytes::from(bytes));
+                    runner.agent.service().rpc_respond(&req, Bytes::from(bytes));
                     continue;
                 }
             };
@@ -65,7 +65,7 @@ impl SkillRunner {
             Err(e) => {
                 tracing::warn!("skill.invoke: invalid JSON from {caller}: {e}");
                 let err = serde_json::json!({"error": format!("invalid input: {e}")});
-                self.agent.rpc_respond(&req, Bytes::from(serde_json::to_vec(&err).unwrap_or_default()));
+                self.agent.service().rpc_respond(&req, Bytes::from(serde_json::to_vec(&err).unwrap_or_default()));
                 return;
             }
         };
@@ -111,7 +111,7 @@ impl SkillRunner {
                 }
 
                 let out = serde_json::to_vec(&llm_resp.output).unwrap_or_default();
-                self.agent.rpc_respond(&req, Bytes::from(out));
+                self.agent.service().rpc_respond(&req, Bytes::from(out));
             }
             Err(e) => {
                 tracing::error!("skill {ns}/{name}: LLM error: {e}");
@@ -119,7 +119,7 @@ impl SkillRunner {
                 audit::write_audit(&self.agent, &rec);
 
                 let err = serde_json::json!({"error": e.to_string()});
-                self.agent.rpc_respond(&req, Bytes::from(serde_json::to_vec(&err).unwrap_or_default()));
+                self.agent.service().rpc_respond(&req, Bytes::from(serde_json::to_vec(&err).unwrap_or_default()));
             }
         }
     }
@@ -168,7 +168,7 @@ impl SkillRunner {
                 };
                 if !ns.is_empty() {
                     let filter = CapFilter::new(ns, cname);
-                    if let Some((_, cap)) = self.agent.resolve(&filter).into_iter().next() {
+                    if let Some((_, cap)) = self.agent.capabilities().resolve(&filter).into_iter().next() {
                         let desc = cap.attributes.get("description")
                             .and_then(|v| if let CapValue::Text(t) = v { Some(t.as_ref().to_string()) } else { None })
                             .unwrap_or_else(|| cname.to_string());
@@ -218,7 +218,7 @@ async fn invoke_mesh_tool(
 
     let filter = CapFilter::new(resolved_ns.as_str(), resolved_cname.as_str());
 
-    let providers = agent.resolve(&filter);
+    let providers = agent.capabilities().resolve(&filter);
     let Some((target, _)) = providers.into_iter().next() else {
         return Value::String(format!("tool '{tool_name}': no provider on mesh"));
     };
@@ -228,7 +228,7 @@ async fn invoke_mesh_tool(
         Err(e) => return Value::String(format!("tool '{tool_name}': serialise error: {e}")),
     };
 
-    match agent.rpc_call(target, "skill.invoke", payload, std::time::Duration::from_secs(90)).await {
+    match agent.service().rpc_call(target, "skill.invoke", payload, std::time::Duration::from_secs(90)).await {
         Ok(resp) => serde_json::from_slice(&resp)
             .unwrap_or(Value::String(String::from_utf8_lossy(&resp).into_owned())),
         Err(e) => Value::String(format!("tool '{tool_name}': rpc error: {e:?}")),

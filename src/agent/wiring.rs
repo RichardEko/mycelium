@@ -18,77 +18,13 @@ use crate::node_id::NodeId;
 use ahash::AHashMap;
 use bytes::Bytes;
 use std::sync::Arc;
-use tokio::sync::watch;
 use tracing::warn;
 
-use super::{GossipAgent, TaskCtx};
+use super::TaskCtx;
 use super::helpers::emit_signal;
 use super::capability_ops::{
     is_cap_locality_key, now_ms, parse_cap_key_or_warn, scan_prefix_kv_with_ts,
 };
-
-impl GossipAgent {
-    /// Snapshot scan of providers satisfying `filter`.
-    ///
-    /// Use [`CapabilitiesHandle::resolve_wiring`] via [`GossipAgent::capabilities`] instead.
-    pub fn resolve_wiring(&self, filter: &CapFilter) -> WiringStatus {
-        self.capabilities().resolve_wiring(filter)
-    }
-
-    /// Like `resolve` but annotated with locality depth.
-    ///
-    /// Use [`CapabilitiesHandle::resolve_with_locality`] via [`GossipAgent::capabilities`] instead.
-    pub fn resolve_with_locality(
-        &self,
-        filter: &CapFilter,
-        pref:   LocalityPreference,
-    ) -> Vec<(NodeId, Capability, usize)> {
-        self.capabilities().resolve_with_locality(filter, pref)
-    }
-
-    /// Locality-aware version of `resolve_wiring`.
-    ///
-    /// Use [`CapabilitiesHandle::resolve_wiring_with_locality`] via [`GossipAgent::capabilities`] instead.
-    pub fn resolve_wiring_with_locality(
-        &self,
-        filter: &CapFilter,
-        pref:   LocalityPreference,
-    ) -> WiringStatus {
-        self.capabilities().resolve_wiring_with_locality(filter, pref)
-    }
-
-    /// Push-based view of the wiring state for `filter`.
-    ///
-    /// Use [`CapabilitiesHandle::watch_wiring`] via [`GossipAgent::capabilities`] instead.
-    pub fn watch_wiring(&self, filter: CapFilter) -> watch::Receiver<WiringStatus> {
-        self.capabilities().watch_wiring(filter)
-    }
-
-    /// Emits `payload` to every provider satisfying `filter`.
-    ///
-    /// Use [`CapabilitiesHandle::signal_wired_via`] via [`GossipAgent::capabilities`] instead.
-    pub fn signal_wired_via(
-        &self,
-        filter:  &CapFilter,
-        kind:    impl Into<Arc<str>>,
-        payload: impl Into<Bytes>,
-    ) -> WiredEmitOutcome {
-        self.capabilities().signal_wired_via(filter, kind, payload)
-    }
-
-    /// Locality-aware variant of `signal_wired_via`.
-    ///
-    /// Use [`CapabilitiesHandle::signal_wired_via_locality`] via [`GossipAgent::capabilities`] instead.
-    pub fn signal_wired_via_locality(
-        &self,
-        filter:  &CapFilter,
-        pref:    LocalityPreference,
-        kind:    impl Into<Arc<str>>,
-        payload: impl Into<Bytes>,
-    ) -> WiredEmitOutcome {
-        self.capabilities().signal_wired_via_locality(filter, kind, payload, pref)
-    }
-}
 
 /// Free-function variant of `dispatch_to_providers` for callers that hold
 /// only `Arc<TaskCtx>` (e.g. `CapabilitiesHandle`).
@@ -564,7 +500,7 @@ mod tests {
             let _ = agent.kv().set(format!("{}{}/{}", consensus_ns::TRUST, "workers", voter), encoded);
         }
 
-        let suggested = agent.suggest_leader("workers", "task", std::time::Duration::from_secs(600));
+        let suggested = agent.consensus().suggest_leader("workers", "task", std::time::Duration::from_secs(600));
         assert_eq!(suggested, node_b, "B should be preferred despite higher load because it has higher trust");
     }
 
@@ -586,7 +522,7 @@ mod tests {
         let _ = agent.kv().set(format!("sys/load/{}/task", node_a), encode_load_state(&heavy));
         let _ = agent.kv().set(format!("sys/load/{}/task", node_b), encode_load_state(&light));
 
-        let suggested = agent.suggest_leader("workers", "task", std::time::Duration::from_secs(600));
+        let suggested = agent.consensus().suggest_leader("workers", "task", std::time::Duration::from_secs(600));
         assert_eq!(suggested, node_b, "suggest_leader should pick the lighter-loaded member");
     }
 }

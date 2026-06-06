@@ -1,6 +1,6 @@
 //! Actor/Event mailboxes — KV-backed durable event delivery.
 //!
-//! [`GossipAgent::deliver_event`] writes an event into the mesh at a
+//! [`ServiceHandle::deliver_event`] writes an event into the mesh at a
 //! HLC-ordered key under `mailbox/{target}/{kind}/{hlc_hex}`. Any node
 //! that knows the target's [`NodeId`] can deliver; the event propagates
 //! via the normal gossip KV path. The target's [`open_mailbox`] watcher
@@ -30,7 +30,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
-use super::{GossipAgent, TaskCtx};
+use super::TaskCtx;
 
 /// An event received from a node's mailbox.
 pub struct MeshEvent {
@@ -41,7 +41,7 @@ pub struct MeshEvent {
     pub hlc_ts:  u64,
 }
 
-/// Cancels the corresponding [`open_mailbox`](GossipAgent::open_mailbox)
+/// Cancels the corresponding [`ServiceHandle::open_mailbox`]
 /// background task on drop.
 pub struct MailboxHandle {
     pub(crate) _cancel: oneshot::Sender<()>,
@@ -148,34 +148,9 @@ async fn mailbox_task(
     }
 }
 
-impl GossipAgent {
-    /// Delivers `payload` to `target`'s mailbox under `kind`.
-    ///
-    /// Use [`ServiceHandle::deliver_event`] via [`GossipAgent::service`] instead.
-    pub fn deliver_event(
-        &self,
-        target:  &NodeId,
-        kind:    impl Into<Arc<str>>,
-        payload: impl Into<Bytes>,
-    ) -> bool {
-        self.service().deliver_event(target, kind, payload)
-    }
-
-    /// Opens a mailbox for events of `kind` addressed to this node.
-    ///
-    /// Use [`ServiceHandle::open_mailbox`] via [`GossipAgent::service`] instead.
-    pub fn open_mailbox(
-        &self,
-        kind:     impl Into<Arc<str>>,
-        capacity: usize,
-    ) -> (MailboxHandle, mpsc::Receiver<MeshEvent>) {
-        self.service().open_mailbox(kind, capacity)
-    }
-}
-
 /// Delivers an event to `target`'s mailbox on behalf of `self_node_id`.
 ///
-/// Free-function variant of [`GossipAgent::deliver_event`] for callers that
+/// Free-function variant of [`ServiceHandle::deliver_event`] for callers that
 /// hold only `Arc<TaskCtx>` (e.g. the HTTP gateway handler).
 pub(crate) fn deliver_event_ctx(
     ctx:          &Arc<TaskCtx>,
@@ -202,7 +177,7 @@ pub(crate) fn deliver_event_ctx(
 
 /// Opens a mailbox for events of `kind` addressed to `self_node_id`.
 ///
-/// Free-function variant of [`GossipAgent::open_mailbox`] for callers that
+/// Free-function variant of [`ServiceHandle::open_mailbox`] for callers that
 /// hold only `Arc<TaskCtx>`. The `shutdown_rx` must come from the owning
 /// agent's broadcast (available on `HttpCtx::shutdown_rx`).
 pub(crate) fn open_mailbox_ctx(
@@ -244,9 +219,9 @@ mod tests {
         let agent = Arc::new(GossipAgent::new(id.clone(), cfg));
         agent.start().await.unwrap();
 
-        let (handle, mut rx) = agent.open_mailbox("test", 16);
+        let (handle, mut rx) = agent.service().open_mailbox("test", 16);
 
-        let delivered = agent.deliver_event(&id, "test", Bytes::from_static(b"hello-mailbox"));
+        let delivered = agent.service().deliver_event(&id, "test", Bytes::from_static(b"hello-mailbox"));
         assert!(delivered, "deliver_event returned false");
 
         // The watcher fires immediately since we're local.
@@ -272,11 +247,11 @@ mod tests {
         let agent = Arc::new(GossipAgent::new(id.clone(), cfg));
         agent.start().await.unwrap();
 
-        let (handle, mut rx) = agent.open_mailbox("order-test", 16);
+        let (handle, mut rx) = agent.service().open_mailbox("order-test", 16);
 
         // Deliver three events in sequence — HLC guarantees key-order = causal order.
         for i in 0u8..3 {
-            agent.deliver_event(&id, "order-test", Bytes::from(vec![i]));
+            agent.service().deliver_event(&id, "order-test", Bytes::from(vec![i]));
         }
 
         let mut received = Vec::new();
@@ -303,11 +278,11 @@ mod tests {
 
         // Use a channel large enough to hold all events without back-pressure.
         let n: usize = DRAIN_CHUNK * 3;
-        let (handle, mut rx) = agent.open_mailbox("burst-test", n + 16);
+        let (handle, mut rx) = agent.service().open_mailbox("burst-test", n + 16);
 
         // Deliver n events before opening the watcher — they land in KV first.
         for i in 0..n {
-            agent.deliver_event(&id, "burst-test", Bytes::from(i.to_be_bytes().to_vec()));
+            agent.service().deliver_event(&id, "burst-test", Bytes::from(i.to_be_bytes().to_vec()));
         }
 
         let mut received: Vec<usize> = Vec::with_capacity(n);

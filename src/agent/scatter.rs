@@ -1,17 +1,15 @@
 //! Scatter-gather: fan-out RPC with configurable minimum-reply threshold.
 //!
-//! [`GossipAgent::scatter_gather`] fans out identical requests to a list of
-//! target nodes in parallel via the existing [`rpc_call`](GossipAgent::rpc_call)
+//! [`ServiceHandle::scatter_gather`] fans out identical requests to a list of
+//! target nodes in parallel via the existing [`ServiceHandle::rpc_call`]
 //! primitive, collects replies as they arrive, and returns as soon as
 //! `min_ok` successful replies have been received — aborting the remaining
 //! in-flight calls. If fewer than `min_ok` replies arrive before `timeout`,
 //! `Err(ScatterError::InsufficientReplies)` is returned.
 
-use crate::node_id::NodeId;
 use bytes::Bytes;
-use std::{sync::Arc, time::Duration};
+use crate::node_id::NodeId;
 
-use super::GossipAgent;
 
 /// A single successful reply from a scatter-gather fan-out.
 #[derive(Debug)]
@@ -20,7 +18,7 @@ pub struct ScatterResult {
     pub payload: Bytes,
 }
 
-/// Error returned by [`GossipAgent::scatter_gather`].
+/// Error returned by [`ServiceHandle::scatter_gather`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScatterError {
     /// Fewer than `min_ok` targets replied before the timeout elapsed.
@@ -37,23 +35,6 @@ impl std::fmt::Display for ScatterError {
 }
 
 impl std::error::Error for ScatterError {}
-
-impl GossipAgent {
-    /// Sends `payload` to every node in `targets` as a point-to-point RPC and
-    /// collects replies.
-    ///
-    /// Use [`ServiceHandle::scatter_gather`] via [`GossipAgent::service`] instead.
-    pub async fn scatter_gather(
-        &self,
-        targets:  Vec<NodeId>,
-        kind:     impl Into<Arc<str>>,
-        payload:  impl Into<Bytes>,
-        timeout:  Duration,
-        min_ok:   usize,
-    ) -> Result<Vec<ScatterResult>, ScatterError> {
-        self.service().scatter_gather(targets, kind, payload, timeout, min_ok).await
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -87,14 +68,14 @@ mod tests {
         // Register an "echo-scatter" responder on node-b
         let responder = Arc::clone(&agent_b);
         tokio::spawn(async move {
-            let mut rx = responder.rpc_rx("echo-scatter");
+            let mut rx = responder.service().rpc_rx("echo-scatter");
             while let Some(req) = rx.recv().await {
-                responder.rpc_respond(&req, req.payload());
+                responder.service().rpc_respond(&req, req.payload());
             }
         });
 
         let targets = vec![id_b.clone()];
-        let result = agent_a.scatter_gather(
+        let result = agent_a.service().scatter_gather(
             targets, "echo-scatter", Bytes::from_static(b"ping"),
             Duration::from_secs(2), 1,
         ).await;
@@ -120,7 +101,7 @@ mod tests {
         // Ghost targets that won't reply
         let ghost1 = NodeId::new("127.0.0.1", 19991).unwrap();
         let ghost2 = NodeId::new("127.0.0.1", 19992).unwrap();
-        let result = agent_a.scatter_gather(
+        let result = agent_a.service().scatter_gather(
             vec![ghost1, ghost2], "noop", Bytes::new(),
             Duration::from_millis(200), 1,
         ).await;

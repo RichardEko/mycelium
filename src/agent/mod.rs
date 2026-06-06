@@ -291,44 +291,28 @@ impl TaskCtx {
 /// All task-helper tasks exit automatically when [`shutdown`](Self::shutdown) is
 /// called, even if the handle is still live.
 ///
-/// ## Topical method index
+/// ## Typed sub-handles
 ///
-/// `GossipAgent` exposes a wide surface; the methods cluster as follows.
-/// Use this index to find the family of methods you want.
+/// All domain operations are accessed through typed handles returned by the
+/// six accessor methods below. Each handle is `Clone + Send + Sync` and can be
+/// stored, moved across tasks, or captured in closures.
 ///
-/// - **Lifecycle**: `new`, `with_http_routes`, `start`, `shutdown`, `shutdown_with_timeout`,
-///   `system_stats`, `peers`, `groups`, `peer_drop_counts`.
-/// - **KV (Layer I)**: `set`, `set_async`, `get`, `delete`, `delete_async`,
-///   `keys`, `scan_prefix`, `subscribe`, `subscribe_prefix`.
-/// - **Signals (Layer II) — emit/receive**: `emit`, `emit_async`, `signal_rx`,
-///   `signal_rx_with_capacity`, `signal_once`, `request`, `advertise`, `advertise_persistent`.
-/// - **RPC (Layer III)**: `rpc_call`, `rpc_respond`.
-/// - **Groups (static)**: `join_group`, `leave_group`, `group_members`,
-///   `cached_group_members`, `group_quorum`, `group_quorum_prehashed`.
-/// - **Opacity & load (Layer II)**: `manage_opacity`, `manage_opacity_gated`,
-///   `opacity`, `effective_opacity`, `is_opaque`, `is_self_opaque`,
-///   `is_node_opaque`, `peer_load`, `peer_load_rx`, `count_opaque_system`,
-///   `count_opaque_members`.
-/// - **Signal log / quorum**: `last_signal`, `last_signal_persistent`,
-///   `quorum`, `quorum_persistent`, `signal_window`, `signal_window_secs`,
-///   `suppress`, `unsuppress`, `is_suppressed`.
-/// - **Consensus (Layer III)**: `group_propose`, `system_propose`,
-///   `start_consensus_listener`, `consensus_get`, `consensus_rx`,
-///   `declare_trust`, `suggest_leader`.
-/// - **Capability / requirement** (Phase 3): `advertise_capability`, `resolve`,
-///   `watch_capabilities`, `declare_requirement`, `watch_requirement`,
-///   `suggest_leader_with_requirements`.
-/// - **Emergent groups** (Phase 3g/3h): `define_capability_group`. (The
-///   per-agent watcher task that drives membership is started automatically
-///   by `start()`.)
-/// - **Inter-group wiring** (Phase 4 + Phase 5 + Phase 6): `resolve_wiring`,
-///   `watch_wiring`, `signal_wired_via`, `resolve_with_locality`,
-///   `resolve_wiring_with_locality`, `signal_wired_via_locality`. Ranking is
-///   applied automatically when the `CapFilter` carries a `CapRanking`.
-/// - **Demand pressure** (Phase 9): `demand`, `watch_demand`.
+/// | Accessor | Handle | Domain |
+/// |---|---|---|
+/// | `agent.kv()` | [`KvHandle`] | KV store — Layer I |
+/// | `agent.mesh()` | [`MeshHandle`] | Signal mesh — Layer II |
+/// | `agent.consensus()` | [`ConsensusHandle`] | Consensus — Layer III |
+/// | `agent.service()` | [`ServiceHandle`] | RPC / bulk / scatter / mailbox / sharding |
+/// | `agent.capabilities()` | [`CapabilitiesHandle`] | Capability / requirement / wiring / demand |
+/// | `agent.schemas()` | [`SchemaHandle`] | Schema registry |
 ///
-/// Items not in this index are private implementation details (methods like
-/// `make_update`, `dispatch_update`, `spawn_task`, etc. are `pub(super)` or
+/// ## Lifecycle methods (directly on `GossipAgent`)
+///
+/// `new`, `with_http_routes`, `start`, `shutdown`, `shutdown_with_timeout`,
+/// `node_id`, `peers`, `groups`, `signal_window`, `system_stats`, `is_ready`,
+/// `peer_drop_counts`, `agent_state_machine`.
+///
+/// Items not in this index are private implementation details (`pub(super)` or
 /// `pub(crate)` only).
 pub struct GossipAgent {
     pub(super) node_id: NodeId,
@@ -629,7 +613,7 @@ impl GossipAgent {
         kv_set(&self.task_ctx, Arc::from(kv_key.as_str()), bytes::Bytes::from(bytes));
 
         // 2. Advertise capability — presence heartbeat, evaporates when node dies.
-        let cap_handle = self.advertise_capability(
+        let cap_handle = self.capabilities().advertise_capability(
             Capability::new(ns, name),
             Duration::from_secs(30),
         );
@@ -672,7 +656,7 @@ impl GossipAgent {
         use crate::capability::CapFilter;
         use crate::signal::signal_kind;
 
-        let providers = self.resolve(&CapFilter::new(ns, name));
+        let providers = self.capabilities().resolve(&CapFilter::new(ns, name));
         let (target, _) = providers.into_iter().next()
             .ok_or_else(|| prompt::PromptSkillError::NoProvider {
                 ns: ns.into(), name: name.into(),

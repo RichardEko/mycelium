@@ -63,9 +63,9 @@ async fn main() {
         .with("vram_gb", CapValue::Integer(8));
     // ^ no schema_id — old provider predating versioning
 
-    let _h_ml     = agent_a.advertise_capability(ml_cap.clone(),     Duration::from_secs(60));
-    let _h_render = agent_b.advertise_capability(render_cap.clone(), Duration::from_secs(60));
-    let _h_legacy = agent_c.advertise_capability(legacy_cap.clone(), Duration::from_secs(60));
+    let _h_ml     = agent_a.capabilities().advertise_capability(ml_cap.clone(),     Duration::from_secs(60));
+    let _h_render = agent_b.capabilities().advertise_capability(render_cap.clone(), Duration::from_secs(60));
+    let _h_legacy = agent_c.capabilities().advertise_capability(legacy_cap.clone(), Duration::from_secs(60));
 
     // Yield so the spawned KV-write tasks run before we resolve.
     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -105,7 +105,7 @@ async fn main() {
         filter_render.matches(&legacy_cap));
 
     // resolve() on the local agent returns only the provider it hosts.
-    let resolved_ml = agent_a.resolve(&filter_ml);
+    let resolved_ml = agent_a.capabilities().resolve(&filter_ml);
     println!("  agent_a resolve(filter_ml) → {} result(s)", resolved_ml.len());
     assert_eq!(resolved_ml.len(), 1);
     assert_eq!(resolved_ml[0].1.schema_id.as_deref(), Some("acme-ml/v2"));
@@ -133,11 +133,11 @@ async fn main() {
         .with_input_schema(input_schema)
         .with_output_schema(output_schema);
 
-    let _h_chat = agent_a.advertise_capability(chat_skill, Duration::from_secs(60));
+    let _h_chat = agent_a.capabilities().advertise_capability(chat_skill, Duration::from_secs(60));
     tokio::time::sleep(Duration::from_millis(10)).await;
 
     // A caller resolves and inspects the contract before making an rpc_call.
-    let results = agent_a.resolve(&CapFilter::new("llm", "chat"));
+    let results = agent_a.capabilities().resolve(&CapFilter::new("llm", "chat"));
     let (provider_node, provider_cap) = results.first().expect("chat skill should resolve");
 
     println!("  provider: {provider_node}");

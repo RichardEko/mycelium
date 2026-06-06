@@ -199,7 +199,7 @@ impl MeshManifest {
     pub fn check_status(&self, agent: &GossipAgent) -> MeshStatus {
         let groups = self.groups.iter().map(|g| {
             let actual = g.capabilities.first().map_or(0, |cap| {
-                agent.resolve(&CapFilter::new(cap.ns.as_str(), cap.name.as_str())).len()
+                agent.capabilities().resolve(&CapFilter::new(cap.ns.as_str(), cap.name.as_str())).len()
             });
             let satisfied = actual >= g.min_agents;
             let deficit   = g.min_agents.saturating_sub(actual);

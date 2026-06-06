@@ -1446,17 +1446,17 @@ async fn test_competitive_response_group_scope() {
 #[tokio::test]
 async fn test_group_propose_single_voter() {
     let agent = make_agent();
-    let _listener = agent.start_consensus_listener(ConsensusConfig::default());
+    let _listener = agent.consensus().start_consensus_listener(ConsensusConfig::default());
     agent.mesh().join_group("cg1");
 
     let config = ConsensusConfig { quorum_size: 1, ..ConsensusConfig::default() };
-    let result = agent.group_propose("cg1", "sl1", Bytes::from_static(b"val1"), config).await;
+    let result = agent.consensus().group_propose("cg1", "sl1", Bytes::from_static(b"val1"), config).await;
 
     assert!(
         matches!(result, ConsensusResult::Committed { .. }),
         "single-voter quorum should commit immediately; got {:?}", result
     );
-    assert_eq!(agent.consensus_get("sl1"), Some(Bytes::from_static(b"val1")));
+    assert_eq!(agent.consensus().consensus_get("sl1"), Some(Bytes::from_static(b"val1")));
 }
 
 #[tokio::test]
@@ -1469,7 +1469,7 @@ async fn test_group_propose_timeout() {
         max_ballots:    1,
         ..ConsensusConfig::default()
     };
-    let result = agent.group_propose("cg2", "sl2", Bytes::from_static(b"v2"), config).await;
+    let result = agent.consensus().group_propose("cg2", "sl2", Bytes::from_static(b"v2"), config).await;
     assert!(
         matches!(result, ConsensusResult::Timeout { ballots_tried: 1, .. }),
         "unreachable quorum must return Timeout; got {:?}", result
@@ -1497,8 +1497,8 @@ async fn test_group_propose_two_node_quorum() {
 
     agent_a.mesh().join_group("cgrp");
     agent_b.mesh().join_group("cgrp");
-    let _la = agent_a.start_consensus_listener(ConsensusConfig::default());
-    let _lb = agent_b.start_consensus_listener(ConsensusConfig::default());
+    let _la = agent_a.consensus().start_consensus_listener(ConsensusConfig::default());
+    let _lb = agent_b.consensus().start_consensus_listener(ConsensusConfig::default());
 
     let config = ConsensusConfig {
         quorum_size:    2,
@@ -1506,7 +1506,7 @@ async fn test_group_propose_two_node_quorum() {
         max_ballots:    3,
         ..ConsensusConfig::default()
     };
-    let result = agent_a.group_propose("cgrp", "slA", Bytes::from_static(b"agreed"), config).await;
+    let result = agent_a.consensus().group_propose("cgrp", "slA", Bytes::from_static(b"agreed"), config).await;
     assert!(
         matches!(result, ConsensusResult::Committed { .. }),
         "two-node quorum should commit; got {:?}", result
@@ -1538,8 +1538,8 @@ async fn test_consensus_simultaneous_proposers_resolve() {
     agent_b.start().await.unwrap();
     time::sleep(Duration::from_millis(150)).await;
 
-    let _la = agent_a.start_consensus_listener(ConsensusConfig::default());
-    let _lb = agent_b.start_consensus_listener(ConsensusConfig::default());
+    let _la = agent_a.consensus().start_consensus_listener(ConsensusConfig::default());
+    let _lb = agent_b.consensus().start_consensus_listener(ConsensusConfig::default());
 
     // quorum_size=1 so each agent self-commits; the second proposer will find the
     // commit_key written by the first and return Superseded on the next ballot check.
@@ -1555,14 +1555,14 @@ async fn test_consensus_simultaneous_proposers_resolve() {
     let aa = agent_a.clone();
     let cfg_a2 = config.clone();
     let task_a = tokio::spawn(async move {
-        aa.system_propose("sim_sl", Bytes::from_static(b"val_a"), cfg_a2).await
+        aa.consensus().system_propose("sim_sl", Bytes::from_static(b"val_a"), cfg_a2).await
     });
     // Small stagger gives A time to commit and gossip the commit_key to B.
     time::sleep(Duration::from_millis(50)).await;
     let bb = agent_b.clone();
     let cfg_b2 = config.clone();
     let task_b = tokio::spawn(async move {
-        bb.system_propose("sim_sl", Bytes::from_static(b"val_b"), cfg_b2).await
+        bb.consensus().system_propose("sim_sl", Bytes::from_static(b"val_b"), cfg_b2).await
     });
 
     let (res_a, res_b) = tokio::join!(task_a, task_b);
@@ -1587,26 +1587,26 @@ async fn test_consensus_simultaneous_proposers_resolve() {
 #[tokio::test]
 async fn test_system_propose_commits() {
     let agent = make_agent();
-    let _listener = agent.start_consensus_listener(ConsensusConfig::default());
+    let _listener = agent.consensus().start_consensus_listener(ConsensusConfig::default());
 
     let config = ConsensusConfig { quorum_size: 1, ..ConsensusConfig::default() };
-    let result = agent.system_propose("sys_sl", Bytes::from_static(b"sys_v"), config).await;
+    let result = agent.consensus().system_propose("sys_sl", Bytes::from_static(b"sys_v"), config).await;
 
     assert!(
         matches!(result, ConsensusResult::Committed { .. }),
         "single-node system propose must commit; got {:?}", result
     );
-    assert_eq!(agent.consensus_get("sys_sl"), Some(Bytes::from_static(b"sys_v")));
+    assert_eq!(agent.consensus().consensus_get("sys_sl"), Some(Bytes::from_static(b"sys_v")));
 }
 
 #[tokio::test]
 async fn test_consensus_rx_fires_on_commit() {
     let agent = make_agent();
-    let _listener = agent.start_consensus_listener(ConsensusConfig::default());
-    let mut rx = agent.consensus_rx("slRx");
+    let _listener = agent.consensus().start_consensus_listener(ConsensusConfig::default());
+    let mut rx = agent.consensus().consensus_rx("slRx");
 
     let config = ConsensusConfig { quorum_size: 1, ..ConsensusConfig::default() };
-    let _ = agent.group_propose("rxg", "slRx", Bytes::from_static(b"fired"), config).await;
+    let _ = agent.consensus().group_propose("rxg", "slRx", Bytes::from_static(b"fired"), config).await;
 
     let val = tokio::time::timeout(Duration::from_millis(500), async {
         loop {
@@ -1620,13 +1620,13 @@ async fn test_consensus_rx_fires_on_commit() {
 #[tokio::test]
 async fn test_consensus_get_returns_committed() {
     let agent = make_agent();
-    let _listener = agent.start_consensus_listener(ConsensusConfig::default());
+    let _listener = agent.consensus().start_consensus_listener(ConsensusConfig::default());
 
     let config = ConsensusConfig { quorum_size: 1, ..ConsensusConfig::default() };
-    let _ = agent.group_propose("cgg", "slGet", Bytes::from_static(b"gotten"), config).await;
+    let _ = agent.consensus().group_propose("cgg", "slGet", Bytes::from_static(b"gotten"), config).await;
 
     assert_eq!(
-        agent.consensus_get("slGet"),
+        agent.consensus().consensus_get("slGet"),
         Some(Bytes::from_static(b"gotten")),
     );
 }
@@ -1637,8 +1637,8 @@ async fn test_declare_and_read_trust() {
     let peer_a = NodeId::new("127.0.0.1", 9001).unwrap();
     let peer_b = NodeId::new("127.0.0.1", 9002).unwrap();
 
-    agent.declare_trust("trustgrp", &[peer_a.clone(), peer_b.clone()]);
-    let slices = agent.group_trust("trustgrp");
+    agent.consensus().declare_trust("trustgrp", &[peer_a.clone(), peer_b.clone()]);
+    let slices = agent.consensus().group_trust("trustgrp");
 
     assert_eq!(slices.len(), 1, "one trust slice declared");
     let (declaring_node, peers) = &slices[0];
@@ -1661,9 +1661,9 @@ async fn test_consensus_late_joiner_sync() {
     let agent_a = GossipAgent::new(NodeId::new("127.0.0.1", port_a).unwrap(), cfg_a);
     agent_a.start().await.unwrap();
 
-    let _listener_a = agent_a.start_consensus_listener(ConsensusConfig::default());
+    let _listener_a = agent_a.consensus().start_consensus_listener(ConsensusConfig::default());
     let config = ConsensusConfig { quorum_size: 1, ..ConsensusConfig::default() };
-    let result = agent_a.system_propose("late_sl", Bytes::from_static(b"late_v"), config).await;
+    let result = agent_a.consensus().system_propose("late_sl", Bytes::from_static(b"late_v"), config).await;
     assert!(matches!(result, ConsensusResult::Committed { .. }));
 
     // B starts after A has already committed — anti-entropy must deliver the value.
@@ -1679,9 +1679,9 @@ async fn test_consensus_late_joiner_sync() {
     // Give B's health monitor time to pass its jitter (0–50 ms) and send
     // the initial StateRequest to A before we start polling.
     time::sleep(Duration::from_millis(100)).await;
-    poll_until(|| agent_b.consensus_get("late_sl").is_some(), 5_000).await;
+    poll_until(|| agent_b.consensus().consensus_get("late_sl").is_some(), 5_000).await;
     assert_eq!(
-        agent_b.consensus_get("late_sl"),
+        agent_b.consensus().consensus_get("late_sl"),
         Some(Bytes::from_static(b"late_v")),
     );
 
@@ -1715,9 +1715,9 @@ async fn test_trust_slice_filters_votes() {
     agent_b.mesh().join_group("tg");
 
     // A declares an empty trust slice — trusts nobody remotely.
-    agent_a.declare_trust("tg", &[]);
-    let _la = agent_a.start_consensus_listener(ConsensusConfig::default());
-    let _lb = agent_b.start_consensus_listener(ConsensusConfig::default());
+    agent_a.consensus().declare_trust("tg", &[]);
+    let _la = agent_a.consensus().start_consensus_listener(ConsensusConfig::default());
+    let _lb = agent_b.consensus().start_consensus_listener(ConsensusConfig::default());
 
     let config = ConsensusConfig {
         quorum_size:      2,
@@ -1727,7 +1727,7 @@ async fn test_trust_slice_filters_votes() {
         ..ConsensusConfig::default()
     };
     let result = agent_a
-        .group_propose("tg", "ts1", Bytes::from_static(b"x"), config)
+        .consensus().group_propose("tg", "ts1", Bytes::from_static(b"x"), config)
         .await;
     assert!(
         matches!(result, ConsensusResult::Timeout { .. }),
@@ -1765,9 +1765,9 @@ async fn test_trust_slice_admits_trusted_vote() {
     agent_b.mesh().join_group("tg2");
 
     // A explicitly trusts B.
-    agent_a.declare_trust("tg2", &[node_b]);
-    let _la = agent_a.start_consensus_listener(ConsensusConfig::default());
-    let _lb = agent_b.start_consensus_listener(ConsensusConfig::default());
+    agent_a.consensus().declare_trust("tg2", &[node_b]);
+    let _la = agent_a.consensus().start_consensus_listener(ConsensusConfig::default());
+    let _lb = agent_b.consensus().start_consensus_listener(ConsensusConfig::default());
 
     let config = ConsensusConfig {
         quorum_size:      2,
@@ -1777,7 +1777,7 @@ async fn test_trust_slice_admits_trusted_vote() {
         ..ConsensusConfig::default()
     };
     let result = agent_a
-        .group_propose("tg2", "ts2", Bytes::from_static(b"y"), config)
+        .consensus().group_propose("tg2", "ts2", Bytes::from_static(b"y"), config)
         .await;
     assert!(
         matches!(result, ConsensusResult::Committed { .. }),
@@ -2018,8 +2018,8 @@ async fn test_ballot_reacts_to_opacity_change() {
     // Both start as consensus listeners; B will not actually vote because it
     // goes opaque before A's PROPOSE is forwarded to it — this is fine, the
     // test verifies A's reactive quorum reduction, not B's vote delivery.
-    let _la = agent_a.start_consensus_listener(ConsensusConfig::default());
-    let _lb = agent_b.start_consensus_listener(ConsensusConfig::default());
+    let _la = agent_a.consensus().start_consensus_listener(ConsensusConfig::default());
+    let _lb = agent_b.consensus().start_consensus_listener(ConsensusConfig::default());
 
     // Background task: after a short pause (to let the 'collect loop start),
     // write B's opaque pheromone to A's store and emit BOUNDARY_OPAQUE on A.
@@ -2052,7 +2052,7 @@ async fn test_ballot_reacts_to_opacity_change() {
     };
 
     let start = tokio::time::Instant::now();
-    let result = agent_a.group_propose("ogrp", "opq_sl", Bytes::from_static(b"v"), config).await;
+    let result = agent_a.consensus().group_propose("ogrp", "opq_sl", Bytes::from_static(b"v"), config).await;
     let elapsed = start.elapsed();
 
     assert!(

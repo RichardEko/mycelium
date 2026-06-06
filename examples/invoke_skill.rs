@@ -33,7 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let skill_id = tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let filter = CapFilter::new("llm", "hello");
-            if let Some((id, _)) = agent.resolve(&filter).into_iter().next() {
+            if let Some((id, _)) = agent.capabilities().resolve(&filter).into_iter().next() {
                 return id;
             }
             tokio::time::sleep(Duration::from_millis(300)).await;
@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "message": "Hello from Mycelium! What is a gossip protocol in one sentence?"
     }))?;
 
-    let result = agent.rpc_call(
+    let result = agent.service().rpc_call(
         skill_id,
         "skill.invoke",
         Bytes::from(payload),

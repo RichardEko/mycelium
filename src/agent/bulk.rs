@@ -1,6 +1,6 @@
 //! invoke.bulk — point-to-point RPC for large payloads.
 //!
-//! Regular [`rpc_call`](super::GossipAgent::rpc_call) encodes the entire
+//! Regular [`ServiceHandle::rpc_call`] encodes the entire
 //! payload inside the gossip signal, which floods every intermediate node.
 //! `bulk_call` stages the payload in a node-local HTTP endpoint and sends
 //! only a lightweight ticket (nonce + kind) over the signal mesh;
@@ -28,7 +28,7 @@
 //!
 //! The embedded HTTP gateway (`src/agent/http.rs`) exposes `GET /bulk/{id}`.
 //! Applications that run their own HTTP server must add an equivalent route
-//! using [`GossipAgent::bulk_staging_get`].
+//! using [`ServiceHandle::bulk_staging_get`].
 //!
 //! ## Transport configuration
 //!
@@ -45,7 +45,7 @@ use std::{sync::{Arc, atomic::{AtomicU16, Ordering}}, time::Duration};
 use tokio::sync::oneshot;
 use tracing::warn;
 
-use super::{GossipAgent, TaskCtx};
+use super::TaskCtx;
 use super::emit_signal;
 use super::rpc::await_nonce_reply;
 
@@ -119,7 +119,7 @@ impl Drop for StagedGuard<'_> {
 
 // ── Error type ────────────────────────────────────────────────────────────────
 
-/// Error returned by [`GossipAgent::bulk_call`].
+/// Error returned by [`ServiceHandle::bulk_call`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BulkError {
     /// No reply arrived before the timeout elapsed.
@@ -263,52 +263,6 @@ where
     });
 }
 
-// ── GossipAgent API ───────────────────────────────────────────────────────────
-
-impl GossipAgent {
-    /// Sends a large `payload` to `target` via the bulk-call protocol.
-    ///
-    /// Use [`ServiceHandle::bulk_call`] via [`GossipAgent::service`] instead.
-    pub async fn bulk_call(
-        &self,
-        target:  NodeId,
-        kind:    impl Into<Arc<str>>,
-        payload: impl Into<Bytes>,
-        timeout: Duration,
-    ) -> Result<Bytes, BulkError> {
-        self.service().bulk_call(target, kind, payload, timeout).await
-    }
-
-    /// Reads a staged bulk payload by nonce, without removing it.
-    ///
-    /// Use [`ServiceHandle::bulk_staging_get`] via [`GossipAgent::service`] instead.
-    pub fn bulk_staging_get(&self, nonce: u64) -> Option<Bytes> {
-        self.service().bulk_staging_get(nonce)
-    }
-
-    /// Overrides the HTTP port used when advertising staged bulk payloads.
-    ///
-    /// Use [`ServiceHandle::set_bulk_serving_port`] via [`GossipAgent::service`] instead.
-    pub fn set_bulk_serving_port(&self, port: u16) {
-        self.service().set_bulk_serving_port(port);
-    }
-
-    /// Registers a handler for incoming bulk calls of a given `kind`.
-    ///
-    /// Use [`ServiceHandle::bulk_serve`] via [`GossipAgent::service`] instead.
-    pub fn bulk_serve<F, Fut>(
-        &self,
-        kind:    impl Into<Arc<str>>,
-        handler: F,
-    ) -> BulkServeHandle
-    where
-        F: Fn(NodeId, Bytes) -> Fut + Send + Sync + 'static,
-        Fut: std::future::Future<Output = Bytes> + Send + 'static,
-    {
-        self.service().bulk_serve(kind, handler)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,12 +287,12 @@ mod tests {
         // Manually stage and retrieve a payload.
         let nonce: u64 = 42;
         agent.task_ctx.bulk_transport.staging.pin().insert(nonce, Bytes::from_static(b"test-payload"));
-        let got = agent.bulk_staging_get(nonce);
+        let got = agent.service().bulk_staging_get(nonce);
         assert_eq!(got, Some(Bytes::from_static(b"test-payload")));
 
         // Simulate cleanup.
         agent.task_ctx.bulk_transport.staging.pin().remove(&nonce);
-        assert!(agent.bulk_staging_get(nonce).is_none());
+        assert!(agent.service().bulk_staging_get(nonce).is_none());
 
         agent.shutdown().await;
     }
@@ -352,7 +306,7 @@ mod tests {
         agent.start().await.unwrap();
 
         let ghost = NodeId::new("127.0.0.1", 19993).unwrap();
-        let err = agent.bulk_call(ghost, "noop", Bytes::new(), Duration::from_millis(100)).await;
+        let err = agent.service().bulk_call(ghost, "noop", Bytes::new(), Duration::from_millis(100)).await;
         assert_eq!(err, Err(BulkError::NoHttpPort));
         agent.shutdown().await;
     }

@@ -464,7 +464,7 @@ mod tests {
         });
 
         let reply = agent_a
-            .rpc_call(
+            .service().rpc_call(
                 node_b,
                 signal_kind::MCP_INVOKE,
                 Bytes::from(rpc_req.to_string().into_bytes()),
@@ -554,7 +554,7 @@ mod tests {
             "params": {"name": "double", "arguments": {"n": 5.0}},
         });
         let reply_double = agent_a
-            .rpc_call(node_b.clone(), signal_kind::MCP_INVOKE,
+            .service().rpc_call(node_b.clone(), signal_kind::MCP_INVOKE,
                       Bytes::from(req_double.to_string().into_bytes()), Duration::from_secs(2))
             .await
             .expect("double call failed");
@@ -568,7 +568,7 @@ mod tests {
             "params": {"name": "negate", "arguments": {"n": 3.0}},
         });
         let reply_negate = agent_a
-            .rpc_call(node_b, signal_kind::MCP_INVOKE,
+            .service().rpc_call(node_b, signal_kind::MCP_INVOKE,
                       Bytes::from(req_negate.to_string().into_bytes()), Duration::from_secs(2))
             .await
             .expect("negate call failed");

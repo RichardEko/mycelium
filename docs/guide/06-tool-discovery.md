@@ -101,7 +101,7 @@ fn register(
     desc:     &str,
     schema:   Value,          // JSON Schema for parameters
     handler:  Arc<dyn Fn(Value) -> BoxFuture<'static, Result<Value, String>> + Send + Sync>,
-) -> CapabilityHandle {
+) -> CapabilityReg {
     // writes tools/{name}/{node_id} → schema bytes
     // returns handle — drop to deregister
 }

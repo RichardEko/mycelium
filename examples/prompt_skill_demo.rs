@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Poll until the capability gossips from A to B (typically < 1 s).
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            if !agent_b.resolve(&CapFilter::new("demo", "echo")).is_empty() {
+            if !agent_b.capabilities().resolve(&CapFilter::new("demo", "echo")).is_empty() {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(200)).await;

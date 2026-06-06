@@ -84,7 +84,7 @@ cargo run --example llm_agent
 
 ## How It Works
 
-Advertising a capability returns a `CapabilityHandle`. Dropping the handle
+Advertising a capability returns a `CapabilityReg`. Dropping the handle
 stops the refresh loop and the advertisement ages out:
 
 ```rust

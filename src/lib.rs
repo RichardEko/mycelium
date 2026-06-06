@@ -171,7 +171,7 @@ pub use agent::{
 pub use agent::{PromptTemplate, PromptSkillError, PromptSkillHandle, LlmBackend, LlmResult, LlmError, OpenAiBackend, EchoBackend};
 pub use capability::{
     CallerContext, CapConstraint, CapFilter, CapRanking, CapValue, Capability, CapabilityEvent,
-    CapabilityGroupDef, CapabilityGroupHandle, CapabilityHandle,
+    CapabilityGroupDef, CapabilityGroupHandle, CapabilityReg,
     DemandStatus, RankingOrder, RequirementHandle, RequirementStatus,
     WiredEmitOutcome, WiringProvider, WiringStatus,
 };

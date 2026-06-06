@@ -90,7 +90,7 @@ async fn run(sf: Arc<SkillFile>) -> Result<(), Box<dyn std::error::Error>> {
     // Advertise capability on the mesh
     let cap = build_capability(&sf);
     let refresh = Duration::from_secs(sf.capability.ttl_secs);
-    let _cap_handle = agent.advertise_capability(cap, refresh);
+    let _cap_handle = agent.capabilities().advertise_capability(cap, refresh);
 
     tracing::info!(
         "skillrunner: advertising {ns}/{name} (refresh {}s, max_concurrent {:?})",

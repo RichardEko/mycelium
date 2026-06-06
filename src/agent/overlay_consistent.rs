@@ -1,11 +1,8 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use bytes::Bytes;
 
-use crate::node_id::NodeId;
-
-use super::{GossipAgent, helpers::make_gossip_update, TaskCtx};
+use super::{helpers::make_gossip_update, TaskCtx};
 use crate::store::apply_and_notify;
 
 // ── Public types ─────────────────────────────────────────────────────────────
@@ -36,7 +33,7 @@ impl std::fmt::Display for ConsistencyError {
 
 impl std::error::Error for ConsistencyError {}
 
-/// RAII guard for a distributed lock acquired via [`GossipAgent::distributed_lock`].
+/// RAII guard for a distributed lock acquired via [`ConsensusHandle::distributed_lock`].
 ///
 /// Tombstones `lock/{name}` in the gossip KV when dropped.
 /// `token` is the consensus ballot number — a monotonically increasing fencing
@@ -79,46 +76,6 @@ impl LockGuard {
 
 impl Drop for LockGuard { fn drop(&mut self) { self.do_release(); } }
 
-// ── GossipAgent methods ───────────────────────────────────────────────────────
-
-impl GossipAgent {
-    /// Consensus-durable write (ballot-serialized). See [`ConsensusHandle::consistent_set`].
-    ///
-    /// Use [`ConsensusHandle::consistent_set`] via [`GossipAgent::consensus`] instead.
-    pub async fn consistent_set(
-        &self,
-        key:   impl Into<Arc<str>>,
-        value: impl Into<Bytes>,
-    ) -> Result<(), ConsistencyError> {
-        self.consensus().consistent_set(key, value).await
-    }
-
-    /// Read the latest ballot-committed value for `key` (local, eventually consistent).
-    ///
-    /// Use [`ConsensusHandle::consistent_get`] via [`GossipAgent::consensus`] instead.
-    pub fn consistent_get(&self, key: &str) -> Option<Bytes> {
-        self.consensus().consistent_get(key)
-    }
-
-    /// Acquire a named distributed lock via cluster consensus.
-    ///
-    /// Use [`ConsensusHandle::distributed_lock`] via [`GossipAgent::consensus`] instead.
-    pub async fn distributed_lock(
-        &self,
-        name: &str,
-        ttl:  Duration,
-    ) -> Result<LockGuard, ConsistencyError> {
-        self.consensus().distributed_lock(name, ttl).await
-    }
-
-    /// Elect a leader for `group` via consensus.
-    ///
-    /// Use [`ConsensusHandle::elect_leader`] via [`GossipAgent::consensus`] instead.
-    pub async fn elect_leader(&self, group: &str) -> Result<NodeId, ConsistencyError> {
-        self.consensus().elect_leader(group).await
-    }
-}
-
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -153,9 +110,9 @@ mod tests {
         let a2 = make_agent(p2, &[p1]).await;
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
-        a1.consistent_set("cfg/x", Bytes::from_static(b"hello")).await.unwrap();
+        a1.consensus().consistent_set("cfg/x", Bytes::from_static(b"hello")).await.unwrap();
 
-        assert_eq!(a1.consistent_get("cfg/x").as_deref(), Some(b"hello".as_slice()));
+        assert_eq!(a1.consensus().consistent_get("cfg/x").as_deref(), Some(b"hello".as_slice()));
 
         a1.shutdown().await;
         a2.shutdown().await;
@@ -165,9 +122,9 @@ mod tests {
     async fn test_consistent_set_single_node_succeeds() {
         // Single node: quorum auto-computes to 1 (majority of 1), so it commits.
         let a = make_agent(alloc_port(), &[]).await;
-        let r = a.consistent_set("cfg/solo", Bytes::from_static(b"ok")).await;
+        let r = a.consensus().consistent_set("cfg/solo", Bytes::from_static(b"ok")).await;
         assert!(r.is_ok(), "single-node consistent_set should succeed: {r:?}");
-        assert_eq!(a.consistent_get("cfg/solo").as_deref(), Some(b"ok".as_slice()));
+        assert_eq!(a.consensus().consistent_get("cfg/solo").as_deref(), Some(b"ok".as_slice()));
         a.shutdown().await;
     }
 
@@ -187,7 +144,7 @@ mod tests {
         a.start().await.unwrap();
 
         let custom = ConsensusConfig { quorum_size: 2, max_ballots: 1, ..ConsensusConfig::default() };
-        match a.system_propose("test/slot", Bytes::from_static(b"x"), custom).await {
+        match a.consensus().system_propose("test/slot", Bytes::from_static(b"x"), custom).await {
             crate::consensus::ConsensusResult::Timeout { .. } => {}
             other => panic!("expected Timeout, got {other:?}"),
         }

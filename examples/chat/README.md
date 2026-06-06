@@ -114,7 +114,7 @@ add a new role branch in `main()`. Start the node; the LLM discovers it on the
 next planning cycle.
 
 The `register()` helper writes `tools/{name}/{node_id}` to the KV store and
-returns a `CapabilityHandle`. Dropping the handle deregisters the tool:
+returns a `CapabilityReg`. Dropping the handle deregisters the tool:
 
 ```rust
 let _handle = register(
