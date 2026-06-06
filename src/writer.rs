@@ -319,7 +319,7 @@ async fn tls_connect(
     tls: &Option<Arc<NodeTls>>,
 ) -> Result<GossipStream, std::io::Error> {
     #[cfg(feature = "tls")]
-    if let Some(ref node_tls) = tls {
+    if let Some(node_tls) = tls {
         use rustls::pki_types::ServerName;
         let ip = peer.to_socket_addr().ip();
         let server_name = ServerName::try_from(ip.to_string().as_str())

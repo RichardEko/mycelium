@@ -108,7 +108,13 @@ mod tests {
         let p2 = alloc_port();
         let a1 = make_agent(p1, &[p2]).await;
         let a2 = make_agent(p2, &[p1]).await;
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        // Poll until each node sees the other as a peer (up to 2 s) before
+        // attempting consensus — avoids the 300 ms fixed sleep being too tight
+        // under CI load.
+        for _ in 0..40 {
+            if !a1.peers().is_empty() && !a2.peers().is_empty() { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
 
         a1.consensus().consistent_set("cfg/x", Bytes::from_static(b"hello")).await.unwrap();
 

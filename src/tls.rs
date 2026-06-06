@@ -261,7 +261,6 @@ mod imp {
     }
 
     pub(crate) fn verify_bytes(pub_key_bytes: &[u8; 32], msg: &[u8], sig: &[u8]) -> bool {
-        use ed25519_dalek::Verifier;
         let Ok(vk) = VerifyingKey::from_bytes(pub_key_bytes) else { return false };
         let Ok(arr): Result<[u8; 64], _> = sig.try_into() else { return false };
         let sig = ed25519_dalek::Signature::from_bytes(&arr);

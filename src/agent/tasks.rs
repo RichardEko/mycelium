@@ -775,7 +775,7 @@ async fn tls_accept(
     tls: &Option<Arc<NodeTls>>,
 ) -> Result<GossipStream, std::io::Error> {
     #[cfg(feature = "tls")]
-    if let Some(ref node_tls) = tls {
+    if let Some(node_tls) = tls {
         let acceptor = tokio_rustls::TlsAcceptor::from(Arc::clone(&node_tls.server_config));
         let tls_stream = acceptor.accept(stream).await?;
         return Ok(GossipStream::TlsServer(tls_stream));
