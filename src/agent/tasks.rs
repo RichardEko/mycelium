@@ -90,7 +90,7 @@ pub(super) async fn run_listener_task(mut listener: TcpListener, lctx: ListenerC
     let mut retry_delay = false;
     let mut need_restart = false;
     listener_alive.fetch_add(1, Ordering::Relaxed);
-    let _guard = ListenerGuard { count: listener_alive.clone(), shutdown_tx: conn.shutdown.clone() };
+    let _guard = ListenerGuard { count: Arc::clone(&listener_alive), shutdown_tx: Arc::clone(&conn.shutdown) };
     let mut restart_backoff = Duration::from_millis(100);
 
     loop {
@@ -131,7 +131,7 @@ pub(super) async fn run_listener_task(mut listener: TcpListener, lctx: ListenerC
                         if let Err(e) = socket.set_nodelay(true) {
                             warn!("set_nodelay failed for {}: {}", peer_addr, e);
                         }
-                        match conn_sem.clone().try_acquire_owned() {
+                        match Arc::clone(&conn_sem).try_acquire_owned() {
                             Ok(permit) => {
                                 let ctx = conn.clone();
                                 let tls = tls.clone();
@@ -198,7 +198,7 @@ pub(super) async fn run_gossip_shard(
     tls:                    Option<Arc<NodeTls>>,
 ) {
     alive.store(true, Ordering::Relaxed);
-    let _alive_guard = AliveGuard(alive.clone());
+    let _alive_guard = AliveGuard(Arc::clone(&alive));
     let mut shutdown_rx = shutdown_tx.subscribe();
     let mut cached_peer_list: Arc<[NodeId]> = peer_list_rx.borrow().clone();
     let mut targets: AHashSet<NodeId> = AHashSet::new();
@@ -292,9 +292,9 @@ pub(super) async fn run_gossip_shard(
                             // from being used immediately after a membership change.
                             let current_gen = grp_generation.load(Ordering::Acquire);
                             let members: &AHashSet<NodeId> = {
-                                let entry = group_member_cache.entry(name.clone());
-                                let (gen, set) = entry.or_insert((u64::MAX, AHashSet::new()));
-                                if *gen != current_gen {
+                                let entry = group_member_cache.entry(Arc::clone(name));
+                                let (roster_gen, set) = entry.or_insert((u64::MAX, AHashSet::new()));
+                                if *roster_gen != current_gen {
                                     let prefix = crate::signal::grp_prefix(name);
                                     let idx_guard = prefix_index.pin();
                                     *set = idx_guard.get("grp")
@@ -307,7 +307,7 @@ pub(super) async fn run_gossip_shard(
                                                 .collect()
                                         })
                                         .unwrap_or_default();
-                                    *gen = current_gen;
+                                    *roster_gen = current_gen;
                                 }
                                 set
                             };
@@ -382,7 +382,7 @@ pub(super) async fn run_health_monitor(
     let bootstrap_set: AHashSet<NodeId> = bootstrap_peers.iter().cloned().collect();
     let mut shutdown_rx = shutdown_tx.subscribe();
     health_monitor_alive.store(true, Ordering::Relaxed);
-    let _alive_guard = AliveGuard(health_monitor_alive.clone());
+    let _alive_guard = AliveGuard(Arc::clone(&health_monitor_alive));
 
     let max_jitter = if health_check_max_jitter > 0 { health_check_max_jitter } else { interval_secs * 500 };
     let jitter_ms = fastrand::u64(0..max_jitter.max(1));
@@ -598,7 +598,7 @@ pub(super) async fn run_gc_task(
     let store         = &kv_state.store;
     let subscriptions = &kv_state.subscriptions;
     gc_alive.store(true, Ordering::Relaxed);
-    let _alive_guard = AliveGuard(gc_alive.clone());
+    let _alive_guard = AliveGuard(Arc::clone(&gc_alive));
     let mut shutdown_rx = shutdown_tx.subscribe();
     let initial = store.pin().iter().filter(|(_, v)| v.data.is_some()).count();
     live_entries.store(initial, Ordering::Relaxed);
@@ -630,7 +630,7 @@ pub(super) async fn run_gc_task(
                             if v.data.is_some() { live += 1; }
                             v.data.is_none() && v.timestamp < tombstone_cutoff
                         })
-                        .map(|(k, _)| k.clone())
+                        .map(|(k, _)| Arc::clone(k))
                         .collect();
                     for key in &stale_keys { guard.remove(key); }
                 }
@@ -665,10 +665,10 @@ pub(super) async fn run_gc_task(
                     let sub_guard = subscriptions.pin();
                     let stale: Vec<Arc<str>> = sub_guard
                         .iter()
-                        .filter_map(|(k, tx)| if tx.is_closed() { Some(k.clone()) } else { None })
+                        .filter_map(|(k, tx)| if tx.is_closed() { Some(Arc::clone(k)) } else { None })
                         .collect();
                     for key in &stale {
-                        sub_guard.compute(key.clone(), |existing| match existing {
+                        sub_guard.compute(Arc::clone(key), |existing| match existing {
                             Some((_, tx)) if tx.is_closed() => papaya::Operation::Remove,
                             _ => papaya::Operation::Abort(()),
                         });
@@ -682,7 +682,7 @@ pub(super) async fn run_gc_task(
                     let pw_guard = kv_state.prefix_watchers.pin();
                     let stale: Vec<Arc<str>> = pw_guard
                         .iter()
-                        .filter_map(|(k, tx)| if tx.is_closed() { Some(k.clone()) } else { None })
+                        .filter_map(|(k, tx)| if tx.is_closed() { Some(Arc::clone(k)) } else { None })
                         .collect();
                     for key in stale {
                         pw_guard.compute(key, |existing| match existing {
@@ -712,7 +712,7 @@ pub(super) async fn run_gc_task(
                     let orphaned: Vec<Arc<str>> = qt_guard
                         .iter()
                         .filter_map(|(k, v)| {
-                            if Arc::strong_count(v) == 1 { Some(k.clone()) } else { None }
+                            if Arc::strong_count(v) == 1 { Some(Arc::clone(k)) } else { None }
                         })
                         .collect();
                     for key in orphaned {

@@ -911,9 +911,9 @@ async fn gw_kv_quorum(
     let write_ts_min = tc.hlc.tick();
     let self_hash    = tc.node_id.id_hash();
     let (tracker, mut rx) = QuorumAckTracker::new(write_ts_min, self_hash);
-    tc.kv_state.quorum_trackers.pin().insert(key.clone(), Arc::clone(&tracker));
+    tc.kv_state.quorum_trackers.pin().insert(Arc::clone(&key), Arc::clone(&tracker));
 
-    kv_write(&tc, key.clone(), value, false);
+    kv_write(&tc, Arc::clone(&key), value, false);
 
     let result = tokio::time::timeout(timeout, async {
         loop {
@@ -1461,11 +1461,10 @@ async fn gw_overlay_elect(
             Json(json!({ "ok": true, "leader": ctx.agent_ctx.node_id.to_string() })).into_response(),
         crate::consensus::ConsensusResult::Superseded { .. } => {
             let committed_key = format!("consensus/committed/{slot}");
-            if let Some(raw) = ctx.agent_ctx.kv_state.store.pin().get(committed_key.as_str()).and_then(|e| e.data.clone()) {
-                if let Ok(s) = std::str::from_utf8(&raw) {
+            if let Some(raw) = ctx.agent_ctx.kv_state.store.pin().get(committed_key.as_str()).and_then(|e| e.data.clone())
+                && let Ok(s) = std::str::from_utf8(&raw) {
                     return Json(json!({ "ok": true, "leader": s.to_string() })).into_response();
                 }
-            }
             (StatusCode::CONFLICT, Json(json!({ "ok": false, "error": "superseded" }))).into_response()
         }
         crate::consensus::ConsensusResult::Timeout { ballots_tried, .. } =>
@@ -1556,8 +1555,8 @@ async fn gw_overlay_log_compact(
     let prefix = format!("log/{}/", body.stream);
     for (k, _) in crate::store::scan_kv_prefix(&ctx.agent_ctx.kv_state, &prefix) {
         let suffix = k.strip_prefix(&prefix).unwrap_or("");
-        if let Ok(hlc) = u64::from_str_radix(suffix, 16) {
-            if hlc < body.before_hlc {
+        if let Ok(hlc) = u64::from_str_radix(suffix, 16)
+            && hlc < body.before_hlc {
                 let update = crate::framing::make_gossip_update(
                     &ctx.agent_ctx.node_id, ctx.agent_ctx.default_ttl,
                     k, Bytes::new(), true, &ctx.agent_ctx.hlc,
@@ -1571,7 +1570,6 @@ async fn gw_overlay_log_compact(
                     &ctx.agent_ctx.kv_state.dropped_frames,
                 );
             }
-        }
     }
     Json(json!({ "ok": true })).into_response()
 }

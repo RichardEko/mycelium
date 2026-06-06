@@ -61,10 +61,10 @@ impl GossipAgent {
             if let Err(e) = tfs::create_dir_all(&dir).await {
                 warn!("persistence: failed to create data dir {:?}: {e}", dir);
             } else {
-                let kv_state     = self.kv_state.clone();
+                let kv_state     = Arc::clone(&self.kv_state);
                 let intern_keys  = self.config.intern_keys;
                 let intern_max   = self.config.intern_max_keys;
-                let hlc          = self.task_ctx.hlc.clone();
+                let hlc          = Arc::clone(&self.task_ctx.hlc);
                 let node_id      = self.node_id.clone();
                 let default_ttl  = self.config.default_ttl;
                 let sync_mode    = pcfg.sync_mode;
@@ -72,7 +72,7 @@ impl GossipAgent {
                 let interval     = pcfg.snapshot_interval_secs;
 
                 let apply_fn = {
-                    let kv_state = kv_state.clone();
+                    let kv_state = Arc::clone(&kv_state);
                     move |entry: crate::framing::SyncEntry| {
                         let key = if intern_keys {
                             intern_key(entry.key, intern_max)
@@ -104,9 +104,9 @@ impl GossipAgent {
                     sync_mode,
                     threshold,
                     interval,
-                    kv_state.clone(),
+                    Arc::clone(&kv_state),
                     node_id,
-                    hlc.clone(),
+                    Arc::clone(&hlc),
                     default_ttl,
                 );
                 let handle = Arc::new(handle);
@@ -200,9 +200,9 @@ impl GossipAgent {
 
         let conn = ConnContext {
             task_ctx:        Arc::clone(&self.task_ctx),
-            peers:           self.peers.clone(),
-            shutdown:        self.shutdown_tx.clone(),
-            peer_writers:    self.peer_writers.clone(),
+            peers:           Arc::clone(&self.peers),
+            shutdown:        Arc::clone(&self.shutdown_tx),
+            peer_writers:    Arc::clone(&self.peer_writers),
             writer_depth:    self.config.writer_channel_depth,
             backoff:         Duration::from_secs(self.config.reconnect_backoff_secs),
             n_shards:        self.task_ctx.gossip_txs.len(),
@@ -214,7 +214,7 @@ impl GossipAgent {
         let lctx = ListenerContext {
             conn,
             conn_sem:       Arc::new(Semaphore::new(self.config.max_connections)),
-            listener_alive: self.listener_alive.clone(),
+            listener_alive: Arc::clone(&self.listener_alive),
             max_conn:       self.config.max_connections,
             addr,
             tcp_backlog:    self.config.tcp_accept_backlog,
@@ -229,17 +229,17 @@ impl GossipAgent {
     }
 
     fn start_gossip_loop(&self) {
-        let bootstrap_peers        = self.bootstrap_peers.clone();
-        let peer_writers           = self.peer_writers.clone();
-        let shutdown_tx            = self.shutdown_tx.clone();
+        let bootstrap_peers        = Arc::clone(&self.bootstrap_peers);
+        let peer_writers           = Arc::clone(&self.peer_writers);
+        let shutdown_tx            = Arc::clone(&self.shutdown_tx);
         let writer_depth           = self.config.writer_channel_depth;
         let backoff                = Duration::from_secs(self.config.reconnect_backoff_secs);
         let idle_timeout           = Duration::from_secs(self.config.writer_idle_timeout_secs);
         let group_aware_forwarding = self.config.group_aware_forwarding;
         let epidemic_extra_peers   = self.config.epidemic_extra_peers;
-        let prefix_index           = self.kv_state.prefix_index.clone();
-        let grp_generation         = self.kv_state.grp_generation.clone();
-        let peer_localities        = self.kv_state.peer_localities.clone();
+        let prefix_index           = std::sync::Arc::<papaya::HashMap<std::sync::Arc<str>, std::sync::Arc<papaya::HashMap<std::sync::Arc<str>, ()>>>>::clone(&self.kv_state.prefix_index);
+        let grp_generation         = Arc::clone(&self.kv_state.grp_generation);
+        let peer_localities        = Arc::clone(&self.kv_state.peer_localities);
         let self_locality          = self.self_locality();
 
         let rxs = self.gossip_rxs
@@ -251,22 +251,22 @@ impl GossipAgent {
             self.spawn_task(run_gossip_shard(
                 shard_idx,
                 gossip_rx,
-                bootstrap_peers.clone(),
-                peer_writers.clone(),
-                shutdown_tx.clone(),
+                Arc::clone(&bootstrap_peers),
+                Arc::clone(&peer_writers),
+                Arc::clone(&shutdown_tx),
                 self.peer_list_tx.subscribe(),
-                self.shard_alive[shard_idx].clone(),
+                Arc::clone(&self.shard_alive[shard_idx]),
                 writer_depth,
                 backoff,
                 idle_timeout,
                 self.config.max_forwarding_peers,
-                self.kv_state.dropped_frames.clone(),
+                Arc::clone(&self.kv_state.dropped_frames),
                 group_aware_forwarding,
                 epidemic_extra_peers,
-                prefix_index.clone(),
-                grp_generation.clone(),
+                std::sync::Arc::<papaya::HashMap<std::sync::Arc<str>, std::sync::Arc<papaya::HashMap<std::sync::Arc<str>, ()>>>>::clone(&prefix_index),
+                Arc::clone(&grp_generation),
                 self_locality.clone(),
-                peer_localities.clone(),
+                Arc::clone(&peer_localities),
                 self.task_ctx.tls.get().cloned(),
             ));
         }
@@ -275,24 +275,24 @@ impl GossipAgent {
     fn start_health_monitor(&self) {
         self.spawn_task(run_health_monitor(
             self.node_id.clone(),
-            self.bootstrap_peers.clone(),
-            self.peers.clone(),
-            self.peer_writers.clone(),
+            Arc::clone(&self.bootstrap_peers),
+            Arc::clone(&self.peers),
+            Arc::clone(&self.peer_writers),
             self.peer_list_tx.clone(),
-            self.shutdown_tx.clone(),
-            self.task_ctx.hlc.clone(),
+            Arc::clone(&self.shutdown_tx),
+            Arc::clone(&self.task_ctx.hlc),
             self.config.health_check_interval_secs,
             self.config.writer_channel_depth,
             Duration::from_secs(self.config.reconnect_backoff_secs),
             Duration::from_secs(self.config.writer_idle_timeout_secs),
             self.config.peer_eviction_intervals,
-            self.health_monitor_alive.clone(),
+            Arc::clone(&self.health_monitor_alive),
             self.config.ping_peer_sample_size,
             self.config.max_active_connections,
             self.config.health_check_max_jitter_ms,
-            self.kv_state.hash_acc.clone(),
-            self.kv_state.dropped_frames.clone(),
-            self.task_ctx.signal_handlers.clone(),
+            Arc::clone(&self.kv_state.hash_acc),
+            Arc::clone(&self.kv_state.dropped_frames),
+            Arc::clone(&self.task_ctx.signal_handlers),
             self.config.signal_window_secs,
             self.task_ctx.tls.get().cloned(),
         ));
@@ -300,18 +300,18 @@ impl GossipAgent {
 
     fn start_gc_task(&self) {
         self.spawn_task(run_gc_task(
-            self.kv_state.clone(),
-            self.shutdown_tx.clone(),
+            Arc::clone(&self.kv_state),
+            Arc::clone(&self.shutdown_tx),
             self.config.health_check_interval_secs,
             self.config.default_ttl,
             self.config.propagation_window_secs,
-            self.live_entries.clone(),
-            self.task_ctx.seen.clone(),
+            Arc::clone(&self.live_entries),
+            Arc::clone(&self.task_ctx.seen),
             self.config.max_seen_entries,
-            self.gc_alive.clone(),
-            self.peer_writers.clone(),
+            Arc::clone(&self.gc_alive),
+            Arc::clone(&self.peer_writers),
             self.config.intern_max_keys,
-            self.task_ctx.signal_boundary.clone(),
+            Arc::clone(&self.task_ctx.signal_boundary),
             self.node_id.clone(),
         ));
     }

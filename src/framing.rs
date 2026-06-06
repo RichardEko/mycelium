@@ -533,7 +533,7 @@ pub(crate) fn make_kv_wire_msg(
 /// Used by WAL call sites to record exactly what the store contains.
 pub(crate) fn sync_entry_from(u: &GossipUpdate) -> SyncEntry {
     SyncEntry {
-        key:          u.key.clone(),
+        key:          Arc::clone(&u.key),
         value:        u.value.clone(),
         timestamp:    u.timestamp,
         is_tombstone: u.is_tombstone,

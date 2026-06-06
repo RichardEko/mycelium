@@ -32,7 +32,7 @@ use super::helpers::{
 };
 use super::kv::run_kv_persist_task;
 use super::opacity::{
-    effective_opacity_ctx, manage_opacity_ctx,
+    effective_opacity_ctx, manage_opacity_ctx, manage_opacity_gated_ctx,
     opacity_ctx, peer_load_ctx,
 };
 use super::wiring::{
@@ -146,7 +146,7 @@ impl CapabilitiesHandle {
         let initial = self.resolve(&filter);
         let mut known: AHashMap<(NodeId, Arc<str>, Arc<str>), Capability> = AHashMap::new();
         for (node_id, cap) in &initial {
-            known.insert((node_id.clone(), cap.namespace.clone(), cap.name.clone()), cap.clone());
+            known.insert((node_id.clone(), Arc::clone(&cap.namespace), Arc::clone(&cap.name)), cap.clone());
         }
         let tx_initial = tx.clone();
         let initial_owned = initial;
@@ -184,7 +184,7 @@ impl CapabilitiesHandle {
                         let removed: Vec<_> = known.keys().filter(|k| !current.contains_key(*k)).cloned().collect();
                         for k in &removed {
                             known.remove(k);
-                            let _ = tx.send(CapabilityEvent::Removed { node_id: k.0.clone(), namespace: k.1.clone(), name: k.2.clone() }).await;
+                            let _ = tx.send(CapabilityEvent::Removed { node_id: k.0.clone(), namespace: Arc::clone(&k.1), name: Arc::clone(&k.2) }).await;
                         }
                         for (k, cap) in &current {
                             let changed = match known.get(k) { None => true, Some(old) => old != cap };
@@ -543,7 +543,7 @@ impl CapabilitiesHandle {
         scope: crate::signal::SignalScope,
         hint:  OpacityHint,
     ) -> OpacityHandle {
-        manage_opacity_ctx(&self.ctx, kind.into(), scope, hint, None)
+        manage_opacity_ctx(&self.ctx, kind.into(), scope, hint)
     }
 
     /// Like [`manage_opacity`](Self::manage_opacity) but with an application gate.
@@ -557,7 +557,7 @@ impl CapabilitiesHandle {
     where
         F: Fn(&OpacityState) -> bool + Send + 'static,
     {
-        manage_opacity_ctx(&self.ctx, kind.into(), scope, hint, Some(Box::new(gate)))
+        manage_opacity_gated_ctx(&self.ctx, kind.into(), scope, hint, Some(gate))
     }
 
     /// Returns the combined load signal for `kind`. `0.0` = transparent, `1.0` = fully saturated.

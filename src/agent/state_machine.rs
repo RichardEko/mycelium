@@ -195,7 +195,7 @@ impl AgentStateMachine {
             turn_count:     AtomicUsize::new(0),
             call_count:     AtomicUsize::new(0),
             task_id:        Mutex::new(Arc::from("current")),
-            weak_self:      weak.clone(),
+            weak_self:      Weak::clone(weak),
             timeout_handle: Mutex::new(None),
         });
         sm.write_policy_kv();
@@ -247,16 +247,15 @@ impl AgentStateMachine {
         self.check_sync_guards(&from, &to)?;
 
         // Async guard: supervisor approval — snapshot the list before releasing the lock
-        let needs_approval = if let ExecutionState::Invoking { ref tool } = to {
+        let needs_approval = if let ExecutionState::Invoking { tool } = &to {
             self.policy.read().require_approval_for.contains(tool)
         } else {
             false
         };
-        if needs_approval {
-            if let ExecutionState::Invoking { ref tool } = to {
+        if needs_approval
+            && let ExecutionState::Invoking { tool } = &to {
                 self.await_approval(tool).await?;
             }
-        }
 
         // Commit
         *self.current.lock() = to.clone();
@@ -285,7 +284,7 @@ impl AgentStateMachine {
         // Cancel any prior timeout; arm a new one if policy specifies one for this state.
         if let Some(h) = self.timeout_handle.lock().take() { h.abort(); }
         if let Some(dur) = self.policy.read().state_timeouts.get(&to).copied() {
-            let weak = self.weak_self.clone();
+            let weak = Weak::clone(&self.weak_self);
             let state_snap = to.clone();
             let h = tokio::spawn(async move {
                 tokio::time::sleep(dur).await;
@@ -327,8 +326,8 @@ impl AgentStateMachine {
         let policy = self.policy.read();
 
         // required_capabilities: block Idle → Planning until all filters resolve
-        if *from == ExecutionState::Idle {
-            if let ExecutionState::Planning = to {
+        if *from == ExecutionState::Idle
+            && let ExecutionState::Planning = to {
                 for filter in &policy.required_capabilities {
                     if resolve_filter_against_kv(&self.ctx.kv_state, filter).is_empty() {
                         return Err(PolicyViolation::RequiredCapabilityMissing(
@@ -337,19 +336,16 @@ impl AgentStateMachine {
                     }
                 }
             }
-        }
 
-        if let ExecutionState::Invoking { ref tool } = to {
-            if let Some(max) = policy.max_turns {
-                if self.turn_count.load(Ordering::Relaxed) >= max {
+        if let ExecutionState::Invoking { tool } = &to {
+            if let Some(max) = policy.max_turns
+                && self.turn_count.load(Ordering::Relaxed) >= max {
                     return Err(PolicyViolation::TurnBudgetExceeded);
                 }
-            }
-            if let Some(max) = policy.tool_budget {
-                if self.call_count.load(Ordering::Relaxed) >= max {
+            if let Some(max) = policy.tool_budget
+                && self.call_count.load(Ordering::Relaxed) >= max {
                     return Err(PolicyViolation::ToolBudgetExceeded);
                 }
-            }
             if !policy.allowed_tools.is_empty() && !policy.allowed_tools.contains(tool) {
                 return Err(PolicyViolation::ToolNotAllowed(tool.clone()));
             }
@@ -377,11 +373,10 @@ impl AgentStateMachine {
         );
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         while let Ok(Some(sig)) = tokio::time::timeout_at(deadline, veto_rx.recv()).await {
-            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&sig.payload) {
-                if v.get("tool").and_then(|t| t.as_str()) == Some(tool) {
+            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&sig.payload)
+                && v.get("tool").and_then(|t| t.as_str()) == Some(tool) {
                     return Err(PolicyViolation::ApprovalVetoed(tool.to_string()));
                 }
-            }
             // Veto for a different tool — keep waiting
         }
         Ok(())

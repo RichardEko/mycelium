@@ -37,10 +37,10 @@ pub(super) fn dispatch_to_providers_ctx(
     let mut emitted = Vec::with_capacity(providers.len());
     for provider in providers {
         let scope = match &provider {
-            WiringProvider::Group { name, .. }    => crate::signal::SignalScope::Group(name.clone()),
+            WiringProvider::Group { name, .. }    => crate::signal::SignalScope::Group(Arc::clone(name)),
             WiringProvider::Node  { node_id, .. } => crate::signal::SignalScope::Individual(node_id.clone()),
         };
-        let _ = emit_signal(ctx, kind.clone(), scope, payload.clone());
+        let _ = emit_signal(ctx, Arc::clone(&kind), scope, payload.clone());
         emitted.push(provider);
     }
     emitted

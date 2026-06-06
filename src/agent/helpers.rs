@@ -64,7 +64,7 @@ pub(crate) fn emit_signal(
     let ts = crate::hlc::physical_ms(ctx.hlc.current());
     ctx.seen.mark_and_check(nonce, ts);
     let sig = Signal {
-        kind: kind.clone(), scope: scope.clone(),
+        kind: Arc::clone(&kind), scope: scope.clone(),
         payload: payload.clone(), sender: ctx.node_id.clone(), nonce,
     };
     // Fast-path for co-located rpc.result / bulk.result: fire the waiting
@@ -89,7 +89,7 @@ pub(crate) fn emit_signal(
     }
     let hint = match &scope {
         SignalScope::System             => ForwardHint::All,
-        SignalScope::Group(name)        => ForwardHint::Group(name.clone()),
+        SignalScope::Group(name)        => ForwardHint::Group(Arc::clone(name)),
         SignalScope::Individual(peer)   => ForwardHint::Individual(peer.clone()),
         SignalScope::Groups(_)          => ForwardHint::All,
     };
@@ -128,7 +128,7 @@ pub(crate) fn emit_signal_ordered(
     let hlc_seq = ctx.hlc.tick();
     ctx.seen.mark_and_check(nonce, ts);
     let sig = Signal {
-        kind: kind.clone(), scope: scope.clone(),
+        kind: Arc::clone(&kind), scope: scope.clone(),
         payload: payload.clone(), sender: ctx.node_id.clone(), nonce,
     };
     let nonce_claimed = if payload.len() >= 8
@@ -147,7 +147,7 @@ pub(crate) fn emit_signal_ordered(
     }
     let hint = match &scope {
         SignalScope::System           => ForwardHint::All,
-        SignalScope::Group(name)      => ForwardHint::Group(name.clone()),
+        SignalScope::Group(name)      => ForwardHint::Group(Arc::clone(name)),
         SignalScope::Individual(peer) => ForwardHint::Individual(peer.clone()),
         SignalScope::Groups(_)        => ForwardHint::All,
     };
@@ -180,12 +180,12 @@ pub(crate) async fn emit_signal_async(
     let handler_fill = ctx.signal_handlers.fill_ratio(&kind);
     let combined = handler_fill.max(crate::framing::gossip_shard_fill(&ctx.gossip_txs));
     deliver_locally(&ctx.signal_boundary, &ctx.signal_handlers, &Signal {
-        kind: kind.clone(), scope: scope.clone(),
+        kind: Arc::clone(&kind), scope: scope.clone(),
         payload: payload.clone(), sender: ctx.node_id.clone(), nonce,
     }, combined);
     let hint = match &scope {
         SignalScope::System             => ForwardHint::All,
-        SignalScope::Group(name)        => ForwardHint::Group(name.clone()),
+        SignalScope::Group(name)        => ForwardHint::Group(Arc::clone(name)),
         SignalScope::Individual(peer)   => ForwardHint::Individual(peer.clone()),
         SignalScope::Groups(_)          => ForwardHint::All,
     };
@@ -215,13 +215,12 @@ pub(crate) fn kv_subscribe(ctx: &TaskCtx, key: impl Into<Arc<str>>) -> tokio::sy
     let key_arc: Arc<str> = key.into();
     loop {
         let guard = ctx.kv_state.subscriptions.pin();
-        if let Some(tx) = guard.get(&key_arc) {
-            if !tx.is_closed() { return tx.subscribe(); }
-        }
+        if let Some(tx) = guard.get(&key_arc)
+            && !tx.is_closed() { return tx.subscribe(); }
         let current = ctx.kv_state.store.pin().get(&*key_arc).and_then(|e| e.data.clone());
         let (new_tx, rx) = tokio::sync::watch::channel(current);
         let mut slot = Some(new_tx);
-        let result = guard.compute(key_arc.clone(), |existing| match existing {
+        let result = guard.compute(Arc::clone(&key_arc), |existing| match existing {
             Some((_, tx)) if !tx.is_closed() => papaya::Operation::Abort(()),
             _ => match slot.take() {
                 Some(tx) => papaya::Operation::Insert(tx),
@@ -240,13 +239,12 @@ pub(crate) fn kv_subscribe_prefix(ctx: &TaskCtx, prefix: impl Into<Arc<str>>) ->
     let prefix_arc: Arc<str> = prefix.into();
     loop {
         let guard = ctx.kv_state.prefix_watchers.pin();
-        if let Some(tx) = guard.get(&prefix_arc) {
-            if !tx.is_closed() { return tx.subscribe(); }
-        }
+        if let Some(tx) = guard.get(&prefix_arc)
+            && !tx.is_closed() { return tx.subscribe(); }
         let (new_tx, rx) = tokio::sync::watch::channel(0u64);
         let new_tx_arc   = std::sync::Arc::new(new_tx);
         let mut slot     = Some(new_tx_arc);
-        let result = guard.compute(prefix_arc.clone(), |existing| match existing {
+        let result = guard.compute(Arc::clone(&prefix_arc), |existing| match existing {
             Some((_, tx)) if !tx.is_closed() => papaya::Operation::Abort(()),
             _ => match slot.take() {
                 Some(tx) => papaya::Operation::Insert(tx),
@@ -294,13 +292,13 @@ pub(crate) fn kv_scan_prefix(ctx: &TaskCtx, prefix: &str) -> Vec<(Arc<str>, Byte
                 if !key.starts_with(prefix) { return None; }
                 let entry = store_guard.get(key.as_ref())?;
                 let data  = entry.data.clone()?;
-                Some((key.clone(), data))
+                Some((Arc::clone(key), data))
             })
             .collect()
     } else {
         store_guard.iter()
             .filter(|(k, v)| v.data.is_some() && k.starts_with(prefix))
-            .map(|(k, v)| (k.clone(), v.data.clone().unwrap()))
+            .map(|(k, v)| (Arc::clone(k), v.data.clone().unwrap()))
             .collect()
     }
 }
@@ -381,18 +379,17 @@ pub(crate) fn cached_group_members_ctx(
     let group_key: Arc<str> = Arc::from(group);
     let current_gen = ctx.kv_state.grp_generation.load(Ordering::Relaxed);
     let guard = ctx.group_roster_cache.pin();
-    if let Some(entry) = guard.get(&group_key) {
-        if entry.grp_gen == current_gen && entry.fetched_at.elapsed() < ttl {
-            return entry.clone();
+    if let Some(entry) = guard.get(&group_key)
+        && entry.grp_gen == current_gen && entry.fetched_at.elapsed() < ttl {
+            return Arc::clone(entry);
         }
-    }
     let members = group_members_ctx(ctx, group);
     let fresh = Arc::new(super::RosterEntry {
         members,
         fetched_at: std::time::Instant::now(),
         grp_gen: current_gen,
     });
-    guard.insert(group_key, fresh.clone());
+    guard.insert(group_key, Arc::clone(&fresh));
     fresh
 }
 

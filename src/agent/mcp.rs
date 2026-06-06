@@ -125,7 +125,7 @@ impl GossipAgent {
         let ctx         = Arc::clone(&self.task_ctx);
         let rx          = self.task_ctx.signal_handlers.register(Arc::from(signal_kind::MCP_INVOKE));
 
-        kv_set(&self.task_ctx, kv_key.clone(), Bytes::from(schema.to_string().into_bytes()));
+        kv_set(&self.task_ctx, Arc::clone(&kv_key), Bytes::from(schema.to_string().into_bytes()));
 
         self.spawn_task(run_mcp_tool_task(
             ctx, cancel_rx, shutdown_rx, kv_key, name, rx, handler,
@@ -295,7 +295,7 @@ impl GossipAgent {
             };
             let schema = tool.get("inputSchema").cloned().unwrap_or(json!({}));
             let kv_key: Arc<str> = Arc::from(format!("tools/{name}/{node_id}").as_str());
-            kv_set(&self.task_ctx, kv_key.clone(), Bytes::from(schema.to_string().into_bytes()));
+            kv_set(&self.task_ctx, Arc::clone(&kv_key), Bytes::from(schema.to_string().into_bytes()));
             kv_keys.push(kv_key);
             tool_names.push(Arc::from(name));
         }
@@ -587,9 +587,9 @@ mod tests {
         use axum::{Router, extract::Json as AJson, routing::post};
         let tools = std::sync::Arc::new(tools);
         let app = Router::new().route("/", post({
-            let tools = tools.clone();
+            let tools = Arc::clone(&tools);
             move |AJson(req): AJson<serde_json::Value>| {
-                let tools = tools.clone();
+                let tools = Arc::clone(&tools);
                 async move {
                     let method = req["method"].as_str().unwrap_or("");
                     let id     = req["id"].clone();

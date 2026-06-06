@@ -475,7 +475,7 @@ impl GossipAgent {
         let mut bootstrap_peers = config.bootstrap_peers.clone();
         bootstrap_peers.retain(|p| p != &node_id);
         let bootstrap_peers: Arc<[NodeId]> = bootstrap_peers.into();
-        let (peer_list_tx, _) = watch::channel(bootstrap_peers.clone());
+        let (peer_list_tx, _) = watch::channel(Arc::clone(&bootstrap_peers));
         let shard_alive = (0..n_shards)
             .map(|_| Arc::new(AtomicBool::new(false)))
             .collect();
@@ -496,7 +496,7 @@ impl GossipAgent {
             signal_handlers: Arc::new(SignalHandlers::new(signal_window)),
             gossip_txs,
             default_ttl,
-            kv_state:        kv_state.clone(),
+            kv_state:        Arc::clone(&kv_state),
             wal:             std::sync::OnceLock::new(),
             caps_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             bulk_transport:  Arc::new(bulk::BulkTransport::new(

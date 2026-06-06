@@ -18,7 +18,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     agent.start().await?;
 
     if std::env::args().any(|a| a == "-i" || a == "--interactive") {
-        run_interactive(agent.clone()).await?;
+        run_interactive(Arc::clone(&agent)).await?;
     } else {
         await_shutdown_signal().await?;
     }

@@ -121,9 +121,9 @@ impl KvHandle {
         let write_ts_min = self.ctx.hlc.tick();
         let self_hash    = self.ctx.node_id.id_hash();
         let (tracker, mut rx) = QuorumAckTracker::new(write_ts_min, self_hash);
-        self.ctx.kv_state.quorum_trackers.pin().insert(key.clone(), Arc::clone(&tracker));
+        self.ctx.kv_state.quorum_trackers.pin().insert(Arc::clone(&key), Arc::clone(&tracker));
 
-        let _ = kv_set_async(&self.ctx, key.clone(), value).await;
+        let _ = kv_set_async(&self.ctx, Arc::clone(&key), value).await;
 
         let result = tokio::time::timeout(timeout, async {
             loop {
@@ -149,7 +149,7 @@ impl KvHandle {
         let guard = self.ctx.kv_state.store.pin();
         guard.iter()
             .filter(|(_, v)| v.data.is_some())
-            .map(|(k, _)| k.clone())
+            .map(|(k, _)| Arc::clone(k))
             .collect()
     }
 
@@ -170,15 +170,14 @@ impl KvHandle {
         let prefix_arc: Arc<str> = prefix.into();
         loop {
             let guard = self.ctx.kv_state.prefix_watchers.pin();
-            if let Some(tx) = guard.get(&prefix_arc) {
-                if !tx.is_closed() {
+            if let Some(tx) = guard.get(&prefix_arc)
+                && !tx.is_closed() {
                     return tx.subscribe();
                 }
-            }
             let (new_tx, rx) = watch::channel(0u64);
             let new_tx_arc   = Arc::new(new_tx);
             let mut slot     = Some(new_tx_arc);
-            let result = guard.compute(prefix_arc.clone(), |existing| match existing {
+            let result = guard.compute(Arc::clone(&prefix_arc), |existing| match existing {
                 Some((_, tx)) if !tx.is_closed() => papaya::Operation::Abort(()),
                 _ => match slot.take() {
                     Some(tx) => papaya::Operation::Insert(tx),
@@ -224,17 +223,16 @@ impl KvHandle {
         let key_arc: Arc<str> = key.into();
         loop {
             let guard = self.ctx.kv_state.subscriptions.pin();
-            if let Some(tx) = guard.get(&key_arc) {
-                if !tx.is_closed() {
+            if let Some(tx) = guard.get(&key_arc)
+                && !tx.is_closed() {
                     return tx.subscribe();
                 }
-            }
             let current = self.ctx.kv_state.store.pin()
                 .get(&*key_arc)
                 .and_then(|e| e.data.clone());
             let (new_tx, rx) = watch::channel(current);
             let mut slot     = Some(new_tx);
-            let result = guard.compute(key_arc.clone(), |existing| match existing {
+            let result = guard.compute(Arc::clone(&key_arc), |existing| match existing {
                 Some((_, tx)) if !tx.is_closed() => papaya::Operation::Abort(()),
                 _ => match slot.take() {
                     Some(tx) => papaya::Operation::Insert(tx),
@@ -304,11 +302,10 @@ impl KvHandle {
         let prefix = format!("log/{stream}/");
         for (k, _) in kv_scan_prefix(&self.ctx, &prefix) {
             let suffix = k.strip_prefix(&prefix).unwrap_or("");
-            if let Ok(hlc) = u64::from_str_radix(suffix, 16) {
-                if hlc < before_hlc {
+            if let Ok(hlc) = u64::from_str_radix(suffix, 16)
+                && hlc < before_hlc {
                     let _ = kv_delete(&self.ctx, k);
                 }
-            }
         }
     }
 

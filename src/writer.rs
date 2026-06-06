@@ -78,8 +78,8 @@ pub(crate) async fn run_peer_writer(
             *d = ttime::Instant::now() + idle_timeout;
         }
 
-        if let Some((fail_time, fail_backoff)) = last_fail {
-            if fail_time.elapsed() < fail_backoff {
+        if let Some((fail_time, fail_backoff)) = last_fail
+            && fail_time.elapsed() < fail_backoff {
                 dropped_frames.fetch_add(1, Ordering::Relaxed);
                 peer_dropped.fetch_add(1, Ordering::Relaxed);
                 #[cfg(feature = "metrics")]
@@ -87,7 +87,6 @@ pub(crate) async fn run_peer_writer(
                 debug!("Dropping frame to {} during reconnect backoff", peer);
                 continue;
             }
-        }
 
         // Lazily establish (or re-establish) the connection.
         if conn.is_none() {
@@ -209,11 +208,10 @@ pub(crate) fn get_or_spawn_writer(
     let guard = writers.pin();
 
     // Fast path: live writer or pending spawn already exists.
-    if let Some(entry) = guard.get(peer) {
-        if entry.is_live() {
+    if let Some(entry) = guard.get(peer)
+        && entry.is_live() {
             return Some(entry.tx.clone());
         }
-    }
 
     // Claim the spawn slot by installing a pending sentinel atomically.
     // Creating the channel here is O(1) (no OS resources); the task only runs if we win.
@@ -223,9 +221,9 @@ pub(crate) fn get_or_spawn_writer(
     let dropped = Arc::new(AtomicU64::new(0));
     let pending = WriterEntry {
         tx: tx.clone(),
-        peer_shutdown: peer_shutdown.clone(),
+        peer_shutdown: Arc::clone(&peer_shutdown),
         abort_handle: None,
-        dropped: dropped.clone(),
+        dropped: Arc::clone(&dropped),
     };
 
     let claim = guard.compute(peer.clone(), |existing| match existing {
@@ -246,7 +244,7 @@ pub(crate) fn get_or_spawn_writer(
         idle_timeout,
         shutdown_tx.subscribe(),
         peer_shutdown_rx,
-        dropped_frames.clone(),
+        Arc::clone(dropped_frames),
         dropped,
         tls,
     ));
@@ -257,9 +255,9 @@ pub(crate) fn get_or_spawn_writer(
     guard.compute(peer.clone(), |existing| match existing {
         Some((_, e)) if e.abort_handle.is_none() => papaya::Operation::Insert(WriterEntry {
             tx: tx.clone(),
-            peer_shutdown: peer_shutdown.clone(),
+            peer_shutdown: Arc::clone(&peer_shutdown),
             abort_handle: Some(abort_handle.clone()),
-            dropped: e.dropped.clone(),
+            dropped: Arc::clone(&e.dropped),
         }),
         _ => papaya::Operation::Abort(()),
     });

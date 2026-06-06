@@ -29,6 +29,16 @@ pub(crate) type KvSubscriptions = Arc<papaya::HashMap<Arc<str>, watch::Sender<Op
 ///
 /// `subscriptions` is a Layer II concern co-located here for lifecycle convenience.
 /// See [`KvSubscriptions`] for the full rationale.
+///
+/// ## papaya pin() guard invariant
+///
+/// All papaya maps are accessed through a *pinned epoch guard* (`map.pin()`).
+/// Guards **must not be held across `await` points** — holding one suspends
+/// the papaya epoch-reclamation collector, causing unbounded memory growth.
+/// Every call site in this module and in `connection.rs` follows this rule:
+/// pin, do the synchronous work, drop the guard, then await.  Reviewers: if
+/// you add an `await` inside a block that already holds a `pin()` guard,
+/// extract the result first and drop the guard before awaiting.
 pub(crate) struct KvState {
     pub store:             Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
     /// Layer II watch channels. See [`KvSubscriptions`] for design notes.
@@ -127,17 +137,16 @@ pub(crate) fn prefix_index_insert(index: &PrefixIndex, key: Arc<str>) {
     }
     // Pre-insert the key so it lands atomically with bucket creation when we win.
     let new_bucket: Arc<papaya::HashMap<Arc<str>, ()>> = Arc::new(papaya::HashMap::new());
-    new_bucket.pin().insert(key.clone(), ());
+    new_bucket.pin().insert(Arc::clone(&key), ());
     let result = guard.compute(Arc::from(seg), |existing| match existing {
         Some(_) => papaya::Operation::Abort(()),
-        None    => papaya::Operation::Insert(new_bucket.clone()),
+        None    => papaya::Operation::Insert(Arc::clone(&new_bucket)),
     });
     // Concurrent racer installed their bucket first; insert into theirs.
-    if let papaya::Compute::Aborted(_) = result {
-        if let Some(bucket) = guard.get(seg) {
+    if let papaya::Compute::Aborted(_) = result
+        && let Some(bucket) = guard.get(seg) {
             bucket.pin().insert(key, ());
         }
-    }
 }
 
 /// Removes `key` from the `seg` bucket (no-op if absent).
@@ -169,17 +178,16 @@ pub(crate) fn index_bucket_insert(index: &PrefixIndex, outer: Arc<str>, inner: A
         return;
     }
     let new_bucket: Arc<papaya::HashMap<Arc<str>, ()>> = Arc::new(papaya::HashMap::new());
-    new_bucket.pin().insert(inner.clone(), ());
-    let outer_clone = outer.clone();
+    new_bucket.pin().insert(Arc::clone(&inner), ());
+    let outer_clone = Arc::clone(&outer);
     let result = guard.compute(outer, |existing| match existing {
         Some(_) => papaya::Operation::Abort(()),
-        None    => papaya::Operation::Insert(new_bucket.clone()),
+        None    => papaya::Operation::Insert(Arc::clone(&new_bucket)),
     });
-    if let papaya::Compute::Aborted(_) = result {
-        if let Some(bucket) = guard.get(outer_clone.as_ref()) {
+    if let papaya::Compute::Aborted(_) = result
+        && let Some(bucket) = guard.get(outer_clone.as_ref()) {
             bucket.pin().insert(inner, ());
         }
-    }
 }
 
 /// Removes `inner_key` from the `outer` bucket (no-op if absent).
@@ -218,12 +226,12 @@ pub(crate) fn shrink_intern_pool(target: usize) {
         .iter()
         .filter_map(|(k, v)| {
             // strong_count == 1 means only the pool holds this Arc — safe to evict.
-            if Arc::strong_count(v) == 1 { Some(k.clone()) } else { None }
+            if Arc::strong_count(v) == 1 { Some(Arc::clone(k)) } else { None }
         })
         .take(pool.len().saturating_sub(target))
         .collect();
     for key in candidates {
-        guard.compute(key.clone(), |existing| match existing {
+        guard.compute(Arc::clone(&key), |existing| match existing {
             // Re-check inside compute: abort if someone grabbed the Arc since we sampled.
             Some((_, v)) if Arc::strong_count(v) == 1 => papaya::Operation::Remove,
             _ => papaya::Operation::Abort(()),
@@ -245,7 +253,7 @@ pub(crate) fn intern_key(key: Arc<str>, max_keys: usize) -> Arc<str> {
     let guard = pool.pin();
     // Fast path: already interned.
     if let Some(existing) = guard.get(&*key) {
-        return existing.clone();
+        return Arc::clone(existing);
     }
     // Pool cap: skip insertion once the limit is reached.
     if max_keys > 0 && pool.len() >= max_keys {
@@ -253,11 +261,11 @@ pub(crate) fn intern_key(key: Arc<str>, max_keys: usize) -> Arc<str> {
     }
     // Slow path: CAS-insert. The callback may retry on contention; each attempt
     // clones `key` cheaply (O(1) Arc refcount bump), so no Option-slot trick is needed.
-    match guard.compute(key.clone(), |existing| match existing {
+    match guard.compute(Arc::clone(&key), |existing| match existing {
         Some(_) => papaya::Operation::Abort(()),
-        None    => papaya::Operation::Insert(key.clone()),
+        None    => papaya::Operation::Insert(Arc::clone(&key)),
     }) {
-        papaya::Compute::Inserted(_, v) => v.clone(),
+        papaya::Compute::Inserted(_, v) => Arc::clone(v),
         _ => guard.get(&*key).cloned().unwrap_or(key),
     }
 }
@@ -323,7 +331,7 @@ pub(crate) fn apply_to_store(store: &papaya::HashMap<Arc<str>, StoreEntry>, upda
     let val = if is_tombstone { None } else { Some(update.value.clone()) };
 
     let guard = store.pin();
-    let result = guard.compute(update.key.clone(), |existing| {
+    let result = guard.compute(Arc::clone(&update.key), |existing| {
         match existing {
             None => Operation::Insert(StoreEntry { data: val.clone(), timestamp: ts }),
             Some((_, curr)) => {
@@ -377,7 +385,7 @@ pub(crate) fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
 
     let changed = {
         let guard = kv.store.pin();
-        let result = guard.compute(update.key.clone(), |existing| {
+        let result = guard.compute(Arc::clone(&update.key), |existing| {
             old_ts_if_live = None; // reset on each CAS retry
             match existing {
                 None => Operation::Insert(StoreEntry { data: val.clone(), timestamp: ts }),
@@ -420,10 +428,10 @@ pub(crate) fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
         // Maintain the peer_localities cache from cap/{node_id}/locality/self entries.
         // Locality is treated as a capability for KV-path uniformity but is also cached
         // in decoded form so hot gossip-forwarding paths don't re-decode per message.
-        if let Some(rest) = update.key.strip_prefix("cap/") {
-            if let Some(node_id_str) = rest.strip_suffix("/locality/self") {
-                if !node_id_str.contains('/') {
-                    if let Ok(node_id) = node_id_str.parse::<NodeId>() {
+        if let Some(rest) = update.key.strip_prefix("cap/")
+            && let Some(node_id_str) = rest.strip_suffix("/locality/self")
+                && !node_id_str.contains('/')
+                    && let Ok(node_id) = node_id_str.parse::<NodeId>() {
                         let guard = kv.peer_localities.pin();
                         if is_tombstone {
                             guard.remove(&node_id);
@@ -437,27 +445,24 @@ pub(crate) fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
                             }
                         }
                     }
-                }
-            }
-        }
         // Maintain the secondary prefix index.
         if is_tombstone {
             prefix_index_remove(&kv.prefix_index, &update.key);
         } else {
-            prefix_index_insert(&kv.prefix_index, update.key.clone());
+            prefix_index_insert(&kv.prefix_index, Arc::clone(&update.key));
         }
         // Maintain cap_ns_index for cap/ and req/ keys.
         if let Some(identity) = cap_ns_index_key(&update.key) {
             if is_tombstone {
                 index_bucket_remove(&kv.cap_ns_index, &identity, &update.key);
             } else {
-                index_bucket_insert(&kv.cap_ns_index, identity, update.key.clone());
+                index_bucket_insert(&kv.cap_ns_index, identity, Arc::clone(&update.key));
             }
         }
         let subs_guard = kv.subscriptions.pin();
         if let Some(tx) = subs_guard.get(&update.key) {
             if tx.is_closed() {
-                subs_guard.compute(update.key.clone(), |existing| match existing {
+                subs_guard.compute(Arc::clone(&update.key), |existing| match existing {
                     Some((_, tx)) if tx.is_closed() => Operation::Remove,
                     _ => Operation::Abort(()),
                 });
@@ -473,7 +478,7 @@ pub(crate) fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
         for (prefix, tx) in prefix_guard.iter() {
             if update.key.starts_with(prefix.as_ref()) {
                 if tx.is_closed() {
-                    to_evict.push(prefix.clone());
+                    to_evict.push(Arc::clone(prefix));
                 } else {
                     tx.send_modify(|n| *n = n.wrapping_add(1));
                 }
@@ -530,13 +535,13 @@ pub(crate) fn scan_kv_prefix(kv: &KvState, prefix: &str) -> Vec<(Arc<str>, Bytes
                 if !key.starts_with(prefix) { return None; }
                 let entry = store_guard.get(key.as_ref())?;
                 let data  = entry.data.clone()?;
-                Some((key.clone(), data))
+                Some((Arc::clone(key), data))
             })
             .collect()
     } else {
         store_guard.iter()
             .filter(|(k, v)| v.data.is_some() && k.starts_with(prefix))
-            .map(|(k, v)| (k.clone(), v.data.clone().unwrap()))
+            .map(|(k, v)| (Arc::clone(k), v.data.clone().unwrap()))
             .collect()
     }
 }

@@ -146,8 +146,8 @@ impl SkillRunner {
                 } else {
                     continue;
                 };
-                if mesh_ns_name == *tool_name && parts.last() == Some(&"input") {
-                    if let Ok(schema) = serde_json::from_slice::<Value>(val) {
+                if mesh_ns_name == *tool_name && parts.last() == Some(&"input")
+                    && let Ok(schema) = serde_json::from_slice::<Value>(val) {
                         schemas.push(ToolSchema {
                             name:        bare.to_string(),
                             description: format!("Mesh capability {}/{}", parts[1], parts[2]),
@@ -155,7 +155,6 @@ impl SkillRunner {
                         });
                         break;
                     }
-                }
             }
 
             // Fallback: try resolve() for a description attribute

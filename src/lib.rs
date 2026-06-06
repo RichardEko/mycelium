@@ -135,7 +135,8 @@
 //! [`advertise_capability`]: GossipAgent::advertise_capability
 //! [`declare_requirement`]: GossipAgent::declare_requirement
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
+#![warn(clippy::clone_on_ref_ptr)]
 
 pub mod capability;
 pub mod capability_config;

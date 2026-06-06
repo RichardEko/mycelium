@@ -138,7 +138,7 @@ fn spawn_handler(
     let ctx = ConnContext {
         task_ctx,
         peers,
-        shutdown: shutdown_tx.clone(),
+        shutdown: Arc::clone(&shutdown_tx),
         peer_writers: Arc::new(papaya::HashMap::new()),
         writer_depth: 64,
         backoff: Duration::ZERO,
@@ -204,7 +204,7 @@ async fn test_state_request_ignored_from_unknown_peer() {
     });
     let (tx, _rx) = mpsc::channel(10);
     let (shutdown_tx, _) = spawn_handler(
-        reader, store.clone(), Arc::new(papaya::HashMap::new()), tx,
+        reader, Arc::clone(&store), Arc::new(papaya::HashMap::new()), tx,
         Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)), GossipConfig::default().default_ttl,
     );
 
@@ -234,12 +234,12 @@ async fn test_upsert_propagates() {
     let (mut writer, reader) = loopback_pair().await;
     let store: Arc<papaya::HashMap<Arc<str>, StoreEntry>> = Arc::new(papaya::HashMap::new());
     let (tx, _rx) = mpsc::channel(10);
-    let _ = spawn_handler(reader, store.clone(), Arc::new(papaya::HashMap::new()), tx,
+    let _ = spawn_handler(reader, Arc::clone(&store), Arc::new(papaya::HashMap::new()), tx,
                           Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)), GossipConfig::default().default_ttl);
 
     send_wire(&mut writer, &WireMessage::Data(data_update("k", b"v", 1, false))).await;
 
-    let s = store.clone();
+    let s = Arc::clone(&store);
     poll_until(|| s.pin().get("k").and_then(|e| e.data.clone()) == Some(Bytes::from_static(b"v")), 200).await;
 }
 
@@ -250,12 +250,12 @@ async fn test_tombstone_nullifies_value() {
     store.pin().insert(Arc::from("k"), StoreEntry { data: Some(Bytes::from_static(b"old")), timestamp: 0 });
 
     let (tx, _rx) = mpsc::channel(10);
-    let _ = spawn_handler(reader, store.clone(), Arc::new(papaya::HashMap::new()), tx,
+    let _ = spawn_handler(reader, Arc::clone(&store), Arc::new(papaya::HashMap::new()), tx,
                           Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)), GossipConfig::default().default_ttl);
 
     send_wire(&mut writer, &WireMessage::Data(data_update("k", b"", 2, true))).await;
 
-    let s = store.clone();
+    let s = Arc::clone(&store);
     poll_until(|| s.pin().get("k").is_some_and(|e| e.data.is_none()), 200).await;
     assert!(store.pin().get("k").is_some(), "tombstone entry must remain in store for LWW");
 }
@@ -266,14 +266,14 @@ async fn test_deduplication() {
     let store: Arc<papaya::HashMap<Arc<str>, StoreEntry>> = Arc::new(papaya::HashMap::new());
     let (tx, mut rx) = mpsc::channel::<(Bytes, u64, crate::framing::ForwardHint)>(10);
     let seen = Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS));
-    let _ = spawn_handler(reader, store.clone(), Arc::new(papaya::HashMap::new()), tx, seen,
+    let _ = spawn_handler(reader, Arc::clone(&store), Arc::new(papaya::HashMap::new()), tx, seen,
                           GossipConfig::default().default_ttl);
 
     let update = data_update("k", b"v", 42, false);
     send_wire(&mut writer, &WireMessage::Data(update.clone())).await;
     send_wire(&mut writer, &WireMessage::Data(update)).await;
 
-    let s = store.clone();
+    let s = Arc::clone(&store);
     poll_until(|| s.pin().get("k").and_then(|e| e.data.clone()) == Some(Bytes::from_static(b"v")), 200).await;
 
     let mut forwarded = 0;
@@ -286,12 +286,12 @@ async fn test_peer_registered_from_ping() {
     let (mut writer, reader) = loopback_pair().await;
     let peers: Arc<papaya::HashMap<NodeId, Instant>> = Arc::new(papaya::HashMap::new());
     let (tx, _rx) = mpsc::channel(10);
-    let _ = spawn_handler(reader, Arc::new(papaya::HashMap::new()), peers.clone(), tx,
+    let _ = spawn_handler(reader, Arc::new(papaya::HashMap::new()), Arc::clone(&peers), tx,
                           Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)), GossipConfig::default().default_ttl);
 
     send_wire(&mut writer, &WireMessage::Ping { sender: "127.0.0.1:9999".parse().unwrap(), known_peers: vec![] }).await;
 
-    let p = peers.clone();
+    let p = Arc::clone(&peers);
     poll_until(
         || p.pin().contains_key(&NodeId::new("127.0.0.1", 9999).unwrap()),
         200,
@@ -303,13 +303,13 @@ async fn test_ping_not_deduplicated() {
     let (mut writer, reader) = loopback_pair().await;
     let peers: Arc<papaya::HashMap<NodeId, Instant>> = Arc::new(papaya::HashMap::new());
     let (tx, _rx) = mpsc::channel(10);
-    let _ = spawn_handler(reader, Arc::new(papaya::HashMap::new()), peers.clone(), tx,
+    let _ = spawn_handler(reader, Arc::new(papaya::HashMap::new()), Arc::clone(&peers), tx,
                           Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)), GossipConfig::default().default_ttl);
 
     send_wire(&mut writer, &WireMessage::Ping { sender: "127.0.0.1:1001".parse().unwrap(), known_peers: vec![] }).await;
     send_wire(&mut writer, &WireMessage::Ping { sender: "127.0.0.1:1002".parse().unwrap(), known_peers: vec![] }).await;
 
-    let p = peers.clone();
+    let p = Arc::clone(&peers);
     poll_until(
         || {
             let g = p.pin();
@@ -327,7 +327,7 @@ async fn test_handle_connection_shutdown() {
     let (tx, _rx) = mpsc::channel(10);
     let (shutdown_tx, handle) = spawn_handler(
         reader,
-        store.clone(),
+        Arc::clone(&store),
         Arc::new(papaya::HashMap::new()),
         tx,
         Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)),
@@ -335,7 +335,7 @@ async fn test_handle_connection_shutdown() {
     );
 
     send_wire(&mut writer, &WireMessage::Data(data_update("k", b"v", 1, false))).await;
-    let s = store.clone();
+    let s = Arc::clone(&store);
     poll_until(|| s.pin().get("k").is_some(), 200).await;
 
     let _ = shutdown_tx.send(true);
@@ -349,14 +349,14 @@ async fn test_inbound_ttl_clamped_to_max() {
     let (mut writer, reader) = loopback_pair().await;
     let store: Arc<papaya::HashMap<Arc<str>, StoreEntry>> = Arc::new(papaya::HashMap::new());
     let (tx, mut rx) = mpsc::channel::<(Bytes, u64, crate::framing::ForwardHint)>(10);
-    let _ = spawn_handler(reader, store.clone(), Arc::new(papaya::HashMap::new()), tx,
+    let _ = spawn_handler(reader, Arc::clone(&store), Arc::new(papaya::HashMap::new()), tx,
                           Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)), 5);
 
     let mut update = data_update("k", b"v", 77, false);
     update.ttl = 255;
     send_wire(&mut writer, &WireMessage::Data(update)).await;
 
-    let s = store.clone();
+    let s = Arc::clone(&store);
     poll_until(|| s.pin().get("k").is_some(), 200).await;
 
     let (fwd_bytes, _, _) = rx.try_recv().expect("should have forwarded once");
@@ -368,14 +368,14 @@ async fn test_inbound_ttl_above_max_not_forwarded_when_clamped_to_one() {
     let (mut writer, reader) = loopback_pair().await;
     let store: Arc<papaya::HashMap<Arc<str>, StoreEntry>> = Arc::new(papaya::HashMap::new());
     let (tx, mut rx) = mpsc::channel::<(Bytes, u64, crate::framing::ForwardHint)>(10);
-    let _ = spawn_handler(reader, store.clone(), Arc::new(papaya::HashMap::new()), tx,
+    let _ = spawn_handler(reader, Arc::clone(&store), Arc::new(papaya::HashMap::new()), tx,
                           Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)), 1);
 
     let mut update = data_update("k", b"v", 88, false);
     update.ttl = 100;
     send_wire(&mut writer, &WireMessage::Data(update)).await;
 
-    let s = store.clone();
+    let s = Arc::clone(&store);
     poll_until(|| s.pin().get("k").is_some(), 200).await;
 
     assert!(rx.try_recv().is_err(), "no forward when clamped ttl == 1");
@@ -410,14 +410,14 @@ async fn test_two_node_propagation() {
     time::sleep(Duration::from_millis(20)).await;
 
     let _ = agent_a.kv().set("x", b"hello".to_vec());
-    let b = agent_b.clone();
+    let b = Arc::clone(&agent_b);
     poll_until(
         || b.kv().get("x") == Some(Bytes::from_static(b"hello")),
         2_000,
     ).await;
 
     let _ = agent_a.kv().delete("x");
-    let b = agent_b.clone();
+    let b = Arc::clone(&agent_b);
     poll_until(|| b.kv().get("x").is_none(), 2_000).await;
 
     agent_a.shutdown().await;
@@ -450,7 +450,7 @@ async fn test_subscribe_notified_via_gossip() {
         use parking_lot::RwLock;
         let node_id = NodeId::new("127.0.0.1", 0).unwrap();
         let kv_state = Arc::new(KvState {
-            store: store.clone(),
+            store: Arc::clone(&store),
             subscriptions:     subs,
             prefix_index:      Arc::new(crate::store::PrefixIndex::new()),
             cap_ns_index:      Arc::new(crate::store::PrefixIndex::new()),
@@ -531,7 +531,7 @@ async fn test_piggybacked_peers_added_to_table() {
     let (mut writer, reader) = loopback_pair().await;
     let peers: Arc<papaya::HashMap<NodeId, Instant>> = Arc::new(papaya::HashMap::new());
     let (tx, _rx) = mpsc::channel(10);
-    let _ = spawn_handler(reader, Arc::new(papaya::HashMap::new()), peers.clone(), tx,
+    let _ = spawn_handler(reader, Arc::new(papaya::HashMap::new()), Arc::clone(&peers), tx,
                           Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)), GossipConfig::default().default_ttl);
 
     let piggybacked = vec![
@@ -543,7 +543,7 @@ async fn test_piggybacked_peers_added_to_table() {
         known_peers: piggybacked,
     }).await;
 
-    let p = peers.clone();
+    let p = Arc::clone(&peers);
     poll_until(
         || {
             let g = p.pin();
@@ -560,7 +560,7 @@ async fn test_piggybacked_self_not_added() {
     let (mut writer, reader) = loopback_pair().await;
     let peers: Arc<papaya::HashMap<NodeId, Instant>> = Arc::new(papaya::HashMap::new());
     let (tx, _rx) = mpsc::channel(10);
-    let _ = spawn_handler(reader, Arc::new(papaya::HashMap::new()), peers.clone(), tx,
+    let _ = spawn_handler(reader, Arc::new(papaya::HashMap::new()), Arc::clone(&peers), tx,
                           Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)), GossipConfig::default().default_ttl);
 
     let self_id = NodeId::new("127.0.0.1", 0).unwrap();
@@ -569,7 +569,7 @@ async fn test_piggybacked_self_not_added() {
         known_peers: vec![self_id.clone()],
     }).await;
 
-    let p = peers.clone();
+    let p = Arc::clone(&peers);
     poll_until(|| p.pin().contains_key(&NodeId::new("127.0.0.1", 9000).unwrap()), 200).await;
     assert!(!peers.pin().contains_key(&self_id), "self must not be added via piggybacking");
 }
@@ -579,7 +579,7 @@ async fn test_piggybacked_known_peer_timestamp_not_overwritten() {
     let (mut writer, reader) = loopback_pair().await;
     let peers: Arc<papaya::HashMap<NodeId, Instant>> = Arc::new(papaya::HashMap::new());
     let (tx, _rx) = mpsc::channel(10);
-    let _ = spawn_handler(reader, Arc::new(papaya::HashMap::new()), peers.clone(), tx,
+    let _ = spawn_handler(reader, Arc::new(papaya::HashMap::new()), Arc::clone(&peers), tx,
                           Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)), GossipConfig::default().default_ttl);
 
     let known_id: NodeId = "127.0.0.1:7777".parse().unwrap();
@@ -591,7 +591,7 @@ async fn test_piggybacked_known_peer_timestamp_not_overwritten() {
         known_peers: vec![known_id.clone()],
     }).await;
 
-    let p = peers.clone();
+    let p = Arc::clone(&peers);
     poll_until(|| p.pin().contains_key(&NodeId::new("127.0.0.1", 8888).unwrap()), 200).await;
 
     let stored = *peers.pin().get(&known_id).unwrap();
@@ -608,7 +608,7 @@ async fn test_state_response_applies_entries_to_store() {
     let (mut writer, reader) = loopback_pair().await;
     let store: Arc<papaya::HashMap<Arc<str>, StoreEntry>> = Arc::new(papaya::HashMap::new());
     let (tx, _rx) = mpsc::channel(10);
-    let _ = spawn_handler(reader, store.clone(), Arc::new(papaya::HashMap::new()), tx,
+    let _ = spawn_handler(reader, Arc::clone(&store), Arc::new(papaya::HashMap::new()), tx,
                           Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)), GossipConfig::default().default_ttl);
 
     let entries = vec![
@@ -617,7 +617,7 @@ async fn test_state_response_applies_entries_to_store() {
     ];
     send_wire(&mut writer, &WireMessage::StateResponse { entries }).await;
 
-    let s = store.clone();
+    let s = Arc::clone(&store);
     poll_until(
         || s.pin().get("c:v1").and_then(|e| e.data.clone()) == Some(Bytes::from_static(b"payload_v1")),
         200,
@@ -636,7 +636,7 @@ async fn test_state_response_respects_lww() {
     store.pin().insert(Arc::from("k"), StoreEntry { data: Some(Bytes::from_static(b"newer")), timestamp: 999 });
 
     let (tx, _rx) = mpsc::channel(10);
-    let _ = spawn_handler(reader, store.clone(), Arc::new(papaya::HashMap::new()), tx,
+    let _ = spawn_handler(reader, Arc::clone(&store), Arc::new(papaya::HashMap::new()), tx,
                           Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)), GossipConfig::default().default_ttl);
 
     let entries = vec![
@@ -683,7 +683,7 @@ async fn test_anti_entropy_syncs_pre_existing_state() {
     ));
     agent_b.start().await.unwrap();
 
-    let b = agent_b.clone();
+    let b = Arc::clone(&agent_b);
     poll_until(
         || b.kv().get("contract:v1") == Some(Bytes::from_static(b"spec_bytes")),
         3_000,
@@ -1042,7 +1042,7 @@ async fn test_state_response_interns_keys() {
     let store: Arc<papaya::HashMap<Arc<str>, StoreEntry>> = Arc::new(papaya::HashMap::new());
     let (tx, _rx) = mpsc::channel(10);
     let _ = spawn_handler(
-        reader, store.clone(), Arc::new(papaya::HashMap::new()), tx,
+        reader, Arc::clone(&store), Arc::new(papaya::HashMap::new()), tx,
         Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)),
         GossipConfig::default().default_ttl,
     );
@@ -1058,7 +1058,7 @@ async fn test_state_response_interns_keys() {
         }],
     }).await;
 
-    let s = store.clone();
+    let s = Arc::clone(&store);
     let k = unique_key.clone();
     poll_until(|| s.pin().get(k.as_str()).is_some(), 200).await;
     assert!(
@@ -1076,19 +1076,19 @@ async fn test_signal_once_returns_on_match() {
     let kind: Arc<str> = Arc::from("test.once");
     let agent_ref = &agent;
     let recv = tokio::spawn({
-        let kind = kind.clone();
+        let kind = Arc::clone(&kind);
         async move {
             make_agent().mesh().signal_once(kind, Duration::from_millis(500), |_| true).await
         }
     });
     // Brief pause so the receiver registers before the emit.
     time::sleep(Duration::from_millis(20)).await;
-    let _ = agent_ref.mesh().emit(kind.clone(), SignalScope::System, Bytes::new());
+    let _ = agent_ref.mesh().emit(Arc::clone(&kind), SignalScope::System, Bytes::new());
 
     // Use a fresh agent with a real handler.
     let agent2 = make_agent();
-    let mut rx = agent2.mesh().signal_rx_with_capacity(kind.clone(), 4);
-    let _ = agent2.mesh().emit(kind.clone(), SignalScope::System, Bytes::from_static(b"hi"));
+    let mut rx = agent2.mesh().signal_rx_with_capacity(Arc::clone(&kind), 4);
+    let _ = agent2.mesh().emit(Arc::clone(&kind), SignalScope::System, Bytes::from_static(b"hi"));
     let sig = tokio::time::timeout(Duration::from_millis(200), rx.recv()).await;
     assert!(sig.is_ok() && sig.unwrap().is_some());
     drop(recv);
@@ -1107,14 +1107,14 @@ async fn test_signal_once_timeout() {
 async fn test_signal_once_skips_non_matching() {
     let agent = make_agent();
     let kind: Arc<str> = Arc::from("invoke.result");
-    let mut rx = agent.mesh().signal_rx_with_capacity(kind.clone(), 16);
+    let mut rx = agent.mesh().signal_rx_with_capacity(Arc::clone(&kind), 16);
 
     // Individual scope bypasses the opacity shedding check so both signals
     // are guaranteed to land in the channel regardless of fill_ratio.
     let self_id = agent.node_id().clone();
     let target_nonce: u64 = 0xDEAD_BEEF;
-    let _ = agent.mesh().emit(kind.clone(), SignalScope::Individual(self_id.clone()), Bytes::from_static(b"wrong"));
-    let _ = agent.mesh().emit(kind.clone(), SignalScope::Individual(self_id.clone()), Bytes::from_static(b"right"));
+    let _ = agent.mesh().emit(Arc::clone(&kind), SignalScope::Individual(self_id.clone()), Bytes::from_static(b"wrong"));
+    let _ = agent.mesh().emit(Arc::clone(&kind), SignalScope::Individual(self_id.clone()), Bytes::from_static(b"right"));
 
     // Drain both into a Vec and find the one with "right" payload.
     let mut signals = Vec::new();
@@ -1135,10 +1135,10 @@ async fn test_signal_once_skips_non_matching() {
 async fn test_advertise_emits_on_interval() {
     let agent = make_agent();
     let kind: Arc<str> = Arc::from("capacity.available");
-    let mut rx = agent.mesh().signal_rx_with_capacity(kind.clone(), 8);
+    let mut rx = agent.mesh().signal_rx_with_capacity(Arc::clone(&kind), 8);
 
     let _handle = agent.mesh().advertise(
-        kind.clone(),
+        Arc::clone(&kind),
         SignalScope::System,
         Duration::from_millis(30),
         || Bytes::from_static(b"load=0"),
@@ -1153,10 +1153,10 @@ async fn test_advertise_emits_on_interval() {
 async fn test_advertise_stops_on_handle_drop() {
     let agent = make_agent();
     let kind: Arc<str> = Arc::from("capacity.probe");
-    let mut rx = agent.mesh().signal_rx_with_capacity(kind.clone(), 8);
+    let mut rx = agent.mesh().signal_rx_with_capacity(Arc::clone(&kind), 8);
 
     let handle = agent.mesh().advertise(
-        kind.clone(),
+        Arc::clone(&kind),
         SignalScope::System,
         Duration::from_millis(20),
         Bytes::new,
@@ -1252,7 +1252,7 @@ async fn test_suppress_still_updates_last_signal() {
 async fn test_watch_fires_on_stale() {
     let agent = make_agent();
     let fired = Arc::new(AtomicU64::new(0));
-    let fired_clone = fired.clone();
+    let fired_clone = Arc::clone(&fired);
     // threshold = 50ms → check_interval = max(12ms, 100ms) = 100ms
     // No signal ever emitted → stale from the first check.
     let _handle = agent.mesh().watch(
@@ -1268,7 +1268,7 @@ async fn test_watch_fires_on_stale() {
 async fn test_watch_does_not_fire_when_fresh() {
     let agent = make_agent();
     let fired = Arc::new(AtomicU64::new(0));
-    let fired_clone = fired.clone();
+    let fired_clone = Arc::clone(&fired);
     // Emit once so last_signal is fresh.
     let _ = agent.mesh().emit("health.fresh", SignalScope::System, Bytes::new());
     // threshold = 500ms → first check at 125ms. At 250ms elapsed is ~250ms < 500ms.
@@ -1285,7 +1285,7 @@ async fn test_watch_does_not_fire_when_fresh() {
 async fn test_watch_stops_on_handle_drop() {
     let agent = make_agent();
     let fired = Arc::new(AtomicU64::new(0));
-    let fired_clone = fired.clone();
+    let fired_clone = Arc::clone(&fired);
     let handle = agent.mesh().watch(
         "health.stop",
         Duration::from_millis(30),
@@ -1412,7 +1412,7 @@ async fn test_competitive_response_group_scope() {
 
     // Worker: receives Group-scoped invoke, replies to sender via Individual scope.
     let mut invoke_rx = agent.mesh().signal_rx(signal_kind::INVOKE);
-    let agent_w = agent.clone();
+    let agent_w = Arc::clone(&agent);
     tokio::spawn(async move {
         if let Some(sig) = invoke_rx.recv().await {
             // Echo correlation payload so the invoker can identify its reply.
@@ -1552,14 +1552,14 @@ async fn test_consensus_simultaneous_proposers_resolve() {
         ..ConsensusConfig::default()
     };
 
-    let aa = agent_a.clone();
+    let aa = Arc::clone(&agent_a);
     let cfg_a2 = config.clone();
     let task_a = tokio::spawn(async move {
         aa.consensus().system_propose("sim_sl", Bytes::from_static(b"val_a"), cfg_a2).await
     });
     // Small stagger gives A time to commit and gossip the commit_key to B.
     time::sleep(Duration::from_millis(50)).await;
-    let bb = agent_b.clone();
+    let bb = Arc::clone(&agent_b);
     let cfg_b2 = config.clone();
     let task_b = tokio::spawn(async move {
         bb.consensus().system_propose("sim_sl", Bytes::from_static(b"val_b"), cfg_b2).await
@@ -2024,7 +2024,7 @@ async fn test_ballot_reacts_to_opacity_change() {
     // Background task: after a short pause (to let the 'collect loop start),
     // write B's opaque pheromone to A's store and emit BOUNDARY_OPAQUE on A.
     // Both happen in-process on agent_a so there's no gossip propagation race.
-    let aa = agent_a.clone();
+    let aa = Arc::clone(&agent_a);
     tokio::spawn(async move {
         time::sleep(Duration::from_millis(100)).await;
         let now_ms = SystemTime::now()

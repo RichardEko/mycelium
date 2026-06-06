@@ -154,7 +154,7 @@ fn reconcile_emergent_groups(
     let mut want_joined: AHashSet<Arc<str>> = AHashSet::new();
     for (group, def) in &defs {
         if own_caps.iter().any(|c| def.filter.matches(c)) {
-            want_joined.insert(group.clone());
+            want_joined.insert(Arc::clone(group));
         }
     }
 
@@ -170,7 +170,7 @@ fn reconcile_emergent_groups(
             let _cancel = spawn_group_membership(
                 ctx, own, group, &provides, &requires, shutdown_rx,
             );
-            joined.insert(group.clone(), GroupProjection {
+            joined.insert(Arc::clone(group), GroupProjection {
                 provides, requires, _cancel,
             });
             continue;
@@ -188,7 +188,7 @@ fn reconcile_emergent_groups(
         let _cancel = spawn_group_membership(
             ctx, own, group, &provides, &requires, shutdown_rx,
         );
-        joined.insert(group.clone(), GroupProjection {
+        joined.insert(Arc::clone(group), GroupProjection {
             provides, requires, _cancel,
         });
     }
@@ -271,7 +271,7 @@ async fn run_group_membership_task(
             refresh_interval_ms: GCAP_REASSERT_INTERVAL.as_millis() as u64,
         }.encode();
         let upd = make_gossip_update(
-            &ctx.node_id, ctx.default_ttl, key.clone(), payload, false, &ctx.hlc,
+            &ctx.node_id, ctx.default_ttl, Arc::clone(key), payload, false, &ctx.hlc,
         );
         apply_and_notify(&ctx.kv_state, &upd);
         dispatch_gossip_try_send(
@@ -286,7 +286,7 @@ async fn run_group_membership_task(
             written_at_ms: now_ms(),
         });
         let upd = make_gossip_update(
-            &ctx.node_id, ctx.default_ttl, key.clone(), payload, false, &ctx.hlc,
+            &ctx.node_id, ctx.default_ttl, Arc::clone(key), payload, false, &ctx.hlc,
         );
         apply_and_notify(&ctx.kv_state, &upd);
         dispatch_gossip_try_send(
@@ -296,7 +296,7 @@ async fn run_group_membership_task(
     };
     let clear_opaque = |key: &Arc<str>| {
         let upd = make_gossip_update(
-            &ctx.node_id, ctx.default_ttl, key.clone(), Bytes::new(), true, &ctx.hlc,
+            &ctx.node_id, ctx.default_ttl, Arc::clone(key), Bytes::new(), true, &ctx.hlc,
         );
         apply_and_notify(&ctx.kv_state, &upd);
         dispatch_gossip_try_send(
@@ -364,7 +364,7 @@ async fn run_group_membership_task(
     // and clear any still-opaque requirement entries.
     for key in &gcap_keys {
         let upd = make_gossip_update(
-            &ctx.node_id, ctx.default_ttl, key.clone(), Bytes::new(), true, &ctx.hlc,
+            &ctx.node_id, ctx.default_ttl, Arc::clone(key), Bytes::new(), true, &ctx.hlc,
         );
         apply_and_notify(&ctx.kv_state, &upd);
         dispatch_gossip_send(
@@ -399,6 +399,6 @@ fn emit_membership(ctx: &TaskCtx, own: &NodeId, group: &Arc<str>, leaving: bool)
         // Also update local boundary so signal admission stops immediately.
         ctx.signal_boundary.write().groups.remove(group);
     } else {
-        ctx.signal_boundary.write().groups.insert(group.clone());
+        ctx.signal_boundary.write().groups.insert(Arc::clone(group));
     }
 }

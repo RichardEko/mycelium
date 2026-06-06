@@ -341,7 +341,7 @@ async fn do_snapshot(
         written_at_ms: crate::hlc::physical_ms(hlc.current()),
     });
     let raise_upd = crate::framing::make_gossip_update(
-        node_id, default_ttl, opacity_key.clone(), opaque_val, false, hlc,
+        node_id, default_ttl, Arc::clone(&opacity_key), opaque_val, false, hlc,
     );
     apply_and_notify(kv_state, &raise_upd);
 
@@ -352,7 +352,7 @@ async fn do_snapshot(
         guard.iter()
             .filter_map(|(k, v)| {
                 v.data.as_ref().map(|data| SyncEntry {
-                    key:          k.clone(),
+                    key:          Arc::clone(k),
                     value:        data.clone(),
                     timestamp:    v.timestamp,
                     is_tombstone: false,

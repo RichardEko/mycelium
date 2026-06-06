@@ -89,7 +89,8 @@ pub(super) fn opacity_ctx(ctx: &TaskCtx, kind: &str) -> f32 {
 /// Effective load for `kind` via a `TaskCtx` reference — max of durable pheromone
 /// and live in-memory channel fill.
 pub(super) fn effective_opacity_ctx(ctx: &TaskCtx, kind: &str) -> f32 {
-    let pheromone = kv_get(ctx, &format!("{}{}/{}", kv_ns::LOAD, ctx.node_id, kind))
+    let load_key = format!("{}{}/{}", kv_ns::LOAD, ctx.node_id, kind);
+    let pheromone = kv_get(ctx, &load_key)
         .and_then(|b| crate::signal::decode_load_state(&b))
         .map(|s| s.fill_ratio)
         .unwrap_or(0.0);
@@ -253,21 +254,34 @@ pub(super) fn count_opaque_all_in_kv(
     }
 }
 
-/// Free-function variant of `manage_opacity_impl` — used by `CapabilityReg`.
-#[allow(clippy::type_complexity)]
-#[allow(dead_code)]
+/// Free-function variant of `manage_opacity_impl` — no application gate.
 pub(super) fn manage_opacity_ctx(
     ctx:  &Arc<TaskCtx>,
     kind: Arc<str>,
     scope: crate::signal::SignalScope,
     hint: OpacityHint,
-    gate: Option<Box<dyn Fn(&OpacityState) -> bool + Send + 'static>>,
 ) -> OpacityHandle {
+    manage_opacity_gated_ctx(ctx, kind, scope, hint, None::<fn(&OpacityState) -> bool>)
+}
+
+/// Like [`manage_opacity_ctx`] but with a generic gate predicate (monomorphized, no vtable).
+pub(super) fn manage_opacity_gated_ctx<F>(
+    ctx:  &Arc<TaskCtx>,
+    kind: Arc<str>,
+    scope: crate::signal::SignalScope,
+    hint: OpacityHint,
+    gate: Option<F>,
+) -> OpacityHandle
+where
+    F: Fn(&OpacityState) -> bool + Send + 'static,
+{
     let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
     let mut shutdown_rx = ctx.shutdown_tx.subscribe();
     let ctx = Arc::clone(ctx);
     let clamped_threshold = hint.threshold.clamp(0.4, 0.95);
-    let init_load_key = format!("{}{}/{}", kv_ns::LOAD, ctx.node_id, kind);
+    // Pre-compute the KV key once; cloning Arc<str> is a single atomic increment.
+    let load_key: Arc<str> = Arc::from(format!("{}{}/{}", kv_ns::LOAD, ctx.node_id, kind).as_str());
+    let init_load_key = Arc::clone(&load_key);
     let (init_is_opaque, init_fill) = ctx.kv_state.store.pin()
         .get(&*init_load_key)
         .and_then(|e| e.data.as_ref())
@@ -298,16 +312,14 @@ pub(super) fn manage_opacity_ctx(
                             emit_signal(&ctx, Arc::from(crate::signal::signal_kind::BOUNDARY_OPAQUE), scope.clone(), hint.payload.clone());
                             is_opaque = true;
                             let written_at_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
-                            let load_key: Arc<str> = Arc::from(format!("{}{}/{}", kv_ns::LOAD, ctx.node_id, kind).as_str());
-                            let upd = make_gossip_update(&ctx.node_id, ctx.default_ttl, load_key, encode_load_state(&LoadState { fill_ratio, is_opaque: true, written_at_ms }), false, &ctx.hlc);
+                            let upd = make_gossip_update(&ctx.node_id, ctx.default_ttl, Arc::clone(&load_key), encode_load_state(&LoadState { fill_ratio, is_opaque: true, written_at_ms }), false, &ctx.hlc);
                             apply_and_notify(&ctx.kv_state, &upd);
                             dispatch_gossip_try_send(&ctx.gossip_txs, WireMessage::Data(upd), ctx.node_id.id_hash(), ForwardHint::All, &ctx.kv_state.dropped_frames);
                         }
                     } else if is_opaque && fill_ratio < eff - hint.hysteresis {
                         emit_signal(&ctx, Arc::from(crate::signal::signal_kind::BOUNDARY_TRANSPARENT), scope.clone(), Bytes::new());
                         is_opaque = false;
-                        let load_key: Arc<str> = Arc::from(format!("{}{}/{}", kv_ns::LOAD, ctx.node_id, kind).as_str());
-                        let upd = make_gossip_update(&ctx.node_id, ctx.default_ttl, load_key, Bytes::new(), true, &ctx.hlc);
+                        let upd = make_gossip_update(&ctx.node_id, ctx.default_ttl, Arc::clone(&load_key), Bytes::new(), true, &ctx.hlc);
                         apply_and_notify(&ctx.kv_state, &upd);
                         dispatch_gossip_try_send(&ctx.gossip_txs, WireMessage::Data(upd), ctx.node_id.id_hash(), ForwardHint::All, &ctx.kv_state.dropped_frames);
                     }
@@ -333,7 +345,7 @@ mod tests {
     fn opacity_zero_when_channel_empty() {
         let handlers = SignalHandlers::new(Duration::from_secs(600));
         let kind: Arc<str> = Arc::from("probe");
-        let _rx = handlers.register_with_capacity(kind.clone(), 8);
+        let _rx = handlers.register_with_capacity(Arc::clone(&kind), 8);
         assert_eq!(handlers.fill_ratio(&kind), 0.0);
     }
 
@@ -341,10 +353,10 @@ mod tests {
     fn opacity_one_when_channel_full() {
         let handlers = SignalHandlers::new(Duration::from_secs(600));
         let kind: Arc<str> = Arc::from("probe");
-        let _rx = handlers.register_with_capacity(kind.clone(), 4);
+        let _rx = handlers.register_with_capacity(Arc::clone(&kind), 4);
         let sender = NodeId::new("127.0.0.1", 1).unwrap();
         let sig = Signal {
-            kind: kind.clone(),
+            kind: Arc::clone(&kind),
             scope: SignalScope::System,
             payload: Bytes::new(),
             sender,

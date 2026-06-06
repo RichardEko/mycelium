@@ -171,11 +171,10 @@ fn build_capability(sf: &SkillFile) -> Capability {
         cap = cap.with("description", CapValue::Text(desc.as_str().into()));
     }
 
-    if let Some(ref policy) = sf.capability.policy {
-        if !policy.authorized_callers.is_empty() {
+    if let Some(ref policy) = sf.capability.policy
+        && !policy.authorized_callers.is_empty() {
             cap = cap.with_authorized_callers(policy.authorized_callers.iter().map(String::as_str));
         }
-    }
 
     // Advertise platform requirements as capability attributes so capability
     // resolution can filter on them (e.g. CapConstraint::Eq "gpu")
@@ -189,16 +188,14 @@ fn build_capability(sf: &SkillFile) -> Capability {
     // nodes can inspect the contract from resolve() results without a separate
     // KV lookup. The `skills/{ns}/{name}/{node}/input` KV keys written above
     // are kept for backward compatibility with pre-schema-field peers.
-    if let Some(ref schema) = sf.capability.input {
-        if let Ok(json_str) = serde_json::to_string(schema) {
+    if let Some(ref schema) = sf.capability.input
+        && let Ok(json_str) = serde_json::to_string(schema) {
             cap = cap.with_input_schema(json_str.as_str());
         }
-    }
-    if let Some(ref schema) = sf.capability.output {
-        if let Ok(json_str) = serde_json::to_string(schema) {
+    if let Some(ref schema) = sf.capability.output
+        && let Ok(json_str) = serde_json::to_string(schema) {
             cap = cap.with_output_schema(json_str.as_str());
         }
-    }
 
     cap
 }

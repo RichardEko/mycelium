@@ -54,13 +54,13 @@ pub(crate) async fn handle_connection(
         intern_keys, intern_max_keys, max_peers, writer_idle_timeout,
     } = ctx;
     let node_id         = task_ctx.node_id.clone();
-    let gossip_txs      = task_ctx.gossip_txs.clone();
-    let seen            = task_ctx.seen.clone();
+    let gossip_txs      = Arc::clone(&task_ctx.gossip_txs);
+    let seen            = Arc::clone(&task_ctx.seen);
     let max_ttl         = task_ctx.default_ttl;
-    let hlc             = task_ctx.hlc.clone();
-    let signal_boundary = task_ctx.signal_boundary.clone();
-    let signal_handlers = task_ctx.signal_handlers.clone();
-    let kv_state        = task_ctx.kv_state.clone();
+    let hlc             = Arc::clone(&task_ctx.hlc);
+    let signal_boundary = Arc::clone(&task_ctx.signal_boundary);
+    let signal_handlers = Arc::clone(&task_ctx.signal_handlers);
+    let kv_state        = Arc::clone(&task_ctx.kv_state);
     let wal             = task_ctx.wal.get().cloned();
     let tls             = task_ctx.tls.get().cloned();
     let mut socket = BufReader::with_capacity(8_192, socket);
@@ -161,7 +161,7 @@ pub(crate) async fn handle_connection(
                 if sender_is_new {
                     let key_timestamps: Vec<(std::sync::Arc<str>, u64)> = {
                         let guard = kv_state.store.pin();
-                        guard.iter().map(|(k, v)| (k.clone(), v.timestamp)).collect()
+                        guard.iter().map(|(k, v)| (Arc::clone(k), v.timestamp)).collect()
                     };
                     request_state(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &node_id, &kv_state.hash_acc, &kv_state.dropped_frames, key_timestamps, tls.clone());
                 }
@@ -211,7 +211,7 @@ pub(crate) async fn handle_connection(
                         // Full dump: v7 peer or sender sent no digest.
                         guard.iter()
                             .map(|(k, v)| SyncEntry {
-                                key:          k.clone(),
+                                key:          Arc::clone(k),
                                 value:        v.data.clone().unwrap_or_default(),
                                 timestamp:    v.timestamp,
                                 is_tombstone: v.data.is_none(),
@@ -230,7 +230,7 @@ pub(crate) async fn handle_connection(
                                 }
                             })
                             .map(|(k, v)| SyncEntry {
-                                key:          k.clone(),
+                                key:          Arc::clone(k),
                                 value:        v.data.clone().unwrap_or_default(),
                                 timestamp:    v.timestamp,
                                 is_tombstone: v.data.is_none(),
@@ -328,14 +328,14 @@ pub(crate) async fn handle_connection(
                     };
                     if admit {
                         let raw_signal = Signal {
-                            kind: kind.clone(), scope: scope.clone(),
+                            kind: Arc::clone(&kind), scope: scope.clone(),
                             payload: payload.clone(), sender: sender.clone(), nonce,
                         };
                         // When ordered delivery is enabled and the signal carries an
                         // hlc_seq, route through the reorder buffer; otherwise deliver
                         // directly. Unordered signals (hlc_seq = None) always bypass.
                         let signals_to_deliver: Vec<Signal> =
-                            if let (Some(seq), Some(ref rbuf)) = (hlc_seq, &task_ctx.reorder_buf) {
+                            if let (Some(seq), Some(rbuf)) = (hlc_seq, &task_ctx.reorder_buf) {
                                 // Drain any stale entries before ingesting the new one.
                                 let mut buf = rbuf.lock().unwrap_or_else(|e| e.into_inner());
                                 let mut out = buf.flush_expired();
@@ -395,7 +395,7 @@ pub(crate) async fn handle_connection(
                 if ttl > 1 {
                     let hint = match &scope {
                         SignalScope::System             => ForwardHint::All,
-                        SignalScope::Group(name)        => ForwardHint::Group(name.clone()),
+                        SignalScope::Group(name)        => ForwardHint::Group(Arc::clone(name)),
                         SignalScope::Individual(peer)   => ForwardHint::Individual(peer.clone()),
                         SignalScope::Groups(_)          => ForwardHint::All,
                     };

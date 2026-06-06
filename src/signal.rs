@@ -247,11 +247,10 @@ impl HandlerTable {
         let mut has_closed = false;
         for fs in snapshot.iter() {
             // Sender-identity filter: skip this slot if the sender is not trusted.
-            if let Some(ref trusted) = fs.filter {
-                if !trusted.iter().any(|id| id == &signal.sender) {
+            if let Some(ref trusted) = fs.filter
+                && !trusted.iter().any(|id| id == &signal.sender) {
                     continue;
                 }
-            }
             match fs.tx.try_send(signal.clone()) {
                 Ok(()) => {}
                 Err(TrySendError::Full(_)) => {
@@ -266,7 +265,7 @@ impl HandlerTable {
             }
         }
         if has_closed {
-            self.map.pin().compute(signal.kind.clone(), |existing| match existing {
+            self.map.pin().compute(Arc::clone(&signal.kind), |existing| match existing {
                 None => papaya::Operation::Abort(()),
                 Some((_, arc)) => {
                     let filtered: Vec<_> = arc.iter().filter(|fs| !fs.is_closed()).cloned().collect();
@@ -306,18 +305,18 @@ impl SignalLog {
     /// the sender history. Lazy retention prunes the deque front while the
     /// oldest entry is older than `sender_log_window`.
     fn record(&self, kind: &Arc<str>, sender: NodeId, now: Instant) {
-        self.last_seen.pin().insert(kind.clone(), now);
+        self.last_seen.pin().insert(Arc::clone(kind), now);
         let window = self.sender_log_window;
         let arc = {
             let guard = self.sender_log.pin();
             if let Some(existing) = guard.get(kind.as_ref()) {
-                existing.clone()
+                Arc::clone(existing)
             } else {
                 let new_arc = Arc::new(Mutex::new(VecDeque::<(NodeId, Instant)>::new()));
                 let mut result: Option<Arc<Mutex<VecDeque<_>>>> = None;
-                guard.compute(kind.clone(), |existing| match existing {
-                    Some((_, arc)) => { result = Some(arc.clone()); papaya::Operation::Abort(()) }
-                    None => { result = Some(new_arc.clone()); papaya::Operation::Insert(new_arc.clone()) }
+                guard.compute(Arc::clone(kind), |existing| match existing {
+                    Some((_, arc)) => { result = Some(Arc::clone(arc)); papaya::Operation::Abort(()) }
+                    None => { result = Some(Arc::clone(&new_arc)); papaya::Operation::Insert(Arc::clone(&new_arc)) }
                 });
                 result.unwrap()
             }
@@ -372,13 +371,13 @@ impl SignalLog {
             .unwrap_or_else(Instant::now);
         let guard = self.sender_log.pin();
         let arc = if let Some(existing) = guard.get(kind.as_ref()) {
-            existing.clone()
+            Arc::clone(existing)
         } else {
             let new_arc = Arc::new(Mutex::new(VecDeque::<(NodeId, Instant)>::new()));
             let mut result: Option<Arc<Mutex<VecDeque<_>>>> = None;
-            guard.compute(kind.clone(), |existing| match existing {
-                Some((_, arc)) => { result = Some(arc.clone()); papaya::Operation::Abort(()) }
-                None => { result = Some(new_arc.clone()); papaya::Operation::Insert(new_arc.clone()) }
+            guard.compute(Arc::clone(&kind), |existing| match existing {
+                Some((_, arc)) => { result = Some(Arc::clone(arc)); papaya::Operation::Abort(()) }
+                None => { result = Some(Arc::clone(&new_arc)); papaya::Operation::Insert(Arc::clone(&new_arc)) }
             });
             result.unwrap()
         };
@@ -397,7 +396,7 @@ impl SignalLog {
                     while log.front().map(|(_, t)| *t <= cutoff).unwrap_or(false) {
                         log.pop_front();
                     }
-                    if log.is_empty() { Some(kind.clone()) } else { None }
+                    if log.is_empty() { Some(Arc::clone(kind)) } else { None }
                 })
                 .collect()
         };
@@ -459,7 +458,7 @@ impl QuorumEvidence {
             .map(|last| now.duration_since(*last) > Duration::from_secs(1))
             .unwrap_or(true);
         if should_write {
-            self.quorum_written.pin().insert(quorum_key.clone(), now);
+            self.quorum_written.pin().insert(Arc::clone(&quorum_key), now);
             let now_ms = SystemTime::now()
                 .duration_since(UNIX_EPOCH).unwrap_or_default()
                 .as_millis() as u64;
@@ -473,7 +472,7 @@ impl QuorumEvidence {
         let stale: Vec<Arc<str>> = self.quorum_written.pin()
             .iter()
             .filter_map(|(k, last)| {
-                if now.duration_since(*last) > window { Some(k.clone()) } else { None }
+                if now.duration_since(*last) > window { Some(Arc::clone(k)) } else { None }
             })
             .collect();
         let guard = self.quorum_written.pin();
@@ -970,7 +969,7 @@ impl SignalReorderBuffer {
     /// to deliver in ascending HLC order. Signals at or below the watermark
     /// (already delivered) are silently discarded.
     pub(crate) fn ingest(&mut self, hlc_seq: u64, signal: Signal) -> Vec<Signal> {
-        let key = (signal.sender.clone(), signal.kind.clone());
+        let key = (signal.sender.clone(), Arc::clone(&signal.kind));
         if hlc_seq <= self.watermarks.get(&key).copied().unwrap_or(0) {
             return vec![];
         }

@@ -88,7 +88,7 @@ impl MeshHandle {
     /// set against a `CapabilityGroupDef` filter — no explicit `join_group` call is needed.
     pub fn join_group(&self, group: impl Into<Arc<str>>) {
         let group: Arc<str> = group.into();
-        let inserted = self.ctx.signal_boundary.write().groups.insert(group.clone());
+        let inserted = self.ctx.signal_boundary.write().groups.insert(Arc::clone(&group));
         if inserted {
             let key = crate::signal::grp_member_key(&group, &self.ctx.node_id);
             let _ = kv_set(&self.ctx, Arc::from(key.as_str()), Bytes::from_static(b"1"));
@@ -189,7 +189,7 @@ impl MeshHandle {
                     _ = &mut cancel_rx                   => break,
                     _ = shutdown_rx.wait_for(|v| *v)     => break,
                     _ = ticker.tick() => {
-                        emit_signal(&ctx, kind.clone(), scope.clone(), payload_fn());
+                        emit_signal(&ctx, Arc::clone(&kind), scope.clone(), payload_fn());
                     }
                 }
             }
@@ -218,9 +218,9 @@ impl MeshHandle {
         let kv_key: Arc<str> = Arc::from(format!("svc/{}/{}", kind, ctx.node_id).as_str());
         let payload_arc: PersistPayloadFn = Arc::new(payload_fn);
         let on_tick: PersistOnTickFn = {
-            let kind = kind.clone();
+            let kind = Arc::clone(&kind);
             Arc::new(move |ctx, payload| {
-                emit_signal(ctx, kind.clone(), scope.clone(), payload.clone());
+                emit_signal(ctx, Arc::clone(&kind), scope.clone(), payload.clone());
             })
         };
 
@@ -406,7 +406,7 @@ mod tests {
         let sender_a = NodeId::new("127.0.0.1", 1001).unwrap();
         let sender_b = NodeId::new("127.0.0.1", 1002).unwrap();
         let sig = |sender: NodeId, nonce: u64| Signal {
-            kind: kind.clone(), scope: SignalScope::System,
+            kind: Arc::clone(&kind), scope: SignalScope::System,
             payload: Bytes::new(), sender, nonce,
         };
         handlers.deliver(&sig(sender_a.clone(), 1));

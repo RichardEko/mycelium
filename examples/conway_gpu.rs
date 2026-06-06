@@ -3,7 +3,7 @@
 //! Architecture:
 //!   - 16×16 GossipAgents run over TCP (ports 52100-52355), one per grid tile.
 //!   - A 512×512 Conway grid lives in a wgpu storage buffer on the GPU (Metal backend).
-//!   - Each tick: a compute shader applies the Conway rule to all 262 144 cells in parallel.
+//!   - Each epoch: a compute shader applies the Conway rule to all 262 144 cells in parallel.
 //!   - Each agent reads the live-cell density of its 32×32 tile and writes it as a u8 to KV.
 //!   - Density values propagate epidemically; any agent can answer "what fraction of tile (x,y)
 //!     is alive?" from its gossiped view — demonstrating eventual-consistency over GPU state.
@@ -43,7 +43,7 @@ const TILE:      usize = 32;           // GPU cells per agent tile
 const FULL:      usize = MESH * TILE;  // 512: full GPU grid width/height
 const BASE_PORT: u16   = 52100;
 const HTTP_PORT: u16   = 8091;
-const TICK_MS:   u64   = 100;          // GPU tick — fast because compute is free
+const TICK_MS:   u64   = 100;          // GPU epoch — fast because compute is free
 const SETTLE_MS: u64   = 3_000;
 
 fn port(x: usize, y: usize) -> u16 { BASE_PORT + (y * MESH + x) as u16 }
@@ -419,9 +419,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     time::sleep(Duration::from_millis(SETTLE_MS)).await;
 
     // ── Tick driver: GPU step + density gossip ─────────────────────────
-    eprintln!("Running. 512×512 GPU grid, {MESH}×{MESH} gossip mesh, {TICK_MS}ms/gen.");
+    eprintln!("Running. 512×512 GPU grid, {MESH}×{MESH} gossip mesh, {TICK_MS}ms/tick.");
 
-    let mut gen = 0u64;
+    let mut epoch = 0u64;
     let agents_arc = Arc::new(agents.clone());
     let shared_tick = shared.clone();
 
@@ -459,16 +459,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // 3. Update shared state for HTTP
                 {
                     let mut s = shared_tick.lock().unwrap();
-                    s.generation = gen;
+                    s.generation = epoch;
                     s.grid       = grid;
                     s.density    = density;
                 }
-                gen += 1;
+                epoch += 1;
 
-                if gen % 50 == 0 {
+                if epoch % 50 == 0 {
                     let total_live: u32 = density.iter().flat_map(|r| r.iter())
                         .map(|&d| d as u32).sum::<u32>() * (TILE * TILE / 100) as u32;
-                    eprintln!("gen {gen:5}  ~{total_live} live cells");
+                    eprintln!("epoch {epoch:5}  ~{total_live} live cells");
                 }
             }
             _ = signal::ctrl_c() => break,

@@ -2,13 +2,13 @@
 //!
 //! 256 GossipAgents run in-process over TCP (ports 52000-52255).
 //! Each agent owns one cell. Cell state lives in the KV store and
-//! propagates epidemically. A System-scope tick signal drives each
+//! propagates epidemically. A System-scope epoch signal drives each
 //! agent to read its neighbours' state from its own gossiped view
 //! and write its cell's next state — demonstrating eventual consistency.
 //!
 //! Coordination: each agent uses a local tokio::time::interval — the
 //! standard pattern in distributed systems (Dynamo, Cassandra, Riak all
-//! do this). The gossip *tick signal* was elegant but unreliable: the
+//! do this). The gossip *epoch signal* was elegant but unreliable: the
 //! boundary layer's opacity mechanism sheds signals under load, and
 //! eventual consistency cannot guarantee all 256 agents see consistent
 //! neighbour state within a single generation boundary. Local timers
@@ -184,9 +184,9 @@ fn read_alive(agent: &GossipAgent, x: usize, y: usize) -> bool {
         .unwrap_or(false)
 }
 
-fn render_terminal(viewer: &GossipAgent, gen: u64, live: usize) {
+fn render_terminal(viewer: &GossipAgent, epoch: u64, live: usize) {
     print!("\x1b[H");
-    println!("  Conway's Life — {GRID}×{GRID} gossip mesh   \x1b[36mgen {gen}\x1b[0m   \x1b[33mlive {live:3}\x1b[0m          ");
+    println!("  Conway's Life — {GRID}×{GRID} gossip mesh   \x1b[36mgen {epoch}\x1b[0m   \x1b[33mlive {live:3}\x1b[0m          ");
     println!("  {} TCP agents · KV epidemic propagation · http://127.0.0.1:{HTTP_PORT}/state\n", GRID*GRID);
     for y in 0..GRID {
         print!("  ");
@@ -280,7 +280,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("Mesh settling ({SETTLE_MS}ms)…");
     time::sleep(Duration::from_millis(SETTLE_MS)).await;
 
-    // ── Per-cell tick tasks ───────────────────────────────────────────
+    // ── Per-cell epoch tasks ───────────────────────────────────────────
     // Each agent runs its own local timer — the standard pattern in distributed
     // systems. The gossip layer handles state propagation; the timer handles
     // local coordination. Two-phase separation (read → sleep → write) keeps
@@ -317,7 +317,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Tracks kv_ages by observing state changes between render frames.
     print!("\x1b[2J");
     let viewer = agents[0].clone();
-    let mut gen = 0u64;
+    let mut epoch = 0u64;
     let mut kv_ages = [[-1i64; GRID]; GRID];
     let mut prev_alive = [[false; GRID]; GRID];
 
@@ -338,7 +338,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if alive { live += 1; }
                         // Track when each cell last changed (drives KV freshness view)
                         if alive != prev_alive[y][x] {
-                            kv_ages[y][x] = gen as i64;
+                            kv_ages[y][x] = epoch as i64;
                             prev_alive[y][x] = alive;
                         }
                     }
@@ -347,14 +347,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Update HTTP snapshot
                 {
                     let mut s = snapshot.lock().unwrap();
-                    s.generation = gen;
+                    s.generation = epoch;
                     s.cells      = snap_cells;
                     s.kv_ages    = kv_ages;
                     s.live       = live;
                 }
 
-                render_terminal(&viewer, gen, live);
-                gen += 1;
+                render_terminal(&viewer, epoch, live);
+                epoch += 1;
             }
             _ = signal::ctrl_c() => break,
         }
@@ -367,7 +367,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Confirm channel depth was adequate — non-zero means writer_channel_depth
-    // should be raised for this cluster size / tick rate.
+    // should be raised for this cluster size / epoch rate.
     let stats = viewer.system_stats();
     if stats.dropped_frames > 0 {
         eprintln!("dropped_frames: {} — consider raising writer_channel_depth", stats.dropped_frames);

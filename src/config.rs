@@ -655,15 +655,14 @@ impl GossipConfig {
             // Writability check: warn and the caller falls back to None at startup.
             // We don't hard-fail here because validate() is also called in load_from_file
             // before the node_id is known, so we can only check the base path itself.
-            if !p.base_path.as_os_str().is_empty() {
-                if let Err(e) = fs::create_dir_all(&p.base_path) {
+            if !p.base_path.as_os_str().is_empty()
+                && let Err(e) = fs::create_dir_all(&p.base_path) {
                     tracing::warn!(
                         path = %p.base_path.display(),
                         error = %e,
                         "persistence.base_path is not writable; node will run in-memory-only mode",
                     );
                 }
-            }
         }
         Ok(())
     }
@@ -903,19 +902,24 @@ mod tests {
     }
 
     #[test]
+    #[allow(unsafe_code)]
     fn apply_env_overrides_sets_field() {
         struct EnvGuard(&'static str, Option<String>);
         impl Drop for EnvGuard {
             fn drop(&mut self) {
-                match &self.1 {
-                    Some(v) => std::env::set_var(self.0, v),
-                    None    => std::env::remove_var(self.0),
+                // SAFETY: single-threaded test; no other thread reads this var.
+                unsafe {
+                    match &self.1 {
+                        Some(v) => std::env::set_var(self.0, v),
+                        None    => std::env::remove_var(self.0),
+                    }
                 }
             }
         }
         let var = "GOSSIP_MAX_SEEN_ENTRIES";
         let _guard = EnvGuard(var, std::env::var(var).ok());
-        std::env::set_var(var, "12345");
+        // SAFETY: single-threaded test; no other thread reads this var.
+        unsafe { std::env::set_var(var, "12345"); }
         let mut cfg = GossipConfig::default();
         cfg.apply_env_overrides().expect("apply_env_overrides must not fail");
         assert_eq!(cfg.max_seen_entries, 12345);

@@ -403,13 +403,11 @@ impl ConsensusHandle {
         match self.group_propose(group, &slot, value, ConsensusConfig::default()).await {
             ConsensusResult::Committed { .. } => Ok(self.ctx.node_id.clone()),
             ConsensusResult::Superseded { .. } => {
-                if let Some(raw) = kv_get(&self.ctx, &format!("consensus/committed/{slot}")) {
-                    if let Ok(s) = std::str::from_utf8(&raw) {
-                        if let Ok(id) = s.parse::<NodeId>() {
+                if let Some(raw) = kv_get(&self.ctx, &format!("consensus/committed/{slot}"))
+                    && let Ok(s) = std::str::from_utf8(&raw)
+                        && let Ok(id) = s.parse::<NodeId>() {
                             return Ok(id);
                         }
-                    }
-                }
                 Err(ConsistencyError::Superseded)
             }
             ConsensusResult::Timeout { ballots_tried, .. } =>

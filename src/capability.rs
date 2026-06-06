@@ -366,11 +366,10 @@ impl CapFilter {
             let Some(value) = cap.attributes.get(attr) else { return false; };
             if !constraint.matches(value) { return false; }
         }
-        if let Some(ref sid) = self.schema_id {
-            if cap.schema_id.as_deref() != Some(sid.as_ref()) {
+        if let Some(ref sid) = self.schema_id
+            && cap.schema_id.as_deref() != Some(sid.as_ref()) {
                 return false;
             }
-        }
         true
     }
 

@@ -137,13 +137,13 @@ pub(super) fn scan_prefix_kv_with_ts(kv_state: &crate::store::KvState, prefix: &
                 if !key.starts_with(prefix) { return None; }
                 let entry = store_guard.get(key.as_ref())?;
                 let data  = entry.data.clone()?;
-                Some((key.clone(), data, entry.timestamp))
+                Some((Arc::clone(key), data, entry.timestamp))
             })
             .collect()
     } else {
         store_guard.iter()
             .filter(|(k, v)| v.data.is_some() && k.starts_with(prefix))
-            .map(|(k, v)| (k.clone(), v.data.clone().unwrap(), v.timestamp))
+            .map(|(k, v)| (Arc::clone(k), v.data.clone().unwrap(), v.timestamp))
             .collect()
     }
 }
@@ -166,7 +166,7 @@ pub(super) fn scan_cap_by_ns_name(
         .filter_map(|(key, _)| {
             let entry = store_guard.get(key.as_ref())?;
             let data  = entry.data.clone()?;
-            Some((key.clone(), data, entry.timestamp))
+            Some((Arc::clone(key), data, entry.timestamp))
         })
         .collect();
     result
@@ -205,9 +205,8 @@ pub(super) fn resolve_filter_against_kv(
             continue;
         };
         if !entry.is_fresh(hlc_ts, now_ms) { continue; }
-        if let Some(max_age) = filter.max_age {
-            if is_stale(hlc_ts, now_ms, max_age) { continue; }
-        }
+        if let Some(max_age) = filter.max_age
+            && is_stale(hlc_ts, now_ms, max_age) { continue; }
         let cap = entry.capability;
         if filter.matches(&cap) {
             out.push((node_id, cap));
@@ -242,15 +241,14 @@ pub(crate) fn subscribe_prefix_on_kv(
 ) -> watch::Receiver<u64> {
     loop {
         let guard = kv_state.prefix_watchers.pin();
-        if let Some(tx) = guard.get(&prefix) {
-            if !tx.is_closed() {
+        if let Some(tx) = guard.get(&prefix)
+            && !tx.is_closed() {
                 return tx.subscribe();
             }
-        }
         let (new_tx, rx) = watch::channel(0u64);
         let new_tx_arc = Arc::new(new_tx);
         let mut slot = Some(new_tx_arc);
-        let result = guard.compute(prefix.clone(), |existing| match existing {
+        let result = guard.compute(Arc::clone(&prefix), |existing| match existing {
             Some((_, tx)) if !tx.is_closed() => papaya::Operation::Abort(()),
             _ => match slot.take() {
                 Some(tx) => papaya::Operation::Insert(tx),
@@ -273,7 +271,7 @@ fn write_opacity_key(ctx: &TaskCtx, opacity_key: &Arc<str>) {
         fill_ratio: 1.0, is_opaque: true, written_at_ms: now_ms(),
     });
     let upd = make_gossip_update(
-        &ctx.node_id, ctx.default_ttl, opacity_key.clone(), payload, false, &ctx.hlc,
+        &ctx.node_id, ctx.default_ttl, Arc::clone(opacity_key), payload, false, &ctx.hlc,
     );
     apply_and_notify(&ctx.kv_state, &upd);
     dispatch_gossip_try_send(
@@ -289,7 +287,7 @@ fn clear_opacity_key(ctx: &TaskCtx, opacity_key: &Arc<str>) {
     use crate::framing::{dispatch_gossip_try_send, ForwardHint, WireMessage, make_gossip_update};
     use crate::store::apply_and_notify;
     let upd = make_gossip_update(
-        &ctx.node_id, ctx.default_ttl, opacity_key.clone(), Bytes::new(), true, &ctx.hlc,
+        &ctx.node_id, ctx.default_ttl, Arc::clone(opacity_key), Bytes::new(), true, &ctx.hlc,
     );
     apply_and_notify(&ctx.kv_state, &upd);
     dispatch_gossip_try_send(
@@ -337,7 +335,7 @@ pub(super) async fn run_consolidated_opacity_watcher(
                 false
             };
             local.push(LocalEntry {
-                opacity_key:    reg.opacity_key.clone(),
+                opacity_key:    Arc::clone(&reg.opacity_key),
                 filter:         Arc::clone(&reg.filter),
                 cancelled:      Arc::clone(&reg.cancelled),
                 opaque_written,
@@ -367,7 +365,7 @@ pub(super) async fn run_consolidated_opacity_watcher(
                     false
                 };
                 local.push(LocalEntry {
-                    opacity_key:    reg.opacity_key.clone(),
+                    opacity_key:    Arc::clone(&reg.opacity_key),
                     filter:         Arc::clone(&reg.filter),
                     cancelled:      Arc::clone(&reg.cancelled),
                     opaque_written,

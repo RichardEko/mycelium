@@ -135,7 +135,7 @@ pub(crate) async fn run_kv_persist_task(
                     f(&ctx, &payload);
                 }
                 let update = crate::framing::make_gossip_update(
-                    &ctx.node_id, ctx.default_ttl, kv_key.clone(), payload, false, &ctx.hlc,
+                    &ctx.node_id, ctx.default_ttl, Arc::clone(&kv_key), payload, false, &ctx.hlc,
                 );
                 apply_and_notify(&ctx.kv_state, &update);
                 if first_tick {
@@ -150,7 +150,7 @@ pub(crate) async fn run_kv_persist_task(
         }
     }
     let tombstone = crate::framing::make_gossip_update(
-        &ctx.node_id, ctx.default_ttl, kv_key.clone(), Bytes::new(), true, &ctx.hlc,
+        &ctx.node_id, ctx.default_ttl, Arc::clone(&kv_key), Bytes::new(), true, &ctx.hlc,
     );
     apply_and_notify(&ctx.kv_state, &tombstone);
     dispatch_gossip_send(

@@ -478,12 +478,11 @@ impl ConsensusEngine {
         if policy.enforcement != TopologyEnforcement::Hard { return (true, 0, None); }
         if let Some(name) = group_name {
             let override_key = format!("sys/topology-override/{}", name);
-            if let Some(value) = self.get(&override_key) {
-                if value.as_ref() == b"true" {
+            if let Some(value) = self.get(&override_key)
+                && value.as_ref() == b"true" {
                     // Operator override — degrade to no-gate behaviour.
                     return (true, 0, None);
                 }
-            }
         }
         let (passes, distinct) = evaluate_topology_gate(voters, policy);
         let meta = (policy.spread_depth.unwrap_or(0), policy.spread_min_distinct);
@@ -605,7 +604,7 @@ impl ConsensusEngine {
         // Extract the group name once for `sys/topology-override/{group}` lookups
         // and for completing the TopologyUnsatisfied return.
         let group_name: Option<Arc<str>> = match &scope {
-            SignalScope::Group(g) => Some(g.clone()),
+            SignalScope::Group(g) => Some(Arc::clone(g)),
             _                     => None,
         };
 
@@ -641,7 +640,7 @@ impl ConsensusEngine {
             );
 
             let propose_msg = ConsensusMsg::Propose {
-                slot: slot.clone(), ballot, value: value.clone(),
+                slot: Arc::clone(&slot), ballot, value: value.clone(),
                 proposer: self.task_ctx.node_id.clone(),
             };
             self.emit_async(
@@ -701,11 +700,10 @@ impl ConsensusEngine {
             // remember it for the final TopologyUnsatisfied return.
             if voters.len() >= quorum_size {
                 let (passes, distinct, meta) = self.topology_check(&voters, group_name.as_deref());
-                if !passes {
-                    if let Some((depth, required)) = meta {
+                if !passes
+                    && let Some((depth, required)) = meta {
                         topology_failed = Some((distinct, required, depth));
                     }
-                }
             }
 
             if config.ballot_retry_jitter_ms > 0 {
@@ -814,7 +812,7 @@ impl ConsensusEngine {
             self.set_async(&ballot_key, encode_ballot(ballot)).await;
 
             let propose_msg = ConsensusMsg::Propose {
-                slot: slot.clone(), ballot, value: value.clone(),
+                slot: Arc::clone(&slot), ballot, value: value.clone(),
                 proposer: self.task_ctx.node_id.clone(),
             };
             self.emit_async(
@@ -856,7 +854,7 @@ impl ConsensusEngine {
                         });
                         if all_ready {
                             let commit_msg = ConsensusMsg::Commit {
-                                slot: slot.clone(), ballot, value: value.clone(),
+                                slot: Arc::clone(&slot), ballot, value: value.clone(),
                             };
                             self.emit_async(
                                 Arc::from(consensus_kind::COMMIT),
@@ -876,12 +874,10 @@ impl ConsensusEngine {
                     Some(sig) = nack_rx.recv() => {
                         if let Some(ConsensusMsg::Nack { slot: s, seen_ballot }) =
                             self.decode_verify(&sig.payload)
-                        {
-                            if s == slot && seen_ballot > ballot {
+                            && s == slot && seen_ballot > ballot {
                                 nack_ballot = seen_ballot;
                                 break 'collect;
                             }
-                        }
                     }
                 }
             }
@@ -928,7 +924,7 @@ impl ConsensusEngine {
         if !passes { return None; }
 
         let commit = ConsensusMsg::Commit {
-            slot: slot.clone(), ballot, value: value.clone(),
+            slot: Arc::clone(slot), ballot, value: value.clone(),
         };
         self.emit_async(
             Arc::from(consensus_kind::COMMIT), scope.clone(), self.sign_payload(encode_consensus_msg(&commit)),
@@ -939,7 +935,7 @@ impl ConsensusEngine {
         }
         self.kv_delete(ballot_key);
         Some(ConsensusResult::Committed {
-            slot:   slot.clone(),
+            slot:   Arc::clone(slot),
             value:  value.clone(),
             ballot,
         })
@@ -991,9 +987,8 @@ impl ConsensusEngine {
                     };
                     if s == *slot && b == ballot {
                         // Trust-slice filtering: only count votes from declared peers.
-                        if let Some(ts) = trust_set {
-                            if !ts.contains(&voter.id_hash()) { continue; }
-                        }
+                        if let Some(ts) = trust_set
+                            && !ts.contains(&voter.id_hash()) { continue; }
                         voters.insert(voter, locality);
                         if let Some(res) = self.try_commit_if_ready(
                             voters, *quorum_size, group_name,
@@ -1009,11 +1004,9 @@ impl ConsensusEngine {
                 Some(sig) = nack_rx.recv() => {
                     if let Some(ConsensusMsg::Nack { slot: s, seen_ballot }) =
                         self.decode_verify(&sig.payload)
-                    {
-                        if s == *slot && seen_ballot > ballot {
+                        && s == *slot && seen_ballot > ballot {
                             return BallotOutcome::NackHigher(seen_ballot);
                         }
-                    }
                 }
                 // Re-evaluate quorum when a member turns opaque mid-ballot.
                 // BOUNDARY_OPAQUE means the sender is now excluded from active_members,
@@ -1144,7 +1137,7 @@ pub(crate) async fn run_consensus_listener(
                         ctx.sign_payload(encode_consensus_msg(&nack)),
                     );
                 } else {
-                    seen_ballot.insert(slot.clone(), ballot);
+                    seen_ballot.insert(Arc::clone(&slot), ballot);
                     ctx.kv_set(
                         format!("{}{}", consensus_ns::BALLOT, &*slot),
                         encode_ballot(ballot),
@@ -1154,7 +1147,7 @@ pub(crate) async fn run_consensus_listener(
                     // via this variant — Soft policies and gate-less proposals
                     // count every voter regardless.
                     let vote = ConsensusMsg::VoteWithLocality {
-                        slot:     slot.clone(),
+                        slot:     Arc::clone(&slot),
                         ballot,
                         voter:    ctx.task_ctx.node_id.clone(),
                         locality: ctx.self_locality.clone(),
