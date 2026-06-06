@@ -213,6 +213,41 @@ Without `gateway`, `with_http_routes`, `with_a2a`, the SSE/WebSocket endpoints, 
 the MCP-over-HTTP bridge are all compiled away. The gossip core, KV store, signal mesh,
 consensus, and all typed sub-handles (`KvHandle`, `MeshHandle`, etc.) remain available.
 
+### Testing conventions
+
+**Always run the full feature matrix locally before pushing.**
+`cargo test --lib` alone misses code inside `#[cfg(feature = "tls")]`, `#[cfg(feature = "a2a")]`, etc.
+Use the same set CI uses:
+
+```bash
+cargo test --lib --features tls,metrics,a2a,llm
+cargo clippy --lib --tests --features tls,metrics,a2a,llm -- -D warnings
+```
+
+**Consensus tests on multi-node setups require `start_consensus_listener` on every node.**
+`system_propose` / `consistent_set` compute `quorum = ⌊(peers+1)/2⌋ + 1`. If peer nodes have
+no `ConsensusListener`, their votes never arrive and every ballot times out. A test that omits
+this only passes when `peers.len() == 0` at call time (accidental single-node quorum) — a timing
+race that disappears as soon as cluster formation is polled properly.
+
+```rust
+// Required pattern for any multi-node consensus test:
+let _l1 = a1.consensus().start_consensus_listener(ConsensusConfig::default());
+let _l2 = a2.consensus().start_consensus_listener(ConsensusConfig::default());
+// Poll until peers are visible — structural, not a sleep:
+for _ in 0..40 {
+    if !a1.peers().is_empty() && !a2.peers().is_empty() { break; }
+    tokio::time::sleep(Duration::from_millis(50)).await;
+}
+```
+
+**Use structural polling, not fixed sleeps, to assert cluster state.**
+A structural assertion (`!peers().is_empty()`) fails deterministically and points to the root
+cause. A fixed `sleep(300ms)` passes by luck on a fast machine and hides the race on a slow one.
+A test that passes intermittently is harder to catch than one that reliably fails — the peer-ready
+poll converts a timing race into a consistent deterministic failure, which is how latent bugs
+get found.
+
 ## Working in this repo
 
 - `cargo build --lib`, `cargo test --lib`, `cargo clippy --lib --tests`
