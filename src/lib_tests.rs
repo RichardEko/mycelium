@@ -184,6 +184,47 @@ fn alloc_port() -> u16 {
         .port()
 }
 
+// ── Two-node consensus test fixture ──────────────────────────────────────
+//
+// Required for any multi-node consensus test:
+// - Both nodes need start_consensus_listener or their votes never arrive.
+// - quorum = ⌊(peers+1)/2⌋ + 1 = 2 once peers are connected; a test that
+//   calls propose before peers connect silently gets quorum=1 (self-vote
+//   only) and passes for the wrong reason.
+// - Structural peer-ready poll converts a timing race into a deterministic
+//   failure if the cluster doesn't form, making root causes obvious.
+
+struct ConsensusPair {
+    pub a:   GossipAgent,
+    pub b:   GossipAgent,
+    pub _la: ConsensusListenerHandle,
+    pub _lb: ConsensusListenerHandle,
+}
+
+async fn consensus_pair() -> ConsensusPair {
+    let port_a = alloc_port();
+    let port_b = alloc_port();
+    let id_a = NodeId::new("127.0.0.1", port_a).unwrap();
+    let id_b = NodeId::new("127.0.0.1", port_b).unwrap();
+    let mut cfg_a = GossipConfig::default();
+    cfg_a.bind_port                  = port_a;
+    cfg_a.bootstrap_peers            = vec![id_b.clone()];
+    cfg_a.health_check_max_jitter_ms = 50;   // cap initial ping delay so poll converges fast
+    let mut cfg_b = GossipConfig::default();
+    cfg_b.bind_port                  = port_b;
+    cfg_b.bootstrap_peers            = vec![id_a.clone()];
+    cfg_b.health_check_max_jitter_ms = 50;
+    let a = GossipAgent::new(id_a, cfg_a);
+    let b = GossipAgent::new(id_b, cfg_b);
+    a.start().await.unwrap();
+    b.start().await.unwrap();
+    let _la = a.consensus().start_consensus_listener(ConsensusConfig::default());
+    let _lb = b.consensus().start_consensus_listener(ConsensusConfig::default());
+    // Structural poll — fails deterministically if cluster doesn't form.
+    poll_until(|| !a.peers().is_empty() && !b.peers().is_empty(), 2_000).await;
+    ConsensusPair { a, b, _la, _lb }
+}
+
 
 // ── Agent API ─────────────────────────────────────────────────────────────
 
@@ -1478,27 +1519,9 @@ async fn test_group_propose_timeout() {
 
 #[tokio::test]
 async fn test_group_propose_two_node_quorum() {
-    let port_a = alloc_port();
-    let port_b = alloc_port();
-
-    let mut cfg_a = GossipConfig::default();
-    cfg_a.bind_port = port_a;
-    cfg_a.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_b).unwrap()];
-
-    let mut cfg_b = GossipConfig::default();
-    cfg_b.bind_port = port_b;
-    cfg_b.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_a).unwrap()];
-
-    let agent_a = GossipAgent::new(NodeId::new("127.0.0.1", port_a).unwrap(), cfg_a);
-    let agent_b = GossipAgent::new(NodeId::new("127.0.0.1", port_b).unwrap(), cfg_b);
-    agent_a.start().await.unwrap();
-    agent_b.start().await.unwrap();
-    time::sleep(Duration::from_millis(150)).await;
-
-    agent_a.mesh().join_group("cgrp");
-    agent_b.mesh().join_group("cgrp");
-    let _la = agent_a.consensus().start_consensus_listener(ConsensusConfig::default());
-    let _lb = agent_b.consensus().start_consensus_listener(ConsensusConfig::default());
+    let pair = consensus_pair().await;
+    pair.a.mesh().join_group("cgrp");
+    pair.b.mesh().join_group("cgrp");
 
     let config = ConsensusConfig {
         quorum_size:    2,
@@ -1506,40 +1529,22 @@ async fn test_group_propose_two_node_quorum() {
         max_ballots:    3,
         ..ConsensusConfig::default()
     };
-    let result = agent_a.consensus().group_propose("cgrp", "slA", Bytes::from_static(b"agreed"), config).await;
+    let result = pair.a.consensus().group_propose("cgrp", "slA", Bytes::from_static(b"agreed"), config).await;
     assert!(
         matches!(result, ConsensusResult::Committed { .. }),
         "two-node quorum should commit; got {:?}", result
     );
-    agent_a.shutdown().await;
-    agent_b.shutdown().await;
+    pair.a.shutdown().await;
+    pair.b.shutdown().await;
 }
 
 // Two agents propose to the same slot concurrently. With ballot jitter, one
 // should Commit and the other Superseded. Neither should Timeout.
 #[tokio::test]
 async fn test_consensus_simultaneous_proposers_resolve() {
-    let port_a = alloc_port();
-    let port_b = alloc_port();
-
-    let mut cfg_a = GossipConfig::default();
-    cfg_a.bind_port                  = port_a;
-    cfg_a.health_check_max_jitter_ms = 50;
-    cfg_a.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_b).unwrap()];
-
-    let mut cfg_b = GossipConfig::default();
-    cfg_b.bind_port                  = port_b;
-    cfg_b.health_check_max_jitter_ms = 50;
-    cfg_b.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_a).unwrap()];
-
-    let agent_a = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port_a).unwrap(), cfg_a));
-    let agent_b = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port_b).unwrap(), cfg_b));
-    agent_a.start().await.unwrap();
-    agent_b.start().await.unwrap();
-    time::sleep(Duration::from_millis(150)).await;
-
-    let _la = agent_a.consensus().start_consensus_listener(ConsensusConfig::default());
-    let _lb = agent_b.consensus().start_consensus_listener(ConsensusConfig::default());
+    let ConsensusPair { a, b, _la, _lb } = consensus_pair().await;
+    let agent_a = Arc::new(a);
+    let agent_b = Arc::new(b);
 
     // quorum_size=1 so each agent self-commits; the second proposer will find the
     // commit_key written by the first and return Superseded on the next ballot check.
@@ -1692,32 +1697,11 @@ async fn test_consensus_late_joiner_sync() {
 // Proposer declares an empty trust slice; B's vote must not count.
 #[tokio::test]
 async fn test_trust_slice_filters_votes() {
-    let port_a = alloc_port();
-    let port_b = alloc_port();
-
-    let mut cfg_a = GossipConfig::default();
-    cfg_a.bind_port                  = port_a;
-    cfg_a.health_check_max_jitter_ms = 50;
-    cfg_a.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_b).unwrap()];
-
-    let mut cfg_b = GossipConfig::default();
-    cfg_b.bind_port                  = port_b;
-    cfg_b.health_check_max_jitter_ms = 50;
-    cfg_b.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_a).unwrap()];
-
-    let agent_a = GossipAgent::new(NodeId::new("127.0.0.1", port_a).unwrap(), cfg_a);
-    let agent_b = GossipAgent::new(NodeId::new("127.0.0.1", port_b).unwrap(), cfg_b);
-    agent_a.start().await.unwrap();
-    agent_b.start().await.unwrap();
-    time::sleep(Duration::from_millis(200)).await;
-
-    agent_a.mesh().join_group("tg");
-    agent_b.mesh().join_group("tg");
-
+    let pair = consensus_pair().await;
+    pair.a.mesh().join_group("tg");
+    pair.b.mesh().join_group("tg");
     // A declares an empty trust slice — trusts nobody remotely.
-    agent_a.consensus().declare_trust("tg", &[]);
-    let _la = agent_a.consensus().start_consensus_listener(ConsensusConfig::default());
-    let _lb = agent_b.consensus().start_consensus_listener(ConsensusConfig::default());
+    pair.a.consensus().declare_trust("tg", &[]);
 
     let config = ConsensusConfig {
         quorum_size:      2,
@@ -1726,7 +1710,7 @@ async fn test_trust_slice_filters_votes() {
         use_trust_slices: true,
         ..ConsensusConfig::default()
     };
-    let result = agent_a
+    let result = pair.a
         .consensus().group_propose("tg", "ts1", Bytes::from_static(b"x"), config)
         .await;
     assert!(
@@ -1734,40 +1718,19 @@ async fn test_trust_slice_filters_votes() {
         "B's vote should be filtered by empty trust slice; got {:?}", result
     );
 
-    agent_a.shutdown().await;
-    agent_b.shutdown().await;
+    pair.a.shutdown().await;
+    pair.b.shutdown().await;
 }
 
 // Proposer includes B in its trust slice; B's vote should be counted.
 #[tokio::test]
 async fn test_trust_slice_admits_trusted_vote() {
-    let port_a = alloc_port();
-    let port_b = alloc_port();
-
-    let mut cfg_a = GossipConfig::default();
-    cfg_a.bind_port                  = port_a;
-    cfg_a.health_check_max_jitter_ms = 50;
-    cfg_a.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_b).unwrap()];
-
-    let mut cfg_b = GossipConfig::default();
-    cfg_b.bind_port                  = port_b;
-    cfg_b.health_check_max_jitter_ms = 50;
-    cfg_b.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_a).unwrap()];
-
-    let node_b = NodeId::new("127.0.0.1", port_b).unwrap();
-    let agent_a = GossipAgent::new(NodeId::new("127.0.0.1", port_a).unwrap(), cfg_a);
-    let agent_b = GossipAgent::new(node_b.clone(), cfg_b);
-    agent_a.start().await.unwrap();
-    agent_b.start().await.unwrap();
-    time::sleep(Duration::from_millis(200)).await;
-
-    agent_a.mesh().join_group("tg2");
-    agent_b.mesh().join_group("tg2");
-
+    let pair = consensus_pair().await;
+    let node_b = pair.b.node_id().clone();
+    pair.a.mesh().join_group("tg2");
+    pair.b.mesh().join_group("tg2");
     // A explicitly trusts B.
-    agent_a.consensus().declare_trust("tg2", &[node_b]);
-    let _la = agent_a.consensus().start_consensus_listener(ConsensusConfig::default());
-    let _lb = agent_b.consensus().start_consensus_listener(ConsensusConfig::default());
+    pair.a.consensus().declare_trust("tg2", &[node_b]);
 
     let config = ConsensusConfig {
         quorum_size:      2,
@@ -1776,7 +1739,7 @@ async fn test_trust_slice_admits_trusted_vote() {
         use_trust_slices: true,
         ..ConsensusConfig::default()
     };
-    let result = agent_a
+    let result = pair.a
         .consensus().group_propose("tg2", "ts2", Bytes::from_static(b"y"), config)
         .await;
     assert!(
@@ -1784,8 +1747,8 @@ async fn test_trust_slice_admits_trusted_vote() {
         "B is trusted; quorum of 2 should commit; got {:?}", result
     );
 
-    agent_a.shutdown().await;
-    agent_b.shutdown().await;
+    pair.a.shutdown().await;
+    pair.b.shutdown().await;
 }
 
 // ── H9: advertise_persistent writes capability to Layer I ─────────────────
@@ -1990,38 +1953,21 @@ async fn test_ballot_reacts_to_opacity_change() {
     use crate::signal::{encode_load_state, LoadState};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    let port_a = alloc_port();
-    let port_b = alloc_port();
-
-    let mut cfg_a = GossipConfig::default();
-    cfg_a.bind_port                  = port_a;
-    cfg_a.health_check_interval_secs = 1;
-    cfg_a.health_check_max_jitter_ms = 10;
-    cfg_a.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_b).unwrap()];
-
-    let mut cfg_b = GossipConfig::default();
-    cfg_b.bind_port                  = port_b;
-    cfg_b.health_check_max_jitter_ms = 10;
-    cfg_b.bootstrap_peers = vec![NodeId::new("127.0.0.1", port_a).unwrap()];
-
-    let node_b = NodeId::new("127.0.0.1", port_b).unwrap();
-    let agent_a = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port_a).unwrap(), cfg_a));
-    let agent_b = GossipAgent::new(node_b.clone(), cfg_b);
-    agent_a.start().await.unwrap();
-    agent_b.start().await.unwrap();
-    time::sleep(Duration::from_millis(150)).await;
+    let ConsensusPair { a, b, _la, _lb } = consensus_pair().await;
+    let node_b = b.node_id().clone();
+    let agent_a = Arc::new(a);
 
     agent_a.mesh().join_group("ogrp");
-    agent_b.mesh().join_group("ogrp");
-    time::sleep(Duration::from_millis(100)).await;
+    b.mesh().join_group("ogrp");
+    // Poll until A sees B's group membership key — required for auto quorum_size=0
+    // to compute 2 (floor(2/2)+1) rather than 1 at proposal time.
+    let node_b_str = node_b.to_string();
+    poll_until(
+        || !agent_a.kv().scan_prefix(&format!("grp/ogrp/{node_b_str}")).is_empty(),
+        2_000,
+    ).await;
 
-    // Both start as consensus listeners; B will not actually vote because it
-    // goes opaque before A's PROPOSE is forwarded to it — this is fine, the
-    // test verifies A's reactive quorum reduction, not B's vote delivery.
-    let _la = agent_a.consensus().start_consensus_listener(ConsensusConfig::default());
-    let _lb = agent_b.consensus().start_consensus_listener(ConsensusConfig::default());
-
-    // Background task: after a short pause (to let the 'collect loop start),
+    // Background task: after a short pause (to let the collect loop start),
     // write B's opaque pheromone to A's store and emit BOUNDARY_OPAQUE on A.
     // Both happen in-process on agent_a so there's no gossip propagation race.
     let aa = Arc::clone(&agent_a);
@@ -2065,7 +2011,7 @@ async fn test_ballot_reacts_to_opacity_change() {
     );
 
     agent_a.shutdown().await;
-    agent_b.shutdown().await;
+    b.shutdown().await;
 }
 
 #[test]

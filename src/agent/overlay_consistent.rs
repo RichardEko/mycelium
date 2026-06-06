@@ -102,31 +102,38 @@ mod tests {
         a
     }
 
-    #[tokio::test]
-    async fn test_consistent_set_and_get_two_nodes() {
+    struct ConsensusPair {
+        a:   GossipAgent,
+        b:   GossipAgent,
+        _la: crate::ConsensusListenerHandle,
+        _lb: crate::ConsensusListenerHandle,
+    }
+
+    async fn consensus_pair() -> ConsensusPair {
         use crate::consensus::ConsensusConfig;
         let p1 = alloc_port();
         let p2 = alloc_port();
-        let a1 = make_agent(p1, &[p2]).await;
-        let a2 = make_agent(p2, &[p1]).await;
-        // Both nodes need a consensus listener so that a2 can vote on a1's ballot.
-        // Without listeners, system_propose computes quorum=2 but only ever collects
-        // a1's own vote, timing out on all 3 ballot attempts.
-        let _l1 = a1.consensus().start_consensus_listener(ConsensusConfig::default());
-        let _l2 = a2.consensus().start_consensus_listener(ConsensusConfig::default());
-        // Poll until each node sees the other as a peer (up to 2 s) so quorum=2
-        // is actually reachable before consistent_set is called.
+        let a = make_agent(p1, &[p2]).await;
+        let b = make_agent(p2, &[p1]).await;
+        let _la = a.consensus().start_consensus_listener(ConsensusConfig::default());
+        let _lb = b.consensus().start_consensus_listener(ConsensusConfig::default());
         for _ in 0..40 {
-            if !a1.peers().is_empty() && !a2.peers().is_empty() { break; }
+            if !a.peers().is_empty() && !b.peers().is_empty() { break; }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
+        ConsensusPair { a, b, _la, _lb }
+    }
 
-        a1.consensus().consistent_set("cfg/x", Bytes::from_static(b"hello")).await.unwrap();
+    #[tokio::test]
+    async fn test_consistent_set_and_get_two_nodes() {
+        let pair = consensus_pair().await;
 
-        assert_eq!(a1.consensus().consistent_get("cfg/x").as_deref(), Some(b"hello".as_slice()));
+        pair.a.consensus().consistent_set("cfg/x", Bytes::from_static(b"hello")).await.unwrap();
 
-        a1.shutdown().await;
-        a2.shutdown().await;
+        assert_eq!(pair.a.consensus().consistent_get("cfg/x").as_deref(), Some(b"hello".as_slice()));
+
+        pair.a.shutdown().await;
+        pair.b.shutdown().await;
     }
 
     #[tokio::test]
