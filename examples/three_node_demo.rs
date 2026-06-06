@@ -1183,7 +1183,7 @@ async fn mgmt_handle_state(State(s): State<Arc<MgmtState>>) -> Json<Value> {
     let liveness = Duration::from_secs(30); // 6× the 5s re-advertisement interval
     let mut node_roles: std::collections::HashMap<String, String> = Default::default();
     for role_name in &["mgmt", "tool-a", "tool-b", "tool-sf", "tool-book", "verifier", "llm", "node"] {
-        for (nid, _cap) in agent.resolve(&CapFilter::new("role", *role_name).with_max_age(liveness)) {
+        for (nid, _cap) in agent.capabilities().resolve(&CapFilter::new("role", *role_name).with_max_age(liveness)) {
             node_roles.entry(nid.to_string()).or_insert_with(|| role_name.to_string());
         }
     }
@@ -1268,7 +1268,7 @@ async fn node_bulk_echo_peer(State(s): State<Arc<NodeState>>) -> Json<Value> {
     let self_id = s.agent.node_id().clone();
     let liveness = std::time::Duration::from_secs(30);
     let Some(target) = s.agent
-        .resolve(&CapFilter::new("role", "node").with_max_age(liveness))
+        .capabilities().resolve(&CapFilter::new("role", "node").with_max_age(liveness))
         .into_iter()
         .map(|(nid, _)| nid)
         .find(|nid| *nid != self_id)
@@ -1365,10 +1365,10 @@ fn init_node_routes(agent: Arc<GossipAgent>) -> axum::Router {
         }
     });
 
-    let bulk_handle = agent.bulk_serve("echo-bulk", |_sender, payload| async move { payload });
+    let bulk_handle = agent.service().bulk_serve("echo-bulk", |_sender, payload| async move { payload });
 
     let mailbox_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let (mbox_handle, mut mbox_rx) = agent.open_mailbox("test-mailbox", 64);
+    let (mbox_handle, mut mbox_rx) = agent.service().open_mailbox("test-mailbox", 64);
     let mc = Arc::clone(&mailbox_count);
     tokio::spawn(async move {
         while mbox_rx.recv().await.is_some() {
