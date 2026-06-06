@@ -1,21 +1,26 @@
-# Mycelium resilience scale test cluster (~52 nodes: 1 seed + 50 workers + mgmt + runner)
+# Mycelium resilience scale test cluster (~22 nodes: 1 seed + 20 workers + mgmt + runner)
 #
 # Topology
 #   seed    — role=node, first contact point, HTTP 8300
 #   mgmt    — role=mgmt, dashboard 8090, standard HTTP 8300
-#   worker  — role=node; bootstrap via seed; default 50 replicas
+#   worker  — role=node; bootstrap via seed; default 20 replicas
 #   runner  — Alpine test runner with Docker socket for stop/start/run
+#
+# Default worker count is 20 to stay within the Docker bridge iptables connection budget.
+# Phase 3 (late-joiner probe) requires the probe to establish a new TCP connection to seed;
+# at 50+ nodes the FORWARD chain saturation causes this to time out (see CLAUDE.md §iptables).
+# Use RESILIENCE_WORKERS=50 only with macvlan driver or nftables enabled.
 #
 # Usage:
 #   cd tests/integration
-#   docker compose -f docker-compose.scale-resilience.yml up --build --scale worker=50 \
+#   docker compose -f docker-compose.scale-resilience.yml up --build --scale worker=20 \
 #       --abort-on-container-exit --exit-code-from runner
 #
 # Or via make:
-#   make test-scale-resilience              # 50 workers (default)
-#   make test-scale-resilience RESILIENCE_WORKERS=30
+#   make test-scale-resilience              # 20 workers (default)
+#   make test-scale-resilience RESILIENCE_WORKERS=50
 #
-# Resource note: each Mycelium node is ~20 MB RSS. 52 nodes ≈ 1.1 GB total.
+# Resource note: each Mycelium node is ~20 MB RSS. 22 nodes ≈ 450 MB total.
 # Docker build cache should be warm — run `make test` first to prime it.
 
 name: mycelium-resilience

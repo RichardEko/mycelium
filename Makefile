@@ -40,11 +40,14 @@ test-scale:
 test-scale-clean:
 	$(COMPOSE_SCALE) down -v --remove-orphans
 
-## test-scale-resilience — crash/rejoin/anti-entropy/churn test (~52 nodes: 1 seed + 50 workers + mgmt)
+## test-scale-resilience — crash/rejoin/anti-entropy/churn test (~22 nodes: 1 seed + 20 workers + mgmt)
 ## Tests: cluster formation, crash+recovery, late-joiner anti-entropy, and churn stability.
-## Requires a warm Docker build cache and Docker socket access.  ~10 min on warm cache.
-## Override RESILIENCE_WORKERS to test at a different size: make test-scale-resilience RESILIENCE_WORKERS=30
-RESILIENCE_WORKERS ?= 50
+## Requires a warm Docker build cache and Docker socket access.  ~8 min on warm cache.
+## Default is 20 workers — stays within the Docker bridge iptables connection limit so the
+## Phase 3 late-joiner probe can establish a new TCP connection to seed (see CLAUDE.md §iptables).
+## For higher scale (50+) switch the Docker network driver to macvlan or enable nftables first.
+## Override: make test-scale-resilience RESILIENCE_WORKERS=50
+RESILIENCE_WORKERS ?= 20
 test-scale-resilience:
 	$(COMPOSE_RESILIENCE) down -v --remove-orphans 2>/dev/null || true
 	$(COMPOSE_RESILIENCE) up -d --build --scale worker=$(RESILIENCE_WORKERS)

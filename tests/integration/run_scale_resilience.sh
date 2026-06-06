@@ -2,7 +2,7 @@
 # Scale resilience test — runs inside the test-runner container.
 #
 # Validates crash recovery, anti-entropy sync, late-joiner catchup, and
-# cluster stability under churn at ~50-node scale.
+# cluster stability under churn at ~20-node scale (default; see Makefile).
 #
 # Phases
 #   0 — Health gate: seed + mgmt healthy
