@@ -102,25 +102,35 @@ overhead when no signal handlers are registered.
 Planned for v2: extract `mycelium-core` crate (gossip transport + KV only) from
 `mycelium` (full substrate with signals, consensus, capabilities).
 
-### 100-node scale test — Docker bridge iptables constraint
+### Scale and resilience tests — Docker bridge iptables constraint
 
-`make test-scale` (default 100 nodes) passes reliably. The test validates:
-cluster formation, KV write on seed, gossip propagation seed → mgmt, zero
-dropped frames.
+Both `make test-scale` (100 nodes) and `make test-scale-resilience` (20 nodes default)
+are subject to the same Docker bridge iptables FORWARD chain limitation, but in
+different ways.
 
-**Known infrastructure constraint (not a Mycelium bug):** at 100 nodes,
-peer-exchange causes each node to connect to ~100 peers, creating ~5 000 TCP
-connections in the Docker bridge network. The Linux bridge iptables FORWARD
-chain grows O(N²); after all inter-node connections form, new TCP connections
-from the runner to seed time out. The test works around this by:
+**`make test-scale` (100 nodes)** passes reliably. The test validates: cluster
+formation, KV write on seed, gossip propagation seed → mgmt, zero dropped frames.
+At 100 nodes, peer-exchange creates ~5 000 TCP connections in the Docker bridge
+network. The Linux bridge iptables FORWARD chain grows O(N²); after all inter-node
+connections form, new TCP connections from the runner to seed time out. The test
+works around this by:
 1. Verifying the KV key on seed *immediately* after write (before chain saturates).
 2. Verifying gossip propagation via mgmt using conntrack entries established
    during Phase 1 polling (not a new connection).
 
-If Phase 2 hangs on a future run, the iptables chain is the first suspect.
-Mitigations for larger scales: switch the Docker network driver to `macvlan`,
-enable nftables (hash-table replacement for the linear iptables chain), or
-reduce `SCALE_WORKERS`.
+**`make test-scale-resilience` (default 20 nodes)** defaults to 20 workers rather
+than 50. The resilience test includes a **Phase 3 late-joiner probe**: a fresh
+container started mid-test that must establish a *new* TCP connection to seed and
+receive the full KV history via anti-entropy. At 50 workers the iptables FORWARD
+chain is already saturated by the time Phase 3 runs, so the probe's TCP SYN to seed
+times out at the OS level (errno 110, ~2 min) — the probe never gets the anti-entropy
+data. At 20 workers the chain is well within budget, the probe connects immediately,
+and all Phase 3 checks (join, anti-entropy inbound, gossip outbound) pass reliably.
+
+If the Phase 3 late-joiner checks fail on a future run, the iptables chain is the
+first suspect. Mitigations: switch the Docker network driver to `macvlan`, enable
+nftables (hash-table replacement for the linear iptables chain), or keep
+`RESILIENCE_WORKERS ≤ 20`.
 
 The v1 runtime mitigation is `GOSSIP_MAX_ACTIVE_CONNECTIONS` (caps outbound
 TCP connections per node to K random peers, reducing O(N²) → O(N×K)).
@@ -211,8 +221,8 @@ consensus, and all typed sub-handles (`KvHandle`, `MeshHandle`, etc.) remain ava
 - `cargo build --lib --features a2a` to include the A2A protocol adapter
 - `cargo build --lib --features llm` to include the Prompt Skills LLM adapter
 - `cargo build --lib --features compliance` to include gateway auth, durable audit, RBAC (planned, not yet implemented)
-- 263 tests at HEAD; clippy at baseline 61
-  (pre-existing `field_reassign_with_default` in test code).
+- 263 tests at HEAD; clippy at 0 warnings (stub removal eliminated the prior 61
+  `field_reassign_with_default` baseline in test code).
 - Wire version is currently **v11** (`PREV_WIRE_VERSION = 10` — rolling upgrade window open).
   v11 adds `hlc_seq: Option<u64>` to `WireMessage::Signal` for ordered delivery via `emit_ordered()`.
   v10 adds `WireMessage::SignedData` for Ed25519-signed KV writes under the `tls` feature.
@@ -225,3 +235,4 @@ consensus, and all typed sub-handles (`KvHandle`, `MeshHandle`, etc.) remain ava
   use them as native tools. Requires `cargo build --bin skillrunner --features a2a` then
   `examples/community/start.sh`.
 - Integration test count: **12 scenarios** (scenario 11 = AFN pipeline; scenario 12 = Prompt Skills cross-node KV propagation + invocation).
+- Scale tests: `make test-scale` (100 nodes), `make test-scale-resilience` (20 nodes default — see §iptables above for why not 50).
