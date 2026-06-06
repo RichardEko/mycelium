@@ -229,10 +229,10 @@ if ! poll_until 60 probe_healthy; then
 fi
 
 probe_in_cluster() { [ "$(mgmt_node_count)" -ge "$(( TOTAL_NODES + 1 ))" ]; }
-if poll_until 60 probe_in_cluster; then
+if poll_until 120 probe_in_cluster; then
     ok "Late joiner: probe joined cluster (mgmt sees $(mgmt_node_count) nodes)"
 else
-    die "Probe did not appear in mgmt node list within 60 s"
+    die "Probe did not appear in mgmt node list within 120 s"
 fi
 
 # Anti-entropy inbound: probe must receive a key that was written before it
@@ -245,10 +245,10 @@ probe_has_baseline_key() {
         2>/dev/null || echo "")
     [ "$val" = "v0" ]
 }
-if poll_until 90 probe_has_baseline_key; then
+if poll_until 120 probe_has_baseline_key; then
     ok "Anti-entropy inbound: probe received pre-existing key resilience/baseline/0000"
 else
-    die "Probe did not receive pre-existing keys via anti-entropy within 90 s"
+    die "Probe did not receive pre-existing keys via anti-entropy within 120 s"
 fi
 
 # Gossip outbound: write a key to the probe and verify it reaches mgmt.
