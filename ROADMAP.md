@@ -1813,6 +1813,53 @@ emitting the counters already identified in the Layer 5 section:
 A reference Grafana dashboard JSON. A `METRICS.md` documenting what each counter means and
 what thresholds should trigger alerts.
 
+### 7. Durable cluster-wide audit trail
+
+The per-node WAL records every local write, but there is no cluster-wide audit namespace.
+If a node is lost, its write history goes with it. For regulated deployments (HIPAA, SOC 2)
+operators need to answer: *"What did every agent in the fleet do over the last 7 days?"*
+without reassembling per-node WAL files manually.
+
+**Design — three additions, all within existing Layer I:**
+
+**a) Structured audit KV namespace.** Every `set`, `delete`, and `consistent_set` call
+optionally emits a companion entry to `sys/audit/{node_id}/{hlc_seq}` with a fixed schema:
+
+```
+{ ts: u64, actor: NodeId, op: "set"|"delete"|"consistent_set", key: &str, value_hash: [u8;32] }
+```
+
+This is gossip-propagated and TTL-controlled (`audit_retention_secs`, default 7 days).
+Because it uses the existing KV substrate, every peer holds a full replica of the audit log
+automatically — no node is a single point of failure for the record. Value hashes (not
+values) are stored so the audit log is tamper-evident without leaking payload data.
+
+**b) WAL replication for audit entries.** Audit namespace writes use `sync_mode = Flush`
+so each entry is fsynced before the originating node acknowledges the application write.
+Combined with gossip replication, an audit entry survives both the originating node dying
+and a peer losing its WAL.
+
+**c) `/audit` HTTP endpoint (gateway feature).** Time-range scan over `sys/audit/`:
+
+```
+GET /audit?since=<unix_ts>&until=<unix_ts>&actor=<node_id>&key_prefix=<prefix>
+→ JSON array of audit entries, sorted by HLC timestamp
+```
+
+The query is a `scan_prefix("sys/audit/")` with client-side filter — no new storage
+mechanism, no indexing. At 1 000 agents × 10 writes/s × 7 days ≈ 6 billion entries this
+approach breaks down, but at realistic agentic fleet sizes (10–500 agents) it is correct
+and sufficient.
+
+**Opt-in flag:** `GossipConfig::audit: bool` (default `false`). When `false`, no audit
+entries are written and `sys/audit/` is empty — zero overhead for deployments that do not
+need it.
+
+**What is explicitly out of scope for v1.x:** immutable append-only audit log with
+cryptographic chaining (Merkle / hash-chain). That is a v2 item if a regulated customer
+requires it. The v1 design provides availability and tamper-evidence via value hashing;
+it does not provide non-repudiation under an adversarial-insider threat model.
+
 ---
 
 ### Gap Summary
@@ -1827,6 +1874,7 @@ what thresholds should trigger alerts.
 | Opt-In Consistency & Ordering Overlay | High | **Complete** 2026-05-25 |
 | `set_with_min_acks` write-durability confirmation API | Medium | **Complete** 2026-05-25 |
 | Prometheus metrics export + dashboards | Medium | **Complete** 2026-05-25 |
+| Durable cluster-wide audit trail (`sys/audit/`, `/audit` endpoint) | High | **Pending** |
 
 None of these require architectural changes. The substrate is sound; these are engineering
 completions on top of it.
