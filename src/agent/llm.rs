@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use crate::signal::signal_kind;
-use super::{GossipAgent, TaskCtx};
+use super::TaskCtx;
 use super::rpc::rpc_respond_ctx;
 use super::prompt::{PromptTemplate, render_template};
 
@@ -187,14 +187,14 @@ pub(crate) struct LlmInvokeError {
 /// Each invocation is handled in its own `tokio::spawn` so slow LLM calls
 /// do not block the loop from receiving the next request.
 pub(super) fn spawn_llm_dispatch_loop(
-    agent:    &GossipAgent,
+    ctx:      &Arc<TaskCtx>,
     registry: LlmSkillRegistry,
 ) {
-    let ctx      = Arc::clone(&agent.task_ctx);
-    let shutdown = agent.shutdown_tx.subscribe();
-    let registry = Arc::clone(&registry);
+    let ctx_clone = Arc::clone(ctx);
+    let shutdown  = ctx.shutdown_tx.subscribe();
+    let registry  = Arc::clone(&registry);
 
-    agent.spawn_task(run_llm_dispatch(ctx, registry, shutdown));
+    ctx.spawn_task(run_llm_dispatch(ctx_clone, registry, shutdown));
 }
 
 async fn run_llm_dispatch(

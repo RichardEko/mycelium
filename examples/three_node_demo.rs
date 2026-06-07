@@ -326,7 +326,7 @@ fn register(
     handler:     ToolHandler,
 ) -> McpToolHandle {
     let schema = json!({ "description": description, "inputSchema": params });
-    agent.register_mcp_tool(name, schema, move |args| {
+    agent.mcp().register_mcp_tool(name, schema, move |args| {
         let h = Arc::clone(&handler);
         Box::pin(async move { h(args).await })
     })
@@ -1715,7 +1715,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             metadata: std::collections::HashMap::new(),
         };
         let backend: std::sync::Arc<dyn LlmBackend> = std::sync::Arc::new(EchoBackend);
-        match Arc::clone(&agent).register_prompt_skill("test", "echo", template, backend).await {
+        match Arc::clone(&agent).llm().register_prompt_skill("test", "echo", template, backend).await {
             Ok(h)  => { info!("[node] test/echo prompt skill registered"); Some(h) }
             Err(e) => { warn!("[node] failed to register prompt skill: {e}"); None }
         }

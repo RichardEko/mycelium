@@ -216,7 +216,7 @@ fn register_tool(
              + Send + Sync + 'static,
 ) -> McpToolHandle {
     let schema = json!({ "description": def.description, "inputSchema": def.params });
-    agent.register_mcp_tool(def.name, schema, move |args: Value| {
+    agent.mcp().register_mcp_tool(def.name, schema, move |args: Value| {
         let fut = handler(args);
         Box::pin(async move { Ok::<Value, String>(fut.await) })
     })

@@ -134,6 +134,8 @@ fn spawn_handler(
         task_handles: Arc::new(std::sync::Mutex::new(tokio::task::JoinSet::new())),
         group_roster_cache: Arc::new(papaya::HashMap::new()),
         config: Arc::new(crate::config::GossipConfig::default()),
+        #[cfg(feature = "llm")]
+        llm_skills: std::sync::Arc::new(papaya::HashMap::new()),
     });
     let ctx = ConnContext {
         task_ctx,
@@ -528,6 +530,8 @@ async fn test_subscribe_notified_via_gossip() {
             task_handles: Arc::new(std::sync::Mutex::new(tokio::task::JoinSet::new())),
             group_roster_cache: Arc::new(papaya::HashMap::new()),
             config: Arc::new(crate::config::GossipConfig::default()),
+            #[cfg(feature = "llm")]
+            llm_skills: std::sync::Arc::new(papaya::HashMap::new()),
         });
         let ctx = ConnContext {
             task_ctx,

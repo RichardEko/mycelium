@@ -51,6 +51,9 @@ pub(crate) mod a2a;
 pub(crate) mod prompt;
 #[cfg(feature = "llm")]
 pub(crate) mod llm;
+#[cfg(feature = "llm")]
+mod llm_handle;
+mod mcp_handle;
 
 #[allow(unused_imports)]
 pub(crate) use bulk::BulkTransport;
@@ -59,8 +62,6 @@ pub(crate) use capability_ops::FilterOpacityRegistry;
 pub(crate) use helpers::emit_signal;
 pub(crate) use helpers::emit_signal_async;
 pub(crate) use helpers::make_gossip_update;
-#[cfg(feature = "llm")]
-use helpers::{kv_delete, kv_scan_prefix, kv_set};
 pub(crate) use opacity::is_self_opaque;
 #[cfg(feature = "gateway")]
 pub use mcp::McpClientHandle;
@@ -84,6 +85,9 @@ pub use schema_handle::{SchemaError, SchemaHandle, SchemaPublishResult};
 pub use prompt::{PromptTemplate, PromptSkillError, PromptSkillHandle};
 #[cfg(feature = "llm")]
 pub use llm::{LlmBackend, LlmResult, LlmError, OpenAiBackend, EchoBackend};
+#[cfg(feature = "llm")]
+pub use llm_handle::LlmHandle;
+pub use mcp_handle::McpHandle;
 
 /// Cached roster entry for a single group, held in the short-lived `group_roster_cache`.
 pub(super) struct RosterEntry {
@@ -242,6 +246,12 @@ pub(crate) struct TaskCtx {
     /// never sees a stale roster after observing the new generation value.
     pub(crate) group_roster_cache: RosterCache,
 
+    // ── LLM skill registry ───────────────────────────────────────────────────────
+    /// Maps `"{ns}/{name}"` → LLM backend. Template is read from KV on every
+    /// invocation; only the backend reference is cached here.
+    #[cfg(feature = "llm")]
+    pub(crate) llm_skills: llm::LlmSkillRegistry,
+
     // ── Service layer ────────────────────────────────────────────────────────────
     /// Bulk-transport adapter: staging map, HTTP port, pooled HTTP client.
     pub(crate) bulk_transport: Arc<bulk::BulkTransport>,
@@ -309,7 +319,7 @@ impl TaskCtx {
 /// ## Typed sub-handles
 ///
 /// All domain operations are accessed through typed handles returned by the
-/// six accessor methods below. Each handle is `Clone + Send + Sync` and can be
+/// accessor methods below. Each handle is `Clone + Send + Sync` and can be
 /// stored, moved across tasks, or captured in closures.
 ///
 /// | Accessor | Handle | Domain |
@@ -320,6 +330,8 @@ impl TaskCtx {
 /// | `agent.service()` | [`ServiceHandle`] | RPC / bulk / scatter / mailbox / sharding |
 /// | `agent.capabilities()` | [`CapabilitiesHandle`] | Capability / requirement / wiring / demand |
 /// | `agent.schemas()` | [`SchemaHandle`] | Schema registry |
+/// | `agent.mcp()` | [`McpHandle`] | MCP tool bridge (server + client roles) |
+/// | `agent.llm()` | [`LlmHandle`] | LLM prompt skills (`llm` feature) |
 ///
 /// ## Lifecycle methods (directly on `GossipAgent`)
 ///
@@ -357,10 +369,6 @@ pub struct GossipAgent {
     /// Taken once by the HTTP server task; subsequent calls to `with_http_routes` are no-ops after start.
     #[cfg(feature = "gateway")]
     pub(super) extra_routes: std::sync::Mutex<Option<axum::Router>>,
-    /// LLM skill registry: maps `"{ns}/{name}"` → backend.
-    /// Template is read from KV on every invocation (not cached here).
-    #[cfg(feature = "llm")]
-    pub(crate) llm_skills: llm::LlmSkillRegistry,
 }
 
 impl GossipAgent {
@@ -441,6 +449,27 @@ impl GossipAgent {
     /// Zero-cost: clones one `Arc` per call.
     pub fn capabilities(&self) -> CapabilitiesHandle {
         CapabilitiesHandle { ctx: Arc::clone(&self.task_ctx) }
+    }
+
+    /// Returns a typed handle for MCP tool registration and client bridging.
+    ///
+    /// Covers server-role tool registration (`register_mcp_tool`) and client-role
+    /// bridging of external MCP servers into the Mycelium mesh (`connect_mcp_server`).
+    ///
+    /// Zero-cost: clones one `Arc` per call.
+    pub fn mcp(&self) -> McpHandle {
+        McpHandle { ctx: Arc::clone(&self.task_ctx) }
+    }
+
+    /// Returns a typed handle for LLM prompt-skill operations.
+    ///
+    /// Covers prompt skill registration, invocation, template management,
+    /// and the node-local LLM backend registry.
+    ///
+    /// Zero-cost: clones one `Arc` per call.
+    #[cfg(feature = "llm")]
+    pub fn llm(&self) -> LlmHandle {
+        LlmHandle { ctx: Arc::clone(&self.task_ctx) }
     }
 
     // ── Signal window helper ──────────────────────────────────────────────────
@@ -536,6 +565,8 @@ impl GossipAgent {
             shutdown_tx:         Arc::clone(&shutdown_tx_arc),
             task_handles:        Arc::clone(&task_handles_arc),
             group_roster_cache:  Arc::clone(&group_roster_cache),
+            #[cfg(feature = "llm")]
+            llm_skills: std::sync::Arc::new(papaya::HashMap::new()),
         });
 
         Self {
@@ -557,8 +588,6 @@ impl GossipAgent {
             task_ctx,
             #[cfg(feature = "gateway")]
             extra_routes: std::sync::Mutex::new(None),
-            #[cfg(feature = "llm")]
-            llm_skills: std::sync::Arc::new(papaya::HashMap::new()),
         }
     }
 }
@@ -602,159 +631,6 @@ impl GossipAgent {
         let router = a2a::a2a_router_full(ctx, tasks);
         self.with_http_routes(router);
         self
-    }
-}
-
-#[cfg(feature = "llm")]
-impl GossipAgent {
-    /// Publish a prompt template to the cluster KV and register this node as a
-    /// provider. The skill is discoverable via the capability ring immediately.
-    /// Dropping the returned handle retracts the capability and removes the backend.
-    pub async fn register_prompt_skill(
-        &self,
-        ns:       &str,
-        name:     &str,
-        template: prompt::PromptTemplate,
-        backend:  std::sync::Arc<dyn llm::LlmBackend>,
-    ) -> Result<prompt::PromptSkillHandle, prompt::PromptSkillError> {
-        use crate::capability::Capability;
-        use crate::signal::kv_ns;
-        use std::time::Duration;
-
-        // 1. Write template to KV — configuration, not heartbeat.
-        let kv_key = format!("{}{}/{}", kv_ns::PROMPTS, ns, name);
-        let bytes  = serde_json::to_vec(&template)
-            .map_err(|e| prompt::PromptSkillError::LlmError(e.to_string()))?;
-        kv_set(&self.task_ctx, Arc::from(kv_key.as_str()), bytes::Bytes::from(bytes));
-
-        // 2. Advertise capability — presence heartbeat, evaporates when node dies.
-        let cap_handle = self.capabilities().advertise_capability(
-            Capability::new(ns, name),
-            Duration::from_secs(30),
-        );
-
-        // 3. Register backend in the shared registry.
-        let skill_id = format!("{}/{}", ns, name);
-        let was_empty = self.llm_skills.is_empty();
-        self.llm_skills.pin().insert(skill_id.clone(), backend);
-
-        // 4. Spawn dispatch loop on first registration.
-        if was_empty {
-            llm::spawn_llm_dispatch_loop(self, std::sync::Arc::clone(&self.llm_skills));
-        }
-
-        // 5. Create cancellation channel for this skill's registry entry.
-        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
-        let registry  = std::sync::Arc::clone(&self.llm_skills);
-        let skill_id2 = skill_id.clone();
-        tokio::spawn(async move {
-            let _ = cancel_rx.await;
-            registry.pin().remove(&skill_id2);
-        });
-
-        Ok(prompt::PromptSkillHandle {
-            _cap:            cap_handle,
-            _handler_cancel: cancel_tx,
-        })
-    }
-
-    /// Call a prompt skill. Resolves a provider via the capability ring,
-    /// sends an RPC `llm.invoke` call, returns the LLM's output string.
-    pub async fn call_prompt_skill(
-        &self,
-        ns:      &str,
-        name:    &str,
-        input:   &str,
-        context: std::collections::HashMap<String, String>,
-        timeout: std::time::Duration,
-    ) -> Result<String, prompt::PromptSkillError> {
-        use crate::capability::CapFilter;
-        use crate::signal::signal_kind;
-
-        let providers = self.capabilities().resolve(&CapFilter::new(ns, name));
-        let (target, _) = providers.into_iter().next()
-            .ok_or_else(|| prompt::PromptSkillError::NoProvider {
-                ns: ns.into(), name: name.into(),
-            })?;
-
-        let req = serde_json::json!({
-            "prompt":  format!("{}/{}", ns, name),
-            "input":   input,
-            "context": context,
-        });
-        let payload = bytes::Bytes::from(req.to_string().into_bytes());
-
-        let reply = rpc::rpc_call_ctx(
-            &self.task_ctx,
-            target,
-            std::sync::Arc::from(signal_kind::LLM_INVOKE),
-            payload,
-            timeout,
-        ).await?;
-
-        // Parse response — may be success or error
-        let v: serde_json::Value = serde_json::from_slice(&reply)
-            .map_err(|e| prompt::PromptSkillError::LlmError(e.to_string()))?;
-        if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
-            let detail = v.get("detail").and_then(|d| d.as_str()).unwrap_or("");
-            return Err(prompt::PromptSkillError::LlmError(format!("{}: {}", err, detail)));
-        }
-        v["output"].as_str()
-            .map(|s| s.to_owned())
-            .ok_or_else(|| prompt::PromptSkillError::LlmError("missing output field".into()))
-    }
-
-    /// Update a prompt template in the cluster KV. All serving nodes pick up
-    /// the change on their next invocation (they read from KV, not a local cache).
-    /// Does not require holding the original `PromptSkillHandle`.
-    pub fn update_prompt(
-        &self,
-        ns:       &str,
-        name:     &str,
-        template: prompt::PromptTemplate,
-    ) -> Result<(), prompt::PromptSkillError> {
-        use crate::signal::kv_ns;
-        let kv_key = format!("{}{}/{}", kv_ns::PROMPTS, ns, name);
-        let bytes  = serde_json::to_vec(&template)
-            .map_err(|e| prompt::PromptSkillError::LlmError(e.to_string()))?;
-        kv_set(&self.task_ctx, Arc::from(kv_key.as_str()), bytes::Bytes::from(bytes));
-        Ok(())
-    }
-
-    /// Retrieve the current prompt template from the local KV snapshot.
-    /// Synchronous — reads in-memory state, same as `resolve()`.
-    pub fn get_prompt(&self, ns: &str, name: &str) -> Option<prompt::PromptTemplate> {
-        use crate::signal::kv_ns;
-        let key = format!("{}{}/{}", kv_ns::PROMPTS, ns, name);
-        let bytes = self.kv_state.store.pin().get(key.as_str())
-            .and_then(|e| e.data.clone())?;
-        serde_json::from_slice(&bytes).ok()
-    }
-
-    /// List all prompt skills currently visible in the local KV snapshot.
-    pub fn list_prompts(&self) -> Vec<(String, String)> {
-        use crate::signal::kv_ns;
-        kv_scan_prefix(&self.task_ctx, kv_ns::PROMPTS)
-            .into_iter()
-            .filter_map(|(k, _)| {
-                let rest = k.strip_prefix(kv_ns::PROMPTS)?;
-                let mut parts = rest.splitn(2, '/');
-                let ns   = parts.next()?.to_owned();
-                let name = parts.next()?.to_owned();
-                if name.is_empty() { return None; }
-                Some((ns, name))
-            })
-            .collect()
-    }
-
-    /// Tombstone the prompt template KV entry. The skill becomes unreachable
-    /// once all serving nodes' capability entries expire (≤30s). Use when
-    /// permanently retiring a skill; for a graceful drain, drop all
-    /// `PromptSkillHandle`s first so capability entries evaporate naturally.
-    pub fn delete_prompt(&self, ns: &str, name: &str) {
-        use crate::signal::kv_ns;
-        let key = format!("{}{}/{}", kv_ns::PROMPTS, ns, name);
-        kv_delete(&self.task_ctx, Arc::from(key.as_str()));
     }
 }
 

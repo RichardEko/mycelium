@@ -162,7 +162,7 @@ mod writer;
 pub use agent::{
     AgentPolicy, ExecutionState, AgentStateMachine, PolicyViolation,
     BulkError, BulkServeHandle,
-    GossipAgent, MailboxHandle, McpError, McpToolHandle,
+    GossipAgent, MailboxHandle, McpError, McpToolHandle, McpHandle,
     MeshEvent, RpcError, RpcRequest, RpcRequestRx, ScatterError, ScatterResult, SystemStats,
     AckResult, CapabilitiesHandle, ConsensusHandle, ConsistencyError, LockGuard, LogEntry,
     KvHandle, MeshHandle, QuorumError, ServiceHandle, ShardError,
@@ -171,7 +171,7 @@ pub use agent::{
 #[cfg(feature = "gateway")]
 pub use agent::McpClientHandle;
 #[cfg(feature = "llm")]
-pub use agent::{PromptTemplate, PromptSkillError, PromptSkillHandle, LlmBackend, LlmResult, LlmError, OpenAiBackend, EchoBackend};
+pub use agent::{PromptTemplate, PromptSkillError, PromptSkillHandle, LlmBackend, LlmResult, LlmError, OpenAiBackend, EchoBackend, LlmHandle};
 pub use capability::{
     CallerContext, CapConstraint, CapFilter, CapRanking, CapValue, Capability, CapabilityEvent,
     CapabilityGroupDef, CapabilityGroupHandle, CapabilityReg,

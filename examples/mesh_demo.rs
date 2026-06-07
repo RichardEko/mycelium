@@ -216,7 +216,7 @@ fn register_tool(
 ) -> McpToolHandle {
     let schema  = json!({ "description": def.description, "inputSchema": def.params });
     let handler = Arc::new(handler);
-    agent.register_mcp_tool(def.name, schema, move |args: Value| {
+    agent.mcp().register_mcp_tool(def.name, schema, move |args: Value| {
         let h = Arc::clone(&handler);
         Box::pin(async move { Ok::<Value, String>(h(args).await) })
     })

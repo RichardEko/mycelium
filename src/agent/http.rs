@@ -2254,7 +2254,7 @@ mod tests {
         agent.start().await.unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let _handle = agent.register_mcp_tool(
+        let _handle = agent.mcp().register_mcp_tool(
             "greet",
             serde_json::json!({
                 "type": "object",
@@ -2294,7 +2294,7 @@ mod tests {
         agent.start().await.unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let _handle = agent.register_mcp_tool(
+        let _handle = agent.mcp().register_mcp_tool(
             "square",
             serde_json::json!({
                 "type": "object",

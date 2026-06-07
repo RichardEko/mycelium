@@ -10,7 +10,7 @@
 //! same `tools/` namespace and calls are proxied outbound to the remote server.
 
 use crate::framing::{dispatch_gossip_send, make_gossip_update, ForwardHint, WireMessage};
-use crate::signal::{Signal, signal_kind};
+use crate::signal::Signal;
 use super::rpc::{RpcRequest, rpc_respond_ctx};
 use crate::store::apply_and_notify;
 use bytes::Bytes;
@@ -19,10 +19,9 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::warn;
 
-use super::{GossipAgent, TaskCtx};
-use super::helpers::kv_set;
+use super::TaskCtx;
 
-/// Handle returned by [`GossipAgent::register_mcp_tool`].
+/// Handle returned by [`McpHandle::register_mcp_tool`].
 ///
 /// Dropping this handle tombstones the tool's KV entry (`tools/{name}/{node_id}`)
 /// and stops the handler task. While the handle is live the tool is discoverable
@@ -30,7 +29,7 @@ use super::helpers::kv_set;
 /// HTTP `/mcp` endpoint.
 #[must_use = "dropping McpToolHandle immediately retracts the tool"]
 pub struct McpToolHandle {
-    _cancel: oneshot::Sender<()>,
+    pub(super) _cancel: oneshot::Sender<()>,
 }
 
 /// Error type for MCP operations.
@@ -68,73 +67,8 @@ impl From<super::rpc::RpcError> for McpError {
     }
 }
 
-impl GossipAgent {
-    /// Registers an MCP tool on this node and returns a lifetime handle.
-    ///
-    /// Writes `schema` under `tools/{name}/{node_id}` in the KV store so any
-    /// node in the cluster can discover the tool via `scan_prefix("tools/")`.
-    /// Subscribes to incoming `"mcp.invoke"` signals and routes calls whose
-    /// `params.name` matches `name` to `handler`.
-    ///
-    /// Drop the returned [`McpToolHandle`] to tombstone the KV entry and stop
-    /// the handler task. The agent's shutdown sequence tombstones all live tools
-    /// automatically.
-    ///
-    /// # Arguments
-    ///
-    /// * `name`    — tool name, unique per node for clean call demux.
-    /// * `schema`  — MCP `inputSchema` JSON Schema object.
-    /// * `handler` — async fn `(serde_json::Value) -> Result<serde_json::Value, String>`.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let _handle = agent.register_mcp_tool(
-    ///     "add",
-    ///     serde_json::json!({
-    ///         "type": "object",
-    ///         "properties": {
-    ///             "a": {"type": "number"},
-    ///             "b": {"type": "number"},
-    ///         },
-    ///         "required": ["a", "b"],
-    ///     }),
-    ///     |args| async move {
-    ///         let sum = args["a"].as_f64().unwrap_or(0.0)
-    ///                 + args["b"].as_f64().unwrap_or(0.0);
-    ///         Ok(serde_json::json!(sum))
-    ///     },
-    /// );
-    /// ```
-    pub fn register_mcp_tool<F, Fut>(
-        &self,
-        name:    impl Into<Arc<str>>,
-        schema:  serde_json::Value,
-        handler: F,
-    ) -> McpToolHandle
-    where
-        F: Fn(serde_json::Value) -> Fut + Send + Sync + 'static,
-        Fut: std::future::Future<Output = Result<serde_json::Value, String>> + Send + 'static,
-    {
-        let name: Arc<str>   = name.into();
-        let kv_key: Arc<str> = Arc::from(
-            format!("tools/{}/{}", name, self.task_ctx.node_id).as_str(),
-        );
-        let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
-        let shutdown_rx = self.shutdown_tx.subscribe();
-        let ctx         = Arc::clone(&self.task_ctx);
-        let rx          = self.task_ctx.signal_handlers.register(Arc::from(signal_kind::MCP_INVOKE));
 
-        kv_set(&self.task_ctx, Arc::clone(&kv_key), Bytes::from(schema.to_string().into_bytes()));
-
-        self.spawn_task(run_mcp_tool_task(
-            ctx, cancel_rx, shutdown_rx, kv_key, name, rx, handler,
-        ));
-        McpToolHandle { _cancel: cancel_tx }
-    }
-}
-
-async fn run_mcp_tool_task<F, Fut>(
+pub(super) async fn run_mcp_tool_task<F, Fut>(
     ctx:             Arc<TaskCtx>,
     mut cancel_rx:   oneshot::Receiver<()>,
     mut shutdown_rx: watch::Receiver<bool>,
@@ -204,7 +138,7 @@ where
     .await;
 }
 
-async fn await_shutdown(rx: &mut watch::Receiver<bool>) {
+pub(super) async fn await_shutdown(rx: &mut watch::Receiver<bool>) {
     while !*rx.borrow() {
         if rx.changed().await.is_err() {
             return;
@@ -214,7 +148,7 @@ async fn await_shutdown(rx: &mut watch::Receiver<bool>) {
 
 // ── MCP client role ───────────────────────────────────────────────────────────
 
-/// Handle returned by [`GossipAgent::connect_mcp_server`].
+/// Handle returned by [`McpHandle::connect_mcp_server`].
 ///
 /// Dropping this handle tombstones all KV entries registered on behalf of the
 /// remote server and stops the proxy task. While live, the remote server's
@@ -223,113 +157,12 @@ async fn await_shutdown(rx: &mut watch::Receiver<bool>) {
 #[cfg(feature = "gateway")]
 #[must_use = "dropping McpClientHandle immediately retracts all bridged tools"]
 pub struct McpClientHandle {
-    _cancel: oneshot::Sender<()>,
-}
-
-#[cfg(feature = "gateway")]
-impl GossipAgent {
-    /// Connects to an external MCP server at `server_url`, discovers its tools,
-    /// and bridges them into the Mycelium mesh.
-    ///
-    /// 1. Sends `initialize` to handshake with the server.
-    /// 2. Sends `tools/list` to enumerate available tools.
-    /// 3. Writes each tool's schema under `tools/{name}/{node_id}` in the KV store.
-    /// 4. Subscribes to `"mcp.invoke"` and proxies matching calls to the server
-    ///    via HTTP `tools/call`.
-    ///
-    /// Drop the returned [`McpClientHandle`] to tombstone all KV entries and
-    /// stop the proxy task.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err(McpError::Transport(...))` if the HTTP handshake or tool
-    /// discovery fails. Individual call failures after connection are logged and
-    /// reported as JSON-RPC errors to the caller.
-    pub async fn connect_mcp_server(
-        &self,
-        server_url: impl Into<String>,
-    ) -> Result<McpClientHandle, McpError> {
-        let server_url = server_url.into();
-        let http_client = reqwest::Client::new();
-
-        // ── Handshake ─────────────────────────────────────────────────────────
-        let init_req = json!({
-            "jsonrpc": "2.0", "id": 0, "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "mycelium", "version": env!("CARGO_PKG_VERSION")},
-            },
-        });
-        http_client
-            .post(&server_url)
-            .json(&init_req)
-            .send()
-            .await
-            .map_err(|e| McpError::Transport(e.to_string()))?;
-
-        // ── Tool discovery ────────────────────────────────────────────────────
-        let list_req = json!({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}});
-        let list_resp: serde_json::Value = http_client
-            .post(&server_url)
-            .json(&list_req)
-            .send()
-            .await
-            .map_err(|e| McpError::Transport(e.to_string()))?
-            .json()
-            .await
-            .map_err(|e| McpError::SerdeJson(e.to_string()))?;
-
-        let tools = list_resp["result"]["tools"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-
-        // ── Register tool KV entries ──────────────────────────────────────────
-        let node_id = self.task_ctx.node_id.clone();
-        let mut kv_keys: Vec<Arc<str>> = Vec::with_capacity(tools.len());
-        let mut tool_names: Vec<Arc<str>> = Vec::with_capacity(tools.len());
-
-        for tool in &tools {
-            let name = match tool["name"].as_str() {
-                Some(n) => n,
-                None    => continue,
-            };
-            let schema = tool.get("inputSchema").cloned().unwrap_or(json!({}));
-            let kv_key: Arc<str> = Arc::from(format!("tools/{name}/{node_id}").as_str());
-            kv_set(&self.task_ctx, Arc::clone(&kv_key), Bytes::from(schema.to_string().into_bytes()));
-            kv_keys.push(kv_key);
-            tool_names.push(Arc::from(name));
-        }
-
-        if kv_keys.is_empty() {
-            tracing::warn!(url = %server_url, "MCP server advertised no tools");
-        }
-
-        // ── Spawn proxy task ──────────────────────────────────────────────────
-        let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
-        let shutdown_rx = self.shutdown_tx.subscribe();
-        let ctx         = Arc::clone(&self.task_ctx);
-        let rx          = self.task_ctx.signal_handlers.register(Arc::from(signal_kind::MCP_INVOKE));
-
-        self.spawn_task(run_mcp_client_task(
-            ctx,
-            cancel_rx,
-            shutdown_rx,
-            kv_keys,
-            tool_names,
-            rx,
-            server_url,
-            http_client,
-        ));
-
-        Ok(McpClientHandle { _cancel: cancel_tx })
-    }
+    pub(super) _cancel: oneshot::Sender<()>,
 }
 
 #[cfg(feature = "gateway")]
 #[allow(clippy::too_many_arguments)]
-async fn run_mcp_client_task(
+pub(super) async fn run_mcp_client_task(
     ctx:             Arc<TaskCtx>,
     mut cancel_rx:   oneshot::Receiver<()>,
     mut shutdown_rx: watch::Receiver<bool>,
@@ -441,7 +274,7 @@ mod tests {
         agent_b.start().await.unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let _handle = agent_b.register_mcp_tool(
+        let _handle = agent_b.mcp().register_mcp_tool(
             "add",
             serde_json::json!({
                 "type": "object",
@@ -496,7 +329,7 @@ mod tests {
         agent.start().await.unwrap();
 
         let kv_key = format!("tools/ping/{id}");
-        let handle = agent.register_mcp_tool(
+        let handle = agent.mcp().register_mcp_tool(
             "ping",
             serde_json::json!({"type": "object", "properties": {}}),
             |_| async move { Ok(serde_json::json!("pong")) },
@@ -532,7 +365,7 @@ mod tests {
             "required": ["n"],
         });
 
-        let _handle_double = agent_b.register_mcp_tool(
+        let _handle_double = agent_b.mcp().register_mcp_tool(
             "double",
             schema.clone(),
             |args| async move {
@@ -540,7 +373,7 @@ mod tests {
                 Ok(serde_json::json!(n * 2.0))
             },
         );
-        let _handle_negate = agent_b.register_mcp_tool(
+        let _handle_negate = agent_b.mcp().register_mcp_tool(
             "negate",
             schema,
             |args| async move {
@@ -655,7 +488,7 @@ mod tests {
 
         let server_url = format!("http://127.0.0.1:{mock_port}/");
         let _handle = agent
-            .connect_mcp_server(server_url)
+            .mcp().connect_mcp_server(server_url)
             .await
             .expect("connect_mcp_server failed");
 
@@ -691,7 +524,7 @@ mod tests {
 
         let server_url = format!("http://127.0.0.1:{mock_port}/");
         let _handle = agent
-            .connect_mcp_server(&server_url)
+            .mcp().connect_mcp_server(&server_url)
             .await
             .expect("connect_mcp_server failed");
 

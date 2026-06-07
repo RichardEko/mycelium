@@ -37,7 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     // EchoBackend returns "echo: <rendered user prompt>" — no Ollama / API key required.
     let backend: Arc<dyn LlmBackend> = Arc::new(EchoBackend);
-    let _skill = agent_a.register_prompt_skill("demo", "echo", template, backend).await?;
+    let _skill = agent_a.llm().register_prompt_skill("demo", "echo", template, backend).await?;
     println!("A: registered demo/echo (EchoBackend, port 7960)");
 
     // ── Node B — caller (port 7961, bootstrapped off A) ────────────────────────
@@ -62,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Call 1 ─────────────────────────────────────────────────────────────────
     // B resolves a provider (→ A), sends llm.invoke RPC, A dispatches to EchoBackend.
-    let out1 = agent_b.call_prompt_skill(
+    let out1 = agent_b.llm().call_prompt_skill(
         "demo", "echo",
         "Hello, Mycelium!",
         HashMap::new(),
@@ -75,17 +75,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Template propagates via gossip KV — readable without an extra RPC.
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    let list = agent_b.list_prompts();
+    let list = agent_b.llm().list_prompts();
     println!("B: list_prompts()  → {list:?}");
     assert!(list.iter().any(|(ns, n)| ns == "demo" && n == "echo"));
 
-    let tpl = agent_b.get_prompt("demo", "echo").expect("template should be in KV");
+    let tpl = agent_b.llm().get_prompt("demo", "echo").expect("template should be in KV");
     println!("B: user_template   = {:?}", tpl.user_template);
 
     // ── Live template update ──────────────────────────────────────────────────
     // A writes a new template to KV — the serving dispatch loop reads KV on every
     // invocation, so the next call picks up the change immediately, no restart needed.
-    agent_a.update_prompt("demo", "echo", PromptTemplate {
+    agent_a.llm().update_prompt("demo", "echo", PromptTemplate {
         system: "Updated assistant.".into(),
         user_template: "v2: {{input}}".into(),
         max_tokens: 64,
@@ -96,12 +96,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Give gossip a moment to propagate the KV write to B.
     tokio::time::sleep(Duration::from_millis(400)).await;
-    let updated = agent_b.get_prompt("demo", "echo").expect("template still present");
+    let updated = agent_b.llm().get_prompt("demo", "echo").expect("template still present");
     assert_eq!(updated.user_template, "v2: {{input}}");
     println!("B: sees live update  user_template = {:?}", updated.user_template);
 
     // ── Call 2 — dispatch reads updated template from KV ──────────────────────
-    let out2 = agent_b.call_prompt_skill(
+    let out2 = agent_b.llm().call_prompt_skill(
         "demo", "echo",
         "world",
         HashMap::new(),
