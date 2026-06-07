@@ -1914,6 +1914,67 @@ None are required for v1.0.
    **Trigger to start**: a confirmed intra-cluster abuse pattern in production (currently
    `max_inbound_frames_per_sec` is sufficient for well-behaved deployments).
 
+8. **Self-tuning metabolism (startup-time auto-derivation)** — all timing and sizing
+   parameters in `docs/operations/tuning.md` follow closed-form formulas derived from cluster
+   size N. Currently operators must read the tuning guide and set env vars manually.
+
+   The proposal is to add `None` / "auto" sentinels to `GossipConfig` for the formula-driven
+   parameters. At `start()`, if a parameter is left as `None`, Mycelium derives the correct
+   value from `bootstrap_peers.len()` (a lower-bound estimate of N):
+
+   | Parameter | Auto-derivation |
+   |---|---|
+   | `default_ttl` | `max(5, ceil(log₂(N + 1)))` |
+   | `max_active_connections` | `0` (full mesh) if N ≤ 20, else `max(16, ceil(√N))` |
+   | `writer_channel_depth` | `max(256, N × 4)` |
+   | `max_seen_entries` | `max(100_000, N × 1_000)` |
+   | `propagation_window_secs` | `max(60, health_check_interval_secs × peer_eviction_intervals × 2)` |
+
+   The hard invariants (`reconnect_backoff < health_check_interval − 2`, propagation ≥ eviction
+   window) are enforced during derivation so the resulting config is always valid. Explicit
+   operator values override the auto-derived ones without any inference.
+
+   **No consensus needed, no task restarts** — derivation happens once, at `start()`, before
+   any background tasks are spawned.
+
+   **Trigger to start**: recurring ops friction from teams deploying clusters of varying size.
+
+9. **Hot-reloadable tuning subset** — a small set of parameters can be changed on a live
+   cluster without task restarts because they are sampled on each use rather than at spawn
+   time: `max_inbound_frames_per_sec`, `max_concurrent_bulk_handlers`, `writer_channel_depth`.
+   Making these `Arc<AtomicU32>` (rather than plain `u32` in `GossipConfig`) allows a
+   management agent to gossip recommended values via `sys/config/` and have every node
+   self-apply them immediately.
+
+   A `ClusterTuner` agent would be built on existing Mycelium primitives:
+   - Observe `peers()` count periodically to track N.
+   - Compute recommended parameter values using the same formulas as milestone 8.
+   - Write recommendations to `sys/config/{param}` (Layer I KV, short TTL).
+   - Each node subscribes to `sys/config/` and applies changes atomically.
+
+   **No new mechanism** — the tuning agent is a regular agent using `kv().subscribe_prefix`
+   and atomic config fields. The cluster manages its own metabolism.
+
+   **Trigger to start**: a production deployment where N grows or shrinks significantly
+   at runtime (elastic scaling, rolling deploys) and ops confirms milestone 8 is
+   insufficient because static startup-time derivation becomes stale.
+
+10. **Full live reconfiguration (coordinated fence)** — parameters that require task restarts
+    (`health_check_interval_secs`, `reconnect_backoff_secs`, `peer_eviction_intervals`) need a
+    coordinated fence: reach consensus on the new config version, drain in-flight operations,
+    restart affected background tasks, confirm all nodes applied the change. This is the full
+    "self-tuning metabolism" vision — the cluster responds to topology changes as they happen,
+    not just at startup.
+
+    **Complexity is significant:** partial rollout (some nodes on old interval, some on new)
+    creates a window where the backoff invariant can be violated; the fence must be atomic
+    cluster-wide or rolled back. Defer until there is a validated production need that
+    milestones 8 and 9 cannot address.
+
+    **Trigger to start**: a deployment with highly variable cluster size (e.g. 10 → 500 nodes
+    in a single session) where startup-time derivation and hot-reloadable parameters are
+    demonstrably insufficient.
+
 ---
 
 ## Deferred Patterns
