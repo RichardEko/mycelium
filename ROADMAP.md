@@ -1891,6 +1891,29 @@ None are required for v1.0.
    where `GOSSIP_MAX_ACTIVE_CONNECTIONS` introduces unacceptable topology gaps (e.g. nodes
    with low K miss peers whose keys they need for anti-entropy).
 
+6. **RBAC / gossip-level capability authorization layer** — `max_inbound_frames_per_sec` rate-limits
+   per-peer inbound frames at each receiver, but there is no cluster-wide enforcement or identity-based
+   access control. A v2 RBAC layer would:
+   - Gate `resolve_capability` on a cluster-advertised ACL (beyond the per-call `authorized_callers`
+     field in `.skill.toml`, which is advisory today).
+   - Associate each Ed25519 node identity with a named role (operator, worker, read-only probe).
+   - Block unauthorized capability advertisements from low-trust nodes before they enter the
+     gossip KV (write-ACL at the `apply_and_notify` crossing point).
+   The `compliance` Cargo feature (currently a stub) is the intended home for this work.
+   **Trigger to start**: first regulated-industry deployment (HIPAA, SOC 2) that requires
+   documented access control beyond transport-layer mTLS.
+
+7. **Cluster-wide distributed rate-limiting** — `max_inbound_frames_per_sec` applies per-peer
+   at each receiver independently; a misbehaving sender can still flood the network by
+   connecting to many peers simultaneously. A v2 rate-limiter would:
+   - Gossip per-sender frame-rate observations to all nodes via a dedicated `sys/rate/{node}/`
+     KV namespace (bounded, short-TTL).
+   - Coordinate a cluster-wide consensus decision to backpressure or evict a sender that
+     exceeds a configurable cluster-wide budget.
+   - Expose the rate state via `system_stats()` for operator visibility.
+   **Trigger to start**: a confirmed intra-cluster abuse pattern in production (currently
+   `max_inbound_frames_per_sec` is sufficient for well-behaved deployments).
+
 ---
 
 ## Deferred Patterns

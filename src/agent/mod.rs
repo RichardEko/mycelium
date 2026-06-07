@@ -164,7 +164,17 @@ pub struct SystemStats {
     ///
     /// Typical baseline on a 3-node cluster: ~17–20. A value growing unboundedly
     /// indicates task leaks; consult `task_handles` diagnostics.
+    ///
+    /// Note: per-request `bulk_serve` handler tasks are NOT included here because
+    /// they are spawned outside the `JoinSet`; their count is in `active_bulk_handlers`.
     pub task_count: usize,
+    /// Number of `bulk_serve` per-request handler tasks currently executing.
+    ///
+    /// These tasks are spawned outside the tracked `JoinSet` and are bounded by
+    /// `GossipConfig::max_concurrent_bulk_handlers` (default 64). A value
+    /// at the configured ceiling means the semaphore is dropping requests — raise
+    /// `max_concurrent_bulk_handlers` or reduce the bulk call rate.
+    pub active_bulk_handlers: u64,
 }
 
 /// Shared infrastructure extracted from `GossipAgent` into a single `Arc` so that

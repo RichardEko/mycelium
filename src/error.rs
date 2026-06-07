@@ -11,6 +11,9 @@
 //! - **Lifecycle errors** ([`AlreadyRunning`], [`Shutdown`]) are returned by
 //!   [`GossipAgent::start`] when it is called in the wrong agent state.
 //! - **I/O and parsing errors** ([`Io`], [`Toml`], [`Parse`]) wrap lower-level failures.
+//!   `Io` is returned only during startup (TCP listener bind, WAL read, TLS setup) —
+//!   runtime TCP connection errors are absorbed internally and visible via
+//!   `system_stats().dropped_frames` and `peer_drop_counts()`, not through `GossipError`.
 
 use thiserror::Error;
 
@@ -60,6 +63,14 @@ pub enum GossipError {
     #[error("Agent has been shut down and cannot be restarted")]
     Shutdown,
 
+    /// An I/O error during startup: TCP listener bind, WAL read/replay, or TLS
+    /// certificate setup.
+    ///
+    /// Runtime TCP connection errors (peer unreachable, write timeout) are absorbed
+    /// internally and surfaced via `system_stats().dropped_frames` and
+    /// `peer_drop_counts()` rather than propagated here. To distinguish the I/O
+    /// sub-kind, match on `err.kind()` (e.g. `ErrorKind::AddrInUse` for a port
+    /// conflict, `ErrorKind::PermissionDenied` for a privileged port).
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 

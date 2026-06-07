@@ -314,5 +314,7 @@ seconds, raise `propagation_window_secs` rather than relying on this multiplier.
 | `system_stats().gc_alive` | `true` | `false` — GC task crashed |
 | `GET /ready` | 200 | non-200 — caps advertised or dead shards |
 | `GET /stats` `dropped_frames` | same as above | — |
+| `system_stats().active_bulk_handlers` | 0 or low | at `max_concurrent_bulk_handlers` ceiling — raise limit or reduce bulk call rate |
 | Warn log `Write to X failed` | occasional on restart | persistent — peer unreachable |
 | Warn log `Gossip shard N full` | none | writer_channel_depth or gossip_channel_capacity too small |
+| Warn log `bulk_serve: handler concurrency limit reached` | none | active_bulk_handlers at ceiling — incoming bulk signals being dropped |

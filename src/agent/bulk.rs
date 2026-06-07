@@ -43,7 +43,7 @@ use crate::signal::{SignalScope, signal_kind};
 #[cfg(feature = "gateway")]
 use crate::signal::Signal;
 use bytes::{BufMut, Bytes, BytesMut};
-use std::{sync::{Arc, atomic::{AtomicU16, Ordering}}, time::Duration};
+use std::{sync::{Arc, atomic::{AtomicU16, AtomicU64, Ordering}}, time::Duration};
 use tokio::sync::{oneshot, Semaphore, TryAcquireError};
 #[cfg(feature = "gateway")]
 use tracing::warn;
@@ -62,6 +62,10 @@ pub struct BulkTransport {
     http_port:             AtomicU16,
     /// `None` = unlimited; `Some(sem)` = cap on concurrent per-request handlers.
     handler_semaphore:     Option<Arc<Semaphore>>,
+    /// Number of per-request handler tasks currently executing.
+    /// Incremented before `tokio::spawn`; decremented when each task exits.
+    /// Not part of `task_handles` (unstructured spawn); surfaced in `SystemStats`.
+    pub(crate) active_handlers: Arc<AtomicU64>,
     #[cfg(feature = "gateway")]
     client:                reqwest::Client,
 }
@@ -76,6 +80,7 @@ impl BulkTransport {
             } else {
                 None
             },
+            active_handlers:  Arc::new(AtomicU64::new(0)),
             #[cfg(feature = "gateway")]
             client: reqwest::Client::builder()
                 .timeout(_fetch_timeout)
@@ -154,6 +159,16 @@ impl std::fmt::Display for BulkError {
 }
 
 impl std::error::Error for BulkError {}
+
+/// RAII guard: decrements `BulkTransport::active_handlers` when the bulk handler task exits,
+/// whether it returns normally, panics, or is cancelled.
+#[cfg(feature = "gateway")]
+struct ActiveHandlerGuard(Arc<AtomicU64>);
+
+#[cfg(feature = "gateway")]
+impl Drop for ActiveHandlerGuard {
+    fn drop(&mut self) { self.0.fetch_sub(1, Ordering::Relaxed); }
+}
 
 /// Cancels the corresponding `bulk_serve` background task on drop.
 pub struct BulkServeHandle {
@@ -266,12 +281,15 @@ where
         None
     };
 
-    let handler_clone = Arc::clone(handler);
-    let sender        = sig.sender.clone();
-    let ctx_clone     = Arc::clone(ctx);
+    let handler_clone   = Arc::clone(handler);
+    let sender          = sig.sender.clone();
+    let ctx_clone       = Arc::clone(ctx);
+    let active_handlers = Arc::clone(&ctx.bulk_transport.active_handlers);
 
+    active_handlers.fetch_add(1, Ordering::Relaxed);
     tokio::spawn(async move {
         let _permit = permit; // dropped when this task completes, releasing the slot
+        let _dec = ActiveHandlerGuard(active_handlers);
 
         let payload = match ctx_clone.bulk_transport.fetch(&url).await {
             Ok(b)  => { tracing::debug!(%url, bytes=b.len(), "bulk_serve: fetch ok"); b }

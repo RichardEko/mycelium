@@ -377,3 +377,38 @@ Changes since Run 10: `KvStore`/`KvState` architectural split (`src/store.rs`) w
 | 24 | Developer Experience | 9 | Lock-Order Table and Layer I/II Bridge Invariant in CLAUDE.md improve contributor onramp for concurrency-sensitive work |
 | 25 | Dependency Hygiene | 9 | Unchanged from Run 10 |
 | — | **Mean** | **8.7** | |
+
+---
+
+## 2026-06-07 — Run 12
+
+Changes since Run 11: Anti-entropy timing resonance bug fixed — cooldown reduced from `interval_secs` to `interval_secs - 1` in `src/connection.rs`, eliminating the race where the health monitor's retry could arrive at the exact cooldown boundary; bootstrap peer re-trigger loop added to health monitor in `src/agent/tasks.rs` so nodes in `cached_ping_targets` (bootstrap peers) correctly re-trigger anti-entropy on reconnect after cluster restart; scenario 04 (full-cluster restart with WAL recovery) now passes consistently; `docs/operations/tuning.md` added (318 lines) with quick-reference table of 16 parameters, 5 hard invariants with mathematical bounds, scaling guidelines for 4 cluster size ranges, reconnect storm mitigations, tombstone safety window formula, and monitoring checklist; structured error variants (`InvalidField`, `FieldConflict`, `NodeIdMismatch`, `FrameTooLarge`, `UnsupportedWireVersion`) replace stringly-typed `Config(String)` / `Network(String)` catch-alls; `max_inbound_frames_per_sec` and `max_concurrent_bulk_handlers` added to `GossipConfig` with env vars; 100-node scale test and 21-node resilience test (3 churn cycles) confirm no regressions.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 9 | Holland/Jini/OSGi/Paremus synthesis fully honored; library-not-platform positioning intact; KvStore/KvState split maintains substrate purity; no feature drift |
+| 2 | Conceptual Integrity | 9 | Eight-handle facade consistent across all domains; naming unambiguous; `docs/operations/tuning.md` invariants match code behaviour; no new idiom inconsistencies |
+| 3 | Architecture | 9 | Three-layer model enforced by namespace table; KvStore/KvState split materialises Layer I/II boundary; gateway feature gate clean; entanglement documented with v2 roadmap |
+| 4 | Modularity | 9 | Eight independently understandable, moveable, storable handles; TaskCtx shared state correctly deferred to v2 workspace split; internal coupling explicit and documented |
+| 5 | API Design | 9 | `CapabilityReg` return type makes drop semantics explicit; `#[must_use]` on `advertise_capability`; eight-handle pattern minimal and orthogonal; no footguns in core paths |
+| 6 | Error Handling Model | 8 | `InvalidField`/`FieldConflict`/`NodeIdMismatch` structured variants replace stringly-typed catch-alls; `#[non_exhaustive]` on all 9 public error enums; `Network(String)` still present for unclassified I/O errors; no structured error code taxonomy |
+| 7 | Configurability | 9 | `max_inbound_frames_per_sec` and `max_concurrent_bulk_handlers` added; all 16 tuning parameters now documented with hard invariants in `docs/operations/tuning.md`; operational knobs exposed without code changes |
+| 8 | Language Best Practices | 9 | 0 clippy warnings at full feature matrix; `#![deny(unsafe_code)]`; no production `unwrap()`; `#[non_exhaustive]` on all public error enums; proptest on core invariants |
+| 9 | Concurrency Correctness | 9 | Lock-Order Table documents 6 lock sites with no-simultaneous-acquisition invariant; Release/Acquire ordering documented per atomic; `!Send` Mutex enforced by compiler; no new lock sites introduced |
+| 10 | Resource Management | 8 | `CapabilityReg` RAII for advertisement lifetime; `task_count` in SystemStats; RAII throughout; per-operation spawned task ceiling (`max_concurrent_bulk_handlers`) now documented and enforced |
+| 11 | Semantic Correctness | 9 | Anti-entropy timing resonance eliminated: `interval - 1` cooldown gives deterministic 1 s margin; bootstrap re-trigger loop handles `cached_ping_targets` gap; scenario 04 confirms end-to-end; LWW convergence and cross-group split-brain property-tested |
+| 12 | Robustness | 9 | All 12 integration scenarios pass; 100-node scale (0 dropped frames); 21-node resilience (3 churn cycles); Ed25519 fail-closed; `MAX_FRAME_BYTES` bound; `max_inbound_frames_per_sec` guards against misbehaving peers |
+| 13 | Security | 8 | mTLS + Ed25519 + gateway bearer token + signed consensus payloads + `signal_rx_from` sender auth; `max_inbound_frames_per_sec` adds basic gossip rate-limiting; no RBAC; `compliance` feature unimplemented |
+| 14 | Failure Mode Legibility | 8 | Structured error variants carry field context; `ConsensusResult` variants carry detail; `task_count` exposes leaks; `peer_drop_counts` identifies slow peers; Nack reasons still not surfaced to callers |
+| 15 | Performance | 9 | 151 ns set, 16 ns get benchmarked; O(K) gossip fan-out; lock-free hot paths; `kv_payload_size` and `capability_resolve` benchmarks; no hot-path regressions from new config fields |
+| 16 | Scalability | 8 | O(N²) TCP cliff documented with cluster-size table in `tuning.md`; `max_active_connections` mitigation operational; `scan_prefix` O(store) fallback documented; v2 SWIM hybrid transport on roadmap |
+| 17 | Testability | 8 | Deterministic, injectable, no hidden global state; proptest on LWW/HLC/framing; `ConsensusPair` helper; `EchoBackend` for LLM; `TaskCtx` still wired-through rather than injected |
+| 18 | Test Architecture | 9 | 290 unit + 12 integration + 2 fuzz + 3 overlay + 2 scale (100-node + 21-node resilience) + proptest; all pass including previously flaky scenario 04; five-tier pyramid |
+| 19 | Observability | 8 | Prometheus + Grafana; `#[tracing::instrument]` on critical methods; `task_count`; `/consensus/{slot}`; monitoring checklist in `tuning.md`; OTEL still only in skillrunner |
+| 20 | Debuggability | 8 | `/consensus/{slot}`, `task_count`, `peer_drop_counts()`, KV dump; monitoring checklist in `tuning.md`; consensus ballot state not directly inspectable via API |
+| 21 | Operational Readiness | 9 | `/ready`, `shutdown_with_timeout`, persistence (`SyncMode::Flush`), Docker Compose health-check wiring, `is_ready()` Kubernetes readiness semantics; `docs/operations/tuning.md` fills the operational runbook gap |
+| 22 | Evolvability | 9 | `#[non_exhaustive]` on all 9 public error enums; `WIRE_VERSION`/`PREV_WIRE_VERSION` tested end-to-end; CHANGELOG [Unreleased] comprehensive; ROADMAP v2 milestones current |
+| 23 | Documentation | 9 | All 13 guide chapters; CONTRIBUTING.md; philosophy.html; API examples use sub-handle syntax; `docs/operations/tuning.md` adds operational runbook with hard invariants; 5 invariants have mathematical proofs |
+| 24 | Developer Experience | 9 | `cargo build --lib --no-default-features` clean; CONTRIBUTING.md + CLAUDE.md onramp; tuning invariants help operators configure correctly without reading source; handle pattern learnable from one example |
+| 25 | Dependency Hygiene | 9 | `tokio test-util` in `[dev-dependencies]`; `reqwest` optional; `papaya` single concurrent map; all optional deps feature-gated; `Cargo.lock` present; `--no-default-features` compiles cleanly |
+| — | **Mean** | **8.7** | |
