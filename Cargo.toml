@@ -6,6 +6,7 @@ rust-version = "1.88"
 authors = ["Dr. Richard Nicholson <tathatasystems@proton.me>"]
 description = "Broker-less gossip substrate for AI agent fleets: KV store, signal mesh, consensus, capability discovery"
 license = "AGPL-3.0-only"
+# Commercial embedding license available — see README §License or contact tathatasystems@proton.me
 repository = "https://github.com/RichardEko/mycelium"
 readme = "README.md"
 keywords = ["distributed-systems", "gossip", "p2p", "protocol"]
