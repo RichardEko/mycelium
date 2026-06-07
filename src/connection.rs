@@ -532,7 +532,17 @@ pub(crate) async fn handle_connection(
                             continue;
                         }
                     }
-                    // Unknown signer → fail-open, proceed to apply.
+                    // Unknown signer → fail-closed. The value will arrive via anti-entropy
+                    // (StateRequest fires immediately on reconnect, carrying the signer's
+                    // sys/identity/ key). Accepting unsigned frames during the bootstrap
+                    // window would defeat the purpose of signed writes.
+                    else {
+                        warn!(
+                            "SignedData from unknown signer {:#x} via {}, dropping (identity not yet received)",
+                            signer, peer_addr
+                        );
+                        continue;
+                    }
                 }
 
                 // Absorb HLC and apply to local store.

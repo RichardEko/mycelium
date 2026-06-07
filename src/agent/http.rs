@@ -539,7 +539,7 @@ async fn gw_cap_advertise(
     ));
 
     let handle_id = format!("{:x}", fastrand::u128(..));
-    ctx.gateway_caps.lock().unwrap().insert(handle_id.clone(), cancel_tx);
+    ctx.gateway_caps.lock().unwrap_or_else(|e| e.into_inner()).insert(handle_id.clone(), cancel_tx);
 
     Json(json!({ "handle_id": handle_id })).into_response()
 }
@@ -552,7 +552,7 @@ async fn gw_cap_drop(
     Path(handle_id): Path<String>,
     State(ctx):      State<Arc<HttpCtx>>,
 ) -> impl IntoResponse {
-    let removed = ctx.gateway_caps.lock().unwrap().remove(&handle_id).is_some();
+    let removed = ctx.gateway_caps.lock().unwrap_or_else(|e| e.into_inner()).remove(&handle_id).is_some();
     if removed {
         Json(json!({ "ok": true })).into_response()
     } else {
@@ -1410,7 +1410,7 @@ async fn gw_overlay_lock_acquire(
                 released: false,
             };
             let guard_id = format!("{:016x}", fastrand::u64(..));
-            ctx.lock_guards.lock().unwrap().insert(guard_id.clone(), guard);
+            ctx.lock_guards.lock().unwrap_or_else(|e| e.into_inner()).insert(guard_id.clone(), guard);
             Json(json!({ "ok": true, "guard_id": guard_id, "token": ballot })).into_response()
         }
         crate::consensus::ConsensusResult::Timeout { ballots_tried, .. } =>
@@ -1427,7 +1427,7 @@ async fn gw_overlay_lock_release(
     Path(guard_id): Path<String>,
     State(ctx):     State<Arc<HttpCtx>>,
 ) -> impl IntoResponse {
-    let removed = ctx.lock_guards.lock().unwrap().remove(&guard_id);
+    let removed = ctx.lock_guards.lock().unwrap_or_else(|e| e.into_inner()).remove(&guard_id);
     if removed.is_some() {
         Json(json!({ "ok": true })).into_response()
     } else {

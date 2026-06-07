@@ -73,7 +73,7 @@ pub(crate) fn emit_signal(
         && (kind.as_ref() == signal_kind::RPC_RESULT || kind.as_ref() == signal_kind::BULK_RESULT)
     {
         let call_nonce = u64::from_le_bytes(payload[..8].try_into().unwrap());
-        if let Some(tx) = ctx.rpc_pending.lock().unwrap().remove(&call_nonce) {
+        if let Some(tx) = ctx.rpc_pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&call_nonce) {
             let _ = tx.send(sig.clone());
             true
         } else {
@@ -135,7 +135,7 @@ pub(crate) fn emit_signal_ordered(
         && (kind.as_ref() == signal_kind::RPC_RESULT || kind.as_ref() == signal_kind::BULK_RESULT)
     {
         let call_nonce = u64::from_le_bytes(payload[..8].try_into().unwrap());
-        if let Some(tx) = ctx.rpc_pending.lock().unwrap().remove(&call_nonce) {
+        if let Some(tx) = ctx.rpc_pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&call_nonce) {
             let _ = tx.send(sig.clone());
             true
         } else { false }

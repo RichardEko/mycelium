@@ -325,7 +325,7 @@ pub(super) async fn run_consolidated_opacity_watcher(
 
     // Initial pass: pick up any entries registered before the task started.
     {
-        let guard = registry.entries.lock().unwrap();
+        let guard = registry.entries.lock().unwrap_or_else(|e| e.into_inner());
         for reg in guard.iter() {
             let satisfied = !resolve_filter_against_kv(&ctx.kv_state, &reg.filter).is_empty();
             let opaque_written = if !satisfied {
@@ -352,7 +352,7 @@ pub(super) async fn run_consolidated_opacity_watcher(
 
         // Merge entries added since last wake.
         {
-            let guard = registry.entries.lock().unwrap();
+            let guard = registry.entries.lock().unwrap_or_else(|e| e.into_inner());
             for reg in guard.iter() {
                 if local.iter().any(|e| e.opacity_key == reg.opacity_key) {
                     continue;
@@ -380,7 +380,7 @@ pub(super) async fn run_consolidated_opacity_watcher(
                 if local[i].opaque_written {
                     clear_opacity_key(&ctx, &local[i].opacity_key);
                 }
-                registry.entries.lock().unwrap()
+                registry.entries.lock().unwrap_or_else(|e| e.into_inner())
                     .retain(|e| e.opacity_key != local[i].opacity_key);
                 local.swap_remove(i);
                 continue;

@@ -228,7 +228,7 @@ impl CapabilitiesHandle {
 
         let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let registry  = Arc::clone(&ctx.filter_opacity_registry);
-        registry.entries.lock().unwrap().push(RegEntry {
+        registry.entries.lock().unwrap_or_else(|e| e.into_inner()).push(RegEntry {
             opacity_key,
             filter:    Arc::clone(&filter_arc),
             cancelled: Arc::clone(&cancelled),
