@@ -1860,6 +1860,75 @@ cryptographic chaining (Merkle / hash-chain). That is a v2 item if a regulated c
 requires it. The v1 design provides availability and tamper-evidence via value hashing;
 it does not provide non-repudiation under an adversarial-insider threat model.
 
+### 8. Role-based access control (v1.x subset)
+
+Regulated-industry deployments (HIPAA, SOC 2) require documented access control and role
+separation. The full gossip-level capability authorization layer is deferred to v2 (see
+*v2.0 Milestones §6*), but a v1.x subset is sufficient to unblock compliance certification
+and is buildable on existing primitives.
+
+**What is needed:**
+
+**a) Node roles.** Three roles annotated in `GossipConfig` and gossiped to
+`sys/identity/{node}/role`:
+
+| Role | Permitted operations |
+|---|---|
+| `operator` | Full read/write; gateway admin endpoints; audit log access |
+| `worker` | KV read/write within own capability namespace; signal emit/receive |
+| `probe` | Read-only KV; `/health`, `/ready`, `/metrics`; no write or admin |
+
+Roles are enforced at the gateway layer (HTTP request → check caller's node role from
+`sys/identity/`) and at `apply_and_notify` for the `sys/` namespace (worker nodes cannot
+write to `sys/config/` or `sys/audit/`).
+
+**b) Gateway endpoint ACLs.** Extend the existing bearer-token middleware to carry a
+role claim. The token maps to a role; the role gates which endpoint groups are accessible.
+No new auth mechanism — the `GOSSIP_GATEWAY_AUTH_TOKEN` path already validates the token;
+role checking is a one-line extension of that middleware.
+
+**c) Audit log access control.** The `/audit` endpoint (gap #7) is restricted to
+`operator` role by default. Workers and probes cannot read the full audit trail.
+
+**What this is not:** gossip-level write ACLs enforced at every forwarding hop (that is
+v2 §6). The v1 enforcement point is the gateway and the `sys/` write guard — sufficient
+for SOC 2 Type II controls evidence and HIPAA §164.312(a)(1) access control requirements.
+
+---
+
+### 9. SSO / enterprise IdP integration (Entra, Okta)
+
+Enterprise procurement almost universally requires SSO against the organisation's IdP
+before IT security will approve deployment. The gateway's existing bearer-token auth is
+a prerequisite; this extends it to OIDC/JWT validation against an external issuer.
+
+**What is needed:**
+
+**a) OIDC token validation middleware.** Replace the static `GOSSIP_GATEWAY_AUTH_TOKEN`
+comparison with a JWT validation path:
+
+```
+Authorization: Bearer <JWT>  →  validate signature against OIDC JWKS endpoint
+                              →  extract role claim (configurable claim key)
+                              →  pass to existing gateway ACL logic (gap #8)
+```
+
+`GossipConfig::gateway_oidc_issuer: Option<String>` — when set, the gateway fetches
+`{issuer}/.well-known/openid-configuration` on startup, caches the JWKS, and validates
+every bearer token. Static token auth remains available as a fallback for non-SSO
+deployments.
+
+**b) Entra (Azure AD) reference configuration.** A `docs/guide/sso-entra.md` showing the
+app registration, role claim mapping, and `GossipConfig` snippet. This is the first IdP
+most enterprise prospects will ask about.
+
+**c) Okta reference configuration.** `docs/guide/sso-okta.md` — same pattern, second
+most common enterprise IdP.
+
+The JWKS cache refresh interval and token clock-skew tolerance are configurable via
+`GossipConfig`. No new dependencies beyond a JWT validation crate (`jsonwebtoken` is
+already in the dep graph via the `llm` feature).
+
 ---
 
 ### Gap Summary
@@ -1875,6 +1944,8 @@ it does not provide non-repudiation under an adversarial-insider threat model.
 | `set_with_min_acks` write-durability confirmation API | Medium | **Complete** 2026-05-25 |
 | Prometheus metrics export + dashboards | Medium | **Complete** 2026-05-25 |
 | Durable cluster-wide audit trail (`sys/audit/`, `/audit` endpoint) | High | **Pending** |
+| Role-based access control — v1.x subset (node roles, gateway ACLs) | High | **Pending** |
+| SSO / enterprise IdP integration (OIDC, Entra, Okta) | High | **Pending** |
 
 None of these require architectural changes. The substrate is sound; these are engineering
 completions on top of it.
@@ -1939,17 +2010,20 @@ None are required for v1.0.
    where `GOSSIP_MAX_ACTIVE_CONNECTIONS` introduces unacceptable topology gaps (e.g. nodes
    with low K miss peers whose keys they need for anti-entropy).
 
-6. **RBAC / gossip-level capability authorization layer** — `max_inbound_frames_per_sec` rate-limits
-   per-peer inbound frames at each receiver, but there is no cluster-wide enforcement or identity-based
-   access control. A v2 RBAC layer would:
+6. **Full gossip-level capability authorization layer** — a v1.x subset of RBAC ships earlier
+   (see *Production Readiness Gap §8*): node roles gossiped via `sys/identity/`, gateway endpoint
+   ACLs, and `sys/` write guards. That subset is sufficient for SOC 2 Type II controls evidence
+   and HIPAA §164.312 access control requirements.
+
+   The v2 layer goes further:
    - Gate `resolve_capability` on a cluster-advertised ACL (beyond the per-call `authorized_callers`
-     field in `.skill.toml`, which is advisory today).
-   - Associate each Ed25519 node identity with a named role (operator, worker, read-only probe).
+     field in `.skill.toml`, which is advisory in v1).
    - Block unauthorized capability advertisements from low-trust nodes before they enter the
-     gossip KV (write-ACL at the `apply_and_notify` crossing point).
+     gossip KV (write-ACL enforced at every forwarding hop, not just at the gateway).
+   - Cluster-wide role policy propagated via consensus so no single node can be a policy bypass.
    The `compliance` Cargo feature (currently a stub) is the intended home for this work.
-   **Trigger to start**: first regulated-industry deployment (HIPAA, SOC 2) that requires
-   documented access control beyond transport-layer mTLS.
+   **Trigger to start**: a regulated-industry deployment where gateway-layer enforcement proves
+   insufficient — i.e. agents need gossip-level write isolation, not just HTTP-level.
 
 7. **Cluster-wide distributed rate-limiting** — `max_inbound_frames_per_sec` applies per-peer
    at each receiver independently; a misbehaving sender can still flood the network by
