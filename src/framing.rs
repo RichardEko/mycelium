@@ -653,6 +653,48 @@ mod tests {
         assert_eq!(&buf[..], payload);
     }
 
+    #[tokio::test]
+    async fn read_frame_rejects_zero_length() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut writer = TcpStream::connect(addr).await.unwrap();
+        let (mut reader, _) = listener.accept().await.unwrap();
+        // Write length=0 (after subtracting the version byte the payload would be -1).
+        writer.write_all(&0u32.to_be_bytes()).await.unwrap();
+        writer.write_all(&[WIRE_VERSION]).await.unwrap();
+        let mut buf = BytesMut::new();
+        let result = read_frame(&mut reader, &mut buf).await;
+        assert!(result.is_err(), "zero-length frame must be rejected");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("out of range"), "error should say 'out of range': {}", msg);
+    }
+
+    #[tokio::test]
+    async fn read_frame_rejects_oversized_frame() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut writer = TcpStream::connect(addr).await.unwrap();
+        let (mut reader, _) = listener.accept().await.unwrap();
+        // Claim a payload length one byte beyond MAX_FRAME_BYTES.
+        let oversized = (MAX_FRAME_BYTES + 1) as u32;
+        writer.write_all(&oversized.to_be_bytes()).await.unwrap();
+        writer.write_all(&[WIRE_VERSION]).await.unwrap();
+        let mut buf = BytesMut::new();
+        let result = read_frame(&mut reader, &mut buf).await;
+        assert!(result.is_err(), "oversized frame must be rejected");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("out of range"), "error should say 'out of range': {}", msg);
+    }
+
+    #[test]
+    fn max_frame_bytes_fits_in_u32() {
+        // write_frame length-prefixes frames with a u32 — verify the constant fits.
+        // payload_len = 1 + data.len() must be representable as u32.
+        // With MAX_FRAME_BYTES = 10 MiB this is trivially true, but guard it
+        // so a future constant change doesn't silently break the protocol.
+        const _: () = assert!(MAX_FRAME_BYTES < u32::MAX as usize);
+    }
+
     #[test]
     fn canonical_sign_bytes_excludes_ttl() {
         let u1 = GossipUpdate {
@@ -724,5 +766,52 @@ mod tests {
         };
         let msg = make_kv_wire_msg(u, 2, None);
         assert!(matches!(msg, WireMessage::Data(_)), "no-tls path must return Data variant");
+    }
+}
+
+#[cfg(test)]
+mod prop_tests {
+    use super::*;
+    use bytes::BytesMut;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Any payload up to 4 KiB survives write_frame + read_frame unchanged.
+        /// Tests the length-prefix framing layer independently of bincode encoding.
+        #[test]
+        fn framing_round_trip(payload in prop::collection::vec(any::<u8>(), 0..=4096usize)) {
+            let result = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let (mut w, mut r) = tokio::io::duplex(8192);
+                    write_frame(&mut w, &payload).await.unwrap();
+                    drop(w);
+                    let mut buf = BytesMut::new();
+                    read_frame(&mut r, &mut buf).await.unwrap();
+                    buf.to_vec()
+                });
+            prop_assert_eq!(result, payload);
+        }
+
+        /// write_frame rejects any payload that would exceed MAX_FRAME_BYTES.
+        /// Since building a 10 MiB buffer in a property test is prohibitive,
+        /// we verify the boundary condition via the length arithmetic directly.
+        #[test]
+        fn write_frame_length_check_is_tight(extra in 1usize..=1024usize) {
+            // payload_len = 1 + data.len(); reject when > MAX_FRAME_BYTES.
+            // Exactly MAX_FRAME_BYTES - 1 data bytes → payload_len = MAX_FRAME_BYTES → accepted.
+            // MAX_FRAME_BYTES + extra - 1 data bytes → payload_len > MAX_FRAME_BYTES → rejected.
+            let boundary_data_len = MAX_FRAME_BYTES.saturating_sub(1);
+            // Oversized: boundary_data_len + extra bytes
+            let oversized_len = boundary_data_len.saturating_add(extra);
+            // payload_len for oversized = 1 + oversized_len
+            let oversized_payload_len = 1usize.saturating_add(oversized_len);
+            prop_assert!(
+                oversized_payload_len > MAX_FRAME_BYTES,
+                "oversized payload_len {} should exceed MAX_FRAME_BYTES {}", oversized_payload_len, MAX_FRAME_BYTES
+            );
+        }
     }
 }

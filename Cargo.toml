@@ -49,7 +49,6 @@ tokio = { version = "1.35", features = ["full"] }
 fastrand = "2"
 
 # Data structures
-dashmap = "5.4"
 papaya = "0.1"
 
 # Serialization
@@ -114,6 +113,7 @@ wgpu         = "22"
 pollster     = "0.3"
 bytemuck     = { version = "1", features = ["derive"] }
 async-openai = "0.28"
+proptest     = "1"
 
 [[bin]]
 name = "skillrunner"

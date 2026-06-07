@@ -68,6 +68,13 @@ pub(crate) async fn handle_connection(
     // BytesMut: recv_buf.split().freeze() at TTL_OFFSET is O(1) for zero-copy forwarding.
     let mut recv_buf: BytesMut = BytesMut::with_capacity(2_048);
     let node_id_str = node_id.to_string();
+    // Per-connection anti-entropy rate limit. StateRequest triggers an O(store_size) scan;
+    // processing repeated requests from the same peer on the same connection faster than
+    // the health-check interval provides no convergence benefit and adds CPU/alloc pressure.
+    let anti_entropy_cooldown = Duration::from_secs(
+        task_ctx.config.health_check_interval_secs.max(1)
+    );
+    let mut last_state_sent: Option<std::time::Instant> = None;
 
     loop {
         // read_frame returns FrameVersion so we can select the right decoder.
@@ -177,6 +184,15 @@ pub(crate) async fn handle_connection(
                     warn!("Ignoring StateRequest from unknown peer {} (reported as {})", peer_addr, sender);
                     continue;
                 }
+                // Rate-limit: one full anti-entropy scan per health-check interval per connection.
+                // A reconnecting peer gets a fresh connection and a fresh cooldown window.
+                if last_state_sent.is_some_and(|t| t.elapsed() < anti_entropy_cooldown) {
+                    tracing::debug!(
+                        "Anti-entropy cooldown active for {}; ignoring repeated StateRequest",
+                        sender
+                    );
+                    continue;
+                }
                 // Anti-entropy fast-path: if the sender's store hash matches ours and is
                 // non-zero (zero = "no digest" sentinel from v7 peers), send an empty
                 // StateResponse to acknowledge we're alive without transferring entries.
@@ -198,6 +214,7 @@ pub(crate) async fn handle_connection(
                                     }
                                 });
                             }
+                            last_state_sent = Some(std::time::Instant::now());
                         }
                         Err(e) => warn!("Fast-path StateResponse serialize failed for {}: {}", sender, e),
                     }
@@ -271,6 +288,7 @@ pub(crate) async fn handle_connection(
                                 }
                             });
                         }
+                        last_state_sent = Some(std::time::Instant::now());
                     }
                 }
             }

@@ -39,31 +39,122 @@ See [`ROADMAP.md`](ROADMAP.md) for the full feature history and what is deferred
 
 1. Fork the repository and create a branch from `main`
 2. Make your changes; see the code style section below
-3. Open a pull request — the CLA bot will prompt you if this is your first contribution
+3. Run the full test matrix (see below)
+4. Open a pull request — the CLA bot will prompt you if this is your first contribution
+5. Update `CHANGELOG.md` under `[Unreleased]` with what changed and why
 
 Keep PRs focused. A PR that fixes one bug is easier to review than one that fixes three.
+For new features or architectural changes, open an issue first so the design can be
+discussed before you write a large amount of code.
+
+## Building
+
+```sh
+# Core library (no optional features)
+cargo build --lib
+
+# Full feature set — what CI runs
+cargo build --lib --features tls,metrics,a2a,llm
+
+# Gateway-free embedded build — must always compile cleanly
+cargo build --lib --no-default-features
+
+# CLI binary
+cargo build --bin mycelium
+```
+
+The pinned toolchain (`rust-toolchain.toml`) is `stable`. No nightly features are used.
+
+## Testing
+
+Run the full matrix before pushing.
+
+```sh
+# Unit tests (287+ tests, ~5 s)
+cargo test --lib --features tls,metrics,a2a,llm
+
+# Lint — zero warnings required
+cargo clippy --lib --tests --features tls,metrics,a2a,llm -- -D warnings
+
+# Gateway-free build — must compile
+cargo build --lib --no-default-features
+
+# Integration tests (12 scenarios, requires Docker, ~5 min warm / ~10 min cold)
+make test
+```
+
+The integration suite requires Docker. The first run builds images from scratch;
+subsequent runs reuse the layer cache and are fast.
+
+### Test conventions
+
+**Structural polling, not fixed sleeps.** Use `for _ in 0..40 { if condition { break; } sleep(50ms) }` rather than `sleep(500ms)`. A structural assertion fails deterministically and points to the root cause.
+
+**Multi-node consensus tests need listeners on every node.** `system_propose` computes
+`quorum = ⌊(peers+1)/2⌋ + 1`. If peer nodes have no `ConsensusListener`, ballots time
+out. See `CLAUDE.md §Testing conventions` for the required pattern.
+
+**Unit tests run in-process.** No Docker, no network. A unit test that spawns real TCP
+connections is an integration test and belongs in `tests/`.
 
 ## Code style
 
-```bash
-# Format
-cargo fmt
+**No comments that explain what code does** — well-named identifiers already do that.
+Write a comment only when the *why* is non-obvious: a hidden constraint, a subtle
+invariant, or a workaround for a specific bug. No multi-line comment blocks, no
+`// ---` separators, no TODO comments in submitted code (open an issue instead).
 
-# Lint — must pass with zero new warnings
-cargo clippy --lib --tests -- -D warnings
+**No `unwrap()` in production code.** Use `.expect("infallible: <reason>")` where the
+invariant is genuinely infallible, or return an error with `?`. The reason string must
+explain *why* the branch cannot be reached.
 
-# Tests — must all pass
-cargo test --lib
+**No unsafe code.** The crate has `#![deny(unsafe_code)]`.
 
-# With optional features
-cargo test --lib --features tls,metrics,a2a,llm
+**Error types.** Use the domain-specific error type for each handle (`ConsistencyError`,
+`RpcError`, etc.). Do not wrap everything in `GossipError`. Use structured variants
+rather than `GossipError::Network(format!("..."))` for typed conditions — callers need
+to match on kind without parsing strings.
+
+**Atomics.** Follow the memory ordering policy in `CLAUDE.md §Memory ordering policy`.
+Do not use `SeqCst` unless you can justify it with a concrete data race.
+
+## Layer rules
+
+Mycelium is built in three layers. Each layer writes to its own key prefix in the gossip
+KV store (see the namespace table in `src/lib.rs`). Respect this separation:
+
+| Layer | Key prefix | Notes |
+|-------|-----------|-------|
+| I — KV | raw user keys | Substrate; no signal mesh, no consensus |
+| II — Signals | `sig/` | Reads from Layer I; never writes `gossip/` keys directly |
+| III — Consensus | `consensus/` | Builds on both layers |
+| Capability | `cap/`, `gcap/`, `sys/load/` | Reads and writes its own prefix only |
+
+A change that writes a `cap/` key from Layer I code is a layer violation and will not
+be merged.
+
+## Wire protocol
+
+Changing the wire format requires a version bump. See the rolling-upgrade policy in
+`src/framing.rs` (the `WIRE_VERSION` block comment). The steps:
+
+1. Add a `WireMessageVN` struct with the *old* field layout.
+2. Increment `WIRE_VERSION`; set `PREV_WIRE_VERSION` to the old value.
+3. Implement `From<WireMessageVN>` → `WireMessage` with sensible defaults for new fields.
+4. Test that a v(N-1) frame decodes correctly via the shim path.
+
+Do not change field order or types in existing `WireMessage` variants without a version
+bump — bincode fixed-int encoding is not self-describing.
+
+## Scale tests (optional)
+
+```sh
+make test-scale               # 100-node cluster
+make test-scale-resilience    # 20-node resilience + late-joiner
 ```
 
-The baseline clippy warning count is 61 pre-existing `field_reassign_with_default`
-warnings in test code. New warnings of any kind are a hard failure.
-
-Comments: only when the *why* is non-obvious. No docstring novels. No TODO comments in
-submitted code — open an issue instead.
+These are slow (~10 min cold) and RAM-intensive. Run them for changes that touch
+`src/connection.rs`, `src/writer.rs`, `src/store.rs`, or `src/agent/tasks.rs`.
 
 ## Licensing
 

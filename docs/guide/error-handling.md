@@ -30,7 +30,8 @@ Feature-gated extras: `PromptSkillError` (`llm` feature), `LlmError` (`llm`),
 pub enum GossipError {
     Network(String),    // TCP dial/accept failure
     Config(String),     // invalid field in GossipConfig
-    State(String),      // runtime state corruption (rare)
+    AlreadyRunning,     // start() called on an already-running agent
+    Shutdown,           // start() called after shutdown (create a new agent)
     Io(std::io::Error), // file I/O (persistence, TLS certs)
     Toml(toml::de::Error),          // config file parse failure
     Parse(std::num::ParseIntError), // env-var parse failure
@@ -45,7 +46,8 @@ config loading (`GossipConfig::load_from_file`).
   at startup.
 - `Network` / `Io` — typically fatal at startup (port in use, cert not found);
   occasionally surfaces in long-running lifecycle paths.
-- `State` — internal invariant violation; treat as a bug, not a runtime error.
+- `AlreadyRunning` — call `start()` at most once per agent instance.
+- `Shutdown` — create a new `GossipAgent` instead of restarting a shut-down one.
 
 ---
 

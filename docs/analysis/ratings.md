@@ -245,3 +245,34 @@ Changes since Run 5: Ed25519 fail-open → fail-closed (`SignedData` from unknow
 | 24 | Developer Experience | 9 | `cargo build --lib --no-default-features` now confirmed clean — contributors can develop against the bare substrate without pulling Hyper; tracing spans on critical paths aid local debugging; all existing DX improvements persist |
 | 25 | Dependency Hygiene | 8 | ↑ `reqwest` is now optional (`gateway` feature only) — `cargo build --lib --no-default-features` passes and does not pull Hyper; `tokio-test-util` still in `[dependencies]` not `[dev-dependencies]` (minor residue); supply chain risk otherwise low |
 | — | **Mean** | **8.0** | |
+
+## 2026-06-07 — Run 8
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 9 | Exceptional Holland/Jini/Paremus alignment; "no coordinator" claim now properly qualified with seed-as-soft-coordinator and consensus proposer caveats |
+| 2 | Conceptual Integrity | 8 | Consistent idioms throughout; LLM/MCP methods remain on `GossipAgent` rather than a typed handle — minor inconsistency with the sub-handle pattern |
+| 3 | Architecture | 8 | Clean layer separation enforced by namespace table; Layer I/II entanglement documented as known v2 item; `TaskCtx` God Object section added to CLAUDE.md |
+| 4 | Modularity | 8 | Six handles independently understandable and storeable; `TaskCtx` shared state is the only remaining coupling, deferred to workspace split in v2 |
+| 5 | API Design | 8 | Minimal public surface; sub-handle pattern is clean and hard to misuse; `set_with_min_acks` naming now correct; no footguns in core paths |
+| 6 | Error Handling Model | 7 | All production `unwrap()` converted to `expect("infallible: reason")`; `GossipError::State(String)` still opaque; no structured error code taxonomy |
+| 7 | Configurability | 9 | Comprehensive `GossipConfig` with env overrides (`GOSSIP_*`), well-organized feature gates, TOML load, CLI flags — covers all operational concerns |
+| 8 | Language Best Practices | 8 | `#![deny(unsafe_code)]`, idiomatic async Rust; dual concurrent map (`dashmap` + `papaya`) is minor redundancy; no `unwrap()` in production paths |
+| 9 | Concurrency Correctness | 8 | Memory ordering policy documented for every atomic; lock-free hot paths; `JoinSet` reaping prevents task accumulation; no identified races |
+| 10 | Resource Management | 8 | `task_count` in `SystemStats` now surfaced; per-peer drop counts via `peer_drop_counts()`; explicit drop semantics on capability handles |
+| 11 | Semantic Correctness | 8 | LWW merge correct (tombstone wins on tie); HLC tick/observe contract correct; quorum arithmetic correct; epidemic Paxos re-proposal sound |
+| 12 | Robustness | 8 | Graceful degradation on shard death; listener auto-restart; anti-entropy on reconnect; missing frame-size cap is known DoS surface |
+| 13 | Security | 7 | mTLS opt-in with Ed25519 identity; signed consensus payloads; frame-size DoS still open; no RBAC; gateway auth is `compliance` feature (unimplemented) |
+| 14 | Failure Mode Legibility | 8 | `ConsensusResult` variants carry detail; `task_count` exposes leaks; `/consensus/{slot}` HTTP inspector; `peer_drop_counts` identifies slow peers |
+| 15 | Performance | 8 | 151 ns `set`, 16 ns `get` benchmarked; tracing at `trace!` level; gossip fan-out is O(K) per node not O(N); no hot-path allocations identified |
+| 16 | Scalability | 8 | O(N²) TCP cliff now documented with explicit connection-count table and iptables saturation thresholds; `max_active_connections` mitigation documented |
+| 17 | Testability | 8 | Deterministic single-process unit tests; injectable config; no global state; fuzz coverage on framing and HLC |
+| 18 | Test Architecture | 8 | 277 unit, 12 integration, 3 overlay, 2 fuzz, 2 scale tests; good pyramid shape; property-based / proptest coverage absent |
+| 19 | Observability | 8 | Prometheus + Grafana, structured tracing, OTEL traces, `task_count` in stats, `/consensus/{slot}` added this run |
+| 20 | Debuggability | 8 | `/consensus/{slot}` endpoint for live inspection; `task_count` catches leaks; `peer_drop_counts()` identifies slow peers; KV dump via scan |
+| 21 | Operational Readiness | 8 | `/ready` probe, `shutdown_with_timeout`, persistence (`SyncMode::Flush`), Docker Compose health check wiring documented |
+| 22 | Evolvability | 8 | Wire version policy (`WIRE_VERSION` + `PREV_WIRE_VERSION`), CHANGELOG under `[Unreleased]`, ROADMAP v2 milestones; debt documented not hidden |
+| 23 | Documentation | 8 | 13 guide chapters (ch.01–13) + philosophy.html; ch.11 (consensus guide) missing; no CONTRIBUTING.md; API examples use current sub-handle syntax |
+| 24 | Developer Experience | 8 | CLAUDE.md onramp with operational diagnostics reference; `rust-toolchain.toml`; Makefile; no visible CI config in repo |
+| 25 | Dependency Hygiene | 8 | Optional deps properly feature-gated; `dashmap`/`papaya` redundancy; one transitive deprecation warning (`block v0.1.6`); `Cargo.lock` present |
+| — | **Mean** | **8.0** | |

@@ -558,7 +558,7 @@ impl GossipAgent {
             #[cfg(feature = "gateway")]
             extra_routes: std::sync::Mutex::new(None),
             #[cfg(feature = "llm")]
-            llm_skills: std::sync::Arc::new(dashmap::DashMap::new()),
+            llm_skills: std::sync::Arc::new(papaya::HashMap::new()),
         }
     }
 }
@@ -636,7 +636,7 @@ impl GossipAgent {
         // 3. Register backend in the shared registry.
         let skill_id = format!("{}/{}", ns, name);
         let was_empty = self.llm_skills.is_empty();
-        self.llm_skills.insert(skill_id.clone(), backend);
+        self.llm_skills.pin().insert(skill_id.clone(), backend);
 
         // 4. Spawn dispatch loop on first registration.
         if was_empty {
@@ -649,7 +649,7 @@ impl GossipAgent {
         let skill_id2 = skill_id.clone();
         tokio::spawn(async move {
             let _ = cancel_rx.await;
-            registry.remove(&skill_id2);
+            registry.pin().remove(&skill_id2);
         });
 
         Ok(prompt::PromptSkillHandle {

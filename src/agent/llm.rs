@@ -2,7 +2,6 @@
 
 use std::{collections::HashMap, sync::Arc};
 use bytes::Bytes;
-use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -158,7 +157,7 @@ impl LlmBackend for EchoBackend {
 
 /// Per-node registry mapping `"{ns}/{name}"` to an LLM backend.
 /// `PromptTemplate` is NOT stored here — it is read fresh from KV on every invocation.
-pub type LlmSkillRegistry = Arc<DashMap<String, Arc<dyn LlmBackend>>>;
+pub type LlmSkillRegistry = Arc<papaya::HashMap<String, Arc<dyn LlmBackend>>>;
 
 // ── RPC payload types ─────────────────────────────────────────────────────────
 
@@ -245,8 +244,8 @@ async fn handle_llm_invoke(
     let skill_id = &invoke_req.prompt;
 
     // Look up backend
-    let backend = match registry.get(skill_id) {
-        Some(b) => Arc::clone(&*b),
+    let backend = match registry.pin().get(skill_id.as_str()) {
+        Some(b) => Arc::clone(b),
         None => {
             let err = serde_json::to_vec(&LlmInvokeError {
                 error: "skill_not_found".into(),

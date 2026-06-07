@@ -616,3 +616,74 @@ mod tests {
         assert_eq!(store.pin().get("k").unwrap().data, None, "same-timestamp data must not resurrect tombstone");
     }
 }
+
+#[cfg(test)]
+mod prop_tests {
+    use super::*;
+    use crate::framing::GossipUpdate;
+    use bytes::Bytes;
+    use proptest::prelude::*;
+
+    /// Build an update with a unique nonce derived from the timestamp so repeated
+    /// application of the same logical event is idempotent in the seen-set.
+    fn update(ts: u64, is_tombstone: bool) -> GossipUpdate {
+        GossipUpdate {
+            sender: 0,
+            key: Arc::from("k"),
+            value: if is_tombstone { Bytes::new() } else { Bytes::from_static(b"v") },
+            timestamp: ts,
+            nonce: ts,
+            ttl: 1,
+            is_tombstone,
+        }
+    }
+
+    proptest! {
+        /// Convergence: applying the same set of updates in any order produces identical state.
+        /// Restricted to distinct timestamps because same-timestamp data (non-tombstone) writes
+        /// are not commutative — the first one applied wins, by design.
+        #[test]
+        fn lww_convergence_any_order(
+            mut pairs in prop::collection::vec((1u64..=10_000u64, any::<bool>()), 1..=10usize)
+        ) {
+            // Enforce distinct timestamps to keep the property commutative.
+            pairs.dedup_by_key(|(ts, _)| *ts);
+            let store_a: papaya::HashMap<Arc<str>, StoreEntry> = papaya::HashMap::new();
+            let store_b: papaya::HashMap<Arc<str>, StoreEntry> = papaya::HashMap::new();
+            for (ts, is_tomb) in &pairs {
+                apply_to_store(&store_a, &update(*ts, *is_tomb));
+            }
+            for (ts, is_tomb) in pairs.iter().rev() {
+                apply_to_store(&store_b, &update(*ts, *is_tomb));
+            }
+            let a = store_a.pin().get("k").map(|e| (e.timestamp, e.data.is_none()));
+            let b = store_b.pin().get("k").map(|e| (e.timestamp, e.data.is_none()));
+            prop_assert_eq!(a, b, "LWW must converge regardless of application order");
+        }
+
+        /// The winning entry is always the one with the highest timestamp.
+        /// On a tie the tombstone wins regardless of application order.
+        #[test]
+        fn lww_winner_is_max_timestamp(
+            ts_a: u64, is_tomb_a: bool, ts_b: u64, is_tomb_b: bool
+        ) {
+            let store: papaya::HashMap<Arc<str>, StoreEntry> = papaya::HashMap::new();
+            apply_to_store(&store, &update(ts_a, is_tomb_a));
+            apply_to_store(&store, &update(ts_b, is_tomb_b));
+            let entry = store.pin().get("k").cloned().unwrap();
+            if ts_a > ts_b {
+                prop_assert_eq!(entry.timestamp, ts_a);
+                prop_assert_eq!(entry.data.is_none(), is_tomb_a);
+            } else if ts_b > ts_a {
+                prop_assert_eq!(entry.timestamp, ts_b);
+                prop_assert_eq!(entry.data.is_none(), is_tomb_b);
+            } else {
+                // Equal timestamps: tombstone beats data.
+                prop_assert_eq!(entry.timestamp, ts_a);
+                if is_tomb_a || is_tomb_b {
+                    prop_assert!(entry.data.is_none(), "tombstone must win equal-timestamp tie");
+                }
+            }
+        }
+    }
+}

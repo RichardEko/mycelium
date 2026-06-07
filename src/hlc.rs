@@ -267,3 +267,60 @@ mod tests {
         assert_eq!(next & LOGICAL_MASK, 0);
     }
 }
+
+#[cfg(test)]
+mod prop_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Sequential tick() calls are strictly monotonically increasing.
+        #[test]
+        fn tick_always_advances(n_ticks in 2usize..=50usize) {
+            let hlc = Hlc::new();
+            let mut prev = hlc.tick();
+            for _ in 1..n_ticks {
+                let next = hlc.tick();
+                prop_assert!(next > prev,
+                    "tick must be strictly monotonic: {} <= {}", next, prev);
+                prev = next;
+            }
+        }
+
+        /// After observe(remote), a subsequent tick() must produce a value strictly
+        /// greater than remote. Remote physical is bounded to ±60 s of now so that
+        /// the logical counter never saturates (saturation at 64 K events/ms is
+        /// unreachable in any real workload and is documented in the HLC module).
+        #[test]
+        fn tick_after_observe_beats_remote(
+            phys_offset_ms in -60_000i64..=60_000i64,
+            remote_log     in 0u64..0x8000u64,
+        ) {
+            let now = wall_now_ms();
+            let remote_phys = (now as i64 + phys_offset_ms).max(1) as u64;
+            let remote = pack(remote_phys, remote_log);
+            let hlc = Hlc::new();
+            hlc.observe(remote);
+            let local = hlc.tick();
+            prop_assert!(local > remote,
+                "tick after observe must beat remote: local={} remote={}", local, remote);
+        }
+
+        /// observe(remote) always returns a value >= remote. Equal only at logical
+        /// saturation (remote_log = LOGICAL_MASK, remote_phys > now_ms) which is
+        /// out of scope for realistic workloads; this test stays well below that.
+        #[test]
+        fn observe_at_least_as_large_as_remote(
+            phys_offset_ms in -60_000i64..=60_000i64,
+            remote_log     in 0u64..0x8000u64,
+        ) {
+            let now = wall_now_ms();
+            let remote_phys = (now as i64 + phys_offset_ms).max(1) as u64;
+            let remote = pack(remote_phys, remote_log);
+            let hlc = Hlc::new();
+            let result = hlc.observe(remote);
+            prop_assert!(result >= remote,
+                "observe must return >= remote: result={} remote={}", result, remote);
+        }
+    }
+}

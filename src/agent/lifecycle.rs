@@ -47,12 +47,10 @@ impl GossipAgent {
         ) {
             Ok(_) => {}
             Err(v) if v == AgentState::Running as u8 => {
-                return Err(GossipError::State("Agent already running".into()));
+                return Err(GossipError::AlreadyRunning);
             }
             Err(_) => {
-                return Err(GossipError::State(
-                    "Agent has been shut down and cannot be restarted".into(),
-                ));
+                return Err(GossipError::Shutdown);
             }
         }
         // Replay WAL + snapshot before any boundary/quorum warm-up reads the store.
