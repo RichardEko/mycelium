@@ -22,7 +22,8 @@ services:
       dockerfile: docker/Dockerfile
     container_name: mycelium-test-node-a
     hostname: node-a
-    # Use kernel-reported IP to avoid Docker DNS race during simultaneous startup.
+    # Static IP keeps the node_id (IP:port) stable across docker stop/start so
+    # the WAL directory path (/data/<node_id>/kv/) is found after cluster restarts.
     entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
     environment:
       MYCELIUM_ROLE:      node
@@ -34,7 +35,8 @@ services:
     volumes:
       - node-a-data:/data
     networks:
-      - mesh
+      mesh:
+        ipv4_address: 172.20.0.2
     restart: "no"
 
   node-b:
@@ -51,7 +53,8 @@ services:
       MYCELIUM_PEERS:     "node-a:57000,node-c:57000,mgmt:57000"
       RUST_LOG:           "info,mycelium=info"
     networks:
-      - mesh
+      mesh:
+        ipv4_address: 172.20.0.3
     restart: "no"
 
   node-c:
@@ -69,7 +72,8 @@ services:
       MYCELIUM_PEERS:     "node-a:57000,node-b:57000,mgmt:57000"
       RUST_LOG:           "info,mycelium=info"
     networks:
-      - mesh
+      mesh:
+        ipv4_address: 172.20.0.4
     restart: "no"
 
   # ── Management dashboard ──────────────────────────────────────────────────────
@@ -89,7 +93,8 @@ services:
       MGMT_PORT:          "8090"
       RUST_LOG:           "info,mycelium=info"
     networks:
-      - mesh
+      mesh:
+        ipv4_address: 172.20.0.5
     restart: "no"
 
   # ── Test runner ───────────────────────────────────────────────────────────────
@@ -121,6 +126,10 @@ services:
 networks:
   mesh:
     driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/24
 
 volumes:
   node-a-data:

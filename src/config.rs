@@ -415,6 +415,34 @@ pub struct GossipConfig {
     /// Default: `30`.
     pub bulk_fetch_timeout_secs: u64,
 
+    /// Maximum number of concurrent per-request handler tasks spawned by `bulk_serve`.
+    ///
+    /// Each incoming bulk signal spawns one background task to fetch-and-respond.
+    /// Without a cap, a flood of bulk signals could exhaust Tokio's task budget.
+    /// When the concurrency limit is reached, new bulk signals are dropped and a
+    /// warning is logged.
+    ///
+    /// `0` = unlimited (not recommended in production).
+    ///
+    /// Default: `64`.
+    pub max_concurrent_bulk_handlers: usize,
+
+    /// Maximum number of gossip frames accepted per second from a single peer.
+    ///
+    /// Frames that exceed this rate are silently dropped and a warning is logged.
+    /// The counter resets every second on a per-connection basis, so a brief burst
+    /// is allowed once per window.
+    ///
+    /// This is a first-line defence against a malicious or misbehaving peer
+    /// flooding the inbound processing pipeline. Set conservatively high enough
+    /// that legitimate traffic is never dropped; a small cluster under normal load
+    /// generates fewer than 200 fps per connection.
+    ///
+    /// `0` = unlimited (default — use only in trusted-network environments or tests).
+    ///
+    /// Set via `GOSSIP_MAX_INBOUND_FRAMES_PER_SEC`.
+    pub max_inbound_frames_per_sec: u64,
+
     /// Optional bearer token that protects the language-bridge gateway endpoints.
     ///
     /// When set, every request to a `/gateway/**` path must include the header:
@@ -484,9 +512,11 @@ impl Default for GossipConfig {
             http_port:               None,
             http_addr:               "127.0.0.1".to_string(),
             persistence:             None,
-            bulk_fetch_timeout_secs: 30,
-            gateway_auth_token:      None,
-            tls:                     None,
+            bulk_fetch_timeout_secs:       30,
+            max_concurrent_bulk_handlers:  64,
+            max_inbound_frames_per_sec:    0,
+            gateway_auth_token:            None,
+            tls:                           None,
         }
     }
 }
@@ -498,47 +528,53 @@ impl GossipConfig {
     /// Call manually after mutating fields directly to catch errors early.
     pub fn validate(&self) -> Result<(), GossipError> {
         if self.bind_address.is_empty() {
-            return Err(GossipError::Config("bind_address cannot be empty".into()));
+            return Err(GossipError::InvalidField { field: "bind_address", reason: "cannot be empty".into() });
         }
         self.bind_address.parse::<std::net::IpAddr>().map_err(|_| {
-            GossipError::Config(format!(
-                "bind_address '{}' is not a valid IP address", self.bind_address
-            ))
+            GossipError::InvalidField {
+                field: "bind_address",
+                reason: format!("'{}' is not a valid IP address", self.bind_address),
+            }
         })?;
         if self.bind_port == 0 {
-            return Err(GossipError::Config("Bind port cannot be zero".into()));
+            return Err(GossipError::InvalidField { field: "bind_port", reason: "cannot be zero".into() });
         }
         if self.max_connections == 0 {
-            return Err(GossipError::Config("max_connections cannot be zero".into()));
+            return Err(GossipError::InvalidField { field: "max_connections", reason: "cannot be zero".into() });
         }
         if self.max_connections > 65535 {
-            return Err(GossipError::Config(
-                "max_connections cannot exceed 65535 (practical file-descriptor budget \
-                 per process; each inbound connection consumes one fd)".into(),
-            ));
+            return Err(GossipError::InvalidField {
+                field: "max_connections",
+                reason: "cannot exceed 65535 (practical file-descriptor budget \
+                         per process; each inbound connection consumes one fd)".into(),
+            });
         }
         if self.health_check_interval_secs == 0 {
-            return Err(GossipError::Config(
-                "health_check_interval_secs cannot be zero".into(),
-            ));
+            return Err(GossipError::InvalidField {
+                field: "health_check_interval_secs",
+                reason: "cannot be zero".into(),
+            });
         }
         if self.health_check_interval_secs > 3600 {
-            return Err(GossipError::Config(
-                "health_check_interval_secs cannot exceed 3600 seconds (1 hour)".into(),
-            ));
+            return Err(GossipError::InvalidField {
+                field: "health_check_interval_secs",
+                reason: "cannot exceed 3600 seconds (1 hour)".into(),
+            });
         }
         if self.default_ttl == 0 {
-            return Err(GossipError::Config("default_ttl cannot be zero".into()));
+            return Err(GossipError::InvalidField { field: "default_ttl", reason: "cannot be zero".into() });
         }
         if self.propagation_window_secs == 0 {
-            return Err(GossipError::Config(
-                "propagation_window_secs cannot be zero".into(),
-            ));
+            return Err(GossipError::InvalidField {
+                field: "propagation_window_secs",
+                reason: "cannot be zero".into(),
+            });
         }
         if self.writer_channel_depth == 0 {
-            return Err(GossipError::Config(
-                "writer_channel_depth cannot be zero".into(),
-            ));
+            return Err(GossipError::InvalidField {
+                field: "writer_channel_depth",
+                reason: "cannot be zero".into(),
+            });
         }
         if self.writer_channel_depth < 64 {
             tracing::warn!(
@@ -547,50 +583,57 @@ impl GossipConfig {
             );
         }
         if self.gossip_channel_capacity == 0 {
-            return Err(GossipError::Config(
-                "gossip_channel_capacity cannot be zero".into(),
-            ));
+            return Err(GossipError::InvalidField {
+                field: "gossip_channel_capacity",
+                reason: "cannot be zero".into(),
+            });
         }
         if self.max_seen_entries == 0 {
-            return Err(GossipError::Config(
-                "max_seen_entries cannot be zero".into(),
-            ));
+            return Err(GossipError::InvalidField {
+                field: "max_seen_entries",
+                reason: "cannot be zero".into(),
+            });
         }
         if self.peer_eviction_intervals == 0 {
-            return Err(GossipError::Config(
-                "peer_eviction_intervals cannot be zero".into(),
-            ));
+            return Err(GossipError::InvalidField {
+                field: "peer_eviction_intervals",
+                reason: "cannot be zero".into(),
+            });
         }
         if self.gossip_shards == 0 {
-            return Err(GossipError::Config("gossip_shards cannot be zero".into()));
+            return Err(GossipError::InvalidField { field: "gossip_shards", reason: "cannot be zero".into() });
         }
         if self.reconnect_backoff_secs == 0 {
-            return Err(GossipError::Config(
-                "reconnect_backoff_secs must be at least 1; \
-                 set to 1 to retry as aggressively as possible".into(),
-            ));
+            return Err(GossipError::InvalidField {
+                field: "reconnect_backoff_secs",
+                reason: "must be at least 1; set to 1 to retry as aggressively as possible".into(),
+            });
         }
         if self.reconnect_backoff_secs > 300 {
-            return Err(GossipError::Config(
-                "reconnect_backoff_secs cannot exceed 300 seconds; \
-                 frames to unreachable peers are dropped during backoff, so large values \
-                 impair convergence — increase health_check_interval_secs instead".into(),
-            ));
+            return Err(GossipError::InvalidField {
+                field: "reconnect_backoff_secs",
+                reason: "cannot exceed 300 seconds; frames to unreachable peers are dropped \
+                         during backoff, so large values impair convergence — increase \
+                         health_check_interval_secs instead".into(),
+            });
         }
         if self.ping_peer_sample_size == 0 {
-            return Err(GossipError::Config(
-                "ping_peer_sample_size cannot be zero".into(),
-            ));
+            return Err(GossipError::InvalidField {
+                field: "ping_peer_sample_size",
+                reason: "cannot be zero".into(),
+            });
         }
         if self.tcp_accept_backlog == 0 {
-            return Err(GossipError::Config(
-                "tcp_accept_backlog cannot be zero".into(),
-            ));
+            return Err(GossipError::InvalidField {
+                field: "tcp_accept_backlog",
+                reason: "cannot be zero".into(),
+            });
         }
         if self.max_peers == 0 {
-            return Err(GossipError::Config(
-                "max_peers cannot be zero".into(),
-            ));
+            return Err(GossipError::InvalidField {
+                field: "max_peers",
+                reason: "cannot be zero".into(),
+            });
         }
         if self.max_forwarding_peers > 100 && self.bootstrap_peers.len() > 20 {
             tracing::warn!(
@@ -602,55 +645,61 @@ impl GossipConfig {
         }
         if let Some(p) = self.http_port {
             if p == 0 {
-                return Err(GossipError::Config("http_port cannot be zero".into()));
+                return Err(GossipError::InvalidField { field: "http_port", reason: "cannot be zero".into() });
             }
             if p == self.bind_port {
-                return Err(GossipError::Config(
-                    "http_port must differ from bind_port".into(),
-                ));
+                return Err(GossipError::FieldConflict {
+                    field_a: "http_port",
+                    field_b: "bind_port",
+                    reason:  "must differ".into(),
+                });
             }
             if self.http_addr.is_empty() {
-                return Err(GossipError::Config("http_addr cannot be empty".into()));
+                return Err(GossipError::InvalidField { field: "http_addr", reason: "cannot be empty".into() });
             }
             self.http_addr.parse::<std::net::IpAddr>().map_err(|_| {
-                GossipError::Config(format!(
-                    "http_addr '{}' is not a valid IP address", self.http_addr
-                ))
+                GossipError::InvalidField {
+                    field:  "http_addr",
+                    reason: format!("'{}' is not a valid IP address", self.http_addr),
+                }
             })?;
         }
         for seg in &self.locality_path {
             if seg.is_empty() {
-                return Err(GossipError::Config(
-                    "locality_path segments must be non-empty".into(),
-                ));
+                return Err(GossipError::InvalidField {
+                    field:  "locality_path",
+                    reason: "segments must be non-empty".into(),
+                });
             }
         }
         for (group, policy) in &self.topology_policies {
             if policy.enforcement == TopologyEnforcement::Hard {
                 if policy.spread_depth.is_none() {
-                    return Err(GossipError::Config(format!(
-                        "topology_policies[{}] requires spread_depth when enforcement = Hard",
-                        group,
-                    )));
+                    return Err(GossipError::InvalidField {
+                        field:  "topology_policies",
+                        reason: format!("[{group}] requires spread_depth when enforcement = Hard"),
+                    });
                 }
                 if policy.spread_min_distinct < 2 {
-                    return Err(GossipError::Config(format!(
-                        "topology_policies[{}] requires spread_min_distinct >= 2 when enforcement = Hard",
-                        group,
-                    )));
+                    return Err(GossipError::InvalidField {
+                        field:  "topology_policies",
+                        reason: format!("[{group}] requires spread_min_distinct >= 2 when enforcement = Hard"),
+                    });
                 }
             }
         }
         if let Some(p) = &self.persistence {
             if p.snapshot_wal_threshold == 0 {
-                return Err(GossipError::Config(
-                    "persistence.snapshot_wal_threshold cannot be zero".into(),
-                ));
+                return Err(GossipError::InvalidField {
+                    field:  "persistence.snapshot_wal_threshold",
+                    reason: "cannot be zero".into(),
+                });
             }
             if p.snapshot_interval_secs == 0 {
-                return Err(GossipError::Config(
-                    "persistence.snapshot_interval_secs cannot be zero".into(),
-                ));
+                return Err(GossipError::InvalidField {
+                    field:  "persistence.snapshot_interval_secs",
+                    reason: "cannot be zero".into(),
+                });
             }
             // Writability check: warn and the caller falls back to None at startup.
             // We don't hard-fail here because validate() is also called in load_from_file
@@ -735,9 +784,10 @@ impl GossipConfig {
             self.intern_keys = match v.as_str() {
                 "true"  | "1" => true,
                 "false" | "0" => false,
-                _ => return Err(GossipError::Config(format!(
-                    "GOSSIP_INTERN_KEYS must be 'true', 'false', '1', or '0', got '{}'", v
-                ))),
+                _ => return Err(GossipError::InvalidField {
+                    field:  "GOSSIP_INTERN_KEYS",
+                    reason: format!("must be 'true', 'false', '1', or '0', got '{v}'"),
+                }),
             };
         }
         if let Ok(v) = env::var("GOSSIP_INTERN_MAX_KEYS") {
@@ -748,7 +798,10 @@ impl GossipConfig {
                 .split(',')
                 .map(|s| s.trim().parse::<NodeId>())
                 .collect();
-            self.bootstrap_peers = peers.map_err(|e| GossipError::Config(e.to_string()))?;
+            self.bootstrap_peers = peers.map_err(|e| GossipError::InvalidField {
+                field:  "GOSSIP_BOOTSTRAP_PEERS",
+                reason: e.to_string(),
+            })?;
         }
         if let Ok(v) = env::var("GOSSIP_PING_PEER_SAMPLE_SIZE") {
             self.ping_peer_sample_size = v.parse().map_err(GossipError::Parse)?;
@@ -769,9 +822,10 @@ impl GossipConfig {
             self.group_aware_forwarding = match v.as_str() {
                 "true" | "1" => true,
                 "false" | "0" => false,
-                _ => return Err(GossipError::Config(
-                    "GOSSIP_GROUP_AWARE_FORWARDING must be true/false/1/0".into(),
-                )),
+                _ => return Err(GossipError::InvalidField {
+                    field:  "GOSSIP_GROUP_AWARE_FORWARDING",
+                    reason: "must be true/false/1/0".into(),
+                }),
             };
         }
         if let Ok(v) = env::var("GOSSIP_HEALTH_CHECK_MAX_JITTER_MS") {
@@ -785,6 +839,12 @@ impl GossipConfig {
         }
         if let Ok(v) = env::var("GOSSIP_EPIDEMIC_EXTRA_PEERS") {
             self.epidemic_extra_peers = v.parse().map_err(GossipError::Parse)?;
+        }
+        if let Ok(v) = env::var("GOSSIP_MAX_CONCURRENT_BULK_HANDLERS") {
+            self.max_concurrent_bulk_handlers = v.parse().map_err(GossipError::Parse)?;
+        }
+        if let Ok(v) = env::var("GOSSIP_MAX_INBOUND_FRAMES_PER_SEC") {
+            self.max_inbound_frames_per_sec = v.parse().map_err(GossipError::Parse)?;
         }
         if let Ok(v) = env::var("GOSSIP_LOCALITY_PATH") {
             self.locality_path = v

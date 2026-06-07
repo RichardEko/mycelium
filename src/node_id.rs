@@ -26,7 +26,10 @@ pub struct NodeId {
 impl NodeId {
     pub fn new(address: &str, port: u16) -> Result<Self, GossipError> {
         let ip: IpAddr = address.parse().map_err(|e| {
-            GossipError::Config(format!("Invalid IP address '{}': {}", address, e))
+            GossipError::InvalidField {
+                field:  "address",
+                reason: format!("Invalid IP address '{}': {}", address, e),
+            }
         })?;
         let addr = SocketAddr::new(ip, port);
         // Use SocketAddr's Display for the canonical string: "[::1]:8080" for IPv6,
@@ -94,7 +97,10 @@ impl FromStr for NodeId {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let addr = s.parse::<SocketAddr>().map_err(|e| {
-            GossipError::Config(format!("Invalid node address '{}': {}", s, e))
+            GossipError::InvalidField {
+                field:  "node_id",
+                reason: format!("Invalid node address '{}': {}", s, e),
+            }
         })?;
         Ok(Self { s: addr.to_string().into(), addr, id_hash: Self::hash_addr(addr) })
     }

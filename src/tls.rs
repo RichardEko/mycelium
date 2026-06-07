@@ -31,7 +31,7 @@ mod imp {
         node_id: &NodeId,
     ) -> Result<NodeTls, GossipError> {
         fs::create_dir_all(&cfg.auto_cert_dir).map_err(|e| {
-            GossipError::Config(format!("TLS: cannot create cert dir {:?}: {e}", cfg.auto_cert_dir))
+            GossipError::InvalidField { field: "tls", reason: format!("TLS: cannot create cert dir {:?}: {e}", cfg.auto_cert_dir) }
         })?;
 
         // ── 1. Node signing / identity key ────────────────────────────────
@@ -61,34 +61,34 @@ mod imp {
         if ca_cert_path.exists() && auto_ca_key_path.exists() {
             // Load existing CA
             let pem = fs::read_to_string(&ca_cert_path)
-                .map_err(|e| GossipError::Config(format!("TLS: read CA cert: {e}")))?;
+                .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: read CA cert: {e}") })?;
             ca_cert_der = pem_cert_to_der(&pem)?;
             let key_pem = fs::read_to_string(&auto_ca_key_path)
-                .map_err(|e| GossipError::Config(format!("TLS: read CA key: {e}")))?;
+                .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: read CA key: {e}") })?;
             ca_key_pair = KeyPair::from_pem(&key_pem)
-                .map_err(|e| GossipError::Config(format!("TLS: parse CA key: {e}")))?;
+                .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: parse CA key: {e}") })?;
         } else {
             // Generate new CA
             ca_key_pair = KeyPair::generate_for(&PKCS_ED25519)
-                .map_err(|e| GossipError::Config(format!("TLS: generate CA key: {e}")))?;
+                .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: generate CA key: {e}") })?;
             let mut ca_params = CertificateParams::new(vec![])
-                .map_err(|e| GossipError::Config(format!("TLS: CA params: {e}")))?;
+                .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: CA params: {e}") })?;
             ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
             ca_params.not_before = rcgen::date_time_ymd(2024, 1, 1);
             ca_params.not_after  = rcgen::date_time_ymd(2099, 1, 1);
             let ca_cert = ca_params
                 .self_signed(&ca_key_pair)
-                .map_err(|e| GossipError::Config(format!("TLS: self-sign CA: {e}")))?;
+                .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: self-sign CA: {e}") })?;
 
             ca_cert_der = CertificateDer::from(ca_cert.der().to_vec());
 
             // Save CA cert as PEM for peer distribution
             let pem_str = cert_der_to_pem(ca_cert_der.as_ref());
             fs::write(&auto_ca_cert_path, pem_str)
-                .map_err(|e| GossipError::Config(format!("TLS: write CA cert: {e}")))?;
+                .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: write CA cert: {e}") })?;
             let key_pem = ca_key_pair.serialize_pem();
             fs::write(&auto_ca_key_path, key_pem)
-                .map_err(|e| GossipError::Config(format!("TLS: write CA key: {e}")))?;
+                .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: write CA key: {e}") })?;
 
             tracing::info!(
                 "TLS: generated new cluster CA in {:?} — distribute ca-cert.pem to all nodes",
@@ -117,15 +117,15 @@ mod imp {
 
     fn save_key_raw(key: &SigningKey, path: &Path) -> Result<(), GossipError> {
         fs::write(path, key.as_bytes())
-            .map_err(|e| GossipError::Config(format!("TLS: write key {:?}: {e}", path)))
+            .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: write key {:?}: {e}", path) })
     }
 
     fn load_key_raw(path: &Path) -> Result<SigningKey, GossipError> {
         let bytes = fs::read(path)
-            .map_err(|e| GossipError::Config(format!("TLS: read key {:?}: {e}", path)))?;
+            .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: read key {:?}: {e}", path) })?;
         let arr: [u8; 32] = bytes
             .try_into()
-            .map_err(|_| GossipError::Config("TLS: key file must be exactly 32 bytes".into()))?;
+            .map_err(|_| GossipError::InvalidField { field: "tls", reason: "TLS: key file must be exactly 32 bytes".into() })?;
         Ok(SigningKey::from_bytes(&arr))
     }
 
@@ -133,16 +133,16 @@ mod imp {
         use base64::{engine::general_purpose::STANDARD, Engine};
         use ed25519_dalek::pkcs8::DecodePrivateKey;
         let pem = fs::read_to_string(path)
-            .map_err(|e| GossipError::Config(format!("TLS: read key PEM {:?}: {e}", path)))?;
+            .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: read key PEM {:?}: {e}", path) })?;
         // Strip PEM armor and base64-decode to DER, then parse.
         // Avoids requiring the `pem` feature flag on the pkcs8 crate.
         let b64: String = pem.lines()
             .filter(|l| !l.starts_with("-----"))
             .collect();
         let der = STANDARD.decode(b64.trim())
-            .map_err(|e| GossipError::Config(format!("TLS: decode key PEM: {e}")))?;
+            .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: decode key PEM: {e}") })?;
         SigningKey::from_pkcs8_der(&der)
-            .map_err(|e| GossipError::Config(format!("TLS: parse PKCS8 key: {e}")))
+            .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: parse PKCS8 key: {e}") })
     }
 
     fn generate_node_cert(
@@ -155,14 +155,14 @@ mod imp {
         // Convert ed25519-dalek key → rcgen KeyPair via PKCS8 DER
         let pkcs8 = signing_key
             .to_pkcs8_der()
-            .map_err(|e| GossipError::Config(format!("TLS: encode node key: {e}")))?;
+            .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: encode node key: {e}") })?;
         let node_key_pair = KeyPair::try_from(pkcs8.as_bytes())
-            .map_err(|e| GossipError::Config(format!("TLS: rcgen node key: {e}")))?;
+            .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: rcgen node key: {e}") })?;
 
         // Add the node's IP address as a Subject Alternative Name
         let ip: std::net::IpAddr = node_id.to_socket_addr().ip();
         let mut params = CertificateParams::new(vec![])
-            .map_err(|e| GossipError::Config(format!("TLS: node cert params: {e}")))?;
+            .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: node cert params: {e}") })?;
         params.subject_alt_names = vec![SanType::IpAddress(ip)];
         params.not_before = rcgen::date_time_ymd(2024, 1, 1);
         params.not_after  = rcgen::date_time_ymd(2099, 1, 1);
@@ -173,17 +173,17 @@ mod imp {
         // Rustls verifies the chain via the SubjectKeyIdentifier (public-key hash), not the
         // serial number, so the reconstructed cert's AKI matches the saved ca-cert.pem.
         let mut ca_params = CertificateParams::new(vec![])
-            .map_err(|e| GossipError::Config(format!("TLS: CA params for signing: {e}")))?;
+            .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: CA params for signing: {e}") })?;
         ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
         ca_params.not_before = rcgen::date_time_ymd(2024, 1, 1);
         ca_params.not_after  = rcgen::date_time_ymd(2099, 1, 1);
         let signing_ca = ca_params
             .self_signed(ca_key_pair)
-            .map_err(|e| GossipError::Config(format!("TLS: reconstruct CA for signing: {e}")))?;
+            .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: reconstruct CA for signing: {e}") })?;
 
         let node_cert = params
             .signed_by(&node_key_pair, &signing_ca, ca_key_pair)
-            .map_err(|e| GossipError::Config(format!("TLS: sign node cert: {e}")))?;
+            .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: sign node cert: {e}") })?;
 
         Ok(CertificateDer::from(node_cert.der().to_vec()))
     }
@@ -198,7 +198,7 @@ mod imp {
         // Convert signing key to rustls PrivateKeyDer
         let pkcs8 = signing_key
             .to_pkcs8_der()
-            .map_err(|e| GossipError::Config(format!("TLS: encode key for rustls: {e}")))?;
+            .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: encode key for rustls: {e}") })?;
         let key_der: PrivateKeyDer<'static> =
             PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(pkcs8.as_bytes().to_vec()));
 
@@ -206,24 +206,24 @@ mod imp {
         let mut root_store = RootCertStore::empty();
         root_store
             .add(ca_cert_der.clone())
-            .map_err(|e| GossipError::Config(format!("TLS: add CA to root store: {e}")))?;
+            .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: add CA to root store: {e}") })?;
         let root_store = Arc::new(root_store);
 
         // Server config: require client cert verified against CA
         let verifier = WebPkiClientVerifier::builder(Arc::clone(&root_store))
             .build()
-            .map_err(|e| GossipError::Config(format!("TLS: build client verifier: {e}")))?;
+            .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: build client verifier: {e}") })?;
 
         let server_config = ServerConfig::builder()
             .with_client_cert_verifier(verifier)
             .with_single_cert(vec![node_cert_der.clone()], key_der.clone_key())
-            .map_err(|e| GossipError::Config(format!("TLS: build server config: {e}")))?;
+            .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: build server config: {e}") })?;
 
         // Client config: present node cert, verify server against CA
         let client_config = ClientConfig::builder()
             .with_root_certificates(root_store)
             .with_client_auth_cert(vec![node_cert_der], key_der)
-            .map_err(|e| GossipError::Config(format!("TLS: build client config: {e}")))?;
+            .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: build client config: {e}") })?;
 
         Ok((server_config, client_config))
     }
@@ -233,11 +233,11 @@ mod imp {
         let certs: Vec<CertificateDer<'static>> =
             rustls_pemfile::certs(&mut cursor)
                 .collect::<Result<_, _>>()
-                .map_err(|e| GossipError::Config(format!("TLS: parse CA cert PEM: {e}")))?;
+                .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: parse CA cert PEM: {e}") })?;
         certs
             .into_iter()
             .next()
-            .ok_or_else(|| GossipError::Config("TLS: CA cert PEM contains no certificate".into()))
+            .ok_or_else(|| GossipError::InvalidField { field: "tls", reason: "TLS: CA cert PEM contains no certificate".into() })
     }
 
     fn cert_der_to_pem(der: &[u8]) -> String {

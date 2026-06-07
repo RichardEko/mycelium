@@ -546,6 +546,7 @@ impl GossipAgent {
             bulk_transport:  Arc::new(bulk::BulkTransport::new(
                 config.http_port.unwrap_or(0),
                 std::time::Duration::from_secs(config.bulk_fetch_timeout_secs),
+                config.max_concurrent_bulk_handlers,
             )),
             rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             tls: std::sync::OnceLock::new(),

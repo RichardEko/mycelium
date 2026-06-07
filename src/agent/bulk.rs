@@ -44,7 +44,7 @@ use crate::signal::{SignalScope, signal_kind};
 use crate::signal::Signal;
 use bytes::{BufMut, Bytes, BytesMut};
 use std::{sync::{Arc, atomic::{AtomicU16, Ordering}}, time::Duration};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, Semaphore, TryAcquireError};
 #[cfg(feature = "gateway")]
 use tracing::warn;
 
@@ -58,17 +58,24 @@ use super::rpc::await_nonce_reply;
 /// the `gateway` feature is enabled) the pooled HTTP client used by `bulk_serve`
 /// to retrieve staged payloads from remote callers.
 pub struct BulkTransport {
-    staging:   papaya::HashMap<u64, Bytes>,
-    http_port: AtomicU16,
+    staging:           papaya::HashMap<u64, Bytes>,
+    http_port:             AtomicU16,
+    /// `None` = unlimited; `Some(sem)` = cap on concurrent per-request handlers.
+    handler_semaphore:     Option<Arc<Semaphore>>,
     #[cfg(feature = "gateway")]
-    client:    reqwest::Client,
+    client:                reqwest::Client,
 }
 
 impl BulkTransport {
-    pub fn new(http_port: u16, _fetch_timeout: Duration) -> Self {
+    pub fn new(http_port: u16, _fetch_timeout: Duration, max_handlers: usize) -> Self {
         Self {
-            staging:   papaya::HashMap::new(),
-            http_port: AtomicU16::new(http_port),
+            staging:          papaya::HashMap::new(),
+            http_port:        AtomicU16::new(http_port),
+            handler_semaphore: if max_handlers > 0 {
+                Some(Arc::new(Semaphore::new(max_handlers)))
+            } else {
+                None
+            },
             #[cfg(feature = "gateway")]
             client: reqwest::Client::builder()
                 .timeout(_fetch_timeout)
@@ -246,11 +253,26 @@ where
 
     tracing::debug!(kind=%sig_kind, %url, "bulk_serve: dispatching fetch");
 
+    let permit = if let Some(sem) = &ctx.bulk_transport.handler_semaphore {
+        match Arc::clone(sem).try_acquire_owned() {
+            Ok(p)  => Some(p),
+            Err(TryAcquireError::NoPermits) => {
+                warn!(kind=%sig_kind, "bulk_serve: handler concurrency limit reached; dropping request");
+                return;
+            }
+            Err(TryAcquireError::Closed) => return,
+        }
+    } else {
+        None
+    };
+
     let handler_clone = Arc::clone(handler);
     let sender        = sig.sender.clone();
     let ctx_clone     = Arc::clone(ctx);
 
     tokio::spawn(async move {
+        let _permit = permit; // dropped when this task completes, releasing the slot
+
         let payload = match ctx_clone.bulk_transport.fetch(&url).await {
             Ok(b)  => { tracing::debug!(%url, bytes=b.len(), "bulk_serve: fetch ok"); b }
             Err(e) => { warn!(%url, "bulk_serve: fetch failed: {e}"); return; }

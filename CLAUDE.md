@@ -254,10 +254,15 @@ steady-state values after `start()`:
 | Per gossip shard (default 4): writer + listener | +8 |
 | Gateway Axum server (`gateway` feature) | +1 |
 | Per connected peer: per-peer writer | +N_peers |
-| In-flight RPC/bulk calls | +N_calls |
+| Each active `bulk_serve` call (one background listener, RAII via `BulkServeHandle`) | +N_bulk_servers |
+
+**Not tracked in `task_handles`:**
+- `rpc_call` — direct `async fn` await over a oneshot channel, no task spawned.
+- `scatter_gather` — uses a local `JoinSet` dropped on function return; never enters `task_handles`.
+- `bulk_serve` per-request handlers — one untracked task is spawned per incoming bulk signal, bounded to `GossipConfig::max_concurrent_bulk_handlers` (default 64) via semaphore; these are not visible in `task_count`.
 
 Typical baseline on a 3-node cluster: **17–20 tasks**. A value growing
-unboundedly indicates a task leak.
+unboundedly indicates a task leak (most likely a per-peer writer that is not exiting on disconnect).
 
 ### Gateway feature gate
 

@@ -31,14 +31,17 @@ impl GossipAgent {
     pub async fn start(&self) -> Result<(), GossipError> {
         self.config.validate()?;
         let bind_ip: IpAddr = self.config.bind_address.parse().map_err(|e| {
-            GossipError::Config(format!("bind_address '{}': {}", self.config.bind_address, e))
+            GossipError::InvalidField {
+                field:  "bind_address",
+                reason: format!("'{}': {}", self.config.bind_address, e),
+            }
         })?;
         let bind_addr = SocketAddr::new(bind_ip, self.config.bind_port);
         if self.node_id.to_socket_addr() != bind_addr {
-            return Err(GossipError::Config(format!(
-                "node_id '{}' does not match bind address '{}'",
-                self.node_id, bind_addr
-            )));
+            return Err(GossipError::NodeIdMismatch {
+                node_id:   self.node_id.to_string(),
+                bind_addr: bind_addr.to_string(),
+            });
         }
 
         match self.state.compare_exchange(
@@ -148,9 +151,10 @@ impl GossipAgent {
         #[cfg(feature = "gateway")]
         if let Some(port) = self.config.http_port {
             let http_addr: std::net::IpAddr = self.config.http_addr.parse().map_err(|_| {
-                GossipError::Config(format!(
-                    "http_addr '{}' is not a valid IP address", self.config.http_addr
-                ))
+                GossipError::InvalidField {
+                    field:  "http_addr",
+                    reason: format!("'{}' is not a valid IP address", self.config.http_addr),
+                }
             })?;
             let http_bind = SocketAddr::new(http_addr, port);
             let ctx   = Arc::clone(&self.task_ctx);

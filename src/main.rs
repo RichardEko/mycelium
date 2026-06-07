@@ -44,24 +44,24 @@ fn parse_args() -> Result<GossipConfig, GossipError> {
             "-c" | "--config" => {
                 config_path = Some(
                     args.next()
-                        .ok_or_else(|| GossipError::Config("Missing config file path".into()))?,
+                        .ok_or_else(|| GossipError::InvalidField { field: "-c/--config", reason: "missing config file path".into() })?,
                 );
             }
             "-p" | "--port" => {
                 let s = args.next()
-                    .ok_or_else(|| GossipError::Config("Missing port number".into()))?;
+                    .ok_or_else(|| GossipError::InvalidField { field: "-p/--port", reason: "missing port number".into() })?;
                 bind_port = Some(s.parse().map_err(GossipError::Parse)?);
             }
             "--host" => {
                 bind_host = Some(
                     args.next()
-                        .ok_or_else(|| GossipError::Config("Missing host address".into()))?,
+                        .ok_or_else(|| GossipError::InvalidField { field: "--host", reason: "missing host address".into() })?,
                 );
             }
             "-r" | "--peers" => {
                 peers_arg = Some(
                     args.next()
-                        .ok_or_else(|| GossipError::Config("Missing peers argument".into()))?,
+                        .ok_or_else(|| GossipError::InvalidField { field: "-r/--peers", reason: "missing peers argument".into() })?,
                 );
             }
             "-i" | "--interactive" => {} // handled in main
@@ -69,7 +69,7 @@ fn parse_args() -> Result<GossipConfig, GossipError> {
                 print_usage();
                 std::process::exit(0);
             }
-            _ => return Err(GossipError::Config(format!("Unknown argument: {}", arg))),
+            _ => return Err(GossipError::InvalidField { field: "argument", reason: format!("unknown argument: {arg}") }),
         }
     }
 

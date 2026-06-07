@@ -271,12 +271,29 @@ async fn resolve_peers(peer_list: &str) -> Vec<NodeId> {
             Ok(p)  => p,
             Err(_) => { warn!(peer = entry, "ignoring peer: invalid port"); continue; }
         };
-        match resolve_ip(host).await {
-            Ok(ip) => match NodeId::new(&ip, port) {
-                Ok(nid) => out.push(nid),
-                Err(e)  => warn!(peer = entry, "ignoring peer: {e}"),
-            },
-            Err(e) => warn!(peer = entry, "ignoring peer: {e}"),
+        // Retry DNS on failure — during simultaneous cluster restarts Docker's
+        // embedded resolver may not have re-registered a peer's name yet.
+        let mut last_err = String::new();
+        let mut resolved = false;
+        for attempt in 0u32..5 {
+            if attempt > 0 {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            match resolve_ip(host).await {
+                Ok(ip) => match NodeId::new(&ip, port) {
+                    Ok(nid) => { out.push(nid); resolved = true; break; }
+                    Err(e)  => { warn!(peer = entry, "ignoring peer: {e}"); break; }
+                },
+                Err(e) => {
+                    last_err = e;
+                    if attempt < 4 {
+                        warn!(peer = entry, attempt = attempt + 1, "DNS lookup failed, retrying: {last_err}");
+                    }
+                }
+            }
+        }
+        if !resolved && !last_err.is_empty() {
+            warn!(peer = entry, "ignoring peer: {last_err}");
         }
     }
     out
@@ -296,7 +313,7 @@ async fn make_agent(
     cfg.http_port                  = http_port;
     cfg.http_addr                  = "0.0.0.0".to_string();
     cfg.bootstrap_peers            = peers;
-    cfg.default_ttl                = 10;
+    cfg.default_ttl                = 240;
     cfg.reconnect_backoff_secs     = 2;
     cfg.gossip_shards              = 2;
     cfg.health_check_max_jitter_ms = 200;

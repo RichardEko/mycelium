@@ -472,6 +472,20 @@ pub(super) async fn run_health_monitor(
                             idle_timeout, &shutdown_tx, &node_id, &hash_acc,
                             &dropped_frames, vec![], tls.clone());
                     }
+                    // Bootstrap peers are pre-loaded into cached_ping_targets, so they never
+                    // appear in the difference above. Fire a separate StateRequest for each
+                    // bootstrap peer that just appeared in the active peer set (sent us a Ping)
+                    // for the first time. This handles the reconnect case where the startup
+                    // StateRequest's response was dropped by writer backoff: the peer is not
+                    // "new" to cached_ping_targets but is "new" to last_peer_set, so we
+                    // re-trigger once the cooldown has cleared (cooldown = interval - 1 s).
+                    for peer in current_peer_set.iter()
+                        .filter(|p| bootstrap_set.contains(*p) && !last_peer_set.contains(*p))
+                    {
+                        request_state(peer, &peer_writers, writer_depth, backoff,
+                            idle_timeout, &shutdown_tx, &node_id, &hash_acc,
+                            &dropped_frames, vec![], tls.clone());
+                    }
 
                     ping_sender_cache.retain(|k, _| new_targets.contains(k));
                     cached_ping_targets = new_targets;

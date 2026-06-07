@@ -365,15 +365,10 @@ where
 {
     let payload_len = 1 + data.len();
     if payload_len > MAX_FRAME_BYTES {
-        return Err(GossipError::Network(format!(
-            "Frame too large to send: {} bytes (max {})",
-            data.len(),
-            MAX_FRAME_BYTES
-        )));
+        return Err(GossipError::FrameTooLarge { size: data.len(), limit: MAX_FRAME_BYTES });
     }
-    let len = u32::try_from(payload_len).map_err(|_| {
-        GossipError::Network(format!("Frame payload too large: {} bytes", data.len()))
-    })?;
+    let len = u32::try_from(payload_len)
+        .map_err(|_| GossipError::FrameTooLarge { size: data.len(), limit: MAX_FRAME_BYTES })?;
     let mut header = [0u8; 5];
     header[..4].copy_from_slice(&len.to_be_bytes());
     header[4] = WIRE_VERSION;
@@ -397,25 +392,24 @@ where
     stream.read_exact(&mut header).await?;
     let total = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as usize;
     if total == 0 || total > MAX_FRAME_BYTES {
-        return Err(GossipError::Network(format!(
-            "Frame length out of range: {} bytes",
-            total
-        )));
+        return Err(GossipError::FrameTooLarge { size: total, limit: MAX_FRAME_BYTES });
     }
     let frame_version = if header[4] == WIRE_VERSION {
         FrameVersion::Current
     } else if header[4] == PREV_WIRE_VERSION {
         FrameVersion::Previous
     } else {
-        let hint = if header[4] < PREV_WIRE_VERSION {
+        let hint: &'static str = if header[4] < PREV_WIRE_VERSION {
             "peer is running a significantly older version"
         } else {
             "peer is running a newer version"
         };
-        return Err(GossipError::Network(format!(
-            "Unsupported wire version {} (accepted {} and {}; {})",
-            header[4], WIRE_VERSION, PREV_WIRE_VERSION, hint
-        )));
+        return Err(GossipError::UnsupportedWireVersion {
+            received: header[4],
+            current:  WIRE_VERSION,
+            prev:     PREV_WIRE_VERSION,
+            hint,
+        });
     };
     let payload_len = total - 1;
     buf.clear();
@@ -665,8 +659,11 @@ mod tests {
         let mut buf = BytesMut::new();
         let result = read_frame(&mut reader, &mut buf).await;
         assert!(result.is_err(), "zero-length frame must be rejected");
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("out of range"), "error should say 'out of range': {}", msg);
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, GossipError::FrameTooLarge { size: 0, limit: _ }),
+            "expected FrameTooLarge for zero-length frame, got: {err}"
+        );
     }
 
     #[tokio::test]
@@ -682,8 +679,11 @@ mod tests {
         let mut buf = BytesMut::new();
         let result = read_frame(&mut reader, &mut buf).await;
         assert!(result.is_err(), "oversized frame must be rejected");
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("out of range"), "error should say 'out of range': {}", msg);
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, GossipError::FrameTooLarge { size, limit: _ } if size > MAX_FRAME_BYTES),
+            "expected FrameTooLarge for oversized frame, got: {err}"
+        );
     }
 
     #[test]

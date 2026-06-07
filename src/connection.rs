@@ -71,10 +71,19 @@ pub(crate) async fn handle_connection(
     // Per-connection anti-entropy rate limit. StateRequest triggers an O(store_size) scan;
     // processing repeated requests from the same peer on the same connection faster than
     // the health-check interval provides no convergence benefit and adds CPU/alloc pressure.
+    //
+    // Set to interval - 1 so the health monitor's first tick (at t = startup_jitter +
+    // interval_secs) arrives at least 1 s after this cooldown expires. Without the gap, the
+    // startup StateRequest and the first-tick retry land at the same wall-clock instant,
+    // creating a timing race where the retry is spuriously blocked by the cooldown.
     let anti_entropy_cooldown = Duration::from_secs(
-        task_ctx.config.health_check_interval_secs.max(1)
+        task_ctx.config.health_check_interval_secs.saturating_sub(1).max(1)
     );
     let mut last_state_sent: Option<std::time::Instant> = None;
+    // Per-connection inbound rate limiter. Resets every second; 0 = unlimited.
+    let inbound_rate_limit = task_ctx.config.max_inbound_frames_per_sec;
+    let mut rate_window_start = std::time::Instant::now();
+    let mut rate_frame_count: u64 = 0;
 
     loop {
         // read_frame returns FrameVersion so we can select the right decoder.
@@ -88,6 +97,25 @@ pub(crate) async fn handle_connection(
             },
             _ = shutdown_rx.wait_for(|v| *v) => break,
         };
+
+        // Per-peer inbound rate limiting: drop frames from a flooding peer.
+        if inbound_rate_limit > 0 {
+            let elapsed = rate_window_start.elapsed();
+            if elapsed >= Duration::from_secs(1) {
+                rate_frame_count = 0;
+                rate_window_start = std::time::Instant::now();
+            }
+            rate_frame_count += 1;
+            if rate_frame_count > inbound_rate_limit {
+                warn!(
+                    from = %peer_addr,
+                    fps  = rate_frame_count,
+                    limit = inbound_rate_limit,
+                    "inbound rate limit exceeded; dropping frame"
+                );
+                continue;
+            }
+        }
 
         // Fast-path dedup: only valid for FrameVersion::Current where fixed field
         // offsets are known. NONCE_OFFSET=4 points at the u64 nonce in fixed-int

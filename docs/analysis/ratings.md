@@ -276,3 +276,104 @@ Changes since Run 5: Ed25519 fail-open → fail-closed (`SignedData` from unknow
 | 24 | Developer Experience | 8 | CLAUDE.md onramp with operational diagnostics reference; `rust-toolchain.toml`; Makefile; no visible CI config in repo |
 | 25 | Dependency Hygiene | 8 | Optional deps properly feature-gated; `dashmap`/`papaya` redundancy; one transitive deprecation warning (`block v0.1.6`); `Cargo.lock` present |
 | — | **Mean** | **8.0** | |
+
+## 2026-06-07 — Run 9
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 9 | Holland/Jini/Paremus synthesis fully realised; "no coordinator" properly scoped; every feature traces back to the stated substrate purpose |
+| 2 | Conceptual Integrity | 8 | Sub-handle pattern consistent across six domains; `register_prompt_skill` / `register_mcp_tool` still live on `GossipAgent` directly rather than typed handles — deliberate but still reads as inconsistency |
+| 3 | Architecture | 8 | Layer separation enforced by namespace table; papaya pin-guard `await` invariant now documented in `KvState`; Layer I/II entanglement acknowledged as v2 roadmap item |
+| 4 | Modularity | 8 | Six handles independently usable; single concurrent map (`papaya`) throughout after dashmap removal; TaskCtx shared state remains the only cross-handle coupling |
+| 5 | API Design | 8 | Minimal, hard-to-misuse surface; `AlreadyRunning`/`Shutdown` typed errors; `signal_rx_from` trust filter elegant; no new footguns |
+| 6 | Error Handling Model | 8 | `GossipError::AlreadyRunning` and `Shutdown` are matchable structural variants; all production paths use `expect("infallible: reason")`; `Network(String)` / `Config(String)` are still catch-alls for their domains |
+| 7 | Configurability | 9 | Comprehensive `GossipConfig` with env overrides, feature gates, TOML, CLI — all operational knobs exposed without requiring code changes |
+| 8 | Language Best Practices | 9 | `#![deny(unsafe_code)]`, no production `unwrap()`, single concurrent map (papaya) throughout after dashmap removal, `is_some_and` used idiomatically; `async-trait` is the only lingering rough edge |
+| 9 | Concurrency Correctness | 8 | Memory ordering policy documented for every atomic; `last_state_sent` is task-local (no sharing); no identified races |
+| 10 | Resource Management | 8 | `task_count` in SystemStats; anti-entropy cooldown adds per-connection `Instant` (zero heap); explicit handle drop semantics throughout |
+| 11 | Semantic Correctness | 8 | LWW convergence and HLC monotonicity now property-tested with proptest; formal guarantees match code; chunked anti-entropy gap documented |
+| 12 | Robustness | 9 | StateRequest cooldown prevents scan-flood DoS; frame rejection tests verify zero-length and oversized paths work; existing infrastructure (frame cap, connection limit, TTL clamp, malformed-frame skip) comprehensive |
+| 13 | Security | 7 | mTLS + Ed25519 + gateway bearer token; StateRequest cooldown adds per-connection DoS protection; no global rate limit, no RBAC, `compliance` feature unimplemented |
+| 14 | Failure Mode Legibility | 8 | `AlreadyRunning`/`Shutdown` give clear callsite diagnostics; `expect("infallible: ...")` messages explain invariants; cooldown logs at `debug!`; no regression |
+| 15 | Performance | 8 | 151 ns set, 16 ns get; O(K) gossip fan-out; anti-entropy cooldown adds only an `Instant::elapsed()` check on the hot path |
+| 16 | Scalability | 8 | O(N²) cliff documented with explicit table; `max_active_connections` mitigation documented; v2 SWIM transport on roadmap |
+| 17 | Testability | 8 | Deterministic, injectable, no hidden global state; proptest now part of the test tool-chain |
+| 18 | Test Architecture | 9 | 287 unit + 12 integration + 2 fuzz + 10 proptest (LWW convergence, HLC monotonicity, framing round-trip) — four-tier pyramid; property coverage of core formal invariants |
+| 19 | Observability | 8 | Prometheus + OTEL + `task_count` + `/consensus/{slot}`; no regression |
+| 20 | Debuggability | 8 | `/consensus/{slot}`, `task_count`, `peer_drop_counts()`, KV dump; no new tools this run |
+| 21 | Operational Readiness | 8 | `/ready`, `shutdown_with_timeout`, persistence, Docker health checks; no regression |
+| 22 | Evolvability | 8 | CHANGELOG consistently updated; dashmap removal is clean dep-tree hygiene; wire-version policy unchanged |
+| 23 | Documentation | 9 | All 13 guide chapters now exist (ch.11 written this run); CONTRIBUTING.md comprehensive with build matrix, layer rules, wire-version policy; no guide chapter gaps remaining |
+| 24 | Developer Experience | 8 | CONTRIBUTING.md now covers full contribution path; `CLAUDE.md` onramp detailed; no CI config in repo remains the main gap |
+| 25 | Dependency Hygiene | 9 | dashmap removed — single concurrent map (`papaya`) throughout; all optional deps properly feature-gated; `Cargo.lock` present; `--no-default-features` compiles cleanly |
+| — | **Mean** | **8.2** | |
+
+---
+
+## 2026-06-07 — Run 10
+
+Changes since Run 9: `LlmHandle` and `McpHandle` sub-handles added (`17aef72`), completing the 8-handle typed facade; all six LLM prompt-skill methods (`register_prompt_skill`, `call_prompt_skill`, `update_prompt`, `get_prompt`, `list_prompts`, `delete_prompt`) moved off `GossipAgent` onto `LlmHandle`; MCP bridge methods (`register_mcp_tool`, `connect_mcp_server`) moved to `McpHandle`; `advertise_capability` return type renamed from `CapabilityHandle` to `CapabilityReg` — resolves the long-standing handle-naming ambiguity; `tokio test-util` confirmed in `[dev-dependencies]` (not `[dependencies]`); all test levels pass; 0 clippy warnings.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 9 | Holland/Jini/OSGi/Paremus synthesis fully honored; handle completion solidifies the "library, not platform" contract; no feature drift |
+| 2 | Conceptual Integrity | 9 | `CapabilityReg` (advertisement lifetime) vs `CapabilitiesHandle` (domain handle) naming ambiguity resolved — the last named idiom inconsistency is gone; all eight domains now follow the same pattern; `LlmHandle`/`McpHandle` are idiomatic with the rest |
+| 3 | Architecture | 8 | Three-layer model and namespace table unchanged; gateway feature gate clean; Layer I/II entanglement documented with v2 roadmap direction; `reqwest` now optional — no regressions |
+| 4 | Modularity | 9 | Eight independently understandable, storable, moveable handles: `KvHandle`, `MeshHandle`, `CapabilitiesHandle`, `ConsensusHandle`, `ServiceHandle`, `SchemaHandle`, `LlmHandle`, `McpHandle`; `TaskCtx` shared state remains the only coupling, correctly deferred to v2 workspace split; LLM skills registry moved into `TaskCtx` so `LlmHandle` needs no borrow of the agent |
+| 5 | API Design | 9 | `CapabilityReg` return type makes drop semantics explicit at the type level; `#[must_use]` on `advertise_capability`; eight-handle facade is minimal, orthogonal, hard to misuse; no remaining public footguns in core paths; `signal_rx_from` trust filter is elegant |
+| 6 | Error Handling Model | 8 | `GossipError::AlreadyRunning`/`Shutdown` matchable; all production `.unwrap()` are in test helpers or genuinely infallible; `Network(String)` / `Config(String)` remain catch-alls for their domains — no structured error code taxonomy; error-handling guide covers all 8 public types |
+| 7 | Configurability | 9 | Comprehensive `GossipConfig` with env overrides (`GOSSIP_*`), TOML load, CLI flags, feature gates — all operational knobs exposed without requiring code changes; cluster topology guide makes the 30-field surface approachable |
+| 8 | Language Best Practices | 9 | `#![deny(unsafe_code)]`, 0 clippy warnings at full feature matrix, `tokio test-util` in `[dev-dependencies]`, `CapabilityReg` `#[must_use]`, proptest on core invariants; `async-trait` is the only lingering rough edge |
+| 9 | Concurrency Correctness | 8 | Memory ordering policy documented for every atomic; `LlmHandle` accesses `llm_skills` via `TaskCtx` field — same concurrency model as other handles; no new lock ordering issues; no formal deadlock proof |
+| 10 | Resource Management | 8 | `CapabilityReg` makes advertisement lifetime explicit and drop-based; `task_count` in `SystemStats`; RAII throughout; spawned task ceiling still not documented |
+| 11 | Semantic Correctness | 8 | LWW convergence and HLC monotonicity property-tested; quorum arithmetic correct; `consistent_set` correctly described as "ballot-serialized" throughout; no regressions |
+| 12 | Robustness | 9 | Ed25519 fail-closed; anti-entropy-on-reconnect; mutex poison recovery complete; `MAX_FRAME_BYTES` bound; listener auto-restart; 21-node resilience test validates late-joiner and churn recovery |
+| 13 | Security | 8 | mTLS + Ed25519 + gateway bearer token; signed consensus payloads; no gossip rate-limiting; no RBAC; `compliance` feature unimplemented; `signal_rx_from` sender auth covers semantic injection |
+| 14 | Failure Mode Legibility | 8 | `ConsensusResult` variants carry detail; `expect("infallible: …")` messages document invariants; `task_count` exposes leaks; `peer_drop_counts` identifies slow peers; Nack reasons still not surfaced to callers |
+| 15 | Performance | 8 | 151 ns set, 16 ns get benchmarked; O(K) gossip fan-out; lock-free hot paths; `LlmHandle` adds no overhead — same `Arc<TaskCtx>` clone pattern; no hot-path regressions |
+| 16 | Scalability | 8 | O(N²) TCP cliff documented with explicit table; `max_active_connections` mitigation operational; v2 SWIM hybrid transport on roadmap; `scan_prefix` O(store) fallback for unknown prefixes |
+| 17 | Testability | 8 | Deterministic, injectable, no hidden global state; proptest on LWW/HLC/framing; `ConsensusPair` helper; `EchoBackend` for LLM; `TaskCtx` still wired-through rather than injected |
+| 18 | Test Architecture | 9 | 287 unit + 12 integration + 2 fuzz + 3 overlay + 2 scale (100-node + 21-node resilience) + proptest — five-tier pyramid covering formal invariants; all pass; full feature matrix (`--features tls,metrics,a2a,llm`) at 0 warnings |
+| 19 | Observability | 8 | Prometheus + Grafana, `#[tracing::instrument]` on 11 critical methods, `task_count`, `/consensus/{slot}`; OTEL still only in skillrunner |
+| 20 | Debuggability | 8 | `/consensus/{slot}`, `task_count`, `peer_drop_counts()`, KV dump; handle typesystem makes ownership traces easier to follow; consensus ballot state not directly inspectable via API |
+| 21 | Operational Readiness | 9 | `/ready`, `shutdown_with_timeout`, persistence (`SyncMode::Flush`), Docker Compose health-check wiring, chapter 13 topology guide, `is_ready()` Kubernetes readiness probe |
+| 22 | Evolvability | 8 | Wire version policy (`WIRE_VERSION` + `PREV_WIRE_VERSION`); CHANGELOG under `[Unreleased]`; ROADMAP v2 milestones; 8-handle facade documented as the stable public surface going forward |
+| 23 | Documentation | 9 | All 13 guide chapters present; CONTRIBUTING.md with CLA, build matrix, layer rules, wire-version policy; philosophy.html; API examples use `agent.llm()` / `agent.mcp()` syntax throughout; no chapter gaps |
+| 24 | Developer Experience | 9 | `cargo build --lib --no-default-features` clean; CONTRIBUTING.md; CLAUDE.md onramp; Makefile; tracing spans on critical paths; handle pattern is learnable from one example; no CI config in repo remains the main gap |
+| 25 | Dependency Hygiene | 9 | `tokio test-util` in `[dev-dependencies]`; `reqwest` optional (`gateway` feature only); `papaya` single concurrent map throughout; all optional deps correctly feature-gated; `Cargo.lock` present; `--no-default-features` compiles cleanly |
+| — | **Mean** | **8.6** | |
+
+---
+
+## 2026-06-07 — Run 11
+
+Changes since Run 10: `KvStore`/`KvState` architectural split (`src/store.rs`) with `Deref<Target=KvStore>` keeping all call sites unchanged; Layer I/II Bridge Invariant table added to `CLAUDE.md` naming `apply_and_notify` and `subscribe/subscribe_prefix` as the sole crossing points; Lock-Order Table added to `CLAUDE.md` documenting 6 lock sites with the "no simultaneous acquisition" invariant; `test_lww_convergence_two_concurrent_writers` and `test_cross_group_propose_requires_all_group_quorums` unit tests added (290 tests total with full feature matrix); `kv_payload_size` and `capability_resolve` Criterion benchmarks added to `benches/throughput.rs`; `#[non_exhaustive]` added to all 9 public error/result enums (`GossipError`, `ConsistencyError`, `RpcError`, `QuorumError`, `ScatterError`, `ShardError`, `BulkError`, `SchemaError`, `McpError`); `read_frame_accepts_prev_wire_version` wire rolling-upgrade test added; `consistent_get` doc updated with staleness bound (`anti_entropy_interval_secs`, default 30 s).
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 9 | KvStore/KvState split is a Layer I/II structural improvement — entirely consistent with the substrate-not-platform philosophy; no feature drift |
+| 2 | Conceptual Integrity | 9 | Naming and idiom consistent throughout; `KvStore` vs `KvState` distinction is clear and documented; no new inconsistencies introduced |
+| 3 | Architecture | 9 | `KvStore` (Layer I) / `KvState` (Layer II bridge) split materialises the documented conceptual separation in code; CLAUDE.md bridge invariant names the two crossing points; `Deref` ensures zero call-site churn; `TaskCtx` God Object deferred to v2 with explicit roadmap |
+| 4 | Modularity | 9 | Unchanged from Run 10 — eight independently storable handles; KvStore/KvState split adds internal clarity without changing external handle boundaries |
+| 5 | API Design | 9 | Unchanged from Run 10; no new surface changes |
+| 6 | Error Handling Model | 8 | `#[non_exhaustive]` now on all 9 public error enums — semver-safe variant additions guaranteed; `Network(String)` / `Config(String)` catch-all variants remain, no structured error code taxonomy |
+| 7 | Configurability | 9 | Unchanged from Run 10 |
+| 8 | Language Best Practices | 9 | Unchanged; `#[non_exhaustive]` adds idiomatic forward-compatibility signal |
+| 9 | Concurrency Correctness | 9 | Lock-Order Table documents 6 lock sites with the "no simultaneous acquisition" invariant; `!Send` Mutex guard compiler enforcement noted; papaya pin() guard invariant documented; no formal deadlock proof but the table precludes the classic acquire-in-different-order pattern |
+| 10 | Resource Management | 8 | Unchanged from Run 10; spawned task ceiling still undocumented per operation type |
+| 11 | Semantic Correctness | 9 | `test_lww_convergence_two_concurrent_writers` verifies HLC-ordered convergence (sequenced writes prevent concurrent-equal-timestamp ambiguity); `test_cross_group_propose_requires_all_group_quorums` proves split-brain property for multi-group proposals; `consistent_get` staleness bound (30 s) documented; epidemic Paxos vs true linearizability gap acknowledged but not formally analysed |
+| 12 | Robustness | 9 | Unchanged from Run 10 |
+| 13 | Security | 8 | Unchanged from Run 10; no gossip rate-limiting; `compliance` feature unimplemented |
+| 14 | Failure Mode Legibility | 8 | Unchanged from Run 10 |
+| 15 | Performance | 9 | `kv_payload_size` benchmarks (64/1 024/65 536 bytes) show framing cost scaling; `capability_resolve` benchmarks (1/10/50/100 providers) characterise O(providers) scan; bench file fully updated to sub-handle API; no hot-path regressions; consensus round-trip not yet benchmarked |
+| 16 | Scalability | 8 | Unchanged from Run 10 |
+| 17 | Testability | 8 | Unchanged from Run 10; `KvStore` slightly more isolatable but `TaskCtx` wiring unchanged |
+| 18 | Test Architecture | 9 | 290 unit (full feature matrix) + 12 integration + 2 fuzz + 3 overlay + 2 scale + proptest; two new targeted correctness tests (LWW convergence, cross-group split-brain); wire rolling-upgrade test in framing.rs; five-tier pyramid intact |
+| 19 | Observability | 8 | Unchanged from Run 10 |
+| 20 | Debuggability | 8 | Unchanged from Run 10 |
+| 21 | Operational Readiness | 9 | Unchanged from Run 10 |
+| 22 | Evolvability | 9 | `#[non_exhaustive]` on all 9 public error enums — wire-safe downstream match arms; `read_frame_accepts_prev_wire_version` test verifies rolling-upgrade window; CHANGELOG [Unreleased] comprehensive; ROADMAP v2 milestones current; wire version policy documented and tested end-to-end |
+| 23 | Documentation | 9 | Unchanged from Run 10 |
+| 24 | Developer Experience | 9 | Lock-Order Table and Layer I/II Bridge Invariant in CLAUDE.md improve contributor onramp for concurrency-sensitive work |
+| 25 | Dependency Hygiene | 9 | Unchanged from Run 10 |
+| — | **Mean** | **8.7** | |
