@@ -62,7 +62,9 @@ pub(crate) use helpers::make_gossip_update;
 #[cfg(feature = "llm")]
 use helpers::{kv_delete, kv_scan_prefix, kv_set};
 pub(crate) use opacity::is_self_opaque;
-pub use mcp::{McpClientHandle, McpError, McpToolHandle};
+#[cfg(feature = "gateway")]
+pub use mcp::McpClientHandle;
+pub use mcp::{McpError, McpToolHandle};
 pub use rpc::{RpcError, RpcRequest, RpcRequestRx};
 pub use state_machine::{AgentPolicy, ExecutionState, AgentStateMachine, PolicyViolation};
 pub use scatter::{ScatterError, ScatterResult};

@@ -39,10 +39,13 @@
 //! explicitly; they read it from the configured transport.
 
 use crate::node_id::NodeId;
-use crate::signal::{Signal, SignalScope, signal_kind};
+use crate::signal::{SignalScope, signal_kind};
+#[cfg(feature = "gateway")]
+use crate::signal::Signal;
 use bytes::{BufMut, Bytes, BytesMut};
 use std::{sync::{Arc, atomic::{AtomicU16, Ordering}}, time::Duration};
 use tokio::sync::oneshot;
+#[cfg(feature = "gateway")]
 use tracing::warn;
 
 use super::TaskCtx;
@@ -51,25 +54,26 @@ use super::rpc::await_nonce_reply;
 
 // ── Transport adapter ─────────────────────────────────────────────────────────
 
-/// Encapsulates all bulk-transport concerns: staging map, HTTP port, fetch
-/// timeout, and the pooled HTTP client used by `bulk_serve` to retrieve
-/// staged payloads from remote callers.
+/// Encapsulates all bulk-transport concerns: staging map, HTTP port, and (when
+/// the `gateway` feature is enabled) the pooled HTTP client used by `bulk_serve`
+/// to retrieve staged payloads from remote callers.
 pub struct BulkTransport {
     staging:   papaya::HashMap<u64, Bytes>,
     http_port: AtomicU16,
+    #[cfg(feature = "gateway")]
     client:    reqwest::Client,
 }
 
 impl BulkTransport {
-    pub fn new(http_port: u16, fetch_timeout: Duration) -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(fetch_timeout)
-            .build()
-            .expect("reqwest::Client build should never fail with valid config");
+    pub fn new(http_port: u16, _fetch_timeout: Duration) -> Self {
         Self {
             staging:   papaya::HashMap::new(),
             http_port: AtomicU16::new(http_port),
-            client,
+            #[cfg(feature = "gateway")]
+            client: reqwest::Client::builder()
+                .timeout(_fetch_timeout)
+                .build()
+                .expect("reqwest::Client build should never fail with valid config"),
         }
     }
 
@@ -99,6 +103,7 @@ impl BulkTransport {
     }
 
     /// Fetches a staged payload from a remote node's HTTP endpoint.
+    #[cfg(feature = "gateway")]
     pub async fn fetch(&self, url: &str) -> Result<Bytes, reqwest::Error> {
         self.client.get(url).send().await?.error_for_status()?.bytes().await
     }
@@ -183,6 +188,7 @@ pub(crate) async fn bulk_call_ctx(
 }
 
 /// Background task that handles incoming `INVOKE_BULK` signals for a given kind.
+#[cfg(feature = "gateway")]
 pub(super) async fn bulk_serve_task<F, Fut>(
     ctx:         Arc<TaskCtx>,
     kind:        Arc<str>,
@@ -213,6 +219,7 @@ where
     }
 }
 
+#[cfg(feature = "gateway")]
 async fn handle_bulk_signal<F, Fut>(
     ctx:     &Arc<TaskCtx>,
     kind:    &Arc<str>,
@@ -225,8 +232,8 @@ where
 {
     // Wire: nonce(8) | http_port(2) | kind_bytes
     if sig.payload.len() < 10 { return; }
-    let nonce     = u64::from_le_bytes(sig.payload[..8].try_into().unwrap());
-    let http_port = u16::from_le_bytes(sig.payload[8..10].try_into().unwrap());
+    let nonce     = u64::from_le_bytes(sig.payload[..8].try_into().expect("nonce is first 8 bytes of bulk wire format; len checked above"));
+    let http_port = u16::from_le_bytes(sig.payload[8..10].try_into().expect("http_port is bytes 8-9 of bulk wire format; len checked above"));
     let sig_kind  = match std::str::from_utf8(&sig.payload[10..]) {
         Ok(s)  => s,
         Err(_) => return,

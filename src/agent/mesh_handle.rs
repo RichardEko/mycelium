@@ -47,6 +47,7 @@ impl MeshHandle {
 
     /// Emits a signal to the cluster.
     #[must_use]
+    #[tracing::instrument(level = "debug", skip(self, kind, payload), fields(node = %self.ctx.node_id))]
     pub fn emit(
         &self,
         kind:    impl Into<Arc<str>>,
@@ -58,6 +59,7 @@ impl MeshHandle {
 
     /// Like [`emit`](Self::emit) but stamps an HLC sequence number for causal ordering.
     #[must_use]
+    #[tracing::instrument(level = "debug", skip(self, kind, payload), fields(node = %self.ctx.node_id))]
     pub fn emit_ordered(
         &self,
         kind:    impl Into<Arc<str>>,
@@ -69,6 +71,7 @@ impl MeshHandle {
 
     /// Like [`emit`](Self::emit), but awaits channel capacity instead of dropping on full.
     #[must_use]
+    #[tracing::instrument(level = "debug", skip(self, kind, payload), fields(node = %self.ctx.node_id))]
     pub async fn emit_async(
         &self,
         kind:    impl Into<Arc<str>>,

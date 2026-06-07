@@ -220,11 +220,13 @@ async fn await_shutdown(rx: &mut watch::Receiver<bool>) {
 /// remote server and stops the proxy task. While live, the remote server's
 /// tools are visible in `scan_prefix("tools/")` and callable from anywhere in
 /// the Mycelium cluster.
+#[cfg(feature = "gateway")]
 #[must_use = "dropping McpClientHandle immediately retracts all bridged tools"]
 pub struct McpClientHandle {
     _cancel: oneshot::Sender<()>,
 }
 
+#[cfg(feature = "gateway")]
 impl GossipAgent {
     /// Connects to an external MCP server at `server_url`, discovers its tools,
     /// and bridges them into the Mycelium mesh.
@@ -325,6 +327,7 @@ impl GossipAgent {
     }
 }
 
+#[cfg(feature = "gateway")]
 #[allow(clippy::too_many_arguments)]
 async fn run_mcp_client_task(
     ctx:             Arc<TaskCtx>,
@@ -580,8 +583,9 @@ mod tests {
         agent_b.shutdown().await;
     }
 
-    // ── MCP client tests (Phase 3) ────────────────────────────────────────────
+    // ── MCP client tests (Phase 3 — gateway feature required) ────────────────
 
+    #[cfg(feature = "gateway")]
     /// Minimal in-process mock MCP server using axum.
     async fn spawn_mock_mcp_server(tools: Vec<serde_json::Value>) -> (u16, tokio::task::JoinHandle<()>) {
         use axum::{Router, extract::Json as AJson, routing::post};
@@ -631,6 +635,7 @@ mod tests {
         (port, handle)
     }
 
+    #[cfg(feature = "gateway")]
     #[tokio::test]
     async fn test_mcp_client_discovers_tools() {
         let mock_tools = vec![
@@ -662,6 +667,7 @@ mod tests {
         agent.shutdown().await;
     }
 
+    #[cfg(feature = "gateway")]
     #[tokio::test]
     async fn test_mcp_client_proxies_call() {
         let mock_tools = vec![

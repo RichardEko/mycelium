@@ -100,7 +100,8 @@ pub(crate) async fn handle_connection(
             && recv_buf[..4] == DATA_TAG
         {
             let nonce = u64::from_le_bytes(
-                recv_buf[NONCE_OFFSET..NONCE_OFFSET + 8].try_into().unwrap(),
+                recv_buf[NONCE_OFFSET..NONCE_OFFSET + 8].try_into()
+                    .expect("NONCE_OFFSET..NONCE_OFFSET+8 is always 8 bytes; length checked above"),
             );
             // Seen-set TTL eviction is keyed by physical milliseconds — extract
             // the high 48 bits of the packed HLC so the "age" math the seen-set
@@ -354,7 +355,8 @@ pub(crate) async fn handle_connection(
                                 || sig.kind.as_ref() == signal_kind::BULK_RESULT)
                         {
                             let call_nonce = u64::from_le_bytes(
-                                sig.payload[..8].try_into().unwrap(),
+                                sig.payload[..8].try_into()
+                                    .expect("RPC/bulk result nonce occupies first 8 bytes; payload length checked"),
                             );
                             if let Some(tx) = task_ctx.rpc_pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&call_nonce) {
                                 let _ = tx.send(sig.clone());

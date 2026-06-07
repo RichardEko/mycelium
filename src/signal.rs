@@ -191,10 +191,10 @@ impl HandlerTable {
         let mut slot = Some(FilteredSender::unfiltered(tx));
         self.map.pin().compute(kind, |existing| -> papaya::Operation<Arc<Vec<FilteredSender>>, ()> {
             match existing {
-                None => papaya::Operation::Insert(Arc::new(vec![slot.take().unwrap()])),
+                None => papaya::Operation::Insert(Arc::new(vec![slot.take().expect("slot filled before compute")])),
                 Some((_, arc)) => {
                     let mut v = (**arc).clone();
-                    v.push(slot.take().unwrap());
+                    v.push(slot.take().expect("slot filled before compute"));
                     papaya::Operation::Insert(Arc::new(v))
                 }
             }
@@ -212,10 +212,10 @@ impl HandlerTable {
         let mut slot = Some(FilteredSender::filtered(tx, trusted));
         self.map.pin().compute(kind, |existing| -> papaya::Operation<Arc<Vec<FilteredSender>>, ()> {
             match existing {
-                None => papaya::Operation::Insert(Arc::new(vec![slot.take().unwrap()])),
+                None => papaya::Operation::Insert(Arc::new(vec![slot.take().expect("slot filled before compute")])),
                 Some((_, arc)) => {
                     let mut v = (**arc).clone();
-                    v.push(slot.take().unwrap());
+                    v.push(slot.take().expect("slot filled before compute"));
                     papaya::Operation::Insert(Arc::new(v))
                 }
             }
@@ -318,7 +318,7 @@ impl SignalLog {
                     Some((_, arc)) => { result = Some(Arc::clone(arc)); papaya::Operation::Abort(()) }
                     None => { result = Some(Arc::clone(&new_arc)); papaya::Operation::Insert(Arc::clone(&new_arc)) }
                 });
-                result.unwrap()
+                result.expect("papaya compute always sets result via Abort or Insert")
             }
         };
         let mut log = arc.lock();
@@ -379,7 +379,7 @@ impl SignalLog {
                 Some((_, arc)) => { result = Some(Arc::clone(arc)); papaya::Operation::Abort(()) }
                 None => { result = Some(Arc::clone(&new_arc)); papaya::Operation::Insert(Arc::clone(&new_arc)) }
             });
-            result.unwrap()
+            result.expect("papaya compute always sets result via Abort or Insert")
         };
         arc.lock().push_back((sender, received_at));
     }
@@ -1020,7 +1020,7 @@ impl SignalReorderBuffer {
                 None => break,
                 Some(Reverse(top)) if top.hlc_seq <= *wm => { heap.pop(); } // stale
                 _ => {
-                    let Reverse(e) = heap.pop().unwrap();
+                    let Reverse(e) = heap.pop().expect("peek returned Some so pop cannot fail");
                     *wm = (*wm).max(e.hlc_seq);
                     out.push(e.signal);
                 }

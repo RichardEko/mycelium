@@ -137,6 +137,7 @@ impl ConsensusHandle {
     ///
     /// Quorum defaults to `floor(N/2)+1` where N is the current group member
     /// count. Set `config.quorum_size > 0` to override.
+    #[tracing::instrument(level = "debug", skip(self, value), fields(node = %self.ctx.node_id))]
     pub async fn group_propose(
         &self,
         group:  &str,
@@ -201,6 +202,7 @@ impl ConsensusHandle {
     ///
     /// Quorum defaults to `floor(N/2)+1` where N is `peers + 1` (including self).
     /// Set `config.quorum_size > 0` to override.
+    #[tracing::instrument(level = "debug", skip(self, value), fields(node = %self.ctx.node_id))]
     pub async fn system_propose(
         &self,
         slot:   &str,
@@ -319,6 +321,7 @@ impl ConsensusHandle {
     /// expected value appears (usually within one gossip round).
     ///
     /// Use [`KvHandle::set`](crate::KvHandle::set) for ordinary eventually-consistent writes.
+    #[tracing::instrument(level = "debug", skip(self, key, value), fields(node = %self.ctx.node_id))]
     pub async fn consistent_set(
         &self,
         key:   impl Into<Arc<str>>,
@@ -359,6 +362,7 @@ impl ConsensusHandle {
     ///
     /// Returns a [`LockGuard`] that releases the lock on drop.
     /// `ttl` is advisory — stored in the lock record for fencing-token expiry checks.
+    #[tracing::instrument(level = "debug", skip(self), fields(node = %self.ctx.node_id))]
     pub async fn distributed_lock(
         &self,
         name: &str,

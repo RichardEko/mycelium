@@ -41,12 +41,17 @@
 //! always-alive — useful for in-process capabilities (MCP tool handlers,
 //! compute functions) that don't have a separate health endpoint.
 
-use crate::{CapValue, Capability, CapabilityReg, GossipAgent};
 use crate::error::GossipError;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     path::Path,
+};
+use crate::CapValue;
+#[cfg(feature = "gateway")]
+use crate::{Capability, CapabilityReg, GossipAgent};
+#[cfg(feature = "gateway")]
+use std::{
     sync::{atomic::{AtomicBool, Ordering}, Arc},
     time::Duration,
 };
@@ -133,6 +138,7 @@ impl NodeCapabilityConfig {
 }
 
 impl CapabilityProbeEntry {
+    #[cfg(feature = "gateway")]
     pub(crate) fn build_capability(&self) -> Capability {
         let mut cap = Capability::new(self.ns.as_str(), self.name.as_str());
         for (k, v) in &self.attrs {
@@ -141,6 +147,7 @@ impl CapabilityProbeEntry {
         cap
     }
 
+    #[cfg(feature = "gateway")]
     pub(crate) async fn passes_probe(&self, client: &reqwest::Client) -> bool {
         let Some(url) = &self.probe_url else { return true };
         client
@@ -175,6 +182,7 @@ pub enum ProbeState {
 
 // ── Probe loop ────────────────────────────────────────────────────────────────
 
+#[cfg(feature = "gateway")]
 const HEALTH_INTERVAL_SECS: u64 = 10;
 
 /// Runs the probe-and-advertise loop for all entries in `config`.
@@ -205,6 +213,7 @@ const HEALTH_INTERVAL_SECS: u64 = 10;
 ///              if matches!(e.state, ProbeState::Up) { "up" } else { "down" });
 /// }));
 /// ```
+#[cfg(feature = "gateway")]
 pub async fn run_capability_probes<F>(
     agent:      Arc<GossipAgent>,
     config:     NodeCapabilityConfig,

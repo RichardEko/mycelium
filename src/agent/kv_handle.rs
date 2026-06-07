@@ -5,6 +5,7 @@
 //!
 //! Obtain a handle via [`GossipAgent::kv`](crate::GossipAgent::kv).
 
+#[cfg(feature = "gateway")]
 use crate::framing::ForwardHint;
 use crate::store::PrefixPredicateWatcher;
 use bytes::Bytes;
@@ -53,11 +54,13 @@ impl KvHandle {
     /// Returns `true` if the update was queued for gossip; `false` if the gossip
     /// channel was full or the shard has died.
     #[must_use]
+    #[tracing::instrument(level = "trace", skip(self, key, value), fields(node = %self.ctx.node_id))]
     pub fn set<K: Into<Arc<str>>>(&self, key: K, value: impl Into<Bytes>) -> bool {
         kv_set(&self.ctx, key.into(), value.into())
     }
 
     /// Returns the current value for `key`, or `None` if absent or tombstoned.
+    #[tracing::instrument(level = "trace", skip(self), fields(node = %self.ctx.node_id, key))]
     pub fn get(&self, key: &str) -> Option<Bytes> {
         kv_get(&self.ctx, key)
     }
@@ -75,6 +78,7 @@ impl KvHandle {
     /// Like [`set`](Self::set), but awaits channel capacity instead of dropping
     /// the frame when the shard channel is full.
     #[must_use]
+    #[tracing::instrument(level = "trace", skip(self, key, value), fields(node = %self.ctx.node_id))]
     pub async fn set_async<K: Into<Arc<str>>>(&self, key: K, value: impl Into<Bytes>) -> bool {
         kv_set_async(&self.ctx, key.into(), value.into()).await
     }
@@ -154,6 +158,7 @@ impl KvHandle {
     }
 
     /// Returns all live key-value pairs whose key starts with `prefix`.
+    #[tracing::instrument(level = "trace", skip(self), fields(node = %self.ctx.node_id, prefix))]
     pub fn scan_prefix(&self, prefix: &str) -> Vec<(Arc<str>, Bytes)> {
         kv_scan_prefix(&self.ctx, prefix)
     }
@@ -403,12 +408,14 @@ impl KvHandle {
 
 // ── SubscribeHandle (internal — used by HTTP gateway log-group handler) ──────
 
+#[cfg(feature = "gateway")]
 /// Minimal agent proxy used by the HTTP gateway's consumer-group log endpoint.
 pub(super) struct SubscribeHandle {
     pub(super) task_ctx: Arc<TaskCtx>,
     kv_state:            Arc<crate::store::KvState>,
 }
 
+#[cfg(feature = "gateway")]
 impl SubscribeHandle {
     /// Construct from an `Arc<TaskCtx>`.
     pub(super) fn from_task_ctx(task_ctx: Arc<TaskCtx>) -> Self {

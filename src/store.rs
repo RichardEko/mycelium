@@ -541,7 +541,7 @@ pub(crate) fn scan_kv_prefix(kv: &KvState, prefix: &str) -> Vec<(Arc<str>, Bytes
     } else {
         store_guard.iter()
             .filter(|(k, v)| v.data.is_some() && k.starts_with(prefix))
-            .map(|(k, v)| (Arc::clone(k), v.data.clone().unwrap()))
+            .map(|(k, v)| (Arc::clone(k), v.data.clone().expect("filtered by is_some above")))
             .collect()
     }
 }

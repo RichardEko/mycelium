@@ -162,12 +162,14 @@ mod writer;
 pub use agent::{
     AgentPolicy, ExecutionState, AgentStateMachine, PolicyViolation,
     BulkError, BulkServeHandle,
-    GossipAgent, MailboxHandle, McpClientHandle, McpError, McpToolHandle,
+    GossipAgent, MailboxHandle, McpError, McpToolHandle,
     MeshEvent, RpcError, RpcRequest, RpcRequestRx, ScatterError, ScatterResult, SystemStats,
     AckResult, CapabilitiesHandle, ConsensusHandle, ConsistencyError, LockGuard, LogEntry,
     KvHandle, MeshHandle, QuorumError, ServiceHandle, ShardError,
     SchemaError, SchemaHandle, SchemaPublishResult,
 };
+#[cfg(feature = "gateway")]
+pub use agent::McpClientHandle;
 #[cfg(feature = "llm")]
 pub use agent::{PromptTemplate, PromptSkillError, PromptSkillHandle, LlmBackend, LlmResult, LlmError, OpenAiBackend, EchoBackend};
 pub use capability::{
@@ -177,9 +179,10 @@ pub use capability::{
     WiredEmitOutcome, WiringProvider, WiringStatus,
 };
 pub use capability_config::{
-    CapabilityProbeEntry, NodeCapabilityConfig, ProbeEvent, ProbeState,
-    TomlCapValue, run_capability_probes,
+    CapabilityProbeEntry, NodeCapabilityConfig, ProbeEvent, ProbeState, TomlCapValue,
 };
+#[cfg(feature = "gateway")]
+pub use capability_config::run_capability_probes;
 pub use mesh_manifest::{
     GroupManifest, GroupStatus, MeshManifest, MeshMeta, MeshStatus,
     manifest_keys, semver_gt,

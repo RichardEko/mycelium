@@ -17,7 +17,7 @@ cli = ["dep:tracing-subscriber"]
 # Embedded HTTP gateway: REST/SSE/WebSocket bridge, MCP over HTTP, bulk staging.
 # Pulls in Axum and related deps. Disable for bare-metal / WASM / no-std targets:
 #   mycelium = { version = "1", default-features = false }
-gateway = ["dep:axum", "dep:tower-http", "dep:tokio-stream", "dep:futures-util"]
+gateway = ["dep:axum", "dep:tower-http", "dep:tokio-stream", "dep:futures-util", "dep:reqwest"]
 # Exposes the `fuzz_internals` module re-exporting internal decoders to the
 # cargo-fuzz harness under `fuzz/`. NOT part of the stable public API — only
 # enable when building fuzz targets.
@@ -83,10 +83,10 @@ futures-util = { version = "0.3",  optional = true }
 # JSON / HTTP utilities used beyond just the gateway
 serde_json   = "1.0"
 base64       = "0.22"
-# HTTP client — used by MCP client, bulk transport, and LLM backends at runtime.
-# Required (not optional) because bulk.rs and mcp.rs are always compiled; gating
-# these behind a feature is a v2 improvement tracked in ROADMAP.md § v2.0 Milestones.
-reqwest      = { version = "0.12", features = ["json"] }
+# HTTP client — used by MCP client bridge, bulk transport, and capability probes.
+# Optional: enabled by the "gateway" feature. Bare-metal / no-std builds that
+# compile without gateway do not pull in Hyper or its transitive deps.
+reqwest      = { version = "0.12", features = ["json"], optional = true }
 
 # TLS (optional — enabled by the "tls" feature)
 tokio-rustls   = { version = "0.26", optional = true }

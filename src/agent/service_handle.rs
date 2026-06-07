@@ -14,7 +14,9 @@ use std::{sync::Arc, time::Duration};
 use tokio::task::JoinSet;
 
 use super::TaskCtx;
-use super::bulk::{BulkError, BulkServeHandle, bulk_call_ctx, bulk_serve_task};
+use super::bulk::{BulkError, bulk_call_ctx};
+#[cfg(feature = "gateway")]
+use super::bulk::{BulkServeHandle, bulk_serve_task};
 use super::capability_ops::resolve_filter_against_kv;
 use super::helpers::emit_signal_async;
 use super::mailbox::{deliver_event_ctx, open_mailbox_ctx, MailboxHandle, MeshEvent};
@@ -101,6 +103,7 @@ impl ServiceHandle {
     ///
     /// Spawns a background task. The returned [`BulkServeHandle`] cancels the
     /// task when dropped.
+    #[cfg(feature = "gateway")]
     pub fn bulk_serve<F, Fut>(
         &self,
         kind:    impl Into<Arc<str>>,
