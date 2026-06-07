@@ -1,10 +1,12 @@
 //! Embedded HTTP server — Layer 3 + Layer 4 gateway.
 //!
 //! ## Library-level endpoints
-//! - `GET  /health`              — liveness probe
-//! - `GET  /stats`               — KV store metrics
-//! - `GET  /signals/{kind}`      — SSE stream of admitted signals
-//! - `POST /mcp`                 — JSON-RPC 2.0 MCP protocol bridge
+//! - `GET  /health`                — liveness probe
+//! - `GET  /ready`                 — readiness probe (caps advertised + no dead shards)
+//! - `GET  /stats`                 — KV store metrics (node_id, store_entries, dropped_frames, task_count)
+//! - `GET  /consensus/{slot}`      — inspect committed value + ballot for a consensus slot
+//! - `GET  /signals/{kind}`        — SSE stream of admitted signals
+//! - `POST /mcp`                   — JSON-RPC 2.0 MCP protocol bridge
 //!
 //! ## Language-bridge gateway endpoints (`/gateway/*`)
 //! These endpoints let Python/TypeScript agents participate in the mesh
@@ -175,13 +177,14 @@ pub(super) async fn run_http_server(
     // ── Main router ───────────────────────────────────────────────────────────
     let app = Router::new()
         // Library endpoints — always public
-        .route("/health",          get(health_handler))
-        .route("/ready",           get(ready_handler))
-        .route("/stats",           get(stats_handler))
-        .route("/metrics",         get(metrics_handler))
-        .route("/signals/{kind}",  get(signal_sse_handler))
-        .route("/mcp",             post(mcp_handler))
-        .route("/bulk/{corr_id}",  get(bulk_staging_handler))
+        .route("/health",               get(health_handler))
+        .route("/ready",                get(ready_handler))
+        .route("/stats",                get(stats_handler))
+        .route("/consensus/{slot}",     get(consensus_slot_handler))
+        .route("/metrics",              get(metrics_handler))
+        .route("/signals/{kind}",       get(signal_sse_handler))
+        .route("/mcp",                  post(mcp_handler))
+        .route("/bulk/{corr_id}",       get(bulk_staging_handler))
         // Gateway — auth-protected when gateway_auth_token is set
         .nest("/gateway", gateway);
 
@@ -298,12 +301,45 @@ async fn bulk_staging_handler(
     }
 }
 
+/// `GET /consensus/{slot}` — inspect the committed value and current ballot for a slot.
+///
+/// Returns `{"slot": "…", "committed": "<base64>" | null, "ballot": <u64>}`.
+/// `committed` is `null` when no value has been committed for the slot yet.
+/// `ballot` reflects the highest ballot number seen for that slot (0 = never proposed).
+///
+/// This endpoint is public (no auth) and is intended for operational debugging.
+async fn consensus_slot_handler(
+    Path(slot):   Path<String>,
+    State(ctx):   State<Arc<HttpCtx>>,
+) -> impl IntoResponse {
+    use base64::Engine as _;
+    let committed_key = format!("{}{}", crate::consensus::consensus_ns::COMMITTED, slot);
+    let ballot_key    = format!("{}{}", crate::consensus::consensus_ns::BALLOT,    slot);
+    let store = ctx.agent_ctx.kv_state.store.pin();
+    let committed_b64 = store.get(committed_key.as_str())
+        .and_then(|e| e.data.clone())
+        .map(|b| base64::engine::general_purpose::STANDARD.encode(&b));
+    let ballot: u64 = store.get(ballot_key.as_str())
+        .and_then(|e| e.data.clone())
+        .map(|b| crate::consensus::decode_ballot(&b))
+        .unwrap_or(0);
+    Json(json!({
+        "slot":      slot,
+        "committed": committed_b64,
+        "ballot":    ballot,
+    }))
+}
+
 async fn stats_handler(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
     let kv = &ctx.agent_ctx.kv_state;
+    let task_count = ctx.agent_ctx.task_handles
+        .lock().unwrap_or_else(|e| e.into_inner())
+        .len();
     Json(json!({
-        "node_id":      ctx.agent_ctx.node_id.to_string(),
+        "node_id":       ctx.agent_ctx.node_id.to_string(),
         "store_entries": kv.store.pin().len(),
         "dropped_frames": kv.dropped_frames.load(std::sync::atomic::Ordering::Relaxed),
+        "task_count":    task_count,
     }))
 }
 
@@ -972,7 +1008,7 @@ async fn gw_rpc_serve(
     let stream = ReceiverStream::new(rx).filter_map(|sig: crate::signal::Signal| {
         use base64::Engine as _;
         if sig.payload.len() < 8 { return None; }
-        let nonce = u64::from_le_bytes(sig.payload[..8].try_into().unwrap());
+        let nonce = u64::from_le_bytes(sig.payload[..8].try_into().expect("infallible: payload.len() >= 8 checked above"));
         let app_payload = sig.payload.slice(8..);
         let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&app_payload);
         let data = json!({

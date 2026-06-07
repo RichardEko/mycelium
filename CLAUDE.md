@@ -200,6 +200,32 @@ and public API calls; AcqRel gives both acquire and release semantics on the CAS
 caller before dropping the handle is visible to the watcher before it stops processing
 that registration.
 
+### Operational diagnostics reference
+
+**Public HTTP endpoints (no auth required, available when `gateway` feature is on):**
+
+| Endpoint | What it tells you |
+|---|---|
+| `GET /health` | 200 = process alive |
+| `GET /ready` | 200 = capabilities advertised + no dead shards |
+| `GET /stats` | `node_id`, `store_entries`, `dropped_frames`, `task_count` |
+| `GET /consensus/{slot}` | `committed` (base64 or null) + `ballot` (u64) for a consensus slot |
+| `GET /metrics` | Prometheus scrape endpoint (`metrics` feature required) |
+
+**`SystemStats::task_count`** — number of Tokio tasks in the `JoinSet`. Expected
+steady-state values after `start()`:
+
+| Source | Count |
+|---|---|
+| GC, health-monitor, anti-entropy, WAL-flush, signal-reorder-buffer, capability-heartbeat, group-member-sync | 7 |
+| Per gossip shard (default 4): writer + listener | +8 |
+| Gateway Axum server (`gateway` feature) | +1 |
+| Per connected peer: per-peer writer | +N_peers |
+| In-flight RPC/bulk calls | +N_calls |
+
+Typical baseline on a 3-node cluster: **17–20 tasks**. A value growing
+unboundedly indicates a task leak.
+
 ### Gateway feature gate
 
 The `gateway` feature (on by default) enables the embedded Axum HTTP server. Disable

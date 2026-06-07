@@ -127,7 +127,7 @@ pub(crate) async fn run_peer_writer(
 
         // Write this frame and any others already queued, then flush once.
         let write_ok = {
-            let c = conn.as_mut().unwrap();
+            let c = conn.as_mut().expect("infallible: conn is Some while loop body runs; only set None after break");
             let mut ok = write_frame(c, &data).await.is_ok();
             if ok {
                 while let Ok(more) = rx.try_recv() {

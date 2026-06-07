@@ -202,6 +202,7 @@ async fn run_interactive(agent: Arc<GossipAgent>) -> Result<(), GossipError> {
                 println!("GC alive     : {}", s.gc_alive);
                 println!("Monitor alive: {}", s.health_monitor_alive);
                 println!("Intern pool  : {}", s.intern_pool_size);
+                println!("Task count   : {}", s.task_count);
                 let depths: Vec<String> = s.gossip_shard_queue_depths
                     .iter()
                     .enumerate()

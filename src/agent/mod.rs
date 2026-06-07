@@ -148,6 +148,19 @@ pub struct SystemStats {
     /// `try_send` returns `Err(Full)`. A non-zero value means the agent lost
     /// writes — raise `writer_channel_depth` or `gossip_channel_capacity`.
     pub dropped_frames: u64,
+    /// Number of background tasks currently tracked in the agent's `JoinSet`.
+    ///
+    /// Steady-state expected count (after `start()` completes):
+    /// - **Core** (always): GC, health-monitor, anti-entropy, WAL-flush, signal-
+    ///   reorder-buffer, capability-heartbeat, group-member-sync = **7**
+    /// - **+N per gossip shard** (default 4 shards): writer + listener pair = **+8**
+    /// - **+1 gateway** (when `gateway` feature enabled): Axum HTTP server = **+1**
+    /// - **+1 per connected peer**: per-peer writer task
+    /// - **+1 per live RPC/bulk call** while in flight
+    ///
+    /// Typical baseline on a 3-node cluster: ~17–20. A value growing unboundedly
+    /// indicates task leaks; consult `task_handles` diagnostics.
+    pub task_count: usize,
 }
 
 /// Shared infrastructure extracted from `GossipAgent` into a single `Arc` so that

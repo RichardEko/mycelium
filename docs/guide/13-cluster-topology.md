@@ -219,9 +219,48 @@ write. No coordinator is required; no recovery procedure is needed.
 |---|---|---|---|---|
 | 1–5 nodes | N/A | 0 (unlimited) | 64 (default) | Full mesh by default |
 | 6–20 nodes | 2 | 0 (unlimited) | 256 | Monitor `dropped_frames` |
-| 21–100 nodes | 2–3 | 12 | 512–1024 | Partial mesh; raise `ping_peer_sample_size` to 16 |
+| 21–50 nodes | 2–3 | 12 | 512 | Partial mesh; raise `ping_peer_sample_size` to 16 |
+| 51–100 nodes | 2–3 | 12 | 1024 | Set `max_active_connections` **before** 50 — see cliff note below |
 | 101–500 nodes | 3 | 15–20 | 2048 | Raise `ping_peer_sample_size` to 32 |
 | 500+ nodes | 3–5 | 20 | 4096 | Consider multi-datacenter seed placement |
+
+### The O(N²) TCP connection cliff
+
+With `max_active_connections = 0` (unlimited), each node opens one outbound
+TCP connection to every peer it knows about. For a cluster of N nodes this
+produces N×(N−1)/2 total connections across the cluster:
+
+| N | Total TCP connections (unlimited) | Docker bridge iptables FORWARD entries |
+|---|---|---|
+| 10 | 45 | ~45 |
+| 20 | 190 | ~190 |
+| 50 | 1 225 | ~1 225 — marginal on default bridge |
+| 100 | 4 950 | **saturates** — new SYN packets dropped |
+| 200 | 19 900 | well beyond Linux bridge default limits |
+
+**The cliff is at approximately 50 nodes under Docker's default bridge driver.**
+Above that, new TCP connections start timing out at the OS level (errno 110,
+~2 min). This is not a Mycelium bug — it is a Linux bridge iptables FORWARD
+chain limitation. The mitigation is `max_active_connections`:
+
+```rust
+// Each node maintains at most K outbound connections
+config.max_active_connections = 12;
+```
+
+With K=12, gossip still propagates cluster-wide in ≈ `log(N) / log(K)` hops
+(≤ 4 for N up to 20 000). Capability advertisements and anti-entropy are
+equally unaffected because they use the existing connection pool.
+
+**Set `max_active_connections` before your cluster reaches 50 nodes, not after.**
+Once the iptables chain saturates, new connections start silently failing.
+
+Alternative infrastructure fixes that remove the cliff entirely:
+- Switch Docker network driver to `macvlan` (bypasses bridge iptables)
+- Enable Linux `nftables` (hash-table replacement for the linear iptables chain)
+
+A v2 structural fix (SWIM-style hybrid TCP/UDP transport) is on the roadmap —
+see `ROADMAP.md` *v2.0 Milestones* item 5.
 
 ---
 

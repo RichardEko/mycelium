@@ -101,6 +101,7 @@ impl GossipAgent {
             health_monitor_alive: !running || self.health_monitor_alive.load(Ordering::Relaxed),
             intern_pool_size:     intern_pool_len(),
             dropped_frames:       self.kv_state.dropped_frames.load(Ordering::Relaxed),
+            task_count:           self.task_handles_lock().len(),
         }
     }
 }

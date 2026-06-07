@@ -247,7 +247,7 @@ mod imp {
         let wrapped: String = b64
             .as_bytes()
             .chunks(64)
-            .map(|c| std::str::from_utf8(c).unwrap())
+            .map(|c| std::str::from_utf8(c).expect("infallible: STANDARD base64 encoding produces ASCII-only bytes"))
             .collect::<Vec<_>>()
             .join("\n");
         format!("-----BEGIN CERTIFICATE-----\n{wrapped}\n-----END CERTIFICATE-----\n")

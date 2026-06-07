@@ -338,7 +338,7 @@ impl GossipAgent {
             let sender_str = &tail[slash + 1..];
             let Ok(sender) = sender_str.parse::<NodeId>() else { continue };
             if bytes.len() < 8 { continue; }
-            let written_at_ms = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+            let written_at_ms = u64::from_le_bytes(bytes[..8].try_into().expect("infallible: WAL quorum entries are always exactly 8-byte timestamps"));
             let age_ms = now_ms.saturating_sub(written_at_ms);
             if age_ms > window_ms { continue; }
             self.task_ctx.signal_handlers.seed_sender_log(kind, sender, age_ms);

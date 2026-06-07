@@ -143,7 +143,7 @@ pub(super) fn scan_prefix_kv_with_ts(kv_state: &crate::store::KvState, prefix: &
     } else {
         store_guard.iter()
             .filter(|(k, v)| v.data.is_some() && k.starts_with(prefix))
-            .map(|(k, v)| (Arc::clone(k), v.data.clone().unwrap(), v.timestamp))
+            .map(|(k, v)| (Arc::clone(k), v.data.clone().expect("infallible: filtered by data.is_some() above"), v.timestamp))
             .collect()
     }
 }

@@ -72,7 +72,7 @@ pub(crate) fn emit_signal(
     let nonce_claimed = if payload.len() >= 8
         && (kind.as_ref() == signal_kind::RPC_RESULT || kind.as_ref() == signal_kind::BULK_RESULT)
     {
-        let call_nonce = u64::from_le_bytes(payload[..8].try_into().unwrap());
+        let call_nonce = u64::from_le_bytes(payload[..8].try_into().expect("infallible: payload.len() >= 8 checked above"));
         if let Some(tx) = ctx.rpc_pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&call_nonce) {
             let _ = tx.send(sig.clone());
             true
@@ -134,7 +134,7 @@ pub(crate) fn emit_signal_ordered(
     let nonce_claimed = if payload.len() >= 8
         && (kind.as_ref() == signal_kind::RPC_RESULT || kind.as_ref() == signal_kind::BULK_RESULT)
     {
-        let call_nonce = u64::from_le_bytes(payload[..8].try_into().unwrap());
+        let call_nonce = u64::from_le_bytes(payload[..8].try_into().expect("infallible: payload.len() >= 8 checked above"));
         if let Some(tx) = ctx.rpc_pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&call_nonce) {
             let _ = tx.send(sig.clone());
             true
@@ -298,7 +298,7 @@ pub(crate) fn kv_scan_prefix(ctx: &TaskCtx, prefix: &str) -> Vec<(Arc<str>, Byte
     } else {
         store_guard.iter()
             .filter(|(k, v)| v.data.is_some() && k.starts_with(prefix))
-            .map(|(k, v)| (Arc::clone(k), v.data.clone().unwrap()))
+            .map(|(k, v)| (Arc::clone(k), v.data.clone().expect("infallible: filtered by data.is_some() above")))
             .collect()
     }
 }
