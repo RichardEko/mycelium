@@ -410,8 +410,8 @@ impl GossipAgent {
     fn start_identity_watcher(&self) {
         let mut rx      = kv_subscribe_prefix(&self.task_ctx, Arc::<str>::from(kv_ns::IDENTITY));
         let shutdown_rx = self.shutdown_tx.subscribe();
-        let peer_keys   = self.task_ctx.peer_keys.clone();
-        let kv_state    = self.kv_state.clone();
+        let peer_keys   = Arc::clone(&self.task_ctx.peer_keys);
+        let kv_state    = Arc::clone(&self.kv_state);
         self.spawn_task(async move {
             let mut shutdown_rx = shutdown_rx;
             loop {

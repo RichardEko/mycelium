@@ -79,6 +79,7 @@ pub(crate) struct Artifact {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[allow(dead_code)]
 pub(crate) struct Message {
     pub role:  String,
     pub parts: Vec<Part>,

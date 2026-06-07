@@ -67,8 +67,7 @@ pub(crate) fn render_template(
     let mut result = template.to_owned();
     // collect all {{...}} occurrences
     let mut pos = 0;
-    loop {
-        let Some(start) = result[pos..].find("{{") else { break };
+    while let Some(start) = result[pos..].find("{{") {
         let abs_start = pos + start;
         let Some(end_rel) = result[abs_start..].find("}}") else { break };
         let abs_end = abs_start + end_rel + 2;
