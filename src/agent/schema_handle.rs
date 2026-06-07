@@ -24,6 +24,7 @@ use super::{helpers::{kv_get, kv_scan_prefix, kv_set_async}, TaskCtx};
 // ── Public types ─────────────────────────────────────────────────────────────
 
 /// Result of a [`SchemaHandle::publish_schema`] call.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchemaPublishResult {
     /// Schema written for the first time.
@@ -45,6 +46,7 @@ pub enum SchemaPublishResult {
 
 /// Error returned by [`SchemaHandle::publish_schema`] and
 /// [`SchemaHandle::seed_schemas_from_dir`].
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum SchemaError {
     #[error("invalid JSON: {0}")]

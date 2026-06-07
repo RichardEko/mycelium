@@ -59,6 +59,7 @@ impl QuorumAckTracker {
 
 /// Error returned by [`GossipAgent::set_with_min_acks`] when the durability threshold
 /// is not reached within the timeout.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum QuorumError {
     /// The write propagated to fewer peers than requested within the deadline.

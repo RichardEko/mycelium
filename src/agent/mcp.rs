@@ -33,6 +33,7 @@ pub struct McpToolHandle {
 }
 
 /// Error type for MCP operations.
+#[non_exhaustive]
 #[derive(Debug)]
 pub enum McpError {
     /// Underlying RPC call timed out.

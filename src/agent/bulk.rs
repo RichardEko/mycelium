@@ -125,6 +125,7 @@ impl Drop for StagedGuard<'_> {
 // ── Error type ────────────────────────────────────────────────────────────────
 
 /// Error returned by [`ServiceHandle::bulk_call`].
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BulkError {
     /// No reply arrived before the timeout elapsed.

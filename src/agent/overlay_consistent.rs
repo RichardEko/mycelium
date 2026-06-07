@@ -8,6 +8,7 @@ use crate::store::apply_and_notify;
 // ── Public types ─────────────────────────────────────────────────────────────
 
 /// Error returned when a consensus round does not commit.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum ConsistencyError {
     /// All ballot attempts timed out without reaching quorum.

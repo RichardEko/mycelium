@@ -351,8 +351,10 @@ impl ConsensusHandle {
     /// and anti-entropy-synced to all nodes); falls back to the raw gossip KV key.
     ///
     /// **Not a read quorum.** Returns whatever has anti-entropy-propagated to this node,
-    /// which may lag the cluster-wide committed value by up to one gossip round. For
-    /// read-after-write guarantees, poll until the expected value appears.
+    /// which may lag the cluster-wide committed value by up to one gossip round.
+    /// The staleness bound is `GossipConfig::anti_entropy_interval_secs` (default 30 s);
+    /// on a healthy cluster, propagation typically completes in well under one second.
+    /// For read-after-write guarantees, poll until the expected value appears.
     pub fn consistent_get(&self, key: &str) -> Option<Bytes> {
         kv_get(&self.ctx, &format!("consensus/committed/consistent/{key}"))
             .or_else(|| kv_get(&self.ctx, key))

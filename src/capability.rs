@@ -524,7 +524,7 @@ macro_rules! impl_bincode_codec {
     ($t:ty) => {
         impl $t {
             #[allow(dead_code)] // some types are encoded only from external callers
-            pub(crate) fn encode(&self) -> Bytes {
+            pub fn encode(&self) -> Bytes {
                 let mut buf = BytesMut::new();
                 let _ = bincode::serde::encode_into_std_write(self, &mut (&mut buf).writer(), bincode_cfg());
                 buf.freeze()

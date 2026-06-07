@@ -173,7 +173,7 @@ pub use agent::McpClientHandle;
 #[cfg(feature = "llm")]
 pub use agent::{PromptTemplate, PromptSkillError, PromptSkillHandle, LlmBackend, LlmResult, LlmError, OpenAiBackend, EchoBackend, LlmHandle};
 pub use capability::{
-    CallerContext, CapConstraint, CapFilter, CapRanking, CapValue, Capability, CapabilityEvent,
+    CallerContext, CapConstraint, CapEntry, CapFilter, CapRanking, CapValue, Capability, CapabilityEvent,
     CapabilityGroupDef, CapabilityGroupHandle, CapabilityReg,
     DemandStatus, RankingOrder, RequirementHandle, RequirementStatus,
     WiredEmitOutcome, WiringProvider, WiringStatus,

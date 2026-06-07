@@ -19,6 +19,7 @@ pub struct ScatterResult {
 }
 
 /// Error returned by [`ServiceHandle::scatter_gather`].
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScatterError {
     /// Fewer than `min_ok` targets replied before the timeout elapsed.

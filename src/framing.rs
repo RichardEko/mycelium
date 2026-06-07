@@ -767,6 +767,64 @@ mod tests {
         let msg = make_kv_wire_msg(u, 2, None);
         assert!(matches!(msg, WireMessage::Data(_)), "no-tls path must return Data variant");
     }
+
+    /// Verifies the rolling-upgrade invariant: a frame encoded at PREV_WIRE_VERSION
+    /// is accepted by read_frame (returns FrameVersion::Previous) and the payload
+    /// decodes correctly via WireMessageV10 → WireMessage.  Specifically confirms
+    /// that a v10 Signal (no hlc_seq field) round-trips to WireMessage::Signal with
+    /// hlc_seq = None, which is the "unordered delivery" sentinel.
+    #[tokio::test]
+    async fn read_frame_accepts_prev_wire_version() {
+        use crate::signal::SignalScope;
+        use tokio::io::AsyncWriteExt;
+
+        let sender_node = crate::node_id::NodeId::new("127.0.0.1", 19_000).unwrap();
+
+        // Build a v10 Signal (no hlc_seq).
+        let v10_msg = WireMessageV10::Signal {
+            ttl:     5,
+            nonce:   0xDEAD_BEEF,
+            sender:  sender_node.clone(),
+            scope:   SignalScope::System,
+            kind:    Arc::from("test.kind"),
+            payload: Bytes::from_static(b"hello-from-v10"),
+        };
+        let encoded = bincode::serde::encode_to_vec(v10_msg, bincode_cfg()).unwrap();
+
+        // Write a frame header stamped with PREV_WIRE_VERSION.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut writer = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let (mut reader, _) = listener.accept().await.unwrap();
+
+        let payload_len = encoded.len() as u32 + 1; // +1 for the version byte
+        writer.write_all(&payload_len.to_be_bytes()).await.unwrap();
+        writer.write_all(&[PREV_WIRE_VERSION]).await.unwrap();
+        writer.write_all(&encoded).await.unwrap();
+
+        // read_frame must accept the v10 frame and report FrameVersion::Previous.
+        let mut buf = BytesMut::new();
+        let frame_ver = read_frame(&mut reader, &mut buf).await
+            .expect("read_frame must accept PREV_WIRE_VERSION frame");
+        assert_eq!(frame_ver, FrameVersion::Previous,
+            "v10 frame must be reported as FrameVersion::Previous");
+
+        // The payload must decode as WireMessageV10 and convert cleanly.
+        let (v10_decoded, _) = bincode::serde::decode_from_slice::<WireMessageV10, _>(
+            &buf, bincode_cfg(),
+        ).expect("WireMessageV10 decode must succeed");
+        let upgraded: WireMessage = v10_decoded.into();
+
+        match upgraded {
+            WireMessage::Signal { kind, payload, hlc_seq, .. } => {
+                assert_eq!(kind.as_ref(), "test.kind");
+                assert_eq!(&payload[..], b"hello-from-v10");
+                assert_eq!(hlc_seq, None,
+                    "v10 Signal must upgrade to hlc_seq=None (unordered-delivery sentinel)");
+            }
+            other => panic!("expected WireMessage::Signal, got {other:?}"),
+        }
+    }
 }
 
 #[cfg(test)]

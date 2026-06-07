@@ -62,6 +62,7 @@ impl RpcRequestRx {
 }
 
 /// Error returned by [`ServiceHandle::rpc_call`].
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RpcError {
     /// No reply arrived before the timeout elapsed.

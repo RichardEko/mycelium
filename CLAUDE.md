@@ -141,6 +141,24 @@ TCP reserved for anti-entropy data transfer. Eliminates the iptables problem
 at the source rather than managing it with a cap. Full design note in
 ROADMAP.md *v2.0 Milestones* item 5.
 
+### Layer I/II Bridge Invariant
+
+`src/store.rs` separates pure Layer I storage (`KvStore`) from the Layer II
+subscription bridge (`KvState`). `KvState` wraps `KvStore` and adds the
+`subscriptions` field; a `Deref<Target=KvStore>` implementation keeps all
+existing call sites working without changes.
+
+**Two named Layer I/II crossing points (the only places either layer reaches into the other):**
+
+| Crossing point | File | What it does |
+|---|---|---|
+| `apply_and_notify` | `src/store.rs` | Writes to `KvStore` (Layer I), then notifies `KvState::subscriptions` watch channels (Layer II). This is the sole write path for both layers. |
+| `subscribe` / `subscribe_prefix` | `src/agent/kv_handle.rs`, `helpers.rs` | Creates a `watch::Sender` in `KvState::subscriptions` (Layer II) and reads the current value from `KvStore::store` (Layer I) to initialise the `watch::Receiver`. |
+
+All other code is single-layer: gossip forwarding reads `KvStore` only; signal
+mesh reads `KvState::subscriptions` only. New features that touch only one layer
+should stay in that layer and not reach into the other.
+
 ### TaskCtx — the shared infrastructure bundle (known God Object)
 
 `src/agent/mod.rs::TaskCtx` is a 22-field struct held in a single `Arc` and cloned into
@@ -162,6 +180,21 @@ the tasks themselves.
 The v2 fix is a workspace split: `mycelium-core` (Layers I+II only, with `CoreCtx`) +
 `mycelium` (full substrate). Deferred until there is a real embedding use case that
 needs the core without consensus/capabilities.
+
+### Lock-Order Table
+
+All `Mutex` and `RwLock` sites in the codebase. **Invariant: no function acquires more than one lock from this table.** There are no nested acquisitions, so no lock-ordering discipline is required beyond this flat list.
+
+| # | Field | Type | Acquired in | Notes |
+|---|-------|------|-------------|-------|
+| 1 | `TaskCtx::task_handles` | `Mutex<JoinSet>` | `spawn_task()`, `wait_for_tasks()` | Short-lived; never held across `await` |
+| 2 | `TaskCtx::rpc_pending` | `Mutex<HashMap>` | `rpc_call_ctx` (register + remove), incoming `rpc.result` signal handler | `.lock()` recovers from poisoning; never held across `await` |
+| 3 | `TaskCtx::reorder_buf` | `Mutex<ReorderBuffer>` | `emit_ordered()`, reorder-buffer flush task | Lock+flush is synchronous; no `await` inside |
+| 4 | `TaskCtx::signal_boundary` | `RwLock<Boundary>` | Read: every `emit()` boundary check; Write: `join_group()`, `leave_group()`, `suppress()`, `unsuppress()` | `read()` is the hot path; `write()` is rare |
+| 5 | `GossipAgent::gossip_rxs` | `Mutex<Option<Vec<Receiver>>>` | `start()` (consumed once, `take()`d) | Single-use; never held after `start()` returns |
+| 6 | `GossipAgent::extra_routes` | `Mutex<Option<Router>>` | `with_http_routes()` (set once), `start()` (consumed, `take()`d) | Gateway feature only; single-use |
+
+**Note on async contexts:** `Mutex` guards in Tokio async code are `!Send` when held across `await` points — the compiler enforces this. All sites above release the guard before any `await`, which is why `std::sync::Mutex` (not `tokio::sync::Mutex`) is used throughout: `std::sync::Mutex` is cheaper and the compiler will error if a guard is accidentally held across a suspension point.
 
 ### Memory ordering policy for atomics
 

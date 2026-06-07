@@ -19,30 +19,15 @@ use tracing::warn;
 /// separating them would require threading a second Arc through every context struct.
 pub(crate) type KvSubscriptions = Arc<papaya::HashMap<Arc<str>, watch::Sender<Option<Bytes>>>>;
 
-/// Bundled KV-path state shared across connection handlers, consensus tasks,
-/// and opacity governors.
+/// Pure Layer I storage bundle — everything the gossip KV store needs without
+/// any Layer II signalling concerns.
 ///
-/// Replacing the five individual Arc fields with a single `Arc<KvState>` reduces
-/// the blast-radius of future additions: new KV fields require only one struct
-/// change and one construction-site change rather than edits in every intermediate
-/// context struct (`ListenerContext`, `ConnContext`, `ConsensusEngine`, etc.).
-///
-/// `subscriptions` is a Layer II concern co-located here for lifecycle convenience.
-/// See [`KvSubscriptions`] for the full rationale.
-///
-/// ## papaya pin() guard invariant
-///
-/// All papaya maps are accessed through a *pinned epoch guard* (`map.pin()`).
-/// Guards **must not be held across `await` points** — holding one suspends
-/// the papaya epoch-reclamation collector, causing unbounded memory growth.
-/// Every call site in this module and in `connection.rs` follows this rule:
-/// pin, do the synchronous work, drop the guard, then await.  Reviewers: if
-/// you add an `await` inside a block that already holds a `pin()` guard,
-/// extract the result first and drop the guard before awaiting.
-pub(crate) struct KvState {
+/// Wrapped inside [`KvState`], which adds the Layer II `subscriptions` field.
+/// All existing callers reach these fields through `KvState`'s `Deref`
+/// implementation, so no call sites need to change when the two concerns are
+/// discussed separately.
+pub(crate) struct KvStore {
     pub store:             Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
-    /// Layer II watch channels. See [`KvSubscriptions`] for design notes.
-    pub subscriptions:     KvSubscriptions,
     pub prefix_index:      Arc<PrefixIndex>,
     /// Secondary index for O(1) cap/req lookups by (namespace, name).
     /// Outer key: `"{seg}/{ns}/{name}"` (e.g. `"cap/compute/text-gen"`).
@@ -78,7 +63,42 @@ pub(crate) struct KvState {
     pub quorum_trackers: Arc<papaya::HashMap<Arc<str>, Arc<QuorumAckTracker>>>,
 }
 
-/// One per-subscriber predicate registration in [`KvState::prefix_predicate_watchers`].
+/// Bundled KV-path state shared across connection handlers, consensus tasks,
+/// and opacity governors.
+///
+/// Holds a [`KvStore`] (Layer I) plus `subscriptions` (Layer II watch channels).
+/// The `Deref<Target = KvStore>` impl means all callers can reach `kv_state.store`,
+/// `kv_state.dropped_frames`, etc. without knowing about the split — no call-site
+/// changes required.
+///
+/// `apply_and_notify` is the **single Layer I/II crossing point**: it writes to
+/// `KvStore` and then notifies both `KvStore::prefix_watchers` (Layer I push
+/// channels) and `KvState::subscriptions` (Layer II watch channels). All other
+/// code treats Layer I and Layer II as independent concerns.
+///
+/// ## papaya pin() guard invariant
+///
+/// All papaya maps are accessed through a *pinned epoch guard* (`map.pin()`).
+/// Guards **must not be held across `await` points** — holding one suspends
+/// the papaya epoch-reclamation collector, causing unbounded memory growth.
+/// Every call site in this module and in `connection.rs` follows this rule:
+/// pin, do the synchronous work, drop the guard, then await.  Reviewers: if
+/// you add an `await` inside a block that already holds a `pin()` guard,
+/// extract the result first and drop the guard before awaiting.
+pub(crate) struct KvState {
+    /// Layer I storage (accessed via Deref).
+    pub kv_store: KvStore,
+    /// Layer II watch channels. See [`KvSubscriptions`] for design notes.
+    pub subscriptions: KvSubscriptions,
+}
+
+impl std::ops::Deref for KvState {
+    type Target = KvStore;
+    #[inline(always)]
+    fn deref(&self) -> &KvStore { &self.kv_store }
+}
+
+/// One per-subscriber predicate registration in [`KvStore::prefix_predicate_watchers`].
 /// `prefix` gates the cheap `starts_with` first; `predicate` runs only when the
 /// prefix matches and is allowed to be more expensive.
 pub struct PrefixPredicateWatcher {
@@ -94,19 +114,21 @@ impl KvState {
     /// than building five independent Arcs and threading them separately.
     pub(crate) fn new(max_store_entries: usize) -> Arc<Self> {
         Arc::new(Self {
-            store:             Arc::new(papaya::HashMap::new()),
-            subscriptions:     Arc::new(papaya::HashMap::new()),
-            prefix_index:      Arc::new(PrefixIndex::new()),
-            cap_ns_index:      Arc::new(PrefixIndex::new()),
-            hash_acc:          Arc::new(AtomicU64::new(0)),
-            dropped_frames:    Arc::new(AtomicU64::new(0)),
-            max_store_entries,
-            grp_generation:    Arc::new(AtomicU64::new(0)),
-            prefix_watchers:           Arc::new(papaya::HashMap::new()),
-            prefix_predicate_watchers: Arc::new(papaya::HashMap::new()),
-            next_pred_watcher_id:      Arc::new(AtomicU64::new(0)),
-            peer_localities:           Arc::new(papaya::HashMap::new()),
-            quorum_trackers:           Arc::new(papaya::HashMap::new()),
+            kv_store: KvStore {
+                store:             Arc::new(papaya::HashMap::new()),
+                prefix_index:      Arc::new(PrefixIndex::new()),
+                cap_ns_index:      Arc::new(PrefixIndex::new()),
+                hash_acc:          Arc::new(AtomicU64::new(0)),
+                dropped_frames:    Arc::new(AtomicU64::new(0)),
+                max_store_entries,
+                grp_generation:    Arc::new(AtomicU64::new(0)),
+                prefix_watchers:           Arc::new(papaya::HashMap::new()),
+                prefix_predicate_watchers: Arc::new(papaya::HashMap::new()),
+                next_pred_watcher_id:      Arc::new(AtomicU64::new(0)),
+                peer_localities:           Arc::new(papaya::HashMap::new()),
+                quorum_trackers:           Arc::new(papaya::HashMap::new()),
+            },
+            subscriptions: Arc::new(papaya::HashMap::new()),
         })
     }
 }

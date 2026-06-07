@@ -97,19 +97,21 @@ fn spawn_handler(
     // anti-entropy fast-path works correctly for pre-populated test stores.
     let initial_hash = store_hash(&store);
     let kv_state = Arc::new(KvState {
-        store,
-        subscriptions:     Arc::new(papaya::HashMap::new()),
-        prefix_index:      Arc::new(crate::store::PrefixIndex::new()),
-        cap_ns_index:      Arc::new(crate::store::PrefixIndex::new()),
-        hash_acc:          Arc::new(AtomicU64::new(initial_hash)),
-        dropped_frames:    Arc::new(AtomicU64::new(0)),
-        max_store_entries: 0,
-        grp_generation:    Arc::new(AtomicU64::new(0)),
-        prefix_watchers:           Arc::new(papaya::HashMap::new()),
-        prefix_predicate_watchers: Arc::new(papaya::HashMap::new()),
-        next_pred_watcher_id:      Arc::new(AtomicU64::new(0)),
-        peer_localities:           Arc::new(papaya::HashMap::new()),
-        quorum_trackers:           Arc::new(papaya::HashMap::new()),
+        kv_store: crate::store::KvStore {
+            store,
+            prefix_index:      Arc::new(crate::store::PrefixIndex::new()),
+            cap_ns_index:      Arc::new(crate::store::PrefixIndex::new()),
+            hash_acc:          Arc::new(AtomicU64::new(initial_hash)),
+            dropped_frames:    Arc::new(AtomicU64::new(0)),
+            max_store_entries: 0,
+            grp_generation:    Arc::new(AtomicU64::new(0)),
+            prefix_watchers:           Arc::new(papaya::HashMap::new()),
+            prefix_predicate_watchers: Arc::new(papaya::HashMap::new()),
+            next_pred_watcher_id:      Arc::new(AtomicU64::new(0)),
+            peer_localities:           Arc::new(papaya::HashMap::new()),
+            quorum_trackers:           Arc::new(papaya::HashMap::new()),
+        },
+        subscriptions: Arc::new(papaya::HashMap::new()),
     });
     let (shutdown_tx_inner, _) = tokio::sync::watch::channel(false);
     let task_ctx = Arc::new(TaskCtx {
@@ -493,19 +495,21 @@ async fn test_subscribe_notified_via_gossip() {
         use parking_lot::RwLock;
         let node_id = NodeId::new("127.0.0.1", 0).unwrap();
         let kv_state = Arc::new(KvState {
-            store: Arc::clone(&store),
-            subscriptions:     subs,
-            prefix_index:      Arc::new(crate::store::PrefixIndex::new()),
-            cap_ns_index:      Arc::new(crate::store::PrefixIndex::new()),
-            hash_acc:          Arc::new(AtomicU64::new(0)),
-            dropped_frames:    Arc::new(AtomicU64::new(0)),
-            max_store_entries: 0,
-            grp_generation:    Arc::new(AtomicU64::new(0)),
-            prefix_watchers:           Arc::new(papaya::HashMap::new()),
-            prefix_predicate_watchers: Arc::new(papaya::HashMap::new()),
-            next_pred_watcher_id:      Arc::new(AtomicU64::new(0)),
-            peer_localities:           Arc::new(papaya::HashMap::new()),
-            quorum_trackers:           Arc::new(papaya::HashMap::new()),
+            kv_store: crate::store::KvStore {
+                store: Arc::clone(&store),
+                prefix_index:      Arc::new(crate::store::PrefixIndex::new()),
+                cap_ns_index:      Arc::new(crate::store::PrefixIndex::new()),
+                hash_acc:          Arc::new(AtomicU64::new(0)),
+                dropped_frames:    Arc::new(AtomicU64::new(0)),
+                max_store_entries: 0,
+                grp_generation:    Arc::new(AtomicU64::new(0)),
+                prefix_watchers:           Arc::new(papaya::HashMap::new()),
+                prefix_predicate_watchers: Arc::new(papaya::HashMap::new()),
+                next_pred_watcher_id:      Arc::new(AtomicU64::new(0)),
+                peer_localities:           Arc::new(papaya::HashMap::new()),
+                quorum_trackers:           Arc::new(papaya::HashMap::new()),
+            },
+            subscriptions: subs,
         });
         let (shutdown_tx_inner2, _) = tokio::sync::watch::channel(false);
         let task_ctx = Arc::new(TaskCtx {
@@ -2074,4 +2078,142 @@ fn test_last_signal_persistent_reads_layer1() {
 
     // Non-existent kind returns None.
     assert!(agent.mesh().last_signal_persistent("never.seen").is_none());
+}
+
+// ── Semantic correctness — LWW convergence ────────────────────────────────
+
+/// Verifies LWW convergence at the network level:
+///
+/// 1. Agent A writes `"first"` and waits for agent B to receive it (HLC sync).
+/// 2. Agent B writes `"second"` — B's HLC is now strictly greater than A's, so
+///    `"second"` is the definitive LWW winner everywhere.
+/// 3. Both agents must converge to `"second"`.
+///
+/// This is a network-level complement to the in-memory LWW unit tests in
+/// `store.rs` — it exercises the full gossip path including HLC `observe()`
+/// and the `>` LWW conflict resolution applied on every inbound update.
+#[tokio::test]
+async fn test_lww_convergence_two_concurrent_writers() {
+    let port_a = alloc_port();
+    let port_b = alloc_port();
+    let id_a = NodeId::new("127.0.0.1", port_a).unwrap();
+    let id_b = NodeId::new("127.0.0.1", port_b).unwrap();
+
+    let mut cfg_a = GossipConfig::default();
+    cfg_a.bind_port       = port_a;
+    cfg_a.bootstrap_peers = vec![id_b.clone()];
+    cfg_a.health_check_max_jitter_ms = 50;
+
+    let mut cfg_b = GossipConfig::default();
+    cfg_b.bind_port       = port_b;
+    cfg_b.bootstrap_peers = vec![id_a.clone()];
+    cfg_b.health_check_max_jitter_ms = 50;
+
+    let agent_a = Arc::new(GossipAgent::new(id_a, cfg_a));
+    let agent_b = Arc::new(GossipAgent::new(id_b, cfg_b));
+
+    agent_a.start().await.unwrap();
+    agent_b.start().await.unwrap();
+
+    poll_until(|| !agent_a.peers().is_empty() && !agent_b.peers().is_empty(), 2_000).await;
+
+    // Step 1: A writes "first".
+    let _ = agent_a.kv().set("lww/converge", Bytes::from_static(b"first"));
+
+    // Step 2: Wait until B has observed A's write (B's HLC now ≥ A's HLC).
+    let ab = Arc::clone(&agent_b);
+    poll_until(
+        || ab.kv().get("lww/converge") == Some(Bytes::from_static(b"first")),
+        2_000,
+    ).await;
+
+    // Step 3: B writes "second" — B's HLC.tick() is strictly > A's "first" timestamp.
+    let _ = agent_b.kv().set("lww/converge", Bytes::from_static(b"second"));
+
+    // Both agents must converge to "second" (higher HLC wins).
+    let aa = Arc::clone(&agent_a);
+    let ab2 = Arc::clone(&agent_b);
+    poll_until(
+        || {
+            aa.kv().get("lww/converge") == Some(Bytes::from_static(b"second"))
+            && ab2.kv().get("lww/converge") == Some(Bytes::from_static(b"second"))
+        },
+        2_000,
+    ).await;
+
+    let final_a = agent_a.kv().get("lww/converge").unwrap();
+    let final_b = agent_b.kv().get("lww/converge").unwrap();
+    assert_eq!(final_a, final_b, "LWW must produce identical values on both nodes");
+    assert_eq!(final_a, Bytes::from_static(b"second"),
+        "higher-HLC write must win");
+
+    agent_a.shutdown().await;
+    agent_b.shutdown().await;
+}
+
+// ── Semantic correctness — cross_group_propose split-brain invariant ──────
+
+/// Verifies that `cross_group_propose` cannot commit when a required group
+/// has no live voters — even if every other group votes unanimously.
+///
+/// This is the key split-brain safety invariant: a single-group majority
+/// cannot unilaterally commit a multi-group proposal.  The commit condition
+/// in `ConsensusEngine::cross_propose` requires `all groups pass their
+/// quorum fraction`, so a group with 0 members contributes `needed = 1`
+/// but `accepts = 0`, permanently blocking the commit.
+#[tokio::test]
+async fn test_cross_group_propose_requires_all_group_quorums() {
+    let pair = consensus_pair().await;
+
+    // Both agents join "alpha" but neither joins "beta".
+    pair.a.mesh().join_group("alpha");
+    pair.b.mesh().join_group("alpha");
+
+    // Wait for group membership to gossip.
+    let aa = &pair.a;
+    let ab = &pair.b;
+    poll_until(
+        || aa.mesh().group_members("alpha").len() >= 2
+        && ab.mesh().group_members("alpha").len() >= 2,
+        2_000,
+    ).await;
+
+    // Require quorum from both "alpha" (has 2 voters) and "beta" (0 voters).
+    let groups = vec![
+        GroupQuorum { group: "alpha".into(), quorum: 0.5, veto: false },
+        GroupQuorum { group: "beta".into(),  quorum: 0.5, veto: false },
+    ];
+    let mut fast_cfg = ConsensusConfig::default();
+    fast_cfg.phase1_timeout = Duration::from_millis(200);
+    fast_cfg.max_ballots    = 1;
+
+    let result = pair.a.consensus()
+        .cross_group_propose("cgp/split-brain", Bytes::from_static(b"v"), groups, fast_cfg)
+        .await;
+
+    assert!(
+        matches!(result, ConsensusResult::Timeout { .. }),
+        "proposal must time out when 'beta' has no voters — got {result:?}",
+    );
+
+    // Positive case: requiring only "alpha" (which has quorum) must commit.
+    let groups_alpha_only = vec![
+        GroupQuorum { group: "alpha".into(), quorum: 0.5, veto: false },
+    ];
+    let result_ok = pair.a.consensus()
+        .cross_group_propose(
+            "cgp/alpha-only",
+            Bytes::from_static(b"v"),
+            groups_alpha_only,
+            ConsensusConfig::default(),
+        )
+        .await;
+
+    assert!(
+        matches!(result_ok, ConsensusResult::Committed { .. }),
+        "alpha-only proposal must commit; got {result_ok:?}",
+    );
+
+    pair.a.shutdown().await;
+    pair.b.shutdown().await;
 }

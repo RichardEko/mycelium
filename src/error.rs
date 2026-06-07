@@ -10,6 +10,7 @@
 
 use thiserror::Error;
 
+#[non_exhaustive]
 #[derive(Error, Debug)]
 pub enum GossipError {
     #[error("Network error: {0}")]

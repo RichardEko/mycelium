@@ -3,6 +3,7 @@ use crate::node_id::NodeId;
 
 /// Returned by [`GossipAgent::emit_sharded`] when the capability filter matches
 /// no live providers in the local KV view.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShardError {
     /// No providers matched the capability filter at call time.
