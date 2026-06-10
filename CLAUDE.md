@@ -11,7 +11,7 @@ three-layer substrate for AI agent fleets and storage replication:
 
 | Layer | What it does | Where it lives |
 |---|---|---|
-| **I — KV store** | Last-write-wins state propagation over TCP; anti-entropy synced; every key has a TTL. | `src/store.rs`, `src/connection.rs`, `src/framing.rs`, `src/writer.rs`, `src/seen.rs` |
+| **I — KV store** | Last-write-wins state propagation over TCP; anti-entropy synced. Two distinct "TTL"s — don't conflate: wire frames carry a **hop-count TTL** (`u8`, decremented per forward); key **evaporation** is a *read-side convention* (entries carry `refresh_interval_ms`; readers discard entries older than 3× — `CapEntry::is_fresh`). The store never time-evicts live keys; only tombstones are GC'd. | `src/store.rs`, `src/connection.rs`, `src/framing.rs`, `src/writer.rs`, `src/seen.rs` |
 | **II — Signal mesh** | Ephemeral scoped events with per-node admission boundaries; pheromone-style opacity composition. | `src/signal.rs`, `src/agent/mesh_handle.rs`, `src/agent/opacity.rs` |
 | **III — Consensus** | Epidemic group / system / cross-group proposals with optional Hard topology enforcement. `GroupQuorum` + `cross_group_propose` for multi-voting-bloc decisions. | `src/consensus.rs`, `src/agent/consensus_ops.rs` |
 | **Security (tls feature)** | mTLS transport, Ed25519 node identity, signed consensus payloads. | `src/tls.rs`, `src/stream.rs` |
@@ -102,6 +102,40 @@ overhead when no signal handlers are registered.
 Planned for v2: extract `mycelium-core` crate (gossip transport + KV only) from
 `mycelium` (full substrate with signals, consensus, capabilities).
 
+### Entry-volume scale test (orthogonal to node-count)
+
+`make test-scale-entries` (30 nodes by default) validates the *entry-volume*
+axis that `make test-scale` does not cover. The 100-node test writes one key
+and confirms it gossips; this test writes `ENTRY_COUNT` keys (default 5 000,
+configurable via `ENTRY_COUNT` and `ENTRY_BYTES` Makefile overrides) to a
+30-node cluster and measures:
+
+1. **Live-gossip fraction** — what percentage of entries are visible on mgmt
+   *immediately after* the bulk-write phase ends. Approximates how well live
+   propagation keeps up with the write rate.
+2. **Anti-entropy sweep tail** — wall-clock seconds from `T_write_end` to
+   `T_full_visible_on_mgmt`. Approximates how much closure work anti-entropy
+   has to do on top of live gossip.
+3. **Stability** — count remains at `ENTRY_COUNT` 15 s after convergence
+   (no flapping, no eviction).
+4. **Random-sample integrity** — 50 random keys verified for correct payload
+   byte count via `kv-scan`.
+5. **Backpressure** — `dropped_frames` on seed and mgmt after the bulk burst;
+   non-zero is informative not fatal, with a hint to raise
+   `GOSSIP_WRITER_CHANNEL_DEPTH`.
+
+Why 30 nodes and not 100: the runner makes new TCP connections throughout
+this test (bulk PUTs + convergence polling + sample reads), so we deliberately
+stay well below the iptables FORWARD-chain ceiling. The 100-node test works
+around chain saturation with conntrack tricks; the entry-volume test cannot
+do the same because polling continues across the entire convergence window.
+
+Bumped configuration in `docker-compose.scale-entries.yml`:
+- `GOSSIP_WRITER_CHANNEL_DEPTH = 4096` on seed/mgmt (default 1024 drops
+  frames at 5 000+ entries written in a short window)
+- `GOSSIP_MAX_STORE_ENTRIES = 200000` so the test's synthetic graph fits
+  without triggering store eviction
+
 ### Scale and resilience tests — Docker bridge iptables constraint
 
 Both `make test-scale` (100 nodes) and `make test-scale-resilience` (20 nodes default)
@@ -132,6 +166,15 @@ first suspect. Mitigations: switch the Docker network driver to `macvlan`, enabl
 nftables (hash-table replacement for the linear iptables chain), or keep
 `RESILIENCE_WORKERS ≤ 20`.
 
+**Consecutive-run VM fatigue (observed 2026-06-10):** repeated 100-node rounds
+in one Docker Desktop session degrade formation monotonically — same code went
+PASS → 80/100 → 97/100 (timeout at 240 s) across three same-day rounds, then
+PASS 5/5 with 0 dropped frames immediately after a Docker engine restart.
+Kernel state in the VM (conntrack/iptables) accumulates across rounds even
+though networks are recreated. Before declaring a formation-timeout failure a
+regression, restart the Docker engine (`docker desktop restart`) and re-run
+once on the fresh VM.
+
 The v1 runtime mitigation is `GOSSIP_MAX_ACTIVE_CONNECTIONS` (caps outbound
 TCP connections per node to K random peers, reducing O(N²) → O(N×K)).
 
@@ -158,6 +201,38 @@ existing call sites working without changes.
 All other code is single-layer: gossip forwarding reads `KvStore` only; signal
 mesh reads `KvState::subscriptions` only. New features that touch only one layer
 should stay in that layer and not reach into the other.
+
+### Layer III invariant posture — tripwire, leases, listener registration
+
+Three related facts about the consensus layer's relationship to the substrate:
+
+1. **Namespace ownership is promise-strength.** The substrate never enforces
+   the `consensus/` prefix; a rogue or buggy writer can clobber
+   `consensus/committed/{slot}` and LWW will accept it. The deliberate response
+   is detection, not prevention: the consensus listener's **commit-conflict
+   tripwire** refuses to endorse (re-write) a COMMIT carrying a different value
+   for a live committed slot, logs a `warn!`, and increments
+   `SystemStats::commit_conflicts` (also on `/stats`). Do **not** "fix" this by
+   adding a `consensus/`-prefix write guard to `apply_and_notify` — that would
+   teach Layer I a Layer III law, inverting the dependency that makes Layer I
+   the foundation.
+
+2. **Epoch-leased commitments** (`ConsensusConfig::committed_lease_secs`).
+   Opt-in; default (`None`) is permanent commit-once. When set, the commit also
+   writes `consensus/lease/{slot}` (u64 LE ms) and readers
+   (`consensus_get`, `consistent_get`, `GET /consensus/{slot}`) apply the same
+   read-side freshness convention as capability entries: expired lease ⇒ reads
+   as not-committed ⇒ the slot reopens for re-proposal. Renewal = re-proposing
+   the *same* value while live (refreshes the commit timestamp via a fresh
+   quorum round); a *different* value while live returns `Superseded`.
+   `consensus_rx` is deliberately the raw KV view.
+
+3. **Listener handlers are registered synchronously.**
+   `start_consensus_listener` registers the PROPOSE/COMMIT receivers *before*
+   spawning the voter task. Registration used to happen inside the task's first
+   poll, which silently dropped any proposal racing listener startup (node
+   fails to vote; single-node tests commit via self-quorum and never notice).
+   Keep it this way when refactoring.
 
 ### TaskCtx — the shared infrastructure bundle (known God Object)
 
@@ -241,8 +316,8 @@ that registration.
 |---|---|
 | `GET /health` | 200 = process alive |
 | `GET /ready` | 200 = capabilities advertised + no dead shards |
-| `GET /stats` | `node_id`, `store_entries`, `dropped_frames`, `task_count` |
-| `GET /consensus/{slot}` | `committed` (base64 or null) + `ballot` (u64) for a consensus slot |
+| `GET /stats` | `node_id`, `store_entries`, `dropped_frames`, `task_count`, `commit_conflicts` |
+| `GET /consensus/{slot}` | `committed` (base64 or null, **lease-aware**) + `ballot` (u64) + `lease_ms` + `lease_expired` for a consensus slot |
 | `GET /metrics` | Prometheus scrape endpoint (`metrics` feature required) |
 
 **`SystemStats::task_count`** — number of Tokio tasks in the `JoinSet`. Expected
