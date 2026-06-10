@@ -2220,3 +2220,81 @@ async fn test_cross_group_propose_requires_all_group_quorums() {
     pair.b.shutdown().await;
 }
 
+// ── M2 falsification probes (Run 16) — kept as permanent regression tests ──
+
+/// Robustness probe: a live agent must survive hostile bytes on its gossip
+/// port — pure garbage, an absurd length prefix, and an abrupt disconnect —
+/// and remain fully serviceable afterwards.
+#[tokio::test]
+async fn probe_garbage_on_gossip_port_survives() {
+    use tokio::io::AsyncWriteExt;
+
+    let port = alloc_port();
+    let id   = NodeId::new("127.0.0.1", port).unwrap();
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = port;
+    let agent = GossipAgent::new(id, cfg);
+    agent.start().await.unwrap();
+
+    // 1. Pure garbage.
+    let mut s1 = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    s1.write_all(&[0xFF; 1024]).await.unwrap();
+    let _ = s1.shutdown().await;
+
+    // 2. Huge length prefix (4 GiB frame announcement), then disconnect.
+    let mut s2 = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    s2.write_all(&u32::MAX.to_le_bytes()).await.unwrap();
+    s2.write_all(b"trailing").await.unwrap();
+    let _ = s2.shutdown().await;
+
+    // 3. Zero-length frame followed by garbage.
+    let mut s3 = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    s3.write_all(&0u32.to_le_bytes()).await.unwrap();
+    s3.write_all(&[0x00; 64]).await.unwrap();
+    let _ = s3.shutdown().await;
+
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // Agent must still be alive and serviceable.
+    assert!(agent.kv().set("probe/after-garbage", Bytes::from_static(b"ok")));
+    assert_eq!(
+        agent.kv().get("probe/after-garbage").as_deref(),
+        Some(b"ok".as_slice()),
+        "agent must remain serviceable after hostile input",
+    );
+    let stats = agent.system_stats();
+    assert_eq!(stats.dead_shards, 0, "no gossip shard may die from hostile input");
+    agent.shutdown().await;
+}
+
+/// Resource-management probe: after `shutdown_with_timeout`, every tracked
+/// background task must have exited and the gossip port must be rebindable.
+#[tokio::test]
+async fn probe_shutdown_drains_tasks_and_releases_port() {
+    let port = alloc_port();
+    let id   = NodeId::new("127.0.0.1", port).unwrap();
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = port;
+    let agent = GossipAgent::new(id, cfg);
+    agent.start().await.unwrap();
+
+    // Exercise the task spawners: consensus listener + capability advertisement.
+    let _listener = agent.consensus().start_consensus_listener(
+        crate::consensus::ConsensusConfig::default(),
+    );
+    let _reg = agent.capabilities().advertise_capability(
+        Capability::new("probe", "drain"),
+        std::time::Duration::from_secs(60),
+    );
+    assert!(agent.system_stats().task_count > 0, "tasks must be tracked while running");
+
+    agent.shutdown_with_timeout(std::time::Duration::from_secs(10)).await;
+    assert_eq!(
+        agent.system_stats().task_count, 0,
+        "no tracked task may survive shutdown",
+    );
+
+    // The gossip port must actually be released.
+    let rebind = std::net::TcpListener::bind(("127.0.0.1", port));
+    assert!(rebind.is_ok(), "gossip port must be rebindable after shutdown");
+}

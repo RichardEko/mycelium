@@ -340,8 +340,35 @@ pub(crate) fn store_hash(store: &papaya::HashMap<Arc<str>, StoreEntry>) -> u64 {
     combined
 }
 
+/// LWW comparison: does the incoming write replace the current entry?
+///
+/// - Different timestamps: strictly newer wins (unchanged).
+/// - Equal timestamps, incoming tombstone: tombstone wins (unchanged — deletes
+///   are never resurrected by a concurrent same-timestamp data write).
+/// - Equal timestamps, current entry is a tombstone: data loses (unchanged).
+/// - Equal timestamps, **data vs data: lexicographically greater value wins.**
+///   This tiebreak is deterministic and order-independent, so two nodes that
+///   apply the same pair of concurrent equal-timestamp writes in opposite
+///   orders converge to the same value. Without it they diverge permanently —
+///   and undetectably, because the anti-entropy digest hashes (key, timestamp)
+///   only and is identical on both sides. Equal timestamps are reachable in
+///   practice: two writers in the same wall-clock millisecond whose HLCs have
+///   not yet observed each other both stamp `(ms, logical=0)`.
+#[inline]
+fn lww_wins(incoming_ts: u64, incoming_tombstone: bool, incoming_val: &Option<Bytes>, curr: &StoreEntry) -> bool {
+    if incoming_ts != curr.timestamp {
+        return incoming_ts > curr.timestamp;
+    }
+    if incoming_tombstone { return true; }
+    match (&curr.data, incoming_val) {
+        (None, _)          => false,    // tie against a tombstone: data never resurrects
+        (Some(c), Some(v)) => v > c,    // deterministic concurrent-data tiebreak
+        (Some(_), None)    => false,    // unreachable: !tombstone ⇒ val is Some
+    }
+}
+
 /// Applies `update` using last-write-wins. Returns `true` if the store changed.
-/// Tombstones win on equal timestamps; plain data requires a strictly newer timestamp.
+/// Conflict resolution is [`lww_wins`] — see its doc for the equal-timestamp rules.
 /// Uses papaya `compute` for a single atomic CAS — no separate read then write.
 #[cfg(test)]
 pub(crate) fn apply_to_store(store: &papaya::HashMap<Arc<str>, StoreEntry>, update: &GossipUpdate) -> bool {
@@ -357,8 +384,7 @@ pub(crate) fn apply_to_store(store: &papaya::HashMap<Arc<str>, StoreEntry>, upda
         match existing {
             None => Operation::Insert(StoreEntry { data: val.clone(), timestamp: ts }),
             Some((_, curr)) => {
-                let wins = if is_tombstone { ts >= curr.timestamp } else { ts > curr.timestamp };
-                if wins {
+                if lww_wins(ts, is_tombstone, &val, curr) {
                     Operation::Insert(StoreEntry { data: val.clone(), timestamp: ts })
                 } else {
                     Operation::Abort(())
@@ -412,8 +438,7 @@ pub(crate) fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
             match existing {
                 None => Operation::Insert(StoreEntry { data: val.clone(), timestamp: ts }),
                 Some((_, curr)) => {
-                    let wins = if is_tombstone { ts >= curr.timestamp } else { ts > curr.timestamp };
-                    if wins {
+                    if lww_wins(ts, is_tombstone, &val, curr) {
                         if curr.data.is_some() {
                             old_ts_if_live = Some(curr.timestamp);
                         }
@@ -620,6 +645,37 @@ mod tests {
             timestamp: 100, nonce: 2, ttl: 1, is_tombstone: true,
         });
         assert_eq!(store.pin().get("k").unwrap().data, None, "tombstone must win equal-timestamp tie");
+    }
+
+    #[test]
+    fn lww_equal_timestamp_concurrent_data_converges() {
+        // Regression test for the M2 Run-16 probe finding: two writers, same
+        // key, identical HLC timestamps (possible: same wall ms, logical 0, no
+        // prior observation), different values, applied in opposite orders on
+        // two nodes. Before the `lww_wins` data-vs-data tiebreak, each node
+        // kept its first-applied value — permanent divergence, invisible to
+        // anti-entropy because the digest hashes (key, timestamp) only.
+        let w_a = GossipUpdate {
+            sender: 1, key: "k".into(), value: Bytes::from_static(b"from-a"),
+            timestamp: 100, nonce: 1, ttl: 1, is_tombstone: false,
+        };
+        let w_b = GossipUpdate {
+            sender: 2, key: "k".into(), value: Bytes::from_static(b"from-b"),
+            timestamp: 100, nonce: 2, ttl: 1, is_tombstone: false,
+        };
+        let node1: papaya::HashMap<Arc<str>, StoreEntry> = papaya::HashMap::new();
+        let node2: papaya::HashMap<Arc<str>, StoreEntry> = papaya::HashMap::new();
+        apply_to_store(&node1, &w_a); apply_to_store(&node1, &w_b);
+        apply_to_store(&node2, &w_b); apply_to_store(&node2, &w_a);
+        let v1 = node1.pin().get("k").unwrap().data.clone();
+        let v2 = node2.pin().get("k").unwrap().data.clone();
+        assert_eq!(v1, v2, "both nodes must agree regardless of apply order");
+        assert_eq!(
+            v1, Some(Bytes::from_static(b"from-b")),
+            "tiebreak is deterministic: lexicographically greater value wins",
+        );
+        // The digests agree too — and now agree on the same underlying value.
+        assert_eq!(store_hash(&node1), store_hash(&node2));
     }
 
     #[test]
