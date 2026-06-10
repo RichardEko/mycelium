@@ -124,6 +124,25 @@ pub struct ConsensusConfig {
     ///
     /// `0` = no limit (always abstain when opaque). Default: `0`.
     pub max_abstain_ballots: u32,
+
+    /// When `Some(secs)`, the commitment is **epoch-leased** rather than permanent:
+    /// readers ([`consensus_get`](crate::ConsensusHandle::consensus_get),
+    /// `GET /consensus/{slot}`) treat the committed value as absent once
+    /// `now − commit_time > secs`, and the slot reopens for re-proposal.
+    ///
+    /// The lease window is written to `consensus/lease/{slot}` and gossips like any
+    /// other key; expiry is evaluated read-side against the committed entry's HLC
+    /// timestamp — the same evaporation convention capability entries use
+    /// ([`CapEntry::is_fresh`](crate::CapEntry::is_fresh)). No background task, no
+    /// renewal RPC: an expired lease is simply no longer acted upon.
+    ///
+    /// **Renewal** is a fresh quorum round: re-propose the *same* value while the
+    /// lease is live (allowed; refreshes the commit timestamp), or any value after
+    /// expiry (the slot has reopened). Proposing a *different* value while the lease
+    /// is live returns [`ConsensusResult::Superseded`], same as a permanent commit.
+    ///
+    /// `None` (default) = permanent commitment; behaviour is unchanged.
+    pub committed_lease_secs: Option<u64>,
 }
 
 impl Default for ConsensusConfig {
@@ -138,6 +157,7 @@ impl Default for ConsensusConfig {
             use_trust_slices:        false,
             use_suggest_leader:      false,
             max_abstain_ballots:     0,
+            committed_lease_secs:    None,
         }
     }
 }
@@ -284,6 +304,60 @@ pub mod consensus_ns {
     /// Key: `consensus/trust/{group}/{node_id}`. Value: bincode-encoded
     /// `Vec<NodeId>` of trusted peers.
     pub const TRUST:     &str = "consensus/trust/";
+    /// Epoch-lease window for a committed slot. Key: `consensus/lease/{slot}`.
+    /// Value: u64 LE milliseconds. Written at commit time when
+    /// [`ConsensusConfig::committed_lease_secs`] is set; absent for permanent
+    /// commitments. Expiry is evaluated read-side against the committed
+    /// entry's HLC timestamp — see [`ConsensusConfig::committed_lease_secs`].
+    pub const LEASE:     &str = "consensus/lease/";
+}
+
+// ── Lease helpers ─────────────────────────────────────────────────────────────
+
+pub(crate) fn encode_lease_ms(ms: u64) -> Bytes {
+    Bytes::copy_from_slice(&ms.to_le_bytes())
+}
+
+/// `None` on malformed bytes — readers treat a malformed lease as *permanent*
+/// (never silently expire a commitment because a lease entry was corrupted).
+pub(crate) fn decode_lease_ms(bytes: &Bytes) -> Option<u64> {
+    (bytes.len() >= 8).then(|| u64::from_le_bytes(bytes[..8].try_into().unwrap_or([0u8; 8])))
+}
+
+/// Wall-clock now in milliseconds (same basis as HLC physical time).
+pub(crate) fn wall_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// Returns the **live** committed value for `slot`, applying the epoch-lease
+/// convention: a committed entry whose `consensus/lease/{slot}` window has
+/// elapsed (measured against the committed entry's HLC timestamp) reads as
+/// absent — the slot has reopened. Slots without a lease entry are permanent.
+///
+/// This is the Layer III read-side analogue of [`CapEntry::is_fresh`]
+/// (crate::CapEntry::is_fresh): expiry is a property readers apply, not a
+/// store mechanism — the substrate never deletes or special-cases the key.
+pub(crate) fn live_committed_value(
+    kv:     &crate::store::KvState,
+    slot:   &str,
+    now_ms: u64,
+) -> Option<Bytes> {
+    let commit_key = format!("{}{}", consensus_ns::COMMITTED, slot);
+    let guard = kv.store.pin();
+    let entry = guard.get(commit_key.as_str())?;
+    let data  = entry.data.clone()?;
+    let lease_key = format!("{}{}", consensus_ns::LEASE, slot);
+    let Some(lease_bytes) = guard.get(lease_key.as_str()).and_then(|e| e.data.clone()) else {
+        return Some(data); // no lease (or tombstoned lease) → permanent
+    };
+    let Some(lease_ms) = decode_lease_ms(&lease_bytes) else {
+        return Some(data); // malformed lease → treat as permanent
+    };
+    let written_ms = crate::hlc::physical_ms(entry.timestamp);
+    (now_ms.saturating_sub(written_ms) <= lease_ms).then_some(data)
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -396,6 +470,12 @@ impl ConsensusEngine {
 
     fn read_ballot(&self, ballot_key: &str) -> u64 {
         self.get(ballot_key).map(|b| decode_ballot(&b)).unwrap_or(0)
+    }
+
+    /// Lease-aware committed read — see [`live_committed_value`]. An expired
+    /// lease reads as `None`: the slot has reopened for re-proposal.
+    fn live_committed(&self, slot: &str) -> Option<Bytes> {
+        live_committed_value(&self.task_ctx.kv_state, slot, wall_now_ms())
     }
 
     /// Applies a KV update from within a consensus task.
@@ -601,6 +681,15 @@ impl ConsensusEngine {
         // `TopologyUnsatisfied` after all ballots are exhausted.
         let mut topology_failed: Option<(usize, usize, usize)> = None;
 
+        // Epoch lease window (ms) for this proposal, if configured.
+        let lease_ms = config.committed_lease_secs.map(|s| s.saturating_mul(1000));
+        // A slot already committed with the *same* value under a lease may be
+        // re-proposed while live — a successful re-commit refreshes the commit
+        // timestamp (lease renewal). Any other live commitment supersedes us.
+        let superseded_by_live = |existing: &Bytes| -> bool {
+            !(lease_ms.is_some() && *existing == value)
+        };
+
         // Extract the group name once for `sys/topology-override/{group}` lookups
         // and for completing the TopologyUnsatisfied return.
         let group_name: Option<Arc<str>> = match &scope {
@@ -609,12 +698,13 @@ impl ConsensusEngine {
         };
 
         for _attempt in 0..config.max_ballots {
-            if self.get(&commit_key).is_some() {
-                return ConsensusResult::Superseded {
-                    slot,
-                    ballot: self.read_ballot(&ballot_key),
-                };
-            }
+            if let Some(existing) = self.live_committed(&slot)
+                && superseded_by_live(&existing) {
+                    return ConsensusResult::Superseded {
+                        slot,
+                        ballot: self.read_ballot(&ballot_key),
+                    };
+                }
 
             // Early exit when all members are opaque — waiting for votes is futile.
             if let Some(ref or) = opaque_recompute {
@@ -663,7 +753,7 @@ impl ConsensusEngine {
             // Single-node quorum check before entering the collect loop.
             if let Some(res) = self.try_commit_if_ready(
                 &voters, quorum_size, group_name.as_deref(),
-                &scope, &slot, ballot, &value, &ballot_key, &commit_key,
+                &scope, &slot, ballot, &value, &ballot_key, &commit_key, lease_ms,
             ).await {
                 return res;
             }
@@ -679,6 +769,7 @@ impl ConsensusEngine {
                 group_name.as_deref(),
                 trust_set.as_ref(),
                 opaque_recompute.as_ref(),
+                lease_ms,
             ).await;
 
             let mut nack_ballot = 0u64;
@@ -688,12 +779,13 @@ impl ConsensusEngine {
                 BallotOutcome::Timeout        => {}
             }
 
-            if self.get(&commit_key).is_some() {
-                return ConsensusResult::Superseded {
-                    slot,
-                    ballot: self.read_ballot(&ballot_key),
-                };
-            }
+            if let Some(existing) = self.live_committed(&slot)
+                && superseded_by_live(&existing) {
+                    return ConsensusResult::Superseded {
+                        slot,
+                        ballot: self.read_ballot(&ballot_key),
+                    };
+                }
 
             votes_last_ballot = voters.len();
             // If this ballot reached quorum-by-count but failed the Hard gate,
@@ -760,9 +852,17 @@ impl ConsensusEngine {
         let ballot_key = format!("{}{}", consensus_ns::BALLOT,    &*slot);
         let commit_key = format!("{}{}", consensus_ns::COMMITTED, &*slot);
 
-        if self.get(&commit_key).is_some() {
-            return ConsensusResult::Superseded { slot, ballot: self.read_ballot(&ballot_key) };
-        }
+        // Epoch lease window (ms), with the same renewal exception as `propose`:
+        // a live same-value leased commitment may be re-proposed to refresh it.
+        let lease_ms = config.committed_lease_secs.map(|s| s.saturating_mul(1000));
+        let superseded_by_live = |existing: &Bytes| -> bool {
+            !(lease_ms.is_some() && *existing == value)
+        };
+
+        if let Some(existing) = self.live_committed(&slot)
+            && superseded_by_live(&existing) {
+                return ConsensusResult::Superseded { slot, ballot: self.read_ballot(&ballot_key) };
+            }
 
         // Per-group state (rebuilt from KV once before the ballot loop).
         struct CrossState {
@@ -853,6 +953,14 @@ impl ConsensusEngine {
                             gs.accepts >= needed
                         });
                         if all_ready {
+                            // Lost race with another proposer mid-ballot: refuse
+                            // to clobber a different live commitment.
+                            if let Some(existing) = self.live_committed(&slot)
+                                && existing != value {
+                                    return ConsensusResult::Superseded {
+                                        slot, ballot: self.read_ballot(&ballot_key),
+                                    };
+                                }
                             let commit_msg = ConsensusMsg::Commit {
                                 slot: Arc::clone(&slot), ballot, value: value.clone(),
                             };
@@ -867,8 +975,9 @@ impl ConsensusEngine {
                                     crate::framing::sync_entry_from(&committed_upd)
                                 ).await;
                             }
+                            self.write_lease(&slot, lease_ms).await;
                             self.kv_delete(&ballot_key);
-                            return ConsensusResult::Committed { slot, value, ballot };
+                            return ConsensusResult::Committed { slot, value: value.clone(), ballot };
                         }
                     }
                     Some(sig) = nack_rx.recv() => {
@@ -882,9 +991,10 @@ impl ConsensusEngine {
                 }
             }
 
-            if self.get(&commit_key).is_some() {
-                return ConsensusResult::Superseded { slot, ballot: self.read_ballot(&ballot_key) };
-            }
+            if let Some(existing) = self.live_committed(&slot)
+                && superseded_by_live(&existing) {
+                    return ConsensusResult::Superseded { slot, ballot: self.read_ballot(&ballot_key) };
+                }
 
             if config.ballot_retry_jitter_ms > 0 {
                 let jitter = fastrand::u64(0..config.ballot_retry_jitter_ms);
@@ -902,10 +1012,14 @@ impl ConsensusEngine {
     }
 
     /// Evaluates quorum-by-count + topology gate. When both pass, dispatches
-    /// the commit (emit `COMMIT`, write `consensus/committed/{slot}`,
-    /// tombstone `consensus/ballot/{slot}`) and returns
-    /// `Some(ConsensusResult::Committed)`. Returns `None` when either gate
-    /// fails — caller keeps collecting.
+    /// the commit (emit `COMMIT`, write `consensus/committed/{slot}` and the
+    /// `consensus/lease/{slot}` window when leased, tombstone
+    /// `consensus/ballot/{slot}`) and returns `Some(ConsensusResult::Committed)`.
+    /// Returns `None` when either gate fails — caller keeps collecting.
+    ///
+    /// Refuses to clobber a *different* live commitment that landed between the
+    /// caller's supersession check and quorum being reached (a lost race with
+    /// another proposer) — returns `Superseded` instead of overwriting.
     #[allow(clippy::too_many_arguments)]
     async fn try_commit_if_ready(
         &self,
@@ -918,10 +1032,19 @@ impl ConsensusEngine {
         value:       &Bytes,
         ballot_key:  &str,
         commit_key:  &str,
+        lease_ms:    Option<u64>,
     ) -> Option<ConsensusResult> {
         if voters.len() < quorum_size { return None; }
         let (passes, _, _) = self.topology_check(voters, group_name);
         if !passes { return None; }
+
+        if let Some(existing) = self.live_committed(slot)
+            && existing != *value {
+                return Some(ConsensusResult::Superseded {
+                    slot:   Arc::clone(slot),
+                    ballot: self.read_ballot(ballot_key),
+                });
+            }
 
         let commit = ConsensusMsg::Commit {
             slot: Arc::clone(slot), ballot, value: value.clone(),
@@ -933,12 +1056,36 @@ impl ConsensusEngine {
         if let Some(wal) = self.task_ctx.wal.get() {
             let _ = wal.append_sync(sync_entry_from(&committed_upd)).await;
         }
+        self.write_lease(slot, lease_ms).await;
         self.kv_delete(ballot_key);
         Some(ConsensusResult::Committed {
             slot:   Arc::clone(slot),
             value:  value.clone(),
             ballot,
         })
+    }
+
+    /// Writes (or clears) the epoch-lease window for `slot` at commit time.
+    ///
+    /// `Some(ms)` → write `consensus/lease/{slot}` (WAL-appended alongside the
+    /// committed value so a restart cannot resurrect an expired slot as
+    /// permanent). `None` → tombstone any stale lease left by a previous
+    /// leased commitment, so the new permanent commit cannot be expired by it.
+    async fn write_lease(&self, slot: &Arc<str>, lease_ms: Option<u64>) {
+        let lease_key = format!("{}{}", consensus_ns::LEASE, &**slot);
+        match lease_ms {
+            Some(ms) => {
+                let upd = self.set_async(&lease_key, encode_lease_ms(ms)).await;
+                if let Some(wal) = self.task_ctx.wal.get() {
+                    let _ = wal.append_sync(sync_entry_from(&upd)).await;
+                }
+            }
+            None => {
+                if self.get(&lease_key).is_some() {
+                    self.kv_delete(&lease_key);
+                }
+            }
+        }
     }
 
     /// Drives one ballot's `'collect` loop: accept votes (Vote or
@@ -968,6 +1115,7 @@ impl ConsensusEngine {
         group_name:       Option<&str>,
         trust_set:        Option<&AHashSet<u64>>,
         opaque_recompute: Option<&OpaqueRecompute>,
+        lease_ms:         Option<u64>,
     ) -> BallotOutcome {
         let sleep = time::sleep_until(deadline);
         tokio::pin!(sleep);
@@ -992,7 +1140,7 @@ impl ConsensusEngine {
                         voters.insert(voter, locality);
                         if let Some(res) = self.try_commit_if_ready(
                             voters, *quorum_size, group_name,
-                            scope, slot, ballot, value, ballot_key, commit_key,
+                            scope, slot, ballot, value, ballot_key, commit_key, lease_ms,
                         ).await {
                             return BallotOutcome::Committed(res);
                         }
@@ -1023,7 +1171,7 @@ impl ConsensusEngine {
                         *quorum_size = if or.config_quorum > 0 { or.config_quorum } else { active / 2 + 1 };
                         if let Some(res) = self.try_commit_if_ready(
                             voters, *quorum_size, group_name,
-                            scope, slot, ballot, value, ballot_key, commit_key,
+                            scope, slot, ballot, value, ballot_key, commit_key, lease_ms,
                         ).await {
                             return BallotOutcome::Committed(res);
                         }
@@ -1093,17 +1241,21 @@ pub(crate) struct SignedConsensusMsg {
 /// votes, nacks, and KV commit writes on behalf of this node.
 ///
 /// Spawned by [`GossipAgent::start_consensus_listener`] via [`ConsensusEngine::spawn_listener`].
+///
+/// `rx_propose` / `rx_commit` are registered **synchronously by the caller**
+/// (`start_consensus_listener`) before this task is spawned, so a proposal or
+/// commit that arrives in the window between `start_consensus_listener`
+/// returning and this task's first poll is queued rather than silently
+/// dropped. Registering here instead would reintroduce that race: this node
+/// would not vote on (or endorse) signals that arrive before the scheduler
+/// first polls the task.
 pub(crate) async fn run_consensus_listener(
     ctx:             ConsensusEngine,
     mut cancel:      oneshot::Receiver<()>,
     mut shutdown_rx: watch::Receiver<bool>,
+    mut rx_propose:  mpsc::Receiver<Signal>,
+    mut rx_commit:   mpsc::Receiver<Signal>,
 ) {
-    let mut rx_propose = ctx.task_ctx.signal_handlers.register_with_capacity(
-        Arc::from(consensus_kind::PROPOSE), 512,
-    );
-    let mut rx_commit = ctx.task_ctx.signal_handlers.register_with_capacity(
-        Arc::from(consensus_kind::COMMIT), 256,
-    );
     let mut seen_ballot: AHashMap<Arc<str>, u64> = AHashMap::new();
     let mut consecutive_abstains: u32 = 0;
 
@@ -1163,6 +1315,32 @@ pub(crate) async fn run_consensus_listener(
                 let Some(ConsensusMsg::Commit { slot, ballot, value }) =
                     ctx.decode_verify(&sig.payload)
                 else { continue };
+
+                // ── Commit-conflict tripwire ─────────────────────────────────
+                // Slots are commit-once (or renewed with the same value while an
+                // epoch lease is live; any value once the lease has expired —
+                // `live_committed` returns None for an expired lease, so a legal
+                // reopen never trips this). A COMMIT carrying a *different* value
+                // while the existing commitment is still live is a protocol
+                // violation: a raced double-commit, a buggy proposer, or a forged
+                // message. Refuse to endorse it — re-writing it here would
+                // propagate the clobber with a fresh HLC from this node, actively
+                // helping it win LWW everywhere. Detection only: the substrate's
+                // own forwarding of the foreign frame is untouched (Layer I/II
+                // stay ignorant of Layer III's laws).
+                if let Some(existing) = ctx.live_committed(&slot)
+                    && existing != value {
+                        ctx.task_ctx.commit_conflicts.fetch_add(
+                            1, std::sync::atomic::Ordering::Relaxed,
+                        );
+                        tracing::warn!(
+                            slot = %slot, ballot,
+                            "commit conflict: COMMIT carries a different value for a \
+                             live committed slot; not endorsing \
+                             (see SystemStats::commit_conflicts)"
+                        );
+                        continue;
+                    }
 
                 let current = *seen_ballot.get(&slot).unwrap_or(&0);
                 if ballot >= current {
@@ -1283,6 +1461,84 @@ mod topology_tests {
         let (passes, distinct) = evaluate_topology_gate(&voters, &policy);
         assert!(!passes);
         assert_eq!(distinct, 1, "only the EU voter contributes diversity; the two legacy votes do not");
+    }
+}
+
+#[cfg(test)]
+mod lease_tests {
+    use super::*;
+    use crate::store::{KvState, StoreEntry};
+
+    fn put(kv: &KvState, key: &str, value: &[u8], ts_ms: u64) {
+        kv.store.pin().insert(
+            Arc::from(key),
+            StoreEntry {
+                data:      Some(Bytes::copy_from_slice(value)),
+                timestamp: crate::hlc::pack(ts_ms, 0),
+            },
+        );
+    }
+
+    #[test]
+    fn no_lease_entry_means_permanent() {
+        let kv = KvState::new(1024);
+        put(&kv, "consensus/committed/cfg", b"v1", 1_000);
+        // Arbitrarily far in the future — still live without a lease entry.
+        assert_eq!(
+            live_committed_value(&kv, "cfg", u64::MAX / 2).as_deref(),
+            Some(b"v1".as_slice()),
+        );
+    }
+
+    #[test]
+    fn lease_fresh_then_expired() {
+        let kv = KvState::new(1024);
+        put(&kv, "consensus/committed/cfg", b"v1", 1_000_000);
+        put(&kv, "consensus/lease/cfg", &5_000u64.to_le_bytes(), 1_000_000);
+        // Inside the 5 s window.
+        assert!(live_committed_value(&kv, "cfg", 1_004_999).is_some());
+        // Exactly at the boundary — still fresh (<=).
+        assert!(live_committed_value(&kv, "cfg", 1_005_000).is_some());
+        // One ms past the window — the slot has reopened.
+        assert!(live_committed_value(&kv, "cfg", 1_005_001).is_none());
+    }
+
+    #[test]
+    fn malformed_lease_is_treated_as_permanent() {
+        // Never silently expire a commitment because a lease entry was corrupted.
+        let kv = KvState::new(1024);
+        put(&kv, "consensus/committed/cfg", b"v1", 1_000);
+        put(&kv, "consensus/lease/cfg", b"xyz", 1_000); // < 8 bytes
+        assert!(live_committed_value(&kv, "cfg", u64::MAX / 2).is_some());
+    }
+
+    #[test]
+    fn tombstoned_lease_is_treated_as_permanent() {
+        let kv = KvState::new(1024);
+        put(&kv, "consensus/committed/cfg", b"v1", 1_000);
+        kv.store.pin().insert(
+            Arc::from("consensus/lease/cfg"),
+            StoreEntry { data: None, timestamp: crate::hlc::pack(2_000, 0) },
+        );
+        assert!(live_committed_value(&kv, "cfg", u64::MAX / 2).is_some());
+    }
+
+    #[test]
+    fn tombstoned_commit_reads_as_absent() {
+        // LockGuard release tombstones the committed slot — must read as reopened.
+        let kv = KvState::new(1024);
+        kv.store.pin().insert(
+            Arc::from("consensus/committed/lock/x"),
+            StoreEntry { data: None, timestamp: crate::hlc::pack(1_000, 0) },
+        );
+        assert!(live_committed_value(&kv, "lock/x", 2_000).is_none());
+    }
+
+    #[test]
+    fn decode_lease_roundtrip_and_malformed() {
+        assert_eq!(decode_lease_ms(&encode_lease_ms(86_400_000)), Some(86_400_000));
+        assert_eq!(decode_lease_ms(&Bytes::from_static(b"short")), None);
+        assert_eq!(decode_lease_ms(&Bytes::new()), None);
     }
 }
 

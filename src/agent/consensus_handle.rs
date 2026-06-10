@@ -62,14 +62,26 @@ impl ConsensusHandle {
     ///
     /// Returns a `watch::Receiver` that fires whenever the slot is committed or
     /// overwritten. Initial value is the current committed state (or `None`).
+    ///
+    /// **Raw KV view**: the receiver reflects the stored bytes and does not
+    /// apply the epoch-lease convention — an expired leased slot still shows
+    /// its last value here. Use [`consensus_get`](Self::consensus_get) for
+    /// lease-aware reads.
     #[must_use]
     pub fn consensus_rx(&self, slot: &str) -> tokio::sync::watch::Receiver<Option<Bytes>> {
         kv_subscribe(&self.ctx, format!("{}{}", consensus_ns::COMMITTED, slot))
     }
 
-    /// Returns the last committed value for a consensus slot, or `None`.
+    /// Returns the **live** committed value for a consensus slot, or `None`.
+    ///
+    /// Lease-aware: when the slot was committed with
+    /// [`ConsensusConfig::committed_lease_secs`] set, a value whose lease
+    /// window has elapsed reads as `None` — the slot has reopened for
+    /// re-proposal. Permanent commitments (the default) never expire.
     pub fn consensus_get(&self, slot: &str) -> Option<Bytes> {
-        kv_get(&self.ctx, &format!("{}{}", consensus_ns::COMMITTED, slot))
+        crate::consensus::live_committed_value(
+            &self.ctx.kv_state, slot, crate::consensus::wall_now_ms(),
+        )
     }
 
     /// Declares this node's quorum trust slice for `group` (SCP §3.1).
@@ -292,7 +304,19 @@ impl ConsensusHandle {
             config.max_abstain_ballots,
             None,
         );
-        self.ctx.spawn_task(crate::consensus::run_consensus_listener(engine, cancel_rx, shutdown_rx));
+        // Register the voter's signal handlers *before* spawning so that a
+        // PROPOSE or COMMIT arriving before the task's first poll is queued
+        // rather than dropped — otherwise this node silently fails to vote on
+        // proposals raced against listener startup.
+        let rx_propose = self.ctx.signal_handlers.register_with_capacity(
+            std::sync::Arc::from(consensus_kind::PROPOSE), 512,
+        );
+        let rx_commit = self.ctx.signal_handlers.register_with_capacity(
+            std::sync::Arc::from(consensus_kind::COMMIT), 256,
+        );
+        self.ctx.spawn_task(crate::consensus::run_consensus_listener(
+            engine, cancel_rx, shutdown_rx, rx_propose, rx_commit,
+        ));
         ConsensusListenerHandle { _cancel: cancel_tx }
     }
 
@@ -356,7 +380,9 @@ impl ConsensusHandle {
     /// on a healthy cluster, propagation typically completes in well under one second.
     /// For read-after-write guarantees, poll until the expected value appears.
     pub fn consistent_get(&self, key: &str) -> Option<Bytes> {
-        kv_get(&self.ctx, &format!("consensus/committed/consistent/{key}"))
+        crate::consensus::live_committed_value(
+            &self.ctx.kv_state, &format!("consistent/{key}"), crate::consensus::wall_now_ms(),
+        )
             .or_else(|| kv_get(&self.ctx, key))
     }
 
@@ -409,7 +435,7 @@ impl ConsensusHandle {
         match self.group_propose(group, &slot, value, ConsensusConfig::default()).await {
             ConsensusResult::Committed { .. } => Ok(self.ctx.node_id.clone()),
             ConsensusResult::Superseded { .. } => {
-                if let Some(raw) = kv_get(&self.ctx, &format!("consensus/committed/{slot}"))
+                if let Some(raw) = self.consensus_get(&slot)
                     && let Ok(s) = std::str::from_utf8(&raw)
                         && let Ok(id) = s.parse::<NodeId>() {
                             return Ok(id);
@@ -484,5 +510,119 @@ mod tests {
     fn _assert_consistency_error_variants() {
         let _ = ConsistencyError::Superseded;
         let _ = ConsistencyError::TopologyUnsatisfied;
+    }
+
+    #[tokio::test]
+    async fn test_leased_commit_expires_and_reopens() {
+        use crate::consensus::{ConsensusConfig, ConsensusResult};
+        let a = make_agent(alloc_port(), &[]).await;
+        let c = a.consensus();
+
+        // Commit with a 0-second lease: expires as soon as the wall clock moves.
+        let leased = ConsensusConfig { committed_lease_secs: Some(0), ..ConsensusConfig::default() };
+        match c.system_propose("lease/slot", Bytes::from_static(b"v1"), leased).await {
+            ConsensusResult::Committed { .. } => {}
+            other => panic!("expected Committed, got {other:?}"),
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(c.consensus_get("lease/slot"), None, "expired lease must read as absent");
+
+        // The slot has reopened: a different value commits (no Superseded), and
+        // committing without a lease clears the stale lease entry → permanent.
+        match c.system_propose("lease/slot", Bytes::from_static(b"v2"), ConsensusConfig::default()).await {
+            ConsensusResult::Committed { .. } => {}
+            other => panic!("expected Committed on reopened slot, got {other:?}"),
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            c.consensus_get("lease/slot").as_deref(), Some(b"v2".as_slice()),
+            "permanent re-commit must not be expired by the stale lease entry",
+        );
+        a.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_leased_commit_renewal_and_supersession() {
+        use crate::consensus::{ConsensusConfig, ConsensusResult};
+        let a = make_agent(alloc_port(), &[]).await;
+        let c = a.consensus();
+
+        let leased = ConsensusConfig { committed_lease_secs: Some(3600), ..ConsensusConfig::default() };
+        match c.system_propose("lease/renew", Bytes::from_static(b"leader-a"), leased.clone()).await {
+            ConsensusResult::Committed { .. } => {}
+            other => panic!("expected Committed, got {other:?}"),
+        }
+        // Same value while the lease is live: renewal — allowed.
+        match c.system_propose("lease/renew", Bytes::from_static(b"leader-a"), leased.clone()).await {
+            ConsensusResult::Committed { .. } => {}
+            other => panic!("expected Committed (renewal), got {other:?}"),
+        }
+        // Different value while the lease is live: superseded, value unchanged.
+        match c.system_propose("lease/renew", Bytes::from_static(b"leader-b"), leased).await {
+            ConsensusResult::Superseded { .. } => {}
+            other => panic!("expected Superseded while lease live, got {other:?}"),
+        }
+        assert_eq!(c.consensus_get("lease/renew").as_deref(), Some(b"leader-a".as_slice()));
+
+        // Without a lease there is no renewal: even the same value is Superseded.
+        match c.system_propose("perm/slot", Bytes::from_static(b"x"), crate::consensus::ConsensusConfig::default()).await {
+            ConsensusResult::Committed { .. } => {}
+            other => panic!("expected Committed, got {other:?}"),
+        }
+        match c.system_propose("perm/slot", Bytes::from_static(b"x"), crate::consensus::ConsensusConfig::default()).await {
+            ConsensusResult::Superseded { .. } => {}
+            other => panic!("permanent slots must stay commit-once, got {other:?}"),
+        }
+        a.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_commit_conflict_tripwire() {
+        use crate::consensus::{
+            consensus_kind, encode_consensus_msg, ConsensusConfig, ConsensusMsg, ConsensusResult,
+        };
+        use crate::signal::SignalScope;
+        use std::sync::Arc;
+
+        let a = make_agent(alloc_port(), &[]).await;
+        let _listener = a.consensus().start_consensus_listener(ConsensusConfig::default());
+
+        match a.consensus().system_propose("trip/slot", Bytes::from_static(b"genuine"), ConsensusConfig::default()).await {
+            ConsensusResult::Committed { .. } => {}
+            other => panic!("expected Committed, got {other:?}"),
+        }
+        assert_eq!(a.system_stats().commit_conflicts, 0);
+
+        // Forge a COMMIT carrying a different value for the live slot. Local
+        // emits self-deliver, so the listener on this node receives it.
+        let forged = ConsensusMsg::Commit {
+            slot:   Arc::from("trip/slot"),
+            ballot: 42,
+            value:  Bytes::from_static(b"clobber"),
+        };
+        assert!(a.mesh().emit(consensus_kind::COMMIT, SignalScope::System, encode_consensus_msg(&forged)));
+
+        // Structural poll: the tripwire must fire and refuse to endorse.
+        let mut fired = false;
+        for _ in 0..80 {
+            if a.system_stats().commit_conflicts >= 1 { fired = true; break; }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(fired, "tripwire did not fire on conflicting COMMIT");
+        assert_eq!(
+            a.consensus().consensus_get("trip/slot").as_deref(), Some(b"genuine".as_slice()),
+            "conflicting COMMIT must not be endorsed",
+        );
+
+        // An idempotent re-COMMIT of the same value is legal and must not trip.
+        let idempotent = ConsensusMsg::Commit {
+            slot:   Arc::from("trip/slot"),
+            ballot: 43,
+            value:  Bytes::from_static(b"genuine"),
+        };
+        assert!(a.mesh().emit(consensus_kind::COMMIT, SignalScope::System, encode_consensus_msg(&idempotent)));
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert_eq!(a.system_stats().commit_conflicts, 1, "same-value COMMIT must not count as a conflict");
+        a.shutdown().await;
     }
 }

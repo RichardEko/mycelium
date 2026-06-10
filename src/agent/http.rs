@@ -303,9 +303,12 @@ async fn bulk_staging_handler(
 
 /// `GET /consensus/{slot}` — inspect the committed value and current ballot for a slot.
 ///
-/// Returns `{"slot": "…", "committed": "<base64>" | null, "ballot": <u64>}`.
-/// `committed` is `null` when no value has been committed for the slot yet.
-/// `ballot` reflects the highest ballot number seen for that slot (0 = never proposed).
+/// Returns `{"slot": "…", "committed": "<base64>" | null, "ballot": <u64>,
+/// "lease_ms": <u64> | null, "lease_expired": <bool>}`.
+/// `committed` is the **live** value: `null` when nothing has been committed
+/// yet *or* when an epoch lease has expired (the slot has reopened —
+/// `lease_expired: true` distinguishes the two). `ballot` reflects the highest
+/// ballot number seen for that slot (0 = never proposed).
 ///
 /// This endpoint is public (no auth) and is intended for operational debugging.
 async fn consensus_slot_handler(
@@ -314,19 +317,31 @@ async fn consensus_slot_handler(
 ) -> impl IntoResponse {
     use base64::Engine as _;
     let committed_key = format!("{}{}", crate::consensus::consensus_ns::COMMITTED, slot);
+    let lease_key     = format!("{}{}", crate::consensus::consensus_ns::LEASE,     slot);
     let ballot_key    = format!("{}{}", crate::consensus::consensus_ns::BALLOT,    slot);
+    let live = crate::consensus::live_committed_value(
+        &ctx.agent_ctx.kv_state, &slot, crate::consensus::wall_now_ms(),
+    );
     let store = ctx.agent_ctx.kv_state.store.pin();
-    let committed_b64 = store.get(committed_key.as_str())
-        .and_then(|e| e.data.clone())
+    let raw_present = store.get(committed_key.as_str())
+        .and_then(|e| e.data.as_ref())
+        .is_some();
+    let committed_b64 = live
         .map(|b| base64::engine::general_purpose::STANDARD.encode(&b));
+    let lease_expired = raw_present && committed_b64.is_none();
+    let lease_ms = store.get(lease_key.as_str())
+        .and_then(|e| e.data.clone())
+        .and_then(|b| crate::consensus::decode_lease_ms(&b));
     let ballot: u64 = store.get(ballot_key.as_str())
         .and_then(|e| e.data.clone())
         .map(|b| crate::consensus::decode_ballot(&b))
         .unwrap_or(0);
     Json(json!({
-        "slot":      slot,
-        "committed": committed_b64,
-        "ballot":    ballot,
+        "slot":          slot,
+        "committed":     committed_b64,
+        "ballot":        ballot,
+        "lease_ms":      lease_ms,
+        "lease_expired": lease_expired,
     }))
 }
 
@@ -340,6 +355,8 @@ async fn stats_handler(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
         "store_entries": kv.store.pin().len(),
         "dropped_frames": kv.dropped_frames.load(std::sync::atomic::Ordering::Relaxed),
         "task_count":    task_count,
+        "commit_conflicts": ctx.agent_ctx.commit_conflicts
+            .load(std::sync::atomic::Ordering::Relaxed),
     }))
 }
 

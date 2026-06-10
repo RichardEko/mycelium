@@ -63,6 +63,7 @@
 //! | `sys/topology-override/{group}`     | Consensus — operator escape hatch (value: `b"true"`)         |
 //! | `consensus/committed/{slot}`        | Consensus — committed slot state                             |
 //! | `consensus/ballot/{slot}`           | Consensus — ballot tracking                                  |
+//! | `consensus/lease/{slot}`            | Consensus — epoch-lease window (u64 LE ms); written when `ConsensusConfig::committed_lease_secs` is set; expiry is evaluated read-side |
 //! | `consensus/trust/{group}/{node}`    | Consensus — trust slices                                     |
 //! | `cap/{node}/{ns}/{name}`            | Node-level capability advertisements                         |
 //! | `cap/{node}/locality/self`          | Locality (also a capability — single namespace, single shape)|
@@ -90,6 +91,16 @@
 //! owns the `consensus/` prefix and reads `sys/topology-override` as a
 //! policy input, both of which are explicitly part of its namespace
 //! contract.
+//!
+//! **Ownership is promise-strength, not mechanism-strength.** The substrate
+//! does not enforce this table: any node can write any key, and LWW will
+//! accept it. Higher layers' invariants (e.g. "committed slots are
+//! commit-once") are therefore exactly as strong as every node's compliance
+//! with this contract — by design, since teaching Layer I to enforce a
+//! higher layer's law would invert the dependency that makes it the
+//! foundation. Violations are made *legible* instead: the consensus
+//! listener's commit-conflict tripwire ([`SystemStats::commit_conflicts`])
+//! detects and refuses to endorse conflicting commits.
 //!
 //! ## Durability contract
 //!

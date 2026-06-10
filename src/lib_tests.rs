@@ -127,6 +127,7 @@ fn spawn_handler(
         caps_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         bulk_transport: Arc::new(BulkTransport::new(0, Duration::from_secs(5), 64)),
         rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        commit_conflicts: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         tls: std::sync::OnceLock::new(),
         peer_keys: Arc::new(papaya::HashMap::new()),
         peers: Arc::new(papaya::HashMap::new()),
@@ -525,6 +526,7 @@ async fn test_subscribe_notified_via_gossip() {
             caps_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             bulk_transport: Arc::new(BulkTransport::new(0, Duration::from_secs(5), 64)),
             rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            commit_conflicts: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             tls: std::sync::OnceLock::new(),
             peer_keys: Arc::new(papaya::HashMap::new()),
             peers: Arc::new(papaya::HashMap::new()),
@@ -2217,3 +2219,4 @@ async fn test_cross_group_propose_requires_all_group_quorums() {
     pair.a.shutdown().await;
     pair.b.shutdown().await;
 }
+

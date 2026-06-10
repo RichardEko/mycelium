@@ -9,7 +9,7 @@ use bytes::Bytes;
 use parking_lot::RwLock;
 use std::{
     sync::{
-        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering},
         Arc,
     },
     time::Instant,
@@ -175,6 +175,19 @@ pub struct SystemStats {
     /// at the configured ceiling means the semaphore is dropping requests — raise
     /// `max_concurrent_bulk_handlers` or reduce the bulk call rate.
     pub active_bulk_handlers: u64,
+    /// Cumulative commit-conflict detections by this node's consensus listener.
+    ///
+    /// Incremented when a `COMMIT` arrives carrying a **different** value for a
+    /// slot whose existing commitment is still live (slots are commit-once;
+    /// epoch-leased slots reopen only after lease expiry). Each detection means
+    /// a raced double-commit, a buggy proposer, or a forged commit message —
+    /// the listener refuses to endorse the conflicting value and logs a `warn!`.
+    ///
+    /// **Any non-zero value warrants investigation.** Namespace ownership of
+    /// `consensus/` is promise-strength (convention, not mechanism): this
+    /// counter is the tripwire that makes violations legible. Requires
+    /// `start_consensus_listener` — nodes without a listener do not detect.
+    pub commit_conflicts: u64,
 }
 
 /// Shared infrastructure extracted from `GossipAgent` into a single `Arc` so that
@@ -270,6 +283,12 @@ pub(crate) struct TaskCtx {
     /// The connection handler's fast-path removes the entry and fires the
     /// oneshot instead of fanning out through signal_handlers.
     pub(crate) rpc_pending: Arc<std::sync::Mutex<std::collections::HashMap<u64, tokio::sync::oneshot::Sender<crate::signal::Signal>>>>,
+
+    // ── Layer III — Consensus ────────────────────────────────────────────────────
+    /// Cumulative commit-conflict detections (see `SystemStats::commit_conflicts`).
+    /// Incremented by the consensus listener's tripwire; Relaxed ordering —
+    /// purely diagnostic, surfaced via `system_stats()` and `/stats`.
+    pub(crate) commit_conflicts: Arc<AtomicU64>,
 
     // ── Security ─────────────────────────────────────────────────────────────────
     /// TLS context (server + client configs + signing key). Unset when the
@@ -559,6 +578,7 @@ impl GossipAgent {
                 config.max_concurrent_bulk_handlers,
             )),
             rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            commit_conflicts: Arc::new(AtomicU64::new(0)),
             tls: std::sync::OnceLock::new(),
             peer_keys: Arc::new(papaya::HashMap::new()),
             peers: Arc::clone(&peers_arc),
