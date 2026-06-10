@@ -4,6 +4,35 @@ Project evaluation across 25 orthogonal dimensions, tracked over time.
 Each run is appended by `/mycelium-analysis`. Higher is better; 10 = no
 meaningful improvement possible at the current stage of the project.
 
+**Methodology note:** Runs 1–15 used methodology v1 (read-and-rate). From
+Run 16, methodology v2 (M2) applies: execution-evidence gate (9 requires
+named execution evidence from the run; 10 requires external validation),
+mandatory falsification probes against the top-3 dimensions, rotating
+five-dimension deep-dives, blind scoring, a cadence gate, and this
+calibration ledger. Do not compare absolute scores across the v1/v2 boundary.
+
+## Calibration Ledger
+
+Records bugs later found in dimensions that scored ≥ 8 while the bug already
+existed. This is the framework's own report card.
+
+- 2026-06-10: **Concurrency Correctness** scored 8–9 in Runs 9–15 while the
+  consensus listener registration race existed (handlers registered on the
+  task's first poll, so proposals racing listener startup were silently
+  dropped — node fails to vote). Found by an adversarial test during the
+  lease/tripwire work; fixed same day (synchronous registration in
+  `start_consensus_listener`).
+- 2026-06-10: **Documentation** scored 8–9 in Runs 10–15 while CLAUDE.md
+  conflated the wire hop-count TTL with key evaporation ("every key has a
+  TTL"); evaporation is a read-side freshness convention
+  (`CapEntry::is_fresh`), and the store never time-evicts live keys. Found by
+  doc-vs-code cross-check during a philosophy audit; docs corrected same day.
+- 2026-06-10: **Semantic Correctness** scored 8–9 in Runs 11–15 while LWW
+  diverged permanently on equal-timestamp concurrent data writes (first
+  arrival won; anti-entropy could not detect it because the digest hashes
+  key+timestamp only). Found by M2 falsification probe in Run 16; fixed same
+  day (`lww_wins` deterministic data-vs-data tiebreak).
+
 **Dimensions:** Philosophy/Coherence · Conceptual Integrity · Architecture ·
 Modularity · API Design · Error Handling · Configurability · Language Best
 Practices · Concurrency Correctness · Resource Management · Semantic Correctness ·
@@ -412,3 +441,188 @@ Changes since Run 11: Anti-entropy timing resonance bug fixed — cooldown reduc
 | 24 | Developer Experience | 9 | `cargo build --lib --no-default-features` clean; CONTRIBUTING.md + CLAUDE.md onramp; tuning invariants help operators configure correctly without reading source; handle pattern learnable from one example |
 | 25 | Dependency Hygiene | 9 | `tokio test-util` in `[dev-dependencies]`; `reqwest` optional; `papaya` single concurrent map; all optional deps feature-gated; `Cargo.lock` present; `--no-default-features` compiles cleanly |
 | — | **Mean** | **8.7** | |
+
+---
+
+## 2026-06-07 — Run 13
+
+Changes since Run 12: `GossipError::Io` variant doc clarified — explicitly states it fires only during startup-time I/O (TCP listener bind, WAL read, TLS setup); runtime peer errors absorbed internally and surfaced via `dropped_frames`/`peer_drop_counts()`, callers directed to `err.kind()` for sub-classification. `BulkTransport::active_handlers: Arc<AtomicU64>` added — incremented before `tokio::spawn`, decremented via `ActiveHandlerGuard` RAII on task exit (including panic/cancel); surfaced as `SystemStats::active_bulk_handlers`; CLAUDE.md and `docs/operations/tuning.md` monitoring checklist updated. ROADMAP.md v2.0 Milestones extended with items 6 (RBAC gossip-level authorization, `compliance` feature, trigger = regulated-industry deployment) and 7 (cluster-wide distributed rate-limiting, trigger = confirmed intra-cluster abuse). All 276 unit tests, 12 integration scenarios, 100-node scale, and 21-node resilience pass.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 9 | Holland/Jini/Paremus synthesis fully honored; library-not-platform intact; no feature drift |
+| 2 | Conceptual Integrity | 9 | Eight-handle facade consistent; `CapabilityReg` naming resolved last ambiguity; all idioms aligned |
+| 3 | Architecture | 9 | KvStore/KvState split materialises Layer I/II boundary; namespace table enforced; gateway feature gate clean; entanglement documented with v2 roadmap |
+| 4 | Modularity | 9 | Eight independently understandable, moveable, storable handles; TaskCtx coupling explicit; v2 workspace split roadmapped |
+| 5 | API Design | 9 | `CapabilityReg` drop semantics explicit at type level; `#[must_use]` on advertisement; eight-handle facade minimal and orthogonal; no footguns |
+| 6 | Error Handling Model | 8 | `Io` doc now distinguishes startup-vs-runtime boundary and directs callers to `err.kind()`; `#[non_exhaustive]` on all 9 public enums; numerous infallible `.expect()` are correct but no structured taxonomy between them |
+| 7 | Configurability | 9 | 16+ tunable parameters with hard invariants and scaling guidelines; tuning.md makes the surface approachable; all knobs exposed without code changes |
+| 8 | Language Best Practices | 9 | 0 clippy warnings at full feature matrix; `#![deny(unsafe_code)]`; `ActiveHandlerGuard` RAII idiomatic; infallible `.expect()` documented with invariant strings |
+| 9 | Concurrency Correctness | 9 | Lock-Order Table documents 6 sites; `active_handlers` uses Relaxed (correct for a diagnostic counter); `ActiveHandlerGuard` covers drop/panic; no new contention |
+| 10 | Resource Management | 9 | `active_bulk_handlers` via `ActiveHandlerGuard` closes the last untracked resource gap; all lifecycle patterns RAII-governed and observable |
+| 11 | Semantic Correctness | 9 | Anti-entropy timing resonance eliminated; bootstrap re-trigger loop correct; LWW convergence and split-brain property-tested; scenario 04 reliable |
+| 12 | Robustness | 9 | All 12 integration + 100-node scale + 21-node resilience (3 churn cycles) pass; Ed25519 fail-closed; `MAX_FRAME_BYTES`; per-peer rate-limiting |
+| 13 | Security | 8 | mTLS + Ed25519 + bearer token + signed consensus + `signal_rx_from` + per-peer rate-limiting; RBAC and cluster-wide rate-limiting now formally documented v2 milestones with design sketches |
+| 14 | Failure Mode Legibility | 8 | Structured error variants carry field context; `active_bulk_handlers` surfaces handler saturation; `Io` doc points to `err.kind()`; Nack reasons still not surfaced to callers |
+| 15 | Performance | 9 | 151 ns set, 16 ns get; O(K) fan-out; lock-free hot paths; `active_handlers` counter is Relaxed atomic — zero hot-path cost |
+| 16 | Scalability | 8 | O(N²) TCP cliff documented; `max_active_connections` + `max_inbound_frames_per_sec` mitigations operational; v2 SWIM transport and distributed rate-limiting roadmapped |
+| 17 | Testability | 8 | Deterministic, injectable, no hidden global state; proptest on LWW/HLC/framing; `ConsensusPair` helper; `TaskCtx` still wired-through not injected |
+| 18 | Test Architecture | 9 | 276 unit + 12 integration + 2 fuzz + scale + resilience + proptest; five-tier pyramid; all pass; full feature matrix at 0 warnings |
+| 19 | Observability | 8 | Prometheus + Grafana + tracing spans + `task_count` + `active_bulk_handlers` + `/consensus/{slot}`; tuning.md checklist updated; OTEL still only in skillrunner |
+| 20 | Debuggability | 8 | `/consensus/{slot}` + `task_count` + `active_bulk_handlers` + `peer_drop_counts()` + KV dump + tuning.md checklist; consensus ballot state not directly inspectable |
+| 21 | Operational Readiness | 9 | `/ready` + `shutdown_with_timeout` + `SyncMode::Flush` + Docker health-checks + tuning.md with 5 hard invariants + monitoring checklist includes `active_bulk_handlers` |
+| 22 | Evolvability | 9 | `#[non_exhaustive]` on all 9 enums; wire version policy tested; ROADMAP v2 milestones now 7 items (RBAC + distributed rate-limiting explicitly designed); CHANGELOG comprehensive |
+| 23 | Documentation | 9 | All 13 guide chapters; CONTRIBUTING.md; `error.rs` doc explains startup-vs-runtime I/O boundary; tuning.md monitoring checklist complete; sub-handle API examples consistent |
+| 24 | Developer Experience | 9 | No-default-features clean; CLAUDE.md + CONTRIBUTING.md onramp; tuning invariants let operators configure without reading source; `active_bulk_handlers` observable without code changes |
+| 25 | Dependency Hygiene | 9 | `tokio test-util` in `[dev-dependencies]`; `reqwest` optional; all optional deps feature-gated; `Cargo.lock` present; `--no-default-features` compiles cleanly |
+| — | **Mean** | **8.8** | |
+
+---
+
+## 2026-06-08 — Run 14
+
+Changes since Run 13: no code changes (`Cargo.lock`, `docs/analysis/ratings.md`, `docs/philosophy.html` are the only working-tree modifications). Today's substantive work is a documentation/theoretical expansion: `docs/philosophy.html` now carries §9 (Promise Theory Convergence — Holland scope distinction vs Burgess), §10 (Subsidiarity Principle — Ostrom polycentric governance + Olson capture dynamics + Bookchin/Öcalan mandate TTL + Dewey epistemic symmetry); seven properties (1–4 epistemic correctness, 5 Capture Resistance, 6 Mandate TTL, 7 Epistemic Symmetry) and four failure modes (I acute collapse, II chronic erosion, III internal capture, IV class entrenchment) are now articulated. `docs/internal/paper2_substrate_convergence.html` working draft exists for Paper 2a (HLKS convergence, SFI target) and 2b (capture dynamics). `docs/internal/compliance_audit_mechanics.html` added for SOC 2 / HIPAA operational mechanics. Paper 1 ("The Coordinator Trap", Nicholson 2026) is now confirmed on SSRN; source at `docs/arxiv/main.tex`. 290 unit tests pass at full feature matrix `--features tls,metrics,a2a,llm`.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 9 | Philosophy document now articulates four-tradition convergence (Holland/Hayek/Burgess/Ostrom) plus mandate TTL (Bookchin/Öcalan) and epistemic symmetry (Dewey); seven substrate properties and four failure modes formalised; implementation continues to satisfy Properties 1–4 by design and Property 6 structurally (TTL'd KV entries dissolving Layer III roles); no feature drift; theoretical grounding now deeper than implementation needs strictly require |
+| 2 | Conceptual Integrity | 9 | Eight-handle facade consistent; `CapabilityReg` naming resolved; all idioms aligned; philosophy framework consistent across philosophy.html, paper2 draft, and CLAUDE.md |
+| 3 | Architecture | 9 | KvStore/KvState split materialises Layer I/II boundary; namespace table enforced; gateway feature gate clean; entanglement documented with v2 roadmap; no regressions |
+| 4 | Modularity | 9 | Eight independently understandable, moveable, storable handles; TaskCtx coupling explicit; v2 workspace split roadmapped |
+| 5 | API Design | 9 | `CapabilityReg` drop semantics explicit at type level; `#[must_use]` on advertisement; eight-handle facade minimal and orthogonal; no footguns |
+| 6 | Error Handling Model | 8 | `Io` doc distinguishes startup-vs-runtime boundary; `#[non_exhaustive]` on all 9 public enums; structured `InvalidField`/`FieldConflict`/`NodeIdMismatch` variants; `Network(String)` catch-all remains for unclassified I/O; no structured error code taxonomy |
+| 7 | Configurability | 9 | 16+ tunable parameters with hard invariants and scaling guidelines in `docs/operations/tuning.md`; all knobs exposed without code changes |
+| 8 | Language Best Practices | 9 | 0 clippy warnings at full feature matrix; `#![deny(unsafe_code)]`; `ActiveHandlerGuard` RAII idiomatic; infallible `.expect()` documented with invariant strings |
+| 9 | Concurrency Correctness | 9 | Lock-Order Table documents 6 sites; `active_handlers` Relaxed correct for diagnostic counter; `ActiveHandlerGuard` covers drop/panic; memory ordering policy codified in CLAUDE.md |
+| 10 | Resource Management | 9 | `active_bulk_handlers` via `ActiveHandlerGuard` closes the last untracked resource gap; all lifecycle patterns RAII-governed and observable |
+| 11 | Semantic Correctness | 9 | Anti-entropy timing resonance eliminated (`interval-1` cooldown); bootstrap re-trigger loop correct; LWW convergence and split-brain property-tested; epidemic Paxos vs true linearizability gap acknowledged in docs |
+| 12 | Robustness | 9 | All 12 integration + 100-node scale + 21-node resilience pass; 290 unit tests at full feature matrix; Ed25519 fail-closed; `MAX_FRAME_BYTES`; per-peer rate-limiting |
+| 13 | Security | 8 | mTLS + Ed25519 + bearer token + signed consensus + `signal_rx_from` + per-peer rate-limiting; RBAC and cluster-wide rate-limiting are documented v2 milestones with design sketches; `compliance` feature unimplemented |
+| 14 | Failure Mode Legibility | 8 | Structured error variants carry field context; `active_bulk_handlers` surfaces handler saturation; `Io` doc points to `err.kind()`; Nack reasons still not surfaced to callers |
+| 15 | Performance | 9 | 151 ns set, 16 ns get; `kv_payload_size` and `capability_resolve` benchmarks; O(K) fan-out; lock-free hot paths; `active_handlers` counter is Relaxed atomic — zero hot-path cost |
+| 16 | Scalability | 8 | O(N²) TCP cliff documented with cluster-size table; `max_active_connections` + `max_inbound_frames_per_sec` mitigations operational; v2 SWIM hybrid transport and distributed rate-limiting on roadmap |
+| 17 | Testability | 8 | Deterministic, injectable, no hidden global state; proptest on LWW/HLC/framing; `ConsensusPair` helper; `EchoBackend` for LLM; `TaskCtx` still wired-through rather than injected |
+| 18 | Test Architecture | 9 | 290 unit (full feature matrix `tls,metrics,a2a,llm`) + 12 integration + 2 fuzz + 3 overlay + 2 scale (100-node + 21-node resilience) + proptest; five-tier pyramid; all pass |
+| 19 | Observability | 8 | Prometheus + Grafana + tracing spans + `task_count` + `active_bulk_handlers` + `/consensus/{slot}`; tuning.md checklist; OTEL still only in skillrunner, not core |
+| 20 | Debuggability | 8 | `/consensus/{slot}` + `task_count` + `active_bulk_handlers` + `peer_drop_counts()` + KV dump + tuning.md checklist; consensus ballot state not directly inspectable from API |
+| 21 | Operational Readiness | 9 | `/ready` + `shutdown_with_timeout` + `SyncMode::Flush` + Docker health-checks + `docs/operations/tuning.md` with 5 hard invariants + monitoring checklist |
+| 22 | Evolvability | 9 | `#[non_exhaustive]` on all 9 public enums; wire version policy tested; ROADMAP v2 milestones now include RBAC, distributed rate-limiting, self-tuning metabolism (8–10); CHANGELOG comprehensive |
+| 23 | Documentation | 9 | All 13 guide chapters; CONTRIBUTING.md; `docs/philosophy.html` now articulates four-tradition cross-domain framework with seven properties and four failure modes; Paper 1 on SSRN; Paper 2a/2b draft at `docs/internal/paper2_substrate_convergence.html`; `docs/internal/compliance_audit_mechanics.html` added; README capabilities section migration guide for flat-API → sub-handle still absent |
+| 24 | Developer Experience | 9 | `cargo build --lib --no-default-features` clean; CLAUDE.md + CONTRIBUTING.md onramp; tuning invariants let operators configure without reading source; eight-handle pattern learnable from one example |
+| 25 | Dependency Hygiene | 9 | `tokio test-util` in `[dev-dependencies]`; `reqwest` optional; all optional deps feature-gated; `Cargo.lock` present; `--no-default-features` compiles cleanly |
+| — | **Mean** | **8.8** | |
+
+---
+
+## 2026-06-10 — Run 15
+
+Changes since Run 14: v1.1.0 released (commercial-license note in `Cargo.toml`, Tathata Systems); ROADMAP v1.x gaps #7 (durable audit trail), #8 (RBAC subset), #9 (SSO/Entra) committed, plus an uncommitted 87-line **production-hardening gate** section naming four sub-gates (AuthN/Z+RBAC, tamper-evident audit, crown-jewel posture, support/SLA) as the regulated-buyer evaluation lens; **entry-volume scale test** added (`make test-scale-entries` — 30 nodes, 5 000×512 B entries, 7 phases measuring live-gossip fraction, anti-entropy sweep tail, stability, random-sample integrity, backpressure; burst and paced write modes; documented in CLAUDE.md with rationale for staying below the iptables ceiling); **`examples/coordinator_comparison.rs`** (+ plot/runner scripts) — empirical companion to Paper 2a measuring misroute rate, staleness, and decision latency for broker-mediated vs locally-resolved routing on the identical substrate; compiles clean. Verified this run: 290/290 unit tests at full feature matrix (`tls,metrics,a2a,llm`), clippy 0 warnings.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 9 | Holland/Hayek/Burgess/Ostrom synthesis intact; `coordinator_comparison.rs` turns the core thesis into a measurable experiment on the same substrate — the strongest philosophy-to-code alignment artifact yet; no feature drift |
+| 2 | Conceptual Integrity | 9 | Eight-handle facade consistent; new example uses current sub-handle API (`kv()`, `service()`) idiomatically; entry-volume test follows established runner/helper conventions |
+| 3 | Architecture | 9 | Three-layer model and namespace table unchanged; KvStore/KvState split intact; new work is test/example/roadmap only — no structural change, no regressions |
+| 4 | Modularity | 9 | Eight independently storable handles; `TaskCtx` (22 fields) remains the documented God Object with v2 workspace-split direction; no new coupling |
+| 5 | API Design | 9 | No surface changes; `CapabilityReg` drop semantics, `#[must_use]`, eight-handle orthogonality all persist; example code demonstrates the API reads naturally at ~350 lines |
+| 6 | Error Handling Model | 8 | No changes; structured variants + `#[non_exhaustive]` on all 9 public enums; `Network(String)` catch-all remains; no structured error code taxonomy |
+| 7 | Configurability | 9 | Entry-volume test exercises `GOSSIP_WRITER_CHANNEL_DEPTH=4096` and `GOSSIP_MAX_STORE_ENTRIES=200000` overrides with documented rationale — config surface proven tunable for volume workloads without code changes |
+| 8 | Language Best Practices | 9 | 0 clippy warnings at full feature matrix verified this run; `#![deny(unsafe_code)]`; example code clean (env-var `unwrap()`s acceptable in example context) |
+| 9 | Concurrency Correctness | 9 | Lock-Order Table (6 sites, no nested acquisition) unchanged; memory ordering policy intact; no new concurrency code in library |
+| 10 | Resource Management | 9 | No changes; `ActiveHandlerGuard` RAII, `task_count`/`active_bulk_handlers` observability persist |
+| 11 | Semantic Correctness | 9 | 290/290 tests pass; LWW convergence and cross-group split-brain property-tested; anti-entropy timing fixes persist; entry-volume test adds end-to-end convergence-completeness verification (5 000 entries, byte-count integrity sample) |
+| 12 | Robustness | 9 | No changes; Ed25519 fail-closed, mutex poison recovery, frame caps, per-peer rate-limiting all persist; entry-volume test confirms no eviction/flapping at 5 000-entry volume |
+| 13 | Security | 8 | Production-hardening gate section converts vague "harden it" into four concrete sub-gates with existing/in-flight/to-design inventory per gate — excellent planning legibility, but gaps #7–#9 remain unimplemented; crown-jewel posture (egress policy, at-rest encryption, threat model) identified as new work |
+| 14 | Failure Mode Legibility | 8 | No changes; Nack reasons still not surfaced to callers; entry-volume test's backpressure phase gives operators an actionable `dropped_frames` → channel-depth diagnostic |
+| 15 | Performance | 9 | No hot-path changes; benchmarks persist; entry-volume test adds write-throughput and convergence-latency measurement at the system level |
+| 16 | Scalability | 8 | Entry-volume axis now empirically characterised (live-gossip fraction vs anti-entropy sweep tail at 5 000 entries × 30 nodes) — the second scale axis is no longer untested; O(N²) TCP topology cliff still present in v1.x with SWIM transport deferred to v2 |
+| 17 | Testability | 8 | No structural changes; `TaskCtx` still wired-through rather than injected; deterministic helpers persist |
+| 18 | Test Architecture | 9 | Suite now spans six tiers: 290 unit + proptest + 2 fuzz + 12 integration + 3 overlay + 3 scale variants (100-node node-count, 21-node resilience, 30-node entry-volume) — the new test covers the previously unvalidated volume axis with explicit phase structure; consensus-protocol property tests still absent |
+| 19 | Observability | 8 | No changes; Prometheus + Grafana + tracing spans + `task_count` + `active_bulk_handlers` + `/consensus/{slot}`; OTEL still only in skillrunner |
+| 20 | Debuggability | 8 | No changes; consensus ballot state still not directly inspectable beyond `/consensus/{slot}` |
+| 21 | Operational Readiness | 9 | Entry-volume test doubles as a capacity-planning tool (paced mode simulates sustained-rate load; overrides documented in Makefile help); `/ready`, `shutdown_with_timeout`, tuning.md invariants persist |
+| 22 | Evolvability | 9 | Production-hardening gate maps every security gap to a procurement-facing sub-gate with explicit existing/in-flight/to-design status — debt is not just documented but sequenced; v1.x gaps #7–#9 and v2 milestones 8–10 committed; wire policy unchanged |
+| 23 | Documentation | 9 | CLAUDE.md entry-volume section explains both the what and the why-30-nodes; coordinator_comparison doc-comment ties code to Paper 2a §9; philosophy.html §9–§10 (Promise Theory, Subsidiarity) carried from Run 14; all 13 guide chapters persist |
+| 24 | Developer Experience | 9 | `make test-scale-entries` with `ENTRY_COUNT`/`ENTRY_BYTES`/`WRITE_DELAY_MS`/`SCALE_ENTRIES_WORKERS` overrides and worked examples in Makefile comments; no CI config in repo remains the main gap |
+| 25 | Dependency Hygiene | 9 | No dependency changes; v1.1.0 published with all optional deps feature-gated; transitive `block v0.1.6` future-incompat warning (dev-deps only) persists |
+| — | **Mean** | **8.8** | |
+
+---
+
+## 2026-06-10 — Run 16 (M2)
+
+**Methodology v2 rebaseline** — first run under the execution-evidence gate,
+falsification quota, and calibration ledger. Scores are not comparable to the
+v1 series; the step change from 8.8 to 8.1 is methodological, not regression.
+Blind-scoring exemption: prior runs were unavoidably in context this session;
+the blind rule applies from Run 17.
+
+Deep-dive dimensions this run: 9 (Concurrency), 10 (Resource Mgmt),
+11 (Semantic Correctness), 12 (Robustness), 18 (Test Architecture).
+Next run by rotation: 1–5.
+
+Execution evidence this run: 302/302 unit tests at full feature matrix
+(`tls,metrics,a2a,llm`); clippy 0 warnings (`-D warnings`, full matrix);
+`--no-default-features` build; all examples build; 12/12 integration
+scenarios; 100-node scale 5/5 with 0 dropped frames (fresh Docker VM);
+21-node resilience 10/10; 30-node entry-volume 6/6 (100% live-gossip
+fraction); 3 falsification probes executed.
+
+Changes since Run 15: epoch-leased commitments (`committed_lease_secs` +
+`consensus/lease/{slot}` + lease-aware readers); commit-conflict tripwire
+(`SystemStats::commit_conflicts`, `/stats`); proposer-side clobber guard;
+consensus listener registration race fixed (synchronous handler
+registration); LWW equal-timestamp tiebreak (`lww_wins`); philosophy §5a
+(Anderson / symmetry breaking / corrected litmus); CLAUDE.md hop-TTL vs
+evaporation correction + Layer III invariant-posture section; namespace
+table promise-strength note.
+
+### Findings
+
+- **Major (fixed in-run)** — *Semantic Correctness*: LWW diverged permanently
+  on equal-timestamp concurrent data writes; first arrival won on each node,
+  and the value-blind anti-entropy digest (key ⊕ timestamp) made the
+  divergence undetectable. Probe: `lww_equal_timestamp_concurrent_data_converges`
+  (initially failed: node1=`from-a`, node2=`from-b`). Fixed with deterministic
+  data-vs-data tiebreak in `lww_wins`; probe kept as regression test;
+  calibration ledger entry recorded. Dimension capped at 6 this run per M2.
+- **Probe passed** — *Robustness*: live agent survived garbage bytes, a 4 GiB
+  length-prefix announcement, and zero-length frames on the gossip port; no
+  dead shards, fully serviceable after (`probe_garbage_on_gossip_port_survives`,
+  kept).
+- **Probe passed** — *Resource Management*: `shutdown_with_timeout` drains all
+  tracked tasks to 0 and releases the gossip port for rebinding
+  (`probe_shutdown_drains_tasks_and_releases_port`, kept).
+- **Test-infra (not a dimension cap)** — repeated same-day 100-node rounds
+  degrade Docker VM formation (PASS → 80/100 → 97/100); fresh engine restart
+  → 5/5 with 0 drops. Documented in CLAUDE.md.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 8 | Reading-capped (M2). §5a closes the Layer III derivation gap (Anderson level-laws, corrected litmus #3, mandate-TTL-for-decisions); lease feature is the philosophy applied to code; `coordinator_comparison` exists but was not executed this run |
+| 2 | Conceptual Integrity | 8 | Reading-capped. Lease deliberately reuses the read-side evaporation convention (`CapEntry::is_fresh` pattern) — idiom-consistent; tripwire follows the diagnostics-counter idiom |
+| 3 | Architecture | 8 | Reading-capped. Tripwire/lease kept wholly in Layer III (no substrate write-guard — dependency direction preserved and now documented in CLAUDE.md §Layer III invariant posture); `--no-default-features` build executed |
+| 4 | Modularity | 8 | Reading-capped. Eight handles unchanged; `commit_conflicts` added to TaskCtx (the God Object grows by one diagnostic field; v2 split still roadmapped) |
+| 5 | API Design | 8 | Reading-capped. `committed_lease_secs: Option<u64>` opt-in with `None` default preserves behaviour; `consensus_rx` raw-view vs `consensus_get` lease-aware split documented |
+| 6 | Error Handling Model | 7 | `Network(String)` catch-all and no structured error-code taxonomy persist (v1 finding, unchanged) |
+| 7 | Configurability | 8 | Suites exercised env-override surface (`GOSSIP_WRITER_CHANNEL_DEPTH` etc.) but the config surface was not deep-dived this run |
+| 8 | Language Best Practices | 9 | **Evidence:** clippy 0 warnings at `-D warnings`, full feature matrix, executed this run; `#![deny(unsafe_code)]`; `lww_wins` extracted as shared comparator rather than duplicated |
+| 9 | Concurrency Correctness | 8 | Deep-dive. Listener registration race found and fixed this session (calibration ledger); fix verified by 302 unit + 12/12 integration re-runs. Capped at 8 as the ledger now shows this dimension's artifacts (lock tables, ordering policy) did not predict the race |
+| 10 | Resource Management | 9 | Deep-dive + probe. **Evidence:** `probe_shutdown_drains_tasks_and_releases_port` passed (task_count → 0, port rebindable); `ActiveHandlerGuard`/RAII patterns re-verified |
+| 11 | Semantic Correctness | 6 | Deep-dive + probe. **Capped: Major finding this run** (LWW equal-timestamp divergence, see Findings). Fixed in-run with deterministic tiebreak + regression test; 302 unit incl. convergence tests pass — expect recovery next run with sustained evidence |
+| 12 | Robustness | 9 | Deep-dive + probe. **Evidence:** `probe_garbage_on_gossip_port_survives` passed; 21-node resilience 10/10 re-executed post-LWW-change; Ed25519 fail-closed and frame caps re-verified by suite |
+| 13 | Security | 8 | tls-feature unit tests executed (signing/verification paths); tripwire adds violation legibility; gaps #7–#9 (audit, RBAC, SSO) remain unimplemented v1.x line items |
+| 14 | Failure Mode Legibility | 8 | Tripwire `warn!` + `commit_conflicts` counter + `lease_expired` on `/consensus/{slot}` all tested this run; consensus Nack reasons still not surfaced to callers |
+| 15 | Performance | 8 | Capped: no benchmarks executed this run. `lww_wins` adds a byte-compare only on the equal-timestamp path (nonce-deduped duplicates never reach it) — reading-verified only |
+| 16 | Scalability | 8 | **Evidence:** 100-node 5/5 with 0 dropped frames (fresh VM) + 30-node entry-volume 6/6 executed this run; held at 8 because the O(N²) TCP ceiling remains the structural v1.x constraint (SWIM transport is v2) |
+| 17 | Testability | 8 | Probes were straightforward to write against public API + test helpers (good sign); `TaskCtx` still wired-through rather than injected |
+| 18 | Test Architecture | 9 | Deep-dive. **Evidence:** all tiers executed this run — 302 unit (3 new probes now permanent) + proptest + 2 fuzz targets (built) + 12/12 integration + 3 scale suites; falsification quota now institutionalised in the methodology |
+| 19 | Observability | 8 | `commit_conflicts` on `/stats`; suites exercised health/ready/stats endpoints; OTEL still skillrunner-only |
+| 20 | Debuggability | 8 | `/consensus/{slot}` now distinguishes never-committed from lease-expired; ballot internals still not inspectable |
+| 21 | Operational Readiness | 9 | **Evidence:** all four Docker suites executed this run end-to-end against `/health`, `/ready`, `/stats`; VM-fatigue diagnostic procedure added to CLAUDE.md |
+| 22 | Evolvability | 8 | Reading-capped. CHANGELOG discipline maintained (3 Added + 2 Fixed this run, incl. rolling-upgrade note for the LWW tiebreak); wire version unchanged |
+| 23 | Documentation | 8 | Reading-capped. Hop-TTL vs evaporation conflation fixed (calibration ledger); §5a + namespace lease row + Layer III posture section added; guide chapters not re-verified this run |
+| 24 | Developer Experience | 8 | Reading-capped. Builds + suites green from clean state; no CI config in repo remains the standing gap |
+| 25 | Dependency Hygiene | 8 | `--no-default-features` build executed; no dep changes; transitive `block v0.1.6` future-incompat (dev-deps only) persists |
+| — | **Floor (lowest 3)** | **6, 7, 8** | Semantic Correctness (6, capped by finding), Error Handling (7), ten dimensions tied at 8 — Security is the most actionable of them |
+| — | Mean (continuity footnote) | 8.1 | not a target; M2 step change — see methodology note |

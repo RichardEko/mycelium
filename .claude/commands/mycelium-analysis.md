@@ -2,6 +2,30 @@ Evaluate the Mycelium project across 25 orthogonal dimensions, rate each 1–10,
 then append a timestamped entry to `docs/analysis/ratings.md` so the series
 can be tracked over time.
 
+**Methodology v2 (M2), adopted 2026-06-10.** Runs 1–15 used v1 (read-and-rate).
+M2 exists because v1 saturated: by Run 13 the scores measured the presence of
+artifacts (lock tables, policies, guides) rather than the absence of defects,
+and a real concurrency race shipped under fifteen consecutive 8–9 scores. M2
+converts the skill from an assessment into an audit: scores require execution
+evidence, every run must attempt to falsify its own best scores, and the series
+keeps a calibration ledger that records when high scores were later proven
+wrong. Entries are headed `Run {N} (M2)`; do not compare absolute values across
+the v1/v2 boundary.
+
+## Step 0 — Cadence gate and blind-scoring rule
+
+**Cadence gate.** Before anything else, check the diff since the previous run
+(commits + working tree). If there is no material change to code, tests, or
+docs (e.g. only `ratings.md` itself), do NOT produce scores: append a one-line
+note-only entry ("Run {N} (M2) — skipped, no material diff since Run {N−1}")
+and stop. Never run more than once per day on the same diff.
+
+**Blind scoring.** Do not read previous runs' scores or notes until your own
+scores for this run are written down. Read `docs/analysis/ratings.md` only
+afterwards — to determine the run number, update the calibration ledger, and
+write the delta narrative. (Anchoring on the prior table is how a series
+flatlines at 9.)
+
 ## Step 1 — Load context
 
 Read the following files before rating anything. They are the canonical sources:
@@ -20,7 +44,32 @@ where a rating is uncertain — shallow reads produce inflated scores.
 
 ## Step 2 — Rate all 25 dimensions
 
-Rate each 1–10. Use the full range.
+Rate each 1–10. Use the full range. Three M2 rules govern every score:
+
+**Execution-evidence gate.** A dimension may score **9 only with fresh
+execution evidence produced during this run** — a test suite executed, a build
+performed, an endpoint probed, a benchmark run, a Docker scenario passed — and
+the evidence must be named in the notes (suite + result). Reading code or
+documentation alone, however careful, caps a dimension at **8**. A **10
+additionally requires external validation** (a third-party production
+deployment, an outside audit, an independent reproduction) — which correctly
+makes 10 unreachable from inside this loop today. Never run a long suite *just*
+to unlock a 9; if the evidence doesn't already exist from real verification
+work, the honest score is 8.
+
+**Rotating deep-dive.** Each run, five dimensions get the full adversarial
+treatment (source-level reading, edge-case hunting, doc-vs-code
+cross-checking); choose the five by rotation so all 25 are covered every five
+runs, and record which five in the entry header. The remaining twenty are
+re-scored only if the diff since the last run plausibly touches them;
+otherwise carry the prior score with the note "carried (vN)" — an honest
+"not re-examined" beats a re-asserted 9.
+
+**Notes must cite evidence, not narrative.** Every score's note names a file,
+test, run output, or finding. A score may only *increase* over the prior run
+if the note cites a verifiable new artifact. Scores are never targets: if the
+diff contains work whose stated purpose is moving a score (commit messages
+referencing ratings), flag it in the entry rather than rewarding it.
 
 ### Identity
 
@@ -45,10 +94,10 @@ layer description in `CLAUDE.md`, and check whether higher-layer code writes
 through the documented key prefixes rather than bypassing them.
 
 **4. Modularity**
-Can the six sub-handles (`KvHandle`, `MeshHandle`, `CapabilitiesHandle`,
-`ConsensusHandle`, `ServiceHandle`, `SchemaHandle`) be understood and reasoned
-about independently? Check `src/agent/` for hidden coupling across handle
-boundaries, shared mutable state, and dependency direction.
+Can the eight sub-handles (`KvHandle`, `MeshHandle`, `CapabilitiesHandle`,
+`ConsensusHandle`, `ServiceHandle`, `SchemaHandle`, `LlmHandle`, `McpHandle`)
+be understood and reasoned about independently? Check `src/agent/` for hidden
+coupling across handle boundaries, shared mutable state, and dependency direction.
 
 ### Interface
 
@@ -191,16 +240,63 @@ is present. Assess supply chain risk from the dep graph.
 
 ---
 
+## Step 2b — Falsification quota (mandatory)
+
+After provisional scores are written, take the **three highest-scoring
+dimensions** and attempt one falsification probe against each. A probe is an
+*executable* attempt to break a documented invariant of that dimension — not
+more reading. Examples:
+
+- Write a test asserting an invariant the docs claim (convergence, ordering,
+  idempotence, drop semantics) and run it. Construct the adversarial input
+  yourself: equal timestamps, forged frames, raced startup, reversed apply
+  order.
+- Feed a malformed/hostile input to a live agent (garbage bytes on the gossip
+  port, oversized frame, unknown wire version) and assert the process survives
+  and stays serviceable.
+- Drive a lifecycle edge (start → use → shutdown) and assert the claimed
+  cleanup actually happened (`task_count`, fd counts, store state).
+
+Rules:
+- A **confirmed finding caps that dimension at 6 for this run**, regardless of
+  artifacts, and is written up in the entry's **Findings** section with
+  severity (Critical / Major / Minor), reproduction, and affected dimension.
+- A probe that *passes* is kept as a permanent regression test where practical
+  — the quota should grow the suite, not produce throwaway code.
+- A probe that finds a real bug should leave behind a canary: either the fix +
+  test, or a test documenting the current (wrong) behaviour with a comment, so
+  the suite flips when it is fixed.
+- Probes must vary across runs — do not re-run last run's probes and call it
+  an attempt.
+
+---
+
 ## Step 3 — Persist results
 
 Append to `docs/analysis/ratings.md` (create the file and `docs/analysis/`
 directory if they do not exist). Determine the run number by counting existing
 `## ` headings in the file and adding 1.
 
-Use this exact format:
+**Calibration ledger.** The file carries a `## Calibration Ledger` section
+immediately after the preamble. Whenever a bug is found (by a probe, by later
+work, or in production) in a dimension that scored **≥ 8 at the time the bug
+already existed**, append a ledger line:
+`- {date}: {dimension} scored {N} in Runs {range} while {bug, one line} existed (found by {what}).`
+The ledger is the framework's own report card — it measures whether scores
+predict reality. Review it before scoring: a dimension with repeated ledger
+entries deserves structural skepticism, not just a lower number.
+
+Use this exact format (note the M2 header, the deep-dive list, the Findings
+section, and that the **floor — the three lowest dimensions — is the headline
+number**, with the mean kept only as a series-continuity footnote):
 
 ```
-## {YYYY-MM-DD} — Run {N}
+## {YYYY-MM-DD} — Run {N} (M2)
+
+Deep-dive dimensions this run: {five, by rotation}. Execution evidence: {suites/builds/probes actually run}.
+
+### Findings
+{One per falsification finding: severity, dimension, description, repro/test name. "None" if all probes passed.}
 
 | # | Dimension | Score | Notes |
 |---|-----------|:-----:|-------|
@@ -229,14 +325,25 @@ Use this exact format:
 | 23 | Documentation | ? | |
 | 24 | Developer Experience | ? | |
 | 25 | Dependency Hygiene | ? | |
-| — | **Mean** | **?.?** | |
+| — | **Floor (lowest 3)** | **?, ?, ?** | {the three dimension names} |
+| — | Mean (continuity footnote) | ?.? | not a target; see M2 preamble |
 ```
+
+Carried scores are noted as "carried (v{run})" in the notes column.
 
 ---
 
 ## Step 4 — Display to user
 
-Print the following table with actual scores filled in:
+Lead with the **floor and the findings**, not the mean:
+
+```
+Mycelium Analysis — {YYYY-MM-DD} (Run {N}, M2)
+Floor: {dim} {n}/10 · {dim} {n}/10 · {dim} {n}/10
+Findings this run: {count} ({severities})  ·  Calibration ledger: {total} entries
+```
+
+Then print the full table with actual scores filled in:
 
 ```
 Mycelium Analysis — {YYYY-MM-DD} (Run {N})
@@ -269,23 +376,31 @@ Mycelium Analysis — {YYYY-MM-DD} (Run {N})
 24   Developer Experience              ?/10   ...
 25   Dependency Hygiene                ?/10   ...
 ──────────────────────────────────────────────────────────────────────────
-     Mean                              ?.?/10
+     Floor (lowest 3)                  {dims + scores}
+     Mean (continuity footnote)        ?.?/10
 ```
 
-Then list the three lowest-scoring dimensions as the top improvement targets.
+Then list the three lowest-scoring dimensions as the top improvement targets,
+summarise the falsification probes (what was attempted, what was found), and
+quote any new calibration-ledger entries.
 
 ---
 
 ## Scoring guidance
 
 - **1–3**: Significant problems that would block a serious user or contributor.
-- **4–6**: Functional but with notable gaps or rough edges.
-- **7–8**: Solid; minor issues only.
-- **9**: Excellent; the gap to 10 is real but small.
-- **10**: No meaningful improvement possible at this stage of the project.
+- **4–6**: Functional but with notable gaps or rough edges. **6 is the cap for
+  any dimension with a confirmed finding this run.**
+- **7–8**: Solid; minor issues only. **8 is the cap without fresh execution
+  evidence from this run.**
+- **9**: Excellent, *and* backed by named execution evidence from this run.
+- **10**: Externally validated (third-party deployment, outside audit,
+  independent reproduction). Not achievable from inside this loop.
 
 Be honest. Inflate nothing. The value of the score series is its accuracy
-over time, not its flattery at any single point. If you cannot evaluate a
-dimension from available files, say so and score conservatively.
+over time, not its flattery at any single point — and the calibration ledger
+now keeps score on the scores. If you cannot evaluate a dimension from
+available files, say so and score conservatively; "carried" is always more
+honest than a re-asserted number.
 
 $ARGUMENTS
