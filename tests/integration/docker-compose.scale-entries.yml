@@ -1,0 +1,144 @@
+# Mycelium entry-volume test cluster (default 30 nodes: 1 seed + 29 workers + mgmt)
+#
+# Purpose
+#   The 100-node test in docker-compose.scale.yml validates the *node-count* axis
+#   (cluster formation, gossip convergence on one key, zero dropped frames). This
+#   test validates the orthogonal *entry-volume* axis: how does convergence and
+#   anti-entropy behave when the KV holds thousands of entries rather than just
+#   one?  Specifically, given a synthetic graph of N entries written to seed,
+#   how long until every entry is visible on mgmt, and how much of that closure
+#   comes from live gossip vs the anti-entropy sweep tail?
+#
+# Why 30 nodes
+#   - Below the Docker bridge iptables FORWARD-chain ceiling (~50 connections
+#     per node is comfortable; 30 × ~12 active connections = ~360 entries in
+#     the chain, well within budget).
+#   - Above the small-cluster regime so anti-entropy actually has work to do —
+#     a 3-node cluster would have everything propagated synchronously and
+#     would not exercise the sweep behaviour we are measuring.
+#   - Leaves headroom for the runner to make new TCP connections to seed
+#     throughout the test (unlike the 100-node test, which has to time its
+#     verifications carefully against chain saturation).
+#
+# Tunable axes
+#   SCALE_ENTRIES_WORKERS   — cluster size minus 1     (default 29)
+#   ENTRY_COUNT             — number of synthetic KV entries (default 5000)
+#   ENTRY_BYTES             — payload size per entry   (default 512)
+#
+# Usage:
+#   make test-scale-entries
+#   make test-scale-entries ENTRY_COUNT=10000 ENTRY_BYTES=1024
+#   make test-scale-entries SCALE_ENTRIES_WORKERS=49      # 50 nodes
+#
+# Resource note: 30 nodes × ~20 MB ≈ 600 MB RSS; 5 000 entries × 512 B ≈ 2.5 MB
+# per node KV, fully held in memory.
+
+services:
+
+  seed:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    container_name: mycelium-scale-entries-seed
+    hostname: seed
+    entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
+    environment:
+      MYCELIUM_ROLE:              node
+      MYCELIUM_PORT:              "57000"
+      MYCELIUM_HTTP_PORT:         "8300"
+      MYCELIUM_PEERS:             "mgmt:57000"
+      # Raised channel depth — the bulk-load burst writes ENTRY_COUNT entries
+      # in a short window; default 1024 can drop frames at 5 000+ entries.
+      GOSSIP_WRITER_CHANNEL_DEPTH: "4096"
+      GOSSIP_PING_PEER_SAMPLE_SIZE: "30"
+      # Raise max_store_entries above the test's ENTRY_COUNT ceiling so the
+      # bulk graph fits without triggering eviction. Default is 100 000.
+      GOSSIP_MAX_STORE_ENTRIES:    "200000"
+      RUST_LOG:                   "warn,mycelium=info"
+    networks:
+      - mesh
+    restart: "no"
+
+  mgmt:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    container_name: mycelium-scale-entries-mgmt
+    hostname: mgmt
+    entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
+    environment:
+      MYCELIUM_ROLE:              mgmt
+      MYCELIUM_PORT:              "57000"
+      MYCELIUM_HTTP_PORT:         "8300"
+      MYCELIUM_PEERS:             "seed:57000"
+      MGMT_PORT:                  "8090"
+      GOSSIP_WRITER_CHANNEL_DEPTH: "4096"
+      GOSSIP_PING_PEER_SAMPLE_SIZE: "30"
+      GOSSIP_MAX_STORE_ENTRIES:    "200000"
+      RUST_LOG:                   "warn,mycelium=info"
+    networks:
+      - mesh
+    restart: "no"
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
+    environment:
+      MYCELIUM_ROLE:              node
+      MYCELIUM_PORT:              "57000"
+      MYCELIUM_HTTP_PORT:         "8300"
+      MYCELIUM_PEERS:             "seed:57000"
+      GOSSIP_WRITER_CHANNEL_DEPTH: "2048"
+      # Cap outbound active connections — 30 nodes × 12 caps total chain entries
+      # well within the bridge iptables budget.
+      GOSSIP_MAX_ACTIVE_CONNECTIONS:     "12"
+      GOSSIP_HEALTH_CHECK_MAX_JITTER_MS: "3000"
+      GOSSIP_MAX_STORE_ENTRIES:    "200000"
+      RUST_LOG:                   "warn,mycelium=info"
+    networks:
+      - mesh
+    depends_on:
+      - seed
+    restart: "no"
+
+  runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test-runner
+    container_name: mycelium-scale-entries-runner
+    volumes:
+      - .:/tests:ro
+    environment:
+      SEED_HOST:      seed
+      MGMT_HOST:      mgmt
+      NODE_HTTP_PORT: "8300"
+      MGMT_HTTP_PORT: "8090"
+      SCALE_TARGET:   "29"
+      # Overridable via shell env: make test-scale-entries ENTRY_COUNT=20000
+      ENTRY_COUNT:              "${ENTRY_COUNT:-5000}"
+      ENTRY_BYTES:              "${ENTRY_BYTES:-512}"
+      # How many parallel PUTs to seed during the bulk-load phase.
+      # Higher = faster load but more chance of writer channel pressure.
+      WRITE_PARALLELISM:        "${WRITE_PARALLELISM:-32}"
+      # Paced write rate. 0 = burst mode (parallel xargs, default — what the
+      # 100-node test does, just at higher entry volume). >0 = paced mode
+      # (serial writes with this delay between each), which simulates
+      # sustained-rate load. For a steady-state sanity check at the 20k
+      # operating point: WRITE_DELAY_MS=30 → ~33 writes/s → ~10 min of writes.
+      WRITE_DELAY_MS:           "${WRITE_DELAY_MS:-0}"
+      # Sweep-completion timeout. The bulk write itself is ~30–60 s at 5 000
+      # entries; we then allow up to 180 s for full convergence on mgmt.
+      CONVERGENCE_TIMEOUT_SECS: "${CONVERGENCE_TIMEOUT_SECS:-180}"
+    entrypoint: ["/bin/bash", "/tests/run_scale_entries.sh"]
+    depends_on:
+      - seed
+      - mgmt
+    networks:
+      - mesh
+    restart: "no"
+
+networks:
+  mesh:
+    driver: bridge

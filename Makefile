@@ -3,12 +3,13 @@
 COMPOSE               = docker compose -f tests/integration/docker-compose.test.yml
 COMPOSE_SCALE         = docker compose -f tests/integration/docker-compose.scale.yml
 COMPOSE_RESILIENCE    = docker compose -f tests/integration/docker-compose.scale-resilience.yml
+COMPOSE_SCALE_ENTRIES = docker compose -f tests/integration/docker-compose.scale-entries.yml
 COMPOSE_LLM           = docker compose -f docker/docker-compose.yml
 COMPOSE_LLM_DEMO      = docker compose -f docker/docker-compose.llm-agent.yml
 COMPOSE_THREE_NODE    = docker compose -f docker/docker-compose.three-node-test.yml
 COMPOSE_OVERLAY       = docker compose -f tests/overlay/docker-compose.test.yml
 
-.PHONY: build test test-clean test-scale test-scale-clean test-scale-resilience test-scale-resilience-clean test-llm-demo test-llm-agent test-three-node test-overlay llm-agent-interactive help
+.PHONY: build test test-clean test-scale test-scale-clean test-scale-resilience test-scale-resilience-clean test-scale-entries test-scale-entries-clean test-llm-demo test-llm-agent test-three-node test-overlay llm-agent-interactive help
 
 ## test — build the cluster and run all integration scenarios
 test:
@@ -59,6 +60,33 @@ test-scale-resilience:
 ## test-scale-resilience-clean — tear down the resilience test cluster and remove volumes
 test-scale-resilience-clean:
 	$(COMPOSE_RESILIENCE) down -v --remove-orphans
+
+## test-scale-entries — entry-volume axis test (~30 nodes: 1 seed + 29 workers + mgmt)
+## The 100-node test (test-scale) validates the node-count axis. This test
+## validates the orthogonal entry-volume axis: load ENTRY_COUNT synthetic
+## entries onto a 30-node cluster and measure convergence + anti-entropy
+## sweep tail. 30 nodes deliberately stays well below the iptables ceiling
+## so the runner can make new TCP connections throughout the test.
+## Override examples:
+##   make test-scale-entries ENTRY_COUNT=10000 ENTRY_BYTES=1024    # bytes-axis probe
+##   make test-scale-entries ENTRY_COUNT=20000 WRITE_DELAY_MS=30   # sustained-rate sanity check (~10 min)
+##   make test-scale-entries SCALE_ENTRIES_WORKERS=49              # wider cluster
+SCALE_ENTRIES_WORKERS ?= 29
+ENTRY_COUNT           ?= 5000
+ENTRY_BYTES           ?= 512
+WRITE_DELAY_MS        ?= 0
+test-scale-entries:
+	$(COMPOSE_SCALE_ENTRIES) down -v --remove-orphans 2>/dev/null || true
+	ENTRY_COUNT=$(ENTRY_COUNT) ENTRY_BYTES=$(ENTRY_BYTES) WRITE_DELAY_MS=$(WRITE_DELAY_MS) \
+	    $(COMPOSE_SCALE_ENTRIES) up -d --build --scale worker=$(SCALE_ENTRIES_WORKERS)
+	@$(COMPOSE_SCALE_ENTRIES) logs -f runner & \
+	EXIT=$$(docker wait mycelium-scale-entries-runner); \
+	$(COMPOSE_SCALE_ENTRIES) down -v --remove-orphans 2>/dev/null || true; \
+	exit $$EXIT
+
+## test-scale-entries-clean — tear down the entry-volume test cluster and remove volumes
+test-scale-entries-clean:
+	$(COMPOSE_SCALE_ENTRIES) down -v --remove-orphans
 
 ## test-llm-demo — manual scenario: start the three_node_demo LLM cluster
 ## Requires Ollama installed locally. Open http://localhost:8080 to chat.
