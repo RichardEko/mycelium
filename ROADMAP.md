@@ -1813,6 +1813,93 @@ emitting the counters already identified in the Layer 5 section:
 A reference Grafana dashboard JSON. A `METRICS.md` documenting what each counter means and
 what thresholds should trigger alerts.
 
+### Production-hardening gate — the four sub-gates
+
+The remaining v1.x security/compliance gaps (#7, #8, #9, plus two new items
+identified below) collectively form the production-hardening gate that
+regulated buyers (healthcare, finserv, federal) evaluate before procurement.
+This section names the four sub-gates explicitly so the gate is a concrete
+checklist rather than a vague "harden it" line item. Each sub-gate identifies
+what is currently in the substrate, what is in flight as a numbered gap, and
+what remains as new work.
+
+**1. AuthN/Z + RBAC.** Different clearance levels for different layers of the
+twin — an L1 board read is different from full L3 SPOF topology and should
+not require the same authorisation. Standard RBAC is not enough; the model
+must be data-classification-aware.
+
+- *Existing substrate:* gateway bearer-token auth
+  (`GossipConfig::gateway_auth_token`, **off by default**); `signal_rx_from`
+  sender authorisation; capability schema versioning; wire-level Ed25519 mTLS
+  (`tls` feature).
+- *In flight:* gap #8 (RBAC v1.x subset — node roles, gateway ACLs, audit
+  access control); gap #9 (SSO / Entra / Okta).
+- *Still to design:* `authorized_callers` enforcement on Skills; layer-clearance
+  model on the twin (L1/L2/L3 access control mapped to specific KV prefix
+  groups); access control on MCP / A2A bridge surfaces (separate from the
+  primary gateway auth).
+
+**2. Audit — complete and tamper-evident.** The cluster-wide `sys/audit/{hlc}`
+trail covers writes. The gate is making it (a) *complete* — every read tied to
+a principal as well as every write — and (b) *tamper-evident* — cryptographically
+chained, not just append-only.
+
+- *Existing substrate:* HLC-ordered KV writes; WAL durability;
+  Ed25519-signed KV writes (`tls` feature, `WireMessage::SignedData`, wire
+  v10) so undetected mutation requires compromising the originating node's
+  private key.
+- *In flight:* gap #7 (durable cluster-wide audit trail — `sys/audit/`,
+  `/audit` endpoint, value-hash tamper-evidence).
+- *Still to design:* read-side audit (logging the principal of every
+  authenticated read, not just every write); cryptographic chaining
+  (Merkle-tree or hash-chain so an inspector can verify the audit has not
+  been edited after the fact — currently gap #7 lists this as explicitly
+  out of scope for v1.x); inspector-facing query API hardened for regulated
+  evidence.
+
+**3. Crown-jewel posture.** *This is the sharpest of the four, and the one
+that turns a generic "is it secure" conversation into a specific
+blast-radius conversation that regulated buyers actually evaluate.* The twin
+is the concentrated map of every SPOF and critical path in the deployment;
+compromising it gives an attacker the complete dependency graph, the failure
+modes, and the escalation paths. This sub-gate is **new work** — no existing
+v1.x gap covers it.
+
+- *Data-at-rest:* the substrate provides wire-level mTLS but no disk
+  encryption. Deployers' responsibility today; a Mycelium-side recommendation
+  document is needed, plus optional integration hooks for envelope-encrypted
+  KV bytes at rest.
+- *Tier-2 egress boundary:* explicit policy on what the twin can reach
+  outbound. A compromised twin with unrestricted egress is the worst-case
+  data-exfiltration vector. Needs a documented egress posture, ideally
+  configuration hooks that allow operators to restrict outbound destinations.
+- *Blast-radius-if-compromised:* explicit modelling of what an attacker who
+  controls one node, or who has compromised the twin's KV state, can do.
+  Needs a threat model document referenced from `docs/operations/` and
+  cross-linked to the architecture document §11.
+
+**4. Support / SLA — the single-source v1 dependency question.** Regulated
+buyers ask: "Who owns Mycelium in production when something fails at
+03:00 on a Saturday?" An open-source library with a GitHub URL is not
+an answer that satisfies procurement. This sub-gate is **commercial work**,
+not engineering, but it gates the same procurement decisions.
+
+- *Existing:* commercial embedding licence available (`Cargo.toml` notes;
+  Tathata Systems Ltd is the legal entity); AGPL fallback for
+  non-commercial use.
+- *Still to design:* SLA tiers with named response-time commitments;
+  named support relationships per customer deployment; documented
+  escalation paths from customer on-call to Tathata on-call; reference
+  customers with paid production deployments and SLAs in force.
+
+**Cross-cutting:** gaps #7, #8, #9 deliver substrate-level primitives. The
+four-sub-gate frame is the *evaluation lens* a regulated buyer applies to
+those primitives plus the new work above. Aligning the gap-#N work with the
+sub-gate frame keeps the engineering output legible to the procurement
+audience.
+
+---
+
 ### 7. Durable cluster-wide audit trail
 
 The per-node WAL records every local write, but there is no cluster-wide audit namespace.
