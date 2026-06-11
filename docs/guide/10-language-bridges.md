@@ -66,14 +66,17 @@ agent = MyceliumAgent("127.0.0.1", 8300)
 ```python
 # ── Capabilities ──────────────────────────────────────────────────────────────
 handle = agent.advertise_capability("compute", "gpu",
-    attributes={"model": "A100", "vram_gb": 80})
+    interval_secs=30, attributes={"model": "A100", "vram_gb": 80})
 providers = agent.resolve_capability("compute", "gpu")
-# providers: list of {node_id, attributes}
+# providers: list of {node_id, attributes, ...} dicts
+# `handle` keeps the advertisement alive — drop()/context-manage it to retract
 
 # ── KV store ──────────────────────────────────────────────────────────────────
-agent.set("pipeline/job/42", b'{"status": "pending"}', ttl_secs=300)
-val  = agent.get("pipeline/job/42")        # bytes | None
-items = agent.scan_prefix("pipeline/job/")  # list of (key, bytes)
+# Note: no TTL parameter — the store never time-evicts live keys. Liveness
+# semantics come from capability evaporation, not from KV expiry.
+agent.set("pipeline/job/42", b'{"status": "pending"}')
+val   = agent.get("pipeline/job/42")        # bytes | None
+items = agent.scan_prefix("pipeline/job/")  # dict[str, bytes]
 agent.delete("pipeline/job/42")
 
 # ── RPC ───────────────────────────────────────────────────────────────────────
@@ -86,8 +89,8 @@ async for req in agent.rpc_serve("process"):
 
 # ── Signals ───────────────────────────────────────────────────────────────────
 agent.emit("task.ready", b"payload", scope="system")
-agent.join_group("workers")
-agent.emit("task.ready", b"payload", scope={"group": "workers"})
+agent.emit("task.ready", b"payload", scope="group:workers")   # scope is a string
+agent.emit("task.ready", b"payload", scope="node:127.0.0.1:7000")
 
 async for sig in agent.on_signal("task.ready"):
     print(sig.sender, sig.payload)
@@ -98,16 +101,16 @@ async for event in agent.mailbox("task.result"):
     print(event.payload)
 
 # ── Consensus overlay ─────────────────────────────────────────────────────────
-agent.consistent_set("config/flag", b"true", group="workers")
+agent.consistent_set("config/flag", b"true")   # quorum = majority of peers
 val = agent.consistent_get("config/flag")
 
-guard_id = agent.lock_acquire("migration-lock", ttl_secs=30)
-# ... critical section ...
-agent.lock_release(guard_id)
+with agent.distributed_lock("migration-lock", ttl_secs=30) as guard:
+    print("fencing token:", guard.token)
+    # ... critical section; released on exit (or after TTL on crash) ...
 
-leader = agent.elect_leader("workers")
-seq = agent.log_append("events", b"entry")
-entries = agent.log_scan("events", from_seq=0, limit=100)
+leader  = agent.elect_leader("workers")
+hlc     = agent.append("events", b"entry")                  # returns HLC stamp
+entries = agent.scan_log("events", from_hlc=0)              # [from_hlc, to_hlc)
 
 # ── A2A / Prompt Skills ───────────────────────────────────────────────────────
 from mycelium import A2aClient, PromptSkillClient
@@ -145,14 +148,16 @@ const agent = new MyceliumAgent("127.0.0.1", 8300);
 
 // ── Capabilities ──────────────────────────────────────────────────────────────
 const handle = await agent.advertiseCapability("compute", "gpu", {
+    intervalSecs: 30,
     attributes: { model: "A100", vram_gb: 80 },
 });
 const providers = await agent.resolveCapability("compute", "gpu");
 
 // ── KV store ──────────────────────────────────────────────────────────────────
-await agent.set("pipeline/job/42", Buffer.from('{"status":"pending"}'), { ttlSecs: 300 });
+// No TTL option — the store never time-evicts live keys.
+await agent.set("pipeline/job/42", Buffer.from('{"status":"pending"}'));
 const val   = await agent.get("pipeline/job/42");      // Buffer | null
-const items = await agent.scanPrefix("pipeline/job/"); // Array<[string, Buffer]>
+const items = await agent.scanPrefix("pipeline/job/"); // Record<string, Buffer>
 await agent.delete("pipeline/job/42");
 
 // ── RPC ───────────────────────────────────────────────────────────────────────
@@ -165,20 +170,21 @@ for await (const req of agent.rpcServe("process")) {
 
 // ── Signals ───────────────────────────────────────────────────────────────────
 await agent.emit("task.ready", Buffer.from("payload"), { scope: "system" });
-await agent.joinGroup("workers");
+await agent.emit("task.ready", Buffer.from("payload"), { scope: "group:workers" });
 for await (const sig of agent.onSignal("task.ready")) {
     console.log(sig.sender, sig.payload.toString());
     break;
 }
 
 // ── Consensus overlay ─────────────────────────────────────────────────────────
-await agent.consistentSet("config/flag", Buffer.from("true"), { group: "workers" });
-const flagVal  = await agent.consistentGet("config/flag");
-const guardId  = await agent.lockAcquire("migration-lock", { ttlSecs: 30 });
-await agent.lockRelease(guardId);
-const leader   = await agent.electLeader("workers");
-const seq      = await agent.logAppend("events", Buffer.from("entry"));
-const entries  = await agent.logScan("events", { from: 0, limit: 100 });
+await agent.consistentSet("config/flag", Buffer.from("true")); // quorum = peer majority
+const flagVal = await agent.consistentGet("config/flag");
+const guard   = await agent.distributedLock("migration-lock", { ttlSecs: 30 });
+// ... critical section (guard.token is the fencing token) ...
+await guard.release();
+const leader  = await agent.electLeader("workers");
+const hlc     = await agent.append("events", Buffer.from("entry")); // bigint HLC
+const entries = await agent.scanLog("events", { fromHlc: 0n });
 
 // ── A2A / Prompt Skills ───────────────────────────────────────────────────────
 import { A2aClient, PromptSkillClient } from "mycelium-ts";
@@ -207,13 +213,14 @@ usage at scale. Each Python worker:
 1. Starts with `MYCELIUM_PEERS` pointing at the coordinator's gossip port
 2. Runs a Mycelium sidecar (embedded in the Docker image)
 3. Connects via `MyceliumAgent("127.0.0.1", 8300)`
-4. Advertises four capabilities (`stage_a/worker` through `stage_d/worker`)
-5. Serves RPC calls via `agent.rpc_serve("process")`
+4. Advertises four capabilities (`advertise_capability("stage_a", "worker")`
+   through `("stage_d", "worker")`, each on a 15 s interval)
+5. Serves RPC calls via `async for req in agent.rpc_serve(method)`
 
-The coordinator resolves workers via `agent.resolve_capability("stage_a/worker")`,
-dispatches via `agent.rpc_call(...)`, and writes results to the KV ring — all
-from Python. The Mycelium substrate handles gossip, anti-entropy, and TTL
-cleanup transparently.
+The coordinator resolves workers via `agent.resolve_capability("stage_a",
+"worker")`, dispatches via `agent.rpc_call(...)`, and writes results to the
+KV ring — all from Python. The Mycelium substrate handles gossip,
+anti-entropy, and capability evaporation transparently.
 
 ---
 

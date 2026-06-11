@@ -12,7 +12,8 @@ prior knowledge of their addresses.
 This is not service discovery in the traditional sense. There is no registry
 service: capability advertisements are KV entries that gossip to every node,
 so every node can resolve locally without a network hop. A node that stops
-refreshing its advertisement simply ages out via TTL.
+refreshing its advertisement simply evaporates: readers discard entries older
+than 3× the refresh interval, so failure detection needs no coordinator either.
 
 ```mermaid
 graph LR
@@ -75,8 +76,8 @@ cargo run --example llm_agent
 - The three nodes appear in the UI within ~2 s of startup.
 - Click "Apply preset" → "compute_cluster" — capability badges update live.
 - Stop one node (`Ctrl-C` in its terminal or via the UI) — its capability
-  advertisement ages out within one TTL period (~60 s by default, faster with
-  a shorter TTL in the manifest).
+  advertisement evaporates within 3× its refresh interval (faster with a
+  shorter interval in the manifest).
 - Click "Probe" — the probe loop writes a `sys/load/` entry and any node
   requiring that capability shows a demand-pressure badge.
 
@@ -91,11 +92,11 @@ stops the refresh loop and the advertisement ages out:
 // llm_agent.rs — advertise at startup
 let _cap = agent.capabilities().advertise_capability(
     Capability::new("llm", "inference")
-        .with_attr("model",   CapValue::Text("llama3.2".into()))
-        .with_attr("ctx_len", CapValue::Int(8192)),
+        .with("model",   CapValue::Text("llama3.2".into()))
+        .with("ctx_len", CapValue::Integer(8192)),
     Duration::from_secs(60),   // refresh interval
 );
-// _cap is held for the lifetime of the node; drop it to withdraw
+// _cap is a CapabilityReg held for the lifetime of the node; drop it to withdraw
 ```
 
 Resolving picks a live provider. The returned `NodeId` can be used directly
@@ -109,11 +110,16 @@ if let Some((node_id, cap)) = providers.into_iter().next() {
 }
 ```
 
-Declaring a requirement makes the node opaque while unmet:
+Declaring a requirement makes the node opaque while unmet. Requirements are
+expressed as the same `CapFilter` used for resolution, and the returned
+`RequirementHandle` keeps the declaration alive (drop it to withdraw):
 
 ```rust
 // Node is opaque (won't receive new work) until llm/inference is on the mesh
-agent.declare_requirement(Requirement::new("llm", "inference"));
+let _req = agent.capabilities().declare_requirement(
+    CapFilter::new("llm", "inference"),
+    Duration::from_secs(30),   // re-asserted on this interval
+);
 ```
 
 ---
@@ -125,29 +131,39 @@ e.g. `pipeline/worker`, `storage/blob`, `llm/embedder`. Keep namespaces short
 and stable; names can be more specific. Avoid generic names like `service/node`
 that will collide if you add a second service type.
 
-**TTL and refresh interval.** The capability advertisement expires after one
-TTL period without a refresh. Set `refresh_interval` to roughly TTL/3 so
-three missed refreshes before expiry. For services that tolerate 30 s of
-stale routing, `ttl=90s, refresh=30s` is a reasonable default.
+**Evaporation, not TTL.** There is no separate TTL parameter: the interval you
+pass to `advertise_capability` is both the refresh cadence and the freshness
+unit. Readers discard entries whose stamp is more than **3× the interval**
+old (`CapEntry::is_fresh`) — so a crashed node's advertisement disappears
+from `resolve()` after at most three missed refreshes. The window is
+symmetric: an entry stamped further than 3× in the *future* is quarantined
+too, so a node with a broken clock cannot make itself un-evaporable. For
+services that tolerate ~90 s of stale routing, a 30 s interval is a
+reasonable default; for ephemeral workers use 5–10 s.
 
-**Filtering on attributes.** `CapFilter` supports predicate closures:
+**Filtering on attributes.** `CapFilter` matches typed constraints, not
+closures — constraints travel with the filter, so they also work in
+gossip-propagated contexts (requirements, group definitions) where a closure
+could not:
 
 ```rust
 let filter = CapFilter::new("llm", "inference")
-    .with_predicate(|cap| {
-        cap.attributes.get("ctx_len")
-            .and_then(|v| if let CapValue::Int(n) = v { Some(*n) } else { None })
-            .map(|n| n >= 32768)
-            .unwrap_or(false)
-    });
+    .with("ctx_len", CapConstraint::Gte(CapValue::Integer(32768)));
 ```
 
-**GroupQuorum pattern.** For operations that require a quorum of a group:
+`CapConstraint` covers `Eq`/`Ne`/`Gt`/`Gte`/`Lt`/`Lte`; see
+`examples/llm_agent.rs` for `Eq`-on-`Text` used to pick a specific model.
+
+**GroupQuorum pattern.** For operations that require a quorum of a group
+(each proposal targets a named *slot*; the result is a `ConsensusResult`,
+not a `Result` — match on it):
 
 ```rust
-let quorum = agent.consensus().group_propose("nlp-workers", payload).await?;
+let outcome = agent.consensus()
+    .group_propose("nlp-workers", "job/assign", payload, ConsensusConfig::default())
+    .await;
 // or for a durable write with quorum confirmation:
-agent.consensus().consistent_set("job/assigned", payload).await?;
+agent.consensus().consistent_set("job/assigned", value).await?;
 ```
 
 **When NOT to use capabilities.** For a single well-known node (a seed, a

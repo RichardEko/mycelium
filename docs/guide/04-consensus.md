@@ -41,15 +41,15 @@ sequenceDiagram
 
 **Available operations**
 
-| Operation | Description |
-|-----------|-------------|
-| `consistent_set(key, value, quorum)` | Ballot-serialized write — committed only after quorum accept; concurrent writes ordered by ballot number |
-| `consistent_get(key)` | Read latest ballot-committed value visible to this node (local, eventually consistent) |
-| `append(stream, entry)` | Append to an ordered log — monotonic sequence numbers |
-| `scan_log(stream, from, to)` | Range scan the log |
-| `distributed_lock(name, ttl)` | Acquire an exclusive lock; TTL prevents deadlock |
-| `elect_leader(group)` | Nominate one node as leader for the group |
-| `emit_reliable(kind, scope, payload)` | Signal with explicit ACK |
+| Operation | Handle | Description |
+|-----------|--------|-------------|
+| `consistent_set(key, value)` | `consensus()` | Ballot-serialized write — committed only after quorum accept; quorum is a majority of current peers |
+| `consistent_get(key)` | `consensus()` | Read latest ballot-committed value visible to this node (local, lease-aware) |
+| `append(stream, entry)` | `kv()` | Append to an ordered log — entries keyed by HLC, so ordering is causal and cluster-wide unique |
+| `scan_log(stream, from, to)` | `kv()` | Range scan the log by HLC window |
+| `distributed_lock(name, ttl)` | `consensus()` | Acquire an exclusive lock (returns a `LockGuard`); TTL prevents deadlock |
+| `elect_leader(group)` | `consensus()` | Nominate one node as leader for the group |
+| `emit_reliable(kind, scope, payload)` | `service()` | Signal with explicit ACK |
 
 ---
 
@@ -122,7 +122,7 @@ From within Rust code, the overlay operations are accessed via the consensus han
 
 ```rust
 // Consistent write via ConsensusHandle
-agent.consensus().consistent_set("config/feature-flag", b"true").await?;
+agent.consensus().consistent_set("config/feature-flag", &b"true"[..]).await?;
 
 // Acquire a lock — returns a guard; drop the guard to release
 let guard = agent.consensus().distributed_lock("migration-lock", Duration::from_secs(30)).await?;
@@ -130,33 +130,50 @@ let guard = agent.consensus().distributed_lock("migration-lock", Duration::from_
 drop(guard);  // or let it expire after 30s
 
 // Elect a leader for a group
-let leader_id = agent.elect_leader("workers").await?;
+let leader_id = agent.consensus().elect_leader("workers").await?;
 
-// Append to an ordered log
-let seq = agent.kv().append("audit-log", entry_bytes).await?;
-let entries = agent.kv().scan_log("audit-log", 0, 100).await?;
+// Append to an ordered log — synchronous; returns the entry's HLC stamp
+let hlc = agent.kv().append("audit-log", entry_bytes);
+let entries = agent.kv().scan_log("audit-log", 0, u64::MAX); // [from, to) HLC window
 ```
 
-Group definitions for consensus quorum:
+Voting blocs are **emergent groups**: a `CapabilityGroupDef` names a filter,
+and every node that matches self-joins — `group_propose` then computes its
+quorum from the group's current membership. No coordinator registers members:
 
 ```rust
-// src/consensus.rs — define a quorum group
-let group = ConsensusGroup {
-    name:      "overlay".into(),
-    quorum:    QuorumPolicy::Majority,  // >50%
-    topology:  TopologyPolicy::Soft,    // allow any member count
-};
-agent.register_consensus_group(group);
+// Each node evaluates this for itself; matching nodes join "overlay".
+let _grp = agent.capabilities().define_capability_group(
+    "overlay",
+    CapabilityGroupDef {
+        filter: CapFilter::new("role", "overlay"),
+        topology_policy: None,    // or Some(GroupTopologyPolicy { .. })
+        provides: vec![],
+        requires: vec![],
+    },
+    Duration::from_secs(30),
+);
+
+// Propose to the group's quorum (a ConsensusResult, not a Result — match it):
+let outcome = agent.consensus()
+    .group_propose("overlay", "config/epoch", value, ConsensusConfig::default())
+    .await;
 ```
+
+Topology constraints (e.g. "votes must span ≥ 2 availability zones") are
+declared per group in `GossipConfig::topology_policies` — config always wins
+over the group definition's own `topology_policy`.
 
 ---
 
 ## Dev Notes
 
-**Quorum sizing.** The default `QuorumPolicy::Majority` requires `floor(n/2)+1`
-votes from the group. For a 3-node cluster that's 2; for a 5-node cluster it's 3.
-Smaller quorums (e.g. `QuorumPolicy::Any(1)`) give better availability but
-weaker consistency guarantees.
+**Quorum sizing.** Quorum is always a majority — `floor(n/2)+1` — computed
+from live membership at proposal time: `system_propose`/`consistent_set` count
+`peers + self`, `group_propose` counts the emergent group's current members.
+For a 3-node cluster that's 2; for 5, it's 3. There is no "any-1" escape
+hatch by design: if you can tolerate non-majority confirmation you want
+`kv().set_with_min_acks` (durability counting, Layer I), not consensus.
 
 **When to use `consistent_set` vs gossip `set`.**
 
@@ -178,10 +195,13 @@ that has a well-defined key.
 expected completion time. The TTL is a safety net for crashes — it is not a
 lease renewal mechanism. If your operation takes up to 5 s, set TTL to 10–15 s.
 
-**Hard topology.** `TopologyPolicy::Hard` rejects votes from nodes not in a
-known-good set. Use it when you need strict membership control (compliance,
-security boundaries). The operator can override with a `sys/topology-override/`
-KV entry as an escape hatch.
+**Hard topology.** `TopologyEnforcement::Hard` (in a group's
+`GroupTopologyPolicy`) rejects a quorum whose votes don't satisfy the
+declared locality spread — e.g. `spread_min_distinct: 2` at `spread_depth:
+Some(1)` demands voters from at least two availability zones. Use it when
+correctness depends on failure-domain diversity (compliance, split-brain
+resistance). The operator can relax a live group with a
+`sys/topology-override/{group}` KV entry as an escape hatch.
 
 **Consensus and partition tolerance.** The overlay is CP (consistent,
 partition-tolerant) within the quorum group — it blocks, not fails, when

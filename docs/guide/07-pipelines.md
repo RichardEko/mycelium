@@ -123,47 +123,41 @@ docker exec afn-postgres psql -U pipeline -d pipeline \
 ```python
 # Seed items into the KV ring
 for article in articles:
-    key = f"pipeline/stage-a/{article['id']}"
-    agent.set(key, json.dumps(article).encode(), ttl_secs=300)
+    agent.set(f"pipeline/stage-a/{article['id']}", json.dumps(article).encode())
 
-# Drain a stage: resolve workers, dispatch, collect results
-async def drain_stage(stage_in, stage_out, capability):
-    items = agent.scan_prefix(stage_in)
-    for key, value in items:
-        workers = agent.resolve_capability(capability)
-        worker = pick_least_loaded(workers)
-        result = await agent.rpc_call(worker.node_id, "process", value, timeout=30)
-        out_key = key.replace(stage_in, stage_out)
-        agent.set(out_key, result)
-        agent.delete(key)  # remove from input stage
+# Drain a stage: list unclaimed items, resolve workers, claim, dispatch
+all_keys    = agent.keys(prefix=f"pipeline/{stage_in}/")
+claimed_ids = {k.split("/")[-1] for k in agent.keys(prefix="pipeline/claiming/")}
+providers   = agent.resolve_capability(cap_ns, "worker")   # (ns, name)
+# ...pick a worker, then claim before dispatching:
+agent.set(f"pipeline/claiming/{item_id}", worker_id.encode())
+result = agent.rpc_call(worker_id, method, payload, timeout_secs=90)
+agent.delete(f"pipeline/claiming/{item_id}")  # released on success AND failure
 ```
 
-**Worker** (`examples/fluid_pipeline/worker/worker.py`):
+**Worker** (`examples/fluid_pipeline/worker/worker.py`). RPC serving is an
+async iterator, not a callback registration — the SSE stream delivers the
+next request only after `rpc_respond()` completes the previous one:
 
 ```python
-# Advertise capability for all stages on startup
-for stage in ["stage_a", "stage_b", "stage_c", "stage_d"]:
-    agent.advertise_capability(f"{stage}/worker", ttl_secs=30)
+# Advertise one capability per stage on startup
+for ns in ["stage_a", "stage_b", "stage_c", "stage_d"]:
+    agent.advertise_capability(ns, "worker", interval_secs=15)
 
 # Handle RPC calls
-agent.rpc_serve("process", handle_process)
-
-async def handle_process(request):
-    stage = detect_stage(request)     # from item schema
-    handler = STAGE_HANDLERS[stage]
-    return await handler(request)
+async for req in agent.rpc_serve(method):
+    item = json.loads(req.payload)
+    out  = await STAGE_HANDLERS[stage](item)
+    agent.rpc_respond(req, json.dumps({"status": "ok", "id": item["id"]}).encode())
 ```
 
-**TTL-native work claiming.** Before processing an item, a worker writes a
-claim key with a short TTL. If the worker crashes, the claim expires and the
-item is requeued on the next drain pass:
-
-```python
-claim_key = f"claim/{item_id}"
-agent.set(claim_key, worker_id.encode(), ttl_secs=15)
-result = await process(item)
-agent.delete(claim_key)   # release claim on success
-```
+**Claim keys are advisory, not TTL'd.** The KV store never time-evicts live
+keys — there is no `ttl_secs` on `set`. A claim under `pipeline/claiming/{id}`
+prevents double-dispatch while an RPC is in flight, and the *coordinator*
+deletes it on completion or failure; a crashed worker's claim is cleared when
+the coordinator's RPC times out. (If you need claims that survive a crashed
+*coordinator*, that's exactly the problem the `mycelium-tuple-space` companion
+crate's WAL-backed `take`/`ack` solves — see its crate docs.)
 
 ---
 

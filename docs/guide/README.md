@@ -84,7 +84,7 @@ group formation — without knowing addresses in advance.
 > 05–08 here. Both descriptions are correct; the guide simplifies for
 > newcomers.
 
-Four application patterns build on this substrate:
+Five application patterns build on this substrate:
 
 | Pattern | What it does | Guide chapter |
 |---------|-------------|---------------|
@@ -92,6 +92,7 @@ Four application patterns build on this substrate:
 | MCP Tool Discovery | LLM discovers tools dynamically from the KV store; zero-restart addition | [06-tool-discovery.md](06-tool-discovery.md) |
 | Fluid Pipelines | Fixed worker pool flows through pipeline stages; KV ring as buffer | [07-pipelines.md](07-pipelines.md) |
 | A2A Interop | LangChain / AutoGen agents discover Mycelium skills via `/.well-known/agent.json` | [08-a2a-interop.md](08-a2a-interop.md) |
+| TupleSpace (companion crate) | Pull-based pipeline buffer: workers `take()` when ready, WAL durability, primary/secondary failover driven by capability evaporation. Built entirely on the public API — see the [`mycelium-tuple-space/`](../../mycelium-tuple-space/) crate docs; integration scenario 13 is the runnable reference | [07-pipelines.md](07-pipelines.md) (claims section) |
 
 ---
 

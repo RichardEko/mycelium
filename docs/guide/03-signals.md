@@ -36,8 +36,12 @@ graph LR
 |-------|---------|
 | `SignalScope::System` | All nodes in the cluster |
 | `SignalScope::Group(name)` | Only nodes that have joined the named group |
-| `SignalScope::Node(id)` | Only the specific target node (point-to-point) |
-| `SignalScope::Locality(region)` | Only nodes in the named region |
+| `SignalScope::Individual(id)` | Only the specific target node (point-to-point) |
+| `SignalScope::Groups(names)` | Union membership — nodes in *any* of the named groups (used by `cross_group_propose`) |
+
+(Locality-aware *routing* is not a scope: use
+`capabilities().signal_wired_via_locality(...)`, which resolves a provider
+group by filter + locality preference at emission time.)
 
 **Opacity composition.** Any reason a node is temporarily overloaded or
 unavailable writes a distinct entry under `sys/load/{self}/...` with
@@ -113,7 +117,7 @@ agent.mesh().emit(
 // Point-to-point to a specific node
 agent.mesh().emit(
     signal_kind::RESULT,
-    SignalScope::Node(caller_node_id),
+    SignalScope::Individual(caller_node_id),
     Bytes::from(response_bytes),
 );
 ```
@@ -136,8 +140,10 @@ agent.mesh().unsuppress(signal_kind::INVOKE);
 ```
 
 For proactive peer notification that this node is becoming overloaded, use
-`agent.mesh().manage_opacity()` — see the [README opacity section](../../README.md) for
-the full `OpacityHint` API and the opacity vs inhibition distinction.
+`agent.capabilities().manage_opacity()` — opacity is load-state, so it lives
+on the capabilities handle, not the mesh. See the
+[README opacity section](../../README.md) for the full API and the opacity vs
+inhibition distinction.
 
 ---
 
