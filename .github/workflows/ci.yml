@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Weekly: RUSTSEC advisories land without any code change (M2 Run-19
+    # found two applicable advisories that no push-triggered gate could
+    # have caught). Monday 06:00 UTC.
+    - cron: '0 6 * * 1'
 
 jobs:
   test:
@@ -41,3 +46,14 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --lib --no-default-features -- -D warnings
+
+  audit:
+    name: Dependency audit (RUSTSEC)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@cargo-audit
+      # Fails on vulnerabilities; unmaintained/unsound advisories surface as
+      # warnings (tracked: bincode RUSTSEC-2025-0141 — wire-codec succession
+      # is a ROADMAP v2 item).
+      - run: cargo audit
