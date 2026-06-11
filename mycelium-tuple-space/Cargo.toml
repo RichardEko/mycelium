@@ -1,0 +1,39 @@
+[package]
+name = "mycelium-tuple-space"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Dr. Richard Nicholson <tathatasystems@proton.me>"]
+description = "Linda-style tuple space companion crate for Mycelium: single-copy pipeline buffer with blocking take, WAL persistence, and emergent primary/secondary failover — built entirely on Mycelium's public API"
+license = "AGPL-3.0-only"
+repository = "https://github.com/RichardEko/mycelium"
+keywords = ["tuple-space", "linda", "pipeline", "distributed-systems", "queue"]
+categories = ["network-programming", "asynchronous"]
+
+[features]
+default = []
+# HTTP gateway endpoints (/gateway/tuple/*, /api/tuple) registered onto the
+# Mycelium embedded gateway via GossipAgent::with_http_routes.
+gateway = ["mycelium/gateway", "dep:axum", "dep:serde", "dep:serde_json", "dep:base64"]
+
+[dependencies]
+# Companion-crate contract: only Mycelium's PUBLIC API is used — no internal
+# access. This dependency line is itself the composability proof.
+mycelium = { path = "..", default-features = false }
+
+tokio       = { version = "1.35", features = ["full"] }
+bytes       = "1"
+parking_lot = "0.12"
+papaya      = "0.1"
+tracing     = "0.1"
+
+# Gateway feature only
+axum       = { version = "0.8", optional = true }
+serde      = { version = "1.0", features = ["derive"], optional = true }
+serde_json = { version = "1.0", optional = true }
+base64     = { version = "0.22", optional = true }
+
+[dev-dependencies]
+reqwest    = { version = "0.12", features = ["json"] }
+serde_json = "1.0"
+base64     = "0.22"

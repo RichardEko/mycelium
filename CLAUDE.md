@@ -83,7 +83,7 @@ These are real work items. Anyone resuming should read
 
 | Plan | What's pending |
 |---|---|
-| TupleSpace companion crate | Deferred; design at `~/.claude/plans/mycelium-tuple-space.md` |
+| TupleSpace companion crate | **Shipped** (2026-06-11) as workspace member `mycelium-tuple-space/` — all 5 phases of [`docs/plans/mycelium-tuple-space.md`](docs/plans/mycelium-tuple-space.md). See §TupleSpace companion crate below. |
 | Pre-release arch remediation | **Complete.** All 9 steps done — plan at `~/.claude/plans/humble-twirling-comet.md`. |
 
 **Already shipped (removed from list):** fuzz harness (`fuzz/fuzz_targets/`), SignalHandlers split, ConsensusEngine::propose extraction, locality/topology Phases 0–7, cross-group consensus Phase 8 (`cross_group_propose` + `GroupQuorum`), watcher C2 (`run_consolidated_opacity_watcher` + `FilterOpacityRegistry`), signal reorder buffer (`emit_ordered()` + wire v11 `hlc_seq`), semantic coordination (capability schema versioning `with_schema_id`/`CapFilter::with_schema`, gossip-propagated skill payload schemas `with_input_schema`/`with_output_schema`, signal sender authorization `signal_rx_from`, FIPA-ACL speech act taxonomy — `examples/semantic_coordination.rs`), schema registry (`publish_schema`, `force_publish_schema`, `get_schema`, `list_schemas`, `seed_schemas_from_dir` — `src/agent/schema_ops.rs`), **pre-release arch remediation** (sub-handle facade — `KvHandle`, `MeshHandle`, `SchemaHandle`, `ConsensusHandle`, `ServiceHandle`, `CapabilitiesHandle` — plus `gateway` feature gate for Axum).
@@ -339,6 +339,42 @@ steady-state values after `start()`:
 Typical baseline on a 3-node cluster: **17–20 tasks**. A value growing
 unboundedly indicates a task leak (most likely a per-peer writer that is not exiting on disconnect).
 
+### TupleSpace companion crate (`mycelium-tuple-space/`)
+
+Linda-style pull-based pipeline buffer, built **entirely on the public API**
+(the crate's single normal dependency on `mycelium` is the composability
+proof; the core's dev-dependency back on it — for `examples/three_node_demo`
+— is a legal Cargo cycle). Design doc: `docs/plans/mycelium-tuple-space.md`.
+
+Key facts for future sessions:
+
+- **Pattern**: workers `take()` when ready — readiness is self-announcing,
+  so the staleness/misroute failure mode of push-predict distribution does
+  not exist. The space removes the central *decision-maker*; the data path
+  is still a rendezvous point with its own failover (below). This crate is
+  the load-bearing artifact for the pull-vs-push reframing of Paper 2a.
+- **Roles** (`TupleRole`): `Primary` serves; `Secondary` mirrors via
+  replicate RPCs + heartbeat Signal and promotes when the primary's
+  capability evaporates (the ring IS the failure detector); `Auto` elects
+  with a lowest-candidate-id tie-break (the plan's bare resolve-then-promote
+  races); `Client` never serves.
+- **Durability**: single-lock hot path (no TOCTOU between waiter check and
+  store); WAL with 4 record types — `Complete` is one indivisible record so
+  a stage transition can never half-replay; compaction bumps a WAL *epoch*
+  so a secondary's byte-offset replay cursor can't silently dangle.
+- **Capability names**: flat `tuple` / `{ns}.primary|secondary|candidate` —
+  capability key segments must not contain `/` (`parse_cap_key` rejects
+  them), so the plan's `tuple/{ns}/primary` shape was flattened.
+- **KV prefixes owned**: `tuple/inflight/{ns}/{id}` (advisory claim keys)
+  and `sys/tuple/{node}/{ns}/…` (metrics + backpressure pheromone). The
+  pheromone deliberately does NOT use `sys/load/` opacity: the load-state
+  encoding is substrate-internal, and hiding the primary from `resolve`
+  under load would false-trigger the secondary's promotion watch.
+- **Gates**: `cargo test -p mycelium-tuple-space --features gateway` and
+  `cargo clippy -p mycelium-tuple-space --features gateway --all-targets -- -D warnings`;
+  SDKs in `mycelium-py/src/mycelium/tuple.py` and `mycelium-ts/src/tuple.ts`;
+  integration scenario 13.
+
 ### Gateway feature gate
 
 The `gateway` feature (on by default) enables the embedded Axum HTTP server. Disable
@@ -408,5 +444,5 @@ get found.
   AutoGen v0.4 agent that auto-discover Mycelium skills via `/.well-known/agent.json` and
   use them as native tools. Requires `cargo build --bin skillrunner --features a2a` then
   `examples/community/start.sh`.
-- Integration test count: **12 scenarios** (scenario 11 = AFN pipeline; scenario 12 = Prompt Skills cross-node KV propagation + invocation).
+- Integration test count: **13 scenarios** (scenario 11 = AFN pipeline; scenario 12 = Prompt Skills cross-node KV propagation + invocation; scenario 13 = TupleSpace pull pipeline — node-a primary, node-b secondary mirror, driven through the HTTP gateway).
 - Scale tests: `make test-scale` (100 nodes), `make test-scale-resilience` (20 nodes default — see §iptables above for why not 50).

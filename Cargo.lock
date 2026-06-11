@@ -1912,6 +1912,7 @@ dependencies = [
  "libc",
  "metrics",
  "metrics-exporter-prometheus",
+ "mycelium-tuple-space",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
@@ -1937,6 +1938,23 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "wgpu",
+]
+
+[[package]]
+name = "mycelium-tuple-space"
+version = "0.1.0"
+dependencies = [
+ "axum 0.8.9",
+ "base64",
+ "bytes",
+ "mycelium",
+ "papaya",
+ "parking_lot",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

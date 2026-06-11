@@ -42,6 +42,7 @@ llm = ["gateway"]
 # The `fuzz/` directory is its own cargo-fuzz crate; keep it out of any
 # implicit-workspace traversal from this parent manifest.
 [workspace]
+members = ["mycelium-tuple-space"]
 exclude = ["fuzz"]
 
 [dependencies]
@@ -107,6 +108,10 @@ metrics                     = { version = "0.24", optional = true }
 metrics-exporter-prometheus = { version = "0.16", optional = true }
 
 [dev-dependencies]
+# Companion crate, consumed by examples/three_node_demo (integration
+# scenario 13). Dev-dependency cycles are legal in Cargo: the companion's
+# normal dependency on `mycelium` is unaffected.
+mycelium-tuple-space = { path = "mycelium-tuple-space", features = ["gateway"] }
 tokio        = { version = "1.35", features = ["full", "test-util"] }
 criterion    = { version = "0.5", features = ["async_tokio"] }
 libc         = "0.2"

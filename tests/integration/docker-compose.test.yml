@@ -26,12 +26,13 @@ services:
     # the WAL directory path (/data/<node_id>/kv/) is found after cluster restarts.
     entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
     environment:
-      MYCELIUM_ROLE:      node
-      MYCELIUM_PORT:      "57000"
-      MYCELIUM_HTTP_PORT: "8300"
-      MYCELIUM_PEERS:     "node-b:57000,node-c:57000,mgmt:57000"
-      MYCELIUM_DATA_DIR:  /data
-      RUST_LOG:           "info,mycelium=info"
+      MYCELIUM_ROLE:       node
+      MYCELIUM_PORT:       "57000"
+      MYCELIUM_HTTP_PORT:  "8300"
+      MYCELIUM_PEERS:      "node-b:57000,node-c:57000,mgmt:57000"
+      MYCELIUM_DATA_DIR:   /data
+      MYCELIUM_TUPLE_ROLE: primary    # scenario 13: serves the ts13 tuple space
+      RUST_LOG:            "info,mycelium=info"
     volumes:
       - node-a-data:/data
     networks:
@@ -47,11 +48,12 @@ services:
     hostname: node-b
     entrypoint: ["sh", "-c", "MYCELIUM_HOSTNAME=$(hostname -I | awk '{print $1}') exec /usr/local/bin/mycelium-demo"]
     environment:
-      MYCELIUM_ROLE:      node
-      MYCELIUM_PORT:      "57000"
-      MYCELIUM_HTTP_PORT: "8300"
-      MYCELIUM_PEERS:     "node-a:57000,node-c:57000,mgmt:57000"
-      RUST_LOG:           "info,mycelium=info"
+      MYCELIUM_ROLE:       node
+      MYCELIUM_PORT:       "57000"
+      MYCELIUM_HTTP_PORT:  "8300"
+      MYCELIUM_PEERS:      "node-a:57000,node-c:57000,mgmt:57000"
+      MYCELIUM_TUPLE_ROLE: secondary  # scenario 13: mirrors node-a; client ops route via RPC
+      RUST_LOG:            "info,mycelium=info"
     networks:
       mesh:
         ipv4_address: 172.20.0.3

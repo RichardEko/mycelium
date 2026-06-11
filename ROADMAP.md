@@ -2194,5 +2194,5 @@ built speculatively. Full design documents are in `docs/plans/`.
 
 | Pattern | File | Trigger to revisit |
 |---|---|---|
-| `mycelium-tuple-space` companion crate — single-copy pipeline buffer with blocking take, WAL, primary/secondary failover | [`docs/plans/mycelium-tuple-space.md`](docs/plans/mycelium-tuple-space.md) | A real workload hitting the AFN gossip fan-out ceiling (scatter-gather at thousands of items/second, or pipeline requiring WAL-backed restart recovery) |
+| ~~`mycelium-tuple-space` companion crate~~ — **shipped 2026-06-11** as workspace member `mycelium-tuple-space/` (all 5 phases: core store + WAL, primary/secondary failover + Auto election, monitoring + backpressure pheromone, HTTP gateway + py/ts SDKs, integration scenario 13). Trigger was re-evaluated: the pull-based model is the load-bearing empirical artifact for Paper 2a's pull-vs-push reframing, not just an AFN throughput escape hatch. | [`docs/plans/mycelium-tuple-space.md`](docs/plans/mycelium-tuple-space.md) | — |
 

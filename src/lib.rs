@@ -84,6 +84,8 @@
 //! | `cap/{node}/llm/loading`           | LLM model pull in progress (model, progress 0–100 attrs)     |
 //! | `cap/{node}/{ns}/installable`      | Any dynamically provisionable software capability             |
 //! | `cap/{node}/{ns}/loading`          | Provisioning in progress; `progress` attr 0–100              |
+//! | `tuple/inflight/{ns}/{id}`         | `mycelium-tuple-space` companion — advisory in-flight claim (JSON value; expiry is read-side, swept by the primary) |
+//! | `sys/tuple/{node}/{ns}/…`          | `mycelium-tuple-space` companion — monitoring counters, role, and the backpressure pheromone (`…/pressure/{stage}`) |
 //!
 //! Layer-III writes that read or write KV (consensus engine,
 //! `sys/topology-override` reads) are documented at their call sites as

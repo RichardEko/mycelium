@@ -55,6 +55,7 @@ run_scenario "09 invoke.bulk large payload"  "$SCENARIOS_DIR/09_invoke_bulk.sh"
 run_scenario "10 event mailbox delivery"     "$SCENARIOS_DIR/10_event_mailbox.sh"
 run_scenario "11 agentic flow network (AFN)" "$SCENARIOS_DIR/11_afn_pipeline.sh"
 run_scenario "12 prompt skills (KV + invoke)" "$SCENARIOS_DIR/12_prompt_skills.sh"
+run_scenario "13 tuple space (pull pipeline)" "$SCENARIOS_DIR/13_tuple_space.sh"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 banner "Results"

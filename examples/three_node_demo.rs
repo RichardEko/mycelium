@@ -1711,9 +1711,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let agent = make_agent(&my_ip, peers, port, Some(http_port), data_dir).await;
 
     // For the node role, register application routes into the embedded gateway before start.
+    // MYCELIUM_TUPLE_ROLE (off|primary|secondary|auto|client) additionally mounts a
+    // mycelium-tuple-space instance and its /gateway/tuple/* routes — integration
+    // scenario 13 drives this.
+    let tuple_role_env =
+        std::env::var("MYCELIUM_TUPLE_ROLE").unwrap_or_else(|_| "off".to_string());
+    let mut _tuple_space: Option<Arc<mycelium_tuple_space::TupleSpace>> = None;
     if role == "node" {
         agent.service().set_bulk_serving_port(http_port);
-        let extra = init_node_routes(Arc::clone(&agent));
+        let mut extra = init_node_routes(Arc::clone(&agent));
+        if tuple_role_env != "off" {
+            use mycelium_tuple_space::{TupleConfig, TupleRole, TupleSpace};
+            let ts_role = match tuple_role_env.as_str() {
+                "primary" => TupleRole::Primary,
+                "secondary" => TupleRole::Secondary,
+                "auto" => TupleRole::Auto,
+                _ => TupleRole::Client,
+            };
+            let ns = std::env::var("MYCELIUM_TUPLE_NS").unwrap_or_else(|_| "ts13".to_string());
+            let cfg = TupleConfig {
+                namespace: Arc::from(ns.as_str()),
+                role: ts_role,
+                // Test-friendly cadences: promotion ≈ 3 × cap_refresh.
+                cap_refresh: Duration::from_secs(2),
+                heartbeat_interval: Duration::from_secs(1),
+                ..Default::default()
+            };
+            match TupleSpace::new(Arc::clone(&agent), cfg).await {
+                Ok(ts) => {
+                    extra = extra.merge(Arc::clone(&ts).http_router());
+                    info!("[node] tuple space ns={ns} role={tuple_role_env}");
+                    _tuple_space = Some(ts);
+                }
+                Err(e) => warn!("[node] tuple space init failed: {e}"),
+            }
+        }
         agent.with_http_routes(extra);
     }
 

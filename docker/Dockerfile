@@ -11,9 +11,11 @@ WORKDIR /build
 # the full source. This layer is reused on subsequent `docker build` calls when
 # only application code (not Cargo.toml / Cargo.lock) changes.
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir -p src examples && \
+COPY mycelium-tuple-space/Cargo.toml mycelium-tuple-space/Cargo.toml
+RUN mkdir -p src examples mycelium-tuple-space/src && \
     echo 'fn main(){}' > examples/three_node_demo.rs && \
     echo '' > src/lib.rs && \
+    echo '' > mycelium-tuple-space/src/lib.rs && \
     cargo build --release --features llm --example three_node_demo 2>/dev/null || true
 
 # Build the real binary
