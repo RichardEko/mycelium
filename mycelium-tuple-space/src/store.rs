@@ -598,6 +598,22 @@ pub(crate) fn now_ms() -> u64 {
 
 // ─── WAL ─────────────────────────────────────────────────────────────────────
 
+/// WAL file header: magic + format version. A file whose version is newer
+/// than this build understands is REFUSED at open — never truncated. Without
+/// the header, a future format change would read as a torn tail and be
+/// silently truncated: an upgrade data-loss hazard (Run-17 finding,
+/// Evolvability).
+const WAL_MAGIC: &[u8; 6] = b"MTSWAL";
+const WAL_VERSION: u16 = 1;
+const WAL_HEADER_LEN: u64 = 8; // magic + u16 LE version
+
+fn wal_header() -> [u8; WAL_HEADER_LEN as usize] {
+    let mut h = [0u8; WAL_HEADER_LEN as usize];
+    h[..6].copy_from_slice(WAL_MAGIC);
+    h[6..8].copy_from_slice(&WAL_VERSION.to_le_bytes());
+    h
+}
+
 const REC_PUT: u8 = 1;
 const REC_TAKE: u8 = 2;
 const REC_ACK: u8 = 3;
@@ -759,6 +775,40 @@ impl WalWriter {
         file.seek(SeekFrom::Start(0))?;
         file.read_to_end(&mut data)?;
 
+        // Header handling. Empty file: stamp the current header. Non-empty:
+        // the magic must match and the version must be one this build
+        // understands — anything else is refused with the file untouched
+        // (silent truncation of a future format is the failure mode this
+        // header exists to prevent).
+        if data.is_empty() {
+            file.write_all(&wal_header())?;
+            data.extend_from_slice(&wal_header());
+        } else if data.len() < WAL_HEADER_LEN as usize
+            || &data[..WAL_MAGIC.len()] != WAL_MAGIC
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "{} is not a mycelium-tuple-space WAL (missing MTSWAL magic); \
+                     refusing to open or modify it",
+                    path.display()
+                ),
+            ));
+        } else {
+            let version =
+                u16::from_le_bytes(data[6..8].try_into().expect("two header bytes"));
+            if version != WAL_VERSION {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "{} is WAL format v{version}, but this build supports v{WAL_VERSION}; \
+                         refusing to open (no silent truncation of newer formats)",
+                        path.display()
+                    ),
+                ));
+            }
+        }
+
         struct ItemState {
             stage: Arc<str>,
             payload: Bytes,
@@ -767,7 +817,7 @@ impl WalWriter {
         let mut items: BTreeMap<u64, ItemState> = BTreeMap::new();
         let mut total = 0u64;
         let mut acked = 0u64;
-        let mut offset = 0usize;
+        let mut offset = WAL_HEADER_LEN as usize;
         while offset < data.len() {
             match Record::decode(&data[offset..]) {
                 None => break, // truncated tail from a mid-append crash
@@ -875,6 +925,7 @@ impl WalWriter {
         let tmp_path = g.path.with_extension("compact");
         let mut tmp = File::create(&tmp_path)?;
         let mut buf = Vec::new();
+        buf.extend_from_slice(&wal_header());
         let mut total = 0u64;
         for rec in &live {
             if matches!(rec, Record::Put { .. } | Record::Complete { .. }) {
@@ -923,6 +974,10 @@ impl WalWriter {
                 done: false,
             });
         }
+        // A cursor of 0 (or anything inside the header) starts at the first
+        // record, not at the magic bytes — which would decode as garbage and
+        // stall the replay loop.
+        let from_offset = from_offset.max(WAL_HEADER_LEN);
         let head = g.file_len;
         if from_offset >= head {
             return Ok(WalChunkData {
@@ -985,12 +1040,13 @@ pub(crate) fn decode_records(data: &[u8]) -> Vec<Record> {
     out
 }
 
-/// Test-only: read every record currently in the WAL file at `path`.
+/// Test-only: read every record currently in the WAL file at `path`,
+/// skipping the file header.
 #[cfg(test)]
 pub(crate) fn read_wal(path: &Path) -> Vec<Record> {
     let data = std::fs::read(path).unwrap_or_default();
     let mut out = Vec::new();
-    let mut offset = 0;
+    let mut offset = WAL_HEADER_LEN as usize;
     while offset < data.len() {
         match Record::decode(&data[offset..]) {
             Some((rec, consumed)) => {
@@ -1325,6 +1381,64 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// Run-17 improvement target (Evolvability): a WAL stamped with a FUTURE
+    /// format version must be refused untouched — never silently truncated.
+    #[tokio::test]
+    async fn wal_future_version_refused_untouched() {
+        let path = temp_wal("future-version");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(WAL_MAGIC);
+        bytes.extend_from_slice(&99u16.to_le_bytes());
+        bytes.extend_from_slice(b"opaque future-format payload");
+        std::fs::write(&path, &bytes).unwrap();
+
+        let err = match TupleStore::persistent(&path, 10_000, 500) {
+            Ok(_) => panic!("future WAL version must refuse to open"),
+            Err(e) => e,
+        };
+        assert!(err.to_string().contains("v99"), "error names the version: {err}");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            bytes,
+            "refusal must leave the file byte-identical"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn wal_foreign_file_refused_untouched() {
+        let path = temp_wal("foreign");
+        std::fs::write(&path, b"definitely not a tuple-space wal").unwrap();
+        let err = match TupleStore::persistent(&path, 10_000, 500) {
+            Ok(_) => panic!("non-WAL file must refuse to open"),
+            Err(e) => e,
+        };
+        assert!(err.to_string().contains("magic"), "error names the cause: {err}");
+        assert_eq!(
+            std::fs::read(&path).unwrap().as_slice(),
+            b"definitely not a tuple-space wal",
+            "refusal must leave the file byte-identical"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn wal_header_written_and_survives_compaction() {
+        let path = temp_wal("header");
+        {
+            let store = TupleStore::persistent(&path, 10_000, 500).unwrap();
+            store.put("s", b("x")).unwrap();
+            store.compact_now().unwrap();
+        }
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(&bytes[..6], WAL_MAGIC);
+        assert_eq!(u16::from_le_bytes(bytes[6..8].try_into().unwrap()), WAL_VERSION);
+        // And the post-compaction file replays.
+        let store = TupleStore::persistent(&path, 10_000, 500).unwrap();
+        assert_eq!(store.depth(Some("s"))[0].depth, 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[tokio::test]
     async fn put_with_id_fences_next_id() {
         let store = TupleStore::transient(500);
@@ -1355,7 +1469,7 @@ mod tests {
         // Find the start of the last record so we can tear inside it.
         let recs = read_wal(&path);
         assert!(recs.len() >= 7); // 5 puts + take + ack
-        let mut offset = 0usize;
+        let mut offset = WAL_HEADER_LEN as usize;
         for _ in 0..recs.len() - 1 {
             let (_, n) = Record::decode(&full[offset..]).unwrap();
             offset += n;
@@ -1476,5 +1590,192 @@ mod tests {
             store.complete(99, "b", b("x")),
             Err(TupleError::NotFound)
         ));
+    }
+
+    // ── Counter-invariant property test (Run-17 improvement target #2) ──────
+    //
+    // Two consecutive M2 runs found concurrency-accounting defects (Run 16:
+    // listener registration race; Run 17: waiters_count double-decrement).
+    // This is the structural response: a model-based test that replays
+    // arbitrary operation sequences against a reference model and checks
+    // every monitoring counter after EVERY step. The Run-17 underflow is
+    // re-found by this test in seconds if the fix regresses (verified by
+    // temporarily reverting the fix: fails at the first timeout+put pair).
+
+    mod counter_model {
+        use super::*;
+        use proptest::prelude::*;
+        use std::collections::HashMap as StdHashMap;
+
+        #[derive(Debug, Clone)]
+        pub(super) enum Op {
+            Put(u8),
+            TakeReady(u8),
+            TakeEmptyTimeout(u8),
+            AckOldest,
+            CompleteOldest(u8),
+            RequeueAll,
+        }
+
+        fn op_strategy() -> impl Strategy<Value = Op> {
+            prop_oneof![
+                3 => (0u8..3).prop_map(Op::Put),
+                3 => (0u8..3).prop_map(Op::TakeReady),
+                2 => (0u8..3).prop_map(Op::TakeEmptyTimeout),
+                2 => Just(Op::AckOldest),
+                2 => (0u8..3).prop_map(Op::CompleteOldest),
+                1 => Just(Op::RequeueAll),
+            ]
+        }
+
+        #[derive(Default)]
+        struct Model {
+            queues: StdHashMap<u8, VecDeque<u64>>,
+            /// Claim order, oldest first.
+            inflight: Vec<(u64, u8)>,
+            /// Timed-out waiters whose dead senders are still queued.
+            dead_waiters: StdHashMap<u8, u32>,
+        }
+
+        fn stage_name(s: u8) -> String {
+            format!("st-{s}")
+        }
+
+        fn check(store: &TupleStore, model: &Model, step: usize) {
+            let by_stage = store.inflight_by_stage();
+            let model_inflight: usize = model.inflight.len();
+            let store_inflight: u32 = by_stage.values().sum();
+            assert_eq!(
+                store_inflight as usize, model_inflight,
+                "step {step}: inflight mismatch"
+            );
+            for m in store.metrics_snapshot() {
+                let s: u8 = m.stage.trim_start_matches("st-").parse().unwrap();
+                let want_depth =
+                    model.queues.get(&s).map_or(0, |q| q.len()) as u32;
+                let want_waiters =
+                    model.dead_waiters.get(&s).copied().unwrap_or(0);
+                assert_eq!(m.depth, want_depth, "step {step}: depth[{s}]");
+                assert_eq!(m.waiters, want_waiters, "step {step}: waiters[{s}]");
+                // Underflow canary: no counter may ever read as wrapped.
+                assert!(m.depth < 1 << 30, "step {step}: depth wrapped");
+                assert!(m.waiters < 1 << 30, "step {step}: waiters wrapped");
+                assert!(m.hot_total <= m.take_total, "step {step}: hot > take");
+            }
+        }
+
+        pub(super) async fn run(ops: Vec<Op>) {
+            let store = TupleStore::transient(u32::MAX);
+            let mut model = Model::default();
+            for (step, op) in ops.iter().enumerate() {
+                match *op {
+                    Op::Put(s) => {
+                        let id = store.put(&stage_name(s), b("p")).unwrap();
+                        // A put pops (and skips) every dead waiter queued
+                        // ahead of it on that stage.
+                        model.dead_waiters.insert(s, 0);
+                        model.queues.entry(s).or_default().push_back(id);
+                    }
+                    Op::TakeReady(s) => {
+                        // Precondition: stage non-empty (else skip the op).
+                        let Some(q) = model.queues.get_mut(&s) else { continue };
+                        let Some(want) = q.pop_front() else { continue };
+                        let (id, _) = store
+                            .take(&stage_name(s), Duration::from_millis(100))
+                            .await
+                            .unwrap();
+                        assert_eq!(id, want, "step {step}: FIFO violated");
+                        model.inflight.push((id, s));
+                    }
+                    Op::TakeEmptyTimeout(s) => {
+                        if model.queues.get(&s).is_some_and(|q| !q.is_empty()) {
+                            continue; // only meaningful on an empty stage
+                        }
+                        let r = store
+                            .take(&stage_name(s), Duration::from_millis(1))
+                            .await;
+                        assert!(matches!(r, Err(TupleError::Timeout)));
+                        *model.dead_waiters.entry(s).or_default() += 1;
+                        // Ensure the stage exists in metrics even if never put to.
+                        model.queues.entry(s).or_default();
+                    }
+                    Op::AckOldest => {
+                        if model.inflight.is_empty() {
+                            continue;
+                        }
+                        let (id, _) = model.inflight.remove(0);
+                        store.ack(id).unwrap();
+                    }
+                    Op::CompleteOldest(to) => {
+                        if model.inflight.is_empty() {
+                            continue;
+                        }
+                        let (id, _) = model.inflight.remove(0);
+                        let new_id =
+                            store.complete(id, &stage_name(to), b("c")).unwrap();
+                        model.dead_waiters.insert(to, 0); // dispatch reaps them
+                        model.queues.entry(to).or_default().push_back(new_id);
+                    }
+                    Op::RequeueAll => {
+                        // Model stays exact only when re-queue order is
+                        // unambiguous: restrict to ≤ 1 in-flight item.
+                        if model.inflight.len() > 1 {
+                            continue;
+                        }
+                        let requeued = store.requeue_expired(Duration::ZERO);
+                        assert_eq!(requeued.len(), model.inflight.len());
+                        if let Some((id, s)) = model.inflight.pop() {
+                            assert_eq!(requeued, vec![id]);
+                            // Re-queue dispatches: dead waiters on the target
+                            // stage are popped and skipped, like any put.
+                            model.dead_waiters.insert(s, 0);
+                            model.queues.entry(s).or_default().push_back(id);
+                        }
+                    }
+                }
+                check(&store, &model, step);
+            }
+            // Drain to quiescence: every queued and in-flight item out, then
+            // exact zeros everywhere.
+            let stages: Vec<u8> = model.queues.keys().copied().collect();
+            for s in stages {
+                while model.queues.get(&s).is_some_and(|q| !q.is_empty()) {
+                    let want = model.queues.get_mut(&s).unwrap().pop_front().unwrap();
+                    let (id, _) = store
+                        .take(&stage_name(s), Duration::from_millis(100))
+                        .await
+                        .unwrap();
+                    assert_eq!(id, want);
+                    store.ack(id).unwrap();
+                }
+            }
+            for (id, _) in model.inflight.drain(..) {
+                store.ack(id).unwrap();
+            }
+            assert_eq!(store.inflight_count(), 0);
+            for m in store.metrics_snapshot() {
+                assert_eq!(m.depth, 0, "quiescence: depth[{}]", m.stage);
+                assert_eq!(m.inflight, 0, "quiescence: inflight[{}]", m.stage);
+                // Dead waiters not yet reaped by a put are the one permitted
+                // nonzero — but they must never read as wrapped.
+                assert!(m.waiters < 1 << 30, "quiescence: waiters wrapped");
+            }
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig {
+                cases: 64, ..ProptestConfig::default()
+            })]
+            #[test]
+            fn counters_match_reference_model(
+                ops in proptest::collection::vec(op_strategy(), 1..120)
+            ) {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_time()
+                    .build()
+                    .unwrap();
+                rt.block_on(run(ops));
+            }
+        }
     }
 }

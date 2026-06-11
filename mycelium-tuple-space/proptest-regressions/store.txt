@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc b9fcbbeb2295b18837a2a2c8da4af2ab3c1ff6033c60354e0261a4fc0de04766 # shrinks to ops = [Put(2), TakeReady(2), TakeEmptyTimeout(2), RequeueAll]
