@@ -40,6 +40,20 @@ existed. This is the framework's own report card.
   (key, ts) loses LWW and never touches the index; introduced 2026-05-18,
   commit cd3368c). Found by M2 deep-dive probe in Run 18 — 86 of 100 000
   racing rounds lost the key on first execution.
+- 2026-06-11: **Semantic Correctness** scored 8–9 in Runs 9–15 and 17–18
+  while `Hlc::observe` accepted unbounded remote clock drift (one skewed
+  peer drags the whole cluster's HLC forward irrecoverably; read-side
+  evaporation — the substrate's failure detector, including tuple-space
+  secondary promotion — is silently suspended for the full drift duration
+  because `now.saturating_sub(written)` reads 0 until the wall clock catches
+  up; the cited Kulkarni et al. 2014 algorithm mandates a drift bound).
+  Found by M2 Run-19 deep-dive doc-vs-algorithm cross-check.
+- 2026-06-11: **Dependency Hygiene** scored 9 in Runs 17–18 while two
+  published RUSTSEC advisories applied to the lockfile (`bytes` 1.10.1,
+  RUSTSEC-2026-0007 integer overflow in `BytesMut::reserve` — called by
+  `read_frame` on the wire path; `tracing-subscriber` 0.3.19,
+  RUSTSEC-2025-0055 log poisoning). Found by M2 Run-19 `cargo audit` probe;
+  fixed same run via semver-compatible lock bumps.
 
 **Dimensions:** Philosophy/Coherence · Conceptual Integrity · Architecture ·
 Modularity · API Design · Error Handling · Configurability · Language Best
@@ -866,3 +880,128 @@ Major finding below.
 | 25 | Dependency Hygiene | 9 | **Evidence:** clippy `--no-default-features` executed this run; diff adds only `proptest` as companion dev-dep (already in core's dev tree — zero new transitive deps); `block v0.1.6` future-incompat (dev-deps) persists |
 | — | **Floor (lowest 3)** | **5, 7, 7** | Concurrency Correctness (5, capped by finding); Security, Scalability, Test Architecture tied at 7 — Concurrency is the actionable one: fix the index race |
 | — | Mean (continuity footnote) | 8.0 | not a target; see M2 preamble |
+
+## 2026-06-11 — Run 19 (M2)
+
+Deep-dive dimensions this run (by rotation from Run 18): 11 (Semantic
+Correctness), 12 (Robustness), 13 (Security), 14 (Failure Mode Legibility),
+15 (Performance). Next run by rotation: 16–20.
+
+**Process disclosure.** The blind rule is fully compromised this run: the
+scoring agent authored the entire diff under evaluation (the Run-18
+race-family sweep) in the same session, with Run 18's table in context.
+Both fix commits reference M2 run findings by name (flagged per M2's
+score-targeting rule). Mitigation: scores moved only where this run's own
+probes or suites produced independent evidence, and the run's two new
+findings are both AGAINST dimensions that benefited from no fix work.
+Third run today; cadence gate passed on a material, distinct diff
+(787 insertions: six concurrency fixes + tests + CI expansion).
+
+Execution evidence this run: core 312/312 at full feature matrix on the
+security-bumped lockfile (bytes 1.11.1 / tracing-subscriber 0.3.20 /
+tokio 1.46.1); tuple-space 24/24; clippy `-D warnings` clean at full
+matrix and `--no-default-features`; remote CI 3/3 jobs green (run
+27335333481 — first run of the expanded workflow); `cargo audit`
+(2 vulnerabilities found → fixed → clean); `cargo tree` dependency-
+direction probe; release perf smoke `apply_and_notify_throughput_smoke`:
+635k writes/s single-thread, 2.28M/s 8-thread 64-hot-key contention.
+
+### Findings
+
+- **Major — Semantic Correctness (#11, capped ≤ 6, scored 6).**
+  `Hlc::observe` absorbs remote physical time with an unbounded `max`,
+  deviating from the drift-bound requirement of the cited Kulkarni et al.
+  2014 algorithm. One peer with a skewed clock (NTP failure; or hostile in
+  a non-TLS cluster) drags every node's HLC forward — `max` never decays,
+  so there is no recovery until the wall clock catches up. Downstream
+  impact: read-side evaporation computes `now.saturating_sub(written)`,
+  which reads 0 for future stamps, so capability evaporation — the
+  substrate's failure detector, on which tuple-space secondary promotion
+  also depends — is silently suspended for the full drift duration (a
+  7-day-skewed peer ⇒ up to 7 days without failure detection,
+  cluster-wide, no log line). NOT fixed in-run: a drift bound changes
+  accept/reject behaviour on the gossip path and deserves a deliberate
+  design pass (clamp vs reject, configurable bound, warn-on-large-drift).
+  Canary: `hlc::tests::observe_bounds_remote_clock_drift` (`#[ignore]`d,
+  flips when the bound lands); impact documented by
+  `future_stamped_entry_outlives_its_evaporation_window_by_the_drift`
+  (capability.rs — asserts current wrong behaviour, inverted on fix).
+  Calibration ledger entry 5. Top improvement target.
+  *Addendum (same day, post-run, at user request):* all three improvement
+  targets addressed. (1) Drift bound implemented — `Hlc::observe` clamps
+  remote physical time to `wall_now + GossipConfig::max_clock_drift_ms`
+  (default 5 min, `0` disables, `GOSSIP_MAX_CLOCK_DRIFT_MS` env), with a
+  rate-limited `warn!` naming the drift (the #14 legibility fix); freshness
+  is now a SYMMETRIC window (`CapEntry`/`ReqEntry::is_fresh` quarantine
+  stamps further than 3× in the future), so failure detection no longer
+  depends on sender clock sanity even for stamps inside the drift bound.
+  Canary `observe_bounds_remote_clock_drift` un-ignored and passing; impact
+  test inverted to `future_stamped_entry_is_quarantined_not_fresh`; module
+  doc records the documented trade-off (out-of-bound stamps waive
+  local-write dominance; store-level rejection deferred to the next
+  wire-policy pass). (2) CI gains a `cargo audit` job (taiki-e prebuilt
+  install) plus a weekly Monday cron — advisories land without code pushes,
+  which is exactly how the Run-19 finding escaped push-triggered gates.
+  (3) Bincode succession decided and recorded as ROADMAP v2 milestone 11:
+  stay-and-monitor short-term (lockfile-pinned, audit-job-tracked);
+  hand-rolled fixed-layout codec at the next WIRE_VERSION bump (v12) —
+  `WireMessage` is a small closed enum whose layout is already hand-managed,
+  so owning the codec removes the unmaintained dependency without a
+  dedicated wire break. Post-fix gates: core 315/315 full matrix,
+  tuple-space 24/24, clippy `-D warnings` clean both configs, ci.yml
+  YAML-validated. Scores stand as the run's snapshot; Run 20 verifies #11
+  recovery with sustained evidence.
+- **Major — Dependency Hygiene (#25, capped ≤ 6, scored 6, fixed in-run).**
+  `cargo audit` probe found 2 vulnerabilities: bytes 1.10.1
+  (RUSTSEC-2026-0007, integer overflow in `BytesMut::reserve` — called by
+  `read_frame` on the wire path; exploitability mitigated by the 10 MiB
+  frame cap upstream) and tracing-subscriber 0.3.19 (RUSTSEC-2025-0055,
+  ANSI-escape log poisoning). Fixed in-run via semver lock bumps (+ tokio
+  1.46.1 for the RUSTSEC-2025-0023 broadcast unsoundness warning); full
+  gate re-run green on the new lockfile; audit now reports 0
+  vulnerabilities. Residual: 5 unmaintained-crate warnings, most notably
+  **bincode — the wire-format codec — is unmaintained** (RUSTSEC-2025-0141);
+  flagged as a roadmap-level concern, not a quick fix. Calibration ledger
+  entry 6. CI gains no audit job yet — adding one is the obvious follow-up.
+- **Probe passed — Performance (#15):** `apply_and_notify_throughput_smoke`
+  (release): 635k writes/s single-thread distinct keys; 2.28M/s under
+  8-thread 64-hot-key contention — the Run-18 stripe-lock reconcile scales
+  with threads and its hot-path cost is immaterial at gossip rates. Kept as
+  an `#[ignore]`d perf smoke.
+- **Probe passed — Architecture (#3):** `cargo tree -e normal` confirms the
+  companion-crate boundary (0 tuple-space references in core's normal
+  deps; exactly 1 core dep in the companion — the documented dev-dep cycle
+  is dev-only). Bonus live demonstration: the layer-boundary enforcement
+  test `layer1_modules_do_not_reference_higher_layers` caught this run's
+  own canary when it was first placed in hlc.rs referencing a capability
+  type — the boundary is mechanically enforced, including over comments.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 9 | carried (v17) |
+| 2 | Conceptual Integrity | 8 | carried (v17) |
+| 3 | Architecture | 9 | **Evidence:** cargo-tree dependency-direction probe passed; layer-enforcement test demonstrated live (caught the canary's misplacement this run) |
+| 4 | Modularity | 8 | carried (v17) |
+| 5 | API Design | 8 | carried (v17) |
+| 6 | Error Handling Model | 8 | carried (v18) |
+| 7 | Configurability | 8 | carried (v18) |
+| 8 | Language Best Practices | 9 | **Evidence:** clippy `-D warnings` clean this run, full matrix + `--no-default-features`, on the bumped lockfile |
+| 9 | Concurrency Correctness | 7 | Up from 5 citing verifiable artifacts: six family fixes + six regression tests in-suite (312/312), remote CI green, sweep verified 7 sites already correct. Two ledger entries keep this below 8 until a clean deep-dive run |
+| 10 | Resource Management | 8 | carried (v18) |
+| 11 | Semantic Correctness | 6 | Deep-dive. **Capped: Major finding** — unbounded HLC drift acceptance suspends evaporation/failure-detection for the drift duration (see Findings). LWW/HLC property tests pass (312/312) but the algorithm deviates from its cited source |
+| 12 | Robustness | 8 | Deep-dive. `read_frame` validation re-verified (length/version gates, budget-limited reads, EOF); Run-16 garbage probe still green in-suite; no fresh fuzz execution this run |
+| 13 | Security | 7 | Deep-dive. `verify_strict` + CA-based mTLS + PKCS8 loading read clean; carried gaps stand (unauthenticated tuple ack/replicate, no RBAC/audit); drift acceptance is also an unauthenticated-input-shapes-state surface in non-TLS clusters |
+| 14 | Failure Mode Legibility | 7 | Deep-dive. Error strings consistently actionable (WAL refusal names versions+path; UnsupportedWireVersion carries hint) — but the run's central finding is a SILENT cluster-wide distortion: observe() absorbing a week of drift logs nothing. Warn-on-large-drift is the cheap legibility fix |
+| 15 | Performance | 9 | Deep-dive. **Evidence:** release perf smoke this run — 635k/s single-thread, 2.28M/s contended; stripe-lock reconcile cost immaterial; scales with threads |
+| 16 | Scalability | 7 | carried (v17) |
+| 17 | Testability | 9 | **Evidence:** this run's canary, impact test, and perf smoke were each written+run in minutes; the arch-enforcement test gave immediate structural feedback on test placement |
+| 18 | Test Architecture | 8 | Up from 7 citing artifacts: +6 race regressions, churn stress, perf smoke, drift canary pair; arch-enforcement test proven live. Remaining gap: no fuzz target for tuple-space WAL/replicate decoder |
+| 19 | Observability | 8 | carried (v18) |
+| 20 | Debuggability | 8 | carried (v17) |
+| 21 | Operational Readiness | 9 | carried (v17, lifecycle drill + 13/13 scenarios) |
+| 22 | Evolvability | 8 | CHANGELOG current (Security section added for the advisory bumps); wire policy unchanged; bincode-unmaintained is the open strategic question for the wire format |
+| 23 | Documentation | 8 | carried (v17) |
+| 24 | Developer Experience | 8 | Remote CI 3/3 green this run (first run of expanded workflow); held at 8: actions/checkout@v4 Node-20 deprecation lands 2026-06-16 (5 days) — bump to v5 pending |
+| 25 | Dependency Hygiene | 6 | **Capped: Major finding this run** (2 RUSTSEC vulnerabilities found by audit probe; fixed in-run, audit now clean — expect recovery next run with sustained evidence). bincode unmaintained remains; no CI audit job yet |
+| — | **Floor (lowest 3)** | **6, 6, 7** | Semantic Correctness (6, HLC drift), Dependency Hygiene (6, fixed in-run), four-way tie at 7 (Concurrency, Security, Scalability, Failure Mode Legibility) — the HLC drift bound is the actionable one and lifts both #11 and #14 |
+| — | Mean (continuity footnote) | 7.9 | not a target; see M2 preamble |

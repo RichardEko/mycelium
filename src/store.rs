@@ -810,6 +810,60 @@ mod tests {
         );
     }
 
+    /// M2 Run-19 perf probe: the Run-18 stripe-locked index reconcile added a
+    /// mutex acquisition + store re-read to every winning write. This smoke
+    /// bounds the cost: single-thread distinct-key throughput and 8-thread
+    /// worst-case stripe contention (64 hot keys) must both stay far above
+    /// any realistic gossip ingest rate. Run explicitly:
+    /// `cargo test --release --lib -- --ignored apply_and_notify_throughput_smoke --nocapture`
+    #[test]
+    #[ignore = "perf smoke; run explicitly with --release --ignored --nocapture"]
+    fn apply_and_notify_throughput_smoke() {
+        let kv = KvState::new(0);
+
+        let n = 200_000u64;
+        let keys: Vec<Arc<str>> =
+            (0..n).map(|i| Arc::from(format!("perf/k{i}").as_str())).collect();
+        let t0 = std::time::Instant::now();
+        for (i, k) in keys.iter().enumerate() {
+            apply_and_notify(&kv, &GossipUpdate {
+                sender: 1, key: Arc::clone(k), value: Bytes::from_static(b"v"),
+                timestamp: 100, nonce: i as u64 + 1, ttl: 1, is_tombstone: false,
+            });
+        }
+        let single = n as f64 / t0.elapsed().as_secs_f64();
+
+        // Worst-case contention: 8 threads, 64 hot keys, strictly rising
+        // timestamps so every write wins its CAS and runs the reconcile.
+        let m = 100_000u64;
+        let hot: Vec<Arc<str>> =
+            (0..64).map(|i| Arc::from(format!("hot/k{i}").as_str())).collect();
+        let ts_base = AtomicU64::new(1_000);
+        let t1 = std::time::Instant::now();
+        std::thread::scope(|s| {
+            for _ in 0..8 {
+                s.spawn(|| {
+                    for j in 0..m {
+                        let ts = ts_base.fetch_add(1, Ordering::Relaxed);
+                        let k = &hot[(j as usize) % hot.len()];
+                        apply_and_notify(&kv, &GossipUpdate {
+                            sender: 1, key: Arc::clone(k), value: Bytes::from_static(b"v"),
+                            timestamp: ts, nonce: ts, ttl: 1, is_tombstone: false,
+                        });
+                    }
+                });
+            }
+        });
+        let contended = (8 * m) as f64 / t1.elapsed().as_secs_f64();
+
+        eprintln!(
+            "apply_and_notify: {single:.0}/s single-thread distinct keys; \
+             {contended:.0}/s 8-thread 64-hot-key contention"
+        );
+        assert!(single > 100_000.0, "single-thread throughput {single:.0}/s below floor");
+        assert!(contended > 100_000.0, "contended throughput {contended:.0}/s below floor");
+    }
+
     /// M2 Run-18 race-family sweep: concurrent `set_with_min_acks` callers on
     /// the SAME key must coexist. The previous single-slot tracker map let the
     /// second caller overwrite the first tracker, and the first caller's
