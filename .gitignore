@@ -21,3 +21,6 @@ __pycache__/
 
 # Community example runtime artifacts
 examples/community/logs/
+
+# Demo runtime artifacts (pids + logs from examples/*/demo.sh runs)
+examples/*/logs/
