@@ -73,18 +73,47 @@ async fn run(sf: Arc<SkillFile>) -> Result<(), Box<dyn std::error::Error>> {
         sf.node.bind_port,
     );
 
-    // Push input/output schemas to KV for tool discovery by peer skills
+    // Push input/output schemas to KV for tool discovery by peer skills.
+    // Re-asserted on a timer, like capability advertisements: schemas are
+    // soft-state on a gossip mesh, and a one-shot write at startup can race
+    // peer-connection establishment — the only repair path is then
+    // anti-entropy, which observed runs show can lag tens of seconds in
+    // hub-spoke bootstrap (peers gate StateRequests until the requester is
+    // known). Periodic re-writes ride the live gossip path exactly as
+    // capability heartbeats do.
     let node_id_str = agent.node_id().to_string();
     let ns   = &sf.capability.ns;
     let name = &sf.capability.name;
 
-    if let Some(ref schema) = sf.capability.input {
-        let key = format!("skills/{ns}/{name}/{node_id_str}/input");
-        let _ = agent.kv().set(key, Bytes::from(serde_json::to_vec(schema)?));
-    }
-    if let Some(ref schema) = sf.capability.output {
-        let key = format!("skills/{ns}/{name}/{node_id_str}/output");
-        let _ = agent.kv().set(key, Bytes::from(serde_json::to_vec(schema)?));
+    let input_kv = sf.capability.input.as_ref()
+        .map(|s| -> Result<_, serde_json::Error> {
+            Ok((format!("skills/{ns}/{name}/{node_id_str}/input"),
+                Bytes::from(serde_json::to_vec(s)?)))
+        }).transpose()?;
+    let output_kv = sf.capability.output.as_ref()
+        .map(|s| -> Result<_, serde_json::Error> {
+            Ok((format!("skills/{ns}/{name}/{node_id_str}/output"),
+                Bytes::from(serde_json::to_vec(s)?)))
+        }).transpose()?;
+    let push_schemas = {
+        let agent = Arc::clone(&agent);
+        move || {
+            for (key, value) in input_kv.iter().chain(output_kv.iter()) {
+                let _ = agent.kv().set(key.clone(), value.clone());
+            }
+        }
+    };
+    push_schemas();
+    {
+        let refresh = Duration::from_secs((sf.capability.ttl_secs / 4).max(5));
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(refresh);
+            tick.tick().await; // immediate first tick already pushed above
+            loop {
+                tick.tick().await;
+                push_schemas();
+            }
+        });
     }
 
     // Advertise capability on the mesh

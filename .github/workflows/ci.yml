@@ -51,6 +51,22 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --lib --no-default-features -- -D warnings
 
+  demo-smoke:
+    name: Demo smoke (community cluster + mock LLM)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --bin skillrunner --features a2a
+      # Scripted run of the community demo against a deterministic mock LLM.
+      # Promoted to CI after a live run-through (2026-06-11) found four
+      # substrate bugs that unit tests and Docker scenarios never touched:
+      # gateway router clobber, A2A tasks/send timeout, tool results sent as
+      # non-string content, skillrunner surviving SIGTERM. Each smoke
+      # assertion is a regression gate for one of them.
+      - run: ./examples/community/ci_smoke.sh
+
   audit:
     name: Dependency audit (RUSTSEC)
     runs-on: ubuntu-latest
