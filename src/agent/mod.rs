@@ -653,6 +653,10 @@ impl GossipAgent {
     /// on them before passing here so they are `Router<()>`). Routes registered after
     /// `start` is called are silently ignored.
     ///
+    /// May be called multiple times; routers are **merged**, so application
+    /// routes compose with [`with_a2a`](Self::with_a2a) and other adapters
+    /// rather than replacing them.
+    ///
     /// # Example
     ///
     /// ```no_run
@@ -668,7 +672,15 @@ impl GossipAgent {
     /// # Ok(()) }
     /// ```
     pub fn with_http_routes(&self, routes: axum::Router) {
-        *self.extra_routes.lock().unwrap_or_else(|e| e.into_inner()) = Some(routes);
+        // Merge, don't replace: callers compose routers (`with_a2a()` +
+        // application routes) and a last-caller-wins slot silently dropped
+        // every earlier registration — skillrunner's management dashboard
+        // erased the A2A endpoints for as long as both were enabled.
+        let mut slot = self.extra_routes.lock().unwrap_or_else(|e| e.into_inner());
+        *slot = Some(match slot.take() {
+            Some(existing) => existing.merge(routes),
+            None           => routes,
+        });
     }
 
     /// Registers the A2A (Agent-to-Agent protocol) endpoints on this node's HTTP gateway.

@@ -2423,6 +2423,46 @@ async fn forwarding_is_unconditional_through_non_member_relay() {
     member.shutdown().await;
 }
 
+/// Regression: `with_http_routes` must MERGE routers across calls, not
+/// replace. A last-caller-wins slot silently dropped every earlier
+/// registration — skillrunner's management dashboard erased the A2A
+/// endpoints (`/.well-known/agent.json` → 404) for as long as both were
+/// enabled, found by a live run-through of examples/a2a_langchain.
+#[cfg(feature = "gateway")]
+#[tokio::test]
+async fn with_http_routes_merges_across_calls() {
+    let gossip_port = alloc_port();
+    let http_port   = alloc_port();
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = gossip_port;
+    cfg.http_port = Some(http_port);
+    let agent = GossipAgent::new(NodeId::new("127.0.0.1", gossip_port).unwrap(), cfg);
+
+    async fn first() -> &'static str { "first" }
+    async fn second() -> &'static str { "second" }
+    agent.with_http_routes(axum::Router::new().route("/extra-one", axum::routing::get(first)));
+    agent.with_http_routes(axum::Router::new().route("/extra-two", axum::routing::get(second)));
+
+    agent.start().await.expect("start");
+    // Poll until the HTTP server is up, then both routes must serve.
+    let client = reqwest::Client::new();
+    let base = format!("http://127.0.0.1:{http_port}");
+    let mut ok = false;
+    for _ in 0..40 {
+        if let Ok(r) = client.get(format!("{base}/health")).send().await
+            && r.status().is_success() { ok = true; break; }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(ok, "gateway did not come up");
+    let one = client.get(format!("{base}/extra-one")).send().await.unwrap();
+    let two = client.get(format!("{base}/extra-two")).send().await.unwrap();
+    assert_eq!(one.status().as_u16(), 200, "first registered router must survive");
+    assert_eq!(two.status().as_u16(), 200, "second registered router must serve");
+    assert_eq!(one.text().await.unwrap(), "first");
+    assert_eq!(two.text().await.unwrap(), "second");
+    agent.shutdown().await;
+}
+
 /// M2 Run-18 race-family sweep: re-registering a prompt skill under the same
 /// id and then dropping the OLD handle must not delete the NEW registration.
 /// The cancellation task previously removed by key unconditionally; it must
