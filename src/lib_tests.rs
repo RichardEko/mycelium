@@ -2423,6 +2423,154 @@ async fn forwarding_is_unconditional_through_non_member_relay() {
     member.shutdown().await;
 }
 
+/// M2 Run-20 quota probe (#21 Operational Readiness): the documented /ready
+/// gate — NOT ready before the first capability advertisement, ready after.
+/// A readiness endpoint that returns 200 early routes traffic to a node with
+/// no soft-state on the mesh yet; one that never flips blocks deploys.
+#[cfg(feature = "gateway")]
+#[tokio::test]
+async fn ready_gate_flips_on_first_capability_advertisement() {
+    let gossip_port = alloc_port();
+    let http_port   = alloc_port();
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = gossip_port;
+    cfg.http_port = Some(http_port);
+    let agent = GossipAgent::new(NodeId::new("127.0.0.1", gossip_port).unwrap(), cfg);
+    agent.start().await.expect("start");
+
+    let client = reqwest::Client::new();
+    let url = format!("http://127.0.0.1:{http_port}/ready");
+    // Wait for the HTTP server itself, via the liveness endpoint.
+    let health = format!("http://127.0.0.1:{http_port}/health");
+    for _ in 0..40 {
+        if client.get(&health).send().await.is_ok_and(|r| r.status().is_success()) { break; }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let before = client.get(&url).send().await.expect("ready before");
+    assert!(
+        !before.status().is_success(),
+        "/ready must NOT be 200 before any capability is advertised (got {})",
+        before.status(),
+    );
+
+    let _reg = agent.capabilities().advertise_capability(
+        Capability::new("probe", "ready"),
+        Duration::from_secs(5),
+    );
+    let mut flipped = false;
+    for _ in 0..60 {
+        if client.get(&url).send().await.is_ok_and(|r| r.status().is_success()) {
+            flipped = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    agent.shutdown().await;
+    assert!(flipped, "/ready must flip to 200 after the first advertisement tick");
+}
+
+/// M2 Run-20 quota probe (#18 Test Architecture): in-suite mini-fuzz of the
+/// wire and capability decoders — the fuzz targets exist but the series has
+/// never executed them, so this puts a fast adversarial pass in the normal
+/// suite. Random bytes plus truncations/bitflips of a VALID encoded frame
+/// (mutation finds more than noise). Pass = no panic; Err is valid output.
+#[cfg(feature = "fuzz-internals")]
+#[test]
+fn mini_fuzz_decoders_survive_adversarial_bytes() {
+    // A valid frame to mutate: encode a real WireMessage.
+    let update = GossipUpdate {
+        nonce: 7, sender: 1, ttl: 3, is_tombstone: false,
+        timestamp: crate::hlc::pack(1_700_000_000_000, 4),
+        key: Arc::from("fuzz/seed"), value: Bytes::from_static(b"v"),
+    };
+    let valid = bincode::serde::encode_to_vec(
+        WireMessage::Data(update),
+        bincode_cfg(),
+    ).unwrap();
+
+    let mut rng = fastrand::Rng::with_seed(0xC0FFEE);
+    let mut cases = 0u32;
+    // Pure noise.
+    for _ in 0..20_000 {
+        let len = rng.usize(..256);
+        let buf: Vec<u8> = (0..len).map(|_| rng.u8(..)).collect();
+        let _ = crate::fuzz_internals::wire_message_decode(&buf);
+        let _ = crate::fuzz_internals::capability_decode(&buf);
+        let _ = crate::fuzz_internals::cap_filter_decode(&buf);
+        let _ = crate::fuzz_internals::locality_path_decode(&buf);
+        cases += 1;
+    }
+    // Truncations of a valid frame at every offset.
+    for cut in 0..valid.len() {
+        let _ = crate::fuzz_internals::wire_message_decode(&valid[..cut]);
+        cases += 1;
+    }
+    // Single-bit flips at every position of the valid frame.
+    for i in 0..valid.len() {
+        for bit in 0..8 {
+            let mut m = valid.clone();
+            m[i] ^= 1 << bit;
+            let _ = crate::fuzz_internals::wire_message_decode(&m);
+            cases += 1;
+        }
+    }
+    eprintln!("mini-fuzz: {cases} adversarial inputs, no panics");
+}
+
+/// M2 Run-20 deep-dive probe: anti-entropy closure for writes that predate
+/// the peer connection. Reconstruction of the community-demo cold-start
+/// flake (2026-06-11): a spoke bootstraps toward a seed that is not yet
+/// listening, writes a key while unconnected, and the seed comes up later.
+/// Live gossip missed the write by construction; the documented guarantee
+/// is that anti-entropy closes the gap. Until it does, hub-spoke clusters
+/// silently lack one-shot writes (the skillrunner schema keys were exactly
+/// this; masked there by periodic re-assertion, not root-caused).
+#[tokio::test]
+async fn anti_entropy_delivers_pre_connection_writes() {
+    let seed_port  = alloc_port();
+    let spoke_port = alloc_port();
+    let seed_id  = NodeId::new("127.0.0.1", seed_port).unwrap();
+    let spoke_id = NodeId::new("127.0.0.1", spoke_port).unwrap();
+
+    // Spoke first: bootstrap points at a seed that is NOT yet listening.
+    let mut spoke_cfg = GossipConfig::default();
+    spoke_cfg.bind_port = spoke_port;
+    spoke_cfg.bootstrap_peers = vec![seed_id.clone()];
+    let spoke = GossipAgent::new(spoke_id.clone(), spoke_cfg);
+    spoke.start().await.expect("spoke start");
+    // Written while unconnected: live gossip cannot deliver this.
+    assert!(spoke.kv().set("ae/pre-connection", &b"written-before-seed-existed"[..]));
+
+    // Seed comes up afterwards.
+    let mut seed_cfg = GossipConfig::default();
+    seed_cfg.bind_port = seed_port;
+    let seed = GossipAgent::new(seed_id, seed_cfg);
+    seed.start().await.expect("seed start");
+
+    // Anti-entropy must converge the pre-connection write seed-ward.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let mut arrived_after = None;
+    let t0 = std::time::Instant::now();
+    while std::time::Instant::now() < deadline {
+        if seed.kv().get("ae/pre-connection").is_some() {
+            arrived_after = Some(t0.elapsed());
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let outcome = arrived_after;
+    spoke.shutdown().await;
+    seed.shutdown().await;
+    match outcome {
+        Some(t) => eprintln!("anti-entropy closed the gap in {t:?}"),
+        None => panic!(
+            "seed never received the spoke's pre-connection write within 30 s — \
+             anti-entropy closure is broken for hub-spoke bootstrap"
+        ),
+    }
+}
+
 /// Regression: `with_http_routes` must MERGE routers across calls, not
 /// replace. A last-caller-wins slot silently dropped every earlier
 /// registration — skillrunner's management dashboard erased the A2A

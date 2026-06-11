@@ -20,6 +20,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --lib
       - run: cargo test --lib --features tls,metrics,a2a,llm
+      # In-suite decoder mini-fuzz (gated behind fuzz-internals). The fuzz/
+      # targets existed for the whole project's life but were never executed
+      # in CI, and an unbounded-allocation decode DoS sat uncaught (M2 Run-20).
+      - run: cargo test --lib --features fuzz-internals mini_fuzz_decoders_survive_adversarial_bytes
       - run: cargo test -p mycelium-tuple-space --features gateway
       # Examples are the documented contract for the guide chapters; an
       # examples-free CI let a stale include_str! path hide behind cargo's

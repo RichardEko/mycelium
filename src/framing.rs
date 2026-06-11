@@ -217,7 +217,18 @@ pub(crate) fn shard_for_key(key: &str, n_shards: usize) -> usize {
 /// produces a more predictable wire size — no branching on the encode/decode hot path.
 #[inline(always)]
 pub(crate) fn bincode_cfg() -> impl bincode::config::Config {
-    bincode::config::standard().with_fixed_int_encoding()
+    // `.with_limit` caps how many bytes a decode is allowed to consume/allocate.
+    // Without it, a frame whose internal length prefix claims a huge element
+    // count makes bincode attempt an unbounded `Vec::with_capacity` and the
+    // process OOM-aborts — one malformed frame from any peer (or a bit-flip on
+    // a non-TLS link) kills the node. The frame itself is already capped at
+    // MAX_FRAME_BYTES by `read_frame`, and no legitimately-decoded message
+    // exceeds the frame it arrived in, so MAX_FRAME_BYTES is the correct
+    // ceiling. (M2 Run-20 finding, caught by the decoder mini-fuzz:
+    // `mini_fuzz_decoders_survive_adversarial_bytes`.)
+    bincode::config::standard()
+        .with_fixed_int_encoding()
+        .with_limit::<MAX_FRAME_BYTES>()
 }
 
 
