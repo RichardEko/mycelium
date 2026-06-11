@@ -124,7 +124,7 @@ export class PromptSkillClient {
    */
   async list(): Promise<PromptListEntry[]> {
     const resp = await this.fetch("/gateway/prompts");
-    const raw: ListEntryWire[] = await resp.json();
+    const raw = (await resp.json()) as ListEntryWire[];
     return (Array.isArray(raw) ? raw : []).map((w) => ({
       ns:          w.ns,
       name:        w.name,
@@ -144,7 +144,7 @@ export class PromptSkillClient {
       ignoreNotFound: true,
     });
     if (resp.status === 404) return null;
-    const w: TemplateWire = await resp.json();
+    const w = (await resp.json()) as TemplateWire;
     return templateFromWire(w);
   }
 
@@ -199,7 +199,12 @@ export class PromptSkillClient {
       body: JSON.stringify({ ns, name, input, context, timeout_ms: timeoutMs }),
       headers: { "Content-Type": "application/json" },
     });
-    const data = await resp.json();
+    const data = (await resp.json()) as {
+      error?: string;
+      detail?: string;
+      output?: string;
+      provider?: string;
+    };
     if (data.error) {
       throw new Error(`llm call failed: ${data.error}: ${data.detail ?? ""}`);
     }

@@ -547,7 +547,7 @@ export class MyceliumAgent {
    */
   async shardFor(ns: string, name: string, key: string): Promise<string> {
     const resp = await fetch(
-      `${this._base}gateway/shard/${encodeURIComponent(ns)}/${encodeURIComponent(name)}?key=${encodeURIComponent(key)}`,
+      `${this.base}/gateway/shard/${encodeURIComponent(ns)}/${encodeURIComponent(name)}?key=${encodeURIComponent(key)}`,
     );
     if (resp.status === 404) throw new Error(`no providers for ${ns}/${name}`);
     if (!resp.ok) throw new Error(`shardFor failed: ${resp.status}`);
