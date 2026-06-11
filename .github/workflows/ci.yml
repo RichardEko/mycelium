@@ -21,6 +21,10 @@ jobs:
       - run: cargo test --lib
       - run: cargo test --lib --features tls,metrics,a2a,llm
       - run: cargo test -p mycelium-tuple-space --features gateway
+      # Examples are the documented contract for the guide chapters; an
+      # examples-free CI let a stale include_str! path hide behind cargo's
+      # incremental cache for weeks (mesh_demo manifests/ → presets/ rename).
+      - run: cargo build --examples --features tls,metrics,a2a,llm
 
   clippy:
     name: Clippy
