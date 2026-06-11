@@ -115,17 +115,32 @@ pub(crate) fn spawn_cleanup(tasks: Arc<papaya::HashMap<String, A2aTask>>) {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
             interval.tick().await;
-            let now = Instant::now();
-            let to_remove: Vec<String> = tasks.pin().iter()
-                .filter(|(_, v)| now.duration_since(v.created_at) > Duration::from_secs(300))
-                .map(|(k, _)| k.clone().to_string())
-                .collect();
-            let guard = tasks.pin();
-            for k in to_remove {
-                guard.remove(&*k);
-            }
+            evict_stale_tasks(&tasks, Instant::now());
         }
     });
+}
+
+const A2A_TASK_TTL: Duration = Duration::from_secs(300);
+
+/// One eviction sweep over `tasks`: removes entries older than
+/// [`A2A_TASK_TTL`] as of `now`. The removal is a conditional `compute`:
+/// a status update can re-insert a task id with a fresh `created_at`
+/// between collect and removal, and an unconditional `remove()` would evict
+/// the live task — clients polling it would get NotFound (M2 Run-18 sweep
+/// finding, same family as the tombstone-GC conditional remove).
+fn evict_stale_tasks(tasks: &papaya::HashMap<String, A2aTask>, now: Instant) {
+    let to_remove: Vec<String> = tasks.pin().iter()
+        .filter(|(_, v)| now.duration_since(v.created_at) > A2A_TASK_TTL)
+        .map(|(k, _)| k.clone().to_string())
+        .collect();
+    let guard = tasks.pin();
+    for k in to_remove {
+        guard.compute(k, |existing| match existing {
+            Some((_, v)) if now.duration_since(v.created_at) > A2A_TASK_TTL =>
+                papaya::Operation::Remove,
+            _ => papaya::Operation::Abort(()),
+        });
+    }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -454,6 +469,26 @@ mod tests {
         let state = A2aState { task_ctx: make_ctx(), tasks };
         let result = handle_tasks_get(&state, None, &json!({ "id": "no-such-id" }));
         assert_eq!(result["error"]["code"], -32001);
+    }
+
+    /// M2 Run-18 race-family sweep regression: the cleanup sweep removes only
+    /// entries that are still stale at removal time — a task re-inserted with
+    /// a fresh `created_at` (status update) survives the sweep.
+    #[test]
+    fn cleanup_sweep_evicts_stale_keeps_fresh() {
+        let mk = |id: &str| Task {
+            id: id.into(),
+            status: TaskStatus { state: "working".into() },
+            artifacts: vec![],
+        };
+        let tasks = Arc::new(papaya::HashMap::<String, A2aTask>::new());
+        let now = Instant::now();
+        let old = now.checked_sub(Duration::from_secs(600)).expect("clock supports -600s");
+        tasks.pin().insert("stale".into(), A2aTask { task: mk("stale"), created_at: old });
+        tasks.pin().insert("fresh".into(), A2aTask { task: mk("fresh"), created_at: now });
+        evict_stale_tasks(&tasks, now);
+        assert!(tasks.pin().get("stale").is_none(), "stale task evicted");
+        assert!(tasks.pin().get("fresh").is_some(), "fresh task survives the sweep");
     }
 
     #[test]

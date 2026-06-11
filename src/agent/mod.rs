@@ -274,6 +274,12 @@ pub(crate) struct TaskCtx {
     /// invocation; only the backend reference is cached here.
     #[cfg(feature = "llm")]
     pub(crate) llm_skills: llm::LlmSkillRegistry,
+    /// First-registration gate for the `llm.invoke` dispatch loop. `swap(true)`
+    /// so exactly one loop spawns even when two `register_prompt_skill` calls
+    /// race (a `was_empty` check-then-act could spawn two loops, each receiving
+    /// every invoke signal → duplicate RPC responses).
+    #[cfg(feature = "llm")]
+    pub(crate) llm_dispatch_spawned: std::sync::atomic::AtomicBool,
 
     // ── Service layer ────────────────────────────────────────────────────────────
     /// Bulk-transport adapter: staging map, HTTP port, pooled HTTP client.
@@ -611,6 +617,8 @@ impl GossipAgent {
             group_roster_cache:  Arc::clone(&group_roster_cache),
             #[cfg(feature = "llm")]
             llm_skills: std::sync::Arc::new(papaya::HashMap::new()),
+            #[cfg(feature = "llm")]
+            llm_dispatch_spawned: std::sync::atomic::AtomicBool::new(false),
         });
 
         Self {

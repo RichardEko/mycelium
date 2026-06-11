@@ -48,22 +48,33 @@ impl LlmHandle {
             .advertise_capability(Capability::new(ns, name), Duration::from_secs(30));
 
         // 3. Register backend in the shared registry.
-        let skill_id  = format!("{}/{}", ns, name);
-        let was_empty = self.ctx.llm_skills.is_empty();
-        self.ctx.llm_skills.pin().insert(skill_id.clone(), backend);
+        let skill_id = format!("{}/{}", ns, name);
+        self.ctx.llm_skills.pin().insert(skill_id.clone(), Arc::clone(&backend));
 
-        // 4. Spawn dispatch loop on first registration.
-        if was_empty {
+        // 4. Spawn the dispatch loop exactly once. An `is_empty()` check
+        // before the insert was a check-then-act: two first registrations
+        // racing could both observe an empty registry and spawn two loops,
+        // each receiving every `llm.invoke` signal → duplicate RPC
+        // responses. The atomic swap admits exactly one winner.
+        if !self.ctx.llm_dispatch_spawned.swap(true, std::sync::atomic::Ordering::AcqRel) {
             llm::spawn_llm_dispatch_loop(&self.ctx, Arc::clone(&self.ctx.llm_skills));
         }
 
         // 5. Create cancellation channel for this skill's registry entry.
+        // The removal is conditional on Arc identity: if the skill was
+        // re-registered under the same id while this handle was alive,
+        // dropping the OLD handle must not delete the NEW backend.
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
-        let registry  = Arc::clone(&self.ctx.llm_skills);
-        let skill_id2 = skill_id.clone();
+        let registry   = Arc::clone(&self.ctx.llm_skills);
+        let skill_id2  = skill_id.clone();
+        let registered = Arc::clone(&backend);
         tokio::spawn(async move {
             let _ = cancel_rx.await;
-            registry.pin().remove(&skill_id2);
+            registry.pin().compute(skill_id2, |existing| match existing {
+                Some((_, current)) if Arc::ptr_eq(current, &registered) =>
+                    papaya::Operation::Remove,
+                _ => papaya::Operation::Abort(()),
+            });
         });
 
         Ok(prompt::PromptSkillHandle {

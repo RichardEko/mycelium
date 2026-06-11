@@ -188,13 +188,19 @@ impl HandlerTable {
 
     fn register_with_capacity(&self, kind: Arc<str>, cap: usize) -> mpsc::Receiver<Signal> {
         let (tx, rx) = mpsc::channel(cap);
-        let mut slot = Some(FilteredSender::unfiltered(tx));
+        // papaya re-invokes the closure when the entry changes concurrently
+        // (another registration, or closed-sender eviction in
+        // `deliver_to_handlers`), so it must be safe to run more than once:
+        // clone the sender per invocation. A single-use `slot.take()` here
+        // panicked on the retry (M2 Run-18 sweep finding; regression test:
+        // `concurrent_same_kind_signal_registration_does_not_panic`).
+        let fs = FilteredSender::unfiltered(tx);
         self.map.pin().compute(kind, |existing| -> papaya::Operation<Arc<Vec<FilteredSender>>, ()> {
             match existing {
-                None => papaya::Operation::Insert(Arc::new(vec![slot.take().expect("slot filled before compute")])),
+                None => papaya::Operation::Insert(Arc::new(vec![fs.clone()])),
                 Some((_, arc)) => {
                     let mut v = (**arc).clone();
-                    v.push(slot.take().expect("slot filled before compute"));
+                    v.push(fs.clone());
                     papaya::Operation::Insert(Arc::new(v))
                 }
             }
@@ -209,13 +215,14 @@ impl HandlerTable {
         trusted: Arc<[NodeId]>,
     ) -> mpsc::Receiver<Signal> {
         let (tx, rx) = mpsc::channel(cap);
-        let mut slot = Some(FilteredSender::filtered(tx, trusted));
+        // Closure must be retry-safe — see `register_with_capacity`.
+        let fs = FilteredSender::filtered(tx, trusted);
         self.map.pin().compute(kind, |existing| -> papaya::Operation<Arc<Vec<FilteredSender>>, ()> {
             match existing {
-                None => papaya::Operation::Insert(Arc::new(vec![slot.take().expect("slot filled before compute")])),
+                None => papaya::Operation::Insert(Arc::new(vec![fs.clone()])),
                 Some((_, arc)) => {
                     let mut v = (**arc).clone();
-                    v.push(slot.take().expect("slot filled before compute"));
+                    v.push(fs.clone());
                     papaya::Operation::Insert(Arc::new(v))
                 }
             }

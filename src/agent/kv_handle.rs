@@ -125,7 +125,7 @@ impl KvHandle {
         let write_ts_min = self.ctx.hlc.tick();
         let self_hash    = self.ctx.node_id.id_hash();
         let (tracker, mut rx) = QuorumAckTracker::new(write_ts_min, self_hash);
-        self.ctx.kv_state.quorum_trackers.pin().insert(Arc::clone(&key), Arc::clone(&tracker));
+        super::kv_quorum::install_tracker(&self.ctx.kv_state.quorum_trackers, Arc::clone(&key), &tracker);
 
         let _ = kv_set_async(&self.ctx, Arc::clone(&key), value).await;
 
@@ -138,7 +138,7 @@ impl KvHandle {
         })
         .await;
 
-        self.ctx.kv_state.quorum_trackers.pin().remove(&key);
+        super::kv_quorum::remove_tracker(&self.ctx.kv_state.quorum_trackers, &key, &tracker);
 
         match result {
             Ok(n)  => Ok(n),

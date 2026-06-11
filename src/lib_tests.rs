@@ -100,6 +100,7 @@ fn spawn_handler(
         kv_store: crate::store::KvStore {
             store,
             prefix_index:      Arc::new(crate::store::PrefixIndex::new()),
+            index_stripes:     Arc::new(std::array::from_fn(|_| std::sync::Mutex::new(()))),
             cap_ns_index:      Arc::new(crate::store::PrefixIndex::new()),
             hash_acc:          Arc::new(AtomicU64::new(initial_hash)),
             dropped_frames:    Arc::new(AtomicU64::new(0)),
@@ -139,6 +140,8 @@ fn spawn_handler(
         config: Arc::new(crate::config::GossipConfig::default()),
         #[cfg(feature = "llm")]
         llm_skills: std::sync::Arc::new(papaya::HashMap::new()),
+        #[cfg(feature = "llm")]
+        llm_dispatch_spawned: std::sync::atomic::AtomicBool::new(false),
     });
     let ctx = ConnContext {
         task_ctx,
@@ -499,6 +502,7 @@ async fn test_subscribe_notified_via_gossip() {
             kv_store: crate::store::KvStore {
                 store: Arc::clone(&store),
                 prefix_index:      Arc::new(crate::store::PrefixIndex::new()),
+                index_stripes:     Arc::new(std::array::from_fn(|_| std::sync::Mutex::new(()))),
                 cap_ns_index:      Arc::new(crate::store::PrefixIndex::new()),
                 hash_acc:          Arc::new(AtomicU64::new(0)),
                 dropped_frames:    Arc::new(AtomicU64::new(0)),
@@ -538,6 +542,8 @@ async fn test_subscribe_notified_via_gossip() {
             config: Arc::new(crate::config::GossipConfig::default()),
             #[cfg(feature = "llm")]
             llm_skills: std::sync::Arc::new(papaya::HashMap::new()),
+            #[cfg(feature = "llm")]
+            llm_dispatch_spawned: std::sync::atomic::AtomicBool::new(false),
         });
         let ctx = ConnContext {
             task_ctx,
@@ -2415,4 +2421,102 @@ async fn forwarding_is_unconditional_through_non_member_relay() {
 
     relay.shutdown().await;
     member.shutdown().await;
+}
+
+/// M2 Run-18 race-family sweep: re-registering a prompt skill under the same
+/// id and then dropping the OLD handle must not delete the NEW registration.
+/// The cancellation task previously removed by key unconditionally; it must
+/// remove only if the registry still holds the backend it registered.
+#[cfg(feature = "llm")]
+#[tokio::test]
+async fn reregistered_llm_skill_survives_old_handle_drop() {
+    use crate::agent::{EchoBackend, PromptTemplate};
+    fn template() -> PromptTemplate {
+        PromptTemplate {
+            system:        "s".into(),
+            user_template: "{{input}}".into(),
+            max_tokens:    16,
+            temperature:   0.0,
+            metadata:      std::collections::HashMap::new(),
+        }
+    }
+    let agent = make_agent();
+    let h1 = agent.llm()
+        .register_prompt_skill("ns", "skill", template(), Arc::new(EchoBackend))
+        .await
+        .expect("first registration");
+    let _h2 = agent.llm()
+        .register_prompt_skill("ns", "skill", template(), Arc::new(EchoBackend))
+        .await
+        .expect("re-registration while first handle is alive");
+
+    drop(h1);
+    // Give the old handle's cancellation task time to run (it fires on drop).
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        agent.task_ctx.llm_skills.pin().get("ns/skill").is_some(),
+        "old handle's drop must not delete the newer registration"
+    );
+}
+
+/// M2 Run-18 race-family sweep: concurrent registrations of the SAME signal
+/// kind. The HandlerTable registration closure runs under papaya `compute`,
+/// which re-invokes the closure when the entry changes concurrently — a
+/// single-use `slot.take().expect(...)` panics on that retry, so two tasks
+/// calling `signal_rx("same.kind")` simultaneously (or one racing the
+/// closed-sender eviction in `deliver_to_handlers`) could crash. The closure
+/// must clone per invocation instead.
+#[test]
+fn concurrent_same_kind_signal_registration_does_not_panic() {
+    use crate::signal::SignalHandlers;
+    let handlers = SignalHandlers::new(Duration::from_secs(600));
+    let threads = 8;
+    let per_thread = 400;
+    std::thread::scope(|s| {
+        for _ in 0..threads {
+            s.spawn(|| {
+                let mut rxs = Vec::with_capacity(per_thread);
+                for _ in 0..per_thread {
+                    rxs.push(handlers.register(Arc::from("contended.kind")));
+                }
+                // Drop half so closed senders accumulate and future eviction
+                // computes contend with registrations too.
+                rxs.truncate(per_thread / 2);
+                rxs
+            });
+        }
+    });
+}
+
+/// M2 Run-18 probe (dims 6/10): the documented lifecycle error contract.
+/// `start()` on a running agent returns `AlreadyRunning`; `start()` after
+/// shutdown returns `Shutdown`; and `shutdown_with_timeout` actually drains
+/// every tracked task (`task_count == 0`) rather than leaking them.
+#[tokio::test]
+async fn test_lifecycle_error_contract_and_task_drain() {
+    let port = alloc_port();
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = port;
+    let agent = GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg);
+
+    agent.start().await.expect("first start succeeds");
+    poll_until(|| agent.system_stats().task_count > 0, 2_000).await;
+
+    let second = agent.start().await;
+    assert!(
+        matches!(second, Err(GossipError::AlreadyRunning)),
+        "second start() must return AlreadyRunning, got {second:?}"
+    );
+
+    agent.shutdown_with_timeout(Duration::from_secs(5)).await;
+    assert_eq!(
+        agent.system_stats().task_count, 0,
+        "all tracked tasks must drain on shutdown"
+    );
+
+    let after = agent.start().await;
+    assert!(
+        matches!(after, Err(GossipError::Shutdown)),
+        "start() after shutdown must return Shutdown, got {after:?}"
+    );
 }

@@ -268,8 +268,33 @@ All `Mutex` and `RwLock` sites in the codebase. **Invariant: no function acquire
 | 4 | `TaskCtx::signal_boundary` | `RwLock<Boundary>` | Read: every `emit()` boundary check; Write: `join_group()`, `leave_group()`, `suppress()`, `unsuppress()` | `read()` is the hot path; `write()` is rare |
 | 5 | `GossipAgent::gossip_rxs` | `Mutex<Option<Vec<Receiver>>>` | `start()` (consumed once, `take()`d) | Single-use; never held after `start()` returns |
 | 6 | `GossipAgent::extra_routes` | `Mutex<Option<Router>>` | `with_http_routes()` (set once), `start()` (consumed, `take()`d) | Gateway feature only; single-use |
+| 7 | `KvStore::index_stripes` | `[Mutex<()>; 64]` (striped by key hash) | `apply_and_notify` secondary-structure reconcile | Leaf lock: nothing else from this table is acquired while held; synchronous section (store re-read + index ops), never across `await`. Exists because the store CAS is lock-free — without it, two winning writers to one key could interleave index ops opposite to their CAS order and strand a live key outside `scan_prefix` (M2 Run-18 finding) |
 
 **Note on async contexts:** `Mutex` guards in Tokio async code are `!Send` when held across `await` points — the compiler enforces this. All sites above release the guard before any `await`, which is why `std::sync::Mutex` (not `tokio::sync::Mutex`) is used throughout: `std::sync::Mutex` is cheaper and the compiler will error if a guard is accidentally held across a suspension point.
+
+### Lock-free mutation rules (papaya) — the race family that keeps recurring
+
+Four M2-audit findings (Runs 16–18) plus a same-day sweep all reduced to one
+shape: **a lock-free operation followed by an unserialised derived effect.**
+Two rules close the whole family; follow them for every new papaya call site:
+
+1. **`compute` closures must be retry-safe.** papaya re-invokes the closure
+   when the entry changes concurrently. Never `take()` a single-use value
+   inside one (panics on retry — the signal-registration crash); clone per
+   invocation, and reset any captured outputs at the top of the closure
+   (see `apply_and_notify`'s `old_ts_if_live`).
+2. **Never act on a stale read.** A collect-then-`remove()` sweep, a
+   check-then-act (`is_empty()` → spawn), or an unconditional remove keyed by
+   something another caller may have replaced — all of these must re-validate
+   inside a `compute` (conditional remove: tombstone GC, A2A sweep, peer
+   eviction, seen-set eviction), behind an atomic `swap` (LLM dispatch spawn),
+   by `Arc::ptr_eq` identity (quorum-tracker and prompt-skill removal), or
+   under a stripe lock with a re-read (`apply_and_notify` index reconcile).
+
+Correct reference implementations: `get_or_spawn_writer` (claim-by-sentinel,
+spawn outside the closure), `ShardedSeen::evict_below` (conditional remove),
+`kv_quorum::{install_tracker, remove_tracker}` (copy-on-write list +
+identity-checked removal).
 
 ### Memory ordering policy for atomics
 
@@ -431,8 +456,8 @@ get found.
 - `cargo build --lib --features a2a` to include the A2A protocol adapter
 - `cargo build --lib --features llm` to include the Prompt Skills LLM adapter
 - `cargo build --lib --features compliance` to include gateway auth, durable audit, RBAC (planned, not yet implemented)
-- 263 tests at HEAD; clippy at 0 warnings (stub removal eliminated the prior 61
-  `field_reassign_with_default` baseline in test code).
+- 307 lib tests at HEAD (full feature matrix); clippy at 0 warnings (stub removal
+  eliminated the prior 61 `field_reassign_with_default` baseline in test code).
 - Wire version is currently **v11** (`PREV_WIRE_VERSION = 10` — rolling upgrade window open).
   v11 adds `hlc_seq: Option<u64>` to `WireMessage::Signal` for ordered delivery via `emit_ordered()`.
   v10 adds `WireMessage::SignedData` for Ed25519-signed KV writes under the `tls` feature.

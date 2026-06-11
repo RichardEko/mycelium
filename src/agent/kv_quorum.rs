@@ -3,15 +3,74 @@
 //! `QuorumAckTracker` is installed by `set_with_min_acks` just before the write and
 //! removed after the wait completes (success or timeout). It lives in
 //! `KvState::quorum_trackers` keyed by the key string.  `apply_and_notify`
-//! calls `observe` for every incoming update so the tracker learns when
+//! calls `observe` for every incoming update so each tracker learns when
 //! distinct peers have confirmed the value.
 //!
-//! The tracker is per-write, not per-key. Only one concurrent `set_with_min_acks` per
-//! key is supported; a second call would overwrite the first tracker.
+//! The tracker is per-write, not per-key: each key maps to a copy-on-write
+//! *list* of trackers, so concurrent `set_with_min_acks` calls on the same
+//! key coexist — every inbound update is observed by all of them, and each
+//! caller removes exactly its own tracker (by `Arc` identity) on completion.
+//! (A previous single-slot design let the second caller overwrite the first
+//! tracker, and the first caller's unconditional cleanup then deleted the
+//! second's — both callers could time out spuriously. M2 Run-18 sweep
+//! finding.)
 
 use std::sync::Arc;
 use papaya::HashMap;
 use tokio::sync::watch;
+
+/// Per-key tracker list stored in `KvState::quorum_trackers`. Copy-on-write:
+/// install/remove replace the whole `Arc<Vec>` via `compute`, so
+/// `apply_and_notify` reads a coherent snapshot with one map lookup.
+pub(crate) type TrackerList = Arc<Vec<Arc<QuorumAckTracker>>>;
+
+/// Adds `tracker` to `key`'s list, coexisting with any concurrent callers'
+/// trackers on the same key. The closure is retry-safe (clones per
+/// invocation — papaya re-invokes it under CAS contention).
+pub(crate) fn install_tracker(
+    map:     &HashMap<Arc<str>, TrackerList>,
+    key:     Arc<str>,
+    tracker: &Arc<QuorumAckTracker>,
+) {
+    map.pin().compute(key, |existing| -> papaya::Operation<TrackerList, ()> {
+        match existing {
+            None => papaya::Operation::Insert(Arc::new(vec![Arc::clone(tracker)])),
+            Some((_, list)) => {
+                let mut v = (**list).clone();
+                v.push(Arc::clone(tracker));
+                papaya::Operation::Insert(Arc::new(v))
+            }
+        }
+    });
+}
+
+/// Removes exactly `tracker` (by `Arc` identity) from `key`'s list — never a
+/// concurrent caller's tracker. Drops the map entry when the list empties.
+pub(crate) fn remove_tracker(
+    map:     &HashMap<Arc<str>, TrackerList>,
+    key:     &Arc<str>,
+    tracker: &Arc<QuorumAckTracker>,
+) {
+    map.pin().compute(Arc::clone(key), |existing| -> papaya::Operation<TrackerList, ()> {
+        match existing {
+            None => papaya::Operation::Abort(()),
+            Some((_, list)) => {
+                let v: Vec<Arc<QuorumAckTracker>> = list
+                    .iter()
+                    .filter(|t| !Arc::ptr_eq(t, tracker))
+                    .cloned()
+                    .collect();
+                if v.len() == list.len() {
+                    papaya::Operation::Abort(())
+                } else if v.is_empty() {
+                    papaya::Operation::Remove
+                } else {
+                    papaya::Operation::Insert(Arc::new(v))
+                }
+            }
+        }
+    });
+}
 
 /// Tracks how many distinct peers have confirmed a particular KV write.
 ///

@@ -646,7 +646,18 @@ pub(super) async fn run_gc_task(
                         })
                         .map(|(k, _)| Arc::clone(k))
                         .collect();
-                    for key in &stale_keys { guard.remove(key); }
+                    // Conditional remove: between collect and removal a live
+                    // write can win the CAS on this key; an unconditional
+                    // remove() would delete it (same race family as the
+                    // M2 Run-18 prefix-index finding). Only remove the entry
+                    // if it is still a stale tombstone.
+                    for key in &stale_keys {
+                        guard.compute(Arc::clone(key), |existing| match existing {
+                            Some((_, e)) if e.data.is_none() && e.timestamp < tombstone_cutoff =>
+                                papaya::Operation::Remove,
+                            _ => papaya::Operation::Abort(()),
+                        });
+                    }
                 }
                 live_entries.store(live, Ordering::Relaxed);
 

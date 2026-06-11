@@ -964,7 +964,7 @@ async fn gw_kv_quorum(
     let write_ts_min = tc.hlc.tick();
     let self_hash    = tc.node_id.id_hash();
     let (tracker, mut rx) = QuorumAckTracker::new(write_ts_min, self_hash);
-    tc.kv_state.quorum_trackers.pin().insert(Arc::clone(&key), Arc::clone(&tracker));
+    super::kv_quorum::install_tracker(&tc.kv_state.quorum_trackers, Arc::clone(&key), &tracker);
 
     kv_write(&tc, Arc::clone(&key), value, false);
 
@@ -977,7 +977,7 @@ async fn gw_kv_quorum(
     })
     .await;
 
-    tc.kv_state.quorum_trackers.pin().remove(&key);
+    super::kv_quorum::remove_tracker(&tc.kv_state.quorum_trackers, &key, &tracker);
 
     match result {
         Ok(n)  => Json(json!({ "ok": true, "acks_received": n })).into_response(),

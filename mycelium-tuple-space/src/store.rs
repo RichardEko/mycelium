@@ -1422,6 +1422,28 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// M2 Run-18 probe (Evolvability): a header torn mid-write — magic intact
+    /// but version bytes missing — must also be refused untouched, not
+    /// stamped over or truncated.
+    #[tokio::test]
+    async fn wal_torn_header_refused_untouched() {
+        let path = temp_wal("torn-header");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(WAL_MAGIC);
+        bytes.push(1); // first byte of the version, second missing
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(
+            TupleStore::persistent(&path, 10_000, 500).is_err(),
+            "7-byte torn header must refuse to open"
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            bytes,
+            "refusal must leave the file byte-identical"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[tokio::test]
     async fn wal_header_written_and_survives_compaction() {
         let path = temp_wal("header");

@@ -1,4 +1,3 @@
-use crate::agent::kv_quorum::QuorumAckTracker;
 use crate::framing::GossipUpdate;
 use crate::locality::LocalityPath;
 use crate::node_id::NodeId;
@@ -7,7 +6,7 @@ use bytes::Bytes;
 use papaya::Operation;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
-    Arc, OnceLock,
+    Arc, Mutex, OnceLock, PoisonError,
 };
 use tokio::sync::watch;
 use tracing::warn;
@@ -29,6 +28,14 @@ pub(crate) type KvSubscriptions = Arc<papaya::HashMap<Arc<str>, watch::Sender<Op
 pub(crate) struct KvStore {
     pub store:             Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
     pub prefix_index:      Arc<PrefixIndex>,
+    /// Striped locks serialising secondary-index reconciliation per key hash.
+    /// The store CAS in [`apply_and_notify`] is lock-free, so two winning
+    /// writers to the same key can reach the index-maintenance step in the
+    /// opposite order of their CASes; the stripe lock + store re-read makes
+    /// the final index state always match the final store state. Never held
+    /// across `await` (apply_and_notify is synchronous); no other lock is
+    /// acquired while a stripe is held.
+    pub index_stripes:     Arc<[Mutex<()>; INDEX_STRIPES]>,
     /// Secondary index for O(1) cap/req lookups by (namespace, name).
     /// Outer key: `"{seg}/{ns}/{name}"` (e.g. `"cap/compute/text-gen"`).
     /// Inner key: the full store key (`"cap/{node}/{ns}/{name}"`).
@@ -57,10 +64,12 @@ pub(crate) struct KvStore {
     /// `cap/{node_id}/locality/self` writes. Used on hot gossip-forwarding paths
     /// (locality-aware fan-out scoring) without re-decoding the KV entry per message.
     pub peer_localities: Arc<papaya::HashMap<NodeId, LocalityPath>>,
-    /// Per-key durability trackers installed by `set_with_min_acks`. `apply_and_notify`
-    /// calls `tracker.observe(sender, timestamp)` for every incoming update so
-    /// the waiter learns when enough distinct peers have confirmed the write.
-    pub quorum_trackers: Arc<papaya::HashMap<Arc<str>, Arc<QuorumAckTracker>>>,
+    /// Per-key durability trackers installed by `set_with_min_acks`. Each key
+    /// holds a copy-on-write *list* so concurrent same-key callers coexist;
+    /// `apply_and_notify` calls `observe(sender, timestamp)` on every tracker
+    /// in the list for every incoming update. Mutate only via
+    /// `kv_quorum::{install_tracker, remove_tracker}`.
+    pub quorum_trackers: Arc<papaya::HashMap<Arc<str>, crate::agent::kv_quorum::TrackerList>>,
 }
 
 /// Bundled KV-path state shared across connection handlers, consensus tasks,
@@ -117,6 +126,7 @@ impl KvState {
             kv_store: KvStore {
                 store:             Arc::new(papaya::HashMap::new()),
                 prefix_index:      Arc::new(PrefixIndex::new()),
+                index_stripes:     Arc::new(std::array::from_fn(|_| Mutex::new(()))),
                 cap_ns_index:      Arc::new(PrefixIndex::new()),
                 hash_acc:          Arc::new(AtomicU64::new(0)),
                 dropped_frames:    Arc::new(AtomicU64::new(0)),
@@ -139,10 +149,17 @@ impl KvState {
 /// the set of live full keys under that segment. Only live (non-tombstone) keys
 /// are tracked; tombstoned keys are removed.
 ///
-/// Updated atomically in [`apply_and_notify`] whenever the store changes. Allows
+/// Reconciled in [`apply_and_notify`] under a [`KvStore::index_stripes`] lock:
+/// after a winning store CAS, the writer re-reads the stored entry and sets
+/// index membership to match it, so concurrent writers to the same key cannot
+/// leave the index diverged from the store (M2 Run-18 finding). Allows
 /// [`GossipAgent::scan_prefix`] to skip the full store and iterate only the
 /// matching bucket — O(|bucket|) instead of O(|store|).
 pub(crate) type PrefixIndex = papaya::HashMap<Arc<str>, Arc<papaya::HashMap<Arc<str>, ()>>>;
+
+/// Stripe count for [`KvStore::index_stripes`]. Power of two; selected by
+/// key hash, so contention is per-colliding-key, not global.
+pub(crate) const INDEX_STRIPES: usize = 64;
 
 #[inline]
 fn prefix_seg(key: &str) -> Option<&str> {
@@ -472,39 +489,66 @@ pub(crate) fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
         // (Capability/requirement watchers use `prefix_watchers` below, not a
         // generation counter — a previous design held a `cap_generation` here
         // but it had no readers and was removed.)
-        // Maintain the peer_localities cache from cap/{node_id}/locality/self entries.
-        // Locality is treated as a capability for KV-path uniformity but is also cached
-        // in decoded form so hot gossip-forwarding paths don't re-decode per message.
-        if let Some(rest) = update.key.strip_prefix("cap/")
-            && let Some(node_id_str) = rest.strip_suffix("/locality/self")
-                && !node_id_str.contains('/')
-                    && let Ok(node_id) = node_id_str.parse::<NodeId>() {
-                        let guard = kv.peer_localities.pin();
-                        if is_tombstone {
-                            guard.remove(&node_id);
-                        } else {
-                            match LocalityPath::decode(&update.value) {
-                                Some(loc) => { guard.insert(node_id, loc); }
-                                None      => warn!(
-                                    key = %update.key,
-                                    "malformed LocalityPath — peer sent bytes under cap/*/locality/self that did not decode",
-                                ),
+        //
+        // ── Secondary-structure reconcile (prefix index, cap_ns_index,
+        //    peer_localities) ─────────────────────────────────────────────
+        // The store CAS above is lock-free, so two winning writers to the
+        // same key can reach this point in the opposite order of their
+        // CASes. Deriving index maintenance from `update` (insert for data,
+        // remove for tombstone) let the later-arriving thread undo the
+        // earlier one's index op while the store kept the earlier value — a
+        // live key permanently invisible to scan_prefix, unrepaired by
+        // anti-entropy (M2 Run-18 finding; regression test:
+        // `prefix_index_consistent_under_tombstone_insert_race`).
+        //
+        // Reconcile instead: under a per-key stripe lock, re-read the stored
+        // entry and set membership in every secondary structure to match it.
+        // Each winner's CAS happens-before its own lock section and lock
+        // sections are totally ordered, so the LAST lock-holder reads a
+        // store state that includes every winning CAS — the final index
+        // state always matches the final store state.
+        {
+            let stripe = &kv.index_stripes[(key_hash as usize) % INDEX_STRIPES];
+            let _stripe_guard = stripe.lock().unwrap_or_else(PoisonError::into_inner);
+            let current_live: Option<Bytes> = kv.store.pin()
+                .get(update.key.as_ref())
+                .and_then(|e| e.data.clone());
+
+            if current_live.is_some() {
+                prefix_index_insert(&kv.prefix_index, Arc::clone(&update.key));
+            } else {
+                prefix_index_remove(&kv.prefix_index, &update.key);
+            }
+
+            if let Some(identity) = cap_ns_index_key(&update.key) {
+                if current_live.is_some() {
+                    index_bucket_insert(&kv.cap_ns_index, identity, Arc::clone(&update.key));
+                } else {
+                    index_bucket_remove(&kv.cap_ns_index, &identity, &update.key);
+                }
+            }
+
+            // peer_localities cache from cap/{node_id}/locality/self entries.
+            // Locality is treated as a capability for KV-path uniformity but is
+            // also cached in decoded form so hot gossip-forwarding paths don't
+            // re-decode per message. Decoded from the STORED value, not
+            // `update.value`, so the cache reflects whichever write won.
+            if let Some(rest) = update.key.strip_prefix("cap/")
+                && let Some(node_id_str) = rest.strip_suffix("/locality/self")
+                    && !node_id_str.contains('/')
+                        && let Ok(node_id) = node_id_str.parse::<NodeId>() {
+                            let guard = kv.peer_localities.pin();
+                            match current_live.as_ref() {
+                                None => { guard.remove(&node_id); }
+                                Some(stored) => match LocalityPath::decode(stored) {
+                                    Some(loc) => { guard.insert(node_id, loc); }
+                                    None      => warn!(
+                                        key = %update.key,
+                                        "malformed LocalityPath — peer sent bytes under cap/*/locality/self that did not decode",
+                                    ),
+                                },
                             }
                         }
-                    }
-        // Maintain the secondary prefix index.
-        if is_tombstone {
-            prefix_index_remove(&kv.prefix_index, &update.key);
-        } else {
-            prefix_index_insert(&kv.prefix_index, Arc::clone(&update.key));
-        }
-        // Maintain cap_ns_index for cap/ and req/ keys.
-        if let Some(identity) = cap_ns_index_key(&update.key) {
-            if is_tombstone {
-                index_bucket_remove(&kv.cap_ns_index, &identity, &update.key);
-            } else {
-                index_bucket_insert(&kv.cap_ns_index, identity, Arc::clone(&update.key));
-            }
         }
         let subs_guard = kv.subscriptions.pin();
         if let Some(tx) = subs_guard.get(&update.key) {
@@ -556,9 +600,12 @@ pub(crate) fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
                 _ => Operation::Abort(()),
             });
         }
-        // Notify any in-flight set_with_min_acks waiters tracking this key.
-        if let Some(tracker) = kv.quorum_trackers.pin().get(&update.key) {
-            tracker.observe(update.sender, update.timestamp);
+        // Notify all in-flight set_with_min_acks waiters tracking this key
+        // (concurrent same-key callers each hold their own tracker).
+        if let Some(trackers) = kv.quorum_trackers.pin().get(&update.key) {
+            for tracker in trackers.iter() {
+                tracker.observe(update.sender, update.timestamp);
+            }
         }
         #[cfg(feature = "metrics")]
         metrics::gauge!("gossip_store_entries").set(kv.store.len() as f64);
@@ -692,6 +739,211 @@ mod tests {
             timestamp: 100, nonce: 2, ttl: 1, is_tombstone: false,
         });
         assert_eq!(store.pin().get("k").unwrap().data, None, "same-timestamp data must not resurrect tombstone");
+    }
+
+    /// Regression gate for the M2 Run-18 finding (dim 9).
+    ///
+    /// `apply_and_notify` used to maintain the prefix index *after* the store
+    /// CAS, derived from the update being applied. If a tombstone (lower ts)
+    /// and a live insert (higher ts) raced on the same key, both CAS'd in ts
+    /// order, but the tombstone thread's `prefix_index_remove` could land
+    /// after the insert thread's `prefix_index_insert` — the store held a
+    /// live key the index had lost, `scan_prefix` silently missed it, and
+    /// anti-entropy never repaired it (re-applying the same (key, ts) loses
+    /// LWW and never touches the index). Reproduced at 86 of 100 000 racing
+    /// rounds on 2026-06-11 (Apple Silicon).
+    ///
+    /// Fixed by the stripe-locked reconcile in `apply_and_notify`: index
+    /// membership is re-derived from the stored entry under
+    /// `KvStore::index_stripes`, so the final index state always matches the
+    /// final store state.
+    #[test]
+    fn prefix_index_consistent_under_tombstone_insert_race() {
+        use std::sync::Barrier;
+        let kv = KvState::new(0);
+        let rounds: u64 = 100_000;
+        let keys: Vec<Arc<str>> =
+            (0..rounds).map(|i| Arc::from(format!("race/k{i}").as_str())).collect();
+        let barrier = Barrier::new(2);
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                for (i, key) in keys.iter().enumerate() {
+                    barrier.wait();
+                    apply_and_notify(&kv, &GossipUpdate {
+                        sender: 1, key: Arc::clone(key), value: Bytes::new(),
+                        timestamp: 100, nonce: 2 * i as u64 + 1, ttl: 1, is_tombstone: true,
+                    });
+                }
+            });
+            s.spawn(|| {
+                for (i, key) in keys.iter().enumerate() {
+                    barrier.wait();
+                    apply_and_notify(&kv, &GossipUpdate {
+                        sender: 2, key: Arc::clone(key), value: Bytes::from_static(b"v"),
+                        timestamp: 200, nonce: 2 * i as u64 + 2, ttl: 1, is_tombstone: false,
+                    });
+                }
+            });
+        });
+        // The live write (ts 200) beats the tombstone (ts 100) in either CAS
+        // order, so every key must be live in the store…
+        let store_guard = kv.store.pin();
+        let idx_guard = kv.prefix_index.pin();
+        let bucket = idx_guard.get("race").expect("race bucket exists");
+        let bucket_guard = bucket.pin();
+        let mut lost = Vec::new();
+        for key in &keys {
+            assert!(
+                store_guard.get(key.as_ref()).is_some_and(|e| e.data.is_some()),
+                "store must converge to the live ts-200 write for {key}"
+            );
+            // …and every live key must still be visible to scan_prefix.
+            if !bucket_guard.contains_key(key.as_ref()) {
+                lost.push(Arc::clone(key));
+            }
+        }
+        assert!(
+            lost.is_empty(),
+            "{} of {rounds} live keys lost from the prefix index by the \
+             tombstone/insert index race (first: {})",
+            lost.len(), lost[0],
+        );
+    }
+
+    /// M2 Run-18 race-family sweep: concurrent `set_with_min_acks` callers on
+    /// the SAME key must coexist. The previous single-slot tracker map let the
+    /// second caller overwrite the first tracker, and the first caller's
+    /// unconditional cleanup then deleted the second's — both could time out
+    /// spuriously despite the acks arriving.
+    #[test]
+    fn concurrent_quorum_trackers_coexist_and_remove_only_self() {
+        use crate::agent::kv_quorum::{install_tracker, remove_tracker, QuorumAckTracker};
+        let kv = KvState::new(0);
+        let key: Arc<str> = Arc::from("q/k");
+        let (t1, rx1) = QuorumAckTracker::new(100, 1);
+        let (t2, rx2) = QuorumAckTracker::new(100, 1);
+        install_tracker(&kv.quorum_trackers, Arc::clone(&key), &t1);
+        install_tracker(&kv.quorum_trackers, Arc::clone(&key), &t2);
+
+        // One inbound peer update acks BOTH in-flight callers.
+        apply_and_notify(&kv, &GossipUpdate {
+            sender: 7, key: Arc::clone(&key), value: Bytes::from_static(b"v1"),
+            timestamp: 150, nonce: 1, ttl: 1, is_tombstone: false,
+        });
+        assert_eq!(*rx1.borrow(), 1, "first caller sees the ack");
+        assert_eq!(*rx2.borrow(), 1, "second caller sees the ack");
+
+        // First caller completes: removes ONLY its own tracker.
+        remove_tracker(&kv.quorum_trackers, &key, &t1);
+        apply_and_notify(&kv, &GossipUpdate {
+            sender: 8, key: Arc::clone(&key), value: Bytes::from_static(b"v2"),
+            timestamp: 151, nonce: 2, ttl: 1, is_tombstone: false,
+        });
+        assert_eq!(*rx2.borrow(), 2, "surviving caller keeps receiving acks");
+        assert_eq!(*rx1.borrow(), 1, "removed tracker is no longer observed");
+
+        remove_tracker(&kv.quorum_trackers, &key, &t2);
+        assert!(
+            kv.quorum_trackers.pin().get(&key).is_none(),
+            "entry drops when the last tracker is removed"
+        );
+    }
+
+    /// Concurrent-stress coverage for `apply_and_notify` beyond the single
+    /// tombstone/insert pair (M2 Run-18 improvement target #2): 8 threads of
+    /// random insert/tombstone churn with colliding timestamps over a shared
+    /// keyspace spanning plain, `grp/`, `cap/{node}/{ns}/{name}`, and
+    /// `cap/{node}/locality/self` keys. Afterwards every secondary structure
+    /// — prefix index, `cap_ns_index`, `peer_localities` — must agree with
+    /// the store in BOTH directions for every key.
+    #[test]
+    fn secondary_structures_consistent_under_concurrent_churn() {
+        let kv = KvState::new(0);
+
+        let plain: Vec<Arc<str>> =
+            (0..40).map(|i| Arc::from(format!("stress/k{i}").as_str())).collect();
+        let grp: Vec<Arc<str>> =
+            (0..20).map(|i| Arc::from(format!("grp/g{i}/m").as_str())).collect();
+        // All cap keys share one cap_ns identity bucket ("cap/ns/skill") so
+        // bucket insert/remove contend on the same inner map.
+        let cap: Vec<Arc<str>> = (0..20)
+            .map(|i| Arc::from(format!("cap/127.0.0.1:{}/ns/skill", 9000 + i).as_str()))
+            .collect();
+        let loc: Vec<Arc<str>> = (0..8)
+            .map(|i| Arc::from(format!("cap/127.0.0.1:{}/locality/self", 9500 + i).as_str()))
+            .collect();
+        let keys: Vec<Arc<str>> =
+            plain.iter().chain(&grp).chain(&cap).chain(&loc).cloned().collect();
+        let loc_payload = LocalityPath::new(["eu", "az1"]).encode();
+
+        let threads = 8;
+        let ops_per_thread = 30_000u64;
+        let nonce_base = AtomicU64::new(1);
+        std::thread::scope(|s| {
+            for _ in 0..threads {
+                s.spawn(|| {
+                    let mut rng = fastrand::Rng::new();
+                    for _ in 0..ops_per_thread {
+                        let key = &keys[rng.usize(..keys.len())];
+                        let is_tombstone = rng.u8(..10) < 4;
+                        // Small timestamp range so concurrent writers collide
+                        // on ties and on either side of each other constantly.
+                        let ts = rng.u64(1..64);
+                        let value = if is_tombstone {
+                            Bytes::new()
+                        } else if key.ends_with("/locality/self") {
+                            loc_payload.clone()
+                        } else {
+                            Bytes::from(format!("v{ts}"))
+                        };
+                        apply_and_notify(&kv, &GossipUpdate {
+                            sender: 1,
+                            key: Arc::clone(key),
+                            value,
+                            timestamp: ts,
+                            nonce: nonce_base.fetch_add(1, Ordering::Relaxed),
+                            ttl: 1,
+                            is_tombstone,
+                        });
+                    }
+                });
+            }
+        });
+
+        let store_guard = kv.store.pin();
+        let idx_guard = kv.prefix_index.pin();
+        let ns_guard = kv.cap_ns_index.pin();
+        let loc_guard = kv.peer_localities.pin();
+        for key in &keys {
+            let live = store_guard.get(key.as_ref()).is_some_and(|e| e.data.is_some());
+            let seg = key.split('/').next().unwrap();
+            let in_prefix = idx_guard
+                .get(seg)
+                .is_some_and(|b| b.pin().contains_key(key.as_ref()));
+            assert_eq!(
+                in_prefix, live,
+                "prefix index diverged from store for {key} (live={live})"
+            );
+            if let Some(identity) = cap_ns_index_key(key) {
+                let in_ns = ns_guard
+                    .get(identity.as_ref())
+                    .is_some_and(|b| b.pin().contains_key(key.as_ref()));
+                assert_eq!(
+                    in_ns, live,
+                    "cap_ns_index diverged from store for {key} (live={live})"
+                );
+            }
+            if let Some(node_id_str) = key
+                .strip_prefix("cap/")
+                .and_then(|r| r.strip_suffix("/locality/self"))
+            {
+                let node_id: NodeId = node_id_str.parse().unwrap();
+                assert_eq!(
+                    loc_guard.contains_key(&node_id), live,
+                    "peer_localities diverged from store for {key} (live={live})"
+                );
+            }
+        }
     }
 }
 
