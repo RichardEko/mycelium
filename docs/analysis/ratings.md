@@ -626,3 +626,89 @@ table promise-strength note.
 | 25 | Dependency Hygiene | 8 | `--no-default-features` build executed; no dep changes; transitive `block v0.1.6` future-incompat (dev-deps only) persists |
 | — | **Floor (lowest 3)** | **6, 7, 8** | Semantic Correctness (6, capped by finding), Error Handling (7), ten dimensions tied at 8 — Security is the most actionable of them |
 | — | Mean (continuity footnote) | 8.1 | not a target; M2 step change — see methodology note |
+
+## 2026-06-11 — Run 17 (M2)
+
+Deep-dive dimensions this run (by rotation from Run 16): 1 (Philosophy), 2
+(Conceptual Integrity), 3 (Architecture), 4 (Modularity), 5 (API Design).
+Next run by rotation: 6–10.
+
+**Process disclosure.** The scoring agent had read Runs 15–16 earlier in the
+same working session (for the coordinator_comparison analysis), so the blind
+rule is compromised this run; scores were written from this run's own
+evidence before re-opening this file, but prior exposure existed.
+
+Diff since Run 16: `mycelium-tuple-space` workspace companion crate (Linda-
+style pull buffer: single-lock store, 4-record WAL with atomic
+CompleteRecord + epoch'd compaction, primary/secondary replication +
+emergent promotion, Auto election with lowest-candidate tie-break,
+sys/tuple metrics + pressure pheromone, HTTP gateway, py/ts SDKs);
+integration scenario 13; `coordinator_comparison` demoted (doc-comment
+scope warning); Paper 1 §3.3/§8/§9.5 and Paper 2a §Two Grades/§Promise
+Reading/§Homogenisation Corollary/§Empirical rewrite; two pre-existing
+no-default-features warnings fixed in `bulk.rs`. Working tree only — not
+yet committed.
+
+Execution evidence this run: companion suite 27 tests across 6 binaries
+incl. 3 fresh falsification probes (re-run post-fix); core 304/304 at full
+feature matrix (`tls,metrics,a2a,llm`); clippy `-D warnings` clean on both
+crates, all targets, both feature configs; `--no-default-features` build 0
+warnings; `make test` 13/13 Docker scenarios incl. new scenario 13 (ran
+earlier this run, pre-fix; the fix is companion-internal and the companion
+suite was re-run post-fix); release perf smoke `wal_throughput_smoke`:
+3.79M transient put/take pairs/s, 215k WAL-backed put/take/ack cycles/s.
+
+### Findings
+
+- **Minor — Observability (#19, capped at 6).** `StageState::waiters_count`
+  underflowed to ~4.29e9 (u32 wrap) whenever a parked take timed out and a
+  later put skipped its dead sender: the timeout path and the dispatch pop
+  path both decremented. The garbage value fed `sys/tuple/...waiters`, the
+  depth RPC, and `/api/tuple`. Found by new probe
+  `metrics_accounting_identity`; fixed in-run (counter is now a strict
+  mirror of deque membership — decrement only at pop, under the stage
+  lock; underflow structurally impossible) and the probe stays as a
+  regression test. No calibration-ledger entry: the bug was introduced and
+  caught within the same run's diff — it never existed under a prior ≥ 8
+  score. First run in which the falsification quota caught a defect before
+  it shipped.
+
+Falsification probes (3, against the three highest provisional scores):
+`wal_torn_tail_recovery` (#11 — WAL truncated at EVERY byte offset inside
+the final record; recovery exact at all offsets; log re-appendable — PASS);
+`metrics_accounting_identity` (#19 — chaotic lifecycle then exact-zero
+quiescence accounting — FAIL → finding above → fixed → PASS);
+`shutdown_flushes_wal_and_restart_recovers` (#21 — full lifecycle drill:
+traffic in four item states, shutdown, restart over same WAL; exactly the
+unacked set recovers, acked items do not resurrect — PASS). All three are
+permanent regression tests (`store.rs` tests, `tests/probes.rs`).
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 9 | Deep-dive. The run's central act was adversarial: `coordinator_comparison` (Run 15's "strongest alignment artifact") was invalidated as a tautology measuring its own staleness arithmetic — logged here as the falsification the quota intends. Its replacement is execution-backed: the pull thesis is now a running artifact (scenario 13 in 13/13 Docker suite; failover drill; both papers reframed around two-grades/promise/homogenisation). Evidence: scenario 13 PASS, `failover.rs` suite, `probes.rs` drill |
+| 2 | Conceptual Integrity | 8 | Deep-dive. Companion reuses the read-side evaporation idiom (pressure pheromone, capability election), namespace-table convention extended (`tuple/inflight`, `sys/tuple`), error/`#[non_exhaustive]`/handle idioms match core; one deliberate divergence documented in-code (flat capability names — parser rejects `/` in segments). Reading-capped |
+| 3 | Architecture | 9 | Deep-dive. Companion-crate boundary is compiler-enforced: public API only, zero core changes required (`with_http_routes` was already public); two architecture conflicts found and resolved by design, not patching (sys/load opacity would false-trigger promotion → own-prefix pheromone; cap-key `/` limit → flat names). Evidence: full-matrix builds + `--no-default-features` 0 warnings executed |
+| 4 | Modularity | 8 | Deep-dive. TaskCtx God Object untouched by the entire companion (the strongest modularity evidence yet is what did NOT need changing); mirror state confined to `TupleSpace`; no new cross-handle coupling. Reading-capped |
+| 5 | API Design | 8 | Deep-dive. Four-role `TupleRole`, `BackpressureMode`, `#[non_exhaustive]` `TupleError`, Arc-handle pattern consistent with core; `Client` role added when Auto became electing (plan gap); `local_depth` vs `depth` split documented. Reading-capped |
+| 6 | Error Handling Model | 7 | `Network(String)` catch-all persists in core; `TupleError::Rpc(String)` reproduces the same untyped-catch-all gap in new code |
+| 7 | Configurability | 8 | `TupleConfig` 13 knobs incl. `cap_refresh` as single-knob test cadence (proven across 4 test files); env overrides for scenario 13 (`MYCELIUM_TUPLE_ROLE/NS`); reading-capped |
+| 8 | Language Best Practices | 9 | **Evidence:** clippy `-D warnings` clean this run — both crates, all targets, both feature configs; `#![deny(unsafe_code)]` in companion; the two remaining `unwrap()`s are length-guarded slice converts |
+| 9 | Concurrency Correctness | 7 | Two consecutive runs with concurrency-accounting defects (Run 16 listener race; Run 17 waiters double-decrement — found by probe, fixed). Lock-order documented in `store.rs` header (WAL→stage→inflight) and `concurrent_100`/storm paths pass, but the ledger pattern warrants structural skepticism, not an 8 |
+| 10 | Resource Management | 8 | Companion tasks are abort-on-shutdown and not in agent `task_handles` (documented); shutdown drill verifies WAL flush + clean agent stop but does not assert task/fd counts for companion tasks — that residual gap keeps this at 8 |
+| 11 | Semantic Correctness | 9 | **Evidence:** `wal_torn_tail_recovery` passed at every truncation offset; WAL replay/inflight/compaction/epoch-chunk suite; atomic CompleteRecord crash-window test pair; `concurrent_100` exactly-once; core 304/304 incl. Run-16 LWW regression. Recovered from Run 16 cap with sustained + new evidence |
+| 12 | Robustness | 8 | Torn-tail recovery proven; record decoder fully bounds-checked (`.get()` throughout) but UNFUZZED while parsing peer-supplied bytes (replicate handler) — gap named, see #18 |
+| 13 | Security | 7 | New intra-cluster mutation surface: any peer can `ack`/`replicate` against a tuple namespace (consistent with the documented operator-owned-cluster trust model, but unauthenticated and unreviewed); core tls/signing untouched |
+| 14 | Failure Mode Legibility | 8 | 9 tracing sites in companion (promotion warn names ns; requeue warns per id; replication-unconfirmed warns per node); `TupleError` Display strings actionable; pressure value carries depth+timestamp. No log-assertion tests → 8 |
+| 15 | Performance | 9 | **Evidence:** release smoke this run — 3.79M transient pairs/s, 215k WAL cycles/s vs plan target 50k (4.3×, with WAL). Hot path measured, not asserted: WAL page-cache append under mutex costs ~4.6 µs/cycle amortised |
+| 16 | Scalability | 7 | Single-primary ceiling (documented, sharding designed not built); per-claim inflight KV key gossips cluster-wide (metadata-only but O(cluster) chatter per item); per-put secondary resolve+spawn; no tuple-space entry-volume test yet |
+| 17 | Testability | 9 | **Evidence:** 19 store tests run in 0.05 s with zero cluster (transient mode + temp WAL); all three probes were writable in minutes against public/`pub(crate)` seams — the quota itself is the testability measurement |
+| 18 | Test Architecture | 8 | Pyramid: 19 unit + 8 e2e (5 files) + scenario 13 + 3 probes-as-regressions + ignored perf smoke. Gaps: no fuzz target for the WAL/replicate record decoder (core has fuzz for its own decoders; the new adversarial surface is uncovered), no property tests on replay |
+| 19 | Observability | 6 | **Capped: finding this run** (waiters_count underflow shipped garbage to sys/tuple metrics, depth RPC, /api/tuple). Fixed in-run + regression kept; surface itself is rich (role/depth/inflight/totals/p99/pressure + /api/tuple aggregation verified in scenario 13 phase IV) — expect recovery next run with sustained evidence |
+| 20 | Debuggability | 8 | Inflight keys + pressure pheromone are operator-readable JSON in plain KV; `/api/tuple` one-call cluster view; WAL has test-only reader but no operator dump tool |
+| 21 | Operational Readiness | 9 | **Evidence:** lifecycle drill probe passed (shutdown fsync → restart → exact unacked-set recovery, four item states); failover promotion drill; 13/13 scenarios; promotion latency documented (≈3× cap_refresh) |
+| 22 | Evolvability | 7 | Companion WAL has no format-version/magic header: an unknown record kind reads as a torn tail → silent truncation of old logs on any future format change (upgrade data-loss hazard, named improvement target); core wire policy (v11/v10 window) unchanged |
+| 23 | Documentation | 8 | CLAUDE.md §TupleSpace (key facts for future sessions), 952-line plan doc now implemented, both papers updated, crate-level rustdoc with passing doctest; gaps: no guide chapter; `paper2a/main.html` stale vs `main.tex` |
+| 24 | Developer Experience | 8 | `cargo -p mycelium-tuple-space` workflows fast (unit suite 0.05 s); single-knob test cadence; still no CI config in repo |
+| 25 | Dependency Hygiene | 9 | **Evidence:** `--no-default-features` 0-warning build executed this run (was 3 warnings — fixed in `bulk.rs`); companion adds zero new transitive deps (papaya/parking_lot/bytes/base64 all already in core's tree; gateway deps optional); `block v0.1.6` (dev-deps) persists |
+| — | **Floor (lowest 3)** | **6, 7, 7** | Observability (6, capped by finding); five-way tie at 7 — Error Handling, Concurrency Correctness, Security, Scalability, Evolvability; Concurrency and Evolvability are the most actionable |
+| — | Mean (continuity footnote) | 8.0 | not a target; see M2 preamble |
