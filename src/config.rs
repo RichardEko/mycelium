@@ -163,9 +163,11 @@ pub struct GossipConfig {
     /// Size this to handle the maximum burst that can arrive before a slow peer drains
     /// its channel. For a cluster of N agents writing one KV entry per tick with epidemic
     /// fan-out F, budget at least `N × F` per peer-writer (the intermediate node that
-    /// happens to forward the most messages in one generation). At the default fan-out of
-    /// 4 and N = 256 agents that is 1 024; the default of 64 is correct only for small
-    /// clusters (N ≤ 16).
+    /// happens to forward the most messages in one generation). The default of 1024
+    /// covers that budget at the default fan-out of 4 up to N = 256 agents; bulk-write
+    /// bursts (thousands of keys in one window) still want 4096+ — both scale tests
+    /// recorded drops at smaller depths (M2 Run-21). Memory is allocated per in-flight
+    /// frame, not up front, so a deeper channel costs nothing while idle.
     pub writer_channel_depth: usize,
     /// Maximum number of peers each gossip shard will forward to simultaneously.
     ///
@@ -498,7 +500,7 @@ impl Default for GossipConfig {
             health_check_interval_secs: 10,
             default_ttl: 5,
             max_connections: 1024,
-            writer_channel_depth: 256,
+            writer_channel_depth: 1024,
             max_forwarding_peers: i64::MAX as usize,
             reconnect_backoff_secs: 5,
             gossip_channel_capacity: 1024,
