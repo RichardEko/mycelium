@@ -158,7 +158,7 @@ cluster in ≈ `log(N) / log(K)` hops. At K=12 this is ≤ 4 hops for N up to
 | `max_peers` | unlimited | Cap for fixed-topology clusters; leave unlimited for dynamic |
 | `max_forwarding_peers` | unlimited | Set to `bootstrap_peers.len()` to pin topology to the seed mesh |
 | `ping_peer_sample_size` | 8 | Raise to 16–32 on large clusters for faster topology convergence |
-| `writer_channel_depth` | 64 | Raise to `N × fanout` (≥ 1024 at N=256) to avoid dropped frames |
+| `writer_channel_depth` | 1024 | Covers `N × fanout` up to N=256 at fan-out 4; raise beyond that or for bulk-write bursts |
 | `reconnect_backoff_secs` | 5 | Raise to 30–60 on large clusters to avoid reconnect storms after partitions |
 | `health_check_interval_secs` | 5 | Controls how quickly dead peers are detected and evicted |
 | `peer_eviction_intervals` | 3 | Evict after this many missed pings (default: 15 s at 5 s interval) |
@@ -217,10 +217,10 @@ write. No coordinator is required; no recovery procedure is needed.
 
 | Cluster size | Seeds | `max_active_connections` | `writer_channel_depth` | Notes |
 |---|---|---|---|---|
-| 1–5 nodes | N/A | 0 (unlimited) | 64 (default) | Full mesh by default |
-| 6–20 nodes | 2 | 0 (unlimited) | 256 | Monitor `dropped_frames` |
-| 21–50 nodes | 2–3 | 12 | 512 | Partial mesh; raise `ping_peer_sample_size` to 16 |
-| 51–100 nodes | 2–3 | 12 | 1024 | Set `max_active_connections` **before** 50 — see cliff note below |
+| 1–5 nodes | N/A | 0 (unlimited) | 1024 (default) | Full mesh by default |
+| 6–20 nodes | 2 | 0 (unlimited) | 1024 (default) | Monitor `dropped_frames` |
+| 21–50 nodes | 2–3 | 12 | 1024 (default) | Partial mesh; raise `ping_peer_sample_size` to 16 |
+| 51–100 nodes | 2–3 | 12 | 1024 (default) | Set `max_active_connections` **before** 50 — see cliff note below |
 | 101–500 nodes | 3 | 15–20 | 2048 | Raise `ping_peer_sample_size` to 32 |
 | 500+ nodes | 3–5 | 20 | 4096 | Consider multi-datacenter seed placement |
 
@@ -276,8 +276,10 @@ all new joins. Use at least two seeds on separate hosts.
 the Linux bridge iptables FORWARD chain at ~50 nodes in Docker. Set
 `max_active_connections = 12` for any cluster that may exceed 20 nodes.
 
-**`writer_channel_depth` too small** — The default of 64 is correct only for
-clusters of ≤ 16 nodes. At N=256 with fan-out 4 the correct size is ≥ 1024.
+**`writer_channel_depth` too small** — The default of 1024 covers `N × fanout`
+up to N=256 at the default fan-out of 4. Size up beyond that, and for
+bulk-write bursts (thousands of keys in one window) go to 4096+ — the
+entry-volume scale test recorded drops at 4096 under a 5 000-key burst.
 Monitor `system_stats().dropped_frames`; a non-zero value means frames are
 being silently discarded.
 

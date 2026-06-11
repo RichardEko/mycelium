@@ -18,7 +18,7 @@ hold between them, and how to scale them safely as cluster size grows.
 | `max_forwarding_peers` | unlimited | `GOSSIP_MAX_FORWARDING_PEERS` | peers |
 | `ping_peer_sample_size` | `20` | `GOSSIP_PING_PEER_SAMPLE_SIZE` | peers |
 | `max_peers` | unlimited | `GOSSIP_MAX_PEERS` | peers |
-| `writer_channel_depth` | `256` | `GOSSIP_WRITER_CHANNEL_DEPTH` | frames |
+| `writer_channel_depth` | `1024` | `GOSSIP_WRITER_CHANNEL_DEPTH` | frames |
 | `gossip_channel_capacity` | `1024` | `GOSSIP_GOSSIP_CHANNEL_CAPACITY` | frames |
 | `max_seen_entries` | `100_000` | `GOSSIP_MAX_SEEN_ENTRIES` | nonces |
 | `max_inbound_frames_per_sec` | `0` (off) | `GOSSIP_MAX_INBOUND_FRAMES_PER_SEC` | fps |
@@ -196,7 +196,7 @@ default_ttl                 = 7         # log₂(100) ≈ 7
 max_active_connections      = 16        # √N ≈ 10; use 16 for margin
 max_forwarding_peers        = 8
 ping_peer_sample_size       = 20        # keep; gossip-discovery still works
-writer_channel_depth        = 512
+writer_channel_depth        = 1024      # default; listed for completeness
 max_seen_entries            = 250_000   # 100k × 2.5
 ```
 
@@ -217,7 +217,7 @@ default_ttl                 = 10        # log₂(1000) ≈ 10
 max_active_connections      = 20        # log(N); gossip diameter ≈ 3 hops
 max_forwarding_peers        = 6
 ping_peer_sample_size       = 20
-writer_channel_depth        = 1024
+writer_channel_depth        = 4096      # N × fan-out = 4 000 at N = 1 000
 gossip_channel_capacity     = 4096
 max_seen_entries            = 1_000_000 # ~24 MB; scale with write rate
 max_inbound_frames_per_sec  = 500       # guard against misbehaving peers

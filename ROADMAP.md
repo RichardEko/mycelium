@@ -196,6 +196,7 @@ primitive any layer can build on.
   (`WARN`) fires every 1 000th cumulative drop to surface channel backpressure in logs.
 - `writer_channel_depth` default raised to `256` and documented as a **correctness threshold**.
   When full, frames are silently dropped. Sizing formula documented on the field.
+  (Raised again to `1024` on 2026-06-11 after both scale tests recorded burst drops.)
 - `epidemic_extra_peers` — replaces the former hardcoded `EPIDEMIC_K = 3` constant. Configurable
   per-deployment; raise to 5–7 for clusters > 1 000 nodes, lower to 1–2 for small clusters.
 - Listener auto-restart with exponential backoff (100 ms → 30 s cap) on fatal TCP accept errors.
@@ -247,7 +248,7 @@ agent.system_stats() -> SystemStats     // includes dropped_frames
 | Field | Default | Purpose |
 |---|---|---|
 | `max_forwarding_peers` | `i64::MAX` | Cap gossip targets; set to `bootstrap_peers.len()` for fixed-topology meshes |
-| `writer_channel_depth` | `256` | Per-peer outbound channel depth (ring buffer). **Correctness threshold** — size to `N × fan_out` |
+| `writer_channel_depth` | `1024` | Per-peer outbound channel depth (ring buffer). **Correctness threshold** — covers `N × fan_out` up to N = 256 at fan-out 4 |
 | `health_check_interval_secs` | `10` | Peer liveness ping interval |
 | `default_ttl` | `5` | Hops before a message stops propagating |
 | `gossip_shards` | `min(CPU, 16)` | Gossip worker tasks; set to `1` for demo/debug to cut task count |
@@ -2137,7 +2138,7 @@ None are required for v1.0.
    |---|---|
    | `default_ttl` | `max(5, ceil(log₂(N + 1)))` |
    | `max_active_connections` | `0` (full mesh) if N ≤ 20, else `max(16, ceil(√N))` |
-   | `writer_channel_depth` | `max(256, N × 4)` |
+   | `writer_channel_depth` | `max(1024, N × 4)` |
    | `max_seen_entries` | `max(100_000, N × 1_000)` |
    | `propagation_window_secs` | `max(60, health_check_interval_secs × peer_eviction_intervals × 2)` |
 

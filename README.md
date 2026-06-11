@@ -1557,7 +1557,7 @@ Environment variables override both — `GOSSIP_<FIELD_NAME>` for every field.
 | `health_check_interval_secs` | `10` | Ping interval and peer eviction cadence |
 | `propagation_window_secs` | `60` | Tombstone retention window |
 | `max_connections` | `1024` | Inbound connection limit |
-| `writer_channel_depth` | `256` | Per-peer outbound channel depth (ring buffer). **Correctness threshold** — frames silently dropped when full. Size to `N × fan_out`. A saturation warning fires every 1 000th cumulative dropped frame. |
+| `writer_channel_depth` | `1024` | Per-peer outbound channel depth (ring buffer). **Correctness threshold** — frames silently dropped when full. Covers `N × fan_out` up to N = 256 at the default fan-out of 4; size up for larger fleets or bulk-write bursts. A saturation warning fires every 1 000th cumulative dropped frame. |
 | `max_forwarding_peers` | unlimited | Cap gossip fan-out targets. Set to `bootstrap_peers.len()` for fixed-topology meshes |
 | `max_peers` | unlimited | Cap the peer table. Prevents O(N²) persistent connections when piggybacked peer lists would otherwise expand every node's view of the full cluster. Set to `bootstrap_peers.len()` for grid or ring topologies |
 | `gossip_channel_capacity` | `1024` | Per-shard gossip channel depth |
