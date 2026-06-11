@@ -1,0 +1,1713 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Substrate Convergence — Paper 2 Draft</title>
+<style>
+  :root {
+    --bg:         #0d1117;
+    --surface:    #161b22;
+    --surface2:   #1c2128;
+    --surface3:   #21262d;
+    --border:     #30363d;
+    --accent:     #58a6ff;
+    --accent2:    #3fb950;
+    --accent3:    #d2a8ff;
+    --accent4:    #ffa657;
+    --accent5:    #ff7b72;
+    --muted:      #8b949e;
+    --text:       #e6edf3;
+    --text2:      #c9d1d9;
+    --radius:     8px;
+    --radius-lg:  14px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif;
+    font-size: 15px;
+    line-height: 1.75;
+    padding-bottom: 120px;
+  }
+
+  /* ── Hero ───────────────────────────────────────────────────────── */
+  .hero {
+    background: radial-gradient(ellipse at 60% 0%,   rgba(88,166,255,0.09)  0%, transparent 55%),
+                radial-gradient(ellipse at 20% 85%,  rgba(63,185,80,0.06)   0%, transparent 50%),
+                radial-gradient(ellipse at 80% 60%,  rgba(210,168,255,0.05) 0%, transparent 60%),
+                var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 80px 40px 64px;
+    text-align: center;
+  }
+  .hero-eyebrow {
+    display: inline-block;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent); background: rgba(88,166,255,0.08);
+    border: 1px solid rgba(88,166,255,0.2); border-radius: 20px;
+    padding: 5px 16px; margin-bottom: 28px;
+  }
+  .hero h1 {
+    font-size: clamp(28px, 4vw, 44px); font-weight: 800;
+    letter-spacing: -0.025em; line-height: 1.15; margin-bottom: 16px;
+    background: linear-gradient(135deg, #e6edf3 0%, #8b949e 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+  }
+  .hero-subtitle {
+    font-size: 16px; color: var(--accent3); font-style: italic;
+    margin-bottom: 20px; line-height: 1.5;
+  }
+  .hero-sub {
+    font-size: 15px; color: var(--muted);
+    max-width: 680px; margin: 0 auto 44px; line-height: 1.75;
+  }
+  .hero-badges { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .badge {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: var(--text2);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 20px; padding: 6px 14px;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .dot-blue   { background: var(--accent); }
+  .dot-green  { background: var(--accent2); }
+  .dot-purple { background: var(--accent3); }
+  .dot-orange { background: var(--accent4); }
+  .dot-red    { background: var(--accent5); }
+
+  /* ── Layout ─────────────────────────────────────────────────────── */
+  .container { max-width: 920px; margin: 0 auto; padding: 0 32px; }
+  .section { margin-top: 80px; }
+  .section-head {
+    display: flex; align-items: baseline; gap: 14px;
+    padding-bottom: 18px; border-bottom: 1px solid var(--border); margin-bottom: 36px;
+  }
+  .section-head h2 { font-size: 22px; font-weight: 700; color: var(--text); }
+  .section-tag {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 4px 12px; border-radius: 20px;
+  }
+  .tag-a { background: rgba(88,166,255,0.1);  color: var(--accent);  border: 1px solid rgba(88,166,255,0.25); }
+  .tag-b { background: rgba(63,185,80,0.1);   color: var(--accent2); border: 1px solid rgba(63,185,80,0.25); }
+  .tag-c { background: rgba(210,168,255,0.1); color: var(--accent3); border: 1px solid rgba(210,168,255,0.25); }
+  .tag-d { background: rgba(255,166,87,0.1);  color: var(--accent4); border: 1px solid rgba(255,166,87,0.25); }
+  .tag-e { background: rgba(255,123,114,0.1); color: var(--accent5); border: 1px solid rgba(255,123,114,0.25); }
+  .tag-f { background: rgba(139,148,158,0.08);color: var(--muted);   border: 1px solid rgba(139,148,158,0.2); }
+
+  p  { color: var(--text2); margin-bottom: 18px; }
+  h3 { font-size: 16px; font-weight: 700; color: var(--text); margin: 36px 0 14px; }
+  h4 { font-size: 14px; font-weight: 700; color: var(--accent3); margin: 24px 0 10px; }
+  strong { color: var(--text); }
+  em     { color: var(--accent3); font-style: italic; }
+  ul, ol { color: var(--text2); padding-left: 22px; margin-bottom: 18px; }
+  li     { margin-bottom: 7px; line-height: 1.65; }
+
+  code {
+    font-family: "SF Mono","Fira Mono",monospace; font-size: 12.5px;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 6px; color: var(--accent3);
+  }
+
+  /* ── Formal block ───────────────────────────────────────────────── */
+  .formal {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-left: 3px solid var(--accent3); border-radius: var(--radius);
+    padding: 20px 24px; margin: 24px 0; font-size: 13.5px;
+  }
+  .formal-label {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--accent3); margin-bottom: 10px;
+  }
+  .formal p  { color: var(--text2); margin-bottom: 10px; font-size: 13.5px; }
+  .formal p:last-child { margin-bottom: 0; }
+  .formal ul { margin-bottom: 0; }
+
+  /* ── Tables ─────────────────────────────────────────────────────── */
+  .map-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; margin: 24px 0; }
+  .map-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .map-table th {
+    background: var(--surface2); color: var(--muted);
+    font-weight: 600; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 10px 16px; text-align: left; border-bottom: 1px solid var(--border);
+  }
+  .map-table td {
+    padding: 11px 16px; color: var(--text2);
+    border-bottom: 1px solid rgba(48,54,61,0.6); vertical-align: top; line-height: 1.55;
+  }
+  .map-table tr:last-child td { border-bottom: none; }
+  .map-table tbody tr:hover td { background: rgba(255,255,255,0.02); }
+
+  /* ── Callout ────────────────────────────────────────────────────── */
+  .callout { border-radius: var(--radius); padding: 18px 20px; margin: 24px 0; font-size: 13.5px; line-height: 1.65; }
+  .callout p { margin: 0; color: var(--text2); }
+  .callout-blue   { background: rgba(88,166,255,0.07);  border-left: 3px solid var(--accent);  }
+  .callout-green  { background: rgba(63,185,80,0.07);   border-left: 3px solid var(--accent2); }
+  .callout-purple { background: rgba(210,168,255,0.07); border-left: 3px solid var(--accent3); }
+  .callout-orange { background: rgba(255,166,87,0.07);  border-left: 3px solid var(--accent4); }
+  .callout-red    { background: rgba(255,123,114,0.07); border-left: 3px solid var(--accent5); }
+
+  /* ── Domain card grid ───────────────────────────────────────────── */
+  .domain-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin: 28px 0; }
+  .domain-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 22px 20px;
+  }
+  .domain-eyebrow {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.12em;
+    text-transform: uppercase; margin-bottom: 8px;
+  }
+  .domain-title { font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 12px; }
+  .domain-body  { font-size: 13px; color: var(--muted); line-height: 1.65; margin: 0; }
+  .domain-card.d-econ   { border-top: 2px solid var(--accent4); }
+  .domain-card.d-gov    { border-top: 2px solid var(--accent2); }
+  .domain-card.d-money  { border-top: 2px solid var(--accent);  }
+  .domain-card.d-comp   { border-top: 2px solid var(--accent3); }
+  .d-econ  .domain-eyebrow { color: var(--accent4); }
+  .d-gov   .domain-eyebrow { color: var(--accent2); }
+  .d-money .domain-eyebrow { color: var(--accent);  }
+  .d-comp  .domain-eyebrow { color: var(--accent3); }
+  .d-mand  { border-top: 2px solid #39c5bb; }
+  .d-mand  .domain-eyebrow { color: #39c5bb; }
+
+  /* ── Nav pills ──────────────────────────────────────────────────── */
+  .nav-pills {
+    display: flex; flex-wrap: wrap; gap: 8px;
+    padding: 28px 0 0; margin-bottom: 0;
+  }
+  .nav-pill {
+    font-size: 12px; font-weight: 600;
+    color: var(--muted); background: var(--surface);
+    border: 1px solid var(--border); border-radius: 20px;
+    padding: 5px 14px; text-decoration: none; transition: color 0.15s, border-color 0.15s;
+  }
+  .nav-pill:hover { color: var(--text); border-color: var(--accent3); }
+
+  @media (max-width: 700px) {
+    .domain-grid { grid-template-columns: 1fr; }
+    .container { padding: 0 20px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Hero ─────────────────────────────────────────────────────────── -->
+<div class="hero">
+  <div class="hero-eyebrow">Working Draft · Internal · Paper 2</div>
+  <h1>The Substrate Convergence</h1>
+  <div class="hero-subtitle">Why Coordinator-Free Architecture is Epistemically Necessary<br>Across Complex Adaptive Systems</div>
+  <p class="hero-sub">
+    Four independent intellectual traditions — distributed computing, monetary system design,
+    polycentric governance theory, and complex adaptive systems biology — arrive independently
+    at identical substrate principles. This paper argues that the convergence is not coincidental:
+    it follows from a formal epistemic constraint that applies to any heterogeneous system of
+    autonomous agents with local knowledge. The implication is that coordinator-free substrate
+    design is not a preference among equals, but the structurally correct answer to a class
+    of problem that appears across domains. A fifth domain — Rojava's Democratic Confederalism,
+    building on Bookchin's libertarian municipalism — independently derives two structural
+    properties not captured by the other four traditions: the mandate TTL (Property 6), which
+    prevents internal capture by role occupants, and epistemic symmetry (Property 7), which
+    prevents structural entrenchment of a coordination class through data locality and
+    meta-game advantage.
+  </p>
+  <div class="hero-badges">
+    <div class="badge"><div class="dot dot-orange"></div>Hayek 1945 — economics</div>
+    <div class="badge"><div class="dot dot-green"></div>Ostrom 1990 — governance</div>
+    <div class="badge"><div class="dot dot-blue"></div>Nicholson 2025 — monetary ecology</div>
+    <div class="badge"><div class="dot dot-purple"></div>Mycelium 2026 — distributed computing</div>
+    <div class="badge"><div class="dot dot-green"></div>Öcalan / Bookchin — democratic confederalism</div>
+  </div>
+</div>
+
+<div class="container">
+
+  <div class="nav-pills">
+    <a href="#abstract"     class="nav-pill">Abstract</a>
+    <a href="#framework"    class="nav-pill">Formal Framework</a>
+    <a href="#domains"      class="nav-pill">Domain Instantiations</a>
+    <a href="#mcbps"        class="nav-pill">MCB/P/S Generalised</a>
+    <a href="#properties"   class="nav-pill">Substrate Properties</a>
+    <a href="#capture"      class="nav-pill">Capture Resistance</a>
+    <a href="#mandate"      class="nav-pill">Mandate TTL</a>
+    <a href="#epistemic"    class="nav-pill">Epistemic Symmetry</a>
+    <a href="#failure"      class="nav-pill">Two Failure Modes</a>
+    <a href="#scale"        class="nav-pill">Emergent Consensus</a>
+    <a href="#implications" class="nav-pill">Implications</a>
+    <a href="#questions"    class="nav-pill">Open Questions</a>
+  </div>
+
+  <!-- ── 1. Abstract ───────────────────────────────────────────────── -->
+  <div class="section" id="abstract">
+    <div class="section-head">
+      <h2>Abstract</h2>
+      <span class="section-tag tag-f">Working draft</span>
+    </div>
+
+    <p>
+      We observe that four independent intellectual traditions, working from different starting
+      points and with different formal tools, converge on the same structural prescription for
+      substrate design in complex systems: coordinator-free, signal-based, locally-resolved,
+      with emergent consensus structures invoked only when scale makes local resolution
+      insufficient. Hayek (1945) derived this for market economies from an epistemic argument.
+      Ostrom (1990) derived it for commons governance from empirical institutional analysis.
+      Nicholson (2025) derives it for monetary systems from an analysis of how fiat currency
+      encodes hidden power relationships. The Mycelium distributed substrate (2026) implements
+      it for heterogeneous AI agent fleets.
+    </p>
+
+    <p>
+      This paper argues that the convergence is not analogical — it is structural. We introduce
+      the concept of a <strong>Heterogeneous Local Knowledge System</strong> (HLKS) as the
+      formal abstraction common to all four domains. We then state and argue informally for
+      the <strong>Coordinator Trap Theorem</strong>: that for any HLKS satisfying standard
+      heterogeneity and state-change conditions, any coordinator-based decision mechanism
+      accumulates epistemic error that grows without bound as the system scales, while a
+      locally-resolved signal mechanism does not. The four substrate correctness properties
+      that follow from this theorem appear — independently derived — in each of the four
+      traditions.
+    </p>
+
+    <p>
+      We extend the MCB/P/S evaluative framework (Moral Circle Breadth / Polycentricity /
+      Surplus-Claim Regime) from monetary system design to substrate design generally,
+      showing it captures the same structural distinctions across all domains. We additionally
+      derive Properties 6 (Mandate TTL) and 7 (Epistemic Symmetry) from the governance model
+      of Rojava's Democratic Confederalism: Property 6 addresses internal capture by role
+      occupants; Property 7 addresses the structural entrenchment of a coordination class
+      through data locality asymmetry and meta-game knowledge that survive formal rotation.
+      We conclude with design principles for substrate architects in any HLKS domain, and with
+      open questions about the boundary conditions under which the theorem's assumptions hold.
+    </p>
+  </div>
+
+  <!-- ── 2. Formal Framework ───────────────────────────────────────── -->
+  <div class="section" id="framework">
+    <div class="section-head">
+      <h2>The Formal Framework</h2>
+      <span class="section-tag tag-c">HLKS · The Coordinator Trap</span>
+    </div>
+
+    <p>
+      We need a minimal formal abstraction that is general enough to apply across all four
+      domains while specific enough to support non-trivial claims. The key observations are
+      that in every domain: (a) there are autonomous agents with local knowledge states;
+      (b) those states are heterogeneous across agents and evolve over time; (c) coordination
+      is required but the information needed for correct coordination is distributed across
+      agents and not directly accessible to any single point.
+    </p>
+
+    <div class="formal">
+      <div class="formal-label">Definition 1 — Heterogeneous Local Knowledge System (HLKS)</div>
+      <p>
+        An HLKS is a tuple <em>(A, K, δ, λ, D)</em> where:
+      </p>
+      <ul>
+        <li><strong>A = {a₁, …, aₙ}</strong> — a finite set of autonomous agents</li>
+        <li><strong>K = {Kᵢ : T → Sᵢ}</strong> — a local knowledge function for each agent,
+        mapping time T to a local state space Sᵢ. The state spaces are <em>heterogeneous</em>:
+        Sᵢ and Sⱼ are generally distinct both in structure and in content (agents hold
+        qualitatively different knowledge, not merely different values of the same variables)</li>
+        <li><strong>δ = {δᵢ}</strong> — the rate of state change for each agent; the speed
+        at which Kᵢ(t) evolves. In heterogeneous fleets, δᵢ varies across agents.</li>
+        <li><strong>λ = {λᵢⱼ}</strong> — the communication latency from agent i to agent j;
+        the minimum time for Kᵢ(t) to become observable by j</li>
+        <li><strong>D : ∏ Sᵢ → Actions</strong> — the optimal decision function; the mapping
+        from the aggregate current state of all agents to the action that best serves the
+        system's objectives. D requires <em>current</em> state; stale inputs degrade output.</li>
+      </ul>
+    </div>
+
+    <p>
+      The coordinator's epistemic problem follows directly from this definition. A coordinator
+      C attempting to compute D(t) can only observe K̂ᵢ(t) = Kᵢ(t − λᵢC), where λᵢC is the
+      latency from agent i to the coordinator. The coordinator's estimate of the true state
+      is therefore always stale by at least λᵢC. Critically, this is not a hardware limitation
+      that can be engineered away: it is a consequence of the finite speed of information
+      propagation, which holds under any physical implementation.
+    </p>
+
+    <div class="formal">
+      <div class="formal-label">Theorem 1 (informal) — The Coordinator Trap</div>
+      <p>
+        For any HLKS where (i) local states are heterogeneous across agents, (ii) state change
+        rates δᵢ are bounded away from zero, and (iii) the optimal decision function D requires
+        current aggregate state, the following hold:
+      </p>
+      <ul>
+        <li>The coordinator's epistemic error <em>εᵢ(t) = dist(Kᵢ(t), K̂ᵢ(t))</em> is
+        strictly positive for all t and all agents i, where dist is any appropriate
+        distance metric on the state space Sᵢ</li>
+        <li>The expected aggregate error E[∑ εᵢ(t)] grows monotonically with the number of
+        agents n, the heterogeneity of state spaces H, and the mean state change rate δ̄</li>
+        <li>No increase in coordinator computational capacity can reduce ε below the bound
+        imposed by latency λ — the constraint is epistemic, not computational</li>
+      </ul>
+    </div>
+
+    <div class="callout callout-purple">
+      <p>
+        <strong>The distinction that matters.</strong> A computational constraint says: given
+        enough hardware, the coordinator can solve the problem. An epistemic constraint says:
+        even given infinite hardware, the coordinator cannot possess the information required
+        to solve the problem correctly. The Coordinator Trap is an epistemic constraint.
+        Hayek (1945) identified it for market economies. Holland (2012) identified it for
+        complex adaptive systems. This paper argues it holds for any HLKS. Faster computers
+        do not help.
+      </p>
+    </div>
+
+    <h3>The locally-resolved alternative</h3>
+
+    <p>
+      If the coordinator cannot compute D(t) correctly, the question is whether any mechanism
+      can. We claim a locally-resolved signal mechanism avoids the coordinator's epistemic error
+      by construction: rather than aggregating state at a central point and computing D globally,
+      each agent applies a local filter to the signals it receives and takes an action based on
+      its own current state Kᵢ(t). No agent needs to know the global state; each needs only its
+      own state and the signals propagating through its local neighbourhood.
+    </p>
+
+    <p>
+      The cost is precision: a locally-resolved mechanism cannot guarantee globally optimal
+      decisions in the sense D requires. The gain is correctness at scale: the decision each
+      agent makes is based on information that is current and accurate, not stale. For
+      heterogeneous systems where the globally optimal decision is structurally unknowable
+      anyway, the locally-resolved mechanism is not a compromise — it is the only mechanism
+      that operates on true information.
+    </p>
+  </div>
+
+  <!-- ── 3. Domain Instantiations ──────────────────────────────────── -->
+  <div class="section" id="domains">
+    <div class="section-head">
+      <h2>Domain Instantiations</h2>
+      <span class="section-tag tag-b">Four Independent Derivations</span>
+    </div>
+
+    <p>
+      We now instantiate the HLKS framework in each of the four domains, identifying the
+      agents, local knowledge, coordinator, epistemic error, and the locally-resolved
+      alternative independently derived in each tradition.
+    </p>
+
+    <div class="domain-grid">
+      <div class="domain-card d-econ">
+        <div class="domain-eyebrow">Economics · Hayek 1945</div>
+        <div class="domain-title">Market Economies</div>
+        <p class="domain-body">Agents: firms and individuals. Local knowledge: prices,
+        preferences, production capabilities, resource availability — dispersed, local,
+        tacit, and continuously changing. Coordinator: central planner. Coordinator's
+        epistemic error: the planner cannot model the local knowledge of every market
+        participant; by the time aggregate data is processed, it is stale. Hayek's
+        mechanism: prices as signals, propagating local knowledge without requiring any
+        agent to understand the whole.</p>
+      </div>
+      <div class="domain-card d-gov">
+        <div class="domain-eyebrow">Governance · Ostrom 1990</div>
+        <div class="domain-title">Commons Governance</div>
+        <p class="domain-body">Agents: community members managing shared resources. Local
+        knowledge: resource state, usage patterns, community relationships, enforcement
+        capacity. Coordinator: external government / Leviathan. Coordinator's epistemic
+        error: rules imposed from outside cannot be adapted to local conditions; enforcement
+        is locally held. Ostrom's mechanism: polycentric governance — institutions that
+        emerge bottom-up, locally adapted, with nested coordination for cross-boundary
+        problems.</p>
+      </div>
+      <div class="domain-card d-money">
+        <div class="domain-eyebrow">Monetary Design · Nicholson 2025</div>
+        <div class="domain-title">Monetary Ecology</div>
+        <p class="domain-body">Agents: communities with different economic needs, values,
+        and political traditions. Local knowledge: local economic conditions, community
+        trust networks, surplus/deficit patterns, cultural values. Coordinator: central
+        bank / single fiat currency. Coordinator's epistemic error: a single monetary policy
+        cannot serve heterogeneous community needs simultaneously; currency design encodes
+        power relationships that serve the coordinator's epistemology, not local conditions.
+        The mechanism: L0 minimal invariants + federated local currencies + mutual credit,
+        each layer handling what the layer below cannot.</p>
+      </div>
+      <div class="domain-card d-comp">
+        <div class="domain-eyebrow">Distributed Computing · Mycelium 2026</div>
+        <div class="domain-title">AI Agent Fleet Substrates</div>
+        <p class="domain-body">Agents: computational nodes with heterogeneous capabilities,
+        load, and state. Local knowledge: capability availability, current load, connection
+        state, domain knowledge. Coordinator: broker, orchestrator, central routing agent.
+        Coordinator's epistemic error: by the time the coordinator processes agent state, it
+        has changed; optimal routing decisions require precisely the local knowledge the
+        coordinator cannot possess. The mechanism: gossip substrate + receptor-based routing
+        + emergent groups + opt-in consensus.</p>
+      </div>
+      <div class="domain-card d-mand" style="grid-column: 1 / -1;">
+        <div class="domain-eyebrow">Political Governance · Öcalan / Bookchin 2011–2012</div>
+        <div class="domain-title">Democratic Confederalism — Rojava Cantons</div>
+        <p class="domain-body">Agents: commune members and delegates (commune ≈ 30–400 households,
+        a Dunbar-scale unit where local knowledge is genuinely sufficient for most decisions).
+        Local knowledge: local resource state, community trust networks, specific coordination
+        problems that require cross-commune agreement. Coordinator: standing government or party
+        committee holding general authority. Coordinator's epistemic error: distant authority
+        cannot adapt rules to local conditions; accumulated incumbency in coordination roles
+        generates informational and coalitional advantages that compound, progressively
+        coordinatorising the mechanism from within. The mechanism: commune as base unit; specific
+        mandates authorised for defined problem classes (not general authority); fixed terms with
+        active dissolution — roles torn down and reconstituted, not merely re-elected; mandatory
+        cooling-off periods preventing incumbency accumulation. This domain independently derives
+        <strong>Properties 6 and 7 (Mandate TTL and Epistemic Symmetry)</strong> — the structural
+        responses to internal capture and coordination-class entrenchment that the other four
+        traditions do not explicitly formulate. The Rojava cantons have operated this model under
+        active adversarial pressure since 2012.</p>
+      </div>
+    </div>
+
+    <h3>The formal mapping</h3>
+
+    <p>
+      Across all four instantiations, the same five components appear. The table below makes
+      the structural identity explicit.
+    </p>
+
+    <div class="map-wrap">
+      <table class="map-table">
+        <thead>
+          <tr>
+            <th>HLKS component</th>
+            <th>Economics (Hayek)</th>
+            <th>Governance (Ostrom)</th>
+            <th>Monetary (Nicholson)</th>
+            <th>Computing (Mycelium)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Agents A</strong></td>
+            <td>Firms, individuals</td>
+            <td>Community members</td>
+            <td>Communities, mints</td>
+            <td>Cluster nodes</td>
+          </tr>
+          <tr>
+            <td><strong>Local knowledge Kᵢ</strong></td>
+            <td>Prices, preferences, production capacity</td>
+            <td>Resource state, community norms, enforcement capacity</td>
+            <td>Local economic conditions, trust networks, value systems</td>
+            <td>Capability set, load, connection state</td>
+          </tr>
+          <tr>
+            <td><strong>Coordinator C</strong></td>
+            <td>Central planner / central bank</td>
+            <td>External state / Leviathan</td>
+            <td>Single fiat currency issuer</td>
+            <td>Broker / orchestrator</td>
+          </tr>
+          <tr>
+            <td><strong>Epistemic error εᵢ</strong></td>
+            <td>Stale aggregate data; cannot model local tacit knowledge</td>
+            <td>Rules cannot adapt to local conditions; enforcement knowledge is local</td>
+            <td>Single policy cannot serve heterogeneous community needs</td>
+            <td>Agent state has changed by time coordinator receives it</td>
+          </tr>
+          <tr>
+            <td><strong>Signal mechanism</strong></td>
+            <td>Price signals — local knowledge propagated without central aggregation</td>
+            <td>Community norms, reputation, boundary rules — locally maintained and enforced</td>
+            <td>L0 invariants + federated e-cash + local mutual credit signals</td>
+            <td>Gossip KV + typed signals through receptor-based mesh</td>
+          </tr>
+          <tr>
+            <td><strong>Federation invariants</strong></td>
+            <td>Property rights, contract enforcement — minimal shared rules enabling exchange</td>
+            <td>Ostrom's design principles — minimal structural requirements for sustainable commons</td>
+            <td>L0 protocol invariants — minimal rules enabling interoperability between mints</td>
+            <td>Wire protocol + HLKV KV semantics — minimal shared rules enabling gossip</td>
+          </tr>
+          <tr>
+            <td><strong>Subsidiarity consensus</strong></td>
+            <td>Legislative process, courts — invoked for cross-market problems law cannot resolve locally</td>
+            <td>Ostrom's collective-choice arrangements — invoked for cross-community commons conflicts</td>
+            <td>L1 Bitcoin settlement — neutral exit and cross-mint settlement layer</td>
+            <td>Epidemic consensus (Layer III) — invoked when operations require linearisable cross-node commitment</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout callout-green">
+      <p>
+        <strong>The structural identity is precise, not approximate.</strong> Each domain has
+        agents with heterogeneous local knowledge, a coordinator whose epistemic error grows
+        with scale and heterogeneity, a locally-resolved signal mechanism that avoids that
+        error, a minimal set of federation invariants enabling system-level coherence, and a
+        subsidiarity-respecting consensus mechanism for the residual class of problems
+        requiring cross-agent binding commitment. These are not metaphorical parallels. They
+        are instantiations of the same formal structure.
+      </p>
+    </div>
+
+    <p>
+      The fifth domain — Rojava's Democratic Confederalism — shares this structural identity
+      and adds a sixth property not independently formulated in the other four traditions.
+      Its specific HLKS mapping and derivation of <strong>Properties 6 and 7</strong> are
+      treated in the <a href="#mandate" style="color:var(--accent3);">Mandate TTL</a> and
+      <a href="#epistemic" style="color:var(--accent3);">Epistemic Symmetry</a> sections below.
+    </p>
+  </div>
+
+  <!-- ── 4. MCB/P/S Generalised ────────────────────────────────────── -->
+  <div class="section" id="mcbps">
+    <div class="section-head">
+      <h2>The MCB/P/S Framework — Generalised</h2>
+      <span class="section-tag tag-d">Cross-Domain Evaluation Metric</span>
+    </div>
+
+    <p>
+      The monetary ecology paper introduces a three-axis evaluation framework for monetary
+      system design: Moral Circle Breadth (MCB), Polycentricity (P), and Surplus-Claim Regime
+      (S). We argue this framework generalises to substrate design in any HLKS domain. The
+      three axes capture exactly the structural properties that the Coordinator Trap Theorem
+      implies a correct substrate must have.
+    </p>
+
+    <div class="map-wrap">
+      <table class="map-table">
+        <thead>
+          <tr>
+            <th>Axis</th>
+            <th>Original definition<br><em>monetary systems</em></th>
+            <th>Generalised definition<br><em>any HLKS substrate</em></th>
+            <th>Computing substrate reading<br><em>Mycelium</em></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>MCB</strong><br>Moral / Participation<br>Circle Breadth</td>
+            <td>Who receives protection and consideration in the monetary system; whose economic interests are encoded in the currency design</td>
+            <td>Which agents are first-class participants in the substrate — whose local knowledge is treated as valid input to system decisions — vs. which are subordinate workers awaiting instructions from the coordinator</td>
+            <td>In a gossip substrate: all nodes are first-class participants; capabilities are self-advertised; group membership is self-selected. In a broker-based substrate: agents are workers; all decisions pass through the broker; local knowledge is reported up, not acted on locally.</td>
+          </tr>
+          <tr>
+            <td><strong>P</strong><br>Polycentricity</td>
+            <td>How dispersed are monetary decision-making powers; whether communities can set their own monetary parameters</td>
+            <td>The fraction of coordination decisions made at the local level vs. requiring coordinator intervention; whether the substrate enables autonomous local action or routes all decisions through a central point</td>
+            <td>Layers I + II: fully polycentric — routing, capability resolution, group membership, and signal delivery are all locally computed. Layer III: temporarily centralised around a specific ballot, then dissolved. Polycentric index: high.</td>
+          </tr>
+          <tr>
+            <td><strong>S</strong><br>Surplus-Claim Regime</td>
+            <td>Who captures value after costs; whether the monetary mechanism extracts coordination rent or allows value to flow to participants</td>
+            <td>Whether the substrate mechanism captures coordination rent — i.e., whether the substrate's operation creates a tollbooth through which value must flow — or whether the substrate is zero-cost to pass through</td>
+            <td>Gossip substrate: zero coordination rent. No entity controls routing or capability resolution; no tollbooth. Value flows entirely to the application layer. Broker-based substrate: the broker operator captures coordination rent proportional to traffic volume.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      A coordinator-based substrate scores: MCB=low (agents are subordinate), P=low (all
+      decisions pass through coordinator), S=high rent (coordinator operator captures
+      coordination value). A gossip substrate scores: MCB=high (all nodes first-class),
+      P=high (locally resolved), S=zero rent. The same scoring applies to central banks
+      vs. federated monetary systems, and to external-coordinator governance vs. polycentric
+      governance. The framework is not domain-specific.
+    </p>
+
+    <div class="callout callout-orange">
+      <p>
+        <strong>The MCB/S connection.</strong> MCB and S are not independent in the coordinator
+        case. When the coordinator is a first-class participant that routes all decisions,
+        it inevitably captures coordination rent proportional to its centrality — this is true
+        for central banks (seigniorage), for brokers (transaction fees), and for orchestrators
+        (compute allocation power). The structural cause is the same: centralised decision-making
+        creates monopoly rents. Polycentricity is the structural remedy for both simultaneously.
+      </p>
+    </div>
+  </div>
+
+  <!-- ── 5. Substrate Correctness Properties ───────────────────────── -->
+  <div class="section" id="properties">
+    <div class="section-head">
+      <h2>The Four Substrate Correctness Properties</h2>
+      <span class="section-tag tag-b">What a Correct Substrate Has</span>
+    </div>
+
+    <p>
+      The Coordinator Trap Theorem implies four structural properties that a correct HLKS
+      substrate must have. We state each as a property, note its derivation in the formal
+      framework, and identify its independent appearance across all four traditions.
+    </p>
+
+    <h3>Property 1 — Local signal propagation</h3>
+
+    <div class="formal">
+      <div class="formal-label">Statement</div>
+      <p>Agents emit signals derived from their current local state Kᵢ(t). Other agents apply
+      local filters to decide which signals to act on. Actions are taken locally, based on the
+      receiving agent's current state and the signal. No agent requires global state to act.</p>
+    </div>
+
+    <p>
+      This directly avoids the coordinator's epistemic error: each action is taken on
+      information that is current and local, not on a stale aggregate computed by a distant
+      coordinator. Holland's signal/boundary model is the formal expression of this property.
+      Hayek's price mechanism is its economic instantiation — prices propagate local knowledge
+      without any agent needing global state. Ostrom's community norms propagate local
+      resource knowledge through reputation and direct observation. Mycelium's gossip KV and
+      typed signal mesh are its computing implementation.
+    </p>
+
+    <h3>Property 2 — Emergent group formation</h3>
+
+    <div class="formal">
+      <div class="formal-label">Statement</div>
+      <p>Groups of agents with related local states self-organise through the application of
+      local rules. No coordinator assigns group membership. A group's existence is emergent —
+      it forms when enough agents independently evaluate their own state against a shared
+      definition and conclude they belong. Groups dissolve when agents' states change such
+      that the membership condition no longer holds.</p>
+    </div>
+
+    <p>
+      Holland's coalition formation from building blocks. Ostrom's community institutions
+      that form around common resources without external design. Currency communities in the
+      monetary ecology model that form Fedimint mints around shared economic conditions.
+      Mycelium's capability groups that self-assemble from capability declarations, with no
+      coordinator assigning membership.
+    </p>
+
+    <h3>Property 3 — Minimal federation invariants</h3>
+
+    <div class="formal">
+      <div class="formal-label">Statement</div>
+      <p>A set I of shared rules, small enough that any agent can maintain I-compliance from
+      local state alone, enables system-level coherence and interoperability without requiring
+      coordination. I defines what it means to be a participant in the system; it does not
+      specify how participants should act beyond the minimum required for coherent
+      communication.</p>
+    </div>
+
+    <p>
+      Hayek's property rights and contract enforcement — the minimal shared rules enabling
+      market exchange. Ostrom's eight design principles — the minimum structural requirements
+      for sustainable commons. The L0 federation invariants in the monetary ecology model —
+      the minimal protocol rules enabling interoperability between independently governed
+      community mints. Mycelium's wire protocol and LWW KV semantics — the minimum shared
+      rules enabling gossip without coordination.
+    </p>
+
+    <h3>Property 4 — Subsidiarity-respecting consensus</h3>
+
+    <div class="formal">
+      <div class="formal-label">Statement</div>
+      <p>For the specific class of operations requiring binding cross-agent commitment that
+      cannot be resolved by local signal-following — where the correctness criterion genuinely
+      requires that all agents in a group agree on an outcome — a minimal consensus mechanism
+      is invoked. The mechanism is: (a) triggered by the agents involved, not imposed by a
+      standing coordinator; (b) scoped to the specific operation; (c) dissolved after the
+      operation completes. It does not own persistent state and does not sit on the critical
+      path of normal substrate operations.</p>
+    </div>
+
+    <p>
+      Legislative processes, courts, and international agreements in Hayek's model — invoked
+      for cross-market problems that market signals cannot resolve. Ostrom's collective-choice
+      arrangements — convened for cross-community commons conflicts. Bitcoin's L1 settlement
+      layer — invoked for cross-mint value transfer where both mints must agree on the
+      exchange. Mycelium's epidemic consensus — invoked for operations requiring linearisable
+      cross-node commitment; opt-in; stateless between operations.
+    </p>
+
+    <div class="callout callout-blue">
+      <p>
+        <strong>The subsidiarity test.</strong> Property 4 is correct only if it is genuinely
+        subsidiarity-respecting — if consensus is invoked only when Properties 1–3 are
+        provably insufficient. A system that invokes consensus for operations that could be
+        resolved locally has imported a coordinator under a different name. The test:
+        <em>can this operation tolerate eventual consistency?</em> If yes, Properties 1–3
+        are sufficient. If no — if the operation genuinely requires that all participants
+        commit to the same outcome before any proceeds — then Property 4 is warranted.
+      </p>
+    </div>
+  </div>
+
+  <!-- ── 5b. Property 5 — Capture Resistance ──────────────────────── -->
+  <div class="section" id="capture">
+    <div class="section-head">
+      <h2>Property 5 — Capture Resistance</h2>
+      <span class="section-tag tag-e">Beyond Epistemic Correctness</span>
+    </div>
+
+    <p>
+      Properties 1–4 establish the epistemic correctness of a substrate: does it make good
+      decisions given the information available? Property 5 addresses a distinct and
+      logically independent question: can the substrate be turned into a coordinator by
+      actors with concentrated interests in controlling it?
+    </p>
+
+    <p>
+      A substrate can satisfy Properties 1–4 perfectly and still fail if Property 5 is
+      absent. The internet's TCP/IP layer is the proof: it is a flawless coordinator-free
+      substrate on Properties 1–4, and it was captured at the application layer anyway —
+      not because the protocol failed, but because it had no technical properties making
+      capture expensive. Olson dynamics operated on the layer above it undisturbed.
+    </p>
+
+    <div class="formal">
+      <div class="formal-label">Definition 2 — Capture Resistance (CR)</div>
+      <p>
+        Let <em>C_capture</em> be the minimum cost to impose a standing coordinator on a
+        substrate — to gain the ability to extract coordination rents from agents using it.
+        Let <em>R_coordinator</em> be the maximum rents that coordinator could extract once
+        imposed. The substrate's capture resistance is:
+      </p>
+      <p style="text-align:center; font-size:15px; color:var(--accent3); margin: 16px 0;">
+        <strong>CR = C_capture / R_coordinator</strong>
+      </p>
+      <p>
+        A substrate is capture-resistant when CR is large — when capture costs more than it
+        yields. A substrate is capture-prone when CR is small — when a modest investment in
+        acquiring control produces outsized returns.
+      </p>
+    </div>
+
+    <h3>What determines C_capture</h3>
+
+    <p>
+      The critical variable in the CR ratio is the <em>denomination</em> of C_capture —
+      what kind of resource must be acquired to capture the substrate.
+    </p>
+
+    <div class="map-wrap">
+      <table class="map-table">
+        <thead>
+          <tr><th>Denomination of C_capture</th><th>Olson dynamics?</th><th>Examples</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Social / political capital</strong><br>
+            Lobbying, campaign finance, revolving-door relationships, regulatory influence</td>
+            <td style="color:var(--accent5)">Yes — concentrated interests always outspend
+            diffuse interests; C_capture declines continuously as capture proceeds and rents
+            fund further capture</td>
+            <td>Federal Reserve capture; regulatory agency capture; trade policy; most
+            historical monetary systems</td>
+          </tr>
+          <tr>
+            <td><strong>Legal / contractual authority</strong><br>
+            Owning the entity, holding the key, having the legal right to modify terms</td>
+            <td style="color:var(--accent5)">Yes — legal entities can be purchased,
+            regulated, or coerced; no legal entity is immune to state-level actors</td>
+            <td>Company-controlled protocols; permissioned blockchains; any substrate
+            with a legal owner</td>
+          </tr>
+          <tr>
+            <td><strong>Physical resource — ongoing</strong><br>
+            Energy, hardware, real-world compute that cannot be conjured through social means</td>
+            <td style="color:var(--accent2)">No — physical resource cannot be acquired
+            through lobbying; acquisition cost is visible and ongoing, not a one-time
+            investment; grows with adoption</td>
+            <td>Bitcoin proof-of-work: 51% of global hash rate requires ongoing physical
+            energy expenditure proportional to network security</td>
+          </tr>
+          <tr>
+            <td><strong>Forkability</strong><br>
+            Open-source code enabling the community to exit to an uncaptured version</td>
+            <td style="color:var(--accent2)">Partial — does not prevent capture but
+            limits R_coordinator by capping rents; captured protocol can be forked away
+            from, reducing the value of capture</td>
+            <td>Bitcoin (UASF 2017); Ethereum Classic fork; any open-source protocol
+            with an active community</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Bitcoin as the first engineered capture-resistant substrate</h3>
+
+    <p>
+      Prior to Bitcoin, all coordinator-free substrate designs had C_capture denominated in
+      social or legal capital — resources that Olson dynamics can always depreciate over
+      sufficient time and with sufficient concentration of interest. Bitcoin's specific
+      innovation is anchoring C_capture in physical reality. The cost of a 51% attack is
+      denominated in electricity and hardware. No amount of lobbying, campaign finance,
+      or regulatory capture reduces the electricity bill.
+    </p>
+
+    <p>
+      This is why Bitcoin is the only global-scale coordinator-free system that has so far
+      resisted full capture. It is not more epistemically correct than, say, the early
+      internet. It is the first substrate to treat capture resistance as a first-class design
+      requirement and engineer against it at the protocol level, not just the legal or social
+      level.
+    </p>
+
+    <div class="callout callout-blue">
+      <p>
+        <strong>Bitcoin's CR properties, stated precisely:</strong>
+        (1) C_capture is denominated in physical energy — cannot be acquired through social
+        or political means. (2) No legal entity exists to be regulated, coerced, or purchased.
+        (3) Open-source forkability caps R_coordinator — any attempt to extract rents above
+        the community's tolerance produces a fork. (4) The federation invariant (21M supply
+        cap) is technically enforced by the protocol, not socially agreed upon — no Layer III
+        actor can modify it without capturing a physical majority of hash rate.
+      </p>
+    </div>
+
+    <div class="formal">
+      <div class="formal-label">Property 5 — Capture Resistance (statement)</div>
+      <p>
+        A substrate satisfying Properties 1–4 is fully substrate-correct only if it also
+        satisfies Property 5: the federation invariants (Property 3) are enforced by
+        technical means rather than social agreement, such that C_capture is denominated in
+        resources that concentrated social or political interests cannot readily acquire. A
+        substrate that satisfies Properties 1–4 but not Property 5 is epistemically correct
+        but politically unstable: it will tend toward capture under Olson dynamics on a
+        timescale proportional to R_coordinator / (rate of interest concentration).
+      </p>
+    </div>
+  </div>
+
+  <!-- ── 5d. Property 6 — Mandate TTL ─────────────────────────────── -->
+  <div class="section" id="mandate">
+    <div class="section-head">
+      <h2>Property 6 — Mandate TTL</h2>
+      <span class="section-tag tag-c">Internal Capture · The Incumbency Problem</span>
+    </div>
+
+    <p>
+      Properties 1–5 address two failure modes: epistemic failure (Properties 1–4 absent) and
+      external capture via Olson dynamics (Property 5 absent). A third failure mode remains:
+      <em>internal capture</em> — the progressive capture of Layer III coordination mechanisms
+      by the agents who operate them, without any external actor involved.
+    </p>
+
+    <p>
+      This failure mode does not require an adversary. It requires only that agents with
+      coordination roles have normal preferences for continued occupancy, and that incumbency
+      generates advantages that compound over time. An agent that holds a Layer III role for
+      an extended period accumulates: (1) <strong>informational advantage</strong> — intimate
+      knowledge of the mechanism's internals unavailable to fresh candidates; (2)
+      <strong>relational advantage</strong> — established coalitions with peer agents that new
+      candidates cannot replicate; (3) <strong>normative advantage</strong> — precedents and
+      interpretive conventions set during tenure that favour the incumbent's continued
+      interpretation. Properties 1–5 cannot prevent this. Property 5 makes the mechanism
+      resistant to external purchase; it does not prevent the mechanism's own operators from
+      progressively capturing it from within.
+    </p>
+
+    <h3>The Rojava instantiation</h3>
+
+    <p>
+      Abdullah Öcalan's Democratic Confederalism (2011) — building directly on Murray
+      Bookchin's libertarian municipalism (<em>The Ecology of Freedom</em>, 1982;
+      <em>Urbanization Without Cities</em>, 1992) — is the governance model of the Rojava
+      cantons in northern Syria, implemented in practice since 2012. It constitutes an
+      independent derivation of the coordinator-free substrate model from a political
+      governance domain, and specifically adds a structural response to internal capture that
+      the other four traditions do not explicitly formulate.
+    </p>
+
+    <p>
+      The base unit is the <strong>commune</strong> — typically 30 to 400 households, a
+      Dunbar-scale unit where local knowledge is genuinely sufficient for most decisions.
+      Communes federate upward through delegate assemblies to district and cantonal levels, but
+      the delegation is specific: each delegate carries a mandate for a defined problem class,
+      not general authority. The critical structural property is the <strong>mandate TTL</strong>:
+      all coordination roles carry explicit fixed terms after which they expire completely.
+      Expiry is active dissolution — the role is torn down and reconstituted from a fresh
+      election — not merely a periodic re-election that allows the incumbent to run again
+      unopposed. Mandatory cooling-off periods prevent the same agent from immediately
+      re-acquiring the same role.
+    </p>
+
+    <p>
+      The structural consequence: no coordination role can accumulate incumbency capital across
+      term boundaries. Each instantiation starts from scratch. The relational and normative
+      advantages that Properties 1–5 cannot prevent are bounded to a single term and then reset.
+      The commune structure prevents the mechanism from silently coordinatorising itself from
+      within.
+    </p>
+
+    <p>
+      The Rojava cantons have operated this model at municipal scale under active adversarial
+      pressure since 2012 — a real-world stress test that most governance theories do not
+      survive in practice. Alongside Paremus's runtime OSGi resolver, it is one of the few
+      existence proofs in any domain that a coordinator-free substrate with correct emergent
+      governance and active mandate dissolution works outside the laboratory.
+    </p>
+
+    <div class="formal">
+      <div class="formal-label">Property 6 — Mandate TTL (statement)</div>
+      <p>
+        For any Layer III coordination role R that involves directing the actions of other agents:
+      </p>
+      <ul>
+        <li>R carries a fixed term T_R after which it expires and is <em>actively dissolved</em></li>
+        <li>The occupant of R is ineligible to re-acquire R for a cooling-off period ≥ T_R,
+        preventing incumbency accumulation across successive terms</li>
+        <li>Dissolution is active: R is explicitly torn down and reconstituted from a fresh
+        election; institutional state is not carried forward from the prior occupant</li>
+        <li>The mandate of R is specific: R is authorised to act on a defined problem class P;
+        no general authority over the substrate is implied or granted</li>
+      </ul>
+      <p>
+        A substrate satisfying Properties 1–6 is substrate-correct with respect to both external
+        and internal capture. Properties 1–5 address the external capture problem; Property 6
+        addresses the internal capture problem. Both are necessary; neither is sufficient alone.
+      </p>
+    </div>
+
+    <h3>Properties 5 and 6 distinguished</h3>
+
+    <div class="map-wrap">
+      <table class="map-table">
+        <thead>
+          <tr>
+            <th>Property</th>
+            <th>Failure mode prevented</th>
+            <th>Actor</th>
+            <th>Mechanism</th>
+            <th>Mycelium implementation</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Property 5</strong><br>Capture Resistance</td>
+            <td>External capture — concentrated outside interests acquire control via Olson dynamics</td>
+            <td>External</td>
+            <td>Anchor C_capture in physical resources; technically enforce federation invariants; create credible exit options</td>
+            <td>Wire protocol invariants technically enforced; open-source forkability; no legal entity to regulate or purchase</td>
+          </tr>
+          <tr>
+            <td><strong>Property 6</strong><br>Mandate TTL</td>
+            <td>Internal capture — Layer III operators capture the mechanism from within via incumbency accumulation</td>
+            <td>Internal</td>
+            <td>Fixed terms with active dissolution; cooling-off periods; specific mandates; institutional state not carried forward</td>
+            <td>Leader election results are KV entries with TTL; expiry dissolves the role; Layer III is stateless between operations by construction; no role persists beyond its KV TTL</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout callout-green">
+      <p>
+        <strong>Mycelium's implementation of Property 6 is structural, not conventional.</strong>
+        Layer III is opt-in and stateless between operations by design. A <code>leader_election</code>
+        result is a gossip KV entry with a TTL; when the TTL expires the role dissolves and the
+        substrate returns to the same state it was in before the election. No persistent
+        coordination authority exists between operations. The architecture enforces mandate TTL
+        by construction — no agent can accumulate incumbency in a role whose existence is bounded
+        by a KV entry TTL that no single agent controls.
+      </p>
+    </div>
+  </div>
+
+  <!-- ── 5e. Property 7 — Epistemic Symmetry ─────────────────────── -->
+  <div class="section" id="epistemic">
+    <div class="section-head">
+      <h2>Property 7 — Epistemic Symmetry</h2>
+      <span class="section-tag tag-d">Data Locality · The Coordination Class</span>
+    </div>
+
+    <p>
+      Property 6 resets formal authority at each term boundary. It does not reset two distinct
+      knowledge asymmetries that survive mandate rotation and produce the same structural effect
+      as incumbency even when the formal constraint is observed.
+    </p>
+
+    <h3>Mechanism 1 — Data locality asymmetry</h3>
+
+    <p>
+      The gossip substrate replicates values — every node converges to the same KV state. It
+      does not replicate <em>causal history</em>: the reasoning that produced those values, the
+      sequence of decisions that shaped the current state, the context in which specific entries
+      were written. The previous occupant of a Layer III role has internalized this history; a
+      fresh candidate inherits the outcome without the reasoning. In practice, a new occupant
+      will defer to or reconstruct the prior occupant's framing simply because that framing is
+      the only documented interpretation of the state. The data asymmetry makes the prior
+      occupant's model of the world the default, even after their formal role has ended.
+    </p>
+
+    <p>
+      This is the inverse of the Coordinator Trap. The Coordinator Trap says a coordinator
+      cannot possess the agents' <em>current</em> state. The data locality asymmetry says a
+      prior Layer III occupant possesses the <em>causal history</em> of the state better than
+      any fresh agent. Both produce coordination errors: the Coordinator Trap from present
+      ignorance, data locality from past knowledge that cannot be equalised.
+    </p>
+
+    <h3>Mechanism 2 — The coordination class</h3>
+
+    <p>
+      An agent that has operated Layer III mechanisms acquires meta-knowledge: understanding
+      of the coordination game itself — the procedural shortcuts, the strategic framing
+      opportunities, the timing advantages, the coalition dynamics under ballot conditions.
+      This meta-knowledge is tacit in Polanyi's sense: it cannot be fully transferred through
+      documentation, cannot be replicated by reading the protocol specification, and is
+      acquired only through direct participation.
+    </p>
+
+    <p>
+      The mandate TTL addresses the occupant's accumulation within a single term. It does not
+      address the electorate's deficit. Agents who do not understand the coordination game
+      select representatives based on the <em>appearance</em> of competence — and the agents
+      who best appear competent to an uninformed electorate are precisely those with prior
+      coordination experience. The cooling-off period moves the specific individual out of the
+      formal role; the meta-knowledge advantage persists through informal networks, reputation,
+      and the class solidarity of prior Layer III participants. The same class cycles through
+      roles even when no individual holds the same role twice.
+    </p>
+
+    <p>
+      This is the demand-side complement to Olson's supply-side argument. Olson explains why
+      concentrated interests <em>supply</em> disproportionate effort to capture coordination
+      mechanisms. The coordination class problem explains why a diffuse electorate <em>demands</em>
+      candidates with specialist knowledge they cannot evaluate — systematically selecting for
+      the incumbent class even when formally unconstrained to do otherwise. Both dynamics operate
+      simultaneously in any system with non-trivial Layer III complexity.
+    </p>
+
+    <h3>Why both survive Property 6</h3>
+
+    <p>
+      Property 6 dissolves the formal role. It does not dissolve the causal history embedded in
+      the occupant's mental model, redistribute the meta-game knowledge held by the coordination
+      class, or improve the electorate's ability to evaluate candidates on substantive rather
+      than reputational grounds. A substrate with perfect Property 6 compliance can still produce
+      a structurally permanent coordination class — formally rotating, substantively entrenched.
+    </p>
+
+    <h3>The independent derivations</h3>
+
+    <p>
+      Bookchin's response to Mechanism 2 is that the commune is not only a governance structure
+      — it is an <strong>educational institution</strong>. The assumption of libertarian
+      municipalism is that universal participation in direct self-governance at Dunbar scale
+      distributes the meta-knowledge of coordination across the entire population. There is no
+      specialist class because there are no specialists: every member is a practitioner.
+      The political class is disrupted not by term limits but by universal competence. This
+      is why, in the HLKS framework, an open and equitable education system is not merely a
+      social good — it is a substrate property. The more broadly distributed civic meta-knowledge
+      is across a population, the more resistant that population's Layer III mechanisms are to
+      coordination-class entrenchment.
+    </p>
+
+    <p>
+      Bitcoin's protocol design independently instantiates the same principle at the technical
+      layer. The rules of the network are simple enough that understanding the game requires no
+      professional class. Running a full node verifies the same protocol that mining pools and
+      custodians operate under. The meta-game is transparent and mechanically verifiable — you
+      do not need to trust that a coordinator understands the rules; you can verify understanding
+      through behaviour. The rule of code, not the rule of experts.
+    </p>
+
+    <p>
+      For Mechanism 1, the response appears in Ostrom's monitoring principle, extended: the
+      <em>causal history</em> of the state must be as accessible as the state values themselves.
+      An audit log is not sufficient if only prior operators can interpret it. The state must
+      be self-explaining, not merely transparent.
+    </p>
+
+    <div class="formal">
+      <div class="formal-label">Property 7 — Epistemic Symmetry (statement)</div>
+      <p>
+        A substrate satisfying Properties 1–6 is fully substrate-correct only if it also
+        satisfies Property 7: the meta-knowledge required to participate in Layer III
+        coordination is:
+      </p>
+      <ul>
+        <li><strong>Minimised</strong> — protocol complexity is the minimum sufficient for the
+        required guarantee; each increment of complexity narrows the participating population
+        and widens the gap between coordination class and electorate</li>
+        <li><strong>Universally accessible</strong> — the causal reasoning that produced the
+        current state is as replicated and transparent as the state values themselves; data
+        locality advantages are distributed through the substrate, not concentrated in prior
+        role occupants through tenure</li>
+        <li><strong>Developed through ordinary participation</strong> — Layers I and II
+        operation provides sufficient substrate experience that Layer III participation requires
+        no specialist knowledge beyond what ordinary operation produces; the gap between
+        "understands the game" and "does not understand the game" closes through use, not
+        through appointment to prior coordination roles</li>
+      </ul>
+      <p>
+        A substrate satisfying Properties 1–6 but not Property 7 will tend to produce a
+        structurally entrenched coordination class: formally rotating, substantively permanent,
+        selected by an electorate whose epistemic deficit reproduces the class regardless of
+        the mandate TTL's formal constraints.
+      </p>
+    </div>
+
+    <div class="map-wrap">
+      <table class="map-table">
+        <thead>
+          <tr><th>Failure mode</th><th>Root cause</th><th>Property preventing it</th><th>Timescale</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>I — Acute collapse</strong></td>
+            <td>Coordinator Trap: coordinator cannot possess distributed local knowledge</td>
+            <td>Properties 1–4</td>
+            <td>Years to decades under complexity load</td>
+          </tr>
+          <tr>
+            <td><strong>II — Chronic erosion</strong></td>
+            <td>External concentrated interests capture Layer III via Olson dynamics</td>
+            <td>Property 5 — Capture Resistance</td>
+            <td>Decades to generations</td>
+          </tr>
+          <tr>
+            <td><strong>III — Internal capture</strong></td>
+            <td>Role occupants accumulate incumbency within Layer III mechanisms</td>
+            <td>Property 6 — Mandate TTL</td>
+            <td>Proportional to term length × unchecked renewal cycles</td>
+          </tr>
+          <tr>
+            <td><strong>IV — Class entrenchment</strong></td>
+            <td>Data locality + meta-game asymmetry reproduce a coordination class across rotation</td>
+            <td>Property 7 — Epistemic Symmetry</td>
+            <td>Generational; accelerates with protocol complexity growth</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout callout-orange">
+      <p>
+        <strong>Mycelium's partial implementation of Property 7.</strong>
+        Protocol minimality: Layer III uses epidemic Paxos — the simplest protocol sufficient
+        for the guarantee. State transparency: the WAL and <code>scan_log</code> expose the
+        causal write sequence; <code>/stats</code> and <code>/consensus/{slot}</code> expose
+        current ballot state to any node. Universal participation: every node operates Layers
+        I and II before any Layer III interaction, building the substrate familiarity that Layer
+        III participation requires. The "partial" qualification is honest: values and HLC
+        timestamps are replicated; the <em>reasoning</em> behind writes is not. Full Property 7
+        compliance would require annotated state — not just <em>what</em> was written and
+        <em>when</em>, but <em>why</em>. That is an open problem.
+      </p>
+    </div>
+  </div>
+
+  <!-- ── 5c. Two Failure Modes ──────────────────────────────────────── -->
+  <div class="section" id="failure">
+    <div class="section-head">
+      <h2>Two Failure Modes in the Empirical Record</h2>
+      <span class="section-tag tag-e">Acute Collapse · Chronic Erosion</span>
+    </div>
+
+    <p>
+      The historical record of large-scale coordination systems appears, at first glance, to
+      challenge the paper's argument: every large-scale human society has centralised. If
+      coordinator-free design is the epistemically correct approach, why does the empirical
+      record not show it prevailing?
+    </p>
+
+    <p>
+      The resolution is that the historical record contains two distinct failure modes with
+      different causes, different signatures, and different timescales. Distinguishing them
+      is essential for evaluating the paper's claims correctly.
+    </p>
+
+    <h3>Failure Mode I — Acute coordinator collapse</h3>
+
+    <p>
+      <strong>Cause:</strong> Properties 1–4 absent from the design. The system is
+      built around a standing coordinator from the start.
+    </p>
+    <p>
+      <strong>Mechanism:</strong> The Coordinator Trap Theorem operates as predicted.
+      Epistemic error accumulates as the system scales in complexity. The coordinator's
+      decisions diverge progressively from the ground truth held in the distributed local
+      knowledge of agents. At some threshold, the divergence produces cascading failures
+      that the coordinator cannot diagnose because the diagnosis itself requires the
+      local knowledge the coordinator does not possess.
+    </p>
+    <p>
+      <strong>Signature:</strong> Inability to set prices correctly → cascading shortages
+      → system collapse. The failure is visible and catastrophic. Timescale: years to decades
+      from inception under high complexity.
+    </p>
+    <p>
+      <strong>Canonical instance:</strong> Soviet central planning. The command economy
+      could not solve the price-setting problem at scale. Hayek predicted this failure
+      mode in 1945, more than four decades before it completed. The planners were not
+      incompetent — the task was epistemically impossible.
+    </p>
+
+    <div class="callout callout-red">
+      <p>
+        <strong>Note:</strong> Failure Mode I is not evidence against coordinator-free design.
+        It is evidence <em>for</em> it — the Coordinator Trap operating exactly as the theorem
+        predicts. The USSR collapsed because of centralised coordination, not despite it.
+      </p>
+    </div>
+
+    <h3>Failure Mode II — Chronic capture erosion</h3>
+
+    <p>
+      <strong>Cause:</strong> Properties 1–4 present; Property 5 absent. The substrate is
+      epistemically correctly designed, but the emergent Layer III coordination mechanisms
+      have C_capture denominated in social or political capital.
+    </p>
+    <p>
+      <strong>Mechanism:</strong> Olson dynamics. A small group that gains enormously from
+      controlling Layer III will always outspend and out-organise the large number of agents
+      who each lose a small amount from that control. C_capture is progressively reduced as
+      each increment of capture funds the next. R_coordinator grows as the captured mechanism
+      is used to write the rules that prevent its own dissolution — regulatory moats,
+      legislative barriers, tax structures that compound the coordinators' advantage.
+    </p>
+    <p>
+      <strong>Signature:</strong> The substrate (Layers I and II) remains functionally
+      intact. GDP grows. Markets function. But Layer III systematically transfers the
+      outputs of Layers I and II upward to the entities controlling Layer III. The gap
+      between productivity growth and median wage growth widens. Corporate profit share
+      diverges from labour share. Regulatory agencies are staffed by the industries they
+      nominally constrain. The system does not collapse; it hollows out. Timescale: decades
+      to generations.
+    </p>
+    <p>
+      <strong>Canonical instance:</strong> The contemporary United States. The constitutional
+      design is explicitly a coordinator-free substrate — the Bill of Rights is a federation
+      invariants document, a subsidiarity constraint specifying what Layer III cannot override.
+      Markets and civil society (Layers I and II) remain the acknowledged bedrock. But Layer
+      III — in particular the monetary layer — has been captured. The Federal Reserve's mandate
+      is price stability and full employment; its operations have produced the largest peacetime
+      transfer of wealth from wage-earners to asset-holders in the nation's history. C_capture
+      for the monetary layer was denominated in political influence; R_coordinator was
+      denominated in seigniorage and asset price control. The ratio was small. Capture followed
+      as Olson predicted.
+    </p>
+
+    <div class="map-wrap">
+      <table class="map-table">
+        <thead>
+          <tr><th>Property</th><th>Failure Mode I<br><em>Acute — USSR</em></th><th>Failure Mode II<br><em>Chronic — USA monetary layer</em></th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Root cause</strong></td>
+            <td>Epistemic — coordinator cannot possess distributed local knowledge</td>
+            <td>Political-economic — Olson dynamics on a coordinator with high R and low C_capture</td>
+          </tr>
+          <tr>
+            <td><strong>Properties absent</strong></td>
+            <td>Properties 1–4 absent from design</td>
+            <td>Properties 1–4 present; Property 5 absent</td>
+          </tr>
+          <tr>
+            <td><strong>Substrate state</strong></td>
+            <td>Coordinator-based from the start; no coordinator-free substrate exists</td>
+            <td>Coordinator-free substrate (Layers I/II) intact; Layer III captured and expanded beyond subsidiarity scope</td>
+          </tr>
+          <tr>
+            <td><strong>Failure signature</strong></td>
+            <td>Cascading shortages, price dysfunction, acute collapse</td>
+            <td>Widening inequality, regulatory capture, hollowing out of effective Layer I/II participation</td>
+          </tr>
+          <tr>
+            <td><strong>Timescale</strong></td>
+            <td>Years to decades under high complexity load</td>
+            <td>Decades to generations; invisible until advanced</td>
+          </tr>
+          <tr>
+            <td><strong>Predictive framework</strong></td>
+            <td>Coordinator Trap Theorem (HLKS epistemic bound)</td>
+            <td>Olson dynamics (C_capture / R_coordinator ratio)</td>
+          </tr>
+          <tr>
+            <td><strong>Remedy</strong></td>
+            <td>Remove the coordinator; implement Properties 1–4</td>
+            <td>Anchor C_capture in physical resources (Property 5); create credible exit options; technically enforce federation invariants</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Bitcoin as the response to Failure Mode II</h3>
+
+    <p>
+      Bitcoin is not a response to Failure Mode I. Failure Mode I is solved by not building a
+      coordinator-based system in the first place. Bitcoin is specifically engineered against
+      Failure Mode II in one critical domain: money. The monetary layer is the highest-R_coordinator
+      domain in any society — controlling money creation, interest rates, and asset prices
+      yields rents that dwarf any other single coordination mechanism. It is therefore the
+      domain most vulnerable to Olson dynamics, and the first to be captured in any system
+      where C_capture is denominated in social or political capital.
+    </p>
+
+    <p>
+      Bitcoin's response is Property 5: anchor C_capture in physical reality. The result
+      is the only monetary system in history where the entity controlling money creation
+      cannot be captured by any interest group short of acquiring a majority of global
+      physical compute — a continuously moving and growing target that no political process
+      can simply appropriate.
+    </p>
+
+    <p>
+      The monetary ecology architecture (Nicholson, 2025) generalises this response: if the
+      highest-R domain (money) can be made capture-resistant through Bitcoin at L1, and
+      progressively more local monetary layers can be built on top with their own
+      capture-resistant properties (federated custody at L2, community mutual credit at L3),
+      the chronic erosion of Failure Mode II can be structurally prevented rather than
+      merely resisted through legal and social mechanisms that Olson dynamics will always
+      eventually overcome.
+    </p>
+
+    <div class="callout callout-purple">
+      <p>
+        <strong>The paper's revised empirical claim.</strong> Large-scale systems do not
+        inevitably centralise. They exhibit one of two failure modes: acute collapse when
+        Properties 1–4 are absent (the coordinator trap operating), or chronic erosion when
+        Property 5 is absent (Olson dynamics operating on a correctly-designed but
+        capture-prone substrate). Neither failure mode is evidence against the HLKS substrate
+        principles. Both are evidence for them: acute collapse confirms the Coordinator Trap
+        Theorem; chronic erosion confirms that epistemic correctness is necessary but not
+        sufficient — and points directly at what else is required.
+      </p>
+    </div>
+  </div>
+
+  <!-- ── 6. Emergent Consensus at Scale ────────────────────────────── -->
+  <div class="section" id="scale">
+    <div class="section-head">
+      <h2>Emergent Consensus at Scale</h2>
+      <span class="section-tag tag-c">Why Property 4 is Not a Contradiction</span>
+    </div>
+
+    <p>
+      A potential objection: if coordinator-free design is epistemically necessary, why is
+      consensus ever justified? If all four traditions reject the coordinator, why does each
+      one also include a consensus layer?
+    </p>
+
+    <p>
+      The resolution is in Holland's CAS framework. Complex adaptive systems, as they scale
+      in size and complexity, produce emergent higher-order structures from the application
+      of local rules. These are not designed in — they are selected for because the system
+      cannot sustain itself without them. At sufficient scale, Problems arise that no local
+      agent can resolve alone: commons that span multiple communities, cross-border trade,
+      monetary exchange between mint federations, cross-group consensus in a distributed
+      compute cluster. The coordination structure that forms around these problems is an
+      emergent coalition — a group of agents that, by applying their local rules, temporarily
+      acts as a higher-order agent with collective behaviour.
+    </p>
+
+    <p>
+      The critical distinction — which Holland's framework can make and Promise Theory's
+      cannot — is between a <em>designed-in coordinator</em> (present from the start, with
+      standing authority, whose removal would break the system) and an <em>emergent consensus
+      structure</em> (formed from local rules in response to a specific problem, dissolved
+      when the problem is resolved, whose absence does not break the substrate).
+    </p>
+
+    <div class="map-wrap">
+      <table class="map-table">
+        <thead>
+          <tr><th>Property</th><th>Designed-in coordinator</th><th>Emergent consensus (Property 4)</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Origin</strong></td>
+            <td>Specified in the architecture; present before any agents exist</td>
+            <td>Formed by agents responding to a specific coordination problem</td>
+          </tr>
+          <tr>
+            <td><strong>Membership</strong></td>
+            <td>Fixed; defined by the system designer</td>
+            <td>Dynamic; determined by which agents respond to the ballot or proposal</td>
+          </tr>
+          <tr>
+            <td><strong>Persistence</strong></td>
+            <td>Permanent; the system depends on the coordinator's availability</td>
+            <td>Transient; dissolved after the operation completes; substrate does not depend on it</td>
+          </tr>
+          <tr>
+            <td><strong>State ownership</strong></td>
+            <td>Owns persistent state; other agents depend on coordinator's state</td>
+            <td>Stateless between operations; no persistent state outside the KV substrate</td>
+          </tr>
+          <tr>
+            <td><strong>Critical path</strong></td>
+            <td>All normal operations route through or depend on the coordinator</td>
+            <td>Normal substrate operations (gossip, signal mesh) proceed without it</td>
+          </tr>
+          <tr>
+            <td><strong>Epistemic error</strong></td>
+            <td>Coordinator accumulates epistemic error as the system scales</td>
+            <td>The quorum is formed from agents with current local state; the ballot is a
+            local signal exchange, not a coordinator polling remote state</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      The emergent consensus structure scores differently on MCB/P/S than a standing
+      coordinator. Its MCB impact is bounded: it affects only the agents involved in the
+      specific ballot and only for the duration of that ballot. Its P impact is temporary:
+      the substrate returns to full polycentricity after the operation. Its S impact is zero
+      rent: no standing entity captures coordination value from the consensus mechanism.
+    </p>
+
+    <p>
+      In political terms: the jury convened to decide a specific case and then disbanded is
+      not a standing Leviathan. The town meeting called to resolve a commons conflict is not
+      a centralised government. The Bitcoin L1 settlement invoked when two Fedimint mints
+      need to transfer value is not a central bank. Emergent consensus structures are what
+      complex systems produce when scale requires them; they are consistent with the
+      coordinator-free principle precisely because they are emergent, not imposed.
+    </p>
+  </div>
+
+  <!-- ── 7. Implications ───────────────────────────────────────────── -->
+  <div class="section" id="implications">
+    <div class="section-head">
+      <h2>Implications and Design Principles</h2>
+      <span class="section-tag tag-b">What This Means for Substrate Architects</span>
+    </div>
+
+    <p>
+      If the Coordinator Trap Theorem holds across HLKS domains, the following design
+      principles follow for any substrate architect working in a domain with heterogeneous
+      agents and local knowledge:
+    </p>
+
+    <ol>
+      <li>
+        <strong>Identify your HLKS components before designing.</strong> Who are the agents?
+        What is their local knowledge? How fast does it change? What is the coordinator's
+        epistemic error at your target scale? If you cannot answer these questions, you cannot
+        evaluate whether your substrate design is epistemically correct.
+      </li>
+      <li>
+        <strong>Design for local resolution first.</strong> Every operation that can be
+        resolved from local state and local signal observations should be. The default is
+        locality; coordination is the exception that requires justification. The justification
+        must be that local resolution is provably insufficient — not that central coordination
+        is convenient or familiar.
+      </li>
+      <li>
+        <strong>Prefer pull to push for work distribution.</strong> The sharpest corollary of
+        the Coordinator Trap Theorem: a <em>push</em> distributor must hold a model of each
+        agent's state to route work, and that model is exactly the unbounded-error term the
+        theorem identifies — it goes stale between observation and dispatch, and the staleness
+        grows with scale. A <em>pull</em> rendezvous carries no such model: idle agents claim
+        work when ready, and readiness is self-announced by the claim itself, so the variable
+        the theorem's error inhabits does not exist. Gelernter's tuple space (Linda, 1985) is
+        the canonical pull primitive; its classical objection — that the shared space is itself
+        a coordinator needing consistency machinery — dissolves when the space is built
+        <em>on</em> a coordinator-free substrate rather than beside one. Work distribution,
+        the most coordinator-shaped operation there is, then carries zero epistemic error by
+        construction.
+      </li>
+      <li>
+        <strong>Minimise federation invariants.</strong> The shared rules that define
+        system participation should be as small as possible while still enabling interoperability.
+        Every invariant added to I is a constraint imposed on all agents; the correct number
+        is the minimum required for coherent communication between locally-governed agents.
+      </li>
+      <li>
+        <strong>Apply the subsidiarity test before invoking consensus.</strong> Before any
+        coordination mechanism above the local level is designed in, ask: can this problem
+        tolerate eventual consistency? If yes, remove the consensus mechanism. If no, invoke
+        it as Property 4 — scoped, transient, stateless between operations.
+      </li>
+      <li>
+        <strong>Evaluate your substrate on MCB/P/S.</strong> A substrate that scores low on
+        any of the three axes has either narrowed participation, reduced polycentricity, or
+        created a coordination toll. Each is a signal that the coordinator trap has been
+        re-imported under a different name.
+      </li>
+      <li>
+        <strong>Apply the Olson test to every emergent coordination mechanism.</strong>
+        For every Layer III component that emerges as the system scales, ask: what is
+        C_capture / R_coordinator? If R_coordinator is large and C_capture is denominated
+        in social or political capital, Olson dynamics predict capture on a timescale
+        inversely proportional to R. Either anchor C_capture in physical resources, create
+        a credible exit option, or technically enforce the federation invariants so that
+        no social/political process can modify them unilaterally. Failure Mode II follows
+        directly from ignoring this test.
+      </li>
+      <li>
+        <strong>Apply the mandate TTL test to every Layer III coordination role.</strong>
+        For every role that directs the actions of other agents, ask: does it carry an
+        explicit term after which it is actively dissolved and reconstituted? Is there a
+        cooling-off period preventing immediate re-acquisition? Is the mandate specific
+        (a defined problem class) or general (authority over the substrate)? A role without
+        a mandate TTL is a standing coordinator that can bypass Properties 1–5 from the
+        inside. Internal capture — Failure Mode III — follows directly from ignoring this test.
+        The Rojava cantonal model provides the existence proof; Mycelium's stateless Layer III
+        implements it structurally.
+      </li>
+      <li>
+        <strong>Apply the epistemic symmetry test to your Layer III protocol design.</strong>
+        Ask: does participating in Layer III require knowledge that ordinary Layer I and II
+        operation does not produce? Is the causal history of the state as accessible as its
+        current values? Is the protocol the simplest one sufficient for the guarantee, or has
+        complexity accumulated beyond necessity? Complexity that narrows the knowledgeable
+        population is not free — it creates the coordination class that Property 6 alone
+        cannot dissolve. Failure Mode IV — structural class entrenchment — follows from
+        accumulating protocol complexity without distributing the meta-knowledge required to
+        navigate it. The same principle applies to any human institution: an education system
+        that distributes civic meta-knowledge broadly is a substrate property, not merely a
+        social good.
+      </li>
+      <li>
+        <strong>Expect emergent higher-order structures at scale — design for their arrival.</strong>
+        As the system scales, agents will form coalitions, develop specialisations, and produce
+        higher-order coordination structures. This is not a failure of the local-rule design;
+        it is its predicted output. The substrate should enable rather than prevent these
+        emergent structures, and should not mistake them for coordinator-like entities.
+      </li>
+    </ol>
+
+    <div class="callout callout-green">
+      <p>
+        <strong>Constructive evidence, not analogy.</strong> Principle 3 (pull over push) is
+        the one design prescription this paper can demonstrate by construction rather than
+        argue. The <code>mycelium-tuple-space</code> companion crate rebuilds work
+        distribution using only the substrate's public API, with no component that predicts
+        any agent's state: producers <code>put</code> into named stages, workers block on
+        <code>take</code>, the serving node is discovered by capability advertisement, and its
+        failure is detected by the same TTL evaporation that fades any signal — a mirror
+        promotes itself through the same emergent election as every other role. 1,000 items
+        across ten producers and ten workers are delivered exactly once with no participant
+        ever holding a view of another's load; killing the serving node mid-flight loses
+        nothing acknowledged. The Coordinator Trap Theorem predicts that this is the only
+        shape work distribution can take without accumulating epistemic error; the companion
+        crate is the existence proof in the AI-fleet HLKS domain.
+      </p>
+    </div>
+  </div>
+
+  <!-- ── 8. Open Questions ─────────────────────────────────────────── -->
+  <div class="section" id="questions">
+    <div class="section-head">
+      <h2>Open Questions</h2>
+      <span class="section-tag tag-e">Boundary Conditions · Further Work</span>
+    </div>
+
+    <p>
+      The argument as stated has boundary conditions and open questions that a complete paper
+      must address.
+    </p>
+
+    <h3>When does the HLKS model not apply?</h3>
+
+    <p>
+      The Coordinator Trap depends on heterogeneity and state change rate being bounded away
+      from zero. There exist systems where these conditions do not hold: systems with
+      homogeneous agents and static state (a database with identical replicas and infrequent
+      writes) are better served by traditional consensus than by gossip. The paper's claim is
+      scoped to HLKS systems; it must state explicitly where the boundary lies and what
+      evidence would establish whether a given system is inside or outside it.
+    </p>
+
+    <h3>The formal status of the Coordinator Trap Theorem</h3>
+
+    <p>
+      The theorem as stated is informal — it argues from the latency bound and heterogeneity
+      conditions without constructing a formal proof. A complete paper should either: (a) prove
+      the theorem formally in a specified model, or (b) argue carefully that the informal
+      argument is sufficient for the claims being made and that formal proof would require
+      domain-specific assumptions that defeat the cross-domain generality. Option (b) is more
+      honest but requires careful handling.
+    </p>
+
+    <h3>The MCB/P/S framework's quantitative operationalisation</h3>
+
+    <p>
+      As stated, MCB, P, and S are qualitative axes. The monetary ecology paper treats them
+      as evaluative dimensions rather than precise metrics. A complete cross-domain paper
+      should investigate whether any of the three can be quantified in a way that is
+      consistent across domains — enabling, for example, a comparison of the polycentricity
+      of different monetary system designs against different computing substrate designs on
+      the same scale.
+    </p>
+
+    <h3>Is Property 7 reducible to Properties 1–6?</h3>
+
+    <p>
+      The data locality asymmetry (Mechanism 1) is related to Property 1 (local signal
+      propagation) but distinct: Property 1 ensures current state is locally held; it says
+      nothing about causal history being accessible. The coordination class (Mechanism 2) is
+      related to Property 6 (Mandate TTL) but distinct: Property 6 bounds the occupant's
+      tenure; it does not bound the electorate's epistemic deficit. Property 7 appears
+      genuinely independent of Properties 1–6 — it addresses the distribution of the
+      meta-knowledge required to operate and evaluate Layer III, which is orthogonal to both
+      the structure of authority and the mechanism of its transfer. Whether a formal argument
+      for this independence can be constructed within the HLKS framework is an open question.
+    </p>
+
+    <h3>The optimal term length for Property 6</h3>
+
+    <p>
+      Property 6 prevents incumbency accumulation by bounding role tenure. The boundary
+      condition question is: what is the optimal T_R? Too short, and the legitimate domain
+      expertise accumulated during a term — which is distinct from the self-serving
+      informational advantage Property 6 guards against — is destroyed before it can benefit
+      the system. Too long, and the capture accumulation mechanism operates long enough to
+      become self-reinforcing before the dissolution forces a reset. The Rojava cantonal model
+      sets terms at approximately one year for most coordination roles; Ostrom's design
+      principles say nothing about optimal term length. A complete treatment of Property 6
+      requires either a formal model of the expertise-accumulation benefit against the
+      incumbency-capture cost as a function of T_R, or an empirical study of term lengths
+      across successful polycentric governance structures. Neither exists in the current
+      literature.
+    </p>
+
+    <h3>The Holland / Burgess tension</h3>
+
+    <p>
+      Promise Theory (Burgess) cannot model emergent higher-order coordination structures;
+      CAS theory (Holland) can. The paper uses Holland's framework to justify Property 4
+      (emergent consensus) against Burgess's objection. A complete treatment should engage
+      with Burgess's response: he would likely argue that an emergent consensus structure
+      that is genuinely transient and stateless is indeed consistent with PT's constraint,
+      because each agent's participation in the ballot is a local promise about its own
+      behaviour ("I accept this ballot"). The paper should explore whether PT and CAS
+      theory are genuinely in tension on this point or merely using different vocabularies
+      for the same structure.
+    </p>
+
+    <h3>Empirical evidence of convergent failure modes</h3>
+
+    <p>
+      The strongest version of the cross-domain argument requires not just that the four
+      traditions prescribe the same substrate design, but that coordinator-based alternatives
+      in each domain fail in structurally similar ways. Central planning failures (Soviet
+      Union), failed external commons governance (colonial-era fishery collapses), currency
+      crises under single fiat systems, and broker-based agent framework performance
+      degradation at scale should exhibit the same signature: epistemic error accumulation
+      as the system scales, manifesting as systematic misallocation that worsens as
+      heterogeneity increases. Documenting this cross-domain failure signature empirically
+      would substantially strengthen the theoretical claim.
+    </p>
+
+    <div class="callout callout-purple">
+      <p>
+        <strong>The paper's central claim, restated precisely.</strong> We are not arguing
+        that all complex systems should be coordinator-free, or that consensus is never
+        appropriate. We are arguing that for any system satisfying the HLKS conditions —
+        heterogeneous agents, local knowledge, non-zero state change rates — a
+        coordinator-based substrate design will accumulate epistemic error proportional to
+        scale and heterogeneity, while a locally-resolved signal substrate with minimal
+        federation invariants and subsidiarity-respecting consensus (Properties 1–4) will
+        not. The four traditions converge on Properties 1–4 because they are independently
+        solving the same HLKS problem. The convergence is the evidence; the formal framework
+        is the explanation.
+      </p>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── Footer ────────────────────────────────────────────────────────── -->
+<div style="max-width:920px; margin:80px auto 0; padding:24px 32px 0;
+            border-top:1px solid var(--border);
+            display:flex; justify-content:space-between; align-items:center;
+            flex-wrap:wrap; gap:12px;">
+  <span style="font-size:12px; color:var(--muted);">mycelium · Paper 2 Working Draft · 2026-06-08</span>
+  <span style="font-size:12px; color:var(--muted);">Hayek · Ostrom · Holland · Burgess · Nicholson · Öcalan · Bookchin — HLKS · Coordinator Trap · Substrate Convergence</span>
+</div>
+
+</body>
+</html>

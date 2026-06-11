@@ -1,0 +1,2 @@
+# coordinator_comparison mode=gossip n=80 duration_secs=20 decision_rate_hz=50 load_update_rate_hz=10 warmup_secs=6
+# warmup 

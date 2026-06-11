@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agentic Flow Networks — A New Primitive for Distributed AI</title>
+<style>
+  :root {
+    --bg:      #0d1117;
+    --surface: #161b22;
+    --surface2:#1c2128;
+    --surface3:#21262d;
+    --border:  #30363d;
+    --accent:  #58a6ff;
+    --accent2: #3fb950;
+    --accent3: #d2a8ff;
+    --accent4: #ffa657;
+    --accent5: #ff7b72;
+    --accent6: #39d353;
+    --muted:   #8b949e;
+    --text:    #e6edf3;
+    --text2:   #c9d1d9;
+    --radius:  8px;
+    --radius-lg: 14px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 17px; line-height: 1.8;
+    padding-bottom: 120px;
+  }
+
+  /* ─── Hero ─────────────────────────────────────────────────── */
+  .hero {
+    background:
+      radial-gradient(ellipse at 50% 0%,  rgba(88,166,255,0.08) 0%, transparent 60%),
+      radial-gradient(ellipse at 80% 80%, rgba(63,185,80,0.06)  0%, transparent 50%),
+      var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 80px 40px 68px; text-align: center;
+  }
+  .series-label {
+    display: inline-block; font-family: -apple-system, "Inter", sans-serif;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--accent);
+    background: rgba(88,166,255,0.08); border: 1px solid rgba(88,166,255,0.2);
+    border-radius: 20px; padding: 5px 16px; margin-bottom: 28px;
+  }
+  .hero h1 {
+    font-size: clamp(32px, 5.5vw, 60px); font-weight: 900;
+    letter-spacing: -0.03em; line-height: 1.02; margin-bottom: 12px;
+    font-family: -apple-system, "Inter", sans-serif;
+    background: linear-gradient(135deg, #e6edf3 0%, #c9d1d9 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .hero-subtitle {
+    font-size: clamp(18px, 2.5vw, 24px); font-family: -apple-system, "Inter", sans-serif;
+    font-style: italic; color: var(--accent); margin-bottom: 28px; font-weight: 400;
+  }
+  .hero-byline {
+    font-family: -apple-system, "Inter", sans-serif;
+    font-size: 13px; color: var(--muted); margin-bottom: 36px;
+  }
+  .hero-abstract {
+    max-width: 680px; margin: 0 auto; font-size: 16px; color: var(--text2);
+    line-height: 1.75; font-style: italic;
+  }
+
+  /* ─── Article layout ────────────────────────────────────────── */
+  .article { max-width: 740px; margin: 0 auto; padding: 0 32px; }
+  .section-marker {
+    font-family: -apple-system, "Inter", sans-serif; font-size: 11px;
+    font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent3); margin: 60px 0 6px;
+  }
+  h2 {
+    font-family: -apple-system, "Inter", sans-serif; font-size: 26px;
+    font-weight: 800; letter-spacing: -0.02em; line-height: 1.2;
+    color: var(--text); margin-bottom: 24px;
+  }
+  p { color: var(--text2); margin-bottom: 18px; }
+  strong { color: var(--text); }
+  em { color: var(--text); font-style: italic; }
+
+  /* Drop cap on first paragraph */
+  .drop-cap::first-letter {
+    float: left; font-size: 64px; line-height: 0.82; font-weight: 900;
+    margin-right: 8px; margin-top: 8px; color: var(--accent);
+    font-family: -apple-system, "Inter", sans-serif;
+  }
+
+  hr { border: none; border-top: 1px solid var(--border); margin: 48px 0; }
+
+  /* ─── Pull quote ──────────────────────────────────────────── */
+  .pull-quote {
+    border-left: 3px solid var(--accent); padding: 12px 24px;
+    margin: 36px 0; font-size: 20px; line-height: 1.55;
+    color: var(--text); font-style: italic;
+    background: var(--surface); border-radius: 0 var(--radius) var(--radius) 0;
+  }
+
+  /* ─── Callout ─────────────────────────────────────────────── */
+  .callout { border-radius: var(--radius); padding: 16px 20px; margin: 24px 0;
+    border-left: 3px solid; font-size: 15px; color: var(--text2); line-height: 1.65;
+    font-family: -apple-system, "Inter", sans-serif; }
+  .callout p:last-child { margin: 0; }
+  .cg { background:rgba(63,185,80,0.06);   border-color:var(--accent2); }
+  .cb { background:rgba(88,166,255,0.06);  border-color:var(--accent); }
+  .cp { background:rgba(210,168,255,0.06); border-color:var(--accent3); }
+  .co { background:rgba(255,166,87,0.06);  border-color:var(--accent4); }
+  .cr { background:rgba(255,123,114,0.06); border-color:var(--accent5); }
+
+  /* ─── Code ────────────────────────────────────────────────── */
+  .code-wrap { background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); overflow: hidden; margin: 24px 0; }
+  .code-header { background: var(--surface2); border-bottom: 1px solid var(--border);
+    padding: 10px 18px; display: flex; align-items: center; gap: 10px;
+    font-family: -apple-system, "Inter", sans-serif; font-size: 11px;
+    color: var(--muted); font-family: "SF Mono","Fira Mono",monospace; }
+  .code-lang { font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.1em; color: var(--accent3); background: rgba(210,168,255,0.1);
+    border: 1px solid rgba(210,168,255,0.2); border-radius: 4px; padding: 2px 8px; }
+  pre { padding: 18px 22px; font-family: "SF Mono","Fira Mono",monospace; font-size: 13px;
+    line-height: 1.75; color: var(--text2); overflow-x: auto; white-space: pre; }
+  code { font-family: "SF Mono","Fira Mono",monospace; font-size: 14px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
+    padding: 1px 6px; color: var(--accent3); }
+  .cm{color:var(--muted)} .ck{color:var(--accent)} .cv{color:var(--accent2)}
+  .cs{color:var(--accent3)} .cn{color:var(--accent4)} .cf{color:var(--accent4);font-weight:600}
+  .cd{color:#79c0ff}
+
+  /* ─── AFN properties ─────────────────────────────────────── */
+  .afn-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr));
+    gap: 1px; background: var(--border); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); overflow: hidden; margin: 28px 0;
+    font-family: -apple-system, "Inter", sans-serif;
+  }
+  .afn-prop { background: var(--surface); padding: 22px 18px; }
+  .afn-num { font-size: 22px; font-weight: 900; line-height: 1; margin-bottom: 10px; }
+  .n1{color:var(--accent2)} .n2{color:var(--accent)} .n3{color:var(--accent3)}
+  .n4{color:var(--accent4)} .n5{color:var(--accent5)}
+  .afn-title { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 6px; }
+  .afn-body  { font-size: 12px; color: var(--muted); line-height: 1.6; }
+
+  /* ─── Comparison table ────────────────────────────────────── */
+  .tbl-wrap { overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-lg);
+    margin: 24px 0; font-family: -apple-system, "Inter", sans-serif; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th { background: var(--surface2); color: var(--muted); font-size: 10px;
+    font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); }
+  tbody tr { border-bottom: 1px solid var(--border); }
+  tbody tr:last-child { border-bottom: none; }
+  td { padding: 12px 14px; color: var(--text2); font-size: 13px; vertical-align: top; }
+  td:first-child { font-weight: 600; white-space: nowrap; color: var(--text); }
+  .check { color: var(--accent2); } .cross { color: var(--accent5); }
+  .partial { color: var(--accent4); }
+
+  /* ─── Demo box ────────────────────────────────────────────── */
+  .demo-box {
+    background: var(--surface); border: 1px solid var(--accent2);
+    border-radius: var(--radius-lg); padding: 28px; margin: 36px 0;
+    font-family: -apple-system, "Inter", sans-serif;
+  }
+  .demo-title { font-size: 14px; font-weight: 700; color: var(--accent2);
+    text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 16px; }
+  .demo-step { display: flex; gap: 14px; margin: 12px 0; align-items: flex-start; }
+  .demo-num { width: 24px; height: 24px; border-radius: 50%; background: rgba(63,185,80,0.15);
+    color: var(--accent2); display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 800; flex-shrink: 0; margin-top: 2px; }
+  .demo-cmd { font-family: "SF Mono","Fira Mono",monospace; font-size: 13px;
+    color: var(--text2); background: var(--surface2); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 8px 14px; flex: 1; }
+  .demo-note { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  .footer { text-align: center; padding: 60px 32px 0; font-size: 13px;
+    color: var(--muted); border-top: 1px solid var(--border); margin-top: 80px;
+    font-family: -apple-system, "Inter", sans-serif; }
+</style>
+</head>
+<body>
+
+<!-- ─── Hero ──────────────────────────────────────────────────────────── -->
+<div class="hero">
+  <div class="series-label">Architecture — Distributed AI Patterns</div>
+  <h1>Agentic Flow Networks</h1>
+  <div class="hero-subtitle">When the Cluster Is the Queue</div>
+  <div class="hero-byline">Mycelium Project · 2026</div>
+  <p class="hero-abstract">
+    A new primitive for distributed AI pipelines where the buffer, the scheduler,
+    and the routing table are all emergent properties of a single gossip substrate —
+    the same one that's already running as part of your cluster.
+    No brokers. No dead-letter queues. No static topology.
+  </p>
+</div>
+
+<!-- ─── Article body ──────────────────────────────────────────────────── -->
+<div class="article">
+
+<!-- §1 -->
+<div class="section-marker">§1</div>
+<h2>The Unix Pipe Moment</h2>
+
+<p class="drop-cap">
+  In 1973, Doug McIlroy gave the world the pipe: <code>cat file | grep pattern | sort</code>.
+  Programs that knew nothing about each other could compose. The medium was the protocol.
+  <code>stdout</code> of one process became <code>stdin</code> of the next.
+  No orchestrator. No registry. No broker. Just a channel.
+</p>
+
+<p>
+  That idea — that the <em>channel itself</em> is the coordination primitive — is
+  one of the most powerful ideas in computing. It scaled from shell scripts to
+  programming languages (functional pipelines, lazy iterators, Rx streams).
+  But something happened when we tried to bring it to distributed systems.
+</p>
+
+<p>
+  We broke the channel into pieces. We put a message broker between producer and
+  consumer. We added a task queue. We added a worker registry. We added a scheduler.
+  We gave each of those pieces its own failure mode, its own ops surface, its own
+  monitoring stack. The simplicity of the pipe disappeared into operational complexity.
+</p>
+
+<div class="pull-quote">
+  "The pipe is so simple it feels trivial. The distributed equivalent is so complex
+  it requires a dedicated platform team."
+</div>
+
+<p>
+  This document is about a pattern that recovers the pipe's simplicity at distributed
+  scale — without sacrificing correctness or resilience. We call it an
+  <strong>Agentic Flow Network</strong>.
+</p>
+
+<hr>
+
+<!-- §2 -->
+<div class="section-marker">§2</div>
+<h2>The Separation Tax</h2>
+
+<p>
+  Consider a typical ML pipeline: raw data → ingestion → feature extraction →
+  model inference → post-processing → storage. In 2024, the standard deployment
+  looks like this:
+</p>
+
+<div class="code-wrap">
+  <div class="code-header"><span class="code-lang">Infrastructure</span>conventional ML pipeline topology</div>
+  <pre>Workers     <span class="cm">→</span> <span style="color:var(--accent5);">Redis</span>          <span class="cm">(work queue)</span>
+Workers     <span class="cm">→</span> <span style="color:var(--accent5);">Consul</span>         <span class="cm">(service registry)</span>
+Workers     <span class="cm">→</span> <span style="color:var(--accent5);">Celery</span>         <span class="cm">(task scheduler + retries)</span>
+Workers     <span class="cm">→</span> <span style="color:var(--accent5);">Kafka</span>          <span class="cm">(event bus between stages)</span>
+Workers     <span class="cm">→</span> <span style="color:var(--accent5);">Dead-letter Q</span>  <span class="cm">(failure handling)</span>
+Workers     <span class="cm">→</span> <span style="color:var(--accent5);">Prometheus</span>     <span class="cm">(queue depth monitoring)</span>
+
+<span class="cm">6 extra systems · 6 failure modes · 6 ops surfaces</span></pre>
+</div>
+
+<p>
+  Every one of those systems was added to solve a real problem. Redis because
+  workers need to share work. Consul because workers need to find each other.
+  Celery because work needs retries and timeouts. Kafka because stages need to
+  communicate asynchronously. The dead-letter queue because work sometimes fails.
+  Prometheus because you need to see what's happening.
+</p>
+
+<p>
+  We call this the <strong>Separation Tax</strong>: every separation between compute
+  and state is a new system to deploy, monitor, and fail. The tax compounds. Each
+  system added to solve the previous one's shortcomings creates new shortcomings
+  of its own.
+</p>
+
+<div class="callout cr">
+  <p>
+    <strong>The tax is not about technology choices.</strong> Redis is excellent.
+    Kafka is excellent. The tax is about the <em>structural assumption</em> that
+    compute and state must be separate systems. Once you accept that assumption,
+    the complexity is load-bearing.
+  </p>
+</div>
+
+<hr>
+
+<!-- §3 -->
+<div class="section-marker">§3</div>
+<h2>What Flow-Based Programming Got Right</h2>
+
+<p>
+  In the early 1970s, J. Paul Morrison at IBM developed
+  <strong>Flow-Based Programming (FBP)</strong>: networks of independent black-box
+  processes that communicate by passing information packets through bounded channels.
+  Processes know nothing about each other. The topology — which process connects to
+  which — is the program.
+</p>
+
+<p>
+  FBP got several things right that the industry keeps rediscovering:
+</p>
+
+<ul style="margin: 0 0 18px 24px; color: var(--text2); line-height: 1.9;">
+  <li>Processes should be reusable and independently testable</li>
+  <li>Backpressure should be automatic (bounded channels block producers)</li>
+  <li>The topology should be declarative, not embedded in process code</li>
+  <li>Dead processes should not block the whole network</li>
+</ul>
+
+<p>
+  These principles are correct. But FBP implementations share a critical limitation:
+  the channels are <em>external to the compute nodes</em>. Workers must connect to
+  a runtime that manages channels. The separation tax exists in FBP too — it's just
+  called "the FBP runtime" instead of "Kafka."
+</p>
+
+<p>
+  The question that Agentic Flow Networks answer is: what happens if the channel
+  <em>is</em> the compute node?
+</p>
+
+<hr>
+
+<!-- §4 -->
+<div class="section-marker">§4</div>
+<h2>The Substrate Unity Insight</h2>
+
+<p>
+  Modern gossip-based distributed systems — Mycelium, CRDTs, epidemic KV stores —
+  give every node a <em>local replica</em> of the cluster's shared state. A write
+  on node A propagates to all other nodes within milliseconds. A read on any node
+  is a local memory access.
+</p>
+
+<p>
+  This is usually described as a consistency mechanism. But it has an underexplored
+  consequence: <strong>every worker already holds the buffer</strong>.
+</p>
+
+<div class="pull-quote">
+  "When a worker writes its output to the KV ring, that value is immediately
+  available for local reads on every other node. There is no queue service to
+  query. The scan latency is zero."
+</div>
+
+<p>
+  Let that sink in. The KV ring is the buffer. It's already there — running as part
+  of the cluster, replicated to every node, consistent within milliseconds.
+  You don't need to deploy a queue service to get a distributed work queue.
+  You already have one.
+</p>
+
+<p>
+  The second half of the insight: capability gossip as the scheduler. Each worker
+  advertises its capabilities — what stage methods it can handle — by writing
+  capability records into the same KV substrate. A coordinator calls
+  <code>resolve_capability("stage_c", "worker")</code> to find nodes that can
+  run stage C. The response is a list of live nodes, resolved locally, without
+  a network hop to a service registry.
+</p>
+
+<p>
+  This is <strong>Substrate Unity</strong>: the buffer, the scheduler, and the
+  routing table are all emergent properties of the same gossip substrate. There
+  is no separation — and therefore no Separation Tax.
+</p>
+
+<hr>
+
+<!-- §4b -->
+<div class="section-marker">§4b</div>
+<h2>From Push to Pull — the TupleSpace Refinement</h2>
+
+<p>
+  The KV-ring-as-buffer (§4) is the right first move, but it leaves one
+  coordinator-shaped seam: a <em>coordinator still decides</em> which worker
+  gets each item. It calls <code>resolve_capability</code>, picks a node, and
+  pushes. To pick well it needs a model of every worker's load — and that model
+  goes stale between the read and the dispatch. Staleness is precisely what
+  drives misrouting and the audit burden the whole architecture set out to
+  eliminate. The buffer was freed from the Separation Tax; the <em>decision</em>
+  was not.
+</p>
+
+<p>
+  The refinement is to remove the decision-maker entirely by inverting the
+  direction of control: instead of a coordinator <em>pushing</em> work toward a
+  predicted worker, idle workers <em>pull</em> work when they are ready.
+  Readiness is announced by the claim itself, so there is no model to keep
+  fresh — the variable staleness would corrupt does not exist. This is
+  Gelernter's tuple space (Linda, 1985), and the classical objection to it —
+  that the shared space is itself a coordinator needing its own consistency
+  machinery — dissolves when the space is built <em>on</em> a coordinator-free
+  substrate rather than beside one.
+</p>
+
+<div class="callout cg">
+  <p>
+    <strong>Shipped as constructive proof.</strong> The
+    <code>mycelium-tuple-space</code> companion crate rebuilds work distribution
+    — the most coordinator-shaped workload there is — using only the substrate's
+    public API, with no component that predicts any agent's state. Producers
+    <code>put</code> items into named stages; workers block on <code>take</code>
+    and receive work exactly when ready. The serving node is discovered by
+    capability advertisement, its failure is detected by TTL evaporation, and a
+    mirror promotes itself through the same emergent election as any other role.
+    1,000 items across ten producers and ten workers are delivered exactly once
+    with no participant ever holding a view of another's load; kill the serving
+    node mid-flight and a standby serves the survivors without resurrecting
+    acknowledged work. The pull pattern survives; only the coordinator-shaped
+    infrastructure around it was ever wrong.
+  </p>
+</div>
+
+<p>
+  The §5 properties below describe the AFN concept in its general form; the
+  TupleSpace companion is its purest instantiation — flow-based programming with
+  the last decision-maker removed.
+</p>
+
+<hr>
+
+<!-- §5 -->
+<div class="section-marker">§5</div>
+<h2>Five Properties of an Agentic Flow Network</h2>
+
+<p>
+  A system is an Agentic Flow Network if and only if it exhibits all five of these
+  properties. They are not aspirational — they are structural requirements.
+</p>
+
+<div class="afn-grid">
+  <div class="afn-prop">
+    <div class="afn-num n1">I</div>
+    <div class="afn-title">Substrate Unity</div>
+    <div class="afn-body">The buffer, scheduler, and routing table are all emergent properties of a single gossip substrate. No separate queue, registry, or router.</div>
+  </div>
+  <div class="afn-prop">
+    <div class="afn-num n2">II</div>
+    <div class="afn-title">Topology Emergence</div>
+    <div class="afn-body">Routing topology is not configured. It emerges from capability gossip. Add a node — it joins. Remove a node — its TTL expires. The topology is always live and always correct.</div>
+  </div>
+  <div class="afn-prop">
+    <div class="afn-num n3">III</div>
+    <div class="afn-title">Fluid Allocation</div>
+    <div class="afn-body">Workers have no fixed stage assignment. They follow the work. When Stage A drains, those workers immediately become available for Stage B — without reconfiguration.</div>
+  </div>
+  <div class="afn-prop">
+    <div class="afn-num n4">IV</div>
+    <div class="afn-title">Opacity Backpressure</div>
+    <div class="afn-body">Saturated workers signal unavailability, becoming invisible to routing. Backpressure is automatic, measured, and self-correcting. No explicit rate limiting required.</div>
+  </div>
+  <div class="afn-prop">
+    <div class="afn-num n5">V</div>
+    <div class="afn-title">TTL-Native Cleanup</div>
+    <div class="afn-body">Abandoned work items expire automatically. No dead-letter queues. No manual intervention for crashed workers. The cluster heals itself through TTL expiry and anti-entropy.</div>
+  </div>
+</div>
+
+<hr>
+
+<!-- §6 -->
+<div class="section-marker">§6</div>
+<h2>The Pattern in Practice — Stage A → B → C → D</h2>
+
+<p>
+  Here is the fluid pipeline pattern made concrete. Ten workers. 200 news articles.
+  Four stages: Parse → Enrich → Score (simulates LLM) → Aggregate.
+</p>
+
+<p>
+  <strong>Step 1: Seed the buffer.</strong> The coordinator writes all 200 work items
+  into the KV ring. Each write propagates to all 10 workers via gossip.
+  Within seconds, every node holds a replica of the full stage-A buffer.
+</p>
+
+<div class="code-wrap">
+  <div class="code-header"><span class="code-lang">Python</span>coordinator — seeding the KV buffer</div>
+  <pre><span class="cm"># 200 writes, each propagates epidemically to all 10 workers</span>
+<span class="ck">for</span> article <span class="ck">in</span> articles:
+    agent.<span class="cf">set</span>(f<span class="cv">"pipeline/stage-a/{article['id']}"</span>,
+             json.<span class="cf">dumps</span>(article).<span class="cf">encode</span>())
+
+<span class="cm"># scan_prefix is a LOCAL read — zero network latency</span>
+items = agent.<span class="cf">keys</span>(prefix=<span class="cv">"pipeline/stage-a/"</span>)
+<span class="cm"># → ['pipeline/stage-a/article-0000', 'pipeline/stage-a/article-0001', …]</span></pre>
+</div>
+
+<p>
+  <strong>Step 2: Workers advertise all capabilities.</strong> Each worker advertises
+  itself as a handler for all four stage methods at startup.
+  No static assignment — the same worker will handle Parse requests today and
+  Score requests tomorrow, or both in the same run.
+</p>
+
+<div class="code-wrap">
+  <div class="code-header"><span class="code-lang">Python</span>worker — fluid capability advertisement</div>
+  <pre><span class="cm"># Every worker advertises ALL four stage capabilities.</span>
+<span class="cm"># The coordinator routes to whichever stage has work.</span>
+<span class="ck">for</span> ns <span class="ck">in</span> (<span class="cv">"stage_a"</span>, <span class="cv">"stage_b"</span>, <span class="cv">"stage_c"</span>, <span class="cv">"stage_d"</span>):
+    agent.<span class="cf">advertise_capability</span>(ns, <span class="cv">"worker"</span>, interval_secs=<span class="cn">15</span>)
+
+<span class="cm"># Serve all four methods concurrently — no reconfiguration ever needed</span>
+<span class="cd">await</span> asyncio.<span class="cf">gather</span>(
+    <span class="cf">serve_stage</span>(agent, <span class="cv">"stage_a.parse"</span>,     parse_article),
+    <span class="cf">serve_stage</span>(agent, <span class="cv">"stage_b.enrich"</span>,    enrich_article),
+    <span class="cf">serve_stage</span>(agent, <span class="cv">"stage_c.score"</span>,     score_article),
+    <span class="cf">serve_stage</span>(agent, <span class="cv">"stage_d.aggregate"</span>, aggregate_article),
+)</pre>
+</div>
+
+<p>
+  <strong>Step 3: The coordinator drains each stage.</strong> The <code>drain_stage</code>
+  loop scans the current stage's KV prefix, resolves free workers via capability query,
+  and dispatches RPC calls. When workers complete, they write results to the
+  <em>next</em> stage's KV prefix and delete from the current one.
+  The loop exits when the prefix is empty and no tasks are in flight.
+</p>
+
+<p>
+  <strong>The wave:</strong> As Stage A drains into B, all 10 workers shift from
+  <code>stage_a.parse</code> calls to <code>stage_b.enrich</code> calls — without
+  any instruction from the coordinator. The capability ring reflects what work is
+  available; workers respond to what the coordinator routes. The wave is emergent.
+</p>
+
+<hr>
+
+<!-- §7 -->
+<div class="section-marker">§7</div>
+<h2>Prior Art — What Each Got Right</h2>
+
+<div class="tbl-wrap">
+  <table>
+    <thead><tr>
+      <th>System</th>
+      <th>Fluid allocation</th>
+      <th>Substrate unity</th>
+      <th>Topology emergence</th>
+      <th>TTL cleanup</th>
+      <th>Zero extra services</th>
+    </tr></thead>
+    <tbody>
+      <tr>
+        <td>Unix pipes</td>
+        <td class="check">✓</td>
+        <td class="check">✓</td>
+        <td class="cross">✗ <span style="font-weight:400;color:var(--muted);">(static)</span></td>
+        <td class="cross">✗</td>
+        <td class="check">✓</td>
+      </tr>
+      <tr>
+        <td>Kafka Streams</td>
+        <td class="cross">✗ <span style="font-weight:400;color:var(--muted);">(partition-assigned)</span></td>
+        <td class="cross">✗ <span style="font-weight:400;color:var(--muted);">(broker is separate)</span></td>
+        <td class="partial">~ <span style="font-weight:400;color:var(--muted);">(rebalance protocol)</span></td>
+        <td class="partial">~ <span style="font-weight:400;color:var(--muted);">(retention policy)</span></td>
+        <td class="cross">✗ <span style="font-weight:400;color:var(--muted);">(Kafka cluster)</span></td>
+      </tr>
+      <tr>
+        <td>Akka Streams</td>
+        <td class="partial">~ <span style="font-weight:400;color:var(--muted);">(manual router)</span></td>
+        <td class="cross">✗ <span style="font-weight:400;color:var(--muted);">(actor mailbox is separate)</span></td>
+        <td class="cross">✗ <span style="font-weight:400;color:var(--muted);">(static graph)</span></td>
+        <td class="cross">✗</td>
+        <td class="partial">~ <span style="font-weight:400;color:var(--muted);">(needs Akka cluster)</span></td>
+      </tr>
+      <tr>
+        <td>Celery</td>
+        <td class="partial">~ <span style="font-weight:400;color:var(--muted);">(queue routing)</span></td>
+        <td class="cross">✗ <span style="font-weight:400;color:var(--muted);">(Redis/RabbitMQ separate)</span></td>
+        <td class="cross">✗ <span style="font-weight:400;color:var(--muted);">(configured queues)</span></td>
+        <td class="partial">~ <span style="font-weight:400;color:var(--muted);">(result expiry)</span></td>
+        <td class="cross">✗ <span style="font-weight:400;color:var(--muted);">(broker required)</span></td>
+      </tr>
+      <tr>
+        <td>NoFlo (FBP)</td>
+        <td class="cross">✗ <span style="font-weight:400;color:var(--muted);">(static connections)</span></td>
+        <td class="cross">✗ <span style="font-weight:400;color:var(--muted);">(runtime is separate)</span></td>
+        <td class="cross">✗</td>
+        <td class="cross">✗</td>
+        <td class="cross">✗ <span style="font-weight:400;color:var(--muted);">(FBP runtime)</span></td>
+      </tr>
+      <tr>
+        <td style="color:var(--accent2);font-weight:700;">Agentic Flow Network</td>
+        <td class="check" style="color:var(--accent2);">✓</td>
+        <td class="check" style="color:var(--accent2);">✓</td>
+        <td class="check" style="color:var(--accent2);">✓</td>
+        <td class="check" style="color:var(--accent2);">✓</td>
+        <td class="check" style="color:var(--accent2);">✓</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  This is not "AFN is better than Kafka." Kafka is the right tool for at-least-once
+  delivery, strict ordering, and durable event log retention. The table shows that
+  AFN is <em>different</em> in specific structural ways — not a replacement for
+  all queue-based systems, but a superior fit for a class of problems where those
+  guarantees are not the primary constraint.
+</p>
+
+<hr>
+
+<!-- §8 -->
+<div class="section-marker">§8</div>
+<h2>When to Use It — and When Not To</h2>
+
+<p><strong>AFN is the right pattern when:</strong></p>
+
+<ul style="margin: 0 0 18px 24px; color: var(--text2); line-height: 1.9;">
+  <li>Work items are <strong>independent</strong> (no inter-item ordering requirement)</li>
+  <li>Stages have <strong>varying latency</strong> — a slow stage benefits from the entire pool concentrating there</li>
+  <li>The worker pool is <strong>elastic</strong> — nodes join and leave during operation</li>
+  <li>You are on the <strong>edge or air-gapped</strong> — no external broker infrastructure available</li>
+  <li>You want <strong>operational simplicity</strong> — one system, one failure mode, one monitoring surface</li>
+  <li>Work items can be <strong>abandoned and retried</strong> — at-least-once via TTL re-queue, not strict exactly-once</li>
+</ul>
+
+<p><strong>AFN is the wrong pattern when:</strong></p>
+
+<ul style="margin: 0 0 18px 24px; color: var(--text2); line-height: 1.9;">
+  <li><strong>Strict ordering is required</strong> — the KV LWW model does not preserve enqueue order</li>
+  <li><strong>Exactly-once delivery semantics are mandatory</strong> — use Kafka with its transactional API</li>
+  <li>Work items have <strong>complex interdependencies</strong> — use a DAG scheduler (Airflow, Dagster)</li>
+  <li><strong>Long-term event log retention</strong> is needed — use a durable append-only log</li>
+  <li>You need <strong>cross-cluster, cross-datacenter</strong> fan-out — gossip TTL windows may not align</li>
+</ul>
+
+<div class="callout cb">
+  <p>
+    The sweet spot: AI inference pipelines with variable-latency stages and a fixed-size
+    worker pool. Exactly the workload that motivated this pattern — where LLM inference
+    at Stage C creates a bottleneck that benefits from having all available workers
+    route toward it automatically.
+  </p>
+</div>
+
+<hr>
+
+<!-- §9 -->
+<div class="section-marker">§9</div>
+<h2>Try It — The Demo Runs in 60 Seconds</h2>
+
+<p>
+  The Mycelium repository includes a complete, runnable demonstration: 10 fluid
+  workers, a coordinator, PostgreSQL for results, and 200 synthetic news articles.
+  Stage C sleeps 300ms to make the bottleneck visible.
+</p>
+
+<div class="demo-box">
+  <div class="demo-title">Run it yourself</div>
+  <div class="demo-step">
+    <div class="demo-num">1</div>
+    <div>
+      <div class="demo-cmd">cd examples/fluid_pipeline</div>
+      <div class="demo-note">From the Mycelium repository root</div>
+    </div>
+  </div>
+  <div class="demo-step">
+    <div class="demo-num">2</div>
+    <div>
+      <div class="demo-cmd">docker compose up --build --scale worker=10</div>
+      <div class="demo-note">Builds Mycelium + Python images and starts 12 containers</div>
+    </div>
+  </div>
+  <div class="demo-step">
+    <div class="demo-num">3</div>
+    <div>
+      <div class="demo-cmd">docker exec afn-postgres psql -U pipeline -d pipeline -c "SELECT count(*), avg(composite_score) FROM articles;"</div>
+      <div class="demo-note">See 200 scored articles in PostgreSQL</div>
+    </div>
+  </div>
+</div>
+
+<p>
+  Watch the coordinator log. You will see the pool visibly shift:
+</p>
+
+<div class="code-wrap">
+  <div class="code-header"><span class="code-lang">Log</span>coordinator output</div>
+  <pre>10:14:01 [coordinator] 10 worker(s) in the capability ring
+10:14:01 [coordinator] seeding 200 articles into pipeline/stage-a/…
+10:14:01 [coordinator] ==> draining stage-a → stage-b  (method=stage_a.parse)
+10:14:09 [coordinator] <== stage-a drained  (200 items dispatched)
+10:14:09 [coordinator]   pool shifting: 10 workers now free for next stage
+10:14:09 [coordinator] ==> draining stage-b → stage-c  (method=stage_b.enrich)
+10:14:19 [coordinator] <== stage-b drained  (200 items dispatched)
+10:14:19 [coordinator] ==> draining stage-c → stage-d  (method=stage_c.score)
+10:15:19 [coordinator] <== stage-c drained  (200 items dispatched)
+10:15:19 [coordinator] ==> draining stage-d → done     (method=stage_d.aggregate)
+10:15:26 [coordinator] <== stage-d drained  (200 items dispatched)
+10:15:26 [coordinator] === pipeline complete: 200/200 articles in 85.4s (2.3 items/s) ===</pre>
+</div>
+
+<p>
+  To make the fluid allocation more dramatic, increase Stage C's simulated latency:
+</p>
+
+<div class="code-wrap">
+  <div class="code-header"><span class="code-lang">Shell</span>amplify the bottleneck</div>
+  <pre>STAGE_C_SLEEP=1.0 docker compose up --scale worker=10</pre>
+</div>
+
+<p>
+  Every worker will visibly pile up at Stage C, demonstrating how the fluid pool
+  automatically concentrates resources at the slowest stage — without any
+  configuration change, without any reconfiguration of worker assignments.
+</p>
+
+<div class="callout cg">
+  <p>
+    <strong>Add more workers while it's running:</strong><br>
+    <code>docker compose up --scale worker=15 --no-recreate</code><br><br>
+    New workers connect to the coordinator as a gossip seed peer. From that single
+    TCP connection, epidemic propagation carries their capability advertisements to
+    every node in the mesh within seconds. No restart. No reconfiguration.
+    The topology emerges from capability gossip, not from configuration.
+  </p>
+</div>
+
+<div class="callout cg" style="margin-top:12px;">
+  <p>
+    <strong>Visual explainer:</strong>
+    <a href="fluid_pipeline_viz.html" style="color:var(--accent2);">The Fluid Pipeline — Visualisation</a>
+    walks through the worker wave, buffer depth over time, KV ring architecture,
+    backpressure mechanics, and a side-by-side Celery/Redis vs AFN code comparison.
+  </p>
+</div>
+
+<hr>
+
+<!-- §10 -->
+<div class="section-marker">§10</div>
+<h2>Replacing the Simulated LLM with a Real One — Prompt Skills</h2>
+
+<p>
+  Stage C in the demo sleeps for <code>STAGE_C_SLEEP</code> seconds to stand in for a real
+  model inference call. The <code>llm</code> cargo feature gives you the real thing: prompt
+  templates stored in the gossip KV ring, served by whichever node has a backend registered,
+  and called through the same capability ring as every other stage.
+</p>
+
+<p>
+  Swap <code>score.py</code>'s simulated sleep for a live model call in three steps:
+</p>
+
+<p><strong>Step 1 — Register the skill on a hosting node (Rust).</strong>
+  One node (or several, for redundancy) calls <code>register_prompt_skill</code>.
+  The template is written to the cluster KV store with a one-week TTL and
+  propagates to every worker via gossip. The model name is baked into the
+  <code>OpenAiBackend</code> at construction — the template carries no <code>model</code>
+  field, keeping node-local knowledge local.</p>
+
+<div class="code-wrap">
+  <div class="code-header"><span class="code-lang">Rust</span>skill host — one node registers the scoring template</div>
+  <pre><span class="ck">use</span> mycelium::{OpenAiBackend, PromptTemplate, GossipAgent};
+
+<span class="ck">let</span> backend = OpenAiBackend::new(
+    <span class="cv">"http://localhost:11434/v1"</span>,  <span class="cm">// any OpenAI-compatible endpoint</span>
+    <span class="cv">""</span>,                            <span class="cm">// API key (empty for local Ollama)</span>
+    <span class="cv">"llama3.2"</span>,                    <span class="cm">// model — baked in here, not in the template</span>
+);
+<span class="ck">let</span> template = PromptTemplate {
+    system: <span class="cv">"You score news articles. Return JSON only: \
+             {\"relevance\":0.0,\"urgency\":0.0,\"credibility\":0.0,\"composite\":0.0}"</span>.into(),
+    user_template: <span class="cv">"Title: {{input}}\nScore this article on relevance (0-1), \
+                    urgency (0-1), credibility (0-1)."</span>.into(),
+    max_tokens: <span class="cn">128</span>,
+    temperature: <span class="cn">0.2</span>,
+    metadata: Default::default(),
+};
+<span class="cm">// Template written to KV, capability advertised — all workers can resolve it.</span>
+<span class="ck">let</span> _skill = agent.<span class="cf">register_prompt_skill</span>(<span class="cv">"stage_c"</span>, <span class="cv">"score"</span>, template, backend).<span class="cd">await</span>?;</pre>
+</div>
+
+<p><strong>Step 2 — Call the skill from Stage C (Python worker).</strong>
+  Replace <code>time.sleep(STAGE_C_SLEEP)</code> in <code>stages/score.py</code> with a
+  gateway call to <code>/gateway/llm/call</code>. The Python SDK wraps this in one line.</p>
+
+<div class="code-wrap">
+  <div class="code-header"><span class="code-lang">Python</span>stages/score.py — replace simulated sleep with live inference</div>
+  <pre><span class="ck">from</span> mycelium.prompt_skill <span class="ck">import</span> PromptSkillClient
+
+_client = PromptSkillClient(<span class="cv">"http://localhost:8300"</span>)
+
+<span class="ck">def</span> <span class="cf">score_article</span>(payload: dict) <span class="ck">-></span> dict:
+    <span class="cm"># Previously: time.sleep(STAGE_C_SLEEP)</span>
+    result = _client.<span class="cf">call</span>(<span class="cv">"stage_c"</span>, <span class="cv">"score"</span>,
+                          input=payload[<span class="cv">"title"</span>], timeout_secs=<span class="cn">30.0</span>)
+
+    <span class="cm"># result.output is the JSON string the model returned</span>
+    scores = json.<span class="cf">loads</span>(result.output)
+    <span class="ck">return</span> {**payload, <span class="cv">"scores"</span>: scores, <span class="cv">"model_used"</span>: result.model_used}</pre>
+</div>
+
+<p><strong>Step 3 — Nothing else changes.</strong>
+  The coordinator's <code>drain_stage</code> loop, the KV buffer, the fluid allocation,
+  and the TTL cleanup all work exactly as before. Stage C is now slower
+  (real inference instead of a sleep), so more workers pile up there — and the
+  fluid pool concentrates resources there automatically, exactly as the AFN pattern
+  predicts.</p>
+
+<div class="callout cb">
+  <p>
+    <strong>Template update with no restart.</strong> While the pipeline is running,
+    call <code>PUT /gateway/prompts/stage_c/score</code> on any node with an updated
+    template body. The write propagates via gossip KV to every worker. The next invocation
+    — on any node — picks up the new template from the local KV snapshot. No rolling
+    restart. No coordination. The substrate handles it.
+  </p>
+</div>
+
+<div class="code-wrap">
+  <div class="code-header"><span class="code-lang">Shell</span>live template update — no restart</div>
+  <pre>curl -X PUT http://localhost:8300/gateway/prompts/stage_c/score \
+     -H <span class="cv">'Content-Type: application/json'</span> \
+     -d <span class="cv">'{"system":"Updated scoring prompt.","user_template":"{{input}}","max_tokens":128,"temperature":0.1}'</span>
+<span class="cm"># propagates to all workers via gossip KV; next invocation uses new template</span></pre>
+</div>
+
+<div class="callout cg">
+  <p>
+    <strong>Standalone example — no pipeline needed:</strong><br>
+    <code>cargo run --example prompt_skill_demo --features llm</code><br><br>
+    Two in-process nodes. Node A registers a skill with <code>EchoBackend</code> (no Ollama required).
+    Node B discovers it via the capability ring, calls it, reads the template
+    directly from its local KV snapshot, and picks up a live template update mid-run.
+    The full round-trip — registration, cross-node call, live update — in under
+    two seconds. Source: <code>examples/prompt_skill_demo.rs</code>.
+  </p>
+</div>
+
+<hr>
+
+<p style="color:var(--muted);font-size:15px;text-align:center;font-style:italic;margin-top:48px;">
+  The Unix pipe was simple because the channel was intrinsic to the system.<br>
+  An Agentic Flow Network is simple for the same reason.
+</p>
+
+</div><!-- /article -->
+
+<div class="footer">
+  <p><strong>Agentic Flow Networks — A New Primitive for Distributed AI</strong></p>
+  <p style="margin-top:8px;">Mycelium Project · Dual-licensed AGPL / Commercial · 2026</p>
+</div>
+
+</body>
+</html>

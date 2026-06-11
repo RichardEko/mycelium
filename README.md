@@ -1434,8 +1434,8 @@ result = agent.rpc_call(providers[0].node_id, "skill.invoke",
 | [`examples/community/`](examples/community/) | 3-skill composition: orchestrator → researcher → writer |
 | [`examples/a2a_langchain/`](examples/a2a_langchain/) | LangChain + AutoGen auto-discovering skills via A2A |
 
-See [`docs/skillrunner.html`](docs/skillrunner.html) for the full manifest
-reference, OTEL integration, concurrency controls, and the audit trail format.
+See [`docs/reference/skillrunner.html`](docs/reference/skillrunner.html) for the full manifest
+reference, A2A auto-discovery, OTEL integration, concurrency controls, and the audit trail format.
 
 ---
 

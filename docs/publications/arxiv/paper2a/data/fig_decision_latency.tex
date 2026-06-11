@@ -1,0 +1,52 @@
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}
+\begin{semilogyaxis}[
+  width=0.46\textwidth, height=5.2cm,
+  xlabel={Cluster size $N$ (workers)},
+  ylabel={Decision latency ($\mu s$)},
+  xtick={10,20,40},
+  legend pos=north west,
+  legend style={font=\scriptsize},
+  ymin=10, ymax=1e6,
+  grid=both, major grid style={gray!30}, minor grid style={gray!10},
+  title={(a) Decision latency},
+  title style={font=\small},
+  name=plota,
+]
+\addplot[mark=*, thick, green!60!black] coordinates { (10,15.7) (20,17.8) (40,27.9) };
+\addlegendentry{gossip mean};
+\addplot[mark=o, thick, green!60!black, dashed] coordinates { (10,46) (20,60) (40,102) };
+\addlegendentry{gossip p99};
+\addplot[mark=square*, thick, red!70!black] coordinates { (10,5857.7) (20,1113.1) (40,10896.4) };
+\addlegendentry{broker mean};
+\addplot[mark=square, thick, red!70!black, dashed] coordinates { (10,501328) (20,11218) (40,500831) };
+\addlegendentry{broker p99};
+\end{semilogyaxis}
+\begin{axis}[
+  at={(plota.east)}, anchor=west, xshift=1cm,
+  width=0.46\textwidth, height=5.2cm,
+  xlabel={Cluster size $N$ (workers)},
+  ylabel={Mean staleness (load-units)},
+  xtick={10,20,40},
+  legend pos=north west,
+  legend style={font=\scriptsize},
+  ymin=0,
+  grid=both, major grid style={gray!30}, minor grid style={gray!10},
+  title={(b) Mean staleness},
+  title style={font=\small},
+]
+\addplot[mark=*, thick, green!60!black] coordinates { (10,0.109) (20,0.12) (40,0.196) };
+\addlegendentry{gossip};
+\addplot[mark=square*, thick, red!70!black] coordinates { (10,0.043) (20,0.086) (40,0.149) };
+\addlegendentry{broker};
+\end{axis}
+\end{tikzpicture}
+\caption{Decision latency (log scale, panel a) and routing-decision staleness
+(panel b) for the locally-resolved gossip mode and the broker-mediated mode
+on the same Mycelium substrate. Each point is the aggregate of one 20-second
+run at 50 decisions/second. Gossip mean grows from 15.7 to 27.9 $\mu s$ over a
+4$\times$ cluster scale; broker mean is two to three orders of magnitude
+higher and p99 includes timeouts at the RPC ceiling.}
+\label{fig:coordinator-latency}
+\end{figure}

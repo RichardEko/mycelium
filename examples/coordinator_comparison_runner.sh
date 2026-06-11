@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Coordinator-comparison runner — sweeps (mode, N) and collects per-decision
-# CSV plus a summary line per run. Outputs to docs/arxiv/paper2a/data/.
+# CSV plus a summary line per run. Outputs to docs/publications/arxiv/paper2a/data/.
 #
 # Usage:
 #   ./examples/coordinator_comparison_runner.sh
@@ -9,14 +9,14 @@
 #   N_VALUES         — space-separated cluster sizes (default "10 20 40")
 #   DURATION_SECS    — per-run measurement window (default 20)
 #   DECISION_RATE_HZ — decisions per second (default 50)
-#   OUT_DIR          — output directory (default docs/arxiv/paper2a/data)
+#   OUT_DIR          — output directory (default docs/publications/arxiv/paper2a/data)
 
 set -euo pipefail
 
 N_VALUES="${N_VALUES:-10 20 40}"
 DURATION_SECS="${DURATION_SECS:-20}"
 DECISION_RATE_HZ="${DECISION_RATE_HZ:-50}"
-OUT_DIR="${OUT_DIR:-docs/arxiv/paper2a/data}"
+OUT_DIR="${OUT_DIR:-docs/publications/arxiv/paper2a/data}"
 
 mkdir -p "$OUT_DIR"
 SUMMARY_FILE="$OUT_DIR/summary.csv"

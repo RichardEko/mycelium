@@ -1,5 +1,14 @@
 # Mycelium TupleSpace — Implementation Plan
 
+> **Status: IMPLEMENTED — 2026-06-11.** All five phases shipped as the
+> workspace member [`mycelium-tuple-space/`](../../mycelium-tuple-space/)
+> (core store + WAL, primary/secondary failover + Auto election, monitoring +
+> backpressure pheromone, Python/TypeScript SDKs, integration scenario 13).
+> This document is retained as the design-of-record (referenced by `CLAUDE.md`
+> and `ROADMAP.md`) and as the home of the one part still open: the
+> **§Future Extension — Sharded TupleSpace** (the single-primary throughput
+> ceiling). Everything above that section describes shipped behaviour.
+
 ## Vision
 
 **`mycelium-tuple-space`** is a companion crate that provides a high-throughput,

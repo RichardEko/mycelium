@@ -1,0 +1,1537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mycelium — Adaptive Substrate for AI Agent Fleets</title>
+<style>
+  :root {
+    --bg:#0d1117; --surface:#161b22; --surface2:#1c2128; --surface3:#21262d;
+    --border:#30363d; --accent:#58a6ff; --accent2:#3fb950; --accent3:#d2a8ff;
+    --accent4:#ffa657; --accent5:#ff7b72; --muted:#8b949e; --text:#e6edf3; --text2:#c9d1d9;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{width:100%;height:100%;background:#050709;overflow:hidden;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Inter",sans-serif;}
+
+  .deck{position:relative;width:100vw;height:100vh;overflow:hidden;}
+  .slide{position:absolute;inset:0;background:var(--bg);color:var(--text);opacity:0;
+    transform:translateX(48px);
+    transition:opacity .38s cubic-bezier(.4,0,.2,1),transform .38s cubic-bezier(.4,0,.2,1);
+    pointer-events:none;display:flex;flex-direction:column;overflow:hidden;}
+  .slide.active{opacity:1;transform:translateX(0);pointer-events:all;}
+  .slide.was-prev{opacity:0;transform:translateX(-48px);}
+
+  .slide-top{flex-shrink:0;padding:28px 52px 0;display:flex;align-items:center;gap:12px;}
+  .eyebrow{font-size:10px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);}
+  .eyebrow-accent{color:var(--accent);}
+  .eyebrow-app{color:var(--accent5);}
+  .slide-num{margin-left:auto;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;}
+
+  .slide-body{flex:1;padding:0 52px 28px;overflow:hidden;display:flex;flex-direction:column;justify-content:center;}
+
+  .slide-title{font-size:clamp(26px,3.6vw,50px);font-weight:800;letter-spacing:-.025em;line-height:1.1;margin-bottom:14px;
+    background:linear-gradient(135deg,#e6edf3 0%,#8b949e 100%);
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}
+  .slide-title em{font-style:normal;
+    background:linear-gradient(135deg,var(--accent) 0%,var(--accent3) 100%);
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}
+  .slide-sub{font-size:clamp(13px,1.4vw,17px);color:var(--muted);line-height:1.65;max-width:680px;margin-bottom:24px;}
+
+  p{color:var(--text2);line-height:1.65;margin-bottom:12px;font-size:14px;}
+  strong{color:var(--text);}
+  code{font-family:"SF Mono","Fira Mono",monospace;font-size:12px;background:var(--surface2);
+    border:1px solid var(--border);border-radius:4px;padding:1px 6px;color:var(--accent3);}
+
+  .cols2{display:grid;grid-template-columns:1fr 1fr;gap:18px;}
+  .cols3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;}
+
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px 18px;}
+  .card-icon{font-size:22px;margin-bottom:8px;display:block;}
+  .card-title{font-size:13px;font-weight:700;color:var(--text);margin-bottom:6px;}
+  .card-body{font-size:12px;color:var(--muted);line-height:1.6;margin:0;}
+  .card-accent-blue{border-left:3px solid var(--accent);}
+  .card-accent-green{border-left:3px solid var(--accent2);}
+  .card-accent-purple{border-left:3px solid var(--accent3);}
+  .card-accent-orange{border-left:3px solid var(--accent4);}
+  .card-accent-red{border-left:3px solid var(--accent5);}
+
+  .callout{border-radius:8px;padding:14px 18px;margin:12px 0;border-left:3px solid;font-size:13px;color:var(--text2);line-height:1.6;}
+  .callout strong{color:var(--text);}
+  .callout-blue{background:rgba(88,166,255,.06);border-color:var(--accent);}
+  .callout-green{background:rgba(63,185,80,.06);border-color:var(--accent2);}
+  .callout-purple{background:rgba(210,168,255,.06);border-color:var(--accent3);}
+  .callout-orange{background:rgba(255,166,87,.06);border-color:var(--accent4);}
+  .callout-red{background:rgba(255,123,114,.06);border-color:var(--accent5);}
+
+  .code-block{background:var(--surface);border:1px solid var(--border);border-radius:8px;
+    padding:14px 18px;font-family:"SF Mono","Fira Mono",monospace;font-size:12px;
+    color:var(--text2);line-height:1.7;overflow:hidden;}
+  .code-block .cm{color:var(--muted);} .code-block .ck{color:var(--accent);}
+  .code-block .cv{color:var(--accent3);} .code-block .cs{color:var(--accent2);}
+  .code-block .cn{color:var(--accent4);}
+
+  .tbl-wrap{overflow:hidden;border:1px solid var(--border);border-radius:10px;margin:12px 0;}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;}
+  thead th{background:var(--surface2);color:var(--muted);font-size:10px;font-weight:700;
+    letter-spacing:.08em;text-transform:uppercase;padding:10px 14px;text-align:left;
+    border-bottom:1px solid var(--border);}
+  tbody tr{border-bottom:1px solid var(--border);}
+  tbody tr:last-child{border-bottom:none;}
+  td{padding:10px 14px;color:var(--text2);vertical-align:middle;}
+  td:first-child{color:var(--text);font-weight:600;}
+  .td-yes{color:var(--accent2);font-weight:700;} .td-no{color:var(--accent5);font-weight:700;}
+  .td-my{background:rgba(63,185,80,.05);}
+
+  .badges{display:flex;gap:10px;flex-wrap:wrap;margin-top:20px;}
+  .badge{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--text2);
+    background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:5px 12px;}
+  .dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;}
+  .dot-g{background:var(--accent2);box-shadow:0 0 6px var(--accent2);animation:pulse 2s ease-in-out infinite;}
+  .dot-b{background:var(--accent);} .dot-p{background:var(--accent3);} .dot-m{background:var(--muted);}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+  .nav-bar{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);
+    display:flex;align-items:center;gap:16px;background:rgba(22,27,34,.92);
+    border:1px solid var(--border);border-radius:40px;padding:8px 20px;
+    backdrop-filter:blur(12px);z-index:100;user-select:none;}
+  .nav-btn{background:none;border:none;color:var(--text2);font-size:16px;cursor:pointer;
+    padding:4px 10px;border-radius:6px;transition:background .15s,color .15s;line-height:1;}
+  .nav-btn:hover{background:var(--surface2);color:var(--text);}
+  .nav-btn:disabled{opacity:.25;cursor:default;}
+  .slide-counter{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;min-width:40px;text-align:center;}
+
+  .progress-bar{position:fixed;bottom:0;left:0;right:0;height:2px;background:var(--border);z-index:99;}
+  .progress-fill{height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent));
+    transition:width .38s cubic-bezier(.4,0,.2,1);}
+
+  /* Hero */
+  .hero-center{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;height:100%;gap:0;}
+  .hero-title{font-size:clamp(52px,8vw,110px);font-weight:900;letter-spacing:-.04em;line-height:1;
+    background:linear-gradient(135deg,#e6edf3 20%,#58a6ff 60%,#d2a8ff 100%);
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:14px;}
+  .hero-tagline{font-size:clamp(15px,1.8vw,22px);color:var(--muted);max-width:600px;line-height:1.55;margin-bottom:32px;}
+
+  /* Superpowers grid */
+  .sp-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;}
+  .sp-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px 18px;
+    display:flex;flex-direction:column;gap:8px;}
+  .sp-icon{font-size:28px;line-height:1;}
+  .sp-title{font-size:14px;font-weight:800;color:var(--text);}
+  .sp-body{font-size:12px;color:var(--muted);line-height:1.6;}
+  .sp-card-1{border-top:3px solid var(--accent2);}
+  .sp-card-2{border-top:3px solid var(--accent);}
+  .sp-card-3{border-top:3px solid var(--accent3);}
+  .sp-card-4{border-top:3px solid var(--accent4);}
+  .sp-card-5{border-top:3px solid var(--accent5);}
+  .sp-card-6{border-top:3px solid var(--muted);}
+
+  /* Appendix */
+  .appendix-slide .eyebrow{color:var(--accent4);}
+  .appendix-divider-body{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;text-align:center;gap:16px;}
+  .appendix-divider-body .big{font-size:clamp(36px,5vw,72px);font-weight:900;letter-spacing:-.03em;
+    background:linear-gradient(135deg,var(--accent4),var(--accent3));
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}
+  .appendix-divider-body .sub{font-size:16px;color:var(--muted);max-width:480px;line-height:1.6;}
+
+  /* Layer strip */
+  .layer-strip{display:flex;background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:16px;}
+  .ls-item{flex:1;padding:8px 4px;text-align:center;font-size:10px;font-weight:700;text-transform:uppercase;
+    letter-spacing:.08em;color:var(--muted);border-right:1px solid var(--border);transition:background .2s;}
+  .ls-item:last-child{border-right:none;}
+  .ls-active-1{background:rgba(63,185,80,.12);color:var(--accent2);}
+  .ls-active-2{background:rgba(88,166,255,.10);color:var(--accent);}
+  .ls-active-3{background:rgba(210,168,255,.10);color:var(--accent3);}
+  .ls-active-4{background:rgba(255,166,87,.10);color:var(--accent4);}
+  .ls-active-5{background:rgba(139,148,158,.10);color:var(--muted);}
+  .ls-active-s{background:rgba(255,123,114,.10);color:var(--accent5);}
+
+  /* Old-stack */
+  .old-stack{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:14px 0;}
+  .old-box{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 12px;text-align:center;}
+  .old-box-title{font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px;}
+  .old-box-eg{font-size:10px;color:var(--muted);margin-bottom:8px;font-family:"SF Mono","Fira Mono",monospace;}
+  .old-box-cost{font-size:11px;color:var(--accent5);line-height:1.6;}
+
+  /* Proto cards */
+  .proto-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:14px;}
+  .proto-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 16px;}
+  .proto-card-mcp{border-top:3px solid var(--accent);}
+  .proto-card-a2a{border-top:3px solid var(--accent3);}
+  .proto-card-skills{border-top:3px solid var(--accent2);}
+  .proto-label{font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;margin-bottom:6px;}
+  .proto-label-mcp{color:var(--accent);} .proto-label-a2a{color:var(--accent3);} .proto-label-skills{color:var(--accent2);}
+  .proto-name{font-size:15px;font-weight:800;color:var(--text);margin-bottom:8px;}
+  .proto-row{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:11.5px;}
+  .proto-row:last-child{border-bottom:none;}
+  .proto-key{color:var(--muted);} .proto-val{color:var(--text2);font-weight:500;text-align:right;}
+
+  /* Scenario list */
+  .scenario-list{list-style:none;}
+  .scenario-list li{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;color:var(--text2);}
+  .scenario-list li:last-child{border-bottom:none;}
+  .sc-num{width:20px;height:20px;border-radius:50%;background:rgba(63,185,80,.15);color:var(--accent2);
+    font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+  .sc-pass{color:var(--accent2);font-size:12px;margin-left:auto;font-weight:700;}
+
+  /* Title radial bg */
+  #s1{background:radial-gradient(ellipse at 70% 10%,rgba(88,166,255,.09) 0%,transparent 55%),
+    radial-gradient(ellipse at 25% 85%,rgba(210,168,255,.07) 0%,transparent 50%),var(--bg);}
+
+  /* SVG diagram styles */
+  .diagram-wrap{display:flex;align-items:center;justify-content:center;flex:1;}
+  .diagram-wrap svg{max-width:100%;max-height:100%;}
+
+  @keyframes gossip-pulse{0%{r:24;opacity:.55}100%{r:90;opacity:0}}
+  @keyframes flow-move{to{stroke-dashoffset:-24}}
+  @keyframes worker-shift{0%,60%{transform:translateX(0)}80%{transform:translateX(52px)}100%{transform:translateX(52px)}}
+  @keyframes fade-in-up{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+</style>
+</head>
+<body>
+<div class="deck">
+
+<!-- ═══════════════════════════════════════════════════════════════
+     MAIN DECK
+═══════════════════════════════════════════════════════════════ -->
+
+<!-- 01 Title -->
+<div class="slide active" id="s1">
+  <div class="slide-top"><span class="eyebrow">Mycelium</span><span class="slide-num">01 / 25</span></div>
+  <div class="slide-body">
+    <div class="hero-center">
+      <div class="hero-title">Mycelium</div>
+      <div class="hero-tagline">
+        The adaptive substrate for next-generation AI agent fleets.<br>
+        <strong style="color:var(--text)">Minimal management. Maximum agility. Maximum robustness.</strong>
+      </div>
+      <div class="badges">
+        <span class="badge"><span class="dot dot-g"></span>319 tests · 13/13 scenarios passing</span>
+        <span class="badge"><span class="dot dot-b"></span>Wire v11 · Ed25519 signed</span>
+        <span class="badge"><span class="dot dot-p"></span>A2A · MCP · Prompt Skills · Python · TypeScript</span>
+        <span class="badge"><span class="dot dot-m"></span>NANDA-federable</span>
+      </div>
+      <div style="margin-top:16px;font-size:13px;color:var(--accent);letter-spacing:.01em;">
+        <a href="https://github.com/RichardEko/mycelium" style="color:var(--accent);text-decoration:none;">github.com/RichardEko/mycelium</a>
+      </div>
+      <div style="margin-top:8px;font-size:11px;color:var(--muted);letter-spacing:.04em;">© 2026 Tathata Systems Ltd &nbsp;·&nbsp; Company No. 17260812</div>
+    </div>
+  </div>
+</div>
+
+<!-- 02 The New Reality -->
+<div class="slide" id="s2">
+  <div class="slide-top"><span class="eyebrow">The New Reality</span><span class="slide-num">02 / 25</span></div>
+  <div class="slide-body">
+    <div class="slide-title">AI agents are <em>not microservices</em></div>
+    <div class="slide-sub">The infrastructure playbook for microservices breaks down when your units of compute are ephemeral, capability-driven, and self-organizing.</div>
+    <div class="cols2" style="gap:20px;">
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <div style="font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:4px;">Microservices World</div>
+        <div class="card" style="border-left:3px solid var(--muted);">
+          <div class="card-title">Static topology</div>
+          <div class="card-body">Services have fixed names and addresses. Service discovery finds them. They don't change shape at runtime.</div>
+        </div>
+        <div class="card" style="border-left:3px solid var(--muted);">
+          <div class="card-title">Register → serve → deregister</div>
+          <div class="card-body">Explicit lifecycle. The registry must be told when something starts and when it stops. Crashes leave stale entries.</div>
+        </div>
+        <div class="card" style="border-left:3px solid var(--muted);">
+          <div class="card-title">Coordinator-centric</div>
+          <div class="card-body">One system knows the topology. Everyone asks it. It becomes the bottleneck and the failure mode.</div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <div style="font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--accent2);margin-bottom:4px;">AI Agent World</div>
+        <div class="card card-accent-green">
+          <div class="card-title">Dynamic capability sets</div>
+          <div class="card-body">An agent's role emerges from what it can do — and that changes as models load, tasks complete, and resources shift. Discovery must keep up.</div>
+        </div>
+        <div class="card card-accent-green">
+          <div class="card-title">Ephemeral by nature</div>
+          <div class="card-body">Agents spawn, exhaust their purpose, and die. The fleet must heal around them automatically. No operator involvement.</div>
+        </div>
+        <div class="card card-accent-green">
+          <div class="card-title">Peer-to-peer intelligence</div>
+          <div class="card-body">Agents need to find each other, negotiate capability, and coordinate — without a broker in the critical path that becomes a single point of failure.</div>
+        </div>
+      </div>
+    </div>
+    <div class="callout callout-blue" style="margin-top:14px;">
+      <strong>The infrastructure hasn't kept up.</strong> The tools we have were built for stateless HTTP services, not for fleets of reasoning agents with dynamic capability surfaces.
+    </div>
+  </div>
+</div>
+
+<!-- 03 The Tax -->
+<div class="slide" id="s3">
+  <div class="slide-top"><span class="eyebrow">The Status Quo</span><span class="slide-num">03 / 25</span></div>
+  <div class="slide-body">
+    <div class="slide-title">Four systems.<br><em>One job.</em></div>
+    <div class="slide-sub">Every serious agent deployment today requires stitching these together. You write the glue. You own the glue.</div>
+    <div class="old-stack">
+      <div class="old-box">
+        <div class="old-box-title">Service Registry</div>
+        <div class="old-box-eg">Consul · Nacos · etcd</div>
+        <div class="old-box-cost">Coordinator SPOF<br>register / deregister lifecycle<br>stale entries after crash<br>separate health checks</div>
+      </div>
+      <div class="old-box">
+        <div class="old-box-title">Message Broker</div>
+        <div class="old-box-eg">NATS · EMQX · Kafka</div>
+        <div class="old-box-cost">Broker SPOF<br>topics ≠ capabilities<br>separate discovery layer<br>backpressure config</div>
+      </div>
+      <div class="old-box">
+        <div class="old-box-title">Consensus</div>
+        <div class="old-box-eg">Raft · ZooKeeper</div>
+        <div class="old-box-cost">Leader election overhead<br>separate from routing<br>no agent semantics<br>quorum management</div>
+      </div>
+      <div class="old-box">
+        <div class="old-box-title">Protocol Adapter</div>
+        <div class="old-box-eg">A2A · MCP glue</div>
+        <div class="old-box-cost">Client wrapper only<br>registry still required<br>no live capability ring<br>manual endpoint config</div>
+      </div>
+    </div>
+    <div class="callout callout-red">
+      <strong>Four failure modes. Four ops surfaces. Four things to monitor, version, and recover.</strong> And they don't know about each other — every integration is custom, every failure is surprising.
+    </div>
+    <div class="callout callout-green" style="margin-top:10px;">
+      <strong>Mycelium replaces all four</strong> with a single embedded Rust library. No broker process. No registry process. No coordinator process. Drop it in and start coordinating.
+    </div>
+  </div>
+</div>
+
+<!-- 04 The Inversion -->
+<div class="slide" id="s4">
+  <div class="slide-top"><span class="eyebrow">The Key Insight</span><span class="slide-num">04 / 25</span></div>
+  <div class="slide-body">
+    <div class="slide-title">Availability first.<br><em>Consistency on demand.</em></div>
+    <div class="slide-sub">Every coordination system before Mycelium starts with a coordinator and bolts availability on top. We inverted it.</div>
+
+    <div class="cols2" style="gap:24px;align-items:start;">
+      <div>
+        <div style="font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:12px;">Traditional Approach</div>
+        <!-- SVG: top-down pyramid showing Raft/consensus base, availability on top -->
+        <svg viewBox="0 0 280 160" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-height:140px;">
+          <rect x="10" y="90" width="260" height="55" rx="8" fill="rgba(255,123,114,.10)" stroke="rgba(255,123,114,.35)" stroke-width="1.5"/>
+          <text x="140" y="114" font-family="-apple-system,sans-serif" font-size="12" font-weight="700" fill="#ff7b72" text-anchor="middle">Coordinator / Raft Leader</text>
+          <text x="140" y="132" font-family="-apple-system,sans-serif" font-size="10" fill="#8b949e" text-anchor="middle">required for any progress</text>
+          <rect x="50" y="28" width="180" height="50" rx="8" fill="rgba(139,148,158,.08)" stroke="rgba(139,148,158,.25)" stroke-width="1.5"/>
+          <text x="140" y="50" font-family="-apple-system,sans-serif" font-size="12" font-weight="700" fill="#8b949e" text-anchor="middle">Availability</text>
+          <text x="140" y="67" font-family="-apple-system,sans-serif" font-size="10" fill="#8b949e" text-anchor="middle">layered on top, fragile under partition</text>
+          <line x1="140" y1="78" x2="140" y2="90" stroke="#30363d" stroke-width="1.5" stroke-dasharray="4,3"/>
+          <text x="148" y="86" font-family="-apple-system,sans-serif" font-size="9" fill="#8b949e">depends on ↓</text>
+        </svg>
+      </div>
+      <div>
+        <div style="font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--accent2);margin-bottom:12px;">Mycelium — The Inversion</div>
+        <svg viewBox="0 0 280 160" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-height:140px;">
+          <rect x="10" y="90" width="260" height="55" rx="8" fill="rgba(63,185,80,.10)" stroke="rgba(63,185,80,.35)" stroke-width="1.5"/>
+          <text x="140" y="114" font-family="-apple-system,sans-serif" font-size="12" font-weight="700" fill="#3fb950" text-anchor="middle">Epidemic Gossip — Always Available</text>
+          <text x="140" y="132" font-family="-apple-system,sans-serif" font-size="10" fill="#8b949e" text-anchor="middle">no coordinator, survives partial failure</text>
+          <rect x="50" y="28" width="180" height="50" rx="8" fill="rgba(210,168,255,.10)" stroke="rgba(210,168,255,.30)" stroke-width="1.5"/>
+          <text x="140" y="50" font-family="-apple-system,sans-serif" font-size="12" font-weight="700" fill="#d2a8ff" text-anchor="middle">Consensus Overlay — Opt-in</text>
+          <text x="140" y="67" font-family="-apple-system,sans-serif" font-size="10" fill="#8b949e" text-anchor="middle">pay for ordering only where you need it</text>
+          <line x1="140" y1="78" x2="140" y2="90" stroke="#3fb950" stroke-width="1.5" stroke-dasharray="4,3"/>
+          <text x="148" y="86" font-family="-apple-system,sans-serif" font-size="9" fill="#3fb950">sits on top of ↓</text>
+        </svg>
+      </div>
+    </div>
+
+    <div class="cols2" style="gap:14px;margin-top:14px;">
+      <div class="callout callout-green">
+        <strong>The gossip layer is always available.</strong> Discovery, state propagation, and event routing keep working even when nodes partition. No coordinator needed.
+      </div>
+      <div class="callout callout-purple">
+        <strong>Consensus is a lightweight opt-in overlay.</strong> Reach for <code>consistent_set</code>, <code>distributed_lock</code>, or <code>elect_leader</code> only where your application actually demands ordering guarantees.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 05 Theoretical Foundations -->
+<div class="slide" id="s5cas">
+  <div class="slide-top"><span class="eyebrow">Theoretical Foundations</span><span class="slide-num">05 / 25</span></div>
+  <div class="slide-body">
+    <div class="slide-title">Not retro-fitted to theory.<br><em>Built from it.</em></div>
+    <div class="slide-sub">Mycelium began with John Holland's Complex Adaptive Systems framework as its design blueprint — then asked what that looks like running in Rust at production scale.</div>
+
+    <div class="cols2" style="gap:22px;align-items:start;">
+      <div>
+        <div style="font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--accent3);margin-bottom:10px;">Holland — Signals &amp; Boundaries (MIT Press, 2012)</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div class="card card-accent-purple" style="padding:13px 16px;">
+            <div class="card-title">Signals</div>
+            <div class="card-body">Information that travels between agents and triggers responses. Selective — only agents that recognise the signal act on it.</div>
+          </div>
+          <div class="card card-accent-purple" style="padding:13px 16px;">
+            <div class="card-title">Boundaries</div>
+            <div class="card-body">Constraints that define which agents interact. Boundaries create structure from the inside — no external authority assigns them.</div>
+          </div>
+          <div class="card card-accent-purple" style="padding:13px 16px;">
+            <div class="card-title">Tags &amp; Aggregation</div>
+            <div class="card-body">Agents carry tags (declared properties). Matching tags cause spontaneous aggregation into higher-order structures — emergent groups with no coordinator.</div>
+          </div>
+          <div class="card card-accent-purple" style="padding:13px 16px;">
+            <div class="card-title">Emergence over prescription</div>
+            <div class="card-body">Macro-level behaviour arises from micro-level rules. The designer specifies interaction primitives, not outcomes.</div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div style="font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--accent2);margin-bottom:10px;">Mycelium — The Implementation</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div class="card card-accent-green" style="padding:13px 16px;">
+            <div class="card-title">Layer II — Signal Mesh</div>
+            <div class="card-body">Scoped ephemeral events with admission boundaries. Only nodes that advertise the matching capability receive group-scoped signals. Holland's signals, made concrete.</div>
+          </div>
+          <div class="card card-accent-green" style="padding:13px 16px;">
+            <div class="card-title">Capability Groups &amp; Opacity</div>
+            <div class="card-body">Group boundaries emerge from capability declarations. Opacity composition enforces admission without a gatekeeper. The boundary is distributed, not policed.</div>
+          </div>
+          <div class="card card-accent-green" style="padding:13px 16px;">
+            <div class="card-title">Capability Advertisement (Tags)</div>
+            <div class="card-body"><code>advertise_capability("compute","gpu")</code> is a tag. <code>resolve()</code> matches tags. Emergent groups self-assemble from nodes sharing compatible tag sets.</div>
+          </div>
+          <div class="card card-accent-green" style="padding:13px 16px;">
+            <div class="card-title">No coordinator, by design</div>
+            <div class="card-body">The cluster topology is never prescribed. It emerges from gossip, TTL expiry, and capability matching — exactly as Holland's CAS model predicts it should.</div>
+          </div>
+        </div>
+
+        <div class="callout callout-purple" style="margin-top:12px;font-size:12px;">
+          <strong>Also standing on:</strong>
+          Grassé (1959) <em>Stigmergy</em> — agents coordinate through environment modification, not direct communication. The gossip KV layer is the environment. ·
+          Demers et al. (1987) <em>Epidemic Algorithms</em> — the gossip substrate. ·
+          Kulkarni et al. (2014) <em>Hybrid Logical Clocks</em> — causal ordering without NTP.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 06 Six Superpowers -->
+<div class="slide" id="s5">
+  <div class="slide-top"><span class="eyebrow">What You Get</span><span class="slide-num">06 / 25</span></div>
+  <div class="slide-body">
+    <div class="slide-title">Six superpowers.<br><em>One library.</em></div>
+    <div class="sp-grid" style="margin-top:6px;">
+      <div class="sp-card sp-card-1">
+        <div class="sp-icon">🌱</div>
+        <div class="sp-title">Self-Organizing Discovery</div>
+        <div class="sp-body">Advertise capabilities and groups emerge automatically. Dead nodes disappear via TTL — no deregister call, no stale entries, no operator involvement.</div>
+      </div>
+      <div class="sp-card sp-card-2">
+        <div class="sp-icon">⚡</div>
+        <div class="sp-title">Zero-Latency State</div>
+        <div class="sp-body">Every node holds a complete, eventually-consistent view of the entire fleet. Reads are local. No round-trip to a registry. No cache to invalidate.</div>
+      </div>
+      <div class="sp-card sp-card-3">
+        <div class="sp-icon">🧠</div>
+        <div class="sp-title">Consensus Without Coordinators</div>
+        <div class="sp-body">Distributed locks, leader election, and ballot-serialized writes via epidemic consensus. No Raft leader, no ZooKeeper, no quorum node you can't lose.</div>
+      </div>
+      <div class="sp-card sp-card-4">
+        <div class="sp-icon">🌊</div>
+        <div class="sp-title">Fluid Workload Allocation</div>
+        <div class="sp-body">Agentic Flow Networks let workers shift between pipeline stages as demand shifts. The cluster is the queue. The capability ring is the scheduler.</div>
+      </div>
+      <div class="sp-card sp-card-5">
+        <div class="sp-icon">🔌</div>
+        <div class="sp-title">Protocol-Native</div>
+        <div class="sp-body">A2A and MCP surfaces built-in. LangChain and AutoGen auto-discover skills from the live capability ring. No adapter code, no manual registration.</div>
+      </div>
+      <div class="sp-card sp-card-6">
+        <div class="sp-icon">🪶</div>
+        <div class="sp-title">Zero Ops Burden</div>
+        <div class="sp-body">No broker process. No registry process. No coordinator. Embed the library, call <code>agent.start()</code>, and you're in the mesh. Air-gap and edge deployments included.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 06 Fleet Self-Organizes (SVG diagram) -->
+<div class="slide" id="s6">
+  <div class="slide-top"><span class="eyebrow">Self-Organization</span><span class="slide-num">07 / 25</span></div>
+  <div class="slide-body" style="justify-content:flex-start;padding-top:16px;">
+    <div class="slide-title" style="margin-bottom:6px;">The fleet knows<br><em>what it can do</em></div>
+    <div class="cols2" style="gap:20px;flex:1;align-items:start;">
+      <div class="diagram-wrap" style="justify-content:flex-start;">
+        <svg viewBox="0 0 320 310" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-height:300px;">
+          <!-- Group halos -->
+          <ellipse cx="90" cy="90" rx="72" ry="62" fill="rgba(255,166,87,.07)" stroke="rgba(255,166,87,.25)" stroke-width="1.5" stroke-dasharray="6,4"/>
+          <ellipse cx="235" cy="80" rx="70" ry="58" fill="rgba(210,168,255,.07)" stroke="rgba(210,168,255,.25)" stroke-width="1.5" stroke-dasharray="6,4"/>
+          <ellipse cx="162" cy="230" rx="75" ry="58" fill="rgba(63,185,80,.07)" stroke="rgba(63,185,80,.25)" stroke-width="1.5" stroke-dasharray="6,4"/>
+
+          <!-- Group labels -->
+          <text x="90" y="24" font-family="-apple-system,sans-serif" font-size="9" font-weight="700" fill="rgba(255,166,87,.7)" text-anchor="middle" letter-spacing="1">GPU WORKERS</text>
+          <text x="235" y="18" font-family="-apple-system,sans-serif" font-size="9" font-weight="700" fill="rgba(210,168,255,.7)" text-anchor="middle" letter-spacing="1">LLM NODES</text>
+          <text x="162" y="296" font-family="-apple-system,sans-serif" font-size="9" font-weight="700" fill="rgba(63,185,80,.7)" text-anchor="middle" letter-spacing="1">STORAGE</text>
+
+          <!-- Cross-group gossip lines (faint) -->
+          <line x1="120" y1="80" x2="195" y2="72" stroke="#30363d" stroke-width="1"/>
+          <line x1="110" y1="105" x2="162" y2="195" stroke="#30363d" stroke-width="1"/>
+          <line x1="210" y1="100" x2="185" y2="195" stroke="#30363d" stroke-width="1"/>
+          <line x1="75" y1="110" x2="140" y2="200" stroke="#30363d" stroke-width="1"/>
+          <line x1="250" y1="100" x2="200" y2="198" stroke="#30363d" stroke-width="1"/>
+
+          <!-- Within-group lines -->
+          <line x1="62" y1="75" x2="105" y2="68" stroke="rgba(255,166,87,.4)" stroke-width="1.2"/>
+          <line x1="62" y1="75" x2="95" y2="112" stroke="rgba(255,166,87,.4)" stroke-width="1.2"/>
+          <line x1="105" y1="68" x2="95" y2="112" stroke="rgba(255,166,87,.4)" stroke-width="1.2"/>
+          <line x1="200" y1="58" x2="255" y2="62" stroke="rgba(210,168,255,.4)" stroke-width="1.2"/>
+          <line x1="200" y1="58" x2="228" y2="100" stroke="rgba(210,168,255,.4)" stroke-width="1.2"/>
+          <line x1="255" y1="62" x2="228" y2="100" stroke="rgba(210,168,255,.4)" stroke-width="1.2"/>
+          <line x1="130" y1="210" x2="185" y2="205" stroke="rgba(63,185,80,.4)" stroke-width="1.2"/>
+          <line x1="130" y1="210" x2="162" y2="250" stroke="rgba(63,185,80,.4)" stroke-width="1.2"/>
+          <line x1="185" y1="205" x2="162" y2="250" stroke="rgba(63,185,80,.4)" stroke-width="1.2"/>
+
+          <!-- GPU nodes -->
+          <circle cx="62" cy="75" r="22" fill="rgba(255,166,87,.12)" stroke="rgba(255,166,87,.6)" stroke-width="1.5"/>
+          <text x="62" y="72" font-family="-apple-system,sans-serif" font-size="8" font-weight="700" fill="#ffa657" text-anchor="middle">GPU</text>
+          <text x="62" y="83" font-family="-apple-system,sans-serif" font-size="7" fill="rgba(255,166,87,.7)" text-anchor="middle">A100</text>
+
+          <circle cx="105" cy="68" r="22" fill="rgba(255,166,87,.12)" stroke="rgba(255,166,87,.6)" stroke-width="1.5"/>
+          <text x="105" y="65" font-family="-apple-system,sans-serif" font-size="8" font-weight="700" fill="#ffa657" text-anchor="middle">GPU</text>
+          <text x="105" y="76" font-family="-apple-system,sans-serif" font-size="7" fill="rgba(255,166,87,.7)" text-anchor="middle">A100</text>
+
+          <!-- Pulse ring on GPU-1 (animated) -->
+          <circle cx="62" cy="75" r="22" fill="none" stroke="rgba(255,166,87,.5)" stroke-width="1.5" style="animation:gossip-pulse 2.5s ease-out infinite;transform-box:fill-box;transform-origin:center;"/>
+
+          <circle cx="95" cy="112" r="22" fill="rgba(255,166,87,.12)" stroke="rgba(255,166,87,.6)" stroke-width="1.5"/>
+          <text x="95" y="109" font-family="-apple-system,sans-serif" font-size="8" font-weight="700" fill="#ffa657" text-anchor="middle">GPU</text>
+          <text x="95" y="120" font-family="-apple-system,sans-serif" font-size="7" fill="rgba(255,166,87,.7)" text-anchor="middle">H100</text>
+
+          <!-- LLM nodes -->
+          <circle cx="200" cy="58" r="22" fill="rgba(210,168,255,.12)" stroke="rgba(210,168,255,.6)" stroke-width="1.5"/>
+          <text x="200" y="55" font-family="-apple-system,sans-serif" font-size="8" font-weight="700" fill="#d2a8ff" text-anchor="middle">LLM</text>
+          <text x="200" y="66" font-family="-apple-system,sans-serif" font-size="7" fill="rgba(210,168,255,.7)" text-anchor="middle">gpt4o</text>
+
+          <circle cx="255" cy="62" r="22" fill="rgba(210,168,255,.12)" stroke="rgba(210,168,255,.6)" stroke-width="1.5"/>
+          <text x="255" y="59" font-family="-apple-system,sans-serif" font-size="8" font-weight="700" fill="#d2a8ff" text-anchor="middle">LLM</text>
+          <text x="255" y="70" font-family="-apple-system,sans-serif" font-size="7" fill="rgba(210,168,255,.7)" text-anchor="middle">llama3</text>
+
+          <circle cx="228" cy="100" r="22" fill="rgba(210,168,255,.12)" stroke="rgba(210,168,255,.6)" stroke-width="1.5"/>
+          <text x="228" y="97" font-family="-apple-system,sans-serif" font-size="8" font-weight="700" fill="#d2a8ff" text-anchor="middle">LLM</text>
+          <text x="228" y="108" font-family="-apple-system,sans-serif" font-size="7" fill="rgba(210,168,255,.7)" text-anchor="middle">mistral</text>
+
+          <!-- Storage nodes -->
+          <circle cx="130" cy="210" r="22" fill="rgba(63,185,80,.12)" stroke="rgba(63,185,80,.6)" stroke-width="1.5"/>
+          <text x="130" y="207" font-family="-apple-system,sans-serif" font-size="8" font-weight="700" fill="#3fb950" text-anchor="middle">STORE</text>
+          <text x="130" y="218" font-family="-apple-system,sans-serif" font-size="7" fill="rgba(63,185,80,.7)" text-anchor="middle">fast</text>
+
+          <circle cx="185" cy="205" r="22" fill="rgba(63,185,80,.12)" stroke="rgba(63,185,80,.6)" stroke-width="1.5"/>
+          <text x="185" y="202" font-family="-apple-system,sans-serif" font-size="8" font-weight="700" fill="#3fb950" text-anchor="middle">STORE</text>
+          <text x="185" y="213" font-family="-apple-system,sans-serif" font-size="7" fill="rgba(63,185,80,.7)" text-anchor="middle">archive</text>
+
+          <circle cx="162" cy="250" r="22" fill="rgba(63,185,80,.12)" stroke="rgba(63,185,80,.6)" stroke-width="1.5"/>
+          <text x="162" y="247" font-family="-apple-system,sans-serif" font-size="8" font-weight="700" fill="#3fb950" text-anchor="middle">STORE</text>
+          <text x="162" y="258" font-family="-apple-system,sans-serif" font-size="7" fill="rgba(63,185,80,.7)" text-anchor="middle">nvme</text>
+
+          <!-- No coordinator badge -->
+          <rect x="116" y="142" width="88" height="26" rx="13" fill="rgba(13,17,23,.9)" stroke="#30363d" stroke-width="1"/>
+          <text x="160" y="159" font-family="-apple-system,sans-serif" font-size="9" font-weight="700" fill="#8b949e" text-anchor="middle">NO COORDINATOR</text>
+        </svg>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <div class="card card-accent-green">
+          <div class="card-title">Capabilities advertised, not registered</div>
+          <div class="card-body">Each node writes its capabilities as TTL'd KV entries that gossip through the cluster. Groups form automatically from nodes sharing compatible capabilities. No administrator defines the groups.</div>
+        </div>
+        <div class="card card-accent-orange">
+          <div class="card-title">Dead nodes vanish automatically</div>
+          <div class="card-body">When a node stops refreshing its TTL entries, they expire. The cluster heals in under one health interval. No deregister call. No stale entries. No operator alert.</div>
+        </div>
+        <div class="card card-accent-purple">
+          <div class="card-title">Late joiners catch up fully</div>
+          <div class="card-body">Anti-entropy sync on reconnect means a restarted node recovers the entire cluster state from its peers within seconds. No replay log. No snapshot restore.</div>
+        </div>
+        <div class="callout callout-green">
+          <strong>The cluster knows what it can do</strong> — and it always has an up-to-date view, on every node, without asking a coordinator.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 07 Fluid by Design — AFN -->
+<div class="slide" id="s7">
+  <div class="slide-top"><span class="eyebrow">Agentic Flow Networks</span><span class="slide-num">08 / 25</span></div>
+  <div class="slide-body" style="justify-content:flex-start;padding-top:16px;">
+    <div class="slide-title" style="margin-bottom:4px;">The cluster <em>is</em> the queue</div>
+    <div class="slide-sub" style="margin-bottom:10px;">Conventional pipelines pin workers to static stages. AFN workers shift to wherever demand exists.</div>
+
+    <!-- AFN Pipeline Diagram -->
+    <svg viewBox="0 0 680 180" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-height:175px;flex-shrink:0;">
+      <!-- KV Ring background -->
+      <rect x="4" y="90" width="672" height="56" rx="10" fill="rgba(88,166,255,.04)" stroke="rgba(88,166,255,.15)" stroke-width="1" stroke-dasharray="6,4"/>
+      <text x="340" y="143" font-family="-apple-system,sans-serif" font-size="8" font-weight="700" fill="rgba(88,166,255,.5)" text-anchor="middle" letter-spacing="2">KV RING — GOSSIP BUFFER</text>
+
+      <!-- INPUT -->
+      <rect x="10" y="20" width="68" height="56" rx="8" fill="rgba(139,148,158,.08)" stroke="#30363d" stroke-width="1.5"/>
+      <text x="44" y="46" font-family="-apple-system,sans-serif" font-size="10" font-weight="700" fill="#8b949e" text-anchor="middle">INPUT</text>
+      <text x="44" y="60" font-family="-apple-system,sans-serif" font-size="8" fill="#8b949e" text-anchor="middle">URLs</text>
+      <!-- workers -->
+      <circle cx="44" cy="84" r="6" fill="rgba(139,148,158,.2)" stroke="#30363d" stroke-width="1"/>
+
+      <!-- Arrow: INPUT → FETCH -->
+      <line x1="78" y1="48" x2="108" y2="48" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="4,3" style="animation:flow-move 1s linear infinite"/>
+      <polygon points="106,44 114,48 106,52" fill="#58a6ff"/>
+
+      <!-- FETCH -->
+      <rect x="114" y="20" width="100" height="56" rx="8" fill="rgba(63,185,80,.08)" stroke="rgba(63,185,80,.4)" stroke-width="1.5"/>
+      <text x="164" y="40" font-family="-apple-system,sans-serif" font-size="10" font-weight="700" fill="#3fb950" text-anchor="middle">FETCH</text>
+      <text x="164" y="54" font-family="-apple-system,sans-serif" font-size="8" fill="rgba(63,185,80,.7)" text-anchor="middle">stage.fetch</text>
+      <text x="164" y="66" font-family="-apple-system,sans-serif" font-size="8" fill="rgba(63,185,80,.7)" text-anchor="middle">workers: 2</text>
+      <!-- workers -->
+      <circle cx="150" cy="84" r="6" fill="rgba(63,185,80,.3)" stroke="rgba(63,185,80,.6)" stroke-width="1.5"/>
+      <circle cx="165" cy="84" r="6" fill="rgba(63,185,80,.3)" stroke="rgba(63,185,80,.6)" stroke-width="1.5"/>
+      <circle cx="180" cy="84" r="6" fill="rgba(63,185,80,.15)" stroke="rgba(63,185,80,.4)" stroke-width="1" stroke-dasharray="3,2"/>
+
+      <!-- Arrow: FETCH → PARSE -->
+      <line x1="214" y1="48" x2="240" y2="48" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="4,3" style="animation:flow-move 1s linear infinite;animation-delay:.25s"/>
+      <polygon points="238,44 246,48 238,52" fill="#58a6ff"/>
+
+      <!-- PARSE -->
+      <rect x="246" y="20" width="100" height="56" rx="8" fill="rgba(255,166,87,.10)" stroke="rgba(255,166,87,.5)" stroke-width="2"/>
+      <text x="296" y="40" font-family="-apple-system,sans-serif" font-size="10" font-weight="700" fill="#ffa657" text-anchor="middle">PARSE</text>
+      <text x="296" y="54" font-family="-apple-system,sans-serif" font-size="8" fill="rgba(255,166,87,.8)" text-anchor="middle">stage.parse</text>
+      <text x="296" y="66" font-family="-apple-system,sans-serif" font-size="8" fill="rgba(255,166,87,.8)" text-anchor="middle">workers: 4 ▲</text>
+      <circle cx="270" cy="84" r="6" fill="rgba(255,166,87,.35)" stroke="rgba(255,166,87,.7)" stroke-width="1.5"/>
+      <circle cx="284" cy="84" r="6" fill="rgba(255,166,87,.35)" stroke="rgba(255,166,87,.7)" stroke-width="1.5"/>
+      <circle cx="298" cy="84" r="6" fill="rgba(255,166,87,.35)" stroke="rgba(255,166,87,.7)" stroke-width="1.5"/>
+      <circle cx="312" cy="84" r="6" fill="rgba(255,166,87,.35)" stroke="rgba(255,166,87,.7)" stroke-width="1.5"/>
+
+      <!-- Shifting worker arrow -->
+      <path d="M 180 84 Q 200 84 210 84 Q 240 84 268 84" stroke="rgba(255,166,87,.6)" stroke-width="1" stroke-dasharray="3,3" fill="none"/>
+      <polygon points="265,80 273,84 265,88" fill="rgba(255,166,87,.6)"/>
+      <text x="224" y="78" font-family="-apple-system,sans-serif" font-size="8" fill="rgba(255,166,87,.7)" text-anchor="middle">shifting →</text>
+
+      <!-- Arrow: PARSE → ENRICH -->
+      <line x1="346" y1="48" x2="374" y2="48" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="4,3" style="animation:flow-move 1s linear infinite;animation-delay:.5s"/>
+      <polygon points="372,44 380,48 372,52" fill="#58a6ff"/>
+
+      <!-- ENRICH -->
+      <rect x="380" y="20" width="100" height="56" rx="8" fill="rgba(88,166,255,.08)" stroke="rgba(88,166,255,.35)" stroke-width="1.5"/>
+      <text x="430" y="40" font-family="-apple-system,sans-serif" font-size="10" font-weight="700" fill="#58a6ff" text-anchor="middle">ENRICH</text>
+      <text x="430" y="54" font-family="-apple-system,sans-serif" font-size="8" fill="rgba(88,166,255,.8)" text-anchor="middle">stage.enrich</text>
+      <text x="430" y="66" font-family="-apple-system,sans-serif" font-size="8" fill="rgba(88,166,255,.8)" text-anchor="middle">workers: 2</text>
+      <circle cx="416" cy="84" r="6" fill="rgba(88,166,255,.25)" stroke="rgba(88,166,255,.6)" stroke-width="1.5"/>
+      <circle cx="432" cy="84" r="6" fill="rgba(88,166,255,.25)" stroke="rgba(88,166,255,.6)" stroke-width="1.5"/>
+
+      <!-- Arrow: ENRICH → INDEX -->
+      <line x1="480" y1="48" x2="508" y2="48" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="4,3" style="animation:flow-move 1s linear infinite;animation-delay:.75s"/>
+      <polygon points="506,44 514,48 506,52" fill="#58a6ff"/>
+
+      <!-- INDEX -->
+      <rect x="514" y="20" width="100" height="56" rx="8" fill="rgba(210,168,255,.08)" stroke="rgba(210,168,255,.35)" stroke-width="1.5"/>
+      <text x="564" y="40" font-family="-apple-system,sans-serif" font-size="10" font-weight="700" fill="#d2a8ff" text-anchor="middle">INDEX</text>
+      <text x="564" y="54" font-family="-apple-system,sans-serif" font-size="8" fill="rgba(210,168,255,.8)" text-anchor="middle">stage.index</text>
+      <text x="564" y="66" font-family="-apple-system,sans-serif" font-size="8" fill="rgba(210,168,255,.8)" text-anchor="middle">workers: 2</text>
+      <circle cx="550" cy="84" r="6" fill="rgba(210,168,255,.25)" stroke="rgba(210,168,255,.6)" stroke-width="1.5"/>
+      <circle cx="566" cy="84" r="6" fill="rgba(210,168,255,.25)" stroke="rgba(210,168,255,.6)" stroke-width="1.5"/>
+
+      <!-- Arrow: INDEX → OUTPUT -->
+      <line x1="614" y1="48" x2="642" y2="48" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="4,3" style="animation:flow-move 1s linear infinite;animation-delay:1s"/>
+      <polygon points="640,44 648,48 640,52" fill="#58a6ff"/>
+
+      <!-- OUTPUT -->
+      <rect x="648" y="20" width="28" height="56" rx="8" fill="rgba(139,148,158,.08)" stroke="#30363d" stroke-width="1.5"/>
+      <text x="662" y="52" font-family="-apple-system,sans-serif" font-size="8" font-weight="700" fill="#8b949e" text-anchor="middle" writing-mode="tb">OUT</text>
+    </svg>
+
+    <div class="cols2" style="gap:14px;margin-top:10px;">
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="card card-accent-orange" style="padding:14px 16px;">
+          <div class="card-title">Opacity Backpressure — automatic</div>
+          <div class="card-body">Busy workers mark themselves opaque. The capability resolver skips them. Overloaded stages draw in idle workers from elsewhere — zero config.</div>
+        </div>
+        <div class="card card-accent-blue" style="padding:14px 16px;">
+          <div class="card-title">KV ring IS the pipeline buffer</div>
+          <div class="card-body">Stage items are KV entries. Any worker that matches the capability can pick them up. No queue server, no topic config, no dead-letter queue.</div>
+        </div>
+        <div class="card card-accent-purple" style="padding:14px 16px;">
+          <div class="card-title">Push → Pull — the last decision-maker, removed</div>
+          <div class="card-body">The KV-ring buffer still lets a coordinator <em>push</em> work to a predicted worker. The <code>mycelium-tuple-space</code> companion flips this: workers <code>take</code> when ready, so no component models anyone's load. Linda's pull pattern, on a coordinator-free substrate. <span style="opacity:.7;">(Appendix A10)</span></div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="card card-accent-green" style="padding:14px 16px;">
+          <div class="card-title">Beyond the demo</div>
+          <div class="card-body">The demo uses identical workers that each carry all stage logic — vivid, but it <em>undersells</em> the model. In production: specialist workers advertising only one stage, heterogeneous teams shipping independent capability sets, zero-downtime rollout of <code>score_v2</code> alongside <code>score_v1</code>. The mesh assembles the topology from whatever is running. No operator involvement.</div>
+        </div>
+        <div class="callout callout-blue" style="margin:0;">
+          <strong>Demo assumption ≠ Mycelium's requirement.</strong> Fluid allocation works across a fully heterogeneous fleet — different images, different teams, different capabilities. Topology emerges bottom-up.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 08 Where It Fits -->
+<div class="slide" id="s8">
+  <div class="slide-top"><span class="eyebrow">The Stack</span><span class="slide-num">09 / 25</span></div>
+  <div class="slide-body">
+    <div class="slide-title">Two layers.<br><em>Nothing else.</em></div>
+    <div class="cols2" style="gap:28px;align-items:center;margin-top:8px;">
+      <!-- Stack diagram -->
+      <svg viewBox="0 0 300 310" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-height:290px;">
+        <!-- Internet tier -->
+        <rect x="8" y="8" width="284" height="80" rx="10" fill="rgba(210,168,255,.08)" stroke="rgba(210,168,255,.30)" stroke-width="1.5"/>
+        <text x="24" y="30" font-family="-apple-system,sans-serif" font-size="9" font-weight="700" fill="rgba(210,168,255,.6)" letter-spacing="2">INTERNET / CROSS-ORG</text>
+        <text x="24" y="52" font-family="-apple-system,sans-serif" font-size="14" font-weight="800" fill="#d2a8ff">NANDA</text>
+        <text x="24" y="68" font-family="-apple-system,sans-serif" font-size="10" fill="#8b949e">AgentAddr · W3C VC · Cross-org Federation</text>
+        <text x="24" y="80" font-family="-apple-system,sans-serif" font-size="10" fill="#8b949e">Sub-second revocation · privacy paths</text>
+
+        <!-- Connector -->
+        <line x1="150" y1="88" x2="150" y2="118" stroke="#30363d" stroke-width="1.5" stroke-dasharray="4,3"/>
+        <polygon points="146,115 150,124 154,115" fill="#30363d"/>
+        <rect x="84" y="98" width="132" height="18" rx="4" fill="rgba(13,17,23,.9)" stroke="#30363d" stroke-width="1"/>
+        <text x="150" y="110" font-family="-apple-system,sans-serif" font-size="9" fill="#8b949e" text-anchor="middle">one AgentAddr record</text>
+
+        <!-- Mycelium tier -->
+        <rect x="8" y="124" width="284" height="100" rx="10" fill="rgba(63,185,80,.08)" stroke="rgba(63,185,80,.35)" stroke-width="2"/>
+        <text x="24" y="146" font-family="-apple-system,sans-serif" font-size="9" font-weight="700" fill="rgba(63,185,80,.6)" letter-spacing="2">YOUR CLUSTER</text>
+        <text x="24" y="166" font-family="-apple-system,sans-serif" font-size="16" font-weight="900" fill="#3fb950">Mycelium</text>
+        <text x="24" y="183" font-family="-apple-system,sans-serif" font-size="10" fill="#8b949e">KV · Signals · Consensus · Capabilities</text>
+        <text x="24" y="197" font-family="-apple-system,sans-serif" font-size="10" fill="#8b949e">A2A · MCP · Sharding · Prompt Skills</text>
+        <text x="24" y="211" font-family="-apple-system,sans-serif" font-size="10" fill="#8b949e">Ed25519 · mTLS · Prometheus metrics</text>
+
+        <!-- Connector -->
+        <line x1="150" y1="224" x2="150" y2="248" stroke="#30363d" stroke-width="1.5" stroke-dasharray="4,3"/>
+        <polygon points="146,245 150,254 154,245" fill="#30363d"/>
+        <rect x="84" y="232" width="132" height="18" rx="4" fill="rgba(13,17,23,.9)" stroke="#30363d" stroke-width="1"/>
+        <text x="150" y="244" font-family="-apple-system,sans-serif" font-size="9" fill="#8b949e" text-anchor="middle">cargo add mycelium</text>
+
+        <!-- Your agents tier -->
+        <rect x="8" y="254" width="284" height="48" rx="10" fill="rgba(88,166,255,.06)" stroke="rgba(88,166,255,.22)" stroke-width="1.5"/>
+        <text x="24" y="274" font-family="-apple-system,sans-serif" font-size="9" font-weight="700" fill="rgba(88,166,255,.6)" letter-spacing="2">YOUR AGENTS</text>
+        <!-- Agent dots -->
+        <circle cx="40"  cy="290" r="6" fill="rgba(88,166,255,.25)" stroke="rgba(88,166,255,.6)" stroke-width="1.5"/>
+        <circle cx="60"  cy="290" r="6" fill="rgba(88,166,255,.25)" stroke="rgba(88,166,255,.6)" stroke-width="1.5"/>
+        <circle cx="80"  cy="290" r="6" fill="rgba(88,166,255,.25)" stroke="rgba(88,166,255,.6)" stroke-width="1.5"/>
+        <circle cx="100" cy="290" r="6" fill="rgba(88,166,255,.25)" stroke="rgba(88,166,255,.6)" stroke-width="1.5"/>
+        <circle cx="120" cy="290" r="6" fill="rgba(88,166,255,.25)" stroke="rgba(88,166,255,.6)" stroke-width="1.5"/>
+        <circle cx="140" cy="290" r="6" fill="rgba(88,166,255,.25)" stroke="rgba(88,166,255,.6)" stroke-width="1.5"/>
+        <circle cx="160" cy="290" r="6" fill="rgba(88,166,255,.25)" stroke="rgba(88,166,255,.6)" stroke-width="1.5"/>
+        <circle cx="180" cy="290" r="6" fill="rgba(88,166,255,.25)" stroke="rgba(88,166,255,.6)" stroke-width="1.5"/>
+        <text x="210" y="294" font-family="-apple-system,sans-serif" font-size="9" fill="#8b949e">Rust · Python · TypeScript</text>
+      </svg>
+
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div class="card card-accent-green">
+          <div class="card-title">Intra-cluster — Mycelium handles everything</div>
+          <div class="card-body" style="line-height:1.9;">
+            Node discovery · State propagation · Event routing<br>
+            Consensus · Leader election · Distributed locks<br>
+            A2A task surface · MCP tool registry<br>
+            Sharding · Prompt Skills · Metrics
+          </div>
+        </div>
+        <div class="card card-accent-purple">
+          <div class="card-title">Internet scale — NANDA federation</div>
+          <div class="card-body">One <code>AgentAddr</code> record points to your cluster's <code>/.well-known/agent.json</code>. Your cluster joins the agent internet. W3C VC-signed AgentFacts. Sub-second revocation.</div>
+        </div>
+        <div class="callout callout-green">
+          <strong>No code changes required.</strong> Mycelium's A2A surface is already a conforming endpoint. NANDA federation is a DNS record, not a code change.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 09 Comparison -->
+<div class="slide" id="s9">
+  <div class="slide-top"><span class="eyebrow">Comparison</span><span class="slide-num">10 / 25</span></div>
+  <div class="slide-body">
+    <div class="slide-title" style="margin-bottom:10px;">Mycelium vs. <em>the field</em></div>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Capability</th>
+            <th style="color:var(--accent2);">Mycelium</th>
+            <th>NATS / EMQX</th>
+            <th>Consul / etcd</th>
+            <th>Akka Cluster</th>
+            <th>Roll-your-own</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Broker required</td><td class="td-yes td-my">None</td><td class="td-no">Yes</td><td class="td-no">Yes</td><td>Partial</td><td class="td-no">You build it</td></tr>
+          <tr><td>Discovery model</td><td class="td-my">TTL gossip · no lifecycle</td><td>Pub/sub + registry</td><td>Centralised registry</td><td>Gossip (limited)</td><td class="td-no">You build it</td></tr>
+          <tr><td>Consensus</td><td class="td-my">Epidemic · no leader</td><td class="td-no">None</td><td>Raft</td><td class="td-no">None</td><td class="td-no">You build it</td></tr>
+          <tr><td>A2A surface</td><td class="td-yes td-my">Built-in</td><td>Via bridge</td><td class="td-no">No</td><td class="td-no">No</td><td class="td-no">You build it</td></tr>
+          <tr><td>Cluster sharding</td><td class="td-yes td-my">Built-in (FNV hash ring)</td><td>Via JetStream</td><td class="td-no">No</td><td>Yes (coordinator)</td><td class="td-no">You build it</td></tr>
+          <tr><td>Agentic Flow Networks</td><td class="td-yes td-my">Built-in (5 properties)</td><td class="td-no">No</td><td class="td-no">No</td><td>Akka Streams (partial)</td><td class="td-no">You build it</td></tr>
+          <tr><td>Prompt Skills (LLM)</td><td class="td-yes td-my">Built-in (llm feature)</td><td class="td-no">No</td><td class="td-no">No</td><td class="td-no">No</td><td class="td-no">You build it</td></tr>
+          <tr><td>Air-gapped / edge</td><td class="td-yes td-my">Yes — zero external deps</td><td>Complex</td><td>Complex</td><td>Possible</td><td>Possible</td></tr>
+          <tr><td>Ops burden</td><td class="td-yes td-my">Zero — no processes</td><td>Broker + config</td><td>Registry + agents</td><td>Cluster manager</td><td class="td-no">Everything</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout callout-green" style="margin-top:10px;">
+      <strong>Each "separate system" row is a new process to operate, a new failure mode to handle, and a new ops surface to audit.</strong> Mycelium collapses them all.
+    </div>
+  </div>
+</div>
+
+<!-- 10 Language Bridges -->
+<div class="slide" id="s10">
+  <div class="slide-top"><span class="eyebrow">Language Bridges</span><span class="slide-num">11 / 25</span></div>
+  <div class="slide-body">
+    <div class="slide-title">Your team writes <em>Python or TypeScript.</em><br>Mycelium speaks gossip.</div>
+    <div class="slide-sub">A thin Rust sidecar exposes the full mesh API over a local HTTP gateway. No native extension. No version matrix. ~1 ms overhead — invisible next to LLM inference latency.</div>
+    <div class="cols2" style="gap:20px;">
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <div class="card card-accent-green">
+          <div class="card-title">pip install mycelium-py</div>
+          <div class="card-body">Full mesh API from Python: KV, capabilities, RPC, signals, mailbox, consensus, A2A, Prompt Skills. Async-native with SSE streaming.</div>
+        </div>
+        <div class="card card-accent-blue">
+          <div class="card-title">npm install mycelium-ts</div>
+          <div class="card-body">Identical API surface in TypeScript. Native Promises, full type safety. Works in Node.js and browser contexts via the HTTP gateway.</div>
+        </div>
+        <div class="card card-accent-purple">
+          <div class="card-title">Reference: fluid pipeline</div>
+          <div class="card-body"><code>examples/fluid_pipeline/</code> — 10 Python workers, zero Rust in the application layer. Full 4-stage AFN pipeline using only <code>mycelium-py</code>.</div>
+        </div>
+        <div class="callout callout-blue">
+          <strong>LangChain + AutoGen:</strong> <code>examples/a2a_langchain/</code> — external agents auto-discover skills via <code>/.well-known/agent.json</code> and use them as native tools. Zero hardcoded endpoint config.
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="code-block" style="font-size:11.5px;">
+<span class="cm"># Python — full mesh in 4 lines</span>
+<span class="ck">from</span> mycelium <span class="ck">import</span> MyceliumAgent
+agent = MyceliumAgent(<span class="cv">"127.0.0.1"</span>, <span class="cn">8300</span>)
+agent.<span class="cs">advertise_capability</span>(<span class="cv">"compute"</span>, <span class="cv">"gpu"</span>,
+    attributes={<span class="cv">"model"</span>: <span class="cv">"A100"</span>})
+providers = agent.<span class="cs">resolve_capability</span>(<span class="cv">"compute"</span>, <span class="cv">"gpu"</span>)
+
+<span class="cm"># Consensus + leader election</span>
+<span class="ck">with</span> agent.<span class="cs">distributed_lock</span>(<span class="cv">"job-42"</span>) <span class="ck">as</span> lock:
+    leader = agent.<span class="cs">elect_leader</span>(<span class="cv">"shard-0"</span>)
+        </div>
+        <div class="code-block" style="font-size:11.5px;">
+<span class="cm">// TypeScript — same API, full types</span>
+<span class="ck">import</span> { MyceliumAgent } <span class="ck">from</span> <span class="cv">"mycelium-ts"</span>;
+<span class="ck">const</span> agent = <span class="ck">new</span> MyceliumAgent(<span class="cv">"127.0.0.1"</span>, <span class="cn">8300</span>);
+<span class="ck">await</span> agent.<span class="cs">advertiseCapability</span>(<span class="cv">"compute"</span>, <span class="cv">"gpu"</span>,
+    { attributes: { model: <span class="cv">"A100"</span> } });
+<span class="ck">const</span> leader = <span class="ck">await</span> agent.<span class="cs">electLeader</span>(<span class="cv">"shard-0"</span>);
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 11 Production Ready -->
+<div class="slide" id="s11">
+  <div class="slide-top"><span class="eyebrow">Production Ready</span><span class="slide-num">12 / 25</span></div>
+  <div class="slide-body">
+    <div class="slide-title">Battle-tested.<br><em>Shipping-ready.</em></div>
+    <div class="cols2" style="gap:20px;margin-top:8px;">
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <div class="card card-accent-green">
+          <div class="card-title">319 tests · 13/13 integration scenarios</div>
+          <div class="card-body">Full unit test suite plus 12 end-to-end Docker integration scenarios. KV propagation, gossip boundaries, consensus, anti-entropy, AFN, Prompt Skills — all automated, all passing.</div>
+        </div>
+        <div class="card card-accent-blue">
+          <div class="card-title">Wire version policy</div>
+          <div class="card-body">Wire v11 current. <code>PREV_WIRE_VERSION = 10</code> — rolling upgrade window keeps the entire cluster online during version transitions. No downtime deploys.</div>
+        </div>
+        <div class="card card-accent-purple">
+          <div class="card-title">Durable persistence</div>
+          <div class="card-body">WAL-backed KV store with <code>SyncMode::Flush</code>. State survives unclean shutdowns. Anti-entropy ensures late joiners and restarters converge to the same state.</div>
+        </div>
+        <div class="card card-accent-orange">
+          <div class="card-title">100-node scale tested</div>
+          <div class="card-body"><code>make test-scale</code> spins 100 Docker nodes: cluster formation, KV write propagation seed→mgmt, zero dropped frames. Validated at production scale.</div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="card-title" style="font-size:11px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;">12 Integration Scenarios — All Passing</div>
+        <ul class="scenario-list">
+          <li><span class="sc-num">1</span>KV propagation across cluster<span class="sc-pass">PASS</span></li>
+          <li><span class="sc-num">2</span>Signal broadcast + boundary enforcement<span class="sc-pass">PASS</span></li>
+          <li><span class="sc-num">3</span>Consensus proposal acceptance<span class="sc-pass">PASS</span></li>
+          <li><span class="sc-num">4</span>Full cluster restart + state recovery<span class="sc-pass">PASS</span></li>
+          <li><span class="sc-num">5</span>Anti-entropy late joiner catch-up<span class="sc-pass">PASS</span></li>
+          <li><span class="sc-num">6</span>Signal propagation boundaries<span class="sc-pass">PASS</span></li>
+          <li><span class="sc-num">7</span>Capability discovery convergence<span class="sc-pass">PASS</span></li>
+          <li><span class="sc-num">8</span>Scatter-gather fan-out<span class="sc-pass">PASS</span></li>
+          <li><span class="sc-num">9</span>Bulk large payload delivery<span class="sc-pass">PASS</span></li>
+          <li><span class="sc-num">10</span>Mailbox reliable delivery<span class="sc-pass">PASS</span></li>
+          <li><span class="sc-num">11</span>Agentic Flow Network pipeline<span class="sc-pass">PASS</span></li>
+          <li><span class="sc-num">12</span>Prompt Skills — KV propagation + invoke<span class="sc-pass">PASS</span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 13 Examples -->
+<div class="slide" id="s11ex">
+  <div class="slide-top"><span class="eyebrow">Running Examples</span><span class="slide-num">13 / 25</span></div>
+  <div class="slide-body">
+    <div class="slide-title">Three demos.<br><em>Zero setup overhead.</em></div>
+    <div class="slide-sub">Each example ships in the repo and runs with a single command.</div>
+    <div class="cols3" style="gap:16px;margin-top:4px;">
+
+      <div class="card" style="border-top:3px solid var(--accent2);display:flex;flex-direction:column;gap:10px;">
+        <div style="font-size:22px;">🌊</div>
+        <div class="card-title" style="font-size:15px;font-weight:700;color:var(--text);">Agentic Flow Network</div>
+        <div class="card-body" style="font-size:13px;color:var(--muted);line-height:1.55;">4-stage news-article pipeline. 10 Python workers fluid-allocated across stages. KV ring as distributed buffer. Backpressure via TTL opacity.</div>
+        <div class="code-block" style="font-size:11px;margin-top:auto;">
+<span class="cm"># examples/fluid_pipeline/</span>
+docker compose up --build \
+  --scale worker=10
+        </div>
+        <div style="font-size:11px;color:var(--accent2);margin-top:4px;">Rust core · Python workers · 10-node Docker cluster</div>
+      </div>
+
+      <div class="card" style="border-top:3px solid var(--accent3);display:flex;flex-direction:column;gap:10px;">
+        <div style="font-size:22px;">🤖</div>
+        <div class="card-title" style="font-size:15px;font-weight:700;color:var(--text);">LangChain + AutoGen A2A</div>
+        <div class="card-body" style="font-size:13px;color:var(--muted);line-height:1.55;">LangChain ReAct agent and AutoGen v0.4 agent auto-discover Mycelium-hosted skills via <code>/.well-known/agent.json</code> and call them as native tools — no manual wiring.</div>
+        <div class="code-block" style="font-size:11px;margin-top:auto;">
+<span class="cm"># examples/a2a_langchain/</span>
+cargo build --bin skillrunner \
+  --features a2a
+examples/community/start.sh
+        </div>
+        <div style="font-size:11px;color:var(--accent3);margin-top:4px;">LangChain · AutoGen v0.4 · A2A protocol</div>
+      </div>
+
+      <div class="card" style="border-top:3px solid var(--accent);display:flex;flex-direction:column;gap:10px;">
+        <div style="font-size:22px;">🧠</div>
+        <div class="card-title" style="font-size:15px;font-weight:700;color:var(--text);">LLM Agent + Prompt Skills</div>
+        <div class="card-body" style="font-size:13px;color:var(--muted);line-height:1.55;">Three-node cluster with live management UI. Prompt Skills propagate over KV gossip — any node can invoke a skill registered on any other. <code>MOCK_LLM=1</code> removes Ollama dependency.</div>
+        <div class="code-block" style="font-size:11px;margin-top:auto;">
+<span class="cm"># examples/llm_agent.rs</span>
+MOCK_LLM=1 cargo run \
+  --example llm_agent
+<span class="cm"># → http://127.0.0.1:8100</span>
+        </div>
+        <div style="font-size:11px;color:var(--accent);margin-top:4px;">3 nodes · live UI · simulated failure · mock LLM</div>
+      </div>
+
+    </div>
+    <div class="callout callout-blue" style="margin-top:14px;">
+      More in <code>examples/</code>: Conway's Life distributed GPU, semantic coordination (FIPA-ACL), three-node mesh demo, cross-group consensus scenarios.
+    </div>
+  </div>
+</div>
+
+<!-- 14 Get Started -->
+<div class="slide" id="s12">
+  <div class="slide-top"><span class="eyebrow">Get Started</span><span class="slide-num">14 / 25</span></div>
+  <div class="slide-body">
+    <div class="slide-title">One library.<br><em>Zero infrastructure.</em></div>
+    <div class="cols2" style="gap:24px;margin-top:8px;">
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div class="code-block" style="font-size:12px;">
+<span class="cm"># github.com/RichardEko/mycelium</span>
+
+<span class="cm"># Add to your Rust project</span>
+cargo add mycelium
+
+<span class="cm"># Python</span>
+pip install mycelium-py
+
+<span class="cm"># TypeScript</span>
+npm install mycelium-ts
+        </div>
+        <div class="code-block" style="font-size:11.5px;">
+<span class="cm">// Three-line cluster join (Rust)</span>
+<span class="ck">let</span> cfg = GossipConfig { port: <span class="cn">7946</span>,
+  bootstrap_peers: <span class="cs">vec!</span>[<span class="cv">"10.0.0.1:7946"</span>], ..Default::default() };
+<span class="ck">let</span> agent = GossipAgent::new(cfg).await?;
+agent.<span class="cs">start</span>().await?;
+<span class="cm">// you are now in the mesh</span>
+        </div>
+        <div class="code-block" style="font-size:11.5px;">
+<span class="cm"># Interactive demo — no Ollama needed</span>
+MOCK_LLM=1 cargo run --example llm_agent
+<span class="cm"># → open http://127.0.0.1:8100</span>
+<span class="cm"># 3 nodes · management UI · simulated failure</span>
+
+<span class="cm"># AFN pipeline — 10 Python workers</span>
+cd examples/fluid_pipeline
+docker compose up --build --scale worker=10
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <div class="card card-accent-green">
+          <div class="card-title">Developer guide</div>
+          <div class="card-body"><code>docs/guide/README.md</code> — 12 chapters covering every pattern from basic KV through Agentic Flow Networks and cross-group consensus. Runnable examples throughout.</div>
+        </div>
+        <div class="card card-accent-blue">
+          <div class="card-title">Integration scenarios</div>
+          <div class="card-body"><code>make test</code> runs all 12 Docker scenarios unattended. Each scenario is a runnable reference implementation of a specific pattern.</div>
+        </div>
+        <div class="card card-accent-purple">
+          <div class="card-title">NANDA federation</div>
+          <div class="card-body">Add <code>.with_a2a()</code> to your builder. Point a NANDA <code>AgentAddr</code> record at your cluster. You're on the agent internet.</div>
+        </div>
+        <div class="callout callout-green">
+          <strong>Philosophy:</strong> if you need to manage infrastructure to use Mycelium, something has gone wrong. The goal is zero ops — embed it, start it, forget it.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     APPENDIX DIVIDER
+═══════════════════════════════════════════════════════════════ -->
+<div class="slide" id="sApp">
+  <div class="slide-top"><span class="eyebrow">Navigation</span><span class="slide-num">15 / 25</span></div>
+  <div class="slide-body">
+    <div class="appendix-divider-body">
+      <div class="big">Technical Deep Dive</div>
+      <div class="sub">The following slides cover the architecture in detail — layer model, wire format, consensus protocol, security model, and API reference.</div>
+      <div class="badges" style="justify-content:center;">
+        <span class="badge"><span class="dot dot-g"></span>A1 · Architecture Layers</span>
+        <span class="badge"><span class="dot dot-b"></span>A2 · KV Store</span>
+        <span class="badge"><span class="dot dot-p"></span>A3 · Signal Mesh</span>
+        <span class="badge"><span class="dot dot-m"></span>A4 · Consensus</span>
+        <span class="badge"><span class="dot dot-g"></span>A5 · Security</span>
+        <span class="badge"><span class="dot dot-b"></span>A6 · Observability</span>
+        <span class="badge"><span class="dot dot-p"></span>A7 · A2A &amp; Sharding</span>
+        <span class="badge"><span class="dot dot-m"></span>A8 · Prompt Skills</span>
+        <span class="badge"><span class="dot dot-g"></span>A9 · Semantic Coordination</span>
+        <span class="badge"><span class="dot dot-b"></span>A10 · TupleSpace (pull)</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     APPENDIX
+═══════════════════════════════════════════════════════════════ -->
+
+<!-- A1 Architecture -->
+<div class="slide appendix-slide" id="sA1">
+  <div class="slide-top"><span class="eyebrow eyebrow-app">Appendix A1</span><span class="slide-num">16 / 25</span></div>
+  <div class="slide-body">
+    <div class="layer-strip">
+      <div class="ls-item ls-active-1">I · KV Store</div>
+      <div class="ls-item ls-active-2">II · Signals</div>
+      <div class="ls-item ls-active-3">III · Consensus</div>
+      <div class="ls-item ls-active-s">Security</div>
+      <div class="ls-item ls-active-4">A2A + Sharding</div>
+      <div class="ls-item ls-active-5">Observability</div>
+    </div>
+    <div class="slide-title" style="font-size:clamp(20px,2.8vw,38px);margin-bottom:10px;">Three-layer <em>Architecture</em></div>
+    <div class="cols3" style="gap:12px;margin-bottom:12px;">
+      <div class="card card-accent-green">
+        <div class="card-title">Layer I — KV Store</div>
+        <div class="card-body">Last-write-wins gossip over TCP. HLC causal ordering. TTL per key. Anti-entropy on reconnect. Bloom-filtered dedup. WAL persistence.</div>
+      </div>
+      <div class="card card-accent-blue">
+        <div class="card-title">Layer II — Signal Mesh</div>
+        <div class="card-body">Ephemeral scoped events. Broadcast / group / individual scopes. Opacity composition for admission control. Pheromone attenuation at group boundaries.</div>
+      </div>
+      <div class="card card-accent-purple">
+        <div class="card-title">Layer III — Consensus</div>
+        <div class="card-body">Epidemic ballot-voting (CASPaxos-adjacent). No Raft leader. <code>consistent_set</code>, <code>distributed_lock</code>, <code>elect_leader</code>. Cross-group proposals via <code>GroupQuorum</code>.</div>
+      </div>
+    </div>
+    <div class="callout callout-blue">
+      <strong>Single KV substrate.</strong> All three layers write to dedicated key prefixes via the same gossip mechanism. <code>cap/</code> · <code>sig/</code> · <code>consensus/</code> · <code>sys/</code> · <code>mailbox/</code> · <code>prompts/</code> — one substrate, many namespaces.
+    </div>
+    <div class="callout callout-green" style="margin-top:10px;">
+      <strong>Structural Inversion:</strong> AP substrate always available. CP overlay opt-in. Pay for ordering guarantees only where your application demands them.
+    </div>
+  </div>
+</div>
+
+<!-- A2 KV Store -->
+<div class="slide appendix-slide" id="sA2">
+  <div class="slide-top"><span class="eyebrow eyebrow-app">Appendix A2</span><span class="slide-num">17 / 25</span></div>
+  <div class="slide-body">
+    <div class="layer-strip">
+      <div class="ls-item ls-active-1">I · KV Store</div>
+      <div class="ls-item">II · Signals</div><div class="ls-item">III · Consensus</div>
+      <div class="ls-item">Security</div><div class="ls-item">A2A + Sharding</div><div class="ls-item">Observability</div>
+    </div>
+    <div class="slide-title" style="font-size:clamp(20px,2.8vw,36px);margin-bottom:8px;">KV Store — <em>Persistent State</em></div>
+    <div class="cols2">
+      <div>
+        <div class="card card-accent-green" style="margin-bottom:10px;">
+          <div class="card-title">How it works</div>
+          <div class="card-body" style="line-height:2;">
+            <strong>LWW gossip</strong> — last write wins, HLC timestamp, TCP transport<br>
+            <strong>Anti-entropy</strong> — on reconnect, late joiners catch up fully<br>
+            <strong>TTL per key</strong> — tombstones expire; no deregister calls<br>
+            <strong>WAL persistence</strong> — survives unclean shutdown<br>
+            <strong>Bloom seen-set</strong> — deduplicates without per-key overhead
+          </div>
+        </div>
+        <div class="callout callout-green">
+          <strong>Why no separate registry:</strong> the KV layer <em>is</em> the registry. Every node holds a complete, eventually-consistent cluster view at all times.
+        </div>
+      </div>
+      <div>
+        <div class="code-block" style="font-size:11.5px;">
+<span class="cm">// Write + gossip</span>
+agent.<span class="cs">kv</span>().<span class="cs">set</span>(<span class="cv">"key"</span>, value).await;
+agent.<span class="cs">kv</span>().<span class="cs">set_with_min_acks</span>(<span class="cv">"key"</span>, value, <span class="cn">2</span>).await?;
+
+<span class="cm">// Read local (no round-trip)</span>
+<span class="ck">let</span> v = agent.<span class="cs">kv</span>().<span class="cs">get</span>(<span class="cv">"key"</span>);
+<span class="ck">let</span> all = agent.<span class="cs">kv</span>().<span class="cs">scan_prefix</span>(<span class="cv">"cap/"</span>);
+
+<span class="cm">// Subscribe to changes</span>
+<span class="ck">let mut</span> rx = agent.<span class="cs">kv</span>().<span class="cs">subscribe_prefix</span>(<span class="cv">"cap/"</span>);
+<span class="ck">while let</span> Some(update) = rx.<span class="cs">recv</span>().await { ... }
+
+<span class="cm">// Append-only log</span>
+<span class="ck">let</span> hlc = agent.<span class="cs">kv</span>().<span class="cs">append</span>(<span class="cv">"events"</span>, payload).await;
+<span class="ck">let</span> entries = agent.<span class="cs">kv</span>().<span class="cs">scan_log</span>(<span class="cv">"events"</span>, from_hlc);
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- A3 Signal Mesh -->
+<div class="slide appendix-slide" id="sA3">
+  <div class="slide-top"><span class="eyebrow eyebrow-app">Appendix A3</span><span class="slide-num">18 / 25</span></div>
+  <div class="slide-body">
+    <div class="layer-strip">
+      <div class="ls-item">I · KV Store</div>
+      <div class="ls-item ls-active-2">II · Signals</div>
+      <div class="ls-item">III · Consensus</div>
+      <div class="ls-item">Security</div><div class="ls-item">A2A + Sharding</div><div class="ls-item">Observability</div>
+    </div>
+    <div class="slide-title" style="font-size:clamp(20px,2.8vw,36px);margin-bottom:8px;">Signal Mesh — <em>Ephemeral Events</em></div>
+    <div class="cols2">
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="card card-accent-blue">
+          <div class="card-title">Three scopes</div>
+          <div class="card-body"><strong>Broadcast</strong> — all reachable nodes<br><strong>Group</strong> — capability-group members only<br><strong>Individual</strong> — single named node</div>
+        </div>
+        <div class="card card-accent-purple">
+          <div class="card-title">Opacity composition</div>
+          <div class="card-body">Any load reason writes a distinct <code>sys/load/{self}/…</code> key. Signals withheld from opaque nodes. Multiple independent load sources compose without new code.</div>
+        </div>
+        <div class="card card-accent-orange">
+          <div class="card-title">Ordered delivery</div>
+          <div class="card-body"><code>emit_ordered()</code> — HLC sequence numbers in wire v11. Reorder buffer on receiver reconstructs causal order across gossiped signals.</div>
+        </div>
+      </div>
+      <div>
+        <div class="code-block" style="font-size:11.5px;">
+<span class="cm">// Three scopes</span>
+agent.<span class="cs">mesh</span>().<span class="cs">emit</span>(<span class="cv">"task"</span>, Broadcast, payload).await;
+agent.<span class="cs">mesh</span>().<span class="cs">emit</span>(<span class="cv">"task"</span>, Group(<span class="cv">"gpu-workers"</span>), payload).await;
+agent.<span class="cs">mesh</span>().<span class="cs">emit</span>(<span class="cv">"task"</span>, Individual(node_id), payload).await;
+
+<span class="cm">// Subscribe (trusted senders only)</span>
+<span class="ck">let mut</span> rx = agent.<span class="cs">mesh</span>()
+  .<span class="cs">signal_rx_from</span>(<span class="cv">"task"</span>, <span class="cs">vec!</span>[trusted_id]);
+
+<span class="cm">// Ordered delivery with HLC sequence</span>
+agent.<span class="cs">mesh</span>().<span class="cs">emit_ordered</span>(<span class="cv">"task"</span>, scope, payload).await;
+
+<span class="cm">// Suppress delivery temporarily</span>
+agent.<span class="cs">mesh</span>().<span class="cs">suppress</span>(<span class="cv">"task"</span>, Duration::from_secs(<span class="cn">30</span>));
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- A4 Consensus -->
+<div class="slide appendix-slide" id="sA4">
+  <div class="slide-top"><span class="eyebrow eyebrow-app">Appendix A4</span><span class="slide-num">19 / 25</span></div>
+  <div class="slide-body">
+    <div class="layer-strip">
+      <div class="ls-item">I · KV Store</div><div class="ls-item">II · Signals</div>
+      <div class="ls-item ls-active-3">III · Consensus</div>
+      <div class="ls-item">Security</div><div class="ls-item">A2A + Sharding</div><div class="ls-item">Observability</div>
+    </div>
+    <div class="slide-title" style="font-size:clamp(20px,2.8vw,36px);margin-bottom:8px;">Consensus — <em>Ballot-Serialized Agreement</em></div>
+    <div class="cols2">
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="card card-accent-purple">
+          <div class="card-title">Epidemic ballot voting — no leader</div>
+          <div class="card-body">CASPaxos-adjacent. Proposals gossip through the cluster. No Raft leader. Concurrent writes to the same key are totally ordered by ballot number.</div>
+        </div>
+        <div class="card card-accent-blue">
+          <div class="card-title">Cross-group federation</div>
+          <div class="card-body"><code>cross_group_propose</code> + <code>GroupQuorum</code> — multiple groups each act as an independent voting bloc. Models multi-AZ durability gates and hierarchical approval.</div>
+        </div>
+        <div class="callout callout-purple">
+          <strong>Why not Raft:</strong> Raft requires a stable leader. Agent fleets have constant churn. Epidemic consensus tolerates node turnover without stalling progress.
+        </div>
+      </div>
+      <div>
+        <div class="code-block" style="font-size:11.5px;">
+<span class="cm">// Ballot-serialized KV write</span>
+agent.<span class="cs">consensus</span>().<span class="cs">consistent_set</span>(<span class="cv">"key"</span>, val).await?;
+<span class="ck">let</span> v = agent.<span class="cs">consensus</span>().<span class="cs">consistent_get</span>(<span class="cv">"key"</span>);
+
+<span class="cm">// Distributed lock with fencing token</span>
+<span class="ck">let</span> lock = agent.<span class="cs">consensus</span>()
+  .<span class="cs">distributed_lock</span>(<span class="cv">"job-42"</span>, ttl_secs=<span class="cn">30</span>).await?;
+println!(<span class="cv">"token: {}"</span>, lock.token); <span class="cm">// monotonic fencing token</span>
+
+<span class="cm">// Leader election</span>
+<span class="ck">let</span> leader = agent.<span class="cs">consensus</span>().<span class="cs">elect_leader</span>(<span class="cv">"shard-0"</span>).await?;
+
+<span class="cm">// Cross-group proposal — both blocs must reach quorum</span>
+agent.<span class="cs">consensus</span>().<span class="cs">cross_group_propose</span>(<span class="cv">"config"</span>, val,
+  <span class="cs">vec!</span>[GroupQuorum { group: <span class="cv">"llm"</span>, quorum: <span class="cn">0.5</span>, veto: <span class="cn">false</span> },
+       GroupQuorum { group: <span class="cv">"compliance"</span>, quorum: <span class="cn">0.5</span>, veto: <span class="cn">true</span> }]).await?;
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- A5 Security -->
+<div class="slide appendix-slide" id="sA5">
+  <div class="slide-top"><span class="eyebrow eyebrow-app">Appendix A5</span><span class="slide-num">20 / 25</span></div>
+  <div class="slide-body">
+    <div class="layer-strip">
+      <div class="ls-item">I · KV Store</div><div class="ls-item">II · Signals</div><div class="ls-item">III · Consensus</div>
+      <div class="ls-item ls-active-s">Security</div>
+      <div class="ls-item">A2A + Sharding</div><div class="ls-item">Observability</div>
+    </div>
+    <div class="slide-title" style="font-size:clamp(20px,2.8vw,36px);margin-bottom:8px;">Security — <em>Transport · Identity · Integrity</em></div>
+    <div class="cols2">
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="card card-accent-red">
+          <div class="card-title">mTLS transport <code style="font-size:10px;">--features tls</code></div>
+          <div class="card-body">Mutual TLS on every gossip TCP connection. External attackers cannot inject or intercept frames. Zero overhead when the feature flag is off — all TLS code compiles away.</div>
+        </div>
+        <div class="card card-accent-red">
+          <div class="card-title">Ed25519 node identity</div>
+          <div class="card-body">Each node generates an Ed25519 keypair at startup. Same keypair serves as mTLS identity, gossips into <code>sys/identity/{node}</code>, and signs consensus payloads.</div>
+        </div>
+        <div class="card card-accent-red">
+          <div class="card-title">Wire v11 — KV write signing</div>
+          <div class="card-body"><code>WireMessage::SignedData</code> — Ed25519 signature over key, value, timestamp, tombstone flag, and sender. A compromised node cannot inject false KV entries.</div>
+        </div>
+      </div>
+      <div>
+        <div class="code-block" style="font-size:11.5px;">
+<span class="cm">// Enable mTLS — one config line</span>
+GossipConfig {
+  tls: <span class="cs">Some</span>(TlsConfig::<span class="cs">default</span>()),
+  <span class="cm">// or: gateway_auth_token = Some("token")</span>
+  ..
+}
+        </div>
+        <div class="callout callout-red" style="margin-top:10px;">
+          <strong>Threat model:</strong> mTLS stops external injection. Wire v11 signing stops a compromised cluster node from injecting modified KV frames. Both layers required for full integrity.
+        </div>
+        <div class="callout callout-orange" style="margin-top:10px;">
+          <strong>HTTP gateway:</strong> no auth by default — bind to loopback or set <code>gateway_auth_token</code>. <code>/health</code>, <code>/ready</code>, <code>/metrics</code> intentionally public for load-balancer probes.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- A6 Observability -->
+<div class="slide appendix-slide" id="sA6">
+  <div class="slide-top"><span class="eyebrow eyebrow-app">Appendix A6</span><span class="slide-num">21 / 25</span></div>
+  <div class="slide-body">
+    <div class="layer-strip">
+      <div class="ls-item">I · KV Store</div><div class="ls-item">II · Signals</div><div class="ls-item">III · Consensus</div>
+      <div class="ls-item">Security</div><div class="ls-item">A2A + Sharding</div>
+      <div class="ls-item ls-active-5">Observability</div>
+    </div>
+    <div class="slide-title" style="font-size:clamp(20px,2.8vw,36px);margin-bottom:8px;">Observability — <em>Visibility Without Overhead</em></div>
+    <div class="cols2">
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="card card-accent-blue">
+          <div class="card-title">Zero-cost <code>metrics</code> facade</div>
+          <div class="card-body">Uses the <code>metrics</code> crate. No recorder installed = no allocations, no overhead. Enable Prometheus with <code>--features metrics</code>. OTEL-compatible.</div>
+        </div>
+        <div class="card card-accent-blue">
+          <div class="card-title">Key metrics</div>
+          <div class="card-body" style="font-family:monospace;font-size:11px;line-height:1.9;">
+            gossip_messages_received_total<br>
+            gossip_frames_dropped_total<br>
+            gossip_store_entries<br>
+            gossip_peers_connected<br>
+            signal_emitted_total{scope,kind}<br>
+            consensus_proposals_total{outcome}
+          </div>
+        </div>
+        <div class="card card-accent-blue">
+          <div class="card-title">Readiness + management</div>
+          <div class="card-body"><code>GET /ready</code> — 200 once capabilities gossip and peers connect<br><code>GET /stats</code> — node_id, store_entries, dropped frames<br><code>GET /health</code> — always 200 while alive</div>
+        </div>
+      </div>
+      <div>
+        <div class="code-block" style="font-size:11.5px;">
+<span class="cm">// Install Prometheus recorder once</span>
+PrometheusBuilder::new().<span class="cs">install</span>()?;
+
+<span class="cm">// Scrape</span>
+<span class="cm">// curl http://node:8300/metrics</span>
+
+<span class="cm">// Readiness gate (wait for cluster convergence)</span>
+agent.<span class="cs">is_ready</span>().await; <span class="cm">// true = caps gossiped + peers connected</span>
+
+<span class="cm">// Graceful shutdown with timeout</span>
+agent.<span class="cs">shutdown_with_timeout</span>(Duration::from_secs(<span class="cn">5</span>)).await;
+        </div>
+        <div class="callout callout-blue" style="margin-top:10px;">
+          <strong>HLC causal audit trail.</strong> Every KV write, signal, and consensus proposal carries an HLC timestamp — a happens-before audit trail across all nodes at no extra cost.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- A7 A2A + Sharding -->
+<div class="slide appendix-slide" id="sA7">
+  <div class="slide-top"><span class="eyebrow eyebrow-app">Appendix A7</span><span class="slide-num">22 / 25</span></div>
+  <div class="slide-body">
+    <div class="layer-strip">
+      <div class="ls-item">I · KV Store</div><div class="ls-item">II · Signals</div><div class="ls-item">III · Consensus</div>
+      <div class="ls-item">Security</div>
+      <div class="ls-item ls-active-4">A2A + Sharding</div>
+      <div class="ls-item">Observability</div>
+    </div>
+    <div class="slide-title" style="font-size:clamp(20px,2.8vw,36px);margin-bottom:8px;">A2A Adapter &amp; Cluster Sharding</div>
+    <div class="cols2">
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="card card-accent-orange">
+          <div class="card-title">A2A protocol surface <code style="font-size:10px;">--features a2a</code></div>
+          <div class="card-body">
+            <code>GET /.well-known/agent.json</code> — built live from <code>cap/</code> KV ring<br>
+            <code>POST /a2a</code> — JSON-RPC 2.0<br>
+            <code>tasks/send</code> · <code>tasks/sendSubscribe</code> (SSE)<br>
+            <code>tasks/get</code> · <code>tasks/cancel</code>
+          </div>
+        </div>
+        <div class="card card-accent-orange">
+          <div class="card-title">Cluster sharding</div>
+          <div class="card-body"><code>shard_for(key, filter)</code> — FNV-1a consistent hash ring over NodeId. <code>emit_sharded(kind, key, filter, payload)</code> — deterministic routing, no coordinator. Same key always routes to the same node while the ring is stable.</div>
+        </div>
+        <div class="callout callout-orange">
+          <strong>AgentCard is built live from the KV ring.</strong> Change a capability and both the A2A surface and MCP tool list update automatically — no manual registration step.
+        </div>
+      </div>
+      <div>
+        <div class="code-block" style="font-size:11.5px;">
+<span class="cm">// Enable A2A</span>
+<span class="ck">let</span> agent = GossipAgent::builder()
+  .<span class="cs">with_a2a</span>()
+  .<span class="cs">build</span>().await?;
+
+<span class="cm">// Shard routing</span>
+<span class="ck">let</span> owner = agent.<span class="cs">service</span>().<span class="cs">shard_for</span>(
+  <span class="cv">"user-12345"</span>,
+  &amp;CapFilter::new(<span class="cv">"compute"</span>, <span class="cv">"gpu"</span>)
+);
+
+<span class="cm">// Sharded emit — routes deterministically</span>
+agent.<span class="cs">service</span>().<span class="cs">emit_sharded</span>(
+  <span class="cv">"render.request"</span>, <span class="cv">"user-12345"</span>, &amp;filter, payload
+).await;
+
+<span class="cm"># Python client</span>
+<span class="cm"># A2aClient("http://node:8300").send("llm/chat","Hi")</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- A8 Prompt Skills -->
+<div class="slide appendix-slide" id="sA8">
+  <div class="slide-top"><span class="eyebrow eyebrow-app">Appendix A8</span><span class="slide-num">23 / 25</span></div>
+  <div class="slide-body">
+    <div class="slide-title" style="font-size:clamp(20px,2.8vw,36px);margin-bottom:8px;">Prompt Skills — <em>LLM via the KV Ring</em></div>
+    <div class="cols2">
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="card card-accent-green">
+          <div class="card-title">Template in the ring, model node-local</div>
+          <div class="card-body"><code>prompts/{ns}/{name}</code> — stored cluster-wide, TTL 1 week. Any node reads the template. The LLM endpoint and API key stay in the serving node only. <strong>Live update:</strong> swap the template while the skill is running.</div>
+        </div>
+        <div class="card card-accent-blue">
+          <div class="card-title">Backends</div>
+          <div class="card-body"><code>OpenAiBackend</code> — any OpenAI-compatible endpoint (OpenAI · Azure · Ollama · vLLM · LM Studio)<br><code>EchoBackend</code> — for tests and demos, no LLM required</div>
+        </div>
+        <div class="card card-accent-purple">
+          <div class="card-title">SkillRunner — no Rust required</div>
+          <div class="card-body">Define your skill in a <code>.skill.toml</code> manifest. Same capability gossip, same mesh, zero library code. SkillRunner nodes coexist transparently.</div>
+        </div>
+      </div>
+      <div>
+        <div class="code-block" style="font-size:11px;">
+<span class="cm">// Register — Rust</span>
+<span class="ck">let</span> _h = agent.<span class="cs">register_prompt_skill</span>(
+  <span class="cv">"llm"</span>, <span class="cv">"summarise"</span>, template,
+  Arc::new(OpenAiBackend::new(url, key, <span class="cv">"gpt-4o-mini"</span>))).await?;
+
+<span class="cm">// Call from any node</span>
+<span class="ck">let</span> reply = agent.<span class="cs">call_prompt_skill</span>(
+  <span class="cv">"llm"</span>, <span class="cv">"summarise"</span>, <span class="cv">"Long text…"</span>, {}, timeout).await?;
+        </div>
+        <div class="code-block" style="font-size:11px;margin-top:10px;">
+<span class="cm"># Python SDK</span>
+<span class="ck">from</span> mycelium.llm <span class="ck">import</span> PromptSkillClient
+client = PromptSkillClient(<span class="cv">"http://node:8300"</span>)
+reply = client.call(<span class="cv">"llm"</span>, <span class="cv">"summarise"</span>, <span class="cv">"Long text…"</span>)
+<span class="cm"># Live template swap — zero downtime</span>
+client.register(<span class="cv">"llm"</span>, <span class="cv">"summarise"</span>, new_template)
+        </div>
+        <div class="callout callout-green" style="margin-top:10px;font-size:12px;">
+          <strong>Demo (no API key):</strong> <code>cargo run --example prompt_skill_demo --features llm</code>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- A9 Semantic Coordination -->
+<div class="slide appendix-slide" id="sA9">
+  <div class="slide-top"><span class="eyebrow eyebrow-app">Appendix A9</span><span class="slide-num">24 / 25</span></div>
+  <div class="slide-body">
+    <div class="slide-title" style="font-size:clamp(20px,2.8vw,36px);margin-bottom:8px;">Semantic Coordination — <em>Contracts in the Mesh</em></div>
+    <div class="cols2">
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="card card-accent-blue">
+          <div class="card-title">Capability schema versioning</div>
+          <div class="card-body">Each capability carries an optional <code>schema_id</code> gossip-propagated with the entry. <code>CapFilter::with_schema("acme-ml/v2")</code> matches only that version — prevents silent mismatches between teams.</div>
+        </div>
+        <div class="card card-accent-green">
+          <div class="card-title">Payload schemas in the ring</div>
+          <div class="card-body"><code>with_input_schema</code> / <code>with_output_schema</code> embed JSON Schema strings in the gossip-propagated capability entry. Callers inspect the contract from <code>resolve()</code> results — no separate lookup.</div>
+        </div>
+        <div class="card card-accent-orange">
+          <div class="card-title">Sender authorization</div>
+          <div class="card-body"><code>signal_rx_from(kind, trusted)</code> delivers only signals from trusted senders — enforced at the fan-out layer. Closes the semantic-injection vector for LLM agents processing signal payloads as prompts.</div>
+        </div>
+      </div>
+      <div>
+        <div class="code-block" style="font-size:11px;">
+<span class="cm">// Advertise with schema + embedded contracts</span>
+<span class="ck">let</span> cap = Capability::new(<span class="cv">"llm"</span>, <span class="cv">"chat"</span>)
+  .with_schema_id(<span class="cv">"llm-chat/v1"</span>)
+  .with_input_schema(<span class="cv">r#"{"type":"object","required":["prompt"]}"#</span>)
+  .with_output_schema(<span class="cv">r#"{"type":"object","required":["reply"]}"#</span>);
+
+<span class="cm">// Resolve with schema filter</span>
+<span class="ck">let</span> providers = agent.<span class="cs">capabilities</span>().<span class="cs">resolve</span>(
+  &amp;CapFilter::new(<span class="cv">"llm"</span>, <span class="cv">"chat"</span>).with_schema(<span class="cv">"llm-chat/v1"</span>));
+
+<span class="cm">// Trusted-sender subscription</span>
+<span class="ck">let mut</span> rx = agent.<span class="cs">mesh</span>()
+  .<span class="cs">signal_rx_from</span>(<span class="cv">"task.assign"</span>, <span class="cs">vec!</span>[orchestrator_id]);
+
+<span class="cm">// Schema registry</span>
+agent.<span class="cs">schemas</span>().<span class="cs">publish_schema</span>(<span class="cv">"llm-chat/v1"</span>, json_bytes).await?;
+agent.<span class="cs">schemas</span>().<span class="cs">seed_schemas_from_dir</span>(<span class="cv">"./schemas"</span>).await?;
+        </div>
+        <div class="callout callout-blue" style="margin-top:10px;font-size:12px;">
+          <strong>Fully backward-compatible.</strong> All fields use <code>#[serde(default)]</code> — existing capabilities decode without change; old nodes ignore richer entries.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- A10 TupleSpace -->
+<div class="slide appendix-slide" id="sA10">
+  <div class="slide-top"><span class="eyebrow eyebrow-app">Appendix A10</span><span class="slide-num">25 / 25</span></div>
+  <div class="slide-body">
+    <div class="slide-title" style="font-size:clamp(20px,2.8vw,36px);margin-bottom:8px;">TupleSpace — <em>Pull, Without the Coordinator</em></div>
+    <div class="slide-sub" style="margin-bottom:10px;">A companion crate (<code>mycelium-tuple-space</code>) built entirely on the public API — the constructive proof that the most coordinator-shaped workload, work distribution, needs no decision-maker.</div>
+    <div class="cols2">
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="card card-accent-purple">
+          <div class="card-title">Pull, not push</div>
+          <div class="card-body">Producers <code>put</code> items into named stages; workers block on <code>take</code> and receive work exactly when ready. Readiness is announced by the claim itself — there is no model of anyone's load to go stale, so the misrouting that staleness causes in push systems has no variable to inhabit.</div>
+        </div>
+        <div class="card card-accent-green">
+          <div class="card-title">The ring IS the failure detector</div>
+          <div class="card-body">The serving node is discovered by capability advertisement; its failure is detected by the same TTL evaporation that fades any pheromone; a mirroring standby promotes itself through the same emergent election as every other role. Kill the primary mid-flight and survivors are served — acknowledged items never resurrect.</div>
+        </div>
+        <div class="card card-accent-blue">
+          <div class="card-title">Durable by construction</div>
+          <div class="card-body">Single-lock hot path; a write-ahead log whose <code>Complete</code> record is one indivisible entry, so a stage transition can never half-replay. Compaction bumps a WAL epoch so a secondary's byte-offset replay cursor can never silently dangle.</div>
+        </div>
+      </div>
+      <div>
+        <div class="code-block" style="font-size:11px;">
+<span class="cm">// Producer — no knowledge of any worker</span>
+<span class="ck">let</span> id = space.<span class="cs">put</span>(<span class="cv">"stage.fetch"</span>, payload).await?;
+
+<span class="cm">// Worker — blocks until work is ready, then claims it</span>
+<span class="ck">let</span> (id, item) = space.<span class="cs">take</span>(<span class="cv">"stage.fetch"</span>).await?;
+<span class="cm">// ...do the work...</span>
+space.<span class="cs">complete</span>(id, <span class="cv">"stage.parse"</span>, next).await?; <span class="cm">// atomic ack + advance</span>
+        </div>
+        <div class="callout callout-purple" style="margin-top:10px;font-size:12px;">
+          <strong>Why it matters.</strong> Gelernter's tuple space (Linda, 1985) was always the right pull primitive; the classical objection — the shared space is itself a coordinator needing consistency machinery — dissolves when the space is built <em>on</em> a coordinator-free substrate. 1,000 items · 10 producers · 10 workers · exactly-once · zero shared load view.
+        </div>
+        <div class="callout callout-blue" style="margin-top:10px;font-size:12px;">
+          <strong>Composability proof.</strong> The crate's only dependency on the core is the public API — pull <em>composes from the existing primitives</em>. Nothing was added to the substrate to make it possible.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /deck -->
+
+<div class="nav-bar">
+  <button class="nav-btn" id="btn-prev" disabled>←</button>
+  <div class="slide-counter" id="counter">1 / 25</div>
+  <button class="nav-btn" id="btn-next">→</button>
+</div>
+<div class="progress-bar">
+  <div class="progress-fill" id="progress-fill" style="width:4%"></div>
+</div>
+
+<script>
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let cur = 0;
+
+  function go(n) {
+    if (n < 0 || n >= total) return;
+    slides[cur].classList.remove('active');
+    slides[cur].classList.add('was-prev');
+    setTimeout(() => { slides.forEach(s => { if (s !== slides[n]) s.classList.remove('was-prev'); }); }, 420);
+    cur = n;
+    slides[cur].classList.add('active');
+    slides[cur].classList.remove('was-prev');
+    document.getElementById('counter').textContent = `${cur + 1} / ${total}`;
+    document.getElementById('progress-fill').style.width = `${((cur + 1) / total) * 100}%`;
+    document.getElementById('btn-prev').disabled = cur === 0;
+    document.getElementById('btn-next').disabled = cur === total - 1;
+  }
+
+  document.getElementById('btn-prev').addEventListener('click', () => go(cur - 1));
+  document.getElementById('btn-next').addEventListener('click', () => go(cur + 1));
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); go(cur + 1); }
+    if (e.key === 'ArrowLeft'  || e.key === 'PageUp')  { e.preventDefault(); go(cur - 1); }
+    if (e.key === 'Home') go(0);
+    if (e.key === 'End')  go(total - 1);
+  });
+  let tx = 0;
+  document.addEventListener('touchstart', e => { tx = e.touches[0].clientX; });
+  document.addEventListener('touchend',   e => {
+    const dx = e.changedTouches[0].clientX - tx;
+    if (Math.abs(dx) > 50) go(dx < 0 ? cur + 1 : cur - 1);
+  });
+</script>
+</body>
+</html>

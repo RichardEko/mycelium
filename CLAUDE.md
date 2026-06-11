@@ -463,8 +463,12 @@ get found.
   v10 adds `WireMessage::SignedData` for Ed25519-signed KV writes under the `tls` feature.
 - **Agentic Flow Networks demo**: `examples/fluid_pipeline/` — 10-worker fluid pool,
   KV ring as distributed buffer, 4-stage news article pipeline. Run with
-  `docker compose up --build --scale worker=10`. See `docs/flow_networks.html` for the
-  concept document and `docs/fluid_pipeline_viz.html` for the visualisation.
+  `docker compose up --build --scale worker=10`. See
+  [`examples/fluid_pipeline/README.md`](examples/fluid_pipeline/README.md) for the
+  concept document, [`flow_networks.html`](examples/fluid_pipeline/flow_networks.html)
+  for the AFN concept essay (incl. the push→pull TupleSpace refinement), and
+  [`fluid_pipeline_viz.html`](examples/fluid_pipeline/fluid_pipeline_viz.html) for the
+  visualisation.
 - **A2A LangChain/AutoGen demo**: `examples/a2a_langchain/` — LangChain ReAct agent and
   AutoGen v0.4 agent that auto-discover Mycelium skills via `/.well-known/agent.json` and
   use them as native tools. Requires `cargo build --bin skillrunner --features a2a` then

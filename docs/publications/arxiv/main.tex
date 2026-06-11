@@ -239,6 +239,29 @@ consistent, and available to all participants. Fault-tolerant variants required
 replication schemes and consistency protocols. The medium is the coordinator. The
 coordinator trap persists in a subtler form.
 
+The distinction that matters---and that Section~7 will realise---is precise: in
+Linda, the admission decision is a retrieval pattern issued against the shared
+medium, which must remain consistently accessible to all participants. An
+alternative is for each node to hold its own boundary as a local declaration
+evaluated against live distributed state: the medium is never queried, the node
+self-filters, and there is no shared state to keep consistent.
+
+Two distinct things are entangled in the classical tuple-space critique, and
+separating them recovers what Linda got right. The space is a
+\emph{decision-maker} in no sense at all---it allocates nothing and predicts
+nothing; workers claim work when ready, which is the one coordination act that
+requires no knowledge of any other participant's state. The space is, however, a
+\emph{rendezvous point on the data path}---a capacity and availability concern,
+like any shared medium. The coordinator trap is a claim about the first role, not
+the second; FT-Linda and JavaSpaces struggled because they answered the second
+concern with designed-in consistency machinery. Mycelium's
+\texttt{mycelium-tuple-space} companion (Section~8) shows the availability
+concern dissolves when the space is built \emph{on} a coordinator-free
+substrate: the serving node is discovered by capability advertisement, its
+failure is detected by evaporation, and a mirror promotes itself through the same
+emergent mechanism as every other role in the system. The pull pattern survives;
+only the coordinator-shaped infrastructure around it was wrong.
+
 Carvalho~\cite{carvalho} observes that modern AI agent frameworks are
 independently rediscovering Linda's tuple space pattern---implementing ad-hoc
 shared stores with task claiming, polling, and matching---without awareness of
@@ -649,17 +672,41 @@ correctly on a substrate that eliminates the coordinator.
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Evaluation}
 
-Mycelium's correctness across its three-layer architecture is validated by 263
-unit tests and 12 integration scenarios run against a live 5-node Docker cluster.
+Mycelium's correctness across its three-layer architecture is validated by 304
+unit tests and 13 integration scenarios run against a live 5-node Docker cluster.
 Scenarios cover KV replication under partition and reconnection, signal delivery
 and boundary admission, capability group formation and dissolution, consensus
 quorum under node failure, cross-group voting, the full Agentic Flow Networks
-pipeline, and Prompt Skills cross-node KV propagation with LLM invocation. All
-12 scenarios pass at HEAD.
+pipeline, Prompt Skills cross-node KV propagation with LLM invocation, and the
+tuple-space pull pipeline described below. All 13 scenarios pass at HEAD.
+
+\textbf{The tuple-space companion as constructive evidence.} The claim of
+Section~4.5---that the exit from the coordinator trap is elimination, not
+improvement---admits a constructive test: rebuild the most coordinator-shaped
+workload, work distribution, with no component that predicts any agent's state.
+The \texttt{mycelium-tuple-space} companion crate does this using only the
+substrate's public API (the dependency relation itself demonstrating that pull
+composes from the existing primitives). Producers \texttt{put} items into named
+stages; workers block on \texttt{take} and receive work exactly when ready---
+readiness is announced by the claim itself, so the staleness that drives
+misrouting in push systems has no variable to inhabit. Three test results carry
+the weight: (i)~1{,}000 items across ten concurrent producers and ten concurrent
+workers are delivered exactly once, with no participant ever holding a view of
+another's load; (ii)~when the serving node is killed with unacknowledged items
+live, a mirroring standby detects the capability evaporation, promotes itself
+through the same emergent election as any other role, and serves the surviving
+items under their original identifiers---acknowledged items do not resurrect;
+(iii)~a full cross-node integration scenario drives the
+put/take/complete/ack lifecycle through the HTTP gateway, including in-flight
+accounting and the blocking-take timeout contract. The historical objection to
+tuple spaces---the shared medium as a designed-in coordinator requiring its own
+consistency machinery (Section~3.3)---is answered by construction: the rendezvous
+point's availability is maintained by substrate evaporation and emergent
+promotion, and its decision authority is zero because it makes no decisions.
 
 The implementation is publicly available at
 \url{https://github.com/RichardEko/mycelium} (commit
-\texttt{de1afe6}, tag \texttt{paper-v1.1}) under the AGPL-3.0 licence.
+\texttt{1717d4e}, tag \texttt{paper-submission-v1}) under the AGPL-3.0 licence.
 The integration test harness is included in the repository and reproducible with a
 single \texttt{make test} invocation against a Docker-composed 5-node cluster.
 The AGPL-3.0 licence is intentional: applications that deploy Mycelium as part of a

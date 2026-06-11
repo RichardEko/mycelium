@@ -162,9 +162,9 @@ By contributing you agree that your contribution is licensed under AGPL-3.0 (for
 open-source use) and under the commercial license (for proprietary use), as described in
 the CLA. The project's `LICENSE` file contains the full AGPL-3.0 text.
 
-If you have questions about the licensing model, see [`GO_TO_MARKET.md`](GO_TO_MARKET.md)
-— note this file is not tracked in the public repository; contact the maintainers
-directly.
+If you have questions about the licensing model, contact the maintainers directly —
+the detailed commercial / go-to-market strategy is kept in a private internal
+document, not in the public repository.
 
 ## Code of Conduct
 

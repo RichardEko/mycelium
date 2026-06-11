@@ -219,4 +219,4 @@ real pipeline output including per-step traces and final articles.
 - **MCP tool discovery** — [`examples/chat/`](../chat/): the simpler
   alternative where tools are functions, not LLM agents
 - **Full guide** — [`docs/guide/05-skills.md`](../../docs/guide/05-skills.md)
-- **Skill manifest reference** — [`docs/skillrunner.html`](../../docs/skillrunner.html)
+- **Skill manifest reference** — [`docs/reference/skillrunner.html`](../../docs/reference/skillrunner.html)

@@ -458,7 +458,11 @@ cargo run --example invoke_skill<div class="lang-tag">sh</div></pre>
   </div>
 
   <p>Declares what this skill advertises on the mesh. Other nodes discover it via
-  <code>resolve(CapFilter::new(ns, name))</code>.</p>
+  <code>resolve(CapFilter::new(ns, name))</code>. The <code>input</code>/<code>output</code>
+  schemas are gossiped soft-state: SkillRunner re-asserts them on a timer (≈ttl/4)
+  alongside the capability itself, so a late-joining peer — or an A2A client
+  fetching the agent card — always sees them, even if it connected after the
+  one-shot startup write.</p>
 
   <div class="tbl-wrap">
     <table>
@@ -664,7 +668,51 @@ pip install -e <span class="str">".[dev]"</span><div class="lang-tag">sh</div></
 console.<span class="fn">log</span>(JSON.<span class="fn">parse</span>(result.<span class="fn">toString</span>()).reply);</pre>
 
   <pre>cd mycelium-ts &amp;&amp; npm install<div class="lang-tag">sh</div></pre>
-  <p>See <a href="../mycelium-ts/README.md"><code>mycelium-ts/README.md</code></a> for the full API reference.</p>
+  <p>See <a href="../../mycelium-ts/README.md"><code>mycelium-ts/README.md</code></a> for the full API reference.</p>
+</section>
+
+<!-- ── A2A auto-discovery ────────────────────────────────────────────── -->
+<section class="section" id="a2a">
+  <div class="section-head">
+    <span class="section-icon">🔌</span>
+    <h2>A2A auto-discovery</h2>
+    <span class="sec-tag tag-guide">Guide</span>
+  </div>
+
+  <p>Build SkillRunner with <code>--features a2a</code> and any node with an
+  <code>http_port</code> set automatically exposes the Agent-to-Agent protocol:
+  external frameworks (LangChain, AutoGen, anything that speaks A2A) discover
+  every skill on the mesh and invoke them as native tools, with no hardcoded
+  knowledge of what skills exist or where they run.</p>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Endpoint</th><th>Method</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>/.well-known/agent.json</code></td><td>GET</td><td>Agent card — one entry per live skill, built from the <code>cap/</code> KV prefix so it reflects the mesh in real time</td></tr>
+        <tr><td><code>/a2a</code></td><td>POST</td><td>JSON-RPC 2.0 — <code>tasks/send</code> resolves a skill, RPC-calls <code>skill.invoke</code>, returns the completed task</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>Each card entry carries the skill's <code>[capability.input]</code> schema in
+  two forms: a human/LLM-readable <code>description</code> ("Input MUST be a JSON
+  object with: …") and the raw JSON Schema as an <code>inputSchema</code> field.
+  Tool-calling frameworks build properly-typed tools from <code>inputSchema</code>
+  rather than guessing the payload shape — this is what lets a small local model
+  call a multi-field skill correctly.</p>
+
+  <div class="callout callout-tip">
+    <div class="callout-icon">💡</div>
+    <div class="callout-body">
+      <p><strong>It is live discovery.</strong> Add or remove a SkillRunner node
+      and the next <code>/.well-known/agent.json</code> call reflects the change —
+      no restart of the calling agent. The <code>tasks/send</code> RPC uses a
+      120&nbsp;s server-side timeout because A2A skills are frequently multi-step
+      LLM pipelines (an orchestrator calling a researcher calling a writer).
+      Runnable end-to-end example: <a href="../../examples/a2a_langchain/README.md"><code>examples/a2a_langchain/</code></a>.</p>
+    </div>
+  </div>
 </section>
 
 <!-- ── Skill composition ─────────────────────────────────────────────── -->

@@ -534,6 +534,7 @@
     <a href="#layering"     class="nav-pill">Layering Principle</a>
     <a href="#prior-art"    class="nav-pill">Prior Art</a>
     <a href="#ceremony"     class="nav-pill">Strip the Ceremony</a>
+    <a href="#pull"         class="nav-pill">The Pull Pattern</a>
     <a href="#litmus"       class="nav-pill">Litmus Tests</a>
     <a href="#levels"       class="nav-pill">Emergent Levels</a>
     <a href="#not"          class="nav-pill">What This Is Not</a>
@@ -811,6 +812,73 @@
         without an explicit protocol; (3) implement the property and let the behaviour emerge.
         When a proposed feature requires a manager, a coordinator, an explicit lifecycle
         protocol, or a renewal RPC, apply this heuristic before accepting it.
+      </p>
+    </div>
+  </div>
+
+  <!-- ── The Pull Pattern: Linda without the coordinator ─────────────── -->
+  <div class="section" id="pull">
+    <div class="section-head">
+      <h2>The Pull Pattern: Linda Without the Coordinator</h2>
+      <span class="section-tag tag-prior">Linda · pull vs push</span>
+    </div>
+
+    <p>
+      The sharpest application of the strip-the-ceremony heuristic is to the oldest
+      coordination medium of all — Gelernter's tuple space (Linda, 1985). The classical
+      critique is that the tuple space is itself a coordinator: a shared medium that must
+      stay accessible, consistent, and available to every participant, so fault-tolerant
+      variants (FT-Linda, JavaSpaces) had to bolt on replication and consistency
+      protocols. That critique is half right, and separating the two halves is what
+      recovers what Linda got right.
+    </p>
+
+    <p>
+      Two roles are entangled in the tuple space, and only one of them is the coordinator:
+    </p>
+
+    <div class="map-wrap" style="margin:24px 0;">
+      <table class="map-table">
+        <thead>
+          <tr><th>Role of the tuple space</th><th>Is it the coordinator trap?</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>Decision-maker</strong> — allocating work, predicting who should do what</td><td>It plays this role in <em>no sense at all</em>. Workers <code>take</code> when ready; claiming work is the one coordination act that needs no knowledge of any other participant's state. There is nothing to predict, so nothing to be stale.</td></tr>
+          <tr><td><strong>Rendezvous point</strong> — a meeting place on the data path</td><td>A capacity-and-availability concern, like any shared medium. Real, but ordinary — and <em>not</em> what the coordinator trap is about. FT-Linda and JavaSpaces struggled because they answered this second concern with designed-in consistency machinery: the ceremony.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      This is the push/pull distinction stated precisely. A <em>push</em> distributor must
+      hold a model of every worker's state to route work — the model goes stale, and
+      staleness is what drives misrouting and the audit burden. A <em>pull</em> rendezvous
+      holds no such model: readiness is self-announced by the claim itself, so the variable
+      that staleness would corrupt does not exist. The coordinator trap lives entirely in
+      the first role. Strip it away and a rendezvous point remains — and a rendezvous
+      point's availability is the kind of problem a coordinator-free substrate already
+      solves.
+    </p>
+
+    <div class="callout callout-green">
+      <p>
+        <strong>Constructive proof, not argument.</strong> The
+        <code>mycelium-tuple-space</code> companion crate rebuilds the most
+        coordinator-shaped workload there is — work distribution — using
+        <em>only</em> the substrate's public API, with no component that predicts any
+        agent's state. The serving node is discovered by capability advertisement; its
+        failure is detected by the same TTL evaporation that fades any pheromone; and a
+        mirror promotes itself through the same emergent election as every other role in
+        the system. Three results carry the weight: (i) 1,000 items across ten producers
+        and ten workers delivered exactly once, no participant ever holding a view of
+        another's load; (ii) kill the serving node with unacknowledged work live and a
+        standby promotes itself and serves the survivors under their original identifiers —
+        acknowledged items do not resurrect; (iii) the full put/take/complete/ack
+        lifecycle drives across nodes through the HTTP gateway. The historical objection to
+        tuple spaces is answered by construction: the rendezvous point's availability comes
+        from substrate evaporation and emergent promotion, and its decision authority is
+        zero because it makes no decisions. The pull pattern survives; only the
+        coordinator-shaped infrastructure around it was ever wrong.
       </p>
     </div>
   </div>

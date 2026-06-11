@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agentic Flow Networks — The Fluid Pipeline</title>
+<style>
+  :root {
+    --bg:      #0d1117;
+    --surface: #161b22;
+    --surface2:#1c2128;
+    --surface3:#21262d;
+    --border:  #30363d;
+    --accent:  #58a6ff;
+    --accent2: #3fb950;
+    --accent3: #d2a8ff;
+    --accent4: #ffa657;
+    --accent5: #ff7b72;
+    --accent6: #39d353;
+    --muted:   #8b949e;
+    --text:    #e6edf3;
+    --text2:   #c9d1d9;
+    --radius:  8px;
+    --radius-lg: 14px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif;
+    font-size: 15px; line-height: 1.7; padding-bottom: 100px;
+  }
+
+  .hero {
+    background:
+      radial-gradient(ellipse at 60% 0%,  rgba(63,185,80,0.10)  0%, transparent 55%),
+      radial-gradient(ellipse at 20% 90%, rgba(88,166,255,0.07)  0%, transparent 50%),
+      var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 64px 40px 52px; text-align: center;
+  }
+  .eyebrow {
+    display: inline-block; font-size: 11px; font-weight: 600;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent2); background: rgba(63,185,80,0.08);
+    border: 1px solid rgba(63,185,80,0.2); border-radius: 20px;
+    padding: 5px 16px; margin-bottom: 22px;
+  }
+  .hero h1 {
+    font-size: clamp(28px, 5vw, 52px); font-weight: 900;
+    letter-spacing: -0.03em; line-height: 1.05; margin-bottom: 14px;
+    background: linear-gradient(135deg, #e6edf3 0%, #8b949e 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+  }
+  .hero h1 em {
+    font-style: normal;
+    background: linear-gradient(135deg, #3fb950 0%, #58a6ff 60%, #d2a8ff 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+  }
+  .hero-sub { font-size: 16px; color: var(--muted); max-width: 600px; margin: 0 auto 28px; }
+  .badges { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .badge { font-size: 12px; color: var(--text2); background: var(--surface);
+    border: 1px solid var(--border); border-radius: 20px; padding: 4px 14px; }
+
+  .container { max-width: 1100px; margin: 0 auto; padding: 0 36px; }
+  .section { margin-top: 72px; }
+  .section-head {
+    display: flex; align-items: center; gap: 14px;
+    padding-bottom: 16px; border-bottom: 1px solid var(--border); margin-bottom: 32px;
+  }
+  .section-head h2 { font-size: 22px; font-weight: 700; }
+  .stag { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 4px 12px; border-radius: 20px; }
+  .stag-g { background:rgba(63,185,80,0.10); color:var(--accent2); border:1px solid rgba(63,185,80,0.25); }
+  .stag-b { background:rgba(88,166,255,0.10); color:var(--accent); border:1px solid rgba(88,166,255,0.25); }
+  .stag-p { background:rgba(210,168,255,0.10);color:var(--accent3); border:1px solid rgba(210,168,255,0.25); }
+  .stag-o { background:rgba(255,166,87,0.10); color:var(--accent4); border:1px solid rgba(255,166,87,0.25); }
+  .stag-r { background:rgba(255,123,114,0.10);color:var(--accent5); border:1px solid rgba(255,123,114,0.25); }
+
+  p { color: var(--text2); margin-bottom: 14px; font-size: 14px; line-height: 1.75; }
+  strong { color: var(--text); }
+  h3 { font-size: 16px; font-weight: 700; color: var(--text); margin: 28px 0 12px; }
+
+  .callout { border-radius: var(--radius); padding: 14px 18px; margin: 16px 0;
+    border-left: 3px solid; font-size: 13.5px; color: var(--text2); line-height: 1.65; }
+  .cg { background:rgba(63,185,80,0.06);   border-color:var(--accent2); }
+  .cb { background:rgba(88,166,255,0.06);  border-color:var(--accent); }
+  .cp { background:rgba(210,168,255,0.06); border-color:var(--accent3); }
+  .co { background:rgba(255,166,87,0.06);  border-color:var(--accent4); }
+  .callout p:last-child { margin: 0; }
+
+  /* ─── Flow diagram ─────────────────────────────────────────── */
+  .flow-wrap {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 28px 24px; overflow-x: auto;
+  }
+  .fd-header {
+    display: grid; grid-template-columns: 80px repeat(20, 1fr);
+    gap: 2px; margin-bottom: 6px; align-items: center;
+  }
+  .fd-row {
+    display: grid; grid-template-columns: 80px repeat(20, 1fr);
+    gap: 2px; margin-bottom: 3px; align-items: center;
+  }
+  .fd-label { font-size: 10px; font-weight: 700; color: var(--muted); text-align: right;
+    padding-right: 10px; font-family: "SF Mono","Fira Mono",monospace; }
+  .fd-tick  { font-size: 9px; color: var(--muted); text-align: center;
+    font-family: "SF Mono","Fira Mono",monospace; }
+  .fd-cell  { height: 26px; border-radius: 3px; display: flex; align-items: center;
+    justify-content: center; font-size: 8px; font-weight: 800; text-transform: uppercase;
+    letter-spacing: 0.05em; border: 1px solid transparent; }
+  .fd-idle  { background: var(--surface2); border-color: var(--border); }
+  .fd-a     { background: rgba(63,185,80,0.2);  border-color: rgba(63,185,80,0.5);  color: var(--accent2); }
+  .fd-b     { background: rgba(88,166,255,0.18);border-color: rgba(88,166,255,0.5); color: var(--accent); }
+  .fd-c     { background: rgba(210,168,255,0.18);border-color:rgba(210,168,255,0.5);color: var(--accent3); }
+  .fd-d     { background: rgba(255,166,87,0.15);border-color: rgba(255,166,87,0.5); color: var(--accent4); }
+  .fd-legend { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 16px;
+    padding-top: 14px; border-top: 1px solid var(--border); }
+  .fd-leg   { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--muted); }
+  .fd-sw    { width: 14px; height: 14px; border-radius: 3px; border: 1px solid; flex-shrink: 0; }
+
+  /* ─── Buffer depth ─────────────────────────────────────────── */
+  .snapshots { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin: 20px 0; }
+  .snap-card { background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 20px; }
+  .snap-time { font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.1em; color: var(--muted); margin-bottom: 16px; }
+  .buf-row { margin-bottom: 12px; }
+  .buf-name { font-size: 11px; font-weight: 700; margin-bottom: 4px; display: flex;
+    justify-content: space-between; }
+  .buf-track { height: 7px; background: var(--surface2); border-radius: 4px;
+    overflow: hidden; border: 1px solid var(--border); }
+  .buf-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
+  .ba { background: linear-gradient(90deg, var(--accent2), rgba(63,185,80,0.4)); color: var(--accent2); }
+  .bb { background: linear-gradient(90deg, var(--accent),  rgba(88,166,255,0.4)); color: var(--accent); }
+  .bc { background: linear-gradient(90deg, var(--accent3), rgba(210,168,255,0.4)); color: var(--accent3); }
+  .bd { background: linear-gradient(90deg, var(--accent4), rgba(255,166,87,0.4));  color: var(--accent4); }
+
+  /* ─── KV architecture ──────────────────────────────────────── */
+  .arch-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin: 20px 0; }
+  .arch-panel { background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 24px; }
+  .arch-title { font-size: 12px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.1em; margin-bottom: 16px; padding-bottom: 10px;
+    border-bottom: 1px solid var(--border); }
+  .arch-old .arch-title { color: var(--accent5); }
+  .arch-new .arch-title { color: var(--accent2); }
+  .arch-row { display: flex; align-items: center; gap: 10px; margin: 8px 0;
+    font-family: "SF Mono","Fira Mono",monospace; font-size: 12px; }
+  .arch-node { padding: 8px 12px; border-radius: var(--radius); border: 1px solid;
+    font-weight: 700; font-size: 11px; min-width: 90px; text-align: center; flex-shrink: 0; }
+  .an-worker { background: rgba(88,166,255,0.12); border-color: rgba(88,166,255,0.4); color: var(--accent); }
+  .an-queue  { background: rgba(255,123,114,0.12); border-color: rgba(255,123,114,0.4); color: var(--accent5); }
+  .an-kv     { background: rgba(63,185,80,0.12);  border-color: rgba(63,185,80,0.4);  color: var(--accent2); }
+  .arch-arrow { color: var(--muted); font-size: 16px; }
+  .arch-label { font-size: 10px; color: var(--muted); }
+
+  /* ─── Backpressure diagram ─────────────────────────────────── */
+  .bp-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin: 20px 0; }
+  .bp-worker { background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 12px 8px; text-align: center; }
+  .bp-name { font-size: 10px; font-weight: 700; color: var(--text); margin-bottom: 8px; }
+  .bp-stage { font-size: 9px; padding: 2px 6px; border-radius: 3px; margin: 2px 0;
+    font-family: "SF Mono","Fira Mono",monospace; }
+  .bp-busy  { background: rgba(255,123,114,0.15); border: 1px solid rgba(255,123,114,0.4);
+    color: var(--accent5); }
+  .bp-free  { background: rgba(63,185,80,0.10);   border: 1px solid rgba(63,185,80,0.3);
+    color: var(--accent2); }
+  .bp-opacity { background: rgba(255,166,87,0.12); border: 1px solid rgba(255,166,87,0.35);
+    color: var(--accent4); font-size: 8px; margin-top: 5px; padding: 2px 4px;
+    border-radius: 3px; }
+
+  /* ─── Code comparison ──────────────────────────────────────── */
+  .code-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 20px 0; }
+  .code-wrap { background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); overflow: hidden; }
+  .code-header { background: var(--surface2); border-bottom: 1px solid var(--border);
+    padding: 10px 16px; display: flex; align-items: center; gap: 10px;
+    font-size: 11px; color: var(--muted); font-family: "SF Mono","Fira Mono",monospace; }
+  .code-lang-old { font-size: 10px; font-weight: 700; text-transform: uppercase;
+    color: var(--accent5); background: rgba(255,123,114,0.1); border: 1px solid rgba(255,123,114,0.2);
+    border-radius: 4px; padding: 2px 8px; }
+  .code-lang-new { font-size: 10px; font-weight: 700; text-transform: uppercase;
+    color: var(--accent2); background: rgba(63,185,80,0.1); border: 1px solid rgba(63,185,80,0.2);
+    border-radius: 4px; padding: 2px 8px; }
+  pre { padding: 16px 18px; font-family: "SF Mono","Fira Mono",monospace; font-size: 11.5px;
+    line-height: 1.75; color: var(--text2); overflow-x: auto; }
+  .cm{color:var(--muted)} .ck{color:var(--accent)} .cv{color:var(--accent2)}
+  .cs{color:var(--accent3)} .cn{color:var(--accent4)} .cf{color:var(--accent4);font-weight:600}
+  .cd{color:#79c0ff} .bad{color:var(--accent5)}
+
+  /* ─── Stat pills ───────────────────────────────────────────── */
+  .stat-row { display: flex; gap: 12px; flex-wrap: wrap; margin: 20px 0; }
+  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 14px 18px; flex: 1; min-width: 140px; }
+  .stat-num { font-size: 28px; font-weight: 900; line-height: 1.1; }
+  .stat-label { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .s-g .stat-num { color: var(--accent2); }
+  .s-r .stat-num { color: var(--accent5); }
+
+  .footer { text-align: center; padding: 60px 32px 0; font-size: 13px;
+    color: var(--muted); border-top: 1px solid var(--border); margin-top: 80px; }
+</style>
+</head>
+<body>
+
+<!-- ─── Hero ──────────────────────────────────────────────────────────── -->
+<div class="hero">
+  <div class="eyebrow">Agentic Flow Networks — Visualisation</div>
+  <h1>The Fluid Pipeline<br><em>When the Cluster Is the Queue</em></h1>
+  <p class="hero-sub">
+    10 workers. 200 articles. 4 stages. No brokers. No schedulers. No static assignment.
+    The KV ring is the buffer. The capability ring is the scheduler.
+  </p>
+  <div class="badges">
+    <span class="badge">10 fluid workers</span>
+    <span class="badge">KV ring as distributed buffer</span>
+    <span class="badge">Zero extra infrastructure</span>
+    <span class="badge">Opacity = automatic backpressure</span>
+  </div>
+</div>
+
+<div class="container">
+
+<!-- ─── Section 1: The Wave ───────────────────────────────────────────── -->
+<div class="section">
+  <div class="section-head">
+    <span class="stag stag-g">§1</span>
+    <h2>The Wave — 10 Workers × 20 Time Slots</h2>
+  </div>
+
+  <p>
+    Each row is one worker. Each column is a time slot. Workers have <strong>no fixed stage
+    assignment</strong> — they follow the work. As Stage A drains its 200 items, workers
+    shift to Stage B without any reconfiguration. The wave is emergent.
+  </p>
+
+  <div class="flow-wrap">
+    <div class="fd-header">
+      <div></div>
+      <div class="fd-tick">t1</div><div class="fd-tick">t2</div><div class="fd-tick">t3</div>
+      <div class="fd-tick">t4</div><div class="fd-tick">t5</div><div class="fd-tick">t6</div>
+      <div class="fd-tick">t7</div><div class="fd-tick">t8</div><div class="fd-tick">t9</div>
+      <div class="fd-tick">t10</div><div class="fd-tick">t11</div><div class="fd-tick">t12</div>
+      <div class="fd-tick">t13</div><div class="fd-tick">t14</div><div class="fd-tick">t15</div>
+      <div class="fd-tick">t16</div><div class="fd-tick">t17</div><div class="fd-tick">t18</div>
+      <div class="fd-tick">t19</div><div class="fd-tick">t20</div>
+    </div>
+    <!-- Worker 1: 5A → 4B → 6C → 5D -->
+    <div class="fd-row">
+      <div class="fd-label">Worker 1</div>
+      <div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div>
+      <div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div>
+      <div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div>
+      <div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div>
+    </div>
+    <!-- Worker 2: 6A → 4B → 5C → 5D -->
+    <div class="fd-row">
+      <div class="fd-label">Worker 2</div>
+      <div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div>
+      <div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div>
+      <div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div>
+      <div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div>
+    </div>
+    <!-- Worker 3: 4A → 5B → 7C → 4D -->
+    <div class="fd-row">
+      <div class="fd-label">Worker 3</div>
+      <div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div>
+      <div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div>
+      <div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div>
+      <div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div>
+    </div>
+    <!-- Worker 4: 5A → 5B → 5C → 5D -->
+    <div class="fd-row">
+      <div class="fd-label">Worker 4</div>
+      <div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div>
+      <div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div>
+      <div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div>
+      <div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div>
+    </div>
+    <!-- Worker 5: 6A → 3B → 7C → 4D -->
+    <div class="fd-row">
+      <div class="fd-label">Worker 5</div>
+      <div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div>
+      <div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div>
+      <div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div>
+      <div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div>
+    </div>
+    <!-- Worker 6: 4A → 6B → 5C → 5D -->
+    <div class="fd-row">
+      <div class="fd-label">Worker 6</div>
+      <div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div>
+      <div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div>
+      <div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div>
+      <div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div>
+    </div>
+    <!-- Worker 7: 5A → 4B → 6C → 5D -->
+    <div class="fd-row">
+      <div class="fd-label">Worker 7</div>
+      <div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div>
+      <div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div>
+      <div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div>
+      <div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div>
+    </div>
+    <!-- Worker 8: 6A → 4B → 5C → 5D -->
+    <div class="fd-row">
+      <div class="fd-label">Worker 8</div>
+      <div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div>
+      <div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div>
+      <div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div>
+      <div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div>
+    </div>
+    <!-- Worker 9: 4A → 5B → 7C → 4D -->
+    <div class="fd-row">
+      <div class="fd-label">Worker 9</div>
+      <div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div>
+      <div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div>
+      <div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div>
+      <div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div>
+    </div>
+    <!-- Worker 10: 5A → 5B → 5C → 5D -->
+    <div class="fd-row">
+      <div class="fd-label">Worker 10</div>
+      <div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div><div class="fd-cell fd-a">A</div>
+      <div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div><div class="fd-cell fd-b">B</div>
+      <div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div><div class="fd-cell fd-c">C</div>
+      <div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div><div class="fd-cell fd-d">D</div>
+    </div>
+    <div class="fd-legend">
+      <div class="fd-leg"><div class="fd-sw" style="background:rgba(63,185,80,0.2);border-color:rgba(63,185,80,0.5)"></div>Stage A — Parse</div>
+      <div class="fd-leg"><div class="fd-sw" style="background:rgba(88,166,255,0.18);border-color:rgba(88,166,255,0.5)"></div>Stage B — Enrich</div>
+      <div class="fd-leg"><div class="fd-sw" style="background:rgba(210,168,255,0.18);border-color:rgba(210,168,255,0.5)"></div>Stage C — Score (slow)</div>
+      <div class="fd-leg"><div class="fd-sw" style="background:rgba(255,166,87,0.15);border-color:rgba(255,166,87,0.5)"></div>Stage D — Aggregate</div>
+      <div class="fd-leg" style="margin-left:auto;font-size:11px;font-style:italic;">No idle gaps. No static assignments. No reconfiguration between stages.</div>
+    </div>
+  </div>
+
+  <div class="callout cg" style="margin-top:20px;">
+    <strong>Reading the diagram:</strong> Every worker starts with Stage A (Parse). As items
+    drain from the A→B buffer, workers automatically shift to B (Enrich). Stage C (Score)
+    is the slowest — all workers spend the most time there. No scheduler decided this.
+    The wave is an emergent consequence of where work is available.
+  </div>
+</div>
+
+<!-- ─── Section 2: Buffer Depth ───────────────────────────────────────── -->
+<div class="section">
+  <div class="section-head">
+    <span class="stag stag-b">§2</span>
+    <h2>Buffer Depth — KV Prefix Fill Over Time</h2>
+  </div>
+
+  <p>
+    The KV ring holds four live buffers simultaneously — one per stage transition.
+    As workers process items, the counts shift. Stage C is the bottleneck
+    (simulates LLM latency), so the B→C buffer fills while C→D drains slowly.
+  </p>
+
+  <div class="snapshots">
+    <!-- t=5% — all in stage-a -->
+    <div class="snap-card">
+      <div class="snap-time">Snapshot t ≈ 5% — Parse starting</div>
+      <div class="buf-row">
+        <div class="buf-name ba"><span>A→B buffer</span><span>10 items</span></div>
+        <div class="buf-track"><div class="buf-fill ba" style="width:5%"></div></div>
+      </div>
+      <div class="buf-row">
+        <div class="buf-name bb"><span>B→C buffer</span><span>0 items</span></div>
+        <div class="buf-track"><div class="buf-fill bb" style="width:0%"></div></div>
+      </div>
+      <div class="buf-row">
+        <div class="buf-name bc"><span>C→D buffer</span><span>0 items</span></div>
+        <div class="buf-track"><div class="buf-fill bc" style="width:0%"></div></div>
+      </div>
+      <div class="buf-row">
+        <div class="buf-name bd"><span>Done</span><span>0 / 200</span></div>
+        <div class="buf-track"><div class="buf-fill bd" style="width:0%"></div></div>
+      </div>
+    </div>
+    <!-- t=30% — stage-b filling -->
+    <div class="snap-card">
+      <div class="snap-time">Snapshot t ≈ 30% — Enrich wave</div>
+      <div class="buf-row">
+        <div class="buf-name ba"><span>A→B buffer</span><span>8 items</span></div>
+        <div class="buf-track"><div class="buf-fill ba" style="width:4%"></div></div>
+      </div>
+      <div class="buf-row">
+        <div class="buf-name bb"><span>B→C buffer</span><span>95 items</span></div>
+        <div class="buf-track"><div class="buf-fill bb" style="width:48%"></div></div>
+      </div>
+      <div class="buf-row">
+        <div class="buf-name bc"><span>C→D buffer</span><span>12 items</span></div>
+        <div class="buf-track"><div class="buf-fill bc" style="width:6%"></div></div>
+      </div>
+      <div class="buf-row">
+        <div class="buf-name bd"><span>Done</span><span>9 / 200</span></div>
+        <div class="buf-track"><div class="buf-fill bd" style="width:5%"></div></div>
+      </div>
+    </div>
+    <!-- t=60% — score bottleneck -->
+    <div class="snap-card">
+      <div class="snap-time">Snapshot t ≈ 60% — Score bottleneck</div>
+      <div class="buf-row">
+        <div class="buf-name ba"><span>A→B buffer</span><span>0 items</span></div>
+        <div class="buf-track"><div class="buf-fill ba" style="width:0%"></div></div>
+      </div>
+      <div class="buf-row">
+        <div class="buf-name bb"><span>B→C buffer</span><span>120 items</span></div>
+        <div class="buf-track"><div class="buf-fill bb" style="width:60%"></div></div>
+      </div>
+      <div class="buf-row">
+        <div class="buf-name bc"><span>C→D buffer</span><span>28 items</span></div>
+        <div class="buf-track"><div class="buf-fill bc" style="width:14%"></div></div>
+      </div>
+      <div class="buf-row">
+        <div class="buf-name bd"><span>Done</span><span>22 / 200</span></div>
+        <div class="buf-track"><div class="buf-fill bd" style="width:11%"></div></div>
+      </div>
+    </div>
+    <!-- t=100% — all done -->
+    <div class="snap-card">
+      <div class="snap-time">Snapshot t = 100% — Complete</div>
+      <div class="buf-row">
+        <div class="buf-name ba"><span>A→B buffer</span><span>0 items</span></div>
+        <div class="buf-track"><div class="buf-fill ba" style="width:0%"></div></div>
+      </div>
+      <div class="buf-row">
+        <div class="buf-name bb"><span>B→C buffer</span><span>0 items</span></div>
+        <div class="buf-track"><div class="buf-fill bb" style="width:0%"></div></div>
+      </div>
+      <div class="buf-row">
+        <div class="buf-name bc"><span>C→D buffer</span><span>0 items</span></div>
+        <div class="buf-track"><div class="buf-fill bc" style="width:0%"></div></div>
+      </div>
+      <div class="buf-row">
+        <div class="buf-name bd"><span>Done</span><span>200 / 200</span></div>
+        <div class="buf-track"><div class="buf-fill bd" style="width:100%"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout co">
+    <strong>The bottleneck is visible in the buffers:</strong> the B→C queue fills while
+    Stage C workers are saturated. In a real system this is where you'd add workers or
+    reduce LLM call complexity. The signal is in the KV prefix depth — no external
+    metrics pipeline needed.
+  </div>
+</div>
+
+<!-- ─── Section 3: KV Architecture ───────────────────────────────────── -->
+<div class="section">
+  <div class="section-head">
+    <span class="stag stag-p">§3</span>
+    <h2>KV Architecture — The Buffer Is Already Everywhere</h2>
+  </div>
+
+  <p>
+    In a conventional pipeline, workers talk to an external queue (Redis, Kafka, SQS).
+    The queue is a separate system. In an Agentic Flow Network, <strong>the buffer is the
+    KV ring</strong> — already replicated to every node as part of the cluster.
+  </p>
+
+  <div class="arch-grid">
+    <div class="arch-panel arch-old">
+      <div class="arch-title">Conventional pipeline — external queue</div>
+      <div class="arch-row">
+        <div class="arch-node an-worker">Worker A</div>
+        <div class="arch-arrow">→</div>
+        <div class="arch-node an-queue">Redis Queue</div>
+        <div class="arch-arrow">→</div>
+        <div class="arch-node an-worker">Worker B</div>
+      </div>
+      <div style="margin-top:14px;font-size:12px;color:var(--muted);line-height:1.8;">
+        ❌ 1 extra system to deploy<br>
+        ❌ 1 extra failure mode<br>
+        ❌ 1 extra ops surface<br>
+        ❌ Network hop per enqueue/dequeue<br>
+        ❌ Dead-letter queue for failures
+      </div>
+    </div>
+    <div class="arch-panel arch-new">
+      <div class="arch-title">Agentic Flow Network — KV ring as buffer</div>
+      <div class="arch-row">
+        <div class="arch-node an-worker">Worker A</div>
+        <div class="arch-arrow">→</div>
+        <div class="arch-node an-kv">KV ring</div>
+        <div class="arch-arrow">→</div>
+        <div class="arch-node an-worker">Worker B</div>
+      </div>
+      <div style="margin-top:14px;font-size:12px;color:var(--accent2);line-height:1.8;">
+        ✓ Zero extra systems<br>
+        ✓ KV already runs as part of the cluster<br>
+        ✓ Scan is a local read — zero network latency<br>
+        ✓ TTL = automatic dead-letter expiry<br>
+        ✓ Anti-entropy = automatic durability
+      </div>
+    </div>
+  </div>
+
+  <h3>KV Key Layout</h3>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:24px;font-family:'SF Mono','Fira Mono',monospace;font-size:12px;line-height:2.2;">
+    <span style="color:var(--accent2);">pipeline/stage-a/{id}</span> <span style="color:var(--muted);">← seeded by coordinator (200 items)</span><br>
+    <span style="color:var(--accent);">pipeline/stage-b/{id}</span>  <span style="color:var(--muted);">← written by Stage A workers (parse result)</span><br>
+    <span style="color:var(--accent3);">pipeline/stage-c/{id}</span> <span style="color:var(--muted);">← written by Stage B workers (enrich result)</span><br>
+    <span style="color:var(--accent4);">pipeline/stage-d/{id}</span> <span style="color:var(--muted);">← written by Stage C workers (score result)</span><br>
+    <span style="color:var(--accent6);">pipeline/done/{id}</span>    <span style="color:var(--muted);">← written by Stage D workers → also in Postgres</span><br>
+    <span style="color:var(--muted);">pipeline/claiming/{id}</span>   <span style="color:var(--muted);">← coordinator claim lock (TTL=30s, prevents double-dispatch)</span>
+  </div>
+</div>
+
+<!-- ─── Section 4: Backpressure ───────────────────────────────────────── -->
+<div class="section">
+  <div class="section-head">
+    <span class="stag stag-o">§4</span>
+    <h2>Backpressure — Coordinator-Side Worker Tracking</h2>
+  </div>
+
+  <p>
+    The coordinator maintains an <code>in_flight</code> set of worker IDs currently processing
+    a task. Before dispatching a new item, it filters out busy workers. When a worker
+    completes and calls <code>rpc_respond()</code>, it drops from <code>in_flight</code>.
+  </p>
+
+  <div class="bp-grid">
+    <div class="bp-worker">
+      <div class="bp-name">Worker 1</div>
+      <div class="bp-stage bp-busy">stage_c.score ⏳</div>
+      <div class="bp-stage bp-free">stage_a ✓</div>
+      <div class="bp-stage bp-free">stage_b ✓</div>
+      <div class="bp-stage bp-free">stage_d ✓</div>
+      <div class="bp-opacity">in_flight set</div>
+    </div>
+    <div class="bp-worker">
+      <div class="bp-name">Worker 2</div>
+      <div class="bp-stage bp-busy">stage_c.score ⏳</div>
+      <div class="bp-stage bp-free">stage_a ✓</div>
+      <div class="bp-stage bp-free">stage_b ✓</div>
+      <div class="bp-stage bp-free">stage_d ✓</div>
+      <div class="bp-opacity">in_flight set</div>
+    </div>
+    <div class="bp-worker">
+      <div class="bp-name">Worker 3</div>
+      <div class="bp-stage bp-free">stage_c FREE</div>
+      <div class="bp-stage bp-free">stage_a ✓</div>
+      <div class="bp-stage bp-free">stage_b ✓</div>
+      <div class="bp-stage bp-free">stage_d ✓</div>
+      <div class="bp-opacity" style="color:var(--accent2);">→ routes here</div>
+    </div>
+    <div class="bp-worker">
+      <div class="bp-name">Worker 4</div>
+      <div class="bp-stage bp-busy">stage_c.score ⏳</div>
+      <div class="bp-stage bp-free">stage_a ✓</div>
+      <div class="bp-stage bp-free">stage_b ✓</div>
+      <div class="bp-stage bp-free">stage_d ✓</div>
+      <div class="bp-opacity">in_flight set</div>
+    </div>
+    <div class="bp-worker">
+      <div class="bp-name">Worker 5</div>
+      <div class="bp-stage bp-busy">stage_c.score ⏳</div>
+      <div class="bp-stage bp-free">stage_a ✓</div>
+      <div class="bp-stage bp-free">stage_b ✓</div>
+      <div class="bp-stage bp-free">stage_d ✓</div>
+      <div class="bp-opacity">in_flight set</div>
+    </div>
+  </div>
+
+  <p style="margin-top:8px;">
+    When all 10 workers are busy, the coordinator sleeps 50ms and retries.
+    When a worker completes, it becomes immediately available for the next item.
+    Saturation is visible, measured, and self-correcting — no rate limiters required.
+  </p>
+</div>
+
+<!-- ─── Section 5: Code Comparison ───────────────────────────────────── -->
+<div class="section">
+  <div class="section-head">
+    <span class="stag stag-r">§5</span>
+    <h2>Code Comparison — Celery/Redis vs Agentic Flow Network</h2>
+  </div>
+
+  <div class="stat-row">
+    <div class="stat s-r">
+      <div class="stat-num">4</div>
+      <div class="stat-label">Extra systems (Celery + Redis + Registry + Broker)</div>
+    </div>
+    <div class="stat s-r">
+      <div class="stat-num">4</div>
+      <div class="stat-label">Failure modes to handle and monitor</div>
+    </div>
+    <div class="stat s-g">
+      <div class="stat-num">0</div>
+      <div class="stat-label">Extra systems in an Agentic Flow Network</div>
+    </div>
+    <div class="stat s-g">
+      <div class="stat-num">1</div>
+      <div class="stat-label">Failure mode — the Mycelium cluster itself</div>
+    </div>
+  </div>
+
+  <div class="code-grid">
+    <div class="code-wrap">
+      <div class="code-header">
+        <span class="code-lang-old">Celery + Redis</span>
+        worker + task definition
+      </div>
+      <pre><span class="cm"># requirements: celery, redis, kombu</span>
+<span class="cm"># deploy: redis server, celery worker, flower</span>
+<span class="cm"># monitor: redis queues + celery inspect</span>
+
+<span class="ck">from</span> celery <span class="ck">import</span> Celery
+
+app = Celery(<span class="cv">'pipeline'</span>,
+    broker=<span class="cv">'redis://redis:6379/0'</span>,
+    backend=<span class="cv">'redis://redis:6379/1'</span>)
+
+@app.<span class="cf">task</span>
+<span class="cd">def</span> <span class="cf">score_article</span>(payload):
+    <span class="bad">time.sleep(SLEEP)</span>  <span class="cm"># LLM call</span>
+    result = <span class="cf">compute_score</span>(payload)
+    <span class="cm"># result goes to Redis backend</span>
+    <span class="cm"># consumed by next .delay() call</span>
+    <span class="ck">return</span> result
+
+<span class="cm"># Caller:</span>
+score_article.<span class="cf">delay</span>(payload)
+<span class="cm"># Dead-letter: Redis separate config</span>
+<span class="cm"># Backpressure: Celery concurrency arg</span>
+<span class="cm"># Routing: Celery queues config</span></pre>
+    </div>
+    <div class="code-wrap">
+      <div class="code-header">
+        <span class="code-lang-new">Mycelium AFN</span>
+        worker + skill handler
+      </div>
+      <pre><span class="cm"># requirements: mycelium-py</span>
+<span class="cm"># deploy: nothing extra</span>
+<span class="cm"># monitor: KV prefix depth</span>
+
+<span class="ck">from</span> mycelium <span class="ck">import</span> MyceliumAgent
+
+agent = <span class="cf">MyceliumAgent</span>(<span class="cv">"127.0.0.1"</span>, <span class="cn">8300</span>)
+agent.<span class="cf">advertise_capability</span>(<span class="cv">"stage_c"</span>, <span class="cv">"worker"</span>)
+
+<span class="cd">async for</span> req <span class="ck">in</span> agent.<span class="cf">rpc_serve</span>(<span class="cv">"stage_c.score"</span>):
+    payload = json.<span class="cf">loads</span>(req.payload)
+    <span class="bad">time.sleep(SLEEP)</span>  <span class="cm"># LLM call</span>
+    result  = <span class="cf">compute_score</span>(payload)
+    <span class="cm"># write to KV ring — gossips everywhere</span>
+    agent.<span class="cf">set</span>(<span class="cv">f"pipeline/stage-d/{id}"</span>, result)
+    agent.<span class="cf">rpc_respond</span>(req, <span class="cv">b"ok"</span>)
+    <span class="cm"># Dead-letter: TTL expiry (automatic)</span>
+    <span class="cm"># Backpressure: in_flight tracking</span>
+    <span class="cm"># Routing: capability resolution</span></pre>
+    </div>
+  </div>
+
+  <div class="callout cg">
+    <strong>The line counts are similar.</strong> The difference is not code volume — it's
+    operational surface. The AFN version deploys zero extra services, has one failure mode,
+    and requires no separate monitoring infrastructure. The buffer depth is readable with a
+    single <code>agent.keys(prefix="pipeline/stage-c/")</code> call.
+  </div>
+</div>
+
+</div><!-- /container -->
+
+<div class="footer">
+  <p><strong>Agentic Flow Networks — Visualisation</strong> · Mycelium · 2026</p>
+</div>
+
+</body>
+</html>
