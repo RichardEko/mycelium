@@ -2011,7 +2011,8 @@ async fn gw_llm_call(
     let (target, _) = match providers.into_iter().next() {
         Some(p) => p,
         None => {
-            return axum::Json(serde_json::json!({"error":"no_provider","detail":""}))
+            return (StatusCode::NOT_FOUND,
+                axum::Json(serde_json::json!({"error":"no_provider","detail":""})))
                 .into_response();
         }
     };
@@ -2034,7 +2035,8 @@ async fn gw_llm_call(
             let v: serde_json::Value = serde_json::from_slice(&reply)
                 .unwrap_or_else(|_| serde_json::json!({"error":"parse_error","detail":""}));
             if v.get("error").is_some() {
-                return axum::Json(v).into_response();
+                // Provider-side failure forwarded to the caller: upstream error.
+                return (StatusCode::BAD_GATEWAY, axum::Json(v)).into_response();
             }
             axum::Json(serde_json::json!({
                 "output":   v["output"],
@@ -2042,7 +2044,8 @@ async fn gw_llm_call(
             })).into_response()
         }
         Err(super::rpc::RpcError::Timeout) =>
-            axum::Json(serde_json::json!({"error":"timeout","detail":""}))
+            (StatusCode::GATEWAY_TIMEOUT,
+                axum::Json(serde_json::json!({"error":"timeout","detail":""})))
                 .into_response(),
     }
 }
@@ -2068,6 +2071,10 @@ async fn gw_llm_stream(
     use futures_util::stream;
 
     // v1: buffer full response via RPC, emit as single "done" event.
+    // Errors are reported as in-stream `{"type":"error",...}` events, not HTTP
+    // status codes: SSE commits the status line before the body, so this is
+    // the only legible channel once streaming starts (deliberate asymmetry
+    // with gw_llm_call, which uses 404/502/504).
     let timeout = std::time::Duration::from_secs(30);
     let filter  = CapFilter::new(body.ns.as_str(), body.name.as_str());
     let providers = resolve_cap_providers(&ctx.agent_ctx.kv_state, &filter);
@@ -2170,6 +2177,39 @@ mod tests {
         let body: serde_json::Value = resp.json().await.unwrap();
         assert!(body["store_entries"].is_number());
         assert!(body["dropped_frames"].is_number());
+
+        agent.shutdown().await;
+    }
+
+    /// gw_llm_call reports failures via HTTP status codes (the gateway-wide
+    /// convention), not a 200 + error-JSON envelope: a no-provider miss is a
+    /// 404 so plain `curl -f` / `raise_for_status()` callers see the failure.
+    #[cfg(feature = "llm")]
+    #[tokio::test]
+    async fn test_llm_call_no_provider_returns_404() {
+        let gossip_port = alloc_port();
+        let http_port   = alloc_port();
+
+        let id  = NodeId::new("127.0.0.1", gossip_port).unwrap();
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = gossip_port;
+        cfg.http_port = Some(http_port);
+
+        let agent = Arc::new(GossipAgent::new(id, cfg));
+        agent.start().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let url = format!("http://127.0.0.1:{http_port}/gateway/llm/call");
+        let resp = reqwest::Client::new()
+            .post(&url)
+            .json(&serde_json::json!({"ns":"nobody","name":"provides-this","input":"x"}))
+            .send()
+            .await
+            .expect("llm/call request failed");
+        assert_eq!(resp.status(), 404, "no provider must surface as HTTP 404");
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["error"], "no_provider", "error JSON body is kept alongside the status");
 
         agent.shutdown().await;
     }

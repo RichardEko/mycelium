@@ -160,9 +160,10 @@ class PromptSkillClient:
 
             {"output": "...", "provider": "ip:port"}
 
-        On error returns::
-
-            {"error": "...", "detail": "..."}
+        On error raises :class:`httpx.HTTPStatusError` — the gateway reports
+        failures via status codes (404 no provider, 502 provider-side error,
+        504 RPC timeout); the response body carries
+        ``{"error": "...", "detail": "..."}``.
 
         :param ns:         Capability namespace (e.g. ``"ai"``).
         :param name:       Capability name (e.g. ``"chat"``).

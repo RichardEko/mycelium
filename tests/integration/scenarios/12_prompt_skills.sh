@@ -40,11 +40,11 @@ poll_until 30 template_visible_on_b || {
 # ── Phase 2 (II — Cross-node invocation): call test/echo from node-b ─────────
 # test/echo is pre-registered on all `node`-role containers by three_node_demo.
 # Call it from node-b's gateway — the RPC routes to whichever node advertises it.
-# timeout_ms must stay below curl's --max-time: the gateway returns errors as
-# HTTP 200 + {"error":...} JSON, so if the internal RPC timeout (default 30 s)
-# outlives curl's budget we get a curl failure and an empty response instead of
-# a legible error (observed as a flake: "returned no output — response: {}").
-result=$(curl -sf --max-time 15 -X POST \
+# timeout_ms stays below curl's --max-time so the gateway's RPC timeout (now a
+# 504 with an {"error":...} body) always beats the curl deadline. No -f: on a
+# 404/502/504 we want the error JSON captured and printed, not discarded
+# (the original curl -sf flake printed an illegible "{}").
+result=$(curl -s --max-time 15 -X POST \
     -H "Content-Type: application/json" \
     -d '{"ns":"test","name":"echo","input":"hello-scenario12","timeout_ms":10000}' \
     "${H_B}/gateway/llm/call" 2>/dev/null || echo '{}')
