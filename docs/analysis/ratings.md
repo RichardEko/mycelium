@@ -32,6 +32,14 @@ existed. This is the framework's own report card.
   arrival won; anti-entropy could not detect it because the digest hashes
   key+timestamp only). Found by M2 falsification probe in Run 16; fixed same
   day (`lww_wins` deterministic data-vs-data tiebreak).
+- 2026-06-11: **Concurrency Correctness** scored 8–9 in Runs 9–16 while the
+  prefix-index maintenance race existed (index updated *after* the store CAS
+  in `apply_and_notify`, unserialised; a tombstone/insert race on one key
+  leaves a live store entry permanently invisible to `scan_prefix` and the
+  `cap_ns_index`; anti-entropy cannot repair it because re-applying the same
+  (key, ts) loses LWW and never touches the index; introduced 2026-05-18,
+  commit cd3368c). Found by M2 deep-dive probe in Run 18 — 86 of 100 000
+  racing rounds lost the key on first execution.
 
 **Dimensions:** Philosophy/Coherence · Conceptual Integrity · Architecture ·
 Modularity · API Design · Error Handling · Configurability · Language Best
@@ -711,4 +719,150 @@ permanent regression tests (`store.rs` tests, `tests/probes.rs`).
 | 24 | Developer Experience | 8 | `cargo -p mycelium-tuple-space` workflows fast (unit suite 0.05 s); single-knob test cadence; still no CI config in repo |
 | 25 | Dependency Hygiene | 9 | **Evidence:** `--no-default-features` 0-warning build executed this run (was 3 warnings — fixed in `bulk.rs`); companion adds zero new transitive deps (papaya/parking_lot/bytes/base64 all already in core's tree; gateway deps optional); `block v0.1.6` (dev-deps) persists |
 | — | **Floor (lowest 3)** | **6, 7, 7** | Observability (6, capped by finding); five-way tie at 7 — Error Handling, Concurrency Correctness, Security, Scalability, Evolvability; Concurrency and Evolvability are the most actionable |
+| — | Mean (continuity footnote) | 8.0 | not a target; see M2 preamble |
+
+## 2026-06-11 — Run 18 (M2)
+
+Deep-dive dimensions this run (by rotation from Run 17): 6 (Error Handling),
+7 (Configurability), 8 (Language Best Practices), 9 (Concurrency Correctness),
+10 (Resource Management). Next run by rotation: 11–15.
+
+Second run today; cadence gate passed because the diff since Run 17 is
+material and distinct (f9bd7e0: tuple-space WAL format header + counter-
+invariant property test; d804d2a: Cargo.lock). Blind rule: only Run 16/17
+deep-dive rotation header lines were read before scoring; full tables read
+after provisional scores were written.
+
+**Score-targeting disclosure (per M2):** f9bd7e0's commit message explicitly
+references "Run-17 improvement targets (2) and (3)". The work is substantive —
+a named upgrade data-loss hazard closed with refusal semantics and tests, and
+a model-based property test that re-finds the Run-17 underflow when its fix is
+reverted — and scores moved only where this run's own probes independently
+verified the artifacts (#22 torn-header probe, #19 property test executed).
+Flagged here rather than taken on faith.
+
+Execution evidence this run: core 305/305 unit tests at full feature matrix
+(`tls,metrics,a2a,llm`, includes 2 new probe regressions); tuple-space 24/24
+(`--features gateway`, includes new torn-header probe +
+`counters_match_reference_model` 64-case property run); clippy `-D warnings`
+clean at full matrix (lib+tests) AND `--no-default-features`; 4 falsification
+probes executed (1 deep-dive + 3 quota), one of which FAILED and produced the
+Major finding below.
+
+### Findings
+
+- **Major — Concurrency Correctness (#9, capped ≤ 6, scored 5).**
+  `apply_and_notify` maintains the prefix index (and `cap_ns_index`) *after*
+  the store CAS, outside any serialisation with it. When a tombstone (lower
+  ts) and a live insert (higher ts) race on the same key — reachable whenever
+  a delete races a rewrite arriving on different shards/tasks — both CAS in
+  ts order, but if the tombstone thread's `prefix_index_remove` lands after
+  the insert thread's `prefix_index_insert`, the store holds a live key the
+  index has lost. `scan_prefix` (and every capability-resolution path through
+  `cap_ns_index`) then silently misses the live key. The divergence is
+  permanent until the key is rewritten: anti-entropy re-applies the same
+  (key, ts), loses LWW, `changed` stays false, and the index is never
+  repaired. Evaporating `cap/` keys self-heal on the next heartbeat; `grp/`,
+  `consensus/`, and user keys do not. The `PrefixIndex` doc comment claims
+  the index is "updated atomically in apply_and_notify" — it is not.
+  Reproduction: probe `prefix_index_consistent_under_tombstone_insert_race`
+  (src/store.rs) lost 86 of 100 000 keys on first execution (Apple Silicon).
+  NOT fixed in-run — the fix requires serialising index maintenance with the
+  CAS (e.g. per-bucket reconcile-under-lock that re-reads the store entry), a
+  hot-path design decision worth deliberate review; the probe is kept as an
+  `#[ignore]`d canary documenting the bug, to be un-ignored as the regression
+  gate when fixed. Calibration ledger entry recorded (bug existed since
+  2026-05-18 under 8–9 scores in Runs 9–16). Third consecutive M2 run in
+  which a probe found a real concurrency defect.
+  *Addendum (same day, post-run, at user request):* fixed by replacing
+  update-derived index maintenance with a stripe-locked reconcile
+  (`KvStore::index_stripes`, 64 stripes; re-read the stored entry, set
+  membership in `prefix_index`/`cap_ns_index`/`peer_localities` to match it).
+  Canary un-ignored — passed 6/6 consecutive executions post-fix (failed at
+  86/100 000 pre-fix); new 8-thread mixed-churn test
+  `secondary_structures_consistent_under_concurrent_churn` covers all three
+  secondary structures in both directions (improvement target #2); CHANGELOG
+  [Unreleased] gained the tuple-space ship + WAL header + this fix
+  (improvement target #3); lock-order table row 7 added to CLAUDE.md.
+  Core suite 307/307 and clippy `-D warnings` clean in both feature configs
+  after the change; companion suite green. Scores above are the run's
+  snapshot and stand unmodified; Run 19 verifies recovery with sustained
+  evidence.
+  *Addendum 2 (same day, post-run, at user request):* systematic sweep of
+  the "lock-free op + unserialised derived effect" family across all 34
+  papaya mutation sites in `src/`. Four further defects found and fixed,
+  each with a regression test: (1) **signal handler registration panicked
+  under contention** — single-use `slot.take().expect()` inside a papaya
+  `compute` closure, which papaya re-invokes on CAS retry; reproduced
+  instantly by `concurrent_same_kind_signal_registration_does_not_panic`
+  (6 threads panicked pre-fix), fixed by cloning per invocation. (2)
+  **Concurrent same-key `set_with_min_acks` callers starved each other** —
+  single-slot tracker overwrite + unconditional cleanup deleting the other
+  caller's tracker; now a copy-on-write tracker list with identity-checked
+  removal (`kv_quorum::{install_tracker, remove_tracker}`), Rust API and
+  HTTP gateway. (3) **LLM prompt-skill races** — double dispatch-loop spawn
+  via `is_empty()` check-then-act (now atomic swap) and stale-handle drop
+  deleting a newer re-registration (now `Arc::ptr_eq`-conditional). (4)
+  **A2A cleanup sweep evicted live tasks** — collect-then-unconditional-
+  remove (now conditional `compute`). Sites verified CORRECT by the same
+  sweep: `get_or_spawn_writer`, `ShardedSeen::evict_below`, peer eviction,
+  subscriptions/prefix-watcher sweeps, roster-cache generation ordering.
+  CLAUDE.md gains a "Lock-free mutation rules" section codifying the two
+  idioms. **Process finding:** the dim-24 note "still no CI config" carried
+  through Runs 16–18 was stale — `.github/workflows/ci.yml` has existed
+  since 2026-06-03; its actual gaps (clippy not at full feature matrix, no
+  tuple-space job, no `--no-default-features` job) are now closed, all
+  gates verified locally. Second stale-carried-note instance this run
+  (after dim-6 `Network(String)`): Run 19 should re-verify carried notes,
+  not just carried scores. Post-sweep gates: core 311/311 (default 295/295),
+  companion 24/24 + clippy `--all-targets`, clippy `-D warnings` at full
+  matrix and `--no-default-features`.
+- **Probe passed — Error Handling / Resource Management (#6/#10):**
+  `test_lifecycle_error_contract_and_task_drain` (new, kept) — second
+  `start()` returns `AlreadyRunning`; `start()` after shutdown returns
+  `Shutdown`; `shutdown_with_timeout` drains `task_count` to exactly 0. The
+  documented lifecycle contract had no prior test.
+- **Probe passed — Evolvability (#22):** `wal_torn_header_refused_untouched`
+  (new, kept) — a 7-byte header torn between magic and version is refused
+  with the file byte-identical, closing the boundary case the shipped header
+  tests did not cover.
+- **Probe passed — Language Best Practices (#8):** clippy `-D warnings` clean
+  at `--no-default-features` (a config the standard gate does not run);
+  production `unwrap()/expect()` audit across 8 core files found 6 sites, all
+  invariant-guarded with messages; `unsafe` appears only in one SAFETY-
+  commented test-only env-var guard under `#[allow(unsafe_code)]`.
+- **Process note:** Runs 16–17 carried the dim-6 note "`Network(String)`
+  catch-all persists" although it was eliminated in v1.1.0 (2026-06-07,
+  replaced by `FrameTooLarge`/`UnsupportedWireVersion`). Carried notes can
+  rot; this deep-dive corrects it. The honest residual gap is the companion's
+  `TupleError::Rpc(String)`.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 9 | carried (v17) |
+| 2 | Conceptual Integrity | 8 | carried (v17) |
+| 3 | Architecture | 9 | carried (v17) |
+| 4 | Modularity | 8 | carried (v17) |
+| 5 | API Design | 8 | carried (v17) |
+| 6 | Error Handling Model | 8 | Deep-dive. `error.rs` is exemplary: per-variant recoverability docs, `#[non_exhaustive]`, explicit runtime-IO-absorption policy; 10 typed sub-enums across subsystems; prior runs' `Network(String)` note was stale (fixed in 1.1.0). **Evidence:** lifecycle error-contract probe passed. Held at 8 by `TupleError::Rpc(String)` |
+| 7 | Configurability | 8 | Deep-dive. 51 fields, all `validate()`d (range + cross-field conflicts), 24+ `GOSSIP_*` env overrides, TOML round-trip + env-override + validation tests in the executed suite; 8 well-documented feature flags. Wart: `GOSSIP_GOSSIP_CHANNEL_CAPACITY` double prefix |
+| 8 | Language Best Practices | 9 | Deep-dive. **Evidence:** clippy `-D warnings` clean this run at full matrix (lib+tests) and `--no-default-features`; `#![deny(unsafe_code)]`; 6 production expect sites all length/filter-guarded |
+| 9 | Concurrency Correctness | 5 | Deep-dive. **Capped: Major finding this run** (prefix-index/store divergence under tombstone-insert race — see Findings). Third consecutive run with a confirmed concurrency defect; ledger now has 2 entries for this dimension — the lock-order table and ordering policy keep not predicting the races that exist outside the locks |
+| 10 | Resource Management | 8 | Deep-dive. 9 RAII `Drop` guards (AliveGuard, ListenerGuard, OpacityDropGuard, StagedGuard, ActiveHandlerGuard, LockGuard…); JoinSet swap-out drain with abort fallback. **Evidence:** lifecycle probe re-verified task_count → 0. Run-17 companion-task accounting gap stands |
+| 11 | Semantic Correctness | 8 | Down from 9: `kv_scan_prefix` completeness is compromised by the #9 race (cross-ref; capped only on #9). Tuple-space side strengthened: `counters_match_reference_model` (64 random op sequences vs reference model, every-step checks) executed this run |
+| 12 | Robustness | 8 | carried (v17) |
+| 13 | Security | 7 | carried (v17) |
+| 14 | Failure Mode Legibility | 8 | carried (v17); WAL refusal errors name both versions and the path (verified by probe) |
+| 15 | Performance | 9 | carried (v17, release perf smoke) |
+| 16 | Scalability | 7 | carried (v17) |
+| 17 | Testability | 9 | carried (v17); corroborated — all 4 of this run's probes were writable in minutes against public/`pub(crate)` seams |
+| 18 | Test Architecture | 7 | Down from 8: the #9 probe exposed that core had ZERO concurrent-stress coverage of `apply_and_notify`/index consistency — the canary is the first — and that hole hosted a Major bug for 3+ weeks. Credit: counter-model property test closes Run-17's named property-test gap (executed this run) |
+| 19 | Observability | 8 | Recovered from Run-17 cap (waiters underflow) with the promised sustained evidence: **counters_match_reference_model** checks every monitoring counter against a reference model after every step, executed this run; underflow canaries structural. Core SystemStats counters still have no equivalent model test |
+| 20 | Debuggability | 8 | carried (v17) |
+| 21 | Operational Readiness | 9 | carried (v17, lifecycle drill + 13/13 scenarios) |
+| 22 | Evolvability | 8 | Up from 7: Run-17's named hazard closed — MTSWAL magic + u16 version, future-version/foreign files refused byte-untouched, header survives compaction, replay cursor clamps past header (f9bd7e0). **Evidence:** 4 shipped header tests + this run's torn-header probe all executed. Held from 9: tuple-space ship and WAL header absent from CHANGELOG [Unreleased] |
+| 23 | Documentation | 8 | carried (v17) |
+| 24 | Developer Experience | 8 | carried (v17); still no CI config |
+| 25 | Dependency Hygiene | 9 | **Evidence:** clippy `--no-default-features` executed this run; diff adds only `proptest` as companion dev-dep (already in core's dev tree — zero new transitive deps); `block v0.1.6` future-incompat (dev-deps) persists |
+| — | **Floor (lowest 3)** | **5, 7, 7** | Concurrency Correctness (5, capped by finding); Security, Scalability, Test Architecture tied at 7 — Concurrency is the actionable one: fix the index race |
 | — | Mean (continuity footnote) | 8.0 | not a target; see M2 preamble |
