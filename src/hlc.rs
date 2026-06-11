@@ -62,11 +62,41 @@
 //!   maintaining strict monotonicity. The HLC is "self-correcting" against
 //!   transient backward jumps but cannot recover lost time once the clock
 //!   resyncs forward again.
+//!
+//! - **Remote drift bound.** `observe` clamps the *remote* physical time to
+//!   `wall_now_ms + max_drift_ms` (default 5 minutes,
+//!   [`DEFAULT_MAX_CLOCK_DRIFT_MS`]; configurable via
+//!   `GossipConfig::max_clock_drift_ms`, `0` disables). Without the clamp a
+//!   single peer with a far-future clock dragged every node's HLC forward
+//!   irrecoverably (`max` never decays), and read-side evaporation — the
+//!   substrate's failure detector — was silently suspended for the full
+//!   drift duration (M2 Run-19 finding; the Kulkarni et al. 2014 algorithm
+//!   mandates exactly this bound). Clamping is rate-limit `warn!`ed.
+//!
+//!   **Documented trade-off:** for a stamp *beyond* the bound, the usual
+//!   "local write after observe beats the remote" guarantee is deliberately
+//!   waived — the poisoned entry would win LWW against local rewrites until
+//!   the wall clock catches up. The capability layer independently
+//!   quarantines such entries (its freshness check rejects stamps too far
+//!   in the future), so failure detection no longer depends on this. Full
+//!   inbound rejection of out-of-bound updates (store-level quarantine) is
+//!   a candidate for the next wire-policy pass.
 
 use std::{
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
+use tracing::warn;
+
+/// Default bound on how far ahead of the local wall clock a *remote* HLC
+/// stamp may pull this node's clock (5 minutes). See the module doc's
+/// "Remote drift bound" section. Override via
+/// `GossipConfig::max_clock_drift_ms`; `0` disables the bound.
+pub(crate) const DEFAULT_MAX_CLOCK_DRIFT_MS: u64 = 300_000;
+
+/// Minimum interval between drift-clamp warnings (per `Hlc` instance), so a
+/// peer with a persistently skewed clock cannot flood the log.
+const DRIFT_WARN_INTERVAL_MS: u64 = 10_000;
 
 /// Number of bits reserved for the logical counter.
 pub(crate) const LOGICAL_BITS: u32 = 16;
@@ -101,13 +131,28 @@ fn wall_now_ms() -> u64 {
 /// are lock-free CAS loops.
 pub(crate) struct Hlc {
     state: AtomicU64,
+    /// Remote stamps may pull the clock at most this far ahead of the local
+    /// wall clock. `0` = unbounded (pre-bound behaviour).
+    max_drift_ms: u64,
+    /// Wall-ms of the last drift-clamp warning (rate limiting).
+    last_drift_warn_ms: AtomicU64,
 }
 
 impl Hlc {
     /// Constructs a fresh HLC initialised to the current wall clock with
-    /// logical zero.
+    /// logical zero and the default remote-drift bound.
     pub(crate) fn new() -> Self {
-        Self { state: AtomicU64::new(pack(wall_now_ms(), 0)) }
+        Self::with_max_drift(DEFAULT_MAX_CLOCK_DRIFT_MS)
+    }
+
+    /// Like [`new`](Self::new) with an explicit remote-drift bound in
+    /// milliseconds. `0` disables the bound.
+    pub(crate) fn with_max_drift(max_drift_ms: u64) -> Self {
+        Self {
+            state:              AtomicU64::new(pack(wall_now_ms(), 0)),
+            max_drift_ms,
+            last_drift_warn_ms: AtomicU64::new(0),
+        }
     }
 
     /// Returns the current packed HLC value without advancing it.
@@ -145,9 +190,39 @@ impl Hlc {
     /// Absorbs a remote HLC stamp and advances the local clock to dominate
     /// the merged `(local, remote, wall_now)` triple. Returns the new packed
     /// timestamp.
+    ///
+    /// The remote physical component is clamped to
+    /// `wall_now_ms + max_drift_ms` (see the module doc's "Remote drift
+    /// bound") so a peer with a far-future clock cannot drag this node's
+    /// clock — and with it, every subsequent local write stamp — into the
+    /// future. Clamping is logged at `warn!`, rate-limited per instance.
     pub(crate) fn observe(&self, remote: u64) -> u64 {
-        let remote_phys = physical_ms(remote);
-        let remote_log  = remote & LOGICAL_MASK;
+        let mut remote_phys = physical_ms(remote);
+        let remote_log      = remote & LOGICAL_MASK;
+        if self.max_drift_ms > 0 {
+            let limit = wall_now_ms().saturating_add(self.max_drift_ms);
+            if remote_phys > limit {
+                let now = wall_now_ms();
+                let last = self.last_drift_warn_ms.load(Ordering::Relaxed);
+                if now.saturating_sub(last) >= DRIFT_WARN_INTERVAL_MS
+                    && self
+                        .last_drift_warn_ms
+                        .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+                        .is_ok()
+                {
+                    warn!(
+                        remote_phys_ms = remote_phys,
+                        ahead_ms = remote_phys - now,
+                        max_drift_ms = self.max_drift_ms,
+                        "remote HLC stamp exceeds the clock-drift bound; clamping — \
+                         a peer's clock is far ahead (check NTP on the sending node). \
+                         Entries carrying such stamps are quarantined by read-side \
+                         freshness checks until the sender's clock is fixed.",
+                    );
+                }
+                remote_phys = limit;
+            }
+        }
         loop {
             let prev      = self.state.load(Ordering::Acquire);
             let prev_phys = physical_ms(prev);
@@ -183,6 +258,16 @@ impl Default for Hlc {
 mod tests {
     use super::*;
 
+    /// Pins the HLC state directly; drift bound disabled so tests that pin
+    /// far-future physical values keep their original semantics.
+    fn pinned(state: u64) -> Hlc {
+        Hlc {
+            state:              AtomicU64::new(state),
+            max_drift_ms:       0,
+            last_drift_warn_ms: AtomicU64::new(0),
+        }
+    }
+
     #[test]
     fn pack_and_unpack_roundtrip() {
         let p = pack(1_700_000_000_000, 42);
@@ -215,7 +300,7 @@ mod tests {
     #[test]
     fn tick_bumps_logical_within_same_ms() {
         // Force the HLC to a fixed physical so wall_now_ms doesn't matter.
-        let hlc = Hlc { state: AtomicU64::new(pack(u64::MAX >> LOGICAL_BITS, 0)) };
+        let hlc = pinned(pack(u64::MAX >> LOGICAL_BITS, 0));
         let a = hlc.tick();
         let b = hlc.tick();
         assert_eq!(physical_ms(a), physical_ms(b));
@@ -248,16 +333,59 @@ mod tests {
         // Pin the HLC and the remote to a physical value far in the future
         // so wall_now_ms can't dominate either side and reset the logical.
         let far_future = wall_now_ms() + 60_000;
-        let hlc = Hlc { state: AtomicU64::new(pack(far_future, 3)) };
+        let hlc = pinned(pack(far_future, 3));
         let remote = pack(far_future, 7);
         let next = hlc.observe(remote);
         assert_eq!(physical_ms(next), far_future);
         assert!((next & LOGICAL_MASK) > 7);
     }
 
+    /// Regression gate for the M2 Run-19 finding (Semantic Correctness).
+    ///
+    /// `observe` used to absorb remote physical time with an unbounded
+    /// `max`: one peer with a far-ahead clock (NTP failure, or a hostile
+    /// node in a non-TLS cluster) dragged this node's HLC — and every
+    /// subsequent local write stamp — into the future, silently suspending
+    /// read-side evaporation (the substrate's failure detector) for the
+    /// full drift duration. Fixed by the drift clamp (module doc, "Remote
+    /// drift bound"); companion impact gate in the capability layer:
+    /// `future_stamped_entry_outlives_its_evaporation_window_by_the_drift`.
+    #[test]
+    fn observe_bounds_remote_clock_drift() {
+        let hlc = Hlc::new(); // default bound: DEFAULT_MAX_CLOCK_DRIFT_MS
+        let week_ahead = wall_now_ms() + 7 * 24 * 3600 * 1000;
+        hlc.observe(pack(week_ahead, 0));
+        let local = hlc.tick();
+        assert!(
+            physical_ms(local) <= wall_now_ms() + DEFAULT_MAX_CLOCK_DRIFT_MS + 1_000,
+            "a remote stamp a week ahead must not drag local time past the \
+             drift bound (local phys = {}, wall = {})",
+            physical_ms(local), wall_now_ms(),
+        );
+    }
+
+    /// The bound is configurable and `0` disables it (pre-bound behaviour).
+    #[test]
+    fn observe_drift_bound_zero_disables_clamp() {
+        let hlc = Hlc::with_max_drift(0);
+        let week_ahead_phys = wall_now_ms() + 7 * 24 * 3600 * 1000;
+        let next = hlc.observe(pack(week_ahead_phys, 0));
+        assert!(physical_ms(next) >= week_ahead_phys, "0 = unbounded");
+    }
+
+    /// Remote stamps within the bound are still absorbed normally — the
+    /// clamp only engages beyond `wall_now + max_drift_ms`.
+    #[test]
+    fn observe_within_bound_still_dominates_remote() {
+        let hlc = Hlc::new();
+        let near_future = pack(wall_now_ms() + 10_000, 5); // 10 s ahead
+        let next = hlc.observe(near_future);
+        assert!(next > near_future, "in-bound remote stamps must be dominated");
+    }
+
     #[test]
     fn logical_saturates_rather_than_wrapping() {
-        let hlc = Hlc { state: AtomicU64::new(pack(0, LOGICAL_MASK)) };
+        let hlc = pinned(pack(0, LOGICAL_MASK));
         // Stuck at physical 0 forever (wall_now_ms is huge but the state
         // pretends it's still 1970). Real callers can't hit this — used here
         // to assert the saturation invariant.

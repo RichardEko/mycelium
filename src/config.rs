@@ -357,6 +357,21 @@ pub struct GossipConfig {
     /// or grouping fine-grained capabilities under a single coarser entry.
     pub max_store_entries: usize,
 
+    /// Bound on how far ahead of the local wall clock a *remote* HLC stamp
+    /// may pull this node's clock, in milliseconds. `0` disables the bound.
+    ///
+    /// Set via `GOSSIP_MAX_CLOCK_DRIFT_MS`. Default **300 000** (5 minutes).
+    ///
+    /// `Hlc::observe` clamps remote physical time to `wall_now + this bound`
+    /// (rate-limited `warn!` when it engages). Without the bound, one peer
+    /// with a far-future clock drags every node's HLC forward irrecoverably
+    /// and read-side evaporation — the substrate's failure detector — is
+    /// silently suspended for the full drift duration. Keep the bound well
+    /// above your real clock-sync error (NTP keeps clusters within
+    /// milliseconds; 5 minutes is generous) but far below any capability
+    /// `refresh_interval` you rely on for failover latency.
+    pub max_clock_drift_ms: u64,
+
     /// Hierarchical locality address for this node, coarse → fine.
     ///
     /// Typical: `["eu-west-1", "az-1a", "rack-14"]`. Segments are opaque strings;
@@ -507,6 +522,7 @@ impl Default for GossipConfig {
             signal_reorder_max_hold_ms:  500,
             signal_reorder_max_depth:    64,
             max_store_entries: 0,
+            max_clock_drift_ms: crate::hlc::DEFAULT_MAX_CLOCK_DRIFT_MS,
             locality_path:     Vec::new(),
             topology_policies: HashMap::new(),
             http_port:               None,
@@ -738,7 +754,8 @@ impl GossipConfig {
     /// `GOSSIP_MAX_PEERS`, `GOSSIP_MAX_ACTIVE_CONNECTIONS`, `GOSSIP_WRITER_IDLE_TIMEOUT_SECS`,
     /// `GOSSIP_GROUP_AWARE_FORWARDING` (`true`/`false`/`1`/`0`),
     /// `GOSSIP_HEALTH_CHECK_MAX_JITTER_MS`, `GOSSIP_SIGNAL_WINDOW_SECS`,
-    /// `GOSSIP_MAX_STORE_ENTRIES`, `GOSSIP_EPIDEMIC_EXTRA_PEERS`,
+    /// `GOSSIP_MAX_STORE_ENTRIES`, `GOSSIP_MAX_CLOCK_DRIFT_MS`,
+    /// `GOSSIP_EPIDEMIC_EXTRA_PEERS`,
     /// `GOSSIP_GATEWAY_AUTH_TOKEN`.
     pub fn apply_env_overrides(&mut self) -> Result<(), GossipError> {
         if let Ok(v) = env::var("GOSSIP_BIND_ADDRESS") {
@@ -836,6 +853,9 @@ impl GossipConfig {
         }
         if let Ok(v) = env::var("GOSSIP_MAX_STORE_ENTRIES") {
             self.max_store_entries = v.parse().map_err(GossipError::Parse)?;
+        }
+        if let Ok(v) = env::var("GOSSIP_MAX_CLOCK_DRIFT_MS") {
+            self.max_clock_drift_ms = v.parse().map_err(GossipError::Parse)?;
         }
         if let Ok(v) = env::var("GOSSIP_EPIDEMIC_EXTRA_PEERS") {
             self.epidemic_extra_peers = v.parse().map_err(GossipError::Parse)?;

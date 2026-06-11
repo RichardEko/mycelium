@@ -583,7 +583,7 @@ impl GossipAgent {
             node_id:         node_id.clone(),
             config:          Arc::clone(&config_arc),
             seen:            Arc::new(ShardedSeen::new(seen_shards)),
-            hlc:             Arc::new(crate::hlc::Hlc::new()),
+            hlc:             Arc::new(crate::hlc::Hlc::with_max_drift(config.max_clock_drift_ms)),
             signal_boundary: Arc::new(RwLock::new(Boundary::new(node_id.clone()))),
             signal_handlers: Arc::new(SignalHandlers::new(signal_window)),
             gossip_txs,

@@ -499,7 +499,15 @@ impl CapEntry {
     /// 3× evaporation window: `now_ms − written_ms ≤ 3 × refresh_interval_ms`.
     pub fn is_fresh(&self, hlc_ts: u64, now_ms: u64) -> bool {
         let written_ms = crate::hlc::physical_ms(hlc_ts);
+        // Symmetric window: an entry stamped further in the FUTURE than the
+        // evaporation window is quarantined as stale too. Without this, a
+        // far-future stamp (writer with a broken clock) read as fresh until
+        // the wall clock caught up — suspending evaporation, the substrate's
+        // failure detector, for the full drift duration (M2 Run-19 finding).
+        // A writer whose clock is persistently ahead by more than
+        // 3 × refresh_interval quarantines itself — the correct outcome.
         now_ms.saturating_sub(written_ms) <= 3 * self.refresh_interval_ms
+            && written_ms.saturating_sub(now_ms) <= 3 * self.refresh_interval_ms
     }
 }
 
@@ -514,7 +522,9 @@ pub struct ReqEntry {
 impl ReqEntry {
     pub fn is_fresh(&self, hlc_ts: u64, now_ms: u64) -> bool {
         let written_ms = crate::hlc::physical_ms(hlc_ts);
+        // Symmetric window — see CapEntry::is_fresh for the rationale.
         now_ms.saturating_sub(written_ms) <= 3 * self.refresh_interval_ms
+            && written_ms.saturating_sub(now_ms) <= 3 * self.refresh_interval_ms
     }
 }
 
@@ -546,6 +556,39 @@ impl_bincode_codec!(ReqEntry);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression gate for the M2 Run-19 HLC-drift finding (canary:
+    /// `hlc::tests::observe_bounds_remote_clock_drift`). Freshness is a
+    /// SYMMETRIC window: an entry stamped further in the future than the
+    /// 3× evaporation window is quarantined as stale, so a writer with a
+    /// broken (far-ahead) clock cannot suspend evaporation — the substrate's
+    /// failure detector, including tuple-space secondary promotion — for the
+    /// drift duration. Lives here, not in hlc.rs: Layer I must not reference
+    /// the capability layer (enforced by
+    /// `layer1_modules_do_not_reference_higher_layers`).
+    #[test]
+    fn future_stamped_entry_is_quarantined_not_fresh() {
+        let cap = CapEntry {
+            capability:          Capability::new("ns", "skill"),
+            refresh_interval_ms: 1, // evaporates 3 ms after writing
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let week = 7 * 24 * 3600 * 1000;
+        let week_ahead_stamp = crate::hlc::pack(now + week, 0);
+        assert!(
+            !cap.is_fresh(week_ahead_stamp, now),
+            "a far-future stamp must be quarantined immediately, not fresh \
+             until the wall clock catches up"
+        );
+        // Sanity both ways: stamps within the window stay fresh…
+        let fresh_stamp = crate::hlc::pack(now, 0);
+        assert!(cap.is_fresh(fresh_stamp, now + 2));
+        // …and ordinary aging still applies.
+        assert!(!cap.is_fresh(fresh_stamp, now + 4));
+    }
 
     fn iv(n: i64) -> CapValue { CapValue::Integer(n) }
     fn fv(n: f64) -> CapValue { CapValue::Float(n) }
