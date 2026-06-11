@@ -111,6 +111,13 @@ async fn run(sf: Arc<SkillFile>) -> Result<(), Box<dyn std::error::Error>> {
         shutdown_signal().await;
         tracing::info!("skillrunner: shutting down");
         agent_shutdown.shutdown().await;
+        // The skill loop below never returns on its own, and having consumed
+        // the signal we've suppressed its default terminate action — without
+        // an explicit exit the process survives SIGTERM indefinitely. (This
+        // silently stacked orphaned skillrunner generations across demo
+        // runs: stop.sh appeared to work, pid files were cleaned, and
+        // SO_REUSEPORT let every generation keep sharing the same ports.)
+        std::process::exit(0);
     });
 
     // Run the skill invocation loop (blocks until shutdown)

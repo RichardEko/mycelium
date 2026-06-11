@@ -266,7 +266,16 @@ where
 
                 messages.push(Message {
                     role:         "tool".into(),
-                    content:      Some(result),
+                    // Same coercion as the user message above: chat APIs
+                    // require STRING content, and tool_dispatch returns JSON —
+                    // an object here made Ollama reject the whole next round
+                    // ("invalid message content type: map[string]interface {}"),
+                    // breaking every skill→skill composition whose callee
+                    // returns structured output.
+                    content:      Some(Value::String(match &result {
+                        Value::String(s) => s.clone(),
+                        other => serde_json::to_string(other).unwrap_or_default(),
+                    })),
                     tool_calls:   None,
                     tool_call_id: Some(tc.id.clone()),
                     name:         Some(tc.function.name.clone()),
