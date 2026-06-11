@@ -81,3 +81,42 @@ jobs:
       # warnings (tracked: bincode RUSTSEC-2025-0141 — wire-codec succession
       # is a ROADMAP v2 item).
       - run: cargo audit
+
+  sdk-ts:
+    name: TypeScript SDK type check
+    runs-on: ubuntu-latest
+    # The TS SDK shipped 8 tsc errors — including a runtime-breaking
+    # `this._base` typo in shardFor() — because nothing in CI ever ran the
+    # compiler over it (M2 Run-21). The jest suite skips without a live node,
+    # so `tsc --noEmit` is the gate.
+    defaults:
+      run:
+        working-directory: mycelium-ts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: mycelium-ts/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+
+  fuzz:
+    name: Fuzz (wire + capability decoders, time-boxed)
+    runs-on: ubuntu-latest
+    # Dedicated cargo-fuzz job: the in-suite mini-fuzz (test job above) covers
+    # adversarial decode on every push, but the libFuzzer targets explore far
+    # deeper. Run 20's decode-DoS sat uncaught while these targets existed
+    # without a CI job. Skipped on PRs to keep review latency low; runs on
+    # main pushes and the weekly schedule.
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - uses: taiki-e/install-action@cargo-fuzz
+      - run: cargo fuzz run wire_decode -- -max_total_time=120
+      - run: cargo fuzz run capability_decode -- -max_total_time=120
