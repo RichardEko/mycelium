@@ -44,7 +44,9 @@ use crate::signal::{SignalScope, signal_kind};
 use crate::signal::Signal;
 use bytes::{BufMut, Bytes, BytesMut};
 use std::{sync::{Arc, atomic::{AtomicU16, AtomicU64, Ordering}}, time::Duration};
-use tokio::sync::{oneshot, Semaphore, TryAcquireError};
+use tokio::sync::oneshot;
+#[cfg(feature = "gateway")]
+use tokio::sync::{Semaphore, TryAcquireError};
 #[cfg(feature = "gateway")]
 use tracing::warn;
 
@@ -61,6 +63,8 @@ pub struct BulkTransport {
     staging:           papaya::HashMap<u64, Bytes>,
     http_port:             AtomicU16,
     /// `None` = unlimited; `Some(sem)` = cap on concurrent per-request handlers.
+    /// Only consumed by the gateway-gated `bulk_serve` dispatch path.
+    #[cfg(feature = "gateway")]
     handler_semaphore:     Option<Arc<Semaphore>>,
     /// Number of per-request handler tasks currently executing.
     /// Incremented before `tokio::spawn`; decremented when each task exits.
@@ -71,12 +75,13 @@ pub struct BulkTransport {
 }
 
 impl BulkTransport {
-    pub fn new(http_port: u16, _fetch_timeout: Duration, max_handlers: usize) -> Self {
+    pub fn new(http_port: u16, _fetch_timeout: Duration, _max_handlers: usize) -> Self {
         Self {
             staging:          papaya::HashMap::new(),
             http_port:        AtomicU16::new(http_port),
-            handler_semaphore: if max_handlers > 0 {
-                Some(Arc::new(Semaphore::new(max_handlers)))
+            #[cfg(feature = "gateway")]
+            handler_semaphore: if _max_handlers > 0 {
+                Some(Arc::new(Semaphore::new(_max_handlers)))
             } else {
                 None
             },
