@@ -1,11 +1,17 @@
-# Mycelium Python bridge (A2aClient lives here)
-# Install from repo root: pip install -e mycelium-py/
-mycelium @ file:../../mycelium-py
+# Mycelium Python bridge (A2aClient lives here). A plain relative path —
+# resolved against the directory you run pip from, so install with:
+#   pip install -r examples/a2a_langchain/requirements.txt   (from repo root)
+# or:
+#   pip install -r requirements.txt                          (from this dir)
+# (`mycelium @ file:../../mycelium-py` is NOT portable: PEP 508 direct
+#  references require absolute file URLs and pip rejects the relative form.)
+../../mycelium-py
 
-# LangChain
-langchain>=0.2
-langchain-core>=0.2
-langchain-community>=0.2   # Ollama LLM
+# LangChain (1.x API: create_agent; the legacy initialize_agent/AgentType
+# surface this demo originally used was removed in 1.0)
+langchain>=1.0
+langchain-core>=1.0
+langchain-ollama>=0.2      # ChatOllama with tool calling
 langchain-openai>=0.1      # OpenAI / Azure (optional)
 
 # AutoGen v0.4

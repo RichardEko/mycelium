@@ -1,5 +1,7 @@
 //! # Semantic Coordination
 //!
+//! Guide chapter: docs/guide/11-semantic-coordination.md
+//!
 //! Demonstrates three capability-layer features drawn from the L8/L9 agent
 //! communication paper (Cisco Research, arXiv 2511.19699):
 //!

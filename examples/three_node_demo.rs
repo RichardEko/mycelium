@@ -1,5 +1,7 @@
 //! Multi-role demo binary — LLM chat cluster and consistency overlay cluster.
 //!
+//! Guide chapters: docs/guide/04-consensus.md · docs/guide/10-language-bridges.md
+//!
 //! # What this demonstrates
 //!
 //! **MCP tool discovery** — the LLM node learns what tools are available by
@@ -1296,21 +1298,6 @@ async fn node_bulk_echo_peer(State(s): State<Arc<NodeState>>) -> Json<Value> {
     match s.agent.service().bulk_call(target.clone(), "echo-bulk", payload, Duration::from_secs(10)).await {
         Ok(result) => Json(json!({ "ok": true, "target": target.to_string(), "echoed_size": result.len() })),
         Err(e)     => Json(json!({ "ok": false, "reason": e.to_string() })),
-    }
-}
-
-/// Serves staged bulk payloads to bulk_serve targets.
-async fn node_bulk_fetch(
-    Path(corr_id): Path<String>,
-    State(s):      State<Arc<NodeState>>,
-) -> impl axum::response::IntoResponse {
-    let nonce = match u64::from_str_radix(corr_id.trim_start_matches("0x"), 16) {
-        Ok(n)  => n,
-        Err(_) => return (StatusCode::BAD_REQUEST, vec![]).into_response(),
-    };
-    match s.agent.service().bulk_staging_get(nonce) {
-        Some(bytes) => (StatusCode::OK, bytes.to_vec()).into_response(),
-        None        => StatusCode::NOT_FOUND.into_response(),
     }
 }
 

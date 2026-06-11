@@ -1,5 +1,7 @@
 //! LLM Agent — Config-driven capabilities · Probe/Health · Dynamic Provisioning
 //!
+//! Guide chapters: docs/guide/02-capabilities.md · docs/guide/06-tool-discovery.md
+//!
 //! Three nodes share a gossip mesh. Each node loads its capability declarations
 //! from a TOML file (`examples/node_n*.toml`). The probe loop advertises
 //! capabilities to the mesh when their services respond, and tombstones them

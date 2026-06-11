@@ -1,0 +1,11 @@
+[2m2026-06-11T10:36:43.527135Z[0m [32m INFO[0m [2mthree_node_demo[0m[2m:[0m starting [3mrole[0m[2m=[0mtool-book [3mmy_ip[0m[2m=[0m127.0.0.1 [3mport[0m[2m=[0m57005 [3mhttp_port[0m[2m=[0m8305 [3mpeers[0m[2m=[0m4
+[2m2026-06-11T10:36:43.548986Z[0m [32m INFO[0m [2mmycelium::agent::lifecycle[0m[2m:[0m Listening on 127.0.0.1:57005 (2 accept tasks)
+[2m2026-06-11T10:36:43.549268Z[0m [32m INFO[0m [2mmycelium::agent::lifecycle[0m[2m:[0m Gossip agent started: 127.0.0.1:57005
+[2m2026-06-11T10:36:43.549283Z[0m [32m INFO[0m [2mthree_node_demo[0m[2m:[0m [tool-book] node_id=127.0.0.1:57005
+[2m2026-06-11T10:36:43.549454Z[0m [32m INFO[0m [2mthree_node_demo[0m[2m:[0m [tool-book] tools: book_plot — listening
+[2m2026-06-11T10:36:43.626736Z[0m [33m WARN[0m [2mmycelium::connection[0m[2m:[0m Ignoring StateRequest from unknown peer 127.0.0.1:58679 (reported as 127.0.0.1:57003)
+[2m2026-06-11T10:36:43.626743Z[0m [33m WARN[0m [2mmycelium::connection[0m[2m:[0m Ignoring StateRequest from unknown peer 127.0.0.1:58680 (reported as 127.0.0.1:57000)
+[2m2026-06-11T10:36:43.626738Z[0m [33m WARN[0m [2mmycelium::connection[0m[2m:[0m Ignoring StateRequest from unknown peer 127.0.0.1:58682 (reported as 127.0.0.1:57001)
+[2m2026-06-11T10:36:43.626738Z[0m [33m WARN[0m [2mmycelium::connection[0m[2m:[0m Ignoring StateRequest from unknown peer 127.0.0.1:58681 (reported as 127.0.0.1:57002)
+[2m2026-06-11T10:36:43.750225Z[0m [32m INFO[0m [2mmycelium::agent::http[0m[2m:[0m HTTP server listening [3maddr[0m[2m=[0m0.0.0.0:8305
+[2m2026-06-11T10:36:44.932008Z[0m [33m WARN[0m [2mmycelium::connection[0m[2m:[0m Ignoring StateRequest from unknown peer 127.0.0.1:58682 (reported as 127.0.0.1:57001)

@@ -38,7 +38,7 @@ if not providers:
     print("ERROR: orchestrator not found on mesh (is start.sh running?)")
     sys.exit(1)
 
-node_id = providers[0].node_id
+node_id = providers[0]["node_id"]
 payload = json.dumps({
     "topic":      "$TOPIC",
     "style":      "$STYLE",
@@ -59,8 +59,12 @@ print(data.get("article", "(no article)"))
 PYEOF
 
 else
-    # Fallback: Rust example (requires recompile if source changed)
+    # Fallback: Rust example caller. SKILL_CAP/SKILL_PAYLOAD select the
+    # orchestrator skill and carry the topic (invoke_skill defaults to the
+    # llm/hello smoke test without them).
     cd "$REPO_ROOT"
-    SKILL_TOPIC="$TOPIC" SKILL_NODE_PORT=$ORCHESTRATOR_PORT SKILL_CALLER_PORT=$CALLER_PORT \
-        cargo run --example invoke_skill 2>/dev/null
+    SKILL_CAP="llm/orchestrator" \
+    SKILL_PAYLOAD="$(python3 -c "import json,sys; print(json.dumps({'topic': sys.argv[1], 'style': sys.argv[2], 'max_points': int(sys.argv[3])}))" "$TOPIC" "$STYLE" "$MAX_POINTS")" \
+    SKILL_NODE_PORT=$ORCHESTRATOR_PORT SKILL_CALLER_PORT=$CALLER_PORT \
+        cargo run --example invoke_skill
 fi

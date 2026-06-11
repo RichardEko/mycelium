@@ -103,7 +103,7 @@ async fn main() {
                 let delta: i32 = (fastrand::i32(0..10)) - 4;
                 load = (load as i32 + delta).clamp(0, 40) as u32;
                 w.true_load.store(load, Ordering::Relaxed);
-                w.agent.kv().set(key.clone(), Bytes::copy_from_slice(&load.to_le_bytes()));
+                let _ = w.agent.kv().set(key.clone(), Bytes::copy_from_slice(&load.to_le_bytes()));
             }
         });
     }

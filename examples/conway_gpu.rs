@@ -1,5 +1,7 @@
 //! Conway's Game of Life: 256-agent gossip mesh + Metal/wgpu compute shader.
 //!
+//! Guide chapter: docs/guide/01-gossip-kv.md
+//!
 //! Architecture:
 //!   - 16×16 GossipAgents run over TCP (ports 52100-52355), one per grid tile.
 //!   - A 512×512 Conway grid lives in a wgpu storage buffer on the GPU (Metal backend).

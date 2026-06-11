@@ -1,5 +1,7 @@
 //! Conway's Game of Life on a real 16×16 gossip mesh.
 //!
+//! Guide chapter: docs/guide/01-gossip-kv.md
+//!
 //! 256 GossipAgents run in-process over TCP (ports 52000-52255).
 //! Each agent owns one cell. Cell state lives in the KV store and
 //! propagates epidemically. A System-scope epoch signal drives each

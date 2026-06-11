@@ -1,5 +1,7 @@
 //! Prompt Skills demo — two in-process nodes, EchoBackend, no LLM required.
 //!
+//! Guide chapters: docs/guide/03-signals.md · docs/guide/05-skills.md
+//!
 //! What it demonstrates:
 //!   1. Node A registers a `demo/echo` skill backed by EchoBackend
 //!   2. Node B discovers it via the capability ring

@@ -29,6 +29,31 @@ kv_count() {
         || echo 0
 }
 
+# Count capability keys for one ns/name. Key shape is cap/{node}/{ns}/{name},
+# so the node segment sits between the prefix and the capability — a plain
+# prefix query cannot express it.
+cap_count() {
+    curl -sf "http://localhost:9050/gateway/kv/keys?prefix=cap/" 2>/dev/null \
+        | python3 -c "import sys,json; d=json.load(sys.stdin); print(sum(1 for k in d.get('keys',[]) if k.endswith('/$1')))" 2>/dev/null \
+        || echo 0
+}
+
+wait_for_cap() {
+    local cap="$1" target="$2" label="$3"
+    for i in $(seq 1 30); do
+        n=$(cap_count "$cap")
+        if [[ "$n" -ge "$target" ]]; then
+            printf '\r    ✓ %s (%d providers)\n' "$label" "$n"
+            return 0
+        fi
+        printf '\r    … %d/%d %s (%ds)' "$n" "$target" "$label" "$i"
+        sleep 1
+    done
+    printf '\n'
+    echo "    ✗ timed out waiting for $label" >&2
+    return 1
+}
+
 wait_for_keys() {
     local prefix="$1" target="$2" label="$3"
     for i in $(seq 1 30); do
@@ -69,7 +94,14 @@ echo ""
 echo "[1/5] Starting orchestrator + researcher + writer + verifier..."
 "$BIN" --skill "$SCRIPT_DIR/orchestrator.skill.toml" > "$LOG_DIR/orchestrator.log" 2>&1 &
 echo $! > "$LOG_DIR/orchestrator.pid"
-sleep 0.5
+# Wait until the orchestrator's gossip port accepts before starting the
+# spokes: they bootstrap to :7950, and a connection refused during the bind
+# race costs a full reconnect backoff before the mesh heals (cold-start flake
+# — a fixed sleep raced exactly this on a cold target/ build).
+for i in $(seq 1 50); do
+    if (exec 3<>/dev/tcp/127.0.0.1/7950) 2>/dev/null; then exec 3>&- 3<&-; break; fi
+    sleep 0.1
+done
 "$BIN" --skill "$SCRIPT_DIR/researcher.skill.toml"  > "$LOG_DIR/researcher.log"  2>&1 &
 echo $! > "$LOG_DIR/researcher.pid"
 "$BIN" --skill "$SCRIPT_DIR/writer.skill.toml"      > "$LOG_DIR/writer.log"      2>&1 &
@@ -100,7 +132,7 @@ sed "s/bind_port *= *7952/bind_port = 7954/" \
     "$SCRIPT_DIR/researcher.skill.toml" > "$LOG_DIR/researcher2.skill.toml"
 "$BIN" --skill "$LOG_DIR/researcher2.skill.toml" > "$LOG_DIR/researcher2.log" 2>&1 &
 echo $! > "$LOG_DIR/researcher2.pid"
-wait_for_keys "cap/llm/researcher/" 2 "second researcher on mesh"
+wait_for_cap "llm/researcher" 2 "second researcher on mesh"
 echo "      Orchestrator will now distribute research calls across both nodes."
 
 # ── 5: second invocation ──────────────────────────────────────────────────────

@@ -1,0 +1,18 @@
+[2m2026-06-11T10:36:34.832151Z[0m [32m INFO[0m [2mthree_node_demo[0m[2m:[0m starting [3mrole[0m[2m=[0mverifier [3mmy_ip[0m[2m=[0m127.0.0.1 [3mport[0m[2m=[0m57006 [3mhttp_port[0m[2m=[0m8306 [3mpeers[0m[2m=[0m4
+[2m2026-06-11T10:36:34.901659Z[0m [32m INFO[0m [2mmycelium::agent::lifecycle[0m[2m:[0m Listening on 127.0.0.1:57006 (2 accept tasks)
+[2m2026-06-11T10:36:34.904023Z[0m [32m INFO[0m [2mmycelium::agent::lifecycle[0m[2m:[0m Gossip agent started: 127.0.0.1:57006
+[2m2026-06-11T10:36:34.904033Z[0m [32m INFO[0m [2mthree_node_demo[0m[2m:[0m [verifier] node_id=127.0.0.1:57006
+[2m2026-06-11T10:36:34.904563Z[0m [32m INFO[0m [2mthree_node_demo[0m[2m:[0m [verifier] claims verifier ready (model: llama3.1:8b) — listening
+[2m2026-06-11T10:36:34.928563Z[0m [33m WARN[0m [2mmycelium::connection[0m[2m:[0m Ignoring StateRequest from unknown peer 127.0.0.1:58630 (reported as 127.0.0.1:57003)
+[2m2026-06-11T10:36:34.928605Z[0m [33m WARN[0m [2mmycelium::connection[0m[2m:[0m Ignoring StateRequest from unknown peer 127.0.0.1:58619 (reported as 127.0.0.1:57000)
+[2m2026-06-11T10:36:34.928604Z[0m [33m WARN[0m [2mmycelium::connection[0m[2m:[0m Ignoring StateRequest from unknown peer 127.0.0.1:58628 (reported as 127.0.0.1:57001)
+[2m2026-06-11T10:36:34.928624Z[0m [33m WARN[0m [2mmycelium::connection[0m[2m:[0m Ignoring StateRequest from unknown peer 127.0.0.1:58633 (reported as 127.0.0.1:57002)
+[2m2026-06-11T10:36:34.928648Z[0m [33m WARN[0m [2mmycelium::connection[0m[2m:[0m Ignoring StateRequest from unknown peer 127.0.0.1:58628 (reported as 127.0.0.1:57001)
+[2m2026-06-11T10:36:34.929938Z[0m [33m WARN[0m [2mmycelium::connection[0m[2m:[0m Ignoring StateRequest from unknown peer 127.0.0.1:58628 (reported as 127.0.0.1:57001)
+[2m2026-06-11T10:36:34.945057Z[0m [33m WARN[0m [2mmycelium::connection[0m[2m:[0m Ignoring StateRequest from unknown peer 127.0.0.1:58630 (reported as 127.0.0.1:57003)
+[2m2026-06-11T10:36:34.946480Z[0m [33m WARN[0m [2mmycelium::connection[0m[2m:[0m Ignoring StateRequest from unknown peer 127.0.0.1:58630 (reported as 127.0.0.1:57003)
+[2m2026-06-11T10:36:34.988963Z[0m [33m WARN[0m [2mmycelium::connection[0m[2m:[0m Ignoring StateRequest from unknown peer 127.0.0.1:58619 (reported as 127.0.0.1:57000)
+[2m2026-06-11T10:36:34.990374Z[0m [33m WARN[0m [2mmycelium::connection[0m[2m:[0m Ignoring StateRequest from unknown peer 127.0.0.1:58619 (reported as 127.0.0.1:57000)
+[2m2026-06-11T10:36:34.998912Z[0m [33m WARN[0m [2mmycelium::connection[0m[2m:[0m Ignoring StateRequest from unknown peer 127.0.0.1:58633 (reported as 127.0.0.1:57002)
+[2m2026-06-11T10:36:35.000298Z[0m [33m WARN[0m [2mmycelium::connection[0m[2m:[0m Ignoring StateRequest from unknown peer 127.0.0.1:58633 (reported as 127.0.0.1:57002)
+[2m2026-06-11T10:36:35.104958Z[0m [32m INFO[0m [2mmycelium::agent::http[0m[2m:[0m HTTP server listening [3maddr[0m[2m=[0m0.0.0.0:8306

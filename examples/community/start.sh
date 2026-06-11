@@ -31,7 +31,13 @@ echo "Starting orchestrator  (port 7950)..."
     > "$LOG_DIR/orchestrator.log" 2>&1 &
 echo $! > "$LOG_DIR/orchestrator.pid"
 
-sleep 1   # let the seed node bind before others connect
+# Wait until the seed's gossip port actually accepts before the spokes
+# bootstrap to it — a fixed sleep raced the bind on cold targets and cost a
+# full reconnect backoff (same fix as demo.sh).
+for i in $(seq 1 50); do
+    if (exec 3<>/dev/tcp/127.0.0.1/7950) 2>/dev/null; then exec 3>&- 3<&-; break; fi
+    sleep 0.1
+done
 
 echo "Starting researcher    (port 7952)..."
 "$BIN" --skill "$SCRIPT_DIR/researcher.skill.toml" \

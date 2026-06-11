@@ -44,9 +44,18 @@ restart of the Python agent.
 | Requirement | Notes |
 |---|---|
 | Rust toolchain | `cargo build --bin skillrunner --features a2a` |
-| Python ≥ 3.11 | |
+| Python ≥ 3.11 | LangChain ≥ 1.0 API (`create_agent`); see `requirements.txt` |
 | Ollama (recommended) | `ollama pull llama3.2` — free, no API key |
 | OpenAI key (optional) | Set `OPENAI_API_KEY` to use `gpt-4o-mini` instead |
+
+> **Model quality matters for tool selection.** The agent card now carries
+> each skill's input schema (`inputSchema`), and both demo agents build
+> properly-typed tools from it — so a capable tool-calling model drives the
+> whole pipeline correctly. `llama3.2` (3B) works but sometimes picks the
+> wrong tool or fabricates arguments; pydantic validation catches this
+> client-side before it reaches the mesh. For reliable runs use a stronger
+> local model (`OLLAMA_MODEL=qwen3:14b` verified end-to-end) or
+> `gpt-4o-mini`.
 
 ---
 

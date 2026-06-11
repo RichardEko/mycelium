@@ -71,6 +71,40 @@ def _build_model_client() -> OpenAIChatCompletionClient:
     )
 
 
+_TYPE_MAP = {"string": "str", "integer": "int", "number": "float",
+             "boolean": "bool", "array": "list", "object": "dict"}
+
+
+def _make_tool(client: A2aClient, sid: str, desc: str, schema: dict | None) -> Callable:
+    """Build a tool function whose signature mirrors the skill's gossiped
+    input schema (the card's ``inputSchema`` extension). AutoGen generates
+    its function-call schema from typed signatures, so structured fields —
+    not JSON-in-a-string — is what makes small local models reliable here."""
+    props    = (schema or {}).get("properties", {}) or {}
+    required = set((schema or {}).get("required", []))
+    params: list[str] = []
+    for pname in sorted(props, key=lambda n: (n not in required, n)):
+        ty = _TYPE_MAP.get(props[pname].get("type"), "str")
+        params.append(f"{pname}: {ty}" if pname in required
+                      else f"{pname}: {ty} | None = None")
+    if not params:   # no schema gossiped — fall back to a raw JSON string
+        params = ["payload_json: str"]
+        body = "    return _CLIENT.send(_SID, payload_json, timeout_secs=120.0)"
+    else:
+        body = (
+            "    _kwargs = {k: v for k, v in locals().items() if v is not None}\n"
+            "    return _CLIENT.send(_SID, _json.dumps(_kwargs), timeout_secs=120.0)"
+        )
+    src = f"def tool_fn({', '.join(params)}) -> str:\n{body}\n"
+    import json as _json
+    ns: dict = {"_CLIENT": client, "_SID": sid, "_json": _json}
+    exec(src, ns)                      # noqa: S102 — source built from schema
+    fn = ns["tool_fn"]
+    fn.__name__ = sid.replace("/", "_")
+    fn.__doc__  = desc
+    return fn
+
+
 def _discover_tools(client: A2aClient) -> list[Callable]:
     """Fetch /.well-known/agent.json and return one callable per skill.
 
@@ -87,17 +121,7 @@ def _discover_tools(client: A2aClient) -> list[Callable]:
         desc = skill.get("description") or f"Mycelium mesh skill: {sid}"
         print(f"    · {sid:<30}  {desc}")
 
-        def _make(s: str, d: str) -> Callable:
-            def tool_fn(message: str) -> str:
-                return client.send(s, message, timeout_secs=120.0)
-            tool_fn.__name__ = s.replace("/", "_")
-            tool_fn.__doc__  = d
-            # Give the function a proper signature so AutoGen can generate
-            # the JSON schema for it.
-            tool_fn.__annotations__ = {"message": str, "return": str}
-            return tool_fn
-
-        fns.append(_make(sid, desc))
+        fns.append(_make_tool(client, sid, desc, skill.get("inputSchema")))
     print()
     return fns
 
