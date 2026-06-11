@@ -2298,3 +2298,121 @@ async fn probe_shutdown_drains_tasks_and_releases_port() {
     let rebind = std::net::TcpListener::bind(("127.0.0.1", port));
     assert!(rebind.is_ok(), "gossip port must be rebindable after shutdown");
 }
+
+// ── Architecture conformance tests (M2 evidence for dimensions 1 and 3) ────
+
+/// Layer separation as an executable invariant: Layer I modules (KV store,
+/// framing, writer, seen-set, HLC) must not reference Layer III (consensus)
+/// or the capability subsystem. Until the v2 workspace split makes this a
+/// compile boundary, this test is the enforcement. The Layer I/II bridge
+/// (`KvState::subscriptions`) is documented and intentionally not forbidden.
+#[test]
+fn layer1_modules_do_not_reference_higher_layers() {
+    const LAYER1: &[(&str, &str)] = &[
+        ("store.rs",   include_str!("store.rs")),
+        ("framing.rs", include_str!("framing.rs")),
+        ("writer.rs",  include_str!("writer.rs")),
+        ("seen.rs",    include_str!("seen.rs")),
+        ("hlc.rs",     include_str!("hlc.rs")),
+    ];
+    const FORBIDDEN: &[&str] = &[
+        "crate::consensus",
+        "crate::capability",
+        "consensus_ns",
+        "ConsensusEngine",
+        "ConsensusMsg",
+        "CapEntry",
+        "CapFilter",
+        "CapabilityGroupDef",
+        "cross_group",
+    ];
+    for (file, src) in LAYER1 {
+        for pat in FORBIDDEN {
+            assert!(
+                !src.contains(pat),
+                "Layer I file src/{file} references `{pat}` — \
+                 a Layer I → Layer III/capability dependency is a layer violation \
+                 (see CLAUDE.md § Layer I/II Bridge Invariant)",
+            );
+        }
+    }
+}
+
+/// The Holland inversion as an executable invariant: boundaries control
+/// *acting*, never *forwarding*. A relay node that is NOT a member of group g
+/// must still forward g-scoped signals to its peers. A raw socket plays the
+/// emitter so the emitter and receiver cannot peer directly — delivery is
+/// only possible through the non-member relay. If anyone ever "optimises"
+/// forwarding by scope membership, this test fails.
+#[tokio::test]
+async fn forwarding_is_unconditional_through_non_member_relay() {
+    let port_r = alloc_port();
+    let port_b = alloc_port();
+    let id_r = NodeId::new("127.0.0.1", port_r).unwrap();
+    let id_b = NodeId::new("127.0.0.1", port_b).unwrap();
+
+    let mut cfg_r = GossipConfig::default();
+    cfg_r.bind_port = port_r;
+    // One-way bootstrap (member → relay): the relay only learns the member's
+    // address from the member's ping, and pings back on its next health-check
+    // tick — that ping-back is what populates the member's peer table. At the
+    // default 10 s interval that exceeds the formation wait, so tighten it.
+    cfg_r.health_check_interval_secs = 1;
+    cfg_r.health_check_max_jitter_ms = 50;
+    let relay = GossipAgent::new(id_r.clone(), cfg_r);
+    relay.start().await.unwrap();
+    // The relay deliberately does NOT join the group.
+
+    let mut cfg_b = GossipConfig::default();
+    cfg_b.bind_port = port_b;
+    cfg_b.bootstrap_peers = vec![id_r.clone()];
+    cfg_b.health_check_interval_secs = 1;
+    cfg_b.health_check_max_jitter_ms = 50;
+    let member = GossipAgent::new(id_b.clone(), cfg_b);
+    member.start().await.unwrap();
+    member.mesh().join_group("relay-grp");
+
+    // Structural readiness: relay must have the member as a live peer AND
+    // know (via gossiped grp/ key) that the member belongs to the group, so
+    // group-hinted forwarding has a routable target.
+    let grp_key = format!("grp/relay-grp/{id_b}");
+    let mut ready = false;
+    for _ in 0..100 {
+        if !relay.peers().is_empty()
+            && !member.peers().is_empty()
+            && relay.kv().get(&grp_key).is_some()
+        {
+            ready = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(ready, "cluster did not form: relay peers={}, member peers={}, grp key seen={}",
+        relay.peers().len(), member.peers().len(), relay.kv().get(&grp_key).is_some());
+
+    // Register the receiver BEFORE emitting.
+    let mut rx = member.mesh().signal_rx("relay.probe");
+
+    // Raw socket plays emitter A — a node the member can never peer with.
+    let fake_sender = NodeId::new("127.0.0.1", 1).unwrap();
+    let mut sock = TcpStream::connect(("127.0.0.1", port_r)).await.unwrap();
+    send_wire(&mut sock, &WireMessage::Signal {
+        ttl:     3,
+        nonce:   fastrand::u64(1..),
+        sender:  fake_sender,
+        scope:   SignalScope::Group(Arc::from("relay-grp")),
+        kind:    Arc::from("relay.probe"),
+        payload: Bytes::from_static(b"through-the-relay"),
+        hlc_seq: None,
+    }).await;
+
+    let got = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await;
+    let sig = got
+        .expect("group signal was not forwarded by the non-member relay within 5 s — \
+                 forwarding must be unconditional (boundaries control acting, not forwarding)")
+        .expect("signal channel closed unexpectedly");
+    assert_eq!(&sig.payload[..], b"through-the-relay");
+
+    relay.shutdown().await;
+    member.shutdown().await;
+}

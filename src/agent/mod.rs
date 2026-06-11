@@ -408,9 +408,12 @@ impl GossipAgent {
     /// Zero-cost: clones one `Arc` per call. The handle is `Clone + Send + Sync`
     /// and can be stored, moved across tasks, or captured in closures.
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use mycelium::{GossipAgent, GossipConfig, NodeId};
+    /// # use bytes::Bytes;
+    /// # let agent = GossipAgent::new(NodeId::new("127.0.0.1", 7000).unwrap(), GossipConfig::default());
     /// let kv = agent.kv();
-    /// kv.set("load/self", Bytes::from_static(b"queue=0"));
+    /// let _ = kv.set("load/self", Bytes::from_static(b"queue=0"));
     /// let val = kv.get("load/self");
     /// ```
     pub fn kv(&self) -> KvHandle {
@@ -422,10 +425,13 @@ impl GossipAgent {
     /// Zero-cost: clones one `Arc` per call. The handle is `Clone + Send + Sync`
     /// and can be stored, moved across tasks, or captured in closures.
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use mycelium::{GossipAgent, GossipConfig, NodeId, SignalScope, signal_kind};
+    /// # use bytes::Bytes;
+    /// # let agent = GossipAgent::new(NodeId::new("127.0.0.1", 7000).unwrap(), GossipConfig::default());
     /// let mesh = agent.mesh();
     /// mesh.join_group("nlp");
-    /// mesh.emit(signal_kind::INVOKE, SignalScope::Group("nlp".into()), Bytes::new());
+    /// let _ = mesh.emit(signal_kind::INVOKE, SignalScope::Group("nlp".into()), Bytes::new());
     /// let mut rx = mesh.signal_rx(signal_kind::INVOKE);
     /// ```
     pub fn mesh(&self) -> MeshHandle {
@@ -437,10 +443,13 @@ impl GossipAgent {
     /// Zero-cost: clones one `Arc` per call. The handle can be stored and moved
     /// across tasks independently of the agent.
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use mycelium::{GossipAgent, GossipConfig, NodeId};
+    /// # async fn example(agent: &GossipAgent) -> Result<(), Box<dyn std::error::Error>> {
     /// let schemas = agent.schemas();
-    /// schemas.publish_schema("acme/v1", MY_SCHEMA_JSON).await?;
+    /// schemas.publish_schema("acme/v1", br#"{"type":"object"}"#).await?;
     /// let bytes = schemas.get_schema("acme/v1");
+    /// # Ok(()) }
     /// ```
     pub fn schemas(&self) -> SchemaHandle {
         SchemaHandle { ctx: Arc::clone(&self.task_ctx) }
@@ -451,10 +460,14 @@ impl GossipAgent {
     /// Zero-cost: clones one `Arc` per call. The handle is `Clone + Send + Sync`
     /// and can be stored, moved across tasks, or captured in closures.
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use mycelium::{GossipAgent, GossipConfig, NodeId, ConsensusConfig};
+    /// # use bytes::Bytes;
+    /// # async fn example(agent: &GossipAgent) -> Result<(), Box<dyn std::error::Error>> {
     /// let c = agent.consensus();
-    /// c.consistent_set("cfg/x", val).await?;
+    /// c.consistent_set("cfg/x", Bytes::from_static(b"v")).await?;
     /// let _listener = c.start_consensus_listener(ConsensusConfig::default());
+    /// # Ok(()) }
     /// ```
     pub fn consensus(&self) -> ConsensusHandle {
         ConsensusHandle { ctx: Arc::clone(&self.task_ctx) }
@@ -634,12 +647,17 @@ impl GossipAgent {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```no_run
+    /// # use mycelium::{GossipAgent, GossipConfig, NodeId};
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let agent = GossipAgent::new(NodeId::new("127.0.0.1", 7000)?, GossipConfig::default());
+    /// async fn my_handler() -> &'static str { "ok" }
+    /// // Attach state with `.with_state(…)` before passing so the router is `Router<()>`.
     /// let extra = axum::Router::new()
-    ///     .route("/my-endpoint", axum::routing::get(my_handler))
-    ///     .with_state(my_state);
+    ///     .route("/my-endpoint", axum::routing::get(my_handler));
     /// agent.with_http_routes(extra);
     /// agent.start().await?;
+    /// # Ok(()) }
     /// ```
     pub fn with_http_routes(&self, routes: axum::Router) {
         *self.extra_routes.lock().unwrap_or_else(|e| e.into_inner()) = Some(routes);

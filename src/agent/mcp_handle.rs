@@ -48,7 +48,9 @@ impl McpHandle {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use mycelium::{GossipAgent, GossipConfig, NodeId};
+    /// # let agent = GossipAgent::new(NodeId::new("127.0.0.1", 7000).unwrap(), GossipConfig::default());
     /// let _handle = agent.mcp().register_mcp_tool(
     ///     "add",
     ///     serde_json::json!({

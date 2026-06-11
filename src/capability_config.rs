@@ -207,7 +207,12 @@ const HEALTH_INTERVAL_SECS: u64 = 10;
 ///
 /// This function never returns. Call it inside `tokio::spawn`:
 ///
-/// ```ignore
+/// ```no_run
+/// # use std::sync::{Arc, atomic::AtomicBool};
+/// # use mycelium::{GossipAgent, GossipConfig, NodeId, NodeCapabilityConfig, ProbeState, run_capability_probes};
+/// # let agent = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", 7000).unwrap(), GossipConfig::default()));
+/// # let config = NodeCapabilityConfig::default();
+/// # let pause_flag = Arc::new(AtomicBool::new(false));
 /// tokio::spawn(run_capability_probes(agent, config, pause_flag, |e| {
 ///     println!("{}/{} is {}", e.ns, e.name,
 ///              if matches!(e.state, ProbeState::Up) { "up" } else { "down" });
