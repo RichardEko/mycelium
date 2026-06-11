@@ -640,11 +640,72 @@ pub(crate) fn scan_kv_prefix(kv: &KvState, prefix: &str) -> Vec<(Arc<str>, Bytes
     }
 }
 
+/// One tombstone-GC sweep: removes entries that are still tombstones whose HLC
+/// *physical* time is older than `cutoff_wall_ms`. Returns the number of live
+/// (non-tombstone) entries observed during the scan.
+///
+/// Store timestamps are packed HLC values (`(physical_ms << 16) | logical`,
+/// see `crate::hlc`), while the cutoff is plain wall-clock milliseconds — the
+/// comparison must unpack via [`crate::hlc::physical_ms`]. Comparing the packed
+/// value directly never fires (packed ≈ 65 536 × ms), which silently disables
+/// tombstone GC (M2 Run-21 finding).
+pub(crate) fn sweep_stale_tombstones(
+    store: &papaya::HashMap<Arc<str>, StoreEntry>,
+    cutoff_wall_ms: u64,
+) -> usize {
+    let mut live: usize = 0;
+    let guard = store.pin();
+    let stale_keys: Vec<Arc<str>> = guard
+        .iter()
+        .filter(|(_, v)| {
+            if v.data.is_some() { live += 1; }
+            v.data.is_none() && crate::hlc::physical_ms(v.timestamp) < cutoff_wall_ms
+        })
+        .map(|(k, _)| Arc::clone(k))
+        .collect();
+    // Conditional remove: between collect and removal a live write can win the
+    // CAS on this key; an unconditional remove() would delete it (same race
+    // family as the M2 Run-18 prefix-index finding). Only remove the entry if
+    // it is still a stale tombstone.
+    for key in &stale_keys {
+        guard.compute(Arc::clone(key), |existing| match existing {
+            Some((_, e)) if e.data.is_none() && crate::hlc::physical_ms(e.timestamp) < cutoff_wall_ms =>
+                papaya::Operation::Remove,
+            _ => papaya::Operation::Abort(()),
+        });
+    }
+    live
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::framing::GossipUpdate;
     use bytes::Bytes;
+
+    #[test]
+    fn tombstone_gc_sweep_unpacks_hlc_timestamps() {
+        let store: papaya::HashMap<Arc<str>, StoreEntry> = papaya::HashMap::new();
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let pack = |ms: u64| ms << 16;
+
+        let guard = store.pin();
+        guard.insert("stale-tomb".into(), StoreEntry { data: None, timestamp: pack(now_ms - 3_600_000) });
+        guard.insert("fresh-tomb".into(), StoreEntry { data: None, timestamp: pack(now_ms) });
+        guard.insert("live".into(), StoreEntry { data: Some(Bytes::from_static(b"v")), timestamp: pack(now_ms - 3_600_000) });
+        drop(guard);
+
+        let live = sweep_stale_tombstones(&store, now_ms - 60_000);
+
+        let guard = store.pin();
+        assert!(guard.get("stale-tomb").is_none(), "hour-old tombstone must be collected");
+        assert!(guard.get("fresh-tomb").is_some(), "tombstone inside the window must survive");
+        assert!(guard.get("live").is_some(), "live entries are never time-evicted regardless of age");
+        assert_eq!(live, 1, "sweep reports the live-entry count");
+    }
 
     #[test]
     fn lww_newer_wins() {

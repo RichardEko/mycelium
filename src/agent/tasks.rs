@@ -635,30 +635,7 @@ pub(super) async fn run_gc_task(
                         .saturating_mul(1_000),
                 );
 
-                let mut live: usize = 0;
-                {
-                    let guard = store.pin();
-                    let stale_keys: Vec<Arc<str>> = guard
-                        .iter()
-                        .filter(|(_, v)| {
-                            if v.data.is_some() { live += 1; }
-                            v.data.is_none() && v.timestamp < tombstone_cutoff
-                        })
-                        .map(|(k, _)| Arc::clone(k))
-                        .collect();
-                    // Conditional remove: between collect and removal a live
-                    // write can win the CAS on this key; an unconditional
-                    // remove() would delete it (same race family as the
-                    // M2 Run-18 prefix-index finding). Only remove the entry
-                    // if it is still a stale tombstone.
-                    for key in &stale_keys {
-                        guard.compute(Arc::clone(key), |existing| match existing {
-                            Some((_, e)) if e.data.is_none() && e.timestamp < tombstone_cutoff =>
-                                papaya::Operation::Remove,
-                            _ => papaya::Operation::Abort(()),
-                        });
-                    }
-                }
+                let live = crate::store::sweep_stale_tombstones(store, tombstone_cutoff);
                 live_entries.store(live, Ordering::Relaxed);
 
                 let pool_len = intern_pool_len();

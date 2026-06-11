@@ -861,6 +861,28 @@ async fn test_shutdown_with_timeout_does_not_hang() {
     .expect("shutdown_with_timeout must return even when the internal timeout fires");
 }
 
+#[tokio::test]
+async fn test_shutdown_lifecycle_edges_never_started_and_double() {
+    // Shutdown on an agent that was never started must return promptly, not
+    // hang waiting on tasks that were never spawned.
+    let port = alloc_port();
+    let cfg = GossipConfig { bind_port: port, ..GossipConfig::default() };
+    let agent = GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg);
+    tokio::time::timeout(Duration::from_secs(2), agent.shutdown())
+        .await
+        .expect("shutdown on a never-started agent must not hang");
+
+    // A second shutdown after a completed one must be an idempotent no-op.
+    let port = alloc_port();
+    let cfg = GossipConfig { bind_port: port, ..GossipConfig::default() };
+    let agent = GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg);
+    agent.start().await.unwrap();
+    agent.shutdown().await;
+    tokio::time::timeout(Duration::from_secs(2), agent.shutdown())
+        .await
+        .expect("double shutdown must be idempotent, not hang or panic");
+}
+
 // ── Layer 2: Signal / Boundary ───────────────────────────────────────────
 
 #[tokio::test]
