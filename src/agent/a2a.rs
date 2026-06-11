@@ -58,6 +58,12 @@ pub(crate) struct AgentSkill {
     pub id:          String,
     pub name:        String,
     pub description: String,
+    /// Machine-readable JSON Schema for the skill's input, taken from the
+    /// gossiped `skills/{ns}/{name}/{node}/input` entry when present.
+    /// Additive extension to the A2A card: tool-calling frameworks use it to
+    /// build properly-typed tools instead of guessing field names from prose.
+    #[serde(rename = "inputSchema", skip_serializing_if = "Option::is_none", default)]
+    pub input_schema: Option<Value>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -206,6 +212,49 @@ fn resolve_providers(
     out
 }
 
+/// Builds a human/LLM-readable description for a skill from its gossiped
+/// input schema (`skills/{ns}/{name}/{node}/input`, published by SkillRunner).
+/// Tool-calling frameworks read the card's `description` to decide how to
+/// invoke a skill — an empty description left LangChain agents passing plain
+/// text to skills that require a JSON object (observed live: the orchestrator
+/// rejected `"CRDTs"` with a JSON parse error and the agent silently fell
+/// back to answering from its own weights).
+fn skill_input_description(kv: &crate::store::KvState, skill_id: &str) -> (String, Option<Value>) {
+    let prefix = format!("skills/{skill_id}/");
+    for (key, bytes) in scan_kv_prefix(kv, &prefix) {
+        if !key.ends_with("/input") { continue; }
+        let Ok(schema) = serde_json::from_slice::<Value>(&bytes) else { continue };
+        let required: Vec<&str> = schema.get("required")
+            .and_then(|r| r.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        let props = schema.get("properties").and_then(|p| p.as_object());
+        let mut fields: Vec<String> = Vec::new();
+        if let Some(props) = props {
+            for (name, spec) in props {
+                let ty   = spec.get("type").and_then(|t| t.as_str()).unwrap_or("any");
+                let desc = spec.get("description").and_then(|d| d.as_str()).unwrap_or("");
+                let req  = if required.contains(&name.as_str()) { "required" } else { "optional" };
+                if desc.is_empty() {
+                    fields.push(format!("{name} ({ty}, {req})"));
+                } else {
+                    fields.push(format!("{name} ({ty}, {req}): {desc}"));
+                }
+            }
+        }
+        let text = if fields.is_empty() {
+            format!("Mycelium mesh skill {skill_id}. Input: a JSON object.")
+        } else {
+            format!(
+                "Mycelium mesh skill {skill_id}. Input MUST be a JSON object with: {}.",
+                fields.join("; "),
+            )
+        };
+        return (text, Some(schema));
+    }
+    (String::new(), None)
+}
+
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 async fn agent_card_handler(State(state): State<A2aState>) -> impl IntoResponse {
@@ -220,7 +269,8 @@ async fn agent_card_handler(State(state): State<A2aState>) -> impl IntoResponse 
         }
     }
     let skills: Vec<AgentSkill> = skill_ids.into_iter().map(|id| {
-        AgentSkill { name: id.clone(), id, description: String::new() }
+        let (description, input_schema) = skill_input_description(kv, &id);
+        AgentSkill { name: id.clone(), id, description, input_schema }
     }).collect();
 
     let node_addr = state.task_ctx.node_id.to_string();
@@ -254,7 +304,11 @@ async fn handle_tasks_send(
         return jsonrpc_error(id, -32001, "skill not found");
     };
 
-    let timeout = Duration::from_secs(30);
+    // Generous: A2A skills are frequently multi-step LLM pipelines
+    // (orchestrator → researcher → writer takes ~90 s on local Ollama);
+    // a 30 s cap made every such composition fail with -32603 while the
+    // pipeline was still working. Clients enforce their own HTTP timeouts.
+    let timeout = Duration::from_secs(120);
     match super::rpc::rpc_call_ctx(
         &state.task_ctx, target,
         "skill.invoke".into(), Bytes::from(text.into_bytes()), timeout,
@@ -469,6 +523,39 @@ mod tests {
         let state = A2aState { task_ctx: make_ctx(), tasks };
         let result = handle_tasks_get(&state, None, &json!({ "id": "no-such-id" }));
         assert_eq!(result["error"]["code"], -32001);
+    }
+
+    /// The agent card must surface each skill's gossiped input schema as a
+    /// description — tool-calling frameworks decide how to invoke from it,
+    /// and an empty description left agents passing plain text to
+    /// JSON-expecting skills.
+    #[test]
+    fn agent_card_description_renders_input_schema() {
+        let kv = crate::store::KvState::new(0);
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["topic"],
+            "properties": {
+                "topic":      { "type": "string", "description": "Topic to write about" },
+                "max_points": { "type": "integer" },
+            },
+        });
+        kv.store.pin().insert(
+            Arc::from("skills/llm/orchestrator/127.0.0.1:7950/input"),
+            crate::store::StoreEntry {
+                data:      Some(bytes::Bytes::from(serde_json::to_vec(&schema).unwrap())),
+                timestamp: 1,
+            },
+        );
+        let (desc, schema) = skill_input_description(&kv, "llm/orchestrator");
+        assert!(schema.is_some(), "raw schema is exposed on the card as inputSchema");
+        assert!(desc.contains("JSON object"), "tells callers the payload shape: {desc}");
+        assert!(desc.contains("topic (string, required): Topic to write about"), "{desc}");
+        assert!(desc.contains("max_points (integer, optional)"), "{desc}");
+        // No schema on the mesh → empty description, never a panic.
+        let (empty_desc, no_schema) = skill_input_description(&kv, "llm/unknown");
+        assert_eq!(empty_desc, "");
+        assert!(no_schema.is_none());
     }
 
     /// M2 Run-18 race-family sweep regression: the cleanup sweep removes only
