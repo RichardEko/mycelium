@@ -54,6 +54,18 @@ existed. This is the framework's own report card.
   `read_frame` on the wire path; `tracing-subscriber` 0.3.19,
   RUSTSEC-2025-0055 log poisoning). Found by M2 Run-19 `cargo audit` probe;
   fixed same run via semver-compatible lock bumps.
+- 2026-06-11: **Robustness** scored 8 in Runs 16–19 while `bincode_cfg()`
+  set no decode byte-limit: a frame whose internal length prefix claims a
+  huge element count makes bincode attempt an unbounded `Vec::with_capacity`
+  and the process OOM-aborts (SIGABRT). One malformed frame from any peer —
+  or a bit-flip on a non-TLS link — kills the node; the 10 MiB `read_frame`
+  cap bounds the frame, not the element counts inside it. Found by the M2
+  Run-20 decoder mini-fuzz; fixed same run with `.with_limit::<MAX_FRAME_BYTES>()`.
+- 2026-06-11: **Test Architecture** scored 8–9 in Runs 1–19 while the two
+  fuzz targets were counted in the pyramid but **never executed** in any run
+  (built at most). The decoder DoS above is exactly what they exist to catch;
+  it sat uncaught for the life of the series. Found by promoting an in-suite
+  mini-fuzz in Run 20.
 
 **Dimensions:** Philosophy/Coherence · Conceptual Integrity · Architecture ·
 Modularity · API Design · Error Handling · Configurability · Language Best
@@ -1005,3 +1017,86 @@ direction probe; release perf smoke `apply_and_notify_throughput_smoke`:
 | 25 | Dependency Hygiene | 6 | **Capped: Major finding this run** (2 RUSTSEC vulnerabilities found by audit probe; fixed in-run, audit now clean — expect recovery next run with sustained evidence). bincode unmaintained remains; no CI audit job yet |
 | — | **Floor (lowest 3)** | **6, 6, 7** | Semantic Correctness (6, HLC drift), Dependency Hygiene (6, fixed in-run), four-way tie at 7 (Concurrency, Security, Scalability, Failure Mode Legibility) — the HLC drift bound is the actionable one and lifts both #11 and #14 |
 | — | Mean (continuity footnote) | 7.9 | not a target; see M2 preamble |
+
+## 2026-06-11 — Run 20 (M2)
+
+Deep-dive dimensions this run (by rotation from Run 19): 16 (Scalability),
+17 (Testability), 18 (Test Architecture), 19 (Observability),
+20 (Debuggability). Next run by rotation: 21–25.
+
+**Process disclosure.** Fourth run today; the scoring agent authored the
+entire diff under evaluation (the demo-smoke / schema-re-assertion work and
+all four prior sessions) with Run 19's table in context, so the blind rule is
+compromised as in Runs 17–19. Mitigation unchanged: scores moved only on this
+run's own probe/suite evidence, and the run's one finding is against
+Robustness, a dimension this session's work did not touch. Cadence gate
+passed on a material diff (8 commits since Run 19; 904 insertions).
+
+Execution evidence this run: core 319/319 at full feature matrix
+(`tls,metrics,a2a,llm`) + 320/320 with `fuzz-internals` (mini-fuzz);
+tuple-space 24/24; clippy `-D warnings` clean at full matrix and
+`--no-default-features`; demo-smoke (community cluster + mock LLM) 8/8
+consecutive local + green on remote CI (run 27352303760); 3 new falsification
+probes executed.
+
+### Findings
+
+- **Major — Robustness (#12, capped ≤ 6, scored 6, fixed in-run).**
+  `bincode_cfg()` carried no decode byte-limit, so a frame whose internal
+  length prefix claims a huge element count drove an unbounded
+  `Vec::with_capacity` → process OOM-abort (SIGABRT, observed: "memory
+  allocation of 2346361151233958999 bytes failed"). `read_frame` caps the
+  *frame* at MAX_FRAME_BYTES but not the element counts decoded from inside
+  it, so one malformed frame from any connected peer — or a bit-flip on a
+  non-TLS link — aborts the node. Reachable on the live gossip path; all
+  decoders (wire, capability, signal, locality, WAL sync) share the config,
+  so the whole wire surface was exposed. Found by the new decoder mini-fuzz
+  (`mini_fuzz_decoders_survive_adversarial_bytes`, 20 504 inputs: noise +
+  truncation + single-bit-flip mutation of a valid frame; reproduced on a
+  bit-flip case). Fixed in-run with
+  `.with_limit::<MAX_FRAME_BYTES>()`; mini-fuzz now passes and stays as an
+  in-suite regression gate (`fuzz-internals` feature). Calibration ledger
+  entry 5. Top improvement target until the dedicated fuzz job catches up.
+- **Probe passed — Semantic Correctness / Scalability (#11/#16):**
+  `anti_entropy_delivers_pre_connection_writes` (kept). Reconstructed the
+  community-demo cold-start flake: a spoke writes a key while its seed is not
+  yet listening, the seed starts later, and anti-entropy must close the gap
+  that live gossip missed by construction. Converged in ~252 ms (2-node).
+  So the substrate's anti-entropy closure is sound; the demo flake was
+  specifically the *schema* keys racing connection setup, correctly fixed by
+  periodic re-assertion rather than a substrate bug. Resolves the open
+  question carried from Run 19.
+- **Probe passed — Operational Readiness (#21):**
+  `ready_gate_flips_on_first_capability_advertisement` (kept) — `/ready`
+  returns non-200 before any capability is advertised and flips to 200 after
+  the first advertisement tick. The documented gate had no prior test.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 9 | carried (v19) |
+| 2 | Conceptual Integrity | 8 | carried (v19) |
+| 3 | Architecture | 9 | carried (v19) |
+| 4 | Modularity | 8 | carried (v19) |
+| 5 | API Design | 8 | carried (v19) |
+| 6 | Error Handling Model | 8 | carried (v18) |
+| 7 | Configurability | 8 | carried (v18) |
+| 8 | Language Best Practices | 9 | **Evidence:** clippy `-D warnings` clean this run, full matrix + `--no-default-features`; `#![deny(unsafe_code)]` |
+| 9 | Concurrency Correctness | 7 | carried (v19); no new concurrency finding this run |
+| 10 | Resource Management | 8 | carried (v18) |
+| 11 | Semantic Correctness | 8 | Recovered from Run-19 cap: HLC drift bound shipped + **anti_entropy_delivers_pre_connection_writes** probe passed this run (convergence closure verified, 2-node). Held at 8: single-probe evidence, not a broad convergence run |
+| 12 | Robustness | 6 | **Capped: Major finding this run** — unbounded decode allocation / OOM-abort from one malformed frame (see Findings). Fixed in-run (`.with_limit`); mini-fuzz kept as regression gate |
+| 13 | Security | 7 | carried (v19); the decode-limit fix also closes a remote-DoS vector, but the unauthenticated tuple-mutation / no-RBAC gaps still set the ceiling |
+| 14 | Failure Mode Legibility | 7 | carried (v19); the OOM-abort was the opposite of legible (bare allocation message, SIGABRT) — now prevented, but a reminder the score isn't a 9 |
+| 15 | Performance | 9 | carried (v19, release perf smoke); no fresh perf run this run |
+| 16 | Scalability | 7 | Deep-dive. Anti-entropy delta carries the full `(key,timestamp)` index per round (`key_timestamps`) — O(n) digest cost that grows with store size; single-primary tuple ceiling and O(N²) TCP unchanged. No fresh scale execution beyond the 2-node anti-entropy probe |
+| 17 | Testability | 9 | Deep-dive. **Evidence:** 3 probes written+run in minutes this run; the mini-fuzz reused `fuzz_internals` (internals reachable for tests behind a feature, not public — the right seam); ready-gate drove the live gateway |
+| 18 | Test Architecture | 7 | Deep-dive. **Down from 8** + ledger entry: the two fuzz targets were counted in the pyramid for 19 runs but never executed, and a Major decoder DoS sat uncaught the whole time. The in-suite mini-fuzz (this run) and the demo-smoke job (this session) close two long-standing gaps; the dedicated `fuzz/` targets still have no CI job |
+| 19 | Observability | 8 | Deep-dive. `/stats` (`dropped_frames`, `commit_conflicts`, `task_count`), `/metrics`, schema re-assertion observable under `skills/`; rich surface, but no fresh metrics probe this run and OTEL remains skillrunner-only |
+| 20 | Debuggability | 8 | Deep-dive. `/mgmt` dashboard + `/gateway/kv/*` scan + agent card + `/consensus/{slot}` lease view; `/mgmt` reachability is now asserted by the demo-smoke job. Ballot internals still not inspectable |
+| 21 | Operational Readiness | 9 | **Evidence:** `ready_gate_flips_on_first_capability_advertisement` probe passed this run; demo-smoke exercises start → A2A traffic → SIGTERM-clean shutdown 8/8 |
+| 22 | Evolvability | 8 | carried (v19); CHANGELOG current (smoke + schema re-assertion entries); bincode-succession is ROADMAP v2 milestone 11 |
+| 23 | Documentation | 8 | carried (v19, full guide alignment); 105 rustdoc intra-doc link warnings (`GossipAgent::*` links that moved to handles) noted as a cleanup target, not re-scored down without a deep-dive |
+| 24 | Developer Experience | 8 | carried (v19); CI now builds examples + runs the demo smoke, tightening the contributor feedback loop; `checkout@v4` Node-20 deprecation (2026-06-16) still pending |
+| 25 | Dependency Hygiene | 8 | Recovered from Run-19 cap (advisories fixed; CI audit job added); held at 8: no fresh `cargo audit` run this run, bincode-unmaintained persists |
+| — | **Floor (lowest 3)** | **6, 7, 7** | Robustness (6, capped by finding); five-way tie at 7 — Concurrency, Security, Failure Mode Legibility, Scalability, Test Architecture. Robustness is the actionable one (fix shipped; needs the fuzz CI job to stay caught) |
+| — | Mean (continuity footnote) | 8.0 | not a target; see M2 preamble |
