@@ -1,17 +1,17 @@
 /target
 .DS_Store
-GO_TO_MARKET.md
-docs/presentation.html
-docs/fluid_pipeline_plan.html
-docs/fluid_pipeline_viz.html
-docs/flow_networks.html
 
-# Internal strategy docs (moved to docs/internal/)
+# Internal strategy docs (private — go-to-market, compliance, v30 integration, …)
 docs/internal/
 docs/commercial.html
 
-# arXiv submission artifacts
-docs/arxiv/
+# Papers & presentations are public: their sources (.tex/.md/.bib + figure/data
+# files) are tracked under docs/publications/. Only whole-paper RENDERED HTML is
+# excluded — it is derived from the source and rots immediately (the same rule
+# that retired docs/readme.html and docs/roadmap.html). The presentation deck
+# (presentation.html) is itself the source, so it is NOT excluded.
+docs/publications/arxiv/**/*.html
+docs/publications/paper.html
 
 # Python
 __pycache__/
