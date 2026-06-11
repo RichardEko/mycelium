@@ -66,6 +66,21 @@ existed. This is the framework's own report card.
   (built at most). The decoder DoS above is exactly what they exist to catch;
   it sat uncaught for the life of the series. Found by promoting an in-suite
   mini-fuzz in Run 20.
+- 2026-06-11: **Resource Management** scored 8 in Runs 16–20 while tombstone
+  GC never fired — the GC predicate compared packed-HLC entry timestamps
+  against a wall-clock-ms cutoff, unsatisfiable since the v9 HLC migration
+  (3c4de6e, 2026-05-20). Found by the Run-21 falsification probe; fixed same
+  run (`store::sweep_stale_tombstones` + regression test).
+- 2026-06-11: **Semantic Correctness** scored 8 in Runs 16–18 and 20 while
+  the same tombstone-GC defect made the documented GC semantics ("only
+  tombstones are GC'd") false in effect. Found by the Run-21 probe.
+- 2026-06-11: **Developer Experience** scored 8 in Runs 16–20 while the
+  TypeScript SDK's `shardFor()` referenced `this._base` (runtime crash on
+  every call) plus 7 further tsc errors, introduced 2026-05-25 (c6cc3ce);
+  no tsc gate in CI. Found by a user-requested type check.
+- 2026-06-11: **Documentation** scored 8 in Runs 16–20 while ROADMAP.md
+  linked three example files deleted 2026-05-25 (95c92af). Found by the
+  Run-21 link-integrity probe; fixed same run.
 
 **Dimensions:** Philosophy/Coherence · Conceptual Integrity · Architecture ·
 Modularity · API Design · Error Handling · Configurability · Language Best
@@ -1100,3 +1115,112 @@ probes executed.
 | 25 | Dependency Hygiene | 8 | Recovered from Run-19 cap (advisories fixed; CI audit job added); held at 8: no fresh `cargo audit` run this run, bincode-unmaintained persists |
 | — | **Floor (lowest 3)** | **6, 7, 7** | Robustness (6, capped by finding); five-way tie at 7 — Concurrency, Security, Failure Mode Legibility, Scalability, Test Architecture. Robustness is the actionable one (fix shipped; needs the fuzz CI job to stay caught) |
 | — | Mean (continuity footnote) | 8.0 | not a target; see M2 preamble |
+
+## 2026-06-11 — Run 21 (M2)
+
+Deep-dive dimensions this run (by rotation from Run 20): 21 (Operational
+Readiness), 22 (Evolvability), 23 (Documentation), 24 (Developer Experience),
+25 (Dependency Hygiene). Next run by rotation: 1–5.
+
+**Process disclosure.** Second run today (Run 20 at 15:28; cadence gate passed
+on a material diff: docs reorganization commits 13b3d47 + 89c9b82, plus
+working-tree TypeScript SDK fixes and the in-run fixes below). The blind rule
+held genuinely this run: all scores were fixed before ratings.md was opened.
+The scoring session also ran the full test pyramid earlier today on user
+request (not to unlock scores) — that evidence is cited where used.
+
+Execution evidence this run: core lib 321/321 at full feature matrix
+(`tls,metrics,a2a,llm`; 319 + 2 probe tests kept); tuple-space 33/33; clippy
+`-D warnings` clean (full matrix); `tsc --noEmit` clean (mycelium-ts);
+integration 13/13 (first run 12/13 — scenario-12 flake, see Findings);
+`make test-scale` 100-node 5/5; `make test-scale-resilience` 21-node 10/10
+across 4 phases; `make test-scale-entries` 30-node × 5000 keys 6/6 (100%
+live-gossip fraction, sweep tail 0); 3 feature-combo builds
+(`--no-default-features` alone, `+tls`, `+metrics`); link-integrity probe over
+all md/html docs.
+
+### Findings
+
+- **Major — Resource Management / Semantic Correctness (#10/#11, both capped
+  ≤ 6, fixed in-run).** Tombstone GC has never fired since the v9 HLC
+  migration (3c4de6e, 2026-05-20): the GC predicate compared the store
+  entry's **packed HLC** timestamp (`(physical_ms << 16) | logical`) against
+  a **wall-clock-millisecond** cutoff (`tasks.rs` run_gc_task). A packed
+  stamp is ~65 536× any ms cutoff, so `v.timestamp < tombstone_cutoff` was
+  unsatisfiable — every tombstone accumulated forever (unbounded store growth
+  on delete-heavy workloads; "only tombstones are GC'd" was in effect
+  "nothing is ever GC'd"). Every other timestamp consumer
+  (`CapEntry::is_fresh`, seen-set eviction) correctly unpacks via
+  `hlc::physical_ms`; the GC was the one that didn't. Found by this run's
+  falsification probe against Semantic Correctness (the planned probe — the
+  equal-timestamp LWW tiebreak — turned out to be already covered by unit +
+  proptest, so the probe moved to the next classic LWW edge: tombstone
+  lifecycle). Fixed in-run: sweep extracted to
+  `store::sweep_stale_tombstones` (unpacks via `physical_ms`, preserves the
+  Run-18 conditional-remove discipline) + regression test
+  `tombstone_gc_sweep_unpacks_hlc_timestamps` (kept). Calibration ledger
+  entries 9–10.
+- **Minor — Test Architecture / Failure Mode Legibility (#18/#14, both
+  capped ≤ 6, fixed in-run).** Integration scenario 12 (prompt skills) flaked
+  on its first execution today: `/gateway/llm/call returned no output —
+  response: {}`; identical rerun passed 13/13. Root cause: the scenario's
+  `curl -sf --max-time 10` raced the gateway's internal 30 s RPC timeout, and
+  because the gateway returns **HTTP 200 + `{"error":...}` JSON** for all
+  runtime failures, `-f` can only fail on the curl timeout — yielding the
+  maximally illegible empty-object diagnostic. Fixed in-run: scenario now
+  passes `timeout_ms:10000 < --max-time 15` so the gateway's legible error
+  JSON always wins the race. The 200-on-error envelope itself is noted as an
+  API-surface wart under #14. Supporting #18 gap: the TypeScript SDK is not
+  type-checked in CI (see next finding).
+- **Minor — Developer Experience (#24, capped ≤ 6, fixed in working tree).**
+  The shipped TypeScript SDK had 8 `tsc` errors, including a runtime-breaking
+  one: `shardFor()` referenced `this._base` (property is `base`) and omitted
+  the path's leading slash — every call would have thrown since the method
+  shipped (c6cc3ce, 2026-05-25). Found by a user-requested type check this
+  morning; no CI gate runs `tsc --noEmit` on mycelium-ts. Calibration ledger
+  entry 11.
+- **Minor — Documentation (#23, capped ≤ 6, fixed in-run).** Link-integrity
+  probe over all markdown/HTML docs found ROADMAP.md still linking three
+  example files (`capability_market.rs`, `emergent_pool.rs`,
+  `locality_wiring.rs`) deleted on 2026-05-25 (archived in dd03725, archive
+  deleted in 95c92af). Fixed in-run (links converted to plain references with
+  a retirement note); probe re-run reports 0 broken links. Calibration ledger
+  entry 12.
+- **Probe passed — Operational Readiness (#21):**
+  `test_shutdown_lifecycle_edges_never_started_and_double` (kept) — shutdown
+  on a never-started agent returns promptly (no hang on never-spawned tasks),
+  and a second shutdown after a completed one is an idempotent no-op.
+- **Probe passed — Dependency Hygiene / feature matrix (#25):** three
+  feature-combo builds compile clean, including the CI-unexercised
+  `--no-default-features --features tls` and `--no-default-features
+  --features metrics` corners.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 8 | Re-examined (philosophy.html pull-aligned in 89c9b82): current, Holland mapping intact, TupleSpace pull-pattern refinement integrated; 8 is the no-execution-evidence cap for a doc-anchored dimension |
+| 2 | Conceptual Integrity | 8 | carried (v19) |
+| 3 | Architecture | 9 | carried (v19); the in-run GC fix respected the layer split (sweep lives in store.rs, task only schedules it) |
+| 4 | Modularity | 8 | carried (v19) |
+| 5 | API Design | 8 | carried (v19) |
+| 6 | Error Handling Model | 8 | carried (v18); the gateway 200-on-error envelope is recorded under #14 this run — candidates for one shared finding if it recurs |
+| 7 | Configurability | 8 | carried (v18) |
+| 8 | Language Best Practices | 9 | **Evidence:** clippy `-D warnings` clean at full matrix this run; `#![deny(unsafe_code)]` |
+| 9 | Concurrency Correctness | 7 | carried (v19); the extracted sweep preserves the conditional-remove rule from the Run-16–18 race family — no new finding |
+| 10 | Resource Management | 6 | **Capped: Major finding** — tombstone GC never fired (unbounded tombstone accumulation); fixed in-run + regression test. Ledger entry 9 |
+| 11 | Semantic Correctness | 6 | **Capped: same finding** — documented GC semantics ("only tombstones are GC'd") diverged from code since 2026-05-20. The originally-planned probe (equal-ts LWW tiebreak) was already covered by `lww_equal_timestamp_concurrent_data_converges` + proptest. Ledger entry 10 |
+| 12 | Robustness | 8 | Recovered from Run-20 cap. **Evidence:** resilience suite 10/10 this run (crash/rejoin, late-joiner anti-entropy, 3× churn); decode mini-fuzz ran green inside the 321. Held at 8: one run since a Major decode-DoS; dedicated `fuzz/` CI job still pending |
+| 13 | Security | 7 | carried (v19) |
+| 14 | Failure Mode Legibility | 6 | **Capped: Minor finding** — gateway 200-on-error + curl `-f` produced the empty `{}` diagnostic that made the scenario-12 flake opaque; scenario fixed, envelope wart remains |
+| 15 | Performance | 8 | **Evidence (re-scored 9→8 on fresh data):** entries test 100% live-gossip at write end, sweep tail 0 — but `dropped_frames` 56 (100-node, depth 2048) and 92 (entries, depth 4096) under burst show default backpressure headroom is thin |
+| 16 | Scalability | 8 | Up from 7 on fresh execution: 100-node 5/5 and 30-node × 5000-entry 6/6 this run (the entry-volume axis Run 20 lacked). Structural ceilings unchanged (O(n) `key_timestamps` digest, O(N²) TCP managed by connection cap) — not a 9 |
+| 17 | Testability | 9 | **Evidence:** 321 lib tests in 5.3 s; both probes this run were writable in minutes against public + pub(crate) seams |
+| 18 | Test Architecture | 6 | **Capped: Minor finding** — scenario-12 flake (timing-budget race, fixed); TS SDK has no tsc gate in CI; `fuzz/` targets still lack a dedicated CI job |
+| 19 | Observability | 8 | carried (v20); `dropped_frames` on `/stats` did its job in both scale tests this run |
+| 20 | Debuggability | 8 | carried (v20) |
+| 21 | Operational Readiness | 9 | Deep-dive. **Evidence:** integration 13/13 incl. KV-persistence + full-cluster restart; resilience 10/10; lifecycle-edge probe passed (never-started + double shutdown, kept) |
+| 22 | Evolvability | 8 | Deep-dive. Wire policy v2–v11 with documented downgrade shims; `read_frame_accepts_prev_wire_version` ran green in this run's suite; CHANGELOG `[Unreleased]` current. Held at 8: wire codec sits on unmaintained bincode (succession = ROADMAP v2 milestone 11) |
+| 23 | Documentation | 6 | **Capped: Minor finding** — 3 dangling ROADMAP example links post-reorg (fixed; link probe now 0 broken). Guide chapters verified on current sub-handle API (61 call sites). Ledger entry 12 |
+| 24 | Developer Experience | 6 | **Capped: Minor finding** — TS SDK shipped 8 type errors incl. runtime-breaking `shardFor()`; no tsc CI gate. Rust-side DX strong (Makefile, CLAUDE.md on-ramp, 5 s test cycle). Ledger entry 11 |
+| 25 | Dependency Hygiene | 8 | Deep-dive. **Evidence:** 3 feature-combo builds clean this run; 251 deps full-matrix vs 61 minimal (annotation-disciplined optionals); `block` future-incompat is dev-only (wgpu→metal). Held at 8: bincode-unmaintained persists; no fresh `cargo audit` this run |
+| — | **Floor (lowest 3)** | **6, 6, 6** | Six-way tie at 6, all capped by findings: Resource Management, Semantic Correctness, Failure Mode Legibility, Test Architecture, Documentation, Developer Experience. All four findings fixed in-run/in-tree; the caps record that they shipped |
+| — | Mean (continuity footnote) | 7.6 | not a target; see M2 preamble |

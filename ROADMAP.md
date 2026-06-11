@@ -691,13 +691,15 @@ built entirely on the Layer I KV store. No separate registry, no coordination ov
 capability state lives under `cap/`, `req/`, and `gcap/` namespaces and is anti-entropy-synced
 to late joiners automatically.
 
-Three browser-visual examples demonstrate the subsystem end-to-end:
-- **[`examples/capability_market.rs`](examples/capability_market.rs)** (port 8097) — four
-  capability types, providers and requirers, demand-pressure bars, live toggle
-- **[`examples/emergent_pool.rs`](examples/emergent_pool.rs)** (port 8098) — 20-node worker
-  pool assembling via `define_capability_group`, consumers dispatching via `signal_wired_via`
-- **[`examples/locality_wiring.rs`](examples/locality_wiring.rs)** (port 8099) — 12 nodes
-  across two AZs, concentric rings showing locality depth, resolver shifting in real time
+Three browser-visual examples demonstrated the subsystem end-to-end. They were retired
+when the standalone demos were unified under the manifest preset gallery (commit
+`dd03725`) and are retrievable from git history:
+- **`capability_market.rs`** (port 8097) — four capability types, providers and
+  requirers, demand-pressure bars, live toggle
+- **`emergent_pool.rs`** (port 8098) — 20-node worker pool assembling via
+  `define_capability_group`, consumers dispatching via `signal_wired_via`
+- **`locality_wiring.rs`** (port 8099) — 12 nodes across two AZs, concentric rings
+  showing locality depth, resolver shifting in real time
 
 ### Direct Capability (Phases 0–3)
 
