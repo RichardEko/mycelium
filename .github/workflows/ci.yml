@@ -117,6 +117,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: fuzz
-      - uses: taiki-e/install-action@cargo-fuzz
+      # Explicit `tool:` form — the @cargo-fuzz tag shorthand resolved to no
+      # tool at all on first run ("no such command: fuzz", exit 101).
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
       - run: cargo fuzz run wire_decode -- -max_total_time=120
       - run: cargo fuzz run capability_decode -- -max_total_time=120
