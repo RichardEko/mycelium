@@ -2184,6 +2184,34 @@ None are required for v1.0.
     in a single session) where startup-time derivation and hot-reloadable parameters are
     demonstrably insufficient.
 
+11. **Wire-codec succession (bincode replacement)** — `bincode` is the serializer behind
+    every wire frame and is officially unmaintained (RUSTSEC-2025-0141; surfaced by the
+    CI `cargo audit` job as a permanent warning). There is no immediate risk: the crate
+    is pure-Rust, `#![deny(unsafe_code)]`-compatible in our usage, pinned by `Cargo.lock`,
+    and the wire format is already frozen by the `WIRE_VERSION` policy — but an
+    unmaintained codec in the trust base of a security-marketed substrate is a liability
+    that compounds (no fixes if an advisory lands; no upgrades as the Rust ecosystem moves).
+
+    **Options evaluated (2026-06-11):**
+    - *Stay + vendor on demand*: zero cost today; fork only if an advisory lands. Viable
+      short-term posture, which is why this is a v2 item and not a v1.x hotfix.
+    - *postcard / borsh / speedy*: maintained codecs, but each changes the byte layout
+      (varint vs fixed-int, different enum tagging) — a full wire break for a third-party
+      dependency we'd still not control.
+    - *Hand-rolled fixed-layout codec* (**recommended**): `WireMessage` is a small, closed
+      enum whose layout we already micro-manage (v6 reordered fields specifically to enable
+      in-place TTL decrement and zero-copy forwarding; framing already hand-builds the
+      header). A ~300-line explicit encoder/decoder eliminates the unmaintained dependency,
+      makes the wire layout a first-class artifact instead of an emergent property of a
+      codec's settings, and pairs naturally with the existing fuzz targets.
+
+    **Plan**: implement at the next wire-version bump (v12) so the break rides an already-
+    open rolling-upgrade window rather than forcing one. Until then the audit-job warning
+    is the tracked reminder.
+
+    **Trigger to start**: the next planned WIRE_VERSION bump, or any RUSTSEC advisory
+    against bincode 2.x beyond "unmaintained" — whichever comes first.
+
 ---
 
 ## Deferred Patterns
