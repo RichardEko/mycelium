@@ -1,10 +1,21 @@
 //! # Coordinator Comparison
 //!
-//! Empirical companion to Paper 2a (§9, "Empirical Validation in the Computing
-//! Domain"). Demonstrates that the same Mycelium substrate can be wired to
-//! exhibit either of two interaction patterns — broker-mediated routing or
-//! locally-resolved gossip routing — and measures the epistemic-error gap
-//! between them as the agent population scales.
+//! Measures the staleness/latency gradient WITHIN the prediction paradigm for
+//! Paper 2a (§ Empirical Validation): broker-mediated prediction vs locally
+//! evaluated prediction on an identical substrate.
+//!
+//! ## Scope — read before citing
+//!
+//! Both modes below are push-predict: each selects a worker from a stale
+//! observation of other agents' load, so the misroute/staleness metrics are
+//! internal to that paradigm. This binary therefore quantifies how the
+//! epistemic error shrinks as the predictor moves from centre to edge — it
+//! does NOT test the paper's strongest claim. The pull grade (self-resolved
+//! action, where no participant predicts any other's state and the misroute
+//! metric is undefined by construction) is instantiated and behaviourally
+//! tested in the `mycelium-tuple-space` companion crate; the planned
+//! three-arm experiment (broker / gossip / pull, outcome-level metrics)
+//! is described in Paper 2a § "What Remains Open Empirically".
 //!
 //! ## Two modes from one substrate
 //!
