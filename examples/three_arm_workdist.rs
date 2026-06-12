@@ -217,6 +217,18 @@ async fn main() {
         // broker arm's broker), so client puts and worker takes both cross a
         // real RPC hop — no colocation shortcut for the pull arm.
         let space = Arc::clone(cluster.space.as_ref().expect("space node"));
+        // Do NOT advertise the primary until the space node's outbound routes
+        // to every worker exist: take responses are Individual-scoped signals
+        // and are silently dropped without a route. Advertising first lets
+        // all n workers fire a synchronized first-take volley into the gap,
+        // wedging each for the full RPC deadline — observed as a ~7 s global
+        // stall poisoning ~20% of runs.
+        for _ in 0..100 {
+            if space.peers().len() >= n + 1 {
+                break;
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
         let ts_primary = TupleSpace::new(space, mk_cfg(TupleRole::Primary))
             .await
             .expect("tuple primary");
@@ -354,7 +366,17 @@ async fn main() {
     loop {
         sleep(Duration::from_millis(300)).await;
         let ready = if mode == "pull" {
-            tuple_client.as_ref().unwrap().depth(Some(TUPLE_STAGE)).await.is_ok()
+            // End-to-end: a probe item must flow put → take → process → ack
+            // before arrivals start. Counter-balanced so waiting math holds;
+            // its completion predates ramp_end and is filtered from metrics.
+            if shared.done.load(Ordering::Relaxed) == 0
+                && shared.submitted.load(Ordering::Relaxed) == 0
+            {
+                shared.submitted.fetch_add(1, Ordering::Relaxed);
+                let probe = Bytes::copy_from_slice(&shared.now_us().to_le_bytes());
+                let _ = tuple_client.as_ref().unwrap().put(TUPLE_STAGE, probe).await;
+            }
+            shared.done.load(Ordering::Relaxed) >= 1
         } else {
             count_load_keys(&cluster.client) == n
                 && (mode != "broker"
@@ -402,8 +424,10 @@ async fn main() {
             let mut tick = tokio::time::interval(Duration::from_millis(IWWE_SAMPLE_MS));
             loop {
                 tick.tick().await;
-                let waiting = shared.submitted.load(Ordering::Relaxed)
-                    - shared.started.load(Ordering::Relaxed);
+                let waiting = shared
+                    .submitted
+                    .load(Ordering::Relaxed)
+                    .saturating_sub(shared.started.load(Ordering::Relaxed));
                 if waiting > 0 {
                     let idle = shared.n as u64 - shared.busy.load(Ordering::Relaxed) as u64;
                     iwwe.fetch_add(idle * IWWE_SAMPLE_MS * 1_000_000, Ordering::Relaxed);
