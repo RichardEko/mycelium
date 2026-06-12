@@ -81,3 +81,38 @@ the *jobs* and the *fleet* experience:
 4. Aggregate capacity identical across arms and across H (normalisation
    above); the *same seed* produces the same worker-speed trajectory in all
    three arms of a cell.
+
+## Scope note: this sweep is push's best case (deliberately)
+
+The phase-1 sweep grants the push arms two advantages real fleets do not
+have, so its results are a **lower bound on the push–pull gap**:
+
+1. **Single submission source ⇒ complete outstanding ledger.** The
+   least-outstanding-requests baseline sees every dispatch, so only the
+   gossiped progress component can be stale. With S independent sources the
+   per-source ledgers do not compose and the shared signal degrades to the
+   gossip view alone (the herd returns at the seams); the broker arm retains
+   ledger completeness only by serialising every decision — the bottleneck
+   itself. Pull is indifferent to S: the lane serialises claims at the data
+   path, not the decision path.
+2. **No hidden local consumption.** Workers do only assigned work, so
+   advertised queue depth is an honest state proxy. Local variability —
+   background contention or work arriving at workers directly — consumes
+   capacity invisibly to any remote view; pull absorbs it by definition.
+
+**Phase 2 axes** (after the phase-1 sweep ships):
+
+- `SOURCES=k` — k independent submitters with private outstanding ledgers
+  (gossip arm), k clients sharing the broker (broker arm), k putters (pull).
+  Prediction: gossip-arm degradation grows with k; broker pays serialisation;
+  pull flat.
+- `LOCAL_FRAC` — a per-worker private Poisson stream of local jobs entering
+  the worker's queue *without* appearing in its advertised load until the
+  next advert tick (and counted in busy/IWWE/fairness like any work).
+  Prediction: push degrades with local fraction; pull flat.
+
+Paper framing: report phase 1 as "even in the push paradigm's best case —
+single source, complete outstanding ledger, no hidden local state — the
+outcome gap exists and widens monotonically with H and δ̄"; phase 2 then
+shows the gap's growth as the best-case assumptions are relaxed one at a
+time.
