@@ -9,6 +9,14 @@ persistent state; Layer 2 carries ephemeral events. Higher layers provide async 
 mailboxes, MCP tool routing, SkillRunner LLM nodes, and a Python bridge — each agent chooses
 its own payload serialisation.
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20665238.svg)](https://doi.org/10.5281/zenodo.20665238)
+
+The architectural argument is published as: R. Nicholson, *"The Coordinator Trap: Structural
+Scaling Liabilities in Mediated Multi-Agent Architectures and a Substrate-Based Alternative,"*
+Tathata Systems Ltd, 2026 — [doi:10.5281/zenodo.20665238](https://doi.org/10.5281/zenodo.20665238)
+(CC BY 4.0; source in [`docs/publications/`](docs/publications/), reproducible at tag
+[`paper-submission-v2`](https://github.com/RichardEko/mycelium/tree/paper-submission-v2)).
+
 ## Getting Started
 
 Mycelium is three layers: a broker-less gossip KV store (Layer I), an ephemeral

@@ -24,4 +24,4 @@ Cite the lead paper as:
 
 > R. Nicholson, "The Coordinator Trap: Structural Scaling Liabilities in
 > Mediated Multi-Agent Architectures and a Substrate-Based Alternative,"
-> Tathata Systems Ltd, 2026.
+> Tathata Systems Ltd, 2026. DOI: [10.5281/zenodo.20665238](https://doi.org/10.5281/zenodo.20665238)
