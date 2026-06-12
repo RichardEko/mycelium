@@ -2215,6 +2215,43 @@ None are required for v1.0.
     **Trigger to start**: the next planned WIRE_VERSION bump, or any RUSTSEC advisory
     against bincode 2.x beyond "unmaintained" — whichever comes first.
 
+12. **WASM components as the bundle analogue (runtime code mobility)** — Mycelium kept
+    two of the three things OSGi bundled together: continuous R&C *resolution* (the
+    resolver re-evaluates on every relevant KV change) and a *dynamic advertised set*
+    per node (`advertise_capability` / handle drop / evaporation). The third — code
+    mobility, the install/update/uninstall lifecycle inside a running process — was
+    deliberately delegated to the orchestrator layer: "install new code" means
+    "schedule a new node," and the resolver wires it in on first heartbeat. That is the
+    right v1 trade (Rust has no safe in-process loading story; `dlopen` has neither a
+    stable ABI nor a sandbox), but it leaves a gap for fleets that need new *logic* —
+    not just new prompt templates — without a container redeploy cycle.
+
+    The WASM component model is the classloader analogue Rust natively lacks:
+    sandboxed, ABI-stable (WIT interfaces), capability-scoped imports, fuel/memory
+    limits. And the substrate hooks already exist — this milestone is plumbing, not
+    new mechanism:
+
+    - `cap/{node}/{ns}/installable` → `cap/{node}/{ns}/loading` (progress 0–100) →
+      live capability: the provisioning state machine, already gossip-visible.
+    - `agent/{node}/provision/{item}/error` for failed installs.
+    - Bulk transport for module-byte distribution (content-addressed; the KV carries
+      the hash + source reference, not the bytes).
+    - Schema registry + `with_schema_id` for typed invocation compatibility.
+    - Ed25519 node identity (`tls` feature) extends naturally to signed module
+      hashes — no unsigned code on the mesh.
+
+    **Shape**: a `mycelium-wasm-host` companion crate built entirely on the public API
+    (the same composability proof as `mycelium-tuple-space`): hosts wasmtime, watches a
+    `wasm/skills/{ns}/{name}` KV prefix, pulls + verifies + instantiates the component,
+    advertises the capability, and routes invoke RPCs into it. Unload = handle drop =
+    tombstone + evaporation. The resolver does not change — a WASM-backed provider is
+    indistinguishable from a compiled-in one, which is the point.
+
+    **Trigger to start**: the first real fleet that needs runtime-installable *logic*
+    where data-driven skills (prompt templates in KV, MCP tool fronting) are not
+    expressive enough — or an embedded deployment with no orchestrator above it to
+    delegate code mobility to.
+
 ---
 
 ## Deferred Patterns
