@@ -713,7 +713,7 @@ correctly on a substrate that eliminates the coordinator.
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Evaluation}
 
-Mycelium's correctness across its three-layer architecture is validated by 304
+Mycelium's correctness across its three-layer architecture is validated by 305
 unit tests and 13 integration scenarios run against a live 5-node Docker cluster.
 Scenarios cover KV replication under partition and reconnection, signal delivery
 and boundary admission, capability group formation and dissolution, consensus
@@ -748,8 +748,7 @@ point's availability is maintained by substrate evaporation and emergent
 promotion, and its decision authority is zero because it makes no decisions.
 
 The implementation is publicly available at
-\url{https://github.com/RichardEko/mycelium} (commit
-\texttt{1717d4e}, tag \texttt{paper-submission-v1}) under the AGPL-3.0 licence.
+\url{https://github.com/RichardEko/mycelium} (tag \texttt{paper-submission-v2}) under the AGPL-3.0 licence.
 The integration test harness is included in the repository and reproducible with a
 single \texttt{make test} invocation against a Docker-composed 5-node cluster.
 The AGPL-3.0 licence is intentional: applications that deploy Mycelium as part of a
