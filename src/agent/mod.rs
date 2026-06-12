@@ -152,6 +152,11 @@ pub struct SystemStats {
     /// `try_send` returns `Err(Full)`. A non-zero value means the agent lost
     /// writes — raise `writer_channel_depth` or `gossip_channel_capacity`.
     pub dropped_frames: u64,
+    /// Times an Individual-scoped frame (RPC request/response, consensus vote)
+    /// had no direct route and fell back to flooding — or, with zero peers,
+    /// was dropped outright. Correct behaviour, but non-zero under steady
+    /// state means RPC-heavy pairs lack direct peering and pay relay latency.
+    pub individual_flood_fallbacks: u64,
     /// Number of background tasks currently tracked in the agent's `JoinSet`.
     ///
     /// Steady-state expected count (after `start()` completes):

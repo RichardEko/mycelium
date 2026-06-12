@@ -189,6 +189,7 @@ pub(super) async fn run_gossip_shard(
     idle_timeout:           Duration,
     max_forwarding_peers:   usize,
     dropped_frames:         Arc<AtomicU64>,
+    individual_flood_fallbacks: Arc<AtomicU64>,
     group_aware_forwarding: bool,
     epidemic_extra_peers:   usize,
     prefix_index:           Arc<crate::store::PrefixIndex>,
@@ -267,7 +268,21 @@ pub(super) async fn run_gossip_shard(
                     sender_cache.retain(|k, _| targets.contains(k));
                 }
 
-                if targets.is_empty() { continue; }
+                if targets.is_empty() {
+                    // A flood frame with no peers is normal during startup;
+                    // an Individual frame (RPC/vote) dropped with zero peers
+                    // is a delivery failure the caller only sees as a timeout
+                    // — make it legible.
+                    if let ForwardHint::Individual(target) = &hint {
+                        let c = individual_flood_fallbacks.fetch_add(1, Ordering::Relaxed);
+                        if c == 0 || c.is_multiple_of(256) {
+                            warn!(target_node = %target,
+                                "Individual-scoped frame dropped: no peers at all \
+                                 (RPC/vote cannot be delivered; will surface as timeout)");
+                        }
+                    }
+                    continue;
+                }
 
                 if !group_aware_forwarding {
                     for peer in targets.iter().filter(|p| p.id_hash() != sender_hash) {
@@ -297,6 +312,13 @@ pub(super) async fn run_gossip_shard(
                                     // max_active_connections produce. Forwarding
                                     // must stay unconditional; only *admission*
                                     // is scoped (Boundary::admits).
+                                    let c = individual_flood_fallbacks.fetch_add(1, Ordering::Relaxed);
+                                    if c == 0 || c.is_multiple_of(256) {
+                                        warn!(target_node = %target, count = c + 1,
+                                            "Individual-scoped frame has no direct route; \
+                                             flooding via relay (topology pressure — consider \
+                                             peering RPC-heavy pairs directly)");
+                                    }
                                     for peer in targets.iter().filter(|p| p.id_hash() != sender_hash) {
                                         send_to_peer!(peer, data);
                                     }

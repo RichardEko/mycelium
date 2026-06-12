@@ -101,6 +101,8 @@ impl GossipAgent {
             health_monitor_alive: !running || self.health_monitor_alive.load(Ordering::Relaxed),
             intern_pool_size:     intern_pool_len(),
             dropped_frames:       self.kv_state.dropped_frames.load(Ordering::Relaxed),
+            individual_flood_fallbacks:
+                self.kv_state.individual_flood_fallbacks.load(Ordering::Relaxed),
             task_count:           self.task_handles_lock().len(),
             active_bulk_handlers: self.task_ctx.bulk_transport.active_handlers.load(Ordering::Relaxed),
             commit_conflicts:     self.task_ctx.commit_conflicts.load(Ordering::Relaxed),

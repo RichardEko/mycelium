@@ -144,6 +144,38 @@ else
     die "Baseline keys did not reach mgmt within 60 s (saw $(kv_count_on_mgmt))"
 fi
 
+# ── Phase 1b: cross-worker RPC — Individual-scope relay gate ──────────────────
+#
+# Workers bootstrap only to the seed, so two workers are typically NOT directly
+# peered. RPC requests and responses are Individual-scoped signals; before the
+# 2026-06-12 flood-fallback fix they were silently dropped without a direct
+# sender→target route — RPCs timed out and ballots starved in partial meshes,
+# and no test topology exercised it. This gate keeps that class caught at
+# integration level. (test/echo is pre-registered on all node-role containers.)
+
+banner "Phase 1b: Cross-worker RPC (Individual scope, typically non-peered pair)"
+
+RPC_PAIR=$(list_running_workers 2)
+RPC_A=$(echo "$RPC_PAIR" | sed -n 1p)
+RPC_B=$(echo "$RPC_PAIR" | sed -n 2p)
+if [ -z "$RPC_A" ] || [ -z "$RPC_B" ]; then
+    fail "Cross-worker RPC: need 2 running workers for the relay gate"
+else
+    B_NODE=$(curl -s --max-time 5 "http://${RPC_B}:${PORT}/health" | jq -r '.node_id // empty')
+    # payload_b64 = {"prompt":"test/echo","input":"relay-probe-xw","context":{}}
+    RPC_RESP=$(curl -s --max-time 20 -X POST -H 'Content-Type: application/json' \
+        -d "{\"target\":\"${B_NODE}\",\"method\":\"llm.invoke\",\"payload_b64\":\"eyJwcm9tcHQiOiJ0ZXN0L2VjaG8iLCJpbnB1dCI6InJlbGF5LXByb2JlLXh3IiwiY29udGV4dCI6e319\",\"timeout_secs\":15}" \
+        "http://${RPC_A}:${PORT}/gateway/rpc" 2>/dev/null || echo '{}')
+    RPC_OK=$(echo "$RPC_RESP" | jq -r '.ok // false')
+    RPC_OUT=$(echo "$RPC_RESP" | jq -r '.result_b64 // empty | @base64d' 2>/dev/null || echo "")
+    if [ "$RPC_OK" = "true" ] && echo "$RPC_OUT" | grep -q "relay-probe-xw"; then
+        FALLBACKS=$(curl -s --max-time 5 "http://${RPC_A}:${PORT}/stats" | jq -r '.individual_flood_fallbacks // 0')
+        ok "Cross-worker RPC ${RPC_A} → ${RPC_B} round-tripped (sender flood-fallbacks: ${FALLBACKS})"
+    else
+        fail "Cross-worker RPC ${RPC_A} → ${RPC_B} failed — response: ${RPC_RESP}"
+    fi
+fi
+
 # ── Phase 2: crash 5 workers, write during outage, recover ───────────────────
 
 banner "Phase 2: Crash 5 workers → write 20 keys during outage → recover"
@@ -337,7 +369,7 @@ fi
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 banner "Scale resilience test results"
-printf '  Nodes: %d   Phases: 4   Pass: %d   Fail: %d\n' \
+printf '  Nodes: %d   Phases: 5   Pass: %d   Fail: %d\n' \
     "$TOTAL_NODES" "$PASS" "$FAIL"
 
 if [ "$FAIL" -gt 0 ]; then

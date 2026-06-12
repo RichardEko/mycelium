@@ -354,6 +354,7 @@ async fn stats_handler(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
         "node_id":       ctx.agent_ctx.node_id.to_string(),
         "store_entries": kv.store.pin().len(),
         "dropped_frames": kv.dropped_frames.load(std::sync::atomic::Ordering::Relaxed),
+        "individual_flood_fallbacks": kv.individual_flood_fallbacks.load(std::sync::atomic::Ordering::Relaxed),
         "task_count":    task_count,
         "commit_conflicts": ctx.agent_ctx.commit_conflicts
             .load(std::sync::atomic::Ordering::Relaxed),

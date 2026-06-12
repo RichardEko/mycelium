@@ -263,6 +263,7 @@ impl GossipAgent {
                 idle_timeout,
                 self.config.max_forwarding_peers,
                 Arc::clone(&self.kv_state.dropped_frames),
+                Arc::clone(&self.kv_state.individual_flood_fallbacks),
                 group_aware_forwarding,
                 epidemic_extra_peers,
                 std::sync::Arc::<papaya::HashMap<std::sync::Arc<str>, std::sync::Arc<papaya::HashMap<std::sync::Arc<str>, ()>>>>::clone(&prefix_index),

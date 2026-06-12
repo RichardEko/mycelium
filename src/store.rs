@@ -43,6 +43,11 @@ pub(crate) struct KvStore {
     pub cap_ns_index:      Arc<PrefixIndex>,
     pub hash_acc:          Arc<AtomicU64>,
     pub dropped_frames:    Arc<AtomicU64>,
+    /// Times an Individual-scoped frame (RPC request/response, consensus vote)
+    /// had no direct route to its target and fell back to flooding. Non-zero
+    /// is correct behaviour but signals topology pressure: RPC-heavy pairs
+    /// without direct peering pay relay latency.
+    pub individual_flood_fallbacks: Arc<AtomicU64>,
     pub max_store_entries: usize,
     /// Monotonic counter bumped whenever a `grp/` key is written or tombstoned.
     /// `cached_group_members` uses this to detect remote membership changes without
@@ -130,6 +135,7 @@ impl KvState {
                 cap_ns_index:      Arc::new(PrefixIndex::new()),
                 hash_acc:          Arc::new(AtomicU64::new(0)),
                 dropped_frames:    Arc::new(AtomicU64::new(0)),
+                individual_flood_fallbacks: Arc::new(AtomicU64::new(0)),
                 max_store_entries,
                 grp_generation:    Arc::new(AtomicU64::new(0)),
                 prefix_watchers:           Arc::new(papaya::HashMap::new()),

@@ -104,6 +104,7 @@ fn spawn_handler(
             cap_ns_index:      Arc::new(crate::store::PrefixIndex::new()),
             hash_acc:          Arc::new(AtomicU64::new(initial_hash)),
             dropped_frames:    Arc::new(AtomicU64::new(0)),
+            individual_flood_fallbacks: Arc::new(AtomicU64::new(0)),
             max_store_entries: 0,
             grp_generation:    Arc::new(AtomicU64::new(0)),
             prefix_watchers:           Arc::new(papaya::HashMap::new()),
@@ -506,6 +507,7 @@ async fn test_subscribe_notified_via_gossip() {
                 cap_ns_index:      Arc::new(crate::store::PrefixIndex::new()),
                 hash_acc:          Arc::new(AtomicU64::new(0)),
                 dropped_frames:    Arc::new(AtomicU64::new(0)),
+            individual_flood_fallbacks: Arc::new(AtomicU64::new(0)),
                 max_store_entries: 0,
                 grp_generation:    Arc::new(AtomicU64::new(0)),
                 prefix_watchers:           Arc::new(papaya::HashMap::new()),
@@ -941,6 +943,13 @@ async fn test_individual_signal_reaches_unpeered_target_via_relay() {
         .expect("Individual signal must reach an unpeered target via relay")
         .expect("channel open");
     assert_eq!(&sig.payload[..], b"hop");
+
+    // The fallback must be legible: A had no direct route, so its counter
+    // (also on /stats) records the flood fallback.
+    assert!(
+        a.system_stats().individual_flood_fallbacks >= 1,
+        "flood fallback must be counted on the sender"
+    );
 
     a.shutdown().await;
     b.shutdown().await;
