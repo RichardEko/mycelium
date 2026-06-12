@@ -192,6 +192,8 @@ Jini [CITE-JINI-ARCH, CITE-JINI-SPEC] was designed to address runtime dynamism: 
 
 The insight is correct. The implementation was protocol-heavy: explicit `Lease` objects, `renew()` RPCs, a lease manager, explicit cancellation. The ceremony obscures the substrate property — that registrations should evaporate unless actively maintained — behind an explicit lifecycle protocol.
 
+Jini's other defining mechanism — the dynamic proxy [CITE-JINI-ARCH] — deserves separate treatment, because its causal direction is the inverse of the one this paper advocates. A client looking up a service received a service-supplied object implementing the service interface; inside it, the service chose the client's transport and serialization. The client's lower layers were payload shipped from above: the macro specification (the interface) came first, and the micro realization was manufactured to fit — top-down realization by selection, in Ellis's sense [CITE-ELLIS], where emergence runs the other way. Two structural consequences followed. First, letting the top configure the bottom requires a universal executable bottom — a JVM on every participant — so substrate independence at the interface level was purchased with platform capture one level down. Second, and more fundamental to this paper's argument: per-service plumbing fragments the shared medium. The substrate properties that every emergent layer composes from — unconditional propagation, evaporation, anti-entropy convergence — are properties *of a common medium*, and a fleet in which each service ships its own transport has no common medium for anything to emerge in. Mycelium accordingly keeps Jini's decay insight and refuses the proxy inversion: the wire format is frozen and identical for every node, and the only downward influence is stigmergic — macro pheromone fields constraining locally-deciding agents through the medium, never reconfiguring it.
+
 ### 6.2 OSGi Requirements and Capabilities
 
 OSGi's insight was that software agility is a function of modular, dynamically assembleable components. The OSGi Alliance [CITE-OSGI] formalised this as a dependency model in which software modules declare capabilities they provide and requirements they need; a resolver matches providers to consumers. The primitive is correct: declarative matching between providers and consumers, with the resolver handling wiring.
@@ -441,6 +443,8 @@ The coordinator trap is not a new discovery. Hayek described the epistemic cost 
 [CITE-OSGI] OSGi Alliance, *OSGi Core Release 8 Specification*, Chapter 27: Capabilities and Requirements, 2020.
 
 [CITE-PAREMUS] Paremus Ltd., *Paremus Service Fabric*, 2010–2015. Runtime OSGi Requirements & Capabilities resolution; direct conceptual predecessor to Mycelium's continuous capability resolver.
+
+[CITE-ELLIS] G. F. R. Ellis, "Top-down causation and emergence: some comments on mechanisms," *Interface Focus*, vol. 2, no. 1, pp. 126–140, 2012.
 
 [CITE-JINI-ARCH] J. Waldo, *Jini Architectural Overview*, Sun Microsystems Technical Report, January 1999.
 

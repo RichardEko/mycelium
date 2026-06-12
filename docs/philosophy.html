@@ -758,6 +758,52 @@
       node's capabilities simply fade.
     </p>
 
+    <h3>The proxy inversion — what was deliberately not kept</h3>
+
+    <p>
+      Jini's other defining idea was the <strong>dynamic proxy</strong>: a client looking up
+      a service received not an address but a serialized object, supplied by the service
+      itself, implementing the service interface. Inside that object, the service chose the
+      transport, the serialization, the caching strategy — the client's lower layers were
+      not infrastructure but <em>payload, shipped from above</em>. Note the direction: this
+      is the exact inverse of emergence. Where emergence grows macro order out of micro
+      interactions nobody specified, the proxy starts from the macro specification (the
+      interface) and manufactures the micro realization to fit — top-down realization, in
+      Ellis's sense of macro-level selection among micro-level possibilities. In Hayek's
+      vocabulary: <em>taxis</em> injected into the transport layer, per service, per
+      interaction.
+    </p>
+
+    <p>
+      Two structural consequences follow, and they explain more about Jini's fate than the
+      usual "ahead of its time" account:
+    </p>
+
+    <div class="map-wrap" style="margin:24px 0;">
+      <table class="map-table">
+        <thead>
+          <tr><th>Consequence</th><th>Why it follows</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>Top-down plumbing requires a universal bottom</strong></td><td>To let the top configure the bottom, every participant must execute arbitrary supplied bottoms — for Jini, a JVM everywhere. Substrate independence at the interface was bought with total platform capture one level down. Bottom-up emergence has the opposite tolerance: a dumb, fixed, <em>shared</em> medium tolerates heterogeneity in everything above it.</td></tr>
+          <tr><td><strong>Fragmenting the medium forfeits fleet-level emergence</strong></td><td>Holland's model needs a shared medium — flooding, evaporation, anti-entropy, freshness are <em>properties of the medium</em>, and they are what higher layers compose into consensus, capability ecologies, and pressure-driven work distribution. N services shipping N private transports leave nothing common for anything to emerge <em>in</em>. The pairwise interaction is optimized; the ecology is starved.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      Mycelium therefore draws the line precisely: the wire format is frozen
+      (<code>WIRE_VERSION</code> policy) and identical for every node; no service can reach
+      down and re-plumb another participant's stack. The only downward path is the
+      stigmergic one — pheromone fields constraining where locally-deciding agents mass —
+      which is influence <em>through</em> the shared medium, never configuration <em>of</em>
+      it. The v2 WASM-component milestone is, knowingly, Jini's proxy idea returning with a
+      better universal bottom (sandboxed, capability-scoped, no platform capture): it ships
+      <em>capability implementations into hosts</em>, and still refuses to ship
+      <em>client-side plumbing into callers</em>. Jini's mistake was never mobile code — it
+      was letting mobile code constitute the medium.
+    </p>
+
     <div class="callout callout-orange">
       <p>
         <strong>The Paremus lesson — library, not platform.</strong> Positioning Service Fabric
