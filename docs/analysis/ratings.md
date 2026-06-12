@@ -81,6 +81,14 @@ existed. This is the framework's own report card.
 - 2026-06-11: **Documentation** scored 8 in Runs 16–20 while ROADMAP.md
   linked three example files deleted 2026-05-25 (95c92af). Found by the
   Run-21 link-integrity probe; fixed same run.
+- 2026-06-12: **Architecture** scored 9 in Runs 19–22 and **Semantic
+  Correctness** 8 in Runs 20/22 while Individual-scoped signals (RPC
+  requests/responses, consensus votes) were silently dropped whenever the
+  target was not in the sender's outbound peer list — partial meshes broke
+  RPC and ballot voting with nothing logged, contradicting the documented
+  unconditional-forwarding model. Found by the three-arm experiment
+  bring-up (synchronized take-volley stall), not by a ratings probe; fixed
+  same day (flood fallback + relay regression test).
 
 **Dimensions:** Philosophy/Coherence · Conceptual Integrity · Architecture ·
 Modularity · API Design · Error Handling · Configurability · Language Best

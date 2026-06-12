@@ -281,8 +281,26 @@ pub(super) async fn run_gossip_shard(
                             }
                         }
                         ForwardHint::Individual(target) => {
-                            if target.id_hash() != sender_hash && targets.contains(target) {
-                                send_to_peer!(target, data);
+                            if target.id_hash() != sender_hash {
+                                if targets.contains(target) {
+                                    // Direct route: the targeted-send optimization.
+                                    send_to_peer!(target, data);
+                                } else {
+                                    // No direct route: fall back to unconditional
+                                    // flooding so the signal still reaches the
+                                    // target via intermediate hops (each applies
+                                    // this same rule; seen-set dedups, hop-TTL
+                                    // bounds it). Dropping here silently breaks
+                                    // RPC requests, RPC responses, and consensus
+                                    // votes between non-peered pairs — exactly
+                                    // what partial meshes built with
+                                    // max_active_connections produce. Forwarding
+                                    // must stay unconditional; only *admission*
+                                    // is scoped (Boundary::admits).
+                                    for peer in targets.iter().filter(|p| p.id_hash() != sender_hash) {
+                                        send_to_peer!(peer, data);
+                                    }
+                                }
                             }
                         }
                         ForwardHint::Group(name) => {

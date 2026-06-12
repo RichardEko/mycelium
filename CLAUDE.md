@@ -256,6 +256,22 @@ The v2 fix is a workspace split: `mycelium-core` (Layers I+II only, with `CoreCt
 `mycelium` (full substrate). Deferred until there is a real embedding use case that
 needs the core without consensus/capabilities.
 
+### Individual-scope routing (RPC / votes) — forwarding stays unconditional
+
+`SignalScope::Individual` carries RPC requests, RPC responses, and consensus
+votes. The gossip loop sends an Individual frame directly to the target when
+it is in the sender's outbound peer list (optimization), and otherwise
+**falls back to flooding** — each hop applies the same rule; the seen-set
+dedups and the hop-TTL bounds it. Do not "optimize" the fallback away: before
+2026-06-12 the frame was silently dropped when the target wasn't directly
+peered, which broke RPC and ballot voting in partial meshes
+(`GOSSIP_MAX_ACTIVE_CONNECTIONS` / `max_forwarding_peers` topologies) and
+contradicted the unconditional-forwarding model (only *admission* is scoped,
+via `Boundary::admits`). Regression gate:
+`test_individual_signal_reaches_unpeered_target_via_relay`. Direct peering
+remains a *latency* optimization for RPC-heavy pairs — the three-arm
+experiment harness bootstraps both directions for that reason.
+
 ### Lock-Order Table
 
 All `Mutex` and `RwLock` sites in the codebase. **Invariant: no function acquires more than one lock from this table.** There are no nested acquisitions, so no lock-ordering discipline is required beyond this flat list.

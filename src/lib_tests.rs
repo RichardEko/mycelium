@@ -883,6 +883,70 @@ async fn test_shutdown_lifecycle_edges_never_started_and_double() {
         .expect("double shutdown must be idempotent, not hang or panic");
 }
 
+/// Individual-scoped signals must reach targets the sender is NOT directly
+/// peered with — forwarding is unconditional in the Holland model; only
+/// admission is scoped. Line topology A→B→C: A's only outbound peer is B,
+/// so delivery to C requires the flood fallback at origination plus B's
+/// targeted relay. Pre-fix, A silently dropped the signal at origination,
+/// which broke RPC requests/responses and consensus votes between
+/// non-peered pairs in partial meshes (M2 finding, 2026-06-12; found by
+/// the three-arm experiment bring-up).
+#[tokio::test]
+async fn test_individual_signal_reaches_unpeered_target_via_relay() {
+    use crate::signal::SignalScope;
+    use bytes::Bytes;
+
+    let port_a = alloc_port();
+    let port_b = alloc_port();
+    let port_c = alloc_port();
+    let id =
+        |p: u16| NodeId::new("127.0.0.1", p).unwrap();
+
+    let mk = |port: u16, boots: Vec<NodeId>| {
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = port;
+        cfg.bootstrap_peers = boots;
+        cfg.reconnect_backoff_secs = 1;
+        GossipAgent::new(id(port), cfg)
+    };
+
+    // Strict line: A → B → C. A never learns a route to C within the test
+    // window unless discovery intervenes; the assertion window is short
+    // enough that delivery proves the relay path.
+    let c = Arc::new(mk(port_c, vec![]));
+    let b = Arc::new(mk(port_b, vec![id(port_c)]));
+    let a = Arc::new(mk(port_a, vec![id(port_b)]));
+    c.start().await.unwrap();
+    b.start().await.unwrap();
+    a.start().await.unwrap();
+
+    let mut rx = c.mesh().signal_rx("test.relay");
+
+    // Structural poll: line links up.
+    for _ in 0..100 {
+        if !a.peers().is_empty() && !b.peers().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    assert!(a.mesh().emit(
+        "test.relay",
+        SignalScope::Individual(id(port_c)),
+        Bytes::from_static(b"hop"),
+    ));
+
+    let got = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await;
+    let sig = got
+        .expect("Individual signal must reach an unpeered target via relay")
+        .expect("channel open");
+    assert_eq!(&sig.payload[..], b"hop");
+
+    a.shutdown().await;
+    b.shutdown().await;
+    c.shutdown().await;
+}
+
 // ── Layer 2: Signal / Boundary ───────────────────────────────────────────
 
 #[tokio::test]
