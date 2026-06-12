@@ -261,7 +261,12 @@ concern dissolves when the space is built \emph{on} a coordinator-free
 substrate: the serving node is discovered by capability advertisement, its
 failure is detected by evaporation, and a mirror promotes itself through the same
 emergent mechanism as every other role in the system. The pull pattern survives;
-only the coordinator-shaped infrastructure around it was wrong.
+only the coordinator-shaped infrastructure around it was wrong. (A precision for
+readers who know Linda: what survives is generative decoupling and blocking pull,
+not associative template retrieval---the realisation in Section~8 is
+lane-addressed, with named per-stage queues and opaque payloads, so the claim
+path is an O(1) pop rather than a pattern match, and the per-lane depth counters
+double as the load signal pull workers route on.)
 
 Carvalho~\cite{carvalho} observes that modern AI agent frameworks are
 independently rediscovering Linda's tuple space pattern---implementing ad-hoc
@@ -425,6 +430,27 @@ The implementation was protocol-heavy: explicit \texttt{Lease} objects,
 \texttt{renew()} RPCs, a lease manager, explicit cancellation. The ceremony
 obscures the substrate property---that registrations should evaporate unless
 actively maintained---behind an explicit lifecycle protocol.
+
+Jini's other defining mechanism---the dynamic proxy~\cite{jini-arch}---deserves
+separate treatment, because its causal direction is the inverse of the one this
+paper advocates. A client looking up a service received a service-supplied
+object implementing the service interface; inside it, the service chose the
+client's transport and serialization. The client's lower layers were payload
+shipped from above: the macro specification (the interface) came first, and the
+micro realization was manufactured to fit---top-down realization by selection,
+in Ellis's sense~\cite{ellis}, where emergence runs the other way. Two
+structural consequences followed. First, letting the top configure the bottom
+requires a universal executable bottom---a JVM on every participant---so
+substrate independence at the interface level was purchased with platform
+capture one level down. Second, and more fundamental to this paper's argument:
+per-service plumbing fragments the shared medium. The substrate properties that
+every emergent layer composes from---unconditional propagation, evaporation,
+anti-entropy convergence---are properties \emph{of a common medium}, and a
+fleet in which each service ships its own transport has no common medium for
+anything to emerge in. Mycelium accordingly keeps Jini's decay insight and
+refuses the proxy inversion: the wire format is frozen and identical for every
+node, and the only downward influence is stigmergic---macro pheromone fields
+constraining locally-deciding agents through the medium, never reconfiguring it.
 
 \subsection{OSGi Requirements and Capabilities}
 
@@ -688,7 +714,9 @@ workload, work distribution, with no component that predicts any agent's state.
 The \texttt{mycelium-tuple-space} companion crate does this using only the
 substrate's public API (the dependency relation itself demonstrating that pull
 composes from the existing primitives). Producers \texttt{put} items into named
-stages; workers block on \texttt{take} and receive work exactly when ready---
+stages---per-stage FIFO lanes, not Linda's associatively-matched bag; payloads
+are opaque to the space and an item's pipeline position is the lane it
+occupies. Workers block on \texttt{take} and receive work exactly when ready---
 readiness is announced by the claim itself, so the staleness that drives
 misrouting in push systems has no variable to inhabit. Three test results carry
 the weight: (i)~1{,}000 items across ten concurrent producers and ten concurrent
@@ -853,6 +881,31 @@ applications requiring replay capability must use a separate append-only store.
 \emph{Cross-cluster fan-out at scale}---where the gossip mesh operates within a
 single cluster; multi-cluster deployments require a federation layer.
 
+\textbf{Lane-addressed claiming, and where Linda's matching earns its keep.}
+The Section~8 realisation replaces associative template retrieval with named
+per-stage lanes, and the honest statement of that choice is a decomposition
+principle rather than a deletion: the architecture retains associative matching
+at the \emph{control plane}---the capability resolver's attribute filters and
+the signal boundary's receptor predicates are both template matchers,
+re-evaluated continuously---and keeps it off the \emph{durable claim path},
+where a matching engine would un-buy the lane properties (O(1) claims,
+well-defined per-lane depth and therefore backpressure, and the single-record
+stage transition). Most workloads decompose along that line: match to select a
+lane, pull from the lane. Four do not, and they mark the realisation's boundary
+of validity: (i)~\emph{fan-in joins} degenerate lanes to one item per
+correlation key---a keyed-exact-match \texttt{take} would cover this without
+general matching; (ii)~\emph{contract-net claiming}, where a multi-dimensional
+predicate lives on the item, makes per-item matching irreducible;
+(iii)~\emph{blackboard working memory}---opportunistic reasoning over shared
+typed facts, with no stages because the flow topology is emergent per item; the
+one missing primitive is a competitive destructive claim-by-predicate with the
+tuple space's exactly-once discipline, and this is precisely the pattern
+Carvalho~\cite{carvalho} observes agent frameworks rebuilding ad hoc;
+(iv)~\emph{semantic claiming}---similarity between task content and agent
+skill profile---is a ranking concern for the selection edge, never the claim
+path. Consistent with the layering principle, the answer to all four is
+composition above the substrate, not a matching engine inside it.
+
 \subsection{Future Work}
 
 \begin{itemize}
@@ -875,6 +928,16 @@ single cluster; multi-cluster deployments require a federation layer.
 \item \textbf{Byzantine fault tolerance}---the current consensus layer is
   crash-fault tolerant only. Extending it to tolerate actively malicious nodes
   while preserving the leaderless, coordinator-free property is an open problem.
+
+\item \textbf{A blackboard companion as the next constructive test}---rebuild
+  opportunistic shared-working-memory coordination (the blackboard of
+  Section~3.1, reborn as LLM-agent scratchpads) on the public API: facts as KV
+  writes, trigger predicates as boundaries, plus one new primitive---competitive
+  destructive claim-by-predicate with the tuple space's WAL/in-flight
+  discipline. Together with a keyed-exact-match \texttt{take} for fan-in
+  joins, this would extend the Section~8 argument from pipeline workloads to
+  the associative-claiming workloads at the lane model's boundary, on the same
+  no-coordinator terms.
 \end{itemize}
 
 % ─────────────────────────────────────────────────────────────────────────────
