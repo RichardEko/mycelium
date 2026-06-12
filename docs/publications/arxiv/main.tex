@@ -971,7 +971,15 @@ composition above the substrate, not a matching engine inside it.
   (facts propagate to everyone; triggers are each agent's own local
   declarations); the single missing piece is an atomic \emph{claim} of a
   matching fact, so that when two agents' triggers both fire, exactly one
-  consumes it. Building that as a companion crate---on the public API, with
+  consumes it. (Concretely: in a community-microgrid scratchpad, any number of
+  agents may freely \emph{read} a posted surplus-solar fact and update their
+  forecasts and prices---but when a ``store 3\,kWh from feeder~4'' task
+  appears and two battery agents both match it, exactly one must win it: the
+  energy exists once. Reading is concurrent; acting is exactly-once.) (Concretely: in an incident-response scratchpad, any number of
+  diagnostic agents may freely \emph{read} a posted alert and add
+  observations---but when a ``roll back the deploy'' task appears and two
+  executor agents both match it, exactly one must win it. Reading is
+  concurrent; acting is exactly-once.) Building that as a companion crate---on the public API, with
   the tuple space's durability discipline---would extend the Section~8
   constructive proof to the workload class at the lane model's boundary, and
   to exactly the pattern agent frameworks are rebuilding ad
