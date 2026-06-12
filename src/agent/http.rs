@@ -2181,6 +2181,51 @@ mod tests {
         agent.shutdown().await;
     }
 
+    /// Operational-readiness invariant: shutdown must actually close the
+    /// gateway port. A load balancer drains a node by observing connection
+    /// refusal; a zombie listener that keeps accepting after shutdown() would
+    /// answer health checks from a dead agent (M2 Run-22 probe).
+    #[tokio::test]
+    async fn test_gateway_port_closes_on_shutdown() {
+        let gossip_port = alloc_port();
+        let http_port   = alloc_port();
+
+        let id  = NodeId::new("127.0.0.1", gossip_port).unwrap();
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = gossip_port;
+        cfg.http_port = Some(http_port);
+
+        let agent = Arc::new(GossipAgent::new(id, cfg));
+        agent.start().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let url = format!("http://127.0.0.1:{http_port}/health");
+        let resp = reqwest::get(&url).await.expect("health request failed");
+        assert_eq!(resp.status(), 200);
+
+        agent.shutdown().await;
+
+        // Poll briefly: the server task abort is asynchronous, but the port
+        // must stop accepting within the shutdown grace window.
+        let mut closed = false;
+        for _ in 0..40 {
+            if reqwest::Client::builder()
+                .timeout(Duration::from_millis(250))
+                .build()
+                .unwrap()
+                .get(&url)
+                .send()
+                .await
+                .is_err()
+            {
+                closed = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(closed, "gateway port still accepting after shutdown");
+    }
+
     /// gw_llm_call reports failures via HTTP status codes (the gateway-wide
     /// convention), not a 200 + error-JSON envelope: a no-provider miss is a
     /// 404 so plain `curl -f` / `raise_for_status()` callers see the failure.

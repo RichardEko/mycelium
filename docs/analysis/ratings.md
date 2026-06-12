@@ -1224,3 +1224,81 @@ all md/html docs.
 | 25 | Dependency Hygiene | 8 | Deep-dive. **Evidence:** 3 feature-combo builds clean this run; 251 deps full-matrix vs 61 minimal (annotation-disciplined optionals); `block` future-incompat is dev-only (wgpu→metal). Held at 8: bincode-unmaintained persists; no fresh `cargo audit` this run |
 | — | **Floor (lowest 3)** | **6, 6, 6** | Six-way tie at 6, all capped by findings: Resource Management, Semantic Correctness, Failure Mode Legibility, Test Architecture, Documentation, Developer Experience. All four findings fixed in-run/in-tree; the caps record that they shipped |
 | — | Mean (continuity footnote) | 7.6 | not a target; see M2 preamble |
+
+## 2026-06-12 — Run 22 (M2)
+
+Deep-dive dimensions this run (by rotation from Run 21): 1 (Philosophy),
+2 (Conceptual Integrity), 3 (Architecture), 4 (Modularity), 5 (API Design).
+Next run by rotation: 6–10.
+
+**Process disclosure.** This session authored the entire diff under evaluation
+(12 commits since Run 21: gateway status codes, depth-default alignment, three
+new CI jobs, the AFN pull migration + smoke harness, Linda-lanes callouts,
+paper/philosophy boundary sections, blackboard deferral) and wrote Run 21, so
+the blind rule is compromised as in Runs 17–21. Mitigation unchanged: scores
+moved only on named execution evidence from this window. Cadence gate passed
+(new day; material diff).
+
+Execution evidence this run: lib 323/323 full matrix (322 + this run's probe
+test), and again at `--test-threads=32` (probe C); clippy `-D warnings` clean;
+`tsc --noEmit` clean; integration 13/13 (post-gateway-change run, scenario 12
+exercising the new status codes); CI run 27398387370 fully green — all 8 jobs
+including the first executions of `afn-smoke` (both pipeline modes, 24/24
+each), `sdk-ts` (tsc gate), and the dedicated `fuzz` job (2 × 120 s libFuzzer,
+wire + capability decoders); local afn ci_smoke pull 24/24 in 1.9 s + push
+24/24; cargo-tree dependency-direction probe.
+
+### Findings
+
+- **Minor — Test Architecture (#18, capped ≤ 6, fixed in-run).**
+  `test_commit_conflict_tripwire` flaked on a loaded 4-vCPU CI runner: its 4 s
+  structural-poll budget expired (panic "tripwire did not fire on conflicting
+  COMMIT") while 0/40 local repetitions fail — CPU starvation under ~16
+  parallel test threads, not a logic regression. Fixed by widening the budget
+  to 15 s (the poll is structural, so a genuinely broken tripwire still fails
+  deterministically). Found by CI in this run's window, not by a probe. No
+  ledger entry: #18 scored 6–7 while the test existed.
+- **Probe passed — Architecture (#3):** dependency-direction acyclicity —
+  `cargo tree --edges normal` shows zero `mycelium → mycelium-tuple-space`
+  normal edges (dev-only cycle as documented) and exactly one
+  `mycelium-tuple-space → mycelium` edge. The composability claim's structural
+  precondition holds.
+- **Probe passed — Operational Readiness (#21):**
+  `test_gateway_port_closes_on_shutdown` (kept) — /health serves 200 while
+  live, and the gateway port refuses connections within the shutdown grace
+  window. The LB-drain invariant had no prior test; a zombie listener
+  answering health checks from a dead agent would now be caught.
+- **Probe passed — Testability (#17):** full suite at `--test-threads=32`
+  (4× default parallelism): 323/323 in 5.3 s — the shared intern pool,
+  fixed-seed hash state, and atomic port allocator show no cross-test
+  interference under stress.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 8 | Deep-dive. The one known drift instance — the flagship AFN demo running the coordinator anti-pattern — was eliminated this window and is execution-gated (afn-smoke green both modes). Residual keeps it at 8: guide 07's body still teaches coordinator-push as *the* concept; only the appended callout corrects it |
+| 2 | Conceptual Integrity | 8 | Deep-dive. Gateway error convention unified (the 200-on-error outlier removed; verified by `test_llm_call_no_provider_returns_404` + 13/13). Residual: `timeout_ms` (4 uses) vs `timeout_secs` (13 uses) split across gateway endpoints |
+| 3 | Architecture | 9 | Deep-dive. **Evidence:** dependency-direction probe passed (acyclic, dev-only cycle as documented); integration 13/13 + scenario 13 exercise both documented layer crossings; Run-21 GC fix kept sweep logic in store.rs with tasks.rs only scheduling |
+| 4 | Modularity | 8 | Deep-dive. Companion crate consumes only the public API (scenario 13 + afn-smoke as living proof); ceiling unchanged — `TaskCtx` 22-field bundle couples every handle through one Arc (documented v2 split) |
+| 5 | API Design | 8 | Deep-dive. llm/call outlier fixed and tested; SDKs type-gated in CI now. Residuals: the timeout_ms/timeout_secs naming split; py `TupleSpace` constructs a fresh httpx client per call |
+| 6 | Error Handling Model | 8 | carried (v18); gateway envelope unification is an improvement within the same model |
+| 7 | Configurability | 8 | carried (v18); `writer_channel_depth` default now matches every doc that mentions it (four conflicting values reduced to one) |
+| 8 | Language Best Practices | 9 | **Evidence:** clippy `-D warnings` clean at full matrix this run; `#![deny(unsafe_code)]` |
+| 9 | Concurrency Correctness | 7 | carried (v19) |
+| 10 | Resource Management | 8 | Recovered from Run-21 cap: tombstone-GC fix + `tombstone_gc_sweep_unpacks_hlc_timestamps` green in this run's 323 (×2 incl. 32-thread) |
+| 11 | Semantic Correctness | 8 | Recovered from Run-21 cap: 323/323 incl. LWW tiebreak proptest, sweep regression, consensus suite; integration 13/13 |
+| 12 | Robustness | 8 | The gap Run 20–21 named is closed: dedicated fuzz job executed in CI (2 × 120 s libFuzzer green). Held at 8 — time-box is shallow; no new adversarial-input probe this run |
+| 13 | Security | 7 | carried (v19) |
+| 14 | Failure Mode Legibility | 8 | Recovered from Run-21 cap: failures on /gateway/llm/call now surface as 404/502/504 with the JSON body kept (`test_llm_call_no_provider_returns_404`; scenario 12 in 13/13); SSE in-stream error asymmetry documented at the handler |
+| 15 | Performance | 8 | carried (v21, entries-test data); no fresh perf run |
+| 16 | Scalability | 8 | carried (v21, 100-node + entry-volume runs); none this window |
+| 17 | Testability | 9 | **Evidence:** probe C — 323/323 at `--test-threads=32` in 5.3 s, no hidden-global-state interference; this run's two probe tests written and green in minutes |
+| 18 | Test Architecture | 6 | **Capped: Minor finding** — tripwire-test flake under CI load (fixed in-run, 4 s → 15 s structural budget). Counterweight noted, not scored: 8 CI jobs green incl. first sdk-ts, fuzz, afn-smoke executions; both demo modes regression-gated |
+| 19 | Observability | 8 | carried (v20) |
+| 20 | Debuggability | 8 | carried (v20) |
+| 21 | Operational Readiness | 9 | **Evidence:** `test_gateway_port_closes_on_shutdown` probe passed + kept; afn-smoke drives full start → health → work → teardown cycles for 2 × 3-node clusters in CI |
+| 22 | Evolvability | 8 | carried (v21); CHANGELOG current through this window's changes |
+| 23 | Documentation | 8 | Recovered from Run-21 cap: 0 broken links; depth default aligned repo-wide; lanes-vs-Linda called out in 10 places incl. crate doc + guide. Residual shared with #1: guide 07 body pre-dates the pull migration |
+| 24 | Developer Experience | 8 | Recovered from Run-21 cap: `tsc --noEmit` green and now CI-gated (sdk-ts job); contributor loop unchanged otherwise |
+| 25 | Dependency Hygiene | 8 | carried (v21 feature-combo builds); no new audit run |
+| — | **Floor (lowest 3)** | **6, 7, 7** | Test Architecture (6, capped by the flake finding); Concurrency Correctness and Security tie at 7 (both carried — neither re-examined since v19; due in the 6–10 rotation next run) |
+| — | Mean (continuity footnote) | 8.0 | not a target; see M2 preamble |
