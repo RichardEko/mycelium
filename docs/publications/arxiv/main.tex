@@ -917,6 +917,16 @@ composition above the substrate, not a matching engine inside it.
   churn---TTL evaporation latency vs knowledge-graph drift rate; (iv)~audit
   obligation under load---artifact count growth as agent population scales.
 
+\item \textbf{The three-arm work-distribution experiment} on one substrate:
+  broker-mediated prediction, locally evaluated prediction, and pull (tuple
+  space), under heterogeneous and drifting worker service times. Because pull
+  abolishes the staleness/misroute vocabulary, the common metrics must be
+  outcome-level---end-to-end job latency, throughput, idle-while-work-exists
+  time, and fairness as worker heterogeneity grows. The companion paper's
+  framework predicts the prediction arms recover only as workers are made
+  clone-like and synchronous; the binaries and the crate for all three arms
+  are in the repository.
+
 \item \textbf{Formal verification} of the signal/boundary substrate properties
   using TLA+ or similar.
 
