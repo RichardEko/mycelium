@@ -1,20 +1,23 @@
 """
-Agentic Flow Networks — Coordinator
+Agentic Flow Networks — Seeder / Sink (pull mode) or Coordinator (push mode)
 
-Seeds 200 synthetic news articles into the Mycelium KV ring and fans work
-out across all four pipeline stages.  Every stage is drained before the next
-starts, so the pool of workers visibly shifts: Parse → Enrich → Score →
-Aggregate.
+Two modes, selected by PIPELINE_MODE (default "pull"):
 
-Key pattern — the KV ring IS the distributed buffer:
-    pipeline/stage-a/{id}   ← seeded here
-    pipeline/stage-b/{id}   ← written by stage-A workers
-    pipeline/stage-c/{id}   ← written by stage-B workers
-    pipeline/stage-d/{id}   ← written by stage-C workers
-    pipeline/done/{id}      ← written by stage-D workers (also in Postgres)
+pull (canonical AFN pattern)
+    This process is NOT a coordinator. It is an edge client: it puts the
+    seed items into the tuple space's first stage, then watches the done
+    markers accumulate. All distribution decisions are made by the workers
+    themselves — they take() when ready, from whichever stage is deepest.
+    The pipeline A>B>C>D lives in the tuple-space stages, not here.
 
-Work-item claiming (pipeline/claiming/{id}) prevents double-dispatch when
-multiple coordinators run or when a worker crashes mid-task.
+push (pre-refinement baseline — the coordinator-trap contrast case)
+    The original demo: seed the KV ring, then drain each stage by resolving
+    free workers and dispatching RPCs to them. Every item flows through this
+    process's decisions — the architecture Paper 1 names "the coordinator
+    trap", kept runnable as the comparison baseline.
+
+The node this process talks to hosts the tuple-space primary in pull mode
+(MYCELIUM_TUPLE_ROLE=primary on the sidecar binary).
 """
 
 from __future__ import annotations
@@ -23,29 +26,35 @@ import asyncio
 import json
 import logging
 import os
-import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 from mycelium import MyceliumAgent
+from mycelium.tuple import TupleSpace
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [coordinator] %(message)s",
+    format="%(asctime)s [seeder] %(message)s",
     datefmt="%H:%M:%S",
 )
 log = logging.getLogger(__name__)
 
 MYCELIUM_PORT = int(os.environ.get("MYCELIUM_HTTP_PORT", "8300"))
+MODE          = os.environ.get("PIPELINE_MODE", "pull").lower()
+TUPLE_NS      = os.environ.get("MYCELIUM_TUPLE_NS", "pipeline")
 MIN_WORKERS   = int(os.environ.get("MIN_WORKERS", "3"))
+ITEM_COUNT    = int(os.environ.get("ITEM_COUNT", "200"))
+RUN_TIMEOUT   = int(os.environ.get("PIPELINE_TIMEOUT_SECS", "600"))
 
-# Stage pipeline: (kv_in_prefix, kv_out_prefix, capability_ns, rpc_method)
+# Push-mode stage table: (kv_in_prefix, kv_out_prefix, capability_ns, rpc_method)
 STAGES = [
     ("stage-a", "stage-b", "stage_a", "stage_a.parse"),
     ("stage-b", "stage-c", "stage_b", "stage_b.enrich"),
     ("stage-c", "stage-d", "stage_c", "stage_c.score"),
     ("stage-d", "done",    "stage_d", "stage_d.aggregate"),
 ]
+
+PULL_STAGES = ["stage-a", "stage-b", "stage-c", "stage-d"]
 
 
 # ── Article dataset ────────────────────────────────────────────────────────────
@@ -81,13 +90,16 @@ ARTICLE_TEMPLATES = [
 ]
 
 
-def load_articles() -> list[dict]:
-    """Return 200 synthetic news article stubs (20 per topic)."""
+def load_articles(count: int = ITEM_COUNT) -> list[dict]:
+    """Return `count` synthetic news article stubs (round-robin over templates)."""
     articles: list[dict] = []
-    for variation in range(20):
-        for idx, (tag, s1, s2) in enumerate(ARTICLE_TEMPLATES):
+    variation = 0
+    while len(articles) < count:
+        for tag, s1, s2 in ARTICLE_TEMPLATES:
+            if len(articles) >= count:
+                break
             art_id = f"article-{len(articles):04d}"
-            source = SOURCES[(len(articles)) % len(SOURCES)]
+            source = SOURCES[len(articles) % len(SOURCES)]
             month  = (len(articles) % 12) + 1
             day    = (len(articles) % 28) + 1
             articles.append({
@@ -97,7 +109,8 @@ def load_articles() -> list[dict]:
                 "date":   f"2025-{month:02d}-{day:02d}",
                 "tag":    tag,
             })
-    return articles[:200]
+        variation += 1
+    return articles
 
 
 # ── Startup helpers ────────────────────────────────────────────────────────────
@@ -114,10 +127,10 @@ def wait_ready(agent: MyceliumAgent, timeout: int = 90) -> None:
     raise RuntimeError("Mycelium node not ready within timeout")
 
 
-def wait_for_workers(agent: MyceliumAgent, min_count: int = MIN_WORKERS, timeout: int = 120) -> int:
+def wait_for_workers(agent: MyceliumAgent, cap_ns: str, min_count: int = MIN_WORKERS, timeout: int = 120) -> int:
     deadline = time.time() + timeout
     while time.time() < deadline:
-        providers = agent.resolve_capability("stage_a", "worker")
+        providers = agent.resolve_capability(cap_ns, "worker")
         if len(providers) >= min_count:
             log.info("%d worker(s) in the capability ring", len(providers))
             return len(providers)
@@ -126,22 +139,62 @@ def wait_for_workers(agent: MyceliumAgent, min_count: int = MIN_WORKERS, timeout
     raise RuntimeError(f"fewer than {min_count} workers available after {timeout}s")
 
 
-# ── Work seeding ───────────────────────────────────────────────────────────────
+# ── Pull mode: seed, then watch ────────────────────────────────────────────────
 
-def seed_articles(agent: MyceliumAgent, articles: list[dict]) -> None:
-    """Write all articles into pipeline/stage-a/{id} in the KV ring.
+async def run_pull(agent: MyceliumAgent) -> None:
+    ts = TupleSpace("127.0.0.1", MYCELIUM_PORT, ns=TUPLE_NS)
 
-    Each write propagates epidemically to every worker node.  By the time
-    the first drain_stage call runs, every worker already holds a replica of
-    the full stage-a buffer — no separate queue service needed.
-    """
+    # Optional but tidy: wait for the pool before seeding so the demo logs
+    # show the fluid behaviour from item 1. Items would happily wait in the
+    # space otherwise — pull has no startup ordering requirement.
+    wait_for_workers(agent, "pipeline")
+
+    articles = load_articles()
+    log.info("seeding %d articles into tuple stage-a (ns=%s)", len(articles), TUPLE_NS)
+    t0 = time.time()
+    for article in articles:
+        await ts.put("stage-a", json.dumps(article).encode(), backpressure="block")
+    log.info("seed complete — workers are already draining (no dispatch step exists)")
+
+    # Sink: watch done markers; narrate the pressure front A→B→C→D.
+    deadline = time.time() + RUN_TIMEOUT
+    last_log = 0.0
+    while time.time() < deadline:
+        done = len(agent.keys(prefix="pipeline/done/"))
+        if done >= len(articles):
+            break
+        if time.time() - last_log >= 2.0:
+            try:
+                depths = await ts.depth()
+                front = "  ".join(
+                    f"{s}={depths.get(s, {}).get('depth', 0)}"
+                    f"(+{depths.get(s, {}).get('inflight', 0)} inflight)"
+                    for s in PULL_STAGES
+                )
+                log.info("  pressure: %s   done=%d/%d", front, done, len(articles))
+            except Exception:
+                pass
+            last_log = time.time()
+        await asyncio.sleep(0.25)
+
+    elapsed = time.time() - t0
+    done = len(agent.keys(prefix="pipeline/done/"))
+    if done < len(articles):
+        raise RuntimeError(f"pipeline incomplete: {done}/{len(articles)} after {RUN_TIMEOUT}s")
+    log.info(
+        "=== pipeline complete: %d/%d articles in %.1fs (%.1f items/s) ===",
+        done, len(articles), elapsed, done / max(elapsed, 0.001),
+    )
+
+
+# ── Push mode: the original coordinator (baseline) ─────────────────────────────
+
+def seed_articles_kv(agent: MyceliumAgent, articles: list[dict]) -> None:
     log.info("seeding %d articles into pipeline/stage-a/… (KV ring is the buffer)", len(articles))
     for article in articles:
         agent.set(f"pipeline/stage-a/{article['id']}", json.dumps(article).encode())
     log.info("seed complete — %d work items live in the distributed KV buffer", len(articles))
 
-
-# ── Stage fan-out ──────────────────────────────────────────────────────────────
 
 async def drain_stage(
     agent:     MyceliumAgent,
@@ -151,31 +204,20 @@ async def drain_stage(
     method:    str,
     executor:  ThreadPoolExecutor,
 ) -> None:
-    """Drain all items from *stage_in* by dispatching RPC calls to free workers.
-
-    Uses coordinator-side in-flight tracking so each worker gets at most one
-    in-flight task at a time.  Workers write results to pipeline/{stage_out}/{id}
-    and tombstone the pipeline/{stage_in}/{id} entry when done.
-
-    Loop terminates when:
-      - No unclaimed items remain in pipeline/{stage_in}/
-      - No tasks are still in flight
-    """
+    """Drain all items from *stage_in* by dispatching RPC calls to free workers."""
     log.info("==> draining %s → %s  (method=%s)", stage_in, stage_out, method)
     loop        = asyncio.get_event_loop()
     in_flight:  dict[str, asyncio.Task] = {}   # worker_id → task
     dispatched  = 0
 
     while True:
-        # Reap finished tasks
         done_ids = [wid for wid, t in in_flight.items() if t.done()]
         for wid in done_ids:
             del in_flight[wid]
 
-        # Local KV scan — zero network latency (reads from this node's replica)
-        all_keys   = agent.keys(prefix=f"pipeline/{stage_in}/")
+        all_keys    = agent.keys(prefix=f"pipeline/{stage_in}/")
         claimed_ids = {k.split("/")[-1] for k in agent.keys(prefix="pipeline/claiming/")}
-        available  = [k for k in all_keys if k.split("/")[-1] not in claimed_ids]
+        available   = [k for k in all_keys if k.split("/")[-1] not in claimed_ids]
 
         if not available and not in_flight:
             log.info("<== %s drained  (%d items dispatched)", stage_in, dispatched)
@@ -185,7 +227,6 @@ async def drain_stage(
             await asyncio.sleep(0.05)
             continue
 
-        # Capability resolution — routes to non-opaque, non-busy workers
         providers = agent.resolve_capability(cap_ns, "worker")
         free_ids  = [p["node_id"] for p in providers if p["node_id"] not in in_flight]
 
@@ -199,10 +240,8 @@ async def drain_stage(
 
         payload = agent.get(item_key)
         if payload is None:
-            # Tombstone raced us — item already processed
-            continue
+            continue  # tombstone raced us — already processed
 
-        # Write claim to prevent double-dispatch
         agent.set(f"pipeline/claiming/{item_id}", worker_id.encode())
 
         async def do_rpc(wid: str, mid: str, pld: bytes) -> None:
@@ -211,7 +250,6 @@ async def drain_stage(
                     executor,
                     lambda: agent.rpc_call(wid, method, pld, timeout_secs=90),
                 )
-                log.debug("  ok %s → %s", mid, stage_out)
             except TimeoutError:
                 log.warning("  timeout routing %s to %s — will retry", mid, wid[:30])
                 agent.delete(f"pipeline/claiming/{mid}")
@@ -227,7 +265,30 @@ async def drain_stage(
 
         if dispatched % 20 == 0:
             done_count = len(agent.keys(prefix="pipeline/done/"))
-            log.info("  progress: %d dispatched, %d/200 done", dispatched, done_count)
+            log.info("  progress: %d dispatched, %d/%d done", dispatched, done_count, ITEM_COUNT)
+
+
+async def run_push(agent: MyceliumAgent) -> None:
+    wait_for_workers(agent, "stage_a")
+
+    articles = load_articles()
+    seed_articles_kv(agent, articles)
+
+    executor = ThreadPoolExecutor(max_workers=30)
+    t0 = time.time()
+    for stage_in, stage_out, cap_ns, method in STAGES:
+        await drain_stage(agent, stage_in, stage_out, cap_ns, method, executor)
+        workers = len(agent.resolve_capability(cap_ns, "worker"))
+        log.info("  pool shifting: %d workers now free for next stage", workers)
+
+    elapsed = time.time() - t0
+    total_done = len(agent.keys(prefix="pipeline/done/"))
+    if total_done < len(articles):
+        raise RuntimeError(f"pipeline incomplete: {total_done}/{len(articles)}")
+    log.info(
+        "=== pipeline complete: %d/%d articles in %.1fs (%.1f items/s) ===",
+        total_done, len(articles), elapsed, total_done / max(elapsed, 0.001),
+    )
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -237,31 +298,12 @@ def main() -> None:
 
     wait_ready(agent)
     node_id = agent.health().get("node_id", "?")
-    log.info("coordinator node ready — id=%s", node_id)
+    log.info("node ready — id=%s mode=%s items=%d", node_id, MODE, ITEM_COUNT)
 
-    wait_for_workers(agent)
-
-    articles = load_articles()
-    seed_articles(agent, articles)
-
-    executor = ThreadPoolExecutor(max_workers=30)
-
-    async def run() -> None:
-        t0 = time.time()
-        for stage_in, stage_out, cap_ns, method in STAGES:
-            await drain_stage(agent, stage_in, stage_out, cap_ns, method, executor)
-            done = len(agent.keys(prefix="pipeline/done/"))
-            workers = len(agent.resolve_capability(cap_ns, "worker"))
-            log.info("  pool shifting: %d workers now free for next stage", workers)
-
-        elapsed = time.time() - t0
-        total_done = len(agent.keys(prefix="pipeline/done/"))
-        log.info(
-            "=== pipeline complete: %d/200 articles in %.1fs (%.1f items/s) ===",
-            total_done, elapsed, total_done / max(elapsed, 0.001),
-        )
-
-    asyncio.run(run())
+    # Outer watchdog so a stalled run exits non-zero instead of hanging the
+    # CI harness (run_pull also enforces RUN_TIMEOUT internally on the sink).
+    runner = run_push(agent) if MODE == "push" else run_pull(agent)
+    asyncio.run(asyncio.wait_for(runner, timeout=RUN_TIMEOUT + 30))
 
 
 if __name__ == "__main__":

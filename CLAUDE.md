@@ -462,8 +462,12 @@ get found.
   v11 adds `hlc_seq: Option<u64>` to `WireMessage::Signal` for ordered delivery via `emit_ordered()`.
   v10 adds `WireMessage::SignedData` for Ed25519-signed KV writes under the `tls` feature.
 - **Agentic Flow Networks demo**: `examples/fluid_pipeline/` — 10-worker fluid pool,
-  KV ring as distributed buffer, 4-stage news article pipeline. Run with
-  `docker compose up --build --scale worker=10`. See
+  4-stage news article pipeline, two modes via `PIPELINE_MODE`: **pull** (default,
+  canonical — tuple-space stages, workers take() from the deepest stage; seeder is an
+  edge client) and **push** (pre-refinement baseline — coordinator dispatch over the
+  KV ring, kept as the comparison case). Run with
+  `docker compose up --build --scale worker=10`; `ci_smoke.sh` runs both modes
+  Docker-free and is wired into CI as the `afn-smoke` job. See
   [`examples/fluid_pipeline/README.md`](examples/fluid_pipeline/README.md) for the
   concept document, [`flow_networks.html`](examples/fluid_pipeline/flow_networks.html)
   for the AFN concept essay (incl. the push→pull TupleSpace refinement), and

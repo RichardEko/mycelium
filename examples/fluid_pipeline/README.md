@@ -6,49 +6,88 @@ Traditional pipeline architectures assign workers statically to stages. This
 is simple until one stage becomes a bottleneck — then you either
 over-provision or re-architect.
 
-The **fluid pool** pattern uses a fixed pool of identical workers that
-advertise capability for *all* stages. The coordinator resolves the right
-workers at dispatch time. Workers "flow" to where demand is: if stage C is
-slow, the coordinator simply keeps routing to the workers who finish earliest.
-No static assignment, no rebalancing job, no configuration change.
+The **fluid pool** pattern uses a fixed pool of identical workers that carry
+the full stage repertoire. Workers "flow" to where demand is: if stage C is
+slow, the pool masses on stage C. No static assignment, no rebalancing job,
+no configuration change.
 
-The Mycelium gossip layer provides both the buffer (KV ring) and the scheduler
-(capability ring) — one substrate, no separate queue infrastructure.
+This demo runs the pattern in two modes — the canonical **pull** architecture
+and the **push** baseline it refined away — selected by `PIPELINE_MODE`. The
+push→pull refinement is the subject of [`flow_networks.html`](flow_networks.html)
+(in this directory); the runnable A/B below is its empirical companion.
+
+## Pull mode (default — the canonical AFN pattern)
+
+The flow `A>B>C>D` is **data topology, not node topology**: it exists as
+tuple-space stages, and a worker is "at stage B" only for the duration of one
+`take()` → process → `complete()` cycle.
 
 ```mermaid
 graph LR
-    CO["Coordinator<br/>seed → drain → drain → drain → done"]
+    SE["Seeder / Sink<br/>put 200 → watch done markers<br/>(edge client, decides nothing)"]
 
-    subgraph "KV Ring buffer"
-        SA["pipeline/stage-a/*"]
-        SB["pipeline/stage-b/*"]
-        SC["pipeline/stage-c/*"]
-        SD["pipeline/stage-d/*"]
+    subgraph "Tuple space (ns=pipeline, primary on seeder node)"
+        SA["stage-a"]
+        SB["stage-b"]
+        SC["stage-c"]
+        SD["stage-d"]
     end
 
-    subgraph "Worker pool (10 identical)"
-        W["Each worker<br/>advertises all 4 stage caps<br/>serves stage-a,b,c,d RPC"]
+    subgraph "Worker pool (10 identical, full repertoire)"
+        W["each flow-loop:<br/>read depths → take() deepest stage<br/>→ process → complete() into next"]
     end
 
-    CO -->|write items| SA
-    SA -->|resolve + rpc| W
-    W -->|result| SB
-    SB -->|resolve + rpc| W
-    W -->|result| SC
-    SC -->|resolve + rpc| W
-    W -->|result| SD
-    SD -->|resolve + rpc| W
-    W -->|write| CO
+    SE -->|put| SA
+    W -->|take| SA
+    W -->|take| SB
+    W -->|take| SC
+    W -->|take| SD
+    W -->|complete| SB
+    W -->|complete| SC
+    W -->|complete| SD
+    W -->|"ack + done marker"| SE
 ```
 
-**Key properties:**
+- **Readiness is self-announcing** — a worker `take()`s when it is actually
+  free. Nobody predicts who is free, so the staleness/misroute failure mode
+  of push dispatch does not exist.
+- **Fluidity is self-selection against pressure** — each flow loop reads the
+  per-stage depths and takes from the deepest stage. The pool automatically
+  masses on the bottleneck; watch the seeder's `pressure:` log lines to see
+  the front migrate A→B→C→D.
+- **Stage transitions are atomic** — `complete()` acks the input and puts the
+  output in one WAL record; a crash cannot half-replay a hop. Unacked items
+  re-queue automatically after the in-flight deadline (at-least-once; the
+  stage handlers are idempotent).
+- **The seeder is not a coordinator** — it puts items into stage-a and counts
+  done markers. Every distribution decision is made by a worker.
 
-| Property | Mechanism |
-|----------|-----------|
-| Fluid allocation | Workers handle all stages; coordinator routes to whoever is free |
-| Topology emergence | Workers appear in `resolve_capability()` as soon as they join |
-| TTL-native cleanup | Crashed workers' capability ads and work claims expire automatically |
-| Substrate unity | KV ring = buffer; capability ring = scheduler; one gossip layer |
+## Push mode (the pre-refinement baseline)
+
+```bash
+PIPELINE_MODE=push docker compose up --build --scale worker=10
+```
+
+The original architecture, kept runnable as the contrast case: workers
+advertise four stage capabilities and serve RPCs; a **coordinator** resolves
+free workers and dispatches every item through its own decision loop —
+the architecture the project's Paper 1 names *the coordinator trap*. The KV
+ring is the buffer (`pipeline/stage-{a,b,c,d}/{id}`), claim keys prevent
+double-dispatch, and the coordinator drains stages one at a time.
+
+It works — and comparing it against pull mode under stage skew is exactly
+how the refinement earns its keep (see below).
+
+**Key properties (pull vs push):**
+
+| Property | Pull (canonical) | Push (baseline) |
+|----------|------------------|-----------------|
+| Who decides | Each worker, by taking when ready | Coordinator, by predicting who is free |
+| Buffer | Tuple-space stages (single-copy, WAL-durable) | KV ring (replicated everywhere) |
+| Stage transition | One atomic `complete()` record | Worker KV write + delete + claim cleanup |
+| Crash recovery | In-flight deadline re-queues automatically | Claim-key TTL + coordinator retry |
+| Failure surface | Tuple primary (secondary promotes via capability evaporation) | The coordinator itself |
+| Topology emergence | Workers appear in the capability ring for observability | Coordinator resolves workers per dispatch |
 
 ---
 
@@ -58,41 +97,38 @@ graph LR
 docker compose version   # Docker Compose v2
 ```
 
----
-
 ## Run
 
 ```bash
 cd examples/fluid_pipeline
-docker compose up --build --scale worker=10
+docker compose up --build --scale worker=10                    # pull (default)
+PIPELINE_MODE=push docker compose up --build --scale worker=10 # baseline
 ```
 
-**Expected coordinator output:**
+**Expected seeder output (pull):**
 
 ```
-coordinator: seeded 200 articles into pipeline/stage-a/
-coordinator: draining stage-a  [workers: 10]
-coordinator: stage-a complete (200/200) in 1.2s
-coordinator: draining stage-b  [workers: 10]
-coordinator: stage-b complete (200/200) in 2.4s
-coordinator: draining stage-c  [workers: 10]
-coordinator: stage-c complete (200/200) in 4.1s
-coordinator: draining stage-d  [workers: 10]
-coordinator: pipeline complete — 200 articles processed
+seeder: seeding 200 articles into tuple stage-a (ns=pipeline)
+seeder: seed complete — workers are already draining (no dispatch step exists)
+seeder:   pressure: stage-a=142(+8 inflight)  stage-b=31(+6)  stage-c=9(+4)  stage-d=0(+0)   done=0/200
+seeder:   pressure: stage-a=0(+0)  stage-b=12(+8)  stage-c=88(+10)  stage-d=21(+6)   done=61/200
+seeder: === pipeline complete: 200/200 articles in 41.3s (4.8 items/s) ===
 ```
-
----
 
 ## What to observe
 
-**Simulate a bottleneck at stage C:**
+**The pressure front migrating (pull mode).** With `STAGE_C_SLEEP=1.0`, watch
+the depth counters: stage-c accumulates while a–b drain, then the whole pool's
+inflight count concentrates on stage-c — no one told the workers to move.
 
 ```bash
 STAGE_C_SLEEP=1.0 docker compose up --build --scale worker=10
 ```
 
-All 10 workers accumulate at stage C. The coordinator does not stall — it
-keeps dispatching to the fastest available worker.
+**The same skew under push.** Run the identical workload with
+`PIPELINE_MODE=push STAGE_C_SLEEP=1.0` and compare wall-clock, dispatch
+retries, and coordinator log volume. Same stages, same workers, same data —
+the only variable is who decides.
 
 **Scale up mid-run:**
 
@@ -100,8 +136,8 @@ keeps dispatching to the fastest available worker.
 docker compose up --scale worker=15 --no-recreate
 ```
 
-New workers are discovered via capability gossip within ~5 s. The coordinator
-starts routing to them immediately — no configuration change.
+New workers join the gossip mesh and start taking within seconds — in pull
+mode there is nothing to tell about them; they just start pulling.
 
 **Query final results:**
 
@@ -115,21 +151,22 @@ docker exec afn-postgres psql -U pipeline -d pipeline \
 
 ## How It Works
 
-**Coordinator** (`coordinator/coordinator.py`) seeds items into the KV ring as
-`pipeline/stage-a/{id}` entries, then drains each stage by resolving workers
-via capability and dispatching via RPC. Results flow into the next stage's
-prefix.
+**Seeder / coordinator** (`coordinator/coordinator.py`) — in pull mode, puts
+items into tuple stage-a and polls `pipeline/done/` markers; in push mode,
+runs the original resolve-and-dispatch drain loops.
 
-**Worker** (`worker/worker.py`) advertises four capabilities at startup
-(`stage_a/worker`, `stage_b/worker`, `stage_c/worker`, `stage_d/worker`) and
-serves a single RPC endpoint `"process"`. It detects which stage to run from
-the item's schema.
+**Worker** (`worker/worker.py`) — in pull mode, runs `WORKER_CONCURRENCY`
+flow loops of take-deepest → process → complete; in push mode, advertises
+`stage_{a..d}/worker` capabilities and serves the four stage RPCs.
 
-**Claim key pattern** prevents double-processing: the worker writes
-`claim/{item_id}` with a short TTL before processing. If it crashes, the
-claim expires; the next drain pass requeues the item.
+**Tuple space hosting** — the seeder's sidecar Mycelium node runs with
+`MYCELIUM_TUPLE_ROLE=primary` for namespace `pipeline`; worker nodes run as
+`client`, so their gateway routes tuple ops to the primary via RPC. (For
+primary failover — a secondary mirror promoting when the primary's capability
+evaporates — see integration scenario 13 and the `mycelium-tuple-space`
+crate docs.)
 
-**Pipeline stages** live in `worker/stages/`:
+**Pipeline stages** live in `worker/stages/` (shared by both modes):
 
 | Stage | File | What it does |
 |-------|------|-------------|
@@ -140,61 +177,67 @@ claim expires; the next drain pass requeues the item.
 
 ---
 
+## CI smoke harness
+
+[`ci_smoke.sh`](ci_smoke.sh) runs **both modes** end-to-end without Docker:
+it starts a seeder node (tuple primary) plus two worker nodes as local
+processes, drives a reduced workload (24 items) through each mode with fresh
+nodes per phase, and asserts `pipeline complete` with the full item count.
+Wired into CI as the `afn-smoke` job.
+
+```bash
+./examples/fluid_pipeline/ci_smoke.sh            # both modes
+./examples/fluid_pipeline/ci_smoke.sh pull       # one mode
+```
+
+---
+
 ## Demo assumption vs real deployment
 
-This demo uses **identical workers that each advertise all four stage
-capabilities**. That choice makes fluid allocation vivid — every worker can
-serve any stage, so the coordinator routes purely to whoever is free.
+This demo uses **identical workers that each carry all four stages**. That
+choice makes fluid allocation vivid — every worker can flow to any stage.
 
-**This is the demo's assumption, not Mycelium's.** The capability model does
-not require a monolithic worker. In a real deployment you could have:
+**This is the demo's assumption, not Mycelium's.** Nothing requires a
+monolithic worker. In a real deployment you could have:
 
-- **Specialist workers** — some nodes advertise only `stage_c.score` (the
-  expensive LLM step), others only `stage_a.parse`. Each team owns one image.
-- **Heterogeneous pools** — different capability sets deployed independently;
-  the mesh self-assembles the pipeline topology from whatever is running.
-  No coordinator change needed when a new capability comes online.
-- **Incremental rollout** — deploy `score_v2` capability alongside `score_v1`.
-  Resolvers start routing to `v2` workers as they appear; drain `v1` workers
-  by letting their capability advertisements expire (TTL). Zero-downtime
-  upgrade with no feature flags and no orchestrator involvement.
+- **Specialist workers** — some nodes serve only `stage-c` (the expensive
+  LLM step), others only `stage-a`. In pull mode that's just a smaller
+  `PIPELINE` dict: a worker takes only from stages it can serve.
+- **Heterogeneous pools** — different repertoires deployed independently;
+  the pipeline self-assembles from whatever is running.
+- **Incremental rollout** — deploy `score_v2` workers alongside `v1`; they
+  start taking from the same stage immediately. Drain `v1` by stopping its
+  workers — items simply stop being taken by them. No flags, no orchestrator.
 
-The monolith demo *undersells* the capability model. The more powerful
-production case is a **heterogeneous fleet where pipeline topology emerges
-from whatever capabilities happen to be running** — assembled bottom-up by
-the mesh, not configured top-down by an operator.
+Each capability a node lacks is a stage it cannot flow to, so fluidity is
+maximal when repertoires are uniform — that is a sizing dial, not a
+constraint of the substrate.
 
 ---
 
 ## Dev Notes
 
-**Adding a stage.** Add a handler in `worker/stages/`, register the new
-capability in `worker.py`, and add a `drain_stage` call in
-`coordinator/coordinator.py`. No other changes required — the gossip layer
-handles worker discovery for the new stage automatically.
+**Adding a stage.** Add a handler in `worker/stages/`, add one entry to
+`PIPELINE` in `worker.py` (and `STAGES` in `coordinator.py` for push mode).
+The tuple space creates stages on first use — no other changes.
 
-**Plugging in a real LLM.** Replace the simulated sleep in `score.py` with
-an LLM call:
+**Plugging in a real LLM.** Replace the simulated sleep in `score.py` with an
+LLM call; `STAGE_C_SLEEP` exists precisely to stand in for that latency.
 
-```python
-async def stage_c_score(item):
-    prompt = f"Rate this article quality 0–10, return JSON {{'score': N}}: {item['body'][:500]}"
-    resp = await llm_client.chat(prompt)
-    score = json.loads(resp)["score"]
-    return {**item, "composite_score": score}
-```
+**In-flight deadline sizing (pull).** Items taken but not acked re-queue
+after the tuple space's `worker_timeout_secs` (default 300 s). Keep it 2–3×
+the slowest stage's expected duration.
 
-The coordinator routes to the same `stage_c/worker` capability regardless.
-
-**Item TTL sizing.** Set item TTLs long enough that slow stages don't lose
-items. 5 minutes is safe for most pipelines. Claim TTLs should be 2–3× the
-expected processing time.
-
-**Without Docker.** Run coordinator and worker as plain Python processes:
+**Without Docker.** `ci_smoke.sh` is the reference for running everything as
+plain processes; the short version:
 
 ```bash
-MYCELIUM_PEERS="127.0.0.1:57000" python worker/worker.py &
-MYCELIUM_PORT=57000 python coordinator/coordinator.py
+cargo build --example three_node_demo
+MYCELIUM_ROLE=node MYCELIUM_PORT=57400 MYCELIUM_HTTP_PORT=58400 \
+  MYCELIUM_TUPLE_ROLE=primary MYCELIUM_TUPLE_NS=pipeline \
+  ./target/debug/examples/three_node_demo &
+# … worker nodes with MYCELIUM_TUPLE_ROLE=client, then worker.py / coordinator.py
 ```
 
 → Full concept guide: [`docs/guide/07-pipelines.md`](../../docs/guide/07-pipelines.md)
+→ The push→pull refinement essay: [`flow_networks.html`](flow_networks.html)

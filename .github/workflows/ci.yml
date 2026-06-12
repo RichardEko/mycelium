@@ -82,6 +82,20 @@ jobs:
       # is a ROADMAP v2 item).
       - run: cargo audit
 
+  afn-smoke:
+    name: AFN fluid-pipeline smoke (pull + push)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --example three_node_demo
+      # Both distribution modes of the AFN demo end-to-end as local processes:
+      # pull (tuple-space take/complete — the canonical pattern) and push
+      # (coordinator-dispatch baseline kept for comparison). Asserts 24/24
+      # completion in each; fresh nodes per mode.
+      - run: ./examples/fluid_pipeline/ci_smoke.sh both
+
   sdk-ts:
     name: TypeScript SDK type check
     runs-on: ubuntu-latest

@@ -2,20 +2,25 @@
 #
 # Usage:
 #   cd examples/fluid_pipeline
-#   docker compose up --build --scale worker=10
+#   docker compose up --build --scale worker=10                  # pull (canonical)
+#   PIPELINE_MODE=push docker compose up --build --scale worker=10   # baseline
 #
 # Topology:
-#   10 × worker    — identical fluid workers, each carries a Mycelium gossip node
-#                    + Python process serving all 4 stage skills concurrently
-#   1 × coordinator — seeds 200 work items, runs the drain-stage fan-out loops
-#   1 × postgres    — durable sink for stage-D results
+#   10 × worker — identical fluid workers, each carries a Mycelium gossip node
+#                 (tuple-space client) + a Python process with the full 4-stage
+#                 repertoire
+#   1 × seeder  — hosts the tuple-space primary; in pull mode it only seeds
+#                 stage-a and watches done markers (an edge client, not a
+#                 coordinator); in push mode it runs the original drain loops
+#   1 × postgres — durable sink for stage-D results
 #
-# All workers peer through the coordinator node. Work flows:
-#   pipeline/stage-a/{id}  (parse)
-#   pipeline/stage-b/{id}  (enrich)
-#   pipeline/stage-c/{id}  (score — simulates LLM latency, configurable)
-#   pipeline/stage-d/{id}  (aggregate → postgres)
-#   pipeline/done/{id}
+# pull mode (default — the canonical AFN pattern):
+#   tuple ns "pipeline", stages stage-a → stage-b → stage-c → stage-d
+#   workers take() from the deepest stage and complete() into the next;
+#   the pipeline shape lives in the tuple stages, workers have no position
+#
+# push mode (pre-refinement baseline, kept for comparison):
+#   pipeline/stage-{a,b,c,d}/{id} KV-ring buffers + coordinator RPC dispatch
 
 services:
 
@@ -27,10 +32,14 @@ services:
     container_name: afn-coordinator
     hostname: coordinator
     environment:
-      MYCELIUM_PEERS:     ""          # coordinator is the seed — no upstream peers
-      MYCELIUM_HTTP_PORT: "8300"
-      RUST_LOG:           "warn,mycelium=info"
-      POSTGRES_DSN:       "postgresql://pipeline:pipeline@postgres:5432/pipeline"
+      MYCELIUM_PEERS:      ""         # this node is the gossip seed — no upstream peers
+      MYCELIUM_HTTP_PORT:  "8300"
+      MYCELIUM_TUPLE_ROLE: "primary"  # hosts the pipeline tuple space (pull mode)
+      MYCELIUM_TUPLE_NS:   "pipeline"
+      PIPELINE_MODE:       "${PIPELINE_MODE:-pull}"
+      ITEM_COUNT:          "${ITEM_COUNT:-200}"
+      RUST_LOG:            "warn,mycelium=info"
+      POSTGRES_DSN:        "postgresql://pipeline:pipeline@postgres:5432/pipeline"
     depends_on:
       postgres:
         condition: service_healthy
@@ -44,11 +53,14 @@ services:
       context: ../..
       dockerfile: examples/fluid_pipeline/worker/Dockerfile
     environment:
-      MYCELIUM_PEERS:     "coordinator:57000"
-      MYCELIUM_HTTP_PORT: "8300"
-      RUST_LOG:           "warn"
-      STAGE_C_SLEEP:      "0.3"    # seconds; increase to make bottleneck more visible
-      POSTGRES_DSN:       "postgresql://pipeline:pipeline@postgres:5432/pipeline"
+      MYCELIUM_PEERS:      "coordinator:57000"
+      MYCELIUM_HTTP_PORT:  "8300"
+      MYCELIUM_TUPLE_ROLE: "client"   # tuple ops route via RPC to the primary
+      MYCELIUM_TUPLE_NS:   "pipeline"
+      PIPELINE_MODE:       "${PIPELINE_MODE:-pull}"
+      RUST_LOG:            "warn"
+      STAGE_C_SLEEP:       "0.3"   # seconds; increase to make the bottleneck (and the pull-mode pressure migration) more visible
+      POSTGRES_DSN:        "postgresql://pipeline:pipeline@postgres:5432/pipeline"
     depends_on:
       - coordinator
     networks:
