@@ -659,38 +659,52 @@ gracefully to reduced quorum, not coordination failure.
 The three-layer architecture described in \S\S7.1--7.4 supports a distinct
 multi-agent computational pattern that we term an \emph{Agentic Flow Network}
 (AFN). An AFN is a topology of capability-bounded agent groups in which work flows
-through the mesh as a sequence of KV state transitions, each stage consuming from
-one key prefix and producing to the next.
+through the named lanes of the tuple-space companion (Section~8), each stage
+\texttt{take}-ing from one lane and \texttt{complete}-ing atomically into the
+next. The pipeline is data topology, not node topology: a worker is ``at'' a
+stage only for the duration of one take~$\to$~process~$\to$~complete cycle.
 
 An AFN has five structural properties:
 
 \begin{enumerate}
-\item \textbf{Substrate Unity.} All coordination---capability advertisement, group
-  membership, backpressure, work items, completion signals---is carried by the same
-  gossip KV substrate. There is no separate message queue, registry, or coordination bus.
+\item \textbf{Substrate Unity.} All \emph{coordination}---capability
+  advertisement, serving-role election, group membership, backpressure pheromones,
+  completion markers---is carried by the same gossip KV substrate; the work-item
+  payload path is a point-to-point RPC to the space's serving node (single-copy,
+  O(1) per item, versus O(N) gossip replication). There is no separate message
+  queue, registry, or coordination bus.
 
-\item \textbf{Topology Emergence.} Which nodes participate in which pipeline stages
-  is not configured by an operator. Each node evaluates its own capabilities against
-  the group definitions and self-joins the matching stages.
+\item \textbf{Topology Emergence.} Which nodes participate is not configured by
+  an operator. Workers self-select stages by reading per-lane depth; the space's
+  serving roles---primary and mirroring secondary---are discovered by capability
+  advertisement and re-elected through evaporation when a holder fails.
 
 \item \textbf{Fluid Allocation.} There is no static assignment of workers to
-  stages. Any node capable of serving a stage joins its group; the group's size
-  fluctuates with available capacity.
+  stages. Each worker's flow loop takes from the deepest lane in its repertoire,
+  so the pool masses on the bottleneck automatically---fluidity is self-selection
+  against pressure.
 
-\item \textbf{Opacity Backpressure.} A saturated node writes an opacity flag to
-  \texttt{sys/load/\{self\}/\{kind\}} (TTL~$\approx$5\,s, where \texttt{kind} is
-  the application-defined opacity category), making itself invisible to resolvers
-  at the next stage. The topology self-throttles without any flow-control protocol.
+\item \textbf{Depth-Native Backpressure.} Per-lane depth counters are
+  simultaneously the backpressure signal (\texttt{put} is refused beyond a high
+  watermark) and the allocation signal workers route on. Saturation is observable
+  state in the medium, not a flow-control protocol.
 
-\item \textbf{TTL-Native Cleanup.} Work items written to the KV substrate carry
-  TTLs. Abandoned items evaporate automatically. There is no dead-letter queue, no
-  explicit cancellation protocol.
+\item \textbf{Deadline-Native Recovery.} Items taken but not acknowledged
+  re-queue automatically when the in-flight deadline lapses, and a stage
+  transition is a single WAL record, so a crash cannot half-replay a hop. Absence
+  of acknowledgement is the failure signal, exactly as absence of refreshment is
+  for capabilities.
 \end{enumerate}
 
-These five properties are validated empirically by \texttt{examples/fluid\_pipeline/}
----a 10-worker, 4-stage news article pipeline (fetch $\to$ parse $\to$ score $\to$
-publish) running over a shared KV ring as distributed buffer, exercised end-to-end
-by integration scenario~11 (repository and test harness: \S8).
+These properties are validated empirically by \texttt{examples/fluid\_pipeline/}
+---a 10-worker, 4-stage news article pipeline (parse $\to$ enrich $\to$ score
+$\to$ aggregate) whose workers take from the deepest stage and complete into the
+next, exercised end-to-end in CI in both its pull form and its retained baseline,
+alongside integration scenario~13 (the cross-node put/take/complete/ack
+lifecycle) and scenario~11 (the substrate-level stage-transition properties). An
+earlier formulation used the replicated KV ring itself as the inter-stage
+buffer; it survives in the example as the push-mode comparison baseline that the
+three-arm experiment (Future Work) requires.
 
 An AFN is not a new programming model layered on top of Mycelium. It is the name
 for the pattern that naturally arises when a distributed application is built
@@ -874,8 +888,13 @@ it does not apply universally.
 not by the first available worker.
 \emph{Exactly-once delivery}---where each work item must be processed exactly
 once, with no duplicate execution under any failure scenario.
-\emph{Complex DAG dependencies}---where later stages must block on combinations
-of earlier results in ways that cannot be expressed as linear KV-prefix pipelines.
+\emph{Complex DAG dependencies}---fan-in joins (a stage consuming the join of
+two upstream outputs) are not expressible in exactly-named lanes today; the
+keyed-exact-match \texttt{take} discussed below covers pairwise joins and is
+roadmapped, and arbitrary cross-stage predicates belong to the blackboard
+companion (Future Work). An orchestrated DAG engine (Airflow, Dagster) remains
+right where centralised control is itself the requirement---human approval
+gates, one pane for dependency state---a coordinator adopted deliberately.
 \emph{Long-term log retention}---where TTL evaporation is a correctness property;
 applications requiring replay capability must use a separate append-only store.
 \emph{Cross-cluster fan-out at scale}---where the gossip mesh operates within a
