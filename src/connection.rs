@@ -42,6 +42,12 @@ pub(crate) struct ConnContext {
     /// Idle timeout forwarded to `get_or_spawn_writer` / `request_state`.
     /// Zero means no timeout (default).
     pub(crate) writer_idle_timeout: Duration,
+    /// Fan-out list publisher (same channel the health monitor feeds). A peer
+    /// learned here must become sendable IMMEDIATELY: waiting for the health
+    /// monitor's next tick left inbound-only nodes mute for live sends —
+    /// including Individual-scoped RPC responses — for up to two
+    /// health-check intervals.
+    pub(crate) peer_list_tx: tokio::sync::watch::Sender<Arc<[NodeId]>>,
 }
 
 pub(crate) async fn handle_connection(
@@ -51,7 +57,7 @@ pub(crate) async fn handle_connection(
 ) -> Result<(), GossipError> {
     let ConnContext {
         task_ctx, peers, shutdown, peer_writers, writer_depth, backoff, n_shards,
-        intern_keys, intern_max_keys, max_peers, writer_idle_timeout,
+        intern_keys, intern_max_keys, max_peers, writer_idle_timeout, peer_list_tx,
     } = ctx;
     let node_id         = task_ctx.node_id.clone();
     let gossip_txs      = Arc::clone(&task_ctx.gossip_txs);
@@ -195,6 +201,15 @@ pub(crate) async fn handle_connection(
                     is_new
                 };
                 if sender_is_new {
+                    // Event-driven fan-out activation: publish the updated
+                    // peer list NOW so the gossip loop can send to this peer
+                    // immediately (signals, RPC responses, votes). The health
+                    // monitor remains the steady-state reconciler/evictor.
+                    let list: Arc<[NodeId]> = {
+                        let guard = peers.pin();
+                        guard.iter().map(|(id, _)| id.clone()).collect()
+                    };
+                    let _ = peer_list_tx.send(list);
                     let key_timestamps: Vec<(std::sync::Arc<str>, u64)> = {
                         let guard = kv_state.store.pin();
                         guard.iter().map(|(k, v)| (Arc::clone(k), v.timestamp)).collect()

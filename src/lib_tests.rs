@@ -156,6 +156,7 @@ fn spawn_handler(
         intern_max_keys: 0,
         max_peers: usize::MAX,
         writer_idle_timeout: Duration::ZERO,
+        peer_list_tx: tokio::sync::watch::channel(std::sync::Arc::from(Vec::<NodeId>::new())).0,
     };
     let handle = tokio::spawn(handle_connection(
         crate::stream::GossipStream::Plain(socket),
@@ -559,6 +560,7 @@ async fn test_subscribe_notified_via_gossip() {
             intern_max_keys: 0,
             max_peers: usize::MAX,
             writer_idle_timeout: Duration::ZERO,
+            peer_list_tx: tokio::sync::watch::channel(std::sync::Arc::from(Vec::<NodeId>::new())).0,
         };
         use crate::connection::handle_connection;
         tokio::spawn(handle_connection(crate::stream::GossipStream::Plain(reader), "127.0.0.1:0".parse().unwrap(), ctx));
@@ -954,6 +956,142 @@ async fn test_individual_signal_reaches_unpeered_target_via_relay() {
     a.shutdown().await;
     b.shutdown().await;
     c.shutdown().await;
+}
+
+
+/// Topology-class generalization of the line-relay canary above: across
+/// RANDOM connected partial meshes, all three Individual-scope consumers —
+/// targeted signal delivery, RPC round-trip, and consensus ballots (votes go
+/// Individual to the proposer) — must work between deliberately NON-adjacent
+/// node pairs via the flood fallback. Topology was the dimension no prior
+/// test varied (M2 post-mortem, 2026-06-12): every existing topology
+/// accidentally peered all RPC pairs directly.
+#[tokio::test]
+async fn test_individual_consumers_over_random_partial_meshes() {
+    use crate::consensus::{ConsensusConfig, ConsensusResult};
+    use crate::signal::SignalScope;
+    use bytes::Bytes;
+
+    for graph_seed in [11u64, 23, 47] {
+        let mut rng = fastrand::Rng::with_seed(graph_seed);
+        let n = 7;
+        let ports: Vec<u16> = (0..n).map(|_| alloc_port()).collect();
+        let id = |i: usize| NodeId::new("127.0.0.1", ports[i]).unwrap();
+
+        // Random spanning tree (node i dials a random earlier node) plus one
+        // extra random edge: connected by construction, sparse enough that
+        // non-adjacent pairs always exist at n=7.
+        let mut dials: Vec<Vec<usize>> = vec![vec![]; n];
+        for (i, d) in dials.iter_mut().enumerate().skip(1) {
+            d.push(rng.usize(0..i));
+        }
+        let (a, b) = (rng.usize(0..n), rng.usize(0..n));
+        if a != b && !dials[a].contains(&b) && !dials[b].contains(&a) {
+            dials[a].push(b);
+        }
+
+        let adjacent = |x: usize, y: usize| dials[x].contains(&y) || dials[y].contains(&x);
+        let (src, dst) = (0..n)
+            .flat_map(|x| (0..n).map(move |y| (x, y)))
+            .find(|&(x, y)| x != y && !adjacent(x, y))
+            .expect("sparse graph must have a non-adjacent pair");
+
+        let mut agents = Vec::with_capacity(n);
+        for i in 0..n {
+            let mut cfg = GossipConfig::default();
+            cfg.bind_port = ports[i];
+            cfg.bootstrap_peers = dials[i].iter().map(|&j| id(j)).collect();
+            cfg.reconnect_backoff_secs = 1;
+            // Fast first pings: peer discovery is ping-driven, and the
+            // property under test is delivery, not discovery cadence.
+            cfg.health_check_max_jitter_ms = 50;
+            // Worst-case relay path in a random tree on 7 nodes can exceed
+            // the default hop budget; the property under test is delivery,
+            // not TTL sizing.
+            cfg.default_ttl = 10;
+            let agent = Arc::new(GossipAgent::new(id(i), cfg));
+            agent.start().await.unwrap();
+            agents.push(agent);
+        }
+
+        // Consensus listeners on every node BEFORE any proposal (CLAUDE.md
+        // pattern), and structural poll until the dial graph links up.
+        let _listeners: Vec<_> = agents
+            .iter()
+            .map(|a| a.consensus().start_consensus_listener(ConsensusConfig::default()))
+            .collect();
+        for _ in 0..100 {
+            if agents.iter().all(|a| !a.peers().is_empty()) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        // (a) Individual signal src -> non-adjacent dst. Re-emit each second
+        // (distinct frames) to distinguish "racing formation" from "never".
+        let mut rx = agents[dst].mesh().signal_rx("prop.topology");
+        let mut delivered_at = None;
+        for attempt in 0..8 {
+            assert!(agents[src].mesh().emit(
+                "prop.topology",
+                SignalScope::Individual(id(dst)),
+                Bytes::from_static(b"hop"),
+            ));
+            if tokio::time::timeout(Duration::from_secs(1), rx.recv()).await.is_ok() {
+                delivered_at = Some(attempt);
+                break;
+            }
+        }
+        if delivered_at.is_none() {
+            for (i, a) in agents.iter().enumerate() {
+                eprintln!("  POSTMORTEM node {i}: fb={} peers={}",
+                    a.system_stats().individual_flood_fallbacks, a.peers().len());
+            }
+            // Which senders can reach dst directly?
+            for (i, agent) in agents.iter().enumerate() {
+                if i == dst { continue; }
+                let ok = agent.mesh().emit(
+                    "prop.topology",
+                    SignalScope::Individual(id(dst)),
+                    Bytes::from_static(b"direct"),
+                );
+                let got = tokio::time::timeout(Duration::from_millis(800), rx.recv()).await.is_ok();
+                eprintln!("  direct {i}->{dst}: emit={ok} delivered={got}");
+            }
+            panic!("graph_seed={graph_seed}: signal {src}->{dst} undelivered after 8 attempts");
+        }
+        eprintln!("  signal delivered on attempt {}", delivered_at.unwrap());
+
+        // (b) RPC round-trip src -> dst (echo handler on dst).
+        let mut req_rx = agents[dst].service().rpc_rx("prop.echo");
+        let dst_agent = Arc::clone(&agents[dst]);
+        tokio::spawn(async move {
+            while let Some(req) = req_rx.recv().await {
+                let payload = req.payload();
+                dst_agent.service().rpc_respond(&req, payload);
+            }
+        });
+        let reply = agents[src]
+            .service()
+            .rpc_call(id(dst), "prop.echo", Bytes::from_static(b"ping"), Duration::from_secs(8))
+            .await
+            .unwrap_or_else(|e| panic!("graph_seed={graph_seed}: rpc {src}->{dst} failed: {e:?}"));
+        assert_eq!(&reply[..], b"ping");
+
+        // (c) Ballot from src: votes return Individual over the same relays.
+        match agents[src]
+            .consensus()
+            .system_propose("prop/slot", Bytes::from_static(b"v"), ConsensusConfig::default())
+            .await
+        {
+            ConsensusResult::Committed { .. } => {}
+            other => panic!("graph_seed={graph_seed}: ballot did not commit: {other:?}"),
+        }
+
+        for a in agents {
+            a.shutdown().await;
+        }
+    }
 }
 
 // ── Layer 2: Signal / Boundary ───────────────────────────────────────────

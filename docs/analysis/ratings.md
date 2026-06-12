@@ -89,6 +89,14 @@ existed. This is the framework's own report card.
   unconditional-forwarding model. Found by the three-arm experiment
   bring-up (synchronized take-volley stall), not by a ratings probe; fixed
   same day (flood fallback + relay regression test).
+- 2026-06-12: **Architecture** scored 9 and **Semantic Correctness** 8 (Run
+  22) while fan-out activation was polled-only: inbound-only nodes (seeds,
+  tuple primaries) were mute for live sends — including RPC responses and
+  votes — for up to 2× health_check_interval after a peer connected. Found
+  by the random-topology property test written as Run-22 follow-up #3; fixed
+  same day (event-driven peer-list publication on insert). Second
+  topology-dimension bug in two days: introspective tests never varied
+  topology, and anti-entropy healing masked the symptom for KV.
 
 **Dimensions:** Philosophy/Coherence · Conceptual Integrity · Architecture ·
 Modularity · API Design · Error Handling · Configurability · Language Best

@@ -272,6 +272,15 @@ via `Boundary::admits`). Regression gate:
 remains a *latency* optimization for RPC-heavy pairs — the three-arm
 experiment harness bootstraps both directions for that reason.
 
+Companion invariant (same day): fan-out activation is **event-driven** — the
+connection handler publishes the peer list the moment a new peer is inserted
+(Ping receipt), because waiting for the health monitor's next tick left
+inbound-only nodes (seeds, tuple primaries) mute for live sends for up to 2×
+`health_check_interval`. The health monitor remains the reconciler/evictor.
+Topology-class regression gate:
+`test_individual_consumers_over_random_partial_meshes` (random partial
+meshes; signal + RPC + ballot between non-adjacent pairs).
+
 ### Lock-Order Table
 
 All `Mutex` and `RwLock` sites in the codebase. **Invariant: no function acquires more than one lock from this table.** There are no nested acquisitions, so no lock-ordering discipline is required beyond this flat list.

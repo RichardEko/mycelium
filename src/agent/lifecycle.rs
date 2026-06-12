@@ -212,6 +212,7 @@ impl GossipAgent {
             intern_max_keys: self.config.intern_max_keys,
             max_peers:           self.config.max_peers,
             writer_idle_timeout: Duration::from_secs(self.config.writer_idle_timeout_secs),
+            peer_list_tx:        self.peer_list_tx.clone(),
         };
         let lctx = ListenerContext {
             conn,
