@@ -385,6 +385,9 @@ Key facts for future sessions:
   is an atomic lane-to-lane move. Workers "filter" only by choosing which
   lane to take from (per-lane depth = the pressure signal). Content-style
   routing is encoded in lane names (`stage-b.high`), never payload matching.
+  Fan-in joins (two-stream rendezvous by correlation key) are NOT yet
+  expressible — keyed-exact-match `take` is ROADMAP v2.0 milestone 13,
+  promised by Paper 1 §9.4.
 - **Roles** (`TupleRole`): `Primary` serves; `Secondary` mirrors via
   replicate RPCs + heartbeat Signal and promotes when the primary's
   capability evaporates (the ring IS the failure detector); `Auto` elects
@@ -431,6 +434,11 @@ cargo test --lib --features tls,metrics,a2a,llm
 cargo clippy --lib --tests --features tls,metrics,a2a,llm -- -D warnings
 ```
 
+CI additionally gates: `tsc --noEmit` over mycelium-ts (`sdk-ts` job), the
+AFN demo end-to-end in both pull and push modes (`afn-smoke` job,
+`examples/fluid_pipeline/ci_smoke.sh`), and time-boxed libFuzzer runs of the
+wire/capability decoders (`fuzz` job; skipped on PRs).
+
 **Consensus tests on multi-node setups require `start_consensus_listener` on every node.**
 `system_propose` / `consistent_set` compute `quorum = ⌊(peers+1)/2⌋ + 1`. If peer nodes have
 no `ConsensusListener`, their votes never arrive and every ballot times out. A test that omits
@@ -463,7 +471,7 @@ get found.
 - `cargo build --lib --features a2a` to include the A2A protocol adapter
 - `cargo build --lib --features llm` to include the Prompt Skills LLM adapter
 - `cargo build --lib --features compliance` to include gateway auth, durable audit, RBAC (planned, not yet implemented)
-- 307 lib tests at HEAD (full feature matrix); clippy at 0 warnings (stub removal
+- 323 lib tests at HEAD (full feature matrix); clippy at 0 warnings (stub removal
   eliminated the prior 61 `field_reassign_with_default` baseline in test code).
 - Wire version is currently **v11** (`PREV_WIRE_VERSION = 10` — rolling upgrade window open).
   v11 adds `hlc_seq: Option<u64>` to `WireMessage::Signal` for ordered delivery via `emit_ordered()`.

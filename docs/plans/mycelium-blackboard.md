@@ -14,43 +14,6 @@ shared scratchpads are the blackboard reborn (Carvalho's observation: agent
 frameworks are rebuilding this ad hoc, badly), which is what makes the
 pattern newly relevant.
 
-## Worked example — the incident war room
-
-Six agents share a fact pool for incident #417: a log-analyst, a
-change-auditor, a db-specialist, a network-specialist, and two remediation
-executors. Nobody dispatches. Each agent holds its own trigger declarations
-("I react to facts matching X") — boundary predicates, local to each agent.
-
-1. Monitoring posts `(alert, service=checkout, p99=4.2s)`. It gossips to
-   everyone; no routing decision exists.
-2. Two triggers match simultaneously — fine, diagnosis is non-destructive
-   reading. The log-analyst posts `(observation, "connection-pool exhaustion
-   to db-7")`; the change-auditor posts `(observation, "deploy at 14:02 cut
-   pool size 100→20")`.
-3. Those facts trip *other* triggers: the db-specialist correlates both and
-   posts `(hypothesis, root-cause="pool misconfig", proposed-action="rollback
-   deploy 14:02", confidence=0.8)`.
-4. **The missing primitive bites here.** Both remediation executors match
-   "actionable task, confidence ≥ 0.7". Reading was safe to share; acting is
-   not — two agents rolling back the same deploy concurrently is the failure
-   case. They must race for an atomic claim: exactly one consumes the fact
-   and executes; the loser's claim returns empty; if the winner crashes
-   mid-action, the in-flight deadline re-queues the fact and the other
-   executor claims it.
-
-The route alert → {log-analyst, change-auditor} → db-specialist → remediation
-was not designed by anyone — a network-partition incident would have routed
-through entirely different agents. The topology is a property of each item's
-content, discovered as it happens. That is why lanes cannot express it: the
-consumer's criterion is a predicate over fact content, and a lane per
-(fact-type × interest) combination explodes against each agent's private,
-changing declarations.
-
-The clean split the example surfaces is the design insight: **reading facts
-is unconditional and concurrent (diagnosis); consuming facts is competitive
-and exactly-once (action)** — Linda's `rd` vs `in`. The substrate already
-does `rd` perfectly; this companion only adds `in`.
-
 ## Worked example — the community microgrid
 
 A neighbourhood energy cooperative runs agents sharing one fact pool: a
@@ -137,8 +100,8 @@ is scope creep until demonstrated otherwise.
 - No semantic/embedding matching in the substrate or this crate — similarity
   is a ranking concern for the selection edge.
 - Fan-in joins do **not** need this crate: a keyed-exact-match `take` on the
-  tuple space (O(1), lane-accounted) covers them; track that as a tuple-space
-  extension instead.
+  tuple space (O(1), lane-accounted) covers them — tracked as ROADMAP v2.0
+  milestone 13.
 
 ## Trigger to revisit
 

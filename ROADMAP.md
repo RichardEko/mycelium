@@ -2252,6 +2252,29 @@ None are required for v1.0.
     expressive enough — or an embedded deployment with no orchestrator above it to
     delegate code mobility to.
 
+13. **Keyed-exact-match `take` on the tuple space (fan-in joins)** — Paper 1 §9.4
+    (DOI [10.5281/zenodo.20665238](https://doi.org/10.5281/zenodo.20665238)) states
+    this "is roadmapped"; this entry is the contract behind that sentence.
+    `put` gains an optional correlation key and `take_by_key(stage, key)` claims
+    the item on `stage` whose key matches, parking a *keyed* waiter when absent —
+    the two-stream rendezvous ("an invoice AND its matching purchase order") that
+    exactly-named lanes cannot express without degenerating to one lane per
+    correlation key. Scope is deliberately **exact-match only**: a hash lookup,
+    O(1), with per-lane depth/backpressure accounting intact — not template
+    matching, which remains the blackboard companion's territory (Deferred
+    Patterns below).
+
+    **Implementation notes** (sized at a focused day, not an afternoon — the WAL
+    is the real work): optional key field on the `Put` WAL record ⇒ WAL format
+    v2 with v1 replay accepted; per-`StageState` keyed index + keyed-waiter map
+    alongside the FIFO; key carried on secondary replication and through
+    promotion replay; `complete` accepting a key for the next stage; gateway
+    endpoint + py/ts SDK methods; regression tests for the join rendezvous and
+    the crash-requeue of a keyed in-flight item.
+
+    **Trigger to start**: the first real fan-in pipeline, or follow-up work
+    exercising Paper 1 §9.4's boundary claims empirically.
+
 ---
 
 ## Deferred Patterns
