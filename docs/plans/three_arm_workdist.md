@@ -25,9 +25,10 @@ falsifiable prediction — not to produce a benchmark.
 
 Both prediction arms use the same policy (lowest perceived queue depth); the
 only difference between them is *where* the stale view lives (centre vs
-edge). The pull arm uses `mycelium-tuple-space` with the client node as
-primary and workers as clients, so the claim path crosses the same real RPC
-machinery the push arms use — no in-memory shortcut.
+edge). The pull arm uses `mycelium-tuple-space` with the primary on a
+**dedicated space node** (the same topology slot as the broker arm's broker)
+and submitter + workers as clients, so puts and takes both cross the same
+real RPC machinery the push arms use — no colocation shortcut.
 
 ## Workload model
 
