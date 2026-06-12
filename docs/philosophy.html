@@ -876,6 +876,45 @@
       mechanism.
     </p>
 
+    <h3>Where associative matching earns its keep</h3>
+
+    <p>
+      Stripping the matching engine was not a deletion — it was a relocation, and
+      saying so precisely matters. The architecture keeps associative matching in
+      two places, both on the <em>control plane</em>: the capability resolver's
+      attribute filters and the signal boundary's receptor predicates are template
+      matchers, re-evaluated continuously. What it refuses is matching on the
+      <em>durable claim path</em>, where a matching engine un-buys every lane
+      property at once: O(1) claims become scans, "depth" stops being well-defined
+      so backpressure and the pressure pheromone vanish, and the one-record stage
+      transition stops making sense. The working decomposition: <strong>match to
+      select a lane; pull from the lane.</strong> Four workloads resist that
+      decomposition, and they mark the lane model's boundary of validity:
+    </p>
+
+    <div class="map-wrap" style="margin:24px 0;">
+      <table class="map-table">
+        <thead>
+          <tr><th>Residual workload</th><th>Why lanes break</th><th>Layering-consistent answer</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>Fan-in joins</strong> — claim an invoice <em>and</em> its matching PO</td><td>One lane per correlation key — degenerates to one item per lane</td><td>Keyed-exact-match <code>take</code>: still O(1), still lane-accounted; a small extension, not a different architecture</td></tr>
+          <tr><td><strong>Contract-net claiming</strong> — multi-dimensional predicates living on the item</td><td>Lane-name encoding explodes combinatorially as predicate cardinality approaches item count</td><td>Per-item matching is irreducible here — companion-crate territory</td></tr>
+          <tr><td><strong>Blackboard working memory</strong> — opportunistic reasoning over shared typed facts (LLM-agent scratchpads are this, reborn)</td><td>No stages exist: the flow topology is emergent per item</td><td>Flooding + boundaries already give propagation and triggering; the one missing primitive is competitive destructive <em>claim-by-predicate</em> with tuple-space exactly-once discipline</td></tr>
+          <tr><td><strong>Semantic claiming</strong> — claim the task nearest my skill embedding</td><td>Similarity is not expressible as a lane name at all</td><td>A ranking concern for the selection edge — never inside the WAL'd claim path</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      Each row passes the litmus tests the same way the tuple space did: the
+      substrate is not changed; a higher-order concern composes on top of it. If a
+      blackboard companion is ever built, it should be built exactly as the tuple
+      space was — entirely on the public API, with the new claim primitive carrying
+      the same WAL and in-flight discipline — so the constructive proof extends to
+      associative workloads rather than being amended by them.
+    </p>
+
     <div class="callout callout-green">
       <p>
         <strong>Constructive proof, not argument.</strong> The
