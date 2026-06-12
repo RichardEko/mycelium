@@ -8,61 +8,92 @@ one stage becomes a bottleneck — then you either over-provision the slow stage
 or re-architect.
 
 The **fluid pool** pattern inverts this. A fixed pool of identical workers
-advertises capability for *all* stages. The coordinator resolves the right
-workers for each stage at dispatch time. Workers "flow" to where demand is:
-if stage C is slow, more workers naturally accumulate there because the
-coordinator keeps routing to whoever is free.
+carries the full stage repertoire, and workers "flow" to where demand is: if
+stage C is slow, the pool masses on stage C. No static assignment, no
+rebalancing job, no configuration change.
+
+The canonical realisation is **pull-based**: the pipeline `A>B>C>D` exists as
+tuple-space stages — *data topology, not node topology*. A worker is "at
+stage B" only for the duration of one `take()` → process → `complete()`
+cycle. Nobody dispatches; nobody predicts who is free. Readiness is announced
+by the claim itself.
 
 ```mermaid
-graph TD
-    CO["Coordinator<br/>seeds 200 items into KV ring<br/>drains each stage in sequence"]
+graph LR
+    SE["Seeder / Sink<br/>put 200 items → watch done markers<br/>(edge client — decides nothing)"]
 
-    subgraph KV Ring as Buffer
-        SA["pipeline/stage-a/*<br/>raw articles"]
-        SB["pipeline/stage-b/*<br/>parsed + structured"]
-        SC["pipeline/stage-c/*<br/>enriched"]
-        SD["pipeline/stage-d/*<br/>scored"]
+    subgraph "Tuple space (ns=pipeline)"
+        SA["stage-a"]
+        SB["stage-b"]
+        SC["stage-c"]
+        SD["stage-d"]
     end
 
-    subgraph Worker Pool 10 identical workers
-        W1["Worker 1<br/>cap: stage_a/worker<br/>cap: stage_b/worker<br/>cap: stage_c/worker<br/>cap: stage_d/worker"]
-        W2["Worker 2<br/>...same..."]
-        WN["Worker N<br/>...same..."]
+    subgraph "Worker pool (10 identical, full repertoire)"
+        W["each flow loop:<br/>read depths → take() deepest stage<br/>→ process → complete() into next"]
     end
 
-    CO -->|seed| SA
-    SA -->|drain_stage| W1
-    SA -->|drain_stage| W2
-    W1 -->|result| SB
-    W2 -->|result| SB
-    SB -->|drain_stage| W1
-    SB -->|drain_stage| WN
-    WN -->|result| SC
+    SE -->|put| SA
+    W -->|take| SA
+    W -->|complete| SB
+    W -->|take| SB
+    W -->|complete| SC
+    W -->|take| SC
+    W -->|complete| SD
+    W -->|take| SD
+    W -->|"ack + done marker"| SE
 ```
 
-The KV ring is the distributed buffer between stages. A worker claims an item
-by writing a claim key with a short TTL; if it crashes before finishing, the
-claim expires and another worker picks up the item. No dead-letter queue, no
-manual requeue — TTL-native cleanup handles it.
+Three properties make this the canonical form:
 
-**Why one gossip substrate for both buffer and scheduling.** The same gossip
-layer that replicates pipeline items also propagates capability advertisements.
-The coordinator resolves workers from the capability ring and reads items from
-the KV ring in the same operation — no separate queue infrastructure, no
-separate service registry.
+- **Readiness is self-announcing.** A worker `take()`s when it is actually
+  free, so the staleness/misroute failure mode of push dispatch — a
+  coordinator routing on a model of worker state that is stale by at least
+  one propagation delay — has no variable to inhabit.
+- **Fluidity is self-selection against pressure.** Each flow loop reads the
+  per-stage depths and takes from the deepest stage it can serve. The pool
+  automatically masses on the bottleneck; nobody tells workers to move.
+- **Stage transitions are atomic.** `complete()` acks the input item and puts
+  the output in one WAL record — a crash cannot half-replay a hop. Items
+  taken but never acked re-queue automatically after the in-flight deadline
+  (at-least-once delivery; keep stage handlers idempotent).
+
+**Why one gossip substrate underneath.** The tuple space is a companion crate
+built entirely on Mycelium's public API: its primary is discovered by
+capability advertisement, its failure is detected by the same TTL evaporation
+as any pheromone, and a mirror promotes itself through the same emergent
+election as every other role. Work distribution composes from the substrate's
+existing primitives — no queue infrastructure, no registry, no coordinator.
+
+## Stages are lanes, not patterns
+
+One precision worth internalizing before reading any code: **stages do not
+filter tuples.** Classic Linda retrieves by template matching over a flat bag
+(`in(("stage-b", ?id, ?data))`); Mycelium's space is lane-addressed — named
+per-stage FIFO lanes, opaque payloads, and an item's pipeline position is
+*the lane it sits in*. `take("stage-b")` pops (or parks on) the `stage-b`
+lane; nothing is ever matched against content. A B-worker never searches for
+A's output — the upstream `complete()` moved the item into B's lane
+atomically.
+
+The trade buys O(1) claims, per-lane depth/backpressure counters (which *are*
+the fluid workers' pressure signal), and the one-record WAL stage transition.
+Content-style routing is recovered by encoding the dimension in the lane name
+(`stage-b.high`, `stage-b.tenant-42`). See the `mycelium-tuple-space` crate
+docs, "Stage lanes, not associative matching", for the full boundary analysis.
 
 ---
 
 ## The Example
 
-`examples/fluid_pipeline/` runs 10 identical Python workers and a coordinator
-in Docker. Four pipeline stages process 200 synthetic news articles:
+`examples/fluid_pipeline/` runs 10 identical Python workers plus a seeder in
+Docker. Four pipeline stages process 200 synthetic news articles:
 
 | Stage | Operation | Simulated latency |
 |-------|-----------|-------------------|
 | A — Parse | Extract title, body, source | ~50 ms |
 | B — Enrich | Add tags, entities, reading time | ~100 ms |
-| C — Score | Compute composite quality score | configurable (default 0.2 s) |
+| C — Score | Compute composite quality score | configurable (`STAGE_C_SLEEP`, default 0.3 s) |
 | D — Aggregate | Write final record to PostgreSQL | ~20 ms |
 
 **Prerequisites**
@@ -75,37 +106,38 @@ docker compose version  # Docker Compose v2
 
 ```bash
 cd examples/fluid_pipeline
-docker compose up --build --scale worker=10
+docker compose up --build --scale worker=10                    # pull (default)
+PIPELINE_MODE=push docker compose up --build --scale worker=10 # baseline (below)
 ```
 
-**Expected output (coordinator log)**
+**Expected output (seeder log, pull mode)**
 
 ```
-coordinator: seeded 200 articles into pipeline/stage-a/
-coordinator: draining stage-a → 10 workers available
-coordinator: stage-a complete (200/200) in 1.2s
-coordinator: draining stage-b → 10 workers available
-coordinator: stage-b complete (200/200) in 2.4s
-coordinator: draining stage-c → 10 workers available  [bottleneck if STAGE_C_SLEEP > 0]
-coordinator: stage-c complete (200/200) in 4.1s
-coordinator: draining stage-d → 10 workers available
-coordinator: pipeline complete — 200 articles in PostgreSQL
+[seeder] seeding 200 articles into tuple stage-a (ns=pipeline)
+[seeder] seed complete — workers are already draining (no dispatch step exists)
+[seeder]   pressure: stage-a=142(+8 inflight)  stage-b=31(+6 inflight)  stage-c=9(+4 inflight)  stage-d=0(+0 inflight)   done=0/200
+[seeder]   pressure: stage-a=0(+0 inflight)  stage-b=12(+8 inflight)  stage-c=88(+10 inflight)  stage-d=21(+6 inflight)   done=61/200
+[seeder] === pipeline complete: 200/200 articles in 41.3s (4.8 items/s) ===
 ```
 
-**Simulate a bottleneck**
+**Watch the pressure front migrate**
 
 ```bash
 STAGE_C_SLEEP=1.0 docker compose up --scale worker=10
 ```
 
-Watch workers accumulate at stage C — all 10 are kept busy. Scale up mid-run:
+The `pressure:` lines show the depth front moving A→B→C→D. With stage C
+skewed, watch its depth accumulate while a–b drain, then the pool's inflight
+count concentrate on stage-c — no one told the workers to move.
+
+**Scale up mid-run**
 
 ```bash
 docker compose up --scale worker=15 --no-recreate
 ```
 
-New workers are discovered via capability gossip within ~5 s; the coordinator
-starts routing to them immediately.
+New workers join the gossip mesh and start taking within seconds. In pull
+mode there is nothing to tell about them — they just start pulling.
 
 **Query results**
 
@@ -118,100 +150,152 @@ docker exec afn-postgres psql -U pipeline -d pipeline \
 
 ## How It Works
 
-**Coordinator** (`examples/fluid_pipeline/coordinator/coordinator.py`):
+**Worker** (`examples/fluid_pipeline/worker/worker.py`) — each worker runs
+`WORKER_CONCURRENCY` flow loops over the `mycelium.tuple.TupleSpace` client:
 
 ```python
-# Seed items into the KV ring
-for article in articles:
-    agent.set(f"pipeline/stage-a/{article['id']}", json.dumps(article).encode())
+from mycelium.tuple import TupleSpace
 
-# Drain a stage: list unclaimed items, resolve workers, claim, dispatch
+PIPELINE = {                      # stage → (handler, next stage | None)
+    "stage-a": (parse_article,     "stage-b"),
+    "stage-b": (enrich_article,    "stage-c"),
+    "stage-c": (score_article,     "stage-d"),
+    "stage-d": (aggregate_article, None),
+}
+
+ts = TupleSpace("127.0.0.1", MYCELIUM_PORT, ns="pipeline")
+
+while True:
+    depths = await ts.depth()                      # {stage: {depth, waiters, inflight}}
+    target = deepest_stage(depths) or "stage-a"    # self-selection against pressure
+
+    try:
+        item_id, payload = await ts.take(target, timeout_secs=5)
+    except TimeoutError:
+        continue                                   # nothing queued — re-read pressure
+
+    handler, next_stage = PIPELINE[target]
+    result = handler(json.loads(payload))
+
+    if next_stage is not None:
+        await ts.complete(item_id, next_stage, json.dumps(result).encode())
+    else:
+        await ts.ack(item_id)                      # terminal stage
+        agent.set(f"pipeline/done/{result['id']}", json.dumps(result).encode())
+```
+
+On a handler exception the worker simply does **not** ack: the in-flight
+deadline re-queues the item automatically. There is no requeue code to write.
+
+**Seeder / sink** (`examples/fluid_pipeline/coordinator/coordinator.py`) — an
+edge client, not a coordinator. It makes no distribution decisions:
+
+```python
+for article in articles:
+    await ts.put("stage-a", json.dumps(article).encode(), backpressure="block")
+
+while len(agent.keys(prefix="pipeline/done/")) < len(articles):
+    log_pressure(await ts.depth())                 # narrate the front A→B→C→D
+    await asyncio.sleep(0.25)
+```
+
+**Tuple space hosting** — the seeder's sidecar Mycelium node runs with
+`MYCELIUM_TUPLE_ROLE=primary` for namespace `pipeline`; worker nodes run as
+`client`, and their local gateway routes tuple ops to the primary via RPC.
+For primary failover — a secondary mirror promoting when the primary's
+capability evaporates — see integration scenario 13 and the
+`mycelium-tuple-space` crate docs.
+
+---
+
+## The push baseline (`PIPELINE_MODE=push`)
+
+The original architecture is retained, runnable, and worth understanding —
+it is the *contrast case* for the pattern above, and the project's Paper 1
+names it directly: the coordinator trap. A coordinator seeds the KV ring,
+resolves free workers from the capability ring, and dispatches every item
+through its own decision loop:
+
+```python
+# Coordinator: list unclaimed items, resolve workers, claim, dispatch
 all_keys    = agent.keys(prefix=f"pipeline/{stage_in}/")
 claimed_ids = {k.split("/")[-1] for k in agent.keys(prefix="pipeline/claiming/")}
-providers   = agent.resolve_capability(cap_ns, "worker")   # (ns, name)
-# ...pick a worker, then claim before dispatching:
-agent.set(f"pipeline/claiming/{item_id}", worker_id.encode())
+providers   = agent.resolve_capability(cap_ns, "worker")
+agent.set(f"pipeline/claiming/{item_id}", worker_id.encode())     # claim
 result = agent.rpc_call(worker_id, method, payload, timeout_secs=90)
-agent.delete(f"pipeline/claiming/{item_id}")  # released on success AND failure
-```
+agent.delete(f"pipeline/claiming/{item_id}")
 
-**Worker** (`examples/fluid_pipeline/worker/worker.py`). RPC serving is an
-async iterator, not a callback registration — the SSE stream delivers the
-next request only after `rpc_respond()` completes the previous one:
-
-```python
-# Advertise one capability per stage on startup
+# Worker: advertise per-stage capabilities, serve RPCs
 for ns in ["stage_a", "stage_b", "stage_c", "stage_d"]:
     agent.advertise_capability(ns, "worker", interval_secs=15)
-
-# Handle RPC calls
 async for req in agent.rpc_serve(method):
-    item = json.loads(req.payload)
-    out  = await STAGE_HANDLERS[stage](item)
-    agent.rpc_respond(req, json.dumps({"status": "ok", "id": item["id"]}).encode())
+    ...
 ```
 
-**Claim keys are advisory, not TTL'd.** The KV store never time-evicts live
-keys — there is no `ttl_secs` on `set`. A claim under `pipeline/claiming/{id}`
-prevents double-dispatch while an RPC is in flight, and the *coordinator*
-deletes it on completion or failure; a crashed worker's claim is cleared when
-the coordinator's RPC times out. (If you need claims that survive a crashed
-*coordinator*, that's exactly the problem the `mycelium-tuple-space` companion
-crate's WAL-backed `take`/`ack` solves — see its crate docs.)
+It works — the CI smoke drives 24/24 items through it on every push — but
+every distribution decision routes through one process holding a model of
+worker state that is stale by construction. The KV-ring buffer also gossips
+every item to every node (O(N) per item vs the tuple space's O(1)
+point-to-point), and claim hygiene is manual: claims are advisory KV keys the
+*coordinator* must delete on completion, failure, and timeout. The pull mode
+replaces all of it — claims, drain loops, dispatch — with `take()`/
+`complete()`.
 
-> **The demo's default is now the pull pattern.** Everything above describes
-> the coordinator-dispatch architecture, which `examples/fluid_pipeline/`
-> retains behind `PIPELINE_MODE=push` as the comparison baseline. The default
-> mode replaces all of it — claims, drain loops, dispatch — with tuple-space
-> stages: workers `take()` when ready and `complete()` into the next stage.
->
-> One precision worth internalizing about that space: **stages do not filter
-> tuples.** Classic Linda retrieves by template matching over a flat bag;
-> Mycelium's space is lane-addressed — named per-stage FIFO lanes, opaque
-> payloads, and an item's pipeline position is the lane it sits in.
-> `take("stage-b")` pops (or parks on) the `stage-b` lane; nothing is ever
-> matched against content. The trade buys O(1) claims, per-lane
-> depth/backpressure counters (the fluid workers' pressure signal), and a
-> one-record WAL stage transition; content-style routing is recovered by
-> encoding the dimension in the lane name (`stage-b.high`). See the
-> `mycelium-tuple-space` crate docs, "Stage lanes, not associative matching."
+Run both modes under the same `STAGE_C_SLEEP` skew and compare wall-clock,
+retries, and log volume — same stages, same workers, same data; the only
+variable is who decides. The push→pull refinement essay is
+[`flow_networks.html`](../../examples/fluid_pipeline/flow_networks.html).
+
+| Property | Pull (canonical) | Push (baseline) |
+|----------|------------------|-----------------|
+| Who decides | Each worker, by taking when ready | Coordinator, predicting who is free |
+| Buffer | Tuple-space lanes (single-copy, WAL-durable) | KV ring (replicated to every node) |
+| Stage transition | One atomic `complete()` record | KV write + delete + claim cleanup |
+| Crash recovery | In-flight deadline re-queues automatically | Claim keys + coordinator retry |
+| Failure surface | Tuple primary (secondary promotes on evaporation) | The coordinator itself |
 
 ---
 
 ## Dev Notes
 
-**Extending to N stages.** Add a new stage by:
-1. Adding a new handler function in `worker/stages/`
-2. Adding the stage capability advertisement in the worker startup
-3. Adding a `drain_stage` call in the coordinator's pipeline loop
-
-No other changes. The gossip layer handles worker discovery for the new stage
-automatically.
+**Extending to N stages.** Add a handler in `worker/stages/` and one entry to
+the `PIPELINE` dict in `worker.py` (and `STAGES` in `coordinator.py` if you
+also run push mode). The tuple space creates lanes on first use — no other
+changes.
 
 **Real LLM integration.** Replace a simulated stage handler with an LLM call:
 
 ```python
-async def stage_c_score(item):
+async def score_article(item):
     prompt = f"Score this article for quality on 0–10: {item['body'][:500]}"
     score = await llm_client.complete(prompt)
     return {**item, "quality_score": float(score)}
 ```
 
-The worker's advertised capability still reads `stage_c/worker` — the
-coordinator doesn't know or care that stage C now calls an LLM.
+Nothing else changes — workers still take from the same lane. `STAGE_C_SLEEP`
+exists precisely to stand in for this latency.
 
-**Work item TTL sizing.** Set item TTLs long enough that slow stages don't
-lose items before processing. A 5-minute TTL is generous for most pipelines.
-Claim TTLs should be 2–3× the expected processing time for the stage.
+**In-flight deadline sizing.** Items taken but not acked re-queue after the
+tuple space's `worker_timeout_secs` (default 300 s). Size it 2–3× the slowest
+stage's expected duration: too short re-queues live work (duplicate
+processing — harmless if handlers are idempotent, wasteful otherwise); too
+long delays recovery of items from crashed workers.
+
+**Backpressure.** `put()` returns HTTP 503 / `TupleBackpressureError` when a
+lane's depth crosses `high_watermark` (default 500). The seeder uses
+`backpressure="block"` (exponential backoff); workers never need it —
+`take()` on an empty lane just parks. The per-lane `depth()` counters are
+both the backpressure signal and the fluidity signal: one mechanism.
 
 **PostgreSQL vs KV for final output.** Stage D writes to PostgreSQL for
-queryable results. For simpler pipelines, write final items back to the KV
-store under `pipeline/results/{id}` and scan them with `scan_prefix`. The KV
-approach needs no external database for moderate item counts.
+queryable results. For simpler pipelines, write final items to the KV store
+under `pipeline/done/{id}` (the demo already writes these as completion
+markers) and scan them with `scan_prefix` — no external database needed for
+moderate item counts.
 
-**Backpressure.** The coordinator dispatches to whoever it resolves first. For
-explicit back-pressure, have workers write a load entry to `sys/load/{self}/`
-when their queue depth exceeds a threshold — the coordinator then skips opaque
-nodes in its resolve results.
+**CI harness.** `examples/fluid_pipeline/ci_smoke.sh` runs *both* modes
+end-to-end without Docker (3 local nodes, 24 items, fresh cluster per mode)
+and is wired into CI as the `afn-smoke` job — the reference for running the
+pipeline as plain processes.
 
 → Next: [08-a2a-interop.md](08-a2a-interop.md) — LangChain and AutoGen agents discovering Mycelium skills.

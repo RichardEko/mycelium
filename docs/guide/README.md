@@ -90,9 +90,9 @@ Five application patterns build on this substrate:
 |---------|-------------|---------------|
 | Skills | LLM agents as mesh nodes; TOML manifests; skill→skill composition | [05-skills.md](05-skills.md) |
 | MCP Tool Discovery | LLM discovers tools dynamically from the KV store; zero-restart addition | [06-tool-discovery.md](06-tool-discovery.md) |
-| Fluid Pipelines | Fixed worker pool flows through pipeline stages; KV ring as buffer | [07-pipelines.md](07-pipelines.md) |
+| Fluid Pipelines | Fixed worker pool flows to the deepest tuple-space stage (pull, canonical); coordinator-dispatch baseline retained as `PIPELINE_MODE=push` | [07-pipelines.md](07-pipelines.md) |
 | A2A Interop | LangChain / AutoGen agents discover Mycelium skills via `/.well-known/agent.json` | [08-a2a-interop.md](08-a2a-interop.md) |
-| TupleSpace (companion crate) | Pull-based pipeline buffer: workers `take()` when ready, WAL durability, primary/secondary failover driven by capability evaporation. Built entirely on the public API — see the [`mycelium-tuple-space/`](../../mycelium-tuple-space/) crate docs; integration scenario 13 is the runnable reference | [07-pipelines.md](07-pipelines.md) (claims section) |
+| TupleSpace (companion crate) | Pull-based pipeline buffer: workers `take()` when ready, WAL durability, primary/secondary failover driven by capability evaporation. Built entirely on the public API — see the [`mycelium-tuple-space/`](../../mycelium-tuple-space/) crate docs; integration scenario 13 is the runnable reference | [07-pipelines.md](07-pipelines.md) (lanes + How It Works) |
 
 ---
 
