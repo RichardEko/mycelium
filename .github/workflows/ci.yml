@@ -122,5 +122,8 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz
-      - run: cargo fuzz run wire_decode -- -max_total_time=120
-      - run: cargo fuzz run capability_decode -- -max_total_time=120
+      # `+nightly` is required even though the toolchain action installs
+      # nightly: the repo's rust-toolchain.toml pins stable, which otherwise
+      # wins toolchain resolution and -Zsanitizer=address fails to parse.
+      - run: cargo +nightly fuzz run wire_decode -- -max_total_time=120
+      - run: cargo +nightly fuzz run capability_decode -- -max_total_time=120
