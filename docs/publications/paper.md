@@ -4,6 +4,12 @@
 **Target venue:** AAMAS 2027 — International Conference on Autonomous Agents and Multi-Agent Systems  
 **Status:** Second draft — 2026-06-11 (adds §3.3 tuple-space reconciliation, §8 pull-instantiation evidence, scenario 13)
 
+© 2026 Tathata Systems Ltd. This work is licensed under a
+[Creative Commons Attribution 4.0 International License](https://creativecommons.org/licenses/by/4.0/) (CC BY 4.0).
+You may share and adapt it for any purpose, including commercially, provided you give appropriate credit.
+Cite as: R. Nicholson, "The Coordinator Trap: Structural Scaling Liabilities in Mediated Multi-Agent
+Architectures and a Substrate-Based Alternative," Tathata Systems Ltd, 2026.
+
 ---
 
 ## Abstract
