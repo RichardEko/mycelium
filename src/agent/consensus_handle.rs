@@ -603,8 +603,11 @@ mod tests {
         assert!(a.mesh().emit(consensus_kind::COMMIT, SignalScope::System, encode_consensus_msg(&forged)));
 
         // Structural poll: the tripwire must fire and refuse to endorse.
+        // 15 s budget: 4 s expired once on a loaded 4-vCPU CI runner
+        // (2026-06-12) with the suite's ~16 threads competing; the poll is
+        // structural, so a broken tripwire still fails — just later.
         let mut fired = false;
-        for _ in 0..80 {
+        for _ in 0..300 {
             if a.system_stats().commit_conflicts >= 1 { fired = true; break; }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
