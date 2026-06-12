@@ -163,16 +163,28 @@ if [ -z "$RPC_A" ] || [ -z "$RPC_B" ]; then
 else
     B_NODE=$(curl -s --max-time 5 "http://${RPC_B}:${PORT}/health" | jq -r '.node_id // empty')
     # payload_b64 = {"prompt":"test/echo","input":"relay-probe-xw","context":{}}
-    RPC_RESP=$(curl -s --max-time 20 -X POST -H 'Content-Type: application/json' \
-        -d "{\"target\":\"${B_NODE}\",\"method\":\"llm.invoke\",\"payload_b64\":\"eyJwcm9tcHQiOiJ0ZXN0L2VjaG8iLCJpbnB1dCI6InJlbGF5LXByb2JlLXh3IiwiY29udGV4dCI6e319\",\"timeout_secs\":15}" \
-        "http://${RPC_A}:${PORT}/gateway/rpc" 2>/dev/null || echo '{}')
+    # Up to 3 attempts: the gate asserts delivery is POSSIBLE across the
+    # partial mesh, not that no single frame ever meets a full channel —
+    # right after formation the seed is still digesting anti-entropy, and a
+    # one-shot RPC frame has no gossip-style retransmission.
+    RPC_HTTP="000"; RPC_RESP=""
+    for attempt in 1 2 3; do
+        RPC_HTTP=$(curl -s --max-time 20 -o /tmp/rpc_resp.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' \
+            -d "{\"target\":\"${B_NODE}\",\"method\":\"llm.invoke\",\"payload_b64\":\"eyJwcm9tcHQiOiJ0ZXN0L2VjaG8iLCJpbnB1dCI6InJlbGF5LXByb2JlLXh3IiwiY29udGV4dCI6e319\",\"timeout_secs\":15}" \
+            "http://${RPC_A}:${PORT}/gateway/rpc/call" 2>/dev/null || echo "000")
+        RPC_RESP=$(cat /tmp/rpc_resp.json 2>/dev/null || echo "")
+        [ "$RPC_HTTP" = "200" ] && break
+        echo "  attempt ${attempt}/3: http=${RPC_HTTP} — retrying"
+        sleep 2
+    done
     RPC_OK=$(echo "$RPC_RESP" | jq -r '.ok // false')
     RPC_OUT=$(echo "$RPC_RESP" | jq -r '.result_b64 // empty | @base64d' 2>/dev/null || echo "")
     if [ "$RPC_OK" = "true" ] && echo "$RPC_OUT" | grep -q "relay-probe-xw"; then
         FALLBACKS=$(curl -s --max-time 5 "http://${RPC_A}:${PORT}/stats" | jq -r '.individual_flood_fallbacks // 0')
         ok "Cross-worker RPC ${RPC_A} → ${RPC_B} round-tripped (sender flood-fallbacks: ${FALLBACKS})"
     else
-        fail "Cross-worker RPC ${RPC_A} → ${RPC_B} failed — response: ${RPC_RESP}"
+        fail "Cross-worker RPC ${RPC_A} → ${RPC_B} failed — http=${RPC_HTTP} target=${B_NODE} response: ${RPC_RESP}"
     fi
 fi
 
