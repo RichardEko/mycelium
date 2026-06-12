@@ -159,6 +159,23 @@ the coordinator's RPC times out. (If you need claims that survive a crashed
 *coordinator*, that's exactly the problem the `mycelium-tuple-space` companion
 crate's WAL-backed `take`/`ack` solves — see its crate docs.)
 
+> **The demo's default is now the pull pattern.** Everything above describes
+> the coordinator-dispatch architecture, which `examples/fluid_pipeline/`
+> retains behind `PIPELINE_MODE=push` as the comparison baseline. The default
+> mode replaces all of it — claims, drain loops, dispatch — with tuple-space
+> stages: workers `take()` when ready and `complete()` into the next stage.
+>
+> One precision worth internalizing about that space: **stages do not filter
+> tuples.** Classic Linda retrieves by template matching over a flat bag;
+> Mycelium's space is lane-addressed — named per-stage FIFO lanes, opaque
+> payloads, and an item's pipeline position is the lane it sits in.
+> `take("stage-b")` pops (or parks on) the `stage-b` lane; nothing is ever
+> matched against content. The trade buys O(1) claims, per-lane
+> depth/backpressure counters (the fluid workers' pressure signal), and a
+> one-record WAL stage transition; content-style routing is recovered by
+> encoding the dimension in the lane name (`stage-b.high`). See the
+> `mycelium-tuple-space` crate docs, "Stage lanes, not associative matching."
+
 ---
 
 ## Dev Notes

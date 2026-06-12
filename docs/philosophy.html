@@ -860,6 +860,22 @@
       solves.
     </p>
 
+    <p>
+      One further strip-the-ceremony move deserves explicit notice, because the
+      "Linda-style" label invites a wrong assumption: Mycelium's space keeps
+      Linda's <em>generative decoupling</em> and <em>blocking pull</em>, but
+      discards associative template matching. Classic Linda retrieves tuples by
+      pattern (<code>in(("stage-b", ?id, ?data))</code>) over one flat bag — the
+      matching engine is more ceremony attached to the rendezvous point. Here the
+      space is <strong>lane-addressed</strong>: named per-stage FIFO lanes, opaque
+      payloads, and an item's pipeline position is the lane it sits in.
+      <code>complete()</code> is an atomic lane-to-lane move; a worker's only
+      "filter" is choosing which lane to <code>take()</code> from. The per-lane
+      depth counters this yields are themselves the pressure pheromone that fluid
+      workers route on — the retrieval model and the stigmergy collapse into one
+      mechanism.
+    </p>
+
     <div class="callout callout-green">
       <p>
         <strong>Constructive proof, not argument.</strong> The

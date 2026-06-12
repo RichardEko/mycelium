@@ -415,6 +415,18 @@ Workers     <span class="cm">→</span> <span style="color:var(--accent5);">Prom
 </div>
 
 <p>
+  A side note on the "tuple space" name, because it invites a wrong assumption:
+  what is kept from Linda is generative decoupling and blocking pull — <em>not</em>
+  associative template matching. The space is lane-addressed: named per-stage
+  FIFO lanes, opaque payloads, an item's position in the flow encoded by which
+  lane it sits in. Stage B never searches for A's output; <code>take("stage-b")</code>
+  pops (or parks on) the stage-b lane, and the upstream <code>complete()</code> is
+  an atomic lane-to-lane move. The per-lane depth counters that fall out of this
+  are exactly the pressure signal fluid workers route on — retrieval model and
+  stigmergy in one mechanism, with O(1) claims instead of template scans.
+</p>
+
+<p>
   The §5 properties below describe the AFN concept in its general form; the
   TupleSpace companion is its purest instantiation — flow-based programming with
   the last decision-maker removed.

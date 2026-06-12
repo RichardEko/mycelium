@@ -159,6 +159,18 @@ runs the original resolve-and-dispatch drain loops.
 flow loops of take-deepest → process → complete; in push mode, advertises
 `stage_{a..d}/worker` capabilities and serves the four stage RPCs.
 
+**How stages "filter" their work — they don't.** One tuple space, but it is
+lane-addressed, not content-matched: classic Linda retrieves tuples by
+template matching over one flat bag; this space keeps Linda's generative
+decoupling and blocking pull but replaces matching with **named per-stage
+FIFO lanes**. Payloads are opaque to the space; an item is "at stage B"
+because it sits in the `stage-b` lane, and `complete(id, "stage-c", out)`
+moves it atomically to the next lane. A B-worker never searches for
+A-output — it just `take("stage-b")`s, parking a waiter that fires the
+instant an upstream `complete()` lands. The per-lane depth counters this
+design gives for free are exactly the pressure signal the fluid workers
+route on.
+
 **Tuple space hosting** — the seeder's sidecar Mycelium node runs with
 `MYCELIUM_TUPLE_ROLE=primary` for namespace `pipeline`; worker nodes run as
 `client`, so their gateway routes tuple ops to the primary via RPC. (For

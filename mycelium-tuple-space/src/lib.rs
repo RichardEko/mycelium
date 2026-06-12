@@ -15,6 +15,28 @@
 //! path, which is why it has its own failover story (capability-TTL election,
 //! WAL replay — no coordinator for the election either).
 //!
+//! ## Stage lanes, not associative matching
+//!
+//! "Linda-style" refers to what is kept — generative decoupling (producers and
+//! workers never know each other) and blocking pull — **not** to Linda's
+//! retrieval model. Classic Linda matches typed tuples against templates
+//! (`in(("stage-b", ?id, ?data))`) over one flat bag. This space deliberately
+//! replaces associative matching with **named per-stage FIFO lanes**:
+//!
+//! - Payloads are opaque bytes — never inspected, matched, or templated.
+//! - An item's pipeline position is *which lane it sits in*, not anything in
+//!   its contents. [`TupleSpace::complete`] is an atomic lane-to-lane move.
+//! - A worker's only "filter" is choosing which lane to `take()` from next.
+//!
+//! The trade: claims are O(1) FIFO pops instead of template scans; a blocking
+//! `take` parks one waiter on one lane (no template re-evaluation on every
+//! write); per-lane depth/waiters/inflight counters come for free and double
+//! as the backpressure + fluid-worker pressure signal; and the WAL records a
+//! stage transition as one indivisible `Complete` entry. What is given up is
+//! content-addressable retrieval ("any tuple where priority=high") — recover
+//! that idiomatically by encoding the dimension in the lane name
+//! (`stage-b.high`, `stage-b.tenant-42`) and letting workers choose lanes.
+//!
 //! ## Pattern placement
 //!
 //! | Pattern | KV ring role | Payload routing |

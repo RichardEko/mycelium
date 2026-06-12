@@ -8,6 +8,13 @@ The tuple space is the pull-based work distribution pattern: workers
 ``take()`` only when ready, so load balance emerges from worker readiness —
 no coordinator predicts anything.
 
+Note — lanes, not Linda matching: unlike classic Linda's associative
+template retrieval, this space is lane-addressed. Every op names a *stage*
+(a per-stage FIFO lane); payloads are opaque and never matched. An item's
+pipeline position is the lane it sits in, and ``complete()`` moves it
+atomically to the next lane. A worker's only "filter" is choosing which
+lane to ``take()`` from — use ``depth()`` to pick the deepest.
+
 Worker pattern for heavy AI flows::
 
     import asyncio

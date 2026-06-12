@@ -378,6 +378,13 @@ Key facts for future sessions:
   not exist. The space removes the central *decision-maker*; the data path
   is still a rendezvous point with its own failover (below). This crate is
   the load-bearing artifact for the pull-vs-push reframing of Paper 2a.
+- **Lanes, not Linda matching**: "Linda-style" = generative decoupling +
+  blocking pull, NOT associative template retrieval. The store is named
+  per-stage FIFO lanes (`stages: HashMap<Arc<str>, StageState>`); payloads
+  are opaque; an item's pipeline position is the lane it sits in; `complete`
+  is an atomic lane-to-lane move. Workers "filter" only by choosing which
+  lane to take from (per-lane depth = the pressure signal). Content-style
+  routing is encoded in lane names (`stage-b.high`), never payload matching.
 - **Roles** (`TupleRole`): `Primary` serves; `Secondary` mirrors via
   replicate RPCs + heartbeat Signal and promotes when the primary's
   capability evaporates (the ring IS the failure detector); `Auto` elects
