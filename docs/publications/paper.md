@@ -367,7 +367,7 @@ The quadratic cost decomposition in §9.3 assumes that the k-iteration task can 
 
 **When not to use Agentic Flow Networks.** Five categories of requirement are structurally mismatched with the AFN pattern:
 
-*Strict ordering required.* The KV substrate uses last-write-wins under Hybrid Logical Clock ordering. Items arriving out of causal order are resolved by timestamp, but processing order within a stage is not preserved. Applications that require strict FIFO or total-order delivery through a pipeline stage need a durable ordered append-only log (Apache Kafka, NATS JetStream) at that stage boundary.
+*Strict ordering required.* The KV substrate uses last-write-wins under Hybrid Logical Clock ordering, and the signal mesh provides opt-in per-sender causal delivery (`emit_ordered()`, wire version 11: each ordered message carries an HLC sequence counter and the receiver reassembles per sender before delivery). What is *not* provided is processing order through a pipeline: items are claimed by the first ready worker, and with concurrent workers completion order is not FIFO even when claim order is. Applications that require strict FIFO or total-order delivery through a pipeline stage need a durable ordered append-only log (Apache Kafka, NATS JetStream) at that stage boundary.
 
 *Exactly-once delivery.* Gossip replication is at-least-once within a TTL window. A worker that crashes mid-processing may leave a partially-processed item visible to another worker. Applications requiring transactional exactly-once semantics — idempotency keys, two-phase commit, offset management — should use a system designed for that guarantee (Kafka transactional APIs, message brokers with acknowledgement semantics) for the affected stage transitions.
 
