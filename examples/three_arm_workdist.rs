@@ -201,6 +201,7 @@ async fn main() {
     }
 
     let mut tuple_client = None;
+    let mut _ts_primary_guard = None;
     if mode == "pull" {
         use mycelium_tuple_space::{TupleConfig, TupleRole, TupleSpace};
         let mk_cfg = |role: TupleRole| TupleConfig {
@@ -212,7 +213,11 @@ async fn main() {
             heartbeat_interval: Duration::from_secs(1),
             ..Default::default()
         };
-        let ts_primary = TupleSpace::new(Arc::clone(&cluster.client), mk_cfg(TupleRole::Primary))
+        // The primary lives on a DEDICATED node (same topology slot as the
+        // broker arm's broker), so client puts and worker takes both cross a
+        // real RPC hop — no colocation shortcut for the pull arm.
+        let space = Arc::clone(cluster.space.as_ref().expect("space node"));
+        let ts_primary = TupleSpace::new(space, mk_cfg(TupleRole::Primary))
             .await
             .expect("tuple primary");
         for (i, w) in cluster.workers.iter().enumerate() {
@@ -240,7 +245,12 @@ async fn main() {
                 }
             });
         }
-        tuple_client = Some(ts_primary);
+        _ts_primary_guard = Some(ts_primary);
+        tuple_client = Some(
+            TupleSpace::new(Arc::clone(&cluster.client), mk_cfg(TupleRole::Client))
+                .await
+                .expect("tuple client (submitter)"),
+        );
     } else {
         // Queue + load advertisement per worker.
         for (i, w) in cluster.workers.iter().enumerate() {
@@ -513,11 +523,16 @@ async fn main() {
         None
     };
 
+    // Absolute-schedule pacing: the arrival process is a fixed timetable from
+    // the seed, so offered load is IDENTICAL across arms regardless of how
+    // much the arm's own machinery loads the runtime (relative sleeps let
+    // scheduler contention slow the arrival clock — observed ~6% in pilot).
+    let mut next_arrival = tokio::time::Instant::now();
     while Instant::now() < deadline {
-        // Poisson inter-arrival.
         let u: f64 = arr_rng.f64().max(1e-12);
         let dt = -u.ln() / lambda_hz;
-        sleep(Duration::from_secs_f64(dt)).await;
+        next_arrival += Duration::from_secs_f64(dt);
+        tokio::time::sleep_until(next_arrival).await;
 
         let submit_us = shared.now_us();
         shared.submitted.fetch_add(1, Ordering::Relaxed);
@@ -626,6 +641,9 @@ async fn main() {
     if let Some(b) = cluster.broker {
         b.shutdown().await;
     }
+    if let Some(s) = cluster.space {
+        s.shutdown().await;
+    }
     cluster.client.shutdown().await;
 }
 
@@ -636,6 +654,9 @@ struct Cluster {
     client: Arc<GossipAgent>,
     broker: Option<Arc<GossipAgent>>,
     broker_node: Option<NodeId>,
+    /// Pull arm: dedicated host for the tuple-space primary (the
+    /// topology-symmetric counterpart of the broker node).
+    space: Option<Arc<GossipAgent>>,
 }
 
 async fn build_cluster(mode: &str, n: usize, port_base: u16) -> Cluster {
@@ -649,7 +670,9 @@ async fn build_cluster(mode: &str, n: usize, port_base: u16) -> Cluster {
         .map(|i| NodeId::new("127.0.0.1", port_base + i as u16).expect("worker port"))
         .collect();
     let client_id = NodeId::new("127.0.0.1", port_base + n as u16).expect("client port");
-    let broker_id = NodeId::new("127.0.0.1", port_base + n as u16 + 1).expect("broker port");
+    // One aux slot: the broker (push-central) or the tuple-space host (pull).
+    let aux_id = NodeId::new("127.0.0.1", port_base + n as u16 + 1).expect("aux port");
+    let broker_id = aux_id.clone();
 
     let mk = |port: u16, boots: Vec<NodeId>| {
         let mut cfg = GossipConfig::default();
@@ -661,11 +684,13 @@ async fn build_cluster(mode: &str, n: usize, port_base: u16) -> Cluster {
     };
 
     // Workers first (their dial to client/broker retries until those start).
+    let needs_aux = mode == "broker" || mode == "pull";
+
     let mut workers = Vec::with_capacity(n);
     for (i, wid) in worker_ids.iter().enumerate() {
         let mut boots = vec![client_id.clone()];
-        if mode == "broker" {
-            boots.push(broker_id.clone());
+        if needs_aux {
+            boots.push(aux_id.clone());
         }
         let agent = Arc::new(GossipAgent::new(wid.clone(), mk(port_base + i as u16, boots)));
         agent.start().await.expect("worker start");
@@ -673,8 +698,8 @@ async fn build_cluster(mode: &str, n: usize, port_base: u16) -> Cluster {
     }
 
     let mut client_boots = worker_ids.clone();
-    if mode == "broker" {
-        client_boots.push(broker_id.clone());
+    if needs_aux {
+        client_boots.push(aux_id.clone());
     }
     let client = Arc::new(GossipAgent::new(
         client_id.clone(),
@@ -682,18 +707,28 @@ async fn build_cluster(mode: &str, n: usize, port_base: u16) -> Cluster {
     ));
     client.start().await.expect("client start");
 
-    let (broker, broker_node) = if mode == "broker" {
-        let broker = Arc::new(GossipAgent::new(
-            broker_id.clone(),
-            mk(port_base + n as u16 + 1, vec![client_id.clone()]),
+    let aux = if needs_aux {
+        // Aux dials client AND every worker: its RPC responses (broker picks,
+        // tuple take deliveries) are Individual-scoped and need outbound routes.
+        let mut boots = vec![client_id.clone()];
+        boots.extend(worker_ids.iter().cloned());
+        let agent = Arc::new(GossipAgent::new(
+            aux_id.clone(),
+            mk(port_base + n as u16 + 1, boots),
         ));
-        broker.start().await.expect("broker start");
-        (Some(broker), Some(broker_id))
+        agent.start().await.expect("aux start");
+        Some(agent)
     } else {
-        (None, None)
+        None
     };
 
-    Cluster { workers, client, broker, broker_node }
+    let (broker, broker_node, space) = match mode {
+        "broker" => (aux.clone(), Some(broker_id), None),
+        "pull" => (None, None, aux),
+        _ => (None, None, None),
+    };
+
+    Cluster { workers, client, broker, broker_node, space }
 }
 
 /// All advertised (node, load) pairs in this agent's local KV view.
