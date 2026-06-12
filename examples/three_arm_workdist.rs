@@ -231,7 +231,7 @@ async fn main() {
                         }
                         Err(e) => {
                             let c = ERRS.fetch_add(1, Ordering::Relaxed);
-                            if c < 5 || c % 500 == 0 {
+                            if c < 5 || c.is_multiple_of(500) {
                                 eprintln!("# take err w{i} #{c}: {e:?}");
                             }
                             sleep(Duration::from_millis(20)).await;
@@ -533,7 +533,7 @@ async fn main() {
                         Ok(_) => break,
                         Err(e) => {
                             let c = PUT_ERRS.fetch_add(1, Ordering::Relaxed);
-                            if c < 5 || c % 200 == 0 {
+                            if c < 5 || c.is_multiple_of(200) {
                                 eprintln!("# put err #{c}: {e:?}");
                             }
                             tries += 1;
@@ -557,7 +557,7 @@ async fn main() {
 
     // ── Metrics over [ramp_end, meas_end] ────────────────────────────────────
     let window_us = meas_end_us - ramp_end_us;
-    let completions = shared.completions.lock().unwrap();
+    let completions = shared.completions.lock().unwrap().clone();
     let mut lat_ms: Vec<f64> = completions
         .iter()
         .filter(|(s, d)| *s >= ramp_end_us && *d <= meas_end_us)
@@ -662,15 +662,12 @@ async fn build_cluster(mode: &str, n: usize, port_base: u16) -> Cluster {
 
     // Workers first (their dial to client/broker retries until those start).
     let mut workers = Vec::with_capacity(n);
-    for i in 0..n {
+    for (i, wid) in worker_ids.iter().enumerate() {
         let mut boots = vec![client_id.clone()];
         if mode == "broker" {
             boots.push(broker_id.clone());
         }
-        let agent = Arc::new(GossipAgent::new(
-            worker_ids[i].clone(),
-            mk(port_base + i as u16, boots),
-        ));
+        let agent = Arc::new(GossipAgent::new(wid.clone(), mk(port_base + i as u16, boots)));
         agent.start().await.expect("worker start");
         workers.push(agent);
     }
@@ -697,32 +694,6 @@ async fn build_cluster(mode: &str, n: usize, port_base: u16) -> Cluster {
     };
 
     Cluster { workers, client, broker, broker_node }
-}
-
-/// Lowest advertised load in this agent's local KV view.
-fn scan_lowest_load(agent: &Arc<GossipAgent>) -> Option<(NodeId, u32)> {
-    let entries = agent.kv().scan_prefix(LOAD_PREFIX);
-    let mut best: Option<(NodeId, u32)> = None;
-    for (key, bytes) in entries {
-        let s = key.as_ref();
-        if !s.ends_with("/load") {
-            continue;
-        }
-        let middle = &s[LOAD_PREFIX.len()..s.len() - "/load".len()];
-        let Some((host, port_str)) = middle.rsplit_once(':') else { continue };
-        let Ok(port) = port_str.parse::<u16>() else { continue };
-        let Ok(node) = NodeId::new(host, port) else { continue };
-        if bytes.len() != 4 {
-            continue;
-        }
-        let load = u32::from_le_bytes(bytes[..].try_into().unwrap());
-        match best {
-            None => best = Some((node, load)),
-            Some((_, cur)) if load < cur => best = Some((node, load)),
-            _ => {}
-        }
-    }
-    best
 }
 
 /// All advertised (node, load) pairs in this agent's local KV view.
