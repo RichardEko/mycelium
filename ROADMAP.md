@@ -105,6 +105,56 @@ apply it *uniformly across your whole system*. Mycelium picks *per operation*.
 
 ---
 
+## Core Principles — Compliance Gate for Future Work
+
+The sections above (*Design Philosophy*, *The Structural Inversion*) describe how the substrate
+works. This section makes those descriptions **normative**: every v2.0 milestone below — and any
+future engineering work, in this repo or in a companion crate — must comply with the invariants
+here. They are not stylistic preferences. Each is load-bearing for the architecture's central
+claim, and violating any one reintroduces exactly the cost the design exists to remove.
+
+1. **No coordinator. The substrate provides mechanism, never agency.** No component decides, on a
+   node's behalf, what it should run, hold, become, or admit. Placement, provisioning, supervision,
+   and admission are *emergent* — they arise from independent local decisions (a node evaluating its
+   own capabilities, load, and locality), never from a central authority that lacks that local
+   knowledge. This is the spine of Paper 1's argument; a substrate that holds that agency *is* the
+   coordinator trap, by definition.
+   **Litmus test:** if a proposed feature requires the substrate itself to act for the fleet —
+   watch-and-decide, pull-and-run, assign-a-role — it is non-compliant *by construction*. Reframe it
+   as an application-layer agent on the public API (the `SkillRunner` / `ClusterTuner` /
+   `mycelium-wasm-host` shape), or do not build it.
+
+2. **Consistency as a service, not a foundation.** The epidemic substrate is always the fast path.
+   Stronger guarantees (consensus, ordering, reliable delivery, exactly-once-effect) are opt-in,
+   per-operation, and built *over* the substrate — never folded into it. A node that never invokes a
+   guarantee pays zero overhead for its existence; nothing in the fast path becomes slower or more
+   complex because a stronger tier exists.
+
+3. **Layer discipline.** Higher layers own KV prefixes and write through the documented path; a
+   lower layer is never taught a higher layer's law (the consensus *commit-conflict tripwire* is the
+   reference — detection in Layer III, **not** a `consensus/`-prefix write guard in Layer I's
+   `apply_and_notify`). Inverting the layer dependency to make a foundation enforce a higher-layer
+   policy is prohibited.
+
+4. **Detection, not prevention.** Namespace ownership is promise-strength: the substrate *detects*
+   violations and routes around them (tripwires, evaporation, fencing leases) rather than enforcing
+   them — enforcement implies an authority, and an authority is a coordinator. Prefer a fencing token
+   to a forcible kill, a tripwire to a write guard.
+
+5. **Emergent, not imposed; threshold activation over agreement.** A node acts when it has
+   sufficient *local* information, not when all nodes agree. Synchronous global barriers are an
+   anti-pattern; agreement is paid for per-operation, only where correctness genuinely requires it.
+
+6. **Composability on the public API.** New capabilities ship as companion crates or app-layer
+   agents built on the public surface (the `mycelium-tuple-space` composability proof), not as core
+   bloat. This keeps embeds a single dependency and continuously re-validates that the public API is
+   sufficient.
+
+A milestone that cannot be expressed within these invariants is not "hard" — it is *out of scope*.
+The correct response is to redesign it until it complies, or to leave it unbuilt.
+
+---
+
 ## Architecture: Five Layers
 
 ```
@@ -2050,7 +2100,9 @@ completions on top of it.
 ## v2.0 Milestones
 
 These are architectural changes deferred until v1.x has production usage to inform decisions.
-None are required for v1.0.
+None are required for v1.0. **Every milestone here must satisfy the *Core Principles — Compliance
+Gate* above**; where a milestone touches that boundary (provisioning, supervision, placement,
+admission), the compliant shape is stated inline rather than assumed.
 
 1. **Workspace split**: `mycelium-core` crate (gossip transport + KV only) extracted from `mycelium` (full substrate). Enables pure-KV embeds with a much smaller dep tree.
 2. **`#[cfg(feature = "consensus")]`** compile-time gate on the epidemic consensus engine. Currently consensus is always compiled; this would let minimal embeds drop the Paxos machinery entirely.
@@ -2389,6 +2441,89 @@ None are required for v1.0.
     beyond the v1 `on_stale` callback — i.e. the mesh must re-provision a failed
     role without an external orchestrator — or follow-up work generalizing the
     TupleSpace Primary/Secondary failover into a reusable pattern.
+
+15. **OBR-style resolve-from-installable-catalog (autonomic provisioning)** —
+    milestone 12 adds the *install mechanism* (pull a WASM component by name,
+    instantiate, advertise). This milestone adds the *selection* step that OSGi's
+    Bundle Repository resolver provides and Mycelium does not have yet: given a
+    requirement, match it against a **catalog of installable artifacts** and choose
+    which to pull — rather than pulling by hard-coded name.
+
+    **What this closes.** Mycelium kept OSGi's continuous R&C resolution but pointed
+    it at the **running** set — `resolve` / `resolve_with_locality` /
+    `resolve_filter_against_kv` match a `CapFilter` against *live, advertised* `cap/`
+    + `gcap/` entries. OSGi's OBR resolver instead matches a requirement against a
+    *repository of not-yet-installed artifacts* annotated with the capabilities they
+    would provide, and produces a deployment set. That resolve-from-catalog step is
+    the missing fourth piece — after resolution, the dynamic advertised set, and
+    milestone 12's code mobility.
+
+    **What already exists (verified in tree):**
+    - `cap/{node}/{ns}/installable` and `cap/{node}/{ns}/loading` are documented KV
+      namespace conventions (`lib.rs` ownership table), with a concrete user today:
+      the LLM provisioning path (`cap/{node}/llm/installable` carries
+      model/size_gb/est_mins; `.../loading` carries progress 0–100).
+    - `agent/{node}/provision/{item}/error` for failures — but **written by the
+      application provisioning handler, not the substrate**. There is no
+      substrate-driven `installable → loading → live` state machine; provisioning is
+      application-layer by design.
+    - `req/{node}/{ns}/{name}` declares a requirement; `demand_snapshot` (`demand.rs`)
+      derives demand pressure from `req/` + `cap/` + `gcap/` as a **read-only view**.
+      The library *never auto-advertises in response to demand* — that is explicitly
+      an application-layer decision (orchestrators, autoscalers).
+    - Content-addressed bulk transport for module bytes; `advertise_capability` to go
+      live.
+
+    **What's new (the gap):**
+    1. **Declared-provide metadata on catalog entries.** An `installable` entry today
+       is keyed by the reserved name with detail in attributes — it does not state,
+       in a resolver-matchable form, *the capability it would provide once
+       installed*. OBR resolve needs each catalog entry to carry its prospective
+       `(ns, name)` provide (and ideally its requires). For WASM this is free: a
+       component's **WIT exports are its provides and imports are its requires** —
+       read them off the artifact (or its Warg / OCI registry metadata) rather than
+       hand-authoring.
+    2. **A resolve pass over the installable catalog** — the same `CapFilter` matching
+       the live resolver already does, scoped to the declared-provides of
+       `installable` entries instead of live `cap/` / `gcap/`.
+    3. **Transitive closure** — if a chosen artifact has unmet imports, satisfy
+       *those* from the catalog too. This is OSGi's genuinely hard part (version
+       ranges, uses-constraints; can be NP-hard). A bounded-depth shallow resolve is
+       easy and likely sufficient; for full closure, delegate to the WASM toolchain's
+       own resolver (`wkg` / Warg) rather than reimplementing a SAT solver.
+    4. **A provisioner agent that closes the loop** — watches `req/` /
+       `demand_snapshot`, resolves unmet requirements against the catalog, pulls +
+       verifies + instantiates via milestone 12, and lets the new capability advertise
+       itself. **This is an application-layer agent** (the same shape as milestone 9's
+       `ClusterTuner` and milestone 12's `mycelium-wasm-host` — a regular agent on the
+       public API), *not* a substrate mechanism: the "library never auto-provisions"
+       invariant stays intact, and provisioning is emergent — any provisioner
+       independently resolves demand; no coordinator assigns provisioning duty.
+
+    **Invariant (Core Principle 1 — no coordinator).** The provisioner never migrates into the
+    substrate. A Layer-I mechanism that watches demand and pulls-and-runs on a node's behalf is a
+    coordinator deciding placement *without* the node's local knowledge — it reintroduces the trap
+    the architecture refutes and invalidates the coordinator-free claim wholesale. The substrate
+    contributes only the primitives (`req/`, `demand_snapshot`, the `installable` convention, bulk
+    transport, `advertise_capability`); the agency to pull and run is always the node's own local
+    choice, expressed as an app-layer agent — generalizing `demand.rs`'s existing "the library never
+    auto-advertises in response to demand" stance.
+
+    **The autonomic loop:** declared requirement (`req/`) → observable demand
+    (`demand_snapshot`) → resolve against the `installable` catalog (new) → pull +
+    verify + instantiate (milestone 12) → capability advertises (`cap/`) → demand
+    relieved. Pairs naturally with milestone 14: a supervised role whose provider
+    evaporated is just an unmet requirement the provisioner can re-satisfy from the
+    catalog — supervision *restart* and first-time *provisioning* collapse onto the
+    same resolve-and-pull path.
+
+    **Dependency**: milestone 12 (the install mechanism) is the layer below; this is
+    the selection layer above it. Without 12, resolve-from-catalog has nothing to pull.
+
+    **Trigger to start**: a fleet where capabilities must be provisioned *by need*
+    rather than pre-placed — nodes should acquire what unmet requirements call for
+    without an operator choosing artifacts by name — or once milestone 12 ships and
+    name-addressed pulls prove too manual.
 
 ---
 
