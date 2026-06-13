@@ -2092,7 +2092,46 @@ None are required for v1.0. **Every milestone here must satisfy the *Core Princi
 Gate* above**; where a milestone touches that boundary (provisioning, supervision, placement,
 admission), the compliant shape is stated inline rather than assumed.
 
-1. **Workspace split**: `mycelium-core` crate (gossip transport + KV only) extracted from `mycelium` (full substrate). Enables pure-KV embeds with a much smaller dep tree.
+1. **Workspace split** — `mycelium-core` extracted from `mycelium` (full substrate).
+   Solves the `TaskCtx` God Object and internalises the Layer I/II entanglement.
+
+   **Scope decided 2026-06-13: `mycelium-core` = Layers I + II** (gossip transport +
+   KV store + signal/boundary mesh), cut at the **II↔III seam**. `mycelium` (full) =
+   core + consensus + capabilities + services + schema/llm/mcp + gateway + tls.
+
+   **Why I+II, not Layer I alone.** The "smaller dep tree" payoff comes from
+   excluding Layer III, capabilities, services, gateway (axum/reqwest), and tls
+   (rustls/rcgen) — *not* from excluding Layer II, which is in-process
+   channel/boundary logic adding essentially no external deps over Layer I. So I+II
+   captures nearly all the minimalism win while keeping the signal/boundary mesh,
+   Mycelium's most differentiated capability. A Layer-I-only core is "just a gossip
+   KV library" — and less than one, since it couldn't offer `subscribe` /
+   `subscribe_prefix` (implemented through the Layer II bridge). Shipping it would
+   require *more* work (severing `apply_and_notify` from the subscription bridge) to
+   produce a *worse* artifact; no consumer for KV-without-signals has been identified.
+
+   **The Layer I/II bridge is sanctioned cohesion, not debt.** `KvStore` (pure
+   Layer I) holds zero Layer II references; the coupling lives only in `KvState` +
+   `apply_and_notify` — the two documented crossing points (see *Layer I/II Bridge
+   Invariant*) — and notification is observer fan-out, not the foundation enforcing a
+   Layer II law (admission / `Boundary::admits` stays in Layer II). There is no
+   dependency inversion and no Core-Principles violation; the entanglement is a
+   *cohesion cost* (it is why Modularity rates 8), correctly internalised by drawing
+   the crate boundary *around* it at II↔III. This decision therefore **absorbs the
+   "Layer I/II entanglement" v2 item** rather than requiring it as a prerequisite.
+
+   **`CoreCtx`** carries the identity, Layer I (KV), Layer II (signal), and
+   networking/lifecycle field groups; the full `TaskCtx` keeps the capability,
+   service, and security groups — which is where the 22-field God Object naturally
+   cleaves.
+
+   **Only if Layer-I-alone ever becomes a goal** (no current consumer): replace the
+   concrete `apply_and_notify`→`KvState` coupling with an abstract change-notification
+   sink that Layer II registers against, making Layer I genuinely standalone.
+
+   **Trigger to start**: a real embedding use case needing the I+II substrate
+   without consensus/capabilities, or sustained friction from the `TaskCtx` coupling
+   in handle code. Enables pure-substrate embeds with a much smaller dep tree.
 2. **`#[cfg(feature = "consensus")]`** compile-time gate on the epidemic consensus engine. Currently consensus is always compiled; this would let minimal embeds drop the Paxos machinery entirely.
 3. **Owned standalone handles**: `KvHandle` / `MeshHandle` / `CapabilitiesHandle` as ownable values that do not require a live `GossipAgent` borrow. Currently handles hold `Arc<TaskCtx>` from a started agent; this would allow passing handles across crate boundaries without exposing `GossipAgent`.
 4. **Partial-mesh gossip** — practical cluster ceiling with current design is ~200–400 nodes.

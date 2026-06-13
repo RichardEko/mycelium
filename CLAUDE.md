@@ -99,8 +99,14 @@ cannot be disabled without losing `subscribe` / `subscribe_prefix` functionality
 Users who only need KV semantics can simply never call `MeshHandle` methods — zero
 overhead when no signal handlers are registered.
 
-Planned for v2: extract `mycelium-core` crate (gossip transport + KV only) from
-`mycelium` (full substrate with signals, consensus, capabilities).
+Planned for v2 (scope decided 2026-06-13 — ROADMAP v2.0 Milestone 1): extract
+`mycelium-core` = **Layers I + II** (gossip transport + KV + signal/boundary mesh)
+from `mycelium` (full substrate: consensus, capabilities, services, gateway, tls),
+cut at the II↔III seam. The bridge above is kept as sanctioned internal cohesion —
+`KvStore` holds no Layer II references, the coupling is only the documented
+`KvState` / `apply_and_notify` crossing points — so the split draws the crate
+boundary *around* the entanglement rather than severing it; Milestone 1 therefore
+absorbs this item.
 
 ### Entry-volume scale test (orthogonal to node-count)
 
