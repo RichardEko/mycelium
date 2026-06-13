@@ -1810,29 +1810,21 @@ certificates auto-generate on first start.
 **Not yet implemented:**
 - Hot certificate rotation without cluster disruption.
 
-### 4. Language bridges not built
+### 4. Language bridges — Complete (2026-05-24)
 
-The Python and TypeScript language bridges are designed (HTTP gateway sidecar, `mycelium`
-Python SDK surface documented in the roadmap) but not implemented. Until they exist, only
-Rust agents can join the mesh natively. Python and TypeScript agents can call in via MCP tool
-calls but cannot advertise capabilities, declare requirements, join groups, or observe the
-full mesh state.
+The Python (`mycelium-py/`) and TypeScript (`mycelium-ts/`) bridges are implemented as HTTP
+gateway sidecars (~1 ms loopback overhead; no PyO3/native extension — any language that speaks
+HTTP works). Each covers the core mesh surface — `advertise_capability`, `declare_requirement`,
+`on_signal`, `emit`, `resolve`, `demand`, RPC, KV, and Actor/Event mailbox. See the **Python
+Language Bridge** and **TypeScript Language Bridge** sections in `README.md` for the API
+reference.
 
-**What is needed:** The HTTP gateway sidecar (the `axum` server is already embedded) plus a
-minimal Python SDK (`mycelium-py`) covering: `advertise_capability`, `declare_requirement`,
-`on_signal`, `emit`, `resolve`, `demand`. TypeScript follows the same gateway pattern.
+### 5. Write-durability confirmation API — Complete (2026-05-25)
 
-### 5. No write-durability confirmation API
-
-`set_async` returns as soon as the value is written locally and handed to the
-gossip shard. There is no acknowledgement that any peer received it. A
-write-then-stop race — where the originating node is killed before gossip
-has reached a persistent peer — results in data loss if no other node holds
-the key.
-
-**What is needed:**
-
-A `set_with_min_acks(key, value, min_acks, timeout)` API that:
+Without confirmation, `set_async` returns as soon as the value is written locally and handed
+to the gossip shard — a write-then-stop race (the originating node killed before gossip reaches
+a persistent peer) could lose data if no other node held the key. Closed by
+`set_with_min_acks(key, value, min_acks, timeout)` (`src/agent/kv_handle.rs`), which:
 
 1. Writes the key locally and to WAL (as `set_async` does today).
 2. Subscribes to the KV watcher for the key (already exists).
@@ -1857,19 +1849,15 @@ Consensus API which provides total-order agreement. `set_with_min_acks` is
 best-effort quorum write — "at least N nodes saw it" — not "all nodes agree
 on the same value at the same logical position."
 
-### 6. Observability is shallow
+### 6. Observability — Complete (2026-05-25)
 
-The `tracing` crate is wired in and `dropped_frames` / `peer_drop_counts()` provide basic
-diagnostics, but there is no structured metrics export. An operator running a real cluster
-has no Prometheus endpoint to scrape, no dashboards, and no alerting surface beyond parsing
-log lines.
-
-**What is needed:** A `metrics` facade integration (zero-cost when no recorder is installed)
-emitting the counters already identified in the Layer 5 section:
-`gossip_frames_dropped_total`, `signal_delivered_total`, `gossip_store_entries`,
-`gossip_peers_connected`, `contract_invocations_total`, `contract_invocation_latency_ms`.
-A reference Grafana dashboard JSON. A `METRICS.md` documenting what each counter means and
-what thresholds should trigger alerts.
+Structured metrics export ships behind the optional `metrics` cargo feature: a `metrics` facade
+integration (zero-cost when no recorder is installed — `counter!`/`histogram!`/`gauge!` compile
+to no-ops) plus a Prometheus `/metrics` endpoint on the gateway, emitting the Layer 5 counter
+set (`gossip_frames_dropped_total`, `signal_delivered_total`, `gossip_store_entries`,
+`gossip_peers_connected`, `contract_invocations_total`, `contract_invocation_latency_ms`).
+`system_stats()`, `dropped_frames`, and `peer_drop_counts()` remain the always-on diagnostic
+surface (see **Layer 1 Observability** in `README.md`).
 
 ### Production-hardening gate — the four sub-gates
 
