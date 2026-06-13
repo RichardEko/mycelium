@@ -1008,6 +1008,11 @@ Layer 4 supervision uses Layer 2's `watch()` to monitor AI agent liveness — no
 monitoring infrastructure. A supervisor watches `contract.available` heartbeats; on stale,
 triggers respawn, failover, or escalation. The Python bridge exposes this as `on_stale(kind, threshold, callback)`.
 
+This is the application-facing primitive. *v2.0 Milestones §14* generalizes it into
+declarative, coordinator-free supervision — capability-presence invariants maintained by
+emergent self-election rather than a supervision tree — honoring the Layer I/II/III
+boundaries end to end.
+
 ### Skills as Capabilities — SkillRunner (Complete)
 
 The industry term "skill" maps directly onto `advertise_capability` with a richer JSON Schema
@@ -2274,6 +2279,116 @@ None are required for v1.0.
 
     **Trigger to start**: the first real fan-in pipeline, or follow-up work
     exercising Paper 1 §9.4's boundary claims empirically.
+
+14. **Substrate-native supervision (capability-presence invariants)** — the v1
+    supervision primitive (*Layer 4 — Supervision* above) is the building block:
+    Layer 2 `watch()` on `contract.available` heartbeats with an
+    `on_stale(kind, threshold, callback)` hook. That gives an *application* a
+    callback; it does not give the *mesh* a coordinator-free recovery discipline.
+    This milestone generalizes it into declarative supervision that honors the
+    Layer I/II/III boundaries end to end.
+
+    **The reframe.** Akka supervises *objects* — a parent actor decides to restart
+    a child. That is a coordinator, and a tree of them; it contradicts the
+    no-coordinator thesis directly. The substrate-native unit is not an object but
+    a **capability-presence invariant**: "role X must always have ≥1 fresh
+    provider." A supervisor is then not a node with authority over others — it is a
+    *policy* that every eligible peer evaluates independently against shared
+    evaporation state, taking over when the invariant is violated. The
+    proof-of-concept already ships: the TupleSpace `Secondary` watching the
+    `Primary`'s capability key and promoting on evaporation — *the ring IS the
+    failure detector*. This milestone lifts that one hardcoded role into a general,
+    declarative mechanism.
+
+    **Mechanism mapping** — every Akka supervision concept resolves to an existing
+    primitive, no new transport:
+
+    | Akka | Substrate-native | Built on |
+    |---|---|---|
+    | Failure detection | capability evaporation (stale past 3× `refresh_interval_ms`) | `CapEntry::is_fresh` |
+    | The supervisor | emergent self-election + deterministic tie-break | `join_group` self-eval; TupleSpace `Auto` lowest-id |
+    | Restart (fresh state) | successor re-acquires the role, starts clean | role/lease key + re-advertise |
+    | Resume (keep state) | successor reads durable state from Layer I, drains the durable mailbox | KV snapshot + `mailbox.rs` |
+    | Stop | let the capability evaporate, don't re-acquire | absence of a refresh |
+    | Escalate | widen scope along the Layer III ladder | `group_propose` → `system_propose` → `cross_group_propose` |
+    | Containment scope (the tree) | signal admission boundary / group scope (flat, nested) | `Boundary::admits` |
+    | OneForOne / AllForOne | per-role recovery / coordinated restart at an agreed epoch | former free; latter a consensus round |
+
+    **Leased consensus IS the supervision lease.** For singleton roles where
+    double-promotion is catastrophic, the successor wins via `group_propose`
+    holding a `committed_lease_secs` lease and renews by re-proposing the same
+    value while live; if the successor *also* dies the lease evaporates read-side
+    and the slot reopens — recovery-of-the-recoverer falls out of a mechanism that
+    already exists, with no background task.
+
+    **Layer decomposition:**
+    - **Layer I**: durable policy specs, role/lease keys, recovered-state snapshot,
+      mailbox backlog — under an owned prefix (e.g. `sup/role/{role}/...`, or folded
+      into the `sys/load/` pheromone space). Failure detection is a *read-side
+      freshness convention*, exactly like opacity and lease expiry; Layer I learns
+      no supervision law — it is "just new keys."
+    - **Layer II**: ephemeral coordination — heartbeats, "claiming role X at epoch
+      E" announcements, the promotion watch — admission-scoped so only the relevant
+      group sees them. (The generalization of the TupleSpace heartbeat Signal.)
+    - **Layer III**: contested succession *only* — correctness-critical singletons.
+      Stateless/idempotent roles resolve at Layers I+II via self-election and never
+      touch consensus.
+
+    **Compliance with the established invariants:**
+    - *Detection, not prevention.* No coordinator can forcibly kill a remote agent,
+      and the substrate does not enforce prefixes; a "stopped" agent that keeps
+      writing is *detected* (a tripwire, like the commit-conflict tripwire) and
+      routed around via evaporation — never prevented. House style, preserved.
+    - *Lock-free claim discipline.* "Claim the role" is a conditional papaya
+      `compute` (claim-by-sentinel, spawn outside the closure — the
+      `get_or_spawn_writer` pattern), never check-then-act; split-brain promotion is
+      exactly the "lock-free op followed by an unserialised derived effect" race the
+      existing rules already close.
+    - *Opacity composition.* An overloaded provider already writes `is_opaque`;
+      supervision *reads* it — an opaque provider is a takeover candidate. No
+      parallel health model ("new causes = new keys").
+    - *Emergent groups.* The supervisor set for a role *is* a `CapabilityGroupDef` —
+      nodes able to provide X self-join; nobody assigns supervisor duty.
+
+    **Three apparent limits — none are show-stoppers:**
+    - *Forcible stop/kill of a remote agent* is not a substrate gap: no system can
+      guarantee a remote process stops across a partition (Akka's `context.stop` is a
+      *local* guarantee; remote death-watch is best-effort). Local stop is handle drop
+      / task cancel; the remote case wants **fencing**, and the leased epoch + tripwire
+      already *is* a fencing token — a stale-epoch writer is rejected the same way the
+      commit-conflict tripwire rejects a divergent COMMIT. The route-around-on-
+      evaporation behaviour is the correct distributed answer, not a concession.
+    - *Atomic AllForOne group-restart* (coordinated restart at a shared epoch) is a
+      consensus problem by definition; it is expressible via a `group_propose` round
+      today, the cost is intrinsic to the semantics rather than a substrate deficiency,
+      and it is the rarely-used supervision strategy anyway.
+    - *Exactly-once* splits in two. Exactly-once *delivery* on the wire is universally
+      impossible (retry ⇒ at-least-once) and nothing needs it. Exactly-once *effects*
+      is achievable and **the engine already ships inside the TupleSpace** —
+      `tuple/inflight/{ns}/{id}` advisory claim + the indivisible `Complete` WAL record
+      (a stage transition can never half-replay) + crash-requeue + the `id → stage`
+      dedup map. The work is to *extract* that discipline as a reusable **dedup-ledger
+      overlay**: deterministic dedup key → claim-by-sentinel on `dedup/{handler}/{key}`
+      (the same `compute` primitive as `get_or_spawn_writer` and the role claim above)
+      → idempotent effect → result-under-key; an in-flight claim left by a dead node
+      expires read-side and requeues, safe because the indivisible complete means a
+      half-applied effect never recorded completion. This upgrades the at-least-once
+      *Reliable Delivery* overlay (above) to exactly-once-effect, and it is the same
+      primitive the `mycelium-blackboard` Deferred Pattern names as "the tuple space's
+      WAL/in-flight exactly-once discipline" — build it once, share it across the
+      blackboard, the mailbox, and supervision restart.
+
+    **Minimal first cut** (~1–2 months, policy plumbing only): a
+    `SupervisionPolicy` declarative spec attached to a role (shaped like
+    `CapabilityGroupDef`); a watcher reusing the existing evaporation read-side
+    check; self-election with the `Auto` tie-break for non-singleton roles; leased
+    `group_propose` reserved for the singleton case. No new transport, no
+    coordinator.
+
+    **Trigger to start**: the first fleet that needs autonomous agent recovery
+    beyond the v1 `on_stale` callback — i.e. the mesh must re-provision a failed
+    role without an external orchestrator — or follow-up work generalizing the
+    TupleSpace Primary/Secondary failover into a reusable pattern.
 
 ---
 
