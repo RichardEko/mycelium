@@ -1041,4 +1041,23 @@ mod tests {
         cfg.health_check_interval_secs = 3601;
         assert!(cfg.validate().is_err(), "health_check_interval_secs = 3601 should fail validation");
     }
+
+    #[test]
+    fn validate_rejects_http_port_equal_to_bind_port() {
+        // Falsification probe (analysis Run 23, dims 6/7): the documented
+        // "http_port and bind_port must differ" invariant must surface a *typed*
+        // FieldConflict — not silently pass validation, and not panic.
+        let mut cfg = GossipConfig::default();
+        cfg.http_port = Some(cfg.bind_port);
+        match cfg.validate() {
+            Err(GossipError::FieldConflict { field_a, field_b, .. }) => {
+                assert_eq!(
+                    (field_a, field_b),
+                    ("http_port", "bind_port"),
+                    "conflict must name the two offending fields"
+                );
+            }
+            other => panic!("expected FieldConflict for http_port == bind_port, got {other:?}"),
+        }
+    }
 }

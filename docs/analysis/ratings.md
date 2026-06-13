@@ -1318,3 +1318,83 @@ wire + capability decoders); local afn ci_smoke pull 24/24 in 1.9 s + push
 | 25 | Dependency Hygiene | 8 | carried (v21 feature-combo builds); no new audit run |
 | — | **Floor (lowest 3)** | **6, 7, 7** | Test Architecture (6, capped by the flake finding); Concurrency Correctness and Security tie at 7 (both carried — neither re-examined since v19; due in the 6–10 rotation next run) |
 | — | Mean (continuity footnote) | 8.0 | not a target; see M2 preamble |
+
+## 2026-06-13 — Run 23 (M2)
+
+Deep-dive dimensions this run (by rotation from Run 22): 6 (Error Handling),
+7 (Configurability), 8 (Language Best Practices), 9 (Concurrency Correctness),
+10 (Resource Management). Next run by rotation: 11–15.
+
+**Process disclosure.** This session authored the entire diff under evaluation
+(3 commits since Run 22: v2 milestone 14 substrate-native supervision, milestone
+15 OBR resolve-from-installable-catalog, and the Core Principles compliance
+gate) and is producing this run, so the blind rule is compromised as in Runs
+17–22. Mitigation: the diff is **docs-only** (ROADMAP.md) — no code, tests, or
+config changed — so every code dimension is unaffected by the authorship; scores
+moved only on named execution evidence. Cadence gate passed (new day; material
+doc diff).
+
+Execution evidence this run: full-matrix lib suite `tls,metrics,a2a,llm`
+**325 passed / 0 failed / 1 ignored** (16.9 s); gateway-free
+`cargo build --lib --no-default-features` **exit 0** (6m01s clean); clippy
+`--lib --tests --features tls,metrics,a2a,llm -D warnings` **clean** (0 lints);
+new probe test `validate_rejects_http_port_equal_to_bind_port` **green**; tree
+verification that all five calibration-ledger bug-fix canaries are present
+(`lww_wins`, `index_stripes` stripe locks, `max_clock_drift_ms`/`with_max_drift`,
+`with_limit::<MAX_FRAME_BYTES>`, `sweep_stale_tombstones`); and — run
+post-hoc at the user's request — afn-smoke `examples/fluid_pipeline/ci_smoke.sh
+both` (Docker-free) **green both modes**: canonical coordinator-free pull
+**24/24** + push baseline **24/24**.
+
+Falsification quota — 3 probes against high-scoring dimensions, all **passed**:
+- **Architecture (#3, 9):** gateway-free `--no-default-features` build compiled
+  clean — the documented "gateway compiled away; gossip core/KV/signal/consensus
+  remain" layer-separability claim holds.
+- **Language Best Practices (#8, 9):** clippy `-D warnings` clean at full feature
+  matrix incl. `--tests`; only `unsafe` outside tests is edition-2024
+  `std::env::set_var` in `#[cfg(test)]` config tests.
+- **Error Handling / Configurability (#6/#7, 8):** constructed an adversarial
+  config (`http_port == bind_port`) and asserted `validate()` returns the *typed*
+  `GossipError::FieldConflict { field_a, field_b }` with correct field names —
+  not a silent pass, not a panic. No prior test existed; the regression test was
+  kept (suite-growing).
+- Probes deliberately varied from Run 22 (which probed dependency-direction
+  acyclicity, shutdown-port closure, 32-thread parallelism). Testability (#17)
+  and Operational Readiness (#21) keep their Run-22 probe-backed 9s as carried,
+  corroborated this run only by the green standard-parallelism suite — disclosed,
+  not independently re-probed.
+
+### Findings
+
+None. All three falsification probes passed; no dimension capped this run. No new
+calibration-ledger entry (no bug surfaced in a dimension scoring ≥ 8).
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 9 | **Evidence:** afn-smoke (`ci_smoke.sh both`, Docker-free) green this run — canonical coordinator-free **pull 24/24** + push baseline **24/24**; the flagship AFN demo *embodies* the no-coordinator philosophy end-to-end, not merely asserts it. Reinforced by the Core Principles compliance gate added this window (philosophy now normative; milestones 14/15 gated on it). The Run-22 guide-07 residual was re-checked and does **not** hold (07-pipelines.md is pull-canonical) — no residual remains. (10 unreachable: needs external/third-party validation.) |
+| 2 | Conceptual Integrity | 8 | carried (v22); `timeout_ms`/`timeout_secs` gateway naming split residual unchanged |
+| 3 | Architecture | 9 | **Evidence:** gateway-free `--no-default-features` build passed this run (layer/feature separability); compliance gate now codifies layer discipline + the "don't teach Layer I a Layer III law" invariant normatively. TaskCtx coupling lives in #4, not here |
+| 4 | Modularity | 8 | carried (v22); `TaskCtx` 22-field Arc bundle still couples every handle (documented v2 split, milestone 1) |
+| 5 | API Design | 8 | carried (v22) |
+| 6 | Error Handling Model | 8 | Deep-dive. `GossipError` is one coherent `thiserror` enum (82 lines) with actionable messages (`UnsupportedWireVersion` carries a hint; `FieldConflict` names both fields); probe confirmed the typed `FieldConflict` variant is actually produced, not stringly-typed. Propagation via `?`. No standout to justify 9 |
+| 7 | Configurability | 8 | Deep-dive. `validate()` covers single-field bounds *and* cross-field conflicts (http_port≠bind_port, http_addr IP parse); env overrides parse to typed `GossipError::Parse`; TOML round-trip tested; 1044-line surface justified by documented tunables. FieldConflict regression test added + green |
+| 8 | Language Best Practices | 9 | Deep-dive. **Evidence:** clippy `-D warnings` clean at full matrix + `--tests` this run; ~zero production `unsafe` (only edition-2024 `set_var` in test cfg); edition 2024, rust 1.88, type-driven correctness (NodeId, sealed handles) |
+| 9 | Concurrency Correctness | 7 | Deep-dive. All five ledger-bug canaries verified present in tree; lock-order table flat (no nested acquisitions); 325 green incl. the new random-topology property test (7069d4c). **Held at 7, not raised:** two ledger entries (listener race, prefix-index race) mandate structural skepticism, and no *fresh* adversarial concurrency probe was run this window (probes targeted #3/#8/#6-7) |
+| 10 | Resource Management | 8 | Deep-dive. `sweep_stale_tombstones` (store.rs:658) + its regression test green in this run's 325; RAII drop on `CapabilityHandle`/`LockGuard`/`MailboxHandle`/`BulkServeHandle` confirmed. Unprobed and flagged for next run: the CLAUDE-noted task-leak path (per-peer writer exit on disconnect) and task_count-to-baseline on shutdown |
+| 11 | Semantic Correctness | 8 | carried (v22); canaries `lww_wins` (data-vs-data tiebreak) and `max_clock_drift_ms`/`Hlc::with_max_drift` confirmed present this run, with the Run-19 drift regression test + proptests green in the 325-run |
+| 12 | Robustness | 8 | carried (v22); `with_limit::<MAX_FRAME_BYTES>` decode cap confirmed present (framing.rs:231); no fresh adversarial-input probe (fuzz toolchain — nightly/cargo-fuzz — not installed locally) |
+| 13 | Security | 7 | carried (v19/v22); not re-examined since v19 — due in the 11–15 rotation next run |
+| 14 | Failure Mode Legibility | 8 | carried (v22) |
+| 15 | Performance | 8 | carried (v21); no fresh perf run |
+| 16 | Scalability | 8 | carried (v21); no fresh scale run |
+| 17 | Testability | 9 | carried (v22, 32-thread probe); corroborated this run only by green standard-parallelism 325-run — 32-thread stress not re-executed |
+| 18 | Test Architecture | 7 | Recovered from Run-22 flake cap (6): the 15 s structural-poll budget fix is in-tree and the tripwire test was green in this run's 325 with no flake. **Held at 7, not 8:** the heavy ledger entry (fuzz targets inert for 19 runs) is only mitigated by CI execution — I could not run the fuzz targets locally this run (no nightly/cargo-fuzz) |
+| 19 | Observability | 8 | carried (v20) |
+| 20 | Debuggability | 8 | carried (v20) |
+| 21 | Operational Readiness | 9 | carried (v22, shutdown-port probe); not independently re-probed this run |
+| 22 | Evolvability | 8 | Re-eval (docs diff): v2 milestones 14/15 added and now governed by the compliance gate; wire policy unchanged (v11 / PREV 10, rolling window open). No CHANGELOG-relevant code change this window |
+| 23 | Documentation | 8 | Re-eval (docs diff): ROADMAP gained a normative compliance gate + two cross-referenced milestones, internally consistent, no broken intra-doc refs introduced. (The Run-22 "guide 07 pre-dates the pull migration" residual was re-checked this run and dropped — see #1: 07-pipelines.md is pull-canonical.) |
+| 24 | Developer Experience | 8 | carried (v22) |
+| 25 | Dependency Hygiene | 8 | carried (v21); gateway-free build passed (the `--no-default-features` dep-hygiene requirement holds), Cargo.lock present. **Caveat:** no `cargo audit` this run — and the ledger records advisories previously lurking under a high score here, so this 8 is unverified against the advisory DB this window. `block v0.1.6` future-incompat is a transitive *dev*-dependency (wgpu→objc), not in the production graph |
+| — | **Floor (lowest 3)** | **7, 7, 7** | Concurrency Correctness (#9), Security (#13), Test Architecture (#18) — Test Architecture recovered 6→7 (flake cap resolved); the other two are carried 7s awaiting the 11–15 / next deep-dive rotation. Floor unchanged by the dim-1 bump (1 was not in the lowest 3) |
+| — | Mean (continuity footnote) | 8.1 | not a target; see M2 preamble (8.04→8.08 on the dim-1 8→9 bump) |
