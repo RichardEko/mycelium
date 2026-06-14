@@ -502,10 +502,12 @@ pub(crate) async fn kv_delete_async(ctx: &TaskCtx, key: Arc<str>) -> bool {
 #[cfg(feature = "tls")]
 pub(crate) fn parse_identity_keys(bytes: &[u8]) -> Vec<[u8; 32]> {
     match bytes.len() {
-        32 => bytes.try_into().ok().map(|k| vec![k]).unwrap_or_default(),
+        32 => <[u8; 32]>::try_from(bytes).map(|k| vec![k]).unwrap_or_default(),
         64 => {
             let mut out = Vec::with_capacity(2);
-            if let (Ok(a), Ok(b)) = (bytes[..32].try_into(), bytes[32..].try_into()) {
+            if let (Ok(a), Ok(b)) =
+                (<[u8; 32]>::try_from(&bytes[..32]), <[u8; 32]>::try_from(&bytes[32..]))
+            {
                 out.push(a);
                 out.push(b);
             }

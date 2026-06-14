@@ -797,6 +797,61 @@ impl GossipAgent {
     }
 }
 
+/// Hot certificate / identity rotation (WS5; `tls` feature).
+#[cfg(feature = "tls")]
+impl GossipAgent {
+    /// Rotate this node's TLS / identity key **without cluster disruption**.
+    ///
+    /// 1. Generate a new key + CA-signed cert (reusing the cluster CA), persisted
+    ///    to disk — but do not activate it yet.
+    /// 2. Publish `sys/identity/{self}` = `new ‖ old`, signed by the **old** key
+    ///    (which peers still trust), so peers' retained key sets accept both.
+    /// 3. Wait `propagation` for that to gossip.
+    /// 4. Cut over: atomically swap the active key + cert ([`tls::NodeTls::activate`]).
+    ///    New gossip signatures and new TLS handshakes use the new key (configs are
+    ///    read per connection); existing connections keep their CA-trusted session —
+    ///    no listener restart. The `new‖old` identity entry is retained so the prior
+    ///    key survives one restart (historical-record verification).
+    ///
+    /// Requires `GossipConfig::tls`. Returns the new 32-byte verifying key.
+    ///
+    /// **Compromise caveat:** the old key remains accepted (retained-key
+    /// verification, WS5 option B) so historical signatures stay valid; rotating
+    /// away from a *compromised* key needs explicit revocation on top.
+    pub async fn rotate_identity(
+        &self,
+        propagation: std::time::Duration,
+    ) -> Result<[u8; 32], crate::error::GossipError> {
+        use crate::error::GossipError;
+        let tls = self.task_ctx.tls.get().ok_or(GossipError::InvalidField {
+            field: "tls", reason: "rotate_identity requires the tls identity (set GossipConfig::tls)".into(),
+        })?;
+        let tls_cfg = self.config.tls.as_ref().ok_or(GossipError::InvalidField {
+            field: "tls", reason: "rotate_identity requires GossipConfig::tls".into(),
+        })?;
+
+        let old_vk = tls.verifying_key_bytes();
+        // 1. Generate the new material (persisted, not yet active).
+        let material = crate::tls::generate_rotation(tls_cfg, &self.node_id)?;
+        let new_vk = material.verifying_key;
+
+        // 2. Publish new‖old, signed by the still-active OLD key (peers trust it),
+        //    so their retained sets accept both before the cutover.
+        let mut dual = Vec::with_capacity(64);
+        dual.extend_from_slice(&new_vk);
+        dual.extend_from_slice(&old_vk);
+        let id_key = format!("sys/identity/{}", self.node_id);
+        let _ = self.kv().set(id_key, Bytes::from(dual));
+
+        // 3. Let it propagate.
+        tokio::time::sleep(propagation).await;
+
+        // 4. Cut over to the new key/cert.
+        tls.activate(material);
+        Ok(new_vk)
+    }
+}
+
 /// RBAC — signed node-role advertisement + verified read (WS1; `compliance` feature).
 #[cfg(feature = "compliance")]
 impl GossipAgent {

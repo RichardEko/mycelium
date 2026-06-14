@@ -38,6 +38,28 @@ impl NodeTls {
     pub(crate) fn verifying_key_bytes(&self) -> [u8; 32] {
         self.signing_key().verifying_key().to_bytes()
     }
+
+    /// Atomically swap in previously-generated rotation material — the cutover
+    /// step of a hot rotation (WS5). New gossip signatures and new TLS handshakes
+    /// (`server_config()` / `client_config()` are read per connection) pick up the
+    /// new key/cert immediately; existing connections keep their old (CA-trusted)
+    /// session. Call only *after* the new verifying key has been published to
+    /// peers, so they already accept it.
+    pub(crate) fn activate(&self, m: RotationMaterial) {
+        self.signing_key.store(m.signing_key);
+        self.server_config.store(m.server_config);
+        self.client_config.store(m.client_config);
+    }
+}
+
+/// A freshly-generated identity key + CA-signed cert + rustls configs, not yet
+/// activated. Produced by `generate_rotation`; consumed by [`NodeTls::activate`].
+#[cfg(feature = "tls")]
+pub(crate) struct RotationMaterial {
+    pub(crate) verifying_key: [u8; 32],
+    server_config: std::sync::Arc<rustls::ServerConfig>,
+    client_config: std::sync::Arc<rustls::ClientConfig>,
+    signing_key: std::sync::Arc<ed25519_dalek::SigningKey>,
 }
 
 #[cfg(feature = "tls")]
@@ -136,6 +158,56 @@ mod imp {
             client_config: arc_swap::ArcSwap::from_pointee(client_config),
             signing_key: arc_swap::ArcSwap::from_pointee(signing_key),
         })
+    }
+
+    /// Generate a fresh identity key + CA-signed node cert + rustls configs
+    /// WITHOUT activating them, persisting the new key to disk so a restart uses
+    /// it. Returns the material (and the new verifying key) so the caller can
+    /// publish the new key to peers before the cutover ([`NodeTls::activate`]).
+    /// Reuses the **existing** cluster CA — never regenerates it — and errors if
+    /// no CA is present (rotation only makes sense post-bootstrap).
+    pub(crate) fn generate_rotation(
+        cfg: &TlsConfig,
+        node_id: &NodeId,
+    ) -> Result<super::RotationMaterial, GossipError> {
+        let signing_key = generate_key()?;
+        let verifying_key = signing_key.verifying_key().to_bytes();
+
+        // Persist the new key (raw 32 bytes), same layout as load_or_generate.
+        let sanitized = node_id.as_str().replace([':', '.'], "_");
+        let auto_key_path = cfg.auto_cert_dir.join(format!("{sanitized}.key"));
+        save_key_raw(&signing_key, &auto_key_path)?;
+
+        let (ca_cert_der, ca_key_pair) = load_existing_ca(cfg)?;
+        let node_cert_der = generate_node_cert(node_id, &signing_key, &ca_key_pair)?;
+        let (server_config, client_config) =
+            build_rustls_configs(node_cert_der, &signing_key, ca_cert_der)?;
+
+        Ok(super::RotationMaterial {
+            verifying_key,
+            server_config: Arc::new(server_config),
+            client_config: Arc::new(client_config),
+            signing_key: Arc::new(signing_key),
+        })
+    }
+
+    /// Load the existing cluster CA cert + key (load-only; errors if absent —
+    /// unlike `load_or_generate`, rotation must never mint a new CA).
+    fn load_existing_ca(cfg: &TlsConfig) -> Result<(CertificateDer<'static>, KeyPair), GossipError> {
+        let auto_ca_cert_path = cfg.auto_cert_dir.join("ca-cert.pem");
+        let auto_ca_key_path  = cfg.auto_cert_dir.join("ca-key.pem");
+        let ca_cert_path = cfg.ca_cert_pem.clone().unwrap_or(auto_ca_cert_path);
+        let pem = fs::read_to_string(&ca_cert_path).map_err(|e| GossipError::InvalidField {
+            field: "tls", reason: format!("TLS: rotation needs an existing CA cert ({ca_cert_path:?}): {e}"),
+        })?;
+        let ca_cert_der = pem_cert_to_der(&pem)?;
+        let key_pem = fs::read_to_string(&auto_ca_key_path).map_err(|e| GossipError::InvalidField {
+            field: "tls", reason: format!("TLS: rotation needs the CA key ({auto_ca_key_path:?}): {e}"),
+        })?;
+        let ca_key_pair = KeyPair::from_pem(&key_pem).map_err(|e| GossipError::InvalidField {
+            field: "tls", reason: format!("TLS: parse CA key: {e}"),
+        })?;
+        Ok((ca_cert_der, ca_key_pair))
     }
 
     fn generate_key() -> Result<SigningKey, GossipError> {
@@ -309,4 +381,4 @@ mod imp {
 }
 
 #[cfg(feature = "tls")]
-pub(crate) use imp::{load_or_generate, sign_bytes, verify_bytes};
+pub(crate) use imp::{generate_rotation, load_or_generate, sign_bytes, verify_bytes};

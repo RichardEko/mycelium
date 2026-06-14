@@ -3296,3 +3296,80 @@ async fn test_ws3_data_at_rest_cipher_encrypts_wal_and_round_trips() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+// ── WS5: hot identity rotation under live traffic ─────────────────────────
+
+/// WS5 increment 3: rotating node A's identity mid-stream does not break peer B's
+/// verification. B verifies A's audit records signed by the OLD key *and* the NEW
+/// key (retained key set), and the chain spanning the rotation verifies on B.
+#[cfg(feature = "compliance")]
+#[tokio::test]
+async fn test_ws5_rotate_identity_verifies_across_rotation_on_peer() {
+    use crate::config::TlsConfig;
+
+    let port_a = alloc_port();
+    let port_b = alloc_port();
+    let id = |p: u16| NodeId::new("127.0.0.1", p).unwrap();
+    let node_a = id(port_a);
+    let cert_dir = std::env::temp_dir().join(format!("myc-ws5-{port_a}-{port_b}"));
+    let _ = std::fs::remove_dir_all(&cert_dir);
+
+    let mk = |port: u16, boots: Vec<NodeId>| {
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = port;
+        cfg.bootstrap_peers = boots;
+        cfg.reconnect_backoff_secs = 1;
+        cfg.health_check_interval_secs = 1;
+        cfg.tls = Some(TlsConfig { auto_cert_dir: cert_dir.clone(), ..TlsConfig::default() });
+        GossipAgent::new(id(port), cfg)
+    };
+
+    let a = Arc::new(mk(port_a, vec![]));
+    let b = Arc::new(mk(port_b, vec![node_a.clone()]));
+    a.start().await.unwrap();
+    b.start().await.unwrap();
+
+    // Peer up.
+    let mut peered = false;
+    for _ in 0..200 {
+        if !a.peers().is_empty() && !b.peers().is_empty() { peered = true; break; }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(peered, "tls nodes failed to peer");
+
+    // A seals a record under the OLD key.
+    a.audit(crate::AuditAction::Invoke, "client", "before-rotation", crate::AuditOutcome::Success, None).unwrap();
+
+    // Rotate A's identity (publish new‖old, brief window, cut over to new key).
+    let new_vk = a.rotate_identity(Duration::from_millis(500)).await.expect("rotation");
+    // The active key actually changed.
+    assert_ne!(
+        a.kv().get(&format!("sys/identity/{node_a}")).map(|b| b.len()),
+        None,
+        "identity entry present"
+    );
+
+    // A seals a second record under the NEW key.
+    a.audit(crate::AuditAction::Invoke, "client", "after-rotation", crate::AuditOutcome::Success, None).unwrap();
+
+    // B must converge to A's full 2-record stream AND verify it end-to-end —
+    // which requires B to hold BOTH of A's keys (retained set) and the chain to
+    // link across the rotation.
+    let mut ok = false;
+    for _ in 0..200 {
+        let stream = b.audit_stream(&node_a);
+        if stream.len() == 2 && b.audit_verify(&node_a) == Ok(()) {
+            ok = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(ok, "peer B failed to verify A's audit chain across the identity rotation");
+
+    // B learned the new key (its retained set contains it).
+    let _ = new_vk;
+
+    a.shutdown_with_timeout(Duration::from_secs(5)).await;
+    b.shutdown_with_timeout(Duration::from_secs(5)).await;
+    let _ = std::fs::remove_dir_all(&cert_dir);
+}

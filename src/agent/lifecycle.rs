@@ -22,6 +22,8 @@ use tracing::{info, warn};
 use crate::connection::ConnContext;
 use super::{GossipAgent, AgentState};
 use super::helpers::{kv_delete, kv_scan_prefix, kv_set, kv_subscribe_prefix};
+#[cfg(feature = "tls")]
+use super::helpers::kv_get;
 use super::tasks::{
     ListenerContext, run_gossip_shard, run_health_monitor, run_gc_task, run_listener_task, new_listener,
 };
@@ -131,10 +133,29 @@ impl GossipAgent {
             match crate::tls::load_or_generate(tls_cfg, &self.node_id) {
                 Ok(node_tls) => {
                     let arc_tls = Arc::new(node_tls);
-                    // Publish Ed25519 verifying key so peers can verify signed consensus messages.
+                    // Publish Ed25519 verifying key so peers can verify signed consensus
+                    // messages. If a persisted `sys/identity/{self}` entry from a prior
+                    // run lists a *different* prior key (i.e. we rotated before this
+                    // restart), preserve it as `current‖previous` (WS5) so historical
+                    // records signed by the old key still verify after the restart.
                     let vk = arc_tls.verifying_key_bytes();
                     let id_key = format!("sys/identity/{}", self.node_id);
-                    let _ = kv_set(&self.task_ctx, Arc::from(id_key.as_str()), Bytes::copy_from_slice(&vk));
+                    let value = {
+                        let existing = kv_get(&self.task_ctx, &id_key)
+                            .map(|b| super::helpers::parse_identity_keys(&b))
+                            .unwrap_or_default();
+                        let prior = existing.into_iter().find(|k| *k != vk);
+                        match prior {
+                            Some(p) => {
+                                let mut v = Vec::with_capacity(64);
+                                v.extend_from_slice(&vk);
+                                v.extend_from_slice(&p);
+                                Bytes::from(v)
+                            }
+                            None => Bytes::copy_from_slice(&vk),
+                        }
+                    };
+                    let _ = kv_set(&self.task_ctx, Arc::from(id_key.as_str()), value);
                     let _ = self.task_ctx.tls.set(arc_tls);
                     // Seed peer_keys from any sys/identity/ entries already in the local store.
                     self.prewarm_peer_keys();
