@@ -1748,6 +1748,11 @@ Supporting arguments in Discussion: the Hayek epistemic parallel (central coordi
 The following gaps are the difference between what exists today and a system that could be
 deployed in a real multi-machine AI fleet. They are ordered by blocking severity.
 
+**Execution plan:** the action plan to close every remaining engineering item to a uniform
+implemented-tested-documented bar is [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md)
+(WS1–WS6: RBAC/identity, tamper-evident audit, crown-jewel, generic-OIDC SSO, cert rotation,
+doc alignment). Support/SLA (sub-gate 4) is tracked separately as commercial work.
+
 ### 1. Multi-machine integration tests — Complete (2026-05-23)
 
 A Docker Compose-based integration test suite exercises real TCP connections across containers.
