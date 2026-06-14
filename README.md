@@ -768,6 +768,13 @@ The legacy `gateway_auth_token` is equivalent to a token holding `["*"]`, so sin
 deployments upgrade with no change. The public edge (`/health`, `/ready`, `/stats`, `/metrics`,
 the A2A descriptor) is never scope-gated.
 
+**SSO via generic OIDC.** Set `GossipConfig::oidc = Some(OidcConfig { issuer, audience,
+group_claim, group_scopes, .. })` and the gateway also accepts an IdP-issued JWT bearer:
+it validates the token (asymmetric-only algorithms — anti alg-confusion — plus `iss`/`aud`/`exp`)
+against the IdP's JWKS (standard `.well-known` discovery, cached), then maps the token's
+groups to gateway scopes. One code path for Entra / Okta / Auth0 / Keycloak — differences are
+config. Human-operator auth, not agent identity. See the [SSO runbook](docs/operations/sso.md).
+
 **Signed node roles + capability authorization.** `agent.advertise_roles(["admin".into()], 3)`
 writes an Ed25519-signed claim to `sys/role/{node}`; `agent.roles_of(node)` returns it **only**
 if the signature verifies against the node's cluster-learned identity key — a forged role write

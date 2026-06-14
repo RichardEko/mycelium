@@ -1894,8 +1894,10 @@ must be data-classification-aware.
   shape); and a core `sys/` namespace-ownership **tripwire**
   (`SystemStats::sys_namespace_violations`, detection-not-prevention). See
   CLAUDE.md §RBAC / identity and [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md) §WS1.
-- *In flight:* gap #9 (SSO / generic OIDC — WS4, maps IdP groups → WS1 roles);
-  audit access control rides on WS2.
+- **Shipped — WS4 (SSO / generic OIDC).** OIDC JWT validation at the gateway
+  (`compliance`): asymmetric-only alg allowlist (anti alg-confusion), `iss`/`aud`/
+  `exp` checks, discovery + cached JWKS, IdP groups → gateway scopes via config.
+  One code path for Entra/Okta/Auth0/Keycloak — see [`docs/operations/sso.md`](docs/operations/sso.md).
 - *Deferred to WS-followups:* access control on the MCP / A2A bridge surfaces
   (distinct from the primary gateway auth) — the OAuth2 scope model extends to
   them directly.
@@ -2049,13 +2051,19 @@ for SOC 2 Type II controls evidence and HIPAA §164.312(a)(1) access control req
 
 ---
 
-### 9. SSO / enterprise IdP integration (Entra, Okta)
+### 9. SSO / enterprise IdP integration (Entra, Okta) — **Shipped (WS4)**
 
 Enterprise procurement almost universally requires SSO against the organisation's IdP
-before IT security will approve deployment. The gateway's existing bearer-token auth is
-a prerequisite; this extends it to OIDC/JWT validation against an external issuer.
+before IT security will approve deployment. Shipped as WS4: generic-OIDC JWT validation
+at the gateway. `GossipConfig::oidc = Some(OidcConfig { issuer, audience, group_claim,
+group_scopes, jwks_uri })`; the gateway validates the bearer JWT (asymmetric-only alg
+allowlist, `iss`/`aud`/`exp`, discovery + cached JWKS) and maps IdP groups → gateway
+scopes, feeding the existing WS1 scope gate. Static token auth remains the fallback.
+**One code path** covers Entra/Okta/Auth0/Keycloak — per-vendor differences (issuer,
+group-claim name) are config, documented in [`docs/operations/sso.md`](docs/operations/sso.md)
+with a per-vendor table. The original per-design notes below are retained for context.
 
-**What is needed:**
+**What was needed (design, now implemented):**
 
 **a) OIDC token validation middleware.** Replace the static `GOSSIP_GATEWAY_AUTH_TOKEN`
 comparison with a JWT validation path:
@@ -2098,7 +2106,7 @@ already in the dep graph via the `llm` feature).
 | Prometheus metrics export + dashboards | Medium | **Complete** 2026-05-25 |
 | Durable cluster-wide audit trail (`sys/audit/`, `/audit` endpoint) | High | **Complete** 2026-06-14 (WS2 — per-node hash-chained signed trail, `verify_chain`, `/gateway/audit`, SkillRunner integration) |
 | Role-based access control — v1.x subset (node roles, gateway ACLs) | High | **Complete** 2026-06-14 (WS1 — signed `sys/role/`, provider authz, OAuth2 gateway ACLs, `sys/` tripwire) |
-| SSO / enterprise IdP integration (OIDC, Entra, Okta) | High | **Pending** |
+| SSO / enterprise IdP integration (OIDC, Entra, Okta) | High | **Complete** 2026-06-14 (WS4 — generic-OIDC JWT validation at the gateway, discovery + JWKS, groups→scopes; mock-IdP test) |
 
 None of these require architectural changes. The substrate is sound; these are engineering
 completions on top of it.

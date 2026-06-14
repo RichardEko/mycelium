@@ -85,7 +85,7 @@ These are real work items. Anyone resuming should read
 |---|---|
 | TupleSpace companion crate | **Shipped** (2026-06-11) as workspace member `mycelium-tuple-space/` — all 5 phases of [`docs/plans/mycelium-tuple-space.md`](docs/plans/mycelium-tuple-space.md). See §TupleSpace companion crate below. |
 | Pre-release arch remediation | **Complete.** All 9 steps done — plan at `~/.claude/plans/humble-twirling-comet.md`. |
-| v1.x completion (Production Readiness Gap) | Action plan at [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md). **WS1 (Identity & RBAC) shipped** — signed role claims, provider-side capability authz, OAuth2 gateway ACLs, `sys/` namespace tripwire; see §RBAC / identity. **WS2 (tamper-evident audit) shipped** — per-node hash-chained signed `sys/audit/` trail, `/gateway/audit` verify endpoint, SkillRunner integration; see §Audit trail. **WS3 (crown-jewel) shipped** — opt-in data-at-rest cipher hook, egress allowlist, blast-radius threat model; see §Crown-jewel posture. **Pending:** WS4 generic-OIDC SSO, WS5 hot cert rotation, WS6 doc sweep. Support/SLA is commercial-track (out of engineering scope). |
+| v1.x completion (Production Readiness Gap) | Action plan at [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md). **WS1 (Identity & RBAC) shipped** — signed role claims, provider-side capability authz, OAuth2 gateway ACLs, `sys/` namespace tripwire; see §RBAC / identity. **WS2 (tamper-evident audit) shipped** — per-node hash-chained signed `sys/audit/` trail, `/gateway/audit` verify endpoint, SkillRunner integration; see §Audit trail. **WS3 (crown-jewel) shipped** — opt-in data-at-rest cipher hook, egress allowlist, blast-radius threat model; see §Crown-jewel posture. **WS4 (OIDC SSO) shipped** — generic-OIDC JWT validation at the gateway (alg-confusion-safe), discovery + cached JWKS, groups→scopes; see §RBAC / identity (OIDC SSO) + [`docs/operations/sso.md`](docs/operations/sso.md). **Pending:** WS5 hot cert rotation, WS6 doc sweep. Support/SLA is commercial-track (out of engineering scope). |
 
 **Already shipped (removed from list):** fuzz harness (`fuzz/fuzz_targets/`), SignalHandlers split, ConsensusEngine::propose extraction, locality/topology Phases 0–7, cross-group consensus Phase 8 (`cross_group_propose` + `GroupQuorum`), watcher C2 (`run_consolidated_opacity_watcher` + `FilterOpacityRegistry`), signal reorder buffer (`emit_ordered()` + wire v11 `hlc_seq`), semantic coordination (capability schema versioning `with_schema_id`/`CapFilter::with_schema`, gossip-propagated skill payload schemas `with_input_schema`/`with_output_schema`, signal sender authorization `signal_rx_from`, FIPA-ACL speech act taxonomy — `examples/semantic_coordination.rs`), schema registry (`publish_schema`, `force_publish_schema`, `get_schema`, `list_schemas`, `seed_schemas_from_dir` — `src/agent/schema_ops.rs`), **pre-release arch remediation** (sub-handle facade — `KvHandle`, `MeshHandle`, `SchemaHandle`, `ConsensusHandle`, `ServiceHandle`, `CapabilitiesHandle` — plus `gateway` feature gate for Axum).
 
@@ -497,8 +497,19 @@ Layer I a higher-layer law:
    `gateway_auth_token` resolves to `["*"]`, so single-token deployments upgrade
    with no behaviour change. **M16 edge criterion:** `/health`, `/ready`, `/stats`,
    `/metrics`, and the descriptor path are *not* under `/gateway` and stay public
-   and uncredentialed. This is the WS4-OIDC forward-compat shape — generic OIDC
-   delivers scopes as a JWT claim: same enforcement, different principal source.
+   and uncredentialed.
+
+   **OIDC SSO (WS4, `src/agent/oidc.rs`).** When `GossipConfig::oidc` is set, the
+   middleware tries OIDC *first*: a JWT bearer is validated against the IdP's
+   JWKS and its groups mapped to scopes, which then feed the *same* scope gate —
+   so an OIDC principal is authorized exactly like a scoped token, just
+   signature-authenticated. **Security:** `validate_token` enforces an
+   asymmetric-only algorithm allowlist (RS*/ES*/PS*) *before* key selection and
+   pins verification to the vetted alg — closing JWT alg-confusion (HS256 with
+   the public key as MAC secret → rejected). `iss`/`aud`/`exp` all checked.
+   `OidcVerifier` caches the JWKS (TTL + refresh-on-unknown-kid; discovery via
+   `.well-known/openid-configuration`). Human-operator auth, **not** agent
+   identity. A forged/expired JWT matches no static token → 401.
 
 4. **`sys/` namespace-ownership tripwire (Layer I, core — not compliance-gated).**
    `sys/identity|load|role|tuple/{node}` is owned by `{node}`; only that node
@@ -631,11 +642,12 @@ get found.
   OAuth2 gateway ACLs, and the tamper-evident hash-chained audit trail. **WS1 + WS2
   shipped** (see §RBAC / identity and §Audit trail); **WS3 crown-jewel shipped** but
   feature-free (data-at-rest + egress need no feature — see §Crown-jewel posture);
-  WS4–WS5 in progress per [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md).
-- Lib tests at HEAD: **318** default · **~336** `tls,metrics,a2a,llm` · **349** `compliance`
+  **WS4 OIDC SSO shipped** (gateway JWT validation — see §RBAC / identity); WS5 in
+  progress per [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md).
+- Lib tests at HEAD: **318** default · **~336** `tls,metrics,a2a,llm` · **360** `compliance`
   (full feature matrix); clippy at 0 warnings on each. The `compliance` delta is the WS1
-  RBAC + WS2 audit unit and cross-node integration tests; the core `sys/` tripwire and WS3
-  crown-jewel (data-at-rest + egress) tests are feature-free and in the default count.
+  RBAC + WS2 audit + WS4 OIDC unit and cross-node integration tests; the core `sys/` tripwire
+  and WS3 crown-jewel (data-at-rest + egress) tests are feature-free and in the default count.
 - Wire version is currently **v11** (`PREV_WIRE_VERSION = 10` — rolling upgrade window open).
   v11 adds `hlc_seq: Option<u64>` to `WireMessage::Signal` for ordered delivery via `emit_ordered()`.
   v10 adds `WireMessage::SignedData` for Ed25519-signed KV writes under the `tls` feature.
