@@ -3373,3 +3373,89 @@ async fn test_ws5_rotate_identity_verifies_across_rotation_on_peer() {
     b.shutdown_with_timeout(Duration::from_secs(5)).await;
     let _ = std::fs::remove_dir_all(&cert_dir);
 }
+
+// ── M2 falsification probe (Run 24): concurrent audit chain integrity ─────
+
+/// Probe: many concurrent `audit()` calls on one node must produce a strictly
+/// linear, gap-free, verifiable hash chain — i.e. the per-node chain lock (#8)
+/// serialises seq/prev_hash assignment correctly and the sign-outside-the-lock
+/// optimisation does not corrupt linkage under contention.
+#[cfg(feature = "compliance")]
+#[tokio::test]
+async fn probe_concurrent_audit_chain_is_contiguous_and_verifies() {
+    use crate::config::TlsConfig;
+
+    let port = alloc_port();
+    let id = NodeId::new("127.0.0.1", port).unwrap();
+    let cert_dir = std::env::temp_dir().join(format!("myc-probe-cc-{port}"));
+    let _ = std::fs::remove_dir_all(&cert_dir);
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = port;
+    cfg.tls = Some(TlsConfig { auto_cert_dir: cert_dir.clone(), ..TlsConfig::default() });
+    let a = Arc::new(GossipAgent::new(id.clone(), cfg));
+    a.start().await.unwrap();
+
+    let id_key = format!("sys/identity/{id}");
+    let mut vkb = None;
+    for _ in 0..100 {
+        if let Some(b) = a.kv().get(&id_key) { vkb = Some(b); break; }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let vkb = vkb.expect("identity key");
+    let mut vk = [0u8; 32];
+    vk.copy_from_slice(&vkb[..32]);
+
+    // Fire N concurrent audits.
+    let n = 64u64;
+    let mut handles = Vec::new();
+    for i in 0..n {
+        let a2 = Arc::clone(&a);
+        handles.push(tokio::spawn(async move {
+            a2.audit(
+                crate::AuditAction::Invoke,
+                format!("caller-{i}"),
+                "concurrent",
+                crate::AuditOutcome::Success,
+                None,
+            ).unwrap()
+        }));
+    }
+    let content_hashes: Vec<[u8; 32]> = {
+        let mut v = Vec::new();
+        for h in handles { v.push(h.await.unwrap()); }
+        v
+    };
+    // Every returned content hash is distinct (no two records collided).
+    let mut uniq = content_hashes.clone();
+    uniq.sort();
+    uniq.dedup();
+    assert_eq!(uniq.len(), n as usize, "every concurrent audit produced a distinct record");
+
+    // The stored stream is contiguous 0..N and verifies end-to-end.
+    let mut entries = a.kv().scan_prefix(&crate::audit_stream_prefix(&id));
+    entries.sort_by(|x, y| x.0.cmp(&y.0));
+    let chain: Vec<crate::SignedAuditRecord> = entries
+        .iter()
+        .filter_map(|(_, v)| crate::SignedAuditRecord::decode(v))
+        .collect();
+    assert_eq!(chain.len() as u64, n, "no lost or duplicated seq under contention");
+    for (i, sr) in chain.iter().enumerate() {
+        assert_eq!(sr.record.seq, i as u64, "contiguous seq (no gap/collision)");
+    }
+    assert_eq!(
+        crate::verify_stream_from_genesis(&chain, &id, &vk),
+        Ok(()),
+        "concurrently-built chain verifies"
+    );
+
+    // And tamper-evidence still holds on the concurrent chain.
+    let mut tampered = chain.clone();
+    tampered[n as usize / 2].record.principal = "EVIL".into();
+    assert!(
+        crate::verify_stream_from_genesis(&tampered, &id, &vk).is_err(),
+        "a tampered record in the concurrent chain fails verification"
+    );
+
+    a.shutdown_with_timeout(Duration::from_secs(5)).await;
+    let _ = std::fs::remove_dir_all(&cert_dir);
+}

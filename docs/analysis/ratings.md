@@ -97,6 +97,16 @@ existed. This is the framework's own report card.
   same day (event-driven peer-list publication on insert). Second
   topology-dimension bug in two days: introspective tests never varied
   topology, and anti-entropy healing masked the symptom for KV.
+- 2026-06-14: **Security** scored ≥ 8 across many prior runs while the `tls`
+  transport **could not complete a single handshake** — no rustls
+  `CryptoProvider` was ever installed (crate built `rustls` with
+  `default-features = false, features = ["ring"]`, so the aws-lc-rs auto-install
+  never fired), guaranteeing a panic on the first TLS accept/connect. The `tls`
+  feature had therefore never actually run in-process; prior runs scored it on
+  read + the Ed25519 sign/verify unit tests, which never exercised the rustls
+  path. Found by the WS1 cross-node integration test (first code to stand up the
+  live TLS transport); fixed same day (idempotent `ring` provider install in
+  `build_rustls_configs`). Operational Readiness/Robustness share the miss.
 
 **Dimensions:** Philosophy/Coherence · Conceptual Integrity · Architecture ·
 Modularity · API Design · Error Handling · Configurability · Language Best
@@ -1398,3 +1408,83 @@ calibration-ledger entry (no bug surfaced in a dimension scoring ≥ 8).
 | 25 | Dependency Hygiene | 8 | carried (v21); gateway-free build passed (the `--no-default-features` dep-hygiene requirement holds), Cargo.lock present. **Caveat:** no `cargo audit` this run — and the ledger records advisories previously lurking under a high score here, so this 8 is unverified against the advisory DB this window. `block v0.1.6` future-incompat is a transitive *dev*-dependency (wgpu→objc), not in the production graph |
 | — | **Floor (lowest 3)** | **7, 7, 7** | Concurrency Correctness (#9), Security (#13), Test Architecture (#18) — Test Architecture recovered 6→7 (flake cap resolved); the other two are carried 7s awaiting the 11–15 / next deep-dive rotation. Floor unchanged by the dim-1 bump (1 was not in the lowest 3) |
 | — | Mean (continuity footnote) | 8.1 | not a target; see M2 preamble (8.04→8.08 on the dim-1 8→9 bump) |
+
+## 2026-06-14 — Run 24 (M2)
+
+Deep-dive dimensions this run (by rotation from Run 23): 11 (Semantic
+Correctness), 12 (Robustness), 13 (Security), 14 (Failure Mode Legibility),
+15 (Performance). Also re-examined 6/9/10 — the heavy diff (the entire v1.x
+compliance layer) touched error handling, concurrency, and resource lifecycles.
+Next run by rotation: 16–20.
+
+**Process disclosure.** This session authored the entire diff under evaluation —
+the full v1.x Production Readiness Gap closure across five merged PRs (WS1 RBAC,
+WS2 tamper-evident audit, WS3 crown-jewel data-at-rest + egress, WS4 OIDC SSO,
+WS5 hot cert rotation) plus the two follow-ups (multi-key archival, full egress
+coverage) and the doc-alignment sweep — and is producing this run, so the blind
+rule is compromised as in Runs 17–23. Unlike Run 23 this is **major code**, not
+docs-only. Mitigation: scores moved only on named execution evidence + the new
+falsification probe, and **ledger-aware skepticism was applied** — Security and
+Concurrency were held at 8 *despite* fresh green evidence (see Findings/notes),
+and a new ledger entry was filed for a security gap this very session uncovered
+(the `tls` transport had never run — missing rustls CryptoProvider).
+
+Execution evidence this run: full-matrix lib suite `tls,metrics,a2a,llm`
+**340 passed / 0 failed / 1 ignored** (16.5 s); `compliance` lib suite
+**366 passed / 0 failed / 1 ignored** (16.9 s, includes the new probe); default
+**318** and `tls` **323** (earlier same session); clippy
+`--lib --tests --features compliance -D warnings` **clean**; gateway-free
+`cargo build --lib --no-default-features` **exit 0**; `Cargo.lock` present
+(**427** transitive deps with the full optional-feature set); new probe test
+`probe_concurrent_audit_chain_is_contiguous_and_verifies` **green**.
+
+### Findings
+None. The falsification probe passed (below).
+
+Falsification quota — one new executable probe against the highest-risk *new*
+code (the WS5 audit chain lock), plus two corroborating probe-suites that ran
+green this run:
+- **Concurrency Correctness / Semantic Correctness / Security (the audit chain):**
+  fired **64 concurrent `audit()` calls** on one node and asserted the per-node
+  hash chain is contiguous `0..64`, every content hash distinct, verifies from
+  genesis, and a post-hoc edit still fails verification. **Passed** — the chain
+  lock (#8) serialises seq/prev_hash assignment correctly and the
+  sign-outside-the-lock optimisation does not corrupt linkage under contention.
+  Kept as a regression test (`probe_concurrent_audit_chain_is_contiguous_and_verifies`).
+- **Semantic Correctness (rotation):** the existing chain-spanning-a-rotation +
+  cross-node rotation-verify tests (`chain_spanning_a_key_rotation_verifies_against_the_key_set`,
+  `test_ws5_rotate_identity_verifies_across_rotation_on_peer`) ran green —
+  retained-key verification holds across a key rotation.
+- **Security (OIDC):** the alg-confusion probe (`hs256_alg_confusion_is_rejected`)
+  + iss/aud/exp/unknown-kid rejections ran green — the asymmetric-only allowlist
+  holds. (Carried from this session's authorship, re-executed this run.)
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 8 | v1.x security added with explicit fidelity to the layering litmus: `sys/` tripwire is detection-not-prevention (NOT an `apply_and_notify` guard), RBAC/egress gate *action/admission* never forwarding, roles/audit are signed KV entries that *use* the substrate. Read-only (caps at 8). |
+| 2 | Conceptual Integrity | 8 | New modules (rbac/audit/oidc) mirror existing idioms — `SignedAuditRecord` ↔ `SignedRoleClaim`, `bincode_cfg` encode/decode, cfg-gating like `tls`. Read-only. |
+| 3 | Architecture | 8 | Three-layer separation intact; security features layer on documented prefixes (`sys/role`, `sys/audit`); gateway-free `--no-default-features` build clean (execution evidence of layer separability) but no fresh dep-graph audit → 8. |
+| 4 | Modularity | 8 | Sub-handles independent; compliance code well-isolated. `helpers.rs` now hosts shared key helpers used by 4 verify paths (acceptable util coupling). Read-only. |
+| 5 | API Design | 8 | New surface (advertise_roles/audit/rotate_identity/egress_policy/with_data_at_rest_cipher + OidcConfig/GatewayToken/EgressPolicy) consistent + opt-in + hard-to-misuse (empty egress = allow-all). Read-only. |
+| 6 | Error Handling Model | 8 | Typed: `InvalidField` for tls-required, precise `AuditVerifyError{seq}`, coarse `OidcError` (deliberate — no leak to unauthenticated callers). Error paths exercised green. Minor: best-effort `let _ = kv().set()` swallows (documented, anti-entropy-recoverable) keep it off 9. |
+| 7 | Configurability | 8 | New serializable config (scoped tokens, egress, oidc) cleanly separated from the runtime `DataAtRestCipher` (builder, not config). Read-only. |
+| 8 | Language Best Practices | 9 | clippy `--lib --tests -D warnings` **clean** across default/tls/llm/compliance/CI this run (named execution evidence); no `unwrap()` in new non-test code; ArcSwap/let-chains/`is_multiple_of` idiomatic. |
+| 9 | Concurrency Correctness | 8 | Concurrent-audit probe passed (lock #8 serialises correctly; sign moved outside the lock). Held at 8 **not 9** (ledger-aware): `merge_peer_keys` is a get-modify-insert on papaya **not** using `compute()` — the recurring "lock-free op + unserialised derived effect" family; eventually-consistent via the single-writer watcher re-scan, but technically not retry-safe. Watch-item. |
+| 10 | Resource Management | 8 | New resources bounded: OidcVerifier (one reqwest client + 1-entry TTL JWKS cache, dropped with the server), `audit_chain` Mutex, ArcSwap, cipher OnceLock. No new spawned tasks; probe drives start→use→shutdown. `task_count==0`-after-shutdown not re-probed for new fields → 8. |
+| 11 | Semantic Correctness | 9 | **Deep-dive.** Hash-chain integrity (contiguity + prev_hash + sig), retained-key verify-any across rotation, multi-key archival full-history — all exercised by the 366-test compliance suite + the new concurrent-chain probe, green this run (named execution evidence). LWW/HLC core unchanged. |
+| 12 | Robustness | 8 | **Deep-dive.** Malformed handling: `parse_identity_keys` rejects non-32-multiples (no panic), OIDC handles garbage/unknown-kid/JWKS-fetch-failure (keeps last good key set + warn), egress `permits_url` fail-closed on unparseable host, audit decode is `.ok()`. SignedData fail-open preserved. No fresh malformed-wire-frame probe this run → 8. |
+| 13 | Security | 8 | **Deep-dive.** Signed RBAC (forged role → None), OAuth2 ACLs (deny-by-default, public edge open), OIDC asymmetric-only alg allowlist (alg-confusion rejected, tested), tamper-evident audit (tested incl. concurrent), data-at-rest hook, egress allowlist (now full coverage), retained-key rotation + `sys/` tripwire. Fresh green probes — but held at 8: the **tls-never-ran** gap this session uncovered (now a ledger entry), the documented compromise-rotation caveat (retired keys stay trusted for verification), and the `merge_peer_keys` concern. Honest 8 over a fresh-evidence 9. |
+| 14 | Failure Mode Legibility | 8 | **Deep-dive.** New `sys_namespace_violations` stat + `warn!` (mirrors commit_conflicts), `AuditVerifyError` names the offending seq, egress denials name the policy, rotation warns. Read-only assessment of message quality → 8. |
+| 15 | Performance | 7 | **Deep-dive.** Design is perf-conscious — sign-outside-lock (µs critical section), lock-free ArcSwap on the hot signing/handshake path, verify-any over a tiny key set, cached JWKS — but **no benchmark run this run**; conservative per the evidence gate. |
+| 16 | Scalability | 7 | New documented-unbounded growth surfaces: `sys/audit` (per-node, retention = operator's), `sys/identity` (+32 B/rotation), `peer_keys` retained set. Core scale (100-node) not re-run this run. Conservative. |
+| 17 | Testability | 8 | Security-critical logic isolated as pure functions (verified_roles, validate_token, parse/encode_identity_keys, scope_admits, required_scope) unit-tested without a cluster; in-process mock-IdP/mock-MCP; tls single-node agents. Read-only assessment of the property. |
+| 18 | Test Architecture | 8 | Strong pyramid (pure unit + in-process integration + 13 Docker scenarios + fuzz); probes kept as regression tests. Held at 8 (not 9): an intermittent multi-node timing test flaked twice this session (non-deterministic test = real test-arch wart). |
+| 19 | Observability | 8 | `/gateway/audit` (verify + per-record content_hash), `sys_namespace_violations` on `/stats`, the audit trail itself. Read-only (no live `/metrics` probe this run). |
+| 20 | Debuggability | 8 | Signed who-did-what audit trail + two promise-strength tripwires (`commit_conflicts`, `sys_namespace_violations`) + seq-naming verify errors materially aid debugging. Read-only. |
+| 21 | Operational Readiness | 8 | Five new ops runbooks (rbac/audit/crown-jewel/sso/cert-rotation); hot rotation = zero-downtime ops; opt-in compliance with documented config; CLA/CI workflow fixed. Gateway-free build green. No Docker scenario run this run → 8. |
+| 22 | Evolvability | 8 | Wire stays v11 (new features are KV-namespace/HTTP/config, not wire); `sys/identity` 32→32×N format is back-compatible (32 B still parses); compliance cleanly feature-gated; documented follow-ups now closed. Read-only. |
+| 23 | Documentation | 8 | Heavily updated + audited this run: CLAUDE.md per-WS sections, README §Security Model, guide ch.09 + index, threat model, 5 ops runbooks, presentation deck, ROADMAP — three stale spots (guide index, skillrunner ref, deck counts) found and fixed. Docs not executable → caps at 8. |
+| 24 | Developer Experience | 8 | CLAUDE.md on-ramp updated; clippy clean; one-flag `compliance`; test fixtures provided. Build time not measured this run → 8. |
+| 25 | Dependency Hygiene | 8 | New deps all optional + feature-gated + well-chosen: `sha2` (already transitive via ed25519-dalek), `jsonwebtoken` (uses `ring`, present), `arc-swap` (tiny, ubiquitous). `--no-default-features` builds clean (execution evidence) — default/embedded supply chain unaffected. 427 transitive deps with the full optional set. |
+| — | **Floor (lowest 3)** | **7, 7, 8** | Performance (15), Scalability (16), Concurrency Correctness (9 — the `merge_peer_keys` non-`compute()` watch-item) |
+| — | Mean (continuity footnote) | 8.0 | not a target; see M2 preamble |
