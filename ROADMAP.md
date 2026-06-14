@@ -2552,6 +2552,78 @@ admission), the compliant shape is stated inline rather than assumed.
     without an operator choosing artifacts by name — or once milestone 12 ships and
     name-addressed pulls prove too manual.
 
+16. **NANDA interop — AgentFacts emission + a CRDT AgentFacts update layer, the
+    Mycelium way** — make a Mycelium domain a first-class **sovereign patch** in a
+    NANDA-style agent-discovery quilt (the "Internet of AI Agents" federation: NANDA
+    index + Verified AgentFacts, arXiv 2507.14263, **v0.3 RFC — treat as aspirational
+    and moving**). Two deliverables, one philosophy.
+
+    **Positioning (verified against the paper).** NANDA is a *federated quilt* of
+    registries that holds redirects to sovereign patches it does **not** govern
+    (*"NANDA need not authenticate, authorize and govern all agents"*). Its trust model
+    offers two modes — *issuer-attested* (VC signed by credential authorities + Trust
+    Reputation Scores + federated trust zones) and *self-certified via DID*. Mycelium
+    adopts **self-certified only**: the issuer/TRS authority is a P-axis chokepoint and
+    a coordinator by another name, so it is out of scope by **Core Principle 1**. A
+    domain federates *at the edge* and self-elects whether to publish at all (run-dark
+    is the default — the scale-invariant boundary again).
+
+    **Deliverable A — AgentFacts emission (edge / inter-domain; PULL).** Emit a
+    self-signed AgentFacts document (JSON-LD, Ed25519-signed by the node identity) at
+    the gateway edge, as a superset of the A2A Agent Card Mycelium already serves at
+    `/.well-known/agent.json` (the paper states AgentFacts *"can be viewed as a superset
+    of the Agent Card"*). Most fields already exist in the tree — this is mapping, not
+    new mechanism:
+
+    | AgentFacts field | Existing Mycelium source |
+    |---|---|
+    | `capabilities` / `skills` (+ schemas) | capability `ns`/`name` + `schema_id` + input/output schemas |
+    | `endpoints.adaptive_resolver` (geo / load routing) | `resolve_with_locality` + `signal_wired_via_locality` + emergent groups |
+    | `jurisdiction` / locality | `locality_path` |
+    | `telemetry` / `evaluations` (self-reported) | `/metrics` + `system_stats()` + `sys/load/` opacity pheromones |
+    | `certification` (self-certified) | `tls` Ed25519 node identity + `WireMessage::SignedData` |
+    | endpoint TTLs | capability refresh interval + evaporation convention |
+
+    Expose a TTL-scoped `facts_url` so the inter-domain quilt **pulls** at the boundary.
+
+    **Deliverable B — the CRDT AgentFacts update layer (intra-domain; PUSH).** The NANDA
+    abstract names a *"CRDT-based update protocol"* that the v0.3 body does not deliver —
+    it falls back to whole-document VC + host-at-URL + TTL re-fetch, because
+    **whole-document VC-signing is in tension with field-level CRDT merge** (you cannot
+    merge two independently-signed documents field-by-field and preserve either
+    signature). Mycelium's substrate *is* that missing protocol: **LWW + HLC +
+    anti-entropy** is a convergent, concurrent-safe, decentralised update mechanism, and
+    **per-entry `SignedData`** (not whole-doc) is exactly the precondition that makes
+    field-level merge possible — each AgentFacts field is an independently-signed KV
+    write that LWW-merges by HLC. So intra-domain, gossip per-field-signed AgentFacts
+    into the mesh; concurrent edits converge; late joiners catch up via anti-entropy;
+    freshness is the evaporation convention. **Push internally, pull at the edge.** No
+    new transport — the existing Layer I substrate carrying a new payload shape; the
+    per-entry-signature granularity makes Mycelium *better-suited* to a CRDT AgentFacts
+    than NANDA's own whole-doc VC.
+
+    **Compliance (Core Principles).** Self-certified only (no issuer/TRS authority —
+    Principle 1). Emission is opt-in and boundary-gated — the domain self-elects
+    federation, run-dark by default. The CRDT layer reuses the existing
+    LWW/HLC/anti-entropy substrate (no new mechanism; the fast path is untouched). Ships
+    as a **companion crate** (`mycelium-agentfacts`) on the public API, not core bloat —
+    the same composability proof as `mycelium-tuple-space`.
+
+    **Out of scope / honest gaps.** *Third-party attestation* (issuer-VC + audited
+    `evaluations` + TRS) — deliberately not adopted; it is the coordinator-shaped trust
+    mode. *Requester-privacy* (`PrivateFactsURL` via IPFS/Tor that hides *who is asking*)
+    — no within-mesh analog; a privacy gateway could add it later, out of scope
+    initially. *Agent-to-agent settlement/payment* — absent from NANDA and from this
+    milestone (a separate, still-open agent-stack layer). The paper itself floats
+    renaming AgentFacts → "Agent Metadata Layer / AgentFacts v2"; build against the
+    stable surface (A2A superset, VC signing, TTL) and treat trust-framework specifics
+    as moving.
+
+    **Trigger to start**: a real need to make a domain's agents discoverable across a
+    NANDA-style quilt (or another agent-internet registry), or interop demand from an
+    A2A/NANDA ecosystem partner. Until then the existing A2A edge already covers
+    single-marketplace discovery.
+
 ---
 
 ## Deferred Patterns
