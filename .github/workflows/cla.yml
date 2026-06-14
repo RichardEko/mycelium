@@ -10,6 +10,14 @@ jobs:
   cla:
     name: CLA check
     runs-on: ubuntu-latest
+    # The action needs write access to create the `cla-signatures` branch +
+    # `signatures/cla.json` storage file and to post the sign/confirm comment.
+    # Without this block the default GITHUB_TOKEN is read-only and the action
+    # fails with "Resource not accessible by integration".
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
     if: |
       github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA' ||
       github.event.comment.body == 'recheck' ||
@@ -17,9 +25,12 @@ jobs:
     steps:
       - name: CLA Assistant
         uses: contributor-assistant/github-action@v2.6.1
+        # Use the now-writable GITHUB_TOKEN for both the signatures store and PR
+        # comments — avoids depending on a separately-scoped CLA_TOKEN PAT. (To
+        # store signatures in a *different* repo, restore PERSONAL_ACCESS_TOKEN
+        # with a PAT that has `repo` scope.)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PERSONAL_ACCESS_TOKEN: ${{ secrets.CLA_TOKEN }}
         with:
           path-to-signatures: signatures/cla.json
           path-to-document: https://github.com/${{ github.repository }}/blob/main/CLA.md
