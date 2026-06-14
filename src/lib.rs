@@ -187,6 +187,11 @@ pub use agent::McpClientHandle;
 pub use agent::{PromptTemplate, PromptSkillError, PromptSkillHandle, LlmBackend, LlmResult, LlmError, OpenAiBackend, EchoBackend, LlmHandle};
 #[cfg(feature = "compliance")]
 pub use agent::{role_key, RoleClaim, SignedRoleClaim, ROLE_PREFIX};
+#[cfg(feature = "compliance")]
+pub use agent::{
+    audit_key, audit_stream_prefix, verify_chain, verify_stream_from_genesis,
+    AuditAction, AuditOutcome, AuditRecord, AuditVerifyError, SignedAuditRecord, AUDIT_PREFIX,
+};
 pub use capability::{
     CallerContext, CapConstraint, CapEntry, CapFilter, CapRanking, CapValue, Capability, CapabilityEvent,
     CapabilityGroupDef, CapabilityGroupHandle, CapabilityReg,

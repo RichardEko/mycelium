@@ -40,8 +40,9 @@ a2a = ["gateway"]
 llm = ["gateway"]
 # Compliance layer (v1.x completion — see docs/plans/v1x-completion.md): RBAC /
 # identity roles, gateway endpoint ACLs, tamper-evident audit trail. Implies
-# `gateway` (the auth/audit HTTP surface) + `tls` (signed identity + roles).
-compliance = ["gateway", "tls"]
+# `gateway` (the auth/audit HTTP surface) + `tls` (signed identity + roles) and
+# pulls in `sha2` for the audit hash-chain (already in the tree via ed25519-dalek).
+compliance = ["gateway", "tls", "dep:sha2"]
 
 # The `fuzz/` directory is its own cargo-fuzz crate; keep it out of any
 # implicit-workspace traversal from this parent manifest.
@@ -100,6 +101,10 @@ rcgen          = { version = "0.13", optional = true }
 rustls-pemfile = { version = "2",    optional = true }
 ed25519-dalek  = { version = "2",    features = ["rand_core", "pkcs8"], optional = true }
 rand_core      = { version = "0.6",  features = ["getrandom"],         optional = true }
+
+# Audit hash-chain (optional — enabled by the "compliance" feature). SHA-256 over
+# canonical record bytes; already present transitively via ed25519-dalek.
+sha2           = { version = "0.10", optional = true }
 
 # OTEL (optional — enabled by the "otel" feature, used by skillrunner)
 opentelemetry          = { version = "0.27", optional = true }
