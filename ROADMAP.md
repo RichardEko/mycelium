@@ -2083,6 +2083,27 @@ already in the dep graph via the `llm` feature).
 None of these require architectural changes. The substrate is sound; these are engineering
 completions on top of it.
 
+**v2 (Milestone 16 / NANDA) forward-compatibility — acceptance criteria for the precursor items.**
+Two of the Pending items above are precursors to M16 (NANDA AgentFacts). When implementing them,
+build to the *stable substrate shape*, not NANDA's moving v0.3 surface — **don't foreclose, don't
+pre-build** — and never couple to AgentFacts field/schema names (the spec is churning, incl. a
+possible AgentFacts → "Agent Metadata Layer" rename):
+
+- **Audit trail (gap #7):** preserve a **capability-scoped, content-hashed, externally-citable
+  slice** (a stable per-claim hash). M16's self-certified AgentFacts cites it as `evaluations`
+  provenance — the thing that turns *self-advertised* into *self-attested-with-audit*. Coarse
+  who-wrote-which-key logging that can't be sliced per capability forces a v2 rebuild.
+- **RBAC capability-authz (gap #8):** express "who may assert this capability" as a property of
+  the **signed capability entry** (under the node Ed25519 identity / `SignedData`), not only an
+  HTTP gateway gate — so it is already AgentFacts-shaped.
+- **Edge / bridge auth (crown-jewel sub-gate):** as bearer-token auth is added, keep a
+  **public-readable, signature-verified** path open — AgentFacts is meant to be publicly fetchable
+  and *cryptographically* verified, not token-gated.
+
+SSO / enterprise IdP is **orthogonal** (human operator auth, not agent machine identity) — no
+forward-design required. Because these are signed KV entries under `sys/` namespaces, they are
+forward-compatible by construction: M16 becomes "new keys + a new payload shape," never a schema break.
+
 ---
 
 ## v2.0 Milestones
@@ -2608,6 +2629,14 @@ admission), the compliant shape is stated inline rather than assumed.
     LWW/HLC/anti-entropy substrate (no new mechanism; the fast path is untouched). Ships
     as a **companion crate** (`mycelium-agentfacts`) on the public API, not core bloat —
     the same composability proof as `mycelium-tuple-space`.
+
+    **v1.x precursor dependency.** The credibility of self-certified `evaluations`/`telemetry`
+    rests on the v1.x tamper-evident **audit trail** (Production Readiness gap #7): it backs
+    self-asserted claims with content-hashed provenance — *self-attested-with-audit*, the
+    coordinator-free answer to NANDA's "audited not self-advertised." Capability-assertion authz
+    (gap #8) hardens *who* may assert a capability into the emitted facts. The forward-compatibility
+    acceptance criteria for both live under *Production Readiness Gap → Gap Summary* — build to the
+    stable substrate shape, not this milestone's (moving) AgentFacts surface.
 
     **Out of scope / honest gaps.** *Third-party attestation* (issuer-VC + audited
     `evaluations` + TRS) — deliberately not adopted; it is the coordinator-shaped trust
