@@ -2941,3 +2941,112 @@ async fn test_lifecycle_error_contract_and_task_drain() {
         "start() after shutdown must return Shutdown, got {after:?}"
     );
 }
+
+// ── WS1 RBAC end-to-end (compliance feature) ──────────────────────────────
+
+/// WS1 integration scenario: signed role claims propagate and verify across two
+/// real tls-enabled nodes, and provider-side `caller_authorized` admits/denies
+/// correctly based on the *verified* claim.
+///
+/// This exercises the whole WS1 path the unit tests stub out: A signs a role
+/// claim with its tls identity key; the claim and A's `sys/identity/` key both
+/// gossip to B; B's identity-watcher mirrors A's verifying key into `peer_keys`;
+/// and B's `roles_of(A)` only returns the claim because the signature checks out
+/// against the key B learned from the cluster — never from the (forgeable) KV
+/// entry alone. Detection-not-prevention: a node can write any `sys/role/` bytes,
+/// but only a correctly-signed claim reads back as a role.
+///
+/// Both nodes share one auto-cert dir so they share a CA (mutual trust); a
+/// unique temp dir per run keeps concurrent tests and the default
+/// `./mycelium-tls/` from colliding.
+#[cfg(feature = "compliance")]
+#[tokio::test]
+async fn test_ws1_rbac_signed_roles_propagate_and_authorize_across_nodes() {
+    use crate::config::TlsConfig;
+
+    let port_a = alloc_port();
+    let port_b = alloc_port();
+    let id = |p: u16| NodeId::new("127.0.0.1", p).unwrap();
+    let node_a = id(port_a);
+    let node_b = id(port_b);
+
+    let cert_dir =
+        std::env::temp_dir().join(format!("myc-rbac-{port_a}-{port_b}"));
+    let _ = std::fs::remove_dir_all(&cert_dir); // clean slate if a prior run left files
+
+    let mk = |port: u16, boots: Vec<NodeId>| {
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = port;
+        cfg.bootstrap_peers = boots;
+        cfg.reconnect_backoff_secs = 1;
+        // Fast Pings so peer registration (which happens on Ping receipt) and
+        // anti-entropy converge well inside the poll window.
+        cfg.health_check_interval_secs = 1;
+        cfg.tls = Some(TlsConfig {
+            auto_cert_dir: cert_dir.clone(),
+            ..TlsConfig::default()
+        });
+        GossipAgent::new(id(port), cfg)
+    };
+
+    let a = Arc::new(mk(port_a, vec![]));
+    let b = Arc::new(mk(port_b, vec![node_a.clone()]));
+    a.start().await.unwrap();
+    b.start().await.unwrap();
+
+    // Structural poll: both nodes peered (so identity keys have a path to gossip).
+    let mut peered = false;
+    for _ in 0..200 {
+        if !a.peers().is_empty() && !b.peers().is_empty() {
+            peered = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(peered, "two tls nodes failed to peer within the window");
+
+    // A advertises an admin role at data-clearance 3.
+    a.advertise_roles([Arc::<str>::from("admin")], 3)
+        .expect("advertise_roles must succeed with a tls identity");
+
+    // Structural poll: B verifies A's claim. Returns Some only once (a) the
+    // signed `sys/role/A` entry has gossiped to B AND (b) A's identity key has
+    // reached B's peer_keys so the signature verifies.
+    let mut verified: Option<crate::RoleClaim> = None;
+    for _ in 0..200 {
+        if let Some(claim) = b.roles_of(&node_a) {
+            verified = Some(claim);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let claim = verified.expect("B never verified A's signed role claim");
+    assert!(claim.has_role("admin"), "verified claim must carry the admin role");
+    assert!(claim.clearance_at_least(3), "verified claim must carry clearance 3");
+    assert!(!claim.clearance_at_least(4), "clearance must not over-report");
+
+    // Provider-side authorization on B, keyed on the verified sender (A):
+    let admin_allow:  [Arc<str>; 1] = [Arc::<str>::from("admin")];
+    let writer_allow: [Arc<str>; 1] = [Arc::<str>::from("db-writer")];
+    let node_allow:   [Arc<str>; 1] = [Arc::<str>::from(node_a.to_string())];
+
+    assert!(b.caller_authorized(&node_a, &admin_allow),
+        "A holds the admin role → admitted");
+    assert!(!b.caller_authorized(&node_a, &writer_allow),
+        "A holds no db-writer role → denied");
+    assert!(b.caller_authorized(&node_a, &node_allow),
+        "explicit NodeId allowlist entry → admitted");
+    assert!(b.caller_authorized(&node_a, &[]),
+        "empty allowlist → open");
+
+    // A node with no advertised roles is denied a role-gated capability but
+    // still admitted on an open one.
+    assert!(!b.caller_authorized(&node_b, &admin_allow),
+        "B advertised no roles → denied a role-gated capability");
+    assert!(b.caller_authorized(&node_b, &[]),
+        "B still admitted on an open (empty-allowlist) capability");
+
+    a.shutdown_with_timeout(Duration::from_secs(5)).await;
+    b.shutdown_with_timeout(Duration::from_secs(5)).await;
+    let _ = std::fs::remove_dir_all(&cert_dir);
+}

@@ -195,6 +195,18 @@ mod imp {
     ) -> Result<(ServerConfig, ClientConfig), GossipError> {
         use ed25519_dalek::pkcs8::EncodePrivateKey;
 
+        // rustls 0.23 resolves a *process-level* CryptoProvider when a
+        // ServerConfig/ClientConfig builder runs, and panics if none is set.
+        // We build with `default-features = false, features = ["ring"]`, so the
+        // aws-lc-rs auto-install never happens — we must pin the ring provider
+        // ourselves, exactly once per process. `install_default` returns Err if
+        // a provider is already set (a second agent in the same process, or a
+        // host that installed one first); that is the desired idempotent no-op.
+        static INSTALL_CRYPTO_PROVIDER: std::sync::Once = std::sync::Once::new();
+        INSTALL_CRYPTO_PROVIDER.call_once(|| {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+        });
+
         // Convert signing key to rustls PrivateKeyDer
         let pkcs8 = signing_key
             .to_pkcs8_der()
