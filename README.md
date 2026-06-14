@@ -816,9 +816,10 @@ Two opt-in, feature-free controls for blast-radius containment (see the
   `DataAtRestCipher` over your KMS/keyring — the substrate stays neutral on key custody. Scope is
   on-disk only; the wire is mTLS (`tls`), memory is unencrypted.
 - **Outbound egress allowlist.** `GossipConfig::egress = EgressPolicy { allow_hosts }` constrains
-  which external hosts the substrate may reach (enforced at the MCP client bridge; empty = allow
-  all). A node-local posture, not a coordinator. Other outbound paths (LLM, probes, A2A) are
-  restricted at the network layer today — see the runbook for the coverage table.
+  which external hosts the substrate may reach — enforced at **every outbound path the substrate
+  chooses**: the MCP client bridge, capability probes, and LLM-backend calls (prompt skills +
+  SkillRunner). Empty = allow all. A node-local posture, not a coordinator. (Intra-cluster peer
+  fetches and operator-configured OIDC are not gated; the A2A client is SDK-side — see the runbook.)
 
 ### Hot Identity Rotation (`tls` feature)
 

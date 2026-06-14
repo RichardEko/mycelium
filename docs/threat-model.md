@@ -74,15 +74,17 @@ the audit trail (WS2) records what it did.
 A compromised node with unrestricted outbound reach can exfiltrate twin state to
 an attacker-controlled endpoint, or pull malicious tool definitions.
 
-*Mitigations:* `EgressPolicy.allow_hosts` (WS3) gates outbound at the MCP client
-bridge — the canonical "twin reaches an external tool server" path. Empty = allow
-all (default); set it to fail-closed against unlisted hosts.
+*Mitigations:* `EgressPolicy.allow_hosts` (WS3) gates **every outbound HTTP path
+the substrate chooses to make**: the MCP client bridge, capability probes, and
+LLM-backend calls (core prompt skills + SkillRunner). Empty = allow all (default);
+set it to fail-closed against unlisted hosts.
 
-*Residual & coverage (be honest):* the egress gate currently covers the **MCP
-client bridge** only. **Not yet gated** in code: LLM backend calls (SkillRunner /
-prompt skills), capability HTTP probes, and the A2A client. For those, restrict
-egress at the network layer (firewall / security group / proxy allowlist) — see
-the crown-jewel runbook. Extending the gate to those call sites is tracked work.
+*Residual & coverage (be honest):* not gated in code — and intentionally so:
+intra-cluster **bulk** peer fetches (cluster-internal, not external egress) and
+operator-configured **OIDC JWKS** (auth infra the node must reach). The A2A
+**client** lives in the SDKs (Python/TS), not the substrate; gate it at the SDK
+or network layer. For anything ungated, restrict egress at the network layer
+(firewall / security group / proxy allowlist) — see the crown-jewel runbook.
 
 ---
 

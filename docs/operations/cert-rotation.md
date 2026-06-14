@@ -42,10 +42,10 @@ claims, and the audit chain — tries all keys for the signer. A node's audit
 stream therefore verifies end-to-end even though records before and after a
 rotation are signed by different keys.
 
-- The `current ‖ previous` identity format preserves the immediately-prior key
-  across **one** restart. Rotating more than once between restarts retains only
-  the most recent prior key on disk (the in-memory set keeps all keys seen since
-  start).
+- The `sys/identity/{node}` value stores the **full** key history (`32 × N` bytes:
+  current first, then every prior key), so verification survives **any** number of
+  rotations and restarts — historical records always have their signing key
+  available. The entry grows 32 bytes per rotation (rotations are rare).
 - **Compromise caveat:** a retired key remains *accepted for verification* — good
   for history, but it means rotating away from a **compromised** key does not by
   itself stop the attacker's old signatures from verifying. Compromise response
@@ -57,8 +57,8 @@ rotation are signed by different keys.
 ## 3. Verify a rotation went cleanly
 
 ```bash
-# The identity entry should briefly be 64 bytes (current‖previous) during the
-# window, then settle. Peers' audit verification of this node must stay green:
+# The identity entry grows by one 32-byte key per rotation (current ‖ priors).
+# Peers' audit verification of this node must stay green across the rotation:
 curl -s -H 'Authorization: Bearer <audit-token>' \
      "http://PEER:PORT/gateway/audit?node=<rotated-node>" | jq '.streams[0].verified'
 # → true   (the chain spans the rotation; the peer holds both keys)
@@ -80,5 +80,5 @@ Expectations during/after rotation:
 |---|---|---|
 | `rotate_identity` → `InvalidField { field: "tls" }` | node has no `GossipConfig::tls`, or no cluster CA on disk | enable tls; rotation requires an established CA (`ca-cert.pem` + `ca-key.pem` in `auto_cert_dir`) |
 | peers briefly reject the node's new-key frames | cutover happened before the new key gossiped | increase `propagation`; verification self-heals via anti-entropy once the key arrives |
-| historical `audit_verify` fails after several rotations + a restart | only the most-recent prior key is persisted (64-byte format) | export/verify audit streams before repeated rotations; a multi-key archive is future work |
+| `sys/identity/{node}` entry growing over time | by design — the full key history is retained (32 B/rotation) so old signatures verify | none needed; rotations are rare. If ever a concern, prune keys older than your audit-retention horizon |
 | rotating away from a compromised key, old signatures still verify | retained-key design (option B) | perform explicit revocation (re-issue CA / rebuild trust), not just rotation |

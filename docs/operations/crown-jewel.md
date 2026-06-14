@@ -79,22 +79,22 @@ cfg.egress = mycelium::EgressPolicy {
 - Matching is case-insensitive; `.suffix` matches the bare suffix and any
   subdomain (`.corp.example` matches `corp.example` and `api.corp.example`).
 
-### Coverage — read this carefully
+### Coverage
 
-The gate is currently enforced **only at the MCP client bridge**
-(`connect_mcp_server`). It is **not yet enforced** in code for:
+The gate is enforced at every outbound HTTP path the substrate *chooses* to make:
 
-| Outbound path | Gated in code? | How to restrict today |
+| Outbound path | Gated in code? | Notes |
 |---|:-:|---|
-| MCP client bridge (`connect_mcp_server`) | ✓ `EgressPolicy` | allowlist above |
-| LLM backend calls (SkillRunner / prompt skills) | ✗ | network layer (firewall / egress proxy) |
-| Capability HTTP probes | ✗ | network layer |
-| A2A client | ✗ | network layer |
+| MCP client bridge (`connect_mcp_server`) | ✓ `EgressPolicy` | denied → `Transport("egress denied")` |
+| LLM backend calls (prompt skills) | ✓ `EgressPolicy` | `handle_llm_invoke` → `egress_denied` if the backend endpoint host isn't allowed |
+| LLM backend calls (SkillRunner) | ✓ `EgressPolicy` | gated against the node's `egress_policy()` before the call |
+| Capability HTTP probes | ✓ `EgressPolicy` | a blocked probe URL fails the probe (capability not advertised) |
+| A2A **client** | — | client lives in the SDKs (Python/TS), not the substrate; restrict at the SDK / network layer |
+| Bulk transport peer fetch | n/a | intra-cluster (peer URLs), not external egress — deliberately not gated |
+| OIDC JWKS / discovery | n/a | operator-configured auth infra the node must reach; allowlist the IdP at the network layer if you restrict egress |
 
-For the ungated paths, enforce egress at the **network layer** (firewall rules,
-security groups, an egress proxy with its own allowlist). Extending the in-code
-gate to these call sites is tracked work; until then, treat `EgressPolicy` as
-defence-in-depth for the MCP path, not the sole egress control.
+For the non-gated rows, enforce egress at the **network layer** (firewall rules,
+security groups, an egress proxy with its own allowlist).
 
 ---
 
