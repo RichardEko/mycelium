@@ -497,24 +497,44 @@ pub(crate) async fn kv_delete_async(ctx: &TaskCtx, key: Arc<str>) -> bool {
 // rotating away from a *compromised* key needs explicit revocation on top —
 // it is not automatic. Hygiene rotation is fully covered.
 
-/// Parse a `sys/identity/{node}` value into verifying keys: 32 bytes → one key;
-/// 64 bytes → `current ‖ previous`; any other length → empty.
+/// Parse a `sys/identity/{node}` value into verifying keys: the value is a
+/// concatenation of 32-byte keys (`32 × N`) — the first is the **current** key,
+/// the rest are retained priors (full rotation history, WS5 multi-key archival).
+/// A 32-byte value is the common single-key case; an empty or non-multiple-of-32
+/// value yields no keys.
 #[cfg(feature = "tls")]
 pub(crate) fn parse_identity_keys(bytes: &[u8]) -> Vec<[u8; 32]> {
-    match bytes.len() {
-        32 => <[u8; 32]>::try_from(bytes).map(|k| vec![k]).unwrap_or_default(),
-        64 => {
-            let mut out = Vec::with_capacity(2);
-            if let (Ok(a), Ok(b)) =
-                (<[u8; 32]>::try_from(&bytes[..32]), <[u8; 32]>::try_from(&bytes[32..]))
-            {
-                out.push(a);
-                out.push(b);
-            }
-            out
-        }
-        _ => Vec::new(),
+    if bytes.is_empty() || !bytes.len().is_multiple_of(32) {
+        return Vec::new();
     }
+    bytes
+        .chunks_exact(32)
+        .map(|c| {
+            let mut a = [0u8; 32];
+            a.copy_from_slice(c);
+            a
+        })
+        .collect()
+}
+
+/// Build the durable `sys/identity/{node}` value: `current` first, then every
+/// other previously-published key (deduped, order otherwise preserved) — so the
+/// **full** rotation history is retained on disk and historical signatures stay
+/// verifiable across any number of rotations and restarts (WS5 multi-key
+/// archival). Grows 32 bytes per rotation; rotations are rare operational events.
+#[cfg(feature = "tls")]
+pub(crate) fn encode_identity_history(current: [u8; 32], existing: &[[u8; 32]]) -> Vec<u8> {
+    let mut keys = vec![current];
+    for k in existing {
+        if !keys.contains(k) {
+            keys.push(*k);
+        }
+    }
+    let mut out = Vec::with_capacity(keys.len() * 32);
+    for k in &keys {
+        out.extend_from_slice(k);
+    }
+    out
 }
 
 /// Union `new_keys` into `node`'s retained key set in `peer_keys` (accumulate;
@@ -554,4 +574,46 @@ pub(crate) fn known_verifying_keys(ctx: &TaskCtx, node: &crate::node_id::NodeId)
         }
     }
     keys
+}
+
+#[cfg(all(test, feature = "tls"))]
+mod ws5_identity_key_tests {
+    use super::{encode_identity_history, parse_identity_keys};
+
+    #[test]
+    fn parse_handles_n_keys_and_rejects_bad_lengths() {
+        let a = [1u8; 32];
+        assert_eq!(parse_identity_keys(&a), vec![a]);
+        // empty / non-multiple-of-32 → no keys
+        assert!(parse_identity_keys(&[]).is_empty());
+        assert!(parse_identity_keys(&[0u8; 31]).is_empty());
+        assert!(parse_identity_keys(&[0u8; 65]).is_empty());
+        // 96 bytes → three keys, in order
+        let mut v = Vec::new();
+        v.extend_from_slice(&[1u8; 32]);
+        v.extend_from_slice(&[2u8; 32]);
+        v.extend_from_slice(&[3u8; 32]);
+        assert_eq!(parse_identity_keys(&v), vec![[1u8; 32], [2u8; 32], [3u8; 32]]);
+    }
+
+    #[test]
+    fn encode_puts_current_first_and_dedups() {
+        let (a, b, c) = ([1u8; 32], [2u8; 32], [3u8; 32]);
+        // c is the new current; existing already contains a dup of c plus b, a.
+        let parsed = parse_identity_keys(&encode_identity_history(c, &[b, a, c]));
+        assert_eq!(parsed, vec![c, b, a], "current first, priors retained, no dup");
+    }
+
+    #[test]
+    fn full_history_retained_across_multiple_rotations() {
+        // k1 → rotate to k2 → rotate to k3; every key must persist (WS5 archival).
+        let (k1, k2, k3) = ([10u8; 32], [20u8; 32], [30u8; 32]);
+        let h1 = encode_identity_history(k1, &[]);
+        assert_eq!(parse_identity_keys(&h1), vec![k1]);
+        let h2 = encode_identity_history(k2, &parse_identity_keys(&h1));
+        assert_eq!(parse_identity_keys(&h2), vec![k2, k1]);
+        let h3 = encode_identity_history(k3, &parse_identity_keys(&h2));
+        assert_eq!(parse_identity_keys(&h3), vec![k3, k2, k1],
+            "all three keys retained across two rotations");
+    }
 }

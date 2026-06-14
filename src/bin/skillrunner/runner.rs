@@ -101,6 +101,18 @@ impl SkillRunner {
             }
         };
 
+        // WS3 egress gate: the LLM endpoint is an outbound reach the node chooses.
+        // Honors the node's GossipConfig::egress (empty allowlist = allow all).
+        if !self.agent.egress_policy().permits_url(&self.skill.skill.llm.endpoint) {
+            tracing::warn!(
+                endpoint = %self.skill.skill.llm.endpoint, ns = %ns, name = %name,
+                "skill {ns}/{name}: LLM endpoint blocked by egress policy"
+            );
+            let err = serde_json::json!({"error": "egress denied: LLM endpoint not in egress allowlist"});
+            self.agent.service().rpc_respond(&req, Bytes::from(serde_json::to_vec(&err).unwrap_or_default()));
+            return;
+        }
+
         let tools = self.resolve_tools().await;
         let agent_ref = Arc::clone(&self.agent);
         let llm_cfg = self.skill.skill.llm.clone();

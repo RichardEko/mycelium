@@ -134,27 +134,16 @@ impl GossipAgent {
                 Ok(node_tls) => {
                     let arc_tls = Arc::new(node_tls);
                     // Publish Ed25519 verifying key so peers can verify signed consensus
-                    // messages. If a persisted `sys/identity/{self}` entry from a prior
-                    // run lists a *different* prior key (i.e. we rotated before this
-                    // restart), preserve it as `current‖previous` (WS5) so historical
-                    // records signed by the old key still verify after the restart.
+                    // messages. Preserve the FULL key history from any persisted
+                    // `sys/identity/{self}` entry (WS5 multi-key archival) — `current`
+                    // first, then every prior key — so records signed by an earlier key
+                    // still verify after a restart, across any number of rotations.
                     let vk = arc_tls.verifying_key_bytes();
                     let id_key = format!("sys/identity/{}", self.node_id);
-                    let value = {
-                        let existing = kv_get(&self.task_ctx, &id_key)
-                            .map(|b| super::helpers::parse_identity_keys(&b))
-                            .unwrap_or_default();
-                        let prior = existing.into_iter().find(|k| *k != vk);
-                        match prior {
-                            Some(p) => {
-                                let mut v = Vec::with_capacity(64);
-                                v.extend_from_slice(&vk);
-                                v.extend_from_slice(&p);
-                                Bytes::from(v)
-                            }
-                            None => Bytes::copy_from_slice(&vk),
-                        }
-                    };
+                    let existing = kv_get(&self.task_ctx, &id_key)
+                        .map(|b| super::helpers::parse_identity_keys(&b))
+                        .unwrap_or_default();
+                    let value = Bytes::from(super::helpers::encode_identity_history(vk, &existing));
                     let _ = kv_set(&self.task_ctx, Arc::from(id_key.as_str()), value);
                     let _ = self.task_ctx.tls.set(arc_tls);
                     // Seed peer_keys from any sys/identity/ entries already in the local store.

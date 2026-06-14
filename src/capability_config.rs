@@ -148,8 +148,17 @@ impl CapabilityProbeEntry {
     }
 
     #[cfg(feature = "gateway")]
-    pub(crate) async fn passes_probe(&self, client: &reqwest::Client) -> bool {
+    pub(crate) async fn passes_probe(
+        &self,
+        client: &reqwest::Client,
+        egress: &crate::config::EgressPolicy,
+    ) -> bool {
         let Some(url) = &self.probe_url else { return true };
+        // WS3 egress gate: a probe is an outbound reach the node *chooses*.
+        if !egress.permits_url(url) {
+            tracing::warn!(url = %url, "capability probe blocked by egress policy");
+            return false;
+        }
         client
             .get(url)
             .timeout(Duration::from_secs(self.probe_timeout_secs))
@@ -234,7 +243,7 @@ pub async fn run_capability_probes<F>(
     // ── Initial probe pass ────────────────────────────────────────────────────
     if !pause_flag.load(Ordering::Relaxed) {
         for (i, entry) in config.capabilities.iter().enumerate() {
-            if entry.passes_probe(&client).await {
+            if entry.passes_probe(&client, agent.egress_policy()).await {
                 handles[i] = Some(agent.capabilities().advertise_capability(
                     entry.build_capability(),
                     Duration::from_secs(entry.ttl_secs),
@@ -277,7 +286,7 @@ pub async fn run_capability_probes<F>(
 
         for (i, entry) in config.capabilities.iter().enumerate() {
             let was_up = handles[i].is_some();
-            let is_up  = entry.passes_probe(&client).await;
+            let is_up  = entry.passes_probe(&client, agent.egress_policy()).await;
 
             match (was_up, is_up) {
                 (true, false) => {
