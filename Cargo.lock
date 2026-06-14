@@ -1930,7 +1930,7 @@ dependencies = [
 
 [[package]]
 name = "mycelium"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "ahash",
  "arc-swap",
