@@ -778,6 +778,24 @@ impl GossipAgent {
         }
         self.task_ctx.peer_keys.pin().get(node).copied()
     }
+
+    /// Provider-side authorization check: may the (verified) `sender` invoke a
+    /// capability whose `authorized_callers` allowlist is `allow`? Empty `allow`
+    /// ⇒ unrestricted; otherwise admits if `sender`'s NodeId is listed or it holds
+    /// a listed role (verified via [`roles_of`](Self::roles_of)).
+    ///
+    /// **Identity-bound:** under the `tls` identity, an incoming RPC/invoke frame's
+    /// sender is signature-verified at the connection layer, so `request.sender()`
+    /// is a trustworthy input. Call this in a provider's `rpc_rx` serve loop before
+    /// honoring an invocation — `authorized_callers` is only *enforced* where the
+    /// provider serves, never at the caller's resolve (which the caller controls).
+    pub fn caller_authorized(&self, sender: &NodeId, allow: &[Arc<str>]) -> bool {
+        if allow.is_empty() {
+            return true;
+        }
+        let roles = self.roles_of(sender).map(|c| c.roles).unwrap_or_default();
+        rbac::caller_admitted(allow, sender, &roles)
+    }
 }
 
 /// Sends the shutdown signal on drop — best-effort only. Does not wait for
@@ -815,5 +833,19 @@ mod rbac_agent_tests {
         assert!(matches!(err, crate::error::GossipError::InvalidField { field: "tls", .. }));
         // Nothing written, so nothing verifies back.
         assert!(agent.roles_of(&node).is_none());
+    }
+
+    #[test]
+    fn caller_authorized_open_nodeid_and_roleless() {
+        let node = NodeId::new("127.0.0.1", 7401).unwrap();
+        let agent = GossipAgent::new(node, GossipConfig::default());
+        let caller = NodeId::new("10.0.0.5", 8000).unwrap();
+        let caller_str: Arc<str> = caller.to_string().into();
+        // Empty allowlist → open.
+        assert!(agent.caller_authorized(&caller, &[]));
+        // Caller has no advertised/verified roles → role entries do not admit.
+        assert!(!agent.caller_authorized(&caller, &["orchestrator".into()]));
+        // Explicit NodeId entry admits.
+        assert!(agent.caller_authorized(&caller, &[caller_str]));
     }
 }

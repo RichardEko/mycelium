@@ -141,6 +141,29 @@ pub(crate) fn verified_roles(
     Some(signed.claim)
 }
 
+/// Provider-side authorization decision: may a caller with verified id
+/// `caller_node` and verified roles `caller_roles` invoke a capability whose
+/// `authorized_callers` allowlist is `allow`?
+///
+/// - Empty `allow` ⇒ unrestricted (admit).
+/// - Otherwise admit iff the caller's NodeId string is listed, **or** the caller
+///   holds a role that is listed. Allowlist entries may name either node ids or
+///   role names, so a capability can be opened to "any node holding role X" or to
+///   "exactly node Y".
+pub(crate) fn caller_admitted(
+    allow: &[Arc<str>],
+    caller_node: &NodeId,
+    caller_roles: &[Arc<str>],
+) -> bool {
+    if allow.is_empty() {
+        return true;
+    }
+    let node_str = caller_node.to_string();
+    allow.iter().any(|entry| {
+        entry.as_ref() == node_str || caller_roles.iter().any(|r| r.as_ref() == entry.as_ref())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,5 +260,23 @@ mod tests {
         assert!(verified_roles(&forged, &node(), &vk).is_none(), "wrong-key signature rejected");
         // Garbage decodes to None, never panics.
         assert!(verified_roles(b"not a signed claim", &node(), &vk).is_none());
+    }
+
+    #[test]
+    fn caller_admitted_by_node_role_and_open() {
+        let caller = node();
+        let node_str: Arc<str> = caller.to_string().into();
+        // Empty allowlist = unrestricted.
+        assert!(caller_admitted(&[], &caller, &[]));
+        // Listed neither by node id nor by a held role → denied.
+        assert!(!caller_admitted(&["orchestrator".into()], &caller, &[]));
+        // Admitted by a held role.
+        assert!(caller_admitted(&["orchestrator".into()], &caller, &["orchestrator".into()]));
+        // Admitted by explicit node id.
+        assert!(caller_admitted(&[node_str], &caller, &[]));
+        // Role match within a mixed allowlist.
+        assert!(caller_admitted(&["planner".into(), "writer".into()], &caller, &["writer".into()]));
+        // Holding a different role is not enough.
+        assert!(!caller_admitted(&["planner".into()], &caller, &["reader".into()]));
     }
 }
