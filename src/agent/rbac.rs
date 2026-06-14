@@ -120,6 +120,27 @@ impl SignedRoleClaim {
     }
 }
 
+/// Read-path verification for a `sys/role/{node}` value: decode it, confirm the
+/// claim is bound to `expected_node` (the slot owner), and verify the signature
+/// against that node's `verifying_key`. Returns the claim only if all three hold;
+/// a forged, mis-attributed, or garbage value yields `None` — detection, not
+/// prevention. This is the single security-critical read primitive; the agent's
+/// `roles_of` is thin glue over it.
+pub(crate) fn verified_roles(
+    signed_bytes: &[u8],
+    expected_node: &NodeId,
+    verifying_key: &[u8; 32],
+) -> Option<RoleClaim> {
+    let signed = SignedRoleClaim::decode(signed_bytes)?;
+    if &signed.claim.node_id != expected_node {
+        return None; // a claim found at sys/role/{X} must be a claim *for* X
+    }
+    if !signed.verify(verifying_key) {
+        return None;
+    }
+    Some(signed.claim)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,5 +202,40 @@ mod tests {
     fn role_key_uses_sys_role_prefix() {
         assert_eq!(role_key(&node()), format!("sys/role/{}", node()));
         assert!(role_key(&node()).starts_with(ROLE_PREFIX));
+    }
+
+    #[test]
+    fn verified_roles_accepts_valid_claim() {
+        let sk = key(7);
+        let vk = sk.verifying_key().to_bytes();
+        let bytes =
+            SignedRoleClaim::sign(RoleClaim::new(node(), ["admin".into()], 3, 1), &sk).encode();
+        let got = verified_roles(&bytes, &node(), &vk).expect("valid claim must verify");
+        assert!(got.has_role("admin") && got.clearance_at_least(3));
+    }
+
+    #[test]
+    fn verified_roles_rejects_node_mismatch() {
+        // A validly-signed claim for node() planted under a *different* node's slot.
+        let sk = key(7);
+        let vk = sk.verifying_key().to_bytes();
+        let bytes =
+            SignedRoleClaim::sign(RoleClaim::new(node(), ["admin".into()], 3, 1), &sk).encode();
+        let other = NodeId::new("127.0.0.1", 7001).unwrap();
+        assert!(
+            verified_roles(&bytes, &other, &vk).is_none(),
+            "a claim must be bound to its slot's node id"
+        );
+    }
+
+    #[test]
+    fn verified_roles_rejects_bad_signature_and_garbage() {
+        let vk = key(7).verifying_key().to_bytes();
+        // Forged by a different key.
+        let forged =
+            SignedRoleClaim::sign(RoleClaim::new(node(), ["admin".into()], 3, 1), &key(9)).encode();
+        assert!(verified_roles(&forged, &node(), &vk).is_none(), "wrong-key signature rejected");
+        // Garbage decodes to None, never panics.
+        assert!(verified_roles(b"not a signed claim", &node(), &vk).is_none());
     }
 }

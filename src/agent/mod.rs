@@ -727,6 +727,59 @@ impl GossipAgent {
     }
 }
 
+/// RBAC — signed node-role advertisement + verified read (WS1; `compliance` feature).
+#[cfg(feature = "compliance")]
+impl GossipAgent {
+    /// Advertise this node's roles + data-classification clearance as a signed
+    /// claim at `sys/role/{node}`. Requires the `tls` identity (roles are
+    /// Ed25519-signed); returns [`GossipError::InvalidField`] if `GossipConfig::tls`
+    /// was not set.
+    ///
+    /// One-shot write — the signed claim persists and anti-entropy-syncs like any
+    /// KV entry; re-call to update. (Periodic re-advertisement / evaporation is a
+    /// later refinement.)
+    pub fn advertise_roles(
+        &self,
+        roles: impl IntoIterator<Item = Arc<str>>,
+        clearance: u8,
+    ) -> Result<(), crate::error::GossipError> {
+        let tls = self.task_ctx.tls.get().ok_or(crate::error::GossipError::InvalidField {
+            field:  "tls",
+            reason: "role advertisement requires the tls identity (set GossipConfig::tls)".into(),
+        })?;
+        let issued_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let claim  = rbac::RoleClaim::new(self.node_id.clone(), roles, clearance, issued_at_ms);
+        let signed = rbac::SignedRoleClaim::sign(claim, &tls.signing_key);
+        // Local + WAL write is guaranteed; a `false` here only means this gossip
+        // tick's channel was full — the entry still anti-entropy-syncs and a
+        // re-advertise retries, so a dropped dispatch is not an error.
+        let _ = self.kv().set(rbac::role_key(&self.node_id), signed.encode());
+        Ok(())
+    }
+
+    /// Read and **verify** `node`'s role claim. Returns the claim only if its
+    /// signature checks out against `node`'s identity key (from `peer_keys`, or
+    /// this node's own key when `node` is self). A forged or mis-attributed
+    /// `sys/role/` write reads back as `None` — detection, not prevention.
+    pub fn roles_of(&self, node: &NodeId) -> Option<rbac::RoleClaim> {
+        let bytes = self.kv().get(&rbac::role_key(node))?;
+        let vk    = self.verifying_key_for(node)?;
+        rbac::verified_roles(&bytes, node, &vk)
+    }
+
+    /// 32-byte Ed25519 verifying key for `node`: this node's own key when `node`
+    /// is self, otherwise the key gossiped to `peer_keys` (from `sys/identity/`).
+    fn verifying_key_for(&self, node: &NodeId) -> Option<[u8; 32]> {
+        if node == &self.node_id {
+            return self.task_ctx.tls.get().map(|t| t.signing_key.verifying_key().to_bytes());
+        }
+        self.task_ctx.peer_keys.pin().get(node).copied()
+    }
+}
+
 /// Sends the shutdown signal on drop — best-effort only. Does not wait for
 /// background tasks to exit. Call [`shutdown`](GossipAgent::shutdown) or
 /// [`shutdown_with_timeout`](GossipAgent::shutdown_with_timeout) before
@@ -745,5 +798,22 @@ impl std::fmt::Debug for GossipAgent {
             .field("peers", &self.peers.len())
             .field("store_entries", &self.kv_state.store.len())
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(all(test, feature = "compliance"))]
+mod rbac_agent_tests {
+    use super::*;
+    use crate::config::GossipConfig;
+
+    #[test]
+    fn advertise_roles_requires_tls_identity() {
+        let node = NodeId::new("127.0.0.1", 7400).unwrap();
+        let agent = GossipAgent::new(node.clone(), GossipConfig::default());
+        // No tls configured → cannot sign → typed error, never a panic.
+        let err = agent.advertise_roles(["admin".into()], 3).unwrap_err();
+        assert!(matches!(err, crate::error::GossipError::InvalidField { field: "tls", .. }));
+        // Nothing written, so nothing verifies back.
+        assert!(agent.roles_of(&node).is_none());
     }
 }
