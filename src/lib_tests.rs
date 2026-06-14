@@ -131,6 +131,8 @@ fn spawn_handler(
         rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         commit_conflicts: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         sys_namespace_violations: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        #[cfg(feature = "compliance")]
+        audit_chain: Arc::new(std::sync::Mutex::new(crate::agent::audit::AuditChainState::new())),
         tls: std::sync::OnceLock::new(),
         peer_keys: Arc::new(papaya::HashMap::new()),
         peers: Arc::new(papaya::HashMap::new()),
@@ -536,6 +538,8 @@ async fn test_subscribe_notified_via_gossip() {
             rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             commit_conflicts: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             sys_namespace_violations: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            #[cfg(feature = "compliance")]
+            audit_chain: Arc::new(std::sync::Mutex::new(crate::agent::audit::AuditChainState::new())),
             tls: std::sync::OnceLock::new(),
             peer_keys: Arc::new(papaya::HashMap::new()),
             peers: Arc::new(papaya::HashMap::new()),
@@ -3110,4 +3114,72 @@ async fn test_sys_namespace_tripwire_flags_foreign_self_owned_write() {
 
     a.shutdown_with_timeout(Duration::from_secs(5)).await;
     b.shutdown_with_timeout(Duration::from_secs(5)).await;
+}
+
+// ── WS2 audit trail — agent-level writer + chain verification ─────────────
+
+/// WS2 increment 2: a node seals events into its own hash-chained audit stream
+/// and the stream verifies end-to-end against the node's identity key — and a
+/// post-hoc edit to any stored record breaks verification (the tamper probe).
+#[cfg(feature = "compliance")]
+#[tokio::test]
+async fn test_ws2_audit_chain_writes_and_verifies_on_a_node() {
+    use crate::config::TlsConfig;
+    use crate::{
+        audit_stream_prefix, verify_stream_from_genesis, AuditAction, AuditOutcome,
+        SignedAuditRecord,
+    };
+
+    let port = alloc_port();
+    let id = NodeId::new("127.0.0.1", port).unwrap();
+    let cert_dir = std::env::temp_dir().join(format!("myc-audit-{port}"));
+    let _ = std::fs::remove_dir_all(&cert_dir);
+
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = port;
+    cfg.tls = Some(TlsConfig { auto_cert_dir: cert_dir.clone(), ..TlsConfig::default() });
+    let a = Arc::new(GossipAgent::new(id.clone(), cfg));
+    a.start().await.unwrap();
+
+    // Structural poll: the tls identity key lands at sys/identity/{self}.
+    let id_key = format!("sys/identity/{id}");
+    let mut vk_bytes = None;
+    for _ in 0..100 {
+        if let Some(b) = a.kv().get(&id_key) {
+            vk_bytes = Some(b);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let vk_bytes = vk_bytes.expect("node identity key never written");
+    assert_eq!(vk_bytes.len(), 32);
+    let mut vk = [0u8; 32];
+    vk.copy_from_slice(&vk_bytes);
+
+    // Seal three events; content hashes must be distinct.
+    let h0 = a.audit(AuditAction::Invoke, "10.0.0.1:9000", "skill/a", AuditOutcome::Success, None).unwrap();
+    let h1 = a.audit(AuditAction::Read, "10.0.0.2:9000", "kv/secret", AuditOutcome::Denied, Some("scope".into())).unwrap();
+    let _h2 = a.audit(AuditAction::Write, "10.0.0.1:9000", "kv/x", AuditOutcome::Success, None).unwrap();
+    assert_ne!(h0, h1, "distinct events have distinct content hashes");
+
+    // Collect the stream, order by key (lexicographic = seq order), decode.
+    let mut entries = a.kv().scan_prefix(&audit_stream_prefix(&id));
+    entries.sort_by(|x, y| x.0.cmp(&y.0));
+    let chain: Vec<SignedAuditRecord> = entries
+        .iter()
+        .map(|(_, v)| SignedAuditRecord::decode(v).expect("decode audit record"))
+        .collect();
+    assert_eq!(chain.len(), 3, "all three sealed records are present");
+    assert_eq!(verify_stream_from_genesis(&chain, &id, &vk), Ok(()), "honest chain verifies");
+
+    // Tamper probe: flip a stored record's outcome → verification must fail.
+    let mut tampered = chain.clone();
+    tampered[1].record.outcome = AuditOutcome::Success;
+    assert!(
+        verify_stream_from_genesis(&tampered, &id, &vk).is_err(),
+        "a post-hoc edit must break chain verification"
+    );
+
+    a.shutdown_with_timeout(Duration::from_secs(5)).await;
+    let _ = std::fs::remove_dir_all(&cert_dir);
 }

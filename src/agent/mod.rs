@@ -57,7 +57,7 @@ mod mcp_handle;
 #[cfg(feature = "compliance")]
 mod rbac;
 #[cfg(feature = "compliance")]
-mod audit;
+pub(crate) mod audit;
 
 #[allow(unused_imports)]
 pub(crate) use bulk::BulkTransport;
@@ -330,6 +330,12 @@ pub(crate) struct TaskCtx {
     /// handler's inbound-apply tripwire when a remote write targets a `sys/`
     /// key this node owns; Relaxed ordering — purely diagnostic.
     pub(crate) sys_namespace_violations: Arc<AtomicU64>,
+
+    /// Head of this node's tamper-evident audit chain (WS2). `audit()` seals a
+    /// record under this lock so the per-node chain stays linear, then releases
+    /// it before writing to KV. Lock #8 in the lock-order table (leaf).
+    #[cfg(feature = "compliance")]
+    pub(crate) audit_chain: Arc<std::sync::Mutex<audit::AuditChainState>>,
 
     // ── Security ─────────────────────────────────────────────────────────────────
     /// TLS context (server + client configs + signing key). Unset when the
@@ -634,6 +640,8 @@ impl GossipAgent {
             rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             commit_conflicts: Arc::new(AtomicU64::new(0)),
             sys_namespace_violations: Arc::new(AtomicU64::new(0)),
+            #[cfg(feature = "compliance")]
+            audit_chain: Arc::new(std::sync::Mutex::new(audit::AuditChainState::new())),
             tls: std::sync::OnceLock::new(),
             peer_keys: Arc::new(papaya::HashMap::new()),
             peers: Arc::clone(&peers_arc),
@@ -822,6 +830,61 @@ impl GossipAgent {
         }
         let roles = self.roles_of(sender).map(|c| c.roles).unwrap_or_default();
         rbac::caller_admitted(allow, sender, &roles)
+    }
+
+    /// Seal one event into this node's tamper-evident audit chain (WS2) and write
+    /// it to `sys/audit/{self}/{seq}`. Returns the record's content hash — the
+    /// stable, citable identifier of the sealed event.
+    ///
+    /// Requires the `tls` identity (records are Ed25519-signed); a node without
+    /// `GossipConfig::tls` returns [`GossipError::InvalidField`]. The chain head is
+    /// advanced under a short lock that is released **before** the KV write, so no
+    /// two lock-order-table locks are ever held together (the write itself takes
+    /// the leaf index-stripe lock inside `apply_and_notify`).
+    ///
+    /// Detection-not-prevention: the record is a normal signed KV entry that
+    /// gossips to the cluster; tampering is caught by [`verify_chain`](crate::verify_chain),
+    /// never blocked at the store.
+    pub fn audit(
+        &self,
+        action: audit::AuditAction,
+        principal: impl Into<String>,
+        target: impl Into<String>,
+        outcome: audit::AuditOutcome,
+        detail: Option<String>,
+    ) -> Result<[u8; 32], crate::error::GossipError> {
+        let tls = self.task_ctx.tls.get().ok_or(crate::error::GossipError::InvalidField {
+            field:  "tls",
+            reason: "audit records require the tls identity (set GossipConfig::tls)".into(),
+        })?;
+        let hlc = self.task_ctx.hlc.tick();
+
+        // Seal under the chain lock, then release before touching KV.
+        let (signed, key, content) = {
+            let mut guard = self.task_ctx.audit_chain.lock().unwrap_or_else(|e| e.into_inner());
+            let seq = guard.next_seq;
+            let record = audit::AuditRecord {
+                node_id:   self.node_id.clone(),
+                seq,
+                hlc,
+                principal: principal.into(),
+                action,
+                target:    target.into(),
+                outcome,
+                detail,
+                prev_hash: guard.last_hash,
+            };
+            let content = record.content_hash();
+            let signed  = audit::SignedAuditRecord::sign(record, &tls.signing_key);
+            guard.next_seq  = seq + 1;
+            guard.last_hash = content;
+            (signed, audit::audit_key(&self.node_id, seq), content)
+        };
+
+        // Local + WAL write is guaranteed; a dropped gossip dispatch (channel full)
+        // still anti-entropy-syncs, so a `false` here is not an error.
+        let _ = self.kv().set(key, signed.encode());
+        Ok(content)
     }
 }
 

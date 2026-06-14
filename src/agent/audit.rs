@@ -39,6 +39,25 @@ pub fn audit_stream_prefix(node: &NodeId) -> String {
     format!("{AUDIT_PREFIX}{node}/")
 }
 
+/// In-memory head of this node's audit chain. Held behind a `Mutex` so record
+/// sealing is serialised and the per-node chain stays strictly linear (each
+/// record's `prev_hash` is the previous record's content hash). Lock #8 in the
+/// CLAUDE.md lock-order table — a leaf lock, released before any KV write so no
+/// two table locks are ever held together.
+#[derive(Debug)]
+pub(crate) struct AuditChainState {
+    /// Sequence number to assign to the next record (genesis = 0).
+    pub(crate) next_seq: u64,
+    /// Content hash of the most recently sealed record (zero before genesis).
+    pub(crate) last_hash: [u8; 32],
+}
+
+impl AuditChainState {
+    pub(crate) fn new() -> Self {
+        Self { next_seq: 0, last_hash: [0u8; 32] }
+    }
+}
+
 /// The kind of event recorded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AuditAction {
