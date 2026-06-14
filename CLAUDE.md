@@ -85,7 +85,7 @@ These are real work items. Anyone resuming should read
 |---|---|
 | TupleSpace companion crate | **Shipped** (2026-06-11) as workspace member `mycelium-tuple-space/` — all 5 phases of [`docs/plans/mycelium-tuple-space.md`](docs/plans/mycelium-tuple-space.md). See §TupleSpace companion crate below. |
 | Pre-release arch remediation | **Complete.** All 9 steps done — plan at `~/.claude/plans/humble-twirling-comet.md`. |
-| v1.x completion (Production Readiness Gap) | Action plan at [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md). **WS1 (Identity & RBAC) shipped** — signed role claims, provider-side capability authz, OAuth2 gateway ACLs, `sys/` namespace tripwire; see §RBAC / identity. **WS2 (tamper-evident audit) shipped** — per-node hash-chained signed `sys/audit/` trail, `/gateway/audit` verify endpoint, SkillRunner integration; see §Audit trail. **Pending:** WS3 crown-jewel encryption hooks, WS4 generic-OIDC SSO, WS5 hot cert rotation, WS6 doc sweep. Support/SLA is commercial-track (out of engineering scope). |
+| v1.x completion (Production Readiness Gap) | Action plan at [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md). **WS1 (Identity & RBAC) shipped** — signed role claims, provider-side capability authz, OAuth2 gateway ACLs, `sys/` namespace tripwire; see §RBAC / identity. **WS2 (tamper-evident audit) shipped** — per-node hash-chained signed `sys/audit/` trail, `/gateway/audit` verify endpoint, SkillRunner integration; see §Audit trail. **WS3 (crown-jewel) shipped** — opt-in data-at-rest cipher hook, egress allowlist, blast-radius threat model; see §Crown-jewel posture. **Pending:** WS4 generic-OIDC SSO, WS5 hot cert rotation, WS6 doc sweep. Support/SLA is commercial-track (out of engineering scope). |
 
 **Already shipped (removed from list):** fuzz harness (`fuzz/fuzz_targets/`), SignalHandlers split, ConsensusEngine::propose extraction, locality/topology Phases 0–7, cross-group consensus Phase 8 (`cross_group_propose` + `GroupQuorum`), watcher C2 (`run_consolidated_opacity_watcher` + `FilterOpacityRegistry`), signal reorder buffer (`emit_ordered()` + wire v11 `hlc_seq`), semantic coordination (capability schema versioning `with_schema_id`/`CapFilter::with_schema`, gossip-propagated skill payload schemas `with_input_schema`/`with_output_schema`, signal sender authorization `signal_rx_from`, FIPA-ACL speech act taxonomy — `examples/semantic_coordination.rs`), schema registry (`publish_schema`, `force_publish_schema`, `get_schema`, `list_schemas`, `seed_schemas_from_dir` — `src/agent/schema_ops.rs`), **pre-release arch remediation** (sub-handle facade — `KvHandle`, `MeshHandle`, `SchemaHandle`, `ConsensusHandle`, `ServiceHandle`, `CapabilitiesHandle` — plus `gateway` feature gate for Axum).
 
@@ -554,6 +554,32 @@ Tamper-evident, signed, hash-chained audit trail. Core in
 `src/agent/http.rs::test_gateway_audit_endpoint_verifies_and_scope_gates`, and the
 10 `audit::tests` chain/tamper unit tests.
 
+### Crown-jewel posture (data-at-rest + egress) — WS3
+
+Two **feature-free, opt-in** blast-radius controls (no cargo feature; zero
+overhead when unused). Threat model: [`docs/threat-model.md`](docs/threat-model.md);
+runbook: [`docs/operations/crown-jewel.md`](docs/operations/crown-jewel.md).
+
+- **Data-at-rest hook.** `DataAtRestCipher` trait (`src/persistence.rs`,
+  re-exported at crate root) + `GossipAgent::with_data_at_rest_cipher` (set once,
+  `OnceLock`, before `start`). Applied at the four on-disk boundaries — WAL append
+  (encrypt), WAL replay (decrypt; failure = corrupt tail, stop), snapshot write
+  (encrypt), snapshot read (decrypt; failure = skip). The length prefix frames the
+  ciphertext. Substrate is neutral on key custody (operator wraps a KMS); scope is
+  **on-disk only** (wire = `tls`, memory = plaintext). Decrypt failure reuses the
+  existing corrupt-record path — no new failure mode.
+- **Egress allowlist.** `EgressPolicy { allow_hosts }` in `GossipConfig`
+  (serializable, default empty = allow-all). `permits_host` (exact + `.suffix`
+  subdomain, case-insensitive) / `permits_url` (fail-closed on unparseable host).
+  Enforced **only at the MCP client bridge** (`connect_mcp_server`) today; LLM /
+  probe / A2A egress is network-layer operator responsibility (documented coverage
+  table in the runbook + threat model). A node-local posture, not a coordinator.
+
+**Gates:** `src/lib_tests.rs::test_ws3_data_at_rest_cipher_encrypts_wal_and_round_trips`
+(default feature set — on-disk plaintext absence, same-key recovery, wrong-key
+rejection), the `config::tests::egress_*` gate unit tests, and
+`src/agent/mcp.rs::test_mcp_egress_policy_denies_disallowed_host`.
+
 ### Testing conventions
 
 **Always run the full feature matrix locally before pushing.**
@@ -603,12 +629,13 @@ get found.
 - `cargo build --lib --features llm` to include the Prompt Skills LLM adapter
 - `cargo build --lib --features compliance` to include RBAC / signed identity roles,
   OAuth2 gateway ACLs, and the tamper-evident hash-chained audit trail. **WS1 + WS2
-  shipped** (see §RBAC / identity and §Audit trail); WS3–WS5 in progress per
-  [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md).
-- Lib tests at HEAD: **312** default · **330** `tls,metrics,a2a,llm` · **343** `compliance`
+  shipped** (see §RBAC / identity and §Audit trail); **WS3 crown-jewel shipped** but
+  feature-free (data-at-rest + egress need no feature — see §Crown-jewel posture);
+  WS4–WS5 in progress per [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md).
+- Lib tests at HEAD: **318** default · **~336** `tls,metrics,a2a,llm` · **349** `compliance`
   (full feature matrix); clippy at 0 warnings on each. The `compliance` delta is the WS1
-  RBAC + WS2 audit unit and cross-node integration tests; the core `sys/` tripwire tests
-  are in the default count.
+  RBAC + WS2 audit unit and cross-node integration tests; the core `sys/` tripwire and WS3
+  crown-jewel (data-at-rest + egress) tests are feature-free and in the default count.
 - Wire version is currently **v11** (`PREV_WIRE_VERSION = 10` — rolling upgrade window open).
   v11 adds `hlc_seq: Option<u64>` to `WireMessage::Signal` for ordered delivery via `emit_ordered()`.
   v10 adds `WireMessage::SignedData` for Ed25519-signed KV writes under the `tls` feature.

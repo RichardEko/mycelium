@@ -1922,26 +1922,27 @@ must be data-classification-aware.
   (waits on WS4 OIDC for real user principals); chain retention/compaction with
   checkpoint hashes (pruning a hash chain otherwise breaks genesis verification).
 
-**3. Crown-jewel posture.** *This is the sharpest of the four, and the one
-that turns a generic "is it secure" conversation into a specific
+**3. Crown-jewel posture.** *Shipped (WS3).* *This is the sharpest of the four,
+and the one that turns a generic "is it secure" conversation into a specific
 blast-radius conversation that regulated buyers actually evaluate.* The twin
 is the concentrated map of every SPOF and critical path in the deployment;
 compromising it gives an attacker the complete dependency graph, the failure
-modes, and the escalation paths. This sub-gate is **new work** — no existing
-v1.x gap covers it.
+modes, and the escalation paths.
 
-- *Data-at-rest:* the substrate provides wire-level mTLS but no disk
-  encryption. Deployers' responsibility today; a Mycelium-side recommendation
-  document is needed, plus optional integration hooks for envelope-encrypted
-  KV bytes at rest.
-- *Tier-2 egress boundary:* explicit policy on what the twin can reach
-  outbound. A compromised twin with unrestricted egress is the worst-case
-  data-exfiltration vector. Needs a documented egress posture, ideally
-  configuration hooks that allow operators to restrict outbound destinations.
-- *Blast-radius-if-compromised:* explicit modelling of what an attacker who
-  controls one node, or who has compromised the twin's KV state, can do.
-  Needs a threat model document referenced from `docs/operations/` and
-  cross-linked to the architecture document §11.
+- **Data-at-rest — shipped (WS3).** Opt-in `DataAtRestCipher` hook
+  (`GossipAgent::with_data_at_rest_cipher`) envelope-encrypts WAL records and
+  snapshots before they hit disk and decrypts them on replay. The substrate stays
+  neutral on key custody — the operator supplies a KMS/keyring adapter. Feature-free,
+  zero-overhead when unused; scope is on-disk only (in transit = `tls`).
+- **Tier-2 egress boundary — shipped (WS3).** `EgressPolicy { allow_hosts }` in
+  `GossipConfig` gates outbound reach (enforced at the MCP client bridge); a
+  node-local posture, not a coordinator. Empty = allow-all (default). Coverage and
+  operator-responsibility paths are documented in the egress runbook + threat model.
+- **Blast-radius-if-compromised — shipped (WS3).** Threat-model document at
+  [`docs/threat-model.md`](docs/threat-model.md), cross-linked from
+  `docs/operations/` (crown-jewel runbook) and CLAUDE.md: per-trust-boundary
+  threats (single node, trusted domain, external egress), the mitigations
+  (mTLS + WS1 RBAC + WS2 audit + WS3 at-rest/egress), and residual risks.
 
 **4. Support / SLA — the single-source v1 dependency question.** Regulated
 buyers ask: "Who owns Mycelium in production when something fails at

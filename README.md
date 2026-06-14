@@ -799,6 +799,20 @@ Query and verify over HTTP with `GET /gateway/audit` (scope `audit:read`), which
 stream's `verified` status, chain-tip `head_hash`, and a per-record `content_hash`. Detection,
 not prevention: records are plain replicated KV entries; tampering makes verification fail.
 
+### Crown-Jewel Posture — data-at-rest & egress
+
+Two opt-in, feature-free controls for blast-radius containment (see the
+[threat model](docs/threat-model.md) and [crown-jewel runbook](docs/operations/crown-jewel.md)):
+
+- **Data-at-rest encryption.** `agent.with_data_at_rest_cipher(Arc::new(my_cipher))` envelope-
+  encrypts WAL records and snapshots before they hit disk and decrypts on replay. You implement
+  `DataAtRestCipher` over your KMS/keyring — the substrate stays neutral on key custody. Scope is
+  on-disk only; the wire is mTLS (`tls`), memory is unencrypted.
+- **Outbound egress allowlist.** `GossipConfig::egress = EgressPolicy { allow_hosts }` constrains
+  which external hosts the substrate may reach (enforced at the MCP client bridge; empty = allow
+  all). A node-local posture, not a coordinator. Other outbound paths (LLM, probes, A2A) are
+  restricted at the network layer today — see the runbook for the coverage table.
+
 ## Layer III — Consensus
 
 Lightweight epidemic two-phase agreement built directly on top of the signal mesh — no extra
