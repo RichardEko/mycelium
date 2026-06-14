@@ -84,6 +84,10 @@ struct HttpCtx {
     /// Prometheus scrape handle (only present when the `metrics` feature is enabled).
     #[cfg(feature = "metrics")]
     prometheus:      metrics_exporter_prometheus::PrometheusHandle,
+    /// OIDC verifier (WS4) — present when `GossipConfig::oidc` is set. Validates
+    /// JWT bearers against the IdP JWKS and maps groups to gateway scopes.
+    #[cfg(feature = "compliance")]
+    oidc:            Option<Arc<super::oidc::OidcVerifier>>,
 }
 
 /// Returns the process-wide Prometheus scrape handle, installing the recorder
@@ -115,6 +119,13 @@ pub(super) async fn run_http_server(
     #[cfg(feature = "metrics")]
     let prometheus = prometheus_handle();
 
+    #[cfg(feature = "compliance")]
+    let oidc = ctx
+        .config
+        .oidc
+        .clone()
+        .map(|c| Arc::new(super::oidc::OidcVerifier::new(c)));
+
     let state = Arc::new(HttpCtx {
         agent_ctx:    ctx,
         gateway_caps: Arc::new(Mutex::new(HashMap::new())),
@@ -122,6 +133,8 @@ pub(super) async fn run_http_server(
         shutdown_rx:  shutdown_rx.clone(),
         #[cfg(feature = "metrics")]
         prometheus,
+        #[cfg(feature = "compliance")]
+        oidc,
     });
 
     // ── Language-bridge gateway routes (optionally auth-protected) ────────────
@@ -245,8 +258,13 @@ async fn gateway_auth(
     #[cfg(not(feature = "compliance"))]
     let have_scoped = false;
 
-    // Open gateway: no token model configured.
-    if legacy.is_none() && !have_scoped {
+    #[cfg(feature = "compliance")]
+    let have_oidc = ctx.oidc.is_some();
+    #[cfg(not(feature = "compliance"))]
+    let have_oidc = false;
+
+    // Open gateway: no token model and no OIDC configured.
+    if legacy.is_none() && !have_scoped && !have_oidc {
         return next.run(request).await;
     }
 
@@ -262,7 +280,23 @@ async fn gateway_auth(
         ).into_response();
     };
 
-    let Some(scopes) = resolve_token_scopes(cfg, presented) else {
+    // Resolve scopes: try OIDC first (a JWT bearer from the IdP → groups → scopes),
+    // then fall back to the static token table. A JWT that fails OIDC validation
+    // won't match a static token either, so it correctly ends in 401.
+    #[cfg(feature = "compliance")]
+    let resolved: Option<Vec<String>> = {
+        let mut s = None;
+        if let Some(verifier) = &ctx.oidc
+            && let Some(principal) = verifier.verify(presented).await
+        {
+            s = Some(principal.scopes);
+        }
+        s.or_else(|| resolve_token_scopes(cfg, presented))
+    };
+    #[cfg(not(feature = "compliance"))]
+    let resolved: Option<Vec<String>> = resolve_token_scopes(cfg, presented);
+
+    let Some(scopes) = resolved else {
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({"error": "authentication required"})),
@@ -2787,6 +2821,90 @@ mod tests {
             .send().await.unwrap();
         assert_ne!(r.status(), 401, "wildcard token must authenticate");
         assert_ne!(r.status(), 403, "wildcard token must pass scope gating");
+
+        agent.shutdown().await;
+    }
+
+    /// WS4: an OIDC JWT from a (mock) IdP is validated at the gateway and its
+    /// groups are mapped to scopes — a `readers`-group token reaches a `kv:read`
+    /// route but is forbidden on a `kv:write` route; no token is 401.
+    #[cfg(feature = "compliance")]
+    #[tokio::test]
+    async fn test_gateway_oidc_jwt_maps_groups_to_scopes() {
+        use axum::{routing::get, Router};
+        use axum::http::header::AUTHORIZATION;
+        use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        const TEST_PRIV: &str = include_str!("../../tests/fixtures/oidc_test.key");
+        let jwks_body = include_str!("../../tests/fixtures/oidc_jwks.json");
+
+        // ── Mock IdP: discovery + JWKS ───────────────────────────────────────
+        let idp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let idp_port = idp_listener.local_addr().unwrap().port();
+        let issuer = format!("http://127.0.0.1:{idp_port}");
+        let disco = serde_json::json!({
+            "issuer": issuer,
+            "jwks_uri": format!("{issuer}/jwks"),
+        }).to_string();
+        let idp = Router::new()
+            .route("/.well-known/openid-configuration", get(move || {
+                let disco = disco.clone();
+                async move { ([("content-type", "application/json")], disco) }
+            }))
+            .route("/jwks", get(move || {
+                async move { ([("content-type", "application/json")], jwks_body) }
+            }));
+        let _idp = tokio::spawn(async move { axum::serve(idp_listener, idp).await.unwrap(); });
+
+        // ── Mycelium node with OIDC configured ───────────────────────────────
+        let gossip_port = alloc_port();
+        let http_port   = alloc_port();
+        let id = NodeId::new("127.0.0.1", gossip_port).unwrap();
+        let mut group_scopes = std::collections::HashMap::new();
+        group_scopes.insert("readers".to_string(), vec!["kv:read".to_string()]);
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = gossip_port;
+        cfg.http_port = Some(http_port);
+        cfg.oidc = Some(crate::OidcConfig {
+            issuer: issuer.clone(),
+            audience: "mycelium-cluster".into(),
+            group_claim: "groups".into(),
+            group_scopes,
+            jwks_uri: None, // exercise discovery
+        });
+        let agent = Arc::new(GossipAgent::new(id, cfg));
+        agent.start().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        // ── Mint a JWT for a "readers" user ──────────────────────────────────
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let claims = serde_json::json!({
+            "sub": "alice", "iss": issuer, "aud": "mycelium-cluster",
+            "exp": now + 3600, "groups": ["readers"],
+        });
+        let mut header = Header::new(Algorithm::RS256);
+        header.kid = Some("test-kid".to_string());
+        let jwt = encode(&header, &claims, &EncodingKey::from_rsa_pem(TEST_PRIV.as_bytes()).unwrap()).unwrap();
+
+        let client = reqwest::Client::new();
+        let base = format!("http://127.0.0.1:{http_port}");
+
+        // No token → 401.
+        let r = client.get(format!("{base}/gateway/kv/keys")).send().await.unwrap();
+        assert_eq!(r.status(), 401, "no token must be unauthorized");
+
+        // OIDC JWT with kv:read → admitted on the kv:read route.
+        let r = client.get(format!("{base}/gateway/kv/keys"))
+            .header(AUTHORIZATION, format!("Bearer {jwt}")).send().await.unwrap();
+        assert_eq!(r.status(), 200, "readers JWT must reach kv/keys (kv:read)");
+
+        // Same JWT on a kv:write route → 403 (group grants only kv:read).
+        let r = client.post(format!("{base}/gateway/kv"))
+            .header(AUTHORIZATION, format!("Bearer {jwt}"))
+            .json(&serde_json::json!({"key":"k","value":"v"}))
+            .send().await.unwrap();
+        assert_eq!(r.status(), 403, "readers JWT must be forbidden on kv:write");
 
         agent.shutdown().await;
     }

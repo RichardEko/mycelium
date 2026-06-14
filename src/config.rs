@@ -588,6 +588,15 @@ pub struct GossipConfig {
     #[serde(default)]
     pub egress: EgressPolicy,
 
+    /// Generic-OIDC SSO config for the gateway (WS4, `compliance` feature).
+    /// `None` (default) = no OIDC; gateway auth uses bearer tokens / scoped
+    /// tokens only. When set, a presented JWT is validated against the IdP's
+    /// JWKS and its groups mapped to gateway scopes. Human-operator auth, not
+    /// agent identity.
+    #[cfg(feature = "compliance")]
+    #[serde(default)]
+    pub oidc: Option<crate::agent::oidc::OidcConfig>,
+
     /// Mutual TLS configuration.
     ///
     /// `None` (the default) disables TLS — the gossip TCP port accepts plain
@@ -645,6 +654,8 @@ impl Default for GossipConfig {
             gateway_auth_token:            None,
             gateway_scoped_tokens:         Vec::new(),
             egress:                        EgressPolicy::default(),
+            #[cfg(feature = "compliance")]
+            oidc:                          None,
             tls:                           None,
         }
     }

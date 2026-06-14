@@ -58,6 +58,8 @@ mod mcp_handle;
 mod rbac;
 #[cfg(feature = "compliance")]
 pub(crate) mod audit;
+#[cfg(feature = "compliance")]
+pub(crate) mod oidc;
 
 #[allow(unused_imports)]
 pub(crate) use bulk::BulkTransport;
@@ -86,6 +88,8 @@ pub use audit::{
     audit_key, audit_stream_prefix, verify_chain, verify_stream_from_genesis,
     AuditAction, AuditOutcome, AuditRecord, AuditVerifyError, SignedAuditRecord, AUDIT_PREFIX,
 };
+#[cfg(feature = "compliance")]
+pub use oidc::OidcConfig;
 pub use kv_quorum::QuorumError;
 pub use kv_handle::{KvHandle, LogEntry};
 pub use mesh_handle::MeshHandle;

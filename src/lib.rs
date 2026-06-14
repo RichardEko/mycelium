@@ -192,6 +192,8 @@ pub use agent::{
     audit_key, audit_stream_prefix, verify_chain, verify_stream_from_genesis,
     AuditAction, AuditOutcome, AuditRecord, AuditVerifyError, SignedAuditRecord, AUDIT_PREFIX,
 };
+#[cfg(feature = "compliance")]
+pub use agent::OidcConfig;
 pub use capability::{
     CallerContext, CapConstraint, CapEntry, CapFilter, CapRanking, CapValue, Capability, CapabilityEvent,
     CapabilityGroupDef, CapabilityGroupHandle, CapabilityReg,
