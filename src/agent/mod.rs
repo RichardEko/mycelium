@@ -445,6 +445,11 @@ pub struct GossipAgent {
     /// Taken once by the HTTP server task; subsequent calls to `with_http_routes` are no-ops after start.
     #[cfg(feature = "gateway")]
     pub(super) extra_routes: std::sync::Mutex<Option<axum::Router>>,
+    /// Optional operator-supplied data-at-rest cipher (WS3). Set once via
+    /// [`with_data_at_rest_cipher`](Self::with_data_at_rest_cipher) before `start`;
+    /// read at `start` and threaded into the WAL/snapshot persistence paths.
+    pub(super) data_at_rest_cipher:
+        std::sync::OnceLock<Arc<dyn crate::persistence::DataAtRestCipher>>,
 }
 
 impl GossipAgent {
@@ -684,6 +689,28 @@ impl GossipAgent {
             task_ctx,
             #[cfg(feature = "gateway")]
             extra_routes: std::sync::Mutex::new(None),
+            data_at_rest_cipher: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Attach an operator-supplied [`DataAtRestCipher`](crate::DataAtRestCipher)
+    /// (WS3 crown-jewel) that envelope-encrypts this node's WAL records and
+    /// snapshots before they hit disk, and decrypts them on replay. Opt-in: with
+    /// no cipher attached, persistence bytes are written in the clear (unchanged).
+    ///
+    /// Call **before** [`start`](Self::start); it is read once at startup. Calling
+    /// it twice keeps the first cipher (a `warn!` is logged). The substrate stays
+    /// neutral on key custody — your impl wraps your KMS/keyring; the same key must
+    /// be available across restarts or the node cannot replay its own data.
+    ///
+    /// Only affects data **at rest**; the gossip wire is secured separately by the
+    /// `tls` feature.
+    pub fn with_data_at_rest_cipher(
+        &self,
+        cipher: Arc<dyn crate::persistence::DataAtRestCipher>,
+    ) {
+        if self.data_at_rest_cipher.set(cipher).is_err() {
+            tracing::warn!("with_data_at_rest_cipher called more than once; keeping the first cipher");
         }
     }
 }

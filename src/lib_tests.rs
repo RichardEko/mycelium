@@ -3183,3 +3183,116 @@ async fn test_ws2_audit_chain_writes_and_verifies_on_a_node() {
     a.shutdown_with_timeout(Duration::from_secs(5)).await;
     let _ = std::fs::remove_dir_all(&cert_dir);
 }
+
+// ── WS3 crown-jewel — data-at-rest encryption hook ────────────────────────
+
+/// A trivial reversible cipher for exercising the data-at-rest hook: a 1-byte
+/// key tag followed by XOR-with-key. `decrypt` rejects a blob tagged with a
+/// different key (returns `None`), so a wrong-key replay reads as corrupt.
+struct XorCipher {
+    key: u8,
+}
+
+impl crate::DataAtRestCipher for XorCipher {
+    fn encrypt(&self, plaintext: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(plaintext.len() + 1);
+        out.push(self.key);
+        out.extend(plaintext.iter().map(|b| b ^ self.key));
+        out
+    }
+    fn decrypt(&self, ciphertext: &[u8]) -> Option<Vec<u8>> {
+        let (tag, body) = ciphertext.split_first()?;
+        if *tag != self.key {
+            return None; // wrong key → treated as corrupt
+        }
+        Some(body.iter().map(|b| b ^ self.key).collect())
+    }
+}
+
+/// WS3: an attached `DataAtRestCipher` encrypts WAL/snapshot bytes on disk
+/// (plaintext never appears in `wal.bin`), the same cipher recovers the data on
+/// restart, and a wrong-key cipher cannot — proving the hook is load-bearing.
+#[tokio::test]
+async fn test_ws3_data_at_rest_cipher_encrypts_wal_and_round_trips() {
+    use crate::{PersistenceConfig, SyncMode};
+
+    let port = alloc_port();
+    let id = NodeId::new("127.0.0.1", port).unwrap();
+    let base = std::env::temp_dir().join(format!("myc-darc-{port}"));
+    let _ = std::fs::remove_dir_all(&base);
+    let wal_path = base.join(id.to_string()).join("kv").join("wal.bin");
+
+    let marker: &[u8] = b"TOPSECRET-PLAINTEXT-MARKER";
+
+    let mk = || {
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = port;
+        cfg.persistence = Some(PersistenceConfig {
+            base_path: base.clone(),
+            sync_mode: SyncMode::Flush,
+            snapshot_wal_threshold: 1_000_000, // keep data in wal.bin, no auto-snapshot
+            snapshot_interval_secs: 3_600,
+        });
+        GossipAgent::new(id.clone(), cfg)
+    };
+
+    // ── Phase 1: write under encryption ──────────────────────────────────
+    let a1 = Arc::new(mk());
+    a1.with_data_at_rest_cipher(Arc::new(XorCipher { key: 0x5A }));
+    a1.start().await.unwrap();
+    let _ = a1.kv().set("secret/1", Bytes::copy_from_slice(marker));
+
+    // Structural poll: wait until the WAL record has actually landed on disk.
+    let mut wal_bytes = Vec::new();
+    for _ in 0..200 {
+        if let Ok(b) = std::fs::read(&wal_path)
+            && !b.is_empty()
+        {
+            wal_bytes = b;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(!wal_bytes.is_empty(), "WAL never flushed to disk");
+
+    // Encryption proof: the plaintext marker must NOT appear on disk.
+    let contains = wal_bytes
+        .windows(marker.len())
+        .any(|w| w == marker);
+    assert!(!contains, "plaintext marker found in wal.bin — bytes were not encrypted");
+
+    a1.shutdown_with_timeout(Duration::from_secs(5)).await;
+
+    // ── Phase 2: same key recovers the data ──────────────────────────────
+    let a2 = Arc::new(mk());
+    a2.with_data_at_rest_cipher(Arc::new(XorCipher { key: 0x5A }));
+    a2.start().await.unwrap();
+    let mut recovered = None;
+    for _ in 0..40 {
+        if let Some(v) = a2.kv().get("secret/1") {
+            recovered = Some(v);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(
+        recovered.as_deref(),
+        Some(marker),
+        "same-key restart must recover the encrypted record"
+    );
+    a2.shutdown_with_timeout(Duration::from_secs(5)).await;
+
+    // ── Phase 3: wrong key cannot read it ────────────────────────────────
+    let a3 = Arc::new(mk());
+    a3.with_data_at_rest_cipher(Arc::new(XorCipher { key: 0x11 }));
+    a3.start().await.unwrap();
+    // Give replay a chance to run; the record must NOT decode under the wrong key.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        a3.kv().get("secret/1").is_none(),
+        "wrong-key replay must not recover the record (cipher is load-bearing)"
+    );
+    a3.shutdown_with_timeout(Duration::from_secs(5)).await;
+
+    let _ = std::fs::remove_dir_all(&base);
+}

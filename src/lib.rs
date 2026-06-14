@@ -208,6 +208,7 @@ pub use mesh_manifest::{
     manifest_keys, semver_gt,
 };
 pub use config::{GatewayToken, GossipConfig, GroupTopologyPolicy, PersistenceConfig, SyncMode, TlsConfig, TopologyEnforcement};
+pub use persistence::DataAtRestCipher;
 pub use locality::LocalityPreference;
 pub use consensus::{ConsensusConfig, ConsensusListenerHandle, ConsensusResult, GroupQuorum, consensus_kind, consensus_ns};
 pub use error::GossipError;

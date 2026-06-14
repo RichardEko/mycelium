@@ -93,7 +93,9 @@ impl GossipAgent {
                     }
                 };
 
-                match crate::persistence::replay(&dir, apply_fn).await {
+                let cipher = self.data_at_rest_cipher.get().cloned();
+
+                match crate::persistence::replay(&dir, cipher.as_ref(), apply_fn).await {
                     Ok(max_ts) => {
                         if max_ts > 0 { hlc.observe(max_ts); }
                     }
@@ -109,6 +111,7 @@ impl GossipAgent {
                     node_id,
                     Arc::clone(&hlc),
                     default_ttl,
+                    cipher,
                 );
                 let handle = Arc::new(handle);
                 // Compact immediately so next restart has a bounded replay window.
