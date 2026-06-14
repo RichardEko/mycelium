@@ -85,7 +85,7 @@ These are real work items. Anyone resuming should read
 |---|---|
 | TupleSpace companion crate | **Shipped** (2026-06-11) as workspace member `mycelium-tuple-space/` — all 5 phases of [`docs/plans/mycelium-tuple-space.md`](docs/plans/mycelium-tuple-space.md). See §TupleSpace companion crate below. |
 | Pre-release arch remediation | **Complete.** All 9 steps done — plan at `~/.claude/plans/humble-twirling-comet.md`. |
-| v1.x completion (Production Readiness Gap) | Action plan at [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md). **WS1 (Identity & RBAC) shipped** — signed role claims, provider-side capability authz, OAuth2 gateway ACLs, `sys/` namespace tripwire; see §RBAC / identity. **WS2 (tamper-evident audit) shipped** — per-node hash-chained signed `sys/audit/` trail, `/gateway/audit` verify endpoint, SkillRunner integration; see §Audit trail. **WS3 (crown-jewel) shipped** — opt-in data-at-rest cipher hook, egress allowlist, blast-radius threat model; see §Crown-jewel posture. **WS4 (OIDC SSO) shipped** — generic-OIDC JWT validation at the gateway (alg-confusion-safe), discovery + cached JWKS, groups→scopes; see §RBAC / identity (OIDC SSO) + [`docs/operations/sso.md`](docs/operations/sso.md). **Pending:** WS5 hot cert rotation, WS6 doc sweep. Support/SLA is commercial-track (out of engineering scope). |
+| v1.x completion (Production Readiness Gap) | Action plan at [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md). **WS1 (Identity & RBAC) shipped** — signed role claims, provider-side capability authz, OAuth2 gateway ACLs, `sys/` namespace tripwire; see §RBAC / identity. **WS2 (tamper-evident audit) shipped** — per-node hash-chained signed `sys/audit/` trail, `/gateway/audit` verify endpoint, SkillRunner integration; see §Audit trail. **WS3 (crown-jewel) shipped** — opt-in data-at-rest cipher hook, egress allowlist, blast-radius threat model; see §Crown-jewel posture. **WS4 (OIDC SSO) shipped** — generic-OIDC JWT validation at the gateway (alg-confusion-safe), discovery + cached JWKS, groups→scopes; see §RBAC / identity (OIDC SSO) + [`docs/operations/sso.md`](docs/operations/sso.md). **WS5 (hot cert rotation) shipped** — swappable `NodeTls` (ArcSwap), `rotate_identity()` with dual-key window, retained-key-set verification (option B); see §Hot cert / identity rotation + [`docs/operations/cert-rotation.md`](docs/operations/cert-rotation.md). **v1.x engineering scope complete** (WS6 = the doc alignment done per-WS). Support/SLA is commercial-track (out of engineering scope). |
 
 **Already shipped (removed from list):** fuzz harness (`fuzz/fuzz_targets/`), SignalHandlers split, ConsensusEngine::propose extraction, locality/topology Phases 0–7, cross-group consensus Phase 8 (`cross_group_propose` + `GroupQuorum`), watcher C2 (`run_consolidated_opacity_watcher` + `FilterOpacityRegistry`), signal reorder buffer (`emit_ordered()` + wire v11 `hlc_seq`), semantic coordination (capability schema versioning `with_schema_id`/`CapFilter::with_schema`, gossip-propagated skill payload schemas `with_input_schema`/`with_output_schema`, signal sender authorization `signal_rx_from`, FIPA-ACL speech act taxonomy — `examples/semantic_coordination.rs`), schema registry (`publish_schema`, `force_publish_schema`, `get_schema`, `list_schemas`, `seed_schemas_from_dir` — `src/agent/schema_ops.rs`), **pre-release arch remediation** (sub-handle facade — `KvHandle`, `MeshHandle`, `SchemaHandle`, `ConsensusHandle`, `ServiceHandle`, `CapabilitiesHandle` — plus `gateway` feature gate for Axum).
 
@@ -591,6 +591,36 @@ runbook: [`docs/operations/crown-jewel.md`](docs/operations/crown-jewel.md).
 rejection), the `config::tests::egress_*` gate unit tests, and
 `src/agent/mcp.rs::test_mcp_egress_policy_denies_disallowed_host`.
 
+### Hot cert / identity rotation (tls feature) — WS5
+
+Rotate a node's Ed25519 TLS/identity key live, with no cluster disruption.
+Runbook: [`docs/operations/cert-rotation.md`](docs/operations/cert-rotation.md).
+
+- **Swappable identity.** `NodeTls` holds its signing key + rustls server/client
+  configs behind lock-free `arc_swap::ArcSwap` cells (the `TaskCtx::tls` *handle*
+  is still set-once; its *contents* rotate). Read them through the accessor
+  methods (`signing_key()`, `server_config()`, …) — never cache a clone past a
+  rotation. `tls_accept`/`tls_connect` call the config accessors **per connection**,
+  so a cutover is live (new connections use the new cert; existing sessions keep
+  their CA-trusted one) — **no listener drain-swap**. ArcSwap is lock-free, so no
+  lock-order-table entry.
+- **`rotate_identity(propagation)`**: generate (CA-signed, persisted, not active)
+  → publish `sys/identity/{self}` = `new‖old` signed by the **old** key → wait →
+  `NodeTls::activate` swaps atomically. Order matters: publish-before-cutover so
+  peers accept the new key first.
+- **Retained-key verification (option B).** `peer_keys` is a `Vec<[u8;32]>` per
+  node, **accumulated** (union; `helpers::merge_peer_keys`), never mirrored — so a
+  rotation never drops a still-needed historical key. Every verify path tries the
+  set: `connection` SignedData (fail-open preserved), `consensus` decode_verify,
+  `rbac` roles_of, `audit` verify_stream (via `verify_chain_keys`). Startup
+  preserves one prior key via the `current‖previous` format. **Compromise caveat:**
+  a retired key stays accepted for verification — compromise needs explicit
+  revocation, not just rotation.
+
+**Gates:** `src/lib_tests.rs::test_ws5_rotate_identity_verifies_across_rotation_on_peer`
+(two tls nodes; A rotates mid-stream; peer B verifies A's audit chain across the
+rotation), `audit::tests::chain_spanning_a_key_rotation_verifies_against_the_key_set`.
+
 ### Testing conventions
 
 **Always run the full feature matrix locally before pushing.**
@@ -644,10 +674,11 @@ get found.
   feature-free (data-at-rest + egress need no feature — see §Crown-jewel posture);
   **WS4 OIDC SSO shipped** (gateway JWT validation — see §RBAC / identity); WS5 in
   progress per [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md).
-- Lib tests at HEAD: **318** default · **~336** `tls,metrics,a2a,llm` · **360** `compliance`
+- Lib tests at HEAD: **318** default · **320** `tls` · **362** `compliance`
   (full feature matrix); clippy at 0 warnings on each. The `compliance` delta is the WS1
-  RBAC + WS2 audit + WS4 OIDC unit and cross-node integration tests; the core `sys/` tripwire
+  RBAC + WS2 audit + WS4 OIDC + WS5 rotation unit/integration tests; the core `sys/` tripwire
   and WS3 crown-jewel (data-at-rest + egress) tests are feature-free and in the default count.
+  WS5's retained-key-set verification lives under `tls` (peer_keys is a key *set* per node).
 - Wire version is currently **v11** (`PREV_WIRE_VERSION = 10` — rolling upgrade window open).
   v11 adds `hlc_seq: Option<u64>` to `WireMessage::Signal` for ordered delivery via `emit_ordered()`.
   v10 adds `WireMessage::SignedData` for Ed25519-signed KV writes under the `tls` feature.

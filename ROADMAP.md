@@ -1812,8 +1812,21 @@ certificates auto-generate on first start.
   and consensus KV writes when the `tls` feature is enabled. Receivers fail-open on unknown
   signers (key hasn't gossiped yet) and drop + warn on verification failure.
 
-**Not yet implemented:**
-- Hot certificate rotation without cluster disruption.
+**Hot certificate rotation — Complete (2026-06-14, WS5):**
+- `GossipAgent::rotate_identity(propagation)` rotates the node's Ed25519
+  identity/TLS key with no cluster disruption: generate a new CA-signed cert
+  (reusing the cluster CA), publish `sys/identity/{self}` = `new‖old` signed by
+  the still-trusted old key, wait a propagation window, then atomically swap the
+  active key + configs (`ArcSwap` — `server_config()`/`client_config()` are read
+  per connection, so the cert cutover is live with no listener restart; existing
+  connections keep their CA-trusted session).
+- **Retained-key verification (option B):** `peer_keys` holds a *set* per node,
+  accumulated across rotations, so historical signatures (audit chain, committed
+  consensus, role claims) stay verifiable; every verify path tries the set. The
+  prior key is preserved across one restart via the `current‖previous` identity
+  format. *Compromise caveat:* a retired key stays accepted for verification, so
+  rotating away from a compromised key needs explicit revocation on top.
+  Runbook: [`docs/operations/cert-rotation.md`](docs/operations/cert-rotation.md).
 
 ### 4. Language bridges — Complete (2026-05-24)
 

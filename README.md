@@ -820,6 +820,17 @@ Two opt-in, feature-free controls for blast-radius containment (see the
   all). A node-local posture, not a coordinator. Other outbound paths (LLM, probes, A2A) are
   restricted at the network layer today — see the runbook for the coverage table.
 
+### Hot Identity Rotation (`tls` feature)
+
+`agent.rotate_identity(propagation).await?` rotates a node's Ed25519 TLS/identity key with **no
+cluster disruption**: it publishes `new‖old` to `sys/identity/` (signed by the old key), waits a
+gossip window, then atomically swaps the active key + cert. New connections use the new cert;
+existing sessions persist (no listener restart). Verification uses a **retained key set** per node
+(accumulated across rotations), so historical signatures — the audit chain, committed consensus,
+role claims — keep verifying across a rotation. See the
+[rotation runbook](docs/operations/cert-rotation.md). (Caveat: a retired key stays accepted for
+verification, so compromise response needs explicit revocation, not just rotation.)
+
 ## Layer III — Consensus
 
 Lightweight epidemic two-phase agreement built directly on top of the signal mesh — no extra
