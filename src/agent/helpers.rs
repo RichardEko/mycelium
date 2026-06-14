@@ -482,3 +482,76 @@ pub(crate) async fn kv_delete_async(ctx: &TaskCtx, key: Arc<str>) -> bool {
         ctx.node_id.id_hash(), ForwardHint::All,
     ).await
 }
+
+// ── WS5: retained verifying-key set (hot cert rotation, option B) ──────────────
+//
+// Identity keys rotate, but historical signatures (audit chain, committed
+// consensus values, role claims) must still verify. So `peer_keys` holds a
+// *retained set* per node — every key a node has published — and verification
+// tries them all. `sys/identity/{node}` carries one key (32 bytes) normally, or
+// `current ‖ previous` (64 bytes) during a rotation window. Population
+// *accumulates* (never drops a key except on tombstone), so a key is verifiable
+// for the life of the records it signed.
+//
+// Tradeoff (documented): a retired key stays trusted for verification, so
+// rotating away from a *compromised* key needs explicit revocation on top —
+// it is not automatic. Hygiene rotation is fully covered.
+
+/// Parse a `sys/identity/{node}` value into verifying keys: 32 bytes → one key;
+/// 64 bytes → `current ‖ previous`; any other length → empty.
+#[cfg(feature = "tls")]
+pub(crate) fn parse_identity_keys(bytes: &[u8]) -> Vec<[u8; 32]> {
+    match bytes.len() {
+        32 => <[u8; 32]>::try_from(bytes).map(|k| vec![k]).unwrap_or_default(),
+        64 => {
+            let mut out = Vec::with_capacity(2);
+            if let (Ok(a), Ok(b)) =
+                (<[u8; 32]>::try_from(&bytes[..32]), <[u8; 32]>::try_from(&bytes[32..]))
+            {
+                out.push(a);
+                out.push(b);
+            }
+            out
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Union `new_keys` into `node`'s retained key set in `peer_keys` (accumulate;
+/// existing keys are never dropped — historical signatures stay verifiable).
+#[cfg(feature = "tls")]
+pub(crate) fn merge_peer_keys(
+    peer_keys: &papaya::HashMap<crate::node_id::NodeId, Vec<[u8; 32]>>,
+    node: &crate::node_id::NodeId,
+    new_keys: &[[u8; 32]],
+) {
+    let guard = peer_keys.pin();
+    let mut set = guard.get(node).cloned().unwrap_or_default();
+    let before = set.len();
+    for k in new_keys {
+        if !set.contains(k) {
+            set.push(*k);
+        }
+    }
+    if set.len() != before || guard.get(node).is_none() {
+        guard.insert(node.clone(), set);
+    }
+}
+
+/// All verifying keys known for `node`: the retained set in `peer_keys`, plus
+/// this node's own current key when `node` is self (covers the gap before the
+/// node's own `sys/identity` write has cycled back through the watcher). Used by
+/// the `compliance` verify paths (role claims, audit chain).
+#[cfg(feature = "compliance")]
+pub(crate) fn known_verifying_keys(ctx: &TaskCtx, node: &crate::node_id::NodeId) -> Vec<[u8; 32]> {
+    let mut keys: Vec<[u8; 32]> = ctx.peer_keys.pin().get(node).cloned().unwrap_or_default();
+    if node == &ctx.node_id
+        && let Some(t) = ctx.tls.get()
+    {
+        let cur = t.verifying_key_bytes();
+        if !keys.contains(&cur) {
+            keys.push(cur);
+        }
+    }
+    keys
+}

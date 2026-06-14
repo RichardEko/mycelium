@@ -189,7 +189,7 @@ pub use agent::{PromptTemplate, PromptSkillError, PromptSkillHandle, LlmBackend,
 pub use agent::{role_key, RoleClaim, SignedRoleClaim, ROLE_PREFIX};
 #[cfg(feature = "compliance")]
 pub use agent::{
-    audit_key, audit_stream_prefix, verify_chain, verify_stream_from_genesis,
+    audit_key, audit_stream_prefix, verify_chain, verify_chain_keys, verify_stream_from_genesis,
     AuditAction, AuditOutcome, AuditRecord, AuditVerifyError, SignedAuditRecord, AUDIT_PREFIX,
 };
 #[cfg(feature = "compliance")]

@@ -85,7 +85,7 @@ pub use capability_handle::CapabilitiesHandle;
 pub use rbac::{role_key, RoleClaim, SignedRoleClaim, ROLE_PREFIX};
 #[cfg(feature = "compliance")]
 pub use audit::{
-    audit_key, audit_stream_prefix, verify_chain, verify_stream_from_genesis,
+    audit_key, audit_stream_prefix, verify_chain, verify_chain_keys, verify_stream_from_genesis,
     AuditAction, AuditOutcome, AuditRecord, AuditVerifyError, SignedAuditRecord, AUDIT_PREFIX,
 };
 #[cfg(feature = "compliance")]
@@ -350,7 +350,11 @@ pub(crate) struct TaskCtx {
     /// sources: (a) the mTLS handshake cert, (b) `sys/identity/` KV entries
     /// gossiped by peers. Used to verify signed consensus messages.
     #[cfg_attr(not(feature = "tls"), allow(dead_code))]
-    pub(crate) peer_keys: Arc<papaya::HashMap<NodeId, [u8; 32]>>,
+    /// Retained verifying-key **set** per node (WS5 option B): every key a node
+    /// has published at `sys/identity/{node}`, accumulated across rotations so
+    /// historical signatures (audit, consensus, roles) keep verifying. Verify
+    /// paths try all keys; see `helpers::{known_verifying_keys, verify_signed_by}`.
+    pub(crate) peer_keys: Arc<papaya::HashMap<NodeId, Vec<[u8; 32]>>>,
 
     // ── Networking ───────────────────────────────────────────────────────────────
     /// Live peer table shared with the HTTP gateway for peer-count-based quorum sizing.
@@ -793,6 +797,61 @@ impl GossipAgent {
     }
 }
 
+/// Hot certificate / identity rotation (WS5; `tls` feature).
+#[cfg(feature = "tls")]
+impl GossipAgent {
+    /// Rotate this node's TLS / identity key **without cluster disruption**.
+    ///
+    /// 1. Generate a new key + CA-signed cert (reusing the cluster CA), persisted
+    ///    to disk — but do not activate it yet.
+    /// 2. Publish `sys/identity/{self}` = `new ‖ old`, signed by the **old** key
+    ///    (which peers still trust), so peers' retained key sets accept both.
+    /// 3. Wait `propagation` for that to gossip.
+    /// 4. Cut over: atomically swap the active key + cert ([`tls::NodeTls::activate`]).
+    ///    New gossip signatures and new TLS handshakes use the new key (configs are
+    ///    read per connection); existing connections keep their CA-trusted session —
+    ///    no listener restart. The `new‖old` identity entry is retained so the prior
+    ///    key survives one restart (historical-record verification).
+    ///
+    /// Requires `GossipConfig::tls`. Returns the new 32-byte verifying key.
+    ///
+    /// **Compromise caveat:** the old key remains accepted (retained-key
+    /// verification, WS5 option B) so historical signatures stay valid; rotating
+    /// away from a *compromised* key needs explicit revocation on top.
+    pub async fn rotate_identity(
+        &self,
+        propagation: std::time::Duration,
+    ) -> Result<[u8; 32], crate::error::GossipError> {
+        use crate::error::GossipError;
+        let tls = self.task_ctx.tls.get().ok_or(GossipError::InvalidField {
+            field: "tls", reason: "rotate_identity requires the tls identity (set GossipConfig::tls)".into(),
+        })?;
+        let tls_cfg = self.config.tls.as_ref().ok_or(GossipError::InvalidField {
+            field: "tls", reason: "rotate_identity requires GossipConfig::tls".into(),
+        })?;
+
+        let old_vk = tls.verifying_key_bytes();
+        // 1. Generate the new material (persisted, not yet active).
+        let material = crate::tls::generate_rotation(tls_cfg, &self.node_id)?;
+        let new_vk = material.verifying_key;
+
+        // 2. Publish new‖old, signed by the still-active OLD key (peers trust it),
+        //    so their retained sets accept both before the cutover.
+        let mut dual = Vec::with_capacity(64);
+        dual.extend_from_slice(&new_vk);
+        dual.extend_from_slice(&old_vk);
+        let id_key = format!("sys/identity/{}", self.node_id);
+        let _ = self.kv().set(id_key, Bytes::from(dual));
+
+        // 3. Let it propagate.
+        tokio::time::sleep(propagation).await;
+
+        // 4. Cut over to the new key/cert.
+        tls.activate(material);
+        Ok(new_vk)
+    }
+}
+
 /// RBAC — signed node-role advertisement + verified read (WS1; `compliance` feature).
 #[cfg(feature = "compliance")]
 impl GossipAgent {
@@ -827,22 +886,15 @@ impl GossipAgent {
     }
 
     /// Read and **verify** `node`'s role claim. Returns the claim only if its
-    /// signature checks out against `node`'s identity key (from `peer_keys`, or
-    /// this node's own key when `node` is self). A forged or mis-attributed
-    /// `sys/role/` write reads back as `None` — detection, not prevention.
+    /// signature checks out against **any** verifying key known for `node` (the
+    /// WS5 retained set, plus this node's own current key when `node` is self), so
+    /// a claim signed before a key rotation still verifies. A forged or
+    /// mis-attributed `sys/role/` write reads back as `None`.
     pub fn roles_of(&self, node: &NodeId) -> Option<rbac::RoleClaim> {
         let bytes = self.kv().get(&rbac::role_key(node))?;
-        let vk    = self.verifying_key_for(node)?;
-        rbac::verified_roles(&bytes, node, &vk)
-    }
-
-    /// 32-byte Ed25519 verifying key for `node`: this node's own key when `node`
-    /// is self, otherwise the key gossiped to `peer_keys` (from `sys/identity/`).
-    fn verifying_key_for(&self, node: &NodeId) -> Option<[u8; 32]> {
-        if node == &self.node_id {
-            return self.task_ctx.tls.get().map(|t| t.verifying_key_bytes());
-        }
-        self.task_ctx.peer_keys.pin().get(node).copied()
+        helpers::known_verifying_keys(&self.task_ctx, node)
+            .iter()
+            .find_map(|vk| rbac::verified_roles(&bytes, node, vk))
     }
 
     /// Provider-side authorization check: may the (verified) `sender` invoke a
