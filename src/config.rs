@@ -46,6 +46,25 @@ impl Default for TlsConfig {
     }
 }
 
+/// A gateway bearer token paired with its OAuth2-style scope grants.
+///
+/// Scopes follow the `resource:verb` convention (`kv:read`, `kv:write`,
+/// `mesh:write`, `consensus:read`, …). A route admits a token when the token
+/// holds the route's required scope, or the superuser wildcard `"*"`.
+///
+/// Only enforced under the `compliance` crate feature; without it the field is
+/// inert and the legacy single-token model (`gateway_auth_token`) applies. The
+/// legacy token is equivalent to a scoped token holding `"*"`, so existing
+/// deployments upgrade with no behaviour change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GatewayToken {
+    /// The bearer token presented as `Authorization: Bearer <token>`.
+    pub token: String,
+    /// Scopes granted to this token. `["*"]` is full access.
+    #[serde(default)]
+    pub scopes: Vec<String>,
+}
+
 /// Controls if and how a node persists its KV store to local disk.
 ///
 /// Set `GossipConfig::persistence` to `Some(PersistenceConfig { .. })` to opt in.
@@ -479,6 +498,20 @@ pub struct GossipConfig {
     /// Can also be set via the `GOSSIP_GATEWAY_AUTH_TOKEN` environment variable.
     pub gateway_auth_token: Option<String>,
 
+    /// OAuth2-style scoped gateway tokens (`compliance` feature).
+    ///
+    /// Each [`GatewayToken`] maps a bearer token to a set of `resource:verb`
+    /// scopes; gateway routes require a scope and admit a token holding it (or
+    /// the `"*"` wildcard). Enforced only under the `compliance` feature — when
+    /// the feature is off this list is ignored and the legacy single-token model
+    /// (`gateway_auth_token`) applies unchanged. Public routes (`/health`,
+    /// `/ready`, `/stats`, `/metrics`, the descriptor path) are never scope-gated.
+    ///
+    /// Default: empty. A `gateway_auth_token` set alongside an empty list keeps
+    /// today's behaviour (one token, full access).
+    #[serde(default)]
+    pub gateway_scoped_tokens: Vec<GatewayToken>,
+
     /// Mutual TLS configuration.
     ///
     /// `None` (the default) disables TLS — the gossip TCP port accepts plain
@@ -534,6 +567,7 @@ impl Default for GossipConfig {
             max_concurrent_bulk_handlers:  64,
             max_inbound_frames_per_sec:    0,
             gateway_auth_token:            None,
+            gateway_scoped_tokens:         Vec::new(),
             tls:                           None,
         }
     }

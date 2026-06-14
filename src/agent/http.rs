@@ -46,6 +46,8 @@ use axum::{
     response::sse::{Event, KeepAlive},
     routing::{delete, get, post},
 };
+#[cfg(feature = "compliance")]
+use axum::extract::MatchedPath;
 use bytes::{BufMut, Bytes, BytesMut};
 use serde::Deserialize;
 use serde_json::json;
@@ -211,29 +213,158 @@ async fn shutdown_signal(mut rx: watch::Receiver<bool>) {
 
 /// Axum middleware applied to every `/gateway/**` route.
 ///
-/// When `GossipConfig::gateway_auth_token` is set, every gateway request must
-/// carry `Authorization: Bearer <token>`. Health, stats, and metrics endpoints
-/// are NOT under `/gateway` and are therefore always public.
+/// Two layers, the second feature-gated:
+///
+/// 1. **Authentication** (always): when `gateway_auth_token` is set, or
+///    (compliance) any `gateway_scoped_tokens` are configured, every gateway
+///    request must carry a valid `Authorization: Bearer <token>`. With neither
+///    set the gateway is open (loopback-only deployments). `/health`, `/ready`,
+///    `/stats`, `/metrics`, and the descriptor path are NOT under `/gateway`
+///    and stay public regardless.
+///
+/// 2. **OAuth2 scope authorization** (`compliance` feature): the presented
+///    token resolves to a scope grant — `gateway_auth_token` ⇒ the `"*"`
+///    wildcard (full access, unchanged behaviour), or a `gateway_scoped_tokens`
+///    entry ⇒ its scopes. The matched route requires a `resource:verb` scope
+///    ([`required_scope`]); the request is admitted only if the grant holds it
+///    or `"*"`. Deny-by-default: an unmapped gateway route requires `admin`.
 async fn gateway_auth(
     State(ctx): State<Arc<HttpCtx>>,
     request: Request,
     next: Next,
 ) -> Response {
-    if let Some(expected) = ctx.agent_ctx.config.gateway_auth_token.as_deref() {
-        let ok = request.headers()
-            .get(header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
-            .map(|t| t == expected)
-            .unwrap_or(false);
-        if !ok {
+    let cfg = &ctx.agent_ctx.config;
+    let legacy = cfg.gateway_auth_token.as_deref();
+
+    #[cfg(feature = "compliance")]
+    let have_scoped = !cfg.gateway_scoped_tokens.is_empty();
+    #[cfg(not(feature = "compliance"))]
+    let have_scoped = false;
+
+    // Open gateway: no token model configured.
+    if legacy.is_none() && !have_scoped {
+        return next.run(request).await;
+    }
+
+    let presented = request.headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+
+    let Some(presented) = presented else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "authentication required"})),
+        ).into_response();
+    };
+
+    let Some(scopes) = resolve_token_scopes(cfg, presented) else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "authentication required"})),
+        ).into_response();
+    };
+
+    #[cfg(feature = "compliance")]
+    {
+        let required = request
+            .extensions()
+            .get::<MatchedPath>()
+            .map(|m| required_scope(request.method(), m.as_str()))
+            .unwrap_or("admin");
+        if !scope_admits(&scopes, required) {
             return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "authentication required"})),
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "insufficient scope", "required_scope": required})),
             ).into_response();
         }
     }
+    // Without compliance the token is authenticated but not scope-gated.
+    #[cfg(not(feature = "compliance"))]
+    let _ = &scopes;
+
     next.run(request).await
+}
+
+/// Map a presented bearer token to its scope grant, or `None` if unrecognised.
+///
+/// The legacy `gateway_auth_token` is the superuser case: it grants `["*"]`, so
+/// deployments that only set it behave exactly as before. Scoped tokens are only
+/// consulted under the `compliance` feature.
+fn resolve_token_scopes(cfg: &crate::config::GossipConfig, presented: &str) -> Option<Vec<String>> {
+    if let Some(legacy) = cfg.gateway_auth_token.as_deref()
+        && presented == legacy
+    {
+        return Some(vec!["*".to_string()]);
+    }
+    #[cfg(feature = "compliance")]
+    {
+        for t in &cfg.gateway_scoped_tokens {
+            if t.token == presented {
+                return Some(t.scopes.clone());
+            }
+        }
+    }
+    None
+}
+
+/// True if `scopes` grants `required` (exact match or the `"*"` wildcard).
+#[cfg(feature = "compliance")]
+fn scope_admits(scopes: &[String], required: &str) -> bool {
+    scopes.iter().any(|s| s == "*" || s == required)
+}
+
+/// The OAuth2 scope a gateway route requires, keyed on its matched-path pattern
+/// and method. This is the gateway ACL policy table; deny-by-default — any route
+/// not listed requires `admin`. Scopes are coarse `resource:verb` families so the
+/// vocabulary stays small (`kv`, `cap`, `mesh`, `consensus`, `llm` × `read`/`write`,
+/// plus `llm:invoke`).
+#[cfg(feature = "compliance")]
+fn required_scope(method: &axum::http::Method, matched_path: &str) -> &'static str {
+    use axum::http::Method;
+    let read = method == Method::GET;
+    match matched_path {
+        // KV
+        "/gateway/kv"          => if read { "kv:read" } else { "kv:write" },
+        "/gateway/kv/keys"     => "kv:read",
+        "/gateway/kv/quorum"   => "kv:write",
+        // Capabilities
+        "/gateway/capability/advertise"   => "cap:write",
+        "/gateway/capability/{handle_id}" => "cap:write",
+        "/gateway/capability/resolve"     => "cap:read",
+        "/gateway/shard/{ns}/{name}"      => "cap:read",
+        // Layer II mesh messaging
+        "/gateway/signal/emit"     => "mesh:write",
+        "/gateway/signal/sse/{kind}" => "mesh:read",
+        "/gateway/demand"          => "mesh:read",
+        "/gateway/rpc/call"        => "mesh:write",
+        "/gateway/rpc/serve/{kind}" => "mesh:read",
+        "/gateway/rpc/respond"     => "mesh:write",
+        "/gateway/scatter"         => "mesh:write",
+        "/gateway/mailbox/deliver" => "mesh:write",
+        "/gateway/mailbox/{kind}"  => "mesh:read",
+        "/gateway/shard/emit"      => "mesh:write",
+        // Layer III consensus / consistency overlay
+        "/gateway/overlay/consistent/set"      => "consensus:write",
+        "/gateway/overlay/consistent/get"      => "consensus:read",
+        "/gateway/overlay/lock/acquire"        => "consensus:write",
+        "/gateway/overlay/lock/{guard_id}"     => "consensus:write",
+        "/gateway/overlay/elect"               => "consensus:write",
+        "/gateway/overlay/log/append"          => "consensus:write",
+        "/gateway/overlay/log/scan"            => "consensus:read",
+        "/gateway/overlay/log/compact"         => "consensus:write",
+        "/gateway/overlay/log/subscribe"       => "consensus:read",
+        "/gateway/overlay/log/group/subscribe" => "consensus:read",
+        "/gateway/overlay/emit_reliable"       => "consensus:write",
+        "/gateway/consensus/cross_group_propose" => "consensus:write",
+        // LLM / prompt skills
+        "/gateway/prompts"             => "llm:read",
+        "/gateway/prompts/{ns}/{name}" => if read { "llm:read" } else { "llm:write" },
+        "/gateway/llm/call"            => "llm:invoke",
+        "/gateway/llm/stream"          => "llm:invoke",
+        // Deny-by-default.
+        _ => "admin",
+    }
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -2453,6 +2584,124 @@ mod tests {
             body["error"]["message"].as_str().unwrap().contains("no-such-tool"),
             "unexpected error message: {body}"
         );
+
+        agent.shutdown().await;
+    }
+
+    // ── WS1 gateway OAuth2 scope ACLs (compliance feature) ────────────────
+
+    #[cfg(feature = "compliance")]
+    #[test]
+    fn required_scope_table_maps_families_and_denies_by_default() {
+        use axum::http::Method;
+        use super::required_scope;
+        // read/write split on the same path keys off the method.
+        assert_eq!(required_scope(&Method::GET,    "/gateway/kv"), "kv:read");
+        assert_eq!(required_scope(&Method::POST,   "/gateway/kv"), "kv:write");
+        assert_eq!(required_scope(&Method::DELETE, "/gateway/kv"), "kv:write");
+        // resource families.
+        assert_eq!(required_scope(&Method::GET,  "/gateway/capability/resolve"), "cap:read");
+        assert_eq!(required_scope(&Method::POST, "/gateway/signal/emit"), "mesh:write");
+        assert_eq!(required_scope(&Method::POST, "/gateway/overlay/consistent/set"), "consensus:write");
+        assert_eq!(required_scope(&Method::GET,  "/gateway/overlay/consistent/get"), "consensus:read");
+        assert_eq!(required_scope(&Method::POST, "/gateway/llm/call"), "llm:invoke");
+        // deny-by-default: anything unmapped requires admin.
+        assert_eq!(required_scope(&Method::POST, "/gateway/some/future/route"), "admin");
+    }
+
+    #[cfg(feature = "compliance")]
+    #[test]
+    fn scope_admits_exact_and_wildcard_only() {
+        use super::scope_admits;
+        let ro = vec!["kv:read".to_string()];
+        assert!(scope_admits(&ro, "kv:read"));
+        assert!(!scope_admits(&ro, "kv:write"));
+        let star = vec!["*".to_string()];
+        assert!(scope_admits(&star, "kv:write"));
+        assert!(scope_admits(&star, "admin"));
+        // Empty grant admits nothing.
+        assert!(!scope_admits(&[], "kv:read"));
+    }
+
+    #[cfg(feature = "compliance")]
+    #[test]
+    fn resolve_token_scopes_legacy_is_wildcard() {
+        use super::resolve_token_scopes;
+        let mut cfg = GossipConfig::default();
+        cfg.gateway_auth_token = Some("legacy-tok".to_string());
+        cfg.gateway_scoped_tokens = vec![crate::GatewayToken {
+            token:  "ro-tok".to_string(),
+            scopes: vec!["kv:read".to_string()],
+        }];
+        // Legacy token → superuser wildcard (unchanged upgrade path).
+        assert_eq!(resolve_token_scopes(&cfg, "legacy-tok"), Some(vec!["*".to_string()]));
+        // Scoped token → its grant.
+        assert_eq!(resolve_token_scopes(&cfg, "ro-tok"), Some(vec!["kv:read".to_string()]));
+        // Unknown token → None (unauthenticated).
+        assert_eq!(resolve_token_scopes(&cfg, "nope"), None);
+    }
+
+    /// End-to-end: a scoped token is admitted on routes within its grant,
+    /// denied (403) on routes outside it, the wildcard token passes scope
+    /// gating everywhere, an unknown token is 401, and public routes stay open
+    /// with no credentials at all.
+    #[cfg(feature = "compliance")]
+    #[tokio::test]
+    async fn test_gateway_scoped_token_acl_end_to_end() {
+        use axum::http::header::AUTHORIZATION;
+
+        let gossip_port = alloc_port();
+        let http_port   = alloc_port();
+        let id  = NodeId::new("127.0.0.1", gossip_port).unwrap();
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = gossip_port;
+        cfg.http_port = Some(http_port);
+        cfg.gateway_scoped_tokens = vec![
+            crate::GatewayToken { token: "ro".into(),    scopes: vec!["kv:read".into()] },
+            crate::GatewayToken { token: "super".into(), scopes: vec!["*".into()] },
+        ];
+
+        let agent = Arc::new(GossipAgent::new(id, cfg));
+        agent.start().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let client = reqwest::Client::new();
+        let base = format!("http://127.0.0.1:{http_port}");
+
+        // Public route: open, no credentials.
+        let r = client.get(format!("{base}/health")).send().await.unwrap();
+        assert_eq!(r.status(), 200, "public /health must stay open");
+
+        // No token on a protected route → 401.
+        let r = client.get(format!("{base}/gateway/kv/keys")).send().await.unwrap();
+        assert_eq!(r.status(), 401, "missing token must be unauthorized");
+
+        // Unknown token → 401.
+        let r = client.get(format!("{base}/gateway/kv/keys"))
+            .header(AUTHORIZATION, "Bearer bogus").send().await.unwrap();
+        assert_eq!(r.status(), 401, "unknown token must be unauthorized");
+
+        // ro token on a kv:read route → admitted (not 401/403).
+        let r = client.get(format!("{base}/gateway/kv/keys"))
+            .header(AUTHORIZATION, "Bearer ro").send().await.unwrap();
+        assert_eq!(r.status(), 200, "kv:read token must reach kv/keys");
+
+        // ro token on a kv:write route → 403 (authenticated, insufficient scope).
+        let r = client.post(format!("{base}/gateway/kv"))
+            .header(AUTHORIZATION, "Bearer ro")
+            .json(&serde_json::json!({"key": "k", "value": "v"}))
+            .send().await.unwrap();
+        assert_eq!(r.status(), 403, "kv:read token must be forbidden on kv:write");
+        let body: serde_json::Value = r.json().await.unwrap();
+        assert_eq!(body["required_scope"], "kv:write");
+
+        // super (wildcard) token on the same write route → passes scope gating.
+        let r = client.post(format!("{base}/gateway/kv"))
+            .header(AUTHORIZATION, "Bearer super")
+            .json(&serde_json::json!({"key": "k", "value": "v"}))
+            .send().await.unwrap();
+        assert_ne!(r.status(), 401, "wildcard token must authenticate");
+        assert_ne!(r.status(), 403, "wildcard token must pass scope gating");
 
         agent.shutdown().await;
     }
