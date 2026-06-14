@@ -130,6 +130,7 @@ fn spawn_handler(
         bulk_transport: Arc::new(BulkTransport::new(0, Duration::from_secs(5), 64)),
         rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         commit_conflicts: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        sys_namespace_violations: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         tls: std::sync::OnceLock::new(),
         peer_keys: Arc::new(papaya::HashMap::new()),
         peers: Arc::new(papaya::HashMap::new()),
@@ -534,6 +535,7 @@ async fn test_subscribe_notified_via_gossip() {
             bulk_transport: Arc::new(BulkTransport::new(0, Duration::from_secs(5), 64)),
             rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             commit_conflicts: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            sys_namespace_violations: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             tls: std::sync::OnceLock::new(),
             peer_keys: Arc::new(papaya::HashMap::new()),
             peers: Arc::new(papaya::HashMap::new()),
@@ -3049,4 +3051,63 @@ async fn test_ws1_rbac_signed_roles_propagate_and_authorize_across_nodes() {
     a.shutdown_with_timeout(Duration::from_secs(5)).await;
     b.shutdown_with_timeout(Duration::from_secs(5)).await;
     let _ = std::fs::remove_dir_all(&cert_dir);
+}
+
+// ── sys/ namespace-ownership tripwire (Layer I detection) ─────────────────
+
+/// WS1 increment 5: the `sys/` write-guard tripwire detects an inbound remote
+/// write to a `sys/` key the receiving node owns. Node A writes
+/// `sys/load/{B}/probe` — a key in B's own load namespace that only B should
+/// ever originate — and it gossips to B. B applies it (LWW, detection not
+/// prevention) but flags it: `system_stats().sys_namespace_violations` rises.
+/// A control key in A's *own* load namespace must not trip B's wire.
+#[tokio::test]
+async fn test_sys_namespace_tripwire_flags_foreign_self_owned_write() {
+    let port_a = alloc_port();
+    let port_b = alloc_port();
+    let id = |p: u16| NodeId::new("127.0.0.1", p).unwrap();
+    let node_b = id(port_b);
+
+    let mk = |port: u16, boots: Vec<NodeId>| {
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = port;
+        cfg.bootstrap_peers = boots;
+        cfg.reconnect_backoff_secs = 1;
+        cfg.health_check_interval_secs = 1;
+        GossipAgent::new(id(port), cfg)
+    };
+
+    let a = Arc::new(mk(port_a, vec![]));
+    let b = Arc::new(mk(port_b, vec![id(port_a)]));
+    a.start().await.unwrap();
+    b.start().await.unwrap();
+
+    // Structural poll: both peered so writes gossip A → B.
+    let mut peered = false;
+    for _ in 0..200 {
+        if !a.peers().is_empty() && !b.peers().is_empty() { peered = true; break; }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(peered, "nodes failed to peer");
+
+    // Control: A writes its OWN load key — legitimate, must never trip B.
+    let _ = a.kv().set(format!("sys/load/{}/control", id(port_a)), Bytes::from_static(b"x"));
+    // Violation: A writes a key in B's load namespace.
+    let foreign_key = format!("sys/load/{node_b}/probe");
+    let _ = a.kv().set(foreign_key.clone(), Bytes::from_static(b"clobber"));
+
+    // Structural poll: B observes the foreign write and flags it.
+    let mut flagged = false;
+    for _ in 0..200 {
+        // Confirm the write actually reached B (gossip arrived) …
+        if b.kv().get(&foreign_key).is_some() && b.system_stats().sys_namespace_violations >= 1 {
+            flagged = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(flagged, "B did not flag the foreign write to its own sys/load namespace");
+
+    a.shutdown_with_timeout(Duration::from_secs(5)).await;
+    b.shutdown_with_timeout(Duration::from_secs(5)).await;
 }

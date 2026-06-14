@@ -197,6 +197,19 @@ pub struct SystemStats {
     /// counter is the tripwire that makes violations legible. Requires
     /// `start_consensus_listener` — nodes without a listener do not detect.
     pub commit_conflicts: u64,
+
+    /// Cumulative count of inbound (remote) writes to a `sys/` key this node
+    /// owns — `sys/identity/{self}`, `sys/load/{self}`, `sys/role/{self}`,
+    /// `sys/tuple/{self}/…`. Only the named node should ever originate these;
+    /// a remote write to one is a namespace-ownership violation.
+    ///
+    /// **Detection, not prevention** (mirrors [`commit_conflicts`](Self::commit_conflicts)):
+    /// the offending write is still applied per LWW — Layer I stays ignorant of
+    /// the namespace convention — and a `warn!` is logged. `sys/` ownership is
+    /// promise-strength; this counter is the tripwire that makes a clobber
+    /// legible. Signed keys (`identity`, `role`) additionally fail verification
+    /// at read; unsigned keys (`load`, `tuple`) rely on this signal alone.
+    pub sys_namespace_violations: u64,
 }
 
 /// Shared infrastructure extracted from `GossipAgent` into a single `Arc` so that
@@ -304,6 +317,12 @@ pub(crate) struct TaskCtx {
     /// Incremented by the consensus listener's tripwire; Relaxed ordering —
     /// purely diagnostic, surfaced via `system_stats()` and `/stats`.
     pub(crate) commit_conflicts: Arc<AtomicU64>,
+
+    /// Cumulative `sys/` namespace-ownership violations (see
+    /// `SystemStats::sys_namespace_violations`). Incremented by the connection
+    /// handler's inbound-apply tripwire when a remote write targets a `sys/`
+    /// key this node owns; Relaxed ordering — purely diagnostic.
+    pub(crate) sys_namespace_violations: Arc<AtomicU64>,
 
     // ── Security ─────────────────────────────────────────────────────────────────
     /// TLS context (server + client configs + signing key). Unset when the
@@ -607,6 +626,7 @@ impl GossipAgent {
             )),
             rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             commit_conflicts: Arc::new(AtomicU64::new(0)),
+            sys_namespace_violations: Arc::new(AtomicU64::new(0)),
             tls: std::sync::OnceLock::new(),
             peer_keys: Arc::new(papaya::HashMap::new()),
             peers: Arc::clone(&peers_arc),

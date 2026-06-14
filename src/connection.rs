@@ -22,6 +22,45 @@ use crate::stream::GossipStream;
 use tokio::{io::BufReader, sync::{mpsc::error::TrySendError, watch}};
 use tracing::{error, warn};
 
+/// `sys/` sub-prefixes whose node-id segment immediately follows the prefix.
+/// Only the named node should ever originate writes to these keys; a remote
+/// write naming *this* node is a namespace-ownership violation. `sys/quorum/`
+/// is deliberately excluded — peers legitimately write quorum evidence naming
+/// the node they observed.
+const SELF_OWNED_SYS_PREFIXES: [&str; 4] =
+    ["sys/identity/", "sys/load/", "sys/role/", "sys/tuple/"];
+
+/// `sys/` namespace-ownership tripwire — **detection, not prevention**.
+///
+/// Called on each *inbound* (remote) update. If the key targets a `sys/`
+/// namespace owned by this node (the node-id segment equals `self_node`), a
+/// peer is clobbering a key only we should ever write: bump the diagnostic
+/// counter and `warn!`. The write itself is left to LWW — Layer I never learns
+/// the `sys/` ownership convention (that would invert the layer dependency, as
+/// the consensus commit-conflict tripwire comment explains). Signed keys
+/// (`identity`, `role`) additionally fail signature verification at read;
+/// unsigned keys (`load`, `tuple`) rely on this signal alone.
+fn flag_foreign_sys_write(
+    key: &str,
+    self_node: &str,
+    counter: &std::sync::atomic::AtomicU64,
+) {
+    for prefix in SELF_OWNED_SYS_PREFIXES {
+        if let Some(rest) = key.strip_prefix(prefix) {
+            if rest.split('/').next() == Some(self_node) {
+                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                warn!(
+                    key = %key,
+                    "sys/ namespace violation: inbound remote write to a self-owned \
+                     sys/ key; applying per LWW but flagging \
+                     (see SystemStats::sys_namespace_violations)"
+                );
+            }
+            return;
+        }
+    }
+}
+
 /// Shared state threaded into every inbound connection handler.
 #[derive(Clone)]
 pub(crate) struct ConnContext {
@@ -67,6 +106,7 @@ pub(crate) async fn handle_connection(
     let signal_boundary = Arc::clone(&task_ctx.signal_boundary);
     let signal_handlers = Arc::clone(&task_ctx.signal_handlers);
     let kv_state        = Arc::clone(&task_ctx.kv_state);
+    let sys_violations  = Arc::clone(&task_ctx.sys_namespace_violations);
     let wal             = task_ctx.wal.get().cloned();
     let tls             = task_ctx.tls.get().cloned();
     let mut socket = BufReader::with_capacity(8_192, socket);
@@ -358,6 +398,7 @@ pub(crate) async fn handle_connection(
                     if let Some(ref wal) = wal {
                         let _ = wal.append(sync_entry_from(&update)).await;
                     }
+                    flag_foreign_sys_write(&update.key, &node_id_str, &sys_violations);
                     apply_and_notify(&kv_state, &update);
                 }
                 #[cfg(feature = "metrics")]
@@ -506,6 +547,7 @@ pub(crate) async fn handle_connection(
                 if let Some(ref wal) = wal {
                     let _ = wal.append(sync_entry_from(&update)).await;
                 }
+                flag_foreign_sys_write(&update.key, &node_id_str, &sys_violations);
                 apply_and_notify(&kv_state, &update);
                 #[cfg(feature = "metrics")]
                 metrics::counter!("gossip_messages_received_total").increment(1);
@@ -614,6 +656,7 @@ pub(crate) async fn handle_connection(
                 if let Some(ref wal) = wal {
                     let _ = wal.append(sync_entry_from(&update)).await;
                 }
+                flag_foreign_sys_write(&update.key, &node_id_str, &sys_violations);
                 apply_and_notify(&kv_state, &update);
                 #[cfg(feature = "metrics")]
                 metrics::counter!("gossip_messages_received_total").increment(1);
@@ -651,4 +694,49 @@ pub(crate) async fn handle_connection(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::flag_foreign_sys_write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn flagged(key: &str, self_node: &str) -> u64 {
+        let c = AtomicU64::new(0);
+        flag_foreign_sys_write(key, self_node, &c);
+        c.load(Ordering::Relaxed)
+    }
+
+    #[test]
+    fn flags_remote_write_to_each_self_owned_prefix() {
+        let me = "127.0.0.1:8080";
+        assert_eq!(flagged("sys/identity/127.0.0.1:8080", me), 1);
+        assert_eq!(flagged("sys/load/127.0.0.1:8080/cpu", me), 1);
+        assert_eq!(flagged("sys/role/127.0.0.1:8080", me), 1);
+        assert_eq!(flagged("sys/tuple/127.0.0.1:8080/orders/depth", me), 1);
+    }
+
+    #[test]
+    fn ignores_other_nodes_and_unowned_namespaces() {
+        let me = "127.0.0.1:8080";
+        // Same prefix, a *different* node id → legitimate, not flagged.
+        assert_eq!(flagged("sys/load/10.0.0.5:9000/cpu", me), 0);
+        // sys/quorum is excluded — peers legitimately attest about us.
+        assert_eq!(flagged("sys/quorum/work.done/127.0.0.1:8080", me), 0);
+        // Non-sys keys are never flagged.
+        assert_eq!(flagged("cap/orders/127.0.0.1:8080", me), 0);
+        assert_eq!(flagged("grp/team/127.0.0.1:8080", me), 0);
+        // A node id that only *prefixes* ours must not match (segment-exact).
+        assert_eq!(flagged("sys/load/127.0.0.1:80800/cpu", me), 0);
+    }
+
+    #[test]
+    fn counter_accumulates_across_calls() {
+        let me = "127.0.0.1:8080";
+        let c = AtomicU64::new(0);
+        flag_foreign_sys_write("sys/load/127.0.0.1:8080/a", me, &c);
+        flag_foreign_sys_write("sys/role/127.0.0.1:8080",   me, &c);
+        flag_foreign_sys_write("sys/load/10.0.0.5:9000/a",  me, &c); // not ours
+        assert_eq!(c.load(Ordering::Relaxed), 2);
+    }
 }
