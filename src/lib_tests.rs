@@ -130,6 +130,9 @@ fn spawn_handler(
         bulk_transport: Arc::new(BulkTransport::new(0, Duration::from_secs(5), 64)),
         rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         commit_conflicts: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        sys_namespace_violations: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        #[cfg(feature = "compliance")]
+        audit_chain: Arc::new(std::sync::Mutex::new(crate::agent::audit::AuditChainState::new())),
         tls: std::sync::OnceLock::new(),
         peer_keys: Arc::new(papaya::HashMap::new()),
         peers: Arc::new(papaya::HashMap::new()),
@@ -534,6 +537,9 @@ async fn test_subscribe_notified_via_gossip() {
             bulk_transport: Arc::new(BulkTransport::new(0, Duration::from_secs(5), 64)),
             rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             commit_conflicts: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            sys_namespace_violations: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            #[cfg(feature = "compliance")]
+            audit_chain: Arc::new(std::sync::Mutex::new(crate::agent::audit::AuditChainState::new())),
             tls: std::sync::OnceLock::new(),
             peer_keys: Arc::new(papaya::HashMap::new()),
             peers: Arc::new(papaya::HashMap::new()),
@@ -2940,4 +2946,353 @@ async fn test_lifecycle_error_contract_and_task_drain() {
         matches!(after, Err(GossipError::Shutdown)),
         "start() after shutdown must return Shutdown, got {after:?}"
     );
+}
+
+// ── WS1 RBAC end-to-end (compliance feature) ──────────────────────────────
+
+/// WS1 integration scenario: signed role claims propagate and verify across two
+/// real tls-enabled nodes, and provider-side `caller_authorized` admits/denies
+/// correctly based on the *verified* claim.
+///
+/// This exercises the whole WS1 path the unit tests stub out: A signs a role
+/// claim with its tls identity key; the claim and A's `sys/identity/` key both
+/// gossip to B; B's identity-watcher mirrors A's verifying key into `peer_keys`;
+/// and B's `roles_of(A)` only returns the claim because the signature checks out
+/// against the key B learned from the cluster — never from the (forgeable) KV
+/// entry alone. Detection-not-prevention: a node can write any `sys/role/` bytes,
+/// but only a correctly-signed claim reads back as a role.
+///
+/// Both nodes share one auto-cert dir so they share a CA (mutual trust); a
+/// unique temp dir per run keeps concurrent tests and the default
+/// `./mycelium-tls/` from colliding.
+#[cfg(feature = "compliance")]
+#[tokio::test]
+async fn test_ws1_rbac_signed_roles_propagate_and_authorize_across_nodes() {
+    use crate::config::TlsConfig;
+
+    let port_a = alloc_port();
+    let port_b = alloc_port();
+    let id = |p: u16| NodeId::new("127.0.0.1", p).unwrap();
+    let node_a = id(port_a);
+    let node_b = id(port_b);
+
+    let cert_dir =
+        std::env::temp_dir().join(format!("myc-rbac-{port_a}-{port_b}"));
+    let _ = std::fs::remove_dir_all(&cert_dir); // clean slate if a prior run left files
+
+    let mk = |port: u16, boots: Vec<NodeId>| {
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = port;
+        cfg.bootstrap_peers = boots;
+        cfg.reconnect_backoff_secs = 1;
+        // Fast Pings so peer registration (which happens on Ping receipt) and
+        // anti-entropy converge well inside the poll window.
+        cfg.health_check_interval_secs = 1;
+        cfg.tls = Some(TlsConfig {
+            auto_cert_dir: cert_dir.clone(),
+            ..TlsConfig::default()
+        });
+        GossipAgent::new(id(port), cfg)
+    };
+
+    let a = Arc::new(mk(port_a, vec![]));
+    let b = Arc::new(mk(port_b, vec![node_a.clone()]));
+    a.start().await.unwrap();
+    b.start().await.unwrap();
+
+    // Structural poll: both nodes peered (so identity keys have a path to gossip).
+    let mut peered = false;
+    for _ in 0..200 {
+        if !a.peers().is_empty() && !b.peers().is_empty() {
+            peered = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(peered, "two tls nodes failed to peer within the window");
+
+    // A advertises an admin role at data-clearance 3.
+    a.advertise_roles(["admin".into()], 3)
+        .expect("advertise_roles must succeed with a tls identity");
+
+    // Structural poll: B verifies A's claim. Returns Some only once (a) the
+    // signed `sys/role/A` entry has gossiped to B AND (b) A's identity key has
+    // reached B's peer_keys so the signature verifies.
+    let mut verified: Option<crate::RoleClaim> = None;
+    for _ in 0..200 {
+        if let Some(claim) = b.roles_of(&node_a) {
+            verified = Some(claim);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let claim = verified.expect("B never verified A's signed role claim");
+    assert!(claim.has_role("admin"), "verified claim must carry the admin role");
+    assert!(claim.clearance_at_least(3), "verified claim must carry clearance 3");
+    assert!(!claim.clearance_at_least(4), "clearance must not over-report");
+
+    // Provider-side authorization on B, keyed on the verified sender (A):
+    let admin_allow:  [Arc<str>; 1] = [Arc::<str>::from("admin")];
+    let writer_allow: [Arc<str>; 1] = [Arc::<str>::from("db-writer")];
+    let node_allow:   [Arc<str>; 1] = [Arc::<str>::from(node_a.to_string())];
+
+    assert!(b.caller_authorized(&node_a, &admin_allow),
+        "A holds the admin role → admitted");
+    assert!(!b.caller_authorized(&node_a, &writer_allow),
+        "A holds no db-writer role → denied");
+    assert!(b.caller_authorized(&node_a, &node_allow),
+        "explicit NodeId allowlist entry → admitted");
+    assert!(b.caller_authorized(&node_a, &[]),
+        "empty allowlist → open");
+
+    // A node with no advertised roles is denied a role-gated capability but
+    // still admitted on an open one.
+    assert!(!b.caller_authorized(&node_b, &admin_allow),
+        "B advertised no roles → denied a role-gated capability");
+    assert!(b.caller_authorized(&node_b, &[]),
+        "B still admitted on an open (empty-allowlist) capability");
+
+    a.shutdown_with_timeout(Duration::from_secs(5)).await;
+    b.shutdown_with_timeout(Duration::from_secs(5)).await;
+    let _ = std::fs::remove_dir_all(&cert_dir);
+}
+
+// ── sys/ namespace-ownership tripwire (Layer I detection) ─────────────────
+
+/// WS1 increment 5: the `sys/` write-guard tripwire detects an inbound remote
+/// write to a `sys/` key the receiving node owns. Node A writes
+/// `sys/load/{B}/probe` — a key in B's own load namespace that only B should
+/// ever originate — and it gossips to B. B applies it (LWW, detection not
+/// prevention) but flags it: `system_stats().sys_namespace_violations` rises.
+/// A control key in A's *own* load namespace must not trip B's wire.
+#[tokio::test]
+async fn test_sys_namespace_tripwire_flags_foreign_self_owned_write() {
+    let port_a = alloc_port();
+    let port_b = alloc_port();
+    let id = |p: u16| NodeId::new("127.0.0.1", p).unwrap();
+    let node_b = id(port_b);
+
+    let mk = |port: u16, boots: Vec<NodeId>| {
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = port;
+        cfg.bootstrap_peers = boots;
+        cfg.reconnect_backoff_secs = 1;
+        cfg.health_check_interval_secs = 1;
+        GossipAgent::new(id(port), cfg)
+    };
+
+    let a = Arc::new(mk(port_a, vec![]));
+    let b = Arc::new(mk(port_b, vec![id(port_a)]));
+    a.start().await.unwrap();
+    b.start().await.unwrap();
+
+    // Structural poll: both peered so writes gossip A → B.
+    let mut peered = false;
+    for _ in 0..200 {
+        if !a.peers().is_empty() && !b.peers().is_empty() { peered = true; break; }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(peered, "nodes failed to peer");
+
+    // Control: A writes its OWN load key — legitimate, must never trip B.
+    let _ = a.kv().set(format!("sys/load/{}/control", id(port_a)), Bytes::from_static(b"x"));
+    // Violation: A writes a key in B's load namespace.
+    let foreign_key = format!("sys/load/{node_b}/probe");
+    let _ = a.kv().set(foreign_key.clone(), Bytes::from_static(b"clobber"));
+
+    // Structural poll: B observes the foreign write and flags it.
+    let mut flagged = false;
+    for _ in 0..200 {
+        // Confirm the write actually reached B (gossip arrived) …
+        if b.kv().get(&foreign_key).is_some() && b.system_stats().sys_namespace_violations >= 1 {
+            flagged = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(flagged, "B did not flag the foreign write to its own sys/load namespace");
+
+    a.shutdown_with_timeout(Duration::from_secs(5)).await;
+    b.shutdown_with_timeout(Duration::from_secs(5)).await;
+}
+
+// ── WS2 audit trail — agent-level writer + chain verification ─────────────
+
+/// WS2 increment 2: a node seals events into its own hash-chained audit stream
+/// and the stream verifies end-to-end against the node's identity key — and a
+/// post-hoc edit to any stored record breaks verification (the tamper probe).
+#[cfg(feature = "compliance")]
+#[tokio::test]
+async fn test_ws2_audit_chain_writes_and_verifies_on_a_node() {
+    use crate::config::TlsConfig;
+    use crate::{
+        audit_stream_prefix, verify_stream_from_genesis, AuditAction, AuditOutcome,
+        SignedAuditRecord,
+    };
+
+    let port = alloc_port();
+    let id = NodeId::new("127.0.0.1", port).unwrap();
+    let cert_dir = std::env::temp_dir().join(format!("myc-audit-{port}"));
+    let _ = std::fs::remove_dir_all(&cert_dir);
+
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = port;
+    cfg.tls = Some(TlsConfig { auto_cert_dir: cert_dir.clone(), ..TlsConfig::default() });
+    let a = Arc::new(GossipAgent::new(id.clone(), cfg));
+    a.start().await.unwrap();
+
+    // Structural poll: the tls identity key lands at sys/identity/{self}.
+    let id_key = format!("sys/identity/{id}");
+    let mut vk_bytes = None;
+    for _ in 0..100 {
+        if let Some(b) = a.kv().get(&id_key) {
+            vk_bytes = Some(b);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let vk_bytes = vk_bytes.expect("node identity key never written");
+    assert_eq!(vk_bytes.len(), 32);
+    let mut vk = [0u8; 32];
+    vk.copy_from_slice(&vk_bytes);
+
+    // Seal three events; content hashes must be distinct.
+    let h0 = a.audit(AuditAction::Invoke, "10.0.0.1:9000", "skill/a", AuditOutcome::Success, None).unwrap();
+    let h1 = a.audit(AuditAction::Read, "10.0.0.2:9000", "kv/secret", AuditOutcome::Denied, Some("scope".into())).unwrap();
+    let _h2 = a.audit(AuditAction::Write, "10.0.0.1:9000", "kv/x", AuditOutcome::Success, None).unwrap();
+    assert_ne!(h0, h1, "distinct events have distinct content hashes");
+
+    // Collect the stream, order by key (lexicographic = seq order), decode.
+    let mut entries = a.kv().scan_prefix(&audit_stream_prefix(&id));
+    entries.sort_by(|x, y| x.0.cmp(&y.0));
+    let chain: Vec<SignedAuditRecord> = entries
+        .iter()
+        .map(|(_, v)| SignedAuditRecord::decode(v).expect("decode audit record"))
+        .collect();
+    assert_eq!(chain.len(), 3, "all three sealed records are present");
+    assert_eq!(verify_stream_from_genesis(&chain, &id, &vk), Ok(()), "honest chain verifies");
+
+    // Tamper probe: flip a stored record's outcome → verification must fail.
+    let mut tampered = chain.clone();
+    tampered[1].record.outcome = AuditOutcome::Success;
+    assert!(
+        verify_stream_from_genesis(&tampered, &id, &vk).is_err(),
+        "a post-hoc edit must break chain verification"
+    );
+
+    a.shutdown_with_timeout(Duration::from_secs(5)).await;
+    let _ = std::fs::remove_dir_all(&cert_dir);
+}
+
+// ── WS3 crown-jewel — data-at-rest encryption hook ────────────────────────
+
+/// A trivial reversible cipher for exercising the data-at-rest hook: a 1-byte
+/// key tag followed by XOR-with-key. `decrypt` rejects a blob tagged with a
+/// different key (returns `None`), so a wrong-key replay reads as corrupt.
+struct XorCipher {
+    key: u8,
+}
+
+impl crate::DataAtRestCipher for XorCipher {
+    fn encrypt(&self, plaintext: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(plaintext.len() + 1);
+        out.push(self.key);
+        out.extend(plaintext.iter().map(|b| b ^ self.key));
+        out
+    }
+    fn decrypt(&self, ciphertext: &[u8]) -> Option<Vec<u8>> {
+        let (tag, body) = ciphertext.split_first()?;
+        if *tag != self.key {
+            return None; // wrong key → treated as corrupt
+        }
+        Some(body.iter().map(|b| b ^ self.key).collect())
+    }
+}
+
+/// WS3: an attached `DataAtRestCipher` encrypts WAL/snapshot bytes on disk
+/// (plaintext never appears in `wal.bin`), the same cipher recovers the data on
+/// restart, and a wrong-key cipher cannot — proving the hook is load-bearing.
+#[tokio::test]
+async fn test_ws3_data_at_rest_cipher_encrypts_wal_and_round_trips() {
+    use crate::{PersistenceConfig, SyncMode};
+
+    let port = alloc_port();
+    let id = NodeId::new("127.0.0.1", port).unwrap();
+    let base = std::env::temp_dir().join(format!("myc-darc-{port}"));
+    let _ = std::fs::remove_dir_all(&base);
+    let wal_path = base.join(id.to_string()).join("kv").join("wal.bin");
+
+    let marker: &[u8] = b"TOPSECRET-PLAINTEXT-MARKER";
+
+    let mk = || {
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = port;
+        cfg.persistence = Some(PersistenceConfig {
+            base_path: base.clone(),
+            sync_mode: SyncMode::Flush,
+            snapshot_wal_threshold: 1_000_000, // keep data in wal.bin, no auto-snapshot
+            snapshot_interval_secs: 3_600,
+        });
+        GossipAgent::new(id.clone(), cfg)
+    };
+
+    // ── Phase 1: write under encryption ──────────────────────────────────
+    let a1 = Arc::new(mk());
+    a1.with_data_at_rest_cipher(Arc::new(XorCipher { key: 0x5A }));
+    a1.start().await.unwrap();
+    let _ = a1.kv().set("secret/1", Bytes::copy_from_slice(marker));
+
+    // Structural poll: wait until the WAL record has actually landed on disk.
+    let mut wal_bytes = Vec::new();
+    for _ in 0..200 {
+        if let Ok(b) = std::fs::read(&wal_path)
+            && !b.is_empty()
+        {
+            wal_bytes = b;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(!wal_bytes.is_empty(), "WAL never flushed to disk");
+
+    // Encryption proof: the plaintext marker must NOT appear on disk.
+    let contains = wal_bytes
+        .windows(marker.len())
+        .any(|w| w == marker);
+    assert!(!contains, "plaintext marker found in wal.bin — bytes were not encrypted");
+
+    a1.shutdown_with_timeout(Duration::from_secs(5)).await;
+
+    // ── Phase 2: same key recovers the data ──────────────────────────────
+    let a2 = Arc::new(mk());
+    a2.with_data_at_rest_cipher(Arc::new(XorCipher { key: 0x5A }));
+    a2.start().await.unwrap();
+    let mut recovered = None;
+    for _ in 0..40 {
+        if let Some(v) = a2.kv().get("secret/1") {
+            recovered = Some(v);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(
+        recovered.as_deref(),
+        Some(marker),
+        "same-key restart must recover the encrypted record"
+    );
+    a2.shutdown_with_timeout(Duration::from_secs(5)).await;
+
+    // ── Phase 3: wrong key cannot read it ────────────────────────────────
+    let a3 = Arc::new(mk());
+    a3.with_data_at_rest_cipher(Arc::new(XorCipher { key: 0x11 }));
+    a3.start().await.unwrap();
+    // Give replay a chance to run; the record must NOT decode under the wrong key.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        a3.kv().get("secret/1").is_none(),
+        "wrong-key replay must not recover the record (cipher is load-bearing)"
+    );
+    a3.shutdown_with_timeout(Duration::from_secs(5)).await;
+
+    let _ = std::fs::remove_dir_all(&base);
 }

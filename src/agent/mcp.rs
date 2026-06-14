@@ -501,6 +501,48 @@ mod tests {
         agent.shutdown().await;
     }
 
+    /// WS3 egress gate: a non-empty `allow_hosts` that does not list the target
+    /// host denies `connect_mcp_server` *before* any outbound request.
+    #[cfg(feature = "gateway")]
+    #[tokio::test]
+    async fn test_mcp_egress_policy_denies_disallowed_host() {
+        let port = alloc_port();
+        let id   = NodeId::new("127.0.0.1", port).unwrap();
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = port;
+        cfg.egress = crate::EgressPolicy { allow_hosts: vec!["allowed.example".into()] };
+        let agent = Arc::new(GossipAgent::new(id, cfg));
+        agent.start().await.unwrap();
+
+        // 127.0.0.1 is not on the allowlist → denied (no server need exist).
+        // `.err()` avoids requiring Debug on the Ok type (McpClientHandle).
+        let err = agent
+            .mcp().connect_mcp_server("http://127.0.0.1:9/")
+            .await
+            .err()
+            .expect("egress policy must deny a disallowed host");
+        match err {
+            super::McpError::Transport(msg) => assert!(
+                msg.contains("egress denied"),
+                "expected egress-denied transport error, got: {msg}"
+            ),
+            _ => panic!("expected Transport(egress denied)"),
+        }
+
+        // A listed host passes the gate (the connect then fails on transport,
+        // proving the gate did not block it — a different error).
+        let err2 = agent
+            .mcp().connect_mcp_server("http://allowed.example:9/")
+            .await
+            .err()
+            .expect("unreachable host should fail at transport, not the gate");
+        if let super::McpError::Transport(msg) = err2 {
+            assert!(!msg.contains("egress denied"), "allowed host must pass the gate");
+        }
+
+        agent.shutdown().await;
+    }
+
     #[cfg(feature = "gateway")]
     #[tokio::test]
     async fn test_mcp_client_proxies_call() {

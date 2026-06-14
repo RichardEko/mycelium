@@ -60,6 +60,37 @@ impl SkillRunner {
         let ns = self.skill.capability.ns.clone();
         let name = self.skill.capability.name.clone();
 
+        // Provider-side authorization (WS1, compliance feature). Under the tls
+        // identity the incoming RPC sender is signature-verified at the
+        // connection layer, so `req.sender()` is trustworthy here — the only
+        // place `authorized_callers` can be *enforced* (the caller controls its
+        // own resolve). An empty allowlist is open. Denial is logged to the
+        // audit trail and answered with an error, never silently dropped.
+        #[cfg(feature = "compliance")]
+        {
+            let allow: Vec<std::sync::Arc<str>> = self
+                .skill
+                .capability
+                .policy
+                .as_ref()
+                .map(|p| p.authorized_callers.iter().map(|s| std::sync::Arc::<str>::from(s.as_str())).collect())
+                .unwrap_or_default();
+            if !self.agent.caller_authorized(req.sender(), &allow) {
+                tracing::warn!("skill {ns}/{name}: denied unauthorized caller {caller}");
+                // Tamper-evident audit of the denial — verified principal, Denied outcome.
+                let _ = self.agent.audit(
+                    mycelium::AuditAction::Invoke,
+                    caller.clone(),
+                    format!("{ns}/{name}"),
+                    mycelium::AuditOutcome::Denied,
+                    Some(serde_json::json!({"nonce": nonce, "reason": "authorized_callers"}).to_string()),
+                );
+                let err = serde_json::json!({"error": "unauthorized: caller not in authorized_callers"});
+                self.agent.service().rpc_respond(&req, Bytes::from(serde_json::to_vec(&err).unwrap_or_default()));
+                return;
+            }
+        }
+
         let input: Value = match serde_json::from_slice(&req.payload()) {
             Ok(v) => v,
             Err(e) => {

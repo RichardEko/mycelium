@@ -325,7 +325,7 @@ async fn tls_connect(
         let server_name = ServerName::try_from(ip.to_string().as_str())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?
             .to_owned();
-        let connector = tokio_rustls::TlsConnector::from(Arc::clone(&node_tls.client_config));
+        let connector = tokio_rustls::TlsConnector::from(node_tls.client_config());
         let tls_stream = connector.connect(server_name, stream).await?;
         return Ok(GossipStream::TlsClient(tls_stream));
     }

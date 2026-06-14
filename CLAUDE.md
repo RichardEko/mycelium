@@ -85,7 +85,7 @@ These are real work items. Anyone resuming should read
 |---|---|
 | TupleSpace companion crate | **Shipped** (2026-06-11) as workspace member `mycelium-tuple-space/` — all 5 phases of [`docs/plans/mycelium-tuple-space.md`](docs/plans/mycelium-tuple-space.md). See §TupleSpace companion crate below. |
 | Pre-release arch remediation | **Complete.** All 9 steps done — plan at `~/.claude/plans/humble-twirling-comet.md`. |
-| v1.x completion (Production Readiness Gap) | Action plan at [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md) — WS1–WS6 (RBAC/identity, tamper-evident hash-chained audit, crown-jewel encryption hooks, generic-OIDC SSO, hot cert rotation, doc alignment) to close the remaining v1.x gaps to an implemented-tested-documented bar. Support/SLA is commercial-track (out of engineering scope). |
+| v1.x completion (Production Readiness Gap) | Action plan at [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md). **WS1 (Identity & RBAC) shipped** — signed role claims, provider-side capability authz, OAuth2 gateway ACLs, `sys/` namespace tripwire; see §RBAC / identity. **WS2 (tamper-evident audit) shipped** — per-node hash-chained signed `sys/audit/` trail, `/gateway/audit` verify endpoint, SkillRunner integration; see §Audit trail. **WS3 (crown-jewel) shipped** — opt-in data-at-rest cipher hook, egress allowlist, blast-radius threat model; see §Crown-jewel posture. **WS4 (OIDC SSO) shipped** — generic-OIDC JWT validation at the gateway (alg-confusion-safe), discovery + cached JWKS, groups→scopes; see §RBAC / identity (OIDC SSO) + [`docs/operations/sso.md`](docs/operations/sso.md). **Pending:** WS5 hot cert rotation, WS6 doc sweep. Support/SLA is commercial-track (out of engineering scope). |
 
 **Already shipped (removed from list):** fuzz harness (`fuzz/fuzz_targets/`), SignalHandlers split, ConsensusEngine::propose extraction, locality/topology Phases 0–7, cross-group consensus Phase 8 (`cross_group_propose` + `GroupQuorum`), watcher C2 (`run_consolidated_opacity_watcher` + `FilterOpacityRegistry`), signal reorder buffer (`emit_ordered()` + wire v11 `hlc_seq`), semantic coordination (capability schema versioning `with_schema_id`/`CapFilter::with_schema`, gossip-propagated skill payload schemas `with_input_schema`/`with_output_schema`, signal sender authorization `signal_rx_from`, FIPA-ACL speech act taxonomy — `examples/semantic_coordination.rs`), schema registry (`publish_schema`, `force_publish_schema`, `get_schema`, `list_schemas`, `seed_schemas_from_dir` — `src/agent/schema_ops.rs`), **pre-release arch remediation** (sub-handle facade — `KvHandle`, `MeshHandle`, `SchemaHandle`, `ConsensusHandle`, `ServiceHandle`, `CapabilitiesHandle` — plus `gateway` feature gate for Axum).
 
@@ -301,6 +301,7 @@ All `Mutex` and `RwLock` sites in the codebase. **Invariant: no function acquire
 | 5 | `GossipAgent::gossip_rxs` | `Mutex<Option<Vec<Receiver>>>` | `start()` (consumed once, `take()`d) | Single-use; never held after `start()` returns |
 | 6 | `GossipAgent::extra_routes` | `Mutex<Option<Router>>` | `with_http_routes()` (set once), `start()` (consumed, `take()`d) | Gateway feature only; single-use |
 | 7 | `KvStore::index_stripes` | `[Mutex<()>; 64]` (striped by key hash) | `apply_and_notify` secondary-structure reconcile | Leaf lock: nothing else from this table is acquired while held; synchronous section (store re-read + index ops), never across `await`. Exists because the store CAS is lock-free — without it, two winning writers to one key could interleave index ops opposite to their CAS order and strand a live key outside `scan_prefix` (M2 Run-18 finding) |
+| 8 | `TaskCtx::audit_chain` | `Mutex<AuditChainState>` (`compliance` feature) | `audit()` record sealing | Leaf lock: serialises the per-node hash chain (seq + last_hash advance atomically). The guard is **released before** the KV write, so it never overlaps lock #7; synchronous section (build record + sign + hash), never across `await` |
 
 **Note on async contexts:** `Mutex` guards in Tokio async code are `!Send` when held across `await` points — the compiler enforces this. All sites above release the guard before any `await`, which is why `std::sync::Mutex` (not `tokio::sync::Mutex`) is used throughout: `std::sync::Mutex` is cheaper and the compiler will error if a guard is accidentally held across a suspension point.
 
@@ -373,7 +374,7 @@ that registration.
 |---|---|
 | `GET /health` | 200 = process alive |
 | `GET /ready` | 200 = capabilities advertised + no dead shards |
-| `GET /stats` | `node_id`, `store_entries`, `dropped_frames`, `task_count`, `commit_conflicts` |
+| `GET /stats` | `node_id`, `store_entries`, `dropped_frames`, `task_count`, `commit_conflicts`, `sys_namespace_violations` |
 | `GET /consensus/{slot}` | `committed` (base64 or null, **lease-aware**) + `ballot` (u64) + `lease_ms` + `lease_expired` for a consensus slot |
 | `GET /metrics` | Prometheus scrape endpoint (`metrics` feature required) |
 
@@ -455,6 +456,141 @@ Without `gateway`, `with_http_routes`, `with_a2a`, the SSE/WebSocket endpoints, 
 the MCP-over-HTTP bridge are all compiled away. The gossip core, KV store, signal mesh,
 consensus, and all typed sub-handles (`KvHandle`, `MeshHandle`, etc.) remain available.
 
+### RBAC / identity (compliance feature) — WS1
+
+The `compliance` feature (`= ["gateway", "tls"]`) adds role-based access control
+on top of the Ed25519 node identity. It is **opt-in and additive**: with the
+feature off every type below compiles away and behaviour is unchanged; with it
+on but unconfigured (no roles advertised, no scoped tokens) behaviour is still
+unchanged. Lives in [`src/agent/rbac.rs`](src/agent/rbac.rs) plus the gateway
+middleware in [`src/agent/http.rs`](src/agent/http.rs). Plan: [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md) §WS1.
+
+Four layers, each obeying the **detection-not-prevention / promise-strength**
+posture — RBAC is enforced where a resource is *served*, never by teaching
+Layer I a higher-layer law:
+
+1. **Signed role claims (Layer I).** `advertise_roles(roles, clearance)` writes a
+   `SignedRoleClaim` to `sys/role/{node}` — an Ed25519 signature (the `tls`
+   identity key) over `{node_id, roles, clearance, issued_at_ms}`. `roles_of(node)`
+   returns the claim **only if** the signature verifies against `node`'s identity
+   key as learned from the cluster (`sys/identity/` → `peer_keys`), *not* the
+   forgeable KV bytes. A forged `sys/role/` write reads back as `None`. Roles are
+   canonicalised (sorted/deduped) in `RoleClaim::new`; `clearance` is the L1/L2/L3
+   data-classification level. `verified_roles` / `caller_admitted` are pure
+   functions, unit-tested without a live agent.
+
+2. **Provider-side capability authz.** `caller_authorized(sender, allow)` admits a
+   verified RPC `sender` if `allow` (a capability's `authorized_callers`) is empty
+   (open), lists the sender's NodeId, or lists a role the sender *verifiably*
+   holds. Under the `tls` identity the inbound RPC sender is signature-checked at
+   the connection layer, so `req.sender()` is trustworthy — this is the one place
+   `authorized_callers` is genuinely enforceable (the caller controls its own
+   resolve). Wired into the SkillRunner serve loop: a denied invoke is audited and
+   answered with an error, never silently dropped.
+
+3. **OAuth2 scope gateway ACLs.** `GossipConfig::gateway_scoped_tokens:
+   Vec<GatewayToken>` maps a bearer token to `resource:verb` scopes
+   (`kv:read`, `kv:write`, `mesh:write`, `consensus:read`, `llm:invoke`, …). Each
+   `/gateway/**` route requires a scope (`required_scope` table in `http.rs`);
+   a request is admitted iff its token's grant holds that scope or `"*"`.
+   **Deny-by-default**: an unmapped gateway route requires `admin`. The legacy
+   `gateway_auth_token` resolves to `["*"]`, so single-token deployments upgrade
+   with no behaviour change. **M16 edge criterion:** `/health`, `/ready`, `/stats`,
+   `/metrics`, and the descriptor path are *not* under `/gateway` and stay public
+   and uncredentialed.
+
+   **OIDC SSO (WS4, `src/agent/oidc.rs`).** When `GossipConfig::oidc` is set, the
+   middleware tries OIDC *first*: a JWT bearer is validated against the IdP's
+   JWKS and its groups mapped to scopes, which then feed the *same* scope gate —
+   so an OIDC principal is authorized exactly like a scoped token, just
+   signature-authenticated. **Security:** `validate_token` enforces an
+   asymmetric-only algorithm allowlist (RS*/ES*/PS*) *before* key selection and
+   pins verification to the vetted alg — closing JWT alg-confusion (HS256 with
+   the public key as MAC secret → rejected). `iss`/`aud`/`exp` all checked.
+   `OidcVerifier` caches the JWKS (TTL + refresh-on-unknown-kid; discovery via
+   `.well-known/openid-configuration`). Human-operator auth, **not** agent
+   identity. A forged/expired JWT matches no static token → 401.
+
+4. **`sys/` namespace-ownership tripwire (Layer I, core — not compliance-gated).**
+   `sys/identity|load|role|tuple/{node}` is owned by `{node}`; only that node
+   should originate writes. The connection handler flags an *inbound* (remote)
+   write naming **self** in one of these prefixes — `warn!` + a cumulative
+   `SystemStats::sys_namespace_violations` counter (on `/stats`). **Detection
+   only**: the write still applies per LWW, exactly like the consensus
+   commit-conflict tripwire — do **not** turn this into an `apply_and_notify`
+   write guard. `sys/quorum/` is excluded (peers legitimately attest about the
+   observed node). Signed keys (`identity`, `role`) also fail verification at
+   read; unsigned keys (`load`, `tuple`) rely on this signal alone.
+
+**Gates:** `cargo test --lib --features compliance` and
+`cargo clippy --lib --tests --features compliance -- -D warnings`. Cross-node
+integration scenarios in `src/lib_tests.rs`
+(`test_ws1_rbac_signed_roles_propagate_and_authorize_across_nodes`,
+`test_gateway_scoped_token_acl_end_to_end`,
+`test_sys_namespace_tripwire_flags_foreign_self_owned_write`).
+
+### Audit trail (compliance feature) — WS2
+
+Tamper-evident, signed, hash-chained audit trail. Core in
+[`src/agent/audit.rs`](src/agent/audit.rs); endpoint in
+[`src/agent/http.rs`](src/agent/http.rs); SkillRunner integration in
+`src/bin/skillrunner/`. Plan: `docs/plans/v1x-completion.md` §WS2.
+
+- **Per-node chains, by necessity.** Records live at `sys/audit/{node}/{seq:016x}`;
+  each `prev_hash` is the SHA-256 `content_hash` of the predecessor in *that node's*
+  stream (genesis = zero). A single global chain would need a sequencer — a
+  coordinator — which violates principle #1, so the chain is per-node and the
+  cluster trail is the union of independently verifiable streams. `sys/audit/` is
+  **not** in the `SELF_OWNED_SYS_PREFIXES` tripwire set (many nodes write audit
+  entries; only `identity|load|role|tuple` are single-owner).
+- **`SignedAuditRecord`** = Ed25519 over canonical record bytes (reuses the tls
+  identity, like `SignedRoleClaim`). `agent.audit(action, principal, target,
+  outcome, detail)` seals + writes; `audit_stream` / `audit_verify` /
+  `audit_stream_nodes` read + verify. `verify_chain` returns a precise
+  `AuditVerifyError` (BadSignature / BrokenLink / SequenceGap / WrongOwner /
+  UnknownSigner) naming the offending `seq`.
+- **Sealing concurrency.** The chain head (lock #8) is held only for seq/prev_hash
+  assignment + `content_hash` + head advance (~µs); signing (~tens of µs) and the
+  KV write happen **after** the lock releases — do not move signing back under it.
+- **`GET /gateway/audit`** (scope `audit:read`, deny-by-default): per-stream
+  `verified` + `head_hash` + per-record `content_hash`. The `content_hash` is the
+  stable, M16-citable identifier (named for what it is, never an AgentFacts field).
+- **SkillRunner** routes every invocation through `agent.audit(Invoke, verified-caller,
+  ns/name, outcome)` under `compliance` (the read-side principal binding is the
+  *served-path* verified caller); the plain `audit/{ts}` writer remains only as the
+  non-compliance fallback. **Detection-not-prevention**: records are plain KV
+  entries; tampering makes `verify_chain` fail, it is never blocked at the store.
+
+**Gates:** as WS1, plus `src/lib_tests.rs::test_ws2_audit_chain_writes_and_verifies_on_a_node`,
+`src/agent/http.rs::test_gateway_audit_endpoint_verifies_and_scope_gates`, and the
+10 `audit::tests` chain/tamper unit tests.
+
+### Crown-jewel posture (data-at-rest + egress) — WS3
+
+Two **feature-free, opt-in** blast-radius controls (no cargo feature; zero
+overhead when unused). Threat model: [`docs/threat-model.md`](docs/threat-model.md);
+runbook: [`docs/operations/crown-jewel.md`](docs/operations/crown-jewel.md).
+
+- **Data-at-rest hook.** `DataAtRestCipher` trait (`src/persistence.rs`,
+  re-exported at crate root) + `GossipAgent::with_data_at_rest_cipher` (set once,
+  `OnceLock`, before `start`). Applied at the four on-disk boundaries — WAL append
+  (encrypt), WAL replay (decrypt; failure = corrupt tail, stop), snapshot write
+  (encrypt), snapshot read (decrypt; failure = skip). The length prefix frames the
+  ciphertext. Substrate is neutral on key custody (operator wraps a KMS); scope is
+  **on-disk only** (wire = `tls`, memory = plaintext). Decrypt failure reuses the
+  existing corrupt-record path — no new failure mode.
+- **Egress allowlist.** `EgressPolicy { allow_hosts }` in `GossipConfig`
+  (serializable, default empty = allow-all). `permits_host` (exact + `.suffix`
+  subdomain, case-insensitive) / `permits_url` (fail-closed on unparseable host).
+  Enforced **only at the MCP client bridge** (`connect_mcp_server`) today; LLM /
+  probe / A2A egress is network-layer operator responsibility (documented coverage
+  table in the runbook + threat model). A node-local posture, not a coordinator.
+
+**Gates:** `src/lib_tests.rs::test_ws3_data_at_rest_cipher_encrypts_wal_and_round_trips`
+(default feature set — on-disk plaintext absence, same-key recovery, wrong-key
+rejection), the `config::tests::egress_*` gate unit tests, and
+`src/agent/mcp.rs::test_mcp_egress_policy_denies_disallowed_host`.
+
 ### Testing conventions
 
 **Always run the full feature matrix locally before pushing.**
@@ -502,9 +638,16 @@ get found.
 - `cargo build --lib --features metrics` to include the Prometheus scrape endpoint
 - `cargo build --lib --features a2a` to include the A2A protocol adapter
 - `cargo build --lib --features llm` to include the Prompt Skills LLM adapter
-- `cargo build --lib --features compliance` to include gateway auth, durable audit, RBAC (planned, not yet implemented)
-- 323 lib tests at HEAD (full feature matrix); clippy at 0 warnings (stub removal
-  eliminated the prior 61 `field_reassign_with_default` baseline in test code).
+- `cargo build --lib --features compliance` to include RBAC / signed identity roles,
+  OAuth2 gateway ACLs, and the tamper-evident hash-chained audit trail. **WS1 + WS2
+  shipped** (see §RBAC / identity and §Audit trail); **WS3 crown-jewel shipped** but
+  feature-free (data-at-rest + egress need no feature — see §Crown-jewel posture);
+  **WS4 OIDC SSO shipped** (gateway JWT validation — see §RBAC / identity); WS5 in
+  progress per [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md).
+- Lib tests at HEAD: **318** default · **~336** `tls,metrics,a2a,llm` · **360** `compliance`
+  (full feature matrix); clippy at 0 warnings on each. The `compliance` delta is the WS1
+  RBAC + WS2 audit + WS4 OIDC unit and cross-node integration tests; the core `sys/` tripwire
+  and WS3 crown-jewel (data-at-rest + egress) tests are feature-free and in the default count.
 - Wire version is currently **v11** (`PREV_WIRE_VERSION = 10` — rolling upgrade window open).
   v11 adds `hlc_seq: Option<u64>` to `WireMessage::Signal` for ordered delivery via `emit_ordered()`.
   v10 adds `WireMessage::SignedData` for Ed25519-signed KV writes under the `tls` feature.

@@ -117,6 +117,14 @@ impl McpHandle {
         server_url: impl Into<String>,
     ) -> Result<McpClientHandle, McpError> {
         let server_url  = server_url.into();
+        // WS3 egress gate: a node-local allowlist may constrain outbound reach.
+        // Enforced here at the canonical "twin reaches an external tool server"
+        // boundary. Empty allowlist (default) permits all.
+        if !self.ctx.config.egress.permits_url(&server_url) {
+            return Err(McpError::Transport(format!(
+                "egress denied by policy: {server_url}"
+            )));
+        }
         let http_client = reqwest::Client::new();
 
         // ── Handshake ─────────────────────────────────────────────────────────

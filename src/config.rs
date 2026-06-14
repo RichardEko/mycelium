@@ -46,6 +46,95 @@ impl Default for TlsConfig {
     }
 }
 
+/// A gateway bearer token paired with its OAuth2-style scope grants.
+///
+/// Scopes follow the `resource:verb` convention (`kv:read`, `kv:write`,
+/// `mesh:write`, `consensus:read`, …). A route admits a token when the token
+/// holds the route's required scope, or the superuser wildcard `"*"`.
+///
+/// Only enforced under the `compliance` crate feature; without it the field is
+/// inert and the legacy single-token model (`gateway_auth_token`) applies. The
+/// legacy token is equivalent to a scoped token holding `"*"`, so existing
+/// deployments upgrade with no behaviour change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GatewayToken {
+    /// The bearer token presented as `Authorization: Bearer <token>`.
+    pub token: String,
+    /// Scopes granted to this token. `["*"]` is full access.
+    #[serde(default)]
+    pub scopes: Vec<String>,
+}
+
+/// Outbound egress allow-policy (WS3 crown-jewel — blast-radius containment).
+///
+/// A node-local allowlist of hosts the substrate may reach *outbound*. It is a
+/// **documented posture, not a coordinator**: each node enforces its own policy;
+/// nothing is centrally assigned. An empty `allow_hosts` (the default) permits
+/// all egress — behaviour is unchanged until an operator opts in.
+///
+/// Enforced at the MCP client bridge (`connect_mcp_server`) — the canonical
+/// "twin reaches an external tool server" egress. Other outbound paths (LLM
+/// backends, capability probes) are operator-responsibility; see the egress
+/// runbook and threat model for the full posture.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct EgressPolicy {
+    /// Permitted outbound hosts. Empty = allow all. An entry matches a host if it
+    /// is equal, or — when the entry starts with `.` — if the host equals or is a
+    /// subdomain of it (`.internal` matches `internal` and `api.internal`).
+    #[serde(default)]
+    pub allow_hosts: Vec<String>,
+}
+
+impl EgressPolicy {
+    /// True if outbound to `host` is permitted. Empty allowlist ⇒ permit all.
+    pub fn permits_host(&self, host: &str) -> bool {
+        if self.allow_hosts.is_empty() {
+            return true;
+        }
+        let host = host.to_ascii_lowercase();
+        self.allow_hosts.iter().any(|p| {
+            let p = p.to_ascii_lowercase();
+            match p.strip_prefix('.') {
+                Some(suffix) => host == suffix || host.ends_with(&format!(".{suffix}")),
+                None => host == p,
+            }
+        })
+    }
+
+    /// True if outbound to `url`'s host is permitted. A URL whose host cannot be
+    /// parsed is **denied** when a non-empty allowlist is in force (fail closed).
+    pub fn permits_url(&self, url: &str) -> bool {
+        if self.allow_hosts.is_empty() {
+            return true;
+        }
+        match host_of_url(url) {
+            Some(h) => self.permits_host(&h),
+            None => false,
+        }
+    }
+}
+
+/// Extract the host from a URL without pulling in a URL crate: drop the scheme,
+/// any `userinfo@`, then take up to the first `/?#` and strip a `:port`. IPv6
+/// literals in brackets are returned without the brackets.
+pub(crate) fn host_of_url(url: &str) -> Option<String> {
+    let after_scheme = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let authority = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(after_scheme);
+    let authority = authority.rsplit_once('@').map(|(_, h)| h).unwrap_or(authority);
+    if authority.is_empty() {
+        return None;
+    }
+    // IPv6 literal: [::1]:port
+    if let Some(rest) = authority.strip_prefix('[') {
+        return rest.split(']').next().filter(|s| !s.is_empty()).map(|s| s.to_string());
+    }
+    let host = authority.split(':').next().unwrap_or(authority);
+    if host.is_empty() { None } else { Some(host.to_string()) }
+}
+
 /// Controls if and how a node persists its KV store to local disk.
 ///
 /// Set `GossipConfig::persistence` to `Some(PersistenceConfig { .. })` to opt in.
@@ -479,6 +568,35 @@ pub struct GossipConfig {
     /// Can also be set via the `GOSSIP_GATEWAY_AUTH_TOKEN` environment variable.
     pub gateway_auth_token: Option<String>,
 
+    /// OAuth2-style scoped gateway tokens (`compliance` feature).
+    ///
+    /// Each [`GatewayToken`] maps a bearer token to a set of `resource:verb`
+    /// scopes; gateway routes require a scope and admit a token holding it (or
+    /// the `"*"` wildcard). Enforced only under the `compliance` feature — when
+    /// the feature is off this list is ignored and the legacy single-token model
+    /// (`gateway_auth_token`) applies unchanged. Public routes (`/health`,
+    /// `/ready`, `/stats`, `/metrics`, the descriptor path) are never scope-gated.
+    ///
+    /// Default: empty. A `gateway_auth_token` set alongside an empty list keeps
+    /// today's behaviour (one token, full access).
+    #[serde(default)]
+    pub gateway_scoped_tokens: Vec<GatewayToken>,
+
+    /// Outbound egress allow-policy (WS3). Default: empty = allow all. Set
+    /// `allow_hosts` to constrain which external hosts the substrate may reach
+    /// (enforced at the MCP client bridge). A node-local posture, not a coordinator.
+    #[serde(default)]
+    pub egress: EgressPolicy,
+
+    /// Generic-OIDC SSO config for the gateway (WS4, `compliance` feature).
+    /// `None` (default) = no OIDC; gateway auth uses bearer tokens / scoped
+    /// tokens only. When set, a presented JWT is validated against the IdP's
+    /// JWKS and its groups mapped to gateway scopes. Human-operator auth, not
+    /// agent identity.
+    #[cfg(feature = "compliance")]
+    #[serde(default)]
+    pub oidc: Option<crate::agent::oidc::OidcConfig>,
+
     /// Mutual TLS configuration.
     ///
     /// `None` (the default) disables TLS — the gossip TCP port accepts plain
@@ -534,6 +652,10 @@ impl Default for GossipConfig {
             max_concurrent_bulk_handlers:  64,
             max_inbound_frames_per_sec:    0,
             gateway_auth_token:            None,
+            gateway_scoped_tokens:         Vec::new(),
+            egress:                        EgressPolicy::default(),
+            #[cfg(feature = "compliance")]
+            oidc:                          None,
             tls:                           None,
         }
     }
@@ -905,6 +1027,50 @@ impl GossipConfig {
 mod tests {
     use super::*;
     use crate::node_id::NodeId;
+
+    // ── WS3 egress policy gate ────────────────────────────────────────────
+
+    #[test]
+    fn egress_empty_allowlist_permits_all() {
+        let p = EgressPolicy::default();
+        assert!(p.permits_host("anything.example.com"));
+        assert!(p.permits_url("http://10.0.0.1:8080/x"));
+    }
+
+    #[test]
+    fn egress_exact_and_suffix_matching() {
+        let p = EgressPolicy { allow_hosts: vec!["api.example.com".into(), ".internal".into()] };
+        // exact
+        assert!(p.permits_host("api.example.com"));
+        assert!(!p.permits_host("evil.example.com"));
+        // suffix / subdomain
+        assert!(p.permits_host("internal"));
+        assert!(p.permits_host("svc.internal"));
+        assert!(p.permits_host("a.b.internal"));
+        assert!(!p.permits_host("internal.evil.com"));
+        // case-insensitive
+        assert!(p.permits_host("API.EXAMPLE.COM"));
+    }
+
+    #[test]
+    fn egress_url_host_extraction_and_fail_closed() {
+        let p = EgressPolicy { allow_hosts: vec!["allowed.host".into()] };
+        assert!(p.permits_url("https://allowed.host/path?q=1"));
+        assert!(p.permits_url("http://user:pw@allowed.host:8443/x"));
+        assert!(!p.permits_url("http://blocked.host/x"));
+        // Unparseable host under a non-empty allowlist → denied (fail closed).
+        assert!(!p.permits_url("not a url"));
+        assert!(!p.permits_url("http:///nohost"));
+    }
+
+    #[test]
+    fn egress_host_of_url_parses_forms() {
+        assert_eq!(host_of_url("http://h.example/p").as_deref(), Some("h.example"));
+        assert_eq!(host_of_url("https://u:p@h.example:9000/p?x#y").as_deref(), Some("h.example"));
+        assert_eq!(host_of_url("h.example:8080/p").as_deref(), Some("h.example"));
+        assert_eq!(host_of_url("http://[::1]:8080/p").as_deref(), Some("::1"));
+        assert_eq!(host_of_url("http:///nohost"), None);
+    }
 
     #[test]
     fn validate_rejects_empty_bind_address() {

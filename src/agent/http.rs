@@ -46,6 +46,8 @@ use axum::{
     response::sse::{Event, KeepAlive},
     routing::{delete, get, post},
 };
+#[cfg(feature = "compliance")]
+use axum::extract::MatchedPath;
 use bytes::{BufMut, Bytes, BytesMut};
 use serde::Deserialize;
 use serde_json::json;
@@ -82,6 +84,10 @@ struct HttpCtx {
     /// Prometheus scrape handle (only present when the `metrics` feature is enabled).
     #[cfg(feature = "metrics")]
     prometheus:      metrics_exporter_prometheus::PrometheusHandle,
+    /// OIDC verifier (WS4) — present when `GossipConfig::oidc` is set. Validates
+    /// JWT bearers against the IdP JWKS and maps groups to gateway scopes.
+    #[cfg(feature = "compliance")]
+    oidc:            Option<Arc<super::oidc::OidcVerifier>>,
 }
 
 /// Returns the process-wide Prometheus scrape handle, installing the recorder
@@ -113,6 +119,13 @@ pub(super) async fn run_http_server(
     #[cfg(feature = "metrics")]
     let prometheus = prometheus_handle();
 
+    #[cfg(feature = "compliance")]
+    let oidc = ctx
+        .config
+        .oidc
+        .clone()
+        .map(|c| Arc::new(super::oidc::OidcVerifier::new(c)));
+
     let state = Arc::new(HttpCtx {
         agent_ctx:    ctx,
         gateway_caps: Arc::new(Mutex::new(HashMap::new())),
@@ -120,6 +133,8 @@ pub(super) async fn run_http_server(
         shutdown_rx:  shutdown_rx.clone(),
         #[cfg(feature = "metrics")]
         prometheus,
+        #[cfg(feature = "compliance")]
+        oidc,
     });
 
     // ── Language-bridge gateway routes (optionally auth-protected) ────────────
@@ -170,6 +185,10 @@ pub(super) async fn run_http_server(
         .route("/llm/call",            post(gw_llm_call))
         .route("/llm/stream",          post(gw_llm_stream));
 
+    // WS2 audit trail query + verification (compliance feature).
+    #[cfg(feature = "compliance")]
+    let gateway = gateway.route("/audit", get(gw_audit));
+
     // Apply auth middleware to all gateway routes in one shot.
     let gateway = gateway
         .route_layer(middleware::from_fn_with_state(Arc::clone(&state), gateway_auth));
@@ -211,29 +230,181 @@ async fn shutdown_signal(mut rx: watch::Receiver<bool>) {
 
 /// Axum middleware applied to every `/gateway/**` route.
 ///
-/// When `GossipConfig::gateway_auth_token` is set, every gateway request must
-/// carry `Authorization: Bearer <token>`. Health, stats, and metrics endpoints
-/// are NOT under `/gateway` and are therefore always public.
+/// Two layers, the second feature-gated:
+///
+/// 1. **Authentication** (always): when `gateway_auth_token` is set, or
+///    (compliance) any `gateway_scoped_tokens` are configured, every gateway
+///    request must carry a valid `Authorization: Bearer <token>`. With neither
+///    set the gateway is open (loopback-only deployments). `/health`, `/ready`,
+///    `/stats`, `/metrics`, and the descriptor path are NOT under `/gateway`
+///    and stay public regardless.
+///
+/// 2. **OAuth2 scope authorization** (`compliance` feature): the presented
+///    token resolves to a scope grant — `gateway_auth_token` ⇒ the `"*"`
+///    wildcard (full access, unchanged behaviour), or a `gateway_scoped_tokens`
+///    entry ⇒ its scopes. The matched route requires a `resource:verb` scope
+///    ([`required_scope`]); the request is admitted only if the grant holds it
+///    or `"*"`. Deny-by-default: an unmapped gateway route requires `admin`.
 async fn gateway_auth(
     State(ctx): State<Arc<HttpCtx>>,
     request: Request,
     next: Next,
 ) -> Response {
-    if let Some(expected) = ctx.agent_ctx.config.gateway_auth_token.as_deref() {
-        let ok = request.headers()
-            .get(header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
-            .map(|t| t == expected)
-            .unwrap_or(false);
-        if !ok {
+    let cfg = &ctx.agent_ctx.config;
+    let legacy = cfg.gateway_auth_token.as_deref();
+
+    #[cfg(feature = "compliance")]
+    let have_scoped = !cfg.gateway_scoped_tokens.is_empty();
+    #[cfg(not(feature = "compliance"))]
+    let have_scoped = false;
+
+    #[cfg(feature = "compliance")]
+    let have_oidc = ctx.oidc.is_some();
+    #[cfg(not(feature = "compliance"))]
+    let have_oidc = false;
+
+    // Open gateway: no token model and no OIDC configured.
+    if legacy.is_none() && !have_scoped && !have_oidc {
+        return next.run(request).await;
+    }
+
+    let presented = request.headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+
+    let Some(presented) = presented else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "authentication required"})),
+        ).into_response();
+    };
+
+    // Resolve scopes: try OIDC first (a JWT bearer from the IdP → groups → scopes),
+    // then fall back to the static token table. A JWT that fails OIDC validation
+    // won't match a static token either, so it correctly ends in 401.
+    #[cfg(feature = "compliance")]
+    let resolved: Option<Vec<String>> = {
+        let mut s = None;
+        if let Some(verifier) = &ctx.oidc
+            && let Some(principal) = verifier.verify(presented).await
+        {
+            s = Some(principal.scopes);
+        }
+        s.or_else(|| resolve_token_scopes(cfg, presented))
+    };
+    #[cfg(not(feature = "compliance"))]
+    let resolved: Option<Vec<String>> = resolve_token_scopes(cfg, presented);
+
+    let Some(scopes) = resolved else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "authentication required"})),
+        ).into_response();
+    };
+
+    #[cfg(feature = "compliance")]
+    {
+        let required = request
+            .extensions()
+            .get::<MatchedPath>()
+            .map(|m| required_scope(request.method(), m.as_str()))
+            .unwrap_or("admin");
+        if !scope_admits(&scopes, required) {
             return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "authentication required"})),
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "insufficient scope", "required_scope": required})),
             ).into_response();
         }
     }
+    // Without compliance the token is authenticated but not scope-gated.
+    #[cfg(not(feature = "compliance"))]
+    let _ = &scopes;
+
     next.run(request).await
+}
+
+/// Map a presented bearer token to its scope grant, or `None` if unrecognised.
+///
+/// The legacy `gateway_auth_token` is the superuser case: it grants `["*"]`, so
+/// deployments that only set it behave exactly as before. Scoped tokens are only
+/// consulted under the `compliance` feature.
+fn resolve_token_scopes(cfg: &crate::config::GossipConfig, presented: &str) -> Option<Vec<String>> {
+    if let Some(legacy) = cfg.gateway_auth_token.as_deref()
+        && presented == legacy
+    {
+        return Some(vec!["*".to_string()]);
+    }
+    #[cfg(feature = "compliance")]
+    {
+        for t in &cfg.gateway_scoped_tokens {
+            if t.token == presented {
+                return Some(t.scopes.clone());
+            }
+        }
+    }
+    None
+}
+
+/// True if `scopes` grants `required` (exact match or the `"*"` wildcard).
+#[cfg(feature = "compliance")]
+fn scope_admits(scopes: &[String], required: &str) -> bool {
+    scopes.iter().any(|s| s == "*" || s == required)
+}
+
+/// The OAuth2 scope a gateway route requires, keyed on its matched-path pattern
+/// and method. This is the gateway ACL policy table; deny-by-default — any route
+/// not listed requires `admin`. Scopes are coarse `resource:verb` families so the
+/// vocabulary stays small (`kv`, `cap`, `mesh`, `consensus`, `llm` × `read`/`write`,
+/// plus `llm:invoke`).
+#[cfg(feature = "compliance")]
+fn required_scope(method: &axum::http::Method, matched_path: &str) -> &'static str {
+    use axum::http::Method;
+    let read = method == Method::GET;
+    match matched_path {
+        // KV
+        "/gateway/kv"          => if read { "kv:read" } else { "kv:write" },
+        "/gateway/kv/keys"     => "kv:read",
+        "/gateway/kv/quorum"   => "kv:write",
+        // Capabilities
+        "/gateway/capability/advertise"   => "cap:write",
+        "/gateway/capability/{handle_id}" => "cap:write",
+        "/gateway/capability/resolve"     => "cap:read",
+        "/gateway/shard/{ns}/{name}"      => "cap:read",
+        // Layer II mesh messaging
+        "/gateway/signal/emit"     => "mesh:write",
+        "/gateway/signal/sse/{kind}" => "mesh:read",
+        "/gateway/demand"          => "mesh:read",
+        "/gateway/rpc/call"        => "mesh:write",
+        "/gateway/rpc/serve/{kind}" => "mesh:read",
+        "/gateway/rpc/respond"     => "mesh:write",
+        "/gateway/scatter"         => "mesh:write",
+        "/gateway/mailbox/deliver" => "mesh:write",
+        "/gateway/mailbox/{kind}"  => "mesh:read",
+        "/gateway/shard/emit"      => "mesh:write",
+        // Layer III consensus / consistency overlay
+        "/gateway/overlay/consistent/set"      => "consensus:write",
+        "/gateway/overlay/consistent/get"      => "consensus:read",
+        "/gateway/overlay/lock/acquire"        => "consensus:write",
+        "/gateway/overlay/lock/{guard_id}"     => "consensus:write",
+        "/gateway/overlay/elect"               => "consensus:write",
+        "/gateway/overlay/log/append"          => "consensus:write",
+        "/gateway/overlay/log/scan"            => "consensus:read",
+        "/gateway/overlay/log/compact"         => "consensus:write",
+        "/gateway/overlay/log/subscribe"       => "consensus:read",
+        "/gateway/overlay/log/group/subscribe" => "consensus:read",
+        "/gateway/overlay/emit_reliable"       => "consensus:write",
+        "/gateway/consensus/cross_group_propose" => "consensus:write",
+        // LLM / prompt skills
+        "/gateway/prompts"             => "llm:read",
+        "/gateway/prompts/{ns}/{name}" => if read { "llm:read" } else { "llm:write" },
+        "/gateway/llm/call"            => "llm:invoke",
+        "/gateway/llm/stream"          => "llm:invoke",
+        // Audit trail (WS2)
+        "/gateway/audit"               => "audit:read",
+        // Deny-by-default.
+        _ => "admin",
+    }
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -358,7 +529,86 @@ async fn stats_handler(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
         "task_count":    task_count,
         "commit_conflicts": ctx.agent_ctx.commit_conflicts
             .load(std::sync::atomic::Ordering::Relaxed),
+        "sys_namespace_violations": ctx.agent_ctx.sys_namespace_violations
+            .load(std::sync::atomic::Ordering::Relaxed),
     }))
+}
+
+/// `GET /gateway/audit` — query the tamper-evident audit trail (compliance, scope
+/// `audit:read`). Optional `?node=` selects one stream (default: all known
+/// streams); optional `?limit=` caps the records returned per stream (most
+/// recent), while verification always runs over the full stream. Each stream
+/// reports `verified` + any `verify_error`, the chain-tip `head_hash`, and each
+/// record's stable `content_hash` (the M16-citable identifier).
+#[cfg(feature = "compliance")]
+#[derive(Deserialize)]
+struct AuditQuery {
+    node:  Option<String>,
+    limit: Option<usize>,
+}
+
+#[cfg(feature = "compliance")]
+fn hex32(bytes: &[u8; 32]) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(64);
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
+#[cfg(feature = "compliance")]
+async fn gw_audit(
+    State(ctx): State<Arc<HttpCtx>>,
+    Query(q): Query<AuditQuery>,
+) -> Response {
+    let tc = &ctx.agent_ctx;
+    let nodes: Vec<crate::node_id::NodeId> = match q.node.as_deref() {
+        Some(s) => match s.parse() {
+            Ok(n) => vec![n],
+            Err(_) => {
+                return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid node id"})))
+                    .into_response();
+            }
+        },
+        None => super::audit::stream_nodes(tc),
+    };
+    let limit = q.limit.unwrap_or(usize::MAX);
+
+    let mut streams = Vec::with_capacity(nodes.len());
+    for node in nodes {
+        let records = super::audit::read_stream(tc, &node);
+        let verify  = super::audit::verify_stream(tc, &node);
+        let head_hash = records.last().map(|sr| hex32(&sr.record.content_hash()));
+        let shown: Vec<_> = records
+            .iter()
+            .rev()
+            .take(limit)
+            .rev()
+            .map(|sr| {
+                let r = &sr.record;
+                json!({
+                    "seq":          r.seq,
+                    "hlc":          r.hlc,
+                    "principal":    r.principal,
+                    "action":       format!("{:?}", r.action),
+                    "target":       r.target,
+                    "outcome":      format!("{:?}", r.outcome),
+                    "detail":       r.detail,
+                    "content_hash": hex32(&r.content_hash()),
+                })
+            })
+            .collect();
+        streams.push(json!({
+            "node":         node.to_string(),
+            "count":        records.len(),
+            "verified":     verify.is_ok(),
+            "verify_error": verify.err().map(|e| format!("{e:?}")),
+            "head_hash":    head_hash,
+            "records":      shown,
+        }));
+    }
+    Json(json!({ "streams": streams })).into_response()
 }
 
 /// SSE endpoint — streams admitted signals of the requested `kind`.
@@ -2455,5 +2705,265 @@ mod tests {
         );
 
         agent.shutdown().await;
+    }
+
+    // ── WS1 gateway OAuth2 scope ACLs (compliance feature) ────────────────
+
+    #[cfg(feature = "compliance")]
+    #[test]
+    fn required_scope_table_maps_families_and_denies_by_default() {
+        use axum::http::Method;
+        use super::required_scope;
+        // read/write split on the same path keys off the method.
+        assert_eq!(required_scope(&Method::GET,    "/gateway/kv"), "kv:read");
+        assert_eq!(required_scope(&Method::POST,   "/gateway/kv"), "kv:write");
+        assert_eq!(required_scope(&Method::DELETE, "/gateway/kv"), "kv:write");
+        // resource families.
+        assert_eq!(required_scope(&Method::GET,  "/gateway/capability/resolve"), "cap:read");
+        assert_eq!(required_scope(&Method::POST, "/gateway/signal/emit"), "mesh:write");
+        assert_eq!(required_scope(&Method::POST, "/gateway/overlay/consistent/set"), "consensus:write");
+        assert_eq!(required_scope(&Method::GET,  "/gateway/overlay/consistent/get"), "consensus:read");
+        assert_eq!(required_scope(&Method::POST, "/gateway/llm/call"), "llm:invoke");
+        // deny-by-default: anything unmapped requires admin.
+        assert_eq!(required_scope(&Method::POST, "/gateway/some/future/route"), "admin");
+    }
+
+    #[cfg(feature = "compliance")]
+    #[test]
+    fn scope_admits_exact_and_wildcard_only() {
+        use super::scope_admits;
+        let ro = vec!["kv:read".to_string()];
+        assert!(scope_admits(&ro, "kv:read"));
+        assert!(!scope_admits(&ro, "kv:write"));
+        let star = vec!["*".to_string()];
+        assert!(scope_admits(&star, "kv:write"));
+        assert!(scope_admits(&star, "admin"));
+        // Empty grant admits nothing.
+        assert!(!scope_admits(&[], "kv:read"));
+    }
+
+    #[cfg(feature = "compliance")]
+    #[test]
+    fn resolve_token_scopes_legacy_is_wildcard() {
+        use super::resolve_token_scopes;
+        let mut cfg = GossipConfig::default();
+        cfg.gateway_auth_token = Some("legacy-tok".to_string());
+        cfg.gateway_scoped_tokens = vec![crate::GatewayToken {
+            token:  "ro-tok".to_string(),
+            scopes: vec!["kv:read".to_string()],
+        }];
+        // Legacy token → superuser wildcard (unchanged upgrade path).
+        assert_eq!(resolve_token_scopes(&cfg, "legacy-tok"), Some(vec!["*".to_string()]));
+        // Scoped token → its grant.
+        assert_eq!(resolve_token_scopes(&cfg, "ro-tok"), Some(vec!["kv:read".to_string()]));
+        // Unknown token → None (unauthenticated).
+        assert_eq!(resolve_token_scopes(&cfg, "nope"), None);
+    }
+
+    /// End-to-end: a scoped token is admitted on routes within its grant,
+    /// denied (403) on routes outside it, the wildcard token passes scope
+    /// gating everywhere, an unknown token is 401, and public routes stay open
+    /// with no credentials at all.
+    #[cfg(feature = "compliance")]
+    #[tokio::test]
+    async fn test_gateway_scoped_token_acl_end_to_end() {
+        use axum::http::header::AUTHORIZATION;
+
+        let gossip_port = alloc_port();
+        let http_port   = alloc_port();
+        let id  = NodeId::new("127.0.0.1", gossip_port).unwrap();
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = gossip_port;
+        cfg.http_port = Some(http_port);
+        cfg.gateway_scoped_tokens = vec![
+            crate::GatewayToken { token: "ro".into(),    scopes: vec!["kv:read".into()] },
+            crate::GatewayToken { token: "super".into(), scopes: vec!["*".into()] },
+        ];
+
+        let agent = Arc::new(GossipAgent::new(id, cfg));
+        agent.start().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let client = reqwest::Client::new();
+        let base = format!("http://127.0.0.1:{http_port}");
+
+        // Public route: open, no credentials.
+        let r = client.get(format!("{base}/health")).send().await.unwrap();
+        assert_eq!(r.status(), 200, "public /health must stay open");
+
+        // No token on a protected route → 401.
+        let r = client.get(format!("{base}/gateway/kv/keys")).send().await.unwrap();
+        assert_eq!(r.status(), 401, "missing token must be unauthorized");
+
+        // Unknown token → 401.
+        let r = client.get(format!("{base}/gateway/kv/keys"))
+            .header(AUTHORIZATION, "Bearer bogus").send().await.unwrap();
+        assert_eq!(r.status(), 401, "unknown token must be unauthorized");
+
+        // ro token on a kv:read route → admitted (not 401/403).
+        let r = client.get(format!("{base}/gateway/kv/keys"))
+            .header(AUTHORIZATION, "Bearer ro").send().await.unwrap();
+        assert_eq!(r.status(), 200, "kv:read token must reach kv/keys");
+
+        // ro token on a kv:write route → 403 (authenticated, insufficient scope).
+        let r = client.post(format!("{base}/gateway/kv"))
+            .header(AUTHORIZATION, "Bearer ro")
+            .json(&serde_json::json!({"key": "k", "value": "v"}))
+            .send().await.unwrap();
+        assert_eq!(r.status(), 403, "kv:read token must be forbidden on kv:write");
+        let body: serde_json::Value = r.json().await.unwrap();
+        assert_eq!(body["required_scope"], "kv:write");
+
+        // super (wildcard) token on the same write route → passes scope gating.
+        let r = client.post(format!("{base}/gateway/kv"))
+            .header(AUTHORIZATION, "Bearer super")
+            .json(&serde_json::json!({"key": "k", "value": "v"}))
+            .send().await.unwrap();
+        assert_ne!(r.status(), 401, "wildcard token must authenticate");
+        assert_ne!(r.status(), 403, "wildcard token must pass scope gating");
+
+        agent.shutdown().await;
+    }
+
+    /// WS4: an OIDC JWT from a (mock) IdP is validated at the gateway and its
+    /// groups are mapped to scopes — a `readers`-group token reaches a `kv:read`
+    /// route but is forbidden on a `kv:write` route; no token is 401.
+    #[cfg(feature = "compliance")]
+    #[tokio::test]
+    async fn test_gateway_oidc_jwt_maps_groups_to_scopes() {
+        use axum::{routing::get, Router};
+        use axum::http::header::AUTHORIZATION;
+        use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        const TEST_PRIV: &str = include_str!("../../tests/fixtures/oidc_test.key");
+        let jwks_body = include_str!("../../tests/fixtures/oidc_jwks.json");
+
+        // ── Mock IdP: discovery + JWKS ───────────────────────────────────────
+        let idp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let idp_port = idp_listener.local_addr().unwrap().port();
+        let issuer = format!("http://127.0.0.1:{idp_port}");
+        let disco = serde_json::json!({
+            "issuer": issuer,
+            "jwks_uri": format!("{issuer}/jwks"),
+        }).to_string();
+        let idp = Router::new()
+            .route("/.well-known/openid-configuration", get(move || {
+                let disco = disco.clone();
+                async move { ([("content-type", "application/json")], disco) }
+            }))
+            .route("/jwks", get(move || {
+                async move { ([("content-type", "application/json")], jwks_body) }
+            }));
+        let _idp = tokio::spawn(async move { axum::serve(idp_listener, idp).await.unwrap(); });
+
+        // ── Mycelium node with OIDC configured ───────────────────────────────
+        let gossip_port = alloc_port();
+        let http_port   = alloc_port();
+        let id = NodeId::new("127.0.0.1", gossip_port).unwrap();
+        let mut group_scopes = std::collections::HashMap::new();
+        group_scopes.insert("readers".to_string(), vec!["kv:read".to_string()]);
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = gossip_port;
+        cfg.http_port = Some(http_port);
+        cfg.oidc = Some(crate::OidcConfig {
+            issuer: issuer.clone(),
+            audience: "mycelium-cluster".into(),
+            group_claim: "groups".into(),
+            group_scopes,
+            jwks_uri: None, // exercise discovery
+        });
+        let agent = Arc::new(GossipAgent::new(id, cfg));
+        agent.start().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        // ── Mint a JWT for a "readers" user ──────────────────────────────────
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let claims = serde_json::json!({
+            "sub": "alice", "iss": issuer, "aud": "mycelium-cluster",
+            "exp": now + 3600, "groups": ["readers"],
+        });
+        let mut header = Header::new(Algorithm::RS256);
+        header.kid = Some("test-kid".to_string());
+        let jwt = encode(&header, &claims, &EncodingKey::from_rsa_pem(TEST_PRIV.as_bytes()).unwrap()).unwrap();
+
+        let client = reqwest::Client::new();
+        let base = format!("http://127.0.0.1:{http_port}");
+
+        // No token → 401.
+        let r = client.get(format!("{base}/gateway/kv/keys")).send().await.unwrap();
+        assert_eq!(r.status(), 401, "no token must be unauthorized");
+
+        // OIDC JWT with kv:read → admitted on the kv:read route.
+        let r = client.get(format!("{base}/gateway/kv/keys"))
+            .header(AUTHORIZATION, format!("Bearer {jwt}")).send().await.unwrap();
+        assert_eq!(r.status(), 200, "readers JWT must reach kv/keys (kv:read)");
+
+        // Same JWT on a kv:write route → 403 (group grants only kv:read).
+        let r = client.post(format!("{base}/gateway/kv"))
+            .header(AUTHORIZATION, format!("Bearer {jwt}"))
+            .json(&serde_json::json!({"key":"k","value":"v"}))
+            .send().await.unwrap();
+        assert_eq!(r.status(), 403, "readers JWT must be forbidden on kv:write");
+
+        agent.shutdown().await;
+    }
+
+    /// WS2: the `/gateway/audit` endpoint returns the node's verified audit
+    /// stream to a token holding `audit:read`, and 403s a token without it.
+    #[cfg(feature = "compliance")]
+    #[tokio::test]
+    async fn test_gateway_audit_endpoint_verifies_and_scope_gates() {
+        use crate::config::TlsConfig;
+        use crate::{AuditAction, AuditOutcome, GatewayToken};
+        use axum::http::header::AUTHORIZATION;
+
+        let gossip_port = alloc_port();
+        let http_port   = alloc_port();
+        let id = NodeId::new("127.0.0.1", gossip_port).unwrap();
+        let cert_dir = std::env::temp_dir().join(format!("myc-audit-ep-{gossip_port}"));
+        let _ = std::fs::remove_dir_all(&cert_dir);
+
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = gossip_port;
+        cfg.http_port = Some(http_port);
+        cfg.tls = Some(TlsConfig { auto_cert_dir: cert_dir.clone(), ..TlsConfig::default() });
+        cfg.gateway_scoped_tokens = vec![
+            GatewayToken { token: "auditor".into(), scopes: vec!["audit:read".into()] },
+            GatewayToken { token: "noaudit".into(), scopes: vec!["kv:read".into()] },
+        ];
+
+        let agent = Arc::new(GossipAgent::new(id.clone(), cfg));
+        agent.start().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        // Seal two events into this node's stream.
+        agent.audit(AuditAction::Invoke, "10.0.0.1:9000", "skill/a", AuditOutcome::Success, None).unwrap();
+        agent.audit(AuditAction::Read, "10.0.0.2:9000", "kv/secret", AuditOutcome::Denied, None).unwrap();
+
+        let client = reqwest::Client::new();
+        let url = format!("http://127.0.0.1:{http_port}/gateway/audit");
+
+        // Wrong scope → 403.
+        let r = client.get(&url).header(AUTHORIZATION, "Bearer noaudit").send().await.unwrap();
+        assert_eq!(r.status(), 403, "kv:read token must not reach the audit trail");
+
+        // Correct scope → 200, verified stream with both records.
+        let r = client.get(&url).header(AUTHORIZATION, "Bearer auditor").send().await.unwrap();
+        assert_eq!(r.status(), 200, "audit:read token must reach the audit trail");
+        let body: serde_json::Value = r.json().await.unwrap();
+        let streams = body["streams"].as_array().expect("streams array");
+        let mine = streams.iter()
+            .find(|s| s["node"] == id.to_string())
+            .expect("this node's stream present");
+        assert_eq!(mine["verified"], true, "honest stream must verify");
+        assert!(mine["count"].as_u64().unwrap() >= 2, "both sealed records counted");
+        assert!(mine["head_hash"].is_string(), "chain tip hash present");
+        let recs = mine["records"].as_array().unwrap();
+        assert!(recs.iter().all(|r| r["content_hash"].is_string()),
+            "every record carries a citable content_hash");
+
+        agent.shutdown().await;
+        let _ = std::fs::remove_dir_all(&cert_dir);
     }
 }

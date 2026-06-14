@@ -580,7 +580,7 @@ impl ConsensusEngine {
     fn sign_payload(&self, bytes: Bytes) -> Bytes {
         #[cfg(feature = "tls")]
         if let Some(tls) = self.task_ctx.tls.get() {
-            let sig = crate::tls::sign_bytes(&tls.signing_key, &bytes);
+            let sig = crate::tls::sign_bytes(&tls.signing_key(), &bytes);
             let signed = SignedConsensusMsg {
                 msg_bytes:  bytes.clone(),
                 signer:     self.task_ctx.node_id.clone(),

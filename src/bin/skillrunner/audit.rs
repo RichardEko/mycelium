@@ -1,3 +1,4 @@
+#[cfg(not(feature = "compliance"))]
 use bytes::Bytes;
 use serde::Serialize;
 use std::sync::Arc;
@@ -57,18 +58,52 @@ impl AuditRecord {
     }
 }
 
-/// Write one invocation audit record to the gossip KV store.
+/// Write one invocation audit record.
 ///
-/// Key format: `audit/{ts_unix_nanos}/{node_id}` — lexicographic order gives
-/// time-sorted prefix scans across the whole cluster.
+/// **With `compliance` (WS2):** routed into the node's tamper-evident,
+/// hash-chained, signed audit trail at `sys/audit/{node}/{seq}` via
+/// `GossipAgent::audit` — the rich SkillRunner fields (nonce, duration, tool
+/// calls) ride in the record's `detail`. This replaces the old plain trail so
+/// there is a single, verifiable audit. Requires `GossipConfig::tls` (records
+/// are signed); a missing identity is a misconfiguration and is logged, not
+/// silently dropped.
 ///
-/// TTL is deliberately not set here; the record ages out via normal KV gossip
-/// TTL decrements over cluster hops (default_ttl from GossipConfig).
+/// **Without `compliance`:** falls back to a plain JSON entry at
+/// `audit/{ts_unix_nanos}/{node_id}` — no signing/chaining is possible without
+/// the identity key, so the legacy time-sorted trail remains.
 pub(crate) fn write_audit(agent: &Arc<GossipAgent>, rec: &AuditRecord) {
-    let key = format!("audit/{}/{}", rec.ts_unix_nanos, agent.node_id());
-    match serde_json::to_vec(rec) {
-        Ok(json) => { let _ = agent.kv().set(key, Bytes::from(json)); }
-        Err(e)   => tracing::warn!("audit: serialisation failed: {e}"),
+    #[cfg(feature = "compliance")]
+    {
+        let target  = format!("{}/{}", rec.skill_ns, rec.skill_name);
+        let outcome = if rec.success {
+            mycelium::AuditOutcome::Success
+        } else {
+            mycelium::AuditOutcome::Error
+        };
+        let detail = serde_json::json!({
+            "nonce":       rec.nonce,
+            "duration_ms": rec.duration_ms,
+            "tool_calls":  rec.tool_calls.iter().map(|t| &t.name).collect::<Vec<_>>(),
+        })
+        .to_string();
+        if let Err(e) = agent.audit(
+            mycelium::AuditAction::Invoke,
+            rec.caller.clone(),
+            target,
+            outcome,
+            Some(detail),
+        ) {
+            tracing::warn!("audit: hash-chained write failed ({e}); set GossipConfig::tls — record not recorded");
+        }
+    }
+    #[cfg(not(feature = "compliance"))]
+    {
+        // No identity key without compliance → plain, unsigned, time-keyed trail.
+        let key = format!("audit/{}/{}", rec.ts_unix_nanos, agent.node_id());
+        match serde_json::to_vec(rec) {
+            Ok(json) => { let _ = agent.kv().set(key, Bytes::from(json)); }
+            Err(e)   => tracing::warn!("audit: serialisation failed: {e}"),
+        }
     }
 }
 

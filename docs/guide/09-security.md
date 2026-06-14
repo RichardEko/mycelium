@@ -43,10 +43,13 @@ timestamp, regardless of wall-clock drift. Tampering with a historical entry
 requires producing a causally-consistent chain from genesis — computationally
 infeasible without the original signing key.
 
-**Audit trail.** Every SkillRunner invocation writes a record to
-`audit/{hlc_hex}/{node_id}` in the KV store. Each record is:
+**Audit trail.** Every SkillRunner invocation writes an audit record. Under the
+`compliance` feature this is a signed, hash-chained record at
+`sys/audit/{node}/{seq}` (see *The audit trail in practice* below); without it,
+a plain time-keyed record at `audit/{ts}/{node}`. The `compliance` record is:
 - HLC-timestamped (causally ordered)
 - Ed25519-signed by the invoking node
+- Hash-chained to its predecessor in that node's stream (tamper-evident)
 - Replicated to every mesh node via gossip within seconds
 
 This means audit records are distributed, tamper-evident, and available on
@@ -136,50 +139,141 @@ pre-v10.
 
 ---
 
-## The audit trail in practice
+## Role-based access control (`compliance` feature)
 
-### SkillRunner audit records
+The `compliance` feature (`= ["gateway", "tls"]`) adds RBAC on top of the node
+identity. Four pieces, all obeying Mycelium's *detection-not-prevention*
+posture — access control is enforced where a resource is **served**, never by
+teaching the gossip store a higher-layer rule.
 
-`src/bin/skillrunner/audit.rs` writes a record after every skill invocation:
+**1. Signed node roles.** A node advertises its roles and a data-classification
+clearance as an Ed25519-signed claim:
 
 ```rust
-// audit/{hlc:016x}/{node_id}
-AuditRecord {
-    skill_ns:    "llm",
-    skill_name:  "orchestrator",
-    caller:      "127.0.0.1:57001",
-    nonce:       u64,
-    success:     true,
-    duration_ms: 4200,
-    tool_calls:  ["researcher", "writer"],
+// node A, started with cfg.tls = Some(..)
+agent.advertise_roles(["admin".into(), "orchestrator".into()], /* clearance L3 */ 3)?;
+```
+
+This writes a `SignedRoleClaim` to `sys/role/A`. Any other node reads it back
+**verified**:
+
+```rust
+match agent.roles_of(&node_a) {
+    Some(claim) if claim.has_role("admin") && claim.clearance_at_least(3) => { /* trust */ }
+    _ => { /* forged, unsigned, or absent — treat as no roles */ }
 }
 ```
 
-Records are signed and HLC-ordered. Query them from any node:
+`roles_of` returns `Some` only when the claim's signature checks out against
+`A`'s identity key as learned from `sys/identity/` — never the raw (forgeable)
+KV bytes. A peer that writes arbitrary bytes to `sys/role/A` cannot mint a role;
+the entry simply reads back as `None`.
 
-```bash
-# Live dashboard
-http://localhost:9050/mgmt   # shows audit trail
+**2. Provider-side capability authorization.** A capability declares an
+`authorized_callers` allowlist; the provider enforces it when it serves:
 
-# From Rust
-let records = agent.kv().scan_prefix("audit/");
+```rust
+// inside a provider's rpc_rx serve loop
+if !agent.caller_authorized(req.sender(), &authorized_callers) {
+    // deny — req.sender() is signature-verified at the connection layer under tls
+}
+```
+
+Empty allowlist = open; otherwise the verified sender is admitted if it is listed
+by NodeId or holds a listed role. SkillRunner wires this in automatically from
+the `[policy] authorized_callers` field of a `.skill.toml`.
+
+**3. OAuth2 scope gateway ACLs.** Map bearer tokens to `resource:verb` scopes;
+each `/gateway/**` route requires one (deny-by-default → `admin`):
+
+```rust
+cfg.gateway_scoped_tokens = vec![
+    GatewayToken { token: "rw".into(),  scopes: vec!["kv:read".into(), "kv:write".into()] },
+    GatewayToken { token: "ro".into(),  scopes: vec!["kv:read".into()] },
+];
+```
+
+`POST /gateway/kv` with the `ro` token → `403 {"required_scope":"kv:write"}`;
+with `rw` → admitted. The legacy `gateway_auth_token` maps to `["*"]`. The public
+edge (`/health`, `/ready`, `/stats`, `/metrics`, descriptor) is never scope-gated.
+
+**4. The `sys/` namespace tripwire** (core — on without `compliance`). A remote
+write naming *this* node in a self-owned `sys/` prefix (`identity`, `load`,
+`role`, `tuple`) is flagged: `warn!` + `GET /stats` → `sys_namespace_violations`.
+Detection only — the write still applies per LWW.
+
+→ Operator config, the scope vocabulary, and a verification checklist:
+[`docs/operations/rbac.md`](../operations/rbac.md).
+
+---
+
+## The audit trail in practice (WS2)
+
+The shape of the audit trail depends on whether the `compliance` feature is on:
+
+| Build | Trail | Key | Signed | Hash-chained |
+|---|---|---|:-:|:-:|
+| **default** (no `compliance`) | plain, time-keyed | `audit/{ts_unix_nanos}/{node}` | ✗ | ✗ |
+| **`compliance`** | tamper-evident | `sys/audit/{node}/{seq:016x}` | ✓ (Ed25519) | ✓ (per-node SHA-256 chain) |
+
+Without `compliance` there is no identity key to sign with, so the plain trail
+is the best available. With `compliance`, every SkillRunner invocation is sealed
+into the node's signed, hash-chained stream.
+
+### The hash chain is per-node — and that is deliberate
+
+A single global chain across all nodes would need a sequencer to order writes —
+a coordinator, which the substrate's first principle forbids. So each node keeps
+its **own** chain: record `seq` is monotonic per node, and each record's
+`prev_hash` is the SHA-256 `content_hash` of its predecessor in the same
+stream. The cluster-wide trail is the **union of independently verifiable
+streams**. Removing, reordering, or editing any record in a stream breaks
+verification of that stream from the next record on.
+
+```rust
+// Seal an event (compliance feature). Returns the record's content hash —
+// the stable, citable identifier.
+let h = agent.audit(
+    AuditAction::Invoke,
+    caller.to_string(),          // the verified principal (req.sender() under tls)
+    format!("{ns}/{name}"),      // the resource
+    AuditOutcome::Success,
+    Some(detail_json),
+)?;
 ```
 
 ### Verifying chain integrity
 
-Because each entry carries an HLC timestamp and the HLC is monotonically
-increasing per node, you can verify that no entries were inserted out of
-order or back-dated:
+Verification checks every record's signature *and* the `prev_hash` linkage *and*
+sequence contiguity — not just timestamps:
 
 ```rust
-let mut prev_hlc = 0u64;
-for (key, val) in agent.kv().scan_prefix("audit/") {
-    let hlc = u64::from_str_radix(key.split('/').nth(1).unwrap(), 16).unwrap();
-    assert!(hlc > prev_hlc, "audit chain broken at {key}");
-    prev_hlc = hlc;
-    // Also verify Ed25519 signature using sys/identity/{node} key
+// Programmatic: verify a node's whole stream against its identity key.
+match agent.audit_verify(&node) {
+    Ok(())  => { /* intact from genesis */ }
+    Err(e)  => { /* e names the first bad seq: BadSignature / BrokenLink / … */ }
 }
+
+// Or verify a slice you already hold:
+let chain = agent.audit_stream(&node);          // decoded, seq-ordered
+verify_stream_from_genesis(&chain, &node, &verifying_key)?;
 ```
+
+Or over HTTP — `GET /gateway/audit` (scope `audit:read`) returns each stream with
+`verified`, the chain-tip `head_hash`, and a `content_hash` per record:
+
+```bash
+curl -H 'Authorization: Bearer <audit-token>' \
+     'http://NODE:PORT/gateway/audit?node=127.0.0.1:8080&limit=50'
+# → { "streams": [ { "node": "...", "verified": true, "head_hash": "…",
+#                    "records": [ { "seq":0, "principal":"…", "content_hash":"…" }, … ] } ] }
+```
+
+The per-record `content_hash` is the stable, citable identifier the v2 M16
+self-attestation layer references.
+
+→ Operator querying, evidence verification, and retention:
+[`docs/operations/audit.md`](../operations/audit.md).
 
 ---
 
@@ -187,9 +281,9 @@ for (key, val) in agent.kv().scan_prefix("audit/") {
 
 | Control | Framework | Mycelium mechanism |
 |---------|-----------|-------------------|
-| Audit Controls | HIPAA §164.312(b) | All KV writes, RPC calls, and skill invocations are HLC-ordered and optionally Ed25519-signed; replicated to all nodes |
+| Audit Controls | HIPAA §164.312(b) | Skill invocations sealed into a signed, hash-chained per-node trail (`compliance`); HLC-ordered and replicated to all nodes |
 | Transmission Security | HIPAA §164.312(e) | mTLS on all gossip TCP connections (`--features tls`) |
-| Integrity | HIPAA §164.312(c)(1) | Hash-chained, signed audit records; gossip replication to all nodes |
+| Integrity | HIPAA §164.312(c)(1) | Hash-chained, Ed25519-signed audit records verifiable via `audit_verify` / `GET /gateway/audit` (`compliance`); gossip-replicated to all nodes |
 | Authentication | HIPAA §164.312(d) | Ed25519 node identity at `sys/identity/{node}` |
 | Anomaly Detection | SOC 2 CC7.2 | Audit trail queryable from any node; no central log aggregator |
 | Change Management | SOC 2 CC6.6 | Capability advertisements version-tagged by HLC; consensus commits signed |

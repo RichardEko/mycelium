@@ -1883,51 +1883,68 @@ must be data-classification-aware.
   (`GossipConfig::gateway_auth_token`, **off by default**); `signal_rx_from`
   sender authorisation; capability schema versioning; wire-level Ed25519 mTLS
   (`tls` feature).
-- *In flight:* gap #8 (RBAC v1.x subset — node roles, gateway ACLs, audit
-  access control); gap #9 (SSO / Entra / Okta).
-- *Still to design:* `authorized_callers` enforcement on Skills; layer-clearance
-  model on the twin (L1/L2/L3 access control mapped to specific KV prefix
-  groups); access control on MCP / A2A bridge surfaces (separate from the
-  primary gateway auth).
+- **Shipped — WS1 (RBAC v1.x subset, `compliance` feature).** Signed node role
+  claims (`sys/role/{node}`, Ed25519 over `{node,roles,clearance,issued_at}`,
+  verified against cluster-learned identity keys — forgery reads back as `None`);
+  data-classification `clearance` on the claim (the L1/L2/L3 model);
+  provider-side `caller_authorized` enforcing `authorized_callers` where a
+  capability is *served* (wired into the SkillRunner serve loop); **OAuth2
+  scope-based gateway ACLs** (`gateway_scoped_tokens`, `resource:verb` scopes,
+  deny-by-default, public edge paths kept open — the WS4-OIDC forward-compat
+  shape); and a core `sys/` namespace-ownership **tripwire**
+  (`SystemStats::sys_namespace_violations`, detection-not-prevention). See
+  CLAUDE.md §RBAC / identity and [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md) §WS1.
+- **Shipped — WS4 (SSO / generic OIDC).** OIDC JWT validation at the gateway
+  (`compliance`): asymmetric-only alg allowlist (anti alg-confusion), `iss`/`aud`/
+  `exp` checks, discovery + cached JWKS, IdP groups → gateway scopes via config.
+  One code path for Entra/Okta/Auth0/Keycloak — see [`docs/operations/sso.md`](docs/operations/sso.md).
+- *Deferred to WS-followups:* access control on the MCP / A2A bridge surfaces
+  (distinct from the primary gateway auth) — the OAuth2 scope model extends to
+  them directly.
 
-**2. Audit — complete and tamper-evident.** The cluster-wide `sys/audit/{hlc}`
-trail covers writes. The gate is making it (a) *complete* — every read tied to
-a principal as well as every write — and (b) *tamper-evident* — cryptographically
-chained, not just append-only.
+**2. Audit — complete and tamper-evident.** *Shipped (WS2).*
 
 - *Existing substrate:* HLC-ordered KV writes; WAL durability;
   Ed25519-signed KV writes (`tls` feature, `WireMessage::SignedData`, wire
   v10) so undetected mutation requires compromising the originating node's
   private key.
-- *In flight:* gap #7 (durable cluster-wide audit trail — `sys/audit/`,
-  `/audit` endpoint, value-hash tamper-evidence).
-- *Still to design:* read-side audit (logging the principal of every
-  authenticated read, not just every write); cryptographic chaining
-  (Merkle-tree or hash-chain so an inspector can verify the audit has not
-  been edited after the fact — currently gap #7 lists this as explicitly
-  out of scope for v1.x); inspector-facing query API hardened for regulated
-  evidence.
+- **Shipped — WS2 (`compliance` feature).** Per-node hash-chained, Ed25519-signed
+  audit stream at `sys/audit/{node}/{seq}`: each record's `prev_hash` is the
+  SHA-256 content hash of its predecessor, so an inspector can verify the stream
+  was not edited, reordered, or truncated (`audit_verify` / `verify_chain`, with a
+  precise `AuditVerifyError`). The chain is per-node by necessity — a global chain
+  would need a sequencer (a coordinator), so the cluster trail is the union of
+  independently verifiable streams. `GET /gateway/audit` (scope `audit:read`)
+  exposes per-stream `verified` + `head_hash` + per-record `content_hash` (the
+  stable M16-citable identifier). SkillRunner seals every invocation through it
+  with the *verified caller* as principal — the read-side principal binding for
+  the served path. Detection-not-prevention: tampering fails verification, never
+  blocked at the store.
+- *Deferred (later WS):* read-side principal binding for gateway-token reads
+  (waits on WS4 OIDC for real user principals); chain retention/compaction with
+  checkpoint hashes (pruning a hash chain otherwise breaks genesis verification).
 
-**3. Crown-jewel posture.** *This is the sharpest of the four, and the one
-that turns a generic "is it secure" conversation into a specific
+**3. Crown-jewel posture.** *Shipped (WS3).* *This is the sharpest of the four,
+and the one that turns a generic "is it secure" conversation into a specific
 blast-radius conversation that regulated buyers actually evaluate.* The twin
 is the concentrated map of every SPOF and critical path in the deployment;
 compromising it gives an attacker the complete dependency graph, the failure
-modes, and the escalation paths. This sub-gate is **new work** — no existing
-v1.x gap covers it.
+modes, and the escalation paths.
 
-- *Data-at-rest:* the substrate provides wire-level mTLS but no disk
-  encryption. Deployers' responsibility today; a Mycelium-side recommendation
-  document is needed, plus optional integration hooks for envelope-encrypted
-  KV bytes at rest.
-- *Tier-2 egress boundary:* explicit policy on what the twin can reach
-  outbound. A compromised twin with unrestricted egress is the worst-case
-  data-exfiltration vector. Needs a documented egress posture, ideally
-  configuration hooks that allow operators to restrict outbound destinations.
-- *Blast-radius-if-compromised:* explicit modelling of what an attacker who
-  controls one node, or who has compromised the twin's KV state, can do.
-  Needs a threat model document referenced from `docs/operations/` and
-  cross-linked to the architecture document §11.
+- **Data-at-rest — shipped (WS3).** Opt-in `DataAtRestCipher` hook
+  (`GossipAgent::with_data_at_rest_cipher`) envelope-encrypts WAL records and
+  snapshots before they hit disk and decrypts them on replay. The substrate stays
+  neutral on key custody — the operator supplies a KMS/keyring adapter. Feature-free,
+  zero-overhead when unused; scope is on-disk only (in transit = `tls`).
+- **Tier-2 egress boundary — shipped (WS3).** `EgressPolicy { allow_hosts }` in
+  `GossipConfig` gates outbound reach (enforced at the MCP client bridge); a
+  node-local posture, not a coordinator. Empty = allow-all (default). Coverage and
+  operator-responsibility paths are documented in the egress runbook + threat model.
+- **Blast-radius-if-compromised — shipped (WS3).** Threat-model document at
+  [`docs/threat-model.md`](docs/threat-model.md), cross-linked from
+  `docs/operations/` (crown-jewel runbook) and CLAUDE.md: per-trust-boundary
+  threats (single node, trusted domain, external egress), the mitigations
+  (mTLS + WS1 RBAC + WS2 audit + WS3 at-rest/egress), and residual risks.
 
 **4. Support / SLA — the single-source v1 dependency question.** Regulated
 buyers ask: "Who owns Mycelium in production when something fails at
@@ -2034,13 +2051,19 @@ for SOC 2 Type II controls evidence and HIPAA §164.312(a)(1) access control req
 
 ---
 
-### 9. SSO / enterprise IdP integration (Entra, Okta)
+### 9. SSO / enterprise IdP integration (Entra, Okta) — **Shipped (WS4)**
 
 Enterprise procurement almost universally requires SSO against the organisation's IdP
-before IT security will approve deployment. The gateway's existing bearer-token auth is
-a prerequisite; this extends it to OIDC/JWT validation against an external issuer.
+before IT security will approve deployment. Shipped as WS4: generic-OIDC JWT validation
+at the gateway. `GossipConfig::oidc = Some(OidcConfig { issuer, audience, group_claim,
+group_scopes, jwks_uri })`; the gateway validates the bearer JWT (asymmetric-only alg
+allowlist, `iss`/`aud`/`exp`, discovery + cached JWKS) and maps IdP groups → gateway
+scopes, feeding the existing WS1 scope gate. Static token auth remains the fallback.
+**One code path** covers Entra/Okta/Auth0/Keycloak — per-vendor differences (issuer,
+group-claim name) are config, documented in [`docs/operations/sso.md`](docs/operations/sso.md)
+with a per-vendor table. The original per-design notes below are retained for context.
 
-**What is needed:**
+**What was needed (design, now implemented):**
 
 **a) OIDC token validation middleware.** Replace the static `GOSSIP_GATEWAY_AUTH_TOKEN`
 comparison with a JWT validation path:
@@ -2081,9 +2104,9 @@ already in the dep graph via the `llm` feature).
 | Opt-In Consistency & Ordering Overlay | High | **Complete** 2026-05-25 |
 | `set_with_min_acks` write-durability confirmation API | Medium | **Complete** 2026-05-25 |
 | Prometheus metrics export + dashboards | Medium | **Complete** 2026-05-25 |
-| Durable cluster-wide audit trail (`sys/audit/`, `/audit` endpoint) | High | **Pending** |
-| Role-based access control — v1.x subset (node roles, gateway ACLs) | High | **Pending** |
-| SSO / enterprise IdP integration (OIDC, Entra, Okta) | High | **Pending** |
+| Durable cluster-wide audit trail (`sys/audit/`, `/audit` endpoint) | High | **Complete** 2026-06-14 (WS2 — per-node hash-chained signed trail, `verify_chain`, `/gateway/audit`, SkillRunner integration) |
+| Role-based access control — v1.x subset (node roles, gateway ACLs) | High | **Complete** 2026-06-14 (WS1 — signed `sys/role/`, provider authz, OAuth2 gateway ACLs, `sys/` tripwire) |
+| SSO / enterprise IdP integration (OIDC, Entra, Okta) | High | **Complete** 2026-06-14 (WS4 — generic-OIDC JWT validation at the gateway, discovery + JWKS, groups→scopes; mock-IdP test) |
 
 None of these require architectural changes. The substrate is sound; these are engineering
 completions on top of it.

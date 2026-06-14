@@ -54,6 +54,12 @@ pub(crate) mod llm;
 #[cfg(feature = "llm")]
 mod llm_handle;
 mod mcp_handle;
+#[cfg(feature = "compliance")]
+mod rbac;
+#[cfg(feature = "compliance")]
+pub(crate) mod audit;
+#[cfg(feature = "compliance")]
+pub(crate) mod oidc;
 
 #[allow(unused_imports)]
 pub(crate) use bulk::BulkTransport;
@@ -75,6 +81,15 @@ pub use overlay_consistent::{ConsistencyError, LockGuard};
 pub use consensus_handle::ConsensusHandle;
 pub use service_handle::ServiceHandle;
 pub use capability_handle::CapabilitiesHandle;
+#[cfg(feature = "compliance")]
+pub use rbac::{role_key, RoleClaim, SignedRoleClaim, ROLE_PREFIX};
+#[cfg(feature = "compliance")]
+pub use audit::{
+    audit_key, audit_stream_prefix, verify_chain, verify_stream_from_genesis,
+    AuditAction, AuditOutcome, AuditRecord, AuditVerifyError, SignedAuditRecord, AUDIT_PREFIX,
+};
+#[cfg(feature = "compliance")]
+pub use oidc::OidcConfig;
 pub use kv_quorum::QuorumError;
 pub use kv_handle::{KvHandle, LogEntry};
 pub use mesh_handle::MeshHandle;
@@ -193,6 +208,19 @@ pub struct SystemStats {
     /// counter is the tripwire that makes violations legible. Requires
     /// `start_consensus_listener` — nodes without a listener do not detect.
     pub commit_conflicts: u64,
+
+    /// Cumulative count of inbound (remote) writes to a `sys/` key this node
+    /// owns — `sys/identity/{self}`, `sys/load/{self}`, `sys/role/{self}`,
+    /// `sys/tuple/{self}/…`. Only the named node should ever originate these;
+    /// a remote write to one is a namespace-ownership violation.
+    ///
+    /// **Detection, not prevention** (mirrors [`commit_conflicts`](Self::commit_conflicts)):
+    /// the offending write is still applied per LWW — Layer I stays ignorant of
+    /// the namespace convention — and a `warn!` is logged. `sys/` ownership is
+    /// promise-strength; this counter is the tripwire that makes a clobber
+    /// legible. Signed keys (`identity`, `role`) additionally fail verification
+    /// at read; unsigned keys (`load`, `tuple`) rely on this signal alone.
+    pub sys_namespace_violations: u64,
 }
 
 /// Shared infrastructure extracted from `GossipAgent` into a single `Arc` so that
@@ -300,6 +328,18 @@ pub(crate) struct TaskCtx {
     /// Incremented by the consensus listener's tripwire; Relaxed ordering —
     /// purely diagnostic, surfaced via `system_stats()` and `/stats`.
     pub(crate) commit_conflicts: Arc<AtomicU64>,
+
+    /// Cumulative `sys/` namespace-ownership violations (see
+    /// `SystemStats::sys_namespace_violations`). Incremented by the connection
+    /// handler's inbound-apply tripwire when a remote write targets a `sys/`
+    /// key this node owns; Relaxed ordering — purely diagnostic.
+    pub(crate) sys_namespace_violations: Arc<AtomicU64>,
+
+    /// Head of this node's tamper-evident audit chain (WS2). `audit()` seals a
+    /// record under this lock so the per-node chain stays linear, then releases
+    /// it before writing to KV. Lock #8 in the lock-order table (leaf).
+    #[cfg(feature = "compliance")]
+    pub(crate) audit_chain: Arc<std::sync::Mutex<audit::AuditChainState>>,
 
     // ── Security ─────────────────────────────────────────────────────────────────
     /// TLS context (server + client configs + signing key). Unset when the
@@ -409,6 +449,11 @@ pub struct GossipAgent {
     /// Taken once by the HTTP server task; subsequent calls to `with_http_routes` are no-ops after start.
     #[cfg(feature = "gateway")]
     pub(super) extra_routes: std::sync::Mutex<Option<axum::Router>>,
+    /// Optional operator-supplied data-at-rest cipher (WS3). Set once via
+    /// [`with_data_at_rest_cipher`](Self::with_data_at_rest_cipher) before `start`;
+    /// read at `start` and threaded into the WAL/snapshot persistence paths.
+    pub(super) data_at_rest_cipher:
+        std::sync::OnceLock<Arc<dyn crate::persistence::DataAtRestCipher>>,
 }
 
 impl GossipAgent {
@@ -603,6 +648,9 @@ impl GossipAgent {
             )),
             rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             commit_conflicts: Arc::new(AtomicU64::new(0)),
+            sys_namespace_violations: Arc::new(AtomicU64::new(0)),
+            #[cfg(feature = "compliance")]
+            audit_chain: Arc::new(std::sync::Mutex::new(audit::AuditChainState::new())),
             tls: std::sync::OnceLock::new(),
             peer_keys: Arc::new(papaya::HashMap::new()),
             peers: Arc::clone(&peers_arc),
@@ -645,6 +693,28 @@ impl GossipAgent {
             task_ctx,
             #[cfg(feature = "gateway")]
             extra_routes: std::sync::Mutex::new(None),
+            data_at_rest_cipher: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Attach an operator-supplied [`DataAtRestCipher`](crate::DataAtRestCipher)
+    /// (WS3 crown-jewel) that envelope-encrypts this node's WAL records and
+    /// snapshots before they hit disk, and decrypts them on replay. Opt-in: with
+    /// no cipher attached, persistence bytes are written in the clear (unchanged).
+    ///
+    /// Call **before** [`start`](Self::start); it is read once at startup. Calling
+    /// it twice keeps the first cipher (a `warn!` is logged). The substrate stays
+    /// neutral on key custody — your impl wraps your KMS/keyring; the same key must
+    /// be available across restarts or the node cannot replay its own data.
+    ///
+    /// Only affects data **at rest**; the gossip wire is secured separately by the
+    /// `tls` feature.
+    pub fn with_data_at_rest_cipher(
+        &self,
+        cipher: Arc<dyn crate::persistence::DataAtRestCipher>,
+    ) {
+        if self.data_at_rest_cipher.set(cipher).is_err() {
+            tracing::warn!("with_data_at_rest_cipher called more than once; keeping the first cipher");
         }
     }
 }
@@ -723,6 +793,157 @@ impl GossipAgent {
     }
 }
 
+/// RBAC — signed node-role advertisement + verified read (WS1; `compliance` feature).
+#[cfg(feature = "compliance")]
+impl GossipAgent {
+    /// Advertise this node's roles + data-classification clearance as a signed
+    /// claim at `sys/role/{node}`. Requires the `tls` identity (roles are
+    /// Ed25519-signed); returns [`GossipError::InvalidField`] if `GossipConfig::tls`
+    /// was not set.
+    ///
+    /// One-shot write — the signed claim persists and anti-entropy-syncs like any
+    /// KV entry; re-call to update. (Periodic re-advertisement / evaporation is a
+    /// later refinement.)
+    pub fn advertise_roles(
+        &self,
+        roles: impl IntoIterator<Item = Arc<str>>,
+        clearance: u8,
+    ) -> Result<(), crate::error::GossipError> {
+        let tls = self.task_ctx.tls.get().ok_or(crate::error::GossipError::InvalidField {
+            field:  "tls",
+            reason: "role advertisement requires the tls identity (set GossipConfig::tls)".into(),
+        })?;
+        let issued_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let claim  = rbac::RoleClaim::new(self.node_id.clone(), roles, clearance, issued_at_ms);
+        let signed = rbac::SignedRoleClaim::sign(claim, &tls.signing_key());
+        // Local + WAL write is guaranteed; a `false` here only means this gossip
+        // tick's channel was full — the entry still anti-entropy-syncs and a
+        // re-advertise retries, so a dropped dispatch is not an error.
+        let _ = self.kv().set(rbac::role_key(&self.node_id), signed.encode());
+        Ok(())
+    }
+
+    /// Read and **verify** `node`'s role claim. Returns the claim only if its
+    /// signature checks out against `node`'s identity key (from `peer_keys`, or
+    /// this node's own key when `node` is self). A forged or mis-attributed
+    /// `sys/role/` write reads back as `None` — detection, not prevention.
+    pub fn roles_of(&self, node: &NodeId) -> Option<rbac::RoleClaim> {
+        let bytes = self.kv().get(&rbac::role_key(node))?;
+        let vk    = self.verifying_key_for(node)?;
+        rbac::verified_roles(&bytes, node, &vk)
+    }
+
+    /// 32-byte Ed25519 verifying key for `node`: this node's own key when `node`
+    /// is self, otherwise the key gossiped to `peer_keys` (from `sys/identity/`).
+    fn verifying_key_for(&self, node: &NodeId) -> Option<[u8; 32]> {
+        if node == &self.node_id {
+            return self.task_ctx.tls.get().map(|t| t.verifying_key_bytes());
+        }
+        self.task_ctx.peer_keys.pin().get(node).copied()
+    }
+
+    /// Provider-side authorization check: may the (verified) `sender` invoke a
+    /// capability whose `authorized_callers` allowlist is `allow`? Empty `allow`
+    /// ⇒ unrestricted; otherwise admits if `sender`'s NodeId is listed or it holds
+    /// a listed role (verified via [`roles_of`](Self::roles_of)).
+    ///
+    /// **Identity-bound:** under the `tls` identity, an incoming RPC/invoke frame's
+    /// sender is signature-verified at the connection layer, so `request.sender()`
+    /// is a trustworthy input. Call this in a provider's `rpc_rx` serve loop before
+    /// honoring an invocation — `authorized_callers` is only *enforced* where the
+    /// provider serves, never at the caller's resolve (which the caller controls).
+    pub fn caller_authorized(&self, sender: &NodeId, allow: &[Arc<str>]) -> bool {
+        if allow.is_empty() {
+            return true;
+        }
+        let roles = self.roles_of(sender).map(|c| c.roles).unwrap_or_default();
+        rbac::caller_admitted(allow, sender, &roles)
+    }
+
+    /// Seal one event into this node's tamper-evident audit chain (WS2) and write
+    /// it to `sys/audit/{self}/{seq}`. Returns the record's content hash — the
+    /// stable, citable identifier of the sealed event.
+    ///
+    /// Requires the `tls` identity (records are Ed25519-signed); a node without
+    /// `GossipConfig::tls` returns [`GossipError::InvalidField`]. The chain head is
+    /// advanced under a short lock that is released **before** the KV write, so no
+    /// two lock-order-table locks are ever held together (the write itself takes
+    /// the leaf index-stripe lock inside `apply_and_notify`).
+    ///
+    /// Detection-not-prevention: the record is a normal signed KV entry that
+    /// gossips to the cluster; tampering is caught by [`verify_chain`](crate::verify_chain),
+    /// never blocked at the store.
+    pub fn audit(
+        &self,
+        action: audit::AuditAction,
+        principal: impl Into<String>,
+        target: impl Into<String>,
+        outcome: audit::AuditOutcome,
+        detail: Option<String>,
+    ) -> Result<[u8; 32], crate::error::GossipError> {
+        let tls = self.task_ctx.tls.get().ok_or(crate::error::GossipError::InvalidField {
+            field:  "tls",
+            reason: "audit records require the tls identity (set GossipConfig::tls)".into(),
+        })?;
+        let hlc = self.task_ctx.hlc.tick();
+
+        // Build the record and advance the chain head under the lock — this is the
+        // only part that must be serialised (each record's prev_hash is the prior
+        // record's content hash). Signing (~tens of µs) and the KV write happen
+        // *outside* the lock: the captured record's bytes are already fixed, so the
+        // signature is deterministic and order-independent. Keeps the per-node chain
+        // lock to a ~µs critical section so it never becomes a throughput ceiling.
+        let (record, key, content) = {
+            let mut guard = self.task_ctx.audit_chain.lock().unwrap_or_else(|e| e.into_inner());
+            let seq = guard.next_seq;
+            let record = audit::AuditRecord {
+                node_id:   self.node_id.clone(),
+                seq,
+                hlc,
+                principal: principal.into(),
+                action,
+                target:    target.into(),
+                outcome,
+                detail,
+                prev_hash: guard.last_hash,
+            };
+            let content = record.content_hash();
+            guard.next_seq  = seq + 1;
+            guard.last_hash = content;
+            (record, audit::audit_key(&self.node_id, seq), content)
+        };
+
+        let signed = audit::SignedAuditRecord::sign(record, &tls.signing_key());
+        // Local + WAL write is guaranteed; a dropped gossip dispatch (channel full)
+        // still anti-entropy-syncs, so a `false` here is not an error.
+        let _ = self.kv().set(key, signed.encode());
+        Ok(content)
+    }
+
+    /// Read `node`'s audit stream from KV, decoded and ordered by sequence. This
+    /// is the content-hash slice primitive the M16 consumer builds on: filter the
+    /// returned records and cite each `record.content_hash()`.
+    pub fn audit_stream(&self, node: &NodeId) -> Vec<audit::SignedAuditRecord> {
+        audit::read_stream(&self.task_ctx, node)
+    }
+
+    /// Verify `node`'s full audit stream against its identity key. `Ok(())` means
+    /// the stream is intact from genesis; an [`AuditVerifyError`](crate::AuditVerifyError)
+    /// names the first violation, or `UnknownSigner` if `node`'s key is not known.
+    pub fn audit_verify(&self, node: &NodeId) -> Result<(), audit::AuditVerifyError> {
+        audit::verify_stream(&self.task_ctx, node)
+    }
+
+    /// Distinct node ids that have an audit stream in the local KV view
+    /// (parsed from `sys/audit/{node}/…` keys).
+    pub fn audit_stream_nodes(&self) -> Vec<NodeId> {
+        audit::stream_nodes(&self.task_ctx)
+    }
+}
+
 /// Sends the shutdown signal on drop — best-effort only. Does not wait for
 /// background tasks to exit. Call [`shutdown`](GossipAgent::shutdown) or
 /// [`shutdown_with_timeout`](GossipAgent::shutdown_with_timeout) before
@@ -741,5 +962,36 @@ impl std::fmt::Debug for GossipAgent {
             .field("peers", &self.peers.len())
             .field("store_entries", &self.kv_state.store.len())
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(all(test, feature = "compliance"))]
+mod rbac_agent_tests {
+    use super::*;
+    use crate::config::GossipConfig;
+
+    #[test]
+    fn advertise_roles_requires_tls_identity() {
+        let node = NodeId::new("127.0.0.1", 7400).unwrap();
+        let agent = GossipAgent::new(node.clone(), GossipConfig::default());
+        // No tls configured → cannot sign → typed error, never a panic.
+        let err = agent.advertise_roles(["admin".into()], 3).unwrap_err();
+        assert!(matches!(err, crate::error::GossipError::InvalidField { field: "tls", .. }));
+        // Nothing written, so nothing verifies back.
+        assert!(agent.roles_of(&node).is_none());
+    }
+
+    #[test]
+    fn caller_authorized_open_nodeid_and_roleless() {
+        let node = NodeId::new("127.0.0.1", 7401).unwrap();
+        let agent = GossipAgent::new(node, GossipConfig::default());
+        let caller = NodeId::new("10.0.0.5", 8000).unwrap();
+        let caller_str: Arc<str> = caller.to_string().into();
+        // Empty allowlist → open.
+        assert!(agent.caller_authorized(&caller, &[]));
+        // Caller has no advertised/verified roles → role entries do not admit.
+        assert!(!agent.caller_authorized(&caller, &["orchestrator".into()]));
+        // Explicit NodeId entry admits.
+        assert!(agent.caller_authorized(&caller, &[caller_str]));
     }
 }

@@ -29,6 +29,34 @@ use tokio::{
 };
 use tracing::{error, warn};
 
+// ── Data-at-rest encryption hook (WS3 crown-jewel) ────────────────────────────
+
+/// Operator-supplied envelope cipher for KV data **at rest** — the WAL records
+/// and snapshot blobs this node writes to disk.
+///
+/// The substrate stays deliberately neutral on key custody: implement this trait
+/// over your own KMS / keyring / HSM and attach it with
+/// [`GossipAgent::with_data_at_rest_cipher`](crate::GossipAgent::with_data_at_rest_cipher).
+/// When no cipher is attached, bytes are written in the clear (unchanged
+/// behaviour, zero overhead).
+///
+/// Scope: this protects the **on-disk** persistence surface only. Data in transit
+/// is protected separately by the `tls` feature (mTLS); data in memory is not
+/// encrypted. A node must use a cipher whose key is stable across restarts, or it
+/// cannot replay its own WAL/snapshot — key rotation is the operator's concern.
+pub trait DataAtRestCipher: Send + Sync {
+    /// Encrypt a plaintext blob for storage. Called once per WAL record and once
+    /// per snapshot. The returned ciphertext is length-framed verbatim on disk.
+    fn encrypt(&self, plaintext: &[u8]) -> Vec<u8>;
+    /// Decrypt a blob read from disk. Return `None` on authentication or format
+    /// failure — the record is then treated as corrupt and skipped, exactly as a
+    /// truncated/garbled plaintext record would be.
+    fn decrypt(&self, ciphertext: &[u8]) -> Option<Vec<u8>>;
+}
+
+/// Optional reference passed through the persistence paths.
+type Cipher<'a> = Option<&'a Arc<dyn DataAtRestCipher>>;
+
 // ── On-disk snapshot format ──────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
@@ -117,7 +145,11 @@ impl WalHandle {
 ///
 /// `apply_fn` is responsible for `intern_key` (if configured) and
 /// `apply_and_notify` — keeping `persistence.rs` free of agent-layer imports.
-pub(crate) async fn replay<F>(dir: &std::path::Path, mut apply_fn: F) -> io::Result<u64>
+pub(crate) async fn replay<F>(
+    dir: &std::path::Path,
+    cipher: Cipher<'_>,
+    mut apply_fn: F,
+) -> io::Result<u64>
 where
     F: FnMut(SyncEntry),
 {
@@ -128,7 +160,20 @@ where
     // 1. Snapshot ─────────────────────────────────────────────────────────────
     let snapshot_hlc = if snapshot_path.exists() {
         match tfs::read(&snapshot_path).await {
-            Ok(bytes) => {
+            Ok(raw) => {
+                // Decrypt the snapshot blob if a cipher is configured; a decrypt
+                // failure is treated like a corrupt snapshot (skipped).
+                let decrypted = match cipher {
+                    Some(c) => c.decrypt(&raw),
+                    None    => Some(raw.to_vec()),
+                };
+                let bytes = match decrypted {
+                    Some(b) => b,
+                    None => {
+                        warn!("persistence: snapshot.bin failed to decrypt, skipping");
+                        Vec::new()
+                    }
+                };
                 match bcode::decode_from_slice::<KvSnapshot, _>(&bytes, bincode_cfg()) {
                     Ok((snap, _)) => {
                         let hlc = snap.snapshot_hlc;
@@ -167,7 +212,16 @@ where
                     if pos + len > bytes.len()            { break; } // truncated tail
                     let record_bytes = &bytes[pos..pos + len];
                     pos += len;
-                    match bcode::decode_from_slice::<SyncEntry, _>(record_bytes, bincode_cfg()) {
+                    // Decrypt the record if a cipher is configured; a decrypt
+                    // failure is a corrupt tail — stop, matching the decode-Err path.
+                    let decrypted = match cipher {
+                        Some(c) => match c.decrypt(record_bytes) {
+                            Some(b) => b,
+                            None    => break,
+                        },
+                        None => record_bytes.to_vec(),
+                    };
+                    match bcode::decode_from_slice::<SyncEntry, _>(&decrypted, bincode_cfg()) {
                         Ok((entry, _)) if entry.timestamp > snapshot_hlc => {
                             if entry.timestamp > max_ts { max_ts = entry.timestamp; }
                             apply_fn(entry);
@@ -196,6 +250,7 @@ pub(crate) fn spawn_wal_writer(
     node_id:                NodeId,
     hlc:                    Arc<crate::hlc::Hlc>,
     default_ttl:            u8,
+    cipher:                 Option<Arc<dyn DataAtRestCipher>>,
 ) -> WalHandle {
     let channel_depth = (snapshot_wal_threshold * 4).max(1024);
     let (tx, rx) = mpsc::channel::<WalMsg>(channel_depth);
@@ -211,6 +266,7 @@ pub(crate) fn spawn_wal_writer(
         node_id,
         hlc,
         default_ttl,
+        cipher,
     ));
 
     handle
@@ -227,6 +283,7 @@ async fn wal_writer_task(
     node_id:                NodeId,
     hlc:                    Arc<crate::hlc::Hlc>,
     default_ttl:            u8,
+    cipher:                 Option<Arc<dyn DataAtRestCipher>>,
 ) {
     let wal_path = dir.join("wal.bin");
     let mut wal_file = match open_wal(&wal_path).await {
@@ -249,20 +306,20 @@ async fn wal_writer_task(
                     // Channel closed (WalHandle dropped) or explicit Shutdown:
                     // snapshot and exit.
                     None | Some(WalMsg::Shutdown) => {
-                        let _ = do_snapshot(&dir, &kv_state, &node_id, &hlc, default_ttl, &mut wal_file).await;
+                        let _ = do_snapshot(&dir, &kv_state, &node_id, &hlc, default_ttl, &mut wal_file, cipher.as_ref()).await;
                         break;
                     }
                     Some(WalMsg::Append { entry, ack }) => {
-                        let result = wal_append(&mut wal_file, &entry, sync_mode).await;
+                        let result = wal_append(&mut wal_file, &entry, sync_mode, cipher.as_ref()).await;
                         wal_entry_count += 1;
                         if let Some(ack) = ack { let _ = ack.send(result); }
                         if wal_entry_count >= snapshot_wal_threshold {
-                            let _ = do_snapshot(&dir, &kv_state, &node_id, &hlc, default_ttl, &mut wal_file).await;
+                            let _ = do_snapshot(&dir, &kv_state, &node_id, &hlc, default_ttl, &mut wal_file, cipher.as_ref()).await;
                             wal_entry_count = 0;
                         }
                     }
                     Some(WalMsg::TriggerSnapshot { ack }) => {
-                        let result = do_snapshot(&dir, &kv_state, &node_id, &hlc, default_ttl, &mut wal_file).await;
+                        let result = do_snapshot(&dir, &kv_state, &node_id, &hlc, default_ttl, &mut wal_file, cipher.as_ref()).await;
                         wal_entry_count = 0;
                         let _ = ack.send(result);
                     }
@@ -276,7 +333,7 @@ async fn wal_writer_task(
                     snap_timer.reset_after(Duration::from_secs(30));
                     continue;
                 }
-                let _ = do_snapshot(&dir, &kv_state, &node_id, &hlc, default_ttl, &mut wal_file).await;
+                let _ = do_snapshot(&dir, &kv_state, &node_id, &hlc, default_ttl, &mut wal_file, cipher.as_ref()).await;
                 wal_entry_count = 0;
             }
         }
@@ -297,18 +354,21 @@ async fn wal_append(
     file:      &mut tfs::File,
     entry:     &SyncEntry,
     sync_mode: SyncMode,
+    cipher:    Cipher<'_>,
 ) -> io::Result<()> {
-    // Build [u32 LE length][bincode payload] in one buffer.
-    let mut buf = BytesMut::with_capacity(256);
-    buf.put_u32_le(0); // placeholder
-    let payload_start = buf.len();
-    {
-        let mut w = (&mut buf).writer();
-        bcode::encode_into_std_write(entry, &mut w, bincode_cfg())
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    // Encode the record, then optionally encrypt the payload. The length prefix
+    // frames whatever lands on disk (ciphertext when a cipher is configured).
+    let mut payload: Vec<u8> = Vec::with_capacity(256);
+    bcode::encode_into_std_write(entry, &mut payload, bincode_cfg())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    if let Some(c) = cipher {
+        payload = c.encrypt(&payload);
     }
-    let payload_len = (buf.len() - payload_start) as u32;
-    buf[..4].copy_from_slice(&payload_len.to_le_bytes());
+
+    // Build [u32 LE length][payload] in one buffer.
+    let mut buf = BytesMut::with_capacity(payload.len() + 4);
+    buf.put_u32_le(payload.len() as u32);
+    buf.extend_from_slice(&payload);
 
     file.write_all(&buf).await?;
     if sync_mode == SyncMode::Flush {
@@ -319,6 +379,7 @@ async fn wal_append(
 
 // ── Snapshot ─────────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 async fn do_snapshot(
     dir:         &std::path::Path,
     kv_state:    &Arc<KvState>,
@@ -326,6 +387,7 @@ async fn do_snapshot(
     hlc:         &Arc<crate::hlc::Hlc>,
     default_ttl: u8,
     wal_file:    &mut tfs::File,
+    cipher:      Cipher<'_>,
 ) -> io::Result<()> {
     let opacity_key: Arc<str> = Arc::from(format!(
         "{}{}{}",
@@ -369,7 +431,10 @@ async fn do_snapshot(
         let mut buf = Vec::new();
         bcode::encode_into_std_write(&snap, &mut buf, bincode_cfg())
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        buf
+        match cipher {
+            Some(c) => c.encrypt(&buf),
+            None    => buf,
+        }
     };
     tfs::write(&tmp_path, &encoded).await?;
     {

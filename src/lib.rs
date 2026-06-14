@@ -185,6 +185,15 @@ pub use agent::{
 pub use agent::McpClientHandle;
 #[cfg(feature = "llm")]
 pub use agent::{PromptTemplate, PromptSkillError, PromptSkillHandle, LlmBackend, LlmResult, LlmError, OpenAiBackend, EchoBackend, LlmHandle};
+#[cfg(feature = "compliance")]
+pub use agent::{role_key, RoleClaim, SignedRoleClaim, ROLE_PREFIX};
+#[cfg(feature = "compliance")]
+pub use agent::{
+    audit_key, audit_stream_prefix, verify_chain, verify_stream_from_genesis,
+    AuditAction, AuditOutcome, AuditRecord, AuditVerifyError, SignedAuditRecord, AUDIT_PREFIX,
+};
+#[cfg(feature = "compliance")]
+pub use agent::OidcConfig;
 pub use capability::{
     CallerContext, CapConstraint, CapEntry, CapFilter, CapRanking, CapValue, Capability, CapabilityEvent,
     CapabilityGroupDef, CapabilityGroupHandle, CapabilityReg,
@@ -200,7 +209,8 @@ pub use mesh_manifest::{
     GroupManifest, GroupStatus, MeshManifest, MeshMeta, MeshStatus,
     manifest_keys, semver_gt,
 };
-pub use config::{GossipConfig, GroupTopologyPolicy, PersistenceConfig, SyncMode, TlsConfig, TopologyEnforcement};
+pub use config::{EgressPolicy, GatewayToken, GossipConfig, GroupTopologyPolicy, PersistenceConfig, SyncMode, TlsConfig, TopologyEnforcement};
+pub use persistence::DataAtRestCipher;
 pub use locality::LocalityPreference;
 pub use consensus::{ConsensusConfig, ConsensusListenerHandle, ConsensusResult, GroupQuorum, consensus_kind, consensus_ns};
 pub use error::GossipError;
