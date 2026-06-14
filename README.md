@@ -745,6 +745,38 @@ The `/health`, `/ready`, `/stats`, and `/metrics` endpoints remain public intent
 they carry no sensitive data and are needed for load-balancer health probes and Prometheus
 scraping without credential configuration.
 
+### Role-Based Access Control (`compliance` feature)
+
+The `compliance` feature (`= ["gateway", "tls"]`) layers OAuth2-style authorization on top of
+the bearer model and adds signed, verifiable node roles. It is **opt-in and backward-compatible**:
+without it the types below compile away; with it but unconfigured, behaviour is unchanged.
+
+**OAuth2 scope-based gateway ACLs.** Map each bearer token to a set of `resource:verb` scopes;
+every `/gateway/**` route requires a scope and admits a token only if its grant holds that scope
+or the `"*"` wildcard. Deny-by-default — an unmapped route requires `admin`.
+
+```rust
+config.gateway_scoped_tokens = vec![
+    GatewayToken { token: "orchestrator".into(),
+                   scopes: vec!["kv:read".into(), "kv:write".into(), "mesh:write".into()] },
+    GatewayToken { token: "readonly".into(),
+                   scopes: vec!["kv:read".into()] },
+];
+```
+
+The legacy `gateway_auth_token` is equivalent to a token holding `["*"]`, so single-token
+deployments upgrade with no change. The public edge (`/health`, `/ready`, `/stats`, `/metrics`,
+the A2A descriptor) is never scope-gated.
+
+**Signed node roles + capability authorization.** `agent.advertise_roles(["admin".into()], 3)`
+writes an Ed25519-signed claim to `sys/role/{node}`; `agent.roles_of(node)` returns it **only**
+if the signature verifies against the node's cluster-learned identity key — a forged role write
+reads back as `None`. A capability provider enforces its `authorized_callers` allowlist with
+`agent.caller_authorized(req.sender(), &allow)` at the point it *serves* a request (the only
+place the allowlist is genuinely enforceable). This is the *detection-not-prevention* posture:
+the substrate never blocks a write, it makes an unauthorized one legible — see also the `sys/`
+namespace-ownership tripwire (`/stats` → `sys_namespace_violations`).
+
 ## Layer III — Consensus
 
 Lightweight epidemic two-phase agreement built directly on top of the signal mesh — no extra

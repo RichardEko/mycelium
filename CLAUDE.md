@@ -85,7 +85,7 @@ These are real work items. Anyone resuming should read
 |---|---|
 | TupleSpace companion crate | **Shipped** (2026-06-11) as workspace member `mycelium-tuple-space/` — all 5 phases of [`docs/plans/mycelium-tuple-space.md`](docs/plans/mycelium-tuple-space.md). See §TupleSpace companion crate below. |
 | Pre-release arch remediation | **Complete.** All 9 steps done — plan at `~/.claude/plans/humble-twirling-comet.md`. |
-| v1.x completion (Production Readiness Gap) | Action plan at [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md) — WS1–WS6 (RBAC/identity, tamper-evident hash-chained audit, crown-jewel encryption hooks, generic-OIDC SSO, hot cert rotation, doc alignment) to close the remaining v1.x gaps to an implemented-tested-documented bar. Support/SLA is commercial-track (out of engineering scope). |
+| v1.x completion (Production Readiness Gap) | Action plan at [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md). **WS1 (Identity & RBAC) shipped** — signed role claims, provider-side capability authz, OAuth2 gateway ACLs, `sys/` namespace tripwire; see §RBAC / identity. **Pending:** WS2 tamper-evident hash-chained audit (M16 keystone), WS3 crown-jewel encryption hooks, WS4 generic-OIDC SSO, WS5 hot cert rotation, WS6 doc sweep. Support/SLA is commercial-track (out of engineering scope). |
 
 **Already shipped (removed from list):** fuzz harness (`fuzz/fuzz_targets/`), SignalHandlers split, ConsensusEngine::propose extraction, locality/topology Phases 0–7, cross-group consensus Phase 8 (`cross_group_propose` + `GroupQuorum`), watcher C2 (`run_consolidated_opacity_watcher` + `FilterOpacityRegistry`), signal reorder buffer (`emit_ordered()` + wire v11 `hlc_seq`), semantic coordination (capability schema versioning `with_schema_id`/`CapFilter::with_schema`, gossip-propagated skill payload schemas `with_input_schema`/`with_output_schema`, signal sender authorization `signal_rx_from`, FIPA-ACL speech act taxonomy — `examples/semantic_coordination.rs`), schema registry (`publish_schema`, `force_publish_schema`, `get_schema`, `list_schemas`, `seed_schemas_from_dir` — `src/agent/schema_ops.rs`), **pre-release arch remediation** (sub-handle facade — `KvHandle`, `MeshHandle`, `SchemaHandle`, `ConsensusHandle`, `ServiceHandle`, `CapabilitiesHandle` — plus `gateway` feature gate for Axum).
 
@@ -373,7 +373,7 @@ that registration.
 |---|---|
 | `GET /health` | 200 = process alive |
 | `GET /ready` | 200 = capabilities advertised + no dead shards |
-| `GET /stats` | `node_id`, `store_entries`, `dropped_frames`, `task_count`, `commit_conflicts` |
+| `GET /stats` | `node_id`, `store_entries`, `dropped_frames`, `task_count`, `commit_conflicts`, `sys_namespace_violations` |
 | `GET /consensus/{slot}` | `committed` (base64 or null, **lease-aware**) + `ballot` (u64) + `lease_ms` + `lease_expired` for a consensus slot |
 | `GET /metrics` | Prometheus scrape endpoint (`metrics` feature required) |
 
@@ -455,6 +455,68 @@ Without `gateway`, `with_http_routes`, `with_a2a`, the SSE/WebSocket endpoints, 
 the MCP-over-HTTP bridge are all compiled away. The gossip core, KV store, signal mesh,
 consensus, and all typed sub-handles (`KvHandle`, `MeshHandle`, etc.) remain available.
 
+### RBAC / identity (compliance feature) — WS1
+
+The `compliance` feature (`= ["gateway", "tls"]`) adds role-based access control
+on top of the Ed25519 node identity. It is **opt-in and additive**: with the
+feature off every type below compiles away and behaviour is unchanged; with it
+on but unconfigured (no roles advertised, no scoped tokens) behaviour is still
+unchanged. Lives in [`src/agent/rbac.rs`](src/agent/rbac.rs) plus the gateway
+middleware in [`src/agent/http.rs`](src/agent/http.rs). Plan: [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md) §WS1.
+
+Four layers, each obeying the **detection-not-prevention / promise-strength**
+posture — RBAC is enforced where a resource is *served*, never by teaching
+Layer I a higher-layer law:
+
+1. **Signed role claims (Layer I).** `advertise_roles(roles, clearance)` writes a
+   `SignedRoleClaim` to `sys/role/{node}` — an Ed25519 signature (the `tls`
+   identity key) over `{node_id, roles, clearance, issued_at_ms}`. `roles_of(node)`
+   returns the claim **only if** the signature verifies against `node`'s identity
+   key as learned from the cluster (`sys/identity/` → `peer_keys`), *not* the
+   forgeable KV bytes. A forged `sys/role/` write reads back as `None`. Roles are
+   canonicalised (sorted/deduped) in `RoleClaim::new`; `clearance` is the L1/L2/L3
+   data-classification level. `verified_roles` / `caller_admitted` are pure
+   functions, unit-tested without a live agent.
+
+2. **Provider-side capability authz.** `caller_authorized(sender, allow)` admits a
+   verified RPC `sender` if `allow` (a capability's `authorized_callers`) is empty
+   (open), lists the sender's NodeId, or lists a role the sender *verifiably*
+   holds. Under the `tls` identity the inbound RPC sender is signature-checked at
+   the connection layer, so `req.sender()` is trustworthy — this is the one place
+   `authorized_callers` is genuinely enforceable (the caller controls its own
+   resolve). Wired into the SkillRunner serve loop: a denied invoke is audited and
+   answered with an error, never silently dropped.
+
+3. **OAuth2 scope gateway ACLs.** `GossipConfig::gateway_scoped_tokens:
+   Vec<GatewayToken>` maps a bearer token to `resource:verb` scopes
+   (`kv:read`, `kv:write`, `mesh:write`, `consensus:read`, `llm:invoke`, …). Each
+   `/gateway/**` route requires a scope (`required_scope` table in `http.rs`);
+   a request is admitted iff its token's grant holds that scope or `"*"`.
+   **Deny-by-default**: an unmapped gateway route requires `admin`. The legacy
+   `gateway_auth_token` resolves to `["*"]`, so single-token deployments upgrade
+   with no behaviour change. **M16 edge criterion:** `/health`, `/ready`, `/stats`,
+   `/metrics`, and the descriptor path are *not* under `/gateway` and stay public
+   and uncredentialed. This is the WS4-OIDC forward-compat shape — generic OIDC
+   delivers scopes as a JWT claim: same enforcement, different principal source.
+
+4. **`sys/` namespace-ownership tripwire (Layer I, core — not compliance-gated).**
+   `sys/identity|load|role|tuple/{node}` is owned by `{node}`; only that node
+   should originate writes. The connection handler flags an *inbound* (remote)
+   write naming **self** in one of these prefixes — `warn!` + a cumulative
+   `SystemStats::sys_namespace_violations` counter (on `/stats`). **Detection
+   only**: the write still applies per LWW, exactly like the consensus
+   commit-conflict tripwire — do **not** turn this into an `apply_and_notify`
+   write guard. `sys/quorum/` is excluded (peers legitimately attest about the
+   observed node). Signed keys (`identity`, `role`) also fail verification at
+   read; unsigned keys (`load`, `tuple`) rely on this signal alone.
+
+**Gates:** `cargo test --lib --features compliance` and
+`cargo clippy --lib --tests --features compliance -- -D warnings`. Cross-node
+integration scenarios in `src/lib_tests.rs`
+(`test_ws1_rbac_signed_roles_propagate_and_authorize_across_nodes`,
+`test_gateway_scoped_token_acl_end_to_end`,
+`test_sys_namespace_tripwire_flags_foreign_self_owned_write`).
+
 ### Testing conventions
 
 **Always run the full feature matrix locally before pushing.**
@@ -502,9 +564,13 @@ get found.
 - `cargo build --lib --features metrics` to include the Prometheus scrape endpoint
 - `cargo build --lib --features a2a` to include the A2A protocol adapter
 - `cargo build --lib --features llm` to include the Prompt Skills LLM adapter
-- `cargo build --lib --features compliance` to include gateway auth, durable audit, RBAC (planned, not yet implemented)
-- 323 lib tests at HEAD (full feature matrix); clippy at 0 warnings (stub removal
-  eliminated the prior 61 `field_reassign_with_default` baseline in test code).
+- `cargo build --lib --features compliance` to include RBAC / signed identity roles,
+  OAuth2 gateway ACLs, and (planned) durable audit. **WS1 shipped** (see §RBAC / identity);
+  WS2–WS5 in progress per [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md).
+- Lib tests at HEAD: **312** default · **330** `tls,metrics,a2a,llm` · **331** `compliance`
+  (full feature matrix); clippy at 0 warnings on each. The `compliance` delta is the WS1
+  RBAC unit + cross-node integration tests; the core `sys/` tripwire tests are in the
+  default count.
 - Wire version is currently **v11** (`PREV_WIRE_VERSION = 10` — rolling upgrade window open).
   v11 adds `hlc_seq: Option<u64>` to `WireMessage::Signal` for ordered delivery via `emit_ordered()`.
   v10 adds `WireMessage::SignedData` for Ed25519-signed KV writes under the `tls` feature.

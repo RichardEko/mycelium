@@ -1883,12 +1883,22 @@ must be data-classification-aware.
   (`GossipConfig::gateway_auth_token`, **off by default**); `signal_rx_from`
   sender authorisation; capability schema versioning; wire-level Ed25519 mTLS
   (`tls` feature).
-- *In flight:* gap #8 (RBAC v1.x subset — node roles, gateway ACLs, audit
-  access control); gap #9 (SSO / Entra / Okta).
-- *Still to design:* `authorized_callers` enforcement on Skills; layer-clearance
-  model on the twin (L1/L2/L3 access control mapped to specific KV prefix
-  groups); access control on MCP / A2A bridge surfaces (separate from the
-  primary gateway auth).
+- **Shipped — WS1 (RBAC v1.x subset, `compliance` feature).** Signed node role
+  claims (`sys/role/{node}`, Ed25519 over `{node,roles,clearance,issued_at}`,
+  verified against cluster-learned identity keys — forgery reads back as `None`);
+  data-classification `clearance` on the claim (the L1/L2/L3 model);
+  provider-side `caller_authorized` enforcing `authorized_callers` where a
+  capability is *served* (wired into the SkillRunner serve loop); **OAuth2
+  scope-based gateway ACLs** (`gateway_scoped_tokens`, `resource:verb` scopes,
+  deny-by-default, public edge paths kept open — the WS4-OIDC forward-compat
+  shape); and a core `sys/` namespace-ownership **tripwire**
+  (`SystemStats::sys_namespace_violations`, detection-not-prevention). See
+  CLAUDE.md §RBAC / identity and [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md) §WS1.
+- *In flight:* gap #9 (SSO / generic OIDC — WS4, maps IdP groups → WS1 roles);
+  audit access control rides on WS2.
+- *Deferred to WS-followups:* access control on the MCP / A2A bridge surfaces
+  (distinct from the primary gateway auth) — the OAuth2 scope model extends to
+  them directly.
 
 **2. Audit — complete and tamper-evident.** The cluster-wide `sys/audit/{hlc}`
 trail covers writes. The gate is making it (a) *complete* — every read tied to
@@ -2082,7 +2092,7 @@ already in the dep graph via the `llm` feature).
 | `set_with_min_acks` write-durability confirmation API | Medium | **Complete** 2026-05-25 |
 | Prometheus metrics export + dashboards | Medium | **Complete** 2026-05-25 |
 | Durable cluster-wide audit trail (`sys/audit/`, `/audit` endpoint) | High | **Pending** |
-| Role-based access control — v1.x subset (node roles, gateway ACLs) | High | **Pending** |
+| Role-based access control — v1.x subset (node roles, gateway ACLs) | High | **Complete** 2026-06-14 (WS1 — signed `sys/role/`, provider authz, OAuth2 gateway ACLs, `sys/` tripwire) |
 | SSO / enterprise IdP integration (OIDC, Entra, Okta) | High | **Pending** |
 
 None of these require architectural changes. The substrate is sound; these are engineering

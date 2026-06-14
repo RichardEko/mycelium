@@ -136,6 +136,74 @@ pre-v10.
 
 ---
 
+## Role-based access control (`compliance` feature)
+
+The `compliance` feature (`= ["gateway", "tls"]`) adds RBAC on top of the node
+identity. Four pieces, all obeying Mycelium's *detection-not-prevention*
+posture — access control is enforced where a resource is **served**, never by
+teaching the gossip store a higher-layer rule.
+
+**1. Signed node roles.** A node advertises its roles and a data-classification
+clearance as an Ed25519-signed claim:
+
+```rust
+// node A, started with cfg.tls = Some(..)
+agent.advertise_roles(["admin".into(), "orchestrator".into()], /* clearance L3 */ 3)?;
+```
+
+This writes a `SignedRoleClaim` to `sys/role/A`. Any other node reads it back
+**verified**:
+
+```rust
+match agent.roles_of(&node_a) {
+    Some(claim) if claim.has_role("admin") && claim.clearance_at_least(3) => { /* trust */ }
+    _ => { /* forged, unsigned, or absent — treat as no roles */ }
+}
+```
+
+`roles_of` returns `Some` only when the claim's signature checks out against
+`A`'s identity key as learned from `sys/identity/` — never the raw (forgeable)
+KV bytes. A peer that writes arbitrary bytes to `sys/role/A` cannot mint a role;
+the entry simply reads back as `None`.
+
+**2. Provider-side capability authorization.** A capability declares an
+`authorized_callers` allowlist; the provider enforces it when it serves:
+
+```rust
+// inside a provider's rpc_rx serve loop
+if !agent.caller_authorized(req.sender(), &authorized_callers) {
+    // deny — req.sender() is signature-verified at the connection layer under tls
+}
+```
+
+Empty allowlist = open; otherwise the verified sender is admitted if it is listed
+by NodeId or holds a listed role. SkillRunner wires this in automatically from
+the `[policy] authorized_callers` field of a `.skill.toml`.
+
+**3. OAuth2 scope gateway ACLs.** Map bearer tokens to `resource:verb` scopes;
+each `/gateway/**` route requires one (deny-by-default → `admin`):
+
+```rust
+cfg.gateway_scoped_tokens = vec![
+    GatewayToken { token: "rw".into(),  scopes: vec!["kv:read".into(), "kv:write".into()] },
+    GatewayToken { token: "ro".into(),  scopes: vec!["kv:read".into()] },
+];
+```
+
+`POST /gateway/kv` with the `ro` token → `403 {"required_scope":"kv:write"}`;
+with `rw` → admitted. The legacy `gateway_auth_token` maps to `["*"]`. The public
+edge (`/health`, `/ready`, `/stats`, `/metrics`, descriptor) is never scope-gated.
+
+**4. The `sys/` namespace tripwire** (core — on without `compliance`). A remote
+write naming *this* node in a self-owned `sys/` prefix (`identity`, `load`,
+`role`, `tuple`) is flagged: `warn!` + `GET /stats` → `sys_namespace_violations`.
+Detection only — the write still applies per LWW.
+
+→ Operator config, the scope vocabulary, and a verification checklist:
+[`docs/operations/rbac.md`](../operations/rbac.md).
+
+---
+
 ## The audit trail in practice
 
 ### SkillRunner audit records

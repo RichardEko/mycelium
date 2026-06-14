@@ -3008,7 +3008,7 @@ async fn test_ws1_rbac_signed_roles_propagate_and_authorize_across_nodes() {
     assert!(peered, "two tls nodes failed to peer within the window");
 
     // A advertises an admin role at data-clearance 3.
-    a.advertise_roles([Arc::<str>::from("admin")], 3)
+    a.advertise_roles(["admin".into()], 3)
         .expect("advertise_roles must succeed with a tls identity");
 
     // Structural poll: B verifies A's claim. Returns Some only once (a) the
