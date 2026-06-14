@@ -85,7 +85,7 @@ pub use capability_handle::CapabilitiesHandle;
 pub use rbac::{role_key, RoleClaim, SignedRoleClaim, ROLE_PREFIX};
 #[cfg(feature = "compliance")]
 pub use audit::{
-    audit_key, audit_stream_prefix, verify_chain, verify_stream_from_genesis,
+    audit_key, audit_stream_prefix, verify_chain, verify_chain_keys, verify_stream_from_genesis,
     AuditAction, AuditOutcome, AuditRecord, AuditVerifyError, SignedAuditRecord, AUDIT_PREFIX,
 };
 #[cfg(feature = "compliance")]
@@ -350,7 +350,11 @@ pub(crate) struct TaskCtx {
     /// sources: (a) the mTLS handshake cert, (b) `sys/identity/` KV entries
     /// gossiped by peers. Used to verify signed consensus messages.
     #[cfg_attr(not(feature = "tls"), allow(dead_code))]
-    pub(crate) peer_keys: Arc<papaya::HashMap<NodeId, [u8; 32]>>,
+    /// Retained verifying-key **set** per node (WS5 option B): every key a node
+    /// has published at `sys/identity/{node}`, accumulated across rotations so
+    /// historical signatures (audit, consensus, roles) keep verifying. Verify
+    /// paths try all keys; see `helpers::{known_verifying_keys, verify_signed_by}`.
+    pub(crate) peer_keys: Arc<papaya::HashMap<NodeId, Vec<[u8; 32]>>>,
 
     // ── Networking ───────────────────────────────────────────────────────────────
     /// Live peer table shared with the HTTP gateway for peer-count-based quorum sizing.
@@ -827,22 +831,15 @@ impl GossipAgent {
     }
 
     /// Read and **verify** `node`'s role claim. Returns the claim only if its
-    /// signature checks out against `node`'s identity key (from `peer_keys`, or
-    /// this node's own key when `node` is self). A forged or mis-attributed
-    /// `sys/role/` write reads back as `None` — detection, not prevention.
+    /// signature checks out against **any** verifying key known for `node` (the
+    /// WS5 retained set, plus this node's own current key when `node` is self), so
+    /// a claim signed before a key rotation still verifies. A forged or
+    /// mis-attributed `sys/role/` write reads back as `None`.
     pub fn roles_of(&self, node: &NodeId) -> Option<rbac::RoleClaim> {
         let bytes = self.kv().get(&rbac::role_key(node))?;
-        let vk    = self.verifying_key_for(node)?;
-        rbac::verified_roles(&bytes, node, &vk)
-    }
-
-    /// 32-byte Ed25519 verifying key for `node`: this node's own key when `node`
-    /// is self, otherwise the key gossiped to `peer_keys` (from `sys/identity/`).
-    fn verifying_key_for(&self, node: &NodeId) -> Option<[u8; 32]> {
-        if node == &self.node_id {
-            return self.task_ctx.tls.get().map(|t| t.verifying_key_bytes());
-        }
-        self.task_ctx.peer_keys.pin().get(node).copied()
+        helpers::known_verifying_keys(&self.task_ctx, node)
+            .iter()
+            .find_map(|vk| rbac::verified_roles(&bytes, node, vk))
     }
 
     /// Provider-side authorization check: may the (verified) `sender` invoke a

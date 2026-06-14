@@ -150,6 +150,12 @@ impl SignedAuditRecord {
         crate::tls::verify_bytes(verifying_key, &self.record.canonical(), &self.sig)
     }
 
+    /// True if the signature verifies under **any** of `verifying_keys` — the WS5
+    /// retained-key set, so a record signed before a rotation still validates.
+    pub fn verify_any(&self, verifying_keys: &[[u8; 32]]) -> bool {
+        verifying_keys.iter().any(|k| self.verify(k))
+    }
+
     pub fn encode(&self) -> Bytes {
         let mut buf = BytesMut::new();
         let _ = bincode::serde::encode_into_std_write(self, &mut (&mut buf).writer(), bincode_cfg());
@@ -198,6 +204,20 @@ pub fn verify_chain(
     expected_first_seq: u64,
     expected_first_prev: [u8; 32],
 ) -> Result<(), AuditVerifyError> {
+    verify_chain_keys(records, owner, std::slice::from_ref(verifying_key), expected_first_seq, expected_first_prev)
+}
+
+/// Like [`verify_chain`] but accepts a **set** of acceptable verifying keys — a
+/// record passes if its signature matches *any* of them. This is the WS5
+/// retained-key path: a node's audit stream may span a key rotation, so records
+/// before and after the rotation are signed by different keys, all still valid.
+pub fn verify_chain_keys(
+    records: &[SignedAuditRecord],
+    owner: &NodeId,
+    verifying_keys: &[[u8; 32]],
+    expected_first_seq: u64,
+    expected_first_prev: [u8; 32],
+) -> Result<(), AuditVerifyError> {
     let mut prev = expected_first_prev;
     for (i, sr) in records.iter().enumerate() {
         let r = &sr.record;
@@ -211,7 +231,7 @@ pub fn verify_chain(
         if r.prev_hash != prev {
             return Err(AuditVerifyError::BrokenLink { seq: r.seq });
         }
-        if !sr.verify(verifying_key) {
+        if !sr.verify_any(verifying_keys) {
             return Err(AuditVerifyError::BadSignature { seq: r.seq });
         }
         prev = r.content_hash();
@@ -233,15 +253,6 @@ pub fn verify_stream_from_genesis(
 
 use super::TaskCtx;
 
-/// The 32-byte Ed25519 verifying key for `node`: this node's own key when `node`
-/// is self, otherwise the key gossiped to `peer_keys` (from `sys/identity/`).
-pub(crate) fn verifying_key(ctx: &TaskCtx, node: &NodeId) -> Option<[u8; 32]> {
-    if node == &ctx.node_id {
-        return ctx.tls.get().map(|t| t.verifying_key_bytes());
-    }
-    ctx.peer_keys.pin().get(node).copied()
-}
-
 /// Read `node`'s audit stream from the local KV view, decoded and ordered by seq.
 pub(crate) fn read_stream(ctx: &TaskCtx, node: &NodeId) -> Vec<SignedAuditRecord> {
     let mut entries = crate::store::scan_kv_prefix(&ctx.kv_state, &audit_stream_prefix(node));
@@ -249,13 +260,15 @@ pub(crate) fn read_stream(ctx: &TaskCtx, node: &NodeId) -> Vec<SignedAuditRecord
     entries.iter().filter_map(|(_, v)| SignedAuditRecord::decode(v)).collect()
 }
 
-/// Verify `node`'s full stream against its identity key (`UnknownSigner` if the
-/// key is not yet known to this node).
+/// Verify `node`'s full stream against the **retained set** of verifying keys
+/// known for it (WS5) — so a stream that spans a key rotation still verifies.
+/// `UnknownSigner` if no key is known for `node`.
 pub(crate) fn verify_stream(ctx: &TaskCtx, node: &NodeId) -> Result<(), AuditVerifyError> {
-    let Some(vk) = verifying_key(ctx, node) else {
+    let keys = super::helpers::known_verifying_keys(ctx, node);
+    if keys.is_empty() {
         return Err(AuditVerifyError::UnknownSigner);
-    };
-    verify_stream_from_genesis(&read_stream(ctx, node), node, &vk)
+    }
+    verify_chain_keys(&read_stream(ctx, node), node, &keys, 0, [0u8; 32])
 }
 
 /// Distinct node ids with an audit stream in the local KV view, sorted by their
@@ -303,6 +316,44 @@ mod tests {
             out.push(SignedAuditRecord::sign(rec, sk));
         }
         out
+    }
+
+    #[test]
+    fn chain_spanning_a_key_rotation_verifies_against_the_key_set() {
+        // WS5 option B: records 0..2 signed by key A, records 2..4 by key B
+        // (a mid-stream identity rotation), same node_id. The chain links are
+        // continuous regardless of signing key.
+        let (sk_a, sk_b) = (key(20), key(21));
+        let (vk_a, vk_b) = (sk_a.verifying_key().to_bytes(), sk_b.verifying_key().to_bytes());
+        let owner = node();
+        let mut out = Vec::new();
+        let mut prev = [0u8; 32];
+        for seq in 0..4u64 {
+            let rec = AuditRecord {
+                node_id: owner.clone(), seq, hlc: seq + 1,
+                principal: "p".into(), action: AuditAction::Invoke,
+                target: format!("job-{seq}"), outcome: AuditOutcome::Success,
+                detail: None, prev_hash: prev,
+            };
+            prev = rec.content_hash();
+            let sk = if seq < 2 { &sk_a } else { &sk_b };
+            out.push(SignedAuditRecord::sign(rec, sk));
+        }
+        // Both keys in the set → whole chain verifies across the rotation.
+        assert_eq!(verify_chain_keys(&out, &owner, &[vk_a, vk_b], 0, [0u8; 32]), Ok(()));
+        // Order of keys in the set doesn't matter.
+        assert_eq!(verify_chain_keys(&out, &owner, &[vk_b, vk_a], 0, [0u8; 32]), Ok(()));
+        // Only the old key → fails at the first record signed by the new key.
+        assert_eq!(
+            verify_chain_keys(&out, &owner, &[vk_a], 0, [0u8; 32]),
+            Err(AuditVerifyError::BadSignature { seq: 2 })
+        );
+        // A forged key not in the set is rejected at genesis.
+        let forged = key(99).verifying_key().to_bytes();
+        assert_eq!(
+            verify_chain_keys(&out, &owner, &[forged], 0, [0u8; 32]),
+            Err(AuditVerifyError::BadSignature { seq: 0 })
+        );
     }
 
     #[test]

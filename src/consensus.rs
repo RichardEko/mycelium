@@ -603,21 +603,24 @@ impl ConsensusEngine {
         if self.task_ctx.tls.get().is_some() {
             let (signed, _): (SignedConsensusMsg, _) =
                 bincode::serde::decode_from_slice(payload, bincode_cfg()).ok()?;
-            // Look up the sender's verifying key: try the in-memory cache first,
-            // then fall back to the `sys/identity/` KV entry.
-            let key_bytes = self.task_ctx.peer_keys.pin().get(&signed.signer).copied()
-                .or_else(|| {
-                    let kv_key = format!("{}{}", crate::signal::kv_ns::IDENTITY, signed.signer);
-                    let b = self.task_ctx.kv_state.store.pin()
-                        .get(kv_key.as_str())?.data.clone()?;
-                    (b.len() == 32).then(|| {
-                        let mut arr = [0u8; 32];
-                        arr.copy_from_slice(&b);
-                        arr
-                    })
-                })?;
-            if !crate::tls::verify_bytes(&key_bytes, &signed.msg_bytes, &signed.signature) {
-                tracing::warn!("dropping consensus msg: bad signature from {}", signed.signer);
+            // Look up the sender's verifying key SET (WS5 retained keys): the
+            // in-memory cache first, else parse the `sys/identity/` KV entry
+            // (32 = one key, 64 = current‖previous). Verify against any so a
+            // rotated key still validates in-flight/historical consensus msgs.
+            let mut key_set: Vec<[u8; 32]> =
+                self.task_ctx.peer_keys.pin().get(&signed.signer).cloned().unwrap_or_default();
+            if key_set.is_empty() {
+                let kv_key = format!("{}{}", crate::signal::kv_ns::IDENTITY, signed.signer);
+                if let Some(b) = self.task_ctx.kv_state.store.pin()
+                    .get(kv_key.as_str()).and_then(|e| e.data.clone())
+                {
+                    key_set = crate::agent::helpers::parse_identity_keys(&b);
+                }
+            }
+            if key_set.is_empty()
+                || !key_set.iter().any(|k| crate::tls::verify_bytes(k, &signed.msg_bytes, &signed.signature))
+            {
+                tracing::warn!("dropping consensus msg: bad/unknown signature from {}", signed.signer);
                 return None;
             }
             return decode_consensus_msg(&signed.msg_bytes);

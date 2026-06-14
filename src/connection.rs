@@ -623,13 +623,15 @@ pub(crate) async fn handle_connection(
                 #[cfg(feature = "tls")]
                 {
                     let guard = task_ctx.peer_keys.pin();
-                    if let Some((_, pub_bytes)) = guard.iter().find(|(k, _)| k.id_hash() == signer) {
+                    // Retained key set per node (WS5): try every published key so a
+                    // rotated-in signature verifies even before the old key ages out.
+                    if let Some((_, pub_key_set)) = guard.iter().find(|(k, _)| k.id_hash() == signer) {
                         let canonical = canonical_sign_bytes(&update);
                         let (lo, hi)  = &signature;
                         let mut sig_bytes = [0u8; 64];
                         sig_bytes[..32].copy_from_slice(lo);
                         sig_bytes[32..].copy_from_slice(hi);
-                        if !crate::tls::verify_bytes(pub_bytes, &canonical, &sig_bytes) {
+                        if !pub_key_set.iter().any(|k| crate::tls::verify_bytes(k, &canonical, &sig_bytes)) {
                             warn!(
                                 "SignedData from {} (signer={:#x}) failed Ed25519 verification, dropping",
                                 peer_addr, signer

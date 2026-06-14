@@ -397,14 +397,13 @@ impl GossipAgent {
     #[cfg(feature = "tls")]
     fn prewarm_peer_keys(&self) {
         let prefix = kv_ns::IDENTITY;
-        let guard  = self.task_ctx.peer_keys.pin();
         for (key, bytes) in kv_scan_prefix(&self.task_ctx, prefix) {
             let Some(node_id_str) = key.strip_prefix(prefix) else { continue };
             let Ok(node_id) = node_id_str.parse::<crate::node_id::NodeId>() else { continue };
-            if bytes.len() == 32 {
-                let mut arr = [0u8; 32];
-                arr.copy_from_slice(&bytes);
-                guard.insert(node_id, arr);
+            // 32 bytes = one key, 64 = current‖previous (rotation window).
+            let keys = super::helpers::parse_identity_keys(&bytes);
+            if !keys.is_empty() {
+                super::helpers::merge_peer_keys(&self.task_ctx.peer_keys, &node_id, &keys);
             }
         }
     }
@@ -426,19 +425,21 @@ impl GossipAgent {
                     _ = shutdown_rx.wait_for(|v| *v) => break,
                     res = rx.changed() => { if res.is_err() { break; } }
                 }
-                // Re-sync peer_keys from the current store snapshot.
-                let guard       = peer_keys.pin();
+                // Re-sync peer_keys from the current store snapshot. Accumulate
+                // (union) published keys so rotation never drops a still-needed
+                // historical key; a tombstone removes the node entirely.
                 let store_guard = kv_state.store.pin();
                 for (key, entry) in store_guard.iter() {
                     let Some(suffix) = key.strip_prefix(kv_ns::IDENTITY) else { continue };
                     let Ok(node_id) = suffix.parse::<crate::node_id::NodeId>() else { continue };
                     match &entry.data {
-                        Some(b) if b.len() == 32 => {
-                            let mut arr = [0u8; 32];
-                            arr.copy_from_slice(b);
-                            guard.insert(node_id, arr);
+                        Some(b) => {
+                            let keys = super::helpers::parse_identity_keys(b);
+                            if !keys.is_empty() {
+                                super::helpers::merge_peer_keys(&peer_keys, &node_id, &keys);
+                            }
                         }
-                        _ => { guard.remove(&node_id); }
+                        None => { peer_keys.pin().remove(&node_id); }
                     }
                 }
             }
