@@ -886,6 +886,26 @@ impl GossipAgent {
         let _ = self.kv().set(key, signed.encode());
         Ok(content)
     }
+
+    /// Read `node`'s audit stream from KV, decoded and ordered by sequence. This
+    /// is the content-hash slice primitive the M16 consumer builds on: filter the
+    /// returned records and cite each `record.content_hash()`.
+    pub fn audit_stream(&self, node: &NodeId) -> Vec<audit::SignedAuditRecord> {
+        audit::read_stream(&self.task_ctx, node)
+    }
+
+    /// Verify `node`'s full audit stream against its identity key. `Ok(())` means
+    /// the stream is intact from genesis; an [`AuditVerifyError`](crate::AuditVerifyError)
+    /// names the first violation, or `UnknownSigner` if `node`'s key is not known.
+    pub fn audit_verify(&self, node: &NodeId) -> Result<(), audit::AuditVerifyError> {
+        audit::verify_stream(&self.task_ctx, node)
+    }
+
+    /// Distinct node ids that have an audit stream in the local KV view
+    /// (parsed from `sys/audit/{node}/…` keys).
+    pub fn audit_stream_nodes(&self) -> Vec<NodeId> {
+        audit::stream_nodes(&self.task_ctx)
+    }
 }
 
 /// Sends the shutdown signal on drop — best-effort only. Does not wait for

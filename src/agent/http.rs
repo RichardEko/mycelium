@@ -172,6 +172,10 @@ pub(super) async fn run_http_server(
         .route("/llm/call",            post(gw_llm_call))
         .route("/llm/stream",          post(gw_llm_stream));
 
+    // WS2 audit trail query + verification (compliance feature).
+    #[cfg(feature = "compliance")]
+    let gateway = gateway.route("/audit", get(gw_audit));
+
     // Apply auth middleware to all gateway routes in one shot.
     let gateway = gateway
         .route_layer(middleware::from_fn_with_state(Arc::clone(&state), gateway_auth));
@@ -362,6 +366,8 @@ fn required_scope(method: &axum::http::Method, matched_path: &str) -> &'static s
         "/gateway/prompts/{ns}/{name}" => if read { "llm:read" } else { "llm:write" },
         "/gateway/llm/call"            => "llm:invoke",
         "/gateway/llm/stream"          => "llm:invoke",
+        // Audit trail (WS2)
+        "/gateway/audit"               => "audit:read",
         // Deny-by-default.
         _ => "admin",
     }
@@ -492,6 +498,83 @@ async fn stats_handler(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
         "sys_namespace_violations": ctx.agent_ctx.sys_namespace_violations
             .load(std::sync::atomic::Ordering::Relaxed),
     }))
+}
+
+/// `GET /gateway/audit` — query the tamper-evident audit trail (compliance, scope
+/// `audit:read`). Optional `?node=` selects one stream (default: all known
+/// streams); optional `?limit=` caps the records returned per stream (most
+/// recent), while verification always runs over the full stream. Each stream
+/// reports `verified` + any `verify_error`, the chain-tip `head_hash`, and each
+/// record's stable `content_hash` (the M16-citable identifier).
+#[cfg(feature = "compliance")]
+#[derive(Deserialize)]
+struct AuditQuery {
+    node:  Option<String>,
+    limit: Option<usize>,
+}
+
+#[cfg(feature = "compliance")]
+fn hex32(bytes: &[u8; 32]) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(64);
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
+#[cfg(feature = "compliance")]
+async fn gw_audit(
+    State(ctx): State<Arc<HttpCtx>>,
+    Query(q): Query<AuditQuery>,
+) -> Response {
+    let tc = &ctx.agent_ctx;
+    let nodes: Vec<crate::node_id::NodeId> = match q.node.as_deref() {
+        Some(s) => match s.parse() {
+            Ok(n) => vec![n],
+            Err(_) => {
+                return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid node id"})))
+                    .into_response();
+            }
+        },
+        None => super::audit::stream_nodes(tc),
+    };
+    let limit = q.limit.unwrap_or(usize::MAX);
+
+    let mut streams = Vec::with_capacity(nodes.len());
+    for node in nodes {
+        let records = super::audit::read_stream(tc, &node);
+        let verify  = super::audit::verify_stream(tc, &node);
+        let head_hash = records.last().map(|sr| hex32(&sr.record.content_hash()));
+        let shown: Vec<_> = records
+            .iter()
+            .rev()
+            .take(limit)
+            .rev()
+            .map(|sr| {
+                let r = &sr.record;
+                json!({
+                    "seq":          r.seq,
+                    "hlc":          r.hlc,
+                    "principal":    r.principal,
+                    "action":       format!("{:?}", r.action),
+                    "target":       r.target,
+                    "outcome":      format!("{:?}", r.outcome),
+                    "detail":       r.detail,
+                    "content_hash": hex32(&r.content_hash()),
+                })
+            })
+            .collect();
+        streams.push(json!({
+            "node":         node.to_string(),
+            "count":        records.len(),
+            "verified":     verify.is_ok(),
+            "verify_error": verify.err().map(|e| format!("{e:?}")),
+            "head_hash":    head_hash,
+            "records":      shown,
+        }));
+    }
+    Json(json!({ "streams": streams })).into_response()
 }
 
 /// SSE endpoint — streams admitted signals of the requested `kind`.
@@ -2706,5 +2789,63 @@ mod tests {
         assert_ne!(r.status(), 403, "wildcard token must pass scope gating");
 
         agent.shutdown().await;
+    }
+
+    /// WS2: the `/gateway/audit` endpoint returns the node's verified audit
+    /// stream to a token holding `audit:read`, and 403s a token without it.
+    #[cfg(feature = "compliance")]
+    #[tokio::test]
+    async fn test_gateway_audit_endpoint_verifies_and_scope_gates() {
+        use crate::config::TlsConfig;
+        use crate::{AuditAction, AuditOutcome, GatewayToken};
+        use axum::http::header::AUTHORIZATION;
+
+        let gossip_port = alloc_port();
+        let http_port   = alloc_port();
+        let id = NodeId::new("127.0.0.1", gossip_port).unwrap();
+        let cert_dir = std::env::temp_dir().join(format!("myc-audit-ep-{gossip_port}"));
+        let _ = std::fs::remove_dir_all(&cert_dir);
+
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = gossip_port;
+        cfg.http_port = Some(http_port);
+        cfg.tls = Some(TlsConfig { auto_cert_dir: cert_dir.clone(), ..TlsConfig::default() });
+        cfg.gateway_scoped_tokens = vec![
+            GatewayToken { token: "auditor".into(), scopes: vec!["audit:read".into()] },
+            GatewayToken { token: "noaudit".into(), scopes: vec!["kv:read".into()] },
+        ];
+
+        let agent = Arc::new(GossipAgent::new(id.clone(), cfg));
+        agent.start().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        // Seal two events into this node's stream.
+        agent.audit(AuditAction::Invoke, "10.0.0.1:9000", "skill/a", AuditOutcome::Success, None).unwrap();
+        agent.audit(AuditAction::Read, "10.0.0.2:9000", "kv/secret", AuditOutcome::Denied, None).unwrap();
+
+        let client = reqwest::Client::new();
+        let url = format!("http://127.0.0.1:{http_port}/gateway/audit");
+
+        // Wrong scope → 403.
+        let r = client.get(&url).header(AUTHORIZATION, "Bearer noaudit").send().await.unwrap();
+        assert_eq!(r.status(), 403, "kv:read token must not reach the audit trail");
+
+        // Correct scope → 200, verified stream with both records.
+        let r = client.get(&url).header(AUTHORIZATION, "Bearer auditor").send().await.unwrap();
+        assert_eq!(r.status(), 200, "audit:read token must reach the audit trail");
+        let body: serde_json::Value = r.json().await.unwrap();
+        let streams = body["streams"].as_array().expect("streams array");
+        let mine = streams.iter()
+            .find(|s| s["node"] == id.to_string())
+            .expect("this node's stream present");
+        assert_eq!(mine["verified"], true, "honest stream must verify");
+        assert!(mine["count"].as_u64().unwrap() >= 2, "both sealed records counted");
+        assert!(mine["head_hash"].is_string(), "chain tip hash present");
+        let recs = mine["records"].as_array().unwrap();
+        assert!(recs.iter().all(|r| r["content_hash"].is_string()),
+            "every record carries a citable content_hash");
+
+        agent.shutdown().await;
+        let _ = std::fs::remove_dir_all(&cert_dir);
     }
 }

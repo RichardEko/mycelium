@@ -176,6 +176,10 @@ pub enum AuditVerifyError {
     SequenceGap { expected: u64, found: u64 },
     /// A record claims a different owner than the stream it appears in.
     WrongOwner { seq: u64 },
+    /// The stream owner's verifying key is not known to this node, so the
+    /// signatures cannot be checked. Not produced by [`verify_chain`] (which
+    /// takes a key) — surfaced by agent-level verification helpers.
+    UnknownSigner,
 }
 
 /// Verify a contiguous slice of one node's stream.
@@ -222,6 +226,53 @@ pub fn verify_stream_from_genesis(
     verifying_key: &[u8; 32],
 ) -> Result<(), AuditVerifyError> {
     verify_chain(records, owner, verifying_key, 0, [0u8; 32])
+}
+
+// ── TaskCtx-level read/verify (shared by GossipAgent methods and the /audit
+//    gateway handler, which only holds an Arc<TaskCtx>) ──────────────────────
+
+use super::TaskCtx;
+
+/// The 32-byte Ed25519 verifying key for `node`: this node's own key when `node`
+/// is self, otherwise the key gossiped to `peer_keys` (from `sys/identity/`).
+pub(crate) fn verifying_key(ctx: &TaskCtx, node: &NodeId) -> Option<[u8; 32]> {
+    if node == &ctx.node_id {
+        return ctx.tls.get().map(|t| t.signing_key.verifying_key().to_bytes());
+    }
+    ctx.peer_keys.pin().get(node).copied()
+}
+
+/// Read `node`'s audit stream from the local KV view, decoded and ordered by seq.
+pub(crate) fn read_stream(ctx: &TaskCtx, node: &NodeId) -> Vec<SignedAuditRecord> {
+    let mut entries = crate::store::scan_kv_prefix(&ctx.kv_state, &audit_stream_prefix(node));
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries.iter().filter_map(|(_, v)| SignedAuditRecord::decode(v)).collect()
+}
+
+/// Verify `node`'s full stream against its identity key (`UnknownSigner` if the
+/// key is not yet known to this node).
+pub(crate) fn verify_stream(ctx: &TaskCtx, node: &NodeId) -> Result<(), AuditVerifyError> {
+    let Some(vk) = verifying_key(ctx, node) else {
+        return Err(AuditVerifyError::UnknownSigner);
+    };
+    verify_stream_from_genesis(&read_stream(ctx, node), node, &vk)
+}
+
+/// Distinct node ids with an audit stream in the local KV view, sorted by their
+/// string form for deterministic output.
+pub(crate) fn stream_nodes(ctx: &TaskCtx) -> Vec<NodeId> {
+    let mut seen = std::collections::HashSet::new();
+    for (key, _) in crate::store::scan_kv_prefix(&ctx.kv_state, AUDIT_PREFIX) {
+        if let Some(rest) = key.strip_prefix(AUDIT_PREFIX)
+            && let Some(node_seg) = rest.split('/').next()
+            && let Ok(node) = node_seg.parse::<NodeId>()
+        {
+            seen.insert(node);
+        }
+    }
+    let mut out: Vec<NodeId> = seen.into_iter().collect();
+    out.sort_by_key(|n| n.to_string());
+    out
 }
 
 #[cfg(test)]
