@@ -85,7 +85,7 @@ These are real work items. Anyone resuming should read
 |---|---|
 | TupleSpace companion crate | **Shipped** (2026-06-11) as workspace member `mycelium-tuple-space/` — all 5 phases of [`docs/plans/mycelium-tuple-space.md`](docs/plans/mycelium-tuple-space.md). See §TupleSpace companion crate below. |
 | Pre-release arch remediation | **Complete.** All 9 steps done — plan at `~/.claude/plans/humble-twirling-comet.md`. |
-| v1.x completion (Production Readiness Gap) | Action plan at [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md). **WS1 (Identity & RBAC) shipped** — signed role claims, provider-side capability authz, OAuth2 gateway ACLs, `sys/` namespace tripwire; see §RBAC / identity. **Pending:** WS2 tamper-evident hash-chained audit (M16 keystone), WS3 crown-jewel encryption hooks, WS4 generic-OIDC SSO, WS5 hot cert rotation, WS6 doc sweep. Support/SLA is commercial-track (out of engineering scope). |
+| v1.x completion (Production Readiness Gap) | Action plan at [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md). **WS1 (Identity & RBAC) shipped** — signed role claims, provider-side capability authz, OAuth2 gateway ACLs, `sys/` namespace tripwire; see §RBAC / identity. **WS2 (tamper-evident audit) shipped** — per-node hash-chained signed `sys/audit/` trail, `/gateway/audit` verify endpoint, SkillRunner integration; see §Audit trail. **Pending:** WS3 crown-jewel encryption hooks, WS4 generic-OIDC SSO, WS5 hot cert rotation, WS6 doc sweep. Support/SLA is commercial-track (out of engineering scope). |
 
 **Already shipped (removed from list):** fuzz harness (`fuzz/fuzz_targets/`), SignalHandlers split, ConsensusEngine::propose extraction, locality/topology Phases 0–7, cross-group consensus Phase 8 (`cross_group_propose` + `GroupQuorum`), watcher C2 (`run_consolidated_opacity_watcher` + `FilterOpacityRegistry`), signal reorder buffer (`emit_ordered()` + wire v11 `hlc_seq`), semantic coordination (capability schema versioning `with_schema_id`/`CapFilter::with_schema`, gossip-propagated skill payload schemas `with_input_schema`/`with_output_schema`, signal sender authorization `signal_rx_from`, FIPA-ACL speech act taxonomy — `examples/semantic_coordination.rs`), schema registry (`publish_schema`, `force_publish_schema`, `get_schema`, `list_schemas`, `seed_schemas_from_dir` — `src/agent/schema_ops.rs`), **pre-release arch remediation** (sub-handle facade — `KvHandle`, `MeshHandle`, `SchemaHandle`, `ConsensusHandle`, `ServiceHandle`, `CapabilitiesHandle` — plus `gateway` feature gate for Axum).
 
@@ -518,6 +518,42 @@ integration scenarios in `src/lib_tests.rs`
 `test_gateway_scoped_token_acl_end_to_end`,
 `test_sys_namespace_tripwire_flags_foreign_self_owned_write`).
 
+### Audit trail (compliance feature) — WS2
+
+Tamper-evident, signed, hash-chained audit trail. Core in
+[`src/agent/audit.rs`](src/agent/audit.rs); endpoint in
+[`src/agent/http.rs`](src/agent/http.rs); SkillRunner integration in
+`src/bin/skillrunner/`. Plan: `docs/plans/v1x-completion.md` §WS2.
+
+- **Per-node chains, by necessity.** Records live at `sys/audit/{node}/{seq:016x}`;
+  each `prev_hash` is the SHA-256 `content_hash` of the predecessor in *that node's*
+  stream (genesis = zero). A single global chain would need a sequencer — a
+  coordinator — which violates principle #1, so the chain is per-node and the
+  cluster trail is the union of independently verifiable streams. `sys/audit/` is
+  **not** in the `SELF_OWNED_SYS_PREFIXES` tripwire set (many nodes write audit
+  entries; only `identity|load|role|tuple` are single-owner).
+- **`SignedAuditRecord`** = Ed25519 over canonical record bytes (reuses the tls
+  identity, like `SignedRoleClaim`). `agent.audit(action, principal, target,
+  outcome, detail)` seals + writes; `audit_stream` / `audit_verify` /
+  `audit_stream_nodes` read + verify. `verify_chain` returns a precise
+  `AuditVerifyError` (BadSignature / BrokenLink / SequenceGap / WrongOwner /
+  UnknownSigner) naming the offending `seq`.
+- **Sealing concurrency.** The chain head (lock #8) is held only for seq/prev_hash
+  assignment + `content_hash` + head advance (~µs); signing (~tens of µs) and the
+  KV write happen **after** the lock releases — do not move signing back under it.
+- **`GET /gateway/audit`** (scope `audit:read`, deny-by-default): per-stream
+  `verified` + `head_hash` + per-record `content_hash`. The `content_hash` is the
+  stable, M16-citable identifier (named for what it is, never an AgentFacts field).
+- **SkillRunner** routes every invocation through `agent.audit(Invoke, verified-caller,
+  ns/name, outcome)` under `compliance` (the read-side principal binding is the
+  *served-path* verified caller); the plain `audit/{ts}` writer remains only as the
+  non-compliance fallback. **Detection-not-prevention**: records are plain KV
+  entries; tampering makes `verify_chain` fail, it is never blocked at the store.
+
+**Gates:** as WS1, plus `src/lib_tests.rs::test_ws2_audit_chain_writes_and_verifies_on_a_node`,
+`src/agent/http.rs::test_gateway_audit_endpoint_verifies_and_scope_gates`, and the
+10 `audit::tests` chain/tamper unit tests.
+
 ### Testing conventions
 
 **Always run the full feature matrix locally before pushing.**
@@ -566,12 +602,13 @@ get found.
 - `cargo build --lib --features a2a` to include the A2A protocol adapter
 - `cargo build --lib --features llm` to include the Prompt Skills LLM adapter
 - `cargo build --lib --features compliance` to include RBAC / signed identity roles,
-  OAuth2 gateway ACLs, and (planned) durable audit. **WS1 shipped** (see §RBAC / identity);
-  WS2–WS5 in progress per [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md).
-- Lib tests at HEAD: **312** default · **330** `tls,metrics,a2a,llm` · **331** `compliance`
+  OAuth2 gateway ACLs, and the tamper-evident hash-chained audit trail. **WS1 + WS2
+  shipped** (see §RBAC / identity and §Audit trail); WS3–WS5 in progress per
+  [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md).
+- Lib tests at HEAD: **312** default · **330** `tls,metrics,a2a,llm` · **343** `compliance`
   (full feature matrix); clippy at 0 warnings on each. The `compliance` delta is the WS1
-  RBAC unit + cross-node integration tests; the core `sys/` tripwire tests are in the
-  default count.
+  RBAC + WS2 audit unit and cross-node integration tests; the core `sys/` tripwire tests
+  are in the default count.
 - Wire version is currently **v11** (`PREV_WIRE_VERSION = 10` — rolling upgrade window open).
   v11 adds `hlc_seq: Option<u64>` to `WireMessage::Signal` for ordered delivery via `emit_ordered()`.
   v10 adds `WireMessage::SignedData` for Ed25519-signed KV writes under the `tls` feature.

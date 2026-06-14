@@ -43,10 +43,13 @@ timestamp, regardless of wall-clock drift. Tampering with a historical entry
 requires producing a causally-consistent chain from genesis — computationally
 infeasible without the original signing key.
 
-**Audit trail.** Every SkillRunner invocation writes a record to
-`audit/{hlc_hex}/{node_id}` in the KV store. Each record is:
+**Audit trail.** Every SkillRunner invocation writes an audit record. Under the
+`compliance` feature this is a signed, hash-chained record at
+`sys/audit/{node}/{seq}` (see *The audit trail in practice* below); without it,
+a plain time-keyed record at `audit/{ts}/{node}`. The `compliance` record is:
 - HLC-timestamped (causally ordered)
 - Ed25519-signed by the invoking node
+- Hash-chained to its predecessor in that node's stream (tamper-evident)
 - Replicated to every mesh node via gossip within seconds
 
 This means audit records are distributed, tamper-evident, and available on
@@ -204,50 +207,73 @@ Detection only — the write still applies per LWW.
 
 ---
 
-## The audit trail in practice
+## The audit trail in practice (WS2)
 
-### SkillRunner audit records
+The shape of the audit trail depends on whether the `compliance` feature is on:
 
-`src/bin/skillrunner/audit.rs` writes a record after every skill invocation:
+| Build | Trail | Key | Signed | Hash-chained |
+|---|---|---|:-:|:-:|
+| **default** (no `compliance`) | plain, time-keyed | `audit/{ts_unix_nanos}/{node}` | ✗ | ✗ |
+| **`compliance`** | tamper-evident | `sys/audit/{node}/{seq:016x}` | ✓ (Ed25519) | ✓ (per-node SHA-256 chain) |
+
+Without `compliance` there is no identity key to sign with, so the plain trail
+is the best available. With `compliance`, every SkillRunner invocation is sealed
+into the node's signed, hash-chained stream.
+
+### The hash chain is per-node — and that is deliberate
+
+A single global chain across all nodes would need a sequencer to order writes —
+a coordinator, which the substrate's first principle forbids. So each node keeps
+its **own** chain: record `seq` is monotonic per node, and each record's
+`prev_hash` is the SHA-256 `content_hash` of its predecessor in the same
+stream. The cluster-wide trail is the **union of independently verifiable
+streams**. Removing, reordering, or editing any record in a stream breaks
+verification of that stream from the next record on.
 
 ```rust
-// audit/{hlc:016x}/{node_id}
-AuditRecord {
-    skill_ns:    "llm",
-    skill_name:  "orchestrator",
-    caller:      "127.0.0.1:57001",
-    nonce:       u64,
-    success:     true,
-    duration_ms: 4200,
-    tool_calls:  ["researcher", "writer"],
-}
-```
-
-Records are signed and HLC-ordered. Query them from any node:
-
-```bash
-# Live dashboard
-http://localhost:9050/mgmt   # shows audit trail
-
-# From Rust
-let records = agent.kv().scan_prefix("audit/");
+// Seal an event (compliance feature). Returns the record's content hash —
+// the stable, citable identifier.
+let h = agent.audit(
+    AuditAction::Invoke,
+    caller.to_string(),          // the verified principal (req.sender() under tls)
+    format!("{ns}/{name}"),      // the resource
+    AuditOutcome::Success,
+    Some(detail_json),
+)?;
 ```
 
 ### Verifying chain integrity
 
-Because each entry carries an HLC timestamp and the HLC is monotonically
-increasing per node, you can verify that no entries were inserted out of
-order or back-dated:
+Verification checks every record's signature *and* the `prev_hash` linkage *and*
+sequence contiguity — not just timestamps:
 
 ```rust
-let mut prev_hlc = 0u64;
-for (key, val) in agent.kv().scan_prefix("audit/") {
-    let hlc = u64::from_str_radix(key.split('/').nth(1).unwrap(), 16).unwrap();
-    assert!(hlc > prev_hlc, "audit chain broken at {key}");
-    prev_hlc = hlc;
-    // Also verify Ed25519 signature using sys/identity/{node} key
+// Programmatic: verify a node's whole stream against its identity key.
+match agent.audit_verify(&node) {
+    Ok(())  => { /* intact from genesis */ }
+    Err(e)  => { /* e names the first bad seq: BadSignature / BrokenLink / … */ }
 }
+
+// Or verify a slice you already hold:
+let chain = agent.audit_stream(&node);          // decoded, seq-ordered
+verify_stream_from_genesis(&chain, &node, &verifying_key)?;
 ```
+
+Or over HTTP — `GET /gateway/audit` (scope `audit:read`) returns each stream with
+`verified`, the chain-tip `head_hash`, and a `content_hash` per record:
+
+```bash
+curl -H 'Authorization: Bearer <audit-token>' \
+     'http://NODE:PORT/gateway/audit?node=127.0.0.1:8080&limit=50'
+# → { "streams": [ { "node": "...", "verified": true, "head_hash": "…",
+#                    "records": [ { "seq":0, "principal":"…", "content_hash":"…" }, … ] } ] }
+```
+
+The per-record `content_hash` is the stable, citable identifier the v2 M16
+self-attestation layer references.
+
+→ Operator querying, evidence verification, and retention:
+[`docs/operations/audit.md`](../operations/audit.md).
 
 ---
 
@@ -255,9 +281,9 @@ for (key, val) in agent.kv().scan_prefix("audit/") {
 
 | Control | Framework | Mycelium mechanism |
 |---------|-----------|-------------------|
-| Audit Controls | HIPAA §164.312(b) | All KV writes, RPC calls, and skill invocations are HLC-ordered and optionally Ed25519-signed; replicated to all nodes |
+| Audit Controls | HIPAA §164.312(b) | Skill invocations sealed into a signed, hash-chained per-node trail (`compliance`); HLC-ordered and replicated to all nodes |
 | Transmission Security | HIPAA §164.312(e) | mTLS on all gossip TCP connections (`--features tls`) |
-| Integrity | HIPAA §164.312(c)(1) | Hash-chained, signed audit records; gossip replication to all nodes |
+| Integrity | HIPAA §164.312(c)(1) | Hash-chained, Ed25519-signed audit records verifiable via `audit_verify` / `GET /gateway/audit` (`compliance`); gossip-replicated to all nodes |
 | Authentication | HIPAA §164.312(d) | Ed25519 node identity at `sys/identity/{node}` |
 | Anomaly Detection | SOC 2 CC7.2 | Audit trail queryable from any node; no central log aggregator |
 | Change Management | SOC 2 CC6.6 | Capability advertisements version-tagged by HLC; consensus commits signed |

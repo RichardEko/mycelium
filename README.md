@@ -777,6 +777,28 @@ place the allowlist is genuinely enforceable). This is the *detection-not-preven
 the substrate never blocks a write, it makes an unauthorized one legible — see also the `sys/`
 namespace-ownership tripwire (`/stats` → `sys_namespace_violations`).
 
+### Tamper-Evident Audit Trail (`compliance` feature)
+
+Every node keeps its **own** Ed25519-signed, SHA-256 hash-chained audit stream at
+`sys/audit/{node}/{seq}`. Each record's `prev_hash` links to its predecessor, so removing,
+reordering, or editing a record breaks verification of that stream. The chain is per-node by
+necessity — a single global chain would need a sequencer, i.e. a coordinator, which the design
+forbids; the cluster trail is the union of independently verifiable streams.
+
+```rust
+// Seal an event; returns the stable, citable content hash.
+let h = agent.audit(AuditAction::Invoke, caller.to_string(), "orders/place",
+                    AuditOutcome::Success, None)?;
+
+// Verify a node's whole stream against its identity key.
+agent.audit_verify(&node)?;     // Err names the first bad seq
+```
+
+SkillRunner routes every invocation into this trail (the verified caller is the principal).
+Query and verify over HTTP with `GET /gateway/audit` (scope `audit:read`), which returns each
+stream's `verified` status, chain-tip `head_hash`, and a per-record `content_hash`. Detection,
+not prevention: records are plain replicated KV entries; tampering makes verification fail.
+
 ## Layer III — Consensus
 
 Lightweight epidemic two-phase agreement built directly on top of the signal mesh — no extra

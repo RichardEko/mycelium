@@ -1900,23 +1900,27 @@ must be data-classification-aware.
   (distinct from the primary gateway auth) — the OAuth2 scope model extends to
   them directly.
 
-**2. Audit — complete and tamper-evident.** The cluster-wide `sys/audit/{hlc}`
-trail covers writes. The gate is making it (a) *complete* — every read tied to
-a principal as well as every write — and (b) *tamper-evident* — cryptographically
-chained, not just append-only.
+**2. Audit — complete and tamper-evident.** *Shipped (WS2).*
 
 - *Existing substrate:* HLC-ordered KV writes; WAL durability;
   Ed25519-signed KV writes (`tls` feature, `WireMessage::SignedData`, wire
   v10) so undetected mutation requires compromising the originating node's
   private key.
-- *In flight:* gap #7 (durable cluster-wide audit trail — `sys/audit/`,
-  `/audit` endpoint, value-hash tamper-evidence).
-- *Still to design:* read-side audit (logging the principal of every
-  authenticated read, not just every write); cryptographic chaining
-  (Merkle-tree or hash-chain so an inspector can verify the audit has not
-  been edited after the fact — currently gap #7 lists this as explicitly
-  out of scope for v1.x); inspector-facing query API hardened for regulated
-  evidence.
+- **Shipped — WS2 (`compliance` feature).** Per-node hash-chained, Ed25519-signed
+  audit stream at `sys/audit/{node}/{seq}`: each record's `prev_hash` is the
+  SHA-256 content hash of its predecessor, so an inspector can verify the stream
+  was not edited, reordered, or truncated (`audit_verify` / `verify_chain`, with a
+  precise `AuditVerifyError`). The chain is per-node by necessity — a global chain
+  would need a sequencer (a coordinator), so the cluster trail is the union of
+  independently verifiable streams. `GET /gateway/audit` (scope `audit:read`)
+  exposes per-stream `verified` + `head_hash` + per-record `content_hash` (the
+  stable M16-citable identifier). SkillRunner seals every invocation through it
+  with the *verified caller* as principal — the read-side principal binding for
+  the served path. Detection-not-prevention: tampering fails verification, never
+  blocked at the store.
+- *Deferred (later WS):* read-side principal binding for gateway-token reads
+  (waits on WS4 OIDC for real user principals); chain retention/compaction with
+  checkpoint hashes (pruning a hash chain otherwise breaks genesis verification).
 
 **3. Crown-jewel posture.** *This is the sharpest of the four, and the one
 that turns a generic "is it secure" conversation into a specific
@@ -2091,7 +2095,7 @@ already in the dep graph via the `llm` feature).
 | Opt-In Consistency & Ordering Overlay | High | **Complete** 2026-05-25 |
 | `set_with_min_acks` write-durability confirmation API | Medium | **Complete** 2026-05-25 |
 | Prometheus metrics export + dashboards | Medium | **Complete** 2026-05-25 |
-| Durable cluster-wide audit trail (`sys/audit/`, `/audit` endpoint) | High | **Pending** |
+| Durable cluster-wide audit trail (`sys/audit/`, `/audit` endpoint) | High | **Complete** 2026-06-14 (WS2 — per-node hash-chained signed trail, `verify_chain`, `/gateway/audit`, SkillRunner integration) |
 | Role-based access control — v1.x subset (node roles, gateway ACLs) | High | **Complete** 2026-06-14 (WS1 — signed `sys/role/`, provider authz, OAuth2 gateway ACLs, `sys/` tripwire) |
 | SSO / enterprise IdP integration (OIDC, Entra, Okta) | High | **Pending** |
 
