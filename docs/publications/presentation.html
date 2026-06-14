@@ -850,6 +850,10 @@ providers = agent.<span class="cs">resolve_capability</span>(<span class="cv">"c
           <div class="card-title">100-node scale tested</div>
           <div class="card-body"><code>make test-scale</code> spins 100 Docker nodes: cluster formation, KV write propagation seed→mgmt, zero dropped frames. Validated at production scale.</div>
         </div>
+        <div class="card card-accent-green">
+          <div class="card-title">v1.x compliance layer (<code>compliance</code> feature)</div>
+          <div class="card-body">Signed-identity <strong>RBAC</strong> + OAuth2 gateway ACLs, <strong>generic-OIDC SSO</strong> (Entra/Okta/Auth0/Keycloak), a <strong>tamper-evident</strong> Ed25519 hash-chained <strong>audit trail</strong>, crown-jewel <strong>data-at-rest encryption + egress policy</strong> (with a blast-radius threat model), and <strong>hot key rotation</strong> with no cluster disruption. The Production Readiness Gap, closed.</div>
+        </div>
       </div>
       <div style="display:flex;flex-direction:column;gap:10px;">
         <div class="card-title" style="font-size:11px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;">12 Integration Scenarios — All Passing</div>
@@ -1219,6 +1223,10 @@ agent.<span class="cs">consensus</span>().<span class="cs">cross_group_propose</
         <div class="card card-accent-red">
           <div class="card-title">Wire v11 — KV write signing</div>
           <div class="card-body"><code>WireMessage::SignedData</code> — Ed25519 signature over key, value, timestamp, tombstone flag, and sender. A compromised node cannot inject false KV entries.</div>
+        </div>
+        <div class="card card-accent-green">
+          <div class="card-title">Compliance layer <code style="font-size:10px;">--features compliance</code></div>
+          <div class="card-body">Signed-identity <strong>RBAC</strong> + OAuth2 gateway scope ACLs · generic-<strong>OIDC SSO</strong> · tamper-evident hash-chained <strong>audit</strong> (verify across key rotations) · <strong>data-at-rest</strong> cipher hook + <strong>egress</strong> allowlist · <strong>hot key rotation</strong>. All detection-not-prevention, all opt-in.</div>
         </div>
       </div>
       <div>

@@ -108,7 +108,7 @@ Five application patterns build on this substrate:
 | [06](06-tool-discovery.md) | MCP tool discovery — LLM finds tools dynamically | `./examples/chat/demo.sh` | 5 min |
 | [07](07-pipelines.md) | Fluid pipelines — Agentic Flow Networks | `docker compose up --scale worker=10` | 3 min |
 | [08](08-a2a-interop.md) | A2A interop — LangChain / AutoGen integration | `python langchain_agent.py` | 3 min |
-| [09](09-security.md) | Security — mTLS, Ed25519, signed KV, audit trail | `--features tls` | — |
+| [09](09-security.md) | Security & compliance — mTLS, Ed25519, signed KV, RBAC + OAuth2 gateway ACLs, OIDC SSO, tamper-evident audit, data-at-rest/egress, hot key rotation | `--features tls` / `compliance` | — |
 | [10](10-language-bridges.md) | Language bridges — Python and TypeScript SDKs | `pip install mycelium-py` | 5 min |
 | [11](11-semantic-coordination.md) | Semantic coordination — schema versioning, payload schemas, sender auth | `cargo run --example semantic_coordination` | 5 min |
 | [12](12-schema-lifecycle.md) | Schema lifecycle — publish, conflict detection, CI gate, versioning | `agent.schemas().publish_schema(...)` | 10 min |

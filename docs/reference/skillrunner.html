@@ -501,7 +501,7 @@ cargo run --example invoke_skill<div class="lang-tag">sh</div></pre>
 
 <span class="toml-hdr">[capability.policy]</span>
 <span class="toml-key">max_concurrent</span>     = <span class="toml-num">2</span>               <span class="toml-cmt"># reject beyond this; "skill saturated"</span>
-<span class="toml-key">authorized_callers</span> = [<span class="toml-str">"orchestrator"</span>] <span class="toml-cmt"># empty = unrestricted</span>
+<span class="toml-key">authorized_callers</span> = [<span class="toml-str">"orchestrator"</span>] <span class="toml-cmt"># empty = open; enforced under `compliance` (verified caller NodeId or role)</span>
 
 <span class="toml-hdr">[capability.platform]</span>
 <span class="toml-key">requires</span> = [<span class="toml-str">"gpu"</span>]  <span class="toml-cmt"># advertised as attribute "requires.gpu = true"</span><div class="lang-tag">toml</div></pre>
@@ -540,7 +540,7 @@ cargo run --example invoke_skill<div class="lang-tag">sh</div></pre>
     <table>
       <thead><tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
       <tbody>
-        <tr><td><code>endpoint</code></td><td>string</td><td><span class="req">required</span></td><td>Base URL of the OpenAI-compatible server. No trailing <code>/</code></td></tr>
+        <tr><td><code>endpoint</code></td><td>string</td><td><span class="req">required</span></td><td>Base URL of the OpenAI-compatible server. No trailing <code>/</code>. Subject to the node's outbound <code>EgressPolicy</code> (WS3) — if <code>GossipConfig::egress.allow_hosts</code> is non-empty, this host must be allowlisted or the invocation returns <code>egress denied</code></td></tr>
         <tr><td><code>model</code></td><td>string</td><td><span class="req">required</span></td><td>Model name as recognised by the server</td></tr>
         <tr><td><code>api_key</code></td><td>string</td><td><code>""</code></td><td>Bearer token. Leave empty for local servers (Ollama, llama.cpp)</td></tr>
         <tr><td><code>max_tokens</code></td><td>integer</td><td>—</td><td>Maximum completion tokens. Unset = server default</td></tr>
@@ -798,10 +798,22 @@ console.<span class="fn">log</span>(JSON.<span class="fn">parse</span>(result.<s
   <p>Every invocation writes one record to the gossip KV store. Because the record is
   gossiped, <em>every node in the cluster</em> can read it.</p>
 
-  <h3>Key format</h3>
-  <pre>audit/{unix_nanos}/{node_id}  →  JSON<div class="lang-tag">key</div></pre>
+  <p><strong>With the <code>compliance</code> feature (recommended for regulated
+  deployments):</strong> records are sealed into a <em>tamper-evident</em>,
+  Ed25519-signed, per-node hash-chained trail at <code>sys/audit/{node}/{seq}</code>,
+  with the verified caller as principal. Verify a node's whole chain with
+  <code>agent.audit_verify(&amp;node)</code> or query <code>GET /gateway/audit</code>
+  (scope <code>audit:read</code>) — each record carries a stable <code>content_hash</code>,
+  and tampering (edit/remove/reorder) fails verification. The rich SkillRunner fields
+  below (nonce, duration, tool calls) ride in the record's <code>detail</code>.</p>
 
-  <p>Lexicographic key ordering gives time-sorted prefix scans across the whole cluster.</p>
+  <h3>Key format</h3>
+  <pre>compliance:  sys/audit/{node}/{seq:016x}  →  signed, hash-chained
+default:     audit/{unix_nanos}/{node_id}  →  plain JSON (no signing/chaining)<div class="lang-tag">key</div></pre>
+
+  <p>Lexicographic key ordering gives time-sorted prefix scans across the whole cluster.
+  Without <code>compliance</code> there is no identity key to sign with, so the plain
+  trail is the fallback.</p>
 
   <h3>Record schema</h3>
   <div class="tbl-wrap">
