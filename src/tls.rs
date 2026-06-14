@@ -3,13 +3,41 @@
 /// When `tls` is disabled this is a zero-size struct and every method is
 /// unreachable; the struct is used only as a type in `Option<Arc<NodeTls>>`
 /// so function signatures stay uniform regardless of the feature flag.
+///
+/// The handle (`Arc<NodeTls>` in `TaskCtx::tls`) is still set once, but its
+/// inner state is **swappable at runtime** (WS5 hot cert rotation): the active
+/// signing key and rustls configs live behind lock-free [`arc_swap::ArcSwap`]
+/// cells, so [`rotate`](NodeTls::rotate) can replace them atomically while
+/// signing/handshake paths keep reading the current value via the accessor
+/// methods. Read the key/configs through the methods, never a cached clone, so
+/// a rotation is observed.
 pub(crate) struct NodeTls {
     #[cfg(feature = "tls")]
-    pub server_config: std::sync::Arc<rustls::ServerConfig>,
+    server_config: arc_swap::ArcSwap<rustls::ServerConfig>,
     #[cfg(feature = "tls")]
-    pub client_config: std::sync::Arc<rustls::ClientConfig>,
+    client_config: arc_swap::ArcSwap<rustls::ClientConfig>,
     #[cfg(feature = "tls")]
-    pub signing_key: std::sync::Arc<ed25519_dalek::SigningKey>,
+    signing_key: arc_swap::ArcSwap<ed25519_dalek::SigningKey>,
+}
+
+#[cfg(feature = "tls")]
+impl NodeTls {
+    /// The current rustls server config (accept side). Cloned cheaply (Arc).
+    pub(crate) fn server_config(&self) -> std::sync::Arc<rustls::ServerConfig> {
+        self.server_config.load_full()
+    }
+    /// The current rustls client config (connect side).
+    pub(crate) fn client_config(&self) -> std::sync::Arc<rustls::ClientConfig> {
+        self.client_config.load_full()
+    }
+    /// The current Ed25519 signing/identity key.
+    pub(crate) fn signing_key(&self) -> std::sync::Arc<ed25519_dalek::SigningKey> {
+        self.signing_key.load_full()
+    }
+    /// The current 32-byte verifying key.
+    pub(crate) fn verifying_key_bytes(&self) -> [u8; 32] {
+        self.signing_key().verifying_key().to_bytes()
+    }
 }
 
 #[cfg(feature = "tls")]
@@ -104,9 +132,9 @@ mod imp {
             build_rustls_configs(node_cert_der, &signing_key, ca_cert_der)?;
 
         Ok(NodeTls {
-            server_config: Arc::new(server_config),
-            client_config: Arc::new(client_config),
-            signing_key: Arc::new(signing_key),
+            server_config: arc_swap::ArcSwap::from_pointee(server_config),
+            client_config: arc_swap::ArcSwap::from_pointee(client_config),
+            signing_key: arc_swap::ArcSwap::from_pointee(signing_key),
         })
     }
 

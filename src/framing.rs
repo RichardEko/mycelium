@@ -524,7 +524,7 @@ pub(crate) fn make_kv_wire_msg(
     #[cfg(feature = "tls")]
     if let Some(t) = tls {
         let canonical  = canonical_sign_bytes(&update);
-        let sig_bytes  = crate::tls::sign_bytes(&t.signing_key, &canonical);
+        let sig_bytes  = crate::tls::sign_bytes(&t.signing_key(), &canonical);
         let sig_lo: [u8; 32] = sig_bytes[..32].try_into().expect("signature is 64 bytes");
         let sig_hi: [u8; 32] = sig_bytes[32..].try_into().expect("signature is 64 bytes");
         return WireMessage::SignedData { update, signer: sender_hash, signature: (sig_lo, sig_hi) };

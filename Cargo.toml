@@ -25,7 +25,7 @@ gateway = ["dep:axum", "dep:tower-http", "dep:tokio-stream", "dep:futures-util",
 fuzz-internals = []
 # Enables mTLS on the gossip TCP port, keypair-backed node identity, and
 # consensus payload signing. Adds tokio-rustls, rcgen, and ed25519-dalek.
-tls = ["dep:tokio-rustls", "dep:rustls", "dep:rcgen", "dep:rustls-pemfile", "dep:ed25519-dalek", "dep:rand_core"]
+tls = ["dep:tokio-rustls", "dep:rustls", "dep:rcgen", "dep:rustls-pemfile", "dep:ed25519-dalek", "dep:rand_core", "dep:arc-swap"]
 # Enables OTEL span export from SkillRunner (opentelemetry-otlp gRPC).
 otel = ["dep:opentelemetry", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry", "dep:opentelemetry_sdk"]
 # Exposes a Prometheus /metrics endpoint on the gateway HTTP port.
@@ -101,6 +101,8 @@ rcgen          = { version = "0.13", optional = true }
 rustls-pemfile = { version = "2",    optional = true }
 ed25519-dalek  = { version = "2",    features = ["rand_core", "pkcs8"], optional = true }
 rand_core      = { version = "0.6",  features = ["getrandom"],         optional = true }
+# Lock-free atomic swap of the live TLS identity (hot cert rotation, WS5).
+arc-swap       = { version = "1",    optional = true }
 
 # Audit hash-chain (optional — enabled by the "compliance" feature). SHA-256 over
 # canonical record bytes; already present transitively via ed25519-dalek.

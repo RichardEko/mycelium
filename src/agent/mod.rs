@@ -818,7 +818,7 @@ impl GossipAgent {
             .unwrap_or_default()
             .as_millis() as u64;
         let claim  = rbac::RoleClaim::new(self.node_id.clone(), roles, clearance, issued_at_ms);
-        let signed = rbac::SignedRoleClaim::sign(claim, &tls.signing_key);
+        let signed = rbac::SignedRoleClaim::sign(claim, &tls.signing_key());
         // Local + WAL write is guaranteed; a `false` here only means this gossip
         // tick's channel was full — the entry still anti-entropy-syncs and a
         // re-advertise retries, so a dropped dispatch is not an error.
@@ -840,7 +840,7 @@ impl GossipAgent {
     /// is self, otherwise the key gossiped to `peer_keys` (from `sys/identity/`).
     fn verifying_key_for(&self, node: &NodeId) -> Option<[u8; 32]> {
         if node == &self.node_id {
-            return self.task_ctx.tls.get().map(|t| t.signing_key.verifying_key().to_bytes());
+            return self.task_ctx.tls.get().map(|t| t.verifying_key_bytes());
         }
         self.task_ctx.peer_keys.pin().get(node).copied()
     }
@@ -916,7 +916,7 @@ impl GossipAgent {
             (record, audit::audit_key(&self.node_id, seq), content)
         };
 
-        let signed = audit::SignedAuditRecord::sign(record, &tls.signing_key);
+        let signed = audit::SignedAuditRecord::sign(record, &tls.signing_key());
         // Local + WAL write is guaranteed; a dropped gossip dispatch (channel full)
         // still anti-entropy-syncs, so a `false` here is not an error.
         let _ = self.kv().set(key, signed.encode());

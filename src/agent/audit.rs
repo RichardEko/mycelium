@@ -237,7 +237,7 @@ use super::TaskCtx;
 /// is self, otherwise the key gossiped to `peer_keys` (from `sys/identity/`).
 pub(crate) fn verifying_key(ctx: &TaskCtx, node: &NodeId) -> Option<[u8; 32]> {
     if node == &ctx.node_id {
-        return ctx.tls.get().map(|t| t.signing_key.verifying_key().to_bytes());
+        return ctx.tls.get().map(|t| t.verifying_key_bytes());
     }
     ctx.peer_keys.pin().get(node).copied()
 }

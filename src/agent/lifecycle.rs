@@ -132,7 +132,7 @@ impl GossipAgent {
                 Ok(node_tls) => {
                     let arc_tls = Arc::new(node_tls);
                     // Publish Ed25519 verifying key so peers can verify signed consensus messages.
-                    let vk = arc_tls.signing_key.verifying_key().to_bytes();
+                    let vk = arc_tls.verifying_key_bytes();
                     let id_key = format!("sys/identity/{}", self.node_id);
                     let _ = kv_set(&self.task_ctx, Arc::from(id_key.as_str()), Bytes::copy_from_slice(&vk));
                     let _ = self.task_ctx.tls.set(arc_tls);
