@@ -77,8 +77,14 @@ impl SkillRunner {
                 .unwrap_or_default();
             if !self.agent.caller_authorized(req.sender(), &allow) {
                 tracing::warn!("skill {ns}/{name}: denied unauthorized caller {caller}");
-                let rec = AuditRecord::new(&ns, &name, &caller, nonce, false, 0, &[]);
-                audit::write_audit(&self.agent, &rec);
+                // Tamper-evident audit of the denial — verified principal, Denied outcome.
+                let _ = self.agent.audit(
+                    mycelium::AuditAction::Invoke,
+                    caller.clone(),
+                    format!("{ns}/{name}"),
+                    mycelium::AuditOutcome::Denied,
+                    Some(serde_json::json!({"nonce": nonce, "reason": "authorized_callers"}).to_string()),
+                );
                 let err = serde_json::json!({"error": "unauthorized: caller not in authorized_callers"});
                 self.agent.service().rpc_respond(&req, Bytes::from(serde_json::to_vec(&err).unwrap_or_default()));
                 return;

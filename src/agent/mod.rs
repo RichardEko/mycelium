@@ -859,8 +859,13 @@ impl GossipAgent {
         })?;
         let hlc = self.task_ctx.hlc.tick();
 
-        // Seal under the chain lock, then release before touching KV.
-        let (signed, key, content) = {
+        // Build the record and advance the chain head under the lock — this is the
+        // only part that must be serialised (each record's prev_hash is the prior
+        // record's content hash). Signing (~tens of µs) and the KV write happen
+        // *outside* the lock: the captured record's bytes are already fixed, so the
+        // signature is deterministic and order-independent. Keeps the per-node chain
+        // lock to a ~µs critical section so it never becomes a throughput ceiling.
+        let (record, key, content) = {
             let mut guard = self.task_ctx.audit_chain.lock().unwrap_or_else(|e| e.into_inner());
             let seq = guard.next_seq;
             let record = audit::AuditRecord {
@@ -875,12 +880,12 @@ impl GossipAgent {
                 prev_hash: guard.last_hash,
             };
             let content = record.content_hash();
-            let signed  = audit::SignedAuditRecord::sign(record, &tls.signing_key);
             guard.next_seq  = seq + 1;
             guard.last_hash = content;
-            (signed, audit::audit_key(&self.node_id, seq), content)
+            (record, audit::audit_key(&self.node_id, seq), content)
         };
 
+        let signed = audit::SignedAuditRecord::sign(record, &tls.signing_key);
         // Local + WAL write is guaranteed; a dropped gossip dispatch (channel full)
         // still anti-entropy-syncs, so a `false` here is not an error.
         let _ = self.kv().set(key, signed.encode());
