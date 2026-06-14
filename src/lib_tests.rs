@@ -1601,6 +1601,30 @@ async fn test_watch_stops_on_handle_drop() {
 
 // ── manage_opacity governor ───────────────────────────────────────────────
 
+/// Wait up to `$secs` for a signal on `$rx`, polling in 200 ms slices.
+///
+/// The opacity governor is a **periodic sampler** (`time::interval(100ms)` in
+/// `opacity.rs`) that emits OPAQUE/TRANSPARENT on the next tick after a fill
+/// transition. The signal is registered before the governor starts and the
+/// channel is buffered, so it is never *lost* — but under heavy parallel test
+/// load tokio can starve the ticker task well past a few ticks
+/// (`MissedTickBehavior::Skip` then drops the missed beats). This is a bounded
+/// "eventually" wait that absorbs that scheduler latency; it is **not** a race
+/// mask — a genuinely stuck governor that never emits still fails at the ceiling.
+macro_rules! recv_within {
+    ($rx:expr, $secs:expr) => {{
+        let deadline = std::time::Instant::now() + Duration::from_secs($secs);
+        let mut got = false;
+        while std::time::Instant::now() < deadline {
+            if let Ok(Some(_)) = time::timeout(Duration::from_millis(200), $rx.recv()).await {
+                got = true;
+                break;
+            }
+        }
+        got
+    }};
+}
+
 #[tokio::test]
 async fn test_manage_opacity_emits_opaque_when_threshold_crossed() {
     let agent = make_agent();
@@ -1622,9 +1646,8 @@ async fn test_manage_opacity_emits_opaque_when_threshold_crossed() {
         let _ = agent.mesh().emit("test.gov.invoke", SignalScope::Individual(self_id.clone()), Bytes::new());
     }
 
-    let result = time::timeout(Duration::from_millis(400), opaque_rx.recv()).await;
     assert!(
-        result.is_ok() && result.unwrap().is_some(),
+        recv_within!(opaque_rx, 3),
         "governor must emit BOUNDARY_OPAQUE when fill crosses threshold",
     );
 }
@@ -1647,17 +1670,15 @@ async fn test_manage_opacity_emits_transparent_after_drain() {
     for _ in 0..4 {
         let _ = agent.mesh().emit("test.gov.drain", SignalScope::Individual(self_id.clone()), Bytes::new());
     }
-    let r = time::timeout(Duration::from_millis(400), opaque_rx.recv()).await;
-    assert!(r.is_ok() && r.unwrap().is_some(), "should go opaque first");
+    assert!(recv_within!(opaque_rx, 3), "should go opaque first");
 
     // Drain all four — fill drops to 0.0 < 0.75 - 0.20 = 0.55.
     for _ in 0..4 {
         let _ = time::timeout(Duration::from_millis(50), work_rx.recv()).await;
     }
 
-    let r = time::timeout(Duration::from_millis(400), clear_rx.recv()).await;
     assert!(
-        r.is_ok() && r.unwrap().is_some(),
+        recv_within!(clear_rx, 3),
         "governor must emit BOUNDARY_TRANSPARENT once fill drops below clear threshold",
     );
 }
