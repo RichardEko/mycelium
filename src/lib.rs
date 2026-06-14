@@ -185,6 +185,8 @@ pub use agent::{
 pub use agent::McpClientHandle;
 #[cfg(feature = "llm")]
 pub use agent::{PromptTemplate, PromptSkillError, PromptSkillHandle, LlmBackend, LlmResult, LlmError, OpenAiBackend, EchoBackend, LlmHandle};
+#[cfg(feature = "compliance")]
+pub use agent::{role_key, RoleClaim, SignedRoleClaim, ROLE_PREFIX};
 pub use capability::{
     CallerContext, CapConstraint, CapEntry, CapFilter, CapRanking, CapValue, Capability, CapabilityEvent,
     CapabilityGroupDef, CapabilityGroupHandle, CapabilityReg,

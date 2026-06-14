@@ -54,6 +54,8 @@ pub(crate) mod llm;
 #[cfg(feature = "llm")]
 mod llm_handle;
 mod mcp_handle;
+#[cfg(feature = "compliance")]
+mod rbac;
 
 #[allow(unused_imports)]
 pub(crate) use bulk::BulkTransport;
@@ -75,6 +77,8 @@ pub use overlay_consistent::{ConsistencyError, LockGuard};
 pub use consensus_handle::ConsensusHandle;
 pub use service_handle::ServiceHandle;
 pub use capability_handle::CapabilitiesHandle;
+#[cfg(feature = "compliance")]
+pub use rbac::{role_key, RoleClaim, SignedRoleClaim, ROLE_PREFIX};
 pub use kv_quorum::QuorumError;
 pub use kv_handle::{KvHandle, LogEntry};
 pub use mesh_handle::MeshHandle;

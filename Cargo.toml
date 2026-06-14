@@ -38,6 +38,10 @@ a2a = ["gateway"]
 # bind a node-local LLM backend, and expose as a callable capability.
 # Requires the embedded gateway for the prompt HTTP endpoint.
 llm = ["gateway"]
+# Compliance layer (v1.x completion — see docs/plans/v1x-completion.md): RBAC /
+# identity roles, gateway endpoint ACLs, tamper-evident audit trail. Implies
+# `gateway` (the auth/audit HTTP surface) + `tls` (signed identity + roles).
+compliance = ["gateway", "tls"]
 
 # The `fuzz/` directory is its own cargo-fuzz crate; keep it out of any
 # implicit-workspace traversal from this parent manifest.
