@@ -795,6 +795,14 @@ impl GossipAgent {
     pub fn agent_state_machine(&self, policy: AgentPolicy) -> Arc<AgentStateMachine> {
         AgentStateMachine::new(Arc::clone(&self.task_ctx), policy)
     }
+
+    /// This node's outbound [`EgressPolicy`](crate::EgressPolicy) (WS3). Consulted
+    /// before the substrate makes outbound HTTP requests it *chooses* to make —
+    /// the MCP client bridge, capability probes, and LLM-backend calls. Empty
+    /// `allow_hosts` (default) permits all.
+    pub fn egress_policy(&self) -> &crate::config::EgressPolicy {
+        &self.config.egress
+    }
 }
 
 /// Hot certificate / identity rotation (WS5; `tls` feature).
@@ -830,18 +838,22 @@ impl GossipAgent {
             field: "tls", reason: "rotate_identity requires GossipConfig::tls".into(),
         })?;
 
-        let old_vk = tls.verifying_key_bytes();
         // 1. Generate the new material (persisted, not yet active).
         let material = crate::tls::generate_rotation(tls_cfg, &self.node_id)?;
         let new_vk = material.verifying_key;
 
-        // 2. Publish new‖old, signed by the still-active OLD key (peers trust it),
-        //    so their retained sets accept both before the cutover.
-        let mut dual = Vec::with_capacity(64);
-        dual.extend_from_slice(&new_vk);
-        dual.extend_from_slice(&old_vk);
+        // 2. Publish new ‖ (every previously-published key) — the full rotation
+        //    history, so historical signatures stay verifiable across any number
+        //    of rotations. Signed by the still-active OLD key (peers trust it), so
+        //    their retained sets accept the new key before the cutover.
         let id_key = format!("sys/identity/{}", self.node_id);
-        let _ = self.kv().set(id_key, Bytes::from(dual));
+        let existing = self
+            .kv()
+            .get(&id_key)
+            .map(|b| helpers::parse_identity_keys(&b))
+            .unwrap_or_default();
+        let value = helpers::encode_identity_history(new_vk, &existing);
+        let _ = self.kv().set(id_key, Bytes::from(value));
 
         // 3. Let it propagate.
         tokio::time::sleep(propagation).await;

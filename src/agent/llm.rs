@@ -58,6 +58,13 @@ pub trait LlmBackend: Send + Sync {
         let _ = tx.send(r.output.clone()).await;
         Ok(r)
     }
+
+    /// The outbound endpoint URL this backend reaches, if any — used by the WS3
+    /// egress gate before dispatch. `None` (the default) means no outbound reach
+    /// (e.g. an in-process / echo backend) and is never egress-gated.
+    fn endpoint(&self) -> Option<&str> {
+        None
+    }
 }
 
 // ── Built-in backends ─────────────────────────────────────────────────────────
@@ -84,6 +91,10 @@ impl OpenAiBackend {
 
 #[async_trait::async_trait]
 impl LlmBackend for OpenAiBackend {
+    fn endpoint(&self) -> Option<&str> {
+        Some(&self.base_url)
+    }
+
     async fn complete(
         &self,
         system:      &str,
@@ -256,6 +267,19 @@ async fn handle_llm_invoke(
         }
     };
 
+    // WS3 egress gate: an LLM-backend call is an outbound reach the node chooses.
+    if let Some(url) = backend.endpoint()
+        && !ctx.config.egress.permits_url(url)
+    {
+        tracing::warn!(url = %url, skill = %skill_id, "llm backend call blocked by egress policy");
+        let err = serde_json::to_vec(&LlmInvokeError {
+            error: "egress_denied".into(),
+            detail: format!("egress policy denies the LLM endpoint for skill {skill_id}"),
+        }).unwrap_or_default();
+        rpc_respond_ctx(&ctx, &req, Bytes::from(err));
+        return;
+    }
+
     // Read template fresh from KV
     let kv_key = format!("prompts/{}", skill_id);
     let template_bytes = ctx.kv_state.store.pin().get(kv_key.as_str())
@@ -348,5 +372,23 @@ mod tests {
         // The signature below must compile without a model parameter.
         fn assert_sig<B: LlmBackend>(_b: B) {}
         assert_sig(EchoBackend);
+    }
+
+    #[test]
+    fn backend_endpoint_drives_the_egress_gate() {
+        // OpenAiBackend exposes its outbound URL (egress-gated); EchoBackend has
+        // no outbound reach (never gated). The gate itself is EgressPolicy.
+        let oa = OpenAiBackend::new("https://api.blocked.example/v1", "k", "m");
+        assert_eq!(oa.endpoint(), Some("https://api.blocked.example/v1"));
+        assert_eq!(EchoBackend.endpoint(), None);
+
+        let policy = crate::config::EgressPolicy { allow_hosts: vec!["api.allowed.example".into()] };
+        // The dispatch gate denies a backend whose endpoint host isn't allowed…
+        assert!(!policy.permits_url(oa.endpoint().unwrap()));
+        // …and an endpoint-less backend is never gated (None → skip the check).
+        assert!(EchoBackend.endpoint().is_none());
+        // An allowed endpoint passes.
+        let ok = OpenAiBackend::new("https://api.allowed.example/v1", "k", "m");
+        assert!(policy.permits_url(ok.endpoint().unwrap()));
     }
 }

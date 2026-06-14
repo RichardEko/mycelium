@@ -582,9 +582,12 @@ runbook: [`docs/operations/crown-jewel.md`](docs/operations/crown-jewel.md).
 - **Egress allowlist.** `EgressPolicy { allow_hosts }` in `GossipConfig`
   (serializable, default empty = allow-all). `permits_host` (exact + `.suffix`
   subdomain, case-insensitive) / `permits_url` (fail-closed on unparseable host).
-  Enforced **only at the MCP client bridge** (`connect_mcp_server`) today; LLM /
-  probe / A2A egress is network-layer operator responsibility (documented coverage
-  table in the runbook + threat model). A node-local posture, not a coordinator.
+  Enforced at **every outbound HTTP path the substrate chooses**: MCP client
+  bridge (`connect_mcp_server`), capability probes (`passes_probe`), core LLM
+  prompt skills (`handle_llm_invoke` via `LlmBackend::endpoint()`), and the
+  SkillRunner LLM call (`agent.egress_policy()`). Intra-cluster bulk fetches and
+  operator-configured OIDC JWKS are intentionally not gated (the A2A *client* is
+  SDK-side). A node-local posture, not a coordinator.
 
 **Gates:** `src/lib_tests.rs::test_ws3_data_at_rest_cipher_encrypts_wal_and_round_trips`
 (default feature set — on-disk plaintext absence, same-key recovery, wrong-key
@@ -612,10 +615,11 @@ Runbook: [`docs/operations/cert-rotation.md`](docs/operations/cert-rotation.md).
   node, **accumulated** (union; `helpers::merge_peer_keys`), never mirrored — so a
   rotation never drops a still-needed historical key. Every verify path tries the
   set: `connection` SignedData (fail-open preserved), `consensus` decode_verify,
-  `rbac` roles_of, `audit` verify_stream (via `verify_chain_keys`). Startup
-  preserves one prior key via the `current‖previous` format. **Compromise caveat:**
-  a retired key stays accepted for verification — compromise needs explicit
-  revocation, not just rotation.
+  `rbac` roles_of, `audit` verify_stream (via `verify_chain_keys`). `sys/identity/{node}`
+  stores the **full** key history (`32 × N`, current first; `helpers::{parse_identity_keys,
+  encode_identity_history}`), so verification survives any number of rotations + restarts
+  (grows 32 B/rotation). **Compromise caveat:** a retired key stays accepted for
+  verification — compromise needs explicit revocation, not just rotation.
 
 **Gates:** `src/lib_tests.rs::test_ws5_rotate_identity_verifies_across_rotation_on_peer`
 (two tls nodes; A rotates mid-stream; peer B verifies A's audit chain across the
@@ -669,16 +673,15 @@ get found.
 - `cargo build --lib --features a2a` to include the A2A protocol adapter
 - `cargo build --lib --features llm` to include the Prompt Skills LLM adapter
 - `cargo build --lib --features compliance` to include RBAC / signed identity roles,
-  OAuth2 gateway ACLs, and the tamper-evident hash-chained audit trail. **WS1 + WS2
-  shipped** (see §RBAC / identity and §Audit trail); **WS3 crown-jewel shipped** but
-  feature-free (data-at-rest + egress need no feature — see §Crown-jewel posture);
-  **WS4 OIDC SSO shipped** (gateway JWT validation — see §RBAC / identity); WS5 in
-  progress per [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md).
-- Lib tests at HEAD: **318** default · **320** `tls` · **362** `compliance`
+  OAuth2 gateway ACLs, and the tamper-evident hash-chained audit trail. **v1.x is
+  engineering-complete: WS1 RBAC, WS2 audit, WS3 crown-jewel (feature-free),
+  WS4 OIDC SSO, WS5 hot cert rotation all shipped** — see the per-WS sections above
+  and [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md).
+- Lib tests at HEAD: **318** default · **323** `tls` · **365** `compliance`
   (full feature matrix); clippy at 0 warnings on each. The `compliance` delta is the WS1
   RBAC + WS2 audit + WS4 OIDC + WS5 rotation unit/integration tests; the core `sys/` tripwire
   and WS3 crown-jewel (data-at-rest + egress) tests are feature-free and in the default count.
-  WS5's retained-key-set verification lives under `tls` (peer_keys is a key *set* per node).
+  WS5's retained-key-set verification + multi-key archival live under `tls`.
 - Wire version is currently **v11** (`PREV_WIRE_VERSION = 10` — rolling upgrade window open).
   v11 adds `hlc_seq: Option<u64>` to `WireMessage::Signal` for ordered delivery via `emit_ordered()`.
   v10 adds `WireMessage::SignedData` for Ed25519-signed KV writes under the `tls` feature.

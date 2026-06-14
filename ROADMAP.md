@@ -1822,9 +1822,10 @@ certificates auto-generate on first start.
   connections keep their CA-trusted session).
 - **Retained-key verification (option B):** `peer_keys` holds a *set* per node,
   accumulated across rotations, so historical signatures (audit chain, committed
-  consensus, role claims) stay verifiable; every verify path tries the set. The
-  prior key is preserved across one restart via the `current‖previous` identity
-  format. *Compromise caveat:* a retired key stays accepted for verification, so
+  consensus, role claims) stay verifiable; every verify path tries the set.
+  `sys/identity/{node}` stores the **full** key history (`32 × N`, current first),
+  so verification survives any number of rotations and restarts (grows 32 B per
+  rotation). *Compromise caveat:* a retired key stays accepted for verification, so
   rotating away from a compromised key needs explicit revocation on top.
   Runbook: [`docs/operations/cert-rotation.md`](docs/operations/cert-rotation.md).
 
@@ -1950,9 +1951,11 @@ modes, and the escalation paths.
   neutral on key custody — the operator supplies a KMS/keyring adapter. Feature-free,
   zero-overhead when unused; scope is on-disk only (in transit = `tls`).
 - **Tier-2 egress boundary — shipped (WS3).** `EgressPolicy { allow_hosts }` in
-  `GossipConfig` gates outbound reach (enforced at the MCP client bridge); a
-  node-local posture, not a coordinator. Empty = allow-all (default). Coverage and
-  operator-responsibility paths are documented in the egress runbook + threat model.
+  `GossipConfig` gates every outbound HTTP path the substrate chooses — the MCP
+  client bridge, capability probes, and LLM-backend calls (core prompt skills +
+  SkillRunner). A node-local posture, not a coordinator. Empty = allow-all (default).
+  Intra-cluster bulk fetches and operator-configured OIDC JWKS are intentionally
+  not gated; the A2A *client* is SDK-side. Documented in the egress runbook + threat model.
 - **Blast-radius-if-compromised — shipped (WS3).** Threat-model document at
   [`docs/threat-model.md`](docs/threat-model.md), cross-linked from
   `docs/operations/` (crown-jewel runbook) and CLAUDE.md: per-trust-boundary
