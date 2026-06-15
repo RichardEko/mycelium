@@ -35,7 +35,7 @@ jobs:
           path-to-signatures: signatures/cla.json
           path-to-document: https://github.com/${{ github.repository }}/blob/main/CLA.md
           branch: cla-signatures
-          allowlist: bot*,RichardEko
+          allowlist: bot*,RichardEko,rn82497
           create-file-commit-message: 'chore: create CLA signatures file'
           signed-commit-message: 'chore: add CLA signature for $contributorName'
           custom-notsigned-prcomment: |
