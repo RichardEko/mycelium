@@ -65,7 +65,7 @@ tripwire). `tls`/`peer_keys` are core (connection-layer verification needs them)
 | 3b ✓ | Move the interdependent transport cluster + `CoreCtx`; `connection` → `CoreCtx`; `QuorumObserver`/`test-support`; relocate the `store.rs` quorum test | `mycelium-core` builds standalone — **committed** |
 | 4 ✓ | `mycelium` depends on core; re-export (`pub use mycelium_core::{config,signal,error}` + `pub(crate) use …`); feature-forwarding | full matrix builds — folded into 3a/3b |
 | 5 ✓ | Tests green, clippy clean, no-default-features | CLAUDE.md test posture met |
-| 6 | Philosophy compliance review (no core→III; library-not-platform; seam at II↔III) | sign-off |
+| 6 ✓ | Philosophy compliance review (no core→III; library-not-platform; seam at II↔III) | **PASS** — see below |
 
 **Stage 3b result — the split is physically done.** `mycelium-core` is a standalone crate
 carrying all 14 substrate modules + `CoreCtx`, and references **nothing** upper (verified by
@@ -137,3 +137,28 @@ with `kv_quorum`).
 consensus/capability/service references; (b) `mycelium-core` has no `daemon`/control-plane
 surface; (c) the public API is unchanged (re-exports); (d) `CoreCtx` contains only the
 classified core fields.
+
+## Stage 6 — philosophy compliance review (PASS, 2026-06-15)
+
+Reviewed against `docs/philosophy.html` (Layering Principle, litmus tests, inverted
+dependency §5a, library-not-platform) with evidence:
+
+| Criterion | Result | Evidence |
+|---|---|---|
+| **Seam at II↔III** | ✅ | `mycelium-core` = the 14 substrate modules + `CoreCtx` (KV + signal/boundary mesh). Consensus, capabilities, services, gateway all stay upper. No agreement/coordination/workflow logic in core. |
+| **No core→III (inverted dependency)** | ✅ | Zero upper references in core *production code* (grep + the `layer1_…_higher_layers` guard reading the moved files). Now a **compile-time guarantee**: a `mycelium-core → mycelium` dependency would be a Cargo cycle, so the substrate *cannot* become aware of the layers above — the §5a invariant is upgraded from documented convention to structural impossibility. |
+| **CoreCtx purity** | ✅ | Exactly the 18 classified core fields; none of the Layer III fields (`caps_advertised`, `filter_opacity_registry`, `group_roster_cache`, `bulk_transport`, `rpc_pending`, `commit_conflicts`, `audit_chain`, `llm_*`) present. |
+| **Library, not platform** | ✅ | Core Cargo.toml has no axum/tower-http/reqwest/jsonwebtoken/tracing-subscriber/opentelemetry/metrics-exporter; no `[[bin]]`, no `fn main`. Pure library. |
+| **Dep-tree win is real** | ✅ | `mycelium-core` (default) = **48** unique deps vs `mycelium` = **140**; axum/hyper/h2/tower/futures-* are absent from core. The embeddability payoff is empirical. |
+| **Public API unchanged** | ✅ | `mycelium::{config, signal, error, NodeId, GossipConfig, GossipError, …}` all still exported via re-export; lib compiles and 239 tests use these paths. |
+| **Mechanism-in-core, agency-above** | ✅ | The three core↔upper couplings are all *hooks the upper layer fills*, `None`/empty-safe for a pure-core embed: `ReplyInterceptor` (RPC reply claim), `QuorumObserver` (quorum ack), `SnapshotDeferHook` (opacity-defer). No coordinator added; strip-the-ceremony honoured. |
+
+**One cosmetic follow-up (non-blocking):** several doc-comments in core modules
+(`signal.rs`, `framing.rs`, `config.rs`) intra-doc-link to upper types (`GossipAgent`,
+`agent::oidc::…`). These are dangling links when core's docs are built standalone — a
+`cargo doc` warning only (not a build/test/clippy gate). Convert to plain `code` spans or
+relative prose in a later pass; not a compliance issue.
+
+**Verdict: M1 is philosophy-compliant.** The split makes the Layering Principle and the
+inverted-dependency invariant *structural* (crate boundary) rather than conventional, with no
+new coordinator and the substrate-is-a-library posture preserved and measurably reinforced.
