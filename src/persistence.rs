@@ -241,6 +241,14 @@ where
 // ── WalWriter task ───────────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
+/// Hook the WAL snapshot loop consults each interval tick to decide whether to
+/// defer a scheduled snapshot (e.g. when the node is already opaque for load
+/// reasons, to avoid piling snapshot opacity on top). `None` — pure-core embeds —
+/// never defers. Core provides the mechanism; the opacity policy is supplied by the
+/// upper layer, so core stays unaware of `sys/load/` semantics (Layer II).
+pub(crate) type SnapshotDeferHook = Arc<dyn Fn() -> bool + Send + Sync>;
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_wal_writer(
     dir:                    PathBuf,
     sync_mode:              SyncMode,
@@ -251,6 +259,7 @@ pub(crate) fn spawn_wal_writer(
     hlc:                    Arc<crate::hlc::Hlc>,
     default_ttl:            u8,
     cipher:                 Option<Arc<dyn DataAtRestCipher>>,
+    defer_snapshot:         Option<SnapshotDeferHook>,
 ) -> WalHandle {
     let channel_depth = (snapshot_wal_threshold * 4).max(1024);
     let (tx, rx) = mpsc::channel::<WalMsg>(channel_depth);
@@ -267,6 +276,7 @@ pub(crate) fn spawn_wal_writer(
         hlc,
         default_ttl,
         cipher,
+        defer_snapshot,
     ));
 
     handle
@@ -284,6 +294,7 @@ async fn wal_writer_task(
     hlc:                    Arc<crate::hlc::Hlc>,
     default_ttl:            u8,
     cipher:                 Option<Arc<dyn DataAtRestCipher>>,
+    defer_snapshot:         Option<SnapshotDeferHook>,
 ) {
     let wal_path = dir.join("wal.bin");
     let mut wal_file = match open_wal(&wal_path).await {
@@ -328,8 +339,9 @@ async fn wal_writer_task(
 
             _ = snap_timer.tick() => {
                 // Defer if already opaque for another reason to avoid piling
-                // snapshot opacity on top of existing load-based opacity.
-                if crate::agent::is_self_opaque(&kv_state, &node_id) {
+                // snapshot opacity on top of existing load-based opacity. The
+                // opacity check is injected (Layer II policy); core stays neutral.
+                if defer_snapshot.as_ref().is_some_and(|f| f()) {
                     snap_timer.reset_after(Duration::from_secs(30));
                     continue;
                 }

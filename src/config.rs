@@ -12,6 +12,54 @@ use std::{collections::HashMap, env, fs, path::{Path, PathBuf}};
 use crate::error::GossipError;
 use crate::NodeId;
 
+/// OIDC SSO configuration (WS4). Plain configuration data — it lives here in core
+/// `config` (not the upper `oidc` verifier module) so `GossipConfig` never names an
+/// upper-layer type. The verifier logic (`agent::oidc::OidcVerifier`, JWKS fetch,
+/// `validate_token`) stays in the upper crate and imports this struct. The IdP's
+/// signing keys are not configured here — they are fetched from the JWKS at runtime,
+/// so vendor differences stay configuration.
+#[cfg(feature = "compliance")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OidcConfig {
+    /// Expected `iss` claim — the IdP issuer URL. Also the discovery base
+    /// (`{issuer}/.well-known/openid-configuration`) when `jwks_uri` is absent.
+    pub issuer: String,
+    /// Expected `aud` claim — this deployment's client/application id.
+    pub audience: String,
+    /// JWT claim holding the user's groups/roles (default `"groups"`; Entra often
+    /// uses `"roles"`, Keycloak a nested path — config, not code).
+    #[serde(default = "default_group_claim")]
+    pub group_claim: String,
+    /// Maps an IdP group name to the gateway scopes it grants. A principal's
+    /// scopes are the union over its groups.
+    #[serde(default)]
+    pub group_scopes: HashMap<String, Vec<String>>,
+    /// Explicit JWKS URI. If `None`, derive from `issuer` via discovery.
+    #[serde(default)]
+    pub jwks_uri: Option<String>,
+}
+
+#[cfg(feature = "compliance")]
+fn default_group_claim() -> String { "groups".to_string() }
+
+#[cfg(feature = "compliance")]
+impl OidcConfig {
+    /// Gateway scopes granted to a principal in `groups` (union, deduplicated).
+    pub fn scopes_for_groups(&self, groups: &[String]) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for g in groups {
+            if let Some(scopes) = self.group_scopes.get(g) {
+                for s in scopes {
+                    if !out.contains(s) {
+                        out.push(s.clone());
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
 /// TLS configuration for mTLS peer connections and node identity signing.
 ///
 /// All fields are optional: when `cert_pem` / `key_pem` are absent, certificates
@@ -595,7 +643,7 @@ pub struct GossipConfig {
     /// agent identity.
     #[cfg(feature = "compliance")]
     #[serde(default)]
-    pub oidc: Option<crate::agent::oidc::OidcConfig>,
+    pub oidc: Option<OidcConfig>,
 
     /// Mutual TLS configuration.
     ///

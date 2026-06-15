@@ -19,25 +19,28 @@ use std::sync::Arc;
 use papaya::HashMap;
 use tokio::sync::watch;
 
-/// Per-key tracker list stored in `KvState::quorum_trackers`. Copy-on-write:
-/// install/remove replace the whole `Arc<Vec>` via `compute`, so
-/// `apply_and_notify` reads a coherent snapshot with one map lookup.
-pub(crate) type TrackerList = Arc<Vec<Arc<QuorumAckTracker>>>;
+/// Per-key tracker list type now lives in core as
+/// [`crate::store::QuorumTrackerList`] (`Arc<Vec<Arc<dyn QuorumObserver>>>`) so the
+/// substrate's `KvState` never names this upper type. `QuorumAckTracker` implements
+/// the core `QuorumObserver` trait; the list holds it as a trait object.
+use crate::store::{QuorumObserver, QuorumTrackerList};
 
 /// Adds `tracker` to `key`'s list, coexisting with any concurrent callers'
 /// trackers on the same key. The closure is retry-safe (clones per
 /// invocation — papaya re-invokes it under CAS contention).
 pub(crate) fn install_tracker(
-    map:     &HashMap<Arc<str>, TrackerList>,
+    map:     &HashMap<Arc<str>, QuorumTrackerList>,
     key:     Arc<str>,
     tracker: &Arc<QuorumAckTracker>,
 ) {
-    map.pin().compute(key, |existing| -> papaya::Operation<TrackerList, ()> {
+    let obs_concrete = Arc::clone(tracker);
+    let obs: Arc<dyn QuorumObserver> = obs_concrete;
+    map.pin().compute(key, |existing| -> papaya::Operation<QuorumTrackerList, ()> {
         match existing {
-            None => papaya::Operation::Insert(Arc::new(vec![Arc::clone(tracker)])),
+            None => papaya::Operation::Insert(Arc::new(vec![Arc::clone(&obs)])),
             Some((_, list)) => {
                 let mut v = (**list).clone();
-                v.push(Arc::clone(tracker));
+                v.push(Arc::clone(&obs));
                 papaya::Operation::Insert(Arc::new(v))
             }
         }
@@ -47,17 +50,19 @@ pub(crate) fn install_tracker(
 /// Removes exactly `tracker` (by `Arc` identity) from `key`'s list — never a
 /// concurrent caller's tracker. Drops the map entry when the list empties.
 pub(crate) fn remove_tracker(
-    map:     &HashMap<Arc<str>, TrackerList>,
+    map:     &HashMap<Arc<str>, QuorumTrackerList>,
     key:     &Arc<str>,
     tracker: &Arc<QuorumAckTracker>,
 ) {
-    map.pin().compute(Arc::clone(key), |existing| -> papaya::Operation<TrackerList, ()> {
+    let needle_concrete = Arc::clone(tracker);
+    let needle: Arc<dyn QuorumObserver> = needle_concrete;
+    map.pin().compute(Arc::clone(key), |existing| -> papaya::Operation<QuorumTrackerList, ()> {
         match existing {
             None => papaya::Operation::Abort(()),
             Some((_, list)) => {
-                let v: Vec<Arc<QuorumAckTracker>> = list
+                let v: Vec<Arc<dyn QuorumObserver>> = list
                     .iter()
-                    .filter(|t| !Arc::ptr_eq(t, tracker))
+                    .filter(|t| !Arc::ptr_eq(t, &needle))
                     .cloned()
                     .collect();
                 if v.len() == list.len() {
@@ -100,11 +105,13 @@ impl QuorumAckTracker {
         });
         (tracker, rx)
     }
+}
 
+impl QuorumObserver for QuorumAckTracker {
     /// Called by `apply_and_notify` for every incoming update on the tracked key.
     /// Increments the ACK count when the update is from a different node and
     /// carries a timestamp at least as recent as the tracked write.
-    pub(crate) fn observe(&self, sender: u64, timestamp: u64) {
+    fn observe(&self, sender: u64, timestamp: u64) {
         if sender != self.self_hash && timestamp >= self.write_ts {
             let n = {
                 let guard = self.acked_by.pin();

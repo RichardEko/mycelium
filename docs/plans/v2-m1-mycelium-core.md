@@ -60,7 +60,7 @@ tripwire). `tls`/`peer_keys` are core (connection-layer verification needs them)
 | 0 ✓ | branch, philosophy, seam map, carve design | done |
 | 1 ✓ | Carve `CoreCtx` from `TaskCtx` in place (+`Deref`); fix 3 constructors | full build + tests green, one crate — **committed** |
 | 2 ✓ | Decouple `connection.rs` from `rpc_pending` via the `ReplyInterceptor` hook | zero core→III refs *in the transport modules* — **committed** |
-| 2.5 | Resolve two core→upper **type** couplings the Stage-2 scan missed (see below) | core types reference no upper type |
+| 2.5 ✓ | Resolve three core→upper couplings the Stage-2 scan missed (see below) | core production code references no upper type — **committed** |
 | 3 | Create `mycelium-core` member; physically move the 14 substrate modules + `CoreCtx`; `connection`/`writer` → `CoreCtx`; `pub(crate)→pub` escalation; relocate the `store.rs` quorum test | `mycelium-core` builds standalone |
 | 4 | `mycelium` depends on core; re-export for API stability; fix paths | full feature matrix builds |
 | 5 | Tests green (318/323/365), clippy clean, no-default-features | CLAUDE.md test posture |
@@ -106,7 +106,20 @@ types into upper modules:
    `config.rs` (core, which is config's home anyway). The OIDC *verifier* (`oidc.rs`, jsonwebtoken,
    `OidcVerifier`) stays upper and imports `crate::config::OidcConfig`.
 
-Both are contained, gateable, in-crate fixes (no file move) and are prerequisites for Stage 3.
+3. **`persistence.rs` → `agent::is_self_opaque`** (`persistence.rs:332`, found in the same
+   preflight once the scan caught the `crate::agent::` form). The WAL snapshot loop (core Layer I)
+   called the Layer II opacity predicate to defer a snapshot when the node is already opaque.
+   `is_self_opaque` can't trivially move to core (it depends on the `LoadState` encoding in
+   `opacity.rs`). **Fix (hook pattern again):** `spawn_wal_writer` takes an optional
+   `SnapshotDeferHook = Arc<dyn Fn() -> bool + Send + Sync>`; the upper layer (`lifecycle.rs`)
+   supplies `|| is_self_opaque(...)`. Core consults the closure, unaware of `sys/load/`. `None`
+   for pure-core embeds (never defers).
+
+All three are contained, gateable, in-crate fixes (no file move) and prerequisites for Stage 3.
+**Done:** default + no-default + full-matrix build, lib tests 318/383 (0 failed), clippy
+`-D warnings` clean. The only remaining core→upper refs are the two Stage-3 mechanical items:
+`connection.rs`'s `TaskCtx` (→ `CoreCtx` at the move) and the `store.rs` quorum **test** (relocates
+with `kv_quorum`).
 
 **Compliance review criteria for Stage 6:** (a) `grep` shows zero `mycelium-core` →
 consensus/capability/service references; (b) `mycelium-core` has no `daemon`/control-plane

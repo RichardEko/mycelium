@@ -11,6 +11,22 @@ use std::sync::{
 use tokio::sync::watch;
 use tracing::warn;
 
+/// Core-side observer of quorum-ack evidence for a key — the Layer-I hook for the
+/// consistency overlay. `apply_and_notify` calls [`observe`](QuorumObserver::observe)
+/// on each registered observer for every incoming update on the tracked key. The
+/// upper `kv_quorum` layer implements this on its `QuorumAckTracker`; core holds only
+/// the trait object, never the concrete type ("consistency as a service": the overlay
+/// lives above; core provides the notification mechanism, not the ack-counting law).
+pub trait QuorumObserver: Send + Sync {
+    /// Record that `sender` (an `id_hash`) confirmed the tracked key at `timestamp`.
+    fn observe(&self, sender: u64, timestamp: u64);
+}
+
+/// Copy-on-write list of quorum observers for one key, stored in
+/// [`KvState::quorum_trackers`]. `kv_quorum`'s install/remove replace it atomically
+/// via `compute`, so `apply_and_notify` reads a coherent snapshot in one lookup.
+pub type QuorumTrackerList = Arc<Vec<Arc<dyn QuorumObserver>>>;
+
 /// Layer II watch-channel map. Maps a key to a `watch::Sender` that fires whenever
 /// the key's value changes in the store. Written by `GossipAgent::subscribe` (Layer II)
 /// and notified by `apply_and_notify` (Layer I/II bridge). Co-located in `KvState`
@@ -74,7 +90,7 @@ pub(crate) struct KvStore {
     /// `apply_and_notify` calls `observe(sender, timestamp)` on every tracker
     /// in the list for every incoming update. Mutate only via
     /// `kv_quorum::{install_tracker, remove_tracker}`.
-    pub quorum_trackers: Arc<papaya::HashMap<Arc<str>, crate::agent::kv_quorum::TrackerList>>,
+    pub quorum_trackers: Arc<papaya::HashMap<Arc<str>, QuorumTrackerList>>,
 }
 
 /// Bundled KV-path state shared across connection handlers, consensus tasks,
