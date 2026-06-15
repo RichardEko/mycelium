@@ -36,7 +36,7 @@ use tracing::{error, warn};
 ///
 /// The substrate stays deliberately neutral on key custody: implement this trait
 /// over your own KMS / keyring / HSM and attach it with
-/// [`GossipAgent::with_data_at_rest_cipher`](crate::GossipAgent::with_data_at_rest_cipher).
+/// `GossipAgent::with_data_at_rest_cipher`.
 /// When no cipher is attached, bytes are written in the clear (unchanged
 /// behaviour, zero overhead).
 ///
@@ -60,11 +60,11 @@ type Cipher<'a> = Option<&'a Arc<dyn DataAtRestCipher>>;
 // ── On-disk snapshot format ──────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-pub(crate) struct KvSnapshot {
+pub struct KvSnapshot {
     /// HLC timestamp of the most-recent entry included in this snapshot.
     /// WAL replay skips entries with `timestamp <= snapshot_hlc`.
-    pub(crate) snapshot_hlc: u64,
-    pub(crate) entries: Vec<SyncEntry>,
+    pub snapshot_hlc: u64,
+    pub entries: Vec<SyncEntry>,
 }
 
 // ── WAL record size cap ──────────────────────────────────────────────────────
@@ -73,7 +73,7 @@ const MAX_RECORD_BYTES: usize = 64 * 1024 * 1024;
 
 // ── Channel messages ─────────────────────────────────────────────────────────
 
-pub(crate) enum WalMsg {
+pub enum WalMsg {
     Append {
         entry: SyncEntry,
         /// `Some` → caller awaits fsync result.
@@ -89,14 +89,14 @@ pub(crate) enum WalMsg {
 
 // ── Public handle ────────────────────────────────────────────────────────────
 
-pub(crate) struct WalHandle {
+pub struct WalHandle {
     tx:        mpsc::Sender<WalMsg>,
     sync_mode: SyncMode,
 }
 
 impl WalHandle {
     /// Append and — in `Flush` mode — await the `fdatasync` ack.
-    pub(crate) async fn append(&self, entry: SyncEntry) -> io::Result<()> {
+    pub async fn append(&self, entry: SyncEntry) -> io::Result<()> {
         match self.sync_mode {
             SyncMode::Flush => {
                 let (tx, rx) = oneshot::channel();
@@ -113,27 +113,27 @@ impl WalHandle {
     /// Fire-and-forget for synchronous callers (`set` / `delete`).
     /// Never awaits fsync. Silently drops if the channel is full —
     /// consistent with `GossipAgent::set`'s existing try_send semantics.
-    pub(crate) fn append_try(&self, entry: SyncEntry) {
+    pub fn append_try(&self, entry: SyncEntry) {
         let _ = self.tx.try_send(WalMsg::Append { entry, ack: None });
     }
 
     /// Always awaits `fdatasync` regardless of `sync_mode`.
     /// Used for consensus committed-slot writes.
-    pub(crate) async fn append_sync(&self, entry: SyncEntry) -> io::Result<()> {
+    pub async fn append_sync(&self, entry: SyncEntry) -> io::Result<()> {
         let (tx, rx) = oneshot::channel();
         let _ = self.tx.send(WalMsg::Append { entry, ack: Some(tx) }).await;
         rx.await.unwrap_or(Ok(()))
     }
 
     /// Ask the writer to snapshot immediately. Awaits completion.
-    pub(crate) async fn trigger_snapshot(&self) -> io::Result<()> {
+    pub async fn trigger_snapshot(&self) -> io::Result<()> {
         let (tx, rx) = oneshot::channel();
         let _ = self.tx.send(WalMsg::TriggerSnapshot { ack: tx }).await;
         rx.await.unwrap_or(Ok(()))
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn shutdown(&self) {
+    pub async fn shutdown(&self) {
         let _ = self.tx.send(WalMsg::Shutdown).await;
     }
 }
@@ -145,7 +145,7 @@ impl WalHandle {
 ///
 /// `apply_fn` is responsible for `intern_key` (if configured) and
 /// `apply_and_notify` — keeping `persistence.rs` free of agent-layer imports.
-pub(crate) async fn replay<F>(
+pub async fn replay<F>(
     dir: &std::path::Path,
     cipher: Cipher<'_>,
     mut apply_fn: F,
@@ -241,7 +241,15 @@ where
 // ── WalWriter task ───────────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn spawn_wal_writer(
+/// Hook the WAL snapshot loop consults each interval tick to decide whether to
+/// defer a scheduled snapshot (e.g. when the node is already opaque for load
+/// reasons, to avoid piling snapshot opacity on top). `None` — pure-core embeds —
+/// never defers. Core provides the mechanism; the opacity policy is supplied by the
+/// upper layer, so core stays unaware of `sys/load/` semantics (Layer II).
+pub type SnapshotDeferHook = Arc<dyn Fn() -> bool + Send + Sync>;
+
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_wal_writer(
     dir:                    PathBuf,
     sync_mode:              SyncMode,
     snapshot_wal_threshold: usize,
@@ -251,6 +259,7 @@ pub(crate) fn spawn_wal_writer(
     hlc:                    Arc<crate::hlc::Hlc>,
     default_ttl:            u8,
     cipher:                 Option<Arc<dyn DataAtRestCipher>>,
+    defer_snapshot:         Option<SnapshotDeferHook>,
 ) -> WalHandle {
     let channel_depth = (snapshot_wal_threshold * 4).max(1024);
     let (tx, rx) = mpsc::channel::<WalMsg>(channel_depth);
@@ -267,6 +276,7 @@ pub(crate) fn spawn_wal_writer(
         hlc,
         default_ttl,
         cipher,
+        defer_snapshot,
     ));
 
     handle
@@ -284,6 +294,7 @@ async fn wal_writer_task(
     hlc:                    Arc<crate::hlc::Hlc>,
     default_ttl:            u8,
     cipher:                 Option<Arc<dyn DataAtRestCipher>>,
+    defer_snapshot:         Option<SnapshotDeferHook>,
 ) {
     let wal_path = dir.join("wal.bin");
     let mut wal_file = match open_wal(&wal_path).await {
@@ -328,8 +339,9 @@ async fn wal_writer_task(
 
             _ = snap_timer.tick() => {
                 // Defer if already opaque for another reason to avoid piling
-                // snapshot opacity on top of existing load-based opacity.
-                if crate::agent::is_self_opaque(&kv_state, &node_id) {
+                // snapshot opacity on top of existing load-based opacity. The
+                // opacity check is injected (Layer II policy); core stays neutral.
+                if defer_snapshot.as_ref().is_some_and(|f| f()) {
                     snap_timer.reset_after(Duration::from_secs(30));
                     continue;
                 }

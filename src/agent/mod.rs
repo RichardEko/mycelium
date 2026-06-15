@@ -2,9 +2,10 @@ use crate::config::GossipConfig;
 use crate::framing::ForwardHint;
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
-use crate::signal::{Boundary, SignalHandlers};
+use crate::signal::{Boundary, Signal, SignalHandlers, signal_kind};
 use crate::store::KvState;
 use crate::writer::WriterEntry;
+use mycelium_core::CoreCtx;
 use bytes::Bytes;
 use parking_lot::RwLock;
 use std::{
@@ -223,69 +224,19 @@ pub struct SystemStats {
     pub sys_namespace_violations: u64,
 }
 
-/// Shared infrastructure extracted from `GossipAgent` into a single `Arc` so that
-/// `ConsensusEngine`, connection handlers, and long-lived task helpers can each hold
-/// a clone without creating a reference cycle back to the agent.
-///
-/// ## Why this exists
-///
-/// `GossipAgent` spawns background tasks that need access to the same infrastructure
-/// the agent uses. If those tasks held an `Arc<GossipAgent>`, the agent could never be
-/// dropped (cycle: agent holds `JoinSet`, tasks hold agent). `TaskCtx` breaks the cycle
-/// by holding all the shared infrastructure in a separate struct; `GossipAgent` holds
-/// `Arc<TaskCtx>`, and so do the tasks — but `GossipAgent` is NOT in `TaskCtx`.
-///
-/// ## Field groups
-///
-/// Fields are grouped by layer. The six typed handles (`KvHandle`, `MeshHandle`, etc.)
-/// each hold `Arc<TaskCtx>` and access only their relevant subset.
-///
-/// | Group | Fields |
-/// |---|---|
-/// | Identity + config | `node_id`, `config`, `default_ttl` |
-/// | Layer I — KV | `seen`, `hlc`, `gossip_txs`, `kv_state`, `wal` |
-/// | Layer II — Signals | `signal_boundary`, `signal_handlers`, `reorder_buf` |
-/// | Capability subsystem | `caps_advertised`, `filter_opacity_registry`, `group_roster_cache` |
-/// | Service layer | `bulk_transport`, `rpc_pending` |
-/// | Security | `tls`, `peer_keys` |
-/// | Networking | `peers` |
-/// | Lifecycle | `shutdown_tx`, `task_handles` |
-///
-/// ## v2 roadmap
-///
-/// `TaskCtx` is a known God Object — see `CLAUDE.md § Layer I/II entanglement`. The
-/// planned fix is a workspace split (`mycelium-core` carrying Layers I+II, `mycelium`
-/// adding Layers III+). `TaskCtx` would split into `CoreCtx` (Layers I+II only) and a
-/// richer context that wraps it. That refactor is deferred until there is a real use
-/// case for embedding the core without the capability / consensus layers.
+// The old 22-field `TaskCtx` God Object has been split (ROADMAP §v2.0 M1): `CoreCtx`
+// (the Layers I+II infrastructure bundle) and `ReplyInterceptor` now live in the
+// `mycelium-core` crate, imported at the top of this module. `TaskCtx` below wraps
+// `Arc<CoreCtx>` and adds the Layer III+ fields; `GossipAgent` holds `Arc<TaskCtx>`
+// (and so do the tasks), breaking the agent↔task reference cycle.
+
+/// The full infrastructure bundle: [`CoreCtx`] (Layers I+II) plus the Layer III+ fields
+/// (capability / service / consensus / compliance). Held in a single `Arc`, cloned into
+/// every background task and typed handle. `Deref`s to `CoreCtx`, so the ~380 existing
+/// `ctx.<core-field>` access sites are unchanged.
 pub(crate) struct TaskCtx {
-    // ── Identity + config ────────────────────────────────────────────────────────
-    pub(crate) node_id:          NodeId,
-    /// Shared copy of the agent configuration. Available to typed handles so they
-    /// can access `signal_window_secs`, `health_check_interval_secs`, `locality_path`,
-    /// and `topology_policies` without borrowing `GossipAgent`.
-    pub(crate) config:           Arc<GossipConfig>,
-    pub(crate) default_ttl:      u8,
-
-    // ── Layer I — KV substrate ───────────────────────────────────────────────────
-    pub(crate) seen:             Arc<ShardedSeen>,
-    /// Hybrid Logical Clock for causal LWW ordering. `make_gossip_update`
-    /// calls `tick()` for every locally-originated write; the connection
-    /// handler calls `observe()` for every incoming timestamp so the local
-    /// clock dominates any remote stamp it has seen.
-    pub(crate) hlc:              Arc<crate::hlc::Hlc>,
-    pub(crate) gossip_txs:       Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]>,
-    pub(crate) kv_state:         Arc<KvState>,
-    /// WAL handle for durable KV writes. Unset when persistence is disabled.
-    /// Written once by `start()` after replay; read-only afterwards.
-    pub(crate) wal: std::sync::OnceLock<Arc<crate::persistence::WalHandle>>,
-
-    // ── Layer II — Signal mesh ───────────────────────────────────────────────────
-    pub(crate) signal_boundary:  Arc<RwLock<Boundary>>,
-    pub(crate) signal_handlers:  Arc<SignalHandlers>,
-    /// Receiver-side causal reorder buffer for `emit_ordered` signals.
-    /// `None` when `config.signal_ordered_delivery = false` (the default).
-    pub(crate) reorder_buf: Option<Arc<std::sync::Mutex<crate::signal::SignalReorderBuffer>>>,
+    /// Layers I + II substrate context. Will live in `mycelium-core` (M1).
+    pub(crate) core: Arc<CoreCtx>,
 
     // ── Capability subsystem ─────────────────────────────────────────────────────
     /// Set to `true` by the first tick of any `run_kv_persist_task` (capability
@@ -329,42 +280,19 @@ pub(crate) struct TaskCtx {
     /// purely diagnostic, surfaced via `system_stats()` and `/stats`.
     pub(crate) commit_conflicts: Arc<AtomicU64>,
 
-    /// Cumulative `sys/` namespace-ownership violations (see
-    /// `SystemStats::sys_namespace_violations`). Incremented by the connection
-    /// handler's inbound-apply tripwire when a remote write targets a `sys/`
-    /// key this node owns; Relaxed ordering — purely diagnostic.
-    pub(crate) sys_namespace_violations: Arc<AtomicU64>,
-
     /// Head of this node's tamper-evident audit chain (WS2). `audit()` seals a
     /// record under this lock so the per-node chain stays linear, then releases
     /// it before writing to KV. Lock #8 in the lock-order table (leaf).
     #[cfg(feature = "compliance")]
     pub(crate) audit_chain: Arc<std::sync::Mutex<audit::AuditChainState>>,
+}
 
-    // ── Security ─────────────────────────────────────────────────────────────────
-    /// TLS context (server + client configs + signing key). Unset when the
-    /// `tls` feature is disabled or when `GossipConfig::tls` is `None`.
-    /// Written once by `start()` before any task is spawned; read-only afterwards.
-    pub(crate) tls: std::sync::OnceLock<Arc<crate::tls::NodeTls>>,
-    /// Map from peer NodeId → 32-byte Ed25519 public key, populated from two
-    /// sources: (a) the mTLS handshake cert, (b) `sys/identity/` KV entries
-    /// gossiped by peers. Used to verify signed consensus messages.
-    #[cfg_attr(not(feature = "tls"), allow(dead_code))]
-    /// Retained verifying-key **set** per node (WS5 option B): every key a node
-    /// has published at `sys/identity/{node}`, accumulated across rotations so
-    /// historical signatures (audit, consensus, roles) keep verifying. Verify
-    /// paths try all keys; see `helpers::{known_verifying_keys, verify_signed_by}`.
-    pub(crate) peer_keys: Arc<papaya::HashMap<NodeId, Vec<[u8; 32]>>>,
-
-    // ── Networking ───────────────────────────────────────────────────────────────
-    /// Live peer table shared with the HTTP gateway for peer-count-based quorum sizing.
-    pub(crate) peers: Arc<papaya::HashMap<NodeId, std::time::Instant>>,
-
-    // ── Lifecycle ────────────────────────────────────────────────────────────────
-    /// Shutdown broadcast — sending `true` cancels all background tasks.
-    pub(crate) shutdown_tx: Arc<watch::Sender<bool>>,
-    /// All spawned background tasks. Reaping is automatic via `JoinSet`.
-    pub(crate) task_handles: Arc<std::sync::Mutex<JoinSet<()>>>,
+impl std::ops::Deref for TaskCtx {
+    type Target = CoreCtx;
+    #[inline]
+    fn deref(&self) -> &CoreCtx {
+        &self.core
+    }
 }
 
 impl TaskCtx {
@@ -372,7 +300,7 @@ impl TaskCtx {
     where
         F: std::future::Future<Output = ()> + Send + 'static,
     {
-        self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).spawn(fut);
+        self.core.task_handles.lock().unwrap_or_else(|e| e.into_inner()).spawn(fut);
     }
 }
 
@@ -633,7 +561,12 @@ impl GossipAgent {
         let gossip_txs: Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]> = gossip_txs_vec.into();
         let peers_arc: Arc<papaya::HashMap<NodeId, std::time::Instant>> = Arc::new(papaya::HashMap::new());
         let config_arc = Arc::new(config.clone());
-        let task_ctx = Arc::new(TaskCtx {
+        // RPC/bulk reply correlation map. Created here so the core-level reply
+        // interceptor can capture it; the same Arc is shared into `TaskCtx`
+        // (Layer III) where `rpc_call` registers and awaits oneshots.
+        let rpc_pending: Arc<std::sync::Mutex<std::collections::HashMap<u64, tokio::sync::oneshot::Sender<crate::signal::Signal>>>> =
+            Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        let core_ctx = Arc::new(CoreCtx {
             node_id:         node_id.clone(),
             config:          Arc::clone(&config_arc),
             seen:            Arc::new(ShardedSeen::new(seen_shards)),
@@ -644,21 +577,10 @@ impl GossipAgent {
             default_ttl,
             kv_state:        Arc::clone(&kv_state),
             wal:             std::sync::OnceLock::new(),
-            caps_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            bulk_transport:  Arc::new(bulk::BulkTransport::new(
-                config.http_port.unwrap_or(0),
-                std::time::Duration::from_secs(config.bulk_fetch_timeout_secs),
-                config.max_concurrent_bulk_handlers,
-            )),
-            rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-            commit_conflicts: Arc::new(AtomicU64::new(0)),
             sys_namespace_violations: Arc::new(AtomicU64::new(0)),
-            #[cfg(feature = "compliance")]
-            audit_chain: Arc::new(std::sync::Mutex::new(audit::AuditChainState::new())),
             tls: std::sync::OnceLock::new(),
             peer_keys: Arc::new(papaya::HashMap::new()),
             peers: Arc::clone(&peers_arc),
-            filter_opacity_registry: Arc::new(capability_ops::FilterOpacityRegistry::new()),
             reorder_buf: if config.signal_ordered_delivery {
                 Some(Arc::new(std::sync::Mutex::new(
                     crate::signal::SignalReorderBuffer::new(
@@ -669,8 +591,44 @@ impl GossipAgent {
             } else {
                 None
             },
+            reply_interceptor: Some({
+                let rp = Arc::clone(&rpc_pending);
+                Arc::new(move |sig: &Signal| -> bool {
+                    // Claim correlated rpc.result / bulk.result: the nonce is the
+                    // first 8 LE bytes of the payload. On hit, fire the oneshot and
+                    // signal "claimed" so the fan-out is skipped.
+                    if sig.payload.len() >= 8
+                        && (sig.kind.as_ref() == signal_kind::RPC_RESULT
+                            || sig.kind.as_ref() == signal_kind::BULK_RESULT)
+                    {
+                        let call_nonce = u64::from_le_bytes(
+                            sig.payload[..8].try_into()
+                                .expect("RPC/bulk result nonce occupies first 8 bytes; payload length checked"),
+                        );
+                        if let Some(tx) = rp.lock().unwrap_or_else(|e| e.into_inner()).remove(&call_nonce) {
+                            let _ = tx.send(sig.clone());
+                            return true;
+                        }
+                    }
+                    false
+                })
+            }),
             shutdown_tx:         Arc::clone(&shutdown_tx_arc),
             task_handles:        Arc::clone(&task_handles_arc),
+        });
+        let task_ctx = Arc::new(TaskCtx {
+            core: Arc::clone(&core_ctx),
+            caps_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            bulk_transport:  Arc::new(bulk::BulkTransport::new(
+                config.http_port.unwrap_or(0),
+                std::time::Duration::from_secs(config.bulk_fetch_timeout_secs),
+                config.max_concurrent_bulk_handlers,
+            )),
+            rpc_pending: Arc::clone(&rpc_pending),
+            commit_conflicts: Arc::new(AtomicU64::new(0)),
+            #[cfg(feature = "compliance")]
+            audit_chain: Arc::new(std::sync::Mutex::new(audit::AuditChainState::new())),
+            filter_opacity_registry: Arc::new(capability_ops::FilterOpacityRegistry::new()),
             group_roster_cache:  Arc::clone(&group_roster_cache),
             #[cfg(feature = "llm")]
             llm_skills: std::sync::Arc::new(papaya::HashMap::new()),

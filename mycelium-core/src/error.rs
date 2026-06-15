@@ -4,12 +4,12 @@
 //! can match specific failure modes without parsing strings:
 //!
 //! - **Configuration errors** ([`InvalidField`], [`FieldConflict`], [`NodeIdMismatch`]) are
-//!   returned by [`GossipAgent::start`] and [`GossipConfig::validate`] when a config field
+//!   returned by `GossipAgent::start` and [`GossipConfig::validate`] when a config field
 //!   has an invalid or conflicting value.
 //! - **Framing errors** ([`FrameTooLarge`], [`UnsupportedWireVersion`]) surface when a TCP
 //!   frame exceeds the size limit or arrives with an unsupported wire-protocol version.
 //! - **Lifecycle errors** ([`AlreadyRunning`], [`Shutdown`]) are returned by
-//!   [`GossipAgent::start`] when it is called in the wrong agent state.
+//!   `GossipAgent::start` when it is called in the wrong agent state.
 //! - **I/O and parsing errors** ([`Io`], [`Toml`], [`Parse`]) wrap lower-level failures.
 //!   `Io` is returned only during startup (TCP listener bind, WAL read, TLS setup) —
 //!   runtime TCP connection errors are absorbed internally and visible via
@@ -23,7 +23,7 @@ pub enum GossipError {
     /// A configuration field has an invalid value.
     ///
     /// `field` is the field name (e.g. `"bind_port"`); `reason` is a human-readable
-    /// explanation. Check the field's allowed range in [`GossipConfig`](crate::GossipConfig).
+    /// explanation. Check the field's allowed range in `GossipConfig`.
     #[error("Configuration error: field '{field}' — {reason}")]
     InvalidField { field: &'static str, reason: String },
 
@@ -41,7 +41,7 @@ pub enum GossipError {
     #[error("node_id '{node_id}' does not match bind address '{bind_addr}'")]
     NodeIdMismatch { node_id: String, bind_addr: String },
 
-    /// A gossip frame exceeds the maximum allowed size ([`MAX_FRAME_BYTES`](crate::MAX_FRAME_BYTES)).
+    /// A gossip frame exceeds the maximum allowed size (`MAX_FRAME_BYTES`).
     ///
     /// Reduce the value size or split the write into smaller keys.
     #[error("Frame {size} bytes exceeds maximum {limit} bytes")]
@@ -59,7 +59,7 @@ pub enum GossipError {
     AlreadyRunning,
 
     /// `start()` was called on an agent that has already been shut down.
-    /// Create a new [`GossipAgent`](crate::GossipAgent) to restart.
+    /// Create a new `GossipAgent` to restart.
     #[error("Agent has been shut down and cannot be restarted")]
     Shutdown,
 

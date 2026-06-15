@@ -1,4 +1,4 @@
-use crate::agent::TaskCtx;
+use crate::context::CoreCtx;
 use crate::error::GossipError;
 use crate::framing::{
     bincode_cfg, dispatch_gossip_try_send, is_connection_closed,
@@ -8,7 +8,7 @@ use crate::framing::{
 };
 #[cfg(feature = "tls")]
 use crate::framing::canonical_sign_bytes;
-use crate::signal::{parse_own_grp_key, Signal, SignalScope, signal_kind};
+use crate::signal::{parse_own_grp_key, Signal, SignalScope};
 use crate::store::{apply_and_notify, intern_key, store_hash_acc};
 use crate::node_id::NodeId;
 use crate::writer::{get_or_spawn_writer, request_state, WriterEntry};
@@ -63,33 +63,34 @@ fn flag_foreign_sys_write(
 
 /// Shared state threaded into every inbound connection handler.
 #[derive(Clone)]
-pub(crate) struct ConnContext {
-    /// Shared infrastructure bundle (node_id, gossip_txs, seen, hlc,
-    /// signal_boundary, signal_handlers, kv_state, wal, default_ttl).
-    pub(crate) task_ctx:            Arc<TaskCtx>,
-    pub(crate) peers:               Arc<papaya::HashMap<NodeId, Instant>>,
-    pub(crate) shutdown:            Arc<watch::Sender<bool>>,
-    pub(crate) peer_writers:        Arc<papaya::HashMap<NodeId, WriterEntry>>,
-    pub(crate) writer_depth:        usize,
-    pub(crate) backoff:             Duration,
-    pub(crate) n_shards:            usize,
-    pub(crate) intern_keys:         bool,
-    pub(crate) intern_max_keys:     usize,
+pub struct ConnContext {
+    /// Shared Layers I+II context (node_id, gossip_txs, seen, hlc,
+    /// signal_boundary, signal_handlers, kv_state, wal, default_ttl, …).
+    /// The upper crate passes `Arc::clone(&task_ctx.core)`.
+    pub task_ctx:            Arc<CoreCtx>,
+    pub peers:               Arc<papaya::HashMap<NodeId, Instant>>,
+    pub shutdown:            Arc<watch::Sender<bool>>,
+    pub peer_writers:        Arc<papaya::HashMap<NodeId, WriterEntry>>,
+    pub writer_depth:        usize,
+    pub backoff:             Duration,
+    pub n_shards:            usize,
+    pub intern_keys:         bool,
+    pub intern_max_keys:     usize,
     /// Cap on the peer table. Piggybacked peers are silently ignored once this
     /// is reached; bootstrap peers and direct senders are always admitted.
-    pub(crate) max_peers:           usize,
+    pub max_peers:           usize,
     /// Idle timeout forwarded to `get_or_spawn_writer` / `request_state`.
     /// Zero means no timeout (default).
-    pub(crate) writer_idle_timeout: Duration,
+    pub writer_idle_timeout: Duration,
     /// Fan-out list publisher (same channel the health monitor feeds). A peer
     /// learned here must become sendable IMMEDIATELY: waiting for the health
     /// monitor's next tick left inbound-only nodes mute for live sends —
     /// including Individual-scoped RPC responses — for up to two
     /// health-check intervals.
-    pub(crate) peer_list_tx: tokio::sync::watch::Sender<Arc<[NodeId]>>,
+    pub peer_list_tx: tokio::sync::watch::Sender<Arc<[NodeId]>>,
 }
 
-pub(crate) async fn handle_connection(
+pub async fn handle_connection(
     socket: GossipStream,
     peer_addr: SocketAddr,
     ctx: ConnContext,
@@ -449,25 +450,14 @@ pub(crate) async fn handle_connection(
                             };
 
                         for sig in signals_to_deliver {
-                        // O(1) fast-path for correlated rpc.result / bulk.result:
-                        // if the correlation nonce is registered in rpc_pending,
-                        // fire the oneshot and skip the signal_handlers fan-out.
-                        let nonce_claimed = if sig.payload.len() >= 8
-                            && (sig.kind.as_ref() == signal_kind::RPC_RESULT
-                                || sig.kind.as_ref() == signal_kind::BULK_RESULT)
-                        {
-                            let call_nonce = u64::from_le_bytes(
-                                sig.payload[..8].try_into()
-                                    .expect("RPC/bulk result nonce occupies first 8 bytes; payload length checked"),
-                            );
-                            if let Some(tx) = task_ctx.rpc_pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&call_nonce) {
-                                let _ = tx.send(sig.clone());
-                                true
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
+                        // Opt-in O(1) fast-path: the upper service layer may register a
+                        // reply interceptor (`CoreCtx::reply_interceptor`) that claims
+                        // correlated rpc.result / bulk.result signals — firing the waiting
+                        // oneshot — and returns true to skip the signal_handlers fan-out.
+                        // Core stays RPC-agnostic: it only asks "did anything claim this?".
+                        let nonce_claimed = match task_ctx.reply_interceptor.as_ref() {
+                            Some(claim) => claim(&sig),
+                            None => false,
                         };
                         if !nonce_claimed {
                             signal_handlers.deliver(&sig);

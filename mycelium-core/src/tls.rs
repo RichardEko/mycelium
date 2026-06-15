@@ -11,7 +11,7 @@
 /// signing/handshake paths keep reading the current value via the accessor
 /// methods. Read the key/configs through the methods, never a cached clone, so
 /// a rotation is observed.
-pub(crate) struct NodeTls {
+pub struct NodeTls {
     #[cfg(feature = "tls")]
     server_config: arc_swap::ArcSwap<rustls::ServerConfig>,
     #[cfg(feature = "tls")]
@@ -23,19 +23,19 @@ pub(crate) struct NodeTls {
 #[cfg(feature = "tls")]
 impl NodeTls {
     /// The current rustls server config (accept side). Cloned cheaply (Arc).
-    pub(crate) fn server_config(&self) -> std::sync::Arc<rustls::ServerConfig> {
+    pub fn server_config(&self) -> std::sync::Arc<rustls::ServerConfig> {
         self.server_config.load_full()
     }
     /// The current rustls client config (connect side).
-    pub(crate) fn client_config(&self) -> std::sync::Arc<rustls::ClientConfig> {
+    pub fn client_config(&self) -> std::sync::Arc<rustls::ClientConfig> {
         self.client_config.load_full()
     }
     /// The current Ed25519 signing/identity key.
-    pub(crate) fn signing_key(&self) -> std::sync::Arc<ed25519_dalek::SigningKey> {
+    pub fn signing_key(&self) -> std::sync::Arc<ed25519_dalek::SigningKey> {
         self.signing_key.load_full()
     }
     /// The current 32-byte verifying key.
-    pub(crate) fn verifying_key_bytes(&self) -> [u8; 32] {
+    pub fn verifying_key_bytes(&self) -> [u8; 32] {
         self.signing_key().verifying_key().to_bytes()
     }
 
@@ -45,7 +45,7 @@ impl NodeTls {
     /// new key/cert immediately; existing connections keep their old (CA-trusted)
     /// session. Call only *after* the new verifying key has been published to
     /// peers, so they already accept it.
-    pub(crate) fn activate(&self, m: RotationMaterial) {
+    pub fn activate(&self, m: RotationMaterial) {
         self.signing_key.store(m.signing_key);
         self.server_config.store(m.server_config);
         self.client_config.store(m.client_config);
@@ -53,10 +53,10 @@ impl NodeTls {
 }
 
 /// A freshly-generated identity key + CA-signed cert + rustls configs, not yet
-/// activated. Produced by `generate_rotation`; consumed by [`NodeTls::activate`].
+/// activated. Produced by `generate_rotation`; consumed by `NodeTls::activate`.
 #[cfg(feature = "tls")]
-pub(crate) struct RotationMaterial {
-    pub(crate) verifying_key: [u8; 32],
+pub struct RotationMaterial {
+    pub verifying_key: [u8; 32],
     server_config: std::sync::Arc<rustls::ServerConfig>,
     client_config: std::sync::Arc<rustls::ClientConfig>,
     signing_key: std::sync::Arc<ed25519_dalek::SigningKey>,
@@ -76,7 +76,7 @@ mod imp {
     };
     use std::{fs, path::Path, sync::Arc};
 
-    pub(crate) fn load_or_generate(
+    pub fn load_or_generate(
         cfg: &TlsConfig,
         node_id: &NodeId,
     ) -> Result<NodeTls, GossipError> {
@@ -163,10 +163,10 @@ mod imp {
     /// Generate a fresh identity key + CA-signed node cert + rustls configs
     /// WITHOUT activating them, persisting the new key to disk so a restart uses
     /// it. Returns the material (and the new verifying key) so the caller can
-    /// publish the new key to peers before the cutover ([`NodeTls::activate`]).
+    /// publish the new key to peers before the cutover (`NodeTls::activate`).
     /// Reuses the **existing** cluster CA — never regenerates it — and errors if
     /// no CA is present (rotation only makes sense post-bootstrap).
-    pub(crate) fn generate_rotation(
+    pub fn generate_rotation(
         cfg: &TlsConfig,
         node_id: &NodeId,
     ) -> Result<super::RotationMaterial, GossipError> {
@@ -367,12 +367,12 @@ mod imp {
 
     // ── Public helpers ────────────────────────────────────────────────────
 
-    pub(crate) fn sign_bytes(key: &SigningKey, msg: &[u8]) -> [u8; 64] {
+    pub fn sign_bytes(key: &SigningKey, msg: &[u8]) -> [u8; 64] {
         use ed25519_dalek::Signer;
         key.sign(msg).to_bytes()
     }
 
-    pub(crate) fn verify_bytes(pub_key_bytes: &[u8; 32], msg: &[u8], sig: &[u8]) -> bool {
+    pub fn verify_bytes(pub_key_bytes: &[u8; 32], msg: &[u8], sig: &[u8]) -> bool {
         let Ok(vk) = VerifyingKey::from_bytes(pub_key_bytes) else { return false };
         let Ok(arr): Result<[u8; 64], _> = sig.try_into() else { return false };
         let sig = ed25519_dalek::Signature::from_bytes(&arr);
@@ -381,4 +381,4 @@ mod imp {
 }
 
 #[cfg(feature = "tls")]
-pub(crate) use imp::{generate_rotation, load_or_generate, sign_bytes, verify_bytes};
+pub use imp::{generate_rotation, load_or_generate, sign_bytes, verify_bytes};

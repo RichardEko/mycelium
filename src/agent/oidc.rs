@@ -19,10 +19,13 @@
 //! not code: discovery is the standard `.well-known/openid-configuration` + JWKS
 //! (runtime fetch/cache lives in the gateway wiring).
 
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde::Deserialize;
 
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
+
+/// `OidcConfig` (the plain config struct) now lives in core `config` so
+/// `GossipConfig` does not name an upper type; this module owns the verifier logic.
+pub use crate::config::OidcConfig;
 
 /// The asymmetric signature algorithms we accept. Symmetric (`HS*`) and `none`
 /// are deliberately excluded — accepting them is the JWT alg-confusion bypass.
@@ -31,48 +34,6 @@ const ALLOWED_ALGS: &[Algorithm] = &[
     Algorithm::ES256, Algorithm::ES384,
     Algorithm::PS256, Algorithm::PS384, Algorithm::PS512,
 ];
-
-fn default_group_claim() -> String { "groups".to_string() }
-
-/// Generic OIDC validation config (`compliance`). Serializable: keys are *not*
-/// here — they are fetched from the IdP's JWKS at runtime (the gateway wiring),
-/// so vendor differences stay configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct OidcConfig {
-    /// Expected `iss` claim — the IdP issuer URL. Also the discovery base
-    /// (`{issuer}/.well-known/openid-configuration`) when `jwks_uri` is absent.
-    pub issuer: String,
-    /// Expected `aud` claim — this deployment's client/application id.
-    pub audience: String,
-    /// JWT claim holding the user's groups/roles (default `"groups"`; Entra often
-    /// uses `"roles"`, Keycloak a nested path — config, not code).
-    #[serde(default = "default_group_claim")]
-    pub group_claim: String,
-    /// Maps an IdP group name to the gateway scopes it grants. A principal's
-    /// scopes are the union over its groups.
-    #[serde(default)]
-    pub group_scopes: HashMap<String, Vec<String>>,
-    /// Explicit JWKS URI. If `None`, derive from `issuer` via discovery.
-    #[serde(default)]
-    pub jwks_uri: Option<String>,
-}
-
-impl OidcConfig {
-    /// Gateway scopes granted to a principal in `groups` (union, deduplicated).
-    pub fn scopes_for_groups(&self, groups: &[String]) -> Vec<String> {
-        let mut out: Vec<String> = Vec::new();
-        for g in groups {
-            if let Some(scopes) = self.group_scopes.get(g) {
-                for s in scopes {
-                    if !out.contains(s) {
-                        out.push(s.clone());
-                    }
-                }
-            }
-        }
-        out
-    }
-}
 
 /// Why an OIDC token was rejected. Coarse on purpose — the gateway answers a flat
 /// 401, and finer detail goes only to logs (never leak validation specifics to
@@ -254,6 +215,7 @@ impl OidcVerifier {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use jsonwebtoken::{encode, EncodingKey, Header};
     use serde_json::json;
     use std::time::{SystemTime, UNIX_EPOCH};

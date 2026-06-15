@@ -25,12 +25,12 @@ gateway = ["dep:axum", "dep:tower-http", "dep:tokio-stream", "dep:futures-util",
 fuzz-internals = []
 # Enables mTLS on the gossip TCP port, keypair-backed node identity, and
 # consensus payload signing. Adds tokio-rustls, rcgen, and ed25519-dalek.
-tls = ["dep:tokio-rustls", "dep:rustls", "dep:rcgen", "dep:rustls-pemfile", "dep:ed25519-dalek", "dep:rand_core", "dep:arc-swap"]
+tls = ["mycelium-core/tls", "dep:tokio-rustls", "dep:rustls", "dep:rcgen", "dep:rustls-pemfile", "dep:ed25519-dalek", "dep:rand_core", "dep:arc-swap"]
 # Enables OTEL span export from SkillRunner (opentelemetry-otlp gRPC).
 otel = ["dep:opentelemetry", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry", "dep:opentelemetry_sdk"]
 # Exposes a Prometheus /metrics endpoint on the gateway HTTP port.
 # Zero-cost when absent: all counter!/histogram!/gauge! calls compile to no-ops.
-metrics = ["dep:metrics", "dep:metrics-exporter-prometheus"]
+metrics = ["mycelium-core/metrics", "dep:metrics", "dep:metrics-exporter-prometheus"]
 # Exposes A2A (Agent-to-Agent protocol) endpoints: GET /.well-known/agent.json
 # and POST /a2a JSON-RPC. Requires the embedded gateway.
 a2a = ["gateway"]
@@ -42,15 +42,20 @@ llm = ["gateway"]
 # identity roles, gateway endpoint ACLs, tamper-evident audit trail. Implies
 # `gateway` (the auth/audit HTTP surface) + `tls` (signed identity + roles) and
 # pulls in `sha2` for the audit hash-chain (already in the tree via ed25519-dalek).
-compliance = ["gateway", "tls", "dep:sha2", "dep:jsonwebtoken"]
+compliance = ["mycelium-core/compliance", "gateway", "tls", "dep:sha2", "dep:jsonwebtoken"]
 
 # The `fuzz/` directory is its own cargo-fuzz crate; keep it out of any
 # implicit-workspace traversal from this parent manifest.
 [workspace]
-members = ["mycelium-tuple-space"]
+members = ["mycelium-core", "mycelium-tuple-space"]
 exclude = ["fuzz"]
 
 [dependencies]
+# Layers I+II substrate (ROADMAP §v2.0 M1). This crate (the full substrate) adds
+# Layers III+ on top. Feature-forwarded below so `mycelium`'s tls/metrics/compliance
+# enable the matching surface in core.
+mycelium-core = { path = "mycelium-core" }
+
 # Core
 tokio = { version = "1.35", features = ["full"] }
 fastrand = "2"
@@ -122,6 +127,10 @@ metrics                     = { version = "0.24", optional = true }
 metrics-exporter-prometheus = { version = "0.16", optional = true }
 
 [dev-dependencies]
+# Enable mycelium-core's test-only helpers (N_GOSSIP_SHARDS, store_hash, …) for
+# this crate's test builds. Cargo unions this with the normal dependency above, so
+# `test-support` is active only for tests, never a plain `cargo build`.
+mycelium-core = { path = "mycelium-core", features = ["test-support"] }
 # Companion crate, consumed by examples/three_node_demo (integration
 # scenario 13). Dev-dependency cycles are legal in Cargo: the companion's
 # normal dependency on `mycelium` is unaffected.

@@ -1949,6 +1949,7 @@ dependencies = [
  "libc",
  "metrics",
  "metrics-exporter-prometheus",
+ "mycelium-core",
  "mycelium-tuple-space",
  "opentelemetry",
  "opentelemetry-otlp",
@@ -1976,6 +1977,35 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "wgpu",
+]
+
+[[package]]
+name = "mycelium-core"
+version = "1.2.0"
+dependencies = [
+ "ahash",
+ "arc-swap",
+ "async-trait",
+ "base64",
+ "bincode",
+ "bytes",
+ "ed25519-dalek",
+ "fastrand",
+ "metrics",
+ "papaya",
+ "parking_lot",
+ "proptest",
+ "rand_core 0.6.4",
+ "rcgen",
+ "rustls",
+ "rustls-pemfile",
+ "serde",
+ "socket2",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-rustls",
+ "toml",
+ "tracing",
 ]
 
 [[package]]

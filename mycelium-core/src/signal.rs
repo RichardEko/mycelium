@@ -11,7 +11,7 @@
 //!
 //! Well-known kind strings live in [`signal_kind`]. KV namespace conventions live in [`kv_ns`].
 //!
-//! All signal APIs are exposed directly on [`GossipAgent`](crate::GossipAgent) — there is no
+//! All signal APIs are exposed directly on `GossipAgent` — there is no
 //! separate Layer 2 wrapper type.
 
 use crate::framing::bincode_cfg;
@@ -31,13 +31,13 @@ use tracing::warn;
 /// Default sender-log retention window (10 minutes).
 ///
 /// Matches the default value of [`GossipConfig::signal_window_secs`].
-/// Kept for doc-link references in [`ConsensusConfig`](crate::ConsensusConfig) and
-/// [`GossipConfig`](crate::GossipConfig). In application code, prefer
-/// [`GossipAgent::signal_window`](crate::GossipAgent::signal_window) — it reads the
+/// Kept for doc-link references in `ConsensusConfig` and
+/// `GossipConfig`. In application code, prefer
+/// `GossipAgent::signal_window` — it reads the
 /// operator-configured value. The live window stored on [`SignalHandlers`] is set from
 /// `signal_window_secs` at agent construction and is used for all runtime eviction.
 #[allow(dead_code)]
-pub(crate) const SENDER_LOG_WINDOW: Duration = Duration::from_secs(600);
+pub const SENDER_LOG_WINDOW: Duration = Duration::from_secs(600);
 
 /// Scope of a signal — determines which nodes **act** on it.
 ///
@@ -60,7 +60,7 @@ pub enum SignalScope {
     Individual(NodeId),
     /// Only nodes that have joined **any** of the named groups act (union membership).
     ///
-    /// Used by [`GossipAgent::cross_group_propose`](crate::GossipAgent::cross_group_propose)
+    /// Used by `GossipAgent::cross_group_propose`
     /// to broadcast a ballot to all participants across multiple voting blocs in one shot.
     Groups(Vec<Arc<str>>),
 }
@@ -84,7 +84,7 @@ pub struct Signal {
 ///
 /// Matches keys of the form `grp/{group}/{node_id_str}` (live or tombstone). Returns `None`
 /// for any other key.
-pub(crate) fn parse_own_grp_key<'a>(key: &'a str, node_id_str: &str) -> Option<&'a str> {
+pub fn parse_own_grp_key<'a>(key: &'a str, node_id_str: &str) -> Option<&'a str> {
     let inner = key.strip_prefix("grp/")?;
     let slash  = inner.rfind('/')?;
     if inner[slash + 1..] != *node_id_str { return None; }
@@ -95,12 +95,12 @@ pub(crate) fn parse_own_grp_key<'a>(key: &'a str, node_id_str: &str) -> Option<&
 ///
 /// Use this wherever a raw `format!("grp/{}/", group)` string would otherwise appear,
 /// so all callers stay consistent with the [`kv_ns::GROUP`] namespace convention.
-pub(crate) fn grp_prefix(group: &str) -> String {
+pub fn grp_prefix(group: &str) -> String {
     format!("grp/{}/", group)
 }
 
 /// Returns the KV key for a single node's group membership entry: `grp/{group}/{node_id}`.
-pub(crate) fn grp_member_key(group: &str, node_id: &crate::node_id::NodeId) -> String {
+pub fn grp_member_key(group: &str, node_id: &crate::node_id::NodeId) -> String {
     format!("{}{}", grp_prefix(group), node_id)
 }
 
@@ -109,19 +109,19 @@ pub(crate) fn grp_member_key(group: &str, node_id: &crate::node_id::NodeId) -> S
 /// Holds the set of groups this node has joined. `admits()` is O(1).
 /// Mutated by `join_group` / `leave_group` (write path) and checked by the
 /// connection handler (read path) via `Arc<RwLock<Boundary>>`.
-pub(crate) struct Boundary {
-    pub(crate) groups:  AHashSet<Arc<str>>,
-    pub(crate) node_id: NodeId,
+pub struct Boundary {
+    pub groups:  AHashSet<Arc<str>>,
+    pub node_id: NodeId,
 }
 
 impl Boundary {
-    pub(crate) fn new(node_id: NodeId) -> Self {
+    pub fn new(node_id: NodeId) -> Self {
         Self { groups: AHashSet::new(), node_id }
     }
 
     /// Returns `true` if this node should act on a signal addressed to `scope`.
     #[inline]
-    pub(crate) fn admits(&self, scope: &SignalScope) -> bool {
+    pub fn admits(&self, scope: &SignalScope) -> bool {
         match scope {
             SignalScope::System => true,
             SignalScope::Group(name) => self.groups.contains(name),
@@ -494,11 +494,11 @@ impl QuorumEvidence {
 /// Fan-out registry plus auxiliary state for signal delivery.
 ///
 /// Internally composed of four focused sub-types ([`HandlerTable`],
-/// [`SignalLog`], [`SuppressionTable`], [`QuorumEvidence`]). The pub(crate)
+/// [`SignalLog`], [`SuppressionTable`], [`QuorumEvidence`]). The pub
 /// surface stays unchanged: every method delegates to the appropriate
 /// sub-type. `deliver` orchestrates across all four in a fixed order:
 /// record → suppression-check → fan-out.
-pub(crate) struct SignalHandlers {
+pub struct SignalHandlers {
     handlers:    HandlerTable,
     log:         SignalLog,
     suppression: SuppressionTable,
@@ -506,7 +506,7 @@ pub(crate) struct SignalHandlers {
 }
 
 impl SignalHandlers {
-    pub(crate) fn new(sender_log_window: Duration) -> Self {
+    pub fn new(sender_log_window: Duration) -> Self {
         Self {
             handlers:    HandlerTable::new(),
             log:         SignalLog::new(sender_log_window),
@@ -517,18 +517,18 @@ impl SignalHandlers {
 
     /// Returns a new `mpsc::Receiver<Signal>` for `kind` with the default channel depth (256).
     /// Multiple calls for the same kind produce independent receivers.
-    pub(crate) fn register(&self, kind: Arc<str>) -> mpsc::Receiver<Signal> {
+    pub fn register(&self, kind: Arc<str>) -> mpsc::Receiver<Signal> {
         self.handlers.register_with_capacity(kind, 256)
     }
 
     /// Returns a new `mpsc::Receiver<Signal>` for `kind` with a caller-specified channel depth.
-    pub(crate) fn register_with_capacity(&self, kind: Arc<str>, cap: usize) -> mpsc::Receiver<Signal> {
+    pub fn register_with_capacity(&self, kind: Arc<str>, cap: usize) -> mpsc::Receiver<Signal> {
         self.handlers.register_with_capacity(kind, cap)
     }
 
     /// Returns a receiver that only delivers signals whose `sender` is in `trusted`.
     /// An empty `trusted` list is equivalent to `register` — no filter overhead.
-    pub(crate) fn register_from(
+    pub fn register_from(
         &self,
         kind:    Arc<str>,
         trusted: Vec<NodeId>,
@@ -541,7 +541,7 @@ impl SignalHandlers {
     }
 
     /// Returns the maximum fill ratio across all open senders for `kind`.
-    pub(crate) fn fill_ratio(&self, kind: &Arc<str>) -> f32 {
+    pub fn fill_ratio(&self, kind: &Arc<str>) -> f32 {
         self.handlers.fill_ratio(kind)
     }
 
@@ -554,7 +554,7 @@ impl SignalHandlers {
     /// quorum counting includes suppressed kinds), checks the
     /// [`SuppressionTable`] using the same `now` (one `Instant::now()` call
     /// per delivery), then delegates fan-out to [`HandlerTable`].
-    pub(crate) fn deliver(&self, signal: &Signal) {
+    pub fn deliver(&self, signal: &Signal) {
         let now = Instant::now();
         self.log.record(&signal.kind, signal.sender.clone(), now);
         if self.suppression.is_suppressed_at(&signal.kind, now) {
@@ -568,26 +568,26 @@ impl SignalHandlers {
     }
 
     /// Returns when this node last admitted a signal of `kind`, or `None` if never.
-    pub(crate) fn last_signal(&self, kind: &str) -> Option<Instant> {
+    pub fn last_signal(&self, kind: &str) -> Option<Instant> {
         self.log.last_signal(kind)
     }
 
-    pub(crate) fn suppress(&self, kind: Arc<str>, until: Instant) {
+    pub fn suppress(&self, kind: Arc<str>, until: Instant) {
         self.suppression.suppress(kind, until);
     }
 
-    pub(crate) fn unsuppress(&self, kind: &str) {
+    pub fn unsuppress(&self, kind: &str) {
         self.suppression.unsuppress(kind);
     }
 
-    pub(crate) fn is_suppressed(&self, kind: &str) -> bool {
+    pub fn is_suppressed(&self, kind: &str) -> bool {
         self.suppression.is_suppressed(kind)
     }
 
     /// Removes sender-log entries and rate-limit entries older than `window`,
     /// then drops kinds whose log has become empty. Called from the GC task
     /// on each GC tick.
-    pub(crate) fn trim_sender_log(&self, window: Duration) {
+    pub fn trim_sender_log(&self, window: Duration) {
         self.log.trim(window);
         self.evidence.trim(window, Instant::now());
     }
@@ -595,20 +595,20 @@ impl SignalHandlers {
     /// Seeds the sender log with a past entry reconstructed from a
     /// `sys/quorum/` Layer I record (used by
     /// `GossipAgent::warm_quorum_from_layer1`).
-    pub(crate) fn seed_sender_log(&self, kind: Arc<str>, sender: NodeId, age_ms: u64) {
+    pub fn seed_sender_log(&self, kind: Arc<str>, sender: NodeId, age_ms: u64) {
         self.log.seed(kind, sender, age_ms);
     }
 
     /// Returns `true` when at least `min_senders` distinct [`NodeId`]s have had a
     /// signal of `kind` delivered within `window`.
-    pub(crate) fn quorum(&self, kind: &str, min_senders: usize, window: Duration) -> bool {
+    pub fn quorum(&self, kind: &str, min_senders: usize, window: Duration) -> bool {
         self.log.quorum(kind, min_senders, window)
     }
 
     /// Like [`quorum`](Self::quorum) but only counts senders whose `id_hash()` is in
     /// `member_hashes`. **Not suitable for per-ballot consensus vote counting** —
     /// the sender log is keyed by `(kind, sender)` only, not `(slot, ballot)`.
-    pub(crate) fn quorum_for_group(
+    pub fn quorum_for_group(
         &self,
         kind:          &str,
         member_hashes: &AHashSet<u64>,
@@ -620,7 +620,7 @@ impl SignalHandlers {
 
     /// Returns the quorum-evidence key and value to write, or `None` if the existing
     /// entry is less than 1 second old (rate-limit to prevent gossip churn).
-    pub(crate) fn quorum_evidence_payload(
+    pub fn quorum_evidence_payload(
         &self,
         kind:   &Arc<str>,
         sender: &NodeId,
@@ -639,7 +639,7 @@ impl SignalHandlers {
 ///
 /// The caller holds the `RwLock` write guard and passes `&mut Boundary` directly,
 /// keeping locking policy with the caller.
-pub(crate) fn reconcile_boundary_from_store(
+pub fn reconcile_boundary_from_store(
     store:       &PapayaMap<Arc<str>, StoreEntry>,
     boundary:    &mut Boundary,
     node_id_str: &str,
@@ -663,10 +663,10 @@ pub(crate) fn reconcile_boundary_from_store(
 
 // ── Pheromone trail ───────────────────────────────────────────────────────────
 
-/// Pheromone load state written to Layer I by [`GossipAgent::manage_opacity`].
+/// Pheromone load state written to Layer I by `GossipAgent::manage_opacity`.
 ///
 /// Key convention: `sys/load/{node_id}/{kind}` (see [`kv_ns::LOAD`]).
-/// Encoded with [`bincode_cfg()`](crate::framing::bincode_cfg) (fixed-int).
+/// Encoded with `bincode_cfg()` (fixed-int).
 /// An absent key means the node is transparent (not overloaded) for that kind.
 /// Tombstoned automatically when `BOUNDARY_TRANSPARENT` is emitted.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -682,42 +682,42 @@ pub struct LoadState {
     pub written_at_ms: u64,
 }
 
-pub(crate) fn encode_load_state(s: &LoadState) -> Bytes {
+pub fn encode_load_state(s: &LoadState) -> Bytes {
     let mut buf = BytesMut::new();
     let _ = bincode::serde::encode_into_std_write(s, &mut (&mut buf).writer(), bincode_cfg());
     buf.freeze()
 }
 
-pub(crate) fn decode_load_state(b: &Bytes) -> Option<LoadState> {
+pub fn decode_load_state(b: &Bytes) -> Option<LoadState> {
     bincode::serde::decode_from_slice(b, bincode_cfg())
         .ok()
         .map(|(v, _)| v)
 }
 
-/// Cancels the associated [`advertise`](crate::GossipAgent::advertise) task on drop.
+/// Cancels the associated `advertise` task on drop.
 ///
-/// Obtain one from [`GossipAgent::advertise`]. The task also exits automatically
+/// Obtain one from `GossipAgent::advertise`. The task also exits automatically
 /// when the agent shuts down, even if this handle is still live.
 pub struct AdvertiseHandle {
-    pub(crate) _cancel: tokio::sync::oneshot::Sender<()>,
+    pub _cancel: tokio::sync::oneshot::Sender<()>,
 }
 
-/// Cancels the associated [`watch`](crate::GossipAgent::watch) task on drop.
+/// Cancels the associated `watch` task on drop.
 ///
-/// Obtain one from [`GossipAgent::watch`]. The task also exits automatically
+/// Obtain one from `GossipAgent::watch`. The task also exits automatically
 /// when the agent shuts down, even if this handle is still live.
 pub struct WatchHandle {
-    pub(crate) _cancel: tokio::sync::oneshot::Sender<()>,
+    pub _cancel: tokio::sync::oneshot::Sender<()>,
 }
 
-/// Cancels the associated [`manage_opacity`](crate::GossipAgent::manage_opacity) governor
+/// Cancels the associated `manage_opacity` governor
 /// task on drop.
 ///
-/// Obtain one from [`GossipAgent::manage_opacity`] or
-/// [`GossipAgent::manage_opacity_gated`]. The task also exits automatically when
+/// Obtain one from `GossipAgent::manage_opacity` or
+/// `GossipAgent::manage_opacity_gated`. The task also exits automatically when
 /// the agent shuts down, even if this handle is still live.
 pub struct OpacityHandle {
-    pub(crate) _cancel: tokio::sync::oneshot::Sender<()>,
+    pub _cancel: tokio::sync::oneshot::Sender<()>,
 }
 
 /// Application hint for the opacity governor.
@@ -776,7 +776,7 @@ pub mod signal_kind {
     ///
     /// **Nonce convention**: the first 8 bytes of the payload carry a little-endian u64
     /// correlation nonce that matches the first 8 bytes of the originating
-    /// [`INVOKE`] or [`INVOKE_BULK`] payload. Use [`GossipAgent::request`](crate::GossipAgent::request)
+    /// [`INVOKE`] or [`INVOKE_BULK`] payload. Use `GossipAgent::request`
     /// on the caller side to generate and match the nonce automatically.
     pub const INVOKE_RESULT:        &str = "invoke.result";
     /// Bulk-invoke signal. The sender emits this kind to trigger a batch operation
@@ -785,7 +785,7 @@ pub mod signal_kind {
     /// (HTTP, gRPC, shared storage, etc. — not provided by this library).
     ///
     /// Responders reply with [`INVOKE_RESULT`] echoing the ticket in the first 8
-    /// payload bytes so the initiator can correlate via [`GossipAgent::request`](crate::GossipAgent::request).
+    /// payload bytes so the initiator can correlate via `GossipAgent::request`.
     pub const INVOKE_BULK:          &str = "invoke.bulk";
     /// A contract has become available at `sender`.
     pub const CONTRACT_AVAILABLE:   &str = "contract.available";
@@ -806,8 +806,8 @@ pub mod signal_kind {
     pub const BOUNDARY_TRANSPARENT: &str = "boundary.transparent";
     /// Generic RPC reply. The correlation nonce in the first 8 bytes of the
     /// originating request payload is echoed at the start of this payload.
-    /// Use [`GossipAgent::rpc_call`](crate::GossipAgent::rpc_call) /
-    /// [`GossipAgent::rpc_respond`](crate::GossipAgent::rpc_respond) to handle
+    /// Use `GossipAgent::rpc_call` /
+    /// `GossipAgent::rpc_respond` to handle
     /// the nonce automatically.
     pub const RPC_RESULT: &str = "rpc.result";
     /// Reply to an [`INVOKE_BULK`] call. Same nonce-prefix convention as
@@ -824,7 +824,7 @@ pub mod signal_kind {
 
     /// Agent state transition notification.
     /// Payload: `{"node": "<id>", "from": "<state>", "to": "<state>"}`.
-    /// Emitted by [`AgentStateMachine::transition`](crate::AgentStateMachine::transition)
+    /// Emitted by `AgentStateMachine::transition`
     /// after every committed transition.
     pub const AGENT_STATE: &str = "agent.state";
 
@@ -854,9 +854,9 @@ pub mod signal_kind {
 pub mod kv_ns {
     /// Pheromone trail namespace (library-internal — do not write from application code).
     ///
-    /// Key: `sys/load/{node_id}/{kind}`. Value: bincode-encoded [`LoadState`](crate::signal::LoadState).
+    /// Key: `sys/load/{node_id}/{kind}`. Value: bincode-encoded `LoadState`.
     ///
-    /// Written automatically by [`GossipAgent::manage_opacity`](crate::GossipAgent::manage_opacity)
+    /// Written automatically by `GossipAgent::manage_opacity`
     /// on every `BOUNDARY_OPAQUE` transition; tombstoned on `BOUNDARY_TRANSPARENT`.
     /// Readers discard entries where `now_ms − written_at_ms` exceeds their evaporation window
     /// (no coordination needed). Graceful shutdown tombstones `sys/load/{node_id}/{kind}`
@@ -868,11 +868,11 @@ pub mod kv_ns {
     pub const GROUP: &str = "grp/";
 
     /// Advertised-capability namespace (optional persistence via
-    /// [`GossipAgent::advertise_persistent`](crate::GossipAgent::advertise_persistent)).
+    /// `GossipAgent::advertise_persistent`).
     ///
     /// Key: `svc/{kind}/{node_id}`. Value: the payload bytes from the most recent
     /// advertise tick. Tombstoned automatically when the returned
-    /// [`AdvertiseHandle`](crate::signal::AdvertiseHandle) is dropped or the agent shuts down.
+    /// `AdvertiseHandle` is dropped or the agent shuts down.
     /// Late joiners can call `scan_prefix(kv_ns::ADVERTISE)` to find current capabilities
     /// without waiting for the next advertise tick.
     pub const ADVERTISE: &str = "svc/";
@@ -891,8 +891,8 @@ pub mod kv_ns {
     /// `sender_node_id`. Written by the connection handler on every admitted signal
     /// delivery; anti-entropy synced to peers so the evidence survives process restarts.
     ///
-    /// Use [`GossipAgent::quorum_persistent`] to query the count of distinct senders
-    /// within a time window. Prefer [`GossipAgent::quorum`] (in-memory) for low-latency
+    /// Use `GossipAgent::quorum_persistent` to query the count of distinct senders
+    /// within a time window. Prefer `GossipAgent::quorum` (in-memory) for low-latency
     /// queries — `quorum_persistent` is only needed when quorum evidence must survive
     /// crashes or restarts.
     pub const QUORUM: &str = "sys/quorum/";
@@ -900,22 +900,22 @@ pub mod kv_ns {
     /// Ordered durable log namespace.
     ///
     /// Key: `log/{stream}/{hlc:016x}`. The 16-char zero-padded hex HLC ensures
-    /// lexicographic order equals time order. Written by [`GossipAgent::append`];
-    /// compacted by [`GossipAgent::compact_log`].
+    /// lexicographic order equals time order. Written by `GossipAgent::append`;
+    /// compacted by `GossipAgent::compact_log`.
     pub const LOG: &str = "log/";
 
     /// Consumer group offset cursors.
     ///
     /// Key: `clog/{stream}/{group}/offset`. Value: 16-char hex HLC of the last
-    /// processed entry. Written by [`GossipAgent::subscribe_log_group`] after each
+    /// processed entry. Written by `GossipAgent::subscribe_log_group` after each
     /// entry is successfully delivered.
     pub const CONSUMER_LOG: &str = "clog/";
 
     /// Distributed lock state.
     ///
     /// Key: `lock/{name}`. Value: JSON `{"holder":"ip:port","token":u64,"expires_ms":u64}`.
-    /// Written by [`GossipAgent::distributed_lock`]; tombstoned when the returned
-    /// [`LockGuard`](crate::LockGuard) is dropped.
+    /// Written by `GossipAgent::distributed_lock`; tombstoned when the returned
+    /// `LockGuard` is dropped.
     pub const LOCK: &str = "lock/";
 
     /// Prompt template namespace.
@@ -955,7 +955,7 @@ impl Ord for PendingSignal {
 /// discarding entries at or below the current watermark (already delivered).
 /// `flush_expired` delivers signals that have been held longer than `max_hold`
 /// or when a buffer exceeds `max_depth`, preventing head-of-line blocking.
-pub(crate) struct SignalReorderBuffer {
+pub struct SignalReorderBuffer {
     pending:    StdHashMap<(NodeId, Arc<str>), BinaryHeap<Reverse<PendingSignal>>>,
     watermarks: StdHashMap<(NodeId, Arc<str>), u64>,
     max_hold:   Duration,
@@ -963,7 +963,7 @@ pub(crate) struct SignalReorderBuffer {
 }
 
 impl SignalReorderBuffer {
-    pub(crate) fn new(max_hold: Duration, max_depth: usize) -> Self {
+    pub fn new(max_hold: Duration, max_depth: usize) -> Self {
         Self {
             pending:    StdHashMap::new(),
             watermarks: StdHashMap::new(),
@@ -975,7 +975,7 @@ impl SignalReorderBuffer {
     /// Ingests a signal with its HLC emission timestamp. Returns signals ready
     /// to deliver in ascending HLC order. Signals at or below the watermark
     /// (already delivered) are silently discarded.
-    pub(crate) fn ingest(&mut self, hlc_seq: u64, signal: Signal) -> Vec<Signal> {
+    pub fn ingest(&mut self, hlc_seq: u64, signal: Signal) -> Vec<Signal> {
         let key = (signal.sender.clone(), Arc::clone(&signal.kind));
         if hlc_seq <= self.watermarks.get(&key).copied().unwrap_or(0) {
             return vec![];
@@ -987,7 +987,7 @@ impl SignalReorderBuffer {
 
     /// Delivers any signals older than `max_hold` or in buffers deeper than
     /// `max_depth`. Call on each receive-loop iteration to bound latency.
-    pub(crate) fn flush_expired(&mut self) -> Vec<Signal> {
+    pub fn flush_expired(&mut self) -> Vec<Signal> {
         let keys: Vec<_> = self.pending.keys().cloned().collect();
         let mut out = Vec::new();
         for key in keys { out.extend(self.drain(&key, true)); }

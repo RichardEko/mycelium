@@ -11,12 +11,28 @@ use std::sync::{
 use tokio::sync::watch;
 use tracing::warn;
 
+/// Core-side observer of quorum-ack evidence for a key — the Layer-I hook for the
+/// consistency overlay. `apply_and_notify` calls [`observe`](QuorumObserver::observe)
+/// on each registered observer for every incoming update on the tracked key. The
+/// upper `kv_quorum` layer implements this on its `QuorumAckTracker`; core holds only
+/// the trait object, never the concrete type ("consistency as a service": the overlay
+/// lives above; core provides the notification mechanism, not the ack-counting law).
+pub trait QuorumObserver: Send + Sync {
+    /// Record that `sender` (an `id_hash`) confirmed the tracked key at `timestamp`.
+    fn observe(&self, sender: u64, timestamp: u64);
+}
+
+/// Copy-on-write list of quorum observers for one key, stored in
+/// [`KvState::quorum_trackers`]. `kv_quorum`'s install/remove replace it atomically
+/// via `compute`, so `apply_and_notify` reads a coherent snapshot in one lookup.
+pub type QuorumTrackerList = Arc<Vec<Arc<dyn QuorumObserver>>>;
+
 /// Layer II watch-channel map. Maps a key to a `watch::Sender` that fires whenever
 /// the key's value changes in the store. Written by `GossipAgent::subscribe` (Layer II)
 /// and notified by `apply_and_notify` (Layer I/II bridge). Co-located in `KvState`
 /// because subscriptions share KvState's lifetime and are always distributed together —
 /// separating them would require threading a second Arc through every context struct.
-pub(crate) type KvSubscriptions = Arc<papaya::HashMap<Arc<str>, watch::Sender<Option<Bytes>>>>;
+pub type KvSubscriptions = Arc<papaya::HashMap<Arc<str>, watch::Sender<Option<Bytes>>>>;
 
 /// Pure Layer I storage bundle — everything the gossip KV store needs without
 /// any Layer II signalling concerns.
@@ -25,7 +41,7 @@ pub(crate) type KvSubscriptions = Arc<papaya::HashMap<Arc<str>, watch::Sender<Op
 /// All existing callers reach these fields through `KvState`'s `Deref`
 /// implementation, so no call sites need to change when the two concerns are
 /// discussed separately.
-pub(crate) struct KvStore {
+pub struct KvStore {
     pub store:             Arc<papaya::HashMap<Arc<str>, StoreEntry>>,
     pub prefix_index:      Arc<PrefixIndex>,
     /// Striped locks serialising secondary-index reconciliation per key hash.
@@ -74,7 +90,7 @@ pub(crate) struct KvStore {
     /// `apply_and_notify` calls `observe(sender, timestamp)` on every tracker
     /// in the list for every incoming update. Mutate only via
     /// `kv_quorum::{install_tracker, remove_tracker}`.
-    pub quorum_trackers: Arc<papaya::HashMap<Arc<str>, crate::agent::kv_quorum::TrackerList>>,
+    pub quorum_trackers: Arc<papaya::HashMap<Arc<str>, QuorumTrackerList>>,
 }
 
 /// Bundled KV-path state shared across connection handlers, consensus tasks,
@@ -99,7 +115,7 @@ pub(crate) struct KvStore {
 /// pin, do the synchronous work, drop the guard, then await.  Reviewers: if
 /// you add an `await` inside a block that already holds a `pin()` guard,
 /// extract the result first and drop the guard before awaiting.
-pub(crate) struct KvState {
+pub struct KvState {
     /// Layer I storage (accessed via Deref).
     pub kv_store: KvStore,
     /// Layer II watch channels. See [`KvSubscriptions`] for design notes.
@@ -126,7 +142,7 @@ impl KvState {
     ///
     /// All sub-Arcs are created here so callers own a single `Arc<KvState>` rather
     /// than building five independent Arcs and threading them separately.
-    pub(crate) fn new(max_store_entries: usize) -> Arc<Self> {
+    pub fn new(max_store_entries: usize) -> Arc<Self> {
         Arc::new(Self {
             kv_store: KvStore {
                 store:             Arc::new(papaya::HashMap::new()),
@@ -159,13 +175,13 @@ impl KvState {
 /// after a winning store CAS, the writer re-reads the stored entry and sets
 /// index membership to match it, so concurrent writers to the same key cannot
 /// leave the index diverged from the store (M2 Run-18 finding). Allows
-/// [`GossipAgent::scan_prefix`] to skip the full store and iterate only the
+/// `GossipAgent::scan_prefix` to skip the full store and iterate only the
 /// matching bucket — O(|bucket|) instead of O(|store|).
-pub(crate) type PrefixIndex = papaya::HashMap<Arc<str>, Arc<papaya::HashMap<Arc<str>, ()>>>;
+pub type PrefixIndex = papaya::HashMap<Arc<str>, Arc<papaya::HashMap<Arc<str>, ()>>>;
 
 /// Stripe count for [`KvStore::index_stripes`]. Power of two; selected by
 /// key hash, so contention is per-colliding-key, not global.
-pub(crate) const INDEX_STRIPES: usize = 64;
+pub const INDEX_STRIPES: usize = 64;
 
 #[inline]
 fn prefix_seg(key: &str) -> Option<&str> {
@@ -173,7 +189,7 @@ fn prefix_seg(key: &str) -> Option<&str> {
 }
 
 /// Inserts `key` into the `seg` bucket, creating the bucket if absent.
-pub(crate) fn prefix_index_insert(index: &PrefixIndex, key: Arc<str>) {
+pub fn prefix_index_insert(index: &PrefixIndex, key: Arc<str>) {
     let Some(seg) = prefix_seg(&key) else { return };
     let guard = index.pin();
     if let Some(bucket) = guard.get(seg) {
@@ -195,7 +211,7 @@ pub(crate) fn prefix_index_insert(index: &PrefixIndex, key: Arc<str>) {
 }
 
 /// Removes `key` from the `seg` bucket (no-op if absent).
-pub(crate) fn prefix_index_remove(index: &PrefixIndex, key: &Arc<str>) {
+pub fn prefix_index_remove(index: &PrefixIndex, key: &Arc<str>) {
     let Some(seg) = prefix_seg(key) else { return };
     if let Some(bucket) = index.pin().get(seg) {
         bucket.pin().remove(key.as_ref());
@@ -205,7 +221,7 @@ pub(crate) fn prefix_index_remove(index: &PrefixIndex, key: &Arc<str>) {
 /// Extracts the cap-ns identity key from a full `cap/` or `req/` store key.
 /// `cap/{node}/{ns}/{name}` → `"cap/{ns}/{name}"` (and similarly for `req/`).
 /// Returns `None` for keys with a different prefix or malformed shape.
-pub(crate) fn cap_ns_index_key(key: &str) -> Option<Arc<str>> {
+pub fn cap_ns_index_key(key: &str) -> Option<Arc<str>> {
     let mut parts = key.splitn(4, '/');
     let seg  = parts.next()?;
     if seg != "cap" && seg != "req" { return None; }
@@ -216,7 +232,7 @@ pub(crate) fn cap_ns_index_key(key: &str) -> Option<Arc<str>> {
 }
 
 /// Inserts `inner_key` into the `outer` bucket of `index`, creating the bucket if absent.
-pub(crate) fn index_bucket_insert(index: &PrefixIndex, outer: Arc<str>, inner: Arc<str>) {
+pub fn index_bucket_insert(index: &PrefixIndex, outer: Arc<str>, inner: Arc<str>) {
     let guard = index.pin();
     if let Some(bucket) = guard.get(outer.as_ref()) {
         bucket.pin().insert(inner, ());
@@ -236,7 +252,7 @@ pub(crate) fn index_bucket_insert(index: &PrefixIndex, outer: Arc<str>, inner: A
 }
 
 /// Removes `inner_key` from the `outer` bucket (no-op if absent).
-pub(crate) fn index_bucket_remove(index: &PrefixIndex, outer: &str, inner: &str) {
+pub fn index_bucket_remove(index: &PrefixIndex, outer: &str, inner: &str) {
     if let Some(bucket) = index.pin().get(outer) {
         bucket.pin().remove(inner);
     }
@@ -251,7 +267,7 @@ fn key_pool() -> &'static papaya::HashMap<Arc<str>, Arc<str>> {
 /// Returns the current number of entries in the intern pool.
 /// Zero if `intern_keys = false` and no key has ever been interned.
 /// Returns the current number of entries in the intern pool.
-pub(crate) fn intern_pool_len() -> usize {
+pub fn intern_pool_len() -> usize {
     KEY_POOL.get().map_or(0, |p| p.len())
 }
 
@@ -263,7 +279,7 @@ pub(crate) fn intern_pool_len() -> usize {
 ///
 /// Called from the GC task when `intern_max_keys > 0` and `pool_len > intern_max_keys`,
 /// allowing the pool to reclaim unused keys rather than simply refusing new inserts.
-pub(crate) fn shrink_intern_pool(target: usize) {
+pub fn shrink_intern_pool(target: usize) {
     let pool = key_pool();
     if pool.len() <= target { return; }
     let guard = pool.pin();
@@ -293,7 +309,7 @@ pub(crate) fn shrink_intern_pool(target: usize) {
 /// `max_keys`: when > 0, new keys are not inserted once the pool reaches that size;
 /// the caller receives its own `Arc<str>` clone instead. Keys already in the pool
 /// at the time the cap is hit continue to be shared. Set `max_keys = 0` for no cap.
-pub(crate) fn intern_key(key: Arc<str>, max_keys: usize) -> Arc<str> {
+pub fn intern_key(key: Arc<str>, max_keys: usize) -> Arc<str> {
     let pool = key_pool();
     let guard = pool.pin();
     // Fast path: already interned.
@@ -318,9 +334,9 @@ pub(crate) fn intern_key(key: Arc<str>, max_keys: usize) -> Arc<str> {
 /// A store entry with timestamp for LWW conflict resolution.
 /// `data: None` = tombstone; kept until it ages out to prevent key resurrection.
 #[derive(Clone, Debug)]
-pub(crate) struct StoreEntry {
-    pub(crate) data: Option<Bytes>,
-    pub(crate) timestamp: u64,
+pub struct StoreEntry {
+    pub data: Option<Bytes>,
+    pub timestamp: u64,
 }
 
 /// Fixed-seed hash state used by both `store_hash` and `apply_and_notify` so the
@@ -335,7 +351,7 @@ fn hash_seed() -> &'static RandomState {
 /// The accumulator is maintained by `apply_and_notify` on every live write or
 /// tombstone. Use this in production; `store_hash` (full scan) is kept for tests
 /// and one-shot re-seeding after a snapshot import.
-pub(crate) fn store_hash_acc(acc: &AtomicU64) -> u64 {
+pub fn store_hash_acc(acc: &AtomicU64) -> u64 {
     acc.load(Ordering::Relaxed)
 }
 
@@ -349,9 +365,10 @@ pub(crate) fn store_hash_acc(acc: &AtomicU64) -> u64 {
 /// In practice a non-empty store almost never XORs to 0 (probability < 1 in 2^64).
 ///
 /// Used in tests to seed a fresh accumulator and verify accumulator correctness.
-/// Production code uses [`store_hash_acc`] instead.
-#[cfg(test)]
-pub(crate) fn store_hash(store: &papaya::HashMap<Arc<str>, StoreEntry>) -> u64 {
+/// Production code uses [`store_hash_acc`] instead. `test-support` exposes it to the
+/// full crate's tests across the crate boundary.
+#[cfg(any(test, feature = "test-support"))]
+pub fn store_hash(store: &papaya::HashMap<Arc<str>, StoreEntry>) -> u64 {
     let rs = hash_seed();
     let guard = store.pin();
     let mut combined: u64 = 0;
@@ -394,7 +411,7 @@ fn lww_wins(incoming_ts: u64, incoming_tombstone: bool, incoming_val: &Option<By
 /// Conflict resolution is [`lww_wins`] — see its doc for the equal-timestamp rules.
 /// Uses papaya `compute` for a single atomic CAS — no separate read then write.
 #[cfg(test)]
-pub(crate) fn apply_to_store(store: &papaya::HashMap<Arc<str>, StoreEntry>, update: &GossipUpdate) -> bool {
+pub fn apply_to_store(store: &papaya::HashMap<Arc<str>, StoreEntry>, update: &GossipUpdate) -> bool {
     let ts          = update.timestamp;
     let is_tombstone = update.is_tombstone;
     // Clone value once outside the callback (O(1) Bytes refcount bump).
@@ -436,7 +453,7 @@ pub(crate) fn apply_to_store(store: &papaya::HashMap<Arc<str>, StoreEntry>, upda
 /// [`crate::framing::make_gossip_update`], which is the canonical write-side
 /// factory for every higher layer — see that function's doc comment for the
 /// placement rationale and the layers it serves.
-pub(crate) fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
+pub fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
     if kv.max_store_entries > 0 && !update.is_tombstone && kv.store.len() >= kv.max_store_entries {
         warn!(
             key = %update.key,
@@ -625,7 +642,7 @@ pub(crate) fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
 ///
 /// Exposed as a free function so modules that hold only `Arc<KvState>` (e.g. HTTP
 /// handlers) can perform prefix scans without going through `GossipAgent`.
-pub(crate) fn scan_kv_prefix(kv: &KvState, prefix: &str) -> Vec<(Arc<str>, Bytes)> {
+pub fn scan_kv_prefix(kv: &KvState, prefix: &str) -> Vec<(Arc<str>, Bytes)> {
     let seg         = prefix.find('/').map_or(prefix, |i| &prefix[..i]);
     let store_guard = kv.store.pin();
     let idx_guard   = kv.prefix_index.pin();
@@ -655,7 +672,7 @@ pub(crate) fn scan_kv_prefix(kv: &KvState, prefix: &str) -> Vec<(Arc<str>, Bytes
 /// comparison must unpack via [`crate::hlc::physical_ms`]. Comparing the packed
 /// value directly never fires (packed ≈ 65 536 × ms), which silently disables
 /// tombstone GC (M2 Run-21 finding).
-pub(crate) fn sweep_stale_tombstones(
+pub fn sweep_stale_tombstones(
     store: &papaya::HashMap<Arc<str>, StoreEntry>,
     cutoff_wall_ms: u64,
 ) -> usize {
@@ -931,44 +948,9 @@ mod tests {
         assert!(contended > 100_000.0, "contended throughput {contended:.0}/s below floor");
     }
 
-    /// M2 Run-18 race-family sweep: concurrent `set_with_min_acks` callers on
-    /// the SAME key must coexist. The previous single-slot tracker map let the
-    /// second caller overwrite the first tracker, and the first caller's
-    /// unconditional cleanup then deleted the second's — both could time out
-    /// spuriously despite the acks arriving.
-    #[test]
-    fn concurrent_quorum_trackers_coexist_and_remove_only_self() {
-        use crate::agent::kv_quorum::{install_tracker, remove_tracker, QuorumAckTracker};
-        let kv = KvState::new(0);
-        let key: Arc<str> = Arc::from("q/k");
-        let (t1, rx1) = QuorumAckTracker::new(100, 1);
-        let (t2, rx2) = QuorumAckTracker::new(100, 1);
-        install_tracker(&kv.quorum_trackers, Arc::clone(&key), &t1);
-        install_tracker(&kv.quorum_trackers, Arc::clone(&key), &t2);
-
-        // One inbound peer update acks BOTH in-flight callers.
-        apply_and_notify(&kv, &GossipUpdate {
-            sender: 7, key: Arc::clone(&key), value: Bytes::from_static(b"v1"),
-            timestamp: 150, nonce: 1, ttl: 1, is_tombstone: false,
-        });
-        assert_eq!(*rx1.borrow(), 1, "first caller sees the ack");
-        assert_eq!(*rx2.borrow(), 1, "second caller sees the ack");
-
-        // First caller completes: removes ONLY its own tracker.
-        remove_tracker(&kv.quorum_trackers, &key, &t1);
-        apply_and_notify(&kv, &GossipUpdate {
-            sender: 8, key: Arc::clone(&key), value: Bytes::from_static(b"v2"),
-            timestamp: 151, nonce: 2, ttl: 1, is_tombstone: false,
-        });
-        assert_eq!(*rx2.borrow(), 2, "surviving caller keeps receiving acks");
-        assert_eq!(*rx1.borrow(), 1, "removed tracker is no longer observed");
-
-        remove_tracker(&kv.quorum_trackers, &key, &t2);
-        assert!(
-            kv.quorum_trackers.pin().get(&key).is_none(),
-            "entry drops when the last tracker is removed"
-        );
-    }
+    // `concurrent_quorum_trackers_coexist_and_remove_only_self` moved to the upper
+    // crate (`agent::kv_quorum` tests) with the quorum overlay — it exercises
+    // `install_tracker`/`remove_tracker`, which live there (ROADMAP §v2.0 M1 Stage 3b).
 
     /// Concurrent-stress coverage for `apply_and_notify` beyond the single
     /// tombstone/insert pair (M2 Run-18 improvement target #2): 8 threads of

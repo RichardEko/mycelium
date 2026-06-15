@@ -104,6 +104,13 @@ impl GossipAgent {
                     Err(e) => warn!("persistence: replay failed: {e}"),
                 }
 
+                // Inject the Layer-II opacity check the snapshot loop uses to defer
+                // (core takes only the closure; it stays unaware of `sys/load/`).
+                let defer_snapshot: Option<crate::persistence::SnapshotDeferHook> = {
+                    let kv2 = Arc::clone(&kv_state);
+                    let nid2 = node_id.clone();
+                    Some(Arc::new(move || crate::agent::is_self_opaque(&kv2, &nid2)))
+                };
                 let handle = crate::persistence::spawn_wal_writer(
                     dir.clone(),
                     sync_mode,
@@ -114,6 +121,7 @@ impl GossipAgent {
                     Arc::clone(&hlc),
                     default_ttl,
                     cipher,
+                    defer_snapshot,
                 );
                 let handle = Arc::new(handle);
                 // Compact immediately so next restart has a bounded replay window.
@@ -214,7 +222,7 @@ impl GossipAgent {
         }
 
         let conn = ConnContext {
-            task_ctx:        Arc::clone(&self.task_ctx),
+            task_ctx:        Arc::clone(&self.task_ctx.core),
             peers:           Arc::clone(&self.peers),
             shutdown:        Arc::clone(&self.shutdown_tx),
             peer_writers:    Arc::clone(&self.peer_writers),

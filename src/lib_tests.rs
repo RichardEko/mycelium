@@ -87,6 +87,7 @@ fn spawn_handler(
     use crate::connection::handle_connection;
     use crate::signal::{Boundary, SignalHandlers};
     use crate::agent::{TaskCtx, BulkTransport};
+    use mycelium_core::CoreCtx;
     use parking_lot::RwLock;
     let node_id = NodeId::new("127.0.0.1", 0).unwrap();
     let (shutdown_tx, _) = watch::channel(false);
@@ -116,7 +117,7 @@ fn spawn_handler(
         subscriptions: Arc::new(papaya::HashMap::new()),
     });
     let (shutdown_tx_inner, _) = tokio::sync::watch::channel(false);
-    let task_ctx = Arc::new(TaskCtx {
+    let core_ctx = Arc::new(CoreCtx {
         node_id: node_id.clone(),
         seen,
         hlc: Arc::new(crate::hlc::Hlc::new()),
@@ -126,29 +127,33 @@ fn spawn_handler(
         default_ttl: max_ttl,
         kv_state,
         wal: std::sync::OnceLock::new(),
+        sys_namespace_violations: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        tls: std::sync::OnceLock::new(),
+        peer_keys: Arc::new(papaya::HashMap::new()),
+        peers: Arc::new(papaya::HashMap::new()),
+        reorder_buf: None,
+        reply_interceptor: None,
+        shutdown_tx: Arc::new(shutdown_tx_inner),
+        task_handles: Arc::new(std::sync::Mutex::new(tokio::task::JoinSet::new())),
+        config: Arc::new(crate::config::GossipConfig::default()),
+    });
+    let task_ctx = Arc::new(TaskCtx {
+        core: core_ctx,
         caps_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         bulk_transport: Arc::new(BulkTransport::new(0, Duration::from_secs(5), 64)),
         rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         commit_conflicts: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        sys_namespace_violations: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         #[cfg(feature = "compliance")]
         audit_chain: Arc::new(std::sync::Mutex::new(crate::agent::audit::AuditChainState::new())),
-        tls: std::sync::OnceLock::new(),
-        peer_keys: Arc::new(papaya::HashMap::new()),
-        peers: Arc::new(papaya::HashMap::new()),
         filter_opacity_registry: Arc::new(crate::agent::FilterOpacityRegistry::new()),
-        reorder_buf: None,
-        shutdown_tx: Arc::new(shutdown_tx_inner),
-        task_handles: Arc::new(std::sync::Mutex::new(tokio::task::JoinSet::new())),
         group_roster_cache: Arc::new(papaya::HashMap::new()),
-        config: Arc::new(crate::config::GossipConfig::default()),
         #[cfg(feature = "llm")]
         llm_skills: std::sync::Arc::new(papaya::HashMap::new()),
         #[cfg(feature = "llm")]
         llm_dispatch_spawned: std::sync::atomic::AtomicBool::new(false),
     });
     let ctx = ConnContext {
-        task_ctx,
+        task_ctx: Arc::clone(&task_ctx.core),
         peers,
         shutdown: Arc::clone(&shutdown_tx),
         peer_writers: Arc::new(papaya::HashMap::new()),
@@ -501,6 +506,7 @@ async fn test_subscribe_notified_via_gossip() {
     {
         use crate::signal::{Boundary, SignalHandlers};
         use crate::agent::{TaskCtx, BulkTransport};
+    use mycelium_core::CoreCtx;
         use parking_lot::RwLock;
         let node_id = NodeId::new("127.0.0.1", 0).unwrap();
         let kv_state = Arc::new(KvState {
@@ -523,7 +529,7 @@ async fn test_subscribe_notified_via_gossip() {
             subscriptions: subs,
         });
         let (shutdown_tx_inner2, _) = tokio::sync::watch::channel(false);
-        let task_ctx = Arc::new(TaskCtx {
+        let core_ctx = Arc::new(CoreCtx {
             node_id: node_id.clone(),
             seen: Arc::new(ShardedSeen::new(N_GOSSIP_SHARDS)),
             hlc: Arc::new(crate::hlc::Hlc::new()),
@@ -533,29 +539,33 @@ async fn test_subscribe_notified_via_gossip() {
             default_ttl: 5,
             kv_state,
             wal: std::sync::OnceLock::new(),
+            sys_namespace_violations: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            tls: std::sync::OnceLock::new(),
+            peer_keys: Arc::new(papaya::HashMap::new()),
+            peers: Arc::new(papaya::HashMap::new()),
+            reorder_buf: None,
+            reply_interceptor: None,
+            shutdown_tx: Arc::new(shutdown_tx_inner2),
+            task_handles: Arc::new(std::sync::Mutex::new(tokio::task::JoinSet::new())),
+            config: Arc::new(crate::config::GossipConfig::default()),
+        });
+        let task_ctx = Arc::new(TaskCtx {
+            core: core_ctx,
             caps_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             bulk_transport: Arc::new(BulkTransport::new(0, Duration::from_secs(5), 64)),
             rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             commit_conflicts: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            sys_namespace_violations: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             #[cfg(feature = "compliance")]
             audit_chain: Arc::new(std::sync::Mutex::new(crate::agent::audit::AuditChainState::new())),
-            tls: std::sync::OnceLock::new(),
-            peer_keys: Arc::new(papaya::HashMap::new()),
-            peers: Arc::new(papaya::HashMap::new()),
             filter_opacity_registry: Arc::new(crate::agent::FilterOpacityRegistry::new()),
-            reorder_buf: None,
-            shutdown_tx: Arc::new(shutdown_tx_inner2),
-            task_handles: Arc::new(std::sync::Mutex::new(tokio::task::JoinSet::new())),
             group_roster_cache: Arc::new(papaya::HashMap::new()),
-            config: Arc::new(crate::config::GossipConfig::default()),
             #[cfg(feature = "llm")]
             llm_skills: std::sync::Arc::new(papaya::HashMap::new()),
             #[cfg(feature = "llm")]
             llm_dispatch_spawned: std::sync::atomic::AtomicBool::new(false),
         });
         let ctx = ConnContext {
-            task_ctx,
+            task_ctx: Arc::clone(&task_ctx.core),
             peers: Arc::new(papaya::HashMap::new()),
             shutdown: shutdown_tx,
             peer_writers: Arc::new(papaya::HashMap::new()),
@@ -2575,11 +2585,11 @@ async fn probe_shutdown_drains_tasks_and_releases_port() {
 #[test]
 fn layer1_modules_do_not_reference_higher_layers() {
     const LAYER1: &[(&str, &str)] = &[
-        ("store.rs",   include_str!("store.rs")),
-        ("framing.rs", include_str!("framing.rs")),
-        ("writer.rs",  include_str!("writer.rs")),
-        ("seen.rs",    include_str!("seen.rs")),
-        ("hlc.rs",     include_str!("hlc.rs")),
+        ("store.rs",   include_str!("../mycelium-core/src/store.rs")),
+        ("framing.rs", include_str!("../mycelium-core/src/framing.rs")),
+        ("writer.rs",  include_str!("../mycelium-core/src/writer.rs")),
+        ("seen.rs",    include_str!("../mycelium-core/src/seen.rs")),
+        ("hlc.rs",     include_str!("../mycelium-core/src/hlc.rs")),
     ];
     const FORBIDDEN: &[&str] = &[
         "crate::consensus",

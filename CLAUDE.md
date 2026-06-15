@@ -92,7 +92,7 @@ These are real work items. Anyone resuming should read
 
 ## Architecture Constraints
 
-### Layer I/II entanglement (known, v2 roadmap item)
+### Layer I/II entanglement (resolved by the `mycelium-core` split — v2 M1)
 
 `KvState` co-locates KV subscriptions with gossip storage. `apply_and_notify` writes
 to both the store and signals `SignalHandlers` on every inbound frame. The signal mesh
@@ -101,14 +101,16 @@ cannot be disabled without losing `subscribe` / `subscribe_prefix` functionality
 Users who only need KV semantics can simply never call `MeshHandle` methods — zero
 overhead when no signal handlers are registered.
 
-Planned for v2 (scope decided 2026-06-13 — ROADMAP v2.0 Milestone 1): extract
-`mycelium-core` = **Layers I + II** (gossip transport + KV + signal/boundary mesh)
-from `mycelium` (full substrate: consensus, capabilities, services, gateway, tls),
-cut at the II↔III seam. The bridge above is kept as sanctioned internal cohesion —
-`KvStore` holds no Layer II references, the coupling is only the documented
-`KvState` / `apply_and_notify` crossing points — so the split draws the crate
-boundary *around* the entanglement rather than severing it; Milestone 1 therefore
-absorbs this item.
+**Resolved by v2 M1 (`mycelium-core` workspace split):** Layers I + II (gossip transport
++ KV + signal/boundary mesh) now live in the [`mycelium-core`](mycelium-core/) crate, cut at
+the II↔III seam; the full `mycelium` crate (consensus, capabilities, services, gateway, tls)
+depends on it. The bridge is kept as sanctioned internal cohesion *within core* — `KvStore`
+holds no Layer II references; the coupling is only the documented `KvState` /
+`apply_and_notify` crossing points — so the split draws the crate boundary *around* the
+entanglement rather than severing it. The crate boundary now makes the inverted-dependency
+invariant (a substrate that is never aware of the layers above) a **compile-time guarantee**:
+`mycelium-core` cannot reference `mycelium` (it would be a Cargo cycle). Execution record:
+[`docs/plans/v2-m1-mycelium-core.md`](docs/plans/v2-m1-mycelium-core.md).
 
 ### Entry-volume scale test (orthogonal to node-count)
 
@@ -242,27 +244,29 @@ Three related facts about the consensus layer's relationship to the substrate:
    fails to vote; single-node tests commit via self-quorum and never notice).
    Keep it this way when refactoring.
 
-### TaskCtx — the shared infrastructure bundle (known God Object)
+### TaskCtx / CoreCtx — the shared infrastructure bundle (God Object split — v2 M1)
 
-`src/agent/mod.rs::TaskCtx` is a 22-field struct held in a single `Arc` and cloned into
-every background task, typed handle, and connection handler. It exists to break the
-otherwise-circular reference between `GossipAgent` (which holds the task `JoinSet`) and
-the tasks themselves.
+The former 22-field `TaskCtx` God Object has been split (v2 M1). The Layers I + II
+infrastructure now lives in **`mycelium_core::CoreCtx`** (`mycelium-core/src/context.rs`);
+`src/agent/mod.rs::TaskCtx` holds `core: Arc<CoreCtx>` plus the Layer III+ fields and
+`Deref`s to `CoreCtx`, so the ~380 existing `ctx.<core-field>` access sites are unchanged.
+Both are held in a single `Arc`, cloned into every background task, typed handle, and
+connection handler — breaking the otherwise-circular reference between `GossipAgent` (which
+holds the task `JoinSet`) and the tasks themselves.
 
-**Field groups** (section comments are in the struct body):
-| Group | Key fields |
+**Field split:**
+| → `CoreCtx` (Layers I+II, in `mycelium-core`) | → `TaskCtx` (Layer III+, in `mycelium`) |
 |---|---|
-| Identity + config | `node_id`, `config`, `default_ttl` |
-| Layer I — KV | `seen`, `hlc`, `gossip_txs`, `kv_state`, `wal` |
-| Layer II — Signals | `signal_boundary`, `signal_handlers`, `reorder_buf` |
-| Capability subsystem | `caps_advertised`, `filter_opacity_registry`, `group_roster_cache` |
-| Service layer | `bulk_transport`, `rpc_pending` |
-| Security | `tls`, `peer_keys` |
-| Networking + Lifecycle | `peers`, `shutdown_tx`, `task_handles` |
+| `node_id`, `config`, `default_ttl` | `caps_advertised`, `filter_opacity_registry`, `group_roster_cache` |
+| `seen`, `hlc`, `gossip_txs`, `kv_state`, `wal` | `llm_skills`, `llm_dispatch_spawned` (cfg `llm`) |
+| `signal_boundary`, `signal_handlers`, `reorder_buf`, `reply_interceptor` | `bulk_transport`, `rpc_pending` |
+| `tls`, `peer_keys`, `sys_namespace_violations` | `commit_conflicts` |
+| `peers`, `shutdown_tx`, `task_handles` | `audit_chain` (cfg `compliance`) |
 
-The v2 fix is a workspace split: `mycelium-core` (Layers I+II only, with `CoreCtx`) +
-`mycelium` (full substrate). Deferred until there is a real embedding use case that
-needs the core without consensus/capabilities.
+The three core↔upper couplings are mechanism-in-core / agency-above hooks, `None`-safe for
+pure-core embeds: `CoreCtx::reply_interceptor` (RPC/bulk reply claim), the `QuorumObserver`
+trait (quorum-ack notify), and `persistence`'s `SnapshotDeferHook` (opacity-defer). See
+[`docs/plans/v2-m1-mycelium-core.md`](docs/plans/v2-m1-mycelium-core.md).
 
 ### Individual-scope routing (RPC / votes) — forwarding stays unconditional
 
@@ -668,7 +672,15 @@ get found.
 
 ## Working in this repo
 
-- `cargo build --lib`, `cargo test --lib`, `cargo clippy --lib --tests`
+- **Workspace (v2 M1):** the substrate is the `mycelium-core` crate; `mycelium` is the full
+  crate that depends on it. Build/test both: `cargo build`, `cargo test`, `cargo clippy
+  --all-targets` (workspace-wide), or `-p mycelium-core` / `-p mycelium` to scope. The
+  `mycelium-core/tls|metrics|compliance` features are forwarded from `mycelium`'s; its
+  `test-support` feature (enabled via `mycelium`'s dev-dependency) exposes core's
+  `#[cfg(test)]` helpers across the crate boundary.
+- `cargo build --lib`, `cargo test --lib`, `cargo clippy --lib --tests` (the full `mycelium` crate)
+- `cargo build -p mycelium-core` — the embeddable Layers I+II substrate, standalone (≈48 deps
+  vs ≈140 for `mycelium`; no axum/hyper/gateway). The dep-tree win M1 exists for.
 - `cargo build --lib --no-default-features` to verify the gateway-free embedded build
 - `cargo build --lib --features metrics` to include the Prometheus scrape endpoint
 - `cargo build --lib --features a2a` to include the A2A protocol adapter
@@ -678,11 +690,13 @@ get found.
   engineering-complete: WS1 RBAC, WS2 audit, WS3 crown-jewel (feature-free),
   WS4 OIDC SSO, WS5 hot cert rotation all shipped** — see the per-WS sections above
   and [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md).
-- Lib tests at HEAD: **318** default · **323** `tls` · **365** `compliance`
-  (full feature matrix); clippy at 0 warnings on each. The `compliance` delta is the WS1
-  RBAC + WS2 audit + WS4 OIDC + WS5 rotation unit/integration tests; the core `sys/` tripwire
-  and WS3 crown-jewel (data-at-rest + egress) tests are feature-free and in the default count.
-  WS5's retained-key-set verification + multi-key archival live under `tls`.
+- Lib tests at HEAD (totals unchanged by M1 — tests moved with their modules, none lost):
+  **318** default · **323** `tls` · **365**+ `compliance` across the workspace, now split
+  between the two crates — e.g. default = **79** `mycelium-core` + **239** `mycelium`. Clippy
+  `-D warnings` clean on both crates. The `compliance` delta is the WS1 RBAC + WS2 audit + WS4
+  OIDC + WS5 rotation unit/integration tests; the core `sys/` tripwire and WS3 crown-jewel
+  (data-at-rest + egress) tests are feature-free and in the default count. WS5's retained-key-set
+  verification + multi-key archival live under `tls`.
 - Wire version is currently **v11** (`PREV_WIRE_VERSION = 10` — rolling upgrade window open).
   v11 adds `hlc_seq: Option<u64>` to `WireMessage::Signal` for ordered delivery via `emit_ordered()`.
   v10 adds `WireMessage::SignedData` for Ed25519-signed KV writes under the `tls` feature.

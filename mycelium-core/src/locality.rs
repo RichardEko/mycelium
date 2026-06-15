@@ -18,8 +18,8 @@ use std::sync::Arc;
 /// → host, or whatever the deployment chooses to model). An empty path means
 /// "unspecified" and shares zero prefix with any other path.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub(crate) struct LocalityPath {
-    pub(crate) segments: Vec<Arc<str>>,
+pub struct LocalityPath {
+    pub segments: Vec<Arc<str>>,
 }
 
 /// How locality should influence a `resolve` or `signal_wired_via` call.
@@ -44,13 +44,13 @@ pub enum LocalityPreference {
 /// returns `shared_prefix_len(own, other)`. Centralised so call sites don't
 /// re-roll the comparison.
 #[allow(dead_code)] // Phase 6+ callers
-pub(crate) fn score(own: &LocalityPath, other: &LocalityPath) -> usize {
+pub fn score(own: &LocalityPath, other: &LocalityPath) -> usize {
     own.shared_prefix_len(other)
 }
 
 impl LocalityPath {
     /// Builds a path from any iterator of segment names.
-    pub(crate) fn new<I, S>(segments: I) -> Self
+    pub fn new<I, S>(segments: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: Into<Arc<str>>,
@@ -60,13 +60,13 @@ impl LocalityPath {
 
     /// Number of segments — zero means unspecified locality.
     #[allow(dead_code)] // used by Phase 5 locality-aware resolve and Phase 2 gate
-    pub(crate) fn depth(&self) -> usize {
+    pub fn depth(&self) -> usize {
         self.segments.len()
     }
 
     /// Number of leading segments that match `other`. Symmetric.
     /// `["eu","az1","r14"]` vs `["eu","az1","r3"]` → `2`.
-    pub(crate) fn shared_prefix_len(&self, other: &Self) -> usize {
+    pub fn shared_prefix_len(&self, other: &Self) -> usize {
         self.segments
             .iter()
             .zip(other.segments.iter())
@@ -78,20 +78,20 @@ impl LocalityPath {
     /// but reads more naturally in topology-gate code that asks "at what level
     /// did these voters diverge."
     #[allow(dead_code)] // used by Phase 2 evaluate_topology_gate
-    pub(crate) fn divergence_level(&self, other: &Self) -> usize {
+    pub fn divergence_level(&self, other: &Self) -> usize {
         self.shared_prefix_len(other)
     }
 
     /// Segment at `idx`, or `None` if out of bounds.
     #[allow(dead_code)] // used by Phase 2 evaluate_topology_gate
-    pub(crate) fn value_at(&self, idx: usize) -> Option<&Arc<str>> {
+    pub fn value_at(&self, idx: usize) -> Option<&Arc<str>> {
         self.segments.get(idx)
     }
 
     /// Encodes as: little-endian `u16` segment count, then for each segment a
     /// little-endian `u16` UTF-8 byte length followed by the segment bytes.
     /// Compact, version-stable, and avoids pulling bincode into hot KV paths.
-    pub(crate) fn encode(&self) -> Bytes {
+    pub fn encode(&self) -> Bytes {
         let total = 2 + self.segments.iter().map(|s| 2 + s.len()).sum::<usize>();
         let mut out = Vec::with_capacity(total);
         out.extend_from_slice(&(self.segments.len() as u16).to_le_bytes());
@@ -103,7 +103,7 @@ impl LocalityPath {
     }
 
     /// Inverse of [`encode`]. Returns `None` on malformed or truncated input.
-    pub(crate) fn decode(mut bytes: &[u8]) -> Option<Self> {
+    pub fn decode(mut bytes: &[u8]) -> Option<Self> {
         if bytes.len() < 2 { return None; }
         let n = u16::from_le_bytes([bytes[0], bytes[1]]) as usize;
         bytes = &bytes[2..];

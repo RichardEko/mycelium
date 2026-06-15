@@ -12,7 +12,7 @@ use tokio::{
 ///
 /// Both variants are `Unpin`; the `AsyncRead`/`AsyncWrite` impls forward to
 /// the inner type without boxing or vtable indirection.
-pub(crate) enum GossipStream {
+pub enum GossipStream {
     Plain(TcpStream),
     #[cfg(feature = "tls")]
     TlsServer(tokio_rustls::server::TlsStream<TcpStream>),
