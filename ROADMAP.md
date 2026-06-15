@@ -2707,6 +2707,65 @@ admission), the compliant shape is stated inline rather than assumed.
     A2A/NANDA ecosystem partner. Until then the existing A2A edge already covers
     single-marketplace discovery.
 
+### NANDA Registry-Quilt deep dive (2026-06-15) — technique-transfer candidates to weigh before starting M16 / M5
+
+A deeper read of NANDA's *Registry Quilt internals* (Lambe, "Deep Dive Part 4: The
+Registry Quilt — Gossip, CRDTs, and Cross-Signing", alongside arXiv 2507.14263 +
+enterprise paper 2508.03101) confirmed the quilt-patch positioning **and** surfaced four
+concrete techniques worth deciding on *before* M16 (NANDA interop) or M5 (SWIM transport)
+begin. NANDA's Quilt is itself a coordinator-free gossip+CRDT substrate (SWIM membership +
+delta gossip + Merkle anti-entropy + OR-Map CRDT + Ed25519 cross-signing + CT-style
+transparency log) — which both **validates** Mycelium's design convergently (cite as
+prior-art corroboration in Paper 2) and offers borrowable mechanism. The discipline stays:
+NANDA owns inter-domain discovery/identity; Mycelium owns the intra-domain substrate NANDA
+explicitly defers to "layers below" — **never let Mycelium's gossip try to *be* the Quilt**
+(different scope: intra-domain trust-homogeneous sub-second vs cross-org Byzantine 60s SLO).
+
+Ranked by relevance:
+
+1. **Merkle-tree anti-entropy (descend only where hashes differ).** *Net-new; feeds M4/M5
+   and the scale-entries tail metric.* Verified 2026-06-15: the current sweep is **not**
+   Merkle-based — `WireMessage::StateRequest` ships the full `key_timestamps:
+   Vec<(Arc<str>, u64)>` index every probe (O(N) keys on the wire per round) on top of the
+   v7 whole-store `store_hash` fast-path skip. NANDA does Dynamo-style per-shard Merkle
+   reconciliation: exchange Merkle roots, descend only divergent subtrees, fetch only
+   missing leaves. Adopting it bounds bytes-on-wire to O(divergence) instead of O(store
+   size) and directly improves the `make test-scale-entries` anti-entropy sweep-tail. Rides
+   a future `WIRE_VERSION` bump (pairs naturally with the M11 codec succession at v12) since
+   `StateRequest`'s shape changes. **Decision to make before M5:** whether the SWIM rework
+   and the Merkle digest land together (both touch the anti-entropy path).
+
+2. **CT-style transparency log with inclusion proofs for key events.** *Net-new; the single
+   most federation-aligned item; depends on / extends WS5 + WS2.* WS5's retained-key-set
+   rotation accepts a retired key until *explicit* revocation (documented caveat), and the
+   WS2 audit chain is **per-node**. A CT-style append-only log of key/rotation/revocation
+   events with client-checkable inclusion proofs would (a) deliver the "sub-second
+   revocation" property NANDA advertises, (b) close the WS5 "compromise needs explicit
+   revocation" gap, and (c) make a Mycelium domain a trustworthy quilt patch without
+   adopting NANDA's issuer/TRS authority (which Core Principle 1 rules out). Must stay
+   coordinator-free: the log is per-domain and gossip-replicated (a new owned KV namespace +
+   inclusion-proof verification on read), **not** a central CT operator. Strategically this
+   is the precursor that most strengthens M16's self-certified `certification`/`evaluations`
+   credibility.
+
+3. **OR-Map (observed-remove) CRDT for the capability/registry projection specifically.**
+   *Refines M16 Deliverable B; design note, not a rewrite.* NANDA models each AgentRecord as
+   an OR-Map CRDT with vector clocks; Mycelium uses LWW+HLC+tombstones. For `gcap/` /
+   capability advertisements — where concurrent add/remove from many nodes is the norm —
+   observed-remove semantics handle the add/remove race more cleanly than LWW-with-tombstones
+   (no "remove loses to a concurrent re-add it never saw" surprise). **Not** a wholesale
+   replacement of the LWW+HLC substrate (M16 Deliverable B already argues per-entry
+   `SignedData` + LWW is *better-suited* than NANDA's whole-doc VC for field-level merge);
+   this is a scoped evaluation of whether the cap/registry projection alone benefits from
+   OR-Map merge semantics layered on top. Capture as a design note before M16, decide during.
+
+4. **AgentFacts emission as the upward contract.** *Already specified — this is M16
+   Deliverable A.* Recorded here only to close the loop: the deep dive reconfirmed AgentFacts
+   ≈ A2A AgentCard + `facts_url` + DID + signed VC capability assertions, and that Mycelium's
+   existing `/.well-known/agent.json` edge is most of the work. No change to M16 Deliverable A;
+   the identity gap (cluster-internal Ed25519 `NodeId` → a domain DID) is the bridging glue to
+   scope when M16 starts.
+
 ---
 
 ## Deferred Patterns
