@@ -59,8 +59,9 @@ tripwire). `tls`/`peer_keys` are core (connection-layer verification needs them)
 |---|---|---|
 | 0 ✓ | branch, philosophy, seam map, carve design | done |
 | 1 ✓ | Carve `CoreCtx` from `TaskCtx` in place (+`Deref`); fix 3 constructors | full build + tests green, one crate — **committed** |
-| 2 ✓ | Decouple `connection.rs` from `rpc_pending` via the `ReplyInterceptor` hook | zero core→III refs in production transport — **committed** |
-| 3 | Create `mycelium-core` member; physically move the 14 substrate modules + `CoreCtx`; `connection`/`writer` → `CoreCtx` | `mycelium-core` builds standalone |
+| 2 ✓ | Decouple `connection.rs` from `rpc_pending` via the `ReplyInterceptor` hook | zero core→III refs *in the transport modules* — **committed** |
+| 2.5 | Resolve two core→upper **type** couplings the Stage-2 scan missed (see below) | core types reference no upper type |
+| 3 | Create `mycelium-core` member; physically move the 14 substrate modules + `CoreCtx`; `connection`/`writer` → `CoreCtx`; `pub(crate)→pub` escalation; relocate the `store.rs` quorum test | `mycelium-core` builds standalone |
 | 4 | `mycelium` depends on core; re-export for API stability; fix paths | full feature matrix builds |
 | 5 | Tests green (318/323/365), clippy clean, no-default-features | CLAUDE.md test posture |
 | 6 | Philosophy compliance review (no core→III; library-not-platform; seam at II↔III) | sign-off |
@@ -86,6 +87,26 @@ tripwire). `tls`/`peer_keys` are core (connection-layer verification needs them)
 - **Stage 3 mechanical note:** the `store.rs` `concurrent_quorum_trackers_coexist…` **test**
   references `kv_quorum`; it relocates to the upper crate alongside `kv_quorum` during the
   physical move (it tests an overlay, not core storage).
+
+## Stage 2.5 — two core→upper type couplings the Stage-2 scan missed
+
+The Stage-2 scan used `(crate|super|self)::(UPPER)` and so **missed the `crate::agent::X` form** —
+a real blind spot. The Stage-3 pre-flight check found two production type-dependencies from core
+types into upper modules:
+
+1. **`KvState.quorum_trackers`** (`store.rs:77`) is typed `crate::agent::kv_quorum::TrackerList`
+   (upper). Core *uses* it: `apply_and_notify` (`store.rs:611`) calls `tracker.observe(sender,
+   timestamp)` on each echoed write. **Fix (same pattern as `ReplyInterceptor`):** define a core
+   trait `QuorumObserver { fn observe(&self, sender: u64, timestamp: u64); }`; make
+   `quorum_trackers` hold `Arc<dyn QuorumObserver>`; the upper `QuorumAckTracker` implements it.
+   `install_tracker`/`remove_tracker` operate on the trait object (identity removal via
+   `Arc::ptr_eq` still works). Mechanism in core, the ack-counting law above.
+2. **`GossipConfig.oidc`** (`config.rs:598`) is typed `crate::agent::oidc::OidcConfig` (upper).
+   **Fix:** `OidcConfig` is a plain serde config struct (+ pure `scopes_for_groups`) → move it to
+   `config.rs` (core, which is config's home anyway). The OIDC *verifier* (`oidc.rs`, jsonwebtoken,
+   `OidcVerifier`) stays upper and imports `crate::config::OidcConfig`.
+
+Both are contained, gateable, in-crate fixes (no file move) and are prerequisites for Stage 3.
 
 **Compliance review criteria for Stage 6:** (a) `grep` shows zero `mycelium-core` →
 consensus/capability/service references; (b) `mycelium-core` has no `daemon`/control-plane
