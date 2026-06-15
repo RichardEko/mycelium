@@ -1,0 +1,58 @@
+[package]
+name = "mycelium-core"
+version = "1.2.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Dr. Richard Nicholson <tathatasystems@proton.me>"]
+description = "Mycelium substrate (Layers I+II): gossip transport, LWW KV store, signal/boundary mesh"
+license = "AGPL-3.0-only"
+repository = "https://github.com/RichardEko/mycelium"
+keywords = ["distributed-systems", "gossip", "p2p", "protocol"]
+categories = ["network-programming", "asynchronous"]
+
+# ROADMAP §v2.0 M1: mycelium-core carries Layers I+II only (gossip transport + KV
+# store + signal/boundary mesh). The full `mycelium` crate adds Layers III+ and
+# depends on this. No gateway/cli here — the embeddable, smaller-dep-tree substrate.
+
+[features]
+default = []
+# mTLS transport, Ed25519 node identity, signed KV/consensus payloads, hot rotation.
+tls = ["dep:tokio-rustls", "dep:rustls", "dep:rcgen", "dep:rustls-pemfile", "dep:ed25519-dalek", "dep:rand_core", "dep:arc-swap"]
+# Prometheus gauge/counter emission from the store/connection paths (no-op without).
+metrics = ["dep:metrics"]
+# Signed-identity surface the compliance layer builds on (audit/RBAC live upstream).
+compliance = ["tls"]
+
+[dependencies]
+tokio = { version = "1.35", features = ["full"] }
+fastrand = "2"
+papaya = "0.1"
+serde = { version = "1.0", features = ["derive", "rc"] }
+ahash = "0.8"
+bincode = { version = "2", features = ["serde"] }
+bytes = { version = "1", features = ["serde"] }
+toml = "0.7"
+socket2 = "0.5"
+parking_lot = "0.12"
+async-trait = "0.1"
+thiserror = "1.0"
+tracing = "0.1"
+base64 = "0.22"
+
+# TLS (optional — "tls" feature)
+tokio-rustls   = { version = "0.26", optional = true }
+rustls         = { version = "0.23", default-features = false, features = ["ring"], optional = true }
+rcgen          = { version = "0.13", optional = true }
+rustls-pemfile = { version = "2",    optional = true }
+ed25519-dalek  = { version = "2",    features = ["rand_core", "pkcs8"], optional = true }
+rand_core      = { version = "0.6",  features = ["getrandom"],         optional = true }
+arc-swap       = { version = "1",    optional = true }
+
+# Prometheus metrics (optional — "metrics" feature)
+metrics = { version = "0.24", optional = true }
+
+[dev-dependencies]
+proptest = "1"
+
+[lints.clippy]
+field_reassign_with_default = "allow"

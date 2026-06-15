@@ -154,19 +154,22 @@
 pub mod capability;
 pub mod capability_config;
 pub mod config;
-pub mod error;
 pub mod mesh_manifest;
 pub mod signal;
+
+// Layers I+II substrate now live in the `mycelium-core` crate (ROADMAP §v2.0 M1).
+// Re-exported here so existing `crate::error::…`, `crate::hlc::…`, `crate::seen::…`
+// paths keep resolving unchanged across the crate boundary.
+pub use mycelium_core::error;
+pub(crate) use mycelium_core::{hlc, seen};
 
 mod agent;
 mod connection;
 mod consensus;
 mod framing;
-mod hlc;
 mod locality;
 mod node_id;
 mod persistence;
-mod seen;
 mod store;
 mod stream;
 mod tls;
@@ -213,7 +216,7 @@ pub use config::{EgressPolicy, GatewayToken, GossipConfig, GroupTopologyPolicy, 
 pub use persistence::DataAtRestCipher;
 pub use locality::LocalityPreference;
 pub use consensus::{ConsensusConfig, ConsensusListenerHandle, ConsensusResult, GroupQuorum, consensus_kind, consensus_ns};
-pub use error::GossipError;
+pub use mycelium_core::error::GossipError;
 pub use node_id::NodeId;
 pub use signal::{
     AdvertiseHandle, OpacityHandle, OpacityHint, OpacityState,

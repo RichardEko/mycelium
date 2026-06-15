@@ -2586,8 +2586,8 @@ fn layer1_modules_do_not_reference_higher_layers() {
         ("store.rs",   include_str!("store.rs")),
         ("framing.rs", include_str!("framing.rs")),
         ("writer.rs",  include_str!("writer.rs")),
-        ("seen.rs",    include_str!("seen.rs")),
-        ("hlc.rs",     include_str!("hlc.rs")),
+        ("seen.rs",    include_str!("../mycelium-core/src/seen.rs")),
+        ("hlc.rs",     include_str!("../mycelium-core/src/hlc.rs")),
     ];
     const FORBIDDEN: &[&str] = &[
         "crate::consensus",

@@ -92,26 +92,26 @@ use tracing::warn;
 /// stamp may pull this node's clock (5 minutes). See the module doc's
 /// "Remote drift bound" section. Override via
 /// `GossipConfig::max_clock_drift_ms`; `0` disables the bound.
-pub(crate) const DEFAULT_MAX_CLOCK_DRIFT_MS: u64 = 300_000;
+pub const DEFAULT_MAX_CLOCK_DRIFT_MS: u64 = 300_000;
 
 /// Minimum interval between drift-clamp warnings (per `Hlc` instance), so a
 /// peer with a persistently skewed clock cannot flood the log.
 const DRIFT_WARN_INTERVAL_MS: u64 = 10_000;
 
 /// Number of bits reserved for the logical counter.
-pub(crate) const LOGICAL_BITS: u32 = 16;
+pub const LOGICAL_BITS: u32 = 16;
 /// Mask covering the logical portion of a packed HLC value.
-pub(crate) const LOGICAL_MASK: u64 = (1 << LOGICAL_BITS) - 1;
+pub const LOGICAL_MASK: u64 = (1 << LOGICAL_BITS) - 1;
 
 /// Extracts the physical-ms portion of a packed HLC timestamp.
 #[inline]
-pub(crate) fn physical_ms(packed: u64) -> u64 {
+pub fn physical_ms(packed: u64) -> u64 {
     packed >> LOGICAL_BITS
 }
 
 /// Packs `(phys_ms, logical)` into a single `u64` HLC value.
 #[inline]
-pub(crate) fn pack(phys_ms: u64, logical: u64) -> u64 {
+pub fn pack(phys_ms: u64, logical: u64) -> u64 {
     (phys_ms << LOGICAL_BITS) | (logical & LOGICAL_MASK)
 }
 
@@ -129,7 +129,7 @@ fn wall_now_ms() -> u64 {
 /// Hybrid Logical Clock. Internal state is a single `AtomicU64` storing the
 /// packed `(phys_ms << 16) | logical` value, so both `tick` and `observe`
 /// are lock-free CAS loops.
-pub(crate) struct Hlc {
+pub struct Hlc {
     state: AtomicU64,
     /// Remote stamps may pull the clock at most this far ahead of the local
     /// wall clock. `0` = unbounded (pre-bound behaviour).
@@ -141,13 +141,13 @@ pub(crate) struct Hlc {
 impl Hlc {
     /// Constructs a fresh HLC initialised to the current wall clock with
     /// logical zero and the default remote-drift bound.
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::with_max_drift(DEFAULT_MAX_CLOCK_DRIFT_MS)
     }
 
     /// Like [`new`](Self::new) with an explicit remote-drift bound in
     /// milliseconds. `0` disables the bound.
-    pub(crate) fn with_max_drift(max_drift_ms: u64) -> Self {
+    pub fn with_max_drift(max_drift_ms: u64) -> Self {
         Self {
             state:              AtomicU64::new(pack(wall_now_ms(), 0)),
             max_drift_ms,
@@ -156,13 +156,13 @@ impl Hlc {
     }
 
     /// Returns the current packed HLC value without advancing it.
-    pub(crate) fn current(&self) -> u64 {
+    pub fn current(&self) -> u64 {
         self.state.load(Ordering::Acquire)
     }
 
     /// Advances the clock for a local event and returns the new packed
     /// timestamp.
-    pub(crate) fn tick(&self) -> u64 {
+    pub fn tick(&self) -> u64 {
         loop {
             let prev      = self.state.load(Ordering::Acquire);
             let prev_phys = physical_ms(prev);
@@ -196,7 +196,7 @@ impl Hlc {
     /// bound") so a peer with a far-future clock cannot drag this node's
     /// clock — and with it, every subsequent local write stamp — into the
     /// future. Clamping is logged at `warn!`, rate-limited per instance.
-    pub(crate) fn observe(&self, remote: u64) -> u64 {
+    pub fn observe(&self, remote: u64) -> u64 {
         let mut remote_phys = physical_ms(remote);
         let remote_log      = remote & LOGICAL_MASK;
         if self.max_drift_ms > 0 {

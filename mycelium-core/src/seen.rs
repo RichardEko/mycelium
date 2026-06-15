@@ -5,7 +5,7 @@
 /// the distribution is uniform. Shards are independent `papaya::HashMap`s —
 /// readers and writers on different shards never share a cache line or a hazard
 /// pointer epoch.
-pub(crate) struct ShardedSeen {
+pub struct ShardedSeen {
     shards: Box<[papaya::HashMap<u64, u64>]>,
     /// `n_shards - 1`; shard selection is `nonce & mask` (cheap bitwise AND).
     mask: usize,
@@ -13,7 +13,7 @@ pub(crate) struct ShardedSeen {
 
 impl ShardedSeen {
     /// Create a new `ShardedSeen`. `n` is rounded up to the nearest power of two.
-    pub(crate) fn new(n: usize) -> Self {
+    pub fn new(n: usize) -> Self {
         let n = n.max(1).next_power_of_two();
         Self {
             shards: (0..n)
@@ -32,13 +32,18 @@ impl ShardedSeen {
     /// Records `nonce` with receive timestamp `ts`.
     /// Returns `true` if the nonce was **already present** (duplicate — caller should drop).
     #[inline]
-    pub(crate) fn mark_and_check(&self, nonce: u64, ts: u64) -> bool {
+    pub fn mark_and_check(&self, nonce: u64, ts: u64) -> bool {
         self.shard(nonce).pin().insert(nonce, ts).is_some()
     }
 
     /// Total number of entries across all shards.
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.shards.iter().map(|s| s.len()).sum()
+    }
+
+    /// `true` when no shard holds any entry.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// Tick-level eviction. Removes nonces whose receive timestamp is at or
@@ -57,7 +62,7 @@ impl ShardedSeen {
     /// a brief window where duplicate frames are admitted until peer traffic
     /// repopulates the seen-set. Documented in `crate::hlc`'s module
     /// header.
-    pub(crate) fn evict(&self, max_entries: usize, seen_cutoff: u64, half_window: u64) -> bool {
+    pub fn evict(&self, max_entries: usize, seen_cutoff: u64, half_window: u64) -> bool {
         let len_before = self.len();
         let cutoff = if len_before > max_entries { half_window } else { seen_cutoff };
         let removed = self.evict_below(cutoff);
@@ -66,7 +71,7 @@ impl ShardedSeen {
 
     /// Emergency trim: remove all entries with timestamp at or before `cutoff`.
     /// Called when normal eviction still leaves the set over the size limit.
-    pub(crate) fn emergency_trim(&self, cutoff: u64) {
+    pub fn emergency_trim(&self, cutoff: u64) {
         self.evict_below(cutoff);
     }
 

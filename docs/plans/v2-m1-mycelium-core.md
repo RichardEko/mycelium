@@ -61,7 +61,8 @@ tripwire). `tls`/`peer_keys` are core (connection-layer verification needs them)
 | 1 ✓ | Carve `CoreCtx` from `TaskCtx` in place (+`Deref`); fix 3 constructors | full build + tests green, one crate — **committed** |
 | 2 ✓ | Decouple `connection.rs` from `rpc_pending` via the `ReplyInterceptor` hook | zero core→III refs *in the transport modules* — **committed** |
 | 2.5 ✓ | Resolve three core→upper couplings the Stage-2 scan missed (see below) | core production code references no upper type — **committed** |
-| 3 | Create `mycelium-core` member; physically move the 14 substrate modules + `CoreCtx`; `connection`/`writer` → `CoreCtx`; `pub(crate)→pub` escalation; relocate the `store.rs` quorum test | `mycelium-core` builds standalone |
+| 3a ✓ | Stand up `mycelium-core`; move the **leaf** modules (`error`, `hlc`, `seen`); prove the mechanism end-to-end | both crates build/test/clippy green — **committed** |
+| 3b | Move the interdependent transport cluster (`store, connection, framing, writer, signal, persistence, stream, tls, locality, config`) + `CoreCtx`; `connection`/`writer` → `CoreCtx`; relocate the `store.rs` quorum test | `mycelium-core` builds standalone |
 | 4 | `mycelium` depends on core; re-export for API stability; fix paths | full feature matrix builds |
 | 5 | Tests green (318/323/365), clippy clean, no-default-features | CLAUDE.md test posture |
 | 6 | Philosophy compliance review (no core→III; library-not-platform; seam at II↔III) | sign-off |
