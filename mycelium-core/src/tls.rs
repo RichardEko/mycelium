@@ -53,7 +53,7 @@ impl NodeTls {
 }
 
 /// A freshly-generated identity key + CA-signed cert + rustls configs, not yet
-/// activated. Produced by `generate_rotation`; consumed by [`NodeTls::activate`].
+/// activated. Produced by `generate_rotation`; consumed by `NodeTls::activate`.
 #[cfg(feature = "tls")]
 pub struct RotationMaterial {
     pub verifying_key: [u8; 32],
@@ -163,7 +163,7 @@ mod imp {
     /// Generate a fresh identity key + CA-signed node cert + rustls configs
     /// WITHOUT activating them, persisting the new key to disk so a restart uses
     /// it. Returns the material (and the new verifying key) so the caller can
-    /// publish the new key to peers before the cutover ([`NodeTls::activate`]).
+    /// publish the new key to peers before the cutover (`NodeTls::activate`).
     /// Reuses the **existing** cluster CA — never regenerates it — and errors if
     /// no CA is present (rotation only makes sense post-bootstrap).
     pub fn generate_rotation(

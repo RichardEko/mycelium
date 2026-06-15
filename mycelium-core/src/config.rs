@@ -1,6 +1,6 @@
 //! Configuration for all gossip protocol components.
 //!
-//! The primary type is [`GossipConfig`], which is passed to [`GossipAgent::new`](crate::GossipAgent::new).
+//! The primary type is [`GossipConfig`], which is passed to `GossipAgent::new`.
 //! All fields have documented defaults. Use [`GossipConfig::default()`] as a starting point and
 //! override only the fields that matter for your deployment.
 //!
@@ -235,7 +235,7 @@ pub enum SyncMode {
 /// is met — diversity, if any, emerges from preference.
 ///
 /// **Hard**: quorum commit requires the policy's diversity condition to be met.
-/// When the condition is not met, [`ConsensusEngine::propose`] returns
+/// When the condition is not met, `ConsensusEngine::propose` returns
 /// `ConsensusResult::TopologyUnsatisfied` — never silently degrades. The caller
 /// decides whether to wait, retry, or surface an error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -245,7 +245,7 @@ pub enum TopologyEnforcement {
     Hard,
 }
 
-/// How a group's quorum must be distributed across [`LocalityPath`](crate::locality::LocalityPath) levels.
+/// How a group's quorum must be distributed across `LocalityPath` levels.
 ///
 /// `prefer_shared_depth` biases fan-out and leader selection toward nodes sharing
 /// locality at the named depth. `spread_depth` + `spread_min_distinct` define the
@@ -433,22 +433,22 @@ pub struct GossipConfig {
     pub health_check_max_jitter_ms: u64,
 
     /// Evaporation window (seconds) for pheromone trail entries written by
-    /// [`manage_opacity`](crate::GossipAgent::manage_opacity).
+    /// `manage_opacity`.
     ///
-    /// [`suggest_leader`](crate::GossipAgent::suggest_leader), [`peer_load`](crate::GossipAgent::peer_load),
-    /// and [`peer_load_rx`](crate::GossipAgent::peer_load_rx) treat entries older than this as
+    /// `suggest_leader`, `peer_load`,
+    /// and `peer_load_rx` treat entries older than this as
     /// transparent (unloaded). Raise when nodes can be unreachable for longer than the default
     /// before their pheromone entries should be considered stale.
     ///
-    /// Use [`GossipAgent::signal_window`] to read this as a `Duration` — prefer that over
-    /// the [`SENDER_LOG_WINDOW`](crate::signal::SENDER_LOG_WINDOW) compile-time constant in
+    /// Use `GossipAgent::signal_window` to read this as a `Duration` — prefer that over
+    /// the `SENDER_LOG_WINDOW` compile-time constant in
     /// application code.
     ///
     /// Default: 600 (10 minutes).
     pub signal_window_secs: u64,
 
     /// Enable causal delivery ordering for signals emitted via
-    /// [`emit_ordered`](crate::GossipAgent::emit_ordered).
+    /// `emit_ordered`.
     ///
     /// When `true`, received signals that carry an `hlc_seq` timestamp are
     /// buffered in a per-`(sender, kind)` min-heap and delivered in ascending
@@ -487,7 +487,7 @@ pub struct GossipConfig {
     /// it becomes active in production.
     ///
     /// **Capability gossip overhead:** each call to
-    /// [`advertise_capability`](crate::GossipAgent::advertise_capability) writes one KV
+    /// `advertise_capability` writes one KV
     /// entry that is re-asserted on every `interval` tick and gossiped to all peers on
     /// each reassertion. With many capabilities per node, gossip bandwidth scales as
     /// `capabilities_per_node × peers × reassertion_rate`. As a practical guideline,
@@ -712,7 +712,7 @@ impl Default for GossipConfig {
 impl GossipConfig {
     /// Validates all numeric constraints.
     ///
-    /// Called automatically by [`GossipAgent::start`] and [`load_from_file`](Self::load_from_file).
+    /// Called automatically by `GossipAgent::start` and [`load_from_file`](Self::load_from_file).
     /// Call manually after mutating fields directly to catch errors early.
     pub fn validate(&self) -> Result<(), GossipError> {
         if self.bind_address.is_empty() {

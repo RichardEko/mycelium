@@ -11,7 +11,7 @@
 //!
 //! Well-known kind strings live in [`signal_kind`]. KV namespace conventions live in [`kv_ns`].
 //!
-//! All signal APIs are exposed directly on [`GossipAgent`](crate::GossipAgent) — there is no
+//! All signal APIs are exposed directly on `GossipAgent` — there is no
 //! separate Layer 2 wrapper type.
 
 use crate::framing::bincode_cfg;
@@ -31,9 +31,9 @@ use tracing::warn;
 /// Default sender-log retention window (10 minutes).
 ///
 /// Matches the default value of [`GossipConfig::signal_window_secs`].
-/// Kept for doc-link references in [`ConsensusConfig`](crate::ConsensusConfig) and
-/// [`GossipConfig`](crate::GossipConfig). In application code, prefer
-/// [`GossipAgent::signal_window`](crate::GossipAgent::signal_window) — it reads the
+/// Kept for doc-link references in `ConsensusConfig` and
+/// `GossipConfig`. In application code, prefer
+/// `GossipAgent::signal_window` — it reads the
 /// operator-configured value. The live window stored on [`SignalHandlers`] is set from
 /// `signal_window_secs` at agent construction and is used for all runtime eviction.
 #[allow(dead_code)]
@@ -60,7 +60,7 @@ pub enum SignalScope {
     Individual(NodeId),
     /// Only nodes that have joined **any** of the named groups act (union membership).
     ///
-    /// Used by [`GossipAgent::cross_group_propose`](crate::GossipAgent::cross_group_propose)
+    /// Used by `GossipAgent::cross_group_propose`
     /// to broadcast a ballot to all participants across multiple voting blocs in one shot.
     Groups(Vec<Arc<str>>),
 }
@@ -663,10 +663,10 @@ pub fn reconcile_boundary_from_store(
 
 // ── Pheromone trail ───────────────────────────────────────────────────────────
 
-/// Pheromone load state written to Layer I by [`GossipAgent::manage_opacity`].
+/// Pheromone load state written to Layer I by `GossipAgent::manage_opacity`.
 ///
 /// Key convention: `sys/load/{node_id}/{kind}` (see [`kv_ns::LOAD`]).
-/// Encoded with [`bincode_cfg()`](crate::framing::bincode_cfg) (fixed-int).
+/// Encoded with `bincode_cfg()` (fixed-int).
 /// An absent key means the node is transparent (not overloaded) for that kind.
 /// Tombstoned automatically when `BOUNDARY_TRANSPARENT` is emitted.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -694,27 +694,27 @@ pub fn decode_load_state(b: &Bytes) -> Option<LoadState> {
         .map(|(v, _)| v)
 }
 
-/// Cancels the associated [`advertise`](crate::GossipAgent::advertise) task on drop.
+/// Cancels the associated `advertise` task on drop.
 ///
-/// Obtain one from [`GossipAgent::advertise`]. The task also exits automatically
+/// Obtain one from `GossipAgent::advertise`. The task also exits automatically
 /// when the agent shuts down, even if this handle is still live.
 pub struct AdvertiseHandle {
     pub _cancel: tokio::sync::oneshot::Sender<()>,
 }
 
-/// Cancels the associated [`watch`](crate::GossipAgent::watch) task on drop.
+/// Cancels the associated `watch` task on drop.
 ///
-/// Obtain one from [`GossipAgent::watch`]. The task also exits automatically
+/// Obtain one from `GossipAgent::watch`. The task also exits automatically
 /// when the agent shuts down, even if this handle is still live.
 pub struct WatchHandle {
     pub _cancel: tokio::sync::oneshot::Sender<()>,
 }
 
-/// Cancels the associated [`manage_opacity`](crate::GossipAgent::manage_opacity) governor
+/// Cancels the associated `manage_opacity` governor
 /// task on drop.
 ///
-/// Obtain one from [`GossipAgent::manage_opacity`] or
-/// [`GossipAgent::manage_opacity_gated`]. The task also exits automatically when
+/// Obtain one from `GossipAgent::manage_opacity` or
+/// `GossipAgent::manage_opacity_gated`. The task also exits automatically when
 /// the agent shuts down, even if this handle is still live.
 pub struct OpacityHandle {
     pub _cancel: tokio::sync::oneshot::Sender<()>,
@@ -776,7 +776,7 @@ pub mod signal_kind {
     ///
     /// **Nonce convention**: the first 8 bytes of the payload carry a little-endian u64
     /// correlation nonce that matches the first 8 bytes of the originating
-    /// [`INVOKE`] or [`INVOKE_BULK`] payload. Use [`GossipAgent::request`](crate::GossipAgent::request)
+    /// [`INVOKE`] or [`INVOKE_BULK`] payload. Use `GossipAgent::request`
     /// on the caller side to generate and match the nonce automatically.
     pub const INVOKE_RESULT:        &str = "invoke.result";
     /// Bulk-invoke signal. The sender emits this kind to trigger a batch operation
@@ -785,7 +785,7 @@ pub mod signal_kind {
     /// (HTTP, gRPC, shared storage, etc. — not provided by this library).
     ///
     /// Responders reply with [`INVOKE_RESULT`] echoing the ticket in the first 8
-    /// payload bytes so the initiator can correlate via [`GossipAgent::request`](crate::GossipAgent::request).
+    /// payload bytes so the initiator can correlate via `GossipAgent::request`.
     pub const INVOKE_BULK:          &str = "invoke.bulk";
     /// A contract has become available at `sender`.
     pub const CONTRACT_AVAILABLE:   &str = "contract.available";
@@ -806,8 +806,8 @@ pub mod signal_kind {
     pub const BOUNDARY_TRANSPARENT: &str = "boundary.transparent";
     /// Generic RPC reply. The correlation nonce in the first 8 bytes of the
     /// originating request payload is echoed at the start of this payload.
-    /// Use [`GossipAgent::rpc_call`](crate::GossipAgent::rpc_call) /
-    /// [`GossipAgent::rpc_respond`](crate::GossipAgent::rpc_respond) to handle
+    /// Use `GossipAgent::rpc_call` /
+    /// `GossipAgent::rpc_respond` to handle
     /// the nonce automatically.
     pub const RPC_RESULT: &str = "rpc.result";
     /// Reply to an [`INVOKE_BULK`] call. Same nonce-prefix convention as
@@ -824,7 +824,7 @@ pub mod signal_kind {
 
     /// Agent state transition notification.
     /// Payload: `{"node": "<id>", "from": "<state>", "to": "<state>"}`.
-    /// Emitted by [`AgentStateMachine::transition`](crate::AgentStateMachine::transition)
+    /// Emitted by `AgentStateMachine::transition`
     /// after every committed transition.
     pub const AGENT_STATE: &str = "agent.state";
 
@@ -854,9 +854,9 @@ pub mod signal_kind {
 pub mod kv_ns {
     /// Pheromone trail namespace (library-internal — do not write from application code).
     ///
-    /// Key: `sys/load/{node_id}/{kind}`. Value: bincode-encoded [`LoadState`](crate::signal::LoadState).
+    /// Key: `sys/load/{node_id}/{kind}`. Value: bincode-encoded `LoadState`.
     ///
-    /// Written automatically by [`GossipAgent::manage_opacity`](crate::GossipAgent::manage_opacity)
+    /// Written automatically by `GossipAgent::manage_opacity`
     /// on every `BOUNDARY_OPAQUE` transition; tombstoned on `BOUNDARY_TRANSPARENT`.
     /// Readers discard entries where `now_ms − written_at_ms` exceeds their evaporation window
     /// (no coordination needed). Graceful shutdown tombstones `sys/load/{node_id}/{kind}`
@@ -868,11 +868,11 @@ pub mod kv_ns {
     pub const GROUP: &str = "grp/";
 
     /// Advertised-capability namespace (optional persistence via
-    /// [`GossipAgent::advertise_persistent`](crate::GossipAgent::advertise_persistent)).
+    /// `GossipAgent::advertise_persistent`).
     ///
     /// Key: `svc/{kind}/{node_id}`. Value: the payload bytes from the most recent
     /// advertise tick. Tombstoned automatically when the returned
-    /// [`AdvertiseHandle`](crate::signal::AdvertiseHandle) is dropped or the agent shuts down.
+    /// `AdvertiseHandle` is dropped or the agent shuts down.
     /// Late joiners can call `scan_prefix(kv_ns::ADVERTISE)` to find current capabilities
     /// without waiting for the next advertise tick.
     pub const ADVERTISE: &str = "svc/";
@@ -891,8 +891,8 @@ pub mod kv_ns {
     /// `sender_node_id`. Written by the connection handler on every admitted signal
     /// delivery; anti-entropy synced to peers so the evidence survives process restarts.
     ///
-    /// Use [`GossipAgent::quorum_persistent`] to query the count of distinct senders
-    /// within a time window. Prefer [`GossipAgent::quorum`] (in-memory) for low-latency
+    /// Use `GossipAgent::quorum_persistent` to query the count of distinct senders
+    /// within a time window. Prefer `GossipAgent::quorum` (in-memory) for low-latency
     /// queries — `quorum_persistent` is only needed when quorum evidence must survive
     /// crashes or restarts.
     pub const QUORUM: &str = "sys/quorum/";
@@ -900,22 +900,22 @@ pub mod kv_ns {
     /// Ordered durable log namespace.
     ///
     /// Key: `log/{stream}/{hlc:016x}`. The 16-char zero-padded hex HLC ensures
-    /// lexicographic order equals time order. Written by [`GossipAgent::append`];
-    /// compacted by [`GossipAgent::compact_log`].
+    /// lexicographic order equals time order. Written by `GossipAgent::append`;
+    /// compacted by `GossipAgent::compact_log`.
     pub const LOG: &str = "log/";
 
     /// Consumer group offset cursors.
     ///
     /// Key: `clog/{stream}/{group}/offset`. Value: 16-char hex HLC of the last
-    /// processed entry. Written by [`GossipAgent::subscribe_log_group`] after each
+    /// processed entry. Written by `GossipAgent::subscribe_log_group` after each
     /// entry is successfully delivered.
     pub const CONSUMER_LOG: &str = "clog/";
 
     /// Distributed lock state.
     ///
     /// Key: `lock/{name}`. Value: JSON `{"holder":"ip:port","token":u64,"expires_ms":u64}`.
-    /// Written by [`GossipAgent::distributed_lock`]; tombstoned when the returned
-    /// [`LockGuard`](crate::LockGuard) is dropped.
+    /// Written by `GossipAgent::distributed_lock`; tombstoned when the returned
+    /// `LockGuard` is dropped.
     pub const LOCK: &str = "lock/";
 
     /// Prompt template namespace.

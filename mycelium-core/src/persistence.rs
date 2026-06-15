@@ -36,7 +36,7 @@ use tracing::{error, warn};
 ///
 /// The substrate stays deliberately neutral on key custody: implement this trait
 /// over your own KMS / keyring / HSM and attach it with
-/// [`GossipAgent::with_data_at_rest_cipher`](crate::GossipAgent::with_data_at_rest_cipher).
+/// `GossipAgent::with_data_at_rest_cipher`.
 /// When no cipher is attached, bytes are written in the clear (unchanged
 /// behaviour, zero overhead).
 ///

@@ -175,7 +175,7 @@ impl KvState {
 /// after a winning store CAS, the writer re-reads the stored entry and sets
 /// index membership to match it, so concurrent writers to the same key cannot
 /// leave the index diverged from the store (M2 Run-18 finding). Allows
-/// [`GossipAgent::scan_prefix`] to skip the full store and iterate only the
+/// `GossipAgent::scan_prefix` to skip the full store and iterate only the
 /// matching bucket — O(|bucket|) instead of O(|store|).
 pub type PrefixIndex = papaya::HashMap<Arc<str>, Arc<papaya::HashMap<Arc<str>, ()>>>;
 

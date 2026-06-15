@@ -2176,6 +2176,15 @@ admission), the compliant shape is stated inline rather than assumed.
 1. **Workspace split** — `mycelium-core` extracted from `mycelium` (full substrate).
    Solves the `TaskCtx` God Object and internalises the Layer I/II entanglement.
 
+   > **✅ IMPLEMENTED (2026-06-15, branch `v2/m1-mycelium-core`, pending merge).** The split
+   > shipped in six gated stages — execution record + philosophy-compliance sign-off in
+   > [`docs/plans/v2-m1-mycelium-core.md`](docs/plans/v2-m1-mycelium-core.md). `mycelium-core`
+   > carries the 14 substrate modules + `CoreCtx` and references nothing upper (a compile-time
+   > guarantee via the crate boundary); `mycelium` depends on it with an unchanged public API.
+   > Dep tree ≈48 vs ≈140 crates. The three core↔upper couplings are mechanism-in-core hooks
+   > (`reply_interceptor`, `QuorumObserver`, `SnapshotDeferHook`). This also closes the
+   > **Layer I/II entanglement** and **`TaskCtx` God Object** v2 items.
+
    **Scope decided 2026-06-13: `mycelium-core` = Layers I + II** (gossip transport +
    KV store + signal/boundary mesh), cut at the **II↔III seam**. `mycelium` (full) =
    core + consensus + capabilities + services + schema/llm/mcp + gateway + tls.
