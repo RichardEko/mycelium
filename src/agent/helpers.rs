@@ -195,7 +195,7 @@ pub(crate) async fn emit_signal_async(
         ctx.node_id.id_hash(), hint,
     ).await
 }
-
+#[cfg(feature = "consensus")]
 pub(crate) fn compute_quorum_size(config_size: usize, member_count: usize) -> usize {
     if config_size > 0 { config_size } else { member_count / 2 + 1 }
 }
@@ -370,6 +370,7 @@ pub(crate) fn group_members_ctx(ctx: &TaskCtx, group: &str) -> Vec<crate::node_i
 
 /// Cached variant of `group_members_ctx`. Returns a cached roster when the
 /// `grp_generation` counter is unchanged and the entry is within `ttl`.
+#[cfg(feature = "consensus")]
 pub(crate) fn cached_group_members_ctx(
     ctx:   &TaskCtx,
     group: &str,
@@ -407,6 +408,7 @@ pub(super) fn self_locality_ctx(ctx: &TaskCtx) -> Option<crate::locality::Locali
 
 /// Constructs a [`ConsensusEngine`] from a `TaskCtx` reference.
 /// Used by `ConsensusHandle` methods.
+#[cfg(feature = "consensus")]
 pub(super) fn make_consensus_engine_ctx(
     ctx:                 &Arc<TaskCtx>,
     abstain_when_opaque: bool,
@@ -433,19 +435,25 @@ pub(super) fn suggest_leader_ctx(
     max_age: std::time::Duration,
 ) -> crate::node_id::NodeId {
     use super::opacity::peer_load_ctx;
-    use crate::consensus::consensus_ns;
     let members = group_members_ctx(ctx, group);
     if members.is_empty() {
         return ctx.node_id.clone();
     }
-    let trust_prefix = format!("{}{}/", consensus_ns::TRUST, group);
+    // Trust-weighting reads consensus `trust/` slices; without the `consensus`
+    // feature there are none, so leader choice degrades to pure load (trust = 0
+    // everywhere → `fill / (1.0 + 0)`). Graceful degradation, not a hard dependency.
+    #[allow(unused_mut)]
     let mut trust_counts: ahash::AHashMap<u64, usize> = ahash::AHashMap::new();
-    for (_, bytes) in kv_scan_prefix(ctx, &trust_prefix) {
-        let Ok((peers, _)) = bincode::serde::decode_from_slice::<Vec<crate::node_id::NodeId>, _>(
-            &bytes, crate::framing::bincode_cfg()
-        ) else { continue };
-        for p in peers {
-            *trust_counts.entry(p.id_hash()).or_insert(0) += 1;
+    #[cfg(feature = "consensus")]
+    {
+        let trust_prefix = format!("{}{}/", crate::consensus::consensus_ns::TRUST, group);
+        for (_, bytes) in kv_scan_prefix(ctx, &trust_prefix) {
+            let Ok((peers, _)) = bincode::serde::decode_from_slice::<Vec<crate::node_id::NodeId>, _>(
+                &bytes, crate::framing::bincode_cfg()
+            ) else { continue };
+            for p in peers {
+                *trust_counts.entry(p.id_hash()).or_insert(0) += 1;
+            }
         }
     }
     let load_by_node: ahash::AHashMap<Arc<str>, f32> = peer_load_ctx(ctx, max_age)

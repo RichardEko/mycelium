@@ -63,7 +63,10 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt as _;
 use tracing::info;
 
-use super::kv_handle::{LogEntry, SubscribeHandle};
+use super::kv_handle::LogEntry;
+#[cfg(feature = "consensus")]
+use super::kv_handle::SubscribeHandle;
+#[cfg(feature = "consensus")]
 use super::overlay_consistent::LockGuard;
 
 use super::TaskCtx;
@@ -78,6 +81,7 @@ struct HttpCtx {
     /// Distributed lock guards held on behalf of HTTP clients.
     /// Key: opaque guard_id returned to the caller.
     /// Drop-on-remove tombstones `lock/{name}` in the gossip KV.
+    #[cfg(feature = "consensus")]
     lock_guards:     Arc<Mutex<HashMap<String, LockGuard>>>,
     /// Shutdown receiver used when spawning gateway advertisement tasks.
     shutdown_rx:     watch::Receiver<bool>,
@@ -129,6 +133,7 @@ pub(super) async fn run_http_server(
     let state = Arc::new(HttpCtx {
         agent_ctx:    ctx,
         gateway_caps: Arc::new(Mutex::new(HashMap::new())),
+        #[cfg(feature = "consensus")]
         lock_guards:  Arc::new(Mutex::new(HashMap::new())),
         shutdown_rx:  shutdown_rx.clone(),
         #[cfg(feature = "metrics")]
@@ -158,24 +163,29 @@ pub(super) async fn run_http_server(
         .route("/kv/quorum",              post(gw_kv_quorum))
         .route("/mailbox/deliver",        post(gw_mailbox_deliver))
         .route("/mailbox/{kind}",         get(gw_mailbox_subscribe))
-        // ── Overlay: consistency, locks, elections ────────────────────────
-        .route("/overlay/consistent/set",         post(gw_overlay_consistent_set))
-        .route("/overlay/consistent/get",         get(gw_overlay_consistent_get))
-        .route("/overlay/lock/acquire",           post(gw_overlay_lock_acquire))
-        .route("/overlay/lock/{guard_id}",         delete(gw_overlay_lock_release))
-        .route("/overlay/elect",                  post(gw_overlay_elect))
         // ── Overlay: ordered log ──────────────────────────────────────────
         .route("/overlay/log/append",             post(gw_overlay_log_append))
         .route("/overlay/log/scan",               get(gw_overlay_log_scan))
         .route("/overlay/log/compact",            post(gw_overlay_log_compact))
         .route("/overlay/log/subscribe",          get(gw_overlay_log_subscribe))
-        .route("/overlay/log/group/subscribe",    get(gw_overlay_log_group_subscribe))
         // ── Overlay: reliable delivery ────────────────────────────────────
         .route("/overlay/emit_reliable",          post(gw_overlay_emit_reliable))
         // ── Cluster sharding ──────────────────────────────────────────────
         .route("/shard/{ns}/{name}",               get(gw_shard_owner))
-        .route("/shard/emit",                     post(gw_shard_emit))
-        // ── Cross-group consensus ─────────────────────────────────────────
+        .route("/shard/emit",                     post(gw_shard_emit));
+
+    // ── Consensus + the consistency/lock/election overlays built on it ────────
+    // (v2 M2 feature gate). The ordered-log and reliable-delivery overlays above
+    // are KV/anti-entropy based, not consensus, so they stay unconditional.
+    #[cfg(feature = "consensus")]
+    let gateway = gateway
+        .route("/overlay/consistent/set",         post(gw_overlay_consistent_set))
+        .route("/overlay/consistent/get",         get(gw_overlay_consistent_get))
+        .route("/overlay/lock/acquire",           post(gw_overlay_lock_acquire))
+        .route("/overlay/lock/{guard_id}",         delete(gw_overlay_lock_release))
+        .route("/overlay/elect",                  post(gw_overlay_elect))
+        // log/group/subscribe uses the distributed-lock claim (consensus overlay)
+        .route("/overlay/log/group/subscribe",    get(gw_overlay_log_group_subscribe))
         .route("/consensus/cross_group_propose",  post(gw_cross_group_propose));
 
     #[cfg(feature = "llm")]
@@ -199,13 +209,16 @@ pub(super) async fn run_http_server(
         .route("/health",               get(health_handler))
         .route("/ready",                get(ready_handler))
         .route("/stats",                get(stats_handler))
-        .route("/consensus/{slot}",     get(consensus_slot_handler))
         .route("/metrics",              get(metrics_handler))
         .route("/signals/{kind}",       get(signal_sse_handler))
         .route("/mcp",                  post(mcp_handler))
         .route("/bulk/{corr_id}",       get(bulk_staging_handler))
         // Gateway — auth-protected when gateway_auth_token is set
         .nest("/gateway", gateway);
+
+    // Consensus slot inspection — public, but consensus-gated (v2 M2).
+    #[cfg(feature = "consensus")]
+    let app = app.route("/consensus/{slot}", get(consensus_slot_handler));
 
     let app = app.with_state(state);
 
@@ -482,6 +495,7 @@ async fn bulk_staging_handler(
 /// ballot number seen for that slot (0 = never proposed).
 ///
 /// This endpoint is public (no auth) and is intended for operational debugging.
+#[cfg(feature = "consensus")]
 async fn consensus_slot_handler(
     Path(slot):   Path<String>,
     State(ctx):   State<Arc<HttpCtx>>,
@@ -1494,6 +1508,7 @@ async fn gw_mailbox_deliver(
 /// Build a `ConsensusEngine` from `TaskCtx`, skipping the opacity/load-balance
 /// heuristics used by `GossipAgent::system_propose` — those are performance
 /// hints, not correctness requirements, and are not available from `TaskCtx`.
+#[cfg(feature = "consensus")]
 fn overlay_make_engine(ctx: &Arc<TaskCtx>) -> crate::consensus::ConsensusEngine {
     crate::consensus::ConsensusEngine {
         task_ctx:            Arc::clone(ctx),
@@ -1506,6 +1521,7 @@ fn overlay_make_engine(ctx: &Arc<TaskCtx>) -> crate::consensus::ConsensusEngine 
 }
 
 /// Thin system-wide propose from `TaskCtx` (quorum = floor(N/2)+1 over live peers).
+#[cfg(feature = "consensus")]
 async fn overlay_system_propose(
     ctx:    &Arc<TaskCtx>,
     slot:   &str,
@@ -1527,6 +1543,7 @@ async fn overlay_system_propose(
 }
 
 /// Thin group propose from `TaskCtx`.
+#[cfg(feature = "consensus")]
 async fn overlay_group_propose(
     ctx:    &Arc<TaskCtx>,
     group:  &str,
@@ -1552,6 +1569,7 @@ async fn overlay_group_propose(
 
 // ── Cross-group consensus ─────────────────────────────────────────────────────
 
+#[cfg(feature = "consensus")]
 #[derive(serde::Deserialize)]
 struct CrossGroupProposeBody {
     slot:      String,
@@ -1563,6 +1581,7 @@ struct CrossGroupProposeBody {
 ///
 /// Body: `{"slot": "S", "value_b64": "...", "groups": [{"group":"G","quorum":0.5,"veto":false}]}`
 /// Returns `{"ok":true}` on commit, or an error status.
+#[cfg(feature = "consensus")]
 async fn gw_cross_group_propose(
     State(ctx): State<Arc<HttpCtx>>,
     Json(body):  Json<CrossGroupProposeBody>,
@@ -1605,6 +1624,7 @@ async fn gw_cross_group_propose(
 /// `POST /gateway/overlay/consistent/set` — consensus-durable KV write (ballot-serialized).
 ///
 /// Body: `{"key": "K", "value_b64": "V"}`.
+#[cfg(feature = "consensus")]
 async fn gw_overlay_consistent_set(
     State(ctx): State<Arc<HttpCtx>>,
     Json(body):  Json<serde_json::Value>,
@@ -1656,6 +1676,7 @@ async fn gw_overlay_consistent_set(
 }
 
 /// `GET /gateway/overlay/consistent/get?key=K` — read latest ballot-committed value (local, eventually consistent).
+#[cfg(feature = "consensus")]
 async fn gw_overlay_consistent_get(
     Query(q):   Query<KvKeyQuery>,
     State(ctx): State<Arc<HttpCtx>>,
@@ -1679,12 +1700,14 @@ async fn gw_overlay_consistent_get(
 // ── Overlay: distributed lock ─────────────────────────────────────────────────
 
 #[derive(Deserialize)]
+#[cfg(feature = "consensus")]
 struct LockAcquireBody { name: String, ttl_secs: Option<u64> }
 
 /// `POST /gateway/overlay/lock/acquire` — acquire a named distributed lock.
 ///
 /// Body: `{"name": "N", "ttl_secs": 30}`.
 /// Returns `{"guard_id": "…", "token": N}`.
+#[cfg(feature = "consensus")]
 async fn gw_overlay_lock_acquire(
     State(ctx): State<Arc<HttpCtx>>,
     Json(body):  Json<LockAcquireBody>,
@@ -1727,6 +1750,7 @@ async fn gw_overlay_lock_acquire(
 }
 
 /// `DELETE /gateway/overlay/lock/:guard_id` — release a held lock.
+#[cfg(feature = "consensus")]
 async fn gw_overlay_lock_release(
     Path(guard_id): Path<String>,
     State(ctx):     State<Arc<HttpCtx>>,
@@ -1742,12 +1766,14 @@ async fn gw_overlay_lock_release(
 // ── Overlay: leader election ──────────────────────────────────────────────────
 
 #[derive(Deserialize)]
+#[cfg(feature = "consensus")]
 struct ElectBody { group: String }
 
 /// `POST /gateway/overlay/elect` — elect a leader for `group`.
 ///
 /// Body: `{"group": "G"}`.
 /// Returns `{"leader": "IP:PORT"}` on success.
+#[cfg(feature = "consensus")]
 async fn gw_overlay_elect(
     State(ctx): State<Arc<HttpCtx>>,
     Json(body):  Json<ElectBody>,
@@ -1926,9 +1952,11 @@ async fn gw_overlay_log_subscribe(
 }
 
 #[derive(Deserialize)]
+#[cfg(feature = "consensus")]
 struct LogGroupSubscribeQuery { stream: String, group: String }
 
 /// `GET /gateway/overlay/log/group/subscribe?stream=S&group=G` — consumer-group SSE.
+#[cfg(feature = "consensus")]
 async fn gw_overlay_log_group_subscribe(
     Query(q):   Query<LogGroupSubscribeQuery>,
     State(ctx): State<Arc<HttpCtx>>,

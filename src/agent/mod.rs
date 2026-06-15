@@ -22,7 +22,9 @@ mod kv;
 pub(crate) mod kv_quorum;
 mod kv_handle;
 mod mesh_handle;
+#[cfg(feature = "consensus")]
 mod consensus_handle;
+#[cfg(feature = "consensus")]
 mod overlay_consistent;
 mod overlay_reliable;
 mod rpc;
@@ -30,6 +32,7 @@ mod rpc;
 mod http;
 mod mcp;
 mod opacity;
+#[cfg(feature = "consensus")]
 mod consensus_ops;
 mod capability_ops;
 mod demand;
@@ -67,7 +70,9 @@ pub(crate) use bulk::BulkTransport;
 #[allow(unused_imports)]
 pub(crate) use capability_ops::FilterOpacityRegistry;
 pub(crate) use helpers::emit_signal;
+#[cfg(feature = "consensus")]
 pub(crate) use helpers::emit_signal_async;
+#[cfg(feature = "consensus")]
 pub(crate) use helpers::make_gossip_update;
 pub(crate) use opacity::is_self_opaque;
 #[cfg(feature = "gateway")]
@@ -78,7 +83,9 @@ pub use state_machine::{AgentPolicy, ExecutionState, AgentStateMachine, PolicyVi
 pub use scatter::{ScatterError, ScatterResult};
 pub use bulk::{BulkError, BulkServeHandle};
 pub use mailbox::{MailboxHandle, MeshEvent};
+#[cfg(feature = "consensus")]
 pub use overlay_consistent::{ConsistencyError, LockGuard};
+#[cfg(feature = "consensus")]
 pub use consensus_handle::ConsensusHandle;
 pub use service_handle::ServiceHandle;
 pub use capability_handle::CapabilitiesHandle;
@@ -106,6 +113,9 @@ pub use llm_handle::LlmHandle;
 pub use mcp_handle::McpHandle;
 
 /// Cached roster entry for a single group, held in the short-lived `group_roster_cache`.
+/// Only read by the consensus path's `cached_group_members_ctx`; the field/struct
+/// remain populated unconditionally (cheap) but are dead without the `consensus` feature.
+#[cfg_attr(not(feature = "consensus"), allow(dead_code))]
 pub(super) struct RosterEntry {
     pub(super) members:    Vec<NodeId>,
     pub(super) fetched_at: Instant,
@@ -251,6 +261,7 @@ pub(crate) struct TaskCtx {
     /// Invalidated generation-based: `KvState::grp_generation` is bumped (Release)
     /// whenever a `grp/` key changes; the cache reader loads it with Acquire so it
     /// never sees a stale roster after observing the new generation value.
+    #[cfg_attr(not(feature = "consensus"), allow(dead_code))]
     pub(crate) group_roster_cache: RosterCache,
 
     // ── LLM skill registry ───────────────────────────────────────────────────────
@@ -457,6 +468,9 @@ impl GossipAgent {
     /// let _listener = c.start_consensus_listener(ConsensusConfig::default());
     /// # Ok(()) }
     /// ```
+    ///
+    /// Requires the `consensus` feature (default-on; v2 M2 gate).
+    #[cfg(feature = "consensus")]
     pub fn consensus(&self) -> ConsensusHandle {
         ConsensusHandle { ctx: Arc::clone(&self.task_ctx) }
     }

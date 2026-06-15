@@ -165,6 +165,7 @@ pub(crate) use mycelium_core::{
 };
 
 mod agent;
+#[cfg(feature = "consensus")]
 mod consensus;
 
 pub use agent::{
@@ -172,10 +173,13 @@ pub use agent::{
     BulkError, BulkServeHandle,
     GossipAgent, MailboxHandle, McpError, McpToolHandle, McpHandle,
     MeshEvent, RpcError, RpcRequest, RpcRequestRx, ScatterError, ScatterResult, SystemStats,
-    AckResult, CapabilitiesHandle, ConsensusHandle, ConsistencyError, LockGuard, LogEntry,
+    AckResult, CapabilitiesHandle, LogEntry,
     KvHandle, MeshHandle, QuorumError, ServiceHandle, ShardError,
     SchemaError, SchemaHandle, SchemaPublishResult,
 };
+// Layer III consensus + the consistency overlay built on it (v2 M2 feature gate).
+#[cfg(feature = "consensus")]
+pub use agent::{ConsensusHandle, ConsistencyError, LockGuard};
 #[cfg(feature = "gateway")]
 pub use agent::McpClientHandle;
 #[cfg(feature = "llm")]
@@ -207,6 +211,7 @@ pub use mesh_manifest::{
 pub use config::{EgressPolicy, GatewayToken, GossipConfig, GroupTopologyPolicy, PersistenceConfig, SyncMode, TlsConfig, TopologyEnforcement};
 pub use persistence::DataAtRestCipher;
 pub use locality::LocalityPreference;
+#[cfg(feature = "consensus")]
 pub use consensus::{ConsensusConfig, ConsensusListenerHandle, ConsensusResult, GroupQuorum, consensus_kind, consensus_ns};
 pub use mycelium_core::error::GossipError;
 pub use node_id::NodeId;
