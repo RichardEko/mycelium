@@ -48,7 +48,9 @@ mod sharding;
 mod shard_ops;
 mod service_handle;
 mod capability_handle;
-mod schema_handle;
+// schema_handle moved to mycelium-core (v2 M3); the GossipAgent-driven tests stay here.
+#[cfg(test)]
+mod schema_handle_tests;
 #[cfg(feature = "a2a")]
 pub(crate) mod a2a;
 #[cfg(feature = "llm")]
@@ -103,7 +105,7 @@ pub use kv_handle::{KvHandle, LogEntry};
 pub use mesh_handle::MeshHandle;
 pub use overlay_reliable::AckResult;
 pub use sharding::ShardError;
-pub use schema_handle::{SchemaError, SchemaHandle, SchemaPublishResult};
+pub use mycelium_core::{SchemaError, SchemaHandle, SchemaPublishResult};
 #[cfg(feature = "llm")]
 pub use prompt::{PromptTemplate, PromptSkillError, PromptSkillHandle};
 #[cfg(feature = "llm")]
@@ -451,7 +453,7 @@ impl GossipAgent {
     /// # Ok(()) }
     /// ```
     pub fn schemas(&self) -> SchemaHandle {
-        SchemaHandle { ctx: Arc::clone(&self.task_ctx) }
+        SchemaHandle::from_core(Arc::clone(&self.task_ctx.core))
     }
 
     /// Returns a typed handle for consensus operations (Layer III).
