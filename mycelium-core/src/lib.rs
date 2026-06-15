@@ -19,6 +19,7 @@ pub mod framing;
 pub mod hlc;
 pub mod locality;
 pub mod node_id;
+pub mod ops;
 pub mod persistence;
 pub mod seen;
 pub mod signal;
