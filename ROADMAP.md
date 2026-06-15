@@ -2267,26 +2267,41 @@ admission), the compliant shape is stated inline rather than assumed.
 
 6. **Full gossip-level capability authorization layer** — a v1.x subset of RBAC ships earlier
    (see *Production Readiness Gap §8*): node roles gossiped via `sys/identity/`, gateway endpoint
-   ACLs, and `sys/` write guards. That subset is sufficient for SOC 2 Type II controls evidence
-   and HIPAA §164.312 access control requirements.
+   ACLs, and the `sys/` namespace-ownership **tripwire** (detection, not a write guard). That
+   subset is sufficient for SOC 2 Type II controls evidence and HIPAA §164.312 access control
+   requirements.
 
-   The v2 layer goes further:
-   - Gate `resolve_capability` on a cluster-advertised ACL (beyond the per-call `authorized_callers`
-     field in `.skill.toml`, which is advisory in v1).
-   - Block unauthorized capability advertisements from low-trust nodes before they enter the
-     gossip KV (write-ACL enforced at every forwarding hop, not just at the gateway).
-   - Cluster-wide role policy propagated via consensus so no single node can be a policy bypass.
-   The `compliance` Cargo feature (currently a stub) is the intended home for this work.
+   The v2 layer goes further — **enforce at resolve/serve, detect at write** (Core Principle 4;
+   never a Layer I write guard — that would teach the gossip layer a higher-layer law, the same
+   inversion the consensus commit-conflict and `sys/` tripwires deliberately avoid):
+   - Gate `resolve_capability` on a cluster-advertised, signed-role ACL (extending WS1's
+     verified-roles beyond the per-call `authorized_callers` field in `.skill.toml`, which is
+     advisory in v1). This is the **enforcement** point — a consumer ignores capabilities from
+     advertisers whose signed role does not satisfy the ACL, emergently and node-locally.
+   - **Detect** unauthorized capability advertisements at the write/forwarding path — a `warn!`
+     + a cumulative counter on `/stats` (the tripwire idiom), **not** a forwarding-hop block.
+     The advertisement still propagates per LWW; consumers simply decline to resolve it. Routing
+     around an unauthorized provider is the coordinator-free answer, not preventing its write.
+   - Cluster-wide role policy *distributed* via consensus (so policy is consistent), with
+     **enforcement remaining at each resolver** — consensus carries the policy, it does not act
+     as an admission coordinator.
+   The `compliance` Cargo feature is the intended home for this work.
    **Trigger to start**: a regulated-industry deployment where gateway-layer enforcement proves
-   insufficient — i.e. agents need gossip-level write isolation, not just HTTP-level.
+   insufficient — i.e. agents need resolve-time authz on gossiped capabilities, not just HTTP-level.
 
 7. **Cluster-wide distributed rate-limiting** — `max_inbound_frames_per_sec` applies per-peer
    at each receiver independently; a misbehaving sender can still flood the network by
-   connecting to many peers simultaneously. A v2 rate-limiter would:
+   connecting to many peers simultaneously. The compliant shape is **shared observation,
+   local decision** (Core Principles 4 + 5 — no cluster-wide eviction *verdict*, which would be
+   a coordinator enforcing a behavioural judgment):
    - Gossip per-sender frame-rate observations to all nodes via a dedicated `sys/rate/{node}/`
-     KV namespace (bounded, short-TTL).
-   - Coordinate a cluster-wide consensus decision to backpressure or evict a sender that
-     exceeds a configurable cluster-wide budget.
+     KV namespace (bounded, short-TTL) — this is *shared evidence*, not a verdict.
+   - Each node **independently** tightens its *own* inbound budget for a sender once the
+     aggregate observed rate crosses a threshold — emergent backpressure on local evidence, the
+     same posture as the existing per-peer limiter, just better-informed. A sustained abuser
+     ends up locally throttled by every node it touches, with no global decision round.
+   - Disconnection of an abusive peer remains a **node-local** self-defense choice (each node
+     drops the connection it sees abused), never a consensus-issued cluster eviction.
    - Expose the rate state via `system_stats()` for operator visibility.
    **Trigger to start**: a confirmed intra-cluster abuse pattern in production (currently
    `max_inbound_frames_per_sec` is sufficient for well-behaved deployments).
@@ -2327,7 +2342,11 @@ admission), the compliant shape is stated inline rather than assumed.
    - Observe `peers()` count periodically to track N.
    - Compute recommended parameter values using the same formulas as milestone 8.
    - Write recommendations to `sys/config/{param}` (Layer I KV, short TTL).
-   - Each node subscribes to `sys/config/` and applies changes atomically.
+   - Each node subscribes to `sys/config/` and applies a recommendation **only if its own local
+     policy accepts it** — the tuner *advises*, the node *decides*; application is never
+     mandatory. This keeps `ClusterTuner` an advisor, not a config coordinator with standing
+     agency over the cluster (Core Principle 1). A node may clamp, ignore, or override any
+     recommendation, exactly as explicit operator values override auto-derivation in milestone 8.
 
    **No new mechanism** — the tuning agent is a regular agent using `kv().subscribe_prefix`
    and atomic config fields. The cluster manages its own metabolism.
