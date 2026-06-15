@@ -2167,6 +2167,12 @@ None are required for v1.0. **Every milestone here must satisfy the *Core Princi
 Gate* above**; where a milestone touches that boundary (provisioning, supervision, placement,
 admission), the compliant shape is stated inline rather than assumed.
 
+> **Execution plan:** the milestones below are the *canonical design detail*. For the
+> workstream grouping, dependency / critical-path graph, completeness matrix, and
+> definition-of-done that tie them together, see [`docs/plans/v2.0.md`](docs/plans/v2.0.md).
+> This section answers "what is each milestone"; the plan answers "how do they group, in
+> what order, and how do we know v2 is done."
+
 1. **Workspace split** — `mycelium-core` extracted from `mycelium` (full substrate).
    Solves the `TaskCtx` God Object and internalises the Layer I/II entanglement.
 
