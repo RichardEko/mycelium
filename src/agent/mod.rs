@@ -5,6 +5,7 @@ use crate::seen::ShardedSeen;
 use crate::signal::{Boundary, Signal, SignalHandlers, signal_kind};
 use crate::store::KvState;
 use crate::writer::WriterEntry;
+use mycelium_core::CoreCtx;
 use bytes::Bytes;
 use parking_lot::RwLock;
 use std::{
@@ -223,126 +224,16 @@ pub struct SystemStats {
     pub sys_namespace_violations: u64,
 }
 
-/// Shared infrastructure extracted from `GossipAgent` into a single `Arc` so that
-/// `ConsensusEngine`, connection handlers, and long-lived task helpers can each hold
-/// a clone without creating a reference cycle back to the agent.
-///
-/// ## Why this exists
-///
-/// `GossipAgent` spawns background tasks that need access to the same infrastructure
-/// the agent uses. If those tasks held an `Arc<GossipAgent>`, the agent could never be
-/// dropped (cycle: agent holds `JoinSet`, tasks hold agent). `TaskCtx` breaks the cycle
-/// by holding all the shared infrastructure in a separate struct; `GossipAgent` holds
-/// `Arc<TaskCtx>`, and so do the tasks — but `GossipAgent` is NOT in `TaskCtx`.
-///
-/// ## Field groups
-///
-/// Fields are grouped by layer. The six typed handles (`KvHandle`, `MeshHandle`, etc.)
-/// each hold `Arc<TaskCtx>` and access only their relevant subset.
-///
-/// | Group | Fields |
-/// |---|---|
-/// | Identity + config | `node_id`, `config`, `default_ttl` |
-/// | Layer I — KV | `seen`, `hlc`, `gossip_txs`, `kv_state`, `wal` |
-/// | Layer II — Signals | `signal_boundary`, `signal_handlers`, `reorder_buf` |
-/// | Capability subsystem | `caps_advertised`, `filter_opacity_registry`, `group_roster_cache` |
-/// | Service layer | `bulk_transport`, `rpc_pending` |
-/// | Security | `tls`, `peer_keys` |
-/// | Networking | `peers` |
-/// | Lifecycle | `shutdown_tx`, `task_handles` |
-///
-/// ## v2 roadmap — M1 workspace split (in progress)
-///
-/// `TaskCtx` was a known God Object — see `CLAUDE.md § Layer I/II entanglement`. The fix
-/// (ROADMAP §v2.0 M1) is a workspace split: [`CoreCtx`] carries Layers I + II (plus
-/// identity / networking / lifecycle / transport-security — everything `connection.rs` and
-/// `writer.rs` need), and will move to the `mycelium-core` crate; `TaskCtx` wraps it
-/// (`core: Arc<CoreCtx>`) and adds the Layer III+ fields (capability / service / consensus /
-/// compliance). `TaskCtx: Deref<Target = CoreCtx>` so every existing `ctx.<core-field>` site
-/// keeps working unchanged — the same pattern `KvState`→`KvStore` uses. Stage 1 of M1 carves
-/// the struct in place; the physical crate move is a later stage. See
-/// `docs/plans/v2-m1-mycelium-core.md`.
-///
-/// **Invariant:** `CoreCtx` must never reference a Layer III type (philosophy §5a — the
-/// substrate is never aware of the layers above it).
-pub(crate) struct CoreCtx {
-    // ── Identity + config ────────────────────────────────────────────────────────
-    pub(crate) node_id:          NodeId,
-    /// Shared copy of the agent configuration. Available to typed handles so they
-    /// can access `signal_window_secs`, `health_check_interval_secs`, `locality_path`,
-    /// and `topology_policies` without borrowing `GossipAgent`.
-    pub(crate) config:           Arc<GossipConfig>,
-    pub(crate) default_ttl:      u8,
-
-    // ── Layer I — KV substrate ───────────────────────────────────────────────────
-    pub(crate) seen:             Arc<ShardedSeen>,
-    /// Hybrid Logical Clock for causal LWW ordering. `make_gossip_update`
-    /// calls `tick()` for every locally-originated write; the connection
-    /// handler calls `observe()` for every incoming timestamp so the local
-    /// clock dominates any remote stamp it has seen.
-    pub(crate) hlc:              Arc<crate::hlc::Hlc>,
-    pub(crate) gossip_txs:       Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]>,
-    pub(crate) kv_state:         Arc<KvState>,
-    /// WAL handle for durable KV writes. Unset when persistence is disabled.
-    /// Written once by `start()` after replay; read-only afterwards.
-    pub(crate) wal: std::sync::OnceLock<Arc<crate::persistence::WalHandle>>,
-
-    // ── Layer II — Signal mesh ───────────────────────────────────────────────────
-    pub(crate) signal_boundary:  Arc<RwLock<Boundary>>,
-    pub(crate) signal_handlers:  Arc<SignalHandlers>,
-    /// Receiver-side causal reorder buffer for `emit_ordered` signals.
-    /// `None` when `config.signal_ordered_delivery = false` (the default).
-    pub(crate) reorder_buf: Option<Arc<std::sync::Mutex<crate::signal::SignalReorderBuffer>>>,
-    /// Opt-in pre-delivery signal interceptor (see [`ReplyInterceptor`]). `None`
-    /// for pure KV/signal embeds (zero overhead); the upper service layer sets it
-    /// to claim correlated RPC/bulk replies. Core stays RPC-agnostic — it only
-    /// asks "did anything claim this signal?" before the `signal_handlers` fan-out.
-    pub(crate) reply_interceptor: Option<ReplyInterceptor>,
-
-    // ── Security (transport) ─────────────────────────────────────────────────────
-    /// TLS context (server + client configs + signing key). Unset when the
-    /// `tls` feature is disabled or when `GossipConfig::tls` is `None`.
-    /// Written once by `start()` before any task is spawned; read-only afterwards.
-    pub(crate) tls: std::sync::OnceLock<Arc<crate::tls::NodeTls>>,
-    /// Map from peer NodeId → 32-byte Ed25519 public key, populated from two
-    /// sources: (a) the mTLS handshake cert, (b) `sys/identity/` KV entries
-    /// gossiped by peers. Used to verify signed consensus messages.
-    #[cfg_attr(not(feature = "tls"), allow(dead_code))]
-    /// Retained verifying-key **set** per node (WS5 option B): every key a node
-    /// has published at `sys/identity/{node}`, accumulated across rotations so
-    /// historical signatures (audit, consensus, roles) keep verifying. Verify
-    /// paths try all keys; see `helpers::{known_verifying_keys, verify_signed_by}`.
-    pub(crate) peer_keys: Arc<papaya::HashMap<NodeId, Vec<[u8; 32]>>>,
-
-    /// Cumulative `sys/` namespace-ownership violations (see
-    /// `SystemStats::sys_namespace_violations`). Incremented by the connection
-    /// handler's inbound-apply tripwire when a remote write targets a `sys/`
-    /// key this node owns; Relaxed ordering — purely diagnostic. Core because the
-    /// connection handler (Layer I transport) is the sole writer.
-    pub(crate) sys_namespace_violations: Arc<AtomicU64>,
-
-    // ── Networking ───────────────────────────────────────────────────────────────
-    /// Live peer table shared with the HTTP gateway for peer-count-based quorum sizing.
-    pub(crate) peers: Arc<papaya::HashMap<NodeId, std::time::Instant>>,
-
-    // ── Lifecycle ────────────────────────────────────────────────────────────────
-    /// Shutdown broadcast — sending `true` cancels all background tasks.
-    pub(crate) shutdown_tx: Arc<watch::Sender<bool>>,
-    /// All spawned background tasks. Reaping is automatic via `JoinSet`.
-    pub(crate) task_handles: Arc<std::sync::Mutex<JoinSet<()>>>,
-}
-
-/// Opt-in pre-delivery signal interceptor registered by the upper service layer.
-/// Given a delivered [`Signal`], it claims correlated `rpc.result` / `bulk.result`
-/// replies — firing the waiting oneshot — and returns `true` to skip the
-/// `signal_handlers` fan-out. Core knows nothing about RPC: the connection handler
-/// only asks "did anything claim this signal?" The RPC correlation law lives in the
-/// closure the service layer registers (mechanism in core; agency above).
-pub(crate) type ReplyInterceptor = Arc<dyn Fn(&Signal) -> bool + Send + Sync>;
+// The old 22-field `TaskCtx` God Object has been split (ROADMAP §v2.0 M1): `CoreCtx`
+// (the Layers I+II infrastructure bundle) and `ReplyInterceptor` now live in the
+// `mycelium-core` crate, imported at the top of this module. `TaskCtx` below wraps
+// `Arc<CoreCtx>` and adds the Layer III+ fields; `GossipAgent` holds `Arc<TaskCtx>`
+// (and so do the tasks), breaking the agent↔task reference cycle.
 
 /// The full infrastructure bundle: [`CoreCtx`] (Layers I+II) plus the Layer III+ fields
-/// (capability / service / consensus / compliance). Derefs to `CoreCtx`, so the ~380
-/// existing `ctx.<core-field>` access sites are unchanged.
+/// (capability / service / consensus / compliance). Held in a single `Arc`, cloned into
+/// every background task and typed handle. `Deref`s to `CoreCtx`, so the ~380 existing
+/// `ctx.<core-field>` access sites are unchanged.
 pub(crate) struct TaskCtx {
     /// Layers I + II substrate context. Will live in `mycelium-core` (M1).
     pub(crate) core: Arc<CoreCtx>,

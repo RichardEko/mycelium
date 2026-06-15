@@ -145,3 +145,51 @@ impl std::fmt::Display for QuorumError {
 }
 
 impl std::error::Error for QuorumError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::framing::GossipUpdate;
+    use crate::store::{apply_and_notify, KvState};
+    use bytes::Bytes;
+
+    /// M2 Run-18 race-family sweep: concurrent `set_with_min_acks` callers on the
+    /// SAME key must coexist. The previous single-slot tracker map let the second
+    /// caller overwrite the first tracker, and the first caller's unconditional
+    /// cleanup then deleted the second's — both could time out spuriously despite
+    /// the acks arriving. (Relocated from `store.rs` with the quorum overlay in the
+    /// ROADMAP §v2.0 M1 Stage 3b crate split; core holds only the `QuorumObserver`
+    /// trait, the install/remove/tracker machinery lives here.)
+    #[test]
+    fn concurrent_quorum_trackers_coexist_and_remove_only_self() {
+        let kv = KvState::new(0);
+        let key: Arc<str> = Arc::from("q/k");
+        let (t1, rx1) = QuorumAckTracker::new(100, 1);
+        let (t2, rx2) = QuorumAckTracker::new(100, 1);
+        install_tracker(&kv.quorum_trackers, Arc::clone(&key), &t1);
+        install_tracker(&kv.quorum_trackers, Arc::clone(&key), &t2);
+
+        // One inbound peer update acks BOTH in-flight callers.
+        apply_and_notify(&kv, &GossipUpdate {
+            sender: 7, key: Arc::clone(&key), value: Bytes::from_static(b"v1"),
+            timestamp: 150, nonce: 1, ttl: 1, is_tombstone: false,
+        });
+        assert_eq!(*rx1.borrow(), 1, "first caller sees the ack");
+        assert_eq!(*rx2.borrow(), 1, "second caller sees the ack");
+
+        // First caller completes: removes ONLY its own tracker.
+        remove_tracker(&kv.quorum_trackers, &key, &t1);
+        apply_and_notify(&kv, &GossipUpdate {
+            sender: 8, key: Arc::clone(&key), value: Bytes::from_static(b"v2"),
+            timestamp: 151, nonce: 2, ttl: 1, is_tombstone: false,
+        });
+        assert_eq!(*rx2.borrow(), 2, "surviving caller keeps receiving acks");
+        assert_eq!(*rx1.borrow(), 1, "removed tracker is no longer observed");
+
+        remove_tracker(&kv.quorum_trackers, &key, &t2);
+        assert!(
+            kv.quorum_trackers.pin().get(&key).is_none(),
+            "entry drops when the last tracker is removed"
+        );
+    }
+}

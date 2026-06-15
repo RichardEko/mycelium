@@ -165,7 +165,7 @@ impl EgressPolicy {
 /// Extract the host from a URL without pulling in a URL crate: drop the scheme,
 /// any `userinfo@`, then take up to the first `/?#` and strip a `:port`. IPv6
 /// literals in brackets are returned without the brackets.
-pub(crate) fn host_of_url(url: &str) -> Option<String> {
+pub fn host_of_url(url: &str) -> Option<String> {
     let after_scheme = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
     let authority = after_scheme
         .split(['/', '?', '#'])

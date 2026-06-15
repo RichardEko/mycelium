@@ -127,6 +127,10 @@ metrics                     = { version = "0.24", optional = true }
 metrics-exporter-prometheus = { version = "0.16", optional = true }
 
 [dev-dependencies]
+# Enable mycelium-core's test-only helpers (N_GOSSIP_SHARDS, store_hash, …) for
+# this crate's test builds. Cargo unions this with the normal dependency above, so
+# `test-support` is active only for tests, never a plain `cargo build`.
+mycelium-core = { path = "mycelium-core", features = ["test-support"] }
 # Companion crate, consumed by examples/three_node_demo (integration
 # scenario 13). Dev-dependency cycles are legal in Cargo: the companion's
 # normal dependency on `mycelium` is unaffected.

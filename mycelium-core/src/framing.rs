@@ -13,7 +13,7 @@ use tokio::{
 };
 use tracing::warn;
 
-pub(crate) const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
+pub const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
 /// Framing-level protocol version. Written before every serialized payload.
 /// v2: switched serialization from bincode 1.x to bincode 2.x (incompatible wire format).
 /// v3: timestamps changed from second to millisecond granularity (incompatible LWW semantics).
@@ -71,23 +71,25 @@ pub(crate) const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
 /// `hlc_seq = None` — the "unordered" sentinel, which is identical to the old
 /// delivery path. A `WireMessageV10` shim is required because adding a field to
 /// an enum variant changes the bincode layout.
-pub(crate) const WIRE_VERSION: u8 = 11;
+pub const WIRE_VERSION: u8 = 11;
 /// Previous wire version accepted during rolling upgrades.
-pub(crate) const PREV_WIRE_VERSION: u8 = 10;
+pub const PREV_WIRE_VERSION: u8 = 10;
 
 /// Which wire version a received frame was encoded with.
 /// Used by `handle_connection` to select the appropriate decoder and to decide
 /// whether the zero-copy Data forward path is safe (current version only).
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub(crate) enum FrameVersion {
+pub enum FrameVersion {
     /// Encoded at `WIRE_VERSION` — use `bincode_cfg()` and zero-copy Data forwarding.
     Current,
     /// Encoded at `PREV_WIRE_VERSION` — use `bincode_cfg_prev()` and full re-encode on forward.
     Previous,
 }
 /// Fallback shard count used in unit tests that build `ConnContext` directly.
-#[cfg(test)]
-pub(crate) const N_GOSSIP_SHARDS: usize = 4;
+/// `test-support` exposes it to the full crate's tests across the crate boundary
+/// (`#[cfg(test)]` items are invisible to dependents).
+#[cfg(any(test, feature = "test-support"))]
+pub const N_GOSSIP_SHARDS: usize = 4;
 
 /// Layout of a bincode-encoded `WireMessage::Data` payload (fixed-int encoding):
 ///
@@ -106,18 +108,18 @@ pub(crate) const N_GOSSIP_SHARDS: usize = 4;
 ///
 /// Used by the early-dedup path to read the nonce directly from the wire buffer
 /// without a full bincode decode.
-pub(crate) const NONCE_OFFSET: usize = 4;
+pub const NONCE_OFFSET: usize = 4;
 /// Byte offset of the `ttl` field. Used for in-place TTL decrement during zero-copy forwarding.
-pub(crate) const TTL_OFFSET: usize = 20;
+pub const TTL_OFFSET: usize = 20;
 /// Little-endian u32(0): the `WireMessage::Data` variant tag. Only Data frames
 /// carry a nonce at `NONCE_OFFSET`; all other variants have a non-zero tag byte.
-pub(crate) const DATA_TAG: [u8; 4] = [0, 0, 0, 0];
+pub const DATA_TAG: [u8; 4] = [0, 0, 0, 0];
 
 /// Sentinel nonce used for entries injected via anti-entropy (`StateResponse`).
 /// The `Data` arm is the only code path that calls `seen.is_duplicate`, so this
 /// value is never inserted into the seen set; it exists solely as a placeholder
 /// to satisfy the `GossipUpdate` struct's nonce field.
-pub(crate) const ANTI_ENTROPY_NONCE: u64 = 0;
+pub const ANTI_ENTROPY_NONCE: u64 = 0;
 
 /// A gossip data update propagated between nodes.
 ///
@@ -125,25 +127,25 @@ pub(crate) const ANTI_ENTROPY_NONCE: u64 = 0;
 /// (nonce, sender, ttl, is_tombstone, timestamp) come first so the TTL can be
 /// decremented in-place at a known byte offset without a full decode/re-encode.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub(crate) struct GossipUpdate {
+pub struct GossipUpdate {
     /// Random identifier for network-wide deduplication.
-    pub(crate) nonce: u64,
+    pub nonce: u64,
     /// Originating node's `id_hash` — compact u64 used for echo-suppression.
-    pub(crate) sender: u64,
+    pub sender: u64,
     /// Remaining hops; decremented on each forward.
-    pub(crate) ttl: u8,
+    pub ttl: u8,
     /// When true the key is deleted rather than upserted.
-    pub(crate) is_tombstone: bool,
+    pub is_tombstone: bool,
     /// Unix-millisecond timestamp for last-write-wins conflict resolution.
-    pub(crate) timestamp: u64,
+    pub timestamp: u64,
     /// `Arc<str>` so clone is O(1) on every fan-out hop.
-    pub(crate) key: Arc<str>,
-    pub(crate) value: Bytes,
+    pub key: Arc<str>,
+    pub value: Bytes,
 }
 
 /// Wire envelope separating control-plane pings from data-plane gossip updates.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub(crate) enum WireMessage {
+pub enum WireMessage {
     Data(GossipUpdate),
     /// `known_peers` carries the sender's current peer table for passive peer discovery.
     Ping { sender: NodeId, known_peers: Vec<NodeId> },
@@ -193,11 +195,11 @@ pub(crate) enum WireMessage {
 
 /// A single key-value record carried inside `WireMessage::StateResponse`.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub(crate) struct SyncEntry {
-    pub(crate) key:          Arc<str>,
-    pub(crate) value:        Bytes,
-    pub(crate) timestamp:    u64,
-    pub(crate) is_tombstone: bool,
+pub struct SyncEntry {
+    pub key:          Arc<str>,
+    pub value:        Bytes,
+    pub timestamp:    u64,
+    pub is_tombstone: bool,
 }
 
 fn shard_hasher() -> &'static RandomState {
@@ -207,7 +209,7 @@ fn shard_hasher() -> &'static RandomState {
 
 /// Maps a key to one of `n_shards` gossip worker channels.
 /// `n_shards` must be a power of two; callers normalise it in `GossipAgent::new`.
-pub(crate) fn shard_for_key(key: &str, n_shards: usize) -> usize {
+pub fn shard_for_key(key: &str, n_shards: usize) -> usize {
     debug_assert!(n_shards.is_power_of_two(), "n_shards must be a power of two");
     shard_hasher().hash_one(key) as usize & (n_shards - 1)
 }
@@ -216,7 +218,7 @@ pub(crate) fn shard_for_key(key: &str, n_shards: usize) -> usize {
 /// Fixed-width integer encoding is faster than varint for u64/u8 fields and
 /// produces a more predictable wire size — no branching on the encode/decode hot path.
 #[inline(always)]
-pub(crate) fn bincode_cfg() -> impl bincode::config::Config {
+pub fn bincode_cfg() -> impl bincode::config::Config {
     // `.with_limit` caps how many bytes a decode is allowed to consume/allocate.
     // Without it, a frame whose internal length prefix claims a huge element
     // count makes bincode attempt an unbounded `Vec::with_capacity` and the
@@ -244,7 +246,7 @@ fn wire_msg_key(msg: &WireMessage) -> &str {
 
 /// Encodes `msg`, routes to the correct shard, and dispatches via `try_send`.
 /// Returns `false` if the channel is full (increments `dropped`) or closed.
-pub(crate) fn dispatch_gossip_try_send(
+pub fn dispatch_gossip_try_send(
     gossip_txs:  &[mpsc::Sender<(Bytes, u64, ForwardHint)>],
     msg:         WireMessage,
     sender_hash: u64,
@@ -270,7 +272,7 @@ pub(crate) fn dispatch_gossip_try_send(
 }
 
 /// Like [`dispatch_gossip_try_send`] but awaits channel capacity instead of dropping.
-pub(crate) async fn dispatch_gossip_send(
+pub async fn dispatch_gossip_send(
     gossip_txs:  &[mpsc::Sender<(Bytes, u64, ForwardHint)>],
     msg:         WireMessage,
     sender_hash: u64,
@@ -293,7 +295,7 @@ pub(crate) async fn dispatch_gossip_send(
 /// after which [`From<WireMessageV7>`] upgrades it to a `WireMessage` with
 /// `key_timestamps = vec![]` (the "no delta info" sentinel — full snapshot).
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub(crate) enum WireMessageV7 {
+pub enum WireMessageV7 {
     Data(GossipUpdate),
     Ping { sender: NodeId, known_peers: Vec<NodeId> },
     /// v7 variant — has `store_hash` but no `key_timestamps`.
@@ -329,7 +331,7 @@ impl From<WireMessageV7> for WireMessage {
 /// Used to decode frames from v10 peers during rolling upgrades; converted to
 /// `WireMessage` via `From`, filling `hlc_seq = None`.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub(crate) enum WireMessageV10 {
+pub enum WireMessageV10 {
     Data(GossipUpdate),
     Ping { sender: NodeId, known_peers: Vec<NodeId> },
     StateRequest { sender: NodeId, store_hash: u64, key_timestamps: Vec<(Arc<str>, u64)> },
@@ -370,7 +372,7 @@ impl From<WireMessageV10> for WireMessage {
 /// Writes a length-prefixed frame: `[4-byte len][WIRE_VERSION][payload]`.
 /// The 5-byte header and payload are written as two consecutive `write_all` calls;
 /// through the caller's `BufWriter` both land in the same kernel write on flush.
-pub(crate) async fn write_frame<W>(stream: &mut W, data: &[u8]) -> Result<(), GossipError>
+pub async fn write_frame<W>(stream: &mut W, data: &[u8]) -> Result<(), GossipError>
 where
     W: AsyncWrite + Unpin,
 {
@@ -395,7 +397,7 @@ where
 ///
 /// Uses `read_buf` with a `BufMut::limit` guard to avoid zero-initialising the
 /// destination region before `read_exact` fills it (safe, no unsafe code needed).
-pub(crate) async fn read_frame<R>(stream: &mut R, buf: &mut BytesMut) -> Result<FrameVersion, GossipError>
+pub async fn read_frame<R>(stream: &mut R, buf: &mut BytesMut) -> Result<FrameVersion, GossipError>
 where
     R: AsyncRead + Unpin,
 {
@@ -446,7 +448,7 @@ where
 /// Forwarding hint passed alongside pre-encoded signal bytes into the gossip shard.
 /// Data frames always use `ForwardHint::All`.
 #[derive(Clone, Debug)]
-pub(crate) enum ForwardHint {
+pub enum ForwardHint {
     /// Forward to all targets — System signals and Data frames.
     All,
     /// Forward to known group members plus up to `epidemic_extra_peers` random non-members.
@@ -475,7 +477,7 @@ pub(crate) enum ForwardHint {
 ///
 /// Callers obtain an `&Hlc` from whichever context holds it
 /// (`TaskCtx::hlc`, `ConnContext::hlc`, or `GossipAgent::task_ctx.hlc`).
-pub(crate) fn make_gossip_update(
+pub fn make_gossip_update(
     node_id:      &crate::node_id::NodeId,
     ttl:          u8,
     key:          Arc<str>,
@@ -500,7 +502,7 @@ pub(crate) fn make_gossip_update(
 /// decremented on each forwarding hop — the originator's signature must remain valid
 /// through the entire propagation path.
 #[cfg_attr(not(feature = "tls"), allow(dead_code))]
-pub(crate) fn canonical_sign_bytes(u: &GossipUpdate) -> Vec<u8> {
+pub fn canonical_sign_bytes(u: &GossipUpdate) -> Vec<u8> {
     bincode::serde::encode_to_vec(
         (u.nonce, u.sender, u.is_tombstone, u.timestamp, u.key.as_ref(), u.value.as_ref()),
         bincode_cfg(),
@@ -516,7 +518,7 @@ pub(crate) fn canonical_sign_bytes(u: &GossipUpdate) -> Vec<u8> {
 /// Used by `dispatch_update`, `dispatch_update_async`, and the consensus engine's
 /// KV write helpers so signing is applied consistently at every locally-originated
 /// write site.
-pub(crate) fn make_kv_wire_msg(
+pub fn make_kv_wire_msg(
     update:      GossipUpdate,
     sender_hash: u64,
     tls:         Option<&crate::tls::NodeTls>,
@@ -536,7 +538,7 @@ pub(crate) fn make_kv_wire_msg(
 /// Projects the persistence-relevant fields from a [`GossipUpdate`] into a
 /// [`SyncEntry`], stripping wire-only fields (`nonce`, `sender`, `ttl`).
 /// Used by WAL call sites to record exactly what the store contains.
-pub(crate) fn sync_entry_from(u: &GossipUpdate) -> SyncEntry {
+pub fn sync_entry_from(u: &GossipUpdate) -> SyncEntry {
     SyncEntry {
         key:          Arc::clone(&u.key),
         value:        u.value.clone(),
@@ -550,7 +552,7 @@ pub(crate) fn sync_entry_from(u: &GossipUpdate) -> SyncEntry {
 /// `0.0` = all channels empty. `1.0` = at least one shard fully saturated.
 /// Used by admission-control paths that need to account for gossip backpressure
 /// independently of handler channel fill ratios.
-pub(crate) fn gossip_shard_fill(txs: &[mpsc::Sender<(Bytes, u64, ForwardHint)>]) -> f32 {
+pub fn gossip_shard_fill(txs: &[mpsc::Sender<(Bytes, u64, ForwardHint)>]) -> f32 {
     txs.iter()
         .map(|tx| {
             let max = tx.max_capacity();
@@ -559,7 +561,7 @@ pub(crate) fn gossip_shard_fill(txs: &[mpsc::Sender<(Bytes, u64, ForwardHint)>])
         .fold(0.0_f32, f32::max)
 }
 
-pub(crate) fn is_connection_closed(e: &GossipError) -> bool {
+pub fn is_connection_closed(e: &GossipError) -> bool {
     match e {
         GossipError::Io(io_err) => matches!(
             io_err.kind(),

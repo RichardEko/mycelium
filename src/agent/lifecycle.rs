@@ -222,7 +222,7 @@ impl GossipAgent {
         }
 
         let conn = ConnContext {
-            task_ctx:        Arc::clone(&self.task_ctx),
+            task_ctx:        Arc::clone(&self.task_ctx.core),
             peers:           Arc::clone(&self.peers),
             shutdown:        Arc::clone(&self.shutdown_tx),
             peer_writers:    Arc::clone(&self.peer_writers),

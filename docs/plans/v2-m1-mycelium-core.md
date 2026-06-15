@@ -62,10 +62,21 @@ tripwire). `tls`/`peer_keys` are core (connection-layer verification needs them)
 | 2 ✓ | Decouple `connection.rs` from `rpc_pending` via the `ReplyInterceptor` hook | zero core→III refs *in the transport modules* — **committed** |
 | 2.5 ✓ | Resolve three core→upper couplings the Stage-2 scan missed (see below) | core production code references no upper type — **committed** |
 | 3a ✓ | Stand up `mycelium-core`; move the **leaf** modules (`error`, `hlc`, `seen`); prove the mechanism end-to-end | both crates build/test/clippy green — **committed** |
-| 3b | Move the interdependent transport cluster (`store, connection, framing, writer, signal, persistence, stream, tls, locality, config`) + `CoreCtx`; `connection`/`writer` → `CoreCtx`; relocate the `store.rs` quorum test | `mycelium-core` builds standalone |
-| 4 | `mycelium` depends on core; re-export for API stability; fix paths | full feature matrix builds |
-| 5 | Tests green (318/323/365), clippy clean, no-default-features | CLAUDE.md test posture |
+| 3b ✓ | Move the interdependent transport cluster + `CoreCtx`; `connection` → `CoreCtx`; `QuorumObserver`/`test-support`; relocate the `store.rs` quorum test | `mycelium-core` builds standalone — **committed** |
+| 4 ✓ | `mycelium` depends on core; re-export (`pub use mycelium_core::{config,signal,error}` + `pub(crate) use …`); feature-forwarding | full matrix builds — folded into 3a/3b |
+| 5 ✓ | Tests green, clippy clean, no-default-features | CLAUDE.md test posture met |
 | 6 | Philosophy compliance review (no core→III; library-not-platform; seam at II↔III) | sign-off |
+
+**Stage 3b result — the split is physically done.** `mycelium-core` is a standalone crate
+carrying all 14 substrate modules + `CoreCtx`, and references **nothing** upper (verified by
+grep + the `layer1_modules_do_not_reference_higher_layers` guard, now reading the moved files).
+`mycelium` depends on it and re-exports, so every `crate::store::…` / `crate::CoreCtx` / public
+`mycelium::{config, signal, error}` path is unchanged. Cross-boundary fallout resolved: blanket
+`pub(crate)→pub` on moved modules; `ShardedSeen::is_empty`; a `test-support` feature exposing
+`#[cfg(test)]` helpers (`N_GOSSIP_SHARDS`, `store_hash`) to the upper crate's tests via its
+dev-dependency. Gate: core standalone (79 tests, clippy clean); `mycelium` default +
+`tls,metrics,a2a,llm,compliance` + no-default-features build; upper lib tests 239 default / 302
+compliance + core (no loss); clippy `-D warnings` clean on both crates.
 
 ## Stage 2 decisions (the de-coupling)
 

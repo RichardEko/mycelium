@@ -1,4 +1,4 @@
-use crate::agent::TaskCtx;
+use crate::context::CoreCtx;
 use crate::error::GossipError;
 use crate::framing::{
     bincode_cfg, dispatch_gossip_try_send, is_connection_closed,
@@ -63,33 +63,34 @@ fn flag_foreign_sys_write(
 
 /// Shared state threaded into every inbound connection handler.
 #[derive(Clone)]
-pub(crate) struct ConnContext {
-    /// Shared infrastructure bundle (node_id, gossip_txs, seen, hlc,
-    /// signal_boundary, signal_handlers, kv_state, wal, default_ttl).
-    pub(crate) task_ctx:            Arc<TaskCtx>,
-    pub(crate) peers:               Arc<papaya::HashMap<NodeId, Instant>>,
-    pub(crate) shutdown:            Arc<watch::Sender<bool>>,
-    pub(crate) peer_writers:        Arc<papaya::HashMap<NodeId, WriterEntry>>,
-    pub(crate) writer_depth:        usize,
-    pub(crate) backoff:             Duration,
-    pub(crate) n_shards:            usize,
-    pub(crate) intern_keys:         bool,
-    pub(crate) intern_max_keys:     usize,
+pub struct ConnContext {
+    /// Shared Layers I+II context (node_id, gossip_txs, seen, hlc,
+    /// signal_boundary, signal_handlers, kv_state, wal, default_ttl, …).
+    /// The upper crate passes `Arc::clone(&task_ctx.core)`.
+    pub task_ctx:            Arc<CoreCtx>,
+    pub peers:               Arc<papaya::HashMap<NodeId, Instant>>,
+    pub shutdown:            Arc<watch::Sender<bool>>,
+    pub peer_writers:        Arc<papaya::HashMap<NodeId, WriterEntry>>,
+    pub writer_depth:        usize,
+    pub backoff:             Duration,
+    pub n_shards:            usize,
+    pub intern_keys:         bool,
+    pub intern_max_keys:     usize,
     /// Cap on the peer table. Piggybacked peers are silently ignored once this
     /// is reached; bootstrap peers and direct senders are always admitted.
-    pub(crate) max_peers:           usize,
+    pub max_peers:           usize,
     /// Idle timeout forwarded to `get_or_spawn_writer` / `request_state`.
     /// Zero means no timeout (default).
-    pub(crate) writer_idle_timeout: Duration,
+    pub writer_idle_timeout: Duration,
     /// Fan-out list publisher (same channel the health monitor feeds). A peer
     /// learned here must become sendable IMMEDIATELY: waiting for the health
     /// monitor's next tick left inbound-only nodes mute for live sends —
     /// including Individual-scoped RPC responses — for up to two
     /// health-check intervals.
-    pub(crate) peer_list_tx: tokio::sync::watch::Sender<Arc<[NodeId]>>,
+    pub peer_list_tx: tokio::sync::watch::Sender<Arc<[NodeId]>>,
 }
 
-pub(crate) async fn handle_connection(
+pub async fn handle_connection(
     socket: GossipStream,
     peer_addr: SocketAddr,
     ctx: ConnContext,

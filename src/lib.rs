@@ -153,27 +153,19 @@
 
 pub mod capability;
 pub mod capability_config;
-pub mod config;
 pub mod mesh_manifest;
-pub mod signal;
 
-// Layers I+II substrate now live in the `mycelium-core` crate (ROADMAP §v2.0 M1).
-// Re-exported here so existing `crate::error::…`, `crate::hlc::…`, `crate::seen::…`
-// paths keep resolving unchanged across the crate boundary.
-pub use mycelium_core::error;
-pub(crate) use mycelium_core::{hlc, seen};
+// Layers I+II substrate live in the `mycelium-core` crate (ROADMAP §v2.0 M1, complete).
+// Re-exported here so existing `crate::store::…`, `crate::signal::…`, `crate::config::…`,
+// `crate::CoreCtx`, etc. keep resolving unchanged across the crate boundary, and the
+// public `mycelium::{config, signal, error}` API surface is preserved.
+pub use mycelium_core::{config, error, signal};
+pub(crate) use mycelium_core::{
+    connection, framing, hlc, locality, node_id, persistence, seen, store, stream, tls, writer,
+};
 
 mod agent;
-mod connection;
 mod consensus;
-mod framing;
-mod locality;
-mod node_id;
-mod persistence;
-mod store;
-mod stream;
-mod tls;
-mod writer;
 
 pub use agent::{
     AgentPolicy, ExecutionState, AgentStateMachine, PolicyViolation,

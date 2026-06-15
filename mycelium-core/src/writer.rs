@@ -35,7 +35,7 @@ fn jittered(backoff: Duration) -> Duration {
 /// doesn't cause a connect storm. Exits on global shutdown, per-peer eviction
 /// signal, or when all senders drop.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn run_peer_writer(
+pub async fn run_peer_writer(
     peer: NodeId,
     mut rx: mpsc::Receiver<Bytes>,
     backoff: Duration,
@@ -163,19 +163,19 @@ pub(crate) async fn run_peer_writer(
 /// callers that see `None` return the pre-installed `tx` directly — they share the same
 /// channel and their frames will be drained once the task starts.
 #[derive(Clone)]
-pub(crate) struct WriterEntry {
-    pub(crate) tx:            mpsc::Sender<Bytes>,
-    pub(crate) peer_shutdown: Arc<watch::Sender<bool>>,
+pub struct WriterEntry {
+    pub tx:            mpsc::Sender<Bytes>,
+    pub peer_shutdown: Arc<watch::Sender<bool>>,
     /// `None` = spawn in progress (pending sentinel); `Some` = task running or finished.
-    pub(crate) abort_handle:  Option<tokio::task::AbortHandle>,
+    pub abort_handle:  Option<tokio::task::AbortHandle>,
     /// Cumulative frames dropped to this peer during reconnect backoff.
     /// Subset of the global `dropped_frames` counter; useful for identifying slow peers.
-    pub(crate) dropped:       Arc<AtomicU64>,
+    pub dropped:       Arc<AtomicU64>,
 }
 
 impl WriterEntry {
     /// Returns `true` if the writer task is alive or its spawn is still pending.
-    pub(crate) fn is_live(&self) -> bool {
+    pub fn is_live(&self) -> bool {
         self.abort_handle.as_ref().is_none_or(|h| !h.is_finished())
     }
 }
@@ -190,7 +190,7 @@ impl WriterEntry {
 /// 3. **Spawn** — the claim winner spawns the writer task outside `compute()` (so papaya
 ///    retry loops don't create duplicate tasks), then updates the entry with the real handle.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn get_or_spawn_writer(
+pub fn get_or_spawn_writer(
     peer: &NodeId,
     writers: &papaya::HashMap<NodeId, WriterEntry>,
     chan_depth: usize,
@@ -266,7 +266,7 @@ pub(crate) fn get_or_spawn_writer(
 }
 
 /// Removes `peer`'s writer from the map and signals its task to exit.
-pub(crate) fn evict_peer_writer(writers: &papaya::HashMap<NodeId, WriterEntry>, peer: &NodeId) {
+pub fn evict_peer_writer(writers: &papaya::HashMap<NodeId, WriterEntry>, peer: &NodeId) {
     let guard = writers.pin();
     if let Some(entry) = guard.get(peer) {
         let _ = entry.peer_shutdown.send(true);
@@ -281,7 +281,7 @@ pub(crate) fn evict_peer_writer(writers: &papaya::HashMap<NodeId, WriterEntry>, 
 /// to compute a delta response (v8+ delta sync). Pass `vec![]` for a full-dump request
 /// (e.g. health monitor calls, or when the local store is empty).
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn request_state(
+pub fn request_state(
     peer: &NodeId,
     peer_writers: &papaya::HashMap<NodeId, WriterEntry>,
     writer_depth: usize,

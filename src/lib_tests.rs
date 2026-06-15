@@ -86,7 +86,8 @@ fn spawn_handler(
 ) -> (Arc<watch::Sender<bool>>, tokio::task::JoinHandle<Result<(), GossipError>>) {
     use crate::connection::handle_connection;
     use crate::signal::{Boundary, SignalHandlers};
-    use crate::agent::{TaskCtx, CoreCtx, BulkTransport};
+    use crate::agent::{TaskCtx, BulkTransport};
+    use mycelium_core::CoreCtx;
     use parking_lot::RwLock;
     let node_id = NodeId::new("127.0.0.1", 0).unwrap();
     let (shutdown_tx, _) = watch::channel(false);
@@ -152,7 +153,7 @@ fn spawn_handler(
         llm_dispatch_spawned: std::sync::atomic::AtomicBool::new(false),
     });
     let ctx = ConnContext {
-        task_ctx,
+        task_ctx: Arc::clone(&task_ctx.core),
         peers,
         shutdown: Arc::clone(&shutdown_tx),
         peer_writers: Arc::new(papaya::HashMap::new()),
@@ -504,7 +505,8 @@ async fn test_subscribe_notified_via_gossip() {
         (0..N_GOSSIP_SHARDS).map(|_| gossip_tx.clone()).collect::<Vec<_>>().into();
     {
         use crate::signal::{Boundary, SignalHandlers};
-        use crate::agent::{TaskCtx, CoreCtx, BulkTransport};
+        use crate::agent::{TaskCtx, BulkTransport};
+    use mycelium_core::CoreCtx;
         use parking_lot::RwLock;
         let node_id = NodeId::new("127.0.0.1", 0).unwrap();
         let kv_state = Arc::new(KvState {
@@ -563,7 +565,7 @@ async fn test_subscribe_notified_via_gossip() {
             llm_dispatch_spawned: std::sync::atomic::AtomicBool::new(false),
         });
         let ctx = ConnContext {
-            task_ctx,
+            task_ctx: Arc::clone(&task_ctx.core),
             peers: Arc::new(papaya::HashMap::new()),
             shutdown: shutdown_tx,
             peer_writers: Arc::new(papaya::HashMap::new()),
@@ -2583,9 +2585,9 @@ async fn probe_shutdown_drains_tasks_and_releases_port() {
 #[test]
 fn layer1_modules_do_not_reference_higher_layers() {
     const LAYER1: &[(&str, &str)] = &[
-        ("store.rs",   include_str!("store.rs")),
-        ("framing.rs", include_str!("framing.rs")),
-        ("writer.rs",  include_str!("writer.rs")),
+        ("store.rs",   include_str!("../mycelium-core/src/store.rs")),
+        ("framing.rs", include_str!("../mycelium-core/src/framing.rs")),
+        ("writer.rs",  include_str!("../mycelium-core/src/writer.rs")),
         ("seen.rs",    include_str!("../mycelium-core/src/seen.rs")),
         ("hlc.rs",     include_str!("../mycelium-core/src/hlc.rs")),
     ];
