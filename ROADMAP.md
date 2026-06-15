@@ -2588,11 +2588,28 @@ admission), the compliant shape is stated inline rather than assumed.
     2. **A resolve pass over the installable catalog** — the same `CapFilter` matching
        the live resolver already does, scoped to the declared-provides of
        `installable` entries instead of live `cap/` / `gcap/`.
-    3. **Transitive closure** — if a chosen artifact has unmet imports, satisfy
-       *those* from the catalog too. This is OSGi's genuinely hard part (version
-       ranges, uses-constraints; can be NP-hard). A bounded-depth shallow resolve is
-       easy and likely sufficient; for full closure, delegate to the WASM toolchain's
-       own resolver (`wkg` / Warg) rather than reimplementing a SAT solver.
+    3. **Install-time dependency resolution — one hop, not a constraint solver
+       (design contract).** Separate two things OSGi conflates. *Service/capability
+       dependencies* ("skill A calls skill B") are **already resolved at runtime
+       across the mesh** by the live resolver, re-resolved on every relevant KV change
+       — A emits to whoever provides B, possibly on another node; this is the
+       transitive part, and it is *not* frozen into a deployment set. *Install-time
+       artifact dependencies* ("what code must this node pull to bring cap A live") are
+       the only thing this milestone resolves, and they bottom out fast: a WASM
+       component's WIT imports are satisfied either from **host-provided
+       capability-scoped imports** (depth 0) or, at most, **one hop** to a directly
+       required component. The rule: *install-time resolution stops at the component
+       plus its host-satisfied imports; anything that is a call to another capability
+       is runtime-mesh-resolved, not install-resolved.* Going deeper into a transitive
+       *install* closure is a smell — it link-time-binds what the mesh already resolves
+       at call time. This deliberately **declines OSGi's genuinely hard part** (version
+       ranges, uses-constraints, NP-hard SAT) because the mesh dissolved it:
+       schema-version compatibility is checked per-hop at the capability boundary (the
+       existing `with_schema` filter), never solved globally. The shallow matcher is
+       not a lesser resolver — it is the architecture refusing to import a problem it
+       doesn't have. For any case that genuinely needs deep artifact closure, delegate
+       to the WASM toolchain's own resolver (`wkg` / Warg) rather than reimplementing a
+       SAT solver.
     4. **A provisioner agent that closes the loop** — watches `req/` /
        `demand_snapshot`, resolves unmet requirements against the catalog, pulls +
        verifies + instantiates via milestone 12, and lets the new capability advertise
@@ -2765,6 +2782,39 @@ Ranked by relevance:
    existing `/.well-known/agent.json` edge is most of the work. No change to M16 Deliverable A;
    the identity gap (cluster-internal Ed25519 `NodeId` → a domain DID) is the bridging glue to
    scope when M16 starts.
+
+### Schema-registry evolution — runtime schema migration, the Mycelium way (v2; pairs with M16)
+
+BRAIN-IoT's Event Bus (Tim Ward's OSGi Type-Safe Events, rfc-0244, contributed to Apache
+Aries) offered *"basic schema transformation"* so a publisher and subscriber compiled against
+different schema versions still interoperate. Mycelium has the ingredients —
+gossip-distributed schemas (`publish_schema` / `get_schema`), cap/skill input/output schemas
+(`with_input_schema` / `with_output_schema`), schema-version-aware filtering
+(`with_schema_id`) — but **not** the *transformation/migration execution* step on the
+signal/RPC delivery path. Scoped in three tiers by cost and house-style fit:
+
+1. **Additive tolerance** (new optional fields ignored, missing fields defaulted) — *largely
+   already true* on the JSON payload paths (gateway, A2A, prompt skills) via serde
+   defaults / ignore-unknown; wire frames are bincode but skill payloads are JSON.
+   **Action: verify + document the property, not a milestone.**
+2. **Compatibility detection** — schema mismatch ⇒ `warn!` + a `schema_mismatch` counter on
+   `/stats`, exactly the existing tripwire idiom (`commit_conflicts`,
+   `sys_namespace_violations`). Detection-not-prevention. Cheap; add whenever schema drift
+   first bites.
+3. **Registered migrations** (renames, type coercions, cross-version mapping) — the real
+   feature, and a **v2 aspiration**. The Mycelium-idiomatic reframe: **explicit, registered,
+   gossip-distributed migration functions** (`vN → vN+1` transforms published into the schema
+   registry *alongside* the schemas), composed `v1→v2→v3` on the receive path — **never
+   silent best-effort coercion**, which would mask real incompatibilities and violate the
+   explicit-contract / detection-not-prevention posture. When no migration path exists,
+   detect (tier 2), do not guess.
+
+**Placement:** a sub-item of the schema-registry work, riding alongside **M16** — whose
+evolvable, semantically-versioned JSON-LD AgentFacts wants exactly this migration machinery —
+not a standalone marquee milestone.
+
+**Trigger to start:** first real cross-version schema drift in production, or M16's AgentFacts
+evolution needing field-level migration.
 
 ---
 
