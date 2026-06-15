@@ -58,12 +58,34 @@ tripwire). `tls`/`peer_keys` are core (connection-layer verification needs them)
 | Stage | Work | Gate |
 |---|---|---|
 | 0 ✓ | branch, philosophy, seam map, carve design | done |
-| 1 | Carve `CoreCtx` from `TaskCtx` in place (+`Deref`); fix 3 constructors | full build + tests green, one crate |
-| 2 | Split `helpers.rs` (core vs upper); relocate `kv_quorum` hooks | zero core→III refs |
-| 3 | Create `mycelium-core` member; physically move core modules; `connection`/`writer` → `CoreCtx` | `mycelium-core` builds standalone |
+| 1 ✓ | Carve `CoreCtx` from `TaskCtx` in place (+`Deref`); fix 3 constructors | full build + tests green, one crate — **committed** |
+| 2 ✓ | Decouple `connection.rs` from `rpc_pending` via the `ReplyInterceptor` hook | zero core→III refs in production transport — **committed** |
+| 3 | Create `mycelium-core` member; physically move the 14 substrate modules + `CoreCtx`; `connection`/`writer` → `CoreCtx` | `mycelium-core` builds standalone |
 | 4 | `mycelium` depends on core; re-export for API stability; fix paths | full feature matrix builds |
 | 5 | Tests green (318/323/365), clippy clean, no-default-features | CLAUDE.md test posture |
 | 6 | Philosophy compliance review (no core→III; library-not-platform; seam at II↔III) | sign-off |
+
+## Stage 2 decisions (the de-coupling)
+
+- **Consistency overlays stay upper.** Philosophy: *"Consistency as a service, not a
+  foundation."* `kv_quorum` and `overlay_consistent` (and `KvHandle`'s `consistent_*` methods)
+  are higher-order → they remain in `mycelium`, not `mycelium-core`. `kv_handle.rs`'s
+  references to them are therefore fine (handle layer is upper).
+- **The RPC fast-path coupling is gone.** `connection.rs` no longer reads `rpc_pending` (a
+  Layer III field). Core now exposes `CoreCtx::reply_interceptor: Option<ReplyInterceptor>`;
+  the upper layer registers a closure (capturing `rpc_pending`) at agent construction that
+  claims correlated `rpc.result`/`bulk.result` replies. Core asks only "did anything claim
+  this signal?" — mechanism in core, RPC law above. Verified by the RPC tests.
+- **Minimal-core decision.** `mycelium-core` = the 14 substrate modules (`store, connection,
+  framing, writer, seen, signal, hlc, node_id, error, config, persistence, stream, tls,
+  locality`) + `CoreCtx`. The agent **handle/ops layer** (`kv_handle`, `mesh_handle`,
+  `helpers`, …) stays in `mycelium` and is re-exported — it's the ergonomic API *over* the
+  core mechanism, holds `Arc<CoreCtx>`/`Arc<TaskCtx>`, and pulls in nothing the substrate
+  modules need. This is the minimal correct cut for M1; pushing the handle layer down too is
+  a later refinement, not required.
+- **Stage 3 mechanical note:** the `store.rs` `concurrent_quorum_trackers_coexist…` **test**
+  references `kv_quorum`; it relocates to the upper crate alongside `kv_quorum` during the
+  physical move (it tests an overlay, not core storage).
 
 **Compliance review criteria for Stage 6:** (a) `grep` shows zero `mycelium-core` →
 consensus/capability/service references; (b) `mycelium-core` has no `daemon`/control-plane

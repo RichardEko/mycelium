@@ -2,7 +2,7 @@ use crate::config::GossipConfig;
 use crate::framing::ForwardHint;
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
-use crate::signal::{Boundary, SignalHandlers};
+use crate::signal::{Boundary, Signal, SignalHandlers, signal_kind};
 use crate::store::KvState;
 use crate::writer::WriterEntry;
 use bytes::Bytes;
@@ -293,6 +293,11 @@ pub(crate) struct CoreCtx {
     /// Receiver-side causal reorder buffer for `emit_ordered` signals.
     /// `None` when `config.signal_ordered_delivery = false` (the default).
     pub(crate) reorder_buf: Option<Arc<std::sync::Mutex<crate::signal::SignalReorderBuffer>>>,
+    /// Opt-in pre-delivery signal interceptor (see [`ReplyInterceptor`]). `None`
+    /// for pure KV/signal embeds (zero overhead); the upper service layer sets it
+    /// to claim correlated RPC/bulk replies. Core stays RPC-agnostic — it only
+    /// asks "did anything claim this signal?" before the `signal_handlers` fan-out.
+    pub(crate) reply_interceptor: Option<ReplyInterceptor>,
 
     // ── Security (transport) ─────────────────────────────────────────────────────
     /// TLS context (server + client configs + signing key). Unset when the
@@ -326,6 +331,14 @@ pub(crate) struct CoreCtx {
     /// All spawned background tasks. Reaping is automatic via `JoinSet`.
     pub(crate) task_handles: Arc<std::sync::Mutex<JoinSet<()>>>,
 }
+
+/// Opt-in pre-delivery signal interceptor registered by the upper service layer.
+/// Given a delivered [`Signal`], it claims correlated `rpc.result` / `bulk.result`
+/// replies — firing the waiting oneshot — and returns `true` to skip the
+/// `signal_handlers` fan-out. Core knows nothing about RPC: the connection handler
+/// only asks "did anything claim this signal?" The RPC correlation law lives in the
+/// closure the service layer registers (mechanism in core; agency above).
+pub(crate) type ReplyInterceptor = Arc<dyn Fn(&Signal) -> bool + Send + Sync>;
 
 /// The full infrastructure bundle: [`CoreCtx`] (Layers I+II) plus the Layer III+ fields
 /// (capability / service / consensus / compliance). Derefs to `CoreCtx`, so the ~380
@@ -657,6 +670,11 @@ impl GossipAgent {
         let gossip_txs: Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]> = gossip_txs_vec.into();
         let peers_arc: Arc<papaya::HashMap<NodeId, std::time::Instant>> = Arc::new(papaya::HashMap::new());
         let config_arc = Arc::new(config.clone());
+        // RPC/bulk reply correlation map. Created here so the core-level reply
+        // interceptor can capture it; the same Arc is shared into `TaskCtx`
+        // (Layer III) where `rpc_call` registers and awaits oneshots.
+        let rpc_pending: Arc<std::sync::Mutex<std::collections::HashMap<u64, tokio::sync::oneshot::Sender<crate::signal::Signal>>>> =
+            Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
         let core_ctx = Arc::new(CoreCtx {
             node_id:         node_id.clone(),
             config:          Arc::clone(&config_arc),
@@ -682,6 +700,28 @@ impl GossipAgent {
             } else {
                 None
             },
+            reply_interceptor: Some({
+                let rp = Arc::clone(&rpc_pending);
+                Arc::new(move |sig: &Signal| -> bool {
+                    // Claim correlated rpc.result / bulk.result: the nonce is the
+                    // first 8 LE bytes of the payload. On hit, fire the oneshot and
+                    // signal "claimed" so the fan-out is skipped.
+                    if sig.payload.len() >= 8
+                        && (sig.kind.as_ref() == signal_kind::RPC_RESULT
+                            || sig.kind.as_ref() == signal_kind::BULK_RESULT)
+                    {
+                        let call_nonce = u64::from_le_bytes(
+                            sig.payload[..8].try_into()
+                                .expect("RPC/bulk result nonce occupies first 8 bytes; payload length checked"),
+                        );
+                        if let Some(tx) = rp.lock().unwrap_or_else(|e| e.into_inner()).remove(&call_nonce) {
+                            let _ = tx.send(sig.clone());
+                            return true;
+                        }
+                    }
+                    false
+                })
+            }),
             shutdown_tx:         Arc::clone(&shutdown_tx_arc),
             task_handles:        Arc::clone(&task_handles_arc),
         });
@@ -693,7 +733,7 @@ impl GossipAgent {
                 std::time::Duration::from_secs(config.bulk_fetch_timeout_secs),
                 config.max_concurrent_bulk_handlers,
             )),
-            rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            rpc_pending: Arc::clone(&rpc_pending),
             commit_conflicts: Arc::new(AtomicU64::new(0)),
             #[cfg(feature = "compliance")]
             audit_chain: Arc::new(std::sync::Mutex::new(audit::AuditChainState::new())),

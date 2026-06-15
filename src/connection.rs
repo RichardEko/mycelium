@@ -8,7 +8,7 @@ use crate::framing::{
 };
 #[cfg(feature = "tls")]
 use crate::framing::canonical_sign_bytes;
-use crate::signal::{parse_own_grp_key, Signal, SignalScope, signal_kind};
+use crate::signal::{parse_own_grp_key, Signal, SignalScope};
 use crate::store::{apply_and_notify, intern_key, store_hash_acc};
 use crate::node_id::NodeId;
 use crate::writer::{get_or_spawn_writer, request_state, WriterEntry};
@@ -449,25 +449,14 @@ pub(crate) async fn handle_connection(
                             };
 
                         for sig in signals_to_deliver {
-                        // O(1) fast-path for correlated rpc.result / bulk.result:
-                        // if the correlation nonce is registered in rpc_pending,
-                        // fire the oneshot and skip the signal_handlers fan-out.
-                        let nonce_claimed = if sig.payload.len() >= 8
-                            && (sig.kind.as_ref() == signal_kind::RPC_RESULT
-                                || sig.kind.as_ref() == signal_kind::BULK_RESULT)
-                        {
-                            let call_nonce = u64::from_le_bytes(
-                                sig.payload[..8].try_into()
-                                    .expect("RPC/bulk result nonce occupies first 8 bytes; payload length checked"),
-                            );
-                            if let Some(tx) = task_ctx.rpc_pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&call_nonce) {
-                                let _ = tx.send(sig.clone());
-                                true
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
+                        // Opt-in O(1) fast-path: the upper service layer may register a
+                        // reply interceptor (`CoreCtx::reply_interceptor`) that claims
+                        // correlated rpc.result / bulk.result signals — firing the waiting
+                        // oneshot — and returns true to skip the signal_handlers fan-out.
+                        // Core stays RPC-agnostic: it only asks "did anything claim this?".
+                        let nonce_claimed = match task_ctx.reply_interceptor.as_ref() {
+                            Some(claim) => claim(&sig),
+                            None => false,
                         };
                         if !nonce_claimed {
                             signal_handlers.deliver(&sig);
