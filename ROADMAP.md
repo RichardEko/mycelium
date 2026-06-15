@@ -2223,6 +2223,15 @@ admission), the compliant shape is stated inline rather than assumed.
    without consensus/capabilities, or sustained friction from the `TaskCtx` coupling
    in handle code. Enables pure-substrate embeds with a much smaller dep tree.
 2. **`#[cfg(feature = "consensus")]`** compile-time gate on the epidemic consensus engine. Currently consensus is always compiled; this would let minimal embeds drop the Paxos machinery entirely.
+
+   > **✅ IMPLEMENTED (2026-06-15, branch `v2/m2-consensus-feature`, pending merge).** `consensus`
+   > is a default-on feature; `default-features = false` drops the engine **and** the consistency
+   > overlay built on it (`consistent_set`/`get`/lock), ~2,200 LOC. Record + the one
+   > graceful-degradation point (`suggest_leader` trust-weighting → pure load) in
+   > [`docs/plans/v2-m2-consensus-feature.md`](docs/plans/v2-m2-consensus-feature.md). Mixed
+   > clusters are fine: a consensus-disabled node still forwards PROPOSE/VOTE/COMMIT (forwarding
+   > is in `mycelium-core`), it just never acts. Gate: default 239 + matrix 302 + **no-consensus
+   > 196** lib tests, clippy `-D warnings` clean across all combos.
 3. **Owned standalone handles**: `KvHandle` / `MeshHandle` / `CapabilitiesHandle` as ownable values that do not require a live `GossipAgent` borrow. Currently handles hold `Arc<TaskCtx>` from a started agent; this would allow passing handles across crate boundaries without exposing `GossipAgent`.
 4. **Partial-mesh gossip** — practical cluster ceiling with current design is ~200–400 nodes.
 

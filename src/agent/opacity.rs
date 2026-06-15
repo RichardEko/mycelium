@@ -99,6 +99,7 @@ pub(super) fn effective_opacity_ctx(ctx: &TaskCtx, kind: &str) -> f32 {
 
 /// Count of `member_ids` nodes that have any opaque load entry fresher than `max_age`
 /// via a `TaskCtx` reference.
+#[cfg(feature = "consensus")]
 pub(super) fn count_opaque_members_ctx(
     ctx:        &TaskCtx,
     member_ids: &ahash::AHashSet<String>,
@@ -124,6 +125,7 @@ pub(super) fn count_opaque_members_ctx(
 
 /// Count of all nodes with any opaque load entry fresher than `max_age`
 /// via a `TaskCtx` reference.
+#[cfg(feature = "consensus")]
 pub(super) fn count_opaque_system_ctx(ctx: &TaskCtx, max_age: std::time::Duration) -> usize {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH).unwrap_or_default()
@@ -173,6 +175,7 @@ pub(super) fn peer_load_ctx(
 ///
 /// Used by `group_propose` to build the mid-ballot opaque-recompute callback so that
 /// the `propose()` function (Layer III) doesn't read `KvState` directly.
+#[cfg(feature = "consensus")]
 pub(super) fn count_opaque_members_in_kv(
     kv_state:   &KvState,
     member_ids: &ahash::AHashSet<String>,
@@ -227,6 +230,7 @@ pub(crate) fn is_self_opaque(kv_state: &KvState, node_id: &crate::node_id::NodeI
 /// Counts all nodes with any opaque load entry fresher than `max_age_ms`.
 ///
 /// Used by `system_propose` to build the mid-ballot opaque-recompute callback.
+#[cfg(feature = "consensus")]
 pub(super) fn count_opaque_all_in_kv(
     kv_state:   &KvState,
     max_age_ms: u64,

@@ -13,8 +13,16 @@ keywords = ["distributed-systems", "gossip", "p2p", "protocol"]
 categories = ["network-programming", "asynchronous"]
 
 [features]
-default = ["cli", "gateway"]
+default = ["cli", "gateway", "consensus"]
 cli = ["dep:tracing-subscriber"]
+# Layer III epidemic consensus engine (ballots/quorum, system/group/cross_group
+# propose, GroupQuorum, leased commits, commit-conflict tripwire) + the consistency
+# overlay built on it (`consistent_set`/`consistent_get`/distributed lock). Default-on;
+# drop it for minimal embeds that need KV + signals + capabilities but not agreement:
+#   mycelium = { version = "1", default-features = false, features = ["gateway"] }
+# A consensus-disabled node still *forwards* PROPOSE/VOTE/COMMIT signals (forwarding
+# lives in mycelium-core, unconditional) — it just never acts on them.
+consensus = []
 # Embedded HTTP gateway: REST/SSE/WebSocket bridge, MCP over HTTP, bulk staging.
 # Pulls in Axum and related deps. Disable for bare-metal / WASM / no-std targets:
 #   mycelium = { version = "1", default-features = false }

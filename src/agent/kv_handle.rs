@@ -6,6 +6,7 @@
 //! Obtain a handle via [`GossipAgent::kv`](crate::GossipAgent::kv).
 
 #[cfg(feature = "gateway")]
+#[cfg(feature = "consensus")]
 use crate::framing::ForwardHint;
 use crate::store::PrefixPredicateWatcher;
 use bytes::Bytes;
@@ -408,14 +409,16 @@ impl KvHandle {
 
 // ── SubscribeHandle (internal — used by HTTP gateway log-group handler) ──────
 
-#[cfg(feature = "gateway")]
+// Consensus-gated: its only users are the gateway's consumer-group log endpoint
+// (which claims via the distributed lock) and `distributed_lock` itself.
+#[cfg(all(feature = "gateway", feature = "consensus"))]
 /// Minimal agent proxy used by the HTTP gateway's consumer-group log endpoint.
 pub(super) struct SubscribeHandle {
     pub(super) task_ctx: Arc<TaskCtx>,
     kv_state:            Arc<crate::store::KvState>,
 }
 
-#[cfg(feature = "gateway")]
+#[cfg(all(feature = "gateway", feature = "consensus"))]
 impl SubscribeHandle {
     /// Construct from an `Arc<TaskCtx>`.
     pub(super) fn from_task_ctx(task_ctx: Arc<TaskCtx>) -> Self {
@@ -423,6 +426,7 @@ impl SubscribeHandle {
         Self { task_ctx, kv_state }
     }
 
+    #[cfg(feature = "consensus")]
     pub(super) async fn distributed_lock(
         &self,
         name: &str,

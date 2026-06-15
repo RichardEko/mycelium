@@ -682,6 +682,12 @@ get found.
 - `cargo build -p mycelium-core` — the embeddable Layers I+II substrate, standalone (≈48 deps
   vs ≈140 for `mycelium`; no axum/hyper/gateway). The dep-tree win M1 exists for.
 - `cargo build --lib --no-default-features` to verify the gateway-free embedded build
+- **`consensus` feature (default-on, v2 M2)** gates Layer III: the epidemic consensus engine +
+  the consistency overlay built on it (`consistent_set`/`get`/distributed lock). Drop it for
+  minimal embeds: `--no-default-features --features gateway`. A consensus-disabled node still
+  *forwards* PROPOSE/VOTE/COMMIT (forwarding is in `mycelium-core`), it just never acts;
+  `suggest_leader` degrades from trust-weighted to pure-load. Verify with
+  `cargo test --lib --no-default-features --features gateway`.
 - `cargo build --lib --features metrics` to include the Prometheus scrape endpoint
 - `cargo build --lib --features a2a` to include the A2A protocol adapter
 - `cargo build --lib --features llm` to include the Prompt Skills LLM adapter

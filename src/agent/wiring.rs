@@ -470,11 +470,13 @@ mod tests {
 
     // ── suggest_leader ────────────────────────────────────────────────────
 
+    #[cfg(feature = "consensus")]
     fn make_agent_for_suggest() -> crate::GossipAgent {
         crate::GossipAgent::new(nid(0), crate::GossipConfig::default())
     }
 
     #[test]
+    #[cfg(feature = "consensus")]
     fn suggest_leader_weighs_trust_over_load() {
         use crate::signal::{encode_load_state, LoadState};
         use crate::consensus_ns;
@@ -505,6 +507,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "consensus")]
     fn suggest_leader_returns_least_loaded_member() {
         use crate::signal::{encode_load_state, LoadState};
 

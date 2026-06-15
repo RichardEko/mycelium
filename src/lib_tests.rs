@@ -212,6 +212,7 @@ fn alloc_port() -> u16 {
 // - Structural peer-ready poll converts a timing race into a deterministic
 //   failure if the cluster doesn't form, making root causes obvious.
 
+#[cfg(feature = "consensus")]
 struct ConsensusPair {
     pub a:   GossipAgent,
     pub b:   GossipAgent,
@@ -219,6 +220,7 @@ struct ConsensusPair {
     pub _lb: ConsensusListenerHandle,
 }
 
+#[cfg(feature = "consensus")]
 async fn consensus_pair() -> ConsensusPair {
     let port_a = alloc_port();
     let port_b = alloc_port();
@@ -983,6 +985,7 @@ async fn test_individual_signal_reaches_unpeered_target_via_relay() {
 /// test varied (M2 post-mortem, 2026-06-12): every existing topology
 /// accidentally peered all RPC pairs directly.
 #[tokio::test]
+#[cfg(feature = "consensus")]
 async fn test_individual_consumers_over_random_partial_meshes() {
     use crate::consensus::{ConsensusConfig, ConsensusResult};
     use crate::signal::SignalScope;
@@ -1771,6 +1774,7 @@ async fn test_competitive_response_group_scope() {
 // ── Consensus ─────────────────────────────────────────────────────────────
 
 #[tokio::test]
+#[cfg(feature = "consensus")]
 async fn test_group_propose_single_voter() {
     let agent = make_agent();
     let _listener = agent.consensus().start_consensus_listener(ConsensusConfig::default());
@@ -1787,6 +1791,7 @@ async fn test_group_propose_single_voter() {
 }
 
 #[tokio::test]
+#[cfg(feature = "consensus")]
 async fn test_group_propose_timeout() {
     let agent = make_agent();
     // No listener started — no votes arrive, quorum of 2 is unreachable.
@@ -1804,6 +1809,7 @@ async fn test_group_propose_timeout() {
 }
 
 #[tokio::test]
+#[cfg(feature = "consensus")]
 async fn test_group_propose_two_node_quorum() {
     let pair = consensus_pair().await;
     pair.a.mesh().join_group("cgrp");
@@ -1827,6 +1833,7 @@ async fn test_group_propose_two_node_quorum() {
 // Two agents propose to the same slot concurrently. With ballot jitter, one
 // should Commit and the other Superseded. Neither should Timeout.
 #[tokio::test]
+#[cfg(feature = "consensus")]
 async fn test_consensus_simultaneous_proposers_resolve() {
     let ConsensusPair { a, b, _la, _lb } = consensus_pair().await;
     let agent_a = Arc::new(a);
@@ -1876,6 +1883,7 @@ async fn test_consensus_simultaneous_proposers_resolve() {
 }
 
 #[tokio::test]
+#[cfg(feature = "consensus")]
 async fn test_system_propose_commits() {
     let agent = make_agent();
     let _listener = agent.consensus().start_consensus_listener(ConsensusConfig::default());
@@ -1891,6 +1899,7 @@ async fn test_system_propose_commits() {
 }
 
 #[tokio::test]
+#[cfg(feature = "consensus")]
 async fn test_consensus_rx_fires_on_commit() {
     let agent = make_agent();
     let _listener = agent.consensus().start_consensus_listener(ConsensusConfig::default());
@@ -1909,6 +1918,7 @@ async fn test_consensus_rx_fires_on_commit() {
 }
 
 #[tokio::test]
+#[cfg(feature = "consensus")]
 async fn test_consensus_get_returns_committed() {
     let agent = make_agent();
     let _listener = agent.consensus().start_consensus_listener(ConsensusConfig::default());
@@ -1923,6 +1933,7 @@ async fn test_consensus_get_returns_committed() {
 }
 
 #[tokio::test]
+#[cfg(feature = "consensus")]
 async fn test_declare_and_read_trust() {
     let agent = make_agent();
     let peer_a = NodeId::new("127.0.0.1", 9001).unwrap();
@@ -1939,6 +1950,7 @@ async fn test_declare_and_read_trust() {
 }
 
 #[tokio::test]
+#[cfg(feature = "consensus")]
 async fn test_consensus_late_joiner_sync() {
     let port_a = alloc_port();
     let port_b = alloc_port();
@@ -1982,6 +1994,7 @@ async fn test_consensus_late_joiner_sync() {
 
 // Proposer declares an empty trust slice; B's vote must not count.
 #[tokio::test]
+#[cfg(feature = "consensus")]
 async fn test_trust_slice_filters_votes() {
     let pair = consensus_pair().await;
     pair.a.mesh().join_group("tg");
@@ -2010,6 +2023,7 @@ async fn test_trust_slice_filters_votes() {
 
 // Proposer includes B in its trust slice; B's vote should be counted.
 #[tokio::test]
+#[cfg(feature = "consensus")]
 async fn test_trust_slice_admits_trusted_vote() {
     let pair = consensus_pair().await;
     let node_b = pair.b.node_id().clone();
@@ -2235,6 +2249,7 @@ async fn test_writer_evicted_after_idle_timeout() {
 // When member B turns opaque mid-ballot the reactive select! arm recomputes quorum
 // from 2 down to 1, letting A's self-vote commit before the phase1 timeout fires.
 #[tokio::test]
+#[cfg(feature = "consensus")]
 async fn test_ballot_reacts_to_opacity_change() {
     use crate::signal::{encode_load_state, LoadState};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -2440,6 +2455,7 @@ async fn test_lww_convergence_two_concurrent_writers() {
 /// quorum fraction`, so a group with 0 members contributes `needed = 1`
 /// but `accepts = 0`, permanently blocking the commit.
 #[tokio::test]
+#[cfg(feature = "consensus")]
 async fn test_cross_group_propose_requires_all_group_quorums() {
     let pair = consensus_pair().await;
 
@@ -2546,6 +2562,7 @@ async fn probe_garbage_on_gossip_port_survives() {
 /// Resource-management probe: after `shutdown_with_timeout`, every tracked
 /// background task must have exited and the gossip port must be rebindable.
 #[tokio::test]
+#[cfg(feature = "consensus")]
 async fn probe_shutdown_drains_tasks_and_releases_port() {
     let port = alloc_port();
     let id   = NodeId::new("127.0.0.1", port).unwrap();
