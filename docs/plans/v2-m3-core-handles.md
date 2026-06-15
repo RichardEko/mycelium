@@ -47,13 +47,23 @@ New core home: `mycelium-core/src/ops.rs` (free helper fns) + the three handle m
 
 ## Stage sequence (gated)
 
-| Stage | Work | Gate |
+| Stage | Work | Gate / Status |
 |---|---|---|
-| 1 | Move emit/kv/group helpers + `run_kv_persist_task` to core (`&CoreCtx`, reply_interceptor); upper re-exports | both crates build (consensus on/off) |
-| 2 | Move `MeshHandle` + `SchemaHandle` to core (`Arc<CoreCtx>`); re-export from `mycelium` | full matrix builds |
-| 3 | Move `KvHandle` (Layer I methods) to core; `set_with_min_acks` → `KvQuorumExt` in `mycelium`; re-export trait | API compiles; tuple-space + tests updated |
+| 1 ✓ | Move emit/kv/group helpers to `mycelium-core::ops` (`&CoreCtx`, reply_interceptor); `helpers.rs` re-exports | **committed `edd8bb2`** — both crates build (consensus on/off), clippy clean |
+| 2a ✓ | Move `SchemaHandle` to core (`Arc<CoreCtx>` + `#[doc(hidden)] from_core`); relocate `GossipAgent` tests | **committed `6389025`** — core 81 tests, upper green, clippy clean |
+| 2b | Move `MeshHandle`: core methods (emit/join/leave/subscribe/signal_rx/suppress) → core; `advertise`/`manage_opacity` → upper `MeshTaskExt` (they use `run_kv_persist_task`, whose `on_tick` is `TaskCtx`-typed + sets `caps_advertised`) | full matrix builds |
+| 3 | Split `KvHandle`: `LogEntry` + core methods → core; `SubscribeHandle` (overlay) stays upper; `set_with_min_acks` → `KvQuorumExt` in `mycelium` (needs `#[doc(hidden)] pub fn core(&self)->&Arc<CoreCtx>` on the core handle); relocate 238-line test module | API compiles; tuple-space + tests updated |
 | 4 | Full gates: default / no-consensus / matrix tests + clippy `-D warnings`; `mycelium-core` standalone | CLAUDE.md posture |
-| 5 | Philosophy compliance review (substrate handles in core; overlays explicit above) | sign-off |
+| 5 | Philosophy compliance review (substrate handles in core; overlay/task-helper methods explicit as ext traits above) | sign-off |
+
+**Pattern proven by Stage 2a (`SchemaHandle`):** each handle move = (1) `git mv` to core,
+(2) `ctx: Arc<CoreCtx>` + `#[doc(hidden)] pub fn from_core(ctx)`, (3) imports → `crate::ops`,
+(4) split the test module — pure tests stay in core, `GossipAgent`-driven tests → an upper
+`*_tests.rs`, (5) core `lib.rs` `pub mod` + re-export, (6) upper `agent/mod.rs` re-export from
+`mycelium_core` + accessor → `Handle::from_core(Arc::clone(&self.task_ctx.core))`. Handles with
+upper-coupled methods additionally need an **upper extension trait** (`KvQuorumExt`,
+`MeshTaskExt`) + a `pub fn core()` accessor on the core handle. New core dep discovered:
+`serde_json` (schema validation).
 
 **Invariant:** `mycelium-core` still references nothing upper; the `layer1_…` purity guard and
 the M1 inverted-dependency compile-time guarantee must hold.
