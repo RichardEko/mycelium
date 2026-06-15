@@ -251,14 +251,21 @@ pub struct SystemStats {
 /// | Networking | `peers` |
 /// | Lifecycle | `shutdown_tx`, `task_handles` |
 ///
-/// ## v2 roadmap
+/// ## v2 roadmap — M1 workspace split (in progress)
 ///
-/// `TaskCtx` is a known God Object — see `CLAUDE.md § Layer I/II entanglement`. The
-/// planned fix is a workspace split (`mycelium-core` carrying Layers I+II, `mycelium`
-/// adding Layers III+). `TaskCtx` would split into `CoreCtx` (Layers I+II only) and a
-/// richer context that wraps it. That refactor is deferred until there is a real use
-/// case for embedding the core without the capability / consensus layers.
-pub(crate) struct TaskCtx {
+/// `TaskCtx` was a known God Object — see `CLAUDE.md § Layer I/II entanglement`. The fix
+/// (ROADMAP §v2.0 M1) is a workspace split: [`CoreCtx`] carries Layers I + II (plus
+/// identity / networking / lifecycle / transport-security — everything `connection.rs` and
+/// `writer.rs` need), and will move to the `mycelium-core` crate; `TaskCtx` wraps it
+/// (`core: Arc<CoreCtx>`) and adds the Layer III+ fields (capability / service / consensus /
+/// compliance). `TaskCtx: Deref<Target = CoreCtx>` so every existing `ctx.<core-field>` site
+/// keeps working unchanged — the same pattern `KvState`→`KvStore` uses. Stage 1 of M1 carves
+/// the struct in place; the physical crate move is a later stage. See
+/// `docs/plans/v2-m1-mycelium-core.md`.
+///
+/// **Invariant:** `CoreCtx` must never reference a Layer III type (philosophy §5a — the
+/// substrate is never aware of the layers above it).
+pub(crate) struct CoreCtx {
     // ── Identity + config ────────────────────────────────────────────────────────
     pub(crate) node_id:          NodeId,
     /// Shared copy of the agent configuration. Available to typed handles so they
@@ -286,6 +293,46 @@ pub(crate) struct TaskCtx {
     /// Receiver-side causal reorder buffer for `emit_ordered` signals.
     /// `None` when `config.signal_ordered_delivery = false` (the default).
     pub(crate) reorder_buf: Option<Arc<std::sync::Mutex<crate::signal::SignalReorderBuffer>>>,
+
+    // ── Security (transport) ─────────────────────────────────────────────────────
+    /// TLS context (server + client configs + signing key). Unset when the
+    /// `tls` feature is disabled or when `GossipConfig::tls` is `None`.
+    /// Written once by `start()` before any task is spawned; read-only afterwards.
+    pub(crate) tls: std::sync::OnceLock<Arc<crate::tls::NodeTls>>,
+    /// Map from peer NodeId → 32-byte Ed25519 public key, populated from two
+    /// sources: (a) the mTLS handshake cert, (b) `sys/identity/` KV entries
+    /// gossiped by peers. Used to verify signed consensus messages.
+    #[cfg_attr(not(feature = "tls"), allow(dead_code))]
+    /// Retained verifying-key **set** per node (WS5 option B): every key a node
+    /// has published at `sys/identity/{node}`, accumulated across rotations so
+    /// historical signatures (audit, consensus, roles) keep verifying. Verify
+    /// paths try all keys; see `helpers::{known_verifying_keys, verify_signed_by}`.
+    pub(crate) peer_keys: Arc<papaya::HashMap<NodeId, Vec<[u8; 32]>>>,
+
+    /// Cumulative `sys/` namespace-ownership violations (see
+    /// `SystemStats::sys_namespace_violations`). Incremented by the connection
+    /// handler's inbound-apply tripwire when a remote write targets a `sys/`
+    /// key this node owns; Relaxed ordering — purely diagnostic. Core because the
+    /// connection handler (Layer I transport) is the sole writer.
+    pub(crate) sys_namespace_violations: Arc<AtomicU64>,
+
+    // ── Networking ───────────────────────────────────────────────────────────────
+    /// Live peer table shared with the HTTP gateway for peer-count-based quorum sizing.
+    pub(crate) peers: Arc<papaya::HashMap<NodeId, std::time::Instant>>,
+
+    // ── Lifecycle ────────────────────────────────────────────────────────────────
+    /// Shutdown broadcast — sending `true` cancels all background tasks.
+    pub(crate) shutdown_tx: Arc<watch::Sender<bool>>,
+    /// All spawned background tasks. Reaping is automatic via `JoinSet`.
+    pub(crate) task_handles: Arc<std::sync::Mutex<JoinSet<()>>>,
+}
+
+/// The full infrastructure bundle: [`CoreCtx`] (Layers I+II) plus the Layer III+ fields
+/// (capability / service / consensus / compliance). Derefs to `CoreCtx`, so the ~380
+/// existing `ctx.<core-field>` access sites are unchanged.
+pub(crate) struct TaskCtx {
+    /// Layers I + II substrate context. Will live in `mycelium-core` (M1).
+    pub(crate) core: Arc<CoreCtx>,
 
     // ── Capability subsystem ─────────────────────────────────────────────────────
     /// Set to `true` by the first tick of any `run_kv_persist_task` (capability
@@ -329,42 +376,19 @@ pub(crate) struct TaskCtx {
     /// purely diagnostic, surfaced via `system_stats()` and `/stats`.
     pub(crate) commit_conflicts: Arc<AtomicU64>,
 
-    /// Cumulative `sys/` namespace-ownership violations (see
-    /// `SystemStats::sys_namespace_violations`). Incremented by the connection
-    /// handler's inbound-apply tripwire when a remote write targets a `sys/`
-    /// key this node owns; Relaxed ordering — purely diagnostic.
-    pub(crate) sys_namespace_violations: Arc<AtomicU64>,
-
     /// Head of this node's tamper-evident audit chain (WS2). `audit()` seals a
     /// record under this lock so the per-node chain stays linear, then releases
     /// it before writing to KV. Lock #8 in the lock-order table (leaf).
     #[cfg(feature = "compliance")]
     pub(crate) audit_chain: Arc<std::sync::Mutex<audit::AuditChainState>>,
+}
 
-    // ── Security ─────────────────────────────────────────────────────────────────
-    /// TLS context (server + client configs + signing key). Unset when the
-    /// `tls` feature is disabled or when `GossipConfig::tls` is `None`.
-    /// Written once by `start()` before any task is spawned; read-only afterwards.
-    pub(crate) tls: std::sync::OnceLock<Arc<crate::tls::NodeTls>>,
-    /// Map from peer NodeId → 32-byte Ed25519 public key, populated from two
-    /// sources: (a) the mTLS handshake cert, (b) `sys/identity/` KV entries
-    /// gossiped by peers. Used to verify signed consensus messages.
-    #[cfg_attr(not(feature = "tls"), allow(dead_code))]
-    /// Retained verifying-key **set** per node (WS5 option B): every key a node
-    /// has published at `sys/identity/{node}`, accumulated across rotations so
-    /// historical signatures (audit, consensus, roles) keep verifying. Verify
-    /// paths try all keys; see `helpers::{known_verifying_keys, verify_signed_by}`.
-    pub(crate) peer_keys: Arc<papaya::HashMap<NodeId, Vec<[u8; 32]>>>,
-
-    // ── Networking ───────────────────────────────────────────────────────────────
-    /// Live peer table shared with the HTTP gateway for peer-count-based quorum sizing.
-    pub(crate) peers: Arc<papaya::HashMap<NodeId, std::time::Instant>>,
-
-    // ── Lifecycle ────────────────────────────────────────────────────────────────
-    /// Shutdown broadcast — sending `true` cancels all background tasks.
-    pub(crate) shutdown_tx: Arc<watch::Sender<bool>>,
-    /// All spawned background tasks. Reaping is automatic via `JoinSet`.
-    pub(crate) task_handles: Arc<std::sync::Mutex<JoinSet<()>>>,
+impl std::ops::Deref for TaskCtx {
+    type Target = CoreCtx;
+    #[inline]
+    fn deref(&self) -> &CoreCtx {
+        &self.core
+    }
 }
 
 impl TaskCtx {
@@ -372,7 +396,7 @@ impl TaskCtx {
     where
         F: std::future::Future<Output = ()> + Send + 'static,
     {
-        self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).spawn(fut);
+        self.core.task_handles.lock().unwrap_or_else(|e| e.into_inner()).spawn(fut);
     }
 }
 
@@ -633,7 +657,7 @@ impl GossipAgent {
         let gossip_txs: Arc<[mpsc::Sender<(Bytes, u64, ForwardHint)>]> = gossip_txs_vec.into();
         let peers_arc: Arc<papaya::HashMap<NodeId, std::time::Instant>> = Arc::new(papaya::HashMap::new());
         let config_arc = Arc::new(config.clone());
-        let task_ctx = Arc::new(TaskCtx {
+        let core_ctx = Arc::new(CoreCtx {
             node_id:         node_id.clone(),
             config:          Arc::clone(&config_arc),
             seen:            Arc::new(ShardedSeen::new(seen_shards)),
@@ -644,21 +668,10 @@ impl GossipAgent {
             default_ttl,
             kv_state:        Arc::clone(&kv_state),
             wal:             std::sync::OnceLock::new(),
-            caps_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            bulk_transport:  Arc::new(bulk::BulkTransport::new(
-                config.http_port.unwrap_or(0),
-                std::time::Duration::from_secs(config.bulk_fetch_timeout_secs),
-                config.max_concurrent_bulk_handlers,
-            )),
-            rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-            commit_conflicts: Arc::new(AtomicU64::new(0)),
             sys_namespace_violations: Arc::new(AtomicU64::new(0)),
-            #[cfg(feature = "compliance")]
-            audit_chain: Arc::new(std::sync::Mutex::new(audit::AuditChainState::new())),
             tls: std::sync::OnceLock::new(),
             peer_keys: Arc::new(papaya::HashMap::new()),
             peers: Arc::clone(&peers_arc),
-            filter_opacity_registry: Arc::new(capability_ops::FilterOpacityRegistry::new()),
             reorder_buf: if config.signal_ordered_delivery {
                 Some(Arc::new(std::sync::Mutex::new(
                     crate::signal::SignalReorderBuffer::new(
@@ -671,6 +684,20 @@ impl GossipAgent {
             },
             shutdown_tx:         Arc::clone(&shutdown_tx_arc),
             task_handles:        Arc::clone(&task_handles_arc),
+        });
+        let task_ctx = Arc::new(TaskCtx {
+            core: Arc::clone(&core_ctx),
+            caps_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            bulk_transport:  Arc::new(bulk::BulkTransport::new(
+                config.http_port.unwrap_or(0),
+                std::time::Duration::from_secs(config.bulk_fetch_timeout_secs),
+                config.max_concurrent_bulk_handlers,
+            )),
+            rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            commit_conflicts: Arc::new(AtomicU64::new(0)),
+            #[cfg(feature = "compliance")]
+            audit_chain: Arc::new(std::sync::Mutex::new(audit::AuditChainState::new())),
+            filter_opacity_registry: Arc::new(capability_ops::FilterOpacityRegistry::new()),
             group_roster_cache:  Arc::clone(&group_roster_cache),
             #[cfg(feature = "llm")]
             llm_skills: std::sync::Arc::new(papaya::HashMap::new()),
