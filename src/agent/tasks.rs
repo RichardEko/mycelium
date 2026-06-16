@@ -500,8 +500,15 @@ pub(super) async fn run_health_monitor(
         _ = shutdown_rx.wait_for(|v| *v) => return,
     }
 
-    for peer in &bootstrap_set {
-        request_state(peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &node_id, &hash_acc, &dropped_frames, vec![], tls.clone());
+    // Startup anti-entropy pull from the bootstrap peers. Skipped under SWIM: it would
+    // make every node open a TCP connection to the (shared) seed at once — the dominant
+    // source of the seed's startup connection spike — and under SWIM the initial KV state
+    // is instead pulled via anti-entropy on the first forwarding-set members (uniform
+    // random), so the seed is not a universal anti-entropy target.
+    if !swim_enabled {
+        for peer in &bootstrap_set {
+            request_state(peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &node_id, &hash_acc, &dropped_frames, vec![], tls.clone());
+        }
     }
 
     let mut ticker = time::interval(Duration::from_secs(interval_secs));
@@ -560,12 +567,16 @@ pub(super) async fn run_health_monitor(
                     // case where the startup StateRequest's response was dropped by writer
                     // backoff: the peer may already be an active target but is "new" to
                     // last_peer_set, so we re-trigger once the cooldown has cleared.
-                    for peer in current_peer_set.iter()
-                        .filter(|p| bootstrap_set.contains(*p) && !last_peer_set.contains(*p))
-                    {
-                        request_state(peer, &peer_writers, writer_depth, backoff,
-                            idle_timeout, &shutdown_tx, &node_id, &hash_acc,
-                            &dropped_frames, vec![], tls.clone());
+                    // Skipped under SWIM (same reason as the startup pull): it would re-pin the
+                    // shared seed as a universal anti-entropy target.
+                    if !swim_enabled {
+                        for peer in current_peer_set.iter()
+                            .filter(|p| bootstrap_set.contains(*p) && !last_peer_set.contains(*p))
+                        {
+                            request_state(peer, &peer_writers, writer_depth, backoff,
+                                idle_timeout, &shutdown_tx, &node_id, &hash_acc,
+                                &dropped_frames, vec![], tls.clone());
+                        }
                     }
                     last_peer_set = current_peer_set.clone();
                 }
