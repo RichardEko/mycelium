@@ -165,8 +165,16 @@ impl SwimMembership {
             .collect()
     }
 
-    /// A gossip sample of up to `n` updates, newest-changed first, with our own `Alive`
-    /// state always included so peers learn (and can refute against) our incarnation.
+    /// A gossip sample of up to `n` updates, with our own `Alive` state always included
+    /// first so peers learn (and can refute against) our incarnation.
+    ///
+    /// The remaining slots are **half most-recently-changed, half uniform-random** over the
+    /// rest. The recency half propagates joins / `Suspect` / `Dead` fast; the random half is
+    /// what makes the *full* roster keep disseminating and heal after a dropped datagram. A
+    /// pure newest-first sample re-gossips only the same recent few once a node's view
+    /// stabilises, so the long tail of the roster never re-propagates over lossy transport —
+    /// which stalled membership below the de-pin threshold at scale over the Docker bridge
+    /// (Stage 4 Docker re-validation). Datagram size is unchanged (still ≤ `n+1` updates).
     pub fn gossip_sample(&self, n: usize) -> Vec<MemberUpdate> {
         let mut out = Vec::with_capacity(n + 1);
         out.push(MemberUpdate {
@@ -174,9 +182,24 @@ impl SwimMembership {
             incarnation: self.self_incarnation,
             status: MemberStatus::Alive,
         });
+        if n == 0 || self.members.is_empty() {
+            return out;
+        }
         let mut entries: Vec<(&NodeId, &Entry)> = self.members.iter().collect();
+        let recent = n.div_ceil(2).min(entries.len());
+        // Recency half (most-recently-changed first).
         entries.sort_unstable_by_key(|(_, e)| std::cmp::Reverse(e.changed));
-        for (node, e) in entries.into_iter().take(n) {
+        for (node, e) in entries.iter().take(recent) {
+            out.push(MemberUpdate { node: (*node).clone(), incarnation: e.incarnation, status: e.status });
+        }
+        // Random half: partial Fisher–Yates over the remaining tail (no overlap with the
+        // recency half, which is already included), so every member is gossiped over time.
+        let tail = &mut entries[recent..];
+        let want = (n - recent).min(tail.len());
+        for i in 0..want {
+            let j = i + fastrand::usize(..tail.len() - i);
+            tail.swap(i, j);
+            let (node, e) = tail[i];
             out.push(MemberUpdate { node: node.clone(), incarnation: e.incarnation, status: e.status });
         }
         out
@@ -280,5 +303,22 @@ mod tests {
         assert_eq!(sample.len(), 6, "self + up to n others");
         assert_eq!(sample[0].node, id(1), "self first");
         assert_eq!(sample[0].status, MemberStatus::Alive);
+    }
+
+    #[test]
+    fn gossip_sample_random_tail_covers_the_whole_roster_over_time() {
+        // A stabilised view: all members share the same `changed`, so the recency half is
+        // arbitrary and the random half must carry full coverage. A pure newest-first sample
+        // would emit the same fixed subset forever; the random tail must reach every member.
+        let mut m = SwimMembership::new(id(1));
+        let now = Instant::now();
+        for p in 2..=60 { m.apply(&alive(p, 0), now); } // 59 stable members, n=6 per sample
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..400 {
+            for u in m.gossip_sample(6) {
+                if u.node != id(1) { seen.insert(u.node.clone()); }
+            }
+        }
+        assert_eq!(seen.len(), 59, "every member must be gossiped over repeated samples");
     }
 }

@@ -538,6 +538,9 @@ async fn stats_handler(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
     Json(json!({
         "node_id":       ctx.agent_ctx.node_id.to_string(),
         "store_entries": kv.store.pin().len(),
+        // SWIM membership-view size — the map the de-pin reads; the direct diagnostic
+        // for connection-fan-out / scale behaviour (small here ⇒ de-pin precondition unmet).
+        "peers":         ctx.agent_ctx.peers.pin().len(),
         "dropped_frames": kv.dropped_frames.load(std::sync::atomic::Ordering::Relaxed),
         "individual_flood_fallbacks": kv.individual_flood_fallbacks.load(std::sync::atomic::Ordering::Relaxed),
         "task_count":    task_count,

@@ -40,6 +40,9 @@ services:
       GOSSIP_PING_PEER_SAMPLE_SIZE: "30"
       # WS-B M5: SWIM UDP failure detector. Off by default; SWIM=1 enables it cluster-wide.
       GOSSIP_SWIM_FAILURE_DETECTOR: "${SWIM:-0}"
+      # SWIM membership-gossip tuning (Stage 4 Docker convergence experiment).
+      GOSSIP_SWIM_GOSSIP_UPDATES:   "${SWIM_GOSSIP:-6}"
+      GOSSIP_SWIM_PROBE_INTERVAL_MS: "${SWIM_PROBE:-1000}"
       RUST_LOG:                   "warn,mycelium=info"
     networks:
       - mesh
@@ -64,6 +67,9 @@ services:
       GOSSIP_PING_PEER_SAMPLE_SIZE: "30"
       # WS-B M5: SWIM UDP failure detector. Off by default; SWIM=1 enables it cluster-wide.
       GOSSIP_SWIM_FAILURE_DETECTOR: "${SWIM:-0}"
+      # SWIM membership-gossip tuning (Stage 4 Docker convergence experiment).
+      GOSSIP_SWIM_GOSSIP_UPDATES:   "${SWIM_GOSSIP:-6}"
+      GOSSIP_SWIM_PROBE_INTERVAL_MS: "${SWIM_PROBE:-1000}"
       RUST_LOG:                   "warn,mycelium=info"
     networks:
       - mesh
@@ -90,6 +96,9 @@ services:
       GOSSIP_MAX_ACTIVE_CONNECTIONS:     "12"
       # WS-B M5: SWIM UDP failure detector. Off by default; SWIM=1 enables it cluster-wide.
       GOSSIP_SWIM_FAILURE_DETECTOR: "${SWIM:-0}"
+      # SWIM membership-gossip tuning (Stage 4 Docker convergence experiment).
+      GOSSIP_SWIM_GOSSIP_UPDATES:   "${SWIM_GOSSIP:-6}"
+      GOSSIP_SWIM_PROBE_INTERVAL_MS: "${SWIM_PROBE:-1000}"
       RUST_LOG:                   "warn,mycelium=info"
     networks:
       - mesh

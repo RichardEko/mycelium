@@ -531,11 +531,9 @@ pub(super) async fn run_health_monitor(
     // StateRequest to each peer, so a churning forwarding set cannot re-trigger a sync storm
     // (each re-add used to re-request state, and the responder spawns a persistent idle-timeout
     // reply writer — so a popular peer like the seed accreted O(N) warm writers; Stage-4
-    // divergence). `bootstrap_depinned` gates the one-time seed de-pin that collapses the early
-    // greedy-fill pinning in a single tick instead of waiting for slow random rotation. The
-    // resync cooldown reuses the liveness window: re-sync a forwarding member about once per it.
+    // divergence). The resync cooldown reuses the liveness window: re-sync a forwarding member
+    // about once per it.
     let mut last_anti_entropy: AHashMap<NodeId, Instant> = AHashMap::new();
-    let mut bootstrap_depinned = false;
     let resync_cooldown =
         Duration::from_secs(interval_secs.saturating_mul(peer_eviction_intervals).max(1));
 
@@ -604,14 +602,19 @@ pub(super) async fn run_health_monitor(
                 // handled by UDP gossip, so the seed is just one uniform-random candidate.
                 let retain_bootstrap =
                     !swim_enabled && current_peer_set.len() < crate::config::AUTO_FANOUT_FLOOR;
-                // SWIM cutover, part 1 — one-time bootstrap de-pin. Every node discovers the
-                // seed first and the early greedy fill pins it into all N forwarding sets. Once
-                // a node knows comfortably more peers than slots (`> 2k`), the bootstrap has
-                // served its discovery purpose: evict it in a single tick so the O(N) seed
-                // pinning collapses immediately instead of bleeding off over ~15 random-rotation
-                // ticks (the Stage-4 ~150 s tail). It is re-added below only at its fair uniform
-                // share, exactly like any other peer — it is NOT permanently excluded.
-                if swim_enabled && !bootstrap_depinned && k > 0 && current_peer_set.len() > 2 * k {
+                // SWIM cutover, part 1 — CONTINUOUS bootstrap de-pin. Every node discovers the
+                // seed first and the early greedy fill pins it into all N forwarding sets. The
+                // seed is also the one peer every node reliably reaches (it IS the bootstrap), so
+                // under membership churn — e.g. UDP-loss-induced false failures transiently
+                // shrinking the known-peer pool over the Docker bridge — it keeps getting
+                // re-sampled into the forwarding set, and a *one-time* de-pin can never undo that
+                // (Stage-4 Docker re-validation: 43/50 workers stayed pinned to the seed even with
+                // fully-converged membership). So re-evict the bootstrap every tick once we know
+                // `> 2k` peers; `reconcile` below re-adds it only at its fair uniform `~k/N` share,
+                // and the seed stays current via its OWN outbound anti-entropy pulls (it does not
+                // need the inbound forwarding edge). Below `2k` known (small clusters / a node
+                // still discovering) the seed is kept — connectivity over flatness.
+                if swim_enabled && k > 0 && current_peer_set.len() > 2 * k {
                     for b in &bootstrap_no_self {
                         if cached_ping_targets.remove(b) {
                             ping_sender_cache.remove(b);
@@ -619,7 +622,6 @@ pub(super) async fn run_health_monitor(
                             evict_peer_writer(&peer_writers, b);
                         }
                     }
-                    bootstrap_depinned = true;
                 }
                 // SWIM cutover, part 2 — slow uniform shuffle. Drop ONE random member per tick
                 // once at capacity so the active set drifts into a moving uniform sample (no
