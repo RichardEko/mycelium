@@ -89,6 +89,40 @@ v12 bump and Phase 2 stays wire-compatible with v11.
   RPC/ballot delivery to non-adjacent pairs.
 - **Exit:** G1 + G2 green at 100 nodes on TCP.
 
+#### Phase 1 outcome (2026-06-16) — shipped as a *partial* reduction; full G1 deferred to M5
+
+Implemented: `gossip_fanout` (auto `2·⌈log2 N⌉`, floor `AUTO_FANOUT_FLOOR=8`, capped at
+known peers; `max_active_connections` as hard ceiling), a **sticky** `reconcile_active_targets`,
+the bounded **active set as the single forwarding source of truth** (`peer_list_tx` publishes
+it; the gossip shard no longer re-pins bootstrap; the connection-handler event-driven
+activation is bounded/incremental), and `writer_idle_timeout_secs` default `0 → 30 s`.
+Both partial-mesh gates pass; full lib suite green; the cluster still converges at 100 nodes.
+
+Measured (`tests/integration/baseline/scale-m4.csv` vs the Phase-0 `scale-baseline.csv`):
+
+| nodes | pre-M4 `seed_established` | M4 |
+|---:|---:|---:|
+| 31  | 62  | 42  |
+| 51  | 102 | 64  |
+| 71  | 142 | 76  |
+| 101 | 202 | 128 |
+
+≈37 % reduction and the curve bends sub-linear — but **not flat** (G1 wants ~`2k`≈28 at
+100 nodes). **Root cause of the residual:** peer *discovery* is coupled to the active set —
+nodes learn peers only via `Ping` piggyback from nodes that ping *them*, so under bounded
+fan-out most workers never discover ≥`AUTO_FANOUT_FLOOR` peers, keep `retain_bootstrap`
+true, and pin the seed; and a discovered node's sticky active set still retains the seed
+(it is in `known` and was the initial member). Fully flattening requires **decoupling
+discovery from the active set + a symmetric active view** (peer-sampling / shuffle,
+HyParView-style, with reciprocal peer-exchange on inbound pings).
+
+**Decision (2026-06-16):** that membership machinery is exactly what **M5 (SWIM) reworks**
+(the plan already notes M4 is *"largely subsumed by M5"*). So M4 ships as the bounded-fan-out
+knob + idle-timeout + bounded-forwarding **partial reduction**, and the **flat-`seed_established`
+G1 gate moves to M5's definition of done** (Phase 2), where the SWIM membership/peer-sampling
+layer lands once instead of building HyParView twice. G2 (no FORWARD saturation / zero dropped
+frames) is already comfortably met at 100 nodes.
+
 ### Phase 2 — M5 hybrid UDP/TCP (SWIM)
 - **What:** heartbeats/pings move to **stateless UDP**; TCP opened **on-demand** for
   anti-entropy (StateRequest/Response) and Data/Signal delivery, then closed. Loss triggers a
@@ -107,8 +141,13 @@ v12 bump and Phase 2 stays wire-compatible with v11.
 - **Risks:** keep ping datagrams < MTU (~512 B); validate UDP traversal of the Docker bridge
   early; the suspect-timing/incarnation state machine is the subtle part — port SWIM's
   `Alive`/`Suspect`/`Dead` logic faithfully.
-- **Exit:** **G3 green** — `test-scale-resilience RESILIENCE_WORKERS=50` Phase-3 probe passes;
-  zero persistent inter-node connections for heartbeats.
+- **Also owns G1 (moved from M4):** the SWIM membership/peer-sampling layer decouples
+  discovery from the active set and makes the active view symmetric, which is what actually
+  flattens `seed_established` to ~`2k`. Re-run `make test-scale-baseline` after M5 and show the
+  column flat vs the committed `scale-baseline.csv` / `scale-m4.csv`.
+- **Exit:** **G1 + G3 green** — `seed_established` flat across 30→100 nodes, and
+  `test-scale-resilience RESILIENCE_WORKERS=50` Phase-3 probe passes; zero persistent
+  inter-node connections for heartbeats.
 
 ### Phase 3 — v12 wire bump: M11 codec + Merkle anti-entropy
 - **M11 (hand-rolled codec):** replace `bincode` (RUSTSEC-2025-0141, unmaintained) with a

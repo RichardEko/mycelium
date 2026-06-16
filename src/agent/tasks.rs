@@ -8,6 +8,7 @@ use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
 use crate::signal::SignalHandlers;
 use crate::store::intern_pool_len;
+use crate::config::resolved_fanout;
 use crate::writer::{evict_peer_writer, get_or_spawn_writer, request_state, WriterEntry};
 use ahash::{AHashMap, AHashSet};
 use bytes::{BufMut, Bytes, BytesMut};
@@ -261,10 +262,13 @@ pub(super) async fn run_gossip_shard(
 
                 if peer_list_rx.has_changed().unwrap_or(false) {
                     cached_peer_list = peer_list_rx.borrow_and_update().clone();
+                    // The published list IS the bounded active set (WS-B M4): use it directly
+                    // as the forwarding fan-out. Bootstrap peers are NOT re-pinned here — the
+                    // health monitor keeps them in the active set only while still discovering,
+                    // then de-pins them, so a well-known seed stops being a forwarding target
+                    // for every node (which would pin O(N) inbound connections on it).
                     targets.clear();
-                    targets.extend(bootstrap_peers.iter().cloned());
-                    let remaining = max_forwarding_peers.saturating_sub(targets.len());
-                    targets.extend(cached_peer_list.iter().take(remaining).cloned());
+                    targets.extend(cached_peer_list.iter().take(max_forwarding_peers).cloned());
                     sender_cache.retain(|k, _| targets.contains(k));
                 }
 
@@ -396,6 +400,69 @@ pub(super) async fn run_gossip_shard(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Sticky reconciliation of the active-connection (ping) target set toward fan-out
+/// `k` (WS-B M4 partial mesh). Prefers keeping existing live members — when the set
+/// is already at `k` live peers it is a no-op, so there is no per-tick churn. Only
+/// the deficit is filled (uniform-random from known peers) or the surplus trimmed.
+///
+/// Bootstrap peers are retained/added as a *discovery aid* while `retain_bootstrap`
+/// is set (the caller passes `known.len() < AUTO_FANOUT_FLOOR` — an absolute floor,
+/// so small clusters always keep their seed and only at scale, once a node has
+/// discovered enough peers, is the seed de-pinned and sampled like any other peer,
+/// stopping it accumulating O(N) inbound connections). Returns `(added, removed)` —
+/// the caller fires anti-entropy for newly active peers and evicts the writers of
+/// dropped ones.
+fn reconcile_active_targets(
+    active:           &mut AHashSet<NodeId>,
+    known:            &AHashSet<NodeId>,   // current live peers (excludes self)
+    bootstrap:        &AHashSet<NodeId>,   // excludes self
+    k:                usize,
+    retain_bootstrap: bool,
+) -> (Vec<NodeId>, Vec<NodeId>) {
+    // 1. Retention: keep members still alive; while still discovering also keep
+    //    bootstrap peers even if they have not pinged back yet (our only route in).
+    let mut removed: Vec<NodeId> = active
+        .iter()
+        .filter(|p| !(known.contains(*p) || retain_bootstrap && bootstrap.contains(*p)))
+        .cloned()
+        .collect();
+    for p in &removed { active.remove(p); }
+
+    // 2. Candidate pool: known peers not already active; while discovering, bootstrap too.
+    let mut pool: Vec<NodeId> = known.iter().filter(|p| !active.contains(*p)).cloned().collect();
+    if retain_bootstrap {
+        for b in bootstrap {
+            if !active.contains(b) && !known.contains(b) { pool.push(b.clone()); }
+        }
+    }
+
+    // 3. Fill the deficit up to k with uniform-random picks.
+    let mut added = Vec::new();
+    while active.len() < k && !pool.is_empty() {
+        let pick = pool.swap_remove(fastrand::usize(..pool.len()));
+        if active.insert(pick.clone()) { added.push(pick); }
+    }
+
+    // 4. Trim the surplus (k shrank) — drop random members, never a bootstrap peer
+    //    while still discovering.
+    if active.len() > k {
+        let drop_n = active.len() - k;
+        let mut victims: Vec<NodeId> = active.iter()
+            .filter(|p| !(retain_bootstrap && bootstrap.contains(*p)))
+            .cloned()
+            .collect();
+        for i in 0..drop_n.min(victims.len()) {
+            let j = i + fastrand::usize(..victims.len() - i);
+            victims.swap(i, j);
+            active.remove(&victims[i]);
+            removed.push(victims[i].clone());
+        }
+    }
+
+    (added, removed)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn run_health_monitor(
     node_id:               NodeId,
     bootstrap_peers:       Arc<[NodeId]>,
@@ -412,6 +479,7 @@ pub(super) async fn run_health_monitor(
     health_monitor_alive:    Arc<AtomicBool>,
     ping_peer_sample_size:    usize,
     max_active_connections:   usize,
+    gossip_fanout:            usize,
     health_check_max_jitter:  u64,
     hash_acc:                 Arc<AtomicU64>,
     dropped_frames:          Arc<AtomicU64>,
@@ -440,6 +508,9 @@ pub(super) async fn run_health_monitor(
     let mut ping_buf: BytesMut = BytesMut::with_capacity(1024);
     let mut cached_ping_targets: AHashSet<NodeId> = bootstrap_set.clone();
     cached_ping_targets.remove(&node_id);
+    // Bootstrap set excluding self — the discovery-aid set for fan-out reconciliation.
+    let bootstrap_no_self: AHashSet<NodeId> =
+        bootstrap_set.iter().filter(|p| **p != node_id).cloned().collect();
     let mut last_peer_set: AHashSet<NodeId> = AHashSet::new();
     let mut ping_sender_cache: AHashMap<NodeId, mpsc::Sender<Bytes>> = AHashMap::new();
 
@@ -472,53 +543,11 @@ pub(super) async fn run_health_monitor(
                 let ping_data: Bytes = ping_buf.split().freeze();
 
                 if current_peer_set != last_peer_set {
-                    // peer_list_tx feeds signal fan-out; always send the full known set.
-                    let peer_list: Arc<[NodeId]> = current_peer_set.iter().cloned().collect();
-                    let _ = peer_list_tx.send(peer_list);
-
-                    // Build the new active-connection set: always include bootstrap peers,
-                    // then randomly sample from the rest up to max_active_connections.
-                    // When max_active_connections == 0 the cap is disabled (full mesh).
-                    let mut new_targets: AHashSet<NodeId> = bootstrap_set.clone();
-                    new_targets.extend(current_peer_set.iter().cloned());
-                    new_targets.remove(&node_id);
-
-                    if max_active_connections > 0 && new_targets.len() > max_active_connections {
-                        let slots = max_active_connections.saturating_sub(
-                            bootstrap_set.iter().filter(|p| **p != node_id).count()
-                        );
-                        let mut non_bootstrap: Vec<NodeId> = new_targets.iter()
-                            .filter(|p| !bootstrap_set.contains(*p))
-                            .cloned()
-                            .collect();
-                        // Fisher-Yates partial shuffle to select `slots` random peers.
-                        for i in 0..slots.min(non_bootstrap.len()) {
-                            let j = i + fastrand::usize(..non_bootstrap.len() - i);
-                            non_bootstrap.swap(i, j);
-                        }
-                        non_bootstrap.truncate(slots);
-                        new_targets = bootstrap_set.iter()
-                            .filter(|p| **p != node_id)
-                            .cloned()
-                            .collect();
-                        new_targets.extend(non_bootstrap);
-                    }
-
-                    // Trigger anti-entropy with every peer newly entering the active set so
-                    // soft-state keys (capabilities, locality) propagate on reconnection
-                    // without waiting for the next advertisement tick.
-                    for peer in new_targets.difference(&cached_ping_targets) {
-                        request_state(peer, &peer_writers, writer_depth, backoff,
-                            idle_timeout, &shutdown_tx, &node_id, &hash_acc,
-                            &dropped_frames, vec![], tls.clone());
-                    }
-                    // Bootstrap peers are pre-loaded into cached_ping_targets, so they never
-                    // appear in the difference above. Fire a separate StateRequest for each
-                    // bootstrap peer that just appeared in the active peer set (sent us a Ping)
-                    // for the first time. This handles the reconnect case where the startup
-                    // StateRequest's response was dropped by writer backoff: the peer is not
-                    // "new" to cached_ping_targets but is "new" to last_peer_set, so we
-                    // re-trigger once the cooldown has cleared (cooldown = interval - 1 s).
+                    // Fire a StateRequest for each bootstrap peer that just appeared in the
+                    // active peer set (sent us a Ping) for the first time. Handles the reconnect
+                    // case where the startup StateRequest's response was dropped by writer
+                    // backoff: the peer may already be an active target but is "new" to
+                    // last_peer_set, so we re-trigger once the cooldown has cleared.
                     for peer in current_peer_set.iter()
                         .filter(|p| bootstrap_set.contains(*p) && !last_peer_set.contains(*p))
                     {
@@ -526,10 +555,39 @@ pub(super) async fn run_health_monitor(
                             idle_timeout, &shutdown_tx, &node_id, &hash_acc,
                             &dropped_frames, vec![], tls.clone());
                     }
+                    last_peer_set = current_peer_set.clone();
+                }
 
-                    ping_sender_cache.retain(|k, _| new_targets.contains(k));
-                    cached_ping_targets = new_targets;
-                    last_peer_set = current_peer_set;
+                // WS-B M4 partial mesh: reconcile the active-connection set toward the
+                // resolved fan-out every tick. Sticky — a no-op once converged — so it does
+                // not churn; it only fills the deficit or trims the surplus. Newly active
+                // peers get anti-entropy; dropped peers have their writers evicted so the
+                // TCP connection actually closes (the connection count is bounded by k, not N).
+                let k = resolved_fanout(gossip_fanout, max_active_connections, current_peer_set.len());
+                // Keep the seed pinned until we've discovered a healthy number of peers
+                // (absolute floor) — only then de-pin so a well-known seed stops carrying
+                // O(N) inbound connections. Small clusters never cross the floor, so they
+                // keep full connectivity to their bootstrap peers.
+                let retain_bootstrap = current_peer_set.len() < crate::config::AUTO_FANOUT_FLOOR;
+                let (added, removed) = reconcile_active_targets(
+                    &mut cached_ping_targets, &current_peer_set, &bootstrap_no_self, k, retain_bootstrap);
+                // Publish the bounded active set to the gossip shards: it is BOTH the ping
+                // set and the forwarding fan-out, so a node opens persistent writers to only
+                // ~k peers (not N). Cluster-wide delivery still holds via multi-hop epidemic
+                // flooding + the seen-set; Individual frames to a non-active target fall back
+                // to flooding (regression-gated). Republish only when the set changes.
+                if !added.is_empty() || !removed.is_empty() {
+                    let active: Arc<[NodeId]> = cached_ping_targets.iter().cloned().collect();
+                    let _ = peer_list_tx.send(active);
+                }
+                for peer in &added {
+                    request_state(peer, &peer_writers, writer_depth, backoff,
+                        idle_timeout, &shutdown_tx, &node_id, &hash_acc,
+                        &dropped_frames, vec![], tls.clone());
+                }
+                for peer in &removed {
+                    ping_sender_cache.remove(peer);
+                    evict_peer_writer(&peer_writers, peer);
                 }
                 for peer in &cached_ping_targets {
                     let tx = if let Some(t) = ping_sender_cache.get(peer) {
@@ -824,4 +882,96 @@ async fn tls_accept(
     }
     let _ = tls;
     Ok(GossipStream::Plain(stream))
+}
+
+#[cfg(test)]
+mod reconcile_tests {
+    use super::reconcile_active_targets;
+    use crate::node_id::NodeId;
+    use ahash::AHashSet;
+
+    fn id(p: u16) -> NodeId { NodeId::new("127.0.0.1", p).unwrap() }
+    fn set(ps: &[u16]) -> AHashSet<NodeId> { ps.iter().map(|p| id(*p)).collect() }
+
+    #[test]
+    fn fills_up_to_k_from_known() {
+        let mut active = AHashSet::new();
+        let known = set(&[10, 11, 12, 13, 14]);
+        let (added, removed) = reconcile_active_targets(&mut active, &known, &AHashSet::new(), 3, false);
+        assert_eq!(active.len(), 3);
+        assert_eq!(added.len(), 3);
+        assert!(removed.is_empty());
+        assert!(active.iter().all(|p| known.contains(p)));
+    }
+
+    #[test]
+    fn is_sticky_no_churn_once_converged() {
+        let known = set(&[10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
+        let mut active = AHashSet::new();
+        reconcile_active_targets(&mut active, &known, &AHashSet::new(), 4, false);
+        let snapshot = active.clone();
+        // Re-run with the same inputs repeatedly: no member changes.
+        for _ in 0..20 {
+            let (added, removed) = reconcile_active_targets(&mut active, &known, &AHashSet::new(), 4, false);
+            assert!(added.is_empty(), "stable set should add nothing");
+            assert!(removed.is_empty(), "stable set should remove nothing");
+            assert_eq!(active, snapshot, "active set must not churn");
+        }
+    }
+
+    #[test]
+    fn drops_dead_peers_and_refills() {
+        let mut active = set(&[10, 11, 12]);
+        // 11 died (no longer known); 13/14 are fresh.
+        let known = set(&[10, 12, 13, 14]);
+        let (added, removed) = reconcile_active_targets(&mut active, &known, &AHashSet::new(), 3, false);
+        assert!(removed.contains(&id(11)));
+        assert!(!active.contains(&id(11)));
+        assert_eq!(active.len(), 3);
+        assert_eq!(added.len(), 1); // refilled the slot freed by 11
+        assert!(active.iter().all(|p| known.contains(p)));
+    }
+
+    #[test]
+    fn retains_bootstrap_while_discovering_then_depins() {
+        let boot = set(&[1]); // the seed
+        // Still discovering (retain_bootstrap = true): seed kept even if not yet pinged back.
+        let mut active = set(&[1]);
+        let known_small = set(&[2, 3]);
+        let (_a, removed) = reconcile_active_targets(&mut active, &known_small, &boot, 8, true);
+        assert!(active.contains(&id(1)), "bootstrap kept while discovering");
+        assert!(!removed.contains(&id(1)));
+
+        // Discovered enough (retain_bootstrap = false): seed no longer force-held, and
+        // since it has left the live set it is dropped and sampled like any other peer.
+        let mut active2 = set(&[1, 20, 21, 22]);
+        let known_big = set(&[20, 21, 22, 23, 24, 25, 26, 27, 28, 29]); // seed not among them
+        let (_a2, removed2) = reconcile_active_targets(&mut active2, &known_big, &boot, 4, false);
+        assert!(!active2.contains(&id(1)), "seed de-pinned once discovery floor crossed");
+        assert!(removed2.contains(&id(1)));
+        assert_eq!(active2.len(), 4);
+    }
+
+    #[test]
+    fn small_cluster_keeps_full_connectivity_with_bootstrap_retained() {
+        // Regression for the n=7 partial-mesh gate: with k == known and retain_bootstrap
+        // true, every known peer (incl. the bootstrap edge) stays active — no partition.
+        let boot = set(&[1]);
+        let known = set(&[1, 2, 3, 4, 5, 6]); // 6 known incl. seed
+        let mut active = set(&[1]);
+        let (_added, removed) = reconcile_active_targets(&mut active, &known, &boot, 6, true);
+        assert_eq!(active.len(), 6, "all known peers stay connected in a small cluster");
+        assert!(active.contains(&id(1)), "bootstrap edge retained");
+        assert!(removed.is_empty());
+    }
+
+    #[test]
+    fn trims_surplus_when_k_shrinks() {
+        let known = set(&[10, 11, 12, 13, 14, 15]);
+        let mut active = known.clone(); // 6 active
+        let (added, removed) = reconcile_active_targets(&mut active, &known, &AHashSet::new(), 2, false);
+        assert!(added.is_empty());
+        assert_eq!(active.len(), 2);
+        assert_eq!(removed.len(), 4);
+    }
 }
