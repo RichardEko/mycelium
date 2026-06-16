@@ -72,6 +72,20 @@ else
     exit 1
 fi
 
+# ── Phase 1b: observability snapshot (WS-B Phase 0 baseline) ─────────────────
+# The runner cannot see seed's netns or the host FORWARD chain, so the
+# authoritative connection-ceiling curve (seed ESTABLISHED / conntrack / FORWARD
+# rules — the G1/G2 metrics) is captured by the host-side
+# measure_scale_baseline.sh. NOTE: task_count is NOT a fan-out proxy for this
+# demo binary — the 2026-06-16 baseline showed it flat at 11 from 30→100 nodes
+# (per-peer writers are not in its JoinSet), while host-measured seed_established
+# grew as 2×total_nodes. We emit task_count + store_entries here only as a cheap
+# in-test observability snapshot, not as the fan-out signal.
+seed_stats=$(curl -sf --max-time 5 "http://${SEED_HOST}:${PORT}/stats" 2>/dev/null || echo '{}')
+seed_task_count=$(echo "$seed_stats" | jq '.task_count // "?"' 2>/dev/null || echo '?')
+seed_store_entries=$(echo "$seed_stats" | jq '.store_entries // "?"' 2>/dev/null || echo '?')
+echo "  [WS-B baseline] seed task_count=${seed_task_count}, store_entries=${seed_store_entries} at ${TOTAL_NODES} nodes (authoritative fan-out: host-side seed_established)"
+
 # ── Phase 2: KV write + gossip convergence ────────────────────────────────────
 
 banner "KV write + gossip convergence across ${TOTAL_NODES} nodes"

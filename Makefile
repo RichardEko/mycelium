@@ -41,6 +41,16 @@ test-scale:
 test-scale-clean:
 	$(COMPOSE_SCALE) down -v --remove-orphans
 
+## test-scale-baseline — WS-B Phase 0: record the connection-ceiling "before" curve.
+## Brings the scale cluster up at each worker count and captures seed ESTABLISHED,
+## host conntrack, FORWARD-chain rule count, and seed /stats into
+## tests/integration/baseline/scale-baseline.csv. Host-side (needs Docker socket +
+## privilege for the --net=host VM probe). Long-running: one cluster up/down per point.
+## Override the curve: make test-scale-baseline BASELINE_WORKERS="30 50 70 100"
+BASELINE_WORKERS ?= 30 50 70 100
+test-scale-baseline:
+	BASELINE_WORKERS="$(BASELINE_WORKERS)" tests/integration/measure_scale_baseline.sh
+
 ## test-scale-resilience — crash/rejoin/anti-entropy/churn test (~22 nodes: 1 seed + 20 workers + mgmt)
 ## Tests: cluster formation, crash+recovery, late-joiner anti-entropy, and churn stability.
 ## Requires a warm Docker build cache and Docker socket access.  ~8 min on warm cache.
