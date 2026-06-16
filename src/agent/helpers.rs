@@ -206,6 +206,16 @@ pub(crate) fn encode_identity_history(current: [u8; 32], existing: &[[u8; 32]]) 
 
 /// Union `new_keys` into `node`'s retained key set in `peer_keys` (accumulate;
 /// existing keys are never dropped — historical signatures stay verifiable).
+///
+/// The union is computed inside a papaya `compute` closure so the read →
+/// merge → write is a single atomic CAS, retried if the entry changes
+/// concurrently (the "lock-free op + unserialised derived effect" family — see
+/// CLAUDE.md §Lock-free mutation rules). A prior get-clone-modify-insert could
+/// lose a key when two rotations for the same node merged concurrently: each
+/// read the same base set, each inserted its own superset, and the later insert
+/// clobbered the earlier — silently dropping a still-needed historical verifying
+/// key. The closure is retry-safe: it derives `merged` afresh from the *current*
+/// stored value on every invocation and never mutates captured state.
 #[cfg(feature = "tls")]
 pub(crate) fn merge_peer_keys(
     peer_keys: &papaya::HashMap<crate::node_id::NodeId, Vec<[u8; 32]>>,
@@ -213,16 +223,24 @@ pub(crate) fn merge_peer_keys(
     new_keys: &[[u8; 32]],
 ) {
     let guard = peer_keys.pin();
-    let mut set = guard.get(node).cloned().unwrap_or_default();
-    let before = set.len();
-    for k in new_keys {
-        if !set.contains(k) {
-            set.push(*k);
+    guard.compute(node.clone(), |existing| {
+        // Recompute the union from the current stored set every invocation;
+        // papaya re-runs this if the entry changed between read and CAS.
+        let base: &[[u8; 32]] = existing.map(|(_, set)| set.as_slice()).unwrap_or(&[]);
+        let mut merged = base.to_vec();
+        for k in new_keys {
+            if !merged.contains(k) {
+                merged.push(*k);
+            }
         }
-    }
-    if set.len() != before || guard.get(node).is_none() {
-        guard.insert(node.clone(), set);
-    }
+        // No-op if nothing new and the entry already exists (avoid a needless CAS);
+        // otherwise upsert (papaya `Insert` both creates and replaces).
+        if existing.is_some() && merged.len() == base.len() {
+            papaya::Operation::Abort(())
+        } else {
+            papaya::Operation::Insert(merged)
+        }
+    });
 }
 
 /// All verifying keys known for `node`: the retained set in `peer_keys`, plus
@@ -282,5 +300,53 @@ mod ws5_identity_key_tests {
         let h3 = encode_identity_history(k3, &parse_identity_keys(&h2));
         assert_eq!(parse_identity_keys(&h3), vec![k3, k2, k1],
             "all three keys retained across two rotations");
+    }
+
+    // Regression for the long-standing ratings watch-item (Runs 23–25):
+    // `merge_peer_keys` was a get-clone-modify-insert, not a papaya `compute`.
+    // Many threads each merging a distinct key for the SAME node would read the
+    // same base set and clobber one another on insert — dropping retained keys
+    // and making historical signatures unverifiable. With the atomic `compute`
+    // fix every distinct key must survive. Pre-fix this loses keys on most runs.
+    #[test]
+    fn concurrent_merges_for_one_node_never_drop_a_key() {
+        use crate::node_id::NodeId;
+        use std::sync::Arc;
+
+        const THREADS: usize = 16;
+        const ITERS: usize = 64; // 16 × 64 = 1024 distinct keys contended per round
+
+        for _round in 0..32 {
+            let peer_keys: Arc<papaya::HashMap<NodeId, Vec<[u8; 32]>>> =
+                Arc::new(papaya::HashMap::new());
+            let node = NodeId::new("127.0.0.1", 9000).unwrap();
+
+            std::thread::scope(|s| {
+                for t in 0..THREADS {
+                    let pk = Arc::clone(&peer_keys);
+                    let node = node.clone();
+                    s.spawn(move || {
+                        for i in 0..ITERS {
+                            // Globally-unique key per (thread, iter) so any clobber
+                            // is detectable as a missing entry in the final union.
+                            let mut k = [0u8; 32];
+                            let id = (t * ITERS + i) as u32;
+                            k[..4].copy_from_slice(&id.to_le_bytes());
+                            super::merge_peer_keys(&pk, &node, &[k]);
+                        }
+                    });
+                }
+            });
+
+            let stored = peer_keys.pin().get(&node).cloned().unwrap_or_default();
+            assert_eq!(
+                stored.len(),
+                THREADS * ITERS,
+                "all {} concurrently-merged keys must survive; lost {} — \
+                 merge_peer_keys clobbered a concurrent writer",
+                THREADS * ITERS,
+                THREADS * ITERS - stored.len(),
+            );
+        }
     }
 }
