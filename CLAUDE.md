@@ -338,7 +338,12 @@ Two rules close the whole family; follow them for every new papaya call site:
 Correct reference implementations: `get_or_spawn_writer` (claim-by-sentinel,
 spawn outside the closure), `ShardedSeen::evict_below` (conditional remove),
 `kv_quorum::{install_tracker, remove_tracker}` (copy-on-write list +
-identity-checked removal).
+identity-checked removal), `helpers::merge_peer_keys` (retained-key-set union
+recomputed inside a `compute` closure — atomic read-merge-write, retry-safe; the
+prior get-clone-modify-insert lost a retained verifying key when two rotations
+for one node merged concurrently — regression gate
+`concurrent_merges_for_one_node_never_drop_a_key`, which loses ~87% of keys
+against the old impl).
 
 ### Memory ordering policy for atomics
 

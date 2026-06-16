@@ -107,6 +107,20 @@ existed. This is the framework's own report card.
   path. Found by the WS1 cross-node integration test (first code to stand up the
   live TLS transport); fixed same day (idempotent `ring` provider install in
   `build_rustls_configs`). Operational Readiness/Robustness share the miss.
+- 2026-06-16: **Concurrency Correctness** scored 8 in Runs 23–25 while
+  `helpers::merge_peer_keys` (WS5 retained verifying-key set) was a non-atomic
+  get-clone-modify-insert, not a papaya `compute` — the recurring "lock-free op
+  + unserialised derived effect" family. Two rotations for the same node merging
+  concurrently each read the same base set and the later `insert` clobbered the
+  earlier, **silently dropping a still-needed historical verifying key** (audit
+  chains / committed values / role claims signed by the lost key become
+  unverifiable). Flagged as a *watch-item* (not a capped finding) in Runs 23/24/25
+  — i.e. the series saw it three times and scored 8 anyway. Confirmed a real
+  Major defect this session by the `concurrent_merges_for_one_node_never_drop_a_key`
+  probe (lost **894 of 1024** keys against the old impl); fixed same session
+  (atomic `compute` closure) and the probe kept as a regression gate. Lesson: a
+  "technically not retry-safe, but eventually-consistent" watch-item is still a
+  data-loss bug until proven otherwise — execute the probe, don't carry the note.
 
 **Dimensions:** Philosophy/Coherence · Conceptual Integrity · Architecture ·
 Modularity · API Design · Error Handling · Configurability · Language Best
@@ -1487,4 +1501,88 @@ green this run:
 | 24 | Developer Experience | 8 | CLAUDE.md on-ramp updated; clippy clean; one-flag `compliance`; test fixtures provided. Build time not measured this run → 8. |
 | 25 | Dependency Hygiene | 8 | New deps all optional + feature-gated + well-chosen: `sha2` (already transitive via ed25519-dalek), `jsonwebtoken` (uses `ring`, present), `arc-swap` (tiny, ubiquitous). `--no-default-features` builds clean (execution evidence) — default/embedded supply chain unaffected. 427 transitive deps with the full optional set. |
 | — | **Floor (lowest 3)** | **7, 7, 8** | Performance (15), Scalability (16), Concurrency Correctness (9 — the `merge_peer_keys` non-`compute()` watch-item) |
+| — | Mean (continuity footnote) | 8.0 | not a target; see M2 preamble |
+
+## 2026-06-16 — Run 25 (M2)
+
+Deep-dive dimensions this run (by rotation from Run 24): 16 (Scalability),
+17 (Testability), 18 (Test Architecture), 19 (Observability), 20 (Debuggability).
+Also re-examined 3 (Architecture) + 4 (Modularity) — the diff is the entire v2
+M1/M2/M3 program (the `mycelium-core` workspace split, `consensus` feature gate,
+SchemaHandle/KvHandle/MeshHandle pushdown), which lands squarely on the layer
+boundary. Next run by rotation: 21–25.
+
+Diff since Run 24: 28 commits — M1 (`mycelium-core` crate carved at the II↔III
+seam: leaf modules + transport + `CoreCtx`/`TaskCtx` God-Object split), M2
+(`consensus` feature gate — Layer III opt-out), M3 (handle pushdown +
+`KvQuorumExt` overlay for `set_with_min_acks`). Pure structural refactor: no wire
+change (stays v11), test totals preserved (318 default), Deref coercion keeps the
+~380 `ctx.<field>` sites and 8 sub-handle accessors unchanged.
+
+Execution evidence: `cargo test --lib -p mycelium-core` → **82 passed**;
+`cargo test --lib -p mycelium` → **236 passed** (318 default total, matches
+CLAUDE.md); `cargo test --lib --no-default-features --features gateway`
+(consensus opt-out) → **193 passed**; `cargo build -p mycelium-core` (standalone
+substrate) clean (20.7s); `cargo build --lib --no-default-features --features
+gateway` clean (47s); `cargo tree` dep counts: **52 core / 139 full** (confirms
+the M1 "≈48 vs ≈140" dep-tree-win claim by execution).
+
+### Findings
+None confirmed. All falsification probes passed or strengthened the score:
+
+- **Probe 1 (Architecture, #1 dim, score 9) — inverted-dependency / acyclic
+  invariant.** `grep` for any `mycelium::` / `use mycelium` / `extern crate
+  mycelium` reference inside `mycelium-core/src/` → **zero hits**; core's
+  `Cargo.toml` has no dependency on the parent. The "core cannot reference the
+  full crate (would be a Cargo cycle)" claim is a *true compile-time guarantee*,
+  not a convention. Reinforced by `cargo build -p mycelium-core` succeeding in
+  isolation. PASS.
+- **Probe 2 (Architecture/Philosophy) — Layer-III drift into the substrate.**
+  `grep` for quorum/ballot *accounting* in core flagged 3 files; inspection
+  shows they are the Layer-II distinct-sender evidence query (`SignalHandlers::
+  quorum`, counting senders of a signal kind in a window) and doc-comments — NOT
+  ballot/COMMIT logic, which remains in `src/consensus.rs` (upper crate).
+  `set_with_min_acks` is explicitly documented in `kv_handle.rs` as living in the
+  upper crate (`kv_quorum_ext.rs`). The substrate is genuinely unaware of
+  agreement. PASS (strengthens #1/#3).
+- **Probe 3 (Test Architecture, score 8) — is the M2 "consensus-disabled node
+  still forwards PROPOSE/VOTE/COMMIT" invariant tested, or asserted-only?** No
+  dedicated cross-feature regression test exists. *However* it is structurally
+  guaranteed: forwarding lives in `mycelium-core`, which has no `consensus`
+  feature at all, so the forward path cannot gate on it. Verified `grep` finds no
+  consensus-feature gate on core's forward path. Behaviour is correct by
+  construction → a minor coverage observation, **not a confirmed bug**. Noted as
+  a test-arch wart (keeps #18 at 8, not 9).
+
+### Calibration ledger
+No new entry — no bug found this run.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 8 | The M1 crate cut *operationalises* the layering litmus test: substrate (I+II) is now a separate crate that "cannot reference the layers above" — the philosophy doc's central rule is a compile error to violate. Consensus stays an emergent concern atop the signal mesh (verified core has no ballot logic). Read philosophy.html in full; no execution to falsify a philosophy → caps at 8. |
+| 2 | Conceptual Integrity | 8 | One mind: the split preserved all idiom — Deref coercion (`TaskCtx`→`CoreCtx`, sub-handles unchanged), `KvQuorumExt` overlay mirrors the existing extension-trait pattern, doc-comments explain *why* `set_with_min_acks` lives upstream. No naming/abstraction divergence introduced. Read-only → 8. |
+| 3 | Architecture | 9 | **Deep-dive.** The inverted-dependency invariant is now a *compile-time guarantee*, falsification-probed this run: core never references parent (grep → 0), builds standalone, consensus opt-out builds + 193 tests green. New verifiable artifact (the crate boundary did not exist before M1) — the one increase this run, execution-backed. |
+| 4 | Modularity | 8 | **Deep-dive.** Substrate now physically separable: `mycelium-core` (52 deps) compiles + tests (82) without the parent. The three core↔upper couplings (ReplyInterceptor / QuorumObserver / SnapshotDeferHook) are `None`-safe hooks, not hard deps. Held at 8 (not 9): handles still share `Arc<CoreCtx>` mutable state — sanctioned cohesion, not full independence. |
+| 5 | API Design | 8 | carried (v24). `KvQuorumExt` overlay is the only surface change — additive extension trait, `kv()` handle unchanged. Read-only. |
+| 6 | Error Handling Model | 8 | carried (v24). Refactor moved error types into `mycelium-core/src/error.rs`; no propagation pattern changed. |
+| 7 | Configurability | 8 | carried (v24). `consensus` feature is a new opt-out knob (default-on); config surface otherwise unchanged. |
+| 8 | Language Best Practices | 8 | carried **down** from v24's 9: that 9 was earned with a fresh `clippy -D warnings` run; I did **not** re-run clippy this run (per M2: don't run a suite just to unlock a 9). Refactor itself is idiomatic — Deref, extension traits, ArcSwap retained. Honest 8 absent fresh lint evidence. |
+| 9 | Concurrency Correctness | 8 | carried (v24). Refactor moved concurrency-bearing code (store `index_stripes`, `signal.rs` fan-out) across the crate boundary; the 82 core tests — incl. the prefix-index race regression — pass, evidence the moved code still serialises. Lock-order table unchanged. **Post-scoring (same session):** the standing `merge_peer_keys` non-`compute()` watch-item was probed at user request and **confirmed a real Major defect** — lost 894/1024 keys under concurrent rotation; fixed (atomic `compute`) + regression gate added; ledger entry recorded. The blind score (8) stands as the state at scoring time; this watch-item-confirmed-as-bug is exactly the calibration the ledger exists to capture. |
+| 10 | Resource Management | 8 | carried (v24). `spawn_task` + `task_handles` JoinSet moved into `CoreCtx` intact; no lifecycle change. Not re-probed this run. |
+| 11 | Semantic Correctness | 8 | carried down from v24's 9 (that 9 was compliance-hash-chain-specific). Core LWW/HLC semantics freshly green this run (`lww_newer_wins`, `lww_equal_timestamp_concurrent_data_converges`, `tombstone_gc_sweep_unpacks_hlc_timestamps` in the 82-test core run) — but consensus linearisability/anti-entropy not freshly probed, and the ledger history (equal-ts, HLC drift) warrants not re-asserting 9 lightly. |
+| 12 | Robustness | 8 | carried (v24). Wire/decoder path (`framing.rs`) moved to core unchanged — `MAX_FRAME_BYTES` limit + decode byte-limit intact; framing proptest in the green core run. No fresh malformed-frame probe this run. |
+| 13 | Security | 8 | carried (v24). `tls.rs`/`stream.rs` moved into core under the forwarded `tls` feature; no auth/crypto logic changed. The Run-24 tls-handshake ledger fix stands. Read-only this run. |
+| 14 | Failure Mode Legibility | 8 | carried (v24). Tripwires (`commit_conflicts`, `sys_namespace_violations`) + typed verify errors unchanged. Read-only. |
+| 15 | Performance | 7 | carried (v24). Hot paths (LWW merge, framing, fan-out) moved verbatim into core; no perf regression expected but **no benchmark run this run** → conservative per evidence gate. |
+| 16 | Scalability | 7 | **Deep-dive.** `scan_prefix` confirmed bucketed by first path segment — O(\|bucket\|) not O(\|store\|) (`PrefixIndex`, `store.rs:180`). Documented cliff edge (Docker bridge iptables O(N²) at 100 nodes) persists with v1 mitigation (`GOSSIP_MAX_ACTIVE_CONNECTIONS`) + roadmapped v2 SWIM/UDP structural fix. No scale test (100-node / entry-volume) run this run → known cliff keeps it at 7. |
+| 17 | Testability | 8 | **Deep-dive.** Design demonstrably injectable: substrate testable in isolation (82 core tests, no full cluster), feature-sliced runs (default / consensus-off) both green this run, components constructible per-crate. Held at 8 (not 9): the full tls/metrics/a2a/llm/compliance matrix and the 13 Docker scenarios were not exercised this run. |
+| 18 | Test Architecture | 8 | **Deep-dive.** Healthy pyramid: 390 `#[test]`/`#[tokio::test]` fns across both crates, 13 integration scenarios, 2 fuzz targets, 3 proptest blocks (hlc/framing/store). M3 pushdown relocated handle tests into core (`schema/kv_handle_tests`) without loss. Held at 8: the M2 "consensus-off still forwards" invariant has no dedicated regression test (structurally guaranteed but untested — Probe 3); Docker scenarios not CI-run this session. |
+| 19 | Observability | 8 | **Deep-dive.** Metrics on hot paths verified in core: `gossip_store_entries` (gauge), `gossip_anti_entropy_rounds_total`, `gossip_messages_received_total`, `gossip_signals_delivered_total`/`_rejected_total`, `gossip_rpc_latency_ms`. `/metrics` (Prometheus), `/stats`, `/ready`, `/health` endpoints present; tracing throughout. Read-only — `/metrics` not live-probed this run → 8. |
+| 20 | Debuggability | 8 | **Deep-dive.** 44 HTTP routes incl. KV inspection (`/kv` GET/POST/DELETE, `/kv/keys`, `/kv/quorum`), per-slot consensus inspection (`/consensus/{slot}`, lease-aware), signal SSE (`/signals/{kind}`), `/stats` with the two tripwire counters. Strong introspection surface; not driven live this run → 8. |
+| 21 | Operational Readiness | 8 | carried (v24). `consensus`-off minimal embed is a new deployment shape (193 tests green); gateway-free + standalone-core builds clean. No Docker scenario run this run. |
+| 22 | Evolvability | 8 | carried (v24), reinforced: the v2 roadmap is *executing* — M1/M2/M3 landed as a clean structural refactor with zero wire change (v11 held) and zero test loss. The TaskCtx God-Object split + Layer I/II crate cut are debt being paid down, not accrued. Read-only assessment → 8. |
+| 23 | Documentation | 8 | carried (v24). CLAUDE.md + ROADMAP updated for M1/M2/M3 (crate split, feature gate, handle table); execution records in `docs/plans/v2-m1`/`v2-m3`. Doc-vs-code spot-checks (dep counts, test totals, scan_prefix complexity) all matched reality this run. Docs not executable → 8. |
+| 24 | Developer Experience | 8 | carried (v24). Build times observed this run: standalone core 20.7s, gateway-free full crate 47s, core test cycle 2.2s. `consensus`/`gateway` one-flag opt-outs; `-p` scoping works. Workspace ergonomics clean. |
+| 25 | Dependency Hygiene | 8 | carried (v24). The M1 dep-tree win is now execution-verified: 52 core vs 139 full unique normal deps (`cargo tree`); `--no-default-features` + standalone-core both build. `Cargo.lock` present. No fresh `cargo audit` this run → held at 8. |
+| — | **Floor (lowest 3)** | **7, 7, 8** | Performance (15), Scalability (16), Concurrency Correctness (9 — the standing `merge_peer_keys` non-`compute()` watch-item) |
 | — | Mean (continuity footnote) | 8.0 | not a target; see M2 preamble |
