@@ -157,7 +157,7 @@ in four independently-mergeable stages, each gated behind `GossipConfig::swim_fa
 (default **false**) so every stage is inert for existing deployments until the final cutover
 flips the default (the M4-default-flip lesson):
 
-**Progress:** Stage 1 ✅ (PR #15) · Stage 2 ✅ (PR #16) · Stage 3 ✅ (PR #17) · Stage 4 🟡 cutover mechanics in + two load-bearing bugs fixed (membership-collapse, then the de-pin/anti-entropy divergence below); **G1 now flat in-process across 30→100 nodes** — the divergence was reproduced *in-process* and root-caused (it was never Docker networking). Docker re-validation + G3 still pending before the default flip. Default stays **off**.
+**Progress:** Stage 1 ✅ (PR #15) · Stage 2 ✅ (PR #16) · Stage 3 ✅ (PR #17) · Stage 4 🟡 cutover mechanics in + two load-bearing bugs fixed (membership-collapse, then the de-pin/anti-entropy storm below); **G1 flat in-process across 30→100 nodes, but NOT yet over Docker** — the Docker re-validation (below) showed `seed_established` still ~1.4N. The remaining blocker is now localized one layer deeper: **SWIM membership does not converge past the de-pin threshold over the lossy Docker-bridge UDP**, so the bootstrap-reliable seed stays over-weighted. Default stays **off**.
 
 #### Stage 4 findings (2026-06-16) — cutover mechanics + the membership-collapse fix
 
@@ -210,8 +210,10 @@ N-scaling amplifiers:
   churned it in. (Bonus: stable members now re-sync periodically — the old on-add trigger never
   re-synced them — and the responder's store-hash fast-path makes a converged exchange empty.)
 
-**G1 result — flat across 30→100 nodes** (oracle, live-writer count, SWIM on, Docker cadence; seed
-total = outbound + inbound writers, KV canary = nodes that received a seed-written key):
+**G1 result — flat across 30→100 nodes IN-PROCESS** (oracle, live-writer count, SWIM on, Docker
+cadence; seed total = outbound + inbound writers, KV canary = nodes that received a seed-written key).
+NB: this is loopback (lossless UDP); the Docker re-validation below shows it does *not* yet hold over
+the bridge:
 
 | N | seed_out | seed_in | **seed_total** | canary |
 |---|---|---|---|---|
@@ -224,10 +226,40 @@ total = outbound + inbound writers, KV canary = nodes that received a seed-writt
 t≈15 s — versus the pre-fix run where `seed_in` sat at N (99) for 100 s+. Reproduce with
 `SWIM_ORACLE_N=100 cargo test --lib swim_scale_oracle -- --ignored --nocapture`.
 
-**Still pending before the default flip:** Docker re-validation (`make test-scale-baseline` should now
-show the same flat `seed_established`) and **G3** (`test-scale-resilience RESILIENCE_WORKERS=50`).
-The mechanism is now demonstrated flat; the Docker run is confirmation, not discovery. **Default stays
-off until G1 (Docker) + G3 are green.**
+#### Stage 4 Docker re-validation (2026-06-16) — the in-process fix is necessary but NOT sufficient
+
+`SWIM=1 SETTLE_SECS=45 make test-scale-baseline` (the fix branch, real Docker bridge, measures
+`/proc/net/tcp` ESTABLISHED on the seed):
+
+| N | seed_established (fix) | note |
+|---|---|---|
+| 30 | 45 (settles ~40) | drains 62→40 by ~t=90 s then holds |
+| 50 | 69 | dropped=0 |
+| 70 | 91 | dropped=89 |
+| 100 | **121** | dropped=59 |
+
+This is **linear (~N+10), not flat** — the in-process oracle gave a false positive because loopback
+UDP is lossless. A live drain probe (N=30) decomposed it: the startup ~2N is every worker holding
+*two* sockets to the seed (forwarding writer + the seed's reply writer); the drain to ~N+10 is the
+anti-entropy fix correctly shedding the **duplicate reply writers**, but **every worker keeps its
+*primary* connection** — the seed stays pinned by ~all workers, and the worker peer fan-out plateaus
+at ~18/30 distinct peers.
+
+**Localized root cause:** the de-pin only fires once a node knows `> 2k` peers. Over the lossy
+Docker-bridge UDP, **SWIM membership gossip does not converge past that threshold** — `gossip_sample`
+is *newest-changed-first*, so once a node's view stabilizes it re-gossips the same recent `n` and the
+long tail of the roster never re-propagates / heals after a dropped datagram. The reliably-bootstrapped
+seed is the one peer every node knows, so it is over-weighted in each node's forwarding sample. The
+in-process fix is correct and a real improvement (kills the reply-writer storm + the ~150 s settle
+tail → Docker now settles by ~90 s instead of never), but Docker flatness needs the membership layer
+to converge under loss.
+
+**Next (closing it out):** (B) test whether SWIM gossip knobs alone close it — bump
+`GOSSIP_SWIM_GOSSIP_UPDATES` (6 → fill the 512 B MTU) and lower `GOSSIP_SWIM_PROBE_INTERVAL_MS`; if
+env tuning is insufficient, make `gossip_sample` mix newest-changed (fast suspect/dead/join
+propagation) with a **uniform-random tail** so the full roster disseminates and heals under loss
+(standard SWIM/`memberlist` retransmit behaviour). Then re-run the Docker baseline + **G3**
+(`test-scale-resilience RESILIENCE_WORKERS=50`). **Default stays off until G1 (Docker) + G3 are green.**
 
 - **Stage 1 — UDP datagram transport foundation.** New `mycelium-core/src/swim.rs`: the
   `SwimDatagram` enum (`Ping`/`Ack`/`PingReq`/`PingReqAck`) + a compact codec with a version
