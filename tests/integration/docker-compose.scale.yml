@@ -38,6 +38,8 @@ services:
       # 2048 gives ~10× headroom over the worst-case burst.
       GOSSIP_WRITER_CHANNEL_DEPTH: "2048"
       GOSSIP_PING_PEER_SAMPLE_SIZE: "30"
+      # WS-B M5: SWIM UDP failure detector. Off by default; SWIM=1 enables it cluster-wide.
+      GOSSIP_SWIM_FAILURE_DETECTOR: "${SWIM:-0}"
       RUST_LOG:                   "warn,mycelium=info"
     networks:
       - mesh
@@ -60,6 +62,8 @@ services:
       MGMT_PORT:                  "8090"
       GOSSIP_WRITER_CHANNEL_DEPTH: "2048"
       GOSSIP_PING_PEER_SAMPLE_SIZE: "30"
+      # WS-B M5: SWIM UDP failure detector. Off by default; SWIM=1 enables it cluster-wide.
+      GOSSIP_SWIM_FAILURE_DETECTOR: "${SWIM:-0}"
       RUST_LOG:                   "warn,mycelium=info"
     networks:
       - mesh
@@ -84,6 +88,8 @@ services:
       GOSSIP_HEALTH_CHECK_MAX_JITTER_MS: "5000"
       # Cap outbound connections per node — prevents iptables saturation at 100 nodes.
       GOSSIP_MAX_ACTIVE_CONNECTIONS:     "12"
+      # WS-B M5: SWIM UDP failure detector. Off by default; SWIM=1 enables it cluster-wide.
+      GOSSIP_SWIM_FAILURE_DETECTOR: "${SWIM:-0}"
       RUST_LOG:                   "warn,mycelium=info"
     networks:
       - mesh

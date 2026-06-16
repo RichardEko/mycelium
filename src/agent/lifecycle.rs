@@ -362,6 +362,7 @@ impl GossipAgent {
             self.config.ping_peer_sample_size,
             self.config.max_active_connections,
             self.config.gossip_fanout,
+            self.config.swim_failure_detector,
             self.config.health_check_max_jitter_ms,
             Arc::clone(&self.kv_state.hash_acc),
             Arc::clone(&self.kv_state.dropped_frames),
