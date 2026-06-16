@@ -21,6 +21,8 @@
 
 use crate::framing::bincode_cfg;
 use crate::node_id::NodeId;
+use crate::swim_membership::{ApplyEffect, MemberUpdate, SwimMembership};
+use crate::writer::{evict_peer_writer, WriterEntry};
 use ahash::AHashMap;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
@@ -35,7 +37,8 @@ use tracing::{debug, warn};
 /// Version byte prefixed to every SWIM datagram. Lets the wire evolve independently
 /// of the TCP `WIRE_VERSION`; a receiver drops datagrams it does not understand
 /// (loss-tolerable — the failure detector simply retries / falls back to indirect).
-pub const SWIM_DATAGRAM_VERSION: u8 = 1;
+/// v2 (Stage 3) adds the piggybacked membership `gossip` to `Ping`/`Ack`.
+pub const SWIM_DATAGRAM_VERSION: u8 = 2;
 
 /// Soft cap on the size of a SWIM datagram we emit. Kept well under a typical
 /// 1500-byte path MTU so probes never fragment; the Stage 3 membership piggyback
@@ -45,10 +48,12 @@ pub const SWIM_MAX_DATAGRAM: usize = 512;
 /// A SWIM control datagram carried over UDP.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SwimDatagram {
-    /// Direct liveness probe. The receiver replies with [`SwimDatagram::Ack`] echoing `seq`.
-    Ping { seq: u64, from: NodeId },
-    /// Reply to a direct `Ping`, or to a relayed `PingReq` (indirect probe).
-    Ack { seq: u64, from: NodeId },
+    /// Direct liveness probe. The receiver merges `gossip`, applies it, and replies with
+    /// [`SwimDatagram::Ack`] echoing `seq` and carrying its own gossip sample.
+    Ping { seq: u64, from: NodeId, gossip: Vec<MemberUpdate> },
+    /// Reply to a direct `Ping` (or relayed). Carries the responder's gossip sample so
+    /// membership spreads on every probe round — discovery independent of forwarding.
+    Ack { seq: u64, from: NodeId, gossip: Vec<MemberUpdate> },
     /// Indirect-probe request (SWIM): `from` could not reach `target` directly and
     /// asks the receiver to `Ping` `target` on its behalf and relay the `Ack` back.
     PingReq { seq: u64, from: NodeId, target: NodeId },
@@ -93,11 +98,113 @@ pub struct SwimState {
     /// seq → completion sender. A probe registers an entry before sending; the listener
     /// removes + fires it when the matching `Ack` / `PingReqAck` arrives.
     pending: Mutex<AHashMap<u64, oneshot::Sender<()>>>,
+    /// The SWIM membership table (Stage 3) — the source of truth gossiped over probes.
+    membership: Mutex<SwimMembership>,
+    /// Shared liveness/discovery map: gossip-learned `Alive` members are inserted here
+    /// (so the bounded-fan-out reconcile + prober see the full cluster), and confirmed
+    /// `Dead` members are removed + their TCP writer evicted.
+    peers: Arc<papaya::HashMap<NodeId, Instant>>,
+    peer_writers: Arc<papaya::HashMap<NodeId, WriterEntry>>,
+    /// How many membership updates to piggyback on each `Ping`/`Ack` (bounded for MTU).
+    gossip_updates: usize,
 }
 
 impl SwimState {
-    pub fn new(socket: Arc<UdpSocket>, self_id: NodeId) -> Arc<Self> {
-        Arc::new(Self { socket, self_id, seq: AtomicU64::new(1), pending: Mutex::new(AHashMap::new()) })
+    pub fn new(
+        socket: Arc<UdpSocket>,
+        self_id: NodeId,
+        peers: Arc<papaya::HashMap<NodeId, Instant>>,
+        peer_writers: Arc<papaya::HashMap<NodeId, WriterEntry>>,
+        gossip_updates: usize,
+    ) -> Arc<Self> {
+        let membership = Mutex::new(SwimMembership::new(self_id.clone()));
+        Arc::new(Self {
+            socket,
+            self_id,
+            seq: AtomicU64::new(1),
+            pending: Mutex::new(AHashMap::new()),
+            membership,
+            peers,
+            peer_writers,
+            gossip_updates,
+        })
+    }
+
+    fn lock_membership(&self) -> std::sync::MutexGuard<'_, SwimMembership> {
+        self.membership.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// A gossip sample to piggyback on an outgoing datagram.
+    fn gossip(&self) -> Vec<MemberUpdate> {
+        self.lock_membership().gossip_sample(self.gossip_updates)
+    }
+
+    /// Merge inbound gossip and apply each effect to the shared `peers` map. Returns the
+    /// updates we must re-gossip to refute a rumour about ourselves (if any).
+    fn merge_gossip(&self, updates: &[MemberUpdate]) {
+        let now = Instant::now();
+        let mut effects = Vec::new();
+        {
+            let mut m = self.lock_membership();
+            for u in updates {
+                effects.push(m.apply(u, now));
+            }
+        }
+        for eff in effects {
+            self.apply_effect(eff, now);
+        }
+    }
+
+    /// Apply a membership effect to the shared `peers` / writer maps. `BecameAlive` is the
+    /// discovery hook (a node learned only via gossip becomes probeable + forwardable);
+    /// `BecameDead` removes it and closes its connection. Refutation needs no side effect
+    /// here — our bumped incarnation rides out on the next gossip sample.
+    fn apply_effect(&self, eff: ApplyEffect, now: Instant) {
+        match eff {
+            ApplyEffect::BecameAlive(node) => {
+                if node != self.self_id {
+                    self.peers.pin().get_or_insert(node, now);
+                }
+            }
+            ApplyEffect::BecameDead(node) => {
+                self.peers.pin().remove(&node);
+                evict_peer_writer(&self.peer_writers, &node);
+            }
+            ApplyEffect::None | ApplyEffect::RefutedSelf(_) => {}
+        }
+    }
+
+    /// Record that `node` is alive (a probe/`Ack` confirmed it) and refresh its liveness
+    /// timestamp for the health-monitor staleness eviction.
+    fn observe_alive(&self, node: &NodeId) {
+        if *node == self.self_id {
+            return;
+        }
+        let now = Instant::now();
+        let eff = self.lock_membership().observe_alive(node, now);
+        self.apply_effect(eff, now);
+        refresh(&self.peers, node);
+    }
+
+    /// Locally suspect `node` (direct + indirect probes both failed). The suspicion is
+    /// recorded in the table and rides out on subsequent gossip samples; it is promoted
+    /// to `Dead` by [`SwimState::tick_suspicion`] if no one refutes it in time.
+    fn suspect(&self, node: &NodeId) {
+        let _ = self.lock_membership().suspect(node, Instant::now());
+    }
+
+    /// Promote suspects that have outlived `timeout` to `Dead`, removing them from `peers`.
+    fn tick_suspicion(&self, timeout: Duration) {
+        let now = Instant::now();
+        let dead = self.lock_membership().promote_expired_suspects(now, timeout);
+        for u in dead {
+            self.apply_effect(ApplyEffect::BecameDead(u.node), now);
+        }
+    }
+
+    /// Members currently believed alive (probe candidates).
+    fn alive_members(&self) -> Vec<NodeId> {
+        self.lock_membership().alive_members()
     }
 
     fn next_seq(&self) -> u64 {
@@ -128,7 +235,12 @@ impl SwimState {
     pub async fn probe_direct(&self, target: SocketAddr, timeout: Duration) -> bool {
         let seq = self.next_seq();
         let rx = self.register(seq);
-        let ping = SwimDatagram::Ping { seq, from: self.self_id.clone() }.encode();
+        let ping = SwimDatagram::Ping {
+            seq,
+            from: self.self_id.clone(),
+            gossip: self.gossip(),
+        }
+        .encode();
         if self.socket.send_to(&ping, target).await.is_err() {
             self.forget(seq);
             return false;
@@ -205,13 +317,25 @@ pub async fn run_swim_listener(
                     continue;
                 };
                 match dg {
-                    SwimDatagram::Ping { seq, .. } => {
-                        let ack = SwimDatagram::Ack { seq, from: state.self_id.clone() }.encode();
+                    SwimDatagram::Ping { seq, from, gossip } => {
+                        state.merge_gossip(&gossip);
+                        // The pinging peer is alive (we just heard from it).
+                        state.observe_alive(&from);
+                        let ack = SwimDatagram::Ack {
+                            seq,
+                            from: state.self_id.clone(),
+                            gossip: state.gossip(),
+                        }
+                        .encode();
                         if let Err(e) = state.socket.send_to(&ack, src).await {
                             debug!(%src, "SWIM Ack send failed: {e}");
                         }
                     }
-                    SwimDatagram::Ack { seq, .. } => state.resolve(seq),
+                    SwimDatagram::Ack { seq, from, gossip } => {
+                        state.merge_gossip(&gossip);
+                        state.observe_alive(&from);
+                        state.resolve(seq);
+                    }
                     SwimDatagram::PingReqAck { seq, .. } => state.resolve(seq),
                     SwimDatagram::PingReq { seq, from: _, target } => {
                         // Relay: probe the target ourselves; if it answers, tell the
@@ -241,20 +365,24 @@ fn probe_addr(peer: &NodeId) -> SocketAddr {
     peer.to_socket_addr()
 }
 
-/// The SWIM prober loop: every protocol period, pick a random live peer, probe it
-/// (direct → indirect on timeout), and on success refresh its last-seen timestamp in
-/// `peers` so the health monitor's staleness eviction treats it as alive. A peer that
-/// answers neither probe simply stops being refreshed and ages out via the existing
-/// eviction window. Runs until shutdown.
+/// The SWIM prober loop. Every protocol period it (1) promotes expired suspects to
+/// `Dead`, then (2) picks a random member and probes it (direct → indirect on timeout).
+/// A successful probe records the member `Alive` (and refreshes its liveness timestamp);
+/// a member that answers neither probe is marked `Suspect`, which gossips out and, if not
+/// refuted within `suspicion_timeout`, is promoted to `Dead` and evicted. Membership
+/// learned via the gossip piggyback (not just direct contact) makes discovery — and the
+/// resulting de-pinning of well-known seeds — independent of the bounded forwarding set.
+/// Runs until shutdown.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_swim_prober(
     state: Arc<SwimState>,
-    peers: Arc<papaya::HashMap<NodeId, Instant>>,
+    bootstrap: Arc<[NodeId]>,
     shutdown_tx: Arc<watch::Sender<bool>>,
     alive: Arc<AtomicBool>,
     interval: Duration,
     probe_timeout: Duration,
     indirect_k: usize,
+    suspicion_timeout: Duration,
 ) {
     alive.store(true, Ordering::Relaxed);
     let mut shutdown_rx = shutdown_tx.subscribe();
@@ -263,28 +391,32 @@ pub async fn run_swim_prober(
     loop {
         tokio::select! {
             _ = ticker.tick() => {
-                // Snapshot the current peer set.
-                let members: Vec<NodeId> = {
-                    let g = peers.pin();
-                    g.iter().map(|(id, _)| id.clone()).collect()
-                };
-                if members.is_empty() { continue; }
-                let target = &members[fastrand::usize(..members.len())];
+                state.tick_suspicion(suspicion_timeout);
 
-                if state.probe_direct(probe_addr(target), probe_timeout).await {
-                    refresh(&peers, target);
+                // Probe candidates: alive members, falling back to bootstrap peers while
+                // the table is still empty (join — we have no gossip yet).
+                let mut members = state.alive_members();
+                if members.is_empty() {
+                    members = bootstrap.iter().cloned().collect();
+                }
+                if members.is_empty() { continue; }
+                let target = members[fastrand::usize(..members.len())].clone();
+
+                if state.probe_direct(probe_addr(&target), probe_timeout).await {
+                    state.observe_alive(&target);
                     continue;
                 }
-                // Direct probe failed — ask k random *other* peers to probe indirectly.
+                // Direct probe failed — ask k random *other* members to probe indirectly.
                 let relays: Vec<SocketAddr> = {
-                    let mut others: Vec<&NodeId> = members.iter().filter(|p| *p != target).collect();
+                    let mut others: Vec<&NodeId> = members.iter().filter(|p| **p != target).collect();
                     fastrand::shuffle(&mut others);
                     others.into_iter().take(indirect_k).map(probe_addr).collect()
                 };
-                if state.probe_indirect(target, &relays, probe_timeout).await {
-                    refresh(&peers, target);
+                if state.probe_indirect(&target, &relays, probe_timeout).await {
+                    state.observe_alive(&target);
+                } else {
+                    state.suspect(&target);
                 }
-                // Else: no refresh → the health monitor evicts the peer once it goes stale.
             }
             _ = shutdown_rx.changed() => break,
         }
@@ -305,14 +437,16 @@ fn refresh(peers: &papaya::HashMap<NodeId, Instant>, peer: &NodeId) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::swim_membership::MemberStatus;
 
     fn id(p: u16) -> NodeId { NodeId::new("127.0.0.1", p).unwrap() }
+    fn upd(p: u16) -> MemberUpdate { MemberUpdate { node: id(p), incarnation: 0, status: MemberStatus::Alive } }
 
     #[test]
     fn datagram_round_trips_all_variants() {
         let cases = [
-            SwimDatagram::Ping { seq: 7, from: id(8000) },
-            SwimDatagram::Ack { seq: 7, from: id(8001) },
+            SwimDatagram::Ping { seq: 7, from: id(8000), gossip: vec![upd(8003), upd(8004)] },
+            SwimDatagram::Ack { seq: 7, from: id(8001), gossip: vec![] },
             SwimDatagram::PingReq { seq: 42, from: id(8000), target: id(8002) },
             SwimDatagram::PingReqAck { seq: 42, target: id(8002) },
         ];
@@ -328,7 +462,7 @@ mod tests {
     fn decode_rejects_empty_unknown_version_and_garbage() {
         assert_eq!(SwimDatagram::decode(&[]), None);
         // Unknown version byte.
-        let mut bad = SwimDatagram::Ping { seq: 1, from: id(8000) }.encode();
+        let mut bad = SwimDatagram::Ping { seq: 1, from: id(8000), gossip: vec![] }.encode();
         bad[0] = SWIM_DATAGRAM_VERSION.wrapping_add(1);
         assert_eq!(SwimDatagram::decode(&bad), None);
         // Right version, garbage body.
@@ -338,17 +472,19 @@ mod tests {
     const PT: Duration = Duration::from_millis(500);
 
     /// Spin up a live SWIM node (socket + state + running listener) on an ephemeral
-    /// port, returning its state, identity, and a shutdown handle.
-    async fn spawn_node() -> (Arc<SwimState>, NodeId, Arc<watch::Sender<bool>>) {
+    /// port, returning its state, identity, shutdown handle, and its `peers` map.
+    async fn spawn_node() -> (Arc<SwimState>, NodeId, Arc<watch::Sender<bool>>, Arc<papaya::HashMap<NodeId, Instant>>) {
         let socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let port = socket.local_addr().unwrap().port();
         let node = NodeId::new("127.0.0.1", port).unwrap();
-        let state = SwimState::new(Arc::clone(&socket), node.clone());
+        let peers = Arc::new(papaya::HashMap::new());
+        let writers = Arc::new(papaya::HashMap::new());
+        let state = SwimState::new(Arc::clone(&socket), node.clone(), Arc::clone(&peers), writers, 6);
         let (sh, _) = watch::channel(false);
         let sh = Arc::new(sh);
         let alive = Arc::new(AtomicBool::new(false));
         tokio::spawn(run_swim_listener(Arc::clone(&state), Arc::clone(&sh), alive, PT));
-        (state, node, sh)
+        (state, node, sh, peers)
     }
 
     /// A `NodeId` whose port is (almost certainly) not bound — bind then drop to free it.
@@ -361,8 +497,8 @@ mod tests {
 
     #[tokio::test]
     async fn direct_probe_succeeds_against_live_peer_and_times_out_against_dead() {
-        let (a, _aid, _ash) = spawn_node().await;
-        let (_b, bid, _bsh) = spawn_node().await;
+        let (a, _aid, _ash, _ap) = spawn_node().await;
+        let (_b, bid, _bsh, _bp) = spawn_node().await;
         assert!(a.probe_direct(probe_addr(&bid), PT).await, "live peer acks");
 
         let dead = dead_node().await;
@@ -374,9 +510,9 @@ mod tests {
 
     #[tokio::test]
     async fn indirect_probe_succeeds_via_relay() {
-        let (a, _aid, _ash) = spawn_node().await;
-        let (_r, rid, _rsh) = spawn_node().await; // relay
-        let (_c, cid, _csh) = spawn_node().await; // live target
+        let (a, _aid, _ash, _ap) = spawn_node().await;
+        let (_r, rid, _rsh, _rp) = spawn_node().await; // relay
+        let (_c, cid, _csh, _cp) = spawn_node().await; // live target
         // A reaches C only by asking R to probe on its behalf.
         assert!(
             a.probe_indirect(&cid, &[probe_addr(&rid)], PT).await,
@@ -387,8 +523,8 @@ mod tests {
 
     #[tokio::test]
     async fn indirect_probe_fails_when_target_is_dead() {
-        let (a, _aid, _ash) = spawn_node().await;
-        let (_r, rid, _rsh) = spawn_node().await; // relay is alive…
+        let (a, _aid, _ash, _ap) = spawn_node().await;
+        let (_r, rid, _rsh, _rp) = spawn_node().await; // relay is alive…
         let dead = dead_node().await; // …but the target is not
         assert!(
             !a.probe_indirect(&dead, &[probe_addr(&rid)], Duration::from_millis(400)).await,
@@ -398,9 +534,34 @@ mod tests {
 
     #[tokio::test]
     async fn indirect_probe_with_no_relays_is_false() {
-        let (a, _aid, _ash) = spawn_node().await;
+        let (a, _aid, _ash, _ap) = spawn_node().await;
         let dead = dead_node().await;
         assert!(!a.probe_indirect(&dead, &[], PT).await);
+    }
+
+    #[tokio::test]
+    async fn gossip_spreads_membership_for_discovery() {
+        // The Stage-3 property: B learns about C purely from A's gossip, without ever
+        // probing C — discovery decoupled from direct contact / the forwarding set.
+        let (a, _aid, _ash, _ap) = spawn_node().await;
+        let (_b, bid, _bsh, b_peers) = spawn_node().await;
+        let cid = id(60123); // a node A "knows" but B has never contacted
+
+        // Seed A's membership with C as alive, then have A probe B (carrying gossip).
+        a.lock_membership().apply(
+            &MemberUpdate { node: cid.clone(), incarnation: 0, status: MemberStatus::Alive },
+            Instant::now(),
+        );
+        assert!(a.probe_direct(probe_addr(&bid), PT).await, "A reaches B");
+
+        // B should have learned C from A's piggybacked gossip and inserted it into peers.
+        // (Allow a brief moment for the listener to process the Ping.)
+        let mut found = false;
+        for _ in 0..20 {
+            if b_peers.pin().contains_key(&cid) { found = true; break; }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(found, "B discovered C via gossip without probing it");
     }
 
     #[tokio::test]

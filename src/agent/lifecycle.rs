@@ -315,7 +315,13 @@ impl GossipAgent {
         let socket = Arc::new(
             tokio::net::UdpSocket::bind(udp_addr).await.map_err(GossipError::Io)?,
         );
-        let state = mycelium_core::swim::SwimState::new(socket, self.node_id.clone());
+        let state = mycelium_core::swim::SwimState::new(
+            socket,
+            self.node_id.clone(),
+            Arc::clone(&self.peers),
+            Arc::clone(&self.peer_writers),
+            self.config.swim_gossip_updates,
+        );
         let probe_timeout = Duration::from_millis(self.config.swim_probe_timeout_ms);
 
         self.spawn_task(mycelium_core::swim::run_swim_listener(
@@ -326,12 +332,13 @@ impl GossipAgent {
         ));
         self.spawn_task(mycelium_core::swim::run_swim_prober(
             state,
-            Arc::clone(&self.peers),
+            Arc::clone(&self.bootstrap_peers),
             Arc::clone(&self.shutdown_tx),
             Arc::new(AtomicBool::new(false)),
             Duration::from_millis(self.config.swim_probe_interval_ms),
             probe_timeout,
             self.config.swim_indirect_probes,
+            Duration::from_millis(self.config.swim_suspicion_timeout_ms),
         ));
         tracing::info!("SWIM failure detector active on udp://{udp_addr}");
         Ok(())

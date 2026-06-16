@@ -157,7 +157,7 @@ in four independently-mergeable stages, each gated behind `GossipConfig::swim_fa
 (default **false**) so every stage is inert for existing deployments until the final cutover
 flips the default (the M4-default-flip lesson):
 
-**Progress:** Stage 1 ✅ (PR #15) · Stage 2 ✅ · Stages 3–4 pending.
+**Progress:** Stage 1 ✅ (PR #15) · Stage 2 ✅ (PR #16) · Stage 3 ✅ · Stage 4 pending (cutover + G1/G3 validation).
 
 - **Stage 1 — UDP datagram transport foundation.** New `mycelium-core/src/swim.rs`: the
   `SwimDatagram` enum (`Ping`/`Ack`/`PingReq`/`PingReqAck`) + a compact codec with a version
