@@ -1763,7 +1763,11 @@ async fn test_competitive_response_group_scope() {
     let corr = Bytes::from_static(b"corr-42");
     let _ = agent.mesh().emit(signal_kind::INVOKE, SignalScope::Group(Arc::from("work")), corr.clone());
 
-    let reply = tokio::time::timeout(Duration::from_millis(500), result_rx.recv())
+    // Generous timeout: this is an in-process signal round-trip, so it completes in
+    // microseconds when the runtime is idle — but a loaded CI runner can starve the
+    // worker task well past a few hundred ms. We assert the reply *arrives*, not that
+    // it is fast, so a wide bound removes the flake without weakening the check.
+    let reply = tokio::time::timeout(Duration::from_secs(3), result_rx.recv())
         .await
         .expect("worker should reply within timeout")
         .expect("channel closed");

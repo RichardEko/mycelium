@@ -30,6 +30,7 @@ pub mod signal;
 pub mod store;
 pub mod stream;
 pub mod swim;
+pub mod swim_membership;
 pub mod tls;
 pub mod writer;
 

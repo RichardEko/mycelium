@@ -457,6 +457,14 @@ pub struct GossipConfig {
     /// Number of random relay peers asked to probe the target on our behalf when a direct
     /// probe times out (SWIM indirect probe `k`). Default `3`. Set via `GOSSIP_SWIM_INDIRECT_PROBES`.
     pub swim_indirect_probes: usize,
+    /// Number of membership updates piggybacked on each `Ping`/`Ack` (SWIM gossip fan-out,
+    /// WS-B M5 Stage 3) — bounded so datagrams stay under the MTU. Default `6`. Set via
+    /// `GOSSIP_SWIM_GOSSIP_UPDATES`.
+    pub swim_gossip_updates: usize,
+    /// Milliseconds a member may stay `Suspect` before being promoted to `Dead` and evicted
+    /// if no refutation arrives (SWIM suspicion timeout). Default `4000`. Set via
+    /// `GOSSIP_SWIM_SUSPICION_TIMEOUT_MS`.
+    pub swim_suspicion_timeout_ms: u64,
     /// Seconds of inactivity after which a peer writer closes its TCP connection.
     ///
     /// The connection is re-established transparently on the next frame destined for that
@@ -759,6 +767,8 @@ impl Default for GossipConfig {
             swim_probe_interval_ms: 1000,
             swim_probe_timeout_ms: 500,
             swim_indirect_probes: 3,
+            swim_gossip_updates: 6,
+            swim_suspicion_timeout_ms: 4000,
             writer_idle_timeout_secs: 30,
             group_aware_forwarding: true,
             epidemic_extra_peers:   3,
@@ -1109,6 +1119,12 @@ impl GossipConfig {
         }
         if let Ok(v) = env::var("GOSSIP_SWIM_INDIRECT_PROBES") {
             self.swim_indirect_probes = v.parse().map_err(GossipError::Parse)?;
+        }
+        if let Ok(v) = env::var("GOSSIP_SWIM_GOSSIP_UPDATES") {
+            self.swim_gossip_updates = v.parse().map_err(GossipError::Parse)?;
+        }
+        if let Ok(v) = env::var("GOSSIP_SWIM_SUSPICION_TIMEOUT_MS") {
+            self.swim_suspicion_timeout_ms = v.parse().map_err(GossipError::Parse)?;
         }
         if let Ok(v) = env::var("GOSSIP_GROUP_AWARE_FORWARDING") {
             self.group_aware_forwarding = match v.as_str() {
