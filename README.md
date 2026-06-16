@@ -29,6 +29,33 @@ AutoGen).
 
 **[→ Developer guide with concept explanations, diagrams, and dev notes for each pattern](docs/guide/README.md)**
 
+### Which crate? — `mycelium` vs `mycelium-core`
+
+The project is a Cargo workspace of two published crates. **Most users want `mycelium`** —
+the full runtime. Reach for `mycelium-core` only for a minimal embed.
+
+| | `mycelium` | `mycelium-core` |
+|---|---|---|
+| **Layers** | I + II + III (gossip KV, signal mesh, consensus, capabilities, services, gateway, TLS) | I + II only (gossip KV + signal/boundary mesh) |
+| **Dependency tree** | ~140 crates (pulls in Axum/hyper for the HTTP gateway) | ~50 crates — no axum/hyper/gateway |
+| **Use it when** | You need RPC, consensus, the capability system, the HTTP/MCP/A2A gateway, or RBAC/audit | You only need last-write-wins KV propagation + the scoped event mesh, on bare-metal / size-constrained / no-gateway targets |
+
+```toml
+# Full runtime (default):
+mycelium = { version = "…", features = ["tls"] }
+
+# Minimal substrate embed (Layers I + II, no gateway):
+mycelium-core = "…"
+```
+
+`mycelium` re-exports everything in `mycelium-core`, and a `mycelium-core` node still *forwards*
+all traffic (including consensus frames) — it just never acts on the higher layers. You can also
+trim `mycelium` itself toward the core with `default-features = false` (drops the gateway) and
+`--no-default-features --features gateway` (drops consensus). The split landed in v2.0 M1 — see
+[ROADMAP §v2.0 Milestones](ROADMAP.md) for the rationale and the
+[`mycelium-tuple-space`](mycelium-tuple-space/) companion crate (a pull-based pipeline buffer
+built entirely on the public API).
+
 ---
 
 ## Demos
