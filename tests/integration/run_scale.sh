@@ -72,6 +72,18 @@ else
     exit 1
 fi
 
+# ── Phase 1b: connection-fan-out instrumentation (WS-B Phase 0 baseline) ─────
+# The runner cannot see seed's netns or the host FORWARD chain, so the
+# authoritative seed-ESTABLISHED / conntrack / iptables curve is captured by the
+# host-side measure_scale_baseline.sh. What the runner CAN observe from /stats is
+# task_count — which includes one per-peer writer task per outbound connection,
+# so it tracks seed's connection fan-out and is a useful in-test proxy. Emitted
+# (not asserted) so a normal `make test-scale` run also surfaces the trend.
+seed_stats=$(curl -sf --max-time 5 "http://${SEED_HOST}:${PORT}/stats" 2>/dev/null || echo '{}')
+seed_task_count=$(echo "$seed_stats" | jq '.task_count // "?"' 2>/dev/null || echo '?')
+seed_store_entries=$(echo "$seed_stats" | jq '.store_entries // "?"' 2>/dev/null || echo '?')
+echo "  [WS-B baseline] seed task_count=${seed_task_count} (peer-writer fan-out proxy), store_entries=${seed_store_entries} at ${TOTAL_NODES} nodes"
+
 # ── Phase 2: KV write + gossip convergence ────────────────────────────────────
 
 banner "KV write + gossip convergence across ${TOTAL_NODES} nodes"
