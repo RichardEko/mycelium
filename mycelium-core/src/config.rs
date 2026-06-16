@@ -273,6 +273,33 @@ impl Default for GroupTopologyPolicy {
     }
 }
 
+/// Floor for auto-resolved [`GossipConfig::gossip_fanout`]: clusters of this many
+/// known peers or fewer keep a connection to every peer (effectively full mesh),
+/// so small clusters and unit tests are unaffected by partial-mesh bounding.
+pub const AUTO_FANOUT_FLOOR: usize = 8;
+
+/// Resolve the effective outbound fan-out for a node that currently knows
+/// `known_count` peers (excluding itself), given the configured `gossip_fanout`
+/// (`0` = auto) and an optional `max_active_connections` hard ceiling (`0` = none).
+///
+/// Auto fan-out is `2·⌈log2(known_count)⌉` floored at [`AUTO_FANOUT_FLOOR`]; the
+/// result is always capped at `known_count` (can't connect to peers you don't know)
+/// and at `max_active_connections` when that is non-zero.
+pub fn resolved_fanout(gossip_fanout: usize, max_active_connections: usize, known_count: usize) -> usize {
+    let mut k = if gossip_fanout > 0 {
+        gossip_fanout
+    } else {
+        // ⌈log2(n)⌉ via bit length; n.max(1) keeps log defined at 0/1.
+        let n = known_count.max(1);
+        let ceil_log2 = (usize::BITS - (n - 1).leading_zeros()) as usize; // 0 for n=1
+        (2 * ceil_log2).max(AUTO_FANOUT_FLOOR)
+    };
+    if max_active_connections > 0 {
+        k = k.min(max_active_connections);
+    }
+    k.min(known_count).max(known_count.min(1)) // ≥1 when any peer is known
+}
+
 /// Unified configuration for all protocol components.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -390,6 +417,23 @@ pub struct GossipConfig {
     ///
     /// Set via `GOSSIP_MAX_ACTIVE_CONNECTIONS`.
     pub max_active_connections: usize,
+    /// Target number of *outbound* gossip connections each node actively maintains —
+    /// the partial-mesh degree (WS-B M4). The health monitor pings only this many
+    /// peers, so only their writers stay warm; the rest idle-close (see
+    /// `writer_idle_timeout_secs`). Gossip still reaches the whole cluster because
+    /// Ping frames piggyback peer lists, inbound connections are unrestricted, and
+    /// Individual/Signal/consensus frames fall back to multi-hop flooding (only
+    /// *admission* is scoped). For N nodes at fan-out `k`, the gossip diameter is
+    /// ≈ log(N)/log(k), which stays small.
+    ///
+    /// - `0` = **auto** (default): `k ≈ 2·⌈log2 N⌉`, floored at [`AUTO_FANOUT_FLOOR`]
+    ///   and capped at the known-peer count — so clusters of ≤ `AUTO_FANOUT_FLOOR`
+    ///   nodes stay effectively full-mesh and only larger clusters are bounded.
+    /// - `> 0` = a fixed fan-out `k`.
+    ///
+    /// `max_active_connections`, when set, is an additional hard ceiling on top of this.
+    /// Set via `GOSSIP_FANOUT`.
+    pub gossip_fanout: usize,
     /// Seconds of inactivity after which a peer writer closes its TCP connection.
     ///
     /// The connection is re-established transparently on the next frame destined for that
@@ -397,7 +441,12 @@ pub struct GossipConfig {
     /// and a tokio task for every peer ever contacted; setting a timeout bounds that cost
     /// in clusters that churn or where many peers are only occasionally active.
     ///
-    /// `0` = no timeout (default, existing behaviour — writers stay connected indefinitely).
+    /// `0` = no timeout (writers stay connected indefinitely). Default `30` s
+    /// (WS-B M4): with partial-mesh fan-out, writers to peers a node no longer
+    /// actively pings must close for the connection count to actually drop —
+    /// otherwise an anti-entropy one-shot or a dropped-fan-out peer would pin a TCP
+    /// socket forever. 30 s comfortably exceeds the 10 s default health-check
+    /// interval, so actively-pinged (fan-out) writers stay warm while idle ones close.
     pub writer_idle_timeout_secs: u64,
     /// When `true`, gossip shards apply scope-aware forwarding for Signal frames:
     /// Group-scoped signals are forwarded only to known group members (plus up to
@@ -681,7 +730,8 @@ impl Default for GossipConfig {
             tcp_accept_backlog: 1024,
             max_peers: i64::MAX as usize,
             max_active_connections: 0,
-            writer_idle_timeout_secs: 0,
+            gossip_fanout: 0,
+            writer_idle_timeout_secs: 30,
             group_aware_forwarding: true,
             epidemic_extra_peers:   3,
             health_check_max_jitter_ms: 0,
@@ -1007,6 +1057,9 @@ impl GossipConfig {
         if let Ok(v) = env::var("GOSSIP_MAX_ACTIVE_CONNECTIONS") {
             self.max_active_connections = v.parse().map_err(GossipError::Parse)?;
         }
+        if let Ok(v) = env::var("GOSSIP_FANOUT") {
+            self.gossip_fanout = v.parse().map_err(GossipError::Parse)?;
+        }
         if let Ok(v) = env::var("GOSSIP_GROUP_AWARE_FORWARDING") {
             self.group_aware_forwarding = match v.as_str() {
                 "true" | "1" => true,
@@ -1075,6 +1128,47 @@ impl GossipConfig {
 mod tests {
     use super::*;
     use crate::node_id::NodeId;
+
+    // ── WS-B M4 fan-out resolution ────────────────────────────────────────
+
+    #[test]
+    fn auto_fanout_keeps_small_clusters_full_mesh() {
+        // known ≤ AUTO_FANOUT_FLOOR → keep every known peer (no bounding).
+        for known in 0..=AUTO_FANOUT_FLOOR {
+            assert_eq!(resolved_fanout(0, 0, known), known, "known={known} should be full mesh");
+        }
+    }
+
+    #[test]
+    fn auto_fanout_grows_logarithmically_for_large_clusters() {
+        // 2·⌈log2 N⌉, floored at 8, capped at N.
+        assert_eq!(resolved_fanout(0, 0, 16), 8);   // 2·4 = 8
+        assert_eq!(resolved_fanout(0, 0, 100), 14); // 2·7 = 14
+        assert_eq!(resolved_fanout(0, 0, 1000), 20);// 2·10 = 20
+        // Always far below N — this is the O(N²)→O(N·k) win.
+        assert!(resolved_fanout(0, 0, 100) < 100);
+        assert!(resolved_fanout(0, 0, 1000) < 1000);
+    }
+
+    #[test]
+    fn explicit_fanout_overrides_auto_but_caps_at_known() {
+        assert_eq!(resolved_fanout(5, 0, 100), 5);
+        assert_eq!(resolved_fanout(50, 0, 12), 12); // can't exceed known peers
+    }
+
+    #[test]
+    fn max_active_connections_is_a_hard_ceiling() {
+        assert_eq!(resolved_fanout(0, 10, 100), 10); // auto would be 14, ceiling wins
+        assert_eq!(resolved_fanout(30, 10, 100), 10);// explicit 30, ceiling wins
+        assert_eq!(resolved_fanout(0, 100, 100), 14);// ceiling above auto → auto wins
+    }
+
+    #[test]
+    fn fanout_is_zero_only_with_no_known_peers() {
+        assert_eq!(resolved_fanout(0, 0, 0), 0);
+        assert_eq!(resolved_fanout(0, 0, 1), 1);
+        assert_eq!(resolved_fanout(8, 0, 0), 0);
+    }
 
     // ── WS3 egress policy gate ────────────────────────────────────────────
 
