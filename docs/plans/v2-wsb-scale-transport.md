@@ -157,7 +157,7 @@ in four independently-mergeable stages, each gated behind `GossipConfig::swim_fa
 (default **false**) so every stage is inert for existing deployments until the final cutover
 flips the default (the M4-default-flip lesson):
 
-**Progress:** Stage 1 ✅ (PR #15) · Stage 2 ✅ (PR #16) · Stage 3 ✅ (PR #17) · Stage 4 🟡 cutover mechanics in + a load-bearing membership-convergence bug fixed; **G1 mechanism proven in-process, Docker convergence-speed work remains** (details below). Default stays **off**.
+**Progress:** Stage 1 ✅ (PR #15) · Stage 2 ✅ (PR #16) · Stage 3 ✅ (PR #17) · Stage 4 🟡 cutover mechanics in + two load-bearing bugs fixed (membership-collapse, then the de-pin/anti-entropy divergence below); **G1 now flat in-process across 30→100 nodes** — the divergence was reproduced *in-process* and root-caused (it was never Docker networking). Docker re-validation + G3 still pending before the default flip. Default stays **off**.
 
 #### Stage 4 findings (2026-06-16) — cutover mechanics + the membership-collapse fix
 
@@ -179,19 +179,55 @@ monitor no longer does staleness eviction. With the fix, membership converges an
 `peers=50` (converged), seed **outbound ≈ 21**, **inbound ≈ 23** → seed total **≈ 44 vs 2N=102**.
 Connections are **bounded ~2k, not N** — G1's flattening works.
 
-**Remaining (the reason Stage 4 isn't done) — an unresolved in-process/Docker divergence:**
-The mechanism converges to bounded ~2k **in-process even at Docker cadences** (50 workers, health
-10 s / probe 1 s): a startup spike (~2N at t≈15 s, from every node touching the shared seed) drains
-to ~2k by **t≈40 s** and stays bounded. Skipping the bootstrap anti-entropy pull under SWIM (done)
-shrinks that spike (~97→~78 at t=15 s). **But Docker at 100 nodes does not converge in a practical
-window** — `seed_established` 123 (50 s) → 94/102 (130–150 s settle), still ≈ N. So G1 is *mechanism-
-proven* but not *demonstrated at Docker scale*. The unidentified gap is some interaction of scale
-(100 vs 50), the demo's continuous capability-advertisement gossip keeping forwarding writers warm,
-and Docker UDP/TCP-over-bridge behaviour — it needs focused Docker-side debugging (a stable cluster
-+ the inbound/outbound `/proc/net/tcp` split, which the manual-inspection orchestration kept
-fighting). **Default stays off until G1 + G3 are demonstrated.** Candidate next steps: reproduce the
-divergence in-process at N=100 with synthetic continuous KV churn (fast oracle); decouple
-anti-entropy from forwarding-set membership entirely; tie de-pinning to the probe cadence.
+#### Stage 4 divergence — RESOLVED (2026-06-16, in-process, not Docker)
+
+The N=50-converges / N=100-doesn't divergence was **reproduced in-process at N=100** with a fast
+deterministic oracle (`src/swim_oracle_tests.rs`, `#[ignore]`; 1 seed + N-1 workers over loopback
+TCP/UDP, SWIM on, Docker cadence; measures the membership-view-size distribution + the seed's
+*live-writer* connection split). It was never Docker networking — at N=100 membership converges fine
+by t≈30 (median node knows 99) yet the seed connection count failed to settle to ~2k. Two coupled,
+N-scaling amplifiers:
+
+1. **De-pin too slow (seed_in).** The old bulk `~k/3` random rotation per 10 s health tick drained
+   the t=0 ~2N spike over ~15 ticks (~150 s) — exactly the Docker "doesn't converge in a window."
+2. **Anti-entropy reply-writer storm (seed_out, dominant).** `request_state` fired on *every*
+   forwarding-set add and the responder spawns a persistent `writer_idle_timeout` (30 s) reply
+   writer. The rotation churn re-added the seed on many nodes inside every idle window, so the seed
+   accreted O(N) warm reply writers that never idle-closed. (A measurement trap to note: an
+   idle-closed writer leaves a *stale* map entry until lazily reaped, so count `is_live()` writers —
+   the in-process analogue of `/proc/net/tcp` ESTABLISHED — not raw map length.)
+
+**Fix** (all gated under `swim_failure_detector`, so the default-off path is untouched — see
+`src/agent/tasks.rs::run_health_monitor`):
+- **One-time bootstrap de-pin** once a node knows `> 2k` peers — collapses the O(N) early greedy-fill
+  seed pinning in a single tick instead of bleeding off over ~150 s. The seed is re-added afterwards
+  only at its fair uniform `~k/N` share, like any peer (never permanently excluded).
+- **Slow uniform shuffle** — drop ONE random member per tick (not bulk `k/3`), so the set drifts into
+  a moving uniform sample without the churn storm.
+- **Decoupled anti-entropy** — sync each *current* forwarding member at most once per resync cooldown
+  (`interval × peer_eviction_intervals`), instead of on every add. The forwarding set is bounded by
+  k, so the seed is anti-entropy-targeted by only ~k nodes per window, not by everyone who briefly
+  churned it in. (Bonus: stable members now re-sync periodically — the old on-add trigger never
+  re-synced them — and the responder's store-hash fast-path makes a converged exchange empty.)
+
+**G1 result — flat across 30→100 nodes** (oracle, live-writer count, SWIM on, Docker cadence; seed
+total = outbound + inbound writers, KV canary = nodes that received a seed-written key):
+
+| N | seed_out | seed_in | **seed_total** | canary |
+|---|---|---|---|---|
+| 30 | 13 | 14 | **27** | 30/30 |
+| 50 | 20 | 20 | **40** | 50/50 |
+| 70 | 20 | 22 | **42** | 70/70 |
+| 100 | 19 | 21 | **40** | 100/100 |
+
+`seed_total` is flat from N=50 (40→42→40 across a 2× node increase) and `seed_in` collapses to ~k by
+t≈15 s — versus the pre-fix run where `seed_in` sat at N (99) for 100 s+. Reproduce with
+`SWIM_ORACLE_N=100 cargo test --lib swim_scale_oracle -- --ignored --nocapture`.
+
+**Still pending before the default flip:** Docker re-validation (`make test-scale-baseline` should now
+show the same flat `seed_established`) and **G3** (`test-scale-resilience RESILIENCE_WORKERS=50`).
+The mechanism is now demonstrated flat; the Docker run is confirmation, not discovery. **Default stays
+off until G1 (Docker) + G3 are green.**
 
 - **Stage 1 — UDP datagram transport foundation.** New `mycelium-core/src/swim.rs`: the
   `SwimDatagram` enum (`Ping`/`Ack`/`PingReq`/`PingReqAck`) + a compact codec with a version
