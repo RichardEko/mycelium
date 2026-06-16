@@ -29,6 +29,7 @@ pub mod seen;
 pub mod signal;
 pub mod store;
 pub mod stream;
+pub mod swim;
 pub mod tls;
 pub mod writer;
 

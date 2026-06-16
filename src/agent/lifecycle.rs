@@ -169,6 +169,11 @@ impl GossipAgent {
         self.start_gossip_loop();
         self.start_health_monitor();
         self.start_gc_task();
+        if self.config.swim_failure_detector {
+            self.start_swim_listener(bind_addr).await.inspect_err(|_| {
+                self.state.store(AgentState::Idle as u8, Ordering::Release);
+            })?;
+        }
         #[cfg(feature = "gateway")]
         if let Some(port) = self.config.http_port {
             let http_addr: std::net::IpAddr = self.config.http_addr.parse().map_err(|_| {
@@ -295,6 +300,27 @@ impl GossipAgent {
                 self.task_ctx.tls.get().cloned(),
             ));
         }
+    }
+
+    /// Bind the SWIM UDP socket and spawn its listener (WS-B M5, opt-in). The UDP
+    /// socket uses the same port number as the gossip TCP port unless `swim_udp_port`
+    /// overrides it. Stage 1 reflects `Ping → Ack`; the failure detector grafts onto
+    /// this loop in later stages.
+    async fn start_swim_listener(&self, tcp_bind: SocketAddr) -> Result<(), GossipError> {
+        let port = self.config.swim_udp_port.unwrap_or(self.config.bind_port);
+        let udp_addr = SocketAddr::new(tcp_bind.ip(), port);
+        let socket = Arc::new(
+            tokio::net::UdpSocket::bind(udp_addr).await.map_err(GossipError::Io)?,
+        );
+        let alive = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.spawn_task(mycelium_core::swim::run_swim_listener(
+            socket,
+            self.node_id.clone(),
+            Arc::clone(&self.shutdown_tx),
+            alive,
+        ));
+        tracing::info!("SWIM failure detector listening on udp://{udp_addr}");
+        Ok(())
     }
 
     fn start_health_monitor(&self) {

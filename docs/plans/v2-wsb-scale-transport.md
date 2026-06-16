@@ -149,6 +149,36 @@ frames) is already comfortably met at 100 nodes.
   `test-scale-resilience RESILIENCE_WORKERS=50` Phase-3 probe passes; zero persistent
   inter-node connections for heartbeats.
 
+#### M5 execution staging (multi-PR; started 2026-06-16)
+
+M5 is too large for one PR — it is a SWIM failure detector *plus* the symmetric
+membership/peer-sampling layer that M4 showed is required to flatten G1. It is delivered
+in four independently-mergeable stages, each gated behind `GossipConfig::swim_failure_detector`
+(default **false**) so every stage is inert for existing deployments until the final cutover
+flips the default (the M4-default-flip lesson):
+
+- **Stage 1 — UDP datagram transport foundation.** New `mycelium-core/src/swim.rs`: the
+  `SwimDatagram` enum (`Ping`/`Ack`/`PingReq`/`PingReqAck`) + a compact codec with a version
+  byte; a UDP socket bound at the **same port number as the gossip TCP port** (decision below)
+  when the flag is on; a recv loop that reflects `Ping → Ack`. Additive + gated → no behaviour
+  change. Codec round-trips unit-tested.
+- **Stage 2 — SWIM failure detector.** Direct ping→ack with timeout; indirect `PingReq` to `k`
+  random peers; `Alive`/`Suspect`/`Dead` state machine with incarnation numbers; drive peer
+  eviction from it. TCP retained for anti-entropy + Data/Signal. Replaces the TCP-ping liveness
+  path (under the flag).
+- **Stage 3 — symmetric membership / peer sampling (the G1 flattener).** Piggyback membership
+  deltas on ping/ack; a symmetric active view + periodic shuffle so discovery is decoupled from
+  the active set and the seed is not pinned. This is what actually flattens `seed_established`.
+- **Stage 4 — cutover + validation.** On-demand TCP for anti-entropy/data; no persistent
+  heartbeat connections; flip `swim_failure_detector` default to true; run
+  `make test-scale-baseline` (G1 flat) + `test-scale-resilience RESILIENCE_WORKERS=50` (G3).
+
+**UDP-port decision (resolves the open question):** the UDP socket binds the **same port number
+as the gossip TCP port** (`bind_port`), on a separate UDP socket — the SWIM/`memberlist`
+convention (one port to open in firewalls for both protocols). An optional `swim_udp_port`
+override is available for environments that must separate them. Ops/firewall docs updated at
+cutover (Stage 4).
+
 ### Phase 3 — v12 wire bump: M11 codec + Merkle anti-entropy
 - **M11 (hand-rolled codec):** replace `bincode` (RUSTSEC-2025-0141, unmaintained) with a
   ~300-line explicit fixed-layout encoder/decoder for the closed `WireMessage` enum.

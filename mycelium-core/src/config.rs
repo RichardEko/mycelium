@@ -434,6 +434,19 @@ pub struct GossipConfig {
     /// `max_active_connections`, when set, is an additional hard ceiling on top of this.
     /// Set via `GOSSIP_FANOUT`.
     pub gossip_fanout: usize,
+    /// Enable the SWIM-style UDP failure detector (WS-B M5). **Opt-in, default `false`.**
+    /// When set, the node binds a UDP socket (see `swim_udp_port`) and runs the SWIM
+    /// transport for liveness/heartbeats — connection-free probing that does not consume
+    /// Docker-bridge iptables FORWARD / conntrack entries, lifting the O(N²) connection
+    /// ceiling. TCP is retained for anti-entropy and Data/Signal delivery. Inert while
+    /// `false` (no socket, no task). Set via `GOSSIP_SWIM_FAILURE_DETECTOR`.
+    pub swim_failure_detector: bool,
+    /// UDP port for the SWIM failure detector. `None` (default) binds the **same port
+    /// number as `bind_port`** on a separate UDP socket — the SWIM/`memberlist`
+    /// convention (one port to open in firewalls for both protocols). Set an explicit
+    /// port only when TCP/UDP must be separated. Ignored unless `swim_failure_detector`
+    /// is set. Set via `GOSSIP_SWIM_UDP_PORT`.
+    pub swim_udp_port: Option<u16>,
     /// Seconds of inactivity after which a peer writer closes its TCP connection.
     ///
     /// The connection is re-established transparently on the next frame destined for that
@@ -731,6 +744,8 @@ impl Default for GossipConfig {
             max_peers: i64::MAX as usize,
             max_active_connections: 0,
             gossip_fanout: 0,
+            swim_failure_detector: false,
+            swim_udp_port: None,
             writer_idle_timeout_secs: 30,
             group_aware_forwarding: true,
             epidemic_extra_peers:   3,
@@ -1059,6 +1074,19 @@ impl GossipConfig {
         }
         if let Ok(v) = env::var("GOSSIP_FANOUT") {
             self.gossip_fanout = v.parse().map_err(GossipError::Parse)?;
+        }
+        if let Ok(v) = env::var("GOSSIP_SWIM_FAILURE_DETECTOR") {
+            self.swim_failure_detector = match v.as_str() {
+                "true" | "1" => true,
+                "false" | "0" => false,
+                _ => return Err(GossipError::InvalidField {
+                    field:  "GOSSIP_SWIM_FAILURE_DETECTOR",
+                    reason: "must be true/false/1/0".into(),
+                }),
+            };
+        }
+        if let Ok(v) = env::var("GOSSIP_SWIM_UDP_PORT") {
+            self.swim_udp_port = Some(v.parse().map_err(GossipError::Parse)?);
         }
         if let Ok(v) = env::var("GOSSIP_GROUP_AWARE_FORWARDING") {
             self.group_aware_forwarding = match v.as_str() {
