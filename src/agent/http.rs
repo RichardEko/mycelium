@@ -63,9 +63,9 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt as _;
 use tracing::info;
 
-use super::kv_handle::LogEntry;
+use crate::LogEntry;
 #[cfg(feature = "consensus")]
-use super::kv_handle::SubscribeHandle;
+use super::subscribe_handle::SubscribeHandle;
 #[cfg(feature = "consensus")]
 use super::overlay_consistent::LockGuard;
 

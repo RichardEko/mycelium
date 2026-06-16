@@ -20,8 +20,13 @@ use tokio::{sync::{mpsc, watch}, task::JoinSet};
 mod lifecycle;
 mod kv;
 pub(crate) mod kv_quorum;
-mod kv_handle;
-// mesh_handle moved to mycelium-core (v2 M3); the GossipAgent-driven tests stay here.
+mod kv_quorum_ext;
+// kv_handle + mesh_handle moved to mycelium-core (v2 M3); the GossipAgent-driven
+// tests stay here. SubscribeHandle (consensus overlay) stays upper too.
+#[cfg(test)]
+mod kv_handle_tests;
+#[cfg(all(feature = "gateway", feature = "consensus"))]
+mod subscribe_handle;
 #[cfg(test)]
 mod mesh_handle_tests;
 #[cfg(feature = "consensus")]
@@ -103,8 +108,8 @@ pub use audit::{
 #[cfg(feature = "compliance")]
 pub use oidc::OidcConfig;
 pub use kv_quorum::QuorumError;
-pub use kv_handle::{KvHandle, LogEntry};
-pub use mycelium_core::MeshHandle;
+pub use kv_quorum_ext::KvQuorumExt;
+pub use mycelium_core::{KvHandle, LogEntry, MeshHandle};
 pub use overlay_reliable::AckResult;
 pub use sharding::ShardError;
 pub use mycelium_core::{SchemaError, SchemaHandle, SchemaPublishResult};
@@ -413,7 +418,7 @@ impl GossipAgent {
     /// let val = kv.get("load/self");
     /// ```
     pub fn kv(&self) -> KvHandle {
-        KvHandle { ctx: Arc::clone(&self.task_ctx) }
+        KvHandle::from_core(Arc::clone(&self.task_ctx.core))
     }
 
     /// Returns a typed handle for signal mesh operations (Layer II).

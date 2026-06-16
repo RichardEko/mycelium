@@ -27,8 +27,8 @@ impl GossipAgent {
 // Deref-coerces to the `&CoreCtx` these take.
 pub(crate) use mycelium_core::ops::{
     emit_signal, emit_signal_async,
-    group_members_ctx, kv_delete, kv_delete_async, kv_get, kv_scan_prefix,
-    kv_set, kv_set_async, kv_subscribe, kv_subscribe_prefix,
+    group_members_ctx, kv_delete, kv_get, kv_scan_prefix,
+    kv_set, kv_subscribe, kv_subscribe_prefix,
     kv_subscribe_prefix_with_predicate,
 };
 
