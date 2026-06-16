@@ -174,7 +174,7 @@ pub use agent::{
     GossipAgent, MailboxHandle, McpError, McpToolHandle, McpHandle,
     MeshEvent, RpcError, RpcRequest, RpcRequestRx, ScatterError, ScatterResult, SystemStats,
     AckResult, CapabilitiesHandle, LogEntry,
-    KvHandle, MeshHandle, QuorumError, ServiceHandle, ShardError,
+    KvHandle, KvQuorumExt, MeshHandle, QuorumError, ServiceHandle, ShardError,
     SchemaError, SchemaHandle, SchemaPublishResult,
 };
 // Layer III consensus + the consistency overlay built on it (v2 M2 feature gate).

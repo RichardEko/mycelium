@@ -133,13 +133,13 @@ fn spawn_handler(
         peers: Arc::new(papaya::HashMap::new()),
         reorder_buf: None,
         reply_interceptor: None,
+        soft_state_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         shutdown_tx: Arc::new(shutdown_tx_inner),
         task_handles: Arc::new(std::sync::Mutex::new(tokio::task::JoinSet::new())),
         config: Arc::new(crate::config::GossipConfig::default()),
     });
     let task_ctx = Arc::new(TaskCtx {
         core: core_ctx,
-        caps_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         bulk_transport: Arc::new(BulkTransport::new(0, Duration::from_secs(5), 64)),
         rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         commit_conflicts: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -547,13 +547,13 @@ async fn test_subscribe_notified_via_gossip() {
             peers: Arc::new(papaya::HashMap::new()),
             reorder_buf: None,
             reply_interceptor: None,
+            soft_state_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             shutdown_tx: Arc::new(shutdown_tx_inner2),
             task_handles: Arc::new(std::sync::Mutex::new(tokio::task::JoinSet::new())),
             config: Arc::new(crate::config::GossipConfig::default()),
         });
         let task_ctx = Arc::new(TaskCtx {
             core: core_ctx,
-            caps_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             bulk_transport: Arc::new(BulkTransport::new(0, Duration::from_secs(5), 64)),
             rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             commit_conflicts: Arc::new(std::sync::atomic::AtomicU64::new(0)),

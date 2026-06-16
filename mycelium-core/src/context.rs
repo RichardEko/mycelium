@@ -86,9 +86,32 @@ pub struct CoreCtx {
     /// Live peer table shared with the HTTP gateway for peer-count-based quorum sizing.
     pub peers: Arc<papaya::HashMap<NodeId, std::time::Instant>>,
 
+    /// Set to `true` by the first tick of any [`run_kv_persist_task`](crate::kv_persist::run_kv_persist_task)
+    /// — the substrate's generic soft-state advertisement loop (capability,
+    /// locality, `advertise_persistent`, …). Until this is `true`, soft-state KV
+    /// keys have not yet been written after a (re)start, so the gateway `/ready`
+    /// probe returns 503. Substrate-level readiness, not a Layer III concept:
+    /// the persist loop that flips it is pure Layer I. Stored with Release;
+    /// loaded with Acquire (see the memory-ordering policy in CLAUDE.md).
+    pub soft_state_advertised: Arc<std::sync::atomic::AtomicBool>,
+
     // ── Lifecycle ────────────────────────────────────────────────────────────────
     /// Shutdown broadcast — sending `true` cancels all background tasks.
     pub shutdown_tx: Arc<watch::Sender<bool>>,
     /// All spawned background tasks. Reaping is automatic via `JoinSet`.
     pub task_handles: Arc<std::sync::Mutex<JoinSet<()>>>,
+}
+
+impl CoreCtx {
+    /// Spawns a background task onto the shared [`JoinSet`](Self::task_handles).
+    ///
+    /// The guard is released before the future is polled; this is the single
+    /// substrate task-spawn entry point used by the typed handles' task helpers
+    /// (`advertise`, `watch`, `subscribe_log`, …) and the gossip lifecycle tasks.
+    pub fn spawn_task<F>(&self, fut: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.task_handles.lock().unwrap_or_else(|e| e.into_inner()).spawn(fut);
+    }
 }

@@ -12,7 +12,7 @@ three-layer substrate for AI agent fleets and storage replication:
 | Layer | What it does | Where it lives |
 |---|---|---|
 | **I — KV store** | Last-write-wins state propagation over TCP; anti-entropy synced. Two distinct "TTL"s — don't conflate: wire frames carry a **hop-count TTL** (`u8`, decremented per forward); key **evaporation** is a *read-side convention* (entries carry `refresh_interval_ms`; readers discard entries older than 3× — `CapEntry::is_fresh` — and, symmetrically, entries stamped further than 3× in the *future*, so a writer with a far-ahead clock quarantines itself instead of becoming un-evaporable; `Hlc::observe` additionally clamps remote drift to `max_clock_drift_ms`, default 5 min). The store never time-evicts live keys; only tombstones are GC'd. | `src/store.rs`, `src/connection.rs`, `src/framing.rs`, `src/writer.rs`, `src/seen.rs` |
-| **II — Signal mesh** | Ephemeral scoped events with per-node admission boundaries; pheromone-style opacity composition. | `src/signal.rs`, `src/agent/mesh_handle.rs`, `src/agent/opacity.rs` |
+| **II — Signal mesh** | Ephemeral scoped events with per-node admission boundaries; pheromone-style opacity composition. | `mycelium-core/src/signal.rs`, `mycelium-core/src/mesh_handle.rs`, `src/agent/opacity.rs` |
 | **III — Consensus** | Epidemic group / system / cross-group proposals with optional Hard topology enforcement. `GroupQuorum` + `cross_group_propose` for multi-voting-bloc decisions. | `src/consensus.rs`, `src/agent/consensus_ops.rs` |
 | **Security (tls feature)** | mTLS transport, Ed25519 node identity, signed consensus payloads. | `src/tls.rs`, `src/stream.rs` |
 
@@ -206,7 +206,7 @@ existing call sites working without changes.
 | Crossing point | File | What it does |
 |---|---|---|
 | `apply_and_notify` | `src/store.rs` | Writes to `KvStore` (Layer I), then notifies `KvState::subscriptions` watch channels (Layer II). This is the sole write path for both layers. |
-| `subscribe` / `subscribe_prefix` | `src/agent/kv_handle.rs`, `helpers.rs` | Creates a `watch::Sender` in `KvState::subscriptions` (Layer II) and reads the current value from `KvStore::store` (Layer I) to initialise the `watch::Receiver`. |
+| `subscribe` / `subscribe_prefix` | `mycelium-core/src/kv_handle.rs`, `mycelium-core/src/ops.rs` | Creates a `watch::Sender` in `KvState::subscriptions` (Layer II) and reads the current value from `KvStore::store` (Layer I) to initialise the `watch::Receiver`. |
 
 All other code is single-layer: gossip forwarding reads `KvStore` only; signal
 mesh reads `KvState::subscriptions` only. New features that touch only one layer
@@ -257,11 +257,17 @@ holds the task `JoinSet`) and the tasks themselves.
 **Field split:**
 | → `CoreCtx` (Layers I+II, in `mycelium-core`) | → `TaskCtx` (Layer III+, in `mycelium`) |
 |---|---|
-| `node_id`, `config`, `default_ttl` | `caps_advertised`, `filter_opacity_registry`, `group_roster_cache` |
+| `node_id`, `config`, `default_ttl` | `filter_opacity_registry`, `group_roster_cache` |
 | `seen`, `hlc`, `gossip_txs`, `kv_state`, `wal` | `llm_skills`, `llm_dispatch_spawned` (cfg `llm`) |
 | `signal_boundary`, `signal_handlers`, `reorder_buf`, `reply_interceptor` | `bulk_transport`, `rpc_pending` |
 | `tls`, `peer_keys`, `sys_namespace_violations` | `commit_conflicts` |
-| `peers`, `shutdown_tx`, `task_handles` | `audit_chain` (cfg `compliance`) |
+| `soft_state_advertised`, `peers`, `shutdown_tx`, `task_handles` | `audit_chain` (cfg `compliance`) |
+
+`CoreCtx` also carries `spawn_task` (the substrate task-spawn entry point) — the
+`task_handles` JoinSet it drives is a core field, so the v2-M3 handle pushdown
+moved `spawn_task` down with it (`TaskCtx` Deref-coerces unchanged). The
+`soft_state_advertised` flag (formerly `caps_advertised`) likewise moved to core:
+it is flipped by the pure-Layer-I persist loop and read by the gateway `/ready`.
 
 The three core↔upper couplings are mechanism-in-core / agency-above hooks, `None`-safe for
 pure-core embeds: `CoreCtx::reply_interceptor` (RPC/bulk reply claim), the `QuorumObserver`
@@ -353,10 +359,10 @@ The gossip-loop cache reader loads it with `Acquire`. This guarantees that when 
 reader observes the new generation value, all `grp/` KV writes that happened-before
 the `Release` store are also visible — the cached roster is never invalidated too late.
 
-`TaskCtx::caps_advertised` is stored with `Release` (first capability advertisement
-tick) and loaded with `Acquire` (the `/ready` handler). This makes the readiness gate
-correct: when `/ready` sees `true`, the soft-state KV keys that preceded the store are
-visible to the same thread.
+`CoreCtx::soft_state_advertised` (formerly `TaskCtx::caps_advertised`) is stored with
+`Release` (first persist-loop tick) and loaded with `Acquire` (the `/ready` handler).
+This makes the readiness gate correct: when `/ready` sees `true`, the soft-state KV
+keys that preceded the store are visible to the same thread.
 
 **`AcqRel` + `Acquire` — agent lifecycle state**
 
@@ -696,11 +702,13 @@ get found.
   engineering-complete: WS1 RBAC, WS2 audit, WS3 crown-jewel (feature-free),
   WS4 OIDC SSO, WS5 hot cert rotation all shipped** — see the per-WS sections above
   and [`docs/plans/v1x-completion.md`](docs/plans/v1x-completion.md).
-- Lib tests at HEAD (totals unchanged by M1 — tests moved with their modules, none lost):
+- Lib tests at HEAD (totals unchanged by M1/M3 — tests moved with their modules, none lost):
   **318** default · **323** `tls` · **365**+ `compliance` across the workspace, now split
-  between the two crates — e.g. default = **79** `mycelium-core` + **239** `mycelium`. Clippy
-  `-D warnings` clean on both crates. The `compliance` delta is the WS1 RBAC + WS2 audit + WS4
-  OIDC + WS5 rotation unit/integration tests; the core `sys/` tripwire and WS3 crown-jewel
+  between the two crates — default = **82** `mycelium-core` + **236** `mycelium` (the v2-M3
+  handle pushdown moved the `SchemaHandle`/`KvHandle`/`MeshHandle` pure tests into core and
+  relocated the `GossipAgent`-driven cases to `src/agent/{schema,kv,mesh}_handle_tests.rs`).
+  Clippy `-D warnings` clean on both crates. The `compliance` delta is the WS1 RBAC + WS2 audit
+  + WS4 OIDC + WS5 rotation unit/integration tests; the core `sys/` tripwire and WS3 crown-jewel
   (data-at-rest + egress) tests are feature-free and in the default count. WS5's retained-key-set
   verification + multi-key archival live under `tls`.
 - Wire version is currently **v11** (`PREV_WIRE_VERSION = 10` — rolling upgrade window open).

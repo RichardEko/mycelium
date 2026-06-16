@@ -63,9 +63,9 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt as _;
 use tracing::info;
 
-use super::kv_handle::LogEntry;
+use crate::LogEntry;
 #[cfg(feature = "consensus")]
-use super::kv_handle::SubscribeHandle;
+use super::subscribe_handle::SubscribeHandle;
 #[cfg(feature = "consensus")]
 use super::overlay_consistent::LockGuard;
 
@@ -459,7 +459,7 @@ async fn health_handler(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
 /// Use `/health` for liveness; use `/ready` before sending traffic that
 /// depends on accurate capability or membership state.
 async fn ready_handler(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
-    if ctx.agent_ctx.caps_advertised.load(std::sync::atomic::Ordering::Acquire) {
+    if ctx.agent_ctx.soft_state_advertised.load(std::sync::atomic::Ordering::Acquire) {
         (StatusCode::OK, Json(json!({ "status": "ready", "node_id": ctx.agent_ctx.node_id.to_string() }))).into_response()
     } else {
         (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "status": "starting", "node_id": ctx.agent_ctx.node_id.to_string() }))).into_response()
@@ -853,7 +853,7 @@ async fn gw_cap_advertise(
     let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
     let shutdown_rx = ctx.shutdown_rx.clone();
     tokio::spawn(super::kv::run_kv_persist_task(
-        Arc::clone(&ctx.agent_ctx), cancel_rx, shutdown_rx, kv_key, interval, payload_fn, None,
+        Arc::clone(&ctx.agent_ctx.core), cancel_rx, shutdown_rx, kv_key, interval, payload_fn, None,
     ));
 
     let handle_id = format!("{:x}", fastrand::u128(..));

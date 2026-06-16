@@ -83,7 +83,7 @@ impl CapabilitiesHandle {
             Arc::new(move || e.encode())
         };
         self.ctx.spawn_task(run_kv_persist_task(
-            ctx, cancel_rx, shutdown_rx, kv_key, interval, payload_fn, None,
+            Arc::clone(&ctx.core), cancel_rx, shutdown_rx, kv_key, interval, payload_fn, None,
         ));
         CapabilityReg { _retract: cancel_tx }
     }
@@ -223,7 +223,7 @@ impl CapabilitiesHandle {
             Arc::new(move || e.encode())
         };
         self.ctx.spawn_task(run_kv_persist_task(
-            Arc::clone(&ctx), cancel_rx, shutdown_rx, kv_key, interval, payload_fn, None,
+            Arc::clone(&ctx.core), cancel_rx, shutdown_rx, kv_key, interval, payload_fn, None,
         ));
 
         let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -349,7 +349,7 @@ impl CapabilitiesHandle {
             Arc::new(move || def.encode())
         };
         self.ctx.spawn_task(run_kv_persist_task(
-            ctx, cancel_rx, shutdown_rx, kv_key, interval, payload_fn, None,
+            Arc::clone(&ctx.core), cancel_rx, shutdown_rx, kv_key, interval, payload_fn, None,
         ));
         CapabilityGroupHandle { _retract: cancel_tx, group }
     }

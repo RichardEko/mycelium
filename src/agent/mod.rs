@@ -20,8 +20,15 @@ use tokio::{sync::{mpsc, watch}, task::JoinSet};
 mod lifecycle;
 mod kv;
 pub(crate) mod kv_quorum;
-mod kv_handle;
-mod mesh_handle;
+mod kv_quorum_ext;
+// kv_handle + mesh_handle moved to mycelium-core (v2 M3); the GossipAgent-driven
+// tests stay here. SubscribeHandle (consensus overlay) stays upper too.
+#[cfg(test)]
+mod kv_handle_tests;
+#[cfg(all(feature = "gateway", feature = "consensus"))]
+mod subscribe_handle;
+#[cfg(test)]
+mod mesh_handle_tests;
 #[cfg(feature = "consensus")]
 mod consensus_handle;
 #[cfg(feature = "consensus")]
@@ -48,7 +55,9 @@ mod sharding;
 mod shard_ops;
 mod service_handle;
 mod capability_handle;
-mod schema_handle;
+// schema_handle moved to mycelium-core (v2 M3); the GossipAgent-driven tests stay here.
+#[cfg(test)]
+mod schema_handle_tests;
 #[cfg(feature = "a2a")]
 pub(crate) mod a2a;
 #[cfg(feature = "llm")]
@@ -99,11 +108,11 @@ pub use audit::{
 #[cfg(feature = "compliance")]
 pub use oidc::OidcConfig;
 pub use kv_quorum::QuorumError;
-pub use kv_handle::{KvHandle, LogEntry};
-pub use mesh_handle::MeshHandle;
+pub use kv_quorum_ext::KvQuorumExt;
+pub use mycelium_core::{KvHandle, LogEntry, MeshHandle};
 pub use overlay_reliable::AckResult;
 pub use sharding::ShardError;
-pub use schema_handle::{SchemaError, SchemaHandle, SchemaPublishResult};
+pub use mycelium_core::{SchemaError, SchemaHandle, SchemaPublishResult};
 #[cfg(feature = "llm")]
 pub use prompt::{PromptTemplate, PromptSkillError, PromptSkillHandle};
 #[cfg(feature = "llm")]
@@ -249,11 +258,9 @@ pub(crate) struct TaskCtx {
     pub(crate) core: Arc<CoreCtx>,
 
     // ── Capability subsystem ─────────────────────────────────────────────────────
-    /// Set to `true` by the first tick of any `run_kv_persist_task` (capability
-    /// or locality advertisement). Until this is `true`, soft-state keys have
-    /// not yet been written to the local store after a restart, so `/ready`
-    /// returns 503. Stored with Release; loaded with Acquire.
-    pub(crate) caps_advertised: Arc<std::sync::atomic::AtomicBool>,
+    // The soft-state readiness flag (formerly `caps_advertised`) moved to
+    // `CoreCtx::soft_state_advertised` in v2 M3 — the persist loop that flips it is
+    // pure Layer I. Read it via `self.soft_state_advertised` (Deref) as before.
     /// Shared registry for the consolidated `declare_requirement` opacity watcher.
     /// A single background task reads from this instead of one task per requirement.
     pub(crate) filter_opacity_registry: Arc<capability_ops::FilterOpacityRegistry>,
@@ -306,14 +313,9 @@ impl std::ops::Deref for TaskCtx {
     }
 }
 
-impl TaskCtx {
-    pub(crate) fn spawn_task<F>(&self, fut: F)
-    where
-        F: std::future::Future<Output = ()> + Send + 'static,
-    {
-        self.core.task_handles.lock().unwrap_or_else(|e| e.into_inner()).spawn(fut);
-    }
-}
+// `TaskCtx::spawn_task` was removed in v2 M3 — `spawn_task` now lives on `CoreCtx`
+// (the `task_handles` JoinSet it drives is a core field). `Arc<TaskCtx>` call sites
+// Deref-coerce to it unchanged.
 
 /// Core gossip agent.
 ///
@@ -416,7 +418,7 @@ impl GossipAgent {
     /// let val = kv.get("load/self");
     /// ```
     pub fn kv(&self) -> KvHandle {
-        KvHandle { ctx: Arc::clone(&self.task_ctx) }
+        KvHandle::from_core(Arc::clone(&self.task_ctx.core))
     }
 
     /// Returns a typed handle for signal mesh operations (Layer II).
@@ -434,7 +436,7 @@ impl GossipAgent {
     /// let mut rx = mesh.signal_rx(signal_kind::INVOKE);
     /// ```
     pub fn mesh(&self) -> MeshHandle {
-        MeshHandle { ctx: Arc::clone(&self.task_ctx) }
+        MeshHandle::from_core(Arc::clone(&self.task_ctx.core))
     }
 
     /// Returns a typed handle for schema registry operations.
@@ -451,7 +453,7 @@ impl GossipAgent {
     /// # Ok(()) }
     /// ```
     pub fn schemas(&self) -> SchemaHandle {
-        SchemaHandle { ctx: Arc::clone(&self.task_ctx) }
+        SchemaHandle::from_core(Arc::clone(&self.task_ctx.core))
     }
 
     /// Returns a typed handle for consensus operations (Layer III).
@@ -627,12 +629,12 @@ impl GossipAgent {
                     false
                 })
             }),
+            soft_state_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             shutdown_tx:         Arc::clone(&shutdown_tx_arc),
             task_handles:        Arc::clone(&task_handles_arc),
         });
         let task_ctx = Arc::new(TaskCtx {
             core: Arc::clone(&core_ctx),
-            caps_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             bulk_transport:  Arc::new(bulk::BulkTransport::new(
                 config.http_port.unwrap_or(0),
                 std::time::Duration::from_secs(config.bulk_fetch_timeout_secs),
