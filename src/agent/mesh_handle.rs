@@ -228,7 +228,7 @@ impl MeshHandle {
         };
 
         self.ctx.spawn_task(run_kv_persist_task(
-            ctx, cancel_rx, shutdown_rx, kv_key, interval, payload_arc, Some(on_tick),
+            Arc::clone(&ctx.core), cancel_rx, shutdown_rx, kv_key, interval, payload_arc, Some(on_tick),
         ));
 
         AdvertiseHandle { _cancel: cancel_tx }

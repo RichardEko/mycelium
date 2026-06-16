@@ -17,6 +17,7 @@ pub mod context;
 pub mod error;
 pub mod framing;
 pub mod hlc;
+pub mod kv_persist;
 pub mod locality;
 pub mod node_id;
 pub mod ops;

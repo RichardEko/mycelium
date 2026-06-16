@@ -251,11 +251,9 @@ pub(crate) struct TaskCtx {
     pub(crate) core: Arc<CoreCtx>,
 
     // ── Capability subsystem ─────────────────────────────────────────────────────
-    /// Set to `true` by the first tick of any `run_kv_persist_task` (capability
-    /// or locality advertisement). Until this is `true`, soft-state keys have
-    /// not yet been written to the local store after a restart, so `/ready`
-    /// returns 503. Stored with Release; loaded with Acquire.
-    pub(crate) caps_advertised: Arc<std::sync::atomic::AtomicBool>,
+    // The soft-state readiness flag (formerly `caps_advertised`) moved to
+    // `CoreCtx::soft_state_advertised` in v2 M3 — the persist loop that flips it is
+    // pure Layer I. Read it via `self.soft_state_advertised` (Deref) as before.
     /// Shared registry for the consolidated `declare_requirement` opacity watcher.
     /// A single background task reads from this instead of one task per requirement.
     pub(crate) filter_opacity_registry: Arc<capability_ops::FilterOpacityRegistry>,
@@ -308,14 +306,9 @@ impl std::ops::Deref for TaskCtx {
     }
 }
 
-impl TaskCtx {
-    pub(crate) fn spawn_task<F>(&self, fut: F)
-    where
-        F: std::future::Future<Output = ()> + Send + 'static,
-    {
-        self.core.task_handles.lock().unwrap_or_else(|e| e.into_inner()).spawn(fut);
-    }
-}
+// `TaskCtx::spawn_task` was removed in v2 M3 — `spawn_task` now lives on `CoreCtx`
+// (the `task_handles` JoinSet it drives is a core field). `Arc<TaskCtx>` call sites
+// Deref-coerce to it unchanged.
 
 /// Core gossip agent.
 ///
@@ -629,12 +622,12 @@ impl GossipAgent {
                     false
                 })
             }),
+            soft_state_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             shutdown_tx:         Arc::clone(&shutdown_tx_arc),
             task_handles:        Arc::clone(&task_handles_arc),
         });
         let task_ctx = Arc::new(TaskCtx {
             core: Arc::clone(&core_ctx),
-            caps_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             bulk_transport:  Arc::new(bulk::BulkTransport::new(
                 config.http_port.unwrap_or(0),
                 std::time::Duration::from_secs(config.bulk_fetch_timeout_secs),

@@ -1,18 +1,15 @@
-use crate::framing::{dispatch_gossip_send, dispatch_gossip_try_send, ForwardHint, WireMessage};
-use crate::store::{apply_and_notify, intern_pool_len};
-use bytes::Bytes;
-use std::{
-    sync::{atomic::Ordering, Arc},
-    time::Duration,
-};
-use tokio::{sync::watch, time};
+use crate::store::intern_pool_len;
+use std::sync::{atomic::Ordering, Arc};
 
 use super::{AgentState, GossipAgent, SystemStats};
 
-/// Closure that produces the payload bytes for one tick of `run_kv_persist_task`.
-pub(crate) type PersistPayloadFn = Arc<dyn Fn() -> Bytes + Send + Sync>;
-/// Optional per-tick side-effect (e.g. signal emission) invoked before the KV write.
-pub(crate) type PersistOnTickFn  = Arc<dyn Fn(&Arc<super::TaskCtx>, &Bytes) + Send + Sync>;
+// The generic soft-state advertisement loop (`run_kv_persist_task`) and its
+// closure type aliases moved to `mycelium-core::kv_persist` in v2 M3 — it is pure
+// Layer I (writes KV + gossips) and now drives `CoreCtx::soft_state_advertised`.
+// Re-exported here so the upper call sites' `super::kv::…` paths are unchanged.
+pub(crate) use mycelium_core::kv_persist::{
+    run_kv_persist_task, PersistOnTickFn, PersistPayloadFn,
+};
 
 impl GossipAgent {
     /// Returns this node's identifier.
@@ -64,7 +61,7 @@ impl GossipAgent {
     /// `advertise_locality`, or any other `run_kv_persist_task`-driven
     /// advertisement has completed its initial tick.
     pub fn is_ready(&self) -> bool {
-        self.task_ctx.caps_advertised.load(std::sync::atomic::Ordering::Acquire)
+        self.task_ctx.soft_state_advertised.load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Returns a snapshot of live protocol state.
@@ -110,60 +107,6 @@ impl GossipAgent {
                 self.task_ctx.sys_namespace_violations.load(Ordering::Relaxed),
         }
     }
-}
-
-/// Shared persist-loop primitive: ticks at `interval` and writes `payload_fn()`
-/// to `kv_key` (Layer I) plus gossips it. Optional `on_tick` runs synchronously
-/// before the KV write — used by [`GossipAgent::advertise_persistent`] to emit a
-/// matching signal, and by capability ops to do nothing.
-///
-/// Tombstones `kv_key` at exit (cancel, shutdown, or sender drop), awaiting
-/// channel capacity so the retraction is never silently dropped.
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn run_kv_persist_task(
-    ctx:             Arc<super::TaskCtx>,
-    mut cancel_rx:   tokio::sync::oneshot::Receiver<()>,
-    mut shutdown_rx: watch::Receiver<bool>,
-    kv_key:          Arc<str>,
-    interval:        Duration,
-    payload_fn:      PersistPayloadFn,
-    on_tick:         Option<PersistOnTickFn>,
-) {
-    let mut ticker = time::interval(interval);
-    ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
-    let mut first_tick = true;
-    loop {
-        tokio::select! { biased;
-            _ = &mut cancel_rx               => break,
-            _ = shutdown_rx.wait_for(|v| *v) => break,
-            _ = ticker.tick() => {
-                let payload = payload_fn();
-                if let Some(ref f) = on_tick {
-                    f(&ctx, &payload);
-                }
-                let update = crate::framing::make_gossip_update(
-                    &ctx.node_id, ctx.default_ttl, Arc::clone(&kv_key), payload, false, &ctx.hlc,
-                );
-                apply_and_notify(&ctx.kv_state, &update);
-                if first_tick {
-                    ctx.caps_advertised.store(true, std::sync::atomic::Ordering::Release);
-                    first_tick = false;
-                }
-                dispatch_gossip_try_send(
-                    &ctx.gossip_txs, WireMessage::Data(update),
-                    ctx.node_id.id_hash(), ForwardHint::All, &ctx.kv_state.dropped_frames,
-                );
-            }
-        }
-    }
-    let tombstone = crate::framing::make_gossip_update(
-        &ctx.node_id, ctx.default_ttl, Arc::clone(&kv_key), Bytes::new(), true, &ctx.hlc,
-    );
-    apply_and_notify(&ctx.kv_state, &tombstone);
-    dispatch_gossip_send(
-        &ctx.gossip_txs, WireMessage::Data(tombstone),
-        ctx.node_id.id_hash(), ForwardHint::All,
-    ).await;
 }
 
 #[cfg(test)]
