@@ -924,20 +924,25 @@ async fn test_individual_signal_reaches_unpeered_target_via_relay() {
     let id =
         |p: u16| NodeId::new("127.0.0.1", p).unwrap();
 
-    let mk = |port: u16, boots: Vec<NodeId>| {
+    let mk = |port: u16, boots: Vec<NodeId>, max_active: usize| {
         let mut cfg = GossipConfig::default();
         cfg.bind_port = port;
         cfg.bootstrap_peers = boots;
         cfg.reconnect_backoff_secs = 1;
+        // Pin the active-connection cap so the topology is deterministic regardless
+        // of discovery/health-tick timing (0 = unbounded).
+        cfg.max_active_connections = max_active;
         GossipAgent::new(id(port), cfg)
     };
 
-    // Strict line: A → B → C. A never learns a route to C within the test
-    // window unless discovery intervenes; the assertion window is short
-    // enough that delivery proves the relay path.
-    let c = Arc::new(mk(port_c, vec![]));
-    let b = Arc::new(mk(port_b, vec![id(port_c)]));
-    let a = Arc::new(mk(port_a, vec![id(port_b)]));
+    // Strict line: A → B → C. A is capped to a single active connection (its
+    // bootstrap, B), so it structurally cannot form a direct A→C route even once
+    // discovery piggybacks C into its peer set — making the relay path (and the
+    // flood-fallback counter) deterministic instead of racing the health tick that
+    // would otherwise reconcile a learned C into A's forwarding set.
+    let c = Arc::new(mk(port_c, vec![], 0));
+    let b = Arc::new(mk(port_b, vec![id(port_c)], 0));
+    let a = Arc::new(mk(port_a, vec![id(port_b)], 1));
     c.start().await.unwrap();
     b.start().await.unwrap();
     a.start().await.unwrap();
