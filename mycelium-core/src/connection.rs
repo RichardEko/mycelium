@@ -242,15 +242,23 @@ pub async fn handle_connection(
                     is_new
                 };
                 if sender_is_new {
-                    // Event-driven fan-out activation: publish the updated
-                    // peer list NOW so the gossip loop can send to this peer
-                    // immediately (signals, RPC responses, votes). The health
-                    // monitor remains the steady-state reconciler/evictor.
-                    let list: Arc<[NodeId]> = {
-                        let guard = peers.pin();
-                        guard.iter().map(|(id, _)| id.clone()).collect()
-                    };
-                    let _ = peer_list_tx.send(list);
+                    // Event-driven fan-out activation (WS-B M4: bounded). Add the new peer
+                    // to the *current* active forwarding set so it is immediately sendable
+                    // (signals, RPC responses, votes) — but only while the set is below the
+                    // resolved fan-out `k`, so this never un-bounds it. Appending to the
+                    // current published set (rather than republishing the full peer map)
+                    // keeps it consistent with the health monitor's sticky set; once the set
+                    // is at `k`, new peers are reached via multi-hop flooding instead. The
+                    // health monitor remains the steady-state reconciler/evictor.
+                    let known_len = peers.pin().len();
+                    let k = crate::config::resolved_fanout(
+                        task_ctx.config.gossip_fanout, task_ctx.config.max_active_connections, known_len);
+                    let current = peer_list_tx.borrow().clone();
+                    if !current.contains(&sender) && current.len() < k.max(1) {
+                        let mut next: Vec<NodeId> = current.to_vec();
+                        next.push(sender.clone());
+                        let _ = peer_list_tx.send(next.into());
+                    }
                     let key_timestamps: Vec<(std::sync::Arc<str>, u64)> = {
                         let guard = kv_state.store.pin();
                         guard.iter().map(|(k, v)| (Arc::clone(k), v.timestamp)).collect()

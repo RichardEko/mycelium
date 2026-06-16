@@ -1,0 +1,5 @@
+timestamp,git_sha,n_workers,total_nodes,converged,seed_established,host_conntrack_count,host_conntrack_max,forward_rules,seed_task_count,seed_store_entries,seed_dropped_frames
+2026-06-16T09:31:12Z,00e6c82,30,31,yes,42,1676,262144,3,11,64,0
+2026-06-16T09:32:13Z,00e6c82,50,51,yes,64,4040,262144,3,11,104,104
+2026-06-16T09:33:19Z,00e6c82,70,71,yes,76,6292,262144,3,11,144,95
+2026-06-16T09:34:23Z,00e6c82,100,101,yes,128,6478,262144,3,11,204,78

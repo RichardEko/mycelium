@@ -262,10 +262,13 @@ pub(super) async fn run_gossip_shard(
 
                 if peer_list_rx.has_changed().unwrap_or(false) {
                     cached_peer_list = peer_list_rx.borrow_and_update().clone();
+                    // The published list IS the bounded active set (WS-B M4): use it directly
+                    // as the forwarding fan-out. Bootstrap peers are NOT re-pinned here — the
+                    // health monitor keeps them in the active set only while still discovering,
+                    // then de-pins them, so a well-known seed stops being a forwarding target
+                    // for every node (which would pin O(N) inbound connections on it).
                     targets.clear();
-                    targets.extend(bootstrap_peers.iter().cloned());
-                    let remaining = max_forwarding_peers.saturating_sub(targets.len());
-                    targets.extend(cached_peer_list.iter().take(remaining).cloned());
+                    targets.extend(cached_peer_list.iter().take(max_forwarding_peers).cloned());
                     sender_cache.retain(|k, _| targets.contains(k));
                 }
 
@@ -540,10 +543,6 @@ pub(super) async fn run_health_monitor(
                 let ping_data: Bytes = ping_buf.split().freeze();
 
                 if current_peer_set != last_peer_set {
-                    // peer_list_tx feeds signal fan-out; always send the full known set.
-                    let peer_list: Arc<[NodeId]> = current_peer_set.iter().cloned().collect();
-                    let _ = peer_list_tx.send(peer_list);
-
                     // Fire a StateRequest for each bootstrap peer that just appeared in the
                     // active peer set (sent us a Ping) for the first time. Handles the reconnect
                     // case where the startup StateRequest's response was dropped by writer
@@ -572,6 +571,15 @@ pub(super) async fn run_health_monitor(
                 let retain_bootstrap = current_peer_set.len() < crate::config::AUTO_FANOUT_FLOOR;
                 let (added, removed) = reconcile_active_targets(
                     &mut cached_ping_targets, &current_peer_set, &bootstrap_no_self, k, retain_bootstrap);
+                // Publish the bounded active set to the gossip shards: it is BOTH the ping
+                // set and the forwarding fan-out, so a node opens persistent writers to only
+                // ~k peers (not N). Cluster-wide delivery still holds via multi-hop epidemic
+                // flooding + the seen-set; Individual frames to a non-active target fall back
+                // to flooding (regression-gated). Republish only when the set changes.
+                if !added.is_empty() || !removed.is_empty() {
+                    let active: Arc<[NodeId]> = cached_ping_targets.iter().cloned().collect();
+                    let _ = peer_list_tx.send(active);
+                }
                 for peer in &added {
                     request_state(peer, &peer_writers, writer_depth, backoff,
                         idle_timeout, &shutdown_tx, &node_id, &hash_acc,
