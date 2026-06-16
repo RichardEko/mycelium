@@ -161,3 +161,12 @@ ephemeral fan-out events — notifications, triggers, real-time signals — use
 the Signal Mesh ([03-signals.md](03-signals.md)) instead. The signal layer
 is zero-copy, has no persistence overhead, and is built for high-frequency
 fan-out.
+
+**Just need this layer? Depend on `mycelium-core`.** Everything in this
+chapter (the gossip KV store) and the signal mesh ([03-signals.md](03-signals.md))
+live in the standalone [`mycelium-core`](../../mycelium-core/) crate — Layers I + II
+with no Axum/gateway and roughly a third of the full dependency tree. If your
+embed needs last-write-wins KV propagation and scoped events but not RPC,
+consensus, the capability system, or the HTTP gateway, depend on `mycelium-core`
+directly instead of `mycelium`. The full `mycelium` crate re-exports it, so the
+API is identical. See the README's *Which crate?* section and ROADMAP §v2.0 M1.

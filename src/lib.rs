@@ -45,6 +45,23 @@
 //! See [ROADMAP.md](https://github.com/RichardEko/mycelium/blob/main/ROADMAP.md) for the
 //! layer-by-layer architecture and higher-layer design.
 //!
+//! ## Crate layout — `mycelium` vs `mycelium-core`
+//!
+//! This crate is the **full runtime** (Layers I + II + III: gossip KV, signal mesh,
+//! consensus, capabilities, services, the HTTP/MCP/A2A gateway, and TLS/RBAC/audit) and is
+//! what most users want. The Layers I + II substrate alone — gossip KV + signal/boundary mesh,
+//! with no Axum/gateway and roughly a third of the dependency tree — lives in the separate
+//! [`mycelium-core`](https://crates.io/crates/mycelium-core) crate, which `mycelium`
+//! re-exports and depends on. Depend on `mycelium-core` directly only for a minimal embed that
+//! needs last-write-wins KV propagation and the scoped event mesh but not RPC, consensus, the
+//! capability system, or the gateway. The crate boundary makes the inverted-dependency
+//! invariant a compile-time guarantee (the substrate cannot reference the layers above it).
+//! You can also trim *this* crate toward the core with `default-features = false` (drops the
+//! gateway) and `--features gateway` without `consensus` (drops the agreement layer); a
+//! consensus-disabled node still forwards PROPOSE/VOTE/COMMIT, it just never acts. The split
+//! landed in v2.0 M1 — see [ROADMAP.md](https://github.com/RichardEko/mycelium/blob/main/ROADMAP.md)
+//! §v2.0 Milestones for the rationale.
+//!
 //! ## KV namespace ownership
 //!
 //! The KV store is the single substrate; higher layers own dedicated key
