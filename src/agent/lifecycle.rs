@@ -302,24 +302,38 @@ impl GossipAgent {
         }
     }
 
-    /// Bind the SWIM UDP socket and spawn its listener (WS-B M5, opt-in). The UDP
-    /// socket uses the same port number as the gossip TCP port unless `swim_udp_port`
-    /// overrides it. Stage 1 reflects `Ping → Ack`; the failure detector grafts onto
-    /// this loop in later stages.
+    /// Bind the SWIM UDP socket and spawn its listener + prober (WS-B M5, opt-in). The
+    /// UDP socket uses the same port number as the gossip TCP port unless `swim_udp_port`
+    /// overrides it. The listener reflects/relays probes; the prober periodically probes a
+    /// random peer (direct → indirect) and refreshes its liveness in the `peers` map, so
+    /// the health monitor's staleness eviction works off UDP probing.
     async fn start_swim_listener(&self, tcp_bind: SocketAddr) -> Result<(), GossipError> {
+        use std::sync::atomic::AtomicBool;
+        use std::time::Duration;
         let port = self.config.swim_udp_port.unwrap_or(self.config.bind_port);
         let udp_addr = SocketAddr::new(tcp_bind.ip(), port);
         let socket = Arc::new(
             tokio::net::UdpSocket::bind(udp_addr).await.map_err(GossipError::Io)?,
         );
-        let alive = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let state = mycelium_core::swim::SwimState::new(socket, self.node_id.clone());
+        let probe_timeout = Duration::from_millis(self.config.swim_probe_timeout_ms);
+
         self.spawn_task(mycelium_core::swim::run_swim_listener(
-            socket,
-            self.node_id.clone(),
+            Arc::clone(&state),
             Arc::clone(&self.shutdown_tx),
-            alive,
+            Arc::new(AtomicBool::new(false)),
+            probe_timeout,
         ));
-        tracing::info!("SWIM failure detector listening on udp://{udp_addr}");
+        self.spawn_task(mycelium_core::swim::run_swim_prober(
+            state,
+            Arc::clone(&self.peers),
+            Arc::clone(&self.shutdown_tx),
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_millis(self.config.swim_probe_interval_ms),
+            probe_timeout,
+            self.config.swim_indirect_probes,
+        ));
+        tracing::info!("SWIM failure detector active on udp://{udp_addr}");
         Ok(())
     }
 

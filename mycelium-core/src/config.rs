@@ -447,6 +447,16 @@ pub struct GossipConfig {
     /// port only when TCP/UDP must be separated. Ignored unless `swim_failure_detector`
     /// is set. Set via `GOSSIP_SWIM_UDP_PORT`.
     pub swim_udp_port: Option<u16>,
+    /// SWIM protocol period in milliseconds — how often the prober picks a random peer
+    /// to probe (WS-B M5 Stage 2). Default `1000`. Set via `GOSSIP_SWIM_PROBE_INTERVAL_MS`.
+    pub swim_probe_interval_ms: u64,
+    /// SWIM direct-probe timeout in milliseconds: how long to wait for a direct `Ack`
+    /// before falling back to indirect probing. Default `500`. Set via
+    /// `GOSSIP_SWIM_PROBE_TIMEOUT_MS`.
+    pub swim_probe_timeout_ms: u64,
+    /// Number of random relay peers asked to probe the target on our behalf when a direct
+    /// probe times out (SWIM indirect probe `k`). Default `3`. Set via `GOSSIP_SWIM_INDIRECT_PROBES`.
+    pub swim_indirect_probes: usize,
     /// Seconds of inactivity after which a peer writer closes its TCP connection.
     ///
     /// The connection is re-established transparently on the next frame destined for that
@@ -746,6 +756,9 @@ impl Default for GossipConfig {
             gossip_fanout: 0,
             swim_failure_detector: false,
             swim_udp_port: None,
+            swim_probe_interval_ms: 1000,
+            swim_probe_timeout_ms: 500,
+            swim_indirect_probes: 3,
             writer_idle_timeout_secs: 30,
             group_aware_forwarding: true,
             epidemic_extra_peers:   3,
@@ -1087,6 +1100,15 @@ impl GossipConfig {
         }
         if let Ok(v) = env::var("GOSSIP_SWIM_UDP_PORT") {
             self.swim_udp_port = Some(v.parse().map_err(GossipError::Parse)?);
+        }
+        if let Ok(v) = env::var("GOSSIP_SWIM_PROBE_INTERVAL_MS") {
+            self.swim_probe_interval_ms = v.parse().map_err(GossipError::Parse)?;
+        }
+        if let Ok(v) = env::var("GOSSIP_SWIM_PROBE_TIMEOUT_MS") {
+            self.swim_probe_timeout_ms = v.parse().map_err(GossipError::Parse)?;
+        }
+        if let Ok(v) = env::var("GOSSIP_SWIM_INDIRECT_PROBES") {
+            self.swim_indirect_probes = v.parse().map_err(GossipError::Parse)?;
         }
         if let Ok(v) = env::var("GOSSIP_GROUP_AWARE_FORWARDING") {
             self.group_aware_forwarding = match v.as_str() {
