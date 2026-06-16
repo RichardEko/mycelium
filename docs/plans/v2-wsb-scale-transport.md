@@ -179,13 +179,19 @@ monitor no longer does staleness eviction. With the fix, membership converges an
 `peers=50` (converged), seed **outbound ≈ 21**, **inbound ≈ 23** → seed total **≈ 44 vs 2N=102**.
 Connections are **bounded ~2k, not N** — G1's flattening works.
 
-**Remaining (the reason Stage 4 isn't done):** under the Docker scale compose's *default*
-cadences (10 s health-check interval, 1 s probe), the per-tick rotation washes out the seed's
-early-fill bias too slowly: `seed_established` at 100 nodes fell 123 (50 s settle) → 94 (150 s
-settle) but did not reach ~2k in a practical window. Next step is to make the de-pinning converge
-fast under default timings — tie the forwarding rotation/uniform-resample to the SWIM probe
-cadence rather than the slow health interval, and decouple anti-entropy from forwarding-set
-membership — then re-measure G1 + G3 and flip the default.
+**Remaining (the reason Stage 4 isn't done) — an unresolved in-process/Docker divergence:**
+The mechanism converges to bounded ~2k **in-process even at Docker cadences** (50 workers, health
+10 s / probe 1 s): a startup spike (~2N at t≈15 s, from every node touching the shared seed) drains
+to ~2k by **t≈40 s** and stays bounded. Skipping the bootstrap anti-entropy pull under SWIM (done)
+shrinks that spike (~97→~78 at t=15 s). **But Docker at 100 nodes does not converge in a practical
+window** — `seed_established` 123 (50 s) → 94/102 (130–150 s settle), still ≈ N. So G1 is *mechanism-
+proven* but not *demonstrated at Docker scale*. The unidentified gap is some interaction of scale
+(100 vs 50), the demo's continuous capability-advertisement gossip keeping forwarding writers warm,
+and Docker UDP/TCP-over-bridge behaviour — it needs focused Docker-side debugging (a stable cluster
++ the inbound/outbound `/proc/net/tcp` split, which the manual-inspection orchestration kept
+fighting). **Default stays off until G1 + G3 are demonstrated.** Candidate next steps: reproduce the
+divergence in-process at N=100 with synthetic continuous KV churn (fast oracle); decouple
+anti-entropy from forwarding-set membership entirely; tie de-pinning to the probe cadence.
 
 - **Stage 1 — UDP datagram transport foundation.** New `mycelium-core/src/swim.rs`: the
   `SwimDatagram` enum (`Ping`/`Ack`/`PingReq`/`PingReqAck`) + a compact codec with a version
