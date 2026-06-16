@@ -33,9 +33,33 @@ Appends one CSV row per worker count to `scale-baseline.csv`.
 
 ## Reading the curve
 
-The WS-B thesis is that `seed_established`, `host_conntrack_count`, and
-`forward_rules` all climb super-linearly toward the iptables ceiling well before
-100 nodes. **M4** (bounded fan-out) should flatten `seed_established` /
-`seed_task_count` (Gate G1); **M5** (UDP/TCP SWIM) should collapse persistent
-heartbeat connections to ~O(1) and let `test-scale-resilience RESILIENCE_WORKERS=50`
-pass (Gate G3). Re-run this baseline after each phase and diff the columns.
+**M4** (bounded fan-out) should flatten `seed_established` (Gate G1); **M5**
+(UDP/TCP SWIM) should collapse persistent heartbeat connections to ~O(1) and let
+`test-scale-resilience RESILIENCE_WORKERS=50` pass (Gate G3). Re-run this baseline
+after each phase and diff the columns.
+
+## Recorded baseline — `main` @ `81858ba`, 2026-06-16 (pre-M4/M5)
+
+| N workers | total nodes | seed_established | host_conntrack_count | forward_rules | seed_task_count | dropped_frames |
+|---:|---:|---:|---:|---:|---:|---:|
+| 30  | 31  | 62  | 1956 | 3 | 11 | 0 |
+| 50  | 51  | 102 | 3399 | 3 | 11 | 0 |
+| 70  | 71  | 142 | 5701 | 3 | 11 | 81 |
+| 100 | 101 | 202 | 8256 | 3 | 11 | 0 |
+
+**Headline finding — `seed_established = 2 × total_nodes`, exactly linear.** Every
+node holds two persistent TCP connections to seed (inbound + peer-exchange
+outbound), so seed's connection table — and the cluster-wide total at O(N²) — grows
+without bound. This is the precise quantity M4 must flatten to ~`2 × fanout`
+(constant) and M5 must drive toward zero for the heartbeat path. `host_conntrack_count`
+climbs in lockstep (1956 → 8256). The G1 target after M4: this column goes flat.
+
+**Caveats for this platform / binary:**
+- `forward_rules` is constant at 3 on Docker Desktop (the FORWARD chain holds only
+  jump rules to DOCKER sub-chains; the O(N²) rule growth is a native-Linux-bridge
+  artifact). On this platform **`host_conntrack_count` is the better G2 saturation
+  proxy** — it is the table that actually fills.
+- `seed_task_count` is flat at 11 (the demo binary does not track per-peer writers
+  in its JoinSet) — **not** a fan-out proxy; use host-measured `seed_established`.
+- `dropped_frames` is transiently non-zero (81 at N=70 here) — gossip backpressure
+  during formation, not a steady-state signal.
