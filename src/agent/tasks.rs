@@ -480,6 +480,7 @@ pub(super) async fn run_health_monitor(
     ping_peer_sample_size:    usize,
     max_active_connections:   usize,
     gossip_fanout:            usize,
+    swim_enabled:             bool,
     health_check_max_jitter:  u64,
     hash_acc:                 Arc<AtomicU64>,
     dropped_frames:          Arc<AtomicU64>,
@@ -499,14 +500,27 @@ pub(super) async fn run_health_monitor(
         _ = shutdown_rx.wait_for(|v| *v) => return,
     }
 
-    for peer in &bootstrap_set {
-        request_state(peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &node_id, &hash_acc, &dropped_frames, vec![], tls.clone());
+    // Startup anti-entropy pull from the bootstrap peers. Skipped under SWIM: it would
+    // make every node open a TCP connection to the (shared) seed at once — the dominant
+    // source of the seed's startup connection spike — and under SWIM the initial KV state
+    // is instead pulled via anti-entropy on the first forwarding-set members (uniform
+    // random), so the seed is not a universal anti-entropy target.
+    if !swim_enabled {
+        for peer in &bootstrap_set {
+            request_state(peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &node_id, &hash_acc, &dropped_frames, vec![], tls.clone());
+        }
     }
 
     let mut ticker = time::interval(Duration::from_secs(interval_secs));
     ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
     let mut ping_buf: BytesMut = BytesMut::with_capacity(1024);
-    let mut cached_ping_targets: AHashSet<NodeId> = bootstrap_set.clone();
+    // With SWIM (M5 cutover) the forwarding set starts empty and is NOT seeded with the
+    // bootstrap peers: liveness + discovery ride UDP probing/gossip, so the forwarding
+    // fan-out is a pure uniform-random sample of the membership — no node permanently
+    // pins the seed (the residual M4 left). Without SWIM, keep the v1 behaviour (seed the
+    // ping set with bootstrap so the TCP ping path bootstraps discovery).
+    let mut cached_ping_targets: AHashSet<NodeId> =
+        if swim_enabled { AHashSet::new() } else { bootstrap_set.clone() };
     cached_ping_targets.remove(&node_id);
     // Bootstrap set excluding self — the discovery-aid set for fan-out reconciliation.
     let bootstrap_no_self: AHashSet<NodeId> =
@@ -526,21 +540,26 @@ pub(super) async fn run_health_monitor(
                         current_peer_set.insert(id.clone());
                     }
                 }
-                for i in 0..ping_peer_sample_size.min(known.len()) {
-                    let j = i + fastrand::usize(..known.len() - i);
-                    known.swap(i, j);
-                }
-                known.truncate(ping_peer_sample_size);
-
-                if let Err(e) = bincode::serde::encode_into_std_write(
-                    WireMessage::Ping { sender: node_id.clone(), known_peers: known },
-                    &mut (&mut ping_buf).writer(),
-                    bincode_cfg(),
-                ) {
-                    warn!("Ping serialize failed: {}", e);
-                    continue;
-                }
-                let ping_data: Bytes = ping_buf.split().freeze();
+                // Build the TCP heartbeat ping only when SWIM is off (it owns liveness +
+                // discovery otherwise). A serialize failure skips just this tick's ping —
+                // the reconcile/eviction below still runs.
+                let ping_data: Option<Bytes> = if swim_enabled {
+                    None
+                } else {
+                    for i in 0..ping_peer_sample_size.min(known.len()) {
+                        let j = i + fastrand::usize(..known.len() - i);
+                        known.swap(i, j);
+                    }
+                    known.truncate(ping_peer_sample_size);
+                    match bincode::serde::encode_into_std_write(
+                        WireMessage::Ping { sender: node_id.clone(), known_peers: known },
+                        &mut (&mut ping_buf).writer(),
+                        bincode_cfg(),
+                    ) {
+                        Ok(_) => Some(ping_buf.split().freeze()),
+                        Err(e) => { warn!("Ping serialize failed: {}", e); None }
+                    }
+                };
 
                 if current_peer_set != last_peer_set {
                     // Fire a StateRequest for each bootstrap peer that just appeared in the
@@ -548,12 +567,16 @@ pub(super) async fn run_health_monitor(
                     // case where the startup StateRequest's response was dropped by writer
                     // backoff: the peer may already be an active target but is "new" to
                     // last_peer_set, so we re-trigger once the cooldown has cleared.
-                    for peer in current_peer_set.iter()
-                        .filter(|p| bootstrap_set.contains(*p) && !last_peer_set.contains(*p))
-                    {
-                        request_state(peer, &peer_writers, writer_depth, backoff,
-                            idle_timeout, &shutdown_tx, &node_id, &hash_acc,
-                            &dropped_frames, vec![], tls.clone());
+                    // Skipped under SWIM (same reason as the startup pull): it would re-pin the
+                    // shared seed as a universal anti-entropy target.
+                    if !swim_enabled {
+                        for peer in current_peer_set.iter()
+                            .filter(|p| bootstrap_set.contains(*p) && !last_peer_set.contains(*p))
+                        {
+                            request_state(peer, &peer_writers, writer_depth, backoff,
+                                idle_timeout, &shutdown_tx, &node_id, &hash_acc,
+                                &dropped_frames, vec![], tls.clone());
+                        }
                     }
                     last_peer_set = current_peer_set.clone();
                 }
@@ -564,11 +587,33 @@ pub(super) async fn run_health_monitor(
                 // peers get anti-entropy; dropped peers have their writers evicted so the
                 // TCP connection actually closes (the connection count is bounded by k, not N).
                 let k = resolved_fanout(gossip_fanout, max_active_connections, current_peer_set.len());
-                // Keep the seed pinned until we've discovered a healthy number of peers
-                // (absolute floor) — only then de-pin so a well-known seed stops carrying
-                // O(N) inbound connections. Small clusters never cross the floor, so they
-                // keep full connectivity to their bootstrap peers.
-                let retain_bootstrap = current_peer_set.len() < crate::config::AUTO_FANOUT_FLOOR;
+                // Without SWIM: keep the seed pinned until we've discovered a healthy number
+                // of peers (absolute floor), then de-pin — small clusters stay full mesh.
+                // With SWIM: never pin the bootstrap in the forwarding set; discovery is
+                // handled by UDP gossip, so the seed is just one uniform-random candidate.
+                let retain_bootstrap =
+                    !swim_enabled && current_peer_set.len() < crate::config::AUTO_FANOUT_FLOOR;
+                // SWIM cutover: rotate the forwarding set so no member (notably the seed,
+                // which every node discovers first and tends to pin via the early greedy
+                // fill) stays permanently retained. Evicting ~k/3 random members per tick
+                // turns the k-set into a moving uniform sample that converges in a few ticks
+                // → each member appears in ~k/N nodes' sets (flat seed_established). Liveness
+                // is unaffected (SWIM owns it). Only rotates once at capacity.
+                if swim_enabled && cached_ping_targets.len() >= k && k > 0 {
+                    let rotate = (k / 3).max(1);
+                    for _ in 0..rotate {
+                        if cached_ping_targets.len() <= 1 { break; }
+                        let victim = cached_ping_targets
+                            .iter()
+                            .nth(fastrand::usize(..cached_ping_targets.len()))
+                            .cloned();
+                        if let Some(v) = victim {
+                            cached_ping_targets.remove(&v);
+                            ping_sender_cache.remove(&v);
+                            evict_peer_writer(&peer_writers, &v);
+                        }
+                    }
+                }
                 let (added, removed) = reconcile_active_targets(
                     &mut cached_ping_targets, &current_peer_set, &bootstrap_no_self, k, retain_bootstrap);
                 // Publish the bounded active set to the gossip shards: it is BOTH the ping
@@ -589,32 +634,39 @@ pub(super) async fn run_health_monitor(
                     ping_sender_cache.remove(peer);
                     evict_peer_writer(&peer_writers, peer);
                 }
-                for peer in &cached_ping_targets {
-                    let tx = if let Some(t) = ping_sender_cache.get(peer) {
-                        t.clone()
-                    } else {
-                        let Some(t) = get_or_spawn_writer(
-                            peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &dropped_frames, tls.clone(),
-                        ) else { continue; };
-                        ping_sender_cache.insert(peer.clone(), t.clone());
-                        t
-                    };
-                    match tx.try_send(ping_data.clone()) {
-                        Ok(()) => {}
-                        Err(TrySendError::Full(_)) => {
-                            warn!("Peer writer channel full, dropping ping to {}", peer);
-                        }
-                        Err(TrySendError::Closed(_)) => {
-                            debug!("Peer writer for {} closed; respawning for ping retry", peer);
-                            ping_sender_cache.remove(peer);
-                            let Some(new_tx) = get_or_spawn_writer(
+                // TCP heartbeat ping. With SWIM (M5 cutover) liveness + discovery ride UDP
+                // probing/gossip, so the TCP ping is gone: forwarding writers stay warm via
+                // actual gossip traffic and idle-close otherwise — which is precisely the
+                // "no persistent heartbeat connections" goal (a closed idle writer leaves no
+                // iptables FORWARD / conntrack entry). Without SWIM, ping as before.
+                if let Some(ping_data) = ping_data.as_ref() {
+                    for peer in &cached_ping_targets {
+                        let tx = if let Some(t) = ping_sender_cache.get(peer) {
+                            t.clone()
+                        } else {
+                            let Some(t) = get_or_spawn_writer(
                                 peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &dropped_frames, tls.clone(),
                             ) else { continue; };
-                            ping_sender_cache.insert(peer.clone(), new_tx.clone());
-                            match new_tx.try_send(ping_data.clone()) {
-                                Ok(()) => {}
-                                Err(_) => {
-                                    debug!("Respawned writer for {} could not accept ping", peer);
+                            ping_sender_cache.insert(peer.clone(), t.clone());
+                            t
+                        };
+                        match tx.try_send(ping_data.clone()) {
+                            Ok(()) => {}
+                            Err(TrySendError::Full(_)) => {
+                                warn!("Peer writer channel full, dropping ping to {}", peer);
+                            }
+                            Err(TrySendError::Closed(_)) => {
+                                debug!("Peer writer for {} closed; respawning for ping retry", peer);
+                                ping_sender_cache.remove(peer);
+                                let Some(new_tx) = get_or_spawn_writer(
+                                    peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &dropped_frames, tls.clone(),
+                                ) else { continue; };
+                                ping_sender_cache.insert(peer.clone(), new_tx.clone());
+                                match new_tx.try_send(ping_data.clone()) {
+                                    Ok(()) => {}
+                                    Err(_) => {
+                                        debug!("Respawned writer for {} could not accept ping", peer);
+                                    }
                                 }
                             }
                         }
@@ -630,8 +682,16 @@ pub(super) async fn run_health_monitor(
 
                 signal_handlers.trim_sender_log(Duration::from_secs(signal_window_secs));
 
+                // Staleness eviction is the TCP-ping liveness model: a peer not heard from
+                // within the window is dropped. Under SWIM this is WRONG — the prober
+                // refreshes only one peer per period, so each peer is touched every
+                // ~N×period, which is slower than any sane window; the health monitor would
+                // evict live peers faster than SWIM refreshes them and collapse the
+                // membership. With SWIM, liveness + eviction are owned entirely by the
+                // failure detector (a confirmed-Dead member is removed via apply_effect), so
+                // skip staleness eviction here.
                 let eviction_window = Duration::from_secs(interval_secs.saturating_mul(peer_eviction_intervals));
-                let maybe_peer_cutoff = Instant::now().checked_sub(eviction_window);
+                let maybe_peer_cutoff = if swim_enabled { None } else { Instant::now().checked_sub(eviction_window) };
 
                 if let Some(peer_cutoff) = maybe_peer_cutoff {
                     let guard = peers.pin();

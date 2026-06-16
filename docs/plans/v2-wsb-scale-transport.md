@@ -157,7 +157,41 @@ in four independently-mergeable stages, each gated behind `GossipConfig::swim_fa
 (default **false**) so every stage is inert for existing deployments until the final cutover
 flips the default (the M4-default-flip lesson):
 
-**Progress:** Stage 1 ✅ (PR #15) · Stage 2 ✅ (PR #16) · Stage 3 ✅ · Stage 4 pending (cutover + G1/G3 validation).
+**Progress:** Stage 1 ✅ (PR #15) · Stage 2 ✅ (PR #16) · Stage 3 ✅ (PR #17) · Stage 4 🟡 cutover mechanics in + a load-bearing membership-convergence bug fixed; **G1 mechanism proven in-process, Docker convergence-speed work remains** (details below). Default stays **off**.
+
+#### Stage 4 findings (2026-06-16) — cutover mechanics + the membership-collapse fix
+
+The Stage 4 cutover (gated under `swim_failure_detector`): the TCP heartbeat ping is gone
+under SWIM; the forwarding set starts empty, never pins the bootstrap, and is gradually
+rotated so no member is permanently retained.
+
+**Load-bearing bug found & fixed:** the health monitor's *staleness eviction* (drop a peer
+not heard from within `interval × peer_eviction_intervals`) is the TCP-ping liveness model and
+is **wrong under SWIM** — the prober refreshes only *one* peer per period, so each peer is
+touched every ~N×period, far slower than the window. The health monitor was evicting live peers
+faster than SWIM refreshed them and **collapsing the membership** (in a 13-node in-process repro,
+the seed's view fell from 12 → 1). Fix: under SWIM, liveness + eviction are owned **entirely** by
+the failure detector (a confirmed-`Dead` member is removed via `apply_effect`); the health
+monitor no longer does staleness eviction. With the fix, membership converges and **holds**
+(all nodes know all peers).
+
+**G1 mechanism proven (in-process, deterministic):** 1 seed + 50 workers, SWIM on — seed
+`peers=50` (converged), seed **outbound ≈ 21**, **inbound ≈ 23** → seed total **≈ 44 vs 2N=102**.
+Connections are **bounded ~2k, not N** — G1's flattening works.
+
+**Remaining (the reason Stage 4 isn't done) — an unresolved in-process/Docker divergence:**
+The mechanism converges to bounded ~2k **in-process even at Docker cadences** (50 workers, health
+10 s / probe 1 s): a startup spike (~2N at t≈15 s, from every node touching the shared seed) drains
+to ~2k by **t≈40 s** and stays bounded. Skipping the bootstrap anti-entropy pull under SWIM (done)
+shrinks that spike (~97→~78 at t=15 s). **But Docker at 100 nodes does not converge in a practical
+window** — `seed_established` 123 (50 s) → 94/102 (130–150 s settle), still ≈ N. So G1 is *mechanism-
+proven* but not *demonstrated at Docker scale*. The unidentified gap is some interaction of scale
+(100 vs 50), the demo's continuous capability-advertisement gossip keeping forwarding writers warm,
+and Docker UDP/TCP-over-bridge behaviour — it needs focused Docker-side debugging (a stable cluster
++ the inbound/outbound `/proc/net/tcp` split, which the manual-inspection orchestration kept
+fighting). **Default stays off until G1 + G3 are demonstrated.** Candidate next steps: reproduce the
+divergence in-process at N=100 with synthetic continuous KV churn (fast oracle); decouple
+anti-entropy from forwarding-set membership entirely; tie de-pinning to the probe cadence.
 
 - **Stage 1 — UDP datagram transport foundation.** New `mycelium-core/src/swim.rs`: the
   `SwimDatagram` enum (`Ping`/`Ack`/`PingReq`/`PingReqAck`) + a compact codec with a version
