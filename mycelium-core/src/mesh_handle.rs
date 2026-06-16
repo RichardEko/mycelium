@@ -1,3 +1,9 @@
+use crate::context::CoreCtx;
+use crate::kv_persist::{run_kv_persist_task, PersistOnTickFn, PersistPayloadFn};
+use crate::ops::{
+    emit_signal, emit_signal_async, emit_signal_ordered, group_members_ctx, kv_delete,
+    kv_scan_prefix, kv_set,
+};
 use crate::signal::{kv_ns, AdvertiseHandle, Signal, SignalScope, WatchHandle};
 use bytes::{BufMut, Bytes, BytesMut};
 use std::{
@@ -6,21 +12,23 @@ use std::{
 };
 use tokio::{sync::mpsc, time};
 
-use super::{TaskCtx, emit_signal};
-use super::helpers::{group_members_ctx, kv_delete, kv_scan_prefix, kv_set};
-use super::kv::run_kv_persist_task;
-use super::kv::{PersistPayloadFn, PersistOnTickFn};
-
 /// Typed handle for signal mesh operations (Layer II).
 ///
-/// Zero-cost: wraps one `Arc<TaskCtx>` clone. `Clone + Send + Sync`.
-/// Acquire via [`GossipAgent::mesh`](super::GossipAgent::mesh).
+/// Zero-cost: wraps one `Arc<CoreCtx>` clone. `Clone + Send + Sync`.
+/// Acquire via `GossipAgent::mesh`.
 #[derive(Clone)]
 pub struct MeshHandle {
-    pub(crate) ctx: Arc<TaskCtx>,
+    pub(crate) ctx: Arc<CoreCtx>,
 }
 
 impl MeshHandle {
+    /// Builds a handle directly from the substrate context. Used by the full
+    /// `mycelium` crate's `GossipAgent::mesh()` accessor.
+    #[doc(hidden)]
+    pub fn from_core(ctx: Arc<CoreCtx>) -> Self {
+        Self { ctx }
+    }
+
     /// Registers a handler for signals of the given `kind`.
     ///
     /// Returns an `mpsc::Receiver<Signal>` with the default channel depth (256).
@@ -66,7 +74,7 @@ impl MeshHandle {
         scope:   SignalScope,
         payload: impl Into<Bytes>,
     ) -> bool {
-        super::helpers::emit_signal_ordered(&self.ctx, kind.into(), scope, payload.into())
+        emit_signal_ordered(&self.ctx, kind.into(), scope, payload.into())
     }
 
     /// Like [`emit`](Self::emit), but awaits channel capacity instead of dropping on full.
@@ -78,7 +86,7 @@ impl MeshHandle {
         scope:   SignalScope,
         payload: impl Into<Bytes>,
     ) -> bool {
-        super::helpers::emit_signal_async(&self.ctx, kind.into(), scope, payload.into()).await
+        emit_signal_async(&self.ctx, kind.into(), scope, payload.into()).await
     }
 
     /// Joins a named **signal boundary group**, publishing membership to `grp/{group}/{node}`.
@@ -181,7 +189,7 @@ impl MeshHandle {
     {
         let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
         let mut shutdown_rx = self.ctx.shutdown_tx.subscribe();
-        let ctx: Arc<TaskCtx> = Arc::clone(&self.ctx);
+        let ctx: Arc<CoreCtx> = Arc::clone(&self.ctx);
         let kind: Arc<str>    = kind.into();
 
         self.ctx.spawn_task(async move {
@@ -216,7 +224,7 @@ impl MeshHandle {
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
         let shutdown_rx = self.ctx.shutdown_tx.subscribe();
 
-        let ctx:             Arc<TaskCtx> = Arc::clone(&self.ctx);
+        let ctx:             Arc<CoreCtx> = Arc::clone(&self.ctx);
         let kind: Arc<str>   = kind.into();
         let kv_key: Arc<str> = Arc::from(format!("svc/{}/{}", kind, ctx.node_id).as_str());
         let payload_arc: PersistPayloadFn = Arc::new(payload_fn);
@@ -228,7 +236,7 @@ impl MeshHandle {
         };
 
         self.ctx.spawn_task(run_kv_persist_task(
-            Arc::clone(&ctx.core), cancel_rx, shutdown_rx, kv_key, interval, payload_arc, Some(on_tick),
+            Arc::clone(&ctx), cancel_rx, shutdown_rx, kv_key, interval, payload_arc, Some(on_tick),
         ));
 
         AdvertiseHandle { _cancel: cancel_tx }
@@ -374,34 +382,14 @@ impl MeshHandle {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::node_id::NodeId;
     use crate::signal::{Signal, SignalHandlers, SignalScope};
-    use crate::{GossipAgent, GossipConfig, NodeId};
     use bytes::Bytes;
     use std::{sync::Arc, time::Duration};
 
-    fn make_agent() -> GossipAgent {
-        GossipAgent::new(NodeId::new("127.0.0.1", 0).unwrap(), GossipConfig::default())
-    }
-
-    // ── quorum ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn quorum_false_initially() {
-        let agent = make_agent();
-        assert!(!agent.mesh().quorum("contract.available", 1, Duration::from_secs(10)));
-    }
-
-    #[test]
-    fn quorum_true_after_delivery() {
-        let agent = make_agent();
-        let _ = agent.mesh().emit("contract.available", SignalScope::System, Bytes::new());
-        assert!(
-            agent.mesh().quorum("contract.available", 1, Duration::from_secs(10)),
-            "quorum(k, 1, 10s) must be true after one delivery",
-        );
-    }
-
+    // Pure `SignalHandlers` unit — no `GossipAgent`, so it lives with the substrate.
+    // The `GossipAgent`-driven mesh tests are in the full crate
+    // (`src/agent/mesh_handle_tests.rs`).
     #[test]
     fn quorum_distinct_senders() {
         let handlers = SignalHandlers::new(Duration::from_secs(600));
@@ -423,63 +411,5 @@ mod tests {
             handlers.quorum(&kind, 2, Duration::from_secs(10)),
             "two distinct senders must satisfy quorum(k, 2)",
         );
-    }
-
-    // ── pheromone trail ───────────────────────────────────────────────────
-
-    #[test]
-    fn pheromone_trail_write_read_and_evaporate() {
-        let agent = make_agent();
-        let load_key = format!("{}worker-1", kv_ns::LOAD);
-        let _ = agent.kv().set(load_key.clone(), b"queue=0".to_vec());
-        let trails = agent.kv().scan_prefix(kv_ns::LOAD);
-        assert_eq!(trails.len(), 1);
-        assert_eq!(trails[0].1, Bytes::from_static(b"queue=0"));
-        let _ = agent.kv().set(load_key.clone(), b"queue=3".to_vec());
-        assert_eq!(agent.kv().scan_prefix(kv_ns::LOAD).len(), 1,
-                   "update overwrites in place — store has one entry per worker");
-        let _ = agent.kv().delete(load_key);
-        assert_eq!(agent.kv().scan_prefix(kv_ns::LOAD).len(), 0,
-                   "tombstone evaporates pheromone trail");
-    }
-
-    // ── group join/leave ──────────────────────────────────────────────────
-
-    #[test]
-    fn join_group_idempotent() {
-        let agent = make_agent();
-        agent.mesh().join_group("nlp");
-        agent.mesh().join_group("nlp");
-        let _rx = agent.mesh().signal_rx("t");
-        let _ = agent.mesh().emit("t", SignalScope::Group(Arc::from("nlp")), b"ok".to_vec());
-        let key = format!("grp/nlp/{}", agent.node_id());
-        assert_eq!(agent.kv().get(&key), Some(Bytes::from_static(b"1")), "join is still reflected in store");
-    }
-
-    #[test]
-    fn leave_group_idempotent() {
-        let agent = make_agent();
-        agent.mesh().join_group("compute");
-        agent.mesh().leave_group("compute");
-        agent.mesh().leave_group("compute");
-        let key = format!("grp/compute/{}", agent.node_id());
-        assert_eq!(agent.kv().get(&key), None, "tombstone stands after double leave");
-    }
-
-    #[tokio::test]
-    async fn join_group_published_to_store() {
-        let agent = make_agent();
-        agent.mesh().join_group("compute");
-        let key = format!("grp/compute/{}", agent.node_id());
-        assert_eq!(agent.kv().get(&key), Some(Bytes::from_static(b"1")));
-    }
-
-    #[tokio::test]
-    async fn leave_group_tombstones_store_entry() {
-        let agent = make_agent();
-        agent.mesh().join_group("compute");
-        agent.mesh().leave_group("compute");
-        let key = format!("grp/compute/{}", agent.node_id());
-        assert_eq!(agent.kv().get(&key), None, "leave_group should tombstone the membership key");
     }
 }

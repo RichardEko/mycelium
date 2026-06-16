@@ -7,9 +7,7 @@ use super::{AgentState, GossipAgent, SystemStats};
 // closure type aliases moved to `mycelium-core::kv_persist` in v2 M3 — it is pure
 // Layer I (writes KV + gossips) and now drives `CoreCtx::soft_state_advertised`.
 // Re-exported here so the upper call sites' `super::kv::…` paths are unchanged.
-pub(crate) use mycelium_core::kv_persist::{
-    run_kv_persist_task, PersistOnTickFn, PersistPayloadFn,
-};
+pub(crate) use mycelium_core::kv_persist::{run_kv_persist_task, PersistPayloadFn};
 
 impl GossipAgent {
     /// Returns this node's identifier.

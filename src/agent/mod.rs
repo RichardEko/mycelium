@@ -21,7 +21,9 @@ mod lifecycle;
 mod kv;
 pub(crate) mod kv_quorum;
 mod kv_handle;
-mod mesh_handle;
+// mesh_handle moved to mycelium-core (v2 M3); the GossipAgent-driven tests stay here.
+#[cfg(test)]
+mod mesh_handle_tests;
 #[cfg(feature = "consensus")]
 mod consensus_handle;
 #[cfg(feature = "consensus")]
@@ -102,7 +104,7 @@ pub use audit::{
 pub use oidc::OidcConfig;
 pub use kv_quorum::QuorumError;
 pub use kv_handle::{KvHandle, LogEntry};
-pub use mesh_handle::MeshHandle;
+pub use mycelium_core::MeshHandle;
 pub use overlay_reliable::AckResult;
 pub use sharding::ShardError;
 pub use mycelium_core::{SchemaError, SchemaHandle, SchemaPublishResult};
@@ -429,7 +431,7 @@ impl GossipAgent {
     /// let mut rx = mesh.signal_rx(signal_kind::INVOKE);
     /// ```
     pub fn mesh(&self) -> MeshHandle {
-        MeshHandle { ctx: Arc::clone(&self.task_ctx) }
+        MeshHandle::from_core(Arc::clone(&self.task_ctx.core))
     }
 
     /// Returns a typed handle for schema registry operations.
