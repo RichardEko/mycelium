@@ -24,7 +24,71 @@ hold between them, and how to scale them safely as cluster size grows.
 | `max_inbound_frames_per_sec` | `0` (off) | `GOSSIP_MAX_INBOUND_FRAMES_PER_SEC` | fps |
 | `max_concurrent_bulk_handlers` | `64` | `GOSSIP_MAX_CONCURRENT_BULK_HANDLERS` | tasks |
 | `gossip_shards` | CPU count (≤16) | — | shards |
-| `writer_idle_timeout_secs` | `0` (off) | `GOSSIP_WRITER_IDLE_TIMEOUT_SECS` | s |
+| `writer_idle_timeout_secs` | `30` | `GOSSIP_WRITER_IDLE_TIMEOUT_SECS` | s |
+| `swim_failure_detector` | `true` | `GOSSIP_SWIM_FAILURE_DETECTOR` | bool |
+| `swim_udp_port` | same as `bind_port` | `GOSSIP_SWIM_UDP_PORT` | port |
+| `swim_probe_interval_ms` | `500` | `GOSSIP_SWIM_PROBE_INTERVAL_MS` | ms |
+| `swim_probe_timeout_ms` | `300` | `GOSSIP_SWIM_PROBE_TIMEOUT_MS` | ms |
+| `swim_indirect_probes` | `3` | `GOSSIP_SWIM_INDIRECT_PROBES` | peers |
+| `swim_gossip_updates` | `12` | `GOSSIP_SWIM_GOSSIP_UPDATES` | updates/datagram |
+| `swim_suspicion_timeout_ms` | `4000` | `GOSSIP_SWIM_SUSPICION_TIMEOUT_MS` | ms |
+
+---
+
+## Gossip transport modes — SWIM (default) vs legacy TCP-ping
+
+Mycelium has two liveness/membership modes. They share the same TCP data plane
+(KV/Signal delivery + anti-entropy); they differ only in *how a node learns which
+peers exist and which are alive*.
+
+| | **SWIM** (default, `swim_failure_detector = true`) | **Legacy TCP-ping** (`=0`) |
+|---|---|---|
+| Liveness | UDP failure detector: direct probe → indirect probe (via `k` relays) → suspect → dead | TCP `Ping` heartbeats; a peer not heard from within `health_check_interval × peer_eviction_intervals` is evicted |
+| Discovery | Membership gossip piggybacked on every probe (UDP) | Peer list piggybacked on TCP `Ping` (`ping_peer_sample_size`) |
+| Connection cost | **~2k** persistent TCP connections per node (k = fan-out), independent of N — UDP probes leave no conntrack/iptables-FORWARD state | **O(N×K)** capped by `max_active_connections`, but every probe is a TCP connection |
+| Eviction owner | the failure detector (health-monitor staleness eviction is **disabled**) | the health monitor (staleness eviction) |
+| Scales to | ~100+ nodes on a Linux bridge without hitting the iptables FORWARD ceiling | bounded by `max_active_connections`; the connection churn still pressures conntrack |
+
+**Why SWIM is the default.** On a Linux bridge the iptables FORWARD chain grows
+O(N²) with persistent TCP connections and the late-joiner/new-connection path
+stalls (errno 110) well below 100 nodes. SWIM moves liveness/heartbeats to
+connection-free UDP, so the seed and every node hold a flat ~2k TCP connections
+regardless of cluster size. Validated over Docker: `seed_established` flat at
+N=50 (24) and N=100 (22); 50-worker resilience late-joiner passes (see
+`docs/plans/v2-wsb-scale-transport.md`).
+
+**Switching.** Set `GOSSIP_SWIM_FAILURE_DETECTOR=0` to fall back to the legacy
+TCP-ping path (e.g. environments where intra-cluster UDP is blocked). The UDP
+socket binds the **same port number as the gossip TCP port** by default (one
+firewall rule for both); override with `GOSSIP_SWIM_UDP_PORT` only if TCP/UDP must
+be separated.
+
+> **⚠ Rolling-upgrade caveat — do not mix modes in one cluster.**
+> A SWIM-on node owns liveness and evicts any peer that fails its UDP probes — so
+> a SWIM-on node will mark a SWIM-*off* peer (no UDP listener) **Dead** and drop it.
+> Flip a whole cluster together. For a staged upgrade, pin
+> `GOSSIP_SWIM_FAILURE_DETECTOR=0` on the new binary until every node carries it,
+> then restart the cluster into SWIM-on. (Not a concern for fresh clusters.)
+
+### SWIM tuning by environment size
+
+The SWIM defaults (`probe 500 ms`, `12 gossip updates/datagram`) are tuned for
+membership to converge **past the de-pin threshold (`> k + k/3`) at ~100 nodes
+over a lossy bridge**. The membership-gossip *rate* (`updates × 1000/probe_ms`) is
+the knob that matters as N grows — if it is too low, membership stays sparse, the
+well-known seed stays over-represented in forwarding sets, and `seed_established`
+creeps toward N instead of staying flat.
+
+| Cluster size | SWIM settings | Notes |
+|---|---|---|
+| ≤ ~30 nodes | defaults | membership converges trivially; nothing to tune |
+| ~50–150 nodes | defaults (`probe 500`, `updates 12`) | the validated operating point (G1/G3 green) |
+| ~150–500 nodes | `swim_gossip_updates = 12–15`, `swim_probe_interval_ms = 400` | raise the gossip *rate* so membership still crosses the de-pin threshold; keep one datagram under the 512 B MTU (≈ 13 × ~25 B) |
+| flaky/lossy network | raise `swim_suspicion_timeout_ms` (e.g. 8000) and/or `swim_indirect_probes` (e.g. 4) | fewer false-positive evictions when probes are dropped |
+
+Diagnostics: `GET /stats` exposes `peers` (SWIM membership view size — should
+approach N) and `cached_connections` (live persistent writers — should stay ~k).
+A `peers` value well below N at scale means the gossip rate needs raising.
 
 ---
 
@@ -33,6 +97,15 @@ hold between them, and how to scale them safely as cluster size grows.
 These relationships must hold or the cluster will oscillate, stall, or produce
 spurious anti-entropy storms. They are not enforced by `validate()` — violating
 them is legal but pathological.
+
+> **Mode note.** Invariants #1 and #2 (startup `StateRequest` timing and the
+> staleness-eviction window) describe the **legacy TCP-ping liveness path**. Under
+> the default **SWIM** mode, liveness and eviction are owned by the UDP failure
+> detector, not the health monitor — see §"Gossip transport modes". Invariants #3–#5
+> (propagation window, TTL, writer-channel depth) and everything below apply to
+> both modes; the `max_active_connections` caps in §Scaling remain useful as a hard
+> ceiling but are no longer the primary connection-bound under SWIM (which is
+> inherently ~2k).
 
 ### 1 — Backoff must be shorter than the health-check interval (minus safety margin)
 
