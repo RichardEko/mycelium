@@ -1,9 +1,9 @@
 use crate::context::CoreCtx;
 use crate::error::GossipError;
 use crate::framing::{
-    bincode_cfg, dispatch_gossip_try_send, is_connection_closed,
+    dispatch_gossip_try_send, is_connection_closed,
     make_gossip_update, read_frame, shard_for_key, sync_entry_from, ForwardHint, FrameVersion,
-    GossipUpdate, SyncEntry, WireMessage, WireMessageV10, ANTI_ENTROPY_NONCE, DATA_TAG,
+    GossipUpdate, SyncEntry, WireMessage, ANTI_ENTROPY_NONCE, DATA_TAG,
     NONCE_OFFSET, TTL_OFFSET,
 };
 #[cfg(feature = "tls")]
@@ -12,7 +12,7 @@ use crate::signal::{parse_own_grp_key, Signal, SignalScope};
 use crate::store::{apply_and_notify, intern_key, store_hash_acc};
 use crate::node_id::NodeId;
 use crate::writer::{get_or_spawn_writer, request_state, WriterEntry};
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 use std::{
     net::SocketAddr,
     sync::Arc,
@@ -198,16 +198,16 @@ pub async fn handle_connection(
         // `hlc_seq` field in Signal. The struct layout is otherwise identical;
         // the From conversion fills hlc_seq = None (unordered delivery).
         let msg: WireMessage = if frame_version == FrameVersion::Current {
-            match bincode::serde::decode_from_slice::<WireMessage, _>(&recv_buf, bincode_cfg()) {
-                Ok((m, _)) => m,
+            match crate::codec::decode_wire(&recv_buf) {
+                Ok(m) => m,
                 Err(e) => {
                     warn!("Malformed v11 message from {}: {}", peer_addr, e);
                     continue;
                 }
             }
         } else {
-            match bincode::serde::decode_from_slice::<WireMessageV10, _>(&recv_buf, bincode_cfg()) {
-                Ok((m, _)) => WireMessage::from(m),
+            match crate::codec::decode_wire_v10(&recv_buf) {
+                Ok(m) => m,
                 Err(e) => {
                     warn!("Malformed v10 message from {}: {}", peer_addr, e);
                     continue;
@@ -290,26 +290,16 @@ pub async fn handle_connection(
                 // StateResponse to acknowledge we're alive without transferring entries.
                 let my_hash = store_hash_acc(&kv_state.hash_acc);
                 if their_hash != 0 && their_hash == my_hash {
-                    let empty = WireMessage::StateResponse { entries: vec![] };
-                    let mut fast_buf = BytesMut::new();
-                    match bincode::serde::encode_into_std_write(
-                        empty,
-                        &mut (&mut fast_buf).writer(),
-                        bincode_cfg(),
-                    ) {
-                        Ok(_) => {
-                            let data: Bytes = fast_buf.freeze();
-                            if let Some(tx) = get_or_spawn_writer(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &kv_state.dropped_frames, tls.clone()) {
-                                tokio::spawn(async move {
-                                    if tx.send(data).await.is_err() {
-                                        tracing::error!("Fast-path StateResponse writer for {} has exited", sender);
-                                    }
-                                });
+                    let data: Bytes = crate::codec::wire_to_bytes(
+                        &WireMessage::StateResponse { entries: vec![] });
+                    if let Some(tx) = get_or_spawn_writer(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &kv_state.dropped_frames, tls.clone()) {
+                        tokio::spawn(async move {
+                            if tx.send(data).await.is_err() {
+                                tracing::error!("Fast-path StateResponse writer for {} has exited", sender);
                             }
-                            last_state_sent = Some(std::time::Instant::now());
-                        }
-                        Err(e) => warn!("Fast-path StateResponse serialize failed for {}: {}", sender, e),
+                        });
                     }
+                    last_state_sent = Some(std::time::Instant::now());
                     continue;
                 }
                 // Delta sync (v8+): build a map of the sender's key→timestamp index.
@@ -348,41 +338,32 @@ pub async fn handle_connection(
                             .collect()
                     }
                 };
-                let mut buf = BytesMut::new();
-                match bincode::serde::encode_into_std_write(
-                    WireMessage::StateResponse { entries },
-                    &mut (&mut buf).writer(),
-                    bincode_cfg(),
-                ) {
-                    Err(e) => warn!("StateResponse serialize failed for {}: {}", sender, e),
-                    Ok(_) => {
-                        let data: Bytes = buf.freeze();
-                        // Guard against oversized frames before they reach the writer,
-                        // where a failed write would silently abort the anti-entropy sync.
-                        if 1 + data.len() > crate::framing::MAX_FRAME_BYTES {
-                            warn!(
-                                "StateResponse for {} is {} B (limit {} B); \
-                                 skipping anti-entropy — store has too many entries \
-                                 for a single frame",
-                                sender, data.len(), crate::framing::MAX_FRAME_BYTES,
-                            );
-                            continue;
-                        }
-                        // Use send().await (not try_send) — StateResponse is a rare,
-                        // join-time message. Dropping it causes permanent divergence
-                        // because StateRequest is only sent on first contact; there is
-                        // no automatic retry. Wrap in spawn so the connection handler
-                        // is not blocked waiting for the writer to drain.
-                        if let Some(tx) = get_or_spawn_writer(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &kv_state.dropped_frames, tls.clone()) {
-                            tokio::spawn(async move {
-                                if tx.send(data).await.is_err() {
-                                    error!("StateResponse writer for {} has exited", sender);
-                                }
-                            });
-                        }
-                        last_state_sent = Some(std::time::Instant::now());
-                    }
+                let data: Bytes = crate::codec::wire_to_bytes(
+                    &WireMessage::StateResponse { entries });
+                // Guard against oversized frames before they reach the writer,
+                // where a failed write would silently abort the anti-entropy sync.
+                if 1 + data.len() > crate::framing::MAX_FRAME_BYTES {
+                    warn!(
+                        "StateResponse for {} is {} B (limit {} B); \
+                         skipping anti-entropy — store has too many entries \
+                         for a single frame",
+                        sender, data.len(), crate::framing::MAX_FRAME_BYTES,
+                    );
+                    continue;
                 }
+                // Use send().await (not try_send) — StateResponse is a rare,
+                // join-time message. Dropping it causes permanent divergence
+                // because StateRequest is only sent on first contact; there is
+                // no automatic retry. Wrap in spawn so the connection handler
+                // is not blocked waiting for the writer to drain.
+                if let Some(tx) = get_or_spawn_writer(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &kv_state.dropped_frames, tls.clone()) {
+                    tokio::spawn(async move {
+                        if tx.send(data).await.is_err() {
+                            error!("StateResponse writer for {} has exited", sender);
+                        }
+                    });
+                }
+                last_state_sent = Some(std::time::Instant::now());
             }
 
             WireMessage::StateResponse { entries } => {
@@ -503,27 +484,19 @@ pub async fn handle_connection(
                     };
                     let shard = shard_for_key(&kind, n_shards);
                     let mut fwd_buf = BytesMut::with_capacity(recv_buf.len());
-                    match bincode::serde::encode_into_std_write(
-                        WireMessage::Signal {
-                            ttl: ttl - 1, nonce,
-                            sender: sender.clone(), scope, kind, payload, hlc_seq,
-                        },
-                        &mut (&mut fwd_buf).writer(),
-                        bincode_cfg(),
-                    ) {
-                        Ok(_) => {
-                            let fwd_data = fwd_buf.freeze();
-                            match gossip_txs[shard].try_send((fwd_data, sender.id_hash(), hint)) {
-                                Ok(()) => {}
-                                Err(TrySendError::Full(_)) => {
-                                    warn!("Gossip shard {} full, dropping signal forward from {}", shard, peer_addr);
-                                }
-                                Err(TrySendError::Closed(_)) => {
-                                    error!("Gossip shard {} dead, signal will not propagate", shard);
-                                }
-                            }
+                    crate::codec::encode_wire(&mut fwd_buf, &WireMessage::Signal {
+                        ttl: ttl - 1, nonce,
+                        sender: sender.clone(), scope, kind, payload, hlc_seq,
+                    });
+                    let fwd_data = fwd_buf.freeze();
+                    match gossip_txs[shard].try_send((fwd_data, sender.id_hash(), hint)) {
+                        Ok(()) => {}
+                        Err(TrySendError::Full(_)) => {
+                            warn!("Gossip shard {} full, dropping signal forward from {}", shard, peer_addr);
                         }
-                        Err(e) => warn!("Signal re-encode failed from {}: {}", peer_addr, e),
+                        Err(TrySendError::Closed(_)) => {
+                            error!("Gossip shard {} dead, signal will not propagate", shard);
+                        }
                     }
                 }
             }
@@ -584,26 +557,17 @@ pub async fn handle_connection(
                         // zero-copy is unsafe. Re-encode at WIRE_VERSION for forwarding.
                         let fwd_update = GossipUpdate { ttl: fwd_ttl - 1, ..update.clone() };
                         let mut fwd_buf = BytesMut::with_capacity(256);
-                        match bincode::serde::encode_into_std_write(
-                            WireMessage::Data(fwd_update),
-                            &mut (&mut fwd_buf).writer(),
-                            bincode_cfg(),
-                        ) {
-                            Ok(_) => {
-                                match gossip_txs[shard].try_send((fwd_buf.freeze(), update.sender, ForwardHint::All)) {
-                                    Ok(()) => {}
-                                    Err(TrySendError::Full(_)) => {
-                                        warn!("Gossip shard {} channel full, dropping v{} forward from {}",
-                                            shard, crate::framing::PREV_WIRE_VERSION, peer_addr);
-                                    }
-                                    Err(TrySendError::Closed(_)) => {
-                                        error!("Gossip shard {} dead, dropping v{} forward from {}",
-                                            shard, crate::framing::PREV_WIRE_VERSION, peer_addr);
-                                    }
-                                }
+                        crate::codec::encode_wire(&mut fwd_buf, &WireMessage::Data(fwd_update));
+                        match gossip_txs[shard].try_send((fwd_buf.freeze(), update.sender, ForwardHint::All)) {
+                            Ok(()) => {}
+                            Err(TrySendError::Full(_)) => {
+                                warn!("Gossip shard {} channel full, dropping v{} forward from {}",
+                                    shard, crate::framing::PREV_WIRE_VERSION, peer_addr);
                             }
-                            Err(e) => warn!("Re-encode of v{} Data frame failed: {}",
-                                crate::framing::PREV_WIRE_VERSION, e),
+                            Err(TrySendError::Closed(_)) => {
+                                error!("Gossip shard {} dead, dropping v{} forward from {}",
+                                    shard, crate::framing::PREV_WIRE_VERSION, peer_addr);
+                            }
                         }
                     }
                 }
@@ -673,21 +637,15 @@ pub async fn handle_connection(
                         signer,
                         signature,
                     };
-                    match bincode::serde::encode_into_std_write(
-                        fwd_msg, &mut (&mut fwd_buf).writer(), bincode_cfg(),
-                    ) {
-                        Ok(_) => {
-                            match gossip_txs[shard].try_send((fwd_buf.freeze(), update.sender, ForwardHint::All)) {
-                                Ok(()) => {}
-                                Err(TrySendError::Full(_)) => {
-                                    warn!("Gossip shard {} full, dropping SignedData forward from {}", shard, peer_addr);
-                                }
-                                Err(TrySendError::Closed(_)) => {
-                                    error!("Gossip shard {} dead, dropping SignedData forward from {}", shard, peer_addr);
-                                }
-                            }
+                    crate::codec::encode_wire(&mut fwd_buf, &fwd_msg);
+                    match gossip_txs[shard].try_send((fwd_buf.freeze(), update.sender, ForwardHint::All)) {
+                        Ok(()) => {}
+                        Err(TrySendError::Full(_)) => {
+                            warn!("Gossip shard {} full, dropping SignedData forward from {}", shard, peer_addr);
                         }
-                        Err(e) => warn!("SignedData re-encode failed from {}: {}", peer_addr, e),
+                        Err(TrySendError::Closed(_)) => {
+                            error!("Gossip shard {} dead, dropping SignedData forward from {}", shard, peer_addr);
+                        }
                     }
                 }
             }

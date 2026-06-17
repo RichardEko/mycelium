@@ -2,7 +2,7 @@ use crate::connection::{handle_connection, ConnContext};
 use crate::stream::GossipStream;
 use crate::tls::NodeTls;
 use crate::error::GossipError;
-use crate::framing::{bincode_cfg, ForwardHint, WireMessage};
+use crate::framing::{ForwardHint, WireMessage};
 use crate::locality::LocalityPath;
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
@@ -11,7 +11,7 @@ use crate::store::intern_pool_len;
 use crate::config::resolved_fanout;
 use crate::writer::{evict_peer_writer, get_or_spawn_writer, request_state, WriterEntry};
 use ahash::{AHashMap, AHashSet};
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::Bytes;
 use std::{
     net::SocketAddr,
     sync::{
@@ -513,7 +513,6 @@ pub(super) async fn run_health_monitor(
 
     let mut ticker = time::interval(Duration::from_secs(interval_secs));
     ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
-    let mut ping_buf: BytesMut = BytesMut::with_capacity(1024);
     // With SWIM (M5 cutover) the forwarding set starts empty and is NOT seeded with the
     // bootstrap peers: liveness + discovery ride UDP probing/gossip, so the forwarding
     // fan-out is a pure uniform-random sample of the membership — no node permanently
@@ -560,14 +559,9 @@ pub(super) async fn run_health_monitor(
                         known.swap(i, j);
                     }
                     known.truncate(ping_peer_sample_size);
-                    match bincode::serde::encode_into_std_write(
-                        WireMessage::Ping { sender: node_id.clone(), known_peers: known },
-                        &mut (&mut ping_buf).writer(),
-                        bincode_cfg(),
-                    ) {
-                        Ok(_) => Some(ping_buf.split().freeze()),
-                        Err(e) => { warn!("Ping serialize failed: {}", e); None }
-                    }
+                    Some(mycelium_core::codec::wire_to_bytes(
+                        &WireMessage::Ping { sender: node_id.clone(), known_peers: known },
+                    ))
                 };
 
                 if current_peer_set != last_peer_set {

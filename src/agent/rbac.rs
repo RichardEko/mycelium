@@ -22,9 +22,8 @@
 //! nested under `sys/identity/{node}` so they do not disturb the existing
 //! identity-key mirror that scans `sys/identity/` for 32-byte verifying keys.
 
-use crate::framing::bincode_cfg;
 use crate::node_id::NodeId;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -79,9 +78,7 @@ impl RoleClaim {
 
     /// Deterministic bytes the signature covers.
     fn signing_bytes(&self) -> Vec<u8> {
-        let mut buf = BytesMut::new();
-        let _ = bincode::serde::encode_into_std_write(self, &mut (&mut buf).writer(), bincode_cfg());
-        buf.to_vec()
+        mycelium_core::serde_fixint::to_vec(self).unwrap_or_default()
     }
 }
 
@@ -110,13 +107,11 @@ impl SignedRoleClaim {
     }
 
     pub fn encode(&self) -> Bytes {
-        let mut buf = BytesMut::new();
-        let _ = bincode::serde::encode_into_std_write(self, &mut (&mut buf).writer(), bincode_cfg());
-        buf.freeze()
+        Bytes::from(mycelium_core::serde_fixint::to_vec(self).unwrap_or_default())
     }
 
     pub fn decode(bytes: &[u8]) -> Option<Self> {
-        bincode::serde::decode_from_slice(bytes, bincode_cfg()).ok().map(|(v, _)| v)
+        mycelium_core::serde_fixint::from_slice(bytes).ok()
     }
 }
 

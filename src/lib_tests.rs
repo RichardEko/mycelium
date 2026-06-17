@@ -10,10 +10,11 @@
 use super::*;
 use crate::connection::ConnContext;
 use crate::framing::{
-    bincode_cfg, read_frame, write_frame, GossipUpdate, SyncEntry,
+    read_frame, write_frame, GossipUpdate, SyncEntry,
     WireMessage,
     N_GOSSIP_SHARDS, TTL_OFFSET,
 };
+use mycelium_core::codec::{decode_wire, wire_to_bytes};
 use crate::seen::ShardedSeen;
 use crate::store::{store_hash, KvState, StoreEntry};
 use bytes::{Bytes, BytesMut};
@@ -60,7 +61,7 @@ async fn loopback_pair() -> (TcpStream, TcpStream) {
 }
 
 async fn send_wire(writer: &mut TcpStream, msg: &WireMessage) {
-    let data = bincode::serde::encode_to_vec(msg, bincode_cfg()).unwrap();
+    let data = wire_to_bytes(msg);
     write_frame(writer, &data).await.unwrap();
 }
 
@@ -828,8 +829,7 @@ async fn test_anti_entropy_skips_when_synced() {
     .expect("timed out waiting for fast-path StateResponse")
     .expect("read_frame error");
 
-    let (msg, _): (WireMessage, _) =
-        bincode::serde::decode_from_slice(&buf, bincode_cfg()).unwrap();
+    let msg = decode_wire(&buf).unwrap();
 
     match msg {
         WireMessage::StateResponse { entries } => assert!(
@@ -2791,10 +2791,7 @@ fn mini_fuzz_decoders_survive_adversarial_bytes() {
         timestamp: crate::hlc::pack(1_700_000_000_000, 4),
         key: Arc::from("fuzz/seed"), value: Bytes::from_static(b"v"),
     };
-    let valid = bincode::serde::encode_to_vec(
-        WireMessage::Data(update),
-        bincode_cfg(),
-    ).unwrap();
+    let valid = wire_to_bytes(&WireMessage::Data(update)).to_vec();
 
     let mut rng = fastrand::Rng::with_seed(0xC0FFEE);
     let mut cases = 0u32;

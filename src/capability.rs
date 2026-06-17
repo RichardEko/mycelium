@@ -11,10 +11,9 @@
 //! determines whether it fits a niche, no coordinator assigns membership.
 
 use crate::config::GroupTopologyPolicy;
-use crate::framing::bincode_cfg;
 use crate::node_id::NodeId;
 use std::collections::BTreeMap;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::{cmp::Ordering, sync::{Arc, atomic::{AtomicBool, Ordering as AOrdering}}};
 use tokio::sync::{oneshot, Notify};
@@ -528,30 +527,30 @@ impl ReqEntry {
     }
 }
 
-// ── Encode/decode (bincode) ─────────────────────────────────────────────────
+// ── Encode/decode (fixed-int codec) ──────────────────────────────────────────
+// Byte-identical to the former bincode encoding (see `mycelium_core::serde_fixint`),
+// so KV-stored capability bytes interop across the M11 cutover with no migration.
 
-macro_rules! impl_bincode_codec {
+macro_rules! impl_fixint_codec {
     ($t:ty) => {
         impl $t {
             #[allow(dead_code)] // some types are encoded only from external callers
             pub fn encode(&self) -> Bytes {
-                let mut buf = BytesMut::new();
-                let _ = bincode::serde::encode_into_std_write(self, &mut (&mut buf).writer(), bincode_cfg());
-                buf.freeze()
+                Bytes::from(mycelium_core::serde_fixint::to_vec(self).unwrap_or_default())
             }
             #[allow(dead_code)]
             pub fn decode(bytes: &[u8]) -> Option<Self> {
-                bincode::serde::decode_from_slice(bytes, bincode_cfg()).ok().map(|(v, _)| v)
+                mycelium_core::serde_fixint::from_slice(bytes).ok()
             }
         }
     };
 }
 
-impl_bincode_codec!(Capability);
-impl_bincode_codec!(CapFilter);
-impl_bincode_codec!(CapabilityGroupDef);
-impl_bincode_codec!(CapEntry);
-impl_bincode_codec!(ReqEntry);
+impl_fixint_codec!(Capability);
+impl_fixint_codec!(CapFilter);
+impl_fixint_codec!(CapabilityGroupDef);
+impl_fixint_codec!(CapEntry);
+impl_fixint_codec!(ReqEntry);
 
 #[cfg(test)]
 mod tests {

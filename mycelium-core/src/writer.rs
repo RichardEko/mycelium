@@ -1,9 +1,9 @@
-use crate::framing::{bincode_cfg, write_frame, WireMessage};
+use crate::framing::{write_frame, WireMessage};
 use crate::node_id::NodeId;
 use crate::store::store_hash_acc;
 use crate::stream::GossipStream;
 use crate::tls::NodeTls;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::Bytes;
 use std::{
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -295,16 +295,9 @@ pub fn request_state(
     tls: Option<Arc<NodeTls>>,
 ) {
     let hash = store_hash_acc(hash_acc);
-    let mut buf = BytesMut::with_capacity(64);
-    if let Err(e) = bincode::serde::encode_into_std_write(
-        WireMessage::StateRequest { sender: sender.clone(), store_hash: hash, key_timestamps },
-        &mut (&mut buf).writer(),
-        bincode_cfg(),
-    ) {
-        warn!("Failed to encode StateRequest to {}: {}", peer, e);
-        return;
-    }
-    let data: Bytes = buf.freeze();
+    let data: Bytes = crate::codec::wire_to_bytes(
+        &WireMessage::StateRequest { sender: sender.clone(), store_hash: hash, key_timestamps },
+    );
     let Some(tx) = get_or_spawn_writer(peer, peer_writers, writer_depth, backoff, idle_timeout, shutdown_tx, dropped_frames, tls) else { return; };
     if tx.try_send(data).is_err() {
         warn!("StateRequest writer for {}: channel full or closed; state sync skipped", peer);

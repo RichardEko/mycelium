@@ -123,9 +123,8 @@ pub(super) fn suggest_leader_ctx(
     {
         let trust_prefix = format!("{}{}/", crate::consensus::consensus_ns::TRUST, group);
         for (_, bytes) in kv_scan_prefix(ctx, &trust_prefix) {
-            let Ok((peers, _)) = bincode::serde::decode_from_slice::<Vec<crate::node_id::NodeId>, _>(
-                &bytes, crate::framing::bincode_cfg()
-            ) else { continue };
+            let Ok(peers) = mycelium_core::serde_fixint::from_slice::<Vec<crate::node_id::NodeId>>(&bytes)
+                else { continue };
             for p in peers {
                 *trust_counts.entry(p.id_hash()).or_insert(0) += 1;
             }

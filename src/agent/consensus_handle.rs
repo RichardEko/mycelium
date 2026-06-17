@@ -14,7 +14,7 @@ use crate::consensus::{
 use crate::node_id::NodeId;
 use crate::signal::SignalScope;
 use ahash::AHashSet;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::Bytes;
 use std::{
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -31,7 +31,6 @@ use super::opacity::{
     count_opaque_members_ctx, count_opaque_system_ctx, effective_opacity_ctx,
     peer_load_ctx, count_opaque_members_in_kv, count_opaque_all_in_kv,
 };
-use crate::framing::bincode_cfg;
 
 // Re-export public types used by callers.
 pub use super::overlay_consistent::{ConsistencyError, LockGuard};
@@ -91,11 +90,8 @@ impl ConsensusHandle {
     /// this stores intent for future slice-aware quorum extensions.
     pub fn declare_trust(&self, group: &str, trusted_peers: &[NodeId]) {
         let key = format!("{}{}/{}", consensus_ns::TRUST, group, self.ctx.node_id);
-        let mut buf = BytesMut::new();
-        if bincode::serde::encode_into_std_write(
-            trusted_peers, &mut (&mut buf).writer(), bincode_cfg(),
-        ).is_ok() {
-            let _ = kv_set(&self.ctx, Arc::from(key.as_str()), buf.freeze());
+        if let Ok(encoded) = mycelium_core::serde_fixint::to_vec(trusted_peers) {
+            let _ = kv_set(&self.ctx, Arc::from(key.as_str()), Bytes::from(encoded));
         }
         let member_prefix = crate::signal::grp_prefix(group);
         let members: AHashSet<String> = kv_scan_prefix(&self.ctx, &member_prefix)
@@ -121,9 +117,7 @@ impl ConsensusHandle {
             .filter_map(|(key, bytes)| {
                 let node_str = key.strip_prefix(&prefix)?;
                 let node_id: NodeId = node_str.parse().ok()?;
-                let (peers, _) = bincode::serde::decode_from_slice::<Vec<NodeId>, _>(
-                    &bytes, bincode_cfg(),
-                ).ok()?;
+                let peers = mycelium_core::serde_fixint::from_slice::<Vec<NodeId>>(&bytes).ok()?;
                 Some((node_id, peers))
             })
             .collect()

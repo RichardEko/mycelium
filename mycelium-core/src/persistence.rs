@@ -9,10 +9,10 @@
 //! `store.rs` and `framing.rs` are not modified — no circular imports.
 
 use crate::config::SyncMode;
-use crate::framing::{bincode_cfg, SyncEntry};
+use crate::framing::SyncEntry;
 use crate::node_id::NodeId;
+use crate::serde_fixint as codec;
 use crate::store::{apply_and_notify, KvState};
-use bincode::serde as bcode;
 use bytes::{BufMut, BytesMut};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -174,8 +174,8 @@ where
                         Vec::new()
                     }
                 };
-                match bcode::decode_from_slice::<KvSnapshot, _>(&bytes, bincode_cfg()) {
-                    Ok((snap, _)) => {
+                match codec::from_slice::<KvSnapshot>(&bytes) {
+                    Ok(snap) => {
                         let hlc = snap.snapshot_hlc;
                         for entry in snap.entries {
                             if entry.timestamp > max_ts { max_ts = entry.timestamp; }
@@ -221,8 +221,8 @@ where
                         },
                         None => record_bytes.to_vec(),
                     };
-                    match bcode::decode_from_slice::<SyncEntry, _>(&decrypted, bincode_cfg()) {
-                        Ok((entry, _)) if entry.timestamp > snapshot_hlc => {
+                    match codec::from_slice::<SyncEntry>(&decrypted) {
+                        Ok(entry) if entry.timestamp > snapshot_hlc => {
                             if entry.timestamp > max_ts { max_ts = entry.timestamp; }
                             apply_fn(entry);
                         }
@@ -370,8 +370,7 @@ async fn wal_append(
 ) -> io::Result<()> {
     // Encode the record, then optionally encrypt the payload. The length prefix
     // frames whatever lands on disk (ciphertext when a cipher is configured).
-    let mut payload: Vec<u8> = Vec::with_capacity(256);
-    bcode::encode_into_std_write(entry, &mut payload, bincode_cfg())
+    let mut payload: Vec<u8> = codec::to_vec(entry)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     if let Some(c) = cipher {
         payload = c.encrypt(&payload);
@@ -440,8 +439,7 @@ async fn do_snapshot(
     let snap_path = dir.join("snapshot.bin");
     let snap = KvSnapshot { snapshot_hlc, entries };
     let encoded = {
-        let mut buf = Vec::new();
-        bcode::encode_into_std_write(&snap, &mut buf, bincode_cfg())
+        let buf = codec::to_vec(&snap)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         match cipher {
             Some(c) => c.encrypt(&buf),

@@ -80,9 +80,11 @@ pub const PREV_WIRE_VERSION: u8 = 10;
 /// whether the zero-copy Data forward path is safe (current version only).
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum FrameVersion {
-    /// Encoded at `WIRE_VERSION` — use `bincode_cfg()` and zero-copy Data forwarding.
+    /// Encoded at `WIRE_VERSION` — decode via `codec::decode_wire` and use the
+    /// zero-copy Data forwarding path.
     Current,
-    /// Encoded at `PREV_WIRE_VERSION` — use `bincode_cfg_prev()` and full re-encode on forward.
+    /// Encoded at `PREV_WIRE_VERSION` — decode via `codec::decode_wire_v10` and
+    /// full re-encode on forward.
     Previous,
 }
 /// Fallback shard count used in unit tests that build `ConnContext` directly.
@@ -214,9 +216,13 @@ pub fn shard_for_key(key: &str, n_shards: usize) -> usize {
     shard_hasher().hash_one(key) as usize & (n_shards - 1)
 }
 
-/// Returns the bincode configuration used for all wire encoding/decoding.
-/// Fixed-width integer encoding is faster than varint for u64/u8 fields and
-/// produces a more predictable wire size — no branching on the encode/decode hot path.
+/// The bincode configuration the wire format was historically encoded with.
+///
+/// As of WS-B M11 the live encode/decode path is the hand-rolled
+/// [`crate::codec`] / [`crate::serde_fixint`] codec; `bincode` is retained
+/// **only as a test-time oracle** (a dev-dependency) to prove the new codec is
+/// byte-identical to the old format. Hence this is `#[cfg(test)]`.
+#[cfg(test)]
 #[inline(always)]
 pub fn bincode_cfg() -> impl bincode::config::Config {
     // `.with_limit` caps how many bytes a decode is allowed to consume/allocate.
@@ -254,11 +260,8 @@ pub fn dispatch_gossip_try_send(
     dropped:     &AtomicU64,
 ) -> bool {
     let shard = shard_for_key(wire_msg_key(&msg), gossip_txs.len());
-    let mut buf = BytesMut::with_capacity(256);
-    if bincode::serde::encode_into_std_write(msg, &mut (&mut buf).writer(), bincode_cfg()).is_err() {
-        return false;
-    }
-    match gossip_txs[shard].try_send((buf.freeze(), sender_hash, hint)) {
+    let buf = crate::codec::wire_to_bytes(&msg);
+    match gossip_txs[shard].try_send((buf, sender_hash, hint)) {
         Ok(())                     => true,
         Err(TrySendError::Full(_)) => {
             let n = dropped.fetch_add(1, Ordering::Relaxed) + 1;
@@ -279,11 +282,8 @@ pub async fn dispatch_gossip_send(
     hint:        ForwardHint,
 ) -> bool {
     let shard = shard_for_key(wire_msg_key(&msg), gossip_txs.len());
-    let mut buf = BytesMut::with_capacity(256);
-    if bincode::serde::encode_into_std_write(msg, &mut (&mut buf).writer(), bincode_cfg()).is_err() {
-        return false;
-    }
-    gossip_txs[shard].send((buf.freeze(), sender_hash, hint)).await.is_ok()
+    let buf = crate::codec::wire_to_bytes(&msg);
+    gossip_txs[shard].send((buf, sender_hash, hint)).await.is_ok()
 }
 
 /// Wire envelope for `PREV_WIRE_VERSION` (v7) frames.
@@ -503,10 +503,7 @@ pub fn make_gossip_update(
 /// through the entire propagation path.
 #[cfg_attr(not(feature = "tls"), allow(dead_code))]
 pub fn canonical_sign_bytes(u: &GossipUpdate) -> Vec<u8> {
-    bincode::serde::encode_to_vec(
-        (u.nonce, u.sender, u.is_tombstone, u.timestamp, u.key.as_ref(), u.value.as_ref()),
-        bincode_cfg(),
-    ).unwrap_or_default()
+    crate::codec::canonical_update_bytes(u)
 }
 
 /// Wraps `update` in the appropriate `WireMessage` variant for local-origination dispatch.

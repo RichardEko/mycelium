@@ -199,6 +199,21 @@ fn get_update(r: &mut Reader) -> Result<GossipUpdate, CodecError> {
     })
 }
 
+/// Canonical signed-bytes encoding of a `GossipUpdate`'s hop-invariant fields, byte-exact
+/// with the old `bincode` tuple encoding `(nonce, sender, is_tombstone, timestamp, key, value)`
+/// under fixed-int. TTL is excluded (it is decremented on each forward), so the originator's
+/// Ed25519 signature stays valid through every hop. See `framing::canonical_sign_bytes`.
+pub fn canonical_update_bytes(u: &GossipUpdate) -> Vec<u8> {
+    let mut b = BytesMut::with_capacity(48 + u.key.len() + u.value.len());
+    put_u64(&mut b, u.nonce);
+    put_u64(&mut b, u.sender);
+    put_bool(&mut b, u.is_tombstone);
+    put_u64(&mut b, u.timestamp);
+    put_str(&mut b, &u.key);
+    put_bytes(&mut b, &u.value);
+    b.to_vec()
+}
+
 fn put_sync_entry(b: &mut BytesMut, e: &SyncEntry) {
     put_str(b, &e.key);
     put_bytes(b, &e.value);
@@ -261,6 +276,15 @@ pub fn encode_wire(b: &mut BytesMut, msg: &WireMessage) {
     }
 }
 
+/// Encode a `WireMessage` to an owned `Bytes` — convenience for call sites that
+/// previously did `bincode::encode_into_std_write(msg, buf, cfg)?; buf.freeze()`.
+/// Infallible (the codec cannot fail to serialize an in-memory message).
+pub fn wire_to_bytes(msg: &WireMessage) -> Bytes {
+    let mut b = BytesMut::with_capacity(256);
+    encode_wire(&mut b, msg);
+    b.freeze()
+}
+
 /// Decode one `WireMessage` from `buf`. Rejects trailing bytes (a well-formed frame
 /// is consumed exactly).
 pub fn decode_wire(buf: &[u8]) -> Result<WireMessage, CodecError> {
@@ -321,10 +345,69 @@ pub fn decode_wire(buf: &[u8]) -> Result<WireMessage, CodecError> {
     Ok(msg)
 }
 
+/// Decode one `PREV_WIRE_VERSION` (v10) `WireMessage`. The v10 layout is identical to
+/// the current one except `Signal` has no trailing `hlc_seq` field; it is filled with
+/// `None` (the "unordered delivery" sentinel) on upgrade — byte-exact with the old
+/// `WireMessageV10` → `WireMessage` bincode path. All other variants are unchanged.
+pub fn decode_wire_v10(buf: &[u8]) -> Result<WireMessage, CodecError> {
+    let mut r = Reader::new(buf);
+    let msg = match r.u32()? {
+        0 => WireMessage::Data(get_update(&mut r)?),
+        1 => {
+            let sender = get_node_id(&mut r)?;
+            let n = r.len()?;
+            let mut known_peers = Vec::with_capacity(r.cap_hint(n, 8));
+            for _ in 0..n { known_peers.push(get_node_id(&mut r)?); }
+            WireMessage::Ping { sender, known_peers }
+        }
+        2 => {
+            let sender = get_node_id(&mut r)?;
+            let store_hash = r.u64()?;
+            let n = r.len()?;
+            let mut key_timestamps = Vec::with_capacity(r.cap_hint(n, 16));
+            for _ in 0..n {
+                let k = r.arc_str()?;
+                let ts = r.u64()?;
+                key_timestamps.push((k, ts));
+            }
+            WireMessage::StateRequest { sender, store_hash, key_timestamps }
+        }
+        3 => {
+            let n = r.len()?;
+            let mut entries = Vec::with_capacity(r.cap_hint(n, 18));
+            for _ in 0..n { entries.push(get_sync_entry(&mut r)?); }
+            WireMessage::StateResponse { entries }
+        }
+        4 => {
+            // v10 Signal: no trailing hlc_seq byte.
+            let ttl = r.u8()?;
+            let nonce = r.u64()?;
+            let sender = get_node_id(&mut r)?;
+            let scope = get_scope(&mut r)?;
+            let kind = r.arc_str()?;
+            let payload = r.bytes()?;
+            WireMessage::Signal { ttl, nonce, sender, scope, kind, payload, hlc_seq: None }
+        }
+        5 => {
+            let update = get_update(&mut r)?;
+            let signer = r.u64()?;
+            let lo: [u8; 32] = r.take(32)?.try_into().unwrap();
+            let hi: [u8; 32] = r.take(32)?.try_into().unwrap();
+            WireMessage::SignedData { update, signer, signature: (lo, hi) }
+        }
+        _ => return Err(CodecError("invalid WireMessage tag")),
+    };
+    if !r.is_empty() {
+        return Err(CodecError("trailing bytes after WireMessage"));
+    }
+    Ok(msg)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::framing::bincode_cfg;
+    use crate::framing::WireMessageV10;
 
     fn nid(p: u16) -> NodeId { NodeId::new("127.0.0.1", p).unwrap() }
 
@@ -392,6 +475,42 @@ mod tests {
     }
 
     #[test]
+    fn decode_wire_v10_matches_bincode_shim() {
+        // A v10 Signal frame (no hlc_seq) must decode to hlc_seq=None, byte-exact with
+        // the old WireMessageV10 → WireMessage bincode path.
+        let v10 = WireMessageV10::Signal {
+            ttl: 5, nonce: 0xDEAD_BEEF, sender: nid(7000),
+            scope: SignalScope::Group(Arc::from("g")),
+            kind: Arc::from("k"), payload: Bytes::from_static(b"body"),
+        };
+        let bytes = bincode::serde::encode_to_vec(&v10, bincode_cfg()).unwrap();
+        let via_codec = decode_wire_v10(&bytes).expect("v10 codec decode");
+        let (via_bincode, _) =
+            bincode::serde::decode_from_slice::<WireMessageV10, _>(&bytes, bincode_cfg()).unwrap();
+        let via_bincode: WireMessage = via_bincode.into();
+        let mut a = BytesMut::new();
+        let mut b = BytesMut::new();
+        encode_wire(&mut a, &via_codec);
+        encode_wire(&mut b, &via_bincode);
+        assert_eq!(a, b, "v10 codec decode must match bincode shim");
+        match via_codec {
+            WireMessage::Signal { hlc_seq, .. } => assert_eq!(hlc_seq, None),
+            other => panic!("expected Signal, got {other:?}"),
+        }
+        // A non-Signal v10 variant (Data) decodes identically through both paths.
+        let v10d = WireMessageV10::Data(GossipUpdate {
+            nonce: 1, sender: 2, ttl: 3, is_tombstone: false,
+            timestamp: 4, key: Arc::from("k"), value: Bytes::from_static(b"v"),
+        });
+        let dbytes = bincode::serde::encode_to_vec(&v10d, bincode_cfg()).unwrap();
+        let mut x = BytesMut::new();
+        let mut y = BytesMut::new();
+        encode_wire(&mut x, &decode_wire(&dbytes).unwrap());
+        encode_wire(&mut y, &decode_wire_v10(&dbytes).unwrap());
+        assert_eq!(x, y, "Data layout is identical across v10/v11");
+    }
+
+    #[test]
     fn decode_rejects_truncation_and_trailing_garbage() {
         let m = WireMessage::Ping { sender: nid(7000), known_peers: vec![nid(7001)] };
         let mut full = BytesMut::new();
@@ -404,6 +523,21 @@ mod tests {
         let mut extra = full.clone();
         extra.put_u8(0xFF);
         assert!(decode_wire(&extra).is_err(), "trailing byte must error");
+    }
+
+    #[test]
+    fn canonical_update_bytes_matches_bincode_tuple() {
+        let u = GossipUpdate {
+            nonce: 0xAABB_CCDD_1122_3344, sender: 0x99, ttl: 7, is_tombstone: true,
+            timestamp: 0x0102_0304_0506_0708, key: Arc::from("sys/identity/x"),
+            value: Bytes::from_static(b"signed payload bytes"),
+        };
+        let mine = canonical_update_bytes(&u);
+        let theirs = bincode::serde::encode_to_vec(
+            (u.nonce, u.sender, u.is_tombstone, u.timestamp, u.key.as_ref(), u.value.as_ref()),
+            bincode_cfg(),
+        ).unwrap();
+        assert_eq!(mine, theirs, "canonical signed bytes must match bincode tuple");
     }
 
     #[test]
