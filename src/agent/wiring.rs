@@ -498,7 +498,7 @@ mod tests {
         let trusted_b = vec![node_b.clone()];
         for port in [7020u16, 7021, 7022, 7023] {
             let voter = nid(port);
-            let encoded = bincode::serde::encode_to_vec(&trusted_b, crate::framing::bincode_cfg()).unwrap();
+            let encoded = mycelium_core::serde_fixint::to_vec(&trusted_b).unwrap();
             let _ = agent.kv().set(format!("{}{}/{}", consensus_ns::TRUST, "workers", voter), encoded);
         }
 

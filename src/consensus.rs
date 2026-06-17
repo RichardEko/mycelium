@@ -29,7 +29,7 @@
 use crate::agent::{emit_signal, emit_signal_async, make_gossip_update, TaskCtx};
 use crate::config::{GroupTopologyPolicy, TopologyEnforcement};
 use crate::framing::{
-    bincode_cfg, dispatch_gossip_send, dispatch_gossip_try_send, make_kv_wire_msg,
+    dispatch_gossip_send, dispatch_gossip_try_send, make_kv_wire_msg,
     sync_entry_from, ForwardHint, GossipUpdate,
 };
 use crate::locality::LocalityPath;
@@ -37,7 +37,7 @@ use crate::node_id::NodeId;
 use crate::signal::{grp_prefix, signal_kind, Signal, SignalScope};
 use crate::store::{apply_and_notify, scan_kv_prefix};
 use ahash::{AHashMap, AHashSet};
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::Bytes;
 use std::{
     sync::Arc,
     time::Duration,
@@ -586,11 +586,8 @@ impl ConsensusEngine {
                 signer:     self.task_ctx.node_id.clone(),
                 signature:  sig.to_vec(),
             };
-            let mut buf = BytesMut::new();
-            if bincode::serde::encode_into_std_write(
-                &signed, &mut (&mut buf).writer(), bincode_cfg(),
-            ).is_ok() {
-                return buf.freeze();
+            if let Ok(encoded) = mycelium_core::serde_fixint::to_vec(&signed) {
+                return Bytes::from(encoded);
             }
         }
         bytes
@@ -601,8 +598,8 @@ impl ConsensusEngine {
     fn decode_verify(&self, payload: &Bytes) -> Option<ConsensusMsg> {
         #[cfg(feature = "tls")]
         if self.task_ctx.tls.get().is_some() {
-            let (signed, _): (SignedConsensusMsg, _) =
-                bincode::serde::decode_from_slice(payload, bincode_cfg()).ok()?;
+            let signed: SignedConsensusMsg =
+                mycelium_core::serde_fixint::from_slice(payload).ok()?;
             // Look up the sender's verifying key SET (WS5 retained keys): the
             // in-memory cache first, else parse the `sys/identity/` KV entry
             // (32 = one key, 64 = current‖previous). Verify against any so a
@@ -668,8 +665,8 @@ impl ConsensusEngine {
             if let SignalScope::Group(ref group_name) = scope {
                 let key = format!("{}{}/{}", consensus_ns::TRUST, group_name, self.task_ctx.node_id);
                 self.get(&key).and_then(|b| {
-                    bincode::serde::decode_from_slice::<Vec<NodeId>, _>(&b, bincode_cfg()).ok()
-                }).map(|(peers, _)| peers.iter().map(|p| p.id_hash()).collect())
+                    mycelium_core::serde_fixint::from_slice::<Vec<NodeId>>(&b).ok()
+                }).map(|peers| peers.iter().map(|p| p.id_hash()).collect())
             } else {
                 None
             }
@@ -1200,15 +1197,11 @@ enum BallotOutcome {
 // ── Wire encoding ─────────────────────────────────────────────────────────────
 
 pub(crate) fn encode_consensus_msg(msg: &ConsensusMsg) -> Bytes {
-    let mut buf = BytesMut::new();
-    let _ = bincode::serde::encode_into_std_write(msg, &mut (&mut buf).writer(), bincode_cfg());
-    buf.freeze()
+    Bytes::from(mycelium_core::serde_fixint::to_vec(msg).unwrap_or_default())
 }
 
 pub(crate) fn decode_consensus_msg(bytes: &Bytes) -> Option<ConsensusMsg> {
-    bincode::serde::decode_from_slice(bytes, bincode_cfg())
-        .ok()
-        .map(|(v, _)| v)
+    mycelium_core::serde_fixint::from_slice(bytes).ok()
 }
 
 pub(crate) fn encode_ballot(ballot: u64) -> Bytes {

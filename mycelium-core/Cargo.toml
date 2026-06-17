@@ -33,7 +33,6 @@ fastrand = "2"
 papaya = "0.1"
 serde = { version = "1.0", features = ["derive", "rc"] }
 ahash = "0.8"
-bincode = { version = "2", features = ["serde"] }
 bytes = { version = "1", features = ["serde"] }
 toml = "0.7"
 # Schema-registry JSON validation (SchemaHandle, v2 M3).
@@ -59,6 +58,10 @@ metrics = { version = "0.24", optional = true }
 
 [dev-dependencies]
 proptest = "1"
+# Test-only oracle: proves the in-tree `serde_fixint` / `codec` modules are
+# byte-identical to the format they replaced. Not in the shipped dependency tree
+# (retires RUSTSEC-2025-0141 from production builds — WS-B M11).
+bincode = { version = "2", features = ["serde"] }
 
 [lints.clippy]
 field_reassign_with_default = "allow"

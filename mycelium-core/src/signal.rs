@@ -14,11 +14,10 @@
 //! All signal APIs are exposed directly on `GossipAgent` — there is no
 //! separate Layer 2 wrapper type.
 
-use crate::framing::bincode_cfg;
 use crate::node_id::NodeId;
 use crate::store::StoreEntry;
 use ahash::AHashSet;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::Bytes;
 use papaya::HashMap as PapayaMap;
 use parking_lot::Mutex;
 use std::collections::VecDeque;
@@ -683,15 +682,11 @@ pub struct LoadState {
 }
 
 pub fn encode_load_state(s: &LoadState) -> Bytes {
-    let mut buf = BytesMut::new();
-    let _ = bincode::serde::encode_into_std_write(s, &mut (&mut buf).writer(), bincode_cfg());
-    buf.freeze()
+    Bytes::from(crate::serde_fixint::to_vec(s).unwrap_or_default())
 }
 
 pub fn decode_load_state(b: &Bytes) -> Option<LoadState> {
-    bincode::serde::decode_from_slice(b, bincode_cfg())
-        .ok()
-        .map(|(v, _)| v)
+    crate::serde_fixint::from_slice(b).ok()
 }
 
 /// Cancels the associated `advertise` task on drop.

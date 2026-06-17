@@ -248,15 +248,13 @@ pub use signal::{
 /// breakage.
 #[cfg(feature = "fuzz-internals")]
 pub mod fuzz_internals {
-    use bincode::serde::decode_from_slice;
     use bytes::Bytes;
 
-    /// Attempts to decode `data` as a `WireMessage` using the same bincode
-    /// configuration as the live decoder. Returns whether decoding succeeded;
-    /// the actual message is discarded.
+    /// Attempts to decode `data` as a `WireMessage` using the live hand-rolled
+    /// codec (`mycelium_core::codec::decode_wire`). Returns whether decoding
+    /// succeeded; the actual message is discarded.
     pub fn wire_message_decode(data: &[u8]) -> bool {
-        let cfg = crate::framing::bincode_cfg();
-        decode_from_slice::<crate::framing::WireMessage, _>(data, cfg).is_ok()
+        mycelium_core::codec::decode_wire(data).is_ok()
     }
 
     pub fn capability_decode(bytes: &[u8]) -> bool {

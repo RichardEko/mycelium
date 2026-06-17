@@ -19,9 +19,8 @@
 //!
 //! Gated behind the `compliance` feature (implies `tls`).
 
-use crate::framing::bincode_cfg;
 use crate::node_id::NodeId;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -112,9 +111,7 @@ impl AuditRecord {
     /// record, so the hash binds every field including `prev_hash` (the chain
     /// link) and `seq` (the position).
     fn canonical(&self) -> Vec<u8> {
-        let mut buf = BytesMut::new();
-        let _ = bincode::serde::encode_into_std_write(self, &mut (&mut buf).writer(), bincode_cfg());
-        buf.to_vec()
+        mycelium_core::serde_fixint::to_vec(self).unwrap_or_default()
     }
 
     /// Stable SHA-256 content hash of this record — the citable per-record
@@ -157,13 +154,11 @@ impl SignedAuditRecord {
     }
 
     pub fn encode(&self) -> Bytes {
-        let mut buf = BytesMut::new();
-        let _ = bincode::serde::encode_into_std_write(self, &mut (&mut buf).writer(), bincode_cfg());
-        buf.freeze()
+        Bytes::from(mycelium_core::serde_fixint::to_vec(self).unwrap_or_default())
     }
 
     pub fn decode(bytes: &[u8]) -> Option<Self> {
-        bincode::serde::decode_from_slice(bytes, bincode_cfg()).ok().map(|(v, _)| v)
+        mycelium_core::serde_fixint::from_slice(bytes).ok()
     }
 }
 

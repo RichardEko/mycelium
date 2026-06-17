@@ -380,6 +380,40 @@ pub fn store_hash(store: &papaya::HashMap<Arc<str>, StoreEntry>) -> u64 {
     combined
 }
 
+/// Number of anti-entropy Merkle buckets. Power of two so the bucket index is a
+/// mask of the key hash. 256 × `u64` = a 2 KiB digest carried in `StateRequest`
+/// (wire v12), independent of the entry count — replacing the v11 full
+/// key→timestamp index (`O(keys)`) with an `O(buckets)` request and an
+/// `O(divergent buckets)` response.
+pub const ANTI_ENTROPY_BUCKETS: usize = 256;
+
+/// Per-bucket XOR digest of the **live** store (tombstones excluded, matching
+/// [`store_hash`]). Key `k` lands in bucket `hash(k) & (BUCKETS-1)` and contributes
+/// `hash(k) ^ timestamp` — the same per-entry term `store_hash` folds, so
+/// `digest.iter().fold(0, ^)) == store_hash_acc`. XOR makes the fold
+/// order-independent over the lock-free store; two converged stores produce
+/// identical digests and a single differing key flips exactly one bucket.
+pub fn store_bucket_hashes(kv: &KvState) -> Vec<u64> {
+    let rs = hash_seed();
+    let mut buckets = vec![0u64; ANTI_ENTROPY_BUCKETS];
+    let guard = kv.store.pin();
+    for (k, v) in guard.iter() {
+        if v.data.is_some() {
+            let h = rs.hash_one(k.as_bytes());
+            buckets[(h as usize) & (ANTI_ENTROPY_BUCKETS - 1)] ^= h ^ v.timestamp;
+        }
+    }
+    buckets
+}
+
+/// Bucket index for `key`, consistent with [`store_bucket_hashes`]. Used by the
+/// anti-entropy responder to select entries from buckets the requester reports
+/// as divergent.
+#[inline]
+pub fn bucket_for_key(key: &str) -> usize {
+    (hash_seed().hash_one(key.as_bytes()) as usize) & (ANTI_ENTROPY_BUCKETS - 1)
+}
+
 /// LWW comparison: does the incoming write replace the current entry?
 ///
 /// - Different timestamps: strictly newer wins (unchanged).
@@ -946,6 +980,58 @@ mod tests {
         );
         assert!(single > 100_000.0, "single-thread throughput {single:.0}/s below floor");
         assert!(contended > 100_000.0, "contended throughput {contended:.0}/s below floor");
+    }
+
+    /// The Merkle digest (v12 anti-entropy) must (a) fold via XOR to the same value
+    /// as the incremental `store_hash` accumulator, and (b) localise a single-key
+    /// divergence to exactly that key's bucket — the property that makes the
+    /// responder's delta `O(divergence)`.
+    #[test]
+    fn bucket_digest_folds_to_store_hash_and_localises_divergence() {
+        let mk = |skip_ts: Option<u64>| {
+            let kv = KvState::new(0);
+            for i in 0..500u64 {
+                let ts = match skip_ts {
+                    Some(j) if i == j => 9_999,
+                    _ => 100 + i,
+                };
+                apply_and_notify(&kv, &GossipUpdate {
+                    sender: 1, key: Arc::from(format!("k/{i}").as_str()),
+                    value: Bytes::from_static(b"v"), timestamp: ts,
+                    nonce: i + 1, ttl: 1, is_tombstone: false,
+                });
+            }
+            kv
+        };
+        let kv = mk(None);
+        let digest = store_bucket_hashes(&kv);
+        assert_eq!(digest.len(), ANTI_ENTROPY_BUCKETS);
+        let folded = digest.iter().fold(0u64, |a, b| a ^ b);
+        assert_eq!(folded, store_hash_acc(&kv.hash_acc),
+            "bucket digest must XOR-fold to the store hash accumulator");
+
+        // Identical store except key k/250 is newer ⇒ exactly its bucket differs.
+        let kv2 = mk(Some(250));
+        let digest2 = store_bucket_hashes(&kv2);
+        let differing: Vec<usize> =
+            (0..ANTI_ENTROPY_BUCKETS).filter(|&b| digest[b] != digest2[b]).collect();
+        assert_eq!(differing, vec![bucket_for_key("k/250")],
+            "exactly the divergent key's bucket must differ");
+    }
+
+    /// Tombstones are excluded from the digest (same convention as `store_hash`),
+    /// so a store holding only tombstones digests to all-zero.
+    #[test]
+    fn bucket_digest_excludes_tombstones() {
+        let kv = KvState::new(0);
+        apply_and_notify(&kv, &GossipUpdate {
+            sender: 1, key: Arc::from("a"), value: Bytes::from_static(b"v"),
+            timestamp: 100, nonce: 1, ttl: 1, is_tombstone: false });
+        apply_and_notify(&kv, &GossipUpdate {
+            sender: 1, key: Arc::from("a"), value: Bytes::new(),
+            timestamp: 200, nonce: 2, ttl: 1, is_tombstone: true });
+        assert!(store_bucket_hashes(&kv).iter().all(|&b| b == 0),
+            "a tombstone-only store yields an all-zero digest");
     }
 
     // `concurrent_quorum_trackers_coexist_and_remove_only_self` moved to the upper

@@ -19,7 +19,6 @@
 //! used to provide — so the existing staleness-based eviction in the health monitor works
 //! unchanged. The TCP heartbeat ping is removed at the Stage 4 cutover.
 
-use crate::framing::bincode_cfg;
 use crate::node_id::NodeId;
 use crate::swim_membership::{ApplyEffect, MemberUpdate, SwimMembership};
 use crate::writer::{evict_peer_writer, WriterEntry};
@@ -67,7 +66,7 @@ impl SwimDatagram {
     pub fn encode(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(48);
         buf.push(SWIM_DATAGRAM_VERSION);
-        match bincode::serde::encode_to_vec(self, bincode_cfg()) {
+        match crate::serde_fixint::to_vec(self) {
             Ok(body) => buf.extend_from_slice(&body),
             Err(e) => warn!("SWIM datagram encode failed: {e}"),
         }
@@ -81,9 +80,7 @@ impl SwimDatagram {
         if ver != SWIM_DATAGRAM_VERSION {
             return None;
         }
-        bincode::serde::decode_from_slice(body, bincode_cfg())
-            .ok()
-            .map(|(d, _)| d)
+        crate::serde_fixint::from_slice(body).ok()
     }
 }
 

@@ -2,7 +2,7 @@ use crate::connection::{handle_connection, ConnContext};
 use crate::stream::GossipStream;
 use crate::tls::NodeTls;
 use crate::error::GossipError;
-use crate::framing::{bincode_cfg, ForwardHint, WireMessage};
+use crate::framing::{ForwardHint, WireMessage};
 use crate::locality::LocalityPath;
 use crate::node_id::NodeId;
 use crate::seen::ShardedSeen;
@@ -11,7 +11,7 @@ use crate::store::intern_pool_len;
 use crate::config::resolved_fanout;
 use crate::writer::{evict_peer_writer, get_or_spawn_writer, request_state, WriterEntry};
 use ahash::{AHashMap, AHashSet};
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::Bytes;
 use std::{
     net::SocketAddr,
     sync::{
@@ -471,6 +471,7 @@ pub(super) async fn run_health_monitor(
     peer_list_tx:          watch::Sender<Arc<[NodeId]>>,
     shutdown_tx:           Arc<watch::Sender<bool>>,
     hlc:                   Arc<crate::hlc::Hlc>,
+    kv_state:              Arc<crate::store::KvState>,
     interval_secs:         u64,
     writer_depth:          usize,
     backoff:               Duration,
@@ -506,14 +507,16 @@ pub(super) async fn run_health_monitor(
     // is instead pulled via anti-entropy on the first forwarding-set members (uniform
     // random), so the seed is not a universal anti-entropy target.
     if !swim_enabled {
+        // Send our current Merkle digest so any state restored from WAL/snapshot is not
+        // re-pulled; an empty store yields an all-zero digest ⇒ responder full-dumps.
+        let digest = crate::store::store_bucket_hashes(&kv_state);
         for peer in &bootstrap_set {
-            request_state(peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &node_id, &hash_acc, &dropped_frames, vec![], tls.clone());
+            request_state(peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &node_id, &hash_acc, &dropped_frames, digest.clone(), tls.clone());
         }
     }
 
     let mut ticker = time::interval(Duration::from_secs(interval_secs));
     ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
-    let mut ping_buf: BytesMut = BytesMut::with_capacity(1024);
     // With SWIM (M5 cutover) the forwarding set starts empty and is NOT seeded with the
     // bootstrap peers: liveness + discovery ride UDP probing/gossip, so the forwarding
     // fan-out is a pure uniform-random sample of the membership — no node permanently
@@ -560,14 +563,9 @@ pub(super) async fn run_health_monitor(
                         known.swap(i, j);
                     }
                     known.truncate(ping_peer_sample_size);
-                    match bincode::serde::encode_into_std_write(
-                        WireMessage::Ping { sender: node_id.clone(), known_peers: known },
-                        &mut (&mut ping_buf).writer(),
-                        bincode_cfg(),
-                    ) {
-                        Ok(_) => Some(ping_buf.split().freeze()),
-                        Err(e) => { warn!("Ping serialize failed: {}", e); None }
-                    }
+                    Some(mycelium_core::codec::wire_to_bytes(
+                        &WireMessage::Ping { sender: node_id.clone(), known_peers: known },
+                    ))
                 };
 
                 if current_peer_set != last_peer_set {
@@ -579,12 +577,16 @@ pub(super) async fn run_health_monitor(
                     // Skipped under SWIM (same reason as the startup pull): it would re-pin the
                     // shared seed as a universal anti-entropy target.
                     if !swim_enabled {
-                        for peer in current_peer_set.iter()
-                            .filter(|p| bootstrap_set.contains(*p) && !last_peer_set.contains(*p))
-                        {
-                            request_state(peer, &peer_writers, writer_depth, backoff,
-                                idle_timeout, &shutdown_tx, &node_id, &hash_acc,
-                                &dropped_frames, vec![], tls.clone());
+                        let reconnect_iter = current_peer_set.iter()
+                            .filter(|p| bootstrap_set.contains(*p) && !last_peer_set.contains(*p));
+                        let mut reconnect_peers = reconnect_iter.peekable();
+                        if reconnect_peers.peek().is_some() {
+                            let digest = crate::store::store_bucket_hashes(&kv_state);
+                            for peer in reconnect_peers {
+                                request_state(peer, &peer_writers, writer_depth, backoff,
+                                    idle_timeout, &shutdown_tx, &node_id, &hash_acc,
+                                    &dropped_frames, digest.clone(), tls.clone());
+                            }
                         }
                     }
                     last_peer_set = current_peer_set.clone();
@@ -682,23 +684,29 @@ pub(super) async fn run_health_monitor(
                 // stores already agree the responder's hash fast-path makes it an empty exchange.
                 if swim_enabled {
                     let now = Instant::now();
-                    for peer in &cached_ping_targets {
-                        let due = last_anti_entropy
-                            .get(peer)
-                            .is_none_or(|t| now.duration_since(*t) >= resync_cooldown);
-                        if due {
+                    let due_peers: Vec<&NodeId> = cached_ping_targets.iter()
+                        .filter(|peer| last_anti_entropy
+                            .get(*peer)
+                            .is_none_or(|t| now.duration_since(*t) >= resync_cooldown))
+                        .collect();
+                    // One digest per tick (not per peer) — a full store scan amortised
+                    // across every due peer; the Merkle delta keeps each response small.
+                    if !due_peers.is_empty() {
+                        let digest = crate::store::store_bucket_hashes(&kv_state);
+                        for peer in due_peers {
                             request_state(peer, &peer_writers, writer_depth, backoff,
                                 idle_timeout, &shutdown_tx, &node_id, &hash_acc,
-                                &dropped_frames, vec![], tls.clone());
+                                &dropped_frames, digest.clone(), tls.clone());
                             last_anti_entropy.insert(peer.clone(), now);
                         }
                     }
                     last_anti_entropy.retain(|p, _| current_peer_set.contains(p));
-                } else {
+                } else if !added.is_empty() {
+                    let digest = crate::store::store_bucket_hashes(&kv_state);
                     for peer in &added {
                         request_state(peer, &peer_writers, writer_depth, backoff,
                             idle_timeout, &shutdown_tx, &node_id, &hash_acc,
-                            &dropped_frames, vec![], tls.clone());
+                            &dropped_frames, digest.clone(), tls.clone());
                     }
                 }
                 for peer in &removed {

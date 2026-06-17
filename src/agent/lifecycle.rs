@@ -353,6 +353,7 @@ impl GossipAgent {
             self.peer_list_tx.clone(),
             Arc::clone(&self.shutdown_tx),
             Arc::clone(&self.task_ctx.hlc),
+            Arc::clone(&self.kv_state),
             self.config.health_check_interval_secs,
             self.config.writer_channel_depth,
             Duration::from_secs(self.config.reconnect_backoff_secs),
