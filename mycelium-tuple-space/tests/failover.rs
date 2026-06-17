@@ -17,6 +17,11 @@ async fn start_agent(port: u16, bootstrap: Option<u16>) -> Arc<GossipAgent> {
         bootstrap_peers: bootstrap
             .map(|b| vec![NodeId::new("127.0.0.1", b).expect("bootstrap id")])
             .unwrap_or_default(),
+        // Failover hinges on capability-evaporation + ring liveness timing on a small
+        // loopback cluster. SWIM (now default-on) swaps in UDP-probe liveness with different
+        // eviction timing, making promotion/election non-deterministic in these tests. Pin
+        // the legacy path; SWIM-on failover at scale is exercised by the G3 resilience test.
+        swim_failure_detector: false,
         ..Default::default()
     };
     let agent = Arc::new(GossipAgent::new(id, cfg));
