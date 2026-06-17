@@ -11,6 +11,7 @@
 //! boundary at the documented II↔III seam. The substrate never references a
 //! higher-layer type (the inverted-dependency invariant — see `docs/philosophy.html`).
 
+pub mod codec;
 pub mod config;
 pub mod connection;
 pub mod context;
