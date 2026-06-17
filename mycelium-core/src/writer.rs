@@ -277,9 +277,10 @@ pub fn evict_peer_writer(writers: &papaya::HashMap<NodeId, WriterEntry>, peer: &
 /// Serialises and enqueues a `StateRequest` into `peer`'s writer channel,
 /// spawning the writer task if needed.
 ///
-/// `key_timestamps` is the sender's full (key, timestamp) index, used by the receiver
-/// to compute a delta response (v8+ delta sync). Pass `vec![]` for a full-dump request
-/// (e.g. health monitor calls, or when the local store is empty).
+/// `bucket_hashes` is the sender's per-bucket Merkle digest of its live store
+/// (`store::store_bucket_hashes`), used by the receiver to send only divergent-bucket
+/// entries (v12 Merkle anti-entropy). Pass `vec![]` for a full-dump request (the
+/// "no digest" sentinel — e.g. when the local store is empty).
 #[allow(clippy::too_many_arguments)]
 pub fn request_state(
     peer: &NodeId,
@@ -291,12 +292,12 @@ pub fn request_state(
     sender: &NodeId,
     hash_acc: &AtomicU64,
     dropped_frames: &Arc<AtomicU64>,
-    key_timestamps: Vec<(std::sync::Arc<str>, u64)>,
+    bucket_hashes: Vec<u64>,
     tls: Option<Arc<NodeTls>>,
 ) {
     let hash = store_hash_acc(hash_acc);
     let data: Bytes = crate::codec::wire_to_bytes(
-        &WireMessage::StateRequest { sender: sender.clone(), store_hash: hash, key_timestamps },
+        &WireMessage::StateRequest { sender: sender.clone(), store_hash: hash, bucket_hashes },
     );
     let Some(tx) = get_or_spawn_writer(peer, peer_writers, writer_depth, backoff, idle_timeout, shutdown_tx, dropped_frames, tls) else { return; };
     if tx.try_send(data).is_err() {

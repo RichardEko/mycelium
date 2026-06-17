@@ -241,12 +241,12 @@ pub fn encode_wire(b: &mut BytesMut, msg: &WireMessage) {
             put_len(b, known_peers.len());
             for p in known_peers { put_node_id(b, p); }
         }
-        WireMessage::StateRequest { sender, store_hash, key_timestamps } => {
+        WireMessage::StateRequest { sender, store_hash, bucket_hashes } => {
             put_u32(b, 2);
             put_node_id(b, sender);
             put_u64(b, *store_hash);
-            put_len(b, key_timestamps.len());
-            for (k, ts) in key_timestamps { put_str(b, k); put_u64(b, *ts); }
+            put_len(b, bucket_hashes.len());
+            for h in bucket_hashes { put_u64(b, *h); }
         }
         WireMessage::StateResponse { entries } => {
             put_u32(b, 3);
@@ -302,13 +302,9 @@ pub fn decode_wire(buf: &[u8]) -> Result<WireMessage, CodecError> {
             let sender = get_node_id(&mut r)?;
             let store_hash = r.u64()?;
             let n = r.len()?;
-            let mut key_timestamps = Vec::with_capacity(r.cap_hint(n, 16));
-            for _ in 0..n {
-                let k = r.arc_str()?;
-                let ts = r.u64()?;
-                key_timestamps.push((k, ts));
-            }
-            WireMessage::StateRequest { sender, store_hash, key_timestamps }
+            let mut bucket_hashes = Vec::with_capacity(r.cap_hint(n, 8));
+            for _ in 0..n { bucket_hashes.push(r.u64()?); }
+            WireMessage::StateRequest { sender, store_hash, bucket_hashes }
         }
         3 => {
             let n = r.len()?;
@@ -345,11 +341,13 @@ pub fn decode_wire(buf: &[u8]) -> Result<WireMessage, CodecError> {
     Ok(msg)
 }
 
-/// Decode one `PREV_WIRE_VERSION` (v10) `WireMessage`. The v10 layout is identical to
-/// the current one except `Signal` has no trailing `hlc_seq` field; it is filled with
-/// `None` (the "unordered delivery" sentinel) on upgrade — byte-exact with the old
-/// `WireMessageV10` → `WireMessage` bincode path. All other variants are unchanged.
-pub fn decode_wire_v10(buf: &[u8]) -> Result<WireMessage, CodecError> {
+/// Decode one `PREV_WIRE_VERSION` (v11) `WireMessage`. The v11 layout is identical to
+/// the current (v12) one except `StateRequest` carries the old `key_timestamps` full
+/// index instead of `bucket_hashes`; the index is read (and discarded) and the result
+/// downgrades to `bucket_hashes = vec![]` — the "no digest" sentinel that triggers a
+/// full snapshot. Byte-exact with the old `WireMessageV11` → `WireMessage` bincode
+/// path. All other variants (Signal already has `hlc_seq` in v11) are unchanged.
+pub fn decode_wire_v11(buf: &[u8]) -> Result<WireMessage, CodecError> {
     let mut r = Reader::new(buf);
     let msg = match r.u32()? {
         0 => WireMessage::Data(get_update(&mut r)?),
@@ -361,16 +359,16 @@ pub fn decode_wire_v10(buf: &[u8]) -> Result<WireMessage, CodecError> {
             WireMessage::Ping { sender, known_peers }
         }
         2 => {
+            // v11 StateRequest: full key→timestamp index. Read and discard it,
+            // downgrading to the "no digest" sentinel (full snapshot).
             let sender = get_node_id(&mut r)?;
             let store_hash = r.u64()?;
             let n = r.len()?;
-            let mut key_timestamps = Vec::with_capacity(r.cap_hint(n, 16));
             for _ in 0..n {
-                let k = r.arc_str()?;
-                let ts = r.u64()?;
-                key_timestamps.push((k, ts));
+                let _k = r.arc_str()?;
+                let _ts = r.u64()?;
             }
-            WireMessage::StateRequest { sender, store_hash, key_timestamps }
+            WireMessage::StateRequest { sender, store_hash, bucket_hashes: vec![] }
         }
         3 => {
             let n = r.len()?;
@@ -379,14 +377,19 @@ pub fn decode_wire_v10(buf: &[u8]) -> Result<WireMessage, CodecError> {
             WireMessage::StateResponse { entries }
         }
         4 => {
-            // v10 Signal: no trailing hlc_seq byte.
+            // v11 Signal already carries hlc_seq (identical to v12).
             let ttl = r.u8()?;
             let nonce = r.u64()?;
             let sender = get_node_id(&mut r)?;
             let scope = get_scope(&mut r)?;
             let kind = r.arc_str()?;
             let payload = r.bytes()?;
-            WireMessage::Signal { ttl, nonce, sender, scope, kind, payload, hlc_seq: None }
+            let hlc_seq = match r.u8()? {
+                0 => None,
+                1 => Some(r.u64()?),
+                _ => return Err(CodecError("invalid Option tag")),
+            };
+            WireMessage::Signal { ttl, nonce, sender, scope, kind, payload, hlc_seq }
         }
         5 => {
             let update = get_update(&mut r)?;
@@ -407,7 +410,7 @@ pub fn decode_wire_v10(buf: &[u8]) -> Result<WireMessage, CodecError> {
 mod tests {
     use super::*;
     use crate::framing::bincode_cfg;
-    use crate::framing::WireMessageV10;
+    use crate::framing::WireMessageV11;
 
     fn nid(p: u16) -> NodeId { NodeId::new("127.0.0.1", p).unwrap() }
 
@@ -426,9 +429,9 @@ mod tests {
             WireMessage::Data(upd.clone()),
             WireMessage::Ping { sender: nid(7000), known_peers: vec![] },
             WireMessage::Ping { sender: nid(7000), known_peers: vec![nid(7001), nid(7002)] },
-            WireMessage::StateRequest { sender: nid(7000), store_hash: 0, key_timestamps: vec![] },
+            WireMessage::StateRequest { sender: nid(7000), store_hash: 0, bucket_hashes: vec![] },
             WireMessage::StateRequest { sender: nid(7000), store_hash: 99,
-                key_timestamps: vec![(Arc::from("a"), 1), (Arc::from("bb"), 2)] },
+                bucket_hashes: vec![0, 1, 0xFFFF_FFFF_FFFF_FFFF, 42] },
             WireMessage::StateResponse { entries: vec![] },
             WireMessage::StateResponse { entries: vec![
                 SyncEntry { key: Arc::from("k1"), value: Bytes::from_static(b"v1"), timestamp: 5, is_tombstone: false },
@@ -475,39 +478,41 @@ mod tests {
     }
 
     #[test]
-    fn decode_wire_v10_matches_bincode_shim() {
-        // A v10 Signal frame (no hlc_seq) must decode to hlc_seq=None, byte-exact with
-        // the old WireMessageV10 → WireMessage bincode path.
-        let v10 = WireMessageV10::Signal {
-            ttl: 5, nonce: 0xDEAD_BEEF, sender: nid(7000),
-            scope: SignalScope::Group(Arc::from("g")),
-            kind: Arc::from("k"), payload: Bytes::from_static(b"body"),
+    fn decode_wire_v11_matches_bincode_shim() {
+        // A v11 StateRequest (full key→timestamp index) must downgrade to
+        // bucket_hashes=vec![], byte-exact with the WireMessageV11 → WireMessage shim.
+        let v11 = WireMessageV11::StateRequest {
+            sender: nid(7000), store_hash: 0x99,
+            key_timestamps: vec![(Arc::from("a"), 1), (Arc::from("bb"), 2)],
         };
-        let bytes = bincode::serde::encode_to_vec(&v10, bincode_cfg()).unwrap();
-        let via_codec = decode_wire_v10(&bytes).expect("v10 codec decode");
+        let bytes = bincode::serde::encode_to_vec(&v11, bincode_cfg()).unwrap();
+        let via_codec = decode_wire_v11(&bytes).expect("v11 codec decode");
         let (via_bincode, _) =
-            bincode::serde::decode_from_slice::<WireMessageV10, _>(&bytes, bincode_cfg()).unwrap();
+            bincode::serde::decode_from_slice::<WireMessageV11, _>(&bytes, bincode_cfg()).unwrap();
         let via_bincode: WireMessage = via_bincode.into();
         let mut a = BytesMut::new();
         let mut b = BytesMut::new();
         encode_wire(&mut a, &via_codec);
         encode_wire(&mut b, &via_bincode);
-        assert_eq!(a, b, "v10 codec decode must match bincode shim");
+        assert_eq!(a, b, "v11 codec decode must match bincode shim");
         match via_codec {
-            WireMessage::Signal { hlc_seq, .. } => assert_eq!(hlc_seq, None),
-            other => panic!("expected Signal, got {other:?}"),
+            WireMessage::StateRequest { store_hash, bucket_hashes, .. } => {
+                assert_eq!(store_hash, 0x99);
+                assert!(bucket_hashes.is_empty(), "v11 StateRequest downgrades to no-digest");
+            }
+            other => panic!("expected StateRequest, got {other:?}"),
         }
-        // A non-Signal v10 variant (Data) decodes identically through both paths.
-        let v10d = WireMessageV10::Data(GossipUpdate {
-            nonce: 1, sender: 2, ttl: 3, is_tombstone: false,
-            timestamp: 4, key: Arc::from("k"), value: Bytes::from_static(b"v"),
-        });
-        let dbytes = bincode::serde::encode_to_vec(&v10d, bincode_cfg()).unwrap();
+        // A Signal v11 variant (hlc_seq present) decodes identically through both paths.
+        let v11s = WireMessageV11::Signal {
+            ttl: 4, nonce: 7, sender: nid(7000), scope: SignalScope::System,
+            kind: Arc::from("k"), payload: Bytes::from_static(b"v"), hlc_seq: Some(5),
+        };
+        let sbytes = bincode::serde::encode_to_vec(&v11s, bincode_cfg()).unwrap();
         let mut x = BytesMut::new();
         let mut y = BytesMut::new();
-        encode_wire(&mut x, &decode_wire(&dbytes).unwrap());
-        encode_wire(&mut y, &decode_wire_v10(&dbytes).unwrap());
-        assert_eq!(x, y, "Data layout is identical across v10/v11");
+        encode_wire(&mut x, &decode_wire(&sbytes).unwrap());
+        encode_wire(&mut y, &decode_wire_v11(&sbytes).unwrap());
+        assert_eq!(x, y, "Signal layout is identical across v11/v12");
     }
 
     #[test]

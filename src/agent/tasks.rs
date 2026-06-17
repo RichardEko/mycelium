@@ -471,6 +471,7 @@ pub(super) async fn run_health_monitor(
     peer_list_tx:          watch::Sender<Arc<[NodeId]>>,
     shutdown_tx:           Arc<watch::Sender<bool>>,
     hlc:                   Arc<crate::hlc::Hlc>,
+    kv_state:              Arc<crate::store::KvState>,
     interval_secs:         u64,
     writer_depth:          usize,
     backoff:               Duration,
@@ -506,8 +507,11 @@ pub(super) async fn run_health_monitor(
     // is instead pulled via anti-entropy on the first forwarding-set members (uniform
     // random), so the seed is not a universal anti-entropy target.
     if !swim_enabled {
+        // Send our current Merkle digest so any state restored from WAL/snapshot is not
+        // re-pulled; an empty store yields an all-zero digest ⇒ responder full-dumps.
+        let digest = crate::store::store_bucket_hashes(&kv_state);
         for peer in &bootstrap_set {
-            request_state(peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &node_id, &hash_acc, &dropped_frames, vec![], tls.clone());
+            request_state(peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &node_id, &hash_acc, &dropped_frames, digest.clone(), tls.clone());
         }
     }
 
@@ -573,12 +577,16 @@ pub(super) async fn run_health_monitor(
                     // Skipped under SWIM (same reason as the startup pull): it would re-pin the
                     // shared seed as a universal anti-entropy target.
                     if !swim_enabled {
-                        for peer in current_peer_set.iter()
-                            .filter(|p| bootstrap_set.contains(*p) && !last_peer_set.contains(*p))
-                        {
-                            request_state(peer, &peer_writers, writer_depth, backoff,
-                                idle_timeout, &shutdown_tx, &node_id, &hash_acc,
-                                &dropped_frames, vec![], tls.clone());
+                        let reconnect_iter = current_peer_set.iter()
+                            .filter(|p| bootstrap_set.contains(*p) && !last_peer_set.contains(*p));
+                        let mut reconnect_peers = reconnect_iter.peekable();
+                        if reconnect_peers.peek().is_some() {
+                            let digest = crate::store::store_bucket_hashes(&kv_state);
+                            for peer in reconnect_peers {
+                                request_state(peer, &peer_writers, writer_depth, backoff,
+                                    idle_timeout, &shutdown_tx, &node_id, &hash_acc,
+                                    &dropped_frames, digest.clone(), tls.clone());
+                            }
                         }
                     }
                     last_peer_set = current_peer_set.clone();
@@ -676,23 +684,29 @@ pub(super) async fn run_health_monitor(
                 // stores already agree the responder's hash fast-path makes it an empty exchange.
                 if swim_enabled {
                     let now = Instant::now();
-                    for peer in &cached_ping_targets {
-                        let due = last_anti_entropy
-                            .get(peer)
-                            .is_none_or(|t| now.duration_since(*t) >= resync_cooldown);
-                        if due {
+                    let due_peers: Vec<&NodeId> = cached_ping_targets.iter()
+                        .filter(|peer| last_anti_entropy
+                            .get(*peer)
+                            .is_none_or(|t| now.duration_since(*t) >= resync_cooldown))
+                        .collect();
+                    // One digest per tick (not per peer) — a full store scan amortised
+                    // across every due peer; the Merkle delta keeps each response small.
+                    if !due_peers.is_empty() {
+                        let digest = crate::store::store_bucket_hashes(&kv_state);
+                        for peer in due_peers {
                             request_state(peer, &peer_writers, writer_depth, backoff,
                                 idle_timeout, &shutdown_tx, &node_id, &hash_acc,
-                                &dropped_frames, vec![], tls.clone());
+                                &dropped_frames, digest.clone(), tls.clone());
                             last_anti_entropy.insert(peer.clone(), now);
                         }
                     }
                     last_anti_entropy.retain(|p, _| current_peer_set.contains(p));
-                } else {
+                } else if !added.is_empty() {
+                    let digest = crate::store::store_bucket_hashes(&kv_state);
                     for peer in &added {
                         request_state(peer, &peer_writers, writer_depth, backoff,
                             idle_timeout, &shutdown_tx, &node_id, &hash_acc,
-                            &dropped_frames, vec![], tls.clone());
+                            &dropped_frames, digest.clone(), tls.clone());
                     }
                 }
                 for peer in &removed {

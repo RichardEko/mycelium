@@ -274,7 +274,7 @@ async fn test_state_request_ignored_from_unknown_peer() {
     send_wire(&mut writer, &WireMessage::StateRequest {
         sender: "127.0.0.1:4444".parse().unwrap(),
         store_hash: 0,
-        key_timestamps: vec![],
+        bucket_hashes: vec![],
     }).await;
 
     // Give the handler time to process the message.
@@ -814,7 +814,7 @@ async fn test_anti_entropy_skips_when_synced() {
     send_wire(&mut writer, &WireMessage::StateRequest {
         sender: sender_id,
         store_hash: expected_hash,
-        key_timestamps: vec![],
+        bucket_hashes: vec![],
     }).await;
 
     let mut response_sock = accept_task.await.unwrap();

@@ -206,10 +206,10 @@ pub async fn handle_connection(
                 }
             }
         } else {
-            match crate::codec::decode_wire_v10(&recv_buf) {
+            match crate::codec::decode_wire_v11(&recv_buf) {
                 Ok(m) => m,
                 Err(e) => {
-                    warn!("Malformed v10 message from {}: {}", peer_addr, e);
+                    warn!("Malformed v11 message from {}: {}", peer_addr, e);
                     continue;
                 }
             }
@@ -259,15 +259,12 @@ pub async fn handle_connection(
                         next.push(sender.clone());
                         let _ = peer_list_tx.send(next.into());
                     }
-                    let key_timestamps: Vec<(std::sync::Arc<str>, u64)> = {
-                        let guard = kv_state.store.pin();
-                        guard.iter().map(|(k, v)| (Arc::clone(k), v.timestamp)).collect()
-                    };
-                    request_state(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &node_id, &kv_state.hash_acc, &kv_state.dropped_frames, key_timestamps, tls.clone());
+                    let bucket_hashes = crate::store::store_bucket_hashes(&kv_state);
+                    request_state(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &node_id, &kv_state.hash_acc, &kv_state.dropped_frames, bucket_hashes, tls.clone());
                 }
             }
 
-            WireMessage::StateRequest { sender, store_hash: their_hash, mut key_timestamps } => {
+            WireMessage::StateRequest { sender, store_hash: their_hash, bucket_hashes: their_buckets } => {
                 // Trusted-domain check: sender must be a known peer. We do not verify that
                 // peer_addr matches sender.to_socket_addr() — that would reject NAT'd topologies.
                 // In the trusted domain a connected node could spoof the sender field; the
@@ -302,13 +299,17 @@ pub async fn handle_connection(
                     last_state_sent = Some(std::time::Instant::now());
                     continue;
                 }
-                // Delta sync (v8+): build a map of the sender's key→timestamp index.
-                // If key_timestamps is empty (v7 peer or first contact), we do a full dump.
-                // Otherwise, only send entries that the sender is missing or has stale.
+                // Merkle delta sync (v12): the sender's `bucket_hashes` is its per-bucket
+                // digest of its live store. We send every entry (incl. tombstones, so
+                // deletes propagate) that falls in a bucket whose hash differs from ours,
+                // plus a full dump when the digest is absent (no-digest sentinel: empty
+                // store, first contact, or a v11 peer downgraded via the shim) or malformed.
+                // The sender applies LWW, so sending a whole divergent bucket is safe —
+                // entries it already has at an equal/newer timestamp are no-ops.
+                let full_dump = their_buckets.len() != crate::store::ANTI_ENTROPY_BUCKETS;
                 let entries: Vec<SyncEntry> = {
                     let guard = kv_state.store.pin();
-                    if key_timestamps.is_empty() {
-                        // Full dump: v7 peer or sender sent no digest.
+                    if full_dump {
                         guard.iter()
                             .map(|(k, v)| SyncEntry {
                                 key:          Arc::clone(k),
@@ -318,16 +319,11 @@ pub async fn handle_connection(
                             })
                             .collect()
                     } else {
-                        // Delta: sort their index once, then binary-search per local key.
-                        // O(N log N) sort + O(M log N) lookups vs O(N) map build + O(M) lookups;
-                        // avoids an O(N) heap allocation for the map.
-                        key_timestamps.sort_unstable_by(|a, b| a.0.as_ref().cmp(b.0.as_ref()));
+                        let my_buckets = crate::store::store_bucket_hashes(&kv_state);
                         guard.iter()
-                            .filter(|(k, v)| {
-                                match key_timestamps.binary_search_by(|(kk, _)| kk.as_ref().cmp(k.as_ref())) {
-                                    Err(_) => true,                              // sender lacks this key
-                                    Ok(i) => v.timestamp > key_timestamps[i].1, // ours is newer
-                                }
+                            .filter(|(k, _)| {
+                                let b = crate::store::bucket_for_key(k);
+                                my_buckets[b] != their_buckets[b] // bucket diverges
                             })
                             .map(|(k, v)| SyncEntry {
                                 key:          Arc::clone(k),
