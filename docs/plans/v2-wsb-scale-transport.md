@@ -226,7 +226,44 @@ the bridge:
 t≈15 s — versus the pre-fix run where `seed_in` sat at N (99) for 100 s+. Reproduce with
 `SWIM_ORACLE_N=100 cargo test --lib swim_scale_oracle -- --ignored --nocapture`.
 
-#### Stage 4 Docker re-validation (2026-06-16) — the in-process fix is necessary but NOT sufficient
+#### ⚠️ CORRECTION (2026-06-17) — the 2026-06-16 Docker numbers below were SWIM-*off*
+
+The real in-process/Docker divergence was a **config bug, not a transport one**: the demo binary
+(`examples/three_node_demo.rs::make_agent`) built its config without calling `apply_env_overrides()`,
+so `GOSSIP_SWIM_FAILURE_DETECTOR` (and every `GOSSIP_*` knob) was silently ignored — **SWIM was OFF in
+every `SWIM=1` scale run**. The whole "in-process converges, Docker doesn't" mystery was the Docker
+side running the non-SWIM M4 path (which pins the seed) while the in-process oracle set the bool
+directly. The 2026-06-16 table below and its "newest-first gossip / membership" root cause are
+therefore measuring the **non-SWIM path** — kept for the record but superseded. Fixed by calling
+`apply_env_overrides()` in the demo. With SWIM actually on:
+
+| N | seed_established (SWIM **off**, the bug) | seed_established (SWIM **on**) | worker membership (SWIM on) |
+|---|---|---|---|
+| 50 | 64–69 | **33** ✓ flat (~2k) | ~21 |
+| 100 | 105–121 | **83** (membership-limited) | ~12 |
+
+N=50 is now flat. N=100 is membership-limited: SWIM's UDP gossip only reaches ~12-14 known peers at
+N=100 (< the `2k`=24 de-pin threshold), so the de-pin doesn't engage — the gossip *rate* is the
+bottleneck at scale. Because the demo fix makes the `GOSSIP_SWIM_*` knobs effective, this is now
+*tunable*, and raising the rate confirms the mechanism (N=100, 120 s settle):
+
+| GOSSIP_SWIM_GOSSIP_UPDATES / PROBE_INTERVAL_MS | seed_established | worker membership |
+|---|---|---|
+| 6 / 1000 (default) | 89 | ~14 |
+| 14 / 400 (bumped) | **54** | **~23** |
+
+Higher gossip rate → membership 14→23 (reaching the de-pin threshold) → seed_established 89→54. So
+the N=100 path is clear: faster SWIM membership convergence (raise the default gossip rate and/or
+lower the de-pin threshold from `2k` toward `~1.5k` so it engages at sparser membership). Full N=100
+trajectory: **121** (SWIM off, the bug) → **89** (SWIM on, default) → **54** (SWIM on, tuned).
+
+The `gossip_sample` randomized-tail + continuous de-pin + decoupled anti-entropy changes are correct
+and shipped (in-process oracle flat at seed_total=11, canary 100% across N=30..100); they were just
+never reached over Docker before the demo fix.
+
+---
+
+#### Stage 4 Docker re-validation (2026-06-16) — [SUPERSEDED: ran SWIM-off, see correction above]
 
 `SWIM=1 SETTLE_SECS=45 make test-scale-baseline` (the fix branch, real Docker bridge, measures
 `/proc/net/tcp` ESTABLISHED on the seed):
