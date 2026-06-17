@@ -157,7 +157,13 @@ in four independently-mergeable stages, each gated behind `GossipConfig::swim_fa
 (default **false**) so every stage is inert for existing deployments until the final cutover
 flips the default (the M4-default-flip lesson):
 
-**Progress:** Stage 1 ✅ (PR #15) · Stage 2 ✅ (PR #16) · Stage 3 ✅ (PR #17) · Stage 4 🟡 cutover mechanics in + two load-bearing bugs fixed (membership-collapse, then the de-pin/anti-entropy storm below); **G1 flat in-process across 30→100 nodes, but NOT yet over Docker** — the Docker re-validation (below) showed `seed_established` still ~1.4N. The remaining blocker is now localized one layer deeper: **SWIM membership does not converge past the de-pin threshold over the lossy Docker-bridge UDP**, so the bootstrap-reliable seed stays over-weighted. Default stays **off**.
+**Progress:** Stage 1 ✅ (PR #15) · Stage 2 ✅ (PR #16) · Stage 3 ✅ (PR #17) · Stage 4 🟢 **G1 + G3 both
+green over Docker** (2026-06-17). The root cause of the long in-process/Docker divergence was a config
+bug — the demo never called `apply_env_overrides()`, so SWIM was *off* in every Docker scale run; with
+SWIM actually on plus the membership/de-pin hardening below, `seed_established` is flat (N=50=24,
+N=100=22) and the 50-worker resilience late-joiner passes (11/11). Only the deliberate default flip
+(`swim_failure_detector` → true) remains; default stays **off** pending that release decision. Details
+below.
 
 #### Stage 4 findings (2026-06-16) — cutover mechanics + the membership-collapse fix
 
@@ -287,8 +293,18 @@ Docker result (SWIM on, raised gossip defaults + this change):
 
 **Full N=100 trajectory: 121** (SWIM off, the bug) **→ 89** (SWIM on, default gossip) **→ 72** (raised
 gossip) **→ 22** (+ lowered threshold + pool exclusion). G1 — flat `seed_established` as N grows — is
-now demonstrated **over the real Docker bridge**, not just in-process. Remaining before the default
-flip: **G3** (`test-scale-resilience RESILIENCE_WORKERS=50`).
+now demonstrated **over the real Docker bridge**, not just in-process.
+
+**G3 GREEN (2026-06-17).** `SWIM=1 make test-scale-resilience RESILIENCE_WORKERS=50` — **11/11 PASS,
+0 FAIL**, runner exit 0. The load-bearing Phase 3 late-joiner probe passes at 50 workers (joins +
+anti-entropy inbound + gossip outbound) — which *cannot* pass on the non-SWIM path (iptables FORWARD
+saturation makes the fresh probe's SYN to seed time out at errno 110). Phases 1–4 (formation, crash
++ recovery + anti-entropy, late-joiner, 3× churn) all pass. Two test-infra gaps were fixed to run G3
+under SWIM: the resilience compose now sets `GOSSIP_SWIM_FAILURE_DETECTOR` (gated `${SWIM:-0}`), and
+the dynamically-started late-joiner probe inherits it (it had run SWIM-off in a SWIM-on cluster).
+
+**Both G1 and G3 are now green over Docker — the M5 Stage-4 cutover criteria are met.** The remaining
+step is the deliberate default flip (`swim_failure_detector: false → true`), a release decision.
 
 The `gossip_sample` randomized-tail + continuous de-pin + decoupled anti-entropy changes are correct
 and shipped (in-process oracle flat at seed_total=11, canary 100% across N=30..100); they were just
