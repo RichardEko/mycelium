@@ -2173,6 +2173,21 @@ admission), the compliant shape is stated inline rather than assumed.
 > This section answers "what is each milestone"; the plan answers "how do they group, in
 > what order, and how do we know v2 is done."
 
+> **Status (2026-06-17): WS-A and WS-B are SHIPPED & SIGNED OFF on `main`.**
+> - **WS-A** (M1/M2/M3 — crate split, consensus gate, handle pushdown): merged.
+> - **WS-B** (M4 partial-mesh, M5 SWIM transport, M11 wire-codec succession + Merkle
+>   anti-entropy at wire v12): merged via PRs #19 + #21. All four DoD gates green
+>   (G1/G2/G3 on #19; G4 + bincode retirement on #21). **Full-matrix sign-off sweep
+>   (2026-06-17):** every host feature gate (`--lib` default / `tls,metrics,a2a,llm` /
+>   `compliance` / `no-default+gateway`), tuple-space gateway tests, all three clippy
+>   `-D warnings` gates, all examples compiling, and the community + AFN smokes pass;
+>   Docker integration (13/13), overlay, llm-agent, **resilience-20** and
+>   **entries-30** (the Merkle anti-entropy paths) all pass. The 100-node `make
+>   test-scale` formation-within-240s remains the documented Docker-bridge iptables
+>   ceiling (variance 8–94/100 across identical-code runs incl. fresh-VM restarts) —
+>   environmental, not a regression; the identical gossip/anti-entropy code converges
+>   cleanly at 20/30/50 nodes. WS-C…WS-G remain trigger-gated (demand-driven menu).
+
 1. **Workspace split** — `mycelium-core` extracted from `mycelium` (full substrate).
    Solves the `TaskCtx` God Object and internalises the Layer I/II entanglement.
 
