@@ -2233,9 +2233,15 @@ admission), the compliant shape is stated inline rather than assumed.
    > is in `mycelium-core`), it just never acts. Gate: default 239 + matrix 302 + **no-consensus
    > 196** lib tests, clippy `-D warnings` clean across all combos.
 3. **Owned standalone handles**: `KvHandle` / `MeshHandle` / `CapabilitiesHandle` as ownable values that do not require a live `GossipAgent` borrow. Currently handles hold `Arc<TaskCtx>` from a started agent; this would allow passing handles across crate boundaries without exposing `GossipAgent`.
-4. **Partial-mesh gossip** — practical cluster ceiling with current design is ~200–400 nodes.
+4. **Partial-mesh gossip** — ✅ **SHIPPED** (WS-B Phase 1, PR #19). Bounded fan-out: each node
+   maintains persistent writers to only `k = O(log N)` random peers (`resolved_fanout` over
+   `gossip_fanout` / `max_active_connections`) and relies on multi-hop epidemic flooding +
+   seen-set dedup for the rest; Individual frames to a non-active target fall back to flooding
+   (regression-gated). Largely subsumed by M5 below, which removes persistent connection state
+   entirely. *Original analysis retained below.*
 
-   Today peer-exchange (Pong messages) causes every node to learn about every other node and
+   Practical cluster ceiling with the old full-mesh design was ~200–400 nodes.
+   Peer-exchange (Pong messages) caused every node to learn about every other node and
    establish a direct TCP connection to each. At N nodes the cluster has O(N²) total TCP
    connections, O(N²) gossip forwarding traffic, and O(N) anti-entropy load per reconnect.
    The 100-node scale test exposed this: seed accumulates ~200 ESTABLISHED connections (99
@@ -2252,7 +2258,13 @@ admission), the compliant shape is stated inline rather than assumed.
    **Trigger to start**: a real workload that needs > 300 nodes, or a benchmark showing
    per-node RSS growing faster than O(1) as cluster size increases.
 
-5. **Hybrid TCP/UDP gossip transport (SWIM-style)** — keep TCP for anti-entropy data
+5. **Hybrid TCP/UDP gossip transport (SWIM-style)** — ✅ **SHIPPED** (WS-B Phase 2, PR #19;
+   `swim_failure_detector` defaults **true**). UDP carries the SWIM direct-ping / indirect-probe
+   cycle and piggybacked membership gossip; TCP is reserved for anti-entropy state transfer.
+   The structural fix for the iptables O(N²) ceiling — G3 (50-worker resilience) green. Rolling
+   caveat: don't mix SWIM-on/off nodes. *Original analysis retained below.*
+
+   Keep TCP for anti-entropy data
    transfer (where reliability matters); switch gossip pings and capability heartbeats to
    UDP (where loss is tolerable and connection-free is ideal). This is precisely SWIM's
    design: SWIM uses UDP for its periodic direct-ping / indirect-probe cycle and TCP only
@@ -2389,7 +2401,20 @@ admission), the compliant shape is stated inline rather than assumed.
     in a single session) where startup-time derivation and hot-reloadable parameters are
     demonstrably insufficient.
 
-11. **Wire-codec succession (bincode replacement)** — `bincode` is the serializer behind
+11. **Wire-codec succession (bincode replacement)** — ✅ **SHIPPED** (WS-B Phase 3,
+    `v2/wsb-m11-merkle-v12`). Went beyond the recommended hand-rolled `WireMessage` codec to a
+    **full bincode retirement**: `mycelium_core::codec` (hand-rolled `WireMessage`, preserving
+    the zero-copy Data byte offsets) plus `mycelium_core::serde_fixint` (a generic serde
+    fixed-int format) now serialize *every* type that previously used bincode — wire frames,
+    on-disk persistence, capabilities, consensus, audit, RBAC, SWIM datagrams. Both are
+    byte-identical to the old `bincode 2.x` fixed-int encoding (equivalence-tested), so the
+    drop-in caused no on-disk migration and no signature/hash-chain breakage. `bincode` is
+    out of the shipped dependency tree (RUSTSEC-2025-0141 cleared from `cargo audit` of
+    production builds), retained only as a `mycelium-core` dev-dependency oracle. Landed
+    bundled with Merkle anti-entropy on the single v11→v12 bump. *Original analysis retained
+    below.*
+
+    `bincode` is the serializer behind
     every wire frame and is officially unmaintained (RUSTSEC-2025-0141; surfaced by the
     CI `cargo audit` job as a permanent warning). There is no immediate risk: the crate
     is pure-Rust, `#![deny(unsafe_code)]`-compatible in our usage, pinned by `Cargo.lock`,
@@ -2783,17 +2808,20 @@ explicitly defers to "layers below" — **never let Mycelium's gossip try to *be
 
 Ranked by relevance:
 
-1. **Merkle-tree anti-entropy (descend only where hashes differ).** *Net-new; feeds M4/M5
-   and the scale-entries tail metric.* Verified 2026-06-15: the current sweep is **not**
-   Merkle-based — `WireMessage::StateRequest` ships the full `key_timestamps:
-   Vec<(Arc<str>, u64)>` index every probe (O(N) keys on the wire per round) on top of the
-   v7 whole-store `store_hash` fast-path skip. NANDA does Dynamo-style per-shard Merkle
-   reconciliation: exchange Merkle roots, descend only divergent subtrees, fetch only
-   missing leaves. Adopting it bounds bytes-on-wire to O(divergence) instead of O(store
-   size) and directly improves the `make test-scale-entries` anti-entropy sweep-tail. Rides
-   a future `WIRE_VERSION` bump (pairs naturally with the M11 codec succession at v12) since
-   `StateRequest`'s shape changes. **Decision to make before M5:** whether the SWIM rework
-   and the Merkle digest land together (both touch the anti-entropy path).
+1. **Merkle-tree anti-entropy (descend only where hashes differ).** ✅ **SHIPPED** (WS-B
+   Phase 3, `v2/wsb-m11-merkle-v12`, wire **v12**). The full `key_timestamps:
+   Vec<(Arc<str>, u64)>` index (O(N) keys per probe) was replaced by a 256-bucket per-bucket
+   XOR digest (`store::store_bucket_hashes`) carried in `WireMessage::StateRequest.bucket_hashes`;
+   the responder compares its own digest and returns only entries in divergent buckets —
+   bytes-on-wire O(divergence) instead of O(store size). The v7 whole-store `store_hash`
+   fast-path skip is retained as the level-0 check. Landed bundled with the M11 codec
+   succession on the single v11→v12 bump (one rolling-upgrade break; `WireMessageV11` shim +
+   `codec::decode_wire_v11` downgrade a v11 index request to the full-snapshot sentinel).
+   G4 (`make test-scale-entries`) and the resilience late-joiner/crash-recovery anti-entropy
+   paths both green. *(Original NANDA-transfer note: Dynamo-style per-shard Merkle
+   reconciliation — exchange roots, descend only divergent subtrees. The shipped form is a
+   single-level bucketed digest, which already bounds the wire cost to O(divergence) for the
+   cluster's key counts; a multi-level tree is a future refinement if buckets grow large.)*
 
 2. **CT-style transparency log with inclusion proofs for key events.** *Net-new; the single
    most federation-aligned item; depends on / extends WS5 + WS2.* WS5's retained-key-set

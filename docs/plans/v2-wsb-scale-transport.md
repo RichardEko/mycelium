@@ -46,11 +46,13 @@ G3 is the load-bearing proof of the structural fix; G1/G2/G4 are supporting meas
 ## 2. Sequencing
 
 ```
-Phase 0  Baseline + instrumentation       (prove the "before")
-Phase 1  M4  partial-mesh bounded fan-out  [TCP-level, incremental — clears G1/G2]
-Phase 2  M5  hybrid UDP/TCP SWIM           [structural — clears G3]
-Phase 3  v12 wire bump: M11 + Merkle AE    [bundled — clears G4 + retires bincode]
+Phase 0  Baseline + instrumentation       (prove the "before")           ✅
+Phase 1  M4  partial-mesh bounded fan-out  [TCP-level — clears G1/G2]      ✅ PR #19
+Phase 2  M5  hybrid UDP/TCP SWIM           [structural — clears G3]        ✅ PR #19
+Phase 3  v12 wire bump: M11 + Merkle AE    [bundled — clears G4]           ✅ wsb-m11-merkle-v12
 ```
+
+**WS-B complete** — all four gates green (G1/G2/G3 on PR #19, G4 on `v2/wsb-m11-merkle-v12`).
 
 **M4-vs-M5 decision (resolved):** ROADMAP notes M4 is *"largely subsumed by M5."* We ship
 **M4 standalone first** as a low-risk, wire-compatible intermediate that should already clear
@@ -373,7 +375,22 @@ convention (one port to open in firewalls for both protocols). An optional `swim
 override is available for environments that must separate them. Ops/firewall docs updated at
 cutover (Stage 4).
 
-### Phase 3 — v12 wire bump: M11 codec + Merkle anti-entropy
+### Phase 3 — v12 wire bump: M11 codec + Merkle anti-entropy ✅ SHIPPED (`v2/wsb-m11-merkle-v12`)
+
+**Outcome:** landed M11 + Merkle together in one v12 window (option 1 from the open
+questions — one rolling-upgrade break). bincode **fully retired** from the shipped tree
+(not just `WireMessage`): two in-tree codecs replace it — `mycelium_core::codec` (hand-rolled
+`WireMessage`, preserves the zero-copy Data offsets) and `mycelium_core::serde_fixint` (a
+generic serde fixed-int format byte-identical to bincode, driving persistence / capabilities /
+consensus / audit / RBAC / SWIM). Both proven byte-exact by equivalence tests against bincode
+(now a dev-dependency oracle only), so no on-disk migration or signature/hash-chain breakage.
+`StateRequest` reshaped to a 256-bucket per-bucket XOR Merkle digest (`store::store_bucket_hashes`);
+responder returns only divergent-bucket entries. `WIRE_VERSION=12`, `PREV=11`, `WireMessageV11`
+shim + `codec::decode_wire_v11` (v11 `key_timestamps` → `bucket_hashes=vec![]` full-snapshot
+sentinel). **G4 green** (`make test-scale-entries`: 30 nodes, 5000 entries, 100% convergence,
+0 dropped frames) and the resilience late-joiner + crash-recovery anti-entropy paths green
+(`make test-scale-resilience`: 11/11). Original plan below.
+
 - **M11 (hand-rolled codec):** replace `bincode` (RUSTSEC-2025-0141, unmaintained) with a
   ~300-line explicit fixed-layout encoder/decoder for the closed `WireMessage` enum.
   `framing.rs` already hand-builds the header and micro-manages layout (v6 field reorder for
