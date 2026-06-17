@@ -266,13 +266,29 @@ trajectory: **121** (SWIM off, the bug) → **89** (SWIM on, default) → **54**
 | 100 | 72 (was 89) | **24** (was 14) |
 
 So the raised rate clearly improves membership (N=50: 21→32; N=100: 14→24) and N=100 seed_established
-89→72. **But N=100 is still not flat** (72 ≈ 2× N=50's 35): SWIM membership remains N-dependent over
-the lossy bridge (24 at N=100 vs 32 at N=50), landing right *at* the `2k`=24 de-pin threshold, so the
-de-pin only marginally engages. **Closing N=100 needs the complementary lever: lower the de-pin
-threshold from `2k` toward `~1.3–1.5k`** so it engages solidly at the sparser scale-membership the
-raised rate now provides (`> k` is the floor — a node needs more known peers than forwarding slots to
-have a non-bootstrap replacement). Full N=100 trajectory: **121** → **89** → **72** (defaults) — the
-threshold change is the remaining step to ~2k.
+89→72 — but not yet flat, because the membership landed right *at* the old `2k`=24 threshold.
+
+**Update (2026-06-17) — lowered the de-pin threshold + excluded the bootstrap from the reconcile pool
+→ N=100 FLAT.** Two coupled changes in `run_health_monitor` (gated under SWIM):
+- de-pin engages at `known > k + k/3` (~1.33k, floor `> k`) instead of `> 2k`, so it fires at the
+  sparse membership SWIM reaches at scale;
+- once de-pinning, the bootstrap is removed from the reconcile *candidate pool*, not just the active
+  set — otherwise reconcile re-adds it at `k/known`, which at sparse membership (k=12 of known≈24 ⇒
+  ~50%) keeps it pinned on half the cluster. Excluding it holds the seed near-zero inbound; it stays
+  current via its own outbound anti-entropy pulls (in-process oracle: seed_total 29, **canary 100%** —
+  KV propagation intact with the seed out of every forwarding set).
+
+Docker result (SWIM on, raised gossip defaults + this change):
+
+| N | seed_established | note |
+|---|---|---|
+| 50 | **24** | = 2k |
+| 100 | **22** | = 2k — **flat across N=50→100** |
+
+**Full N=100 trajectory: 121** (SWIM off, the bug) **→ 89** (SWIM on, default gossip) **→ 72** (raised
+gossip) **→ 22** (+ lowered threshold + pool exclusion). G1 — flat `seed_established` as N grows — is
+now demonstrated **over the real Docker bridge**, not just in-process. Remaining before the default
+flip: **G3** (`test-scale-resilience RESILIENCE_WORKERS=50`).
 
 The `gossip_sample` randomized-tail + continuous de-pin + decoupled anti-entropy changes are correct
 and shipped (in-process oracle flat at seed_total=11, canary 100% across N=30..100); they were just

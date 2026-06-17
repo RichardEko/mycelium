@@ -610,11 +610,16 @@ pub(super) async fn run_health_monitor(
                 // re-sampled into the forwarding set, and a *one-time* de-pin can never undo that
                 // (Stage-4 Docker re-validation: 43/50 workers stayed pinned to the seed even with
                 // fully-converged membership). So re-evict the bootstrap every tick once we know
-                // `> 2k` peers; `reconcile` below re-adds it only at its fair uniform `~k/N` share,
-                // and the seed stays current via its OWN outbound anti-entropy pulls (it does not
-                // need the inbound forwarding edge). Below `2k` known (small clusters / a node
-                // still discovering) the seed is kept — connectivity over flatness.
-                if swim_enabled && k > 0 && current_peer_set.len() > 2 * k {
+                // more than ~1.33× our forwarding slots. The threshold is `> k + k/3` (not `2k`):
+                // SWIM's UDP gossip only converges membership to a sparse value at scale over a
+                // lossy bridge (~24 known at N=100), which barely reached the old `2k` so the
+                // de-pin never engaged; `k + k/3` engages at that sparse membership while keeping
+                // a floor of `> k` (a node needs ≥1 non-bootstrap peer to swap the seed for).
+                // Below the threshold (small clusters / a node still discovering) the seed is kept
+                // — connectivity over flatness.
+                let depin_threshold = k + k / 3;
+                let depin_active = swim_enabled && k > 0 && current_peer_set.len() > depin_threshold;
+                if depin_active {
                     for b in &bootstrap_no_self {
                         if cached_ping_targets.remove(b) {
                             ping_sender_cache.remove(b);
@@ -641,8 +646,21 @@ pub(super) async fn run_health_monitor(
                     last_anti_entropy.remove(&v);
                     evict_peer_writer(&peer_writers, &v);
                 }
-                let (added, removed) = reconcile_active_targets(
-                    &mut cached_ping_targets, &current_peer_set, &bootstrap_no_self, k, retain_bootstrap);
+                // Reconcile toward `k`. Once de-pinning, exclude the bootstrap from the candidate
+                // POOL too — not just the active set — otherwise reconcile re-adds it at `k/known`,
+                // which at the sparse scale-membership SWIM reaches (known ≪ N) wildly
+                // over-represents the seed (e.g. k=12 of known=24 ⇒ a 50% re-add rate, so the seed
+                // stays pinned on ~half the cluster despite the de-pin). Excluding it from the pool
+                // keeps the seed near-zero inbound — it stays current via its own outbound
+                // anti-entropy pulls — so the seed's fan-in is flat (independent of N), not `k/known`.
+                let (added, removed) = if depin_active {
+                    let mut pool = current_peer_set.clone();
+                    for b in &bootstrap_no_self { pool.remove(b); }
+                    reconcile_active_targets(&mut cached_ping_targets, &pool, &bootstrap_no_self, k, retain_bootstrap)
+                } else {
+                    reconcile_active_targets(
+                        &mut cached_ping_targets, &current_peer_set, &bootstrap_no_self, k, retain_bootstrap)
+                };
                 // Publish the bounded active set to the gossip shards: it is BOTH the ping
                 // set and the forwarding fan-out, so a node opens persistent writers to only
                 // ~k peers (not N). Cluster-wide delivery still holds via multi-hop epidemic
