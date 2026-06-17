@@ -214,15 +214,17 @@ impl ser::SerializeStructVariant for Compound<'_> {
 
 // ── Deserializer ───────────────────────────────────────────────────────────────
 
-/// Decode a `T` from `bytes`. Rejects trailing bytes (a well-formed value is
-/// consumed exactly), matching the strictness callers relied on from bincode.
+/// Decode a `T` from the front of `bytes`, **tolerating trailing bytes** — exactly
+/// like the `bincode::serde::decode_from_slice(..).map(|(v, _)| v)` it replaces, which
+/// every former call site relied on. This is load-bearing: a `cap/` KV value is a
+/// `CapEntry` (a `Capability` followed by a trailing `u64` refresh interval), and the
+/// A2A card / legacy readers decode just the `Capability` prefix and ignore the suffix
+/// (the documented dual-format fallback). The untrusted *wire* path uses the separate,
+/// strict [`crate::codec::decode_wire`] (which rejects trailing), so trusted KV / signed
+/// payloads decoded here keep bincode's lenient prefix semantics.
 pub fn from_slice<'de, T: de::Deserialize<'de>>(bytes: &'de [u8]) -> Result<T, Error> {
     let mut d = Deserializer { buf: bytes, pos: 0 };
-    let v = T::deserialize(&mut d)?;
-    if d.pos != d.buf.len() {
-        return Err(Error("trailing bytes after value".into()));
-    }
-    Ok(v)
+    T::deserialize(&mut d)
 }
 
 struct Deserializer<'de> {
@@ -536,10 +538,26 @@ mod tests {
     }
 
     #[test]
-    fn from_slice_rejects_trailing_bytes() {
+    fn from_slice_tolerates_trailing_bytes_like_bincode() {
+        // bincode's decode_from_slice ignores trailing bytes; from_slice must match,
+        // because `cap/` values are a Capability-prefix followed by a trailing u64
+        // (CapEntry's refresh interval) that legacy/card readers decode past.
         let mut bytes = to_vec(&42u32).unwrap();
-        bytes.push(0xFF);
-        assert!(from_slice::<u32>(&bytes).is_err(), "trailing byte must error");
+        bytes.extend_from_slice(&60_000u64.to_le_bytes()); // trailing suffix
+        assert_eq!(from_slice::<u32>(&bytes).unwrap(), 42, "must decode the prefix, ignore trailing");
+        // And it stays byte-equivalent to bincode's lenient decode.
+        let (via_bincode, _): (u32, _) =
+            bincode::serde::decode_from_slice(&bytes, bincode_cfg()).unwrap();
+        assert_eq!(via_bincode, 42);
+
+        // The real shape: a prefix struct followed by a trailing scalar (CapEntry layout).
+        #[derive(Serialize, Deserialize, PartialEq, Debug)]
+        struct Prefix { a: u8, name: String, tags: Vec<u16> }
+        let p = Prefix { a: 9, name: "cap".into(), tags: vec![1, 2, 3] };
+        let mut buf = to_vec(&p).unwrap();
+        buf.extend_from_slice(&123u64.to_le_bytes()); // CapEntry-style trailing u64
+        assert_eq!(from_slice::<Prefix>(&buf).unwrap(), p,
+            "struct prefix must decode while ignoring the trailing scalar");
     }
 
     #[test]
