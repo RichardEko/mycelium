@@ -282,3 +282,6 @@ pub mod fuzz_internals {
 
 #[cfg(test)]
 mod lib_tests;
+
+#[cfg(test)]
+mod swim_oracle_tests;

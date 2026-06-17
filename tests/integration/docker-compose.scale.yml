@@ -38,8 +38,12 @@ services:
       # 2048 gives ~10× headroom over the worst-case burst.
       GOSSIP_WRITER_CHANNEL_DEPTH: "2048"
       GOSSIP_PING_PEER_SAMPLE_SIZE: "30"
-      # WS-B M5: SWIM UDP failure detector. Off by default; SWIM=1 enables it cluster-wide.
-      GOSSIP_SWIM_FAILURE_DETECTOR: "${SWIM:-0}"
+      # WS-B M5: SWIM UDP failure detector. On by default (M5 cutover); SWIM=0 disables it cluster-wide.
+      GOSSIP_SWIM_FAILURE_DETECTOR: "${SWIM:-1}"
+      # SWIM membership-gossip rate (defaults match the raised config defaults; override
+      # via SWIM_GOSSIP / SWIM_PROBE for experiments).
+      GOSSIP_SWIM_GOSSIP_UPDATES:   "${SWIM_GOSSIP:-12}"
+      GOSSIP_SWIM_PROBE_INTERVAL_MS: "${SWIM_PROBE:-500}"
       RUST_LOG:                   "warn,mycelium=info"
     networks:
       - mesh
@@ -62,8 +66,12 @@ services:
       MGMT_PORT:                  "8090"
       GOSSIP_WRITER_CHANNEL_DEPTH: "2048"
       GOSSIP_PING_PEER_SAMPLE_SIZE: "30"
-      # WS-B M5: SWIM UDP failure detector. Off by default; SWIM=1 enables it cluster-wide.
-      GOSSIP_SWIM_FAILURE_DETECTOR: "${SWIM:-0}"
+      # WS-B M5: SWIM UDP failure detector. On by default (M5 cutover); SWIM=0 disables it cluster-wide.
+      GOSSIP_SWIM_FAILURE_DETECTOR: "${SWIM:-1}"
+      # SWIM membership-gossip rate (defaults match the raised config defaults; override
+      # via SWIM_GOSSIP / SWIM_PROBE for experiments).
+      GOSSIP_SWIM_GOSSIP_UPDATES:   "${SWIM_GOSSIP:-12}"
+      GOSSIP_SWIM_PROBE_INTERVAL_MS: "${SWIM_PROBE:-500}"
       RUST_LOG:                   "warn,mycelium=info"
     networks:
       - mesh
@@ -88,8 +96,12 @@ services:
       GOSSIP_HEALTH_CHECK_MAX_JITTER_MS: "5000"
       # Cap outbound connections per node — prevents iptables saturation at 100 nodes.
       GOSSIP_MAX_ACTIVE_CONNECTIONS:     "12"
-      # WS-B M5: SWIM UDP failure detector. Off by default; SWIM=1 enables it cluster-wide.
-      GOSSIP_SWIM_FAILURE_DETECTOR: "${SWIM:-0}"
+      # WS-B M5: SWIM UDP failure detector. On by default (M5 cutover); SWIM=0 disables it cluster-wide.
+      GOSSIP_SWIM_FAILURE_DETECTOR: "${SWIM:-1}"
+      # SWIM membership-gossip rate (defaults match the raised config defaults; override
+      # via SWIM_GOSSIP / SWIM_PROBE for experiments).
+      GOSSIP_SWIM_GOSSIP_UPDATES:   "${SWIM_GOSSIP:-12}"
+      GOSSIP_SWIM_PROBE_INTERVAL_MS: "${SWIM_PROBE:-500}"
       RUST_LOG:                   "warn,mycelium=info"
     networks:
       - mesh

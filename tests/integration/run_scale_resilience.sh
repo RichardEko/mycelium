@@ -256,6 +256,7 @@ docker run -d \
     -e MYCELIUM_HTTP_PORT=8300 \
     -e MYCELIUM_PEERS=seed:57000 \
     -e GOSSIP_WRITER_CHANNEL_DEPTH=512 \
+    -e GOSSIP_SWIM_FAILURE_DETECTOR="${GOSSIP_SWIM_FAILURE_DETECTOR:-1}" \
     -e RUST_LOG="warn,mycelium=info" \
     --entrypoint sh \
     "$WORKER_IMAGE" \

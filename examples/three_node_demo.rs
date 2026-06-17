@@ -329,6 +329,13 @@ async fn make_agent(
             snapshot_interval_secs: 300,
         });
     }
+    // Apply `GOSSIP_*` environment overrides AFTER the explicit field setup above, so
+    // tuning the scale cluster from compose actually takes effect. Without this the demo
+    // silently ignored every GOSSIP_* knob (notably GOSSIP_SWIM_FAILURE_DETECTOR — the
+    // scale test ran the non-SWIM path even with SWIM=1, which is why WS-B M5's SWIM
+    // behaviour never showed up over Docker). The MYCELIUM_*-derived fields above are not
+    // GOSSIP_* keys, so they are not clobbered.
+    cfg.apply_env_overrides().expect("invalid GOSSIP_* environment override");
     Arc::new(GossipAgent::new(nid, cfg))
 }
 

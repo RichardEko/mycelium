@@ -932,6 +932,11 @@ async fn test_individual_signal_reaches_unpeered_target_via_relay() {
         // Pin the active-connection cap so the topology is deterministic regardless
         // of discovery/health-tick timing (0 = unbounded).
         cfg.max_active_connections = max_active;
+        // This gate asserts relay/flood-fallback across a *controlled* sparse topology
+        // (A→B→C, non-adjacent pair). SWIM (now default-on) would discover every node over
+        // UDP and dissolve the controlled mesh, so pin the legacy TCP-forwarding path the
+        // gate is written for. (RPC over SWIM partial meshes is covered by the G3 scale test.)
+        cfg.swim_failure_detector = false;
         GossipAgent::new(id(port), cfg)
     };
 
@@ -1033,6 +1038,12 @@ async fn test_individual_consumers_over_random_partial_meshes() {
             // the default hop budget; the property under test is delivery,
             // not TTL sizing.
             cfg.default_ttl = 10;
+            // The gate's premise is a *random partial mesh* with genuinely non-adjacent
+            // pairs. SWIM (now default-on) discovers every node over UDP and would connect
+            // the mesh fully, removing the non-adjacency this gate exists to exercise — so
+            // pin the legacy TCP-forwarding/relay path it is written for. (RPC/delivery over
+            // SWIM partial meshes at scale is covered by the G3 resilience test.)
+            cfg.swim_failure_detector = false;
             let agent = Arc::new(GossipAgent::new(id(i), cfg));
             agent.start().await.unwrap();
             agents.push(agent);

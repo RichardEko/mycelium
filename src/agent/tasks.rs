@@ -527,6 +527,15 @@ pub(super) async fn run_health_monitor(
         bootstrap_set.iter().filter(|p| **p != node_id).cloned().collect();
     let mut last_peer_set: AHashSet<NodeId> = AHashSet::new();
     let mut ping_sender_cache: AHashMap<NodeId, mpsc::Sender<Bytes>> = AHashMap::new();
+    // SWIM anti-entropy de-churning state. `last_anti_entropy` records when we last fired a
+    // StateRequest to each peer, so a churning forwarding set cannot re-trigger a sync storm
+    // (each re-add used to re-request state, and the responder spawns a persistent idle-timeout
+    // reply writer — so a popular peer like the seed accreted O(N) warm writers; Stage-4
+    // divergence). The resync cooldown reuses the liveness window: re-sync a forwarding member
+    // about once per it.
+    let mut last_anti_entropy: AHashMap<NodeId, Instant> = AHashMap::new();
+    let resync_cooldown =
+        Duration::from_secs(interval_secs.saturating_mul(peer_eviction_intervals).max(1));
 
     loop {
         tokio::select! { biased;
@@ -593,29 +602,65 @@ pub(super) async fn run_health_monitor(
                 // handled by UDP gossip, so the seed is just one uniform-random candidate.
                 let retain_bootstrap =
                     !swim_enabled && current_peer_set.len() < crate::config::AUTO_FANOUT_FLOOR;
-                // SWIM cutover: rotate the forwarding set so no member (notably the seed,
-                // which every node discovers first and tends to pin via the early greedy
-                // fill) stays permanently retained. Evicting ~k/3 random members per tick
-                // turns the k-set into a moving uniform sample that converges in a few ticks
-                // → each member appears in ~k/N nodes' sets (flat seed_established). Liveness
-                // is unaffected (SWIM owns it). Only rotates once at capacity.
-                if swim_enabled && cached_ping_targets.len() >= k && k > 0 {
-                    let rotate = (k / 3).max(1);
-                    for _ in 0..rotate {
-                        if cached_ping_targets.len() <= 1 { break; }
-                        let victim = cached_ping_targets
-                            .iter()
-                            .nth(fastrand::usize(..cached_ping_targets.len()))
-                            .cloned();
-                        if let Some(v) = victim {
-                            cached_ping_targets.remove(&v);
-                            ping_sender_cache.remove(&v);
-                            evict_peer_writer(&peer_writers, &v);
+                // SWIM cutover, part 1 — CONTINUOUS bootstrap de-pin. Every node discovers the
+                // seed first and the early greedy fill pins it into all N forwarding sets. The
+                // seed is also the one peer every node reliably reaches (it IS the bootstrap), so
+                // under membership churn — e.g. UDP-loss-induced false failures transiently
+                // shrinking the known-peer pool over the Docker bridge — it keeps getting
+                // re-sampled into the forwarding set, and a *one-time* de-pin can never undo that
+                // (Stage-4 Docker re-validation: 43/50 workers stayed pinned to the seed even with
+                // fully-converged membership). So re-evict the bootstrap every tick once we know
+                // more than ~1.33× our forwarding slots. The threshold is `> k + k/3` (not `2k`):
+                // SWIM's UDP gossip only converges membership to a sparse value at scale over a
+                // lossy bridge (~24 known at N=100), which barely reached the old `2k` so the
+                // de-pin never engaged; `k + k/3` engages at that sparse membership while keeping
+                // a floor of `> k` (a node needs ≥1 non-bootstrap peer to swap the seed for).
+                // Below the threshold (small clusters / a node still discovering) the seed is kept
+                // — connectivity over flatness.
+                let depin_threshold = k + k / 3;
+                let depin_active = swim_enabled && k > 0 && current_peer_set.len() > depin_threshold;
+                if depin_active {
+                    for b in &bootstrap_no_self {
+                        if cached_ping_targets.remove(b) {
+                            ping_sender_cache.remove(b);
+                            last_anti_entropy.remove(b);
+                            evict_peer_writer(&peer_writers, b);
                         }
                     }
                 }
-                let (added, removed) = reconcile_active_targets(
-                    &mut cached_ping_targets, &current_peer_set, &bootstrap_no_self, k, retain_bootstrap);
+                // SWIM cutover, part 2 — slow uniform shuffle. Drop ONE random member per tick
+                // once at capacity so the active set drifts into a moving uniform sample (no
+                // member stays permanently retained) WITHOUT the churn storm of the old bulk
+                // ~k/3 eviction: every freed slot is re-filled by `reconcile` and each fill used
+                // to re-fire anti-entropy, re-warming reply writers cluster-wide. One swap/tick
+                // is enough to keep the sample fresh; the decoupled anti-entropy below makes the
+                // cost of the swap a single bounded StateRequest, not an O(N) ripple.
+                if swim_enabled && cached_ping_targets.len() >= k && k > 1
+                    && let Some(v) = cached_ping_targets
+                        .iter()
+                        .nth(fastrand::usize(..cached_ping_targets.len()))
+                        .cloned()
+                {
+                    cached_ping_targets.remove(&v);
+                    ping_sender_cache.remove(&v);
+                    last_anti_entropy.remove(&v);
+                    evict_peer_writer(&peer_writers, &v);
+                }
+                // Reconcile toward `k`. Once de-pinning, exclude the bootstrap from the candidate
+                // POOL too — not just the active set — otherwise reconcile re-adds it at `k/known`,
+                // which at the sparse scale-membership SWIM reaches (known ≪ N) wildly
+                // over-represents the seed (e.g. k=12 of known=24 ⇒ a 50% re-add rate, so the seed
+                // stays pinned on ~half the cluster despite the de-pin). Excluding it from the pool
+                // keeps the seed near-zero inbound — it stays current via its own outbound
+                // anti-entropy pulls — so the seed's fan-in is flat (independent of N), not `k/known`.
+                let (added, removed) = if depin_active {
+                    let mut pool = current_peer_set.clone();
+                    for b in &bootstrap_no_self { pool.remove(b); }
+                    reconcile_active_targets(&mut cached_ping_targets, &pool, &bootstrap_no_self, k, retain_bootstrap)
+                } else {
+                    reconcile_active_targets(
+                        &mut cached_ping_targets, &current_peer_set, &bootstrap_no_self, k, retain_bootstrap)
+                };
                 // Publish the bounded active set to the gossip shards: it is BOTH the ping
                 // set and the forwarding fan-out, so a node opens persistent writers to only
                 // ~k peers (not N). Cluster-wide delivery still holds via multi-hop epidemic
@@ -625,10 +670,36 @@ pub(super) async fn run_health_monitor(
                     let active: Arc<[NodeId]> = cached_ping_targets.iter().cloned().collect();
                     let _ = peer_list_tx.send(active);
                 }
-                for peer in &added {
-                    request_state(peer, &peer_writers, writer_depth, backoff,
-                        idle_timeout, &shutdown_tx, &node_id, &hash_acc,
-                        &dropped_frames, vec![], tls.clone());
+                // Anti-entropy. Without SWIM: sync each newly-added forwarding peer once (the v1
+                // on-add trigger). With SWIM: decouple anti-entropy from the add/remove churn —
+                // sync each CURRENT forwarding member at most once per `resync_cooldown`. The
+                // forwarding set is bounded by k, so a popular peer (the seed) is
+                // anti-entropy-targeted by only ~k nodes per window, not by every node that
+                // briefly churned it into its set — which is what made it accrete O(N) warm
+                // reply writers (Stage-4 seed_out divergence). As a bonus this re-syncs stable
+                // members periodically (the old on-add trigger never re-synced them, so a frame
+                // dropped between two settled peers could only heal via some third peer); when
+                // stores already agree the responder's hash fast-path makes it an empty exchange.
+                if swim_enabled {
+                    let now = Instant::now();
+                    for peer in &cached_ping_targets {
+                        let due = last_anti_entropy
+                            .get(peer)
+                            .is_none_or(|t| now.duration_since(*t) >= resync_cooldown);
+                        if due {
+                            request_state(peer, &peer_writers, writer_depth, backoff,
+                                idle_timeout, &shutdown_tx, &node_id, &hash_acc,
+                                &dropped_frames, vec![], tls.clone());
+                            last_anti_entropy.insert(peer.clone(), now);
+                        }
+                    }
+                    last_anti_entropy.retain(|p, _| current_peer_set.contains(p));
+                } else {
+                    for peer in &added {
+                        request_state(peer, &peer_writers, writer_depth, backoff,
+                            idle_timeout, &shutdown_tx, &node_id, &hash_acc,
+                            &dropped_frames, vec![], tls.clone());
+                    }
                 }
                 for peer in &removed {
                     ping_sender_cache.remove(peer);
