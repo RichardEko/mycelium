@@ -43,9 +43,9 @@ services:
       MYCELIUM_PEERS:              "mgmt:57000"
       GOSSIP_WRITER_CHANNEL_DEPTH: "2048"
       GOSSIP_PING_PEER_SAMPLE_SIZE: "20"
-      # WS-B M5 SWIM: off by default; SWIM=1 enables it cluster-wide (the structural fix
-      # that lets the Phase-3 late-joiner pass at 50 workers — no O(N²) connection state).
-      GOSSIP_SWIM_FAILURE_DETECTOR: "${SWIM:-0}"
+      # WS-B M5 SWIM: on by default (M5 cutover); SWIM=0 disables it cluster-wide (the
+      # structural fix that lets the Phase-3 late-joiner pass at 50 workers).
+      GOSSIP_SWIM_FAILURE_DETECTOR: "${SWIM:-1}"
       RUST_LOG:                    "warn,mycelium=info"
     networks:
       - mesh
@@ -68,9 +68,9 @@ services:
       MGMT_PORT:                   "8090"
       GOSSIP_WRITER_CHANNEL_DEPTH: "2048"
       GOSSIP_PING_PEER_SAMPLE_SIZE: "20"
-      # WS-B M5 SWIM: off by default; SWIM=1 enables it cluster-wide (the structural fix
-      # that lets the Phase-3 late-joiner pass at 50 workers — no O(N²) connection state).
-      GOSSIP_SWIM_FAILURE_DETECTOR: "${SWIM:-0}"
+      # WS-B M5 SWIM: on by default (M5 cutover); SWIM=0 disables it cluster-wide (the
+      # structural fix that lets the Phase-3 late-joiner pass at 50 workers).
+      GOSSIP_SWIM_FAILURE_DETECTOR: "${SWIM:-1}"
       RUST_LOG:                    "warn,mycelium=info"
     networks:
       - mesh
@@ -96,8 +96,8 @@ services:
       # Cap outbound connections to 12 per node (50 × 12 = 600 total vs 2500 without cap).
       # Prevents Docker bridge iptables FORWARD chain saturation at this scale.
       GOSSIP_MAX_ACTIVE_CONNECTIONS:     "12"
-      # WS-B M5 SWIM: off by default; SWIM=1 enables it (the structural fix for G3 at 50 workers).
-      GOSSIP_SWIM_FAILURE_DETECTOR:      "${SWIM:-0}"
+      # WS-B M5 SWIM: on by default (M5 cutover); SWIM=0 disables it (the structural fix for G3).
+      GOSSIP_SWIM_FAILURE_DETECTOR:      "${SWIM:-1}"
       RUST_LOG:                          "warn,mycelium=info"
     networks:
       - mesh
@@ -125,7 +125,7 @@ services:
       RESILIENCE_WORKERS: "20"
       # Propagated so the dynamically-started late-joiner probe matches the cluster's
       # SWIM mode (a non-SWIM probe in a SWIM cluster is a mixed-mode mismatch).
-      GOSSIP_SWIM_FAILURE_DETECTOR: "${SWIM:-0}"
+      GOSSIP_SWIM_FAILURE_DETECTOR: "${SWIM:-1}"
       COMPOSE_PROJECT:    "mycelium-resilience"
       # Docker network name: {project_name}_{network_name} (Compose v2 convention)
       DOCKER_NETWORK:     "mycelium-resilience_mesh"

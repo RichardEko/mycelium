@@ -434,12 +434,19 @@ pub struct GossipConfig {
     /// `max_active_connections`, when set, is an additional hard ceiling on top of this.
     /// Set via `GOSSIP_FANOUT`.
     pub gossip_fanout: usize,
-    /// Enable the SWIM-style UDP failure detector (WS-B M5). **Opt-in, default `false`.**
-    /// When set, the node binds a UDP socket (see `swim_udp_port`) and runs the SWIM
-    /// transport for liveness/heartbeats — connection-free probing that does not consume
-    /// Docker-bridge iptables FORWARD / conntrack entries, lifting the O(N²) connection
-    /// ceiling. TCP is retained for anti-entropy and Data/Signal delivery. Inert while
-    /// `false` (no socket, no task). Set via `GOSSIP_SWIM_FAILURE_DETECTOR`.
+    /// Enable the SWIM-style UDP failure detector (WS-B M5). **Default `true`** (WS-B M5
+    /// Stage-4 cutover — G1 flat `seed_established` + G3 50-worker resilience both green over
+    /// Docker). The node binds a UDP socket (see `swim_udp_port`) and runs the SWIM transport
+    /// for liveness/heartbeats — connection-free probing that does not consume Docker-bridge
+    /// iptables FORWARD / conntrack entries, lifting the O(N²) connection ceiling. TCP is
+    /// retained for anti-entropy and Data/Signal delivery. Set `false` (via
+    /// `GOSSIP_SWIM_FAILURE_DETECTOR=0`) to fall back to the legacy TCP-ping liveness path.
+    ///
+    /// **Rolling-upgrade caveat:** SWIM owns liveness when on (the failure detector evicts a
+    /// peer that fails direct+indirect UDP probes). A SWIM-on node probing a SWIM-*off* node
+    /// (no UDP listener) will mark it Dead. So do **not** mix SWIM-on and SWIM-off nodes in one
+    /// cluster — flip the whole cluster together (or pin `=0` during a staged upgrade until all
+    /// nodes are on the new binary, then restart into SWIM-on).
     pub swim_failure_detector: bool,
     /// UDP port for the SWIM failure detector. `None` (default) binds the **same port
     /// number as `bind_port`** on a separate UDP socket — the SWIM/`memberlist`
@@ -762,7 +769,7 @@ impl Default for GossipConfig {
             max_peers: i64::MAX as usize,
             max_active_connections: 0,
             gossip_fanout: 0,
-            swim_failure_detector: false,
+            swim_failure_detector: true,
             swim_udp_port: None,
             // Membership-gossip rate. Raised from the original 1000 ms / 6 updates: at scale
             // (100 nodes over a lossy bridge) that converged membership to only ~14 known peers

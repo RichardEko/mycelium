@@ -157,13 +157,15 @@ in four independently-mergeable stages, each gated behind `GossipConfig::swim_fa
 (default **false**) so every stage is inert for existing deployments until the final cutover
 flips the default (the M4-default-flip lesson):
 
-**Progress:** Stage 1 ✅ (PR #15) · Stage 2 ✅ (PR #16) · Stage 3 ✅ (PR #17) · Stage 4 🟢 **G1 + G3 both
-green over Docker** (2026-06-17). The root cause of the long in-process/Docker divergence was a config
-bug — the demo never called `apply_env_overrides()`, so SWIM was *off* in every Docker scale run; with
-SWIM actually on plus the membership/de-pin hardening below, `seed_established` is flat (N=50=24,
-N=100=22) and the 50-worker resilience late-joiner passes (11/11). Only the deliberate default flip
-(`swim_failure_detector` → true) remains; default stays **off** pending that release decision. Details
-below.
+**Progress:** Stage 1 ✅ (PR #15) · Stage 2 ✅ (PR #16) · Stage 3 ✅ (PR #17) · Stage 4 ✅ **CUTOVER DONE**
+(2026-06-17). `swim_failure_detector` now defaults **true**. The root cause of the long
+in-process/Docker divergence was a config bug — the demo never called `apply_env_overrides()`, so SWIM
+was *off* in every Docker scale run; with SWIM actually on plus the membership/de-pin hardening below,
+`seed_established` is flat over Docker (N=50=24, N=100=22) and the 50-worker resilience late-joiner
+passes (11/11). 263 lib tests pass with the new default. **Rolling-upgrade caveat** (see the
+`swim_failure_detector` doc-comment): do not mix SWIM-on and SWIM-off nodes in one cluster — flip the
+whole cluster together, since a SWIM-on node evicts a SWIM-off peer that can't answer UDP probes.
+Details below.
 
 #### Stage 4 findings (2026-06-16) — cutover mechanics + the membership-collapse fix
 
@@ -303,8 +305,10 @@ saturation makes the fresh probe's SYN to seed time out at errno 110). Phases 1�
 under SWIM: the resilience compose now sets `GOSSIP_SWIM_FAILURE_DETECTOR` (gated `${SWIM:-0}`), and
 the dynamically-started late-joiner probe inherits it (it had run SWIM-off in a SWIM-on cluster).
 
-**Both G1 and G3 are now green over Docker — the M5 Stage-4 cutover criteria are met.** The remaining
-step is the deliberate default flip (`swim_failure_detector: false → true`), a release decision.
+**Both G1 and G3 are now green over Docker — the M5 Stage-4 cutover criteria are met, and the default
+is flipped: `swim_failure_detector` defaults `true`** (2026-06-17). 263 lib tests pass with the new
+default; the legacy TCP-ping path remains available via `GOSSIP_SWIM_FAILURE_DETECTOR=0`. Mind the
+rolling-upgrade caveat in the config doc-comment (don't mix SWIM-on/off nodes in one cluster).
 
 The `gossip_sample` randomized-tail + continuous de-pin + decoupled anti-entropy changes are correct
 and shipped (in-process oracle flat at seed_total=11, canary 100% across N=30..100); they were just
