@@ -257,6 +257,23 @@ the N=100 path is clear: faster SWIM membership convergence (raise the default g
 lower the de-pin threshold from `2k` toward `~1.5k` so it engages at sparser membership). Full N=100
 trajectory: **121** (SWIM off, the bug) → **89** (SWIM on, default) → **54** (SWIM on, tuned).
 
+**Update (2026-06-17) — raised the SWIM gossip-rate defaults** (`swim_probe_interval_ms` 1000→500,
+`swim_gossip_updates` 6→12; `swim_probe_timeout_ms` 500→300). Docker re-run (SWIM on, defaults only):
+
+| N | seed_established | worker membership |
+|---|---|---|
+| 50 | 35 (flat) | **32** (was 21) |
+| 100 | 72 (was 89) | **24** (was 14) |
+
+So the raised rate clearly improves membership (N=50: 21→32; N=100: 14→24) and N=100 seed_established
+89→72. **But N=100 is still not flat** (72 ≈ 2× N=50's 35): SWIM membership remains N-dependent over
+the lossy bridge (24 at N=100 vs 32 at N=50), landing right *at* the `2k`=24 de-pin threshold, so the
+de-pin only marginally engages. **Closing N=100 needs the complementary lever: lower the de-pin
+threshold from `2k` toward `~1.3–1.5k`** so it engages solidly at the sparser scale-membership the
+raised rate now provides (`> k` is the floor — a node needs more known peers than forwarding slots to
+have a non-bootstrap replacement). Full N=100 trajectory: **121** → **89** → **72** (defaults) — the
+threshold change is the remaining step to ~2k.
+
 The `gossip_sample` randomized-tail + continuous de-pin + decoupled anti-entropy changes are correct
 and shipped (in-process oracle flat at seed_total=11, canary 100% across N=30..100); they were just
 never reached over Docker before the demo fix.
