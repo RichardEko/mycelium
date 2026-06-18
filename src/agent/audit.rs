@@ -248,6 +248,61 @@ pub fn verify_stream_from_genesis(
 
 use super::TaskCtx;
 
+/// Seal one event into `ctx`'s tamper-evident audit chain and write it to
+/// `sys/audit/{self}/{seq}`. Returns the record's content hash.
+///
+/// This is the `TaskCtx`-level primitive behind [`GossipAgent::audit`](super::GossipAgent::audit):
+/// it is callable from anywhere holding an `Arc<TaskCtx>` (e.g. the `/gateway/govern`
+/// HTTP handlers, which never hold a `GossipAgent`). The chain head (lock #8) is
+/// advanced under a short lock released **before** signing and the KV write, so no
+/// two lock-order-table locks are ever held together.
+///
+/// Requires the `tls` identity; returns [`GossipError::InvalidField`] otherwise.
+pub(crate) fn seal_and_write(
+    ctx: &TaskCtx,
+    action: AuditAction,
+    principal: impl Into<String>,
+    target: impl Into<String>,
+    outcome: AuditOutcome,
+    detail: Option<String>,
+) -> Result<[u8; 32], crate::error::GossipError> {
+    let tls = ctx.tls.get().ok_or(crate::error::GossipError::InvalidField {
+        field:  "tls",
+        reason: "audit records require the tls identity (set GossipConfig::tls)".into(),
+    })?;
+    let hlc = ctx.hlc.tick();
+
+    // Build the record and advance the chain head under the lock — the only part
+    // that must be serialised (each record's prev_hash is the prior record's
+    // content hash). Signing and the KV write happen *outside* the lock.
+    let (record, key, content) = {
+        let mut guard = ctx.audit_chain.lock().unwrap_or_else(|e| e.into_inner());
+        let seq = guard.next_seq;
+        let record = AuditRecord {
+            node_id:   ctx.node_id.clone(),
+            seq,
+            hlc,
+            principal: principal.into(),
+            action,
+            target:    target.into(),
+            outcome,
+            detail,
+            prev_hash: guard.last_hash,
+        };
+        let content = record.content_hash();
+        guard.next_seq  = seq + 1;
+        guard.last_hash = content;
+        (record, audit_key(&ctx.node_id, seq), content)
+    };
+
+    let signed = SignedAuditRecord::sign(record, &tls.signing_key());
+    // Local + WAL write is guaranteed; a dropped gossip dispatch still
+    // anti-entropy-syncs, so a queue-full `false` here is not an error.
+    let _ = mycelium_core::kv_handle::KvHandle::from_core(std::sync::Arc::clone(&ctx.core))
+        .set(key, signed.encode());
+    Ok(content)
+}
+
 /// Read `node`'s audit stream from the local KV view, decoded and ordered by seq.
 pub(crate) fn read_stream(ctx: &TaskCtx, node: &NodeId) -> Vec<SignedAuditRecord> {
     let mut entries = crate::store::scan_kv_prefix(&ctx.kv_state, &audit_stream_prefix(node));
