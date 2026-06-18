@@ -59,10 +59,16 @@ regular agent on the public API, never a substrate mechanism — no coordinator 
 duty; each node runs its own and self-elects. The full autonomic loop (declare requirement → demand
 → provision → advertise → demand relieved) is proven by `provisioner::tests`.
 
+**Serve path (landed — provisioned capabilities are callable):** when the provisioner brings a
+capability live it registers an RPC handler (`cap_invoke_kind(ns, name)`) and spawns a serve task
+that owns the component instance (wasmtime stores are single-threaded → one task per instance) and
+routes each inbound invocation to the component's `handle`, replying with its output. A caller
+resolves the capability to a provider, then `rpc_call(provider, cap_invoke_kind(ns, name), …)`.
+
 **Follow-up:** a **gossip-backed catalog** (populate `InstallableCatalog` from the cluster's
 `installable` KV entries); a **mesh-bulk `ArtifactSource`** (surfacing the content-addressed
-bulk-fetch client, §E.4.4); a **serve path** (route an inbound capability invocation to the hosted
-component's `handle`); optional Ed25519 signed-provenance. M14 (supervision) builds on this.
+bulk-fetch client, §E.4.4); fuel/epoch limits + `spawn_blocking` for long-running handlers;
+optional Ed25519 signed-provenance. M14 (supervision) builds on this.
 
 [`ArtifactSource`]: src/artifact.rs
 
