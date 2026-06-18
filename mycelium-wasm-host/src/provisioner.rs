@@ -31,10 +31,10 @@ pub fn cap_invoke_kind(namespace: &str, name: &str) -> String {
 
 /// A capability this node has provisioned and is now hosting: the advertisement registration
 /// (dropping it tombstones the `cap/` entry) plus the serve task that owns the live component
-/// instance and answers inbound invocations.
+/// instance and answers inbound invocations (aborted on withdraw).
 struct Hosted {
-    _cap:   CapabilityReg,
-    _serve: tokio::task::JoinHandle<()>,
+    _cap:  CapabilityReg,
+    serve: tokio::task::JoinHandle<()>,
 }
 
 /// Serve loop for one hosted capability: owns the component [`Instance`] (wasmtime stores are
@@ -63,6 +63,10 @@ async fn serve_loop(agent: Arc<GossipAgent>, mut instance: Instance, mut rx: Rpc
 pub struct SupervisionPolicy {
     pub filter:        CapFilter,
     pub min_providers: usize,
+    /// Upper bound (Track 2b elastic sizing). `Some(max)` ⇒ when the live provider count exceeds
+    /// `max`, a hosting node self-elects to **withdraw** (cooperative self-removal — tombstone its
+    /// `cap/` + stop serving), the symmetric shed path to bring-up. `None` ⇒ unbounded.
+    pub max_providers: Option<usize>,
 }
 
 /// An app-layer provisioner / supervisor. Construct it with the node, a [`WasmHost`], an
@@ -109,7 +113,30 @@ impl Provisioner {
     /// of `filter` alive, re-provisioning from the catalog when the count drops (a dead provider's
     /// `cap/` evaporates → count falls → re-satisfied). Drives bring-up *without* organic demand.
     pub fn supervise(&mut self, filter: CapFilter, min_providers: usize) {
-        self.policies.push(SupervisionPolicy { filter, min_providers });
+        self.policies.push(SupervisionPolicy { filter, min_providers, max_providers: None });
+    }
+
+    /// Like [`supervise`](Self::supervise) but with an upper bound (Track 2b elastic sizing): keep
+    /// the live provider count within `[min, max]`. Below `min` → bring up; above `max` → a hosting
+    /// node self-elects to **withdraw** (cooperative self-removal). Bounds are convergence targets,
+    /// not guarantees (sovereign veto / soft self-election), consistent with the membership governor.
+    pub fn supervise_band(&mut self, filter: CapFilter, min_providers: usize, max_providers: usize) {
+        self.policies.push(SupervisionPolicy {
+            filter,
+            min_providers,
+            max_providers: Some(max_providers),
+        });
+    }
+
+    /// Stop hosting `artifact`: tombstone its `cap/` advertisement (drop the reg) and abort its
+    /// serve task. Cooperative self-removal — the symmetric counterpart to [`bring_live`].
+    fn withdraw(&mut self, artifact: &ArtifactId) -> bool {
+        if let Some(h) = self.hosted.remove(artifact) {
+            h.serve.abort(); // dropping h._cap tombstones the cap/ entry
+            true
+        } else {
+            false
+        }
     }
 
     /// Number of capabilities this node is currently hosting via provisioning.
@@ -142,7 +169,7 @@ impl Provisioner {
                     .capabilities()
                     .advertise_capability(provides.clone(), ADVERTISE_INTERVAL);
                 let serve = tokio::spawn(serve_loop(Arc::clone(&self.agent), instance, rx));
-                self.hosted.insert(artifact, Hosted { _cap: cap, _serve: serve });
+                self.hosted.insert(artifact, Hosted { _cap: cap, serve });
                 tracing::info!(ns = %provides.namespace, name = %provides.name, "provisioned + serving capability");
                 true
             }
@@ -191,7 +218,7 @@ impl Provisioner {
 
         // ── Presence-driven (M14 supervision) ────────────────────────────────
         let policies = self.policies.clone();
-        for policy in policies {
+        for policy in &policies {
             // Live provider count is freshness-aware: a crashed provider's cap/ entry ages out,
             // so `providers` reflects only currently-live providers (this is the self-heal trigger).
             let live = self.agent.capabilities().demand(&policy.filter).providers.len();
@@ -211,6 +238,24 @@ impl Provisioner {
             }
             if self.self_elects() && self.bring_live(provides, artifact) {
                 provisioned += 1;
+            }
+        }
+
+        // ── Shed-driven (Track 2b elastic sizing) ────────────────────────────
+        // Symmetric to bring-up: when a band's live provider count exceeds `max`, a hosting node
+        // self-elects to withdraw. Over-provisioning (e.g. a transient duplicate after a herd of
+        // self-elections) self-corrects here.
+        for policy in &policies {
+            let Some(max) = policy.max_providers else { continue };
+            let live = self.agent.capabilities().demand(&policy.filter).providers.len();
+            if live <= max {
+                continue; // within the band
+            }
+            let Some(artifact) = self.catalog.resolve_best(&policy.filter).map(|e| e.artifact) else {
+                continue;
+            };
+            if self.hosted.contains_key(&artifact) && self.self_elects() {
+                self.withdraw(&artifact); // cooperative self-removal
             }
         }
 
@@ -367,6 +412,48 @@ mod tests {
         }
         assert!(saw_provider, "supervised capability advertises a provider");
         assert_eq!(prov.provision_round(), 0, "invariant satisfied → no re-provisioning");
+
+        agent.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn track2b_sheds_a_provider_when_over_max() {
+        // Track 2b: the symmetric shed path. Bring a capability live, then a band whose `max` is
+        // below the live count makes a hosting node self-elect to withdraw (tombstone + stop
+        // serving). (Single-node: max=0 forces shed of the one local provider — the cross-node
+        // case is the identical code path against real provider counts.)
+        let agent = live_agent().await;
+        let host = Arc::new(WasmHost::new().expect("engine"));
+
+        let mut source = InMemorySource::new();
+        let id = source.insert(ECHO_COMPONENT.to_vec());
+        let mut catalog = InstallableCatalog::new();
+        catalog.add(InstallableEntry::new(Capability::new("text", "echo"), id));
+
+        let mut prov =
+            Provisioner::new(Arc::clone(&agent), host, catalog, Arc::new(source), 1.0);
+
+        // Bring it live via a min>=1 invariant.
+        prov.supervise(CapFilter::new("text", "echo"), 1);
+        assert_eq!(prov.provision_round(), 1);
+        assert_eq!(prov.hosted_count(), 1);
+
+        // Wait until the provider is observable (the shed decision is based on the live count).
+        let mut saw_provider = false;
+        for _ in 0..40 {
+            if !agent.capabilities().demand(&CapFilter::new("text", "echo")).providers.is_empty() {
+                saw_provider = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(saw_provider, "provider must be observable before it can be shed");
+
+        // Replace the policy with a band that wants *fewer* than are live (max=0) → shed.
+        prov.policies.clear();
+        prov.supervise_band(CapFilter::new("text", "echo"), 0, 0);
+        prov.provision_round(); // shed pass withdraws the local provider
+        assert_eq!(prov.hosted_count(), 0, "over-max provider is withdrawn");
 
         agent.shutdown().await;
     }
