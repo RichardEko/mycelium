@@ -184,6 +184,29 @@ by an `accept_all` node and ignored by a `reject_all` node) + `test_wsc_m9_hot_r
 **Start trigger (now satisfied for the mechanism):** the hot-reload primitive + tuner are in;
 running the advisor in production is still demand-gated on an actual elastic-scaling deployment.
 
+### 5.1 Tuning governor ✅ SHIPPED — first worked instance of *management = intent + local reconcile*
+
+Post-implementation, management needed to **bound/disable** the auto-tuner. Rather than a
+control plane, this became the canonical instance of the project pattern (see project memory
+*management-as-intent*): a `TuningGovernor` (`src/agent/tuning_governor.rs`) the applier consults
+before applying any recommendation, fed by two intent sources:
+
+- **Local (sovereign):** `GossipAgent::{set_dynamic_tuning, lock_tuning_floor, lock_tuning_ceiling,
+  set_tuning_ratchet, clear_tuning_locks, clear_all_tuning_locks, tuning_governor}` — set the
+  governor directly and mark the param locally pinned.
+- **Fleet (advisory, evaporating):** `publish_tuning_intent(GovernIntent)` → gossiped
+  `sys/govern/fleet`; `start_governor_reconciler()` applies it only where not locally pinned
+  (local-wins) and only while fresh (`GOVERN_INTENT_TTL_MS`; evaporates → self-heal). Human and
+  agent publishers are substrate-identical — it is intent, never command.
+
+`gate()` = `enabled? → clamp to [floor, ceiling] → ratchet vs current`. Ratchet is one-way
+(`Up` never auto-decreases, `Down` never auto-increases); nothing is permanently locked (a newer
+intent always overrides). Gates the **auto-tuner only** — a manual `set_*` is the operator's own
+override. Gates: 10 `tuning_governor::tests` (gate / clamp / ratchet / clear / local-wins /
+evaporation / fleet-enable / snapshot) + `test_wsc_m9_governor_fleet_reconcile_and_local_wins`
+(cross-node). The broader "govern M8 startup + manual `set_*` too" remains the recognized general
+application, deferred.
+
 ---
 
 ## 6. Phase 3 — M7 distributed rate-limiting (independent; gate: abuse)
