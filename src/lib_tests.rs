@@ -249,6 +249,49 @@ async fn consensus_pair() -> ConsensusPair {
 
 // ── Agent API ─────────────────────────────────────────────────────────────
 
+/// WS-C M8 G-C2: a cluster deployed with `GossipConfig::auto()` (no hand-set tuning
+/// values, no `GOSSIP_*` env) converges and propagates a KV write — the zero-tuning
+/// ops-friction the workstream removes — and each node's *resolved* config reflects the
+/// size-derived (non-zero) values filled by `new()`'s `derive_unset`.
+#[tokio::test]
+async fn test_wsc_m8_auto_config_cluster_converges() {
+    let port_a = alloc_port();
+    let port_b = alloc_port();
+    let id_a = NodeId::new("127.0.0.1", port_a).unwrap();
+    let id_b = NodeId::new("127.0.0.1", port_b).unwrap();
+
+    let mut cfg_a = GossipConfig::auto();
+    cfg_a.bind_port                  = port_a;
+    cfg_a.bootstrap_peers            = vec![id_b.clone()];
+    cfg_a.health_check_max_jitter_ms = 50;
+    let mut cfg_b = GossipConfig::auto();
+    cfg_b.bind_port                  = port_b;
+    cfg_b.bootstrap_peers            = vec![id_a.clone()];
+    cfg_b.health_check_max_jitter_ms = 50;
+
+    let a = GossipAgent::new(id_a, cfg_a);
+    let b = GossipAgent::new(id_b, cfg_b);
+
+    // auto()'s 0 sentinels were filled by new()'s derive_unset (N≈2) — the resolved
+    // config carries valid, formula-derived values, not the 0 sentinel.
+    assert!(a.config().default_ttl >= 5,                 "default_ttl derived");
+    assert!(a.config().writer_channel_depth >= 1024,     "writer_channel_depth derived");
+    assert!(a.config().max_seen_entries >= 100_000,      "max_seen_entries derived");
+    assert!(a.config().ping_peer_sample_size >= 1,       "ping_peer_sample_size derived");
+    assert!(a.config().propagation_window_secs >= 60,    "propagation_window_secs derived");
+    assert!(a.config().validate().is_ok(),               "resolved auto config must validate");
+
+    a.start().await.unwrap();
+    b.start().await.unwrap();
+    poll_until(|| !a.peers().is_empty() && !b.peers().is_empty(), 3_000).await;
+
+    // The cluster actually works end-to-end with auto tuning: a write on A reaches B.
+    let _ = a.kv().set("wsc/m8/k", b"v".to_vec());
+    poll_until(|| b.kv().get("wsc/m8/k") == Some(Bytes::from_static(b"v")), 3_000).await;
+    assert_eq!(b.kv().get("wsc/m8/k"), Some(Bytes::from_static(b"v")),
+        "auto-configured cluster must propagate a KV write");
+}
+
 // Compile-time proof that GossipAgent is Send + Sync so it can be wrapped in Arc.
 #[allow(dead_code)]
 fn assert_gossip_agent_is_send_sync() {

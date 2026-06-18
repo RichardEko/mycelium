@@ -64,7 +64,7 @@ M7 is orthogonal (abuse-triggered, not size-triggered) and parks on its own trig
 | Gate | Harness | What it proves |
 |---|---|---|
 | **G-C1 — formulas are correct & invariant-safe** | `config::tests` unit | `derive_from_n(N)` matches the documented table **and** satisfies all 5 `tuning.md` hard invariants for N ∈ {1, 3, 20, 50, 100, 1000}. |
-| **G-C2 — zero-tuning convergence** | `make test-scale-resilience` + `test-scale-entries` with **all-`auto` config** (no `GOSSIP_*` tuning env beyond bind/SWIM) | A cluster deployed with no hand-set knobs converges and passes the existing scale gates — the ops-friction the workstream exists to remove. |
+| **G-C2 — zero-tuning convergence** | host integration test `test_wsc_m8_auto_config_cluster_converges` (a `GossipConfig::auto()` cluster forms + propagates a KV write; resolved config is derived & valid) | A cluster deployed with no hand-set knobs converges — the ops-friction the workstream exists to remove. *(Node-count axis only: `writer_channel_depth = N×4` does not cover the orthogonal entry-volume burst, so the entries-test's manual depth bump stays a separate, volume-driven knob — see `tuning.md` §Auto-derivation.)* |
 | **G-C3 — override precedence** | `config::tests` unit | An explicit operator value always wins over derivation; an explicit value that *violates* an invariant logs a `warn!` (detection, not silent coercion) but is honoured. |
 
 G-C2 is the load-bearing proof; G-C1/G-C3 are the unit-level correctness net. Phase 2
@@ -73,7 +73,21 @@ that *rejects* the recommendation keeps its own value — advisor-not-coordinato
 
 ---
 
-## 4. Phase 1 — M8 startup auto-derivation (the keystone)
+## 4. Phase 1 — M8 startup auto-derivation (the keystone) ✅ SHIPPED
+
+**Outcome:** `GossipConfig::auto()` + `derive_unset(n)` + `audit_invariants()` in
+`mycelium-core/src/config.rs`; `GossipAgent::new` derives from `bootstrap_peers + self`
+before `validate()` (so a derived field never trips the zero-guard) and a `config()`
+accessor exposes the resolved values. `0` is the per-field "auto" sentinel (consistent with
+`gossip_fanout`); explicit/env values pass through untouched. Fan-out was already auto via
+`resolved_fanout`, so M8 left it alone (resolved open questions #2 & #4). Gates green:
+G-C1 (`derive_matches_table_and_invariants` + idempotence + `integer_sqrt`), G-C3
+(`explicit_values_override_derivation`, `invariant_violating_explicit_config_is_honoured`),
+G-C2 (`test_wsc_m8_auto_config_cluster_converges`). One correction vs. the original plan:
+`writer_channel_depth = N×4` is the node-count axis only — entry-volume burst is orthogonal
+(documented). Design notes below.
+
+
 
 ### 4.1 Mechanism
 Add an "auto" sentinel to each formula-driven `GossipConfig` field. For numeric fields
