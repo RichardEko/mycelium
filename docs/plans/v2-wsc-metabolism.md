@@ -1,0 +1,200 @@
+# v2.0 WS-C — Self-Managing Metabolism — Delivery Plan
+
+Per-workstream execution plan. The canonical *design* lives in
+[ROADMAP.md §v2.0 Milestones](../../ROADMAP.md) (M7, M8, M9, M10) and the workstream
+summary in [`docs/plans/v2.0.md`](v2.0.md) §WS-C. This document is **strategy /
+sequencing only** — it does not restate the milestone designs, it orders them into
+shippable phases with falsifiable gates, mirroring
+[`v2-wsb-scale-transport.md`](v2-wsb-scale-transport.md).
+
+WS-C theme: **the cluster tunes itself to its own size and load — node-locally, with
+no config coordinator.**
+
+---
+
+## 1. Why now (the demand signal)
+
+WS-C's ROADMAP trigger is *"recurring ops friction from teams deploying clusters of
+varying size."* WS-B produced exactly that signal in-house:
+
+- The Stage-4 SWIM divergence root cause was a **config bug** — the demo never applied
+  `GOSSIP_*`, so SWIM was silently off. A self-deriving config removes the whole class
+  of "forgot to set the env var for this size" failure.
+- We had to **hand-write** [`docs/operations/tuning.md`](../operations/tuning.md) (a
+  quick-ref table, 5 hard invariants, and per-size scaling guidance) precisely because
+  none of it is automatic. M8 turns that guide into closed-form derivation.
+- The 100-node `make test-scale` formation is sensitive to fan-out / health-check /
+  anti-entropy cadence that are **not** derived from N; the entries test had to bump
+  `writer_channel_depth` to 4096 by hand. Auto-derivation makes the scale suite itself
+  more robust (a DoD gate below).
+
+So WS-C is **consolidation of what WS-B shipped**, not a new frontier — the lowest-risk,
+highest-"we just felt this" next step. It is also **philosophy-clean**: derivation is a
+node-local function of observable N; the optional tuner *advises*, nodes *decide*
+(Core Principles 1, 4, 5).
+
+---
+
+## 2. Scope & sequencing
+
+| Milestone | What | Phase | Posture |
+|---|---|---|---|
+| **M8** Startup auto-derivation | `None`/"auto" sentinels in `GossipConfig`; closed-form values from N at `start()` | **Phase 1** | The keystone — ship first, standalone |
+| **M9** Hot-reloadable subset + `ClusterTuner` | `Arc<AtomicU32>` for sampled-per-use params; advisor agent over `sys/config/` | **Phase 2** | Builds on M8's formulas; trigger-gated |
+| **M7** Distributed rate-limiting | gossiped `sys/rate/` observations → local budget tightening | **Phase 3 (independent)** | Different trigger (abuse), parks until needed |
+| **M10** Fenced live reconfiguration | consensus-fenced restart of timing params | **Deferred** | Heaviest; defer until M8+M9 proven insufficient |
+
+```
+Phase 1  M8  startup auto-derivation     [self-contained — clears the ops-friction signal]
+Phase 2  M9  hot-reload + ClusterTuner    [needs M8 formulas; gate on elastic-scaling demand]
+Phase 3  M7  distributed rate-limit       [independent; gate on a real abuse pattern]
+   —     M10 fenced reconfiguration        [deferred until 8+9 demonstrably insufficient]
+```
+
+**Sequencing rationale:** M8 is pure node-local derivation (no consensus, no new wire,
+no task restarts — it runs once before any task spawns). M9 reuses M8's formulas behind
+a gossip/subscribe advisor. M10 is the only one needing a fence; its ROADMAP entry
+already says "defer until there is a validated production need 8 and 9 cannot address."
+M7 is orthogonal (abuse-triggered, not size-triggered) and parks on its own trigger.
+
+---
+
+## 3. Definition of done (falsifiable gates)
+
+| Gate | Harness | What it proves |
+|---|---|---|
+| **G-C1 — formulas are correct & invariant-safe** | `config::tests` unit | `derive_from_n(N)` matches the documented table **and** satisfies all 5 `tuning.md` hard invariants for N ∈ {1, 3, 20, 50, 100, 1000}. |
+| **G-C2 — zero-tuning convergence** | `make test-scale-resilience` + `test-scale-entries` with **all-`auto` config** (no `GOSSIP_*` tuning env beyond bind/SWIM) | A cluster deployed with no hand-set knobs converges and passes the existing scale gates — the ops-friction the workstream exists to remove. |
+| **G-C3 — override precedence** | `config::tests` unit | An explicit operator value always wins over derivation; an explicit value that *violates* an invariant logs a `warn!` (detection, not silent coercion) but is honoured. |
+
+G-C2 is the load-bearing proof; G-C1/G-C3 are the unit-level correctness net. Phase 2
+adds **G-C4** (a `ClusterTuner` advisory round changes a sampled param live and a node
+that *rejects* the recommendation keeps its own value — advisor-not-coordinator).
+
+---
+
+## 4. Phase 1 — M8 startup auto-derivation (the keystone)
+
+### 4.1 Mechanism
+Add an "auto" sentinel to each formula-driven `GossipConfig` field. For numeric fields
+the sentinel is a dedicated value already meaning "unset" where one exists
+(`max_active_connections = 0`, `max_inbound_frames_per_sec = 0`) or a new
+`Option<_>` / `0`-as-auto convention documented per field. At `GossipAgent::start()`,
+**before any task spawns**, a single `config.derive_unset(n_estimate)` pass fills every
+auto field, where `n_estimate = bootstrap_peers.len().max(1)` (a lower bound on N).
+
+This slots in next to the existing [`apply_env_overrides`](../../mycelium-core/src/config.rs)
+and [`resolved_fanout`](../../mycelium-core/src/config.rs) — env overrides apply *first*
+(operator intent), then `derive_unset` fills only what remains auto. Order:
+**explicit field set in code > `GOSSIP_*` env > auto-derivation > hard default.**
+
+### 4.2 Derivation table (reconciled with SWIM-default)
+The ROADMAP M8 table predates the M5 SWIM cutover; under SWIM the persistent-TCP
+footprint is the **forwarding set bounded by `resolved_fanout(gossip_fanout,
+max_active_connections, N)`**, not a √N connection cap. The derivation therefore targets
+the *fan-out k* and feeds the existing `resolved_fanout` knob rather than reintroducing a
+separate cap:
+
+| Field | Auto-derivation | Invariant tie-in (`tuning.md`) |
+|---|---|---|
+| `default_ttl` | `max(5, ceil(log₂(N+1)))` | §4 TTL ≥ gossip diameter (safe upper bound for any fan-out k ≥ 2) |
+| fan-out `k` (`gossip_fanout`) | `0` (full mesh) if N ≤ 20, else `max(16, ceil(√N))`; consumed by `resolved_fanout` | the O(N²)→O(N·k) structural fix WS-B shipped |
+| `writer_channel_depth` | `max(1024, N × 4)` | §5 writer depth ≥ burst fan-in |
+| `max_seen_entries` | `max(100_000, N × 1_000)` | dedup horizon scales with origin count |
+| `propagation_window_secs` | `max(60, health_check_interval_secs × peer_eviction_intervals × 2)` | §3 propagation ≥ eviction window |
+| `ping_peer_sample_size` *(candidate)* | `min(N, max(20, ceil(√N)))` | bounds Ping fan-in at large N |
+
+SWIM cadence (`swim_suspicion_timeout_ms`, `swim_gossip_updates`) scaling with N is a
+**candidate**, listed for evaluation in Phase 1 but only adopted if a size sweep shows the
+fixed defaults degrade — we do not derive what isn't demonstrably size-sensitive.
+
+### 4.3 Invariant enforcement
+`derive_unset` finishes with a `validate()` pass that enforces the 5 `tuning.md`
+invariants on the *resolved* config (whether each field was derived or operator-set):
+1. `reconnect_backoff_secs < health_check_interval_secs − 2`
+2. eviction window (`health_check_interval × peer_eviction_intervals`) ≥ expected restart gap
+3. `propagation_window_secs ≥` eviction window
+4. `default_ttl ≥` estimated gossip diameter
+5. `writer_channel_depth ≥` burst fan-in floor
+
+Derived values are constructed to satisfy these by formula. An **operator** value that
+violates one is honoured but emits a `warn!` (G-C3) — same detection-not-prevention
+posture as the consensus/`sys/` tripwires.
+
+### 4.4 Surface & docs
+- `system_stats()` (or a new `GET /config` diagnostic) reports the *resolved* values and,
+  per field, whether it was `explicit | env | derived | default` — so an operator can see
+  what the cluster chose. (M16 edge criterion: keep it under `/gateway` if it exposes
+  anything sensitive; the resolved tuning values are not, so `/stats`-adjacent is fine.)
+- `tuning.md` gains a short "Auto-derivation" section: the table above + "leave it unset
+  and Mycelium sizes it; set it to override." The existing manual guidance stays as the
+  override reference.
+
+### 4.5 Tests (Phase 1)
+- `config::tests::derive_matches_table_and_invariants` → **G-C1**.
+- `config::tests::explicit_overrides_win_and_warn_on_violation` → **G-C3**.
+- Re-run `make test-scale-resilience` / `test-scale-entries` with an all-auto compose
+  (strip the hand-set `GOSSIP_WRITER_CHANNEL_DEPTH=4096` etc.) → **G-C2**; the entries
+  compose's manual bump should become unnecessary, which is itself the proof.
+
+---
+
+## 5. Phase 2 — M9 hot-reload + `ClusterTuner` (gate: elastic scaling)
+
+Promote the three **sampled-per-use** params (`max_inbound_frames_per_sec`,
+`max_concurrent_bulk_handlers`, `writer_channel_depth`) from plain fields to
+`Arc<AtomicU32>` so they can change on a live node with no task restart. A `ClusterTuner`
+companion agent (regular agent, no new mechanism) observes `peers()` to track N, recomputes
+the M8 formulas, and writes recommendations to a short-TTL `sys/config/{param}` KV namespace.
+Each node `subscribe_prefix("sys/config/")` and applies a recommendation **only if its local
+policy accepts it** — the tuner advises, the node decides (Core Principle 1). **G-C4** gates
+the advisor-not-coordinator contract.
+
+**Start trigger:** a deployment where N grows/shrinks at runtime and M8's static startup
+derivation goes stale. Until then, Phase 2 is designed-but-parked.
+
+---
+
+## 6. Phase 3 — M7 distributed rate-limiting (independent; gate: abuse)
+
+Shared observation, local decision: gossip per-sender frame-rate evidence via a bounded
+short-TTL `sys/rate/{node}/` namespace; each node independently tightens its *own* inbound
+budget once aggregate observed rate crosses a threshold; disconnection stays a node-local
+self-defense choice — never a consensus-issued cluster eviction. Expose via `system_stats()`.
+**Start trigger:** a confirmed intra-cluster abuse pattern (today `max_inbound_frames_per_sec`
+suffices for well-behaved deployments). Orthogonal to M8/M9; sequenced last only because its
+trigger is independent of cluster size.
+
+---
+
+## 7. Cross-cutting / philosophy compliance
+
+- **No coordinator (CP1).** M8 is a pure node-local function of observable N. M9's tuner
+  has *no standing agency* — it writes advisory KV; nodes clamp/ignore/override freely,
+  exactly as operator values override auto-derivation. M10 (deferred) is the only piece
+  that needs a fence, which is why it waits for proven need.
+- **Detection, not prevention (CP4).** Invariant violations on operator values warn; they
+  are not silently rewritten.
+- **No new substrate.** M8 is config-layer only. M9 reuses `subscribe_prefix` + atomic
+  fields. M7 reuses the KV namespace + the existing per-peer limiter. Nothing touches the
+  wire format (no `WIRE_VERSION` bump anywhere in WS-C).
+
+---
+
+## 8. Open questions (resolve before Phase 1 build)
+
+1. **`n_estimate` source.** `bootstrap_peers.len()` is a lower bound and can badly
+   under-count a large cluster joined via a single seed. Options: (a) accept the
+   under-count (derivation is a floor; operators override when they know better);
+   (b) re-derive opportunistically once `peers()` reflects the true N — but that crosses
+   into M9 territory (re-deriving live). Recommend (a) for M8, (b) as the M9 hook.
+2. **Auto sentinel encoding.** `0`-as-auto for fields where `0` isn't a legal operating
+   value (`max_active_connections`, `writer_channel_depth`) vs. `Option<_>` for fields
+   where `0`/absence is meaningful. Decide per field; document in the `GossipConfig` doc
+   comments alongside the existing `GOSSIP_*` notes.
+3. **Which SWIM params (if any) are size-derived.** Resolve via a Phase-1 size sweep, not
+   by assumption.
+4. **`derive` vs `resolved_fanout` overlap.** `resolved_fanout` already turns
+   `gossip_fanout`/`max_active_connections`/N into an effective k at runtime. M8 should
+   derive the *inputs* and leave `resolved_fanout` as the single resolution point — avoid
+   two places computing k.
