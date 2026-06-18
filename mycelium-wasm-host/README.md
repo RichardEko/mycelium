@@ -65,10 +65,18 @@ that owns the component instance (wasmtime stores are single-threaded → one ta
 routes each inbound invocation to the component's `handle`, replying with its output. A caller
 resolves the capability to a provider, then `rpc_call(provider, cap_invoke_kind(ns, name), …)`.
 
+**M14 supervision (landed):** `Provisioner::supervise(filter, min_providers)` adds a
+capability-presence invariant — keep ≥ `min_providers` live providers of `filter` alive. The same
+`provision_round` reconciles it: a freshness-aware provider count below the floor triggers a
+catalog resolve + `bring_live` — with **no organic demand**. Self-healing falls out for free: a
+crashed provider's `cap/` entry evaporates, the count drops, the invariant re-provisions —
+**restart and first-time provisioning are the same resolve-and-pull path**.
+
 **Follow-up:** a **gossip-backed catalog** (populate `InstallableCatalog` from the cluster's
 `installable` KV entries); a **mesh-bulk `ArtifactSource`** (surfacing the content-addressed
 bulk-fetch client, §E.4.4); fuel/epoch limits + `spawn_blocking` for long-running handlers;
-optional Ed25519 signed-provenance. M14 (supervision) builds on this.
+**withdraw-when-over-`max`** (Track 2b elastic sizing — the symmetric shed path); leased-consensus
+for strict singletons; optional Ed25519 signed-provenance.
 
 [`ArtifactSource`]: src/artifact.rs
 
