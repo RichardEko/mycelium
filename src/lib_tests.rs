@@ -407,6 +407,47 @@ async fn test_wsc_m9_governor_fleet_reconcile_and_local_wins() {
     assert_eq!(ceiling_of(&b), Some(4096), "local pin wins over the fleet intent");
 }
 
+/// Track 1: a node-targeted intent is applied only by the named node — per-node governance
+/// rides the gossip path (the publisher's own node, not the target, must NOT apply it).
+#[tokio::test]
+async fn test_governor_node_targeted_intent() {
+    let port_a = alloc_port();
+    let port_b = alloc_port();
+    let id_a = NodeId::new("127.0.0.1", port_a).unwrap();
+    let id_b = NodeId::new("127.0.0.1", port_b).unwrap();
+
+    let mut cfg_a = GossipConfig::auto();
+    cfg_a.bind_port = port_a; cfg_a.bootstrap_peers = vec![id_b.clone()];
+    cfg_a.health_check_max_jitter_ms = 50;
+    let mut cfg_b = GossipConfig::auto();
+    cfg_b.bind_port = port_b; cfg_b.bootstrap_peers = vec![id_a.clone()];
+    cfg_b.health_check_max_jitter_ms = 50;
+
+    let a = GossipAgent::new(id_a, cfg_a);
+    let b = GossipAgent::new(id_b.clone(), cfg_b);
+    a.start().await.unwrap();
+    b.start().await.unwrap();
+    poll_until(|| !a.peers().is_empty() && !b.peers().is_empty(), 3_000).await;
+    a.start_governor_reconciler();
+    b.start_governor_reconciler();
+
+    let ceiling_of = |agent: &GossipAgent| -> Option<u64> {
+        agent.tuning_governor().params.into_iter()
+            .find(|p| p.param == crate::HotParam::WriterDepth)
+            .and_then(|p| p.ceiling)
+    };
+
+    // A publishes an intent TARGETED at B. It gossips to both, but only B applies it.
+    let _ = a.publish_tuning_intent(
+        crate::GovernIntent::bound(crate::HotParam::WriterDepth, None, Some(2048), crate::Ratchet::Off)
+            .for_node(id_b.clone()));
+    poll_until(|| ceiling_of(&b) == Some(2048), 5_000).await;
+    assert_eq!(ceiling_of(&b), Some(2048), "the targeted node applies it");
+    // Give A's reconciler ample time; it must NOT apply (not its target).
+    time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(ceiling_of(&a), None, "a non-targeted node ignores the intent");
+}
+
 // Compile-time proof that GossipAgent is Send + Sync so it can be wrapped in Arc.
 #[allow(dead_code)]
 fn assert_gossip_agent_is_send_sync() {
