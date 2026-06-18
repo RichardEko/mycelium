@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use mycelium::{CapFilter, Capability, CapabilityReg, GossipAgent};
+use mycelium::{CapFilter, Capability, CapabilityReg, GossipAgent, RpcRequestRx};
 
 use crate::artifact::{ArtifactId, ArtifactSource};
 use crate::catalog::InstallableCatalog;
@@ -22,11 +22,36 @@ use crate::host::{HostState, Instance, WasmHost};
 /// How often a provisioned capability re-asserts its `cap/` advertisement.
 const ADVERTISE_INTERVAL: Duration = Duration::from_secs(5);
 
-/// A capability this node has provisioned and is now hosting: the live component instance kept
-/// alive, plus the advertisement registration (dropping it would tombstone the `cap/` entry).
+/// The RPC `kind` an inbound caller uses to invoke the hosted capability `ns/name`. A caller
+/// resolves the capability to a provider node, then `rpc_call(provider, cap_invoke_kind(ns, name),
+/// payload, timeout)`; the provisioner's serve loop routes it to the component's `handle` export.
+pub fn cap_invoke_kind(namespace: &str, name: &str) -> String {
+    format!("cap.invoke/{namespace}/{name}")
+}
+
+/// A capability this node has provisioned and is now hosting: the advertisement registration
+/// (dropping it tombstones the `cap/` entry) plus the serve task that owns the live component
+/// instance and answers inbound invocations.
 struct Hosted {
-    _instance: Instance,
-    _cap:      CapabilityReg,
+    _cap:   CapabilityReg,
+    _serve: tokio::task::JoinHandle<()>,
+}
+
+/// Serve loop for one hosted capability: owns the component [`Instance`] (wasmtime stores are
+/// single-threaded, so one task per instance serialises calls) and answers each inbound RPC by
+/// invoking the component's `handle` export and replying with its output.
+async fn serve_loop(agent: Arc<GossipAgent>, mut instance: Instance, mut rx: RpcRequestRx) {
+    while let Some(req) = rx.recv().await {
+        let payload = req.payload().to_vec();
+        // NB: wasm execution is synchronous and blocks this task for its duration — fine for
+        // short handlers; long-running components want fuel/epoch limits + spawn_blocking (follow-up).
+        let result: Vec<u8> = match instance.invoke("invoke", payload) {
+            Ok(Ok(out)) => out,
+            Ok(Err(e)) => format!("component-error: {e}").into_bytes(),
+            Err(e) => format!("host-error: {e}").into_bytes(),
+        };
+        agent.service().rpc_respond(&req, result);
+    }
 }
 
 /// An app-layer provisioner. Construct it with the node, a [`WasmHost`], an [`InstallableCatalog`],
@@ -98,13 +123,18 @@ impl Provisioner {
             );
             match self.host.provision(&*self.source, &artifact, state) {
                 Ok(instance) => {
+                    // Register the inbound serve handler *before* advertising, so a caller that
+                    // resolves the fresh `cap/` entry always finds a live RPC receiver.
+                    let kind = cap_invoke_kind(&provides.namespace, &provides.name);
+                    let rx = self.agent.service().rpc_rx(kind);
                     let cap = self
                         .agent
                         .capabilities()
                         .advertise_capability(provides.clone(), ADVERTISE_INTERVAL);
-                    self.hosted.insert(artifact, Hosted { _instance: instance, _cap: cap });
+                    let serve = tokio::spawn(serve_loop(Arc::clone(&self.agent), instance, rx));
+                    self.hosted.insert(artifact, Hosted { _cap: cap, _serve: serve });
                     provisioned += 1;
-                    tracing::info!(ns = %provides.namespace, name = %provides.name, "provisioned capability by demand");
+                    tracing::info!(ns = %provides.namespace, name = %provides.name, "provisioned + serving capability by demand");
                 }
                 Err(e) => {
                     tracing::warn!(ns = %provides.namespace, name = %provides.name, %e, "provisioning failed");
@@ -197,6 +227,19 @@ mod tests {
         // Idempotent: a second round provisions nothing (already hosted + now has a provider).
         assert_eq!(prov.provision_round(), 0, "satisfied requirement is not re-provisioned");
         assert_eq!(prov.hosted_count(), 1);
+
+        // The provisioned capability is callable: an inbound RPC reaches the component's `handle`.
+        let reply = agent
+            .service()
+            .rpc_call(
+                agent.node_id().clone(),
+                cap_invoke_kind("text", "echo"),
+                b"call me".to_vec(),
+                Duration::from_secs(5),
+            )
+            .await
+            .expect("served capability replies");
+        assert_eq!(reply.as_ref(), b"call me", "the hosted component echoed the invocation");
 
         agent.shutdown().await;
     }
