@@ -185,7 +185,7 @@ pub(super) async fn run_gossip_shard(
     shutdown_tx:            Arc<watch::Sender<bool>>,
     mut peer_list_rx:       watch::Receiver<Arc<[NodeId]>>,
     alive:                  Arc<AtomicBool>,
-    writer_depth:           usize,
+    hot:                    Arc<mycelium_core::context::HotConfig>,
     backoff:                Duration,
     idle_timeout:           Duration,
     max_forwarding_peers:   usize,
@@ -219,7 +219,7 @@ pub(super) async fn run_gossip_shard(
                 t.clone()
             } else {
                 let Some(t) = get_or_spawn_writer(
-                    peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &dropped_frames, tls.clone(),
+                    peer, &peer_writers, hot.writer_depth(), backoff, idle_timeout, &shutdown_tx, &dropped_frames, tls.clone(),
                 ) else { continue; };
                 sender_cache.insert(peer.clone(), t.clone());
                 t
@@ -234,7 +234,7 @@ pub(super) async fn run_gossip_shard(
                     debug!("Peer writer for {} closed; respawning and retrying", peer);
                     sender_cache.remove(peer);
                     let Some(new_tx) = get_or_spawn_writer(
-                        peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &dropped_frames, tls.clone(),
+                        peer, &peer_writers, hot.writer_depth(), backoff, idle_timeout, &shutdown_tx, &dropped_frames, tls.clone(),
                     ) else { continue; };
                     sender_cache.insert(peer.clone(), new_tx.clone());
                     match new_tx.try_send($data.clone()) {
@@ -473,7 +473,7 @@ pub(super) async fn run_health_monitor(
     hlc:                   Arc<crate::hlc::Hlc>,
     kv_state:              Arc<crate::store::KvState>,
     interval_secs:         u64,
-    writer_depth:          usize,
+    hot:                   Arc<mycelium_core::context::HotConfig>,
     backoff:               Duration,
     idle_timeout:          Duration,
     peer_eviction_intervals: u64,
@@ -511,7 +511,7 @@ pub(super) async fn run_health_monitor(
         // re-pulled; an empty store yields an all-zero digest ⇒ responder full-dumps.
         let digest = crate::store::store_bucket_hashes(&kv_state);
         for peer in &bootstrap_set {
-            request_state(peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &node_id, &hash_acc, &dropped_frames, digest.clone(), tls.clone());
+            request_state(peer, &peer_writers, hot.writer_depth(), backoff, idle_timeout, &shutdown_tx, &node_id, &hash_acc, &dropped_frames, digest.clone(), tls.clone());
         }
     }
 
@@ -583,7 +583,7 @@ pub(super) async fn run_health_monitor(
                         if reconnect_peers.peek().is_some() {
                             let digest = crate::store::store_bucket_hashes(&kv_state);
                             for peer in reconnect_peers {
-                                request_state(peer, &peer_writers, writer_depth, backoff,
+                                request_state(peer, &peer_writers, hot.writer_depth(), backoff,
                                     idle_timeout, &shutdown_tx, &node_id, &hash_acc,
                                     &dropped_frames, digest.clone(), tls.clone());
                             }
@@ -694,7 +694,7 @@ pub(super) async fn run_health_monitor(
                     if !due_peers.is_empty() {
                         let digest = crate::store::store_bucket_hashes(&kv_state);
                         for peer in due_peers {
-                            request_state(peer, &peer_writers, writer_depth, backoff,
+                            request_state(peer, &peer_writers, hot.writer_depth(), backoff,
                                 idle_timeout, &shutdown_tx, &node_id, &hash_acc,
                                 &dropped_frames, digest.clone(), tls.clone());
                             last_anti_entropy.insert(peer.clone(), now);
@@ -704,7 +704,7 @@ pub(super) async fn run_health_monitor(
                 } else if !added.is_empty() {
                     let digest = crate::store::store_bucket_hashes(&kv_state);
                     for peer in &added {
-                        request_state(peer, &peer_writers, writer_depth, backoff,
+                        request_state(peer, &peer_writers, hot.writer_depth(), backoff,
                             idle_timeout, &shutdown_tx, &node_id, &hash_acc,
                             &dropped_frames, digest.clone(), tls.clone());
                     }
@@ -724,7 +724,7 @@ pub(super) async fn run_health_monitor(
                             t.clone()
                         } else {
                             let Some(t) = get_or_spawn_writer(
-                                peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &dropped_frames, tls.clone(),
+                                peer, &peer_writers, hot.writer_depth(), backoff, idle_timeout, &shutdown_tx, &dropped_frames, tls.clone(),
                             ) else { continue; };
                             ping_sender_cache.insert(peer.clone(), t.clone());
                             t
@@ -738,7 +738,7 @@ pub(super) async fn run_health_monitor(
                                 debug!("Peer writer for {} closed; respawning for ping retry", peer);
                                 ping_sender_cache.remove(peer);
                                 let Some(new_tx) = get_or_spawn_writer(
-                                    peer, &peer_writers, writer_depth, backoff, idle_timeout, &shutdown_tx, &dropped_frames, tls.clone(),
+                                    peer, &peer_writers, hot.writer_depth(), backoff, idle_timeout, &shutdown_tx, &dropped_frames, tls.clone(),
                                 ) else { continue; };
                                 ping_sender_cache.insert(peer.clone(), new_tx.clone());
                                 match new_tx.try_send(ping_data.clone()) {

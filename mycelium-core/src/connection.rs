@@ -71,7 +71,6 @@ pub struct ConnContext {
     pub peers:               Arc<papaya::HashMap<NodeId, Instant>>,
     pub shutdown:            Arc<watch::Sender<bool>>,
     pub peer_writers:        Arc<papaya::HashMap<NodeId, WriterEntry>>,
-    pub writer_depth:        usize,
     pub backoff:             Duration,
     pub n_shards:            usize,
     pub intern_keys:         bool,
@@ -96,7 +95,7 @@ pub async fn handle_connection(
     ctx: ConnContext,
 ) -> Result<(), GossipError> {
     let ConnContext {
-        task_ctx, peers, shutdown, peer_writers, writer_depth, backoff, n_shards,
+        task_ctx, peers, shutdown, peer_writers, backoff, n_shards,
         intern_keys, intern_max_keys, max_peers, writer_idle_timeout, peer_list_tx,
     } = ctx;
     let node_id         = task_ctx.node_id.clone();
@@ -128,7 +127,7 @@ pub async fn handle_connection(
     );
     let mut last_state_sent: Option<std::time::Instant> = None;
     // Per-connection inbound rate limiter. Resets every second; 0 = unlimited.
-    let inbound_rate_limit = task_ctx.config.max_inbound_frames_per_sec;
+    // The limit is read from the hot cell each frame (WS-C M9) so it can be retuned live.
     let mut rate_window_start = std::time::Instant::now();
     let mut rate_frame_count: u64 = 0;
 
@@ -146,6 +145,7 @@ pub async fn handle_connection(
         };
 
         // Per-peer inbound rate limiting: drop frames from a flooding peer.
+        let inbound_rate_limit = task_ctx.hot.inbound_fps();
         if inbound_rate_limit > 0 {
             let elapsed = rate_window_start.elapsed();
             if elapsed >= Duration::from_secs(1) {
@@ -260,7 +260,7 @@ pub async fn handle_connection(
                         let _ = peer_list_tx.send(next.into());
                     }
                     let bucket_hashes = crate::store::store_bucket_hashes(&kv_state);
-                    request_state(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &node_id, &kv_state.hash_acc, &kv_state.dropped_frames, bucket_hashes, tls.clone());
+                    request_state(&sender, &peer_writers, task_ctx.hot.writer_depth(), backoff, writer_idle_timeout, &shutdown, &node_id, &kv_state.hash_acc, &kv_state.dropped_frames, bucket_hashes, tls.clone());
                 }
             }
 
@@ -289,7 +289,7 @@ pub async fn handle_connection(
                 if their_hash != 0 && their_hash == my_hash {
                     let data: Bytes = crate::codec::wire_to_bytes(
                         &WireMessage::StateResponse { entries: vec![] });
-                    if let Some(tx) = get_or_spawn_writer(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &kv_state.dropped_frames, tls.clone()) {
+                    if let Some(tx) = get_or_spawn_writer(&sender, &peer_writers, task_ctx.hot.writer_depth(), backoff, writer_idle_timeout, &shutdown, &kv_state.dropped_frames, tls.clone()) {
                         tokio::spawn(async move {
                             if tx.send(data).await.is_err() {
                                 tracing::error!("Fast-path StateResponse writer for {} has exited", sender);
@@ -352,7 +352,7 @@ pub async fn handle_connection(
                 // because StateRequest is only sent on first contact; there is
                 // no automatic retry. Wrap in spawn so the connection handler
                 // is not blocked waiting for the writer to drain.
-                if let Some(tx) = get_or_spawn_writer(&sender, &peer_writers, writer_depth, backoff, writer_idle_timeout, &shutdown, &kv_state.dropped_frames, tls.clone()) {
+                if let Some(tx) = get_or_spawn_writer(&sender, &peer_writers, task_ctx.hot.writer_depth(), backoff, writer_idle_timeout, &shutdown, &kv_state.dropped_frames, tls.clone()) {
                     tokio::spawn(async move {
                         if tx.send(data).await.is_err() {
                             error!("StateResponse writer for {} has exited", sender);

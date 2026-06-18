@@ -871,7 +871,7 @@ impl GossipConfig {
             self.default_ttl = (ceil_log2(n + 1).max(5)).min(u8::MAX as usize) as u8;
         }
         if self.writer_channel_depth == 0 {
-            self.writer_channel_depth = (n.saturating_mul(4)).max(1024);
+            self.writer_channel_depth = Self::auto_writer_channel_depth(n);
         }
         if self.max_seen_entries == 0 {
             self.max_seen_entries = (n.saturating_mul(1_000)).max(100_000);
@@ -886,6 +886,14 @@ impl GossipConfig {
                 .saturating_mul(2)
                 .max(60);
         }
+    }
+
+    /// The M8 size-derived `writer_channel_depth` for cluster size `n` (`max(1024, N×4)`).
+    /// Exposed so the WS-C M9 `ClusterTuner` recommends the *same* value `derive_unset`
+    /// would, with no formula drift between startup derivation and live retuning.
+    #[inline]
+    pub fn auto_writer_channel_depth(n: usize) -> usize {
+        n.max(1).saturating_mul(4).max(1024)
     }
 
     /// Logs a `warn!` for each soft tuning invariant the **resolved** config violates

@@ -64,6 +64,21 @@ still honoured. Inspect the resolved values with `GossipAgent::config()`.
 `GOSSIP_<FIELD>=0` is the env-level "auto" for any of these fields; leaving the env unset
 keeps the static default in the table above (auto is opt-in via `auto()` or a `0`).
 
+### Live retuning — hot-reload (WS-C M9)
+
+Three params are **hot-reloadable** on a running node, no restart: `max_inbound_frames_per_sec`
+(sampled per inbound frame), `max_concurrent_bulk_handlers` (sampled per bulk admission), and
+`writer_channel_depth` (sampled at each *new* writer spawn — existing peers keep their channel).
+Set them live with `GossipAgent::{set_max_inbound_frames_per_sec, set_max_concurrent_bulk_handlers,
+set_writer_channel_depth}`; read the current live values with `hot_tunables()`.
+
+For self-tuning, call `GossipAgent::start_cluster_tuner(interval, policy)` — a decentralized,
+coordinator-free advisor: each node observes the live peer count, recomputes the M8 formula, and
+gossips a recommendation to `sys/config/{param}`; every node applies it **only if its local
+`ConfigPolicy` accepts it** (`accept_all()` / `reject_all()` / `clamped(min, max)`, or your own
+closure). `start_config_applier(policy)` opts a node into applying without advising. The advisor
+*advises*; the node *decides*.
+
 ---
 
 ## Gossip transport modes — SWIM (default) vs legacy TCP-ping
