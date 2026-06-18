@@ -31,6 +31,7 @@ mod artifact;
 mod catalog;
 mod confine;
 mod host;
+mod provisioner;
 
 pub use artifact::{
     verify_artifact, ArtifactId, ArtifactIdError, ArtifactSource, InMemorySource, VerifyError,
@@ -38,3 +39,4 @@ pub use artifact::{
 pub use catalog::{InstallableCatalog, InstallableEntry};
 pub use confine::{confine_key, ConfinementError, COMPONENT_KV_PREFIX};
 pub use host::{HostState, Instance, Request, Response, WasmHost, WasmHostError};
+pub use provisioner::Provisioner;
