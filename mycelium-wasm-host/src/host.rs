@@ -214,7 +214,7 @@ impl WasmHost {
     /// the catalog that gave it `id`, not the bytes' origin.
     pub fn provision(
         &self,
-        source: &impl ArtifactSource,
+        source: &(impl ArtifactSource + ?Sized),
         id: &ArtifactId,
         state: HostState,
     ) -> Result<Instance, WasmHostError> {
@@ -234,7 +234,7 @@ impl WasmHost {
         &self,
         catalog: &InstallableCatalog,
         filter: &CapFilter,
-        source: &impl ArtifactSource,
+        source: &(impl ArtifactSource + ?Sized),
         state: HostState,
     ) -> Result<Option<Instance>, WasmHostError> {
         match catalog.resolve_best(filter) {

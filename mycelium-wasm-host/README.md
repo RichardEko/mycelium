@@ -51,11 +51,18 @@ M12: resolve → pull → verify → instantiate (`Ok(None)` if nothing satisfie
 is **one hop, not a constraint solver** by design — *service* dependencies are runtime-mesh-resolved
 (a component imports the mesh), never frozen into an install closure.
 
+**Provisioner (landed — the loop closes):** `Provisioner` (`src/provisioner.rs`) is the app-layer
+agent that watches demand, resolves unmet requirements against the catalog, and pulls + verifies +
+instantiates + advertises — relieving demand. `provision_round()` is the testable convergence pass;
+it self-elects probabilistically (herd damping) and is idempotent. **Core Principle 1:** it is a
+regular agent on the public API, never a substrate mechanism — no coordinator assigns provisioning
+duty; each node runs its own and self-elects. The full autonomic loop (declare requirement → demand
+→ provision → advertise → demand relieved) is proven by `provisioner::tests`.
+
 **Follow-up:** a **gossip-backed catalog** (populate `InstallableCatalog` from the cluster's
 `installable` KV entries); a **mesh-bulk `ArtifactSource`** (surfacing the content-addressed
-bulk-fetch client, §E.4.4); a **provisioner agent** (the standing demand-watch loop that calls
-`provision_for` — an app-layer concern); optional Ed25519 signed-provenance. M14 (supervision)
-builds on this.
+bulk-fetch client, §E.4.4); a **serve path** (route an inbound capability invocation to the hosted
+component's `handle`); optional Ed25519 signed-provenance. M14 (supervision) builds on this.
 
 [`ArtifactSource`]: src/artifact.rs
 
