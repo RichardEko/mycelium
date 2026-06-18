@@ -149,6 +149,7 @@ fn spawn_handler(
         audit_chain: Arc::new(std::sync::Mutex::new(crate::agent::audit::AuditChainState::new())),
         filter_opacity_registry: Arc::new(crate::agent::FilterOpacityRegistry::new()),
         group_roster_cache: Arc::new(papaya::HashMap::new()),
+        tuning_governor: Arc::new(crate::agent::TuningGovernor::default()),
         #[cfg(feature = "llm")]
         llm_skills: std::sync::Arc::new(papaya::HashMap::new()),
         #[cfg(feature = "llm")]
@@ -359,6 +360,51 @@ async fn test_wsc_m9_config_policy_accept_vs_reject() {
     // Let B's applier run on the change, then confirm it did NOT apply.
     time::sleep(Duration::from_millis(200)).await;
     assert_eq!(b.hot_tunables().1, 1024, "reject-policy node keeps its own value");
+}
+
+/// WS-C M9 governor: a fleet governance intent published on A is reconciled by B; once B
+/// takes local control of the param, a later fleet intent is ignored (local always wins).
+#[tokio::test]
+async fn test_wsc_m9_governor_fleet_reconcile_and_local_wins() {
+    let port_a = alloc_port();
+    let port_b = alloc_port();
+    let id_a = NodeId::new("127.0.0.1", port_a).unwrap();
+    let id_b = NodeId::new("127.0.0.1", port_b).unwrap();
+
+    let mut cfg_a = GossipConfig::auto();
+    cfg_a.bind_port = port_a; cfg_a.bootstrap_peers = vec![id_b.clone()];
+    cfg_a.health_check_max_jitter_ms = 50;
+    let mut cfg_b = GossipConfig::auto();
+    cfg_b.bind_port = port_b; cfg_b.bootstrap_peers = vec![id_a.clone()];
+    cfg_b.health_check_max_jitter_ms = 50;
+
+    let a = GossipAgent::new(id_a, cfg_a);
+    let b = GossipAgent::new(id_b, cfg_b);
+    a.start().await.unwrap();
+    b.start().await.unwrap();
+    poll_until(|| !a.peers().is_empty() && !b.peers().is_empty(), 3_000).await;
+
+    // B opts in to reconciling fleet governance.
+    b.start_governor_reconciler();
+
+    let ceiling_of = |agent: &GossipAgent| -> Option<u64> {
+        agent.tuning_governor().params.into_iter()
+            .find(|p| p.param == crate::HotParam::WriterDepth)
+            .and_then(|p| p.ceiling)
+    };
+
+    // A publishes a fleet ceiling on writer_depth → B reconciles it (not locally pinned).
+    let _ = a.publish_tuning_intent(crate::GovernIntent::bound(
+        crate::HotParam::WriterDepth, None, Some(2048), crate::Ratchet::Off));
+    poll_until(|| ceiling_of(&b) == Some(2048), 5_000).await;
+    assert_eq!(ceiling_of(&b), Some(2048), "fleet intent reconciled on B");
+
+    // B takes local control → a later fleet intent for the same param is ignored.
+    b.lock_tuning_ceiling(crate::HotParam::WriterDepth, 4096);
+    let _ = a.publish_tuning_intent(crate::GovernIntent::bound(
+        crate::HotParam::WriterDepth, None, Some(500), crate::Ratchet::Off));
+    time::sleep(Duration::from_millis(300)).await; // let the new intent gossip + reconcile
+    assert_eq!(ceiling_of(&b), Some(4096), "local pin wins over the fleet intent");
 }
 
 // Compile-time proof that GossipAgent is Send + Sync so it can be wrapped in Arc.
@@ -675,6 +721,7 @@ async fn test_subscribe_notified_via_gossip() {
             audit_chain: Arc::new(std::sync::Mutex::new(crate::agent::audit::AuditChainState::new())),
             filter_opacity_registry: Arc::new(crate::agent::FilterOpacityRegistry::new()),
             group_roster_cache: Arc::new(papaya::HashMap::new()),
+            tuning_governor: Arc::new(crate::agent::TuningGovernor::default()),
             #[cfg(feature = "llm")]
             llm_skills: std::sync::Arc::new(papaya::HashMap::new()),
             #[cfg(feature = "llm")]

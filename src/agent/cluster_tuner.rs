@@ -51,23 +51,37 @@ fn decode_u64(b: &[u8]) -> Option<u64> {
     b.get(..8).map(|s| u64::from_le_bytes(s.try_into().expect("slice is 8 bytes")))
 }
 
-/// Scan `sys/config/`, run `policy` over each recommendation, and apply the accepted
-/// values to this node's hot cell.
+/// Scan `sys/config/`, gate each recommendation through the M9 governor (enable/bounds/
+/// ratchet) then the custom `policy`, and apply the accepted values to this node's hot cell.
 fn apply_all(kv: &KvHandle, ctx: &Arc<TaskCtx>, policy: &ConfigPolicy) {
+    use super::tuning_governor::HotParam;
     for (key, val) in kv.scan_prefix(CONFIG_PREFIX) {
         let Some(param) = key.strip_prefix(CONFIG_PREFIX) else { continue };
         let Some(rec) = decode_u64(&val) else { continue };
-        let Some(accepted) = policy(param, rec) else {
-            debug!(param, rec, "ClusterTuner: policy rejected recommendation");
+        // Map the recommendation to a governor param + current applied value.
+        let (hot_param, cur) = match param {
+            K_WRITER_DEPTH => (HotParam::WriterDepth, ctx.hot.writer_depth() as u64),
+            other => { warn!(param = other, "ClusterTuner: unknown sys/config param, ignoring"); continue; }
+        };
+        // Governor gate first (management intent: disabled / floor / ceiling / ratchet)…
+        let Some(gated) = ctx.tuning_governor.gate(hot_param, rec, cur) else {
+            debug!(param, rec, "ClusterTuner: governor blocked recommendation (disabled/bounded)");
             continue;
         };
-        match param {
-            K_WRITER_DEPTH => {
-                ctx.hot.writer_channel_depth.store((accepted as usize).max(1), Ordering::Relaxed);
-                debug!(param, value = accepted, "ClusterTuner: applied recommendation");
-            }
-            other => warn!(param = other, "ClusterTuner: unknown sys/config param, ignoring"),
+        // …then the custom ConfigPolicy escape hatch.
+        let Some(accepted) = policy(param, gated) else {
+            debug!(param, gated, "ClusterTuner: policy rejected recommendation");
+            continue;
+        };
+        match hot_param {
+            HotParam::WriterDepth =>
+                ctx.hot.writer_channel_depth.store((accepted as usize).max(1), Ordering::Relaxed),
+            HotParam::InboundFps =>
+                ctx.hot.max_inbound_frames_per_sec.store(accepted, Ordering::Relaxed),
+            HotParam::BulkHandlers =>
+                ctx.hot.max_concurrent_bulk_handlers.store(accepted as usize, Ordering::Relaxed),
         }
+        debug!(param, value = accepted, "ClusterTuner: applied recommendation");
     }
 }
 

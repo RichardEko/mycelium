@@ -79,6 +79,25 @@ gossips a recommendation to `sys/config/{param}`; every node applies it **only i
 closure). `start_config_applier(policy)` opts a node into applying without advising. The advisor
 *advises*; the node *decides*.
 
+### Governing the auto-tuner (WS-C M9 — management as intent)
+
+Management constrains the auto-tuner through **intents, never commands** (see the
+*management-as-intent* design principle). Two control surfaces, both gating the auto-tuner only
+(a deliberate manual `set_*` is the operator's own override):
+
+- **Local (sovereign).** On a node: `set_dynamic_tuning(bool)` (master enable/disable),
+  `lock_tuning_floor(param, v)` / `lock_tuning_ceiling(param, v)` (low/high watermark),
+  `set_tuning_ratchet(param, Ratchet::Up|Down|Off)` (one-way: `Up` never auto-decreases,
+  `Down` never auto-increases), `clear_tuning_locks(param)` / `clear_all_tuning_locks()`.
+  Inspect with `tuning_governor()`. `param` is a `HotParam` (`InboundFps` / `WriterDepth` /
+  `BulkHandlers`).
+- **Fleet (advisory, evaporating).** Any entity with a concern (human via gateway, or an agent)
+  calls `publish_tuning_intent(GovernIntent)` → gossiped to `sys/govern/fleet`. Nodes running
+  `start_governor_reconciler()` apply it **only where they have not locally pinned the param**
+  (local always wins) and **only while it is fresh** — re-publish within `GOVERN_INTENT_TTL_MS`
+  (5 min) or it evaporates and the node self-heals to its own derivation. Nothing is ever
+  permanently locked: a lock/ratchet is just the currently-winning intent, lifted by a newer one.
+
 ---
 
 ## Gossip transport modes — SWIM (default) vs legacy TCP-ping

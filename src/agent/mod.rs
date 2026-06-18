@@ -52,6 +52,7 @@ mod scatter;
 mod bulk;
 mod mailbox;
 mod cluster_tuner;
+mod tuning_governor;
 mod sharding;
 mod shard_ops;
 mod service_handle;
@@ -94,6 +95,12 @@ pub use scatter::{ScatterError, ScatterResult};
 pub use bulk::{BulkError, BulkServeHandle};
 pub use mailbox::{MailboxHandle, MeshEvent};
 pub use cluster_tuner::{accept_all, clamped, reject_all, ConfigPolicy, CONFIG_PREFIX};
+pub use tuning_governor::{
+    GovernIntent, GovernorSnapshot, HotParam, ParamDirective, ParamSnapshot, Ratchet,
+    GOVERN_FLEET_KEY, GOVERN_INTENT_TTL_MS,
+};
+#[cfg(test)]
+pub(crate) use tuning_governor::TuningGovernor;
 #[cfg(feature = "consensus")]
 pub use overlay_consistent::{ConsistencyError, LockGuard};
 #[cfg(feature = "consensus")]
@@ -272,6 +279,9 @@ pub(crate) struct TaskCtx {
     /// never sees a stale roster after observing the new generation value.
     #[cfg_attr(not(feature = "consensus"), allow(dead_code))]
     pub(crate) group_roster_cache: RosterCache,
+    /// WS-C M9 tuning governor — the auto-tuner gate fed by local API (sovereign) +
+    /// gossiped `sys/govern/` fleet intents (reconciled, local-wins, evaporating).
+    pub(crate) tuning_governor: Arc<tuning_governor::TuningGovernor>,
 
     // ── LLM skill registry ───────────────────────────────────────────────────────
     /// Maps `"{ns}/{name}"` → LLM backend. Template is read from KV on every
@@ -657,6 +667,7 @@ impl GossipAgent {
             audit_chain: Arc::new(std::sync::Mutex::new(audit::AuditChainState::new())),
             filter_opacity_registry: Arc::new(capability_ops::FilterOpacityRegistry::new()),
             group_roster_cache:  Arc::clone(&group_roster_cache),
+            tuning_governor:     Arc::new(tuning_governor::TuningGovernor::default()),
             #[cfg(feature = "llm")]
             llm_skills: std::sync::Arc::new(papaya::HashMap::new()),
             #[cfg(feature = "llm")]
