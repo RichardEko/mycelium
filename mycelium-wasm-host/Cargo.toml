@@ -1,0 +1,32 @@
+[package]
+name = "mycelium-wasm-host"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Dr. Richard Nicholson <tathatasystems@proton.me>"]
+description = "WASM Component host for Mycelium (v2.0 WS-E M12): pull + instantiate sandboxed capability components that talk to the local node through a capability-scoped WIT world — the runtime code-mobility / OSGi-bundle analogue, built on Mycelium's public API"
+license = "AGPL-3.0-only"
+repository = "https://github.com/RichardEko/mycelium"
+keywords = ["wasm", "component-model", "code-mobility", "distributed-systems", "wasmtime"]
+categories = ["wasm", "network-programming"]
+
+[dependencies]
+# Companion-crate contract: only Mycelium's PUBLIC API is used (the composability
+# proof, same as mycelium-tuple-space). wasmtime is confined to THIS crate — it must
+# never leak into mycelium / mycelium-core (preserves core's small dep tree; WS-A).
+mycelium = { path = "..", default-features = false }
+
+# WASM Component Model runtime. component-model is the WIT/canonical-ABI half.
+wasmtime = "45"
+# WASI host implementation. Real components (std-based guests) import wasi:* from libc
+# init; the host provides a *restricted, deny-by-default* WASI context (no fs/net/env/stdio)
+# as part of the sandbox — a component's only doors are our scoped imports + minimal WASI.
+wasmtime-wasi = "45"
+
+anyhow  = "1"
+bytes   = "1"
+tracing = "0.1"
+sha2    = "0.10"
+
+[dev-dependencies]
+tokio = { version = "1.35", features = ["full"] }

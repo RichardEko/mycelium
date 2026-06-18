@@ -55,8 +55,10 @@ compliance = ["mycelium-core/compliance", "gateway", "tls", "dep:sha2", "dep:jso
 # The `fuzz/` directory is its own cargo-fuzz crate; keep it out of any
 # implicit-workspace traversal from this parent manifest.
 [workspace]
-members = ["mycelium-core", "mycelium-tuple-space"]
-exclude = ["fuzz"]
+members = ["mycelium-core", "mycelium-tuple-space", "mycelium-wasm-host"]
+# `fuzz/` is its own cargo-fuzz crate; the wasm guest fixture is a wasm32 cdylib
+# built out-of-band (its prebuilt .wasm is committed as a test fixture).
+exclude = ["fuzz", "mycelium-wasm-host/tests/fixtures/echo-component"]
 
 [dependencies]
 # Layers I+II substrate (ROADMAP §v2.0 M1). This crate (the full substrate) adds
