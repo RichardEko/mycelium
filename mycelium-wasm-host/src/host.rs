@@ -12,6 +12,7 @@ use bytes::Bytes;
 use mycelium::{KvHandle, MeshHandle, NodeId, SignalScope};
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Config, Engine, Store};
+use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::artifact::{verify_artifact, ArtifactId, ArtifactSource};
 use crate::confine::{confine_key, ConfinementError};
@@ -69,6 +70,13 @@ impl bindings::mycelium::host::log::Host for HostState {
     }
 }
 
+// Gives the WASI host implementation access to this component's restricted WASI context.
+impl WasiView for HostState {
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        WasiCtxView { ctx: &mut self.wasi, table: &mut self.table }
+    }
+}
+
 /// Per-component host context carried in the wasmtime `Store`. Holds the component's identity
 /// (node + capability namespace) and the **scoped** Mycelium handles its imports map onto.
 pub struct HostState {
@@ -76,12 +84,24 @@ pub struct HostState {
     namespace: Arc<str>,
     kv:        KvHandle,
     mesh:      MeshHandle,
+    // A *restricted, deny-by-default* WASI context: std-based guests import wasi:* from libc
+    // init, so the host must provide it — but with no filesystem, network, env, or inherited
+    // stdio. The guest's only real doors remain our scoped kv/mesh/log imports.
+    wasi:      WasiCtx,
+    table:     ResourceTable,
 }
 
 impl HostState {
     /// Build the context for a component instance providing capability `namespace` on `node_id`.
     pub fn new(node_id: NodeId, namespace: impl Into<Arc<str>>, kv: KvHandle, mesh: MeshHandle) -> Self {
-        Self { node_id, namespace: namespace.into(), kv, mesh }
+        Self {
+            node_id,
+            namespace: namespace.into(),
+            kv,
+            mesh,
+            wasi: WasiCtxBuilder::new().build(), // deny-by-default: no fs/net/env/stdio
+            table: ResourceTable::new(),
+        }
     }
 
     /// The capability namespace this component provides (its confinement scope).
@@ -174,6 +194,9 @@ impl WasmHost {
         let component = Component::new(&self.engine, component_bytes)
             .map_err(|e| WasmHostError::Instantiate(e.to_string()))?;
         let mut linker: Linker<HostState> = Linker::new(&self.engine);
+        // Restricted WASI (std-based guests link wasi:* at init) + our scoped host imports.
+        wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
+            .map_err(|e| WasmHostError::Instantiate(e.to_string()))?;
         bindings::CapabilityComponent::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |s| s)
             .map_err(|e| WasmHostError::Instantiate(e.to_string()))?;
         let mut store = Store::new(&self.engine, state);

@@ -1,0 +1,21 @@
+# WASM guest fixture for the host⇄component e2e test. Built out-of-band for
+# wasm32-wasip2 (produces a component); the resulting .wasm is committed as a
+# fixture so CI needs no wasm toolchain. Regenerate with build.sh.
+# Standalone (not part of the parent workspace — it's a wasm32 cdylib).
+[workspace]
+
+[package]
+name = "echo-component"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+
+[profile.release]
+opt-level = "s"
+strip = true

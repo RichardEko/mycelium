@@ -18,6 +18,10 @@ mycelium = { path = "..", default-features = false }
 
 # WASM Component Model runtime. component-model is the WIT/canonical-ABI half.
 wasmtime = "45"
+# WASI host implementation. Real components (std-based guests) import wasi:* from libc
+# init; the host provides a *restricted, deny-by-default* WASI context (no fs/net/env/stdio)
+# as part of the sandbox — a component's only doors are our scoped imports + minimal WASI.
+wasmtime-wasi = "45"
 
 anyhow  = "1"
 bytes   = "1"

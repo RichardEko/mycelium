@@ -20,7 +20,9 @@ socket:
   `comp/{node}/{namespace}/…`; a component can never escape its subtree or reach the capability
   registry. This is the one place the substrate's *detection-not-prevention* posture flips to
   genuine **prevention** — the guest is untrusted foreign code in the node's own process, so the
-  host mediating every import is legitimate.
+  host mediating every import is legitimate. The host also provides a **restricted, deny-by-default
+  WASI** context (no filesystem, network, env, or inherited stdio) — std-based guests link `wasi:*`
+  at init, but their only real doors are the scoped imports above.
 - **Component export** `handle(request) -> response` — the capability entry point the host calls
   on an inbound invocation.
 
@@ -31,15 +33,18 @@ runtime-mesh-resolved, never link-time-bound into a deployment set.
 ## Status (M12, in progress)
 
 **Landed:** crate scaffold; the WIT contract; `confine` (the enforcement point, unit-tested);
-`HostState` scoped operations proven against a live node; `bindgen!` host-import impls; the
-`WasmHost::instantiate` / `Instance::invoke` path; and **pull + verify + instantiate**
+`HostState` scoped operations proven against a live node; restricted WASI; `bindgen!` host-import
+impls; the `WasmHost::instantiate` / `Instance::invoke` path; **pull + verify + instantiate**
 end to end — `ArtifactId` (content address = SHA-256), `verify_artifact` (run before the engine
-ever sees the bytes), and a pluggable, untrusted [`ArtifactSource`] (`InMemorySource` for now).
+ever sees the bytes), pluggable untrusted [`ArtifactSource`] (`InMemorySource`); and a
+**real-guest end-to-end test** (`tests/e2e.rs`) — an actual WASM component (built from
+`tests/fixtures/echo-component/`, committed as `tests/fixtures/echo_component.wasm`) is
+instantiated, invoked, and its `kv` import is observed crossing into the confined subtree. The
+`.wasm` is committed so CI needs no wasm toolchain; regenerate with the fixture's `build.sh`.
 
-**Follow-up:** a positive end-to-end test with a real guest component (needs the wasm guest
-toolchain — `cargo-component` / `wasm32-wasip2`); a **mesh-bulk `ArtifactSource`** (surfacing the
-content-addressed bulk-fetch client, §E.4.4); and optional Ed25519 signed-provenance over the id.
-M15 (catalog resolve) and M14 (supervision) build on this.
+**Follow-up:** a **mesh-bulk `ArtifactSource`** (surfacing the content-addressed bulk-fetch
+client, §E.4.4) and optional Ed25519 signed-provenance over the id. M15 (catalog resolve) and
+M14 (supervision) build on this.
 
 [`ArtifactSource`]: src/artifact.rs
 
