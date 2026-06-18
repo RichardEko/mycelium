@@ -55,6 +55,22 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --lib --no-default-features -- -D warnings
 
+  wasm-host:
+    # WS-E M12 companion crate. Its own job: it pulls wasmtime (large first
+    # build; rust-cache amortises it) and runs in parallel so it never blocks
+    # the main test/clippy jobs. wasmtime is confined here — never in mycelium /
+    # mycelium-core (the WS-A dep-tree invariant).
+    name: WASM host (WS-E M12)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p mycelium-wasm-host
+      - run: cargo clippy -p mycelium-wasm-host --all-targets -- -D warnings
+
   demo-smoke:
     name: Demo smoke (community cluster + mock LLM)
     runs-on: ubuntu-latest

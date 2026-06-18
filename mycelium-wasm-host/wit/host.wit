@@ -1,0 +1,53 @@
+// The Mycelium host ⇄ component contract (WS-E M12).
+//
+// A capability component runs sandboxed, in-process. It touches the node ONLY through the
+// interfaces below — in-process FFI over the Component-Model canonical ABI, not a socket.
+// The host's IMPORTS are a capability-scoped projection of Mycelium's public handles; the
+// component's EXPORT is the capability it provides.
+//
+// WIT imports = the component's *requires*; WIT exports = its *provides* (M15's one-hop contract):
+// a component imports the MESH, not other capabilities — a call to another skill goes through
+// `mesh`/RPC and is runtime-mesh-resolved, never link-time-bound into a deployment set.
+
+package mycelium:host@0.1.0;
+
+/// Component-private key/value state. Keys are *relative* to the component's namespace; the
+/// host confines them to `comp/{node}/{namespace}/…` — a component can never escape its subtree
+/// or reach the capability registry (this is the enforcement point; see `confine`).
+interface kv {
+    get: func(key: string) -> option<list<u8>>;
+    set: func(key: string, value: list<u8>);
+    delete: func(key: string);
+}
+
+/// Signal emission into the mesh. The host applies the admission scope (broadcast for v0).
+interface mesh {
+    emit: func(kind: string, payload: list<u8>);
+}
+
+/// Structured logging routed through the host's tracing, attributed to the component.
+interface log {
+    info: func(message: string);
+    warn: func(message: string);
+}
+
+/// The capability the component provides. The host calls `handle` on an inbound invocation.
+interface capability {
+    record request {
+        kind: string,
+        payload: list<u8>,
+    }
+    record response {
+        payload: list<u8>,
+        error: option<string>,
+    }
+    handle: func(req: request) -> response;
+}
+
+/// A Mycelium capability component: imports the scoped host surface, exports its capability.
+world capability-component {
+    import kv;
+    import mesh;
+    import log;
+    export capability;
+}
