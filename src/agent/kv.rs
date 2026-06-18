@@ -15,6 +15,14 @@ impl GossipAgent {
         &self.node_id
     }
 
+    /// Returns the node's **resolved** configuration — the value after WS-C M8
+    /// startup auto-derivation (`GossipConfig::derive_unset`) has filled any `0`
+    /// "auto" tuning fields from the cluster-size estimate. Use it to inspect the
+    /// effective tuning a node is actually running with (e.g. after `GossipConfig::auto()`).
+    pub fn config(&self) -> &crate::config::GossipConfig {
+        &self.config
+    }
+
     /// Returns a snapshot of all currently live peer `NodeId`s.
     ///
     /// Useful at Layer 3 when a direct connection (e.g. HTTP) must be opened to

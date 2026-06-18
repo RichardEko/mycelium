@@ -35,6 +35,37 @@ hold between them, and how to scale them safely as cluster size grows.
 
 ---
 
+## Auto-derivation — let the cluster size itself (WS-C M8)
+
+Most of the size-dependent knobs above don't need to be set by hand. Construct the
+config with [`GossipConfig::auto()`](../../mycelium-core/src/config.rs) (or set any one
+field to its `0` "auto" sentinel) and `GossipAgent::new` derives a correct value from a
+cluster-size estimate **N** (`bootstrap_peers` + self, a lower bound) at construction
+time — before any task spawns, no consensus, no wire change. **An explicit non-zero value
+— in code or via `GOSSIP_*` — always wins**, so you can auto-size everything and override
+just the one knob you care about.
+
+| Field | Auto formula | Notes |
+|---|---|---|
+| `default_ttl` | `max(5, ⌈log₂(N+1)⌉)` | covers the gossip diameter (invariant 4) |
+| `writer_channel_depth` | `max(1024, N × 4)` | per-peer **node-count** fan-in floor (invariant 5). The *entry-volume* axis is orthogonal — a single node bulk-writing thousands of keys still wants a deeper channel; size that from the write burst, not N. |
+| `max_seen_entries` | `max(100_000, N × 1000)` | dedup horizon scales with origin count |
+| `ping_peer_sample_size` | `min(N, max(20, ⌊√N⌋))` | bounds Ping fan-in at large N |
+| `propagation_window_secs` | `max(60, health_check_interval × peer_eviction_intervals × 2)` | ≥ eviction window (invariant 3) |
+
+Fan-out (`gossip_fanout` / `max_active_connections`) is **already auto by default** — it is
+resolved *live* per known-peer count by `resolved_fanout` (`k ≈ 2·⌈log₂ N⌉`, floored at
+`AUTO_FANOUT_FLOOR = 8`), so small clusters stay full-mesh and only larger ones are bounded.
+
+`GossipAgent::new` also runs `audit_invariants()`, which logs a `warn!` (detection, not
+prevention) if your *explicit* values violate a cross-field invariant below — the config is
+still honoured. Inspect the resolved values with `GossipAgent::config()`.
+
+`GOSSIP_<FIELD>=0` is the env-level "auto" for any of these fields; leaving the env unset
+keeps the static default in the table above (auto is opt-in via `auto()` or a `0`).
+
+---
+
 ## Gossip transport modes — SWIM (default) vs legacy TCP-ping
 
 Mycelium has two liveness/membership modes. They share the same TCP data plane

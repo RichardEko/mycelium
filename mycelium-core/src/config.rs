@@ -273,6 +273,19 @@ impl Default for GroupTopologyPolicy {
     }
 }
 
+/// Integer floor-sqrt (`⌊√n⌋`), used by `GossipConfig::derive_unset` to size
+/// `ping_peer_sample_size`. No float cast — exact and clippy-clean.
+pub(crate) fn integer_sqrt(n: usize) -> usize {
+    if n < 2 { return n; }
+    let mut x = n;
+    let mut y = x.div_ceil(2);
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x
+}
+
 /// Floor for auto-resolved [`GossipConfig::gossip_fanout`]: clusters of this many
 /// known peers or fewer keep a connection to every peer (effectively full mesh),
 /// so small clusters and unit tests are unaffected by partial-mesh bounding.
@@ -811,6 +824,99 @@ impl Default for GossipConfig {
 }
 
 impl GossipConfig {
+    /// A self-sizing configuration (WS-C M8): [`Default`] with every formula-driven
+    /// tuning field set to its `0` "auto" sentinel, so `GossipAgent::new` derives them
+    /// from the cluster-size estimate. Use this to deploy a cluster of any size without
+    /// hand-computing tuning values; override any individual field afterwards (an explicit
+    /// non-zero value always wins). Fan-out (`gossip_fanout`/`max_active_connections`) is
+    /// already auto by default — it is resolved live by [`resolved_fanout`].
+    ///
+    /// See [`derive_unset`](Self::derive_unset), `docs/operations/tuning.md` §Auto-derivation,
+    /// and `docs/plans/v2-wsc-metabolism.md`.
+    pub fn auto() -> Self {
+        Self {
+            default_ttl:             0,
+            writer_channel_depth:    0,
+            max_seen_entries:        0,
+            ping_peer_sample_size:   0,
+            propagation_window_secs: 0,
+            ..Self::default()
+        }
+    }
+
+    /// Fills size-derived tuning fields left at their `0` "auto" sentinel with closed-form
+    /// values from `n` (an estimate of cluster size N; callers pass a lower bound such as
+    /// `bootstrap_peers.len() + 1`). Explicit non-zero values — set in code or via
+    /// `GOSSIP_*` env — are left untouched, so operator intent always wins.
+    ///
+    /// Called by `GossipAgent::new` **before** [`validate`](Self::validate), so a derived
+    /// field never trips validate's zero-rejection guards. Idempotent: a second call with
+    /// no `0` fields left is a no-op. Fan-out is intentionally *not* handled here — it is
+    /// resolved live per known-peer count by [`resolved_fanout`] (the single k-resolution
+    /// point), which already treats `gossip_fanout = 0` as auto.
+    ///
+    /// Formulas (see `docs/operations/tuning.md` §Auto-derivation):
+    /// - `default_ttl            = max(5, ⌈log₂(N+1)⌉)`  — covers the gossip diameter (invariant 4)
+    /// - `writer_channel_depth   = max(1024, N×4)`       — per-peer burst fan-in floor (invariant 5)
+    /// - `max_seen_entries       = max(100_000, N×1000)` — dedup horizon scales with origin count
+    /// - `ping_peer_sample_size  = min(N, max(20, ⌊√N⌋))` — bounds Ping fan-in at large N
+    /// - `propagation_window_secs= max(60, health×eviction×2)` — ≥ eviction window (invariant 3)
+    pub fn derive_unset(&mut self, n: usize) {
+        let n = n.max(1);
+        // ⌈log₂(m)⌉: smallest k with 2^k ≥ m. 0 for m ≤ 1.
+        let ceil_log2 = |m: usize| -> usize {
+            if m <= 1 { 0 } else { (usize::BITS - (m - 1).leading_zeros()) as usize }
+        };
+        if self.default_ttl == 0 {
+            self.default_ttl = (ceil_log2(n + 1).max(5)).min(u8::MAX as usize) as u8;
+        }
+        if self.writer_channel_depth == 0 {
+            self.writer_channel_depth = (n.saturating_mul(4)).max(1024);
+        }
+        if self.max_seen_entries == 0 {
+            self.max_seen_entries = (n.saturating_mul(1_000)).max(100_000);
+        }
+        if self.ping_peer_sample_size == 0 {
+            self.ping_peer_sample_size = integer_sqrt(n).max(20).min(n);
+        }
+        if self.propagation_window_secs == 0 {
+            self.propagation_window_secs = self
+                .health_check_interval_secs
+                .saturating_mul(self.peer_eviction_intervals)
+                .saturating_mul(2)
+                .max(60);
+        }
+    }
+
+    /// Logs a `warn!` for each soft tuning invariant the **resolved** config violates
+    /// (`docs/operations/tuning.md` §Hard invariants). Detection, not prevention: the
+    /// values are honoured (an operator may know better), exactly like the consensus /
+    /// `sys/` tripwires. `validate()` still hard-rejects the structurally-invalid cases
+    /// (zero fields, out-of-range bounds); this covers the cross-field relationships
+    /// validate does not. Called by `GossipAgent::new` after [`derive_unset`](Self::derive_unset).
+    pub fn audit_invariants(&self) {
+        // Invariant 1 — backoff must be shorter than the health-check interval (−2 s margin).
+        if self.reconnect_backoff_secs + 2 >= self.health_check_interval_secs {
+            tracing::warn!(
+                reconnect_backoff_secs = self.reconnect_backoff_secs,
+                health_check_interval_secs = self.health_check_interval_secs,
+                "tuning invariant 1: reconnect_backoff_secs should be < health_check_interval_secs − 2 \
+                 (a peer can otherwise be evicted mid-backoff and never reconnect)"
+            );
+        }
+        // Invariant 3 — propagation window must cover the eviction window.
+        let eviction_window = self.health_check_interval_secs.saturating_mul(self.peer_eviction_intervals);
+        if self.propagation_window_secs < eviction_window {
+            tracing::warn!(
+                propagation_window_secs = self.propagation_window_secs,
+                eviction_window,
+                "tuning invariant 3: propagation_window_secs should be ≥ the eviction window \
+                 (health_check_interval_secs × peer_eviction_intervals), else a peer can evaporate \
+                 from the seen-set before a slow partition heals"
+            );
+        }
+    }
+
     /// Validates all numeric constraints.
     ///
     /// Called automatically by `GossipAgent::start` and [`load_from_file`](Self::load_from_file).
@@ -1324,6 +1430,106 @@ mod tests {
     #[test]
     fn validate_default_is_valid() {
         assert!(GossipConfig::default().validate().is_ok());
+    }
+
+    // ── WS-C M8: startup auto-derivation ─────────────────────────────────────
+
+    #[test]
+    fn integer_sqrt_is_floor_sqrt() {
+        for n in [0usize, 1, 2, 3, 4, 8, 15, 16, 17, 99, 100, 101, 1000, 1_000_000] {
+            let r = super::integer_sqrt(n);
+            assert!(r * r <= n && (r + 1) * (r + 1) > n, "isqrt({n}) = {r}");
+        }
+    }
+
+    /// G-C1: derived values match the documented formula table **and** the resolved
+    /// config is valid + satisfies the soft tuning invariants, for a sweep of N.
+    #[test]
+    fn derive_matches_table_and_invariants() {
+        // (N, ttl, writer_depth, seen, ping, propagation) — computed from the §4.2 table.
+        let cases = [
+            (1usize,    5u8, 1024usize, 100_000usize,   1usize, 60u64),
+            (3,         5,   1024,      100_000,         3,      60),
+            (20,        5,   1024,      100_000,        20,      60),
+            (50,        6,   1024,      100_000,        20,      60),
+            (100,       7,   1024,      100_000,        20,      60),
+            (1000,     10,   4000,    1_000_000,        31,      60),
+        ];
+        for (n, ttl, wd, seen, ping, prop) in cases {
+            let mut c = GossipConfig::auto();
+            // auto() leaves the five formula fields at the 0 sentinel.
+            assert_eq!(
+                (c.default_ttl, c.writer_channel_depth, c.max_seen_entries,
+                 c.ping_peer_sample_size, c.propagation_window_secs),
+                (0, 0, 0, 0, 0), "auto() must zero the formula fields");
+            c.derive_unset(n);
+            assert_eq!(c.default_ttl, ttl, "default_ttl @ N={n}");
+            assert_eq!(c.writer_channel_depth, wd, "writer_channel_depth @ N={n}");
+            assert_eq!(c.max_seen_entries, seen, "max_seen_entries @ N={n}");
+            assert_eq!(c.ping_peer_sample_size, ping, "ping_peer_sample_size @ N={n}");
+            assert_eq!(c.propagation_window_secs, prop, "propagation_window_secs @ N={n}");
+            // The resolved config must pass validate() (no field left at the 0 sentinel).
+            assert!(c.validate().is_ok(), "derived config must validate @ N={n}");
+            // Soft invariants on the resolved config (defaults: health=10, evict=3, backoff=5).
+            assert!(c.reconnect_backoff_secs + 2 < c.health_check_interval_secs, "invariant 1 @ N={n}");
+            assert!(c.propagation_window_secs >= c.health_check_interval_secs * c.peer_eviction_intervals,
+                "invariant 3 @ N={n}");
+            // default_ttl must cover the gossip diameter ⌈log2(N+1)⌉ (invariant 4).
+            let ceil_log2 = if n + 1 <= 1 { 0 } else { (usize::BITS - n.leading_zeros()) as usize };
+            assert!(c.default_ttl as usize >= ceil_log2.min(u8::MAX as usize) || c.default_ttl == 5,
+                "invariant 4 @ N={n}");
+        }
+    }
+
+    /// G-C1 edge: derivation is idempotent and `derive_unset` is a no-op once filled.
+    #[test]
+    fn derive_is_idempotent() {
+        let mut c = GossipConfig::auto();
+        c.derive_unset(100);
+        let once = c.clone();
+        c.derive_unset(100);
+        assert_eq!(c, once, "second derive_unset must be a no-op");
+        // And deriving on the static Default (no 0 sentinels) changes nothing.
+        let mut d = GossipConfig::default();
+        let before = d.clone();
+        d.derive_unset(9999);
+        assert_eq!(d, before, "derive must not touch explicitly-set (non-zero) fields");
+    }
+
+    /// G-C3: explicit operator values always win over derivation, regardless of N.
+    #[test]
+    fn explicit_values_override_derivation() {
+        let mut c = GossipConfig {
+            default_ttl:             9,
+            writer_channel_depth:    7777,
+            max_seen_entries:        222_222,
+            ping_peer_sample_size:   33,
+            propagation_window_secs: 4242,
+            ..GossipConfig::default()
+        };
+        c.derive_unset(1_000_000); // large N would otherwise raise every field
+        assert_eq!(c.default_ttl, 9);
+        assert_eq!(c.writer_channel_depth, 7777);
+        assert_eq!(c.max_seen_entries, 222_222);
+        assert_eq!(c.ping_peer_sample_size, 33);
+        assert_eq!(c.propagation_window_secs, 4242);
+    }
+
+    /// G-C3 (detection-not-prevention): an explicit config that violates a soft invariant
+    /// is **honoured** (validate passes) — `audit_invariants` only warns, never rejects.
+    #[test]
+    fn invariant_violating_explicit_config_is_honoured() {
+        let c = GossipConfig {
+            // propagation (60) < eviction window (40 × 3 = 120) — trips invariant 3.
+            health_check_interval_secs: 40,
+            peer_eviction_intervals:    3,
+            propagation_window_secs:    60,
+            // backoff (39) ≥ health − 2 (38) — trips invariant 1.
+            reconnect_backoff_secs:     39,
+            ..GossipConfig::default()
+        };
+        c.audit_invariants(); // emits warns; must not panic
+        assert!(c.validate().is_ok(), "soft-invariant violations are warned, not rejected");
     }
 
     #[test]

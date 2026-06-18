@@ -547,6 +547,13 @@ impl GossipAgent {
 
     /// Creates a new agent. Call [`start`](Self::start) to begin listening.
     pub fn new(node_id: NodeId, mut config: GossipConfig) -> Self {
+        // WS-C M8: fill any "auto" (0-sentinel) tuning fields from a cluster-size estimate
+        // before anything reads the config. `bootstrap_peers` (excluding self) + this node is
+        // a lower bound on N; explicit/env values are non-zero and pass through untouched.
+        // Runs before `start()`'s `validate()`, so a derived field never trips the zero guard.
+        let n_estimate = config.bootstrap_peers.iter().filter(|p| *p != &node_id).count() + 1;
+        config.derive_unset(n_estimate);
+        config.audit_invariants();
         let cap = config.gossip_channel_capacity;
         let n_shards = config.gossip_shards.next_power_of_two();
         config.gossip_shards = n_shards;
