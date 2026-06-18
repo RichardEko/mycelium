@@ -125,6 +125,19 @@ intent evaporation reverts to emergent (un-bounded) membership. Local pin beats 
 
 ## 5. Track 3 — Operator surface (separate slice, **after** Track 2)
 
+> **Track 3 ✅ SHIPPED.** `src/agent/http.rs`: `POST /gateway/govern/tuning`, `POST
+> /gateway/govern/membership` (both publish an evaporating, optionally `target`-ed fleet
+> intent over the gossip KV via the Track-1 `publish_intent`), and `GET /gateway/govern`
+> (this node's **effective** tuning-governor snapshot). Gated by a new deny-by-default
+> `govern:read` / `govern:write` pair in the `required_scope` ACL. Governance POSTs are
+> recorded through the WS2 audit trail (`audit::seal_and_write`, extracted so the HTTP
+> handler — which holds only an `Arc<TaskCtx>` — can seal; `GossipAgent::audit` now
+> delegates to it). Per-node Prometheus gauges (`mycelium_governor_*`) emit the effective
+> state on every governor mutation/reconcile (`metrics` feature). Gates:
+> `test_gateway_govern_publish_and_snapshot` (default) +
+> `test_gateway_govern_scope_gating` (compliance). **Engine slice (Tracks 1+2a) + operator
+> surface (Track 3) all landed; Track 2b deferred to WS-E M15.**
+
 The human/observability door onto the headless engine. All existing patterns, low risk.
 
 **HTTP is opt-in on a *subset* of nodes — never required on all.** The `gateway` feature is the

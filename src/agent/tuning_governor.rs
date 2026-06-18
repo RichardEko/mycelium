@@ -44,7 +44,7 @@ pub enum HotParam {
 }
 
 impl HotParam {
-    fn from_key(s: &str) -> Option<Self> {
+    pub(crate) fn from_key(s: &str) -> Option<Self> {
         match s {
             "inbound_fps" => Some(Self::InboundFps),
             "writer_depth" => Some(Self::WriterDepth),
@@ -169,31 +169,37 @@ impl TuningGovernor {
     fn set_enabled(&self, on: bool) {
         self.auto_enabled.store(on, Ordering::Relaxed);
         self.enabled_local.store(true, Ordering::Relaxed);
+        self.emit_metrics();
     }
     fn lock_floor(&self, param: HotParam, v: u64) {
         let p = self.p(param);
         p.floor.store(v, Ordering::Relaxed);
         p.local_set.store(true, Ordering::Relaxed);
+        self.emit_metrics();
     }
     fn lock_ceiling(&self, param: HotParam, v: u64) {
         let p = self.p(param);
         p.ceiling.store(v, Ordering::Relaxed);
         p.local_set.store(true, Ordering::Relaxed);
+        self.emit_metrics();
     }
     fn set_ratchet(&self, param: HotParam, r: Ratchet) {
         let p = self.p(param);
         p.ratchet.store(r.to_u8(), Ordering::Relaxed);
         p.local_set.store(true, Ordering::Relaxed);
+        self.emit_metrics();
     }
     fn clear(&self, param: HotParam) {
         self.p(param).reset();
+        self.emit_metrics();
     }
     fn clear_all(&self) {
         for x in HotParam::all() {
-            self.clear(x);
+            self.p(x).reset();
         }
         self.auto_enabled.store(true, Ordering::Relaxed);
         self.enabled_local.store(false, Ordering::Relaxed);
+        self.emit_metrics();
     }
 
     /// Apply a fleet intent — only to fields the node has **not** locally pinned, and
@@ -214,6 +220,7 @@ impl TuningGovernor {
             p.ceiling.store(d.ceiling.unwrap_or(NO_CEIL), Ordering::Relaxed);
             p.ratchet.store(d.ratchet.to_u8(), Ordering::Relaxed);
         }
+        self.emit_metrics();
     }
 
     /// Revert every **non-locally-pinned** field to unconstrained — used when the fleet
@@ -230,7 +237,32 @@ impl TuningGovernor {
                 p.ratchet.store(0, Ordering::Relaxed);
             }
         }
+        self.emit_metrics();
     }
+
+    /// Emit the effective state as per-node Prometheus gauges (no-op without the
+    /// `metrics` feature). Called after every mutation and on each reconcile, so a
+    /// scrape always reflects the live governor without polling the HTTP snapshot.
+    #[cfg(feature = "metrics")]
+    fn emit_metrics(&self) {
+        let snap = self.snapshot();
+        metrics::gauge!("mycelium_governor_auto_enabled")
+            .set(if snap.auto_enabled { 1.0 } else { 0.0 });
+        for p in &snap.params {
+            let param = p.param.key();
+            // floor 0 = no floor; ceiling -1 = unbounded.
+            metrics::gauge!("mycelium_governor_floor", "param" => param)
+                .set(p.floor.unwrap_or(0) as f64);
+            metrics::gauge!("mycelium_governor_ceiling", "param" => param)
+                .set(p.ceiling.map(|c| c as f64).unwrap_or(-1.0));
+            metrics::gauge!("mycelium_governor_ratchet", "param" => param)
+                .set(p.ratchet.to_u8() as f64);
+            metrics::gauge!("mycelium_governor_locally_pinned", "param" => param)
+                .set(if p.locally_pinned { 1.0 } else { 0.0 });
+        }
+    }
+    #[cfg(not(feature = "metrics"))]
+    fn emit_metrics(&self) {}
 
     /// Effective state, for diagnostics / the gateway.
     pub fn snapshot(&self) -> GovernorSnapshot {

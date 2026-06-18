@@ -98,6 +98,35 @@ Management constrains the auto-tuner through **intents, never commands** (see th
   (5 min) or it evaporates and the node self-heals to its own derivation. Nothing is ever
   permanently locked: a lock/ratchet is just the currently-winning intent, lifted by a newer one.
 
+#### Operator surface — HTTP gateway (WS-C Track 3)
+
+The fleet-intent surface is also exposed over the gateway, so a HITL operator (or an
+external agent) governs without a Rust dependency. HTTP is **opt-in per node** (the
+`gateway` feature); headless nodes still reconcile and self-heal — they just are not an
+operator entry point. Publishing is an idempotent LWW KV write, so **any** gateway node
+accepts the POST and it gossips to converge — no elected/active endpoint, no forwarding
+(want one URL? put an operator-side load balancer in front of the gateway nodes).
+
+| Route | Scope | Body / effect |
+|---|---|---|
+| `POST /gateway/govern/tuning` | `govern:write` | `{"enabled":bool?, "params":[{"param","floor"?,"ceiling"?,"ratchet":"up\|down\|off"}], "target":NodeId?}` → publishes a `GovernIntent` to `sys/govern/fleet` |
+| `POST /gateway/govern/membership` | `govern:write` | `{"group", "min", "max"?, "drain":[NodeId]?, "target":NodeId?}` → publishes a `MembershipIntent` to `sys/govern/membership/{group}` |
+| `GET /gateway/govern` | `govern:read` | this node's **effective** tuning-governor snapshot (reconciled local pins + fleet intent) |
+
+- **Per-node control without per-node HTTP:** set `target: <NodeId>` on any intent and POST
+  it to *any* gateway node — it gossips to everyone (including headless nodes) and only the
+  named node applies it (with local veto). Never reach a node's own HTTP for this.
+- **Scopes are deny-by-default** (`compliance`): `govern:read` / `govern:write` must be granted
+  via `gateway_scoped_tokens` (or OIDC group mapping); an unmapped token is 401, an
+  insufficient one 403.
+- **Provenance:** every governance POST is sealed into the WS2 tamper-evident audit trail
+  (`action = Admin`, principal `gateway/govern`), queryable + verifiable at `GET /gateway/audit`.
+- **Observability:** per-node Prometheus gauges (`mycelium_governor_auto_enabled`,
+  `mycelium_governor_{floor,ceiling,ratchet,locally_pinned}{param=…}`) report **effective**
+  state on `/metrics` (`metrics` feature; ceiling `-1` = unbounded, floor `0` = no floor). The
+  operator aggregates the fleet view in their own Prometheus/Grafana — *library, not platform*.
+  Prometheus carries effective state only; intent history lives in KV + the audit trail.
+
 ---
 
 ## Gossip transport modes — SWIM (default) vs legacy TCP-ping

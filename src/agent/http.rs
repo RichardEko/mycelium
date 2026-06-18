@@ -172,7 +172,11 @@ pub(super) async fn run_http_server(
         .route("/overlay/emit_reliable",          post(gw_overlay_emit_reliable))
         // ── Cluster sharding ──────────────────────────────────────────────
         .route("/shard/{ns}/{name}",               get(gw_shard_owner))
-        .route("/shard/emit",                     post(gw_shard_emit));
+        .route("/shard/emit",                     post(gw_shard_emit))
+        // ── WS-C governance: management = intent + local reconcile ─────────
+        .route("/govern",                         get(gw_govern_snapshot))
+        .route("/govern/tuning",                  post(gw_govern_tuning))
+        .route("/govern/membership",              post(gw_govern_membership));
 
     // ── Consensus + the consistency/lock/election overlays built on it ────────
     // (v2 M2 feature gate). The ordered-log and reliable-delivery overlays above
@@ -415,6 +419,10 @@ fn required_scope(method: &axum::http::Method, matched_path: &str) -> &'static s
         "/gateway/llm/stream"          => "llm:invoke",
         // Audit trail (WS2)
         "/gateway/audit"               => "audit:read",
+        // WS-C governance (intent publish + effective-state snapshot)
+        "/gateway/govern"              => "govern:read",
+        "/gateway/govern/tuning"       => "govern:write",
+        "/gateway/govern/membership"   => "govern:write",
         // Deny-by-default.
         _ => "admin",
     }
@@ -626,6 +634,168 @@ async fn gw_audit(
         }));
     }
     Json(json!({ "streams": streams })).into_response()
+}
+
+// ── WS-C governance: management = intent + local reconcile ───────────────────
+//
+// A HITL operator (or an agent with a concern) publishes an evaporating fleet
+// *intent* over the gossip KV; every node reconciles it locally, local pins win,
+// and the intent self-heals away if the publisher vanishes. These routes are the
+// publish surface (POST) plus an effective-state snapshot (GET). They never command
+// a node — they only seed soft-state that nodes choose to honour (Principles 1 & 5).
+
+/// Record a governance change in the tamper-evident audit trail (best-effort;
+/// requires the `tls` identity, no-op otherwise). Without `compliance`, a no-op.
+#[cfg(feature = "compliance")]
+fn audit_govern(ctx: &Arc<TaskCtx>, target: &str, detail: String) {
+    let _ = super::audit::seal_and_write(
+        ctx,
+        super::audit::AuditAction::Admin,
+        "gateway/govern",
+        target,
+        super::audit::AuditOutcome::Success,
+        Some(detail),
+    );
+}
+#[cfg(not(feature = "compliance"))]
+fn audit_govern(_ctx: &Arc<TaskCtx>, _target: &str, _detail: String) {}
+
+/// Parse an optional `"target"` field into a node id. `Err` carries a message the
+/// caller turns into a 400 (a small error type keeps the `Result` cheap).
+fn parse_optional_target(body: &serde_json::Value) -> Result<Option<crate::node_id::NodeId>, &'static str> {
+    match body.get("target").and_then(|v| v.as_str()) {
+        None => Ok(None),
+        Some(s) => s.parse().map(Some).map_err(|_| "invalid target node id"),
+    }
+}
+
+/// `GET /gateway/govern` — this node's **effective** tuning-governor state (the
+/// reconciled result of local pins + the current fleet intent). Per-node by design;
+/// scrape every node for the fleet picture (there is no central view — Principle 1).
+async fn gw_govern_snapshot(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
+    let snap = ctx.agent_ctx.tuning_governor.snapshot();
+    let params: Vec<_> = snap
+        .params
+        .iter()
+        .map(|p| {
+            json!({
+                "param":          p.param.key(),
+                "floor":          p.floor,
+                "ceiling":        p.ceiling,
+                "ratchet":        format!("{:?}", p.ratchet).to_lowercase(),
+                "locally_pinned": p.locally_pinned,
+            })
+        })
+        .collect();
+    Json(json!({
+        "node_id":      ctx.agent_ctx.node_id.to_string(),
+        "auto_enabled": snap.auto_enabled,
+        "params":       params,
+    }))
+    .into_response()
+}
+
+/// `POST /gateway/govern/tuning` — publish a cluster-wide (or `target`-ed) tuning
+/// intent. Body:
+/// ```json
+/// {"enabled": true,
+///  "params": [{"param": "writer_depth", "floor": 1024, "ceiling": 8192, "ratchet": "up"}],
+///  "target": "10.0.0.5:9000"}
+/// ```
+/// All fields optional except that at least one of `enabled` / `params` must be present.
+async fn gw_govern_tuning(
+    State(ctx): State<Arc<HttpCtx>>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    use super::tuning_governor::{GovernIntent, HotParam, ParamDirective, Ratchet};
+
+    let enabled = body.get("enabled").and_then(|v| v.as_bool());
+
+    let mut params = Vec::new();
+    if let Some(arr) = body.get("params").and_then(|v| v.as_array()) {
+        for d in arr {
+            let Some(pkey) = d.get("param").and_then(|v| v.as_str()) else {
+                return (StatusCode::BAD_REQUEST, Json(json!({"error": "param directive missing 'param'"}))).into_response();
+            };
+            if HotParam::from_key(pkey).is_none() {
+                return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("unknown param '{pkey}'")}))).into_response();
+            }
+            let ratchet = match d.get("ratchet").and_then(|v| v.as_str()) {
+                Some("up")   => Ratchet::Up,
+                Some("down") => Ratchet::Down,
+                Some("off") | None => Ratchet::Off,
+                Some(other)  => return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("unknown ratchet '{other}'")}))).into_response(),
+            };
+            params.push(ParamDirective {
+                param:   pkey.to_string(),
+                floor:   d.get("floor").and_then(|v| v.as_u64()),
+                ceiling: d.get("ceiling").and_then(|v| v.as_u64()),
+                ratchet,
+            });
+        }
+    }
+
+    if enabled.is_none() && params.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "intent must set 'enabled' or 'params'"}))).into_response();
+    }
+
+    let target = match parse_optional_target(&body) {
+        Ok(t)  => t,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({"error": e}))).into_response(),
+    };
+
+    let intent = GovernIntent { enabled, params, written_at_ms: 0, target };
+    let kv = mycelium_core::kv_handle::KvHandle::from_core(Arc::clone(&ctx.agent_ctx.core));
+    let ok = super::intent::publish_intent(&kv, super::tuning_governor::GOVERN_FLEET_KEY, intent);
+    audit_govern(&ctx.agent_ctx, super::tuning_governor::GOVERN_FLEET_KEY, body.to_string());
+    Json(json!({"ok": ok, "key": super::tuning_governor::GOVERN_FLEET_KEY})).into_response()
+}
+
+/// `POST /gateway/govern/membership` — publish an elastic-sizing intent for a group.
+/// Body:
+/// ```json
+/// {"group": "workers", "min": 3, "max": 10, "drain": ["10.0.0.5:9000"], "target": null}
+/// ```
+/// `group` + `min` required; `max` `null`/absent = unbounded; `drain` cooperative self-removal.
+async fn gw_govern_membership(
+    State(ctx): State<Arc<HttpCtx>>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    use super::membership_governor::{MembershipIntent, MEMBERSHIP_PREFIX};
+
+    let Some(group) = body.get("group").and_then(|v| v.as_str()) else {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "missing 'group'"}))).into_response();
+    };
+    let min = body.get("min").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let max = body.get("max").and_then(|v| v.as_u64()).map(|m| m as usize);
+
+    let mut drain: Vec<crate::node_id::NodeId> = Vec::new();
+    if let Some(arr) = body.get("drain").and_then(|v| v.as_array()) {
+        for v in arr {
+            let Some(s) = v.as_str() else {
+                return (StatusCode::BAD_REQUEST, Json(json!({"error": "drain entries must be node-id strings"}))).into_response();
+            };
+            match s.parse() {
+                Ok(n)  => drain.push(n),
+                Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("invalid drain node id '{s}'")}))).into_response(),
+            }
+        }
+    }
+
+    let target = match parse_optional_target(&body) {
+        Ok(t)  => t,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({"error": e}))).into_response(),
+    };
+
+    let mut intent = MembershipIntent::new(group, min, max).with_drain(drain);
+    if let Some(t) = target {
+        intent = intent.for_node(t);
+    }
+    let key = format!("{MEMBERSHIP_PREFIX}{group}");
+    let kv = mycelium_core::kv_handle::KvHandle::from_core(Arc::clone(&ctx.agent_ctx.core));
+    let ok = super::intent::publish_intent(&kv, &key, intent);
+    audit_govern(&ctx.agent_ctx, &key, body.to_string());
+    Json(json!({"ok": ok, "key": key})).into_response()
 }
 
 /// SSE endpoint — streams admitted signals of the requested `kind`.
@@ -2852,6 +3022,132 @@ mod tests {
             .send().await.unwrap();
         assert_ne!(r.status(), 401, "wildcard token must authenticate");
         assert_ne!(r.status(), 403, "wildcard token must pass scope gating");
+
+        agent.shutdown().await;
+    }
+
+    /// WS-C governance surface (Track 3): an operator publishes tuning + membership
+    /// intents over HTTP; the writes land in the gossip KV as evaporating soft-state,
+    /// malformed bodies are rejected, and the effective-state snapshot is served.
+    /// Open gateway here — scope gating is covered by the next test.
+    #[tokio::test]
+    async fn test_gateway_govern_publish_and_snapshot() {
+        let gossip_port = alloc_port();
+        let http_port   = alloc_port();
+        let id  = NodeId::new("127.0.0.1", gossip_port).unwrap();
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = gossip_port;
+        cfg.http_port = Some(http_port);
+
+        let agent = Arc::new(GossipAgent::new(id, cfg));
+        agent.start().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let client = reqwest::Client::new();
+        let base = format!("http://127.0.0.1:{http_port}");
+
+        // Publish a tuning intent → 200, lands at sys/govern/fleet.
+        let r = client.post(format!("{base}/gateway/govern/tuning"))
+            .json(&serde_json::json!({
+                "enabled": true,
+                "params": [{"param": "writer_depth", "floor": 1024, "ceiling": 8192, "ratchet": "up"}]
+            }))
+            .send().await.unwrap();
+        assert_eq!(r.status(), 200);
+        let body: serde_json::Value = r.json().await.unwrap();
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["key"], "sys/govern/fleet");
+
+        // Unknown param → 400.
+        let r = client.post(format!("{base}/gateway/govern/tuning"))
+            .json(&serde_json::json!({"params": [{"param": "nope"}]}))
+            .send().await.unwrap();
+        assert_eq!(r.status(), 400, "unknown param must be rejected");
+
+        // Empty intent (neither enabled nor params) → 400.
+        let r = client.post(format!("{base}/gateway/govern/tuning"))
+            .json(&serde_json::json!({}))
+            .send().await.unwrap();
+        assert_eq!(r.status(), 400, "empty intent must be rejected");
+
+        // Publish a membership intent → 200, lands at sys/govern/membership/workers.
+        let r = client.post(format!("{base}/gateway/govern/membership"))
+            .json(&serde_json::json!({"group": "workers", "min": 3, "max": 10}))
+            .send().await.unwrap();
+        assert_eq!(r.status(), 200);
+        let body: serde_json::Value = r.json().await.unwrap();
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["key"], "sys/govern/membership/workers");
+
+        // Missing group → 400.
+        let r = client.post(format!("{base}/gateway/govern/membership"))
+            .json(&serde_json::json!({"min": 1}))
+            .send().await.unwrap();
+        assert_eq!(r.status(), 400, "membership intent without group must be rejected");
+
+        // Both intents are now in the gossip KV (evaporating soft-state).
+        assert!(agent.kv().get("sys/govern/fleet").is_some(), "tuning intent must be in KV");
+        assert!(agent.kv().get("sys/govern/membership/workers").is_some(), "membership intent must be in KV");
+
+        // Effective-state snapshot is served and well-formed.
+        let r = client.get(format!("{base}/gateway/govern")).send().await.unwrap();
+        assert_eq!(r.status(), 200);
+        let snap: serde_json::Value = r.json().await.unwrap();
+        assert!(snap["auto_enabled"].is_boolean());
+        assert_eq!(snap["params"].as_array().unwrap().len(), 3);
+
+        agent.shutdown().await;
+    }
+
+    /// WS-C governance scope gating (Track 3, compliance): `govern:read` reaches the
+    /// snapshot but is forbidden on a publish route; `govern:write` reaches publish.
+    #[cfg(feature = "compliance")]
+    #[tokio::test]
+    async fn test_gateway_govern_scope_gating() {
+        use axum::http::header::AUTHORIZATION;
+
+        let gossip_port = alloc_port();
+        let http_port   = alloc_port();
+        let id  = NodeId::new("127.0.0.1", gossip_port).unwrap();
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = gossip_port;
+        cfg.http_port = Some(http_port);
+        cfg.gateway_scoped_tokens = vec![
+            crate::GatewayToken { token: "gov-ro".into(), scopes: vec!["govern:read".into()] },
+            crate::GatewayToken { token: "gov-rw".into(), scopes: vec!["govern:write".into()] },
+        ];
+
+        let agent = Arc::new(GossipAgent::new(id, cfg));
+        agent.start().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let client = reqwest::Client::new();
+        let base = format!("http://127.0.0.1:{http_port}");
+
+        // govern:read reaches the snapshot.
+        let r = client.get(format!("{base}/gateway/govern"))
+            .header(AUTHORIZATION, "Bearer gov-ro").send().await.unwrap();
+        assert_eq!(r.status(), 200, "govern:read must reach the snapshot");
+
+        // govern:read is forbidden on a publish route.
+        let r = client.post(format!("{base}/gateway/govern/tuning"))
+            .header(AUTHORIZATION, "Bearer gov-ro")
+            .json(&serde_json::json!({"enabled": false}))
+            .send().await.unwrap();
+        assert_eq!(r.status(), 403, "govern:read must be forbidden on publish");
+        let body: serde_json::Value = r.json().await.unwrap();
+        assert_eq!(body["required_scope"], "govern:write");
+
+        // govern:write reaches the publish route.
+        let r = client.post(format!("{base}/gateway/govern/tuning"))
+            .header(AUTHORIZATION, "Bearer gov-rw")
+            .json(&serde_json::json!({"enabled": false}))
+            .send().await.unwrap();
+        assert_eq!(r.status(), 200, "govern:write must reach publish");
+
+        // No token → 401.
+        let r = client.get(format!("{base}/gateway/govern")).send().await.unwrap();
+        assert_eq!(r.status(), 401, "missing token must be unauthorized");
 
         agent.shutdown().await;
     }
