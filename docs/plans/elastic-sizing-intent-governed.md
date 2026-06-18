@@ -72,6 +72,13 @@ tested for freshness/evaporation in isolation.
 **Intent shape:** per group (and per capability, the provider analogue) — `min`, `max`, optional
 `drain` (exclude named nodes). Published fleet intent + local override, same governor model.
 
+**Node-targeting (applies to every governor intent, incl. the shipped tuning `GovernIntent`):**
+add an optional `target: Option<NodeId>`. The reconciler applies a targeted intent only when
+`target` is `None` (whole fleet) or equals `self`. This is what makes "not all nodes run HTTP" a
+non-issue — per-node governance reaches even headless nodes over gossip, addressed by node-id, so
+the operator never needs that node's HTTP. (Still local-veto-able; still evaporates.) A small
+additive change to the existing tuning governor's intent + reconcile, worth landing alongside Track 1.
+
 **The hard part — collective self-election.** Unlike tuning (each node clamps its *own* scalar,
 zero coupling), membership is a *collective target*: the group/provider count must converge to
 `[min, max]` while each node decides whether **it specifically** should join/leave — and they must
@@ -101,11 +108,30 @@ intent evaporation reverts to emergent (un-bounded) membership. Local pin beats 
 
 ## 5. Track 3 — Operator surface (separate slice, **after** Track 2)
 
-The human/observability door onto the headless engine. All existing patterns, low risk:
+The human/observability door onto the headless engine. All existing patterns, low risk.
 
-- **HTTP:** `/gateway/govern/...` routes (publish/clear fleet intent; set/clear local lock/enable/
-  ratchet; `GET` snapshot). Fleet intent ⇒ POST to *any* node (gossips); local intent ⇒ POST to
-  *that* node. Gated by a new **deny-by-default `govern:write`** scope in the gateway ACL
+**HTTP is opt-in on a *subset* of nodes — never required on all.** The `gateway` feature is the
+heavy axum/hyper half (the reason for the `mycelium-core` split + the bare-metal/WASM embed story).
+The engine is **gateway-free** (reconciler = `subscribe_prefix`+`kv.get`; publish = `kv.set`), so a
+**headless node stays first-class**: it reconciles fleet intents and self-heals, it just isn't an
+operator entry point. Enable the gateway on whatever nodes you want operator-reachable (one, a few,
+or a dedicated edge/management node).
+
+**No consensus, no single-active endpoint, no forwarding.** Publishing a fleet intent is an
+idempotent, commutative LWW KV write — *any* gateway node can accept the POST and it gossips and
+converges (two operators on two nodes is fine: newest-wins). An elected "active endpoint" would be
+a coordinator + SPOF (fails the litmus test: it dies ⇒ operator interaction blocks) solving a
+problem the intent model dissolves. Want one URL? That's an **operator-side ingress/LB** pointed at
+the gateway nodes — *library, not platform* — not a Mycelium election.
+
+**Per-node control without per-node HTTP** = a **node-targeted fleet intent** (see §4 / §3 intent
+shape: optional `target: Option<NodeId>`). It gossips to everyone including headless nodes; the
+named node applies it (with local veto). So you govern a specific headless node by POSTing a
+targeted intent at *any* gateway node — never by reaching that node's HTTP directly. The
+local-direct-API path (sovereign pin) remains for a node's *own* agents, not the operator's primary route.
+
+- **HTTP:** `/gateway/govern/...` routes (publish/clear fleet intent — optionally `target`-ed;
+  `GET` snapshot). Gated by a new **deny-by-default `govern:write`** scope in the gateway ACL
   (`required_scope` table) — governance is sensitive.
 - **Audit (WS2):** route governance changes through the tamper-evident audit trail (who/what/when)
   — provenance is an audit concern, not a metrics one.
@@ -128,6 +154,12 @@ The human/observability door onto the headless engine. All existing patterns, lo
 Litmus test for every step: *if the publishing entity vanishes, does the cluster keep running and
 self-heal?* (Intents evaporate ⇒ yes.) Stay at Tier-2 (desired-state + local veto); escalate to
 Tier-3 **consensus** only for a genuinely inviolable cluster-wide invariant (not in scope here).
+
+**Explicitly rejected:** a consensus-elected single "active governance endpoint" with request
+forwarding. It re-introduces a coordinator + SPOF for the operator door and fails the litmus test,
+to serialize writes that are already idempotent/commutative (LWW). The operator door is "gateway on
+a subset of nodes + node-targeted fleet intent over gossip"; one-URL convenience is operator-side
+ingress, not a Mycelium election.
 
 ---
 
