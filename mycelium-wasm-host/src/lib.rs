@@ -27,8 +27,12 @@
 //! leaks into `mycelium` / `mycelium-core` (WS-A dep-tree invariant). Same posture as
 //! `mycelium-tuple-space`.
 
+mod artifact;
 mod confine;
 mod host;
 
+pub use artifact::{
+    verify_artifact, ArtifactId, ArtifactIdError, ArtifactSource, InMemorySource, VerifyError,
+};
 pub use confine::{confine_key, ConfinementError, COMPONENT_KV_PREFIX};
 pub use host::{HostState, Instance, Request, Response, WasmHost, WasmHostError};

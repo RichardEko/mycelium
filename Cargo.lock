@@ -2405,6 +2405,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "mycelium",
+ "sha2",
  "tokio",
  "tracing",
  "wasmtime",

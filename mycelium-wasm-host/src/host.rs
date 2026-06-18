@@ -13,6 +13,7 @@ use mycelium::{KvHandle, MeshHandle, NodeId, SignalScope};
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Config, Engine, Store};
 
+use crate::artifact::{verify_artifact, ArtifactId, ArtifactSource};
 use crate::confine::{confine_key, ConfinementError};
 
 /// Generated host/guest bindings for [`wit/host.wit`]. Wrapped in a private module so the
@@ -131,6 +132,10 @@ pub enum WasmHostError {
     Instantiate(String),
     /// Calling the component's `handle` export trapped or failed at the ABI.
     Invoke(String),
+    /// No source held the requested artifact.
+    Fetch(String),
+    /// Fetched bytes did not match the requested content address.
+    Verify(String),
 }
 
 impl std::fmt::Display for WasmHostError {
@@ -139,6 +144,8 @@ impl std::fmt::Display for WasmHostError {
             Self::Engine(e) => write!(f, "wasm engine init failed: {e}"),
             Self::Instantiate(e) => write!(f, "component instantiation failed: {e}"),
             Self::Invoke(e) => write!(f, "component invocation failed: {e}"),
+            Self::Fetch(e) => write!(f, "artifact fetch failed: {e}"),
+            Self::Verify(e) => write!(f, "artifact verification failed: {e}"),
         }
     }
 }
@@ -173,6 +180,23 @@ impl WasmHost {
         let world = bindings::CapabilityComponent::instantiate(&mut store, &component, &linker)
             .map_err(|e| WasmHostError::Instantiate(e.to_string()))?;
         Ok(Instance { store, world })
+    }
+
+    /// **Pull + verify + instantiate** — the M12 mechanism end to end. Fetch the artifact for
+    /// `id` from `source`, **verify** the bytes against the content address *before* handing them
+    /// to the engine (the source is untrusted), then instantiate against `state`. A node trusts
+    /// the catalog that gave it `id`, not the bytes' origin.
+    pub fn provision(
+        &self,
+        source: &impl ArtifactSource,
+        id: &ArtifactId,
+        state: HostState,
+    ) -> Result<Instance, WasmHostError> {
+        let bytes = source
+            .fetch(id)
+            .ok_or_else(|| WasmHostError::Fetch(format!("no source holds artifact {id}")))?;
+        verify_artifact(&bytes, id).map_err(|e| WasmHostError::Verify(e.to_string()))?;
+        self.instantiate(&bytes, state)
     }
 }
 
@@ -228,6 +252,39 @@ mod tests {
         let host = WasmHost::new().expect("engine");
         // The engine is component-model-capable; a no-op smoke that the dep + config are sane.
         let _ = host.engine();
+    }
+
+    #[tokio::test]
+    async fn provision_fetches_and_verifies_before_instantiating() {
+        use crate::artifact::{ArtifactId, ArtifactSource, InMemorySource};
+        use bytes::Bytes;
+
+        let agent = live_agent().await;
+        let host = WasmHost::new().expect("engine");
+        let st = |a: &mycelium::GossipAgent| HostState::new(a.node_id().clone(), "nlp", a.kv(), a.mesh());
+
+        // Unknown id → Fetch error (never reaches verify/instantiate).
+        let empty = InMemorySource::new();
+        let missing = ArtifactId::of(b"never stored");
+        assert!(matches!(host.provision(&empty, &missing, st(&agent)), Err(WasmHostError::Fetch(_))));
+
+        // Stored, content-addressed bytes pass verify, then fail instantiate (not a real
+        // component) — proving fetch+verify ran and instantiate was reached.
+        let mut src = InMemorySource::new();
+        let id = src.insert(Bytes::from_static(b"\0asm-but-not-a-component"));
+        assert!(matches!(host.provision(&src, &id, st(&agent)), Err(WasmHostError::Instantiate(_))));
+
+        // A source that returns bytes not matching the id → Verify error (bytes never instantiated).
+        struct LyingSource;
+        impl ArtifactSource for LyingSource {
+            fn fetch(&self, _id: &ArtifactId) -> Option<Bytes> {
+                Some(Bytes::from_static(b"substituted bytes"))
+            }
+        }
+        let claimed = ArtifactId::of(b"what the catalog promised");
+        assert!(matches!(host.provision(&LyingSource, &claimed, st(&agent)), Err(WasmHostError::Verify(_))));
+
+        agent.shutdown().await;
     }
 
     #[tokio::test]

@@ -30,14 +30,18 @@ runtime-mesh-resolved, never link-time-bound into a deployment set.
 
 ## Status (M12, in progress)
 
-**Landed (this slice):** crate scaffold; the WIT contract; `confine` (the enforcement point,
-unit-tested); `HostState` scoped operations proven against a live node; `bindgen!` host-import
-impls; and the `WasmHost::instantiate` / `Instance::invoke` path (compiles against the generated
-bindings; a negative test exercises it).
+**Landed:** crate scaffold; the WIT contract; `confine` (the enforcement point, unit-tested);
+`HostState` scoped operations proven against a live node; `bindgen!` host-import impls; the
+`WasmHost::instantiate` / `Instance::invoke` path; and **pull + verify + instantiate**
+end to end — `ArtifactId` (content address = SHA-256), `verify_artifact` (run before the engine
+ever sees the bytes), and a pluggable, untrusted [`ArtifactSource`] (`InMemorySource` for now).
 
 **Follow-up:** a positive end-to-end test with a real guest component (needs the wasm guest
-toolchain — `cargo-component` / `wasm32-wasip2`), plus the content-addressed **pull/verify**
-front of the loop. M15 (catalog resolve) and M14 (supervision) build on this.
+toolchain — `cargo-component` / `wasm32-wasip2`); a **mesh-bulk `ArtifactSource`** (surfacing the
+content-addressed bulk-fetch client, §E.4.4); and optional Ed25519 signed-provenance over the id.
+M15 (catalog resolve) and M14 (supervision) build on this.
+
+[`ArtifactSource`]: src/artifact.rs
 
 ## Build / test
 
