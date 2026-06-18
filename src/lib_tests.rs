@@ -448,6 +448,51 @@ async fn test_governor_node_targeted_intent() {
     assert_eq!(ceiling_of(&a), None, "a non-targeted node ignores the intent");
 }
 
+/// Track 2a: a `MembershipIntent { min }` makes eligible nodes self-elect into the group until
+/// the member count converges up to `min` — coordinator-free elastic sizing.
+#[tokio::test]
+async fn test_membership_governor_converges_to_min() {
+    use crate::capability::{Capability, CapFilter, CapabilityGroupDef};
+    let ports: Vec<u16> = (0..3).map(|_| alloc_port()).collect();
+    let ids: Vec<NodeId> = ports.iter().map(|p| NodeId::new("127.0.0.1", *p).unwrap()).collect();
+
+    let mut agents = Vec::new();
+    let mut regs = Vec::new();
+    for i in 0..3 {
+        let mut cfg = GossipConfig::auto();
+        cfg.bind_port = ports[i];
+        cfg.bootstrap_peers = ids.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, id)| id.clone()).collect();
+        cfg.health_check_interval_secs = 1;        // fast convergence ticks
+        cfg.health_check_max_jitter_ms = 50;
+        agents.push(GossipAgent::new(ids[i].clone(), cfg));
+    }
+    for a in &agents { a.start().await.unwrap(); }
+    // Every node is eligible: advertise the capability the group's filter matches.
+    for a in &agents {
+        regs.push(a.capabilities().advertise_capability(
+            Capability::new("svc", "worker"), Duration::from_secs(30)));
+    }
+    // Define the group (one node is enough; the def gossips) and turn on the governor everywhere.
+    let _grp = agents[0].capabilities().define_capability_group(
+        "pool",
+        CapabilityGroupDef { filter: CapFilter::new("svc", "worker"), topology_policy: None,
+                             provides: vec![], requires: vec![] },
+        Duration::from_secs(30));
+    for a in &agents { a.start_membership_governor(); }
+
+    // Wait for caps + group def to propagate so every node sees the eligible set.
+    poll_until(|| agents.iter().all(|a| !a.peers().is_empty()), 3_000).await;
+
+    // Publish: keep "pool" at >= 2 members. Nobody is a member yet → nodes self-elect up to 2.
+    let _ = agents[0].publish_membership_intent(crate::MembershipIntent::new("pool", 2, None));
+
+    let joined = |agents: &[GossipAgent]| -> usize {
+        agents.iter().filter(|a| a.groups().iter().any(|g| g.as_ref() == "pool")).count()
+    };
+    poll_until(|| joined(&agents) >= 2, 20_000).await;
+    assert!(joined(&agents) >= 2, "membership must converge up to min=2 (got {})", joined(&agents));
+}
+
 // Compile-time proof that GossipAgent is Send + Sync so it can be wrapped in Arc.
 #[allow(dead_code)]
 fn assert_gossip_agent_is_send_sync() {

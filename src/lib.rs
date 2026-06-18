@@ -203,6 +203,8 @@ pub use agent::{
     GovernIntent, GovernorSnapshot, HotParam, ParamDirective, ParamSnapshot, Ratchet,
     GOVERN_FLEET_KEY, GOVERN_INTENT_TTL_MS,
 };
+// Elastic group sizing (Track 2a).
+pub use agent::{MembershipAction, MembershipIntent, MEMBERSHIP_INTENT_TTL_MS, MEMBERSHIP_PREFIX};
 #[cfg(feature = "gateway")]
 pub use agent::McpClientHandle;
 #[cfg(feature = "llm")]

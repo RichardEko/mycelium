@@ -69,6 +69,15 @@ tested for freshness/evaporation in isolation.
 
 ## 4. Track 2 — `MembershipGovernor` (the engine; the real work)
 
+> **Track 2a (group membership) ✅ SHIPPED.** `src/agent/membership_governor.rs`:
+> `MembershipIntent { group, min, max, drain, target }` (FleetIntent, via Track-1 transport);
+> `publish_membership_intent` / `start_membership_governor`; probabilistic self-election
+> (`join_probability`/`leave_probability`/`decide`, pure + unit-tested) over the live `grp/`
+> count, eligibility from the group's `CapabilityGroupDef` filter, own-load bias, drain, and a
+> post-action cooldown. Reuses `emit_membership` + the Track-1 reconcile helpers. Gates: 5 pure
+> unit tests + `test_membership_governor_converges_to_min` (3-node cluster converges up to min).
+> **Track 2b (provider/replica sizing)** remains, after WS-E M15.
+
 **Intent shape:** per group (and per capability, the provider analogue) — `min`, `max`, optional
 `drain` (exclude named nodes). Published fleet intent + local override, same governor model.
 
@@ -199,15 +208,49 @@ API is sufficient. Decide at the start of Track 2 based on size.
 
 ---
 
-## 7. Open questions (resolve at the start of Track 2)
+## 7. Open questions — RESOLVED (2026-06-18)
 
-1. **Eligibility rank for self-election** — lowest-id (deterministic, simple) vs lowest-load
-   (better placement, needs the load signal) vs trust-weighted (reuse `suggest_leader`)? Start
-   simple (lowest-id + jitter); make the rank pluggable.
-2. **Hysteresis / round cadence** — tie the convergence-round interval to `health_check_interval`?
-   What dead-band width avoids flap at realistic churn?
-3. **Group vs provider unification** — one `MembershipGovernor` over both `grp/` members and
-   `cap`/`gcap` providers, or two thin governors sharing the self-election helper? (Likely the
-   latter — same Track-1 reconciler, same self-election helper, different count source.)
-4. **Interaction with `max_peers` / partial-mesh fan-out** — ensure a bounded group target doesn't
-   fight the SWIM/partial-mesh connection bounds.
+1. **Eligibility rank** → **pluggable; default load-then-id** (lowest `sys/load/{node}` fill_ratio,
+   tie-break lowest-id). Reuses the opacity load signal; balances placement; and a node acting on
+   *its own* load is the local knowledge Principle 1/5 wants. Pluggable so an operator/agent can
+   override (e.g. trust-weighted via `suggest_leader`).
+2. **Cadence / hysteresis** → **derived (M8-style), not hand-set.** Convergence tick = `health_check_
+   interval` (the natural observe beat); a per-node post-action **cooldown** (a few ticks) damps
+   boundary flap; the `[min,max]` band is itself the dead-band. Knobs stay internal for v1.
+3. **Group vs provider** → **two thin governors sharing one `self_elect` helper**; **group membership
+   ships first (Track 2a)** — its count source (`grp/{group}/*`) and `join_group`/`leave_group`
+   already exist. **Provider/replica sizing is Track 2b, after WS-E M15** supplies a provide/withdraw
+   path (building it here would drag M15 in).
+4. **Partial-mesh interaction** → **non-issue.** Membership is a *logical overlay* (`grp/` KV keys),
+   not a connection requirement — gossip reaches members via flooding regardless of SWIM/partial-mesh
+   fan-out. Only edge: `min` > eligible-node-count is unsatisfiable (best-effort, expected).
+
+### 7.1 Resolved self-election mechanism (Track 2a)
+
+Per node, each tick (`health_check_interval`, jittered) **and** on `grp/`/intent gossip change, for
+each governed group:
+- compute the **eligible set** (nodes whose gossiped caps match the group's `CapabilityGroupDef`
+  filter) and **my rank** within it (load-then-id); read live **N** (`grp/{group}/*` count) and the
+  intent `[min,max]`/`drain` (a `MembershipIntent` via the Track-1 transport, fresh + self/fleet-targeted).
+- **probabilistic (Option B — chosen 2026-06-18).** *Why not pure position-based:* it is
+  veto-fragile — a vetoing top-ranked node leaves its slot unfilled because lower nodes count it
+  "ahead in the queue," stalling convergence below `min`. Probabilistic self-election is robust to
+  veto and view-skew by construction.
+  - **Join** (eligible non-member, `N < min`) with probability `(min − N) / eligible_non_members`,
+    **biased by the node's *own* load** (`gossip_shard_fill` — idle ⇒ ×1.5, busy ⇒ ×0.5, clamped);
+    using *own* load keeps it purely local (Principle 5) and prefers idle nodes for placement. A
+    busy-but-needed node keeps a non-zero floor so convergence still completes.
+  - **Leave** (member, `N > max`) with probability `(N − max) / members`, biased toward busy nodes.
+  - **Drain** (I'm listed) → leave (highest priority).
+  - Re-rolled each tick against the live `N`; a per-group **post-action cooldown** damps flap.
+    Converges over *a few* ticks (not one) with bounded-variance overshoot — both within the accepted
+    truths. Local veto handled for free: a vetoer contributes 0; others fill over subsequent ticks.
+
+**Three accepted truths** (agreed): (a) partition ⇒ each side self-sizes ⇒ transient ≤2×max on heal,
+re-converges (AP/CAP reality; bounds are per-partition); (b) local veto absorbed by re-check; (c)
+drain composes with min (drain ⇒ N drops ⇒ next-ranked joins; eligible<min ⇒ stuck under min, expected).
+
+### 7.2 Remaining (Track 2b / later)
+
+- Provider/replica sizing once WS-E M15 provide/withdraw exists.
+- Whether the `MembershipIntent` should carry the group filter or rely on the local `CapabilityGroupDef`.

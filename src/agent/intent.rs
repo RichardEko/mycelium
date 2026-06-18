@@ -50,6 +50,16 @@ pub fn publish_intent<I: FleetIntent>(kv: &KvHandle, key: &str, mut intent: I) -
     }
 }
 
+/// Read `key` and return the decoded intent **iff** it is fresh (within `ttl_ms`) and targeted
+/// at `me` (or the whole fleet) — else `None`. The value-returning counterpart to
+/// [`reconcile_intent`], for governors that scan a prefix and run their own per-key logic
+/// (e.g. the membership governor over `sys/govern/membership/{group}`).
+pub fn read_fresh_intent<I: FleetIntent>(kv: &KvHandle, key: &str, me: &NodeId, ttl_ms: u64) -> Option<I> {
+    let i: I = kv.get(key).and_then(|b| mycelium_core::serde_fixint::from_slice::<I>(&b).ok())?;
+    (now_ms().saturating_sub(i.written_at_ms()) <= ttl_ms && i.target().is_none_or(|t| t == me))
+        .then_some(i)
+}
+
 /// Read `key`; if a **fresh** intent **targeted at `me`** (or the whole fleet) is present, call
 /// `apply`; otherwise call `revert` (absent / evaporated / not-for-me → self-heal to local
 /// derivation). Shared by the subscribe and periodic-tick paths.

@@ -54,6 +54,7 @@ mod mailbox;
 mod intent;
 mod cluster_tuner;
 mod tuning_governor;
+mod membership_governor;
 mod sharding;
 mod shard_ops;
 mod service_handle;
@@ -102,6 +103,7 @@ pub use tuning_governor::{
 };
 #[cfg(test)]
 pub(crate) use tuning_governor::TuningGovernor;
+pub use membership_governor::{MembershipAction, MembershipIntent, MEMBERSHIP_INTENT_TTL_MS, MEMBERSHIP_PREFIX};
 #[cfg(feature = "consensus")]
 pub use overlay_consistent::{ConsistencyError, LockGuard};
 #[cfg(feature = "consensus")]
