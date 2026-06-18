@@ -17,8 +17,41 @@ use crate::signal::{Boundary, Signal, SignalHandlers};
 use crate::store::KvState;
 use bytes::Bytes;
 use parking_lot::RwLock;
-use std::sync::{atomic::AtomicU64, Arc};
+use std::sync::{atomic::{AtomicU64, AtomicUsize, Ordering}, Arc};
 use tokio::{sync::{mpsc, watch}, task::JoinSet};
+
+/// Runtime-tunable ("hot") subset of [`GossipConfig`] (WS-C M9). These parameters are
+/// sampled from an atomic cell **on each use** (or each writer / bulk-handler spawn)
+/// rather than captured at task-spawn time, so a live cluster can retune them with **no
+/// task restart**. Initialised from `GossipConfig` at agent construction (after M8
+/// auto-derivation), then updated either by an operator (`GossipAgent::set_*`) or by the
+/// `ClusterTuner` advisor over `sys/config/` — in both cases the node applies the change
+/// itself (advisor advises, node decides — Core Principle 1).
+#[derive(Debug)]
+pub struct HotConfig {
+    /// Per-peer inbound frame-rate cap (`0` = unlimited). Sampled per inbound frame in
+    /// the connection handler.
+    pub max_inbound_frames_per_sec: AtomicU64,
+    /// Depth of each *new* per-peer writer channel. Sampled at writer spawn — existing
+    /// writers keep their channel; new / reconnecting peers pick up the new depth.
+    pub writer_channel_depth: AtomicUsize,
+    /// Concurrent bulk-handler cap (`0` = unlimited). Sampled per bulk-serve admission.
+    pub max_concurrent_bulk_handlers: AtomicUsize,
+}
+
+impl HotConfig {
+    /// Snapshot the hot subset from a (already M8-derived) config.
+    pub fn from_config(c: &GossipConfig) -> Self {
+        Self {
+            max_inbound_frames_per_sec:   AtomicU64::new(c.max_inbound_frames_per_sec),
+            writer_channel_depth:         AtomicUsize::new(c.writer_channel_depth),
+            max_concurrent_bulk_handlers: AtomicUsize::new(c.max_concurrent_bulk_handlers),
+        }
+    }
+    #[inline] pub fn inbound_fps(&self) -> u64 { self.max_inbound_frames_per_sec.load(Ordering::Relaxed) }
+    #[inline] pub fn writer_depth(&self) -> usize { self.writer_channel_depth.load(Ordering::Relaxed) }
+    #[inline] pub fn bulk_handlers(&self) -> usize { self.max_concurrent_bulk_handlers.load(Ordering::Relaxed) }
+}
 
 /// Opt-in pre-delivery signal interceptor registered by the upper service layer.
 /// Given a delivered [`Signal`], it claims correlated `rpc.result` / `bulk.result`
@@ -37,6 +70,9 @@ pub struct CoreCtx {
     /// can access `signal_window_secs`, `health_check_interval_secs`, `locality_path`,
     /// and `topology_policies` without borrowing `GossipAgent`.
     pub config:           Arc<GossipConfig>,
+    /// Runtime-tunable subset of `config` (WS-C M9). Hot-path code reads tuning values
+    /// from here (atomic, live) instead of the immutable `config` snapshot.
+    pub hot:              Arc<HotConfig>,
     pub default_ttl:      u8,
 
     // ── Layer I — KV substrate ───────────────────────────────────────────────────

@@ -51,6 +51,7 @@ mod state_machine;
 mod scatter;
 mod bulk;
 mod mailbox;
+mod cluster_tuner;
 mod sharding;
 mod shard_ops;
 mod service_handle;
@@ -92,6 +93,7 @@ pub use state_machine::{AgentPolicy, ExecutionState, AgentStateMachine, PolicyVi
 pub use scatter::{ScatterError, ScatterResult};
 pub use bulk::{BulkError, BulkServeHandle};
 pub use mailbox::{MailboxHandle, MeshEvent};
+pub use cluster_tuner::{accept_all, clamped, reject_all, ConfigPolicy, CONFIG_PREFIX};
 #[cfg(feature = "consensus")]
 pub use overlay_consistent::{ConsistencyError, LockGuard};
 #[cfg(feature = "consensus")]
@@ -591,6 +593,8 @@ impl GossipAgent {
             Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
         let core_ctx = Arc::new(CoreCtx {
             node_id:         node_id.clone(),
+            // WS-C M9: snapshot the hot-tunable subset from the (M8-derived) config.
+            hot:             Arc::new(mycelium_core::context::HotConfig::from_config(&config)),
             config:          Arc::clone(&config_arc),
             seen:            Arc::new(ShardedSeen::new(seen_shards)),
             hlc:             Arc::new(crate::hlc::Hlc::with_max_drift(config.max_clock_drift_ms)),

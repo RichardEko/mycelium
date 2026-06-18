@@ -138,6 +138,7 @@ fn spawn_handler(
         shutdown_tx: Arc::new(shutdown_tx_inner),
         task_handles: Arc::new(std::sync::Mutex::new(tokio::task::JoinSet::new())),
         config: Arc::new(crate::config::GossipConfig::default()),
+        hot: Arc::new(mycelium_core::context::HotConfig::from_config(&crate::config::GossipConfig::default())),
     });
     let task_ctx = Arc::new(TaskCtx {
         core: core_ctx,
@@ -158,7 +159,6 @@ fn spawn_handler(
         peers,
         shutdown: Arc::clone(&shutdown_tx),
         peer_writers: Arc::new(papaya::HashMap::new()),
-        writer_depth: 64,
         backoff: Duration::ZERO,
         n_shards: N_GOSSIP_SHARDS,
         intern_keys: true,
@@ -290,6 +290,75 @@ async fn test_wsc_m8_auto_config_cluster_converges() {
     poll_until(|| b.kv().get("wsc/m8/k") == Some(Bytes::from_static(b"v")), 3_000).await;
     assert_eq!(b.kv().get("wsc/m8/k"), Some(Bytes::from_static(b"v")),
         "auto-configured cluster must propagate a KV write");
+}
+
+/// WS-C M9: the hot-reload set_* API updates the live (hot) tunables immediately,
+/// with no task restart, and clamps writer depth to ≥ 1.
+#[tokio::test]
+async fn test_wsc_m9_hot_reload_set_api() {
+    let port = alloc_port();
+    let id   = NodeId::new("127.0.0.1", port).unwrap();
+    let mut cfg = GossipConfig::auto();
+    cfg.bind_port = port;
+    let a = GossipAgent::new(id, cfg);
+
+    // Initial (N=1): writer depth derived to 1024; inbound 0 (off); bulk 64 (Default).
+    assert_eq!(a.hot_tunables(), (0, 1024, 64));
+
+    a.set_max_inbound_frames_per_sec(500);
+    a.set_writer_channel_depth(4096);
+    a.set_max_concurrent_bulk_handlers(8);
+    assert_eq!(a.hot_tunables(), (500, 4096, 8), "set_* must update the hot cell live");
+
+    // writer depth is clamped to ≥ 1.
+    a.set_writer_channel_depth(0);
+    assert_eq!(a.hot_tunables().1, 1, "writer depth floors at 1");
+}
+
+/// WS-C M9 G-C4: a gossiped `sys/config/` recommendation is applied by a node whose
+/// policy accepts it and **ignored** by a node whose policy rejects it — advisor advises,
+/// node decides.
+#[tokio::test]
+async fn test_wsc_m9_config_policy_accept_vs_reject() {
+    let port_a = alloc_port();
+    let port_b = alloc_port();
+    let id_a = NodeId::new("127.0.0.1", port_a).unwrap();
+    let id_b = NodeId::new("127.0.0.1", port_b).unwrap();
+
+    let mut cfg_a = GossipConfig::auto();
+    cfg_a.bind_port = port_a; cfg_a.bootstrap_peers = vec![id_b.clone()];
+    cfg_a.health_check_max_jitter_ms = 50;
+    let mut cfg_b = GossipConfig::auto();
+    cfg_b.bind_port = port_b; cfg_b.bootstrap_peers = vec![id_a.clone()];
+    cfg_b.health_check_max_jitter_ms = 50;
+
+    let a = GossipAgent::new(id_a, cfg_a);
+    let b = GossipAgent::new(id_b, cfg_b);
+    a.start().await.unwrap();
+    b.start().await.unwrap();
+    poll_until(|| !a.peers().is_empty() && !b.peers().is_empty(), 3_000).await;
+
+    // Both opt in to applying recommendations: A accepts, B rejects.
+    a.start_config_applier(crate::accept_all());
+    b.start_config_applier(crate::reject_all());
+
+    // Both start at the derived writer depth (small N → 1024).
+    assert_eq!(a.hot_tunables().1, 1024);
+    assert_eq!(b.hot_tunables().1, 1024);
+
+    // Inject a recommendation (as the advisor would) on A; it gossips to B.
+    let key = format!("{}writer_channel_depth", crate::CONFIG_PREFIX);
+    let _ = a.kv().set(key.clone(), 9999u64.to_le_bytes().to_vec());
+
+    // A's accept policy applies it live.
+    poll_until(|| a.hot_tunables().1 == 9999, 3_000).await;
+    assert_eq!(a.hot_tunables().1, 9999, "accept-policy node applies the recommendation");
+
+    // B receives the recommendation (gossip) but its reject policy keeps its own value.
+    poll_until(|| b.kv().get(&key).is_some(), 3_000).await;
+    // Let B's applier run on the change, then confirm it did NOT apply.
+    time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(b.hot_tunables().1, 1024, "reject-policy node keeps its own value");
 }
 
 // Compile-time proof that GossipAgent is Send + Sync so it can be wrapped in Arc.
@@ -595,6 +664,7 @@ async fn test_subscribe_notified_via_gossip() {
             shutdown_tx: Arc::new(shutdown_tx_inner2),
             task_handles: Arc::new(std::sync::Mutex::new(tokio::task::JoinSet::new())),
             config: Arc::new(crate::config::GossipConfig::default()),
+            hot: Arc::new(mycelium_core::context::HotConfig::from_config(&crate::config::GossipConfig::default())),
         });
         let task_ctx = Arc::new(TaskCtx {
             core: core_ctx,
@@ -615,7 +685,6 @@ async fn test_subscribe_notified_via_gossip() {
             peers: Arc::new(papaya::HashMap::new()),
             shutdown: shutdown_tx,
             peer_writers: Arc::new(papaya::HashMap::new()),
-            writer_depth: 64,
             backoff: Duration::ZERO,
             n_shards: N_GOSSIP_SHARDS,
             intern_keys: true,

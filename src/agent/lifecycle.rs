@@ -231,7 +231,6 @@ impl GossipAgent {
             peers:           Arc::clone(&self.peers),
             shutdown:        Arc::clone(&self.shutdown_tx),
             peer_writers:    Arc::clone(&self.peer_writers),
-            writer_depth:    self.config.writer_channel_depth,
             backoff:         Duration::from_secs(self.config.reconnect_backoff_secs),
             n_shards:        self.task_ctx.gossip_txs.len(),
             intern_keys:     self.config.intern_keys,
@@ -261,7 +260,6 @@ impl GossipAgent {
         let bootstrap_peers        = Arc::clone(&self.bootstrap_peers);
         let peer_writers           = Arc::clone(&self.peer_writers);
         let shutdown_tx            = Arc::clone(&self.shutdown_tx);
-        let writer_depth           = self.config.writer_channel_depth;
         let backoff                = Duration::from_secs(self.config.reconnect_backoff_secs);
         let idle_timeout           = Duration::from_secs(self.config.writer_idle_timeout_secs);
         let group_aware_forwarding = self.config.group_aware_forwarding;
@@ -285,7 +283,7 @@ impl GossipAgent {
                 Arc::clone(&shutdown_tx),
                 self.peer_list_tx.subscribe(),
                 Arc::clone(&self.shard_alive[shard_idx]),
-                writer_depth,
+                Arc::clone(&self.task_ctx.hot),
                 backoff,
                 idle_timeout,
                 self.config.max_forwarding_peers,
@@ -355,7 +353,7 @@ impl GossipAgent {
             Arc::clone(&self.task_ctx.hlc),
             Arc::clone(&self.kv_state),
             self.config.health_check_interval_secs,
-            self.config.writer_channel_depth,
+            Arc::clone(&self.task_ctx.hot),
             Duration::from_secs(self.config.reconnect_backoff_secs),
             Duration::from_secs(self.config.writer_idle_timeout_secs),
             self.config.peer_eviction_intervals,

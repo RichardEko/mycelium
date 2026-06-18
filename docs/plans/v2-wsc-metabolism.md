@@ -68,8 +68,9 @@ M7 is orthogonal (abuse-triggered, not size-triggered) and parks on its own trig
 | **G-C3 — override precedence** | `config::tests` unit | An explicit operator value always wins over derivation; an explicit value that *violates* an invariant logs a `warn!` (detection, not silent coercion) but is honoured. |
 
 G-C2 is the load-bearing proof; G-C1/G-C3 are the unit-level correctness net. Phase 2
-adds **G-C4** (a `ClusterTuner` advisory round changes a sampled param live and a node
-that *rejects* the recommendation keeps its own value — advisor-not-coordinator).
+adds **G-C4** ✅ (`test_wsc_m9_config_policy_accept_vs_reject`: a gossiped recommendation is
+applied by an `accept_all` node and ignored by a `reject_all` node — advisor-not-coordinator),
+plus `test_wsc_m9_hot_reload_set_api` for the live set_* mechanism.
 
 ---
 
@@ -153,19 +154,35 @@ posture as the consensus/`sys/` tripwires.
 
 ---
 
-## 5. Phase 2 — M9 hot-reload + `ClusterTuner` (gate: elastic scaling)
+## 5. Phase 2 — M9 hot-reload + `ClusterTuner` ✅ SHIPPED
 
-Promote the three **sampled-per-use** params (`max_inbound_frames_per_sec`,
-`max_concurrent_bulk_handlers`, `writer_channel_depth`) from plain fields to
-`Arc<AtomicU32>` so they can change on a live node with no task restart. A `ClusterTuner`
-companion agent (regular agent, no new mechanism) observes `peers()` to track N, recomputes
-the M8 formulas, and writes recommendations to a short-TTL `sys/config/{param}` KV namespace.
-Each node `subscribe_prefix("sys/config/")` and applies a recommendation **only if its local
-policy accepts it** — the tuner advises, the node decides (Core Principle 1). **G-C4** gates
-the advisor-not-coordinator contract.
+**Outcome:** the three sampled-per-use params (`max_inbound_frames_per_sec`,
+`writer_channel_depth`, `max_concurrent_bulk_handlers`) now live in
+`mycelium_core::context::HotConfig` (atomics on `CoreCtx::hot`, seeded from the M8-derived
+config) and are read live at each use/spawn: the connection inbound-rate check (per frame),
+`get_or_spawn_writer` (per writer spawn — threaded through the connection handler **and**
+`run_gossip_shard`/`run_health_monitor`), and the bulk admission (the fixed `Semaphore` was
+replaced by a dynamic limit over the existing `active_handlers` counter — atomic fetch-add
+with back-out, hot-reloadable both ways). `GossipAgent::{set_max_inbound_frames_per_sec,
+set_writer_channel_depth, set_max_concurrent_bulk_handlers}` + `hot_tunables()` are the
+node-local application/inspection API.
 
-**Start trigger:** a deployment where N grows/shrinks at runtime and M8's static startup
-derivation goes stale. Until then, Phase 2 is designed-but-parked.
+`ClusterTuner` (`src/agent/cluster_tuner.rs`) is two opt-in tasks, no new mechanism:
+`start_cluster_tuner(interval, policy)` runs the **advisor** (observe `peers()`+self → recompute
+`GossipConfig::auto_writer_channel_depth(N)` — the *same* fn M8's `derive_unset` uses, no drift
+— and gossip to `sys/config/{param}` only when it changed) and the **applier**;
+`start_config_applier(policy)` runs just the applier (`subscribe_prefix("sys/config/")` →
+run the node's [`ConfigPolicy`] → apply accepted values live). `accept_all`/`reject_all`/
+`clamped(min,max)` are provided. Fully decentralized: every node computes the same formula and
+converges via LWW; `sys/config/` is deliberately outside the `sys/` self-owned tripwire set.
+
+Gates: G-C4 (`test_wsc_m9_config_policy_accept_vs_reject` — a gossiped recommendation is applied
+by an `accept_all` node and ignored by a `reject_all` node) + `test_wsc_m9_hot_reload_set_api`
+(set_* updates the hot cell live + writer-depth floor). Matrix 266 lib tests + clippy
+`-D warnings` (matrix / gateway-free / tuple-space) green. Original design notes below.
+
+**Start trigger (now satisfied for the mechanism):** the hot-reload primitive + tuner are in;
+running the advisor in production is still demand-gated on an actual elastic-scaling deployment.
 
 ---
 

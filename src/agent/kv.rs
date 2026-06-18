@@ -23,6 +23,39 @@ impl GossipAgent {
         &self.config
     }
 
+    // ── WS-C M9: live ("hot") retuning ───────────────────────────────────────
+    // The node-local application point: operators call these directly; the
+    // `ClusterTuner` advisor routes its recommendations through them too. Each
+    // takes effect immediately (sampled per use / per spawn), no task restart.
+    // Inspect current values via `config()` is the *startup* snapshot; these are
+    // the live overrides — read back with the matching `hot_*` getter.
+
+    /// Live-set the per-peer inbound frame-rate cap (`0` = unlimited). Sampled per
+    /// inbound frame, so every open connection picks it up on its next frame.
+    pub fn set_max_inbound_frames_per_sec(&self, fps: u64) {
+        self.task_ctx.hot.max_inbound_frames_per_sec
+            .store(fps, std::sync::atomic::Ordering::Relaxed);
+    }
+    /// Live-set the depth for *new* per-peer writer channels (clamped to ≥ 1).
+    /// Existing writers keep their channel; new / reconnecting peers use the new depth.
+    pub fn set_writer_channel_depth(&self, depth: usize) {
+        self.task_ctx.hot.writer_channel_depth
+            .store(depth.max(1), std::sync::atomic::Ordering::Relaxed);
+    }
+    /// Live-set the concurrent bulk-handler cap (`0` = unlimited). Sampled per bulk admission.
+    pub fn set_max_concurrent_bulk_handlers(&self, n: usize) {
+        self.task_ctx.hot.max_concurrent_bulk_handlers
+            .store(n, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Current live values of the hot-tunable subset (post-M9 overrides), as
+    /// `(max_inbound_frames_per_sec, writer_channel_depth, max_concurrent_bulk_handlers)`.
+    pub fn hot_tunables(&self) -> (u64, usize, usize) {
+        (self.task_ctx.hot.inbound_fps(),
+         self.task_ctx.hot.writer_depth(),
+         self.task_ctx.hot.bulk_handlers())
+    }
+
     /// Returns a snapshot of all currently live peer `NodeId`s.
     ///
     /// Useful at Layer 3 when a direct connection (e.g. HTTP) must be opened to

@@ -46,7 +46,6 @@ use bytes::{BufMut, Bytes, BytesMut};
 use std::{sync::{Arc, atomic::{AtomicU16, AtomicU64, Ordering}}, time::Duration};
 use tokio::sync::oneshot;
 #[cfg(feature = "gateway")]
-use tokio::sync::{Semaphore, TryAcquireError};
 #[cfg(feature = "gateway")]
 use tracing::warn;
 
@@ -62,10 +61,6 @@ use super::rpc::await_nonce_reply;
 pub struct BulkTransport {
     staging:           papaya::HashMap<u64, Bytes>,
     http_port:             AtomicU16,
-    /// `None` = unlimited; `Some(sem)` = cap on concurrent per-request handlers.
-    /// Only consumed by the gateway-gated `bulk_serve` dispatch path.
-    #[cfg(feature = "gateway")]
-    handler_semaphore:     Option<Arc<Semaphore>>,
     /// Number of per-request handler tasks currently executing.
     /// Incremented before `tokio::spawn`; decremented when each task exits.
     /// Not part of `task_handles` (unstructured spawn); surfaced in `SystemStats`.
@@ -76,15 +71,12 @@ pub struct BulkTransport {
 
 impl BulkTransport {
     pub fn new(http_port: u16, _fetch_timeout: Duration, _max_handlers: usize) -> Self {
+        // `_max_handlers` is the *initial* concurrency cap; it lives in `CoreCtx::hot`
+        // (WS-C M9), seeded from config, and is read live per bulk admission — not stored
+        // here as a fixed Semaphore.
         Self {
             staging:          papaya::HashMap::new(),
             http_port:        AtomicU16::new(http_port),
-            #[cfg(feature = "gateway")]
-            handler_semaphore: if _max_handlers > 0 {
-                Some(Arc::new(Semaphore::new(_max_handlers)))
-            } else {
-                None
-            },
             active_handlers:  Arc::new(AtomicU64::new(0)),
             #[cfg(feature = "gateway")]
             client: reqwest::Client::builder()
@@ -273,27 +265,24 @@ where
 
     tracing::debug!(kind=%sig_kind, %url, "bulk_serve: dispatching fetch");
 
-    let permit = if let Some(sem) = &ctx.bulk_transport.handler_semaphore {
-        match Arc::clone(sem).try_acquire_owned() {
-            Ok(p)  => Some(p),
-            Err(TryAcquireError::NoPermits) => {
-                warn!(kind=%sig_kind, "bulk_serve: handler concurrency limit reached; dropping request");
-                return;
-            }
-            Err(TryAcquireError::Closed) => return,
-        }
-    } else {
-        None
-    };
+    // WS-C M9: concurrency cap sampled live from the hot cell (0 = unlimited) instead of a
+    // fixed Semaphore, so it can be retuned on a live node. The existing active-handler
+    // counter is the accounting: claim a slot with fetch_add, and back out if over the cap
+    // (atomic — no overshoot past the limit).
+    let limit           = ctx.hot.bulk_handlers();
+    let active_handlers = Arc::clone(&ctx.bulk_transport.active_handlers);
+    let prev = active_handlers.fetch_add(1, Ordering::Relaxed);
+    if limit > 0 && prev as usize >= limit {
+        active_handlers.fetch_sub(1, Ordering::Relaxed);
+        warn!(kind=%sig_kind, "bulk_serve: handler concurrency limit reached; dropping request");
+        return;
+    }
 
     let handler_clone   = Arc::clone(handler);
     let sender          = sig.sender.clone();
     let ctx_clone       = Arc::clone(ctx);
-    let active_handlers = Arc::clone(&ctx.bulk_transport.active_handlers);
 
-    active_handlers.fetch_add(1, Ordering::Relaxed);
     tokio::spawn(async move {
-        let _permit = permit; // dropped when this task completes, releasing the slot
         let _dec = ActiveHandlerGuard(active_handlers);
 
         let payload = match ctx_clone.bulk_transport.fetch(&url).await {
