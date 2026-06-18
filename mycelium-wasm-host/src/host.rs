@@ -14,7 +14,10 @@ use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
+use mycelium::CapFilter;
+
 use crate::artifact::{verify_artifact, ArtifactId, ArtifactSource};
+use crate::catalog::InstallableCatalog;
 use crate::confine::{confine_key, ConfinementError};
 
 /// Generated host/guest bindings for [`wit/host.wit`]. Wrapped in a private module so the
@@ -221,6 +224,24 @@ impl WasmHost {
         verify_artifact(&bytes, id).map_err(|e| WasmHostError::Verify(e.to_string()))?;
         self.instantiate(&bytes, state)
     }
+
+    /// **The full autonomic step (M15 → M12):** resolve `filter` against `catalog` to pick the
+    /// best installable artifact, then pull + verify + instantiate it from `source`. `Ok(None)`
+    /// means *no catalog entry satisfies the requirement* (the loop simply does not fire — not an
+    /// error). This is the one-shot "a requirement appeared; become a provider of it" path; the
+    /// standing demand-watch loop that calls it is the provisioner agent (an app-layer concern).
+    pub fn provision_for(
+        &self,
+        catalog: &InstallableCatalog,
+        filter: &CapFilter,
+        source: &impl ArtifactSource,
+        state: HostState,
+    ) -> Result<Option<Instance>, WasmHostError> {
+        match catalog.resolve_best(filter) {
+            Some(entry) => self.provision(source, &entry.artifact, state).map(Some),
+            None => Ok(None),
+        }
+    }
 }
 
 /// A live, instantiated capability component plus its per-instance store. The capability is
@@ -262,12 +283,19 @@ mod tests {
     }
 
     async fn live_agent() -> std::sync::Arc<mycelium::GossipAgent> {
-        let port = alloc_port();
-        let id = NodeId::new("127.0.0.1", port).unwrap();
-        let cfg = mycelium::GossipConfig { bind_port: port, ..Default::default() };
-        let agent = std::sync::Arc::new(mycelium::GossipAgent::new(id, cfg));
-        agent.start().await.unwrap();
-        agent
+        // Retry on bind failure: alloc_port() has a TOCTOU window, so under parallel tests two
+        // agents can race for the same freed port (AddrInUse). A fresh port per attempt removes
+        // the flake deterministically.
+        for _ in 0..16 {
+            let port = alloc_port();
+            let id = NodeId::new("127.0.0.1", port).unwrap();
+            let cfg = mycelium::GossipConfig { bind_port: port, ..Default::default() };
+            let agent = std::sync::Arc::new(mycelium::GossipAgent::new(id, cfg));
+            if agent.start().await.is_ok() {
+                return agent;
+            }
+        }
+        panic!("could not bind a gossip port after 16 attempts");
     }
 
     #[test]

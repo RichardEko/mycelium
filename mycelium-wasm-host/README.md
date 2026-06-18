@@ -1,7 +1,8 @@
 # mycelium-wasm-host
 
-WASM Component host for Mycelium — the **install mechanism** of the autonomic-provisioning
-chain (v2.0 **WS-E M12** → M15 → M14; see [`docs/plans/v2.0.md`](../docs/plans/v2.0.md) §WS-E).
+WASM Component host for Mycelium — the **install mechanism** (M12) plus the **catalog
+selection step** (M15) of the autonomic-provisioning chain (v2.0 **WS-E** M12 → M15 → M14;
+see [`docs/plans/v2.0.md`](../docs/plans/v2.0.md) §WS-E).
 
 A capability can be shipped as a sandboxed **WASM component**, pulled by content address,
 instantiated here, and made to provide a capability on the local node — the OSGi-bundle
@@ -42,9 +43,19 @@ ever sees the bytes), pluggable untrusted [`ArtifactSource`] (`InMemorySource`);
 instantiated, invoked, and its `kv` import is observed crossing into the confined subtree. The
 `.wasm` is committed so CI needs no wasm toolchain; regenerate with the fixture's `build.sh`.
 
-**Follow-up:** a **mesh-bulk `ArtifactSource`** (surfacing the content-addressed bulk-fetch
-client, §E.4.4) and optional Ed25519 signed-provenance over the id. M15 (catalog resolve) and
-M14 (supervision) build on this.
+**M15 selection (landed):** `InstallableCatalog` / `InstallableEntry` (`src/catalog.rs`) resolve a
+requirement against installable artifacts using the **same `CapFilter::matches`** the live resolver
+uses — pointed at each entry's declared-provide `Capability` instead of a running `cap/` entry —
+and pick the cheapest match. `WasmHost::provision_for(catalog, filter, source, state)` ties it to
+M12: resolve → pull → verify → instantiate (`Ok(None)` if nothing satisfies the requirement). This
+is **one hop, not a constraint solver** by design — *service* dependencies are runtime-mesh-resolved
+(a component imports the mesh), never frozen into an install closure.
+
+**Follow-up:** a **gossip-backed catalog** (populate `InstallableCatalog` from the cluster's
+`installable` KV entries); a **mesh-bulk `ArtifactSource`** (surfacing the content-addressed
+bulk-fetch client, §E.4.4); a **provisioner agent** (the standing demand-watch loop that calls
+`provision_for` — an app-layer concern); optional Ed25519 signed-provenance. M14 (supervision)
+builds on this.
 
 [`ArtifactSource`]: src/artifact.rs
 
