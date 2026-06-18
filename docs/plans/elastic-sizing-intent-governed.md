@@ -79,6 +79,14 @@ non-issue — per-node governance reaches even headless nodes over gossip, addre
 the operator never needs that node's HTTP. (Still local-veto-able; still evaporates.) A small
 additive change to the existing tuning governor's intent + reconcile, worth landing alongside Track 1.
 
+> **⚠ Crux — bounds are convergence targets, never guarantees.** `min`/`max` mean "the cluster
+> *converges toward* this band," **not** "this count is guaranteed." A sovereign node may decline
+> to join even when the group is under `min` (local veto always wins); the intent evaporates if its
+> publisher vanishes. This is the same honesty as "namespace ownership is promise-strength" — and
+> it is *load-bearing*: the moment we promise an exact/guaranteed count we have implied a
+> coordinator. A genuinely inviolable count is a conscious **Tier-3 consensus** escalation for that
+> one operation, never smuggled into this Tier-2 governor.
+
 **The hard part — collective self-election.** Unlike tuning (each node clamps its *own* scalar,
 zero coupling), membership is a *collective target*: the group/provider count must converge to
 `[min, max]` while each node decides whether **it specifically** should join/leave — and they must
@@ -160,6 +168,34 @@ forwarding. It re-introduces a coordinator + SPOF for the operator door and fail
 to serialize writes that are already idempotent/commutative (LWW). The operator door is "gateway on
 a subset of nodes + node-targeted fleet intent over gossip"; one-URL convenience is operator-side
 ingress, not a Mycelium election.
+
+### 6.1 Philosophy compliance — must-holds (build gate)
+
+Audited against [ROADMAP §Core Principles — Compliance Gate](../../ROADMAP.md). The plan is
+compliant by construction (Principle 1 even names the `ClusterTuner` shape as the reference); the
+risks are all *implementation discipline* — drift points to hold the line on while building. **A
+PR in this plan that violates one of these is non-compliant by construction — redesign or don't
+ship** (ROADMAP's own gate language).
+
+| Must-hold | Core Principle | The drift it prevents |
+|---|---|---|
+| **Distributed decision, no controller** — convergence is N independent local decisions; no node watches-the-count-and-assigns | 1 (no coordinator; litmus: "watch-and-decide / assign-a-role") | importing the HPA *controller* model |
+| **Bounds are convergence targets, never guarantees** — sovereign veto always wins; min/max is "tends toward", documented | 1 + 5 | implying an exact/guaranteed count ⇒ a coordinator |
+| **No synchronous barrier** — jittered threshold activation; transient over/undershoot is the accepted price of emergence | 5 (threshold over agreement) | adding a round/agreement to get "clean" convergence |
+| **`IntentReconciler` lives in the agent layer**, composing core's KV-subscribe + freshness convention — never in `mycelium-core` | 1 + 3 (mechanism in core, agency above) | leaking the governance abstraction into the substrate |
+| **Read-side reconcile + audit, never a write-guard** in `apply_and_notify` | 3 + 4 (detection not prevention) | teaching Layer I a higher-layer law |
+| **No consensus** for the operator door or for bounds (stay Tier-2) | 2 (consistency as a service) | folding agreement into the fast path |
+| **Local `lock_*` is self-binding, overridable by a newer intent** — not enforcement on others | 4 (promise-strength) | "lock" being read as a hard, un-overridable bound |
+
+Escalation is allowed but must be *conscious*: a genuinely inviolable cluster-wide count/bound is a
+per-operation **Tier-3 consensus** decision (Principle 2), never smuggled into the Tier-2 governor.
+
+### 6.2 Composability note (Principle 6)
+
+The engine ships as agent-layer modules on the public KV/capability API (like `cluster_tuner` /
+`tuning_governor`). If Track 2 grows large, a **`mycelium-governor` companion crate** (tuple-space
+style) is the more Principle-6-aligned home — keeps the main crate lean and re-proves the public
+API is sufficient. Decide at the start of Track 2 based on size.
 
 ---
 
