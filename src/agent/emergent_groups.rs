@@ -382,7 +382,7 @@ async fn run_group_membership_task(
 /// Writes (or tombstones) `grp/{group}/{node_id}` for this node, mirroring the
 /// effect of `GossipAgent::{join_group, leave_group}` from a spawned task
 /// without holding an agent reference.
-fn emit_membership(ctx: &TaskCtx, own: &NodeId, group: &Arc<str>, leaving: bool) {
+pub(crate) fn emit_membership(ctx: &TaskCtx, own: &NodeId, group: &Arc<str>, leaving: bool) {
     use crate::framing::{dispatch_gossip_try_send, ForwardHint, WireMessage, make_gossip_update};
     use crate::store::apply_and_notify;
     let key: Arc<str> = Arc::from(format!("grp/{}/{}", group, own).as_str());

@@ -69,6 +69,15 @@ tested for freshness/evaporation in isolation.
 
 ## 4. Track 2 — `MembershipGovernor` (the engine; the real work)
 
+> **Track 2a (group membership) ✅ SHIPPED.** `src/agent/membership_governor.rs`:
+> `MembershipIntent { group, min, max, drain, target }` (FleetIntent, via Track-1 transport);
+> `publish_membership_intent` / `start_membership_governor`; probabilistic self-election
+> (`join_probability`/`leave_probability`/`decide`, pure + unit-tested) over the live `grp/`
+> count, eligibility from the group's `CapabilityGroupDef` filter, own-load bias, drain, and a
+> post-action cooldown. Reuses `emit_membership` + the Track-1 reconcile helpers. Gates: 5 pure
+> unit tests + `test_membership_governor_converges_to_min` (3-node cluster converges up to min).
+> **Track 2b (provider/replica sizing)** remains, after WS-E M15.
+
 **Intent shape:** per group (and per capability, the provider analogue) — `min`, `max`, optional
 `drain` (exclude named nodes). Published fleet intent + local override, same governor model.
 
@@ -223,13 +232,19 @@ each governed group:
 - compute the **eligible set** (nodes whose gossiped caps match the group's `CapabilityGroupDef`
   filter) and **my rank** within it (load-then-id); read live **N** (`grp/{group}/*` count) and the
   intent `[min,max]`/`drain` (a `MembershipIntent` via the Track-1 transport, fresh + self/fleet-targeted).
-- **position-based, deterministic, no spawned stagger:** `position` = eligible-non-members ranked
-  above me. **Join** if `N < min && eligible && !member && position < (min − N) && cooldown_ok`.
-  **Leave** if `N > max && member && my_member_rank_from_bottom < (N − max) && cooldown_ok`. **Drain**
-  (I'm listed) → leave (highest priority). When all nodes see the same N + same rank, exactly the top
-  `(min−N)` join in one tick — no overshoot; view skew causes bounded transient over/undershoot that
-  re-converges next tick (the cooldown damps oscillation). Local veto is absorbed for free (a node
-  that declines simply isn't counted; the next tick re-evaluates against the still-deficit N).
+- **probabilistic (Option B — chosen 2026-06-18).** *Why not pure position-based:* it is
+  veto-fragile — a vetoing top-ranked node leaves its slot unfilled because lower nodes count it
+  "ahead in the queue," stalling convergence below `min`. Probabilistic self-election is robust to
+  veto and view-skew by construction.
+  - **Join** (eligible non-member, `N < min`) with probability `(min − N) / eligible_non_members`,
+    **biased by the node's *own* load** (`gossip_shard_fill` — idle ⇒ ×1.5, busy ⇒ ×0.5, clamped);
+    using *own* load keeps it purely local (Principle 5) and prefers idle nodes for placement. A
+    busy-but-needed node keeps a non-zero floor so convergence still completes.
+  - **Leave** (member, `N > max`) with probability `(N − max) / members`, biased toward busy nodes.
+  - **Drain** (I'm listed) → leave (highest priority).
+  - Re-rolled each tick against the live `N`; a per-group **post-action cooldown** damps flap.
+    Converges over *a few* ticks (not one) with bounded-variance overshoot — both within the accepted
+    truths. Local veto handled for free: a vetoer contributes 0; others fill over subsequent ticks.
 
 **Three accepted truths** (agreed): (a) partition ⇒ each side self-sizes ⇒ transient ≤2×max on heal,
 re-converges (AP/CAP reality; bounds are per-partition); (b) local veto absorbed by re-check; (c)
