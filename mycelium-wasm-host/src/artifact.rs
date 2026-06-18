@@ -40,6 +40,11 @@ impl ArtifactId {
         Ok(Self(out))
     }
 
+    /// Construct from raw digest bytes (e.g. parsed from a catalog key).
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
     /// The 32 raw digest bytes.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
