@@ -21,12 +21,9 @@
 //! [`ClusterTuner`]: crate::agent::cluster_tuner
 
 use crate::agent::GossipAgent;
-use mycelium_core::kv_handle::KvHandle;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
-use tracing::debug;
 
 /// KV key carrying the cluster-wide (fleet) governance intent.
 pub const GOVERN_FLEET_KEY: &str = "sys/govern/fleet";
@@ -292,6 +289,9 @@ pub struct GovernIntent {
     pub params: Vec<ParamDirective>,
     /// Unix-ms when published; the reconciler discards the intent after [`GOVERN_INTENT_TTL_MS`].
     pub written_at_ms: u64,
+    /// `None` = whole fleet; `Some(node)` = only that node applies it. Lets per-node governance
+    /// ride the gossip path (even to headless nodes) without reaching that node's HTTP directly.
+    pub target: Option<crate::node_id::NodeId>,
 }
 
 impl GovernIntent {
@@ -301,32 +301,24 @@ impl GovernIntent {
             enabled: None,
             params: vec![ParamDirective { param: param.key().to_string(), floor, ceiling, ratchet }],
             written_at_ms: 0,
+            target: None,
         }
     }
     /// Convenience: a directive that just flips the auto-tuner on/off cluster-wide.
     pub fn set_enabled(on: bool) -> Self {
-        Self { enabled: Some(on), params: vec![], written_at_ms: 0 }
+        Self { enabled: Some(on), params: vec![], written_at_ms: 0, target: None }
+    }
+    /// Target this intent at a single node (per-node governance over gossip).
+    pub fn for_node(mut self, node: crate::node_id::NodeId) -> Self {
+        self.target = Some(node);
+        self
     }
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
-
-/// Read the fleet intent from KV and apply-or-revert it on `governor` (fresh ⇒ apply,
-/// absent/stale ⇒ revert non-pinned fields). Shared by the subscribe and tick paths.
-fn reconcile_once(kv: &KvHandle, governor: &TuningGovernor) {
-    match kv.get(GOVERN_FLEET_KEY)
-        .and_then(|b| mycelium_core::serde_fixint::from_slice::<GovernIntent>(&b).ok())
-    {
-        Some(intent) if now_ms().saturating_sub(intent.written_at_ms) <= GOVERN_INTENT_TTL_MS => {
-            governor.apply_fleet(&intent);
-        }
-        _ => governor.revert_fleet(), // absent or evaporated → self-heal
-    }
+impl super::intent::FleetIntent for GovernIntent {
+    fn written_at_ms(&self) -> u64 { self.written_at_ms }
+    fn stamp(&mut self, now_ms: u64) { self.written_at_ms = now_ms; }
+    fn target(&self) -> Option<&crate::node_id::NodeId> { self.target.as_ref() }
 }
 
 impl GossipAgent {
@@ -370,37 +362,25 @@ impl GossipAgent {
     /// has not locally pinned the param. Re-publish within [`GOVERN_INTENT_TTL_MS`] to keep
     /// it in force (it evaporates otherwise — management gone ⇒ self-heal). Any entity with
     /// a concern may call this; it is intent, not command.
-    pub fn publish_tuning_intent(&self, mut intent: GovernIntent) -> bool {
-        intent.written_at_ms = now_ms();
-        match mycelium_core::serde_fixint::to_vec(&intent) {
-            Ok(bytes) => self.kv().set(GOVERN_FLEET_KEY, bytes),
-            Err(_) => false,
-        }
+    pub fn publish_tuning_intent(&self, intent: GovernIntent) -> bool {
+        super::intent::publish_intent(&self.kv(), GOVERN_FLEET_KEY, intent)
     }
 
-    /// Opt this node in to **reconciling** gossiped fleet governance (WS-C M9). Spawns a
-    /// task that applies the fleet intent on every `sys/govern/` change and on a periodic
-    /// tick (so an evaporated intent reverts even with no new write). Local pins always win.
-    /// The task exits on shutdown.
+    /// Opt this node in to **reconciling** gossiped fleet governance (WS-C M9). Spawns the
+    /// shared intent reconciler over `sys/govern/`: it applies a fresh, fleet-or-self-targeted
+    /// [`GovernIntent`] (local pins always win, inside `apply_fleet`) on every change and on a
+    /// periodic tick, and reverts non-pinned fields once the intent evaporates. Exits on shutdown.
     pub fn start_governor_reconciler(&self) {
         let governor = Arc::clone(&self.task_ctx.tuning_governor);
-        let kv = KvHandle::from_core(Arc::clone(&self.task_ctx.core));
-        let mut shutdown = self.task_ctx.shutdown_tx.subscribe();
-        self.task_ctx.spawn_task(async move {
-            let mut rx = kv.subscribe_prefix("sys/govern/");
-            // Tick at TTL/2 so an evaporated intent is noticed within the window.
-            let mut tick = tokio::time::interval(Duration::from_millis(GOVERN_INTENT_TTL_MS / 2));
-            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                reconcile_once(&kv, &governor);
-                debug!(snapshot = ?governor.snapshot(), "governor reconciled");
-                tokio::select! {
-                    r = rx.changed() => { if r.is_err() { break; } }
-                    _ = tick.tick() => {}
-                    _ = shutdown.wait_for(|v| *v) => break,
-                }
-            }
-        });
+        let governor_revert = Arc::clone(&governor);
+        super::intent::spawn_intent_reconciler::<GovernIntent, _, _>(
+            &self.task_ctx,
+            "sys/govern/",
+            GOVERN_FLEET_KEY,
+            GOVERN_INTENT_TTL_MS,
+            move |i| governor.apply_fleet(i),
+            move || governor_revert.revert_fleet(),
+        );
     }
 }
 

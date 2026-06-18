@@ -51,6 +51,7 @@ mod state_machine;
 mod scatter;
 mod bulk;
 mod mailbox;
+mod intent;
 mod cluster_tuner;
 mod tuning_governor;
 mod sharding;
