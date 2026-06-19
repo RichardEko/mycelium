@@ -58,7 +58,7 @@ compliance = ["mycelium-core/compliance", "gateway", "tls", "dep:sha2", "dep:jso
 members = ["mycelium-core", "mycelium-tuple-space", "mycelium-wasm-host"]
 # `fuzz/` is its own cargo-fuzz crate; the wasm guest fixture is a wasm32 cdylib
 # built out-of-band (its prebuilt .wasm is committed as a test fixture).
-exclude = ["fuzz", "mycelium-wasm-host/tests/fixtures/echo-component"]
+exclude = ["fuzz", "mycelium-wasm-host/tests/fixtures/echo-component", "examples/conway-gpu"]
 
 [dependencies]
 # Layers I+II substrate (ROADMAP §v2.0 M1). This crate (the full substrate) adds
@@ -147,9 +147,9 @@ mycelium-tuple-space = { path = "mycelium-tuple-space", features = ["gateway"] }
 tokio        = { version = "1.35", features = ["full", "test-util"] }
 criterion    = { version = "0.5", features = ["async_tokio"] }
 libc         = "0.2"
-wgpu         = "22"
-pollster     = "0.3"
-bytemuck     = { version = "1", features = ["derive"] }
+# GPU deps (wgpu/pollster/bytemuck) were here only for the conway_gpu demo, which
+# dragged the whole GPU toolchain into every `cargo test` / `clippy --tests` build.
+# That demo now lives in its own excluded crate: examples/conway-gpu/.
 async-openai = "0.28"
 proptest     = "1"
 

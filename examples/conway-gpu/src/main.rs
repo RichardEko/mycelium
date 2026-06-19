@@ -12,8 +12,8 @@
 //!   - The HTTP server at :8091 serves the full 512×512 grid as a flat JSON byte array and
 //!     the 16×16 mesh density view, viewable in the browser.
 //!
-//! Run:
-//!   cargo run --example conway_gpu
+//! Run (standalone crate — its wgpu stack is kept out of the main dev-dep tree):
+//!   cargo run --release --manifest-path examples/conway-gpu/Cargo.toml
 //!
 //! Then open http://127.0.0.1:8091
 

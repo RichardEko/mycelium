@@ -212,7 +212,8 @@ A separate standalone demo that shows the epidemic substrate itself rather than 
 
 ```sh
 cargo run --example conway          # CPU renderer (terminal / HTTP canvas)
-cargo run --example conway_gpu      # GPU-accelerated renderer (Metal / wgpu)
+# GPU renderer (Metal / wgpu) — standalone crate so its GPU stack isn't a mycelium dev-dep:
+cargo run --release --manifest-path examples/conway-gpu/Cargo.toml
 ```
 
 ---
