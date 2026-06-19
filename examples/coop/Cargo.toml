@@ -1,0 +1,30 @@
+[package]
+name = "mycelium-coop-examples"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+description = "Food-Rescue Co-op example suite — runnable demos of the mailbox, governance, autonomic provisioning, federation, and tuple-space capabilities, composed in one constructive world. See docs/plans/example-suite.md."
+
+[lib]
+name = "coop"
+path = "src/lib.rs"
+
+# Each demo is its own bin. Step 0 (the `common/` harness) + Step 01 (mailbox-llm) land first.
+[[bin]]
+name = "mailbox_llm"
+path = "src/bin/mailbox_llm.rs"
+
+[dependencies]
+# The full substrate (gateway is default-on; tls for node identity / the facts lens; llm for the
+# Prompt Skills used by the mailbox-llm demo).
+mycelium           = { path = "../..", features = ["llm", "tls"] }
+# WS-F federation companion — the AgentFacts "lens" mounted on every depot.
+mycelium-agentfacts = { path = "../../mycelium-agentfacts" }
+
+tokio              = { version = "1.35", features = ["full"] }
+bytes              = "1"
+serde              = { version = "1", features = ["derive"] }
+serde_json         = "1"
+tracing            = "0.1"
+tracing-subscriber = "0.3"
