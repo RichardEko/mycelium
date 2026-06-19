@@ -1,0 +1,25 @@
+[package]
+name = "mycelium-agentfacts"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Dr. Richard Nicholson <tathatasystems@proton.me>"]
+description = "WS-F M16-A: self-certified AgentFacts emission for a Mycelium domain — a NANDA-quilt sovereign patch. Builds a self-signed, TTL-scoped agent-metadata document from live substrate state and serves it at the gateway edge. Built entirely on Mycelium's public API."
+license = "AGPL-3.0-only"
+repository = "https://github.com/RichardEko/mycelium"
+keywords = ["nanda", "agent-discovery", "federation", "a2a", "distributed-systems"]
+categories = ["network-programming", "web-programming"]
+
+[dependencies]
+# Companion-crate contract: only Mycelium's PUBLIC API. `tls` is required (AgentFacts are
+# self-signed by the node identity via `GossipAgent::sign_with_identity`); `gateway` for the
+# edge endpoint. The composability proof, same as mycelium-tuple-space / mycelium-wasm-host.
+mycelium = { path = "..", default-features = false, features = ["tls", "gateway"] }
+
+serde         = { version = "1.0", features = ["derive"] }
+serde_json    = "1.0"
+base64        = "0.22"
+ed25519-dalek = "2"
+
+[dev-dependencies]
+tokio = { version = "1.35", features = ["full"] }
