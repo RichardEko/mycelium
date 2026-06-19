@@ -1,0 +1,26 @@
+# Standalone GPU demo, kept OUT of the main workspace so its heavy GPU stack
+# (wgpu + bytemuck) is not a dev-dependency of `mycelium` — that previously
+# dragged the whole GPU toolchain into every `cargo test` / `clippy --tests`
+# build. The wgpu-free CPU variant is `examples/conway.rs` (the guide example).
+#
+# Run:  cargo run --release --manifest-path examples/conway-gpu/Cargo.toml
+[workspace]
+
+[package]
+name = "conway-gpu"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[[bin]]
+name = "conway-gpu"
+path = "src/main.rs"
+
+[dependencies]
+mycelium  = { path = "../.." }
+bytes     = "1"
+tokio     = { version = "1.35", features = ["full"] }
+wgpu      = "22"
+bytemuck  = { version = "1", features = ["derive"] }
+libc      = "0.2"
