@@ -33,7 +33,7 @@ curl http://127.0.0.1:<printed-port>/.well-known/agent-facts.json
 | # | Bin | Status | Demonstrates |
 |---|-----|--------|--------------|
 | 01 | `mailbox_llm` | ✅ shipped | actor ↔ LLM via the durable, HLC-ordered **mailbox** |
-| 02 | `stigmergy` | planned | coordinator-free load shedding via `sys/load` pheromone |
+| 02 | `stigmergy` | ✅ shipped | coordinator-free load shedding via `sys/load` pheromone |
 | 03 | `elastic_intent` | planned | elastic sizing as evaporating **intent** (operator-optional) |
 | 04 | `provisioning` ⭐ | planned | the full **autonomic loop**: buffer in a tuple-space lane while peers self-provision the missing capability |
 | 05 | `federation_facts` | planned | cross-domain edge discovery via self-certified AgentFacts |
@@ -54,6 +54,21 @@ to intake's reply mailbox.
 **Philosophy beat** ("would Holland approve?"): actor-style messaging — addressed, ordered, durable
 within the gossip TTL window — emerges from Layer I (KV) + HLC ordering. No broker, no actor
 registry, no explicit lifecycle. Addressing is just the target `NodeId` + a `kind` string.
+
+### 02 — `stigmergy`
+
+```bash
+cargo run -p mycelium-coop-examples --bin stigmergy
+```
+
+Three worker depots advertise `depot/intake` and run an opacity governor over their `work.intake`
+queue; a `depot-dispatch` node decides where intake goes by **reading the pheromone trail the medium
+carries**. When one depot hits a local backlog, its governor writes an `is_opaque` pheromone to
+`sys/load/{depot}/work.intake`; dispatch reads it (`is_node_opaque`) and routes around the busy
+depot. Drain the queue and the pheromone evaporates — the depot rejoins the eligible set on its own.
+
+**Philosophy beat:** load shedding with **no coordinator, no message, no failure detector**. The
+busy node reports only its own saturation; every other node reads the trail and decides locally.
 
 ## CI
 

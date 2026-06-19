@@ -10,10 +10,14 @@ description = "Food-Rescue Co-op example suite — runnable demos of the mailbox
 name = "coop"
 path = "src/lib.rs"
 
-# Each demo is its own bin. Step 0 (the `common/` harness) + Step 01 (mailbox-llm) land first.
+# Each demo is its own bin.
 [[bin]]
 name = "mailbox_llm"
 path = "src/bin/mailbox_llm.rs"
+
+[[bin]]
+name = "stigmergy"
+path = "src/bin/stigmergy.rs"
 
 [dependencies]
 # The full substrate (gateway is default-on; tls for node identity / the facts lens; llm for the

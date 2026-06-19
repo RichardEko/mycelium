@@ -14,4 +14,11 @@ echo "$out" | grep -q "triage replied" \
   || { echo "FAIL: no triage reply observed"; exit 1; }
 
 echo
+echo "── 02 · stigmergy ───────────────────────────────────────────────"
+out="$(cargo run -q -p mycelium-coop-examples --bin stigmergy 2>/dev/null)"
+echo "$out"
+echo "$out" | grep -q "All assertions passed" \
+  || { echo "FAIL: stigmergy did not pass its assertions"; exit 1; }
+
+echo
 echo "All co-op smokes passed."
