@@ -37,12 +37,26 @@ pub struct InstallableEntry {
     /// Optional ranking hints (0 = unknown): bytes to pull, estimated install seconds.
     pub size_bytes:        u64,
     pub est_install_secs:  u64,
+    /// Optional **provenance**: an Ed25519 signature over the content address by a publisher.
+    /// Empty = unsigned. The content hash gives *integrity* (the bytes are what the catalog named);
+    /// this gives *provenance* (a trusted publisher vouched for them). See [`verify_provenance`].
+    ///
+    /// [`verify_provenance`]: Self::verify_provenance
+    pub signer:            Vec<u8>, // 32-byte verifying key, or empty
+    pub signature:         Vec<u8>, // 64-byte signature over artifact.as_bytes(), or empty
 }
 
 impl InstallableEntry {
     /// A catalog entry for `provides`, pulled from `artifact`.
     pub fn new(provides: Capability, artifact: ArtifactId) -> Self {
-        Self { provides, artifact, size_bytes: 0, est_install_secs: 0 }
+        Self {
+            provides,
+            artifact,
+            size_bytes: 0,
+            est_install_secs: 0,
+            signer: Vec::new(),
+            signature: Vec::new(),
+        }
     }
 
     /// Attach ranking hints used by [`InstallableCatalog::resolve_best`].
@@ -52,29 +66,82 @@ impl InstallableEntry {
         self
     }
 
-    /// Serialize for gossip: `[32B artifact][8B size LE][8B est LE][Capability bytes]`. Built on
-    /// the public `Capability::encode` (no internal codec), so it stays a pure public-API consumer.
+    /// Sign the content address with `signing_key`, attaching publisher provenance. A provisioner
+    /// configured with the matching verifying key (see `Provisioner::require_provenance`) then only
+    /// installs artifacts a trusted publisher vouched for.
+    pub fn signed_by(mut self, signing_key: &ed25519_dalek::SigningKey) -> Self {
+        use ed25519_dalek::Signer;
+        let sig = signing_key.sign(self.artifact.as_bytes());
+        self.signer = signing_key.verifying_key().to_bytes().to_vec();
+        self.signature = sig.to_bytes().to_vec();
+        self
+    }
+
+    /// Verify provenance: the entry is signed, the signer is in `trusted`, and the signature is a
+    /// valid Ed25519 signature over the content address. An unsigned entry is **not** trusted.
+    pub fn verify_provenance(&self, trusted: &[[u8; 32]]) -> bool {
+        use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+        let (Ok(signer), Ok(sig_bytes)) =
+            (<[u8; 32]>::try_from(self.signer.as_slice()), <[u8; 64]>::try_from(self.signature.as_slice()))
+        else {
+            return false;
+        };
+        if !trusted.contains(&signer) {
+            return false;
+        }
+        let Ok(vk) = VerifyingKey::from_bytes(&signer) else { return false };
+        vk.verify(self.artifact.as_bytes(), &Signature::from_bytes(&sig_bytes)).is_ok()
+    }
+
+    /// Serialize for gossip: `[32B artifact][8B size][8B est][1B signed][32B signer +64B sig if
+    /// signed][Capability bytes]`. Built on the public `Capability::encode` (no internal codec).
     pub fn encode(&self) -> Vec<u8> {
         let cap = self.provides.encode();
-        let mut out = Vec::with_capacity(48 + cap.len());
+        let signed = self.signer.len() == 32 && self.signature.len() == 64;
+        let mut out = Vec::with_capacity(49 + if signed { 96 } else { 0 } + cap.len());
         out.extend_from_slice(self.artifact.as_bytes());
         out.extend_from_slice(&self.size_bytes.to_le_bytes());
         out.extend_from_slice(&self.est_install_secs.to_le_bytes());
+        out.push(signed as u8);
+        if signed {
+            out.extend_from_slice(&self.signer);
+            out.extend_from_slice(&self.signature);
+        }
         out.extend_from_slice(&cap);
         out
     }
 
     /// Inverse of [`encode`](Self::encode).
     pub fn decode(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() < 48 {
+        if bytes.len() < 49 {
             return None;
         }
         let mut id = [0u8; 32];
         id.copy_from_slice(&bytes[0..32]);
         let size_bytes = u64::from_le_bytes(bytes[32..40].try_into().ok()?);
         let est_install_secs = u64::from_le_bytes(bytes[40..48].try_into().ok()?);
-        let provides = Capability::decode(&bytes[48..])?;
-        Some(Self { provides, artifact: ArtifactId::from_bytes(id), size_bytes, est_install_secs })
+        let signed = bytes[48] == 1;
+        let mut off = 49;
+        let (signer, signature) = if signed {
+            if bytes.len() < off + 96 {
+                return None;
+            }
+            let signer = bytes[off..off + 32].to_vec();
+            let signature = bytes[off + 32..off + 96].to_vec();
+            off += 96;
+            (signer, signature)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let provides = Capability::decode(&bytes[off..])?;
+        Some(Self {
+            provides,
+            artifact: ArtifactId::from_bytes(id),
+            size_bytes,
+            est_install_secs,
+            signer,
+            signature,
+        })
     }
 
     /// The KV key this entry is published under (`installable/{ns}/{name}/{artifact-hex}`).
@@ -171,6 +238,40 @@ mod tests {
 
         // A requirement nothing in the catalog provides resolves to empty (loop simply won't fire).
         assert!(cat.resolve(&CapFilter::new("audio", "transcribe")).is_empty());
+    }
+
+    #[test]
+    fn provenance_signs_and_verifies_against_trusted_keys() {
+        use ed25519_dalek::SigningKey;
+        let sk = SigningKey::from_bytes(&[7u8; 32]);
+        let vk = sk.verifying_key().to_bytes();
+        let entry = InstallableEntry::new(cap("llm", "summarize"), art(b"a.wasm")).signed_by(&sk);
+
+        assert!(entry.verify_provenance(&[vk]), "trusted signer accepted");
+
+        let other = SigningKey::from_bytes(&[8u8; 32]).verifying_key().to_bytes();
+        assert!(!entry.verify_provenance(&[other]), "untrusted signer rejected");
+
+        let unsigned = InstallableEntry::new(cap("llm", "summarize"), art(b"a.wasm"));
+        assert!(!unsigned.verify_provenance(&[vk]), "unsigned entry is never trusted");
+
+        // A signature is over the content address — pointing the entry at different bytes breaks it.
+        let mut tampered = entry.clone();
+        tampered.artifact = art(b"evil.wasm");
+        assert!(!tampered.verify_provenance(&[vk]), "swapped artifact fails the signature");
+    }
+
+    #[test]
+    fn signed_entry_encode_decode_round_trips() {
+        use ed25519_dalek::SigningKey;
+        let sk = SigningKey::from_bytes(&[9u8; 32]);
+        let vk = sk.verifying_key().to_bytes();
+        let e = InstallableEntry::new(cap("v", "d"), art(b"x")).with_cost(10, 2).signed_by(&sk);
+        let back = InstallableEntry::decode(&e.encode()).expect("decode signed");
+        assert_eq!(back.signer, e.signer);
+        assert_eq!(back.signature, e.signature);
+        assert_eq!(back.size_bytes, 10);
+        assert!(back.verify_provenance(&[vk]), "provenance survives encode/decode");
     }
 
     #[test]

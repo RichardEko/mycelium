@@ -83,9 +83,14 @@ wasm instructions; a runaway component **traps** (`WasmHostError::Invoke`) inste
 serve task. Instantiation runs with unlimited fuel so only `invoke` is bounded; `WasmHost::new()`
 stays unmetered (zero overhead). Recommended when serving untrusted components.
 
+**Provenance (landed):** content-addressing gives *integrity* (the bytes are what the catalog
+named); `InstallableEntry::signed_by(key)` adds *provenance* — an Ed25519 signature over the
+content address by a publisher. `Provisioner::require_provenance(trusted_keys)` then installs only
+artifacts a trusted publisher vouched for (unsigned / untrusted-signer / swapped-artifact refused).
+
 **Follow-up:** a **mesh-bulk `ArtifactSource`** (surfacing the content-addressed bulk-fetch
-client, §E.4.4); `spawn_blocking` (+ epoch interruption for wall-clock deadlines) for long-running
-handlers; leased-consensus for strict singletons; optional Ed25519 signed-provenance.
+client, §E.4.4); epoch (wall-clock) limits for long-running handlers; leased-consensus for strict
+singletons.
 
 [`ArtifactSource`]: src/artifact.rs
 

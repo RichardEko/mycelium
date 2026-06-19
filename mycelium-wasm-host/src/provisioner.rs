@@ -84,6 +84,9 @@ pub struct Provisioner {
     self_elect_p: f64,
     /// Capability-presence invariants this node supervises (M14).
     policies:     Vec<SupervisionPolicy>,
+    /// If non-empty, only catalog entries with valid provenance from one of these publisher keys
+    /// are installed (Ed25519 over the content address). Empty = accept any (integrity-only).
+    trusted_publishers: Vec<[u8; 32]>,
     /// Artifacts this node has already provisioned (kept alive), so a round never double-pulls.
     hosted:       HashMap<ArtifactId, Hosted>,
 }
@@ -105,8 +108,22 @@ impl Provisioner {
             source,
             self_elect_p,
             policies: Vec::new(),
+            trusted_publishers: Vec::new(),
             hosted: HashMap::new(),
         }
+    }
+
+    /// Require **signed provenance**: only install catalog entries carrying a valid Ed25519
+    /// signature over their content address from one of `trusted` publisher keys. Without this,
+    /// the provisioner trusts the catalog for integrity (hash match) but not origin; with it, an
+    /// unsigned or untrusted-signer artifact is refused even if its bytes hash correctly.
+    pub fn require_provenance(&mut self, trusted: Vec<[u8; 32]>) {
+        self.trusted_publishers = trusted;
+    }
+
+    /// True if `entry` may be installed under the current provenance policy.
+    fn provenance_ok(&self, entry: &crate::catalog::InstallableEntry) -> bool {
+        self.trusted_publishers.is_empty() || entry.verify_provenance(&self.trusted_publishers)
     }
 
     /// Add a capability-presence invariant (M14 supervision): keep ≥ `min_providers` live providers
@@ -198,20 +215,15 @@ impl Provisioner {
         let mut provisioned = 0;
 
         // ── Demand-driven (M15) ──────────────────────────────────────────────
-        let entries: Vec<(Capability, ArtifactId)> = self
-            .catalog
-            .entries()
-            .iter()
-            .map(|e| (e.provides.clone(), e.artifact))
-            .collect();
-        for (provides, artifact) in entries {
-            if self.hosted.contains_key(&artifact) {
+        let entries: Vec<crate::catalog::InstallableEntry> = self.catalog.entries().to_vec();
+        for entry in entries {
+            if self.hosted.contains_key(&entry.artifact) || !self.provenance_ok(&entry) {
                 continue;
             }
-            let filter = CapFilter::new(provides.namespace.clone(), provides.name.clone());
+            let filter = CapFilter::new(entry.provides.namespace.clone(), entry.provides.name.clone());
             let demand = self.agent.capabilities().demand(&filter);
             let unmet = demand.providers.is_empty() && !demand.demanding_nodes.is_empty();
-            if unmet && self.self_elects() && self.bring_live(provides, artifact) {
+            if unmet && self.self_elects() && self.bring_live(entry.provides, entry.artifact) {
                 provisioned += 1;
             }
         }
@@ -226,17 +238,13 @@ impl Provisioner {
                 continue; // invariant already satisfied across the fleet
             }
             // Resolve the catalog for an artifact that would satisfy the invariant.
-            let Some((provides, artifact)) = self
-                .catalog
-                .resolve_best(&policy.filter)
-                .map(|e| (e.provides.clone(), e.artifact))
-            else {
+            let Some(entry) = self.catalog.resolve_best(&policy.filter).cloned() else {
                 continue; // nothing in the catalog provides it
             };
-            if self.hosted.contains_key(&artifact) {
-                continue; // this node already contributes a provider
+            if self.hosted.contains_key(&entry.artifact) || !self.provenance_ok(&entry) {
+                continue; // already a provider here, or fails the provenance policy
             }
-            if self.self_elects() && self.bring_live(provides, artifact) {
+            if self.self_elects() && self.bring_live(entry.provides, entry.artifact) {
                 provisioned += 1;
             }
         }
@@ -454,6 +462,42 @@ mod tests {
         prov.supervise_band(CapFilter::new("text", "echo"), 0, 0);
         prov.provision_round(); // shed pass withdraws the local provider
         assert_eq!(prov.hosted_count(), 0, "over-max provider is withdrawn");
+
+        agent.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn require_provenance_refuses_unsigned_but_installs_trusted_signed() {
+        use crate::catalog::InstallableEntry;
+        use ed25519_dalek::SigningKey;
+
+        let agent = live_agent().await;
+        let host = Arc::new(WasmHost::new().expect("engine"));
+        let sk = SigningKey::from_bytes(&[42u8; 32]);
+        let trusted = sk.verifying_key().to_bytes();
+
+        let mut source = InMemorySource::new();
+        let id = source.insert(ECHO_COMPONENT.to_vec());
+        let source: Arc<dyn crate::ArtifactSource + Send + Sync> = Arc::new(source);
+
+        // Unsigned catalog entry + provenance required → refused.
+        let mut unsigned_cat = InstallableCatalog::new();
+        unsigned_cat.add(InstallableEntry::new(Capability::new("text", "echo"), id));
+        let mut p1 = Provisioner::new(
+            Arc::clone(&agent), Arc::clone(&host), unsigned_cat, Arc::clone(&source), 1.0);
+        p1.require_provenance(vec![trusted]);
+        p1.supervise(CapFilter::new("text", "echo"), 1);
+        assert_eq!(p1.provision_round(), 0, "unsigned artifact refused under provenance policy");
+        assert_eq!(p1.hosted_count(), 0);
+
+        // Signed by the trusted publisher → installed.
+        let mut signed_cat = InstallableCatalog::new();
+        signed_cat.add(InstallableEntry::new(Capability::new("text", "echo"), id).signed_by(&sk));
+        let mut p2 = Provisioner::new(Arc::clone(&agent), host, signed_cat, source, 1.0);
+        p2.require_provenance(vec![trusted]);
+        p2.supervise(CapFilter::new("text", "echo"), 1);
+        assert_eq!(p2.provision_round(), 1, "trusted-signed artifact is installed");
+        assert_eq!(p2.hosted_count(), 1);
 
         agent.shutdown().await;
     }
