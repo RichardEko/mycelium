@@ -2658,11 +2658,11 @@ mod tests {
         // Poll until the HTTP server has bound — a fixed sleep races server startup under load.
         let mut up = false;
         for _ in 0..100 {
-            if let Ok(resp) = client.get(&url).send().await {
-                if resp.status() == 200 {
-                    up = true;
-                    break;
-                }
+            if let Ok(resp) = client.get(&url).send().await
+                && resp.status() == 200
+            {
+                up = true;
+                break;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
