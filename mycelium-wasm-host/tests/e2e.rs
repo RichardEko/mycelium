@@ -77,6 +77,30 @@ async fn provision_pulls_verifies_and_runs_a_real_component() {
 }
 
 #[tokio::test]
+async fn fuel_budget_bounds_a_component_invocation() {
+    let agent = live_agent().await;
+
+    // A tiny fuel budget: the component's handle runs past it and traps (no hang).
+    let starved = WasmHost::with_fuel_per_call(1).expect("engine");
+    let state = HostState::new(agent.node_id().clone(), "nlp", agent.kv(), agent.mesh());
+    let mut inst = starved.instantiate(ECHO_COMPONENT, state).expect("instantiate (unlimited init)");
+    let err = inst.invoke("go", b"x".to_vec());
+    assert!(
+        matches!(err, Err(mycelium_wasm_host::WasmHostError::Invoke(_))),
+        "a starved invocation must trap, got {err:?}"
+    );
+
+    // An ample budget: the same call completes normally.
+    let ample = WasmHost::with_fuel_per_call(1_000_000_000).expect("engine");
+    let state = HostState::new(agent.node_id().clone(), "nlp", agent.kv(), agent.mesh());
+    let mut inst = ample.instantiate(ECHO_COMPONENT, state).expect("instantiate");
+    let out = inst.invoke("go", b"plenty".to_vec()).expect("no trap").expect("guest ok");
+    assert_eq!(out, b"plenty");
+
+    agent.shutdown().await;
+}
+
+#[tokio::test]
 async fn provision_for_resolves_a_requirement_then_pulls_and_runs_the_match() {
     // The full M15→M12 path: a requirement (CapFilter) is resolved against an installable
     // catalog to pick an ArtifactId, which is then pulled + verified + instantiated.
