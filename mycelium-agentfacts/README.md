@@ -34,12 +34,27 @@ agent.with_http_routes(mycelium_agentfacts::agent_facts_router(Arc::clone(&agent
 agent.start().await?;   // GET /.well-known/agent-facts.json
 ```
 
-## Status (M16-A complete)
+## M16-B — the CRDT update layer (intra-domain, PUSH)
 
-- **Landed:** stable model + substrate builder (`AgentFacts::from_agent`), thin NANDA serializer
-  (`to_nanda_jsonld`), sign/verify (`SignedFacts` / `signed_agent_facts`), and the **edge HTTP
-  endpoint** (`agent_facts_router`).
-- **Next (M16-B):** intra-domain per-field-signed CRDT updates over LWW/HLC/anti-entropy.
+NANDA names a "CRDT-based update protocol" its v0.3 body doesn't deliver, because whole-document
+signing is in tension with field-level merge. Mycelium's substrate *is* that protocol: each field
+is an independently **node-signed** KV entry at `facts/{node}/{field}`, and **LWW + HLC +
+anti-entropy** is the convergent, concurrent-safe merge.
+
+- `publish_field(agent, field, value)` — self-sign one field, gossip it (LWW by HLC; distinct
+  fields never conflict, same-field newest-wins).
+- `read_verified_fields(agent, node, ttl_ms)` — read + **verify** a node's fields against its
+  identity key, drop forged or stale ones, return the merged `{field: value}`. A forged
+  `facts/{node}/…` write (LWW-accepted by the substrate — detection-not-prevention) reads back as
+  absent. Late joiners catch up via anti-entropy. **Push intra-domain; pull at the edge.**
+
+## Status
+
+- **M16-A complete:** model + `from_agent` builder + `to_nanda_jsonld` + `SignedFacts`/`verify` +
+  edge endpoint (`agent_facts_router`).
+- **M16-B complete:** per-field signed CRDT layer (`publish_field` / `read_verified_fields`),
+  proven single-node (LWW + forgery rejection) and **cross-node** (intra-domain gossip + verify).
+- **Remaining WS-F:** OR-Map CRDT design note; schema-registry runtime migrations.
 
 `evaluations`/`telemetry` provenance (when added) cites the WS2 audit trail's stable `content_hash`
 — *self-attested-with-audit*, per the ROADMAP precursor criterion.
