@@ -192,17 +192,7 @@ async fn poll_until(mut predicate: impl FnMut() -> bool, timeout_ms: u64) {
 
 // ── Port allocator for integration tests ──────────────────────────────────
 
-fn alloc_port() -> u16 {
-    // Bind to port 0, let the OS assign an ephemeral port, then release the
-    // socket. The port is free for ~microseconds before the agent binds it;
-    // this is far more reliable than a fixed sequential range that may already
-    // be in use on the test host.
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .expect("OS failed to allocate ephemeral port for test")
-        .local_addr()
-        .unwrap()
-        .port()
-}
+fn alloc_port() -> u16 { crate::test_util::alloc_port() }
 
 // ── Two-node consensus test fixture ──────────────────────────────────────
 //

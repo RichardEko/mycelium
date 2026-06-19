@@ -206,10 +206,7 @@ mod tests {
     use bytes::Bytes;
     use std::{sync::Arc, time::Duration};
 
-    fn alloc_port() -> u16 {
-        std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap().local_addr().unwrap().port()
-    }
+    fn alloc_port() -> u16 { crate::test_util::alloc_port() }
 
     #[tokio::test]
     async fn deliver_and_open_mailbox_loopback() {

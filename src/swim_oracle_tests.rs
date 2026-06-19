@@ -40,13 +40,7 @@ fn env_u64(key: &str, default: u64) -> u64 {
 
 /// Bind port 0, read the OS-assigned port, release it. Free for the microseconds
 /// before the agent binds it (same trick as the `lib_tests` allocator).
-fn alloc_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .expect("OS failed to allocate ephemeral port")
-        .local_addr()
-        .unwrap()
-        .port()
-}
+fn alloc_port() -> u16 { crate::test_util::alloc_port() }
 
 /// Count the seed's persistent TCP connection load the way `seed_established`
 /// does in Docker: outbound writers the seed itself opened + inbound writers
