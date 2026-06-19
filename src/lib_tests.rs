@@ -3781,3 +3781,43 @@ async fn probe_concurrent_audit_chain_is_contiguous_and_verifies() {
     a.shutdown_with_timeout(Duration::from_secs(5)).await;
     let _ = std::fs::remove_dir_all(&cert_dir);
 }
+
+/// WS-F M16-A prerequisite: the public node-identity signing surface (`sign_with_identity` +
+/// `identity_public_key`) lets a public-API consumer self-certify a document under the node
+/// identity and a fetcher verify it — the foundation AgentFacts emission builds on.
+#[cfg(feature = "tls")]
+#[tokio::test]
+async fn test_wsf_public_identity_signing_round_trips() {
+    use crate::config::TlsConfig;
+
+    let port = alloc_port();
+    let id = NodeId::new("127.0.0.1", port).unwrap();
+    let cert_dir = std::env::temp_dir().join(format!("myc-wsf-sign-{port}"));
+    let _ = std::fs::remove_dir_all(&cert_dir);
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = port;
+    cfg.tls = Some(TlsConfig { auto_cert_dir: cert_dir.clone(), ..TlsConfig::default() });
+    let a = Arc::new(GossipAgent::new(id, cfg));
+    a.start().await.unwrap();
+
+    let doc = b"agent-facts-document-bytes";
+    let sig = a.sign_with_identity(doc).expect("tls node signs");
+    let pk = a.identity_public_key().expect("tls node has a public key");
+
+    // A fetcher verifies the self-signed document against the published key.
+    assert!(crate::tls::verify_bytes(&pk, doc, &sig), "self-signed document verifies");
+    // Tampered document → verification fails.
+    assert!(!crate::tls::verify_bytes(&pk, b"tampered", &sig), "tampered document rejected");
+    // The published key matches the gossiped identity (sys/identity/{self}).
+    let id_key = format!("sys/identity/{}", a.node_id());
+    let mut idb = None;
+    for _ in 0..100 {
+        if let Some(b) = a.kv().get(&id_key) { idb = Some(b); break; }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let idb = idb.expect("identity gossiped");
+    assert_eq!(&idb[..32], &pk[..], "identity_public_key matches the gossiped sys/identity key");
+
+    a.shutdown_with_timeout(Duration::from_secs(5)).await;
+    let _ = std::fs::remove_dir_all(&cert_dir);
+}

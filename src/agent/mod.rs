@@ -807,6 +807,23 @@ impl GossipAgent {
 /// Hot certificate / identity rotation (WS5; `tls` feature).
 #[cfg(feature = "tls")]
 impl GossipAgent {
+    /// Sign `msg` with this node's Ed25519 **identity** key — the same key behind TLS and gossip
+    /// `SignedData`. `None` if no `tls` identity is configured. Public so companion crates (e.g.
+    /// WS-F AgentFacts emission) can **self-certify** documents under the node identity without
+    /// reaching into the substrate; the matching key is [`identity_public_key`](Self::identity_public_key).
+    pub fn sign_with_identity(&self, msg: &[u8]) -> Option<[u8; 64]> {
+        let tls = self.task_ctx.tls.get()?;
+        Some(crate::tls::sign_bytes(&tls.signing_key(), msg))
+    }
+
+    /// This node's Ed25519 identity **public** (verifying) key, or `None` without the `tls`
+    /// identity. A fetcher verifies a self-signed document against this; trust is the caller's to
+    /// decide (self-certified — no issuer authority).
+    pub fn identity_public_key(&self) -> Option<[u8; 32]> {
+        let tls = self.task_ctx.tls.get()?;
+        Some(tls.signing_key().verifying_key().to_bytes())
+    }
+
     /// Rotate this node's TLS / identity key **without cluster disruption**.
     ///
     /// 1. Generate a new key + CA-signed cert (reusing the cluster CA), persisted
