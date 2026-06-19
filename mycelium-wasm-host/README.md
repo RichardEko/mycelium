@@ -78,9 +78,14 @@ to the cluster-wide `installable/{ns}/{name}/{artifact-hex}` KV prefix (declared
 rebuilds the catalog from the gossiped view. So any node publishes artifacts and every provisioner
 resolves against the live cluster catalog — no embedder-supplied in-memory list required.
 
+**Fuel metering (landed):** `WasmHost::with_fuel_per_call(n)` grants each `invoke` a budget of `n`
+wasm instructions; a runaway component **traps** (`WasmHostError::Invoke`) instead of hanging the
+serve task. Instantiation runs with unlimited fuel so only `invoke` is bounded; `WasmHost::new()`
+stays unmetered (zero overhead). Recommended when serving untrusted components.
+
 **Follow-up:** a **mesh-bulk `ArtifactSource`** (surfacing the content-addressed bulk-fetch
-client, §E.4.4); fuel/epoch limits + `spawn_blocking` for long-running handlers; leased-consensus
-for strict singletons; optional Ed25519 signed-provenance.
+client, §E.4.4); `spawn_blocking` (+ epoch interruption for wall-clock deadlines) for long-running
+handlers; leased-consensus for strict singletons; optional Ed25519 signed-provenance.
 
 [`ArtifactSource`]: src/artifact.rs
 

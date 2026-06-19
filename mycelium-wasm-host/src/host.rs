@@ -143,7 +143,11 @@ impl HostState {
 /// The component host: a shared wasmtime [`Engine`] configured for the Component Model. Cheap
 /// to clone-share across instantiations; one per node is plenty.
 pub struct WasmHost {
-    engine: Engine,
+    engine:        Engine,
+    /// Opt-in fuel budget granted to each `invoke` call. `Some(n)` ⇒ a component that runs past
+    /// `n` wasm instructions **traps** instead of hanging the serve task (deterministic). `None` ⇒
+    /// unmetered (the engine doesn't even enable fuel — zero overhead).
+    fuel_per_call: Option<u64>,
 }
 
 /// Errors from host setup / instantiation / invocation.
@@ -176,12 +180,26 @@ impl std::fmt::Display for WasmHostError {
 impl std::error::Error for WasmHostError {}
 
 impl WasmHost {
-    /// Create a host with a Component-Model-enabled engine.
+    /// Create a host with a Component-Model-enabled engine (no fuel metering — zero overhead).
     pub fn new() -> Result<Self, WasmHostError> {
+        Self::build(None)
+    }
+
+    /// Create a host that grants each `invoke` a fuel budget of `fuel_per_call` wasm instructions.
+    /// A component exceeding it traps (`WasmHostError::Invoke`) rather than hanging the serve task —
+    /// the safety bound recommended for serving untrusted components.
+    pub fn with_fuel_per_call(fuel_per_call: u64) -> Result<Self, WasmHostError> {
+        Self::build(Some(fuel_per_call))
+    }
+
+    fn build(fuel_per_call: Option<u64>) -> Result<Self, WasmHostError> {
         let mut cfg = Config::new();
         cfg.wasm_component_model(true);
+        if fuel_per_call.is_some() {
+            cfg.consume_fuel(true);
+        }
         let engine = Engine::new(&cfg).map_err(|e| WasmHostError::Engine(e.to_string()))?;
-        Ok(Self { engine })
+        Ok(Self { engine, fuel_per_call })
     }
 
     /// The shared engine (components are instantiated against it).
@@ -203,9 +221,14 @@ impl WasmHost {
         bindings::CapabilityComponent::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |s| s)
             .map_err(|e| WasmHostError::Instantiate(e.to_string()))?;
         let mut store = Store::new(&self.engine, state);
+        // Component instantiation (libc/WASI init) runs guest code; give it unlimited fuel so the
+        // per-call budget bounds only `invoke`, not start-up. (No-op when fuel is disabled.)
+        if self.fuel_per_call.is_some() {
+            store.set_fuel(u64::MAX).map_err(|e| WasmHostError::Instantiate(e.to_string()))?;
+        }
         let world = bindings::CapabilityComponent::instantiate(&mut store, &component, &linker)
             .map_err(|e| WasmHostError::Instantiate(e.to_string()))?;
-        Ok(Instance { store, world })
+        Ok(Instance { store, world, fuel_per_call: self.fuel_per_call })
     }
 
     /// **Pull + verify + instantiate** — the M12 mechanism end to end. Fetch the artifact for
@@ -247,15 +270,21 @@ impl WasmHost {
 /// A live, instantiated capability component plus its per-instance store. The capability is
 /// invoked by calling its `handle` export ([`invoke`](Self::invoke)).
 pub struct Instance {
-    store: Store<HostState>,
-    world: bindings::CapabilityComponent,
+    store:         Store<HostState>,
+    world:         bindings::CapabilityComponent,
+    fuel_per_call: Option<u64>,
 }
 
 impl Instance {
     /// Invoke the component's capability `handle(kind, payload)` export. The outer `Result` is a
-    /// host/ABI failure (trap); the inner `Result` is the component's own success payload or its
-    /// returned error string.
+    /// host/ABI failure (trap — incl. fuel exhaustion); the inner `Result` is the component's own
+    /// success payload or its returned error string.
     pub fn invoke(&mut self, kind: &str, payload: Vec<u8>) -> Result<Result<Vec<u8>, String>, WasmHostError> {
+        // Refuel per call so each invocation gets the full budget (and a runaway component traps
+        // instead of hanging the serve task).
+        if let Some(budget) = self.fuel_per_call {
+            self.store.set_fuel(budget).map_err(|e| WasmHostError::Invoke(e.to_string()))?;
+        }
         let req = Request { kind: kind.to_string(), payload };
         let resp = self
             .world
