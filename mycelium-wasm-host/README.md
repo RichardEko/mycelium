@@ -88,8 +88,13 @@ named); `InstallableEntry::signed_by(key)` adds *provenance* — an Ed25519 sign
 content address by a publisher. `Provisioner::require_provenance(trusted_keys)` then installs only
 artifacts a trusted publisher vouched for (unsigned / untrusted-signer / swapped-artifact refused).
 
-**Follow-up:** a **mesh-bulk `ArtifactSource`** (surfacing the content-addressed bulk-fetch
-client, §E.4.4); epoch (wall-clock) limits for long-running handlers; leased-consensus for strict
+**Mesh artifact pull (landed):** `serve_artifacts(agent, source)` answers `artifact.fetch` RPCs
+with bytes by content address; `pull_artifact(agent, peer, id, …)` / `MeshArtifactSource` pull from
+a peer and **verify the content address on arrival** (untrusted source). So nodes distribute
+artifacts to each other over the cluster — no external registry required (RPC frame ≤ 10 MiB;
+larger artifacts want the bulk transport). Closes §E.4.4 on the public API.
+
+**Follow-up:** epoch (wall-clock) limits for long-running handlers; leased-consensus for strict
 singletons.
 
 [`ArtifactSource`]: src/artifact.rs
