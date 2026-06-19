@@ -13,10 +13,7 @@ fn make_agent() -> GossipAgent {
     GossipAgent::new(NodeId::new("127.0.0.1", 0).unwrap(), GossipConfig::default())
 }
 
-fn alloc_port() -> u16 {
-    use std::net::TcpListener;
-    TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
-}
+fn alloc_port() -> u16 { crate::test_util::alloc_port() }
 
 async fn make_started_agent(port: u16) -> GossipAgent {
     let id  = NodeId::new("127.0.0.1", port).unwrap();

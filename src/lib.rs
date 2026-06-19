@@ -287,6 +287,9 @@ pub mod fuzz_internals {
 
 
 #[cfg(test)]
+mod test_util;
+
+#[cfg(test)]
 mod lib_tests;
 
 #[cfg(test)]
