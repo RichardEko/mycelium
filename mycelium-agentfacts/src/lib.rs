@@ -23,6 +23,9 @@ use mycelium::{Capability, GossipAgent};
 use serde::Serialize;
 use serde_json::{json, Value};
 
+mod http;
+pub use http::agent_facts_router;
+
 fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }

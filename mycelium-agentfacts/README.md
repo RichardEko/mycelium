@@ -20,13 +20,26 @@ When the moving v0.3 spec renames a field (AgentFacts may even become "Agent Met
 that serializer changes; the substrate-derived core never does. (ROADMAP §16 precursor rule:
 "never couple to AgentFacts field/schema names".)
 
-## Status (M16-A)
+## Edge endpoint
 
-- **Landed:** the stable model + substrate builder (`AgentFacts::from_agent`) + thin NANDA
-  serializer (`to_nanda_jsonld`) + sign/verify (`SignedFacts`) + `signed_agent_facts`.
-- **Follow-up:** the **edge HTTP endpoint** (serve the signed doc at a public, un-gated
-  `/.well-known/agent-facts.json` via `with_http_routes`, TTL-scoped) — M16-A's serve half; then
-  **M16-B** (intra-domain per-field-signed CRDT updates over LWW/HLC/anti-entropy).
+`agent_facts_router(agent, opts)` mounts a public, un-gated `GET /.well-known/agent-facts.json` on
+the agent's embedded gateway (via `with_http_routes`) that serves the freshly-built signed document
+with `Cache-Control: max-age=<ttl>` — the TTL-scoped `facts_url` the quilt **pulls**. Deliberately
+outside the `/gateway` scope wall (publicly fetchable + cryptographically verified, never
+token-gated). Run-dark: nothing is published until the operator mounts it.
+
+```rust,ignore
+let opts = FactsOptions { endpoints: vec![..], locality: Some("eu-west".into()), ttl_secs: 300 };
+agent.with_http_routes(mycelium_agentfacts::agent_facts_router(Arc::clone(&agent), opts));
+agent.start().await?;   // GET /.well-known/agent-facts.json
+```
+
+## Status (M16-A complete)
+
+- **Landed:** stable model + substrate builder (`AgentFacts::from_agent`), thin NANDA serializer
+  (`to_nanda_jsonld`), sign/verify (`SignedFacts` / `signed_agent_facts`), and the **edge HTTP
+  endpoint** (`agent_facts_router`).
+- **Next (M16-B):** intra-domain per-field-signed CRDT updates over LWW/HLC/anti-entropy.
 
 `evaluations`/`telemetry` provenance (when added) cites the WS2 audit trail's stable `content_hash`
 — *self-attested-with-audit*, per the ROADMAP precursor criterion.
