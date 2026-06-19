@@ -44,6 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         zone: "camden".into(),
         bootstrap: vec![],
         cert_dir: cert_dir.clone(),
+        health_secs: None,
     })
     .await?;
     println!("[{}] up — gossip :{} · facts http://127.0.0.1:{}/.well-known/agent-facts.json",
@@ -70,6 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         zone: "islington".into(),
         bootstrap: vec![router.gossip_port],
         cert_dir: cert_dir.clone(),
+        health_secs: None,
     })
     .await?;
     println!("[{}] up — gossip :{}", triage.name, triage.gossip_port);
@@ -98,6 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         zone: "hackney".into(),
         bootstrap: vec![router.gossip_port],
         cert_dir: cert_dir.clone(),
+        health_secs: None,
     })
     .await?;
     println!("[{}] up — gossip :{}", intake.name, intake.gossip_port);

@@ -44,6 +44,7 @@ async fn spawn_worker(name: &str, zone: &str, ports: (u16, u16), seed: u16, cert
         zone: zone.into(),
         bootstrap: vec![seed],
         cert_dir: cert_dir.to_path_buf(),
+        health_secs: None,
     })
     .await
     .expect("worker depot starts");
@@ -101,6 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         zone: "hub".into(),
         bootstrap: vec![],
         cert_dir: cert_dir.clone(),
+        health_secs: None,
     })
     .await?;
     println!("[{}] up — will route intake by reading pheromone trails", dispatch.name);

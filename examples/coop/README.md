@@ -34,7 +34,7 @@ curl http://127.0.0.1:<printed-port>/.well-known/agent-facts.json
 |---|-----|--------|--------------|
 | 01 | `mailbox_llm` | ✅ shipped | actor ↔ LLM via the durable, HLC-ordered **mailbox** |
 | 02 | `stigmergy` | ✅ shipped | coordinator-free load shedding via `sys/load` pheromone |
-| 03 | `elastic_intent` | planned | elastic sizing as evaporating **intent** (operator-optional) |
+| 03 | `elastic_intent` | ✅ shipped | elastic sizing as evaporating **intent** (operator-optional) |
 | 04 | `provisioning` ⭐ | planned | the full **autonomic loop**: buffer in a tuple-space lane while peers self-provision the missing capability |
 | 05 | `federation_facts` | planned | cross-domain edge discovery via self-certified AgentFacts |
 | 06 | `rotation` | planned | zero-disruption identity rotation; pre-rotation facts still verify |
@@ -69,6 +69,23 @@ depot. Drain the queue and the pheromone evaporates — the depot rejoins the el
 
 **Philosophy beat:** load shedding with **no coordinator, no message, no failure detector**. The
 busy node reports only its own saturation; every other node reads the trail and decides locally.
+
+### 03 — `elastic_intent`
+
+```bash
+cargo run -p mycelium-coop-examples --bin elastic_intent
+```
+
+An operator declares "keep `rush-pool` in `[2, 3]` depots" by publishing an evaporating
+`MembershipIntent` (soft-state, **not** a command). Five candidate depots run a `MembershipGovernor`
+and **self-elect** so the pool holds a *subset* in the band — no controller picks who. Then: (2) the
+operator goes offline and the band still holds (the intent persists in gossip within its TTL); (3) a
+pool member is killed and the governors self-heal the count back to `MIN`.
+
+**Philosophy beat:** *management = intent + local reconcile*. There is no privileged controller —
+just an evaporating desired-state and nodes that reconcile locally. The litmus *"if management
+vanishes, does the cluster keep working?"* is shown by killing the operator. (Requires the governor
+to own a group under intent — see #56 / the emergent-defers-to-governor fix.)
 
 ## CI
 
