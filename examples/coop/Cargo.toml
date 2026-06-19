@@ -19,6 +19,10 @@ path = "src/bin/mailbox_llm.rs"
 name = "stigmergy"
 path = "src/bin/stigmergy.rs"
 
+[[bin]]
+name = "elastic_intent"
+path = "src/bin/elastic_intent.rs"
+
 [dependencies]
 # The full substrate (gateway is default-on; tls for node identity / the facts lens; llm for the
 # Prompt Skills used by the mailbox-llm demo).

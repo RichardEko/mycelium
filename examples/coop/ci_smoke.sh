@@ -21,4 +21,11 @@ echo "$out" | grep -q "All assertions passed" \
   || { echo "FAIL: stigmergy did not pass its assertions"; exit 1; }
 
 echo
+echo "── 03 · elastic_intent ──────────────────────────────────────────"
+out="$(cargo run -q -p mycelium-coop-examples --bin elastic_intent 2>/dev/null)"
+echo "$out"
+echo "$out" | grep -q "All assertions passed" \
+  || { echo "FAIL: elastic_intent did not pass its assertions"; exit 1; }
+
+echo
 echo "All co-op smokes passed."

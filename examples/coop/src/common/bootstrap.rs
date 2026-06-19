@@ -43,6 +43,10 @@ pub struct DepotOpts {
     pub bootstrap:   Vec<u16>,
     /// Shared auto-CA directory (all depots in one demo must share this).
     pub cert_dir:    PathBuf,
+    /// Optional faster health/convergence tick (seconds) for governor demos. `None` = library
+    /// default (10 s). When `Some(h)`, `reconnect_backoff` is set to `h.saturating_sub(3)` so the
+    /// tuning invariant (`reconnect_backoff + 2 < health`) holds.
+    pub health_secs: Option<u64>,
 }
 
 /// A running depot.
@@ -74,13 +78,19 @@ pub async fn spawn_depot(opts: DepotOpts) -> Result<Depot, Box<dyn std::error::E
         bootstrap_peers.push(NodeId::new("127.0.0.1", *p)?);
     }
 
-    let cfg = GossipConfig {
+    let mut cfg = GossipConfig {
         bind_port: opts.gossip_port,
         http_port: Some(opts.http_port),
         bootstrap_peers,
         tls: Some(TlsConfig { auto_cert_dir: opts.cert_dir.clone(), ..TlsConfig::default() }),
         ..Default::default()
     };
+    if let Some(h) = opts.health_secs {
+        cfg.health_check_interval_secs = h.max(1);
+        // reconnect_backoff must be >= 1 (0 is rejected); keep it < health where possible.
+        cfg.reconnect_backoff_secs = h.saturating_sub(3).max(1);
+        cfg.health_check_max_jitter_ms = 50;
+    }
 
     let agent = Arc::new(GossipAgent::new(id, cfg));
 
