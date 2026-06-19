@@ -1970,13 +1970,14 @@ async fn test_manage_opacity_gate_vetoes_then_library_overrides() {
     let premature = time::timeout(Duration::from_millis(250), opaque_rx.recv()).await;
     assert!(premature.is_err(), "gate veto must prevent emission below 100% fill");
 
-    // Fill to 100% — library overrides the gate.
+    // Fill to 100% — library overrides the gate. Poll structurally (up to 3 s) rather than with a
+    // tight one-shot timeout: a 400 ms `recv()` raced the governor's emission under loaded CI
+    // (264 parallel tests) and flaked. `recv_within!` is the same bound the sibling tests use.
     for _ in 0..2 {
         let _ = agent.mesh().emit("test.gov.gate", SignalScope::Individual(self_id.clone()), Bytes::new());
     }
-    let result = time::timeout(Duration::from_millis(400), opaque_rx.recv()).await;
     assert!(
-        result.is_ok() && result.unwrap().is_some(),
+        recv_within!(opaque_rx, 3),
         "library must override gate and emit BOUNDARY_OPAQUE when fill == 1.0",
     );
 }
