@@ -36,7 +36,7 @@ mod provisioner;
 pub use artifact::{
     verify_artifact, ArtifactId, ArtifactIdError, ArtifactSource, InMemorySource, VerifyError,
 };
-pub use catalog::{InstallableCatalog, InstallableEntry};
+pub use catalog::{publish_installable, InstallableCatalog, InstallableEntry, INSTALLABLE_PREFIX};
 pub use confine::{confine_key, ConfinementError, COMPONENT_KV_PREFIX};
 pub use host::{HostState, Instance, Request, Response, WasmHost, WasmHostError};
 pub use provisioner::{cap_invoke_kind, Provisioner, SupervisionPolicy};

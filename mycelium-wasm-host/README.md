@@ -72,10 +72,14 @@ catalog resolve + `bring_live` — with **no organic demand**. Self-healing fall
 crashed provider's `cap/` entry evaporates, the count drops, the invariant re-provisions —
 **restart and first-time provisioning are the same resolve-and-pull path**.
 
-**Follow-up:** a **gossip-backed catalog** (populate `InstallableCatalog` from the cluster's
-`installable` KV entries); a **mesh-bulk `ArtifactSource`** (surfacing the content-addressed
-bulk-fetch client, §E.4.4); fuel/epoch limits + `spawn_blocking` for long-running handlers;
-**withdraw-when-over-`max`** (Track 2b elastic sizing — the symmetric shed path); leased-consensus
+**Gossip-backed catalog (landed):** `publish_installable(kv, entry)` writes an installable artifact
+to the cluster-wide `installable/{ns}/{name}/{artifact-hex}` KV prefix (declared-provide `Capability`
++ `ArtifactId` + cost, framed on the public `Capability::encode`); `InstallableCatalog::from_kv(kv)`
+rebuilds the catalog from the gossiped view. So any node publishes artifacts and every provisioner
+resolves against the live cluster catalog — no embedder-supplied in-memory list required.
+
+**Follow-up:** a **mesh-bulk `ArtifactSource`** (surfacing the content-addressed bulk-fetch
+client, §E.4.4); fuel/epoch limits + `spawn_blocking` for long-running handlers; leased-consensus
 for strict singletons; optional Ed25519 signed-provenance.
 
 [`ArtifactSource`]: src/artifact.rs
