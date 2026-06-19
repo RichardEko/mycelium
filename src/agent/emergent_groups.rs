@@ -20,6 +20,13 @@
 //!
 //! Pre-C3 each provide + each requirement was its own spawned tokio task.
 //! After C3 it is one task per group, regardless of provides/requires count.
+//!
+//! **Governed groups (WS-C elastic sizing).** A group that carries a live
+//! `sys/govern/membership/{group}` intent is owned by the
+//! [`MembershipGovernor`](super::membership_governor): this watcher **defers** to it (see
+//! `governor_owned_groups`) — it neither auto-joins the group on a cap match nor auto-leaves it —
+//! so the governor's `[min, max]` / `drain` can hold against the otherwise-unconditional cap-match
+//! auto-join. When the intent evaporates the group reverts to emergent (un-bounded) membership.
 
 use crate::capability::{CapEntry, Capability, CapFilter, CapabilityGroupDef, WiringStatus};
 use crate::node_id::NodeId;
@@ -113,6 +120,31 @@ pub(crate) async fn watch_capability_group_definitions(
     drop(joined);
 }
 
+/// Groups that currently carry a fleet **membership intent** applicable to `own` (whole-fleet, or
+/// `target`-ed at this node) and still fresh. Their membership is owned by the
+/// [`MembershipGovernor`](super::membership_governor); the emergent watcher **defers** to it — it
+/// neither auto-joins nor auto-leaves a governed group — so the governor's `[min, max]` / `drain`
+/// can actually hold against the otherwise-unconditional cap-match auto-join. When the intent
+/// evaporates the group drops out of this set and reverts to emergent (un-bounded) membership.
+fn governor_owned_groups(ctx: &Arc<TaskCtx>, own: &NodeId) -> AHashSet<Arc<str>> {
+    use super::membership_governor::{MembershipIntent, MEMBERSHIP_INTENT_TTL_MS, MEMBERSHIP_PREFIX};
+    let mut set = AHashSet::new();
+    let now = now_ms();
+    for (_key, bytes) in scan_prefix_kv(&ctx.kv_state, MEMBERSHIP_PREFIX) {
+        let Ok(intent) = mycelium_core::serde_fixint::from_slice::<MembershipIntent>(&bytes) else {
+            continue;
+        };
+        if now.saturating_sub(intent.written_at_ms) > MEMBERSHIP_INTENT_TTL_MS {
+            continue; // evaporated — not governed
+        }
+        if intent.target.as_ref().is_some_and(|t| t != own) {
+            continue; // targeted at another node — not governed for me
+        }
+        set.insert(Arc::from(intent.group.as_str()));
+    }
+    set
+}
+
 /// One reconciliation pass: snapshot own caps + every `cap-group/` def, decide
 /// which groups we should be in, and update both `grp/{group}/{self}`
 /// membership and `gcap/{group}/{ns}/{name}/{self}` projections accordingly.
@@ -158,6 +190,12 @@ fn reconcile_emergent_groups(
         }
     }
 
+    // Defer to the MembershipGovernor for any group under a live membership intent: drop it from
+    // want_joined (don't auto-join) — and below, exclude it from the leave sweep (don't auto-leave).
+    // The governor alone then drives that group's membership toward the intent's [min, max] / drain.
+    let governor_owned = governor_owned_groups(ctx, own);
+    want_joined.retain(|g| !governor_owned.contains(g.as_ref()));
+
     // Join newly-matching groups; spawn one consolidated membership task per
     // group (provides + requires handled internally).
     for group in &want_joined {
@@ -197,8 +235,10 @@ fn reconcile_emergent_groups(
     // disappeared or our caps changed. Dropping the `GroupProjection`
     // tombstones the gcap entries; `emit_membership(leaving = true)` tombstones
     // `grp/`.
+    // Exclude governor-owned groups: if we're already a member of a now-governed group, leaving is
+    // the governor's call (drain / over-max), not the emergent watcher's — don't tombstone it here.
     let to_leave: Vec<Arc<str>> = joined.keys()
-        .filter(|g| !want_joined.contains(g.as_ref()))
+        .filter(|g| !want_joined.contains(g.as_ref()) && !governor_owned.contains(g.as_ref()))
         .cloned()
         .collect();
     for g in to_leave {
