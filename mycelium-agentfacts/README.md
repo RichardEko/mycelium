@@ -54,7 +54,11 @@ anti-entropy** is the convergent, concurrent-safe merge.
   edge endpoint (`agent_facts_router`).
 - **M16-B complete:** per-field signed CRDT layer (`publish_field` / `read_verified_fields`),
   proven single-node (LWW + forgery rejection) and **cross-node** (intra-domain gossip + verify).
-- **Remaining WS-F:** OR-Map CRDT design note; schema-registry runtime migrations.
+- **Edge ⇄ CRDT integration:** `GET /.well-known/agent-facts/domain.json` serves the
+  **converged, multi-author CRDT board** (`domain_facts`) — every node's per-field-signed facts as
+  they've gossiped, each field independently verifiable against the owning node's key + identity.
+  Ties PUSH (intra-domain) → PULL (edge): the quilt pulls one URL and gets the whole patch.
+- **Remaining WS-F:** schema-registry runtime migrations. (OR-Map evaluated → keep LWW+HLC.)
 
 `evaluations`/`telemetry` provenance (when added) cites the WS2 audit trail's stable `content_hash`
 — *self-attested-with-audit*, per the ROADMAP precursor criterion.

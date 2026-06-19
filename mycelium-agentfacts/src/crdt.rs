@@ -107,6 +107,49 @@ pub fn read_verified_fields(agent: &GossipAgent, node: &str, ttl_ms: u64) -> BTr
     out
 }
 
+/// One node's slice of the domain-wide CRDT facts board: its identity key plus its **verified**,
+/// fresh signed fields. A puller re-verifies each field against `public_key_b64`.
+#[derive(Clone, Debug, Serialize)]
+pub struct NodeFacts {
+    pub node:           String,
+    pub public_key_b64: String,
+    pub fields:         Vec<SignedField>,
+}
+
+/// Assemble the **domain-wide** CRDT facts board from this node's local gossip view: every node
+/// that has published facts (`facts/{node}/…`), with its identity key and its verified, fresh
+/// fields. This is the converged, multi-author view to serve at the edge — the quilt pulls one URL
+/// and gets the whole patch, each field independently verifiable. Nodes whose identity key isn't
+/// yet known locally, and forged/stale fields, are dropped.
+pub fn domain_facts(agent: &GossipAgent, ttl_ms: u64) -> Vec<NodeFacts> {
+    use base64::Engine as _;
+    let now = now_ms();
+    let mut by_node: BTreeMap<String, Vec<SignedField>> = BTreeMap::new();
+    for (key, bytes) in agent.kv().scan_prefix(FACTS_PREFIX) {
+        let Some(rest) = key.strip_prefix(FACTS_PREFIX) else { continue };
+        let Some((node, _field)) = rest.split_once('/') else { continue };
+        let Some(sf) = SignedField::decode(&bytes) else { continue };
+        if now.saturating_sub(sf.issued_at_ms) > ttl_ms {
+            continue;
+        }
+        by_node.entry(node.to_string()).or_default().push(sf);
+    }
+    let mut out = Vec::new();
+    for (node, fields) in by_node {
+        let Some(pk) = peer_identity_key(agent, &node) else { continue };
+        let verified: Vec<SignedField> = fields.into_iter().filter(|sf| sf.verify(&pk)).collect();
+        if verified.is_empty() {
+            continue;
+        }
+        out.push(NodeFacts {
+            node,
+            public_key_b64: base64::engine::general_purpose::STANDARD.encode(pk),
+            fields: verified,
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,6 +256,38 @@ mod tests {
 
         a.shutdown_with_timeout(Duration::from_secs(5)).await;
         b.shutdown_with_timeout(Duration::from_secs(5)).await;
+        let _ = std::fs::remove_dir_all(&cert_dir);
+    }
+
+    #[tokio::test]
+    async fn domain_facts_assembles_verified_per_node_board() {
+        let cert_dir = std::env::temp_dir().join(format!("myc-crdt-3-{}", alloc_port()));
+        let _ = std::fs::remove_dir_all(&cert_dir);
+        let (agent, _p) = tls_agent(None, &cert_dir).await;
+        let me = agent.node_id().to_string();
+        wait_identity(&agent, &me).await;
+
+        assert!(publish_field(&agent, "model", json!("acme-1")));
+        assert!(publish_field(&agent, "region", json!("eu")));
+        // A forged field must not appear on the board.
+        let forged = SignedField {
+            field: "evil".into(), value: json!("x"),
+            issued_at_ms: now_ms(), signature: vec![0u8; 64],
+        };
+        let _ = agent.kv().set(field_key(&me, "evil"), forged.encode());
+
+        let board = domain_facts(&agent, 60_000);
+        let entry = board.iter().find(|n| n.node == me).expect("this node on the board");
+        let names: Vec<&str> = entry.fields.iter().map(|f| f.field.as_str()).collect();
+        assert!(names.contains(&"model") && names.contains(&"region"), "verified fields present");
+        assert!(!names.contains(&"evil"), "forged field excluded from the board");
+        // Each served field verifies against the published key.
+        use base64::Engine as _;
+        let pk: [u8; 32] = base64::engine::general_purpose::STANDARD
+            .decode(&entry.public_key_b64).unwrap().try_into().unwrap();
+        assert!(entry.fields.iter().all(|f| f.verify(&pk)), "every board field verifies");
+
+        agent.shutdown_with_timeout(Duration::from_secs(5)).await;
         let _ = std::fs::remove_dir_all(&cert_dir);
     }
 }

@@ -25,7 +25,9 @@ use serde_json::{json, Value};
 
 mod crdt;
 mod http;
-pub use crdt::{publish_field, read_verified_fields, SignedField, FACTS_PREFIX};
+pub use crdt::{
+    domain_facts, publish_field, read_verified_fields, NodeFacts, SignedField, FACTS_PREFIX,
+};
 pub use http::agent_facts_router;
 
 fn now_ms() -> u64 {
