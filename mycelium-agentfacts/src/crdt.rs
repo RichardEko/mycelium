@@ -58,6 +58,13 @@ impl SignedField {
             .is_ok()
     }
 
+    /// Verify against any key in a node's retained set (current key + rotation history). `true` if
+    /// the signature checks out under *some* key the node has published — so a field signed before
+    /// an identity rotation still verifies (the WS5 retained-key-set posture). Empty set ⇒ `false`.
+    pub fn verify_any(&self, pubkeys: &[[u8; 32]]) -> bool {
+        pubkeys.iter().any(|pk| self.verify(pk))
+    }
+
     fn encode(&self) -> Vec<u8> {
         serde_json::to_vec(self).unwrap_or_default()
     }
@@ -79,11 +86,25 @@ pub fn publish_field(agent: &GossipAgent, field: &str, value: Value) -> bool {
     agent.kv().set(field_key(&agent.node_id().to_string(), field), sf.encode())
 }
 
-/// This node's view of `node`'s current verifying key, read from the gossiped `sys/identity/{node}`
-/// entry (current key first). `None` if not yet learned.
-fn peer_identity_key(agent: &GossipAgent, node: &str) -> Option<[u8; 32]> {
-    let bytes = agent.kv().get(&format!("sys/identity/{node}"))?;
-    <[u8; 32]>::try_from(&bytes[..bytes.len().min(32)]).ok()
+/// This node's view of `node`'s verifying-key **history**, read from the gossiped
+/// `sys/identity/{node}` entry: a concatenation of 32-byte keys (`32 × N`) — current key first,
+/// retained priors after (WS5 multi-key archival, same layout `helpers::parse_identity_keys`
+/// produces). Empty if not yet learned or malformed (empty / non-multiple-of-32). Every verify
+/// path tries the whole set so a field signed before an identity rotation still verifies — the
+/// retained-key-set posture the connection/consensus/rbac/audit paths already use.
+fn peer_identity_keys(agent: &GossipAgent, node: &str) -> Vec<[u8; 32]> {
+    let Some(bytes) = agent.kv().get(&format!("sys/identity/{node}")) else { return Vec::new() };
+    if bytes.is_empty() || !bytes.len().is_multiple_of(32) {
+        return Vec::new();
+    }
+    bytes
+        .chunks_exact(32)
+        .map(|c| {
+            let mut a = [0u8; 32];
+            a.copy_from_slice(c);
+            a
+        })
+        .collect()
 }
 
 /// Read and **verify** `node`'s published AgentFacts fields from the local gossip view, returning
@@ -93,14 +114,17 @@ fn peer_identity_key(agent: &GossipAgent, node: &str) -> Option<[u8; 32]> {
 /// reads back as absent. `None`-key (identity not yet learned) yields an empty map.
 pub fn read_verified_fields(agent: &GossipAgent, node: &str, ttl_ms: u64) -> BTreeMap<String, Value> {
     let mut out = BTreeMap::new();
-    let Some(pk) = peer_identity_key(agent, node) else { return out };
+    let keys = peer_identity_keys(agent, node);
+    if keys.is_empty() {
+        return out;
+    }
     let now = now_ms();
     for (_key, bytes) in agent.kv().scan_prefix(&format!("{FACTS_PREFIX}{node}/")) {
         let Some(sf) = SignedField::decode(&bytes) else { continue };
         if now.saturating_sub(sf.issued_at_ms) > ttl_ms {
             continue; // stale
         }
-        if sf.verify(&pk) {
+        if sf.verify_any(&keys) {
             out.insert(sf.field.clone(), sf.value);
         }
     }
@@ -136,14 +160,17 @@ pub fn domain_facts(agent: &GossipAgent, ttl_ms: u64) -> Vec<NodeFacts> {
     }
     let mut out = Vec::new();
     for (node, fields) in by_node {
-        let Some(pk) = peer_identity_key(agent, &node) else { continue };
-        let verified: Vec<SignedField> = fields.into_iter().filter(|sf| sf.verify(&pk)).collect();
+        let keys = peer_identity_keys(agent, &node);
+        // The published key is the node's *current* identity (first in the history); fields are
+        // verified against the whole retained set so pre-rotation signatures still pass.
+        let Some(current) = keys.first().copied() else { continue };
+        let verified: Vec<SignedField> = fields.into_iter().filter(|sf| sf.verify_any(&keys)).collect();
         if verified.is_empty() {
             continue;
         }
         out.push(NodeFacts {
             node,
-            public_key_b64: base64::engine::general_purpose::STANDARD.encode(pk),
+            public_key_b64: base64::engine::general_purpose::STANDARD.encode(current),
             fields: verified,
         });
     }
@@ -256,6 +283,57 @@ mod tests {
 
         a.shutdown_with_timeout(Duration::from_secs(5)).await;
         b.shutdown_with_timeout(Duration::from_secs(5)).await;
+        let _ = std::fs::remove_dir_all(&cert_dir);
+    }
+
+    #[tokio::test]
+    async fn field_signed_before_rotation_still_verifies_after_rotation() {
+        // The retained-key-set gap (Run-26 fix): a field signed by the OLD identity key must still
+        // read back as verified after the node rotates its identity, because `sys/identity/{node}`
+        // retains `new ‖ old` and verification tries the whole set. Without the fix, only the
+        // current key is tried and the pre-rotation field silently vanishes from the board.
+        let cert_dir = std::env::temp_dir().join(format!("myc-crdt-rot-{}", alloc_port()));
+        let _ = std::fs::remove_dir_all(&cert_dir);
+        let (agent, _p) = tls_agent(None, &cert_dir).await;
+        let me = agent.node_id().to_string();
+        wait_identity(&agent, &me).await;
+
+        // Publish a field under the original identity key.
+        assert!(publish_field(&agent, "model", json!("acme-1")));
+        assert_eq!(
+            read_verified_fields(&agent, &me, 120_000).get("model"),
+            Some(&json!("acme-1")),
+            "field verifies under the original key"
+        );
+        let old_key = agent.identity_public_key().unwrap();
+
+        // Rotate the identity. `sys/identity/{me}` becomes `new ‖ old`; the field is NOT republished.
+        let new_key = agent
+            .rotate_identity(Duration::from_millis(50))
+            .await
+            .expect("rotation succeeds");
+        assert_ne!(new_key, old_key, "rotation produced a fresh key");
+
+        // The history entry now carries both keys (current first).
+        let keys = peer_identity_keys(&agent, &me);
+        assert!(keys.first() == Some(&new_key) && keys.contains(&old_key), "new‖old retained");
+
+        // The pre-rotation field (still signed by the old key) must still verify against the set.
+        assert_eq!(
+            read_verified_fields(&agent, &me, 120_000).get("model"),
+            Some(&json!("acme-1")),
+            "old-key-signed field survives the rotation via the retained key set"
+        );
+        // And it appears on the assembled board, advertised under the *current* key.
+        let board = domain_facts(&agent, 120_000);
+        let entry = board.iter().find(|n| n.node == me).expect("node on the board");
+        use base64::Engine as _;
+        let advertised: [u8; 32] = base64::engine::general_purpose::STANDARD
+            .decode(&entry.public_key_b64).unwrap().try_into().unwrap();
+        assert_eq!(advertised, new_key, "board advertises the current key");
+        assert!(entry.fields.iter().any(|f| f.field == "model"), "field present on the board");
+
+        agent.shutdown_with_timeout(Duration::from_secs(5)).await;
         let _ = std::fs::remove_dir_all(&cert_dir);
     }
 
