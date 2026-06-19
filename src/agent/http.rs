@@ -2649,11 +2649,24 @@ mod tests {
 
         let agent = Arc::new(GossipAgent::new(id, cfg));
         agent.start().await.unwrap();
-        tokio::time::sleep(Duration::from_millis(50)).await;
 
         let url = format!("http://127.0.0.1:{http_port}/health");
-        let resp = reqwest::get(&url).await.expect("health request failed");
-        assert_eq!(resp.status(), 200);
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(250))
+            .build()
+            .unwrap();
+        // Poll until the HTTP server has bound — a fixed sleep races server startup under load.
+        let mut up = false;
+        for _ in 0..100 {
+            if let Ok(resp) = client.get(&url).send().await {
+                if resp.status() == 200 {
+                    up = true;
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(up, "gateway /health never returned 200");
 
         agent.shutdown().await;
 

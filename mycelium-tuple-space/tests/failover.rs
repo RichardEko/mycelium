@@ -9,6 +9,24 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// A free ephemeral port (kernel-assigned), avoiding the PID-derived fixed-port collisions that
+/// flaked under parallel CI / re-runs (lingering TIME_WAIT sockets, two test processes landing on
+/// the same `pid % 400` base).
+fn alloc_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+}
+
+/// Two distinct free ports, lower first — so "lowest candidate id wins" stays deterministic
+/// without fixed ports.
+fn alloc_two_sorted_ports() -> (u16, u16) {
+    loop {
+        let (a, b) = (alloc_port(), alloc_port());
+        if a != b {
+            return (a.min(b), a.max(b));
+        }
+    }
+}
+
 async fn start_agent(port: u16, bootstrap: Option<u16>) -> Arc<GossipAgent> {
     let id = NodeId::new("127.0.0.1", port).expect("node id");
     let cfg = GossipConfig {
@@ -171,9 +189,9 @@ async fn failover_preserves_items_and_ids() {
 /// other becomes secondary — no coordinator, both conclude from the ring.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn auto_election_is_deterministic() {
-    let base: u16 = 26400 + (std::process::id() % 400) as u16 * 2;
-    let a1 = start_agent(base, None).await;
-    let a2 = start_agent(base + 1, Some(base)).await;
+    let (p_lo, p_hi) = alloc_two_sorted_ports();
+    let a1 = start_agent(p_lo, None).await; // lower id → expected primary
+    let a2 = start_agent(p_hi, Some(p_lo)).await;
     wait_peered(&[&a1, &a2]).await;
 
     let ts1 = TupleSpace::new(Arc::clone(&a1), ts_cfg("elect", TupleRole::Auto))
