@@ -94,8 +94,21 @@ a peer and **verify the content address on arrival** (untrusted source). So node
 artifacts to each other over the cluster — no external registry required (RPC frame ≤ 10 MiB;
 larger artifacts want the bulk transport). Closes §E.4.4 on the public API.
 
-**Follow-up:** epoch (wall-clock) limits for long-running handlers; leased-consensus for strict
-singletons.
+**WS-E is complete.** Two further ideas were considered and **deliberately deferred** — neither is
+a gap in what the host does today:
+
+- **Epoch / wall-clock invocation limit** — *not needed yet.* `fuel` already traps any runaway
+  *compute*; the only thing it can't see is time spent *inside a host call*, but every host import
+  (`kv`/`mesh`/`log`) is fast, synchronous, and non-blocking. Epoch becomes worthwhile only if a
+  **blocking** host import is ever added (e.g. guest-triggered outbound I/O) — add it just-in-time
+  then, not speculatively now.
+- **Strict (leased-consensus) singleton** — *out of grain, niche.* The shipped probabilistic
+  self-election + Track-2b shed gives **eventual-single** (converges to ~1 provider, self-corrects
+  overshoot, re-provisions on death) — adequate for any idempotent/stateless or "about-one"
+  capability. *Strict* exactly-one needs an async consensus election/lease (a `provision_round`
+  async refactor) and trades liveness for safety under partition — the substrate's AP/convergence
+  grain. Worth it only for a capability where two simultaneous providers is actively harmful (an
+  exclusive external resource); opt in then via `consensus().elect_leader` / `distributed_lock`.
 
 [`ArtifactSource`]: src/artifact.rs
 
