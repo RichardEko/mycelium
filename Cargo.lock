@@ -2107,9 +2107,11 @@ dependencies = [
 name = "mycelium-agentfacts"
 version = "0.1.0"
 dependencies = [
+ "axum 0.8.9",
  "base64",
  "ed25519-dalek",
  "mycelium",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",

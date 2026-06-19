@@ -20,6 +20,9 @@ serde         = { version = "1.0", features = ["derive"] }
 serde_json    = "1.0"
 base64        = "0.22"
 ed25519-dalek = "2"
+# The edge endpoint mounts onto the agent's embedded gateway via `with_http_routes`.
+axum          = "0.8"
 
 [dev-dependencies]
-tokio = { version = "1.35", features = ["full"] }
+tokio   = { version = "1.35", features = ["full"] }
+reqwest = { version = "0.12", features = ["json"] }
