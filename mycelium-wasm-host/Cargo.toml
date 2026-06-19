@@ -28,6 +28,8 @@ bytes    = "1"
 tracing  = "0.1"
 sha2     = "0.10"
 fastrand = "2"
+# Optional signed-provenance over the content address (a publisher vouches for the bytes).
+ed25519-dalek = "2"
 # `rt` only — the provisioner spawns a serve task per hosted capability (tokio::spawn +
 # JoinHandle). The embedder supplies the runtime (same one the GossipAgent runs on).
 tokio    = { version = "1.35", features = ["rt"] }
