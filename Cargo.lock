@@ -2104,6 +2104,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mycelium-agentfacts"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "ed25519-dalek",
+ "mycelium",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "mycelium-core"
 version = "1.2.0"
 dependencies = [

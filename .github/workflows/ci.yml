@@ -71,6 +71,20 @@ jobs:
       - run: cargo test -p mycelium-wasm-host
       - run: cargo clippy -p mycelium-wasm-host --all-targets -- -D warnings
 
+  agentfacts:
+    # WS-F M16-A companion crate (self-certified AgentFacts emission). Public-API
+    # only; its own job for parallelism + caching.
+    name: AgentFacts (WS-F M16-A)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p mycelium-agentfacts
+      - run: cargo clippy -p mycelium-agentfacts --all-targets -- -D warnings
+
   conway-gpu:
     # Standalone GPU demo (examples/conway-gpu): excluded from the workspace so its
     # wgpu stack is NOT a mycelium dev-dependency (it used to drag the whole GPU
