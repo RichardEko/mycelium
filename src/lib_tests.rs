@@ -2952,23 +2952,35 @@ async fn forwarding_is_unconditional_through_non_member_relay() {
     let mut rx = member.mesh().signal_rx("relay.probe");
 
     // Raw socket plays emitter A — a node the member can never peer with.
+    // The forwarded frame is best-effort: `relay.peers()` reflects the membership table (populated
+    // on the member's inbound ping), but forwarding rides the `gossip_txs` fan-out, whose outbound
+    // relay→member writer is established slightly later. A frame injected during that window is
+    // (correctly) dropped and lost forever. Re-inject with a FRESH nonce (so the seen-set doesn't
+    // dedup it) until the member receives it, within an overall deadline — faithful to the
+    // invariant (forwarding works once the path is up), robust to the one-shot setup race.
     let fake_sender = NodeId::new("127.0.0.1", 1).unwrap();
-    let mut sock = TcpStream::connect(("127.0.0.1", port_r)).await.unwrap();
-    send_wire(&mut sock, &WireMessage::Signal {
-        ttl:     3,
-        nonce:   fastrand::u64(1..),
-        sender:  fake_sender,
-        scope:   SignalScope::Group(Arc::from("relay-grp")),
-        kind:    Arc::from("relay.probe"),
-        payload: Bytes::from_static(b"through-the-relay"),
-        hlc_seq: None,
-    }).await;
-
-    let got = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await;
-    let sig = got
-        .expect("group signal was not forwarded by the non-member relay within 5 s — \
-                 forwarding must be unconditional (boundaries control acting, not forwarding)")
-        .expect("signal channel closed unexpectedly");
+    let mut delivered = None;
+    for _ in 0..20 {
+        let mut sock = TcpStream::connect(("127.0.0.1", port_r)).await.unwrap();
+        send_wire(&mut sock, &WireMessage::Signal {
+            ttl:     3,
+            nonce:   fastrand::u64(1..),
+            sender:  fake_sender.clone(),
+            scope:   SignalScope::Group(Arc::from("relay-grp")),
+            kind:    Arc::from("relay.probe"),
+            payload: Bytes::from_static(b"through-the-relay"),
+            hlc_seq: None,
+        }).await;
+        if let Ok(Some(sig)) =
+            tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await
+        {
+            delivered = Some(sig);
+            break;
+        }
+    }
+    let sig = delivered
+        .expect("group signal was never forwarded by the non-member relay within 10 s — \
+                 forwarding must be unconditional (boundaries control acting, not forwarding)");
     assert_eq!(&sig.payload[..], b"through-the-relay");
 
     relay.shutdown().await;
