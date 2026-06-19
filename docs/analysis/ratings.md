@@ -1586,3 +1586,99 @@ No new entry — no bug found this run.
 | 25 | Dependency Hygiene | 8 | carried (v24). The M1 dep-tree win is now execution-verified: 52 core vs 139 full unique normal deps (`cargo tree`); `--no-default-features` + standalone-core both build. `Cargo.lock` present. No fresh `cargo audit` this run → held at 8. |
 | — | **Floor (lowest 3)** | **7, 7, 8** | Performance (15), Scalability (16), Concurrency Correctness (9 — the standing `merge_peer_keys` non-`compute()` watch-item) |
 | — | Mean (continuity footnote) | 8.0 | not a target; see M2 preamble |
+
+## 2026-06-19 — Run 26 (M2)
+
+Deep-dive dimensions this run (by rotation, Run 26 ≡ Runs 1/6/11/16/21 cycle):
+1 (Philosophy), 2 (Conceptual Integrity), 3 (Architecture), 4 (Modularity),
+5 (API Design). Next run by rotation: 6–10.
+
+Diff since Run 25: PRs #44–#50 — WS-F federation kickoff + the new
+`mycelium-agentfacts` companion crate (M16-A self-certified AgentFacts edge
+endpoint; M16-B per-field-signed CRDT update layer; CRDT-assembled domain-facts
+endpoint; OR-Map design note), a new public node-identity signing API
+(`GossipAgent::sign_with_identity` / `identity_public_key`, tls), the shared
+`crate::test_util::alloc_port` flake fix (PR #50, retiring the AddrInUse family),
+and the conway_gpu dep-bloat removal (PR #40, wgpu out of dev-deps). (The larger
+WS-C metabolism / elastic-governance / WS-E autonomic-provisioning program that
+also merged in this window is carried at prior scores except where a fresh probe
+or suite this run touched it — see notes.)
+
+Execution evidence: `cargo test --lib --features tls,metrics,a2a,llm` →
+**286 passed, 0 failed, 1 ignored** (64.6s); `cargo test -p mycelium-core --lib`
+→ **122 passed, 0 failed, 1 ignored** (2.2s); `cargo test -p mycelium-agentfacts`
+→ green (unit + 3 CRDT integration + doctests); `cargo clippy -p
+mycelium-agentfacts --all-targets -- -D warnings` → clean (57.8s); `cargo build
+--lib` → exit 0. Falsification: 3 probes, all PASS (acyclicity grep, namespace
+ownership grep, new hostile-input regression test run green).
+
+### Findings
+None confirmed. All three falsification probes (run against the top dimensions)
+passed:
+
+- **Probe 1 (Architecture, #3, score 9) — acyclic inverted-dependency invariant.**
+  `grep -rn "use mycelium::" mycelium-core/src/` → **0 hits**; `mycelium-core`'s
+  Cargo.toml has no `mycelium` dependency. The "core cannot reference the layers
+  above (would be a Cargo cycle)" claim remains a true compile-time guarantee, not
+  a convention. Re-confirmed by 122 core tests green standalone. PASS.
+- **Probe 2 (Architecture / Layer ownership, #3) — does the new governance code
+  (`membership_governor.rs`, `tuning_governor.rs`) bypass documented prefixes?**
+  Grep of every string literal it writes → only `sys/govern/`, `sys/govern/fleet`,
+  `sys/govern/membership/`. Governance rides the owned `sys/govern/` prefix via the
+  `FleetIntent` transport (`src/agent/intent.rs`: publish + gossip + evaporate +
+  node-target + reconcile loop), agency-above / mechanism-in-core. No write to
+  consensus/, no substrate modification. PASS (reinforces #1/#3).
+- **Probe 3 (Philosophy/API/Robustness — WS-F self-cert surface) — can `verify()`
+  be made to panic or accept a substitution on hostile input?** New regression
+  test `mycelium-agentfacts/tests/falsification_run26.rs`: short/empty/oversized/
+  zero signatures all return `false` (no panic); `read_verified_fields` for an
+  unknown node yields an empty map (never a forged-through field). Both green. The
+  surface is total. PASS. Combined with the in-crate tamper test
+  (`per_field_merge_lww_and_forgery_rejection`: a forged `facts/{node}/…` write is
+  LWW-accepted by the substrate but dropped at read), the detection-not-prevention
+  posture holds end to end.
+
+Minor observation (not a finding — does not break a documented invariant):
+`crdt.rs::peer_identity_key` verifies fields against only the **current** identity
+key (`bytes[..32]`), unlike the WS5 retained-key-set verify paths
+(connection/consensus/rbac/audit) which try the full key history. After an identity
+rotation, a still-fresh field signed by the retired key would fail verification
+until republished. Safe in practice (AgentFacts fields are short-TTL and re-signed
+on every change; current key is published first), but a divergence from the
+retained-key-set pattern worth tracking if facts TTLs are ever lengthened.
+
+### Calibration ledger
+No new entry — no bug found this run. The standing `merge_peer_keys` watch-item
+named in the Run 25 floor was fixed in that session (atomic `compute`, regression
+gate `concurrent_merges_for_one_node_never_drop_a_key`); no replacement watch-item
+this run.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 8 | **Deep-dive.** WS-F extends the companion-crate constructive-proof discipline to federation: `mycelium-agentfacts` builds entirely on the public API (run-dark by default, self-certified — "trust is the fetcher's decision", Core Principle 1), and the CRDT update layer is *exactly* the "missing protocol" NANDA's v0.3 names but doesn't deliver — LWW+HLC+anti-entropy + per-entry signatures = field-level merge. Governance ("management = intent + local reconcile", `intent.rs`) is the philosophy's elastic-management stance in code: evaporating soft-state, node-sovereign reconcile, never a command. Read philosophy.html §1–6 in full; no drift found. Caps at 8 (philosophy can't be execution-falsified; 9 needs external validation). |
+| 2 | Conceptual Integrity | 8 | **Deep-dive.** One mind sustained across a 4th companion crate: agentfacts mirrors tuple-space/wasm-host idiom (public-API-only, `alloc_port` test helper, shared-cert-dir mTLS test pattern). `intent.rs` deliberately uses free functions over a generic `IntentGovernor<T>` and cites the Rule of Three for deferring abstraction — disciplined, not ad-hoc. The "stable substrate-shaped struct + single NANDA-mapping point" (`to_nanda_jsonld`) is the same decouple-from-churn instinct as the wire-version freeze. Read-only → 8. |
+| 3 | Architecture | 9 | **Deep-dive.** Inverted-dependency invariant re-probed and green (Probe 1: core⊥mycelium, 0 grep hits + 122 core tests standalone). New federation + governance land *above* the substrate without touching it: WS-F is a separate crate; governance writes only `sys/govern/` (Probe 2) and is built on the `FleetIntent` KV-transport, agency-above/mechanism-in-core. Two new edge endpoints mount via `with_http_routes` (the sanctioned extension seam). Execution-backed this run (fresh acyclicity + namespace probes both PASS) → holds at 9. |
+| 4 | Modularity | 8 | **Deep-dive.** Federation is now a *physically separable* crate depending only on `mycelium` (default-features = false, tls+gateway) — composability proof #4. Within it, `crdt.rs` (M16-B push) and `lib.rs`/`http.rs` (M16-A pull) are cleanly separated; `SignedField`/`AgentFacts` are independent units. Held at 8 (not 9): the in-crate sub-handles still share `Arc<CoreCtx>` mutable state (sanctioned cohesion, unchanged since Run 25); the new agent-layer governors (`membership_governor`, `tuning_governor`) share `TaskCtx`. |
+| 5 | API Design | 8 | **Deep-dive.** New public surface is minimal and well-shaped: `sign_with_identity(&[u8]) -> Option<[u8;64]>` + `identity_public_key() -> Option<[u8;32]>` (tls-gated, `None` when no identity — total, hard to misuse). `FleetIntent` trait exposes exactly 3 facets (written_at_ms/stamp/target); everything policy stays in the governor. AgentFacts `from_agent`/`signed_agent_facts` return `Option` (no identity ⇒ `None`, not a panic). Read-only, but the surface is clean → 8. |
+| 6 | Error Handling Model | 8 | carried (v25). No error-type changes this run; WS-F surface uses `Option` returns + `bool` queued-writes consistently (no new `Result` taxonomy). |
+| 7 | Configurability | 8 | carried (v25). WS-C auto-derivation + hot-reload and elastic governor config are new knobs (default-on / opt-in), structurally consistent with the existing feature/config split; not deep-dived this run. |
+| 8 | Language Best Practices | 8 | Fresh-but-scoped evidence: `clippy -p mycelium-agentfacts --all-targets -D warnings` clean this run; the new code (`intent.rs`, `crdt.rs`, `lib.rs`) is idiomatic (let-else, `is_none_or`, `Option` combinators, no `unwrap` outside tests). Full-crate clippy not re-run → honest 8, not 9. |
+| 9 | Concurrency Correctness | 8 | carried (v25). `merge_peer_keys` race fixed last session; no new concurrency-bearing path probed this run beyond the intent reconcile loop (select! over watch + tick + shutdown — standard, no shared lock). Lock-order table unchanged. |
+| 10 | Resource Management | 8 | carried (v25). `spawn_intent_reconciler` exits on shutdown (`shutdown.wait_for`); governors are `spawn_task`-tracked. No lifecycle regression; not re-probed. |
+| 11 | Semantic Correctness | 8 | carried (v25), reinforced: the WS-F CRDT merge (LWW+HLC per field, distinct-key concurrency, forgery-drop-at-read) is freshly green (`per_field_merge_lww_and_forgery_rejection`, `intra_domain_field_gossips_and_verifies_cross_node`, `domain_facts_assembles_verified_per_node_board`). Consensus linearisability/anti-entropy not re-probed → not raised to 9. |
+| 12 | Robustness | 8 | carried (v25), reinforced by Probe 3: the WS-F verify surface is total against malformed/hostile signatures + unknown nodes (new regression test green). Broader malformed-frame/decoder paths not re-probed this run → 8. |
+| 13 | Security | 8 | carried (v25). New self-certified signing (Ed25519 over canonical JSON), per-field signatures, forgery rejection at read, hostile-input-safe `verify()` — all freshly green. Detection-not-prevention posture intact (forged KV write LWW-accepted but never verifies). No external audit + broader mTLS/RBAC/audit not re-probed → 8. |
+| 14 | Failure Mode Legibility | 8 | carried (v25). Tripwires + typed verify errors unchanged; WS-F drops (forged/stale/unknown-key) are silent-at-read by design (the served board simply omits them) — legible via absence, consistent with evaporation. |
+| 15 | Performance | 7 | carried (v25). No benchmark run this run; WS-F adds JSON canonicalisation + Ed25519 verify on the *edge read* path (not the gossip hot path), bounded by `scan_prefix(facts/)`. Conservative per evidence gate. |
+| 16 | Scalability | 7 | carried (v25). `domain_facts` is O(facts entries) per edge pull; no scale test (100-node / entry-volume) run this run; the documented Docker-bridge iptables cliff persists (WS-B SWIM + WS-C auto-derivation mitigate, don't eliminate). |
+| 17 | Testability | 8 | carried (v25), reinforced: WS-F crate is testable in isolation (per-crate tls agents over shared cert_dir, no full external cluster); added a probe regression test this run with no harness friction. Full feature/Docker matrix not exercised → 8. |
+| 18 | Test Architecture | 8 | carried (v25). Suite grew (new `falsification_run26.rs` + 3 CRDT integration tests + per-field/forgery/cross-node coverage); pyramid stays healthy. The "consensus-off still forwards" coverage wart (Run 25 Probe 3) is unchanged → 8. |
+| 19 | Observability | 8 | carried (v25). Elastic Track 3 added `/gateway/govern` + governance Prometheus metrics + audit; `/metrics`/`/stats`/`/ready`/`/health` unchanged. `/metrics` not live-probed this run → 8. |
+| 20 | Debuggability | 8 | carried (v25). New edge endpoints (`/.well-known/agent-facts`, domain-facts board) add introspection surface; KV/consensus/SSE inspection routes unchanged. Not driven live this run → 8. |
+| 21 | Operational Readiness | 8 | carried (v25). WS-E autonomic provisioning + elastic governance + WS-F run-dark federation are new operational shapes; agentfacts is opt-in/operator-served. No Docker scenario run this run. |
+| 22 | Evolvability | 8 | carried (v25), reinforced: the v2 roadmap is executing at pace — WS-B/C/E/F all shipped in-window with the wire version held at v12 and no test loss. AgentFacts' single-mapping-point decoupling from NANDA's churning field names is forward-compat by design. Read-only → 8. |
+| 23 | Documentation | 8 | carried (v25). New crate docs (agentfacts lib/crdt module docs are unusually clear on the NANDA-decoupling rationale), WS-C/elastic plans, OR-Map design note, cert-rotation/sso/crown-jewel ops docs. Doc-vs-code spot-checks (companion-crate contract, namespace ownership) matched reality. Not executable → 8. |
+| 24 | Developer Experience | 8 | carried (v25). conway_gpu/wgpu removed from dev-deps (lighter clean build); shared `alloc_port` test util ends the AddrInUse flake family. Build/test cycles observed green this run (core 2.2s, agentfacts clippy 57.8s). → 8. |
+| 25 | Dependency Hygiene | 8 | carried (v25). agentfacts adds ed25519-dalek/serde_json/base64/axum (all already in the parent tree) + reqwest (dev-only); wgpu dev-dep removed (PR #40). `Cargo.lock` present. `--no-default-features` not re-run this run + no fresh `cargo audit` → 8. |
+| — | **Floor (lowest 3)** | **7, 7, 8** | Performance (15), Scalability (16), and the lowest 8-tier — Robustness (12)/Security (13): broad paths verified only on the new WS-F surface this run, not end to end |
+| — | Mean (continuity footnote) | 8.0 | not a target; see M2 preamble (sum 199/25 = 7.96) |
