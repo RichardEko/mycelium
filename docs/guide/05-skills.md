@@ -206,4 +206,33 @@ curl http://localhost:9050/mgmt   # dashboard shows audit records
 agent.kv().scan_prefix("audit/")
 ```
 
+## Live prompt-template updates (no restart)
+
+A Prompt Skill's template lives in the gossip KV store under
+`prompts/{ns}/{name}`, **not** baked into the serving node. The dispatch loop
+reads the template fresh from KV on *every* invocation — so updating it takes
+effect on the next call, cluster-wide, with no restart and no redeploy:
+
+```rust
+// On any node — the write gossips to every serving node.
+agent.llm().update_prompt("demo", "echo", PromptTemplate {
+    system: "Updated assistant.".into(),
+    user_template: "v2: {{input}}".into(),
+    max_tokens: 64,
+    temperature: 0.0,
+    metadata: HashMap::new(),
+})?;
+
+// Any node reads the current template from its KV snapshot — no RPC:
+let tpl = agent.llm().get_prompt("demo", "echo");   // Option<PromptTemplate>
+let all = agent.llm().list_prompts();               // Vec<(ns, name)>
+agent.llm().delete_prompt("demo", "echo");          // retract it
+```
+
+Because the template is *configuration* in KV (not a heartbeat), it does **not**
+evaporate — it persists until overwritten or deleted, while the *capability*
+advertisement is the heartbeat that evaporates when the node dies. This is the
+durable-state-vs-presence separation the [concepts chapter](00-concepts.md)
+draws: tune prompts live in production without touching the serving binary.
+
 → Next: [06-tool-discovery.md](06-tool-discovery.md) — the MCP-style alternative where tools are functions, not agents.

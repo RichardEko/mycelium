@@ -157,13 +157,6 @@ proptest     = "1"
 name = "skillrunner"
 path = "src/bin/skillrunner/main.rs"
 
-# Prompt-skill example needs the `llm` adapter (EchoBackend / LlmBackend /
-# PromptTemplate). Gate it so `cargo test/build --workspace` (default features)
-# skips it instead of failing to compile; it builds under `--features llm`.
-[[example]]
-name = "prompt_skill_demo"
-required-features = ["llm"]
-
 [[bench]]
 name    = "throughput"
 harness = false
