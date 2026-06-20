@@ -86,18 +86,21 @@ impl SignedRevocation {
         Self { event, sig }
     }
 
-    /// Verify the signature against `verifying_key`.
-    fn verify(&self, verifying_key: &[u8; 32]) -> bool {
+    /// Verify the event signature against `verifying_key`. Public so an external auditor can
+    /// independently confirm a revocation is signed by the claimed key before trusting it.
+    pub fn verify(&self, verifying_key: &[u8; 32]) -> bool {
         let Ok(sig) = <[u8; 64]>::try_from(self.sig.as_slice()) else { return false };
         let Ok(vk) = VerifyingKey::from_bytes(verifying_key) else { return false };
         vk.verify(&self.event.canonical(), &Signature::from_bytes(&sig)).is_ok()
     }
 
-    pub(crate) fn encode(&self) -> bytes::Bytes {
+    /// Canonical wire encoding (the bytes a transparency leaf commits to via `leaf_hash`).
+    pub fn encode(&self) -> bytes::Bytes {
         bytes::Bytes::from(mycelium_core::serde_fixint::to_vec(self).unwrap_or_default())
     }
 
-    pub(crate) fn decode(bytes: &[u8]) -> Option<Self> {
+    /// Decode from the wire encoding. `None` on malformed bytes.
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
         mycelium_core::serde_fixint::from_slice(bytes).ok()
     }
 }
@@ -127,28 +130,57 @@ pub(crate) fn revoke_key(
     Ok(())
 }
 
-/// The set of verifying keys that have been **validly** revoked, read from the local gossip view.
-/// A revocation counts only if signed by the revoking node's *current* identity key and the revoked
-/// key is in that node's identity history (see the module-level validation rule). A forged or
-/// foreign-signed revocation is ignored.
+/// The **validated** signed revocations published by one `node`, read from the local gossip view.
+/// A revocation counts only if signed by the node's *current* identity key and the revoked key is in
+/// that node's identity history (see the module-level validation rule). Forged or foreign-signed
+/// revocations are dropped. Order is the KV scan order (callers that need determinism — e.g. the
+/// Merkle root — sort).
+pub(crate) fn validated_signed_revocations(ctx: &TaskCtx, node: &NodeId) -> Vec<SignedRevocation> {
+    // The revoking node's identity history (current first).
+    let identity = mycelium_core::kv_handle::KvHandle::from_core(std::sync::Arc::clone(&ctx.core))
+        .get(&format!("sys/identity/{node}"))
+        .map(|b| super::helpers::parse_identity_keys(&b))
+        .unwrap_or_default();
+    let Some(current) = identity.first().copied() else { return Vec::new() };
+    let prefix = format!("{REVOCATION_PREFIX}{node}/");
+    let mut out = Vec::new();
+    for (_key, bytes) in crate::store::scan_kv_prefix(&ctx.kv_state, &prefix) {
+        let Some(signed) = SignedRevocation::decode(&bytes) else { continue };
+        // Valid iff: claimed owner matches the path, signed by the current key, and the revoked key
+        // is one of the node's own keys.
+        if &signed.event.node_id == node
+            && signed.verify(&current)
+            && identity.contains(&signed.event.revoked_key)
+        {
+            out.push(signed);
+        }
+    }
+    out
+}
+
+/// Distinct nodes that have published at least one revocation in the local gossip view.
+pub(crate) fn revocation_nodes(ctx: &TaskCtx) -> Vec<NodeId> {
+    let mut nodes = HashSet::new();
+    for (key, _) in crate::store::scan_kv_prefix(&ctx.kv_state, REVOCATION_PREFIX) {
+        if let Some(rest) = key.strip_prefix(REVOCATION_PREFIX)
+            && let Some((node_seg, _)) = rest.split_once('/')
+            && let Ok(node) = node_seg.parse::<NodeId>()
+        {
+            nodes.insert(node);
+        }
+    }
+    let mut v: Vec<NodeId> = nodes.into_iter().collect();
+    v.sort_by_key(|n| n.to_string());
+    v
+}
+
+/// The set of verifying keys that have been **validly** revoked across all nodes, read from the
+/// local gossip view. Consulted by [`super::helpers::known_verifying_keys`] to exclude revoked keys
+/// from every retained-key verify path.
 pub(crate) fn revoked_key_set(ctx: &TaskCtx) -> HashSet<[u8; 32]> {
     let mut revoked = HashSet::new();
-    for (key, bytes) in crate::store::scan_kv_prefix(&ctx.kv_state, REVOCATION_PREFIX) {
-        let Some(rest) = key.strip_prefix(REVOCATION_PREFIX) else { continue };
-        let Some((node_seg, _)) = rest.split_once('/') else { continue };
-        let Ok(node) = node_seg.parse::<NodeId>() else { continue };
-        let Some(signed) = SignedRevocation::decode(&bytes) else { continue };
-        if signed.event.node_id != node {
-            continue; // key path must match the event's claimed owner
-        }
-        // The revoking node's identity history (current first).
-        let identity = mycelium_core::kv_handle::KvHandle::from_core(std::sync::Arc::clone(&ctx.core))
-            .get(&format!("sys/identity/{node}"))
-            .map(|b| super::helpers::parse_identity_keys(&b))
-            .unwrap_or_default();
-        let Some(current) = identity.first() else { continue };
-        // Valid iff signed by the current key AND the revoked key is one of the node's own keys.
-        if signed.verify(current) && identity.contains(&signed.event.revoked_key) {
+    for node in revocation_nodes(ctx) {
+        for signed in validated_signed_revocations(ctx, &node) {
             revoked.insert(signed.event.revoked_key);
         }
     }

@@ -78,6 +78,8 @@ pub(crate) mod audit;
 #[cfg(feature = "compliance")]
 pub(crate) mod revocation;
 #[cfg(feature = "compliance")]
+pub(crate) mod transparency;
+#[cfg(feature = "compliance")]
 pub(crate) mod oidc;
 
 #[allow(unused_imports)]
@@ -119,6 +121,12 @@ pub use audit::{
     audit_key, audit_stream_prefix, verify_chain, verify_chain_keys, verify_stream_from_genesis,
     AuditAction, AuditOutcome, AuditRecord, AuditVerifyError, SignedAuditRecord, AUDIT_PREFIX,
 };
+#[cfg(feature = "compliance")]
+pub use revocation::{RevocationEvent, SignedRevocation, REVOCATION_PREFIX};
+// WS-D / D2: the client-side revocation inclusion-proof verifier + Merkle primitives, so an SDK or
+// external auditor can check a `/gateway/transparency` proof without trusting the server.
+#[cfg(feature = "compliance")]
+pub use transparency::{leaf_hash, merkle_root, verify_inclusion, ProofStep};
 #[cfg(feature = "compliance")]
 pub use oidc::OidcConfig;
 pub use kv_quorum::QuorumError;
