@@ -44,6 +44,23 @@ curl http://127.0.0.1:<printed-port>/.well-known/agent-facts.json
 | 09 | `mcp_toolgrowth` | ✅ shipped | an LLM agent grows the fabric's toolset at runtime — declares a need, an MCP tool is loaded on demand, then invoked |
 | 10 | `llm_council` | ✅ shipped | a council of **differentiated** LLM agents deliberates a shared task — fan-out → synthesis → iterative refinement, all via the tuple space |
 
+## Patterns & pitfalls
+
+Each demo also teaches a **pitfall** — the right way vs. the anti-pattern, with the *why*. The full
+write-up is [guide chapter 14](../../docs/guide/14-patterns-and-pitfalls.md); the one-line index:
+
+| Demo | Pitfall it teaches (don't do the wrong thing) |
+|---|---|
+| `mailbox_llm` | host an invokable skill on a *separate* node (don't self-RPC); gate readiness on capability **and** peers |
+| `stigmergy` | model load as a node's *own* backlog (don't inject load into a remote node) |
+| `elastic_intent` | let the governor *own* a group under intent (don't expect `max`/`drain` to hold against emergent auto-join) |
+| `provisioning` | the gossip catalogue is the cluster path (don't ship artifacts via node-local `InMemorySource`) |
+| `rotation` | use a faster anti-entropy tick to read a freshly-signed fact across startup |
+| `consensus` | commitments are promise-strength (an empty bloc can't be coerced) |
+| `llm_council` | keep fan-in joins to a single synthesizer today (keyed fan-in is M13) |
+| `mcp_toolgrowth` | bridge an MCP tool by *also* advertising a `tool/` capability |
+| all | structural polls, never fixed sleeps; bind N ports at once |
+
 ### 01 — `mailbox_llm`
 
 ```bash

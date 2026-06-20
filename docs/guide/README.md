@@ -114,6 +114,7 @@ Five application patterns build on this substrate:
 | [11](11-semantic-coordination.md) | Semantic coordination — schema versioning, payload schemas, sender auth | `cargo run --example semantic_coordination` | 5 min |
 | [12](12-schema-lifecycle.md) | Schema lifecycle — publish, conflict detection, CI gate, versioning | `agent.schemas().publish_schema(...)` | 10 min |
 | [13](13-cluster-topology.md) | Cluster topology — seeds, partial mesh, sizing, partition recovery | — | 10 min |
+| [14](14-patterns-and-pitfalls.md) | **Patterns & pitfalls** — the right way vs the anti-pattern, grounded in the coop examples (with the *why*) | the [coop suite](../../examples/coop/) | 10 min |
 | [Error handling](error-handling.md) | Error type taxonomy, recoverability, propagation strategy | — | — |
 
 Read chapters 01–04 to build the mental model. Jump to 05–08 for the application
