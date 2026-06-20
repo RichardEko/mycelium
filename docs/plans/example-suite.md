@@ -1,6 +1,10 @@
 # Delivery plan — the Food-Rescue Co-op example suite
 
-**Status:** proposed (2026-06-19). Awaiting approval before implementation.
+**Status:** ✅ **SHIPPED** (2026-06-20). All six examples landed (PRs #52, #54, #58, #59, #60, +
+this) under `examples/coop/`; run them all Docker-free with `examples/coop/ci_smoke.sh`. Two
+substrate side-effects surfaced and were resolved while building: the emergent-watcher-vs-governor
+fix (#56 → PR #57) that unblocked Step 03, and issue #55 (cross-node Individual-scoped signals) filed
+for a maintainer. The original plan below is preserved as the design record.
 
 **Goal.** A cohesive set of runnable examples that demonstrate the capabilities
 shipped since the last example pass — the **mailbox** (actor/event delivery),

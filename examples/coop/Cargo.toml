@@ -31,6 +31,10 @@ path = "src/bin/provisioning.rs"
 name = "federation_facts"
 path = "src/bin/federation_facts.rs"
 
+[[bin]]
+name = "rotation"
+path = "src/bin/rotation.rs"
+
 [dependencies]
 # The full substrate (gateway is default-on; tls for node identity / the facts lens; llm for the
 # Prompt Skills used by the mailbox-llm demo).

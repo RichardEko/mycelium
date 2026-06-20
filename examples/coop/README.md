@@ -10,6 +10,7 @@ A cohesive set of runnable demos for Mycelium's newer capabilities — the **mai
 > ready, and self-organise. A neighbouring co-op is a separate *domain* the federation demo talks to.
 
 Full design + the six-example roadmap: [`docs/plans/example-suite.md`](../../docs/plans/example-suite.md).
+**All six examples are shipped** — run them all Docker-free with [`ci_smoke.sh`](ci_smoke.sh).
 
 ## Shared harness (`src/common/`)
 
@@ -37,7 +38,7 @@ curl http://127.0.0.1:<printed-port>/.well-known/agent-facts.json
 | 03 | `elastic_intent` | ✅ shipped | elastic sizing as evaporating **intent** (operator-optional) |
 | 04 | `provisioning` ⭐ | ✅ shipped | the full **autonomic loop**: buffer in a tuple-space lane while peers self-provision the missing capability |
 | 05 | `federation_facts` | ✅ shipped | cross-domain edge discovery via self-certified AgentFacts |
-| 06 | `rotation` | planned | zero-disruption identity rotation; pre-rotation facts still verify |
+| 06 | `rotation` | ✅ shipped | zero-disruption identity rotation; pre-rotation facts still verify |
 
 ### 01 — `mailbox_llm`
 
@@ -124,6 +125,22 @@ overflow to us, and — a tampered copy of the document fails verification.
 **Philosophy beat:** discovery across a trust boundary with **no shared CA and no issuer authority**.
 The facts are self-certified by the node identity; trust is the *fetcher's* decision (Core Principle
 1). A Mycelium domain is a sovereign quilt-patch.
+
+### 06 — `rotation`
+
+```bash
+cargo run -p mycelium-coop-examples --bin rotation
+```
+
+`depot-a` publishes a signed AgentFacts field, then **rotates its Ed25519 identity** mid-operation
+(routine hygiene). Its peer `depot-b` keeps verifying across the rotation: (1) the field before the
+rotation; (2) the **same old-key-signed field after the rotation** — it still verifies, because A's
+`sys/identity/{a}` retains `new ‖ old` and every verify path tries the whole **retained key set**;
+(3) a fresh field A signs with the new key.
+
+**Philosophy beat:** key hygiene with **no disruption and no re-signing of history** — a retired key
+stays verifiable for what it signed. This is the runnable form of the retained-key-set fix
+(PR #51 / `crdt.rs::verify_any`).
 
 ## CI
 
