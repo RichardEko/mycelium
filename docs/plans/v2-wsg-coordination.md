@@ -59,7 +59,17 @@ per key. (ROADMAP M13; the WAL is the real work.)
 
 ---
 
-## G2 — Exactly-once-effect dedup overlay (the WS-G "done-when")
+## G2 — Exactly-once-effect dedup overlay (the WS-G "done-when") ✅ DONE (documented contract)
+
+**Resolved as a documented shared contract** ([`docs/design/exactly-once-effect.md`](../design/exactly-once-effect.md)),
+code-extraction **deferred-with-rationale** per the sequencing note below. The Rule-of-Three check
+during G1 was decisive: only **one** real implementation of this mechanism exists today (the
+tuple-space store); the **mailbox uses a genuinely different mechanism** (KV + HLC keys +
+read-side tombstoning, no in-flight claim/WAL/requeue); supervision (M14) and the blackboard (G3)
+are not built. Extracting an `ExactlyOnce` overlay across one real user + a different-mechanism user
++ two non-existent users would be speculative abstraction. The contract names the invariants + the
+canonical reference (`mycelium-tuple-space/src/store.rs`); **G3's claim-by-predicate is the second
+real user that will drive the extraction.**
 
 The tuple space, mailbox, supervision (M14), and the blackboard each implement an
 "effect-happens-once" discipline (in-flight claim + ack + crash-requeue). Extract the **shared
