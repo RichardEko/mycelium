@@ -39,6 +39,7 @@ curl http://127.0.0.1:<printed-port>/.well-known/agent-facts.json
 | 04 | `provisioning` ⭐ | ✅ shipped | the full **autonomic loop**: buffer in a tuple-space lane while peers self-provision the missing capability |
 | 05 | `federation_facts` | ✅ shipped | cross-domain edge discovery via self-certified AgentFacts |
 | 06 | `rotation` | ✅ shipped | zero-disruption identity rotation; pre-rotation facts still verify |
+| 07 | `consensus` | ✅ shipped | multi-bloc agreement via cross-group consensus + leased (decaying) decisions |
 
 ### 01 — `mailbox_llm`
 
@@ -141,6 +142,24 @@ rotation; (2) the **same old-key-signed field after the rotation** — it still 
 **Philosophy beat:** key hygiene with **no disruption and no re-signing of history** — a retired key
 stays verifiable for what it signed. This is the runnable form of the retained-key-set fix
 (PR #51 / `crdt.rs::verify_any`).
+
+### 07 — `consensus`
+
+```bash
+cargo run -p mycelium-coop-examples --bin consensus
+```
+
+A large donation spans two depot blocs (`north`, `south`) and accepting it commits *both* to
+cold-chain capacity — so acceptance requires **each bloc to independently reach quorum**
+(`cross_group_propose` over two `GroupQuorum`s). Phase 1 commits (both blocs agree); Phase 2 — adding
+a third bloc with no voters — **times out** (no bloc can be coerced); Phase 3 commits a
+**short-leased** decision that **decays**, so the slot reads back as reopened.
+
+**Philosophy beat:** Layer III — an emergent coordinator (proposer + quorum) that exists only for the
+decision and **dissolves once it commits**, riding ordinary signals on the same substrate. Commitments
+are *promise-strength* (a bloc with no voters can't be bound), and decisions evaporate like any other
+mandate (epoch-leased commit). "Complex societies do need coordinators; they emerge — they aren't the
+starting point."
 
 ## CI
 

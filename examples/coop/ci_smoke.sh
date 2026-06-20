@@ -55,4 +55,13 @@ echo "$out" | grep -q "STILL verifies the old-key-signed field" \
   || { echo "FAIL: retained-key verification across rotation did not occur"; exit 1; }
 
 echo
+echo "── 07 · consensus ───────────────────────────────────────────────"
+out="$(cargo run -q -p mycelium-coop-examples --bin consensus 2>/dev/null)"
+echo "$out"
+echo "$out" | grep -q "All assertions passed" \
+  || { echo "FAIL: consensus did not pass its assertions"; exit 1; }
+echo "$out" | grep -q "reads as reopened" \
+  || { echo "FAIL: leased-decision decay did not occur"; exit 1; }
+
+echo
 echo "All co-op smokes passed."
