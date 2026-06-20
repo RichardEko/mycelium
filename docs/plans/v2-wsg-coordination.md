@@ -98,9 +98,11 @@ M13's keyed claim (G1) for fan-in. Built entirely on the public API.
 - Facts as KV writes; trigger predicates as signal boundaries; the new primitive is
   *claim-by-predicate* with exactly-once discipline (contract-net / blackboard, **not** fan-in joins
   — those are G1's keyed `take`).
-- This is a **large** increment (a whole companion crate); it gets its own phased sub-plan when G1+G2
-  land, following the `mycelium-tuple-space` template (core → durability → roles/failover →
-  gateway+SDK → integration scenario).
+- This is a **large** increment (a whole companion crate); **its phased build plan is now written**:
+  [`v2-wsg-g3-blackboard.md`](v2-wsg-g3-blackboard.md) — Phase 1 core claim-by-predicate → Phase 2
+  WAL durability (built against the G2 contract) → Phase 3 roles/failover → Phase 4 gateway+SDK →
+  Phase 5 worked example + integration scenario 14 → Phase 6 extract the exactly-once overlay (G3 is
+  the second real user, closing G2's deferred half).
 - **Gate G-G3:** a worked example (the community-microgrid fact pool from the sketch) drives
   claim-by-predicate end to end with exactly-once effect; integration scenario added.
 
