@@ -100,6 +100,7 @@ Five application patterns build on this substrate:
 
 | # | Concept | Runnable example | Time |
 |---|---------|-----------------|------|
+| [00](00-concepts.md) | **Concepts & vocabulary** — Capability vs Skill vs A2A/MCP/AgentFacts; native model vs edge standards. **Read first.** | — | 5 min |
 | [01](01-gossip-kv.md) | Gossip KV — shared state without a broker | `cargo run --example conway` | 30 s |
 | [02](02-capabilities.md) | Capability discovery — find nodes by what they do | `cargo run --example llm_agent` | 1 min |
 | [03](03-signals.md) | Signal mesh — ephemeral scoped events | `cargo run --example prompt_skill_demo` | 30 s |
