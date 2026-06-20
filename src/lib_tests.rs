@@ -4039,6 +4039,44 @@ async fn test_wsf_migration_registry_round_trips() {
     agent.shutdown_with_timeout(Duration::from_secs(5)).await;
 }
 
+/// WS-F / Schema-Evo gate (G-E3b): `migrate_payload` composes the registered `v1→v2→v3` chain to
+/// migrate a received payload; with the chain incomplete it returns `NoMigrationPath` (and trips the
+/// `schema_mismatch` tripwire) rather than mis-parsing — detect, don't guess.
+#[tokio::test]
+async fn test_wsf_migrate_payload_composes_chain_or_detects_no_path() {
+    use crate::schema_evolution::{MigrationError, MigrationRule, SchemaMigration};
+
+    let port = alloc_port();
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = port;
+    let agent = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg));
+    agent.start().await.unwrap();
+
+    let m12 = SchemaMigration { from: "d@v1".into(), to: "d@v2".into(),
+        rules: vec![MigrationRule::Rename { from: "origin".into(), to: "origin_zone".into() }] };
+    agent.publish_migration(&m12);
+    poll_until(|| agent.get_migration("d@v1", "d@v2").is_some(), 3_000).await;
+
+    // Before v2→v3 is registered, v1→v3 has no path → NoMigrationPath + the tripwire fires.
+    let before = agent.system_stats().schema_mismatch;
+    let payload = br#"{"origin":"southwark","kg":12}"#;
+    let err = agent.migrate_payload("d@v1", "d@v3", payload).unwrap_err();
+    assert_eq!(err, MigrationError::NoMigrationPath { from: "d@v1".into(), to: "d@v3".into() });
+    assert!(agent.system_stats().schema_mismatch > before, "a missing path trips schema_mismatch");
+
+    // Register v2→v3; now v1→v3 composes and migrates the payload.
+    let m23 = SchemaMigration { from: "d@v2".into(), to: "d@v3".into(),
+        rules: vec![MigrationRule::Default { path: "priority".into(), value: serde_json::json!(0) }] };
+    agent.publish_migration(&m23);
+    poll_until(|| agent.get_migration("d@v2", "d@v3").is_some(), 3_000).await;
+
+    let migrated = agent.migrate_payload("d@v1", "d@v3", payload).expect("the chain now composes");
+    assert_eq!(migrated, serde_json::json!({ "origin_zone": "southwark", "kg": 12, "priority": 0 }),
+        "the composed v1→v2→v3 chain migrates the payload");
+
+    agent.shutdown_with_timeout(Duration::from_secs(5)).await;
+}
+
 // ── M2 falsification probe (Run 24): concurrent audit chain integrity ─────
 
 /// Probe: many concurrent `audit()` calls on one node must produce a strictly

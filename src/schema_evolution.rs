@@ -183,6 +183,78 @@ pub fn list_migrations(kv: &KvHandle) -> Vec<SchemaMigration> {
         .collect()
 }
 
+// ── Path resolution + composition (E3b) ────────────────────────────────────────
+
+/// Why a migration could not be performed.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum MigrationError {
+    /// No registered migration chain connects `from` to `to`. **Detect, don't guess** — the caller
+    /// surfaces this (e.g. the `schema_mismatch` tripwire), never a partial/coerced result.
+    #[error("no registered migration path from {from:?} to {to:?}")]
+    NoMigrationPath { from: String, to: String },
+    /// The payload was not valid JSON.
+    #[error("payload is not valid JSON: {0}")]
+    InvalidJson(String),
+}
+
+/// Shortest `from → to` path over the directed migration graph (BFS), as the ordered migrations to
+/// apply. `Some(vec![])` for `from == to` (identity). `None` if no path exists — **never** a
+/// best-effort partial.
+pub fn resolve_path<'a>(
+    migrations: &'a [SchemaMigration],
+    from: &str,
+    to: &str,
+) -> Option<Vec<&'a SchemaMigration>> {
+    use std::collections::{HashMap, HashSet, VecDeque};
+    if from == to {
+        return Some(Vec::new());
+    }
+    let mut adj: HashMap<&str, Vec<&SchemaMigration>> = HashMap::new();
+    for m in migrations {
+        adj.entry(m.from.as_str()).or_default().push(m);
+    }
+    let mut queue = VecDeque::from([from]);
+    let mut visited = HashSet::from([from]);
+    let mut pred: HashMap<&str, &SchemaMigration> = HashMap::new();
+    while let Some(node) = queue.pop_front() {
+        if node == to {
+            // Reconstruct the edge path from `to` back to `from`.
+            let mut path = Vec::new();
+            let mut cur = to;
+            while cur != from {
+                let edge = pred.get(cur)?;
+                path.push(*edge);
+                cur = edge.from.as_str();
+            }
+            path.reverse();
+            return Some(path);
+        }
+        for m in adj.get(node).into_iter().flatten() {
+            if visited.insert(m.to.as_str()) {
+                pred.insert(m.to.as_str(), m);
+                queue.push_back(m.to.as_str());
+            }
+        }
+    }
+    None
+}
+
+/// Migrate a JSON `value` from schema `from` to `to` by composing the registered migration chain.
+/// `Err(NoMigrationPath)` when no chain connects them — the migration is *explicit*, never guessed.
+pub fn migrate_value(
+    migrations: &[SchemaMigration],
+    from: &str,
+    to: &str,
+    mut value: Value,
+) -> Result<Value, MigrationError> {
+    let path = resolve_path(migrations, from, to)
+        .ok_or_else(|| MigrationError::NoMigrationPath { from: from.to_string(), to: to.to_string() })?;
+    for m in path {
+        apply_rules(&mut value, &m.rules);
+    }
+    Ok(value)
+}
+
 #[cfg(test)]
 mod additive_tolerance_tests {
     //! E1 / Gate G-E1: verify that the JSON payload paths are **additively tolerant** — a consumer
@@ -317,5 +389,50 @@ mod migration_tests {
         // The registry key is deterministic for a (from, to) pair.
         assert_eq!(migration_key("donation@v1", "donation@v2"), migration_key("donation@v1", "donation@v2"));
         assert_ne!(migration_key("donation@v1", "donation@v2"), migration_key("donation@v2", "donation@v1"));
+    }
+
+    // ── E3b / Gate G-E3b: path resolution + composition ──────────────────────
+
+    fn mig(from: &str, to: &str, rules: Vec<MigrationRule>) -> SchemaMigration {
+        SchemaMigration { from: from.into(), to: to.into(), rules }
+    }
+
+    #[test]
+    fn composes_a_multi_step_path() {
+        // v1→v2 renames origin→origin_zone; v2→v3 defaults priority. v1→v3 composes both.
+        let migs = vec![
+            mig("d@v1", "d@v2", vec![MigrationRule::Rename { from: "origin".into(), to: "origin_zone".into() }]),
+            mig("d@v2", "d@v3", vec![MigrationRule::Default { path: "priority".into(), value: json!(0) }]),
+        ];
+        let out = migrate_value(&migs, "d@v1", "d@v3", json!({ "origin": "southwark", "kg": 12 })).unwrap();
+        assert_eq!(out, json!({ "origin_zone": "southwark", "kg": 12, "priority": 0 }));
+    }
+
+    #[test]
+    fn identity_path_is_unchanged() {
+        let out = migrate_value(&[], "d@v1", "d@v1", json!({ "kg": 12 })).unwrap();
+        assert_eq!(out, json!({ "kg": 12 }));
+    }
+
+    #[test]
+    fn missing_link_yields_no_path_never_a_guess() {
+        // v1→v2 exists but v2→v3 does not: v1→v3 must NOT be partially applied — it errors.
+        let migs = vec![mig("d@v1", "d@v2", vec![MigrationRule::Drop { path: "legacy".into() }])];
+        let err = migrate_value(&migs, "d@v1", "d@v3", json!({ "legacy": true, "kg": 1 })).unwrap_err();
+        assert_eq!(err, MigrationError::NoMigrationPath { from: "d@v1".into(), to: "d@v3".into() });
+    }
+
+    #[test]
+    fn resolve_path_finds_shortest_and_handles_cycles() {
+        // A cycle (v2→v1) must not trap the BFS; a direct v1→v3 shortcut wins over the long way.
+        let migs = vec![
+            mig("v1", "v2", vec![]),
+            mig("v2", "v1", vec![]), // cycle
+            mig("v2", "v3", vec![]),
+            mig("v1", "v3", vec![]), // shortcut
+        ];
+        let path = resolve_path(&migs, "v1", "v3").expect("a path exists");
+        assert_eq!(path.len(), 1, "the direct v1→v3 shortcut is shortest");
+        assert!(resolve_path(&migs, "v3", "v1").is_none(), "no path back to v1 from v3");
     }
 }
