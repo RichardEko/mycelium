@@ -40,6 +40,7 @@ curl http://127.0.0.1:<printed-port>/.well-known/agent-facts.json
 | 05 | `federation_facts` | ✅ shipped | cross-domain edge discovery via self-certified AgentFacts |
 | 06 | `rotation` | ✅ shipped | zero-disruption identity rotation; pre-rotation facts still verify |
 | 07 | `consensus` | ✅ shipped | multi-bloc agreement via cross-group consensus + leased (decaying) decisions |
+| 08 | `llm_pipeline` | ✅ shipped | LLM agents coordinating a multi-stage pipeline purely via a tuple space |
 
 ### 01 — `mailbox_llm`
 
@@ -160,6 +161,24 @@ decision and **dissolves once it commits**, riding ordinary signals on the same 
 are *promise-strength* (a bloc with no voters can't be bound), and decisions evaporate like any other
 mandate (epoch-leased commit). "Complex societies do need coordinators; they emerge — they aren't the
 starting point."
+
+### 08 — `llm_pipeline`
+
+```bash
+cargo run -p mycelium-coop-examples --bin llm_pipeline
+```
+
+A two-stage donation pipeline whose workers are **LLM agents**: `classify ──▶ route ──▶ done`, where
+each stage is a tuple-space lane. Two LLM workers (`agent-a`, `agent-b`) each loop — **pull** an item
+from the deepest pending lane, run **their own model** on it (an `EchoBackend` stand-in invoked
+directly, so the worker *is* the agent, not a caller of a central skill), and **complete** it to the
+next lane. They compete per-lane; no dispatcher predicts who does what. A finished item carries
+nested echoes proving it went through both LLM passes (`route(classify(donation))`).
+
+**Philosophy beat:** multi-agent LLM coordination with **no orchestrator** — the lanes are the only
+coordination, readiness is self-announced by the pull, and the model call lives *between* `take` and
+`complete`. This is the LLM-over-tuple-space composition (Paper 1 §9.4 territory), built on the public
+API only.
 
 ## CI
 

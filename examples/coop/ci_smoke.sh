@@ -64,4 +64,13 @@ echo "$out" | grep -q "reads as reopened" \
   || { echo "FAIL: leased-decision decay did not occur"; exit 1; }
 
 echo
+echo "── 08 · llm_pipeline ────────────────────────────────────────────"
+out="$(cargo run -q -p mycelium-coop-examples --bin llm_pipeline 2>/dev/null)"
+echo "$out"
+echo "$out" | grep -q "All assertions passed" \
+  || { echo "FAIL: llm_pipeline did not pass its assertions"; exit 1; }
+echo "$out" | grep -q "both LLM stages" \
+  || { echo "FAIL: chained LLM stages not evidenced"; exit 1; }
+
+echo
 echo "All co-op smokes passed."
