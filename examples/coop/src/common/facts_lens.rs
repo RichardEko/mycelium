@@ -21,6 +21,7 @@ pub fn mount(agent: &Arc<GossipAgent>, zone: &str, http_port: u16) {
         endpoints: vec![format!("http://127.0.0.1:{http_port}/.well-known/agent-facts.json")],
         locality:  Some(zone.to_string()),
         ttl_secs:  300,
+        ..Default::default()
     };
     agent.with_http_routes(agent_facts_router(Arc::clone(agent), opts));
 }
