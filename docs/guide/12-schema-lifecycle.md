@@ -228,6 +228,46 @@ README for the full persistence model.
 
 ---
 
+## Schema evolution
+
+Schemas drift. Mycelium handles version skew in three tiers (ROADMAP
+§*Schema-registry evolution*; delivery plan
+[`docs/plans/v2-wsf-schema-evolution.md`](../plans/v2-wsf-schema-evolution.md)),
+governed by one rule: **explicit, registered migrations — never silent
+coercion.** When no migration path exists, the mismatch is *detected*, not
+guessed.
+
+### Additive tolerance (already true on JSON payloads)
+
+The **JSON payload paths** (gateway, A2A, prompt skills, AgentFacts) are
+*additively tolerant* by virtue of serde:
+
+- a consumer compiled against an **older** schema **ignores** fields a newer
+  producer added (serde ignores unknown fields unless `deny_unknown_fields`);
+- a consumer compiled against a **newer** schema **defaults** fields an older
+  producer omitted (`#[serde(default)]`, used throughout `capability.rs`).
+
+So *adding optional fields* and *dropping fields a peer defaults* are
+backward/forward compatible with **no migration needed**. (This is a *payload*
+property — the gossip wire frame uses the in-tree fixed-int codec, not JSON, and
+is versioned by `WIRE_VERSION`.) Verified by `schema_evolution::additive_tolerance_tests`.
+
+**The boundary:** additive tolerance does **not** cover *type changes* or
+*renames* — a `priority: "high"` where `priority: u8` is expected fails to parse,
+deliberately. That is what the next two tiers are for.
+
+### Detection (tier 2) and registered migrations (tier 3)
+
+When a schema version genuinely changes shape (rename, type coercion,
+cross-version mapping), Mycelium's answer is an **explicit, registered,
+gossip-distributed migration** — a declarative `vN → vN+1` transform published
+into the registry alongside the schemas and composed `v1 → v2 → v3` on the
+receive side — and, where no such migration is registered, a **`schema_mismatch`
+tripwire** (`/stats`) that surfaces the drift rather than silently coercing it.
+See the [delivery plan](../plans/v2-wsf-schema-evolution.md) for status.
+
+---
+
 ## Summary
 
 | Task | API |
