@@ -120,6 +120,9 @@ pub(crate) struct Inflight {
     pub(crate) stage: Arc<str>,
     pub(crate) payload: Bytes,
     pub(crate) taken_at_ms: u64,
+    /// M13 / WS-G: the correlation key if this item was put keyed, so a crash-requeue or compaction
+    /// snapshot re-queues it under its key (not the FIFO). `None` for ordinary FIFO items.
+    pub(crate) key: Option<Arc<str>>,
 }
 
 // ─── TupleStore ──────────────────────────────────────────────────────────────
@@ -179,15 +182,18 @@ impl TupleStore {
             high_watermark,
             wal: Some(wal),
         };
-        for (id, stage, payload) in live {
+        for (id, stage, payload, key) in live {
             let state = store.stage(&stage);
             // Direct enqueue: no waiters can exist yet, no WAL write needed
-            // (the records being replayed are already in the log).
-            state
-                .inner
-                .lock()
-                .entries
-                .push_back((id, payload, std::time::Instant::now()));
+            // (the records being replayed are already in the log). A keyed item re-queues into the
+            // keyed index under its key (M13) so a post-restart take_by_key still rendezvouses.
+            {
+                let mut g = state.inner.lock();
+                match key {
+                    Some(k) => { g.keyed_entries.insert(k, (id, payload, std::time::Instant::now())); }
+                    None => { g.entries.push_back((id, payload, std::time::Instant::now())); }
+                }
+            }
             state.depth.fetch_add(1, Ordering::Relaxed);
         }
         Ok(store)
@@ -217,6 +223,7 @@ impl TupleStore {
                 id,
                 stage: Arc::from(stage),
                 payload: payload.clone(),
+                key: None,
             })?;
         }
         state.put_total.fetch_add(1, Ordering::Relaxed);
@@ -256,6 +263,7 @@ impl TupleStore {
                             stage: Arc::clone(&stage),
                             payload: payload.clone(),
                             taken_at_ms: now_ms(),
+                            key: None,
                         },
                     );
                     drop(g); // release before send — no I/O or wakeup under lock
@@ -296,6 +304,7 @@ impl TupleStore {
                         stage: Arc::from(stage),
                         payload: payload.clone(),
                         taken_at_ms: now_ms(),
+                        key: None,
                     },
                 );
                 drop(g);
@@ -350,9 +359,14 @@ impl TupleStore {
         }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         if let Some(wal) = &self.wal {
-            // G1a reuses the v1 Put record (key not yet persisted); G1b adds the key to the WAL so a
-            // keyed in-flight item re-queues under its key across a crash/promotion.
-            wal.append(&Record::Put { id, stage: Arc::from(stage), payload: payload.clone() })?;
+            // WAL v2: the key is persisted so a keyed in-flight item re-queues under its key across
+            // a crash / promotion (G1b).
+            wal.append(&Record::Put {
+                id,
+                stage: Arc::from(stage),
+                payload: payload.clone(),
+                key: Some(Arc::clone(&key)),
+            })?;
         }
         state.put_total.fetch_add(1, Ordering::Relaxed);
         let hot = self.dispatch_keyed(&state, Arc::from(stage), key, id, payload)?;
@@ -378,7 +392,7 @@ impl TupleStore {
         if let Some(tx) = g.keyed_waiters.remove(&key) {
             self.inflight.lock().insert(
                 id,
-                Inflight { stage: Arc::clone(&stage), payload: payload.clone(), taken_at_ms: now_ms() },
+                Inflight { stage: Arc::clone(&stage), payload: payload.clone(), taken_at_ms: now_ms(), key: Some(Arc::clone(&key)) },
             );
             drop(g);
             match tx.send((id, payload)) {
@@ -421,7 +435,7 @@ impl TupleStore {
                 state.record_queue_wait(enqueued.elapsed());
                 self.inflight.lock().insert(
                     id,
-                    Inflight { stage: Arc::from(stage), payload: payload.clone(), taken_at_ms: now_ms() },
+                    Inflight { stage: Arc::from(stage), payload: payload.clone(), taken_at_ms: now_ms(), key: Some(Arc::clone(&key)) },
                 );
                 drop(g);
                 if let Some(wal) = &self.wal {
@@ -498,6 +512,7 @@ impl TupleStore {
                 new_id,
                 stage: Arc::from(next_stage),
                 payload: payload.clone(),
+                key: None,
             })?;
             wal.note_acked();
         }
@@ -531,6 +546,7 @@ impl TupleStore {
                 new_id,
                 stage: Arc::from(next_stage),
                 payload: payload.clone(),
+                key: Some(Arc::clone(&key)),
             })?;
             wal.note_acked();
         }
@@ -553,6 +569,7 @@ impl TupleStore {
         stage: &str,
         id: u64,
         payload: Bytes,
+        key: Option<Arc<str>>,
     ) -> Result<(), TupleError> {
         self.next_id.fetch_max(id + 1, Ordering::Relaxed);
         if let Some(wal) = &self.wal {
@@ -560,11 +577,17 @@ impl TupleStore {
                 id,
                 stage: Arc::from(stage),
                 payload: payload.clone(),
+                key: key.clone(),
             })?;
         }
         let state = self.stage(stage);
         state.put_total.fetch_add(1, Ordering::Relaxed);
-        let hot = self.dispatch(&state, Arc::from(stage), id, payload)?;
+        // A keyed replicated item routes into the keyed index so a take_by_key on a promoted mirror
+        // still rendezvouses (G1b).
+        let hot = match key {
+            Some(k) => self.dispatch_keyed(&state, Arc::from(stage), k, id, payload)?,
+            None => self.dispatch(&state, Arc::from(stage), id, payload)?,
+        };
         if hot {
             state.hot_total.fetch_add(1, Ordering::Relaxed);
             state.take_total.fetch_add(1, Ordering::Relaxed);
@@ -580,7 +603,15 @@ impl TupleStore {
         let mut g = state.inner.lock();
         let before = g.entries.len();
         g.entries.retain(|(eid, _, _)| *eid != id);
-        let removed = before - g.entries.len();
+        let mut removed = before - g.entries.len();
+        // A keyed queued item (M13) lives in the keyed index, not the FIFO.
+        if removed == 0 {
+            let key = g.keyed_entries.iter().find(|(_, (eid, _, _))| *eid == id).map(|(k, _)| Arc::clone(k));
+            if let Some(k) = key {
+                g.keyed_entries.remove(&k);
+                removed = 1;
+            }
+        }
         if removed > 0 {
             state.depth.fetch_sub(removed as u32, Ordering::Relaxed);
             if let Some(wal) = &self.wal {
@@ -613,10 +644,12 @@ impl TupleStore {
         let mut requeued = Vec::with_capacity(expired.len());
         for (id, item) in expired {
             let state = self.stage(&item.stage);
-            if self
-                .dispatch(&state, Arc::clone(&item.stage), id, item.payload)
-                .is_ok()
-            {
+            // A keyed item re-queues under its key (M13) so its waiter still rendezvouses.
+            let ok = match item.key {
+                Some(k) => self.dispatch_keyed(&state, Arc::clone(&item.stage), k, id, item.payload).is_ok(),
+                None => self.dispatch(&state, Arc::clone(&item.stage), id, item.payload).is_ok(),
+            };
+            if ok {
                 requeued.push(id);
             }
         }
@@ -709,6 +742,16 @@ impl TupleStore {
                         id: *id,
                         stage: Arc::clone(&name),
                         payload: payload.clone(),
+                        key: None,
+                    });
+                }
+                // Keyed queued items are preserved under their key (M13 / G1b).
+                for (key, (id, payload, _)) in &g.keyed_entries {
+                    live.push(Record::Put {
+                        id: *id,
+                        stage: Arc::clone(&name),
+                        payload: payload.clone(),
+                        key: Some(Arc::clone(key)),
                     });
                 }
             }
@@ -717,6 +760,7 @@ impl TupleStore {
                     id,
                     stage: Arc::clone(&item.stage),
                     payload: item.payload.clone(),
+                    key: item.key.clone(),
                 });
                 live.push(Record::Take { id, taken_at_ms: item.taken_at_ms });
             }
@@ -770,7 +814,11 @@ pub(crate) fn now_ms() -> u64 {
 /// silently truncated: an upgrade data-loss hazard (Run-17 finding,
 /// Evolvability).
 const WAL_MAGIC: &[u8; 6] = b"MTSWAL";
-const WAL_VERSION: u16 = 1;
+/// v2 (WS-G / M13) adds the keyed record kinds (`REC_PUT_KEYED` / `REC_COMPLETE_KEYED`). Unkeyed
+/// records are byte-identical to v1, so a v1 WAL replays unchanged and a v2 WAL with no keyed items
+/// is byte-identical to a v1 one. v1 is accepted on read (rolling-upgrade window).
+const WAL_VERSION: u16 = 2;
+const PREV_WAL_VERSION: u16 = 1;
 const WAL_HEADER_LEN: u64 = 8; // magic + u16 LE version
 
 fn wal_header() -> [u8; WAL_HEADER_LEN as usize] {
@@ -784,6 +832,9 @@ const REC_PUT: u8 = 1;
 const REC_TAKE: u8 = 2;
 const REC_ACK: u8 = 3;
 const REC_COMPLETE: u8 = 4;
+// WS-G / M13 (WAL v2): keyed variants carry a correlation key after the stage.
+const REC_PUT_KEYED: u8 = 5;
+const REC_COMPLETE_KEYED: u8 = 6;
 
 /// One chunk of raw WAL records served to a replaying secondary.
 pub(crate) struct WalChunkData {
@@ -798,22 +849,26 @@ pub(crate) struct WalChunkData {
 /// duplicate hazard the split encoding reintroduces.
 #[derive(Debug)]
 pub(crate) enum Record {
-    Put { id: u64, stage: Arc<str>, payload: Bytes },
+    Put { id: u64, stage: Arc<str>, payload: Bytes, key: Option<Arc<str>> },
     Take { id: u64, taken_at_ms: u64 },
     Ack { id: u64 },
-    Complete { old_id: u64, new_id: u64, stage: Arc<str>, payload: Bytes },
+    Complete { old_id: u64, new_id: u64, stage: Arc<str>, payload: Bytes, key: Option<Arc<str>> },
 }
 
 impl Record {
     pub(crate) fn encode(&self, buf: &mut Vec<u8>) {
         let body_start = buf.len() + 5; // [kind u8][len u32]
         match self {
-            Record::Put { id, stage, payload } => {
-                buf.push(REC_PUT);
+            Record::Put { id, stage, payload, key } => {
+                buf.push(if key.is_some() { REC_PUT_KEYED } else { REC_PUT });
                 buf.extend_from_slice(&[0; 4]);
                 buf.extend_from_slice(&id.to_le_bytes());
                 buf.extend_from_slice(&(stage.len() as u16).to_le_bytes());
                 buf.extend_from_slice(stage.as_bytes());
+                if let Some(k) = key {
+                    buf.extend_from_slice(&(k.len() as u16).to_le_bytes());
+                    buf.extend_from_slice(k.as_bytes());
+                }
                 buf.extend_from_slice(&(payload.len() as u32).to_le_bytes());
                 buf.extend_from_slice(payload);
             }
@@ -828,13 +883,17 @@ impl Record {
                 buf.extend_from_slice(&[0; 4]);
                 buf.extend_from_slice(&id.to_le_bytes());
             }
-            Record::Complete { old_id, new_id, stage, payload } => {
-                buf.push(REC_COMPLETE);
+            Record::Complete { old_id, new_id, stage, payload, key } => {
+                buf.push(if key.is_some() { REC_COMPLETE_KEYED } else { REC_COMPLETE });
                 buf.extend_from_slice(&[0; 4]);
                 buf.extend_from_slice(&old_id.to_le_bytes());
                 buf.extend_from_slice(&new_id.to_le_bytes());
                 buf.extend_from_slice(&(stage.len() as u16).to_le_bytes());
                 buf.extend_from_slice(stage.as_bytes());
+                if let Some(k) = key {
+                    buf.extend_from_slice(&(k.len() as u16).to_le_bytes());
+                    buf.extend_from_slice(k.as_bytes());
+                }
                 buf.extend_from_slice(&(payload.len() as u32).to_le_bytes());
                 buf.extend_from_slice(payload);
             }
@@ -853,12 +912,20 @@ impl Record {
         let body_len = u32::from_le_bytes(data[1..5].try_into().ok()?) as usize;
         let body = data.get(5..5 + body_len)?;
         let rec = match kind {
-            REC_PUT => {
+            REC_PUT | REC_PUT_KEYED => {
                 let id = u64::from_le_bytes(body.get(..8)?.try_into().ok()?);
                 let stage_len =
                     u16::from_le_bytes(body.get(8..10)?.try_into().ok()?) as usize;
                 let stage = std::str::from_utf8(body.get(10..10 + stage_len)?).ok()?;
-                let p = 10 + stage_len;
+                let mut p = 10 + stage_len;
+                let key = if kind == REC_PUT_KEYED {
+                    let kl = u16::from_le_bytes(body.get(p..p + 2)?.try_into().ok()?) as usize;
+                    let k = std::str::from_utf8(body.get(p + 2..p + 2 + kl)?).ok()?;
+                    p += 2 + kl;
+                    Some(Arc::from(k))
+                } else {
+                    None
+                };
                 let payload_len =
                     u32::from_le_bytes(body.get(p..p + 4)?.try_into().ok()?) as usize;
                 let payload = body.get(p + 4..p + 4 + payload_len)?;
@@ -866,6 +933,7 @@ impl Record {
                     id,
                     stage: Arc::from(stage),
                     payload: Bytes::copy_from_slice(payload),
+                    key,
                 }
             }
             REC_TAKE => Record::Take {
@@ -875,13 +943,21 @@ impl Record {
             REC_ACK => Record::Ack {
                 id: u64::from_le_bytes(body.get(..8)?.try_into().ok()?),
             },
-            REC_COMPLETE => {
+            REC_COMPLETE | REC_COMPLETE_KEYED => {
                 let old_id = u64::from_le_bytes(body.get(..8)?.try_into().ok()?);
                 let new_id = u64::from_le_bytes(body.get(8..16)?.try_into().ok()?);
                 let stage_len =
                     u16::from_le_bytes(body.get(16..18)?.try_into().ok()?) as usize;
                 let stage = std::str::from_utf8(body.get(18..18 + stage_len)?).ok()?;
-                let p = 18 + stage_len;
+                let mut p = 18 + stage_len;
+                let key = if kind == REC_COMPLETE_KEYED {
+                    let kl = u16::from_le_bytes(body.get(p..p + 2)?.try_into().ok()?) as usize;
+                    let k = std::str::from_utf8(body.get(p + 2..p + 2 + kl)?).ok()?;
+                    p += 2 + kl;
+                    Some(Arc::from(k))
+                } else {
+                    None
+                };
                 let payload_len =
                     u32::from_le_bytes(body.get(p..p + 4)?.try_into().ok()?) as usize;
                 let payload = body.get(p + 4..p + 4 + payload_len)?;
@@ -890,6 +966,7 @@ impl Record {
                     new_id,
                     stage: Arc::from(stage),
                     payload: Bytes::copy_from_slice(payload),
+                    key,
                 }
             }
             _ => return None, // unknown kind — treat as corrupt tail
@@ -926,7 +1003,7 @@ impl WalWriter {
     fn open(
         path: &Path,
         checkpoint_every: u64,
-    ) -> io::Result<(Self, Vec<(u64, Arc<str>, Bytes)>, Option<u64>)> {
+    ) -> io::Result<(Self, Vec<(u64, Arc<str>, Bytes, Option<Arc<str>>)>, Option<u64>)> {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {
@@ -963,12 +1040,16 @@ impl WalWriter {
         } else {
             let version =
                 u16::from_le_bytes(data[6..8].try_into().expect("two header bytes"));
-            if version != WAL_VERSION {
+            // Accept the current and the previous format (rolling upgrade); refuse a *newer* one
+            // (no silent truncation of a format this build does not understand). v1 unkeyed records
+            // are byte-identical, so a v1 WAL replays unchanged here.
+            if version != WAL_VERSION && version != PREV_WAL_VERSION {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!(
-                        "{} is WAL format v{version}, but this build supports v{WAL_VERSION}; \
-                         refusing to open (no silent truncation of newer formats)",
+                        "{} is WAL format v{version}, but this build supports v{WAL_VERSION} \
+                         (and reads v{PREV_WAL_VERSION}); refusing to open (no silent truncation \
+                         of newer formats)",
                         path.display()
                     ),
                 ));
@@ -979,6 +1060,7 @@ impl WalWriter {
             stage: Arc<str>,
             payload: Bytes,
             acked: bool,
+            key: Option<Arc<str>>,
         }
         let mut items: BTreeMap<u64, ItemState> = BTreeMap::new();
         let mut total = 0u64;
@@ -990,9 +1072,9 @@ impl WalWriter {
                 Some((rec, consumed)) => {
                     offset += consumed;
                     match rec {
-                        Record::Put { id, stage, payload } => {
+                        Record::Put { id, stage, payload, key } => {
                             total += 1;
-                            items.insert(id, ItemState { stage, payload, acked: false });
+                            items.insert(id, ItemState { stage, payload, acked: false, key });
                         }
                         // Take alone never terminates an item: taken-but-unacked
                         // re-queues as abandoned.
@@ -1003,13 +1085,13 @@ impl WalWriter {
                                 it.acked = true;
                             }
                         }
-                        Record::Complete { old_id, new_id, stage, payload } => {
+                        Record::Complete { old_id, new_id, stage, payload, key } => {
                             acked += 1;
                             total += 1;
                             if let Some(it) = items.get_mut(&old_id) {
                                 it.acked = true;
                             }
-                            items.insert(new_id, ItemState { stage, payload, acked: false });
+                            items.insert(new_id, ItemState { stage, payload, acked: false, key });
                         }
                     }
                 }
@@ -1020,10 +1102,10 @@ impl WalWriter {
             file.set_len(offset as u64)?;
         }
         let max_id = items.keys().next_back().copied();
-        let live: Vec<(u64, Arc<str>, Bytes)> = items
+        let live: Vec<(u64, Arc<str>, Bytes, Option<Arc<str>>)> = items
             .into_iter()
             .filter(|(_, it)| !it.acked)
-            .map(|(id, it)| (id, it.stage, it.payload))
+            .map(|(id, it)| (id, it.stage, it.payload, it.key))
             .collect();
         let file_len = offset as u64;
         let writer = Self {
@@ -1507,6 +1589,59 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    // ── M13 / WS-G · G-G1b: keyed durability (WAL v2 + replay) ──────────────
+
+    #[tokio::test]
+    async fn keyed_item_survives_wal_replay_under_its_key() {
+        let path = temp_wal("keyed-replay");
+        {
+            let store = TupleStore::persistent(&path, 10_000, 500).unwrap();
+            store.put_keyed("po", Arc::from("inv-7"), b("matched")).unwrap();
+        }
+        // Reopen (the WAL is v2 with a keyed Put record) — the item re-queues under its key, so a
+        // post-restart take_by_key still rendezvouses (and an unkeyed take does NOT claim it).
+        let store = TupleStore::persistent(&path, 10_000, 500).unwrap();
+        assert!(store.take("po", Duration::from_millis(50)).await.is_err(),
+            "the replayed keyed item is not on the FIFO");
+        let (_, payload) = store.take_by_key("po", "inv-7", Duration::from_millis(100)).await.unwrap();
+        assert_eq!(payload.as_ref(), &b"matched"[..]);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn acked_keyed_item_does_not_resurrect() {
+        let path = temp_wal("keyed-acked");
+        {
+            let store = TupleStore::persistent(&path, 10_000, 500).unwrap();
+            let id = store.put_keyed("po", Arc::from("k"), b("v")).unwrap();
+            let (got, _) = store.take_by_key("po", "k", Duration::from_millis(100)).await.unwrap();
+            assert_eq!(got, id);
+            store.ack(id).unwrap();
+        }
+        let store = TupleStore::persistent(&path, 10_000, 500).unwrap();
+        assert!(store.take_by_key("po", "k", Duration::from_millis(50)).await.is_err(),
+            "an acked keyed item must not resurrect on replay");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn v1_wal_replays_on_v2_build() {
+        // A WAL stamped with the PREVIOUS format version, holding an (unkeyed) Put, must replay on
+        // this v2 build — the rolling-upgrade guarantee. Unkeyed records are byte-identical across
+        // versions, so only the header version differs.
+        let path = temp_wal("v1-compat");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(WAL_MAGIC);
+        bytes.extend_from_slice(&PREV_WAL_VERSION.to_le_bytes());
+        Record::Put { id: 1, stage: Arc::from("s"), payload: b("legacy"), key: None }.encode(&mut bytes);
+        std::fs::write(&path, &bytes).unwrap();
+
+        let store = TupleStore::persistent(&path, 10_000, 500).unwrap();
+        let (id, payload) = store.take("s", Duration::from_millis(100)).await.unwrap();
+        assert_eq!((id, payload.as_ref()), (1, &b"legacy"[..]), "v1 WAL replays unchanged");
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[tokio::test]
     async fn wal_compact() {
         let path = temp_wal("compact");
@@ -1683,7 +1818,7 @@ mod tests {
     #[tokio::test]
     async fn put_with_id_fences_next_id() {
         let store = TupleStore::transient(500);
-        store.put_with_id("s", 41, b("mirrored")).unwrap();
+        store.put_with_id("s", 41, b("mirrored"), None).unwrap();
         let fresh = store.put("s", b("new")).unwrap();
         assert!(fresh > 41, "next_id not fenced past replicated id");
         assert!(store.remove_queued("s", 41));

@@ -725,13 +725,13 @@ impl TupleSpace {
         let Some(store) = self.store() else { return };
         for rec in records {
             match rec {
-                Record::Put { id, stage, payload } => {
+                Record::Put { id, stage, payload, key } => {
                     let fresh = self
                         .mirror_stages
                         .lock()
                         .insert(*id, Arc::clone(stage))
                         .is_none();
-                    if fresh && let Err(e) = store.put_with_id(stage, *id, payload.clone())
+                    if fresh && let Err(e) = store.put_with_id(stage, *id, payload.clone(), key.clone())
                     {
                         tracing::error!(id, error = %e, "tuple-space: mirror put failed");
                     }
@@ -741,7 +741,7 @@ impl TupleSpace {
                         store.remove_queued(&stage, *id);
                     }
                 }
-                Record::Complete { old_id, new_id, stage, payload } => {
+                Record::Complete { old_id, new_id, stage, payload, key } => {
                     if let Some(old_stage) = self.mirror_stages.lock().remove(old_id) {
                         store.remove_queued(&old_stage, *old_id);
                     }
@@ -751,7 +751,7 @@ impl TupleSpace {
                         .insert(*new_id, Arc::clone(stage))
                         .is_none();
                     if fresh
-                        && let Err(e) = store.put_with_id(stage, *new_id, payload.clone())
+                        && let Err(e) = store.put_with_id(stage, *new_id, payload.clone(), key.clone())
                     {
                         tracing::error!(id = new_id, error = %e, "tuple-space: mirror complete failed");
                     }
@@ -772,6 +772,7 @@ impl TupleSpace {
             id,
             stage: Arc::from(stage),
             payload,
+            key: None,
         });
         Ok(id)
     }
@@ -802,6 +803,7 @@ impl TupleSpace {
             new_id,
             stage: Arc::from(next_stage),
             payload,
+            key: None,
         });
         Ok(new_id)
     }
@@ -815,13 +817,12 @@ impl TupleSpace {
     }
 
     // ── M13 / WS-G keyed serve paths ─────────────────────────────────────────
-    // G1a replicates keyed items as plain `Put`/`Complete` (key not yet on the WAL
-    // record); G1b adds the key to the WAL + replication so a keyed in-flight item
+    // The key is carried on the WAL record AND on replication (G1b) so a keyed in-flight item
     // re-queues under its key across a primary crash / promotion.
     pub(crate) fn serve_put_keyed(&self, stage: &str, key: Arc<str>, payload: Bytes) -> Result<u64, TupleError> {
         let store = self.store_expect();
-        let id = store.put_keyed(stage, key, payload.clone())?;
-        self.replicate(Record::Put { id, stage: Arc::from(stage), payload });
+        let id = store.put_keyed(stage, Arc::clone(&key), payload.clone())?;
+        self.replicate(Record::Put { id, stage: Arc::from(stage), payload, key: Some(key) });
         Ok(id)
     }
 
@@ -846,9 +847,9 @@ impl TupleSpace {
         payload: Bytes,
     ) -> Result<u64, TupleError> {
         let store = self.store_expect();
-        let new_id = store.complete_keyed(id, next_stage, key, payload.clone())?;
+        let new_id = store.complete_keyed(id, next_stage, Arc::clone(&key), payload.clone())?;
         self.clear_inflight_key(id);
-        self.replicate(Record::Complete { old_id: id, new_id, stage: Arc::from(next_stage), payload });
+        self.replicate(Record::Complete { old_id: id, new_id, stage: Arc::from(next_stage), payload, key: Some(key) });
         Ok(new_id)
     }
 
