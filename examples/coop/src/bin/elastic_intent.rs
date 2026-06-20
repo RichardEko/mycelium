@@ -96,7 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!("{N_CANDIDATES} candidates eligible for {GROUP}; governors on, awaiting intent");
 
-    wait_until(15, || {
+    wait_until(30, || {
         candidates.iter().all(|d| !d.agent.peers().is_empty())
             && operator.agent.kv().get(&format!("cap-group/{GROUP}")).is_some()
     })
