@@ -2126,6 +2126,7 @@ dependencies = [
  "mycelium-agentfacts",
  "mycelium-tuple-space",
  "mycelium-wasm-host",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",

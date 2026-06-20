@@ -36,7 +36,7 @@ curl http://127.0.0.1:<printed-port>/.well-known/agent-facts.json
 | 02 | `stigmergy` | ✅ shipped | coordinator-free load shedding via `sys/load` pheromone |
 | 03 | `elastic_intent` | ✅ shipped | elastic sizing as evaporating **intent** (operator-optional) |
 | 04 | `provisioning` ⭐ | ✅ shipped | the full **autonomic loop**: buffer in a tuple-space lane while peers self-provision the missing capability |
-| 05 | `federation_facts` | planned | cross-domain edge discovery via self-certified AgentFacts |
+| 05 | `federation_facts` | ✅ shipped | cross-domain edge discovery via self-certified AgentFacts |
 | 06 | `rotation` | planned | zero-disruption identity rotation; pre-rotation facts still verify |
 
 ### 01 — `mailbox_llm`
@@ -107,6 +107,23 @@ deterministic "optimized route"), so CI needs no wasm toolchain.
 **Philosophy beat:** nothing predicted who would run the optimizer. It was **unmet demand** (a
 pheromone), satisfied by a node **electing to provision**; the buffer lost no item; and the
 rendezvous **self-healed** across a provider death — no coordinator anywhere in the loop.
+
+### 05 — `federation_facts`
+
+```bash
+cargo run -p mycelium-coop-examples --bin federation_facts
+```
+
+**Two separate domains** (separate clusters, separate auto-CAs — they do *not* peer): our co-op
+(`coop-a`, advertising `route/optimize`) and a neighbouring co-op (`coop-b`) with overflow. The
+neighbour discovers our capability the way a NANDA-style quilt does — it **pulls our AgentFacts at
+the edge** (`/.well-known/agent-facts.json`, served by the facts lens), a self-signed JSON-LD
+document, and **verifies the signature itself**. It reads the capability list, decides to route
+overflow to us, and — a tampered copy of the document fails verification.
+
+**Philosophy beat:** discovery across a trust boundary with **no shared CA and no issuer authority**.
+The facts are self-certified by the node identity; trust is the *fetcher's* decision (Core Principle
+1). A Mycelium domain is a sovereign quilt-patch.
 
 ## CI
 
