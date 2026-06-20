@@ -140,7 +140,7 @@ jobs:
       - run: ./examples/fluid_pipeline/ci_smoke.sh both
 
   coop-smoke:
-    name: Food-Rescue Co-op example suite (10 demos)
+    name: Food-Rescue Co-op example suite (11 demos)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

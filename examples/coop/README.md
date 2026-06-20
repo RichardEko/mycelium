@@ -10,7 +10,7 @@ A cohesive set of runnable demos for Mycelium's newer capabilities — the **mai
 > ready, and self-organise. A neighbouring co-op is a separate *domain* the federation demo talks to.
 
 Full design + the six-example roadmap: [`docs/plans/example-suite.md`](../../docs/plans/example-suite.md).
-**All ten examples are shipped** — run them all Docker-free with [`ci_smoke.sh`](ci_smoke.sh).
+**All eleven examples are shipped** — run them all Docker-free with [`ci_smoke.sh`](ci_smoke.sh).
 
 ## Shared harness (`src/common/`)
 
@@ -43,6 +43,7 @@ curl http://127.0.0.1:<printed-port>/.well-known/agent-facts.json
 | 08 | `llm_pipeline` | ✅ shipped | LLM agents coordinating a multi-stage pipeline purely via a tuple space |
 | 09 | `mcp_toolgrowth` | ✅ shipped | an LLM agent grows the fabric's toolset at runtime — declares a need, an MCP tool is loaded on demand, then invoked |
 | 10 | `llm_council` | ✅ shipped | a council of **differentiated** LLM agents deliberates a shared task — fan-out → synthesis → iterative refinement, all via the tuple space |
+| 11 | `catalog` | ✅ shipped | the **cluster-wide artifact catalogue** — register a deployable, discover it via gossip, pull bytes over the mesh, provision & invoke (no registry server) |
 
 ## Patterns & pitfalls
 
@@ -249,6 +250,25 @@ never address each other, only the lanes.
 in the synthesizer's own memory (accumulate-by-id after `take`) — fully expressible today. *Competing*
 synthesizers would each grab fragments of one donation's partial set, which needs keyed-exact-match
 `take` (ROADMAP **M13**, Paper 1 §9.4). This demo names that line rather than crossing it.
+
+### 11 — `catalog`
+
+```bash
+cargo run -p mycelium-coop-examples --bin catalog
+```
+
+The **cluster-wide artifact catalogue**, end to end — the real path that demo 04's node-local
+`InMemorySource` shortcut stands in for. A `publisher` node **serves** the route-optimizer bytes
+(`serve_artifacts`) and **registers** a signed catalogue entry (`publish_installable` →
+`installable/` gossiped KV). An `installer` node **discovers** the entry via
+`InstallableCatalog::from_kv` (no registry server — the catalogue *is* the gossip store), **verifies
+its provenance**, **pulls the bytes over the mesh** (`MeshArtifactSource`, verified against the
+content address), provisions the WASM component, and advertises + serves the `route/optimize`
+capability. A `caller` then invokes it.
+
+**Philosophy beat:** the catalogue is not a server you deploy — it's gossiped KV, so it's as
+available as the cluster. The byte source is untrusted (content-addressed), and provenance is the
+publisher's signature. Full operator + developer guide: [operations/artifacts.md](../../docs/operations/artifacts.md).
 
 ## CI
 
