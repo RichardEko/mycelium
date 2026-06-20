@@ -10,7 +10,7 @@ A cohesive set of runnable demos for Mycelium's newer capabilities — the **mai
 > ready, and self-organise. A neighbouring co-op is a separate *domain* the federation demo talks to.
 
 Full design + the six-example roadmap: [`docs/plans/example-suite.md`](../../docs/plans/example-suite.md).
-**All six examples are shipped** — run them all Docker-free with [`ci_smoke.sh`](ci_smoke.sh).
+**All nine examples are shipped** — run them all Docker-free with [`ci_smoke.sh`](ci_smoke.sh).
 
 ## Shared harness (`src/common/`)
 
@@ -41,6 +41,7 @@ curl http://127.0.0.1:<printed-port>/.well-known/agent-facts.json
 | 06 | `rotation` | ✅ shipped | zero-disruption identity rotation; pre-rotation facts still verify |
 | 07 | `consensus` | ✅ shipped | multi-bloc agreement via cross-group consensus + leased (decaying) decisions |
 | 08 | `llm_pipeline` | ✅ shipped | LLM agents coordinating a multi-stage pipeline purely via a tuple space |
+| 09 | `mcp_toolgrowth` | ✅ shipped | an LLM agent grows the fabric's toolset at runtime — declares a need, an MCP tool is loaded on demand, then invoked |
 
 ### 01 — `mailbox_llm`
 
@@ -179,6 +180,24 @@ nested echoes proving it went through both LLM passes (`route(classify(donation)
 coordination, readiness is self-announced by the pull, and the model call lives *between* `take` and
 `complete`. This is the LLM-over-tuple-space composition (Paper 1 §9.4 territory), built on the public
 API only.
+
+### 09 — `mcp_toolgrowth`
+
+```bash
+cargo run -p mycelium-coop-examples --bin mcp_toolgrowth
+```
+
+An LLM agent, mid-task, finds it needs a tool the fabric doesn't yet offer (a kg→tonnes converter).
+It **declares the requirement**; a `tool-host` node — running dark — sees the unmet demand, **loads
+the MCP tool into itself and offers it out** (`register_mcp_tool` → `tools/unit-convert/{host}`) and
+advertises the matching capability so the demand resolves. The agent then **discovers and invokes**
+the freshly-loaded tool over the MCP path (`rpc_call` with `mcp.invoke`), gets `{"tonnes": 5.0}`, and
+its model composes the receipt.
+
+**Philosophy beat:** the agentic self-extension loop — the fabric's *capability surface grows because
+an agent asked for it.* No operator wired the tool in advance, no coordinator decided who hosts it;
+it's the same demand→provision pheromone as the WASM flagship (04), here loading an **MCP tool**
+instead of a WASM component.
 
 ## CI
 

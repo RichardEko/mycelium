@@ -43,6 +43,10 @@ path = "src/bin/consensus.rs"
 name = "llm_pipeline"
 path = "src/bin/llm_pipeline.rs"
 
+[[bin]]
+name = "mcp_toolgrowth"
+path = "src/bin/mcp_toolgrowth.rs"
+
 [dependencies]
 # The full substrate (gateway is default-on; tls for node identity / the facts lens; llm for the
 # Prompt Skills used by the mailbox-llm demo).
