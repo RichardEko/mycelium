@@ -1,6 +1,22 @@
 # Delivery plan — WS-D · Security & trust hardening
 
-**Status:** proposed (2026-06-20). The v2.0 plan's WS-D, executed. Two tracks, both
+**Status:** ✅ **COMPLETE** (2026-06-20). All six increments shipped:
+
+| Increment | What | PR |
+|---|---|---|
+| D1 | Key revocation — closes the WS5 compromise caveat | #77 (+#78) |
+| D2 | Merkle inclusion proofs + `/gateway/transparency` | #79 |
+| D4+D5 | Resolve-time capability ACL + write-detect tripwire (M6) | #80 |
+| D6 | Consensus-distributed capability-authz policy | #81 |
+| D3 | AgentFacts revocation-head tie-in | #82 |
+
+**Done-when met:** capability writes are authz-enforced at the gossip layer (resolve-time, D4–D6), and
+a compromised key can be revoked cluster-wide with client-checkable proof (D1+D2), not just rotated.
+All compliance-gated, coordinator-free, detection-not-prevention. Design record follows.
+
+---
+
+The v2.0 plan's WS-D, executed. Two tracks, both
 **coordinator-free** and both homed in the `compliance` Cargo feature (so the default build is
 unchanged): a **revocation transparency log** (closes the WS5 compromise gap) and **gossip-level
 capability authorization** (M6 — enforce at resolve, detect at write).

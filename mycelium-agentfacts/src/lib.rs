@@ -48,6 +48,17 @@ pub struct CapabilityFact {
     pub output_schema: Option<String>,
 }
 
+/// The domain's revocation-log head (WS-D / D3): the Merkle `root` over this node's validated key
+/// revocations and how many there are. Surfacing it lets a quilt fetcher check "is this domain's key
+/// set current?" and verify inclusion proofs against the live `/gateway/transparency` endpoint — no
+/// new trust authority. Obtain it from `GossipAgent::revocation_head()` (the `compliance` feature)
+/// and pass it in [`FactsOptions`]; the substrate-shaped facts stay independent of the feature.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct RevocationHead {
+    pub root:  String,
+    pub count: u64,
+}
+
 /// Stable, **substrate-shaped** agent facts (deliberately NOT NANDA field names — see crate docs).
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct AgentFacts {
@@ -61,15 +72,20 @@ pub struct AgentFacts {
     /// Endpoint freshness (seconds) — the quilt re-pulls after this (`facts_url` TTL).
     pub ttl_secs:        u64,
     pub issued_at_ms:    u64,
+    /// Revocation-log head, if surfaced (WS-D / D3). `None` ⇒ omitted from the document.
+    pub revocation:      Option<RevocationHead>,
 }
 
 /// Operator-supplied facets the substrate doesn't itself know: the public edge URLs, an optional
-/// jurisdiction/locality string, and the publish TTL.
+/// jurisdiction/locality string, the publish TTL, and (optionally) the revocation-log head.
 #[derive(Clone, Debug, Default)]
 pub struct FactsOptions {
     pub endpoints: Vec<String>,
     pub locality:  Option<String>,
     pub ttl_secs:  u64,
+    /// WS-D / D3: the revocation head from `GossipAgent::revocation_head()`, if the operator wants
+    /// to surface it in the federation edge. Decouples this crate from the `compliance` feature.
+    pub revocation: Option<RevocationHead>,
 }
 
 impl AgentFacts {
@@ -103,6 +119,7 @@ impl AgentFacts {
             endpoints: opts.endpoints.clone(),
             ttl_secs: opts.ttl_secs,
             issued_at_ms: now_ms(),
+            revocation: opts.revocation.clone(),
         })
     }
 }
@@ -144,6 +161,11 @@ pub fn to_nanda_jsonld(facts: &AgentFacts) -> Value {
     });
     if let Some(loc) = &facts.locality {
         doc["jurisdiction"] = json!(loc);
+    }
+    // WS-D / D3: surface the revocation-log head so a quilt fetcher can check key-set currency and
+    // verify inclusion proofs against /gateway/transparency. No new authority — self-certified.
+    if let Some(rev) = &facts.revocation {
+        doc["certification"]["revocation"] = json!({ "root": rev.root, "count": rev.count });
     }
     doc
 }
@@ -248,6 +270,7 @@ mod tests {
             endpoints: vec!["https://edge.example/.well-known/agent-facts.json".into()],
             locality: Some("eu-west".into()),
             ttl_secs: 300,
+            ..Default::default()
         };
 
         // Poll until the advertised cap is visible, then build the signed document.
@@ -299,6 +322,7 @@ mod tests {
             endpoints: vec!["https://x/".into()],
             ttl_secs: 60,
             issued_at_ms: 1,
+            revocation: None,
         };
         let doc = to_nanda_jsonld(&facts);
         assert_eq!(doc["@context"], "https://projectnanda.org/agentfacts/v0");
@@ -306,5 +330,24 @@ mod tests {
         assert_eq!(doc["capabilities"][0]["id"], "vision/detect");
         assert_eq!(doc["capabilities"][0]["schemaId"], "acme/v1");
         assert!(doc.get("jurisdiction").is_none(), "absent locality omits the field");
+        assert!(doc["certification"].get("revocation").is_none(), "absent revocation omits the field");
+    }
+
+    #[test]
+    fn revocation_head_surfaces_in_certification() {
+        // WS-D / D3: an operator-supplied revocation head appears under certification.revocation.
+        let facts = AgentFacts {
+            node_id: "127.0.0.1:9000".into(),
+            identity_pubkey: [3u8; 32],
+            capabilities: vec![],
+            locality: None,
+            endpoints: vec![],
+            ttl_secs: 60,
+            issued_at_ms: 1,
+            revocation: Some(RevocationHead { root: "ab12".into(), count: 2 }),
+        };
+        let doc = to_nanda_jsonld(&facts);
+        assert_eq!(doc["certification"]["revocation"]["root"], "ab12");
+        assert_eq!(doc["certification"]["revocation"]["count"], 2);
     }
 }

@@ -967,6 +967,19 @@ impl GossipAgent {
         revocation::revoke_key(&self.task_ctx, revoked_key, None)
     }
 
+    /// This node's **revocation-log head** (WS-D / D3): `(merkle_root_hex, count)` over its validated
+    /// revocations — the same root `/gateway/transparency` serves. Surfacing it in the federation
+    /// edge (e.g. the `mycelium-agentfacts` AgentFacts `certification`) lets a NANDA-quilt fetcher
+    /// see "is this domain's key set current?" and check inclusion proofs against it — no new trust
+    /// authority. `None` if there are no revocations yet.
+    pub fn revocation_head(&self) -> Option<(String, usize)> {
+        let (root, count) = transparency::revocation_head(&self.task_ctx, &self.task_ctx.node_id);
+        (count > 0).then(|| {
+            let hex: String = root.iter().map(|b| format!("{b:02x}")).collect();
+            (hex, count)
+        })
+    }
+
     /// Set the **gossip-level capability-authorization policy** for `ns/name` (WS-D / M6 · D4): an
     /// any-of list of roles an advertiser must hold (a *signature-verified* `sys/role/` claim) for
     /// resolvers to admit it. Writes `sys/capauthz/{ns}/{name}`; every node then **routes around**
