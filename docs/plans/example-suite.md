@@ -1,10 +1,40 @@
 # Delivery plan — the Food-Rescue Co-op example suite
 
-**Status:** ✅ **SHIPPED** (2026-06-20). All six examples landed (PRs #52, #54, #58, #59, #60, +
-this) under `examples/coop/`; run them all Docker-free with `examples/coop/ci_smoke.sh`. Two
-substrate side-effects surfaced and were resolved while building: the emergent-watcher-vs-governor
-fix (#56 → PR #57) that unblocked Step 03, and issue #55 (cross-node Individual-scoped signals) filed
-for a maintainer. The original plan below is preserved as the design record.
+**Status:** ✅ **SHIPPED & CI-GATED** (2026-06-20). **All ten examples** landed under
+`examples/coop/` and run Docker-free via `examples/coop/ci_smoke.sh`, which is wired into the
+`coop-smoke` CI job (retry-hardened for constrained runners — PR #65). The original six-example plan
+below is preserved as the design record; the suite was then extended past it (see *Shipped status*).
+
+**Shipped status — 10 examples (each its own PR, each CI-gated):**
+
+| # | Bin | PR | Demonstrates |
+|---|-----|----|--------------|
+| 01 | `mailbox_llm` | #52 | actor ↔ LLM via the durable, HLC-ordered mailbox |
+| 02 | `stigmergy` | #54 | coordinator-free load shedding via the `sys/load` pheromone |
+| 03 | `elastic_intent` | #58 | elastic sizing as evaporating intent (operator-optional) |
+| 04 | `provisioning` ⭐ | #59 | the full autonomic loop — tuple-space buffer + WASM self-provision + failover |
+| 05 | `federation_facts` | #60 | cross-domain edge discovery via self-certified AgentFacts |
+| 06 | `rotation` | #61 | zero-disruption identity rotation; pre-rotation facts still verify |
+| 07 | `consensus` | #62 | Layer III — cross-group multi-bloc agreement + leased (decaying) decisions |
+| 08 | `llm_pipeline` | #63 | homogeneous LLM workers, competitive pull over a linear tuple-space pipeline |
+| 09 | `mcp_toolgrowth` | #64 | an LLM agent grows the fabric's toolset at runtime (MCP tool loaded on demand) |
+| 10 | `llm_council` | #66 | a council of **differentiated** LLM agents — fan-out → synthesis → iterative refinement |
+
+CI gating: PR #65 (`coop-smoke` job, retry harness).
+
+**Steps 07–10 were added past the original six-example plan**, to close coverage gaps surfaced during
+a differentiator audit: Layer III consensus (07) was entirely absent; the LLM-over-tuple
+compositions were thin (08 covered only a homogeneous worker pool; 10 added differentiated agents +
+fan-out/fan-in + iterative refinement); and MCP runtime tool-growth (09) was undemonstrated. The one
+LLM-coordination pattern still *not expressible* — keyed-correlation fan-in joins — is named
+explicitly in `llm_council` (ROADMAP M13, Paper 1 §9.4) rather than left unsaid.
+
+**Substrate side-effects surfaced and resolved while building** (the examples doubled as a stress
+test): the emergent-watcher-vs-governor fix (#56 → PR #57) that unblocked Step 03; the `crdt.rs`
+retained-key verification fix (PR #51) that Step 06 demonstrates; a flaky opacity-gate test (PR #53);
+and the `coop-smoke` constrained-runner hardening (capture stderr + per-demo retries + widened
+budgets, PR #65). Issue #55 (cross-node Individual-scoped signals not reaching a remote `signal_rx`)
+was filed for a maintainer decision.
 
 **Goal.** A cohesive set of runnable examples that demonstrate the capabilities
 shipped since the last example pass — the **mailbox** (actor/event delivery),
@@ -65,6 +95,11 @@ forces `exclude` like `conway-gpu`.
 ---
 
 ## The six examples (build order = small → flagship)
+
+> **Design record.** This section is the *original* six-example plan. The shipped suite has **ten**
+> examples (07–10 were added past this plan — see the *Shipped status* table at the top). The six
+> below are preserved as the design rationale; the canonical per-example descriptions now live in
+> [`examples/coop/README.md`](../../examples/coop/README.md).
 
 ### 01 — `mailbox-llm` (selection: LLM agent mailbox)
 **Story.** A depot receives a donation and asks the co-op's **triage** skill —
