@@ -217,6 +217,11 @@ pub use agent::{
     AuditAction, AuditOutcome, AuditRecord, AuditVerifyError, SignedAuditRecord, AUDIT_PREFIX,
 };
 #[cfg(feature = "compliance")]
+pub use agent::{
+    leaf_hash, merkle_root, verify_inclusion, ProofStep, RevocationEvent, SignedRevocation,
+    REVOCATION_PREFIX,
+};
+#[cfg(feature = "compliance")]
 pub use agent::OidcConfig;
 pub use capability::{
     CallerContext, CapConstraint, CapEntry, CapFilter, CapRanking, CapValue, Capability, CapabilityEvent,

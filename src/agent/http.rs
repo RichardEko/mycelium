@@ -203,6 +203,10 @@ pub(super) async fn run_http_server(
     #[cfg(feature = "compliance")]
     let gateway = gateway.route("/audit", get(gw_audit));
 
+    // WS-D / D2: revocation transparency — Merkle heads + client-checkable inclusion proofs.
+    #[cfg(feature = "compliance")]
+    let gateway = gateway.route("/transparency", get(gw_transparency));
+
     // Apply auth middleware to all gateway routes in one shot.
     let gateway = gateway
         .route_layer(middleware::from_fn_with_state(Arc::clone(&state), gateway_auth));
@@ -419,6 +423,7 @@ fn required_scope(method: &axum::http::Method, matched_path: &str) -> &'static s
         "/gateway/llm/stream"          => "llm:invoke",
         // Audit trail (WS2)
         "/gateway/audit"               => "audit:read",
+        "/gateway/transparency"        => "transparency:read",
         // WS-C governance (intent publish + effective-state snapshot)
         "/gateway/govern"              => "govern:read",
         "/gateway/govern/tuning"       => "govern:write",
@@ -634,6 +639,73 @@ async fn gw_audit(
         }));
     }
     Json(json!({ "streams": streams })).into_response()
+}
+
+/// `GET /gateway/transparency` (scope `transparency:read`) — the revocation transparency log
+/// (WS-D / D2). With no query: each node's Merkle `root` + `count` (the head). With `?node=&key=`
+/// (key = 64-hex of a revoked verifying key): a **client-checkable inclusion proof** that the
+/// revocation is in that node's log — `leaf`, `index`, the Merkle audit `proof`, and the `root` to
+/// verify against (run `transparency::verify_inclusion` locally; no trust in this server needed).
+#[cfg(feature = "compliance")]
+#[derive(Deserialize)]
+struct TransparencyQuery {
+    node: Option<String>,
+    key:  Option<String>,
+}
+
+#[cfg(feature = "compliance")]
+fn parse_hex32(s: &str) -> Option<[u8; 32]> {
+    if s.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(out)
+}
+
+#[cfg(feature = "compliance")]
+async fn gw_transparency(
+    State(ctx): State<Arc<HttpCtx>>,
+    Query(q): Query<TransparencyQuery>,
+) -> Response {
+    let tc = &ctx.agent_ctx;
+
+    // Inclusion-proof mode: ?node=&key=.
+    if let (Some(node_s), Some(key_s)) = (q.node.as_deref(), q.key.as_deref()) {
+        let Ok(node) = node_s.parse::<crate::node_id::NodeId>() else {
+            return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid node id"}))).into_response();
+        };
+        let Some(revoked_key) = parse_hex32(key_s) else {
+            return (StatusCode::BAD_REQUEST, Json(json!({"error": "key must be 64 hex chars"}))).into_response();
+        };
+        return match super::transparency::inclusion_proof(tc, &node, &revoked_key) {
+            Some((leaf, index, proof, root)) => Json(json!({
+                "node":        node.to_string(),
+                "revoked_key": key_s,
+                "included":    true,
+                "root":        hex32(&root),
+                "leaf":        hex32(&leaf),
+                "index":       index,
+                "proof":       proof.iter().map(|s| json!({
+                    "sibling":  hex32(&s.sibling),
+                    "on_right": s.on_right,
+                })).collect::<Vec<_>>(),
+            })).into_response(),
+            None => Json(json!({
+                "node": node.to_string(), "revoked_key": key_s, "included": false,
+            })).into_response(),
+        };
+    }
+
+    // Head mode: every node's revocation-log root + count.
+    let nodes = super::revocation::revocation_nodes(tc);
+    let heads: Vec<_> = nodes.iter().map(|node| {
+        let (root, count) = super::transparency::revocation_head(tc, node);
+        json!({ "node": node.to_string(), "root": hex32(&root), "count": count })
+    }).collect();
+    Json(json!({ "nodes": heads })).into_response()
 }
 
 // ── WS-C governance: management = intent + local reconcile ───────────────────
@@ -3296,6 +3368,82 @@ mod tests {
         let recs = mine["records"].as_array().unwrap();
         assert!(recs.iter().all(|r| r["content_hash"].is_string()),
             "every record carries a citable content_hash");
+
+        agent.shutdown().await;
+        let _ = std::fs::remove_dir_all(&cert_dir);
+    }
+
+    /// WS-D / D2 gate (G-D2): the `/gateway/transparency` endpoint serves a Merkle inclusion proof
+    /// that a fetcher verifies *locally* with the public [`verify_inclusion`], and the endpoint is
+    /// scope-gated.
+    #[cfg(feature = "compliance")]
+    #[tokio::test]
+    async fn test_gateway_transparency_inclusion_proof_verifies_and_scope_gates() {
+        use crate::config::TlsConfig;
+        use crate::{verify_inclusion, GatewayToken, ProofStep};
+        use axum::http::header::AUTHORIZATION;
+
+        let gossip_port = alloc_port();
+        let http_port   = alloc_port();
+        let id = NodeId::new("127.0.0.1", gossip_port).unwrap();
+        let cert_dir = std::env::temp_dir().join(format!("myc-transp-ep-{gossip_port}"));
+        let _ = std::fs::remove_dir_all(&cert_dir);
+
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = gossip_port;
+        cfg.http_port = Some(http_port);
+        cfg.tls = Some(TlsConfig { auto_cert_dir: cert_dir.clone(), ..TlsConfig::default() });
+        cfg.gateway_scoped_tokens = vec![
+            GatewayToken { token: "auditor".into(), scopes: vec!["transparency:read".into()] },
+            GatewayToken { token: "noaudit".into(), scopes: vec!["kv:read".into()] },
+        ];
+
+        let agent = Arc::new(GossipAgent::new(id.clone(), cfg));
+        agent.start().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        // Rotate so there is an old key to revoke, then revoke it (two revocations would build a
+        // taller tree; one is enough to prove the inclusion path round-trips).
+        let old_key = agent.identity_public_key().unwrap();
+        agent.rotate_identity(Duration::from_millis(200)).await.unwrap();
+        agent.revoke_identity_key(old_key).unwrap();
+        tokio::time::sleep(Duration::from_millis(120)).await;
+
+        let client = reqwest::Client::new();
+        let base = format!("http://127.0.0.1:{http_port}/gateway/transparency");
+        let key_hex: String = old_key.iter().map(|b| format!("{b:02x}")).collect();
+
+        // Wrong scope → 403.
+        let r = client.get(&base).header(AUTHORIZATION, "Bearer noaudit").send().await.unwrap();
+        assert_eq!(r.status(), 403, "kv:read token must not reach the transparency log");
+
+        // Head: this node has a non-empty revocation root.
+        let r = client.get(&base).header(AUTHORIZATION, "Bearer auditor").send().await.unwrap();
+        assert_eq!(r.status(), 200);
+        let head: serde_json::Value = r.json().await.unwrap();
+        let mine = head["nodes"].as_array().unwrap().iter()
+            .find(|n| n["node"] == id.to_string()).expect("this node's head");
+        assert!(mine["count"].as_u64().unwrap() >= 1, "the revocation is in the log");
+
+        // Inclusion proof for the revoked key — verify it locally against the root.
+        let url = format!("{base}?node={id}&key={key_hex}");
+        let r = client.get(&url).header(AUTHORIZATION, "Bearer auditor").send().await.unwrap();
+        let proof_doc: serde_json::Value = r.json().await.unwrap();
+        assert_eq!(proof_doc["included"], true, "the revoked key is included");
+        let hex32 = |s: &str| { let mut o = [0u8; 32];
+            for i in 0..32 { o[i] = u8::from_str_radix(&s[i*2..i*2+2], 16).unwrap(); } o };
+        let leaf = hex32(proof_doc["leaf"].as_str().unwrap());
+        let root = hex32(proof_doc["root"].as_str().unwrap());
+        let proof: Vec<ProofStep> = proof_doc["proof"].as_array().unwrap().iter().map(|s| ProofStep {
+            sibling:  hex32(s["sibling"].as_str().unwrap()),
+            on_right: s["on_right"].as_bool().unwrap(),
+        }).collect();
+        assert!(verify_inclusion(&leaf, &proof, &root), "the served proof verifies locally");
+
+        // A tampered root must NOT verify.
+        let mut bad_root = root;
+        bad_root[0] ^= 0xff;
+        assert!(!verify_inclusion(&leaf, &proof, &bad_root), "a tampered root is rejected");
 
         agent.shutdown().await;
         let _ = std::fs::remove_dir_all(&cert_dir);
