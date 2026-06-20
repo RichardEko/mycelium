@@ -121,6 +121,21 @@ impl CapabilitiesHandle {
                 if now_ms_val.saturating_sub(entry_physical_ms) > max_age.as_millis() as u64 { continue; }
             }
             let cap = entry.capability;
+            // WS-F / Schema-Evo (E2): detect a schema-version mismatch — the provider matches the
+            // requested (ns, name) + attributes but advertises a different schema_id than the
+            // filter asked for. Count it (legible drift) rather than letting the schema-strict
+            // matches() below silently exclude it. Detection-not-prevention: the provider is still
+            // routed around; register a migration (tier 3) or reconcile the versions.
+            if filter.schema_id.is_some()
+                && filter.matches_ignoring_schema(&cap)
+                && !filter.matches(&cap)
+            {
+                warn!(node = %node_id, ns = %cap.namespace, name = %cap.name,
+                    expected = ?filter.schema_id, advertised = ?cap.schema_id,
+                    "schema version mismatch — routing around the provider");
+                self.ctx.schema_mismatch.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                continue;
+            }
             if filter.matches(&cap) && ctx.can_see(&cap) {
                 // WS-D / M6 (D4 enforce, D5 detect): if a capauthz policy governs `ns/name`, route
                 // around an advertiser whose signed role does not satisfy it — and count the

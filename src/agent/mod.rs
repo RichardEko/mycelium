@@ -277,6 +277,18 @@ pub struct SystemStats {
     /// signed role — investigate that node. Only counts under the `compliance`
     /// feature with a published policy.
     pub cap_authz_violations: u64,
+
+    /// Cumulative count of **schema-version mismatches** detected at resolve
+    /// (WS-F / Schema-Evo · E2): a provider matched the requested `(ns, name)`
+    /// (and attributes) but advertised a different `schema_id` than the
+    /// `CapFilter::with_schema(expected)` asked for.
+    ///
+    /// **Detection, not prevention** (the tripwire idiom): the mismatched
+    /// provider is routed around (it never satisfies the schema-strict filter),
+    /// but the drift is made legible instead of silently invisible. A non-zero
+    /// value means producers and consumers in the cluster disagree on a schema
+    /// version — register a migration (tier 3) or reconcile the versions.
+    pub schema_mismatch: u64,
 }
 
 // The old 22-field `TaskCtx` God Object has been split (ROADMAP §v2.0 M1): `CoreCtx`
@@ -340,6 +352,10 @@ pub(crate) struct TaskCtx {
     /// Cumulative capability-authorization rejections at resolve (WS-D / M6 · D5;
     /// see `SystemStats::cap_authz_violations`). Relaxed — diagnostic.
     pub(crate) cap_authz_violations: Arc<AtomicU64>,
+
+    /// Cumulative schema-version mismatches at resolve (WS-F / Schema-Evo · E2;
+    /// see `SystemStats::schema_mismatch`). Relaxed — diagnostic.
+    pub(crate) schema_mismatch: Arc<AtomicU64>,
 
     /// Head of this node's tamper-evident audit chain (WS2). `audit()` seals a
     /// record under this lock so the per-node chain stays linear, then releases
@@ -695,6 +711,7 @@ impl GossipAgent {
             rpc_pending: Arc::clone(&rpc_pending),
             commit_conflicts: Arc::new(AtomicU64::new(0)),
             cap_authz_violations: Arc::new(AtomicU64::new(0)),
+            schema_mismatch: Arc::new(AtomicU64::new(0)),
             #[cfg(feature = "compliance")]
             audit_chain: Arc::new(std::sync::Mutex::new(audit::AuditChainState::new())),
             filter_opacity_registry: Arc::new(capability_ops::FilterOpacityRegistry::new()),

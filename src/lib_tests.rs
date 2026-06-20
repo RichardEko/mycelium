@@ -146,6 +146,7 @@ fn spawn_handler(
         rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         commit_conflicts: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         cap_authz_violations: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        schema_mismatch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         #[cfg(feature = "compliance")]
         audit_chain: Arc::new(std::sync::Mutex::new(crate::agent::audit::AuditChainState::new())),
         filter_opacity_registry: Arc::new(crate::agent::FilterOpacityRegistry::new()),
@@ -846,6 +847,7 @@ async fn test_subscribe_notified_via_gossip() {
             rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             commit_conflicts: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             cap_authz_violations: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            schema_mismatch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             #[cfg(feature = "compliance")]
             audit_chain: Arc::new(std::sync::Mutex::new(crate::agent::audit::AuditChainState::new())),
             filter_opacity_registry: Arc::new(crate::agent::FilterOpacityRegistry::new()),
@@ -3967,6 +3969,42 @@ async fn test_wsd_capability_authz_policy_via_consensus() {
     a.shutdown_with_timeout(Duration::from_secs(5)).await;
     b.shutdown_with_timeout(Duration::from_secs(5)).await;
     let _ = std::fs::remove_dir_all(&cert_dir);
+}
+
+/// WS-F / Schema-Evo gate (G-E2): a schema-version mismatch at resolve is **detected** — counted on
+/// `/stats` and the provider routed around — never silently accepted. A matching version does not
+/// trip the counter.
+#[tokio::test]
+async fn test_wsf_schema_mismatch_is_detected_at_resolve() {
+    use crate::{Capability, CapFilter};
+
+    let port = alloc_port();
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = port;
+    let agent = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg));
+    agent.start().await.unwrap();
+
+    // Advertise nlp/summarize at schema version v2.
+    let _reg = agent.capabilities().advertise_capability(
+        Capability::new("nlp", "summarize").with_schema_id("nlp/summarize@v2"),
+        Duration::from_secs(30));
+    poll_until(|| !agent.capabilities().resolve(&CapFilter::new("nlp", "summarize")).is_empty(), 3_000).await;
+
+    let before = agent.system_stats().schema_mismatch;
+
+    // A consumer expecting v1 finds nothing AND the mismatch is counted.
+    let v1 = CapFilter::new("nlp", "summarize").with_schema("nlp/summarize@v1");
+    assert!(agent.capabilities().resolve(&v1).is_empty(), "the v2 provider does not satisfy a v1 filter");
+    let after_mismatch = agent.system_stats().schema_mismatch;
+    assert!(after_mismatch > before, "G-E2: the schema-version mismatch is counted on /stats");
+
+    // A consumer expecting the matching v2 resolves it, with no further mismatch count.
+    let v2 = CapFilter::new("nlp", "summarize").with_schema("nlp/summarize@v2");
+    assert_eq!(agent.capabilities().resolve(&v2).len(), 1, "the matching schema version resolves");
+    assert_eq!(agent.system_stats().schema_mismatch, after_mismatch,
+        "a matching version does not trip the counter");
+
+    agent.shutdown_with_timeout(Duration::from_secs(5)).await;
 }
 
 // ── M2 falsification probe (Run 24): concurrent audit chain integrity ─────

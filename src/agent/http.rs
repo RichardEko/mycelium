@@ -563,6 +563,8 @@ async fn stats_handler(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
             .load(std::sync::atomic::Ordering::Relaxed),
         "cap_authz_violations": ctx.agent_ctx.cap_authz_violations
             .load(std::sync::atomic::Ordering::Relaxed),
+        "schema_mismatch": ctx.agent_ctx.schema_mismatch
+            .load(std::sync::atomic::Ordering::Relaxed),
     }))
 }
 

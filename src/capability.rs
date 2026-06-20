@@ -372,6 +372,20 @@ impl CapFilter {
         true
     }
 
+    /// Like [`matches`](Self::matches) but **ignores** `schema_id`. Used by the resolve path to tell
+    /// a *schema-only* mismatch (everything matches except the schema version — WS-F / E2 detection)
+    /// apart from an ordinary `(ns, name)` / attribute non-match.
+    pub(crate) fn matches_ignoring_schema(&self, cap: &Capability) -> bool {
+        if self.namespace != cap.namespace || self.name != cap.name {
+            return false;
+        }
+        for (attr, constraint) in &self.attributes {
+            let Some(value) = cap.attributes.get(attr) else { return false; };
+            if !constraint.matches(value) { return false; }
+        }
+        true
+    }
+
     /// Convenience constructor for a name-only filter.
     pub fn new<N: Into<Arc<str>>, S: Into<Arc<str>>>(namespace: N, name: S) -> Self {
         Self {
