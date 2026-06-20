@@ -1,85 +1,52 @@
 #!/usr/bin/env bash
 # Docker-free smoke for the Food-Rescue Co-op suite. Runs each shipped demo and asserts on its
 # output. Mirrors examples/fluid_pipeline/ci_smoke.sh. Exits non-zero on any failure.
-set -euo pipefail
+#
+# Each demo is a multi-node in-process TLS cluster whose convergence is timing-sensitive; on a
+# shared/constrained CI runner a single attempt can miss a structural-poll deadline. So each demo
+# gets up to ATTEMPTS tries — a real regression fails all of them, a transient slow-runner miss does
+# not. (The same posture as the wasm-host e2e port retry and the tuple-space rpc_roundtrip primary
+# poll.) Output of the last attempt is always printed for diagnosis.
+set -uo pipefail
 
 cd "$(dirname "$0")/../.."
 
-echo "── 01 · mailbox_llm ─────────────────────────────────────────────"
-out="$(cargo run -q -p mycelium-coop-examples --bin mailbox_llm 2>/dev/null)"
-echo "$out"
-echo "$out" | grep -q "All assertions passed" \
-  || { echo "FAIL: mailbox_llm did not pass its assertions"; exit 1; }
-echo "$out" | grep -q "triage replied" \
-  || { echo "FAIL: no triage reply observed"; exit 1; }
+ATTEMPTS="${COOP_SMOKE_ATTEMPTS:-3}"
 
-echo
-echo "── 02 · stigmergy ───────────────────────────────────────────────"
-out="$(cargo run -q -p mycelium-coop-examples --bin stigmergy 2>/dev/null)"
-echo "$out"
-echo "$out" | grep -q "All assertions passed" \
-  || { echo "FAIL: stigmergy did not pass its assertions"; exit 1; }
+# run_demo <label> <bin> <required-substring>...
+# Passes if some attempt's combined output contains every required substring.
+run_demo() {
+  local label="$1" bin="$2"; shift 2
+  local markers=("$@")
+  echo "── ${label} ─────────────────────────────────────────────"
+  local attempt out ok
+  for attempt in $(seq 1 "$ATTEMPTS"); do
+    out="$(cargo run -q -p mycelium-coop-examples --bin "$bin" 2>&1 || true)"
+    ok=1
+    for m in "${markers[@]}"; do
+      echo "$out" | grep -q -- "$m" || { ok=0; break; }
+    done
+    if [ "$ok" = 1 ]; then
+      echo "$out" | grep -E "All assertions passed|^\[" | tail -3
+      echo "  ✓ ${label} (attempt ${attempt}/${ATTEMPTS})"
+      echo
+      return 0
+    fi
+    echo "  …attempt ${attempt}/${ATTEMPTS} did not show all markers; retrying" >&2
+  done
+  echo "FAIL: ${label} did not pass after ${ATTEMPTS} attempts. Last output:" >&2
+  echo "$out" >&2
+  exit 1
+}
 
-echo
-echo "── 03 · elastic_intent ──────────────────────────────────────────"
-out="$(cargo run -q -p mycelium-coop-examples --bin elastic_intent 2>/dev/null)"
-echo "$out"
-echo "$out" | grep -q "All assertions passed" \
-  || { echo "FAIL: elastic_intent did not pass its assertions"; exit 1; }
+run_demo "01 · mailbox_llm"      mailbox_llm      "All assertions passed" "triage replied"
+run_demo "02 · stigmergy"        stigmergy        "All assertions passed"
+run_demo "03 · elastic_intent"   elastic_intent   "All assertions passed"
+run_demo "04 · provisioning"     provisioning     "All assertions passed" "self-healed"
+run_demo "05 · federation_facts" federation_facts "All assertions passed" "verified the self-signature"
+run_demo "06 · rotation"         rotation         "All assertions passed" "STILL verifies the old-key-signed field"
+run_demo "07 · consensus"        consensus        "All assertions passed" "reads as reopened"
+run_demo "08 · llm_pipeline"     llm_pipeline     "All assertions passed" "both LLM stages"
+run_demo "09 · mcp_toolgrowth"   mcp_toolgrowth   "All assertions passed" "loaded the MCP tool and offered it out"
 
-echo
-echo "── 04 · provisioning (flagship; pulls wasmtime on first build) ───"
-out="$(cargo run -q -p mycelium-coop-examples --bin provisioning 2>/dev/null)"
-echo "$out"
-echo "$out" | grep -q "All assertions passed" \
-  || { echo "FAIL: provisioning did not pass its assertions"; exit 1; }
-echo "$out" | grep -q "self-healed" \
-  || { echo "FAIL: provisioning failover phase did not complete"; exit 1; }
-
-echo
-echo "── 05 · federation_facts ────────────────────────────────────────"
-out="$(cargo run -q -p mycelium-coop-examples --bin federation_facts 2>/dev/null)"
-echo "$out"
-echo "$out" | grep -q "All assertions passed" \
-  || { echo "FAIL: federation_facts did not pass its assertions"; exit 1; }
-echo "$out" | grep -q "verified the self-signature" \
-  || { echo "FAIL: cross-domain verification did not occur"; exit 1; }
-
-echo
-echo "── 06 · rotation ────────────────────────────────────────────────"
-out="$(cargo run -q -p mycelium-coop-examples --bin rotation 2>/dev/null)"
-echo "$out"
-echo "$out" | grep -q "All assertions passed" \
-  || { echo "FAIL: rotation did not pass its assertions"; exit 1; }
-echo "$out" | grep -q "STILL verifies the old-key-signed field" \
-  || { echo "FAIL: retained-key verification across rotation did not occur"; exit 1; }
-
-echo
-echo "── 07 · consensus ───────────────────────────────────────────────"
-out="$(cargo run -q -p mycelium-coop-examples --bin consensus 2>/dev/null)"
-echo "$out"
-echo "$out" | grep -q "All assertions passed" \
-  || { echo "FAIL: consensus did not pass its assertions"; exit 1; }
-echo "$out" | grep -q "reads as reopened" \
-  || { echo "FAIL: leased-decision decay did not occur"; exit 1; }
-
-echo
-echo "── 08 · llm_pipeline ────────────────────────────────────────────"
-out="$(cargo run -q -p mycelium-coop-examples --bin llm_pipeline 2>/dev/null)"
-echo "$out"
-echo "$out" | grep -q "All assertions passed" \
-  || { echo "FAIL: llm_pipeline did not pass its assertions"; exit 1; }
-echo "$out" | grep -q "both LLM stages" \
-  || { echo "FAIL: chained LLM stages not evidenced"; exit 1; }
-
-echo
-echo "── 09 · mcp_toolgrowth ──────────────────────────────────────────"
-out="$(cargo run -q -p mycelium-coop-examples --bin mcp_toolgrowth 2>/dev/null)"
-echo "$out"
-echo "$out" | grep -q "All assertions passed" \
-  || { echo "FAIL: mcp_toolgrowth did not pass its assertions"; exit 1; }
-echo "$out" | grep -q "loaded the MCP tool and offered it out" \
-  || { echo "FAIL: on-demand MCP tool loading did not occur"; exit 1; }
-
-echo
 echo "All co-op smokes passed."

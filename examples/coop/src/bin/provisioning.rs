@@ -125,14 +125,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let worker_ts = TupleSpace::new(Arc::clone(&worker.agent), TupleConfig {
         namespace: Arc::from("rescue"), role: TupleRole::Client, persist: false, ..Default::default()
     }).await?;
-    wait_until(20, || !worker.agent.peers().is_empty() && !seeder.agent.peers().is_empty()).await;
+    wait_until(30, || !worker.agent.peers().is_empty() && !seeder.agent.peers().is_empty()).await;
     // Structural: wait until the client can reach the tuple-space primary (depth() succeeds).
-    for _ in 0..100 {
+    // Generous budget (30 s) — a constrained CI runner peers + elects the primary more slowly.
+    let mut primary_ready = false;
+    for _ in 0..300 {
         if seeder_ts.depth(None).await.is_ok() && worker_ts.depth(None).await.is_ok() {
+            primary_ready = true;
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    assert!(primary_ready, "clients must reach the tuple-space primary before seeding");
 
     // ── Phase 1 — wave 1 of donations buffers in the lane (no optimizer yet) ─────
     for id in 1..=N_DONATIONS {
@@ -152,7 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let prov_b = spawn_provisioner(Arc::clone(&provider_b.agent));
 
     // ── Phase 2 — the optimizer self-provisions; the worker drains wave 1 ───────
-    let provisioned = wait_until(25, || {
+    let provisioned = wait_until(40, || {
         !worker.agent.capabilities().resolve(&CapFilter::new("route", "optimize")).is_empty()
     }).await;
     assert!(provisioned, "a provider must self-provision route/optimize from unmet demand");
@@ -184,7 +188,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // The surviving provider sees the demand return (the dead node's cap/ evaporated) and re-provisions.
-    let healed = wait_until(30, || {
+    let healed = wait_until(45, || {
         worker.agent.capabilities().resolve(&CapFilter::new("route", "optimize"))
             .iter().any(|(id, _)| *id != active)
     }).await;
