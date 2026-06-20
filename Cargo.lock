@@ -2124,6 +2124,8 @@ dependencies = [
  "bytes",
  "mycelium",
  "mycelium-agentfacts",
+ "mycelium-tuple-space",
+ "mycelium-wasm-host",
  "serde",
  "serde_json",
  "tokio",

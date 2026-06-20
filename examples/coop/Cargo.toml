@@ -23,12 +23,19 @@ path = "src/bin/stigmergy.rs"
 name = "elastic_intent"
 path = "src/bin/elastic_intent.rs"
 
+[[bin]]
+name = "provisioning"
+path = "src/bin/provisioning.rs"
+
 [dependencies]
 # The full substrate (gateway is default-on; tls for node identity / the facts lens; llm for the
 # Prompt Skills used by the mailbox-llm demo).
 mycelium           = { path = "../..", features = ["llm", "tls"] }
 # WS-F federation companion — the AgentFacts "lens" mounted on every depot.
 mycelium-agentfacts = { path = "../../mycelium-agentfacts" }
+# Flagship (Step 04): the tuple-space buffer + the WASM autonomic provisioner.
+mycelium-tuple-space = { path = "../../mycelium-tuple-space" }
+mycelium-wasm-host   = { path = "../../mycelium-wasm-host" }
 
 tokio              = { version = "1.35", features = ["full"] }
 bytes              = "1"
