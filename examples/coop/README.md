@@ -10,7 +10,7 @@ A cohesive set of runnable demos for Mycelium's newer capabilities — the **mai
 > ready, and self-organise. A neighbouring co-op is a separate *domain* the federation demo talks to.
 
 Full design + the six-example roadmap: [`docs/plans/example-suite.md`](../../docs/plans/example-suite.md).
-**All nine examples are shipped** — run them all Docker-free with [`ci_smoke.sh`](ci_smoke.sh).
+**All ten examples are shipped** — run them all Docker-free with [`ci_smoke.sh`](ci_smoke.sh).
 
 ## Shared harness (`src/common/`)
 
@@ -42,6 +42,7 @@ curl http://127.0.0.1:<printed-port>/.well-known/agent-facts.json
 | 07 | `consensus` | ✅ shipped | multi-bloc agreement via cross-group consensus + leased (decaying) decisions |
 | 08 | `llm_pipeline` | ✅ shipped | LLM agents coordinating a multi-stage pipeline purely via a tuple space |
 | 09 | `mcp_toolgrowth` | ✅ shipped | an LLM agent grows the fabric's toolset at runtime — declares a need, an MCP tool is loaded on demand, then invoked |
+| 10 | `llm_council` | ✅ shipped | a council of **differentiated** LLM agents deliberates a shared task — fan-out → synthesis → iterative refinement, all via the tuple space |
 
 ### 01 — `mailbox_llm`
 
@@ -198,6 +199,39 @@ its model composes the receipt.
 an agent asked for it.* No operator wired the tool in advance, no coordinator decided who hosts it;
 it's the same demand→provision pheromone as the WASM flagship (04), here loading an **MCP tool**
 instead of a WASM component.
+
+### 10 — `llm_council`
+
+```bash
+cargo run -p mycelium-coop-examples --bin llm_council
+```
+
+The capstone of the LLM-coordination examples. A raw donation **evolves** into an approved
+distribution plan through a *council of differentiated agents*, each pulling only its own lane — no
+orchestrator, the tuple space is the only coordination. It composes three collaboration modes in
+sequence:
+
+1. **Fan-out → specialists** — a fan-out agent copies the donation into three lanes; three
+   *differentiated* agents (perishability / routing / allergen) each pull their own lane, in
+   parallel, and emit a partial.
+2. **Fan-in synthesis** — a synthesizer drains `partials`, accumulates them **by donation id**, and
+   once it holds all three for an id merges them into a draft plan.
+3. **Iterative refinement** — a critic scores the draft; on a fail it sends the item **back to
+   `revise`**; a reviser improves it and sends it **back to `draft`** — the item cycles until the
+   critic approves (deterministically: quality 0.6 → 0.8 → 1.0, exactly two refinement cycles).
+
+Every role is a real `LlmBackend::complete` call (an `EchoBackend` stand-in, CI needs no key); the
+structured decisions are deterministic so the demo asserts each approved plan carries all three
+specialists' contributions **and** went through ≥2 revisions.
+
+**Philosophy beat:** a *group* of differentiated LLM agents collaborating on one shared artifact —
+fan-out, synthesize, refine — with no orchestrator. The plan matures through three modes; the agents
+never address each other, only the lanes.
+
+**Architectural note (the boundary it sits on):** with a *single* synthesizer the fan-in join is done
+in the synthesizer's own memory (accumulate-by-id after `take`) — fully expressible today. *Competing*
+synthesizers would each grab fragments of one donation's partial set, which needs keyed-exact-match
+`take` (ROADMAP **M13**, Paper 1 §9.4). This demo names that line rather than crossing it.
 
 ## CI
 
