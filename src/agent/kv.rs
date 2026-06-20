@@ -145,6 +145,7 @@ impl GossipAgent {
             sys_namespace_violations:
                 self.task_ctx.sys_namespace_violations.load(Ordering::Relaxed),
             cap_authz_violations: self.task_ctx.cap_authz_violations.load(Ordering::Relaxed),
+            schema_mismatch: self.task_ctx.schema_mismatch.load(Ordering::Relaxed),
         }
     }
 }
