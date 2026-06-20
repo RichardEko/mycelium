@@ -48,5 +48,6 @@ run_demo "06 · rotation"         rotation         "All assertions passed" "STIL
 run_demo "07 · consensus"        consensus        "All assertions passed" "reads as reopened"
 run_demo "08 · llm_pipeline"     llm_pipeline     "All assertions passed" "both LLM stages"
 run_demo "09 · mcp_toolgrowth"   mcp_toolgrowth   "All assertions passed" "loaded the MCP tool and offered it out"
+run_demo "10 · llm_council"      llm_council      "All assertions passed" "fanned out to 3 specialists, synthesized, and refined"
 
 echo "All co-op smokes passed."
