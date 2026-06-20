@@ -58,6 +58,40 @@ pub(crate) fn enc_ack_req(id: u64) -> Bytes {
     Bytes::copy_from_slice(&id.to_le_bytes())
 }
 
+// ─── Keyed (M13 / WS-G) request encoding ─────────────────────────────────────
+// Wire shape reuses the `[u16 len][str]` stage prefix for both stage and key.
+
+pub(crate) fn enc_put_keyed_req(stage: &str, key: &str, payload: &Bytes) -> Bytes {
+    let mut buf = Vec::with_capacity(4 + stage.len() + key.len() + payload.len());
+    buf.extend_from_slice(&(stage.len() as u16).to_le_bytes());
+    buf.extend_from_slice(stage.as_bytes());
+    buf.extend_from_slice(&(key.len() as u16).to_le_bytes());
+    buf.extend_from_slice(key.as_bytes());
+    buf.extend_from_slice(payload);
+    Bytes::from(buf)
+}
+
+pub(crate) fn enc_take_by_key_req(stage: &str, key: &str, timeout: Duration) -> Bytes {
+    let mut buf = Vec::with_capacity(12 + stage.len() + key.len());
+    buf.extend_from_slice(&(stage.len() as u16).to_le_bytes());
+    buf.extend_from_slice(stage.as_bytes());
+    buf.extend_from_slice(&(key.len() as u16).to_le_bytes());
+    buf.extend_from_slice(key.as_bytes());
+    buf.extend_from_slice(&(timeout.as_millis() as u64).to_le_bytes());
+    Bytes::from(buf)
+}
+
+pub(crate) fn enc_complete_keyed_req(id: u64, next_stage: &str, key: &str, payload: &Bytes) -> Bytes {
+    let mut buf = Vec::with_capacity(12 + next_stage.len() + key.len() + payload.len());
+    buf.extend_from_slice(&id.to_le_bytes());
+    buf.extend_from_slice(&(next_stage.len() as u16).to_le_bytes());
+    buf.extend_from_slice(next_stage.as_bytes());
+    buf.extend_from_slice(&(key.len() as u16).to_le_bytes());
+    buf.extend_from_slice(key.as_bytes());
+    buf.extend_from_slice(payload);
+    Bytes::from(buf)
+}
+
 pub(crate) fn enc_depth_req(stage: Option<&str>) -> Bytes {
     let s = stage.unwrap_or("");
     let mut buf = Vec::with_capacity(2 + s.len());
@@ -242,7 +276,7 @@ pub(crate) fn spawn_primary_handlers(
     ts: &Arc<TupleSpace>,
 ) -> Vec<tokio::task::JoinHandle<()>> {
     let ns = &ts.cfg().namespace;
-    let mut handles = Vec::with_capacity(6);
+    let mut handles = Vec::with_capacity(9);
 
     // put — fast, handled inline.
     {
@@ -307,6 +341,76 @@ pub(crate) fn spawn_primary_handlers(
                 let reply = match parse_complete_req(&p) {
                     Some((id, stage, rest)) => match me.serve_complete(id, &stage, rest)
                     {
+                        Ok(new_id) => ok_id(new_id),
+                        Err(e) => err_resp(&e),
+                    },
+                    None => vec![ST_ERR],
+                };
+                me.agent().service().rpc_respond(&req, Bytes::from(reply));
+            }
+        }));
+    }
+
+    // put_keyed (M13) — inline.
+    {
+        let me = Arc::clone(ts);
+        let mut rx = ts.agent().service().rpc_rx(rpc_kind(ns, "put_keyed"));
+        handles.push(tokio::spawn(async move {
+            while let Some(req) = rx.recv().await {
+                let p = req.payload();
+                let reply = match parse_put_keyed_req(&p) {
+                    Some((stage, key, payload)) => match me.serve_put_keyed(&stage, key, payload) {
+                        Ok(id) => ok_id(id),
+                        Err(e) => err_resp(&e),
+                    },
+                    None => vec![ST_ERR],
+                };
+                me.agent().service().rpc_respond(&req, Bytes::from(reply));
+            }
+        }));
+    }
+
+    // take_by_key (M13) — parks; one task per request like `take`.
+    {
+        let me = Arc::clone(ts);
+        let mut rx = ts.agent().service().rpc_rx(rpc_kind(ns, "take_by_key"));
+        handles.push(tokio::spawn(async move {
+            while let Some(req) = rx.recv().await {
+                let me2 = Arc::clone(&me);
+                tokio::spawn(async move {
+                    let p = req.payload();
+                    let reply = match parse_take_by_key_req(&p) {
+                        Some((stage, key, timeout)) => {
+                            let timeout = timeout.min(MAX_TAKE_PARK);
+                            match me2.serve_take_by_key(&stage, &key, timeout, req.sender()).await {
+                                Ok((id, payload)) => {
+                                    let mut buf = Vec::with_capacity(9 + payload.len());
+                                    buf.push(ST_OK);
+                                    buf.extend_from_slice(&id.to_le_bytes());
+                                    buf.extend_from_slice(&payload);
+                                    buf
+                                }
+                                Err(TupleError::Timeout) => vec![ST_TIMEOUT],
+                                Err(e) => err_resp(&e),
+                            }
+                        }
+                        None => vec![ST_ERR],
+                    };
+                    me2.agent().service().rpc_respond(&req, Bytes::from(reply));
+                });
+            }
+        }));
+    }
+
+    // complete_keyed (M13) — atomic ack + keyed advance, inline.
+    {
+        let me = Arc::clone(ts);
+        let mut rx = ts.agent().service().rpc_rx(rpc_kind(ns, "complete_keyed"));
+        handles.push(tokio::spawn(async move {
+            while let Some(req) = rx.recv().await {
+                let p = req.payload();
+                let reply = match parse_complete_keyed_req(&p) {
+                    Some((id, stage, key, payload)) => match me.serve_complete_keyed(id, &stage, key, payload) {
                         Ok(new_id) => ok_id(new_id),
                         Err(e) => err_resp(&e),
                     },
@@ -478,4 +582,24 @@ fn parse_complete_req(p: &Bytes) -> Option<(u64, Arc<str>, Bytes)> {
     let rest = p.slice(8..);
     let (stage, payload) = parse_stage_prefix(&rest)?;
     Some((id, stage, payload))
+}
+
+// Keyed (M13 / WS-G) — reuse the stage prefix for both stage and key.
+fn parse_put_keyed_req(p: &Bytes) -> Option<(Arc<str>, Arc<str>, Bytes)> {
+    let (stage, rest) = parse_stage_prefix(p)?;
+    let (key, payload) = parse_stage_prefix(&rest)?;
+    Some((stage, key, payload))
+}
+fn parse_take_by_key_req(p: &Bytes) -> Option<(Arc<str>, Arc<str>, Duration)> {
+    let (stage, rest) = parse_stage_prefix(p)?;
+    let (key, rest2) = parse_stage_prefix(&rest)?;
+    let ms = u64::from_le_bytes(rest2.get(..8)?.try_into().ok()?);
+    Some((stage, key, Duration::from_millis(ms)))
+}
+fn parse_complete_keyed_req(p: &Bytes) -> Option<(u64, Arc<str>, Arc<str>, Bytes)> {
+    let id = u64::from_le_bytes(p.get(..8)?.try_into().ok()?);
+    let rest = p.slice(8..);
+    let (stage, rest2) = parse_stage_prefix(&rest)?;
+    let (key, payload) = parse_stage_prefix(&rest2)?;
+    Some((id, stage, key, payload))
 }
