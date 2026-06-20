@@ -3899,6 +3899,76 @@ async fn test_wsd_capability_authz_routes_around_unauthorized_advertiser() {
     let _ = std::fs::remove_dir_all(&cert_dir);
 }
 
+/// WS-D / M6 gate (G-D6): the capability-authz policy is set **through consensus** (agreed by a
+/// quorum, not a unilateral LWW write), and is then enforced at resolve exactly like the D4 path.
+#[cfg(all(feature = "compliance", feature = "consensus"))]
+#[tokio::test]
+async fn test_wsd_capability_authz_policy_via_consensus() {
+    use crate::config::TlsConfig;
+    use crate::{CapFilter, Capability, ConsensusConfig, ConsensusResult};
+
+    let pa = alloc_port();
+    let pb = alloc_port();
+    let id = |p: u16| NodeId::new("127.0.0.1", p).unwrap();
+    let (node_a, node_b) = (id(pa), id(pb));
+    let cert_dir = std::env::temp_dir().join(format!("myc-capauthz-cons-{pa}-{pb}"));
+    let _ = std::fs::remove_dir_all(&cert_dir);
+
+    let mk = |port: u16, boots: Vec<NodeId>| {
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = port;
+        cfg.bootstrap_peers = boots;
+        cfg.reconnect_backoff_secs = 1;
+        cfg.health_check_interval_secs = 1;
+        cfg.tls = Some(TlsConfig { auto_cert_dir: cert_dir.clone(), ..TlsConfig::default() });
+        GossipAgent::new(id(port), cfg)
+    };
+
+    let a = Arc::new(mk(pa, vec![]));                  // voter + unauthorized advertiser
+    let b = Arc::new(mk(pb, vec![node_a.clone()]));    // voter + authorized advertiser + consumer
+    a.start().await.unwrap();
+    b.start().await.unwrap();
+
+    // Multi-node consensus requires a listener on every voter (CLAUDE.md).
+    let _la = a.consensus().start_consensus_listener(ConsensusConfig::default());
+    let _lb = b.consensus().start_consensus_listener(ConsensusConfig::default());
+
+    poll_until(|| !a.peers().is_empty() && !b.peers().is_empty(), 5_000).await;
+
+    let _r1 = a.capabilities().advertise_capability(Capability::new("rush", "worker"), Duration::from_secs(30));
+    let _r2 = b.capabilities().advertise_capability(Capability::new("rush", "worker"), Duration::from_secs(30));
+    b.advertise_roles([Arc::from("operator")], 1).unwrap();
+
+    let filter = CapFilter::new("rush", "worker");
+    poll_until(|| b.capabilities().resolve(&filter).len() >= 2, 10_000).await;
+
+    // Set the policy THROUGH CONSENSUS (quorum = 2; both voters participate).
+    let result = a.set_capability_authz_via_consensus(
+        "rush", "worker", vec!["operator".into()], ConsensusConfig::default()).await;
+    assert!(matches!(result, ConsensusResult::Committed { .. }),
+        "G-D6: the policy must be agreed via consensus — got {result:?}");
+
+    // The agreed policy is committed (proves it went through consensus, not a bare LWW write).
+    assert!(a.consensus().consensus_get("capauthz/rush/worker").is_some(),
+        "the policy is recorded as a committed consensus value");
+
+    // …and is enforced at resolve exactly like D4: B routes around the unauthorized advertiser.
+    let mut converged = false;
+    for _ in 0..200 {
+        let r = b.capabilities().resolve(&filter);
+        if r.len() == 1 && r[0].0 == node_b {
+            converged = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(converged, "G-D6: the consensus-set policy is enforced at resolve");
+
+    a.shutdown_with_timeout(Duration::from_secs(5)).await;
+    b.shutdown_with_timeout(Duration::from_secs(5)).await;
+    let _ = std::fs::remove_dir_all(&cert_dir);
+}
+
 // ── M2 falsification probe (Run 24): concurrent audit chain integrity ─────
 
 /// Probe: many concurrent `audit()` calls on one node must produce a strictly
