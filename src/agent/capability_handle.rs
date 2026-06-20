@@ -122,6 +122,18 @@ impl CapabilitiesHandle {
             }
             let cap = entry.capability;
             if filter.matches(&cap) && ctx.can_see(&cap) {
+                // WS-D / M6 (D4 enforce, D5 detect): if a capauthz policy governs `ns/name`, route
+                // around an advertiser whose signed role does not satisfy it — and count the
+                // rejection (detection-not-prevention; the advertisement still propagated per LWW).
+                #[cfg(feature = "compliance")]
+                if let Some(required) = super::capauthz::required_roles(&self.ctx, &cap.namespace, &cap.name)
+                    && !super::capauthz::advertiser_authorized(&self.ctx, &node_id, &required)
+                {
+                    warn!(node = %node_id, ns = %cap.namespace, name = %cap.name,
+                        "capauthz: advertiser lacks a required role — routing around it");
+                    self.ctx.cap_authz_violations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    continue;
+                }
                 out.push((node_id, cap));
             }
         }

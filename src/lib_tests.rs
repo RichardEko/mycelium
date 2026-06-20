@@ -145,6 +145,7 @@ fn spawn_handler(
         bulk_transport: Arc::new(BulkTransport::new(0, Duration::from_secs(5), 64)),
         rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         commit_conflicts: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        cap_authz_violations: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         #[cfg(feature = "compliance")]
         audit_chain: Arc::new(std::sync::Mutex::new(crate::agent::audit::AuditChainState::new())),
         filter_opacity_registry: Arc::new(crate::agent::FilterOpacityRegistry::new()),
@@ -844,6 +845,7 @@ async fn test_subscribe_notified_via_gossip() {
             bulk_transport: Arc::new(BulkTransport::new(0, Duration::from_secs(5), 64)),
             rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             commit_conflicts: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            cap_authz_violations: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             #[cfg(feature = "compliance")]
             audit_chain: Arc::new(std::sync::Mutex::new(crate::agent::audit::AuditChainState::new())),
             filter_opacity_registry: Arc::new(crate::agent::FilterOpacityRegistry::new()),
@@ -3815,6 +3817,84 @@ async fn test_wsd_revoked_key_is_rejected_by_peer_verification() {
     assert!(a.audit_verify(&node_a) != Ok(()), "A also rejects its own revoked-key-signed chain");
 
     a.shutdown_with_timeout(Duration::from_secs(5)).await;
+    b.shutdown_with_timeout(Duration::from_secs(5)).await;
+    let _ = std::fs::remove_dir_all(&cert_dir);
+}
+
+/// WS-D / M6 gate (G-D4 + G-D5): gossip-level capability authorization. With a `capauthz` policy
+/// requiring role `operator` for `rush/worker`, a consumer **routes around** an advertiser that
+/// lacks the role (D4 enforce) and counts the rejection on `/stats` (D5 detect) — while the
+/// advertisement still propagated (detection-not-prevention). An advertiser holding the verified
+/// role stays resolvable.
+#[cfg(feature = "compliance")]
+#[tokio::test]
+async fn test_wsd_capability_authz_routes_around_unauthorized_advertiser() {
+    use crate::config::TlsConfig;
+    use crate::{CapFilter, Capability};
+
+    let pa = alloc_port();
+    let pa2 = alloc_port();
+    let pb = alloc_port();
+    let id = |p: u16| NodeId::new("127.0.0.1", p).unwrap();
+    let (node_a, node_a2) = (id(pa), id(pa2));
+    let cert_dir = std::env::temp_dir().join(format!("myc-capauthz-{pa}-{pb}"));
+    let _ = std::fs::remove_dir_all(&cert_dir);
+
+    let mk = |port: u16, boots: Vec<NodeId>| {
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = port;
+        cfg.bootstrap_peers = boots;
+        cfg.reconnect_backoff_secs = 1;
+        cfg.health_check_interval_secs = 1;
+        cfg.tls = Some(TlsConfig { auto_cert_dir: cert_dir.clone(), ..TlsConfig::default() });
+        GossipAgent::new(id(port), cfg)
+    };
+
+    let a  = Arc::new(mk(pa, vec![]));                       // unauthorized advertiser (no role)
+    let a2 = Arc::new(mk(pa2, vec![node_a.clone()]));        // authorized advertiser (operator role)
+    let b  = Arc::new(mk(pb, vec![node_a.clone()]));         // consumer
+    a.start().await.unwrap();
+    a2.start().await.unwrap();
+    b.start().await.unwrap();
+
+    poll_until(|| !a.peers().is_empty() && !a2.peers().is_empty() && !b.peers().is_empty(), 5_000).await;
+
+    // Both advertise rush/worker; only A2 advertises the operator role.
+    let _r1 = a.capabilities().advertise_capability(Capability::new("rush", "worker"), Duration::from_secs(30));
+    let _r2 = a2.capabilities().advertise_capability(Capability::new("rush", "worker"), Duration::from_secs(30));
+    a2.advertise_roles([Arc::from("operator")], 1).unwrap();
+
+    // B sees both providers before any policy.
+    let filter = CapFilter::new("rush", "worker");
+    poll_until(|| b.capabilities().resolve(&filter).len() >= 2, 10_000).await;
+    assert_eq!(b.capabilities().resolve(&filter).len(), 2, "both providers resolvable with no policy");
+
+    // Publish the policy: rush/worker requires role `operator`.
+    assert!(b.set_capability_authz("rush", "worker", vec!["operator".into()]));
+
+    // After the policy + A2's role gossip, B resolves ONLY the authorized advertiser.
+    let mut converged = false;
+    for _ in 0..200 {
+        let r = b.capabilities().resolve(&filter);
+        if r.len() == 1 && r[0].0 == node_a2 {
+            converged = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let resolved = b.capabilities().resolve(&filter);
+    assert!(converged, "G-D4: B must route around the unauthorized advertiser — got {resolved:?}");
+    assert!(resolved.iter().any(|(n, _)| n == &node_a2), "the authorized advertiser stays resolvable");
+    assert!(!resolved.iter().any(|(n, _)| n == &node_a), "the unauthorized advertiser is excluded");
+
+    // G-D5: the rejection is counted on /stats, and the advertisement still PROPAGATED (the cap
+    // entry is present in B's store — detection, not prevention).
+    assert!(b.system_stats().cap_authz_violations >= 1, "G-D5: the rejection is counted");
+    assert!(b.kv().get(&format!("cap/{node_a}/rush/worker")).is_some(),
+        "the unauthorized advertisement still propagated (detection, not prevention)");
+
+    a.shutdown_with_timeout(Duration::from_secs(5)).await;
+    a2.shutdown_with_timeout(Duration::from_secs(5)).await;
     b.shutdown_with_timeout(Duration::from_secs(5)).await;
     let _ = std::fs::remove_dir_all(&cert_dir);
 }
