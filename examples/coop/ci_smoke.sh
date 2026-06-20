@@ -73,4 +73,13 @@ echo "$out" | grep -q "both LLM stages" \
   || { echo "FAIL: chained LLM stages not evidenced"; exit 1; }
 
 echo
+echo "── 09 · mcp_toolgrowth ──────────────────────────────────────────"
+out="$(cargo run -q -p mycelium-coop-examples --bin mcp_toolgrowth 2>/dev/null)"
+echo "$out"
+echo "$out" | grep -q "All assertions passed" \
+  || { echo "FAIL: mcp_toolgrowth did not pass its assertions"; exit 1; }
+echo "$out" | grep -q "loaded the MCP tool and offered it out" \
+  || { echo "FAIL: on-demand MCP tool loading did not occur"; exit 1; }
+
+echo
 echo "All co-op smokes passed."
