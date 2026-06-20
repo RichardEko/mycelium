@@ -515,6 +515,24 @@ impl GossipAgent {
         SchemaHandle::from_core(Arc::clone(&self.task_ctx.core))
     }
 
+    /// Publish a **schema migration** into the registry (WS-F / Schema-Evo · E3) — a declarative
+    /// `from → to` transform gossiped alongside the schemas. Any node may publish; every node then
+    /// resolves migration paths over the union (see [`migrate_payload`](Self::migrate_payload)).
+    /// Registered + explicit — never silent coercion. Returns whether the write was queued.
+    pub fn publish_migration(&self, migration: &crate::schema_evolution::SchemaMigration) -> bool {
+        crate::schema_evolution::publish_migration(&self.kv(), migration)
+    }
+
+    /// The registered `from → to` migration from the local gossip view, if any.
+    pub fn get_migration(&self, from: &str, to: &str) -> Option<crate::schema_evolution::SchemaMigration> {
+        crate::schema_evolution::get_migration(&self.kv(), from, to)
+    }
+
+    /// Every registered migration in the local gossip view.
+    pub fn list_migrations(&self) -> Vec<crate::schema_evolution::SchemaMigration> {
+        crate::schema_evolution::list_migrations(&self.kv())
+    }
+
     /// Returns a typed handle for consensus operations (Layer III).
     ///
     /// Zero-cost: clones one `Arc` per call. The handle is `Clone + Send + Sync`
