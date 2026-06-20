@@ -1,8 +1,25 @@
 # Delivery plan — WS-F · Schema-registry evolution (runtime migration)
 
-**Status:** proposed (2026-06-20). Executes the v2.0 plan's WS-F *"Schema-registry evolution —
-runtime migration"* item ([Schema-Evo]), the last open M16/WS-F piece. Canonical design: ROADMAP
-§*Schema-registry evolution — runtime schema migration, the Mycelium way*.
+**Status:** ✅ **COMPLETE** (2026-06-20). All increments shipped:
+
+| Increment | What | PR |
+|---|---|---|
+| E1 | Tier 1 — additive tolerance (verify + document) | #84 |
+| E2 | Tier 2 — `schema_mismatch` detection tripwire | #85 |
+| E3a | Tier 3 — declarative migration data model + registry | #86 |
+| E3b | path resolution + composition (`NoMigrationPath`, never guess) | #87 |
+| E3c | end-to-end cross-version interop + AgentFacts tie-in | #88 |
+
+**Done-when met:** a producer and consumer compiled against different schema versions interoperate
+via an *explicitly registered* migration chain composed on the receive side (G-E3c); a missing path
+is *detected* (`NoMigrationPath` + `schema_mismatch` tripwire), never silently coerced. Governing rule
+held throughout: **registered + explicit + detect-don't-guess.** Design record follows.
+
+---
+
+Executes the v2.0 plan's WS-F *"Schema-registry evolution — runtime migration"* item ([Schema-Evo]),
+the last open M16/WS-F piece. Canonical design: ROADMAP §*Schema-registry evolution — runtime schema
+migration, the Mycelium way*.
 
 **Why now.** WS-F federation (M16-A/B AgentFacts) shipped; AgentFacts are *semantically versioned*
 JSON-LD that will drift. The schema-evolution machinery is exactly what evolvable AgentFacts need —

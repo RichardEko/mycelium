@@ -4077,6 +4077,58 @@ async fn test_wsf_migrate_payload_composes_chain_or_detects_no_path() {
     agent.shutdown_with_timeout(Duration::from_secs(5)).await;
 }
 
+/// WS-F / Schema-Evo gate (G-E3c) — **the WS-F done-when**: a producer and consumer compiled against
+/// *different* schema versions interoperate via an explicitly registered migration chain composed on
+/// the receive side. Also exercises a nested (AgentFacts-shaped) document migration — the M16 pairing.
+#[tokio::test]
+async fn test_wsf_cross_version_producer_consumer_interop_end_to_end() {
+    use crate::schema_evolution::{MigrationRule, SchemaMigration};
+    use serde::{Deserialize, Serialize};
+
+    // The producer is compiled against schema v1.
+    #[derive(Serialize)]
+    struct ProducerV1 { origin: String, kg: u32 }
+    // The consumer is compiled against schema v3 — renamed field + a new required field.
+    #[derive(Deserialize, PartialEq, Debug)]
+    struct ConsumerV3 { origin_zone: String, kg: u32, priority: u8 }
+
+    let port = alloc_port();
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = port;
+    let agent = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg));
+    agent.start().await.unwrap();
+
+    let wire = serde_json::to_vec(&ProducerV1 { origin: "southwark".into(), kg: 12 }).unwrap();
+
+    // Without a migration, the v1 payload does NOT parse as v3 (the incompatibility is real).
+    assert!(serde_json::from_slice::<ConsumerV3>(&wire).is_err(),
+        "cross-version interop genuinely needs migration, not luck");
+
+    // Register the explicit v1→v2→v3 chain.
+    agent.publish_migration(&SchemaMigration { from: "d@v1".into(), to: "d@v2".into(),
+        rules: vec![MigrationRule::Rename { from: "origin".into(), to: "origin_zone".into() }] });
+    agent.publish_migration(&SchemaMigration { from: "d@v2".into(), to: "d@v3".into(),
+        rules: vec![MigrationRule::Default { path: "priority".into(), value: serde_json::json!(0) }] });
+    poll_until(|| agent.get_migration("d@v2", "d@v3").is_some(), 3_000).await;
+
+    // The consumer migrates the received payload, then parses it into its own v3 type — interop.
+    let migrated = agent.migrate_payload("d@v1", "d@v3", &wire).expect("chain composes");
+    let parsed: ConsumerV3 = serde_json::from_value(migrated).expect("migrated payload parses as v3");
+    assert_eq!(parsed, ConsumerV3 { origin_zone: "southwark".into(), kg: 12, priority: 0 });
+
+    // M16 pairing: the same engine migrates a nested AgentFacts-shaped document (the quilt-fetcher
+    // case — evolve `certification` across versions).
+    agent.publish_migration(&SchemaMigration { from: "facts@v1".into(), to: "facts@v2".into(),
+        rules: vec![MigrationRule::Default { path: "certification.schemaVersion".into(), value: serde_json::json!("v2") }] });
+    poll_until(|| agent.get_migration("facts@v1", "facts@v2").is_some(), 3_000).await;
+    let facts_v1 = br#"{"id":"did:mycelium:x","certification":{"scheme":"self-certified"}}"#;
+    let facts_v2 = agent.migrate_payload("facts@v1", "facts@v2", facts_v1).expect("facts chain composes");
+    assert_eq!(facts_v2["certification"]["schemaVersion"], serde_json::json!("v2"),
+        "the engine evolves a nested AgentFacts certification field (M16 pairing)");
+
+    agent.shutdown_with_timeout(Duration::from_secs(5)).await;
+}
+
 // ── M2 falsification probe (Run 24): concurrent audit chain integrity ─────
 
 /// Probe: many concurrent `audit()` calls on one node must produce a strictly
