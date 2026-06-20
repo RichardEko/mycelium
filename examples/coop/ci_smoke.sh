@@ -46,4 +46,13 @@ echo "$out" | grep -q "verified the self-signature" \
   || { echo "FAIL: cross-domain verification did not occur"; exit 1; }
 
 echo
+echo "── 06 · rotation ────────────────────────────────────────────────"
+out="$(cargo run -q -p mycelium-coop-examples --bin rotation 2>/dev/null)"
+echo "$out"
+echo "$out" | grep -q "All assertions passed" \
+  || { echo "FAIL: rotation did not pass its assertions"; exit 1; }
+echo "$out" | grep -q "STILL verifies the old-key-signed field" \
+  || { echo "FAIL: retained-key verification across rotation did not occur"; exit 1; }
+
+echo
 echo "All co-op smokes passed."
