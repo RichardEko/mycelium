@@ -740,7 +740,7 @@ get found.
   binary format) for every other `#[derive(Serialize,Deserialize)]` type (persistence,
   capabilities, consensus, audit, RBAC, SWIM datagrams). `framing::bincode_cfg()` is now
   `#[cfg(test)]`.
-- **Food-Rescue Co-op example suite**: `examples/coop/` — **ten** runnable demos that exercise the
+- **Food-Rescue Co-op example suite**: `examples/coop/` — **eleven** runnable demos that exercise the
   newer capability surface, composed in *one constructive world* (a co-op of depot nodes rescuing
   surplus food, no central dispatcher) rather than isolated API toys. Standalone workspace member
   (`mycelium-coop-examples`) depending on `mycelium` + the three companion crates; each demo is its
@@ -753,13 +753,22 @@ get found.
   decay) · **08** `llm_pipeline` (homogeneous LLM workers, competitive pull) · **09** `mcp_toolgrowth`
   (an LLM agent grows the fabric's toolset — MCP tool loaded on demand) · **10** `llm_council` (a
   council of *differentiated* LLM agents — fan-out → synthesis → iterative refinement; names the
-  keyed-fan-in M13 boundary). Shared harness in `src/common/` (bootstrap + domain types +
-  `facts_lens` mounting the AgentFacts edge on every depot). `examples/coop/ci_smoke.sh` runs all ten
-  Docker-free (retry-hardened for constrained runners) and is wired into CI as the `coop-smoke` job.
-  Plan + shipped-status table: [`docs/plans/example-suite.md`](docs/plans/example-suite.md); per-demo
-  descriptions: [`examples/coop/README.md`](examples/coop/README.md). Built-while-stress-testing:
-  surfaced/fixed the governor-vs-emergent-autojoin bug (#56→#57), the `crdt.rs` retained-key gap
-  (#51), and filed #55 (cross-node Individual-scoped signals).
+  keyed-fan-in M13 boundary) · **11** `catalog` (the cluster-wide artifact catalogue — gossiped
+  `installable/`, register/discover/pull-over-mesh/provision; no registry server). Shared harness in
+  `src/common/` (bootstrap + domain types + `facts_lens` mounting the AgentFacts edge on every depot).
+  `examples/coop/ci_smoke.sh` runs all eleven Docker-free (retry-hardened for constrained runners) and
+  is wired into CI as the `coop-smoke` job. Plan + shipped-status table:
+  [`docs/plans/example-suite.md`](docs/plans/example-suite.md); per-demo descriptions:
+  [`examples/coop/README.md`](examples/coop/README.md). **The suite anchors the developer docs** (see
+  the docs-alignment plan [`docs/plans/docs-and-examples-alignment.md`](docs/plans/docs-and-examples-alignment.md)):
+  guide [`00-concepts.md`](docs/guide/00-concepts.md) (native model — Capability/Skill — vs edge
+  standards — A2A/MCP/AgentFacts), [`14-patterns-and-pitfalls.md`](docs/guide/14-patterns-and-pitfalls.md)
+  (grounded in these examples), the [`cookbook.md`](docs/guide/cookbook.md) ("how do I…"), and the
+  two-audience [`docs/operations/`](docs/operations/) runbooks (deployment, observability/AgentFacts,
+  dynamic-scaling, artifacts). Built-while-stress-testing: surfaced/fixed the
+  governor-vs-emergent-autojoin bug (#56→#57), the `crdt.rs` retained-key gap (#51), and filed #55
+  (cross-node Individual-scoped signals). Retired `prompt_skill_demo`→`mailbox_llm` (+ live
+  template-update §05) and `mesh_demo`→`llm_agent`.
 - **Agentic Flow Networks demo**: `examples/fluid_pipeline/` — 10-worker fluid pool,
   4-stage news article pipeline, two modes via `PIPELINE_MODE`: **pull** (default,
   canonical — tuple-space stages, workers take() from the deepest stage; seeder is an
