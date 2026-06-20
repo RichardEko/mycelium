@@ -977,6 +977,33 @@ impl GossipAgent {
         capauthz::set_policy(&self.task_ctx, ns, name, roles)
     }
 
+    /// Set the capability-authorization policy for `ns/name` **through consensus** (WS-D / M6 · D6),
+    /// so the cluster *agrees* the policy rather than accepting a unilateral LWW write — a single
+    /// rogue or buggy operator cannot impose a cluster-wide authz policy alone. Proposes the policy
+    /// on the consensus slot `capauthz/{ns}/{name}`; on commit, the agreed value is applied to
+    /// `sys/capauthz/{ns}/{name}` (the key resolvers read, unchanged from D4) so enforcement stays
+    /// at each resolver — **consensus carries the policy, it is not an admission coordinator**.
+    ///
+    /// Requires `start_consensus_listener` on every voter (multi-node quorum). Returns the
+    /// [`ConsensusResult`]; the policy is applied only on `Committed`.
+    #[cfg(feature = "consensus")]
+    pub async fn set_capability_authz_via_consensus(
+        &self,
+        ns: &str,
+        name: &str,
+        roles: Vec<String>,
+        config: crate::consensus::ConsensusConfig,
+    ) -> crate::consensus::ConsensusResult {
+        let policy = capauthz::CapAuthzPolicy { required_roles: roles }.encode();
+        let slot = format!("capauthz/{ns}/{name}");
+        let result = self.consensus().system_propose(&slot, policy.clone(), config).await;
+        if matches!(result, crate::consensus::ConsensusResult::Committed { .. }) {
+            // Apply the agreed policy to the key resolvers enforce on (D4). Idempotent under LWW.
+            let _ = self.kv().set(capauthz::capauthz_key(ns, name), policy);
+        }
+        result
+    }
+
     /// Provider-side authorization check: may the (verified) `sender` invoke a
     /// capability whose `authorized_callers` allowlist is `allow`? Empty `allow`
     /// ⇒ unrestricted; otherwise admits if `sender`'s NodeId is listed or it holds
