@@ -143,6 +143,52 @@ export class TupleSpace {
     return [body.id, fromB64(body.payload_b64)];
   }
 
+  // ── Keyed-exact-match rendezvous (M13 — fan-in joins) ──────────────────────
+
+  /**
+   * Put `payload` on `stage` under correlation `key` (M13). Claimed only by a
+   * matching {@link takeByKey} — the two-stream rendezvous ("an invoice AND its
+   * matching purchase order"). Returns the item id.
+   */
+  async putKeyed(stage: string, key: string, payload: Uint8Array): Promise<number> {
+    const r = await fetch(`${this.baseUrl}/gateway/tuple/put`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ns: this.ns, stage, key, payload_b64: toB64(payload) }),
+    });
+    if (r.status === 503) {
+      const retryAfter = Number(r.headers.get("Retry-After") ?? "1");
+      throw new TupleBackpressureError(retryAfter * 1000);
+    }
+    if (!r.ok) throw new Error(`tuple putKeyed failed: ${r.status}`);
+    const body = (await r.json()) as { id: number };
+    return body.id;
+  }
+
+  /**
+   * Blocking keyed claim (M13): claims the item on `stage` whose correlation key
+   * is `key`, or parks until it arrives. Resolves with `[itemId, payload]` or
+   * throws on timeout.
+   */
+  async takeByKey(
+    stage: string,
+    key: string,
+    timeoutSecs: number = 30,
+  ): Promise<[number, Uint8Array]> {
+    const r = await fetch(`${this.baseUrl}/gateway/tuple/take_by_key`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ns: this.ns, stage, key, timeout_secs: timeoutSecs }),
+      signal: AbortSignal.timeout((timeoutSecs + 5) * 1000),
+    });
+    if (r.status === 408) {
+      throw new Error(`no item keyed "${key}" on stage "${stage}" within ${timeoutSecs}s`);
+    }
+    if (!r.ok) throw new Error(`tuple takeByKey failed: ${r.status}`);
+    const body = (await r.json()) as { id: number; payload_b64: string };
+    return [body.id, fromB64(body.payload_b64)];
+  }
+
   /**
    * Atomic pipeline advance: acks `itemId` AND puts `nextStage` in one WAL
    * record — no crash window between stages. PREFERRED over separate

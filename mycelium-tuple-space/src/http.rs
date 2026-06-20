@@ -33,6 +33,7 @@ impl TupleSpace {
         axum::Router::new()
             .route("/gateway/tuple/put", post(gw_put))
             .route("/gateway/tuple/take", post(gw_take))
+            .route("/gateway/tuple/take_by_key", post(gw_take_by_key))
             .route("/gateway/tuple/complete", post(gw_complete))
             .route("/gateway/tuple/ack", post(gw_ack))
             .route("/gateway/tuple/depth", get(gw_depth))
@@ -70,6 +71,10 @@ struct PutBody {
     ns: Option<String>,
     stage: String,
     payload_b64: String,
+    /// M13 (WS-G): when present, the item is put under this correlation key and is claimable only by
+    /// a matching `take_by_key`. Omit for an ordinary FIFO put.
+    #[serde(default)]
+    key: Option<String>,
 }
 
 async fn gw_put(State(ts): State<Arc<TupleSpace>>, Json(b): Json<PutBody>) -> Response {
@@ -79,8 +84,37 @@ async fn gw_put(State(ts): State<Arc<TupleSpace>>, Json(b): Json<PutBody>) -> Re
     let Ok(payload) = B64.decode(&b.payload_b64) else {
         return bad_request("payload_b64 is not valid base64");
     };
-    match ts.put(&b.stage, Bytes::from(payload)).await {
+    let result = match &b.key {
+        Some(key) => ts.put_keyed(&b.stage, key, Bytes::from(payload)).await,
+        None => ts.put(&b.stage, Bytes::from(payload)).await,
+    };
+    match result {
         Ok(id) => Json(json!({ "id": id })).into_response(),
+        Err(e) => err_response(&e),
+    }
+}
+
+#[derive(Deserialize)]
+struct TakeByKeyBody {
+    ns: Option<String>,
+    stage: String,
+    key: String,
+    #[serde(default = "default_take_timeout")]
+    timeout_secs: u64,
+}
+
+async fn gw_take_by_key(State(ts): State<Arc<TupleSpace>>, Json(b): Json<TakeByKeyBody>) -> Response {
+    if ns_mismatch(&ts, &b.ns) {
+        return bad_request("unknown namespace");
+    }
+    match ts.take_by_key(&b.stage, &b.key, Duration::from_secs(b.timeout_secs)).await {
+        Ok((id, payload)) => Json(json!({
+            "id": id,
+            "stage": b.stage,
+            "key": b.key,
+            "payload_b64": B64.encode(&payload),
+        }))
+        .into_response(),
         Err(e) => err_response(&e),
     }
 }

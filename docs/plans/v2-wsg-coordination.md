@@ -16,7 +16,11 @@ built **entirely on the public API** (the same composability proof as `mycelium-
 
 ---
 
-## G1 — M13 · keyed-exact-match `take` (fan-in joins)
+## G1 — M13 · keyed-exact-match `take` (fan-in joins) ✅ COMPLETE
+
+**Shipped** (G1a #90 in-memory rendezvous + public API/RPC, G1b #91 WAL v2 + replication/promotion
+durability, G1c gateway + py/ts SDKs + cross-node join integration). Fan-in joins are now expressible
+without one-lane-per-key degeneration; exact-match only.
 
 `put` gains an optional **correlation key**; `take_by_key(stage, key)` claims the item on `stage`
 whose key matches, parking a *keyed waiter* when absent — the two-stream rendezvous ("an invoice AND

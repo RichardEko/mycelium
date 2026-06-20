@@ -435,9 +435,15 @@ Key facts for future sessions:
   is an atomic lane-to-lane move. Workers "filter" only by choosing which
   lane to take from (per-lane depth = the pressure signal). Content-style
   routing is encoded in lane names (`stage-b.high`), never payload matching.
-  Fan-in joins (two-stream rendezvous by correlation key) are NOT yet
-  expressible — keyed-exact-match `take` is ROADMAP v2.0 milestone 13,
-  promised by Paper 1 §9.4.
+  **Fan-in joins** (two-stream rendezvous by correlation key) ARE now
+  expressible via **keyed-exact-match `take`** (ROADMAP M13 / WS-G, shipped):
+  `put_keyed(stage, key, payload)` + `take_by_key(stage, key, timeout)` +
+  `complete_keyed` claim by an O(1) exact-match key (a keyed index + keyed-waiter
+  map per `StageState`, kept separate from the FIFO; durable across crash/promotion
+  via WAL v2 record kinds `REC_PUT_KEYED`/`REC_COMPLETE_KEYED`, v1 replay accepted).
+  Exact-match only — associative *template* matching remains the blackboard
+  companion's territory (Paper 1 §9.4). Gateway: `POST /gateway/tuple/put` (optional
+  `key`) + `/gateway/tuple/take_by_key`; py/ts `put_keyed`/`take_by_key`.
 - **Roles** (`TupleRole`): `Primary` serves; `Secondary` mirrors via
   replicate RPCs + heartbeat Signal and promotes when the primary's
   capability evaporates (the ring IS the failure detector); `Auto` elects

@@ -127,6 +127,47 @@ class TupleSpace:
         body = r.json()
         return int(body["id"]), base64.b64decode(body["payload_b64"])
 
+    # ── Keyed-exact-match rendezvous (M13 — fan-in joins) ─────────────────────
+
+    async def put_keyed(self, stage: str, key: str, payload: bytes) -> int:
+        """Put ``payload`` on ``stage`` under correlation ``key`` (M13). Claimed
+        only by a matching :meth:`take_by_key` — the two-stream rendezvous ("an
+        invoice AND its matching purchase order"). Returns the item id."""
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=15.0) as c:
+            r = await c.post("/gateway/tuple/put", json={
+                "ns": self._ns,
+                "stage": stage,
+                "key": key,
+                "payload_b64": base64.b64encode(payload).decode(),
+            })
+        if r.status_code == 503:
+            retry_ms = int(float(r.headers.get("Retry-After", "1")) * 1000)
+            raise TupleBackpressureError(retry_ms)
+        r.raise_for_status()
+        return int(r.json()["id"])
+
+    async def take_by_key(
+        self, stage: str, key: str, timeout_secs: float = 30.0
+    ) -> tuple[int, bytes]:
+        """Blocking keyed claim (M13): claims the item on ``stage`` whose
+        correlation key is ``key``, or parks until it arrives. Returns
+        ``(item_id, payload)``; raises :class:`TimeoutError` on timeout."""
+        async with httpx.AsyncClient(
+            base_url=self._base_url,
+            timeout=timeout_secs + 5.0,
+        ) as c:
+            r = await c.post("/gateway/tuple/take_by_key", json={
+                "ns": self._ns,
+                "stage": stage,
+                "key": key,
+                "timeout_secs": int(timeout_secs),
+            })
+        if r.status_code == 408:
+            raise TimeoutError(f"no item keyed {key!r} on stage {stage!r} within {timeout_secs}s")
+        r.raise_for_status()
+        body = r.json()
+        return int(body["id"]), base64.b64decode(body["payload_b64"])
+
     async def complete(self, item_id: int, next_stage: str, payload: bytes) -> int:
         """Atomic pipeline advance: acks ``item_id`` AND puts ``next_stage``
         in one WAL record — no crash window between stages. PREFERRED over
