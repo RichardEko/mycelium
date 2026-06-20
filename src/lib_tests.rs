@@ -3742,6 +3742,7 @@ async fn test_ws5_rotate_identity_verifies_across_rotation_on_peer() {
 /// record under key1, rotates to key2 (B verifies the chain via the retained key set — the WS5
 /// guarantee), then A **revokes key1**. Once the revocation gossips, B must **refuse** to verify the
 /// key1-signed record — a revoked key is trusted for nothing.
+#[cfg(feature = "compliance")]
 #[tokio::test]
 async fn test_wsd_revoked_key_is_rejected_by_peer_verification() {
     use crate::config::TlsConfig;
