@@ -3738,6 +3738,86 @@ async fn test_ws5_rotate_identity_verifies_across_rotation_on_peer() {
     let _ = std::fs::remove_dir_all(&cert_dir);
 }
 
+/// WS-D / D1 gate (G-D1): explicit **revocation** closes the WS5 compromise caveat. A seals an audit
+/// record under key1, rotates to key2 (B verifies the chain via the retained key set — the WS5
+/// guarantee), then A **revokes key1**. Once the revocation gossips, B must **refuse** to verify the
+/// key1-signed record — a revoked key is trusted for nothing.
+#[tokio::test]
+async fn test_wsd_revoked_key_is_rejected_by_peer_verification() {
+    use crate::config::TlsConfig;
+
+    let port_a = alloc_port();
+    let port_b = alloc_port();
+    let id = |p: u16| NodeId::new("127.0.0.1", p).unwrap();
+    let node_a = id(port_a);
+    let cert_dir = std::env::temp_dir().join(format!("myc-wsd-{port_a}-{port_b}"));
+    let _ = std::fs::remove_dir_all(&cert_dir);
+
+    let mk = |port: u16, boots: Vec<NodeId>| {
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = port;
+        cfg.bootstrap_peers = boots;
+        cfg.reconnect_backoff_secs = 1;
+        cfg.health_check_interval_secs = 1;
+        cfg.tls = Some(TlsConfig { auto_cert_dir: cert_dir.clone(), ..TlsConfig::default() });
+        GossipAgent::new(id(port), cfg)
+    };
+
+    let a = Arc::new(mk(port_a, vec![]));
+    let b = Arc::new(mk(port_b, vec![node_a.clone()]));
+    a.start().await.unwrap();
+    b.start().await.unwrap();
+
+    let mut peered = false;
+    for _ in 0..200 {
+        if !a.peers().is_empty() && !b.peers().is_empty() { peered = true; break; }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(peered, "tls nodes failed to peer");
+
+    // The key that will sign the record we later revoke.
+    let old_key = a.identity_public_key().expect("a has a tls identity");
+    a.audit(crate::AuditAction::Invoke, "client", "signed-by-old-key", crate::AuditOutcome::Success, None).unwrap();
+
+    // Rotate to a fresh key, then seal a second record under it.
+    let new_key = a.rotate_identity(Duration::from_millis(500)).await.expect("rotation");
+    assert_ne!(new_key, old_key);
+    a.audit(crate::AuditAction::Invoke, "client", "signed-by-new-key", crate::AuditOutcome::Success, None).unwrap();
+
+    // WS5 guarantee first: B verifies the full chain across the rotation (retained key set).
+    let mut verified_across_rotation = false;
+    for _ in 0..200 {
+        if b.audit_stream(&node_a).len() == 2 && b.audit_verify(&node_a) == Ok(()) {
+            verified_across_rotation = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(verified_across_rotation, "WS5: B should verify A's chain across the rotation before revocation");
+
+    // Now revoke the OLD key (signed by the current/new key). This is the compromise case.
+    a.revoke_identity_key(old_key).expect("revoke");
+
+    // Once the revocation gossips to B, B must REFUSE to verify A's chain — the genesis record was
+    // signed by the now-revoked key1.
+    let mut rejected = false;
+    for _ in 0..200 {
+        if b.audit_verify(&node_a) != Ok(()) {
+            rejected = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(rejected, "G-D1: B must reject a chain signed by a revoked key (the WS5 caveat is closed)");
+
+    // And on A itself the revocation reads back as valid (signed by current key, revoked key owned).
+    assert!(a.audit_verify(&node_a) != Ok(()), "A also rejects its own revoked-key-signed chain");
+
+    a.shutdown_with_timeout(Duration::from_secs(5)).await;
+    b.shutdown_with_timeout(Duration::from_secs(5)).await;
+    let _ = std::fs::remove_dir_all(&cert_dir);
+}
+
 // ── M2 falsification probe (Run 24): concurrent audit chain integrity ─────
 
 /// Probe: many concurrent `audit()` calls on one node must produce a strictly
