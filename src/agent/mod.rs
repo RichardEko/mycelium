@@ -80,6 +80,8 @@ pub(crate) mod revocation;
 #[cfg(feature = "compliance")]
 pub(crate) mod transparency;
 #[cfg(feature = "compliance")]
+pub(crate) mod capauthz;
+#[cfg(feature = "compliance")]
 pub(crate) mod oidc;
 
 #[allow(unused_imports)]
@@ -263,6 +265,18 @@ pub struct SystemStats {
     /// legible. Signed keys (`identity`, `role`) additionally fail verification
     /// at read; unsigned keys (`load`, `tuple`) rely on this signal alone.
     pub sys_namespace_violations: u64,
+
+    /// Cumulative count of capability advertisements this node **declined to
+    /// resolve** because the advertiser did not hold a role required by the
+    /// `sys/capauthz/{ns}/{name}` policy (WS-D / M6 · D5).
+    ///
+    /// **Detection, not prevention** (mirrors the tripwires above): the
+    /// advertisement still propagates per LWW; this node simply routes around the
+    /// unauthorized provider at resolve time and logs a `warn!`. A non-zero value
+    /// means a provider is advertising a governed capability without the required
+    /// signed role — investigate that node. Only counts under the `compliance`
+    /// feature with a published policy.
+    pub cap_authz_violations: u64,
 }
 
 // The old 22-field `TaskCtx` God Object has been split (ROADMAP §v2.0 M1): `CoreCtx`
@@ -322,6 +336,10 @@ pub(crate) struct TaskCtx {
     /// Incremented by the consensus listener's tripwire; Relaxed ordering —
     /// purely diagnostic, surfaced via `system_stats()` and `/stats`.
     pub(crate) commit_conflicts: Arc<AtomicU64>,
+
+    /// Cumulative capability-authorization rejections at resolve (WS-D / M6 · D5;
+    /// see `SystemStats::cap_authz_violations`). Relaxed — diagnostic.
+    pub(crate) cap_authz_violations: Arc<AtomicU64>,
 
     /// Head of this node's tamper-evident audit chain (WS2). `audit()` seals a
     /// record under this lock so the per-node chain stays linear, then releases
@@ -676,6 +694,7 @@ impl GossipAgent {
             )),
             rpc_pending: Arc::clone(&rpc_pending),
             commit_conflicts: Arc::new(AtomicU64::new(0)),
+            cap_authz_violations: Arc::new(AtomicU64::new(0)),
             #[cfg(feature = "compliance")]
             audit_chain: Arc::new(std::sync::Mutex::new(audit::AuditChainState::new())),
             filter_opacity_registry: Arc::new(capability_ops::FilterOpacityRegistry::new()),
@@ -946,6 +965,16 @@ impl GossipAgent {
     /// → `revoke_identity_key(old_key)` (signed by the new current key). Requires the `tls` identity.
     pub fn revoke_identity_key(&self, revoked_key: [u8; 32]) -> Result<(), crate::error::GossipError> {
         revocation::revoke_key(&self.task_ctx, revoked_key, None)
+    }
+
+    /// Set the **gossip-level capability-authorization policy** for `ns/name` (WS-D / M6 · D4): an
+    /// any-of list of roles an advertiser must hold (a *signature-verified* `sys/role/` claim) for
+    /// resolvers to admit it. Writes `sys/capauthz/{ns}/{name}`; every node then **routes around**
+    /// unauthorized advertisers of `ns/name` at resolve time and counts the rejection on `/stats`
+    /// (`cap_authz_violations`). An empty `roles` opens the capability again. Enforce-at-resolve,
+    /// detect-at-write — never a Layer I write guard. Returns whether the write was queued.
+    pub fn set_capability_authz(&self, ns: &str, name: &str, roles: Vec<String>) -> bool {
+        capauthz::set_policy(&self.task_ctx, ns, name, roles)
     }
 
     /// Provider-side authorization check: may the (verified) `sender` invoke a
