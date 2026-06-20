@@ -57,35 +57,33 @@ the consensus overlay. Use it sparingly; most event patterns do not need it.
 
 ## The Example
 
-`examples/prompt_skill_demo.rs` creates two in-process nodes. Node A registers
-a Prompt Skill (`demo/echo`) using `EchoBackend` — a test backend that returns
-its input unchanged. Node B discovers the skill via capability resolution and
-invokes it. The invocation path goes through the signal mesh: the capability
-system emits an `INVOKE` signal scoped to the `llm` group; Node A's boundary
-accepts it and routes to the echo backend.
-
-**Prerequisites**
-
-```bash
-cargo build --example prompt_skill_demo --features llm
-```
+The coop suite's [`mailbox_llm`](../../examples/coop/src/bin/mailbox_llm.rs)
+example exercises this end to end. `kitchen-router` registers a Prompt Skill
+(`routing/suggest`, `EchoBackend` — a test backend that returns its input
+unchanged); `depot-triage` discovers it via capability resolution and invokes it
+over RPC, with the request itself delivered as a durable **mailbox** event. The
+invocation path goes through the signal mesh: an Individual-scoped frame to the
+provider, whose boundary admits it and routes to the backend.
 
 **Run**
 
 ```bash
-cargo run --example prompt_skill_demo --features llm
+cargo run -p mycelium-coop-examples --bin mailbox_llm
 ```
 
-**Expected output**
+**Expected output** (abridged)
 
 ```
-prompt_skill_demo: node_a started on :7900
-prompt_skill_demo: node_b started on :7901
-prompt_skill_demo: node_a registered demo/echo skill
-prompt_skill_demo: node_b discovered demo/echo on node_a
-prompt_skill_demo: invoking demo/echo with "Hello, mesh!"
-prompt_skill_demo: reply: "Hello, mesh!"
+[kitchen-router] registered skill routing/suggest (EchoBackend)
+[depot-intake] cluster peered; routing/suggest visible to triage
+[depot-intake] ← triage replied: [1] echo: Route this donation ...
+All assertions passed — 3 donations routed via the mailbox, in order.
 ```
+
+(For the two-node prompt-skill mechanics on their own — including live template
+updates — see [05 · Skills](05-skills.md). The earlier `prompt_skill_demo`
+example was retired into this suite; see the
+[example portfolio](../../examples/coop/README.md).)
 
 ---
 

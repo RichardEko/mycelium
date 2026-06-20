@@ -96,6 +96,28 @@ Five application patterns build on this substrate:
 
 ---
 
+## Example portfolio
+
+The [**Food-Rescue Co-op suite**](../../examples/coop/) (`examples/coop/`, 10
+demos) is the capability tour — one runnable demo per capability area, composed
+in one constructive world, each calling out a [pattern & pitfall](14-patterns-and-pitfalls.md).
+Start there. The other examples are specialised:
+
+| Example | What it's for |
+|---|---|
+| [`examples/coop/`](../../examples/coop/) | the capability tour (mailbox, stigmergy, governance, provisioning, federation, consensus, LLM/MCP coordination) |
+| `llm_agent` · `three_node_demo` | live **management-UI** clusters (the headless versions are in coop) |
+| `examples/community` · `examples/chat` | SkillRunner skill clusters + MCP tool discovery |
+| `examples/a2a_langchain` | external-framework (LangChain/AutoGen) A2A interop |
+| `examples/fluid_pipeline` | the AFN **push-vs-pull** contrast |
+| `coordinator_comparison` · `three_arm_workdist` | research artifacts (Paper 1/2a) |
+| `conway` | a gossip-KV convergence visual (chapter 01) |
+
+> `prompt_skill_demo` and `mesh_demo` were **retired** into this portfolio —
+> the first into the coop suite (`mailbox_llm` + the live-template-update section
+> of [05 · Skills](05-skills.md)), the second into `llm_agent`'s manifest-driven
+> management UI.
+
 ## Chapters
 
 | # | Concept | Runnable example | Time |
@@ -103,7 +125,7 @@ Five application patterns build on this substrate:
 | [00](00-concepts.md) | **Concepts & vocabulary** — Capability vs Skill vs A2A/MCP/AgentFacts; native model vs edge standards. **Read first.** | — | 5 min |
 | [01](01-gossip-kv.md) | Gossip KV — shared state without a broker | `cargo run --example conway` | 30 s |
 | [02](02-capabilities.md) | Capability discovery — find nodes by what they do | `cargo run --example llm_agent` | 1 min |
-| [03](03-signals.md) | Signal mesh — ephemeral scoped events | `cargo run --example prompt_skill_demo` | 30 s |
+| [03](03-signals.md) | Signal mesh — ephemeral scoped events | `cargo run -p mycelium-coop-examples --bin mailbox_llm` | 30 s |
 | [04](04-consensus.md) | Consensus overlay — strong consistency on demand | overlay scenarios in `three_node_demo` | 2 min |
 | [05](05-skills.md) | Skills — LLM agents on the mesh | `cd examples/community && ./demo.sh` | 5 min |
 | [06](06-tool-discovery.md) | MCP tool discovery — LLM finds tools dynamically | `./examples/chat/demo.sh` | 5 min |
