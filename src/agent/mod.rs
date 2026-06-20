@@ -76,6 +76,8 @@ mod rbac;
 #[cfg(feature = "compliance")]
 pub(crate) mod audit;
 #[cfg(feature = "compliance")]
+pub(crate) mod revocation;
+#[cfg(feature = "compliance")]
 pub(crate) mod oidc;
 
 #[allow(unused_imports)]
@@ -923,6 +925,19 @@ impl GossipAgent {
         helpers::known_verifying_keys(&self.task_ctx, node)
             .iter()
             .find_map(|vk| rbac::verified_roles(&bytes, node, vk))
+    }
+
+    /// **Revoke** one of this node's own verifying keys cluster-wide (WS-D / D1) — for a key known
+    /// to be *compromised*, where WS5 rotation alone is insufficient (a rotated-away key stays
+    /// trusted for verification). Writes a signed revocation to `sys/revocation/{self}/{key}`,
+    /// signed by the **current** identity key; once it gossips, every node's retained-key verify
+    /// paths (role claims, audit chain) **exclude** `revoked_key`, so anything it signed fails
+    /// verification — "sub-second revocation", bounded by gossip latency.
+    ///
+    /// Typical flow: detect compromise → [`rotate_identity`](Self::rotate_identity) to a fresh key
+    /// → `revoke_identity_key(old_key)` (signed by the new current key). Requires the `tls` identity.
+    pub fn revoke_identity_key(&self, revoked_key: [u8; 32]) -> Result<(), crate::error::GossipError> {
+        revocation::revoke_key(&self.task_ctx, revoked_key, None)
     }
 
     /// Provider-side authorization check: may the (verified) `sender` invoke a

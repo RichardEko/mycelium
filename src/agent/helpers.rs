@@ -257,6 +257,14 @@ pub(crate) fn known_verifying_keys(ctx: &TaskCtx, node: &crate::node_id::NodeId)
             keys.push(cur);
         }
     }
+    // WS-D / D1: exclude validly-revoked keys. A key the node has explicitly revoked (signed by its
+    // current identity) is no longer trusted for *any* signature — closing the WS5 compromise
+    // caveat. Retained-key verification (role claims, audit chain) consults this set here, so a
+    // revoked key fails verification everywhere it is read.
+    let revoked = super::revocation::revoked_key_set(ctx);
+    if !revoked.is_empty() {
+        keys.retain(|k| !revoked.contains(k));
+    }
     keys
 }
 
