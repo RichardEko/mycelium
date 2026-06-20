@@ -139,6 +139,24 @@ jobs:
       # completion in each; fresh nodes per mode.
       - run: ./examples/fluid_pipeline/ci_smoke.sh both
 
+  coop-smoke:
+    name: Food-Rescue Co-op example suite (9 demos)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Pre-build the crate (provisioning + mcp_toolgrowth pull wasmtime — a long
+      # first compile cached by rust-cache) so the smoke's per-demo `cargo run`s
+      # are warm and the run-phase timing isn't dominated by the build.
+      - run: cargo build -p mycelium-coop-examples
+      # All nine examples end-to-end as local in-process clusters: mailbox↔LLM,
+      # stigmergy, elastic-intent, the WASM autonomic flagship (+ failover),
+      # cross-domain AgentFacts, identity rotation, cross-group consensus,
+      # LLM-over-tuple-space coordination, and on-demand MCP tool-growth. Each
+      # demo asserts its own invariants; the script fails on the first miss.
+      - run: ./examples/coop/ci_smoke.sh
+
   sdk-ts:
     name: TypeScript SDK type check
     runs-on: ubuntu-latest
