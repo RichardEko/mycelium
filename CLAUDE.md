@@ -689,7 +689,10 @@ get found.
   --all-targets` (workspace-wide), or `-p mycelium-core` / `-p mycelium` to scope. The
   `mycelium-core/tls|metrics|compliance` features are forwarded from `mycelium`'s; its
   `test-support` feature (enabled via `mycelium`'s dev-dependency) exposes core's
-  `#[cfg(test)]` helpers across the crate boundary.
+  `#[cfg(test)]` helpers across the crate boundary. Workspace members now also include the
+  companion crates (`mycelium-tuple-space`, `mycelium-wasm-host`, `mycelium-agentfacts`) and the
+  `examples/coop` suite (`mycelium-coop-examples`) — so a workspace-wide `cargo build` pulls
+  `wasmtime` (via wasm-host, used by coop demos 04/09); scope with `-p` to skip it.
 - `cargo build --lib`, `cargo test --lib`, `cargo clippy --lib --tests` (the full `mycelium` crate)
 - `cargo build -p mycelium-core` — the embeddable Layers I+II substrate, standalone (≈48 deps
   vs ≈140 for `mycelium`; no axum/hyper/gateway). The dep-tree win M1 exists for.
@@ -737,6 +740,26 @@ get found.
   binary format) for every other `#[derive(Serialize,Deserialize)]` type (persistence,
   capabilities, consensus, audit, RBAC, SWIM datagrams). `framing::bincode_cfg()` is now
   `#[cfg(test)]`.
+- **Food-Rescue Co-op example suite**: `examples/coop/` — **ten** runnable demos that exercise the
+  newer capability surface, composed in *one constructive world* (a co-op of depot nodes rescuing
+  surplus food, no central dispatcher) rather than isolated API toys. Standalone workspace member
+  (`mycelium-coop-examples`) depending on `mycelium` + the three companion crates; each demo is its
+  own `[[bin]]`. **01** `mailbox_llm` (actor↔LLM via the HLC-ordered mailbox) · **02** `stigmergy`
+  (load-shed via `sys/load` pheromone) · **03** `elastic_intent` (management-as-intent / elastic
+  `MembershipGovernor`, operator-optional) · **04** `provisioning` ⭐ (the autonomic loop —
+  tuple-space buffer + WASM self-provision + failover) · **05** `federation_facts` (cross-domain
+  self-certified AgentFacts discovery) · **06** `rotation` (zero-disruption identity rotation;
+  retained-key verify) · **07** `consensus` (Layer III cross-group multi-bloc agreement + leased
+  decay) · **08** `llm_pipeline` (homogeneous LLM workers, competitive pull) · **09** `mcp_toolgrowth`
+  (an LLM agent grows the fabric's toolset — MCP tool loaded on demand) · **10** `llm_council` (a
+  council of *differentiated* LLM agents — fan-out → synthesis → iterative refinement; names the
+  keyed-fan-in M13 boundary). Shared harness in `src/common/` (bootstrap + domain types +
+  `facts_lens` mounting the AgentFacts edge on every depot). `examples/coop/ci_smoke.sh` runs all ten
+  Docker-free (retry-hardened for constrained runners) and is wired into CI as the `coop-smoke` job.
+  Plan + shipped-status table: [`docs/plans/example-suite.md`](docs/plans/example-suite.md); per-demo
+  descriptions: [`examples/coop/README.md`](examples/coop/README.md). Built-while-stress-testing:
+  surfaced/fixed the governor-vs-emergent-autojoin bug (#56→#57), the `crdt.rs` retained-key gap
+  (#51), and filed #55 (cross-node Individual-scoped signals).
 - **Agentic Flow Networks demo**: `examples/fluid_pipeline/` — 10-worker fluid pool,
   4-stage news article pipeline, two modes via `PIPELINE_MODE`: **pull** (default,
   canonical — tuple-space stages, workers take() from the deepest stage; seeder is an
