@@ -264,7 +264,35 @@ gossip-distributed migration** — a declarative `vN → vN+1` transform publish
 into the registry alongside the schemas and composed `v1 → v2 → v3` on the
 receive side — and, where no such migration is registered, a **`schema_mismatch`
 tripwire** (`/stats`) that surfaces the drift rather than silently coercing it.
-See the [delivery plan](../plans/v2-wsf-schema-evolution.md) for status.
+
+A migration is **declarative data, never code** (so it is safe to gossip): an
+ordered list of `Rename` / `Default` / `Drop` / `Coerce` rules over dot-addressed
+JSON paths. Register it once; every node resolves the chain from its gossip view:
+
+```rust
+use mycelium::schema_evolution::{MigrationRule, SchemaMigration};
+
+// An operator (or CI) registers the v1 → v2 transform.
+agent.publish_migration(&SchemaMigration {
+    from: "donation@v1".into(),
+    to:   "donation@v2".into(),
+    rules: vec![
+        MigrationRule::Rename  { from: "origin".into(), to: "origin_zone".into() },
+        MigrationRule::Default { path: "priority".into(), value: serde_json::json!(0) },
+    ],
+});
+
+// A consumer expecting v3 migrates a received v1 payload EXPLICITLY before parsing —
+// never an automatic silent transform on the hot path. It composes v1 → v2 → v3 from
+// the registry; a missing link returns `NoMigrationPath` (and trips `schema_mismatch`).
+let value = agent.migrate_payload("donation@v1", "donation@v3", &payload_bytes)?;
+let parsed: DonationV3 = serde_json::from_value(value)?;   // cross-version interop
+```
+
+The rule: **explicit, registered, detect-don't-guess.** This is the same
+machinery M16's evolvable JSON-LD AgentFacts use to migrate a nested
+`certification` field across versions. See the
+[delivery plan](../plans/v2-wsf-schema-evolution.md).
 
 ---
 
