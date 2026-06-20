@@ -1,6 +1,7 @@
 # Delivery plan — the Food-Rescue Co-op example suite
 
-**Status:** ✅ **SHIPPED & CI-GATED** (2026-06-20). **All ten examples** landed under
+**Status:** ✅ **SHIPPED & CI-GATED** (2026-06-20). **All ten examples** (an 11th, `catalog`, was
+added later via the [docs-and-examples-alignment plan](docs-and-examples-alignment.md)) landed under
 `examples/coop/` and run Docker-free via `examples/coop/ci_smoke.sh`, which is wired into the
 `coop-smoke` CI job (retry-hardened for constrained runners — PR #65). The original six-example plan
 below is preserved as the design record; the suite was then extended past it (see *Shipped status*).

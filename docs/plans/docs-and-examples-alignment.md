@@ -1,8 +1,18 @@
 # Delivery plan — documentation & example-portfolio alignment
 
-**Status:** proposed (2026-06-20). **Priority: this whole effort precedes the remaining v2
-engineering** (WS-D security, WS-F schema-evolution) — the house gets put in order (concepts,
-examples, two-audience docs) before more features land.
+**Status:** ✅ **COMPLETE** (2026-06-20). All seven workstreams shipped; the house is in order ahead
+of the remaining v2 engineering (WS-D security, WS-F schema-evolution).
+
+| WS | What | PR |
+|---|---|---|
+| WS0 | Concepts & Glossary (`guide/00-concepts.md`) | #70 |
+| WS2 | Patterns & Pitfalls grounded in examples (`guide/14-patterns-and-pitfalls.md`) | #71 |
+| WS1 | Retire-but-preserve (`prompt_skill_demo`, `mesh_demo`) | #72 |
+| WS5 | Cluster artifact catalogue (example 11 `catalog` + `operations/artifacts.md`) | #73 |
+| WS3+WS4 | Developer cookbook + two-audience ops docs | #74 |
+| WS6 | Reconcile (CLAUDE.md, plan status, stale-ref sweep) | this |
+
+The original plan follows as the design record.
 
 **Why.** The 10-example Food-Rescue Co-op suite shipped, but the documentation never caught up:
 the guide index still points at *old* examples, the coop suite is invisible to `docs/`, no example
