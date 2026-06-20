@@ -533,6 +533,31 @@ impl GossipAgent {
         crate::schema_evolution::list_migrations(&self.kv())
     }
 
+    /// **Migrate** a received JSON `payload` from schema `from` to `to` by composing the registered
+    /// migration chain (WS-F / Schema-Evo · E3b). This is the **explicit** application a consumer
+    /// makes before parsing a cross-version payload — never an automatic silent coercion on the hot
+    /// path. `Err(NoMigrationPath)` when no registered chain connects the versions (and the
+    /// `schema_mismatch` tripwire fires so the drift is legible) — **detect, don't guess**.
+    pub fn migrate_payload(
+        &self,
+        from: &str,
+        to: &str,
+        payload: &[u8],
+    ) -> Result<serde_json::Value, crate::schema_evolution::MigrationError> {
+        use crate::schema_evolution::MigrationError;
+        let value: serde_json::Value = serde_json::from_slice(payload)
+            .map_err(|e| MigrationError::InvalidJson(e.to_string()))?;
+        let migrations = self.list_migrations();
+        match crate::schema_evolution::migrate_value(&migrations, from, to, value) {
+            Ok(v) => Ok(v),
+            Err(e @ MigrationError::NoMigrationPath { .. }) => {
+                self.task_ctx.schema_mismatch.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Err(e)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// Returns a typed handle for consensus operations (Layer III).
     ///
     /// Zero-cost: clones one `Arc` per call. The handle is `Clone + Send + Sync`
