@@ -4007,6 +4007,38 @@ async fn test_wsf_schema_mismatch_is_detected_at_resolve() {
     agent.shutdown_with_timeout(Duration::from_secs(5)).await;
 }
 
+/// WS-F / Schema-Evo gate (G-E3a): the migration registry round-trips through the gossip KV — a
+/// published migration is readable by `get_migration` / `list_migrations` on the same node (and
+/// would gossip to peers like any KV entry).
+#[tokio::test]
+async fn test_wsf_migration_registry_round_trips() {
+    use crate::schema_evolution::{MigrationRule, SchemaMigration};
+
+    let port = alloc_port();
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = port;
+    let agent = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg));
+    agent.start().await.unwrap();
+
+    let m = SchemaMigration {
+        from: "donation@v1".into(),
+        to: "donation@v2".into(),
+        rules: vec![
+            MigrationRule::Rename { from: "origin".into(), to: "origin_zone".into() },
+            MigrationRule::Default { path: "priority".into(), value: serde_json::json!(0) },
+        ],
+    };
+    assert!(agent.publish_migration(&m), "publish queued");
+    poll_until(|| agent.get_migration("donation@v1", "donation@v2").is_some(), 3_000).await;
+
+    assert_eq!(agent.get_migration("donation@v1", "donation@v2").as_ref(), Some(&m),
+        "the registered migration round-trips through the registry");
+    assert!(agent.get_migration("donation@v2", "donation@v3").is_none(), "an unregistered path is absent");
+    assert!(agent.list_migrations().contains(&m), "it appears in the catalogue");
+
+    agent.shutdown_with_timeout(Duration::from_secs(5)).await;
+}
+
 // ── M2 falsification probe (Run 24): concurrent audit chain integrity ─────
 
 /// Probe: many concurrent `audit()` calls on one node must produce a strictly

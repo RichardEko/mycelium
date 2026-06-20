@@ -182,7 +182,7 @@ pub(crate) use mycelium_core::{
 };
 
 mod agent;
-mod schema_evolution;
+pub mod schema_evolution;
 #[cfg(feature = "consensus")]
 mod consensus;
 
