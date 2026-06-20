@@ -28,4 +28,13 @@ echo "$out" | grep -q "All assertions passed" \
   || { echo "FAIL: elastic_intent did not pass its assertions"; exit 1; }
 
 echo
+echo "── 04 · provisioning (flagship; pulls wasmtime on first build) ───"
+out="$(cargo run -q -p mycelium-coop-examples --bin provisioning 2>/dev/null)"
+echo "$out"
+echo "$out" | grep -q "All assertions passed" \
+  || { echo "FAIL: provisioning did not pass its assertions"; exit 1; }
+echo "$out" | grep -q "self-healed" \
+  || { echo "FAIL: provisioning failover phase did not complete"; exit 1; }
+
+echo
 echo "All co-op smokes passed."

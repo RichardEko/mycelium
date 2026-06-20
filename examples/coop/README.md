@@ -35,7 +35,7 @@ curl http://127.0.0.1:<printed-port>/.well-known/agent-facts.json
 | 01 | `mailbox_llm` | ✅ shipped | actor ↔ LLM via the durable, HLC-ordered **mailbox** |
 | 02 | `stigmergy` | ✅ shipped | coordinator-free load shedding via `sys/load` pheromone |
 | 03 | `elastic_intent` | ✅ shipped | elastic sizing as evaporating **intent** (operator-optional) |
-| 04 | `provisioning` ⭐ | planned | the full **autonomic loop**: buffer in a tuple-space lane while peers self-provision the missing capability |
+| 04 | `provisioning` ⭐ | ✅ shipped | the full **autonomic loop**: buffer in a tuple-space lane while peers self-provision the missing capability |
 | 05 | `federation_facts` | planned | cross-domain edge discovery via self-certified AgentFacts |
 | 06 | `rotation` | planned | zero-disruption identity rotation; pre-rotation facts still verify |
 
@@ -86,6 +86,27 @@ pool member is killed and the governors self-heal the count back to `MIN`.
 just an evaporating desired-state and nodes that reconcile locally. The litmus *"if management
 vanishes, does the cluster keep working?"* is shown by killing the operator. (Requires the governor
 to own a group under intent — see #56 / the emergent-defers-to-governor fix.)
+
+### 04 — `provisioning` ⭐ (the flagship)
+
+```bash
+cargo run -p mycelium-coop-examples --bin provisioning
+```
+
+The whole thesis in one process. A surge of donations needs a `route/optimize` capability **no depot
+has yet**, so they **buffer in a tuple-space lane**. The worker declares the requirement (the demand);
+a provider depot **self-provisions** the optimizer — a real WASM component pulled, content-verified,
+and instantiated — advertises it, and serves it over RPC. The worker then drains the backlog: `take`
+→ invoke the optimizer → `complete` to `done`. Finally the **active optimizer is killed**: its
+capability evaporates, a second wave buffers, and a **standby self-provisions** to restore it —
+*restart ≡ provisioning*. Both waves drain.
+
+The WASM artifact is the committed `echo_component.wasm` fixture (it echoes its input — a
+deterministic "optimized route"), so CI needs no wasm toolchain.
+
+**Philosophy beat:** nothing predicted who would run the optimizer. It was **unmet demand** (a
+pheromone), satisfied by a node **electing to provision**; the buffer lost no item; and the
+rendezvous **self-healed** across a provider death — no coordinator anywhere in the loop.
 
 ## CI
 
