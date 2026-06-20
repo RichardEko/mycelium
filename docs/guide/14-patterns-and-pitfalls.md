@@ -179,9 +179,10 @@ no other node can fetch from it. For a real cluster the artifact must be
 discoverable (`publish_installable` → `installable/` gossiped KV) and its bytes
 distributable (`MeshArtifactSource` / `serve_artifacts`). `provisioning` uses the
 shortcut because it runs every role in one process; don't copy that into a
-distributed deployment. The cluster-wide path lives in the
-[`mycelium-wasm-host`](../../mycelium-wasm-host/) crate (a dedicated
-`operations/artifacts.md` + a `catalog` example land with that workstream).
+distributed deployment. The cluster-wide path — `publish_installable` → `from_kv`
+→ `MeshArtifactSource` — is shown end to end in the
+[`catalog`](../../examples/coop/src/bin/catalog.rs) example and documented in
+[operations/artifacts.md](../operations/artifacts.md).
 
 ---
 

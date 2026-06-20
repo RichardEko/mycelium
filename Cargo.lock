@@ -2122,6 +2122,7 @@ name = "mycelium-coop-examples"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "ed25519-dalek",
  "mycelium",
  "mycelium-agentfacts",
  "mycelium-tuple-space",

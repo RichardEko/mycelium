@@ -51,6 +51,10 @@ path = "src/bin/mcp_toolgrowth.rs"
 name = "llm_council"
 path = "src/bin/llm_council.rs"
 
+[[bin]]
+name = "catalog"
+path = "src/bin/catalog.rs"
+
 [dependencies]
 # The full substrate (gateway is default-on; tls for node identity / the facts lens; llm for the
 # Prompt Skills used by the mailbox-llm demo).
@@ -69,3 +73,5 @@ tracing            = "0.1"
 tracing-subscriber = "0.3"
 # federation_facts: a quilt fetcher does a plain HTTP GET of the neighbour's edge endpoint.
 reqwest            = { version = "0.12", features = ["json"] }
+# catalog: sign an installable artifact's provenance (publisher vouches for the bytes).
+ed25519-dalek      = "2"
