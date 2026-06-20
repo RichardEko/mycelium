@@ -120,6 +120,11 @@ Start there. The other examples are specialised:
 
 ## Chapters
 
+> **In a hurry?** The [Cookbook](cookbook.md) answers "how do I…?" task by task
+> (embed, advertise a capability, build a skill, call across nodes, federate,
+> ship an artifact, scale), each pointing at a runnable demo. Operators: see
+> [docs/operations/](../operations/).
+
 | # | Concept | Runnable example | Time |
 |---|---------|-----------------|------|
 | [00](00-concepts.md) | **Concepts & vocabulary** — Capability vs Skill vs A2A/MCP/AgentFacts; native model vs edge standards. **Read first.** | — | 5 min |
