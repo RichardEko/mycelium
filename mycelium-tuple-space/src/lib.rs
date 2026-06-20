@@ -814,6 +814,44 @@ impl TupleSpace {
         Ok(())
     }
 
+    // ── M13 / WS-G keyed serve paths ─────────────────────────────────────────
+    // G1a replicates keyed items as plain `Put`/`Complete` (key not yet on the WAL
+    // record); G1b adds the key to the WAL + replication so a keyed in-flight item
+    // re-queues under its key across a primary crash / promotion.
+    pub(crate) fn serve_put_keyed(&self, stage: &str, key: Arc<str>, payload: Bytes) -> Result<u64, TupleError> {
+        let store = self.store_expect();
+        let id = store.put_keyed(stage, key, payload.clone())?;
+        self.replicate(Record::Put { id, stage: Arc::from(stage), payload });
+        Ok(id)
+    }
+
+    pub(crate) async fn serve_take_by_key(
+        &self,
+        stage: &str,
+        key: &str,
+        timeout: Duration,
+        worker: &NodeId,
+    ) -> Result<(u64, Bytes), TupleError> {
+        let store = self.store_expect();
+        let (id, payload) = store.take_by_key(stage, key, timeout).await?;
+        self.write_inflight_key(id, stage, worker);
+        Ok((id, payload))
+    }
+
+    pub(crate) fn serve_complete_keyed(
+        &self,
+        id: u64,
+        next_stage: &str,
+        key: Arc<str>,
+        payload: Bytes,
+    ) -> Result<u64, TupleError> {
+        let store = self.store_expect();
+        let new_id = store.complete_keyed(id, next_stage, key, payload.clone())?;
+        self.clear_inflight_key(id);
+        self.replicate(Record::Complete { old_id: id, new_id, stage: Arc::from(next_stage), payload });
+        Ok(new_id)
+    }
+
     /// Fire-and-forget replication to every live secondary. Not on the
     /// producer's critical path. Items above `mirror_payload_limit` are
     /// skipped — the WAL replay at promotion is their recovery path.
@@ -1027,6 +1065,88 @@ impl TupleSpace {
                 primary,
                 rpc::rpc_kind(&self.cfg.namespace, "complete"),
                 rpc::enc_complete_req(id, next_stage, &payload),
+                Duration::from_secs(10),
+            )
+            .await
+            .map_err(rpc_err)?;
+        rpc::dec_id_resp(&resp)
+    }
+
+    // ── M13 / WS-G: keyed-exact-match rendezvous (fan-in joins) ──────────────
+
+    /// Put `payload` on `stage` under correlation `key` (WS-G / M13). Claimed only by a
+    /// [`take_by_key`](Self::take_by_key) with the same key — the two-stream rendezvous ("an invoice
+    /// AND its matching purchase order") that exact lane names can't express without one lane per key.
+    /// Exact-match only (O(1) hash), never template matching.
+    pub async fn put_keyed(&self, stage: &str, key: &str, payload: Bytes) -> Result<u64, TupleError> {
+        if self.serving_locally().is_some() {
+            return self.serve_put_keyed(stage, Arc::from(key), payload);
+        }
+        let primary = self.resolve_primary()?;
+        if self.pressure_fresh(&primary, stage) {
+            return Err(TupleError::Backpressure { retry_after_ms: 500 });
+        }
+        let resp = self
+            .agent
+            .service()
+            .rpc_call(
+                primary,
+                rpc::rpc_kind(&self.cfg.namespace, "put_keyed"),
+                rpc::enc_put_keyed_req(stage, key, &payload),
+                Duration::from_secs(10),
+            )
+            .await
+            .map_err(rpc_err)?;
+        rpc::dec_id_resp(&resp)
+    }
+
+    /// Blocking keyed claim (WS-G / M13): claims the item on `stage` whose correlation key is `key`,
+    /// or parks until one arrives or `timeout` elapses.
+    pub async fn take_by_key(
+        &self,
+        stage: &str,
+        key: &str,
+        timeout: Duration,
+    ) -> Result<(u64, Bytes), TupleError> {
+        if self.serving_locally().is_some() {
+            let me = self.agent.node_id().clone();
+            return self.serve_take_by_key(stage, key, timeout, &me).await;
+        }
+        let primary = self.resolve_primary()?;
+        let resp = self
+            .agent
+            .service()
+            .rpc_call(
+                primary,
+                rpc::rpc_kind(&self.cfg.namespace, "take_by_key"),
+                rpc::enc_take_by_key_req(stage, key, timeout),
+                timeout + Duration::from_secs(5),
+            )
+            .await
+            .map_err(rpc_err)?;
+        rpc::dec_take_resp(&resp)
+    }
+
+    /// Atomic keyed pipeline advance (WS-G / M13): acks `id` AND puts `payload` on `next_stage` under
+    /// correlation `key` in one record — the keyed analogue of [`complete`](Self::complete).
+    pub async fn complete_keyed(
+        &self,
+        id: u64,
+        next_stage: &str,
+        key: &str,
+        payload: Bytes,
+    ) -> Result<u64, TupleError> {
+        if self.serving_locally().is_some() {
+            return self.serve_complete_keyed(id, next_stage, Arc::from(key), payload);
+        }
+        let primary = self.resolve_primary()?;
+        let resp = self
+            .agent
+            .service()
+            .rpc_call(
+                primary,
+                rpc::rpc_kind(&self.cfg.namespace, "complete_keyed"),
+                rpc::enc_complete_keyed_req(id, next_stage, key, &payload),
                 Duration::from_secs(10),
             )
             .await

@@ -43,6 +43,14 @@ use crate::TupleError;
 struct StageInner {
     entries: VecDeque<(u64, Bytes, std::time::Instant)>,
     waiters: VecDeque<oneshot::Sender<(u64, Bytes)>>,
+    /// M13 (WS-G / G1a) keyed-exact-match rendezvous, kept **separate** from the FIFO so a keyed
+    /// `take_by_key` and an unkeyed `take` on the same stage never interfere. Items put with a
+    /// correlation key wait here to be claimed by that exact key (an O(1) hash lookup — not template
+    /// matching). Both count toward `depth` (backpressure sees all queued items).
+    keyed_entries: HashMap<Arc<str>, (u64, Bytes, std::time::Instant)>,
+    /// Workers parked on a specific key (one per key — a second waiter on the same pending key
+    /// replaces the first, whose oneshot then times out; a correlation key is, by definition, unique).
+    keyed_waiters: HashMap<Arc<str>, oneshot::Sender<(u64, Bytes)>>,
 }
 
 /// Ring of the last N store-path queue waits (µs), for P99 reporting.
@@ -75,6 +83,8 @@ impl StageState {
             inner: Mutex::new(StageInner {
                 entries: VecDeque::new(),
                 waiters: VecDeque::new(),
+                keyed_entries: HashMap::new(),
+                keyed_waiters: HashMap::new(),
             }),
             depth: AtomicU32::new(0),
             waiters_count: AtomicU32::new(0),
@@ -327,6 +337,129 @@ impl TupleStore {
         }
     }
 
+    // ── M13 / G1a: keyed-exact-match rendezvous (fan-in joins) ───────────────
+
+    /// Put `payload` on `stage` under correlation `key` (WS-G / M13). Claimed only by
+    /// [`take_by_key`](Self::take_by_key) with the same key — the two-stream rendezvous ("an invoice
+    /// AND its matching purchase order") that exact lane names can't express without one lane per
+    /// key. Hands off to a parked keyed waiter (hot path) or stores under the key.
+    pub(crate) fn put_keyed(&self, stage: &str, key: Arc<str>, payload: Bytes) -> Result<u64, TupleError> {
+        let state = self.stage(stage);
+        if state.depth.load(Ordering::Relaxed) >= self.high_watermark {
+            return Err(TupleError::Backpressure { retry_after_ms: 500 });
+        }
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        if let Some(wal) = &self.wal {
+            // G1a reuses the v1 Put record (key not yet persisted); G1b adds the key to the WAL so a
+            // keyed in-flight item re-queues under its key across a crash/promotion.
+            wal.append(&Record::Put { id, stage: Arc::from(stage), payload: payload.clone() })?;
+        }
+        state.put_total.fetch_add(1, Ordering::Relaxed);
+        let hot = self.dispatch_keyed(&state, Arc::from(stage), key, id, payload)?;
+        if hot {
+            state.hot_total.fetch_add(1, Ordering::Relaxed);
+            state.take_total.fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(id)
+    }
+
+    /// Hand a keyed `(id, payload)` to a waiter parked on `key`, or store it under `key`. Returns
+    /// `true` on a direct (hot-path) delivery. Mirrors [`dispatch`](Self::dispatch): the item is
+    /// registered in `inflight` before the oneshot send so a compaction snapshot never loses it.
+    fn dispatch_keyed(
+        &self,
+        state: &StageState,
+        stage: Arc<str>,
+        key: Arc<str>,
+        id: u64,
+        payload: Bytes,
+    ) -> Result<bool, TupleError> {
+        let mut g = state.inner.lock();
+        if let Some(tx) = g.keyed_waiters.remove(&key) {
+            self.inflight.lock().insert(
+                id,
+                Inflight { stage: Arc::clone(&stage), payload: payload.clone(), taken_at_ms: now_ms() },
+            );
+            drop(g);
+            match tx.send((id, payload)) {
+                Ok(()) => {
+                    if let Some(wal) = &self.wal {
+                        wal.append(&Record::Take { id, taken_at_ms: now_ms() })?;
+                    }
+                    return Ok(true);
+                }
+                Err(p) => {
+                    // The keyed waiter timed out — undo the in-flight claim and fall through to store.
+                    self.inflight.lock().remove(&id);
+                    let mut g2 = state.inner.lock();
+                    g2.keyed_entries.insert(key, (p.0, p.1, std::time::Instant::now()));
+                    state.depth.fetch_add(1, Ordering::Relaxed);
+                    return Ok(false);
+                }
+            }
+        }
+        g.keyed_entries.insert(key, (id, payload, std::time::Instant::now()));
+        state.depth.fetch_add(1, Ordering::Relaxed);
+        Ok(false)
+    }
+
+    /// Blocking keyed claim (WS-G / M13). Claims the item on `stage` whose correlation key is `key`,
+    /// or parks a keyed waiter until one arrives or `timeout` elapses. O(1) exact-match — never
+    /// template matching (that is the blackboard companion's territory).
+    pub(crate) async fn take_by_key(
+        &self,
+        stage: &str,
+        key: &str,
+        timeout: Duration,
+    ) -> Result<(u64, Bytes), TupleError> {
+        let state = self.stage(stage);
+        let key: Arc<str> = Arc::from(key);
+        let mut rx = {
+            let mut g = state.inner.lock();
+            if let Some((id, payload, enqueued)) = g.keyed_entries.remove(&key) {
+                state.depth.fetch_sub(1, Ordering::Relaxed);
+                state.record_queue_wait(enqueued.elapsed());
+                self.inflight.lock().insert(
+                    id,
+                    Inflight { stage: Arc::from(stage), payload: payload.clone(), taken_at_ms: now_ms() },
+                );
+                drop(g);
+                if let Some(wal) = &self.wal {
+                    wal.append(&Record::Take { id, taken_at_ms: now_ms() })?;
+                }
+                state.take_total.fetch_add(1, Ordering::Relaxed);
+                return Ok((id, payload));
+            }
+            let (tx, rx) = oneshot::channel();
+            // One waiter per key; a prior waiter on this key is dropped (its take then times out).
+            g.keyed_waiters.insert(Arc::clone(&key), tx);
+            rx
+        };
+        tokio::select! {
+            item = &mut rx => match item {
+                Ok((id, payload)) => {
+                    state.take_total.fetch_add(1, Ordering::Relaxed);
+                    Ok((id, payload))
+                }
+                Err(_) => Err(TupleError::Timeout),
+            },
+            _ = tokio::time::sleep(timeout) => {
+                match rx.try_recv() {
+                    Ok((id, payload)) => {
+                        state.take_total.fetch_add(1, Ordering::Relaxed);
+                        Ok((id, payload))
+                    }
+                    Err(_) => {
+                        // Remove our now-dead keyed waiter if it's still ours (a racing put may have
+                        // already removed it to deliver).
+                        state.inner.lock().keyed_waiters.remove(&key);
+                        Err(TupleError::Timeout)
+                    }
+                }
+            }
+        }
+    }
+
     /// Terminal ack: removes the in-flight entry and writes `AckRecord`.
     pub(crate) fn ack(&self, id: u64) -> Result<(), TupleError> {
         let removed = self.inflight.lock().remove(&id);
@@ -371,6 +504,39 @@ impl TupleStore {
         let state = self.stage(next_stage);
         state.put_total.fetch_add(1, Ordering::Relaxed);
         let hot = self.dispatch(&state, Arc::from(next_stage), new_id, payload)?;
+        if hot {
+            state.hot_total.fetch_add(1, Ordering::Relaxed);
+            state.take_total.fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(new_id)
+    }
+
+    /// Atomic keyed pipeline advance (WS-G / M13): acks `id` AND puts `payload` on `next_stage`
+    /// under correlation `key` in one `CompleteRecord` — the keyed analogue of [`complete`](Self::complete).
+    pub(crate) fn complete_keyed(
+        &self,
+        id: u64,
+        next_stage: &str,
+        key: Arc<str>,
+        payload: Bytes,
+    ) -> Result<u64, TupleError> {
+        let removed = self.inflight.lock().remove(&id);
+        if removed.is_none() {
+            return Err(TupleError::NotFound);
+        }
+        let new_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        if let Some(wal) = &self.wal {
+            wal.append(&Record::Complete {
+                old_id: id,
+                new_id,
+                stage: Arc::from(next_stage),
+                payload: payload.clone(),
+            })?;
+            wal.note_acked();
+        }
+        let state = self.stage(next_stage);
+        state.put_total.fetch_add(1, Ordering::Relaxed);
+        let hot = self.dispatch_keyed(&state, Arc::from(next_stage), key, new_id, payload)?;
         if hot {
             state.hot_total.fetch_add(1, Ordering::Relaxed);
             state.take_total.fetch_add(1, Ordering::Relaxed);
@@ -1090,6 +1256,59 @@ mod tests {
         assert_eq!((got_a, pa.as_ref()), (id_a, &b"alpha"[..]));
         assert_eq!((got_b, pb.as_ref()), (id_b, &b"beta"[..]));
         assert_eq!(store.depth(Some("s"))[0].depth, 0);
+    }
+
+    // ── M13 / WS-G · G-G1a: keyed-exact-match rendezvous ────────────────────
+
+    #[tokio::test]
+    async fn keyed_put_then_take_by_key() {
+        let store = TupleStore::transient(500);
+        let id = store.put_keyed("po", Arc::from("inv-42"), b("purchase-order")).unwrap();
+        // The wrong key does not match (times out fast); the right key claims it.
+        assert!(store.take_by_key("po", "inv-99", Duration::from_millis(50)).await.is_err());
+        let (got, payload) = store.take_by_key("po", "inv-42", Duration::from_millis(100)).await.unwrap();
+        assert_eq!((got, payload.as_ref()), (id, &b"purchase-order"[..]));
+        assert_eq!(store.depth(Some("po"))[0].depth, 0, "keyed take decrements depth");
+    }
+
+    #[tokio::test]
+    async fn keyed_take_parks_until_keyed_put() {
+        // The two-stream join: a worker waits on a correlation key before the item arrives.
+        let store = Arc::new(TupleStore::transient(500));
+        let s2 = Arc::clone(&store);
+        let waiter = tokio::spawn(async move {
+            s2.take_by_key("po", "inv-7", Duration::from_secs(5)).await
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await; // ensure the waiter parks first
+        let id = store.put_keyed("po", Arc::from("inv-7"), b("matched")).unwrap();
+        let (got, payload) = waiter.await.unwrap().unwrap();
+        assert_eq!((got, payload.as_ref()), (id, &b"matched"[..]));
+    }
+
+    #[tokio::test]
+    async fn keyed_and_unkeyed_lanes_do_not_interfere() {
+        let store = TupleStore::transient(500);
+        // A keyed item is NOT claimable by an unkeyed FIFO take, and vice versa.
+        store.put_keyed("s", Arc::from("k1"), b("keyed")).unwrap();
+        assert!(store.take("s", Duration::from_millis(50)).await.is_err(),
+            "an unkeyed take must not claim a keyed item");
+        let id_u = store.put("s", b("unkeyed")).unwrap();
+        assert!(store.take_by_key("s", "k1", Duration::from_millis(50)).await.is_ok(),
+            "the keyed item is still claimable by its key");
+        let (got, _) = store.take("s", Duration::from_millis(50)).await.unwrap();
+        assert_eq!(got, id_u, "the unkeyed item is claimable by an unkeyed take");
+    }
+
+    #[tokio::test]
+    async fn keyed_complete_advances_under_key() {
+        let store = TupleStore::transient(500);
+        let id = store.put_keyed("a", Arc::from("corr"), b("v1")).unwrap();
+        let (claimed, _) = store.take_by_key("a", "corr", Duration::from_millis(100)).await.unwrap();
+        assert_eq!(claimed, id);
+        // complete_keyed advances the item onto stage "b" under the same correlation key.
+        store.complete_keyed(id, "b", Arc::from("corr"), b("v2")).unwrap();
+        let (_, payload) = store.take_by_key("b", "corr", Duration::from_millis(100)).await.unwrap();
+        assert_eq!(payload.as_ref(), &b"v2"[..]);
     }
 
     #[tokio::test]
