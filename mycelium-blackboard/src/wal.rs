@@ -266,6 +266,14 @@ impl WalWriter {
     pub(crate) fn epoch(&self) -> u64 {
         self.inner.lock().epoch
     }
+
+    /// Force a durable sync (the periodic checkpoint task).
+    pub(crate) fn sync(&self) -> io::Result<()> {
+        let mut g = self.inner.lock();
+        g.file.sync_data()?;
+        g.ops_since_sync = 0;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

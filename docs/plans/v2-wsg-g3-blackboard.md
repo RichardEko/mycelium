@@ -74,7 +74,17 @@ tests; clippy clean.
   acked claim does not resurrect on WAL replay; the worked-example "winner drops mid-charge → loser
   claims the remainder" path passes.
 
-## Phase 3 — Roles & failover
+## Phase 3 — Roles & failover ✅ SHIPPED
+
+**Shipped** — the agent-backed `Blackboard` (`BoardConfig` + `BoardRole`): primary discovered on the
+capability ring (`blackboard/{ns}.primary`), secondary mirrors + promotes on evaporation, `Auto`
+elects lowest-candidate. Public `post`/`read`/`claim`/`ack`/`release` serve locally on the primary or
+RPC to it. **Replication is `Post`/`Ack`-only** (a `Claim`/`Release` doesn't change mirror liveness —
+a claimed-but-unacked fact stays claimable in the mirror = the at-least-once re-queue a promotion
+wants), so the heartbeat/WAL-replay-cursor machinery is unneeded: snapshot-on-join + live replication
+keep the mirror a complete live view. Gates G-G3.3 (2 integration tests): an in-flight claim survives
+a primary kill + promotion and is re-claimable (then acked → no resurrection); `Auto` election elects
+a serving primary. Clippy `--features gateway --all-targets` clean.
 
 - `BoardRole` (`Primary`/`Secondary`/`Auto`/`Client`) mirroring `TupleRole`: primary discovered by
   capability advertisement; secondary mirrors via replicate RPC + heartbeat and promotes when the
