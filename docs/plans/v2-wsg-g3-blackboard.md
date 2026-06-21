@@ -31,7 +31,13 @@ scenario.
 
 ---
 
-## Phase 1 — Core: the board store + claim-by-predicate
+## Phase 1 — Core: the board store + claim-by-predicate ✅ SHIPPED
+
+**Shipped** — the `mycelium-blackboard` crate scaffold + the pure in-memory `BoardStore`:
+`post` / `read` (non-destructive `rd`) / `claim` (competitive destructive `in`, single-owner,
+non-blocking) / `ack` (idempotent terminal) / `release` / `requeue_expired`, with a conjunctive
+attribute `Predicate` (equality + presence). 8 unit tests incl. G-G3.1 (a 16-thread race over one
+finite fact — exactly one claims it); clippy `--features gateway --all-targets` clean; CI job added.
 
 The in-memory primitive, mirroring `mycelium-tuple-space`'s Phase 1 (core store, no WAL/roles yet).
 
