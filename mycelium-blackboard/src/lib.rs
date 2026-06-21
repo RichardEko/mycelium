@@ -42,6 +42,7 @@
 use std::collections::BTreeMap;
 
 mod store;
+mod wal;
 pub use store::{BoardDepth, BoardStats, BoardStore};
 
 /// A typed fact on the board: an attribute map (the matchable surface) plus an opaque payload.
@@ -113,7 +114,7 @@ impl Predicate {
 }
 
 /// Errors from the board API.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 #[non_exhaustive]
 pub enum BlackboardError {
     /// Unknown claim id — already acked, already released, re-queued by the in-flight deadline, or
@@ -123,6 +124,8 @@ pub enum BlackboardError {
     NoProvider,
     /// Transport error talking to the board primary (later phases).
     Rpc(String),
+    /// WAL I/O error (persistent boards).
+    Io(std::io::Error),
 }
 
 impl std::fmt::Display for BlackboardError {
@@ -131,8 +134,22 @@ impl std::fmt::Display for BlackboardError {
             BlackboardError::NotFound => write!(f, "unknown claim id"),
             BlackboardError::NoProvider => write!(f, "no blackboard primary resolvable"),
             BlackboardError::Rpc(s) => write!(f, "rpc error: {s}"),
+            BlackboardError::Io(e) => write!(f, "wal io error: {e}"),
         }
     }
 }
 
-impl std::error::Error for BlackboardError {}
+impl std::error::Error for BlackboardError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            BlackboardError::Io(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for BlackboardError {
+    fn from(e: std::io::Error) -> Self {
+        BlackboardError::Io(e)
+    }
+}

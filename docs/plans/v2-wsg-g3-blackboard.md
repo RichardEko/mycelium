@@ -55,7 +55,16 @@ The in-memory primitive, mirroring `mycelium-tuple-space`'s Phase 1 (core store,
   one wins, the other gets `None`; non-destructive `read` sees the fact until it's claimed; `release`
   returns it to claimable.
 
-## Phase 2 — Durability: WAL (build against the G2 contract)
+## Phase 2 — Durability: WAL (build against the G2 contract) ✅ SHIPPED
+
+**Shipped** — `mycelium-blackboard/src/wal.rs` + `BoardStore::{transient, persistent}`. WAL records
+`Post` / `Claim` / `Ack` / `Release` (each one indivisible record — the blackboard has no stage
+transitions, so no compound `Complete`), magic+versioned header (refuses a newer format), corrupt-tail
+truncation, and compaction with an epoch bump. Replay liveness: a fact is claimable iff `Post`ed and
+not `Ack`ed; a claimed-but-unacked fact re-queues (at-least-once). 5 G-G3.2 gate tests
+(posted-survive-replay, **claimed-but-unacked re-queues** = the "winner drops mid-charge" path,
+acked-does-not-resurrect, compaction-preserves-live-drops-acked, refuses-newer-format) + 2 WAL unit
+tests; clippy clean.
 
 - Claim path served through a primary with a WAL + in-flight deadline, **exactly the G2 discipline**:
   `Claim` is **one indivisible record**; an unacked claim past the deadline re-queues (at-least-once,
