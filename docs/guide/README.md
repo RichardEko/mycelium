@@ -99,14 +99,15 @@ Five application patterns build on this substrate:
 
 ## Example portfolio
 
-The [**Food-Rescue Co-op suite**](../../examples/coop/) (`examples/coop/`, 10
+The [**Food-Rescue Co-op suite**](../../examples/coop/) (`examples/coop/`, 11
 demos) is the capability tour — one runnable demo per capability area, composed
 in one constructive world, each calling out a [pattern & pitfall](14-patterns-and-pitfalls.md).
 Start there. The other examples are specialised:
 
 | Example | What it's for |
 |---|---|
-| [`examples/coop/`](../../examples/coop/) | the capability tour (mailbox, stigmergy, governance, provisioning, federation, consensus, LLM/MCP coordination) |
+| [`examples/coop/`](../../examples/coop/) | the capability tour (mailbox, stigmergy, governance, provisioning, federation, rotation, consensus, LLM/MCP coordination, **catalog**) |
+| [`mycelium-blackboard/examples/microgrid`](../../mycelium-blackboard/examples/microgrid.rs) | the blackboard **`rd`/`in`** split — shared reads, competitive exactly-once claims (a finite-resource co-op) |
 | `llm_agent` · `three_node_demo` | live **management-UI** clusters (the headless versions are in coop) |
 | `examples/community` · `examples/chat` | SkillRunner skill clusters + MCP tool discovery |
 | `examples/a2a_langchain` | external-framework (LangChain/AutoGen) A2A interop |
