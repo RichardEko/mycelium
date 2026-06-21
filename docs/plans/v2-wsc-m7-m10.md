@@ -1,6 +1,12 @@
 # Delivery plan — WS-C · M7 distributed rate-limiting + M10 live reconfiguration
 
-**Status:** proposed (2026-06-21). The two trigger-gated WS-C milestones, now being built. Canonical
+**Status:** ✅ **COMPLETE** (2026-06-21). M7 (PR #105), M10.1 hot-reloadable timing (PR #106), M10.2
+intent-governed fence-free reconfiguration (this). WS-C now has **no deferred milestones** — the
+Done-when is fully met. The M10 consensus *fence* was **declined-with-reasoning** (it would import a
+coordinator to prevent transient variation the self-healing substrate tolerates); the *end* (live
+cluster-wide timing reconfig) is delivered via hot-reload + management-as-intent. Design record follows.
+
+**Original status:** proposed (2026-06-21). The two trigger-gated WS-C milestones, now being built. Canonical
 design: ROADMAP §v2.0 M7 + M10; workstream context [`v2-wsc-metabolism.md`](v2-wsc-metabolism.md).
 
 Both reuse machinery already on `main` — M7 the per-peer inbound limiter (`connection.rs` +
