@@ -140,10 +140,19 @@ own memory* until it holds a complete set.
 donation's three partials to land together.
 
 **Why** — Competing synthesizers would each `take` fragments of one donation's
-partial set, and the tuple space can't correlate them for you. True
-keyed-correlation fan-in needs `keyed-exact-match take` — **ROADMAP M13**
-(Paper 1 §9.4). The demo sits exactly at that boundary and names the line rather
-than crossing it.
+partial set, and an unkeyed lane can't correlate them for you. True
+keyed-correlation fan-in is **`take_by_key`** — **M13, shipped** (Paper 1 §9.4):
+`put_keyed(stage, key, …)` + `take_by_key(stage, key)` claim by an O(1)
+correlation key, so competing synthesizers each rendezvous on the *same*
+donation id. The demo predates the primitive and keeps the single-synthesizer
+shape; with M13 you can now scale out keyed synthesizers instead.
+
+> **Content-routed competition is the blackboard, not the tuple space.** When
+> *which* consumer acts depends on a fact's *content* (not its lane), reach for
+> [`mycelium-blackboard`](../../mycelium-blackboard/): `claim(predicate)` is a
+> competitive, exactly-once claim over facts matching an attribute predicate
+> (Linda's `in`), with non-destructive shared `read` (`rd`) for the agents that
+> only observe. Lanes route by position; the blackboard routes by content.
 
 ---
 

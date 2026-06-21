@@ -80,7 +80,20 @@ Bulk vs Scatter). Demo: [`mailbox_llm`](../../examples/coop/src/bin/mailbox_llm.
 Use the tuple space: workers `take()` when ready; no one predicts who does what.
 Demos: [`llm_pipeline`](../../examples/coop/src/bin/llm_pipeline.rs) (linear),
 [`llm_council`](../../examples/coop/src/bin/llm_council.rs) (fan-out → synthesis →
-refinement). Chapter: [07 · Pipelines](07-pipelines.md).
+refinement). Chapter: [07 · Pipelines](07-pipelines.md). Need fan-in by
+correlation key? `put_keyed` + `take_by_key` (M13).
+
+### How do I let agents compete for shared facts by content (blackboard)?
+
+When *which* agent acts depends on a fact's *content* rather than a known lane,
+use [`mycelium-blackboard`](../../mycelium-blackboard/): agents `post` typed
+facts, many `read` them non-destructively (`rd`), and a finite fact is consumed
+by exactly one agent via `claim(predicate)` (`in`) — competitive, single-owner,
+with at-least-once re-queue if a claimer drops mid-work. Predicates are attribute
+equality + presence (not unification). Demo:
+[`microgrid`](../../mycelium-blackboard/examples/microgrid.rs) (readers share,
+storage executors compete for finite surplus). When to use which:
+[00 · Concepts](00-concepts.md) ("tuple space vs. blackboard").
 
 ### How do I make my agents reachable from LangChain / AutoGen (A2A)?
 
