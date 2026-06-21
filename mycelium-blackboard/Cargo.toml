@@ -1,0 +1,37 @@
+[package]
+name = "mycelium-blackboard"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Dr. Richard Nicholson <tathatasystems@proton.me>"]
+description = "Blackboard-style shared working memory companion crate for Mycelium: opportunistic multi-agent reasoning over typed facts with competitive destructive claim-by-predicate (Linda's `in`), built entirely on Mycelium's public API"
+license = "AGPL-3.0-only"
+repository = "https://github.com/RichardEko/mycelium"
+keywords = ["blackboard", "linda", "multi-agent", "distributed-systems", "coordination"]
+categories = ["network-programming", "asynchronous"]
+
+[features]
+default = []
+# HTTP gateway endpoints (/gateway/bb/*) registered onto the Mycelium embedded
+# gateway via GossipAgent::with_http_routes. (Wired in a later phase.)
+gateway = ["mycelium/gateway", "dep:axum", "dep:serde", "dep:serde_json", "dep:base64"]
+
+[dependencies]
+# Companion-crate contract: only Mycelium's PUBLIC API is used — no internal
+# access. This dependency line is itself the composability proof.
+mycelium = { path = "..", default-features = false }
+
+bytes       = "1"
+parking_lot = "0.12"
+tracing     = "0.1"
+
+# Gateway feature only
+axum       = { version = "0.8", optional = true }
+serde      = { version = "1.0", features = ["derive"], optional = true }
+serde_json = { version = "1.0", optional = true }
+base64     = { version = "0.22", optional = true }
+
+[dev-dependencies]
+reqwest    = { version = "0.12", features = ["json"] }
+serde_json = "1.0"
+base64     = "0.22"
