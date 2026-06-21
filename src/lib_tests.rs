@@ -4199,6 +4199,48 @@ async fn test_wsc_m10_hot_reload_timing_no_task_restart() {
     agent.shutdown_with_timeout(Duration::from_secs(5)).await;
 }
 
+/// WS-C / M10.2 gate (G-M10.2): live timing reconfiguration cluster-wide, intent-governed and
+/// fence-free. A `TimingIntent` published on one node is reconciled by every node within the TTL; a
+/// node-local `set_*` wins over the fleet intent (local-wins); and letting the intent evaporate
+/// returns non-pinned nodes to baseline.
+#[tokio::test]
+async fn test_wsc_m10_timing_intent_governs_fleet_with_local_wins() {
+    let pa = alloc_port();
+    let pb = alloc_port();
+    let node_a = NodeId::new("127.0.0.1", pa).unwrap();
+    let mk = |port: u16, boots: Vec<NodeId>| {
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = port;
+        cfg.bootstrap_peers = boots;
+        cfg.health_check_interval_secs = 5;
+        Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg))
+    };
+    let a = mk(pa, vec![]);
+    let b = mk(pb, vec![node_a.clone()]);
+    a.start().await.unwrap();
+    b.start().await.unwrap();
+    poll_until(|| !a.peers().is_empty() && !b.peers().is_empty(), 5_000).await;
+
+    // B pins its own timing locally → it must ignore the fleet intent (local-wins).
+    b.set_health_check_interval_secs(9);
+
+    // A publishes a fleet TimingIntent (whole fleet).
+    assert!(a.govern_timing(2, 3, None), "intent published");
+
+    // A (not pinned) adopts the fleet intent; B (pinned) keeps its local value.
+    poll_until(|| a.timing_tunables() == (2, 3), 6_000).await;
+    assert_eq!(a.timing_tunables(), (2, 3), "G-M10.2: the non-pinned node adopts the fleet intent");
+    assert_eq!(b.timing_tunables().0, 9, "local-wins: the pinned node ignores the fleet intent");
+
+    // Evaporate the intent (delete the key) → A self-heals back to baseline (0 = static).
+    let _ = a.kv().delete(crate::agent::timing_governor::TIMING_INTENT_KEY);
+    poll_until(|| a.timing_tunables() == (0, 0), 6_000).await;
+    assert_eq!(a.timing_tunables(), (0, 0), "the non-pinned node self-heals to baseline on evaporation");
+
+    a.shutdown_with_timeout(Duration::from_secs(5)).await;
+    b.shutdown_with_timeout(Duration::from_secs(5)).await;
+}
+
 // ── M2 falsification probe (Run 24): concurrent audit chain integrity ─────
 
 /// Probe: many concurrent `audit()` calls on one node must produce a strictly

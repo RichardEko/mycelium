@@ -49,21 +49,47 @@ impl GossipAgent {
     }
     /// Live-set the **health-check interval** (secs, WS-C / M10). The health monitor re-reads it each
     /// cycle and retunes its cadence on the next tick — no task restart. `0` ⇒ revert to the static
-    /// config value.
+    /// config value. A node-local set is **sovereign**: it pins timing so a cluster `TimingIntent`
+    /// no longer overrides this node (local-wins).
     pub fn set_health_check_interval_secs(&self, secs: u64) {
         self.task_ctx.hot.health_check_interval_secs
             .store(secs, std::sync::atomic::Ordering::Relaxed);
+        self.task_ctx.hot.timing_locally_pinned.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     /// Live-set the **reconnect backoff** (secs, WS-C / M10). `0` ⇒ revert to the static config value.
+    /// Pins timing locally (local-wins over fleet governance).
     pub fn set_reconnect_backoff_secs(&self, secs: u64) {
         self.task_ctx.hot.reconnect_backoff_secs
             .store(secs, std::sync::atomic::Ordering::Relaxed);
+        self.task_ctx.hot.timing_locally_pinned.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     /// Current live timing values (WS-C / M10), as `(health_check_interval_secs, reconnect_backoff_secs)`.
     /// `0` for a field means "using the static config value".
     pub fn timing_tunables(&self) -> (u64, u64) {
         (self.task_ctx.hot.health_check_interval_secs.load(std::sync::atomic::Ordering::Relaxed),
          self.task_ctx.hot.reconnect_backoff_secs.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// **Govern timing cluster-wide** (WS-C / M10.2): publish an evaporating `TimingIntent` that every
+    /// node reconciles toward — newest-wins, **local-wins** (a node that called a `set_*` setter is
+    /// pinned and ignores the intent), self-healing on evaporation. `0` for a field leaves it
+    /// ungoverned; `target = None` ⇒ whole fleet, `Some(node)` ⇒ just that node. Intent, never
+    /// command — and **no consensus fence** (see `timing_governor` docs). Returns whether queued.
+    pub fn govern_timing(
+        &self,
+        health_check_interval_secs: u64,
+        reconnect_backoff_secs: u64,
+        target: Option<crate::node_id::NodeId>,
+    ) -> bool {
+        super::timing_governor::publish_timing_intent(
+            &self.task_ctx,
+            super::timing_governor::TimingIntent {
+                health_check_interval_secs,
+                reconnect_backoff_secs,
+                target,
+                written_at_ms: 0,
+            },
+        )
     }
 
     /// Current live values of the hot-tunable subset (post-M9 overrides), as

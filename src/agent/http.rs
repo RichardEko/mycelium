@@ -176,6 +176,7 @@ pub(super) async fn run_http_server(
         // ── WS-C governance: management = intent + local reconcile ─────────
         .route("/govern",                         get(gw_govern_snapshot))
         .route("/govern/tuning",                  post(gw_govern_tuning))
+        .route("/govern/timing",                  post(gw_govern_timing))
         .route("/govern/membership",              post(gw_govern_membership));
 
     // ── Consensus + the consistency/lock/election overlays built on it ────────
@@ -427,6 +428,7 @@ fn required_scope(method: &axum::http::Method, matched_path: &str) -> &'static s
         // WS-C governance (intent publish + effective-state snapshot)
         "/gateway/govern"              => "govern:read",
         "/gateway/govern/tuning"       => "govern:write",
+        "/gateway/govern/timing"       => "govern:write",
         "/gateway/govern/membership"   => "govern:write",
         // Deny-by-default.
         _ => "admin",
@@ -826,6 +828,30 @@ async fn gw_govern_tuning(
     let ok = super::intent::publish_intent(&kv, super::tuning_governor::GOVERN_FLEET_KEY, intent);
     audit_govern(&ctx.agent_ctx, super::tuning_governor::GOVERN_FLEET_KEY, body.to_string());
     Json(json!({"ok": ok, "key": super::tuning_governor::GOVERN_FLEET_KEY})).into_response()
+}
+
+/// `POST /gateway/govern/timing` — publish a cluster-wide (or `target`-ed) **timing** intent
+/// (WS-C / M10.2). Body:
+/// ```json
+/// {"health_check_interval_secs": 2, "reconnect_backoff_secs": 3, "target": null}
+/// ```
+/// `0`/absent for a field leaves it ungoverned; `target` `null` = whole fleet. Newest-wins,
+/// local-wins (a node that called a `set_*` setter ignores it), evaporating. No consensus fence.
+async fn gw_govern_timing(
+    State(ctx): State<Arc<HttpCtx>>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let health = body.get("health_check_interval_secs").and_then(|v| v.as_u64()).unwrap_or(0);
+    let reconnect = body.get("reconnect_backoff_secs").and_then(|v| v.as_u64()).unwrap_or(0);
+    let target = body.get("target").and_then(|v| v.as_str()).and_then(|s| s.parse::<crate::node_id::NodeId>().ok());
+    let intent = super::timing_governor::TimingIntent {
+        health_check_interval_secs: health,
+        reconnect_backoff_secs: reconnect,
+        target,
+        written_at_ms: 0,
+    };
+    let ok = super::timing_governor::publish_timing_intent(&ctx.agent_ctx, intent);
+    Json(json!({ "published": ok, "key": super::timing_governor::TIMING_INTENT_KEY })).into_response()
 }
 
 /// `POST /gateway/govern/membership` — publish an elastic-sizing intent for a group.

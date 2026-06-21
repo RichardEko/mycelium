@@ -199,6 +199,9 @@ impl GossipAgent {
             let srx = self.shutdown_tx.subscribe();
             self.spawn_task(mycelium_core::rate::run_rate_decider(ctx, srx));
         }
+        // M10.2 (WS-C) live timing reconfiguration — the TimingIntent reconciler. Inert until an
+        // intent is published; an evaporated intent self-heals to the static baseline.
+        super::timing_governor::spawn_timing_reconciler(&self.task_ctx);
         info!("Gossip agent started: {}", self.node_id);
         Ok(())
     }
