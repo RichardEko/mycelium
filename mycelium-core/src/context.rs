@@ -37,6 +37,14 @@ pub struct HotConfig {
     pub writer_channel_depth: AtomicUsize,
     /// Concurrent bulk-handler cap (`0` = unlimited). Sampled per bulk-serve admission.
     pub max_concurrent_bulk_handlers: AtomicUsize,
+    /// **Timing params (WS-C / M10), live-reconfigurable.** The background loops re-read these each
+    /// cycle (via a dynamic sleep, not a fixed `interval`), so a change takes effect on the next tick
+    /// with **no task restart**. Cluster-wide changes propagate via an evaporating `TimingIntent`
+    /// (management-as-intent — newest-wins, local-wins, no consensus fence; see
+    /// `docs/plans/v2-wsc-m7-m10.md` for why a fence would import a coordinator the self-healing
+    /// substrate doesn't need). `0` means "leave at the static config value" for that param.
+    pub health_check_interval_secs: AtomicU64,
+    pub reconnect_backoff_secs: AtomicU64,
 }
 
 impl HotConfig {
@@ -46,11 +54,23 @@ impl HotConfig {
             max_inbound_frames_per_sec:   AtomicU64::new(c.max_inbound_frames_per_sec),
             writer_channel_depth:         AtomicUsize::new(c.writer_channel_depth),
             max_concurrent_bulk_handlers: AtomicUsize::new(c.max_concurrent_bulk_handlers),
+            health_check_interval_secs:   AtomicU64::new(c.health_check_interval_secs),
+            reconnect_backoff_secs:       AtomicU64::new(c.reconnect_backoff_secs),
         }
     }
     #[inline] pub fn inbound_fps(&self) -> u64 { self.max_inbound_frames_per_sec.load(Ordering::Relaxed) }
     #[inline] pub fn writer_depth(&self) -> usize { self.writer_channel_depth.load(Ordering::Relaxed) }
     #[inline] pub fn bulk_handlers(&self) -> usize { self.max_concurrent_bulk_handlers.load(Ordering::Relaxed) }
+    /// Live health-check interval (secs); falls back to `fallback` (the static config) when unset (`0`).
+    #[inline] pub fn health_interval_secs(&self, fallback: u64) -> u64 {
+        let v = self.health_check_interval_secs.load(Ordering::Relaxed);
+        if v == 0 { fallback } else { v }
+    }
+    /// Live reconnect backoff (secs); falls back to `fallback` when unset (`0`).
+    #[inline] pub fn reconnect_backoff_secs(&self, fallback: u64) -> u64 {
+        let v = self.reconnect_backoff_secs.load(Ordering::Relaxed);
+        if v == 0 { fallback } else { v }
+    }
 }
 
 /// Opt-in pre-delivery signal interceptor registered by the upper service layer.
