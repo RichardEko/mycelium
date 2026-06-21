@@ -202,7 +202,7 @@
     <div class="hero-center">
       <div class="hero-title">Mycelium</div>
       <div class="hero-tagline">
-        The adaptive substrate for next-generation AI agent fleets.<br>
+        One coordinator-free fabric for AI agent fleets — <strong style="color:var(--text)">every interaction pattern</strong>, not just RPC.<br>
         <strong style="color:var(--text)">Minimal management. Maximum agility. Maximum robustness.</strong>
       </div>
       <div class="badges">
@@ -296,6 +296,44 @@
     </div>
     <div class="callout callout-green" style="margin-top:10px;">
       <strong>Mycelium replaces all four</strong> with a single embedded Rust library. No broker process. No registry process. No coordinator process. Drop it in and start coordinating.
+    </div>
+  </div>
+</div>
+
+<!-- One fabric, every interaction pattern -->
+<div class="slide" id="sPatterns">
+  <div class="slide-top"><span class="eyebrow">The Claim</span><span class="slide-num">·· / ··</span></div>
+  <div class="slide-body">
+    <div class="slide-title">One fabric. <em>Every interaction pattern.</em></div>
+    <div class="slide-sub">Most "agentic" frameworks give you <strong>one</strong> way for agents to interact — a remote call wearing a prompt, brokered by an orchestrator. But coordination is older and richer than RPC. Mycelium offers the whole taxonomy, and every shape is just reads, writes, and signals on the same coordinator-free substrate.</div>
+    <div class="cols3" style="gap:12px;">
+      <div class="card card-accent-blue" style="padding:15px 16px;">
+        <div class="card-title">Request / Response</div>
+        <div class="card-body"><code>rpc_call</code> · <code>scatter_gather</code> — an addressed call you await, or a fan-out to every provider of a capability with replies gathered. <em>The one shape most agentic stacks stop at.</em></div>
+      </div>
+      <div class="card card-accent-green" style="padding:15px 16px;">
+        <div class="card-title">Publish / Subscribe</div>
+        <div class="card-body"><code>emit</code> · <code>subscribe</code> — Signals (Layer II): ephemeral, scoped, admission-bounded broadcast. Fire an event; only nodes inside the boundary that recognise it react.</div>
+      </div>
+      <div class="card card-accent-purple" style="padding:15px 16px;">
+        <div class="card-title">Actor Mailbox</div>
+        <div class="card-body"><code>deliver_event</code> · <code>open_mailbox</code> — a durable, HLC-ordered, addressed inbox. A conversation that survives a restart and never reorders under clock skew.</div>
+      </div>
+      <div class="card card-accent-orange" style="padding:15px 16px;">
+        <div class="card-title">Shared State / Stigmergy</div>
+        <div class="card-body"><code>set</code> · <code>subscribe_prefix</code> — the gossiped LWW KV store is a shared environment. Agents coordinate by <em>modifying it</em> — load pheromones, soft-state intent — with no message at all.</div>
+      </div>
+      <div class="card card-accent-red" style="padding:15px 16px;">
+        <div class="card-title">Pull · Tuple Space</div>
+        <div class="card-body"><code>put</code> · <code>take</code> — positional work distribution. Producers drop items into lanes; workers take when ready. No component models anyone's load.</div>
+      </div>
+      <div class="card card-accent-blue" style="padding:15px 16px;">
+        <div class="card-title">Blackboard</div>
+        <div class="card-body"><code>post</code> · <code>claim</code> — content-routed competitive claim. Agents post facts; others claim by an attribute predicate. Topology emerges from what the fact <em>says</em>.</div>
+      </div>
+    </div>
+    <div class="callout callout-green" style="font-size:12.5px;margin-top:14px;">
+      <strong>…plus ballot consensus</strong> (<code>propose</code>) when you genuinely need agreement. <strong>Seven interaction shapes, one coordinator-free substrate — chosen per interaction, not dictated by the framework.</strong> The RPC monoculture of today's agentic stacks is a constraint Mycelium simply doesn't have: pick the pattern the problem wants, and it composes on the same gossip fabric as all the others.
     </div>
   </div>
 </div>
