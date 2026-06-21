@@ -121,6 +121,17 @@ existed. This is the framework's own report card.
   (atomic `compute` closure) and the probe kept as a regression gate. Lesson: a
   "technically not retry-safe, but eventually-consistent" watch-item is still a
   data-loss bug until proven otherwise — execute the probe, don't carry the note.
+- 2026-06-21: **Test Architecture** scored 8 in Runs 24–26 while
+  `test_wsc_m8_auto_config_cluster_converges` (and the multi-node unit-test family
+  generally) was non-deterministic under **parallel** execution — `start()`
+  intermittently errors on transient bind/resource contention when many multi-node
+  tests spin up agents at once (fails ~1 in 3 full-suite runs; passes **5/5 in
+  isolation**). A product-correct feature (M8 auto-config) with a flaky harness:
+  the default `cargo test --lib` is not deterministically green. Found by Run 27
+  evidence-gathering; canary comment left on the test. The session's own additions
+  (M7/M10 multi-node tests) plausibly raised the parallelism that surfaced it.
+  Lesson: "all CI runs green" hid a 1-in-3 local flake — run the suite *twice* before
+  trusting a clean result.
 
 **Dimensions:** Philosophy/Coherence · Conceptual Integrity · Architecture ·
 Modularity · API Design · Error Handling · Configurability · Language Best
@@ -1682,3 +1693,40 @@ this run.
 | 25 | Dependency Hygiene | 8 | carried (v25). agentfacts adds ed25519-dalek/serde_json/base64/axum (all already in the parent tree) + reqwest (dev-only); wgpu dev-dep removed (PR #40). `Cargo.lock` present. `--no-default-features` not re-run this run + no fresh `cargo audit` → 8. |
 | — | **Floor (lowest 3)** | **7, 7, 8** | Performance (15), Scalability (16), and the lowest 8-tier — Robustness (12)/Security (13): broad paths verified only on the new WS-F surface this run, not end to end |
 | — | Mean (continuity footnote) | 8.0 | not a target; see M2 preamble (sum 199/25 = 7.96) |
+
+## 2026-06-21 — Run 27 (M2)
+
+Deep-dive dimensions this run (by rotation): Concurrency Correctness (9), Semantic Correctness (11), Security (13), Scalability (16), Evolvability (22). Execution evidence: `cargo test --lib` default = **286 passed / 1 failed (flake) / 1 ignored** (re-run 286/0; flake characterised below); companion libs green standalone — blackboard **15**, tuple-space **31**, core **125** (+3 kept probes → 128); `cargo clippy --lib` **0 warnings**; `cargo build --lib --no-default-features` clean; three falsification probes (Architecture/Concurrency/Semantic) all PASS and kept as regression tests. Diff since Run 26: ~30 PRs — the 11-demo coop suite + two-audience docs, **WS-D** (M6 + CT revocation log), **WS-F** (schema migrations), **WS-G** (M13 keyed-take + the `mycelium-blackboard` companion crate), **M7** distributed rate-limiting, **M10** fence-free live timing reconfiguration. v2.0 acceptance gate now MET — all 16 milestones (M1–M16) delivered.
+
+### Findings
+- **Minor — Test Architecture (18):** `test_wsc_m8_auto_config_cluster_converges` flakes under *parallel* execution — `start()` errors on transient bind/resource contention (~1 in 3 full-suite runs; **5/5 in isolation**). Product feature (M8 auto-config) is correct; the harness is non-deterministic under load. Canary comment left on the test; calibration-ledger entry added. Caps Test Architecture at 6.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 8 | M10's **consensus-fence decline** (`timing_governor` docs: a fence would import a coordinator to prevent transient variation the self-healing substrate tolerates — CP1) and the blackboard `rd`/`in` split are textbook philosophy-coherent. No drift across the huge diff. Qualitative → caps at 8. |
+| 2 | Conceptual Integrity | 8 | One mind sustained: `mycelium-blackboard` faithfully mirrors the tuple-space idiom; the tripwire family extended consistently (`cap_authz_violations`/`schema_mismatch`/`rate_limited_senders` all follow `commit_conflicts`); `TimingIntent` reuses the `FleetIntent` transport. Declined-with-evidence decisions (G2 overlay, M10 fence) show consistent judgment. Read-only → 8. |
+| 3 | Architecture | 9 | **Deep-dive-adjacent. Probe 1 PASS** (executable): `cargo tree -p mycelium-core -i mycelium` → no edge (inverted-dependency = compile-time guarantee); `sys/rate/` written only by `rate.rs` (M7 namespace discipline). M7 is detection-only (KV evidence; the limiter is a read-side decision); M10 rides `HotConfig` + intent — both land without a layer violation. Execution-backed → 9. |
+| 4 | Modularity | 8 | Companion crates build + test **standalone** (blackboard 15, tuple-space 31) — composability proof holds for a 5th crate. Handle boundaries intact. Held at 8: agent-layer governors still share `TaskCtx` (sanctioned cohesion); no new modularity-specific probe. |
+| 5 | API Design | 8 | New surface is minimal + total: `claim(&Predicate) -> Option<Fact>` (non-blocking, loser gets `None`), `govern_timing(h, r, target)`, `migrate_payload` returns `NoMigrationPath` not a guess, `revoke_identity_key`. Consistent with the handle idiom; no footgun found. Read-only → 8. |
+| 6 | Error Handling Model | 8 | `BlackboardError`/`MigrationError` follow the typed-`#[non_exhaustive]` idiom; `Io` variant drops `PartialEq` exactly as `TupleError` does (tests use `matches!`). No product-path `unwrap`. carried/re-checked → 8. |
+| 7 | Configurability | 8 | New knobs off-by-default and env-wired (`GOSSIP_RATE_OBSERVATION`, hot timing params); `--no-default-features` builds (fresh). Structurally consistent. 8. |
+| 8 | Language Best Practices | 8 | `cargo clippy --lib` 0 warnings (fresh); idiomatic papaya `compute`/`pin`, deref-coercion at call sites. Not deep-dived; clippy-clean is necessary-not-sufficient for 9 → 8. |
+| 9 | Concurrency Correctness | 9 | **Deep-dive. Probe 2 PASS** (executable): the M7 rate decider `reconcile_throttle` is idempotent (re-run = no drift) and threshold is strict `>` (exactly-at-threshold not throttled — no off-by-one). M7's connection-hot-path change reads the throttle once/window (off the frame path) + is zero-overhead when disabled; `rate_throttle` is papaya (lock-free). Blackboard claim single-owner (16-thread test green). Ledger-aware (2 prior entries) — probed the invariant families directly. Execution-backed → 9. |
+| 10 | Resource Management | 8 | `Blackboard::shutdown` aborts tasks + retracts ads (failover test exercises it); capability TTL/evaporation drives promotion. No new leak found. carried → 8. |
+| 11 | Semantic Correctness | 9 | **Deep-dive. Probe 3 PASS** (executable): equal-timestamp LWW **converges regardless of apply order** (deterministic byte tiebreak) and data does **not** resurrect over an equal-ts tombstone — directly re-probes the Run-16 ledger bug, now a kept regression gate. Schema migration: no path → `NoMigrationPath`, never a partial apply. Blackboard claim exactly-once. Execution-backed → 9. |
+| 12 | Robustness | 8 | Corrupt-tail WAL truncation (blackboard + tuple), v1-replay-accept, malformed-frame survival; M7 off-by-default = no robustness regression on the hot path. Not deep-dived this run → 8. |
+| 13 | Security | 8 | **Deep-dive (read-level).** WS-D shipped end-to-end: key revocation (excluded from every retained-key verify path), RFC-6962 Merkle inclusion proofs (`/gateway/transparency`), resolve-time capability ACL verifying *signed* roles against the retained-non-revoked key set, consensus-distributed policy. Detection-not-prevention throughout. Capped at **8**: the `compliance` suite was **not** re-run *this* analysis run (CI-green during the session, but M2 requires fresh-this-run execution for 9). |
+| 14 | Failure Mode Legibility | 8 | New legible signals: `rate_limited_senders`/`cap_authz_violations`/`schema_mismatch` on `/stats`; `NoMigrationPath{from,to}`; `AuditVerifyError` names the offending seq. carried/extended → 8. |
+| 15 | Performance | 8 | M7 adds one branch on the inbound frame path, taken only when a limit/observation is active; the KV evidence write is once-per-peer-per-second on rollover (off the frame path). Blackboard claim non-blocking. No fresh benchmark this run → 8. |
+| 16 | Scalability | 7 | **Deep-dive.** Two honest considerations surfaced: (a) M7's `sys/rate/` evidence is `O(observers × senders)` entries — bounded by `max_active_connections` (O(N×K)) but a real volume cost at large N, and the decider re-scans it every 2 s; (b) the blackboard/tuple **claim path is single-primary** (horizontal claim throughput does not scale with N — by design, with failover not sharding). No cliff, but not unbounded. The substrate itself scales (WS-B SWIM/partial-mesh/Merkle). No fresh scale run → 7. |
+| 17 | Testability | 8 | The three probes this run were each writable as pure in-isolation tests (`reconcile_throttle`, `lww_wins`, `BoardStore::transient`) — strong evidence the design is injectable/deterministic at the unit level. The *parallel-suite* non-determinism (finding) is a harness, not a design, issue. 8. |
+| 18 | Test Architecture | 6 | **FINDING (Minor):** the default unit suite is non-deterministic under parallel load (`test_wsc_m8_auto_config_cluster_converges` flakes ~1/3; 5/5 in isolation). Large, layered suite (286 default + 15 blackboard + 31 tuple + 125 core + 13 Docker scenarios + fuzz) and the 3 new probes grew it — but a 1-in-3 local flake caps the dimension at 6. |
+| 19 | Observability | 8 | `/stats` now carries five tripwire counters + `task_count`; `/gateway/transparency`, `/gateway/govern/timing`, the blackboard/tuple gateways. `/metrics` (Prometheus) intact. carried/extended → 8. |
+| 20 | Debuggability | 8 | Tripwires + typed errors name the offending entity (sender / seq / from→to / claim id). carried → 8. |
+| 21 | Operational Readiness | 8 | `/ready`, `shutdown_with_timeout`, the governance surfaces (`/gateway/govern/timing` + audit), M7/M10 operator knobs, blackboard/tuple gateways + py/ts SDKs. carried/extended → 8. |
+| 22 | Evolvability | 8 | **Deep-dive.** Wire stays **v12** — verified M7 (KV-only) and M10 (HotConfig + intent KV) introduce **no `WIRE_VERSION` bump**; `PREV = 11` keeps the rolling-upgrade window. The WS-F schema-migration engine *is* the evolvability tooling. Debt is reasoned (G2/M10 declined-with-evidence) and paid (this run's flake found+documented, scorecard refreshed). v2.0 all-16 complete. No single execution probe lifts to 9 → 8. |
+| 23 | Documentation | 8 | Dev docs integrated this session (blackboard into 00-concepts/cookbook/14-patterns; **stale M13 ref fixed**; exactly-once contract doc; M7/M10 + WS-G plans; scorecard refreshed to reality). Qualitative → 8. |
+| 24 | Developer Experience | 8 | CLAUDE.md gained a blackboard section + the on-ramp is current; clean clippy. The parallel flake mildly dents DX (an occasional local red). 8. |
+| 25 | Dependency Hygiene | 8 | `--no-default-features` builds clean (fresh); blackboard adds only standard deps (tokio/bytes/parking_lot); companion crates are public-API-only. `Cargo.lock` present; bincode retired (WS-B). No fresh `cargo audit` this run → 8. |
+| — | **Floor (lowest 3)** | **6, 7, 8** | Test Architecture (18) · Scalability (16) · Performance (15) [representative 8-tier] |
+| — | Mean (continuity footnote) | 8.0 | not a target; see M2 preamble (sum 200/25 = 8.0) |

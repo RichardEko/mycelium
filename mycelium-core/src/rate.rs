@@ -160,6 +160,25 @@ mod tests {
         assert_eq!(get(&map, "s"), 0, "throttle released when no longer abusive");
     }
 
+    // Analysis Run 27 falsification probe (Concurrency/Semantic): the decider must be idempotent
+    // (re-running on identical evidence does not drift the throttle) and boundary-correct (a sender
+    // *exactly at* the threshold is NOT throttled — strict `>`, no off-by-one).
+    #[test]
+    fn reconcile_is_idempotent_and_threshold_is_strict() {
+        let map = papaya::HashMap::new();
+        let evidence = || vec![ev("o1", "s", "600"), ev("o2", "s", "600")]; // aggregate 1200 > 900
+        reconcile_throttle(evidence(), 900, &map);
+        let first = get(&map, "s");
+        reconcile_throttle(evidence(), 900, &map); // re-run, same evidence
+        assert_eq!(get(&map, "s"), first, "idempotent: re-running does not drift the throttle");
+        assert_eq!(map.pin().len(), 1, "no duplicate throttle entries accumulate");
+
+        // A sender whose aggregate is EXACTLY the threshold is not throttled (strict `>`).
+        let map2 = papaya::HashMap::new();
+        reconcile_throttle(vec![ev("o1", "s", "900")], 900, &map2); // aggregate == threshold
+        assert_eq!(get(&map2, "s"), 0, "exactly-at-threshold is not throttled (no off-by-one)");
+    }
+
     #[test]
     fn evaporated_evidence_clears_throttle() {
         let map = papaya::HashMap::new();

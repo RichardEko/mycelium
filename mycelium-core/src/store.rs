@@ -780,6 +780,33 @@ mod tests {
         assert_eq!(store.pin().get("k").unwrap().data, Some(Bytes::from_static(b"new")));
     }
 
+    // Analysis Run 27 falsification probe (Semantic Correctness): equal-timestamp LWW must converge
+    // — two concurrent writes with the SAME packed HLC timestamp must resolve to the SAME value on
+    // every node regardless of apply order (the deterministic byte-comparison tiebreak), and a
+    // tie against a tombstone must not resurrect data.
+    #[test]
+    fn lww_equal_timestamp_converges_regardless_of_order() {
+        let mk = |val: &'static [u8]| GossipUpdate {
+            sender: 0, key: "k".into(), value: Bytes::from_static(val),
+            timestamp: 500, nonce: 1, ttl: 1, is_tombstone: false,
+        };
+        // Node 1 applies A then B; node 2 applies B then A — both at ts 500.
+        let n1: papaya::HashMap<Arc<str>, StoreEntry> = papaya::HashMap::new();
+        apply_to_store(&n1, &mk(b"aaa")); apply_to_store(&n1, &mk(b"bbb"));
+        let n2: papaya::HashMap<Arc<str>, StoreEntry> = papaya::HashMap::new();
+        apply_to_store(&n2, &mk(b"bbb")); apply_to_store(&n2, &mk(b"aaa"));
+        assert_eq!(n1.pin().get("k").unwrap().data, n2.pin().get("k").unwrap().data,
+            "equal-timestamp writes converge to the same value on both nodes");
+        assert_eq!(n1.pin().get("k").unwrap().data, Some(Bytes::from_static(b"bbb")),
+            "higher bytes win the deterministic tiebreak");
+
+        // A tombstone at the same ts as live data: data must not resurrect.
+        let s: papaya::HashMap<Arc<str>, StoreEntry> = papaya::HashMap::new();
+        apply_to_store(&s, &GossipUpdate { sender: 0, key: "t".into(), value: Bytes::from_static(b"zzz"), timestamp: 500, nonce: 2, ttl: 1, is_tombstone: true });
+        apply_to_store(&s, &GossipUpdate { sender: 0, key: "t".into(), value: Bytes::from_static(b"zzz"), timestamp: 500, nonce: 3, ttl: 1, is_tombstone: false });
+        assert!(s.pin().get("t").unwrap().data.is_none(), "data must not resurrect over an equal-ts tombstone");
+    }
+
     #[test]
     fn lww_stale_ignored() {
         let store: papaya::HashMap<Arc<str>, StoreEntry> = papaya::HashMap::new();
