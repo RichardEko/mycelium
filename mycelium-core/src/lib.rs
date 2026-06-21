@@ -26,6 +26,7 @@ pub mod mesh_handle;
 pub mod node_id;
 pub mod ops;
 pub mod persistence;
+pub mod rate;
 pub mod schema_handle;
 pub mod seen;
 pub mod signal;

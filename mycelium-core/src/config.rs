@@ -697,6 +697,21 @@ pub struct GossipConfig {
     /// Set via `GOSSIP_MAX_INBOUND_FRAMES_PER_SEC`.
     pub max_inbound_frames_per_sec: u64,
 
+    /// **Cluster-wide distributed rate-limiting** (WS-C / M7) — *shared observation, local
+    /// decision*. When `true`, each node publishes its observed per-peer inbound frame rate to a
+    /// short-TTL `sys/rate/{observer}/{sender}` namespace, and a decider task sums the aggregate
+    /// across all observers; a sender whose aggregate exceeds `rate_aggregate_threshold_fps` is
+    /// **locally** throttled by every node it touches (a fair-share budget = threshold ÷ observers),
+    /// never a cluster-wide eviction verdict. Off (`false`) by default — pure per-peer limiting,
+    /// zero overhead. Catches a sender that floods many peers at once (each under its per-peer
+    /// limit, but caught by the aggregate). Set via `GOSSIP_RATE_OBSERVATION`.
+    pub rate_observation_enabled: bool,
+
+    /// The aggregate (summed-across-observers) inbound frame-rate threshold above which M7 throttles
+    /// a sender. `0` with `rate_observation_enabled` picks a default of `8 × max_inbound_frames_per_sec`
+    /// (or `8000` if that is unset). Set via `GOSSIP_RATE_AGGREGATE_THRESHOLD_FPS`.
+    pub rate_aggregate_threshold_fps: u64,
+
     /// Optional bearer token that protects the language-bridge gateway endpoints.
     ///
     /// When set, every request to a `/gateway/**` path must include the header:
@@ -813,6 +828,8 @@ impl Default for GossipConfig {
             bulk_fetch_timeout_secs:       30,
             max_concurrent_bulk_handlers:  64,
             max_inbound_frames_per_sec:    0,
+            rate_observation_enabled:      false,
+            rate_aggregate_threshold_fps:  0,
             gateway_auth_token:            None,
             gateway_scoped_tokens:         Vec::new(),
             egress:                        EgressPolicy::default(),
@@ -1283,6 +1300,12 @@ impl GossipConfig {
         }
         if let Ok(v) = env::var("GOSSIP_MAX_INBOUND_FRAMES_PER_SEC") {
             self.max_inbound_frames_per_sec = v.parse().map_err(GossipError::Parse)?;
+        }
+        if let Ok(v) = env::var("GOSSIP_RATE_OBSERVATION") {
+            self.rate_observation_enabled = matches!(v.as_str(), "1" | "true" | "TRUE" | "yes");
+        }
+        if let Ok(v) = env::var("GOSSIP_RATE_AGGREGATE_THRESHOLD_FPS") {
+            self.rate_aggregate_threshold_fps = v.parse().map_err(GossipError::Parse)?;
         }
         if let Ok(v) = env::var("GOSSIP_LOCALITY_PATH") {
             self.locality_path = v

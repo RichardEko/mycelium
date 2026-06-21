@@ -289,6 +289,13 @@ pub struct SystemStats {
     /// value means producers and consumers in the cluster disagree on a schema
     /// version — register a migration (tier 3) or reconcile the versions.
     pub schema_mismatch: u64,
+
+    /// Number of senders this node is currently **distributed-rate-limiting** (WS-C / M7): a sender
+    /// whose *aggregate* observed inbound rate (summed across all observers via `sys/rate/`) crossed
+    /// `rate_aggregate_threshold_fps`, so this node tightened its own inbound budget for it. `0`
+    /// unless `rate_observation_enabled`. A node-local decision on shared evidence — never a cluster
+    /// eviction. A sustained non-zero value names an abusive sender to investigate.
+    pub rate_limited_senders: u64,
 }
 
 // The old 22-field `TaskCtx` God Object has been split (ROADMAP §v2.0 M1): `CoreCtx`
@@ -708,6 +715,7 @@ impl GossipAgent {
             tls: std::sync::OnceLock::new(),
             peer_keys: Arc::new(papaya::HashMap::new()),
             peers: Arc::clone(&peers_arc),
+            rate_throttle: Arc::new(papaya::HashMap::new()),
             reorder_buf: if config.signal_ordered_delivery {
                 Some(Arc::new(std::sync::Mutex::new(
                     crate::signal::SignalReorderBuffer::new(

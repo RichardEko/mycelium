@@ -122,6 +122,13 @@ pub struct CoreCtx {
     /// Live peer table shared with the HTTP gateway for peer-count-based quorum sizing.
     pub peers: Arc<papaya::HashMap<NodeId, std::time::Instant>>,
 
+    /// **M7 distributed rate-limiting** (WS-C): per-sender locally-decided throttle budget (fps).
+    /// Empty unless `rate_observation_enabled`. The rate-decider task sets a fair-share budget for a
+    /// sender whose *aggregate* observed rate (summed across all observers via `sys/rate/`) crosses
+    /// the threshold; the connection read loop reads it and clamps the sender's effective inbound
+    /// limit. A node-local decision on shared evidence — never a cluster eviction verdict.
+    pub rate_throttle: Arc<papaya::HashMap<Arc<str>, std::sync::atomic::AtomicU64>>,
+
     /// Set to `true` by the first tick of any [`run_kv_persist_task`](crate::kv_persist::run_kv_persist_task)
     /// — the substrate's generic soft-state advertisement loop (capability,
     /// locality, `advertise_persistent`, …). Until this is `true`, soft-state KV
