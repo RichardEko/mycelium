@@ -275,6 +275,10 @@ async fn test_wsc_m8_auto_config_cluster_converges() {
     assert!(a.config().propagation_window_secs >= 60,    "propagation_window_secs derived");
     assert!(a.config().validate().is_ok(),               "resolved auto config must validate");
 
+    // KNOWN FLAKE (analysis Run 27, 2026-06-21): under heavy *parallel* test execution these two
+    // `start()`s occasionally error on transient bind/resource contention (many multi-node tests
+    // spinning up agents at once); passes 5/5 in isolation. The M8 auto-config product behaviour is
+    // correct — this is a test-harness reliability issue (Test Architecture finding), not a bug.
     a.start().await.unwrap();
     b.start().await.unwrap();
     poll_until(|| !a.peers().is_empty() && !b.peers().is_empty(), 3_000).await;
