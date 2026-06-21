@@ -1,5 +1,9 @@
 # Elastic Sizing via Intent-Governed Membership — Delivery Plan
 
+**Status:** ✅ **shipped** — `IntentReconciler` (shared transport) → `MembershipGovernor`
+(min/max/drain + collective self-election) → operator surface (`/gateway/govern` + audit +
+Prometheus). `src/agent/membership_governor.rs` + the elastic Tracks 2a/2b/3.
+
 Strategy/sequencing plan (no design duplication). Builds directly on the **WS-C M9 tuning
 governor** (PR #27, `src/agent/tuning_governor.rs`) and realizes the project's governing
 pattern — **management = intent + local reconcile** (see project memory *management-as-intent*;
