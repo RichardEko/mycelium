@@ -2334,7 +2334,12 @@ admission), the compliant shape is stated inline rather than assumed.
    **Trigger to start**: a regulated-industry deployment where gateway-layer enforcement proves
    insufficient — i.e. agents need resolve-time authz on gossiped capabilities, not just HTTP-level.
 
-7. **Cluster-wide distributed rate-limiting** — `max_inbound_frames_per_sec` applies per-peer
+7. **Cluster-wide distributed rate-limiting** — ✅ **SHIPPED** (WS-C, PR #105;
+   `mycelium-core/src/rate.rs`). Off by default (`GOSSIP_RATE_OBSERVATION`); when on, each node
+   publishes per-peer observed fps to `sys/rate/{observer}/{sender}` (evaporating evidence) and a
+   decider tightens its *own* budget for a sender whose aggregate crosses the threshold (fair-share =
+   threshold ÷ observers) — `SystemStats::rate_limited_senders` on `/stats`. Shared evidence, local
+   decision, no eviction verdict. *Original analysis retained below.* `max_inbound_frames_per_sec` applies per-peer
    at each receiver independently; a misbehaving sender can still flood the network by
    connecting to many peers simultaneously. The compliant shape is **shared observation,
    local decision** (Core Principles 4 + 5 — no cluster-wide eviction *verdict*, which would be
@@ -2400,7 +2405,15 @@ admission), the compliant shape is stated inline rather than assumed.
    at runtime (elastic scaling, rolling deploys) and ops confirms milestone 8 is
    insufficient because static startup-time derivation becomes stale.
 
-10. **Full live reconfiguration (coordinated fence)** — parameters that require task restarts
+10. **Full live reconfiguration** — ✅ **SHIPPED, fence-free** (WS-C, PRs #106/#107;
+    `src/agent/timing_governor.rs`). The original "coordinated fence" was **declined-with-reasoning**:
+    the timing params were made hot-reloadable (the loops re-read `HotConfig` each cycle — no task
+    restart) and distributed cluster-wide via an evaporating `TimingIntent` (management-as-intent —
+    newest-wins, local-wins, `POST /gateway/govern/timing`). A consensus fence would import a
+    coordinator (CP1 violation) to prevent a *transient* cross-node variation the self-healing
+    substrate already tolerates; within-node atomic apply closes the only correctness hazard. The
+    *end* (live cluster-wide timing reconfig) is delivered without the *means* the original proposed.
+    *Original analysis retained below.* Parameters that require task restarts
     (`health_check_interval_secs`, `reconnect_backoff_secs`, `peer_eviction_intervals`) need a
     coordinated fence: reach consensus on the new config version, drain in-flight operations,
     restart affected background tasks, confirm all nodes applied the change. This is the full
