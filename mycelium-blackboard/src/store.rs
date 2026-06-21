@@ -235,6 +235,40 @@ impl BoardStore {
         self.wal.as_ref().map_or(0, WalWriter::epoch)
     }
 
+    /// Force a durable WAL sync (the periodic checkpoint task; no-op when transient).
+    pub fn sync(&self) -> Result<(), BlackboardError> {
+        if let Some(wal) = &self.wal {
+            wal.sync()?;
+        }
+        Ok(())
+    }
+
+    /// Snapshot of every live fact (claimable + in-flight) — the secondary's initial sync source.
+    pub fn snapshot_live(&self) -> Vec<Fact> {
+        let g = self.inner.lock();
+        g.available
+            .values()
+            .cloned()
+            .chain(g.inflight.values().map(|i| i.fact.clone()))
+            .collect()
+    }
+
+    /// **Mirror-side terminal**: drop fact `id` (consumed on the primary) from this mirror,
+    /// WAL-ing the `Ack` so the mirror's own replay agrees. Returns whether it was present.
+    pub fn discard(&self, id: u64) -> Result<bool, BlackboardError> {
+        let removed = {
+            let mut g = self.inner.lock();
+            g.available.remove(&id).is_some() || g.inflight.remove(&id).is_some()
+        };
+        if removed {
+            if let Some(wal) = &self.wal {
+                wal.append(&WalRecord::Ack { id })?;
+            }
+            self.acked.fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(removed)
+    }
+
     /// **Crash-requeue** (at-least-once): in-flight claims older than `timeout` return to the
     /// claimable pool, so a claimer that dropped mid-work does not strand the fact. Returns the
     /// re-queued ids. (Phase 2 drives this on a cadence with the WAL; the mechanism lives here.)

@@ -33,14 +33,24 @@
 //!
 //! ## Status (WS-G / G3)
 //!
-//! **Phase 1 (this module): the in-memory core.** [`BoardStore`] is the pure claim-by-predicate
-//! primitive — `post` / `read` / `claim` / `ack` / `release`, single-owner and exactly-once,
-//! testable without a cluster (the [`mycelium-tuple-space`] `TupleStore::transient` analogue).
-//! Later phases add WAL durability (against the shared exactly-once-effect contract), emergent
-//! primary/secondary roles, the HTTP gateway + SDKs, and the worked example.
+//! - **[`BoardStore`]** — the pure claim-by-predicate core (`post` / `read` / `claim` / `ack` /
+//!   `release`), single-owner and exactly-once, testable without a cluster, with WAL durability.
+//! - **[`Blackboard`]** — the agent-backed board: posting/reading/claiming over a coordinator-free
+//!   primary discovered on the capability ring, with emergent secondary failover (`Post`/`Ack`
+//!   replication + snapshot sync + promotion-on-evaporation).
+//!
+//! Remaining phases add the HTTP gateway + SDKs and the worked example.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
+use bytes::Bytes;
+use mycelium::{CapFilter, Capability, CapabilityReg, GossipAgent, NodeId};
+
+mod rpc;
 mod store;
 mod wal;
 pub use store::{BoardDepth, BoardStats, BoardStore};
@@ -151,5 +161,455 @@ impl std::error::Error for BlackboardError {
 impl From<std::io::Error> for BlackboardError {
     fn from(e: std::io::Error) -> Self {
         BlackboardError::Io(e)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Agent-backed board (WS-G / G3 · Phase 3) — emergent roles + failover.
+//
+// Mirrors the mycelium-tuple-space role pattern: the primary is discovered by capability
+// advertisement (`blackboard/{ns}.primary`); a secondary mirrors via Post/Ack replication + an
+// initial snapshot and promotes when the primary's capability evaporates (the ring IS the failure
+// detector); `Auto` self-elects with a lowest-candidate-id tie-break. No coordinator assigns roles.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Role this node plays for a board namespace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoardRole {
+    /// Advertise as candidate, settle, then become primary (lowest candidate id wins) or secondary.
+    Auto,
+    /// Serve the board immediately.
+    Primary,
+    /// Mirror the primary and promote when its advertisement evaporates.
+    Secondary,
+    /// Pure poster/claimer; never serves.
+    Client,
+}
+
+/// Board configuration.
+#[derive(Debug, Clone)]
+pub struct BoardConfig {
+    /// Namespace, e.g. `"microgrid"`. Must not contain `/`. Advertised as capability
+    /// `blackboard`/`{ns}.primary`; RPC kinds are `blackboard.{ns}.claim` etc.
+    pub namespace: Arc<str>,
+    pub role: BoardRole,
+    /// WAL-backed (`true`) or transient (`false`).
+    pub persist: bool,
+    /// Ignored when `persist` is `false`.
+    pub wal_path: PathBuf,
+    /// Appends between `fdatasync` calls.
+    pub checkpoint_every: u64,
+    /// In-flight claim deadline: a claim not acked within this window re-queues the fact
+    /// (at-least-once — the "claimer dropped mid-work" path).
+    pub claim_timeout_secs: u64,
+    /// Capability advertisement refresh. Readers evaporate ads at 3×, so promotion latency after a
+    /// primary crash is ≈3× this value.
+    pub cap_refresh: Duration,
+}
+
+impl Default for BoardConfig {
+    fn default() -> Self {
+        Self {
+            namespace: Arc::from("board"),
+            role: BoardRole::Auto,
+            persist: false,
+            wal_path: PathBuf::from("board.wal"),
+            checkpoint_every: 500,
+            claim_timeout_secs: 300,
+            cap_refresh: Duration::from_secs(10),
+        }
+    }
+}
+
+/// An agent-backed board: posting/reading/claiming over a coordinator-free primary discovered on the
+/// capability ring, with emergent secondary failover. Construct after `agent.start()`.
+pub struct Blackboard {
+    agent: Arc<GossipAgent>,
+    cfg: BoardConfig,
+    store: parking_lot::Mutex<Option<Arc<BoardStore>>>,
+    is_primary: AtomicBool,
+    is_secondary: AtomicBool,
+    primary_reg: parking_lot::Mutex<Option<CapabilityReg>>,
+    role_reg: parking_lot::Mutex<Option<CapabilityReg>>,
+    /// Mirror dedup: fact ids already applied (a replicated Post may arrive twice).
+    mirrored: parking_lot::Mutex<HashSet<u64>>,
+    tasks: parking_lot::Mutex<Vec<tokio::task::JoinHandle<()>>>,
+}
+
+impl Blackboard {
+    /// Construct the board and start whatever machinery the configured role needs.
+    pub async fn new(agent: Arc<GossipAgent>, cfg: BoardConfig) -> Result<Arc<Self>, BlackboardError> {
+        let bb = Arc::new(Self {
+            agent,
+            cfg,
+            store: parking_lot::Mutex::new(None),
+            is_primary: AtomicBool::new(false),
+            is_secondary: AtomicBool::new(false),
+            primary_reg: parking_lot::Mutex::new(None),
+            role_reg: parking_lot::Mutex::new(None),
+            mirrored: parking_lot::Mutex::new(HashSet::new()),
+            tasks: parking_lot::Mutex::new(Vec::new()),
+        });
+        match bb.cfg.role {
+            BoardRole::Primary => {
+                bb.init_store()?;
+                bb.become_primary();
+            }
+            BoardRole::Secondary => {
+                bb.init_store()?;
+                bb.become_secondary();
+            }
+            BoardRole::Auto => {
+                let me = Arc::clone(&bb);
+                let h = tokio::spawn(async move { me.run_election().await });
+                bb.tasks.lock().push(h);
+            }
+            BoardRole::Client => {}
+        }
+        Ok(bb)
+    }
+
+    fn init_store(&self) -> Result<(), BlackboardError> {
+        let mut g = self.store.lock();
+        if g.is_none() {
+            let store = if self.cfg.persist {
+                BoardStore::persistent(&self.cfg.wal_path, self.cfg.checkpoint_every)?
+            } else {
+                BoardStore::transient()
+            };
+            *g = Some(Arc::new(store));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn store(&self) -> Option<Arc<BoardStore>> {
+        self.store.lock().clone()
+    }
+    pub(crate) fn cfg(&self) -> &BoardConfig {
+        &self.cfg
+    }
+    pub(crate) fn agent(&self) -> &Arc<GossipAgent> {
+        &self.agent
+    }
+    /// This board's namespace.
+    pub fn namespace(&self) -> &Arc<str> {
+        &self.cfg.namespace
+    }
+    fn store_expect(&self) -> Arc<BoardStore> {
+        self.store().expect("serving role requires a store")
+    }
+    pub(crate) fn mark_mirrored(&self, id: u64) -> bool {
+        self.mirrored.lock().insert(id)
+    }
+
+    // ── Role assumption ──────────────────────────────────────────────────────
+
+    fn become_primary(self: &Arc<Self>) {
+        let store = self.store_expect();
+        let ns = &self.cfg.namespace;
+        let mut tasks = rpc::spawn_primary_handlers(self);
+
+        let reg = self.agent.capabilities().advertise_capability(
+            Capability::new("blackboard", format!("{ns}.primary")),
+            self.cfg.cap_refresh,
+        );
+        *self.primary_reg.lock() = Some(reg);
+        *self.role_reg.lock() = None; // retract candidate/secondary ad
+
+        // Re-queue scan: claims not acked within the deadline return to claimable (at-least-once).
+        {
+            let store2 = Arc::clone(&store);
+            let timeout = Duration::from_secs(self.cfg.claim_timeout_secs);
+            tasks.push(tokio::spawn(async move {
+                let mut tick = tokio::time::interval(Duration::from_secs(30));
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    tick.tick().await;
+                    for id in store2.requeue_expired(timeout) {
+                        tracing::warn!(id, "blackboard: re-queued expired in-flight claim");
+                    }
+                }
+            }));
+        }
+
+        // Checkpoint + compaction, off the hot path.
+        {
+            let store2 = Arc::clone(&store);
+            tasks.push(tokio::spawn(async move {
+                let mut tick = tokio::time::interval(Duration::from_secs(1));
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    tick.tick().await;
+                    let s = Arc::clone(&store2);
+                    let _ = tokio::task::spawn_blocking(move || {
+                        let _ = s.sync();
+                        if s.wants_compaction() {
+                            let _ = s.compact();
+                        }
+                    })
+                    .await;
+                }
+            }));
+        }
+
+        self.tasks.lock().extend(tasks);
+        self.is_secondary.store(false, Ordering::Release);
+        self.is_primary.store(true, Ordering::Release);
+        tracing::info!(ns = %self.cfg.namespace, "blackboard: serving as primary");
+    }
+
+    fn become_secondary(self: &Arc<Self>) {
+        let ns = &self.cfg.namespace;
+        let mut tasks = rpc::spawn_mirror_handlers(self);
+
+        let reg = self.agent.capabilities().advertise_capability(
+            Capability::new("blackboard", format!("{ns}.secondary")),
+            self.cfg.cap_refresh,
+        );
+        *self.role_reg.lock() = Some(reg);
+
+        // Initial sync: pull the primary's current live facts so the mirror is complete, then live
+        // Post/Ack replication keeps it current.
+        {
+            let me = Arc::clone(self);
+            tasks.push(tokio::spawn(async move {
+                me.sync_from_primary().await;
+            }));
+        }
+
+        // Promotion watch: the capability ring IS the failure detector. Two consecutive empty
+        // resolves of `.primary` (one ad interval apart — split-brain guard) → take over.
+        {
+            let me = Arc::clone(self);
+            let interval = self.cfg.cap_refresh;
+            tasks.push(tokio::spawn(async move {
+                let mut tick = tokio::time::interval(interval);
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    tick.tick().await;
+                    if !me.resolve_role("primary").is_empty() {
+                        continue;
+                    }
+                    tokio::time::sleep(interval).await;
+                    if !me.resolve_role("primary").is_empty() {
+                        continue;
+                    }
+                    tracing::warn!(ns = %me.cfg.namespace, "blackboard: primary evaporated — promoting");
+                    me.become_primary();
+                    return;
+                }
+            }));
+        }
+
+        self.tasks.lock().extend(tasks);
+        self.is_secondary.store(true, Ordering::Release);
+        tracing::info!(ns = %self.cfg.namespace, "blackboard: mirroring as secondary");
+    }
+
+    async fn run_election(self: Arc<Self>) {
+        let ns = &self.cfg.namespace;
+        let reg = self.agent.capabilities().advertise_capability(
+            Capability::new("blackboard", format!("{ns}.candidate")),
+            self.cfg.cap_refresh,
+        );
+        *self.role_reg.lock() = Some(reg);
+
+        let settle = (self.cfg.cap_refresh * 2).max(Duration::from_secs(2));
+        tokio::time::sleep(settle).await;
+
+        loop {
+            if !self.resolve_role("primary").is_empty() {
+                if self.init_store().is_ok() {
+                    self.become_secondary();
+                }
+                return;
+            }
+            let mut candidates = self.resolve_role("candidate");
+            candidates.sort_by_key(NodeId::to_string);
+            let self_id = self.agent.node_id().to_string();
+            match candidates.first() {
+                Some(lowest) if lowest.to_string() == self_id => {
+                    if self.init_store().is_ok() {
+                        self.become_primary();
+                    }
+                    return;
+                }
+                _ => tokio::time::sleep(self.cfg.cap_refresh).await,
+            }
+        }
+    }
+
+    /// Pull the primary's current live facts into the mirror (one snapshot RPC).
+    async fn sync_from_primary(self: &Arc<Self>) {
+        let Ok(primary) = self.resolve_primary() else { return };
+        let kind = rpc::rpc_kind(&self.cfg.namespace, "snapshot");
+        let Ok(resp) = self
+            .agent
+            .service()
+            .rpc_call(primary, kind, Bytes::new(), Duration::from_secs(10))
+            .await
+        else {
+            return;
+        };
+        if let (Ok(facts), Some(store)) = (rpc::dec_facts_resp(&resp), self.store()) {
+            for f in facts {
+                if self.mark_mirrored(f.id) {
+                    let _ = store.post_with_id(f.id, f.attributes, f.payload);
+                }
+            }
+        }
+    }
+
+    // ── Serving paths (primary) ──────────────────────────────────────────────
+
+    pub(crate) fn serve_post(self: &Arc<Self>, attrs: BTreeMap<String, String>, payload: Bytes) -> Result<u64, BlackboardError> {
+        let store = self.store_expect();
+        let id = store.post(attrs.clone(), payload.clone())?;
+        self.replicate(rpc::enc_replicate_post(&Fact { id, attributes: attrs, payload }));
+        Ok(id)
+    }
+    pub(crate) fn serve_read(&self, pred: &Predicate) -> Vec<Fact> {
+        self.store().map(|s| s.read(pred)).unwrap_or_default()
+    }
+    pub(crate) fn serve_claim(&self, pred: &Predicate) -> Result<Option<Fact>, BlackboardError> {
+        self.store_expect().claim(pred)
+    }
+    pub(crate) fn serve_ack(self: &Arc<Self>, id: u64) -> Result<(), BlackboardError> {
+        self.store_expect().ack(id)?;
+        self.replicate(rpc::enc_replicate_ack(id));
+        Ok(())
+    }
+    pub(crate) fn serve_release(&self, id: u64) -> Result<(), BlackboardError> {
+        self.store_expect().release(id)
+    }
+
+    /// Fire-and-forget replication of a `Post`/`Ack` record to every live secondary.
+    fn replicate(self: &Arc<Self>, body: Bytes) {
+        let secondaries = self.resolve_role("secondary");
+        if secondaries.is_empty() {
+            return;
+        }
+        let kind = rpc::rpc_kind(&self.cfg.namespace, "replicate");
+        let agent = Arc::clone(&self.agent);
+        tokio::spawn(async move {
+            for node in secondaries {
+                for _ in 0..2 {
+                    if agent
+                        .service()
+                        .rpc_call(node.clone(), Arc::clone(&kind), body.clone(), Duration::from_secs(5))
+                        .await
+                        .is_ok()
+                    {
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
+    // ── Resolution ───────────────────────────────────────────────────────────
+
+    fn resolve_role(&self, role: &str) -> Vec<NodeId> {
+        let filter = CapFilter::new("blackboard", format!("{}.{role}", self.cfg.namespace));
+        self.agent.capabilities().resolve(&filter).into_iter().map(|(n, _)| n).collect()
+    }
+    fn resolve_primary(&self) -> Result<NodeId, BlackboardError> {
+        let mut providers = self.resolve_role("primary");
+        if providers.is_empty() {
+            return Err(BlackboardError::NoProvider);
+        }
+        providers.sort_by_key(NodeId::to_string);
+        Ok(providers.remove(0))
+    }
+    fn serving_locally(&self) -> bool {
+        self.is_primary.load(Ordering::Acquire)
+    }
+
+    // ── Public API ───────────────────────────────────────────────────────────
+
+    /// Post a fact (Linda `out`) — non-destructive; readable and claimable cluster-wide. Returns its id.
+    pub async fn post(self: &Arc<Self>, attributes: BTreeMap<String, String>, payload: Bytes) -> Result<u64, BlackboardError> {
+        if self.serving_locally() {
+            return self.serve_post(attributes, payload);
+        }
+        let primary = self.resolve_primary()?;
+        let resp = self
+            .agent
+            .service()
+            .rpc_call(primary, rpc::rpc_kind(&self.cfg.namespace, "post"), rpc::enc_post_req(&attributes, &payload), Duration::from_secs(10))
+            .await
+            .map_err(|e| BlackboardError::Rpc(e.to_string()))?;
+        rpc::dec_id_resp(&resp)
+    }
+
+    /// Non-destructive read (Linda `rd`): all facts matching `predicate`.
+    pub async fn read(self: &Arc<Self>, predicate: &Predicate) -> Result<Vec<Fact>, BlackboardError> {
+        if self.serving_locally() {
+            return Ok(self.serve_read(predicate));
+        }
+        let primary = self.resolve_primary()?;
+        let resp = self
+            .agent
+            .service()
+            .rpc_call(primary, rpc::rpc_kind(&self.cfg.namespace, "read"), rpc::enc_predicate_req(predicate), Duration::from_secs(10))
+            .await
+            .map_err(|e| BlackboardError::Rpc(e.to_string()))?;
+        rpc::dec_facts_resp(&resp)
+    }
+
+    /// Competitive destructive claim (Linda `in`): claim one fact matching `predicate`, or `None`.
+    pub async fn claim(self: &Arc<Self>, predicate: &Predicate) -> Result<Option<Fact>, BlackboardError> {
+        if self.serving_locally() {
+            return self.serve_claim(predicate);
+        }
+        let primary = self.resolve_primary()?;
+        let resp = self
+            .agent
+            .service()
+            .rpc_call(primary, rpc::rpc_kind(&self.cfg.namespace, "claim"), rpc::enc_predicate_req(predicate), Duration::from_secs(10))
+            .await
+            .map_err(|e| BlackboardError::Rpc(e.to_string()))?;
+        rpc::dec_opt_fact_resp(&resp)
+    }
+
+    /// Terminal ack: the claimed fact was consumed.
+    pub async fn ack(self: &Arc<Self>, id: u64) -> Result<(), BlackboardError> {
+        if self.serving_locally() {
+            return self.serve_ack(id);
+        }
+        let primary = self.resolve_primary()?;
+        let resp = self
+            .agent
+            .service()
+            .rpc_call(primary, rpc::rpc_kind(&self.cfg.namespace, "ack"), rpc::enc_id_req(id), Duration::from_secs(10))
+            .await
+            .map_err(|e| BlackboardError::Rpc(e.to_string()))?;
+        rpc::dec_unit_resp(&resp)
+    }
+
+    /// Release: abandon a claim — the fact returns to claimable.
+    pub async fn release(self: &Arc<Self>, id: u64) -> Result<(), BlackboardError> {
+        if self.serving_locally() {
+            return self.serve_release(id);
+        }
+        let primary = self.resolve_primary()?;
+        let resp = self
+            .agent
+            .service()
+            .rpc_call(primary, rpc::rpc_kind(&self.cfg.namespace, "release"), rpc::enc_id_req(id), Duration::from_secs(10))
+            .await
+            .map_err(|e| BlackboardError::Rpc(e.to_string()))?;
+        rpc::dec_unit_resp(&resp)
+    }
+
+    /// Abort background tasks and retract advertisements.
+    pub async fn shutdown(&self) {
+        for h in self.tasks.lock().drain(..) {
+            h.abort();
+        }
+        *self.primary_reg.lock() = None;
+        *self.role_reg.lock() = None;
+        self.is_primary.store(false, Ordering::Release);
+        self.is_secondary.store(false, Ordering::Release);
     }
 }
