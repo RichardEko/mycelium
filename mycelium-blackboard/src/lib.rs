@@ -50,6 +50,8 @@ use std::time::Duration;
 use bytes::Bytes;
 use mycelium::{CapFilter, Capability, CapabilityReg, GossipAgent, NodeId};
 
+#[cfg(feature = "gateway")]
+mod http;
 mod rpc;
 mod store;
 mod wal;
@@ -600,6 +602,21 @@ impl Blackboard {
             .await
             .map_err(|e| BlackboardError::Rpc(e.to_string()))?;
         rpc::dec_unit_resp(&resp)
+    }
+
+    /// Live depth of the board (claimable + in-flight).
+    pub async fn depth(self: &Arc<Self>) -> Result<BoardDepth, BlackboardError> {
+        if self.serving_locally() {
+            return Ok(self.store_expect().depth());
+        }
+        let primary = self.resolve_primary()?;
+        let resp = self
+            .agent
+            .service()
+            .rpc_call(primary, rpc::rpc_kind(&self.cfg.namespace, "depth"), Bytes::new(), Duration::from_secs(10))
+            .await
+            .map_err(|e| BlackboardError::Rpc(e.to_string()))?;
+        rpc::dec_depth_resp(&resp)
     }
 
     /// Abort background tasks and retract advertisements.
