@@ -1,7 +1,11 @@
 # v2.0 WS-B — Scale & Transport — Delivery Plan
 
-**Status:** Not started (trigger-gated, like all of v2.0 beyond WS-A). This document is
-the *strategy/sequencing* plan; the canonical per-milestone design home stays
+**Status:** ✅ **COMPLETE & signed off** (PRs #19/#21, example-gate #22) — M4 partial-mesh,
+M5 SWIM UDP/TCP failure detector (default-on), M11 in-tree codec + Merkle anti-entropy, wire bumped
+to **v12** (`PREV = 11`). The 100-node `make test-scale` formation-within-240s is the documented
+Docker-bridge iptables FORWARD-chain ceiling (environmental, not a regression — identical code
+converges at 20/30/50 nodes). This document is the *strategy/sequencing* plan; the canonical
+per-milestone design home stays
 [ROADMAP §v2.0 Milestones](../../ROADMAP.md) (M4, M5, M11) and the NANDA Quilt deep-dive
 (Merkle anti-entropy). The workstream summary lives in
 [`docs/plans/v2.0.md`](v2.0.md) §WS-B.

@@ -1,5 +1,11 @@
 # v2.0 WS-C — Self-Managing Metabolism — Delivery Plan
 
+**Status:** ✅ **Done-when met** — M8 startup auto-derivation + M9 hot-reload/`ClusterTuner` + the
+tuning governor (PRs #26/#27) + the elastic `MembershipGovernor`/`/gateway/govern` shipped (see
+[`elastic-sizing-intent-governed.md`](elastic-sizing-intent-governed.md)). **M7** (distributed
+rate-limiting, abuse-triggered) and **M10** (fenced live reconfiguration, gated on M8+M9 proving
+insufficient) are **deferred-with-reason**, triggers unfired.
+
 Per-workstream execution plan. The canonical *design* lives in
 [ROADMAP.md §v2.0 Milestones](../../ROADMAP.md) (M7, M8, M9, M10) and the workstream
 summary in [`docs/plans/v2.0.md`](v2.0.md) §WS-C. This document is **strategy /
