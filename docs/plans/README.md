@@ -12,10 +12,11 @@ index just routes you to the right one.
 [`docs/design/`](../design/). These plans are strategy/sequencing + execution
 record, not duplicates of those.
 
-> **As of 2026-06-21, all engineering plans are shipped.** v2.0's acceptance gate
-> is met — every workstream and all 16 milestones (M1–M16) delivered
-> ([`v2.0.md`](v2.0.md)). The only open item is one **research experiment**
-> (three-arm work distribution, for Paper 1).
+> **As of 2026-06-21, all *delivered* engineering plans are shipped.** v2.0's
+> acceptance gate is met — every workstream and all 16 milestones (M1–M16) delivered
+> ([`v2.0.md`](v2.0.md)). Open items: one **proposed** plan
+> ([`legible-emergence.md`](legible-emergence.md) — emergent observability, awaiting
+> go-ahead) and one **research experiment** (three-arm work distribution, for Paper 1).
 
 ---
 
@@ -48,6 +49,12 @@ future contributor needs so they don't re-litigate a settled choice — lives he
 | Doc | What it is |
 |---|---|
 | [`mycelium-blackboard.md`](mycelium-blackboard.md) | The blackboard *design rationale* (worked example, `rd`/`in` split, non-goals). ✅ Built — the phased build plan is [`v2-wsg-g3-blackboard.md`](v2-wsg-g3-blackboard.md). |
+
+## Proposed — not yet started
+
+| Doc | Status |
+|---|---|
+| [`legible-emergence.md`](legible-emergence.md) | 📋 **Proposed** (2026-06-21) — make coordinator-free fleets diagnosable by a *non-designer* (Detect → Localize → Explain → Intervene), closing the debuggability-of-emergence adoption risk. Coordinator-free by construction (fleet diagnostics computed from each node's locally-held KV + HLC causal order + scatter-gather fan-out; no central collector). 6 phases (0 taxonomy → 1 emergent tripwires → 2 fleet snapshot → 3 causal reconstruction → 4 fleet narrative → 5 operator surface). Awaiting go-ahead. |
 
 ## Research track — in progress
 
