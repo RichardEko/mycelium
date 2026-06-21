@@ -4168,6 +4168,37 @@ async fn test_wsc_m7_distributed_rate_limit_throttles_on_aggregate() {
     agent.shutdown_with_timeout(Duration::from_secs(5)).await;
 }
 
+/// WS-C / M10.1 gate (G-M10.1): timing params are hot-reloadable — a live `set_*` retunes the
+/// background loop on its next cycle with **no task restart** (`task_count` unchanged), the
+/// management-as-intent / hot-reload way (no consensus fence).
+#[tokio::test]
+async fn test_wsc_m10_hot_reload_timing_no_task_restart() {
+    let port = alloc_port();
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = port;
+    cfg.health_check_interval_secs = 5;
+    let agent = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg));
+    agent.start().await.unwrap();
+    poll_until(|| agent.system_stats().task_count > 0, 3_000).await;
+    let tasks_before = agent.system_stats().task_count;
+
+    // Live-retune the health-check interval and the reconnect backoff.
+    agent.set_health_check_interval_secs(1);
+    agent.set_reconnect_backoff_secs(2);
+    assert_eq!(agent.timing_tunables(), (1, 2), "the live timing override is recorded");
+
+    // The health monitor adopts the new cadence on its next cycle — no task respawned.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(agent.system_stats().task_count, tasks_before,
+        "G-M10.1: hot-reload retunes the loop in place — no task restart");
+
+    // `0` reverts to the static config value.
+    agent.set_health_check_interval_secs(0);
+    assert_eq!(agent.timing_tunables().0, 0, "0 = revert to static config");
+
+    agent.shutdown_with_timeout(Duration::from_secs(5)).await;
+}
+
 // ── M2 falsification probe (Run 24): concurrent audit chain integrity ─────
 
 /// Probe: many concurrent `audit()` calls on one node must produce a strictly

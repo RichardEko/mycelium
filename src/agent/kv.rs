@@ -47,6 +47,24 @@ impl GossipAgent {
         self.task_ctx.hot.max_concurrent_bulk_handlers
             .store(n, std::sync::atomic::Ordering::Relaxed);
     }
+    /// Live-set the **health-check interval** (secs, WS-C / M10). The health monitor re-reads it each
+    /// cycle and retunes its cadence on the next tick — no task restart. `0` ⇒ revert to the static
+    /// config value.
+    pub fn set_health_check_interval_secs(&self, secs: u64) {
+        self.task_ctx.hot.health_check_interval_secs
+            .store(secs, std::sync::atomic::Ordering::Relaxed);
+    }
+    /// Live-set the **reconnect backoff** (secs, WS-C / M10). `0` ⇒ revert to the static config value.
+    pub fn set_reconnect_backoff_secs(&self, secs: u64) {
+        self.task_ctx.hot.reconnect_backoff_secs
+            .store(secs, std::sync::atomic::Ordering::Relaxed);
+    }
+    /// Current live timing values (WS-C / M10), as `(health_check_interval_secs, reconnect_backoff_secs)`.
+    /// `0` for a field means "using the static config value".
+    pub fn timing_tunables(&self) -> (u64, u64) {
+        (self.task_ctx.hot.health_check_interval_secs.load(std::sync::atomic::Ordering::Relaxed),
+         self.task_ctx.hot.reconnect_backoff_secs.load(std::sync::atomic::Ordering::Relaxed))
+    }
 
     /// Current live values of the hot-tunable subset (post-M9 overrides), as
     /// `(max_inbound_frames_per_sec, writer_channel_depth, max_concurrent_bulk_handlers)`.

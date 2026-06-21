@@ -515,7 +515,12 @@ pub(super) async fn run_health_monitor(
         }
     }
 
-    let mut ticker = time::interval(Duration::from_secs(interval_secs));
+    // M10 (WS-C): the tick cadence is live-reconfigurable. We re-read the hot value each loop and
+    // recreate the interval only when it changes, so a `TimingIntent` (or local `set_timing`) retunes
+    // the health-check cadence with no task restart — preserving the immediate-first-tick + Skip
+    // semantics. `0` ⇒ keep the static config value.
+    let mut current_health_secs = hot.health_interval_secs(interval_secs);
+    let mut ticker = time::interval(Duration::from_secs(current_health_secs.max(1)));
     ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
     // With SWIM (M5 cutover) the forwarding set starts empty and is NOT seeded with the
     // bootstrap peers: liveness + discovery ride UDP probing/gossip, so the forwarding
@@ -541,6 +546,14 @@ pub(super) async fn run_health_monitor(
         Duration::from_secs(interval_secs.saturating_mul(peer_eviction_intervals).max(1));
 
     loop {
+        // M10: adopt a live cadence change on the next cycle (recreate only on change).
+        let want_health_secs = hot.health_interval_secs(interval_secs);
+        if want_health_secs != current_health_secs {
+            current_health_secs = want_health_secs;
+            ticker = time::interval(Duration::from_secs(current_health_secs.max(1)));
+            ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+            tracing::info!(secs = current_health_secs, "M10: health-check interval retuned live");
+        }
         tokio::select! { biased;
             _ = ticker.tick() => {
                 let mut current_peer_set: AHashSet<NodeId> = AHashSet::new();
