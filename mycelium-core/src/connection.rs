@@ -130,6 +130,11 @@ pub async fn handle_connection(
     // The limit is read from the hot cell each frame (WS-C M9) so it can be retuned live.
     let mut rate_window_start = std::time::Instant::now();
     let mut rate_frame_count: u64 = 0;
+    // M7 (WS-C) distributed rate-limiting: the immediate peer's identity (the sender key) + its
+    // locally-decided throttle budget, refreshed once per window. Inert unless `rate_observation`.
+    let m7_enabled = task_ctx.config.rate_observation_enabled;
+    let peer_key: std::sync::Arc<str> = std::sync::Arc::from(peer_addr.to_string());
+    let mut sender_throttle: u64 = 0;
 
     loop {
         // read_frame returns FrameVersion so we can select the right decoder.
@@ -144,20 +149,35 @@ pub async fn handle_connection(
             _ = shutdown_rx.wait_for(|v| *v) => break,
         };
 
-        // Per-peer inbound rate limiting: drop frames from a flooding peer.
-        let inbound_rate_limit = task_ctx.hot.inbound_fps();
-        if inbound_rate_limit > 0 {
+        // Inbound rate limiting: drop frames from a flooding peer. The effective limit is the
+        // tightest of the global per-peer limit (`max_inbound_frames_per_sec`, M9-hot) and the M7
+        // distributed throttle (a fair-share budget decided from cluster-wide aggregate evidence).
+        let global_limit = task_ctx.hot.inbound_fps();
+        if global_limit > 0 || m7_enabled {
             let elapsed = rate_window_start.elapsed();
             if elapsed >= Duration::from_secs(1) {
+                // Window rollover: publish this peer's observed rate as shared M7 evidence, then
+                // refresh its locally-decided throttle budget for the new window.
+                if m7_enabled {
+                    if rate_frame_count > 0 {
+                        crate::rate::publish_observation(&task_ctx, &peer_key, rate_frame_count);
+                    }
+                    sender_throttle = crate::rate::throttle_for(&task_ctx, &peer_key);
+                }
                 rate_frame_count = 0;
                 rate_window_start = std::time::Instant::now();
             }
             rate_frame_count += 1;
-            if rate_frame_count > inbound_rate_limit {
+            let effective = match (global_limit, sender_throttle) {
+                (0, t) => t,
+                (g, 0) => g,
+                (g, t) => g.min(t),
+            };
+            if effective > 0 && rate_frame_count > effective {
                 warn!(
                     from = %peer_addr,
                     fps  = rate_frame_count,
-                    limit = inbound_rate_limit,
+                    limit = effective,
                     "inbound rate limit exceeded; dropping frame"
                 );
                 continue;

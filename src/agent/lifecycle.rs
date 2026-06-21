@@ -193,6 +193,12 @@ impl GossipAgent {
             });
         }
         self.start_capability_group_watcher();
+        // M7 (WS-C) distributed rate-limiting decider — only when rate observation is enabled.
+        if self.task_ctx.config.rate_observation_enabled {
+            let ctx = Arc::clone(&self.task_ctx.core);
+            let srx = self.shutdown_tx.subscribe();
+            self.spawn_task(mycelium_core::rate::run_rate_decider(ctx, srx));
+        }
         info!("Gossip agent started: {}", self.node_id);
         Ok(())
     }

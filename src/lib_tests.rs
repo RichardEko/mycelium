@@ -132,6 +132,7 @@ fn spawn_handler(
         tls: std::sync::OnceLock::new(),
         peer_keys: Arc::new(papaya::HashMap::new()),
         peers: Arc::new(papaya::HashMap::new()),
+        rate_throttle: Arc::new(papaya::HashMap::new()),
         reorder_buf: None,
         reply_interceptor: None,
         soft_state_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -833,6 +834,7 @@ async fn test_subscribe_notified_via_gossip() {
             tls: std::sync::OnceLock::new(),
             peer_keys: Arc::new(papaya::HashMap::new()),
             peers: Arc::new(papaya::HashMap::new()),
+            rate_throttle: Arc::new(papaya::HashMap::new()),
             reorder_buf: None,
             reply_interceptor: None,
             soft_state_advertised: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -4125,6 +4127,43 @@ async fn test_wsf_cross_version_producer_consumer_interop_end_to_end() {
     let facts_v2 = agent.migrate_payload("facts@v1", "facts@v2", facts_v1).expect("facts chain composes");
     assert_eq!(facts_v2["certification"]["schemaVersion"], serde_json::json!("v2"),
         "the engine evolves a nested AgentFacts certification field (M16 pairing)");
+
+    agent.shutdown_with_timeout(Duration::from_secs(5)).await;
+}
+
+/// WS-C / M7 gate (G-M7): distributed rate-limiting — shared observation, local decision. With
+/// aggregate evidence (summed across observers via `sys/rate/`) over the threshold, the decider
+/// throttles the sender on this node (`rate_limited_senders` reflects it); a calm sender never trips
+/// it; and the throttle clears when the evidence evaporates.
+#[tokio::test]
+async fn test_wsc_m7_distributed_rate_limit_throttles_on_aggregate() {
+    let port = alloc_port();
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = port;
+    cfg.rate_observation_enabled = true;
+    cfg.rate_aggregate_threshold_fps = 900; // low, for the test
+    let agent = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg));
+    agent.start().await.unwrap();
+
+    // Seed shared evidence: three observers each saw "noisy:1" at 500 fps → aggregate 1500 > 900.
+    for obs in ["10.0.0.1:7", "10.0.0.2:7", "10.0.0.3:7"] {
+        let _ = agent.kv().set(format!("sys/rate/{obs}/noisy:1"), Bytes::from_static(b"500"));
+    }
+    // A calm sender seen once at 100 fps → aggregate 100 < 900.
+    let _ = agent.kv().set("sys/rate/10.0.0.1:7/calm:1", Bytes::from_static(b"100"));
+
+    // The decider runs every ~2 s; wait for it to throttle exactly the noisy sender.
+    poll_until(|| agent.system_stats().rate_limited_senders == 1, 8_000).await;
+    assert_eq!(agent.system_stats().rate_limited_senders, 1,
+        "G-M7: the over-threshold sender is throttled; the calm one is not");
+
+    // Evidence evaporates (drop it) → the throttle clears on the next decider pass.
+    for obs in ["10.0.0.1:7", "10.0.0.2:7", "10.0.0.3:7"] {
+        let _ = agent.kv().delete(format!("sys/rate/{obs}/noisy:1"));
+    }
+    poll_until(|| agent.system_stats().rate_limited_senders == 0, 8_000).await;
+    assert_eq!(agent.system_stats().rate_limited_senders, 0,
+        "the throttle releases when the sender is no longer abusive");
 
     agent.shutdown_with_timeout(Duration::from_secs(5)).await;
 }

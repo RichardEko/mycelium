@@ -565,6 +565,7 @@ async fn stats_handler(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
             .load(std::sync::atomic::Ordering::Relaxed),
         "schema_mismatch": ctx.agent_ctx.schema_mismatch
             .load(std::sync::atomic::Ordering::Relaxed),
+        "rate_limited_senders": mycelium_core::rate::throttled_sender_count(&ctx.agent_ctx.core),
     }))
 }
 
