@@ -93,6 +93,7 @@ Five application patterns build on this substrate:
 | Fluid Pipelines | Fixed worker pool flows to the deepest tuple-space stage (pull, canonical); coordinator-dispatch baseline retained as `PIPELINE_MODE=push` | [07-pipelines.md](07-pipelines.md) |
 | A2A Interop | LangChain / AutoGen agents discover Mycelium skills via `/.well-known/agent.json` | [08-a2a-interop.md](08-a2a-interop.md) |
 | TupleSpace (companion crate) | Pull-based pipeline buffer: workers `take()` when ready, WAL durability, primary/secondary failover driven by capability evaporation. Built entirely on the public API — see the [`mycelium-tuple-space/`](../../mycelium-tuple-space/) crate docs; integration scenario 13 is the runnable reference | [07-pipelines.md](07-pipelines.md) (lanes + How It Works) |
+| Blackboard (companion crate) | Shared working memory: many agents `read` facts non-destructively (`rd`), a finite fact is `claim`ed by exactly one by *content* predicate (`in`) — competitive, exactly-once, with primary/secondary failover. The content-routed sibling of the tuple space, on the public API — see the [`mycelium-blackboard/`](../../mycelium-blackboard/) crate docs + the `microgrid` example | [00-concepts.md](00-concepts.md) ("tuple space vs. blackboard") |
 
 ---
 

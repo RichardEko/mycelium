@@ -118,6 +118,20 @@ alternative to predicting who does what). →
 [`consensus`](../../examples/coop/src/bin/consensus.rs),
 [`llm_pipeline`](../../examples/coop/src/bin/llm_pipeline.rs).
 
+**Tuple space vs. blackboard — "how does a consumer find its work?"** Two
+companion crates, two answers, both on the public API. The
+[`mycelium-tuple-space`](../../mycelium-tuple-space/) routes by **position**:
+named FIFO lanes (stages), topology known up front, O(1) claims — for pipelines
+whose stages you know. Fan-in joins by correlation key use its keyed
+`take_by_key` (M13). The [`mycelium-blackboard`](../../mycelium-blackboard/)
+routes by **content**: a consumer names a **predicate** over fact attributes and
+the topology is *emergent per item* — for opportunistic reasoning where *which*
+agent acts is decided by the fact, not by where it was put. The blackboard adds
+the one primitive the substrate lacks — **competitive destructive
+claim-by-predicate** (Linda's `in`); non-destructive shared reads (`rd`) are
+already the substrate's (gossiped facts + predicate filters). One line: *known
+stages → tuple space; emergent topology over shared facts → blackboard.*
+
 **Opacity / pheromone / load / backpressure.** All one mechanism: a node writes
 its own state under `sys/load/{self}/…`; anything scanning that prefix sees a
 consistent picture with no coordination. **Load** is the raw fill; **opacity**

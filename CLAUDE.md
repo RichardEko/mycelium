@@ -466,6 +466,41 @@ Key facts for future sessions:
   SDKs in `mycelium-py/src/mycelium/tuple.py` and `mycelium-ts/src/tuple.ts`;
   integration scenario 13.
 
+### Blackboard companion crate (`mycelium-blackboard/`)
+
+Blackboard-style shared working memory, built **entirely on the public API** (WS-G / G3, shipped
+2026-06-21, PRs #95–#100). The content-routed sibling of the tuple space: where the tuple space
+routes by lane *position*, the blackboard routes by *content* (a predicate over fact attributes).
+Design: `docs/plans/mycelium-blackboard.md` (sketch) + `docs/plans/v2-wsg-g3-blackboard.md` (build).
+
+Key facts for future sessions:
+
+- **The one new primitive is `claim(predicate)`** — competitive destructive claim-by-predicate
+  (Linda's `in`): a finite fact matching the predicate is claimed by exactly one agent (single-owner,
+  **non-blocking** — the loser gets `None`, no parked waiters, unlike the tuple space's blocking
+  `take`). Non-destructive `read` (`rd`) is shared/concurrent. `ack` is the idempotent terminal;
+  `release` / the in-flight deadline re-queue (at-least-once).
+- **Predicate language** = the capability attribute-filter grammar (equality + presence), **not**
+  unification/template matching — `Predicate::new().eq(k,v).present(k)`.
+- **Two layers**: `BoardStore` (pure in-memory core + WAL, testable via `transient()`/`persistent()`)
+  and `Blackboard` (agent-backed: roles + RPC + failover). `BoardRole` = `Auto`/`Primary`/`Secondary`/
+  `Client`, mirroring `TupleRole`.
+- **Replication is `Post`/`Ack`-only** (the deliberate divergence from the tuple space): a
+  `Claim`/`Release` doesn't change a mirror's liveness — a claimed-but-unacked fact stays claimable in
+  the mirror = the at-least-once re-queue a promotion wants. So **no heartbeat / WAL-replay cursor** is
+  needed; snapshot-on-join + live replication keep the mirror a complete live view.
+- **Exactly-once discipline**: the blackboard is the *second* real user of the WAL claim/ack/requeue
+  discipline (the tuple space is the first). The shared-overlay extraction was **examined and
+  declined-with-evidence** — the two diverge on a load-bearing axis (tuple = wall-clock-ms,
+  WAL-persisted, cross-node; blackboard = monotonic `Instant`, in-process). The contract is the shared
+  artifact, not code — see `docs/design/exactly-once-effect.md`.
+- **WAL**: magic `MBBWAL`, records `Post`/`Claim`/`Ack`/`Release`, replay liveness = Posted-and-not-Acked.
+- **Gates**: `cargo test -p mycelium-blackboard --features gateway` + clippy `--features gateway
+  --all-targets`; SDKs in `mycelium-py/src/mycelium/blackboard.py` + `mycelium-ts/src/blackboard.ts`;
+  the `microgrid` example + `ci_smoke.sh` (CI `blackboard` job); cross-node `tests/failover.rs`,
+  gateway `tests/gateway.rs`. Gateway: `POST /gateway/bb/{post,read,claim,ack,release}` + `GET
+  /gateway/bb/depth`.
+
 ### Gateway feature gate
 
 The `gateway` feature (on by default) enables the embedded Axum HTTP server. Disable

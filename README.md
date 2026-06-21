@@ -52,9 +52,12 @@ mycelium-core = "…"
 all traffic (including consensus frames) — it just never acts on the higher layers. You can also
 trim `mycelium` itself toward the core with `default-features = false` (drops the gateway) and
 `--no-default-features --features gateway` (drops consensus). The split landed in v2.0 M1 — see
-[ROADMAP §v2.0 Milestones](ROADMAP.md) for the rationale and the
-[`mycelium-tuple-space`](mycelium-tuple-space/) companion crate (a pull-based pipeline buffer
-built entirely on the public API).
+[ROADMAP §v2.0 Milestones](ROADMAP.md) for the rationale. Two coordination companion crates are
+built entirely on the public API: [`mycelium-tuple-space`](mycelium-tuple-space/) (a pull-based
+pipeline buffer — work routed by lane *position*) and
+[`mycelium-blackboard`](mycelium-blackboard/) (shared working memory — facts claimed by *content*
+predicate, competitive and exactly-once). Known stages → tuple space; emergent topology over shared
+facts → blackboard.
 
 ---
 
