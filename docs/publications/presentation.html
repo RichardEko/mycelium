@@ -980,6 +980,32 @@ providers = agent.<span class="cs">resolve_capability</span>(<span class="cv">"c
   </div>
 </div>
 
+<!-- Coop suite showcase -->
+<div class="slide" id="sCoop">
+  <div class="slide-top"><span class="eyebrow">Showcase</span><span class="slide-num">·· / ··</span></div>
+  <div class="slide-body">
+    <div class="slide-title">One world. <em>Eleven demos.</em></div>
+    <div class="slide-sub">The <strong>Food-Rescue Co-op</strong> (<code>examples/coop/</code>) — depot nodes rescuing surplus food, no central dispatcher. Not isolated API toys: one runnable demo per capability area, composed in a single constructive world, each calling out a pattern &amp; pitfall. The whole suite runs Docker-free and is CI-gated (<code>coop-smoke</code>).</div>
+    <div class="cols3" style="gap:12px;">
+      <div class="card card-accent-blue" style="padding:14px 16px;">
+        <div class="card-title">Self-organising fabric</div>
+        <div class="card-body"><strong>01</strong> actor↔LLM via the HLC-ordered mailbox · <strong>02</strong> stigmergic load-shed (<code>sys/load</code> pheromone) · <strong>03</strong> elastic intent (operator-optional governor)</div>
+      </div>
+      <div class="card card-accent-orange" style="padding:14px 16px;">
+        <div class="card-title">Mobility &amp; federation</div>
+        <div class="card-body"><strong>04</strong> ⭐ the autonomic loop (tuple-space + WASM self-provision + failover) · <strong>05</strong> cross-domain AgentFacts · <strong>06</strong> zero-disruption identity rotation · <strong>11</strong> the cluster artifact catalogue</div>
+      </div>
+      <div class="card card-accent-purple" style="padding:14px 16px;">
+        <div class="card-title">Agreement &amp; LLM coordination</div>
+        <div class="card-body"><strong>07</strong> cross-group consensus + leased decay · <strong>08</strong> homogeneous LLM workers (competitive pull) · <strong>09</strong> MCP tool-growth on demand · <strong>10</strong> a council of differentiated LLM agents</div>
+      </div>
+    </div>
+    <div class="callout callout-green" style="font-size:12.5px;">
+      <strong>Why one world, not eleven toys.</strong> Stress-testing the suite is how the fabric is hardened in anger — it surfaced and fixed the governor-vs-auto-join race, the retained-key gap, and the cross-node Individual-signal relay. The examples don't just <em>demonstrate</em> the substrate; they <em>exercise</em> it. <code>cargo run -p mycelium-coop-examples --bin provisioning</code>
+    </div>
+  </div>
+</div>
+
 <!-- 13 Examples -->
 <div class="slide" id="s11ex">
   <div class="slide-top"><span class="eyebrow">Running Examples</span><span class="slide-num">13 / 25</span></div>
@@ -1028,7 +1054,7 @@ MOCK_LLM=1 cargo run \
 
     </div>
     <div class="callout callout-blue" style="margin-top:14px;">
-      More in <code>examples/</code>: Conway's Life distributed GPU, semantic coordination (FIPA-ACL), three-node mesh demo, cross-group consensus scenarios.
+      These are the <strong>protocol / interop</strong> demos. The <strong>capability tour</strong> is the eleven-demo <a style="color:var(--accent);">Food-Rescue Co-op</a> (previous slide); the companion crates ship their own — the tuple-space <code>fluid_pipeline</code> and the blackboard <code>microgrid</code>. Plus <code>examples/</code>: Conway's Life on the GPU, semantic coordination (FIPA-ACL), cross-group consensus.
     </div>
   </div>
 </div>
@@ -1594,6 +1620,94 @@ space.<span class="cs">complete</span>(id, <span class="cv">"stage.parse"</span>
         </div>
         <div class="callout callout-blue" style="margin-top:10px;font-size:12px;">
           <strong>Composability proof.</strong> The crate's only dependency on the core is the public API — pull <em>composes from the existing primitives</em>. Nothing was added to the substrate to make it possible.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- A11 Blackboard -->
+<div class="slide appendix-slide" id="sA11">
+  <div class="slide-top"><span class="eyebrow eyebrow-app">Appendix A11</span><span class="slide-num">·· / ··</span></div>
+  <div class="slide-body">
+    <div class="slide-title" style="font-size:clamp(20px,2.8vw,36px);margin-bottom:8px;">Blackboard — <em>Claim by Content</em></div>
+    <div class="slide-sub" style="margin-bottom:10px;">A companion crate (<code>mycelium-blackboard</code>), public-API-only — the content-routed sibling of the tuple space. Where the tuple space routes by lane <em>position</em>, the blackboard routes by a <em>predicate over fact attributes</em>.</div>
+    <div class="cols2">
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="card card-accent-blue">
+          <div class="card-title">The one new primitive: <code>claim(predicate)</code></div>
+          <div class="card-body">Competitive, destructive claim-by-predicate (Linda's <code>in</code>): a finite fact matching the predicate is claimed by exactly one agent — single-owner, <strong>non-blocking</strong> (the loser gets <code>None</code>, no parked waiters). Non-destructive <code>read</code> (<code>rd</code>) is shared/concurrent. <code>ack</code> is the idempotent terminal; an in-flight deadline re-queues (at-least-once).</div>
+        </div>
+        <div class="card card-accent-green">
+          <div class="card-title">Predicate, not unification</div>
+          <div class="card-body">The match language is the capability attribute-filter grammar — equality + presence (<code>Predicate::new().eq(k,v).present(k)</code>) — deliberately <em>not</em> template/unification matching. Topology emerges from what a fact <em>says</em>.</div>
+        </div>
+        <div class="card card-accent-purple">
+          <div class="card-title">Mirror-complete replication</div>
+          <div class="card-body"><code>Post</code>/<code>Ack</code>-only — the deliberate divergence from the tuple space. A claim doesn't change a mirror's liveness, so a claimed-but-unacked fact stays claimable on a standby = the at-least-once re-queue a promotion wants. No heartbeat, no WAL-replay cursor.</div>
+        </div>
+      </div>
+      <div>
+        <div class="code-block" style="font-size:11px;">
+<span class="cm">// Post a fact — attributes + payload, no addressee</span>
+board.<span class="cs">post</span>(BTreeMap::from([
+  (<span class="cv">"kind"</span>.into(), <span class="cv">"repair"</span>.into()),
+  (<span class="cv">"zone"</span>.into(), <span class="cv">"north"</span>.into())]), payload).await?;
+
+<span class="cm">// Read shared (rd) — non-destructive, concurrent</span>
+<span class="ck">let</span> open = board.<span class="cs">read</span>(&amp;Predicate::new().<span class="cs">eq</span>(<span class="cv">"kind"</span>,<span class="cv">"repair"</span>)).await?;
+
+<span class="cm">// Claim (in) — competitive, exactly one winner</span>
+<span class="ck">if let</span> <span class="cs">Some</span>(f) = board.<span class="cs">claim</span>(&amp;Predicate::new()
+        .<span class="cs">eq</span>(<span class="cv">"zone"</span>,<span class="cv">"north"</span>).<span class="cs">present</span>(<span class="cv">"kind"</span>)).await? {
+  <span class="cm">// ...do the work...</span>
+  board.<span class="cs">ack</span>(f.id).await?;   <span class="cm">// idempotent terminal</span>
+}
+        </div>
+        <div class="callout callout-blue" style="margin-top:10px;font-size:12px;">
+          <strong>The exactly-once contract, reused.</strong> The blackboard is the <em>second</em> real user of the WAL claim/ack/requeue discipline (the tuple space is the first). The shared overlay was examined and <strong>declined-with-evidence</strong> — they diverge on a load-bearing axis (wall-clock-ms/cross-node vs monotonic/in-process). The shared artifact is the <em>contract</em>, not the code. Worked example: <code>mycelium-blackboard/examples/microgrid</code>.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- A12 Mailbox & Events -->
+<div class="slide appendix-slide" id="sA12">
+  <div class="slide-top"><span class="eyebrow eyebrow-app">Appendix A12</span><span class="slide-num">·· / ··</span></div>
+  <div class="slide-body">
+    <div class="slide-title" style="font-size:clamp(20px,2.8vw,36px);margin-bottom:8px;">Mailbox &amp; Events — <em>the Actor Inbox</em></div>
+    <div class="slide-sub" style="margin-bottom:10px;">Signals are ephemeral broadcast; sometimes an agent needs a <em>durable, ordered, addressed</em> inbox. <code>MailboxHandle</code> is that primitive — an actor mailbox on the substrate, with no broker behind it.</div>
+    <div class="cols2">
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="card card-accent-green">
+          <div class="card-title">Durable + HLC-ordered</div>
+          <div class="card-body">Messages land in a per-recipient mailbox backed by the KV store, delivered in <strong>Hybrid-Logical-Clock order</strong> — so causal happens-before survives wall-clock skew. Survives restart; a late reader catches up via anti-entropy like any other state.</div>
+        </div>
+        <div class="card card-accent-blue">
+          <div class="card-title">Two delivery shapes, one mesh</div>
+          <div class="card-body"><strong>Signals</strong> (Layer II) — ephemeral, scoped broadcast for events: fan-out, fire-and-forget, admission-bounded. <strong>Mailbox</strong> — durable, point-to-point, ordered: the actor inbox. Pick per interaction; both ride the same coordinator-free substrate.</div>
+        </div>
+        <div class="card card-accent-purple">
+          <div class="card-title">The actor ↔ LLM pattern</div>
+          <div class="card-body">The canonical use (coop demo <strong>01</strong>): an actor and an LLM worker exchange turns through the mailbox, so a slow or restarted model never drops or reorders a conversation. <code>MeshEvent</code> is the typed envelope.</div>
+        </div>
+      </div>
+      <div>
+        <div class="code-block" style="font-size:11px;">
+<span class="cm">// Open a durable, ordered inbox → (handle, receiver)</span>
+<span class="ck">let</span> (_mbox, <span class="ck">mut</span> rx) = agent.<span class="cs">service</span>().<span class="cs">open_mailbox</span>(<span class="cv">"triage.ask"</span>, <span class="cn">64</span>);
+
+<span class="cm">// Send — addressed by NodeId + kind only, no broker</span>
+agent.<span class="cs">service</span>().<span class="cs">deliver_event</span>(&amp;target_id, <span class="cv">"triage.ask"</span>, payload);
+
+<span class="cm">// Receive — drained in HLC-causal order, durable across restarts</span>
+<span class="ck">while let</span> <span class="cs">Some</span>(ev) = rx.<span class="cs">recv</span>().await {
+  <span class="cm">// ev: MeshEvent { kind, sender, payload, hlc_ts }</span>
+}
+        </div>
+        <div class="callout callout-green" style="margin-top:10px;font-size:12px;">
+          <strong>Why not just signals?</strong> Signals are the right tool for ephemeral events — but an agent conversation needs <em>delivery</em> and <em>order</em>. The mailbox gives both without standing up a queue: the durability is the KV store, the ordering is the HLC, the addressing is the capability ring. The actor model, with nothing to operate.
         </div>
       </div>
     </div>
