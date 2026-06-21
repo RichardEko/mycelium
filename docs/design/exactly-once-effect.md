@@ -1,9 +1,11 @@
-# The exactly-once-effect discipline — shared contract (WS-G / G2)
+# The exactly-once-effect discipline — shared contract (WS-G / G2 + G3·P6)
 
-**Status:** documented contract (2026-06-20). Code-level extraction **deferred-with-rationale**
-(Rule of Three — see below). This is the v2.0 §WS-G "done-when" item: *"the exactly-once-effect
-dedup discipline is extracted as a reusable overlay shared by the tuple space, mailbox, supervision
-(M14), and the blackboard."*
+**Status:** ✅ **resolved** (G2 documented the contract 2026-06-20; G3 Phase 6 made the code-extraction
+decision 2026-06-21 with the second user in hand → **declined-with-evidence**, see below). This is
+the v2.0 §WS-G "done-when" item: *"the exactly-once-effect dedup discipline is extracted as a reusable
+overlay shared by the tuple space, mailbox, supervision (M14), and the blackboard."* The resolution:
+the shared artifact is **this contract**; a code overlay is declined because the two real
+implementations diverge on a load-bearing axis (persisted/cross-node ms vs in-process `Instant`).
 
 ## What the discipline is
 
@@ -40,31 +42,40 @@ The load-bearing invariants:
 | Bounded in-flight (crash-requeue) | `TupleStore::requeue_expired` — re-dispatch unacked claims past `worker_timeout` (keyed items re-queue under their key) |
 | Crash durability | WAL v2 (`Record` encode/decode, `open()` replay) + secondary replication (`apply_records`) + promotion replay |
 
-## Why the code is not yet extracted (Rule of Three)
+## Code extraction: examined with the second user, **declined-with-evidence** (WS-G / G3 · Phase 6)
 
-The done-when names four prospective users; **only one exists as this mechanism today**:
+The G2 plan deferred the *code* extraction until a genuine second user of this exact mechanism
+existed — explicitly **G3's blackboard** — so the abstraction would be driven by two concrete shapes,
+not one shape + anticipation. The blackboard now exists (`mycelium-blackboard`, all phases shipped),
+so the deferred decision is now **made with both implementations in hand**.
 
-| Prospective user | Status | Mechanism |
+| User | Status | In-flight mechanism |
 |---|---|---|
-| **Tuple space** | shipped | This discipline (WAL claim/ack/requeue). The reference. |
-| **Mailbox** (Actor/Event) | shipped | **A different mechanism** — KV-backed, HLC-ordered keys under `mailbox/{target}/{kind}/{hlc}`, drain-then-**tombstone** (idempotent read-side eviction). At-least-once delivery with idempotent tombstoning; **no in-flight claim, no WAL, no requeue**. Sharing an `ExactlyOnce` claim/ack overlay would not fit it. |
+| **Tuple space** (`TupleStore`) | shipped | `Inflight.taken_at_ms: u64` — **wall-clock ms**, **WAL-persisted** (in `Record::Take`) and written into the cross-node advisory `tuple/inflight/{id}` visibility key. Also feeds `inflight_by_stage` (metrics), `inflight_snapshot` (compaction), and keyed dispatch. Exactly-once that is *persisted + cross-node*. |
+| **Blackboard** (`BoardStore`) | shipped | `Inflight.claimed_at: Instant` — **monotonic, in-process only**, no timestamp in the WAL `Claim` record. Exactly-once whose in-flight *deadline* is in-process. |
+| **Mailbox** (Actor/Event) | shipped | A genuinely different mechanism — KV + HLC keys + drain-then-tombstone; no in-flight claim/WAL/requeue. |
 | **Supervision (M14)** | not built | — |
-| **Blackboard (G3)** | not built | — |
 
-Extracting a shared `ExactlyOnce` abstraction now would mean abstracting across **one** real user, a
-second user whose mechanism is genuinely different, and two that do not exist — speculative
-abstraction with no second concrete shape to generalise from. The disciplined call (and the one the
-WS-G plan explicitly authorized) is to **document the contract now** and **extract the code when a
-genuine second user of this exact mechanism lands** — which is **G3 (the blackboard), whose
-competitive destructive claim-by-predicate is precisely this discipline.** At that point there are
-two real implementations to factor a correct overlay from, and the extraction is driven by demand,
-not anticipation.
+**Verdict: the shared artifact is the contract above, not a code overlay.** Examining the two real
+implementations reveals a **load-bearing divergence** the surface similarity hid: the tuple space's
+in-flight timestamp is **wall-clock-ms + persisted + cross-node** (it lives in WAL records and a
+gossiped visibility key precisely because its exactly-once spans nodes and restarts), whereas the
+blackboard's is a **monotonic `Instant` + in-process** deadline. A shared `InflightTracker<T>` would
+have to be generic over the clock, and the tuple space additionally reaches into its in-flight set
+through three crate-specific surfaces (`inflight_by_stage`, `inflight_snapshot`, keyed dispatch).
+Forcing a shared overlay over a ~15-line kernel would couple two crates with **divergent evolution**
+(a change for the tuple space's persisted/cross-node needs would ripple into the blackboard's
+in-process path) — the exact failure mode the Rule of Three exists to prevent, just on the
+over-abstraction side. So both crates implement the *same contract*, validated by the *same gate
+shape* (claim single-owner, ack idempotent, expired re-queues), with **no code coupling**.
 
-**Trigger to extract:** G3's claim-by-predicate (the second real in-flight-claim/ack/requeue user).
-Build it against this contract; then lift the shared core out of the two and have both reference it.
-M14 supervision adopts whichever shape (this overlay, or the mailbox's tombstone pattern) its
-capability-presence-invariant semantics actually need — decided when M14 is specified, not now.
+This is the intended outcome of the deferral, not a dodge: the second concrete user was the
+*evidence* the decision waited for, and the evidence says the divergence is real. The contract
+remains the single source of truth; a future third user with a *persisted, cross-node* in-flight set
+(not the in-process blackboard) would be the trigger to revisit a shared persisted-claim overlay.
+M14 supervision adopts whichever shape its capability-presence-invariant semantics need — decided
+when M14 is specified.
 
 > This mirrors the project's standing posture (Core Principle: detection-not-prevention; the WS-E
-> "deferred-with-rationale" niceties; the elastic `IntentReconciler` extraction sequencing): name the
-> invariant, point at the reference, and let the second concrete user drive the abstraction.
+> "deferred-with-rationale" niceties; the elastic `IntentReconciler` sequencing): name the invariant,
+> point at the reference, let the concrete users decide — including the decision *not* to couple them.
