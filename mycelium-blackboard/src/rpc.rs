@@ -289,7 +289,31 @@ pub(crate) fn spawn_primary_handlers(bb: &Arc<Blackboard>) -> Vec<tokio::task::J
         }
     });
 
+    handler!("depth", req, |me: &Arc<Blackboard>, _req: &mycelium::RpcRequest| {
+        match me.store() {
+            Some(store) => {
+                let d = store.depth();
+                let mut b = vec![ST_OK];
+                b.extend_from_slice(&d.available.to_le_bytes());
+                b.extend_from_slice(&d.inflight.to_le_bytes());
+                b
+            }
+            None => vec![ST_ERR],
+        }
+    });
+
     handles
+}
+
+pub(crate) fn dec_depth_resp(resp: &Bytes) -> Result<crate::BoardDepth, crate::BlackboardError> {
+    if resp.first() != Some(&ST_OK) {
+        return Err(status_err(resp));
+    }
+    let available = u64::from_le_bytes(resp.get(1..9).and_then(|s| s.try_into().ok())
+        .ok_or_else(|| crate::BlackboardError::Rpc("malformed depth".into()))?);
+    let inflight = u64::from_le_bytes(resp.get(9..17).and_then(|s| s.try_into().ok())
+        .ok_or_else(|| crate::BlackboardError::Rpc("malformed depth".into()))?);
+    Ok(crate::BoardDepth { available, inflight })
 }
 
 /// The mirror's `replicate` handler: applies `Post`/`Ack` shipped by the live primary.

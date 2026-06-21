@@ -93,7 +93,14 @@ a serving primary. Clippy `--features gateway --all-targets` clean.
 - **Gate G-G3.3:** kill the primary with a claim in-flight → a standby promotes and the in-flight
   claim survives (re-queues under the deadline); claims are not double-served across promotion.
 
-## Phase 4 — Edge: gateway + py/ts SDKs
+## Phase 4 — Edge: gateway + py/ts SDKs ✅ SHIPPED
+
+**Shipped** — `src/http.rs` (gateway feature): `POST /gateway/bb/{post,read,claim,ack,release}` +
+`GET /gateway/bb/depth`, with a JSON predicate (`eq` map + `present` list) and base64 payloads.
+Python `mycelium.blackboard.Blackboard` + TypeScript `Blackboard` SDKs (post/read/claim/ack/release/
+depth). Gate G-G3.4 (`tests/gateway.rs`): the full post→read→claim→ack lifecycle + the competitive
+claim race drive across the HTTP gateway (second claimer gets nothing; acked fact does not re-serve;
+double-ack → 404; wrong-ns → 400). `tsc --noEmit` clean; `py_compile` OK; clippy clean.
 
 - `POST /gateway/bb/{board}/post`, `/read`, `/claim`, `/ack`, `/release`; `GET /gateway/bb/{board}/depth`.
 - Python + TypeScript SDK methods (`post`/`read`/`claim`/`ack`/`release`) mirroring the wire shape, as

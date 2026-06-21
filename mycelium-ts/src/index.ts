@@ -26,3 +26,4 @@ export {
   TupleNotFoundError,
   StageDepth,
 } from "./tuple";
+export { Blackboard, BlackboardNotFoundError, Fact } from "./blackboard";
