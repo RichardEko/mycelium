@@ -23,6 +23,13 @@ impl GossipAgent {
         &self.config
     }
 
+    /// The optional operator-set cluster / environment name (`GossipConfig::cluster_name`), if any.
+    /// A label for disambiguating multiple environments — surfaced on `/stats`, as a `/metrics`
+    /// `cluster` label, and in AgentFacts. No effect on gossip or identity.
+    pub fn cluster_name(&self) -> Option<&str> {
+        self.config.cluster_name.as_deref()
+    }
+
     // ── WS-C M9: live ("hot") retuning ───────────────────────────────────────
     // The node-local application point: operators call these directly; the
     // `ClusterTuner` advisor routes its recommendations through them too. Each
