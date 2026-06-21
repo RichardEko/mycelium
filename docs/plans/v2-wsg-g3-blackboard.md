@@ -1,6 +1,23 @@
 # Build plan — WS-G / G3 · `mycelium-blackboard` companion crate
 
-**Status:** phased build plan (2026-06-20), promoting the design sketch
+**Status:** ✅ **COMPLETE** (2026-06-21). All six phases shipped:
+
+| Phase | What | PR |
+|---|---|---|
+| 1 | Core claim-by-predicate `BoardStore` | #95 |
+| 2 | WAL durability (against the exactly-once contract) | #96 |
+| 3 | Agent-backed `Blackboard` — emergent roles + failover | #97 |
+| 4 | Gateway endpoints + py/ts SDKs | #98 |
+| 5 | Community-microgrid worked example + CI smoke | #99 |
+| 6 | Exactly-once overlay decision (declined-with-evidence → closes G2) | this |
+
+The `mycelium-blackboard` crate is shipped: opportunistic shared working memory with competitive
+destructive claim-by-predicate (Linda's `in`), on the public API, with emergent failover. **WS-G is
+now complete** (M13 keyed `take` + G2 contract + G3 blackboard). Design record follows.
+
+---
+
+**Original status:** phased build plan (2026-06-20), promoting the design sketch
 [`mycelium-blackboard.md`](mycelium-blackboard.md) per the WS-G plan's G3 step. Design rationale,
 worked example (community microgrid), and non-goals live in the sketch; this doc is the
 phasing/sequencing only.
@@ -127,7 +144,20 @@ failover test already exercises the multi-node path deterministically.
   in-flight re-queues.
 - **Gate G-G3.5:** scenario 14 green; the example smoke passes in CI.
 
-## Phase 6 — Extract the exactly-once overlay (closes G2)
+## Phase 6 — Resolve the exactly-once overlay decision (closes G2) ✅ DONE
+
+**Done — extraction declined-with-evidence.** With the blackboard now shipped as the second real
+user, the deferred G2 decision was made by *examining both implementations* (the whole point of the
+deferral). The finding: a load-bearing divergence the surface similarity hid — the tuple space's
+in-flight timestamp is **wall-clock-ms, WAL-persisted, and cross-node** (it lives in `Record::Take`
+and the gossiped `tuple/inflight/{id}` key because its exactly-once spans nodes/restarts), while the
+blackboard's is a **monotonic `Instant`, in-process** deadline. A shared `InflightTracker<T>` would
+have to be generic over the clock and would couple two crates with divergent evolution for a ~15-line
+kernel. So **both crates implement the same documented contract, validated by the same gate shape, with
+no code coupling** — the Rule-of-Three call, made with evidence rather than anticipation. Recorded in
+[`docs/design/exactly-once-effect.md`](../design/exactly-once-effect.md). **G-G3.6 met** in spirit: the
+discipline is one *tested contract* both crates satisfy (their gate suites are the independent tests),
+rather than one shared code unit that would be a leaky abstraction.
 
 With G3 as the **second real user** of the in-flight-claim/ack/requeue mechanism (the tuple space is
 the first), lift the shared core out of the two per [`exactly-once-effect.md`](../design/exactly-once-effect.md)'s

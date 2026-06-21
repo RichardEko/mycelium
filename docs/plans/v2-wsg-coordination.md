@@ -1,7 +1,14 @@
 # Delivery plan — WS-G · Coordination patterns
 
-**Status:** proposed (2026-06-20). Executes the v2.0 plan's WS-G *"richer data rendezvous on the
-existing substrate."* Two items: **M13** (keyed-exact-match `take` — fan-in joins) and the
+**Status:** ✅ **COMPLETE** (2026-06-21). G1 (M13 keyed-exact-match `take` — fan-in joins, PRs
+#90–#92), G2 (exactly-once-effect contract, PR #93 + resolved by G3·P6), and G3 (`mycelium-blackboard`
+companion crate, PRs #95–#99 + the P6 decision) all shipped. The done-when is met: fan-in pipelines
+are expressible without lane degeneration (M13), and the exactly-once-effect discipline is the single
+documented contract both the tuple space and the blackboard satisfy (the code-overlay extraction was
+examined with both users and declined-with-evidence — the implementations diverge on a load-bearing
+axis). Design record follows.
+
+Executes the v2.0 plan's WS-G *"richer data rendezvous on the existing substrate."* Two items: **M13** (keyed-exact-match `take` — fan-in joins) and the
 **`mycelium-blackboard`** companion crate, plus the WS-G "done-when" overlay (extract the
 exactly-once-effect dedup discipline).
 
