@@ -1,9 +1,15 @@
-# mycelium-blackboard — design sketch (deferred)
+# mycelium-blackboard — design sketch
 
-**Status:** Sketch, not a build plan. Recorded 2026-06-12 alongside the
-boundary-of-validity analysis in Paper 1 §9.4 and `docs/philosophy.html`
-("Where associative matching earns its keep"). Promote to a full phased plan
-only when the trigger fires.
+**Status:** ✅ **BUILT (2026-06-21)** — the trigger fired and the
+`mycelium-blackboard/` companion crate shipped (WS-G / G3, PRs #95–#100). This
+document is the **design rationale** (the worked example, the `rd`/`in` split, the
+non-goals, the Paper 1 §9.4 boundary framing); the **phased build plan + execution
+record** is [`v2-wsg-g3-blackboard.md`](v2-wsg-g3-blackboard.md), and the API doc
+is the crate's `lib.rs`. Kept as the *why* behind the crate.
+
+*(Originally recorded 2026-06-12 as a deferred sketch alongside the
+boundary-of-validity analysis in Paper 1 §9.4 and `docs/philosophy.html`, "Where
+associative matching earns its keep" — promote-when-the-trigger-fires. It fired.)*
 
 ## What it is
 
