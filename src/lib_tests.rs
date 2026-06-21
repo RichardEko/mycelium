@@ -4243,6 +4243,24 @@ async fn test_wsc_m10_timing_intent_governs_fleet_with_local_wins() {
     b.shutdown_with_timeout(Duration::from_secs(5)).await;
 }
 
+/// Ops cluster-name: the optional `cluster_name` config flows to the public accessor (and thence to
+/// `/stats`, the `/metrics` `cluster` label, and AgentFacts). Purely a label — no effect on identity.
+#[test]
+fn test_cluster_name_config_flows_to_accessor() {
+    let port = alloc_port();
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = port;
+    cfg.cluster_name = Some("prod-eu".into());
+    let agent = GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg);
+    assert_eq!(agent.cluster_name(), Some("prod-eu"));
+
+    // Default (unset) reads as None — unlabelled.
+    let mut cfg2 = GossipConfig::default();
+    cfg2.bind_port = alloc_port();
+    let plain = GossipAgent::new(NodeId::new("127.0.0.1", cfg2.bind_port).unwrap(), cfg2);
+    assert_eq!(plain.cluster_name(), None);
+}
+
 // ── M2 falsification probe (Run 24): concurrent audit chain integrity ─────
 
 /// Probe: many concurrent `audit()` calls on one node must produce a strictly

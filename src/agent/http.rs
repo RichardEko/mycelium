@@ -98,13 +98,19 @@ struct HttpCtx {
 /// the first time it is called. Safe to call from multiple agents in the same
 /// process (e.g. in tests) — subsequent calls return a clone of the same handle.
 #[cfg(feature = "metrics")]
-fn prometheus_handle() -> metrics_exporter_prometheus::PrometheusHandle {
+fn prometheus_handle(cluster_name: Option<&str>) -> metrics_exporter_prometheus::PrometheusHandle {
     use std::sync::OnceLock;
     static HANDLE: OnceLock<metrics_exporter_prometheus::PrometheusHandle> = OnceLock::new();
+    // The recorder is process-wide (installed once). When a `cluster_name` is configured it becomes
+    // a `cluster` *global label* on every series, so one Prometheus can disambiguate environments
+    // (WS-ops cluster-name). One-agent-per-process is the production case; if several agents share a
+    // process (tests) the first one's label wins — harmless.
     HANDLE.get_or_init(|| {
-        metrics_exporter_prometheus::PrometheusBuilder::new()
-            .install_recorder()
-            .expect("Prometheus recorder install failed")
+        let mut builder = metrics_exporter_prometheus::PrometheusBuilder::new();
+        if let Some(name) = cluster_name.filter(|n| !n.is_empty()) {
+            builder = builder.add_global_label("cluster", name);
+        }
+        builder.install_recorder().expect("Prometheus recorder install failed")
     }).clone()
 }
 
@@ -121,7 +127,7 @@ pub(super) async fn run_http_server(
     extra_routes: Option<axum::Router>,
 ) -> Result<(), std::io::Error> {
     #[cfg(feature = "metrics")]
-    let prometheus = prometheus_handle();
+    let prometheus = prometheus_handle(ctx.config.cluster_name.as_deref());
 
     #[cfg(feature = "compliance")]
     let oidc = ctx
@@ -552,6 +558,7 @@ async fn stats_handler(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
         .len();
     Json(json!({
         "node_id":       ctx.agent_ctx.node_id.to_string(),
+        "cluster_name":  ctx.agent_ctx.config.cluster_name,
         "store_entries": kv.store.pin().len(),
         // SWIM membership-view size — the map the de-pin reads; the direct diagnostic
         // for connection-fan-out / scale behaviour (small here ⇒ de-pin precondition unmet).

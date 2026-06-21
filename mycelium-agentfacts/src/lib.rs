@@ -74,6 +74,9 @@ pub struct AgentFacts {
     pub issued_at_ms:    u64,
     /// Revocation-log head, if surfaced (WS-D / D3). `None` ⇒ omitted from the document.
     pub revocation:      Option<RevocationHead>,
+    /// Operator-set cluster / environment name (`GossipConfig::cluster_name`), if any — read from
+    /// the agent. Lets a federation fetcher tell which environment a node belongs to. `None` ⇒ omitted.
+    pub cluster:         Option<String>,
 }
 
 /// Operator-supplied facets the substrate doesn't itself know: the public edge URLs, an optional
@@ -120,6 +123,7 @@ impl AgentFacts {
             ttl_secs: opts.ttl_secs,
             issued_at_ms: now_ms(),
             revocation: opts.revocation.clone(),
+            cluster: agent.cluster_name().map(str::to_string),
         })
     }
 }
@@ -161,6 +165,10 @@ pub fn to_nanda_jsonld(facts: &AgentFacts) -> Value {
     });
     if let Some(loc) = &facts.locality {
         doc["jurisdiction"] = json!(loc);
+    }
+    // Operator cluster / environment name — lets a fetcher tell which environment a node belongs to.
+    if let Some(cluster) = &facts.cluster {
+        doc["cluster"] = json!(cluster);
     }
     // WS-D / D3: surface the revocation-log head so a quilt fetcher can check key-set currency and
     // verify inclusion proofs against /gateway/transparency. No new authority — self-certified.
@@ -323,6 +331,7 @@ mod tests {
             ttl_secs: 60,
             issued_at_ms: 1,
             revocation: None,
+            cluster: None,
         };
         let doc = to_nanda_jsonld(&facts);
         assert_eq!(doc["@context"], "https://projectnanda.org/agentfacts/v0");
@@ -345,9 +354,22 @@ mod tests {
             ttl_secs: 60,
             issued_at_ms: 1,
             revocation: Some(RevocationHead { root: "ab12".into(), count: 2 }),
+            cluster: Some("prod-eu".into()),
         };
         let doc = to_nanda_jsonld(&facts);
         assert_eq!(doc["certification"]["revocation"]["root"], "ab12");
         assert_eq!(doc["certification"]["revocation"]["count"], 2);
+        // The operator cluster/environment name surfaces at the document root.
+        assert_eq!(doc["cluster"], "prod-eu");
+    }
+
+    #[test]
+    fn absent_cluster_is_omitted() {
+        let facts = AgentFacts {
+            node_id: "n".into(), identity_pubkey: [0u8; 32], capabilities: vec![],
+            locality: None, endpoints: vec![], ttl_secs: 1, issued_at_ms: 1,
+            revocation: None, cluster: None,
+        };
+        assert!(to_nanda_jsonld(&facts).get("cluster").is_none(), "no cluster name ⇒ field omitted");
     }
 }

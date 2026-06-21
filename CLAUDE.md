@@ -391,7 +391,7 @@ that registration.
 |---|---|
 | `GET /health` | 200 = process alive |
 | `GET /ready` | 200 = capabilities advertised + no dead shards |
-| `GET /stats` | `node_id`, `store_entries`, `dropped_frames`, `task_count`, `commit_conflicts`, `sys_namespace_violations` |
+| `GET /stats` | `node_id`, `cluster_name` (optional operator label, `GOSSIP_CLUSTER_NAME`; also a `cluster` label on `/metrics` + in AgentFacts), `store_entries`, `dropped_frames`, `task_count`, `commit_conflicts`, `sys_namespace_violations`, `cap_authz_violations`, `schema_mismatch`, `rate_limited_senders` |
 | `GET /consensus/{slot}` | `committed` (base64 or null, **lease-aware**) + `ballot` (u64) + `lease_ms` + `lease_expired` for a consensus slot |
 | `GET /metrics` | Prometheus scrape endpoint (`metrics` feature required) |
 

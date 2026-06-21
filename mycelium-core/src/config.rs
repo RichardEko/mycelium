@@ -321,6 +321,14 @@ pub struct GossipConfig {
     pub bind_address: String,
     /// TCP port the node listens on. Must be non-zero.
     pub bind_port: u16,
+    /// **Optional cluster / environment name** (e.g. `"prod-eu"`, `"staging"`). Purely a label for
+    /// *operator* disambiguation across multiple Mycelium environments — it has **no effect on
+    /// gossip, identity, or membership** (a node is still identified by its `node_id`). When set it
+    /// is surfaced on `GET /stats` (`cluster_name`), as a `cluster` label on every `/metrics` series,
+    /// and (when the AgentFacts lens is mounted) in the federation document — so one Prometheus /
+    /// Grafana can tell `prod-eu` from `staging` without external bookkeeping. `None` (default) =
+    /// unlabelled. Set via `GOSSIP_CLUSTER_NAME`.
+    pub cluster_name: Option<String>,
     /// Peers to connect to on startup for initial cluster discovery.
     pub bootstrap_peers: Vec<NodeId>,
     /// Window (seconds) used to compute seen-set and tombstone retention cutoffs.
@@ -776,6 +784,7 @@ impl Default for GossipConfig {
         Self {
             bind_address: "127.0.0.1".to_string(),
             bind_port: 8080,
+            cluster_name: None,
             bootstrap_peers: Vec::new(),
             propagation_window_secs: 60,
             health_check_interval_secs: 10,
@@ -1167,6 +1176,9 @@ impl GossipConfig {
         }
         if let Ok(v) = env::var("GOSSIP_BIND_PORT") {
             self.bind_port = v.parse().map_err(GossipError::Parse)?;
+        }
+        if let Ok(v) = env::var("GOSSIP_CLUSTER_NAME") {
+            self.cluster_name = if v.trim().is_empty() { None } else { Some(v) };
         }
         if let Ok(v) = env::var("GOSSIP_PROPAGATION_WINDOW_SECS") {
             self.propagation_window_secs = v.parse().map_err(GossipError::Parse)?;

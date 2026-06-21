@@ -80,6 +80,29 @@ operator concern (wrap a KMS); the demo uses a fixed seed.
 - **Eviction / GC.** Catalogue entries are ordinary KV; tombstone an entry to
   withdraw it. Held artifact bytes live as long as the serving node holds them.
 
+### Sharing a catalogue across clusters
+
+The catalogue is the **per-cluster** gossip KV — it does *not* automatically span
+clusters. But because an `InstallableEntry` is **content-addressed and
+Ed25519-signed**, the *same* artifact is byte-identical and verifies identically in
+every cluster, so an org-wide catalogue is a publishing pattern, not missing
+machinery:
+
+1. **Publish the same signed entry into each cluster** (CI runs `publish_installable`
+   against each cluster's gateway/seed). The hash + signature mean a runtime in any
+   cluster pulls and verifies the exact same bytes.
+2. **Serve the bytes from a shared store.** Point `serve_artifacts` at a common
+   object store (S3 / OCI registry / artifact server) that all clusters can reach,
+   or let one bridge node in each cluster mirror from it — so you publish bytes once
+   and every cluster's mesh fetch resolves them.
+
+What Mycelium deliberately does *not* provide is a cross-cluster catalogue **sync
+daemon** — that would re-introduce a coordinator. Cross-*domain* capability
+*discovery* (which domain offers what) is the federation story instead — see the
+[AgentFacts](observability.md#viewing-agentfacts) edge and the `federation_facts`
+demo; artifact-byte distribution stays the publish-per-cluster + shared-store
+pattern above.
+
 ---
 
 ## Solution/Dev — authoring & publishing an artifact

@@ -57,6 +57,14 @@ without disruption: [cert-rotation.md](cert-rotation.md). Compliance features
 (RBAC, audit, OIDC) build on this: [rbac.md](rbac.md), [audit.md](audit.md),
 [sso.md](sso.md).
 
+## Naming the cluster
+
+Set `GOSSIP_CLUSTER_NAME` (or `GossipConfig::cluster_name`) to label the
+environment — `prod-eu`, `staging`, … It is a pure operator label (no effect on
+gossip, identity, or membership) that flows to `/stats`, the `/metrics` `cluster`
+label, and AgentFacts, so one monitoring stack can tell environments apart. See
+[observability.md](observability.md#naming-environments--monitoring-many-clusters).
+
 ## Containers / Compose
 
 No special base image — it's your Rust binary. Expose `bind_port` (and
@@ -65,6 +73,33 @@ mount a volume for `auto_cert_dir` (so identity survives restarts) and for the
 WAL/persistence path if enabled. Reference multi-node setups:
 [`examples/community`](../../examples/community/) (skillrunner cluster) and the
 `tests/integration/docker-compose.*.yml` files.
+
+## Cloud / Kubernetes / bare metal
+
+Mycelium ships **no Helm chart, Terraform module, or systemd unit** — and that is
+deliberate: a node is just a binary/container, and packaging would only track cloud
+churn while every org's topology differs. Deploy it like any **stateful** service,
+minding two requirements that follow from the design:
+
+1. **Stable network identity.** A node's `node_id` is its `host:port`; peers
+   bootstrap to it by address. Each node needs an address that survives a restart
+   (a static IP, a DNS name, or a Kubernetes *headless Service* + StatefulSet pod
+   DNS like `node-0.gossip.svc`). Don't put gossip behind a round-robin load
+   balancer — peers must reach *specific* nodes.
+2. **Persistent identity + WAL.** Mount a durable volume for `auto_cert_dir` (so
+   the Ed25519 identity survives restarts) and, if persistence is on, the WAL path
+   (so state replays). On k8s that's a `volumeClaimTemplates` PVC per pod.
+
+**Kubernetes:** a **StatefulSet** (stable pod identity + per-pod PVC) behind a
+**headless Service** (stable per-pod DNS for bootstrap) is the natural fit; set
+`GOSSIP_BOOTSTRAP_PEERS` to a seed pod's DNS name, `readinessProbe` → `/ready`,
+`livenessProbe` → `/health`, and `GOSSIP_CLUSTER_NAME` to the environment. Scrape
+`/metrics` with a `ServiceMonitor`. **AWS/GCP/bare metal:** an instance/ECS-task
+per node with a stable address (Elastic IP / internal DNS) + a durable disk (EBS /
+PD) for `auto_cert_dir` + WAL; a sample systemd unit is just `ExecStart=mycelium`
+with the `GOSSIP_*` env in the unit's `Environment=`. Elastic membership (add/remove
+nodes) is then driven by [dynamic-scaling.md](dynamic-scaling.md) — the governors
+self-heal the count; the substrate needs no orchestrator hook.
 
 ## Sizing & tuning
 
