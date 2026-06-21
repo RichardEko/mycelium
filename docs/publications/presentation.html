@@ -206,8 +206,8 @@
         <strong style="color:var(--text)">Minimal management. Maximum agility. Maximum robustness.</strong>
       </div>
       <div class="badges">
-        <span class="badge"><span class="dot dot-g"></span>365 tests · 13/13 scenarios passing</span>
-        <span class="badge"><span class="dot dot-b"></span>Wire v11 · Ed25519 signed</span>
+        <span class="badge"><span class="dot dot-g"></span>5 crates tested · 13/13 scenarios passing</span>
+        <span class="badge"><span class="dot dot-b"></span>Wire v12 · Ed25519 signed</span>
         <span class="badge"><span class="dot dot-p"></span>A2A · MCP · Prompt Skills · Python · TypeScript</span>
         <span class="badge"><span class="dot dot-m"></span>NANDA-federable</span>
       </div>
@@ -405,6 +405,9 @@
           Demers et al. (1987) <em>Epidemic Algorithms</em> — the gossip substrate. ·
           Kulkarni et al. (2014) <em>Hybrid Logical Clocks</em> — causal ordering without NTP.
         </div>
+        <div class="callout callout-green" style="margin-top:10px;font-size:12px;">
+          <strong>And producing:</strong> the theory runs both ways — <em>The Coordinator Trap</em> (2026, submitted) argues coordinator-freeness is epistemically <em>necessary</em>, not merely convenient (a Hayekian local-knowledge argument), and a second paper formalises substrate convergence. The design isn't decorated with citations after the fact; it is an executable instance of a published argument.
+        </div>
       </div>
     </div>
   </div>
@@ -443,8 +446,8 @@
       </div>
       <div class="sp-card sp-card-6">
         <div class="sp-icon">🪶</div>
-        <div class="sp-title">Zero Ops Burden</div>
-        <div class="sp-body">No broker process. No registry process. No coordinator. Embed the library, call <code>agent.start()</code>, and you're in the mesh. Air-gap and edge deployments included.</div>
+        <div class="sp-title">Self-Managing</div>
+        <div class="sp-body">No broker, registry, or coordinator process. The cluster self-tunes from its size, hot-reloads config, elastically scales, and rate-limits abuse — management is intent, not command. Embed, call <code>agent.start()</code>, done. Air-gap included.</div>
       </div>
     </div>
   </div>
@@ -669,6 +672,106 @@
   </div>
 </div>
 
+<!-- V1 Self-managing substrate (v2.0) -->
+<div class="slide" id="sV1">
+  <div class="slide-top"><span class="eyebrow"><span class="eyebrow-accent">v2.0</span> · Metabolism</span><span class="slide-num">·· / ··</span></div>
+  <div class="slide-body">
+    <div class="slide-title">The substrate <em>runs itself.</em></div>
+    <div class="slide-sub">"Zero ops" isn't "no processes to run" — it's a cluster that tunes, scales, and heals itself with no coordinator and no operator in the loop. Management is never a command; it is an <strong>intent</strong> every node reconciles locally.</div>
+    <div class="cols2" style="gap:24px;align-items:start;">
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="card card-accent-green">
+          <div class="card-title">Self-tuning from size</div>
+          <div class="card-body">A node derives its own channel depths, intervals, and fan-out from the observed cluster size — closed-form, no tuning file. As the cluster grows or shrinks every node re-derives, and config <strong>hot-reloads</strong> live with no restart.</div>
+        </div>
+        <div class="card card-accent-blue">
+          <div class="card-title">Elastic membership + self-heal</div>
+          <div class="card-body">A <code>MembershipGovernor</code> reconciles a group toward a min/max band and drains nodes cooperatively. Kill the governor — the cluster still self-heals; the intent lives in evaporating soft-state, owned by no one.</div>
+        </div>
+        <div class="card card-accent-orange">
+          <div class="card-title">Defends itself</div>
+          <div class="card-body">Distributed rate-limiting: nodes share observed per-sender rates and each independently throttles an aggregate abuser to a fair share. A sustained flooder is clamped by every node it touches — with no global eviction verdict.</div>
+        </div>
+      </div>
+      <div>
+        <div class="code-block" style="font-size:11px;">
+<span class="cm">// Management = intent + local reconcile. No command. No coordinator.</span>
+<span class="cm">// Posted by anyone — a human or an agent — they are substrate-identical.</span>
+POST /gateway/govern/membership  { <span class="cv">"group"</span>:<span class="cv">"workers"</span>, <span class="cv">"min"</span>:<span class="cn">3</span>, <span class="cv">"max"</span>:<span class="cn">12</span> }
+POST /gateway/govern/timing      { <span class="cv">"health_secs"</span>:<span class="cn">2</span>, <span class="cv">"backoff_secs"</span>:<span class="cn">1</span> }
+
+<span class="cm">// → written as evaporating soft-state; every node reconciles toward it</span>
+<span class="cm">// → newest-wins, node-sovereign; kill the poster and the last intent holds</span>
+        </div>
+        <div class="callout callout-green" style="margin-top:10px;font-size:12px;">
+          <strong>The litmus test.</strong> "If management vanishes, does the cluster self-heal?" Yes — because there was never a manager, only nodes reconciling a shared desired-state. Operators are <em>optional</em>; the deck's "zero ops burden" is this, not merely "no broker process."
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- V2 Coordination, two ways (v2.0) -->
+<div class="slide" id="sV2">
+  <div class="slide-top"><span class="eyebrow"><span class="eyebrow-accent">v2.0</span> · Coordination</span><span class="slide-num">·· / ··</span></div>
+  <div class="slide-body">
+    <div class="slide-title">Coordination, <em>two ways.</em></div>
+    <div class="slide-sub">Two companion crates — both built entirely on the public API — revive the Linda / JavaSpaces lineage: its two access modes, <em>coordinator-free</em>, minus the transaction monitor that made the original a single point of failure.</div>
+    <div class="cols2">
+      <div class="card card-accent-purple">
+        <div class="card-icon">⬍</div>
+        <div class="card-title">Tuple space — pull by <em>position</em></div>
+        <div class="card-body"><code>mycelium-tuple-space</code>. Producers <code>put</code> into named FIFO lanes; workers <code>take</code> when ready — Linda's <code>in</code>, a competitive exactly-once destructive claim. An item's lane <em>is</em> its pipeline stage; per-lane depth is the fluid workers' pressure signal. Keyed <code>take_by_key</code> adds O(1) fan-in joins.</div>
+      </div>
+      <div class="card card-accent-blue">
+        <div class="card-icon">▦</div>
+        <div class="card-title">Blackboard — claim by <em>content</em></div>
+        <div class="card-body"><code>mycelium-blackboard</code>. Agents <code>post</code> facts; others <code>read</code> them non-destructively (Linda's <code>rd</code>) and <code>claim</code> a finite one competitively (<code>in</code>) — matched by an <em>attribute predicate</em>, not a stage. Which agent acts is decided by what the fact <em>says</em>, not where it sits.</div>
+      </div>
+    </div>
+    <div class="callout callout-purple" style="font-size:12.5px;">
+      <strong>The classical objection, dissolved.</strong> Gelernter's tuple space (1985) and JavaSpaces were always the right pull primitives; the standing complaint was that the shared space is itself a coordinator needing consistency machinery. Build the space <em>on</em> a coordinator-free substrate and that objection has no variable to inhabit — the ring is the failure detector, a standby self-promotes, acknowledged work never resurrects. <strong>Pull (position) and claim (content) are the two shapes — Mycelium ships both.</strong>
+    </div>
+  </div>
+</div>
+
+<!-- V3 Code mobility & federation (v2.0) -->
+<div class="slide" id="sV3">
+  <div class="slide-top"><span class="eyebrow"><span class="eyebrow-accent">v2.0</span> · Code Mobility</span><span class="slide-num">·· / ··</span></div>
+  <div class="slide-body">
+    <div class="slide-title">Capabilities that <em>travel.</em></div>
+    <div class="slide-sub">A node that can't satisfy a requirement doesn't page an operator — it provisions the capability itself. Content-addressed WASM components move over the mesh, verified, and a restart is indistinguishable from a first provision.</div>
+    <div class="cols2" style="gap:24px;align-items:start;">
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="card card-accent-orange">
+          <div class="card-title">The autonomic loop</div>
+          <div class="card-body"><code>requirement → resolve → pull → verify → instantiate → advertise → serve → self-heal → shed</code>. No coordinator assigns work; each node closes the loop locally against the gossiped catalogue. The classic requirement→deploy loop, done as level-triggered soft-state.</div>
+        </div>
+        <div class="card card-accent-green">
+          <div class="card-title">Content-addressed + signed</div>
+          <div class="card-body">An <code>installable/</code> entry is a hash + Ed25519 provenance; bytes pull over the mesh — no registry server, the catalogue <em>is</em> the gossip store — and verify identically on every node. WASM runs fuel-limited (<code>mycelium-wasm-host</code> / <code>wasmtime</code>): the OSGi-bundle analogue Rust never had.</div>
+        </div>
+      </div>
+      <div>
+        <div class="code-block" style="font-size:11px;">
+<span class="cm">// Publish once — gossips to every node, no registry to run</span>
+<span class="ck">let</span> entry = InstallableEntry::new(ns, name, artifact_id)
+  .<span class="cs">provides</span>([<span class="cv">"tool/translate"</span>]).<span class="cs">signed_by</span>(&amp;key);
+<span class="cs">publish_installable</span>(&amp;agent.<span class="cs">kv</span>(), &amp;entry);
+
+<span class="cm">// A node missing a requirement self-provisions:</span>
+<span class="cm">//   resolve installable/ → pull bytes over the mesh → verify</span>
+<span class="cm">//   hash + sig → instantiate WASM → advertise the capability</span>
+<span class="cm">// Restart ≡ provisioning. Failure ≡ a fresh resolve.</span>
+        </div>
+        <div class="callout callout-orange" style="margin-top:10px;font-size:12px;">
+          <strong>Federation, shipped.</strong> Across domains a node publishes self-certified <strong>AgentFacts</strong> — a NANDA-shaped, Ed25519-signed quilt-patch — plus a CRDT-assembled domain view: sovereign discovery with no issuer authority. The internet-scale tier is no longer a future box on the stack.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- 08 Where It Fits -->
 <div class="slide" id="s8">
   <div class="slide-top"><span class="eyebrow">The Stack</span><span class="slide-num">09 / 25</span></div>
@@ -730,11 +833,11 @@
           </div>
         </div>
         <div class="card card-accent-purple">
-          <div class="card-title">Internet scale — NANDA federation</div>
-          <div class="card-body">One <code>AgentAddr</code> record points to your cluster's <code>/.well-known/agent.json</code>. Your cluster joins the agent internet. W3C VC-signed AgentFacts. Sub-second revocation.</div>
+          <div class="card-title">Internet scale — federation, <em>shipped</em></div>
+          <div class="card-body">Each node serves <code>/.well-known/agent-facts.json</code>: a self-certified, Ed25519-signed <strong>AgentFacts</strong> quilt-patch (NANDA-shaped) plus a CRDT-assembled domain view, with a Merkle revocation-transparency log. Sovereign discovery, no issuer authority — your domain joins the agent internet on its own terms.</div>
         </div>
         <div class="callout callout-green">
-          <strong>No code changes required.</strong> Mycelium's A2A surface is already a conforming endpoint. NANDA federation is a DNS record, not a code change.
+          <strong>Not a future box on the stack.</strong> Federation is the <code>mycelium-agentfacts</code> companion crate, on the public API — A2A/MCP surfaces and the signed facts edge are live today, not a roadmap promise.
         </div>
       </div>
     </div>
@@ -835,12 +938,12 @@ providers = agent.<span class="cs">resolve_capability</span>(<span class="cv">"c
     <div class="cols2" style="gap:20px;margin-top:8px;">
       <div style="display:flex;flex-direction:column;gap:12px;">
         <div class="card card-accent-green">
-          <div class="card-title">365 tests · 13/13 integration scenarios</div>
-          <div class="card-body">365 lib tests across the full feature matrix (318 default; +RBAC/audit/OIDC under <code>compliance</code>) plus 13 end-to-end Docker integration scenarios. KV propagation, gossip boundaries, consensus, anti-entropy, AFN, Prompt Skills, TupleSpace — all automated, all passing.</div>
+          <div class="card-title">Tested across five crates · 13/13 integration scenarios</div>
+          <div class="card-body">Lib tests across the full feature matrix and five workspace crates (core substrate, full crate, tuple-space, blackboard, AgentFacts), plus 13 end-to-end Docker scenarios and time-boxed libFuzzer runs of the wire/capability decoders. KV propagation, gossip boundaries, consensus, anti-entropy, AFN, Prompt Skills, TupleSpace — all automated, all passing.</div>
         </div>
         <div class="card card-accent-blue">
           <div class="card-title">Wire version policy</div>
-          <div class="card-body">Wire v11 current. <code>PREV_WIRE_VERSION = 10</code> — rolling upgrade window keeps the entire cluster online during version transitions. No downtime deploys.</div>
+          <div class="card-body">Wire v12 current (Merkle anti-entropy; <code>bincode</code> retired for an in-tree codec). <code>PREV_WIRE_VERSION = 11</code> — the rolling-upgrade window keeps the whole cluster online during version transitions. No downtime deploys.</div>
         </div>
         <div class="card card-accent-purple">
           <div class="card-title">Durable persistence</div>
@@ -975,11 +1078,11 @@ docker compose up --build --scale worker=10
         </div>
         <div class="card card-accent-blue">
           <div class="card-title">Integration scenarios</div>
-          <div class="card-body"><code>make test</code> runs all 12 Docker scenarios unattended. Each scenario is a runnable reference implementation of a specific pattern.</div>
+          <div class="card-body"><code>make test</code> runs all 13 Docker scenarios unattended. Each scenario is a runnable reference implementation of a specific pattern.</div>
         </div>
         <div class="card card-accent-purple">
-          <div class="card-title">NANDA federation</div>
-          <div class="card-body">Add <code>.with_a2a()</code> to your builder. Point a NANDA <code>AgentAddr</code> record at your cluster. You're on the agent internet.</div>
+          <div class="card-title">Federation (shipped)</div>
+          <div class="card-body">Mount the <code>mycelium-agentfacts</code> lens: each node serves a self-certified, signed AgentFacts quilt-patch at <code>/.well-known/agent-facts.json</code>. Sovereign discovery on the agent internet — no issuer authority.</div>
         </div>
         <div class="callout callout-green">
           <strong>Philosophy:</strong> if you need to manage infrastructure to use Mycelium, something has gone wrong. The goal is zero ops — embed it, start it, forget it.
@@ -1222,12 +1325,12 @@ agent.<span class="cs">consensus</span>().<span class="cs">cross_group_propose</
           <div class="card-body">Each node generates an Ed25519 keypair at startup. Same keypair serves as mTLS identity, gossips into <code>sys/identity/{node}</code>, and signs consensus payloads.</div>
         </div>
         <div class="card card-accent-red">
-          <div class="card-title">Wire v11 — KV write signing</div>
+          <div class="card-title">Signed KV writes</div>
           <div class="card-body"><code>WireMessage::SignedData</code> — Ed25519 signature over key, value, timestamp, tombstone flag, and sender. A compromised node cannot inject false KV entries.</div>
         </div>
         <div class="card card-accent-green">
           <div class="card-title">Compliance layer <code style="font-size:10px;">--features compliance</code></div>
-          <div class="card-body">Signed-identity <strong>RBAC</strong> + OAuth2 gateway scope ACLs · generic-<strong>OIDC SSO</strong> · tamper-evident hash-chained <strong>audit</strong> (verify across key rotations) · <strong>data-at-rest</strong> cipher hook + <strong>egress</strong> allowlist · <strong>hot key rotation</strong>. All detection-not-prevention, all opt-in.</div>
+          <div class="card-body">Signed-identity <strong>RBAC</strong> + gossip-level <strong>capability authorization</strong> · OAuth2 scope ACLs · generic-<strong>OIDC SSO</strong> · tamper-evident hash-chained <strong>audit</strong> (verify across key rotations) · a Merkle <strong>revocation-transparency log</strong> · <strong>data-at-rest</strong> cipher + <strong>egress</strong> allowlist · <strong>hot key rotation</strong>. All detection-not-prevention, all opt-in.</div>
         </div>
       </div>
       <div>
@@ -1240,7 +1343,7 @@ GossipConfig {
 }
         </div>
         <div class="callout callout-red" style="margin-top:10px;">
-          <strong>Threat model:</strong> mTLS stops external injection. Wire v11 signing stops a compromised cluster node from injecting modified KV frames. Both layers required for full integrity.
+          <strong>Threat model:</strong> mTLS stops external injection. KV-write signing stops a compromised cluster node from injecting modified KV frames. Both layers required for full integrity.
         </div>
         <div class="callout callout-orange" style="margin-top:10px;">
           <strong>HTTP gateway:</strong> no auth by default — bind to loopback or set <code>gateway_auth_token</code>. <code>/health</code>, <code>/ready</code>, <code>/metrics</code> intentionally public for load-balancer probes.
@@ -1512,6 +1615,13 @@ space.<span class="cs">complete</span>(id, <span class="cv">"stage.parse"</span>
   const slides = Array.from(document.querySelectorAll('.slide'));
   const total = slides.length;
   let cur = 0;
+
+  // Auto-number every slide's corner label from its position, so inserting or
+  // reordering slides can never desync the hardcoded "NN / NN" labels again.
+  slides.forEach((s, i) => {
+    const n = s.querySelector('.slide-num');
+    if (n) n.textContent = `${String(i + 1).padStart(2, '0')} / ${total}`;
+  });
 
   function go(n) {
     if (n < 0 || n >= total) return;
