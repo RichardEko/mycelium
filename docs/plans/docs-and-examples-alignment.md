@@ -14,7 +14,7 @@ of the remaining v2 engineering (WS-D security, WS-F schema-evolution).
 
 The original plan follows as the design record.
 
-**Why.** The 10-example Food-Rescue Co-op suite shipped, but the documentation never caught up:
+**Why.** The 11-example Food-Rescue Co-op suite shipped, but the documentation never caught up:
 the guide index still points at *old* examples, the coop suite is invisible to `docs/`, no example
 or chapter calls out an **anti-pattern**, the **concept vocabulary** is undefined (Capability vs
 Skill vs A2A vs MCP vs AgentFacts — easily conflated), there are **no operational docs** for the

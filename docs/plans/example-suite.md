@@ -1,12 +1,14 @@
 # Delivery plan — the Food-Rescue Co-op example suite
 
-**Status:** ✅ **SHIPPED & CI-GATED** (2026-06-20). **All ten examples** (an 11th, `catalog`, was
-added later via the [docs-and-examples-alignment plan](docs-and-examples-alignment.md)) landed under
+**Status:** ✅ **SHIPPED & CI-GATED** (2026-06-20). **All eleven examples** (the 11th, `catalog`,
+added via the [docs-and-examples-alignment plan](docs-and-examples-alignment.md)) landed under
 `examples/coop/` and run Docker-free via `examples/coop/ci_smoke.sh`, which is wired into the
 `coop-smoke` CI job (retry-hardened for constrained runners — PR #65). The original six-example plan
 below is preserved as the design record; the suite was then extended past it (see *Shipped status*).
+A 12th worked example, the blackboard [`microgrid`](../../mycelium-blackboard/examples/microgrid.rs),
+ships in the `mycelium-blackboard` crate with its own smoke (WS-G / G3 Phase 5).
 
-**Shipped status — 10 examples (each its own PR, each CI-gated):**
+**Shipped status — 11 examples (each its own PR, each CI-gated):**
 
 | # | Bin | PR | Demonstrates |
 |---|-----|----|--------------|
@@ -20,6 +22,7 @@ below is preserved as the design record; the suite was then extended past it (se
 | 08 | `llm_pipeline` | #63 | homogeneous LLM workers, competitive pull over a linear tuple-space pipeline |
 | 09 | `mcp_toolgrowth` | #64 | an LLM agent grows the fabric's toolset at runtime (MCP tool loaded on demand) |
 | 10 | `llm_council` | #66 | a council of **differentiated** LLM agents — fan-out → synthesis → iterative refinement |
+| 11 | `catalog` | #73 | the cluster-wide artifact catalogue — gossiped `installable/`, register / discover / pull-over-mesh / provision (no registry server) |
 
 CI gating: PR #65 (`coop-smoke` job, retry harness).
 
@@ -97,8 +100,8 @@ forces `exclude` like `conway-gpu`.
 
 ## The six examples (build order = small → flagship)
 
-> **Design record.** This section is the *original* six-example plan. The shipped suite has **ten**
-> examples (07–10 were added past this plan — see the *Shipped status* table at the top). The six
+> **Design record.** This section is the *original* six-example plan. The shipped suite has **eleven**
+> examples (07–11 were added past this plan — see the *Shipped status* table at the top). The six
 > below are preserved as the design rationale; the canonical per-example descriptions now live in
 > [`examples/coop/README.md`](../../examples/coop/README.md).
 
@@ -227,8 +230,8 @@ loop on freshly shipped work.
 
 ## Cross-cutting requirements
 
-- **CI-runnable without secrets.** LLM uses a mock backend (as the existing
-  `prompt_skill_demo` / community smoke do). Each example ships a `ci_smoke.sh`
+- **CI-runnable without secrets.** LLM uses a mock backend (as the now-retired
+  `prompt_skill_demo` and the community smoke did). Each example ships a `ci_smoke.sh`
   that runs Docker-free where possible, wired into the existing `afn-smoke`-style
   job pattern.
 - **Every node serves the facts lens** — so any example can be inspected live via

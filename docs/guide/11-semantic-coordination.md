@@ -279,3 +279,17 @@ from within an already-trusted cluster. They do not replace authentication.
 | Method | Signature | Notes |
 |--------|-----------|-------|
 | `signal_rx_from` | `fn signal_rx_from(kind: &str, trusted: Vec<NodeId>) -> Receiver<Signal>` | Empty `trusted` → unfiltered |
+
+---
+
+## Related: content-routed coordination (the blackboard)
+
+The mechanisms above coordinate **capability-based** interactions — caller and
+provider negotiate by `(namespace, name)` + versioned schemas. A *different*
+coordination shape is **content-routed**: which agent acts on a fact is decided by
+the fact's *attributes*, not by a known stage or capability name. That is the
+[`mycelium-blackboard`](../../mycelium-blackboard/) companion crate — agents `read`
+facts non-destructively and `claim` a finite one competitively (Linda's `rd`/`in`),
+matching by an attribute predicate. See [00 · Concepts](00-concepts.md) ("tuple
+space vs. blackboard") and [14 · Patterns & Pitfalls](14-patterns-and-pitfalls.md)
+for when content-routing beats positional lanes or schema-versioned capabilities.
