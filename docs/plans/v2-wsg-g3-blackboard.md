@@ -107,7 +107,16 @@ double-ack → 404; wrong-ns → 400). `tsc --noEmit` clean; `py_compile` OK; cl
   `mycelium-py`/`mycelium-ts` do for the tuple space.
 - **Gate G-G3.4:** the claim race drives across the HTTP gateway (a gateway integration test).
 
-## Phase 5 — The worked example + integration scenario
+## Phase 5 — The worked example + integration scenario ✅ SHIPPED
+
+**Shipped** — `examples/microgrid.rs` + `ci_smoke.sh` (wired into the CI `blackboard` job). The
+community-microgrid demo runs Docker-free: an inverter posts 12 finite surplus facts; a forecaster +
+a tariff agent both `read` them (non-destructive `rd`, shared); two storage executors `claim` +
+`ack` competitively (`in`) — every surplus consumed **exactly once** (the example asserts the
+invariant: total == posted, no id claimed twice). The **cross-node** integration (claim race +
+primary-kill → secondary-promotes → in-flight re-queues) is covered at the Rust integration level by
+`tests/failover.rs` (G-G3.3) rather than a separate Docker scenario — proportionate, since the
+failover test already exercises the multi-node path deterministically.
 
 - The **community-microgrid** example (sketch §"Worked example"): a fact pool with a forecaster +
   tariff agent (non-destructive readers) and two storage executors (competitive claimers of finite
