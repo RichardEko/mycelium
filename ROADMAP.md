@@ -1715,7 +1715,7 @@ The companion paper — *"The Coordinator Trap"* (target: AAMAS 2027) — argues
 
 **Status:** First draft complete; structural revision done 2026-05-28. §8 evaluation benchmarks are placeholders pending empirical runs.
 
-**Files:** [`docs/publications/paper.md`](docs/publications/paper.md) (Markdown source), [`docs/publications/arxiv/main.tex`](docs/publications/arxiv/main.tex) (LaTeX source). Rendered HTML is derived and not tracked — regenerate from source as needed.
+**Files:** [`docs/publications/paper1/paper.md`](docs/publications/paper1/paper.md) (Markdown source), [`docs/publications/paper1/main.tex`](docs/publications/paper1/main.tex) (LaTeX source). Rendered PDF/HTML is derived and not tracked — regenerate from source as needed.
 
 ### Core argument
 

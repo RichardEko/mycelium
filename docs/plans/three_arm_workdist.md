@@ -68,7 +68,7 @@ the *jobs* and the *fleet* experience:
 - arms × H ∈ {0, 0.25, 0.5, 1.0} × δ̄ ∈ {0, 0.05, 0.20}/s, N = 20 default
   (env-overridable), ≥3 seeds per cell.
 - Output: one CSV row per job (latency) + one summary row per run
-  (throughput, IWWE, Jain) into `docs/publications/arxiv/paper2a/data/three_arm/`.
+  (throughput, IWWE, Jain) into `docs/publications/paper2a/data/three_arm/`.
 - Figure pipeline: `three_arm_plot.py` (gap-vs-H and gap-vs-δ̄ panels).
 
 ## Fairness-of-comparison rules

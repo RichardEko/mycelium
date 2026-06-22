@@ -9,7 +9,7 @@ import csv
 import os
 import sys
 
-DATA_DIR = "docs/publications/arxiv/paper2a/data"
+DATA_DIR = "docs/publications/paper2a/data"
 SUMMARY  = os.path.join(DATA_DIR, "summary.csv")
 SVG_OUT  = os.path.join(DATA_DIR, "fig_decision_latency.svg")
 TEX_OUT  = os.path.join(DATA_DIR, "fig_decision_latency.tex")

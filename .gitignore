@@ -25,14 +25,16 @@ examples/community/logs/
 # Demo runtime artifacts (pids + logs from examples/*/demo.sh runs)
 examples/*/logs/
 
-# LaTeX render artifacts (PDFs are published to Zenodo/arXiv, not tracked)
-docs/publications/arxiv/**/*.aux
-docs/publications/arxiv/**/*.bbl
-docs/publications/arxiv/**/*.out
-docs/publications/arxiv/**/*.log
-docs/publications/arxiv/**/main.pdf
-docs/publications/arxiv/*.aux
-docs/publications/arxiv/*.bbl
-docs/publications/arxiv/*.out
-docs/publications/arxiv/*.log
-docs/publications/arxiv/main.pdf
+# LaTeX render artifacts (PDFs/rendered HTML are published to Zenodo/arXiv, not tracked —
+# regenerate from the tracked .tex/.bib source). Covers paper1/ and paper2a/ (was arxiv/).
+docs/publications/paper*/**/*.aux
+docs/publications/paper*/**/*.bbl
+docs/publications/paper*/**/*.out
+docs/publications/paper*/**/*.log
+docs/publications/paper*/**/*.pdf
+docs/publications/paper*/*.aux
+docs/publications/paper*/*.bbl
+docs/publications/paper*/*.out
+docs/publications/paper*/*.log
+docs/publications/paper*/*.pdf
+docs/publications/paper2a/main.html
