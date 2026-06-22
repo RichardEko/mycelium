@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mycelium — Coordinate AI Agent Fleets Without a Coordinator</title>
+<style>
+  :root {
+    --bg:#0d1117; --surface:#161b22; --surface2:#1c2128; --surface3:#21262d;
+    --border:#30363d; --accent:#58a6ff; --accent2:#3fb950; --accent3:#d2a8ff;
+    --accent4:#ffa657; --accent5:#ff7b72; --muted:#8b949e; --text:#e6edf3; --text2:#c9d1d9;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{width:100%;height:100%;background:#050709;overflow:hidden;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Inter",sans-serif;}
+
+  .deck{position:relative;width:100vw;height:100vh;overflow:hidden;}
+  .slide{position:absolute;inset:0;background:var(--bg);color:var(--text);opacity:0;
+    transform:translateX(48px);
+    transition:opacity .38s cubic-bezier(.4,0,.2,1),transform .38s cubic-bezier(.4,0,.2,1);
+    pointer-events:none;display:flex;flex-direction:column;overflow:hidden;}
+  .slide.active{opacity:1;transform:translateX(0);pointer-events:all;}
+  .slide.was-prev{opacity:0;transform:translateX(-48px);}
+
+  .slide-top{flex-shrink:0;padding:28px 52px 0;display:flex;align-items:center;gap:12px;}
+  .eyebrow{font-size:10px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);}
+  .eyebrow-accent{color:var(--accent);}
+  .eyebrow-green{color:var(--accent2);}
+  .eyebrow-orange{color:var(--accent4);}
+  .slide-num{margin-left:auto;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;}
+
+  .slide-body{flex:1;padding:0 52px 28px;overflow:hidden;display:flex;flex-direction:column;justify-content:center;}
+
+  .slide-title{font-size:clamp(26px,3.6vw,50px);font-weight:800;letter-spacing:-.025em;line-height:1.1;margin-bottom:14px;
+    background:linear-gradient(135deg,#e6edf3 0%,#8b949e 100%);
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}
+  .slide-title em{font-style:normal;
+    background:linear-gradient(135deg,var(--accent) 0%,var(--accent3) 100%);
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}
+  .slide-title.warn em{background:linear-gradient(135deg,var(--accent5) 0%,var(--accent4) 100%);
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}
+  .slide-title.good em{background:linear-gradient(135deg,var(--accent2) 0%,var(--accent) 100%);
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}
+  .slide-sub{font-size:clamp(13px,1.4vw,17px);color:var(--muted);line-height:1.65;max-width:760px;margin-bottom:24px;}
+
+  p{color:var(--text2);line-height:1.65;margin-bottom:12px;font-size:14px;}
+  strong{color:var(--text);}
+  code{font-family:"SF Mono","Fira Mono",monospace;font-size:12px;background:var(--surface2);
+    border:1px solid var(--border);border-radius:4px;padding:1px 6px;color:var(--accent3);}
+
+  .cols2{display:grid;grid-template-columns:1fr 1fr;gap:18px;}
+  .cols3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;}
+
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px 18px;}
+  .card-icon{font-size:22px;margin-bottom:8px;display:block;}
+  .card-title{font-size:13px;font-weight:700;color:var(--text);margin-bottom:6px;}
+  .card-body{font-size:12px;color:var(--muted);line-height:1.6;margin:0;}
+  .card-accent-blue{border-left:3px solid var(--accent);}
+  .card-accent-green{border-left:3px solid var(--accent2);}
+  .card-accent-purple{border-left:3px solid var(--accent3);}
+  .card-accent-orange{border-left:3px solid var(--accent4);}
+  .card-accent-red{border-left:3px solid var(--accent5);}
+
+  .callout{border-radius:8px;padding:14px 18px;margin:12px 0;border-left:3px solid;font-size:13px;color:var(--text2);line-height:1.6;}
+  .callout strong{color:var(--text);}
+  .callout-blue{background:rgba(88,166,255,.06);border-color:var(--accent);}
+  .callout-green{background:rgba(63,185,80,.06);border-color:var(--accent2);}
+  .callout-purple{background:rgba(210,168,255,.06);border-color:var(--accent3);}
+  .callout-orange{background:rgba(255,166,87,.06);border-color:var(--accent4);}
+  .callout-red{background:rgba(255,123,114,.06);border-color:var(--accent5);}
+
+  .tbl-wrap{overflow:hidden;border:1px solid var(--border);border-radius:10px;margin:12px 0;}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;}
+  thead th{background:var(--surface2);color:var(--muted);font-size:10px;font-weight:700;
+    letter-spacing:.08em;text-transform:uppercase;padding:10px 14px;text-align:left;
+    border-bottom:1px solid var(--border);}
+  tbody tr{border-bottom:1px solid var(--border);}
+  tbody tr:last-child{border-bottom:none;}
+  td{padding:10px 14px;color:var(--text2);vertical-align:middle;}
+  td:first-child{color:var(--text);font-weight:600;}
+  .td-yes{color:var(--accent2);font-weight:700;} .td-no{color:var(--accent5);font-weight:700;}
+  .td-my{background:rgba(63,185,80,.05);}
+
+  .badges{display:flex;gap:10px;flex-wrap:wrap;margin-top:20px;justify-content:center;}
+  .badge{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--text2);
+    background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:5px 12px;}
+  .dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;}
+  .dot-g{background:var(--accent2);box-shadow:0 0 6px var(--accent2);animation:pulse 2s ease-in-out infinite;}
+  .dot-b{background:var(--accent);} .dot-p{background:var(--accent3);} .dot-m{background:var(--muted);}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+  .nav-bar{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);
+    display:flex;align-items:center;gap:16px;background:rgba(22,27,34,.92);
+    border:1px solid var(--border);border-radius:40px;padding:8px 20px;
+    backdrop-filter:blur(12px);z-index:100;user-select:none;}
+  .nav-btn{background:none;border:none;color:var(--text2);font-size:16px;cursor:pointer;
+    padding:4px 10px;border-radius:6px;transition:background .15s,color .15s;line-height:1;}
+  .nav-btn:hover{background:var(--surface2);color:var(--text);}
+  .nav-btn:disabled{opacity:.25;cursor:default;}
+  .slide-counter{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;min-width:40px;text-align:center;}
+
+  .progress-bar{position:fixed;bottom:0;left:0;right:0;height:2px;background:var(--border);z-index:99;}
+  .progress-fill{height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent));
+    transition:width .38s cubic-bezier(.4,0,.2,1);}
+
+  /* Hero */
+  .hero-center{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;height:100%;gap:0;}
+  .hero-title{font-size:clamp(52px,8vw,110px);font-weight:900;letter-spacing:-.04em;line-height:1;
+    background:linear-gradient(135deg,#e6edf3 20%,#58a6ff 60%,#d2a8ff 100%);
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:18px;}
+  .hero-tagline{font-size:clamp(16px,2vw,26px);color:var(--text2);max-width:740px;line-height:1.4;margin-bottom:14px;font-weight:600;}
+  .hero-sub{font-size:clamp(13px,1.4vw,16px);color:var(--muted);max-width:600px;line-height:1.55;}
+
+  .big-quote{font-size:clamp(22px,3vw,40px);font-weight:800;letter-spacing:-.02em;line-height:1.2;
+    background:linear-gradient(135deg,#e6edf3 0%,#8b949e 100%);
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}
+  .big-quote em{font-style:normal;background:linear-gradient(135deg,var(--accent2) 0%,var(--accent) 100%);
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}
+
+  .pattern-pill{display:inline-block;font-size:11px;font-weight:700;color:var(--text2);
+    background:var(--surface2);border:1px solid var(--border);border-radius:16px;padding:4px 11px;margin:3px;}
+
+  #cs1{background:radial-gradient(ellipse at 70% 10%,rgba(63,185,80,.10) 0%,transparent 55%),
+    radial-gradient(ellipse at 25% 85%,rgba(88,166,255,.08) 0%,transparent 50%),var(--bg);}
+  #csEnd{background:radial-gradient(ellipse at 50% 30%,rgba(63,185,80,.10) 0%,transparent 60%),var(--bg);}
+</style>
+</head>
+<body>
+<div class="deck">
+
+<!-- 01 Hero -->
+<div class="slide active" id="cs1">
+  <div class="slide-top"><span class="eyebrow">Mycelium · Tathata Systems</span><span class="slide-num">·· / ··</span></div>
+  <div class="slide-body">
+    <div class="hero-center">
+      <div class="hero-title">Mycelium</div>
+      <div class="hero-tagline">Coordinate AI agent fleets without handing your data to anyone's coordinator.</div>
+      <div class="hero-sub">An embedded, coordinator-free substrate for distributed agent systems. No central engine, no control plane, no party that holds everyone's state.</div>
+      <div class="badges">
+        <span class="badge"><span class="dot dot-g"></span>Data-sovereign by construction</span>
+        <span class="badge"><span class="dot dot-b"></span>No single point of failure</span>
+        <span class="badge"><span class="dot dot-p"></span>Open-source · embeddable · polyglot</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 02 The problem -->
+<div class="slide" id="cs2">
+  <div class="slide-top"><span class="eyebrow">The Problem</span><span class="slide-num">·· / ··</span></div>
+  <div class="slide-body">
+    <div class="slide-title warn">Every agent platform puts something <em>in the middle.</em></div>
+    <div class="slide-sub">Call it an orchestrator, a control plane, a registry, a broker — every mainstream multi-agent framework has a coordinator. It routes every request, holds the shared state, and decides who does what. It is convenient to build on. And it sees everything.</div>
+    <div class="cols3">
+      <div class="card card-accent-red">
+        <div class="card-icon">🗄️</div>
+        <div class="card-title">It holds your data</div>
+        <div class="card-body">Authoritative state about the whole fleet concentrates in one place — the agents' context, decisions, and outputs all pass through it.</div>
+      </div>
+      <div class="card card-accent-red">
+        <div class="card-icon">⚠️</div>
+        <div class="card-title">It's a single point of failure</div>
+        <div class="card-body">When the coordinator stalls, restarts, or saturates, the fleet stops. Its load grows with every agent you add.</div>
+      </div>
+      <div class="card card-accent-red">
+        <div class="card-icon">🔑</div>
+        <div class="card-title">It's a chokepoint someone controls</div>
+        <div class="card-body">Whoever runs the coordinator can see, gate, or seize the coordination — a honeypot, a compliance boundary, a point of leverage.</div>
+      </div>
+    </div>
+    <div class="callout callout-red">
+      For a single team, that's an acceptable trade. For a <strong>regulated, multi-organisation, or cross-border</strong> fleet, it is often a non-starter — before a line of code is written.
+    </div>
+  </div>
+</div>
+
+<!-- 03 Structural -->
+<div class="slide" id="cs3">
+  <div class="slide-top"><span class="eyebrow">Why It Won't Be Fixed</span><span class="slide-num">·· / ··</span></div>
+  <div class="slide-body">
+    <div class="slide-title warn">A smarter coordinator <em>doesn't fix this.</em></div>
+    <div class="slide-sub">These are not bugs in one product. They follow from the <strong>position</strong> — one component everything passes through — and a better one inherits all three. Documented in <em>The Coordinator Trap</em> (Nicholson, 2026).</div>
+    <div class="cols3">
+      <div class="card card-accent-orange"><div class="card-title">Unbounded oversight</div><div class="card-body">Every output passes through the centre and carries the same apparent authority, relevant or not. The review burden grows with the fleet.</div></div>
+      <div class="card card-accent-orange"><div class="card-title">Lost context</div><div class="card-body">Shared state lives in or near the coordinator. When it restarts, settled decisions are gone and have to be re-litigated.</div></div>
+      <div class="card card-accent-orange"><div class="card-title">One-size output</div><div class="card-body">It broadcasts the same result to consumers it has no model of — a human reviewer and a downstream agent get the same undifferentiated payload.</div></div>
+    </div>
+    <div class="callout callout-orange">
+      And the obvious 2026 answer — <strong>"just use one big, very capable model to manage it all"</strong> — is the <em>maximal</em> coordinator, not the escape. The more it manages, the more it must oversee and the more it concentrates. <strong>Capability isn't the constraint. Position is.</strong>
+    </div>
+  </div>
+</div>
+
+<!-- 04 The bill -->
+<div class="slide" id="cs4">
+  <div class="slide-top"><span class="eyebrow">The Cost</span><span class="slide-num">·· / ··</span></div>
+  <div class="slide-body">
+    <div class="slide-title warn">The bill you're <em>already paying.</em></div>
+    <div class="slide-sub">The coordinator assumption shows up as concrete liabilities long before scale — on the compliance review, in the risk register, in the contract.</div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Liability</th><th>What it means for you</th></tr></thead>
+        <tbody>
+          <tr><td>Data residency</td><td>A coordinator in one jurisdiction holding another's data — a GDPR / localisation exposure, structurally.</td></tr>
+          <tr><td>Custody risk</td><td>Your authoritative state lives inside a party you must trust — a vendor, a competitor, or a "neutral" third party that becomes a honeypot.</td></tr>
+          <tr><td>Availability</td><td>A single component whose failure stops the fleet and whose load rises with every agent added.</td></tr>
+          <tr><td>Lock-in</td><td>One coordination shape, one vendor's control plane, one upgrade cycle — the substrate you can't swap.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout callout-red">None of these are operational tuning problems you can configure away. They are consequences of the <strong>architecture</strong> — which is why a better-run coordinator doesn't remove them.</div>
+  </div>
+</div>
+
+<!-- 05 The shift -->
+<div class="slide" id="cs5">
+  <div class="slide-top"><span class="eyebrow">The Shift</span><span class="slide-num">·· / ··</span></div>
+  <div class="slide-body">
+    <div class="slide-title good">Coordinate <em>without a coordinator.</em></div>
+    <div class="slide-sub">Mycelium is an embedded library, not a platform you connect to. There is no central engine, no control plane, no registry. Coordination <strong>emerges</strong> from the substrate: each node holds only what is relevant to it, advertises what it can do, and the fleet self-organises — based on a published model of complex adaptive systems, and 50 years of distributed-systems history.</div>
+    <div class="cols2" style="align-items:center;gap:28px;">
+      <div class="card card-accent-red" style="text-align:center;">
+        <div class="card-icon" style="font-size:30px;">◍</div>
+        <div class="card-title">Coordinator model</div>
+        <div class="card-body">Agents are spokes around a hub. The hub holds the data, makes the decisions, and is the thing that fails, leaks, or is controlled.</div>
+      </div>
+      <div class="card card-accent-green" style="text-align:center;">
+        <div class="card-icon" style="font-size:30px;">🕸️</div>
+        <div class="card-title">Mycelium substrate</div>
+        <div class="card-body">Peers gossip soft-state with each other. No hub. Capability, load, and membership are signals in a shared medium that evaporate when a node goes quiet.</div>
+      </div>
+    </div>
+    <div class="callout callout-green">Nothing in the middle means <strong>nothing to hold your data, nothing to fail, and nothing to be controlled.</strong></div>
+  </div>
+</div>
+
+<!-- 06 Value 1: sovereignty -->
+<div class="slide" id="cs6">
+  <div class="slide-top"><span class="eyebrow eyebrow-green">Value · 1 of 3</span><span class="slide-num">·· / ··</span></div>
+  <div class="slide-body">
+    <div class="slide-title good">Your data <em>never leaves your control.</em></div>
+    <div class="slide-sub">There is no central custodian — by construction, not by policy. Each node holds its own state. Identity is self-certified (no central authority issues it). Across organisations or borders, domains <strong>federate as sovereign peers</strong> — each self-certifies, none surrenders custody.</div>
+    <div class="cols3">
+      <div class="card card-accent-green"><div class="card-title">Regulated industries</div><div class="card-body">Finance, health: "who holds the data" is a compliance question with legal weight — answered structurally, because the answer is "you do."</div></div>
+      <div class="card card-accent-green"><div class="card-title">Cross-jurisdiction</div><div class="card-body">No central store in one jurisdiction holding another's data. Data residency is a property of where you run nodes, not a vendor's promise.</div></div>
+      <div class="card card-accent-green"><div class="card-title">Multi-org consortia</div><div class="card-body">Supply chains, federated AI: no party hands authoritative state to a competitor or a third-party chokepoint. Sovereignty is the trust model.</div></div>
+    </div>
+    <div class="callout callout-green">
+      This is the one place where the <strong>architecture and the purchase order point the same way</strong> — and a coordinator-based competitor cannot copy it without ceasing to be coordinator-based. It is a structural advantage, not a feature.
+    </div>
+  </div>
+</div>
+
+<!-- 07 Value 2: no SPOF / capture -->
+<div class="slide" id="cs7">
+  <div class="slide-top"><span class="eyebrow eyebrow-green">Value · 2 of 3</span><span class="slide-num">·· / ··</span></div>
+  <div class="slide-body">
+    <div class="slide-title good">Nothing to take down, <em>subpoena, or saturate.</em></div>
+    <div class="slide-sub">Kill any node and the fleet self-heals — capabilities re-advertise, work re-routes, a standby promotes itself. There is no privileged component to fail, compromise, coerce, or overload.</div>
+    <div class="cols3">
+      <div class="card card-accent-blue"><div class="card-icon">🪨</div><div class="card-title">Anti-fragile</div><div class="card-body">A node failing is a normal, local event the fleet absorbs — not an outage. Failure detection is built in: a node that goes quiet simply fades.</div></div>
+      <div class="card card-accent-blue"><div class="card-icon">🛡️</div><div class="card-title">Anti-capture</div><div class="card-body">No chokepoint to seize, bribe, or compel. A domain that no longer trusts the federation can exit unilaterally — sovereignty includes the right to leave.</div></div>
+      <div class="card card-accent-blue"><div class="card-icon">📈</div><div class="card-title">No central bottleneck</div><div class="card-body">There is no engine whose cognitive or network load grows with the fleet. Adding agents adds capacity, not a tax on a shared centre.</div></div>
+    </div>
+    <div class="callout callout-blue">Resilience and security stop being features you bolt on around a coordinator, and become <strong>properties of not having one.</strong></div>
+  </div>
+</div>
+
+<!-- 08 Value 3: every pattern -->
+<div class="slide" id="cs8">
+  <div class="slide-top"><span class="eyebrow eyebrow-green">Value · 3 of 3</span><span class="slide-num">·· / ··</span></div>
+  <div class="slide-body">
+    <div class="slide-title good">Every way agents need to interact. <em>One fabric.</em></div>
+    <div class="slide-sub">Most platforms give you one shape — a remote call wearing a prompt, brokered through the middle. Real coordination is richer than that. Mycelium offers the whole repertoire on one substrate, so you are never locked into the wrong pattern for your problem.</div>
+    <div style="text-align:center;margin:8px 0 18px;">
+      <span class="pattern-pill">Request / Response</span>
+      <span class="pattern-pill">Events &amp; Pub/Sub</span>
+      <span class="pattern-pill">Durable Mailboxes</span>
+      <span class="pattern-pill">Shared State</span>
+      <span class="pattern-pill">Pull Work-Queues</span>
+      <span class="pattern-pill">Content Claiming</span>
+      <span class="pattern-pill">Consensus</span>
+    </div>
+    <div class="callout callout-purple">Pick the pattern the problem wants — <strong>not the one the framework forces.</strong> And because they share one substrate, mixing them is free: a pipeline can pull work, broadcast an event, and reach agreement without three separate systems to operate.</div>
+  </div>
+</div>
+
+<!-- 09 Honest qualifier -->
+<div class="slide" id="cs9">
+  <div class="slide-top"><span class="eyebrow eyebrow-orange">Honest Fit</span><span class="slide-num">·· / ··</span></div>
+  <div class="slide-body">
+    <div class="slide-title">Is this <em>actually</em> your problem?</div>
+    <div class="slide-sub">We will tell you when it isn't. Mycelium earns its place only when coordination is <strong>genuinely distributed</strong> — and we would rather qualify out early than sell you a substrate you don't need.</div>
+    <div class="cols2">
+      <div class="card card-accent-green">
+        <div class="card-icon">✅</div>
+        <div class="card-title">You need this when…</div>
+        <div class="card-body" style="line-height:1.8;">• multiple organisations, domains, or jurisdictions are involved<br>• data that cannot — or must not — be centralised<br>• agents that must outlive restarts, partitions, and partial failure<br>• a fleet that has to keep running when parts of it don't</div>
+      </div>
+      <div class="card" style="border-left:3px solid var(--muted);">
+        <div class="card-icon">🟡</div>
+        <div class="card-title">You don't (yet) when…</div>
+        <div class="card-body" style="line-height:1.8;">• one team, one trust boundary, one data store<br>• a single task you split into "agents" for convenience<br>• a workload a single capable model will likely absorb next year<br><br>No shame in this — it just isn't us, and we'll say so.</div>
+      </div>
+    </div>
+    <div class="callout callout-orange">The test: <strong>is the knowledge genuinely dispersed across independent parties?</strong> If yes, no central model can absorb it — by the same argument that makes the coordinator fail. If no, you may not have a fleet at all.</div>
+  </div>
+</div>
+
+<!-- 10 The honest concern -->
+<div class="slide" id="cs10">
+  <div class="slide-top"><span class="eyebrow eyebrow-orange">The Fair Objection</span><span class="slide-num">·· / ··</span></div>
+  <div class="slide-body">
+    <div class="slide-title">"Can I operate something with <em>no control plane?"</em></div>
+    <div class="slide-sub">The honest objection, and we take it seriously. An emergent system can feel hard to reason about — there is no single dashboard that "runs" the fleet. Here is exactly where we are on it.</div>
+    <div class="cols2">
+      <div class="card card-accent-green">
+        <div class="card-title">Today — node-level legibility</div>
+        <div class="card-body">Every node explains itself: <em>why</em> it is busy, <em>why</em> it shed load, <em>why</em> it is unavailable. A tamper-evident, signed audit trail. Standard health, readiness, and metrics endpoints that drop into your existing monitoring.</div>
+      </div>
+      <div class="card card-accent-orange">
+        <div class="card-title">Next — fleet-level legibility</div>
+        <div class="card-body"><strong>Legible Emergence</strong>: a designed roadmap for fleet-level "why did it do that" diagnostics — computed <em>without</em> a central collector, so the diagnostics stay coordinator-free too. A planned programme, not a promise.</div>
+      </div>
+    </div>
+    <div class="callout callout-orange">We would rather show you the honest gap <strong>and</strong> the plan to close it than pretend emergence is free to operate. The fear is real; the answer is on the roadmap.</div>
+  </div>
+</div>
+
+<!-- 11 Maturity -->
+<div class="slide" id="cs11">
+  <div class="slide-top"><span class="eyebrow eyebrow-orange">Where It Is Today</span><span class="slide-num">·· / ··</span></div>
+  <div class="slide-body">
+    <div class="slide-title">Built, proven where it's proven, <em>honest about the rest.</em></div>
+    <div class="slide-sub">A sophisticated buyer is owed a clear line between what is done, what is demonstrated, and what is still ahead.</div>
+    <div class="cols3">
+      <div class="card card-accent-green">
+        <div class="card-title">✓ Built</div>
+        <div class="card-body" style="line-height:1.75;">Three-layer substrate. Security &amp; compliance: signed identity, role-based access, OIDC single sign-on, tamper-evident audit, data-at-rest encryption, live key rotation. Sovereign federation. Polyglot SDKs (Rust · Python · TypeScript). Feature-complete v2.</div>
+      </div>
+      <div class="card card-accent-blue">
+        <div class="card-title">✓ Demonstrated</div>
+        <div class="card-body" style="line-height:1.75;">100-node cluster formation, gossip propagation, automatic failover and recovery, state convergence — all under an automated test and integration suite that runs on every change.</div>
+      </div>
+      <div class="card card-accent-orange">
+        <div class="card-title">→ Honest next</div>
+        <div class="card-body" style="line-height:1.75;">Sustained real-network and load validation. The measured "federate-at-N" threshold. Fleet-level diagnostics. <strong>No third-party production deployment yet</strong> — that is the gap a design partnership closes.</div>
+      </div>
+    </div>
+    <div class="callout callout-blue">We are looking for <strong>design partners</strong>, not selling shrink-wrap at 10,000 nodes. The honesty is deliberate — it is the same discipline that produced the architecture.</div>
+  </div>
+</div>
+
+<!-- 12 Positioning -->
+<div class="slide" id="cs12">
+  <div class="slide-top"><span class="eyebrow">Why Mycelium</span><span class="slide-num">·· / ··</span></div>
+  <div class="slide-body">
+    <div class="slide-title">Not "the best." <em>The structurally different.</em></div>
+    <div class="slide-sub">We will not claim Mycelium is state-of-the-art for the field — that is earned with outside evidence we don't yet have. We will claim only what is defensible, because a claim a skeptic concedes is worth more than one they dismiss.</div>
+    <div class="cols3">
+      <div class="card card-accent-purple"><div class="card-title">A moat that can't be copied</div><div class="card-body">The sovereignty advantage is structural. A coordinator-based competitor cannot adopt it without abandoning the coordinator — i.e. without abandoning their architecture.</div></div>
+      <div class="card card-accent-purple"><div class="card-title">A limit, not a frontier</div><div class="card-body">Coordinator-freeness sits at a structural floor. Competitors who want these properties converge <em>toward</em> this design — there is nothing "past" zero coordinators to leapfrog it.</div></div>
+      <div class="card card-accent-purple"><div class="card-title">Grounded, not trend-chasing</div><div class="card-body">Built from a published argument and five decades of distributed-systems research — Holland, Gelernter, gossip, lease decay — not from this quarter's framework.</div></div>
+    </div>
+    <div class="callout callout-purple">The philosophy is the moat — and, for the data-sovereign buyer, <strong>it is also the buying reason.</strong> That alignment is rare, and it is the whole pitch.</div>
+  </div>
+</div>
+
+<!-- 13 The ask -->
+<div class="slide" id="cs13">
+  <div class="slide-top"><span class="eyebrow eyebrow-green">The Ask</span><span class="slide-num">·· / ··</span></div>
+  <div class="slide-body">
+    <div class="slide-title good">Let's find your <em>first deployment.</em></div>
+    <div class="slide-sub">We are partnering with a small number of teams whose coordination is genuinely distributed — and for whom data sovereignty is a requirement, not a nice-to-have.</div>
+    <div class="cols2">
+      <div class="card card-accent-green">
+        <div class="card-title">What we'd do together</div>
+        <div class="card-body" style="line-height:1.8;">• a scoped pilot on one real, bounded workload<br>• validation against <em>your</em> network and failure conditions<br>• co-design of the federation / trust boundary<br>• an honest go / no-go at the end — including "not yet"</div>
+      </div>
+      <div class="card card-accent-blue">
+        <div class="card-title">What you bring</div>
+        <div class="card-body" style="line-height:1.8;">• a coordination problem that is genuinely multi-party<br>• a data-sovereignty or resilience constraint that hurts today<br>• an engineering team willing to work at the substrate level<br>• patience for an early-stage, high-conviction technology</div>
+      </div>
+    </div>
+    <div class="callout callout-green">We win when the architecture is necessary, not merely nicer. If your problem is the one this was built for, there is nothing else shaped like it.</div>
+  </div>
+</div>
+
+<!-- 14 Close -->
+<div class="slide" id="csEnd">
+  <div class="slide-top"><span class="eyebrow">Mycelium · Tathata Systems Ltd</span><span class="slide-num">·· / ··</span></div>
+  <div class="slide-body">
+    <div class="hero-center">
+      <div class="big-quote">Coordinate the fleet.<br><em>Keep the data. Lose the coordinator.</em></div>
+      <div class="badges" style="margin-top:34px;">
+        <span class="badge"><span class="dot dot-g"></span>tathatasystems@proton.me</span>
+        <span class="badge"><span class="dot dot-b"></span>github.com/RichardEko/mycelium</span>
+        <span class="badge"><span class="dot dot-p"></span>The Coordinator Trap — Nicholson, 2026</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /deck -->
+
+<div class="nav-bar">
+  <button class="nav-btn" id="btn-prev" disabled>←</button>
+  <div class="slide-counter" id="counter">1 / 1</div>
+  <button class="nav-btn" id="btn-next">→</button>
+</div>
+<div class="progress-bar">
+  <div class="progress-fill" id="progress-fill" style="width:7%"></div>
+</div>
+
+<script>
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let cur = 0;
+
+  // Auto-number every slide's corner label from its position.
+  slides.forEach((s, i) => {
+    const n = s.querySelector('.slide-num');
+    if (n) n.textContent = `${String(i + 1).padStart(2, '0')} / ${total}`;
+  });
+
+  function go(n) {
+    if (n < 0 || n >= total) return;
+    slides[cur].classList.remove('active');
+    slides[cur].classList.add('was-prev');
+    setTimeout(() => { slides.forEach(s => { if (s !== slides[n]) s.classList.remove('was-prev'); }); }, 420);
+    cur = n;
+    slides[cur].classList.add('active');
+    slides[cur].classList.remove('was-prev');
+    document.getElementById('counter').textContent = `${cur + 1} / ${total}`;
+    document.getElementById('progress-fill').style.width = `${((cur + 1) / total) * 100}%`;
+    document.getElementById('btn-prev').disabled = cur === 0;
+    document.getElementById('btn-next').disabled = cur === total - 1;
+  }
+
+  document.getElementById('btn-prev').addEventListener('click', () => go(cur - 1));
+  document.getElementById('btn-next').addEventListener('click', () => go(cur + 1));
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); go(cur + 1); }
+    if (e.key === 'ArrowLeft'  || e.key === 'PageUp')  { e.preventDefault(); go(cur - 1); }
+    if (e.key === 'Home') go(0);
+    if (e.key === 'End')  go(total - 1);
+  });
+  let tx = 0;
+  document.addEventListener('touchstart', e => { tx = e.touches[0].clientX; });
+  document.addEventListener('touchend',   e => {
+    const dx = e.changedTouches[0].clientX - tx;
+    if (Math.abs(dx) > 50) go(dx < 0 ? cur + 1 : cur - 1);
+  });
+</script>
+</body>
+</html>
