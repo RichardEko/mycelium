@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """three_arm_plot.py — figure pipeline for the three-arm work-distribution sweep.
 
-Reads  docs/publications/arxiv/paper2a/data/three_arm/summary.csv
-Writes docs/publications/arxiv/paper2a/data/fig_three_arm.tex (pgfplots, two
+Reads  docs/publications/paper2a/data/three_arm/summary.csv
+Writes docs/publications/paper2a/data/fig_three_arm.tex (pgfplots, two
 panels matching fig_decision_latency.tex's style):
 
   (a) p99 job latency vs drift δ̄ at H = 0.5 — the staleness axis
@@ -17,7 +17,7 @@ import statistics as st
 from collections import defaultdict
 from pathlib import Path
 
-DATA = Path("docs/publications/arxiv/paper2a/data")
+DATA = Path("docs/publications/paper2a/data")
 SRC = DATA / "three_arm" / "summary.csv"
 OUT = DATA / "fig_three_arm.tex"
 

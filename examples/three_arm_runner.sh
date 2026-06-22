@@ -15,7 +15,7 @@
 #   SEEDS         — default "1 2 3"
 #   N             — default 20
 #   DURATION_SECS — default 40 (RAMP_SECS=5 excluded from metrics)
-#   OUT_DIR       — default docs/publications/arxiv/paper2a/data/three_arm
+#   OUT_DIR       — default docs/publications/paper2a/data/three_arm
 
 set -euo pipefail
 
@@ -27,7 +27,7 @@ N="${N:-20}"
 DURATION_SECS="${DURATION_SECS:-40}"
 RAMP_SECS="${RAMP_SECS:-5}"
 WARMUP_SECS="${WARMUP_SECS:-12}"
-OUT_DIR="${OUT_DIR:-docs/publications/arxiv/paper2a/data/three_arm}"
+OUT_DIR="${OUT_DIR:-docs/publications/paper2a/data/three_arm}"
 
 mkdir -p "$OUT_DIR"
 SUMMARY="$OUT_DIR/summary.csv"
