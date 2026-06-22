@@ -1,0 +1,584 @@
+\documentclass[11pt]{article}
+
+% ── Encoding & fonts ──────────────────────────────────────────────────────────
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+
+% ── Page geometry ─────────────────────────────────────────────────────────────
+\usepackage[margin=1.25in]{geometry}
+
+% ── Mathematics ───────────────────────────────────────────────────────────────
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+
+% ── Tables ────────────────────────────────────────────────────────────────────
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{tabularx}
+
+% ── Lists ─────────────────────────────────────────────────────────────────────
+\usepackage{enumitem}
+\setlist{itemsep=2pt, topsep=4pt}
+
+% ── Hyperlinks ────────────────────────────────────────────────────────────────
+\usepackage[colorlinks=true, linkcolor=black, citecolor=black,
+            urlcolor=black, pdfborder={0 0 0}]{hyperref}
+\usepackage{url}
+
+% ── Bibliography ──────────────────────────────────────────────────────────────
+\usepackage[numbers, sort&compress]{natbib}
+\bibliographystyle{unsrtnat}
+
+% ── Paragraph spacing ─────────────────────────────────────────────────────────
+\usepackage{parskip}
+\setlength{\parskip}{6pt}
+
+% ── Section formatting ────────────────────────────────────────────────────────
+\usepackage{titlesec}
+\titleformat{\section}{\large\bfseries}{\thesection.}{0.6em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{0.6em}{}
+\titlespacing{\section}{0pt}{14pt}{6pt}
+\titlespacing{\subsection}{0pt}{10pt}{4pt}
+
+% ── Abstract ──────────────────────────────────────────────────────────────────
+\usepackage{abstract}
+\renewcommand{\abstractnamefont}{\normalfont\bfseries}
+\renewcommand{\abstracttextfont}{\normalfont\small}
+
+% ── Footnotes ─────────────────────────────────────────────────────────────────
+\usepackage[hang, flushmargin]{footmisc}
+
+% ── Theorem-like environments ─────────────────────────────────────────────────
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+\theoremstyle{plain}
+\newtheorem*{informalclaim}{Claim (informal)}
+\newtheorem*{property}{Property}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\title{\textbf{The Capture Problem:\\
+Why Epistemic Decentralisation Is Not Sufficient,\\
+and What Capture Resistance Requires}}
+
+\author{%
+  Dr.\ Richard Nicholson\\[4pt]
+  \small Tathata Systems Ltd, United Kingdom\\
+  \small \href{mailto:tathatasystems@proton.me}{tathatasystems@proton.me}
+}
+
+\date{June 2026\\[4pt]
+\small \textbf{Working draft.} Companion to~\cite{nicholson2026,nicholson2026hlks}.}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+The companion papers establish that coordinator-based architectures fail
+structurally~\cite{nicholson2026} and that coordinator-free, locally-resolved
+substrate design is the unique \emph{epistemically} correct response across four
+independent domains~\cite{nicholson2026hlks}. This paper argues that epistemic
+correctness is \emph{necessary but not sufficient}. A substrate that resolves
+knowledge locally---that satisfies the four correctness properties of the
+companion paper---can nonetheless be \emph{captured}: its emergent consensus
+mechanisms can be seized by concentrated interests, or an internal coordination
+class can entrench and extract coordination rent, without any violation of
+epistemic correctness. Capture is a failure of \emph{power} distribution, not of
+\emph{knowledge} distribution, and the two are orthogonal. We introduce four
+further substrate properties---Capture Resistance, Mandate TTL, Epistemic
+Symmetry, and Exit---that an epistemically-correct substrate must additionally
+satisfy to resist capture, and argue, following the cross-domain method of the
+companion paper, that these properties appear independently in the design of
+capture-resistant monetary systems (Bitcoin), capture-resistant governance
+(Ostrom's commons, recallable-mandate confederalism), and capture-resistant
+computing substrates. We relocate the MCB/P/S evaluative framework (Moral Circle
+Breadth, Polycentricity, Surplus-Claim Regime) to its proper home here, as a
+scorecard for capture resistance. We then confront the hardest question the
+research programme faces: \emph{does coordinator-freeness prevent capture, or
+merely relocate the captor to a place that is harder to see?} We argue---against a
+common reading---that Bitcoin's surface concentration of mining, development, and
+wealth does not constitute capture: its value resides in holders who are motivated
+to resist seizure and able to exit, so that concentration is the \emph{source} of an
+emergent immune response rather than evidence of capture, and a would-be captor
+inherits a worthless network. Bitcoin shows capture resistance can be emergent and
+robust; the sharper open question is whether a \emph{computing} substrate---which
+lacks an internal asset whose value participants are individually motivated to
+protect---can manufacture the same alignment, or must rely on weaker mechanisms. We
+close with an honest account of what is open, including whether the present authors'
+own substrate can supply that alignment or only makes its coordination class visible
+and contestable.
+\end{abstract}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Introduction}
+
+The companion paper~\cite{nicholson2026hlks} establishes a strong result: across
+economics, governance, organisations, and distributed computing, coordinator-free
+locally-resolved substrate design is the unique structurally correct response to
+the \emph{epistemic} problem of heterogeneous local knowledge. Four substrate
+correctness properties---local signal propagation, emergent group formation,
+minimal federation invariants, and subsidiarity-respecting consensus---follow from
+the Coordinator Trap Theorem and appear, independently derived, in each domain.
+
+That result is about \emph{knowledge}. This paper is about \emph{power}. Its thesis
+is that the two are orthogonal, and that the first does not buy the second:
+
+\begin{informalclaim}[The Insufficiency of Epistemic Correctness]
+A substrate may satisfy all four epistemic-correctness properties of the companion
+paper and remain vulnerable to capture. Capture is the seizure of a system's
+coordination surplus by a subset of its participants or by external interests;
+it is a failure of power distribution, and no property concerning the distribution
+of \emph{knowledge} precludes it. Resistance to capture is therefore a distinct
+structural axis, requiring its own properties.
+\end{informalclaim}
+
+The intuition is direct. The companion paper's Property~4 admits an emergent
+consensus mechanism for the narrow class of operations requiring binding
+cross-agent commitment. That mechanism is exactly the surface a captor seeks: it
+is where the system's collective decisions are made, and a participant who acquires
+disproportionate influence over it can bend system-level outcomes to extract rent
+without ever telling a lie about local state. The substrate remains epistemically
+correct---every agent still resolves its own knowledge locally---while becoming, at
+the level that matters, an instrument of the captor. Epistemic correctness is the
+floor, not the ceiling.
+
+\paragraph{Contributions.} This paper:
+\begin{enumerate}
+\item States the orthogonality of epistemic correctness and capture resistance,
+  and the two failure modes---\emph{external} and \emph{internal} capture---that
+  an epistemically-correct substrate remains exposed to (\S\ref{sec:problem}).
+\item Defines four further substrate properties---Capture Resistance, Mandate TTL,
+  Epistemic Symmetry, and Exit---and argues that an epistemically-correct substrate
+  must satisfy them to resist capture (\S\ref{sec:properties}).
+\item Relocates the MCB/P/S framework to its proper role as a capture-resistance
+  scorecard, and shows the three axes measure exactly the distinctions the
+  capture-resistance properties imply (\S\ref{sec:mcbps}).
+\item Instantiates the properties across domains---capture-resistant money
+  (Bitcoin), capture-resistant governance (Ostrom; recallable-mandate
+  confederalism), and capture-resistant computing---by the same convergence method
+  as the companion paper (\S\ref{sec:domains}).
+\item Confronts the central difficulty: whether coordinator-freeness prevents
+  capture or relocates it, using Bitcoin's empirical concentration as the test
+  case, and applies the same scrutiny to the present authors' own substrate
+  (\S\ref{sec:hard}).
+\item Gives an honest accounting of what remains open (\S\ref{sec:open}).
+\end{enumerate}
+
+\paragraph{Scope of the claim.} As with the companion paper, the cross-domain
+argument is one of \emph{convergent independent derivation}, not mechanism
+transfer: a capture-resistant computing substrate implements neither Bitcoin's
+proof-of-work nor a confederal council, but exhibits the same structural
+\emph{properties} that those independently arrived at. The pattern recurs; the
+mechanisms do not transfer. Crucially, the structural analysis of an example is
+\emph{orthogonal to endorsing it}: we analyse the capture-resistance structure of
+Bitcoin and of recallable-mandate governance without endorsing the monetary
+politics of the one or the revolutionary politics of the other. This separation is
+not evasion---it is the precise discipline the cross-domain method requires, and
+the place where the structural content of a charged example must be taken
+seriously rather than avoided. Capture is, unavoidably, a normative-adjacent
+subject (it concerns rent, power, and who a system serves); we keep the
+\emph{structural} claim---which substrate designs make capture costly---separable
+throughout from the \emph{normative} question of which distributions of power are
+just.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{The Capture Problem}
+\label{sec:problem}
+
+\subsection{What Capture Is}
+
+\begin{definition}[Capture]
+A system is \emph{captured} when a subset of its participants, or an external
+interest, acquires disproportionate control over the system's binding coordination
+decisions and uses that control to redirect the system's coordination surplus
+toward itself. Capture is distinguished from ordinary influence by two features:
+the control is \emph{disproportionate} to the captor's legitimate stake, and it
+is used to extract \emph{rent}---value not matched by contribution.
+\end{definition}
+
+Capture presupposes a surface to capture. In a fully local system with no binding
+collective decisions there is nothing to seize. But the companion paper shows that
+some operations---those requiring linearisable cross-agent commitment---cannot be
+resolved locally and require an emergent consensus mechanism (Property~4). That
+mechanism is the capture surface. Capture resistance is therefore not the absence
+of collective decision-making but the structuring of it so that disproportionate
+control is costly to acquire and costly to retain.
+
+\subsection{Two Failure Modes}
+
+\paragraph{External capture.} A concentrated outside interest acquires control of
+the emergent consensus mechanism and bends it to extract rent. The engine is the
+asymmetry Olson~\cite{olson1965} identified: the benefits of capturing a coordination
+mechanism are concentrated on the captor, while the costs are diffused across all
+participants, so the captor is motivated to invest in capture far beyond any
+individual defender's motivation to resist. The cost of capture and the rent it
+yields are not symmetric; substrate design that does not engineer that asymmetry
+in the defender's favour is, over a long enough horizon, captured by default.
+
+\paragraph{Internal capture.} A subset of the system's \emph{own} participants---
+those who operate, maintain, or hold the largest stake in the consensus
+mechanism---entrenches and extracts. This is the subtler and, we will argue, the
+harder mode: a system can be coordinator-\emph{free} in its protocol and still grow
+an internal \emph{coordination class}---the maintainers who set the defaults, the
+large stakeholders whose preferences dominate emergent consensus, the operators of
+the points where federation seams meet. Internal capture does not require anyone to
+violate a protocol rule. It requires only that influence over the collective
+mechanism concentrate faster than the mechanism redistributes it.
+
+These two modes correspond to the two failure modes visible in the empirical record
+and named in the companion paper's open questions: acute seizure from without, and
+chronic erosion from within.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Four Properties of a Capture-Resistant Substrate}
+\label{sec:properties}
+
+We state four properties additional to the companion paper's Properties 1--4. As
+there, they are stated as structural conditions and argued to appear independently
+across domains; their formal status is the same as the companion paper's---argued
+with care, not proved in a single cross-domain formalism (\S\ref{sec:open}).
+
+\begin{property}[5: Capture Resistance]
+The cost $C_{\text{capture}}$ of acquiring disproportionate control of the
+substrate's binding-commitment mechanism is high relative to the rent
+$R_{\text{capture}}$ that control yields, and rises with the value the substrate
+coordinates. A substrate is capture-resistant to the degree that
+$C_{\text{capture}} / R_{\text{capture}}$ is large and increasing in stake.
+\end{property}
+
+The canonical engineered instance is Bitcoin's proof-of-work: control of the
+consensus requires acquiring a majority of a deliberately expensive resource, and
+the cost rises with the value secured. The computing-substrate analogue is open
+and discussed in \S\ref{sec:hard}; it is \emph{not} simply ``make consensus
+expensive,'' because gratuitous cost violates the companion paper's
+efficiency-by-locality commitments. The design tension---capture resistance
+demands that control be costly, epistemic correctness demands that coordination be
+cheap---is real and is a central subject of this paper.
+
+\begin{property}[6: Mandate TTL]
+No grant of influence over the collective mechanism is permanent. Authority is
+held under a time-to-live and must be actively re-granted; absent renewal, it
+evaporates. Capture that depends on holding a position is bounded by the rate at
+which positions must be re-earned.
+\end{property}
+
+Mandate TTL is the governance analogue of the companion substrate's defining
+mechanism: capability advertisements, group memberships, and load signals are all
+soft-state under a TTL, and a node that stops re-advertising simply fades. The
+companion paper applies this to \emph{liveness}; here it applies to
+\emph{authority}. Recallable delegation, fixed terms, and graduated re-grant are
+the governance instances; ``management as evaporating intent''---an instruction
+that must be continuously re-asserted to persist, and that any node may locally
+override---is the computing instance. A permanent mandate is a standing capture
+surface; a mandate that must be re-earned each interval is not.
+
+\begin{property}[7: Epistemic Symmetry]
+No participant holds privileged access to the substrate's state that other
+participants structurally lack. Where one party can observe the global state and
+others cannot, that asymmetry is itself a capture vector: the observer can act on
+information unavailable to those it coordinates.
+\end{property}
+
+Epistemic symmetry connects capture resistance back to the data-locality argument
+of the companion paper, and to a result of independent practical importance: a
+substrate in which \emph{data stays where it is produced}---at the edge, under the
+control of the participant that generated it---denies any central party the
+asymmetric view that capture exploits. Data sovereignty, which the engineering
+literature treats as a compliance property, is here a \emph{capture-resistance}
+property: the same structural feature that keeps a regulated participant's data
+under its own control also denies a would-be captor the privileged vantage point.
+
+\begin{property}[8: Exit]
+A participant, or a coherent sub-domain of participants, can unilaterally withdraw
+from the substrate---taking its state and its capabilities with it---without the
+permission of any other party. Exit is the capture-resistance mechanism that does
+not depend on the captor playing fair.
+\end{property}
+
+Exit is Hirschman's~\cite{hirschman1970} insight applied to substrate design. Voice
+(participating in the collective mechanism) and loyalty (remaining despite
+dissatisfaction) both leave the captor in place; only exit removes the captor's
+hold. A federation of sovereign sub-domains, each able to leave at will, bounds
+capture at the federation level structurally: no federation-wide captor can hold a
+sub-domain that can simply depart. Exit is the property most directly served by the
+companion substrate's sovereign federation model, and the one that most sharply
+distinguishes a federation of equals from a hierarchy with extra steps.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{The MCB/P/S Framework as a Capture Scorecard}
+\label{sec:mcbps}
+
+The MCB/P/S framework---Moral Circle Breadth, Polycentricity, Surplus-Claim
+Regime---was introduced by the present author~\cite{nicholson2025} for the
+evaluation of monetary architectures, and borrowed by the companion
+paper~\cite{nicholson2026hlks} to score epistemic distinctions. As that paper
+notes, its proper home is the analysis of capture, which we develop here.
+
+\begin{itemize}
+\item \emph{Moral Circle Breadth} measures \emph{who the substrate serves}---whose
+  interests are inside the boundary the system optimises for. A captured substrate
+  has a narrow effective moral circle (the captor) regardless of its nominal
+  membership.
+\item \emph{Polycentricity} measures \emph{how distributed binding decision-making
+  is}---the fraction of decisions resolved locally versus through a single
+  collective mechanism. Low polycentricity is a large capture surface.
+\item \emph{Surplus-Claim Regime} measures \emph{who claims the coordination
+  surplus}---the rent the system generates. This is the capture axis proper: a
+  captured substrate has a concentrated surplus-claim regime.
+\end{itemize}
+
+The three axes are not independent of Properties 5--8; they are the observable
+\emph{symptoms} the properties are designed to prevent. A substrate scoring well on
+Capture Resistance, Mandate TTL, Epistemic Symmetry, and Exit will, we argue, score
+broad-MCB, high-P, distributed-surplus; and the failure of any property shows up as
+degradation on a corresponding axis. Table~\ref{tab:propaxis} states the mapping.
+
+\begin{table}[t]
+\centering
+\small
+\renewcommand{\arraystretch}{1.2}
+\begin{tabularx}{\textwidth}{@{}llX@{}}
+\toprule
+\textbf{Property} & \textbf{Primary axis} & \textbf{Symptom if the property fails} \\
+\midrule
+5 \,Capture Resistance & Surplus-Claim & Low $C_{\text{capture}}$ lets a captor seize the consensus mechanism and claim coordination rent; surplus concentrates. \\
+6 \,Mandate TTL & Polycentricity & Authority accretes into durable positions; binding decisions centralise into a standing class. \\
+7 \,Epistemic Symmetry & Moral Circle Breadth & A privileged observer acts on a view others lack; the effective circle narrows to that observer's interests. \\
+8 \,Exit & Surplus-Claim / MCB & Captive participants cannot leave; extractable rent is unbounded and the served circle shrinks to those who cannot exit. \\
+\bottomrule
+\end{tabularx}
+\caption{Each capture-resistance property protects a primary MCB/P/S axis; failure
+of the property is observable as degradation on that axis. The MCB/P/S framework is
+thus the \emph{scorecard} for the properties, not an independent construct.}
+\label{tab:propaxis}
+\end{table}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Domain Instantiations of Capture Resistance}
+\label{sec:domains}
+
+By the convergence method of the companion paper, we expect the capture-resistance
+properties to appear independently wherever capture has been a live design concern.
+
+\subsection{Capture-Resistant Money: Bitcoin}
+
+Bitcoin~\cite{nakamoto2008} is the first \emph{engineered} capture-resistant
+substrate, and it instantiates capture resistance more richly than any single
+mechanism suggests: an engineered cost-of-capture at the protocol layer, and---above
+it---an emergent economic immune response that a surface reading routinely mistakes
+for its opposite.
+
+At the protocol level its capture resistance is strong and deliberate. Control of
+the consensus requires a majority of a resource (hash power) made costly by design,
+with a cost that rises as the value secured rises---an explicit, scaling
+$C_{\text{capture}}$ (Property~5). There is no issuer, foundation, or authority
+empowered to alter the monetary schedule, so control of the protocol carries no
+permanent mandate (Property~6). The ledger is public and verified identically by
+every full node, so no participant holds a privileged view of system state
+(Property~7). And a participant who rejects a ruleset may fork, carrying its state
+into a substrate governed by different rules (Property~8). On the four properties,
+the protocol scores well, and did so by explicit design rather than by accident.
+
+At the emergent level its capture resistance is---contrary to a common reading---
+also strong, though by a different mechanism than the protocol provides, and the
+distinction is this paper's central lesson about where capture resistance actually
+lives. The substrate does exhibit surface concentration in the layers the protocol
+does not govern: hash power concentrates into a few mining pools, development into a
+small set of maintainers, and holdings into a small fraction of addresses. The naive
+inference---that this concentration constitutes capture---is wrong, and seeing why
+is the point.
+
+\emph{Concentration of a layer is not capture of the system, because capture
+requires control of the layer that holds value, and in Bitcoin that layer is the one
+most resistant to seizure.} A mining coalition, even a majority one, cannot rewrite
+the monetary rules, steal balances, or impose a ruleset the economic majority
+rejects. The value of the network resides in its holders and in the social consensus
+over which chain is legitimate; any coalition that attacks the rules destroys the
+value it would need to profit from the attack. The attack is self-defeating. The
+parties with the most to lose from capture---the holders of the majority of the
+network's value---are therefore not its captors but its immune system: they have the
+strongest motivation to neutralise a captor and the decisive means to do so, because
+they can exit (sell, or fork to a chain that excludes the attacker) and value follows
+the legitimate chain rather than the attacker's. Property~8 (Exit) is doing the work,
+at the economic rather than the protocol layer. (Concentration of hash power can
+still enable bounded, detectable harms short of capture---transaction censorship, a
+short reorganisation---but even these are disciplined by the same response: a pool
+that misbehaves bleeds the hash power it rents, because the miners who supply it
+answer to the same value signal.)
+
+This is the elegant part, and the part a surface reading misses. Bitcoin's capture
+resistance is not a single engineered barrier but a multi-layered equilibrium: an
+engineered cost-of-capture at the protocol layer, and above it an emergent immune
+response in which the \emph{concentration of value}, far from being the vulnerability,
+is the \emph{source} of resistance, because the concentrated holders are precisely
+those most motivated to defeat a captor. The 2017 dispute over block size is the
+demonstration: a coalition of the most powerful concentrated parties---large
+businesses and a mining majority---attempted a rule change, and the economic users
+and nodes rejected it; the change was abandoned. Every surface metric of
+concentration was present, and capture still failed. Concentration and capture are
+different things, and conflating them is the error this paper most wants to avoid.
+
+\subsection{Capture-Resistant Governance: Ostrom and Recallable Mandate}
+
+Read structurally rather than normatively, Ostrom's~\cite{ostrom1990}
+empirically-derived design principles for long-enduring commons are a catalogue of
+capture-resistance mechanisms. Graduated sanctions and accountable monitoring raise
+the cost of defecting from or seizing the collective-choice arrangement
+(Property~5). Nested enterprises decompose authority so that no single tier holds
+decisive control, keeping decisions polycentric (Property~6 at each tier). The
+principle that appropriators may modify their own operating rules keeps mandate
+local and revocable rather than imposed and permanent (Property~6). And clearly
+defined boundaries, paired with the practical ability of appropriators to abandon a
+failing arrangement, supply a form of Exit (Property~8). Ostrom did not derive these
+from a theory of capture; she observed which commons endured for centuries and which
+collapsed, and the enduring ones independently exhibit the capture-resistance
+properties. That is the convergence this paper claims.
+
+The sharpest instantiation of Mandate~TTL (Property~6) is found in
+\emph{recallable-mandate confederalism}, of which the contemporary governance of
+Rojava (the Autonomous Administration of North and East
+Syria)~\cite{ocalan2011,knapp2016} is the most fully realised modern instance.
+Authority is delegated upward through councils under \emph{continuous recall}:
+a delegate's mandate may be withdrawn at any time by those who granted it, and
+binding decisions originate in local assemblies rather than descending from a
+centre. Structurally, this is Mandate~TTL taken to its limit---authority that is
+not merely term-limited but revocable at every instant---and it is paired with
+strong Polycentricity (decisions default to the most local competent assembly) and
+a deliberately broad Moral Circle (the boundary principle is inclusion by
+participation, not by prior status). We analyse this structure for its
+capture-resistance content alone. As stated in the introduction's scope of the
+claim, the structural claim is orthogonal to the political programme in which the
+structure is embedded: that continuously revocable mandate raises the cost of durable capture is
+a claim about \emph{authority dynamics}, not an endorsement of a revolutionary
+movement, and it survives substitution by any far less charged arrangement that
+makes mandate continuously revocable---frequent recall elections, mandatory
+rotation, sunset clauses on delegated powers. We name Rojava not for its politics
+but because it is where the structure is implemented most completely, and a
+cross-domain argument that quietly omitted its clearest governance instance to
+avoid discomfort would be failing its own method.
+
+\subsection{Capture-Resistant Computing: the Companion Substrate}
+
+The companion substrate instantiates the properties partially and unevenly, and
+honesty requires saying which.
+
+It provides \emph{Exit} structurally (Property~8): a federation of self-certifying
+sovereign sub-domains, each able to depart unilaterally---carrying its own state and
+identity---without the permission of any other party, because no issuing authority
+exists whose consent departure would require. It provides \emph{Epistemic Symmetry}
+(Property~7) through data locality---state is held by the participant that produces
+it and replicated only as the soft-state its consumers need---and through
+self-certified identity, so that no party holds an issuing key conferring a
+privileged trust position. It provides a form of \emph{Mandate~TTL} (Property~6)
+through evaporating soft-state and management-as-intent: an operator instruction is
+expressed as an intent that must be continuously re-asserted to persist and that any
+node may locally override, so no operator mandate becomes permanent.
+
+Its \emph{Capture Resistance} (Property~5) is the least developed, and the
+substrate's posture here is \emph{detection rather than prevention}. It has no
+engineered cost-of-capture analogous to proof-of-work; instead it makes capture
+\emph{visible}. A hash-chained, signed transparency log records changes to the
+trust set, so that a captor cannot quietly rewrite who is trusted; namespace-
+ownership tripwires flag writes that cross authority boundaries; and an ongoing
+diagnosability effort aims to make emergent, fleet-level behaviour---including the
+formation of an internal coordination class---legible to a non-privileged observer.
+Detection is structurally weaker than prevention: it does not stop capture, it
+denies the captor the ability to act \emph{quietly}, raising the cost of capture by
+the cost of being seen. Whether, for a computing substrate, detection-plus-exit is
+an adequate substitute for an engineered $C_{\text{capture}}$---or whether such
+substrates need a prevention mechanism of their own---is the open question carried
+into \S\ref{sec:hard} and \S\ref{sec:open}.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{The Hard Question: Prevention or Relocation?}
+\label{sec:hard}
+
+We state the difficulty the programme cannot avoid:
+
+\begin{quote}
+\emph{Does coordinator-freeness prevent capture, or merely relocate the captor to a
+place that is harder to see?}
+\end{quote}
+
+Bitcoin is the test case that sharpens the question---but not in the direction a
+surface reading suggests. As \S\ref{sec:domains} argued, Bitcoin's surface
+concentration does not constitute capture: its value layer resists seizure because
+the holders are motivated to resist and able to exit, so a would-be captor inherits
+a worthless network. Bitcoin is therefore evidence that capture resistance can be
+\emph{emergent and robust}, not merely engineered---encouraging for the programme
+rather than damning. The captor did not relocate to an unbounded emergent class; it
+was defeated by an emergent immune response the surface metrics do not show.
+
+That result sharpens a harder and more specific question for a \emph{computing}
+substrate, because Bitcoin's immune response rests on a feature such a substrate may
+lack: an asset whose value every participant is individually motivated to protect.
+In Bitcoin, everyone with holdings has skin in the game---an attack on the rules is
+an attack on their wealth, and self-interest aligns the broad majority against any
+captor automatically. A substrate that coordinates AI agents has no equivalent stake
+by default: its participants run workloads, but they do not necessarily hold a
+fungible, exit-portable claim on the substrate's continued integrity whose value
+would collapse if the substrate were captured. The disciplining value signal that
+makes Bitcoin's exit decisive may simply be absent.
+
+The honest question is therefore not \emph{whether} coordinator-freeness can prevent
+capture in the abstract---Bitcoin shows the properties can deliver it---but whether a
+computing substrate can \emph{manufacture the alignment} that makes capture
+resistance emergent, or must instead rely on the weaker mechanisms available to it:
+detection without a value signal, and exit without an asset whose flight punishes the
+captor. The load in resisting internal capture still falls on Properties~6--8---a
+continuously re-earned mandate (6) denies a class a durable position, epistemic
+symmetry (7) denies it an informational edge, and exit (8) caps the rent it can
+extract---but Bitcoin shows these are strongest when an aligned value signal stands
+behind them. Whether a substrate can supply that signal without an internal asset,
+or resist a coordination class without it, is, we believe, the central open problem
+of coordinator-free design, and the one on which the normative significance of the
+entire programme rests.
+
+We apply the same scrutiny to our own substrate. A coordinator-free computing
+substrate is not immune: its maintainers set defaults, its largest deployments
+shape its emergent norms, and the operators of its federation seams occupy
+structurally privileged positions. We claim only that it makes these positions
+\emph{visible and contestable}---through transparency, mandate-TTL, and exit---not
+that it abolishes them. A research programme that claimed to have abolished internal
+capture would be making exactly the totalising error its own thesis warns against.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Open Questions}
+\label{sec:open}
+
+\begin{enumerate}
+\item \emph{The formal status of capture resistance.} As with the companion paper's
+  theorem, Properties 5--8 are argued informally to preserve cross-domain
+  generality. Whether $C_{\text{capture}}$ and the surplus-claim regime admit a
+  cross-domain quantification on a common scale is open.
+
+\item \emph{The cost/correctness tension.} Capture resistance wants binding decisions
+  to be costly to control; epistemic correctness wants coordination to be cheap.
+  Whether a single substrate can satisfy both, and where the frontier lies, is open.
+
+\item \emph{The sufficiency of Properties 6--8 against internal capture.} The hard
+  question of \S\ref{sec:hard}: can mandate-TTL, epistemic symmetry, and exit bound
+  an emergent coordination class, or does internal capture require a mechanism not
+  yet identified?
+
+\item \emph{An engineered $C_{\text{capture}}$ for computing.} Whether a
+  coordinator-free computing substrate needs an explicit cost-of-capture analogous
+  to proof-of-work, or whether detection-plus-exit suffices, is open and bears
+  directly on the companion substrate's design.
+
+\item \emph{The normative bridge.} This paper keeps the structural claim separable
+  from the normative one. A complete treatment must eventually connect them: to say
+  which \emph{distributions} of power a capture-resistant substrate tends to
+  produce, and whether structural capture resistance reliably yields outcomes a
+  normative theory would endorse---or merely makes capture harder without making it
+  rare.
+\end{enumerate}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\bibliography{references}
+
+\end{document}
