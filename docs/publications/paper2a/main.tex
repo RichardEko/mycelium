@@ -18,6 +18,7 @@
 \usepackage{booktabs}
 \usepackage{array}
 \usepackage{tabularx}
+\usepackage{float}
 
 % ── Lists ─────────────────────────────────────────────────────────────────────
 \usepackage{enumitem}
@@ -97,8 +98,10 @@ its Discussion, it observes that the failure modes parallel Hayek's 1945
 argument against central economic planning and Beinhocker's empirical analysis
 of hierarchical organisations, but qualifies the observation as ``suggestive
 rather than exact---economies, biological systems, and distributed software are
-not identical.'' This paper argues that the parallel is, in fact, structurally
-exact, and supplies the formal framework that makes it so. We introduce
+not identical.'' This paper argues that the parallel is structurally
+\emph{homologous}---the domains instantiate a common coordination problem under
+specified assumptions---and supplies the formal framework that makes the
+correspondence precise. We introduce
 \emph{Heterogeneous Local Knowledge Systems} (HLKS) as the common abstraction
 underlying four independent intellectual traditions: economic epistemics
 (Hayek), polycentric commons governance (Ostrom), organisational adaptation
@@ -106,14 +109,15 @@ underlying four independent intellectual traditions: economic epistemics
 state the \emph{Coordinator Trap Theorem} informally and argue that for any
 HLKS satisfying mild heterogeneity and state-change conditions, any coordinator
 mechanism accumulates epistemic error proportional to scale and heterogeneity,
-while a locally-resolved signal mechanism does not. We then identify four
+while locally evaluated mechanisms reduce that error and self-resolved \emph{pull}
+eliminates the specific prediction variable in which it is expressed. We then identify four
 substrate correctness properties that follow from the theorem and show that
 they are independently derived---in different vocabularies, with different
 formal apparatus, across more than half a century---in each of the four
-traditions. We extend the MCB/P/S evaluative framework (Moral Circle Breadth,
-Polycentricity, Surplus-Claim Regime) from monetary system design to substrate
-design generally, showing that it captures the same structural distinctions
-across domains. We distinguish two grades of local resolution---locally evaluated
+traditions. A short note relates the substrate's
+distributive dimension to the MCB/P/S framework~\cite{nicholson2025}, deferring its
+development to a companion paper on capture. We distinguish two grades of local
+resolution---locally evaluated
 \emph{prediction}, which shrinks the coordinator's epistemic error, and
 self-resolved \emph{pull}, which eliminates the variable in which that error
 is expressed: a worker that claims work when ready makes the only promise a
@@ -123,7 +127,7 @@ a measurement on a single substrate in which broker-mediated decisions
 exhibit mean latency two to three orders of magnitude higher than locally
 evaluated ones (the within-paradigm gradient the theorem predicts), and a
 constructive pull instantiation---a tuple-space layer built entirely from
-the substrate's public primitives---whose test suite verifies exactly-once
+the substrate's public primitives---whose test suite verifies exactly-once-effect
 distribution with no participant holding a view of any other's state, and
 survival of the rendezvous point itself through emergent, coordinator-free
 failover. We close with an
@@ -152,15 +156,19 @@ qualifies: ``The parallel to the coordinator trap is suggestive rather than
 exact---economies, biological systems, and distributed software are not
 identical.''
 
-This paper argues that the parallel is, in fact, structurally exact. The
-qualification in~\cite{nicholson2026} is correct as an honest statement of
-what that paper had established---a single-domain architectural argument with
-two cross-domain observations in its Discussion---but understates what is
-available with the right abstraction. With an appropriate formal model of
-the underlying problem, the four traditions can be shown to be solving
-\emph{the same problem}, not merely \emph{analogous problems}; their
-prescriptions converge because the structure of the problem admits only one
-class of correct solution.
+This paper argues that the parallel is structurally \emph{homologous}: under an
+appropriate formal abstraction, the four traditions are addressing a common
+coordination problem, not merely analogous problems, and their prescriptions
+converge for that reason. We do not claim a proof of formal identity---``exact''
+would overstate what an informal cross-domain argument can establish
+(\S\ref{sec:scope})---but the qualification in~\cite{nicholson2026} (``suggestive
+rather than exact'') can be \emph{sharpened}: the resemblance is not loose analogy
+but a shared problem-class under specified HLKS assumptions, within which one class
+of solution is epistemically privileged. The qualification in~\cite{nicholson2026}
+is correct as an honest statement of what that paper had established---a
+single-domain architectural argument with two cross-domain observations in its
+Discussion---and the abstraction below makes the correspondence precise enough to
+say in what respect, and under what conditions, it holds.
 
 The contributions of this paper are:
 
@@ -169,24 +177,26 @@ The contributions of this paper are:
   (HLKS)---common to economic, governance, organisational, and computing
   domains, expressed as a five-component tuple capturing the agents, their
   heterogeneous local knowledge, the rate at which that knowledge changes, the
-  communication latency between agents, and the optimal decision function the
-  system is attempting to approximate.
+  communication latency between agents, and a correctness relation specifying when
+  an action is adequate relative to the current joint local state (rather than a
+  planner-computable optimum, which several domains deny exists).
 
 \item An informal statement of the \emph{Coordinator Trap Theorem}, with a
   careful argument that for any HLKS satisfying mild heterogeneity and
   state-change conditions, any coordinator-based mechanism accumulates
   epistemic error that grows with scale, heterogeneity, and the rate of
-  state change, while a locally-resolved signal mechanism does not.
+  state change, while locally evaluated mechanisms reduce it and self-resolved pull
+  eliminates the prediction variable in which it is expressed.
 
 \item Four independent domain instantiations of the HLKS framework, together
   with a structural identity table that makes the cross-domain correspondence
   precise rather than analogical.
 
-\item Generalisation of the MCB/P/S evaluative framework (Moral Circle
-  Breadth, Polycentricity, Surplus-Claim Regime), originally developed for
-  monetary system design, to substrate design generally---and a demonstration
-  that the three axes capture exactly the structural distinctions the
-  Coordinator Trap Theorem implies a correct substrate must exhibit.
+\item A short note relating the substrate's \emph{distributive} dimension---who is
+  first-class, how dispersed decision rights are, who captures coordination
+  surplus---to the MCB/P/S framework~\cite{nicholson2025}, with the full normative
+  and capture-resistance treatment deferred to a companion paper. This paper's claim
+  is confined to \emph{epistemic} correctness.
 
 \item Statement of four substrate correctness properties that follow from
   the framework and appear in each of the four traditions: local signal
@@ -215,9 +225,44 @@ are universally wrong---there are domains, notably those with homogeneous
 agents and low state-change rates, where the HLKS assumptions fail and
 traditional consensus is well-suited. The implication is that for any system
 satisfying the HLKS assumptions, the coordinator-free substrate is the
-structurally correct architecture, and the convergent prescriptions of the
-four traditions are evidence supporting this claim rather than independent
-coincidences.
+epistemically privileged architecture for the operations whose correctness depends
+on current heterogeneous local state, and the convergent prescriptions of the four
+traditions are evidence supporting this claim rather than independent coincidences.
+
+\subsection{Scope of the Claim}
+\label{sec:scope}
+
+Because the argument spans four traditions, it is worth stating precisely what is,
+and is not, being claimed. We claim that four traditions, reasoning independently
+from different premises and with different formal apparatus, converge on the same
+\emph{structural} constraint on substrate design. The evidence is the
+\emph{independence} of the derivations, not the resemblance of the domains:
+convergent derivation, as in convergent evolution, is stronger than analogy
+precisely because nothing is transferred between the cases. That the same
+structure recurs in domains as different as price formation, commons governance,
+organisational adaptation, and distributed agent coordination is not an
+embarrassment to be minimised but the phenomenon itself---the signature of a
+complex adaptive system, in which the organising constraint lies in the structure
+of the problem, not the substance of the domain.
+
+We do not claim that the domains are identical---they are not, and the companion
+paper's qualification on that point stands. We do not claim that any domain's
+specific \emph{mechanisms} carry across: the substrate of the computing domain
+implements neither a price mechanism nor a nested governance rule; it exhibits the
+same coordinator-free \emph{property} that economics and governance independently
+identify as correct. The pattern recurs; the mechanisms do not transfer. Nor does
+the structural argument depend on endorsing the normative commitments of any source
+framework---the ethical content of Moral Circle Breadth, for instance, is
+orthogonal to whether that axis marks a structural distinction between substrate
+designs, and we adopt these frameworks for their structural content alone. Finally,
+the engineering validity of the computing instantiation (\S\ref{sec:empirical}, and
+the companion paper) is established within the computing domain on its own terms; it
+does not depend on a reader accepting the cross-domain convergence thesis argued
+here.
+
+We state the central result as an informal theorem argued with care
+(\S\ref{sec:formalstatus}), not as a proved one; its formal status in each domain is
+discussed there and revisited among the open questions (\S\ref{sec:open}).
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Heterogeneous Local Knowledge Systems}
@@ -236,7 +281,7 @@ across agents and not directly accessible to any single point.
 
 \begin{definition}[Heterogeneous Local Knowledge System]
 A \emph{Heterogeneous Local Knowledge System} (HLKS) is a tuple
-$(A, K, \delta, \lambda, D)$ where:
+$(A, K, \delta, \lambda, R)$ where:
 \begin{itemize}
 \item $A = \{a_1, \ldots, a_n\}$ is a finite set of autonomous agents.
 \item $K = \{K_i : T \to S_i\}_{i \in A}$ is a family of local knowledge
@@ -251,24 +296,28 @@ $(A, K, \delta, \lambda, D)$ where:
   communication latencies---the minimum time for information held by agent
   $i$ to become observable by agent $j$ (or by a coordinator $C$, if one is
   present).
-\item $D : \prod_i S_i \to \mathit{Actions}$ is the \emph{optimal decision
-  function}: the mapping from the aggregate current state of all agents to
-  the action that best serves the system's objectives. $D$ requires
-  \emph{current} state; stale inputs degrade output.
+\item $R \subseteq \bigl(\prod_i S_i\bigr) \times \mathit{Actions}$ is a
+  \emph{correctness relation}: it specifies when an action is adequate
+  \emph{relative to the current joint local state}. We deliberately do not posit an
+  \emph{optimal decision function} computable from a global summary---in several
+  domains, notably economics, no such function is available to any central party,
+  which is part of the problem rather than an assumption we may help ourselves to.
+  $R$ encodes only that, for the operations at issue, correctness depends on current
+  local states and is not recoverable from a globally available sufficient statistic.
 \end{itemize}
 \end{definition}
 
 The definition is deliberately spare. We do not specify the structure of the
-state spaces beyond their heterogeneity, the precise form of $D$ beyond its
-dependence on aggregate current state, or the topology of the communication
+state spaces beyond their heterogeneity, the precise form of $R$ beyond its
+dependence on current local states, or the topology of the communication
 network beyond the existence of pairwise latencies. The claim is that this
 minimal structure suffices to derive the Coordinator Trap, and that it
 correctly characterises the common structure across the four target domains.
 
 \subsection{The Coordinator's Epistemic Problem}
 
-A coordinator $C$ attempting to compute $D(t)$ from a position outside the
-agent population can only observe estimates $\hat{K}_i(t) = K_i(t - \lambda_{iC})$:
+A coordinator $C$ attempting to choose an action satisfying $R$ from a position
+outside the agent population can only observe estimates $\hat{K}_i(t) = K_i(t - \lambda_{iC})$:
 that is, the state of agent $i$ as it was at the moment its information was
 emitted toward the coordinator, not the state at time $t$. The coordinator's
 estimate of the true aggregate state is therefore always stale by at least
@@ -280,27 +329,37 @@ implementation regardless of available compute.
 \subsection{The Coordinator Trap Theorem}
 
 \begin{informaltheorem}[The Coordinator Trap]\label{thm:coordtrap}
-For any HLKS where
+Consider an HLKS in which
 \begin{enumerate}[label=(\roman*)]
-\item local states are heterogeneous across agents (the state spaces $S_i$
-  and $S_j$ are not isomorphic, and the values $K_i(t)$ and $K_j(t)$ are not
-  derivable from one another),
+\item local states are heterogeneous across agents---differing in structure,
+  content, dynamics, or decision relevance---and not fully derivable from one another
+  or from a common global summary (it is \emph{not} required that the state spaces
+  $S_i$ and $S_j$ be non-isomorphic: agents sharing a schema but differing materially
+  in values, capabilities, or histories still satisfy this),
 \item state-change rates $\delta_i$ are bounded away from zero, and
-\item the optimal decision function $D$ requires current aggregate state,
+\item a correct decision depends on the agents' current local states in a way not
+  recoverable from any globally available summary---no sufficient statistic
+  substitutes for the current joint state, and the dependence is not separable into
+  independent per-agent terms.
 \end{enumerate}
-the following hold:
+Then, for a coordinator acting on an estimate $\hat{K}_i(t)$ of each agent's state
+formed at communication latency $\lambda_{iC} > 0$:
 \begin{enumerate}
-\item The coordinator's per-agent epistemic error
-  $\varepsilon_i(t) = \mathrm{dist}(K_i(t), \hat{K}_i(t))$ is strictly positive
-  for all $t$ and all $i$, where $\mathrm{dist}$ is any appropriate distance
-  metric on $S_i$.
-\item The expected aggregate error $\mathbb{E}\!\left[\sum_i \varepsilon_i(t)\right]$
-  grows monotonically with the number of agents $n$, with a measure $H$ of
-  the heterogeneity of the state spaces, and with the mean state-change rate
-  $\bar{\delta}$.
-\item No increase in coordinator computational capacity can reduce
-  $\varepsilon_i$ below the bound imposed by $\lambda_{iC}$. The constraint
-  is epistemic, not computational: faster computers do not help.
+\item The per-agent epistemic error
+  $\varepsilon_i(t) = \mathrm{dist}(K_i(t), \hat{K}_i(t))$ is positive \emph{in
+  expectation}, $\mathbb{E}[\varepsilon_i(t)] > 0$, whenever $K_i$ varies over the
+  interval $\lambda_{iC}$. (It may be momentarily zero---when a state happens not to
+  change, or changes and returns---so the claim is on expected, not strict
+  pointwise, error.)
+\item Under~(iii), the expected aggregate error
+  $\mathbb{E}\!\left[\sum_i \varepsilon_i(t)\right]$ is non-decreasing in the number
+  of \emph{relevant} agents $n$ (those the decision depends on), in a measure $H$ of
+  state-space heterogeneity, and in the mean state-change rate $\bar{\delta}$.
+  Without~(iii)---a separable decision, or one admitting a sufficient statistic, or
+  agents the decision ignores---this need not hold.
+\item No increase in coordinator computational capacity reduces
+  $\mathbb{E}[\varepsilon_i]$ below the bound imposed by $\lambda_{iC}$. The
+  constraint is epistemic, not computational: faster computers do not help.
 \end{enumerate}
 \end{informaltheorem}
 
@@ -311,13 +370,26 @@ We state Theorem~\ref{thm:coordtrap} informally and argue carefully. A formal
 proof would require commitment to: a specific model of the communication
 medium and its latency distribution; a specific metric on local state spaces;
 a specific characterisation of ``heterogeneity'' that admits a quantitative
-measure $H$; and a specific decision criterion under which the optimal
-function $D$ degrades with stale inputs. Each commitment is sensible for any
+measure $H$ (which a domain-specific version would instantiate differently---
+type and capability variance in compute, preference, resource and context
+diversity in economics, institutional and contextual diversity in governance,
+task, customer and technical variance in organisations); and a specific decision
+criterion under which a correct action degrades with stale inputs. Each commitment is sensible for any
 single domain but defeats the cross-domain generality we are attempting to
 establish. In economics, the natural state metric is preference-revealed
 willingness to pay; in governance, it is institutional fit; in distributed
 computing, it is bytewise distance in a serialised state space. A theorem
 proved in one of these formalisms does not transfer to the others.
+
+A further subtlety, sharpest in economics, is that the theorem must not assume a
+planner-\emph{computable} optimal decision function: Hayek's argument is precisely
+that no such function is available to a central planner in the first place. We
+therefore state condition~(iii) without it---requiring only that a \emph{correct}
+action depend on current local states not recoverable from any global summary, which
+is weaker than positing a computable global optimum and is what each domain actually
+exhibits. The earlier-draft formulation in terms of ``the optimal decision function
+$D$'' conceded too much; the conditional form is both safer and closer to the
+traditions' own claims.
 
 We therefore choose to argue the theorem informally with sufficient care that
 the cross-domain claim is supported, and to leave formal proof in each
@@ -338,10 +410,10 @@ from it.
 \subsection{The Locally-Resolved Alternative: Two Grades of Locality}
 \label{sec:twogrades}
 
-If the coordinator cannot compute $D(t)$ correctly, the natural question is
-whether any mechanism can. We claim that a locally-resolved signal mechanism
-avoids the coordinator's epistemic error by construction. Rather than
-aggregating state at a central point and computing $D$ globally, each agent
+If the coordinator cannot reliably choose an action satisfying $R$, the natural
+question is whether any mechanism can. We claim that a locally-resolved signal
+mechanism avoids the coordinator's epistemic error by construction. Rather than
+aggregating state at a central point and choosing globally, each agent
 applies a local filter to the signals it receives and takes an action based on
 its own current state $K_i(t)$. No agent needs to know the global state; each
 needs only its own state and the signals propagating through its local
@@ -373,8 +445,8 @@ description admits:
 \end{enumerate}
 
 The cost of locality is precision: a locally-resolved mechanism cannot
-guarantee that the action taken is globally optimal in the sense $D$ would
-prescribe if it had access to current aggregate state. The gain is correctness
+guarantee that the action taken is the one an observer with access to current
+aggregate state would prescribe. The gain is correctness
 at scale: the action each agent takes is based on information that is current
 and accurate, not stale. For heterogeneous systems where the globally optimal
 decision is structurally unknowable in finite latency, the locally-resolved
@@ -383,9 +455,9 @@ information about the aggregate state. And of its two grades, only the second
 realises the claim fully: grade (1) reduces the epistemic error; grade (2)
 eliminates the variable in which the error is expressed.
 
-This is the key inversion. Coordinator-based mechanisms optimise against a
-specification ($D$) that they cannot evaluate correctly. Locally-resolved
-mechanisms satisfy a weaker specification ($D$ on local state) that they can
+This is the key inversion. Coordinator-based mechanisms act against a correctness
+specification ($R$ over the current joint state) they cannot evaluate. Locally-resolved
+mechanisms satisfy a weaker specification ($R$ restricted to local state) they can
 evaluate exactly. Under the HLKS conditions, the second is the strongest
 specification that any architecture can correctly satisfy---and the pull
 grade is its exact realisation, not an approximation of it.
@@ -504,9 +576,14 @@ near-optimal allocation through the aggregation of local responses.
 The structural correspondence to the coordinator trap of~\cite{nicholson2026}
 is not loose. Hayek's central planner is, in the HLKS framework, a coordinator
 $C$ that observes stale estimates $\hat{K}_i$ of each market participant's
-local knowledge and attempts to compute $D$ from those estimates. The planner's
-epistemic error is exactly the $\varepsilon_i$ of Theorem~\ref{thm:coordtrap}.
-The price mechanism is exactly the locally-resolved alternative.
+local knowledge and attempts to act correctly (to satisfy $R$) from those estimates. The planner's
+epistemic error is the $\varepsilon_i$ of Theorem~\ref{thm:coordtrap}; the price
+mechanism is the locally-resolved alternative. The prescription is conditional, not
+universal: where the relevant knowledge is not purely local---externalities, public
+goods, monopoly power, incomplete markets---prices alone underdetermine the correct
+action and require supplementary coordination. The HLKS claim is scoped to operations
+whose correctness turns on dispersed \emph{current local} state, not to all economic
+action.
 
 \subsection{Governance: Ostrom 1990}
 
@@ -532,7 +609,12 @@ correctly designed governance substrate exhibits. We argue in
 Section~\ref{sec:properties} that these eight principles correspond
 structurally to the four substrate correctness properties derivable from
 Theorem~\ref{thm:coordtrap}: they are not a separate finding but the same
-finding expressed in governance vocabulary.
+finding expressed in governance vocabulary. The prescription is not that local
+governance is automatically just or adaptive: locally-emerged institutions can
+entrench exclusion, elite capture, parochialism, or coercion. Ostrom's design
+principles are themselves the conditions under which local governance \emph{succeeds};
+absent them, polycentricity secures the epistemic fit the framework concerns, not a
+good outcome as such.
 
 \subsection{Organisations: Beinhocker 2006}
 
@@ -557,7 +639,12 @@ empirics: it provides a domain (organisations) where the HLKS structure is
 sharply visible, and an empirical record (corporate performance under
 different organisational structures) that supports the structural claim
 without requiring formal proof. The cross-domain claim is reinforced rather
-than weakened by the variation in formal apparatus across the four traditions.
+than weakened by the variation in formal apparatus across the four traditions. High
+autonomy is not always superior: tasks that are safety-critical, compliance-bound, or
+that require synchronised capital allocation or crisis response can need central
+coordination. Beinhocker's claim, and ours, concerns the operations whose correctness
+depends on fast-changing local knowledge, not a blanket preference for
+decentralisation.
 
 \subsection{Distributed Computing: Holland 2012 and Nicholson 2026}
 
@@ -584,7 +671,12 @@ from the coordinator assumption. It describes a working implementation
 (Mycelium) of the locally-resolved alternative as an embeddable library. The
 implementation is the empirical anchor of the HLKS framework in the computing
 domain: a working system, publicly available, with documented test coverage
-across the structural properties.
+across the structural properties. Coordinators remain appropriate in computing where
+the HLKS conditions fail---homogeneous nodes, bounded low-variance state, or tasks
+requiring strong consistency---a case the homogenisation corollary
+(\S\ref{sec:homogenisation}) makes precise. The claim is not that coordination is
+never appropriate, but that it is mis-applied to heterogeneous, fast-changing,
+locally-held state.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{The Structural Identity}
@@ -596,7 +688,7 @@ on different agent populations. Table~\ref{tab:identity} makes this explicit:
 each row is an HLKS component, each column a domain, and each cell the
 specific form the component takes in that domain.
 
-\begin{table}[t]
+\begin{table}[H]
 \centering
 \small
 \begin{tabularx}{\textwidth}{lXXXX}
@@ -670,93 +762,49 @@ commitment.
 The strength of the cross-domain claim rests on this identity. We are not
 arguing by analogy that coordinator-free designs are good for AI agent fleets
 because they are good for market economies. We are arguing that AI agent
-fleets and market economies are instances of the same formal problem
-(heterogeneous local knowledge under non-zero state-change rates), and that
-both admit only the same class of correct solution.
+fleets and market economies are instances of a common coordination problem
+(heterogeneous local knowledge under non-zero state-change rates), within which
+one class of solution---local resolution---is epistemically privileged. This is
+correctness \emph{relative to local action}, not a claim of global optimality or
+of uniqueness in every respect; \S\ref{sec:scope} and \S\ref{sec:formalstatus}
+bound it.
 
 % ─────────────────────────────────────────────────────────────────────────────
-\section{The MCB/P/S Framework, Generalised}
+\section{Beyond Epistemic Correctness: a Note on the Distributive Axes}
 \label{sec:mcbps}
 
-The original MCB/P/S framework was developed in the monetary system design
-literature as a three-axis evaluation of monetary architectures: Moral Circle
-Breadth, Polycentricity, and Surplus-Claim Regime. The same three axes, we
-argue, capture the structural distinctions that the Coordinator Trap Theorem
-implies a correct substrate must exhibit, and they do so across all four
-HLKS domains. We summarise the generalisation here; a more detailed treatment
-is in preparation for the companion paper on capture dynamics.
+The HLKS argument so far concerns \emph{epistemic} correctness: which substrate
+coordinates heterogeneous local knowledge without acting on stale central estimates.
+A substrate also has a \emph{distributive} dimension---whose knowledge is treated as
+first-class, how dispersed decision rights are, and who captures the coordination
+surplus---which this paper deliberately does not evaluate. That dimension is the
+subject of the MCB/P/S framework (Moral Circle Breadth, Polycentricity,
+Surplus-Claim Regime), introduced for monetary architectures in~\cite{nicholson2025}
+and there given its scoring method and its careful structural tendency
+$P \rightsquigarrow S$ (low polycentricity \emph{pressures} concentrated
+surplus-claim---a tendency, not a law).
 
-\subsection{The Three Axes Generalised}
-
-\textbf{Moral Circle Breadth (MCB)} originally asks who receives protection
-and consideration in the monetary system---whose economic interests are
-encoded in the currency design. Generalised: which agents are first-class
-participants in the substrate? Whose local knowledge is treated as valid
-input to system decisions, versus which agents are subordinate workers
-awaiting instructions from a coordinator? In a gossip substrate, all nodes
-are first-class; capabilities are self-advertised; group membership is
-self-selected. In a broker-based substrate, agents are workers; all decisions
-pass through the broker; local knowledge is reported up, not acted on locally.
-
-\textbf{Polycentricity (P)} originally asks how dispersed monetary
-decision-making powers are. Generalised: the fraction of coordination
-decisions made at the local level versus those requiring coordinator
-intervention; whether the substrate enables autonomous local action or routes
-all decisions through a central point. In the HLKS framework, P is high when
-the substrate respects the locally-resolved alternative for the operations
-that admit it, and low when the substrate routes operations through a
-coordinator whose epistemic error degrades the decision.
-
-\textbf{Surplus-Claim Regime (S)} originally asks who captures value after
-costs---whether the monetary mechanism extracts coordination rent or allows
-value to flow to participants. Generalised: whether the substrate mechanism
-captures coordination rent. Does the substrate's operation create a tollbooth
-through which value must flow---a broker that takes a transaction fee, an
-orchestrator that holds the routing decision, a central bank that earns
-seigniorage---or is the substrate zero-cost to pass through? In a gossip
-substrate, S is approximately zero rent: no entity controls routing or
-capability resolution. In a broker-based substrate, S is proportional to
-traffic volume: the broker operator captures coordination value at a rate
-that scales with use.
-
-\subsection{The MCB/S Link}
-
-MCB and S are not independent when a coordinator is present. When the
-coordinator is a first-class participant that routes all decisions, it
-inevitably captures coordination rent proportional to its centrality. The
-structural cause is the same across domains: centralised decision-making
-creates monopoly rents. Central banks earn seigniorage. Brokers earn
-transaction fees. Orchestrators earn compute allocation power. The MCB/S
-correlation is therefore structural rather than incidental: any architecture
-that narrows MCB by promoting an agent to coordinator status inflates S by
-the value of the coordination rent that promotion enables.
-
-The implication for the HLKS framework is that a coordinator-based substrate
-cannot simultaneously score well on MCB and on S. The two axes are
-constrained jointly: low MCB implies high S, high MCB implies low S.
-Polycentricity (P) is the structural remedy for both simultaneously, because
-locally-resolved coordination admits no tollbooth and treats all agents as
-first-class participants by construction.
-
-\subsection{The Framework as Scoring Sheet}
-
-A coordinator-based substrate scores: low MCB (agents are subordinate), low
-P (all decisions pass through coordinator), high S (coordinator operator
-captures coordination value). A correctly designed HLKS substrate scores: high
-MCB (all agents first-class), high P (locally resolved), zero S (no
-coordination rent). The same scoring rubric applies to central banks versus
-federated monetary systems, to external-coordinator governance versus
-polycentric governance, to hierarchical organisations versus high-autonomy
-adaptive ones, and to broker-based agent frameworks versus the gossip
-substrate of~\cite{nicholson2026}. The framework is not domain-specific.
+We record only the one structural connection that bears on the present argument:
+promoting an agent to coordinator both narrows the set of first-class participants
+and creates a control point through which coordination value can be extracted---a
+broker's transaction fee, an orchestrator's allocation power. Polycentricity is the
+structural remedy for both at once, since locally-resolved coordination admits no
+such control point by construction. We resist the stronger reading---that low
+participation \emph{implies} concentrated surplus-claim---because rent can also arise
+through control of implementation, hosting, protocol evolution, or identity even
+where no coordinator routes decisions. That is a capture problem in its own right,
+and its structural treatment belongs to the companion paper on capture dynamics, not
+here.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Four Properties of a Correct HLKS Substrate}
 \label{sec:properties}
 
-The Coordinator Trap Theorem implies four structural properties that a correct
-HLKS substrate must have. We state each as a property, note its derivation in
-the framework, and identify its independent appearance across all four
+The Coordinator Trap Theorem motivates four structural properties of a correct HLKS
+substrate. The first follows directly from the theorem; the others are design
+corollaries---strongly suggested by the framework rather than strictly entailed---and
+we are explicit below about which is which. We state each as a property, note its
+relation to the framework, and identify its independent appearance across all four
 domain instantiations.
 
 \subsection{Property 1: Local Signal Propagation}
@@ -892,9 +940,10 @@ and dissolved on completion.
 The four properties together specify the structural shape of a correct HLKS
 substrate. They are independent: a substrate can satisfy any subset, and the
 correctness implication runs through all four jointly rather than through any
-single one. They are also exhaustive in the sense that any HLKS substrate
-satisfying all four resolves the epistemic problem the Coordinator Trap
-Theorem identifies. They are not, however, sufficient for all the structural
+single one. They are \emph{sufficient at the level of this framework}---an HLKS
+substrate satisfying all four resolves the epistemic problem the Coordinator Trap
+Theorem identifies---though we do not claim exhaustiveness over a formal space of
+mechanisms, which the informal theorem cannot support. They are not, however, sufficient for all the structural
 correctness properties one might require in practice---\S\ref{sec:open}
 discusses the further properties that resistance to external and internal
 political capture would require, and identifies these as the subject of a
@@ -934,7 +983,7 @@ response to a specific problem, dissolved when the problem is resolved,
 whose absence does not break the substrate). Table~\ref{tab:designed-vs-emergent}
 makes the distinction precise.
 
-\begin{table}[t]
+\begin{table}[!ht]
 \centering
 \small
 \begin{tabularx}{\textwidth}{lXX}
@@ -989,15 +1038,15 @@ designed in. This is consistent with Promise Theory's autonomy principle and
 with Holland's CAS framework simultaneously; the apparent tension was a
 vocabulary difference, not a structural disagreement.
 
-\subsection{MCB/P/S Scoring of Emergent Consensus}
+\subsection{Emergent Consensus Is Not a Standing Coordinator}
 
-The emergent consensus structure scores differently on the MCB/P/S axes than
-a standing coordinator. Its MCB impact is bounded: it affects only the agents
-involved in the specific ballot and only for the duration of that ballot. Its
-P impact is temporary: the substrate returns to full polycentricity after the
-operation completes. Its S impact is zero rent: no standing entity captures
-coordination value from the consensus mechanism because no standing entity
-exists.
+The distinction that matters is temporal and structural: an emergent consensus
+structure is convened for a specific operation and dissolves, where a coordinator
+stands. It affects only the agents in the specific ballot and only for its duration;
+the substrate returns to full local resolution once the operation completes; and no
+\emph{standing} entity exists to become a permanent control point---though whether an
+emergent mechanism can be \emph{captured} while convened is a capture question, taken
+up in the companion paper, not an epistemic one.
 
 In political terms: the jury convened to decide a specific case and then
 disbanded is not a standing Leviathan. The town meeting called to resolve a
@@ -1008,7 +1057,7 @@ are consistent with the coordinator-free principle precisely because they
 are emergent, not imposed.
 
 % ─────────────────────────────────────────────────────────────────────────────
-\section{Empirical Validation in the Computing Domain}
+\section{Preliminary Evidence: a Computing-Domain Anchor}
 \label{sec:empirical}
 
 This section anchors the cross-domain framework in evidence from the
@@ -1016,8 +1065,8 @@ computing domain, in two parts matching the two grades of
 \S\ref{sec:twogrades}. First, a measurement: the staleness and latency
 gradient \emph{within} the prediction paradigm, comparing centrally
 evaluated against locally evaluated prediction on an identical substrate.
-Second---and this is the part that validates the framework's strongest
-claim---a constructive artifact: a pull-based work-distribution layer
+Second---and this is the part that most directly evidences the framework's
+strongest claim---a constructive artifact: a pull-based work-distribution layer
 (\texttt{mycelium-tuple-space}) in which the epistemic error term of
 Theorem~\ref{thm:coordtrap} is not reduced but structurally eliminated,
 together with the test suite that verifies its claimed properties on a
@@ -1106,7 +1155,7 @@ data point on the magnitude of the gap, not as a definitive measurement.
 Table~\ref{tab:empirical} reports the aggregate per-run metrics; the same
 data appears as Figure~\ref{fig:coordinator-latency}.
 
-\begin{table}[t]
+\begin{table}[!ht]
 \centering
 \small
 \begin{tabular}{lrrrrr}
@@ -1135,10 +1184,21 @@ the framework's prediction: a locally-resolved decision is a scan of the
 client's local KV, with cost linear in the number of entries scanned, and
 that cost stays in the tens of microseconds at the tested scale. Broker
 mode mean latency is between $1$\,ms and $11$\,ms — two to three orders
-of magnitude higher than gossip — and the p99 tail includes the $500$\,ms
-RPC timeout at $N{=}10$ and $N{=}40$. The substrate is not slow; the
-serialisation through a single coordinating agent is. This is the
-quantitative expression of the Coordinator Trap in one HLKS instantiation.
+of magnitude higher than gossip. The substrate is not slow; the serialisation
+through a single coordinating agent is. We read this as a concrete computing-domain
+instance of the latency gradient the Coordinator Trap predicts---not as a measurement
+of a general scaling law, which a single run per condition cannot support.
+
+The broker p99 tail at $N{=}10$ and $N{=}40$ is dominated by the $500$\,ms RPC
+timeout, and should be read as a separate \emph{failure tail} rather than ordinary
+routing latency: it reflects requests that did not complete within the timeout, and
+its magnitude is partly an artefact of the chosen timeout value and this broker
+implementation, not of the coordinator trap as such. A claim resting on the tail
+would be fragile; the result we rely on is the order-of-magnitude gap in \emph{mean}
+routing latency between the two paradigms on the same substrate. A fuller breakdown---
+timeout rate, median, and mean computed with and without timed-out calls, reported
+separately from the tail---would harden the evidence and is the natural next
+measurement; the present table does not yet decompose it.
 
 \textbf{Staleness.} The mean per-decision staleness — the magnitude by which
 the perceived load differs from the actual load — is small in both modes
@@ -1187,14 +1247,20 @@ building the space's availability out of the substrate's own emergent
 mechanisms, and its decision authority out of existence:
 
 \begin{itemize}
-\item \textbf{The space decides nothing.} It holds no model of any
-  worker's state, makes no allocation decision, and predicts nothing.
-  Allocation \emph{is} the workers' pull operations. The space is a
-  rendezvous point on the data path---a capacity concern, like any shared
-  medium---not an epistemic authority. The Coordinator Trap is a theorem
-  about the latter; conflating the two is a category mistake the
-  measurement vocabulary makes visible: no quantity in the system
-  corresponds to ``misroute.''
+\item \textbf{The space decides nothing---but three roles must be
+  separated.} \emph{Epistemic coordination} (predicting and assigning on stale
+  state) is what the Coordinator Trap is a theorem about, and the space does none of
+  it: it holds no model of any worker's state, makes no allocation decision, and
+  predicts nothing; allocation \emph{is} the workers' pull operations, and no
+  quantity in the system corresponds to ``misroute.'' \emph{State rendezvous}
+  (storing and transferring items) the space \emph{does} perform, so it is a capacity
+  concern and a failure domain like any shared medium---answered by the emergent
+  failover below, not waved away. \emph{Authority and capture} (who controls the
+  mechanism and can extract rent from it) is a third question the space does not
+  escape merely by deciding nothing: a rendezvous can still become a control point,
+  and that is a capture problem, treated in the companion paper, not an epistemic
+  one. Removing the epistemic coordinator does not by itself remove every
+  coordinator-shaped risk, and we do not claim it does.
 \item \textbf{Failure handling is the substrate's, not a protocol's.} The
   serving node advertises a capability with the standard evaporation
   convention; a standby mirrors items via replication and promotes itself
@@ -1222,11 +1288,16 @@ weight:
 
 \begin{enumerate}
 \item \textbf{Exactness without prediction.} Ten concurrent producers and
-  ten concurrent workers exchange 1{,}000 items with exactly-once
-  delivery, and a parked worker receives a direct hand-off when work
-  arrives---demonstrating that allocation precision under pull comes from
-  the claim operation itself, with no participant ever holding a view of
-  another's load.
+  ten concurrent workers exchange 1{,}000 items with \emph{exactly-once delivery
+  under concurrent, no-failure consumption}---each item claimed by a single
+  owner---and a parked worker receives a direct hand-off when work arrives.
+  Allocation precision under pull comes from the claim operation itself, with no
+  participant ever holding a view of another's load. Under worker failure the
+  guarantee is \emph{at-least-once} delivery (an expired claim re-queues the item)
+  with an idempotent \texttt{complete}, yielding the \emph{exactly-once effect}:
+  delivery may repeat, but the effect lands once. ``Exactly-once'' is used
+  throughout as shorthand for this effect, not for the (impossible) guarantee of
+  non-repeating delivery in an asynchronous system.
 \item \textbf{Survival of the rendezvous point.} With a primary and a
   mirroring standby, the primary is killed while three unacknowledged
   items are live: the standby detects the evaporation, promotes, and
@@ -1362,23 +1433,27 @@ all complex systems should be coordinator-free, or that consensus is never
 appropriate. We are arguing that for any system satisfying the HLKS
 conditions---heterogeneous agents, local knowledge, non-zero state-change
 rates---a coordinator-based substrate accumulates epistemic error
-proportional to scale, heterogeneity, and the rate of state change, while a
-locally-resolved signal substrate with minimal federation invariants and
-subsidiarity-respecting consensus does not. The four traditions
+proportional to scale, heterogeneity, and the rate of state change, while
+locally evaluated mechanisms reduce that error and self-resolved pull eliminates
+the specific prediction variable in which it is expressed. The four traditions
 (Hayek, Ostrom, Beinhocker, and the Holland/Nicholson computing line)
-converge on Properties 1--4 because they are independently solving the same
-HLKS problem in four different domain vocabularies. The convergence is the
-evidence; the HLKS framework is the explanation.
+converge on Properties 1--4 because they are independently addressing the same
+HLKS problem in four different domain vocabularies. The convergence is evidence
+for the shared structure; the HLKS framework is the proposed explanation. Neither
+closes the argument by itself---independent resemblance is strong evidence, not
+proof---but the abstraction makes precise \emph{in what respect} the domains
+correspond.
 
 The companion paper~\cite{nicholson2026} characterised the convergence as
 ``suggestive rather than exact.'' That qualification was honest given the
-single-domain scope of that paper. With the HLKS framework, the qualification
-can be removed: the parallel is exact, because the four domains are
-instantiations of the same formal problem. The structural identity of
-Table~\ref{tab:identity} is the precise statement of what ``exact'' means
-here: each component of the HLKS framework has a specific form in each
-domain, and the substrate properties follow from the framework in each
-domain identically.
+single-domain scope of that paper. With the HLKS framework it can be
+\emph{sharpened} rather than removed: the resemblance is structurally
+\emph{homologous}---the four domains instantiate a common coordination problem
+under the HLKS assumptions, and the structural identity of
+Table~\ref{tab:identity} states in what respect, mapping each HLKS component to its
+form in each domain. What we do not claim is formal identity in a single
+parametric model; \S\ref{sec:formalstatus} explains why such a model is neither
+available nor necessary for the homology claim.
 
 For substrate architects, the practical implication is direct. Before
 designing a substrate for any domain with heterogeneous agents and local
@@ -1386,8 +1461,9 @@ knowledge, the architect should: identify the HLKS components in the target
 domain; compute or estimate the coordinator's epistemic error at the target
 scale; design for local resolution wherever the operation admits it;
 minimise the federation invariants; apply the subsidiarity test before
-invoking consensus; and evaluate the resulting substrate on the MCB/P/S
-axes. The same set of design moves applies whether the substrate is a
+invoking consensus; and, where distributive or capture questions matter, evaluate
+the resulting substrate using a separate framework such as MCB/P/S. The same set of
+design moves applies whether the substrate is a
 monetary system, a governance institution, an organisational structure, or
 a distributed computing platform.
 
@@ -1408,7 +1484,7 @@ paper~\cite{nicholson2026}. The author thanks the contributors to the
 Mycelium project for sustained engagement with the substrate-level claims,
 and the readers who pushed back on the original ``suggestive rather than
 exact'' qualification with the observation that the parallel might be made
-exact with the right abstraction. That observation is the seed of the
+\emph{precise} with the right abstraction. That observation is the seed of the
 present paper.
 
 % ─────────────────────────────────────────────────────────────────────────────

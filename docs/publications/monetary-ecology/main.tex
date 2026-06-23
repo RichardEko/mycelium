@@ -1,0 +1,476 @@
+\documentclass[11pt]{article}
+
+% ── Encoding & fonts ──────────────────────────────────────────────────────────
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+
+% ── Page geometry ─────────────────────────────────────────────────────────────
+\usepackage[margin=1.25in]{geometry}
+
+% ── Mathematics ───────────────────────────────────────────────────────────────
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+
+% ── Tables ────────────────────────────────────────────────────────────────────
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{tabularx}
+
+% ── Lists ─────────────────────────────────────────────────────────────────────
+\usepackage{enumitem}
+\setlist{itemsep=2pt, topsep=4pt}
+
+% ── Hyperlinks ────────────────────────────────────────────────────────────────
+\usepackage[colorlinks=true, linkcolor=black, citecolor=black,
+            urlcolor=black, pdfborder={0 0 0}]{hyperref}
+\usepackage{url}
+
+% ── Bibliography ──────────────────────────────────────────────────────────────
+\usepackage[numbers, sort&compress]{natbib}
+\bibliographystyle{unsrtnat}
+
+% ── Paragraph spacing ─────────────────────────────────────────────────────────
+\usepackage{parskip}
+\setlength{\parskip}{6pt}
+
+% ── Section formatting ────────────────────────────────────────────────────────
+\usepackage{titlesec}
+\titleformat{\section}{\large\bfseries}{\thesection.}{0.6em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{0.6em}{}
+\titlespacing{\section}{0pt}{14pt}{6pt}
+\titlespacing{\subsection}{0pt}{10pt}{4pt}
+
+% ── Abstract ──────────────────────────────────────────────────────────────────
+\usepackage{abstract}
+\renewcommand{\abstractnamefont}{\normalfont\bfseries}
+\renewcommand{\abstracttextfont}{\normalfont\small}
+
+% ── Footnotes ─────────────────────────────────────────────────────────────────
+\usepackage[hang, flushmargin]{footmisc}
+
+% ── Theorem-like environments ─────────────────────────────────────────────────
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+
+% ── The information-rights diagnostic symbol ─────────────────────────────────
+\newcommand{\Iax}{\ensuremath{\hat{I}}}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\title{\textbf{Monetary Ecology:\\
+An MCB/P/S/\Iax{} Framework for Evaluating\\
+Monetary Architectures}}
+
+\author{%
+  Dr.\ Richard Nicholson\\[4pt]
+  \small Tathata Systems Ltd, United Kingdom\\
+  \small \href{mailto:tathatasystems@proton.me}{tathatasystems@proton.me}
+}
+
+\date{2026\\[4pt]
+\small \textbf{Working draft.} Formalised from the essay
+\emph{From Blood Money to Monetary Ecology} (2025).}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+A monetary architecture encodes, in its rules of issuance, custody, and redemption,
+three commitments that conventional metrics---stability, throughput, settlement
+finality---leave implicit: who is counted, who decides, and who claims the surplus.
+This paper presents a framework for making those commitments explicit and comparable.
+It scores a monetary architecture on three axes---\emph{Moral Circle Breadth} (MCB),
+\emph{Polycentricity} (P), and \emph{Surplus-Claim Regime} (S)---together with an
+\emph{Information-Rights} diagnostic ($\Iax$) that qualifies the others by asking
+whether their claims are verifiable without exposing persons to surveillance. We give
+a 0--5 scoring method with a fully worked example, and apply the framework to a set of
+architectural ideal types. We argue one substantive structural claim, that low
+polycentricity exerts pressure toward concentrated surplus-claim ($P \rightsquigarrow
+S$), while keeping the axes independent as measurements. This is a framework paper:
+the scores are illustrative, demonstrating the method rather than measuring real
+systems, and empirical scoring of deployed monetary systems is left to future work.
+\end{abstract}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Introduction}
+\label{sec:intro}
+
+A monetary system is usually evaluated on narrow technical criteria. These matter,
+but they are silent on the questions a monetary architecture in fact answers in its
+design. A system can be perfectly stable and perfectly extractive; it can be flawless by
+every technical measure and answer to no one. The reason these metrics mislead is one
+of timescale: a monetary architecture's consequences unfold not at the speed of a
+transaction but at the pace of a \emph{metabolism}---accumulation, exclusion, and the
+slow concentration of claim, over months and years---so a system can excel at
+everything measured in milliseconds and fail at everything that takes years to
+surface. It is those slow dimensions that this framework measures.
+
+The framework of this paper rests on a single observation, which we take as canonical:
+\emph{a monetary architecture encodes, in its rules of issuance, custody, and
+redemption, who is counted, who decides, and who claims the surplus it generates.}
+Money is not neutral~\cite{ingham2004}. The framework's purpose is to make those three commitments---and
+the verifiability of a system's claims about them---explicit, comparable, and
+contestable on a common scale.
+
+This is a \emph{framework} paper. Its contribution is an evaluative instrument: four
+well-defined dimensions, a scoring method, and a worked demonstration that the method
+applies end to end. The scores it reports are \emph{illustrative}---they exercise the
+instrument on architectural ideal types, not deployed systems; we claim the instrument
+and one structural tendency that follows from it, not measurements. Empirical scoring
+of real systems is a programme in its own right, scoped in \S\ref{sec:limits}.
+
+\paragraph{Contributions.} This paper (i) defines the MCB/P/S framework and the
+$\Iax$ diagnostic (\S\ref{sec:framework}); (ii) gives a 0--5 scoring method with a
+fully worked example, foregrounding the illustrative status of all scores
+(\S\ref{sec:scoring}); (iii) argues the structural tendency $P \rightsquigarrow S$ as
+an interpretation that emerges from the framework (\S\ref{sec:causality}); (iv)
+applies the framework to a set of architectural ideal types, with a federated
+``monetary ecology'' presented as a hypothesis rather than a demonstrated winner
+(\S\ref{sec:application}); and (v) states its scope and the work it defers
+(\S\ref{sec:limits}). A short closing note relates the framework to coordinator-free
+substrate design (\S\ref{sec:broader}).
+
+A remark on terminology. The originating essay uses the deliberately polemical term
+\emph{blood money} for the limit case of a centralised medium that finances outcomes
+its holders would not individually endorse. We retain it only as a rhetorical
+limit-case label, not as an analytic category; the framework's work is done by the
+four dimensions below.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{The Framework: MCB, P, S, and \texorpdfstring{$\Iax$}{I-hat}}
+\label{sec:framework}
+
+The framework rests on three questions a monetary architecture cannot avoid
+answering, and which conventional metrics do not ask, plus a diagnostic that gates
+the answers.
+
+\begin{definition}[Moral Circle Breadth (MCB) --- ``who counts?'']
+The effective scope of those granted protection, voice, and material consideration by
+the system. A broad moral circle extends standing beyond present participants to
+non-citizens, future generations, non-human animals, and ecosystems.
+\end{definition}
+
+MCB has a load-bearing \emph{voiceless edge}: the parties whose standing most tests a
+moral circle---future generations, non-human animals, ecosystems---cannot advocate
+for themselves within the system, so it extends them standing only structurally,
+through rules rather than participation. MCB therefore measures who is
+\emph{considered}, not who is represented, and its operational content is what a
+high-MCB architecture would actually \emph{do}: ecological reserve requirements,
+intergenerational provisioning, externality pricing in credit allocation,
+inclusion-of-access rights for non-citizens. Of the four dimensions it is the most
+explicitly normative and the least mechanical, by nature rather than by omission.
+
+\begin{definition}[Polycentricity (P) --- ``who decides?'']
+The dispersion, contestability, and recallability of decision rights over the system
+across multiple independent centres, rather than their concentration in a single
+authority. After Ostrom~\cite{ostrom1990}, what matters is not the mere existence of
+many centres but that their authority is contestable and recallable.
+\end{definition}
+
+\begin{definition}[Surplus-Claim Regime (S) --- ``who benefits?'']
+The incidence of residual income and rents---who captures the value a system
+generates after costs. A distributed regime returns value to participants,
+communities, and the commons; a concentrated one routes it to the owners of the
+issuing or custodial layer.
+\end{definition}
+
+The three axes are \emph{orthogonal as measurements}: improving one does not
+automatically improve another, and a system may score high on one while low on
+another (broad protections can coexist with pervasive surveillance; a widely held
+shareholder base can still concentrate surplus-claim). It is precisely because the
+axes can diverge that measuring them separately is informative; the framework's
+descriptive content is the \emph{vector} $(\text{MCB}, P, S)$, not its average. Each
+axis draws on an established tradition---the moral-circle literature after
+Singer~\cite{singer1981} for MCB, Ostrom's~\cite{ostrom1990} polycentric governance
+for P, the political economy of surplus and rent for S---but the synthesis into a
+single evaluative instrument for monetary architecture is, to our knowledge, novel.
+
+\begin{definition}[Information-Rights diagnostic ($\Iax$)]
+A red-flag diagnostic, not a fourth axis, that qualifies the confidence with which
+MCB/P/S can be asserted. Its principle is \emph{privacy for people, transparency for
+power}: persons should be shielded from surveillance, while the mechanisms that
+exercise power over the system should be continuously auditable.
+\end{definition}
+
+Making verifiability a \emph{diagnostic} rather than an axis is deliberate: it does
+not describe a distributional commitment, it prevents good distributional claims from
+being laundered through opaque or capturable means. A high MCB/P/S vector carried by a
+low $\Iax$ is provisional, because the means by which it is achieved cannot be
+verified and may be captured without notice. $\Iax$ scores five domains---proofs of
+reserves and flows; portability and exit; custody topology; governance traceability;
+surveillance exposure---net of penalties for specific opacity failures (no public
+proofs; a single custodian able to override; failed portability; audit-blocking
+clauses; unreported material incidents), and is clamped to $[0,5]$:
+\[
+  \Iax = \max\!\bigl(0,\ \min(5,\ \Iax_{\text{raw}} - \textstyle\sum\text{penalties})\bigr).
+\]
+It is reported \emph{alongside} the vector as a confidence qualifier. The framework's
+hardest design questions live here---whether a small co-operative is ``people'' or
+``power'', how to prove reserves without exposing individual transaction graphs---and
+we flag them as open (\S\ref{sec:limits}) rather than resolved.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Scoring: Method, Confidence, and a Worked Example}
+\label{sec:scoring}
+
+\paragraph{Method.} Each axis is scored on a 0--5 scale as a weighted average of two
+to five observable indicators, each normalised to the scale. Indicator sets are
+domain-specific and \emph{published with the score}, so that a placement can be
+contested at the level of its evidence rather than its conclusion---an application of
+the framework's own polycentricity to itself. Systems are plotted on the plane
+$(x = P,\ y = S)$ with bubble magnitude given by MCB and $\Iax$ reported separately
+as a confidence-qualified annotation; the $(P,S)$ plane is chosen because it is the
+plane in which the structural tendency of \S\ref{sec:causality} runs.
+
+\paragraph{A worked example.} Table~\ref{tab:worked} scores one ideal type, a
+\emph{closed custodial platform}~\cite{srnicek2017} (custodial wallets, closed rails, a single corporate
+operator), end to end, on indicators uncontroversial enough that the example
+demonstrates the \emph{method} without a dispute over the \emph{evidence}. Like all
+scores in this paper it is illustrative; its point is the \emph{reproducible scoring
+form}---a reader can follow exactly how a score is built and dispute any indicator,
+whether or not they accept the number. We report axis scores to the nearest
+half-point: the method is exact, but the interpretation it supports is coarse.
+
+\begin{table}[!ht]
+\centering\small
+\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\textwidth}{@{}p{1.6cm}p{4.4cm}Xc@{}}
+\toprule
+\textbf{Axis (score)} & \textbf{Indicator (weight)} & \textbf{Evidence in a closed custodial platform} & \textbf{0--5} \\
+\midrule
+\textbf{P} \newline ($\approx$0.5)
+  & Recallability of authority (0.40) & Operator sets and changes terms unilaterally; participants cannot recall it & 0 \\
+  & Dispersion of decision rights (0.35) & A single corporate centre governs issuance, custody, and rules & 0 \\
+  & Participant contestability (0.25) & Complaint channels and external regulatory recourse, but no power over rule-making & 2 \\
+\addlinespace
+\textbf{S} \newline ($\approx$0.5)
+  & Residual-claim incidence (0.50) & Fees, spread, and data rents accrue to platform shareholders & 1 \\
+  & User share of value generated (0.30) & Users generate network value but capture little of it & 0.5 \\
+  & Anti-rent provisions (0.20) & Closed rails, lock-in; no interoperability or fee caps & 0 \\
+\addlinespace
+\textbf{MCB} \newline ($\approx$1.5)
+  & Access breadth (0.40) & Broad consumer access where profitable; the unprofitable are excluded & 2.5 \\
+  & Standing for non-present stakeholders (0.30) & No provision for future generations or ecological cost & 0 \\
+  & Non-discrimination (0.30) & KYC-gated; commercial exclusion permitted & 1 \\
+\addlinespace
+\textbf{$\Iax$} \newline (0)
+  & Portability \& exit (0.25) & Account data exportable, but value locked into the platform & 3 \\
+  & Governance traceability (0.20) & Published terms and change-logs; no independent audit & 2.5 \\
+  & Proofs, custody, surveillance (0.55) & No public proofs of reserves; a single custodian; full transaction surveillance & 0 \\
+  & \emph{Penalties} & No public proofs ($-1.0$) and single-custodian override ($-1.0$) & $-2.0$ \\
+\bottomrule
+\end{tabularx}
+\caption{A worked \emph{illustrative} score for one architectural ideal type, with
+axis scores rounded to the nearest half-point (the method is exact; the
+interpretation is coarse). Weighted averages: $P = 0(0.40)+0(0.35)+2(0.25) = 0.5$;
+$S = 1(0.50)+0.5(0.30)+0(0.20) = 0.65 \approx 0.5$; $\text{MCB} =
+2.5(0.40)+0(0.30)+1(0.30) = 1.3 \approx 1.5$. The diagnostic earns partial raw credit
+for exportable data and published terms ($\Iax_{\text{raw}} = 3(0.25)+2.5(0.20) =
+1.25$) but two fatal red flags---no public proofs and a single custodian able to
+override---deduct $2.0$, giving $\Iax = \max(0, 1.25-2.0) = 0$. The evidence column is
+what a reader contests: a placement is disputed by disputing an indicator's evidence
+or weight, not by rejecting the conclusion.}
+\label{tab:worked}
+\end{table}
+
+The example makes two things concrete. The vector $(\text{MCB} \approx 1.5,\ P
+\approx 0.5,\ S \approx 0.5)$ is valuable not as a measurement but because it is
+\emph{traceable} to indicators a reader can argue with. And the $\Iax$ row shows the
+penalty mechanism doing its work: partial verifiability (raw $1.25$) does not rescue a
+system that carries fatal red flags, so the platform's distributional scores are
+flagged as unverifiable in any case. Penalties matter precisely where a system has
+\emph{some} apparent transparency but a disqualifying opacity beneath it.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{A Structural Tendency: \texorpdfstring{$P \rightsquigarrow S$}{P pressures S}}
+\label{sec:causality}
+
+The axes are scored separately because they can diverge at a point in time. But
+divergence at a point in time does not mean the absence of pressure over time. We
+argue one such pressure, written $P \rightsquigarrow S$ to mark it as a directional
+tendency rather than a law:
+
+\begin{quote}
+Low polycentricity exerts pressure toward concentrated surplus-claim. Where decision
+rights over a monetary system concentrate, and absent explicit anti-rent rules, the
+control points that concentration creates tend to be converted into rent.
+\end{quote}
+
+The mechanism is the one Olson~\cite{olson1965} identified: the benefits of
+controlling a coordination mechanism are concentrated on the controller while the
+costs are diffuse, so concentrated power is under standing pressure to convert itself
+into concentrated claim. The conversion is not mysterious; it runs through a short
+causal chain. Concentrated decision rights create \emph{control points}---over
+issuance, custody, permissioning, and settlement. Control points create
+\emph{exclusion or dependency}: a participant must transact through the controller or
+be shut out. Exclusion and dependency create \emph{pricing power}---seigniorage at
+issuance, fee extraction and lock-in at custody, exclusionary rents at permissioning,
+chokepoint pricing at settlement. And pricing power becomes \emph{surplus-claim}
+unless it is actively constrained---by anti-rent rules, by exit, or by public
+accountability. Each link is individually familiar from the study of rent; the claim
+is only that they compose, and that low polycentricity supplies the first link.
+
+A fuller treatment must defend each link empirically and confront the counter-cases---
+a centralised public authority that distributes surplus through taxation; a
+polycentric system that concentrates it through local oligarchy or validator
+cartels---and that empirical defence is the principal work we leave to a successor
+paper (\S\ref{sec:limits}).
+
+The relation is directional and probabilistic, not deterministic. High P does not
+\emph{guarantee} distributed S---a polycentric system can still tolerate rent---but
+low P reliably \emph{erodes} it. This asymmetry is exactly why the framework treats P
+and S as independent \emph{measurements} while positing a tendency between them: one
+must measure S directly, because P does not determine it; but a low P score is a
+leading indicator that S is under structural pressure. The design corollary is that
+distributing power is necessary but not sufficient for distributing surplus---the
+anti-rent rules must be written explicitly, not assumed to follow.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Applying the Framework: Architectural Ideal Types}
+\label{sec:application}
+
+We apply the framework to a set of \emph{architectural ideal types}---abstract design
+configurations, named by neutral architectural descriptors rather than ideological
+labels, and distinct from both deployed systems and the design proposal that follows.
+This separation is deliberate: scoring \emph{real} systems is the empirical programme
+we defer, and comparing a preferred design against caricatures would stack the deck.
+Table~\ref{tab:types} reports illustrative placements.
+
+\begin{table}[!ht]
+\centering\small
+\renewcommand{\arraystretch}{1.2}
+\begin{tabularx}{\textwidth}{@{}Xccc l@{}}
+\toprule
+\textbf{Architectural ideal type} & \textbf{MCB} & \textbf{P} & \textbf{S} & \textbf{$\Iax$} \\
+\midrule
+Identity-linked programmable CBDC (state-administered) & 2.0 & 1.0 & 2.0 & low \\
+Closed custodial platform \emph{(worked, \S\ref{sec:scoring})} & 1.5 & 0.5 & 0.5 & very low \\
+Market-sovereign, no-demurrage design & 1.0 & 3.0 & 1.0 & mid \\
+Market-forward convertible design, anti-rent funding & 3.0 & 4.0 & 4.5 & mid \\
+Commons-forward demurrage design & 4.5 & 3.0 & 4.5 & mid--high \\
+\bottomrule
+\end{tabularx}
+\caption{Illustrative MCB/P/S placements for five architectural ideal types (half-point
+scale), with $\Iax$ as a separate, coarse qualitative band. \emph{Only the closed
+custodial platform is worked in full} (Table~\ref{tab:worked}); the remaining
+placements are \emph{schematic}---they indicate relative position in the framework and
+would require published indicator tables before use as measurements. The lowest
+$(P,S)$ placements---programmable CBDC and closed custodial platform---illustrate the
+$P \rightsquigarrow S$ tendency: concentrated decision rights co-occurring with
+concentrated surplus-claim, because centralised issuance and custody place both the
+decision and the residual claim in the same hands.}
+\label{tab:types}
+\end{table}
+
+Two readings stand out, both about the \emph{shape} the framework reveals rather than
+any specific number. First, the configurations that concentrate decision rights (low
+P) are the same ones that concentrate surplus-claim (low S)---the $P \rightsquigarrow
+S$ tendency made visible. Second, no configuration dominates on all axes: a
+market-forward design may score well on P and S while extending a narrower moral
+circle than a commons-forward one. The framework surfaces these trade-offs rather
+than collapsing them into a ranking.
+
+\subsection{A Hypothesis: the Federated ``Monetary Ecology''}
+
+The configurations that score broadly share a structural form: they are \emph{plural
+and layered} rather than monolithic. We therefore advance a \emph{hypothesis}, stated
+as such to avoid the circularity of grading a design against axes chosen to favour it:
+
+\begin{quote}
+\emph{Hypothesis.} A recursive, federated architecture---minimal federation
+invariants at the base (exit rights, proofs of reserves, common formats); a neutral
+settlement and reserve layer; a privacy-preserving community circulation layer under
+rotating multi-party custody; and a bottom-up mutual-credit layer---tuned per
+community through published parameters, \emph{would, if implemented with these
+constraints, score highly} on MCB/P/S/$\Iax$.
+\end{quote}
+
+The hypothesis is plausible by construction (local, contestable, recallable decision
+rights give high P; explicit anti-rent rules support high S; federated custody and
+public proofs give high $\Iax$; communities may extend standing per their charters,
+admitting broad MCB), but plausibility by construction is not empirical demonstration:
+whether such an architecture achieves these scores in deployment, and how it scores
+against real systems graded by the same indicators, this paper does not settle. The
+architecture's full design and an implementation path are developed in the originating
+essay; here it is the framework's leading \emph{implication}, not its centre.
+
+The structural feature that makes such plurality corrigible rather than merely diverse
+is \emph{exit}: because participants and communities can leave a configuration they
+reject, taking value and state with them, no layer can hold them against the threat of
+departure---Hirschman's~\cite{hirschman1970} exit, doing what voice alone cannot.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Scope and Limitations}
+\label{sec:limits}
+
+\begin{enumerate}
+\item \emph{Empirical scoring deferred.} Scoring deployed systems---fiat, mobile
+  money, Bitcoin, custodial and stablecoin platforms, CBDC pilots, mutual-credit
+  networks---against published indicator evidence is the framework's strongest
+  validation and a programme in its own right; it is future work.
+\item \emph{$P \rightsquigarrow S$ awaits empirical defence.} \S\ref{sec:causality}
+  gives the causal chain; what remains is to defend each link empirically and confront
+  the counter-cases---centralised public authorities that distribute surplus,
+  polycentric systems that concentrate it through local oligarchy or cartels. This is
+  the principal theoretical work the framework still owes.
+\item \emph{MCB is the normative axis.} MCB is, by nature, the most normative and
+  least mechanical dimension; the framework measures the standing a design encodes,
+  not which standings are right.
+\item \emph{$\Iax$'s hard cases are open.} The boundary of ``people'' versus
+  ``power'' (small co-operatives, validators, municipal treasuries, large merchants),
+  and proving reserves and flows without exposing individual transaction graphs, are
+  where the diagnostic could become technically distinctive; this paper poses them
+  rather than resolving them.
+\item \emph{Comparative, not predictive.} The framework renders structural
+  commitments legible; it does not forecast adoption. Its conceptual spine is drawn
+  from the literatures on money as a social relation~\cite{ingham2004}, polycentric
+  governance~\cite{ostrom1990}, collective action and rent~\cite{olson1965},
+  exit~\cite{hirschman1970}, and platform concentration~\cite{srnicek2017}; a fuller
+  engagement with monetary economics specifically---endogenous money, seigniorage,
+  CBDC governance, custodial and payment-rail risk, financial inclusion and
+  surveillance---is sized for the empirical successor paper.
+\end{enumerate}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{A Note on Broader Significance: Substrate Design}
+\label{sec:broader}
+
+The framework was developed for monetary architecture, but its structure is not
+specific to money, and we record the connection briefly rather than develop it here.
+Companion work argues that coordinator-based architectures fail
+structurally~\cite{nicholson2026}, and that coordinator-free, locally-resolved design
+is the correct response wherever knowledge is heterogeneous and locally
+held~\cite{nicholson2026hlks}. The monetary case maps onto that argument:
+Polycentricity is the monetary form of local, contestable resolution; the $P
+\rightsquigarrow S$ tendency is the monetary form of the risk that a coordination
+chokepoint extracts rent; and $\Iax$ is the monetary form of the legibility-and-exit
+requirements by which such a system keeps capture visible and bounded. That the same
+prescription---local resolution, plural and contestable power, exit, transparency of
+mechanism---arises independently in monetary design and in distributed computing is,
+we argue elsewhere~\cite{nicholson2026hlks}, a convergence rather than an analogy.
+That broader claim is the companion papers' to make; here it is only a note on why the
+monetary framework may be an instance of something more general.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Conclusion}
+
+Money is never neutral: a monetary architecture answers, in its rules, who counts,
+who decides, and who benefits, and conventional metrics leave those answers implicit.
+The MCB/P/S framework makes them explicit and comparable; the $\Iax$ diagnostic
+ensures the answers are not claimed through opaque or capturable means; and the $P
+\rightsquigarrow S$ tendency names the structural pressure by which concentrated power
+becomes concentrated claim. We have demonstrated the method on a worked example and
+exercised it across architectural ideal types, deferring the empirical scoring of
+deployed systems---and the fuller defence of $P \rightsquigarrow S$---to future work.
+The framework does not by itself prescribe a single architecture. It makes the difference
+between architectures measurable, which is the precondition for choosing among them on
+grounds more honest than technical performance alone.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\bibliography{references}
+
+\end{document}
