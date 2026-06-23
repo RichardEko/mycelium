@@ -78,10 +78,11 @@ and What Capture Resistance Requires}}
 \maketitle
 
 \begin{abstract}
-The companion papers establish that coordinator-based architectures fail
+The companion papers argue that coordinator-based architectures fail
 structurally~\cite{nicholson2026} and that coordinator-free, locally-resolved
-substrate design is the unique \emph{epistemically} correct response across four
-independent domains~\cite{nicholson2026hlks}. This paper argues that epistemic
+substrate design is the \emph{epistemically privileged} response across four
+independent domains---homologous rather than identical---for operations whose
+correctness depends on current local state~\cite{nicholson2026hlks}. This paper argues that epistemic
 correctness is \emph{necessary but not sufficient}. A substrate that resolves
 knowledge locally---that satisfies the four correctness properties of the
 companion paper---can nonetheless be \emph{captured}: its emergent consensus
@@ -90,22 +91,24 @@ class can entrench and extract coordination rent, without any violation of
 epistemic correctness. Capture is a failure of \emph{power} distribution, not of
 \emph{knowledge} distribution, and the two are orthogonal. We introduce four
 further substrate properties---Capture Resistance, Mandate TTL, Epistemic
-Symmetry, and Exit---that an epistemically-correct substrate must additionally
-satisfy to resist capture, and argue, following the cross-domain method of the
+Symmetry, and Exit---that capture resistance requires in addition to epistemic
+correctness, and argue, following the cross-domain method of the
 companion paper, that these properties appear independently in the design of
 capture-resistant monetary systems (Bitcoin), capture-resistant governance
 (Ostrom's commons, recallable-mandate confederalism), and capture-resistant
-computing substrates. We relocate the MCB/P/S evaluative framework (Moral Circle
-Breadth, Polycentricity, Surplus-Claim Regime) to its proper home here, as a
-scorecard for capture resistance. We then confront the hardest question the
+computing substrates. We apply the MCB/P/S evaluative framework (Moral Circle
+Breadth, Polycentricity, Surplus-Claim Regime), introduced for monetary architectures
+in~\cite{nicholson2025}, as a scorecard for capture resistance---the dimension it was
+designed to measure. We then confront the hardest question the
 research programme faces: \emph{does coordinator-freeness prevent capture, or
 merely relocate the captor to a place that is harder to see?} We argue---against a
 common reading---that Bitcoin's surface concentration of mining, development, and
 wealth does not constitute capture: its value resides in holders who are motivated
 to resist seizure and able to exit, so that concentration is the \emph{source} of an
 emergent immune response rather than evidence of capture, and a would-be captor
-inherits a worthless network. Bitcoin shows capture resistance can be emergent and
-robust; the sharper open question is whether a \emph{computing} substrate---which
+inherits a worthless network. On this reading Bitcoin is evidence that capture
+resistance can be emergent and robust; the sharper open question is whether a
+\emph{computing} substrate---which
 lacks an internal asset whose value participants are individually motivated to
 protect---can manufacture the same alignment, or must rely on weaker mechanisms. We
 close with an honest account of what is open, including whether the present authors'
@@ -116,13 +119,15 @@ and contestable.
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Introduction}
 
-The companion paper~\cite{nicholson2026hlks} establishes a strong result: across
-economics, governance, organisations, and distributed computing, coordinator-free
-locally-resolved substrate design is the unique structurally correct response to
-the \emph{epistemic} problem of heterogeneous local knowledge. Four substrate
-correctness properties---local signal propagation, emergent group formation,
-minimal federation invariants, and subsidiarity-respecting consensus---follow from
-the Coordinator Trap Theorem and appear, independently derived, in each domain.
+The companion paper~\cite{nicholson2026hlks} argues that across economics,
+governance, organisations, and distributed computing, coordinator-free
+locally-resolved substrate design is the \emph{epistemically privileged} response to
+the problem of heterogeneous local knowledge---homologous across the four domains
+rather than identical, and scoped to operations whose correctness turns on current
+local state. Four substrate correctness properties---local signal propagation,
+emergent group formation, minimal federation invariants, and subsidiarity-respecting
+consensus---are motivated by the (informal) Coordinator Trap Theorem and appear,
+independently derived, in each domain.
 
 That result is about \emph{knowledge}. This paper is about \emph{power}. Its thesis
 is that the two are orthogonal, and that the first does not buy the second:
@@ -152,11 +157,12 @@ floor, not the ceiling.
   and the two failure modes---\emph{external} and \emph{internal} capture---that
   an epistemically-correct substrate remains exposed to (\S\ref{sec:problem}).
 \item Defines four further substrate properties---Capture Resistance, Mandate TTL,
-  Epistemic Symmetry, and Exit---and argues that an epistemically-correct substrate
-  must satisfy them to resist capture (\S\ref{sec:properties}).
-\item Relocates the MCB/P/S framework to its proper role as a capture-resistance
-  scorecard, and shows the three axes measure exactly the distinctions the
-  capture-resistance properties imply (\S\ref{sec:mcbps}).
+  Epistemic Symmetry, and Exit---and argues that capture resistance calls for them in
+  addition to epistemic correctness (\S\ref{sec:properties}).
+\item Applies the MCB/P/S framework---introduced for monetary architectures
+  in~\cite{nicholson2025}---as a capture-resistance scorecard, arguing that the three
+  axes track the distinctions the capture-resistance properties are designed to
+  protect (\S\ref{sec:mcbps}).
 \item Instantiates the properties across domains---capture-resistant money
   (Bitcoin), capture-resistant governance (Ostrom; recallable-mandate
   confederalism), and capture-resistant computing---by the same convergence method
@@ -184,6 +190,16 @@ subject (it concerns rent, power, and who a system serves); we keep the
 \emph{structural} claim---which substrate designs make capture costly---separable
 throughout from the \emph{normative} question of which distributions of power are
 just.
+
+\paragraph{A note on evidence.} Unlike its companions---which carry a latency
+measurement and a constructive pull instantiation~\cite{nicholson2026hlks}, and a
+worked scoring example~\cite{nicholson2025}---this paper is structural. Its
+contribution is conceptual and cross-domain; it offers no new measurement, and the
+empirical and constructive grounding of capture resistance in the computing domain
+(\S\ref{sec:domains}, \S\ref{sec:hard}) is, we acknowledge, the least developed part
+of the research programme. The properties below are design desiderata argued to
+recur, not quantities measured; the honest accounting of what that leaves open is
+\S\ref{sec:open}.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{The Capture Problem}
@@ -257,7 +273,12 @@ and discussed in \S\ref{sec:hard}; it is \emph{not} simply ``make consensus
 expensive,'' because gratuitous cost violates the companion paper's
 efficiency-by-locality commitments. The design tension---capture resistance
 demands that control be costly, epistemic correctness demands that coordination be
-cheap---is real and is a central subject of this paper.
+cheap---is real and is a central subject of this paper. Like the measures in the
+companion frameworks (the heterogeneity measure $H$ of~\cite{nicholson2026hlks}, the
+illustrative scores of~\cite{nicholson2025}), $C_{\text{capture}}$ is here a
+qualitative desideratum, not an operationalised metric. What is concrete is the
+comparative judgement it licenses: a substrate with no engineered or emergent
+cost-of-capture is more exposed than one whose cost is high and rises with the stake.
 
 \begin{property}[6: Mandate TTL]
 No grant of influence over the collective mechanism is permanent. Authority is
@@ -315,8 +336,9 @@ distinguishes a federation of equals from a hierarchy with extra steps.
 The MCB/P/S framework---Moral Circle Breadth, Polycentricity, Surplus-Claim
 Regime---was introduced by the present author~\cite{nicholson2025} for the
 evaluation of monetary architectures, and borrowed by the companion
-paper~\cite{nicholson2026hlks} to score epistemic distinctions. As that paper
-notes, its proper home is the analysis of capture, which we develop here.
+paper~\cite{nicholson2026hlks} to score epistemic distinctions. As that paper notes,
+the framework belongs most naturally to the analysis of capture, which this paper
+develops.
 
 \begin{itemize}
 \item \emph{Moral Circle Breadth} measures \emph{who the substrate serves}---whose
@@ -333,11 +355,15 @@ notes, its proper home is the analysis of capture, which we develop here.
 
 The three axes are not independent of Properties 5--8; they are the observable
 \emph{symptoms} the properties are designed to prevent. A substrate scoring well on
-Capture Resistance, Mandate TTL, Epistemic Symmetry, and Exit will, we argue, score
-broad-MCB, high-P, distributed-surplus; and the failure of any property shows up as
-degradation on a corresponding axis. Table~\ref{tab:propaxis} states the mapping.
+Capture Resistance, Mandate TTL, Epistemic Symmetry, and Exit \emph{tends} to score
+broad-MCB, high-P, distributed-surplus, and the failure of a property tends to show
+as degradation on a corresponding axis---a directional relationship, not an
+entailment, in the same spirit as the $P \rightsquigarrow S$ tendency
+of~\cite{nicholson2025}. Table~\ref{tab:propaxis} states the \emph{primary} mappings;
+they are indicative rather than one-to-one---Exit, for instance, bears on both
+Surplus-Claim and Moral Circle Breadth.
 
-\begin{table}[t]
+\begin{table}[!ht]
 \centering
 \small
 \renewcommand{\arraystretch}{1.2}
@@ -351,9 +377,10 @@ degradation on a corresponding axis. Table~\ref{tab:propaxis} states the mapping
 8 \,Exit & Surplus-Claim / MCB & Captive participants cannot leave; extractable rent is unbounded and the served circle shrinks to those who cannot exit. \\
 \bottomrule
 \end{tabularx}
-\caption{Each capture-resistance property protects a primary MCB/P/S axis; failure
-of the property is observable as degradation on that axis. The MCB/P/S framework is
-thus the \emph{scorecard} for the properties, not an independent construct.}
+\caption{Each capture-resistance property \emph{primarily} protects one MCB/P/S axis;
+the mapping is indicative rather than one-to-one, and a property's failure tends to
+show as degradation on that axis. The MCB/P/S framework thus serves as the
+\emph{scorecard} for the properties rather than an independent construct.}
 \label{tab:propaxis}
 \end{table}
 
@@ -525,14 +552,14 @@ would collapse if the substrate were captured. The disciplining value signal tha
 makes Bitcoin's exit decisive may simply be absent.
 
 The honest question is therefore not \emph{whether} coordinator-freeness can prevent
-capture in the abstract---Bitcoin shows the properties can deliver it---but whether a
+capture in the abstract---Bitcoin indicates the properties can deliver it---but whether a
 computing substrate can \emph{manufacture the alignment} that makes capture
 resistance emergent, or must instead rely on the weaker mechanisms available to it:
 detection without a value signal, and exit without an asset whose flight punishes the
 captor. The load in resisting internal capture still falls on Properties~6--8---a
 continuously re-earned mandate (6) denies a class a durable position, epistemic
 symmetry (7) denies it an informational edge, and exit (8) caps the rent it can
-extract---but Bitcoin shows these are strongest when an aligned value signal stands
+extract---but Bitcoin suggests these are strongest when an aligned value signal stands
 behind them. Whether a substrate can supply that signal without an internal asset,
 or resist a coordination class without it, is, we believe, the central open problem
 of coordinator-free design, and the one on which the normative significance of the
