@@ -1,8 +1,11 @@
 # Legible Emergence — making coordinator-free fleets diagnosable
 
-**Status:** 📋 **Proposed** (2026-06-21) — a phased plan, not yet started. Awaiting go-ahead to
-implement Phase 0. Canonical design home for the per-mechanism decisions will be a
-`docs/design/` record produced in Phase 0; this file is strategy + sequencing.
+**Status:** 📋 **Proposed, red-teamed** (2026-06-21; adversarial review 2026-07-02) — a phased
+plan, not yet started. Awaiting go-ahead to implement Phase 0. The **Red-team findings** section
+(below, near the end) surfaced four load-bearing issues Phase 0 must resolve — chiefly that a
+diagnostic is a *per-node best-effort estimate, not fleet ground truth*; read it before starting.
+Canonical design home for the per-mechanism decisions will be a `docs/design/` record produced in
+Phase 0; this file is strategy + sequencing.
 
 ## Why
 
@@ -195,6 +198,62 @@ verified (works from any node, survives killing any node); zero overhead when di
 - Can the fleet narrative (Phase 4) be a small deterministic rule engine, or does it want the
   capability/skill machinery (an LLM "fleet doctor" skill consuming the snapshot) as an *optional*
   layer on top of the deterministic core?
+
+## Red-team findings (pre-Phase-0, 2026-07-02) — Phase 0 must resolve these
+
+An adversarial review, grounded against the code (`src/agent/scatter.rs`,
+`src/capability.rs::CapEntry::is_fresh`, the KV-floods-cluster invariant). The architecture is
+sound — the KV-view snapshot **is** computable locally with no collector — but the plan currently
+oversells **authority, agreement, and completeness**, treating a node's *local estimate* as if it
+were fleet *ground truth*. Four findings the phases do not yet confront:
+
+- **RT1 (Major) — eventual consistency means there is no single fleet truth, so "three nodes
+  agree" (Phase 2 gate) does not hold during an incident.** Each node's snapshot reads its *local*
+  LWW view, which is divergent at any instant (anti-entropy converges only *eventually*; there is no
+  consistent read of `cap/`/`sys/load/` — `consistent_get` is the expensive consensus overlay, not
+  this path). During the transient the operator is diagnosing, node A may not yet have received that
+  C went opaque, so A and B legitimately compute *different* diagnoses. **Reframe (the fix, and it
+  is *more* coordinator-free-honest):** a diagnostic is a **per-node best-effort estimate**, never a
+  global verdict. Phase 2's gate becomes "agree *at convergence*; during divergence each snapshot
+  labels its own staleness," and every snapshot carries a **view-confidence header** (heard-from
+  k/N peers this window, max HLC skew, last-AE age). An estimate that admits its partial view is
+  the epistemically honest artifact — and it dissolves the "which node is right?" problem instead of
+  smuggling in a quorum/coordinator to resolve it.
+
+- **RT2 (Major) — the diagnostic degrades exactly when it is needed most.** A node computes
+  "opacity storm / convergence stall / partition" from the *same gossip* the pathology is degrading.
+  A partitioned node holds a stale view and computes a confidently-wrong fleet snapshot **with no
+  local signal that it is the partitioned one**. The inputs are least reliable for the
+  highest-severity pathologies. **Requirement:** every diagnostic must carry the RT1 view-health
+  self-caveat, and Phase 0 must state plainly that a lone node's fleet claim during a partition is an
+  estimate from one side; corroboration needs the Phase-3 fan-out (which is itself partial — RT3).
+
+- **RT3 (Medium) — evaporation makes "zero live providers" / "node is gone" inherently ambiguous,
+  and the `explain` fan-out is incomplete precisely during incidents.** `is_fresh` is a 3×
+  `refresh_interval` window, so a provider whose ad merely lapsed (GC pause, slow refresh) or sits
+  across a partition is *indistinguishable in local KV* from one that genuinely retracted — both are
+  "no fresh key." So the Phase-2 capability-coverage-gap and opacity detectors are false-positive-
+  prone by construction. And `scatter_gather` returns `InsufficientReplies` on timeout: the slow/
+  partitioned nodes whose ring you most need are the ones that won't answer, so the Phase-3 causal
+  reconstruction is *partial* exactly when it matters. **Requirement:** detectors must tolerate the
+  evaporation window (confirmation delay ≥ 3× refresh before asserting "gone"), distinguish
+  "retracted" from "unheard" where possible, and `explain` must render *what it has* + **name the
+  non-responding nodes** rather than imply completeness.
+
+- **RT4 (Medium) — "zero overhead when off" and "explain what already happened" are in direct
+  tension.** If the Phase-3 event ring is off until an operator enables it during an incident, there
+  is **no history** to explain the incident that just happened — only future ones. Post-hoc
+  diagnosis (the common need) requires **always-on** recording. Phase 0 must decide explicitly:
+  quantify the bounded ring's standing cost and make it **always-on-cheap** (a fixed-memory ring of
+  significant events likely is — measure it), accepting a small constant overhead, *or* declare the
+  tool **future-incidents-only** and say so in the runbook. The plan currently straddles both.
+
+These turn into Phase-0 acceptance criteria: (1) the view-confidence header is part of the snapshot
+schema; (2) each detector's trip condition names its evaporation/partition tolerance; (3) the
+always-on-vs-on-demand ring decision is made with a measured cost number; (4) the Phase-2 "agreement"
+gate is restated as convergence-conditional. What *survives* the review unchanged: the no-collector
+architecture, detection-not-prevention, the #56 governor-vs-membership detector as the right cheap
+first target, and scatter-gather as the correct temporal-history primitive.
 
 ## Relationship to existing work
 
