@@ -314,8 +314,16 @@ All `Mutex` and `RwLock` sites in the codebase. **Invariant: no function acquire
 | 6 | `GossipAgent::extra_routes` | `Mutex<Option<Router>>` | `with_http_routes()` (set once), `start()` (consumed, `take()`d) | Gateway feature only; single-use |
 | 7 | `KvStore::index_stripes` | `[Mutex<()>; 64]` (striped by key hash) | `apply_and_notify` secondary-structure reconcile | Leaf lock: nothing else from this table is acquired while held; synchronous section (store re-read + index ops), never across `await`. Exists because the store CAS is lock-free — without it, two winning writers to one key could interleave index ops opposite to their CAS order and strand a live key outside `scan_prefix` (M2 Run-18 finding) |
 | 8 | `TaskCtx::audit_chain` | `Mutex<AuditChainState>` (`compliance` feature) | `audit()` record sealing | Leaf lock: serialises the per-node hash chain (seq + last_hash advance atomically). The guard is **released before** the KV write, so it never overlaps lock #7; synchronous section (build record + sign + hash), never across `await` |
+| 9 | `AgentStateMachine::current` | `parking_lot::Mutex<ExecutionState>` | `state()`, `try_commit()`, `force_failed_transition()` | The commit lock: `try_commit` holds it for validate-and-swap **plus the budget-counter check + reserve** — one atomic step (M2 Run-28 fix: budget counters only move under this lock). Synchronous µs section; policy is snapshotted **before** acquiring (never take #10 while holding this) |
+| 10 | `AgentStateMachine::policy` | `parking_lot::RwLock<AgentPolicy>` | `check_sync_guards()`, `transition()` snapshot, `set_policy()` | Read-mostly; never held while acquiring #9 |
+| 11 | `AgentStateMachine::task_id` / `::timeout_handle` | `parking_lot::Mutex<Arc<str>>` / `parking_lot::Mutex<Option<JoinHandle>>` | task-id set/read; timeout arm/cancel | Leaf locks, single-statement sections |
+| 12 | `SwimState::pending` | `Mutex<AHashMap<u64, oneshot::Sender>>` | probe register/resolve/forget | Leaf lock; poison-recovering; never across `await` |
+| 13 | `SwimState::membership` | `Mutex<SwimMembership>` | `lock_membership()` callers (gossip sample, merge) | Leaf lock; poison-recovering; never across `await`; never held while acquiring #12 |
+| 14 | `FilterOpacityRegistry::entries` | `Mutex<Vec<RegEntry>>` | `declare_requirement` push, consolidated opacity watcher sweep | Leaf lock; poison-recovering; never across `await` |
 
-**Note on async contexts:** `Mutex` guards in Tokio async code are `!Send` when held across `await` points — the compiler enforces this. All sites above release the guard before any `await`, which is why `std::sync::Mutex` (not `tokio::sync::Mutex`) is used throughout: `std::sync::Mutex` is cheaper and the compiler will error if a guard is accidentally held across a suspension point.
+**Note on async contexts:** guards from every lock above are `!Send` when held across `await` points (`std::sync::Mutex` and default `parking_lot` alike) — the compiler enforces this for any spawned future. All sites above release the guard before any `await`. `std::sync::Mutex` is the default choice; `AgentStateMachine` (rows 9–11) uses `parking_lot` — same discipline applies. Do not use `tokio::sync::Mutex` anywhere.
+
+**Keeping this table honest:** it claims completeness — when adding any `Mutex`/`RwLock` field, add a row (Run 28 found rows 9–14 missing after three feature waves; the flat-acquisition invariant held, but only by luck of review).
 
 ### Lock-free mutation rules (papaya) — the race family that keeps recurring
 

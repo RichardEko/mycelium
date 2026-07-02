@@ -1518,7 +1518,7 @@ mod tests {
             assert!(c.propagation_window_secs >= c.health_check_interval_secs * c.peer_eviction_intervals,
                 "invariant 3 @ N={n}");
             // default_ttl must cover the gossip diameter ⌈log2(N+1)⌉ (invariant 4).
-            let ceil_log2 = if n + 1 <= 1 { 0 } else { (usize::BITS - n.leading_zeros()) as usize };
+            let ceil_log2 = if n == 0 { 0 } else { (usize::BITS - n.leading_zeros()) as usize };
             assert!(c.default_ttl as usize >= ceil_log2.min(u8::MAX as usize) || c.default_ttl == 5,
                 "invariant 4 @ N={n}");
         }
@@ -1619,24 +1619,37 @@ mod tests {
         assert_eq!(roundtripped, original, "all fields must survive a TOML round-trip");
     }
 
-    #[test]
+    /// Serialises every test that mutates `GOSSIP_*` env vars: `apply_env_overrides`
+    /// reads ALL of them, so two env tests racing in parallel threads observe each
+    /// other's garbage. Recovers from poisoning (a failing env test must not cascade).
+    fn env_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Restores (or removes) an env var on drop. Hold `env_test_lock()` for the
+    /// guard's whole lifetime.
+    struct EnvGuard(&'static str, Option<String>);
     #[allow(unsafe_code)]
-    fn apply_env_overrides_sets_field() {
-        struct EnvGuard(&'static str, Option<String>);
-        impl Drop for EnvGuard {
-            fn drop(&mut self) {
-                // SAFETY: single-threaded test; no other thread reads this var.
-                unsafe {
-                    match &self.1 {
-                        Some(v) => std::env::set_var(self.0, v),
-                        None    => std::env::remove_var(self.0),
-                    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: mutations serialised by env_test_lock().
+            unsafe {
+                match &self.1 {
+                    Some(v) => std::env::set_var(self.0, v),
+                    None    => std::env::remove_var(self.0),
                 }
             }
         }
+    }
+
+    #[test]
+    #[allow(unsafe_code)]
+    fn apply_env_overrides_sets_field() {
+        let _lock = env_test_lock();
         let var = "GOSSIP_MAX_SEEN_ENTRIES";
         let _guard = EnvGuard(var, std::env::var(var).ok());
-        // SAFETY: single-threaded test; no other thread reads this var.
+        // SAFETY: mutations serialised by env_test_lock().
         unsafe { std::env::set_var(var, "12345"); }
         let mut cfg = GossipConfig::default();
         cfg.apply_env_overrides().expect("apply_env_overrides must not fail");
@@ -1694,6 +1707,32 @@ mod tests {
                 );
             }
             other => panic!("expected FieldConflict for http_port == bind_port, got {other:?}"),
+        }
+    }
+
+    /// M2 Run-28 probe (dim 7 — configurability): a malformed or out-of-range
+    /// `GOSSIP_*` env value must surface as a typed `GossipError::Parse`, never
+    /// a panic, and must leave the config field untouched.
+    /// PASSED at Run 28 — kept as a regression gate.
+    #[test]
+    #[allow(unsafe_code)]
+    fn apply_env_overrides_rejects_malformed_value_with_typed_error() {
+        let _lock = env_test_lock();
+        let var = "GOSSIP_BIND_PORT";
+        let _guard = EnvGuard(var, std::env::var(var).ok());
+
+        for bad in ["not-a-port", "99999999", "-1", ""] {
+            // SAFETY: mutations serialised by env_test_lock().
+            unsafe { std::env::set_var(var, bad); }
+            let mut cfg = GossipConfig::default();
+            let before = cfg.bind_port;
+            match cfg.apply_env_overrides() {
+                Err(GossipError::Parse(_)) => {
+                    assert_eq!(cfg.bind_port, before, "field must be untouched on parse failure ({bad:?})");
+                }
+                Ok(())   => panic!("malformed GOSSIP_BIND_PORT={bad:?} was silently accepted"),
+                Err(e)   => panic!("expected GossipError::Parse for {bad:?}, got {e:?}"),
+            }
         }
     }
 }
