@@ -1,6 +1,6 @@
 # Legible Emergence — making coordinator-free fleets diagnosable
 
-**Status:** 🟢 **Phases 0–1 done; Phases 2–5 not started** (proposed 2026-06-21;
+**Status:** 🟢 **Phases 0–1 done; Phase 2 in progress; Phases 3–5 not started** (proposed 2026-06-21;
 red-teamed + Phase-0 taxonomy 2026-07-02; all 5 Phase-1 detectors (P1/P2/P3/P4/P6) + `/metrics` shipped 2026-07-02). Phase 0 shipped as
 [`docs/design/legible-emergence-taxonomy.md`](../design/legible-emergence-taxonomy.md) (the
 pathology taxonomy, with RT1–RT4 baked in). The **Red-team findings** section (below, near the
@@ -141,7 +141,15 @@ Off-cost-free, opt-in loop (`GOSSIP_EMERGENT_DETECTORS`). **Gate:** reproduce ea
 (starting with the #56 governor-vs-autojoin condition) and assert the flag fires; assert healthy
 churn does **not** trip it (the false-positive gate).
 
-### Phase 2 — Fleet snapshot endpoint (the relational "Localize" view, coordinator-free)
+### Phase 2 — Fleet snapshot endpoint (the relational "Localize" view, coordinator-free) — 🟡 IN PROGRESS
+
+**Increment 1 shipped:** `GET /gateway/fleet` (scope `fleet:read`) — `compute_fleet_snapshot`
+(`src/agent/emergent.rs`) assembles governed-group status + coverage gaps + opacity + counters from
+local KV, with the RT1/RT2 `view_confidence` header. **Acceptance gate met** (RT1-restated):
+`test_fleet_snapshot_agrees_across_three_nodes_at_convergence` — three nodes agree on the *diagnosis*
+at convergence; `view_confidence` is each observer's own. Remaining: the throttle graph, store-
+divergence/convergence-health, and commit-conflict hot slots (more relational fields).
+
 
 A `GET /gateway/fleet` (scope-gated) that, **computed locally from the gossiped KV any node already
 holds**, returns the *relational* picture an operator needs to localise: per-node opacity + reason,

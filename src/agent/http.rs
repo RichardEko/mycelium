@@ -183,7 +183,9 @@ pub(super) async fn run_http_server(
         .route("/govern",                         get(gw_govern_snapshot))
         .route("/govern/tuning",                  post(gw_govern_tuning))
         .route("/govern/timing",                  post(gw_govern_timing))
-        .route("/govern/membership",              post(gw_govern_membership));
+        .route("/govern/membership",              post(gw_govern_membership))
+        // ── Legible Emergence Phase 2: the relational fleet snapshot (localize) ─
+        .route("/fleet",                          get(gw_fleet_snapshot));
 
     // ── Consensus + the consistency/lock/election overlays built on it ────────
     // (v2 M2 feature gate). The ordered-log and reliable-delivery overlays above
@@ -436,6 +438,8 @@ fn required_scope(method: &axum::http::Method, matched_path: &str) -> &'static s
         "/gateway/govern/tuning"       => "govern:write",
         "/gateway/govern/timing"       => "govern:write",
         "/gateway/govern/membership"   => "govern:write",
+        // Legible Emergence Phase 2: the relational fleet snapshot.
+        "/gateway/fleet"               => "fleet:read",
         // Deny-by-default.
         _ => "admin",
     }
@@ -794,6 +798,17 @@ async fn gw_govern_snapshot(State(ctx): State<Arc<HttpCtx>>) -> impl IntoRespons
         "params":       params,
     }))
     .into_response()
+}
+
+/// `GET /gateway/fleet` — the Legible-Emergence Phase-2 **relational fleet snapshot**: the
+/// operator's "localize" view, computed **locally** from the gossiped KV this node already holds
+/// (no collector — any node answers it, and it survives killing any node; Principle 1). Governed-
+/// group status (intent vs observed), capability-coverage gaps, fleet opacity, and the flap/
+/// oscillation counters — each paired with the RT1/RT2 `view_confidence` header (a per-node
+/// *estimate*, not fleet ground truth; at convergence the *diagnosis* agrees across nodes while
+/// `view_confidence` stays each observer's own). Scope `fleet:read`.
+async fn gw_fleet_snapshot(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
+    Json(super::emergent::compute_fleet_snapshot(&ctx.agent_ctx)).into_response()
 }
 
 /// `POST /gateway/govern/tuning` — publish a cluster-wide (or `target`-ed) tuning
@@ -3057,6 +3072,7 @@ mod tests {
         assert_eq!(required_scope(&Method::POST, "/gateway/overlay/consistent/set"), "consensus:write");
         assert_eq!(required_scope(&Method::GET,  "/gateway/overlay/consistent/get"), "consensus:read");
         assert_eq!(required_scope(&Method::POST, "/gateway/llm/call"), "llm:invoke");
+        assert_eq!(required_scope(&Method::GET,  "/gateway/fleet"), "fleet:read");
         // deny-by-default: anything unmapped requires admin.
         assert_eq!(required_scope(&Method::POST, "/gateway/some/future/route"), "admin");
     }

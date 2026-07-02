@@ -60,7 +60,11 @@ substrate uses (`CapEntry::is_fresh`, 3× window).
 ## Status & what's next
 
 Phase 1 is **complete** (all five detectors + `/stats`/`/metrics` + the live #56 test;
-[history](history.md)). Not started: Phase 2 (`GET /gateway/fleet` relational snapshot,
-computed locally, RT1-labelled — "three nodes agree *at convergence*"), Phase 3 (causal event
+[history](history.md)). **Phase 2 in progress** — `GET /gateway/fleet` (scope `fleet:read`) ships the relational
+snapshot: `compute_fleet_snapshot` assembles governed-group status (`governed_group_statuses`),
+coverage gaps, opacity, and the flap/oscillation counters from local KV, each with the RT1/RT2
+`view_confidence` header. The acceptance gate is met — `test_fleet_snapshot_agrees_across_three_
+nodes_at_convergence` proves three nodes compute the same *diagnosis* from converged KV while
+`view_confidence` stays each observer's own. Not started: Phase 3 (causal event
 ring + scatter-gather `explain`), Phase 4 (fleet narrative), Phase 5 (operator surface). The
 red-team findings (RT1–RT4) and their Phase-2+ implications are in the plan.

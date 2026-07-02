@@ -12,6 +12,11 @@
 | `GET /consensus/{slot}` | committed value (lease-aware) + ballot + lease state |
 | `GET /metrics` | Prometheus (`metrics` feature). Includes the emergent-detector gauges when `GOSSIP_EMERGENT_DETECTORS` is on: `mycelium_emergent_governed_group_conflicts` (P1), `mycelium_emergent_capability_coverage_gaps` (P6), `mycelium_emergent_membership_flaps` (P2), `mycelium_emergent_opacity_oscillations` (P3), `mycelium_emergent_opaque_node_pct` (P4), and the RT1/RT2 view-health gauges `mycelium_emergent_peers_heard` / `_peers_known` / `_max_staleness_ms` (alert-qualify a diagnostic by the observer's own view: `peers_heard` ≪ `peers_known` ⇒ partial view) |
 
+Diagnostics surface: `GET /gateway/fleet` (scope `fleet:read`) — the Legible-Emergence Phase-2
+relational fleet snapshot, computed locally from this node's KV (governed-group status, coverage
+gaps, opacity, flap/oscillation counters + the RT1/RT2 `view_confidence` header). Coordinator-free:
+any node answers; at convergence the *diagnosis* agrees across nodes.
+
 Governance surface: `POST /gateway/govern/{tuning,membership}` + `GET /gateway/govern`
 (deny-by-default scopes, WS2-audited) — see
 [management-as-intent](../domain/theory/management-as-intent.md) for the model.

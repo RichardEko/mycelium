@@ -316,6 +316,79 @@ pub fn compute_view_confidence(ctx: &TaskCtx) -> ViewConfidence {
     }
 }
 
+// ── Phase 2: the relational fleet snapshot (GET /gateway/fleet) ───────────────────────────────
+
+/// The status of one governed group in the fleet snapshot — the relational "localize" view: the
+/// governor's `[min, max]` intent vs the observed live `grp/` count, and whether that is a conflict.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct GroupStatus {
+    pub group:    String,
+    pub min:      usize,
+    pub max:      Option<usize>,
+    pub observed: usize,
+    pub conflict: bool,
+}
+
+/// **Pure** — every *fresh* governed group with its intent vs observed membership (not only the
+/// conflicting ones, unlike [`detect_governed_group_conflicts`] — the snapshot shows the whole
+/// relation). Sorted by group so independent nodes at convergence produce byte-identical output.
+pub fn governed_group_statuses(kv_state: &crate::store::KvState, now: u64) -> Vec<GroupStatus> {
+    let mut out = Vec::new();
+    for (_key, bytes) in scan_prefix_kv(kv_state, MEMBERSHIP_PREFIX) {
+        let Ok(intent) = mycelium_core::serde_fixint::from_slice::<MembershipIntent>(&bytes) else {
+            continue;
+        };
+        if now.saturating_sub(intent.written_at_ms) > MEMBERSHIP_INTENT_TTL_MS {
+            continue;
+        }
+        let observed = group_members(kv_state, &intent.group).len();
+        let conflict = observed < intent.min || intent.max.is_some_and(|mx| observed > mx);
+        out.push(GroupStatus { group: intent.group, min: intent.min, max: intent.max, observed, conflict });
+    }
+    out.sort_by(|a, b| a.group.cmp(&b.group));
+    out
+}
+
+/// The `GET /gateway/fleet` relational snapshot — the operator's "localize" view, **computed
+/// locally from the gossiped KV this node already holds** (no collector; any node answers it;
+/// survives killing any node). Carries the RT1/RT2 [`ViewConfidence`] header: this is a *per-node
+/// best-effort estimate*, and at convergence the *diagnosis* fields (`governed_groups` conflicts,
+/// `capability_coverage_gaps`) agree across nodes while `view_confidence` is each observer's own.
+#[derive(Debug, Clone, Serialize)]
+pub struct FleetSnapshot {
+    pub observer:                 String,
+    pub view_confidence:          ViewConfidence,
+    pub governed_groups:          Vec<GroupStatus>,
+    pub capability_coverage_gaps: Vec<String>,
+    pub opaque_node_pct:          u64,
+    pub opaque_pairs:             Vec<(String, String)>,
+    pub membership_flaps:         u64,
+    pub opacity_oscillations:     u64,
+}
+
+/// Assemble the current fleet snapshot from local KV. Deterministic given the same store (lists
+/// sorted), so independent observers at convergence agree on the diagnosis. Available whether or
+/// not the detector *loop* runs (the flap/oscillation counters read 0 when it doesn't).
+pub fn compute_fleet_snapshot(ctx: &TaskCtx) -> FleetSnapshot {
+    let now = now_ms();
+    let live_nodes = ctx.peers.pin().len() + 1; // peers + self
+    let mut opaque_pairs: Vec<(String, String)> =
+        opacity_pairs(&ctx.kv_state, now, OPAQUE_MAX_AGE_MS).into_iter().collect();
+    opaque_pairs.sort();
+    let mut gaps = detect_coverage_gaps(&ctx.kv_state, now);
+    gaps.sort();
+    FleetSnapshot {
+        observer:                 ctx.node_id.to_string(),
+        view_confidence:          compute_view_confidence(ctx),
+        governed_groups:          governed_group_statuses(&ctx.kv_state, now),
+        capability_coverage_gaps: gaps,
+        opaque_node_pct:          opaque_node_pct(&ctx.kv_state, live_nodes, now, OPAQUE_MAX_AGE_MS),
+        opaque_pairs,
+        membership_flaps:         ctx.membership_flaps.load(Ordering::Relaxed),
+        opacity_oscillations:     ctx.opacity_oscillations.load(Ordering::Relaxed),
+    }
+}
+
 /// The detector loop. Spawned only when `emergent_detectors_enabled` (zero overhead when off).
 /// Each tick runs the tier-(b) detectors and reconciles the `/stats` gauges; detection only —
 /// it never emits a signal or mutates another layer's state.
@@ -652,5 +725,26 @@ mod tests {
         let t = set_transitions(&prev, &curr);
         assert_eq!(t.len(), 2); // a disappeared, b appeared
         assert!(set_transitions(&curr, &curr).is_empty());
+    }
+
+    /// Phase 2 — the relational governed-group view reports *every* fresh group with its status
+    /// (conflict flagged), sorted deterministically so independent nodes at convergence agree.
+    #[test]
+    fn governed_group_statuses_reports_all_groups_sorted() {
+        let kv = KvState::new(0);
+        let hlc = Hlc::new();
+        let now = 1_000_000_000_000;
+        seed_intent(&kv, &hlc, "zeta", 2, Some(8), now);   // out of order + in-bounds
+        seed_members(&kv, &hlc, "zeta", 5);
+        seed_intent(&kv, &hlc, "alpha", 1, Some(2), now);  // over max ⇒ conflict
+        seed_members(&kv, &hlc, "alpha", 4);
+
+        let s = governed_group_statuses(&kv, now);
+        assert_eq!(s.len(), 2);
+        assert_eq!(s[0].group, "alpha"); // sorted
+        assert!(s[0].conflict, "alpha: 4 > max 2 ⇒ conflict");
+        assert_eq!(s[0].observed, 4);
+        assert_eq!(s[1].group, "zeta");
+        assert!(!s[1].conflict, "zeta: 5 ∈ [2,8] ⇒ no conflict");
     }
 }

@@ -4657,3 +4657,67 @@ async fn test_p1_governed_group_conflict_detector_fires_and_clears_end_to_end() 
 
     agent.shutdown_with_timeout(Duration::from_secs(5)).await;
 }
+
+/// Legible-Emergence Phase 2 — the fleet-snapshot **acceptance gate** (RT1-restated): on a seeded
+/// conflicted fleet, the snapshot from *three different nodes* agrees on the **diagnosis** (the
+/// governed-group conflict + the capability-coverage gap), while each node's `view_confidence` is
+/// its own. Proves the snapshot is coordinator-free — computed locally from converged KV, identical
+/// across observers — the thing a central collector would otherwise provide.
+#[tokio::test]
+async fn test_fleet_snapshot_agrees_across_three_nodes_at_convergence() {
+    use crate::capability::{CapFilter, ReqEntry};
+    let (pa, pb, pc) = (alloc_port(), alloc_port(), alloc_port());
+    let (ia, ib, ic) = (
+        NodeId::new("127.0.0.1", pa).unwrap(),
+        NodeId::new("127.0.0.1", pb).unwrap(),
+        NodeId::new("127.0.0.1", pc).unwrap(),
+    );
+    let mk = |port: u16, boot: Vec<NodeId>| {
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = port;
+        cfg.bootstrap_peers = boot;
+        cfg.health_check_max_jitter_ms = 50;
+        GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg)
+    };
+    let a = mk(pa, vec![ib.clone()]);
+    let b = mk(pb, vec![ic.clone()]);
+    let c = mk(pc, vec![ia.clone()]);
+    a.start().await.unwrap();
+    b.start().await.unwrap();
+    c.start().await.unwrap();
+    // Ring forms.
+    poll_until(|| !a.peers().is_empty() && !b.peers().is_empty() && !c.peers().is_empty(), 5_000).await;
+
+    // Seed a conflict + a coverage gap on node A; KV floods to all three.
+    assert!(a.publish_membership_intent(MembershipIntent::new("workers", 1, Some(2))));
+    for i in 0..4 {
+        let m = NodeId::new("127.0.0.1", 26000 + i).unwrap();
+        assert!(a.kv().set(format!("grp/workers/{m}"), "1"));
+    }
+    let req = ReqEntry { filter: CapFilter::new("ai", "llm"), refresh_interval_ms: 60_000 };
+    assert!(a.kv().set(format!("req/{ia}/ai/llm"), req.encode())); // no provider ⇒ gap
+
+    let diagnosis = |node: &GossipAgent| {
+        let s = crate::agent::emergent::compute_fleet_snapshot(&node.task_ctx);
+        let conflict = s.governed_groups.iter().any(|g| g.group == "workers" && g.conflict && g.observed == 4);
+        (conflict, s.capability_coverage_gaps.contains(&"ai/llm".to_string()))
+    };
+    // Wait for all three to converge on the same diagnosis.
+    poll_until(|| diagnosis(&a) == (true, true) && diagnosis(&b) == (true, true) && diagnosis(&c) == (true, true), 15_000).await;
+
+    // The diagnosis is byte-identical across observers; view_confidence is each node's own.
+    let (sa, sb, sc) = (
+        crate::agent::emergent::compute_fleet_snapshot(&a.task_ctx),
+        crate::agent::emergent::compute_fleet_snapshot(&b.task_ctx),
+        crate::agent::emergent::compute_fleet_snapshot(&c.task_ctx),
+    );
+    assert_eq!(sa.governed_groups, sb.governed_groups, "A and B agree on governed-group diagnosis");
+    assert_eq!(sb.governed_groups, sc.governed_groups, "B and C agree");
+    assert_eq!(sa.capability_coverage_gaps, sc.capability_coverage_gaps, "A and C agree on coverage gaps");
+    assert_eq!(sa.view_confidence.observer, ia.to_string(), "each snapshot is labelled with its own observer");
+    assert_eq!(sc.view_confidence.observer, ic.to_string());
+
+    a.shutdown_with_timeout(Duration::from_secs(5)).await;
+    b.shutdown_with_timeout(Duration::from_secs(5)).await;
+    c.shutdown_with_timeout(Duration::from_secs(5)).await;
+}
