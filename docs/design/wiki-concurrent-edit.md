@@ -5,7 +5,8 @@
 the sketch flagged: (1) the **section addressing + merge unit** (§1–§2), (2) the **curator role
 state machine** (§3), and (3) the **identity/access mapping** — how a wiki relates to
 Capability / Skill / Group, and the normative "competence is a capability, knowledge is not" rule
-(§4). Written *before* the crate exists so the mechanism is settled and reviewable; promotes to the
+(§4). §6 is a **pre-build `lib.rs` API sketch** of the curator surface (the `WikiRole`/`CuratorState`
+shape). Written *before* the crate exists so the mechanism is settled and reviewable; promotes to the
 crate's `lib.rs` doc + a `v2-…-wiki.md` build plan when the demand trigger fires. Nothing here
 changes core — it is a discipline over the public KV/signal/capability API, the way
 [`exactly-once-effect.md`](exactly-once-effect.md) is.
@@ -322,7 +323,163 @@ The design's one sentence: **section granularity turns the common case into a lo
 needs no curator, and the curator turns the rare same-section case into a single-writer sequence —
 so the LLM's non-determinism is quarantined at one serialised node and never threatens convergence.**
 
-## 6. Open questions for the build plan (not decided here)
+## 6. API reference sketch — the curator surface as it would appear in `lib.rs`
+
+Pre-build draft of the curator-role surface, in the doc-commented idiom the `mycelium-tuple-space`
+(`TupleRole`) and `mycelium-blackboard` (`BoardRole`) crates use in their `lib.rs`. Signatures may
+shift in the build; this pins the *shape* — the configured-role vs observable-state split (§3), the
+curator loop entry points, and the read-only accessors that make the role legible. Not the full
+crate API (the `read`/`propose`/`reconcile` data surface is gestured, not drafted).
+
+```rust
+//! Role model (see the module-doc table, tuple/blackboard style):
+//!
+//! | [`WikiRole::Auto`]        | Advertise as candidate, observe the ring, self-elect Curator (lowest candidate id) or fall back to Contributor — no coordinator |
+//! | [`WikiRole::Curator`]     | Serve reconcile + lint immediately (skip the election; single-curator deployments / tests) |
+//! | [`WikiRole::Contributor`] | Propose edits + read; never reconciles |
+//! | [`WikiRole::Reader`]      | Read-only; never advertises candidacy |
+
+use std::sync::Arc;
+use std::time::Duration;
+use bytes::Bytes;
+use mycelium::GossipAgent;
+
+/// The role this node is *configured* to play for one group wiki — the operator/agent's
+/// **intent**, distinct from the observable [`CuratorState`] the node currently occupies
+/// (an `Auto` node moves Reader→Candidate→Curator over time; see §3). Mirrors
+/// [`TupleRole`]/[`BoardRole`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WikiRole {
+    /// Advertise `wiki.{group}.candidate`, observe the candidate ring, and self-elect the
+    /// single Curator by lowest candidate id — otherwise serve as a Contributor. The
+    /// coordinator-free default; the ring is the failure detector (§3.1, §3.4).
+    Auto,
+    /// Serve the reconcile + lint loops immediately, skipping the election. For
+    /// single-curator deployments and tests; **do not** run two of these for one group
+    /// (two writers-of-record reintroduce the divergence §2.3 rules out).
+    Curator,
+    /// Propose edits (§2.2) and read; never reconciles. The common agent role.
+    Contributor,
+    /// Read-only. Never advertises candidacy, never proposes.
+    Reader,
+}
+
+/// The **observable** state of an `Auto`/`Curator` node's curator machine (§3.1) — exposed
+/// read-only for legibility (a fleet operator can see who currently holds curation). Do not
+/// confuse with [`WikiRole`]: the role is the intent, this is where the machine sits now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CuratorState {
+    /// Not seeking curation (a `Reader`/`Contributor`, or an `Auto` node that has not yet
+    /// advertised candidacy).
+    Idle,
+    /// Advertising `wiki.{group}.candidate`; waiting to learn whether it holds the lowest
+    /// live candidate id.
+    Candidate,
+    /// The live curator: advertising `wiki.{group}.curator`, running the reconcile (§3.2)
+    /// and lint (§3.3) loops. Exactly one per group at convergence.
+    Curator,
+    /// Finishing an in-flight reconcile, retracting the curator capability, returning to
+    /// `Candidate`/`Idle` (yielded to a strictly-lower candidate id, or shutting down).
+    SteppingDown,
+}
+
+/// Curator-relevant configuration. (The full `WikiConfig` also carries the data-plane knobs;
+/// only the fields the curator role reads are shown here.)
+#[derive(Clone, Debug)]
+pub struct WikiConfig {
+    /// Group namespace, e.g. `"tls-ops"`. Must not contain `/` (capability key segments
+    /// reject it, like the tuple space). Advertised as `wiki.{ns}.curator|candidate`;
+    /// pages live under `wiki/{ns}/…` (§1.1).
+    pub namespace: Arc<str>,
+    /// This node's configured role.
+    pub role: WikiRole,
+    /// How often the live curator drains the proposal queue and reconciles (§3.2). The
+    /// same-section edit-to-visible latency floor.
+    pub reconcile_interval: Duration,
+    /// How often the live curator runs the lint pass (§3.3) — dead links, orphan sections,
+    /// stale cited facts. Typically ≫ `reconcile_interval`.
+    pub lint_interval: Duration,
+    /// Capability advertisement refresh for the candidate/curator ads. Readers evaporate at
+    /// 3×, so **curator failover latency after a crash ≈ 3 × `cap_refresh`** (§3.4).
+    pub cap_refresh: Duration,
+}
+
+/// Errors from the curator surface. (Shares the crate `WikiError`; curator-relevant variants.)
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum WikiError {
+    /// No node currently serves as curator for this group (none started, or the curator's
+    /// ad evaporated and no candidate has promoted yet). Reads still succeed; only
+    /// reconcile is paused (invariant **I3**).
+    NoCurator,
+    /// The `llm` feature is off (or no backend configured) and a same-section reconcile that
+    /// needs a 3-way merge was required. Fast-path (single proposal, base==current) still
+    /// applies; only genuine conflicts surface this. See the no-LLM fallback, §3.2.
+    NoReconciler,
+    /// Transport error talking to the live curator.
+    Transport(String),
+}
+
+/// An agent-backed group wiki: durable pages over the KV substrate, with a coordinator-free
+/// curator discovered on the capability ring and emergent failover. Construct after
+/// `agent.start()`. (Read/propose/reconcile data methods elided — this sketch is the curator
+/// surface.)
+pub struct Wiki {
+    // agent, cfg, curator state cell, loop handles …
+}
+
+impl Wiki {
+    /// Construct the wiki and start whatever machinery the configured [`WikiRole`] needs:
+    /// `Auto` begins candidacy; `Curator` starts the loops immediately; `Contributor`/`Reader`
+    /// start none. Idempotent per (agent, namespace).
+    pub async fn new(agent: Arc<GossipAgent>, cfg: WikiConfig) -> Result<Arc<Self>, WikiError> {
+        unimplemented!("build")
+    }
+
+    /// This wiki's group namespace.
+    pub fn namespace(&self) -> &Arc<str> { unimplemented!("build") }
+
+    /// The **configured** role (the intent). Immutable for the handle's life.
+    pub fn role(&self) -> WikiRole { unimplemented!("build") }
+
+    /// The **current observable** curator state (§3.1) — read-only, for legibility. Changes
+    /// over time for an `Auto` node as the ring converges.
+    pub fn curator_state(&self) -> CuratorState { unimplemented!("build") }
+
+    /// True iff this node is the live curator right now (`curator_state() == Curator`).
+    pub fn is_curator(&self) -> bool { matches!(self.curator_state(), CuratorState::Curator) }
+
+    /// The NodeId of the group's current live curator as seen from this node's KV view
+    /// (`wiki.{ns}.curator` advertiser), or `None` if none is live (**I3** — reads still work).
+    /// The fleet-legibility accessor: "who is curating this domain?"
+    pub fn current_curator(&self) -> Option<mycelium::NodeId> { unimplemented!("build") }
+
+    // ── Curator machinery (private; spawned by `new` for Auto/Curator roles) ─────────────
+    //
+    // async fn run_election(self: Arc<Self>)   // Reader→Candidate→Curator, lowest-id, yields on lower id (§3.1)
+    // async fn run_reconcile(self: Arc<Self>)  // drain proposals → per-target 3-way merge → one LWW write (§3.2)
+    // async fn run_lint(self: Arc<Self>)       // dead links / orphans / stale cited facts → wiki/{ns}/.lint/ (§3.3)
+    //
+    // Invariants these must uphold (§0): I1 convergence (single writer-of-record per section),
+    // I2 no-lost-edit (every proposal merged or explicitly superseded, never dropped),
+    // I3 curator-optional (losing the role pauses only reconcile; reads + proposals persist).
+
+    /// Graceful stop: if curator, transition `SteppingDown` (finish any in-flight reconcile —
+    /// sub-ms, one LWW write), retract the curator/candidate capability, then stop the loops.
+    /// Pending proposals persist as evaporating soft-state; a peer promotes (I3).
+    pub async fn shutdown(&self) { unimplemented!("build") }
+}
+```
+
+**Why the role/state split is a public distinction, not an internal one:** the *intent*
+([`WikiRole`]) is what an operator/agent sets and what governs failover eligibility; the *state*
+([`CuratorState`] / `current_curator()`) is what a fleet observer reads to answer "who is curating
+`tls-ops` right now, and is anyone?" — the emergent-legibility question (adjacent to
+[`../plans/legible-emergence.md`](../plans/legible-emergence.md)). Exposing both, read-only, is the
+same posture as the tuple space's `TupleRole` + ring observability; a curator is a *recallable
+participant*, so its identity is legible but never authoritative state (§3.4).
+
+## 7. Open questions for the build plan (not decided here)
 
 - **Section-split/merge edits** (an author wants to split one section into two, or fuse two): these
   touch multiple `sec/` keys + `meta.order` atomically-ish. Proposed as a single multi-key proposal

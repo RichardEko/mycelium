@@ -242,7 +242,9 @@ Mirrors the tuple-space / blackboard phasing. All public-API-only; core unchange
   pages, sections, proposal queue, `read`/`propose`/`reconcile`/`lint` over
   `transient()`/`persistent()` test constructors. Unit-tested without a live cluster.
 - **Phase 2 — agent-backed roles + failover.** `Wiki` (roles + RPC + curator election),
-  `WikiRole`, ring-failover, cross-node `tests/failover.rs`.
+  `WikiRole`, ring-failover, cross-node `tests/failover.rs`. The curator surface is
+  pre-drafted: [`wiki-concurrent-edit.md` §6](../design/wiki-concurrent-edit.md) (the
+  `WikiRole` intent vs `CuratorState` observable split + the loop entry points).
 - **Phase 3 — the LLM ingest/lint loop.** Curator drains proposals → LLM reconcile into
   sections; periodic lint (staleness, dead cross-links, orphan sections, and the
   cited-fact check generalised from `/wiki-lint`). Gated behind the `llm` feature; a
