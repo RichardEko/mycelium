@@ -27,10 +27,13 @@ use std::time::Duration;
 use serde::Serialize;
 
 use super::TaskCtx;
-use super::capability_ops::{now_ms, scan_prefix_kv};
+use super::capability_ops::{
+    now_ms, parse_cap_key_or_warn, resolve_filter_against_kv, scan_prefix_kv, scan_prefix_kv_with_ts,
+};
 use super::membership_governor::{
     group_members, MembershipIntent, MEMBERSHIP_INTENT_TTL_MS, MEMBERSHIP_PREFIX,
 };
+use crate::capability::ReqEntry;
 
 /// Detector tick interval.
 const DETECTOR_INTERVAL: Duration = Duration::from_secs(2);
@@ -96,26 +99,58 @@ pub fn detect_governed_group_conflicts(kv_state: &crate::store::KvState, now: u6
     out
 }
 
-/// **Pure hysteresis** — fold raw per-tick conflicts into *confirmed* ones. A group must be in
-/// conflict for `confirm_ticks` consecutive ticks to count (the false-positive guard: a transient
-/// while the governor converges is not a pathology). Groups that recover are pruned from `streaks`.
-/// Returns the count of confirmed-conflict groups.
-pub fn confirm_conflicts(
-    raw: &[GroupConflict],
-    streaks: &mut HashMap<String, u32>,
-    confirm_ticks: u32,
-) -> u64 {
-    let current: HashSet<&str> = raw.iter().map(|c| c.group.as_str()).collect();
-    streaks.retain(|g, _| current.contains(g.as_str())); // a recovered group resets its streak
+/// **Pure hysteresis** (generic) — fold a per-tick set of *keyed* pathologies into *confirmed*
+/// ones. A key must be present for `confirm_ticks` consecutive ticks to count (the false-positive
+/// guard: a transient while the governor/fleet converges is not a pathology). Keys that recover are
+/// pruned from `streaks`. Deduplicates the input. Returns the count of confirmed keys. Shared by the
+/// stateful detectors (P1 conflicts, P6 coverage gaps).
+pub fn confirm_by_key(keys: &[String], streaks: &mut HashMap<String, u32>, confirm_ticks: u32) -> u64 {
+    let current: HashSet<&str> = keys.iter().map(|s| s.as_str()).collect();
+    streaks.retain(|k, _| current.contains(k.as_str())); // a recovered key resets its streak
     let mut confirmed = 0u64;
-    for c in raw {
-        let n = streaks.entry(c.group.clone()).or_insert(0);
+    for k in &current {
+        let n = streaks.entry((*k).to_string()).or_insert(0);
         *n = n.saturating_add(1);
         if *n >= confirm_ticks {
             confirmed += 1;
         }
     }
     confirmed
+}
+
+/// P1 hysteresis over [`GroupConflict`]s — thin wrapper over [`confirm_by_key`].
+pub fn confirm_conflicts(
+    raw: &[GroupConflict],
+    streaks: &mut HashMap<String, u32>,
+    confirm_ticks: u32,
+) -> u64 {
+    let keys: Vec<String> = raw.iter().map(|c| c.group.clone()).collect();
+    confirm_by_key(&keys, streaks, confirm_ticks)
+}
+
+/// **Pure P6 detector** — capability-coverage gaps. For each *fresh* `req/` requirement this node
+/// holds, resolve its `CapFilter` against fresh `cap/` providers; a requirement with **zero fresh
+/// providers** is a gap. Returns the deduplicated set of uncovered capability ids (`{ns}/{name}`) —
+/// a gap is a property of the *capability*, not of each requirer. Node-local KV scan; unit-testable.
+///
+/// **RT3 flagship:** "retracted" and "merely unheard / GC-paused / partitioned" are *identical* in
+/// local KV (both = no fresh `cap/` key). So this instantaneous detector must be paired with the
+/// loop's hysteresis (a gap is only *confirmed* after `CONFIRM_TICKS`, past a provider's refresh),
+/// and the result names "no provider **visible from here**," never "no provider exists" — read it
+/// beside [`compute_view_confidence`].
+pub fn detect_coverage_gaps(kv_state: &crate::store::KvState, now: u64) -> Vec<String> {
+    let mut gaps: HashSet<String> = HashSet::new();
+    for (key, bytes, hlc_ts) in scan_prefix_kv_with_ts(kv_state, "req/") {
+        let Some((_node, ns, name)) = parse_cap_key_or_warn("req/", &key) else { continue };
+        let Some(req) = ReqEntry::decode(&bytes) else { continue };
+        if !req.is_fresh(hlc_ts, now) {
+            continue; // only live requirements — a crashed requirer's declaration ages out
+        }
+        if resolve_filter_against_kv(kv_state, &req.filter).is_empty() {
+            gaps.insert(format!("{ns}/{name}"));
+        }
+    }
+    gaps.into_iter().collect()
 }
 
 /// A peer opacity entry older than this is not counted as live for the storm gauge (P4).
@@ -188,12 +223,20 @@ pub async fn run_emergent_detectors(
     let mut tick = tokio::time::interval(DETECTOR_INTERVAL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut conflict_streaks: HashMap<String, u32> = HashMap::new();
+    let mut gap_streaks: HashMap<String, u32> = HashMap::new();
     loop {
         tokio::select! {
             _ = tick.tick() => {
-                let raw = detect_governed_group_conflicts(&ctx.kv_state, now_ms());
-                let confirmed = confirm_conflicts(&raw, &mut conflict_streaks, CONFIRM_TICKS);
+                let now = now_ms();
+                // P1 — governed-group conflict (hysteresis-confirmed).
+                let conflicts = detect_governed_group_conflicts(&ctx.kv_state, now);
+                let confirmed = confirm_conflicts(&conflicts, &mut conflict_streaks, CONFIRM_TICKS);
                 ctx.governed_group_conflicts.store(confirmed, Ordering::Relaxed);
+                // P6 — capability-coverage gap (hysteresis-confirmed; RT3 needs the sustained window
+                // to tell a retracted provider from a merely-lapsed one).
+                let gaps = detect_coverage_gaps(&ctx.kv_state, now);
+                let confirmed_gaps = confirm_by_key(&gaps, &mut gap_streaks, CONFIRM_TICKS);
+                ctx.capability_coverage_gaps.store(confirmed_gaps, Ordering::Relaxed);
             }
             _ = shutdown.wait_for(|v| *v) => break,
         }
@@ -352,5 +395,55 @@ mod tests {
         let node = NodeId::new("127.0.0.1", 32000).unwrap();
         seed_opacity(&kv, &hlc, &node, "work", true, now - OPAQUE_MAX_AGE_MS - 1); // stale
         assert_eq!(opaque_node_pct(&kv, 4, now, OPAQUE_MAX_AGE_MS), 0, "stale opacity ⇒ not counted");
+    }
+
+    fn seed_requirement(kv: &KvState, hlc: &Hlc, node: &NodeId, ns: &str, name: &str) {
+        use crate::capability::CapFilter;
+        let key: Arc<str> = Arc::from(format!("req/{node}/{ns}/{name}").as_str());
+        let req = ReqEntry { filter: CapFilter::new(ns, name), refresh_interval_ms: 60_000 };
+        apply_and_notify(kv, &make_gossip_update(node, 4, key, req.encode(), false, hlc));
+    }
+
+    fn seed_capability(kv: &KvState, hlc: &Hlc, node: &NodeId, ns: &str, name: &str) {
+        use crate::capability::Capability;
+        let key: Arc<str> = Arc::from(format!("cap/{node}/{ns}/{name}").as_str());
+        apply_and_notify(kv, &make_gossip_update(node, 4, key, Capability::new(ns, name).encode(), false, hlc));
+    }
+
+    /// P6 gap gate — a required capability with zero providers is a coverage gap.
+    #[test]
+    fn coverage_gap_when_no_provider() {
+        let kv = KvState::new(0);
+        let hlc = Hlc::new();
+        let requirer = NodeId::new("127.0.0.1", 40000).unwrap();
+        seed_requirement(&kv, &hlc, &requirer, "ai", "llm");
+        // no cap/ provider for ai/llm
+        let now = mycelium_core::hlc::physical_ms(hlc.tick()); // real now-ms, matches production now_ms()
+        let gaps = detect_coverage_gaps(&kv, now);
+        assert_eq!(gaps, vec!["ai/llm".to_string()], "unmet requirement ⇒ one coverage gap");
+    }
+
+    /// P6 false-positive gate — a requirement with a live provider is NOT a gap.
+    #[test]
+    fn no_gap_when_provider_present() {
+        let kv = KvState::new(0);
+        let hlc = Hlc::new();
+        let requirer = NodeId::new("127.0.0.1", 41000).unwrap();
+        let provider = NodeId::new("127.0.0.1", 41001).unwrap();
+        seed_requirement(&kv, &hlc, &requirer, "ai", "llm");
+        seed_capability(&kv, &hlc, &provider, "ai", "llm");
+        let now = mycelium_core::hlc::physical_ms(hlc.tick()).max(1);
+        assert!(detect_coverage_gaps(&kv, now).is_empty(), "a covered requirement is not a gap");
+    }
+
+    /// Generic hysteresis (shared by P1 + P6) confirms only sustained keys.
+    #[test]
+    fn confirm_by_key_requires_sustained() {
+        let mut streaks = HashMap::new();
+        let keys = vec!["ai/llm".to_string()];
+        assert_eq!(confirm_by_key(&keys, &mut streaks, 2), 0, "tick 1");
+        assert_eq!(confirm_by_key(&keys, &mut streaks, 2), 1, "tick 2 confirmed");
+        assert_eq!(confirm_by_key(&[], &mut streaks, 2), 0, "recovered");
+        assert!(streaks.is_empty());
     }
 }

@@ -98,20 +98,22 @@ the majority — validating that Phases 1–2 are cheap.
 
 ### Phase 1 — Emergent-condition tripwires (node-local + KV-view detectors) — 🟡 IN PROGRESS
 
-**Increments 1–2 shipped** in `src/agent/emergent.rs` — config-gated `GOSSIP_EMERGENT_DETECTORS`
+**Increments 1–3 shipped** in `src/agent/emergent.rs` — config-gated `GOSSIP_EMERGENT_DETECTORS`
 (off by default, zero overhead), the `run_emergent_detectors` loop, the `ViewConfidence` header
 (RT1/RT2), all surfaced on `/stats`:
-- **P1 governed-group conflict** (#56): pure `detect_governed_group_conflicts` (governor intent
-  vs live `grp/` count, RT3 evaporation-tolerant) + `confirm_conflicts` (hysteresis, in the loop);
-  gauge `governed_group_conflicts`.
-- **P4 fleet-opacity storm** (RT2 flagship): pure `opaque_node_pct` (distinct fresh-opaque nodes ÷
-  live nodes) — a *stateless* gauge computed on-demand, so it lives in `/stats` not the loop; a raw
-  gauge the operator thresholds (library-not-platform), read beside `view_confidence`.
+- **P1 governed-group conflict** (#56): `detect_governed_group_conflicts` (governor intent vs live
+  `grp/` count, RT3-tolerant) + hysteresis; gauge `governed_group_conflicts`.
+- **P4 fleet-opacity storm** (RT2 flagship): `opaque_node_pct` (fresh-opaque nodes ÷ live) — a
+  *stateless* gauge computed on-demand in `/stats`; raw gauge the operator thresholds.
+- **P6 capability-coverage gap** (RT3 flagship): `detect_coverage_gaps` (fresh `req/` with zero
+  fresh `cap/` providers, resolved via `resolve_filter_against_kv`) + hysteresis (needed to tell a
+  retracted provider from a merely-lapsed one); gauge `capability_coverage_gaps`. Names "no provider
+  *visible from here*," never "exists."
 
-Design note that emerged: **stateful detectors (hysteresis → P1) live in the loop; stateless gauges
-(P4) compute on-demand in `/stats`.** 8 unit tests (P1: over-max/under-min/healthy/RT3/hysteresis;
-P4: storm/healthy/stale-RT3). **Remaining:** P2 flap, P3 oscillation, P6 coverage-gap (same shape),
-a `/metrics` surface, and a live-cluster #56 reproduction test.
+Design notes that emerged: **stateful detectors (hysteresis → P1, P6) live in the loop; stateless
+gauges (P4) compute on-demand in `/stats`.** The hysteresis is a shared generic `confirm_by_key`.
+11 unit tests. **Remaining:** P2 flap, P3 oscillation (same shape), a `/metrics` surface, and a
+live-cluster #56 reproduction test.
 
 The cheap, high-value layer. New detectors that read node-local state + the locally-held KV,
 surfaced on `/stats` and `/metrics`, mirroring the existing tripwire pattern but at the

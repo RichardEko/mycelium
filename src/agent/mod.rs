@@ -364,6 +364,11 @@ pub(crate) struct TaskCtx {
     /// `emergent_detectors_enabled`. Relaxed — diagnostic; surfaced on `/stats`.
     pub(crate) governed_group_conflicts: Arc<AtomicU64>,
 
+    /// Legible-Emergence Phase-1 gauge (P6): count of required capabilities currently with **zero
+    /// fresh providers visible from this node**, confirmed past hysteresis. Set by the detector
+    /// loop; `0` unless `emergent_detectors_enabled`. Relaxed — diagnostic; on `/stats`.
+    pub(crate) capability_coverage_gaps: Arc<AtomicU64>,
+
     /// Cumulative capability-authorization rejections at resolve (WS-D / M6 · D5;
     /// see `SystemStats::cap_authz_violations`). Relaxed — diagnostic.
     pub(crate) cap_authz_violations: Arc<AtomicU64>,
@@ -770,6 +775,7 @@ impl GossipAgent {
             rpc_pending: Arc::clone(&rpc_pending),
             commit_conflicts: Arc::new(AtomicU64::new(0)),
             governed_group_conflicts: Arc::new(AtomicU64::new(0)),
+            capability_coverage_gaps: Arc::new(AtomicU64::new(0)),
             cap_authz_violations: Arc::new(AtomicU64::new(0)),
             schema_mismatch: Arc::new(AtomicU64::new(0)),
             #[cfg(feature = "compliance")]
