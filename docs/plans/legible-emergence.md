@@ -96,7 +96,16 @@ live providers), consensus livelock (votes not arriving). **Gate:** the classifi
 each pathology has a defined trip condition, and the (b)-tier (KV-computable) set is confirmed to be
 the majority — validating that Phases 1–2 are cheap.
 
-### Phase 1 — Emergent-condition tripwires (node-local + KV-view detectors)
+### Phase 1 — Emergent-condition tripwires (node-local + KV-view detectors) — 🟡 IN PROGRESS
+
+**Increment 1 shipped:** the detector infrastructure + **P1 governed-group conflict** (the #56
+detector). `src/agent/emergent.rs` — config-gated `GOSSIP_EMERGENT_DETECTORS` (off by default,
+zero overhead), a `run_emergent_detectors` loop, the pure `detect_governed_group_conflicts` +
+`confirm_conflicts` (hysteresis) functions, the `ViewConfidence` header (RT1/RT2), surfaced on
+`/stats` as `governed_group_conflicts` + `view_confidence`. Gates: the #56 over-max reproduction,
+under-min, the healthy-in-bounds false-positive gate, RT3 evaporated-intent, and the hysteresis
+test all pass. **Remaining:** P2 flap, P3 oscillation, P4 opacity-storm, P6 coverage-gap (same
+shape), a `/metrics` surface, and a live-cluster #56 reproduction test.
 
 The cheap, high-value layer. New detectors that read node-local state + the locally-held KV,
 surfaced on `/stats` and `/metrics`, mirroring the existing tripwire pattern but at the

@@ -56,6 +56,7 @@ mod cluster_tuner;
 mod tuning_governor;
 pub(crate) mod timing_governor;
 mod membership_governor;
+pub(crate) mod emergent;
 mod sharding;
 mod shard_ops;
 mod service_handle;
@@ -356,6 +357,12 @@ pub(crate) struct TaskCtx {
     /// Incremented by the consensus listener's tripwire; Relaxed ordering —
     /// purely diagnostic, surfaced via `system_stats()` and `/stats`.
     pub(crate) commit_conflicts: Arc<AtomicU64>,
+
+    /// Legible-Emergence Phase-1 gauge: count of governed groups currently in a **confirmed**
+    /// membership conflict (observed `grp/` count outside the governor's `[min,max]`, sustained
+    /// past hysteresis). Set each tick by [`emergent::run_emergent_detectors`]; `0` unless
+    /// `emergent_detectors_enabled`. Relaxed — diagnostic; surfaced on `/stats`.
+    pub(crate) governed_group_conflicts: Arc<AtomicU64>,
 
     /// Cumulative capability-authorization rejections at resolve (WS-D / M6 · D5;
     /// see `SystemStats::cap_authz_violations`). Relaxed — diagnostic.
@@ -762,6 +769,7 @@ impl GossipAgent {
             )),
             rpc_pending: Arc::clone(&rpc_pending),
             commit_conflicts: Arc::new(AtomicU64::new(0)),
+            governed_group_conflicts: Arc::new(AtomicU64::new(0)),
             cap_authz_violations: Arc::new(AtomicU64::new(0)),
             schema_mismatch: Arc::new(AtomicU64::new(0)),
             #[cfg(feature = "compliance")]

@@ -720,6 +720,17 @@ pub struct GossipConfig {
     /// (or `8000` if that is unset). Set via `GOSSIP_RATE_AGGREGATE_THRESHOLD_FPS`.
     pub rate_aggregate_threshold_fps: u64,
 
+    /// **Emergent-condition detectors** (Legible Emergence, Phase 1) — *coordinator-free
+    /// diagnosability*. When `true`, a node-local detector loop reads the gossiped fleet soft-state
+    /// this node already holds and surfaces **emergent-stratum** pathologies (starting with
+    /// governed-group conflict — governor intent vs observed `grp/` membership) on `GET /stats`,
+    /// alongside a `view_confidence` header (this is a *per-node best-effort estimate*, not fleet
+    /// ground truth). No collector, no fan-out — a local KV scan. Off (`false`) by default: no
+    /// detector loop, zero overhead. Detection-not-prevention: it *names* pathologies, never
+    /// corrects them. Set via `GOSSIP_EMERGENT_DETECTORS`. Design:
+    /// `docs/design/legible-emergence-taxonomy.md`.
+    pub emergent_detectors_enabled: bool,
+
     /// Optional bearer token that protects the language-bridge gateway endpoints.
     ///
     /// When set, every request to a `/gateway/**` path must include the header:
@@ -839,6 +850,7 @@ impl Default for GossipConfig {
             max_inbound_frames_per_sec:    0,
             rate_observation_enabled:      false,
             rate_aggregate_threshold_fps:  0,
+            emergent_detectors_enabled:    false,
             gateway_auth_token:            None,
             gateway_scoped_tokens:         Vec::new(),
             egress:                        EgressPolicy::default(),
@@ -1318,6 +1330,9 @@ impl GossipConfig {
         }
         if let Ok(v) = env::var("GOSSIP_RATE_AGGREGATE_THRESHOLD_FPS") {
             self.rate_aggregate_threshold_fps = v.parse().map_err(GossipError::Parse)?;
+        }
+        if let Ok(v) = env::var("GOSSIP_EMERGENT_DETECTORS") {
+            self.emergent_detectors_enabled = matches!(v.as_str(), "1" | "true" | "TRUE" | "yes");
         }
         if let Ok(v) = env::var("GOSSIP_LOCALITY_PATH") {
             self.locality_path = v

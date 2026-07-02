@@ -575,6 +575,13 @@ async fn stats_handler(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
         "schema_mismatch": ctx.agent_ctx.schema_mismatch
             .load(std::sync::atomic::Ordering::Relaxed),
         "rate_limited_senders": mycelium_core::rate::throttled_sender_count(&ctx.agent_ctx.core),
+        // Legible-Emergence Phase 1 (emergent detectors). The conflict gauge is always present
+        // (0 unless the detector loop is running); `view_confidence` — the RT1/RT2 "this is a
+        // per-node estimate, not fleet truth" header — is attached only when detectors are enabled.
+        "governed_group_conflicts": ctx.agent_ctx.governed_group_conflicts
+            .load(std::sync::atomic::Ordering::Relaxed),
+        "view_confidence": ctx.agent_ctx.config.emergent_detectors_enabled
+            .then(|| super::emergent::compute_view_confidence(&ctx.agent_ctx)),
     }))
 }
 

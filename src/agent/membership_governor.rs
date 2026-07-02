@@ -130,7 +130,7 @@ fn resolve_eligible(kv_state: &crate::store::KvState, filter: &CapFilter) -> Has
 }
 
 /// Current live members of `group` (`grp/{group}/{node}`, tombstones excluded).
-fn group_members(kv_state: &crate::store::KvState, group: &str) -> HashSet<NodeId> {
+pub(super) fn group_members(kv_state: &crate::store::KvState, group: &str) -> HashSet<NodeId> {
     let prefix = crate::signal::grp_prefix(group);
     let mut set = HashSet::new();
     for (key, bytes) in scan_prefix_kv(kv_state, &prefix) {
