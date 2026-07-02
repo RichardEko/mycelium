@@ -328,8 +328,10 @@ so the LLM's non-determinism is quarantined at one serialised node and never thr
 Pre-build draft of the curator-role surface, in the doc-commented idiom the `mycelium-tuple-space`
 (`TupleRole`) and `mycelium-blackboard` (`BoardRole`) crates use in their `lib.rs`. Signatures may
 shift in the build; this pins the *shape* — the configured-role vs observable-state split (§3), the
-curator loop entry points, and the read-only accessors that make the role legible. Not the full
-crate API (the `read`/`propose`/`reconcile` data surface is gestured, not drafted).
+**full `WikiConfig`** (curator-loop + data-plane knobs, with the deliberate non-knobs noted), the
+curator loop entry points, and the read-only accessors that make the role legible. The
+`read`/`propose`/`reconcile` *data methods* are gestured, not drafted — but their configuration is
+complete.
 
 ```rust
 //! Role model (see the module-doc table, tuple/blackboard style):
@@ -383,16 +385,19 @@ pub enum CuratorState {
     SteppingDown,
 }
 
-/// Curator-relevant configuration. (The full `WikiConfig` also carries the data-plane knobs;
-/// only the fields the curator role reads are shown here.)
+/// Full wiki configuration — grouped by concern. The curator loop reads the first two groups;
+/// the data-plane groups govern read/propose/section lifecycle and access.
 #[derive(Clone, Debug)]
 pub struct WikiConfig {
+    // ── identity & role ─────────────────────────────────────────────────────────────────
     /// Group namespace, e.g. `"tls-ops"`. Must not contain `/` (capability key segments
     /// reject it, like the tuple space). Advertised as `wiki.{ns}.curator|candidate`;
     /// pages live under `wiki/{ns}/…` (§1.1).
     pub namespace: Arc<str>,
     /// This node's configured role.
     pub role: WikiRole,
+
+    // ── curator loop (read by the curator; §3) ──────────────────────────────────────────
     /// How often the live curator drains the proposal queue and reconciles (§3.2). The
     /// same-section edit-to-visible latency floor.
     pub reconcile_interval: Duration,
@@ -402,7 +407,57 @@ pub struct WikiConfig {
     /// Capability advertisement refresh for the candidate/curator ads. Readers evaporate at
     /// 3×, so **curator failover latency after a crash ≈ 3 × `cap_refresh`** (§3.4).
     pub cap_refresh: Duration,
+
+    // ── data plane: sections & proposals ────────────────────────────────────────────────
+    /// Max bytes for one **section** body. A section is a paragraph-scale merge unit (§1.1),
+    /// so this is set *far below* the substrate's `MAX_KV_WRITE_BYTES` frame limit on purpose:
+    /// a huge section defeats section-granular convergence (every edit to it drags through the
+    /// curator, §2.2) and coarsens the merge grain. A `propose`/write over this is rejected
+    /// (`SectionTooLarge` — split the section). Default 64 KiB.
+    pub max_section_bytes: usize,
+    /// Proposal evaporation window (§2.2). A proposal not drained by the curator ages out at
+    /// the 3× read-side factor — the crashed-author path — bounding queue growth with no
+    /// coordinator. Set a few × `reconcile_interval` so a live curator always drains before
+    /// evaporation. Default `5 × reconcile_interval`.
+    pub proposal_ttl: Duration,
+    /// When `true` (default), a **new** section is written directly (it cannot lose-update,
+    /// §2.1) and only an edit to an **existing** section queues as a proposal. When `false`,
+    /// *every* edit routes through the curator queue — no direct writes at all: safer where
+    /// near-all edits collide, at the cost of one `reconcile_interval` of latency on every
+    /// change (and unavailability of writes while there is no live curator, I3).
+    pub direct_new_sections: bool,
+
+    // ── data plane: lint scope ──────────────────────────────────────────────────────────
+    /// Whether the curator's lint (§3.3) probes **external** cited facts — a config key, a
+    /// capability name, an endpoint a page cites — the doc-vs-code check generalised. Costs
+    /// I/O per probe and is the only lint check with side effects; the intra-wiki checks
+    /// (dead cross-links, orphan sections) are always on. Default `true`.
+    pub lint_probes_cited_facts: bool,
+
+    // ── access (compliance feature; §4.3) ───────────────────────────────────────────────
+    /// Default read-clearance for pages in this wiki (WS1 data-classification). `None` =
+    /// group membership is the only gate. A page may **raise** its own classification above
+    /// this floor; it never lowers below it. Compiles away without `compliance`.
+    #[cfg(feature = "compliance")]
+    pub default_read_clearance: Option<Clearance>,
 }
+
+// Deliberate NON-knobs (divergences from TupleConfig / BoardConfig — recorded so a builder
+// doesn't add them by pattern-matching the siblings):
+//
+// • No `persist` / `wal_path`. Wiki *content* is ordinary durable KV — the substrate already
+//   persists it (WAL + snapshot) and heals it (Merkle anti-entropy); there is no crate-owned
+//   log. Proposals are *intentionally* ephemeral (evaporating soft-state), so they are the one
+//   thing NOT persisted. This is the same "no crate WAL" stance §3.4 takes for curator failover.
+// • No page-assembly cache knob. Pages assemble from their sections at read time (§1.1); a
+//   cached assembled `page/{path}/rendered` is deferred (§7 open question) — it would be a
+//   curator-written derived effect, so it is not a v1 config surface.
+// • No reconcile-batch knob. Whether the curator batches multiple same-section proposals per
+//   LLM call (§7) is an open build decision, not a pinned default.
+// • No backpressure knob. The optional `sys/wiki/{node}/{group}/…` pressure pheromone (§7) is
+//   deferred; `proposal_ttl` is the v1 bound on queue growth.
+// • No LLM/model field. The reconcile uses the *agent's* configured `LlmBackend` (the `llm`
+//   feature); a per-wiki model override is deferred until a real need appears.
 
 /// Errors from the curator surface. (Shares the crate `WikiError`; curator-relevant variants.)
 #[derive(Debug)]
@@ -416,6 +471,10 @@ pub enum WikiError {
     /// needs a 3-way merge was required. Fast-path (single proposal, base==current) still
     /// applies; only genuine conflicts surface this. See the no-LLM fallback, §3.2.
     NoReconciler,
+    /// A section body (or a proposed edit) exceeds `WikiConfig::max_section_bytes`. Split the
+    /// section — see the data-plane knobs. Rejected before any write (a section is a
+    /// paragraph-scale merge unit, not a document).
+    SectionTooLarge { size: usize, limit: usize },
     /// Transport error talking to the live curator.
     Transport(String),
 }
