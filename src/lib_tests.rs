@@ -4529,3 +4529,74 @@ async fn test_capability_reg_drop_tombstones_advertisement() {
 
     agent.shutdown_with_timeout(Duration::from_secs(5)).await;
 }
+
+// ── M2 Run-29 falsification probes ────────────────────────────────────────
+
+/// M2 Run-29 probe (dim 11 — semantic correctness): equal-timestamp LWW must
+/// converge *regardless of apply order* and *across more than two concurrent
+/// writers* (Run 27 covered two data writers; this adds a third and the
+/// tombstone-tie rule). All permutations of three equal-ts writes to one key —
+/// three distinct values plus a tombstone — must land on the same StoreEntry.
+/// The deterministic rule (`store.rs::lww_wins`): among equal-ts writes a
+/// tombstone always wins the tie; among equal-ts data writes the lexicographically
+/// greater value wins; data never resurrects over an equal-ts tombstone. PASSED
+/// Run 29 — kept as a regression gate.
+#[test]
+fn test_equal_timestamp_lww_converges_across_three_writers_all_orders() {
+    use crate::store::{apply_and_notify, KvState};
+
+    // Four concurrent equal-ts (ts=1) writes to one key.
+    let writes: Vec<GossipUpdate> = vec![
+        data_update("k", b"alpha",   1, false),
+        data_update("k", b"bravo",   1, false),
+        data_update("k", b"charlie", 1, false),
+        data_update("k", b"",        4, true),   // tombstone (distinct nonce)
+    ];
+
+    // Reference outcome: a tombstone present among equal-ts writes always wins.
+    let expected: Option<Bytes> = None;
+
+    // Every permutation of apply order must converge to the same StoreEntry.
+    let idx = [0usize, 1, 2, 3];
+    let mut perms = vec![idx.to_vec()];
+    // Heap's algorithm (iterative not needed — 24 perms, generate by std lib style).
+    fn permute(v: &mut Vec<usize>, k: usize, out: &mut Vec<Vec<usize>>) {
+        if k == 1 { out.push(v.clone()); return; }
+        for i in 0..k {
+            permute(v, k - 1, out);
+            if k.is_multiple_of(2) { v.swap(i, k - 1); } else { v.swap(0, k - 1); }
+        }
+    }
+    let mut base = idx.to_vec();
+    perms.clear();
+    permute(&mut base, 4, &mut perms);
+    assert_eq!(perms.len(), 24);
+
+    for perm in &perms {
+        let kv = KvState::new(0);
+        for &i in perm {
+            apply_and_notify(&kv, &writes[i]);
+        }
+        let got = kv.store.pin().get("k").map(|e| e.data.clone()).unwrap();
+        assert_eq!(
+            got, expected,
+            "equal-ts convergence broke for apply order {perm:?}: got {got:?}"
+        );
+    }
+
+    // Control: with NO tombstone, all data-write orders converge to max value ("charlie").
+    let data_only = [&writes[0], &writes[1], &writes[2]];
+    let data_idx = [0usize, 1, 2];
+    let mut db = data_idx.to_vec();
+    let mut dperms = Vec::new();
+    permute(&mut db, 3, &mut dperms);
+    for perm in &dperms {
+        let kv = KvState::new(0);
+        for &i in perm { apply_and_notify(&kv, data_only[i]); }
+        let got = kv.store.pin().get("k").map(|e| e.data.clone()).unwrap();
+        assert_eq!(
+            got.as_deref(), Some(&b"charlie"[..]),
+            "equal-ts data-only convergence broke for order {perm:?}: got {got:?}"
+        );
+    }
+}
