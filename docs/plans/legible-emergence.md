@@ -147,8 +147,12 @@ churn does **not** trip it (the false-positive gate).
 (`src/agent/emergent.rs`) assembles governed-group status + coverage gaps + opacity + counters from
 local KV, with the RT1/RT2 `view_confidence` header. **Acceptance gate met** (RT1-restated):
 `test_fleet_snapshot_agrees_across_three_nodes_at_convergence` — three nodes agree on the *diagnosis*
-at convergence; `view_confidence` is each observer's own. Remaining: the throttle graph, store-
-divergence/convergence-health, and commit-conflict hot slots (more relational fields).
+at convergence; `view_confidence` is each observer's own. **Increment 2 shipped** — the snapshot now also carries the **throttle graph** (M7
+`sys/rate/` observer→sender edges, `throttle_graph`), a **convergence-health self-report**
+(`store_entries` + `store_hash` — two nodes at convergence share the hash; an operator diffs
+across nodes), and the cumulative `commit_conflicts` count. Deferred (need new state, taxonomy
+§8): true cross-node store-divergence (a gossiped `sys/health/` key) and per-slot commit-conflict
+"hot slots." The core relational view is complete.
 
 
 A `GET /gateway/fleet` (scope-gated) that, **computed locally from the gossiped KV any node already

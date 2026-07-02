@@ -349,6 +349,33 @@ pub fn governed_group_statuses(kv_state: &crate::store::KvState, now: u64) -> Ve
     out
 }
 
+/// One edge of the throttle graph: `observer` observed `sender` sending at `observed_fps`
+/// (M7 `sys/rate/{observer}/{sender}` shared evidence — "who is throttling whom").
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ThrottleEdge {
+    pub observer:     String,
+    pub sender:       String,
+    pub observed_fps: u64,
+}
+
+/// **Pure** — the throttle graph from M7 rate evidence (`sys/rate/{observer}/{sender}` → fps).
+/// Sorted for cross-node determinism.
+pub fn throttle_graph(kv_state: &crate::store::KvState) -> Vec<ThrottleEdge> {
+    let mut out = Vec::new();
+    for (key, bytes) in scan_prefix_kv(kv_state, mycelium_core::rate::RATE_PREFIX) {
+        let tail = key.strip_prefix(mycelium_core::rate::RATE_PREFIX).unwrap_or("");
+        let Some(slash) = tail.find('/') else { continue };
+        let observed_fps = std::str::from_utf8(&bytes).ok().and_then(|s| s.parse().ok()).unwrap_or(0);
+        out.push(ThrottleEdge {
+            observer: tail[..slash].to_string(),
+            sender: tail[slash + 1..].to_string(),
+            observed_fps,
+        });
+    }
+    out.sort_by(|a, b| (&a.observer, &a.sender).cmp(&(&b.observer, &b.sender)));
+    out
+}
+
 /// The `GET /gateway/fleet` relational snapshot — the operator's "localize" view, **computed
 /// locally from the gossiped KV this node already holds** (no collector; any node answers it;
 /// survives killing any node). Carries the RT1/RT2 [`ViewConfidence`] header: this is a *per-node
@@ -364,6 +391,15 @@ pub struct FleetSnapshot {
     pub opaque_pairs:             Vec<(String, String)>,
     pub membership_flaps:         u64,
     pub opacity_oscillations:     u64,
+    pub throttle_graph:           Vec<ThrottleEdge>,
+    /// This node's own store size + content hash. **Convergence-health self-report**: two nodes at
+    /// convergence share a `store_hash`; an operator scraping every node diffs these (true
+    /// cross-node divergence would need a gossiped `sys/health/` key — deferred, taxonomy §8).
+    pub store_entries:            usize,
+    pub store_hash:               u64,
+    /// Cumulative consensus commit-conflict tripwire count (per-slot "hot slots" would need new
+    /// tracking — deferred; the count is the convergence-of-agreement signal today).
+    pub commit_conflicts:         u64,
 }
 
 /// Assemble the current fleet snapshot from local KV. Deterministic given the same store (lists
@@ -386,6 +422,10 @@ pub fn compute_fleet_snapshot(ctx: &TaskCtx) -> FleetSnapshot {
         opaque_pairs,
         membership_flaps:         ctx.membership_flaps.load(Ordering::Relaxed),
         opacity_oscillations:     ctx.opacity_oscillations.load(Ordering::Relaxed),
+        throttle_graph:           throttle_graph(&ctx.kv_state),
+        store_entries:            ctx.kv_state.store.pin().len(),
+        store_hash:               mycelium_core::store::store_hash_acc(&ctx.kv_state.hash_acc),
+        commit_conflicts:         ctx.commit_conflicts.load(Ordering::Relaxed),
     }
 }
 
@@ -746,5 +786,26 @@ mod tests {
         assert_eq!(s[0].observed, 4);
         assert_eq!(s[1].group, "zeta");
         assert!(!s[1].conflict, "zeta: 5 ∈ [2,8] ⇒ no conflict");
+    }
+
+    /// Phase 2 — the throttle graph reports `sys/rate/` observer→sender edges, sorted.
+    #[test]
+    fn throttle_graph_reports_rate_edges_sorted() {
+        let kv = KvState::new(0);
+        let hlc = Hlc::new();
+        let obs = NodeId::new("127.0.0.1", 60000).unwrap();
+        let put = |o: &str, sender: &str, fps: &str| {
+            let key: Arc<str> = Arc::from(format!("sys/rate/{o}/{sender}").as_str());
+            apply_and_notify(&kv, &make_gossip_update(
+                &obs, 4, key, Bytes::copy_from_slice(fps.as_bytes()), false, &hlc));
+        };
+        put("nodeB", "flooder", "9000");
+        put("nodeA", "flooder", "8000");
+        let g = throttle_graph(&kv);
+        assert_eq!(g.len(), 2);
+        assert_eq!(g[0].observer, "nodeA"); // sorted by (observer, sender)
+        assert_eq!(g[0].sender, "flooder");
+        assert_eq!(g[0].observed_fps, 8000);
+        assert_eq!(g[1].observer, "nodeB");
     }
 }
