@@ -1,7 +1,9 @@
 # Legible Emergence — making coordinator-free fleets diagnosable
 
-**Status:** 📋 **Proposed, red-teamed** (2026-06-21; adversarial review 2026-07-02) — a phased
-plan, not yet started. Awaiting go-ahead to implement Phase 0. The **Red-team findings** section
+**Status:** 📋 **Phase 0 done; Phases 1–5 not started** (proposed 2026-06-21; red-teamed +
+Phase-0 taxonomy 2026-07-02). Phase 0 shipped as
+[`docs/design/legible-emergence-taxonomy.md`](../design/legible-emergence-taxonomy.md) (the
+pathology taxonomy, with RT1–RT4 baked in); the first *code* is Phase 1, awaiting go-ahead. The **Red-team findings** section
 (below, near the end) surfaced four load-bearing issues Phase 0 must resolve — chiefly that a
 diagnostic is a *per-node best-effort estimate, not fleet ground truth*; read it before starting.
 Canonical design home for the per-mechanism decisions will be a `docs/design/` record produced in
@@ -71,7 +73,13 @@ This is the load-bearing design decision and the thing Phase 0 must validate bef
 
 ## Phases
 
-### Phase 0 — Taxonomy + detection-source classification (design record, no code)
+### Phase 0 — Taxonomy + detection-source classification (design record, no code) — ✅ DONE
+
+**Delivered:** [`docs/design/legible-emergence-taxonomy.md`](../design/legible-emergence-taxonomy.md).
+Classifies P1–P7 by detection tier (a/b/c), gives each a grounded trip condition + evaporation/
+partition tolerance, bakes in RT1–RT4 (the `ViewConfidence` header, the always-on-ring decision),
+and clears the gate — the KV-view (b) tier is the majority (5 of 7). Downstream phases inherit its
+§7. The original scope, for reference:
 
 The discriminator that makes everything after it cheap or expensive. Produce a `docs/design/`
 decision record that, for every emergent pathology, classifies its **detection source**:
