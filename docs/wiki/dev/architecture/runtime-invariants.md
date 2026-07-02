@@ -53,13 +53,21 @@ whether a node *acts on a Signal*; it never scopes KV propagation. Consequences 
   node already holds.
 - The genuine **data-isolation boundary is the cluster/mesh** — peer admission (TLS
   mutual-auth: who you connect to and authenticate). Bytes that must never *reach* a node
-  belong in a **separate cluster** (its KV never peers in) or must be **encrypted** (WS3;
-  ciphertext still floods, only key-holders read). This is the domain-level self-election of
+  belong in a **separate cluster** (its KV never peers in). This is the domain-level
+  self-election of
   [coordinator-free-recursion](../../domain/theory/coordinator-free-recursion.md) — the
   boundary that isolates *data* is one level up from the group.
+- For "the bytes may *reach* a node but it must not *read* them" **within** one cluster, the
+  answer is **application/envelope payload encryption** — the value is ciphertext before the
+  KV write, so the substrate only ever holds opaque bytes and only key-holders decrypt. This
+  is **not** WS3 `DataAtRestCipher`: WS3 is **on-disk only** (`mycelium-core/src/persistence.rs`
+  — "data in memory is not [protected]"), one cluster-uniform cipher per node, so every node
+  still holds the *plaintext in memory* — WS3 is disk-theft defence-in-depth, not a per-page
+  or cross-node read boundary.
 
-Worked examples (governance vs confidentiality): `docs/design/wiki-concurrent-edit.md`
-§4.3.1–4.3.2.
+Worked examples (governance · cluster boundary · payload encryption vs WS3):
+`docs/design/wiki-concurrent-edit.md`
+§4.3.1–4.3.3.
 
 ## Fan-out activation is event-driven
 

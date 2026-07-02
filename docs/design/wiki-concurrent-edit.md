@@ -293,7 +293,8 @@ it:
   "different clearance for different layers of the twin" framing). Worked example + the
   crucial served-path-vs-confidentiality distinction: §4.3.1; why a capability sub-group does
   **not** isolate the bytes (KV floods the cluster) and the cluster boundary is the real
-  isolation: §4.3.2.
+  isolation: §4.3.2; in-cluster confidentiality via payload encryption, and where WS3
+  `DataAtRestCipher` fits (and does not): §4.3.3.
 
 #### 4.3.1 Worked example — a classified section, and what the gate does *not* do
 
@@ -345,8 +346,9 @@ data-isolation boundary** (§4.3.2 works this through):
 | Need | Mechanism | What it costs |
 |---|---|---|
 | **Governance** — "cluster/group members shouldn't *casually* read L3, and it's audited if they try" | this served-path clearance gate (§4.3.1) | nothing extra; rides WS1 + WS2 |
+| **In-cluster confidentiality — only cleared nodes can *read*** (bytes still flood, as ciphertext) | **application/envelope payload encryption**: the wiki encrypts the *section value* with a clearance-scoped key before the KV write; the substrate sees opaque ciphertext everywhere (memory, wire, disk) and only key-holders decrypt (§4.3.3). | key management (a KEK per clearance) + a decrypt step per read |
 | **Confidentiality — bytes never *reach* non-cleared nodes** | a **cluster/mesh boundary**: the classified wiki runs in a *separate cluster* whose peer-admission (TLS mutual-auth) only cleared nodes pass — KV never crosses the mesh boundary (§4.3.2). The domain-level boundary, one level up from `join_group`. | a second mesh + cleared nodes peer into it + edge federation to bridge non-classified state |
-| **Confidentiality at rest, in one cluster** | **WS3 per-page/section encryption** — store ciphertext; only cleared nodes hold the key. The bytes still replicate cluster-wide, but as ciphertext. | key custody + a decrypt step on read |
+| **Defence-in-depth at rest** (disk theft), cluster-uniform | **WS3 `DataAtRestCipher`** — encrypts each node's own WAL/snapshot. **On-disk only** (`mycelium-core/src/persistence.rs`: "data in memory is not [protected]"), one cipher per node, **not** per-page and **not** per-clearance. Complements §4.3.3; does **not** by itself hide a page from other cluster nodes (they hold the plaintext in memory). | one operator-supplied cipher hook |
 
 Conflating governance and confidentiality is the trap: a gossip substrate replicates to the
 whole **cluster** by construction, so a per-key ACL — or a capability sub-group — *within* a
@@ -389,9 +391,56 @@ replicates*. The genuine boundary is the **mesh/cluster** — the domain-level s
 
 This is the same recursion the whole system rests on: **the boundary that isolates *data* is the
 peer-admission boundary (a cluster), not the participation boundary (a capability group).** Use a
-group to organise a knowledge community; use a *separate cluster* (or WS3 encryption) when
-non-cleared nodes must never hold the bytes. In-cluster classification (§4.3.1) is governance +
-audit, and that is a legitimate, common need — just never mis-sold as isolation.
+group to organise a knowledge community; use a *separate cluster* when non-cleared nodes must
+never *hold* the bytes, or *payload encryption* (§4.3.3) when they may hold ciphertext but must
+not *read* it. In-cluster classification (§4.3.1) is governance + audit, and that is a legitimate,
+common need — just never mis-sold as isolation.
+
+#### 4.3.3 Worked example — in-cluster confidentiality via payload encryption (and where WS3 fits)
+
+Sometimes you want confidentiality *without* a second cluster: non-cleared nodes may **hold** the
+classified section (it floods to them like all KV) but must not **read** it. That is
+**application/envelope encryption of the section value** — done by the wiki *before* the KV write,
+so the substrate only ever sees opaque bytes. It is **not** WS3's `DataAtRestCipher` (see the
+caveat below).
+
+```text
+# Envelope scheme: a per-clearance key-encryption-key (KEK) held only by cleared nodes.
+#   KEK_L3 is provisioned (KMS / sealed secret) to L3-cleared nodes only.
+#
+# WRITE (a cleared curator/contributor reconciles the L3 root-cause section):
+#   dek        = random data key
+#   ciphertext = AEAD_encrypt(dek, section_plaintext)         # the section body
+#   wrapped    = AEAD_encrypt(KEK_L3, dek)                     # DEK wrapped for the L3 KEK
+#   SectionBody { classification: 3, enc: Some({ wrapped, ciphertext }), body: <empty> }
+#   → kv.set("wiki/ir/postmortems/payment-outage#root-cause", SectionBody.encode())
+#
+# The KV VALUE is now opaque ciphertext. It floods the whole cluster (KV is cluster-wide) —
+# every node stores the bytes, in memory and on disk, as ciphertext. The substrate never sees
+# plaintext; there is nothing to redact at the served path (the value is already unreadable).
+#
+# READ:
+#   L3 node   → has KEK_L3 → unwrap dek → AEAD_decrypt → plaintext. ✓
+#   L2 node   → no KEK_L3 → unwrap fails → the section is unreadable ciphertext. ✓ (holds bytes, can't read)
+#   off-cluster node → never received the frame at all (that is §4.3.2's separate-cluster case).
+```
+
+**Convergence still holds:** the ciphertext is an ordinary opaque KV value, so section-granular
+LWW (§1–§2) and the curator reconcile (§3) work unchanged — *except* that a reconcile of an
+encrypted section must run on a **cleared curator** (it has to decrypt to 3-way-merge, then
+re-encrypt). So an encrypted page's curator-eligibility is itself clearance-gated: `WikiRole`
+candidacy for an encrypted namespace requires the KEK. Uncleared nodes can still hold and gossip
+the ciphertext (relay), just not curate it. Record this as a build constraint.
+
+**Where WS3 `DataAtRestCipher` fits — and does not.** WS3 is a *complementary, different* control:
+it encrypts each node's **on-disk** WAL/snapshot (`mycelium-core/src/persistence.rs`, scope
+"on-disk only … data in memory is not [protected]"), with **one cluster-uniform cipher per node**.
+It protects against *disk theft*; it does **not** give per-page or per-clearance confidentiality,
+because every node still holds the section **plaintext in memory** (the store is plaintext) and
+applies WS3 to its *own* disk regardless of clearance. Use WS3 for defence-in-depth at rest across
+the whole node; use payload encryption (above) for "only cleared nodes can read *this* page." They
+compose (payload-encrypted value, itself on a WS3-encrypted disk), but only payload encryption
+delivers the cross-node read boundary.
 
 ### 4.4 Federation boundary
 
