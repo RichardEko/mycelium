@@ -301,6 +301,59 @@ to replay or hand off. This is the blackboard's `Post`/`Ack` simplification (sna
 mirror, no heartbeat) applied one level up — recorded here as the reason `mycelium-wiki` will *not*
 copy the tuple space's WAL-cursor machinery.
 
+### 3.5 Worked example — curator crash + failover (the hard case: crash mid-reconcile)
+
+Three `Auto` nodes serve the `ir` group's wiki: **X** (candidate id 1, the live curator), **Y**
+(id 2), **Z** (id 3). All advertise `wiki.ir.candidate`; X additionally advertises
+`wiki.ir.curator` (§3.1). A contributor's proposal `P` is in the queue.
+
+```text
+t0  Steady state.
+    X: Curator (advertising wiki.ir.curator, cap_refresh ticking).  Y,Z: Candidate.
+    Queue: [ P = edit to sec/{sid}, base_hlc H ].
+
+t1  X begins reconciling P: reads base(H)+current, runs LLM_3way → MERGED.
+    X writes  sec/{sid} = MERGED   (one LWW write, gossips cluster-wide).
+    *** X CRASHES here — after the write, BEFORE tombstoning P. ***
+    (The other crash window — before the write — is simpler: P is untouched, just re-run.)
+
+t2  X's ads stop refreshing. Readers evaporate them at 3× cap_refresh (§3.4):
+    wiki.ir.curator{X} and wiki.ir.candidate{X} age out ⇒ current_curator() → None.
+    Reads of the wiki still succeed throughout (I3): MERGED already gossiped; pages are plain KV.
+
+t3  Y and Z both observe: no live wiki.ir.curator, and the lowest live candidate id is now Y (2).
+    Y transitions Candidate → Curator (§3.1 lowest-id, deterministic — Z sees Y<Z and stays).
+    No log replay, no state handoff: Y's "state" is just the durable KV (§3.4).
+
+t4  Y's first reconcile pass drains the queue and finds P STILL PRESENT (X never tombstoned it).
+    Y re-reconciles: base(H) + current(= MERGED, X's write) + [P.edit].
+    P.edit is already reflected in current ⇒ the 3-way merge is a no-op-equivalent; Y writes
+    MERGED' ≡ MERGED (idempotent, §2.2.1) and tombstones P.
+    Net effect of the whole failover: P applied exactly once; the section is single-valued.
+```
+
+Why each step is safe, against the invariants (§0):
+
+- **I3 (curator-optional):** between t1 and t3 there is *no* live curator, yet reads never
+  fail and P is not lost — it persists as evaporating soft-state until Y drains it. Only
+  *reconciliation* paused (for ≈ one election ≈ 3× `cap_refresh`), never reading.
+- **I2 (no lost edit) across the crash:** P survives because it is tombstoned *only after* it is
+  incorporated (§3.2). X crashing between write and tombstone is the at-least-once path, not a
+  loss path — the re-drain re-applies it idempotently.
+- **I1 (convergence):** at no instant are there two writers of `sec/{sid}` — X stopped writing
+  before Y started (the election is total-ordered on candidate id, and Y only promotes once X's
+  curator ad has *evaporated*, not merely gone quiet). One-writer-at-a-time holds across the
+  handoff, so the section stays single-valued.
+
+**The one liveness caveat to document for the build:** promotion waits for X's ad to *evaporate*
+(≈3× `cap_refresh`), not for a positive "X is dead" signal — the ring is the failure detector
+(§3.1). So there is a bounded window where reconciliation is paused but reads/proposals continue.
+Shrink it by lowering `cap_refresh` (at the cost of more advertisement gossip); it is the same
+promotion-latency tradeoff the tuple space and blackboard already make. A *transiently* slow X
+(GC pause > 3× cap_refresh) can cause a spurious dual-candidacy blip, but the total-order tie-break
+converges to one curator and the idempotent reconcile makes a doubled drain harmless — the same
+"eventual-single, not strict-single" posture WS-E accepted for provisioning.
+
 ---
 
 ## 4. Identity & access — competence is a capability, knowledge is not
