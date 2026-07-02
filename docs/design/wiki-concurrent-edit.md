@@ -127,6 +127,68 @@ proposal was written against a stale version" and hand the LLM both the base and
 do a **3-way** reconcile (base + current + proposed), the same shape as a git 3-way merge, rather than
 a blind overwrite.
 
+#### 2.2.1 Worked example — the curator's 3-way reconcile
+
+Two responders concurrently edit the **resolution** section of one incident page. Both read the
+same base, so both proposals carry the same `base_hlc`.
+
+```text
+BASE (what both B and C read — sec/{sid} at base_hlc):
+  ## Resolution
+  1. Rolled the payment service back to v4.2.1.
+  2. Confirmed checkout success rate recovered.
+
+# B (adds a follow-up step, edits nothing existing):
+proposal_B = { target: sec/{sid}, base_hlc: H, edit: "append step 3: 'Re-enable the v4.3
+              canary at 10% once RUSTSEC-2026-0188 is patched.'" }
+
+# C (corrects step 1 — the rollback was actually to v4.2.2 — and edits the same line B left alone):
+proposal_C = { target: sec/{sid}, base_hlc: H, edit: "step 1: rollback target was v4.2.2, not
+              v4.2.1 (v4.2.1 still had the leak)." }
+```
+
+The live curator drains **both** proposals for this target in one reconcile pass (§3.2) and picks
+the path by cost:
+
+```text
+# Fast path (no LLM): a SINGLE proposal whose base_hlc == the live section's current hlc
+#   → apply the edit directly. (Neither B nor C alone hits this here — there are two.)
+
+# Conflict path (LLM 3-way): ≥2 proposals for the target, or base_hlc != current.
+#   reconcile = LLM_3way(
+#       base    = BASE,                       # the common ancestor (base_hlc)
+#       current = live sec/{sid},             # may already differ if an earlier reconcile landed
+#       edits   = [proposal_B.edit, proposal_C.edit],
+#   )
+#   → MERGED:
+#       ## Resolution
+#       1. Rolled the payment service back to v4.2.2 (v4.2.1 still had the leak).   ← C
+#       2. Confirmed checkout success rate recovered.
+#       3. Re-enable the v4.3 canary at 10% once RUSTSEC-2026-0188 is patched.       ← B
+#
+#   ONE LWW write:  sec/{sid} = MERGED   (HLC-stamped by the curator)
+#   Both proposals tombstoned (§3.2). Neither edit was lost (I2): B's addition and C's
+#   correction both landed, exactly as a git 3-way merge combines non-overlapping hunks and
+#   the LLM resolves the one line C actually changed.
+```
+
+Two properties the example makes concrete:
+
+- **Non-overlapping edits just compose** — B appended, C fixed a different line; a 3-way merge
+  takes both without the LLM having to "choose." The LLM only adjudicates genuine overlap (had B
+  and C both rewritten step 1 differently, the merge would reconcile *those two* against BASE, and
+  the curator's single write still yields one converged value).
+- **`base_hlc` drives the merge, not a blind overwrite** — because both proposals name BASE, the
+  curator feeds the LLM the ancestor and can tell an *addition* (B) from a *change* (C). A proposal
+  whose `base_hlc` is older than `current` (it was written against a version a prior reconcile
+  already moved) still merges correctly: `current` is the second merge parent, so a stale-based
+  edit is layered onto the latest text, never clobbering it.
+
+Idempotence (§3.2): if the curator crashes after writing MERGED but before tombstoning the
+proposals, the re-elected curator re-drains them and re-runs the merge; `current` is now MERGED, the
+edits are already reflected, and the re-merge is a no-op-equivalent write — the section stays
+single-valued and converged because there is still exactly one writer.
+
 ### 2.3 Why free-for-all LLM merge is rejected (the declined alternative)
 
 The tempting shortcut — every agent's LLM reconciles concurrent edits inline, no curator — **violates
@@ -199,7 +261,7 @@ loop while Curator:
      base    = proposal.base_hlc's text (or current if absent)
      current = live sec/{sid} (or meta)
      merged  = if single proposal and base==current:  apply directly (no LLM)
-               else:                                   LLM 3-way reconcile(base, current, [edits])
+               else:                                   LLM 3-way reconcile(base, current, [edits])   # §2.2.1 worked example
      write  sec/{sid} = merged        # ONE LWW write, HLC-stamped, keyed by section id
      tombstone each consumed proposal # idempotent: a re-drained proposal re-reconciles to the same text
   sleep(reconcile_interval)
