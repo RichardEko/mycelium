@@ -3,9 +3,11 @@
 ↑ [dev/](dev.md) · full execution records: `docs/plans/README.md` (the canonical index)
 
 Reconciled current state of *what shipped when* — so no session re-derives it from git.
-As of 2026-06-21 **all engineering plans are shipped**; the only open plan is **Legible
-Emergence** (proposed, not started — `docs/plans/legible-emergence.md`, PR #118; resume at
-Phase 0).
+As of 2026-06-21 all v1.x/v2.0 engineering plans were shipped. Since then, **Legible Emergence
+(diagnosability) Phases 0–1 shipped** (2026-07-02): the Phase-0 taxonomy design record + the
+full Phase-1 emergent-detector layer — see [diagnostics.md](diagnostics.md). Phases 2–5 (fleet
+snapshot, causal `explain`, narrative, operator surface) are not started
+(`docs/plans/legible-emergence.md`).
 
 ## v2.0 (2026-06-21) — all 16 milestones M1–M16, acceptance gate met, no deferrals
 
