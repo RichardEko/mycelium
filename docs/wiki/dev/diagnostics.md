@@ -65,6 +65,9 @@ snapshot: `compute_fleet_snapshot` assembles governed-group status (`governed_gr
 coverage gaps, opacity, and the flap/oscillation counters from local KV, each with the RT1/RT2
 `view_confidence` header. The acceptance gate is met — `test_fleet_snapshot_agrees_across_three_
 nodes_at_convergence` proves three nodes compute the same *diagnosis* from converged KV while
-`view_confidence` stays each observer's own. Not started: Phase 3 (causal event
+`view_confidence` stays each observer's own; the live endpoint + `fleet:read` scope gate are
+covered by `test_gateway_fleet_snapshot_endpoint_scope_gated` (401/403/200). The snapshot also
+carries the throttle graph (`sys/rate/` edges), a convergence-health self-report (`store_hash`),
+and the commit-conflict count. Not started: Phase 3 (causal event
 ring + scatter-gather `explain`), Phase 4 (fleet narrative), Phase 5 (operator surface). The
 red-team findings (RT1–RT4) and their Phase-2+ implications are in the plan.

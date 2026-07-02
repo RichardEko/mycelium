@@ -3300,6 +3300,49 @@ mod tests {
         agent.shutdown().await;
     }
 
+    /// Legible Emergence Phase 2: the `/gateway/fleet` snapshot endpoint is live and
+    /// scope-gated (`fleet:read`, deny-by-default) — a `fleet:read` token reads it and
+    /// gets the relational snapshot shape; a wrong-scope token is 403; no token is 401.
+    #[cfg(feature = "compliance")]
+    #[tokio::test]
+    async fn test_gateway_fleet_snapshot_endpoint_scope_gated() {
+        use axum::http::header::AUTHORIZATION;
+        let gossip_port = alloc_port();
+        let http_port   = alloc_port();
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = gossip_port;
+        cfg.http_port = Some(http_port);
+        cfg.emergent_detectors_enabled = true;
+        cfg.gateway_scoped_tokens = vec![
+            crate::GatewayToken { token: "fleet-ro".into(), scopes: vec!["fleet:read".into()] },
+            crate::GatewayToken { token: "kv-ro".into(),    scopes: vec!["kv:read".into()] },
+        ];
+        let agent = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", gossip_port).unwrap(), cfg));
+        agent.start().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let client = reqwest::Client::new();
+        let base = format!("http://127.0.0.1:{http_port}");
+
+        // No token → 401.
+        let r = client.get(format!("{base}/gateway/fleet")).send().await.unwrap();
+        assert_eq!(r.status(), 401, "missing token unauthorized");
+        // Wrong scope → 403 naming fleet:read.
+        let r = client.get(format!("{base}/gateway/fleet"))
+            .header(AUTHORIZATION, "Bearer kv-ro").send().await.unwrap();
+        assert_eq!(r.status(), 403, "kv:read token forbidden on fleet:read");
+        assert_eq!(r.json::<serde_json::Value>().await.unwrap()["required_scope"], "fleet:read");
+        // fleet:read token → 200 with the relational snapshot shape.
+        let r = client.get(format!("{base}/gateway/fleet"))
+            .header(AUTHORIZATION, "Bearer fleet-ro").send().await.unwrap();
+        assert_eq!(r.status(), 200, "fleet:read token admitted");
+        let body: serde_json::Value = r.json().await.unwrap();
+        assert!(body["view_confidence"]["observer"].is_string(), "snapshot carries the RT1 view_confidence header");
+        assert!(body["governed_groups"].is_array());
+        assert!(body["throttle_graph"].is_array());
+        assert!(body["store_hash"].is_number());
+        agent.shutdown().await;
+    }
+
     /// WS4: an OIDC JWT from a (mock) IdP is validated at the gateway and its
     /// groups are mapped to scopes — a `readers`-group token reaches a `kv:read`
     /// route but is forbidden on a `kv:write` route; no token is 401.
