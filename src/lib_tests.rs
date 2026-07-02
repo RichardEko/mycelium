@@ -4613,3 +4613,47 @@ fn test_equal_timestamp_lww_converges_across_three_writers_all_orders() {
         );
     }
 }
+
+/// Legible-Emergence Phase 1 — **live end-to-end** #56 reproduction. The pure detectors are
+/// unit-tested in `agent::emergent`; this exercises the whole path a real deployment uses: a
+/// started agent with `emergent_detectors_enabled`, the spawned detector loop, the governor-intent
+/// publish path, and the `/stats` gauge atomic. It reproduces the governor-vs-emergent-autojoin
+/// condition (#56) — a group capped at max=2 that observes 4 members — and asserts the detector
+/// *fires*, then *clears* when membership returns in-bounds (the false-positive direction).
+#[tokio::test]
+async fn test_p1_governed_group_conflict_detector_fires_and_clears_end_to_end() {
+    use std::sync::atomic::Ordering;
+    let port = alloc_port();
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = port;
+    cfg.emergent_detectors_enabled = true;
+    let agent = GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg);
+    agent.start().await.unwrap();
+
+    // Governor caps "workers" at [min=1, max=2] (publish_membership_intent stamps it fresh).
+    assert!(agent.publish_membership_intent(MembershipIntent::new("workers", 1, Some(2))));
+
+    // Emergent auto-join pushes the group to 4 live members — over the cap. Inject them as
+    // `grp/workers/{node}` entries (the node segment must round-trip through NodeId::parse).
+    let members: Vec<NodeId> = (0..4).map(|i| NodeId::new("127.0.0.1", 25000 + i).unwrap()).collect();
+    for m in &members {
+        assert!(agent.kv().set(format!("grp/workers/{m}"), "1"));
+    }
+
+    // The detector loop ticks every ~2 s and confirms after CONFIRM_TICKS — wait it out.
+    poll_until(
+        || agent.task_ctx.governed_group_conflicts.load(Ordering::Relaxed) >= 1,
+        15_000,
+    ).await;
+
+    // Bring membership back in-bounds (tombstone 3 of 4 → 1 ∈ [1,2]) and assert the gauge clears.
+    for m in &members[1..] {
+        assert!(agent.kv().delete(format!("grp/workers/{m}")));
+    }
+    poll_until(
+        || agent.task_ctx.governed_group_conflicts.load(Ordering::Relaxed) == 0,
+        15_000,
+    ).await;
+
+    agent.shutdown_with_timeout(Duration::from_secs(5)).await;
+}

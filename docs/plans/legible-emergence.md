@@ -1,6 +1,6 @@
 # Legible Emergence — making coordinator-free fleets diagnosable
 
-**Status:** 🟡 **Phase 0 done; Phase 1 in progress; Phases 2–5 not started** (proposed 2026-06-21;
+**Status:** 🟢 **Phases 0–1 done; Phases 2–5 not started** (proposed 2026-06-21;
 red-teamed + Phase-0 taxonomy 2026-07-02; all 5 Phase-1 detectors (P1/P2/P3/P4/P6) + `/metrics` shipped 2026-07-02). Phase 0 shipped as
 [`docs/design/legible-emergence-taxonomy.md`](../design/legible-emergence-taxonomy.md) (the
 pathology taxonomy, with RT1–RT4 baked in). The **Red-team findings** section (below, near the
@@ -96,7 +96,7 @@ live providers), consensus livelock (votes not arriving). **Gate:** the classifi
 each pathology has a defined trip condition, and the (b)-tier (KV-computable) set is confirmed to be
 the majority — validating that Phases 1–2 are cheap.
 
-### Phase 1 — Emergent-condition tripwires (node-local + KV-view detectors) — 🟢 DETECTORS DONE (live test pending)
+### Phase 1 — Emergent-condition tripwires (node-local + KV-view detectors) — ✅ DONE
 
 **Increments 1–5 shipped — all five KV-view detectors + `/metrics` done** in `src/agent/emergent.rs` — config-gated `GOSSIP_EMERGENT_DETECTORS`
 (off by default, zero overhead), the `run_emergent_detectors` loop, the `ViewConfidence` header
@@ -119,9 +119,11 @@ sliding-window `FlapTracker` (per (group,node) transition timestamps; ≥4 toggl
 so a single failover doesn't trip it); gauge `membership_flaps`. This is the detector for the plan's
 motivating image ("node count flapping with no signal why"). **P3 opacity oscillation** shipped — reuses P2's `FlapTracker` (opacity is the same
 presence-set-churn shape): `opacity_pairs` + `set_transitions` feed a second tracker; gauge
-`opacity_oscillations`. **All five Phase-1 detectors (P1/P2/P3/P4/P6) + the `/stats`/`/metrics`
-surface are done.** The only remaining Phase-1 item is a *live-cluster* #56 reproduction
-integration test (the pure detectors are unit-tested; this would exercise the loop end-to-end).
+`opacity_oscillations`. **Phase 1 is complete:** all five detectors (P1/P2/P3/P4/P6), the `/stats` + `/metrics`
+surface, and a **live end-to-end #56 reproduction** (`test_p1_governed_group_conflict_detector_
+fires_and_clears_end_to_end` — a started agent with detectors on, the governor-intent publish
+path, the spawned loop, and the gauge: the cap-vs-observed conflict fires, then clears when
+membership returns in-bounds). Next: Phase 2 (`/gateway/fleet` relational snapshot).
 
 The cheap, high-value layer. New detectors that read node-local state + the locally-held KV,
 surfaced on `/stats` and `/metrics`, mirroring the existing tripwire pattern but at the
