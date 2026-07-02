@@ -291,7 +291,9 @@ it:
   an L3-classified section is *served* only to a caller whose *verified* signed role claim
   carries L3 clearance. A group wiki is a natural home for per-page classification (the
   "different clearance for different layers of the twin" framing). Worked example + the
-  crucial served-path-vs-confidentiality distinction: §4.3.1.
+  crucial served-path-vs-confidentiality distinction: §4.3.1; why a capability sub-group does
+  **not** isolate the bytes (KV floods the cluster) and the cluster boundary is the real
+  isolation: §4.3.2.
 
 #### 4.3.1 Worked example — a classified section, and what the gate does *not* do
 
@@ -327,26 +329,69 @@ endpoint and the wiki read RPC), using `roles_of`, which is unforgeable because 
 the Ed25519 signature against the caller's *cluster-learned* identity key, never the raw KV
 bytes. A forged `sys/role/` write reads back as `None`, so a self-upgraded clearance fails.
 
-But Mycelium is a **gossip** substrate: once B joined the group, `Boundary::admits` already
-delivered the whole `wiki/{group}/` namespace — **including the L3 section's bytes** — to B's
-local store. The clearance gate withholds the section from the *convenient* path and audits
-the attempt; it does **not** stop a group member who bypasses the read path and inspects raw
-gossiped KV. **Per-page clearance gates *access*, not *replication*.**
+But Mycelium is a **gossip** substrate, and — the load-bearing fact — **Layer-I KV floods the
+whole cluster unconditionally.** `WireMessage::Data` always forwards `ForwardHint::All`
+(`mycelium-core/src/connection.rs`); `Boundary::admits` gates only whether a node *acts on a
+Signal*, never KV propagation ("only *admission* is scoped, forwarding never is" — the runtime
+invariant). So the L3 section's bytes reach **every node in the cluster** — not just group
+members, and not because anyone "joined": anti-entropy converges the store cluster-wide by
+construction. The clearance gate withholds the section from the *convenient* read path and
+audits the attempt; it does **not** stop *any* cluster node that inspects raw gossiped KV.
+**Per-page clearance gates *access*, not *replication*.**
 
-So pick the tool by what you actually need:
+So pick the tool by what you actually need — and note that a capability **group is not a
+data-isolation boundary** (§4.3.2 works this through):
 
 | Need | Mechanism | What it costs |
 |---|---|---|
-| **Governance** — "group members shouldn't *casually* read L3, and it's audited if they try" | this served-path clearance gate (§4.3.1) | nothing extra; rides WS1 + WS2 |
-| **Confidentiality** — "non-cleared members must never *hold* the bytes" | a **sub-group boundary**: L3 pages live in group `{group}.l3` whose `CapabilityGroupDef` filter only cleared members satisfy → the bytes never gossip to non-cleared nodes (classification becomes a more-exclusive *group*, not a per-page ACL — the clean coordinator-free option) | a second group + cleared members re-join it |
-| **Confidentiality at rest, in-group** | **WS3 per-page/section encryption** — store ciphertext; only cleared members hold the key | key custody + a decrypt step on read |
+| **Governance** — "cluster/group members shouldn't *casually* read L3, and it's audited if they try" | this served-path clearance gate (§4.3.1) | nothing extra; rides WS1 + WS2 |
+| **Confidentiality — bytes never *reach* non-cleared nodes** | a **cluster/mesh boundary**: the classified wiki runs in a *separate cluster* whose peer-admission (TLS mutual-auth) only cleared nodes pass — KV never crosses the mesh boundary (§4.3.2). The domain-level boundary, one level up from `join_group`. | a second mesh + cleared nodes peer into it + edge federation to bridge non-classified state |
+| **Confidentiality at rest, in one cluster** | **WS3 per-page/section encryption** — store ciphertext; only cleared nodes hold the key. The bytes still replicate cluster-wide, but as ciphertext. | key custody + a decrypt step on read |
 
 Conflating governance and confidentiality is the trap: a gossip substrate replicates to the
-whole group by construction, so a per-key ACL *within* a group is a governance gate, not an
-isolation boundary. The wiki's own §4 mapping still holds — **access is group membership**;
-clearance *refines* the convenient path, and true isolation is a *tighter group* (or
-encryption), never a promise that a per-page label alone hides bytes from a member who
-already has them.
+whole **cluster** by construction, so a per-key ACL — or a capability sub-group — *within* a
+cluster is a governance gate, **not** an isolation boundary. The wiki's §4 mapping still holds
+(**access is group membership**; clearance *refines* the served path), but true isolation is a
+*tighter cluster* or *encryption*, never a promise that a per-page label — or a sub-group —
+hides bytes from a node that already holds them.
+
+#### 4.3.2 Worked example — the cluster boundary is the real isolation, not a sub-group
+
+The tempting-but-wrong instinct is "put L3 pages in a capability sub-group `{group}.l3` so only
+cleared members hold them." **This does not isolate the bytes** — `wiki/{group}.l3/*` is still
+ordinary KV, and KV floods the whole cluster (above), so every node stores it regardless of any
+capability group. A capability group self-organises *who participates*; it never scopes *what
+replicates*. The genuine boundary is the **mesh/cluster** — the domain-level self-election from
+[`../wiki/domain/theory/coordinator-free-recursion.md`](../wiki/domain/theory/coordinator-free-recursion.md)
+("Domain/cluster: peer admission + identity define who is in this economy").
+
+```text
+# WRONG — a capability sub-group inside the shared cluster:
+#   L3 pages under wiki/incident-response.l3/*  →  STILL gossips to every node in the cluster.
+#   Non-cleared nodes hold the bytes; only the served-path gate (§4.3.1) withholds them. Governance, not isolation.
+
+# RIGHT (isolation) — a separate cluster for the classified domain:
+#   Cluster A ("ir-public"):   all responders. Holds wiki/incident-response/* (L1/L2 pages).
+#   Cluster B ("ir-classified"): a SEPARATE mesh — its own bind/peer set; peer admission is
+#     TLS mutual-auth, and only L3-cleared nodes hold the CA-issued cert to join it. Holds the
+#     L3 wiki/incident-response/*  (root-cause, SPOF topology). Its KV NEVER crosses into A —
+#     the two meshes don't peer, so anti-entropy has no path between them.
+#
+#   A cleared incident commander runs a node in BOTH clusters (two GossipAgents, two meshes);
+#   a triage bot runs only in A and, having no cert for B, cannot peer in — the bytes are
+#   physically absent from its store, not merely withheld at read time.
+#
+#   Bridge the non-classified state at the EDGE, not the substrate: cluster B publishes its
+#   *competence* (AgentFacts: "L3 incident analysis available") into the federation quilt, or
+#   a redacted summary page into A over the gateway — never its raw KV. (§4.4: advertise what
+#   you can do, never what you know.)
+```
+
+This is the same recursion the whole system rests on: **the boundary that isolates *data* is the
+peer-admission boundary (a cluster), not the participation boundary (a capability group).** Use a
+group to organise a knowledge community; use a *separate cluster* (or WS3 encryption) when
+non-cleared nodes must never hold the bytes. In-cluster classification (§4.3.1) is governance +
+audit, and that is a legitimate, common need — just never mis-sold as isolation.
 
 ### 4.4 Federation boundary
 
