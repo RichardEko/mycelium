@@ -170,6 +170,16 @@ existed. This is the framework's own report card.
   wasm-host sandbox surface). Found by the Run-28 `cargo audit` probe; fixed same day —
   `wasmtime-wasi` → 45.0.3 (and `anyhow` → 1.0.103 for the RUSTSEC-2026-0190 unsound
   warning); `cargo audit` re-run clean (0 vulnerabilities).
+- 2026-07-02: **Test Architecture** scored 8 in Run 29 (evidence: "`cargo test --lib` 291/0
+  run twice, deterministic") while `test_manage_opacity_gate_vetoes_then_library_overrides`
+  flaked under the **full-feature** CI `Test` job (`tls,metrics,a2a,llm`) — a scheduler-
+  starvation timing flake (the opacity governor's 100 ms ticker starves under ~314 parallel
+  tests, so the guaranteed `fill==1.0` BOUNDARY_OPAQUE emission missed the test's 3 s poll).
+  The Run-29 "deterministic" evidence was scoped to *default* features and never ran the
+  matrix that flaked. Found by CI red on the docs-only Phase-0 commit (155f8b3); fixed by
+  widening the structural poll 3 s → 10 s (the emission is guaranteed, only its latency under
+  load wasn't). Lesson (again): "green twice" is only as broad as the feature set you ran —
+  Run 29's determinism claim should have named its scope.
 
 **Dimensions:** Philosophy/Coherence · Conceptual Integrity · Architecture ·
 Modularity · API Design · Error Handling · Configurability · Language Best

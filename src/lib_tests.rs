@@ -2029,14 +2029,19 @@ async fn test_manage_opacity_gate_vetoes_then_library_overrides() {
     let premature = time::timeout(Duration::from_millis(250), opaque_rx.recv()).await;
     assert!(premature.is_err(), "gate veto must prevent emission below 100% fill");
 
-    // Fill to 100% — library overrides the gate. Poll structurally (up to 3 s) rather than with a
-    // tight one-shot timeout: a 400 ms `recv()` raced the governor's emission under loaded CI
-    // (264 parallel tests) and flaked. `recv_within!` is the same bound the sibling tests use.
+    // Fill to 100% — library overrides the gate (at `fill_ratio >= 1.0` the emit is
+    // unconditional, `src/agent/opacity.rs`), so BOUNDARY_OPAQUE is *guaranteed*; only its
+    // latency is in question. That latency is the governor's 100 ms ticker being **scheduled**,
+    // and under the full-feature `Test` job (tls,metrics,a2a,llm × ~314 parallel tests) the
+    // ticker starves: a 3 s bound flaked on CI 2026-07-02 (passed locally + on rerun). Poll
+    // generously — 10 s costs nothing on a healthy run (it returns on the first tick, ~100 ms)
+    // and only spends the budget when the runtime is saturated. `recv_within!` polls in 200 ms
+    // steps, so this is patience, not a fixed sleep.
     for _ in 0..2 {
         let _ = agent.mesh().emit("test.gov.gate", SignalScope::Individual(self_id.clone()), Bytes::new());
     }
     assert!(
-        recv_within!(opaque_rx, 3),
+        recv_within!(opaque_rx, 10),
         "library must override gate and emit BOUNDARY_OPAQUE when fill == 1.0",
     );
 }
