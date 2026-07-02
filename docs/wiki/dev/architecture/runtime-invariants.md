@@ -35,6 +35,32 @@ silent drop, which broke RPC and ballot voting in partial meshes. Only *admissio
 `test_individual_signal_reaches_unpeered_target_via_relay`,
 `test_individual_consumers_over_random_partial_meshes` (both in `src/lib_tests.rs`).
 
+## KV floods the cluster — a group is not a data-isolation boundary
+
+`WireMessage::Data` (the KV path) always forwards `ForwardHint::All`
+(`mycelium-core/src/connection.rs` — the seen-set dedups, hop-TTL bounds it): **Layer-I KV
+replicates to every node in the cluster, unconditionally.** `Boundary::admits` gates only
+whether a node *acts on a Signal*; it never scopes KV propagation. Consequences a contributor
+*will* get wrong (it was mis-stated once in the wiki design record and caught by this lint):
+
+- A **capability group** (`join_group`, `gcap/`) organises *who participates* — it never
+  scopes *what replicates*. Group-scoped state (e.g. a `wiki/{group}/…` namespace) is
+  **namespaced and access-gated, not replication-isolated**: every cluster node holds the
+  bytes regardless of membership.
+- Therefore an in-cluster access label (RBAC clearance on a key, an `authorized_callers`
+  ACL) is a **served-path gate** — governance + audit (detection-not-prevention), never
+  confidentiality. It withholds the *convenient* read path; it cannot un-replicate bytes a
+  node already holds.
+- The genuine **data-isolation boundary is the cluster/mesh** — peer admission (TLS
+  mutual-auth: who you connect to and authenticate). Bytes that must never *reach* a node
+  belong in a **separate cluster** (its KV never peers in) or must be **encrypted** (WS3;
+  ciphertext still floods, only key-holders read). This is the domain-level self-election of
+  [coordinator-free-recursion](../../domain/theory/coordinator-free-recursion.md) — the
+  boundary that isolates *data* is one level up from the group.
+
+Worked examples (governance vs confidentiality): `docs/design/wiki-concurrent-edit.md`
+§4.3.1–4.3.2.
+
 ## Fan-out activation is event-driven
 
 The connection handler publishes the peer list the moment a new peer is inserted (Ping
