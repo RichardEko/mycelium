@@ -1,10 +1,15 @@
 # Mycelium documentation — map
 
-The front door for `docs/`. Seven categorized areas plus two **root-level stance
+The front door for `docs/`. Eight categorized areas plus two **root-level stance
 anchors**. The convention: **root holds the foundational, cross-cutting "stance"
 documents** (what the system *is*, and what an attacker *gains*); **everything else
 is categorized by document *type*** — sequencing vs decision vs tutorial vs manual
-vs runbook vs paper vs audit. Find the kind of answer you need, then the area.
+vs runbook vs paper vs audit vs synthesis. Find the kind of answer you need, then
+the area.
+
+> **Agents / maintainers start at [`wiki/`](wiki/wiki.md)** — the LLM-maintained
+> knowledge base that synthesises the current state across all the areas below
+> (schema: [`wiki/AGENTS.md`](wiki/AGENTS.md); code is canon, the wiki cites it).
 
 ## Root anchors
 
@@ -27,6 +32,7 @@ across the tree, deliberately at the root rather than filed under one area.
 | [`reference/`](reference/) | **Manual** — *how to use* a feature | Reference docs, e.g. the [SkillRunner manual](reference/skillrunner.html). |
 | [`publications/`](publications/) | **Papers + decks** — the research & pitch track | One directory per paper: [`paper1/`](publications/paper1/) — "The Coordinator Trap" ([paper.md](publications/paper1/paper.md) + LaTeX source); [`paper2a/`](publications/paper2a/) — the substrate-convergence paper (LaTeX + [working draft](publications/paper2a/substrate_convergence.html)). Plus two decks — the architecture/strategy [presentation](publications/presentation.html) (engineer-facing) and the buyer-facing [customer pitch](publications/customer-pitch.html) (value/sovereignty-led). Rendered PDFs are derived, not tracked. |
 | [`analysis/`](analysis/) | **Audit series** — the project's own report card | [`ratings.md`](analysis/ratings.md): the periodic 25-dimension M2 self-audit (execution-evidence-gated, with a calibration ledger that scores the scores). Run via the `mycelium-analysis` skill. |
+| [`wiki/`](wiki/wiki.md) | **Synthesis** — the LLM-maintained knowledge base | The current-state, cross-linked wiki compiled from all the areas above (Karpathy LLM-wiki pattern): [`dev/`](wiki/dev/dev.md) (architecture invariants, concurrency discipline, testing lore, security, companions, delivery history) + [`domain/`](wiki/domain/domain.md) (coordinator-free theory, publications, strategy). Schema: [`AGENTS.md`](wiki/AGENTS.md). Query-first for agents; linted via the `wiki-lint` skill. |
 
 ## Which area answers which question?
 
@@ -37,6 +43,7 @@ across the tree, deliberately at the root rather than filed under one area.
 - *"What's the security blast radius?"* → [`threat-model.md`](threat-model.md).
 - *"How do I use feature Z?"* → [`reference/`](reference/) (+ the relevant guide chapter).
 - *"What's the research basis / is it sound?"* → [`publications/`](publications/) + [`analysis/`](analysis/).
+- *"What's the current reconciled state of X?" (agent onboarding)* → [`wiki/`](wiki/wiki.md).
 
 > Architecture invariants and the on-ramp for code-assistant sessions live in the
 > repo-root [`CLAUDE.md`](../CLAUDE.md); the milestone *design* home is

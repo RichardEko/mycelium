@@ -1,0 +1,39 @@
+# Lock-order table
+
+↑ [concurrency](concurrency.md) · sibling: [lock-free-and-atomics](lock-free-and-atomics.md)
+
+All `Mutex` and `RwLock` sites in the codebase. **Invariant: no function acquires more than
+one lock from this table** — flat acquisitions only, so no ordering discipline is needed
+beyond this list.
+
+**Keep this table honest:** it claims completeness — when adding any `Mutex`/`RwLock` field,
+add a row. Analysis Run 28 found rows 9–14 missing after three feature waves; the flat
+invariant held, but only by luck of review. The doc-vs-code lint (schema §Lint) greps for
+`Mutex<`/`RwLock<` declarations and diffs against this table.
+
+| # | Field | Type | Acquired in | Notes |
+|---|-------|------|-------------|-------|
+| 1 | `CoreCtx::task_handles` | `Mutex<JoinSet>` | `spawn_task()`, `wait_for_tasks()`, shutdown drain | Short-lived; the shutdown drain swaps the set out before awaiting |
+| 2 | `TaskCtx::rpc_pending` | `Mutex<HashMap>` | `rpc_call_ctx`, `rpc.result` handler | Poison-recovering; never across `await` |
+| 3 | `CoreCtx::reorder_buf` | `Mutex<ReorderBuffer>` | `emit_ordered()`, flush task | Lock+flush synchronous |
+| 4 | `CoreCtx::signal_boundary` | `parking_lot::RwLock<Boundary>` | read: every `emit()`; write: join/leave/suppress | `read()` is the hot path |
+| 5 | `GossipAgent::gossip_rxs` | `Mutex<Option<Vec<Receiver>>>` | `start()` (`take()`d once) | Single-use |
+| 6 | `GossipAgent::extra_routes` | `Mutex<Option<Router>>` | `with_http_routes()`, `start()` | Gateway feature; single-use |
+| 7 | `KvStore::index_stripes` | `[Mutex<()>; 64]` | `apply_and_notify` index reconcile | Leaf lock; exists because the store CAS is lock-free (M2 Run-18 finding: index ops could interleave opposite to CAS order and strand a key outside `scan_prefix`) |
+| 8 | `TaskCtx::audit_chain` | `Mutex<AuditChainState>` (`compliance`) | `audit()` sealing | Guard released **before** the KV write; signing happens after the lock |
+| 9 | `AgentStateMachine::current` | `parking_lot::Mutex<ExecutionState>` | `state()`, `try_commit()`, `force_failed_transition()` | The commit lock: validate-and-swap **plus** budget-counter check + reserve as one atomic step (Run 28 fix). Policy is snapshotted before acquiring — never take #10 while holding this |
+| 10 | `AgentStateMachine::policy` | `parking_lot::RwLock<AgentPolicy>` | guards, snapshots, `set_policy()` | Read-mostly; never held while acquiring #9 |
+| 11 | `AgentStateMachine::task_id` / `::timeout_handle` | `parking_lot::Mutex<…>` | task-id set/read; timeout arm/cancel | Leaf locks, single-statement |
+| 12 | `SwimState::pending` | `Mutex<AHashMap<u64, oneshot::Sender>>` | probe register/resolve/forget | Leaf; poison-recovering |
+| 13 | `SwimState::membership` | `Mutex<SwimMembership>` | `lock_membership()` callers | Leaf; never held while acquiring #12 |
+| 14 | `FilterOpacityRegistry::entries` | `Mutex<Vec<RegEntry>>` | `declare_requirement`, opacity watcher | Leaf; poison-recovering |
+| 15 | `HttpCtx::gateway_caps` | `Mutex<HashMap<String, oneshot::Sender>>` | gateway capability register/retract handlers | Leaf; poison-recovering; single-statement insert/remove |
+| 16 | `HttpCtx::lock_guards` | `Mutex<HashMap<String, LockGuard>>` | gateway distributed-lock acquire/release handlers | Leaf; poison-recovering; single-statement insert/remove |
+| 17 | `OidcVerifier::cache` | **`tokio::sync::RwLock<Option<CachedKeys>>`** | JWT verify (read), JWKS refresh (write) | **The one sanctioned async lock**: the write guard is *deliberately held across the JWKS HTTP fetch* so refresh is single-flight (readers on the hot path take a cheap read-lock on cached keys). Do not copy this pattern without the same single-flight justification |
+
+**Async contexts:** guards from every *sync* lock above are `!Send` across `await`
+(`std::sync` and default `parking_lot` alike) — the compiler enforces it for spawned
+futures; all those sites release before any `await`. `std::sync::Mutex` is the default
+flavour; `signal_boundary` (row 4) and `AgentStateMachine` (rows 9–11) use `parking_lot`
+with the same discipline. `tokio::sync` locks are banned **except** row 17's documented
+single-flight exception.

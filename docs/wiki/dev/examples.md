@@ -1,0 +1,20 @@
+# dev/examples — the runnable suites
+
+↑ [dev/](dev.md)
+
+- **Food-Rescue Co-op suite** (`examples/coop/`, workspace member
+  `mycelium-coop-examples`): **eleven** demos composed in one constructive world (depot
+  nodes rescuing surplus food, no dispatcher) — mailbox_llm · stigmergy · elastic_intent ·
+  provisioning ⭐ (the autonomic loop) · federation_facts · rotation · consensus ·
+  llm_pipeline · mcp_toolgrowth · llm_council · catalog. `ci_smoke.sh` runs all eleven
+  Docker-free (CI `coop-smoke`). Per-demo docs: `examples/coop/README.md`; plan:
+  `docs/plans/example-suite.md`. **The suite anchors the developer docs** (guide 00 /
+  14-patterns / cookbook). Domain preference: constructive framings (microgrids, food
+  redistribution), never war-room/crisis.
+- **Agentic Flow Networks** (`examples/fluid_pipeline/`): 10-worker pool, 4-stage pipeline,
+  `PIPELINE_MODE=pull` (canonical, tuple-space) vs `push` (baseline comparison). CI
+  `afn-smoke`. Concept essay: `flow_networks.html`.
+- **A2A LangChain/AutoGen** (`examples/a2a_langchain/`): external agents auto-discover
+  Mycelium skills via `/.well-known/agent.json`.
+- Integration suite: **13 Docker scenarios** (`make test-integration`); scale suites in
+  [testing/scale-tests](testing/scale-tests.md).
