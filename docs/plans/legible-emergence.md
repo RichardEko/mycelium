@@ -98,14 +98,20 @@ the majority — validating that Phases 1–2 are cheap.
 
 ### Phase 1 — Emergent-condition tripwires (node-local + KV-view detectors) — 🟡 IN PROGRESS
 
-**Increment 1 shipped:** the detector infrastructure + **P1 governed-group conflict** (the #56
-detector). `src/agent/emergent.rs` — config-gated `GOSSIP_EMERGENT_DETECTORS` (off by default,
-zero overhead), a `run_emergent_detectors` loop, the pure `detect_governed_group_conflicts` +
-`confirm_conflicts` (hysteresis) functions, the `ViewConfidence` header (RT1/RT2), surfaced on
-`/stats` as `governed_group_conflicts` + `view_confidence`. Gates: the #56 over-max reproduction,
-under-min, the healthy-in-bounds false-positive gate, RT3 evaporated-intent, and the hysteresis
-test all pass. **Remaining:** P2 flap, P3 oscillation, P4 opacity-storm, P6 coverage-gap (same
-shape), a `/metrics` surface, and a live-cluster #56 reproduction test.
+**Increments 1–2 shipped** in `src/agent/emergent.rs` — config-gated `GOSSIP_EMERGENT_DETECTORS`
+(off by default, zero overhead), the `run_emergent_detectors` loop, the `ViewConfidence` header
+(RT1/RT2), all surfaced on `/stats`:
+- **P1 governed-group conflict** (#56): pure `detect_governed_group_conflicts` (governor intent
+  vs live `grp/` count, RT3 evaporation-tolerant) + `confirm_conflicts` (hysteresis, in the loop);
+  gauge `governed_group_conflicts`.
+- **P4 fleet-opacity storm** (RT2 flagship): pure `opaque_node_pct` (distinct fresh-opaque nodes ÷
+  live nodes) — a *stateless* gauge computed on-demand, so it lives in `/stats` not the loop; a raw
+  gauge the operator thresholds (library-not-platform), read beside `view_confidence`.
+
+Design note that emerged: **stateful detectors (hysteresis → P1) live in the loop; stateless gauges
+(P4) compute on-demand in `/stats`.** 8 unit tests (P1: over-max/under-min/healthy/RT3/hysteresis;
+P4: storm/healthy/stale-RT3). **Remaining:** P2 flap, P3 oscillation, P6 coverage-gap (same shape),
+a `/metrics` surface, and a live-cluster #56 reproduction test.
 
 The cheap, high-value layer. New detectors that read node-local state + the locally-held KV,
 surfaced on `/stats` and `/metrics`, mirroring the existing tripwire pattern but at the

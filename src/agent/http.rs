@@ -580,6 +580,8 @@ async fn stats_handler(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
         // per-node estimate, not fleet truth" header — is attached only when detectors are enabled.
         "governed_group_conflicts": ctx.agent_ctx.governed_group_conflicts
             .load(std::sync::atomic::Ordering::Relaxed),
+        "opaque_node_pct": ctx.agent_ctx.config.emergent_detectors_enabled
+            .then(|| super::emergent::compute_opaque_node_pct(&ctx.agent_ctx)),
         "view_confidence": ctx.agent_ctx.config.emergent_detectors_enabled
             .then(|| super::emergent::compute_view_confidence(&ctx.agent_ctx)),
     }))

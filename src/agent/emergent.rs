@@ -118,6 +118,44 @@ pub fn confirm_conflicts(
     confirmed
 }
 
+/// A peer opacity entry older than this is not counted as live for the storm gauge (P4).
+const OPAQUE_MAX_AGE_MS: u64 = 30_000;
+
+/// **Pure P4 detector** — the fraction (integer percent, 0–100) of live nodes currently shedding
+/// (opaque). A fleet-wide **opacity storm** (correlated shed / pheromone runaway) shows here. Scans
+/// `sys/load/`, counts *distinct* nodes with a **fresh** `is_opaque` entry, over `live_nodes`
+/// (the caller's roster + self). Node-local KV scan; unit-testable.
+///
+/// **RT2 flagship:** a storm degrades the very gossip this count relies on, so the result is an
+/// explicitly view-confidence-qualified *estimate* — always read it beside [`compute_view_confidence`]
+/// (`peers_heard ≪ peers_known` ⇒ the fraction may be undercounted, because the observer is itself
+/// starved). It is a **raw gauge, not a flag**: the operator thresholds it (library-not-platform —
+/// heavy alerting is their stack), so no contestable in-code bound is baked here.
+pub fn opaque_node_pct(kv_state: &crate::store::KvState, live_nodes: usize, now: u64, max_age_ms: u64) -> u64 {
+    let mut opaque: HashSet<String> = HashSet::new();
+    for (key, bytes) in scan_prefix_kv(kv_state, crate::signal::kv_ns::LOAD) {
+        let tail = key.strip_prefix(crate::signal::kv_ns::LOAD).unwrap_or("");
+        let node = &tail[..tail.find('/').unwrap_or(tail.len())];
+        if let Some(s) = crate::signal::decode_load_state(&bytes)
+            && s.is_opaque
+            && now.saturating_sub(s.written_at_ms) <= max_age_ms
+        {
+            opaque.insert(node.to_string());
+        }
+    }
+    if live_nodes == 0 {
+        return 0;
+    }
+    ((opaque.len() as u64 * 100) / live_nodes as u64).min(100)
+}
+
+/// Compute the current opacity-storm gauge (P4) — cheap, on-demand (called by `/stats`). The
+/// denominator is this node's roster + self; RT3 evaporation is honoured via [`OPAQUE_MAX_AGE_MS`].
+pub fn compute_opaque_node_pct(ctx: &TaskCtx) -> u64 {
+    let live_nodes = ctx.peers.pin().len() + 1; // peers + self
+    opaque_node_pct(&ctx.kv_state, live_nodes, now_ms(), OPAQUE_MAX_AGE_MS)
+}
+
 /// Compute this node's current [`ViewConfidence`] — cheap, on-demand (called by `/stats`).
 pub fn compute_view_confidence(ctx: &TaskCtx) -> ViewConfidence {
     let guard = ctx.peers.pin();
@@ -267,5 +305,52 @@ mod tests {
         // Group recovers → streak pruned, count drops to 0.
         assert_eq!(confirm_conflicts(&[], &mut streaks, 2), 0, "recovered: no confirmed conflict");
         assert!(streaks.is_empty(), "recovered group's streak is pruned");
+    }
+
+    fn seed_opacity(kv: &KvState, hlc: &Hlc, node: &NodeId, kind: &str, is_opaque: bool, now: u64) {
+        let key: Arc<str> = Arc::from(format!("sys/load/{node}/{kind}").as_str());
+        let ls = crate::signal::LoadState { fill_ratio: if is_opaque { 1.0 } else { 0.1 }, is_opaque, written_at_ms: now };
+        apply_and_notify(kv, &make_gossip_update(
+            node, 4, key, crate::signal::encode_load_state(&ls), false, hlc));
+    }
+
+    /// P4 storm gate — most of the fleet shedding shows a high percentage.
+    #[test]
+    fn opacity_storm_shows_high_pct() {
+        let kv = KvState::new(0);
+        let hlc = Hlc::new();
+        let now = 1_000_000_000_000;
+        // 6 of 8 live nodes opaque.
+        for i in 0..8 {
+            let node = NodeId::new("127.0.0.1", 30000 + i as u16).unwrap();
+            seed_opacity(&kv, &hlc, &node, "work", i < 6, now);
+        }
+        let pct = opaque_node_pct(&kv, 8, now, OPAQUE_MAX_AGE_MS);
+        assert_eq!(pct, 75, "6 of 8 opaque ⇒ 75%");
+    }
+
+    /// P4 false-positive gate — a healthy fleet (few shedding) reads low.
+    #[test]
+    fn healthy_fleet_shows_low_opacity_pct() {
+        let kv = KvState::new(0);
+        let hlc = Hlc::new();
+        let now = 1_000_000_000_000;
+        for i in 0..8 {
+            let node = NodeId::new("127.0.0.1", 31000 + i as u16).unwrap();
+            seed_opacity(&kv, &hlc, &node, "work", i == 0, now); // 1 of 8
+        }
+        assert_eq!(opaque_node_pct(&kv, 8, now, OPAQUE_MAX_AGE_MS), 12, "1 of 8 ⇒ 12%");
+    }
+
+    /// P4 RT3 — a *stale* opaque entry (older than the freshness window) is not counted; a node
+    /// that stopped refreshing its shed pheromone is no longer "opaque."
+    #[test]
+    fn stale_opacity_entry_not_counted() {
+        let kv = KvState::new(0);
+        let hlc = Hlc::new();
+        let now = 1_000_000_000_000;
+        let node = NodeId::new("127.0.0.1", 32000).unwrap();
+        seed_opacity(&kv, &hlc, &node, "work", true, now - OPAQUE_MAX_AGE_MS - 1); // stale
+        assert_eq!(opaque_node_pct(&kv, 4, now, OPAQUE_MAX_AGE_MS), 0, "stale opacity ⇒ not counted");
     }
 }
