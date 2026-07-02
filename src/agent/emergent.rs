@@ -237,6 +237,20 @@ pub async fn run_emergent_detectors(
                 let gaps = detect_coverage_gaps(&ctx.kv_state, now);
                 let confirmed_gaps = confirm_by_key(&gaps, &mut gap_streaks, CONFIRM_TICKS);
                 ctx.capability_coverage_gaps.store(confirmed_gaps, Ordering::Relaxed);
+                // The loop is the periodic emitter for the `/metrics` surface (Prometheus scrapes a
+                // registry, so gauges must be *set* on a tick, not computed on scrape). Emitted with
+                // the RT1/RT2 view-confidence gauges so an operator's alert can qualify a diagnostic
+                // by the observer's own view health (`peers_heard` ≪ `peers_known` ⇒ partial view).
+                #[cfg(feature = "metrics")]
+                {
+                    metrics::gauge!("mycelium_emergent_governed_group_conflicts").set(confirmed as f64);
+                    metrics::gauge!("mycelium_emergent_capability_coverage_gaps").set(confirmed_gaps as f64);
+                    metrics::gauge!("mycelium_emergent_opaque_node_pct").set(compute_opaque_node_pct(&ctx) as f64);
+                    let vc = compute_view_confidence(&ctx);
+                    metrics::gauge!("mycelium_emergent_peers_heard").set(vc.peers_heard as f64);
+                    metrics::gauge!("mycelium_emergent_peers_known").set(vc.peers_known as f64);
+                    metrics::gauge!("mycelium_emergent_max_staleness_ms").set(vc.max_staleness_ms as f64);
+                }
             }
             _ = shutdown.wait_for(|v| *v) => break,
         }

@@ -112,8 +112,10 @@ the majority — validating that Phases 1–2 are cheap.
 
 Design notes that emerged: **stateful detectors (hysteresis → P1, P6) live in the loop; stateless
 gauges (P4) compute on-demand in `/stats`.** The hysteresis is a shared generic `confirm_by_key`.
-11 unit tests. **Remaining:** P2 flap, P3 oscillation (same shape), a `/metrics` surface, and a
-live-cluster #56 reproduction test.
+11 unit tests. **`/metrics` surface shipped** — the loop emits `mycelium_emergent_*` gauges
+(the three detectors + the RT1/RT2 `peers_heard`/`peers_known`/`max_staleness_ms` view-health gauges)
+when `metrics` is on. **Remaining:** P2 flap, P3 oscillation (same shape), and a live-cluster #56
+reproduction test.
 
 The cheap, high-value layer. New detectors that read node-local state + the locally-held KV,
 surfaced on `/stats` and `/metrics`, mirroring the existing tripwire pattern but at the
