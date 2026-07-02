@@ -234,8 +234,32 @@ pub fn kv_scan_prefix(ctx: &CoreCtx, prefix: &str) -> Vec<(Arc<str>, Bytes)> {
     crate::store::scan_kv_prefix(&ctx.kv_state, prefix)
 }
 
+/// Rejects a write whose `key + value` cannot fit a single gossip frame. Accepting it
+/// would apply locally (and WAL) but never propagate: the per-peer writer cannot frame
+/// it and anti-entropy skips entries that don't fit — silent permanent divergence.
+/// Returns `true` (= reject) after a `warn!`; callers surface it as `false` ("not queued").
+fn reject_oversized_write(key: &str, value_len: usize) -> bool {
+    let size = key.len() + value_len;
+    if size <= crate::framing::MAX_KV_WRITE_BYTES {
+        return false;
+    }
+    tracing::warn!(
+        key, size, limit = crate::framing::MAX_KV_WRITE_BYTES,
+        "kv write rejected: key + value cannot fit a gossip frame and would silently \
+         diverge; use the bulk transport (bulk_call / bulk_serve) for large payloads"
+    );
+    true
+}
+
 /// Stores `value` under `key`, queues WAL (try-send), applies locally, gossips (try-send).
+///
+/// Returns `false` without applying anything if `key.len() + value.len()` exceeds
+/// [`MAX_KV_WRITE_BYTES`](crate::framing::MAX_KV_WRITE_BYTES) — such a write cannot be
+/// encoded into one gossip frame and would otherwise diverge silently.
 pub fn kv_set(ctx: &CoreCtx, key: Arc<str>, value: Bytes) -> bool {
+    if reject_oversized_write(&key, value.len()) {
+        return false;
+    }
     let update = make_gossip_update(&ctx.node_id, ctx.default_ttl, key, value, false, &ctx.hlc);
     if let Some(wal) = ctx.wal.get() {
         wal.append_try(sync_entry_from(&update));
@@ -252,7 +276,13 @@ pub fn kv_set(ctx: &CoreCtx, key: Arc<str>, value: Bytes) -> bool {
 }
 
 /// Writes `value` under `key`, appends to WAL, applies locally, awaits gossip capacity.
+///
+/// Returns `false` without applying anything if `key.len() + value.len()` exceeds
+/// [`MAX_KV_WRITE_BYTES`](crate::framing::MAX_KV_WRITE_BYTES) — see [`kv_set`].
 pub async fn kv_set_async(ctx: &CoreCtx, key: Arc<str>, value: Bytes) -> bool {
+    if reject_oversized_write(&key, value.len()) {
+        return false;
+    }
     let update = make_gossip_update(&ctx.node_id, ctx.default_ttl, key, value, false, &ctx.hlc);
     if let Some(wal) = ctx.wal.get() {
         let _ = wal.append(sync_entry_from(&update)).await;

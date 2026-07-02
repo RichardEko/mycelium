@@ -354,19 +354,44 @@ pub async fn handle_connection(
                             .collect()
                     }
                 };
-                let data: Bytes = crate::codec::wire_to_bytes(
-                    &WireMessage::StateResponse { entries });
-                // Guard against oversized frames before they reach the writer,
-                // where a failed write would silently abort the anti-entropy sync.
-                if 1 + data.len() > crate::framing::MAX_FRAME_BYTES {
-                    warn!(
-                        "StateResponse for {} is {} B (limit {} B); \
-                         skipping anti-entropy — store has too many entries \
-                         for a single frame",
-                        sender, data.len(), crate::framing::MAX_FRAME_BYTES,
-                    );
-                    continue;
+                // Chunk the response so the total divergent set is never bounded by one
+                // frame: each chunk stays under a conservative byte budget and the sender
+                // applies chunks independently (entries bypass the seen-set, TTL = 1), so
+                // N frames are semantically identical to one. Pre-2026-07-02 this was a
+                // single frame and a >MAX_FRAME_BYTES store *silently could not bootstrap
+                // a late joiner* (skipped with a warn, never retried). An individual entry
+                // that alone exceeds the budget is skipped with a warn naming the key —
+                // `kv_set` now rejects such writes, so only a legacy store can hold one —
+                // and the rest of the sync still proceeds.
+                let chunk_budget = crate::framing::MAX_KV_WRITE_BYTES;
+                let mut chunks: Vec<Vec<SyncEntry>> = Vec::new();
+                let mut chunk: Vec<SyncEntry> = Vec::new();
+                let mut chunk_bytes = 0usize;
+                for e in entries {
+                    // Conservative per-entry envelope: key/value length prefixes,
+                    // timestamp, tombstone flag (~25 B actual).
+                    let e_bytes = e.key.len() + e.value.len() + 64;
+                    if e_bytes > chunk_budget {
+                        warn!(
+                            "skipping anti-entropy for oversized entry '{}' ({} B > {} B budget) \
+                             — entry cannot fit a gossip frame; peers will never receive it",
+                            e.key, e.value.len(), chunk_budget,
+                        );
+                        continue;
+                    }
+                    if chunk_bytes + e_bytes > chunk_budget {
+                        chunks.push(std::mem::take(&mut chunk));
+                        chunk_bytes = 0;
+                    }
+                    chunk.push(e);
+                    chunk_bytes += e_bytes;
                 }
+                // Always send the final chunk, even when empty: an empty StateResponse
+                // doubles as the liveness ack (same as the fast-path above).
+                chunks.push(chunk);
+                let frames: Vec<Bytes> = chunks.into_iter()
+                    .map(|entries| crate::codec::wire_to_bytes(&WireMessage::StateResponse { entries }))
+                    .collect();
                 // Use send().await (not try_send) — StateResponse is a rare,
                 // join-time message. Dropping it causes permanent divergence
                 // because StateRequest is only sent on first contact; there is
@@ -374,8 +399,11 @@ pub async fn handle_connection(
                 // is not blocked waiting for the writer to drain.
                 if let Some(tx) = get_or_spawn_writer(&sender, &peer_writers, task_ctx.hot.writer_depth(), backoff, writer_idle_timeout, &shutdown, &kv_state.dropped_frames, tls.clone()) {
                     tokio::spawn(async move {
-                        if tx.send(data).await.is_err() {
-                            error!("StateResponse writer for {} has exited", sender);
+                        for data in frames {
+                            if tx.send(data).await.is_err() {
+                                error!("StateResponse writer for {} has exited", sender);
+                                break;
+                            }
                         }
                     });
                 }

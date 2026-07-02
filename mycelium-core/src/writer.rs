@@ -126,19 +126,38 @@ pub async fn run_peer_writer(
         }
 
         // Write this frame and any others already queued, then flush once.
-        let write_ok = {
+        //
+        // `FrameTooLarge` is a *frame* problem, not a *connection* problem: `write_frame`
+        // checks the size before touching the stream, so the connection is still clean —
+        // drop that frame with a warn and keep going. Treating it as a write failure
+        // (pre-2026-07-02 behaviour) tore down a healthy connection and dropped every
+        // queued frame behind one oversized payload.
+        let frame_fits = |peer: &NodeId, res: Result<(), crate::error::GossipError>| -> Result<bool, ()> {
+            match res {
+                Ok(())                                                => Ok(true),
+                Err(crate::error::GossipError::FrameTooLarge { size, limit }) => {
+                    dropped_frames.fetch_add(1, Ordering::Relaxed);
+                    peer_dropped.fetch_add(1, Ordering::Relaxed);
+                    warn!("Dropping oversized frame to {} ({} B > {} B limit); connection kept", peer, size, limit);
+                    Ok(false)
+                }
+                Err(_) => Err(()),
+            }
+        };
+        let write_ok = 'write: {
             let c = conn.as_mut().expect("infallible: conn is Some while loop body runs; only set None after break");
-            let mut ok = write_frame(c, &data).await.is_ok();
-            if ok {
-                while let Ok(more) = rx.try_recv() {
-                    if write_frame(c, &more).await.is_err() {
-                        ok = false;
-                        break;
-                    }
+            let mut wrote_any = false;
+            match frame_fits(&peer, write_frame(c, &data).await) {
+                Ok(sent)  => wrote_any |= sent,
+                Err(())   => break 'write false,
+            }
+            while let Ok(more) = rx.try_recv() {
+                match frame_fits(&peer, write_frame(c, &more).await) {
+                    Ok(sent) => wrote_any |= sent,
+                    Err(())  => break 'write false,
                 }
             }
-            if ok { ok = c.flush().await.is_ok(); }
-            ok
+            !wrote_any || c.flush().await.is_ok()
         };
 
         if !write_ok {

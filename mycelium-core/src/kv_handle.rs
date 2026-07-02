@@ -62,9 +62,14 @@ impl KvHandle {
 
     /// Stores `value` under `key` locally and queues it for gossip to peers.
     ///
-    /// The local store is **always** updated regardless of the return value.
-    /// Returns `true` if the update was queued for gossip; `false` if the gossip
-    /// channel was full or the shard has died.
+    /// Returns `true` if the update was queued for gossip. Returns `false` if the
+    /// gossip channel was full or the shard has died (the local store is still
+    /// updated in those cases — anti-entropy propagates the entry later), **or** if
+    /// `key.len() + value.len()` exceeds
+    /// [`MAX_KV_WRITE_BYTES`](crate::framing::MAX_KV_WRITE_BYTES), in which case the
+    /// write is rejected outright (nothing applied anywhere, a `warn!` is logged):
+    /// an entry that large cannot be encoded into a gossip frame and would silently
+    /// never propagate. Use the bulk transport for payloads that large.
     #[must_use]
     #[tracing::instrument(level = "trace", skip(self, key, value), fields(node = %self.ctx.node_id))]
     pub fn set<K: Into<Arc<str>>>(&self, key: K, value: impl Into<Bytes>) -> bool {

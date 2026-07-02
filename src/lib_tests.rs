@@ -4386,3 +4386,146 @@ async fn test_wsf_public_identity_signing_round_trips() {
     a.shutdown_with_timeout(Duration::from_secs(5)).await;
     let _ = std::fs::remove_dir_all(&cert_dir);
 }
+
+// ── M2 Run-28 falsification probes ────────────────────────────────────────
+
+/// M2 Run-28 probe (dim 6 — error model), **flipped to a regression gate** same-day:
+/// `kv().set()` used to accept values that cannot fit a gossip frame (`true`, applied
+/// locally, WAL-appended) while the value could never leave the node — silent permanent
+/// divergence — and the per-peer writer tore down the healthy connection on the
+/// resulting `FrameTooLarge`. Fixed by the `MAX_KV_WRITE_BYTES` guard in
+/// `kv_set`/`kv_set_async` (reject outright: `false`, nothing applied, `warn!`) and by
+/// the writer dropping an oversized frame without tearing down the connection.
+#[tokio::test]
+async fn test_oversized_value_is_rejected_outright_and_cluster_stays_healthy() {
+    let port_a = alloc_port();
+    let port_b = alloc_port();
+    let id_a = NodeId::new("127.0.0.1", port_a).unwrap();
+    let id_b = NodeId::new("127.0.0.1", port_b).unwrap();
+    let mut cfg_a = GossipConfig::default();
+    cfg_a.bind_port                  = port_a;
+    cfg_a.bootstrap_peers            = vec![id_b.clone()];
+    cfg_a.health_check_max_jitter_ms = 50;
+    let mut cfg_b = GossipConfig::default();
+    cfg_b.bind_port                  = port_b;
+    cfg_b.bootstrap_peers            = vec![id_a.clone()];
+    cfg_b.health_check_max_jitter_ms = 50;
+    let a = GossipAgent::new(id_a, cfg_a);
+    let b = GossipAgent::new(id_b, cfg_b);
+    a.start().await.unwrap();
+    b.start().await.unwrap();
+    poll_until(|| !a.peers().is_empty() && !b.peers().is_empty(), 5_000).await;
+
+    // Healthy-cluster baseline: a small key propagates A → B.
+    assert!(a.kv().set("probe/small-before", "x"));
+    poll_until(|| b.kv().get("probe/small-before").is_some(), 10_000).await;
+
+    // An oversized write is rejected outright: no local apply, no queue, `false`.
+    let big = vec![0u8; crate::framing::MAX_FRAME_BYTES + 64 * 1024];
+    assert!(
+        !a.kv().set("probe/oversized", big.clone()),
+        "kv.set must reject a value that cannot fit a gossip frame"
+    );
+    assert!(
+        a.kv().get("probe/oversized").is_none(),
+        "a rejected oversized write must not be applied to the local store"
+    );
+    assert!(
+        !a.kv().set_async("probe/oversized-async", big).await,
+        "kv.set_async must reject the same way"
+    );
+
+    // The cluster is unharmed: a subsequent small key still propagates promptly.
+    assert!(a.kv().set("probe/small-after", "y"));
+    poll_until(|| b.kv().get("probe/small-after").is_some(), 10_000).await;
+
+    a.shutdown_with_timeout(Duration::from_secs(5)).await;
+    b.shutdown_with_timeout(Duration::from_secs(5)).await;
+}
+
+/// M2 Run-28 follow-up gate (dims 12/16): anti-entropy must converge a late joiner
+/// whose divergence exceeds one gossip frame. Pre-fix, `StateResponse` was a single
+/// unchunked frame: a >`MAX_FRAME_BYTES` full dump was skipped with a warn and never
+/// retried, so a late joiner of a large store never converged. Now the response is
+/// chunked; this test also plants one poison entry (injected past the write guard, as
+/// a legacy store could hold) and asserts the sync skips it and still delivers
+/// everything else.
+#[tokio::test]
+async fn test_late_joiner_converges_past_frame_sized_store_via_chunked_anti_entropy() {
+    use crate::framing::make_gossip_update;
+    use crate::store::apply_and_notify;
+
+    let port_a = alloc_port();
+    let port_b = alloc_port();
+    let id_a = NodeId::new("127.0.0.1", port_a).unwrap();
+    let id_b = NodeId::new("127.0.0.1", port_b).unwrap();
+    let mut cfg_a = GossipConfig::default();
+    cfg_a.bind_port                  = port_a;
+    cfg_a.health_check_max_jitter_ms = 50;
+    let a = GossipAgent::new(id_a.clone(), cfg_a);
+    a.start().await.unwrap();
+
+    // ~12.3 MiB across 120 keys — more than one MAX_FRAME_BYTES frame can carry.
+    let n_keys = 120usize;
+    let val = vec![7u8; 105 * 1024];
+    for i in 0..n_keys {
+        assert!(a.kv().set_async(format!("bulkstore/{i:04}"), val.clone()).await);
+    }
+    // Poison entry: apply an un-frameable value directly (bypassing the kv_set guard,
+    // the way a legacy store might hold one). The sync must skip it, not stall on it.
+    let poison = make_gossip_update(
+        &id_a,
+        a.task_ctx.default_ttl,
+        Arc::from("bulkstore/poison"),
+        Bytes::from(vec![9u8; crate::framing::MAX_FRAME_BYTES]),
+        false,
+        &a.task_ctx.hlc,
+    );
+    apply_and_notify(&a.task_ctx.kv_state, &poison);
+    assert!(a.kv().get("bulkstore/poison").is_some());
+
+    // Late joiner: bootstraps to A after the writes — anti-entropy is its only source.
+    let mut cfg_b = GossipConfig::default();
+    cfg_b.bind_port                  = port_b;
+    cfg_b.bootstrap_peers            = vec![id_a.clone()];
+    cfg_b.health_check_max_jitter_ms = 50;
+    let b = GossipAgent::new(id_b, cfg_b);
+    b.start().await.unwrap();
+
+    poll_until(
+        || (0..n_keys).all(|i| b.kv().get(&format!("bulkstore/{i:04}")).is_some()),
+        30_000,
+    ).await;
+    assert!(
+        b.kv().get("bulkstore/poison").is_none(),
+        "the un-frameable poison entry must be skipped, not delivered"
+    );
+
+    a.shutdown_with_timeout(Duration::from_secs(5)).await;
+    b.shutdown_with_timeout(Duration::from_secs(5)).await;
+}
+
+/// M2 Run-28 probe (dim 10 — resource management): dropping a `CapabilityReg`
+/// must tombstone the `cap/{node}/{ns}/{name}` advertisement (the documented
+/// drop contract on `advertise_capability`). PASSED at Run 28 — kept as a
+/// regression gate.
+#[tokio::test]
+async fn test_capability_reg_drop_tombstones_advertisement() {
+    let port = alloc_port();
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = port;
+    let agent = GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg);
+    agent.start().await.unwrap();
+
+    let key = format!("cap/{}/probe/drop-retract", agent.node_id());
+    let reg = agent.capabilities().advertise_capability(
+        Capability::new("probe", "drop-retract"),
+        Duration::from_millis(100),
+    );
+    poll_until(|| agent.kv().get(&key).is_some(), 5_000).await;
+
+    drop(reg);
+    poll_until(|| agent.kv().get(&key).is_none(), 5_000).await;
+
+    agent.shutdown_with_timeout(Duration::from_secs(5)).await;
+}

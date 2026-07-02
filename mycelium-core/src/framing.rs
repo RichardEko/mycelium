@@ -14,6 +14,15 @@ use tokio::{
 use tracing::warn;
 
 pub const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
+
+/// Conservative ceiling for a single KV write (`key.len() + value.len()`), enforced by
+/// `kv_set` / `kv_set_async` **before** the write is applied anywhere. A write above this
+/// cannot be encoded into one gossip frame (`MAX_FRAME_BYTES`) once envelope overhead is
+/// added (frame header, `GossipUpdate` fixed fields, optional `SignedData` wrapper), so
+/// accepting it would create an entry that applies locally but can never propagate —
+/// silent permanent divergence. 64 KiB of headroom is far above the worst-case envelope.
+/// Payloads larger than this belong on the bulk transport (`bulk_call` / `bulk_serve`).
+pub const MAX_KV_WRITE_BYTES: usize = MAX_FRAME_BYTES - 64 * 1024;
 /// Framing-level protocol version. Written before every serialized payload.
 /// v2: switched serialization from bincode 1.x to bincode 2.x (incompatible wire format).
 /// v3: timestamps changed from second to millisecond granularity (incompatible LWW semantics).
