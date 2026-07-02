@@ -91,6 +91,11 @@ the demand question below is precisely "is your fleet that shape?"
 
 ## The one load-bearing hard problem: concurrent prose edits
 
+*(Now formalised — the full section-addressing scheme, merge semantics, curator state machine, and
+convergence argument are in the Phase 0 design record
+[`docs/design/wiki-concurrent-edit.md`](../design/wiki-concurrent-edit.md). This section is the
+summary.)*
+
 This is the crux, and it decides whether this is a weekend crate or a research project.
 Two agents ingesting into the **same page** concurrently: LWW keeps one and silently drops
 the other. You **cannot LWW-merge prose** the way the KV store merges opaque bytes —
@@ -183,9 +188,13 @@ at-least-once idempotent reconcile.
 
 Mirrors the tuple-space / blackboard phasing. All public-API-only; core unchanged.
 
-- **Phase 0 — merge design record.** Write `docs/design/wiki-concurrent-edit.md`: pin the
-  section-granular + recallable-curator scheme, record free-for-all-LLM-merge as
-  declined-with-evidence, define the section-id scheme (stable anchors, not line numbers).
+- **Phase 0 — merge design record.** ✅ **done ahead of build** —
+  [`docs/design/wiki-concurrent-edit.md`](../design/wiki-concurrent-edit.md) pins the
+  section-granular + recallable-curator scheme, formalises the section-id addressing (stable
+  content-independent ids, not headings or line numbers), the three merge cases, the curator
+  state machine, and records free-for-all-LLM-merge as declined-with-evidence (breaks the LWW
+  convergence invariant). The build plan inherits it; Phase 0 at build time is only its §5 open
+  questions (section split/merge, starvation, LLM cost batching).
 - **Phase 1 — `BoardStore`-analog core.** `WikiStore` (pure, in-memory + the KV mapping):
   pages, sections, proposal queue, `read`/`propose`/`reconcile`/`lint` over
   `transient()`/`persistent()` test constructors. Unit-tested without a live cluster.
