@@ -23,3 +23,16 @@ via wasm-host).
 Both tuple-space and blackboard implement the **exactly-once-effect contract** — the shared
 artifact is the *contract*, not code (`docs/design/exactly-once-effect.md`; a shared overlay
 was examined and declined-with-evidence).
+
+## The coordination-primitive taxonomy
+
+The public-API coordination primitives form one axis — *how a consumer finds what it needs*:
+tuple-space routes by lane **position** (transient, blocking `take`), blackboard by content
+**predicate** (transient, competitive `claim`). A **proposed** third fills the durable slot:
+**`mycelium-wiki`** — a group-scoped LLM-maintained wiki (curated, compounding, re-read), the
+long-term-memory sibling of the blackboard's working memory. Design sketch:
+`docs/plans/mycelium-wiki.md` (proposed 2026-07-02, gated on demand not feasibility; the
+load-bearing problem is that concurrent prose edits don't LWW-merge → section-granular keys +
+a recallable curator role, serialising the LLM reconcile at one writer-of-record). It would be
+the runtime-primitive form of the pattern this very wiki (`docs/wiki/`) is the reference
+implementation of.
