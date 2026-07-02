@@ -240,13 +240,23 @@ impl AgentStateMachine {
     /// `agent/{node}/state` to the gossip KV store, and emits an `agent.state`
     /// signal so the whole mesh observes the change. On failure: returns
     /// [`PolicyViolation`] and leaves state unchanged.
+    ///
+    /// **Commit discipline (M2 Run-28 fix):** guards are fast-failed against a
+    /// snapshot, but the *authoritative* check happens at commit time inside
+    /// [`try_commit`](Self::try_commit) — a validate-and-swap under the state
+    /// lock, retried if the state moved (e.g. a timeout fired during the
+    /// approval `await`). Budget counters are checked *and reserved* while the
+    /// lock is held, so two racing transitions can never both pass the same
+    /// last budget slot, and a state committed concurrently is never silently
+    /// overwritten — the transition is re-validated against it instead.
     pub async fn transition(&self, to: ExecutionState) -> Result<(), PolicyViolation> {
-        let from = self.current.lock().clone();
+        // Fast-fail guards against a snapshot (cheap early exit before the
+        // approval round-trip; the commit re-validates authoritatively).
+        let from_snapshot = self.current.lock().clone();
+        self.check_sync_guards(&from_snapshot, &to)?;
 
-        // Synchronous guards
-        self.check_sync_guards(&from, &to)?;
-
-        // Async guard: supervisor approval — snapshot the list before releasing the lock
+        // Async guard: supervisor approval. The approval concerns the *tool*,
+        // not the state, so it is requested once — not per commit retry.
         let needs_approval = if let ExecutionState::Invoking { tool } = &to {
             self.policy.read().require_approval_for.contains(tool)
         } else {
@@ -257,22 +267,34 @@ impl AgentStateMachine {
                 self.await_approval(tool).await?;
             }
 
-        // Commit
-        *self.current.lock() = to.clone();
+        // Snapshot the budget limits before the commit loop: `try_commit` must
+        // not take `policy` while holding `current` (single-lock discipline).
+        let (max_turns, tool_budget) = {
+            let p = self.policy.read();
+            (p.max_turns, p.tool_budget)
+        };
 
-        // Update per-task counters and write to gossip KV for mesh observability.
+        // Validate-and-swap commit loop: re-read the state, re-run the guards
+        // against it, and commit only if it is still the state we validated.
+        let from = loop {
+            let expected = self.current.lock().clone();
+            self.check_sync_guards(&expected, &to)?;
+            match self.try_commit(&expected, &to, max_turns, tool_budget)? {
+                Some(from) => break from,
+                None       => continue, // state moved between validate and lock — re-validate
+            }
+        };
+
+        // Post-commit effects: mesh-visible counter KV writes (counters were
+        // already reserved atomically inside try_commit).
         match &to {
             ExecutionState::Planning => {
-                let v = self.turn_count.fetch_add(1, Ordering::Relaxed) + 1;
-                self.write_counter_kv("turn", v);
+                self.write_counter_kv("turn", self.turn_count.load(Ordering::Relaxed));
             }
             ExecutionState::Invoking { .. } => {
-                let v = self.call_count.fetch_add(1, Ordering::Relaxed) + 1;
-                self.write_counter_kv("calls", v);
+                self.write_counter_kv("calls", self.call_count.load(Ordering::Relaxed));
             }
             ExecutionState::Idle | ExecutionState::Done | ExecutionState::Failed { .. } => {
-                self.turn_count.store(0, Ordering::Relaxed);
-                self.call_count.store(0, Ordering::Relaxed);
                 self.write_counter_kv("turn", 0);
                 self.write_counter_kv("calls", 0);
             }
@@ -321,6 +343,52 @@ impl AgentStateMachine {
     }
 
     // ─── private ──────────────────────────────────────────────────────────────
+
+    /// Validate-and-swap commit: under the state lock, verifies the state is still
+    /// `expected`, re-checks the budget guards against the *current* counters, commits
+    /// `to`, and reserves the counters — one atomic step. Returns `Ok(Some(from))` on
+    /// commit, `Ok(None)` when the state changed since `expected` was read (the caller
+    /// re-validates and retries), `Err` when a budget is exhausted.
+    ///
+    /// Budget counters only move while this lock is held (here and in
+    /// [`force_failed_transition`](Self::force_failed_transition)), which is what makes
+    /// the check-then-reserve atomic — the M2 Run-28 race (two approval-gated
+    /// transitions both passing `tool_budget = 1`) is closed by this.
+    /// `max_turns` / `tool_budget` are passed in pre-read: never take `policy` while
+    /// holding `current` (single-lock discipline, CLAUDE.md lock-order table).
+    fn try_commit(
+        &self,
+        expected:    &ExecutionState,
+        to:          &ExecutionState,
+        max_turns:   Option<usize>,
+        tool_budget: Option<usize>,
+    ) -> Result<Option<ExecutionState>, PolicyViolation> {
+        let mut guard = self.current.lock();
+        if *guard != *expected {
+            return Ok(None);
+        }
+        if matches!(to, ExecutionState::Invoking { .. }) {
+            if let Some(max) = max_turns
+                && self.turn_count.load(Ordering::Relaxed) >= max {
+                    return Err(PolicyViolation::TurnBudgetExceeded);
+                }
+            if let Some(max) = tool_budget
+                && self.call_count.load(Ordering::Relaxed) >= max {
+                    return Err(PolicyViolation::ToolBudgetExceeded);
+                }
+        }
+        let from = std::mem::replace(&mut *guard, to.clone());
+        match to {
+            ExecutionState::Planning        => { self.turn_count.fetch_add(1, Ordering::Relaxed); }
+            ExecutionState::Invoking { .. } => { self.call_count.fetch_add(1, Ordering::Relaxed); }
+            ExecutionState::Idle | ExecutionState::Done | ExecutionState::Failed { .. } => {
+                self.turn_count.store(0, Ordering::Relaxed);
+                self.call_count.store(0, Ordering::Relaxed);
+            }
+            _ => {}
+        }
+        Ok(Some(from))
+    }
 
     fn check_sync_guards(&self, from: &ExecutionState, to: &ExecutionState) -> Result<(), PolicyViolation> {
         let policy = self.policy.read();
@@ -419,15 +487,18 @@ impl AgentStateMachine {
     /// Only commits if `self.state() == expected` to guard against races where
     /// the agent already transitioned away before the timer fired.
     fn force_failed_transition(&self, expected: &ExecutionState, dur: Duration) {
-        let mut guard = self.current.lock();
-        if *guard != *expected { return; }
-        let from = std::mem::replace(&mut *guard, ExecutionState::Failed {
+        let to = ExecutionState::Failed {
             reason: format!("timeout after {dur:?} in state {}", expected.to_kv_str()),
-        });
-        drop(guard);
-        let to = self.current.lock().clone();
-        self.turn_count.store(0, Ordering::Relaxed);
-        self.call_count.store(0, Ordering::Relaxed);
+        };
+        let from = {
+            let mut guard = self.current.lock();
+            if *guard != *expected { return; }
+            let from = std::mem::replace(&mut *guard, to.clone());
+            // Counters only move under the state lock (see try_commit).
+            self.turn_count.store(0, Ordering::Relaxed);
+            self.call_count.store(0, Ordering::Relaxed);
+            from
+        };
         self.write_counter_kv("turn", 0);
         self.write_counter_kv("calls", 0);
         self.write_kv_and_signal(&from, &to);
@@ -663,5 +734,45 @@ mod tests {
         sm.transition(ExecutionState::Planning).await.unwrap();
         let err = sm.transition(ExecutionState::Invoking { tool: "dangerous".into() }).await;
         assert!(matches!(err, Err(PolicyViolation::ToolDenied(_))));
+    }
+
+    /// M2 Run-28 probe (dim 9 — concurrency), **flipped to a regression gate**
+    /// same-day: `transition()` was check-then-act (budget counters read before
+    /// the approval `await`, incremented only after commit; commit never
+    /// re-read `current`), so two approval-gated `Invoking` transitions racing
+    /// through the await both passed `tool_budget = 1`. Fixed by `try_commit`:
+    /// a validate-and-swap under the state lock with budget check + reserve as
+    /// one atomic step. Exactly one racer may now win the last budget slot; the
+    /// loser gets `ToolBudgetExceeded`.
+    #[tokio::test(start_paused = true)]
+    async fn tool_budget_enforced_under_concurrent_approval_gated_transitions() {
+        let agent = crate::lib_tests::make_agent_for_sm_tests();
+        let policy = AgentPolicy {
+            tool_budget: Some(1),
+            require_approval_for: vec!["a".into(), "b".into()],
+            ..Default::default()
+        };
+        let sm = agent.agent_state_machine(policy);
+        sm.transition(ExecutionState::Planning).await.unwrap();
+
+        // Both futures pass the fast-fail check (call_count = 0 < 1) and park on
+        // the 30 s approval window (paused time auto-advances) — the commit loop
+        // must serialise them.
+        let (r1, r2) = tokio::join!(
+            sm.transition(ExecutionState::Invoking { tool: "a".into() }),
+            sm.transition(ExecutionState::Invoking { tool: "b".into() }),
+        );
+        let ok = u32::from(r1.is_ok()) + u32::from(r2.is_ok());
+        assert_eq!(
+            ok, 1,
+            "tool_budget=1 must admit exactly one of two racing Invoking transitions, got {ok} \
+             (r1={r1:?}, r2={r2:?})"
+        );
+        let (winner_tool, loser) = if r1.is_ok() { ("a", r2) } else { ("b", r1) };
+        assert!(
+            matches!(loser, Err(PolicyViolation::ToolBudgetExceeded)),
+            "the losing transition must fail with ToolBudgetExceeded, got {loser:?}"
+        );
+        assert_eq!(sm.state(), ExecutionState::Invoking { tool: winner_tool.into() });
     }
 }

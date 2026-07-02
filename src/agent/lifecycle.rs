@@ -585,21 +585,23 @@ impl GossipAgent {
             for key in keys { guard.remove(&key); }
         }
         // Drain the JoinSet. Swap it out first so the std::sync::Mutex is not held
-        // across any await point (clippy::await_holding_lock).
+        // across any await point (clippy::await_holding_lock). `owned` lives in the
+        // *outer* scope (the drain future only borrows it): if the timeout cancels the
+        // drain, the undrained set is still here — so the warn counts the actual stuck
+        // tasks, not the empty replacement set (M2 Run-28 finding: the count was
+        // always wrong because the set died with the cancelled future).
+        let mut owned = {
+            let mut handles = self.task_handles_lock();
+            let mut empty = tokio::task::JoinSet::new();
+            std::mem::swap(&mut *handles, &mut empty);
+            empty
+        };
         let drain = async {
-            let mut owned = {
-                let mut handles = self.task_handles_lock();
-                let mut empty = tokio::task::JoinSet::new();
-                std::mem::swap(&mut *handles, &mut empty);
-                empty
-            };
             while owned.join_next().await.is_some() {}
         };
         if time::timeout(timeout, drain).await.is_err() {
-            let mut handles = self.task_handles_lock();
-            let remaining = handles.len();
-            warn!("shutdown: {} task(s) did not exit within {:?}; abandoning", remaining, timeout);
-            handles.abort_all();
+            warn!("shutdown: {} task(s) did not exit within {:?}; aborting", owned.len(), timeout);
+            owned.abort_all();
         }
     }
 
