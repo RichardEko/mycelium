@@ -28,6 +28,15 @@
 - Calibration discipline throughout: narrowest defensible claim; tendencies not
   determinism (monetary's `P⤳S`); no single load-bearing overclaimed word.
 
+## Pending: the three-arm work-distribution experiment (research-track)
+
+The remaining empirical work for the corpus: a three-arm comparison harness
+(coordinator-dispatch vs gossip-KV vs tuple-space pull) feeding Paper 1/2a's latency
+figures. Plan: `docs/plans/three_arm_workdist.md`; runners
+`examples/three_arm_runner.sh` + `examples/three_arm_plot.py`; pilot data under
+`docs/publications/paper2a/data/three_arm/` (one sweep stall-contaminated — see its
+README). Engineering-complete substrate; this is measurement + writing.
+
 ## Pending: the "Blood Money → Monetary Ecology" article revision (planned, not started)
 
 Three load-bearing improvements: (1) pull P and S apart as cause→effect (suppress

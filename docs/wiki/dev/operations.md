@@ -27,7 +27,7 @@ a per-peer writer not exiting on disconnect.
 
 ## Feature gates
 
-`gateway` (default; disable for embedded: `default-features = false` — gossip, KV, signals,
+`cli` (default; tracing-subscriber for binaries) · `gateway` (default; disable for embedded: `default-features = false` — gossip, KV, signals,
 consensus, typed handles all remain) · `consensus` (default; drop for minimal embeds — a
 consensus-free node still *forwards* PROPOSE/VOTE/COMMIT) · `tls` · `metrics` · `a2a` ·
 `llm` · `compliance` (= gateway+tls). `mycelium-core` builds standalone (≈48 deps vs ≈140).

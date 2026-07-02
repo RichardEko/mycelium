@@ -8,9 +8,11 @@ For every wiki-page claim that cites code, confirm the code still says it. Minim
 
 - **Lock-order table** (`docs/wiki/dev/concurrency/lock-order.md`): grep the workspace for
   `Mutex<` / `RwLock<` field declarations outside test modules
-  (`grep -rn "Mutex<\|RwLock<" src/ mycelium-core/src/ --include='*.rs'`) and diff against
-  the table's rows. Any undeclared site = a finding (this exact drift shipped once —
-  analysis Run 28, calibration ledger 2026-07-02).
+  (`grep -rn "Mutex<\|RwLock<" src/ mycelium-core/src/ --include='*.rs'`) **and** for lock-
+  wrapping type aliases (`grep -rn "^type \|^pub type" … | grep -i "mutex\|rwlock"`) — an
+  alias hides the lock from the field grep (the 2026-07-02 lint found `SenderLog` exactly
+  this way). Diff both against the table's rows. Any undeclared site = a finding (this
+  drift shipped once — analysis Run 28, calibration ledger 2026-07-02).
 - **Named regression gates**: every test cited by name in a wiki page still exists
   (`grep -rn "<test_name>" src/ mycelium-core/src/`). A renamed/deleted gate = a finding.
 - **Cited constants/flags** (e.g. `MAX_KV_WRITE_BYTES`, `WIRE_VERSION`/`PREV_WIRE_VERSION`,

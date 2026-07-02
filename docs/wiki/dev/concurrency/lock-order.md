@@ -30,6 +30,7 @@ invariant held, but only by luck of review. The doc-vs-code lint (schema §Lint)
 | 15 | `HttpCtx::gateway_caps` | `Mutex<HashMap<String, oneshot::Sender>>` | gateway capability register/retract handlers | Leaf; poison-recovering; single-statement insert/remove |
 | 16 | `HttpCtx::lock_guards` | `Mutex<HashMap<String, LockGuard>>` | gateway distributed-lock acquire/release handlers | Leaf; poison-recovering; single-statement insert/remove |
 | 17 | `OidcVerifier::cache` | **`tokio::sync::RwLock<Option<CachedKeys>>`** | JWT verify (read), JWKS refresh (write) | **The one sanctioned async lock**: the write guard is *deliberately held across the JWKS HTTP fetch* so refresh is single-flight (readers on the hot path take a cheap read-lock on cached keys). Do not copy this pattern without the same single-flight justification |
+| 18 | `SignalLog::sender_log` values | `PapayaMap<Arc<str>, Arc<parking_lot::Mutex<VecDeque<(NodeId, Instant)>>>>` | `record()`, `quorum()`, sender-history reads (`mycelium-core/src/signal.rs`) | Per-kind leaf locks *inside* a papaya map (hidden behind the `SenderLog` type alias): arc retrieved via retry-safe `compute`, then locked for a short synchronous prune/push or scan. Never across `await` |
 
 **Async contexts:** guards from every *sync* lock above are `!Send` across `await`
 (`std::sync` and default `parking_lot` alike) — the compiler enforces it for spawned
