@@ -266,6 +266,34 @@ pub fn compute_opaque_node_pct(ctx: &TaskCtx) -> u64 {
     opaque_node_pct(&ctx.kv_state, live_nodes, now_ms(), OPAQUE_MAX_AGE_MS)
 }
 
+/// **Pure P3 detector input** — the set of `(node, kind)` pairs currently *opaque* and fresh, from
+/// `sys/load/{node}/{kind}`. P3 (opacity/pheromone **oscillation** — a node "hunting" in and out of
+/// shed) is the presence-set-churn sibling of P2: feed successive snapshots through
+/// [`set_transitions`] into a [`FlapTracker`]. Node-local KV scan.
+pub fn opacity_pairs(kv_state: &crate::store::KvState, now: u64, max_age_ms: u64) -> HashSet<(String, String)> {
+    let mut out = HashSet::new();
+    for (key, bytes) in scan_prefix_kv(kv_state, crate::signal::kv_ns::LOAD) {
+        let tail = key.strip_prefix(crate::signal::kv_ns::LOAD).unwrap_or("");
+        let Some(slash) = tail.find('/') else { continue };
+        if let Some(s) = crate::signal::decode_load_state(&bytes)
+            && s.is_opaque
+            && now.saturating_sub(s.written_at_ms) <= max_age_ms
+        {
+            out.insert((tail[..slash].to_string(), tail[slash + 1..].to_string()));
+        }
+    }
+    out
+}
+
+/// **Pure** — the set of pairs whose *presence* changed between two flat sets (symmetric
+/// difference). The generic per-tick transition input shared by P3 (and any presence-set detector).
+pub fn set_transitions(
+    prev: &HashSet<(String, String)>,
+    curr: &HashSet<(String, String)>,
+) -> HashSet<(String, String)> {
+    prev.symmetric_difference(curr).cloned().collect()
+}
+
 /// Compute this node's current [`ViewConfidence`] — cheap, on-demand (called by `/stats`).
 pub fn compute_view_confidence(ctx: &TaskCtx) -> ViewConfidence {
     let guard = ctx.peers.pin();
@@ -302,6 +330,9 @@ pub async fn run_emergent_detectors(
     // P2 flap state: seed prev-membership at spawn so the initial roster is not counted as joins.
     let mut prev_membership = membership_snapshot(&ctx.kv_state);
     let mut flap_tracker = FlapTracker::default();
+    // P3 oscillation state: seed prev-opacity at spawn likewise.
+    let mut prev_opacity = opacity_pairs(&ctx.kv_state, now_ms(), OPAQUE_MAX_AGE_MS);
+    let mut osc_tracker = FlapTracker::default();
     loop {
         tokio::select! {
             _ = tick.tick() => {
@@ -322,6 +353,12 @@ pub async fn run_emergent_detectors(
                 let flaps = flap_tracker.flapping_count(now, FLAP_WINDOW_MS, FLAP_THRESHOLD);
                 ctx.membership_flaps.store(flaps, Ordering::Relaxed);
                 prev_membership = curr_membership;
+                // P3 — opacity oscillation: a (node,kind) toggling opaque state (pheromone hunting).
+                let curr_opacity = opacity_pairs(&ctx.kv_state, now, OPAQUE_MAX_AGE_MS);
+                osc_tracker.record(&set_transitions(&prev_opacity, &curr_opacity), now);
+                let oscillations = osc_tracker.flapping_count(now, FLAP_WINDOW_MS, FLAP_THRESHOLD);
+                ctx.opacity_oscillations.store(oscillations, Ordering::Relaxed);
+                prev_opacity = curr_opacity;
                 // The loop is the periodic emitter for the `/metrics` surface (Prometheus scrapes a
                 // registry, so gauges must be *set* on a tick, not computed on scrape). Emitted with
                 // the RT1/RT2 view-confidence gauges so an operator's alert can qualify a diagnostic
@@ -331,6 +368,7 @@ pub async fn run_emergent_detectors(
                     metrics::gauge!("mycelium_emergent_governed_group_conflicts").set(confirmed as f64);
                     metrics::gauge!("mycelium_emergent_capability_coverage_gaps").set(confirmed_gaps as f64);
                     metrics::gauge!("mycelium_emergent_membership_flaps").set(flaps as f64);
+                    metrics::gauge!("mycelium_emergent_opacity_oscillations").set(oscillations as f64);
                     metrics::gauge!("mycelium_emergent_opaque_node_pct").set(compute_opaque_node_pct(&ctx) as f64);
                     let vc = compute_view_confidence(&ctx);
                     metrics::gauge!("mycelium_emergent_peers_heard").set(vc.peers_heard as f64);
@@ -589,5 +627,30 @@ mod tests {
             std::iter::once(("g".to_string(), "n".to_string())).collect();
         tr.record(&pair, 1_000);
         assert_eq!(tr.flapping_count(2_000, FLAP_WINDOW_MS, FLAP_THRESHOLD), 0, "one join is not a flap");
+    }
+
+    /// P3 — opacity_pairs picks up fresh-opaque (node,kind), ignores non-opaque and stale.
+    #[test]
+    fn opacity_pairs_selects_fresh_opaque() {
+        let kv = KvState::new(0);
+        let hlc = Hlc::new();
+        let now = 1_000_000_000_000;
+        let a = NodeId::new("127.0.0.1", 50000).unwrap();
+        let b = NodeId::new("127.0.0.1", 50001).unwrap();
+        seed_opacity(&kv, &hlc, &a, "work", true, now);                    // fresh opaque ✓
+        seed_opacity(&kv, &hlc, &b, "work", false, now);                   // not opaque ✗
+        seed_opacity(&kv, &hlc, &a, "sync", true, now - OPAQUE_MAX_AGE_MS - 1); // stale ✗
+        let pairs = opacity_pairs(&kv, now, OPAQUE_MAX_AGE_MS);
+        assert_eq!(pairs, std::iter::once((a.to_string(), "work".to_string())).collect());
+    }
+
+    /// P3 — set_transitions is the symmetric difference (appeared or disappeared).
+    #[test]
+    fn set_transitions_is_symmetric_difference() {
+        let prev: HashSet<(String, String)> = [("n".into(), "a".into())].into_iter().collect();
+        let curr: HashSet<(String, String)> = [("n".into(), "b".into())].into_iter().collect();
+        let t = set_transitions(&prev, &curr);
+        assert_eq!(t.len(), 2); // a disappeared, b appeared
+        assert!(set_transitions(&curr, &curr).is_empty());
     }
 }

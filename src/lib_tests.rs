@@ -149,6 +149,7 @@ fn spawn_handler(
         governed_group_conflicts: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         capability_coverage_gaps: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         membership_flaps: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        opacity_oscillations: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         cap_authz_violations: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         schema_mismatch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         #[cfg(feature = "compliance")]
@@ -856,6 +857,7 @@ async fn test_subscribe_notified_via_gossip() {
             governed_group_conflicts: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             capability_coverage_gaps: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             membership_flaps: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            opacity_oscillations: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             cap_authz_violations: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             schema_mismatch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             #[cfg(feature = "compliance")]

@@ -374,6 +374,11 @@ pub(crate) struct TaskCtx {
     /// the detector loop; `0` unless `emergent_detectors_enabled`. Relaxed — diagnostic; on `/stats`.
     pub(crate) membership_flaps: Arc<AtomicU64>,
 
+    /// Legible-Emergence Phase-1 gauge (P3): count of (node, kind) pairs whose opacity is currently
+    /// **oscillating** (≥ threshold opaque/transparent toggles within the window — pheromone
+    /// hunting). Set by the detector loop; `0` unless `emergent_detectors_enabled`. On `/stats`.
+    pub(crate) opacity_oscillations: Arc<AtomicU64>,
+
     /// Cumulative capability-authorization rejections at resolve (WS-D / M6 · D5;
     /// see `SystemStats::cap_authz_violations`). Relaxed — diagnostic.
     pub(crate) cap_authz_violations: Arc<AtomicU64>,
@@ -782,6 +787,7 @@ impl GossipAgent {
             governed_group_conflicts: Arc::new(AtomicU64::new(0)),
             capability_coverage_gaps: Arc::new(AtomicU64::new(0)),
             membership_flaps: Arc::new(AtomicU64::new(0)),
+            opacity_oscillations: Arc::new(AtomicU64::new(0)),
             cap_authz_violations: Arc::new(AtomicU64::new(0)),
             schema_mismatch: Arc::new(AtomicU64::new(0)),
             #[cfg(feature = "compliance")]

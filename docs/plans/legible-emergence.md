@@ -1,7 +1,7 @@
 # Legible Emergence — making coordinator-free fleets diagnosable
 
 **Status:** 🟡 **Phase 0 done; Phase 1 in progress; Phases 2–5 not started** (proposed 2026-06-21;
-red-teamed + Phase-0 taxonomy 2026-07-02; Phase-1 detectors P1/P4/P6/P2 + `/metrics` shipped 2026-07-02). Phase 0 shipped as
+red-teamed + Phase-0 taxonomy 2026-07-02; all 5 Phase-1 detectors (P1/P2/P3/P4/P6) + `/metrics` shipped 2026-07-02). Phase 0 shipped as
 [`docs/design/legible-emergence-taxonomy.md`](../design/legible-emergence-taxonomy.md) (the
 pathology taxonomy, with RT1–RT4 baked in). The **Red-team findings** section (below, near the
 end) surfaced four load-bearing issues — chiefly that a diagnostic is a *per-node best-effort
@@ -96,9 +96,9 @@ live providers), consensus livelock (votes not arriving). **Gate:** the classifi
 each pathology has a defined trip condition, and the (b)-tier (KV-computable) set is confirmed to be
 the majority — validating that Phases 1–2 are cheap.
 
-### Phase 1 — Emergent-condition tripwires (node-local + KV-view detectors) — 🟡 IN PROGRESS
+### Phase 1 — Emergent-condition tripwires (node-local + KV-view detectors) — 🟢 DETECTORS DONE (live test pending)
 
-**Increments 1–4 shipped** in `src/agent/emergent.rs` — config-gated `GOSSIP_EMERGENT_DETECTORS`
+**Increments 1–5 shipped — all five KV-view detectors + `/metrics` done** in `src/agent/emergent.rs` — config-gated `GOSSIP_EMERGENT_DETECTORS`
 (off by default, zero overhead), the `run_emergent_detectors` loop, the `ViewConfidence` header
 (RT1/RT2), all surfaced on `/stats`:
 - **P1 governed-group conflict** (#56): `detect_governed_group_conflicts` (governor intent vs live
@@ -117,8 +117,11 @@ gauges (P4) compute on-demand in `/stats`.** The hysteresis is a shared generic 
 when `metrics` is on. **P2 failover flap** shipped too — `membership_snapshot` + `flap_transitions` (pure) + a
 sliding-window `FlapTracker` (per (group,node) transition timestamps; ≥4 toggles in 60 s = a flap,
 so a single failover doesn't trip it); gauge `membership_flaps`. This is the detector for the plan's
-motivating image ("node count flapping with no signal why"). **Remaining:** P3 oscillation (same
-shape), and a live-cluster #56 reproduction test.
+motivating image ("node count flapping with no signal why"). **P3 opacity oscillation** shipped — reuses P2's `FlapTracker` (opacity is the same
+presence-set-churn shape): `opacity_pairs` + `set_transitions` feed a second tracker; gauge
+`opacity_oscillations`. **All five Phase-1 detectors (P1/P2/P3/P4/P6) + the `/stats`/`/metrics`
+surface are done.** The only remaining Phase-1 item is a *live-cluster* #56 reproduction
+integration test (the pure detectors are unit-tested; this would exercise the loop end-to-end).
 
 The cheap, high-value layer. New detectors that read node-local state + the locally-held KV,
 surfaced on `/stats` and `/metrics`, mirroring the existing tripwire pattern but at the
