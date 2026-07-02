@@ -288,9 +288,65 @@ it:
   where the skill is served (`caller_authorized`), the one place it is genuinely
   enforceable.
 - **RBAC clearance** (WS1, data-classification-aware L1/L2/L3) can gate an individual page:
-  an L3-classified `sec/`/`meta` key admits only a caller whose *verified* signed role
-  claim carries L3 clearance. A group wiki is a natural home for per-page classification
-  (the "different clearance for different layers of the twin" framing).
+  an L3-classified section is *served* only to a caller whose *verified* signed role claim
+  carries L3 clearance. A group wiki is a natural home for per-page classification (the
+  "different clearance for different layers of the twin" framing). Worked example + the
+  crucial served-path-vs-confidentiality distinction: §4.3.1.
+
+#### 4.3.1 Worked example — a classified section, and what the gate does *not* do
+
+`classification: u8` (0/1/2/3) is a field on `SectionBody` (page-level default in `PageMeta`,
+per-section override). The example: the `incident-response` group's postmortem page has a
+`root-cause` section classified **L3** because it names the exact SPOF chain (crown-jewel
+topology); the rest of the page is L1.
+
+```text
+# The curator (or an authorised contributor) classifies the section:
+wiki.set_classification("postmortems/payment-outage#root-cause", 3)   # writes SectionBody.classification
+
+# Agent B — a triage bot — holds a signed L2 claim; Agent C — incident commander — L3.
+# (advertise_roles writes an Ed25519-SIGNED RoleClaim to sys/role/{node}; needs tls identity.)
+agent_b.advertise_roles(["responder"], 2)?    # clearance = 2
+agent_c.advertise_roles(["commander"], 3)?    # clearance = 3
+
+# B reads the page over the served path (GET /gateway/wiki/read, or the wiki read RPC).
+# The serving node, per L3 section, runs the UNFORGEABLE check:
+#     claim = agent.roles_of(&caller_b)         // Some(_) ONLY if B's Ed25519 sig verifies
+#                                               // against B's cluster-learned identity key
+#     admit = claim.map_or(false, |c| c.clearance_at_least(3))
+#   → admit == false  ⇒ the root-cause section is REDACTED (placeholder: "L3 — clearance
+#                        required"); B still gets the L1 sections. The denial is AUDITED (WS2).
+
+# C reads the same page:  C's verified claim clearance_at_least(3) == true  ⇒ section included.
+```
+
+**What this gate guarantees — and, load-bearingly, what it does *not*.** This is a
+**served-path gate** — detection-not-prevention, exactly like the rest of the RBAC surface
+(§ the security posture): it is enforced where the section is *served* (the gateway read
+endpoint and the wiki read RPC), using `roles_of`, which is unforgeable because it verifies
+the Ed25519 signature against the caller's *cluster-learned* identity key, never the raw KV
+bytes. A forged `sys/role/` write reads back as `None`, so a self-upgraded clearance fails.
+
+But Mycelium is a **gossip** substrate: once B joined the group, `Boundary::admits` already
+delivered the whole `wiki/{group}/` namespace — **including the L3 section's bytes** — to B's
+local store. The clearance gate withholds the section from the *convenient* path and audits
+the attempt; it does **not** stop a group member who bypasses the read path and inspects raw
+gossiped KV. **Per-page clearance gates *access*, not *replication*.**
+
+So pick the tool by what you actually need:
+
+| Need | Mechanism | What it costs |
+|---|---|---|
+| **Governance** — "group members shouldn't *casually* read L3, and it's audited if they try" | this served-path clearance gate (§4.3.1) | nothing extra; rides WS1 + WS2 |
+| **Confidentiality** — "non-cleared members must never *hold* the bytes" | a **sub-group boundary**: L3 pages live in group `{group}.l3` whose `CapabilityGroupDef` filter only cleared members satisfy → the bytes never gossip to non-cleared nodes (classification becomes a more-exclusive *group*, not a per-page ACL — the clean coordinator-free option) | a second group + cleared members re-join it |
+| **Confidentiality at rest, in-group** | **WS3 per-page/section encryption** — store ciphertext; only cleared members hold the key | key custody + a decrypt step on read |
+
+Conflating governance and confidentiality is the trap: a gossip substrate replicates to the
+whole group by construction, so a per-key ACL *within* a group is a governance gate, not an
+isolation boundary. The wiki's own §4 mapping still holds — **access is group membership**;
+clearance *refines* the convenient path, and true isolation is a *tighter group* (or
+encryption), never a promise that a per-page label alone hides bytes from a member who
+already has them.
 
 ### 4.4 Federation boundary
 
