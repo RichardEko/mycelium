@@ -369,6 +369,11 @@ pub(crate) struct TaskCtx {
     /// loop; `0` unless `emergent_detectors_enabled`. Relaxed — diagnostic; on `/stats`.
     pub(crate) capability_coverage_gaps: Arc<AtomicU64>,
 
+    /// Legible-Emergence Phase-1 gauge (P2): count of (group, node) pairs whose membership is
+    /// currently **flapping** (≥ threshold join/leave transitions within the flap window). Set by
+    /// the detector loop; `0` unless `emergent_detectors_enabled`. Relaxed — diagnostic; on `/stats`.
+    pub(crate) membership_flaps: Arc<AtomicU64>,
+
     /// Cumulative capability-authorization rejections at resolve (WS-D / M6 · D5;
     /// see `SystemStats::cap_authz_violations`). Relaxed — diagnostic.
     pub(crate) cap_authz_violations: Arc<AtomicU64>,
@@ -776,6 +781,7 @@ impl GossipAgent {
             commit_conflicts: Arc::new(AtomicU64::new(0)),
             governed_group_conflicts: Arc::new(AtomicU64::new(0)),
             capability_coverage_gaps: Arc::new(AtomicU64::new(0)),
+            membership_flaps: Arc::new(AtomicU64::new(0)),
             cap_authz_violations: Arc::new(AtomicU64::new(0)),
             schema_mismatch: Arc::new(AtomicU64::new(0)),
             #[cfg(feature = "compliance")]

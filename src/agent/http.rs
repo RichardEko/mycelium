@@ -582,6 +582,8 @@ async fn stats_handler(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
             .load(std::sync::atomic::Ordering::Relaxed),
         "capability_coverage_gaps": ctx.agent_ctx.capability_coverage_gaps
             .load(std::sync::atomic::Ordering::Relaxed),
+        "membership_flaps": ctx.agent_ctx.membership_flaps
+            .load(std::sync::atomic::Ordering::Relaxed),
         "opaque_node_pct": ctx.agent_ctx.config.emergent_detectors_enabled
             .then(|| super::emergent::compute_opaque_node_pct(&ctx.agent_ctx)),
         "view_confidence": ctx.agent_ctx.config.emergent_detectors_enabled

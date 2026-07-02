@@ -155,6 +155,81 @@ pub fn detect_coverage_gaps(kv_state: &crate::store::KvState, now: u64) -> Vec<S
 
 /// A peer opacity entry older than this is not counted as live for the storm gauge (P4).
 const OPAQUE_MAX_AGE_MS: u64 = 30_000;
+/// Sliding window over which P2 counts a (group, node)'s membership transitions.
+const FLAP_WINDOW_MS: u64 = 60_000;
+/// Membership transitions within [`FLAP_WINDOW_MS`] that make a (group, node) "flapping" — 4 = two
+/// full join/leave cycles (a single failover is 1–2; the threshold is the false-positive guard).
+const FLAP_THRESHOLD: usize = 4;
+
+/// Group membership as `group → {member node strings}` — the P2 snapshot unit.
+pub type MembershipSnapshot = HashMap<String, HashSet<String>>;
+
+/// **Pure** — snapshot current group membership across *all* groups from `grp/{group}/{node}`
+/// (tombstones = left, excluded). Node-local KV scan.
+pub fn membership_snapshot(kv_state: &crate::store::KvState) -> MembershipSnapshot {
+    let mut out: MembershipSnapshot = HashMap::new();
+    for (key, bytes) in scan_prefix_kv(kv_state, "grp/") {
+        if bytes.is_empty() {
+            continue; // tombstone = left the group
+        }
+        let tail = key.strip_prefix("grp/").unwrap_or("");
+        let Some(slash) = tail.find('/') else { continue };
+        out.entry(tail[..slash].to_string()).or_default().insert(tail[slash + 1..].to_string());
+    }
+    out
+}
+
+/// **Pure** — the set of (group, node) pairs whose membership *presence* changed between two
+/// snapshots (joined or left). The per-tick input to the flap tracker.
+pub fn flap_transitions(prev: &MembershipSnapshot, curr: &MembershipSnapshot) -> HashSet<(String, String)> {
+    let mut changed = HashSet::new();
+    let empty = HashSet::new();
+    for g in prev.keys().chain(curr.keys()).collect::<HashSet<_>>() {
+        let p = prev.get(g).unwrap_or(&empty);
+        let c = curr.get(g).unwrap_or(&empty);
+        for node in p.symmetric_difference(c) {
+            changed.insert((g.clone(), node.clone()));
+        }
+    }
+    changed
+}
+
+/// Sliding-window **failover-flap tracker** (P2): per (group, node), the timestamps of recent
+/// membership transitions. A node that repeatedly joins/leaves — the #56 "node count flapping with
+/// no signal why" — accumulates transitions here. Stateful (lives in the detector loop).
+#[derive(Default)]
+pub struct FlapTracker {
+    events: HashMap<(String, String), std::collections::VecDeque<u64>>,
+}
+
+impl FlapTracker {
+    /// Record this tick's transitions at `now`.
+    pub fn record(&mut self, transitions: &HashSet<(String, String)>, now: u64) {
+        for pair in transitions {
+            self.events.entry(pair.clone()).or_default().push_back(now);
+        }
+    }
+
+    /// Count of (group, node) pairs with ≥ `threshold` transitions within `window_ms`. Prunes
+    /// expired events and forgets pairs that fall silent (so a settled failover ages out).
+    pub fn flapping_count(&mut self, now: u64, window_ms: u64, threshold: usize) -> u64 {
+        let cutoff = now.saturating_sub(window_ms);
+        let mut count = 0u64;
+        self.events.retain(|_, dq| {
+            while dq.front().is_some_and(|&t| t < cutoff) {
+                dq.pop_front();
+            }
+            if dq.is_empty() {
+                return false; // no recent activity → forget the pair
+            }
+            if dq.len() >= threshold {
+                count += 1;
+            }
+            true
+        });
+        count
+    }
+}
 
 /// **Pure P4 detector** — the fraction (integer percent, 0–100) of live nodes currently shedding
 /// (opaque). A fleet-wide **opacity storm** (correlated shed / pheromone runaway) shows here. Scans
@@ -224,6 +299,9 @@ pub async fn run_emergent_detectors(
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut conflict_streaks: HashMap<String, u32> = HashMap::new();
     let mut gap_streaks: HashMap<String, u32> = HashMap::new();
+    // P2 flap state: seed prev-membership at spawn so the initial roster is not counted as joins.
+    let mut prev_membership = membership_snapshot(&ctx.kv_state);
+    let mut flap_tracker = FlapTracker::default();
     loop {
         tokio::select! {
             _ = tick.tick() => {
@@ -237,6 +315,13 @@ pub async fn run_emergent_detectors(
                 let gaps = detect_coverage_gaps(&ctx.kv_state, now);
                 let confirmed_gaps = confirm_by_key(&gaps, &mut gap_streaks, CONFIRM_TICKS);
                 ctx.capability_coverage_gaps.store(confirmed_gaps, Ordering::Relaxed);
+                // P2 — failover flap: a (group,node) toggling membership faster than a settled
+                // failover (the #56 "node count flapping with no signal why").
+                let curr_membership = membership_snapshot(&ctx.kv_state);
+                flap_tracker.record(&flap_transitions(&prev_membership, &curr_membership), now);
+                let flaps = flap_tracker.flapping_count(now, FLAP_WINDOW_MS, FLAP_THRESHOLD);
+                ctx.membership_flaps.store(flaps, Ordering::Relaxed);
+                prev_membership = curr_membership;
                 // The loop is the periodic emitter for the `/metrics` surface (Prometheus scrapes a
                 // registry, so gauges must be *set* on a tick, not computed on scrape). Emitted with
                 // the RT1/RT2 view-confidence gauges so an operator's alert can qualify a diagnostic
@@ -245,6 +330,7 @@ pub async fn run_emergent_detectors(
                 {
                     metrics::gauge!("mycelium_emergent_governed_group_conflicts").set(confirmed as f64);
                     metrics::gauge!("mycelium_emergent_capability_coverage_gaps").set(confirmed_gaps as f64);
+                    metrics::gauge!("mycelium_emergent_membership_flaps").set(flaps as f64);
                     metrics::gauge!("mycelium_emergent_opaque_node_pct").set(compute_opaque_node_pct(&ctx) as f64);
                     let vc = compute_view_confidence(&ctx);
                     metrics::gauge!("mycelium_emergent_peers_heard").set(vc.peers_heard as f64);
@@ -459,5 +545,49 @@ mod tests {
         assert_eq!(confirm_by_key(&keys, &mut streaks, 2), 1, "tick 2 confirmed");
         assert_eq!(confirm_by_key(&[], &mut streaks, 2), 0, "recovered");
         assert!(streaks.is_empty());
+    }
+
+    fn snap(pairs: &[(&str, &[&str])]) -> MembershipSnapshot {
+        pairs.iter()
+            .map(|(g, ns)| (g.to_string(), ns.iter().map(|n| n.to_string()).collect()))
+            .collect()
+    }
+
+    /// P2 — a join and a leave between snapshots are both transitions.
+    #[test]
+    fn flap_transitions_detects_join_and_leave() {
+        let prev = snap(&[("g", &["a", "b"])]);
+        let curr = snap(&[("g", &["b", "c"])]); // a left, c joined
+        let t = flap_transitions(&prev, &curr);
+        assert_eq!(t.len(), 2);
+        assert!(t.contains(&("g".to_string(), "a".to_string())));
+        assert!(t.contains(&("g".to_string(), "c".to_string())));
+        // No change ⇒ no transitions.
+        assert!(flap_transitions(&curr, &curr).is_empty());
+    }
+
+    /// P2 flap gate — a node toggling ≥ threshold times in the window flaps; recovery ages out.
+    #[test]
+    fn flap_tracker_flags_sustained_toggling_and_ages_out() {
+        let mut tr = FlapTracker::default();
+        let pair: HashSet<(String, String)> =
+            std::iter::once(("g".to_string(), "n".to_string())).collect();
+        // 4 transitions within a 60 s window ⇒ flapping.
+        for i in 0..4 {
+            tr.record(&pair, 1_000 + i * 5_000);
+        }
+        assert_eq!(tr.flapping_count(1_000 + 3 * 5_000, FLAP_WINDOW_MS, FLAP_THRESHOLD), 1);
+        // Well past the window with no new events ⇒ pruned, no longer flapping.
+        assert_eq!(tr.flapping_count(1_000 + 3 * 5_000 + FLAP_WINDOW_MS + 1, FLAP_WINDOW_MS, FLAP_THRESHOLD), 0);
+    }
+
+    /// P2 false-positive gate — a single failover (1 transition) is not a flap.
+    #[test]
+    fn single_failover_is_not_a_flap() {
+        let mut tr = FlapTracker::default();
+        let pair: HashSet<(String, String)> =
+            std::iter::once(("g".to_string(), "n".to_string())).collect();
+        tr.record(&pair, 1_000);
+        assert_eq!(tr.flapping_count(2_000, FLAP_WINDOW_MS, FLAP_THRESHOLD), 0, "one join is not a flap");
     }
 }

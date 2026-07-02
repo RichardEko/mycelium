@@ -1,13 +1,13 @@
 # Legible Emergence — making coordinator-free fleets diagnosable
 
-**Status:** 📋 **Phase 0 done; Phases 1–5 not started** (proposed 2026-06-21; red-teamed +
-Phase-0 taxonomy 2026-07-02). Phase 0 shipped as
+**Status:** 🟡 **Phase 0 done; Phase 1 in progress; Phases 2–5 not started** (proposed 2026-06-21;
+red-teamed + Phase-0 taxonomy 2026-07-02; Phase-1 detectors P1/P4/P6/P2 + `/metrics` shipped 2026-07-02). Phase 0 shipped as
 [`docs/design/legible-emergence-taxonomy.md`](../design/legible-emergence-taxonomy.md) (the
-pathology taxonomy, with RT1–RT4 baked in); the first *code* is Phase 1, awaiting go-ahead. The **Red-team findings** section
-(below, near the end) surfaced four load-bearing issues Phase 0 must resolve — chiefly that a
-diagnostic is a *per-node best-effort estimate, not fleet ground truth*; read it before starting.
-Canonical design home for the per-mechanism decisions will be a `docs/design/` record produced in
-Phase 0; this file is strategy + sequencing.
+pathology taxonomy, with RT1–RT4 baked in). The **Red-team findings** section (below, near the
+end) surfaced four load-bearing issues — chiefly that a diagnostic is a *per-node best-effort
+estimate, not fleet ground truth* (the `ViewConfidence` header realises this); read it before
+extending. This file is strategy + sequencing; the per-mechanism decisions live in the Phase-0
+design record.
 
 ## Why
 
@@ -98,7 +98,7 @@ the majority — validating that Phases 1–2 are cheap.
 
 ### Phase 1 — Emergent-condition tripwires (node-local + KV-view detectors) — 🟡 IN PROGRESS
 
-**Increments 1–3 shipped** in `src/agent/emergent.rs` — config-gated `GOSSIP_EMERGENT_DETECTORS`
+**Increments 1–4 shipped** in `src/agent/emergent.rs` — config-gated `GOSSIP_EMERGENT_DETECTORS`
 (off by default, zero overhead), the `run_emergent_detectors` loop, the `ViewConfidence` header
 (RT1/RT2), all surfaced on `/stats`:
 - **P1 governed-group conflict** (#56): `detect_governed_group_conflicts` (governor intent vs live
@@ -114,8 +114,11 @@ Design notes that emerged: **stateful detectors (hysteresis → P1, P6) live in 
 gauges (P4) compute on-demand in `/stats`.** The hysteresis is a shared generic `confirm_by_key`.
 11 unit tests. **`/metrics` surface shipped** — the loop emits `mycelium_emergent_*` gauges
 (the three detectors + the RT1/RT2 `peers_heard`/`peers_known`/`max_staleness_ms` view-health gauges)
-when `metrics` is on. **Remaining:** P2 flap, P3 oscillation (same shape), and a live-cluster #56
-reproduction test.
+when `metrics` is on. **P2 failover flap** shipped too — `membership_snapshot` + `flap_transitions` (pure) + a
+sliding-window `FlapTracker` (per (group,node) transition timestamps; ≥4 toggles in 60 s = a flap,
+so a single failover doesn't trip it); gauge `membership_flaps`. This is the detector for the plan's
+motivating image ("node count flapping with no signal why"). **Remaining:** P3 oscillation (same
+shape), and a live-cluster #56 reproduction test.
 
 The cheap, high-value layer. New detectors that read node-local state + the locally-held KV,
 surfaced on `/stats` and `/metrics`, mirroring the existing tripwire pattern but at the
