@@ -1,11 +1,13 @@
-# Group-wiki concurrent edits — section addressing, merge semantics, curator state machine
+# Group-wiki concurrent edits — section addressing, merge semantics, curator state machine, identity/access
 
 **Status:** 📐 **design record, pre-build** (2026-07-02). This is the Phase 0 artifact the
-[`mycelium-wiki` sketch](../plans/mycelium-wiki.md) calls for — it formalises the two areas the
-sketch flagged as load-bearing: (1) the **section addressing + merge unit** and (2) the **curator
-role state machine**. Written *before* the crate exists so the mechanism is settled and reviewable;
-promotes to the crate's `lib.rs` doc + a `v2-…-wiki.md` build plan when the demand trigger fires.
-Nothing here changes core — it is a discipline over the public KV/signal/capability API, the way
+[`mycelium-wiki` sketch](../plans/mycelium-wiki.md) calls for — it formalises the load-bearing areas
+the sketch flagged: (1) the **section addressing + merge unit** (§1–§2), (2) the **curator role
+state machine** (§3), and (3) the **identity/access mapping** — how a wiki relates to
+Capability / Skill / Group, and the normative "competence is a capability, knowledge is not" rule
+(§4). Written *before* the crate exists so the mechanism is settled and reviewable; promotes to the
+crate's `lib.rs` doc + a `v2-…-wiki.md` build plan when the demand trigger fires. Nothing here
+changes core — it is a discipline over the public KV/signal/capability API, the way
 [`exactly-once-effect.md`](exactly-once-effect.md) is.
 
 The whole record exists to answer one question: **how does a group of LLM agents edit a shared prose
@@ -238,7 +240,75 @@ copy the tuple space's WAL-cursor machinery.
 
 ---
 
-## 4. What this buys, restated against the invariants
+## 4. Identity & access — competence is a capability, knowledge is not
+
+Who may read and edit a group wiki, and how that ties to Mycelium's discovery model. The
+load-bearing distinction (normative — a build that blurs it is wrong): **an agent's
+*competence* and *role* are Capabilities; the *knowledge content* is not — it is the
+group-scoped Layer-I state this whole record is about.** The native atoms
+([`../guide/00-concepts.md`](../guide/00-concepts.md)): a **Capability** is a declarative
+advertisement ("this node provides `ns/name`" — the discovery atom, *found not called*); a
+**Skill** is a Capability plus an executable handler.
+
+### 4.1 The mapping
+
+| Concept | Layer | Role here | Prefix |
+|---|---|---|---|
+| **Group** | II (scope) | the knowledge community + admission boundary; self-elected by a `CapabilityGroupDef` filter, no coordinator | `gcap/{group}/…` |
+| **Wiki / domain** | I (state) | the group's durable knowledge — owned by the *group*, not any node | `wiki/{group}/…` |
+| **Capability — competence** | discovery | "I qualify for / am competent in this domain"; the filter that auto-joins the group | `cap/{node}/…` |
+| **Capability — role** | discovery | curator / candidate (the §3 election); reused `tuple.{ns}.primary` shape | `cap/{node}/wiki.{group}.curator\|candidate` |
+| **Skill** | invocation | the invocable handler that reads the group wiki (+ blackboard) and calls the LLM | backed by a `cap/` |
+| **Knowledge content** | I (state) | **not a Capability** — the prose; accessed by group membership | inside `wiki/{group}/…` |
+
+### 4.2 The composition — how an agent reaches a domain's knowledge
+
+1. The agent advertises a **competence capability** (`cap/{node}/domain/{d}`).
+2. It matches the `CapabilityGroupDef` filter for group `{d}` → the agent **self-joins**
+   (no coordinator; core design rule 4).
+3. Group membership is what grants access: `Boundary::admits` now passes group-scoped
+   signals **and** reads of `wiki/{group}/*`. **Access to a specific wiki/domain = group
+   membership**, and membership is *earned by advertising the qualifying capability.*
+4. The agent's **skill** (a `cap/`-backed handler) runs by reading the group wiki
+   (long-term memory) + the blackboard (working memory) + the LLM.
+5. The **curator/candidate role** (§3) is *also* a capability — because roles are
+   discoverable and electable — but it advertises a *role*, not knowledge.
+
+At no point does wiki *content* enter the `cap/` namespace. Contributing to the wiki
+(§2 propose/reconcile) is a distinct act from advertising a capability.
+
+### 4.3 Access control layers (only when the knowledge is sensitive)
+
+Group membership is the default gate; it composes with the existing authz surface for
+classified knowledge, both *refining* the capability→group→boundary chain, never replacing
+it:
+
+- **`authorized_callers`** (WS-D) restricts *who* may invoke a domain skill — enforced
+  where the skill is served (`caller_authorized`), the one place it is genuinely
+  enforceable.
+- **RBAC clearance** (WS1, data-classification-aware L1/L2/L3) can gate an individual page:
+  an L3-classified `sec/`/`meta` key admits only a caller whose *verified* signed role
+  claim carries L3 clearance. A group wiki is a natural home for per-page classification
+  (the "different clearance for different layers of the twin" framing).
+
+### 4.4 Federation boundary
+
+At the edge, **AgentFacts publishes the agent's capabilities** (its competence) as the
+outward contract; the **wiki content stays internal to the group**. A federation partner
+discovers "this cluster has domain-D competence," never domain D's pages — the boundary
+primitive one level up (advertise *what you can do*, never *what you know*), the MCB/exit
+invariant of [`../wiki/domain/theory/coordinator-free-recursion.md`](../wiki/domain/theory/coordinator-free-recursion.md).
+
+### 4.5 The anti-pattern (normative)
+
+**Never advertise knowledge *content* as capabilities.** Capabilities are for "I can" /
+"I may access" (competence, role, qualification); the wiki is for "here is what we know"
+(state). A capability minted per fact collapses the discovery layer into the storage layer
+and explodes the `cap/` namespace. Keep them on opposite layers — it is what makes
+discovery scalable (a bounded, filterable competence set) and access governable (one
+boundary + optional clearance, not N per-fact ACLs).
+
+## 5. What this buys, restated against the invariants
 
 | Case | Mechanism | I1 (converge) | I2 (no lost edit) | I3 (curator-optional) |
 |---|---|---|---|---|
@@ -252,7 +322,7 @@ The design's one sentence: **section granularity turns the common case into a lo
 needs no curator, and the curator turns the rare same-section case into a single-writer sequence —
 so the LLM's non-determinism is quarantined at one serialised node and never threatens convergence.**
 
-## 5. Open questions for the build plan (not decided here)
+## 6. Open questions for the build plan (not decided here)
 
 - **Section-split/merge edits** (an author wants to split one section into two, or fuse two): these
   touch multiple `sec/` keys + `meta.order` atomically-ish. Proposed as a single multi-key proposal

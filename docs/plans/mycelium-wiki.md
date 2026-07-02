@@ -133,6 +133,49 @@ per page-group at a time. This is the same "single serving role + ring failover"
 other two companions proved; the novelty is only *what* the role does (LLM reconcile +
 lint instead of `take`/`claim`).
 
+## How it maps to Capability / Skill / Group — competence is advertised, knowledge is not
+
+The recurring question ("is an agent's knowledge advertised as a capability?") has a sharp
+answer that this crate must not blur: **competence and access are capabilities; knowledge
+*content* is not — it is group-scoped Layer-I state, and the group is the bridge.** The
+native atoms (`docs/guide/00-concepts.md`): a **Capability** is a declarative advertisement
+("this node provides `ns/name`" — the discovery atom, found not called); a **Skill** is a
+Capability *plus an executable handler*.
+
+| Concept | Layer | Role in the wiki | Prefix |
+|---|---|---|---|
+| **Group** | II (scope) | The knowledge *community* + boundary — who is in the domain. Self-elected by a `CapabilityGroupDef` filter, no coordinator. | `gcap/{group}/…` |
+| **Wiki / domain** | I (state) | The group's durable shared knowledge — long-term memory owned by the *group*, not any node. | `wiki/{group}/…` |
+| **Capability — competence** | discovery | "I qualify for / am competent in this domain." The filter that auto-joins the group. | `cap/{node}/…` |
+| **Capability — role** | discovery | The wiki role (curator / contributor / reader) for election + failover — same shape as `tuple.{ns}.primary`. | `cap/{node}/wiki.{group}.curator` |
+| **Skill** | invocation | The invocable handler that *reads the group wiki* (+ blackboard) and calls the LLM — competence made runnable. | backed by a `cap/` |
+| **Knowledge content** | I (state) | **Not a capability.** The prose itself; accessed by group membership. | inside `wiki/{group}/…` |
+
+**The composition (how an agent gets to a domain's knowledge):** advertise a competence
+capability → it matches the group's `CapabilityGroupDef` filter → **self-join** (no
+coordinator) → group membership makes `Boundary::admits` pass reads of `wiki/{group}/*` →
+the agent's skill consumes the wiki. So **access to a specific wiki/domain = group
+membership**, and membership is *earned by advertising the qualifying capability*. The
+content never enters the `cap/` namespace.
+
+**Access control layers on top of membership** (only when the knowledge is sensitive):
+`authorized_callers` restricts *who* may invoke a domain skill (WS-D, enforced where the
+skill is served); RBAC clearance (WS1, data-classification-aware L1/L2/L3) can gate an
+individual page — an L3 page admits only a caller whose *verified* role claim carries L3.
+Both refine the capability→group→boundary chain; neither replaces it.
+
+**Federation boundary:** at the edge, **AgentFacts publishes an agent's capabilities**
+(competence) as the outward contract; the **wiki content stays internal to the group**. A
+partner discovers "this cluster has domain-D competence," never domain D's pages — the
+boundary primitive one level up (advertise *what you can do*, never *what you know*; the
+MCB/exit invariant of `docs/wiki/domain/theory/coordinator-free-recursion.md`).
+
+> **Anti-pattern to guard against (normative for the build):** never advertise knowledge
+> *content* as capabilities. Capabilities are for "I can" / "I may access" (competence,
+> role, qualification); the wiki is for "here is what we know" (state). A capability minted
+> per fact collapses the discovery layer into the storage layer and explodes the `cap/`
+> namespace. Keep them on opposite layers.
+
 ## KV namespace + group scoping (all existing mechanism)
 
 Group scoping is already in the substrate — no core change:
