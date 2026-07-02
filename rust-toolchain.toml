@@ -1,2 +1,13 @@
+# Pinned toolchain (was floating `stable`). Pinned 2026-07-02 because new stable
+# releases ship new clippy lints that redden `-D warnings` on unrelated PRs the
+# moment a CI runner picks up a newer stable than a developer has locally — this
+# bit twice in one session (rustc 1.96's `int_plus_one` and `manual_is_multiple_of`
+# on pre-existing/probe test code; see docs/analysis/ratings.md Runs 28–29).
+#
+# Bump this deliberately (its own PR, run the full `-D warnings` matrix first), not
+# implicitly on the runner's whim. Keep it in lockstep with the CI jobs, which pin
+# `dtolnay/rust-toolchain@1.96.0` (the fuzz job stays on nightly by necessity).
 [toolchain]
-channel = "stable"
+channel    = "1.96.0"
+components = ["clippy", "rustfmt"]
+profile    = "minimal"

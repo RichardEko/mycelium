@@ -19,6 +19,16 @@ smoke, time-boxed fuzz (skipped on PRs), and `cargo audit` (RUSTSEC). **Don't tr
 memorised test count** — the counts grow every PR; run the suites for the live total (the
 CLAUDE.md count bullet drifted twice before this rule).
 
+## Toolchain is pinned — bump it deliberately
+
+`rust-toolchain.toml` pins `channel = "1.96.0"` (was floating `stable`), and the CI jobs pin
+`dtolnay/rust-toolchain@1.96.0` (the fuzz job stays on `@nightly` by necessity). This exists
+because a new stable ships new clippy lints that redden `-D warnings` on unrelated PRs the
+moment a runner picks up a newer stable than a dev has locally — it bit twice in one session
+(`int_plus_one`, `manual_is_multiple_of`; analysis Runs 28–29). To upgrade: bump the file
+**and** the 10 CI `@1.96.0` refs together, in their own PR, after running the full
+`-D warnings` matrix on the new version — never let it float again.
+
 ## Multi-node consensus tests need listeners everywhere
 
 `system_propose`/`consistent_set` compute quorum from live peers; peers without
