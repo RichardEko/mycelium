@@ -4932,3 +4932,34 @@ async fn probe_every_diagnosis_finding_is_operator_legible() {
     }
     a.shutdown_with_timeout(Duration::from_secs(5)).await;
 }
+
+/// **Probe — Philosophy/Coherence (analysis Run 31, diagnostics as a pure read).** `fleet_diagnosis`
+/// is a pure function of the store, not a stateful engine: called repeatedly against unchanged KV it
+/// returns the *same* load-bearing findings, with no accumulating state and no self-perturbation.
+/// (Run-30 probed "does not correct a conflict"; this probes idempotence — a distinct angle.)
+#[tokio::test]
+async fn probe_r31_diagnosis_is_idempotent_no_accumulating_state() {
+    use crate::capability::{CapFilter, ReqEntry};
+    let p = alloc_port();
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = p;
+    let a = GossipAgent::new(NodeId::new("127.0.0.1", p).unwrap(), cfg);
+    a.start().await.unwrap();
+    assert!(a.publish_membership_intent(MembershipIntent::new("workers", 1, Some(2))));
+    for i in 0..4 {
+        assert!(a.kv().set(format!("grp/workers/127.0.0.1:{}", 27600 + i), "1"));
+    }
+    let req = ReqEntry { filter: CapFilter::new("ai", "llm"), refresh_interval_ms: 60_000 };
+    assert!(a.kv().set(format!("req/127.0.0.1:{p}/ai/llm"), req.encode()));
+    poll_until(|| a.fleet_diagnosis().findings.len() >= 2, 5_000).await;
+
+    // 50 diagnoses against the same KV: the load-bearing findings are present *every* time.
+    for _ in 0..50 {
+        let d = a.fleet_diagnosis();
+        assert!(d.findings.iter().any(|f| f.cause.contains("workers")),
+            "the workers conflict is diagnosed on every call (idempotent)");
+        assert!(d.findings.iter().any(|f| f.pathology == "capability_coverage_gap"),
+            "the coverage gap is diagnosed on every call (no accumulating state)");
+    }
+    a.shutdown_with_timeout(Duration::from_secs(5)).await;
+}

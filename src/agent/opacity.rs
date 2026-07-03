@@ -425,6 +425,23 @@ mod tests {
         assert_eq!(opacity_transition(&past, true, 0.20), OpacityTransition::GoTransparent);
     }
 
+    /// **Probe — Semantic Correctness (analysis Run 31, the library-override boundary).** The
+    /// decision/scheduling split (which fixed the recurring flake) must not have shifted the
+    /// semantics: the library override of a vetoing gate triggers at `fill >= 1.0` and *not a hair
+    /// below*. Falsifies an off-by-epsilon that the extraction could have introduced.
+    #[test]
+    fn probe_r31_opacity_override_boundary_is_exactly_at_full() {
+        use super::{opacity_state_for, opacity_transition, OpacityTransition};
+        // 0.999 with a vetoing gate: below full ⇒ Hold (the gate is respected, no override).
+        let s = opacity_state_for(false, 0.999, 0.999, 0.75);
+        assert_eq!(opacity_transition(&s, false, 0.20), OpacityTransition::Hold,
+            "no override a hair below full");
+        // Exactly 1.0: the library overrides the veto ⇒ GoOpaque.
+        let s = opacity_state_for(false, 1.0, 1.0, 0.75);
+        assert_eq!(opacity_transition(&s, false, 0.20), OpacityTransition::GoOpaque,
+            "override triggers exactly at a full channel");
+    }
+
     #[test]
     fn opacity_zero_when_channel_empty() {
         let handlers = SignalHandlers::new(Duration::from_secs(600));

@@ -1431,6 +1431,26 @@ mod tests {
         assert_eq!(s, 0);
     }
 
+    /// **Probe — Architecture/Scalability (analysis Run 31, the capped fan-out).** The explain
+    /// fan-out target set is bounded by the cap for *any* fleet size (never an O(N) RPC storm), the
+    /// remainder is always accounted for (targets + skipped == N, nothing silently dropped), and the
+    /// selection is deterministic — an observer picks the same subset every time, no coordination.
+    #[test]
+    fn probe_r31_explain_fanout_is_bounded_and_deterministic_for_any_fleet() {
+        for n in [0usize, 1, 31, 32, 33, 100, 1000, 4000] {
+            // Distinct identities via unique host octets (avoids port wraparound at large n).
+            let peers: Vec<NodeId> = (0..n)
+                .map(|i| NodeId::new(&format!("10.{}.{}.{}", (i / 65536) % 256, (i / 256) % 256, i % 256), 9000).unwrap())
+                .collect();
+            let (targets, skipped) = select_explain_targets(peers.clone(), EXPLAIN_MAX_FANOUT);
+            assert!(targets.len() <= EXPLAIN_MAX_FANOUT, "n={n}: fan-out bounded by the cap");
+            assert_eq!(targets.len() + skipped, n, "n={n}: remainder accounted, nothing dropped");
+            // Deterministic: the same peer set yields the same subset.
+            let (targets2, _) = select_explain_targets(peers, EXPLAIN_MAX_FANOUT);
+            assert_eq!(targets, targets2, "n={n}: capped subset is deterministic");
+        }
+    }
+
     // ── Phase 4: fleet diagnosis (the "why is the fleet in this state" rule engine) ────────────
 
     /// A healthy-fleet snapshot with a full, current view. Tests mutate one axis at a time.
