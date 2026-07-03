@@ -177,6 +177,27 @@ impl<S: WikiStore + 'static> Wiki<S> {
     /// The underlying agent (used by the MCP tool registration in [`crate::mcp`]).
     pub(crate) fn agent(&self) -> &Arc<GossipAgent> { &self.agent }
 
+    /// Stop this node's wiki background tasks (election / curator drain / lint / failover-watch) and
+    /// retract its capability advertisements. **Idempotent.**
+    ///
+    /// This is required for a `Wiki` to be reclaimed: each background loop holds an `Arc<Self>` and
+    /// runs unconditionally, so without `shutdown` the `Wiki` sits in a strong-reference cycle and its
+    /// tasks run until the agent's runtime ends — a leak for any process that creates and discards
+    /// wikis. Mirrors `Blackboard::shutdown`. Aborting the tasks releases their `Arc<Self>`, breaking
+    /// the cycle.
+    pub async fn shutdown(&self) {
+        let handles: Vec<JoinHandle<()>> = std::mem::take(&mut *self.tasks.lock());
+        for h in &handles {
+            h.abort();
+        }
+        for h in handles {
+            let _ = h.await; // await cancellation so the task's Arc<Self> is dropped before we return
+        }
+        *self.curator_reg.lock() = None; // drop the CapabilityReg → retract the ad
+        *self.candidate_reg.lock() = None;
+        self.is_curator.store(false, Ordering::Release);
+    }
+
     /// Read a page directly from the store (any role — reads never go through the curator).
     pub fn read(&self, page: &str) -> Result<Option<Page>, WikiError> { self.store.read(page) }
     /// Query sections by attribute directly from the store.
@@ -372,5 +393,48 @@ impl<S: WikiStore + 'static> Wiki<S> {
             None        => sections.push(sec),  // new section
         }
         self.store.write_page(page, &sections, &page_attrs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::field_reassign_with_default)]
+    use super::*;
+    use std::sync::Weak;
+    use mycelium::{GossipAgent, GossipConfig, NodeId};
+    use crate::fs::FsStore;
+
+    fn free_port() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    }
+
+    /// Canary for the 2026-07-03 resource finding: the curator's background loops hold `Arc<Self>`, so
+    /// without `shutdown` the `Wiki` is a strong-ref cycle that never drops. After `shutdown` aborts the
+    /// tasks, the last strong ref frees the `Wiki` — a `Weak` no longer upgrades. (Pre-fix this
+    /// assertion failed: `upgrade()` stayed `Some` because the tasks pinned an `Arc<Self>` forever.)
+    #[tokio::test]
+    async fn shutdown_breaks_the_task_cycle_and_frees_the_wiki() {
+        let dir = tempfile::tempdir().unwrap();
+        let port = free_port();
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = port;
+        let agent = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg));
+        agent.start().await.unwrap();
+        let store = Arc::new(FsStore::open(dir.path(), "ops").unwrap());
+        let wcfg = WikiConfig {
+            group: "ops".into(), role: WikiRole::Curator,
+            cap_refresh: Duration::from_millis(300), drain_interval: Duration::from_millis(100),
+            lint_interval: Duration::from_millis(200),
+        };
+        let wiki = Wiki::new(Arc::clone(&agent), wcfg, store).await;
+        let weak: Weak<Wiki<FsStore>> = Arc::downgrade(&wiki);
+        // Let the curator's drain + lint loops actually start and capture their Arc<Self>.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        wiki.shutdown().await;
+        drop(wiki);
+        assert!(weak.upgrade().is_none(), "after shutdown the Wiki is reclaimed (task cycle broken)");
+
+        agent.shutdown_with_timeout(Duration::from_secs(5)).await;
     }
 }
