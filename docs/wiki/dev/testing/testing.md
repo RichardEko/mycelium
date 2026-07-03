@@ -12,7 +12,15 @@ cargo clippy --lib --tests --features tls,metrics,a2a,llm -- -D warnings
 cargo test --lib --features compliance          # WS1 RBAC + WS2 audit + WS4 OIDC + WS5 rotation
 cargo test --lib --no-default-features --features gateway   # consensus-free embed
 cargo clippy -p mycelium-core --lib --tests -- -D warnings  # core's own tests are a separate lint scope
+cargo clippy --lib --no-default-features -- -D warnings     # minimal embed — catches feature-gated dead code
+cargo clippy -p mycelium-wasm-host --all-targets -- -D warnings   # wasm-host embeds mycelium default-features=false
 ```
+
+**Feature-gated dead code is a real trap** (bit the diagnostics work, 2026-07-03): an item used
+only under `gateway`/`metrics` is *dead* in a `--no-default-features` build (the CI "Gateway-free"
++ "WASM host" jobs run exactly that), and `-D warnings` fails there even though the default and
+feature-matrix gates pass. Run the last two lines above before pushing anything with a
+feature-conditional consumer.
 
 CI additionally gates `tsc --noEmit` (mycelium-ts), the AFN smoke (pull+push), the coop
 smoke, time-boxed fuzz (skipped on PRs), and `cargo audit` (RUSTSEC). **Don't trust a

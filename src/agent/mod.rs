@@ -56,6 +56,12 @@ mod cluster_tuner;
 mod tuning_governor;
 pub(crate) mod timing_governor;
 mod membership_governor;
+// The diagnostics module's *snapshot/view* surface (fleet snapshot, ViewConfidence, the `explain`
+// reader) is consumed only by the `gateway` HTTP handlers and the `metrics` emitter; its detectors
+// are used unconditionally by the loop. In a build with neither feature (e.g. `--no-default-features`
+// or the wasm-host's minimal embed) that surface is legitimately dead — allow it there only, so
+// genuine dead code is still caught under normal features.
+#[cfg_attr(not(any(feature = "gateway", feature = "metrics")), allow(dead_code))]
 pub(crate) mod emergent;
 mod sharding;
 mod shard_ops;
@@ -360,6 +366,9 @@ pub(crate) struct TaskCtx {
     /// Per-slot commit-conflict counts (Legible-Emergence Phase 2 "hot slots"): the consensus
     /// listener's tripwire records each conflicting slot here (lock-free papaya, incremented via
     /// `compute`). Read by the fleet snapshot; empty when there are no conflicts / no consensus.
+    // Read only by the `gateway` fleet snapshot; written only by the `consensus` tripwire — so no
+    // single feature makes it both, and it is legitimately unread in a gateway-free build.
+    #[cfg_attr(not(feature = "gateway"), allow(dead_code))]
     pub(crate) commit_conflict_slots: Arc<papaya::HashMap<Arc<str>, u64>>,
 
     /// Legible-Emergence Phase 3: the bounded, HLC-stamped **event ring** — the per-node source the
