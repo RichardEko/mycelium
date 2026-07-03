@@ -339,9 +339,18 @@ no longer the build spine — it is the disconnected variant in the design recor
   `POST /gateway/wiki/{read,propose}` + `GET /gateway/wiki/query` REST routes (a `gateway`-feature axum
   `Router` the app mounts via `GossipAgent::with_http_routes`, as the blackboard does) and the
   Python/TS `WikiClient` — both additive, and separable from the mesh-native MCP path above.
-- **Phase 5 — worked example + CI smoke.** One of the driving use cases (a bounded UC2-style council
-  corpus, or a UC1 domain canon) as a runnable example over `FsStore` + `ci_smoke.sh` (Docker-free),
-  wired as a CI job — the pattern the other companions established.
+- **Phase 5 — worked example + CI smoke.** ✅ **shipped (2026-07-03).** `examples/wiki_chat.rs` — one
+  template that **imports documents then answers questions grounded in the wiki**, run over **both**
+  driving corpora (`examples/corpus/council` for UC2, `examples/corpus/org-twin` for UC1) by pointing
+  `--corpus` at a different directory. It demonstrates **both planes** the way the architecture
+  intends: `import` is a **writer** → the control plane (a curator drains its proposals and applies them
+  to the store); `ask`/`chat` are **readers** → the data plane **directly** (open the store, retrieve,
+  ground — **no node, no curator**, the node-independence that makes the wiki a store not a service).
+  Retrieval is keyword-overlap (lexical recall of the exact curated text — RAG's similarity is the
+  separate background layer). `ci_smoke.sh` (Docker-free, deterministic via a `--mock` backend that
+  echoes the grounded context) imports each corpus, asserts an imported fact reaches the answer
+  (`Resolution 2026-14` + its £120,000 funding for UC2; the team lead for UC1), and negative-checks that
+  an off-corpus question retrieves nothing — wired as a CI job.
 
 ## Non-goals
 

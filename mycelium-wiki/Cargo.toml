@@ -43,3 +43,9 @@ tokio    = { version = "1.35", features = ["full"] }
 [[test]]
 name = "failover"
 required-features = ["control-plane"]
+
+# Phase 5 — the worked example: import documents, then chat grounded in the wiki. One template for both
+# use cases (UC1 org twin / UC2 council). Needs `llm` for the LLM backend abstraction.
+[[example]]
+name = "wiki_chat"
+required-features = ["llm"]
