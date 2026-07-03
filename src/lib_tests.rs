@@ -1369,10 +1369,14 @@ async fn test_individual_consumers_over_random_partial_meshes() {
         }
 
         // (a) Individual signal src -> non-adjacent dst. Re-emit each second
-        // (distinct frames) to distinguish "racing formation" from "never".
+        // (distinct frames) to distinguish "racing formation" from "never". The window is 20 s, not
+        // 8: the topology is deterministic (fixed seeds) but multi-hop flood-fallback delivery is
+        // timing-bound, and 8 s occasionally starves under full CI load (flaked once on 2026-07-03 —
+        // calibration ledger). This is "re-emit until the structural condition holds", not a fixed
+        // sleep — the loop exits the instant delivery is observed.
         let mut rx = agents[dst].mesh().signal_rx("prop.topology");
         let mut delivered_at = None;
-        for attempt in 0..8 {
+        for attempt in 0..20 {
             assert!(agents[src].mesh().emit(
                 "prop.topology",
                 SignalScope::Individual(id(dst)),

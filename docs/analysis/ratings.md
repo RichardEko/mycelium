@@ -180,6 +180,16 @@ existed. This is the framework's own report card.
   widening the structural poll 3 s → 10 s (the emission is guaranteed, only its latency under
   load wasn't). Lesson (again): "green twice" is only as broad as the feature set you ran —
   Run 29's determinism claim should have named its scope.
+- 2026-07-03: **Test Architecture** — `test_individual_consumers_over_random_partial_meshes`
+  (the random-topology individual-scope flood-fallback property test, added 7069d4c) flaked
+  once on the CI `Test` job during Legible-Emergence Phase-3 increment 3 (commit 9ea4e35,
+  which is orthogonal — it never enables the detectors). The topology is deterministic (fixed
+  seeds 11/23/47) but multi-hop flood-fallback *delivery* is timing-bound, and the 8×1 s
+  re-emit window occasionally starves under full CI load. Same family as the opacity-gate flake
+  above: a guaranteed structural outcome whose latency-under-load exceeded a too-tight window.
+  Fixed by widening the re-emit loop 8 → 20 attempts (still exits the instant delivery is
+  observed — a structural condition, not a fixed sleep). Confirmed flaky, not a regression, by a
+  clean job re-run with no code change.
 
 **Dimensions:** Philosophy/Coherence · Conceptual Integrity · Architecture ·
 Modularity · API Design · Error Handling · Configurability · Language Best
