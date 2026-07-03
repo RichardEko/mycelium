@@ -35,6 +35,8 @@ mod fs;
 mod agent;
 #[cfg(feature = "control-plane")]
 mod reconcile;
+#[cfg(feature = "control-plane")]
+mod lint;
 
 pub use model::{
     mint_section_id, Manifest, Page, Predicate, Section, SectionId, SectionRef, WikiError,
@@ -46,12 +48,20 @@ pub use fs::FsStore;
 /// evaporating proposal queue, and the single-writer apply. Behind the `control-plane` feature so the
 /// data plane above stays Mycelium-agnostic.
 #[cfg(feature = "control-plane")]
-pub use agent::{Wiki, WikiConfig, WikiRole};
+pub use agent::{CuratorBrain, Wiki, WikiConfig, WikiRole};
 
 /// The curator's **reconcile** (Phase 3) — how a batch of same-section proposals is merged. The
 /// default [`DirectReconciler`] is a lossless no-LLM append-merge; [`LlmReconciler`] (feature `llm`) is
-/// a real 3-way merge over a `mycelium::LlmBackend`. Inject via [`Wiki::with_reconciler`].
+/// a real 3-way merge over a `mycelium::LlmBackend`. Inject via [`CuratorBrain`].
 #[cfg(feature = "control-plane")]
 pub use reconcile::{DirectReconciler, ProposalEdit, Reconciled, Reconciler};
 #[cfg(feature = "llm")]
 pub use reconcile::LlmReconciler;
+
+/// The curator's periodic **lint** (Phase 3) — the group-function health check. [`structural_lint`] is
+/// always-on and deterministic (dead cross-links, empty sections); [`SemanticLinter`] is the optional
+/// LLM self-consistency pass ([`LlmSemanticLinter`] under feature `llm`). Read via [`Wiki::last_lint`].
+#[cfg(feature = "control-plane")]
+pub use lint::{structural_lint, LintFinding, LintKind, LintReport, SemanticLinter};
+#[cfg(feature = "llm")]
+pub use lint::LlmSemanticLinter;

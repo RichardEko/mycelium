@@ -17,6 +17,7 @@ use tokio::task::JoinHandle;
 
 use mycelium::{CapFilter, Capability, CapabilityReg, GossipAgent, NodeId};
 
+use crate::lint::{structural_lint, LintReport, SemanticLinter};
 use crate::model::{mint_section_id, Page, Predicate, Section, SectionId, SectionRef, WikiError};
 use crate::reconcile::{DirectReconciler, ProposalEdit, Reconciler};
 use crate::store::WikiStore;
@@ -43,6 +44,8 @@ pub struct WikiConfig {
     pub cap_refresh:    Duration,
     /// How often the curator drains the proposal queue.
     pub drain_interval: Duration,
+    /// How often the curator runs the lint pass (the group-function health check).
+    pub lint_interval:  Duration,
 }
 
 impl WikiConfig {
@@ -52,9 +55,33 @@ impl WikiConfig {
             role: WikiRole::Auto,
             cap_refresh: Duration::from_secs(2),
             drain_interval: Duration::from_millis(200),
+            lint_interval: Duration::from_secs(30),
         }
     }
     pub fn role(mut self, role: WikiRole) -> Self { self.role = role; self }
+}
+
+/// The curator's decision logic, bundled so a single [`Wiki::with_brain`] constructor carries both the
+/// [`Reconciler`] (how proposals merge) and the optional semantic [`SemanticLinter`] (LLM
+/// self-consistency). The structural lint is always on and needs no brain. [`Default`] is the no-LLM
+/// curator: append-merge, structural lint only.
+pub struct CuratorBrain {
+    pub reconciler:    Box<dyn Reconciler>,
+    pub semantic_lint: Option<Box<dyn SemanticLinter>>,
+}
+
+impl Default for CuratorBrain {
+    fn default() -> Self { Self { reconciler: Box::new(DirectReconciler), semantic_lint: None } }
+}
+
+impl CuratorBrain {
+    /// A brain with a custom reconciler and no semantic lint.
+    pub fn new(reconciler: Box<dyn Reconciler>) -> Self { Self { reconciler, semantic_lint: None } }
+    /// Add the LLM self-consistency pass to the periodic lint.
+    pub fn with_semantic_lint(mut self, linter: Box<dyn SemanticLinter>) -> Self {
+        self.semantic_lint = Some(linter);
+        self
+    }
 }
 
 /// A queued edit proposal — serialised into `wiki/{group}/proposal/{id}` (evaporating soft-state).
@@ -85,8 +112,12 @@ pub struct Wiki<S: WikiStore + 'static> {
     cfg:              WikiConfig,
     store:            Arc<S>,
     /// How the curator merges a batch of same-section proposals (Phase 3). Default: the deterministic
-    /// append-merge ([`DirectReconciler`]); [`Wiki::with_reconciler`] injects the LLM curator.
+    /// append-merge ([`DirectReconciler`]); a custom [`CuratorBrain`] injects the LLM curator.
     reconciler:       Box<dyn Reconciler>,
+    /// The optional LLM self-consistency lint (structural lint is always on, needs no injection).
+    semantic_lint:    Option<Box<dyn SemanticLinter>>,
+    /// The latest lint report (refreshed each lint tick while curating) — the group-function output.
+    last_lint:        Mutex<LintReport>,
     is_curator:       AtomicBool,
     curator_reg:      Mutex<Option<CapabilityReg>>,
     candidate_reg:    Mutex<Option<CapabilityReg>>,
@@ -95,20 +126,31 @@ pub struct Wiki<S: WikiStore + 'static> {
 }
 
 impl<S: WikiStore + 'static> Wiki<S> {
-    /// Construct with the default (no-LLM) append-merge curator and start whatever the role needs.
+    /// Construct with the default (no-LLM) curator — append-merge reconcile + structural lint — and
+    /// start whatever the role needs.
     pub async fn new(agent: Arc<GossipAgent>, cfg: WikiConfig, store: Arc<S>) -> Arc<Self> {
-        Self::with_reconciler(agent, cfg, store, Box::new(DirectReconciler)).await
+        Self::with_brain(agent, cfg, store, CuratorBrain::default()).await
     }
 
-    /// Construct with a custom [`Reconciler`] (e.g. the LLM curator) and start whatever the role needs.
+    /// Construct with a custom [`Reconciler`] and no semantic lint (convenience over [`with_brain`]).
     pub async fn with_reconciler(
         agent: Arc<GossipAgent>, cfg: WikiConfig, store: Arc<S>, reconciler: Box<dyn Reconciler>,
+    ) -> Arc<Self> {
+        Self::with_brain(agent, cfg, store, CuratorBrain::new(reconciler)).await
+    }
+
+    /// Construct with a full [`CuratorBrain`] (reconciler + optional semantic lint) and start whatever
+    /// the role needs.
+    pub async fn with_brain(
+        agent: Arc<GossipAgent>, cfg: WikiConfig, store: Arc<S>, brain: CuratorBrain,
     ) -> Arc<Self> {
         let w = Arc::new(Self {
             agent,
             cfg,
             store,
-            reconciler,
+            reconciler:       brain.reconciler,
+            semantic_lint:    brain.semantic_lint,
+            last_lint:        Mutex::new(LintReport::default()),
             is_curator:       AtomicBool::new(false),
             curator_reg:      Mutex::new(None),
             candidate_reg:    Mutex::new(None),
@@ -137,6 +179,33 @@ impl<S: WikiStore + 'static> Wiki<S> {
     pub fn read(&self, page: &str) -> Result<Option<Page>, WikiError> { self.store.read(page) }
     /// Query sections by attribute directly from the store.
     pub fn query(&self, pred: &Predicate) -> Result<Vec<SectionRef>, WikiError> { self.store.query(pred) }
+
+    /// The most recent lint report (the curator refreshes it each `lint_interval`; empty until the
+    /// first pass, and on a non-curator node). Advisory — findings are surfaced, never auto-applied.
+    pub fn last_lint(&self) -> LintReport { self.last_lint.lock().clone() }
+
+    /// Run a lint pass now over the whole corpus: the always-on [`structural_lint`] plus the injected
+    /// semantic pass (if any). Stores and returns the report. Any node may call it; the curator also
+    /// runs it on a timer.
+    pub async fn lint_now(&self) -> LintReport {
+        let pages = self.read_all_pages();
+        let mut report = structural_lint(&pages);
+        if let Some(linter) = &self.semantic_lint {
+            report.findings.extend(linter.lint(&pages).await);
+        }
+        if !report.is_clean() {
+            tracing::warn!(group = %self.cfg.group, findings = report.len(), "wiki: lint findings");
+        }
+        *self.last_lint.lock() = report.clone();
+        report
+    }
+
+    /// Read every page the store lists (skipping any that error) — the corpus snapshot the lint runs on.
+    fn read_all_pages(&self) -> Vec<Page> {
+        self.store.list_pages().unwrap_or_default().into_iter()
+            .filter_map(|path| self.store.read(&path).ok().flatten())
+            .collect()
+    }
 
     /// Mint a fresh, stable section id for a **new** section on `page`.
     pub fn new_section_id(&self, page: &str) -> SectionId {
@@ -182,7 +251,7 @@ impl<S: WikiStore + 'static> Wiki<S> {
 
         // The single-writer drain loop: drain the proposal queue → apply to the store.
         let me = Arc::clone(self);
-        let h = tokio::spawn(async move {
+        let drain = tokio::spawn(async move {
             let mut tick = tokio::time::interval(me.cfg.drain_interval);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
@@ -190,7 +259,21 @@ impl<S: WikiStore + 'static> Wiki<S> {
                 me.drain_once().await;
             }
         });
-        self.tasks.lock().push(h);
+        // The lint loop: the group-function health check runs only on the curator (one lint of record,
+        // like one writer of record). Findings are surfaced, never auto-applied.
+        let me = Arc::clone(self);
+        let lint = tokio::spawn(async move {
+            let mut tick = tokio::time::interval(me.cfg.lint_interval);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tick.tick().await;
+                me.lint_now().await;
+            }
+        });
+        let mut tasks = self.tasks.lock();
+        tasks.push(drain);
+        tasks.push(lint);
+        drop(tasks);
         tracing::info!(group = %self.cfg.group, "wiki: serving as curator");
     }
 

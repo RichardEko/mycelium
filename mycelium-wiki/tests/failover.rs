@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mycelium::{GossipAgent, GossipConfig, NodeId};
-use mycelium_wiki::{FsStore, Wiki, WikiConfig, WikiRole};
+use mycelium_wiki::{FsStore, LintKind, Wiki, WikiConfig, WikiRole};
 
 /// A free TCP port (bind :0, read it, drop). Good enough for an in-process test cluster.
 fn free_port() -> u16 {
@@ -44,6 +44,7 @@ async fn spawn(port: u16, boot: Vec<u16>, dir: &std::path::Path) -> (Arc<GossipA
         role: WikiRole::Auto,
         cap_refresh: Duration::from_millis(400),
         drain_interval: Duration::from_millis(150),
+        lint_interval: Duration::from_millis(300),
     };
     let wiki = Wiki::new(Arc::clone(&agent), wcfg, store).await;
     (agent, wiki)
@@ -94,6 +95,14 @@ async fn curator_elects_applies_and_fails_over_against_the_same_store() {
         survivor.read("incidents/cert-rotation").ok().flatten()
             .map(|p| p.sections.iter().any(|s| s.body == "rolled the cert back")).unwrap_or(false)
     }, Duration::from_secs(30)).await, "the promoted curator applies against the same store");
+
+    // The curator's periodic lint loop runs the group-function health check over the shared store:
+    // propose a section with a dead cross-link and the promoted curator surfaces it (advisory only).
+    let sid3 = survivor.new_section_id("incidents/cert-rotation");
+    survivor.propose("incidents/cert-rotation", sid3, "Refs", "see [[incidents/does-not-exist]]", attrs(&[]));
+    assert!(poll_until(|| {
+        survivor.last_lint().findings.iter().any(|f| f.kind == LintKind::DeadCrossLink)
+    }, Duration::from_secs(30)).await, "the curator's lint loop reports the dead cross-link");
 
     // Cleanup — shutting down an already-dead agent is harmless.
     agent_a.shutdown_with_timeout(Duration::from_secs(5)).await;
