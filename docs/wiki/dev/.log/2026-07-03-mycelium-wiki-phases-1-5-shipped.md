@@ -30,7 +30,9 @@ The `mycelium-wiki` companion went from *proposed* to *functionally complete*, a
 - **Reader node-independence** is the litmus that keeps the curator a *recallable role*, not a
   coordinator: `ask`/`chat` in the example use the data plane with no node at all.
 
-**Open remainders (additive, non-blocking):** Phase 4 bespoke REST routes + Python/TS `WikiClient`; the
-disconnected KV-native variant retained in `docs/design/wiki-concurrent-edit.md`.
+**Open remainders (additive, non-blocking):** ~~Phase 4 bespoke REST routes + Python/TS `WikiClient`~~
+**closed same-day** (commit `21917e0`: `/gateway/wiki/*` axum router + `mycelium.wiki.Wiki` /
+`mycelium-ts` `Wiki`, `tests/gateway.rs`). Only the disconnected KV-native variant remains
+(`docs/design/wiki-concurrent-edit.md`).
 
 Related: [2026-07-03-wiki-approach-pivot-control-data-plane](2026-07-03-wiki-approach-pivot-control-data-plane.md).
