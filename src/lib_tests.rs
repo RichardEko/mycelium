@@ -4852,3 +4852,84 @@ async fn test_fleet_diagnosis_names_a_real_governed_group_conflict() {
 
     a.shutdown_with_timeout(Duration::from_secs(5)).await;
 }
+
+// ── M2 self-audit falsification probes (analysis Run 30) — kept as regression tests ──────────────
+
+/// **Probe — Philosophy/Coherence (detection, not prevention).** Running the fleet diagnosis over a
+/// governed-group conflict must NOT mutate the observed `grp/` membership — the diagnosis *names*
+/// the pathology, it never drains nodes to "fix" it. Falsifies any hidden correction path.
+#[tokio::test]
+async fn probe_diagnosis_observes_but_never_corrects_a_conflict() {
+    let p = alloc_port();
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = p;
+    let a = GossipAgent::new(NodeId::new("127.0.0.1", p).unwrap(), cfg);
+    a.start().await.unwrap();
+    assert!(a.publish_membership_intent(MembershipIntent::new("workers", 1, Some(2))));
+    for i in 0..4 {
+        assert!(a.kv().set(format!("grp/workers/127.0.0.1:{}", 27400 + i), "1"));
+    }
+    let observed = || a.fleet_snapshot().governed_groups.iter()
+        .find(|g| g.group == "workers").map(|g| g.observed).unwrap_or(0);
+    poll_until(|| observed() == 4, 3_000).await;
+    let before = observed();
+    // Hammer the diagnosis: if it corrected anything, the membership would move.
+    for _ in 0..25 {
+        let _ = a.fleet_diagnosis();
+        let _ = a.fleet_snapshot();
+    }
+    assert_eq!(before, observed(), "diagnosis must not correct the conflict (detection, not prevention)");
+    assert!(a.fleet_diagnosis().findings.iter().any(|f| f.cause.contains("workers")),
+        "the conflict is still diagnosed, not silently resolved");
+    a.shutdown_with_timeout(Duration::from_secs(5)).await;
+}
+
+/// **Probe — coordinator-free (no collector).** A lone node with no peers computes a well-formed
+/// diagnosis from its own KV — no quorum, no aggregator, no hang. Falsifies any hidden dependency
+/// on a peer/collector for the fleet view.
+#[tokio::test]
+async fn probe_lone_node_diagnoses_without_a_collector() {
+    let p = alloc_port();
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = p;
+    let a = GossipAgent::new(NodeId::new("127.0.0.1", p).unwrap(), cfg);
+    a.start().await.unwrap();
+    // No peers, no bootstrap. The diagnosis is a local computation.
+    let d = a.fleet_diagnosis();
+    assert_eq!(d.observer, format!("127.0.0.1:{p}"), "labelled with its own identity");
+    assert!(d.findings.is_empty() && d.summary.to_lowercase().contains("nominal"),
+        "a healthy lone node reads nominal: {d:?}");
+    assert!(a.peers().is_empty(), "truly no peers — the diagnosis needed no collector");
+    a.shutdown_with_timeout(Duration::from_secs(5)).await;
+}
+
+/// **Probe — Failure-Mode Legibility.** Every finding's `cause` must be operator-readable: an
+/// actionable sentence, never a raw code identifier. Seed two distinct pathologies and assert no
+/// cause leaks its snake_case pathology id and every one carries an `Action:`.
+#[tokio::test]
+async fn probe_every_diagnosis_finding_is_operator_legible() {
+    use crate::capability::{CapFilter, ReqEntry};
+    let p = alloc_port();
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = p;
+    let a = GossipAgent::new(NodeId::new("127.0.0.1", p).unwrap(), cfg);
+    a.start().await.unwrap();
+    // Pathology 1: a governed-group conflict.
+    assert!(a.publish_membership_intent(MembershipIntent::new("workers", 1, Some(2))));
+    for i in 0..4 {
+        assert!(a.kv().set(format!("grp/workers/127.0.0.1:{}", 27500 + i), "1"));
+    }
+    // Pathology 2: a capability-coverage gap (a demand with no provider).
+    let req = ReqEntry { filter: CapFilter::new("ai", "llm"), refresh_interval_ms: 60_000 };
+    assert!(a.kv().set(format!("req/127.0.0.1:{p}/ai/llm"), req.encode()));
+
+    poll_until(|| a.fleet_diagnosis().findings.len() >= 2, 5_000).await;
+    let d = a.fleet_diagnosis();
+    assert!(d.findings.len() >= 2, "both pathologies diagnosed: {:?}", d.findings);
+    for f in &d.findings {
+        assert!(f.cause.contains("Action:"), "finding is actionable: {}", f.cause);
+        assert!(!f.cause.contains(&f.pathology),
+            "cause must not leak its raw pathology id ({}): {}", f.pathology, f.cause);
+    }
+    a.shutdown_with_timeout(Duration::from_secs(5)).await;
+}
