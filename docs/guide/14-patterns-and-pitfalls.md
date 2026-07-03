@@ -193,6 +193,27 @@ distributed deployment. The cluster-wide path — `publish_installable` → `fro
 [`catalog`](../../examples/coop/src/bin/catalog.rs) example and documented in
 [operations/artifacts.md](../operations/artifacts.md).
 
+## 11 · Diagnose the fleet from *any* node — diagnostics as data
+
+**Pattern** — To answer "why is the fleet in this state?", call `agent.fleet_diagnosis()` (or
+`GET /gateway/diagnose`) on **any** node. Each node computes the diagnosis from the gossiped KV it
+already holds — a rule engine over `fleet_snapshot()` that names each pathology (governed-group
+conflict/thrash, opacity storm, coverage gap, …) in actionable terms. The
+[`diagnostics`](../../examples/coop/src/bin/diagnostics.rs) example (coop step 12) induces a conflict
+on one depot and diagnoses it from **another**.
+
+**Anti-pattern** — Standing up a central metrics collector / "fleet controller" to aggregate node
+state and decide health. That reintroduces the coordinator the substrate exists to avoid — a single
+point of failure and of truth.
+
+**Why** — KV floods the whole cluster, so every node already holds the fleet's state; the diagnosis
+is a *local* computation, not a *gather*. Kill any node and the answer survives on the rest; ask any
+node and it answers. **But** honour the RT1/RT2 caveat the diagnosis carries: a node hearing only
+part of the fleet (`peers_heard < peers_known`) is reporting a partial view — it may be the
+partitioned one. Cross-check by asking a second node; at convergence the *findings* agree while each
+keeps its own `view_confidence`. Full runbook (one entry per pathology + Prometheus alert recipes):
+[operations/diagnostics.md](../operations/diagnostics.md).
+
 ---
 
 ## The meta-pattern

@@ -8,6 +8,7 @@ vocabulary is in [00 · Concepts](../guide/00-concepts.md).
 |---|---|
 | [deployment.md](deployment.md) | the library-embed model, ports, seeds, TLS/auto-CA, containers, restart behaviour |
 | [observability.md](observability.md) | the public endpoints (`/health` `/ready` `/stats` `/metrics`), reading the tripwire counters, **viewing AgentFacts**, Prometheus, dashboards |
+| [diagnostics.md](diagnostics.md) | **diagnosing a coordinator-free fleet** — localize/explain/diagnose, one runbook entry per emergent pathology, Prometheus alert recipes |
 | [dynamic-scaling.md](dynamic-scaling.md) | elastic membership + capacity via `/gateway/govern`; **seeing scaling** live; live tuning |
 | [artifacts.md](artifacts.md) | the cluster-wide **artifact catalogue** — where it lives, registering, authoring + publishing a deployable |
 | [tuning.md](tuning.md) | the config knobs (shards, channel depth, intervals, connection cap) |

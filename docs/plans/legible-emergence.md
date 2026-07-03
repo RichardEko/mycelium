@@ -1,6 +1,6 @@
 # Legible Emergence — making coordinator-free fleets diagnosable
 
-**Status:** 🟢 **Phases 0–4 done; Phase 5 not started** (proposed 2026-06-21;
+**Status:** 🟢 **COMPLETE — all phases 0–5 shipped** (proposed 2026-06-21;
 red-teamed + Phase-0 taxonomy 2026-07-02; all 5 Phase-1 detectors (P1/P2/P3/P4/P6) + `/metrics` shipped 2026-07-02). Phase 0 shipped as
 [`docs/design/legible-emergence-taxonomy.md`](../design/legible-emergence-taxonomy.md) (the
 pathology taxonomy, with RT1–RT4 baked in). The **Red-team findings** section (below, near the
@@ -237,16 +237,27 @@ rules (each pathology → actionable cause; ordering; healthy=nominal; partial-v
 KV-derived snapshot, not a synthetic struct). The SRE-fear acceptance test (below) is met per
 pathology.
 
-### Phase 5 — Operator surface, runbook, alerts, docs
+### Phase 5 — Operator surface, runbook, alerts, docs — 🟢 DONE
 
-Surface the diagnostics as **data** (the library-not-platform line): extend the existing mesh/`/mgmt`
-dashboard with a reference diagnostics view; ship `docs/operations/diagnostics.md` ("the fleet is
-doing X — here is how to read it", one entry per pathology, each linking the detector + snapshot +
-explain query); Prometheus alert recipes for the emergent tripwires; integrate into
-`guide/14-patterns-and-pitfalls.md` (each pathology as a pattern) and the `coop` suite (a demo that
-*induces* an emergent pathology and shows the tooling diagnosing it — the constructive proof, the
-way `provisioning` is for the autonomic loop). **Gate:** the two-audience docs land; the coop demo
-induces-and-diagnoses a pathology Docker-free in CI.
+**Shipped.** Diagnostics surfaced as **data** (the library-not-platform line): new public
+`GossipAgent::fleet_snapshot()` / `fleet_diagnosis()` (`src/agent/kv.rs`) — the same content as
+`GET /gateway/fleet` / `/gateway/diagnose`, callable with no HTTP/auth; types re-exported from
+`lib.rs`. Two-audience docs: **operator** — `docs/operations/diagnostics.md` (the three verbs +
+endpoints + API, "read the caveat first" for RT1/RT2, one runbook entry per pathology
+[means / read via gauge+snapshot+explain / do], and **Prometheus alert recipes** on the
+`mycelium_emergent_*` gauges incl. the `peers_heard < peers_known` partial-view alert); **developer** —
+`guide/14-patterns-and-pitfalls.md` pattern 11 ("diagnose from any node — diagnostics as data";
+anti-pattern = a central collector). **Constructive proof / CI gate:**
+`examples/coop/src/bin/diagnostics.rs` (Food-Rescue step 12) induces a governed-group conflict on
+one depot and has **another** depot diagnose it from its own gossiped KV (the coordinator-free
+property, end to end), wired into `examples/coop/ci_smoke.sh` — Docker-free, with the suite's 3×
+retry. **Gate met:** the two-audience docs land + the coop demo induces-and-diagnoses in CI.
+(Deferred as optional polish, not gaps: a `/mgmt` dashboard diagnostics *view*, and a Phase-4
+store-divergence rule.)
+
+**Legible Emergence is COMPLETE.** The three-verb operator spine — **localize** (`/fleet`) ·
+**explain** (`/explain`) · **diagnose** (`/diagnose`) — is shipped, tested, documented for both
+audiences, and demonstrated end-to-end in CI.
 
 ## Definition of done (the acceptance gate)
 

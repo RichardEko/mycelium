@@ -200,6 +200,23 @@ impl GossipAgent {
             rate_limited_senders: mycelium_core::rate::throttled_sender_count(&self.task_ctx.core),
         }
     }
+
+    /// The Legible-Emergence **fleet snapshot** — the relational "localize" view computed locally
+    /// from the gossiped KV this node already holds (no collector; any node answers it). Governed-
+    /// group status, capability-coverage gaps, fleet opacity, the throttle graph, and the RT1/RT2
+    /// [`ViewConfidence`](super::emergent::ViewConfidence) that qualifies it. Available whether or
+    /// not the detector loop runs (the flap/oscillation counters read 0 when it does not).
+    pub fn fleet_snapshot(&self) -> super::emergent::FleetSnapshot {
+        super::emergent::compute_fleet_snapshot(&self.task_ctx)
+    }
+
+    /// The Legible-Emergence **fleet diagnosis** — the "why is the fleet in this state" narrative:
+    /// a rule engine over [`fleet_snapshot`](Self::fleet_snapshot) that names each detected pathology
+    /// in code-free, actionable terms, most-severe first, qualified by this observer's own view
+    /// health. Diagnostics *as data* — the same content the `GET /gateway/diagnose` endpoint serves.
+    pub fn fleet_diagnosis(&self) -> super::emergent::FleetDiagnosis {
+        super::emergent::compute_fleet_diagnosis(&self.task_ctx)
+    }
 }
 
 #[cfg(test)]

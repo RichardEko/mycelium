@@ -206,6 +206,11 @@ pub use agent::{
 };
 // Elastic group sizing (Track 2a).
 pub use agent::{MembershipAction, MembershipIntent, MEMBERSHIP_INTENT_TTL_MS, MEMBERSHIP_PREFIX};
+// Legible Emergence — fleet diagnostics as data (localize · explain · diagnose). `GroupStatus`
+// stays crate-internal (bare name is the mesh type); reach it via `FleetSnapshot.governed_groups`.
+pub use agent::{
+    FleetDiagnosis, FleetSnapshot, Finding, Severity, StoreConvergence, ThrottleEdge, ViewConfidence,
+};
 #[cfg(feature = "gateway")]
 pub use agent::McpClientHandle;
 #[cfg(feature = "llm")]

@@ -118,6 +118,11 @@ pub use tuning_governor::{
 #[cfg(test)]
 pub(crate) use tuning_governor::TuningGovernor;
 pub use membership_governor::{MembershipAction, MembershipIntent, MEMBERSHIP_INTENT_TTL_MS, MEMBERSHIP_PREFIX};
+// Legible Emergence — fleet diagnostics as data (localize · explain · diagnose). `GroupStatus` is
+// reached via `FleetSnapshot.governed_groups` (the bare name is already the mesh-dashboard type).
+pub use emergent::{
+    FleetDiagnosis, FleetSnapshot, Finding, Severity, StoreConvergence, ThrottleEdge, ViewConfidence,
+};
 #[cfg(feature = "consensus")]
 pub use overlay_consistent::{ConsistencyError, LockGuard};
 #[cfg(feature = "consensus")]

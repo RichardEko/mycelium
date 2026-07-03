@@ -50,5 +50,6 @@ run_demo "08 · llm_pipeline"     llm_pipeline     "All assertions passed" "both
 run_demo "09 · mcp_toolgrowth"   mcp_toolgrowth   "All assertions passed" "loaded the MCP tool and offered it out"
 run_demo "10 · llm_council"      llm_council      "All assertions passed" "fanned out to 3 specialists, synthesized, and refined"
 run_demo "11 · catalog"          catalog          "All assertions passed" "pulled the artifact bytes over the mesh"
+run_demo "12 · diagnostics"      diagnostics      "All assertions passed" "diagnosed the governed-group conflict"
 
 echo "All co-op smokes passed."
