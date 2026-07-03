@@ -118,6 +118,12 @@ pub struct Wiki<S: WikiStore + 'static> {
     semantic_lint:    Option<Box<dyn SemanticLinter>>,
     /// The latest lint report (refreshed each lint tick while curating) — the group-function output.
     last_lint:        Mutex<LintReport>,
+    /// Set whenever the curator writes the store; the periodic lint loop only runs a (whole-corpus)
+    /// pass when this is set, so an idle wiki does **no** lint work (the Run-32 scalability fix). Starts
+    /// `true` so the curator establishes a baseline over any pre-existing corpus on startup.
+    lint_dirty:       AtomicBool,
+    /// How many lint passes the curator has run (observability + the dirty-skip regression test).
+    lint_passes:      AtomicU64,
     is_curator:       AtomicBool,
     curator_reg:      Mutex<Option<CapabilityReg>>,
     candidate_reg:    Mutex<Option<CapabilityReg>>,
@@ -151,6 +157,8 @@ impl<S: WikiStore + 'static> Wiki<S> {
             reconciler:       brain.reconciler,
             semantic_lint:    brain.semantic_lint,
             last_lint:        Mutex::new(LintReport::default()),
+            lint_dirty:       AtomicBool::new(true),
+            lint_passes:      AtomicU64::new(0),
             is_curator:       AtomicBool::new(false),
             curator_reg:      Mutex::new(None),
             candidate_reg:    Mutex::new(None),
@@ -203,14 +211,19 @@ impl<S: WikiStore + 'static> Wiki<S> {
     /// Query sections by attribute directly from the store.
     pub fn query(&self, pred: &Predicate) -> Result<Vec<SectionRef>, WikiError> { self.store.query(pred) }
 
-    /// The most recent lint report (the curator refreshes it each `lint_interval`; empty until the
-    /// first pass, and on a non-curator node). Advisory — findings are surfaced, never auto-applied.
+    /// The most recent lint report (the curator refreshes it after a change; empty until the first
+    /// pass, and on a non-curator node). Advisory — findings are surfaced, never auto-applied.
     pub fn last_lint(&self) -> LintReport { self.last_lint.lock().clone() }
 
+    /// How many lint passes the curator has run since construction. Observability, and the anchor for
+    /// the dirty-skip regression test (an idle wiki does not advance this).
+    pub fn lint_pass_count(&self) -> u64 { self.lint_passes.load(Ordering::Relaxed) }
+
     /// Run a lint pass now over the whole corpus: the always-on [`structural_lint`] plus the injected
-    /// semantic pass (if any). Stores and returns the report. Any node may call it; the curator also
-    /// runs it on a timer.
+    /// semantic pass (if any). Stores and returns the report. Any node may call it on demand; the
+    /// curator's loop runs it only after a write (see `lint_dirty`).
     pub async fn lint_now(&self) -> LintReport {
+        self.lint_passes.fetch_add(1, Ordering::Relaxed);
         let pages = self.read_all_pages();
         let mut report = structural_lint(&pages);
         if let Some(linter) = &self.semantic_lint {
@@ -283,14 +296,19 @@ impl<S: WikiStore + 'static> Wiki<S> {
             }
         });
         // The lint loop: the group-function health check runs only on the curator (one lint of record,
-        // like one writer of record). Findings are surfaced, never auto-applied.
+        // like one writer of record). Findings are surfaced, never auto-applied. It runs a (whole-corpus)
+        // pass **only when the corpus changed** since the last one (`lint_dirty`) — an idle wiki does no
+        // lint work (Run-32 scalability fix). `swap(false)` before the pass so a write landing *during*
+        // the pass re-arms it for the next tick (no missed change).
         let me = Arc::clone(self);
         let lint = tokio::spawn(async move {
             let mut tick = tokio::time::interval(me.cfg.lint_interval);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tick.tick().await;
-                me.lint_now().await;
+                if me.lint_dirty.swap(false, Ordering::AcqRel) {
+                    me.lint_now().await;
+                }
             }
         });
         let mut tasks = self.tasks.lock();
@@ -392,7 +410,11 @@ impl<S: WikiStore + 'static> Wiki<S> {
             Some(slot) => *slot = sec,          // edit an existing section
             None        => sections.push(sec),  // new section
         }
-        self.store.write_page(page, &sections, &page_attrs)
+        let r = self.store.write_page(page, &sections, &page_attrs);
+        if r.is_ok() {
+            self.lint_dirty.store(true, Ordering::Release); // the corpus changed → re-lint next tick
+        }
+        r
     }
 }
 
@@ -435,6 +457,50 @@ mod tests {
         drop(wiki);
         assert!(weak.upgrade().is_none(), "after shutdown the Wiki is reclaimed (task cycle broken)");
 
+        agent.shutdown_with_timeout(Duration::from_secs(5)).await;
+    }
+
+    /// Run-32 scalability fix: the curator runs a whole-corpus lint pass only after a change — an idle
+    /// wiki does no lint work. Asserts the pass counter stays flat while idle, then advances on a write.
+    #[tokio::test]
+    async fn curator_lints_only_after_a_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let port = free_port();
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = port;
+        let agent = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg));
+        agent.start().await.unwrap();
+        let store = Arc::new(FsStore::open(dir.path(), "ops").unwrap());
+        let wcfg = WikiConfig {
+            group: "ops".into(), role: WikiRole::Curator,
+            cap_refresh: Duration::from_millis(300), drain_interval: Duration::from_millis(80),
+            lint_interval: Duration::from_millis(120),
+        };
+        let wiki = Wiki::new(Arc::clone(&agent), wcfg, store).await;
+
+        // Baseline pass (constructed dirty=true → the first lint tick establishes it).
+        for _ in 0..50 {
+            if wiki.lint_pass_count() >= 1 { break; }
+            tokio::time::sleep(Duration::from_millis(40)).await;
+        }
+        let baseline = wiki.lint_pass_count();
+        assert!(baseline >= 1, "the curator ran a baseline lint");
+
+        // Idle: several lint intervals with no writes → the counter must not advance.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(wiki.lint_pass_count(), baseline, "an idle wiki runs no further lint passes");
+
+        // A write re-arms the dirty flag → exactly the change triggers the next pass.
+        let sid = wiki.new_section_id("p");
+        wiki.propose("p", sid, "H", "body", BTreeMap::new());
+        let mut advanced = false;
+        for _ in 0..100 {
+            if wiki.lint_pass_count() > baseline { advanced = true; break; }
+            tokio::time::sleep(Duration::from_millis(40)).await;
+        }
+        assert!(advanced, "a write triggers exactly one further lint pass");
+
+        wiki.shutdown().await;
         agent.shutdown_with_timeout(Duration::from_secs(5)).await;
     }
 }
