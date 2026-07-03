@@ -829,9 +829,10 @@ async fn gw_diagnose(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
 
 /// `GET /gateway/explain?since=<hlc>` — the Legible-Emergence Phase-3 causal **explain**: the
 /// HLC-ordered narrative of significant fleet events (`?since` filters to `hlc >= since`; default
-/// all). Fans a best-effort `sys.explain` RPC out to every known peer, merges each node's ring into
-/// one causal stream, and — RT3 — names the peers that did not answer (`non_responders`) rather than
-/// silently dropping their events. Scope `fleet:read`.
+/// all). Fans a best-effort `sys.explain` RPC out to a **capped** subset of known peers
+/// (`EXPLAIN_MAX_FANOUT`, so the query never becomes an O(N) RPC storm), merges each node's ring into
+/// one causal stream, and — RT3 — names both the peers that did not answer (`non_responders`) and the
+/// count skipped by the cap (`not_queried`) rather than silently dropping either. Scope `fleet:read`.
 async fn gw_explain(
     State(ctx): State<Arc<HttpCtx>>,
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,

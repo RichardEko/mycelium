@@ -4805,6 +4805,7 @@ async fn test_explain_fanout_assembles_cross_node_ring_and_names_non_responders(
         res.responders, res.non_responders);
     assert!(!res.responders.contains(&ic.to_string()), "C did not answer");
     assert_eq!(res.observer, ia.to_string(), "result is labelled with the assembling observer");
+    assert_eq!(res.not_queried, 0, "a 2-peer fleet is well under the fan-out cap — nothing skipped");
 
     // (3) The #56 reconstruction narrative — the assembled ring renders an operator-legible story
     // (one line per event) that names the specific group + band, with no code knowledge required.

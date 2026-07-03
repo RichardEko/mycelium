@@ -20,8 +20,9 @@ the *diagnosis* agrees across nodes, while each keeps its own `view_confidence`)
   gaps, opacity, throttle graph, cross-node store-convergence, commit-conflict hot slots + the
   RT1/RT2 `view_confidence` header).
 - **explain** — `GET /gateway/explain?since=`: the cross-node HLC-ordered event narrative,
-  best-effort fan-out that *names the peers that did not answer* (`non_responders`) rather than
-  silently dropping them (RT3).
+  best-effort fan-out (**capped** at `EXPLAIN_MAX_FANOUT` peers so an operator query never becomes an
+  O(N) RPC storm) that *names* both the peers that did not answer (`non_responders`) and the count
+  skipped by the cap (`not_queried`) rather than silently dropping them (RT3).
 - **diagnose** — `GET /gateway/diagnose`: the "why is the fleet in this state" rule engine — a
   most-severe-first list of findings, each naming a pathology in actionable terms, with an RT1/RT2
   `caveat` when the observer's own view is partial.

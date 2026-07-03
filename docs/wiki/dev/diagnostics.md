@@ -76,15 +76,18 @@ as soft-state refreshes; each node publishes its report from the detector loop),
 conflicting slot in a lock-free papaya map). **Phase 3 is complete** — the bounded HLC-stamped `EventRing` (RT4 always-on-when-enabled)
 records detector-state transitions + commit conflicts. `GET /gateway/explain?since=` (scope
 `fleet:read`) now returns the **cross-node** causal narrative: `assemble_explain` starts from this
-node's ring, fans a best-effort `sys.explain` RPC out to every known peer (served by
-`run_explain_responder`, spawned alongside the detector loop), merges each node's single-author ring
-into one HLC-ordered stream, and — **RT3** — names the peers that did **not** answer
-(`non_responders`) rather than silently dropping their events. It is deliberately **not**
-`scatter_gather`: that aborts at `min_ok` and discards *all* partial replies on
-`InsufficientReplies`, which is the RT3 failure mode (the slow/partitioned nodes you most need
-mid-incident are exactly the ones that time out). Gate:
+node's ring, fans a best-effort `sys.explain` RPC out to a **bounded subset** of known peers
+(`select_explain_targets`, capped at `EXPLAIN_MAX_FANOUT = 32` so an operator query never becomes an
+O(N) RPC storm; served by `run_explain_responder`, spawned alongside the detector loop), merges each
+node's single-author ring into one HLC-ordered stream, and — **RT3** — names *both* the peers that
+did **not** answer (`non_responders`) and the count skipped by the cap (`not_queried`), rather than
+silently dropping either. It is deliberately **not** `scatter_gather`: that aborts at `min_ok` and
+discards *all* partial replies on `InsufficientReplies`, which is the RT3 failure mode (the
+slow/partitioned nodes you most need mid-incident are exactly the ones that time out). Gates:
 `test_explain_fanout_assembles_cross_node_ring_and_names_non_responders` (A+B assemble each other's
-rings; C — a live peer with no responder — is the deterministic named non-responder).
+rings; C — a live peer with no responder — is the deterministic named non-responder) +
+`select_explain_targets_caps_the_fanout_and_names_the_remainder` (the cap is deterministic and the
+remainder counted).
 
 **Phase 3 is complete** with the **reconstruction narrative** (increment 3): `assemble_explain` now
 also returns `narrative` — the same HLC-ordered events rendered one line per event by `narrate`,

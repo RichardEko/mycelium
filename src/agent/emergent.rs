@@ -441,6 +441,23 @@ pub(crate) const EXPLAIN_RPC_KIND: &str = "sys.explain";
 /// never a silent gap.
 const EXPLAIN_FANOUT_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Cap on the number of peers one `explain` fans out to. Bounds the concurrent `sys.explain` RPCs
+/// so an operator query on a large fleet cannot spray one RPC per node (an on-demand query must not
+/// become an O(N) storm). Peers beyond the cap are *named* (`not_queried`), never silently dropped —
+/// the same RT3 honesty as `non_responders`. Raise only if you genuinely need a wider single-shot
+/// view; the local ring + a handful of peers already reconstruct most incidents.
+const EXPLAIN_MAX_FANOUT: usize = 32;
+
+/// Pick the deterministic subset of peers an `explain` fans out to (capped at `cap`), plus the count
+/// skipped. Sorted by identity so the subset is *stable* across repeated queries; the skipped count
+/// is surfaced so a capped fan-out is never mistaken for a complete one. **Pure** — unit-tested.
+fn select_explain_targets(mut peers: Vec<crate::node_id::NodeId>, cap: usize) -> (Vec<crate::node_id::NodeId>, usize) {
+    peers.sort_by_key(|p| p.to_string());
+    let not_queried = peers.len().saturating_sub(cap);
+    peers.truncate(cap);
+    (peers, not_queried)
+}
+
 /// The assembled cross-node explain: every reachable node's ring merged into one HLC-ordered
 /// stream, plus the RT3 honesty pair — who answered and who did **not**. A non-empty
 /// `non_responders` is the view telling you the reconstruction is partial *exactly where* it says,
@@ -457,8 +474,13 @@ pub struct ExplainResult {
     pub narrative:      Vec<String>,
     /// Peers that answered the fan-out, sorted.
     pub responders:     Vec<String>,
-    /// Peers that did **not** answer within [`EXPLAIN_FANOUT_TIMEOUT`] — the named gaps (RT3), sorted.
+    /// Peers that were queried but did **not** answer within [`EXPLAIN_FANOUT_TIMEOUT`] — the named
+    /// gaps (RT3), sorted.
     pub non_responders: Vec<String>,
+    /// How many known peers were **not queried at all** because the fan-out hit
+    /// [`EXPLAIN_MAX_FANOUT`]. Non-zero ⇒ this is a *capped* view: raise the cap or re-query for a
+    /// wider one. Named, not silently dropped — the same RT3 honesty as `non_responders`.
+    pub not_queried:    usize,
 }
 
 /// Render an HLC-ordered event stream into a legible, non-designer-readable narrative — one line
@@ -512,18 +534,22 @@ pub async fn run_explain_responder(
 }
 
 /// Assemble the cross-node causal explain: start from this node's ring, fan a best-effort
-/// `sys.explain` RPC out to every known peer, merge whatever returns within
-/// [`EXPLAIN_FANOUT_TIMEOUT`] in HLC order, and name the peers that did not answer.
+/// `sys.explain` RPC out to a bounded subset of known peers ([`EXPLAIN_MAX_FANOUT`]), merge whatever
+/// returns within [`EXPLAIN_FANOUT_TIMEOUT`] in HLC order, and name both the peers that did not
+/// answer and the count of peers skipped by the cap.
 ///
 /// Deliberately **not** [`crate::agent::service_handle::ServiceHandle::scatter_gather`]: that
 /// aborts once `min_ok` replies land and discards *all* partial replies on `InsufficientReplies` —
 /// the RT3 failure mode, because the slow/partitioned nodes you most need mid-incident are exactly
 /// the ones that time out. Here each per-peer timeout turns a silent peer into a named
-/// `non_responder` while every reply that does arrive still lands in `events`.
+/// `non_responder` while every reply that does arrive still lands in `events`. The fan-out is
+/// **capped** so an operator query on a large fleet stays a bounded action, not an O(N) RPC storm;
+/// skipped peers are surfaced as `not_queried`, never silently dropped.
 pub async fn assemble_explain(ctx: &Arc<TaskCtx>, since: u64) -> ExplainResult {
     let mut events = ctx.event_ring.since(since);
 
-    let peers: Vec<crate::node_id::NodeId> = ctx.peers.pin().keys().cloned().collect();
+    let all_peers: Vec<crate::node_id::NodeId> = ctx.peers.pin().keys().cloned().collect();
+    let (peers, not_queried) = select_explain_targets(all_peers, EXPLAIN_MAX_FANOUT);
     let since_bytes = bytes::Bytes::copy_from_slice(&since.to_le_bytes());
 
     let mut js: tokio::task::JoinSet<(crate::node_id::NodeId, Result<bytes::Bytes, super::rpc::RpcError>)> =
@@ -562,7 +588,9 @@ pub async fn assemble_explain(ctx: &Arc<TaskCtx>, since: u64) -> ExplainResult {
     responders.sort();
 
     let narrative = narrate(&events);
-    ExplainResult { observer: ctx.node_id.to_string(), events, narrative, responders, non_responders }
+    ExplainResult {
+        observer: ctx.node_id.to_string(), events, narrative, responders, non_responders, not_queried,
+    }
 }
 
 // ── Phase 2: the relational fleet snapshot (GET /gateway/fleet) ───────────────────────────────
@@ -1381,6 +1409,26 @@ mod tests {
         let story = narrate(&events);
         assert_eq!(story.len(), 1);
         assert!(story[0].contains("some_future_detector"), "unknown kind surfaced: {}", story[0]);
+    }
+
+    #[test]
+    fn select_explain_targets_caps_the_fanout_and_names_the_remainder() {
+        // Over the cap: exactly `cap` targets fan out, the rest are counted (never silently dropped),
+        // and the subset is deterministic (stable across repeated queries).
+        let peers: Vec<NodeId> = (0..40)
+            .map(|i| NodeId::new("127.0.0.1", 20_000 + i).unwrap()).collect();
+        let (targets, skipped) = select_explain_targets(peers.clone(), EXPLAIN_MAX_FANOUT);
+        assert_eq!(targets.len(), EXPLAIN_MAX_FANOUT, "fan-out is capped");
+        assert_eq!(skipped, 40 - EXPLAIN_MAX_FANOUT, "the remainder is named, not dropped");
+        let (targets2, _) = select_explain_targets(peers, EXPLAIN_MAX_FANOUT);
+        assert_eq!(targets, targets2, "the capped subset is deterministic");
+
+        // Under the cap: everyone is queried, nothing skipped.
+        let few: Vec<NodeId> = (0..3)
+            .map(|i| NodeId::new("127.0.0.1", 21_000 + i).unwrap()).collect();
+        let (t, s) = select_explain_targets(few, EXPLAIN_MAX_FANOUT);
+        assert_eq!(t.len(), 3);
+        assert_eq!(s, 0);
     }
 
     // ── Phase 4: fleet diagnosis (the "why is the fleet in this state" rule engine) ────────────
