@@ -174,6 +174,8 @@ impl<S: WikiStore + 'static> Wiki<S> {
     pub fn is_curator(&self) -> bool { self.is_curator.load(Ordering::Acquire) }
     /// The store handle (reads go here directly — the data plane).
     pub fn store(&self) -> &Arc<S> { &self.store }
+    /// The underlying agent (used by the MCP tool registration in [`crate::mcp`]).
+    pub(crate) fn agent(&self) -> &Arc<GossipAgent> { &self.agent }
 
     /// Read a page directly from the store (any role — reads never go through the curator).
     pub fn read(&self, page: &str) -> Result<Option<Page>, WikiError> { self.store.read(page) }

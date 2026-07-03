@@ -325,9 +325,20 @@ no longer the build spine — it is the disconnected variant in the design recor
   `/wiki-lint`: dead cross-links, orphans, the cited-fact check, and — for UC1 — **semantic
   self-consistency**, no cross-section contradictions) — a curator background task, separable from the
   reconcile and landing next.
-- **Phase 4 — MCP tool + gateway + SDKs.** The wiki as an **MCP tool** (`wiki.read`/`propose`/`query`)
-  so agents reach it the way they reach any tool; `POST /gateway/wiki/{read,propose}` +
-  `GET /gateway/wiki/query`; Python/TS `WikiClient`.
+- **Phase 4 — MCP tool + gateway + SDKs.** ✅ **the MCP tools shipped (2026-07-03)**; the bespoke REST
+  routes + SDKs are the open remainder. [`Wiki::register_mcp_tools`] publishes three tools —
+  `wiki.read` / `wiki.query` (served **directly from the store on the calling node** — the data-plane
+  parallel-read property, so any node hosts them) and `wiki.propose` (enqueues to the curator) — over
+  Mycelium's **existing** MCP invoke path: registration writes each tool's `inputSchema` to
+  `tools/{name}/{node}` in KV for cluster-wide discovery, and dropping the returned [`WikiMcpTools`]
+  guard tombstones them. No new transport and no fork of mycelium core — the companion-crate contract
+  (public API only) is what makes the MCP path, not bespoke `/gateway/wiki/*` routes, the right shape.
+  *Verified:* two single-node tests — the read/query handlers serve a seeded store (page JSON +
+  attribute-filtered refs), and a new-section propose mints an id, lands on the KV queue, and
+  registration publishes all three discoverable schemas. *Remaining for Phase 4:* the bespoke
+  `POST /gateway/wiki/{read,propose}` + `GET /gateway/wiki/query` REST routes (a `gateway`-feature axum
+  `Router` the app mounts via `GossipAgent::with_http_routes`, as the blackboard does) and the
+  Python/TS `WikiClient` — both additive, and separable from the mesh-native MCP path above.
 - **Phase 5 — worked example + CI smoke.** One of the driving use cases (a bounded UC2-style council
   corpus, or a UC1 domain canon) as a runnable example over `FsStore` + `ci_smoke.sh` (Docker-free),
   wired as a CI job — the pattern the other companions established.

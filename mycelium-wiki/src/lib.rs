@@ -37,6 +37,8 @@ mod agent;
 mod reconcile;
 #[cfg(feature = "control-plane")]
 mod lint;
+#[cfg(feature = "control-plane")]
+mod mcp;
 
 pub use model::{
     mint_section_id, Manifest, Page, Predicate, Section, SectionId, SectionRef, WikiError,
@@ -65,3 +67,9 @@ pub use reconcile::LlmReconciler;
 pub use lint::{structural_lint, LintFinding, LintKind, LintReport, SemanticLinter};
 #[cfg(feature = "llm")]
 pub use lint::LlmSemanticLinter;
+
+/// The wiki as **MCP tools** (Phase 4) — [`Wiki::register_mcp_tools`] publishes `wiki.read` /
+/// `wiki.propose` / `wiki.query` so fleet agents reach the group wiki over Mycelium's standard MCP
+/// invoke path. Hold the returned [`WikiMcpTools`] guard for the tools' lifetime.
+#[cfg(feature = "control-plane")]
+pub use mcp::WikiMcpTools;

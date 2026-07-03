@@ -35,7 +35,7 @@ pub struct Manifest {
 }
 
 /// A page as read: the manifest joined with its live section bodies, in render order.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Page {
     pub path:       String,
     pub attributes: BTreeMap<String, String>,
@@ -44,7 +44,7 @@ pub struct Page {
 
 /// A lightweight [`query`](crate::WikiStore::query) hit — which section on which page matched, without
 /// the full-page join.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SectionRef {
     pub page:       String,
     pub id:         SectionId,
