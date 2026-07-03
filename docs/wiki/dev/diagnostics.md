@@ -1,4 +1,4 @@
-# dev/diagnostics — the emergent-detector layer (Legible Emergence Phase 1)
+# dev/diagnostics — the emergent-detector layer (Legible Emergence Phases 1–3)
 
 ↑ [dev/](dev.md) · design: `docs/design/legible-emergence-taxonomy.md` · plan:
 `docs/plans/legible-emergence.md` · code: `src/agent/emergent.rs`
@@ -82,7 +82,17 @@ into one HLC-ordered stream, and — **RT3** — names the peers that did **not*
 `InsufficientReplies`, which is the RT3 failure mode (the slow/partitioned nodes you most need
 mid-incident are exactly the ones that time out). Gate:
 `test_explain_fanout_assembles_cross_node_ring_and_names_non_responders` (A+B assemble each other's
-rings; C — a live peer with no responder — is the deterministic named non-responder). Remaining in
-Phase 3: the #56-sequence reconstruction narrative. Not started: Phase 4 (fleet narrative),
-Phase 5 (operator surface). The red-team findings (RT1–RT4) and their Phase-2+ implications are in
-the plan.
+rings; C — a live peer with no responder — is the deterministic named non-responder).
+
+**Phase 3 is complete** with the **reconstruction narrative** (increment 3): `assemble_explain` now
+also returns `narrative` — the same HLC-ordered events rendered one line per event by `narrate`,
+which glosses each terse `kind` into plain English (`governed_group_conflict` → "a group's live
+membership left the governor's [min,max] band"), and the conflict event's `detail` names the
+specific group + band ("workers: 4 live vs band [1, 2]"). Together this reconstructs the #56 story —
+governor cap exceeded → node flaps → returns to band — with **no code knowledge required to read
+it** (the Phase-3 acceptance bar). An unknown `kind` falls back to its raw string, so a new detector
+is surfaced, never dropped. Gates: `narrate_renders_the_56_sequence_legibly`,
+`narrate_surfaces_unknown_kinds_rather_than_dropping_them`, and the cross-node e2e asserts the
+narrative names the `workers` conflict from *real* detector output. Not started: Phase 4 (fleet
+narrative), Phase 5 (operator surface). The red-team findings (RT1–RT4) and their Phase-2+
+implications are in the plan.

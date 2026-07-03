@@ -4799,6 +4799,13 @@ async fn test_explain_fanout_assembles_cross_node_ring_and_names_non_responders(
     assert!(!res.responders.contains(&ic.to_string()), "C did not answer");
     assert_eq!(res.observer, ia.to_string(), "result is labelled with the assembling observer");
 
+    // (3) The #56 reconstruction narrative — the assembled ring renders an operator-legible story
+    // (one line per event) that names the specific group + band, with no code knowledge required.
+    assert_eq!(res.narrative.len(), res.events.len(), "one narrative line per event");
+    assert!(res.narrative.iter().any(|l|
+        l.contains("governor's [min,max] band") && l.contains("workers")),
+        "narrative legibly describes the governed-group conflict on 'workers': {:?}", res.narrative);
+
     a.shutdown_with_timeout(Duration::from_secs(5)).await;
     b.shutdown_with_timeout(Duration::from_secs(5)).await;
     c.shutdown_with_timeout(Duration::from_secs(5)).await;

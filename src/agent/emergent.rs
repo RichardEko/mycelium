@@ -452,10 +452,38 @@ pub struct ExplainResult {
     /// Local + every responder's events, HLC-ordered — the causal narrative. Each ring is
     /// single-author (`record_event` stamps `node = self`), so the merged streams are disjoint.
     pub events:         Vec<Event>,
+    /// The same events rendered as a legible, operator-readable story — one line per event, terse
+    /// `kind` glossed into plain English (the #56 DoD: "no designer knowledge required to read it").
+    pub narrative:      Vec<String>,
     /// Peers that answered the fan-out, sorted.
     pub responders:     Vec<String>,
     /// Peers that did **not** answer within [`EXPLAIN_FANOUT_TIMEOUT`] — the named gaps (RT3), sorted.
     pub non_responders: Vec<String>,
+}
+
+/// Render an HLC-ordered event stream into a legible, non-designer-readable narrative — one line
+/// per event: `[hlc N] <node> — <plain-English gloss> (<detail>)`. The gloss table translates the
+/// terse event `kind` into what an on-call operator needs (the #56 acceptance bar: reconstruct
+/// "governor capped → auto-join re-added → governor drained" with **no code knowledge**). An
+/// unknown kind falls back to its raw string, so a newly-added event type is surfaced, never
+/// silently dropped.
+pub fn narrate(events: &[Event]) -> Vec<String> {
+    events.iter().map(|e| {
+        let gloss = match e.kind.as_str() {
+            "governed_group_conflict" =>
+                "governed-group conflict — a group's live membership left the governor's [min,max] band",
+            "membership_flap" =>
+                "membership flap — a node is repeatedly joining and leaving a group",
+            "capability_coverage_gap" =>
+                "capability-coverage gap — a demand has no fresh provider visible from here",
+            "opacity_oscillation" =>
+                "opacity oscillation — a node is flipping in and out of the overload state",
+            "commit_conflict" =>
+                "consensus commit conflict — two proposals raced for the same slot",
+            other => other,
+        };
+        format!("[hlc {}] {} — {} ({})", e.hlc, e.node, gloss, e.detail)
+    }).collect()
 }
 
 /// Serve `sys.explain` requests: reply with **this** node's ring since the requested cursor.
@@ -533,7 +561,8 @@ pub async fn assemble_explain(ctx: &Arc<TaskCtx>, since: u64) -> ExplainResult {
     let mut responders: Vec<String> = responders.into_iter().collect();
     responders.sort();
 
-    ExplainResult { observer: ctx.node_id.to_string(), events, responders, non_responders }
+    let narrative = narrate(&events);
+    ExplainResult { observer: ctx.node_id.to_string(), events, narrative, responders, non_responders }
 }
 
 // ── Phase 2: the relational fleet snapshot (GET /gateway/fleet) ───────────────────────────────
@@ -712,7 +741,19 @@ pub async fn run_emergent_detectors(
                 prev_opacity = curr_opacity;
                 // Record detector-state transitions into the event ring (the "explain" history).
                 if confirmed != prev_conf {
-                    record_event(&ctx, "governed_group_conflict", format!("confirmed conflicts {prev_conf} → {confirmed}"));
+                    // Name the specific group + its band vs live count, so the assembled narrative
+                    // reads the #56 beat ("governor capped at N, observed M") with no code knowledge.
+                    let detail = if confirmed > prev_conf {
+                        let which = conflicts.iter().map(|c| format!(
+                            "{}: {} live vs band [{}, {}]",
+                            c.group, c.observed, c.min,
+                            c.max.map(|m| m.to_string()).unwrap_or_else(|| "∞".into()),
+                        )).collect::<Vec<_>>().join("; ");
+                        format!("{prev_conf} → {confirmed} — group(s) now outside the governor band: {which}")
+                    } else {
+                        format!("{prev_conf} → {confirmed} — a group returned inside its governor band")
+                    };
+                    record_event(&ctx, "governed_group_conflict", detail);
                     prev_conf = confirmed;
                 }
                 if confirmed_gaps != prev_gaps {
@@ -1108,5 +1149,44 @@ mod tests {
         assert_eq!(sc.nodes_reporting, 2, "stale report excluded");
         assert_eq!(sc.min_entries, 40);
         assert_eq!(sc.max_entries, 100);
+    }
+
+    #[test]
+    fn narrate_renders_the_56_sequence_legibly() {
+        // The #56 story as an assembled cross-node ring: governor cap exceeded → node flaps →
+        // returns to band. `narrate` must render it operator-legibly, in order, with the specific
+        // group/band surviving and no raw `kind` string leaking into the story.
+        let events = vec![
+            Event { hlc: 10, node: "n1".into(), kind: "governed_group_conflict".into(),
+                detail: "0 → 1 — group(s) now outside the governor band: workers: 4 live vs band [1, 2]".into() },
+            Event { hlc: 20, node: "n2".into(), kind: "membership_flap".into(),
+                detail: "flapping pairs 0 → 1".into() },
+            Event { hlc: 30, node: "n1".into(), kind: "governed_group_conflict".into(),
+                detail: "1 → 0 — a group returned inside its governor band".into() },
+        ];
+        let story = narrate(&events);
+        assert_eq!(story.len(), 3);
+        // HLC-ordered, one line per event.
+        assert!(story[0].contains("[hlc 10]"));
+        assert!(story[1].contains("[hlc 20]"));
+        assert!(story[2].contains("[hlc 30]"));
+        // Legible: terse kind glossed to plain English; the specific group + band survive.
+        assert!(story[0].contains("governor's [min,max] band"), "conflict glossed: {}", story[0]);
+        assert!(story[0].contains("workers: 4 live vs band [1, 2]"), "group/band named: {}", story[0]);
+        assert!(story[1].contains("repeatedly joining and leaving"), "flap glossed: {}", story[1]);
+        // No raw event-kind identifier leaks into the operator narrative.
+        assert!(!story.iter().any(|l| l.contains("governed_group_conflict") || l.contains("membership_flap")),
+            "raw kind strings must not appear in the narrative: {story:?}");
+    }
+
+    #[test]
+    fn narrate_surfaces_unknown_kinds_rather_than_dropping_them() {
+        // A newly-added detector with no gloss must still appear (raw kind), never be silently lost.
+        let events = vec![Event {
+            hlc: 1, node: "n".into(), kind: "some_future_detector".into(), detail: "x".into(),
+        }];
+        let story = narrate(&events);
+        assert_eq!(story.len(), 1);
+        assert!(story[0].contains("some_future_detector"), "unknown kind surfaced: {}", story[0]);
     }
 }

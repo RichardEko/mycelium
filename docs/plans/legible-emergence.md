@@ -1,6 +1,6 @@
 # Legible Emergence — making coordinator-free fleets diagnosable
 
-**Status:** 🟢 **Phases 0–2 done; Phase 3 in progress; Phases 4–5 not started** (proposed 2026-06-21;
+**Status:** 🟢 **Phases 0–3 done; Phases 4–5 not started** (proposed 2026-06-21;
 red-teamed + Phase-0 taxonomy 2026-07-02; all 5 Phase-1 detectors (P1/P2/P3/P4/P6) + `/metrics` shipped 2026-07-02). Phase 0 shipped as
 [`docs/design/legible-emergence-taxonomy.md`](../design/legible-emergence-taxonomy.md) (the
 pathology taxonomy, with RT1–RT4 baked in). The **Red-team findings** section (below, near the
@@ -167,7 +167,7 @@ from local KV** — any node answers it, and it survives killing any node. **Gat
 divergent/conflicted fleet, the snapshot from *three different nodes* agrees on the diagnosis; the
 endpoint correctly names a synthetic capability-coverage gap and a governed-group conflict.
 
-### Phase 3 — Causal event ring + fan-out reconstruction (the hard "Explain") — 🟡 IN PROGRESS
+### Phase 3 — Causal event ring + fan-out reconstruction (the hard "Explain") — 🟢 DONE
 
 **Increment 1 shipped:** the bounded HLC-stamped `EventRing` (`src/agent/emergent.rs`, RT4
 always-on-when-enabled, fixed ~1024 events) + recording from the detector loop (state-change
@@ -189,9 +189,18 @@ every reply that arrives still lands. **Gate:**
 other's rings in HLC order; node C — a live gossiping peer running *without* the responder — is the
 deterministic named non-responder, standing in for a slow/partitioned node without an eviction race).
 
-**Remaining in Phase 3:** the #56-sequence *reconstruction narrative* gate — assembling the specific
-governor→auto-join→drain sequence into a human-legible story (the cross-node collection primitive it
-needs is now done; what's left is the rendering + the end-to-end #56 scenario test).
+**Increment 3 shipped — the #56 reconstruction narrative (closes Phase 3).** `assemble_explain` now
+also returns `narrative`: the merged HLC-ordered events rendered one line per event by `narrate`
+(`src/agent/emergent.rs`), which glosses each terse event `kind` into plain English
+(`governed_group_conflict` → "a group's live membership left the governor's [min,max] band"), and
+the conflict event's `detail` was enriched to name the specific group + band ("workers: 4 live vs
+band [1, 2]"). Together they reconstruct the #56 story — governor cap exceeded → node flaps →
+returns to band — with **no code knowledge required to read it** (the acceptance bar). An unknown
+`kind` falls back to its raw string, so a new detector is surfaced, never silently dropped. **Gates:**
+`narrate_renders_the_56_sequence_legibly` + `narrate_surfaces_unknown_kinds_rather_than_dropping_them`
+(unit), and the cross-node e2e (`test_explain_fanout_…`) asserts the narrative names the `workers`
+conflict from *real* detector-produced events. Phase 3 is complete; Phases 4–5 (fleet narrative,
+operator surface) remain.
 
 
 Each node keeps a **bounded, fixed-memory, HLC-stamped ring buffer** of *significant* events (role
