@@ -14,9 +14,9 @@ categories = ["network-programming", "asynchronous"]
 default = []
 # The Mycelium control plane (Phase 2): curator role + election/failover, the store-location
 # advertisement, the evaporating proposal queue, access-brokering, the MCP tool. Pulls in `mycelium`.
-# Phase 1 (this release) is the data plane only — the `Store` trait + the FS reference impl — and is
-# deliberately Mycelium-agnostic, so the store is a plain pluggable backing store.
-control-plane = ["dep:mycelium"]
+# Phase 1 is the data plane only — the `Store` trait + the FS reference impl — deliberately
+# Mycelium-agnostic, so the store is a plain pluggable backing store.
+control-plane = ["dep:mycelium", "dep:tokio", "dep:parking_lot", "dep:bytes"]
 
 [dependencies]
 # `rc` so `Arc<str>` section ids (de)serialise (each Arc round-trips to a fresh allocation — fine, ids
@@ -26,7 +26,15 @@ serde_json  = "1"
 tracing     = "0.1"
 
 # Control-plane only (Phase 2). Companion-crate contract: only Mycelium's PUBLIC API.
-mycelium = { path = "..", default-features = false, optional = true }
+mycelium    = { path = "..", default-features = false, optional = true }
+tokio       = { version = "1.35", features = ["rt", "time", "macros", "sync"], optional = true }
+parking_lot = { version = "0.12", optional = true }
+bytes       = { version = "1", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
+tokio    = { version = "1.35", features = ["full"] }
+
+[[test]]
+name = "failover"
+required-features = ["control-plane"]

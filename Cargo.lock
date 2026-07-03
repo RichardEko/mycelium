@@ -2219,10 +2219,13 @@ dependencies = [
 name = "mycelium-wiki"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "mycelium",
+ "parking_lot",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
  "tracing",
 ]
 

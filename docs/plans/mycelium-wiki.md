@@ -293,12 +293,18 @@ no longer the build spine — it is the disconnected variant in the design recor
   reference impl — atomic per-object writes, **manifest-last** (torn-read safe), manifest-authoritative
   reads, attribute `query` across pages, path-traversal-guarded. Unit-tested on a tempdir, no cluster.
   `S3Store` is a parallel impl (later). *(The earlier in-KV `WikiStore` was spiked and retired.)*
-- **Phase 2 — the curator service + control plane.** `Wiki` (roles + curator election + ring
-  failover), the `wiki.{group}.curator` advertisement carrying the store location, the KV proposal
-  queue (evaporating), the **access broker** (scoped read grant), and the single-writer curator write
-  path. Cross-node `tests/failover.rs`: kill the curator, a candidate promotes and resumes against the
-  same store. The curator surface is pre-drafted in
-  [`wiki-concurrent-edit.md` §6](../design/wiki-concurrent-edit.md).
+- **Phase 2 — the curator service + control plane.** ✅ **shipped (2026-07-03)** — behind the
+  `control-plane` feature: `Wiki<S: WikiStore>` + `WikiRole` (Auto/Curator/Reader) + `WikiConfig`.
+  Curator **election** (advertise `wiki.{group}.candidate` → settle → lowest-candidate-id becomes
+  `wiki.{group}.curator`, else watch) + **ring-failover** (two empty `curator` resolves → re-elect),
+  the **evaporating KV proposal queue** (`wiki/{group}/proposal/{id}` — `propose` writes it), and the
+  **single-writer apply** (the curator drains → upserts the section → `write_page` → tombstones the
+  proposal; idempotent). Reads go **direct to the store** (any role). Cross-node
+  `tests/failover.rs`: two agents share one `FsStore` dir; one elects curator, applies a proposal both
+  read; kill it, the survivor promotes and applies against the *same* store (no state transfer —
+  passed, 2.8 s). *Remaining:* the **access broker** (scoped read grant → group-membership gate) — a
+  store-adapter concern — and TTL-evaporation of abandoned proposals; the Phase-2 apply is a direct
+  upsert (the LLM 3-way reconcile is Phase 3).
 - **Phase 3 — the LLM ingest/lint loop.** Curator drains proposals → LLM reconcile (3-way against
   current store content) → single write; periodic lint generalising `/wiki-lint`: dead cross-links,
   orphans, the cited-fact check, and — for UC1 — **semantic self-consistency** (no cross-section

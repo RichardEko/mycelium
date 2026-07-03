@@ -31,9 +31,17 @@
 mod model;
 mod store;
 mod fs;
+#[cfg(feature = "control-plane")]
+mod agent;
 
 pub use model::{
     mint_section_id, Manifest, Page, Predicate, Section, SectionId, SectionRef, WikiError,
 };
 pub use store::WikiStore;
 pub use fs::FsStore;
+
+/// The Mycelium **control plane** (Phase 2) — the curator role, election + ring-failover, the
+/// evaporating proposal queue, and the single-writer apply. Behind the `control-plane` feature so the
+/// data plane above stays Mycelium-agnostic.
+#[cfg(feature = "control-plane")]
+pub use agent::{Wiki, WikiConfig, WikiRole};
