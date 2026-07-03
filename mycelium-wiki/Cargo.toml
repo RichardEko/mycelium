@@ -21,6 +21,9 @@ control-plane = ["dep:mycelium", "dep:tokio", "dep:parking_lot", "dep:bytes", "d
 # same-section conflicts. Adds the `mycelium/llm` backend abstraction; without it the curator falls
 # back to the deterministic append-merge (lossless but uncurated).
 llm = ["control-plane", "mycelium/llm"]
+# Phase 4 — the HTTP gateway edge: `/gateway/wiki/{read,query,propose}` as an axum Router the app mounts
+# via GossipAgent::with_http_routes. The JSON boundary the Python/TS WikiClients speak.
+gateway = ["control-plane", "mycelium/gateway", "dep:axum"]
 
 [dependencies]
 # `rc` so `Arc<str>` section ids (de)serialise (each Arc round-trips to a fresh allocation — fine, ids
@@ -35,14 +38,20 @@ tokio       = { version = "1.35", features = ["rt", "time", "macros", "sync"], o
 parking_lot = { version = "0.12", optional = true }
 bytes       = { version = "1", optional = true }
 async-trait = { version = "0.1", optional = true }
+axum        = { version = "0.8", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
 tokio    = { version = "1.35", features = ["full"] }
+reqwest  = { version = "0.12", features = ["json"] }
 
 [[test]]
 name = "failover"
 required-features = ["control-plane"]
+
+[[test]]
+name = "gateway"
+required-features = ["gateway"]
 
 # Phase 5 — the worked example: import documents, then chat grounded in the wiki. One template for both
 # use cases (UC1 org twin / UC2 council). Needs `llm` for the LLM backend abstraction.

@@ -11,6 +11,7 @@ from .agent import (
 from .a2a import A2aClient
 from .prompt_skill import PromptTemplate, PromptSkillClient
 from .tuple import TupleSpace, TupleBackpressureError, TupleNotFoundError
+from .wiki import Wiki
 
 __all__ = [
     "MyceliumAgent",
@@ -27,4 +28,5 @@ __all__ = [
     "TupleSpace",
     "TupleBackpressureError",
     "TupleNotFoundError",
+    "Wiki",
 ]

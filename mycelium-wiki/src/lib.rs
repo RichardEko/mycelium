@@ -39,6 +39,8 @@ mod reconcile;
 mod lint;
 #[cfg(feature = "control-plane")]
 mod mcp;
+#[cfg(feature = "gateway")]
+mod http;
 
 pub use model::{
     mint_section_id, Manifest, Page, Predicate, Section, SectionId, SectionRef, WikiError,

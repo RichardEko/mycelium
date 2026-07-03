@@ -120,6 +120,9 @@ jobs:
       # Phase 3 — the LLM curator (the 3-way reconcile; the EchoBackend test proves the backend wiring).
       - run: cargo test -p mycelium-wiki --features llm
       - run: cargo clippy -p mycelium-wiki --features llm --all-targets -- -D warnings
+      # Phase 4 remainder — the HTTP gateway edge (/gateway/wiki/*), the path the Python/TS SDKs speak.
+      - run: cargo test -p mycelium-wiki --features gateway
+      - run: cargo clippy -p mycelium-wiki --features gateway --all-targets -- -D warnings
       # Phase 5 — the worked example: import documents → curator applies → a reader chat-agent answers
       # grounded in the wiki, over both use-case corpora (UC1 org twin + UC2 council). Docker-free.
       - run: ./mycelium-wiki/ci_smoke.sh

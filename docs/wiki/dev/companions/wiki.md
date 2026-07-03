@@ -58,9 +58,13 @@ contradictory facts).
 
 - **MCP tools** (`Wiki::register_mcp_tools` → `WikiMcpTools` guard): `wiki.read` / `wiki.query` (served
   direct from the store on the calling node) + `wiki.propose` (enqueues). Over Mycelium's **existing**
-  MCP invoke path — schema to `tools/{name}/{node}` for discovery. Public API only; no core fork —
-  which is *why* the mesh-native MCP path, not bespoke `/gateway/wiki/*` routes, is the
-  companion-appropriate shape.
+  MCP invoke path — schema to `tools/{name}/{node}` for discovery. Public API only; no core fork — the
+  mesh-native surface for agents already on the mesh.
+- **HTTP gateway** (feature `gateway`, `Wiki::http_router`): `POST /gateway/wiki/{read,query,propose}`
+  mounted via `GossipAgent::with_http_routes` — the JSON edge for **non-mesh** callers, spoken by the
+  Python (`mycelium.wiki.Wiki`) + TypeScript (`mycelium-ts` `Wiki`) clients. `query` is
+  POST-with-predicate (a GET can't carry an attribute map — the blackboard's read precedent).
+  `tests/gateway.rs` drives propose → curator-apply → read/query over HTTP.
 - **Worked example** (`examples/wiki_chat.rs`): **one template, both use cases** — import documents
   then chat grounded in the wiki. `import` = writer (control plane); `ask`/`chat` = reader (data plane,
   no node). Retrieval is keyword-overlap over the exact curated text (RAG's similarity is the separate
@@ -75,7 +79,8 @@ Joined to **Postgres** (typed metrics/structure) + **RAG** (background) by a **s
 ## Gates
 
 `cargo test -p mycelium-wiki` (data plane) · `--features control-plane` (curator + `tests/failover.rs`)
-· `--features llm` (reconcile + semantic-lint wiring, EchoBackend) · `./mycelium-wiki/ci_smoke.sh` (the
-worked example, Docker-free) · clippy `--features control-plane|llm --all-targets -D warnings`. Wired
-as the CI **Wiki** job. **Open remainders (additive):** Phase 4's bespoke REST routes + Python/TS
-`WikiClient`; the disconnected KV-native section-CRDT variant (`docs/design/wiki-concurrent-edit.md`).
+· `--features llm` (reconcile + semantic-lint wiring, EchoBackend) · `--features gateway`
+(`tests/gateway.rs` — the `/gateway/wiki/*` lifecycle) · `./mycelium-wiki/ci_smoke.sh` (the worked
+example, Docker-free) · clippy `--features control-plane|llm|gateway --all-targets -D warnings`. Wired
+as the CI **Wiki** job. **Only open remainder (additive):** the disconnected KV-native section-CRDT
+variant for the no-external-store case (design record `docs/design/wiki-concurrent-edit.md`).

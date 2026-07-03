@@ -325,8 +325,7 @@ no longer the build spine — it is the disconnected variant in the design recor
   `/wiki-lint`: dead cross-links, orphans, the cited-fact check, and — for UC1 — **semantic
   self-consistency**, no cross-section contradictions) — a curator background task, separable from the
   reconcile and landing next.
-- **Phase 4 — MCP tool + gateway + SDKs.** ✅ **the MCP tools shipped (2026-07-03)**; the bespoke REST
-  routes + SDKs are the open remainder. [`Wiki::register_mcp_tools`] publishes three tools —
+- **Phase 4 — MCP tool + gateway + SDKs.** ✅ **fully shipped (2026-07-03).** [`Wiki::register_mcp_tools`] publishes three tools —
   `wiki.read` / `wiki.query` (served **directly from the store on the calling node** — the data-plane
   parallel-read property, so any node hosts them) and `wiki.propose` (enqueues to the curator) — over
   Mycelium's **existing** MCP invoke path: registration writes each tool's `inputSchema` to
@@ -335,10 +334,14 @@ no longer the build spine — it is the disconnected variant in the design recor
   (public API only) is what makes the MCP path, not bespoke `/gateway/wiki/*` routes, the right shape.
   *Verified:* two single-node tests — the read/query handlers serve a seeded store (page JSON +
   attribute-filtered refs), and a new-section propose mints an id, lands on the KV queue, and
-  registration publishes all three discoverable schemas. *Remaining for Phase 4:* the bespoke
-  `POST /gateway/wiki/{read,propose}` + `GET /gateway/wiki/query` REST routes (a `gateway`-feature axum
-  `Router` the app mounts via `GossipAgent::with_http_routes`, as the blackboard does) and the
-  Python/TS `WikiClient` — both additive, and separable from the mesh-native MCP path above.
+  registration publishes all three discoverable schemas. **The gateway + SDKs** (the second access
+  surface, for non-mesh callers): a `gateway`-feature axum `Router` (`Wiki::http_router`) mounts
+  `POST /gateway/wiki/{read,query,propose}` via `GossipAgent::with_http_routes` (`query` is
+  POST-with-predicate, following the blackboard's read precedent — a GET can't carry an attribute map),
+  spoken by the Python (`mycelium.wiki.Wiki`) + TypeScript (`mycelium-ts` `Wiki`) clients. *Verified:*
+  `tests/gateway.rs` drives the full propose → curator-apply → read/query lifecycle over HTTP (+ absent
+  page → `null`, wrong group → 400); clippy `--features gateway` clean; `tsc --noEmit` + `py_compile`
+  clean.
 - **Phase 5 — worked example + CI smoke.** ✅ **shipped (2026-07-03).** `examples/wiki_chat.rs` — one
   template that **imports documents then answers questions grounded in the wiki**, run over **both**
   driving corpora (`examples/corpus/council` for UC2, `examples/corpus/org-twin` for UC1) by pointing

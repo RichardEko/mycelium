@@ -27,3 +27,4 @@ export {
   StageDepth,
 } from "./tuple";
 export { Blackboard, BlackboardNotFoundError, Fact } from "./blackboard";
+export { Wiki, Page, Section, SectionRef, ProposeArgs } from "./wiki";
