@@ -55,8 +55,11 @@ the runtime ends. Canary: `agent::tests::shutdown_breaks_the_task_cycle_and_free
 
 ## The lint loop (the group function — detection, not prevention)
 
-Only the curator lints (one lint of record), every `lint_interval`; findings are **advisory**
-(`Wiki::last_lint()` + warn log), never auto-applied. `structural_lint` (always-on, deterministic):
+Only the curator lints (one lint of record); findings are **advisory** (`Wiki::last_lint()` + warn
+log), never auto-applied. It is **change-driven** (Run-32 scalability fix): a whole-corpus pass runs
+only when the store changed since the last one (a `lint_dirty` flag set by `apply_group`), so an idle
+wiki does zero lint work — cost is proportional to change, not to elapsed time. `lint_pass_count()`
+exposes how many passes have run. `structural_lint` (always-on, deterministic):
 dead cross-links (`[[page]]` / `[[page#section]]`) + empty sections, pure over the pages. `SemanticLinter`
 (feature `llm`, `LlmSemanticLinter`): cross-section self-consistency (the UC1 org-twin must not assert
 contradictory facts).
