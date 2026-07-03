@@ -199,6 +199,17 @@ existed. This is the framework's own report card.
   10 s ceiling was still inside the tail of CI scheduling latency under ~345 parallel full-feature
   tests; because the emission is *guaranteed* (only its schedule varies), the correct fix is a
   ceiling that comfortably clears the saturated-runner tail, not a structural rework.
+- 2026-07-03: **Test Architecture — structural resolution** of the two flakes above (Run 30 scored
+  this dimension **7**, marking the recurrence as a real weakness rather than hiding it under an 8).
+  The opacity-gate flake is addressed at the root: the veto / library-override / hysteresis-clear
+  *decision* is extracted from the async tick loop into pure functions (`opacity_state_for` /
+  `opacity_transition`, `src/agent/opacity.rs`), and the invariant now lives on a **deterministic**
+  gate (`opacity_gate_vetoes_below_full_then_the_library_overrides_at_full` +
+  `opacity_clears_only_after_fill_falls_a_full_hysteresis_below_threshold` — no async, no ticker, no
+  timeout). The integration test is now an explicit *wiring smoke* whose 30 s ceiling can no longer
+  threaten the invariant. Lesson reversed: once a "widen the ceiling" flake **recurs**, the honest
+  fix *is* the structural rework — separate the decision (pure, testable) from the scheduling
+  (async, best-effort). Refactor is behavior-preserving (the integration tests still pass unchanged).
 
 **Dimensions:** Philosophy/Coherence · Conceptual Integrity · Architecture ·
 Modularity · API Design · Error Handling · Configurability · Language Best

@@ -2046,16 +2046,14 @@ async fn test_manage_opacity_gate_vetoes_then_library_overrides() {
     assert!(premature.is_err(), "gate veto must prevent emission below 100% fill");
 
     // Fill to 100% — library overrides the gate (at `fill_ratio >= 1.0` the emit is
-    // unconditional, `src/agent/opacity.rs`), so BOUNDARY_OPAQUE is *guaranteed*; only its
-    // latency is in question. That latency is the governor's 100 ms ticker being **scheduled**,
-    // and under the full-feature `Test` job (tls,metrics,a2a,llm × ~345 parallel tests) the
-    // ticker starves. History: a 3 s bound flaked on CI 2026-07-02; widened to 10 s; flaked
-    // *again* 2026-07-03 (48 s Test run — the runner was saturated past 10 s). Now 30 s. This
-    // costs nothing on a healthy run (it returns on the first tick, ~100 ms) and only spends the
-    // budget when the runtime is saturated; `recv_within!` polls in 200 ms steps, so it is
-    // patience, not a fixed sleep. Because the emission is *guaranteed* (only its schedule
-    // latency varies), a generous ceiling is the correct fix — a real regression would fail even
-    // at 30 s, a starved runner would not.
+    // unconditional), so BOUNDARY_OPAQUE is *guaranteed*; only its latency is in question. That
+    // latency is the governor's 100 ms ticker being **scheduled**, which starves under the
+    // full-feature `Test` job (~345 parallel tests) — a bound of 3 s (2026-07-02) then 10 s both
+    // flaked. **The invariant no longer lives here.** The veto/override decision is now a *pure*,
+    // deterministic gate — `opacity.rs::opacity_gate_vetoes_below_full_then_the_library_overrides_at_full`
+    // (no async, no ticker, no timeout). This integration assertion is now a **wiring smoke** (the
+    // governor is spawned and does emit on the live mesh); its 30 s ceiling is patience for a
+    // guaranteed-but-async emission, and a slow-flake here can no longer threaten the invariant.
     for _ in 0..2 {
         let _ = agent.mesh().emit("test.gov.gate", SignalScope::Individual(self_id.clone()), Bytes::new());
     }

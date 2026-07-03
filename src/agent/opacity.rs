@@ -268,6 +268,50 @@ pub(super) fn manage_opacity_ctx(
     manage_opacity_gated_ctx(ctx, kind, scope, hint, None::<fn(&OpacityState) -> bool>)
 }
 
+/// The boundary transition an opacity-governor tick decides on. Extracted from the async tick loop
+/// so the veto / library-override / hysteresis-clear decision is a **pure, deterministic** function —
+/// testable without spawning the governor, whose 100 ms `time::interval` ticker starves under CI
+/// parallel-test saturation (the source of a *recurring* flake: the integration test that waited on
+/// the async emission was widened 3 s → 10 s → 30 s and still flaked twice). The invariant now lives
+/// on the pure path; the async path is a wiring smoke.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpacityTransition {
+    /// Emit `BOUNDARY_OPAQUE` — the node starts shedding.
+    GoOpaque,
+    /// Emit `BOUNDARY_TRANSPARENT` — the node stops shedding.
+    GoTransparent,
+    /// No boundary change this tick.
+    Hold,
+}
+
+/// **Pure** — the trend-adjusted [`OpacityState`] for a tick, given the current + previous fill and
+/// the already-`[0.4, 0.95]`-clamped threshold. A rising fill lowers the effective threshold
+/// (trend adaptation); a falling one does not.
+fn opacity_state_for(is_opaque: bool, fill_ratio: f32, prev_fill: f32, clamped_threshold: f32) -> OpacityState {
+    let trend = fill_ratio - prev_fill;
+    let trend_factor = (trend.max(0.0) * 2.0).min(0.4);
+    let eff = clamped_threshold * (1.0 - trend_factor);
+    OpacityState { fill_ratio, effective_threshold: eff, trend, is_opaque }
+}
+
+/// **Pure** — decide the boundary transition. The library **overrides** a vetoing gate once
+/// `fill_ratio >= 1.0` (an unconditional shed at a full channel); below full, a `false` gate holds
+/// the boundary transparent. Clearing requires fill to fall a full `hysteresis` below the effective
+/// threshold (anti-oscillation).
+fn opacity_transition(state: &OpacityState, gate_ok: bool, hysteresis: f32) -> OpacityTransition {
+    if !state.is_opaque && state.fill_ratio >= state.effective_threshold {
+        if gate_ok || state.fill_ratio >= 1.0 {
+            OpacityTransition::GoOpaque
+        } else {
+            OpacityTransition::Hold
+        }
+    } else if state.is_opaque && state.fill_ratio < state.effective_threshold - hysteresis {
+        OpacityTransition::GoTransparent
+    } else {
+        OpacityTransition::Hold
+    }
+}
+
 /// Like [`manage_opacity_ctx`] but with a generic gate predicate (monomorphized, no vtable).
 pub(super) fn manage_opacity_gated_ctx<F>(
     ctx:  &Arc<TaskCtx>,
@@ -305,14 +349,11 @@ where
                 _ = ticker.tick() => {
                     let handler_fill = ctx.signal_handlers.fill_ratio(&kind);
                     let fill_ratio = handler_fill.max(crate::framing::gossip_shard_fill(&ctx.gossip_txs));
-                    let trend        = fill_ratio - prev_fill;
-                    let trend_factor = (trend.max(0.0) * 2.0).min(0.4);
-                    let eff          = clamped_threshold * (1.0 - trend_factor);
-                    prev_fill        = fill_ratio;
-                    let state = OpacityState { fill_ratio, effective_threshold: eff, trend, is_opaque };
-                    if !is_opaque && fill_ratio >= eff {
-                        let gate_ok = gate.as_ref().map(|g| g(&state)).unwrap_or(true);
-                        if gate_ok || fill_ratio >= 1.0 {
+                    let state = opacity_state_for(is_opaque, fill_ratio, prev_fill, clamped_threshold);
+                    prev_fill = fill_ratio;
+                    let gate_ok = gate.as_ref().map(|g| g(&state)).unwrap_or(true);
+                    match opacity_transition(&state, gate_ok, hint.hysteresis) {
+                        OpacityTransition::GoOpaque => {
                             emit_signal(&ctx, Arc::from(crate::signal::signal_kind::BOUNDARY_OPAQUE), scope.clone(), hint.payload.clone());
                             is_opaque = true;
                             let written_at_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
@@ -320,12 +361,14 @@ where
                             apply_and_notify(&ctx.kv_state, &upd);
                             dispatch_gossip_try_send(&ctx.gossip_txs, WireMessage::Data(upd), ctx.node_id.id_hash(), ForwardHint::All, &ctx.kv_state.dropped_frames);
                         }
-                    } else if is_opaque && fill_ratio < eff - hint.hysteresis {
-                        emit_signal(&ctx, Arc::from(crate::signal::signal_kind::BOUNDARY_TRANSPARENT), scope.clone(), Bytes::new());
-                        is_opaque = false;
-                        let upd = make_gossip_update(&ctx.node_id, ctx.default_ttl, Arc::clone(&load_key), Bytes::new(), true, &ctx.hlc);
-                        apply_and_notify(&ctx.kv_state, &upd);
-                        dispatch_gossip_try_send(&ctx.gossip_txs, WireMessage::Data(upd), ctx.node_id.id_hash(), ForwardHint::All, &ctx.kv_state.dropped_frames);
+                        OpacityTransition::GoTransparent => {
+                            emit_signal(&ctx, Arc::from(crate::signal::signal_kind::BOUNDARY_TRANSPARENT), scope.clone(), Bytes::new());
+                            is_opaque = false;
+                            let upd = make_gossip_update(&ctx.node_id, ctx.default_ttl, Arc::clone(&load_key), Bytes::new(), true, &ctx.hlc);
+                            apply_and_notify(&ctx.kv_state, &upd);
+                            dispatch_gossip_try_send(&ctx.gossip_txs, WireMessage::Data(upd), ctx.node_id.id_hash(), ForwardHint::All, &ctx.kv_state.dropped_frames);
+                        }
+                        OpacityTransition::Hold => {}
                     }
                 }
             }
@@ -343,6 +386,43 @@ mod tests {
 
     fn make_agent() -> GossipAgent {
         GossipAgent::new(NodeId::new("127.0.0.1", 0).unwrap(), GossipConfig::default())
+    }
+
+    // ── The opacity decision, tested purely (no async governor, no ticker, no timeout). These are
+    //    the deterministic authoritative gates for the veto/override + clear invariants that the
+    //    integration tests (`test_manage_opacity_gate_…`) exercise through the flaky async path.
+
+    #[test]
+    fn opacity_gate_vetoes_below_full_then_the_library_overrides_at_full() {
+        use super::{opacity_state_for, opacity_transition, OpacityTransition};
+        let veto = |_: &crate::signal::OpacityState| false;
+
+        // Below full (fill == threshold == 0.75, no trend ⇒ eff 0.75): threshold met, but the gate
+        // vetoes and fill < 1.0 ⇒ Hold (the boundary stays transparent).
+        let s = opacity_state_for(false, 0.75, 0.75, 0.75);
+        assert_eq!(opacity_transition(&s, veto(&s), 0.20), OpacityTransition::Hold);
+
+        // At full (fill == 1.0): the library overrides the veto ⇒ GoOpaque (unconditional shed).
+        let s = opacity_state_for(false, 1.0, 0.75, 0.75);
+        assert_eq!(opacity_transition(&s, veto(&s), 0.20), OpacityTransition::GoOpaque);
+
+        // Gate open + above threshold (below full): GoOpaque, no override needed.
+        let s = opacity_state_for(false, 0.80, 0.80, 0.75);
+        assert_eq!(opacity_transition(&s, true, 0.20), OpacityTransition::GoOpaque);
+
+        // Below threshold with an open gate: nothing to do.
+        let s = opacity_state_for(false, 0.50, 0.50, 0.75);
+        assert_eq!(opacity_transition(&s, true, 0.20), OpacityTransition::Hold);
+    }
+
+    #[test]
+    fn opacity_clears_only_after_fill_falls_a_full_hysteresis_below_threshold() {
+        use super::{opacity_state_for, opacity_transition, OpacityTransition};
+        // Draining (no positive trend) ⇒ eff = 0.75; the clear line is 0.75 - 0.20 = 0.55.
+        let just_inside = opacity_state_for(true, 0.60, 1.0, 0.75); // 0.60 > 0.55 ⇒ still opaque
+        assert_eq!(opacity_transition(&just_inside, true, 0.20), OpacityTransition::Hold);
+        let past = opacity_state_for(true, 0.50, 1.0, 0.75);        // 0.50 < 0.55 ⇒ clear
+        assert_eq!(opacity_transition(&past, true, 0.20), OpacityTransition::GoTransparent);
     }
 
     #[test]
