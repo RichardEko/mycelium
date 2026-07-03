@@ -10,6 +10,9 @@ via wasm-host).
   (Linda-style lanes). The load-bearing artifact for Paper 2a's pull-vs-push argument.
 - **[blackboard.md](blackboard.md)** — `mycelium-blackboard/`: content-routed shared working
   memory (`claim(predicate)`).
+- **[wiki.md](wiki.md)** — `mycelium-wiki/`: group-scoped, LLM-curated wiki — the durable, curated
+  third primitive (a **store, not a service**: node-independent store + a recallable curator). Build
+  phases 1–5 shipped 2026-07-03.
 - **`mycelium-wasm-host/`** — WS-E code mobility: the coordinator-free
   requirement→resolve→pull→advertise→serve→self-heal loop, Ed25519 provenance, mesh artifact
   pull, gossiped catalog, fuel limits (restart ≡ provisioning). PRs #32–#42; runbook
@@ -28,10 +31,12 @@ was examined and declined-with-evidence).
 
 The public-API coordination primitives form one axis — *how a consumer finds what it needs*:
 tuple-space routes by lane **position** (transient, blocking `take`), blackboard by content
-**predicate** (transient, competitive `claim`). A **proposed** third fills the durable slot:
-**`mycelium-wiki`** — a group-scoped LLM-curated wiki (curated, compounding, re-read), the
-long-term-memory sibling of the blackboard's working memory. Plan: `docs/plans/mycelium-wiki.md`.
-**Approach revised 2026-07-03 (control-plane / data-plane):** the corpus is **not** in gossiped KV —
+**predicate** (transient, competitive `claim`). The **durable** slot is filled by
+**[`mycelium-wiki`](wiki.md)** — a group-scoped LLM-curated wiki (curated, compounding, re-read), the
+long-term-memory sibling of the blackboard's working memory. **Build phases 1–5 shipped 2026-07-03**
+(page: [wiki.md](wiki.md)); the design shape below is now the implemented one. Plan:
+`docs/plans/mycelium-wiki.md`.
+**Control-plane / data-plane:** the corpus is **not** in gossiped KV —
 it lives in a **node-independent, pluggable store** (shared FS dir / S3 / doc store); a group node
 runs a **curator** service that serialises writes, runs the LLM ingest/lint, and **brokers access**,
 while group agents **read the store directly, in parallel**. Mycelium is the control plane — curator
