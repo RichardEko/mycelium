@@ -1,7 +1,25 @@
 # mycelium-wiki — design sketch
 
-**Status:** 📋 **Proposed** (2026-07-02) — a design sketch, not yet started. Awaiting
-go-ahead. This file is rationale + a phased build outline in the shape the
+**Status:** 🟢 **Approach revised 2026-07-03 — control-plane / data-plane** (design record done
+2026-07-02; two driving use cases reviewed 2026-07-03). Build not started under the new shape.
+
+> **Revision (2026-07-03) — the wiki is NOT in the KV substrate.** Reviewing two real use cases
+> (Novus-i2 organisational digital-twin; Transparency-Platform council decisions) with the intended
+> owner, we pivoted the whole approach. The wiki is the **maintained-meaning / authoritative-specific
+> canon** that *complements* an external metrics/structure store (Postgres) and RAG (background) — and
+> for those deployments there is **no reason to push the corpus into gossiped KV** (which floods every
+> node; group scope is not a data boundary). Instead: a group node offers a **wiki service** over a
+> **node-independent, pluggable store** (a shared FS directory / S3 bucket — the store can be *dumb*),
+> the **curator** serialises writes + runs the LLM ingest/lint + **brokers access**, and group agents
+> **read the store directly, in parallel** once they obtain the location + a scoped read grant from the
+> curator. Mycelium's job is the **control plane** — capability advertisement, group admission, curator
+> election + ring-failover, the MCP tool, and the small evaporating **proposal queue** in KV — never
+> the storage. This is the wiki pattern's *native* shape (files + an LLM curator + direct reads — how
+> Mycelium's own `docs/wiki/` works), so the "one hard problem" (concurrent prose merge) largely
+> dissolves into single-writer-curator + the store. The earlier **KV-native section-CRDT** design (§
+> the hard problem, and the [design record](../design/wiki-concurrent-edit.md)) is retained as the
+> **disconnected / no-external-store variant** — for an edge/autonomous fleet with no store to point
+> at — not the primary path. A `WikiStore`-in-KV crate was spiked to clarify this and then retired. This file is rationale + a phased build outline in the shape the
 [`mycelium-tuple-space`](mycelium-tuple-space.md) and
 [`mycelium-blackboard`](mycelium-blackboard.md) plans took before they shipped; the
 canonical per-mechanism decisions (esp. the concurrent-edit merge) will move to a
@@ -89,49 +107,80 @@ the demand question below is precisely "is your fleet that shape?"
   *machine* contracts (typed schemas), not synthesised natural-language knowledge, and has
   no ingest/merge/lint loop.
 
-## The one load-bearing hard problem: concurrent prose edits
+## Architecture — control plane (Mycelium) / data plane (the store)
 
-*(Now formalised — the full section-addressing scheme, merge semantics, curator state machine, and
-convergence argument are in the Phase 0 design record
-[`docs/design/wiki-concurrent-edit.md`](../design/wiki-concurrent-edit.md). This section is the
-summary.)*
+The wiki is **not** stored in gossiped KV. A group's canon lives in a **node-independent, pluggable
+store** — a shared filesystem directory, an S3 bucket, or a document store the group already runs.
+Mycelium supplies the **control plane** around it; the store is the **data plane**. Each layer does
+what it is best at:
 
-This is the crux, and it decides whether this is a weekend crate or a research project.
-Two agents ingesting into the **same page** concurrently: LWW keeps one and silently drops
-the other. You **cannot LWW-merge prose** the way the KV store merges opaque bytes —
-losing half a paragraph is exactly the bookkeeping failure the pattern exists to prevent.
-The design space, ordered by how coordinator-shaped each option is:
+| | Home | Holds | Access |
+|---|---|---|---|
+| **Control plane** | Mycelium (KV + capabilities + signals + MCP) | *who* the group's curator is + *where* the store is (a `cap/`-advertised pointer); the short-lived **proposal queue** (evaporating soft-state) | coordinator-free, self-healing |
+| **Data plane** | the pluggable store (FS dir / S3 / doc store) | the durable **content** (pages/sections + a manifest) | **curator writes; group agents read directly, in parallel** |
 
-1. **Section-granular keys** — `wiki/{group}/{page}#{section-id}` as the LWW unit, not the
-   whole page. Shrinks the collision blast radius to a paragraph; cheap; no coordinator.
-   Necessary but not sufficient — two edits to the *same* section still collide.
-2. **A recallable "curator" role** *(recommended, combined with 1)* — mirror `TupleRole` /
-   `BoardRole`: agents **propose** edits (append to an ingest queue — a blackboard-style
-   `post`, or a `wiki/{group}/proposals/…` prefix); the elected **curator** owns the LLM
-   ingest step that reconciles a proposal into the live page, and the periodic lint. This
-   is coordinator-shaped **for curation only**, but it passes the management-as-intent
-   litmus (`docs/wiki/domain/theory/management-as-intent.md`): if the curator vanishes,
-   the wiki stays fully **readable**, pending proposals persist as evaporating soft-state,
-   and a new curator self-elects (lowest-candidate-id, the tuple/blackboard failover the
-   ring already provides). It is a recallable participant, not a coordinator with a veto.
-3. **Free-for-all inline LLM merge** *(rejected — the trap)* — every agent's LLM
-   reconciles concurrent edits in place. Tempting and philosophy-flavoured, but it
-   **breaks convergence**: LLM merges are non-deterministic, so two replicas reconciling
-   the same pair of edits land on *different* text and never converge — violating the LWW
-   convergence guarantee the whole substrate rests on
-   (`docs/wiki/dev/architecture/runtime-invariants.md`). Only viable if the merge is made
-   deterministic (pinned model + pinned prompt + canonical input ordering), which is
-   fragile enough to be a research question, not a v1 mechanism. Record it as
-   declined-with-evidence.
+**The flow:**
 
-**Recommended v1:** (1) + (2). Section-granular LWW for the common case (edits to
-different parts of a page never collide), and a single recallable curator serialising the
-LLM reconcile for the same-section case. Deterministic where it can be (the KV/LWW
-substrate does the convergence), LLM-in-the-loop only at the one serialised point (the
-curator), which sidesteps the convergence problem because there is one writer of record
-per page-group at a time. This is the same "single serving role + ring failover" shape the
-other two companions proved; the novelty is only *what* the role does (LLM reconcile +
-lint instead of `take`/`claim`).
+1. **Propose** — an agent appends a small edit **proposal** to the group's evaporating KV queue
+   (`wiki/{group}/proposal/{id}`, `refresh_interval`d, so a crashed author's proposal ages out).
+   Coordinator-free; no round-trip to the curator.
+2. **Curate** — the elected **curator** drains proposals, runs the LLM ingest/reconcile (and the
+   periodic lint), and writes the store — the **single writer of record**, so the same-section
+   concurrent-edit problem degrades to a single-writer sequence and **no edit is lost**, with the
+   store's own atomicity (S3 PUT / temp-then-rename) doing the rest. It writes section/page objects
+   first and the **manifest/index object last**, so a direct reader never sees a half-applied edit.
+3. **Read** — a group agent obtains the store **location + a scoped, short-lived read grant** from
+   the curator (a pre-signed URL / STS-assumed prefix / FS ACL), then reads the store **directly and
+   in parallel**. Group membership (`Boundary::admits`) is what the curator brokers on, so **the
+   group boundary is the access gate** — not raw IAM.
+4. **Fail over** — the curator is a role advertised as `wiki.{group}.curator`; if its capability
+   evaporates, a candidate self-elects (lowest-candidate-id, the ring-as-failure-detector the
+   tuple-space/blackboard already use). Because the store is node-independent, the new curator simply
+   resumes against the *same* store and re-drains the KV proposal queue — nothing to transfer.
+
+**Why this is the wiki pattern's *native* shape.** The Karpathy LLM-wiki pattern — and Mycelium's own
+`docs/wiki/` — is *files in a store, an LLM curator maintains them, everyone reads the files directly*.
+The store handles durability and per-object atomicity; the curator handles curation and serialisation;
+readers read. There is no distributed-consensus problem to solve, because we stopped inventing one.
+The "concurrent prose merge" question **dissolves**: writes are serialised through one curator, so the
+only merge is the curator's LLM reconciling a batch of proposals against current text (a 3-way merge —
+design record §2), and the store's atomic per-object write commits it.
+
+**The declined alternative — free-for-all inline LLM merge** — stays declined-with-evidence: every
+agent LLM-merging in place is non-deterministic, so replicas diverge and never converge. Single-writer
+curator is precisely what avoids it. (The KV-native section-CRDT — the *disconnected* variant in the
+design record — is the other way to avoid it when there is no external store to point at.)
+
+## Composition — the third layer, not a replacement for the other two
+
+The two driving use cases both draw the same boundary: the wiki is the **specific / authoritative /
+maintained** layer; it composes with — does not replace — a metrics/structure store and RAG.
+
+| Layer | Home | Holds | Nature |
+|---|---|---|---|
+| Structure + metrics | **Postgres** (schema ≈ org / BU / system / domain) | typed nodes, edges, quantitative metrics | relational, *computed* by services/tools + telemetry |
+| **Meaning / authoritative records** | **the wiki** (this crate) | the curated, maintained, converged narrative & specific records | prose canon, **keyed to the same id namespace** |
+| Background / evidence | **RAG** | the fuzzy corpus | approximate recall |
+
+- **UC1 — Novus-i2 organisational twin.** Management ↔ a domain agent iterate a domain's *meaning*
+  canon toward self-consistency; the quantitative twin (couplings, critical path, agility) is
+  *computed* into Postgres by services on Mycelium; RAG supplies background. The wiki holds the
+  interpretation ("why this coupling is the SPOF, the de-jure-vs-real gap"), **keyed to the Postgres
+  node ids** (`node = e_rl_rk`) so the agent joins meaning ↔ metrics. `group` = business-unit/domain;
+  many parallel canons. UC1's payoff is the **LLM consistency loop** — the curator's lint generalises
+  from structural checks to *semantic self-consistency* (no cross-section contradictions as new org
+  info arrives).
+- **UC2 — Transparency-Platform council decisions.** A community navigates *specific council
+  decisions* surfaced from the wiki, positioned against Climate/Biodiversity evidence via RAG.
+  `group` = the council/jurisdiction — **one** authoritative corpus; a community's "scope of interest"
+  is a **query** over `{ward, topic, issue}` tags, not its own wiki. (Corpus-boundedness constraint:
+  keep the *hot* corpus current/active and archive older decisions out of the served set — a durable
+  registry is fine, an unbounded one is a design smell.)
+
+Both need one addition over prose-only: **records carry structured `attributes`** — the shared id +
+cross-cutting tags — and the read surface supports **`query(predicate)`** across pages (mirroring the
+blackboard's `Fact { attributes, payload }` / `read(predicate)`). Attributes are the *join key and
+scope tags*, not typed facets for computation (those are Postgres's).
 
 ## How it maps to Capability / Skill / Group — competence is advertised, knowledge is not
 
@@ -176,85 +225,88 @@ MCB/exit invariant of `docs/wiki/domain/theory/coordinator-free-recursion.md`).
 > per fact collapses the discovery layer into the storage layer and explodes the `cap/`
 > namespace. Keep them on opposite layers.
 
-## KV namespace + group scoping (all existing mechanism)
+## Control-plane KV namespace (pointers + queue only — never the content)
 
-Group scoping is already in the substrate — no core change:
+The substrate holds only small, dynamic, self-healing *control* state; the corpus lives in the store.
 
-- **Pages:** `wiki/{group}/{path}#{section}` → section body (LWW + HLC, gossiped). The
-  crate owns this prefix.
-- **Proposals (ingest queue):** `wiki/{group}/proposal/{id}` — evaporating soft-state
-  (`refresh_interval`), so a proposal from a crashed agent ages out; the curator drains
-  and reconciles them.
-- **Curator role / metrics:** flat capability names `wiki.{group}.curator|candidate`
-  (capability key segments must not contain `/` — the same flattening the tuple space
-  needed), plus `sys/wiki/{node}/{group}/…` for metrics. Read admission uses
-  `Boundary::admits` on `SignalScope::Group`; **group opacity** can hide a wiki exactly as
-  it hides `gcap/`.
-- **Lint state:** `wiki/{group}/.lint/{ts}` — the curator writes lint findings as
-  durable entries (the group-function analog of the `docs/wiki/**/.log/` discipline).
+- **Curator advertisement:** flat capability `wiki.{group}.curator|candidate` (capability key
+  segments must not contain `/` — the flattening the tuple space needed). The winning curator's
+  advertisement carries the **store location** (its endpoint / bucket-prefix), so a reader discovers
+  *where* the wiki is by resolving the group's curator capability.
+- **Proposal queue:** `wiki/{group}/proposal/{id}` — a small **evaporating** edit proposal
+  (`refresh_interval`d, so a crashed author's proposal ages out). This is the *only* wiki data in KV,
+  and it is bounded (in-flight proposals the curator quickly drains), which is exactly what gossip KV
+  is good at — unlike the durable corpus.
+- **Metrics / opacity:** `sys/wiki/{node}/{group}/…`; group admission via `Boundary::admits` on
+  `SignalScope::Group`; group opacity can hide a wiki's *service* exactly as it hides `gcap/`.
 
 ## Roles
 
 `WikiRole`, mirroring `TupleRole` / `BoardRole`:
 
-- **`Curator`** — serves the LLM ingest (proposal → reconciled page section) and the
-  periodic lint; exactly one live per group.
-- **`Contributor`** — proposes edits (queue append) and reads freely; never reconciles.
-- **`Reader`** — read-only (query the wiki, no ingest). The common case for most agents.
-- **`Auto`** — self-elects Curator with the lowest-candidate-id tie-break, promotes when
-  the live curator's capability evaporates (ring-as-failure-detector, as the other two).
+- **`Curator`** — the group's wiki **service host + gateway**: drains proposals, runs the LLM
+  ingest/reconcile and the periodic lint, **writes the store** (single writer of record), and
+  **brokers read access** (hands out store location + a scoped, short-lived read grant to group
+  members). Exactly one live per group.
+- **`Contributor`** — proposes edits (append to the KV queue) and reads the store directly; never
+  writes the store.
+- **`Reader`** — read-only: obtains location + grant from the curator, reads the store directly (the
+  common case; parallel, un-serialised).
+- **`Auto`** — self-elects Curator with the lowest-candidate-id tie-break, promotes when the live
+  curator's capability evaporates (ring-as-failure-detector, as the other two).
 
-## Replication & durability
+## Durability & failover — the store outlives the node
 
-Pages are ordinary KV entries — gossiped, LWW+HLC, Merkle anti-entropy for free; a late
-joiner converges via the (now chunked) `StateResponse` path. The **only** stateful role is
-the curator, and its state is *derivable* (it reconciles from the durable proposal queue +
-current pages), so — like the blackboard's `Post`/`Ack` model, and *unlike* the tuple
-space — a curator handoff needs **no heartbeat/WAL-cursor**: a promoted curator reads the
-live pages + pending proposals and continues. Proposals are evaporating soft-state
-(at-least-once: a proposal reconciled twice is idempotent because the reconcile is
-LWW-into-a-section keyed by proposal id). This is the deliberate simplification the
-blackboard's divergence from the tuple space already established.
+Durability is the **store's** job (FS dir / S3 / doc store — durable, atomic per object). The curator
+is (near-)**stateless w.r.t. durability**: its state is *derivable* — it reconciles from the KV
+proposal queue + current store content — so a curator handoff needs **no heartbeat/WAL-cursor**.
+Because the store is node-independent, a promoted curator resumes against the *same* store and
+re-drains the *same* KV proposals; nothing transfers. This is what makes the failover honest (§the
+architecture): the store is where the knowledge lives, the curator is only who serves and writes it.
 
-## The exactly-once question
-
-Ingest is **at-least-once, idempotent** — not exactly-once. A proposal may be reconciled
-twice (curator crash mid-reconcile, re-elected curator re-drains); the reconcile writes a
-section keyed by content so a re-apply is a no-op LWW. This side-steps the WAL claim/ack
-discipline the tuple space and blackboard share
-(`docs/design/exactly-once-effect.md`) — the wiki does not need it because a page edit is
-idempotent where a `take` is not. Record this as the third data point on that contract:
-tuple = exactly-once blocking take; blackboard = at-least-once claim/requeue; wiki =
-at-least-once idempotent reconcile.
+Ingest is **at-least-once, idempotent** — a proposal may be reconciled twice (curator crash
+mid-reconcile, re-elected curator re-drains). Idempotence is the reconcile's contract: re-merging the
+same proposals against current store content yields an equivalent write, and the store's atomic
+per-object write (manifest last) means a torn intermediate is never observed. Third data point on the
+effect contract (`docs/design/exactly-once-effect.md`): tuple = exactly-once blocking take;
+blackboard = at-least-once claim/requeue; **wiki = at-least-once idempotent curator write to an
+external store**.
 
 ## Phased build outline (when the trigger fires)
 
 Mirrors the tuple-space / blackboard phasing. All public-API-only; core unchanged.
 
-- **Phase 0 — merge design record.** ✅ **done ahead of build** —
-  [`docs/design/wiki-concurrent-edit.md`](../design/wiki-concurrent-edit.md) pins the
-  section-granular + recallable-curator scheme, formalises the section-id addressing (stable
-  content-independent ids, not headings or line numbers), the three merge cases, the curator
-  state machine, and records free-for-all-LLM-merge as declined-with-evidence (breaks the LWW
-  convergence invariant). The build plan inherits it; Phase 0 at build time is only its §5 open
-  questions (section split/merge, starvation, LLM cost batching).
-- **Phase 1 — `BoardStore`-analog core.** `WikiStore` (pure, in-memory + the KV mapping):
-  pages, sections, proposal queue, `read`/`propose`/`reconcile`/`lint` over
-  `transient()`/`persistent()` test constructors. Unit-tested without a live cluster.
-- **Phase 2 — agent-backed roles + failover.** `Wiki` (roles + RPC + curator election),
-  `WikiRole`, ring-failover, cross-node `tests/failover.rs`. The curator surface is
-  pre-drafted: [`wiki-concurrent-edit.md` §6](../design/wiki-concurrent-edit.md) (the
-  `WikiRole` intent vs `CuratorState` observable split + the loop entry points).
-- **Phase 3 — the LLM ingest/lint loop.** Curator drains proposals → LLM reconcile into
-  sections; periodic lint (staleness, dead cross-links, orphan sections, and the
-  cited-fact check generalised from `/wiki-lint`). Gated behind the `llm` feature; a
-  no-LLM fallback stores proposals verbatim as append-only sections (still useful, just
-  uncurated).
-- **Phase 4 — gateway + SDKs.** `POST /gateway/wiki/{read,propose,pages}` +
-  `GET /gateway/wiki/lint`; `mycelium-py/src/mycelium/wiki.py`, `mycelium-ts/src/wiki.ts`.
-- **Phase 5 — worked example + CI smoke.** The long-lived support/ops fleet above as a
-  runnable example + `ci_smoke.sh` (Docker-free), wired as a CI job — the pattern the
-  other companions established.
+*(Re-phased 2026-07-03 for the control-plane/data-plane architecture. The KV-native section-CRDT is
+no longer the build spine — it is the disconnected variant in the design record.)*
+
+- **Phase 0 — design.** ✅ the identity/access mapping and the (now *disconnected-variant*) merge
+  semantics are in [`docs/design/wiki-concurrent-edit.md`](../design/wiki-concurrent-edit.md). The
+  primary control-plane/data-plane architecture is pinned in this plan (above). A short new design
+  record for the **store interface + access-brokering + write-ordering** (manifest-last, torn-read
+  safety, the scoped-grant scheme) is the remaining Phase-0 slice.
+- **Phase 1 — the `Store` trait + a filesystem-dir reference impl.** The pluggable data plane: a
+  `WikiStore` **trait** (`read(page)`, `query(predicate)`, `write(page, sections, manifest-last)`,
+  `location()`), a `FsStore` reference implementation over a shared directory (trivial, Docker-free,
+  CI-testable), and the record model (page/section + `attributes` + manifest). `S3Store` is a
+  parallel impl. *(The earlier in-KV `WikiStore` was spiked and retired; the "store" is now external
+  behind this trait.)*
+- **Phase 2 — the curator service + control plane.** `Wiki` (roles + curator election + ring
+  failover), the `wiki.{group}.curator` advertisement carrying the store location, the KV proposal
+  queue (evaporating), the **access broker** (scoped read grant), and the single-writer curator write
+  path. Cross-node `tests/failover.rs`: kill the curator, a candidate promotes and resumes against the
+  same store. The curator surface is pre-drafted in
+  [`wiki-concurrent-edit.md` §6](../design/wiki-concurrent-edit.md).
+- **Phase 3 — the LLM ingest/lint loop.** Curator drains proposals → LLM reconcile (3-way against
+  current store content) → single write; periodic lint generalising `/wiki-lint`: dead cross-links,
+  orphans, the cited-fact check, and — for UC1 — **semantic self-consistency** (no cross-section
+  contradictions). Behind the `llm` feature; a no-LLM fallback appends proposals verbatim (uncurated
+  but useful).
+- **Phase 4 — MCP tool + gateway + SDKs.** The wiki as an **MCP tool** (`wiki.read`/`propose`/`query`)
+  so agents reach it the way they reach any tool; `POST /gateway/wiki/{read,propose}` +
+  `GET /gateway/wiki/query`; Python/TS `WikiClient`.
+- **Phase 5 — worked example + CI smoke.** One of the driving use cases (a bounded UC2-style council
+  corpus, or a UC1 domain canon) as a runnable example over `FsStore` + `ci_smoke.sh` (Docker-free),
+  wired as a CI job — the pattern the other companions established.
 
 ## Non-goals
 
@@ -263,10 +315,15 @@ Mirrors the tuple-space / blackboard phasing. All public-API-only; core unchange
   for **agent-fleet-internal** knowledge, queried over the mesh/gateway. (The recursion is
   intentional but the two are separate artifacts: `docs/wiki/` is the reference
   implementation of the *idea*; this crate is the *runtime primitive*.)
-- **Not RAG / vector search.** Retrieval is by path/link/group, not embedding similarity.
-  A vector index over pages is a possible later extension, explicitly out of v1.
-- **Not deterministic LLM merge.** The curator serialises reconciles precisely *because*
-  concurrent LLM merge doesn't converge; do not attempt free-for-all reconcile.
+- **Not RAG, and not a metrics store — it *composes* with both.** The wiki is the specific /
+  authoritative / maintained layer; the fuzzy background corpus is RAG's, the typed metrics/structure
+  are Postgres's (see *Composition*, above). Retrieval is by attribute/tag/id, **not** embedding
+  similarity — no vector index in the wiki; the agent joins the three layers by shared id.
+- **Not the storage engine.** Durability, indexing, atomicity, backup are the pluggable store's job
+  (FS dir / S3 / doc store); the crate supplies the *access/identity/curation control plane*, not a
+  bespoke database. (The KV-native section-CRDT store is the disconnected-variant exception.)
+- **Not deterministic LLM merge.** The single-writer curator is precisely what avoids the
+  non-convergent free-for-all reconcile; do not attempt in-place multi-writer LLM merge.
 - **Not a core change.** If a phase needs a core change, that is a signal to re-scope — the
   composability proof is that it rides the public API.
 

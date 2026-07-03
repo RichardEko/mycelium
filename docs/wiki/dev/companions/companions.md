@@ -29,10 +29,17 @@ was examined and declined-with-evidence).
 The public-API coordination primitives form one axis — *how a consumer finds what it needs*:
 tuple-space routes by lane **position** (transient, blocking `take`), blackboard by content
 **predicate** (transient, competitive `claim`). A **proposed** third fills the durable slot:
-**`mycelium-wiki`** — a group-scoped LLM-maintained wiki (curated, compounding, re-read), the
-long-term-memory sibling of the blackboard's working memory. Design sketch:
-`docs/plans/mycelium-wiki.md` (proposed 2026-07-02, gated on demand not feasibility; the
-load-bearing problem is that concurrent prose edits don't LWW-merge → section-granular keys +
-a recallable curator role, serialising the LLM reconcile at one writer-of-record). It would be
-the runtime-primitive form of the pattern this very wiki (`docs/wiki/`) is the reference
-implementation of.
+**`mycelium-wiki`** — a group-scoped LLM-curated wiki (curated, compounding, re-read), the
+long-term-memory sibling of the blackboard's working memory. Plan: `docs/plans/mycelium-wiki.md`.
+**Approach revised 2026-07-03 (control-plane / data-plane):** the corpus is **not** in gossiped KV —
+it lives in a **node-independent, pluggable store** (shared FS dir / S3 / doc store); a group node
+runs a **curator** service that serialises writes, runs the LLM ingest/lint, and **brokers access**,
+while group agents **read the store directly, in parallel**. Mycelium is the control plane — curator
+election + ring-failover, the store-location pointer, the small evaporating proposal queue in KV, the
+MCP tool — never the storage. This is the wiki pattern's *native* shape (files + an LLM curator +
+direct reads, exactly how this very `docs/wiki/` works), so the concurrent-prose-merge problem
+dissolves into single-writer-curator + the store. The earlier KV-native section-CRDT is retained as
+the **disconnected / no-external-store variant** (design record `docs/design/wiki-concurrent-edit.md`
+§1–§2); the identity model + curator state machine carry over. Composes with Postgres (metrics) + RAG
+(background) by a shared id namespace — it is the specific/authoritative/maintained layer, not a
+replacement for either.

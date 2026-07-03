@@ -1,7 +1,21 @@
 # Group-wiki concurrent edits — section addressing, merge semantics, curator state machine, identity/access
 
-**Status:** 📐 **design record, pre-build** (2026-07-02). This is the Phase 0 artifact the
-[`mycelium-wiki` sketch](../plans/mycelium-wiki.md) calls for — it formalises the load-bearing areas
+> **⚠ Superseded as the primary design (2026-07-03).** After reviewing two driving use cases, the
+> `mycelium-wiki` approach pivoted to a **control-plane / data-plane** architecture: the corpus lives
+> in a **node-independent external store** (FS dir / S3 / doc store), a **curator** service serialises
+> writes + brokers access, and group agents **read the store directly**. Mycelium is the control plane
+> (curator election + failover, the store-location pointer, the evaporating proposal queue, MCP tool),
+> **not** the storage. See [`docs/plans/mycelium-wiki.md`](../plans/mycelium-wiki.md) → *Architecture*.
+>
+> **This record is retained as the *disconnected variant*** — the KV-native section-CRDT merge, for an
+> edge/autonomous fleet with **no external store to point at**. §1–§2 (section addressing + the LWW/
+> curator merge) are that variant's mechanism. **§3 (curator state machine), §4 (identity/access —
+> "competence is a capability, knowledge is not"), and §6 (the curator `lib.rs` surface) carry over to
+> the primary architecture unchanged** — they are about *who curates and who may read*, not *where the
+> bytes live*.
+
+**Status:** 📐 **design record** (2026-07-02; reframed 2026-07-03 as the disconnected variant, above).
+This formalises the load-bearing areas
 the sketch flagged: (1) the **section addressing + merge unit** (§1–§2), (2) the **curator role
 state machine** (§3), and (3) the **identity/access mapping** — how a wiki relates to
 Capability / Skill / Group, and the normative "competence is a capability, knowledge is not" rule

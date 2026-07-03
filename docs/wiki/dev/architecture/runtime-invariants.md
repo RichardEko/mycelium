@@ -46,7 +46,10 @@ whether a node *acts on a Signal*; it never scopes KV propagation. Consequences 
 - A **capability group** (`join_group`, `gcap/`) organises *who participates* — it never
   scopes *what replicates*. Group-scoped state (e.g. a `wiki/{group}/…` namespace) is
   **namespaced and access-gated, not replication-isolated**: every cluster node holds the
-  bytes regardless of membership.
+  bytes regardless of membership. *(This invariant is why the `mycelium-wiki` plan moved its
+  durable corpus **out** of KV to an external store — a group's wiki is not KV-isolated, so a
+  large per-group corpus would flood every node; only its small evaporating proposal queue
+  stays in KV. See `docs/plans/mycelium-wiki.md` → Architecture.)*
 - Therefore an in-cluster access label (RBAC clearance on a key, an `authorized_callers`
   ACL) is a **served-path gate** — governance + audit (detection-not-prevention), never
   confidentiality. It withholds the *convenient* read path; it cannot un-replicate bytes a
