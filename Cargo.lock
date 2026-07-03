@@ -2220,9 +2220,11 @@ name = "mycelium-wiki"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "axum 0.8.9",
  "bytes",
  "mycelium",
  "parking_lot",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",
