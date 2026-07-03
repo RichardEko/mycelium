@@ -20,9 +20,11 @@ pages here cite `src/` / `mycelium-core/src/` rather than paraphrasing it.
 ## Leaf pages
 
 - **[security.md](security.md)** — the v1.x WS1–WS5 security surface + crown-jewel posture.
-- **[diagnostics.md](diagnostics.md)** — the emergent-detector layer (Legible Emergence Phase 1):
-  the five coordinator-free detectors, the `ViewConfidence` per-node-estimate posture, the
-  `/stats` + `/metrics` surface.
+- **[diagnostics.md](diagnostics.md)** — the emergent-detector layer (Legible Emergence, Phases
+  1–5, complete): the five coordinator-free detectors + the three-verb operator spine —
+  **localize** (`/gateway/fleet`) · **explain** (`/gateway/explain`) · **diagnose**
+  (`/gateway/diagnose`), the `ViewConfidence` per-node-estimate posture, and the `/stats` +
+  `/metrics` surface.
 - **[operations.md](operations.md)** — diagnostics endpoints, task-count reference, feature
   gates, the ops label.
 - **[examples.md](examples.md)** — the coop suite, AFN pipeline, A2A community demos.

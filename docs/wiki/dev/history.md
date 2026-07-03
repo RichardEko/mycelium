@@ -4,10 +4,23 @@
 
 Reconciled current state of *what shipped when* — so no session re-derives it from git.
 As of 2026-06-21 all v1.x/v2.0 engineering plans were shipped. Since then, **Legible Emergence
-(diagnosability) Phases 0–1 shipped** (2026-07-02): the Phase-0 taxonomy design record + the
-full Phase-1 emergent-detector layer — see [diagnostics.md](diagnostics.md). Phases 2–5 (fleet
-snapshot, causal `explain`, narrative, operator surface) are not started
-(`docs/plans/legible-emergence.md`).
+(diagnosability) is COMPLETE — all phases 0–5 shipped** (2026-07-02/03; see
+[diagnostics.md](diagnostics.md) and `docs/plans/legible-emergence.md`):
+
+- **Phase 0** — the pathology taxonomy design record (RT1–RT4 red-team baked in).
+- **Phase 1** — the five coordinator-free emergent detectors + `/stats`/`/metrics`.
+- **Phase 2** — `GET /gateway/fleet`, the relational fleet snapshot (throttle graph, cross-node
+  store-convergence, commit-conflict hot slots).
+- **Phase 3** — the HLC-stamped `EventRing` + `GET /gateway/explain`, cross-node causal
+  reconstruction (best-effort fan-out naming non-responders; the #56 narrative).
+- **Phase 4** — `GET /gateway/diagnose`, the `diagnose_fleet` rule engine (the "why is the fleet
+  in this state" narrative, one rule per pathology).
+- **Phase 5** — the operator surface: public `fleet_snapshot()`/`fleet_diagnosis()` API,
+  `docs/operations/diagnostics.md` runbook + Prometheus alert recipes, guide pattern 11, and the
+  coop `diagnostics` demo (induce-and-diagnose, Docker-free in CI).
+
+The three-verb operator spine — **localize** (`/fleet`) · **explain** (`/explain`) · **diagnose**
+(`/diagnose`) — is shipped, tested, and documented for both audiences.
 
 ## v2.0 (2026-06-21) — all 16 milestones M1–M16, acceptance gate met, no deferrals
 

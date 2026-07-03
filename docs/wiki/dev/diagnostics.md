@@ -1,4 +1,4 @@
-# dev/diagnostics — the emergent-detector layer (Legible Emergence Phases 1–4)
+# dev/diagnostics — the emergent-detector layer (Legible Emergence, complete)
 
 ↑ [dev/](dev.md) · design: `docs/design/legible-emergence-taxonomy.md` · plan:
 `docs/plans/legible-emergence.md` · code: `src/agent/emergent.rs`
@@ -59,8 +59,10 @@ substrate uses (`CapEntry::is_fresh`, 3× window).
 
 ## Status & what's next
 
+**Legible Emergence is complete — all phases 0–5 shipped.** Phase-by-phase detail below.
+
 Phase 1 is **complete** (all five detectors + `/stats`/`/metrics` + the live #56 test;
-[history](history.md)). **Phase 2 in progress** — `GET /gateway/fleet` (scope `fleet:read`) ships the relational
+[history](history.md)). **Phase 2 is complete** — `GET /gateway/fleet` (scope `fleet:read`) ships the relational
 snapshot: `compute_fleet_snapshot` assembles governed-group status (`governed_group_statuses`),
 coverage gaps, opacity, and the flap/oscillation counters from local KV, each with the RT1/RT2
 `view_confidence` header. The acceptance gate is met — `test_fleet_snapshot_agrees_across_three_
@@ -71,7 +73,7 @@ carries the throttle graph (`sys/rate/` edges), **cross-node store-convergence**
 `sys/health/{node}` entry-count self-reports — a *count* not a hash, since a hash churns every tick
 as soft-state refreshes; each node publishes its report from the detector loop), and
 **commit-conflict hot slots** (`commit_conflict_slots` — the consensus tripwire records each
-conflicting slot in a lock-free papaya map). Phase 2 is complete. **Phase 3 in progress** — the bounded HLC-stamped `EventRing` (RT4 always-on-when-enabled)
+conflicting slot in a lock-free papaya map). **Phase 3 is complete** — the bounded HLC-stamped `EventRing` (RT4 always-on-when-enabled)
 records detector-state transitions + commit conflicts. `GET /gateway/explain?since=` (scope
 `fleet:read`) now returns the **cross-node** causal narrative: `assemble_explain` starts from this
 node's ring, fans a best-effort `sys.explain` RPC out to every known peer (served by
@@ -106,6 +108,14 @@ opacity ("rate-limited edges n3→n7 @ 5 fps"). Findings sort most-severe-first;
 (`peers_heard < peers_known`) or self-degraded, so a clean read from a blind node never reads as a
 healthy fleet. Gates: five unit rules + `test_fleet_diagnosis_names_a_real_governed_group_conflict`
 (grounds the engine against a *real* KV-derived snapshot). The three-verb spine is now complete:
-**localize** (`/fleet`) · **explain** (`/explain`) · **diagnose** (`/diagnose`). Not started: Phase 5
-(operator surface — runbook, alerts, docs). The red-team findings (RT1–RT4) and their Phase-2+
-implications are in the plan.
+**localize** (`/fleet`) · **explain** (`/explain`) · **diagnose** (`/diagnose`).
+
+**Phase 5 is complete** — the **operator surface**. Diagnostics as *data*: public
+`GossipAgent::fleet_snapshot()` / `fleet_diagnosis()` (`src/agent/kv.rs`) — the same content as the
+`/gateway/fleet` / `/gateway/diagnose` endpoints, callable with no HTTP/auth (types re-exported from
+`lib.rs`). Two-audience docs: operator — [`operations/diagnostics.md`](../../operations/diagnostics.md)
+(one runbook entry per pathology + Prometheus alert recipes); developer — guide/14 pattern 11.
+Constructive proof + CI gate: the coop `diagnostics` demo (`examples/coop/src/bin/diagnostics.rs`,
+step 12) induces a governed-group conflict on one depot and has **another** diagnose it from its own
+gossiped KV — the coordinator-free property end to end, Docker-free. The red-team findings (RT1–RT4)
+and their per-phase implications are in the plan.
