@@ -2216,6 +2216,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mycelium-wiki"
+version = "0.1.0"
+dependencies = [
+ "mycelium",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "native-tls"
 version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"

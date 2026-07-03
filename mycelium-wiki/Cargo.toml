@@ -1,0 +1,32 @@
+[package]
+name = "mycelium-wiki"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Dr. Richard Nicholson <tathatasystems@proton.me>"]
+description = "Group-scoped, LLM-curated wiki for Mycelium — the maintained-meaning / authoritative-specific knowledge canon that composes with an external metrics store and RAG. Control-plane on Mycelium (curator election + failover, access-brokering, MCP tool); data-plane in a pluggable node-independent store."
+license = "AGPL-3.0-only"
+repository = "https://github.com/RichardEko/mycelium"
+keywords = ["wiki", "knowledge-base", "multi-agent", "distributed-systems", "coordination"]
+categories = ["network-programming", "asynchronous"]
+
+[features]
+default = []
+# The Mycelium control plane (Phase 2): curator role + election/failover, the store-location
+# advertisement, the evaporating proposal queue, access-brokering, the MCP tool. Pulls in `mycelium`.
+# Phase 1 (this release) is the data plane only — the `Store` trait + the FS reference impl — and is
+# deliberately Mycelium-agnostic, so the store is a plain pluggable backing store.
+control-plane = ["dep:mycelium"]
+
+[dependencies]
+# `rc` so `Arc<str>` section ids (de)serialise (each Arc round-trips to a fresh allocation — fine, ids
+# are small and not shared across the wire).
+serde       = { version = "1", features = ["derive", "rc"] }
+serde_json  = "1"
+tracing     = "0.1"
+
+# Control-plane only (Phase 2). Companion-crate contract: only Mycelium's PUBLIC API.
+mycelium = { path = "..", default-features = false, optional = true }
+
+[dev-dependencies]
+tempfile = "3"

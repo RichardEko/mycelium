@@ -284,12 +284,15 @@ no longer the build spine — it is the disconnected variant in the design recor
   primary control-plane/data-plane architecture is pinned in this plan (above). A short new design
   record for the **store interface + access-brokering + write-ordering** (manifest-last, torn-read
   safety, the scoped-grant scheme) is the remaining Phase-0 slice.
-- **Phase 1 — the `Store` trait + a filesystem-dir reference impl.** The pluggable data plane: a
-  `WikiStore` **trait** (`read(page)`, `query(predicate)`, `write(page, sections, manifest-last)`,
-  `location()`), a `FsStore` reference implementation over a shared directory (trivial, Docker-free,
-  CI-testable), and the record model (page/section + `attributes` + manifest). `S3Store` is a
-  parallel impl. *(The earlier in-KV `WikiStore` was spiked and retired; the "store" is now external
-  behind this trait.)*
+- **Phase 1 — the `Store` trait + a filesystem-dir reference impl.** ✅ **shipped (2026-07-03)** — the
+  `mycelium-wiki` crate's **data plane**, deliberately Mycelium-agnostic (control plane behind the
+  `control-plane` feature, Phase 2). Ships: the `WikiStore` **trait** (`read`/`query`/`write_page`/
+  `list_pages`/`location`); the record model — `Section` (heading + body + join-key/scope
+  `attributes`), `Manifest` (order, written **last**), `Page`, `Predicate` (structured attribute
+  filter, *not* similarity), stable opaque `mint_section_id`; and **`FsStore`**, the filesystem-dir
+  reference impl — atomic per-object writes, **manifest-last** (torn-read safe), manifest-authoritative
+  reads, attribute `query` across pages, path-traversal-guarded. Unit-tested on a tempdir, no cluster.
+  `S3Store` is a parallel impl (later). *(The earlier in-KV `WikiStore` was spiked and retired.)*
 - **Phase 2 — the curator service + control plane.** `Wiki` (roles + curator election + ring
   failover), the `wiki.{group}.curator` advertisement carrying the store location, the KV proposal
   queue (evaporating), the **access broker** (scoped read grant), and the single-writer curator write
