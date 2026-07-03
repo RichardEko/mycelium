@@ -381,7 +381,7 @@ const EVENT_RING_CAP: usize = 1024;
 
 /// One *significant* fleet event, HLC-stamped for cross-node causal ordering. "Significant" =
 /// state changes (a detector firing/clearing, a commit conflict), **not** a per-message firehose.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Event {
     /// HLC stamp — the causal-order key the Phase-3 fan-out assembles peer rings by.
     pub hlc:    u64,
@@ -429,6 +429,111 @@ pub fn record_event(ctx: &TaskCtx, kind: &str, detail: String) {
         kind:   kind.to_string(),
         detail,
     });
+}
+
+// ── Phase 3 increment 2: cross-node causal `explain` (best-effort fan-out) ────────────────────
+
+/// RPC kind for the peer-to-peer explain-ring request/response.
+pub(crate) const EXPLAIN_RPC_KIND: &str = "sys.explain";
+
+/// How long the fan-out waits on each peer before giving up on it. Short — an `explain` is
+/// interactive — and, crucially, a peer that misses it becomes a *named non-responder* (RT3),
+/// never a silent gap.
+const EXPLAIN_FANOUT_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// The assembled cross-node explain: every reachable node's ring merged into one HLC-ordered
+/// stream, plus the RT3 honesty pair — who answered and who did **not**. A non-empty
+/// `non_responders` is the view telling you the reconstruction is partial *exactly where* it says,
+/// rather than silently dropping the events of the nodes that matter most during an incident.
+#[derive(Debug, Clone, Serialize)]
+pub struct ExplainResult {
+    /// The node that assembled this view (the observer).
+    pub observer:       String,
+    /// Local + every responder's events, HLC-ordered — the causal narrative. Each ring is
+    /// single-author (`record_event` stamps `node = self`), so the merged streams are disjoint.
+    pub events:         Vec<Event>,
+    /// Peers that answered the fan-out, sorted.
+    pub responders:     Vec<String>,
+    /// Peers that did **not** answer within [`EXPLAIN_FANOUT_TIMEOUT`] — the named gaps (RT3), sorted.
+    pub non_responders: Vec<String>,
+}
+
+/// Serve `sys.explain` requests: reply with **this** node's ring since the requested cursor.
+/// Registered as a background task (only under `emergent_detectors_enabled` — RT4 zero-overhead-off).
+pub async fn run_explain_responder(
+    ctx: Arc<TaskCtx>,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) {
+    let mut rx = ctx.signal_handlers.register(Arc::from(EXPLAIN_RPC_KIND));
+    loop {
+        tokio::select! {
+            maybe = rx.recv() => {
+                let Some(sig) = maybe else { break };
+                let req = super::rpc::RpcRequest::from(sig);
+                let since = req.payload().get(..8)
+                    .and_then(|b| <[u8; 8]>::try_from(b).ok())
+                    .map(u64::from_le_bytes)
+                    .unwrap_or(0);
+                let events = ctx.event_ring.since(since);
+                let payload = mycelium_core::serde_fixint::to_vec(&events).unwrap_or_default();
+                super::rpc::rpc_respond_ctx(&ctx, &req, payload);
+            }
+            _ = shutdown.wait_for(|v| *v) => break,
+        }
+    }
+}
+
+/// Assemble the cross-node causal explain: start from this node's ring, fan a best-effort
+/// `sys.explain` RPC out to every known peer, merge whatever returns within
+/// [`EXPLAIN_FANOUT_TIMEOUT`] in HLC order, and name the peers that did not answer.
+///
+/// Deliberately **not** [`crate::agent::service_handle::ServiceHandle::scatter_gather`]: that
+/// aborts once `min_ok` replies land and discards *all* partial replies on `InsufficientReplies` —
+/// the RT3 failure mode, because the slow/partitioned nodes you most need mid-incident are exactly
+/// the ones that time out. Here each per-peer timeout turns a silent peer into a named
+/// `non_responder` while every reply that does arrive still lands in `events`.
+pub async fn assemble_explain(ctx: &Arc<TaskCtx>, since: u64) -> ExplainResult {
+    let mut events = ctx.event_ring.since(since);
+
+    let peers: Vec<crate::node_id::NodeId> = ctx.peers.pin().keys().cloned().collect();
+    let since_bytes = bytes::Bytes::copy_from_slice(&since.to_le_bytes());
+
+    let mut js: tokio::task::JoinSet<(crate::node_id::NodeId, Result<bytes::Bytes, super::rpc::RpcError>)> =
+        tokio::task::JoinSet::new();
+    for peer in &peers {
+        let c = Arc::clone(ctx);
+        let p = peer.clone();
+        let sb = since_bytes.clone();
+        js.spawn(async move {
+            let r = super::rpc::rpc_call_ctx(
+                &c, p.clone(), Arc::from(EXPLAIN_RPC_KIND), sb, EXPLAIN_FANOUT_TIMEOUT,
+            ).await;
+            (p, r)
+        });
+    }
+
+    let mut responders: HashSet<String> = HashSet::new();
+    while let Some(joined) = js.join_next().await {
+        if let Ok((peer, Ok(payload))) = joined
+            && let Ok(peer_events) =
+                mycelium_core::serde_fixint::from_slice::<Vec<Event>>(&payload)
+        {
+            events.extend(peer_events);
+            responders.insert(peer.to_string());
+        }
+    }
+
+    events.sort_by_key(|e| e.hlc);
+
+    let mut non_responders: Vec<String> = peers.iter()
+        .map(|p| p.to_string())
+        .filter(|p| !responders.contains(p))
+        .collect();
+    non_responders.sort();
+    let mut responders: Vec<String> = responders.into_iter().collect();
+    responders.sort();
+
+    ExplainResult { observer: ctx.node_id.to_string(), events, responders, non_responders }
 }
 
 // ── Phase 2: the relational fleet snapshot (GET /gateway/fleet) ───────────────────────────────

@@ -814,20 +814,17 @@ async fn gw_fleet_snapshot(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse
     Json(super::emergent::compute_fleet_snapshot(&ctx.agent_ctx)).into_response()
 }
 
-/// `GET /gateway/explain?since=<hlc>` — the Legible-Emergence Phase-3 causal **explain**: this
-/// node's HLC-ordered ring of significant events (`?since` filters to `hlc >= since`; default all).
-/// Increment 1 returns **this node's** ring; the cross-node scatter-gather assembly is increment 2.
-/// Scope `fleet:read`.
+/// `GET /gateway/explain?since=<hlc>` — the Legible-Emergence Phase-3 causal **explain**: the
+/// HLC-ordered narrative of significant fleet events (`?since` filters to `hlc >= since`; default
+/// all). Fans a best-effort `sys.explain` RPC out to every known peer, merges each node's ring into
+/// one causal stream, and — RT3 — names the peers that did not answer (`non_responders`) rather than
+/// silently dropping their events. Scope `fleet:read`.
 async fn gw_explain(
     State(ctx): State<Arc<HttpCtx>>,
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
     let since = q.get("since").and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-    Json(json!({
-        "node_id": ctx.agent_ctx.node_id.to_string(),
-        "events":  ctx.agent_ctx.event_ring.since(since),
-    }))
-    .into_response()
+    Json(super::emergent::assemble_explain(&ctx.agent_ctx, since).await).into_response()
 }
 
 /// `POST /gateway/govern/tuning` — publish a cluster-wide (or `target`-ed) tuning

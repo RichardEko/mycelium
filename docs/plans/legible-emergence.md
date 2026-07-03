@@ -172,9 +172,26 @@ endpoint correctly names a synthetic capability-coverage gap and a governed-grou
 **Increment 1 shipped:** the bounded HLC-stamped `EventRing` (`src/agent/emergent.rs`, RT4
 always-on-when-enabled, fixed ~1024 events) + recording from the detector loop (state-change
 transitions, not a firehose) and the consensus commit-conflict tripwire, + `GET /gateway/explain?since=`
-(scope `fleet:read`) returning **this node's** HLC-ordered ring. Remaining: the cross-node
-scatter-gather assembly (RT3 — render what you have, name non-responders) + the #56-sequence
-reconstruction gate.
+(scope `fleet:read`) returning **this node's** HLC-ordered ring.
+
+**Increment 2 shipped — the cross-node fan-out.** `assemble_explain` (`src/agent/emergent.rs`)
+starts from this node's ring and fans a best-effort `sys.explain` RPC out to every known peer
+(served by `run_explain_responder`, spawned alongside the detector loop under
+`emergent_detectors_enabled`), merges each node's single-author ring into one HLC-ordered stream,
+and — **RT3** — names the peers that did **not** answer (`non_responders`) instead of silently
+dropping them. `GET /gateway/explain` now returns this cross-node `ExplainResult`
+(`observer`/`events`/`responders`/`non_responders`). It is deliberately **not** `scatter_gather`:
+that primitive aborts at `min_ok` and discards *all* partial replies on `InsufficientReplies` —
+precisely the RT3 pathology, since the slow/partitioned nodes you most need mid-incident are the
+ones that time out. Each per-peer `rpc_call` timeout turns a silent peer into a *named* gap while
+every reply that arrives still lands. **Gate:**
+`test_explain_fanout_assembles_cross_node_ring_and_names_non_responders` (nodes A+B assemble each
+other's rings in HLC order; node C — a live gossiping peer running *without* the responder — is the
+deterministic named non-responder, standing in for a slow/partitioned node without an eviction race).
+
+**Remaining in Phase 3:** the #56-sequence *reconstruction narrative* gate — assembling the specific
+governor→auto-join→drain sequence into a human-legible story (the cross-node collection primitive it
+needs is now done; what's left is the rendering + the end-to-end #56 scenario test).
 
 
 Each node keeps a **bounded, fixed-memory, HLC-stamped ring buffer** of *significant* events (role

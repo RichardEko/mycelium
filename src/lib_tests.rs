@@ -4732,3 +4732,74 @@ async fn test_fleet_snapshot_agrees_across_three_nodes_at_convergence() {
     b.shutdown_with_timeout(Duration::from_secs(5)).await;
     c.shutdown_with_timeout(Duration::from_secs(5)).await;
 }
+
+/// Legible-Emergence **Phase 3 increment 2** — the cross-node causal `explain` fan-out. Proves the
+/// two halves of the DoD in one run: (1) `assemble_explain` on node A merges A's *and* B's
+/// event rings into one HLC-ordered narrative (cross-node causal assembly), and (2) node C — a
+/// live, gossiping peer that runs **without** the explain responder — is named as a `non_responder`
+/// rather than silently dropped (RT3: render what you have + name the gaps). C-without-responder is
+/// the deterministic stand-in for a slow/partitioned node, avoiding an eviction-timing race.
+#[tokio::test]
+async fn test_explain_fanout_assembles_cross_node_ring_and_names_non_responders() {
+    let (pa, pb, pc) = (alloc_port(), alloc_port(), alloc_port());
+    let (ia, ib, ic) = (
+        NodeId::new("127.0.0.1", pa).unwrap(),
+        NodeId::new("127.0.0.1", pb).unwrap(),
+        NodeId::new("127.0.0.1", pc).unwrap(),
+    );
+    let mk = |port: u16, boot: Vec<NodeId>, detectors: bool| {
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = port;
+        cfg.bootstrap_peers = boot;
+        cfg.health_check_max_jitter_ms = 50;
+        cfg.emergent_detectors_enabled = detectors;
+        GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg)
+    };
+    // A + B run the detector loop AND the explain responder; C gossips but has neither — so C is a
+    // live peer that never answers `sys.explain` (the deterministic non-responder).
+    let a = mk(pa, vec![ib.clone()], true);
+    let b = mk(pb, vec![ic.clone()], true);
+    let c = mk(pc, vec![ia.clone()], false);
+    a.start().await.unwrap();
+    b.start().await.unwrap();
+    c.start().await.unwrap();
+    poll_until(|| !a.peers().is_empty() && !b.peers().is_empty() && !c.peers().is_empty(), 5_000).await;
+    // A must learn C as a peer (peer-exchange around the ring) for C to be a fan-out target.
+    poll_until(|| a.peers().len() >= 2, 10_000).await;
+
+    // Seed a governed-group conflict on A; KV floods to B (and C), so both A's and B's detector
+    // loops confirm it and record a `governed_group_conflict` onset event into their own rings.
+    assert!(a.publish_membership_intent(MembershipIntent::new("workers", 1, Some(2))));
+    for i in 0..4 {
+        let m = NodeId::new("127.0.0.1", 26100 + i).unwrap();
+        assert!(a.kv().set(format!("grp/workers/{m}"), "1"));
+    }
+    // Wait until both A and B have recorded the onset event locally (hysteresis ≈ 4 s).
+    poll_until(|| {
+        !a.task_ctx.event_ring.since(0).is_empty() && !b.task_ctx.event_ring.since(0).is_empty()
+    }, 20_000).await;
+
+    let res = crate::agent::emergent::assemble_explain(&a.task_ctx, 0).await;
+
+    // (1) Cross-node assembly: the merged narrative carries events authored by BOTH A and B.
+    assert!(res.events.iter().any(|e| e.node == ia.to_string()), "A's own events present");
+    assert!(res.events.iter().any(|e| e.node == ib.to_string()), "B's events assembled via fan-out");
+    // HLC-ordered.
+    let hlcs: Vec<u64> = res.events.iter().map(|e| e.hlc).collect();
+    let mut sorted = hlcs.clone();
+    sorted.sort();
+    assert_eq!(hlcs, sorted, "assembled narrative is HLC causal-ordered");
+    // B answered.
+    assert!(res.responders.contains(&ib.to_string()), "B is a responder");
+
+    // (2) RT3: C is a live peer that runs no responder ⇒ named non-responder, not a silent gap.
+    assert!(res.non_responders.contains(&ic.to_string()),
+        "C (live peer, no explain responder) is named as a non-responder; got responders={:?} non_responders={:?}",
+        res.responders, res.non_responders);
+    assert!(!res.responders.contains(&ic.to_string()), "C did not answer");
+    assert_eq!(res.observer, ia.to_string(), "result is labelled with the assembling observer");
+
+    a.shutdown_with_timeout(Duration::from_secs(5)).await;
+    b.shutdown_with_timeout(Duration::from_secs(5)).await;
+    c.shutdown_with_timeout(Duration::from_secs(5)).await;
+}

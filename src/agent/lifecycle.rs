@@ -199,11 +199,15 @@ impl GossipAgent {
             let srx = self.shutdown_tx.subscribe();
             self.spawn_task(mycelium_core::rate::run_rate_decider(ctx, srx));
         }
-        // Legible-Emergence Phase 1 — emergent-condition detector loop, only when enabled.
+        // Legible-Emergence — emergent-condition detector loop (Phase 1) + cross-node explain
+        // responder (Phase 3), only when enabled.
         if self.task_ctx.config.emergent_detectors_enabled {
             let ctx = Arc::clone(&self.task_ctx);
             let srx = self.shutdown_tx.subscribe();
             self.spawn_task(super::emergent::run_emergent_detectors(ctx, srx));
+            let ctx = Arc::clone(&self.task_ctx);
+            let srx = self.shutdown_tx.subscribe();
+            self.spawn_task(super::emergent::run_explain_responder(ctx, srx));
         }
         // M10.2 (WS-C) live timing reconfiguration — the TimingIntent reconciler. Inert until an
         // intent is published; an evaporated intent self-heals to the static baseline.

@@ -72,7 +72,17 @@ carries the throttle graph (`sys/rate/` edges), **cross-node store-convergence**
 as soft-state refreshes; each node publishes its report from the detector loop), and
 **commit-conflict hot slots** (`commit_conflict_slots` — the consensus tripwire records each
 conflicting slot in a lock-free papaya map). Phase 2 is complete. **Phase 3 in progress** — the bounded HLC-stamped `EventRing` (RT4 always-on-when-enabled)
-records detector-state transitions + commit conflicts; `GET /gateway/explain?since=` (scope
-`fleet:read`) returns this node's HLC-ordered ring. Remaining: the cross-node scatter-gather
-assembly. Not started: Phase 4 (fleet narrative), Phase 5 (operator surface). The
-red-team findings (RT1–RT4) and their Phase-2+ implications are in the plan.
+records detector-state transitions + commit conflicts. `GET /gateway/explain?since=` (scope
+`fleet:read`) now returns the **cross-node** causal narrative: `assemble_explain` starts from this
+node's ring, fans a best-effort `sys.explain` RPC out to every known peer (served by
+`run_explain_responder`, spawned alongside the detector loop), merges each node's single-author ring
+into one HLC-ordered stream, and — **RT3** — names the peers that did **not** answer
+(`non_responders`) rather than silently dropping their events. It is deliberately **not**
+`scatter_gather`: that aborts at `min_ok` and discards *all* partial replies on
+`InsufficientReplies`, which is the RT3 failure mode (the slow/partitioned nodes you most need
+mid-incident are exactly the ones that time out). Gate:
+`test_explain_fanout_assembles_cross_node_ring_and_names_non_responders` (A+B assemble each other's
+rings; C — a live peer with no responder — is the deterministic named non-responder). Remaining in
+Phase 3: the #56-sequence reconstruction narrative. Not started: Phase 4 (fleet narrative),
+Phase 5 (operator surface). The red-team findings (RT1–RT4) and their Phase-2+ implications are in
+the plan.
