@@ -1,4 +1,4 @@
-# dev/diagnostics — the emergent-detector layer (Legible Emergence Phases 1–3)
+# dev/diagnostics — the emergent-detector layer (Legible Emergence Phases 1–4)
 
 ↑ [dev/](dev.md) · design: `docs/design/legible-emergence-taxonomy.md` · plan:
 `docs/plans/legible-emergence.md` · code: `src/agent/emergent.rs`
@@ -93,6 +93,19 @@ governor cap exceeded → node flaps → returns to band — with **no code know
 it** (the Phase-3 acceptance bar). An unknown `kind` falls back to its raw string, so a new detector
 is surfaced, never dropped. Gates: `narrate_renders_the_56_sequence_legibly`,
 `narrate_surfaces_unknown_kinds_rather_than_dropping_them`, and the cross-node e2e asserts the
-narrative names the `workers` conflict from *real* detector output. Not started: Phase 4 (fleet
-narrative), Phase 5 (operator surface). The red-team findings (RT1–RT4) and their Phase-2+
+narrative names the `workers` conflict from *real* detector output.
+
+**Phase 4 is complete** — the **fleet diagnosis** (`GET /gateway/diagnose`, scope `fleet:read`).
+`diagnose_fleet(&FleetSnapshot) -> FleetDiagnosis` is a **pure, templated rule engine**: where the
+snapshot *localizes* and the explain ring *sequences*, the diagnosis **names the cause** in code-free,
+actionable terms — the "why is the fleet in this state" artifact. One rule per Phase-0 pathology
+(governed-group thrash/conflict, opacity storm/present, coverage gap, opacity oscillation, commit
+conflict); each fires only on its condition, and the **throttle graph supplies the *because*** for
+opacity ("rate-limited edges n3→n7 @ 5 fps"). Findings sort most-severe-first; a healthy fleet is
+"nominal". **RT1/RT2:** every diagnosis carries a `caveat` when the observer's own view is partial
+(`peers_heard < peers_known`) or self-degraded, so a clean read from a blind node never reads as a
+healthy fleet. Gates: five unit rules + `test_fleet_diagnosis_names_a_real_governed_group_conflict`
+(grounds the engine against a *real* KV-derived snapshot). The three-verb spine is now complete:
+**localize** (`/fleet`) · **explain** (`/explain`) · **diagnose** (`/diagnose`). Not started: Phase 5
+(operator surface — runbook, alerts, docs). The red-team findings (RT1–RT4) and their Phase-2+
 implications are in the plan.

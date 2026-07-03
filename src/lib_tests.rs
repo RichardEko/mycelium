@@ -4814,3 +4814,38 @@ async fn test_explain_fanout_assembles_cross_node_ring_and_names_non_responders(
     b.shutdown_with_timeout(Duration::from_secs(5)).await;
     c.shutdown_with_timeout(Duration::from_secs(5)).await;
 }
+
+/// Legible-Emergence **Phase 4** — the fleet narrative / diagnosis. Grounds the rule engine against
+/// a *real* KV-derived snapshot (not a synthetic struct): seed an actual governor-vs-membership
+/// conflict, then assert `compute_fleet_diagnosis` names the cause on 'workers' in actionable,
+/// code-free terms — the Phase-4 acceptance bar. Single node: the snapshot's `conflict` flag is a
+/// pure KV scan (no detector loop / hysteresis needed to surface it).
+#[tokio::test]
+async fn test_fleet_diagnosis_names_a_real_governed_group_conflict() {
+    let p = alloc_port();
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = p;
+    let a = GossipAgent::new(NodeId::new("127.0.0.1", p).unwrap(), cfg);
+    a.start().await.unwrap();
+
+    // Seed a real conflict: governor caps 'workers' at [1, 2]; four live members.
+    assert!(a.publish_membership_intent(MembershipIntent::new("workers", 1, Some(2))));
+    for i in 0..4 {
+        assert!(a.kv().set(format!("grp/workers/127.0.0.1:{}", 26200 + i), "1"));
+    }
+
+    // The diagnosis (over the real snapshot) names the workers conflict, actionably.
+    poll_until(|| {
+        let d = crate::agent::emergent::compute_fleet_diagnosis(&a.task_ctx);
+        d.findings.iter().any(|f| f.pathology.starts_with("governed_group") && f.cause.contains("workers"))
+    }, 5_000).await;
+
+    let d = crate::agent::emergent::compute_fleet_diagnosis(&a.task_ctx);
+    let f = d.findings.iter().find(|f| f.cause.contains("workers"))
+        .expect("diagnosis must name the real 'workers' conflict");
+    assert!(f.cause.contains("Action:"), "diagnosis is actionable: {}", f.cause);
+    assert!(f.cause.contains("[1, 2]") && f.cause.contains('4'), "names the band + observed: {}", f.cause);
+    assert!(d.summary.contains("condition"), "summary counts the condition: {}", d.summary);
+
+    a.shutdown_with_timeout(Duration::from_secs(5)).await;
+}

@@ -790,6 +790,199 @@ pub async fn run_emergent_detectors(
     }
 }
 
+// ── Phase 4: the fleet narrative — "why is the fleet in this state" ────────────────────────────
+//
+// A templated rule engine over the Phase-2 snapshot (+ the Phase-3 counters it carries). Where the
+// snapshot *localizes* a pathology and the explain ring *sequences* it, the diagnosis *names the
+// cause* in terms an on-call engineer who did NOT build the system can act on. One rule per Phase-0
+// pathology; each fires only when its condition holds, and the throttle graph supplies the *because*
+// for opacity. RT1/RT2: every diagnosis is qualified by the observer's own view health.
+
+/// Fleet-opacity fraction (percent) at or above which opacity is a *storm* (Critical) rather than
+/// incidental (Warning) — one third of the fleet shedding is the point at which work visibly pools.
+const OPACITY_STORM_PCT: u64 = 34;
+
+/// Severity of a [`Finding`] — orders the diagnosis (most severe first) and colours an operator
+/// alert. Only the two tiers the current rules emit; an informational tier can be added with its
+/// first user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub enum Severity {
+    /// A pathology an operator should look at.
+    Warning,
+    /// A pathology actively degrading the fleet.
+    Critical,
+}
+
+/// One diagnosed condition: a stable `pathology` id, its `severity`, and the `cause` — a
+/// code-free, actionable sentence (the Phase-4 bar).
+#[derive(Debug, Clone, Serialize)]
+pub struct Finding {
+    pub pathology: String,
+    pub severity:  Severity,
+    pub cause:     String,
+}
+
+/// The fleet diagnosis: the observer, a one-line `summary`, the `findings` (most severe first), and
+/// an RT1/RT2 `caveat` when the observer's own view is partial or degraded (so a clean diagnosis
+/// from a blind node is never mistaken for a healthy fleet).
+#[derive(Debug, Clone, Serialize)]
+pub struct FleetDiagnosis {
+    pub observer: String,
+    pub summary:  String,
+    pub findings: Vec<Finding>,
+    pub caveat:   Option<String>,
+}
+
+/// **Pure** — diagnose the fleet from a snapshot. Deterministic given the same snapshot, so
+/// independent observers at convergence produce the same diagnosis (their `caveat` differs — it is
+/// each observer's own view health). One rule per Phase-0 pathology; a healthy fleet yields no
+/// findings and a "nominal" summary.
+pub fn diagnose_fleet(s: &FleetSnapshot) -> FleetDiagnosis {
+    let mut findings = Vec::new();
+
+    // P1 (+P2) — governed-group conflict, escalated to the #56 thrash when membership is flapping.
+    for g in s.governed_groups.iter().filter(|g| g.conflict) {
+        let band = format!("[{}, {}]", g.min, g.max.map(|m| m.to_string()).unwrap_or_else(|| "∞".into()));
+        if s.membership_flaps > 0 {
+            findings.push(Finding {
+                pathology: "governed_group_thrash".into(),
+                severity:  Severity::Critical,
+                cause: format!(
+                    "Group '{}': live membership {} is outside the governor's band {} AND membership \
+                     is flapping ({} pair(s) fleet-wide). This is the governor-vs-auto-join thrash: \
+                     the governor caps the group while auto-join keeps re-adding nodes. Action: align \
+                     the governor intent with the intended size, or pause auto-join for this group.",
+                    g.group, g.observed, band, s.membership_flaps,
+                ),
+            });
+        } else {
+            findings.push(Finding {
+                pathology: "governed_group_conflict".into(),
+                severity:  Severity::Warning,
+                cause: format!(
+                    "Group '{}': live membership {} is outside the governor's band {} (steady, not \
+                     flapping). Action: reconcile the governor intent with the actual pool size.",
+                    g.group, g.observed, band,
+                ),
+            });
+        }
+    }
+
+    // P4 — fleet-opacity storm. The throttle graph names *why* (which senders are being rate-limited).
+    if s.opaque_node_pct > 0 {
+        let because = if s.throttle_graph.is_empty() {
+            String::new()
+        } else {
+            let edges = s.throttle_graph.iter().take(3)
+                .map(|e| format!("{}→{} @ {} fps", e.sender, e.observer, e.observed_fps))
+                .collect::<Vec<_>>().join(", ");
+            format!(" Rate-limited edges (the likely reason): {edges}.")
+        };
+        if s.opaque_node_pct >= OPACITY_STORM_PCT {
+            findings.push(Finding {
+                pathology: "opacity_storm".into(),
+                severity:  Severity::Critical,
+                cause: format!(
+                    "Opacity storm: {}% of the fleet is opaque (overloaded / shedding load), so work \
+                     pools onto the non-opaque nodes.{} Action: add capacity, or raise the rate \
+                     limits that are shedding.",
+                    s.opaque_node_pct, because,
+                ),
+            });
+        } else {
+            findings.push(Finding {
+                pathology: "opacity_present".into(),
+                severity:  Severity::Warning,
+                cause: format!(
+                    "{}% of the fleet is opaque (some nodes are shedding load).{} Action: watch for it \
+                     spreading; check the rate limits on the opaque nodes.",
+                    s.opaque_node_pct, because,
+                ),
+            });
+        }
+    }
+
+    // P6 — capability-coverage gap.
+    if !s.capability_coverage_gaps.is_empty() {
+        findings.push(Finding {
+            pathology: "capability_coverage_gap".into(),
+            severity:  Severity::Warning,
+            cause: format!(
+                "No provider visible for demand(s): {}. Consumers of these capabilities will stall. \
+                 Action: check whether the providers crashed or were never deployed; (re-)advertise \
+                 the capability. NB: 'not visible from here' — a partitioned provider looks identical.",
+                s.capability_coverage_gaps.join(", "),
+            ),
+        });
+    }
+
+    // P3 — opacity oscillation.
+    if s.opacity_oscillations > 0 {
+        findings.push(Finding {
+            pathology: "opacity_oscillation".into(),
+            severity:  Severity::Warning,
+            cause: format!(
+                "{} node/kind pair(s) are oscillating in and out of the overload state (unstable \
+                 back-pressure — the load sits right at a rate threshold). Action: widen the rate \
+                 hysteresis or smooth the offered load so nodes settle.",
+                s.opacity_oscillations,
+            ),
+        });
+    }
+
+    // Consensus commit conflicts (the tripwire's hot slots).
+    if !s.commit_conflict_slots.is_empty() {
+        let slots = s.commit_conflict_slots.iter().take(5)
+            .map(|(slot, n)| format!("{slot} (×{n})")).collect::<Vec<_>>().join(", ");
+        findings.push(Finding {
+            pathology: "commit_conflict".into(),
+            severity:  Severity::Critical,
+            cause: format!(
+                "Consensus commit conflicts on slot(s): {slots}. Two proposals committed for the same \
+                 slot — a sign of split-brain proposing or a partition healing. Action: check \
+                 consensus membership and whether the cluster recently rejoined after a split.",
+            ),
+        });
+    }
+
+    findings.sort_by_key(|f| std::cmp::Reverse(f.severity));
+
+    let summary = if findings.is_empty() {
+        "Fleet nominal — no emergent pathologies detected from this observer's view.".into()
+    } else {
+        let crit = findings.iter().filter(|f| f.severity == Severity::Critical).count();
+        let warn = findings.iter().filter(|f| f.severity == Severity::Warning).count();
+        let mut parts = Vec::new();
+        if crit > 0 { parts.push(format!("{crit} critical")); }
+        if warn > 0 { parts.push(format!("{warn} warning")); }
+        format!("{} condition(s) detected ({}).", findings.len(), parts.join(", "))
+    };
+
+    // RT1/RT2 — qualify the diagnosis by the observer's own view health. A clean diagnosis from a
+    // blind or degraded node must NOT read as "the fleet is healthy".
+    let vc = &s.view_confidence;
+    let mut caveats = Vec::new();
+    if vc.self_degraded {
+        caveats.push("this observer is itself opaque/shedding, so its own inputs may be degraded".into());
+    }
+    if vc.peers_heard < vc.peers_known {
+        caveats.push(format!(
+            "partial view — heard {} of {} peers (stalest {} ms); pathologies on unheard nodes are \
+             invisible from here",
+            vc.peers_heard, vc.peers_known, vc.max_staleness_ms,
+        ));
+    }
+    let caveat = if caveats.is_empty() { None } else { Some(format!("⚠ {}.", caveats.join("; "))) };
+
+    FleetDiagnosis { observer: s.observer.clone(), summary, findings, caveat }
+}
+
+/// Compute this node's fleet diagnosis from local KV (snapshot → rule engine). The
+/// `GET /gateway/diagnose` surface.
+pub fn compute_fleet_diagnosis(ctx: &TaskCtx) -> FleetDiagnosis {
+    diagnose_fleet(&compute_fleet_snapshot(ctx))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1188,5 +1381,97 @@ mod tests {
         let story = narrate(&events);
         assert_eq!(story.len(), 1);
         assert!(story[0].contains("some_future_detector"), "unknown kind surfaced: {}", story[0]);
+    }
+
+    // ── Phase 4: fleet diagnosis (the "why is the fleet in this state" rule engine) ────────────
+
+    /// A healthy-fleet snapshot with a full, current view. Tests mutate one axis at a time.
+    fn nominal_snapshot() -> FleetSnapshot {
+        FleetSnapshot {
+            observer: "n1".into(),
+            view_confidence: ViewConfidence {
+                observer: "n1".into(), peers_known: 3, peers_heard: 3,
+                max_staleness_ms: 0, self_degraded: false,
+            },
+            governed_groups: vec![],
+            capability_coverage_gaps: vec![],
+            opaque_node_pct: 0,
+            opaque_pairs: vec![],
+            membership_flaps: 0,
+            opacity_oscillations: 0,
+            throttle_graph: vec![],
+            store_entries: 10,
+            store_hash: 0,
+            store_convergence: StoreConvergence { nodes_reporting: 3, min_entries: 10, max_entries: 10 },
+            commit_conflicts: 0,
+            commit_conflict_slots: vec![],
+        }
+    }
+
+    #[test]
+    fn diagnose_healthy_fleet_is_nominal_with_no_findings() {
+        let d = diagnose_fleet(&nominal_snapshot());
+        assert!(d.findings.is_empty());
+        assert!(d.summary.to_lowercase().contains("nominal"), "summary: {}", d.summary);
+        assert!(d.caveat.is_none(), "a full current view has no caveat");
+    }
+
+    #[test]
+    fn diagnose_names_the_56_thrash_actionably() {
+        // Governed-group conflict + flapping membership = the #56 governor-vs-auto-join thrash.
+        let mut s = nominal_snapshot();
+        s.governed_groups = vec![GroupStatus {
+            group: "workers".into(), min: 1, max: Some(2), observed: 4, conflict: true,
+        }];
+        s.membership_flaps = 1;
+        let d = diagnose_fleet(&s);
+        let f = d.findings.iter().find(|f| f.pathology == "governed_group_thrash")
+            .expect("thrash diagnosed");
+        assert_eq!(f.severity, Severity::Critical);
+        // Names the group, the band, the observed count, and an action — no code jargon.
+        assert!(f.cause.contains("workers") && f.cause.contains("[1, 2]") && f.cause.contains('4'));
+        assert!(f.cause.contains("Action:"), "actionable: {}", f.cause);
+        assert!(f.cause.to_lowercase().contains("auto-join"), "names the cause: {}", f.cause);
+    }
+
+    #[test]
+    fn diagnose_opacity_storm_names_the_throttle_reason() {
+        // A storm-level opacity fraction + a throttle edge: the diagnosis must name *why* (the edge).
+        let mut s = nominal_snapshot();
+        s.opaque_node_pct = 50;
+        s.throttle_graph = vec![ThrottleEdge {
+            observer: "n7".into(), sender: "n3".into(), observed_fps: 5,
+        }];
+        let d = diagnose_fleet(&s);
+        let f = d.findings.iter().find(|f| f.pathology == "opacity_storm").expect("storm diagnosed");
+        assert_eq!(f.severity, Severity::Critical);
+        assert!(f.cause.contains("50%"), "names the fraction: {}", f.cause);
+        assert!(f.cause.contains("n3→n7") && f.cause.contains("5 fps"), "names the throttle reason: {}", f.cause);
+    }
+
+    #[test]
+    fn diagnose_coverage_gap_is_flagged_and_partial_view_caveated() {
+        let mut s = nominal_snapshot();
+        s.capability_coverage_gaps = vec!["ai/llm".into()];
+        // Observer hears only 1 of 3 peers ⇒ RT1/RT2 caveat.
+        s.view_confidence.peers_heard = 1;
+        s.view_confidence.max_staleness_ms = 9_000;
+        let d = diagnose_fleet(&s);
+        assert!(d.findings.iter().any(|f| f.pathology == "capability_coverage_gap"
+            && f.cause.contains("ai/llm") && f.cause.contains("Action:")));
+        let caveat = d.caveat.expect("partial view is caveated");
+        assert!(caveat.contains("heard 1 of 3"), "caveat names the partial view: {caveat}");
+    }
+
+    #[test]
+    fn diagnose_orders_findings_most_severe_first() {
+        // A warning (coverage gap) plus a critical (commit conflict): critical must sort first.
+        let mut s = nominal_snapshot();
+        s.capability_coverage_gaps = vec!["ai/llm".into()];
+        s.commit_conflict_slots = vec![("slot-9".into(), 3)];
+        let d = diagnose_fleet(&s);
+        assert!(d.findings.len() >= 2);
+        assert_eq!(d.findings[0].severity, Severity::Critical, "most-severe first");
+        assert!(d.summary.contains("critical"), "summary counts severities: {}", d.summary);
     }
 }

@@ -187,7 +187,9 @@ pub(super) async fn run_http_server(
         // ── Legible Emergence Phase 2: the relational fleet snapshot (localize) ─
         .route("/fleet",                          get(gw_fleet_snapshot))
         // ── Legible Emergence Phase 3: the causal event ring (explain) ─────────
-        .route("/explain",                        get(gw_explain));
+        .route("/explain",                        get(gw_explain))
+        // ── Legible Emergence Phase 4: the fleet narrative (why / diagnose) ────
+        .route("/diagnose",                       get(gw_diagnose));
 
     // ── Consensus + the consistency/lock/election overlays built on it ────────
     // (v2 M2 feature gate). The ordered-log and reliable-delivery overlays above
@@ -443,6 +445,7 @@ fn required_scope(method: &axum::http::Method, matched_path: &str) -> &'static s
         // Legible Emergence Phase 2/3: the relational fleet snapshot + causal explain.
         "/gateway/fleet"               => "fleet:read",
         "/gateway/explain"             => "fleet:read",
+        "/gateway/diagnose"            => "fleet:read",
         // Deny-by-default.
         _ => "admin",
     }
@@ -812,6 +815,16 @@ async fn gw_govern_snapshot(State(ctx): State<Arc<HttpCtx>>) -> impl IntoRespons
 /// `view_confidence` stays each observer's own). Scope `fleet:read`.
 async fn gw_fleet_snapshot(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
     Json(super::emergent::compute_fleet_snapshot(&ctx.agent_ctx)).into_response()
+}
+
+/// `GET /gateway/diagnose` — the Legible-Emergence Phase-4 **fleet narrative**: the "why is the
+/// fleet in this state" diagnosis. A templated rule engine over the Phase-2 snapshot (one rule per
+/// Phase-0 pathology) that names each cause in code-free, actionable terms — the artifact an on-call
+/// engineer who did not build the system can act on. Every diagnosis is qualified by the observer's
+/// own RT1/RT2 view health (`caveat`), so a clean read from a blind node is not mistaken for a
+/// healthy fleet. Scope `fleet:read`.
+async fn gw_diagnose(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
+    Json(super::emergent::compute_fleet_diagnosis(&ctx.agent_ctx)).into_response()
 }
 
 /// `GET /gateway/explain?since=<hlc>` — the Legible-Emergence Phase-3 causal **explain**: the
@@ -3090,6 +3103,7 @@ mod tests {
         assert_eq!(required_scope(&Method::POST, "/gateway/llm/call"), "llm:invoke");
         assert_eq!(required_scope(&Method::GET,  "/gateway/fleet"), "fleet:read");
         assert_eq!(required_scope(&Method::GET,  "/gateway/explain"), "fleet:read");
+        assert_eq!(required_scope(&Method::GET,  "/gateway/diagnose"), "fleet:read");
         // deny-by-default: anything unmapped requires admin.
         assert_eq!(required_scope(&Method::POST, "/gateway/some/future/route"), "admin");
     }

@@ -1,6 +1,6 @@
 # Legible Emergence — making coordinator-free fleets diagnosable
 
-**Status:** 🟢 **Phases 0–3 done; Phases 4–5 not started** (proposed 2026-06-21;
+**Status:** 🟢 **Phases 0–4 done; Phase 5 not started** (proposed 2026-06-21;
 red-teamed + Phase-0 taxonomy 2026-07-02; all 5 Phase-1 detectors (P1/P2/P3/P4/P6) + `/metrics` shipped 2026-07-02). Phase 0 shipped as
 [`docs/design/legible-emergence-taxonomy.md`](../design/legible-emergence-taxonomy.md) (the
 pathology taxonomy, with RT1–RT4 baked in). The **Red-team findings** section (below, near the
@@ -212,15 +212,30 @@ central log; bounded memory; opt-in. **Gate:** reconstruct the #56 sequence end-
 ("governor capped at 8 @ hlc_X → auto-join re-added node @ hlc_Y → governor drained @ hlc_Z → …")
 from the assembled rings, with no designer knowledge required to read it.
 
-### Phase 4 — Fleet narrative (the "why is the fleet in this state" — the differentiator payoff)
+### Phase 4 — Fleet narrative (the "why is the fleet in this state" — the differentiator payoff) — 🟢 DONE
 
-Extend the per-node opacity self-explanation to a **fleet-level narrative** over the Phase 2
-snapshot + Phase 3 causal data: *"Work is pooling on node-7 because nodes 3,4,5 are opaque
-(reason: rate-limit aggregate) and the membership governor capped the group at 8 while auto-join is
-contending — see the conflict @ hlc_Y."* A templated rule engine over the detector/snapshot/ring
-outputs, producing a human-readable diagnosis. This is the artifact that directly answers the SRE's
-fear. **Gate:** for each Phase-0 pathology, the narrative names the cause in terms an on-call
-engineer who did **not** build the system can act on (the acceptance test below).
+**Shipped.** `diagnose_fleet(&FleetSnapshot) -> FleetDiagnosis` (`src/agent/emergent.rs`) — a **pure,
+templated rule engine** over the Phase-2 snapshot (+ the Phase-3 counters it carries). Where the
+snapshot *localizes* a pathology and the explain ring *sequences* it, the diagnosis **names the
+cause** in code-free, actionable terms. One rule per Phase-0 pathology, each firing only when its
+condition holds:
+
+- **governed_group_thrash / _conflict** (P1+P2) — a conflicting group, escalated to Critical "the
+  governor-vs-auto-join thrash" when membership is also flapping (the #56 signature); names the
+  group, band, observed count, and the fix.
+- **opacity_storm / opacity_present** (P4) — `opaque_node_pct ≥ 34%` is a storm; the **throttle
+  graph supplies the *because*** ("rate-limited edges n3→n7 @ 5 fps — the likely reason").
+- **capability_coverage_gap** (P6), **opacity_oscillation** (P3), **commit_conflict** — each with an
+  actionable cause + the RT3 "not visible from here" honesty on the coverage gap.
+
+Findings are sorted most-severe-first; a healthy fleet yields no findings and a "nominal" summary.
+**RT1/RT2:** every diagnosis carries a `caveat` when the observer's own view is partial
+(`peers_heard < peers_known`) or self-degraded — a clean read from a blind node never reads as "the
+fleet is healthy". Surfaced at `GET /gateway/diagnose` (scope `fleet:read`). **Gates:** five unit
+rules (each pathology → actionable cause; ordering; healthy=nominal; partial-view caveat) +
+`test_fleet_diagnosis_names_a_real_governed_group_conflict` (grounds the engine against a *real*
+KV-derived snapshot, not a synthetic struct). The SRE-fear acceptance test (below) is met per
+pathology.
 
 ### Phase 5 — Operator surface, runbook, alerts, docs
 
