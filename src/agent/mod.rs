@@ -362,6 +362,12 @@ pub(crate) struct TaskCtx {
     /// `compute`). Read by the fleet snapshot; empty when there are no conflicts / no consensus.
     pub(crate) commit_conflict_slots: Arc<papaya::HashMap<Arc<str>, u64>>,
 
+    /// Legible-Emergence Phase 3: the bounded, HLC-stamped **event ring** — the per-node source the
+    /// `explain` fan-out assembles in causal order. Always allocated (tiny); recorded to only when
+    /// `emergent_detectors_enabled` (RT4 always-on-when-enabled). Lock #: leaf, short critical
+    /// section, never across `await`.
+    pub(crate) event_ring: Arc<emergent::EventRing>,
+
     /// Legible-Emergence Phase-1 gauge: count of governed groups currently in a **confirmed**
     /// membership conflict (observed `grp/` count outside the governor's `[min,max]`, sustained
     /// past hysteresis). Set each tick by [`emergent::run_emergent_detectors`]; `0` unless
@@ -789,6 +795,7 @@ impl GossipAgent {
             rpc_pending: Arc::clone(&rpc_pending),
             commit_conflicts: Arc::new(AtomicU64::new(0)),
             commit_conflict_slots: Arc::new(papaya::HashMap::new()),
+            event_ring: Arc::new(emergent::EventRing::default()),
             governed_group_conflicts: Arc::new(AtomicU64::new(0)),
             capability_coverage_gaps: Arc::new(AtomicU64::new(0)),
             membership_flaps: Arc::new(AtomicU64::new(0)),

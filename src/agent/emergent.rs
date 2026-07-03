@@ -371,6 +371,66 @@ pub fn compute_view_confidence(ctx: &TaskCtx) -> ViewConfidence {
     }
 }
 
+// ── Phase 3: the causal event ring (the "explain" source) ─────────────────────────────────────
+
+/// Bounded event-ring capacity. RT4 decision (taxonomy §6): the ring is **always-on when the
+/// detector feature is enabled** (so post-hoc `explain` works — a ring switched on mid-incident
+/// can only explain *future* ones), fixed-memory, oldest dropped first. ~1024 significant events ×
+/// ~128 B ≈ 128 KB/node — cheap enough to leave on.
+const EVENT_RING_CAP: usize = 1024;
+
+/// One *significant* fleet event, HLC-stamped for cross-node causal ordering. "Significant" =
+/// state changes (a detector firing/clearing, a commit conflict), **not** a per-message firehose.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Event {
+    /// HLC stamp — the causal-order key the Phase-3 fan-out assembles peer rings by.
+    pub hlc:    u64,
+    /// Originating node (so an assembled cross-node stream stays attributable).
+    pub node:   String,
+    /// Event kind, e.g. `"commit_conflict"`, `"governed_group_conflict"`.
+    pub kind:   String,
+    /// Human-readable detail — legible to a non-designer (the DoD bar).
+    pub detail: String,
+}
+
+/// A per-node bounded ring of [`Event`]s. Leaf lock (short synchronous push/scan, never across
+/// `await`) — see the lock-order table.
+#[derive(Default)]
+pub struct EventRing {
+    events: std::sync::Mutex<std::collections::VecDeque<Event>>,
+}
+
+impl EventRing {
+    /// Append an event, dropping the oldest if at capacity.
+    pub fn record(&self, ev: Event) {
+        let mut q = self.events.lock().unwrap_or_else(|e| e.into_inner());
+        if q.len() >= EVENT_RING_CAP {
+            q.pop_front();
+        }
+        q.push_back(ev);
+    }
+
+    /// Events with `hlc >= since`, in HLC causal order (oldest first). `since = 0` = everything.
+    pub fn since(&self, since: u64) -> Vec<Event> {
+        let q = self.events.lock().unwrap_or_else(|e| e.into_inner());
+        let mut v: Vec<Event> = q.iter().filter(|e| e.hlc >= since).cloned().collect();
+        v.sort_by_key(|e| e.hlc);
+        v
+    }
+}
+
+/// Record a significant event into this node's ring, HLC-stamped now. A no-op-cheap helper the
+/// detector loop and the commit-conflict tripwire call. Callers gate on `emergent_detectors_enabled`
+/// (the loop is only spawned when enabled; the tripwire checks the flag) — RT4 zero-overhead-off.
+pub fn record_event(ctx: &TaskCtx, kind: &str, detail: String) {
+    ctx.event_ring.record(Event {
+        hlc:    ctx.hlc.tick(),
+        node:   ctx.node_id.to_string(),
+        kind:   kind.to_string(),
+        detail,
+    });
+}
+
 // ── Phase 2: the relational fleet snapshot (GET /gateway/fleet) ───────────────────────────────
 
 /// The status of one governed group in the fleet snapshot — the relational "localize" view: the
@@ -508,6 +568,9 @@ pub async fn run_emergent_detectors(
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut conflict_streaks: HashMap<String, u32> = HashMap::new();
     let mut gap_streaks: HashMap<String, u32> = HashMap::new();
+    // P3-explain: record a *significant event* whenever a detector's confirmed count changes
+    // (onset/clear), not every tick — the event ring is the state-change history, not a firehose.
+    let (mut prev_conf, mut prev_gaps, mut prev_flaps, mut prev_osc) = (0u64, 0u64, 0u64, 0u64);
     // P2 flap state: seed prev-membership at spawn so the initial roster is not counted as joins.
     let mut prev_membership = membership_snapshot(&ctx.kv_state);
     let mut flap_tracker = FlapTracker::default();
@@ -542,6 +605,23 @@ pub async fn run_emergent_detectors(
                 let oscillations = osc_tracker.flapping_count(now, FLAP_WINDOW_MS, FLAP_THRESHOLD);
                 ctx.opacity_oscillations.store(oscillations, Ordering::Relaxed);
                 prev_opacity = curr_opacity;
+                // Record detector-state transitions into the event ring (the "explain" history).
+                if confirmed != prev_conf {
+                    record_event(&ctx, "governed_group_conflict", format!("confirmed conflicts {prev_conf} → {confirmed}"));
+                    prev_conf = confirmed;
+                }
+                if confirmed_gaps != prev_gaps {
+                    record_event(&ctx, "capability_coverage_gap", format!("coverage gaps {prev_gaps} → {confirmed_gaps}"));
+                    prev_gaps = confirmed_gaps;
+                }
+                if flaps != prev_flaps {
+                    record_event(&ctx, "membership_flap", format!("flapping pairs {prev_flaps} → {flaps}"));
+                    prev_flaps = flaps;
+                }
+                if oscillations != prev_osc {
+                    record_event(&ctx, "opacity_oscillation", format!("oscillating pairs {prev_osc} → {oscillations}"));
+                    prev_osc = oscillations;
+                }
                 // The loop is the periodic emitter for the `/metrics` surface (Prometheus scrapes a
                 // registry, so gauges must be *set* on a tick, not computed on scrape). Emitted with
                 // the RT1/RT2 view-confidence gauges so an operator's alert can qualify a diagnostic
@@ -877,6 +957,29 @@ mod tests {
         assert_eq!(g[0].sender, "flooder");
         assert_eq!(g[0].observed_fps, 8000);
         assert_eq!(g[1].observer, "nodeB");
+    }
+
+    /// Phase 3 — the event ring is bounded (oldest dropped), and `since` returns HLC-ordered events
+    /// at or after the cursor.
+    #[test]
+    fn event_ring_is_bounded_and_since_filters_in_order() {
+        let ring = EventRing::default();
+        // Insert out of HLC order; `since` must sort.
+        ring.record(Event { hlc: 30, node: "n".into(), kind: "k".into(), detail: "c".into() });
+        ring.record(Event { hlc: 10, node: "n".into(), kind: "k".into(), detail: "a".into() });
+        ring.record(Event { hlc: 20, node: "n".into(), kind: "k".into(), detail: "b".into() });
+        let all = ring.since(0);
+        assert_eq!(all.iter().map(|e| e.hlc).collect::<Vec<_>>(), vec![10, 20, 30], "HLC-sorted");
+        assert_eq!(ring.since(20).iter().map(|e| e.hlc).collect::<Vec<_>>(), vec![20, 30], "since filters");
+
+        // Bounded: fill past capacity, oldest dropped.
+        let ring = EventRing::default();
+        for i in 0..(EVENT_RING_CAP as u64 + 50) {
+            ring.record(Event { hlc: i, node: "n".into(), kind: "k".into(), detail: String::new() });
+        }
+        let all = ring.since(0);
+        assert_eq!(all.len(), EVENT_RING_CAP, "ring is fixed-memory");
+        assert_eq!(all[0].hlc, 50, "oldest 50 dropped");
     }
 
     /// Phase 2 — store-convergence reports the spread of fresh `sys/health/` entry counts; a stale

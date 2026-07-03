@@ -1,6 +1,6 @@
 # Legible Emergence — making coordinator-free fleets diagnosable
 
-**Status:** 🟢 **Phases 0–2 done; Phases 3–5 not started** (proposed 2026-06-21;
+**Status:** 🟢 **Phases 0–2 done; Phase 3 in progress; Phases 4–5 not started** (proposed 2026-06-21;
 red-teamed + Phase-0 taxonomy 2026-07-02; all 5 Phase-1 detectors (P1/P2/P3/P4/P6) + `/metrics` shipped 2026-07-02). Phase 0 shipped as
 [`docs/design/legible-emergence-taxonomy.md`](../design/legible-emergence-taxonomy.md) (the
 pathology taxonomy, with RT1–RT4 baked in). The **Red-team findings** section (below, near the
@@ -167,7 +167,15 @@ from local KV** — any node answers it, and it survives killing any node. **Gat
 divergent/conflicted fleet, the snapshot from *three different nodes* agrees on the diagnosis; the
 endpoint correctly names a synthetic capability-coverage gap and a governed-group conflict.
 
-### Phase 3 — Causal event ring + fan-out reconstruction (the hard "Explain")
+### Phase 3 — Causal event ring + fan-out reconstruction (the hard "Explain") — 🟡 IN PROGRESS
+
+**Increment 1 shipped:** the bounded HLC-stamped `EventRing` (`src/agent/emergent.rs`, RT4
+always-on-when-enabled, fixed ~1024 events) + recording from the detector loop (state-change
+transitions, not a firehose) and the consensus commit-conflict tripwire, + `GET /gateway/explain?since=`
+(scope `fleet:read`) returning **this node's** HLC-ordered ring. Remaining: the cross-node
+scatter-gather assembly (RT3 — render what you have, name non-responders) + the #56-sequence
+reconstruction gate.
+
 
 Each node keeps a **bounded, fixed-memory, HLC-stamped ring buffer** of *significant* events (role
 changes, opacity transitions, governor actions, commit conflicts, throttle decisions, membership

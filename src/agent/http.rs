@@ -185,7 +185,9 @@ pub(super) async fn run_http_server(
         .route("/govern/timing",                  post(gw_govern_timing))
         .route("/govern/membership",              post(gw_govern_membership))
         // ── Legible Emergence Phase 2: the relational fleet snapshot (localize) ─
-        .route("/fleet",                          get(gw_fleet_snapshot));
+        .route("/fleet",                          get(gw_fleet_snapshot))
+        // ── Legible Emergence Phase 3: the causal event ring (explain) ─────────
+        .route("/explain",                        get(gw_explain));
 
     // ── Consensus + the consistency/lock/election overlays built on it ────────
     // (v2 M2 feature gate). The ordered-log and reliable-delivery overlays above
@@ -438,8 +440,9 @@ fn required_scope(method: &axum::http::Method, matched_path: &str) -> &'static s
         "/gateway/govern/tuning"       => "govern:write",
         "/gateway/govern/timing"       => "govern:write",
         "/gateway/govern/membership"   => "govern:write",
-        // Legible Emergence Phase 2: the relational fleet snapshot.
+        // Legible Emergence Phase 2/3: the relational fleet snapshot + causal explain.
         "/gateway/fleet"               => "fleet:read",
+        "/gateway/explain"             => "fleet:read",
         // Deny-by-default.
         _ => "admin",
     }
@@ -809,6 +812,22 @@ async fn gw_govern_snapshot(State(ctx): State<Arc<HttpCtx>>) -> impl IntoRespons
 /// `view_confidence` stays each observer's own). Scope `fleet:read`.
 async fn gw_fleet_snapshot(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
     Json(super::emergent::compute_fleet_snapshot(&ctx.agent_ctx)).into_response()
+}
+
+/// `GET /gateway/explain?since=<hlc>` — the Legible-Emergence Phase-3 causal **explain**: this
+/// node's HLC-ordered ring of significant events (`?since` filters to `hlc >= since`; default all).
+/// Increment 1 returns **this node's** ring; the cross-node scatter-gather assembly is increment 2.
+/// Scope `fleet:read`.
+async fn gw_explain(
+    State(ctx): State<Arc<HttpCtx>>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let since = q.get("since").and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+    Json(json!({
+        "node_id": ctx.agent_ctx.node_id.to_string(),
+        "events":  ctx.agent_ctx.event_ring.since(since),
+    }))
+    .into_response()
 }
 
 /// `POST /gateway/govern/tuning` — publish a cluster-wide (or `target`-ed) tuning
@@ -3073,6 +3092,7 @@ mod tests {
         assert_eq!(required_scope(&Method::GET,  "/gateway/overlay/consistent/get"), "consensus:read");
         assert_eq!(required_scope(&Method::POST, "/gateway/llm/call"), "llm:invoke");
         assert_eq!(required_scope(&Method::GET,  "/gateway/fleet"), "fleet:read");
+        assert_eq!(required_scope(&Method::GET,  "/gateway/explain"), "fleet:read");
         // deny-by-default: anything unmapped requires admin.
         assert_eq!(required_scope(&Method::POST, "/gateway/some/future/route"), "admin");
     }

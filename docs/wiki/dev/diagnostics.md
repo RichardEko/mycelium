@@ -71,6 +71,8 @@ carries the throttle graph (`sys/rate/` edges), **cross-node store-convergence**
 `sys/health/{node}` entry-count self-reports — a *count* not a hash, since a hash churns every tick
 as soft-state refreshes; each node publishes its report from the detector loop), and
 **commit-conflict hot slots** (`commit_conflict_slots` — the consensus tripwire records each
-conflicting slot in a lock-free papaya map). Phase 2 is complete. Not started: Phase 3 (causal event
-ring + scatter-gather `explain`), Phase 4 (fleet narrative), Phase 5 (operator surface). The
+conflicting slot in a lock-free papaya map). Phase 2 is complete. **Phase 3 in progress** — the bounded HLC-stamped `EventRing` (RT4 always-on-when-enabled)
+records detector-state transitions + commit conflicts; `GET /gateway/explain?since=` (scope
+`fleet:read`) returns this node's HLC-ordered ring. Remaining: the cross-node scatter-gather
+assembly. Not started: Phase 4 (fleet narrative), Phase 5 (operator surface). The
 red-team findings (RT1–RT4) and their Phase-2+ implications are in the plan.

@@ -1338,6 +1338,14 @@ pub(crate) async fn run_consensus_listener(
                                 papaya::Operation::<u64, ()>::Insert(n)
                             },
                         );
+                        // Phase 3 explain: record the event (gated — the ring only records when
+                        // the diagnostics feature is on; RT4 zero-overhead-off).
+                        if ctx.task_ctx.config.emergent_detectors_enabled {
+                            crate::agent::emergent::record_event(
+                                &ctx.task_ctx, "commit_conflict",
+                                format!("conflicting COMMIT for live slot {slot} at ballot {ballot}"),
+                            );
+                        }
                         tracing::warn!(
                             slot = %slot, ballot,
                             "commit conflict: COMMIT carries a different value for a \
