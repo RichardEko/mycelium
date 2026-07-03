@@ -117,6 +117,9 @@ jobs:
       # Phase 2 — the Mycelium control plane (curator election + failover, single-writer apply).
       - run: cargo test -p mycelium-wiki --features control-plane
       - run: cargo clippy -p mycelium-wiki --features control-plane --all-targets -- -D warnings
+      # Phase 3 — the LLM curator (the 3-way reconcile; the EchoBackend test proves the backend wiring).
+      - run: cargo test -p mycelium-wiki --features llm
+      - run: cargo clippy -p mycelium-wiki --features llm --all-targets -- -D warnings
 
   conway-gpu:
     # Standalone GPU demo (examples/conway-gpu): excluded from the workspace so its

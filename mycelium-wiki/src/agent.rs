@@ -18,6 +18,7 @@ use tokio::task::JoinHandle;
 use mycelium::{CapFilter, Capability, CapabilityReg, GossipAgent, NodeId};
 
 use crate::model::{mint_section_id, Page, Predicate, Section, SectionId, SectionRef, WikiError};
+use crate::reconcile::{DirectReconciler, ProposalEdit, Reconciler};
 use crate::store::WikiStore;
 
 /// A node's intended role in a group's wiki (mirrors `TupleRole` / `BoardRole`).
@@ -68,6 +69,14 @@ struct WireProposal {
     author:     String,
 }
 
+/// One drain's worth of proposals for a single section: the KV keys to tombstone once applied, and the
+/// edits in queue order for the [`Reconciler`].
+#[derive(Default)]
+struct SectionBatch {
+    keys:  Vec<Arc<str>>,
+    edits: Vec<ProposalEdit>,
+}
+
 /// An agent-backed group wiki: propose/read/query over a coordinator-free curator discovered on the
 /// capability ring, with emergent failover. The **data plane** is the injected [`WikiStore`] (each
 /// node holds a handle to the *same* node-independent store). Construct after `agent.start()`.
@@ -75,6 +84,9 @@ pub struct Wiki<S: WikiStore + 'static> {
     agent:            Arc<GossipAgent>,
     cfg:              WikiConfig,
     store:            Arc<S>,
+    /// How the curator merges a batch of same-section proposals (Phase 3). Default: the deterministic
+    /// append-merge ([`DirectReconciler`]); [`Wiki::with_reconciler`] injects the LLM curator.
+    reconciler:       Box<dyn Reconciler>,
     is_curator:       AtomicBool,
     curator_reg:      Mutex<Option<CapabilityReg>>,
     candidate_reg:    Mutex<Option<CapabilityReg>>,
@@ -83,12 +95,20 @@ pub struct Wiki<S: WikiStore + 'static> {
 }
 
 impl<S: WikiStore + 'static> Wiki<S> {
-    /// Construct and start whatever the configured role needs.
+    /// Construct with the default (no-LLM) append-merge curator and start whatever the role needs.
     pub async fn new(agent: Arc<GossipAgent>, cfg: WikiConfig, store: Arc<S>) -> Arc<Self> {
+        Self::with_reconciler(agent, cfg, store, Box::new(DirectReconciler)).await
+    }
+
+    /// Construct with a custom [`Reconciler`] (e.g. the LLM curator) and start whatever the role needs.
+    pub async fn with_reconciler(
+        agent: Arc<GossipAgent>, cfg: WikiConfig, store: Arc<S>, reconciler: Box<dyn Reconciler>,
+    ) -> Arc<Self> {
         let w = Arc::new(Self {
             agent,
             cfg,
             store,
+            reconciler,
             is_curator:       AtomicBool::new(false),
             curator_reg:      Mutex::new(None),
             candidate_reg:    Mutex::new(None),
@@ -167,7 +187,7 @@ impl<S: WikiStore + 'static> Wiki<S> {
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tick.tick().await;
-                me.drain_once();
+                me.drain_once().await;
             }
         });
         self.tasks.lock().push(h);
@@ -222,38 +242,50 @@ impl<S: WikiStore + 'static> Wiki<S> {
 
     // ── the single-writer apply ────────────────────────────────────────────────
 
-    /// Drain every pending proposal and apply it to the store. Only the curator runs this. Idempotent:
-    /// an apply re-run after a crash (proposal not yet deleted) upserts the same section → same result.
-    fn drain_once(&self) {
+    /// Drain every pending proposal and apply it to the store. Only the curator runs this. Proposals
+    /// are **grouped by target section** so a same-section conflict reaches the [`Reconciler`] as one
+    /// batch (the whole point of a single writer — no lost update, no CRDT). Idempotent: a batch
+    /// re-drained after a crash reconciles to the same result (the append-merge skips contained edits).
+    async fn drain_once(&self) {
         let prefix = format!("wiki/{}/proposal/", self.cfg.group);
+        let mut groups: BTreeMap<(String, SectionId), SectionBatch> = BTreeMap::new();
         for (key, value) in self.agent.kv().scan_prefix(&prefix) {
             let Ok(p) = serde_json::from_slice::<WireProposal>(&value) else {
                 let _ = self.agent.kv().delete(key); // undecodable → drop, don't wedge the queue
                 continue;
             };
-            if self.apply(&p).is_ok() {
-                let _ = self.agent.kv().delete(key); // tombstone only after the store write landed
+            let batch = groups.entry((p.page, p.section)).or_default();
+            batch.keys.push(key);
+            batch.edits.push(ProposalEdit { heading: p.heading, body: p.body, attributes: p.attributes, author: p.author });
+        }
+        for ((page, section), batch) in groups {
+            if self.apply_group(&page, &section, &batch.edits).await.is_ok() {
+                for key in batch.keys {
+                    let _ = self.agent.kv().delete(key); // tombstone only after the store write landed
+                }
             }
         }
     }
 
-    /// Apply one proposal: upsert its section into the target page and write the page (manifest-last).
-    /// The Phase-2 apply is a direct upsert; the LLM 3-way reconcile for same-section conflicts lands
-    /// in Phase 3.
-    fn apply(&self, p: &WireProposal) -> Result<(), WikiError> {
-        let existing = self.store.read(&p.page)?;
+    /// Reconcile one section's batch of proposals against its current text and write the page back
+    /// (manifest-last). The reconcile is [`DirectReconciler`] by default (lossless append-merge) or the
+    /// injected LLM curator.
+    async fn apply_group(&self, page: &str, section: &SectionId, edits: &[ProposalEdit]) -> Result<(), WikiError> {
+        let existing = self.store.read(page)?;
         let (mut sections, page_attrs) = match existing {
-            Some(page) => (page.sections, page.attributes),
-            None        => (Vec::new(), BTreeMap::new()),
+            Some(pg) => (pg.sections, pg.attributes),
+            None      => (Vec::new(), BTreeMap::new()),
         };
+        // Clone the current section so the immutable borrow ends before the reconcile await + the upsert.
+        let current = sections.iter().find(|s| &s.id == section).cloned();
+        let merged = self.reconciler.reconcile(page, section, current.as_ref(), edits).await;
         let sec = Section {
-            id: p.section.clone(), heading: p.heading.clone(), body: p.body.clone(),
-            attributes: p.attributes.clone(),
+            id: section.clone(), heading: merged.heading, body: merged.body, attributes: merged.attributes,
         };
-        match sections.iter_mut().find(|s| s.id == p.section) {
+        match sections.iter_mut().find(|s| &s.id == section) {
             Some(slot) => *slot = sec,          // edit an existing section
             None        => sections.push(sec),  // new section
         }
-        self.store.write_page(&p.page, &sections, &page_attrs)
+        self.store.write_page(page, &sections, &page_attrs)
     }
 }

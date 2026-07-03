@@ -305,11 +305,26 @@ no longer the build spine — it is the disconnected variant in the design recor
   passed, 2.8 s). *Remaining:* the **access broker** (scoped read grant → group-membership gate) — a
   store-adapter concern — and TTL-evaporation of abandoned proposals; the Phase-2 apply is a direct
   upsert (the LLM 3-way reconcile is Phase 3).
-- **Phase 3 — the LLM ingest/lint loop.** Curator drains proposals → LLM reconcile (3-way against
-  current store content) → single write; periodic lint generalising `/wiki-lint`: dead cross-links,
-  orphans, the cited-fact check, and — for UC1 — **semantic self-consistency** (no cross-section
-  contradictions). Behind the `llm` feature; a no-LLM fallback appends proposals verbatim (uncurated
-  but useful).
+- **Phase 3 — the LLM reconcile.** ✅ **the reconcile shipped (2026-07-03)**; the lint loop is the
+  open remainder. The curator's drain now **groups proposals by target section** and hands each batch to
+  a pluggable [`Reconciler`] (a dyn-safe `#[async_trait]` trait), so a same-section conflict is resolved
+  by *one* writer holding *all* the proposals — the single-writer dividend, no CRDT, no lost update.
+  Two implementations:
+  - `DirectReconciler` (default, no LLM) — a deterministic **lossless append-merge**: appends each
+    distinct proposal body, skips one already contained. That skip is what makes it **idempotent**, so
+    a curator can crash mid-drain and the re-elected one re-drains the same batch to the same result.
+  - `LlmReconciler` (feature `llm`) — a real **3-way merge** over a `mycelium::LlmBackend`: the LLM
+    curates the section **prose** (resolve conflicts, drop redundancy, keep meaning) while heading and
+    attributes are merged **structurally** (code-controlled — the model does not invent join keys). Any
+    backend error falls back to the append-merge, so an LLM outage degrades curation, never a write.
+
+  *Verified:* 4 reconcile unit tests (new-section, lossless append, idempotent replay, attribute
+  last-wins) + the `EchoBackend`-driven `llm` test proving the backend is called and its completion
+  becomes the section body; the cross-node `failover.rs` still passes unchanged (the drain restructure
+  preserved single-writer behaviour). *Remaining for Phase 3:* the **periodic lint loop** (generalising
+  `/wiki-lint`: dead cross-links, orphans, the cited-fact check, and — for UC1 — **semantic
+  self-consistency**, no cross-section contradictions) — a curator background task, separable from the
+  reconcile and landing next.
 - **Phase 4 — MCP tool + gateway + SDKs.** The wiki as an **MCP tool** (`wiki.read`/`propose`/`query`)
   so agents reach it the way they reach any tool; `POST /gateway/wiki/{read,propose}` +
   `GET /gateway/wiki/query`; Python/TS `WikiClient`.

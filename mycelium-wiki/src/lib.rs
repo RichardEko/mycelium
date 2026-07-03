@@ -33,6 +33,8 @@ mod store;
 mod fs;
 #[cfg(feature = "control-plane")]
 mod agent;
+#[cfg(feature = "control-plane")]
+mod reconcile;
 
 pub use model::{
     mint_section_id, Manifest, Page, Predicate, Section, SectionId, SectionRef, WikiError,
@@ -45,3 +47,11 @@ pub use fs::FsStore;
 /// data plane above stays Mycelium-agnostic.
 #[cfg(feature = "control-plane")]
 pub use agent::{Wiki, WikiConfig, WikiRole};
+
+/// The curator's **reconcile** (Phase 3) — how a batch of same-section proposals is merged. The
+/// default [`DirectReconciler`] is a lossless no-LLM append-merge; [`LlmReconciler`] (feature `llm`) is
+/// a real 3-way merge over a `mycelium::LlmBackend`. Inject via [`Wiki::with_reconciler`].
+#[cfg(feature = "control-plane")]
+pub use reconcile::{DirectReconciler, ProposalEdit, Reconciled, Reconciler};
+#[cfg(feature = "llm")]
+pub use reconcile::LlmReconciler;
