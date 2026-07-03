@@ -2048,16 +2048,19 @@ async fn test_manage_opacity_gate_vetoes_then_library_overrides() {
     // Fill to 100% — library overrides the gate (at `fill_ratio >= 1.0` the emit is
     // unconditional, `src/agent/opacity.rs`), so BOUNDARY_OPAQUE is *guaranteed*; only its
     // latency is in question. That latency is the governor's 100 ms ticker being **scheduled**,
-    // and under the full-feature `Test` job (tls,metrics,a2a,llm × ~314 parallel tests) the
-    // ticker starves: a 3 s bound flaked on CI 2026-07-02 (passed locally + on rerun). Poll
-    // generously — 10 s costs nothing on a healthy run (it returns on the first tick, ~100 ms)
-    // and only spends the budget when the runtime is saturated. `recv_within!` polls in 200 ms
-    // steps, so this is patience, not a fixed sleep.
+    // and under the full-feature `Test` job (tls,metrics,a2a,llm × ~345 parallel tests) the
+    // ticker starves. History: a 3 s bound flaked on CI 2026-07-02; widened to 10 s; flaked
+    // *again* 2026-07-03 (48 s Test run — the runner was saturated past 10 s). Now 30 s. This
+    // costs nothing on a healthy run (it returns on the first tick, ~100 ms) and only spends the
+    // budget when the runtime is saturated; `recv_within!` polls in 200 ms steps, so it is
+    // patience, not a fixed sleep. Because the emission is *guaranteed* (only its schedule
+    // latency varies), a generous ceiling is the correct fix — a real regression would fail even
+    // at 30 s, a starved runner would not.
     for _ in 0..2 {
         let _ = agent.mesh().emit("test.gov.gate", SignalScope::Individual(self_id.clone()), Bytes::new());
     }
     assert!(
-        recv_within!(opaque_rx, 10),
+        recv_within!(opaque_rx, 30),
         "library must override gate and emit BOUNDARY_OPAQUE when fill == 1.0",
     );
 }

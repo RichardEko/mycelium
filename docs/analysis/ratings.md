@@ -190,6 +190,15 @@ existed. This is the framework's own report card.
   Fixed by widening the re-emit loop 8 → 20 attempts (still exits the instant delivery is
   observed — a structural condition, not a fixed sleep). Confirmed flaky, not a regression, by a
   clean job re-run with no code change.
+- 2026-07-03: **Test Architecture** — `test_manage_opacity_gate_vetoes_then_library_overrides`
+  flaked *again* on the CI `Test` job during Legible-Emergence Phase 5 (commit 4991d6f, orthogonal
+  — Phase 5 only adds public wrapper methods + re-exports + a coop demo; suite was 345/0 locally).
+  This is the **second** flake of this exact test: the guaranteed `fill==1.0` BOUNDARY_OPAQUE
+  emission's schedule-latency exceeded the 3 s bound (2026-07-02, widened to 10 s), then the 10 s
+  bound (2026-07-03, ~48 s saturated Test run). Widened 10 → 30 s. The recurrence is the lesson: a
+  10 s ceiling was still inside the tail of CI scheduling latency under ~345 parallel full-feature
+  tests; because the emission is *guaranteed* (only its schedule varies), the correct fix is a
+  ceiling that comfortably clears the saturated-runner tail, not a structural rework.
 
 **Dimensions:** Philosophy/Coherence · Conceptual Integrity · Architecture ·
 Modularity · API Design · Error Handling · Configurability · Language Best
