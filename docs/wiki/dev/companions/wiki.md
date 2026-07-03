@@ -32,6 +32,13 @@ apart — split-brain guard) → re-elect. Because the store is node-independent
 nothing**: a promoted curator resumes against the *same* store and re-drains the *same* proposals. The
 litmus: *if the curator vanishes, the wiki stays readable and a new curator self-elects.*
 
+**Lifecycle (learned the hard way — analysis Run 32):** the curator's background loops (drain / lint /
+election / watch) each hold an `Arc<Self>` and loop unconditionally, and they use raw `tokio::spawn`
+(not the agent's tracked `spawn_task`, so agent shutdown does **not** reap them). Call **`Wiki::shutdown`**
+to reclaim a wiki — it aborts the tasks (releasing their `Arc<Self>`, breaking the strong-ref cycle) and
+retracts the cap ads. Mirrors `Blackboard::shutdown`; without it a discarded `Wiki` leaks its tasks until
+the runtime ends. Canary: `agent::tests::shutdown_breaks_the_task_cycle_and_frees_the_wiki`.
+
 ## The write path: propose → drain → reconcile → apply
 
 - **Evaporating proposal queue:** any agent (any role) `propose`s → an evaporating
