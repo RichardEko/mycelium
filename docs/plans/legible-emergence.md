@@ -1,6 +1,6 @@
 # Legible Emergence — making coordinator-free fleets diagnosable
 
-**Status:** 🟢 **Phases 0–1 done; Phase 2 in progress; Phases 3–5 not started** (proposed 2026-06-21;
+**Status:** 🟢 **Phases 0–2 done; Phases 3–5 not started** (proposed 2026-06-21;
 red-teamed + Phase-0 taxonomy 2026-07-02; all 5 Phase-1 detectors (P1/P2/P3/P4/P6) + `/metrics` shipped 2026-07-02). Phase 0 shipped as
 [`docs/design/legible-emergence-taxonomy.md`](../design/legible-emergence-taxonomy.md) (the
 pathology taxonomy, with RT1–RT4 baked in). The **Red-team findings** section (below, near the
@@ -141,7 +141,7 @@ Off-cost-free, opt-in loop (`GOSSIP_EMERGENT_DETECTORS`). **Gate:** reproduce ea
 (starting with the #56 governor-vs-autojoin condition) and assert the flag fires; assert healthy
 churn does **not** trip it (the false-positive gate).
 
-### Phase 2 — Fleet snapshot endpoint (the relational "Localize" view, coordinator-free) — 🟡 IN PROGRESS
+### Phase 2 — Fleet snapshot endpoint (the relational "Localize" view, coordinator-free) — ✅ DONE
 
 **Increment 1 shipped:** `GET /gateway/fleet` (scope `fleet:read`) — `compute_fleet_snapshot`
 (`src/agent/emergent.rs`) assembles governed-group status + coverage gaps + opacity + counters from
@@ -150,9 +150,12 @@ local KV, with the RT1/RT2 `view_confidence` header. **Acceptance gate met** (RT
 at convergence; `view_confidence` is each observer's own. **Increment 2 shipped** — the snapshot now also carries the **throttle graph** (M7
 `sys/rate/` observer→sender edges, `throttle_graph`), a **convergence-health self-report**
 (`store_entries` + `store_hash` — two nodes at convergence share the hash; an operator diffs
-across nodes), and the cumulative `commit_conflicts` count. Deferred (need new state, taxonomy
-§8): true cross-node store-divergence (a gossiped `sys/health/` key) and per-slot commit-conflict
-"hot slots." The core relational view is complete.
+across nodes), and the cumulative `commit_conflicts` count. **Increment 3 shipped — both previously-deferred fields done:** (1) cross-node
+store-convergence via a gossiped `sys/health/{node}` self-report (a store-entry **count**, not a
+hash — a hash churns every tick as soft-state refreshes, the RT2 observer effect; the *spread* of
+counts is the honest divergence signal), resolving taxonomy §8's open item; (2) per-slot
+commit-conflict **hot slots** — the consensus tripwire now records each conflicting slot in a
+lock-free papaya map, surfaced as `commit_conflict_slots`. The relational view is complete.
 
 
 A `GET /gateway/fleet` (scope-gated) that, **computed locally from the gossiped KV any node already

@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::TaskCtx;
 use super::capability_ops::{
@@ -155,6 +155,61 @@ pub fn detect_coverage_gaps(kv_state: &crate::store::KvState, now: u64) -> Vec<S
 
 /// A peer opacity entry older than this is not counted as live for the storm gauge (P4).
 const OPAQUE_MAX_AGE_MS: u64 = 30_000;
+/// A `sys/health/` self-report older than this is not counted for store-convergence.
+const HEALTH_MAX_AGE_MS: u64 = 30_000;
+/// KV namespace for the per-node store self-report (Phase 2 convergence health).
+const HEALTH_PREFIX: &str = "sys/health/";
+
+/// A node's periodic store self-report, gossiped to `sys/health/{node}` (Phase 2). A **count**, not
+/// a hash: on a live cluster the store hash churns every tick (soft-state refresh perturbs it — the
+/// RT2 observer effect), so exact byte-identity is never the convergence metric. The *spread* of
+/// entry counts across nodes is the honest signal — a partitioned or behind node shows far fewer.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HealthReport {
+    pub store_entries:  usize,
+    pub written_at_ms:  u64,
+}
+
+/// Cross-node store-convergence view assembled from the fresh `sys/health/` reports this node holds.
+/// `nodes_reporting` = how many nodes' fresh reports are visible; `max − min` entries is the
+/// divergence indicator (0 spread ⇒ converged; a large spread ⇒ a node is behind/partitioned).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct StoreConvergence {
+    pub nodes_reporting: usize,
+    pub min_entries:     usize,
+    pub max_entries:     usize,
+}
+
+/// **Pure** — the cross-node store-convergence view from `sys/health/` reports fresher than
+/// `max_age_ms`. Node-local scan; unit-testable.
+pub fn store_convergence(kv_state: &crate::store::KvState, now: u64, max_age_ms: u64) -> StoreConvergence {
+    let mut min = usize::MAX;
+    let mut max = 0usize;
+    let mut n = 0usize;
+    for (_key, bytes) in scan_prefix_kv(kv_state, HEALTH_PREFIX) {
+        let Ok(r) = mycelium_core::serde_fixint::from_slice::<HealthReport>(&bytes) else { continue };
+        if now.saturating_sub(r.written_at_ms) > max_age_ms {
+            continue;
+        }
+        n += 1;
+        min = min.min(r.store_entries);
+        max = max.max(r.store_entries);
+    }
+    StoreConvergence {
+        nodes_reporting: n,
+        min_entries:     if n == 0 { 0 } else { min },
+        max_entries:     max,
+    }
+}
+
+/// Publish this node's `sys/health/{node}` store self-report. Called each detector tick.
+fn publish_health(ctx: &TaskCtx, now: u64) {
+    let report = HealthReport { store_entries: ctx.kv_state.store.pin().len(), written_at_ms: now };
+    if let Ok(bytes) = mycelium_core::serde_fixint::to_vec(&report) {
+        let key: std::sync::Arc<str> = std::sync::Arc::from(format!("{HEALTH_PREFIX}{}", ctx.node_id).as_str());
+        mycelium_core::ops::kv_set(&ctx.core, key, bytes.into());
+    }
+}
 /// Sliding window over which P2 counts a (group, node)'s membership transitions.
 const FLAP_WINDOW_MS: u64 = 60_000;
 /// Membership transitions within [`FLAP_WINDOW_MS`] that make a (group, node) "flapping" — 4 = two
@@ -397,9 +452,15 @@ pub struct FleetSnapshot {
     /// cross-node divergence would need a gossiped `sys/health/` key — deferred, taxonomy §8).
     pub store_entries:            usize,
     pub store_hash:               u64,
-    /// Cumulative consensus commit-conflict tripwire count (per-slot "hot slots" would need new
-    /// tracking — deferred; the count is the convergence-of-agreement signal today).
+    /// Cross-node store convergence health (spread of `sys/health/` entry counts). Populated when
+    /// the detector loop is running cluster-wide (it publishes the reports); `nodes_reporting = 0`
+    /// otherwise.
+    pub store_convergence:        StoreConvergence,
+    /// Cumulative consensus commit-conflict tripwire count.
     pub commit_conflicts:         u64,
+    /// Per-slot commit-conflict counts — the "hot slots" (which consensus slots saw a conflicting
+    /// COMMIT, and how often). Sorted by slot; empty when none.
+    pub commit_conflict_slots:    Vec<(String, u64)>,
 }
 
 /// Assemble the current fleet snapshot from local KV. Deterministic given the same store (lists
@@ -425,7 +486,14 @@ pub fn compute_fleet_snapshot(ctx: &TaskCtx) -> FleetSnapshot {
         throttle_graph:           throttle_graph(&ctx.kv_state),
         store_entries:            ctx.kv_state.store.pin().len(),
         store_hash:               mycelium_core::store::store_hash_acc(&ctx.kv_state.hash_acc),
+        store_convergence:        store_convergence(&ctx.kv_state, now, HEALTH_MAX_AGE_MS),
         commit_conflicts:         ctx.commit_conflicts.load(Ordering::Relaxed),
+        commit_conflict_slots:    {
+            let mut v: Vec<(String, u64)> = ctx.commit_conflict_slots.pin().iter()
+                .map(|(slot, n)| (slot.to_string(), *n)).collect();
+            v.sort();
+            v
+        },
     }
 }
 
@@ -450,6 +518,8 @@ pub async fn run_emergent_detectors(
         tokio::select! {
             _ = tick.tick() => {
                 let now = now_ms();
+                // Publish this node's store self-report (Phase 2 cross-node convergence health).
+                publish_health(&ctx, now);
                 // P1 — governed-group conflict (hysteresis-confirmed).
                 let conflicts = detect_governed_group_conflicts(&ctx.kv_state, now);
                 let confirmed = confirm_conflicts(&conflicts, &mut conflict_streaks, CONFIRM_TICKS);
@@ -807,5 +877,28 @@ mod tests {
         assert_eq!(g[0].sender, "flooder");
         assert_eq!(g[0].observed_fps, 8000);
         assert_eq!(g[1].observer, "nodeB");
+    }
+
+    /// Phase 2 — store-convergence reports the spread of fresh `sys/health/` entry counts; a stale
+    /// report is excluded (a behind/gone node stops counting).
+    #[test]
+    fn store_convergence_reports_entry_spread_and_ignores_stale() {
+        let kv = KvState::new(0);
+        let hlc = Hlc::new();
+        let now = 1_000_000_000_000;
+        let put = |node: &str, entries: usize, at: u64| {
+            let r = HealthReport { store_entries: entries, written_at_ms: at };
+            let key: Arc<str> = Arc::from(format!("sys/health/{node}").as_str());
+            let n = NodeId::new("127.0.0.1", 9000).unwrap();
+            apply_and_notify(&kv, &make_gossip_update(
+                &n, 4, key, mycelium_core::serde_fixint::to_vec(&r).unwrap().into(), false, &hlc));
+        };
+        put("a", 100, now);
+        put("b", 40, now); // behind ⇒ spread
+        put("c", 100, now - HEALTH_MAX_AGE_MS - 1); // stale ⇒ excluded
+        let sc = store_convergence(&kv, now, HEALTH_MAX_AGE_MS);
+        assert_eq!(sc.nodes_reporting, 2, "stale report excluded");
+        assert_eq!(sc.min_entries, 40);
+        assert_eq!(sc.max_entries, 100);
     }
 }

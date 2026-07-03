@@ -67,7 +67,10 @@ coverage gaps, opacity, and the flap/oscillation counters from local KV, each wi
 nodes_at_convergence` proves three nodes compute the same *diagnosis* from converged KV while
 `view_confidence` stays each observer's own; the live endpoint + `fleet:read` scope gate are
 covered by `test_gateway_fleet_snapshot_endpoint_scope_gated` (401/403/200). The snapshot also
-carries the throttle graph (`sys/rate/` edges), a convergence-health self-report (`store_hash`),
-and the commit-conflict count. Not started: Phase 3 (causal event
+carries the throttle graph (`sys/rate/` edges), **cross-node store-convergence** (the spread of
+`sys/health/{node}` entry-count self-reports — a *count* not a hash, since a hash churns every tick
+as soft-state refreshes; each node publishes its report from the detector loop), and
+**commit-conflict hot slots** (`commit_conflict_slots` — the consensus tripwire records each
+conflicting slot in a lock-free papaya map). Phase 2 is complete. Not started: Phase 3 (causal event
 ring + scatter-gather `explain`), Phase 4 (fleet narrative), Phase 5 (operator surface). The
 red-team findings (RT1–RT4) and their Phase-2+ implications are in the plan.

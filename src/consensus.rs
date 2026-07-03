@@ -1329,6 +1329,15 @@ pub(crate) async fn run_consensus_listener(
                         ctx.task_ctx.commit_conflicts.fetch_add(
                             1, std::sync::atomic::Ordering::Relaxed,
                         );
+                        // Legible-Emergence Phase 2: record the "hot slot". Retry-safe compute —
+                        // recompute the count from `existing` on papaya CAS retry.
+                        ctx.task_ctx.commit_conflict_slots.pin().compute(
+                            std::sync::Arc::clone(&slot),
+                            |existing| {
+                                let n = existing.map(|(_, v)| *v).unwrap_or(0) + 1;
+                                papaya::Operation::<u64, ()>::Insert(n)
+                            },
+                        );
                         tracing::warn!(
                             slot = %slot, ballot,
                             "commit conflict: COMMIT carries a different value for a \

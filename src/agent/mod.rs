@@ -357,6 +357,10 @@ pub(crate) struct TaskCtx {
     /// Incremented by the consensus listener's tripwire; Relaxed ordering —
     /// purely diagnostic, surfaced via `system_stats()` and `/stats`.
     pub(crate) commit_conflicts: Arc<AtomicU64>,
+    /// Per-slot commit-conflict counts (Legible-Emergence Phase 2 "hot slots"): the consensus
+    /// listener's tripwire records each conflicting slot here (lock-free papaya, incremented via
+    /// `compute`). Read by the fleet snapshot; empty when there are no conflicts / no consensus.
+    pub(crate) commit_conflict_slots: Arc<papaya::HashMap<Arc<str>, u64>>,
 
     /// Legible-Emergence Phase-1 gauge: count of governed groups currently in a **confirmed**
     /// membership conflict (observed `grp/` count outside the governor's `[min,max]`, sustained
@@ -784,6 +788,7 @@ impl GossipAgent {
             )),
             rpc_pending: Arc::clone(&rpc_pending),
             commit_conflicts: Arc::new(AtomicU64::new(0)),
+            commit_conflict_slots: Arc::new(papaya::HashMap::new()),
             governed_group_conflicts: Arc::new(AtomicU64::new(0)),
             capability_coverage_gaps: Arc::new(AtomicU64::new(0)),
             membership_flaps: Arc::new(AtomicU64::new(0)),

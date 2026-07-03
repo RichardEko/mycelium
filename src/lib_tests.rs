@@ -146,6 +146,7 @@ fn spawn_handler(
         bulk_transport: Arc::new(BulkTransport::new(0, Duration::from_secs(5), 64)),
         rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         commit_conflicts: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        commit_conflict_slots: Arc::new(papaya::HashMap::new()),
         governed_group_conflicts: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         capability_coverage_gaps: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         membership_flaps: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -854,6 +855,7 @@ async fn test_subscribe_notified_via_gossip() {
             bulk_transport: Arc::new(BulkTransport::new(0, Duration::from_secs(5), 64)),
             rpc_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             commit_conflicts: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            commit_conflict_slots: Arc::new(papaya::HashMap::new()),
             governed_group_conflicts: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             capability_coverage_gaps: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             membership_flaps: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -4677,6 +4679,7 @@ async fn test_fleet_snapshot_agrees_across_three_nodes_at_convergence() {
         cfg.bind_port = port;
         cfg.bootstrap_peers = boot;
         cfg.health_check_max_jitter_ms = 50;
+        cfg.emergent_detectors_enabled = true; // so each node publishes its sys/health self-report
         GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg)
     };
     let a = mk(pa, vec![ib.clone()]);
@@ -4702,8 +4705,13 @@ async fn test_fleet_snapshot_agrees_across_three_nodes_at_convergence() {
         let conflict = s.governed_groups.iter().any(|g| g.group == "workers" && g.conflict && g.observed == 4);
         (conflict, s.capability_coverage_gaps.contains(&"ai/llm".to_string()))
     };
-    // Wait for all three to converge on the same diagnosis.
-    poll_until(|| diagnosis(&a) == (true, true) && diagnosis(&b) == (true, true) && diagnosis(&c) == (true, true), 15_000).await;
+    // Wait for all three to converge on the same diagnosis AND to see all three sys/health reports
+    // (the cross-node store-convergence field — Field 1, published by each node's detector loop).
+    let converged = |n: &GossipAgent| {
+        let s = crate::agent::emergent::compute_fleet_snapshot(&n.task_ctx);
+        diagnosis(n) == (true, true) && s.store_convergence.nodes_reporting == 3
+    };
+    poll_until(|| converged(&a) && converged(&b) && converged(&c), 20_000).await;
 
     // The diagnosis is byte-identical across observers; view_confidence is each node's own.
     let (sa, sb, sc) = (
@@ -4711,6 +4719,7 @@ async fn test_fleet_snapshot_agrees_across_three_nodes_at_convergence() {
         crate::agent::emergent::compute_fleet_snapshot(&b.task_ctx),
         crate::agent::emergent::compute_fleet_snapshot(&c.task_ctx),
     );
+    assert_eq!(sa.store_convergence.nodes_reporting, 3, "all three nodes' sys/health self-reports visible");
     assert_eq!(sa.governed_groups, sb.governed_groups, "A and B agree on governed-group diagnosis");
     assert_eq!(sb.governed_groups, sc.governed_groups, "B and C agree");
     assert_eq!(sa.capability_coverage_gaps, sc.capability_coverage_gaps, "A and C agree on coverage gaps");
