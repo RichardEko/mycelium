@@ -10,6 +10,12 @@ description = "Food-Rescue Co-op example suite — runnable demos of the mailbox
 name = "coop"
 path = "src/lib.rs"
 
+# `wasm` pulls the WASM autonomic-provisioner host (wasmtime/cranelift) — heavy, and needed by only
+# two demos. Off by default so the other ten (and the coop lib) build fast; the two enable it via
+# `required-features`.
+[features]
+wasm = ["dep:mycelium-wasm-host"]
+
 # Each demo is its own bin.
 [[bin]]
 name = "mailbox_llm"
@@ -26,6 +32,7 @@ path = "src/bin/elastic_intent.rs"
 [[bin]]
 name = "provisioning"
 path = "src/bin/provisioning.rs"
+required-features = ["wasm"]
 
 [[bin]]
 name = "federation_facts"
@@ -54,6 +61,7 @@ path = "src/bin/llm_council.rs"
 [[bin]]
 name = "catalog"
 path = "src/bin/catalog.rs"
+required-features = ["wasm"]
 
 [dependencies]
 # The full substrate (gateway is default-on; tls for node identity / the facts lens; llm for the
@@ -63,7 +71,11 @@ mycelium           = { path = "../..", features = ["llm", "tls"] }
 mycelium-agentfacts = { path = "../../mycelium-agentfacts" }
 # Flagship (Step 04): the tuple-space buffer + the WASM autonomic provisioner.
 mycelium-tuple-space = { path = "../../mycelium-tuple-space" }
-mycelium-wasm-host   = { path = "../../mycelium-wasm-host" }
+# Optional behind the `wasm` feature: only `provisioning` + `catalog` need it, and it pulls the
+# whole wasmtime/cranelift tree (a very heavy cold build). Gating it here means the other ten demos
+# — e.g. `cargo run --bin diagnostics` — build WITHOUT compiling wasmtime. The two demos that need it
+# declare `required-features = ["wasm"]`; CI enables it explicitly for those (examples/coop/ci_smoke.sh).
+mycelium-wasm-host   = { path = "../../mycelium-wasm-host", optional = true }
 
 tokio              = { version = "1.35", features = ["full"] }
 bytes              = "1"

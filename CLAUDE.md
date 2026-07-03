@@ -43,12 +43,19 @@ promote durable project knowledge to the wiki.
 
 ## Build & test gates (run before pushing)
 
+**`make check`** is the one-command pre-push gate — clippy across the feature matrix CI enforces
+(feature-matrix + `--no-default-features` + core), ~3 min, no wasmtime. The `--no-default-features`
+clippy is the catcher for the *feature-gated dead-code trap* (an item live only under
+`gateway`/`metrics` is dead in a minimal build — CI's Gateway-free + WASM-host jobs). `make
+check-full` adds the test suites + wasm-host clippy. The underlying set:
+
 ```bash
 cargo test --lib --features tls,metrics,a2a,llm
 cargo clippy --lib --tests --features tls,metrics,a2a,llm -- -D warnings
 cargo test --lib --features compliance
 cargo test --lib --no-default-features --features gateway
 cargo clippy -p mycelium-core --lib --tests -- -D warnings
+cargo clippy --lib --no-default-features -- -D warnings   # catches the feature-gated dead-code trap
 ```
 
 Companion crates: `cargo test -p mycelium-tuple-space --features gateway`, same for

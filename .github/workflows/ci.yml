@@ -156,16 +156,17 @@ jobs:
       - run: ./examples/fluid_pipeline/ci_smoke.sh both
 
   coop-smoke:
-    name: Food-Rescue Co-op example suite (11 demos)
+    name: Food-Rescue Co-op example suite (12 demos)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.96.0
       - uses: Swatinem/rust-cache@v2
-      # Pre-build the crate (provisioning + mcp_toolgrowth pull wasmtime — a long
-      # first compile cached by rust-cache) so the smoke's per-demo `cargo run`s
-      # are warm and the run-phase timing isn't dominated by the build.
-      - run: cargo build -p mycelium-coop-examples
+      # Pre-build the crate WITH `wasm` (provisioning + catalog pull wasmtime — a long first compile
+      # cached by rust-cache) so the smoke's per-demo `cargo run`s are warm and the run-phase timing
+      # isn't dominated by the build. `wasm` is opt-in (examples/coop/Cargo.toml) so the other ten
+      # demos build without wasmtime locally; here we warm everything.
+      - run: cargo build -p mycelium-coop-examples --features wasm
       # All nine examples end-to-end as local in-process clusters: mailbox↔LLM,
       # stigmergy, elastic-intent, the WASM autonomic flagship (+ failover),
       # cross-domain AgentFacts, identity rotation, cross-group consensus,

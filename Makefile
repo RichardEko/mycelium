@@ -9,7 +9,7 @@ COMPOSE_LLM_DEMO      = docker compose -f docker/docker-compose.llm-agent.yml
 COMPOSE_THREE_NODE    = docker compose -f docker/docker-compose.three-node-test.yml
 COMPOSE_OVERLAY       = docker compose -f tests/overlay/docker-compose.test.yml
 
-.PHONY: build test test-clean test-scale test-scale-clean test-scale-resilience test-scale-resilience-clean test-scale-entries test-scale-entries-clean test-llm-demo test-llm-agent test-three-node test-overlay llm-agent-interactive help
+.PHONY: build check check-full test test-clean test-scale test-scale-clean test-scale-resilience test-scale-resilience-clean test-scale-entries test-scale-entries-clean test-llm-demo test-llm-agent test-three-node test-overlay llm-agent-interactive help
 
 ## test — build the cluster and run all integration scenarios
 test:
@@ -143,6 +143,24 @@ llm-agent-interactive:
 build:
 	cargo build --lib
 	cargo build --example three_node_demo
+
+## check — the pre-push gate. Runs clippy across the feature matrix that CI enforces, in ONE
+## command, so the feature-gated dead-code trap (an item live only under gateway/metrics is *dead*
+## under --no-default-features) is caught locally instead of turning a push CI-red. The
+## --no-default-features clippy is the trap-catcher — it lints the same gateway/metrics-off mycelium
+## lib that CI's "Gateway-free build" and "WASM host" jobs compile — so this is fast (~3 min, no
+## wasmtime). Run it before every push.
+check:
+	cargo clippy --lib --tests --features tls,metrics,a2a,llm -- -D warnings
+	cargo clippy --lib --no-default-features -- -D warnings
+	cargo clippy -p mycelium-core --lib --tests -- -D warnings
+
+## check-full — check + the test suites + the (slow, wasmtime-heavy) wasm-host clippy. Mirrors the
+## CI gate set; run before a release or when you have touched wasm-host / a feature-conditional path.
+check-full: check
+	cargo test  --lib --features tls,metrics,a2a,llm
+	cargo test  --lib --no-default-features --features gateway
+	cargo clippy -p mycelium-wasm-host --all-targets -- -D warnings
 
 ## help
 help:

@@ -20,8 +20,12 @@ run_demo() {
   local markers=("$@")
   echo "── ${label} ─────────────────────────────────────────────"
   local attempt out ok
+  # `provisioning` + `catalog` need the WASM autonomic-provisioner host, gated behind the `wasm`
+  # feature so the other ten demos build without compiling wasmtime (see examples/coop/Cargo.toml).
+  local feat=""
+  case "$bin" in provisioning|catalog) feat="--features wasm";; esac
   for attempt in $(seq 1 "$ATTEMPTS"); do
-    out="$(cargo run -q -p mycelium-coop-examples --bin "$bin" 2>&1 || true)"
+    out="$(cargo run -q -p mycelium-coop-examples $feat --bin "$bin" 2>&1 || true)"
     ok=1
     for m in "${markers[@]}"; do
       echo "$out" | grep -q -- "$m" || { ok=0; break; }

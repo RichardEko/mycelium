@@ -4,7 +4,12 @@
 
 ## Run the full feature matrix before pushing
 
-`cargo test --lib` alone misses `#[cfg(feature = …)]` code. CI's set:
+**`make check` is the one-command pre-push gate** — clippy across the feature matrix CI enforces
+(feature-matrix + `--no-default-features` + core), in ~3 min with no wasmtime compile. Run it before
+every push. `make check-full` adds the test suites + the (slow) wasm-host clippy; run it before a
+release or when you have touched wasm-host / a feature-conditional path.
+
+`make check` expands to CI's clippy set; the full CI gate (for reference) is:
 
 ```bash
 cargo test --lib --features tls,metrics,a2a,llm
@@ -19,8 +24,17 @@ cargo clippy -p mycelium-wasm-host --all-targets -- -D warnings   # wasm-host em
 **Feature-gated dead code is a real trap** (bit the diagnostics work, 2026-07-03): an item used
 only under `gateway`/`metrics` is *dead* in a `--no-default-features` build (the CI "Gateway-free"
 + "WASM host" jobs run exactly that), and `-D warnings` fails there even though the default and
-feature-matrix gates pass. Run the last two lines above before pushing anything with a
-feature-conditional consumer.
+feature-matrix gates pass. **The fast catcher is `cargo clippy --lib --no-default-features`** (in
+`make check`) — it lints the same gateway/metrics-off mycelium lib the slow wasm-host job compiles,
+so you rarely need the wasmtime build to catch the trap.
+
+## Coop demos: wasm is opt-in (fast non-wasm builds)
+
+`examples/coop` gates `mycelium-wasm-host` (→ wasmtime/cranelift) behind a `wasm` feature. Only
+`provisioning` + `catalog` need it (`required-features = ["wasm"]`); the other ten demos — e.g.
+`cargo run --bin diagnostics` — build **without** compiling wasmtime. `ci_smoke.sh` enables
+`--features wasm` for the two that need it; a dev iterating on any non-wasm demo skips the heavy
+build entirely.
 
 CI additionally gates `tsc --noEmit` (mycelium-ts), the AFN smoke (pull+push), the coop
 smoke, time-boxed fuzz (skipped on PRs), and `cargo audit` (RUSTSEC). **Don't trust a
