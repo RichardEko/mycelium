@@ -561,13 +561,20 @@ mod tests {
 
     #[test]
     fn adversarial_bytes_never_panic() {
-        // Decoder must return Err (never panic/OOM) on arbitrary input.
+        // Both decoders must return Err (never panic/OOM) on arbitrary input — including the rewritten
+        // previous-version `decode_wire_v11` path (Run-33 falsification probe).
         let mut rng = fastrand::Rng::with_seed(0xC0DEC);
         for _ in 0..20_000 {
             let len = rng.usize(0..64);
             let mut v = vec![0u8; len];
             for byte in &mut v { *byte = rng.u8(..); }
-            let _ = decode_wire(&v); // must not panic
+            let _ = decode_wire(&v);     // must not panic
+            let _ = decode_wire_v11(&v); // must not panic (the v11 index-drop path)
         }
+        // A hostile length prefix (claims gigabytes) must be bounded by the buffer, not allocated.
+        let mut oversized = Vec::new();
+        oversized.extend_from_slice(&1u32.to_le_bytes());          // Ping tag
+        oversized.extend_from_slice(&u64::MAX.to_le_bytes());      // known_peers len = u64::MAX
+        assert!(decode_wire(&oversized).is_err(), "oversized length prefix must error, not OOM");
     }
 }
