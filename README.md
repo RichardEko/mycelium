@@ -1407,7 +1407,7 @@ Enable the `metrics` feature to expose a Prometheus scrape endpoint on every nod
 
 ```toml
 # Cargo.toml
-mycelium = { version = "0.1", features = ["metrics"] }
+mycelium = { version = "2.0", features = ["metrics"] }
 ```
 
 ```sh

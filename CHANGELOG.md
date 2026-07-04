@@ -9,6 +9,40 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [2.0.0] — 2026-07-04
+
+The **v2.0 epoch** — all 16 milestones (M1–M16) shipped and signed off
+([`docs/plans/v2.0.md`](docs/plans/v2.0.md)), plus the companion-crate ecosystem. First release since
+`v1.2.0`. All workspace crates version in lockstep at `2.0.0` (a unified release train); the companion
+crates (`mycelium-wiki` / `-blackboard` / `-tuple-space` / `-agentfacts` / `-wasm-host`) are newer than
+the substrate and their APIs may still evolve within the 2.x line — pin exact versions if that matters.
+
+### ⚠ Breaking changes (from `v1.2.0`)
+
+- **Wire protocol `v10` → `v12`.** `v11` added `hlc_seq` to `Signal` (ordered delivery); `v12` replaced
+  the full key→timestamp anti-entropy index with a fixed-width Merkle **`bucket_hashes`** digest. A
+  `v1.2.0` node **cannot** interoperate with a `2.0.0` node except across the rolling-upgrade window —
+  `read_frame` accepts `WIRE_VERSION = 12` **and** `PREV_WIRE_VERSION = 11` only.
+- **Workspace restructure** — the substrate (Layers I+II) was extracted into a separate `mycelium-core`
+  crate. `mycelium` re-exports an unchanged public Rust API, but consumers reaching internal module
+  paths must update; and `consensus` (Layer III) is now behind a feature gate.
+- **Serialization dependency** — the wire/WAL codec is the in-tree hand-rolled fixed-int codec
+  (`mycelium-core::codec` / `serde_fixint`), **byte-identical** to the former `bincode`; `bincode` is
+  fully removed from the dependency tree (RUSTSEC-2025-0141 no longer applies). This is *not* a wire or
+  on-disk format change — persisted WAL/snapshots decode unchanged.
+
+### Migration
+
+- **Rolling upgrade is one step only.** A mixed `v11 ⇄ v12` cluster converges (a `v11` anti-entropy
+  request downgrades to a full snapshot). Upgrading from `≤ v9` (i.e. `v1.2.0` and earlier) is a
+  **stop-the-world** upgrade: drain, stop the cluster, deploy `2.0.0`, restart. WAL/snapshots persisted
+  by the former codec load without migration.
+- **No public API removals** in `mycelium` itself; new capability arrives behind additive feature flags.
+  Before a production go-live, walk [`docs/operations/production-readiness.md`](docs/operations/production-readiness.md);
+  for a first customer engagement, [`docs/operations/customer-pilot.md`](docs/operations/customer-pilot.md).
+
 ### Added
 
 - **`mycelium-wiki` companion crate** — a group-scoped, LLM-curated wiki: the durable, curated third coordination primitive (long-term-memory sibling of the blackboard's working memory), built on the public `mycelium` API only. **Control-plane / data-plane**: the corpus lives in a node-independent pluggable store (the `WikiStore` trait + an `FsStore` reference impl — manifest-last, torn-read-safe); a single elected **curator** serialises writes while group agents **read the store directly, in parallel** (no curator on the read path). Curator **election + ring-failover** on the capability ring; an evaporating KV **proposal queue** (`wiki/{group}/proposal/`); a **single-writer reconcile** that groups proposals by section (`DirectReconciler` lossless append-merge, or `LlmReconciler` 3-way merge behind `llm`); a **change-driven lint** loop (structural dead-cross-link/empty-section checks always on, LLM self-consistency behind `llm`; runs only after a write); **MCP tools** (`wiki.read`/`query`/`propose`) and an **HTTP gateway** (`/gateway/wiki/*`, feature `gateway`) with Python/TS `Wiki` SDKs; and a membership-gated **access broker** (`Wiki::request_store_access` → `StoreGrant`, RPC point-to-point). `Wiki::shutdown` reclaims the curator's background tasks. Features `control-plane` / `llm` / `gateway`; cross-node `tests/{failover,gateway,access}.rs` + the `wiki_chat` worked example (`ci_smoke.sh`, both use-case corpora). Audited in analysis Run 32 (one Major finding found + fixed same-session). Design/plan: `docs/plans/mycelium-wiki.md`; companion page `docs/wiki/dev/companions/wiki.md`.
