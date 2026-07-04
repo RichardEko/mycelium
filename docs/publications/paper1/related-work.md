@@ -42,7 +42,7 @@ causal-order + consensus + recallable-role machinery** that makes coordination-f
 | `\cite{habiba-gossip-vision}` | IBM Software, Dublin (same cluster) | Vision | Earlier statement of the same gossip-for-emergent-coordination thesis. |
 | `\cite{terrarium}` | **UMass Amherst** (Zilberstein et al.) + **MPI/ELLIS Tübingen** | Framework, security-angled | Revives the **blackboard** for multi-agent safety/privacy — academic kin to the substrate's content-routed sharing; not a coordination-scaling argument. |
 | `\cite{evogit}` | **Hong Kong Polytechnic Univ** (Tan, Cheng) | Implemented (narrow) | Coordination **emerges through a shared git version-graph, no central scheduler** — the "substrate not scheduler" instinct, in code, but domain-specific (code evolution). |
-| `\cite{pressure-fields-decay}` | **Independent** (Rodriguez, solo) | Algorithm + convergence proofs + **simulation benchmarks** (meeting-room scheduling, 1–4 LLM agents) | **Stigmergy + evaporation, genuinely shared** — but an **application-level single-artifact refinement algorithm** (tick-synchronous, a central per-tick selection, single machine), a *different layer* from a distributed substrate. A fellow-traveller / ally in the motivation, not a rival. Full read below. |
+| `\cite{pressure-fields-decay}` | **Independent** (Rodriguez, solo; proton.me) | **Implemented + reproducible** — public repo (`github.com/Govcraft/pressure-field-experiment`, Rust), convergence proofs, simulation benchmarks (meeting-room scheduling, 1–4 LLM agents, single machine) | **Stigmergy + evaporation, genuinely shared** — but an **application-level single-artifact refinement algorithm** (tick-synchronous; central queue + central per-tick selection; single machine), a *different layer* from a distributed substrate. A fellow-traveller / **empirical ally** in the motivation, not a rival. Full read below. |
 
 **Positioning sentence (draft):** *"The substrate direction is not idiosyncratic: an IBM agentic-AI
 architect \cite{geacl,habiba-gossip-vision}, a leading multi-agent-systems group \cite{terrarium}, an
@@ -122,10 +122,12 @@ an *attack surface to defend*, where Mycelium treats overload as a *signal to ro
 metabolism). **EvoGit** inverts the memory story — an *immutable, permanent* git history, where Mycelium's
 whole model is *evaporation/TTL* (permanence vs forgetting-as-a-feature).
 
-### Pressure-fields — the full read (2026-07-04, pp. 1–24: abstract, §2 related work, §3 model, §4 method + Algorithm 1, §5 all theorems, §6 setup)
+### Pressure-fields — the complete read (2026-07-04, all 65 pp: abstract → §8, Appendix A protocol, Appendix B alignment, Appendix C all theorem proofs, references)
 
-The provisional row above resolved on a proper read, and the finding is *better than "closest competitor"*
-— it is **not a competitor at all, but a fellow-traveller one layer up.** Precisely:
+Read cover to cover. The finding is *better than "closest competitor"* — it is **not a competitor at all,
+but an empirical fellow-traveller one layer up**, and it is a **well-executed, reproducible** paper (so
+cite it with respect; don't wave it away). One earlier error corrected: **it has a public code repo**
+(`github.com/Govcraft/pressure-field-experiment`) — it is *not* vision-only. Precisely:
 
 - **What it is.** A paradigm for **collaborative artifact refinement by LLM agents**: *one* shared artifact
   of `n` "regions"; a **quality-pressure field** `P(s)=Σ Pᵢ` derived from local signal functions; agents
@@ -155,8 +157,38 @@ The provisional row above resolved on a proper read, and the finding is *better 
   receiver-side boundary/opacity, epidemic consensus, recallable-role failover — that application-level
   emergent-coordination schemes like this one assume but do not supply."**
 
-_Confidence: high for pp. 1–24 (the substance); the appendix proofs (§B) and full result tables (§6.2–6.9)
-were not read line-by-line but are not load-bearing for this characterization._
+**Confirmed by the complete read (appendices + proofs).**
+- **Single machine, localhost.** Appendix A: one NVIDIA RTX 4070, Rust + Ollama at `localhost:11434`,
+  `qwen2.5:0.5b/1.5b/3b`, agents ∈ {1,2,4}, 30 trials/config, ~9 h total. There is no network, no second
+  node — "distribution" never appears.
+- **A central queue + central selection, confirmed.** Appendix C.3 (Thm 5.4): agents "write proposed
+  patches to a **central queue**… the fork pool for parallel validation has fixed size K"; Phase 3 sorts
+  and greedily selects. So it is *not* coordinator-free at the write/selection layer — it has a central
+  reducer; its "no coordinator" claim is about *proposal*, not *application*.
+- **"Convergence" = monotone potential descent, not distributed consensus.** Appendix C.1–C.4 prove global
+  pressure decreases by `δ_min−(n−1)ε` per accepted patch (potential game → Nash equilibrium). The
+  references are ACO/stigmergy + potential games + distributed *subgradient* optimisation (Monderer–Shapley,
+  Nedić–Ozdaglar) — **no gossip / Raft / Paxos / CRDT / vector-clock** anywhere. It is an MAS-coordination +
+  optimisation paper, not a distributed-systems one.
+- **The guarantees rest on an engineered `ε=0` separable domain.** Appendix B: meeting-scheduling is
+  *constructed* so per-region pressure depends only on that region (`ε=0`); the convergence theorems need
+  `δ_min > (n−1)ε`. Genuinely coupled coordination (the case §7.6's "multi-artifact… future work" names)
+  breaks separability — so the clean scaling is domain-conditioned.
+- **The author names the exact gaps this paper's substrate fills.** §7.8.1: attribution "requires detailed
+  logging that the minimal coordination mechanism does not inherently provide" (Mycelium: the HLC causal
+  audit trail is *built in*). §7.3.1: "coherence drift / dependency accumulation" that local validation
+  can't catch need "periodic global coherence checks" (a substrate concern). §7.6: multi-artifact and
+  larger-scale are *future work*.
+
+**Net for §2.** Cite it as the **strongest empirical ally**: its §7.2 documents the coordinator trap in the
+wild (hierarchical LLM control hit a **98.7% rejection rate**; **66.7% of hierarchical runs applied zero
+patches** — a "rejection loop" that stalls everything), independently confirming the paper's thesis with
+real numbers. Then differentiate cleanly: pressure-fields is an *application-level artifact-refinement
+pattern on one machine*; this work is the *distributed substrate* — causal KV, receiver-side
+boundary/opacity, epidemic consensus, recallable-role failover — that such patterns assume but do not
+supply. They **compose, not compete** (its "shared artifact" ≈ a replicated KV; its actors ≈ nodes).
+
+_Confidence: high — complete read, all 65 pp including every appendix proof._
 
 ## Why this shape helps the paper
 
