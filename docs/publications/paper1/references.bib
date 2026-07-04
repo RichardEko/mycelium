@@ -267,3 +267,65 @@
   note   = {Working paper, Tathata Systems Ltd. In preparation},
   year   = {2026},
 }
+
+% ── Related work surfaced 2026-07-04 (web-search snapshot; verify before submission) ──────────
+% Substrate / emergent camp — converging on the coordinator-free direction, but vision/prototype
+% (none implement causal order + consensus + recallable roles).
+
+@article{geacl,
+  author    = {Habiba, Mansura and Khan, Rafflesia and Khan, Nafiul I.},
+  title     = {A Gossip-Enhanced Communication Substrate for Agentic {AI}: Toward Decentralized Coordination in Large-Scale Multi-Agent Systems},
+  journal   = {arXiv preprint arXiv:2512.03285},
+  year      = {2025},
+  note      = {Authors at IBM Software, Dublin (personal capacity). Vision paper: no implementation; explicitly lacks failover/roles, hybrid logical clocks, and consensus.},
+}
+
+@article{habiba-gossip-vision,
+  author    = {Habiba, Mansura and Khan, Nafiul I.},
+  title     = {Revisiting Gossip Protocols: A Vision for Emergent Coordination in Agentic Multi-Agent Systems},
+  journal   = {arXiv preprint arXiv:2508.01531},
+  year      = {2025},
+  note      = {IBM Software, Dublin (personal capacity). Vision paper.},
+}
+
+@article{terrarium,
+  author    = {Nakamura, Mason and Kumar, Abhinav and Mahmud, Saaduddin and Abdelnabi, Sahar and Zilberstein, Shlomo and Bagdasarian, Eugene},
+  title     = {Terrarium: Revisiting the Blackboard for Multi-Agent Safety, Privacy, and Security Studies},
+  journal   = {arXiv preprint arXiv:2510.14312},
+  year      = {2025},
+  note      = {University of Massachusetts Amherst; ELLIS Institute / MPI for Intelligent Systems, T\"ubingen. Blackboard revival, security-angled.},
+}
+
+@article{evogit,
+  author    = {Huang, Beichen and Cheng, Ran and Tan, Kay Chen},
+  title     = {{EvoGit}: Decentralized Code Evolution via Git-Based Multi-Agent Collaboration},
+  journal   = {arXiv preprint arXiv:2506.02049},
+  year      = {2025},
+  note      = {Hong Kong Polytechnic University, Dept. of Data Science and AI. Coordination emerges through a shared version graph, no central scheduler.},
+}
+
+@article{pressure-fields-decay,
+  author    = {Rodriguez, Roland},
+  title     = {Emergent Coordination in Multi-Agent Systems via Pressure Fields and Temporal Decay},
+  journal   = {arXiv preprint arXiv:2601.08129},
+  year      = {2026},
+  note      = {Independent (no affiliation listed). Conceptual: stigmergy + evaporation as theory, no code.},
+}
+
+% Coordinator camp — the mediated / registry patterns the paper critiques.
+
+@misc{cisco-mycelium,
+  author       = {{Outshift by Cisco}},
+  title        = {Mycelium: A Coordination Layer for Multi-Agent Teams (with {CASA})},
+  howpublished = {\url{https://github.com/mycelium-io}},
+  year         = {2025},
+  note         = {A ``CognitiveEngine'' mediates negotiation ``so agents never have to talk directly to each other'' (rooms + state machine, NegMAS). The mediated-hierarchy pattern; name collision with this work.},
+}
+
+@misc{solace-agent-mesh,
+  author       = {{Solace}},
+  title        = {Solace Agent Mesh: {OrchestratorAgent}},
+  howpublished = {\url{https://solacelabs.github.io/solace-agent-mesh/}},
+  year         = {2025},
+  note         = {A2A-based agent mesh; centralized task breakdown via a specialized OrchestratorAgent.},
+}
