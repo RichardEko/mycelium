@@ -12,11 +12,12 @@ index just routes you to the right one.
 [`docs/design/`](../design/). These plans are strategy/sequencing + execution
 record, not duplicates of those.
 
-> **As of 2026-06-21, all *delivered* engineering plans are shipped.** v2.0's
-> acceptance gate is met — every workstream and all 16 milestones (M1–M16) delivered
-> ([`v2.0.md`](v2.0.md)). Open items: one **proposed** plan
-> ([`legible-emergence.md`](legible-emergence.md) — emergent observability, awaiting
-> go-ahead) and one **research experiment** (three-arm work distribution, for Paper 1).
+> **As of 2026-07-04, every engineering plan is shipped.** v2.0's acceptance gate is met —
+> all 16 milestones (M1–M16) ([`v2.0.md`](v2.0.md)) — and both former *proposed* plans have
+> since shipped: **Legible Emergence** (complete, phases 0–5, 2026-07-03) and
+> **mycelium-wiki** (complete, build phases 1–5 + gateway/SDKs + access broker, 2026-07-04;
+> the only remaining slice is the *additive* disconnected KV-native variant). The one open
+> non-engineering item is a **research experiment** (three-arm work distribution, for Paper 1).
 
 ---
 
@@ -43,6 +44,8 @@ future contributor needs so they don't re-litigate a settled choice — lives he
 | [`v1x-completion.md`](v1x-completion.md) | v1.x Production Readiness Gap → done (RBAC/audit/crown-jewel/OIDC/cert-rotation), `v1.2.0` | #1 |
 | [`docs-and-examples-alignment.md`](docs-and-examples-alignment.md) | The two-audience docs + coop example-suite alignment (7 workstreams) | — |
 | [`example-suite.md`](example-suite.md) | The 11-demo Food-Rescue Co-op example suite | — |
+| [`legible-emergence.md`](legible-emergence.md) | Diagnosable coordinator-free fleets (Detect→Localize→Explain→Intervene) — phases 0–5, incl. the operator surface. ✅ complete 2026-07-03 | — |
+| [`mycelium-wiki.md`](mycelium-wiki.md) | The `mycelium-wiki` companion — group-scoped LLM-curated wiki (data plane · curator control plane · reconcile + change-driven lint · MCP + HTTP gateway + py/ts SDKs · access broker · worked example). ✅ phases 1–5 shipped 2026-07-03/04; audited Run 32. Remaining: the additive KV-native variant | — |
 
 ## Design sketches (rationale)
 
@@ -52,10 +55,11 @@ future contributor needs so they don't re-litigate a settled choice — lives he
 
 ## Proposed — not yet started
 
-| Doc | Status |
-|---|---|
-| [`legible-emergence.md`](legible-emergence.md) | 📋 **Proposed** (2026-06-21) — make coordinator-free fleets diagnosable by a *non-designer* (Detect → Localize → Explain → Intervene), closing the debuggability-of-emergence adoption risk. Coordinator-free by construction (fleet diagnostics computed from each node's locally-held KV + HLC causal order + scatter-gather fan-out; no central collector). 6 phases (0 taxonomy → 1 emergent tripwires → 2 fleet snapshot → 3 causal reconstruction → 4 fleet narrative → 5 operator surface). Awaiting go-ahead. |
-| [`mycelium-wiki.md`](mycelium-wiki.md) | 🟢 **Approach revised 2026-07-03 — control-plane/data-plane; build not started** — a **group-scoped, LLM-curated wiki** as the fourth coordination primitive: the **maintained-meaning / authoritative-specific canon** that *composes* with an external metrics store (Postgres) and RAG (background), joined by a shared id namespace. **Not in gossiped KV** — the corpus lives in a **node-independent, pluggable store** (shared FS dir / S3 / doc store, which can be *dumb*); a group node runs a **curator service** that serialises writes + runs the LLM ingest/lint + **brokers access**, while group agents **read the store directly, in parallel**. Mycelium is the **control plane** — curator election + ring-failover, the store-location pointer, the small evaporating **proposal queue** in KV, and the MCP tool — never the storage. This is the wiki pattern's native shape (files + LLM curator + direct reads, as `docs/wiki/` itself works), so the concurrent-prose-merge problem dissolves into single-writer-curator + the store. The earlier **KV-native section-CRDT** ([design record](../design/wiki-concurrent-edit.md) §1–§2) is retained as the **disconnected / no-external-store variant**; the identity model ("competence is a capability, knowledge is not") + curator state machine carry over. Two driving use cases (Novus-i2 org twin; Transparency-Platform council decisions) reviewed 2026-07-03. |
+_None._ Both previously-proposed plans (Legible Emergence; mycelium-wiki) have shipped — see the
+execution-records table above. The only open engineering slice is the **additive** disconnected
+KV-native wiki variant (design record [`../design/wiki-concurrent-edit.md`](../design/wiki-concurrent-edit.md)),
+started only if a no-external-store deployment needs it. Research-track work (Paper 1's three-arm
+experiment) is tracked in [`docs/wiki/domain/publications.md`](../wiki/domain/publications.md).
 
 ## Research track — in progress
 
