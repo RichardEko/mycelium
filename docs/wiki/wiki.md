@@ -6,8 +6,9 @@ canon, the wiki cites it**). Start here, follow links down.
 Mycelium is an embedded, broker-less Rust library: a three-layer substrate (gossip KV /
 signal mesh / epidemic consensus) for AI agent fleets and storage replication, built on the
 thesis that a coordinator is not just slower but *epistemically incapable* for heterogeneous
-fleets. Purpose anchor: `docs/philosophy.html`. Version state: v2.0 complete (all 16
-milestones, 2026-06-21); v1.x production-readiness workstreams shipped; wire v12.
+fleets. Purpose anchor: `docs/philosophy.html`. Version state: **v2.0.0 released** (tag `v2.0.0`) —
+all 16 milestones (2026-06-21) + the v1.x production-readiness workstreams, now on a unified
+2.0.0 workspace version train; wire v12.
 
 ## Sections
 
