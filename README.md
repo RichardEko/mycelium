@@ -27,7 +27,10 @@ as mesh nodes), MCP tool discovery (LLM finds tools dynamically from the KV
 store), fluid pipelines (Agentic Flow Networks), and A2A interop (LangChain /
 AutoGen).
 
-**[→ Developer guide with concept explanations, diagrams, and dev notes for each pattern](docs/guide/README.md)**
+**[→ Start with the FAQ](docs/guide/faq.md)** — is this for me? which primitive
+do I use? which example do I run? why-not-X? — then dive into the
+**[developer guide](docs/guide/README.md)** for concept explanations, diagrams,
+and dev notes for each pattern.
 
 ### Which crate? — `mycelium` vs `mycelium-core`
 
