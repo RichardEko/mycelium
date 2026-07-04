@@ -82,14 +82,14 @@ pub const MAX_KV_WRITE_BYTES: usize = MAX_FRAME_BYTES - 64 * 1024;
 ///     `store::store_bucket_hashes`). The responder compares its own digest and
 ///     returns only entries in divergent buckets (`O(divergence)`). An empty
 ///     `bucket_hashes` is the "no digest" sentinel → full snapshot. v11 peers send
-///     a `key_timestamps` StateRequest; the `WireMessageV11` shim decodes it and
+///     a `key_timestamps` StateRequest; `codec::decode_wire_v11` decodes it and
 ///     drops the index (`bucket_hashes = vec![]` → full snapshot), the same graceful
 ///     downgrade the v7→v8 and v6→v7 sentinels used. The serialization itself is the
 ///     in-tree fixed-int codec (M11) — byte-identical to the former bincode, so the
 ///     only v12 change is this struct shape, not the encoding.
 ///
-/// **Current state**: `PREV_WIRE_VERSION = 11`, `WIRE_VERSION = 12`. A `WireMessageV11`
-/// shim is required because changing a variant's field layout changes the encoding.
+/// **Current state**: `PREV_WIRE_VERSION = 11`, `WIRE_VERSION = 12`. A dedicated
+/// `codec::decode_wire_v11` path is required because changing a variant's field layout changes the encoding.
 pub const WIRE_VERSION: u8 = 12;
 /// Previous wire version accepted during rolling upgrades.
 pub const PREV_WIRE_VERSION: u8 = 11;
@@ -102,7 +102,7 @@ pub enum FrameVersion {
     /// Encoded at `WIRE_VERSION` — decode via `codec::decode_wire` and use the
     /// zero-copy Data forwarding path.
     Current,
-    /// Encoded at `PREV_WIRE_VERSION` — decode via `codec::decode_wire_v10` and
+    /// Encoded at `PREV_WIRE_VERSION` — decode via `codec::decode_wire_v11` and
     /// full re-encode on forward.
     Previous,
 }
@@ -122,7 +122,7 @@ pub const N_GOSSIP_SHARDS: usize = 4;
 ///  [22..30] GossipUpdate.timestamp (u64 LE)
 ///  [30..]   GossipUpdate.key, GossipUpdate.value (variable-length)
 ///
-/// IMPORTANT: if `GossipUpdate`'s field order or `bincode_cfg()` changes these
+/// IMPORTANT: if `GossipUpdate`'s field order or the `codec` layout changes, these
 /// constants must be updated. `test_ttl_offset_matches_wire_layout` and
 /// `test_nonce_offset_matches_wire_layout` encode live messages and assert the
 /// byte offsets — update them alongside these constants.
@@ -182,7 +182,7 @@ pub enum WireMessage {
     /// computes its own digest and replies with the entries in every bucket whose
     /// hash differs — `O(divergence)` rather than `O(keys)`. An empty vec means
     /// "no digest" — the receiver sends a full snapshot (backward-compat sentinel
-    /// for v11 peers downgraded via `WireMessageV11`, and for a fresh/empty store).
+    /// for v11 peers downgraded via `codec::decode_wire_v11`, and for a fresh/empty store).
     StateRequest { sender: NodeId, store_hash: u64, bucket_hashes: Vec<u64> },
     /// Response to `StateRequest`; contains the responder's current store.
     StateResponse { entries: Vec<SyncEntry> },
@@ -237,30 +237,6 @@ pub fn shard_for_key(key: &str, n_shards: usize) -> usize {
     shard_hasher().hash_one(key) as usize & (n_shards - 1)
 }
 
-/// The bincode configuration the wire format was historically encoded with.
-///
-/// As of WS-B M11 the live encode/decode path is the hand-rolled
-/// [`crate::codec`] / [`crate::serde_fixint`] codec; `bincode` is retained
-/// **only as a test-time oracle** (a dev-dependency) to prove the new codec is
-/// byte-identical to the old format. Hence this is `#[cfg(test)]`.
-#[cfg(test)]
-#[inline(always)]
-pub fn bincode_cfg() -> impl bincode::config::Config {
-    // `.with_limit` caps how many bytes a decode is allowed to consume/allocate.
-    // Without it, a frame whose internal length prefix claims a huge element
-    // count makes bincode attempt an unbounded `Vec::with_capacity` and the
-    // process OOM-aborts — one malformed frame from any peer (or a bit-flip on
-    // a non-TLS link) kills the node. The frame itself is already capped at
-    // MAX_FRAME_BYTES by `read_frame`, and no legitimately-decoded message
-    // exceeds the frame it arrived in, so MAX_FRAME_BYTES is the correct
-    // ceiling. (M2 Run-20 finding, caught by the decoder mini-fuzz:
-    // `mini_fuzz_decoders_survive_adversarial_bytes`.)
-    bincode::config::standard()
-        .with_fixed_int_encoding()
-        .with_limit::<MAX_FRAME_BYTES>()
-}
-
-
 /// Extracts the gossip shard routing key from a wire message.
 fn wire_msg_key(msg: &WireMessage) -> &str {
     match msg {
@@ -307,56 +283,11 @@ pub async fn dispatch_gossip_send(
     gossip_txs[shard].send((buf, sender_hash, hint)).await.is_ok()
 }
 
-/// Wire envelope for `PREV_WIRE_VERSION` (v11) frames.
-///
-/// Identical to [`WireMessage`] except `StateRequest` still carries the v11
-/// `key_timestamps` full index instead of the v12 `bucket_hashes` Merkle digest.
-/// (Signal already has `hlc_seq` in v11, so it is unchanged.) [`From<WireMessageV11>`]
-/// upgrades a decoded v11 frame to `WireMessage`, dropping the index in favour of
-/// `bucket_hashes = vec![]` — the "no digest" sentinel, so a v11 peer's anti-entropy
-/// request simply triggers a full snapshot during the rolling-upgrade window.
-///
-/// Used only by the test that exercises the bincode-era layout; the live previous
-/// decode path is `codec::decode_wire_v11`.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub enum WireMessageV11 {
-    Data(GossipUpdate),
-    Ping { sender: NodeId, known_peers: Vec<NodeId> },
-    /// v11 variant — full key→timestamp index, no `bucket_hashes`.
-    StateRequest { sender: NodeId, store_hash: u64, key_timestamps: Vec<(Arc<str>, u64)> },
-    StateResponse { entries: Vec<SyncEntry> },
-    Signal {
-        ttl:     u8,
-        nonce:   u64,
-        sender:  NodeId,
-        scope:   SignalScope,
-        kind:    Arc<str>,
-        payload: bytes::Bytes,
-        hlc_seq: Option<u64>,
-    },
-    /// Ed25519-signed KV write (tls feature). Layout unchanged from v11.
-    #[cfg(feature = "tls")]
-    SignedData { update: GossipUpdate, signer: u64, signature: ([u8; 32], [u8; 32]) },
-}
-
-impl From<WireMessageV11> for WireMessage {
-    fn from(m: WireMessageV11) -> Self {
-        match m {
-            WireMessageV11::Data(u) => WireMessage::Data(u),
-            WireMessageV11::Ping { sender, known_peers } =>
-                WireMessage::Ping { sender, known_peers },
-            WireMessageV11::StateRequest { sender, store_hash, .. } =>
-                WireMessage::StateRequest { sender, store_hash, bucket_hashes: vec![] },
-            WireMessageV11::StateResponse { entries } =>
-                WireMessage::StateResponse { entries },
-            WireMessageV11::Signal { ttl, nonce, sender, scope, kind, payload, hlc_seq } =>
-                WireMessage::Signal { ttl, nonce, sender, scope, kind, payload, hlc_seq },
-            #[cfg(feature = "tls")]
-            WireMessageV11::SignedData { update, signer, signature } =>
-                WireMessage::SignedData { update, signer, signature },
-        }
-    }
-}
+// Previous-version (v11) frames are decoded by the hand-rolled `crate::codec::decode_wire_v11`: the
+// v11 layout is identical to v12 except `StateRequest` carries the old `key_timestamps` full index
+// instead of the `bucket_hashes` Merkle digest, which `decode_wire_v11` reads and discards, downgrading
+// to `bucket_hashes = vec![]` — the "no digest" sentinel, so a v11 peer's anti-entropy request simply
+// triggers a full snapshot during the rolling-upgrade window. (Signal already has `hlc_seq` in v11.)
 
 /// Writes a length-prefixed frame: `[4-byte len][WIRE_VERSION][payload]`.
 /// The 5-byte header and payload are written as two consecutive `write_all` calls;
@@ -578,9 +509,7 @@ mod tests {
             key:          Arc::from("k"),
             value:        Bytes::new(),
         };
-        let encoded = bincode::serde::encode_to_vec(
-            WireMessage::Data(update), bincode_cfg(),
-        ).unwrap();
+        let encoded = crate::codec::wire_to_bytes(&WireMessage::Data(update));
         assert_eq!(
             encoded[TTL_OFFSET], 0xAA,
             "TTL_OFFSET={} does not point at ttl byte; wire layout may have changed",
@@ -599,9 +528,7 @@ mod tests {
             key:          Arc::from("k"),
             value:        Bytes::new(),
         };
-        let encoded = bincode::serde::encode_to_vec(
-            WireMessage::Data(update), bincode_cfg(),
-        ).unwrap();
+        let encoded = crate::codec::wire_to_bytes(&WireMessage::Data(update));
         let nonce = u64::from_le_bytes(
             encoded[NONCE_OFFSET..NONCE_OFFSET + 8].try_into().unwrap(),
         );
@@ -768,8 +695,8 @@ mod tests {
     }
 
     /// Verifies the rolling-upgrade invariant: a frame encoded at PREV_WIRE_VERSION
-    /// (v11) is accepted by read_frame (returns FrameVersion::Previous) and the
-    /// payload decodes correctly via WireMessageV11 → WireMessage. Specifically
+    /// (v11) is accepted by read_frame (returns FrameVersion::Previous) and the payload
+    /// decodes correctly via the live [`crate::codec::decode_wire_v11`] path. Specifically
     /// confirms that a v11 StateRequest (carrying the old `key_timestamps` index)
     /// downgrades to `bucket_hashes = vec![]` — the "no digest" sentinel that
     /// triggers a full snapshot during the upgrade window.
@@ -777,15 +704,17 @@ mod tests {
     async fn read_frame_accepts_prev_wire_version() {
         use tokio::io::AsyncWriteExt;
 
-        let sender_node = crate::node_id::NodeId::new("127.0.0.1", 19_000).unwrap();
-
-        // Build a v11 StateRequest (full key→timestamp index, no bucket_hashes).
-        let v11_msg = WireMessageV11::StateRequest {
-            sender:         sender_node.clone(),
-            store_hash:     0xABCD,
-            key_timestamps: vec![(Arc::from("k1"), 10), (Arc::from("k2"), 20)],
-        };
-        let encoded = bincode::serde::encode_to_vec(v11_msg, bincode_cfg()).unwrap();
+        // Golden bincode-era v11 StateRequest bytes (sender 127.0.0.1:7000, store_hash 0x99, full
+        // key→timestamp index [("a",1),("bb",2)]) — captured when the codec was proven byte-identical
+        // to bincode fixed-int (WS-B M11). No dependency on the retired `bincode`.
+        const V11_STATE_REQUEST: &[u8] = &[
+            0x02, 0x00, 0x00, 0x00, 0x0e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x31, 0x32, 0x37,
+            0x2e, 0x30, 0x2e, 0x30, 0x2e, 0x31, 0x3a, 0x37, 0x30, 0x30, 0x30, 0x99, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x61, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x62, 0x62, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00,
+        ];
 
         // Write a frame header stamped with PREV_WIRE_VERSION.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -793,10 +722,10 @@ mod tests {
         let mut writer = tokio::net::TcpStream::connect(addr).await.unwrap();
         let (mut reader, _) = listener.accept().await.unwrap();
 
-        let payload_len = encoded.len() as u32 + 1; // +1 for the version byte
+        let payload_len = V11_STATE_REQUEST.len() as u32 + 1; // +1 for the version byte
         writer.write_all(&payload_len.to_be_bytes()).await.unwrap();
         writer.write_all(&[PREV_WIRE_VERSION]).await.unwrap();
-        writer.write_all(&encoded).await.unwrap();
+        writer.write_all(V11_STATE_REQUEST).await.unwrap();
 
         // read_frame must accept the v11 frame and report FrameVersion::Previous.
         let mut buf = BytesMut::new();
@@ -805,24 +734,14 @@ mod tests {
         assert_eq!(frame_ver, FrameVersion::Previous,
             "v11 frame must be reported as FrameVersion::Previous");
 
-        // The live previous-decode path (codec) must downgrade it cleanly...
-        let upgraded = crate::codec::decode_wire_v11(&buf)
-            .expect("v11 codec decode must succeed");
-        // ...identically to the bincode WireMessageV11 → WireMessage shim.
-        let (v11_decoded, _) = bincode::serde::decode_from_slice::<WireMessageV11, _>(
-            &buf, bincode_cfg(),
-        ).expect("WireMessageV11 decode must succeed");
-        let via_shim: WireMessage = v11_decoded.into();
-
-        for m in [upgraded, via_shim] {
-            match m {
-                WireMessage::StateRequest { store_hash, bucket_hashes, .. } => {
-                    assert_eq!(store_hash, 0xABCD);
-                    assert!(bucket_hashes.is_empty(),
-                        "v11 StateRequest must downgrade to bucket_hashes=vec![] (full-snapshot sentinel)");
-                }
-                other => panic!("expected WireMessage::StateRequest, got {other:?}"),
+        // The live previous-decode path (codec) must downgrade it cleanly to the no-digest sentinel.
+        match crate::codec::decode_wire_v11(&buf).expect("v11 codec decode must succeed") {
+            WireMessage::StateRequest { store_hash, bucket_hashes, .. } => {
+                assert_eq!(store_hash, 0x99);
+                assert!(bucket_hashes.is_empty(),
+                    "v11 StateRequest must downgrade to bucket_hashes=vec![] (full-snapshot sentinel)");
             }
+            other => panic!("expected WireMessage::StateRequest, got {other:?}"),
         }
     }
 }

@@ -665,7 +665,7 @@ pub fn reconcile_boundary_from_store(
 /// Pheromone load state written to Layer I by `GossipAgent::manage_opacity`.
 ///
 /// Key convention: `sys/load/{node_id}/{kind}` (see [`kv_ns::LOAD`]).
-/// Encoded with `bincode_cfg()` (fixed-int).
+/// Encoded with the in-tree fixed-int `serde_fixint` codec.
 /// An absent key means the node is transparent (not overloaded) for that kind.
 /// Tombstoned automatically when `BOUNDARY_TRANSPARENT` is emitted.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]

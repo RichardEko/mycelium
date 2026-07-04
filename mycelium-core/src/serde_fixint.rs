@@ -7,9 +7,9 @@
 //! through [`to_vec`] / [`from_slice`], producing the *same bytes* — so this is a
 //! drop-in swap with no on-disk migration and no signature/hash-chain breakage
 //! (audit chains, consensus signatures, and KV-stored capability bytes are all
-//! computed over these bytes). The `tests` module proves equivalence against
-//! `bincode` for representative types; `bincode` is retained only as a
-//! `dev-dependency` oracle.
+//! computed over these bytes). The `tests` module pins the exact layout with
+//! **golden byte-vectors** (`layout_is_pinned_by_goldens`) plus round-trips;
+//! `bincode` is fully retired — not even a dev-dependency (clears RUSTSEC-2025-0141).
 //!
 //! ## Layout (the bincode fixed-int subset we reproduce)
 //! - integers: little-endian, fixed width (`i8..=i128`, `u8..=u128`);
@@ -454,24 +454,20 @@ impl<'de> de::VariantAccess<'de> for Enum<'_, 'de> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::framing::bincode_cfg;
     use serde::{Deserialize, Serialize};
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
-    /// Encode `v` with both codecs and assert byte-equality, then round-trip ours.
-    fn assert_matches_bincode<T>(v: &T)
+    /// Round-trip: encode with our fixed-int codec and decode back to the same value. (The exact byte
+    /// layout is pinned separately by `layout_is_pinned_by_goldens` — together these replace the retired
+    /// `bincode` byte-equality oracle.)
+    fn assert_roundtrip<T>(v: &T)
     where
         T: Serialize + for<'d> Deserialize<'d> + PartialEq + std::fmt::Debug,
     {
         let mine = to_vec(v).unwrap();
-        let theirs = bincode::serde::encode_to_vec(v, bincode_cfg()).unwrap();
-        assert_eq!(mine, theirs, "encode mismatch for {v:?}");
         let back: T = from_slice(&mine).unwrap();
         assert_eq!(&back, v, "round-trip mismatch for {v:?}");
-        // bincode's bytes must also decode through us.
-        let cross: T = from_slice(&theirs).unwrap();
-        assert_eq!(&cross, v, "cross-decode mismatch for {v:?}");
     }
 
     #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -495,32 +491,32 @@ mod tests {
     }
 
     #[test]
-    fn primitives_match_bincode() {
-        assert_matches_bincode(&true);
-        assert_matches_bincode(&false);
-        assert_matches_bincode(&0u8);
-        assert_matches_bincode(&u64::MAX);
-        assert_matches_bincode(&(-1234567i64));
-        assert_matches_bincode(&core::f32::consts::PI);
-        assert_matches_bincode(&core::f64::consts::E);
-        assert_matches_bincode(&String::from("héllo wörld"));
-        assert_matches_bincode(&Option::<u32>::None);
-        assert_matches_bincode(&Some(42u32));
-        assert_matches_bincode(&vec![1u64, 2, 3]);
-        assert_matches_bincode(&(1u8, 2u16, 3u32, 4u64));
+    fn primitives_round_trip() {
+        assert_roundtrip(&true);
+        assert_roundtrip(&false);
+        assert_roundtrip(&0u8);
+        assert_roundtrip(&u64::MAX);
+        assert_roundtrip(&(-1234567i64));
+        assert_roundtrip(&core::f32::consts::PI);
+        assert_roundtrip(&core::f64::consts::E);
+        assert_roundtrip(&String::from("héllo wörld"));
+        assert_roundtrip(&Option::<u32>::None);
+        assert_roundtrip(&Some(42u32));
+        assert_roundtrip(&vec![1u64, 2, 3]);
+        assert_roundtrip(&(1u8, 2u16, 3u32, 4u64));
     }
 
     #[test]
-    fn enums_match_bincode() {
-        assert_matches_bincode(&Shape::Unit);
-        assert_matches_bincode(&Shape::New(0xDEAD_BEEF));
-        assert_matches_bincode(&Shape::Tuple(7, "x".into()));
-        assert_matches_bincode(&Shape::Struct { a: -5, b: vec![9, 8, 7], c: Some(1.5) });
-        assert_matches_bincode(&Shape::Struct { a: 0, b: vec![], c: None });
+    fn enums_round_trip() {
+        assert_roundtrip(&Shape::Unit);
+        assert_roundtrip(&Shape::New(0xDEAD_BEEF));
+        assert_roundtrip(&Shape::Tuple(7, "x".into()));
+        assert_roundtrip(&Shape::Struct { a: -5, b: vec![9, 8, 7], c: Some(1.5) });
+        assert_roundtrip(&Shape::Struct { a: 0, b: vec![], c: None });
     }
 
     #[test]
-    fn nested_struct_matches_bincode() {
+    fn nested_struct_round_trips() {
         let mut map = BTreeMap::new();
         map.insert("alpha".to_string(), -1i64);
         map.insert("beta".to_string(), 2i64);
@@ -534,21 +530,48 @@ mod tests {
             ratio: 0.625,
             sig: ([0x11; 32], [0x22; 32]),
         };
-        assert_matches_bincode(&v);
+        assert_roundtrip(&v);
+    }
+
+    /// Golden byte-vectors pinning the exact fixed-int layout (captured from the codec when it was
+    /// proven byte-identical to `bincode 2.x` fixed-int, WS-B M11). With `assert_roundtrip` above, these
+    /// replace the retired `bincode` byte-equality oracle: round-trip proves self-consistency, goldens
+    /// pin the exact on-disk/on-wire bytes (which signatures + hash chains are computed over).
+    #[test]
+    fn layout_is_pinned_by_goldens() {
+        assert_eq!(to_vec(&u64::MAX).unwrap(), [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+        assert_eq!(to_vec(&(-1234567i64)).unwrap(), [0x79, 0x29, 0xed, 0xff, 0xff, 0xff, 0xff, 0xff]);
+        assert_eq!(to_vec(&core::f64::consts::E).unwrap(), [0x69, 0x57, 0x14, 0x8b, 0x0a, 0xbf, 0x05, 0x40]);
+        // multibyte UTF-8: u64 LE byte-length then the raw bytes
+        assert_eq!(to_vec(&String::from("héllo wörld")).unwrap(),
+            [0x0d, 0, 0, 0, 0, 0, 0, 0, 0x68, 0xc3, 0xa9, 0x6c, 0x6c, 0x6f, 0x20, 0x77, 0xc3, 0xb6, 0x72, 0x6c, 0x64]);
+        assert_eq!(to_vec(&Option::<u32>::None).unwrap(), [0x00]);
+        assert_eq!(to_vec(&Some(42u32)).unwrap(), [0x01, 0x2a, 0x00, 0x00, 0x00]);
+        assert_eq!(to_vec(&(1u8, 2u16, 3u32, 4u64)).unwrap(),
+            [0x01, 0x02, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        // struct enum variant (tag 3) with i32, Vec<u8>, Option<f64>
+        assert_eq!(to_vec(&Shape::Struct { a: -5, b: vec![9, 8, 7], c: Some(1.5) }).unwrap(),
+            [0x03, 0, 0, 0, 0xfb, 0xff, 0xff, 0xff, 0x03, 0, 0, 0, 0, 0, 0, 0, 0x09, 0x08, 0x07, 0x01, 0, 0, 0, 0, 0, 0, 0xf8, 0x3f]);
+        // the full Nested (map/fixed-array/sig/Box/Arc<str>) — the comprehensive layout guard
+        let mut map = BTreeMap::new();
+        map.insert("alpha".to_string(), -1i64);
+        map.insert("beta".to_string(), 2i64);
+        let n = Nested {
+            id: 0x0102_0304_0506_0708, name: Arc::from("node-a:7000"),
+            flags: vec![true, false, true], opt: Some(Box::new(Shape::New(99))), map,
+            fixed: [0xAA, 0xBB, 0xCC, 0xDD], ratio: 0.625, sig: ([0x11; 32], [0x22; 32]),
+        };
+        assert_eq!(to_vec(&n).unwrap(), [0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x6e, 0x6f, 0x64, 0x65, 0x2d, 0x61, 0x3a, 0x37, 0x30, 0x30, 0x30, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x63, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x61, 0x6c, 0x70, 0x68, 0x61, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x62, 0x65, 0x74, 0x61, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xaa, 0xbb, 0xcc, 0xdd, 0x00, 0x00, 0x20, 0x3f, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22]);
     }
 
     #[test]
-    fn from_slice_tolerates_trailing_bytes_like_bincode() {
-        // bincode's decode_from_slice ignores trailing bytes; from_slice must match,
-        // because `cap/` values are a Capability-prefix followed by a trailing u64
-        // (CapEntry's refresh interval) that legacy/card readers decode past.
+    fn from_slice_tolerates_trailing_bytes() {
+        // `from_slice` decodes a prefix and ignores trailing bytes (matching the retired bincode
+        // `decode_from_slice`), because `cap/` values are a Capability-prefix followed by a trailing
+        // u64 (CapEntry's refresh interval) that readers decode past.
         let mut bytes = to_vec(&42u32).unwrap();
         bytes.extend_from_slice(&60_000u64.to_le_bytes()); // trailing suffix
         assert_eq!(from_slice::<u32>(&bytes).unwrap(), 42, "must decode the prefix, ignore trailing");
-        // And it stays byte-equivalent to bincode's lenient decode.
-        let (via_bincode, _): (u32, _) =
-            bincode::serde::decode_from_slice(&bytes, bincode_cfg()).unwrap();
-        assert_eq!(via_bincode, 42);
 
         // The real shape: a prefix struct followed by a trailing scalar (CapEntry layout).
         #[derive(Serialize, Deserialize, PartialEq, Debug)]
