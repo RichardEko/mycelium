@@ -39,6 +39,8 @@ mod reconcile;
 mod lint;
 #[cfg(feature = "control-plane")]
 mod mcp;
+#[cfg(feature = "control-plane")]
+mod broker;
 #[cfg(feature = "gateway")]
 mod http;
 
@@ -75,3 +77,9 @@ pub use lint::LlmSemanticLinter;
 /// invoke path. Hold the returned [`WikiMcpTools`] guard for the tools' lifetime.
 #[cfg(feature = "control-plane")]
 pub use mcp::WikiMcpTools;
+
+/// The **access broker** (Phase 2 remainder) — the curator's membership gate on store access.
+/// [`Membership`] (set on [`CuratorBrain`]) decides who [`Wiki::request_store_access`] grants a
+/// [`StoreGrant`] to; a one-time handshake, then reads go direct. [`AccessError`] on the deny/failure path.
+#[cfg(feature = "control-plane")]
+pub use broker::{AccessError, Membership, StoreGrant};

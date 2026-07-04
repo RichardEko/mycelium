@@ -17,6 +17,7 @@ use tokio::task::JoinHandle;
 
 use mycelium::{CapFilter, Capability, CapabilityReg, GossipAgent, NodeId};
 
+use crate::broker::{AccessError, AccessReply, Membership, StoreGrant};
 use crate::lint::{structural_lint, LintReport, SemanticLinter};
 use crate::model::{mint_section_id, Page, Predicate, Section, SectionId, SectionRef, WikiError};
 use crate::reconcile::{DirectReconciler, ProposalEdit, Reconciler};
@@ -68,18 +69,29 @@ impl WikiConfig {
 pub struct CuratorBrain {
     pub reconciler:    Box<dyn Reconciler>,
     pub semantic_lint: Option<Box<dyn SemanticLinter>>,
+    /// The membership gate the curator applies to store-access requests (default [`Membership::Open`]).
+    pub membership:    Membership,
 }
 
 impl Default for CuratorBrain {
-    fn default() -> Self { Self { reconciler: Box::new(DirectReconciler), semantic_lint: None } }
+    fn default() -> Self {
+        Self { reconciler: Box::new(DirectReconciler), semantic_lint: None, membership: Membership::Open }
+    }
 }
 
 impl CuratorBrain {
     /// A brain with a custom reconciler and no semantic lint.
-    pub fn new(reconciler: Box<dyn Reconciler>) -> Self { Self { reconciler, semantic_lint: None } }
+    pub fn new(reconciler: Box<dyn Reconciler>) -> Self {
+        Self { reconciler, semantic_lint: None, membership: Membership::Open }
+    }
     /// Add the LLM self-consistency pass to the periodic lint.
     pub fn with_semantic_lint(mut self, linter: Box<dyn SemanticLinter>) -> Self {
         self.semantic_lint = Some(linter);
+        self
+    }
+    /// Set the curator's membership gate for store-access requests.
+    pub fn with_membership(mut self, membership: Membership) -> Self {
+        self.membership = membership;
         self
     }
 }
@@ -116,6 +128,8 @@ pub struct Wiki<S: WikiStore + 'static> {
     reconciler:       Box<dyn Reconciler>,
     /// The optional LLM self-consistency lint (structural lint is always on, needs no injection).
     semantic_lint:    Option<Box<dyn SemanticLinter>>,
+    /// The curator's membership gate for store-access requests (only consulted while curating).
+    membership:       Membership,
     /// The latest lint report (refreshed each lint tick while curating) — the group-function output.
     last_lint:        Mutex<LintReport>,
     /// Set whenever the curator writes the store; the periodic lint loop only runs a (whole-corpus)
@@ -156,6 +170,7 @@ impl<S: WikiStore + 'static> Wiki<S> {
             store,
             reconciler:       brain.reconciler,
             semantic_lint:    brain.semantic_lint,
+            membership:       brain.membership,
             last_lint:        Mutex::new(LintReport::default()),
             lint_dirty:       AtomicBool::new(true),
             lint_passes:      AtomicU64::new(0),
@@ -210,6 +225,29 @@ impl<S: WikiStore + 'static> Wiki<S> {
     pub fn read(&self, page: &str) -> Result<Option<Page>, WikiError> { self.store.read(page) }
     /// Query sections by attribute directly from the store.
     pub fn query(&self, pred: &Predicate) -> Result<Vec<SectionRef>, WikiError> { self.store.query(pred) }
+
+    /// **Request store access** from the curator — the one-time broker handshake. Resolves the elected
+    /// curator, RPCs it, and (if the curator's membership gate grants this node) returns a [`StoreGrant`]
+    /// naming *where* to read. After this, open the store and read **directly** — the broker is not on
+    /// the read path. The curator self-grants. Idempotent; safe to retry on [`AccessError::NoCurator`]
+    /// (failover in progress) or [`AccessError::Rpc`] (transient).
+    pub async fn request_store_access(&self) -> Result<StoreGrant, AccessError> {
+        let group = self.cfg.group.to_string();
+        if self.is_curator() {
+            return Ok(StoreGrant { group, location: self.store.location() }); // I hold the store
+        }
+        let curator = self.resolve_role("curator").into_iter().next().ok_or(AccessError::NoCurator)?;
+        let kind = format!("wiki.{}.access", self.cfg.group);
+        let raw = self.agent.service()
+            .rpc_call(curator, kind, Vec::<u8>::new(), Duration::from_secs(5))
+            .await
+            .map_err(|e| AccessError::Rpc(e.to_string()))?;
+        let reply: AccessReply = serde_json::from_slice(&raw).map_err(|e| AccessError::Decode(e.to_string()))?;
+        match (reply.granted, reply.location) {
+            (true, Some(location)) => Ok(StoreGrant { group, location }),
+            _                      => Err(AccessError::Denied),
+        }
+    }
 
     /// The most recent lint report (the curator refreshes it after a change; empty until the first
     /// pass, and on a non-curator node). Advisory — findings are surfaced, never auto-applied.
@@ -311,9 +349,23 @@ impl<S: WikiStore + 'static> Wiki<S> {
                 }
             }
         });
+        // The access broker: answer store-access requests, gated on membership. Point-to-point RPC so a
+        // grant (and, for a real object store, its scoped credential) never floods the cluster.
+        let me = Arc::clone(self);
+        let broker = tokio::spawn(async move {
+            let mut rx = me.agent.service().rpc_rx(format!("wiki.{}.access", me.cfg.group));
+            while let Some(req) = rx.recv().await {
+                let requester = req.sender().to_string();
+                let granted = me.membership.permits(&requester);
+                let reply = AccessReply { granted, location: granted.then(|| me.store.location()) };
+                me.agent.service().rpc_respond(&req, serde_json::to_vec(&reply).unwrap_or_default());
+                tracing::info!(group = %me.cfg.group, requester = %requester, granted, "wiki: store-access request");
+            }
+        });
         let mut tasks = self.tasks.lock();
         tasks.push(drain);
         tasks.push(lint);
+        tasks.push(broker);
         drop(tasks);
         tracing::info!(group = %self.cfg.group, "wiki: serving as curator");
     }

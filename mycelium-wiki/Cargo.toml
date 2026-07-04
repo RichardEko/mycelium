@@ -50,6 +50,10 @@ name = "failover"
 required-features = ["control-plane"]
 
 [[test]]
+name = "access"
+required-features = ["control-plane"]
+
+[[test]]
 name = "gateway"
 required-features = ["gateway"]
 

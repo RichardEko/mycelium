@@ -39,6 +39,17 @@ to reclaim a wiki — it aborts the tasks (releasing their `Arc<Self>`, breaking
 retracts the cap ads. Mirrors `Blackboard::shutdown`; without it a discarded `Wiki` leaks its tasks until
 the runtime ends. Canary: `agent::tests::shutdown_breaks_the_task_cycle_and_frees_the_wiki`.
 
+## The access broker (membership-gated store grant)
+
+`Wiki::request_store_access` is a **one-time** handshake: an agent RPCs the curator, which — if its
+`Membership` gate (`Open` | `Allowlist`, set on the `CuratorBrain`) permits the requester's
+transport-authenticated node id — replies with a `StoreGrant` (the store `location`; a real object-store
+adapter would add a scoped credential). After the grant the agent opens the store and reads **directly**,
+so the broker is **not on the read path** — node-independence holds. RPC (not KV) so a grant/credential
+goes point-to-point, never floods the cluster. The curator self-grants; `AccessError::{NoCurator,Denied}`
+on the retry/deny paths. Cross-node `tests/access.rs`: an allowlisted reader is granted its store's
+location; one outside the allowlist is denied.
+
 ## The write path: propose → drain → reconcile → apply
 
 - **Evaporating proposal queue:** any agent (any role) `propose`s → an evaporating
@@ -90,7 +101,8 @@ Joined to **Postgres** (typed metrics/structure) + **RAG** (background) by a **s
 
 `cargo test -p mycelium-wiki` (data plane) · `--features control-plane` (curator + `tests/failover.rs`)
 · `--features llm` (reconcile + semantic-lint wiring, EchoBackend) · `--features gateway`
-(`tests/gateway.rs` — the `/gateway/wiki/*` lifecycle) · `./mycelium-wiki/ci_smoke.sh` (the worked
-example, Docker-free) · clippy `--features control-plane|llm|gateway --all-targets -D warnings`. Wired
-as the CI **Wiki** job. **Only open remainder (additive):** the disconnected KV-native section-CRDT
-variant for the no-external-store case (design record `docs/design/wiki-concurrent-edit.md`).
+(`tests/gateway.rs` — the `/gateway/wiki/*` lifecycle) · `tests/access.rs` (the membership-gated broker,
+under `control-plane`) · `./mycelium-wiki/ci_smoke.sh` (the worked example, Docker-free) · clippy
+`--features control-plane|llm|gateway --all-targets -D warnings`. Wired as the CI **Wiki** job. **Only
+open remainder (additive):** the disconnected KV-native section-CRDT variant for the no-external-store
+case (design record `docs/design/wiki-concurrent-edit.md`).
