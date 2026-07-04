@@ -1,7 +1,11 @@
 # mycelium-wiki — design sketch
 
-**Status:** 🟢 **Approach revised 2026-07-03 — control-plane / data-plane** (design record done
-2026-07-02; two driving use cases reviewed 2026-07-03). Build not started under the new shape.
+**Status:** ✅ **Build phases 1–5 shipped 2026-07-03** under the control-plane / data-plane shape
+(data plane · curator control plane · reconcile + change-driven lint · MCP tools + HTTP gateway + py/ts
+SDKs · worked example), all CI-green; audited in analysis Run 32 (one Major finding found + fixed —
+`Wiki::shutdown`). Companion page: [`docs/wiki/dev/companions/wiki.md`](../wiki/dev/companions/wiki.md).
+**Open (additive):** the **access broker** (scoped read grant → group-membership gate) and the
+disconnected KV-native variant. Design record: 2026-07-02; two driving use cases reviewed 2026-07-03.
 
 > **Revision (2026-07-03) — the wiki is NOT in the KV substrate.** Reviewing two real use cases
 > (Novus-i2 organisational digital-twin; Transparency-Platform council decisions) with the intended
