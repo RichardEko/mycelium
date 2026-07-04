@@ -42,7 +42,7 @@ causal-order + consensus + recallable-role machinery** that makes coordination-f
 | `\cite{habiba-gossip-vision}` | IBM Software, Dublin (same cluster) | Vision | Earlier statement of the same gossip-for-emergent-coordination thesis. |
 | `\cite{terrarium}` | **UMass Amherst** (Zilberstein et al.) + **MPI/ELLIS Tübingen** | Framework, security-angled | Revives the **blackboard** for multi-agent safety/privacy — academic kin to the substrate's content-routed sharing; not a coordination-scaling argument. |
 | `\cite{evogit}` | **Hong Kong Polytechnic Univ** (Tan, Cheng) | Implemented (narrow) | Coordination **emerges through a shared git version-graph, no central scheduler** — the "substrate not scheduler" instinct, in code, but domain-specific (code evolution). |
-| `\cite{pressure-fields-decay}` | **Independent** (Rodriguez, no affiliation) | Theory **+ benchmarks** (65 pp, v3; convergence proofs + eval vs CrewAI/AutoGen/MetaGPT) | **Pressure fields + temporal decay = stigmergy + evaporation** — the **closest** work on *this* axis, and it is *not* vision-only. Differentiator narrows to boundary-vs-field + integration + recursion (see matrix below). **Row provisional — PDF only partly read.** |
+| `\cite{pressure-fields-decay}` | **Independent** (Rodriguez, solo) | Algorithm + convergence proofs + **simulation benchmarks** (meeting-room scheduling, 1–4 LLM agents) | **Stigmergy + evaporation, genuinely shared** — but an **application-level single-artifact refinement algorithm** (tick-synchronous, a central per-tick selection, single machine), a *different layer* from a distributed substrate. A fellow-traveller / ally in the motivation, not a rival. Full read below. |
 
 **Positioning sentence (draft):** *"The substrate direction is not idiosyncratic: an IBM agentic-AI
 architect \cite{geacl,habiba-gossip-vision}, a leading multi-agent-systems group \cite{terrarium}, an
@@ -97,7 +97,7 @@ For consistency, the identical signal/boundary interrogation applied to the othe
 | GEACL / Habiba `\cite{geacl}` | ✗ | ✗ | ✗ (sender-side load *routing* only) | ✗ | **state** substrate |
 | Terrarium `\cite{terrarium}` | ✗ | `~` (sender sets recipients; blackboard membership via factor graph) | ✗ (treats context-overflow as an **attack to defend**, not load to shed) | ✗ | **instrumented, scoped safety-research blackboard** |
 | EvoGit `\cite{evogit}` | ✗ | ✗ | ✗ (agents "operate independently," "no centralized scheduling") | analogy only, **not implemented**; git history is **permanent** — the *opposite* of evaporation | **immutable shared-artifact** coordination |
-| Pressure-fields `\cite{pressure-fields-decay}` | `?` | `~` (per-region components) | `?` — an **attraction/allocation field agents follow**, not a node making *itself* unavailable | **✓ core thesis + empirical benchmarks** (vs CrewAI/AutoGen/MetaGPT) | **closest on stigmergy/decay** — but a coordination *field*, not an admission *boundary* |
+| Pressure-fields `\cite{pressure-fields-decay}` | ✗ — message-free; a **central per-tick selection** (sort proposals, pick top-κ) replaces admission | ✗ — "regions" are artifact subdivisions, not addressing scopes | ✗ — "inhibition" = *region cooldown*; no node/load model at all (single-machine tick loop) | **✓ core thesis + benchmarks** | **stigmergy kin at a *different layer*** — an application-level single-artifact refinement algorithm, not a distributed substrate |
 
 **Read this honestly — it is where the paper could over-reach.** The pressure-fields work
 \cite{pressure-fields-decay} genuinely shares the stigmergy-plus-evaporation core *and* reports
@@ -122,9 +122,41 @@ an *attack surface to defend*, where Mycelium treats overload as a *signal to ro
 metabolism). **EvoGit** inverts the memory story — an *immutable, permanent* git history, where Mycelium's
 whole model is *evaporation/TTL* (permanence vs forgetting-as-a-feature).
 
-_Confidence: Terrarium/EvoGit read cleanly; the **pressure-fields analysis is partial** — several rows are
-`?` because the PDF text did not fully extract, and it is a 65-page v3 with benchmarks that deserves a
-proper read before it anchors any claim in §2. Treat its row as provisional._
+### Pressure-fields — the full read (2026-07-04, pp. 1–24: abstract, §2 related work, §3 model, §4 method + Algorithm 1, §5 all theorems, §6 setup)
+
+The provisional row above resolved on a proper read, and the finding is *better than "closest competitor"*
+— it is **not a competitor at all, but a fellow-traveller one layer up.** Precisely:
+
+- **What it is.** A paradigm for **collaborative artifact refinement by LLM agents**: *one* shared artifact
+  of `n` "regions"; a **quality-pressure field** `P(s)=Σ Pᵢ` derived from local signal functions; agents
+  greedily propose region patches that lower local pressure; **temporal decay** erodes fitness to force
+  continued exploration. Formalised as a potential game with convergence proofs (Thm 5.1/5.3), and
+  **evaluated in single-machine simulation** on meeting-room scheduling (qwen2.5:0.5–3B via Ollama, 1–4
+  agents) vs conversation/hierarchical/sequential/random baselines.
+- **Genuinely shared with Mycelium (state it, credit it):** stigmergy + evaporation as the coordination
+  principle; locality (agents see only their region); **role-free**; "coordination from shared state, not
+  messages"; and — usefully — its §5.4 makes the *same coordinator critique* (centralized = SPOF,
+  hierarchical = manager cascade, message-passing = O(n²)). It is an **empirical ally for the motivation**,
+  not a threat to the contribution. **Do not claim to have invented emergent/stigmergic coordination.**
+- **Why it is a different artifact, not a rival substrate:** it is **tick-synchronous** (Algorithm 1 is one
+  central control loop: Decay → Proposal → **Validation & Selection** → Reinforcement); Phase 3 is an
+  explicit **global reduce** ("sort validated patches, greedily select top-κ") — i.e. a *central per-tick
+  selection*, the opposite of a local admission boundary; there is **no distribution** — a single shared
+  artifact on one machine, no network, no partitions, no replication, no wire, no logical clocks; its
+  "consensus" is potential-game convergence (Nedić/Monderer), not epidemic quorum; its "graceful
+  degradation" is *stateless-agent* fault tolerance (proposers can come and go), **not** a fault-tolerant
+  distributed store. Its "inhibition" is a **region cooldown**, not node opacity/load-shedding.
+- **The clean framing for §2.** Pressure-fields is an **application-level coordination *pattern*** (how N
+  agents refine one artifact); Mycelium is the **distributed *substrate*** (multi-node gossip KV + signal/
+  boundary mesh + epidemic consensus + failover + wire, an embeddable library). They compose rather than
+  compete — pressure-field coordination is exactly the kind of pattern that could *run on* a Mycelium-like
+  substrate (its "shared artifact" ≈ a replicated KV; its agents ≈ nodes). So the honest contribution
+  statement is not "we did stigmergy too" but **"we provide the distributed substrate — causal KV,
+  receiver-side boundary/opacity, epidemic consensus, recallable-role failover — that application-level
+  emergent-coordination schemes like this one assume but do not supply."**
+
+_Confidence: high for pp. 1–24 (the substance); the appendix proofs (§B) and full result tables (§6.2–6.9)
+were not read line-by-line but are not load-bearing for this characterization._
 
 ## Why this shape helps the paper
 
