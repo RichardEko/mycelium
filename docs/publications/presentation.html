@@ -1657,7 +1657,7 @@ space.<span class="cs">complete</span>(id, <span class="cv">"stage.parse"</span>
           <strong>Why it matters.</strong> Gelernter's tuple space (Linda, 1985) was always the right pull primitive; the classical objection — the shared space is itself a coordinator needing consistency machinery — dissolves when the space is built <em>on</em> a coordinator-free substrate. 1,000 items · 10 producers · 10 workers · exactly-once · zero shared load view. <em>Side note:</em> what is kept is pull + decoupling, not Linda's associative matching — the space is lane-addressed (named per-stage FIFO lanes, opaque payloads, O(1) claims), and the per-lane depths double as the fluid workers' pressure signal.
         </div>
         <div class="callout callout-blue" style="margin-top:10px;font-size:12px;">
-          <strong>Composability proof.</strong> The crate's only dependency on the core is the public API — pull <em>composes from the existing primitives</em>. Nothing was added to the substrate to make it possible.
+          <strong>Composability proof.</strong> The crate's only dependency on the core is the public API — pull <em>composes from the existing primitives</em>. Nothing was added to the substrate to make it possible. Worked example: <code>examples/fluid_pipeline</code> (the AFN pull pipeline — coordinator/worker over the tuple space, both pull and push modes in <code>ci_smoke.sh</code>).
         </div>
       </div>
     </div>
@@ -1745,7 +1745,7 @@ agent.<span class="cs">service</span>().<span class="cs">deliver_event</span>(&a
 }
         </div>
         <div class="callout callout-green" style="margin-top:10px;font-size:12px;">
-          <strong>Why not just signals?</strong> Signals are the right tool for ephemeral events — but an agent conversation needs <em>delivery</em> and <em>order</em>. The mailbox gives both without standing up a queue: the durability is the KV store, the ordering is the HLC, the addressing is the capability ring. The actor model, with nothing to operate.
+          <strong>Why not just signals?</strong> Signals are the right tool for ephemeral events — but an agent conversation needs <em>delivery</em> and <em>order</em>. The mailbox gives both without standing up a queue: the durability is the KV store, the ordering is the HLC, the addressing is the capability ring. The actor model, with nothing to operate. Worked example: <code>examples/coop/src/bin/mailbox_llm</code> (an actor and an LLM worker exchange turns through the mailbox — coop demo 01).
         </div>
       </div>
     </div>
