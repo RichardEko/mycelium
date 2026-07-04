@@ -1448,6 +1448,10 @@ GossipConfig {
           <div class="card-title">Readiness + management</div>
           <div class="card-body"><code>GET /ready</code> — 200 once capabilities gossip and peers connect<br><code>GET /stats</code> — node_id, store_entries, dropped frames<br><code>GET /health</code> — always 200 while alive</div>
         </div>
+        <div class="card card-accent-green">
+          <div class="card-title">Fleet diagnosability — <em>Legible Emergence</em></div>
+          <div class="card-body">Per-node metrics answer "is <em>this node</em> healthy?"; an emergent fleet needs "why is the <em>whole fleet</em> in this state?" <strong>Detect → Localize → Explain → Intervene</strong>, computed <strong>coordinator-free</strong> from each node's local KV + HLC causal order + a <strong>bounded</strong> scatter-gather — no central collector, and the skipped set is <em>named</em> (<code>not_queried</code>), never silently dropped. <code>GET /gateway/explain</code> reconstructs a key's cross-node causal history; <code>GET /gateway/diagnose</code> narrates the fleet's state for a non-designer.</div>
+        </div>
       </div>
       <div>
         <div class="code-block" style="font-size:11.5px;">
@@ -1462,6 +1466,10 @@ agent.<span class="cs">is_ready</span>().await; <span class="cm">// true = caps 
 
 <span class="cm">// Graceful shutdown with timeout</span>
 agent.<span class="cs">shutdown_with_timeout</span>(Duration::from_secs(<span class="cn">5</span>)).await;
+
+<span class="cm">// Fleet diagnosis — no central collector, coordinator-free</span>
+<span class="cm">// curl .../gateway/diagnose      // narrate why the fleet is in this state</span>
+<span class="cm">// curl .../gateway/explain?key=… // one key's cross-node causal history</span>
         </div>
         <div class="callout callout-blue" style="margin-top:10px;">
           <strong>HLC causal audit trail.</strong> Every KV write, signal, and consensus proposal carries an HLC timestamp — a happens-before audit trail across all nodes at no extra cost.
