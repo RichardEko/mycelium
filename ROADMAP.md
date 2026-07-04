@@ -2173,7 +2173,10 @@ admission), the compliant shape is stated inline rather than assumed.
 > This section answers "what is each milestone"; the plan answers "how do they group, in
 > what order, and how do we know v2 is done."
 
-> **Status (2026-06-17): WS-A and WS-B are SHIPPED & SIGNED OFF on `main`.**
+> **Status (2026-06-21): v2.0 COMPLETE — all 16 milestones (M1–M16), workstreams WS-A…WS-G,
+> SHIPPED & SIGNED OFF on `main`** (per-workstream records + acceptance scorecard in
+> [`docs/plans/v2.0.md`](docs/plans/v2.0.md)). The original WS-A / WS-B sign-off detail is retained
+> below as the historical record; WS-C…WS-G followed (see the closing line).
 > - **WS-A** (M1/M2/M3 — crate split, consensus gate, handle pushdown): merged.
 > - **WS-B** (M4 partial-mesh, M5 SWIM transport, M11 wire-codec succession + Merkle
 >   anti-entropy at wire v12): merged via PRs #19 + #21. All four DoD gates green
@@ -2186,7 +2189,14 @@ admission), the compliant shape is stated inline rather than assumed.
 >   test-scale` formation-within-240s remains the documented Docker-bridge iptables
 >   ceiling (variance 8–94/100 across identical-code runs incl. fresh-VM restarts) —
 >   environmental, not a regression; the identical gossip/anti-entropy code converges
->   cleanly at 20/30/50 nodes. WS-C…WS-G remain trigger-gated (demand-driven menu).
+>   cleanly at 20/30/50 nodes.
+> - **WS-C…WS-G — subsequently shipped (v2.0 complete, 2026-06-21).** What was a trigger-gated,
+>   demand-driven menu at the 2026-06-17 sweep was all delivered: **WS-C** metabolism (M8/M9 +
+>   M7 distributed rate-limiting + M10 fence-free live-timing reconfig), **WS-D** security (M6
+>   capability authz + CT revocation), **WS-E** WASM code mobility (M12, `mycelium-wasm-host`),
+>   **WS-F** schema evolution (M16 AgentFacts, `mycelium-agentfacts`), **WS-G** coordination
+>   (M13 keyed-`take` + G2 exactly-once contract + G3 `mycelium-blackboard`). Per-workstream
+>   completion + PRs: [`docs/plans/v2.0.md`](docs/plans/v2.0.md).
 
 1. **Workspace split** — `mycelium-core` extracted from `mycelium` (full substrate).
    Solves the `TaskCtx` God Object and internalises the Layer I/II entanglement.
