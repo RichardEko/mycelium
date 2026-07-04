@@ -144,6 +144,23 @@ issue corrective actions. The coordinator is more sophisticated than a negotiati
 engine, but the structural relationship is identical: state is held above the
 runtime, and correctness is enforced top-down.
 
+Independent empirical work corroborates that this pattern's failure is structural
+rather than incidental. Rodriguez~\cite{pressure-fields-decay}, comparing
+coordination strategies for LLM agents on constraint-satisfaction tasks, reports
+that hierarchical (mediated) control applied \emph{zero} accepted changes in
+$66.7\%$ of runs---a $98.7\%$ rejection rate---as the coordinator repeatedly
+re-selected the single highest-pressure sub-problem while progress stalled
+everywhere else. Notably, that study reaches for the same alternative this paper
+argues for: it proposes a stigmergic, coordinator-free coordination scheme, and
+finds it outperforms mediated control by roughly $30\times$ on the same task. It
+does so, however, as an \emph{application-level} algorithm over a single shared
+artifact on one machine---with a central per-tick selection queue, potential-game
+(not distributed) convergence, and (its own §7.6) multi-artifact and larger-scale
+operation left to future work. This paper supplies what that direction assumes but
+does not build: the distributed substrate---causal state, receiver-side signal
+boundaries, epidemic consensus, and recallable-role failover---developed in
+Sections 5--7.
+
 \subsection{Registry-Based Discovery}
 
 A registry-based system separates coordination from discovery. Agents register
