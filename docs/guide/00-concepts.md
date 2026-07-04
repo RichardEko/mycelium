@@ -132,6 +132,18 @@ claim-by-predicate** (Linda's `in`); non-destructive shared reads (`rd`) are
 already the substrate's (gossiped facts + predicate filters). One line: *known
 stages → tuple space; emergent topology over shared facts → blackboard.*
 
+Both of those are **transient** — work found and consumed. The durable sibling is
+[`mycelium-wiki`](../../mycelium-wiki/): a group-scoped, **LLM-curated** knowledge
+canon (the *maintained-meaning / authoritative-specific* layer, composing with
+Postgres metrics + RAG background by a shared id namespace). It answers a
+different question — *"where does a group keep what it learns?"* Not in gossiped
+KV: the corpus lives in a node-independent store, a single elected **curator**
+serialises writes (so concurrent edits need no CRDT) while agents **read directly,
+in parallel**, and Mycelium is only the control plane (curator election +
+ring-failover, an evaporating proposal queue, MCP + gateway, a membership-gated
+access broker). One line: *transient work → tuple space / blackboard; durable
+curated knowledge → wiki.*
+
 **Opacity / pheromone / load / backpressure.** All one mechanism: a node writes
 its own state under `sys/load/{self}/…`; anything scanning that prefix sees a
 consistent picture with no coordination. **Load** is the raw fill; **opacity**

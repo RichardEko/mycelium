@@ -95,6 +95,20 @@ equality + presence (not unification). Demo:
 storage executors compete for finite surplus). When to use which:
 [00 · Concepts](00-concepts.md) ("tuple space vs. blackboard").
 
+### How do I give a group a durable, curated knowledge canon (wiki)?
+
+When the group needs **durable, curated** shared knowledge — not transient work —
+use [`mycelium-wiki`](../../mycelium-wiki/): agents `propose` edits, a single
+elected **curator** reconciles + lint-checks them into a node-independent store,
+and every agent **reads directly** (no curator on the read path). Reach it as MCP
+tools (`wiki.read`/`query`/`propose`), over the HTTP gateway (`/gateway/wiki/*` +
+Python/TS `Wiki` SDKs), or via `Wiki::request_store_access` for a membership-gated
+grant. Demo: [`wiki_chat`](../../mycelium-wiki/examples/wiki_chat.rs) — import
+documents, then chat grounded in the wiki (one template for both the org-twin and
+council use cases). It **composes** with Postgres (metrics) + RAG (background) by a
+shared id namespace — it is the authoritative/maintained layer, not a similarity
+index.
+
 ### How do I make my agents reachable from LangChain / AutoGen (A2A)?
 
 Serve the A2A AgentCard — built automatically from your capabilities at
