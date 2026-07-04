@@ -6,6 +6,8 @@ vocabulary is in [00 · Concepts](../guide/00-concepts.md).
 
 | Doc | What it covers |
 |---|---|
+| [production-readiness.md](production-readiness.md) | **the go-live checklist** — one pre-flight tying the topic docs below into a single sweep (security · persistence · sizing · observability · supply chain · companions) |
+| [customer-pilot.md](customer-pilot.md) | **first customer-led project** — scoping, de-risking, and treating the pilot as the external validation the internal audit loop can't self-supply |
 | [deployment.md](deployment.md) | the library-embed model, ports, seeds, TLS/auto-CA, containers, restart behaviour |
 | [observability.md](observability.md) | the public endpoints (`/health` `/ready` `/stats` `/metrics`), reading the tripwire counters, **viewing AgentFacts**, Prometheus, dashboards |
 | [diagnostics.md](diagnostics.md) | **diagnosing a coordinator-free fleet** — localize/explain/diagnose, one runbook entry per emergent pathology, Prometheus alert recipes |
@@ -18,4 +20,6 @@ vocabulary is in [00 · Concepts](../guide/00-concepts.md).
 | [cert-rotation.md](cert-rotation.md) | hot Ed25519 identity/cert rotation with no disruption |
 | [crown-jewel.md](crown-jewel.md) | data-at-rest cipher hook + egress allowlist + threat model |
 
-Start with [deployment.md](deployment.md), then [observability.md](observability.md).
+Start with [deployment.md](deployment.md), then [observability.md](observability.md). Before a
+production go-live, run the [production-readiness.md](production-readiness.md) checklist; for a first
+customer engagement, add [customer-pilot.md](customer-pilot.md).

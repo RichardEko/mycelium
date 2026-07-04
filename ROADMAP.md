@@ -1790,7 +1790,9 @@ endpoints — thin wrappers over the library API with no added test-only logic i
 itself.
 
 Operator sizing guidance for `max_peers` / `max_forwarding_peers` / `epidemic_extra_peers`
-at 10 / 100 / 1,000 nodes is deferred to the production deployment guide.
+at ≤20 / 20–100 / 100–1 000 / >1 000 nodes now lives in
+[`docs/operations/tuning.md`](docs/operations/tuning.md) (§Scaling guidelines), with the go-live
+pre-flight in [`docs/operations/production-readiness.md`](docs/operations/production-readiness.md).
 
 ### 2. KV persistence — Complete (2026-05-23)
 
