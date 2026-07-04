@@ -1,6 +1,6 @@
 # dev/operations — the diagnostic surface
 
-↑ [dev/](dev.md) · operator runbooks: `docs/operations/` (deployment, observability, tuning, dynamic-scaling…)
+↑ [dev/](dev.md) · operator runbooks: `docs/operations/` (deployment, observability, tuning, dynamic-scaling…). Before a go-live, the [`production-readiness.md`](../../operations/production-readiness.md) pre-flight ties the topic runbooks into one sweep; for a first customer engagement, [`customer-pilot.md`](../../operations/customer-pilot.md) scopes it as external validation.
 
 ## Public HTTP endpoints (`gateway` feature; no auth by design — M16 edge criterion)
 
