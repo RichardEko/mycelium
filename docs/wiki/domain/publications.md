@@ -28,6 +28,27 @@
 - Calibration discipline throughout: narrowest defensible claim; tendencies not
   determinism (monetary's `P⤳S`); no single load-bearing overclaimed word.
 
+## Paper 1 related-work landscape (competitive positioning)
+
+Canonical: `docs/publications/paper1/related-work.md` + `references.bib` (link, don't copy).
+The scan splits the field on one axis — **who mediates coordination**:
+
+- **Camp A (mediated):** a central agent routes/decides — Cisco *Mycelium* (name clash;
+  a `CognitiveEngine` mediator), Solace `OrchestratorAgent`. These are what the Coordinator
+  Trap paper argues *against*.
+- **Camp B (substrate / coordinator-free) — fellow travellers:** IBM's GEACL + gossip-vision
+  (Habiba, *personal-capacity* preprints — a sustained agentic-AI research thread, worth
+  monitoring), Terrarium, EvoGit, and `pressure-fields` (Rodriguez). **The differentiator
+  is the same for all of them:** none has Mycelium's **receiver-side signal/boundary control
+  plane** — they gossip *state* but don't scope *admission*.
+- **`pressure-fields` is an ally, not a rival** (full 65-pp read): an *application-level*,
+  single-machine artifact-refinement algorithm whose empirical result (mediated control
+  applied zero accepted changes in 66.7 % of runs; ~30× worse than stigmergic) independently
+  corroborates Paper 1's §2.1 thesis — cited there as `\cite{pressure-fields-decay}`.
+
+Honesty guardrail applied across the section: gmail-authored preprints are flagged as
+personal-capacity, not institutional output.
+
 ## Pending: the three-arm work-distribution experiment (research-track)
 
 The remaining empirical work for the corpus: a three-arm comparison harness

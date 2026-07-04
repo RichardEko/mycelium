@@ -1,5 +1,8 @@
 # Mycelium — Developer Guide
 
+> **New here? Read the [FAQ](faq.md) first** — "is this for me?", which primitive
+> to use, which example to run, and why-not-X — then come back for the depth below.
+
 Mycelium is a broker-less embedded Rust library. You embed it directly in your
 process — there is no daemon, no sidecar, no coordinator to run. Each node is
 simultaneously a participant in the mesh and a full peer. The mesh is the

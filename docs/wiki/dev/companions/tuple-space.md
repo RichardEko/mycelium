@@ -25,5 +25,7 @@ Design: `docs/plans/mycelium-tuple-space.md`. Key facts:
   `sys/tuple/{node}/{ns}/…` (backpressure pheromone — deliberately NOT `sys/load/` opacity:
   hiding the primary from `resolve` under load would false-trigger promotion).
 - **Gates:** `cargo test -p mycelium-tuple-space --features gateway` (+ clippy
-  `--all-targets -D warnings`); integration scenario 13; SDKs `mycelium-py/src/mycelium/
-  tuple.py`, `mycelium-ts/src/tuple.ts`.
+  `--all-targets -D warnings`); integration scenario 13; `redistribution` example
+  (staged `intake→sorted→routed` pipeline — single-copy `take` + atomic `complete`,
+  exactly-once assertion); SDKs `mycelium-py/src/mycelium/tuple.py`,
+  `mycelium-ts/src/tuple.ts`.
