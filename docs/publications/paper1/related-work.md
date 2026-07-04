@@ -42,7 +42,7 @@ causal-order + consensus + recallable-role machinery** that makes coordination-f
 | `\cite{habiba-gossip-vision}` | IBM Software, Dublin (same cluster) | Vision | Earlier statement of the same gossip-for-emergent-coordination thesis. |
 | `\cite{terrarium}` | **UMass Amherst** (Zilberstein et al.) + **MPI/ELLIS Tübingen** | Framework, security-angled | Revives the **blackboard** for multi-agent safety/privacy — academic kin to the substrate's content-routed sharing; not a coordination-scaling argument. |
 | `\cite{evogit}` | **Hong Kong Polytechnic Univ** (Tan, Cheng) | Implemented (narrow) | Coordination **emerges through a shared git version-graph, no central scheduler** — the "substrate not scheduler" instinct, in code, but domain-specific (code evolution). |
-| `\cite{pressure-fields-decay}` | **Independent** (Rodriguez, no affiliation) | Conceptual (theorems) | **Pressure fields + temporal decay** = stigmergy + evaporation as formal theory — mirrors the substrate's opacity/load + TTL-evaporation, without a system. |
+| `\cite{pressure-fields-decay}` | **Independent** (Rodriguez, no affiliation) | Theory **+ benchmarks** (65 pp, v3; convergence proofs + eval vs CrewAI/AutoGen/MetaGPT) | **Pressure fields + temporal decay = stigmergy + evaporation** — the **closest** work on *this* axis, and it is *not* vision-only. Differentiator narrows to boundary-vs-field + integration + recursion (see matrix below). **Row provisional — PDF only partly read.** |
 
 **Positioning sentence (draft):** *"The substrate direction is not idiosyncratic: an IBM agentic-AI
 architect \cite{geacl,habiba-gossip-vision}, a leading multi-agent-systems group \cite{terrarium}, an
@@ -86,6 +86,45 @@ because it moves the contribution from "we added consensus" to "we solve the har
 
 _Source: close reading of arXiv:2512.03285v1 and arXiv:2508.01531v1, 2026-07-04. Re-verify their current
 versions before camera-ready — a v2 could add ingress admission or opacity._
+
+### The same check across the rest of Camp B
+
+For consistency, the identical signal/boundary interrogation applied to the other three
+(2026-07-04). **`~` = partial / different sense; `?` = could not confirm from the fetched text.**
+
+| Work | Receiver-side admission boundary | Scoped delivery | Opacity / self-shed back-pressure | Stigmergy **+ evaporation** | Net characterization |
+|---|:--:|:--:|:--:|:--:|---|
+| GEACL / Habiba `\cite{geacl}` | ✗ | ✗ | ✗ (sender-side load *routing* only) | ✗ | **state** substrate |
+| Terrarium `\cite{terrarium}` | ✗ | `~` (sender sets recipients; blackboard membership via factor graph) | ✗ (treats context-overflow as an **attack to defend**, not load to shed) | ✗ | **instrumented, scoped safety-research blackboard** |
+| EvoGit `\cite{evogit}` | ✗ | ✗ | ✗ (agents "operate independently," "no centralized scheduling") | analogy only, **not implemented**; git history is **permanent** — the *opposite* of evaporation | **immutable shared-artifact** coordination |
+| Pressure-fields `\cite{pressure-fields-decay}` | `?` | `~` (per-region components) | `?` — an **attraction/allocation field agents follow**, not a node making *itself* unavailable | **✓ core thesis + empirical benchmarks** (vs CrewAI/AutoGen/MetaGPT) | **closest on stigmergy/decay** — but a coordination *field*, not an admission *boundary* |
+
+**Read this honestly — it is where the paper could over-reach.** The pressure-fields work
+\cite{pressure-fields-decay} genuinely shares the stigmergy-plus-evaporation core *and* reports
+benchmarks, so **do not claim to have invented emergent or stigmergic coordination** — that claim would
+not survive review. The defensible differentiation narrows to three things it (and the rest of Camp B) do
+not have:
+
+1. **The receiver-side *boundary*, not a global field.** A pressure field is a shared structure agents
+   *follow* (attraction/allocation); Mycelium's boundary/opacity is a purely *local* admission decision a
+   node makes about *itself* — overload → the node goes opaque → rerouting emerges from reachability, with
+   no field to compute or share. Field-following is a softer, still-global shaping; boundary/opacity is
+   fully local. (State this carefully — it is a real but subtle distinction, and reviewers will probe it.)
+2. **Integration, not a single mechanism.** Camp B each isolates *one* idea — gossip convergence (IBM), a
+   scoped blackboard (Terrarium), a shared version-graph (EvoGit), a decay field (pressure-fields).
+   Mycelium's claim is the *integrated three layers* — causal KV (HLC) **+** signal/boundary mesh **+**
+   epidemic consensus — with recallable-role failover, such that the layers compose.
+3. **The recursion.** None demonstrate the substrate *generating multiple distinct coordination primitives*
+   on one public API (§8, the five companion crates). That composability evidence is unique to this work.
+
+Two useful contrast lines fall out: **Terrarium** inverts the load story — it treats context-overflow as
+an *attack surface to defend*, where Mycelium treats overload as a *signal to route on* (defence vs
+metabolism). **EvoGit** inverts the memory story — an *immutable, permanent* git history, where Mycelium's
+whole model is *evaporation/TTL* (permanence vs forgetting-as-a-feature).
+
+_Confidence: Terrarium/EvoGit read cleanly; the **pressure-fields analysis is partial** — several rows are
+`?` because the PDF text did not fully extract, and it is a 65-page v3 with benchmarks that deserves a
+proper read before it anchors any claim in §2. Treat its row as provisional._
 
 ## Why this shape helps the paper
 
