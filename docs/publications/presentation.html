@@ -977,7 +977,7 @@ providers = agent.<span class="cs">resolve_capability</span>(<span class="cv">"c
       <div style="display:flex;flex-direction:column;gap:12px;">
         <div class="card card-accent-green">
           <div class="card-title">Tested across five crates · 13/13 integration scenarios</div>
-          <div class="card-body">Lib tests across the full feature matrix and five workspace crates (core substrate, full crate, tuple-space, blackboard, AgentFacts), plus 13 end-to-end Docker scenarios and time-boxed libFuzzer runs of the wire/capability decoders. KV propagation, gossip boundaries, consensus, anti-entropy, AFN, Prompt Skills, TupleSpace — all automated, all passing.</div>
+          <div class="card-body">Lib tests across the full feature matrix and the workspace crates (core substrate, full crate, tuple-space, blackboard, AgentFacts, WASM-host, wiki), plus 13 end-to-end Docker scenarios and time-boxed libFuzzer runs of the wire/capability decoders. KV propagation, gossip boundaries, consensus, anti-entropy, AFN, Prompt Skills, TupleSpace, the wiki curator + gateway — all automated, all passing.</div>
         </div>
         <div class="card card-accent-blue">
           <div class="card-title">Wire version policy</div>
@@ -1746,6 +1746,47 @@ agent.<span class="cs">service</span>().<span class="cs">deliver_event</span>(&a
         </div>
         <div class="callout callout-green" style="margin-top:10px;font-size:12px;">
           <strong>Why not just signals?</strong> Signals are the right tool for ephemeral events — but an agent conversation needs <em>delivery</em> and <em>order</em>. The mailbox gives both without standing up a queue: the durability is the KV store, the ordering is the HLC, the addressing is the capability ring. The actor model, with nothing to operate.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- A13 Wiki -->
+<div class="slide appendix-slide" id="sA13">
+  <div class="slide-top"><span class="eyebrow eyebrow-app">Appendix A13</span><span class="slide-num">·· / ··</span></div>
+  <div class="slide-body">
+    <div class="slide-title" style="font-size:clamp(20px,2.8vw,36px);margin-bottom:8px;">Wiki — <em>Durable Curated Knowledge</em></div>
+    <div class="slide-sub" style="margin-bottom:10px;">A companion crate (<code>mycelium-wiki</code>), public-API-only — the <em>durable</em> sibling of the transient work-finding primitives. Tuple space and blackboard route work to be <em>consumed</em>; the wiki is the group's <em>maintained-meaning</em> canon: where a group keeps what it learns.</div>
+    <div class="cols2">
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="card card-accent-blue">
+          <div class="card-title">Control plane / data plane</div>
+          <div class="card-body">The corpus is <strong>not</strong> in gossiped KV — it lives in a node-independent, pluggable store (shared FS / S3 / doc store). A single elected <strong>curator</strong> serialises writes; every agent <strong>reads the store directly, in parallel</strong> — no curator on the read path. Curator election + ring-failover ride the capability ring; if the curator vanishes the wiki stays readable and a new one self-elects.</div>
+        </div>
+        <div class="card card-accent-green">
+          <div class="card-title">Single writer, no CRDT</div>
+          <div class="card-body">The curator groups proposals by section and reconciles each batch as one writer — the append-merge is lossless + idempotent, or an <em>LLM 3-way merge</em> behind the <code>llm</code> feature (prose curated, structure code-owned). A <strong>change-driven</strong> lint (dead cross-links, self-consistency) runs only after a write — an idle wiki does no work.</div>
+        </div>
+        <div class="card card-accent-purple">
+          <div class="card-title">Composes, doesn't replace</div>
+          <div class="card-body">The authoritative/maintained layer <em>alongside</em> Postgres (typed metrics) + RAG (background), joined by a shared id namespace — not a similarity index. Reached as <strong>MCP tools</strong> (<code>wiki.read</code>/<code>query</code>/<code>propose</code>), an <strong>HTTP gateway</strong> (<code>/gateway/wiki/*</code> + py/ts SDKs), or a membership-gated <strong>access broker</strong>.</div>
+        </div>
+      </div>
+      <div>
+        <div class="code-block" style="font-size:11px;">
+<span class="cm">// Propose an edit — the curator reconciles + applies it</span>
+wiki.<span class="cs">propose</span>(<span class="cv">"decisions/elm-street"</span>, sid, <span class="cv">"Resolution 2026-14"</span>,
+             <span class="cv">"protected bike lane approved"</span>, attrs);
+
+<span class="cm">// Read directly from the store — no curator on the read path</span>
+<span class="ck">let</span> page = wiki.<span class="cs">read</span>(<span class="cv">"decisions/elm-street"</span>)?;
+
+<span class="cm">// One-time membership-gated grant, then read direct forever</span>
+<span class="ck">let</span> grant = wiki.<span class="cs">request_store_access</span>().await?;  <span class="cm">// StoreGrant { location }</span>
+        </div>
+        <div class="callout callout-blue" style="margin-top:10px;font-size:12px;">
+          <strong>The wiki pattern, recursively.</strong> Files + an LLM curator + direct reads — exactly how Mycelium's own <code>docs/wiki/</code> works. The concurrent-prose-merge problem dissolves into single-writer-curator + a <em>dumb</em> store. Worked example: <code>mycelium-wiki/examples/wiki_chat</code> — import documents, then chat grounded in the wiki (one template for the org-twin <em>and</em> council use cases).
         </div>
       </div>
     </div>
