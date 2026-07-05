@@ -96,18 +96,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!("{N_CANDIDATES} candidates eligible for {GROUP}; governors on, awaiting intent");
 
-    wait_until(30, || {
-        candidates.iter().all(|d| !d.agent.peers().is_empty())
-            && operator.agent.kv().get(&format!("cap-group/{GROUP}")).is_some()
+    // Structural readiness gate (not a fixed sleep): don't start the *timed* convergence phase
+    // until bidirectional signed KV propagation is **proven** — every candidate has received the
+    // operator's group def AND the operator resolves all N candidates' `rush` ad. Under TLS, signed
+    // anti-entropy frames are dropped until identity exchange completes ("identity not yet
+    // received"); the weaker old gate (TCP peers + the operator seeing its *own* capgroup key) could
+    // pass while that exchange was still in flight, leaking the saturated-runner identity latency
+    // into the convergence windows below — that was the coop-suite CI flake. Gating on the *effect*
+    // of the exchange keeps it out.
+    let primed = wait_until(60, || {
+        candidates.iter().all(|d| d.agent.kv().get(&format!("cap-group/{GROUP}")).is_some())
+            && operator.agent.capabilities()
+                .resolve(&CapFilter::new("rush", "worker")).len() == N_CANDIDATES
     })
     .await;
+    assert!(primed,
+        "cluster did not become signed-ready (operator's capgroup at every candidate + all \
+         {N_CANDIDATES} rush ads at the operator) within 60s");
 
     // ── Phase 1 — publish the band; the pool converges to a subset in [MIN, MAX] ─
     println!("\n[operator] intent: keep {GROUP} in [{MIN}, {MAX}]  (of {N_CANDIDATES} eligible)");
     let _ = operator.agent
         .publish_membership_intent(MembershipIntent::new(GROUP, MIN, Some(MAX)));
 
-    let converged = wait_until(45, || (MIN..=MAX).contains(&members(&candidates))).await;
+    let converged = wait_until(60, || (MIN..=MAX).contains(&members(&candidates))).await;
     let m1 = members(&candidates);
     println!("[phase 1] pool members: {m1} (band [{MIN}, {MAX}], a subset of {N_CANDIDATES})");
     assert!(converged && (MIN..=MAX).contains(&m1),
@@ -129,7 +141,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     candidates[victim].shutdown().await;
     candidates.remove(victim);
 
-    let healed = wait_until(45, || members(&candidates) >= MIN).await;
+    // Heal is a *guaranteed* outcome (intent stays fresh for MEMBERSHIP_INTENT_TTL_MS = 5 min), so
+    // only its latency varies: a surviving governor may still be inside its post-action cooldown
+    // (COOLDOWN_TICKS 3 × ~4 s health tick = ~12 s) when the victim drops, then must observe
+    // members<MIN and rejoin. 45 s was marginal against cooldown + loss-detection under CI load (the
+    // coop-suite flake); 90 s clears that tail while staying far under the 5-min intent freshness.
+    let healed = wait_until(90, || members(&candidates) >= MIN).await;
     let m3 = members(&candidates);
     println!("[phase 3] after loss, pool self-healed to: {m3} (>= MIN {MIN})");
     assert!(healed && m3 >= MIN, "governors must self-heal the pool back to >= MIN — got {m3}");
