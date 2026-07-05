@@ -27,10 +27,15 @@ as mesh nodes), MCP tool discovery (LLM finds tools dynamically from the KV
 store), fluid pipelines (Agentic Flow Networks), and A2A interop (LangChain /
 AutoGen).
 
-**[→ Start with the FAQ](docs/guide/faq.md)** — is this for me? which primitive
-do I use? which example do I run? why-not-X? — then dive into the
-**[developer guide](docs/guide/README.md)** for concept explanations, diagrams,
-and dev notes for each pattern.
+**New to Mycelium?** [→ Start with the FAQ](docs/guide/faq.md) — is this for me?
+which primitive do I use? which example do I run? why-not-X? — then dive into the
+[developer guide](docs/guide/README.md) for concept explanations, diagrams, and
+dev notes for each pattern.
+
+**Building a use case *on* Mycelium?** [→ Building on Mycelium](docs/guide/building-on-mycelium.md)
+— the integrator contract: the dependency, the public-API-only rule, which KV
+prefixes to avoid, the invariants you must respect, and a copyable `CLAUDE.md`
+snippet for agent-driven downstream projects.
 
 ### Which crate? — `mycelium` vs `mycelium-core`
 

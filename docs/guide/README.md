@@ -2,6 +2,10 @@
 
 > **New here? Read the [FAQ](faq.md) first** — "is this for me?", which primitive
 > to use, which example to run, and why-not-X — then come back for the depth below.
+>
+> **Building a use case *on* Mycelium?** See [Building on Mycelium](building-on-mycelium.md)
+> — the integrator contract (dependency, public-API-only rule, reserved KV prefixes,
+> invariants, and a copyable `CLAUDE.md` snippet).
 
 Mycelium is a broker-less embedded Rust library. You embed it directly in your
 process — there is no daemon, no sidecar, no coordinator to run. Each node is
