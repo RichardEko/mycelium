@@ -2120,3 +2120,30 @@ ledger line added (Concurrency scored 8 in Runs 32–33 while it existed, both c
 | 25 | Dependency Hygiene | 8 | carried (v33). No new deps (the fix uses existing `tokio`); RUSTSEC `cargo audit` job green on #127. |
 | — | **Floor (lowest 3)** | **6, 7, 7** | Concurrency Correctness (6, capped finding) · Robustness (7) · Test Architecture (7) — all three facets of the one curator-split-brain defect (the bug, its non-recovery, and the flaky gate that hid it), each now remediated with the deterministic canary. |
 | — | Mean (continuity footnote) | 7.84 | not a target; see M2 preamble (sum 196/25 = 7.84). Down from Run 33's 8.16 — the honest cost of a Major finding surfacing in the shipped companion. No 9s this run: the headline is a real defect in shipped code, which is not the posture for handing out top marks. Expect recovery toward the Run-33 baseline next run as the fix confirms. |
+
+## 2026-07-05 — Run 35 (M2) — recovery confirmation
+
+**Cadence note:** no material code/test/docs diff since Run 34 (its commit was `ratings.md` only), so
+this is **not** a full 25-dimension re-audit — it is a *targeted recovery confirmation* of the three
+dimensions Run 34 capped/dinged for the curator split-brain, triggered by **new post-merge execution
+evidence** rather than new code (mirrors the same-day Run 28→29 recovery). The other 22 dimensions
+**carry Run 34** unexamined.
+
+Confirmation evidence: the fix (`9e42453`) is now green on the **mainline** across repeated CI, and the
+contrast is the point — the `Wiki (data plane)` job was **red on two pre-fix main pushes** (`54efcdc`
+09:07, `0c54910` 10:30 — the split-brain flaking in the wild) and **green on three consecutive
+post-fix pushes** (`b872a5e`, `5ea48f2`, and the Run-34 commit `81a914a`, run `28739434717`: `Test`,
+`Wiki (data plane)`, and the 12-demo Co-op suite all success). The deterministic canary
+`dual_curators_reconcile_to_a_single_writer` rides in that green job. Red-before / green-after ×3 is the
+find→fix→confirm signature the cap predicted.
+
+### Findings
+None. This run confirms the Run-34 finding is remediated; no new probe was run (no new diff to probe).
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 9 | Concurrency Correctness | **8** | **Recovered from 6.** The split-brain fix is confirmed on the mainline — `Wiki (data plane)` red ×2 pre-fix → green ×3 post-fix, the deterministic canary green in each. Not 9: recovery is fix-verified (repeated CI), not a whole-dimension re-sweep — the Run-29 recovery-language precedent. |
+| 12 | Robustness | **8** | **Recovered from 7.** The "no recovery from a lost election race" facet is closed — the election is now self-healing (higher-id curator resigns), confirmed by the green-after streak. |
+| 18 | Test Architecture | 7 | **Held at 7 (not recovered).** The *specific* failover gate is now deterministic, but the dimension's recurring-flake weakness stayed live *this same day*: the 12-demo Co-op suite flaked on the fix-merge push (`9e42453`, run `28739078960`) and passed on the next push — a different timing-sensitive gate, the same pattern. Honest hold, not a re-assertion. |
+| — | **Floor (lowest 3)** | **7, 8, 8** | Test Architecture (7) · Concurrency Correctness (8, recovered) · Robustness (8, recovered). The curator-split-brain trough is remediated and confirmed; Test Architecture remains the standing weakness (its ~7th ledger appearance + a fresh same-day Co-op flake). |
+| — | Mean (continuity footnote) | 7.96 | not a target (sum 199/25 = 7.96, carrying 22 dims from Run 34). Recovering toward the Run-33 8.16 baseline; the residual gap is Test Architecture (7), which the series has now flagged repeatedly — the honest next target, not the curator code. |
