@@ -17,6 +17,14 @@ Tathata Systems Ltd, 2026 — [doi:10.5281/zenodo.20665238](https://doi.org/10.5
 (CC BY 4.0; source in [`docs/publications/`](docs/publications/), reproducible at tag
 [`paper-submission-v2`](https://github.com/RichardEko/mycelium/tree/paper-submission-v2)).
 
+It is the lead paper of a **four-part corpus** (all CC BY 4.0; full read-order, dependency
+graph, and DOIs in [`docs/publications/README.md`](docs/publications/README.md)):
+
+- **Heterogeneous Local Knowledge Systems (HLKS)** — the cross-domain convergence argument
+  (`mycelium-tuple-space` is its constructive evidence) — [doi:10.5281/zenodo.20813058](https://doi.org/10.5281/zenodo.20813058)
+- **The Capture Problem** — power vs knowledge; closes the sequence — [doi:10.5281/zenodo.20813463](https://doi.org/10.5281/zenodo.20813463)
+- **Monetary Ecology** — the MCB/P/S/Î evaluation framework the distributive argument draws on — [doi:10.5281/zenodo.20811062](https://doi.org/10.5281/zenodo.20811062)
+
 ## Getting Started
 
 Mycelium is three layers: a broker-less gossip KV store (Layer I), an ephemeral
