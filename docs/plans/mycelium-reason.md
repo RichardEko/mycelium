@@ -1,85 +1,104 @@
-# mycelium-reason — design sketch
+# mycelium-reason — LLM DX strategy (design sketch)
 
-**Status:** 🔵 **PROPOSED — v3.0 candidate, not started.** A demand-driven DX companion; the substrate
-needs no new capability for most of it (see *What already exists*). Positioning source:
-[`../wiki/domain/pattern-coverage.md`](../wiki/domain/pattern-coverage.md) → the LLM-authoring DX axis.
+**Status:** 🔵 **PROPOSED — v3.0 candidate, not started.** Build-vs-adopt resolved to a **three-tier
+strategy** (build / adopt / interop) with a **Tier-3-first** sequence. The substrate needs no new
+capability. Positioning source: [`../wiki/domain/pattern-coverage.md`](../wiki/domain/pattern-coverage.md)
+→ the LLM-authoring DX axis.
 
-## What it is
+## The question this settles
 
-The **LLM-authoring DX layer** for Mycelium — the ergonomic surface for building the *reasoning* part
-of an agent (prompt → tool-loop → typed output → memory → traces), sitting beside the coordination
-companions (tuple-space / blackboard / wiki) on the **public API only**. It is *not* a LangGraph /
-CrewAI port; it is those ergonomics rebuilt so each feature is **the coordinator-free substrate's
-differentiator applied to reasoning**.
-
-Axis note: reasoning DX is orthogonal to coordination-pattern coverage. Mycelium is strong on the
-latter and already has real pieces of the former (`PromptTemplate`, `LlmBackend`/`OpenAiBackend` +
-streaming, MCP tools, the Layer-V `AgentStateMachine` with `max_turns`/`tool_budget`, HLC audit +
-OTEL). The gaps are the *reasoning-framework* ergonomics: reasoning-graph authoring, typed output +
-retry, model-call resilience, conversation memory, and run-level evals.
+"Roll our own LLM DX framework, or map/support a popular one?" — **neither extreme.** The popular DX
+(LangGraph, Instructor, Pydantic AI, CrewAI) is almost all **Python** and operates at layers a
+*substrate sits under*. So: **adopt** the commodity layers, **be the distributed backend** for the
+orchestration layer, and **build** only the differentiators nothing else can offer. Rolling a full
+framework would reimplement commodities in the wrong language for a community that won't switch tools
+to get them.
 
 ## The compelling frame — substrate-native, not a framework port
 
 The same coordinator-free properties that make *coordination* resilient make *reasoning* resilient:
-graphs that outlive their orchestrator, inference routing with no central proxy, memory that hands off
-between agents, and tamper-evident causal traces of the whole fleet's thinking. That is additive value
-a single-process framework **structurally cannot** offer.
+inference routed with no central proxy, tamper-evident causal traces of the whole fleet's thinking,
+memory that hands off between agents, graphs that outlive their orchestrator. Additive value a
+single-process framework **structurally cannot** offer.
 
-## The closures — ranked, leading with the differentiating wedge
+## The three tiers
 
-**① Capability-routed inference (the wedge — mostly composes; no central proxy).** Model capacity is
-already a mesh capability (`cap/{node}/llm/inference`). "Fallback" becomes **capability resolution +
-opacity back-pressure**: route each call to whichever node advertises a healthy model with headroom;
-shed load via opacity. Elastic, load-aware inference across the fleet — vs a LiteLLM-style central
-proxy you operate. *New code: a resilience/routing policy over `LlmBackend`.*
+### Tier 3 — BUILD (our differentiators; un-adoptable because nothing else has the mesh)
+- **① Capability-routed inference** — route each call to a healthy model-advertising node
+  (`cap/{node}/llm/inference`) via capability resolution + opacity back-pressure. Elastic, load-aware
+  inference across the fleet, **no central proxy** (vs a LiteLLM proxy you operate). *New: a
+  resilience/routing policy over `LlmBackend`.*
+- **② Fleet-reasoning traces** — extend the HLC audit chain + `/gateway/explain` to LLM-run
+  granularity: **tamper-evident, causal, replayable traces of why the whole fleet reasoned as it did.**
+  Single-process tracers see one process. *New: run-level trace records; replay via the event log.*
 
-**② Fleet-reasoning traces (the wedge — mostly composes).** Every turn/tool-call already seals to the
-HLC audit chain; `/gateway/explain` reconstructs cross-node causality. Extend to LLM-run granularity:
-**tamper-evident, causal, replayable traces of why the whole fleet reasoned as it did** — single-process
-tracers see one process. *New code: run-level trace records + an explain view; replay via the event log.*
+Both **mostly compose** from existing substrate. Exposed through `mycelium-py` so they compose *with*
+the Tier-1/2 tools, not replace them.
 
-**③ Typed output + auto-retry (cheap, high-value).** `call_typed::<T>(prompt)` binds the **existing
-schema registry** to the call: validate → feed the parse error back → retry. Because schemas are
-gossiped, typed reasoning contracts are **fleet-wide**, not per-process. *New code: small glue.*
+### Tier 1 — ADOPT (commodity library layer; wrap, don't rebuild)
+- **Typed output → [Instructor](https://python.useinstructor.com/)** (~3M downloads/mo — a thin client
+  patch) or **[Pydantic AI](https://ai.pydantic.dev/)**. `mycelium-py` wraps these for the `call_typed`
+  closure — no custom typed-output+retry. (Schemas stay fleet-shared via the registry.)
+- **Provider access →** provider SDKs / LiteLLM-*as-library* for the 100+ adapters; drop its central
+  *proxy* — Tier 3 ① replaces it.
 
-**④ Reasoning-graph authoring (more work).** An authoring veneer where each node is a mesh **skill** and
-edges are capability wiring — so the graph auto-scales and **survives node/orchestrator loss** (the
-AFN / tuple-space substrate already does the execution; this is the ergonomic layer). *New code: a
-graph DSL/builder over skills + tuple-space.*
+### Tier 2 — INTEROP / BE-THE-BACKEND (map/support the popular frameworks)
+- **`langgraph-checkpoint-mycelium`** — LangGraph's pluggable
+  [`BaseCheckpointSaver`/Store protocol](https://docs.langchain.com/oss/python/langgraph/persistence)
+  (`get_tuple`/`list`/`put`/`put_writes`) backed by Mycelium KV + the `append`/`scan_log` log overlay.
+  One-line swap → LangGraph agent state becomes **coordinator-free, gossip-replicated, resumable across
+  nodes** (the `Suspended`/resume + hand-off value, delivered through *their* abstraction). Directly
+  answers "why not just LangGraph?" → *"Use it — on Mycelium; now it survives node loss and hands off
+  across the fleet."*
+- Extends to CrewAI / AutoGen memory backends + the existing MCP + A2A adapters.
 
-**⑤ Hand-off memory (more work; = the governed-memory composable, cashed out).** Per-task history on
-`kv().append` + wiki curated long-term memory + auto-summarize-to-window. The Layer-V `Suspended` /
-resume already lets a task's context **hand off between agents / survive a crash** — impossible for an
-in-process buffer. *New code: a memory/window abstraction.*
+## Sequencing — Tier 3 first, then Tier 1 ∥ Tier 2
 
-## What already exists (the composition base — this is mostly packaging)
+**Differentiators first, to a *validated wedge*** (one CI-tested example each — the pattern-gallery
+bar; not gold-plated). Rationale: the differentiator is what gives the adopt/interop its **pull**. A
+Mycelium-backed LangGraph checkpointer that is *only* durable state competes with Postgres/Redis on
+commodity terms and loses on maturity; the same checkpointer that *also* surfaces capability-routed
+inference + fleet traces is a category of one. Build the reason-to-adopt first, then distribute it.
+
+Then **Tier 1 (Instructor wrap) ∥ Tier 2 (LangGraph checkpointer)** in parallel — independent surfaces
+(`mycelium-py` vs a LangGraph package), and **Tier 2 is built to *expose* the Tier-3 wedges** so it
+lands differentiated, not commoditised.
+
+**Trade-off, named honestly:** Tier-3-first pushes time-to-first-external-user slightly later than an
+adopt-first land-grab would. For a thesis-led, pre-adoption project that is the right call —
+*why Mycelium* before *Mycelium everywhere*.
+
+## Concrete deliverables
+
+| Tier | Deliverable | Home | Nature |
+|---|---|---|---|
+| 3 (first) | capability-routed inference · fleet-reasoning traces | `mycelium-reason` crate + `mycelium-py` | build (mostly composes) |
+| 1 (∥) | `call_typed` over Instructor / Pydantic AI | `mycelium-py` | adopt |
+| 2 (∥) | `langgraph-checkpoint-mycelium` | new Python package | interop / be-the-backend |
+
+## What already exists (the composition base — mostly packaging)
 
 `PromptTemplate` (KV, fleet-shared) · `LlmBackend`/`OpenAiBackend` + `/gateway/llm/stream` · MCP tool
 discovery · `AgentStateMachine` (Planning/Invoking/Reflecting/Suspended/… + `max_turns`/`tool_budget`
 + `watch_mesh_states`) · schema registry (`schemas/`) · HLC audit chain + OTEL + `/gateway/explain` ·
-`kv().append`/`scan_log` event log · `mycelium-wiki` durable memory.
-
-## What's genuinely new (small, scoped)
-
-The backend resilience/routing policy (①), run-level trace records (②), the `call_typed` binding (③),
-the graph builder (④), the memory/window abstraction (⑤). All **application-layer, on the public API**
-— zero core changes (the companion-crate contract), consistent with the v3.0 "packaging, not new
-substrate" thesis.
+`kv().append`/`scan_log` event log · `mycelium-wiki` durable memory. The Rust core needs **zero
+changes** (companion-crate contract); integration is application-layer, much of it in `mycelium-py`.
 
 ## Non-goals
 
-- A first-class **orchestrator** (the substrate's deliberate non-goal — see `docs/philosophy.html`).
+- A first-class **orchestrator** (the substrate's deliberate non-goal — `docs/philosophy.html`).
 - **Declarative prompt optimization** (DSPy-style compile-from-examples) — research-track, watch-only.
-- Reimplementing a provider SDK — `LlmBackend` stays a thin trait; bring your own model.
+- Reimplementing a provider SDK, or a typed-output library — Tier 1 adopts those.
 
-## Expressible ≠ validated — the deliverable is a tested pattern gallery
+## Expressible ≠ validated
 
-Per the pattern-coverage caveat, each closure is a **hypothesis until it has a working, CI-tested
-example**. The companion earns its claims the way blackboard/tuple-space did — worked demos at the
-`ci_smoke` bar, one per closure. Ship **①③② first** (differentiating + cheap); ④⑤ on demand.
+Every wedge and the checkpointer fit are **hypotheses until tested**. The checkpointer mapping
+(versioned KV + log ↔ checkpoints + pending writes) *looks* natural but needs a **one-day spike**
+before commitment. Each Tier-3 wedge earns its claim with a `ci_smoke`-bar example — the same bar
+blackboard/tuple-space met. This also raises **`mycelium-py` to a first-class citizen** — a deliberate
+strategic choice, since the ecosystem the strategy targets is Python.
 
 ## Trigger to revisit
 
-A customer building reasoning agents *on the mesh* who hits the DX cliff (writes their own
-retry/routing/trace glue), or a positioning need to answer "why not just LangGraph on top?" with an
-ergonomic story, not only a coordination one.
+A customer building reasoning agents *on the mesh* who hits the DX cliff, or a positioning need to
+answer "why not just LangGraph on top?" with an ergonomic story, not only a coordination one.

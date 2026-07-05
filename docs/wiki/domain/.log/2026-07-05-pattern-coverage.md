@@ -38,3 +38,18 @@ reasoning-framework ergonomics. Proposed the **`mycelium-reason`** DX companion 
 `docs/plans/mycelium-reason.md`, ROADMAP → v3.0. Framed substrate-native (capability-routed inference,
 fleet-reasoning traces, hand-off memory, orchestrator-proof graphs), mostly packaging, lead wedges
 ①③②. Same expressible≠validated caveat: a tested pattern gallery earns the claim.
+
+## Addendum 2 — LLM DX build-vs-adopt resolved (three-tier, Tier-3-first)
+
+`mycelium-reason.md` reworked from "build our own 5 closures" to a **three-tier strategy**:
+- **Tier 3 BUILD** (differentiators, un-adoptable): ① capability-routed inference (no central proxy),
+  ② fleet-reasoning traces (HLC audit + /gateway/explain).
+- **Tier 1 ADOPT**: typed output via Instructor (~3M dl/mo) / Pydantic AI, wrapped in mycelium-py.
+- **Tier 2 INTEROP/BE-THE-BACKEND**: `langgraph-checkpoint-mycelium` on LangGraph's pluggable
+  BaseCheckpointSaver/Store protocol (verified via LangChain persistence docs) — one-line swap →
+  coordinator-free resumable-across-nodes state; the "why not just LangGraph?" rebuttal.
+- **Sequence (user-preferred, agreed): Tier 3 first to a CI-tested wedge, then Tier 1 ∥ Tier 2**, with
+  Tier 2 exposing the Tier-3 wedges so interop lands differentiated. Trade-off named: slightly later
+  first-external-user vs an adopt-first land-grab — correct for a thesis-led pre-adoption project.
+- Raises `mycelium-py` to first-class (the target ecosystem is Python). Core needs zero changes.
+- Discipline held: checkpointer fit is expressible, not validated — flagged for a 1-day spike.

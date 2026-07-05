@@ -2959,12 +2959,15 @@ that *packages a composition already possible on the public API* (the blackboard
 built if and when demand justifies the ergonomics, not because a capability is missing.
 
 **DX companion — `mycelium-reason` (proposed).** A *separate axis* from the coordination candidates
-above: an LLM-**authoring** DX layer (reasoning-graph authoring, typed-output + retry, model-call
-resilience, conversation memory, run-level traces) rebuilt **substrate-native** — inference routed by
-capability (no central proxy), tamper-evident *fleet*-reasoning traces, memory that hands off between
-agents, graphs that outlive their orchestrator. Mostly packaging (`PromptTemplate` / `LlmBackend` /
-MCP / `AgentStateMachine` / schema registry / audit + `/gateway/explain` already exist); lead with the
-two differentiating, mostly-composed wedges — **capability-routed inference + fleet-reasoning traces**.
+above: the LLM-**authoring** DX layer. Build-vs-adopt resolved to a **three-tier strategy** —
+**build** the substrate-native differentiators (① capability-routed inference — no central proxy; ②
+tamper-evident *fleet*-reasoning traces), **adopt** the commodity layer (Instructor / Pydantic AI for
+typed output), and **interop / be-the-backend** for the orchestration frameworks — flagship: a
+**`langgraph-checkpoint-mycelium`** backend on LangGraph's pluggable checkpointer protocol (one-line
+swap → coordinator-free, resumable-across-nodes agent state; the strongest "why not just LangGraph?"
+rebuttal). **Sequence: Tier 3 (differentiators) first — to a CI-tested wedge — then Tier 1 ∥ Tier 2**,
+with Tier 2 built to *expose* the Tier-3 wedges so the interop lands differentiated, not commoditised.
+Core needs zero changes; much of the integration is in `mycelium-py` (raising the SDK to first-class).
 Sketch: [`docs/plans/mycelium-reason.md`](docs/plans/mycelium-reason.md).
 
 ## Deferred Patterns
