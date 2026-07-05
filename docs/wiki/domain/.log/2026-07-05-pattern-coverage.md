@@ -1,5 +1,9 @@
 # 2026-07-05 — ingest: pattern-coverage positioning artifact + v3.0 candidates
 
+> **⚠ The framing below was corrected the same day — see the Correction section at the bottom.**
+> The "Native / Expressible / Gap · five additive gaps" wording is superseded; the canonical page
+> `pattern-coverage.md` and `ROADMAP.md` use **Native / Composable / one genuine gap (ANP)**.
+
 New leaf page `domain/pattern-coverage.md` (linked from `domain.md`): the distributed-agentic
 pattern landscape (2026-07 scan) mapped against the substrate — Native / Expressible / Gap, the
 orchestrator non-goal, and five additive gaps. Coverage claims are code-anchored (verified this
