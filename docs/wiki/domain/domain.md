@@ -18,3 +18,6 @@ the published corpus, and the commercial strategy built on both. Purpose anchor:
 
 - **[publications.md](publications.md)** — the four-paper corpus (all published, DOIs),
   framework corrections that supersede older notes, the planned article revision.
+- **[pattern-coverage.md](pattern-coverage.md)** — the distributed-agentic pattern landscape vs
+  the substrate (Native / Expressible / Gap), the orchestrator non-goal, and the five additive
+  gaps framed as **v3.0 candidates** (mirrors `ROADMAP.md` → v3.0 Candidates).
