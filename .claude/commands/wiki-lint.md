@@ -19,6 +19,13 @@ For every wiki-page claim that cites code, confirm the code still says it. Minim
   `swim_failure_detector` default): read the cited file and confirm the stated value/default.
 - **Endpoint/feature lists** (`docs/wiki/dev/operations.md`): spot-check against
   `src/agent/http.rs` routes and `Cargo.toml` features.
+- **External front-door docs that *restate* code facts** — `docs/guide/building-on-mycelium.md`
+  (and lightly `docs/guide/faq.md`). These live outside `docs/wiki/` but duplicate code by
+  design, so they drift like a wiki page and are higher-stakes (downstream integrators act on
+  them). Verify: the reserved-KV-prefix list matches the `src/lib.rs` namespace-ownership
+  table (top-level prefixes — grep `\| \`` rows, diff the sets); `WIRE_VERSION`; the eight
+  sub-handle names; the `Cargo.toml` feature flags. A mismatch = a finding (fix the doc). The
+  *linking* front-doors (the FAQ's routing tables) need only the dead-link check in §3.
 
 Numbers the wiki deliberately does NOT pin (test counts, dep counts) are exempt — the
 convention is "run the suite for the live total".
@@ -33,7 +40,10 @@ pending/planned = a finding.
 ## 3. Orphans & dead links
 
 Every page reachable from its folder-note chain up to `wiki.md`; every relative link
-resolves; every folder has its `<folder>/<folder>.md` folder-note.
+resolves; every folder has its `<folder>/<folder>.md` folder-note. Also resolve every
+relative link in the external front-door docs (`docs/guide/faq.md`,
+`docs/guide/building-on-mycelium.md`) — they route into the guide/examples and break silently
+when a chapter or example is renamed/moved.
 
 ## 4. Coverage
 
