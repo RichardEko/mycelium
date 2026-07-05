@@ -2939,6 +2939,13 @@ so "not a first-class primitive" almost always means "not yet *packaged*," not "
 **one** item needs genuinely new code (an external-protocol adapter); the orchestrator pattern is a
 *non-goal*. Candidates are demand-driven (same discipline as *Deferred Patterns* below), not committed.
 
+**Primary v3.0 thrust — a validated pattern gallery.** Because *expressible ≠ supported*, the
+headline v3.0 deliverable is not core code but a set of **worked, CI-tested examples** — one per
+Composable pattern — that turn each composition from a claim into evidence, at the bar the
+blackboard/tuple-space examples already meet. The gallery is what *substantiates* the coverage story;
+packaging companions and the ANP adapter follow real demand. (Coverage-by-composition is a hypothesis
+until a tested example exists — see [`pattern-coverage.md`](docs/wiki/domain/pattern-coverage.md).)
+
 | Candidate | Nature | Composes from (or: what it adds) | Trigger to build |
 |---|---|---|---|
 | **Auction / bidding companion** (`mycelium-auction`?) | *packaging* — Contract-Net | signal announce + `kv().append("bids/…")` + a consensus round **or** deterministic lowest-wins (as the tuple-space/wiki elections) | work-distribution needs price/priority clearing, not FCFS `claim`. |

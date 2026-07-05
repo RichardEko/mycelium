@@ -18,6 +18,15 @@ ergonomically (blackboard = Linda `rd`/`in`; tuple-space = a pull pipeline). So 
 primitive" almost never means "not supported" — it means "not yet *packaged*." The Native/Composable
 line is about **ergonomics, not capability**.
 
+**Caveat — expressible ≠ validated (do not read this table as a coverage *guarantee*).** A `Native`
+row is backed by shipping code (and, for companions, tests). A `Composable` row is a **hypothesis**:
+the pattern is expressible on the public API, but *expressible* is not *supported* until it has a
+**working, CI-tested example**. The substrate's own history is the standing reminder — the curator
+split-brain, the coop flake, and an event-log first mis-classed as a gap were all "should compose"
+until built and tested. Converting the Composable rows into a gallery of tested examples is the
+[v3.0 work](../../../ROADMAP.md) that *earns* the coverage claim; until then this page states
+capability, not proof.
+
 ## Native — a primitive or companion provides it
 
 | Pattern | Provided by |
