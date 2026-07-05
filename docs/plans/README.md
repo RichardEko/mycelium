@@ -18,6 +18,12 @@ record, not duplicates of those.
 > **mycelium-wiki** (complete, build phases 1–5 + gateway/SDKs + access broker, 2026-07-04;
 > the only remaining slice is the *additive* disconnected KV-native variant). The one open
 > non-engineering item is a **research experiment** (three-arm work distribution, for Paper 1).
+>
+> **v3.0 candidates (proposed, 2026-07-05):** a pattern-landscape scan found the substrate covers the
+> agentic pattern space natively or by composition — the gaps are *packaging companions + one protocol
+> adapter* ([`ROADMAP.md`](../../ROADMAP.md) → v3.0 Candidates). First design sketch:
+> [`mycelium-reason.md`](mycelium-reason.md) — the LLM-authoring DX companion (substrate-native, not a
+> framework port).
 
 ---
 

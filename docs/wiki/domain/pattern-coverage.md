@@ -74,6 +74,20 @@ packaged Linda. Tracked as packaging companions in [`ROADMAP.md`](../../../ROADM
 A *durable / partitioned* log with consumer-group committed offsets would push the Native event-sourced
 log toward full Kafka semantics — a packaging **refinement**, not a missing pattern.
 
+## A distinct axis — LLM-authoring DX (not coordination)
+
+Coordination-pattern coverage (above) is orthogonal to how *pleasant it is to author the LLM reasoning*
+that rides on the mesh. Mycelium has real pieces (`PromptTemplate`, `LlmBackend` + streaming, MCP tools,
+the Layer-V `AgentStateMachine` with `max_turns`/`tool_budget`, HLC audit + `/gateway/explain`) but its
+design center is the substrate, so the reasoning-framework ergonomics — reasoning-graph authoring,
+typed-output + retry, model-call resilience, conversation memory, run-level evals — are **gaps on this
+axis**. Closed *substrate-native* (not as a framework port) each becomes a differentiator: inference
+routed by capability (no central proxy), traces that explain the *fleet's* reasoning tamper-evidently,
+memory that hands off between agents, graphs that outlive their orchestrator. Proposed as the
+**`mycelium-reason`** DX companion — [`ROADMAP.md`](../../../ROADMAP.md) → v3.0 · sketch
+[`../../plans/mycelium-reason.md`](../../plans/mycelium-reason.md). Same caveat: expressible until each
+closure has a tested example.
+
 ## Deliberate non-goal (not a gap)
 
 A first-class **orchestrator / coordinator primitive**. The thesis is coordinator-free: you can

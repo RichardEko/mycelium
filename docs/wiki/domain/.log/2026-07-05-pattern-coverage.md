@@ -28,3 +28,13 @@ Reframed Native/Expressible/Gap → **Native / Composable / one genuine gap**. T
 - **Only ANP is a genuine gap** (external wire-protocol conformance = an edge adapter, like `a2a`).
 
 ROADMAP v3.0 section retitled "packaging companions + one protocol adapter" to match.
+
+## Addendum — LLM-authoring DX axis + mycelium-reason (same day)
+
+Added a distinct-axis section to `pattern-coverage.md`: reasoning-authoring DX is orthogonal to
+coordination coverage. Mycelium has real pieces (`PromptTemplate`, `LlmBackend`+streaming, MCP,
+Layer-V `AgentStateMachine` max_turns/tool_budget, HLC audit + `/gateway/explain`); the gaps are the
+reasoning-framework ergonomics. Proposed the **`mycelium-reason`** DX companion — design sketch
+`docs/plans/mycelium-reason.md`, ROADMAP → v3.0. Framed substrate-native (capability-routed inference,
+fleet-reasoning traces, hand-off memory, orchestrator-proof graphs), mostly packaging, lead wedges
+①③②. Same expressible≠validated caveat: a tested pattern gallery earns the claim.

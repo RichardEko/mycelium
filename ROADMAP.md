@@ -2958,6 +2958,15 @@ Disposition: **the only genuinely new engineering is the ANP adapter.** Everythi
 that *packages a composition already possible on the public API* (the blackboard/tuple-space precedent) —
 built if and when demand justifies the ergonomics, not because a capability is missing.
 
+**DX companion — `mycelium-reason` (proposed).** A *separate axis* from the coordination candidates
+above: an LLM-**authoring** DX layer (reasoning-graph authoring, typed-output + retry, model-call
+resilience, conversation memory, run-level traces) rebuilt **substrate-native** — inference routed by
+capability (no central proxy), tamper-evident *fleet*-reasoning traces, memory that hands off between
+agents, graphs that outlive their orchestrator. Mostly packaging (`PromptTemplate` / `LlmBackend` /
+MCP / `AgentStateMachine` / schema registry / audit + `/gateway/explain` already exist); lead with the
+two differentiating, mostly-composed wedges — **capability-routed inference + fleet-reasoning traces**.
+Sketch: [`docs/plans/mycelium-reason.md`](docs/plans/mycelium-reason.md).
+
 ## Deferred Patterns
 
 These are well-designed ideas that were evaluated and deliberately shelved — not because
