@@ -225,6 +225,15 @@ existed. This is the framework's own report card.
   passes with). Lesson (third of its kind — cf. the WS5 `merge_peer_keys` watch-item and the Run-27
   "all CI green hid a flake"): **a green *non-deterministic* gate is not evidence** — the flaky XOR
   poll masked a Major defect for two runs while the dimension was even deep-dived (Run 32).
+- 2026-07-05: **Test Architecture** scored **8** in Runs 32–33 while the `elastic_intent` coop demo
+  (03) carried a latent CI-load flake: its Phase-1 readiness gate waited for TCP peers but **not** for
+  TLS identity exchange (signed anti-entropy frames dropped — "identity not yet received" — leaking
+  that latency into the convergence window), and the Phase-3 self-heal window (45 s) was marginal
+  against the ~12 s governor cooldown. Green in Runs 32–33 (never manifested), then **all three
+  `ci_smoke` retries failed** on the `9e42453` push (run `28739078960`). Scored 7 once known (Runs
+  34–35); root-caused + fixed 2026-07-05 (PR #128 — structural bidirectional-propagation gate +
+  widened heal window), verified **14/14 local + CI green** (incl. the Co-op job). Same family as the
+  curator entry above — a timing-sensitive gate that was green until CI saturation exposed it.
 
 **Dimensions:** Philosophy/Coherence · Conceptual Integrity · Architecture ·
 Modularity · API Design · Error Handling · Configurability · Language Best
@@ -2147,3 +2156,52 @@ None. This run confirms the Run-34 finding is remediated; no new probe was run (
 | 18 | Test Architecture | 7 | **Held at 7 (not recovered).** The *specific* failover gate is now deterministic, but the dimension's recurring-flake weakness stayed live *this same day*: the 12-demo Co-op suite flaked on the fix-merge push (`9e42453`, run `28739078960`) and passed on the next push — a different timing-sensitive gate, the same pattern. Honest hold, not a re-assertion. |
 | — | **Floor (lowest 3)** | **7, 8, 8** | Test Architecture (7) · Concurrency Correctness (8, recovered) · Robustness (8, recovered). The curator-split-brain trough is remediated and confirmed; Test Architecture remains the standing weakness (its ~7th ledger appearance + a fresh same-day Co-op flake). |
 | — | Mean (continuity footnote) | 7.96 | not a target (sum 199/25 = 7.96, carrying 22 dims from Run 34). Recovering toward the Run-33 8.16 baseline; the residual gap is Test Architecture (7), which the series has now flagged repeatedly — the honest next target, not the curator code. |
+
+## 2026-07-05 — Run 36 (M2)
+
+Deep-dive dimensions this run: **18 Test Architecture, 17 Testability** — diff-driven; the entire
+material diff since Run 35 is **one example file** (`26375e5`, PR #128 — the `elastic_intent` coop-demo
+hardening, +22/−5), which is squarely a Test-Architecture concern and was the Run-35 floor. The other
+23 dimensions **carry Run 33/34** (the `mycelium`/`mycelium-core` core is untouched since Run 33 — the
+whole Run 34/35/36 arc is companion + example + docs). Execution evidence this run: the `elastic_intent`
+demo **14/14 clean sequential local runs** (was ~1-in-3 pre-fix — reproduced, fixed, re-verified);
+**PR #128 CI green across all 14 jobs incl. the Food-Rescue Co-op suite** (the previously-flaking job);
+`cargo clippy -p mycelium-coop-examples --all-targets -- -D warnings` clean. This is a **small-diff
+recovery run**: it completes the Run-34 trough's remediation by lifting the last floor item
+(Test Architecture), which Run 35 deliberately held at 7 while the coop flake was still live.
+
+### Findings
+None. The coop flake was found (CI red on `9e42453`), root-caused, and fixed in this session's prior
+work (PR #128); this run confirms the remediation. A new calibration-ledger line is added for it (it was
+latent-while-scored-8 in Runs 32–33). No fresh probe on the untouched core — it was heavily probed in
+Runs 28–33 and no diff touches it.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 8 | carried (v34). Core untouched; no execution axis this run. |
+| 2 | Conceptual Integrity | 8 | carried (v34). |
+| 3 | Architecture | 8 | carried (v34). |
+| 4 | Modularity | 8 | carried (v34). |
+| 5 | API Design | 8 | carried (v34). |
+| 6 | Error Handling Model | 8 | carried (v34). |
+| 7 | Configurability | 8 | carried (v34). The demo tunes `health_secs`/cooldown via existing config knobs — no surface change. |
+| 8 | Language Best Practices | 8 | carried (v34) + fresh: `clippy --all-targets -D warnings` clean on the changed example. |
+| 9 | Concurrency Correctness | 8 | carried (v35 recovery). Core untouched; the wiki curator fix stays confirmed on the mainline. |
+| 10 | Resource Management | 8 | carried (v34). |
+| 11 | Semantic Correctness | 8 | carried (v34). Core LWW/HLC/consensus untouched; not probed this run. |
+| 12 | Robustness | 8 | carried (v35 recovery). |
+| 13 | Security | 8 | carried (v34). The `elastic_intent` demo exercises the mTLS identity path (its flake *was* the identity-exchange window) — no security defect, a test-timing one. |
+| 14 | Failure Mode Legibility | 8 | carried (v34) + a small gain: the demo's new readiness gate asserts a legible "cluster did not become signed-ready within 60s" instead of a confusing downstream failure. |
+| 15 | Performance | 8 | carried (v34). |
+| 16 | Scalability | 8 | carried (v34). |
+| 17 | Testability | 8 | **Deep-dive.** The fix *demonstrates* testability: the flake was locally reproducible (~1-in-3) and the demo became a **structural** gate (prove bidirectional signed propagation before the timed phase) rather than a race — the lore-correct "structural poll, not a fixed sleep." Held 8 (fresh execution evidence, but this is one example, not a harness-wide change). |
+| 18 | Test Architecture | 8 | **Deep-dive; RECOVERED from 7.** The Run-35 floor item — the `elastic_intent` coop flake — is fixed and verified (14/14 local + PR #128 CI green incl. the Co-op job). Not 9: the dimension's chronic recurring-flake history (its ~7th ledger appearance, now +1 for this demo) warrants continued watch, not a top mark — fixing flakes one-by-one is not the same as eliminating the pattern. |
+| 19 | Observability | 8 | carried (v34). |
+| 20 | Debuggability | 8 | carried (v34). |
+| 21 | Operational Readiness | 8 | carried (v34). |
+| 22 | Evolvability | 8 | carried (v34). |
+| 23 | Documentation | 8 | carried (v34). |
+| 24 | Developer Experience | 8 | carried (v34). |
+| 25 | Dependency Hygiene | 8 | carried (v34). No dep change (the demo uses existing APIs). |
+| — | **Floor (lowest 3)** | **8, 8, 8** | All dimensions at 8 — the Run-34 trough (Concurrency 6 · Robustness/Test-Architecture 7) is now **fully remediated and confirmed**: the curator split-brain (PR #127) and the coop flake (PR #128) both fixed with verified canaries/green CI. Floor returns to the Run-31/33 8/8/8. |
+| — | Mean (continuity footnote) | 8.00 | not a target (sum 200/25 = 8.00). A flat 8 is the honest read of a small-diff recovery run: everything solid, the two Run-34/35 defects remediated, and **no dimension carries fresh execution evidence this run that uniquely earns a 9** (the session's headline was finding+fixing defects, which argues against top marks, not for them). Below Run-33's 8.16 precisely because Run 33's four 9s were execution-backed *that* run and have not been re-earned since. |
