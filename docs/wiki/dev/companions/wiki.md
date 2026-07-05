@@ -32,6 +32,15 @@ apart — split-brain guard) → re-elect. Because the store is node-independent
 nothing**: a promoted curator resumes against the *same* store and re-drains the *same* proposals. The
 litmus: *if the curator vanishes, the wiki stays readable and a new curator self-elects.*
 
+**Step-down (split-brain reconciliation, PR #127):** the election settles on a *fixed* window
+(`(cap_refresh*2).max(2s)`), so a lost gossip race can leave two nodes self-elected — both writing the
+shared store, with no recovery (this flaked `tests/failover.rs::curator_elects_…` once in CI). A curator
+**sentinel** now applies *lowest-id-wins continuously*, not just at election: a curator that sees a
+lower-id peer curator **resigns** — stops *just* its own drain/lint/broker loops (held in a separate
+`curator_tasks` list so the sentinel that triggered it survives), retracts the ad, and returns to the
+reader watch. Deterministic: the lowest stays, every other steps down; self-healing. Canary:
+`tests/failover.rs::dual_curators_reconcile_to_a_single_writer` (fails at 30 s without the sentinel).
+
 **Lifecycle (learned the hard way — analysis Run 32):** the curator's background loops (drain / lint /
 election / watch) each hold an `Arc<Self>` and loop unconditionally, and they use raw `tokio::spawn`
 (not the agent's tracked `spawn_task`, so agent shutdown does **not** reap them). Call **`Wiki::shutdown`**
