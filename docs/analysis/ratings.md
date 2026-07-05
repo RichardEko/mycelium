@@ -210,6 +210,21 @@ existed. This is the framework's own report card.
   threaten the invariant. Lesson reversed: once a "widen the ceiling" flake **recurs**, the honest
   fix *is* the structural rework — separate the decision (pure, testable) from the scheduling
   (async, best-effort). Refactor is behavior-preserving (the integration tests still pass unchanged).
+- 2026-07-05: **Concurrency Correctness** scored **8** in Runs 32–33 while the `mycelium-wiki`
+  curator election could **split-brain**: the settle window in `run_election` is a fixed sleep
+  (`(cap_refresh*2).max(2s)`), so a candidate ad lost to gossip latency lets two `Auto` nodes each
+  see only themselves and both call `become_curator()` — which had **no step-down**, leaving two
+  permanent writers of record against the shared store with no recovery (existed since the companion's
+  election shipped, `65b31c2`, in the Run-32 window). **Both runs cited `failover.rs` ("election,
+  ring-failover, single-writer apply — green") as the evidence the companion's concurrency was sound**
+  — but that test's XOR "exactly one curator" gate (`poll_until`, 30 s) could pass by luck. Surfaced
+  as an intermittent CI failure of `curator_elects_…` on PR #126; root-caused and fixed this session
+  (`9e42453` — a curator **sentinel** applying lowest-id-wins continuously; higher-id curator resigns,
+  stopping just its `curator_tasks` loops) with the deterministic canary
+  `dual_curators_reconcile_to_a_single_writer` (verified: **fails at 30 s without the sentinel**,
+  passes with). Lesson (third of its kind — cf. the WS5 `merge_peer_keys` watch-item and the Run-27
+  "all CI green hid a flake"): **a green *non-deterministic* gate is not evidence** — the flaky XOR
+  poll masked a Major defect for two runs while the dimension was even deep-dived (Run 32).
 
 **Dimensions:** Philosophy/Coherence · Conceptual Integrity · Architecture ·
 Modularity · API Design · Error Handling · Configurability · Language Best
@@ -2047,3 +2062,61 @@ None. All three falsification probes passed (below). The Run-32 Major finding (t
 | 25 | Dependency Hygiene | 8 | **Deep-dive.** `bincode 2.0.1` **fully retired** — gone from `Cargo.lock` and every `Cargo.toml` (net −1 crate); the CI `cargo audit` job passed on `49ccbf4` with the RUSTSEC-2025-0141 advisory gone. `--no-default-features` intact; `Cargo.lock` present. Not 9: `instant 0.1.13` (transitive) still carries an unmaintained warning, so the tree is not advisory-clean. |
 | — | **Floor (lowest 3)** | **8, 8, 8** | The Run-32 trough (Resource Management 6 · Conceptual Integrity 7 · Scalability 7) is **fully remediated** — each fix shipped with a canary that ran green this run. The floor returns to Run-31's 8/8/8: find → fix → confirm, exactly what the ledger predicts a remediated finding should do. |
 | — | Mean (continuity footnote) | 8.16 | not a target; see M2 preamble (sum 204/25 = 8.16). Back to the Run-31 baseline after Run-32's dip. Four 9s (Philosophy, Architecture, Semantic Correctness, Failure Mode Legibility). No new ledger line: this run's probes found nothing, and the Run-32 defect was scored 6 (not ≥8) while it existed, so it never earned one. |
+
+## 2026-07-05 — Run 34 (M2)
+
+Deep-dive dimensions this run: **9 Concurrency Correctness, 10 Resource Management, 12 Robustness,
+14 Failure Mode Legibility, 18 Test Architecture** — finding-driven (the curator step-down landed
+squarely on all five), so the rotation deviates from the strict 11–15 that would follow Run 33's 6–10;
+rotation resumes 11–15 next run. The material diff since Run 33 is **the wiki curator step-down fix**
+(`9e42453`, PR #127) plus the external-facing docs sweep (FAQ + Building-on-Mycelium integrator
+on-ramp, README front-doors + four-paper corpus DOIs, the wiki-lint scope extension, a `schema()`→
+`schemas()` doc fix) and one `/wiki-lint` ingest. Execution evidence this run: `cargo test -p
+mycelium-wiki --features llm` = **26/0** (lib 22/0 + access 2/0 + failover 2/0), on a **cold** rebuild
+(post `cargo clean`); the deterministic canary `dual_curators_reconcile_to_a_single_writer`
+**verified to fail at 30 s without the sentinel and pass (~3 s) with it** (the run's falsification
+probe, executed); `cargo clippy -p mycelium-wiki --all-targets --all-features -D warnings` clean; **PR
+#127 CI green across all 14 jobs** (core lib `Test`, `Clippy`, gateway-free build, all companions,
+AFN/coop/demo smokes, RUSTSEC `cargo audit`). Core `mycelium` (KV/Signal/Consensus) is untouched by
+this diff → its dimensions carry Run 33.
+
+### Findings
+
+**Major — Concurrency Correctness (capped 6) — `mycelium-wiki` curator split-brain.** `run_election`
+settles on a fixed window, so a lost gossip race lets two `Auto` nodes both `become_curator()`; there
+was **no step-down**, so both stayed writers of record against the shared store permanently. Confirmed
+by the `dual_curators_reconcile_to_a_single_writer` probe (two forced curators never reconcile without
+the fix — XOR poll times out at 30 s). Fixed this session (`9e42453` — curator sentinel, lowest-id-wins
+applied continuously, higher-id resigns) with the probe kept as the regression gate. New calibration
+ledger line added (Concurrency scored 8 in Runs 32–33 while it existed, both citing the flaky
+`failover.rs` XOR gate as evidence). Recovery to 8 expected Run 35, per the find→fix→confirm pattern.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 8 | carried (v33). The step-down is philosophically on-message — a *recallable role* that self-heals to a single writer is the coordinator-free thesis, not a coordinator. Read-only this run. |
+| 2 | Conceptual Integrity | 8 | carried (v33). The sentinel/resign mirror the existing `watch_and_promote` idiom and the blackboard election; `curator_tasks` split from `tasks` is a clean extension. The `schema()`→`schemas()` doc typo (caught + fixed, `b872a5e`) is a minor blemish, not drift. |
+| 3 | Architecture | 8 | carried (v33). Layers untouched; the fix is companion-local and builds on the public API only. Namespace table verified against `building-on-mycelium.md` (lint) — exact match. |
+| 4 | Modularity | 8 | carried (v33). |
+| 5 | API Design | 8 | carried (v33). Sub-handle surface unchanged; `resign`/sentinel are private. |
+| 6 | Error Handling Model | 8 | carried (v33). |
+| 7 | Configurability | 8 | carried (v33). |
+| 8 | Language Best Practices | 8 | carried (v33) + fresh artifact: `clippy --all-targets --all-features -D warnings` clean on the companion incl. the new code; the `match … if guard` avoids `single_match`. |
+| 9 | Concurrency Correctness | **6** | **Deep-dive; FINDING (Major, capped).** The wiki curator split-brain (no step-down → two permanent writers) confirmed by the `dual_curators_reconcile_to_a_single_writer` probe. **Fourth** ledger entry for this dimension, and the second of the "a green non-deterministic gate was mistaken for evidence" shape. Fixed + canary this session; recovery expected Run 35. |
+| 10 | Resource Management | 8 | **Deep-dive.** The `resign()` teardown is correct — takes `curator_tasks` under lock, drops the lock, then aborts+awaits (releasing each loop's `Arc<Self>`), and `shutdown` now drains `curator_tasks` too; the sentinel that triggers resign lives in `tasks` and ends by returning, so it never aborts itself. Verified green under the full wiki suite + canary. Not capped — this is the fix side, not the defect. Not 9: no fresh RM-specific probe (fd/task-count assertion) beyond the suite. |
+| 11 | Semantic Correctness | 8 | carried (v33). Core LWW/HLC/consensus untouched; the CI `Test` job (core lib) green on #127, but not deep-dived this run. |
+| 12 | Robustness | 7 | **Deep-dive.** Dinged (not capped): the split-brain's defining trait was **no recovery** from an off-nominal election race — a graceful-degradation failure, now self-healing via the sentinel. Distinct facet from the Concurrency cap. Malformed-frame / peer-loss paths unchanged from Run 33. |
+| 13 | Security | 8 | carried (v33). No change; gateway-no-auth-by-default still documented (now also in `building-on-mycelium.md` §4). |
+| 14 | Failure Mode Legibility | 8 | **Deep-dive.** The step-down is *legible*: `resign` emits `tracing::warn!("wiki: stepped down — a lower-id curator exists")`, where the old dual-curator state was silent. A net legibility gain; held at 8 (the improvement is one log line, not a subsystem). |
+| 15 | Performance | 8 | carried (v33). The sentinel adds one `resolve_role("curator")` per `cap_refresh` — negligible. |
+| 16 | Scalability | 8 | carried (v33). |
+| 17 | Testability | 8 | carried (v33). The `spawn_role` helper + forced-role construction made the split-brain deterministically reproducible — evidence the design is injectable. |
+| 18 | Test Architecture | 7 | **Deep-dive.** Dinged: the `failover.rs` XOR poll was a **non-deterministic gate that hid a Major bug for two runs** (the recurring Test-Architecture weakness — this is its ~7th ledger appearance). Remediated at the root here with a *deterministic* canary that forces the split-brain, and I verified it bites. Held at 7 (not 8) to mark the recurrence honestly, mirroring Run 30. |
+| 19 | Observability | 8 | carried (v33). |
+| 20 | Debuggability | 8 | carried (v33). |
+| 21 | Operational Readiness | 8 | carried (v33). |
+| 22 | Evolvability | 8 | carried (v33). Wire policy intact (v12/PREV 11); wiki-lint extended to guard the external front-door docs against doc-vs-code drift (`0c54910`) — a debt-reducing move. |
+| 23 | Documentation | 8 | carried (v33) + real additions: the FAQ + Building-on-Mycelium integrator on-ramp (two-audience front doors), README corpus DOIs. The `schema()` typo shipped in `building-on-mycelium.md` and was caught by the very lint check added to guard it — honest wash, held 8. |
+| 24 | Developer Experience | 8 | carried (v33). The on-ramp + copyable `CLAUDE.md` snippet materially improve the downstream-integrator path. |
+| 25 | Dependency Hygiene | 8 | carried (v33). No new deps (the fix uses existing `tokio`); RUSTSEC `cargo audit` job green on #127. |
+| — | **Floor (lowest 3)** | **6, 7, 7** | Concurrency Correctness (6, capped finding) · Robustness (7) · Test Architecture (7) — all three facets of the one curator-split-brain defect (the bug, its non-recovery, and the flaky gate that hid it), each now remediated with the deterministic canary. |
+| — | Mean (continuity footnote) | 7.84 | not a target; see M2 preamble (sum 196/25 = 7.84). Down from Run 33's 8.16 — the honest cost of a Major finding surfacing in the shipped companion. No 9s this run: the headline is a real defect in shipped code, which is not the posture for handing out top marks. Expect recovery toward the Run-33 baseline next run as the fix confirms. |
