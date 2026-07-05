@@ -45,6 +45,12 @@
 //! See [ROADMAP.md](https://github.com/RichardEko/mycelium/blob/main/ROADMAP.md) for the
 //! layer-by-layer architecture and higher-layer design.
 //!
+//! **Building a use case on top of Mycelium?** Start with
+//! [Building on Mycelium](https://github.com/RichardEko/mycelium/blob/main/docs/guide/building-on-mycelium.md)
+//! — the integrator contract (dependency, public-API-only rule, reserved KV prefixes, the
+//! invariants to respect, and a copyable `CLAUDE.md` snippet), then the
+//! [FAQ](https://github.com/RichardEko/mycelium/blob/main/docs/guide/faq.md).
+//!
 //! ## Crate layout — `mycelium` vs `mycelium-core`
 //!
 //! This crate is the **full runtime** (Layers I + II + III: gossip KV, signal mesh,
