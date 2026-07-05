@@ -10,3 +10,17 @@ The five gaps are also written into `ROADMAP.md` → **v3.0 Candidates** (propos
 replayable event-sourced log, auction/bidding, DAG self-evolving network, ANP conformance, governed
 shared memory. Disposition tags: engineering-ready-if-demanded (event-log, auction) · standards-
 tracking (ANP) · watch-only frontier (DAG, governed-memory). No page contradicts the code; all links resolve.
+
+## Correction (same day, after a composability challenge)
+
+Reframed Native/Expressible/Gap → **Native / Composable / one genuine gap**. Two fixes:
+- **Event-sourced log was NOT a gap — it's Native:** `KvHandle::{append, scan_log(from,to),
+  subscribe_log(since_hlc), compact_log}` (`mycelium-core/src/kv_handle.rs`), a `log/{stream}/{hlc}`
+  overlay on gossip KV. My first grep scoped to `src/` and missed `mycelium-core/src/` — the
+  exact "assert a gap without grepping the whole workspace" miss the calibration ledger records.
+- **Auction, DAG-network, governed-memory are compositions, not gaps** — Contract-Net over
+  signals+append+consensus; the `advertise`/`declare_requirement`/`resolve_wiring` dynamic wiring
+  graph; access-broker+authz + HLC read-stamps. They belong in *Composable* (packaging candidates).
+- **Only ANP is a genuine gap** (external wire-protocol conformance = an edge adapter, like `a2a`).
+
+ROADMAP v3.0 section retitled "packaging companions + one protocol adapter" to match.

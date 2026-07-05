@@ -2929,26 +2929,27 @@ evolution needing field-level migration.
 
 ---
 
-## v3.0 Candidates — pattern-coverage gaps (proposed, not started)
+## v3.0 Candidates — packaging companions + one protocol adapter (proposed, not started)
 
 A 2026-07 scan of the distributed-agentic pattern landscape (positioning artifact:
 [`docs/wiki/domain/pattern-coverage.md`](docs/wiki/domain/pattern-coverage.md)) found the substrate
-covers the decentralized / mesh / blackboard / pipeline / stigmergy family **natively**, is the
-field's prescribed mitigation for the shared-state reliability failures, and expresses the
-orchestrator family **by design** (a first-class orchestrator is a *non-goal*, not a gap). Five
-**additive** gaps remain — none contradicts the coordinator-free model. These are **candidates**,
-demand-driven (same discipline as *Deferred Patterns* below), not committed work.
+covers the pattern space **natively or by composition of native primitives**. The companions are
+themselves compositions of KV + signals (blackboard = Linda `rd`/`in`; tuple-space = a pull pipeline),
+so "not a first-class primitive" almost always means "not yet *packaged*," not "not supported." Only
+**one** item needs genuinely new code (an external-protocol adapter); the orchestrator pattern is a
+*non-goal*. Candidates are demand-driven (same discipline as *Deferred Patterns* below), not committed.
 
-| Candidate | What / why it fits | Leverage on existing substrate | Trigger to build |
+| Candidate | Nature | Composes from (or: what it adds) | Trigger to build |
 |---|---|---|---|
-| **Replayable event-sourced log** (`mycelium-eventlog`?) | append-only app-event log replayable from an offset — the one pattern the mailbox (durable *delivery*) + companion WALs (*state* recovery) don't give. Event-sourcing/replay is a mainstream reliability pattern. | **High** — HLC total order + WAL machinery already exist; largely packaging/exposure on the public API. | a customer needs event replay / audit-grade event history beyond the tamper-evident audit log. |
-| **Auction / bidding allocation** (`mycelium-auction`?) | competitive bid/clear over capability + demand, vs today's demand *pressure* + first-come `claim`. Market-based allocation is a named coordination pattern. | Medium — rides on capability resolution + `demand()`/`watch_demand()` + signals. | work-distribution needs price/priority clearing, not FCFS. |
-| **DAG self-evolving agent network** | AgentNet-style dynamic specialization graph; capability groups are flat today. | Low–Medium — research-shaped; needs a topology primitive. | evidence dynamic specialization beats flat capability groups. |
-| **ANP protocol conformance** | the one interop standard not covered (AgentFacts is NANDA-adjacent, not ANP). | Low — a standards-tracking edge, like the `a2a` adapter. | ANP reaches adoption critical mass. |
-| **Governed shared memory / read-set reconstruction** | S-Bus-style consistency reconstruction over shared memory; today's access broker + authz cover *governance* only. | Low — frontier research (2026 preprints). | the research matures **and** a governance-of-shared-memory customer need appears. |
+| **Auction / bidding companion** (`mycelium-auction`?) | *packaging* — Contract-Net | signal announce + `kv().append("bids/…")` + a consensus round **or** deterministic lowest-wins (as the tuple-space/wiki elections) | work-distribution needs price/priority clearing, not FCFS `claim`. |
+| **Durable / partitioned event-log** | *refinement* — the event-sourced log is already **Native** (`KvHandle::append`/`scan_log`/`subscribe_log`/`compact_log`); this adds Kafka-style partitions + consumer-group committed offsets + retention | the existing `log/{stream}` overlay | a customer needs partitioned throughput + durable consumer offsets beyond replay + compaction. |
+| **DAG self-evolving network** | *packaging* — the dynamic wiring graph already rewires | `advertise_capability` + `declare_requirement` + `resolve_wiring` | evidence dynamic specialization beats flat capability groups. |
+| **Governed-memory read-set reconstruction** | *packaging* — governance is Native (access broker + authz); adds S-Bus-style read-set tracking | HLC read-stamps + wiki 3-way reconcile | the research matures **and** a governance-of-shared-memory customer need appears. |
+| **ANP protocol conformance** | **new code** — an external wire-protocol adapter, like the `a2a` adapter | (not a composition — edge conformance) | ANP reaches adoption critical mass. |
 
-Disposition: **engineering-ready if demanded** — event-log, auction. **Standards-tracking** — ANP.
-**Watch-only (frontier, 2026 preprints — track, don't build)** — DAG-network, governed-memory.
+Disposition: **the only genuinely new engineering is the ANP adapter.** Everything else is a companion
+that *packages a composition already possible on the public API* (the blackboard/tuple-space precedent) —
+built if and when demand justifies the ergonomics, not because a capability is missing.
 
 ## Deferred Patterns
 
