@@ -45,7 +45,7 @@ public primitive (or open an issue), not to fork. Your use case is *another comp
 substrate is meant to be extended from outside, not patched from within.
 
 Your public toolkit is the eight sub-handles off `GossipAgent`: `kv()`, `mesh()`,
-`capabilities()`, `consensus()`, `service()`, `schema()`, `llm()`, `mcp()`. See the
+`capabilities()`, `consensus()`, `service()`, `schemas()`, `llm()`, `mcp()`. See the
 [crate-root doc](../../src/lib.rs) (`GossipAgent`) for the full surface and
 [00-concepts.md](00-concepts.md) for the model.
 
@@ -112,7 +112,7 @@ inherits the contract without reading everything:
 ## Building on Mycelium (dependency)
 
 - Mycelium is a broker-less embedded substrate; we build on its **public API only**
-  (the eight `GossipAgent` sub-handles: kv/mesh/capabilities/consensus/service/schema/
+  (the eight `GossipAgent` sub-handles: kv/mesh/capabilities/consensus/service/schemas/
   llm/mcp). Never reach for crate internals — pick a different public primitive instead.
 - **Our KV keys live under `myapp/…`.** Never write under the substrate's reserved
   prefixes: grp/ sys/ consensus/ cap/ req/ cap-group/ gcap/ mailbox/ schemas/ tools/
