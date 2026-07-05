@@ -59,6 +59,12 @@ Two `mycelium` vs `mycelium-core` crate-choice questions are answered in the
 The minimal embed (start an agent, set a key, emit a signal, opt into consensus)
 is at the top of the [guide README](README.md).
 
+**Building a use case *on top* of Mycelium** (a coordinator, an agent fleet, your
+own companion crate)? Go to **[Building on Mycelium](building-on-mycelium.md)** — the
+integrator contract: the dependency, the public-API-only rule, which KV prefixes to
+avoid, the invariants you must respect, and a copyable `CLAUDE.md` snippet for your
+own agent-driven project.
+
 ---
 
 ## Which example maps to my problem?
