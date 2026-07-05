@@ -81,12 +81,24 @@ that rides on the mesh. Mycelium has real pieces (`PromptTemplate`, `LlmBackend`
 the Layer-V `AgentStateMachine` with `max_turns`/`tool_budget`, HLC audit + `/gateway/explain`) but its
 design center is the substrate, so the reasoning-framework ergonomics — reasoning-graph authoring,
 typed-output + retry, model-call resilience, conversation memory, run-level evals — are **gaps on this
-axis**. Closed *substrate-native* (not as a framework port) each becomes a differentiator: inference
-routed by capability (no central proxy), traces that explain the *fleet's* reasoning tamper-evidently,
-memory that hands off between agents, graphs that outlive their orchestrator. Proposed as the
-**`mycelium-reason`** DX companion — [`ROADMAP.md`](../../../ROADMAP.md) → v3.0 · sketch
+axis**.
+
+**Strategy — build-vs-adopt resolved to three tiers (don't roll a full framework).** The popular DX
+(LangGraph, Instructor, Pydantic AI) is almost all **Python** and sits *above* a substrate, so:
+- **BUILD** only the un-adoptable, substrate-native differentiators — ① **capability-routed inference**
+  (route to a healthy model-advertising node; no central proxy) and ② **fleet-reasoning traces**
+  (tamper-evident causal traces via HLC audit + `/gateway/explain`).
+- **ADOPT** the commodity layer — typed output via **Instructor** / Pydantic AI, wrapped in `mycelium-py`.
+- **INTEROP / be-the-backend** — flagship a **`langgraph-checkpoint-mycelium`** on LangGraph's pluggable
+  checkpointer protocol: one-line swap → coordinator-free, resumable-across-nodes agent state (the
+  strongest "why not just LangGraph?" rebuttal).
+
+**Sequence: Tier 3 first — to a CI-tested wedge — then Tier 1 ∥ Tier 2** (the differentiator is what
+gives the adopt/interop its *pull*; Tier 2 is built to *expose* the wedges). Raises `mycelium-py` to
+first-class; the Rust core needs zero changes. Home: the **`mycelium-reason`** DX companion —
+[`ROADMAP.md`](../../../ROADMAP.md) → v3.0 · full strategy in the sketch
 [`../../plans/mycelium-reason.md`](../../plans/mycelium-reason.md). Same caveat: expressible until each
-closure has a tested example.
+wedge (and the checkpointer fit) has a tested example.
 
 ## Deliberate non-goal (not a gap)
 
