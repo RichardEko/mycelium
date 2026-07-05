@@ -3,9 +3,12 @@
 #![allow(clippy::field_reassign_with_default)] // GossipConfig is built the way mycelium's own tests do
 //!
 //! Robustness note: election/failover are asserted with **structural polls on generous timeouts**,
-//! never fixed sleeps — the capability-ring failure detector is timing-sensitive under CI load (a
-//! sibling companion's election test flaked exactly this way), and the guaranteed outcome only needs
-//! patience, not a tighter bound.
+//! never fixed sleeps — the capability-ring failure detector is timing-sensitive under CI load. The
+//! election settles on a fixed window, so a lost gossip race could once leave two nodes self-elected
+//! with no recovery (this flaked `curator_elects_…` once in CI). The curator **sentinel** now makes
+//! that self-healing — "lowest id wins" applied continuously, not just at election — so convergence
+//! to a single curator is guaranteed, not merely probable; `dual_curators_reconcile_to_a_single_writer`
+//! is its canary.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -33,6 +36,12 @@ fn attrs(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
 }
 
 async fn spawn(port: u16, boot: Vec<u16>, dir: &std::path::Path) -> (Arc<GossipAgent>, Arc<Wiki<FsStore>>) {
+    spawn_role(port, boot, dir, WikiRole::Auto).await
+}
+
+async fn spawn_role(port: u16, boot: Vec<u16>, dir: &std::path::Path, role: WikiRole)
+    -> (Arc<GossipAgent>, Arc<Wiki<FsStore>>)
+{
     let mut cfg = GossipConfig::default();
     cfg.bind_port = port;
     cfg.bootstrap_peers = boot.into_iter().map(|p| NodeId::new("127.0.0.1", p).unwrap()).collect();
@@ -41,7 +50,7 @@ async fn spawn(port: u16, boot: Vec<u16>, dir: &std::path::Path) -> (Arc<GossipA
     let store = Arc::new(FsStore::open(dir, "ops").unwrap());
     let wcfg = WikiConfig {
         group: "ops".into(),
-        role: WikiRole::Auto,
+        role,
         cap_refresh: Duration::from_millis(400),
         drain_interval: Duration::from_millis(150),
         lint_interval: Duration::from_millis(300),
@@ -53,6 +62,32 @@ async fn spawn(port: u16, boot: Vec<u16>, dir: &std::path::Path) -> (Arc<GossipA
 /// Read `page`'s first section body from a wiki, if present.
 fn first_body(w: &Wiki<FsStore>, page: &str) -> Option<String> {
     w.read(page).ok().flatten().and_then(|p| p.sections.first().map(|s| s.body.clone()))
+}
+
+/// Split-brain reconciliation (the root cause of the earlier `curator_elects_…` CI flake): the
+/// election settles on a fixed window, so a lost gossip race can leave two nodes self-elected. Force
+/// that state directly — two **forced** curators against one store — and assert the sentinel makes
+/// the higher-id one step down, so exactly one curator survives and stays. Before the step-down guard
+/// both stayed curator forever and this XOR never held.
+#[tokio::test]
+async fn dual_curators_reconcile_to_a_single_writer() {
+    let dir = tempfile::tempdir().unwrap();
+    let (pa, pb) = (free_port(), free_port());
+    let (agent_a, wiki_a) = spawn_role(pa, vec![pb], dir.path(), WikiRole::Curator).await;
+    let (agent_b, wiki_b) = spawn_role(pb, vec![pa], dir.path(), WikiRole::Curator).await;
+
+    assert!(poll_until(|| !agent_a.peers().is_empty() && !agent_b.peers().is_empty(), Duration::from_secs(10)).await,
+        "mesh forms");
+    // Both begin as curator (forced). The sentinel reconciles: lowest id wins, the other resigns.
+    assert!(poll_until(|| wiki_a.is_curator() ^ wiki_b.is_curator(), Duration::from_secs(30)).await,
+        "the split-brain reconciles to exactly one curator");
+    // …and it stays reconciled: the resigned node must NOT re-elect while the winner advertises. If
+    // any poll over the next ~1.5s observes a non-XOR state, this returns true and the assert fails.
+    let regressed = poll_until(|| !(wiki_a.is_curator() ^ wiki_b.is_curator()), Duration::from_millis(1500)).await;
+    assert!(!regressed, "exactly-one-curator holds stably after reconciliation");
+
+    agent_a.shutdown_with_timeout(Duration::from_secs(5)).await;
+    agent_b.shutdown_with_timeout(Duration::from_secs(5)).await;
 }
 
 #[tokio::test]
