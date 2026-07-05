@@ -142,7 +142,12 @@ pub struct Wiki<S: WikiStore + 'static> {
     curator_reg:      Mutex<Option<CapabilityReg>>,
     candidate_reg:    Mutex<Option<CapabilityReg>>,
     next_proposal_id: AtomicU64,
+    /// Long-lived tasks that outlive a single curatorship (the election / sentinel / reader watch).
     tasks:            Mutex<Vec<JoinHandle<()>>>,
+    /// The current curatorship's loops (drain / lint / broker). Held separately from `tasks` so a
+    /// step-down ([`resign`](Self::resign)) can stop *just* these without touching the sentinel that
+    /// triggered it. Aborted on both `resign` and `shutdown`.
+    curator_tasks:    Mutex<Vec<JoinHandle<()>>>,
 }
 
 impl<S: WikiStore + 'static> Wiki<S> {
@@ -179,6 +184,7 @@ impl<S: WikiStore + 'static> Wiki<S> {
             candidate_reg:    Mutex::new(None),
             next_proposal_id: AtomicU64::new(0),
             tasks:            Mutex::new(Vec::new()),
+            curator_tasks:    Mutex::new(Vec::new()),
         });
         match w.cfg.role {
             WikiRole::Curator => w.become_curator(),
@@ -209,7 +215,8 @@ impl<S: WikiStore + 'static> Wiki<S> {
     /// wikis. Mirrors `Blackboard::shutdown`. Aborting the tasks releases their `Arc<Self>`, breaking
     /// the cycle.
     pub async fn shutdown(&self) {
-        let handles: Vec<JoinHandle<()>> = std::mem::take(&mut *self.tasks.lock());
+        let mut handles: Vec<JoinHandle<()>> = std::mem::take(&mut *self.tasks.lock());
+        handles.extend(std::mem::take(&mut *self.curator_tasks.lock()));
         for h in &handles {
             h.abort();
         }
@@ -362,12 +369,51 @@ impl<S: WikiStore + 'static> Wiki<S> {
                 tracing::info!(group = %me.cfg.group, requester = %requester, granted, "wiki: store-access request");
             }
         });
-        let mut tasks = self.tasks.lock();
-        tasks.push(drain);
-        tasks.push(lint);
-        tasks.push(broker);
-        drop(tasks);
+        // This curatorship's loops live in `curator_tasks` so a step-down can stop exactly them.
+        {
+            let mut ct = self.curator_tasks.lock();
+            ct.push(drain);
+            ct.push(lint);
+            ct.push(broker);
+        }
+
+        // Curator sentinel — split-brain reconciliation. The initial election settles on a fixed
+        // window, so a lost gossip race can leave *two* nodes self-elected with no recovery (both
+        // write the shared store). Apply "lowest id wins" continuously, not just at election: if a
+        // curator with a lower node-id is visible, this (higher-id) node resigns. Convergence is
+        // deterministic — the lowest always sees itself as lowest and stays; every other steps down.
+        let me = Arc::clone(self);
+        let sentinel = tokio::spawn(async move {
+            let self_id = me.agent.node_id().to_string();
+            let mut tick = tokio::time::interval(me.cfg.cap_refresh);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                if !me.is_curator() { return; }
+                let mut curators = me.resolve_role("curator");
+                curators.sort_by_key(NodeId::to_string);
+                match curators.first() {
+                    Some(lowest) if lowest.to_string() < self_id => { me.resign().await; return; }
+                    _ => {}
+                }
+            }
+        });
+        self.tasks.lock().push(sentinel);
         tracing::info!(group = %self.cfg.group, "wiki: serving as curator");
+    }
+
+    /// Step down in favour of a lower-id peer curator (split-brain reconciliation). Stops *this*
+    /// curatorship's loops, retracts the curator ad, and returns the node to the reader failover-watch
+    /// so it can still be promoted later if the surviving curator evaporates. Never touches `tasks`
+    /// (the sentinel that called this lives there and ends by returning).
+    async fn resign(self: &Arc<Self>) {
+        self.is_curator.store(false, Ordering::Release);
+        let handles: Vec<JoinHandle<()>> = std::mem::take(&mut *self.curator_tasks.lock());
+        for h in &handles { h.abort(); }
+        for h in handles { let _ = h.await; } // drop their Arc<Self> before we re-arm the watch
+        *self.curator_reg.lock() = None; // retract the curator ad
+        tracing::warn!(group = %self.cfg.group, "wiki: stepped down — a lower-id curator exists");
+        self.watch_and_promote();
     }
 
     async fn run_election(self: Arc<Self>) {
