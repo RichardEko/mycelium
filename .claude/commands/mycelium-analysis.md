@@ -258,9 +258,18 @@ more reading. Examples:
   cleanup actually happened (`task_count`, fd counts, store state).
 
 Rules:
-- A **confirmed finding caps that dimension at 6 for this run**, regardless of
-  artifacts, and is written up in the entry's **Findings** section with
-  severity (Critical / Major / Minor), reproduction, and affected dimension.
+- A **confirmed finding caps that dimension at 6 for this run** *if the defect is
+  still live at run's end*, and is written up in the entry's **Findings** section
+  with severity (Critical / Major / Minor), reproduction, and affected dimension.
+  **Exception (added 2026-07-06, Run 37):** a finding that is *found **and** fixed
+  **and** left with a deterministic (non-flaky) regression gate in the same run*
+  scores the dimension's **fixed end-state** instead — usually a modest skepticism
+  discount (e.g. 7, not a confident 8), never a confident 9. Rationale: the
+  calibration ledger already records the historical over-scoring (its numeric-honesty
+  penalty), so capping the fix-run too **double-counts** and perversely makes
+  *discovering* a bug lower the score — discouraging the digging M2 exists to reward.
+  A finding that is unfixed, or "fixed" only by widening a timeout / a still-flaky
+  gate, remains capped at 6.
 - A probe that *passes* is kept as a permanent regression test where practical
   — the quota should grow the suite, not produce throwaway code.
 - A probe that finds a real bug should leave behind a canary: either the fix +

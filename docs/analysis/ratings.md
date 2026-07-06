@@ -2238,7 +2238,7 @@ regression **verified to FAIL with the fix neutralized** (deterministic at `comb
 
 ### Findings
 
-**Major — Robustness (capped 6) — opacity control-signal-shed liveness bug.** The opacity governor emits
+**Major — Robustness (scored 7, *not* capped 6 — corrected) — opacity control-signal-shed liveness bug.** The opacity governor emits
 `BOUNDARY_OPAQUE`/`TRANSPARENT` at `System` scope, and `ops::deliver_locally` probabilistically sheds
 non-`Individual` signals by `combined_fill = max(handler_fill, gossip_shard_fill)`. Under CI gossip-drain
 starvation `gossip_shard_fill > 0`, so the governor's **single** boundary-transition emission could be
@@ -2264,9 +2264,9 @@ per find→fix→confirm.
 | 9 | Concurrency Correctness | 8 | **Deep-dive.** The fix is in the signal-delivery path but is a *policy* correction (exempt control kinds from the probabilistic shed), not a data-race fix — no new lock/`await` interleaving; the shed is a pure per-signal decision. Held 8: the defect was Robustness (a dropped control signal under load), not a concurrency race. |
 | 10 | Resource Management | 8 | carried (v36). |
 | 11 | Semantic Correctness | 8 | carried (v36). Core LWW/HLC/consensus untouched; not re-probed. |
-| 12 | Robustness | **6** | **Deep-dive; FINDING (Major, capped).** Control-plane `BOUNDARY_OPAQUE`/`TRANSPARENT` were subject to the data-plane probabilistic local shed → dropped under load. A real graceful-degradation defect (the announcement of degradation was itself dropped). Fixed + deterministic regression; recovery expected Run 38. |
+| 12 | Robustness | **7** | **Deep-dive; FINDING (Major) — corrected from 6, see note.** Control-plane `BOUNDARY_OPAQUE`/`TRANSPARENT` were subject to the data-plane probabilistic local shed → dropped under load. Fixed + deterministic regression this run, so **not capped at 6** (the cap is for *live* findings; capping a fixed-and-gated one double-counts the ledger's historical-over-score penalty and perversely punishes discovery). Held at **7, not 8**: lasting skepticism is warranted — the dimension harboured a Major latent bug for 10 runs. Recovery to 8 expected Run 38. |
 | 13 | Security | 8 | carried (v36). |
-| 14 | Failure Mode Legibility | **7** | **Deep-dive.** Dinged (related facet of the finding): the boundary-transition *signal* is the local legibility mechanism for "why is this node shedding," and it was the thing dropped under load — so a local subscriber lost legibility exactly when it mattered. Now fixed; the durable KV load-state always propagated, which bounds the blast radius (hence 7, not capped). |
+| 14 | Failure Mode Legibility | **8** | **Deep-dive.** The boundary-transition *signal* is the local legibility mechanism for "why is this node shedding," and it was the thing dropped under load — now fixed. The durable KV load-state always propagated (bounding the blast radius to local *signal* subscribers), and the fix restores the local path; held 8 (finding was primarily a Robustness/delivery issue, not a legibility-subsystem weakness). |
 | 15 | Performance | 8 | carried (v36). |
 | 16 | Scalability | 8 | carried (v36). |
 | 17 | Testability | 8 | **Deep-dive.** The fix demonstrates good testability — `deliver_locally` is a pure, unit-testable function; the regression pins the invariant *deterministically* (`combined_fill = 1.0` forces the shed) with no async/ticker, exactly the "extract the decision, test it deterministically" pattern. Held 8 (fresh evidence, but one function). |
@@ -2278,5 +2278,5 @@ per find→fix→confirm.
 | 23 | Documentation | 8 | carried (v36). Large v3.0 *positioning* sweep added, but it is proposed/speculative (self-flagged as doc-debt risk in this session's critique) — net-neutral to the user-facing docs bar; held 8. |
 | 24 | Developer Experience | 8 | carried (v36). |
 | 25 | Dependency Hygiene | 8 | carried (v36). No dep change. |
-| — | **Floor (lowest 3)** | **6, 7, 7** | Robustness (6, capped finding) · Failure-Mode Legibility (7) · Test Architecture (7) — the three facets of the one opacity control-signal-shed defect (the drop, the lost legibility, and the flaky test that hid it), all remediated with a deterministic regression. |
-| — | Mean (continuity footnote) | 7.84 | not a target (sum 196/25 = 7.84). Down from Run 36's 8.00 — the honest cost of a real liveness bug surfacing (a *good* outcome: it was found by digging, not shipped to a user). Same shape as Run 34: a Major finding drops the floor to 6/7/7; expect recovery toward 8/8/8 next run as the fix confirms on the mainline. |
+| — | **Floor (lowest 3)** | **7, 7, 8** | Robustness (7, finding fixed + gated → not capped) · Test Architecture (7, chronic flaky-gate pattern — 8th ledger entry) · (an 8). The opacity defect is remediated; the two floor items are the *lasting* signals — modest skepticism toward a dimension that hid a bug, and the genuine standing test-flakiness weakness. |
+| — | Mean (continuity footnote) | 7.92 | not a target (sum 198/25 = 7.92). ~Flat vs Run 36's 8.00 — a fixed bug should net roughly flat (the fix offsets the discovery), with a small honest dip from *lasting* skepticism (Robustness 7) + the now-undeniable Test-Architecture pattern (7), **not** from punishing the fix. **Correction (see Findings): an earlier cut of this run capped Robustness at 6 by mechanically applying the finding-cap to a same-run-fixed-and-gated defect; that double-counts the ledger's historical penalty and perversely lowers the score for *discovering* a bug. The cap applies to *live* findings; a found+fixed+deterministically-gated finding scores its fixed end-state.** The methodology's cap rule is amended accordingly. |
