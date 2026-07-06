@@ -91,6 +91,12 @@ know we did not know. So:
   look humble — that is pessimism cosplaying as rigor. Score the honest best estimate,
   label its staleness, and let the falsification quota + rotating deep-dive go *earn*
   the confidence by looking where we haven't.
+- **Never retroactively rewrite a past run's scores.** Each entry is a dated measurement
+  under the rules in force *then*; a rule change (like the current-state principle above)
+  applies **forward only**. A time-series is only meaningful if past values stand — and the
+  calibration ledger already records when an old score was later shown miscalibrated, which
+  is the correct, non-destructive way to carry a correction. (Learned 2026-07-06: retro-
+  correcting one older run made the series *less* consistent than leaving all snapshots intact.)
 
 ### Identity
 

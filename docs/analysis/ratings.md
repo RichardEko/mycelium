@@ -11,6 +11,17 @@ mandatory falsification probes against the top-3 dimensions, rotating
 five-dimension deep-dives, blind scoring, a cadence gate, and this
 calibration ledger. Do not compare absolute scores across the v1/v2 boundary.
 
+**Current-state principle — bright line at Run 37 (adopted 2026-07-06).** From Run 37, a dimension's
+score reflects its *current* state: a bug **found + fixed + deterministically gated in the same run**
+scores its fixed end-state (not the old "cap a confirmed finding at 6" — that cap now applies only to a
+defect *still live* at run's end), and discovering a latent bug adds a ledger entry (where accountability
+for past over-scoring lives) rather than lowering the current score. Also from Run 37: every score
+carries an *unknown-unknowns reserve*, and a `carried (vN)` score is a *decaying, unverified* claim.
+**These apply forward only.** Runs ≤ 36 are **dated snapshots under the rules in force then** (incl. the
+old cap-at-6 for a fixed-same-run finding — see Runs 20, 22, 32, 34) and are **not** retroactively
+rewritten: a time-series is only meaningful if past measurements stand. The ledger already carries every
+such finding.
+
 ## Calibration Ledger
 
 Records bugs later found in dimensions that scored ≥ 8 while the bug already
@@ -2125,10 +2136,10 @@ ledger line added (Concurrency scored 8 in Runs 32–33 while it existed, both c
 | 6 | Error Handling Model | 8 | carried (v33). |
 | 7 | Configurability | 8 | carried (v33). |
 | 8 | Language Best Practices | 8 | carried (v33) + fresh artifact: `clippy --all-targets --all-features -D warnings` clean on the companion incl. the new code; the `match … if guard` avoids `single_match`. |
-| 9 | Concurrency Correctness | **8** | **Deep-dive; FINDING (Major) — retro-corrected 2026-07-06 from 6 (see the Mean note).** The wiki curator split-brain (no step-down → two permanent writers), confirmed by the `dual_curators_reconcile_to_a_single_writer` probe and **fixed + gated with that deterministic canary this same session**. Under the current-state principle (Run 37) the fixed+gated end-state is **8**, not a capped 6; the past over-scoring is accounted for by the ledger entry, not by degrading the fix-run. Not 9: only this slice got fresh evidence. |
+| 9 | Concurrency Correctness | **6** | **Deep-dive; FINDING (Major, capped).** The wiki curator split-brain (no step-down → two permanent writers) confirmed by the `dual_curators_reconcile_to_a_single_writer` probe. **Fourth** ledger entry for this dimension, and the second of the "a green non-deterministic gate was mistaken for evidence" shape. Fixed + canary this session; recovery expected Run 35. |
 | 10 | Resource Management | 8 | **Deep-dive.** The `resign()` teardown is correct — takes `curator_tasks` under lock, drops the lock, then aborts+awaits (releasing each loop's `Arc<Self>`), and `shutdown` now drains `curator_tasks` too; the sentinel that triggers resign lives in `tasks` and ends by returning, so it never aborts itself. Verified green under the full wiki suite + canary. Not capped — this is the fix side, not the defect. Not 9: no fresh RM-specific probe (fd/task-count assertion) beyond the suite. |
 | 11 | Semantic Correctness | 8 | carried (v33). Core LWW/HLC/consensus untouched; the CI `Test` job (core lib) green on #127, but not deep-dived this run. |
-| 12 | Robustness | **8** | **Deep-dive — retro-corrected 2026-07-06 from 7.** The split-brain's "no recovery from an off-nominal election race" facet is fixed by the same sentinel (self-healing). Since the defect is fixed + gated this session, the current-state score is **8**, not a dinged 7 (same correction as Concurrency; the ding was the discovery-penalty the Run-37 principle rejects). |
+| 12 | Robustness | 7 | **Deep-dive.** Dinged (not capped): the split-brain's defining trait was **no recovery** from an off-nominal election race — a graceful-degradation failure, now self-healing via the sentinel. Distinct facet from the Concurrency cap. Malformed-frame / peer-loss paths unchanged from Run 33. |
 | 13 | Security | 8 | carried (v33). No change; gateway-no-auth-by-default still documented (now also in `building-on-mycelium.md` §4). |
 | 14 | Failure Mode Legibility | 8 | **Deep-dive.** The step-down is *legible*: `resign` emits `tracing::warn!("wiki: stepped down — a lower-id curator exists")`, where the old dual-curator state was silent. A net legibility gain; held at 8 (the improvement is one log line, not a subsystem). |
 | 15 | Performance | 8 | carried (v33). The sentinel adds one `resolve_role("curator")` per `cap_refresh` — negligible. |
@@ -2142,15 +2153,10 @@ ledger line added (Concurrency scored 8 in Runs 32–33 while it existed, both c
 | 23 | Documentation | 8 | carried (v33) + real additions: the FAQ + Building-on-Mycelium integrator on-ramp (two-audience front doors), README corpus DOIs. The `schema()` typo shipped in `building-on-mycelium.md` and was caught by the very lint check added to guard it — honest wash, held 8. |
 | 24 | Developer Experience | 8 | carried (v33). The on-ramp + copyable `CLAUDE.md` snippet materially improve the downstream-integrator path. |
 | 25 | Dependency Hygiene | 8 | carried (v33). No new deps (the fix uses existing `tokio`); RUSTSEC `cargo audit` job green on #127. |
-| — | **Floor (lowest 3)** | **7, 8, 8** | Test Architecture (7 — the sole sub-8: the persisting structural flaky-gate weakness) · two 8s. **Retro-corrected 2026-07-06:** Concurrency (8) and Robustness (8) are back at 8 — their split-brain defect was *fixed + gated* this session, so the current state is not degraded. |
-| — | Mean (continuity footnote) | 7.96 | not a target (sum 199/25 = 7.96; **was 7.84 with the original 6/7/7 floor**). **Retroactive correction (2026-07-06):** this entry originally capped Concurrency at 6 and dinged Robustness to 7 for the curator split-brain. Under the **current-state principle** later established in Run 37 — *a bug found **and** fixed **and** left with a deterministic regression gate in the same run scores its fixed end-state; accountability for the past over-scoring lives in the calibration ledger, not in degrading the fix-run* — both are **8**. The `dual_curators_reconcile_to_a_single_writer` canary is exactly such a gate. Test Architecture stays **7** (a genuine current structural weakness, not a discovery-penalty). This makes Run 35's "recovery confirmation" framing moot: there was no trough to recover from — the correction removes it retroactively. Same fix applied to Run 37; the shared lesson is in the methodology's *current-score = current-state* principle. |
+| — | **Floor (lowest 3)** | **6, 7, 7** | Concurrency Correctness (6, capped finding) · Robustness (7) · Test Architecture (7) — all three facets of the one curator-split-brain defect (the bug, its non-recovery, and the flaky gate that hid it), each now remediated with the deterministic canary. |
+| — | Mean (continuity footnote) | 7.84 | not a target; see M2 preamble (sum 196/25 = 7.84). Down from Run 33's 8.16 — the honest cost of a Major finding surfacing in the shipped companion. No 9s this run: the headline is a real defect in shipped code, which is not the posture for handing out top marks. Expect recovery toward the Run-33 baseline next run as the fix confirms. **[2026-07-06 note — snapshot preserved: a retro-correction to 8/8/7 under the later *current-state principle* (adopted Run 37, see the preamble bright-line) was applied and then reverted. Time-series scores are dated measurements under the rule in force *then*; the principle applies forward, and the ledger already carries this finding. Under the current rule this run would read Concurrency 8 · Robustness 8 · Test Architecture 7.]** |
 
 ## 2026-07-05 — Run 35 (M2) — recovery confirmation
-
-> **Retro-note (2026-07-06): this run's premise is superseded.** Run 34 was retroactively corrected
-> (Concurrency/Robustness 6/7 → 8/8) under the current-state principle, so there was no trough to
-> "recover" from — the split-brain was already fixed + gated in Run 34. This entry's scores stand as a
-> record, but its *recovery* framing is moot. Kept for series continuity, not re-litigated.
 
 **Cadence note:** no material code/test/docs diff since Run 34 (its commit was `ratings.md` only), so
 this is **not** a full 25-dimension re-audit — it is a *targeted recovery confirmation* of the three
