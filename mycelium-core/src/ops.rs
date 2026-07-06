@@ -29,6 +29,16 @@ fn deliver_locally(
     if !signal_boundary.read().admits(&signal.scope) { return; }
     let admit = match &signal.scope {
         SignalScope::Individual(_) => true,
+        // Boundary-transition announcements are control-plane, not work. Shedding the very
+        // signal that says "I'm now shedding" is self-defeating — and it fires *only* when
+        // `combined_fill > 0` (under load), the one moment it must get through. A shed here is a
+        // permanent miss (the governor emits each transition once), so a local subscriber can miss
+        // the transition under load. Exempt them from the probabilistic shed, like `Individual`.
+        _ if matches!(
+            signal.kind.as_ref(),
+            crate::signal::signal_kind::BOUNDARY_OPAQUE
+                | crate::signal::signal_kind::BOUNDARY_TRANSPARENT
+        ) => true,
         _ => combined_fill == 0.0 || fastrand::f32() >= combined_fill,
     };
     if admit {
@@ -342,4 +352,46 @@ pub fn group_members_ctx(ctx: &CoreCtx, group: &str) -> Vec<crate::node_id::Node
                 .and_then(|s| s.parse::<crate::node_id::NodeId>().ok())
         })
         .collect()
+}
+
+#[cfg(test)]
+mod delivery_shed_tests {
+    use super::*;
+    use crate::node_id::NodeId;
+    use crate::signal::signal_kind;
+    use std::time::Duration;
+
+    fn sig(kind: &str, scope: SignalScope, sender: NodeId) -> Signal {
+        Signal { kind: Arc::from(kind), scope, payload: Bytes::new(), sender, nonce: 1 }
+    }
+
+    /// Regression for the opacity-governor flake (`test_manage_opacity_gate_vetoes_then_library_overrides`,
+    /// flaky Runs 27–36): the governor's own `BOUNDARY_OPAQUE` announcement is `System`-scoped and was
+    /// subject to the probabilistic local shed in `deliver_locally`. Under gossip backpressure
+    /// (`combined_fill > 0`) the single emission could be dropped from *local* delivery — the "I'm now
+    /// shedding" signal shed by the shedding mechanism. At `combined_fill == 1.0` the shed is
+    /// deterministic (`fastrand::f32()` is in `[0,1)`, never `>= 1.0`), so this pins the fix.
+    #[test]
+    fn boundary_transition_signals_are_never_locally_shed() {
+        let node = NodeId::new("127.0.0.1", 9000).unwrap();
+        let boundary = RwLock::new(Boundary::new(node.clone()));
+        let handlers = SignalHandlers::new(Duration::from_secs(60));
+
+        let mut opaque_rx = handlers.register_with_capacity(Arc::from(signal_kind::BOUNDARY_OPAQUE), 4);
+        let mut clear_rx  = handlers.register_with_capacity(Arc::from(signal_kind::BOUNDARY_TRANSPARENT), 4);
+        let mut work_rx   = handlers.register_with_capacity(Arc::from("work"), 4);
+
+        // Sanity: an ordinary System-scoped signal IS shed deterministically at fill 1.0.
+        deliver_locally(&boundary, &handlers, &sig("work", SignalScope::System, node.clone()), 1.0);
+        assert!(work_rx.try_recv().is_err(), "ordinary System signal is shed at fill 1.0");
+
+        // The fix: boundary-transition control signals must still be delivered locally at fill 1.0.
+        deliver_locally(&boundary, &handlers, &sig(signal_kind::BOUNDARY_OPAQUE, SignalScope::System, node.clone()), 1.0);
+        assert!(opaque_rx.try_recv().is_ok(),
+            "BOUNDARY_OPAQUE must be delivered locally even at fill 1.0 (control signals are not load-shed)");
+
+        deliver_locally(&boundary, &handlers, &sig(signal_kind::BOUNDARY_TRANSPARENT, SignalScope::System, node.clone()), 1.0);
+        assert!(clear_rx.try_recv().is_ok(),
+            "BOUNDARY_TRANSPARENT must be delivered locally even at fill 1.0");
+    }
 }

@@ -234,6 +234,21 @@ existed. This is the framework's own report card.
   34–35); root-caused + fixed 2026-07-05 (PR #128 — structural bidirectional-propagation gate +
   widened heal window), verified **14/14 local + CI green** (incl. the Co-op job). Same family as the
   curator entry above — a timing-sensitive gate that was green until CI saturation exposed it.
+- 2026-07-06: **Robustness / Failure-Mode Legibility** carried a real **control-signal-shed liveness
+  bug** while `test_manage_opacity_gate_vetoes_then_library_overrides` was dismissed as a *timing* flake
+  for **Runs 27–36** (widened 3 s → 10 s → 30 s; "structurally resolved" Run 30 by extracting the
+  *decision* to pure gates — which never touched the actual cause). Root cause: the opacity governor
+  emits `BOUNDARY_OPAQUE`/`TRANSPARENT` at `System` scope, and `ops::deliver_locally` probabilistically
+  sheds non-`Individual` signals by `combined_fill = max(handler_fill, gossip_shard_fill)`; under CI
+  gossip-drain starvation `gossip_shard_fill > 0`, so the governor's **single** boundary-transition
+  emission could be shed from *local* delivery — the "I'm now shedding" signal dropped by the shedding
+  mechanism, exactly under load. A permanent miss (emitted once), which is why no timeout ever helped,
+  and why a *local* subscriber to a boundary transition could miss it in production. Found 2026-07-06 by
+  a deliberate root-cause dig (not a probe); fixed by exempting boundary-transition kinds from the local
+  shed (`ops.rs`, like `Individual`), pinned by the **deterministic** gate
+  `ops::delivery_shed_tests::boundary_transition_signals_are_never_locally_shed` (fails w.p.≈1 at
+  `combined_fill = 1.0` without the fix). Lesson: **a recurring "flaky test" is a defect until root-caused
+  — three "resolutions" treated latency; the bug was a dropped signal a different layer down.**
 
 **Dimensions:** Philosophy/Coherence · Conceptual Integrity · Architecture ·
 Modularity · API Design · Error Handling · Configurability · Language Best

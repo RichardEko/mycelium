@@ -2045,20 +2045,22 @@ async fn test_manage_opacity_gate_vetoes_then_library_overrides() {
     let premature = time::timeout(Duration::from_millis(250), opaque_rx.recv()).await;
     assert!(premature.is_err(), "gate veto must prevent emission below 100% fill");
 
-    // Fill to 100% — library overrides the gate (at `fill_ratio >= 1.0` the emit is
-    // unconditional), so BOUNDARY_OPAQUE is *guaranteed*; only its latency is in question. That
-    // latency is the governor's 100 ms ticker being **scheduled**, which starves under the
-    // full-feature `Test` job (~345 parallel tests) — a bound of 3 s (2026-07-02) then 10 s both
-    // flaked. **The invariant no longer lives here.** The veto/override decision is now a *pure*,
-    // deterministic gate — `opacity.rs::opacity_gate_vetoes_below_full_then_the_library_overrides_at_full`
-    // (no async, no ticker, no timeout). This integration assertion is now a **wiring smoke** (the
-    // governor is spawned and does emit on the live mesh); its 30 s ceiling is patience for a
-    // guaranteed-but-async emission, and a slow-flake here can no longer threaten the invariant.
+    // Fill to 100% — the library overrides the gate (at `fill_ratio >= 1.0` the emit is
+    // unconditional), so BOUNDARY_OPAQUE is emitted. The **real** root cause of this test's long
+    // flake history (Runs 27–36, "widened 3 s → 10 s → 30 s") was NOT scheduling latency — it was a
+    // *dropped signal*: the governor's BOUNDARY_OPAQUE is `System`-scoped, and `ops::deliver_locally`
+    // probabilistically sheds non-`Individual` signals by `combined_fill`. Under CI gossip
+    // backpressure (`gossip_shard_fill > 0`) the single emission was occasionally shed from *local*
+    // delivery — a permanent miss no timeout could recover, which is why widening never worked.
+    // Fixed in `ops.rs` (boundary-transition kinds are exempt from the local shed, like `Individual`);
+    // pinned deterministically by
+    // `ops::delivery_shed_tests::boundary_transition_signals_are_never_locally_shed`. The emission is
+    // now undroppable, so this only needs a little patience for the governor's 100 ms ticker.
     for _ in 0..2 {
         let _ = agent.mesh().emit("test.gov.gate", SignalScope::Individual(self_id.clone()), Bytes::new());
     }
     assert!(
-        recv_within!(opaque_rx, 30),
+        recv_within!(opaque_rx, 5),
         "library must override gate and emit BOUNDARY_OPAQUE when fill == 1.0",
     );
 }
