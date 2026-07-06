@@ -53,3 +53,17 @@ fleet-reasoning traces, hand-off memory, orchestrator-proof graphs), mostly pack
   first-external-user vs an adopt-first land-grab — correct for a thesis-led pre-adoption project.
 - Raises `mycelium-py` to first-class (the target ecosystem is Python). Core needs zero changes.
 - Discipline held: checkpointer fit is expressible, not validated — flagged for a 1-day spike.
+
+## Addendum 3 (2026-07-06) — rescoped to coordination patterns; RAG/HITL/guardrails
+
+Critique found the matrix overclaimed "the agentic space." Rescoped to **coordination** patterns +
+added the boundary honestly:
+- **Use-case functions (not substrate gaps):** RAG/retrieval, HITL/approval, and *content* guardrails
+  are external services a group accesses *through* the mesh — the wiki control-plane/data-plane
+  precedent (store off-cluster, accessed via capability + access broker). RAG especially: Mycelium is
+  not a vector store and needn't be.
+- **Structural guardrails = a native strength + differentiator:** what an agent may *do* (receiver-side
+  `Boundary` + capability authz + tool_budget + tamper-evident audit) enforced per-receiver with **no
+  central chokepoint** — vs the mainstream "guardrail proxy" (itself a coordinator). Flagged as a
+  candidate v3.0 wedge; honest caveats kept (action-not-content; promise-strength/legibility; reframe
+  until a worked example exists). ROADMAP v3.0 scope-note + domain.md folder-note updated to match.

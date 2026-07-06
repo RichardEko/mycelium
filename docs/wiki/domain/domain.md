@@ -18,7 +18,9 @@ the published corpus, and the commercial strategy built on both. Purpose anchor:
 
 - **[publications.md](publications.md)** — the four-paper corpus (all published, DOIs),
   framework corrections that supersede older notes, the planned article revision.
-- **[pattern-coverage.md](pattern-coverage.md)** — the distributed-agentic pattern landscape vs the
-  substrate (Native / Composable / one genuine gap), the orchestrator non-goal. Key finding: the space
-  is covered *natively or by composition of native primitives*; only ANP wire-protocol conformance needs
-  new code. The composables are **v3.0 packaging candidates** (mirrors `ROADMAP.md` → v3.0 Candidates).
+- **[pattern-coverage.md](pattern-coverage.md)** — **coordination**-pattern coverage vs the substrate
+  (Native / Composable / one genuine gap = ANP), the orchestrator non-goal. Scoped honestly: *data /
+  human / content-safety* concerns (RAG, HITL, content guardrails) are **use-case functions** — external
+  services a group accesses *through* the mesh (the wiki precedent), not substrate gaps. **Structural
+  guardrails** (what an agent may *do*) are a native strength + a coordinator-free differentiator. The
+  composables + the LLM-DX strategy are **v3.0 candidates** (mirrors `ROADMAP.md` → v3.0).

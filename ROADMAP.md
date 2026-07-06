@@ -2958,6 +2958,14 @@ Disposition: **the only genuinely new engineering is the ANP adapter.** Everythi
 that *packages a composition already possible on the public API* (the blackboard/tuple-space precedent) —
 built if and when demand justifies the ergonomics, not because a capability is missing.
 
+*Scope note:* the coverage above is **coordination** patterns. Data/human/content-safety concerns
+(RAG, human-in-the-loop, content guardrails) are **use-case functions** — external services accessed
+*through* the mesh (the wiki precedent), not substrate gaps. One safety concern *is* a substrate
+strength: **structural guardrails** (what an agent may *do* — receiver-side `Boundary` + capability
+authz + `tool_budget` + tamper-evident audit, enforced per-receiver with no central chokepoint) — a
+candidate v3.0 wedge, arguably stronger than some above. See
+[`docs/wiki/domain/pattern-coverage.md`](docs/wiki/domain/pattern-coverage.md).
+
 **DX companion — `mycelium-reason` (proposed).** A *separate axis* from the coordination candidates
 above: the LLM-**authoring** DX layer. Build-vs-adopt resolved to a **three-tier strategy** —
 **build** the substrate-native differentiators (① capability-routed inference — no central proxy; ②
