@@ -22,5 +22,6 @@ the published corpus, and the commercial strategy built on both. Purpose anchor:
   (Native / Composable / one genuine gap = ANP), the orchestrator non-goal. Scoped honestly: *data /
   human / content-safety* concerns (RAG, HITL, content guardrails) are **use-case functions** — external
   services a group accesses *through* the mesh (the wiki precedent), not substrate gaps. **Structural
-  guardrails** (what an agent may *do*) are a native strength + a coordinator-free differentiator. The
-  composables + the LLM-DX strategy are **v3.0 candidates** (mirrors `ROADMAP.md` → v3.0).
+  guardrails** (what an agent may *do*) are a native strength + a coordinator-free differentiator. v3.0
+  has **two primary deliverables** — `mycelium-reason` (LLM-authoring DX) and `mycelium-guardrails`
+  (structural guardrails) — plus packaging candidates + one ANP adapter (mirrors `ROADMAP.md` → v3.0).
