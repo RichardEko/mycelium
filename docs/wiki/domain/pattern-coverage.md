@@ -117,7 +117,8 @@ tamper-evident. Caveats (honest): it is *action*, not *content*, guardrails; it 
 (each node enforces; the substrate makes violations *legible* rather than centrally *prevented* — on
 thesis); and it is a **reframe of existing mechanisms** — a strong hypothesis until a worked example
 exists (an agent structurally stopped from an out-of-boundary action, with the audit proving it).
-Possible v3.0 wedge — arguably stronger than some current candidates.
+**Now a primary v3.0 deliverable** — `mycelium-guardrails`, alongside the DX companion:
+[`ROADMAP.md`](../../../ROADMAP.md) → v3.0 · sketch [`../../plans/mycelium-guardrails.md`](../../plans/mycelium-guardrails.md).
 
 ## A distinct axis — LLM-authoring DX (not coordination)
 

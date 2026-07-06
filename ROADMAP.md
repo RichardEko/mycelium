@@ -2929,7 +2929,14 @@ evolution needing field-level migration.
 
 ---
 
-## v3.0 Candidates — packaging companions + one protocol adapter (proposed, not started)
+## v3.0 — proposed deliverables (two primaries · packaging candidates · one adapter, not started)
+
+**Two primary deliverables** (each its own design sketch, each a substrate-native differentiator):
+**`mycelium-reason`** (LLM-authoring DX) and **`mycelium-guardrails`** (structural, coordinator-free
+guardrails) — see the two paragraphs after the table. The rest below are demand-driven packaging
+candidates + the one ANP adapter.
+
+### Packaging candidates + one adapter
 
 A 2026-07 scan of the distributed-agentic pattern landscape (positioning artifact:
 [`docs/wiki/domain/pattern-coverage.md`](docs/wiki/domain/pattern-coverage.md)) found the substrate
@@ -2962,8 +2969,8 @@ built if and when demand justifies the ergonomics, not because a capability is m
 (RAG, human-in-the-loop, content guardrails) are **use-case functions** — external services accessed
 *through* the mesh (the wiki precedent), not substrate gaps. One safety concern *is* a substrate
 strength: **structural guardrails** (what an agent may *do* — receiver-side `Boundary` + capability
-authz + `tool_budget` + tamper-evident audit, enforced per-receiver with no central chokepoint) — a
-candidate v3.0 wedge, arguably stronger than some above. See
+authz + `tool_budget` + tamper-evident audit, enforced per-receiver with no central chokepoint) — now a
+**primary v3.0 deliverable** (`mycelium-guardrails`, below). See
 [`docs/wiki/domain/pattern-coverage.md`](docs/wiki/domain/pattern-coverage.md).
 
 **DX companion — `mycelium-reason` (proposed).** A *separate axis* from the coordination candidates
@@ -2977,6 +2984,18 @@ rebuttal). **Sequence: Tier 3 (differentiators) first — to a CI-tested wedge �
 with Tier 2 built to *expose* the Tier-3 wedges so the interop lands differentiated, not commoditised.
 Core needs zero changes; much of the integration is in `mycelium-py` (raising the SDK to first-class).
 Sketch: [`docs/plans/mycelium-reason.md`](docs/plans/mycelium-reason.md).
+
+**Structural guardrails — `mycelium-guardrails` (proposed; primary v3.0 deliverable alongside the DX
+companion).** *What an agent may do* — which tools / data / spend / groups — enforced at **every
+receiver's `Boundary`** with **no central chokepoint** (the mainstream "guardrail proxy" is itself a
+coordinator; compromising one node can't lift fleet policy), backed by **tamper-evident per-node audit**.
+Mostly packaging of existing mechanisms (`Boundary` + capability authz + CT revocation + `tool_budget` +
+audit); the only new code is an ergonomic **policy API** that compiles one declaration down to them.
+**Lead wedge:** an agent structurally stopped at a boundary, with the audit proving it. Distinct from
+*content* guardrails (toxicity / PII — a use-case function, external service via the mesh). Honest
+limits: **promise-strength** (per-node enforcement + legible violations, not a central mandate) and
+**eventually-consistent policy** (gossip-speed revocation). Sketch:
+[`docs/plans/mycelium-guardrails.md`](docs/plans/mycelium-guardrails.md).
 
 ## Deferred Patterns
 

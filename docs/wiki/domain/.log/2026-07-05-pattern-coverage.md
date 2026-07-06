@@ -67,3 +67,15 @@ added the boundary honestly:
   central chokepoint** — vs the mainstream "guardrail proxy" (itself a coordinator). Flagged as a
   candidate v3.0 wedge; honest caveats kept (action-not-content; promise-strength/legibility; reframe
   until a worked example exists). ROADMAP v3.0 scope-note + domain.md folder-note updated to match.
+
+## Addendum 4 (2026-07-06) — structural guardrails promoted to a v3.0 PRIMARY
+
+Per user direction, structural guardrails is now a **primary v3.0 deliverable alongside the DX
+companion** — new sketch `docs/plans/mycelium-guardrails.md`. Value: *what an agent may do*
+(receiver-side `Boundary` + capability authz + CT revocation + tool_budget + tamper-evident audit),
+enforced per-receiver with **no central chokepoint** vs the mainstream "guardrail proxy" (itself a
+coordinator). Mostly packaging; only new code is an ergonomic policy API compiling one declaration
+down to the existing mechanisms; lead wedge = agent structurally stopped at a boundary + audit proves
+it. Honest limits kept: promise-strength (per-node, legible-not-mandated), eventually-consistent policy
+(gossip-speed revocation), reframe-until-tested. ROADMAP v3.0 now lists two primaries (reason +
+guardrails); pattern-coverage + domain.md + plans/README updated.
