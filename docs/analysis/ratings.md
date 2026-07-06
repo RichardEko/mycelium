@@ -2220,3 +2220,63 @@ Runs 28–33 and no diff touches it.
 | 25 | Dependency Hygiene | 8 | carried (v34). No dep change (the demo uses existing APIs). |
 | — | **Floor (lowest 3)** | **8, 8, 8** | All dimensions at 8 — the Run-34 trough (Concurrency 6 · Robustness/Test-Architecture 7) is now **fully remediated and confirmed**: the curator split-brain (PR #127) and the coop flake (PR #128) both fixed with verified canaries/green CI. Floor returns to the Run-31/33 8/8/8. |
 | — | Mean (continuity footnote) | 8.00 | not a target (sum 200/25 = 8.00). A flat 8 is the honest read of a small-diff recovery run: everything solid, the two Run-34/35 defects remediated, and **no dimension carries fresh execution evidence this run that uniquely earns a 9** (the session's headline was finding+fixing defects, which argues against top marks, not for them). Below Run-33's 8.16 precisely because Run 33's four 9s were execution-backed *that* run and have not been re-earned since. |
+
+## 2026-07-06 — Run 37 (M2)
+
+Deep-dive dimensions this run: **9 Concurrency Correctness, 12 Robustness, 14 Failure-Mode Legibility,
+17 Testability, 18 Test Architecture** — finding-driven (the opacity control-signal-shed lands on all
+five); rotation deviated to where the finding is, as prior finding-runs have. The material code diff
+since Run 36 is a **single fix** (`d1db7bd` / PR #129 — never load-shed boundary-transition signals
+locally) plus a large **proposed/not-started v3.0 strategy** docs sweep (pattern-coverage rescope to
+*coordination*; the two v3.0 primaries `mycelium-reason` + `mycelium-guardrails`; the LLM-DX build/adopt/
+interop strategy; the LangGraph-checkpointer-vs-A2A integration map). Core `mycelium` KV/HLC/consensus
+is untouched. Execution evidence this run: `mycelium-core` lib **131/0** (incl. the new
+`ops::delivery_shed_tests::boundary_transition_signals_are_never_locally_shed`); main lib
+`--features tls,metrics,a2a,llm` **354/0**; `cargo clippy` clean on core + the main feature matrix; the
+regression **verified to FAIL with the fix neutralized** (deterministic at `combined_fill = 1.0`); PR
+#129 **CI green 14/14** incl. the `Test` job that carried the flake.
+
+### Findings
+
+**Major — Robustness (capped 6) — opacity control-signal-shed liveness bug.** The opacity governor emits
+`BOUNDARY_OPAQUE`/`TRANSPARENT` at `System` scope, and `ops::deliver_locally` probabilistically sheds
+non-`Individual` signals by `combined_fill = max(handler_fill, gossip_shard_fill)`. Under CI gossip-drain
+starvation `gossip_shard_fill > 0`, so the governor's **single** boundary-transition emission could be
+shed from *local* delivery — a permanent miss (the "I'm now shedding" signal dropped by the shedding
+mechanism, precisely under load); a local subscriber could miss the transition in production. **Found by
+a deliberate root-cause dig** into the 10-run "flaky" `test_manage_opacity_gate_vetoes_then_library_overrides`
+(three prior "resolutions" — 3 s→10 s→30 s widening, then a Run-30 pure-function extraction — all treated
+it as *latency*; the bug was a dropped signal a layer down). Fixed same session (`d1db7bd`) by exempting
+boundary-transition kinds from the local shed (like `Individual` scope) + the deterministic regression
+above. **Ledger line already recorded** (2026-07-06, in the fix commit). Recovery to 8 expected Run 38,
+per find→fix→confirm.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 8 | carried (v36). The v3.0 primaries (coordinator-free guardrails, substrate-native DX) are on-thesis; read-only this run. |
+| 2 | Conceptual Integrity | 8 | carried (v36). |
+| 3 | Architecture | 8 | carried (v36). The fix is layer-local (`mycelium-core/ops.rs`); no namespace/layer change. |
+| 4 | Modularity | 8 | carried (v36). |
+| 5 | API Design | 8 | carried (v36). |
+| 6 | Error Handling Model | 8 | carried (v36). |
+| 7 | Configurability | 8 | carried (v36). |
+| 8 | Language Best Practices | 8 | carried (v36) + fresh: `clippy -D warnings` clean on core + main matrix incl. the changed `deliver_locally`. |
+| 9 | Concurrency Correctness | 8 | **Deep-dive.** The fix is in the signal-delivery path but is a *policy* correction (exempt control kinds from the probabilistic shed), not a data-race fix — no new lock/`await` interleaving; the shed is a pure per-signal decision. Held 8: the defect was Robustness (a dropped control signal under load), not a concurrency race. |
+| 10 | Resource Management | 8 | carried (v36). |
+| 11 | Semantic Correctness | 8 | carried (v36). Core LWW/HLC/consensus untouched; not re-probed. |
+| 12 | Robustness | **6** | **Deep-dive; FINDING (Major, capped).** Control-plane `BOUNDARY_OPAQUE`/`TRANSPARENT` were subject to the data-plane probabilistic local shed → dropped under load. A real graceful-degradation defect (the announcement of degradation was itself dropped). Fixed + deterministic regression; recovery expected Run 38. |
+| 13 | Security | 8 | carried (v36). |
+| 14 | Failure Mode Legibility | **7** | **Deep-dive.** Dinged (related facet of the finding): the boundary-transition *signal* is the local legibility mechanism for "why is this node shedding," and it was the thing dropped under load — so a local subscriber lost legibility exactly when it mattered. Now fixed; the durable KV load-state always propagated, which bounds the blast radius (hence 7, not capped). |
+| 15 | Performance | 8 | carried (v36). |
+| 16 | Scalability | 8 | carried (v36). |
+| 17 | Testability | 8 | **Deep-dive.** The fix demonstrates good testability — `deliver_locally` is a pure, unit-testable function; the regression pins the invariant *deterministically* (`combined_fill = 1.0` forces the shed) with no async/ticker, exactly the "extract the decision, test it deterministically" pattern. Held 8 (fresh evidence, but one function). |
+| 18 | Test Architecture | **7** | **Deep-dive.** Dinged: a **flaky test masked a real liveness bug for 10 runs** (Runs 27–36) — the **8th** Test-Architecture ledger entry, and the sharpest yet (three "resolutions" treated latency while a control-signal drop hid beneath). Genuinely improved this run (the flaky reliance is replaced by a deterministic gate + the misleading comment corrected), but the chronic "flaky gate hides real defect" pattern is precisely why this dimension earns standing skepticism, not an 8. |
+| 19 | Observability | 8 | carried (v36). |
+| 20 | Debuggability | 8 | carried (v36). |
+| 21 | Operational Readiness | 8 | carried (v36). |
+| 22 | Evolvability | 8 | carried (v36). Wire policy intact; the v3.0 roadmap is now explicit (two primaries + candidates) — additive, not debt. |
+| 23 | Documentation | 8 | carried (v36). Large v3.0 *positioning* sweep added, but it is proposed/speculative (self-flagged as doc-debt risk in this session's critique) — net-neutral to the user-facing docs bar; held 8. |
+| 24 | Developer Experience | 8 | carried (v36). |
+| 25 | Dependency Hygiene | 8 | carried (v36). No dep change. |
+| — | **Floor (lowest 3)** | **6, 7, 7** | Robustness (6, capped finding) · Failure-Mode Legibility (7) · Test Architecture (7) — the three facets of the one opacity control-signal-shed defect (the drop, the lost legibility, and the flaky test that hid it), all remediated with a deterministic regression. |
+| — | Mean (continuity footnote) | 7.84 | not a target (sum 196/25 = 7.84). Down from Run 36's 8.00 — the honest cost of a real liveness bug surfacing (a *good* outcome: it was found by digging, not shipped to a user). Same shape as Run 34: a Major finding drops the floor to 6/7/7; expect recovery toward 8/8/8 next run as the fix confirms on the mainline. |
