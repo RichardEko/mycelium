@@ -2238,7 +2238,7 @@ regression **verified to FAIL with the fix neutralized** (deterministic at `comb
 
 ### Findings
 
-**Major — Robustness (scored 7, *not* capped 6 — corrected) — opacity control-signal-shed liveness bug.** The opacity governor emits
+**Major — Robustness (scored 8 — current-state; *not* capped, see the Mean note's correction chain) — opacity control-signal-shed liveness bug.** The opacity governor emits
 `BOUNDARY_OPAQUE`/`TRANSPARENT` at `System` scope, and `ops::deliver_locally` probabilistically sheds
 non-`Individual` signals by `combined_fill = max(handler_fill, gossip_shard_fill)`. Under CI gossip-drain
 starvation `gossip_shard_fill > 0`, so the governor's **single** boundary-transition emission could be
@@ -2248,8 +2248,9 @@ a deliberate root-cause dig** into the 10-run "flaky" `test_manage_opacity_gate_
 (three prior "resolutions" — 3 s→10 s→30 s widening, then a Run-30 pure-function extraction — all treated
 it as *latency*; the bug was a dropped signal a layer down). Fixed same session (`d1db7bd`) by exempting
 boundary-transition kinds from the local shed (like `Individual` scope) + the deterministic regression
-above. **Ledger line already recorded** (2026-07-06, in the fix commit). Recovery to 8 expected Run 38,
-per find→fix→confirm.
+above. **Ledger line already recorded** (2026-07-06, in the fix commit) — that is where the past
+over-scoring is accounted for. The *current* Robustness state (defect removed + permanent gate) is
+therefore scored **8**, not degraded: finding-and-fixing a bug does not lower a current-state score.
 
 | # | Dimension | Score | Notes |
 |---|-----------|:-----:|-------|
@@ -2264,13 +2265,13 @@ per find→fix→confirm.
 | 9 | Concurrency Correctness | 8 | **Deep-dive.** The fix is in the signal-delivery path but is a *policy* correction (exempt control kinds from the probabilistic shed), not a data-race fix — no new lock/`await` interleaving; the shed is a pure per-signal decision. Held 8: the defect was Robustness (a dropped control signal under load), not a concurrency race. |
 | 10 | Resource Management | 8 | carried (v36). |
 | 11 | Semantic Correctness | 8 | carried (v36). Core LWW/HLC/consensus untouched; not re-probed. |
-| 12 | Robustness | **7** | **Deep-dive; FINDING (Major) — corrected from 6, see note.** Control-plane `BOUNDARY_OPAQUE`/`TRANSPARENT` were subject to the data-plane probabilistic local shed → dropped under load. Fixed + deterministic regression this run, so **not capped at 6** (the cap is for *live* findings; capping a fixed-and-gated one double-counts the ledger's historical-over-score penalty and perversely punishes discovery). Held at **7, not 8**: lasting skepticism is warranted — the dimension harboured a Major latent bug for 10 runs. Recovery to 8 expected Run 38. |
+| 12 | Robustness | **8** | **Deep-dive; FINDING (Major) — corrected from 6→7→8, see note.** Control-plane `BOUNDARY_OPAQUE`/`TRANSPARENT` were subject to the data-plane probabilistic local shed → dropped under load. **Found + fixed + deterministic regression this run, so the *current* state is a latent defect removed + a permanent gate added — strictly better than Run 36, hence 8, not degraded.** The past over-scoring (Runs 27–36) is recorded in the ledger; that is where the accountability lives, not in the current score. Not 9: only this one slice of Robustness got fresh execution evidence. |
 | 13 | Security | 8 | carried (v36). |
 | 14 | Failure Mode Legibility | **8** | **Deep-dive.** The boundary-transition *signal* is the local legibility mechanism for "why is this node shedding," and it was the thing dropped under load — now fixed. The durable KV load-state always propagated (bounding the blast radius to local *signal* subscribers), and the fix restores the local path; held 8 (finding was primarily a Robustness/delivery issue, not a legibility-subsystem weakness). |
 | 15 | Performance | 8 | carried (v36). |
 | 16 | Scalability | 8 | carried (v36). |
 | 17 | Testability | 8 | **Deep-dive.** The fix demonstrates good testability — `deliver_locally` is a pure, unit-testable function; the regression pins the invariant *deterministically* (`combined_fill = 1.0` forces the shed) with no async/ticker, exactly the "extract the decision, test it deterministically" pattern. Held 8 (fresh evidence, but one function). |
-| 18 | Test Architecture | **7** | **Deep-dive.** Dinged: a **flaky test masked a real liveness bug for 10 runs** (Runs 27–36) — the **8th** Test-Architecture ledger entry, and the sharpest yet (three "resolutions" treated latency while a control-signal drop hid beneath). Genuinely improved this run (the flaky reliance is replaced by a deterministic gate + the misleading comment corrected), but the chronic "flaky gate hides real defect" pattern is precisely why this dimension earns standing skepticism, not an 8. |
+| 18 | Test Architecture | **7** | **Deep-dive.** The sole sub-8, and *not* a discovery-penalty: it's a **genuine current, structural, un-remediated weakness** — the suite permits timing-sensitive integration tests that gate CI and can *mask* real defects (just demonstrated: a Major liveness bug hid for 10 runs), with **no structural prevention** (each flake is fixed reactively; 8th ledger entry). This run improved it (deterministic regression + the methodology now forbids counting a timeout-widen as a "fix"), but the class-level gap is real and present. 8 is earnable once flaky wall-clock gates are structurally excluded from CI-gating tests. |
 | 19 | Observability | 8 | carried (v36). |
 | 20 | Debuggability | 8 | carried (v36). |
 | 21 | Operational Readiness | 8 | carried (v36). |
@@ -2278,5 +2279,5 @@ per find→fix→confirm.
 | 23 | Documentation | 8 | carried (v36). Large v3.0 *positioning* sweep added, but it is proposed/speculative (self-flagged as doc-debt risk in this session's critique) — net-neutral to the user-facing docs bar; held 8. |
 | 24 | Developer Experience | 8 | carried (v36). |
 | 25 | Dependency Hygiene | 8 | carried (v36). No dep change. |
-| — | **Floor (lowest 3)** | **7, 7, 8** | Robustness (7, finding fixed + gated → not capped) · Test Architecture (7, chronic flaky-gate pattern — 8th ledger entry) · (an 8). The opacity defect is remediated; the two floor items are the *lasting* signals — modest skepticism toward a dimension that hid a bug, and the genuine standing test-flakiness weakness. |
-| — | Mean (continuity footnote) | 7.92 | not a target (sum 198/25 = 7.92). ~Flat vs Run 36's 8.00 — a fixed bug should net roughly flat (the fix offsets the discovery), with a small honest dip from *lasting* skepticism (Robustness 7) + the now-undeniable Test-Architecture pattern (7), **not** from punishing the fix. **Correction (see Findings): an earlier cut of this run capped Robustness at 6 by mechanically applying the finding-cap to a same-run-fixed-and-gated defect; that double-counts the ledger's historical penalty and perversely lowers the score for *discovering* a bug. The cap applies to *live* findings; a found+fixed+deterministically-gated finding scores its fixed end-state.** The methodology's cap rule is amended accordingly. |
+| — | **Floor (lowest 3)** | **7, 8, 8** | Test Architecture (7 — the sole sub-8: a *genuine current* structural weakness, the recurring flaky-gate pattern with no structural prevention, 8th ledger entry) · two 8s. Robustness and Failure-Mode Legibility are back at 8 — their defect is *fixed and gated*, so their current state is not degraded. |
+| — | Mean (continuity footnote) | 7.96 | not a target (sum 199/25 = 7.96). Essentially flat vs Run 36's 8.00; the only sub-8 is Test Architecture, a real *current* weakness — not a penalty for fixing a bug. **Correction chain (this run was re-scored twice under challenge): first cut capped Robustness at 6 (mechanical finding-cap); second held it at 7 ("lasting skepticism"); both were the same error — a *fixed-and-gated* defect makes the dimension's current state *better*, not worse, and the accountability for the *past* over-scoring lives in the calibration ledger, not the current number. Final: current score = current state; a discovered-and-fixed bug adds a ledger entry and does not lower the current score. The methodology is amended to this principle (not just the narrow cap exception).** |

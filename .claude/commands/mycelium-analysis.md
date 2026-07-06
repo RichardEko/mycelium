@@ -258,18 +258,26 @@ more reading. Examples:
   cleanup actually happened (`task_count`, fd counts, store state).
 
 Rules:
-- A **confirmed finding caps that dimension at 6 for this run** *if the defect is
-  still live at run's end*, and is written up in the entry's **Findings** section
-  with severity (Critical / Major / Minor), reproduction, and affected dimension.
-  **Exception (added 2026-07-06, Run 37):** a finding that is *found **and** fixed
-  **and** left with a deterministic (non-flaky) regression gate in the same run*
-  scores the dimension's **fixed end-state** instead — usually a modest skepticism
-  discount (e.g. 7, not a confident 8), never a confident 9. Rationale: the
-  calibration ledger already records the historical over-scoring (its numeric-honesty
-  penalty), so capping the fix-run too **double-counts** and perversely makes
-  *discovering* a bug lower the score — discouraging the digging M2 exists to reward.
-  A finding that is unfixed, or "fixed" only by widening a timeout / a still-flaky
-  gate, remains capped at 6.
+- **Current score = current state (the governing principle, sharpened 2026-07-06, Run 37).**
+  A dimension's score reflects its state *at the end of this run*. **Discovering a latent
+  bug adds a calibration-ledger entry — that is where accountability for the *past*
+  over-scoring lives — and does NOT, by itself, lower the current score.** Finding *and*
+  fixing a defect makes the dimension's current state *better* (defect removed, and if
+  gated, a new regression added), so its score does not drop; scoring the fix-run *below*
+  the runs where the bug was hidden is incoherent, and it perversely punishes the digging
+  M2 exists to reward. "We found a bug so there are probably more" is **not** a valid
+  reason to lower a current score — it would justify downgrading every un-audited dimension,
+  and the just-hardened one is the *best*-scrutinised, not the worst.
+- A finding lowers the **current** score only when it reveals a **currently-unfixed
+  weakness**. Concretely: a **live/unfixed finding caps the dimension at 6**; a finding
+  "fixed" only by widening a timeout or a still-flaky gate also caps at 6 (not really
+  fixed); a finding **fixed + left with a deterministic (non-flaky) regression gate this
+  run** scores its fixed end-state (back to solid — an 8, or a 9 only with fresh
+  whole-dimension execution evidence); a **structural weakness that persists** (e.g. an
+  architecture that keeps permitting flaky CI-gating tests) legitimately scores sub-8 for as
+  long as it is unaddressed — that is a current-state fact, not a discovery-penalty.
+- Every finding is still written up in the entry's **Findings** section with severity
+  (Critical / Major / Minor), reproduction, and affected dimension, and gets its ledger line.
 - A probe that *passes* is kept as a permanent regression test where practical
   — the quota should grow the suite, not produce throwaway code.
 - A probe that finds a real bug should leave behind a canary: either the fix +
