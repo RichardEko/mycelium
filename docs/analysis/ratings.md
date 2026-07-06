@@ -2241,6 +2241,19 @@ is untouched. Execution evidence this run: `mycelium-core` lib **131/0** (incl. 
 regression **verified to FAIL with the fix neutralized** (deterministic at `combined_fill = 1.0`); PR
 #129 **CI green 14/14** incl. the `Test` job that carried the flake.
 
+**Carried-score caveat — the stale 8s (unknown-unknowns reserve).** Only **6** dimensions have *fresh
+evidence this run*: 8 (clippy), 9, 12, 14, 17, 18 (deep-dived). The other **19 8s are carried on Run-36
+(or older) evidence and are UNVERIFIED this run** — 1 Philosophy · 2 Conceptual Integrity · 3
+Architecture · 4 Modularity · 5 API Design · 6 Error Handling · 7 Configurability · 10 Resource
+Management · 11 Semantic Correctness · 13 Security · 15 Performance · 16 Scalability · 19 Observability ·
+20 Debuggability · 21 Operational Readiness · 22 Evolvability · 23 Documentation · 24 Developer
+Experience · 25 Dependency Hygiene. Per the ledger's demonstrated miss rate, read each as "no *known*
+defect, not re-probed" — a *decaying* claim, possibly optimistic — **not** "solid." The two bugs this
+session were both unknown-unknowns in dimensions scored 8; several of these carried 8s (esp. those with
+ledger histories — Concurrency-adjacent paths, Semantic Correctness, Robustness surfaces) are the likely
+homes of the next one. The honest way to convert a stale 8 into a confident one is a probe that finds
+nothing — not inheritance.
+
 ### Findings
 
 **Major — Robustness (scored 8 — current-state; *not* capped, see the Mean note's correction chain) — opacity control-signal-shed liveness bug.** The opacity governor emits

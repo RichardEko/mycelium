@@ -71,6 +71,27 @@ if the note cites a verifiable new artifact. Scores are never targets: if the
 diff contains work whose stated purpose is moving a score (commit messages
 referencing ratings), flag it in the entry rather than rewarding it.
 
+**Unknown-unknowns reserve & carried-score decay (added 2026-07-06, Run 37).**
+Known knowns / known unknowns / **unknown unknowns** — the ledger (26+ entries of
+"scored 8–9 while a real bug existed") is empirical proof that this loop's scores
+*systematically over-predict*: our "known-good" keeps harbouring defects we did not
+know we did not know. So:
+- **Every score carries an implicit unknown-unknown reserve.** An 8 means "best
+  current estimate — no *known* defect, recently checked," **not** "solid, trust it."
+  The gap between any score and 10 is not only room-to-improve; a real part of it is
+  things we don't know we don't know. This is *why* 10 is unreachable from inside the
+  loop and 9 needs fresh evidence — and it should temper the 8s too.
+- **A "carried (vN)" score is a *decaying* claim, not a held one.** It asserts
+  solidity on evidence nobody re-touched — the most over-confident kind of score.
+  Mark every carried dimension **stale/unverified this run**; a confident 8 must be
+  *re-earned* by fresh probing-that-found-nothing, not inherited. A dimension carried
+  several runs without fresh evidence, **especially one with repeated ledger entries**,
+  should be read as "possibly optimistic," and its note must say so.
+- **The cure is more probing, not reflexive markdown.** Do not mark everything down to
+  look humble — that is pessimism cosplaying as rigor. Score the honest best estimate,
+  label its staleness, and let the falsification quota + rotating deep-dive go *earn*
+  the confidence by looking where we haven't.
+
 ### Identity
 
 **1. Philosophy / Coherence with Goal**
