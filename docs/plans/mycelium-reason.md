@@ -52,6 +52,16 @@ the Tier-1/2 tools, not replace them.
   across the fleet."*
 - Extends to CrewAI / AutoGen memory backends + the existing MCP + A2A adapters.
 
+**Relationship to the existing `examples/a2a_langchain/` — a different layer, not a duplicate (avoid
+scatter).** That example is **A2A interop, direction LangChain → Mycelium**: a LangChain/AutoGen agent
+discovers Mycelium *skills* via `/.well-known/agent.json` and calls them as tools (Mycelium is the
+*tool provider*). The checkpointer is the **reverse and deeper**: **LangGraph runs *on* Mycelium**, its
+graph state backed by the mesh (Mycelium is the *resilient state backend*). These teach different
+things — do **not** merge them. Anti-scatter rule for this deliverable: ship **one** *Mycelium ×
+LangChain/LangGraph integration map* (interop edge = A2A, exists · state backend = checkpointer ·
+reasoning wedges = Tier 3 · typed output = Tier 1) that labels each touchpoint and when to use it, so
+there is a single coherent integration story rather than several look-alike "LangChain examples."
+
 ## Sequencing — Tier 3 first, then Tier 1 ∥ Tier 2
 
 **Differentiators first, to a *validated wedge*** (one CI-tested example each — the pattern-gallery
