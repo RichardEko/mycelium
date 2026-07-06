@@ -22,7 +22,7 @@ As of 2026-06-21 all v1.x/v2.0 engineering plans were shipped. Since then, **Leg
 The three-verb operator spine — **localize** (`/fleet`) · **explain** (`/explain`) · **diagnose**
 (`/diagnose`) — is shipped, tested, and documented for both audiences.
 
-## Post-v2.0: downstream on-ramp + hardening (2026-07-04/05)
+## Post-v2.0: downstream on-ramp + hardening (2026-07-04/06)
 
 - **`mycelium-wiki` curator step-down** (#127): the companion (group-scoped LLM-curated wiki,
   control-plane/data-plane — shipped 2026-07-03) gained a split-brain guard. The election settles on a
@@ -43,6 +43,25 @@ The three-verb operator spine — **localize** (`/fleet`) · **explain** (`/expl
   bidirectional-signed-propagation readiness gate (keeps the TLS identity-exchange window out of the
   convergence poll) + a self-heal window sized past the ~12 s governor cooldown. Verified 14/14 local +
   CI green (the previously-flaking `Food-Rescue Co-op suite` job).
+- **Opacity control-signal-shed fix** (#129, 2026-07-06): a *real liveness bug* hiding behind a 10-run
+  "flaky" test. The opacity governor emits `BOUNDARY_OPAQUE`/`TRANSPARENT` at `System` scope, and
+  `ops::deliver_locally` probabilistically sheds non-`Individual` signals by `combined_fill`; under CI
+  gossip-drain starvation the governor's single boundary-transition emission could be shed from *local*
+  delivery — the "I'm now shedding" signal dropped by the shedding mechanism, precisely under load.
+  Fixed by exempting boundary-transition kinds from the local shed (like `Individual`); deterministic
+  regression `ops::delivery_shed_tests::boundary_transition_signals_are_never_locally_shed` (verified to
+  fail without the fix). Root-caused by a deliberate dig (analysis Run 37, Major) after three prior
+  "resolutions" mis-treated it as scheduling latency.
+- **v3.0 positioning — PROPOSED, not started** (2026-07-05/06): a pattern-landscape scan established the
+  substrate covers the *coordination* pattern space **natively or by composition of native primitives**
+  (only ANP wire-protocol conformance needs new code; orchestrator is a non-goal). Recorded as **two
+  primary v3.0 deliverables** — `mycelium-reason` (LLM-authoring DX; a three-tier *build the
+  differentiators / adopt Instructor / be the LangGraph checkpointer backend* strategy) and
+  `mycelium-guardrails` (structural, coordinator-free guardrails — per-receiver `Boundary` enforcement,
+  no central chokepoint) — plus packaging candidates. RAG / HITL / *content* guardrails are framed as
+  **use-case functions** (external services accessed *through* the mesh — the wiki precedent), not
+  substrate work. Homes: `ROADMAP.md` → v3.0 · `docs/wiki/domain/pattern-coverage.md` ·
+  `docs/plans/mycelium-{reason,guardrails}.md`. Nothing built — positioning + design sketches only.
 
 ## v2.0 (2026-06-21) — all 16 milestones M1–M16, acceptance gate met, no deferrals
 
@@ -77,9 +96,14 @@ dev-dep removed, PR #40; ephemeral-floor fix, PR #110).
 
 ## The self-audit series
 
-`docs/analysis/ratings.md` — 36 runs; methodology M2 since Run 16 (execution-evidence gate,
+`docs/analysis/ratings.md` — 37 runs; methodology M2 since Run 16 (execution-evidence gate,
 falsification probes, calibration ledger). Run 28 (2026-07-02): 5 findings (3 Major), all
 fixed same day — the oversized-write family, the state-machine commit race, RUSTSEC-2026-0188.
-Run 34 (2026-07-05): the `mycelium-wiki` curator split-brain (Major, single-writer) — found via
-a CI flake, fixed same session (#127); floor dipped to 6/7/7 then recovered to **8/8/8 by Run 36**
-as the fix (#127) and the coop-flake fix (#128) confirmed green. 25 calibration-ledger entries.
+Run 34 (2026-07-05): the `mycelium-wiki` curator split-brain (Major, single-writer, #127). Run 37
+(2026-07-06): the opacity control-signal-shed (Major, #129). 27 calibration-ledger entries.
+**Methodology upgraded 2026-07-06 (bright line at Run 37):** *current score = current state* — a bug
+found + fixed + deterministically gated in the same run scores its fixed end-state (not the old cap-at-6),
+and finding-and-fixing a bug never lowers a score (accountability for past over-scoring lives in the
+ledger); an *unknown-unknowns reserve* + *carried-score decay* temper confident 8s; and **past run scores
+are never retroactively rewritten** (a time-series is only meaningful if its measurements stand). Pre-37
+runs are dated snapshots under the prior rule.
