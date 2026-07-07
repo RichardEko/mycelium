@@ -79,6 +79,10 @@ operator concern (wrap a KMS); the demo uses a fixed seed.
   for this; if you wire it by hand, prefetch first.
 - **Eviction / GC.** Catalogue entries are ordinary KV; tombstone an entry to
   withdraw it. Held artifact bytes live as long as the serving node holds them.
+- **Durability.** The shipped `ArtifactSource` implementations are in-memory and
+  mesh-cache only — bytes survive exactly as long as some serving node holds them.
+  A durable origin tier (filesystem/object-store source + librarian discovery) is
+  a proposed design: see [design/artifact-library.md](../design/artifact-library.md).
 
 ### Sharing a catalogue across clusters
 
