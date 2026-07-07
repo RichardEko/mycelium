@@ -750,6 +750,56 @@ mod tests {
         std::fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 
+    /// M2 Run-38 falsification probe (Test Architecture), kept as a permanent property test:
+    /// the entry decoder and manifest parser must be TOTAL over hostile input — every
+    /// truncation of a valid encoding, and a spray of single-byte corruptions, must return
+    /// None/Err, never panic, never misdecode into a different-but-valid entry silently
+    /// accepted by provenance.
+    #[test]
+    fn decode_and_manifest_parse_are_total_over_adversarial_bytes() {
+        use ed25519_dalek::SigningKey;
+        let sk = SigningKey::from_bytes(&[3u8; 32]);
+        let vk = sk.verifying_key().to_bytes();
+        let entry = InstallableEntry::new(cap("llm", "weights"), art(b"payload"))
+            .with_kind(crate::artifact::ArtifactKind::Blob)
+            .with_cost(123, 4)
+            .with_requirements(1_000, 2_000)
+            .signed_by(&sk);
+        let good = entry.encode();
+
+        // Every truncation: no panic, and never a decode that still passes provenance.
+        for cut in 0..good.len() {
+            if let Some(d) = InstallableEntry::decode(&good[..cut]) {
+                assert!(!d.verify_provenance(&[vk]),
+                    "a truncated encoding must never verify as the publisher's entry (cut={cut})");
+            }
+        }
+        // Single-byte corruption at every offset: no panic; if it still decodes, provenance
+        // must reject it (the signature covers version/kind/artifact/requirements/capability;
+        // only the unsigned cost-hint bytes may mutate and still verify — by design).
+        const HINTS: std::ops::Range<usize> = 34..50; // size_bytes + est_install_secs
+        for i in 0..good.len() {
+            let mut bad = good.clone();
+            bad[i] ^= 0xA5;
+            if let Some(d) = InstallableEntry::decode(&bad)
+                && d.verify_provenance(&[vk])
+            {
+                assert!(HINTS.contains(&i),
+                    "corruption at offset {i} decoded AND passed provenance outside the unsigned hint bytes");
+            }
+        }
+        // Manifest lines: odd-length hex, non-hex, and corrupted-entry lines all error (never
+        // panic, never silently skip).
+        for text in ["abc\n", "zz zz\n", "deadbeef\n"] {
+            assert!(Manifest::parse(text).is_err(), "malformed line must be an error: {text:?}");
+        }
+        let mut hexline = String::new();
+        for b in &good { use std::fmt::Write; let _ = write!(hexline, "{b:02x}"); }
+        hexline.replace_range(0..2, "ff"); // unknown format version
+        assert!(Manifest::parse(&format!("{hexline}\n")).is_err(),
+            "an undecodable entry line is an error, not a skip");
+    }
+
     #[test]
     fn manifest_diff_yields_publish_and_tombstone_sets() {
         let a = InstallableEntry::new(cap("route", "optimize"), art(b"opt-v1"));

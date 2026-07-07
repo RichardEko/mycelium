@@ -1230,6 +1230,106 @@ mod tests {
         agent.shutdown().await;
     }
 
+    /// M2 Run-38 falsification probe (Resource Management), kept: an agent shut down while an
+    /// install is still in flight must stay harmless — the detached install task completes
+    /// against the dead agent, its advertisement is a no-op write, nothing panics, and the
+    /// provisioner's state stays coherent (the install may land Live in the map — the map is
+    /// node-local bookkeeping; the node itself is gone).
+    #[tokio::test]
+    async fn agent_shutdown_mid_install_is_harmless() {
+        let agent = live_agent().await;
+        let host = Arc::new(WasmHost::new().expect("engine"));
+
+        let mut source = InMemorySource::new();
+        let id = source.insert(b"shutdown mid-flight".to_vec());
+        let mut catalog = InstallableCatalog::new();
+        catalog.add(InstallableEntry::new(Capability::new("llm", "shutdown"), id)
+            .with_kind(ArtifactKind::Blob));
+
+        let mut prov =
+            Provisioner::new(Arc::clone(&agent), host, catalog, Arc::new(source), 1.0);
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let uninstalled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        prov.register_runtime(Arc::new(TrackingRuntime {
+            gate:           Some(Arc::clone(&gate)),
+            fail_remaining: Arc::new(AtomicU64::new(0)),
+            uninstalled:    Arc::clone(&uninstalled),
+        }));
+        prov.supervise(CapFilter::new("llm", "shutdown"), 1);
+        assert_eq!(prov.provision_round(), 1);
+        assert_eq!(prov.installing_count(), 1);
+
+        // Shut the node down under the in-flight install, then let the install finish.
+        agent.shutdown().await;
+        gate.add_permits(1);
+
+        // The task completes without panicking the runtime; the reservation resolves.
+        let mut settled = false;
+        for _ in 0..200 {
+            if prov.installing_count() == 0 {
+                settled = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(settled, "the in-flight install resolves after shutdown (no zombie reservation)");
+        // And the provisioner is still coherent to use (no poisoned lock, no panic).
+        assert_eq!(prov.provision_round(), 0, "rounds on a shut agent are safe no-ops");
+    }
+
+    /// M2 Run-38 falsification probe (Philosophy / no-coordinator), kept: resource-aware
+    /// self-election must leave NO fleet-visible scheduler state. After a full install cycle,
+    /// the only KV the provisioner produced is the capability advertisement family for what it
+    /// hosts (`cap/...`) — no assignment keys, no resource gossip, no queue: eligibility was
+    /// decided and forgotten locally.
+    #[tokio::test]
+    async fn self_election_writes_no_scheduler_state_to_the_fleet() {
+        let agent = live_agent().await;
+        let host = Arc::new(WasmHost::new().expect("engine"));
+
+        let mut source = InMemorySource::new();
+        let id = source.insert(ECHO_COMPONENT.to_vec());
+        let mut catalog = InstallableCatalog::new();
+        catalog.add(InstallableEntry::new(Capability::new("text", "echo"), id)
+            .with_requirements(0, 1_000)); // resource-checked election (real probe, default policy)
+
+        // Snapshot every key before the provisioner exists.
+        let before: std::collections::HashSet<String> =
+            agent.kv().keys().into_iter().map(|k| k.to_string()).collect();
+
+        let mut prov =
+            Provisioner::new(Arc::clone(&agent), host, catalog, Arc::new(source), 1.0);
+        prov.supervise(CapFilter::new("text", "echo"), 1);
+        assert_eq!(prov.provision_round(), 1);
+        wait_live(&prov, 1).await;
+        for _ in 0..3 {
+            prov.provision_round(); // extra rounds: probe pass + idempotence also write nothing
+        }
+
+        // The ad's KV write lands asynchronously — poll structurally for it before diffing.
+        let mut after: Vec<String> = Vec::new();
+        for _ in 0..80 {
+            after = agent.kv().keys().into_iter()
+                .map(|k| k.to_string())
+                .filter(|k| !before.contains(k))
+                .collect();
+            if !after.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(!after.is_empty(), "the capability advertisement itself must appear");
+        for key in &after {
+            assert!(
+                key.starts_with("cap/"),
+                "self-election left non-advertisement fleet state: {key} — that would be a \
+                 scheduler wearing a costume (design §4.4)"
+            );
+        }
+
+        agent.shutdown().await;
+    }
+
     #[tokio::test]
     async fn unregistered_kind_and_over_budget_entries_are_skipped_and_counted() {
         // Eligibility is node-local truth: no runtime for a kind → never self-elect for it; over

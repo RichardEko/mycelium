@@ -9,7 +9,37 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+- **The artifact library** (`mycelium-wasm-host`; design record
+  [`docs/design/artifact-library.md`](docs/design/artifact-library.md)): a durable origin tier for
+  content-addressed artifacts — `FsLibrarySource` (blob dir + signed `Manifest`;
+  `Manifest::append_entry` is the one-call CI publish step), the **librarian** role
+  (`spawn_librarian`: serve + `artifact/librarian` discovery + signature-scoped
+  manifest→catalogue reconcile), `MeshArtifactSource::resolving` (holders discovered via the
+  capability ring — no hardcoded node-ids), and the HTTP object-store source
+  (`BlobFetcher` / `PrefetchingSource` / `HttpLibrarySource`, egress-gated before dispatch).
+- **Artifact kinds + node runtimes**: `ArtifactKind` (WasmComponent | Blob) in a clean-slate
+  versioned entry encoding; `ArtifactRuntime`/`Installed` traits — `WasmHost` becomes the engine
+  inside one runtime; `BlobRuntime` places models/data (ranged streaming via
+  `RangedArtifactSource`, complete-or-absent placement, activation hook, pluggable probe). The
+  `Provisioner` gains a kind registry, async install reservations, **resource-aware
+  eligibility** (signed per-entry `requires{disk,mem}`, `ResourceProbe` + headroom fraction,
+  in-flight reservations counted), real `{ns}/loading` percent tiers, and a per-round **probe
+  health pass** (fail → withdraw → reinstall).
+- **Provenance binds the whole entry** (version‖kind‖artifact‖requirements‖capability): a signed
+  artifact cannot be re-labeled under a different capability or kind, and resource requirements
+  are tamper-evident (cost hints remain unsigned ranking inputs).
+- **Examples**: `catalog` reworked honest (runtime-read library origin, librarian, origin death →
+  peer-cache install); `mcp_toolgrowth` now installs real arriving code (new committed
+  `unit_convert_component` fixture; activation-vs-installation taught explicitly); new **manual**
+  `model_deploy` demo — real GGUF weights **and** their deployment profile as two signed
+  artifacts (profile → weights by content address, design §4.3.1), activated into Ollama,
+  generating real tokens under the governed profile.
+
+### Fixed
+- `mycelium-wiki` integration tests: the `free_port()` bind-race flake class retired
+  (pair-granularity bind retries; `AddrInUse` CI failure 2026-07-07).
+- `crossbeam-epoch` 0.9.18 → 0.9.20 (RUSTSEC-2026-0204; bench-only dependency path).
 
 ## [2.0.0] — 2026-07-04
 

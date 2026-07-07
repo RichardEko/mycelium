@@ -269,6 +269,8 @@ Testability · Test Architecture · Observability · Debuggability · Operationa
 Readiness · Evolvability · Documentation · Developer Experience · Dependency Hygiene
 
 ---
+- 2026-07-07: Test Architecture scored 8 in Runs 32–36 while the `mycelium-wiki` integration tests carried the `free_port()` bind-TOCTOU flake class (bare-unwrap re-bind, CI-gating) (found by a CI `AddrInUse` failure on an unrelated push; class retired with pair-granularity retries same day).
+- 2026-07-07: Documentation scored 8 in Runs 33–37 while `docs/wiki/dev/examples.md` counted eleven coop demos though the smoke had run twelve since 2026-07-03 (found by wiki-lint 8 — the first lint that *counted*).
 
 ## 2026-06-04 — Run 1
 
@@ -2305,3 +2307,87 @@ therefore scored **8**, not degraded: finding-and-fixing a bug does not lower a 
 | 25 | Dependency Hygiene | 8 | carried (v36). No dep change. |
 | — | **Floor (lowest 3)** | **7, 8, 8** | Test Architecture (7 — the sole sub-8: a *genuine current* structural weakness, the recurring flaky-gate pattern with no structural prevention, 8th ledger entry) · two 8s. Robustness and Failure-Mode Legibility are back at 8 — their defect is *fixed and gated*, so their current state is not degraded. |
 | — | Mean (continuity footnote) | 7.96 | not a target (sum 199/25 = 7.96). Essentially flat vs Run 36's 8.00; the only sub-8 is Test Architecture, a real *current* weakness — not a penalty for fixing a bug. **Correction chain (this run was re-scored twice under challenge): first cut capped Robustness at 6 (mechanical finding-cap); second held it at 7 ("lasting skepticism"); both were the same error — a *fixed-and-gated* defect makes the dimension's current state *better*, not worse, and the accountability for the *past* over-scoring lives in the calibration ledger, not the current number. Final: current score = current state; a discovered-and-fixed bug adds a ledger entry and does not lower the current score. The methodology is amended to this principle (not just the narrow cap exception).** |
+
+## 2026-07-07 — Run 38 (M2)
+
+Deep-dive dimensions this run (rotation — the least-recently-covered band): **11 Semantic
+Correctness, 13 Security, 15 Performance, 19 Observability, 20 Debuggability**. The material
+diff since Run 37 is the largest single-day workstream of the series: the **artifact library**
+(design record `docs/design/artifact-library.md`, ✅ adopted & implemented same day) — 25
+commits: durable `FsLibrarySource` + signed manifest, librarian role + capability-ring holder
+discovery, `ArtifactKind` + `ArtifactRuntime`/`Installed` (WasmHost becomes one runtime;
+`BlobRuntime` streams/places models), whole-entry provenance, resource-aware eligibility
+(§4.4), probe-gated health, the HTTP object-store source, honest `catalog`/`mcp_toolgrowth`
+demos + the **`model_deploy`** manual demo (a real 19 MB GGUF **and its deployment profile as
+two signed artifacts**, activated into Ollama, generating real tokens), three wiki-lints, the
+KV-namespace-table canon repair (nine missing prefixes), the lock-order table extended to the
+full workspace (rows 20–30), and the wiki test port-race class retired. Execution evidence this
+run: `mycelium-wasm-host` **55/0** lib + **4/0** e2e (incl. the three kept falsification probes
+below and the four lifecycle/concurrency tests); `mycelium-wiki` control-plane **24/0** +
+gateway; `make check` green; coop `ci_smoke` **12/12**; **`model_deploy` run live twice on real
+hardware** (real streamed percent, real `ollama create`, real tokens; `ollama show` asserting
+the governed SYSTEM prompt); **8 CI runs green today** (one red caught + fixed: the RUSTSEC
+audit + the wiki flake — both same-day); `cargo audit` clean post-`crossbeam-epoch` bump.
+
+**Falsification probes (three highest provisional: 10, 18→re-judged, 1) — all kept as
+permanent tests:**
+- **Probe A (Resource Management)** `agent_shutdown_mid_install_is_harmless` — agent shut down
+  under an in-flight gated install; the detached task resolves, nothing panics, rounds on the
+  dead agent are safe no-ops. **PASS.**
+- **Probe B (Test Architecture / codec)** `decode_and_manifest_parse_are_total_over_adversarial_bytes`
+  — every truncation + per-byte corruption of a signed entry: no panic, and nothing that still
+  decodes passes provenance **except mutations inside the deliberately-unsigned cost-hint bytes**
+  (the property encodes the design's exact signing boundary). Manifest lines: malformed/unknown-
+  version lines are errors, never skips. **PASS.**
+- **Probe C (Philosophy / no-coordinator)** `self_election_writes_no_scheduler_state_to_the_fleet`
+  — after resource-checked election + install + extra rounds, the only new fleet KV is the
+  `cap/` advertisement family: no assignment keys, no resource gossip, no queue. **PASS** (first
+  attempt failed on the probe's *own* timing bug — the ad's KV write lands async; fixed with a
+  structural poll. Probe defect, not system defect.)
+
+### Findings
+- **Minor — Evolvability (22): CHANGELOG `[Unreleased]` said "Nothing yet"** after the entire
+  workstream shipped. **Fixed this run** (full Added/Fixed entry written); scored at fixed
+  state.
+- **Minor (gap, not an invariant break) — Observability (19): the new artifact tripwire
+  counters (`ineligible_skips`, resource-skip reasons) are programmatic-only** — not exported
+  via `/stats` or `/metrics` (no doc promises it, hence a gap not a broken claim; the honest
+  fix is `metrics`-facade instrumentation in the companion). **Live** → 19 scores 7 and heads
+  the improvement targets.
+- **Standing (Run 37's structural weakness, RECONFIRMED live): Test Architecture (18)** — the
+  class "timing-sensitive integration tests gate CI with no structural prevention" produced a
+  red main *today* (wiki `AddrInUse`). The port-race *family* is now structurally retired
+  (pair-retry idiom + testing.md lore) and today's new tests are structural-poll clean, but the
+  class-level gap Run 37 named persists → 18 stays 7. Ledger line added for Runs 32–36.
+- Ledger line also added for Documentation (23), Runs 33–37 (the examples.md eleven-vs-twelve
+  miscount, found by lint 8).
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 9 | Probe C (kept test): self-election leaves zero fleet scheduler state; `ci_smoke` 12/12 + `model_deploy` live — the coordinator-free provisioning thesis *executed* end-to-end (librarian = role; origin death → installs continue). Design §4.4 explicitly rejects resource gossip/best-fit ranking. |
+| 2 | Conceptual Integrity | 8 | Diff-reviewed: the new subsystem carries the house invariants (detection-not-prevention → tripwires; restart≡provisioning → ordering, health, retry ALL reduce to it; content-address everywhere). No fresh whole-dimension evidence. |
+| 3 | Architecture | 8 | L5 held: core `src/`+`mycelium-core/` untouched all day (verified by diff); companion built on public API only; namespace table repaired (nine missing prefixes — lint 7) now matches writers. `make check` (incl. no-default-features) green. |
+| 4 | Modularity | 8 | Kind-dispatch registry keeps runtimes independent; the demand/presence/shed loops were untouched by the generalization — evidence the seams were right. |
+| 5 | API Design | 8 | New surface is builder+RAII consistent; one API risk noted: `Installed::probe` cheap-under-lock is a doc contract only; `ActivateFn` runs sync in async context (documented). |
+| 6 | Error Handling Model | **7** | **Down from 8 (current-state):** the new app layer is stringly (`InstallError(String)`, `ActivateFn → Result<(), String>`) against the typed core — a real consistency regression introduced today. Functional (retry semantics work, tested) but callers can't match on cause. |
+| 7 | Configurability | 8 | Resource policy (probe + headroom, default-on 0.8), install budget, chunk size, egress — knobs are operational and orthogonal. `reqwest` ungated in wasm-host noted under 25. |
+| 8 | Language Best Practices | 8 | clippy `-D warnings` clean across the full matrix + wasm-host all-targets (several lints caught + fixed during the day); no `unsafe`; but see 6 — the stringly app-layer errors keep this at 8. |
+| 9 | Concurrency Correctness | 8 | Heavy new concurrent machinery (async reservations, token-checked completion, rows 20–23) with dedicated race tests green (`withdraw_during_install…`, `failed_install…`, joint-reservation accounting). Ledger-heavy dimension; tests are same-day self-authored — 8, not 9. |
+| 10 | Resource Management | **9** | Probe A (kept) + the lifecycle suite: shed deletes placed bytes, stale installs explicitly uninstalled, librarian handle aborts on drop, `Wiki`-style task hygiene respected. Named fresh evidence across the dimension's new surface. |
+| 11 | Semantic Correctness | 8 | **Deep-dive (read):** `lww_wins` convergence re-derived by hand (tombstone-beats-data at equal ts is order-independent; byte tiebreak commutes — both application orders checked); HLC tick CAS + saturating logical verified; quorum = floor(N/2)+1 with documented no-BFT scope. Core suites not re-run this run → 8, honestly read-capped. |
+| 12 | Robustness | 8 | Fresh adversarial evidence on the new surface (Probe B; lying-source in both pull flavours; complete-or-absent under ENOSPC/crash; unknown-version rejection) — but the dimension is broader than today's slice and Run 37's finding is one day old. |
+| 13 | Security | 8 | **Deep-dive:** whole-entry provenance closed a real re-label hole *before* first deployment (tamper matrix run today: capability re-label, kind flip, requirement tamper all fail; hints-only mutations pass — by design, probe B pins the exact boundary). Egress gate denies before dispatch (zero-connection test). Gap found by the dive: **publisher-key rotation/revocation posture is undocumented** (trusted-list-restart is the implicit story) — keeps this at 8. |
+| 14 | Failure Mode Legibility | 8 | Distinct tripwire reasons, install errors carry retry semantics in the message, probe-withdraw warns with artifact ids, loading tiers make progress visible. |
+| 15 | Performance | 8 | **Deep-dive (read):** streaming pull never materializes a model in memory and runs on the blocking pool; probe pass is O(hosted) under one lock; noted: `provision_round` clones the catalog Vec per round and `eligible()` re-locks per entry — fine at current scale, flagged for a future catalog-size cliff. No benchmark run → capped 8. |
+| 16 | Scalability | 8 | Per-hash librarian ads rejected with explicit namespace-flood analysis (§6); direct store pulls keep models off the 10 MiB mesh frames; loading-tier re-adverts bounded to 10 % steps. |
+| 17 | Testability | **9** | The whole day is the evidence: every new mechanism was testable via injected fakes (`GatedRuntime`, `TrackingRuntime`, `FixedProbe`, lying sources, gated semaphores) without a cluster; 55-test suite exercises them; probes A–C were writable in minutes *because* the seams exist. |
+| 18 | Test Architecture | **7** | Held at Run 37's 7 — the structural weakness it named **reconfirmed live today** (a wiki port-race flake turned main red). The *family* is retired structurally (pair-retry + lore) and the new suite is exemplary (lifecycle, property probe B kept, structural polls), but timing-sensitive CI-gating tests still have no class-level prevention. 9th ledger entry. |
+| 19 | Observability | **7** | **Deep-dive; Minor gap (live):** node surface strong (`/stats` tripwires, `/metrics`, explain/diagnose — read, not probed live this run), but the new artifact tripwire counters are **programmatic-only**; an operator can't see resource-skip storms without embedder wiring. Fix path named (metrics facade in the companion). |
+| 20 | Debuggability | 8 | **Deep-dive (read):** failure paths log with artifact ids + reasons; the librarian logs reconcile deltas; `model_deploy` preflight prints exact remediation; kv-dump + explain/diagnose unchanged. Not probed live → 8. |
+| 21 | Operational Readiness | 8 | The artifacts runbook is now a real operator path (publish flow with footprint guidance, librarian how-to, remote-store note); `model_deploy` doubles as an operator rehearsal and was run twice for real. |
+| 22 | Evolvability | 8 | Finding (Minor) fixed this run: CHANGELOG Unreleased written. Versioned entry encoding with explicit rejection semantics; clean-slate decision + declined-with-evidence step 7 both recorded ADR-style; only the crate-naming question open. |
+| 23 | Documentation | **9** | Three wiki-lint passes executed today (findings fixed, links verified programmatically each pass); the design note reads end-to-end as the day's decision record; runbook, README, demo docs all reconciled same-day (ship-time ingest held twice). Ledger line added for the pre-existing examples.md miscount — past accountability, current state earned. |
+| 24 | Developer Experience | 8 | `make check` contract defended under pressure (the llm_agent de-simulation was *declined* specifically to keep wasmtime out of it — recorded); one-call publish step; demo preflights. |
+| 25 | Dependency Hygiene | 8 | Adds: `sysinfo` (system+disk features only), `reqwest` (rustls, no default features — but ungated in wasm-host: flagged), `async-trait`. `cargo audit` clean in CI after same-day RUSTSEC-2026-0204 bump (bench-only path). |
+| — | **Floor (lowest 3)** | **7, 7, 7** | Error Handling (stringly new app layer) · Test Architecture (standing structural weakness, reconfirmed live) · Observability (companion tripwires not operator-visible). |
+| — | Mean (continuity footnote) | 8.04 | not a target (sum 201/25). Up from 7.96 on named fresh evidence (four 9s, each probe- or execution-backed); the floor widened to three 7s — all three are *current, actionable* weaknesses, which is the audit working. |
