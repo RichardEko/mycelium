@@ -35,9 +35,13 @@ mod mesh_source;
 mod provisioner;
 
 pub use artifact::{
-    verify_artifact, ArtifactId, ArtifactIdError, ArtifactSource, InMemorySource, VerifyError,
+    verify_artifact, ArtifactId, ArtifactIdError, ArtifactKind, ArtifactSource, FsLibrarySource,
+    InMemorySource, VerifyError,
 };
-pub use catalog::{publish_installable, InstallableCatalog, InstallableEntry, INSTALLABLE_PREFIX};
+pub use catalog::{
+    publish_installable, InstallableCatalog, InstallableEntry, Manifest, ManifestError,
+    ENTRY_FORMAT_VERSION, INSTALLABLE_PREFIX, MANIFEST_FILE,
+};
 pub use confine::{confine_key, ConfinementError, COMPONENT_KV_PREFIX};
 pub use host::{HostState, Instance, Request, Response, WasmHost, WasmHostError};
 pub use mesh_source::{pull_artifact, serve_artifacts, MeshArtifactSource, ARTIFACT_FETCH_KIND};

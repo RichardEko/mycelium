@@ -173,6 +173,14 @@ a flag. (A v1 draft of this note proposed a flag-byte bitfield for backward comp
 rejected as unnecessary cleverness once clean-slate was confirmed — see §7.) The `installable/`
 encoding is app-layer, owned by this crate — not the core wire protocol.
 
+**Provenance binds the whole entry, not just the bytes.** The clean slate also fixed a
+weakness in the original scheme: the Ed25519 signature covered *only* the content address, so a
+signed artifact could be re-published under a different capability or kind with provenance
+still verifying (re-labeling `llm/summarize` as `admin/root-shell`). The signature now covers a
+domain-separated message over `version ‖ kind ‖ artifact ‖ capability`
+(`InstallableEntry::provenance_message`). Cost hints stay outside the signature — they are
+ranking hints, not security claims, and may be updated without re-signing.
+
 ### 4.2 `ArtifactRuntime` — install + lifecycle per kind
 
 ```rust

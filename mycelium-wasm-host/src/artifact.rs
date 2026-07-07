@@ -135,9 +135,47 @@ pub fn verify_artifact(bytes: &[u8], expected: &ArtifactId) -> Result<(), Verify
     }
 }
 
+/// What a deployable artifact *is* — the runtime-dispatch axis of install
+/// (`docs/design/artifact-library.md` §4). A [`WasmComponent`](Self::WasmComponent) is pulled,
+/// verified, and **instantiated** (`WasmHost`); a [`Blob`](Self::Blob) is pulled, verified, and
+/// **placed** for a node-local runtime to consume (model weights, a data pack), with its
+/// capability advertisement probe-gated on that runtime answering. The kind travels in the
+/// catalogue entry; a node without a registered runtime for a kind simply never self-elects to
+/// install it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ArtifactKind {
+    /// A WASM component: instantiate in the sandboxed host and serve its `handle` export.
+    WasmComponent,
+    /// Opaque bytes a node-local runtime consumes from disk (LLM/ONNX weights, data packs).
+    Blob,
+}
+
+impl ArtifactKind {
+    /// The kind's wire byte (catalogue-entry encoding).
+    pub const fn as_u8(self) -> u8 {
+        match self {
+            Self::WasmComponent => 0,
+            Self::Blob => 1,
+        }
+    }
+
+    /// Inverse of [`as_u8`](Self::as_u8); `None` for an unknown kind byte (the decoder rejects
+    /// the entry — a node never guesses how to install something it can't name).
+    pub const fn from_u8(b: u8) -> Option<Self> {
+        match b {
+            0 => Some(Self::WasmComponent),
+            1 => Some(Self::Blob),
+            _ => None,
+        }
+    }
+}
+
 /// A place artifact bytes can be fetched from by content address. The transport is pluggable and
 /// **untrusted** (content-addressing verifies after fetch): mesh bulk, an OCI/Warg registry, a
-/// local cache, etc. The mesh-bulk source is a follow-up (§E.4.4); v0 ships in-memory + local-dir.
+/// local cache, etc. Shipped implementations: [`InMemorySource`] (embedding/tests),
+/// [`FsLibrarySource`] (the durable library directory), and `MeshArtifactSource` (peer pull over
+/// the `artifact.fetch` RPC, prefetched into a verified cache).
 pub trait ArtifactSource {
     /// Fetch the bytes for `id`, or `None` if this source does not hold it.
     fn fetch(&self, id: &ArtifactId) -> Option<Bytes>;
@@ -167,6 +205,92 @@ impl InMemorySource {
 impl ArtifactSource for InMemorySource {
     fn fetch(&self, id: &ArtifactId) -> Option<Bytes> {
         self.by_id.get(id).cloned()
+    }
+}
+
+/// A durable, filesystem-backed artifact library: a directory of content-addressed blobs, each
+/// stored under its 64-hex [`ArtifactId`] filename. This is the durable **origin tier** of the
+/// artifact-library design (`docs/design/artifact-library.md` §2): it survives process
+/// restarts, is shareable via a mounted volume, and becomes cluster-servable by handing it to
+/// `serve_artifacts`. The library's *self-description* (which capability each blob provides,
+/// cost, provenance) lives in its manifest — see `catalog::Manifest`; non-hex filenames (the
+/// manifest, temp files) are ignored by [`list`](Self::list) and unreachable via `fetch`.
+pub struct FsLibrarySource {
+    dir: std::path::PathBuf,
+}
+
+impl FsLibrarySource {
+    /// Open a library directory, creating it (and parents) if absent.
+    pub fn open(dir: impl Into<std::path::PathBuf>) -> std::io::Result<Self> {
+        let dir = dir.into();
+        std::fs::create_dir_all(&dir)?;
+        Ok(Self { dir })
+    }
+
+    /// The library directory.
+    pub fn dir(&self) -> &std::path::Path {
+        &self.dir
+    }
+
+    fn blob_path(&self, id: &ArtifactId) -> std::path::PathBuf {
+        self.dir.join(id.to_hex())
+    }
+
+    /// Store `bytes` as a content-addressed blob, returning their [`ArtifactId`].
+    ///
+    /// The write is **complete-or-absent**: bytes land in a uniquely-named temp file and are
+    /// renamed into place only after the full write, so a concurrent reader never observes a
+    /// partial blob (the same manifest-last discipline as the wiki's `FsStore`). Idempotent —
+    /// storing bytes the library already holds is a no-op returning the same id.
+    pub fn store(&self, bytes: &[u8]) -> std::io::Result<ArtifactId> {
+        let id = ArtifactId::of(bytes);
+        let path = self.blob_path(&id);
+        if path.exists() {
+            return Ok(id);
+        }
+        static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let tmp = self.dir.join(format!(
+            ".tmp-{}-{}-{}",
+            id.to_hex(),
+            std::process::id(),
+            TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        ));
+        std::fs::write(&tmp, bytes)?;
+        std::fs::rename(&tmp, &path)?;
+        Ok(id)
+    }
+
+    /// Remove the blob for `id`, returning whether it was present.
+    pub fn remove(&self, id: &ArtifactId) -> std::io::Result<bool> {
+        match std::fs::remove_file(self.blob_path(id)) {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// All artifact ids currently held — files whose name parses as a 64-hex content address.
+    /// The manifest, temp files, and anything else are skipped.
+    pub fn list(&self) -> std::io::Result<Vec<ArtifactId>> {
+        let mut ids = Vec::new();
+        for entry in std::fs::read_dir(&self.dir)? {
+            let entry = entry?;
+            if let Some(name) = entry.file_name().to_str()
+                && let Ok(id) = ArtifactId::from_hex(name)
+            {
+                ids.push(id);
+            }
+        }
+        Ok(ids)
+    }
+}
+
+impl ArtifactSource for FsLibrarySource {
+    /// Read the blob for `id`; `None` if absent or unreadable. Like every source, the library
+    /// is *untrusted* — callers verify the bytes against the content address after fetch, so a
+    /// corrupted-on-disk blob is detected at the pull/provision boundary, not trusted here.
+    fn fetch(&self, id: &ArtifactId) -> Option<Bytes> {
+        std::fs::read(self.blob_path(id)).ok().map(Bytes::from)
     }
 }
 
@@ -217,5 +341,68 @@ mod tests {
         // What a source returns always re-verifies against the id it was fetched by.
         let fetched = src.fetch(&id).unwrap();
         assert!(verify_artifact(&fetched, &id).is_ok());
+    }
+
+    #[test]
+    fn artifact_kind_wire_bytes_round_trip_and_reject_unknown() {
+        assert_eq!(ArtifactKind::from_u8(ArtifactKind::WasmComponent.as_u8()),
+                   Some(ArtifactKind::WasmComponent));
+        assert_eq!(ArtifactKind::from_u8(ArtifactKind::Blob.as_u8()), Some(ArtifactKind::Blob));
+        assert_eq!(ArtifactKind::from_u8(0xFF), None);
+    }
+
+    /// Fresh, unique library dir under the system temp dir (no tempfile dep in this crate).
+    fn scratch_lib_dir(tag: &str) -> std::path::PathBuf {
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        std::env::temp_dir().join(format!(
+            "mycelium-fs-library-{tag}-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        ))
+    }
+
+    #[test]
+    fn fs_library_stores_fetches_and_survives_reopen() {
+        let dir = scratch_lib_dir("roundtrip");
+        let lib = FsLibrarySource::open(&dir).expect("open");
+        let id = lib.store(b"component bytes").expect("store");
+        assert_eq!(id, ArtifactId::of(b"component bytes"), "content address is the identity");
+        assert_eq!(lib.fetch(&id).as_deref(), Some(&b"component bytes"[..]));
+        assert!(verify_artifact(&lib.fetch(&id).unwrap(), &id).is_ok());
+
+        // Idempotent re-store, unknown miss.
+        assert_eq!(lib.store(b"component bytes").unwrap(), id);
+        assert!(lib.fetch(&ArtifactId::of(b"never stored")).is_none());
+
+        // Durability: a fresh handle on the same directory (≈ process restart) still serves it.
+        drop(lib);
+        let reopened = FsLibrarySource::open(&dir).expect("reopen");
+        assert_eq!(reopened.fetch(&id).as_deref(), Some(&b"component bytes"[..]));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn fs_library_lists_only_content_addressed_blobs_and_removes() {
+        let dir = scratch_lib_dir("list");
+        let lib = FsLibrarySource::open(&dir).expect("open");
+        let a = lib.store(b"artifact a").unwrap();
+        let b = lib.store(b"artifact b").unwrap();
+        // Non-blob files (a manifest, a stray temp file) are invisible to list().
+        std::fs::write(dir.join("manifest"), b"not a blob").unwrap();
+        std::fs::write(dir.join(".tmp-leftover"), b"crashed writer residue").unwrap();
+
+        let mut listed = lib.list().unwrap();
+        listed.sort_by_key(|id| id.to_hex());
+        let mut expect = vec![a, b];
+        expect.sort_by_key(|id| id.to_hex());
+        assert_eq!(listed, expect);
+
+        assert!(lib.remove(&a).unwrap(), "removing a held blob reports true");
+        assert!(!lib.remove(&a).unwrap(), "removing an absent blob reports false");
+        assert!(lib.fetch(&a).is_none());
+        assert_eq!(lib.fetch(&b).as_deref(), Some(&b"artifact b"[..]));
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

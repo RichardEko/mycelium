@@ -17,46 +17,66 @@
 
 use mycelium::{CapFilter, Capability, KvHandle};
 
-use crate::artifact::ArtifactId;
+use crate::artifact::{ArtifactId, ArtifactKind};
 
 /// KV prefix owned by the cluster-wide installable catalog: `installable/{ns}/{name}/{artifact-hex}`.
 /// Entries are gossiped like any KV value, so any node can publish an installable artifact and every
 /// provisioner can build its catalog from the cluster view.
 pub const INSTALLABLE_PREFIX: &str = "installable/";
 
+/// Format version of the [`InstallableEntry`] encoding. A decoder rejects versions it does not
+/// know (an entry from the future is invisible, and counted by the caller — detection, not
+/// prevention). Clean-slate v1 per `docs/design/artifact-library.md` §4.1 — the catalogue had no
+/// field deployments when the kind axis landed, so there is no pre-version format to accept.
+pub const ENTRY_FORMAT_VERSION: u8 = 1;
+
 /// One installable artifact in the catalog: the [`Capability`] it would provide once installed,
-/// plus the content address ([`ArtifactId`]) to pull. The declared-provide is a full `Capability`
-/// so the live resolver's `CapFilter::matches` works unchanged against not-yet-installed artifacts.
+/// the [`ArtifactKind`] that selects *how* a node installs it, plus the content address
+/// ([`ArtifactId`]) to pull. The declared-provide is a full `Capability` so the live resolver's
+/// `CapFilter::matches` works unchanged against not-yet-installed artifacts.
 // `Capability` is `PartialEq` but not `Eq`, so neither is this.
 #[derive(Clone, Debug, PartialEq)]
 pub struct InstallableEntry {
     /// What this artifact would advertise once installed (the resolver-matchable declared-provide).
     pub provides:          Capability,
+    /// How a node installs it: instantiate (`WasmComponent`) vs place-and-probe (`Blob`).
+    pub kind:              ArtifactKind,
     /// Content address of the artifact bytes to pull (hand to `WasmHost::provision`).
     pub artifact:          ArtifactId,
     /// Optional ranking hints (0 = unknown): bytes to pull, estimated install seconds.
     pub size_bytes:        u64,
     pub est_install_secs:  u64,
-    /// Optional **provenance**: an Ed25519 signature over the content address by a publisher.
-    /// Empty = unsigned. The content hash gives *integrity* (the bytes are what the catalog named);
-    /// this gives *provenance* (a trusted publisher vouched for them). See [`verify_provenance`].
+    /// Optional **provenance**: an Ed25519 signature by a publisher over the *entry* — version,
+    /// kind, content address, and declared-provide (see [`provenance_message`]). Empty = unsigned.
+    /// The content hash gives *integrity* (the bytes are what the catalog named); this gives
+    /// *provenance* (a trusted publisher vouched for these bytes **as** this capability and kind —
+    /// a signed artifact cannot be re-labeled under a different capability or kind and still
+    /// verify). Cost hints stay outside the signature: they are ranking hints, not security claims.
     ///
-    /// [`verify_provenance`]: Self::verify_provenance
+    /// [`provenance_message`]: Self::provenance_message
     pub signer:            Vec<u8>, // 32-byte verifying key, or empty
-    pub signature:         Vec<u8>, // 64-byte signature over artifact.as_bytes(), or empty
+    pub signature:         Vec<u8>, // 64-byte signature over provenance_message(), or empty
 }
 
 impl InstallableEntry {
-    /// A catalog entry for `provides`, pulled from `artifact`.
+    /// A catalog entry for `provides`, pulled from `artifact`. Defaults to
+    /// [`ArtifactKind::WasmComponent`]; see [`with_kind`](Self::with_kind).
     pub fn new(provides: Capability, artifact: ArtifactId) -> Self {
         Self {
             provides,
+            kind: ArtifactKind::WasmComponent,
             artifact,
             size_bytes: 0,
             est_install_secs: 0,
             signer: Vec::new(),
             signature: Vec::new(),
         }
+    }
+
+    /// Set the artifact kind (install dispatch — `docs/design/artifact-library.md` §4).
+    pub fn with_kind(mut self, kind: ArtifactKind) -> Self {
+        self.kind = kind;
+        self
     }
 
     /// Attach ranking hints used by [`InstallableCatalog::resolve_best`].
@@ -66,19 +86,37 @@ impl InstallableEntry {
         self
     }
 
-    /// Sign the content address with `signing_key`, attaching publisher provenance. A provisioner
+    /// The domain-separated message provenance signs: binds the signature to the whole entry —
+    /// format version, kind, content address, and declared-provide capability. Signing only the
+    /// content address would let anyone re-publish a trusted publisher's artifact under a
+    /// different capability or kind with provenance still verifying.
+    fn provenance_message(&self) -> Vec<u8> {
+        let cap = self.provides.encode();
+        let mut m = Vec::with_capacity(24 + 2 + 32 + cap.len());
+        m.extend_from_slice(b"mycelium-installable-v1");
+        m.push(ENTRY_FORMAT_VERSION);
+        m.push(self.kind.as_u8());
+        m.extend_from_slice(self.artifact.as_bytes());
+        m.extend_from_slice(&cap);
+        m
+    }
+
+    /// Sign the entry with `signing_key`, attaching publisher provenance. A provisioner
     /// configured with the matching verifying key (see `Provisioner::require_provenance`) then only
-    /// installs artifacts a trusted publisher vouched for.
+    /// installs artifacts a trusted publisher vouched for. Call **after** `with_kind` — the
+    /// signature covers the kind and declared-provide (not the cost hints).
     pub fn signed_by(mut self, signing_key: &ed25519_dalek::SigningKey) -> Self {
         use ed25519_dalek::Signer;
-        let sig = signing_key.sign(self.artifact.as_bytes());
+        let sig = signing_key.sign(&self.provenance_message());
         self.signer = signing_key.verifying_key().to_bytes().to_vec();
         self.signature = sig.to_bytes().to_vec();
         self
     }
 
     /// Verify provenance: the entry is signed, the signer is in `trusted`, and the signature is a
-    /// valid Ed25519 signature over the content address. An unsigned entry is **not** trusted.
+    /// valid Ed25519 signature over [`provenance_message`](Self::provenance_message). An unsigned
+    /// entry is **not** trusted; neither is a signed entry whose kind, artifact, or
+    /// declared-provide was altered after signing.
     pub fn verify_provenance(&self, trusted: &[[u8; 32]]) -> bool {
         use ed25519_dalek::{Signature, Verifier, VerifyingKey};
         let (Ok(signer), Ok(sig_bytes)) =
@@ -90,15 +128,18 @@ impl InstallableEntry {
             return false;
         }
         let Ok(vk) = VerifyingKey::from_bytes(&signer) else { return false };
-        vk.verify(self.artifact.as_bytes(), &Signature::from_bytes(&sig_bytes)).is_ok()
+        vk.verify(&self.provenance_message(), &Signature::from_bytes(&sig_bytes)).is_ok()
     }
 
-    /// Serialize for gossip: `[32B artifact][8B size][8B est][1B signed][32B signer +64B sig if
-    /// signed][Capability bytes]`. Built on the public `Capability::encode` (no internal codec).
+    /// Serialize for gossip: `[1B version][1B kind][32B artifact][8B size][8B est][1B signed]
+    /// [32B signer + 64B sig if signed][Capability bytes]`. Built on the public
+    /// `Capability::encode` (no internal codec).
     pub fn encode(&self) -> Vec<u8> {
         let cap = self.provides.encode();
         let signed = self.signer.len() == 32 && self.signature.len() == 64;
-        let mut out = Vec::with_capacity(49 + if signed { 96 } else { 0 } + cap.len());
+        let mut out = Vec::with_capacity(51 + if signed { 96 } else { 0 } + cap.len());
+        out.push(ENTRY_FORMAT_VERSION);
+        out.push(self.kind.as_u8());
         out.extend_from_slice(self.artifact.as_bytes());
         out.extend_from_slice(&self.size_bytes.to_le_bytes());
         out.extend_from_slice(&self.est_install_secs.to_le_bytes());
@@ -111,17 +152,19 @@ impl InstallableEntry {
         out
     }
 
-    /// Inverse of [`encode`](Self::encode).
+    /// Inverse of [`encode`](Self::encode). `None` for an unknown format version or kind byte —
+    /// a node never guesses at an entry it cannot fully name (the caller counts the rejection).
     pub fn decode(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() < 49 {
+        if bytes.len() < 51 || bytes[0] != ENTRY_FORMAT_VERSION {
             return None;
         }
+        let kind = ArtifactKind::from_u8(bytes[1])?;
         let mut id = [0u8; 32];
-        id.copy_from_slice(&bytes[0..32]);
-        let size_bytes = u64::from_le_bytes(bytes[32..40].try_into().ok()?);
-        let est_install_secs = u64::from_le_bytes(bytes[40..48].try_into().ok()?);
-        let signed = bytes[48] == 1;
-        let mut off = 49;
+        id.copy_from_slice(&bytes[2..34]);
+        let size_bytes = u64::from_le_bytes(bytes[34..42].try_into().ok()?);
+        let est_install_secs = u64::from_le_bytes(bytes[42..50].try_into().ok()?);
+        let signed = bytes[50] == 1;
+        let mut off = 51;
         let (signer, signature) = if signed {
             if bytes.len() < off + 96 {
                 return None;
@@ -136,6 +179,7 @@ impl InstallableEntry {
         let provides = Capability::decode(&bytes[off..])?;
         Some(Self {
             provides,
+            kind,
             artifact: ArtifactId::from_bytes(id),
             size_bytes,
             est_install_secs,
@@ -159,6 +203,166 @@ impl InstallableEntry {
 /// every provisioner that builds its catalog via [`InstallableCatalog::from_kv`] then sees it.
 pub fn publish_installable(kv: &KvHandle, entry: &InstallableEntry) -> bool {
     kv.set(entry.kv_key(), entry.encode())
+}
+
+/// Conventional filename of a library's manifest inside its blob directory. Not 64-hex, so
+/// `FsLibrarySource::list` never mistakes it for a blob.
+pub const MANIFEST_FILE: &str = "manifest";
+
+/// The library's own catalogue file — what makes a blob directory **self-describing**
+/// (`docs/design/artifact-library.md` §2). One [`InstallableEntry`] per line, lowercase hex of
+/// the canonical [`InstallableEntry::encode`] — signatures included, because entries are signed
+/// when *added to the library* (by CI holding the publisher key), so librarian nodes serve
+/// pre-signed entries and never hold signing keys.
+///
+/// The manifest is the **library's source of truth**; the gossiped `installable/` catalogue is
+/// the *cluster's view* of it. A librarian keeps the view current by diffing manifest revisions
+/// ([`Manifest::diff`]) — publishing added entries, tombstoning removed ones — scoped to its own
+/// publisher's entries, so a library removal never clobbers another publisher's announcement.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Manifest {
+    entries: Vec<InstallableEntry>,
+}
+
+impl Manifest {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn from_entries(entries: Vec<InstallableEntry>) -> Self {
+        Self { entries }
+    }
+
+    pub fn entries(&self) -> &[InstallableEntry] {
+        &self.entries
+    }
+
+    pub fn add(&mut self, entry: InstallableEntry) {
+        self.entries.push(entry);
+    }
+
+    /// Render to the line-hex format (one encoded entry per line).
+    pub fn render(&self) -> String {
+        let mut out = String::new();
+        for e in &self.entries {
+            for b in e.encode() {
+                use std::fmt::Write;
+                let _ = write!(out, "{b:02x}");
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Parse the line-hex format. A malformed line is an **error**, not a skip — the manifest is
+    /// the library's source of truth, and silent corruption is exactly what must be detected.
+    pub fn parse(text: &str) -> Result<Self, ManifestError> {
+        let mut entries = Vec::new();
+        for (lineno, line) in text.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let bytes = hex_line(line).ok_or(ManifestError::BadLine(lineno + 1))?;
+            let entry =
+                InstallableEntry::decode(&bytes).ok_or(ManifestError::BadLine(lineno + 1))?;
+            entries.push(entry);
+        }
+        Ok(Self { entries })
+    }
+
+    /// Load from `path`. A missing file is an empty manifest (a new library); a malformed one is
+    /// an error.
+    pub fn load(path: &std::path::Path) -> Result<Self, ManifestError> {
+        match std::fs::read_to_string(path) {
+            Ok(text) => Self::parse(&text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::new()),
+            Err(e) => Err(ManifestError::Io(e)),
+        }
+    }
+
+    /// Save to `path`, complete-or-absent (temp write + rename — a concurrent reader never
+    /// observes a torn manifest).
+    pub fn save(&self, path: &std::path::Path) -> Result<(), ManifestError> {
+        let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let tmp = dir.join(format!(
+            ".tmp-manifest-{}-{}",
+            std::process::id(),
+            TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        ));
+        std::fs::write(&tmp, self.render()).map_err(ManifestError::Io)?;
+        std::fs::rename(&tmp, path).map_err(ManifestError::Io)
+    }
+
+    /// Diff two manifest revisions into the librarian's sync actions:
+    /// `(to_publish, to_tombstone)`. An entry is *published* when its KV key is new **or** its
+    /// encoded value changed (LWW republish overwrites in place); *tombstoned* when its key
+    /// disappeared. Keys are [`InstallableEntry::kv_key`].
+    pub fn diff(old: &Manifest, new: &Manifest) -> (Vec<InstallableEntry>, Vec<InstallableEntry>) {
+        use std::collections::HashMap;
+        let old_by_key: HashMap<String, &InstallableEntry> =
+            old.entries.iter().map(|e| (e.kv_key(), e)).collect();
+        let new_keys: std::collections::HashSet<String> =
+            new.entries.iter().map(|e| e.kv_key()).collect();
+
+        let to_publish = new
+            .entries
+            .iter()
+            .filter(|e| old_by_key.get(&e.kv_key()).is_none_or(|o| o.encode() != e.encode()))
+            .cloned()
+            .collect();
+        let to_tombstone = old
+            .entries
+            .iter()
+            .filter(|e| !new_keys.contains(&e.kv_key()))
+            .cloned()
+            .collect();
+        (to_publish, to_tombstone)
+    }
+}
+
+/// Why a [`Manifest`] failed to load or save.
+#[derive(Debug)]
+pub enum ManifestError {
+    /// Line `n` (1-indexed) is not a hex-encoded, decodable [`InstallableEntry`].
+    BadLine(usize),
+    Io(std::io::Error),
+}
+
+impl std::fmt::Display for ManifestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BadLine(n) => write!(f, "manifest line {n} is not a valid installable entry"),
+            Self::Io(e) => write!(f, "manifest io error: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for ManifestError {}
+
+/// Decode one even-length lowercase/uppercase hex line.
+fn hex_line(s: &str) -> Option<Vec<u8>> {
+    if !s.len().is_multiple_of(2) {
+        return None;
+    }
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(s.len() / 2);
+    for i in (0..b.len()).step_by(2) {
+        let hi = hex_nibble(b[i])?;
+        let lo = hex_nibble(b[i + 1])?;
+        out.push((hi << 4) | lo);
+    }
+    Some(out)
+}
+
+fn hex_nibble(c: u8) -> Option<u8> {
+    match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        b'A'..=b'F' => Some(c - b'A' + 10),
+        _ => None,
+    }
 }
 
 /// A catalog of installable artifacts to resolve requirements against.
@@ -338,5 +542,118 @@ mod tests {
         assert_eq!(best.artifact, art(b"small"), "lowest size, then lowest est time");
 
         assert!(cat.resolve_best(&CapFilter::new("nope", "nope")).is_none());
+    }
+
+    #[test]
+    fn kind_round_trips_and_defaults_to_wasm_component() {
+        use crate::artifact::ArtifactKind;
+        let e = InstallableEntry::new(cap("llm", "weights"), art(b"model.onnx"));
+        assert_eq!(e.kind, ArtifactKind::WasmComponent, "default kind");
+
+        let blob = e.with_kind(ArtifactKind::Blob);
+        let back = InstallableEntry::decode(&blob.encode()).expect("decode blob entry");
+        assert_eq!(back.kind, ArtifactKind::Blob);
+        assert_eq!(back.provides.name.as_ref(), "weights");
+    }
+
+    #[test]
+    fn decode_rejects_unknown_version_and_unknown_kind() {
+        let good = InstallableEntry::new(cap("v", "d"), art(b"x")).encode();
+
+        let mut wrong_version = good.clone();
+        wrong_version[0] = ENTRY_FORMAT_VERSION + 1;
+        assert!(InstallableEntry::decode(&wrong_version).is_none(), "future version invisible");
+
+        let mut wrong_kind = good;
+        wrong_kind[1] = 0xEE;
+        assert!(InstallableEntry::decode(&wrong_kind).is_none(), "unknown kind invisible");
+    }
+
+    #[test]
+    fn provenance_binds_the_whole_entry_not_just_the_bytes() {
+        use crate::artifact::ArtifactKind;
+        use ed25519_dalek::SigningKey;
+        let sk = SigningKey::from_bytes(&[11u8; 32]);
+        let vk = sk.verifying_key().to_bytes();
+        let entry = InstallableEntry::new(cap("llm", "summarize"), art(b"a.wasm"))
+            .with_kind(ArtifactKind::WasmComponent)
+            .signed_by(&sk);
+        assert!(entry.verify_provenance(&[vk]));
+
+        // Re-labeling a signed artifact under a different capability must break provenance…
+        let mut relabeled = entry.clone();
+        relabeled.provides = cap("admin", "root-shell");
+        assert!(!relabeled.verify_provenance(&[vk]), "capability re-label fails the signature");
+
+        // …and so must flipping the kind (install method) after signing.
+        let mut rekinded = entry.clone();
+        rekinded.kind = ArtifactKind::Blob;
+        assert!(!rekinded.verify_provenance(&[vk]), "kind flip fails the signature");
+
+        // Cost hints are outside the signature (ranking hints, not security claims).
+        let mut rehinted = entry;
+        rehinted.size_bytes = 999;
+        assert!(rehinted.verify_provenance(&[vk]), "cost hints may be updated without re-signing");
+    }
+
+    fn scratch_manifest_path(tag: &str) -> std::path::PathBuf {
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "mycelium-manifest-{tag}-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join(MANIFEST_FILE)
+    }
+
+    #[test]
+    fn manifest_saves_loads_and_preserves_signatures() {
+        use ed25519_dalek::SigningKey;
+        let sk = SigningKey::from_bytes(&[13u8; 32]);
+        let vk = sk.verifying_key().to_bytes();
+
+        let mut m = Manifest::new();
+        m.add(InstallableEntry::new(cap("route", "optimize"), art(b"opt")).with_cost(10, 1).signed_by(&sk));
+        m.add(InstallableEntry::new(cap("llm", "weights"), art(b"w"))
+            .with_kind(crate::artifact::ArtifactKind::Blob));
+
+        let path = scratch_manifest_path("roundtrip");
+        m.save(&path).expect("save");
+        let back = Manifest::load(&path).expect("load");
+        assert_eq!(back, m, "line-hex round trip is lossless");
+        assert!(back.entries()[0].verify_provenance(&[vk]), "signature survives the manifest");
+
+        // A missing manifest is an empty (new) library; a corrupt one is an error, not a skip.
+        let missing = Manifest::load(&path.with_file_name("nonexistent")).expect("missing = empty");
+        assert!(missing.entries().is_empty());
+        std::fs::write(&path, "deadbeef-not-an-entry\n").unwrap();
+        assert!(matches!(Manifest::load(&path), Err(ManifestError::BadLine(1))));
+
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn manifest_diff_yields_publish_and_tombstone_sets() {
+        let a = InstallableEntry::new(cap("route", "optimize"), art(b"opt-v1"));
+        let b = InstallableEntry::new(cap("llm", "weights"), art(b"w"));
+        let c = InstallableEntry::new(cap("vision", "detect"), art(b"d"));
+        let old = Manifest::from_entries(vec![a.clone(), b.clone()]);
+
+        // c added, a's hints changed in place (same key), b removed.
+        let a_rehinted = a.clone().with_cost(5_000, 2);
+        let new = Manifest::from_entries(vec![a_rehinted.clone(), c.clone()]);
+
+        let (publish, tombstone) = Manifest::diff(&old, &new);
+        let publish_keys: Vec<String> = publish.iter().map(|e| e.kv_key()).collect();
+        assert!(publish_keys.contains(&c.kv_key()), "new entry published");
+        assert!(publish_keys.contains(&a_rehinted.kv_key()), "changed entry republished (LWW)");
+        assert_eq!(publish.len(), 2);
+        assert_eq!(tombstone.len(), 1);
+        assert_eq!(tombstone[0].kv_key(), b.kv_key(), "removed entry tombstoned");
+
+        // Identical revisions are a no-op sync.
+        let (p2, t2) = Manifest::diff(&new, &new);
+        assert!(p2.is_empty() && t2.is_empty());
     }
 }
