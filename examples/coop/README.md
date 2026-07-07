@@ -60,6 +60,7 @@ write-up is [guide chapter 14](../../docs/guide/14-patterns-and-pitfalls.md); th
 | `consensus` | commitments are promise-strength (an empty bloc can't be coerced) |
 | `llm_council` | keep fan-in joins to a single synthesizer today (keyed fan-in is M13) |
 | `mcp_toolgrowth` | bridge an MCP tool by *also* advertising a `tool/` capability |
+| `catalog` | the library is an origin tier, not a read dependency (don't make installs require the origin alive — a peer's cache verifies identically) |
 | all | structural polls, never fixed sleeps; bind N ports at once |
 
 ### 01 — `mailbox_llm`
@@ -258,17 +259,25 @@ cargo run -p mycelium-coop-examples --bin catalog
 ```
 
 The **cluster-wide artifact catalogue**, end to end — the real path that demo 04's node-local
-`InMemorySource` shortcut stands in for. A `publisher` node **serves** the route-optimizer bytes
-(`serve_artifacts`) and **registers** a signed catalogue entry (`publish_installable` →
-`installable/` gossiped KV). An `installer` node **discovers** the entry via
-`InstallableCatalog::from_kv` (no registry server — the catalogue *is* the gossip store), **verifies
-its provenance**, **pulls the bytes over the mesh** (`MeshArtifactSource`, verified against the
-content address), provisions the WASM component, and advertises + serves the `route/optimize`
-capability. A `caller` then invokes it.
+`InMemorySource` shortcut stands in for, with no build-time embedding and no hardcoded providers.
+CI (plain code, no node) reads the component **from disk at runtime**, stores it in a durable
+**library** (`FsLibrarySource` directory + Ed25519-**signed manifest** — publisher keys never
+touch a node). A `librarian` node takes the role (`spawn_librarian`): serves the library's bytes,
+advertises `artifact/librarian`, and syncs manifest → `installable/` catalogue. An `installer`
+**discovers** the entry via `InstallableCatalog::from_kv` (no registry server — the catalogue
+*is* the gossip store), **verifies provenance**, pulls via `MeshArtifactSource::resolving` (the
+holder is *discovered through the capability ring*), provisions the WASM component, serves
+`route/optimize` — and **re-serves its verified cache** as a peer holder. A `caller` invokes it.
+Then the librarian is killed **and the library directory deleted** — the origin tier is gone —
+and a `late` node joins, still finds the catalogue entry (ordinary KV), and installs **from the
+installer's cache**: same hash, same verify, holders are interchangeable.
 
 **Philosophy beat:** the catalogue is not a server you deploy — it's gossiped KV, so it's as
-available as the cluster. The byte source is untrusted (content-addressed), and provenance is the
-publisher's signature. Full operator + developer guide: [operations/artifacts.md](../../docs/operations/artifacts.md).
+available as the cluster. The library is an **origin tier, never a mandatory read path**: content
+addressing makes every holder (librarian or peer cache) equally verifiable, so losing the origin
+pauses nothing that any live holder can serve. Full operator + developer guide:
+[operations/artifacts.md](../../docs/operations/artifacts.md); design record:
+[design/artifact-library.md](../../docs/design/artifact-library.md).
 
 ## CI
 
