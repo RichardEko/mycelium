@@ -11,6 +11,14 @@
 //! (or bypassed in mock mode). All capability advertisement is config-driven —
 //! no capability is hardcoded in the application.
 //!
+//! **The install-progress percent loops in this example are SIMULATED** (fixed-interval
+//! ticks): its subject is capability-tier UX and config-driven advertisement, and it
+//! deliberately stays free of the wasmtime dependency (`make check`'s no-wasmtime gate).
+//! The *real* install machinery — content-addressed pull from a durable library, chunked
+//! with progress from actual bytes driving the same `loading` tiers, probe-gated ready —
+//! is `mycelium-wasm-host` (`BlobRuntime` + `Provisioner`; design record
+//! `docs/design/artifact-library.md`; live demos: coop `catalog` + `mcp_toolgrowth`).
+//!
 //! Tool discovery is hybrid: the planning loop merges MCP tools (registered via
 //! `register_mcp_tool`, stored under `tools/`) with SkillRunner skills (from
 //! `.skill.toml` nodes, stored under `skills/`). Any skill running on the gossip
@@ -288,7 +296,9 @@ async fn run_vector_search_provision_handler(agent: Arc<GossipAgent>, log: Share
         agent.service().rpc_respond(&req, Bytes::from_static(b"accepted"));
         push_log(&log, "Provision", "vector-search accepted");
 
-        // loading tier — 2 s re-assertion so progress updates stay fresh
+        // loading tier — 2 s re-assertion so progress updates stay fresh.
+        // SIMULATED progress (fixed ticks): the real equivalent is BlobRuntime's chunked
+        // pull driving the provisioner's loading tier from actual bytes (mycelium-wasm-host).
         let mut loading_h = agent.capabilities().advertise_capability(
             Capability::new("data", "loading")
                 .with("name",     CapValue::Text("vector-search".into()))
@@ -341,6 +351,9 @@ async fn run_llm_provision_handler(agent: Arc<GossipAgent>, base_url: String, lo
 
         agent.service().rpc_respond(&req, Bytes::from_static(b"pulling"));
         push_log(&log, "LLM Provision", format!("pulling model={model}"));
+
+        // SIMULATED pull (fixed ticks) — a real model pull is a Blob-kind artifact streamed
+        // from the library with progress from actual bytes (mycelium-wasm-host BlobRuntime).
 
         let mut loading_h = agent.capabilities().advertise_capability(
             Capability::new("llm", "loading")
