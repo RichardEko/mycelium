@@ -64,6 +64,12 @@ name = "catalog"
 path = "src/bin/catalog.rs"
 required-features = ["wasm"]
 
+# Manual demo (needs a local Ollama daemon + a GGUF file) — deliberately NOT in ci_smoke.sh.
+[[bin]]
+name = "model_deploy"
+path = "src/bin/model_deploy.rs"
+required-features = ["wasm"]
+
 [dependencies]
 # The full substrate (gateway is default-on; tls for node identity / the facts lens; llm for the
 # Prompt Skills used by the mailbox-llm demo).

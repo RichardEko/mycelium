@@ -95,7 +95,9 @@ operator concern (wrap a KMS); the demo uses a fixed seed.
   catalogue reconciled to the manifest. The library is an *origin tier*, never a
   mandatory read path — peers that pulled an artifact serve the same verified
   bytes. Design record: [design/artifact-library.md](../design/artifact-library.md);
-  live demo: the coop `catalog` example (origin dies, installs continue).
+  live demos: the coop `catalog` example (origin dies, installs continue) and
+  `model_deploy` (manual — a real GGUF deployed end-to-end into Ollama, generating
+  real tokens).
 
 ### Sharing a catalogue across clusters
 

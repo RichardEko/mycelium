@@ -44,6 +44,7 @@ curl http://127.0.0.1:<printed-port>/.well-known/agent-facts.json
 | 09 | `mcp_toolgrowth` | ✅ shipped | an LLM agent grows the fabric's toolset at runtime — declares a need, the tool's **code arrives** (catalogue → pull → verify → instantiate), is bridged over MCP, then invoked |
 | 10 | `llm_council` | ✅ shipped | a council of **differentiated** LLM agents deliberates a shared task — fan-out → synthesis → iterative refinement, all via the tuple space |
 | 11 | `catalog` | ✅ shipped | the **cluster-wide artifact catalogue** — register a deployable, discover it via gossip, pull bytes over the mesh, provision & invoke (no registry server) |
+| M | `model_deploy` | ✅ shipped (manual) | **a real LLM model deployed through the artifact library** — GGUF → library → catalogue → resource-checked election → streamed with live percent → `ollama create` → probe-gated → real tokens generated. Needs Ollama; not in `ci_smoke` |
 
 ## Patterns & pitfalls
 
@@ -287,6 +288,29 @@ addressing makes every holder (librarian or peer cache) equally verifiable, so l
 pauses nothing that any live holder can serve. Full operator + developer guide:
 [operations/artifacts.md](../../docs/operations/artifacts.md); design record:
 [design/artifact-library.md](../../docs/design/artifact-library.md).
+
+### M — `model_deploy` (manual — a real LLM through the library)
+
+```bash
+# needs: ollama daemon running + any GGUF file (19 MB TinyStories shown)
+curl -L -o /tmp/stories15M-q4_0.gguf \
+  https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories15M-q4_0.gguf
+MODEL_GGUF=/tmp/stories15M-q4_0.gguf \
+  cargo run -p mycelium-coop-examples --features wasm --bin model_deploy
+```
+
+The Blob path proven with **nothing simulated**: a genuine GGUF is published to the durable
+library (runtime read, signed entry with kind + cost + **resource footprint**), a librarian
+syncs the catalogue, a model-host **self-elects under the real resource probe**, streams the
+model **direct from the store** (design §5 — the mesh RPC's 10 MiB frame is for WASM-sized
+artifacts) with the `llm/loading` percent driven by actual bytes, places it, **activates it
+into Ollama** (`ollama create` from the placed file), probe-gates the capability on the
+activation health bit — and an `app` node then **generates real tokens** through the deployed
+model via `OpenAiBackend`. Deliberately **not** in `ci_smoke.sh` (needs Ollama + a model);
+run it when you want to see the artifact library move something real.
+
+**Philosophy beat:** the same demand→provision loop as 04/09/11 — but the artifact is a
+neural network, the progress bar is honest, and the proof is the story it tells you.
 
 ## CI
 
