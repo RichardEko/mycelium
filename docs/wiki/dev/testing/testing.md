@@ -74,3 +74,12 @@ guard's lifetime (added Run 28 after exactly this race).
 
 Use `crate::test_util::alloc_port` (process-unique, bind-verified, confined below the OS
 ephemeral floor — PR #110 retired the parallel-suite flake family). Never hardcode.
+
+Companion-crate integration tests that can't reach `test_util` and bind real agents must
+**retry the bind, never bare-`unwrap` it**: the bind-`:0`-read-drop idiom (`free_port()`)
+opens a TOCTOU window against parallel test binaries (`AddrInUse` flaked
+`mycelium-wiki/tests/failover.rs` in CI, 2026-07-07). Retry at the granularity the topology
+forces: per-agent with fresh ports when nodes join one at a time (the wasm-host tests'
+16-attempt loop), **per-pair** when mutual bootstrap fixes both ports before either agent
+starts (`start_pair()` in the wiki tests — shut the half-started survivor down before
+re-attempting, and shut a discarded `Wiki` down explicitly, the Run-32 task-leak lesson).

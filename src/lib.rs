@@ -107,6 +107,15 @@
 //! | `cap/{node}/llm/loading`           | LLM model pull in progress (model, progress 0–100 attrs)     |
 //! | `cap/{node}/{ns}/installable`      | Any dynamically provisionable software capability             |
 //! | `cap/{node}/{ns}/loading`          | Provisioning in progress; `progress` attr 0–100              |
+//! | `svc/{kind}/{node}`                | Persistent capability advertisements (`advertise_persistent`; tombstoned on handle drop) |
+//! | `log/{stream}/{hlc_hex}`           | Append-only KV log entries (`KvHandle::append`)              |
+//! | `clog/{…}`                         | Consumer positions for group log subscription (`subscribe_log_group`) |
+//! | `lock/{name}`                      | Distributed lock state (JSON holder/token/expiry; tombstoned on `LockGuard` drop) |
+//! | `prompts/{ns}/{name}`              | LLM prompt templates (`llm` feature; configuration — the `cap/` entry is the presence heartbeat) |
+//! | `skills/{ns}/{name}/{node}/input\|output` | SkillRunner skill registrations (signal-kind routing for `skill.invoke`) |
+//! | `installable/{ns}/{name}/{hex}`    | `mycelium-wasm-host` — the artifact catalogue (encoded `InstallableEntry`: kind, content address, cost hints, signed resource requirements) |
+//! | `comp/{node}/{ns}/…`               | `mycelium-wasm-host` — confined component KV (a WASM guest's scoped subtree; the host's enforcement point) |
+//! | `wiki/{group}/proposal/{id}`       | `mycelium-wiki` companion — evaporating edit proposals (drained by the curator) |
 //! | `tuple/inflight/{ns}/{id}`         | `mycelium-tuple-space` companion — advisory in-flight claim (JSON value; expiry is read-side, swept by the primary) |
 //! | `sys/tuple/{node}/{ns}/…`          | `mycelium-tuple-space` companion — monitoring counters, role, and the backpressure pheromone (`…/pressure/{stage}`) |
 //!

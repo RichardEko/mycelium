@@ -31,7 +31,7 @@ All three are also programmatic (**diagnostics as data**): `agent.fleet_snapshot
 `fleet_diagnosis()`. Operator runbook (one entry per pathology + Prometheus alert recipes):
 [operations/diagnostics.md](../../operations/diagnostics.md).
 
-Governance surface: `POST /gateway/govern/{tuning,membership}` + `GET /gateway/govern`
+Governance surface: `POST /gateway/govern/{timing,tuning,membership}` + `GET /gateway/govern`
 (deny-by-default scopes, WS2-audited) — see
 [management-as-intent](../domain/theory/management-as-intent.md) for the model.
 

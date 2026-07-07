@@ -35,6 +35,15 @@ invariant held, but only by luck of review. The doc-vs-code lint (schema §Lint)
 | 20 | `MeshArtifactSource::cache` | `std::sync::Mutex<HashMap<ArtifactId, Bytes>>` | `prefetch()` (contains/insert), `fetch()` (get) (`mycelium-wasm-host/src/mesh_source.rs`) | Leaf; single-statement ops; released before the `pull_artifact` await inside `prefetch` (added retroactively — pre-dated this row, found in the artifact-library session 2026-07-07) |
 | 21 | `Provisioner::hosted` | `Arc<Mutex<HashMap<ArtifactId, HostedState>>>` | `provision_round` passes (`is_hosted`), `start_install` reservation, install-task completion swap, `withdraw`, counts, `reserved_requirements` (resource eligibility, §4.4) (`mycelium-wasm-host/src/provisioner.rs`) | Leaf; acquired once per function, never across `await`; install tasks lock once at completion (token-checked swap), teardown of a superseded install runs *outside* the lock |
 | 22 | install-task loading tier (local) | `Arc<Mutex<(u64, Option<CapabilityReg>)>>` | the `ProgressFn` closure + post-install drop in `start_install`'s spawned task (`mycelium-wasm-host/src/provisioner.rs`) | Leaf, task-local (not a struct field); callback runs on the runtime's pull thread (`spawn_blocking`) — sync only, never across `await`; guards the last-pct step + the `{ns}/loading` advertisement handle |
+| 23 | `PrefetchingSource::cache` | `std::sync::Mutex<HashMap<ArtifactId, Bytes>>` | `prefetch()`/`prefetch_all()` (contains/insert), `fetch()` (get) (`mycelium-wasm-host/src/http_source.rs`) | Leaf; single-statement ops; released before the `fetch_remote` await inside `prefetch` — same shape as row 20 |
+
+**Scope (made explicit 2026-07-07):** the table covers `mycelium-core`, `mycelium`, and
+`mycelium-wasm-host`. The data-plane companion crates (`mycelium-tuple-space`,
+`mycelium-blackboard`, `mycelium-wiki`) hold their own lock sites (~20 — store/WAL inners,
+role registrations, task lists) that are **not** inventoried here; they follow the same
+one-lock-per-function flat discipline, documented at their declaration sites. Whether to
+extend this table to a full workspace inventory is an open decision — flagged by the
+2026-07-07 lint, not taken unilaterally.
 
 **Async contexts:** guards from every *sync* lock above are `!Send` across `await`
 (`std::sync` and default `parking_lot` alike) — the compiler enforces it for spawned
