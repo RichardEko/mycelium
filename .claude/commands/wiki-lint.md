@@ -6,17 +6,28 @@ what it finds. Four checks, most-valuable first. Record the pass as a dated
 
 For every wiki-page claim that cites code, confirm the code still says it. Minimum sweep:
 
-- **Lock-order table** (`docs/wiki/dev/concurrency/lock-order.md`): grep the workspace for
-  `Mutex<` / `RwLock<` field declarations outside test modules
-  (`grep -rn "Mutex<\|RwLock<" src/ mycelium-core/src/ --include='*.rs'`) **and** for lock-
-  wrapping type aliases (`grep -rn "^type \|^pub type" … | grep -i "mutex\|rwlock"`) — an
-  alias hides the lock from the field grep (the 2026-07-02 lint found `SenderLog` exactly
-  this way). Diff both against the table's rows. Any undeclared site = a finding (this
-  drift shipped once — analysis Run 28, calibration ledger 2026-07-02).
+- **Lock-order table** (`docs/wiki/dev/concurrency/lock-order.md`): grep the **whole
+  workspace** — the table's scope is all crates since 2026-07-07 (rows 24–30 added the
+  companions; the old `src/ mycelium-core/src/` sweep was the blind spot that hid them):
+  `grep -rn "Mutex<\|RwLock<" src/ mycelium-core/src/ mycelium-*/src/ --include='*.rs'`
+  outside test modules, **and** for lock-wrapping type aliases
+  (`grep -rn "^type \|^pub type" … | grep -i "mutex\|rwlock"`) — an alias hides the lock
+  from the field grep (the 2026-07-02 lint found `SenderLog` exactly this way). Diff both
+  against the table's rows — grouped rows list every field name, so the diff is by name.
+  Any undeclared site = a finding (this drift shipped once — analysis Run 28, calibration
+  ledger 2026-07-02).
 - **Named regression gates**: every test cited by name in a wiki page still exists
-  (`grep -rn "<test_name>" src/ mycelium-core/src/`). A renamed/deleted gate = a finding.
+  (`grep -rn "<test_name>" src/ mycelium-core/src/ mycelium-*/src/ mycelium-*/tests/`).
+  A renamed/deleted gate = a finding.
 - **Cited constants/flags** (e.g. `MAX_KV_WRITE_BYTES`, `WIRE_VERSION`/`PREV_WIRE_VERSION`,
   `swim_failure_detector` default): read the cited file and confirm the stated value/default.
+- **KV-namespace table** (`src/lib.rs` §KV namespace ownership — code canon, but it drifts
+  like a doc): grep the workspace for KV prefix writers
+  (`kv_ns::` constants in `mycelium-core/src/signal.rs`, `format!("…/` keys in `kv.set`/
+  `kv_set`/`publish_*` call sites, incl. companions) and confirm every live prefix has a
+  row. The 2026-07-07 lint found NINE missing (`svc/ log/ clog/ lock/ prompts/ skills/
+  installable/ comp/ wiki/`) — the front-door reserved list had inherited the same gap
+  because it was only ever diffed against this table, not against code.
 - **Endpoint/feature lists** (`docs/wiki/dev/operations.md`): spot-check against
   `src/agent/http.rs` routes and `Cargo.toml` features.
 - **External front-door docs that *restate* code facts** — `docs/guide/building-on-mycelium.md`

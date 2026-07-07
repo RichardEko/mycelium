@@ -36,14 +36,19 @@ invariant held, but only by luck of review. The doc-vs-code lint (schema §Lint)
 | 21 | `Provisioner::hosted` | `Arc<Mutex<HashMap<ArtifactId, HostedState>>>` | `provision_round` passes (`is_hosted`), `start_install` reservation, install-task completion swap, `withdraw`, counts, `reserved_requirements` (resource eligibility, §4.4) (`mycelium-wasm-host/src/provisioner.rs`) | Leaf; acquired once per function, never across `await`; install tasks lock once at completion (token-checked swap), teardown of a superseded install runs *outside* the lock |
 | 22 | install-task loading tier (local) | `Arc<Mutex<(u64, Option<CapabilityReg>)>>` | the `ProgressFn` closure + post-install drop in `start_install`'s spawned task (`mycelium-wasm-host/src/provisioner.rs`) | Leaf, task-local (not a struct field); callback runs on the runtime's pull thread (`spawn_blocking`) — sync only, never across `await`; guards the last-pct step + the `{ns}/loading` advertisement handle |
 | 23 | `PrefetchingSource::cache` | `std::sync::Mutex<HashMap<ArtifactId, Bytes>>` | `prefetch()`/`prefetch_all()` (contains/insert), `fetch()` (get) (`mycelium-wasm-host/src/http_source.rs`) | Leaf; single-statement ops; released before the `fetch_remote` await inside `prefetch` — same shape as row 20 |
+| 24 | `TupleStore::inner` (per-stage `StageInner`) / `::queue_waits_us` / `::inflight` | `parking_lot::Mutex<…>` | take/complete/requeue/sweep + latency sampling (`mycelium-tuple-space/src/store.rs`) | Store-internal leaves, sync methods only. The per-stage `inner` is the exactly-once **claim** lock (single-owner take); `inflight` is the crash-requeue registry. Never held while acquiring another row |
+| 25 | tuple-space `WalInner::inner` | `parking_lot::Mutex<WalInner>` | WAL append / checkpoint / replay (`mycelium-tuple-space/src/store.rs:993`) | Leaf; short synchronous file ops under the guard (the WAL is single-writer by construction) |
+| 26 | `TupleSpace::{store, primary_reg, role_reg, replay_cursor, last_heartbeat_sender, mirror_stages, tasks}` | `parking_lot::Mutex<…>` (7 fields) | role election/failover, mirror replay, lifecycle (`mycelium-tuple-space/src/lib.rs`) | Handle-level leaves: single-statement or scoped-block guards, sequential (never nested). One nuance: `init_store` holds the `store` slot guard across store *construction* (WAL open/replay) — the freshly-built row-24/25 locks are unshared until published, so no ordering hazard. `shutdown` drains `tasks` as its own statement |
+| 27 | `BoardStore::inner` | `parking_lot::Mutex<BoardInner>` | post/claim/ack/sweep (`mycelium-blackboard/src/store.rs:62`) | Store-internal leaf, sync methods only — the blackboard's single-owner claim lock (same exactly-once shape as row 24) |
+| 28 | blackboard `WalInner::inner` | `parking_lot::Mutex<WalInner>` | WAL append / checkpoint (`mycelium-blackboard/src/wal.rs:125`) | Leaf; same single-writer discipline as row 25 |
+| 29 | `Blackboard::{store, primary_reg, role_reg, mirrored, tasks}` | `parking_lot::Mutex<…>` (5 fields) | role election/failover, mirror dedup, lifecycle (`mycelium-blackboard/src/lib.rs`) | Handle-level leaves, same shape (and the same `init_store` construction nuance) as row 26 |
+| 30 | `Wiki::{last_lint, curator_reg, candidate_reg, tasks, curator_tasks}` | `parking_lot::Mutex<…>` (5 fields) | election, step-down sentinel, curatorship start/stop, `shutdown` (`mycelium-wiki/src/agent.rs`) | Leaves: sequential temporaries, never nested (`shutdown` drains `tasks` then `curator_tasks` as separate statements; step-down swaps `curator_reg`/`candidate_reg` one statement each). `curator_tasks` is separate from `tasks` precisely so the sentinel can stop *only* the curatorship's loops (#127) |
 
-**Scope (made explicit 2026-07-07):** the table covers `mycelium-core`, `mycelium`, and
-`mycelium-wasm-host`. The data-plane companion crates (`mycelium-tuple-space`,
-`mycelium-blackboard`, `mycelium-wiki`) hold their own lock sites (~20 — store/WAL inners,
-role registrations, task lists) that are **not** inventoried here; they follow the same
-one-lock-per-function flat discipline, documented at their declaration sites. Whether to
-extend this table to a full workspace inventory is an open decision — flagged by the
-2026-07-07 lint, not taken unilaterally.
+**Scope: the full workspace** (extended 2026-07-07 on review — rows 24–30 inventory the
+data-plane companions; previously the table silently covered only `mycelium-core` +
+`mycelium`, and the lint's grep matched that blind spot). Every companion lock is a
+`parking_lot` **leaf** — the flat invariant holds workspace-wide. `mycelium-agentfacts`
+holds no locks.
 
 **Async contexts:** guards from every *sync* lock above are `!Send` across `await`
 (`std::sync` and default `parking_lot` alike) — the compiler enforces it for spawned
