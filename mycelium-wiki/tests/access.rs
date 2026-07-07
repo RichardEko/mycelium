@@ -14,8 +14,34 @@ use mycelium_wiki::{
     WikiRole, WikiStore,
 };
 
+/// A free TCP port (bind :0, read it, drop). The drop opens a TOCTOU window against parallel
+/// test binaries — agents start via [`start_pair`]'s retry, never a bare unwrap (an
+/// `AddrInUse` flaked the sibling failover test in CI, 2026-07-07).
 fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+}
+
+/// Start one agent, `None` if the bind lost the port race.
+async fn try_start(port: u16, boot: Vec<u16>) -> Option<Arc<GossipAgent>> {
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = port;
+    cfg.bootstrap_peers = boot.into_iter().map(|p| NodeId::new("127.0.0.1", p).unwrap()).collect();
+    let a = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg));
+    a.start().await.ok().map(|_| a)
+}
+
+/// Start a mutually-bootstrapped agent pair, retrying the *whole pair* on fresh ports when a
+/// bind loses the `free_port` race (mutual bootstrap fixes both ports before either starts).
+async fn start_pair() -> (Arc<GossipAgent>, Arc<GossipAgent>) {
+    for _ in 0..16 {
+        let (pa, pb) = (free_port(), free_port());
+        let Some(a) = try_start(pa, vec![pb]).await else { continue };
+        match try_start(pb, vec![pa]).await {
+            Some(b) => return (a, b),
+            None => a.shutdown_with_timeout(Duration::from_secs(5)).await,
+        }
+    }
+    panic!("could not bind an agent pair after 16 attempts");
 }
 
 async fn poll_until(mut cond: impl FnMut() -> bool, timeout: Duration) -> bool {
@@ -33,15 +59,6 @@ fn wcfg(role: WikiRole) -> WikiConfig {
         cap_refresh: Duration::from_millis(300), drain_interval: Duration::from_millis(150),
         lint_interval: Duration::from_secs(5),
     }
-}
-
-async fn spawn_agent(port: u16, boot: Vec<u16>) -> Arc<GossipAgent> {
-    let mut cfg = GossipConfig::default();
-    cfg.bind_port = port;
-    cfg.bootstrap_peers = boot.into_iter().map(|p| NodeId::new("127.0.0.1", p).unwrap()).collect();
-    let a = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg));
-    a.start().await.unwrap();
-    a
 }
 
 /// Retry the broker handshake past the startup window (curator-ad propagation + handler registration);
@@ -64,15 +81,13 @@ async fn cluster(
     dir: &std::path::Path,
     membership_for: impl FnOnce(&str) -> Membership,
 ) -> (Arc<GossipAgent>, Arc<Wiki<FsStore>>, Arc<GossipAgent>, Arc<Wiki<FsStore>>) {
-    let (pa, pb) = (free_port(), free_port());
-    let b_id = NodeId::new("127.0.0.1", pb).unwrap().to_string();
+    let (agent_a, agent_b) = start_pair().await;
+    let b_id = agent_b.node_id().to_string();
 
-    let agent_a = spawn_agent(pa, vec![pb]).await;
     let store_a = Arc::new(FsStore::open(dir, "ops").unwrap());
     let brain = CuratorBrain::new(Box::new(DirectReconciler)).with_membership(membership_for(&b_id));
     let curator = Wiki::with_brain(Arc::clone(&agent_a), wcfg(WikiRole::Curator), store_a, brain).await;
 
-    let agent_b = spawn_agent(pb, vec![pa]).await;
     let store_b = Arc::new(FsStore::open(dir, "ops").unwrap());
     let reader = Wiki::new(Arc::clone(&agent_b), wcfg(WikiRole::Reader), store_b).await;
 

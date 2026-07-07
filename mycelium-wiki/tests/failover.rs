@@ -17,9 +17,35 @@ use std::time::Duration;
 use mycelium::{GossipAgent, GossipConfig, NodeId};
 use mycelium_wiki::{FsStore, LintKind, Wiki, WikiConfig, WikiRole};
 
-/// A free TCP port (bind :0, read it, drop). Good enough for an in-process test cluster.
+/// A free TCP port (bind :0, read it, drop). The drop opens a TOCTOU window against parallel
+/// test binaries — which is why agents start via [`start_pair`]'s retry, never a bare unwrap
+/// (an `AddrInUse` here flaked this file in CI, 2026-07-07).
 fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+}
+
+/// Start one agent, `None` if the bind lost the port race.
+async fn try_start(port: u16, boot: Vec<u16>) -> Option<Arc<GossipAgent>> {
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = port;
+    cfg.bootstrap_peers = boot.into_iter().map(|p| NodeId::new("127.0.0.1", p).unwrap()).collect();
+    let agent = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg));
+    agent.start().await.ok().map(|_| agent)
+}
+
+/// Start a mutually-bootstrapped agent pair, retrying the *whole pair* on fresh ports when a
+/// bind loses the `free_port` race (mutual bootstrap means both ports must be fixed before
+/// either agent starts, so a per-agent retry can't work). Same idiom as the wasm-host tests.
+async fn start_pair() -> (Arc<GossipAgent>, Arc<GossipAgent>) {
+    for _ in 0..16 {
+        let (pa, pb) = (free_port(), free_port());
+        let Some(a) = try_start(pa, vec![pb]).await else { continue };
+        match try_start(pb, vec![pa]).await {
+            Some(b) => return (a, b),
+            None => a.shutdown_with_timeout(Duration::from_secs(5)).await,
+        }
+    }
+    panic!("could not bind an agent pair after 16 attempts");
 }
 
 async fn poll_until(mut cond: impl FnMut() -> bool, timeout: Duration) -> bool {
@@ -35,18 +61,8 @@ fn attrs(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
     pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
 }
 
-async fn spawn(port: u16, boot: Vec<u16>, dir: &std::path::Path) -> (Arc<GossipAgent>, Arc<Wiki<FsStore>>) {
-    spawn_role(port, boot, dir, WikiRole::Auto).await
-}
-
-async fn spawn_role(port: u16, boot: Vec<u16>, dir: &std::path::Path, role: WikiRole)
-    -> (Arc<GossipAgent>, Arc<Wiki<FsStore>>)
-{
-    let mut cfg = GossipConfig::default();
-    cfg.bind_port = port;
-    cfg.bootstrap_peers = boot.into_iter().map(|p| NodeId::new("127.0.0.1", p).unwrap()).collect();
-    let agent = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg));
-    agent.start().await.unwrap();
+/// Build a wiki over a shared store dir on an already-started agent.
+async fn wiki_on(agent: &Arc<GossipAgent>, dir: &std::path::Path, role: WikiRole) -> Arc<Wiki<FsStore>> {
     let store = Arc::new(FsStore::open(dir, "ops").unwrap());
     let wcfg = WikiConfig {
         group: "ops".into(),
@@ -55,8 +71,7 @@ async fn spawn_role(port: u16, boot: Vec<u16>, dir: &std::path::Path, role: Wiki
         drain_interval: Duration::from_millis(150),
         lint_interval: Duration::from_millis(300),
     };
-    let wiki = Wiki::new(Arc::clone(&agent), wcfg, store).await;
-    (agent, wiki)
+    Wiki::new(Arc::clone(agent), wcfg, store).await
 }
 
 /// Read `page`'s first section body from a wiki, if present.
@@ -72,9 +87,9 @@ fn first_body(w: &Wiki<FsStore>, page: &str) -> Option<String> {
 #[tokio::test]
 async fn dual_curators_reconcile_to_a_single_writer() {
     let dir = tempfile::tempdir().unwrap();
-    let (pa, pb) = (free_port(), free_port());
-    let (agent_a, wiki_a) = spawn_role(pa, vec![pb], dir.path(), WikiRole::Curator).await;
-    let (agent_b, wiki_b) = spawn_role(pb, vec![pa], dir.path(), WikiRole::Curator).await;
+    let (agent_a, agent_b) = start_pair().await;
+    let wiki_a = wiki_on(&agent_a, dir.path(), WikiRole::Curator).await;
+    let wiki_b = wiki_on(&agent_b, dir.path(), WikiRole::Curator).await;
 
     assert!(poll_until(|| !agent_a.peers().is_empty() && !agent_b.peers().is_empty(), Duration::from_secs(10)).await,
         "mesh forms");
@@ -93,9 +108,9 @@ async fn dual_curators_reconcile_to_a_single_writer() {
 #[tokio::test]
 async fn curator_elects_applies_and_fails_over_against_the_same_store() {
     let dir = tempfile::tempdir().unwrap();
-    let (pa, pb) = (free_port(), free_port());
-    let (agent_a, wiki_a) = spawn(pa, vec![pb], dir.path()).await;
-    let (agent_b, wiki_b) = spawn(pb, vec![pa], dir.path()).await;
+    let (agent_a, agent_b) = start_pair().await;
+    let wiki_a = wiki_on(&agent_a, dir.path(), WikiRole::Auto).await;
+    let wiki_b = wiki_on(&agent_b, dir.path(), WikiRole::Auto).await;
 
     // The ring forms and exactly one node elects itself curator.
     assert!(poll_until(|| !agent_a.peers().is_empty() && !agent_b.peers().is_empty(), Duration::from_secs(10)).await,

@@ -12,23 +12,36 @@ use mycelium_wiki::{FsStore, Wiki, WikiConfig, WikiRole};
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn gateway_propose_apply_read_query_lifecycle() {
     let dir = tempfile::tempdir().unwrap();
-    let base = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let http_port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
 
-    let mut cfg = GossipConfig::default();
-    cfg.bind_port = base;
-    cfg.http_port = Some(http_port);
-    let agent = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", base).unwrap(), cfg));
+    // Retry fresh ports when a bind loses the bind-:0-then-drop TOCTOU race against parallel
+    // test binaries (the AddrInUse CI flake class, 2026-07-07). The wiki is rebuilt per
+    // attempt; a failed attempt's wiki is shut down to reclaim its tasks (the Run-32 lesson).
+    let mut started = None;
+    for _ in 0..16 {
+        let base = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let http_port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
 
-    let store = Arc::new(FsStore::open(dir.path(), "council").unwrap());
-    let wcfg = WikiConfig {
-        group: "council".into(), role: WikiRole::Curator,
-        cap_refresh: Duration::from_millis(300), drain_interval: Duration::from_millis(100),
-        lint_interval: Duration::from_secs(5),
-    };
-    let wiki = Wiki::new(Arc::clone(&agent), wcfg, store).await;
-    agent.with_http_routes(Arc::clone(&wiki).http_router());
-    agent.start().await.unwrap();
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = base;
+        cfg.http_port = Some(http_port);
+        let agent = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", base).unwrap(), cfg));
+
+        let store = Arc::new(FsStore::open(dir.path(), "council").unwrap());
+        let wcfg = WikiConfig {
+            group: "council".into(), role: WikiRole::Curator,
+            cap_refresh: Duration::from_millis(300), drain_interval: Duration::from_millis(100),
+            lint_interval: Duration::from_secs(5),
+        };
+        let wiki = Wiki::new(Arc::clone(&agent), wcfg, store).await;
+        agent.with_http_routes(Arc::clone(&wiki).http_router());
+        if agent.start().await.is_ok() {
+            started = Some((agent, wiki, http_port));
+            break;
+        }
+        wiki.shutdown().await;
+    }
+    let (agent, _wiki, http_port) =
+        started.expect("could not bind agent + gateway after 16 attempts");
 
     let url = format!("http://127.0.0.1:{http_port}");
     let http = reqwest::Client::new();
