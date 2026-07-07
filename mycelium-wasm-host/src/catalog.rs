@@ -335,6 +335,26 @@ impl Manifest {
         std::fs::rename(&tmp, path).map_err(ManifestError::Io)
     }
 
+    /// The CI **publish step**: load the manifest at `path` (missing = new library), add
+    /// `entry` — replacing any existing row with the same KV key (`{ns}/{name}/{artifact-hex}`)
+    /// — and save it back (torn-read-safe). Together with `FsLibrarySource::store` this is the
+    /// whole publish operation; a running librarian picks the change up on its next reconcile
+    /// pass. Single-publisher discipline: concurrent publishers race the load-modify-save
+    /// (whole-file last-write-wins) — serialize publish jobs per library.
+    pub fn append_entry(
+        path: &std::path::Path,
+        entry: InstallableEntry,
+    ) -> Result<(), ManifestError> {
+        let mut m = Self::load(path)?;
+        let key = entry.kv_key();
+        if let Some(existing) = m.entries.iter_mut().find(|e| e.kv_key() == key) {
+            *existing = entry;
+        } else {
+            m.entries.push(entry);
+        }
+        m.save(path)
+    }
+
     /// Diff two manifest revisions into the librarian's sync actions:
     /// `(to_publish, to_tombstone)`. An entry is *published* when its KV key is new **or** its
     /// encoded value changed (LWW republish overwrites in place); *tombstoned* when its key
@@ -695,6 +715,37 @@ mod tests {
         assert!(missing.entries().is_empty());
         std::fs::write(&path, "deadbeef-not-an-entry\n").unwrap();
         assert!(matches!(Manifest::load(&path), Err(ManifestError::BadLine(1))));
+
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn manifest_append_entry_is_the_one_call_publish_step() {
+        use crate::artifact::ArtifactKind;
+        let path = scratch_manifest_path("append");
+
+        // First publish into a not-yet-existing manifest (a new library).
+        let v1 = InstallableEntry::new(cap("llm", "weights"), art(b"model-v1"))
+            .with_kind(ArtifactKind::Blob)
+            .with_requirements(4_000, 5_000);
+        Manifest::append_entry(&path, v1.clone()).expect("first publish");
+        let m = Manifest::load(&path).unwrap();
+        assert_eq!(m.entries().len(), 1);
+        assert_eq!(m.entries()[0].requires.mem_bytes, 5_000, "footprint travels in the manifest");
+
+        // A second, different artifact appends…
+        let other = InstallableEntry::new(cap("route", "optimize"), art(b"opt"));
+        Manifest::append_entry(&path, other).expect("second publish");
+        assert_eq!(Manifest::load(&path).unwrap().entries().len(), 2);
+
+        // …while re-publishing the same key (same capability + artifact, new metadata)
+        // replaces in place instead of duplicating.
+        let v1_retuned = v1.with_requirements(4_000, 6_000);
+        Manifest::append_entry(&path, v1_retuned).expect("republish");
+        let m = Manifest::load(&path).unwrap();
+        assert_eq!(m.entries().len(), 2, "same kv_key replaces, never duplicates");
+        let row = m.entries().iter().find(|e| e.provides.name.as_ref() == "weights").unwrap();
+        assert_eq!(row.requires.mem_bytes, 6_000);
 
         std::fs::remove_dir_all(path.parent().unwrap()).ok();
     }

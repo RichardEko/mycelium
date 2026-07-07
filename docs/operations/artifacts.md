@@ -29,7 +29,7 @@ to deploy, secure, or keep available — the catalogue's availability is the
 cluster's availability.
 
 ```text
-installable/{ns}/{name}/{artifact-hex}   →  InstallableEntry { provides, artifact_id, cost, signature }
+installable/{ns}/{name}/{artifact-hex}   →  InstallableEntry { provides, kind, artifact_id, cost hints, requires{disk,mem}, signature }
 ```
 
 Two distinct things travel separately:
@@ -48,11 +48,17 @@ You don't stand anything up — you **publish to it** and **serve the bytes**:
 2. The same (or any) node calls `publish_installable(kv, &entry)` — the entry
    gossips cluster-wide.
 
-That's it. Any node now discovers the entry (`InstallableCatalog::from_kv`) and
-pulls the bytes (`MeshArtifactSource`). In the
-[`catalog`](../../examples/coop/src/bin/catalog.rs) example, the `publisher` node
-does both; the `installer` node discovers + pulls + provisions with no
-configuration beyond the bootstrap peer.
+That's it for an **ad-hoc publish** (a dev node offering a one-off). For
+production, use the **durable library** instead: CI publishes blob + signed
+manifest row into an `FsLibrarySource` directory (or an HTTP blob store), and a
+node takes the librarian role — `spawn_librarian(agent, source, config)` serves
+the bytes, advertises `artifact/librarian`, and keeps the catalogue reconciled
+to the manifest (publishes additions, tombstones removals, scoped to the
+library's publisher key). Any node then discovers the entry
+(`InstallableCatalog::from_kv`) and pulls from a *discovered* holder
+(`MeshArtifactSource::resolving(agent, librarian_filter(), timeout)` — no
+hardcoded node-ids). The [`catalog`](../../examples/coop/src/bin/catalog.rs)
+example runs the whole durable flow, including the origin dying.
 
 ### Trust & provenance
 
@@ -132,34 +138,68 @@ its `comp/{node}/{ns}/` subtree). Build it to a `.wasm` and you have your bytes.
 ./build.sh        # → echo_component.wasm
 ```
 
-### 2 · Content-address, sign, and publish
+### 2 · Declare the footprint, sign, and publish to the library
+
+The publish step is CI code (no node, no mesh): store the bytes in the library,
+describe them — **kind**, cost hints, and the **resource footprint** — sign, and
+append to the manifest. A running librarian picks the change up on its next
+reconcile pass and the catalogue updates cluster-wide.
 
 ```rust
-use mycelium_wasm_host::{ArtifactId, InMemorySource, InstallableEntry,
-                         publish_installable, serve_artifacts};
+use mycelium_wasm_host::{ArtifactKind, FsLibrarySource, InstallableEntry, Manifest,
+                         MANIFEST_FILE};
 use mycelium::Capability;
 
-let bytes: Vec<u8> = std::fs::read("my_component.wasm")?;
-let artifact = ArtifactId::of(&bytes);                  // content address = hash of the bytes
+let bytes = std::fs::read("my_component.wasm")?;
+let library = FsLibrarySource::open("/srv/mycelium-library")?;
+let id = library.store(&bytes)?;                        // content address = hash of the bytes
 
-// Hold the bytes and serve them to the cluster.
-let mut src = InMemorySource::new();
-let id = src.insert(bytes);                             // == artifact
-let _serve = serve_artifacts(agent.clone(), std::sync::Arc::new(src));
-
-// Register the entry (capability → content address), signed for provenance.
-let entry = InstallableEntry::new(Capability::new("route", "optimize"), artifact)
-    .with_cost(/* size_bytes */ 52_266, /* est_install_secs */ 1)
+let entry = InstallableEntry::new(Capability::new("route", "optimize"), id)
+    .with_kind(ArtifactKind::WasmComponent)             // install dispatch (Blob for models)
+    .with_cost(bytes.len() as u64, /* est_install_secs */ 1)
+    .with_requirements(/* disk */ 0, /* mem */ 64 << 20) // the resource footprint — see below
     .signed_by(&publisher_key);                         // ed25519 SigningKey (KMS in prod)
-publish_installable(&agent.kv(), &entry);
+Manifest::append_entry(&std::path::Path::new("/srv/mycelium-library").join(MANIFEST_FILE), entry)?;
 ```
+
+**Declaring `with_requirements(disk_bytes, mem_bytes)`** — what hosting the
+artifact *consumes*, as opposed to `with_cost` (transfer-size ranking hints):
+
+- `disk_bytes` — the placed footprint at the runtime's placement root. For a
+  `Blob` this is the file size; for a `WasmComponent` it is `0` (memory-resident).
+- `mem_bytes` — the working set once live. For a model: the loaded size, not the
+  file size (a 4 GB quantised model typically wants 5 GB+ activated — weights +
+  KV-cache/session overhead; measure with your runtime). For a WASM component:
+  the instance memory bound you run it with.
+- `0` = undeclared = unchecked. Declare honestly: nodes **refuse to self-elect**
+  for entries whose requirements exceed their headroom
+  (`headroom × available − reserved`, default 0.8 — `Provisioner::set_resource_policy`),
+  so an undeclared 5 GB model will be attempted by nodes that cannot host it,
+  and an over-declared one will be installed by nobody (the
+  `ineligible_skips` tripwire tells you which is happening).
+- Requirements are **inside the provenance signature** — they are install-safety
+  claims. Changing them means re-signing (unlike the cost hints); tampered
+  requirements fail `verify_provenance`.
+
+Sign **after** `with_kind`/`with_requirements`. For an ad-hoc publish without a
+library (a dev one-off), the `InMemorySource` + `publish_installable` flow above
+still works — it just dies with the process.
+
+**Remote blob stores:** blobs can live in any HTTP(S) store (consumed via
+`HttpLibrarySource` + `PrefetchingSource`, egress-gated, credential headers;
+implement `BlobFetcher` for a vendor SDK). The *manifest* is a local file path
+(`LibrarianConfig::manifest_path`), so for a remote store, sync the manifest file
+down to the librarian node (CI artifact, cron `curl`, or a mounted volume) while
+the bytes stay remote — the librarian mirrors what its manifest names
+(`PrefetchingSource::prefetch_all`).
 
 ### 3 · How another node installs it
 
 The installing node needs no configuration beyond being in the cluster:
 
 ```rust
-use mycelium_wasm_host::{InstallableCatalog, MeshArtifactSource, WasmHost, HostState};
+use mycelium_wasm_host::{librarian_filter, InstallableCatalog, MeshArtifactSource,
+                         WasmHost, HostState};
 use mycelium::CapFilter;
 
 let filter = CapFilter::new("route", "optimize");
@@ -167,7 +207,8 @@ let catalog = InstallableCatalog::from_kv(&agent.kv());   // the gossiped catalo
 let entry = catalog.resolve_best(&filter).expect("in catalogue").clone();
 assert!(entry.verify_provenance(&[trusted_pub]));         // origin check
 
-let src = MeshArtifactSource::new(agent.clone(), vec![publisher_id], timeout);
+// Holders are DISCOVERED via the capability ring — no node-ids in installer code.
+let src = MeshArtifactSource::resolving(agent.clone(), librarian_filter(), timeout);
 src.prefetch(&entry.artifact).await;                       // pull bytes over the mesh (verified)
 
 let host = WasmHost::new()?;
@@ -181,6 +222,13 @@ The fully wired version (publisher + installer + caller, with the serve loop) is
 [`examples/coop/src/bin/catalog.rs`](../../examples/coop/src/bin/catalog.rs).
 
 ### Doing it autonomically
+
+Hand-wiring is for understanding; production nodes run the `Provisioner`
+(register a `BlobRuntime` for model artifacts alongside the built-in WASM
+runtime). It applies everything above automatically per round: provenance
+policy, kind dispatch, **and the resource-eligibility check** — a node whose
+free memory/disk (minus in-flight reservations) can't fit an entry's declared
+requirements silently never elects; some node that fits does.
 
 The [`provisioning`](../../examples/coop/src/bin/provisioning.rs) flagship runs
 this loop *on demand*: a `Provisioner` watches for unmet demand and installs the
