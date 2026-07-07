@@ -3,7 +3,9 @@
 **Status:** 🔵 **PROPOSED — v3.0 candidate, not started.** Build-vs-adopt resolved to a **three-tier
 strategy** (build / adopt / interop) with a **Tier-3-first** sequence. The substrate needs no new
 capability. Positioning source: [`../wiki/domain/pattern-coverage.md`](../wiki/domain/pattern-coverage.md)
-→ the LLM-authoring DX axis.
+→ the LLM-authoring DX axis. **Amended 2026-07-07** (artifact-library implications — see the
+dated addendum §below): checkpoint storage pattern fixed, wedge ③ added, Tier-3 ① partially
+de-risked.
 
 ## The question this settles
 
@@ -32,8 +34,17 @@ single-process framework **structurally cannot** offer.
   granularity: **tamper-evident, causal, replayable traces of why the whole fleet reasoned as it did.**
   Single-process tracers see one process. *New: run-level trace records; replay via the event log.*
 
-Both **mostly compose** from existing substrate. Exposed through `mycelium-py` so they compose *with*
-the Tier-1/2 tools, not replace them.
+- **③ Artifact-aware resume** *(added 2026-07-07 — enabled by the artifact library,
+  [`../design/artifact-library.md`](../design/artifact-library.md))* — a resumed graph's **model
+  dependencies follow it**: resource-aware self-election decides *which* node picks a suspended
+  thread up (only one whose probe says the required model fits), and demand-driven install
+  streams the model in where the thread lands. "Resume on any node" is hollow if the node lacks
+  the 4 GB model the graph calls; with this, it isn't. *New: a thin mapping from a resumed
+  graph's model needs to `declare_requirement` — the library machinery already exists and was
+  proven live (`model_deploy`).*
+
+All three **mostly compose** from existing substrate. Exposed through `mycelium-py` so they compose
+*with* the Tier-1/2 tools, not replace them.
 
 ### Tier 1 — ADOPT (commodity library layer; wrap, don't rebuild)
 - **Typed output → [Instructor](https://python.useinstructor.com/)** (~3M downloads/mo — a thin client
@@ -82,7 +93,7 @@ adopt-first land-grab would. For a thesis-led, pre-adoption project that is the 
 
 | Tier | Deliverable | Home | Nature |
 |---|---|---|---|
-| 3 (first) | capability-routed inference · fleet-reasoning traces | `mycelium-reason` crate + `mycelium-py` | build (mostly composes) |
+| 3 (first) | capability-routed inference · fleet-reasoning traces · artifact-aware resume | `mycelium-reason` crate + `mycelium-py` | build (mostly composes) |
 | 1 (∥) | `call_typed` over Instructor / Pydantic AI | `mycelium-py` | adopt |
 | 2 (∥) | `langgraph-checkpoint-mycelium` | new Python package | interop / be-the-backend |
 
@@ -91,8 +102,11 @@ adopt-first land-grab would. For a thesis-led, pre-adoption project that is the 
 `PromptTemplate` (KV, fleet-shared) · `LlmBackend`/`OpenAiBackend` + `/gateway/llm/stream` · MCP tool
 discovery · `AgentStateMachine` (Planning/Invoking/Reflecting/Suspended/… + `max_turns`/`tool_budget`
 + `watch_mesh_states`) · schema registry (`schemas/`) · HLC audit chain + OTEL + `/gateway/explain` ·
-`kv().append`/`scan_log` event log · `mycelium-wiki` durable memory. The Rust core needs **zero
-changes** (companion-crate contract); integration is application-layer, much of it in `mycelium-py`.
+`kv().append`/`scan_log` event log · `mycelium-wiki` durable memory · **the artifact library**
+(shipped 2026-07-07: content-addressed durable blobs, librarian discovery, resource-aware
+self-election, probe-gated model deployment — proven live with a real GGUF in `model_deploy`).
+The Rust core needs **zero changes** (companion-crate contract); integration is
+application-layer, much of it in `mycelium-py`.
 
 ## Non-goals
 
@@ -100,11 +114,51 @@ changes** (companion-crate contract); integration is application-layer, much of 
 - **Declarative prompt optimization** (DSPy-style compile-from-examples) — research-track, watch-only.
 - Reimplementing a provider SDK, or a typed-output library — Tier 1 adopts those.
 
+## Addendum (2026-07-07) — what the artifact library changes here
+
+Written the day the artifact-library workstream shipped
+([`../design/artifact-library.md`](../design/artifact-library.md), ✅ same-day). Three
+implications are **binding on the implementation strategy**; the rest of this sketch stands.
+
+1. **The checkpointer's storage layer follows the metadata-in-KV / payload-in-a-tier pattern —
+   from day one, not after a scale surprise.** The original line "backed by Mycelium KV + the
+   log overlay" under-specified storage. Two substrate facts rule out naïve
+   checkpoint-blobs-in-KV: **KV floods every node** (every agent's channel state — message
+   histories, easily 100s of KB per super-step per thread — replicated fleet-wide), and writes
+   are size-gated (`MAX_KV_WRITE_BYTES`). The house answer is now thrice-proven (wiki → artifact
+   library → here): *a store's cardinality follows the scope of what it stores* — *thread
+   index/heads/metadata in gossiped KV (tiny, fleet-visible); checkpoint payloads in a tiered
+   store.* And the sharper fact: **LangGraph checkpoints are immutable once written** (a
+   `checkpoint_id` is a snapshot), i.e. they are **content-addressable blobs** — the artifact
+   library's storage half (content-addressed immutable blobs, verified fetch, `FsLibrarySource`/
+   `PrefetchingSource`-shaped tiers) is the closer fit than KV, and **channel-value dedup across
+   super-steps falls out of content addressing for free** (a real cost issue for chatty graphs).
+   The one-day spike below must evaluate exactly this design, not only the KV mapping.
+2. **Wedge ③ (artifact-aware resume) joins the differentiation story** — see Tier 3. It upgrades
+   the flagship demo from "durable state" to "durable state **plus model logistics**": *kill a
+   node mid-graph → the thread resumes elsewhere via the checkpointer → the model it needs
+   streams in through the library with real progress → the graph continues → the audit chain
+   shows all of it.* `model_deploy` already proved the model half live. Postgres/Redis cannot
+   express this — it is the strongest available answer to "a checkpointer that is only durable
+   state competes on commodity terms and loses."
+3. **Tier-3 ① is partially de-risked.** Capability-routed inference presupposes models existing
+   *at capabilities* across the fleet; that was aspirational and is now deployable, probe-gated,
+   and attribute-advertised (`cap/{node}/llm/inference` with model/context attrs). Tier-3-first
+   stands, with a shorter path.
+
+Honest counter-note: the **`mycelium-py` gap widened slightly** — the checkpointer is Python and
+none of the artifact-library surface has py bindings (the checkpointer itself likely needs only
+KV/gateway access; wedge ③'s py surface is `declare_requirement`, which the SDK already speaks).
+The flagship also inherits this session's delivery machinery: the ADR-first template, the CI
+flake tier (its cross-node integration tests will want it), and the honest-demo bar (a real
+LangGraph graph, never a simulated one).
+
 ## Expressible ≠ validated
 
 Every wedge and the checkpointer fit are **hypotheses until tested**. The checkpointer mapping
 (versioned KV + log ↔ checkpoints + pending writes) *looks* natural but needs a **one-day spike**
-before commitment. Each Tier-3 wedge earns its claim with a `ci_smoke`-bar example — the same bar
+before commitment — and per the 2026-07-07 addendum, the spike's first question is the storage
+split (metadata-in-KV + content-addressed payload tier), not the protocol mapping. Each Tier-3 wedge earns its claim with a `ci_smoke`-bar example — the same bar
 blackboard/tuple-space met. This also raises **`mycelium-py` to a first-class citizen** — a deliberate
 strategic choice, since the ecosystem the strategy targets is Python.
 
