@@ -31,6 +31,7 @@ mod artifact;
 mod catalog;
 mod confine;
 mod host;
+mod librarian;
 mod mesh_source;
 mod provisioner;
 mod runtime;
@@ -45,6 +46,10 @@ pub use catalog::{
 };
 pub use confine::{confine_key, ConfinementError, COMPONENT_KV_PREFIX};
 pub use host::{HostState, Instance, Request, Response, WasmHost, WasmHostError};
+pub use librarian::{
+    librarian_filter, spawn_librarian, LibrarianConfig, LibrarianHandle, LIBRARIAN_NAME,
+    LIBRARIAN_NS,
+};
 pub use mesh_source::{pull_artifact, serve_artifacts, MeshArtifactSource, ARTIFACT_FETCH_KIND};
 pub use provisioner::{Provisioner, SupervisionPolicy};
 pub use runtime::{

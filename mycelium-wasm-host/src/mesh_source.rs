@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
-use mycelium::{GossipAgent, NodeId};
+use mycelium::{CapFilter, GossipAgent, NodeId};
 
 use crate::artifact::{verify_artifact, ArtifactId, ArtifactSource};
 
@@ -68,26 +68,57 @@ pub async fn pull_artifact(
 /// must be [`prefetch`](Self::prefetch)ed (async, verified) into the cache before
 /// `WasmHost::provision` reads them; `fetch` then serves from that cache. (Transparent on-demand
 /// mesh pull would require an async `ArtifactSource` — a deliberate future refinement.)
+///
+/// Holders come from a fixed provider list ([`new`](Self::new)), the capability ring
+/// ([`resolving`](Self::resolving) — e.g. `librarian_filter()`), or both: prefetch tries the
+/// fixed list first, then live-resolved providers.
 pub struct MeshArtifactSource {
-    agent:     Arc<GossipAgent>,
-    providers: Vec<NodeId>,
-    timeout:   Duration,
-    cache:     Mutex<HashMap<ArtifactId, Bytes>>,
+    agent:           Arc<GossipAgent>,
+    providers:       Vec<NodeId>,
+    /// Holders discovered live at prefetch time by resolving this filter against the
+    /// capability ring — the no-hardcoded-provider path (design §6).
+    provider_filter: Option<CapFilter>,
+    timeout:         Duration,
+    cache:           Mutex<HashMap<ArtifactId, Bytes>>,
 }
 
 impl MeshArtifactSource {
+    /// Pull from a fixed provider list (tests, fixed topologies).
     pub fn new(agent: Arc<GossipAgent>, providers: Vec<NodeId>, timeout: Duration) -> Self {
-        Self { agent, providers, timeout, cache: Mutex::new(HashMap::new()) }
+        Self { agent, providers, provider_filter: None, timeout, cache: Mutex::new(HashMap::new()) }
+    }
+
+    /// Discover holders through the capability ring instead of a fixed list: each `prefetch`
+    /// resolves `filter` (e.g. `librarian_filter()`) and tries the matching nodes in order. A
+    /// holder that appears, moves, or dies needs no reconfiguration here — its capability
+    /// advertisement is the discovery.
+    pub fn resolving(agent: Arc<GossipAgent>, filter: CapFilter, timeout: Duration) -> Self {
+        Self {
+            agent,
+            providers: Vec::new(),
+            provider_filter: Some(filter),
+            timeout,
+            cache: Mutex::new(HashMap::new()),
+        }
     }
 
     /// Pull `id` from the first provider that has it into the local cache (verified on arrival).
-    /// Returns whether it is now cached. Idempotent — a cached id short-circuits.
+    /// Returns whether it is now cached. Idempotent — a cached id short-circuits. Misses are
+    /// cheap (one RPC per tried holder), so a resolved holder set needs no per-artifact routing.
     pub async fn prefetch(&self, id: &ArtifactId) -> bool {
         if self.cache.lock().unwrap().contains_key(id) {
             return true;
         }
-        for provider in &self.providers {
-            if let Some(bytes) = pull_artifact(&self.agent, provider.clone(), id, self.timeout).await {
+        let mut candidates = self.providers.clone();
+        if let Some(filter) = &self.provider_filter {
+            for (node, _cap) in self.agent.capabilities().resolve(filter) {
+                if !candidates.contains(&node) {
+                    candidates.push(node);
+                }
+            }
+        }
+        for provider in candidates {
+            if let Some(bytes) = pull_artifact(&self.agent, provider, id, self.timeout).await {
                 self.cache.lock().unwrap().insert(*id, bytes);
                 return true;
             }
