@@ -126,6 +126,10 @@ fn sync_once(agent: &Arc<GossipAgent>, cfg: &LibrarianConfig) {
         let _ = kv.delete(entry.kv_key());
     }
     if !publish.is_empty() || !tombstone.is_empty() {
+        metrics::counter!("mycelium_artifact_librarian_published_total")
+            .increment(publish.len() as u64);
+        metrics::counter!("mycelium_artifact_librarian_tombstoned_total")
+            .increment(tombstone.len() as u64);
         tracing::info!(published = publish.len(), tombstoned = tombstone.len(),
             "librarian reconciled the catalogue to the manifest");
     }

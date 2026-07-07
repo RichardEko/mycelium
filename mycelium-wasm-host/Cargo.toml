@@ -43,6 +43,13 @@ sysinfo = { version = "0.38.4", default-features = false, features = ["system", 
 # The HTTP object-store source (artifact-library §2.2 step 6): GET-by-content-address from
 # any HTTP(S) blob store (S3-compatible, nginx, CDN). rustls — no system openssl.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# Operator-visible tripwires (Run-38 floor fix): the provisioner/librarian emit counters
+# through the `metrics` facade — a no-op without a recorder, and they flow into the node's
+# /metrics automatically when the embedder enables mycelium's `metrics` feature. Unconditional
+# (unlike core's feature gate) by choice: this crate already carries wasmtime, and the facade
+# is tiny.
+metrics = "0.24"
 
 [dev-dependencies]
+metrics-util = "0.20.4"
 tokio = { version = "1.35", features = ["full"] }

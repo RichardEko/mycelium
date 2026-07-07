@@ -35,6 +35,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `model_deploy` demo — real GGUF weights **and** their deployment profile as two signed
   artifacts (profile → weights by content address, design §4.3.1), activated into Ollama,
   generating real tokens under the governed profile.
+- **Typed install errors**: `InstallError` is now an enum
+  (`Fetch | Verify | Place | Activation | Resources | Host`) with a stable `stage()` label —
+  callers match on cause instead of parsing strings.
+- **Operator-visible artifact tripwires**: the provisioner/librarian emit
+  `mycelium_artifact_*` counters through the `metrics` facade (ineligible-skip reasons,
+  install started/completed/failed-by-stage, probe withdrawals, librarian publish/tombstone).
+- **The CI flake tier** (`scripts/ci-retest.sh`): socket-binding suites re-run only their
+  failed tests once — a deterministic failure still reds the build (fails twice); a flake
+  keeps it green but emits a loud annotation (a bug report, never silence).
 
 ### Fixed
 - `mycelium-wiki` integration tests: the `free_port()` bind-race flake class retired

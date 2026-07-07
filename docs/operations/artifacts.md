@@ -76,6 +76,15 @@ operator concern (wrap a KMS); the demo uses a fixed seed.
 
 ### Operational notes
 
+- **Metrics.** The provisioner/librarian emit Prometheus-ready counters through the `metrics`
+  facade (visible on `/metrics` when the `metrics` feature's recorder is installed):
+  `mycelium_artifact_installs_{started,completed}_total`,
+  `mycelium_artifact_installs_failed_total{stage=fetch|verify|place|activation|resources|host}`,
+  `mycelium_artifact_ineligible_skips_total{reason=no_runtime|budget|memory|disk}` (the
+  resource-election tripwire — a storm here means the fleet can't fit an artifact),
+  `mycelium_artifact_probe_withdrawals_total`, and
+  `mycelium_artifact_librarian_{published,tombstoned}_total`.
+
 - **Size ceiling.** `artifact.fetch` rides the gossip frame (`MAX_FRAME_BYTES` =
   10 MiB). Larger artifacts want the bulk transport
   (`ServiceHandle::bulk_serve`). Typical WASM components are well under.

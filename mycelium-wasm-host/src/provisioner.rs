@@ -200,6 +200,8 @@ impl Provisioner {
     fn eligible(&self, entry: &InstallableEntry) -> bool {
         let Some(runtime) = self.runtimes.get(&entry.kind) else {
             self.ineligible.fetch_add(1, Ordering::Relaxed);
+            metrics::counter!("mycelium_artifact_ineligible_skips_total", "reason" => "no_runtime")
+                .increment(1);
             tracing::debug!(ns = %entry.provides.namespace, name = %entry.provides.name,
                 kind = ?entry.kind, "no runtime registered for kind — not electing");
             return false;
@@ -208,6 +210,8 @@ impl Provisioner {
             && entry.size_bytes > max
         {
             self.ineligible.fetch_add(1, Ordering::Relaxed);
+            metrics::counter!("mycelium_artifact_ineligible_skips_total", "reason" => "budget")
+                .increment(1);
             tracing::debug!(ns = %entry.provides.namespace, name = %entry.provides.name,
                 size = entry.size_bytes, budget = max, "entry exceeds install budget — not electing");
             return false;
@@ -222,6 +226,8 @@ impl Provisioner {
                 && entry.requires.mem_bytes.saturating_add(reserved.mem_bytes) > usable(avail)
             {
                 self.ineligible.fetch_add(1, Ordering::Relaxed);
+                metrics::counter!("mycelium_artifact_ineligible_skips_total", "reason" => "memory")
+                    .increment(1);
                 tracing::debug!(ns = %entry.provides.namespace, name = %entry.provides.name,
                     require = entry.requires.mem_bytes, reserved = reserved.mem_bytes,
                     available = avail, headroom, "memory requirement exceeds headroom — not electing");
@@ -233,6 +239,8 @@ impl Provisioner {
                 && entry.requires.disk_bytes.saturating_add(reserved.disk_bytes) > usable(avail)
             {
                 self.ineligible.fetch_add(1, Ordering::Relaxed);
+                metrics::counter!("mycelium_artifact_ineligible_skips_total", "reason" => "disk")
+                    .increment(1);
                 tracing::debug!(ns = %entry.provides.namespace, name = %entry.provides.name,
                     require = entry.requires.disk_bytes, reserved = reserved.disk_bytes,
                     available = avail, headroom, "disk requirement exceeds headroom — not electing");
@@ -334,6 +342,7 @@ impl Provisioner {
                 HostedState::Installing { token, reserved: entry.requires },
             );
         }
+        metrics::counter!("mycelium_artifact_installs_started_total").increment(1);
 
         let agent = Arc::clone(&self.agent);
         let source = Arc::clone(&self.source);
@@ -400,8 +409,12 @@ impl Provisioner {
                         }
                     };
                     match leftover {
-                        None => tracing::info!(ns = %provides.namespace, name = %provides.name,
-                            "provisioned + serving capability"),
+                        None => {
+                            metrics::counter!("mycelium_artifact_installs_completed_total")
+                                .increment(1);
+                            tracing::info!(ns = %provides.namespace, name = %provides.name,
+                                "provisioned + serving capability");
+                        }
                         Some((cap, installed)) => {
                             // Withdrawn (or superseded) while installing: nothing references
                             // this install — tombstone the just-made ad and tear it down.
@@ -413,6 +426,8 @@ impl Provisioner {
                     }
                 }
                 Err(e) => {
+                    metrics::counter!("mycelium_artifact_installs_failed_total",
+                        "stage" => e.stage()).increment(1);
                     tracing::warn!(ns = %provides.namespace, name = %provides.name, %e,
                         "provisioning failed");
                     let mut map = hosted.lock().unwrap();
@@ -463,6 +478,7 @@ impl Provisioner {
                 .collect()
         };
         for artifact in unhealthy {
+            metrics::counter!("mycelium_artifact_probe_withdrawals_total").increment(1);
             tracing::warn!(artifact = %artifact,
                 "hosted install failed its probe — withdrawing (this round reinstalls if still wanted)");
             self.withdraw(&artifact);
@@ -826,7 +842,7 @@ mod tests {
                 .gate
                 .acquire()
                 .await
-                .map_err(|e| crate::runtime::InstallError(e.to_string()))?;
+                .map_err(|e| crate::runtime::InstallError::Host(e.to_string()))?;
             permit.forget();
             Ok(Box::new(NoopInstalled))
         }
@@ -977,7 +993,7 @@ mod tests {
                 let permit = gate
                     .acquire()
                     .await
-                    .map_err(|e| crate::runtime::InstallError(e.to_string()))?;
+                    .map_err(|e| crate::runtime::InstallError::Host(e.to_string()))?;
                 permit.forget();
             }
             if self
@@ -985,7 +1001,7 @@ mod tests {
                 .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
                 .is_ok()
             {
-                return Err(crate::runtime::InstallError("transient install failure".into()));
+                return Err(crate::runtime::InstallError::Fetch("transient install failure".into()));
             }
             Ok(Box::new(TrackingInstalled { uninstalled: Arc::clone(&self.uninstalled) }))
         }
@@ -1328,6 +1344,50 @@ mod tests {
         }
 
         agent.shutdown().await;
+    }
+
+    /// Run-38 floor fix (Observability): the tripwires are no longer programmatic-only — they
+    /// reach the `metrics` facade, so any embedder with a recorder (the node's `/metrics`
+    /// exporter) sees resource-skip storms without extra plumbing.
+    #[test]
+    fn tripwire_counters_reach_the_metrics_facade() {
+        use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        metrics::with_local_recorder(&recorder, || {
+            // An unstarted agent suffices: the presence pass reads only local (empty) state,
+            // resolves the catalog, and skips on "no runtime for kind" — the tripwire path.
+            let port =
+                std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+            let id = mycelium::NodeId::new("127.0.0.1", port).unwrap();
+            let agent = Arc::new(GossipAgent::new(
+                id,
+                mycelium::GossipConfig { bind_port: port, ..Default::default() },
+            ));
+            let host = Arc::new(WasmHost::new().expect("engine"));
+            let mut source = InMemorySource::new();
+            let blob = source.insert(b"unhostable model".to_vec());
+            let mut catalog = InstallableCatalog::new();
+            catalog.add(InstallableEntry::new(Capability::new("llm", "unhostable"), blob)
+                .with_kind(ArtifactKind::Blob));
+            let mut prov = Provisioner::new(agent, host, catalog, Arc::new(source), 1.0);
+            prov.supervise(CapFilter::new("llm", "unhostable"), 1);
+            assert_eq!(prov.provision_round(), 0);
+            assert!(prov.ineligible_skips() >= 1);
+        });
+
+        let snapshot = snapshotter.snapshot().into_vec();
+        let skip = snapshot.iter().find(|(key, _, _, _)| {
+            key.key().name() == "mycelium_artifact_ineligible_skips_total"
+                && key.key().labels().any(|l| l.key() == "reason" && l.value() == "no_runtime")
+        });
+        match skip {
+            Some((_, _, _, DebugValue::Counter(n))) => {
+                assert!(*n >= 1, "skip counter incremented through the facade")
+            }
+            other => panic!("expected the no_runtime skip counter in the snapshot, got {other:?}"),
+        }
     }
 
     #[tokio::test]

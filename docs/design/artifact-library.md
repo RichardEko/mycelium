@@ -280,7 +280,12 @@ operator *guess*; the node also needs a view of its **actual free resources**:
 - **Unmeasurable = permissive, undeclared = unchecked** (detection, not prevention). Blocking
   every install on a platform the probe can't read would freeze a fleet silently; the runtime's
   real failure is the signal, and the tripwire counter (`ineligible_skips`) records every
-  resource-based non-election.
+  resource-based non-election. **Operator-visible since 2026-07-07 (Run-38 floor fix):** the
+  tripwires also flow through the `metrics` facade —
+  `mycelium_artifact_ineligible_skips_total{reason=no_runtime|budget|memory|disk}`,
+  `…installs_{started,completed}_total`, `…installs_failed_total{stage}`,
+  `…probe_withdrawals_total`, `…librarian_{published,tombstoned}_total` — reaching the node's
+  `/metrics` automatically wherever a recorder is installed.
 - **This is the fleet's placement algorithm — deliberately not a scheduler.** Eligibility is
   node-local, binary, and *silent*: a node that can't fit simply doesn't elect, one that can
   does (herd-damped by the existing probabilistic self-election), and if *no* live node can,

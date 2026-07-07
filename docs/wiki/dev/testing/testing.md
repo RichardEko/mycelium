@@ -30,11 +30,11 @@ so you rarely need the wasmtime build to catch the trap.
 
 ## Coop demos: wasm is opt-in (fast non-wasm builds)
 
-`examples/coop` gates `mycelium-wasm-host` (→ wasmtime/cranelift) behind a `wasm` feature. Only
-`provisioning` + `catalog` need it (`required-features = ["wasm"]`); the other ten demos — e.g.
-`cargo run --bin diagnostics` — build **without** compiling wasmtime. `ci_smoke.sh` enables
-`--features wasm` for the two that need it; a dev iterating on any non-wasm demo skips the heavy
-build entirely.
+`examples/coop` gates `mycelium-wasm-host` (→ wasmtime/cranelift) behind a `wasm` feature. Four
+bins need it (`required-features = ["wasm"]`): `provisioning`, `catalog`, `mcp_toolgrowth`, and
+the manual `model_deploy`; the other demos — e.g. `cargo run --bin diagnostics` — build
+**without** compiling wasmtime. `ci_smoke.sh` enables `--features wasm` for the three CI demos
+that need it; a dev iterating on any non-wasm demo skips the heavy build entirely.
 
 CI additionally gates `tsc --noEmit` (mycelium-ts), the AFN smoke (pull+push), the coop
 smoke, time-boxed fuzz (skipped on PRs), and `cargo audit` (RUSTSEC). **Don't trust a
@@ -74,6 +74,18 @@ guard's lifetime (added Run 28 after exactly this race).
 
 Use `crate::test_util::alloc_port` (process-unique, bind-verified, confined below the OS
 ephemeral floor — PR #110 retired the parallel-suite flake family). Never hardcode.
+
+## The CI flake tier (structural, Run-38 floor fix)
+
+Socket-binding / multi-node suites run in CI through `scripts/ci-retest.sh`, not bare
+`cargo test`: on failure the wrapper re-runs **only the failed tests, individually, once**. A
+test that fails twice is a real failure and reds the build; a test that passes on isolated
+retry keeps the build green **but emits a loud per-test flake annotation + step-summary line**.
+The policy that makes this safe against the Run-37 masking failure mode: **a flake annotation
+is a bug report** — recurring annotations get a root-cause dig (the wiki port race and the
+opacity shed bug were both found that way), and "fixing" a flake by widening a timeout is
+forbidden. Deterministic unit gates stay on bare `cargo test`. This is the class-level
+prevention Run 37 asked for: a wall-clock flake can no longer red main *or* hide silently.
 
 Companion-crate integration tests that can't reach `test_util` and bind real agents must
 **retry the bind, never bare-`unwrap` it**: the bind-`:0`-read-drop idiom (`free_port()`)

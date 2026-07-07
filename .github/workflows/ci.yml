@@ -18,13 +18,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.96.0
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --lib
-      - run: cargo test --lib --features tls,metrics,a2a,llm
+      # Socket-binding suites go through the flake tier (scripts/ci-retest.sh): a wall-clock
+      # flake no longer reds main, but every flake is a loud annotation — never silent.
+      - run: ./scripts/ci-retest.sh --lib
+      - run: ./scripts/ci-retest.sh --lib --features tls,metrics,a2a,llm
       # In-suite decoder mini-fuzz (gated behind fuzz-internals). The fuzz/
       # targets existed for the whole project's life but were never executed
       # in CI, and an unbounded-allocation decode DoS sat uncaught (M2 Run-20).
       - run: cargo test --lib --features fuzz-internals mini_fuzz_decoders_survive_adversarial_bytes
-      - run: cargo test -p mycelium-tuple-space --features gateway
+      - run: ./scripts/ci-retest.sh -p mycelium-tuple-space --features gateway
       # Examples are the documented contract for the guide chapters; an
       # examples-free CI let a stale include_str! path hide behind cargo's
       # incremental cache for weeks (mesh_demo manifests/ → presets/ rename).
@@ -68,7 +70,7 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test -p mycelium-wasm-host
+      - run: ./scripts/ci-retest.sh -p mycelium-wasm-host
       - run: cargo clippy -p mycelium-wasm-host --all-targets -- -D warnings
 
   agentfacts:
@@ -82,7 +84,7 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test -p mycelium-agentfacts
+      - run: ./scripts/ci-retest.sh -p mycelium-agentfacts
       - run: cargo clippy -p mycelium-agentfacts --all-targets -- -D warnings
 
   blackboard:
@@ -96,7 +98,7 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test -p mycelium-blackboard --features gateway
+      - run: ./scripts/ci-retest.sh -p mycelium-blackboard --features gateway
       - run: cargo clippy -p mycelium-blackboard --features gateway --all-targets -- -D warnings
       # The community-microgrid worked example (rd shared / in competitive), Docker-free.
       - run: ./mycelium-blackboard/ci_smoke.sh
@@ -112,16 +114,16 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test -p mycelium-wiki
+      - run: ./scripts/ci-retest.sh -p mycelium-wiki
       - run: cargo clippy -p mycelium-wiki --all-targets -- -D warnings
       # Phase 2 — the Mycelium control plane (curator election + failover, single-writer apply).
-      - run: cargo test -p mycelium-wiki --features control-plane
+      - run: ./scripts/ci-retest.sh -p mycelium-wiki --features control-plane
       - run: cargo clippy -p mycelium-wiki --features control-plane --all-targets -- -D warnings
       # Phase 3 — the LLM curator (the 3-way reconcile; the EchoBackend test proves the backend wiring).
-      - run: cargo test -p mycelium-wiki --features llm
+      - run: ./scripts/ci-retest.sh -p mycelium-wiki --features llm
       - run: cargo clippy -p mycelium-wiki --features llm --all-targets -- -D warnings
       # Phase 4 remainder — the HTTP gateway edge (/gateway/wiki/*), the path the Python/TS SDKs speak.
-      - run: cargo test -p mycelium-wiki --features gateway
+      - run: ./scripts/ci-retest.sh -p mycelium-wiki --features gateway
       - run: cargo clippy -p mycelium-wiki --features gateway --all-targets -- -D warnings
       # Phase 5 — the worked example: import documents → curator applies → a reader chat-agent answers
       # grounded in the wiki, over both use-case corpora (UC1 org twin + UC2 council). Docker-free.

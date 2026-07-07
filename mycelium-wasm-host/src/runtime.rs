@@ -36,22 +36,66 @@ pub struct RuntimeCtx {
     pub agent: Arc<GossipAgent>,
 }
 
-/// Why an install failed. Wraps the failing stage's message; the provisioner logs it, drops the
-/// reservation, and lets a later round retry (restart ≡ provisioning).
+/// Why an install failed — **typed by stage** so callers can match on cause (retry a
+/// [`Fetch`](Self::Fetch), refuse a [`Verify`](Self::Verify), alert on
+/// [`Resources`](Self::Resources)) instead of parsing strings. The provisioner logs it, drops
+/// the reservation, and lets a later round retry (restart ≡ provisioning).
 #[derive(Debug)]
-pub struct InstallError(pub String);
+pub enum InstallError {
+    /// No holder produced the bytes (source miss, ranged read failed, remote unreachable).
+    /// Transient by nature — the canonical retry case.
+    Fetch(String),
+    /// Bytes failed the content address — an untrusted holder lied or corrupted. Retrying a
+    /// *different* holder may succeed; the same bytes never will.
+    Verify(String),
+    /// Local filesystem placement failed (temp write, rename, placement dir).
+    Place(String),
+    /// The runtime's activation hook refused — e.g. a prerequisite artifact not yet placed
+    /// (retried by design), or the node-local runtime rejected the artifact.
+    Activation(String),
+    /// The declared resource requirements provably cannot fit on this node (fail-fast check).
+    Resources(String),
+    /// Engine/task-level failure (wasmtime instantiate, a panicked pull task).
+    Host(String),
+}
 
 impl std::fmt::Display for InstallError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "install failed: {}", self.0)
+        let (stage, msg) = match self {
+            Self::Fetch(m) => ("fetch", m),
+            Self::Verify(m) => ("verify", m),
+            Self::Place(m) => ("place", m),
+            Self::Activation(m) => ("activation", m),
+            Self::Resources(m) => ("resources", m),
+            Self::Host(m) => ("host", m),
+        };
+        write!(f, "install failed ({stage}): {msg}")
     }
 }
 
 impl std::error::Error for InstallError {}
 
+impl InstallError {
+    /// Stable stage label (metrics/log dimension).
+    pub fn stage(&self) -> &'static str {
+        match self {
+            Self::Fetch(_) => "fetch",
+            Self::Verify(_) => "verify",
+            Self::Place(_) => "place",
+            Self::Activation(_) => "activation",
+            Self::Resources(_) => "resources",
+            Self::Host(_) => "host",
+        }
+    }
+}
+
 impl From<WasmHostError> for InstallError {
     fn from(e: WasmHostError) -> Self {
-        Self(e.to_string())
+        match e {
+            WasmHostError::Fetch(m) => Self::Fetch(m),
+            WasmHostError::Verify(m) => Self::Verify(m),
+            other => Self::Host(other.to_string()),
+        }
     }
 }
 
@@ -267,35 +311,35 @@ fn pull_to_temp(
             && let Some(total) = ranged.size(id)
         {
             let mut file = std::fs::File::create(tmp)
-                .map_err(|e| InstallError(format!("create temp: {e}")))?;
+                .map_err(|e| InstallError::Place(format!("create temp: {e}")))?;
             let mut hasher = Sha256::new();
             let mut fetched = 0u64;
             while fetched < total {
                 let want = chunk_bytes.min(total - fetched);
                 let chunk = ranged
                     .fetch_range(id, fetched, want)
-                    .ok_or_else(|| InstallError(format!("ranged read failed at {fetched}")))?;
+                    .ok_or_else(|| InstallError::Fetch(format!("ranged read failed at {fetched}")))?;
                 if chunk.is_empty() {
-                    return Err(InstallError(format!(
+                    return Err(InstallError::Fetch(format!(
                         "source returned an empty range at {fetched}/{total}"
                     )));
                 }
                 hasher.update(&chunk);
-                file.write_all(&chunk).map_err(|e| InstallError(format!("write temp: {e}")))?;
+                file.write_all(&chunk).map_err(|e| InstallError::Place(format!("write temp: {e}")))?;
                 fetched += chunk.len() as u64;
                 progress(fetched, total);
             }
             let digest: [u8; 32] = hasher.finalize().into();
             if crate::artifact::ArtifactId::from_bytes(digest) != *id {
-                return Err(InstallError("streamed bytes do not hash to the content address".into()));
+                return Err(InstallError::Verify("streamed bytes do not hash to the content address".into()));
             }
         } else {
             let bytes = source
                 .fetch(id)
-                .ok_or_else(|| InstallError(format!("no source holds artifact {id}")))?;
+                .ok_or_else(|| InstallError::Fetch(format!("no source holds artifact {id}")))?;
             crate::artifact::verify_artifact(&bytes, id)
-                .map_err(|e| InstallError(e.to_string()))?;
-            std::fs::write(tmp, &bytes).map_err(|e| InstallError(format!("write temp: {e}")))?;
+                .map_err(|e| InstallError::Verify(e.to_string()))?;
+            std::fs::write(tmp, &bytes).map_err(|e| InstallError::Place(format!("write temp: {e}")))?;
             let len = bytes.len() as u64;
             progress(len, len);
         }
@@ -326,7 +370,7 @@ impl ArtifactRuntime for BlobRuntime {
         progress: ProgressFn,
     ) -> Result<Box<dyn Installed>, InstallError> {
         std::fs::create_dir_all(&self.place_dir)
-            .map_err(|e| InstallError(format!("create place dir: {e}")))?;
+            .map_err(|e| InstallError::Place(format!("create place dir: {e}")))?;
         let dest = self.place_dir.join(entry.artifact.to_hex());
 
         // Fail fast before a multi-GB pull if the declared footprint provably can't land.
@@ -340,7 +384,7 @@ impl ArtifactRuntime for BlobRuntime {
                 crate::resources::SystemResourceProbe::new().available_disk_bytes(&self.place_dir)
                 && entry.requires.disk_bytes > avail
             {
-                return Err(InstallError(format!(
+                return Err(InstallError::Resources(format!(
                     "insufficient disk at {}: artifact requires {} bytes, {} available",
                     self.place_dir.display(),
                     entry.requires.disk_bytes,
@@ -372,13 +416,13 @@ impl ArtifactRuntime for BlobRuntime {
                     pull_to_temp(&*source, &id, chunk, &tmp, &progress)
                 })
             };
-            pull.await.map_err(|e| InstallError(format!("pull task: {e}")))??;
+            pull.await.map_err(|e| InstallError::Host(format!("pull task: {e}")))??;
             std::fs::rename(&tmp, &dest)
-                .map_err(|e| InstallError(format!("place blob: {e}")))?;
+                .map_err(|e| InstallError::Place(format!("place blob: {e}")))?;
         }
 
         if let Some(activate) = &self.activate {
-            activate(&dest).map_err(|e| InstallError(format!("activation failed: {e}")))?;
+            activate(&dest).map_err(InstallError::Activation)?;
         }
 
         Ok(Box::new(BlobInstalled { path: dest, probe: Arc::clone(&self.probe) }))
