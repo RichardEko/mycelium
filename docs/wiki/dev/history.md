@@ -63,6 +63,26 @@ The three-verb operator spine — **localize** (`/fleet`) · **explain** (`/expl
   substrate work. Homes: `ROADMAP.md` → v3.0 · `docs/wiki/domain/pattern-coverage.md` ·
   `docs/plans/mycelium-{reason,guardrails}.md`. Nothing built — positioning + design sketches only.
 
+- **Artifact library — steps 1–5 shipped** (2026-07-07, commits `910c1ff`…`22ac02b`; design record
+  `docs/design/artifact-library.md`): the durable origin tier + install generalization for
+  `mycelium-wasm-host`. **Data:** `FsLibrarySource` (content-addressed blob dir, complete-or-absent
+  writes) + the signed **manifest** (the library's own catalogue; publisher keys stay in CI) + a
+  clean-slate versioned entry encoding with an explicit `ArtifactKind`, provenance now binding the
+  *whole entry* (version‖kind‖artifact‖capability — closes a re-labeling hole). **Roles:** the
+  **librarian** (`spawn_librarian` — serve + one `artifact/librarian` cap + stateless manifest→KV
+  reconcile, signature-scoped) and `MeshArtifactSource::resolving` (holders discovered via the
+  capability ring — no hardcoded provider ids). **Install:** `ArtifactRuntime`/`Installed` traits —
+  `WasmHost` is now the engine inside *one* runtime; `BlobRuntime` places models/data
+  (ranged/streamed pull via `RangedArtifactSource`, temp+rename, activation hook, pluggable probe);
+  the `Provisioner` gained a kind registry, eligibility (kind + size budget) with a tripwire
+  counter, async `Installing→Live` reservations (token-checked), and **real** `{ns}/loading` pct
+  tiers driven by actual bytes. **Honest demos:** `catalog` (runtime-read library → librarian →
+  discovered pull → origin killed + library deleted → late joiner installs from a peer cache) and
+  `mcp_toolgrowth` (the converter's arithmetic **arrives** as a new committed WASM fixture,
+  bridged over MCP; activation-vs-installation taught explicitly); `llm_agent`'s percent loops
+  stay simulated by decision (wasmtime must not enter `make check` via root dev-deps) and say so.
+  Lock-order rows 20–22. Open: object-store source (step 6), async `ArtifactSource` (step 7).
+
 ## v2.0 (2026-06-21) — all 16 milestones M1–M16, acceptance gate met, no deferrals
 
 | Workstream | Delivered | PRs |

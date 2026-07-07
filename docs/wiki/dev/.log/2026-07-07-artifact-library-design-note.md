@@ -1,4 +1,16 @@
-# 2026-07-07 — artifact-library design note (proposed): durable origin tier + librarian discovery
+# 2026-07-07 — artifact-library: design note + steps 1–5 SHIPPED same day
+
+**Implementation status (end of day): steps 1–5 of the note's sequencing shipped**, commits
+`910c1ff`…`22ac02b` — FsLibrarySource + manifest + kind encoding + entry-binding provenance;
+ArtifactRuntime/Installed + kind-dispatching Provisioner (async reservations, eligibility,
+tripwire); librarian role + resolving MeshArtifactSource; BlobRuntime + RangedArtifactSource +
+real loading tiers; honest catalog/mcp_toolgrowth demos (+ the new committed
+unit-convert-component fixture) and the llm_agent labelled-simulation decision. 45 crate tests;
+lock-order rows 20–22; full coop smoke + make check green. **Open: step 6 (object-store source
+via PrefetchingSource — needs a per-node credentials story) and step 7 (async ArtifactSource
+revisit).** Ledger entry: [dev/history](../history.md); companion entry updated.
+
+Original note (morning), for the record:
 
 A session probing "dynamic component install at runtime" verified a gap in the artifact pipeline
 and produced [`docs/design/artifact-library.md`](../../../design/artifact-library.md) (📐 proposed,

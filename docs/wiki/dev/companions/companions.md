@@ -16,7 +16,13 @@ via wasm-host).
 - **`mycelium-wasm-host/`** — WS-E code mobility: the coordinator-free
   requirement→resolve→pull→advertise→serve→self-heal loop, Ed25519 provenance, mesh artifact
   pull, gossiped catalog, fuel limits (restart ≡ provisioning). PRs #32–#42; runbook
-  `docs/operations/artifacts.md`. Security note: wasmtime is this crate's sandbox — keep
+  `docs/operations/artifacts.md`. **Extended 2026-07-07 (artifact library, steps 1–5 —
+  `docs/design/artifact-library.md`):** durable `FsLibrarySource` + signed manifest, the
+  **librarian** role (serve + `artifact/librarian` cap + signature-scoped manifest→KV reconcile),
+  capability-resolved pulls (`MeshArtifactSource::resolving`), and the **kind/runtime
+  generalization** — `ArtifactRuntime`/`Installed` with `WasmHost` as one engine and `BlobRuntime`
+  (streamed place-and-probe for models/data) as another; provenance binds the whole entry.
+  Security note: wasmtime is this crate's sandbox — keep
   `cargo audit` green on it (RUSTSEC-2026-0188 was found+fixed via audit, Run 28).
 - **`mycelium-agentfacts/`** — WS-F/M16 federation edge: self-certified NANDA AgentFacts
   document (superset of the A2A AgentCard), CRDT-assembled domain endpoint, schema

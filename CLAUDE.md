@@ -88,10 +88,11 @@ the suite. Scale suites: `make test-scale` (100 nodes), `test-scale-resilience`,
 
 ## Active work
 
-All engineering plans shipped as of 2026-06-21 (`docs/plans/README.md`). Open:
-**Legible Emergence** (proposed, not started — `docs/plans/legible-emergence.md`) and the
-**artifact library** (proposed, not started — durable origin tier, librarian discovery, and
-the artifact-kind/runtime generalization of the provisioner, `docs/design/artifact-library.md`).
+All engineering plans shipped as of 2026-06-21 (`docs/plans/README.md`); **Legible Emergence**
+completed 2026-07-03 (phases 0–5 — `docs/plans/legible-emergence.md`). Open: the
+**artifact library** (steps 1–5 shipped 2026-07-07 — durable library + librarian + kind/runtime
+generalization + honest demos; remaining: object-store source + async-trait revisit,
+`docs/design/artifact-library.md` §10).
 Research-track: the three-arm work-distribution experiment (Paper 1) and the monetary-
 ecology article revision ([wiki](docs/wiki/domain/publications.md)). Delivery ledger:
 [dev/history](docs/wiki/dev/history.md). Self-audit series: `docs/analysis/ratings.md`
