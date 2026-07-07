@@ -59,7 +59,12 @@ impl From<WasmHostError> for InstallError {
 /// [`ArtifactRuntime::install`].
 pub trait Installed: Send {
     /// Is the capability actually servable right now? For a WASM component: the serve task
-    /// lives. For a placed model: the local runtime answers (the probe-gating hook).
+    /// lives. For a placed model: the local runtime answers (the probe-gating hook). The
+    /// provisioner consults this every `provision_round` and **withdraws** a failing install
+    /// (the same round reinstalls if demand/supervision still wants it — restart ≡
+    /// provisioning). Called under the provisioner's hosted lock: keep it **cheap and
+    /// non-blocking** (a file-exists check, a cached health bit — never a network call;
+    /// push slow health checks into a background task that flips a flag this reads).
     fn probe(&self) -> bool;
 
     /// Cooperative teardown: stop serving and clean up (abort tasks, delete placed bytes).

@@ -446,6 +446,28 @@ impl Provisioner {
     pub fn provision_round(&mut self) -> usize {
         let mut started = 0;
 
+        // ── Probe-gated health (§4.2) ────────────────────────────────────────
+        // A Live install whose probe fails is withdrawn — advertisement retracted, runtime
+        // torn down — and the demand/presence passes reinstall it as soon as the retracted
+        // ad clears the local capability view (typically the next round; the tombstone write
+        // is not synchronous with this pass): restart ≡ provisioning. Health is the hosting
+        // node's own observation; there is no fleet health protocol. Probes run under the
+        // hosted lock — they must be cheap and non-blocking (see `Installed::probe`).
+        let unhealthy: Vec<ArtifactId> = {
+            let map = self.hosted.lock().unwrap();
+            map.iter()
+                .filter_map(|(artifact, state)| match state {
+                    HostedState::Live(live) if !live.installed.probe() => Some(*artifact),
+                    _ => None,
+                })
+                .collect()
+        };
+        for artifact in unhealthy {
+            tracing::warn!(artifact = %artifact,
+                "hosted install failed its probe — withdrawing (this round reinstalls if still wanted)");
+            self.withdraw(&artifact);
+        }
+
         // ── Demand-driven (M15) ──────────────────────────────────────────────
         let entries: Vec<InstallableEntry> = self.catalog.entries().to_vec();
         for entry in entries {
@@ -916,6 +938,296 @@ mod tests {
 
         agent.shutdown().await;
         std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// An `Installed` that records its own teardown.
+    struct TrackingInstalled {
+        uninstalled: Arc<std::sync::atomic::AtomicBool>,
+    }
+    impl Installed for TrackingInstalled {
+        fn probe(&self) -> bool {
+            true
+        }
+        fn uninstall(self: Box<Self>) {
+            self.uninstalled.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// A Blob-kind runtime for exercising the provisioner's concurrency paths: optionally
+    /// blocks on a semaphore mid-install, optionally fails the first N installs, and returns
+    /// a teardown-tracking handle.
+    struct TrackingRuntime {
+        gate:           Option<Arc<tokio::sync::Semaphore>>,
+        fail_remaining: Arc<AtomicU64>,
+        uninstalled:    Arc<std::sync::atomic::AtomicBool>,
+    }
+    #[async_trait::async_trait]
+    impl ArtifactRuntime for TrackingRuntime {
+        fn kind(&self) -> ArtifactKind {
+            ArtifactKind::Blob
+        }
+        async fn install(
+            &self,
+            _entry: InstallableEntry,
+            _source: Arc<dyn ArtifactSource + Send + Sync>,
+            _ctx: RuntimeCtx,
+            _progress: ProgressFn,
+        ) -> Result<Box<dyn Installed>, crate::runtime::InstallError> {
+            if let Some(gate) = &self.gate {
+                let permit = gate
+                    .acquire()
+                    .await
+                    .map_err(|e| crate::runtime::InstallError(e.to_string()))?;
+                permit.forget();
+            }
+            if self
+                .fail_remaining
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .is_ok()
+            {
+                return Err(crate::runtime::InstallError("transient install failure".into()));
+            }
+            Ok(Box::new(TrackingInstalled { uninstalled: Arc::clone(&self.uninstalled) }))
+        }
+    }
+
+    #[tokio::test]
+    async fn wasm_component_full_lifecycle_install_invoke_shed_reinstall() {
+        // The WasmComponent kind through its whole life via the provisioner: supervision
+        // installs → the capability serves real invocations → the shed band withdraws it →
+        // re-supervising reinstalls the SAME artifact and it serves again (restart ≡
+        // provisioning as a test, not just a demo).
+        let agent = live_agent().await;
+        let host = Arc::new(WasmHost::new().expect("engine"));
+
+        let mut source = InMemorySource::new();
+        let id = source.insert(ECHO_COMPONENT.to_vec());
+        let mut catalog = InstallableCatalog::new();
+        catalog.add(InstallableEntry::new(Capability::new("text", "echo"), id));
+
+        let mut prov =
+            Provisioner::new(Arc::clone(&agent), host, catalog, Arc::new(source), 1.0);
+
+        // Act 1 — install + serve.
+        prov.supervise(CapFilter::new("text", "echo"), 1);
+        assert_eq!(prov.provision_round(), 1);
+        wait_live(&prov, 1).await;
+        let reply = agent.service()
+            .rpc_call(agent.node_id().clone(), crate::runtime::cap_invoke_kind("text", "echo"),
+                b"first life".to_vec(), Duration::from_secs(5))
+            .await.expect("serves");
+        assert_eq!(reply.as_ref(), b"first life");
+
+        // Act 2 — shed (cooperative self-removal).
+        let mut observable = false;
+        for _ in 0..40 {
+            if !agent.capabilities().demand(&CapFilter::new("text", "echo")).providers.is_empty() {
+                observable = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(observable);
+        prov.policies.clear();
+        prov.supervise_band(CapFilter::new("text", "echo"), 0, 0);
+        prov.provision_round();
+        assert_eq!(prov.hosted_count(), 0, "shed withdrew the component");
+
+        // Act 3 — reinstall: the same demand machinery brings the same artifact back.
+        prov.policies.clear();
+        prov.supervise(CapFilter::new("text", "echo"), 1);
+        let mut restarted = 0;
+        for _ in 0..40 {
+            restarted += prov.provision_round();
+            if prov.hosted_count() == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(restarted >= 1, "re-supervision reinstalls");
+        wait_live(&prov, 1).await;
+        let reply = agent.service()
+            .rpc_call(agent.node_id().clone(), crate::runtime::cap_invoke_kind("text", "echo"),
+                b"second life".to_vec(), Duration::from_secs(5))
+            .await.expect("serves after reinstall");
+        assert_eq!(reply.as_ref(), b"second life");
+
+        agent.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn blob_full_lifecycle_install_probe_selfheal_and_shed() {
+        // The Blob kind through its whole life: supervision installs (streamed from the
+        // library, placed on disk, advertised) → the placed file is destroyed out-of-band →
+        // the probe pass catches it and the SAME round reinstalls (probe-gated self-heal) →
+        // the shed band withdraws it and the placed file is actually deleted.
+        use crate::artifact::FsLibrarySource;
+        use crate::runtime::BlobRuntime;
+
+        let agent = live_agent().await;
+        let host = Arc::new(WasmHost::new().expect("engine"));
+
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let base = std::env::temp_dir().join(format!(
+            "mycelium-blob-lifecycle-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed),
+        ));
+        let (lib_dir, place_dir) = (base.join("library"), base.join("models"));
+
+        let lib = Arc::new(FsLibrarySource::open(&lib_dir).unwrap());
+        let payload: Vec<u8> = (0..200u8).cycle().take(500).collect();
+        let id = lib.store(&payload).unwrap();
+        let placed = place_dir.join(id.to_hex());
+
+        let mut catalog = InstallableCatalog::new();
+        catalog.add(
+            InstallableEntry::new(Capability::new("llm", "weights"), id)
+                .with_kind(ArtifactKind::Blob)
+                .with_cost(payload.len() as u64, 1),
+        );
+
+        let mut prov =
+            Provisioner::new(Arc::clone(&agent), host, catalog, lib as Arc<_>, 1.0);
+        prov.register_runtime(Arc::new(BlobRuntime::new(&place_dir).with_chunk_bytes(64)));
+
+        // Act 1 — install: streamed, placed, advertised.
+        prov.supervise(CapFilter::new("llm", "weights"), 1);
+        assert_eq!(prov.provision_round(), 1);
+        wait_live(&prov, 1).await;
+        assert_eq!(std::fs::read(&placed).unwrap(), payload);
+        let mut observable = false;
+        for _ in 0..40 {
+            if !agent.capabilities().demand(&CapFilter::new("llm", "weights")).providers.is_empty() {
+                observable = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(observable, "placed blob advertises");
+
+        // Act 2 — sabotage: the placed file vanishes. The default probe (file exists) fails,
+        // the probe pass withdraws, and supervision reinstalls from the library once the
+        // retracted ad clears the local view (content-addressed placement makes the re-pull
+        // honest: dest is gone). Structural poll over rounds — the tombstone lands async.
+        std::fs::remove_file(&placed).unwrap();
+        let mut restarted = 0;
+        for _ in 0..80 {
+            restarted += prov.provision_round();
+            if restarted >= 1 && prov.hosted_count() == 1 && prov.installing_count() == 0
+                && placed.exists()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(restarted >= 1, "probe failure leads to a reinstall");
+        wait_live(&prov, 1).await;
+        assert_eq!(std::fs::read(&placed).unwrap(), payload, "self-healed: file re-placed");
+
+        // Act 3 — shed: cooperative self-removal deletes the placed bytes.
+        prov.policies.clear();
+        prov.supervise_band(CapFilter::new("llm", "weights"), 0, 0);
+        prov.provision_round();
+        assert_eq!(prov.hosted_count(), 0, "over-max blob is withdrawn");
+        assert!(!placed.exists(), "uninstall deleted the placed blob");
+
+        agent.shutdown().await;
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[tokio::test]
+    async fn failed_install_drops_the_reservation_and_a_later_round_retries() {
+        // The Err path of start_install: a transient install failure must remove the
+        // Installing reservation (not leave a zombie that blocks forever), and the next
+        // round retries the same artifact to success — restart ≡ provisioning.
+        let agent = live_agent().await;
+        let host = Arc::new(WasmHost::new().expect("engine"));
+
+        let mut source = InMemorySource::new();
+        let id = source.insert(b"flaky model".to_vec());
+        let mut catalog = InstallableCatalog::new();
+        catalog.add(InstallableEntry::new(Capability::new("llm", "flaky"), id)
+            .with_kind(ArtifactKind::Blob));
+
+        let mut prov =
+            Provisioner::new(Arc::clone(&agent), host, catalog, Arc::new(source), 1.0);
+        let uninstalled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        prov.register_runtime(Arc::new(TrackingRuntime {
+            gate:           None,
+            fail_remaining: Arc::new(AtomicU64::new(1)), // first install fails
+            uninstalled:    Arc::clone(&uninstalled),
+        }));
+        prov.supervise(CapFilter::new("llm", "flaky"), 1);
+
+        assert_eq!(prov.provision_round(), 1, "first attempt starts");
+        // The failure clears the reservation…
+        let mut cleared = false;
+        for _ in 0..200 {
+            if prov.installing_count() == 0 && prov.hosted_count() == 0 {
+                cleared = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(cleared, "failed install drops the Installing reservation");
+
+        // …so the next round retries, and this one sticks.
+        assert_eq!(prov.provision_round(), 1, "retry starts");
+        wait_live(&prov, 1).await;
+
+        agent.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn withdraw_during_install_tears_down_the_stale_result() {
+        // The token-check path: an install withdrawn while in flight must, on completion,
+        // find its reservation gone and tear its fresh result down (advertisement dropped,
+        // Installed::uninstall called) — never resurrect itself into the map.
+        let agent = live_agent().await;
+        let host = Arc::new(WasmHost::new().expect("engine"));
+
+        let mut source = InMemorySource::new();
+        let id = source.insert(b"withdrawn mid-flight".to_vec());
+        let artifact = id;
+        let mut catalog = InstallableCatalog::new();
+        catalog.add(InstallableEntry::new(Capability::new("llm", "midflight"), id)
+            .with_kind(ArtifactKind::Blob));
+
+        let mut prov =
+            Provisioner::new(Arc::clone(&agent), host, catalog, Arc::new(source), 1.0);
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let uninstalled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        prov.register_runtime(Arc::new(TrackingRuntime {
+            gate:           Some(Arc::clone(&gate)),
+            fail_remaining: Arc::new(AtomicU64::new(0)),
+            uninstalled:    Arc::clone(&uninstalled),
+        }));
+        prov.supervise(CapFilter::new("llm", "midflight"), 1);
+
+        assert_eq!(prov.provision_round(), 1);
+        assert_eq!(prov.installing_count(), 1, "install is in flight, blocked on the gate");
+
+        // Withdraw while installing (in the fleet this happens when another provider makes
+        // the band's live count exceed max while ours is still pulling).
+        assert!(prov.withdraw(&artifact), "reservation withdrawn mid-install");
+        assert_eq!(prov.installing_count(), 0);
+
+        // Let the install finish: the completion's token check must tear it down.
+        gate.add_permits(1);
+        let mut torn_down = false;
+        for _ in 0..200 {
+            if uninstalled.load(std::sync::atomic::Ordering::SeqCst) {
+                torn_down = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(torn_down, "the stale install was explicitly uninstalled");
+        assert_eq!(prov.hosted_count(), 0, "it never resurrected into the hosted map");
+        assert_eq!(prov.installing_count(), 0);
+
+        agent.shutdown().await;
     }
 
     #[tokio::test]
