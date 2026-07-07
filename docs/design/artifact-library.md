@@ -1,8 +1,9 @@
 # The durable artifact library — origin tier, artifact kinds, and node-level install lifecycle
 
-**Status:** 📐 **proposed** (2026-07-07; revised same day — v2 adds the library manifest, the
-cardinality decision, the artifact-kind/runtime generalization, the large-artifact path, and the
-code impact map). Decision record for closing the gap between what
+**Status:** ✅ **adopted & implemented** (proposed, revised, and shipped 2026-07-07: sequencing
+steps 1–6 landed in commits `910c1ff`…; §4.4 resource-aware eligibility added and shipped the
+same day; step 7 resolved **declined-with-evidence** — see §10. Open remainder: the crate-naming
+question only). Decision record for closing the gap between what
 [`operations/artifacts.md`](../operations/artifacts.md) *prescribes* ("point `serve_artifacts` at a
 common object store — S3 / OCI registry / artifact server") and what `mycelium-wasm-host` *ships*
 (no durable `ArtifactSource`, no holder discovery, one hard-coded artifact kind). Nothing here
@@ -402,8 +403,24 @@ settles.
    loading tiers, bulk-transport peer serving. `llm_agent` de-simulated.
 5. **Examples honest-ified + acceptance tests** (§9 rows); `catalog` gains the
    publisher-dies-installer-still-provisions act; `mcp_toolgrowth` gains real code arrival.
-6. **Object-store source** (S3/OCI via `PrefetchingSource`; per-node read creds + egress gate).
-7. Revisit async `ArtifactSource` once 1–6 are in use (own decision record if taken).
+6. **Object-store source** — ✅ shipped as three pieces: the **`BlobFetcher`** async trait
+   (the vendor-SDK extension point — native SigV4 is deliberately out of scope; an AWS/OCI
+   client implements `BlobFetcher` and plugs in), **`PrefetchingSource`** (the verified-cache
+   bridge to the sync face, with `prefetch_all` as a librarian's mirror step), and
+   **`HttpLibrarySource`** (GET `{base}/{artifact-hex}` over any HTTP(S) blob store —
+   S3-compatible, nginx, CDN — with static credential headers, gated by the node's
+   `EgressPolicy` **before** dispatch: the same WS3 posture as the LLM backends, per-node
+   creds, no relay).
+7. Revisit async `ArtifactSource` once 1–6 are in use. **Resolved 2026-07-07:
+   declined-with-evidence.** By step 6 the crate ships three async faces that together serve
+   every consumer: `MeshArtifactSource::prefetch` (peer pulls), `BlobFetcher` +
+   `PrefetchingSource` (remote stores, vendor-extensible), and `RangedArtifactSource`
+   (streaming for large blobs). An async `ArtifactSource` would unify those aesthetically but
+   break `WasmHost::provision` and every source implementation for no new capability — the
+   same shape as the exactly-once-effect record's declined code-extraction: the shared
+   artifact is the *pattern* (async pull → verified cache → sync face), not a trait revision.
+   Reopen only if a consumer appears that genuinely needs transparent on-demand async fetch
+   inside `provision` itself.
 
 **Non-goals:** cross-cluster catalogue sync (stays publish-per-cluster + shared store — ops
 guide §"Sharing a catalogue across clusters"); artifact GC/eviction (operator concern; entries

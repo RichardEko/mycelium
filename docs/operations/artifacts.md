@@ -79,10 +79,17 @@ operator concern (wrap a KMS); the demo uses a fixed seed.
   for this; if you wire it by hand, prefetch first.
 - **Eviction / GC.** Catalogue entries are ordinary KV; tombstone an entry to
   withdraw it. Held artifact bytes live as long as the serving node holds them.
-- **Durability.** The shipped `ArtifactSource` implementations are in-memory and
-  mesh-cache only — bytes survive exactly as long as some serving node holds them.
-  A durable origin tier (filesystem/object-store source + librarian discovery) is
-  a proposed design: see [design/artifact-library.md](../design/artifact-library.md).
+- **Durability — the library tier.** For bytes that must outlive any serving node,
+  use the durable library: `FsLibrarySource` (a content-addressed blob directory +
+  signed `Manifest`) or any HTTP(S) blob store via `HttpLibrarySource` +
+  `PrefetchingSource` (egress-gated, credential headers; implement `BlobFetcher`
+  for vendor SDKs). A node takes the **librarian** role with `spawn_librarian` —
+  it serves the bytes, advertises `artifact/librarian` for discovery
+  (`MeshArtifactSource::resolving` finds it; no hardcoded node-ids), and keeps the
+  catalogue reconciled to the manifest. The library is an *origin tier*, never a
+  mandatory read path — peers that pulled an artifact serve the same verified
+  bytes. Design record: [design/artifact-library.md](../design/artifact-library.md);
+  live demo: the coop `catalog` example (origin dies, installs continue).
 
 ### Sharing a catalogue across clusters
 

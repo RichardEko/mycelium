@@ -10,6 +10,17 @@ lock-order rows 20–22; full coop smoke + make check green. **Open: step 6 (obj
 via PrefetchingSource — needs a per-node credentials story) and step 7 (async ArtifactSource
 revisit).** Ledger entry: [dev/history](../history.md); companion entry updated.
 
+**Steps 6 + 7 closed the same day — the workstream is COMPLETE.** Step 6 (object-store
+source): `BlobFetcher` async trait (vendor-SDK extension point; SigV4 deliberately out of
+scope), `PrefetchingSource` (verified-cache bridge + `prefetch_all` librarian mirror step),
+`HttpLibrarySource` (GET `{base}/{hex}` over any HTTP(S) blob store, static credential headers,
+`EgressPolicy`-gated *before* dispatch — same WS3 posture as LLM backends; reqwest/rustls).
+Step 7 (async `ArtifactSource`): **declined-with-evidence** — three async faces
+(mesh prefetch / BlobFetcher / RangedArtifactSource) serve every consumer; a breaking trait
+revision buys only aesthetics (note §10). Statuses flipped: note ✅ adopted & implemented,
+ops-guide durability bullet rewritten as the library-tier runbook, docs/README + CLAUDE.md.
+Only the crate-naming question remains open.
+
 **Step 4b added later the same day** (requirements review with Richard): **resource-aware
 eligibility** (design §4.4) — signed `requires: {disk, mem}` in the entry (safety claims inside
 provenance; hints stay unsigned), `ResourceProbe` + headroom fraction (default system probe at

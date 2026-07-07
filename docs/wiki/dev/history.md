@@ -82,7 +82,7 @@ The three-verb operator spine — **localize** (`/fleet`) · **explain** (`/expl
   `mcp_toolgrowth` (the converter's arithmetic **arrives** as a new committed WASM fixture,
   bridged over MCP; activation-vs-installation taught explicitly); `llm_agent`'s percent loops
   stay simulated by decision (wasmtime must not enter `make check` via root dev-deps) and say so.
-  Lock-order rows 20–22. Open: object-store source (step 6), async `ArtifactSource` (step 7).
+  Lock-order rows 20–22. **Complete** — step 6 shipped (`BlobFetcher`/`PrefetchingSource`/`HttpLibrarySource`: any HTTP(S) blob store, egress-gated, vendor SDKs via the trait); step 7 declined-with-evidence (three async faces already serve every consumer — note §10). Open: the crate-naming question only.
 
 ## v2.0 (2026-06-21) — all 16 milestones M1–M16, acceptance gate met, no deferrals
 
