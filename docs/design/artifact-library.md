@@ -241,6 +241,21 @@ pub trait Installed: Send {
   (file-exists, a cached health bit — slow checks live in a background task that flips a
   flag the probe reads).
 
+### 4.3.1 Composite deployments: the profile is an artifact too (added 2026-07-07)
+
+A model deployment has two governed halves: the **weights** and the **profile** (system
+prompt, parameters — the configuration a runtime loads the weights *with*). Both travel the
+library as ordinary signed Blob entries; the profile references the weights **by content
+address** (`FROM artifact:{hex}` in the demo's Modelfile dialect), never by path or node.
+Activation resolves the reference against the local placement dir — content-addressed
+placement makes the weights' path derivable from their hash. **There is no dependency
+resolver** (the M15 one-hop contract stands): a profile whose referenced artifact isn't
+placed yet fails activation, drops its reservation, and a later round retries — the ordering
+mechanism *is* restart ≡ provisioning. Updating a prompt/parameter set = publishing a new
+profile artifact (new content address, re-signed); the weights entry is untouched. Proven
+live by the `model_deploy` demo, which asserts `ollama show` carries the SYSTEM prompt that
+arrived in the signed profile.
+
 ### 4.4 Resource-aware eligibility (added 2026-07-07, requirements review)
 
 A node must not elect to install an artifact it cannot fit. The static byte budget (§4.3) is an
