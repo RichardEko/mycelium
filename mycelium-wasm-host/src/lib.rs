@@ -38,7 +38,7 @@ mod runtime;
 
 pub use artifact::{
     verify_artifact, ArtifactId, ArtifactIdError, ArtifactKind, ArtifactSource, FsLibrarySource,
-    InMemorySource, VerifyError,
+    InMemorySource, RangedArtifactSource, VerifyError,
 };
 pub use catalog::{
     publish_installable, InstallableCatalog, InstallableEntry, Manifest, ManifestError,
@@ -53,6 +53,6 @@ pub use librarian::{
 pub use mesh_source::{pull_artifact, serve_artifacts, MeshArtifactSource, ARTIFACT_FETCH_KIND};
 pub use provisioner::{Provisioner, SupervisionPolicy};
 pub use runtime::{
-    cap_invoke_kind, ArtifactRuntime, InstallError, Installed, ProgressFn, RuntimeCtx,
-    WasmComponentRuntime,
+    cap_invoke_kind, ArtifactRuntime, BlobRuntime, InstallError, Installed, ProgressFn,
+    RuntimeCtx, WasmComponentRuntime,
 };

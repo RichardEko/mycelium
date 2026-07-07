@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use mycelium::{CapFilter, CapabilityReg, GossipAgent};
+use mycelium::{CapFilter, CapValue, Capability, CapabilityReg, GossipAgent};
 
 use crate::artifact::{ArtifactId, ArtifactKind, ArtifactSource};
 use crate::catalog::{InstallableCatalog, InstallableEntry};
@@ -269,12 +269,41 @@ impl Provisioner {
         tokio::spawn(async move {
             let artifact = entry.artifact;
             let provides = entry.provides.clone();
-            // Real progress → loading-tier advertisement arrives with the blob runtime; the
-            // provisioner's default observer is a no-op.
-            let progress: ProgressFn = Arc::new(|_fetched, _total| {});
+
+            // Loading tier: while the install runs, `{ns}/loading` is advertised with a `pct`
+            // attribute stepped in tens — the capability-tier convention the llm_agent example
+            // established, here driven by real bytes from the runtime's pull. Each step
+            // tombstones-then-re-advertises (that order makes the advertise the LWW winner);
+            // the whole tier drops when the install resolves. Lock-order table row 22.
+            let loading: Arc<Mutex<(u64, Option<CapabilityReg>)>> =
+                Arc::new(Mutex::new((u64::MAX, None)));
+            let progress: ProgressFn = {
+                let loading = Arc::clone(&loading);
+                let agent = Arc::clone(&agent);
+                let ns = provides.namespace.clone();
+                Arc::new(move |fetched, total| {
+                    if total == 0 {
+                        return;
+                    }
+                    let step = (fetched.saturating_mul(100) / total).min(100) / 10 * 10;
+                    let mut tier = loading.lock().unwrap();
+                    if tier.0 == step {
+                        return;
+                    }
+                    tier.0 = step;
+                    let mut cap = Capability::new(ns.clone(), "loading");
+                    cap.attributes.insert("pct".into(), CapValue::Integer(step as i64));
+                    tier.1.take(); // tombstone the previous step first
+                    tier.1 =
+                        Some(agent.capabilities().advertise_capability(cap, ADVERTISE_INTERVAL));
+                })
+            };
             let ctx = RuntimeCtx { agent: Arc::clone(&agent) };
 
-            match runtime.install(entry, source, ctx, progress).await {
+            let result = runtime.install(entry, source, ctx, progress).await;
+            loading.lock().unwrap().1.take(); // install resolved — the loading tier ends
+
+            match result {
                 Ok(installed) => {
                     // Advertise only after a successful install: a resolvable `cap/` entry always
                     // has a live receiver behind it (the runtime registered its serve path before
@@ -657,6 +686,63 @@ mod tests {
         wait_live(&p2, 1).await;
 
         agent.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn blob_kind_installs_via_a_registered_runtime() {
+        // The kind-dispatch acceptance path: a Blob entry, a registered BlobRuntime, and the
+        // same demand/presence machinery — the artifact ends up *placed* (not instantiated)
+        // and its capability advertised.
+        use crate::artifact::FsLibrarySource;
+        use crate::runtime::BlobRuntime;
+
+        let agent = live_agent().await;
+        let host = Arc::new(WasmHost::new().expect("engine"));
+
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let base = std::env::temp_dir().join(format!(
+            "mycelium-prov-blob-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed),
+        ));
+        let lib_dir = base.join("library");
+        let place_dir = base.join("models");
+
+        let lib = Arc::new(FsLibrarySource::open(&lib_dir).unwrap());
+        let payload: Vec<u8> = (0..100u8).collect();
+        let id = lib.store(&payload).unwrap();
+
+        let mut catalog = InstallableCatalog::new();
+        catalog.add(
+            InstallableEntry::new(Capability::new("llm", "weights"), id)
+                .with_kind(ArtifactKind::Blob)
+                .with_cost(payload.len() as u64, 1),
+        );
+
+        let mut prov =
+            Provisioner::new(Arc::clone(&agent), host, catalog, lib as Arc<_>, 1.0);
+        prov.register_runtime(Arc::new(BlobRuntime::new(&place_dir).with_chunk_bytes(16)));
+        prov.supervise(CapFilter::new("llm", "weights"), 1);
+
+        assert_eq!(prov.provision_round(), 1, "blob install starts");
+        wait_live(&prov, 1).await;
+
+        // Placed (streamed from the ranged library source), content-correct.
+        assert_eq!(std::fs::read(place_dir.join(id.to_hex())).unwrap(), payload);
+
+        // And advertised like any provisioned capability.
+        let mut saw_provider = false;
+        for _ in 0..40 {
+            if !agent.capabilities().demand(&CapFilter::new("llm", "weights")).providers.is_empty() {
+                saw_provider = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(saw_provider, "placed blob's capability is advertised");
+
+        agent.shutdown().await;
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[tokio::test]

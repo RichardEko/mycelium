@@ -179,6 +179,28 @@ impl ArtifactKind {
 pub trait ArtifactSource {
     /// Fetch the bytes for `id`, or `None` if this source does not hold it.
     fn fetch(&self, id: &ArtifactId) -> Option<Bytes>;
+
+    /// This source's streaming view, if it supports ranged reads (default: it doesn't).
+    /// Large-artifact consumers (the blob runtime) stream via this when present and fall back
+    /// to whole-bytes [`fetch`](Self::fetch) otherwise — see [`RangedArtifactSource`].
+    fn as_ranged(&self) -> Option<&dyn RangedArtifactSource> {
+        None
+    }
+}
+
+/// Ranged reads — the streaming extension of [`ArtifactSource`] for large artifacts
+/// (`docs/design/artifact-library.md` §5). A multi-GB model must stream to disk in chunks with
+/// real progress, never materialise in memory. Like the base trait the source stays
+/// **untrusted**: the consumer hashes the assembled stream and compares to the content address
+/// before use. [`FsLibrarySource`] implements it natively; in-memory and mesh-cache sources
+/// don't need to (their bytes are already resident).
+pub trait RangedArtifactSource: ArtifactSource {
+    /// Total size in bytes of the blob for `id`, or `None` if this source does not hold it.
+    fn size(&self, id: &ArtifactId) -> Option<u64>;
+
+    /// Read up to `len` bytes at `offset` from the blob for `id`. A short read at the tail
+    /// returns the remaining bytes; `None` means the blob is not held or the read failed.
+    fn fetch_range(&self, id: &ArtifactId, offset: u64, len: u64) -> Option<Bytes>;
 }
 
 /// An in-memory artifact source — for embedding and tests. Keys are derived from the bytes, so a
@@ -292,6 +314,34 @@ impl ArtifactSource for FsLibrarySource {
     fn fetch(&self, id: &ArtifactId) -> Option<Bytes> {
         std::fs::read(self.blob_path(id)).ok().map(Bytes::from)
     }
+
+    fn as_ranged(&self) -> Option<&dyn RangedArtifactSource> {
+        Some(self)
+    }
+}
+
+impl RangedArtifactSource for FsLibrarySource {
+    fn size(&self, id: &ArtifactId) -> Option<u64> {
+        std::fs::metadata(self.blob_path(id)).ok().map(|m| m.len())
+    }
+
+    fn fetch_range(&self, id: &ArtifactId, offset: u64, len: u64) -> Option<Bytes> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = std::fs::File::open(self.blob_path(id)).ok()?;
+        file.seek(SeekFrom::Start(offset)).ok()?;
+        let mut buf = vec![0u8; usize::try_from(len).ok()?];
+        let mut read = 0;
+        while read < buf.len() {
+            match file.read(&mut buf[read..]) {
+                Ok(0) => break, // tail short read
+                Ok(n) => read += n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => return None,
+            }
+        }
+        buf.truncate(read);
+        Some(Bytes::from(buf))
+    }
 }
 
 #[cfg(test)]
@@ -378,6 +428,39 @@ mod tests {
         drop(lib);
         let reopened = FsLibrarySource::open(&dir).expect("reopen");
         assert_eq!(reopened.fetch(&id).as_deref(), Some(&b"component bytes"[..]));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn fs_library_serves_ranged_reads_that_reassemble_to_the_content_address() {
+        let dir = scratch_lib_dir("ranged");
+        let lib = FsLibrarySource::open(&dir).expect("open");
+        let payload: Vec<u8> = (0..=255u8).cycle().take(1000).collect();
+        let id = lib.store(&payload).unwrap();
+
+        let ranged = lib.as_ranged().expect("fs library supports ranged reads");
+        assert_eq!(ranged.size(&id), Some(1000));
+        assert_eq!(ranged.size(&ArtifactId::of(b"missing")), None);
+
+        // Chunked reassembly hashes back to the content address (the streaming verify path).
+        let mut assembled = Vec::new();
+        let mut off = 0u64;
+        while off < 1000 {
+            let chunk = ranged.fetch_range(&id, off, 96).expect("chunk");
+            assert!(!chunk.is_empty());
+            off += chunk.len() as u64;
+            assembled.extend_from_slice(&chunk);
+        }
+        assert_eq!(ArtifactId::of(&assembled), id);
+
+        // Tail short read + past-the-end reads behave.
+        assert_eq!(ranged.fetch_range(&id, 990, 96).unwrap().len(), 10);
+        assert_eq!(ranged.fetch_range(&id, 1000, 8).unwrap().len(), 0);
+        assert!(ranged.fetch_range(&ArtifactId::of(b"missing"), 0, 8).is_none());
+
+        // The in-memory source has no ranged view (whole-bytes fallback territory).
+        assert!(InMemorySource::new().as_ranged().is_none());
 
         std::fs::remove_dir_all(&dir).ok();
     }
