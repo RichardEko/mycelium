@@ -20,10 +20,10 @@ run_demo() {
   local markers=("$@")
   echo "── ${label} ─────────────────────────────────────────────"
   local attempt out ok
-  # `provisioning` + `catalog` need the WASM autonomic-provisioner host, gated behind the `wasm`
+  # `provisioning` + `catalog` + `mcp_toolgrowth` need the WASM host, gated behind the `wasm`
   # feature so the other ten demos build without compiling wasmtime (see examples/coop/Cargo.toml).
   local feat=""
-  case "$bin" in provisioning|catalog) feat="--features wasm";; esac
+  case "$bin" in provisioning|catalog|mcp_toolgrowth) feat="--features wasm";; esac
   for attempt in $(seq 1 "$ATTEMPTS"); do
     out="$(cargo run -q -p mycelium-coop-examples $feat --bin "$bin" 2>&1 || true)"
     ok=1
@@ -51,9 +51,9 @@ run_demo "05 · federation_facts" federation_facts "All assertions passed" "veri
 run_demo "06 · rotation"         rotation         "All assertions passed" "STILL verifies the old-key-signed field"
 run_demo "07 · consensus"        consensus        "All assertions passed" "reads as reopened"
 run_demo "08 · llm_pipeline"     llm_pipeline     "All assertions passed" "both LLM stages"
-run_demo "09 · mcp_toolgrowth"   mcp_toolgrowth   "All assertions passed" "loaded the MCP tool and offered it out"
+run_demo "09 · mcp_toolgrowth"   mcp_toolgrowth   "All assertions passed" "the converter code arrived over the mesh"
 run_demo "10 · llm_council"      llm_council      "All assertions passed" "fanned out to 3 specialists, synthesized, and refined"
-run_demo "11 · catalog"          catalog          "All assertions passed" "pulled the artifact bytes over the mesh"
+run_demo "11 · catalog"          catalog          "All assertions passed" "installed from a peer cache and ran it"
 run_demo "12 · diagnostics"      diagnostics      "All assertions passed" "diagnosed the governed-group conflict"
 
 echo "All co-op smokes passed."

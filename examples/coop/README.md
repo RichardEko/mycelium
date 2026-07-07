@@ -41,7 +41,7 @@ curl http://127.0.0.1:<printed-port>/.well-known/agent-facts.json
 | 06 | `rotation` | ✅ shipped | zero-disruption identity rotation; pre-rotation facts still verify |
 | 07 | `consensus` | ✅ shipped | multi-bloc agreement via cross-group consensus + leased (decaying) decisions |
 | 08 | `llm_pipeline` | ✅ shipped | LLM agents coordinating a multi-stage pipeline purely via a tuple space |
-| 09 | `mcp_toolgrowth` | ✅ shipped | an LLM agent grows the fabric's toolset at runtime — declares a need, an MCP tool is loaded on demand, then invoked |
+| 09 | `mcp_toolgrowth` | ✅ shipped | an LLM agent grows the fabric's toolset at runtime — declares a need, the tool's **code arrives** (catalogue → pull → verify → instantiate), is bridged over MCP, then invoked |
 | 10 | `llm_council` | ✅ shipped | a council of **differentiated** LLM agents deliberates a shared task — fan-out → synthesis → iterative refinement, all via the tuple space |
 | 11 | `catalog` | ✅ shipped | the **cluster-wide artifact catalogue** — register a deployable, discover it via gossip, pull bytes over the mesh, provision & invoke (no registry server) |
 
@@ -59,7 +59,7 @@ write-up is [guide chapter 14](../../docs/guide/14-patterns-and-pitfalls.md); th
 | `rotation` | use a faster anti-entropy tick to read a freshly-signed fact across startup |
 | `consensus` | commitments are promise-strength (an empty bloc can't be coerced) |
 | `llm_council` | keep fan-in joins to a single synthesizer today (keyed fan-in is M13) |
-| `mcp_toolgrowth` | bridge an MCP tool by *also* advertising a `tool/` capability |
+| `mcp_toolgrowth` | activation ≠ installation (registering compiled-in code is not code arrival); bridge an MCP tool by *also* advertising a `tool/` capability |
 | `catalog` | the library is an origin tier, not a read dependency (don't make installs require the origin alive — a peer's cache verifies identically) |
 | all | structural polls, never fixed sleeps; bind N ports at once |
 
@@ -204,20 +204,29 @@ API only.
 ### 09 — `mcp_toolgrowth`
 
 ```bash
-cargo run -p mycelium-coop-examples --bin mcp_toolgrowth
+cargo run -p mycelium-coop-examples --features wasm --bin mcp_toolgrowth
 ```
 
 An LLM agent, mid-task, finds it needs a tool the fabric doesn't yet offer (a kg→tonnes converter).
-It **declares the requirement**; a `tool-host` node — running dark — sees the unmet demand, **loads
-the MCP tool into itself and offers it out** (`register_mcp_tool` → `tools/unit-convert/{host}`) and
-advertises the matching capability so the demand resolves. The agent then **discovers and invokes**
-the freshly-loaded tool over the MCP path (`rpc_call` with `mcp.invoke`), gets `{"tonnes": 5.0}`, and
-its model composes the receipt.
+It **declares the requirement**; a `tool-host` node — running dark — sees the unmet demand and
+**installs the tool for real**: the converter's arithmetic lives in a WASM component whose bytes
+**arrive over the mesh** (catalogue entry → provenance check → pull from a discovered librarian →
+content-address verify → instantiate), and the arrived component is then **bridged** as an MCP tool
+(`register_mcp_tool` → `tools/unit-convert/{host}`, the handler a thin shim into the sandboxed
+guest) with the matching `tool/` capability advertised so the demand resolves. The agent
+**discovers and invokes** it over the MCP path (`rpc_call` with `mcp.invoke`), gets
+`{"tonnes": 5.0}` — computed *inside the component that just arrived* — and its model composes the
+receipt.
+
+**Activation ≠ installation:** the tool-host also registers a compiled-in `ping` tool at startup,
+explicitly labelled as *activation* — turning on code you already shipped. The converter is
+*installation*: `grep` the demo for arithmetic; there is none. (The guest source:
+`mycelium-wasm-host/tests/fixtures/unit-convert-component/`.)
 
 **Philosophy beat:** the agentic self-extension loop — the fabric's *capability surface grows because
 an agent asked for it.* No operator wired the tool in advance, no coordinator decided who hosts it;
-it's the same demand→provision pheromone as the WASM flagship (04), here loading an **MCP tool**
-instead of a WASM component.
+it's the same demand→provision pheromone as the WASM flagship (04), and the same library/catalogue
+machinery as demo 11 — here surfacing the arrived code as an **MCP tool**.
 
 ### 10 — `llm_council`
 

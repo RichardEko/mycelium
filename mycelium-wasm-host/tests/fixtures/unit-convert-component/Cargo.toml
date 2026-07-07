@@ -1,0 +1,24 @@
+# WASM guest fixture: a kg→tonnes unit converter capability component. This is the
+# "tool that ARRIVES" for the mcp_toolgrowth demo — the conversion arithmetic lives in
+# THIS component, pulled over the mesh and provisioned at runtime, not compiled into any
+# node. Built out-of-band for wasm32-wasip2 (produces a component); the resulting .wasm
+# is committed as a fixture so CI needs no wasm toolchain. Regenerate with build.sh.
+# Standalone (not part of the parent workspace — it's a wasm32 cdylib).
+[workspace]
+
+[package]
+name = "unit-convert-component"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+strip = true

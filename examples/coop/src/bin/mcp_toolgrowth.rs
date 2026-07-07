@@ -1,27 +1,49 @@
-//! Example 09 — **an LLM agent grows the fabric's toolset at runtime** (MCP + demand).
+//! Example 09 — **an LLM agent grows the fabric's toolset at runtime** (MCP + demand + a real
+//! code arrival).
 //!
-//! An LLM agent, mid-task, finds it needs a tool the fabric doesn't yet offer — a unit converter.
-//! It **declares the requirement**; a tool-host node, watching demand, **loads the MCP tool into
-//! itself and offers it out** (`register_mcp_tool` → `tools/unit-convert/{host}`); the agent then
-//! **discovers and invokes** the freshly-loaded tool over the MCP path and finishes its task.
+//! An LLM agent, mid-task, finds it needs a tool the fabric doesn't yet offer — a unit
+//! converter. It **declares the requirement**; a tool-host node, watching demand, **installs the
+//! tool**: the converter's arithmetic lives in a WASM component that **arrives over the mesh**
+//! (discovered via the catalogue, pulled by content address from a librarian, verified,
+//! instantiated) and is then **bridged** as an MCP tool (`register_mcp_tool` →
+//! `tools/unit-convert/{host}` + a `tool/` capability so the demand resolves). The agent
+//! discovers and invokes it over the MCP path and finishes its task.
 //!
-//! This is the agentic self-extension loop: the fabric's capability surface grows because an agent
-//! asked for it — no operator wired the tool in advance, no coordinator decided who hosts it.
+//! **Activation vs installation — the distinction this demo teaches.** The tool-host also has a
+//! trivial `ping` tool *compiled in*, which it merely **activates** (registers) at startup:
+//! turning on code you already shipped is *activation*. The converter is *installation*: no node
+//! has its logic compiled in — `grep` this file for arithmetic; there is none — the code arrives
+//! as verified bytes at runtime. Both are legitimate; don't mistake the first for the second.
 //!
-//!   • `tool-host` — can provide a `unit-convert` MCP tool, but runs **dark** until demand appears.
-//!   • `llm-agent` — processes a donation; needs kg→tonnes; declares the requirement, waits for the
-//!                   tool to be offered, invokes it, then uses its model to compose the result.
+//!   • CI (plain code, no node) — stores the converter component in a durable library + signed
+//!     manifest (see the `catalog` demo for the library pattern in full).
+//!   • `library` — a librarian node: serves the bytes, advertises `artifact/librarian`, syncs
+//!     the manifest into the catalogue.
+//!   • `tool-host` — runs **dark** (only `ping` activated) until demand appears; then installs
+//!     the arrived component and offers it as an MCP tool.
+//!   • `llm-agent` — declares the requirement, waits, invokes the tool, composes the result.
 //!
-//! Run:  cargo run -p mycelium-coop-examples --bin mcp_toolgrowth
+//! Run:  cargo run -p mycelium-coop-examples --features wasm --bin mcp_toolgrowth
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use coop::common::{alloc_ports, spawn_depot, DepotOpts};
+use ed25519_dalek::SigningKey;
 use mycelium::{Capability, CapFilter, EchoBackend, LlmBackend, signal_kind};
+use mycelium_wasm_host::{
+    librarian_filter, spawn_librarian, FsLibrarySource, HostState, InstallableCatalog,
+    InstallableEntry, LibrarianConfig, Manifest, MeshArtifactSource, WasmHost, MANIFEST_FILE,
+};
 use serde_json::json;
 
 const TOOL: &str = "unit-convert";
+
+/// Read at **runtime** — the converter's logic is in this component, not in this binary.
+const CONVERTER_WASM_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../mycelium-wasm-host/tests/fixtures/unit_convert_component.wasm"
+);
 
 async fn wait_until(secs: u64, mut cond: impl FnMut() -> bool) -> bool {
     let deadline = std::time::Instant::now() + Duration::from_secs(secs);
@@ -48,25 +70,63 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cert_dir = std::env::temp_dir().join(format!("coop-mcp-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&cert_dir);
-    let p = alloc_ports(4);
+    let p = alloc_ports(6);
 
-    // ── tool-host: can offer a unit-convert MCP tool, but runs dark for now ──────
-    let host = spawn_depot(DepotOpts {
-        name: "tool-host".into(), gossip_port: p[0], http_port: p[1],
-        zone: "depot-a".into(), bootstrap: vec![], cert_dir: cert_dir.clone(), health_secs: Some(2),
+    // ── Phase 0 — CI publishes the converter component into the library ──────────
+    let lib_dir = std::env::temp_dir().join(format!("coop-mcp-lib-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&lib_dir);
+    let publisher_key = SigningKey::from_bytes(&[43u8; 32]);
+    let publisher_pub = publisher_key.verifying_key().to_bytes();
+
+    let converter_wasm = std::fs::read(CONVERTER_WASM_PATH)?; // runtime read — no include_bytes!
+    let library_src = Arc::new(FsLibrarySource::open(&lib_dir)?);
+    let artifact_id = library_src.store(&converter_wasm)?;
+    let entry = InstallableEntry::new(Capability::new("tool", TOOL), artifact_id)
+        .with_cost(converter_wasm.len() as u64, 1)
+        .signed_by(&publisher_key);
+    Manifest::from_entries(vec![entry]).save(&lib_dir.join(MANIFEST_FILE))?;
+    println!("[ci] converter component stored in the library (its arithmetic is NOT in this binary)");
+
+    // ── library node: the librarian role ─────────────────────────────────────────
+    let library = spawn_depot(DepotOpts {
+        name: "library".into(), gossip_port: p[0], http_port: p[1],
+        zone: "hub".into(), bootstrap: vec![], cert_dir: cert_dir.clone(), health_secs: Some(2),
     }).await?;
-    println!("[tool-host] up — can provide '{TOOL}', running dark (nothing registered yet)");
+    let seed = library.gossip_port;
+    let _librarian = spawn_librarian(
+        Arc::clone(&library.agent),
+        Arc::clone(&library_src) as Arc<_>,
+        LibrarianConfig {
+            manifest_path: lib_dir.join(MANIFEST_FILE),
+            publisher: publisher_pub,
+            sync_interval: Duration::from_millis(500),
+        },
+    );
+    println!("[library] librarian up — serving bytes + syncing the manifest into the catalogue");
 
-    // ── llm-agent: an LLM-backed depot processing a donation ────────────────────
+    // ── tool-host + llm-agent ─────────────────────────────────────────────────────
+    let host = spawn_depot(DepotOpts {
+        name: "tool-host".into(), gossip_port: p[2], http_port: p[3],
+        zone: "depot-a".into(), bootstrap: vec![seed], cert_dir: cert_dir.clone(), health_secs: Some(2),
+    }).await?;
+    // CONTRAST — activation: `ping` was compiled into this binary; registering it just turns
+    // existing code on. No new code arrives. (Installation is what happens to the converter.)
+    let _ping = host.agent.mcp().register_mcp_tool(
+        "ping",
+        json!({"name": "ping", "description": "liveness echo (compiled-in)"}),
+        |_args| async move { Ok(json!({"pong": true})) },
+    );
+    println!("[tool-host] up — 'ping' ACTIVATED (code was already here); '{TOOL}' not present in any form");
+
     let agent = spawn_depot(DepotOpts {
-        name: "llm-agent".into(), gossip_port: p[2], http_port: p[3],
-        zone: "depot-b".into(), bootstrap: vec![p[0]], cert_dir: cert_dir.clone(), health_secs: Some(2),
+        name: "llm-agent".into(), gossip_port: p[4], http_port: p[5],
+        zone: "depot-b".into(), bootstrap: vec![seed], cert_dir: cert_dir.clone(), health_secs: Some(2),
     }).await?;
     println!("[llm-agent] up — needs to report a donation weight in tonnes");
 
     wait_until(20, || !agent.agent.peers().is_empty() && !host.agent.peers().is_empty()).await;
 
-    // ── tool-host watches demand for tool/unit-convert; loads the MCP tool on demand ──
+    // ── tool-host watches demand; INSTALLS the tool when the fabric asks ─────────
     let host_agent = Arc::clone(&host.agent);
     let host_loop = tokio::spawn(async move {
         let filter = CapFilter::new("tool", TOOL);
@@ -76,20 +136,64 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let demand = host_agent.capabilities().demand(&filter);
             let unmet = demand.providers.is_empty() && !demand.demanding_nodes.is_empty();
             if unmet && _tool_handle.is_none() {
-                // Load the MCP tool INTO this node and offer it out (writes tools/unit-convert/{self}).
+                // 1. Resolve the *catalogue*: is there an installable artifact providing tool/unit-convert?
+                let Some(entry) =
+                    InstallableCatalog::from_kv(&host_agent.kv()).resolve_best(&filter).cloned()
+                else {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    continue; // catalogue entry not gossiped yet
+                };
+                // 2. Provenance: only install what a trusted publisher vouched for.
+                if !entry.verify_provenance(&[publisher_pub]) {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    continue;
+                }
+                // 3. Pull the bytes from a *discovered* holder (capability ring), verified.
+                let mesh = MeshArtifactSource::resolving(
+                    Arc::clone(&host_agent), librarian_filter(), Duration::from_secs(3));
+                if !mesh.prefetch(&entry.artifact).await {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    continue; // holder not reachable yet — retry
+                }
+                // 4. Instantiate the arrived component: the converter's code is now on this node.
+                let state = HostState::new(
+                    host_agent.node_id().clone(), entry.provides.namespace.clone(),
+                    host_agent.kv(), host_agent.mesh());
+                let instance = match WasmHost::new().and_then(|h| h.provision(&mesh, &entry.artifact, state)) {
+                    Ok(i) => i,
+                    Err(e) => {
+                        eprintln!("[tool-host] provision failed ({e}) — retrying");
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                        continue;
+                    }
+                };
+                println!("[tool-host] unmet demand for tool/{TOOL} → the converter code arrived over the mesh (pulled, verified, instantiated)");
+
+                // 5. Bridge it as an MCP tool: the handler is a thin shim — the arithmetic runs
+                //    inside the sandboxed component that just arrived.
                 let schema = json!({
                     "name": TOOL,
-                    "description": "Convert a mass in kilograms to tonnes.",
+                    "description": "Convert a mass in kilograms to tonnes (runs in an installed WASM component).",
                     "inputSchema": {"type": "object", "properties": {"kg": {"type": "number"}}},
                 });
-                _tool_handle = Some(host_agent.mcp().register_mcp_tool(TOOL, schema, |args| async move {
-                    let kg = args["kg"].as_f64().unwrap_or(0.0);
-                    Ok(json!({"tonnes": kg / 1000.0}))
+                let inst = Arc::new(std::sync::Mutex::new(instance));
+                _tool_handle = Some(host_agent.mcp().register_mcp_tool(TOOL, schema, move |args| {
+                    let inst = Arc::clone(&inst);
+                    async move {
+                        let out = {
+                            let mut i = inst.lock().unwrap();
+                            i.invoke("invoke", args.to_string().into_bytes())
+                                .map_err(|e| format!("host: {e}"))?
+                                .map_err(|e| format!("component: {e}"))?
+                        };
+                        serde_json::from_slice::<serde_json::Value>(&out)
+                            .map_err(|e| format!("bad component json: {e}"))
+                    }
                 }));
-                // Advertise the matching capability so the requirement resolves (demand relieved).
+                // 6. Advertise the matching capability so the requirement resolves (demand relieved).
                 _cap = Some(host_agent.capabilities()
                     .advertise_capability(Capability::new("tool", TOOL), Duration::from_secs(30)));
-                println!("[tool-host] saw unmet demand for tool/{TOOL} → loaded the MCP tool and offered it out");
+                println!("[tool-host] INSTALLED + offered tool/{TOOL} (bridged over mcp.invoke)");
             }
             tokio::time::sleep(Duration::from_millis(300)).await;
         }
@@ -101,9 +205,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _req = agent.agent.capabilities()
         .declare_requirement(CapFilter::new("tool", TOOL), Duration::from_secs(60));
 
-    // ── Phase 2 — the tool appears (loaded on demand); the agent invokes it ─────
-    let appeared = wait_until(25, || tool_offered(&agent.agent).is_some()).await;
-    assert!(appeared, "the tool-host must load + offer the tool once demand appears");
+    // ── Phase 2 — the tool appears (installed on demand); the agent invokes it ──
+    let appeared = wait_until(30, || tool_offered(&agent.agent).is_some()).await;
+    assert!(appeared, "the tool-host must install + offer the tool once demand appears");
     let provider = tool_offered(&agent.agent).expect("a tool provider node");
     println!("[llm-agent] '{TOOL}' is now offered by {provider} — invoking it over MCP");
 
@@ -128,11 +232,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[llm-agent] composed report: {}", summary.output);
     assert!(summary.output.contains("tonnes"), "the agent's report incorporates the tool result");
 
-    println!("\nAll assertions passed — an LLM agent grew the fabric's toolset at runtime: declared a need, the tool was loaded on demand, then invoked.");
+    println!("\nAll assertions passed — an LLM agent grew the fabric's toolset at runtime: declared a need, the tool's code ARRIVED (catalogue → pull → verify → instantiate), was bridged over MCP, and invoked. Activation ≠ installation: ping was activated; the converter was installed.");
 
     host_loop.abort();
     agent.shutdown().await;
     host.shutdown().await;
+    library.shutdown().await;
     let _ = std::fs::remove_dir_all(&cert_dir);
+    let _ = std::fs::remove_dir_all(&lib_dir);
     Ok(())
 }

@@ -11,7 +11,7 @@ name = "coop"
 path = "src/lib.rs"
 
 # `wasm` pulls the WASM autonomic-provisioner host (wasmtime/cranelift) — heavy, and needed by only
-# two demos. Off by default so the other ten (and the coop lib) build fast; the two enable it via
+# three demos. Off by default so the other nine (and the coop lib) build fast; the three enable it via
 # `required-features`.
 [features]
 wasm = ["dep:mycelium-wasm-host"]
@@ -53,6 +53,7 @@ path = "src/bin/llm_pipeline.rs"
 [[bin]]
 name = "mcp_toolgrowth"
 path = "src/bin/mcp_toolgrowth.rs"
+required-features = ["wasm"]
 
 [[bin]]
 name = "llm_council"
@@ -73,7 +74,7 @@ mycelium-agentfacts = { path = "../../mycelium-agentfacts" }
 mycelium-tuple-space = { path = "../../mycelium-tuple-space" }
 # Optional behind the `wasm` feature: only `provisioning` + `catalog` need it, and it pulls the
 # whole wasmtime/cranelift tree (a very heavy cold build). Gating it here means the other ten demos
-# — e.g. `cargo run --bin diagnostics` — build WITHOUT compiling wasmtime. The two demos that need it
+# — e.g. `cargo run --bin diagnostics` — build WITHOUT compiling wasmtime. The three demos that need it
 # declare `required-features = ["wasm"]`; CI enables it explicitly for those (examples/coop/ci_smoke.sh).
 mycelium-wasm-host   = { path = "../../mycelium-wasm-host", optional = true }
 
