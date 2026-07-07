@@ -1,6 +1,6 @@
 //! The **provisioner** — the app-layer loop that *closes* the autonomic loop (M15 item 4):
-//! watch demand → resolve unmet requirements against the installable catalog → pull + verify +
-//! instantiate → advertise, so demand is relieved.
+//! watch demand → resolve unmet requirements against the installable catalog → dispatch to the
+//! matching [`ArtifactRuntime`] (pull + verify + install) → advertise, so demand is relieved.
 //!
 //! **Core Principle 1 (no coordinator).** This is a regular agent built on Mycelium's public API,
 //! **not** a substrate mechanism. The library never auto-provisions; the agency to pull-and-run is
@@ -8,50 +8,46 @@
 //! provisioner, each independently observes demand and **self-elects** (probabilistically, to damp
 //! the thundering herd; any over-provisioning self-corrects when a future governor sheds providers
 //! over `max`). This generalises `demand.rs`'s "the library never auto-advertises" stance.
+//!
+//! **Kind dispatch (`docs/design/artifact-library.md` §4).** The convergence loops here are
+//! kind-agnostic — they reason about capabilities, demand, and provider counts. *How* an artifact
+//! becomes live is the registered [`ArtifactRuntime`]'s business: `WasmComponent` instantiates in
+//! the sandboxed host, `Blob` places bytes for a node-local runtime. A node without a runtime for
+//! an entry's kind (or whose install budget the entry exceeds) silently never self-elects for it —
+//! **eligibility is node-local truth** — and a tripwire counter records the skip (detection, not
+//! prevention). Installs run as **background tasks against an `Installing` reservation**, so a
+//! multi-GB pull never blocks the provision tick and a round never double-starts an artifact.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use mycelium::{CapFilter, Capability, CapabilityReg, GossipAgent, RpcRequestRx};
+use mycelium::{CapFilter, CapabilityReg, GossipAgent};
 
-use crate::artifact::{ArtifactId, ArtifactSource};
-use crate::catalog::InstallableCatalog;
-use crate::host::{HostState, Instance, WasmHost};
+use crate::artifact::{ArtifactId, ArtifactKind, ArtifactSource};
+use crate::catalog::{InstallableCatalog, InstallableEntry};
+use crate::host::WasmHost;
+use crate::runtime::{ArtifactRuntime, Installed, ProgressFn, RuntimeCtx, WasmComponentRuntime};
 
 /// How often a provisioned capability re-asserts its `cap/` advertisement.
 const ADVERTISE_INTERVAL: Duration = Duration::from_secs(5);
 
-/// The RPC `kind` an inbound caller uses to invoke the hosted capability `ns/name`. A caller
-/// resolves the capability to a provider node, then `rpc_call(provider, cap_invoke_kind(ns, name),
-/// payload, timeout)`; the provisioner's serve loop routes it to the component's `handle` export.
-pub fn cap_invoke_kind(namespace: &str, name: &str) -> String {
-    format!("cap.invoke/{namespace}/{name}")
+/// One hosted artifact's node-level lifecycle state.
+enum HostedState {
+    /// A background install task is in flight — the reservation that prevents a later round
+    /// double-starting the same artifact. The token identifies *which* task, so a
+    /// withdraw-then-reinstall never lets a stale task's completion clobber the newer install.
+    Installing(u64),
+    /// Installed, advertised, serving.
+    Live(LiveHosted),
 }
 
 /// A capability this node has provisioned and is now hosting: the advertisement registration
-/// (dropping it tombstones the `cap/` entry) plus the serve task that owns the live component
-/// instance and answers inbound invocations (aborted on withdraw).
-struct Hosted {
-    _cap:  CapabilityReg,
-    serve: tokio::task::JoinHandle<()>,
-}
-
-/// Serve loop for one hosted capability: owns the component [`Instance`] (wasmtime stores are
-/// single-threaded, so one task per instance serialises calls) and answers each inbound RPC by
-/// invoking the component's `handle` export and replying with its output.
-async fn serve_loop(agent: Arc<GossipAgent>, mut instance: Instance, mut rx: RpcRequestRx) {
-    while let Some(req) = rx.recv().await {
-        let payload = req.payload().to_vec();
-        // NB: wasm execution is synchronous and blocks this task for its duration — fine for
-        // short handlers; long-running components want fuel/epoch limits + spawn_blocking (follow-up).
-        let result: Vec<u8> = match instance.invoke("invoke", payload) {
-            Ok(Ok(out)) => out,
-            Ok(Err(e)) => format!("component-error: {e}").into_bytes(),
-            Err(e) => format!("host-error: {e}").into_bytes(),
-        };
-        agent.service().rpc_respond(&req, result);
-    }
+/// (dropping it tombstones the `cap/` entry) plus the runtime's lifecycle handle.
+struct LiveHosted {
+    _cap:      CapabilityReg,
+    installed: Box<dyn Installed>,
 }
 
 /// A **capability-presence invariant** (M14 supervision): keep at least `min_providers` live
@@ -73,27 +69,41 @@ pub struct SupervisionPolicy {
 /// [`InstallableCatalog`], and an [`ArtifactSource`]; call [`provision_round`](Self::provision_round)
 /// on a tick to keep the node provisioning what (a) unmet **demand** and (b) **presence
 /// invariants** ([`supervise`](Self::supervise)) call for — both are just "desired state" the node
-/// reconciles locally, the same resolve-and-pull path.
+/// reconciles locally, the same resolve-and-pull path. The
+/// [`WasmComponent`](ArtifactKind::WasmComponent) runtime is registered automatically; add more
+/// kinds via [`register_runtime`](Self::register_runtime).
 pub struct Provisioner {
     agent:        Arc<GossipAgent>,
-    host:         Arc<WasmHost>,
     catalog:      InstallableCatalog,
     source:       Arc<dyn ArtifactSource + Send + Sync>,
+    /// Install dispatch: one runtime per [`ArtifactKind`] this node can host.
+    runtimes:     HashMap<ArtifactKind, Arc<dyn ArtifactRuntime>>,
     /// Probability of self-electing to satisfy an unmet requirement on a given round (herd
     /// damping). `1.0` = always (fine for a single provisioner); lower it when many nodes run one.
     self_elect_p: f64,
     /// Capability-presence invariants this node supervises (M14).
     policies:     Vec<SupervisionPolicy>,
     /// If non-empty, only catalog entries with valid provenance from one of these publisher keys
-    /// are installed (Ed25519 over the content address). Empty = accept any (integrity-only).
+    /// are installed (Ed25519 over the entry — kind, content address, declared-provide). Empty =
+    /// accept any (integrity-only).
     trusted_publishers: Vec<[u8; 32]>,
-    /// Artifacts this node has already provisioned (kept alive), so a round never double-pulls.
-    hosted:       HashMap<ArtifactId, Hosted>,
+    /// Skip entries whose `size_bytes` hint exceeds this (node-local install budget). `None` =
+    /// unbounded.
+    install_budget_bytes: Option<u64>,
+    /// Artifacts this node has reserved (install in flight) or brought live — a round never
+    /// double-starts. Lock discipline: acquired once per function, flat, never across `await`
+    /// (wiki lock-order table row 21).
+    hosted:       Arc<Mutex<HashMap<ArtifactId, HostedState>>>,
+    /// Tripwire (detection, not prevention): resolvable entries skipped because no runtime is
+    /// registered for their kind or they exceed the install budget. Counts skip *events* (one
+    /// per entry per round), not distinct entries.
+    ineligible:   Arc<AtomicU64>,
 }
 
 impl Provisioner {
     /// Build a provisioner that self-elects with probability `self_elect_p` (use `1.0` for a
-    /// single provisioner; lower for a fleet of them).
+    /// single provisioner; lower for a fleet of them). Registers the WASM-component runtime over
+    /// `host`; add other kinds via [`register_runtime`](Self::register_runtime).
     pub fn new(
         agent: Arc<GossipAgent>,
         host: Arc<WasmHost>,
@@ -101,29 +111,72 @@ impl Provisioner {
         source: Arc<dyn ArtifactSource + Send + Sync>,
         self_elect_p: f64,
     ) -> Self {
+        let mut runtimes: HashMap<ArtifactKind, Arc<dyn ArtifactRuntime>> = HashMap::new();
+        runtimes.insert(ArtifactKind::WasmComponent, Arc::new(WasmComponentRuntime::new(host)));
         Self {
             agent,
-            host,
             catalog,
             source,
+            runtimes,
             self_elect_p,
             policies: Vec::new(),
             trusted_publishers: Vec::new(),
-            hosted: HashMap::new(),
+            install_budget_bytes: None,
+            hosted: Arc::new(Mutex::new(HashMap::new())),
+            ineligible: Arc::new(AtomicU64::new(0)),
         }
     }
 
+    /// Register a runtime for an additional [`ArtifactKind`] (e.g. a blob/model runtime). A node
+    /// only ever self-elects for kinds it has a runtime for — eligibility is node-local truth.
+    pub fn register_runtime(&mut self, runtime: Arc<dyn ArtifactRuntime>) {
+        self.runtimes.insert(runtime.kind(), runtime);
+    }
+
+    /// Cap the artifacts this node will elect to install by their `size_bytes` hint.
+    pub fn set_install_budget(&mut self, max_bytes: u64) {
+        self.install_budget_bytes = Some(max_bytes);
+    }
+
     /// Require **signed provenance**: only install catalog entries carrying a valid Ed25519
-    /// signature over their content address from one of `trusted` publisher keys. Without this,
-    /// the provisioner trusts the catalog for integrity (hash match) but not origin; with it, an
-    /// unsigned or untrusted-signer artifact is refused even if its bytes hash correctly.
+    /// signature over the entry (kind + content address + declared-provide) from one of `trusted`
+    /// publisher keys. Without this, the provisioner trusts the catalog for integrity (hash match)
+    /// but not origin; with it, an unsigned or untrusted-signer artifact is refused even if its
+    /// bytes hash correctly.
     pub fn require_provenance(&mut self, trusted: Vec<[u8; 32]>) {
         self.trusted_publishers = trusted;
     }
 
     /// True if `entry` may be installed under the current provenance policy.
-    fn provenance_ok(&self, entry: &crate::catalog::InstallableEntry) -> bool {
+    fn provenance_ok(&self, entry: &InstallableEntry) -> bool {
         self.trusted_publishers.is_empty() || entry.verify_provenance(&self.trusted_publishers)
+    }
+
+    /// True if this node *can* host `entry`: a runtime is registered for its kind and it fits the
+    /// install budget. A miss is silent non-participation (some other node elects) plus a
+    /// tripwire tick — see [`ineligible_skips`](Self::ineligible_skips).
+    fn eligible(&self, entry: &InstallableEntry) -> bool {
+        if !self.runtimes.contains_key(&entry.kind) {
+            self.ineligible.fetch_add(1, Ordering::Relaxed);
+            tracing::debug!(ns = %entry.provides.namespace, name = %entry.provides.name,
+                kind = ?entry.kind, "no runtime registered for kind — not electing");
+            return false;
+        }
+        if let Some(max) = self.install_budget_bytes
+            && entry.size_bytes > max
+        {
+            self.ineligible.fetch_add(1, Ordering::Relaxed);
+            tracing::debug!(ns = %entry.provides.namespace, name = %entry.provides.name,
+                size = entry.size_bytes, budget = max, "entry exceeds install budget — not electing");
+            return false;
+        }
+        true
+    }
+
+    /// Tripwire counter: skip events for resolvable-but-ineligible entries (no runtime for the
+    /// kind, or over the install budget). One tick per skipped entry per round.
+    pub fn ineligible_skips(&self) -> u64 {
+        self.ineligible.load(Ordering::Relaxed)
     }
 
     /// Add a capability-presence invariant (M14 supervision): keep ≥ `min_providers` live providers
@@ -145,56 +198,131 @@ impl Provisioner {
         });
     }
 
-    /// Stop hosting `artifact`: tombstone its `cap/` advertisement (drop the reg) and abort its
-    /// serve task. Cooperative self-removal — the symmetric counterpart to [`bring_live`].
+    /// Stop hosting `artifact`: tombstone its `cap/` advertisement and let the runtime tear down
+    /// ([`Installed::uninstall`] — abort the serve task, delete placed bytes). An **in-flight**
+    /// install is cancelled by removing its reservation; the install task's token check tears the
+    /// finished result down on completion. Cooperative self-removal — the symmetric counterpart
+    /// to [`start_install`](Self::start_install).
     fn withdraw(&mut self, artifact: &ArtifactId) -> bool {
-        if let Some(h) = self.hosted.remove(artifact) {
-            h.serve.abort(); // dropping h._cap tombstones the cap/ entry
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Number of capabilities this node is currently hosting via provisioning.
-    pub fn hosted_count(&self) -> usize {
-        self.hosted.len()
-    }
-
-    /// Bring one capability live on this node: pull + verify + instantiate `artifact`, register the
-    /// serve handler, advertise `provides`, and spawn the serve task. Returns `true` if newly
-    /// hosted, `false` if already hosted or provisioning failed. Shared by the demand and presence
-    /// paths — the one resolve-and-pull path the architecture promises.
-    fn bring_live(&mut self, provides: Capability, artifact: ArtifactId) -> bool {
-        if self.hosted.contains_key(&artifact) {
-            return false;
-        }
-        let state = HostState::new(
-            self.agent.node_id().clone(),
-            provides.namespace.clone(),
-            self.agent.kv(),
-            self.agent.mesh(),
-        );
-        match self.host.provision(&*self.source, &artifact, state) {
-            Ok(instance) => {
-                // Register the inbound serve handler *before* advertising, so a caller that
-                // resolves the fresh `cap/` entry always finds a live RPC receiver.
-                let kind = cap_invoke_kind(&provides.namespace, &provides.name);
-                let rx = self.agent.service().rpc_rx(kind);
-                let cap = self
-                    .agent
-                    .capabilities()
-                    .advertise_capability(provides.clone(), ADVERTISE_INTERVAL);
-                let serve = tokio::spawn(serve_loop(Arc::clone(&self.agent), instance, rx));
-                self.hosted.insert(artifact, Hosted { _cap: cap, serve });
-                tracing::info!(ns = %provides.namespace, name = %provides.name, "provisioned + serving capability");
+        let removed = self.hosted.lock().unwrap().remove(artifact);
+        match removed {
+            Some(HostedState::Live(live)) => {
+                live.installed.uninstall(); // dropping live._cap tombstones the cap/ entry
                 true
             }
-            Err(e) => {
-                tracing::warn!(ns = %provides.namespace, name = %provides.name, %e, "provisioning failed");
-                false
-            }
+            Some(HostedState::Installing(_)) => true,
+            None => false,
         }
+    }
+
+    /// Number of capabilities this node is hosting **live** via provisioning. In-flight installs
+    /// are not counted — see [`installing_count`](Self::installing_count).
+    pub fn hosted_count(&self) -> usize {
+        self.hosted
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|s| matches!(s, HostedState::Live(_)))
+            .count()
+    }
+
+    /// Number of installs currently in flight (reserved, background task running).
+    pub fn installing_count(&self) -> usize {
+        self.hosted
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|s| matches!(s, HostedState::Installing(_)))
+            .count()
+    }
+
+    /// True if `artifact` is reserved or live on this node.
+    fn is_hosted(&self, artifact: &ArtifactId) -> bool {
+        self.hosted.lock().unwrap().contains_key(artifact)
+    }
+
+    /// Start bringing one capability live on this node: **reserve** the artifact, then run the
+    /// kind's runtime install as a background task (pull + verify + install), advertising the
+    /// declared-provide and flipping the reservation to `Live` on success (on failure the
+    /// reservation is dropped, so a later round retries — restart ≡ provisioning). Returns `true`
+    /// if an install was newly started, `false` if already reserved/hosted or no runtime matches.
+    /// Shared by the demand and presence paths — the one resolve-and-pull path the architecture
+    /// promises.
+    fn start_install(&self, entry: InstallableEntry) -> bool {
+        let Some(runtime) = self.runtimes.get(&entry.kind).map(Arc::clone) else {
+            return false; // eligible() screens this; belt-and-braces for direct callers
+        };
+
+        static INSTALL_SEQ: AtomicU64 = AtomicU64::new(0);
+        let token = INSTALL_SEQ.fetch_add(1, Ordering::Relaxed);
+        {
+            let mut map = self.hosted.lock().unwrap();
+            if map.contains_key(&entry.artifact) {
+                return false;
+            }
+            map.insert(entry.artifact, HostedState::Installing(token));
+        }
+
+        let agent = Arc::clone(&self.agent);
+        let source = Arc::clone(&self.source);
+        let hosted = Arc::clone(&self.hosted);
+        tokio::spawn(async move {
+            let artifact = entry.artifact;
+            let provides = entry.provides.clone();
+            // Real progress → loading-tier advertisement arrives with the blob runtime; the
+            // provisioner's default observer is a no-op.
+            let progress: ProgressFn = Arc::new(|_fetched, _total| {});
+            let ctx = RuntimeCtx { agent: Arc::clone(&agent) };
+
+            match runtime.install(entry, source, ctx, progress).await {
+                Ok(installed) => {
+                    // Advertise only after a successful install: a resolvable `cap/` entry always
+                    // has a live receiver behind it (the runtime registered its serve path before
+                    // returning).
+                    let cap = agent
+                        .capabilities()
+                        .advertise_capability(provides.clone(), ADVERTISE_INTERVAL);
+                    // Take the lock once; hand ownership back out on the not-ours path so the
+                    // teardown below runs *outside* the lock. Dropping `installed` would NOT stop
+                    // the serve path (JoinHandle drop detaches) — uninstall must be explicit.
+                    let leftover = {
+                        let mut map = hosted.lock().unwrap();
+                        match map.get(&artifact) {
+                            Some(HostedState::Installing(t)) if *t == token => {
+                                map.insert(
+                                    artifact,
+                                    HostedState::Live(LiveHosted { _cap: cap, installed }),
+                                );
+                                None
+                            }
+                            _ => Some((cap, installed)),
+                        }
+                    };
+                    match leftover {
+                        None => tracing::info!(ns = %provides.namespace, name = %provides.name,
+                            "provisioned + serving capability"),
+                        Some((cap, installed)) => {
+                            // Withdrawn (or superseded) while installing: nothing references
+                            // this install — tombstone the just-made ad and tear it down.
+                            drop(cap);
+                            installed.uninstall();
+                            tracing::info!(ns = %provides.namespace, name = %provides.name,
+                                "install finished after withdraw — torn down");
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(ns = %provides.namespace, name = %provides.name, %e,
+                        "provisioning failed");
+                    let mut map = hosted.lock().unwrap();
+                    if matches!(map.get(&artifact), Some(HostedState::Installing(t)) if *t == token)
+                    {
+                        map.remove(&artifact);
+                    }
+                }
+            }
+        });
+        true
     }
 
     /// True if this node should self-elect to act this round (herd damping).
@@ -202,8 +330,10 @@ impl Provisioner {
         fastrand::f64() < self.self_elect_p
     }
 
-    /// One convergence pass over **both** desired-state sources, returning how many capabilities
-    /// were newly provisioned. Idempotent — already-hosted/already-satisfied are skipped.
+    /// One convergence pass over **both** desired-state sources, returning how many installs were
+    /// newly **started** (installs run as background tasks — poll
+    /// [`hosted_count`](Self::hosted_count) / the capability ring for completion). Idempotent —
+    /// already-reserved/hosted/satisfied entries are skipped.
     ///
     /// 1. **Demand-driven** (M15): a catalog entry whose declared-provide has demand but no live
     ///    provider → bring it live (relieves demand).
@@ -212,19 +342,25 @@ impl Provisioner {
     ///    a dead provider's `cap/` evaporates, the count drops, this fires again — restart and
     ///    first-time provisioning are the same path.
     pub fn provision_round(&mut self) -> usize {
-        let mut provisioned = 0;
+        let mut started = 0;
 
         // ── Demand-driven (M15) ──────────────────────────────────────────────
-        let entries: Vec<crate::catalog::InstallableEntry> = self.catalog.entries().to_vec();
+        let entries: Vec<InstallableEntry> = self.catalog.entries().to_vec();
         for entry in entries {
-            if self.hosted.contains_key(&entry.artifact) || !self.provenance_ok(&entry) {
+            if self.is_hosted(&entry.artifact) || !self.provenance_ok(&entry) {
                 continue;
             }
-            let filter = CapFilter::new(entry.provides.namespace.clone(), entry.provides.name.clone());
+            let filter =
+                CapFilter::new(entry.provides.namespace.clone(), entry.provides.name.clone());
             let demand = self.agent.capabilities().demand(&filter);
             let unmet = demand.providers.is_empty() && !demand.demanding_nodes.is_empty();
-            if unmet && self.self_elects() && self.bring_live(entry.provides, entry.artifact) {
-                provisioned += 1;
+            if !unmet {
+                continue;
+            }
+            // Eligibility is checked only for entries this node would otherwise act on — an
+            // idle catalog must not tick the tripwire every round.
+            if self.eligible(&entry) && self.self_elects() && self.start_install(entry) {
+                started += 1;
             }
         }
 
@@ -241,11 +377,14 @@ impl Provisioner {
             let Some(entry) = self.catalog.resolve_best(&policy.filter).cloned() else {
                 continue; // nothing in the catalog provides it
             };
-            if self.hosted.contains_key(&entry.artifact) || !self.provenance_ok(&entry) {
-                continue; // already a provider here, or fails the provenance policy
+            if self.is_hosted(&entry.artifact)
+                || !self.provenance_ok(&entry)
+                || !self.eligible(&entry)
+            {
+                continue; // already reserved/hosted here, or fails policy
             }
-            if self.self_elects() && self.bring_live(entry.provides, entry.artifact) {
-                provisioned += 1;
+            if self.self_elects() && self.start_install(entry) {
+                started += 1;
             }
         }
 
@@ -259,15 +398,16 @@ impl Provisioner {
             if live <= max {
                 continue; // within the band
             }
-            let Some(artifact) = self.catalog.resolve_best(&policy.filter).map(|e| e.artifact) else {
+            let Some(artifact) = self.catalog.resolve_best(&policy.filter).map(|e| e.artifact)
+            else {
                 continue;
             };
-            if self.hosted.contains_key(&artifact) && self.self_elects() {
+            if self.is_hosted(&artifact) && self.self_elects() {
                 self.withdraw(&artifact); // cooperative self-removal
             }
         }
 
-        provisioned
+        started
     }
 }
 
@@ -276,6 +416,7 @@ mod tests {
     use super::*;
     use crate::catalog::InstallableEntry;
     use crate::InMemorySource;
+    use mycelium::Capability;
 
     const ECHO_COMPONENT: &[u8] = include_bytes!("../tests/fixtures/echo_component.wasm");
 
@@ -294,6 +435,21 @@ mod tests {
             }
         }
         panic!("could not bind a gossip port after 16 attempts");
+    }
+
+    /// Structural poll: installs run as background tasks, so completion is awaited, not assumed.
+    async fn wait_live(prov: &Provisioner, n: usize) {
+        for _ in 0..200 {
+            if prov.hosted_count() == n && prov.installing_count() == 0 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!(
+            "hosted_count did not settle at {n} (live={}, installing={})",
+            prov.hosted_count(),
+            prov.installing_count()
+        );
     }
 
     #[tokio::test]
@@ -334,9 +490,10 @@ mod tests {
         }
         assert!(saw_demand, "requirement should register as demand");
 
-        // The provisioner satisfies it: pulls + instantiates + advertises.
-        assert_eq!(prov.provision_round(), 1, "unmet requirement should be provisioned");
-        assert_eq!(prov.hosted_count(), 1);
+        // The provisioner satisfies it: starts the install (a background task), which pulls +
+        // instantiates + advertises on completion.
+        assert_eq!(prov.provision_round(), 1, "unmet requirement should start an install");
+        wait_live(&prov, 1).await;
 
         // The advertisement relieves demand — a provider now exists.
         let mut saw_provider = false;
@@ -359,7 +516,7 @@ mod tests {
             .service()
             .rpc_call(
                 agent.node_id().clone(),
-                cap_invoke_kind("text", "echo"),
+                crate::runtime::cap_invoke_kind("text", "echo"),
                 b"call me".to_vec(),
                 Duration::from_secs(5),
             )
@@ -394,14 +551,14 @@ mod tests {
 
         // The presence invariant alone (no demander) brings the capability live.
         assert_eq!(prov.provision_round(), 1, "presence invariant provisions with no demander");
-        assert_eq!(prov.hosted_count(), 1);
+        wait_live(&prov, 1).await;
 
         // It actually serves invocations.
         let reply = agent
             .service()
             .rpc_call(
                 agent.node_id().clone(),
-                cap_invoke_kind("text", "echo"),
+                crate::runtime::cap_invoke_kind("text", "echo"),
                 b"supervised".to_vec(),
                 Duration::from_secs(5),
             )
@@ -444,7 +601,7 @@ mod tests {
         // Bring it live via a min>=1 invariant.
         prov.supervise(CapFilter::new("text", "echo"), 1);
         assert_eq!(prov.provision_round(), 1);
-        assert_eq!(prov.hosted_count(), 1);
+        wait_live(&prov, 1).await;
 
         // Wait until the provider is observable (the shed decision is based on the live count).
         let mut saw_provider = false;
@@ -496,8 +653,50 @@ mod tests {
         let mut p2 = Provisioner::new(Arc::clone(&agent), host, signed_cat, source, 1.0);
         p2.require_provenance(vec![trusted]);
         p2.supervise(CapFilter::new("text", "echo"), 1);
-        assert_eq!(p2.provision_round(), 1, "trusted-signed artifact is installed");
-        assert_eq!(p2.hosted_count(), 1);
+        assert_eq!(p2.provision_round(), 1, "trusted-signed artifact starts installing");
+        wait_live(&p2, 1).await;
+
+        agent.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn unregistered_kind_and_over_budget_entries_are_skipped_and_counted() {
+        // Eligibility is node-local truth: no runtime for a kind → never self-elect for it; over
+        // the install budget → same. Both are silent non-participation plus a tripwire tick
+        // (detection, not prevention) — never an error.
+        let agent = live_agent().await;
+        let host = Arc::new(WasmHost::new().expect("engine"));
+
+        let mut source = InMemorySource::new();
+        let blob_id = source.insert(b"model weights stand-in".to_vec());
+        let wasm_id = source.insert(ECHO_COMPONENT.to_vec());
+
+        // A blob-kind entry (no blob runtime registered here) + an over-budget wasm entry.
+        let mut catalog = InstallableCatalog::new();
+        catalog.add(
+            InstallableEntry::new(Capability::new("llm", "weights"), blob_id)
+                .with_kind(ArtifactKind::Blob),
+        );
+        catalog.add(
+            InstallableEntry::new(Capability::new("text", "echo"), wasm_id).with_cost(10_000, 1),
+        );
+
+        let mut prov =
+            Provisioner::new(Arc::clone(&agent), host, catalog, Arc::new(source), 1.0);
+        prov.set_install_budget(1_000); // below the wasm entry's 10_000 hint
+        prov.supervise(CapFilter::new("llm", "weights"), 1);
+        prov.supervise(CapFilter::new("text", "echo"), 1);
+
+        assert_eq!(prov.provision_round(), 0, "neither entry is eligible on this node");
+        assert_eq!(prov.hosted_count(), 0);
+        assert_eq!(prov.installing_count(), 0);
+        assert_eq!(prov.ineligible_skips(), 2, "one tripwire tick per skipped entry");
+
+        // Raising the budget makes the wasm entry eligible; the blob kind stays unhostable.
+        prov.set_install_budget(1_000_000);
+        assert_eq!(prov.provision_round(), 1, "wasm entry becomes eligible");
+        wait_live(&prov, 1).await;
+        assert_eq!(prov.ineligible_skips(), 3, "blob entry ticked again this round");
 
         agent.shutdown().await;
     }

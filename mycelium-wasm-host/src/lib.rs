@@ -33,6 +33,7 @@ mod confine;
 mod host;
 mod mesh_source;
 mod provisioner;
+mod runtime;
 
 pub use artifact::{
     verify_artifact, ArtifactId, ArtifactIdError, ArtifactKind, ArtifactSource, FsLibrarySource,
@@ -45,4 +46,8 @@ pub use catalog::{
 pub use confine::{confine_key, ConfinementError, COMPONENT_KV_PREFIX};
 pub use host::{HostState, Instance, Request, Response, WasmHost, WasmHostError};
 pub use mesh_source::{pull_artifact, serve_artifacts, MeshArtifactSource, ARTIFACT_FETCH_KIND};
-pub use provisioner::{cap_invoke_kind, Provisioner, SupervisionPolicy};
+pub use provisioner::{Provisioner, SupervisionPolicy};
+pub use runtime::{
+    cap_invoke_kind, ArtifactRuntime, InstallError, Installed, ProgressFn, RuntimeCtx,
+    WasmComponentRuntime,
+};

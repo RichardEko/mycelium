@@ -24,6 +24,9 @@ wasmtime = "45"
 wasmtime-wasi = "45"
 
 anyhow   = "1"
+# The ArtifactRuntime kind-dispatch trait (docs/design/artifact-library.md §4) is async —
+# installs run as long-lived background tasks (large blob pulls must not block a tick).
+async-trait = "0.1"
 bytes    = "1"
 tracing  = "0.1"
 sha2     = "0.10"
