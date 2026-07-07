@@ -232,6 +232,14 @@ pub trait Installed: Send {
   machine: `Installing → Live → Withdrawing`.
 - The **shed path** (`max_providers`) and **supervision** loops are already kind-agnostic and
   survive unchanged — `withdraw` delegates to `Installed::uninstall`.
+- **The probe is consumed, not just exposed** (wired 2026-07-07, coverage review): every
+  `provision_round` opens with a health pass — a `Live` install whose `Installed::probe()`
+  fails is withdrawn (ad retracted, runtime torn down), and the demand/presence passes
+  reinstall it once the retracted ad clears the local view. Probe-gated advertisement thus
+  degenerates into the existing restart ≡ provisioning machinery instead of needing its own
+  health protocol. Probes run under the hosted lock: cheap and non-blocking by contract
+  (file-exists, a cached health bit — slow checks live in a background task that flips a
+  flag the probe reads).
 
 ### 4.4 Resource-aware eligibility (added 2026-07-07, requirements review)
 
