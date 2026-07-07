@@ -21,7 +21,9 @@ via wasm-host).
   **librarian** role (serve + `artifact/librarian` cap + signature-scoped manifest→KV reconcile),
   capability-resolved pulls (`MeshArtifactSource::resolving`), and the **kind/runtime
   generalization** — `ArtifactRuntime`/`Installed` with `WasmHost` as one engine and `BlobRuntime`
-  (streamed place-and-probe for models/data) as another; provenance binds the whole entry.
+  (streamed place-and-probe for models/data) as another; provenance binds the whole entry;
+  the probe is *consumed* — a per-round health pass withdraws failing installs (restart ≡
+  provisioning is the health protocol). Real-model proof: the coop `model_deploy` demo.
   Security note: wasmtime is this crate's sandbox — keep
   `cargo audit` green on it (RUSTSEC-2026-0188 was found+fixed via audit, Run 28).
 - **`mycelium-agentfacts/`** — WS-F/M16 federation edge: self-certified NANDA AgentFacts

@@ -3,11 +3,15 @@
 ↑ [dev/](dev.md)
 
 - **Food-Rescue Co-op suite** (`examples/coop/`, workspace member
-  `mycelium-coop-examples`): **eleven** demos composed in one constructive world (depot
+  `mycelium-coop-examples`): **twelve** CI demos composed in one constructive world (depot
   nodes rescuing surplus food, no dispatcher) — mailbox_llm · stigmergy · elastic_intent ·
   provisioning ⭐ (the autonomic loop) · federation_facts · rotation · consensus ·
-  llm_pipeline · mcp_toolgrowth · llm_council · catalog. `ci_smoke.sh` runs all eleven
-  Docker-free (CI `coop-smoke`). Per-demo docs: `examples/coop/README.md`; plan:
+  llm_pipeline · mcp_toolgrowth (real **code arrival**, bridged over MCP) · llm_council ·
+  catalog (the durable **library**: runtime-read origin, librarian, origin-death →
+  peer-cache install) · diagnostics. `ci_smoke.sh` runs all twelve Docker-free (CI
+  `coop-smoke`). Plus one **manual** demo, `model_deploy` — a real GGUF deployed through
+  the artifact library into Ollama, generating real tokens (needs the Ollama daemon;
+  deliberately not in the smoke). Per-demo docs: `examples/coop/README.md`; plan:
   `docs/plans/example-suite.md`. **The suite anchors the developer docs** (guide 00 /
   14-patterns / cookbook). Domain preference: constructive framings (microgrids, food
   redistribution), never war-room/crisis.
