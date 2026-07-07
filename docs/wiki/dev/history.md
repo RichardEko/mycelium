@@ -74,9 +74,10 @@ The three-verb operator spine — **localize** (`/fleet`) · **explain** (`/expl
   capability ring — no hardcoded provider ids). **Install:** `ArtifactRuntime`/`Installed` traits —
   `WasmHost` is now the engine inside *one* runtime; `BlobRuntime` places models/data
   (ranged/streamed pull via `RangedArtifactSource`, temp+rename, activation hook, pluggable probe);
-  the `Provisioner` gained a kind registry, eligibility (kind + size budget) with a tripwire
-  counter, async `Installing→Live` reservations (token-checked), and **real** `{ns}/loading` pct
-  tiers driven by actual bytes. **Honest demos:** `catalog` (runtime-read library → librarian →
+  the `Provisioner` gained a kind registry, eligibility (kind + size budget + **resource
+  headroom** — signed per-entry `requires`, `ResourceProbe`, in-flight reservations counted;
+  §4.4, step 4b) with a tripwire counter, async `Installing→Live` reservations (token-checked),
+  and **real** `{ns}/loading` pct tiers driven by actual bytes. **Honest demos:** `catalog` (runtime-read library → librarian →
   discovered pull → origin killed + library deleted → late joiner installs from a peer cache) and
   `mcp_toolgrowth` (the converter's arithmetic **arrives** as a new committed WASM fixture,
   bridged over MCP; activation-vs-installation taught explicitly); `llm_agent`'s percent loops

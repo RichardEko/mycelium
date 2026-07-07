@@ -30,6 +30,22 @@ pub const INSTALLABLE_PREFIX: &str = "installable/";
 /// field deployments when the kind axis landed, so there is no pre-version format to accept.
 pub const ENTRY_FORMAT_VERSION: u8 = 1;
 
+/// Publisher-declared **resource requirements** for hosting an artifact — what installing it
+/// actually consumes on a node, as opposed to the *ranking hints* (`size_bytes` is transfer
+/// cost). `0` = undeclared (no check). A node's provisioner refuses to self-elect for an entry
+/// whose requirements exceed its headroom (`docs/design/artifact-library.md` §4.4); only the
+/// publisher knows these numbers (a 4 GB quantised model can want 5 GB+ of RAM activated), so
+/// they travel in the entry — **inside the provenance signature**: a requirement is an
+/// install-safety claim, and a tampered one (mem lowered to 0) would make trusting nodes OOM
+/// themselves.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ResourceRequirements {
+    /// Bytes of disk the placed artifact occupies at the runtime's placement root.
+    pub disk_bytes: u64,
+    /// Bytes of memory hosting the artifact consumes once live (instance / activated model).
+    pub mem_bytes:  u64,
+}
+
 /// One installable artifact in the catalog: the [`Capability`] it would provide once installed,
 /// the [`ArtifactKind`] that selects *how* a node installs it, plus the content address
 /// ([`ArtifactId`]) to pull. The declared-provide is a full `Capability` so the live resolver's
@@ -46,6 +62,9 @@ pub struct InstallableEntry {
     /// Optional ranking hints (0 = unknown): bytes to pull, estimated install seconds.
     pub size_bytes:        u64,
     pub est_install_secs:  u64,
+    /// Publisher-declared hosting requirements (0 = undeclared). Signed — see
+    /// [`ResourceRequirements`].
+    pub requires:          ResourceRequirements,
     /// Optional **provenance**: an Ed25519 signature by a publisher over the *entry* — version,
     /// kind, content address, and declared-provide (see [`provenance_message`]). Empty = unsigned.
     /// The content hash gives *integrity* (the bytes are what the catalog named); this gives
@@ -68,6 +87,7 @@ impl InstallableEntry {
             artifact,
             size_bytes: 0,
             est_install_secs: 0,
+            requires: ResourceRequirements::default(),
             signer: Vec::new(),
             signature: Vec::new(),
         }
@@ -86,25 +106,38 @@ impl InstallableEntry {
         self
     }
 
+    /// Declare hosting requirements (disk at the placement root, memory once live). Call
+    /// **before** [`signed_by`](Self::signed_by) — requirements are inside the signature.
+    pub fn with_requirements(mut self, disk_bytes: u64, mem_bytes: u64) -> Self {
+        self.requires = ResourceRequirements { disk_bytes, mem_bytes };
+        self
+    }
+
     /// The domain-separated message provenance signs: binds the signature to the whole entry —
-    /// format version, kind, content address, and declared-provide capability. Signing only the
-    /// content address would let anyone re-publish a trusted publisher's artifact under a
-    /// different capability or kind with provenance still verifying.
+    /// format version, kind, content address, **hosting requirements**, and declared-provide
+    /// capability. Signing only the content address would let anyone re-publish a trusted
+    /// publisher's artifact under a different capability or kind with provenance still
+    /// verifying; leaving requirements unsigned would let a tampered entry (mem lowered to 0)
+    /// make trusting nodes install something that OOMs them. Cost *hints* stay outside — they
+    /// are ranking inputs, not safety claims.
     fn provenance_message(&self) -> Vec<u8> {
         let cap = self.provides.encode();
-        let mut m = Vec::with_capacity(24 + 2 + 32 + cap.len());
+        let mut m = Vec::with_capacity(24 + 2 + 32 + 16 + cap.len());
         m.extend_from_slice(b"mycelium-installable-v1");
         m.push(ENTRY_FORMAT_VERSION);
         m.push(self.kind.as_u8());
         m.extend_from_slice(self.artifact.as_bytes());
+        m.extend_from_slice(&self.requires.disk_bytes.to_le_bytes());
+        m.extend_from_slice(&self.requires.mem_bytes.to_le_bytes());
         m.extend_from_slice(&cap);
         m
     }
 
     /// Sign the entry with `signing_key`, attaching publisher provenance. A provisioner
     /// configured with the matching verifying key (see `Provisioner::require_provenance`) then only
-    /// installs artifacts a trusted publisher vouched for. Call **after** `with_kind` — the
-    /// signature covers the kind and declared-provide (not the cost hints).
+    /// installs artifacts a trusted publisher vouched for. Call **after** `with_kind` /
+    /// `with_requirements` — the signature covers the kind, requirements, and declared-provide
+    /// (not the cost hints).
     pub fn signed_by(mut self, signing_key: &ed25519_dalek::SigningKey) -> Self {
         use ed25519_dalek::Signer;
         let sig = signing_key.sign(&self.provenance_message());
@@ -131,18 +164,20 @@ impl InstallableEntry {
         vk.verify(&self.provenance_message(), &Signature::from_bytes(&sig_bytes)).is_ok()
     }
 
-    /// Serialize for gossip: `[1B version][1B kind][32B artifact][8B size][8B est][1B signed]
-    /// [32B signer + 64B sig if signed][Capability bytes]`. Built on the public
-    /// `Capability::encode` (no internal codec).
+    /// Serialize for gossip: `[1B version][1B kind][32B artifact][8B size][8B est]
+    /// [8B req_disk][8B req_mem][1B signed][32B signer + 64B sig if signed][Capability bytes]`.
+    /// Built on the public `Capability::encode` (no internal codec).
     pub fn encode(&self) -> Vec<u8> {
         let cap = self.provides.encode();
         let signed = self.signer.len() == 32 && self.signature.len() == 64;
-        let mut out = Vec::with_capacity(51 + if signed { 96 } else { 0 } + cap.len());
+        let mut out = Vec::with_capacity(67 + if signed { 96 } else { 0 } + cap.len());
         out.push(ENTRY_FORMAT_VERSION);
         out.push(self.kind.as_u8());
         out.extend_from_slice(self.artifact.as_bytes());
         out.extend_from_slice(&self.size_bytes.to_le_bytes());
         out.extend_from_slice(&self.est_install_secs.to_le_bytes());
+        out.extend_from_slice(&self.requires.disk_bytes.to_le_bytes());
+        out.extend_from_slice(&self.requires.mem_bytes.to_le_bytes());
         out.push(signed as u8);
         if signed {
             out.extend_from_slice(&self.signer);
@@ -155,7 +190,7 @@ impl InstallableEntry {
     /// Inverse of [`encode`](Self::encode). `None` for an unknown format version or kind byte —
     /// a node never guesses at an entry it cannot fully name (the caller counts the rejection).
     pub fn decode(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() < 51 || bytes[0] != ENTRY_FORMAT_VERSION {
+        if bytes.len() < 67 || bytes[0] != ENTRY_FORMAT_VERSION {
             return None;
         }
         let kind = ArtifactKind::from_u8(bytes[1])?;
@@ -163,8 +198,12 @@ impl InstallableEntry {
         id.copy_from_slice(&bytes[2..34]);
         let size_bytes = u64::from_le_bytes(bytes[34..42].try_into().ok()?);
         let est_install_secs = u64::from_le_bytes(bytes[42..50].try_into().ok()?);
-        let signed = bytes[50] == 1;
-        let mut off = 51;
+        let requires = ResourceRequirements {
+            disk_bytes: u64::from_le_bytes(bytes[50..58].try_into().ok()?),
+            mem_bytes:  u64::from_le_bytes(bytes[58..66].try_into().ok()?),
+        };
+        let signed = bytes[66] == 1;
+        let mut off = 67;
         let (signer, signature) = if signed {
             if bytes.len() < off + 96 {
                 return None;
@@ -183,6 +222,7 @@ impl InstallableEntry {
             artifact: ArtifactId::from_bytes(id),
             size_bytes,
             est_install_secs,
+            requires,
             signer,
             signature,
         })
@@ -594,6 +634,32 @@ mod tests {
         let mut rehinted = entry;
         rehinted.size_bytes = 999;
         assert!(rehinted.verify_provenance(&[vk]), "cost hints may be updated without re-signing");
+    }
+
+    #[test]
+    fn requirements_round_trip_and_are_bound_by_provenance() {
+        use ed25519_dalek::SigningKey;
+        let sk = SigningKey::from_bytes(&[17u8; 32]);
+        let vk = sk.verifying_key().to_bytes();
+
+        let entry = InstallableEntry::new(cap("llm", "weights"), art(b"model"))
+            .with_kind(crate::artifact::ArtifactKind::Blob)
+            .with_requirements(4_000_000_000, 5_000_000_000)
+            .signed_by(&sk);
+
+        // Round trip through the wire encoding.
+        let back = InstallableEntry::decode(&entry.encode()).expect("decode");
+        assert_eq!(back.requires.disk_bytes, 4_000_000_000);
+        assert_eq!(back.requires.mem_bytes, 5_000_000_000);
+        assert!(back.verify_provenance(&[vk]), "requirements survive encode/decode signed");
+
+        // Requirements are safety claims: lowering them after signing breaks provenance.
+        let mut starved = entry.clone();
+        starved.requires.mem_bytes = 0;
+        assert!(!starved.verify_provenance(&[vk]), "tampered mem requirement fails the signature");
+        let mut shrunk = entry;
+        shrunk.requires.disk_bytes = 1;
+        assert!(!shrunk.verify_provenance(&[vk]), "tampered disk requirement fails the signature");
     }
 
     fn scratch_manifest_path(tag: &str) -> std::path::PathBuf {

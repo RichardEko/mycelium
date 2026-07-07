@@ -34,6 +34,7 @@ mod host;
 mod librarian;
 mod mesh_source;
 mod provisioner;
+mod resources;
 mod runtime;
 
 pub use artifact::{
@@ -42,7 +43,7 @@ pub use artifact::{
 };
 pub use catalog::{
     publish_installable, InstallableCatalog, InstallableEntry, Manifest, ManifestError,
-    ENTRY_FORMAT_VERSION, INSTALLABLE_PREFIX, MANIFEST_FILE,
+    ResourceRequirements, ENTRY_FORMAT_VERSION, INSTALLABLE_PREFIX, MANIFEST_FILE,
 };
 pub use confine::{confine_key, ConfinementError, COMPONENT_KV_PREFIX};
 pub use host::{HostState, Instance, Request, Response, WasmHost, WasmHostError};
@@ -52,6 +53,7 @@ pub use librarian::{
 };
 pub use mesh_source::{pull_artifact, serve_artifacts, MeshArtifactSource, ARTIFACT_FETCH_KIND};
 pub use provisioner::{Provisioner, SupervisionPolicy};
+pub use resources::{ResourceProbe, SystemResourceProbe};
 pub use runtime::{
     cap_invoke_kind, ArtifactRuntime, BlobRuntime, InstallError, Installed, ProgressFn,
     RuntimeCtx, WasmComponentRuntime,

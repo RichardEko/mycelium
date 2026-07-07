@@ -72,6 +72,14 @@ pub trait ArtifactRuntime: Send + Sync {
     /// The artifact kind this runtime installs.
     fn kind(&self) -> ArtifactKind;
 
+    /// Where installs of this kind land on disk, if anywhere — the path the provisioner's
+    /// resource-eligibility check measures free disk at (`docs/design/artifact-library.md`
+    /// §4.4). `None` (the default) means installs are not disk-resident (a WASM component
+    /// lives in memory) and only the memory requirement is checked.
+    fn resource_root(&self) -> Option<&std::path::Path> {
+        None
+    }
+
     /// Pull (from `source`), verify, and bring the artifact live. May be long-running (a
     /// multi-GB blob) — the provisioner runs it as a background task against an `Installing`
     /// reservation, never blocking the provision tick. The runtime must have a live inbound
@@ -301,6 +309,10 @@ impl ArtifactRuntime for BlobRuntime {
         ArtifactKind::Blob
     }
 
+    fn resource_root(&self) -> Option<&std::path::Path> {
+        Some(&self.place_dir)
+    }
+
     async fn install(
         &self,
         entry: InstallableEntry,
@@ -311,6 +323,26 @@ impl ArtifactRuntime for BlobRuntime {
         std::fs::create_dir_all(&self.place_dir)
             .map_err(|e| InstallError(format!("create place dir: {e}")))?;
         let dest = self.place_dir.join(entry.artifact.to_hex());
+
+        // Fail fast before a multi-GB pull if the declared footprint provably can't land.
+        // Advisory only (time-of-check): the eligibility gate applies headroom *policy*; this
+        // is the absolute impossibility check, and a mid-pull ENOSPC still fails cleanly
+        // (temp-write + rename ⇒ complete-or-absent, the reservation drops, a later round
+        // retries — possibly on a node that fits).
+        if entry.requires.disk_bytes > 0 && !dest.exists() {
+            use crate::resources::ResourceProbe;
+            if let Some(avail) =
+                crate::resources::SystemResourceProbe::new().available_disk_bytes(&self.place_dir)
+                && entry.requires.disk_bytes > avail
+            {
+                return Err(InstallError(format!(
+                    "insufficient disk at {}: artifact requires {} bytes, {} available",
+                    self.place_dir.display(),
+                    entry.requires.disk_bytes,
+                    avail
+                )));
+            }
+        }
 
         if dest.exists() {
             // Content-addressed name ⇒ already placed and verified; reactivate only.
@@ -499,6 +531,35 @@ mod tests {
 
             std::fs::remove_dir_all(&place_dir).ok();
         }
+    }
+
+    #[tokio::test]
+    async fn blob_install_fails_fast_on_an_impossible_disk_requirement() {
+        let place_dir = scratch_dir("nospace");
+        let id = ArtifactId::of(b"colossal model");
+        let entry = InstallableEntry::new(Capability::new("llm", "weights"), id)
+            .with_kind(ArtifactKind::Blob)
+            .with_requirements(u64::MAX / 2, 0);
+
+        let (progress, log) = recording_progress();
+        let result = BlobRuntime::new(&place_dir)
+            .install(entry, Arc::new(crate::InMemorySource::new()), idle_ctx(), progress)
+            .await;
+        match result {
+            // Measurable platform: the declared footprint provably can't land → fail fast,
+            // before any pull. Unmeasurable platform (permissive contract): the empty source
+            // fails the pull instead — either way it's an Err and nothing was placed.
+            Err(e) => assert!(
+                e.to_string().contains("insufficient disk") || e.to_string().contains("no source"),
+                "got: {e}"
+            ),
+            Ok(_) => panic!("an impossible disk requirement must not install"),
+        }
+        let residue: Vec<_> = std::fs::read_dir(&place_dir).unwrap().collect();
+        assert!(residue.is_empty(), "nothing placed, no temp residue");
+        drop(log);
+
+        std::fs::remove_dir_all(&place_dir).ok();
     }
 
     #[tokio::test]

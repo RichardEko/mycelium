@@ -232,6 +232,43 @@ pub trait Installed: Send {
 - The **shed path** (`max_providers`) and **supervision** loops are already kind-agnostic and
   survive unchanged — `withdraw` delegates to `Installed::uninstall`.
 
+### 4.4 Resource-aware eligibility (added 2026-07-07, requirements review)
+
+A node must not elect to install an artifact it cannot fit. The static byte budget (§4.3) is an
+operator *guess*; the node also needs a view of its **actual free resources**:
+
+- **Requirements travel in the entry, signed.** `InstallableEntry.requires` (`disk_bytes` at the
+  placement root, `mem_bytes` once live; `0` = undeclared) is publisher-declared metadata —
+  only the publisher knows that a 4 GB quantised model wants 5 GB+ of RAM activated. Unlike the
+  cost *hints* (ranking inputs, deliberately unsigned), requirements are **install-safety
+  claims** and sit inside `provenance_message`: a tampered requirement (mem lowered to 0) would
+  make trusting nodes OOM themselves, so it must break the signature.
+- **The node side is a probe + a headroom fraction.** `ResourceProbe` (available memory;
+  available disk at a path — implementations measure the nearest existing ancestor of a
+  not-yet-created placement dir) with a `sysinfo`-backed default, and a policy on the
+  provisioner: eligible only if `requirement ≤ headroom × available − reserved`, headroom
+  clamped to `(0, 1]`, default `0.8`. Disk is measured at the kind's runtime `resource_root()`
+  (`None` for memory-resident kinds like WASM components — then only memory is checked).
+- **In-flight installs count.** The `Installing` reservation carries the entry's declared
+  requirements; eligibility subtracts the sum of in-flight reservations — two 6 GB models must
+  not both pass a 10 GB-free check. Live installs need no virtual accounting: their placed
+  bytes and activated memory are visible to the probe directly.
+- **Unmeasurable = permissive, undeclared = unchecked** (detection, not prevention). Blocking
+  every install on a platform the probe can't read would freeze a fleet silently; the runtime's
+  real failure is the signal, and the tripwire counter (`ineligible_skips`) records every
+  resource-based non-election.
+- **This is the fleet's placement algorithm — deliberately not a scheduler.** Eligibility is
+  node-local, binary, and *silent*: a node that can't fit simply doesn't elect, one that can
+  does (herd-damped by the existing probabilistic self-election), and if *no* live node can,
+  the tripwire family says so. Two things are explicitly rejected: **gossiping per-node
+  resource state** (nobody needs global resource knowledge — the stigmergy lesson: model load
+  as the node's *own* backlog) and **best-fit ranking** (contended capacity self-corrects via
+  the shed band; ranking would require exactly the cross-node comparisons we refuse).
+- **Time-of-check honesty:** disk can fill between election and rename. `BlobRuntime` adds a
+  fail-fast absolute check before starting a multi-GB pull, but correctness never depended on
+  it — a mid-pull ENOSPC fails cleanly (complete-or-absent), the reservation drops, a later
+  round retries, possibly on a node that fits.
+
 ## 5. Transport: large artifacts pull direct, async, per-node
 
 For an LLM or ONNX net, the mesh RPC fetch is out (`artifact.fetch` rides the gossip frame,
@@ -296,6 +333,7 @@ install:   resolve catalogue (from_kv) → provenance check → kind/size eligib
 | Async `ArtifactSource` trait now | Right long-term shape, wrong sequencing: a breaking trait revision to unblock what the prefetch pattern already delivers. Chunked pulls live inside runtime `install`; the trait decision is taken later, on its own merits (`mesh_source.rs:70`). |
 | One kind-specific provisioner per crate (WasmProvisioner, ModelProvisioner…) | Duplicates the demand/presence/shed loops — which are already kind-agnostic — per kind. The loops are the invariant machinery; only install/lifecycle varies. Hence one provisioner + a runtime registry (§4.3). |
 | A registry server (Docker-registry style) | The line the feature was built to avoid — see the ops guide's "There is no registry server." A librarian is optional on the read path and interchangeable with any peer cache. |
+| Gossip per-node resource state / best-fit install ranking | Resource-aware **self-election is already the placement algorithm** (§4.4): local truth + silent non-participation needs no global resource knowledge, and contention self-corrects via herd damping + the shed band. A resource gossip layer plus ranking is a scheduler wearing a costume. |
 
 ---
 
@@ -336,7 +374,8 @@ All changes live in `mycelium-wasm-host` (+ examples/tests). Core Mycelium: **ze
 | `mesh_source.rs` | `serve_artifacts` gains an opt-in **`artifact/librarian` advertisement**. `MeshArtifactSource` gains the **resolving constructor** (`CapFilter`-based, resolved at prefetch). Bulk-transport serve/pull path for beyond-frame-cap artifacts (peer-serving optimization, §5). |
 | `provisioner.rs` | **The generalization.** `ArtifactRuntime` + `Installed` traits (§4.2); runtime registry on `Provisioner`; `bring_live` → async reservation + kind dispatch (`Hosted` becomes `Installing → Live → Withdrawing`); eligibility checks (kind registered, size budget) before self-election; `withdraw` delegates to `Installed::uninstall`; tripwire counters. The demand/presence/shed loops in `provision_round` are **unchanged** — they were always kind-agnostic. |
 | `host.rs` | **Unchanged.** `WasmHost` becomes the engine inside `WasmComponentRuntime`; `provision`/`provision_for` keep their signatures (the runtime calls them). The current `serve_loop` and `cap_invoke_kind` move into (or are wrapped by) `WasmComponentRuntime`. |
-| New: `runtime/` module | `WasmComponentRuntime` (today's behaviour, relocated), `BlobRuntime` (place + probe-gate + temp-file/rename discipline), progress plumbing to the loading tier. |
+| New: `runtime/` module | `WasmComponentRuntime` (today's behaviour, relocated), `BlobRuntime` (place + probe-gate + temp-file/rename discipline + fail-fast disk check), progress plumbing to the loading tier; `ArtifactRuntime::resource_root()` for the §4.4 disk check. |
+| New: `resources.rs` | `ResourceProbe` trait + `SystemResourceProbe` (sysinfo-backed memory + per-mount disk); the provisioner's resource policy (`set_resource_policy(probe, headroom)`, default system probe at 0.8) and in-flight reservation accounting (§4.4). `InstallableEntry.requires` (signed) carries the publisher-declared footprint. |
 | Examples | `catalog`: origin becomes a runtime-read `FsLibrarySource` directory (delete the `include_bytes!`); publisher dies after a librarian mirrors; a late-joining installer still provisions. `mcp_toolgrowth`: the converter **arrives** as a WASM component pulled from the library, provisioned, *then* bridged (`register_mcp_tool` + `tool/` cap); current activation behaviour retained as an explicitly-labelled contrast (activation vs installation is worth teaching). `llm_agent`: **kept simulated, now explicitly labelled** — de-simulating it would need `mycelium-wasm-host` as a root dev-dependency, and `cargo test --lib` compiles dev-deps, so wasmtime would enter `make check` (whose contract is *no wasmtime, ~3 min*). The real chunked-pull-drives-loading-tier path is proven instead by the provisioner blob e2e test and the coop `catalog`/`mcp_toolgrowth` demos; `llm_agent`'s percent loops carry SIMULATED markers pointing there. (Decided 2026-07-07 during implementation.) |
 | Tests (acceptance criteria, not afterthoughts) | Cross-node provision knowing *only* the catalogue (no hardcoded provider). Librarian death after peer cache → second peer provisions. Manifest add/remove → publish/tombstone, scoped to own signer (another publisher's entry survives). Provenance rejection. Kind dispatch: wasm instantiates; blob places + probe-gates; unregistered kind → skip + counter. Large-artifact path: fixture > frame cap via bulk/ranged pull, progress observed, crash-mid-pull leaves no partial placed file. Encoding: round-trip across all kinds signed/unsigned; unknown format-version rejected (and counted). |
 | Docs | Ops guide gains the manifest/librarian runbook section; guide ch. 14 gains the activation-vs-installation pitfall; this record's §3 principle cross-linked from the wiki's companions pages. |

@@ -26,8 +26,9 @@ use std::time::Duration;
 use mycelium::{CapFilter, CapValue, Capability, CapabilityReg, GossipAgent};
 
 use crate::artifact::{ArtifactId, ArtifactKind, ArtifactSource};
-use crate::catalog::{InstallableCatalog, InstallableEntry};
+use crate::catalog::{InstallableCatalog, InstallableEntry, ResourceRequirements};
 use crate::host::WasmHost;
+use crate::resources::{ResourceProbe, SystemResourceProbe};
 use crate::runtime::{ArtifactRuntime, Installed, ProgressFn, RuntimeCtx, WasmComponentRuntime};
 
 /// How often a provisioned capability re-asserts its `cap/` advertisement.
@@ -38,8 +39,11 @@ enum HostedState {
     /// A background install task is in flight — the reservation that prevents a later round
     /// double-starting the same artifact. The token identifies *which* task, so a
     /// withdraw-then-reinstall never lets a stale task's completion clobber the newer install.
-    Installing(u64),
-    /// Installed, advertised, serving.
+    /// `reserved` carries the entry's declared requirements so concurrent eligibility checks
+    /// see resources already spoken for (two 3 GB models must not both pass a 5 GB-free check).
+    Installing { token: u64, reserved: ResourceRequirements },
+    /// Installed, advertised, serving. (Its real consumption — placed bytes on disk, activated
+    /// memory — is visible to the probe directly, so no virtual accounting is kept.)
     Live(LiveHosted),
 }
 
@@ -90,6 +94,12 @@ pub struct Provisioner {
     /// Skip entries whose `size_bytes` hint exceeds this (node-local install budget). `None` =
     /// unbounded.
     install_budget_bytes: Option<u64>,
+    /// Resource-aware eligibility (§4.4): a probe of this node's free memory/disk plus a
+    /// headroom fraction (< 1.0) — an entry's declared requirements must fit within
+    /// `headroom × available − reserved-by-in-flight-installs`. Default: the system probe at
+    /// 0.8. `None` = disabled. Unmeasurable resources are permissive (detection, not
+    /// prevention).
+    resource_policy: Option<(Arc<dyn ResourceProbe>, f64)>,
     /// Artifacts this node has reserved (install in flight) or brought live — a round never
     /// double-starts. Lock discipline: acquired once per function, flat, never across `await`
     /// (wiki lock-order table row 21).
@@ -122,6 +132,7 @@ impl Provisioner {
             policies: Vec::new(),
             trusted_publishers: Vec::new(),
             install_budget_bytes: None,
+            resource_policy: Some((Arc::new(SystemResourceProbe::new()), 0.8)),
             hosted: Arc::new(Mutex::new(HashMap::new())),
             ineligible: Arc::new(AtomicU64::new(0)),
         }
@@ -138,6 +149,33 @@ impl Provisioner {
         self.install_budget_bytes = Some(max_bytes);
     }
 
+    /// Override the resource-eligibility policy (§4.4): an entry's declared requirements must
+    /// fit within `headroom × available − reserved`, where `available` comes from `probe`
+    /// (memory globally; disk at the kind's runtime `resource_root`). `headroom` is clamped to
+    /// `(0, 1]` — a node never commits 100 %+ of what it has free. The default is the system
+    /// probe at `0.8`.
+    pub fn set_resource_policy(&mut self, probe: Arc<dyn ResourceProbe>, headroom: f64) {
+        self.resource_policy = Some((probe, headroom.clamp(f64::MIN_POSITIVE, 1.0)));
+    }
+
+    /// Disable resource-aware eligibility entirely (kind + budget checks remain).
+    pub fn disable_resource_policy(&mut self) {
+        self.resource_policy = None;
+    }
+
+    /// Requirements reserved by in-flight installs (the `Installing` states).
+    fn reserved_requirements(&self) -> ResourceRequirements {
+        let map = self.hosted.lock().unwrap();
+        let mut sum = ResourceRequirements::default();
+        for state in map.values() {
+            if let HostedState::Installing { reserved, .. } = state {
+                sum.disk_bytes = sum.disk_bytes.saturating_add(reserved.disk_bytes);
+                sum.mem_bytes = sum.mem_bytes.saturating_add(reserved.mem_bytes);
+            }
+        }
+        sum
+    }
+
     /// Require **signed provenance**: only install catalog entries carrying a valid Ed25519
     /// signature over the entry (kind + content address + declared-provide) from one of `trusted`
     /// publisher keys. Without this, the provisioner trusts the catalog for integrity (hash match)
@@ -152,16 +190,20 @@ impl Provisioner {
         self.trusted_publishers.is_empty() || entry.verify_provenance(&self.trusted_publishers)
     }
 
-    /// True if this node *can* host `entry`: a runtime is registered for its kind and it fits the
-    /// install budget. A miss is silent non-participation (some other node elects) plus a
-    /// tripwire tick — see [`ineligible_skips`](Self::ineligible_skips).
+    /// True if this node *can* host `entry`: a runtime is registered for its kind, it fits the
+    /// install budget, and its declared requirements fit this node's **resource headroom**
+    /// (§4.4: `headroom × available − reserved-by-in-flight`; memory globally, disk at the
+    /// runtime's `resource_root`; undeclared requirements and unmeasurable resources are
+    /// permissive). A miss is silent non-participation — some node that fits elects; this is
+    /// the fleet's placement algorithm, with no scheduler and no resource gossip — plus a
+    /// tripwire tick, see [`ineligible_skips`](Self::ineligible_skips).
     fn eligible(&self, entry: &InstallableEntry) -> bool {
-        if !self.runtimes.contains_key(&entry.kind) {
+        let Some(runtime) = self.runtimes.get(&entry.kind) else {
             self.ineligible.fetch_add(1, Ordering::Relaxed);
             tracing::debug!(ns = %entry.provides.namespace, name = %entry.provides.name,
                 kind = ?entry.kind, "no runtime registered for kind — not electing");
             return false;
-        }
+        };
         if let Some(max) = self.install_budget_bytes
             && entry.size_bytes > max
         {
@@ -169,6 +211,33 @@ impl Provisioner {
             tracing::debug!(ns = %entry.provides.namespace, name = %entry.provides.name,
                 size = entry.size_bytes, budget = max, "entry exceeds install budget — not electing");
             return false;
+        }
+        if let Some((probe, headroom)) = &self.resource_policy
+            && (entry.requires.mem_bytes > 0 || entry.requires.disk_bytes > 0)
+        {
+            let reserved = self.reserved_requirements();
+            let usable = |avail: u64| (avail as f64 * headroom) as u64;
+            if entry.requires.mem_bytes > 0
+                && let Some(avail) = probe.available_memory_bytes()
+                && entry.requires.mem_bytes.saturating_add(reserved.mem_bytes) > usable(avail)
+            {
+                self.ineligible.fetch_add(1, Ordering::Relaxed);
+                tracing::debug!(ns = %entry.provides.namespace, name = %entry.provides.name,
+                    require = entry.requires.mem_bytes, reserved = reserved.mem_bytes,
+                    available = avail, headroom, "memory requirement exceeds headroom — not electing");
+                return false;
+            }
+            if entry.requires.disk_bytes > 0
+                && let Some(root) = runtime.resource_root()
+                && let Some(avail) = probe.available_disk_bytes(root)
+                && entry.requires.disk_bytes.saturating_add(reserved.disk_bytes) > usable(avail)
+            {
+                self.ineligible.fetch_add(1, Ordering::Relaxed);
+                tracing::debug!(ns = %entry.provides.namespace, name = %entry.provides.name,
+                    require = entry.requires.disk_bytes, reserved = reserved.disk_bytes,
+                    available = avail, headroom, "disk requirement exceeds headroom — not electing");
+                return false;
+            }
         }
         true
     }
@@ -210,7 +279,7 @@ impl Provisioner {
                 live.installed.uninstall(); // dropping live._cap tombstones the cap/ entry
                 true
             }
-            Some(HostedState::Installing(_)) => true,
+            Some(HostedState::Installing { .. }) => true,
             None => false,
         }
     }
@@ -232,7 +301,7 @@ impl Provisioner {
             .lock()
             .unwrap()
             .values()
-            .filter(|s| matches!(s, HostedState::Installing(_)))
+            .filter(|s| matches!(s, HostedState::Installing { .. }))
             .count()
     }
 
@@ -260,7 +329,10 @@ impl Provisioner {
             if map.contains_key(&entry.artifact) {
                 return false;
             }
-            map.insert(entry.artifact, HostedState::Installing(token));
+            map.insert(
+                entry.artifact,
+                HostedState::Installing { token, reserved: entry.requires },
+            );
         }
 
         let agent = Arc::clone(&self.agent);
@@ -317,7 +389,7 @@ impl Provisioner {
                     let leftover = {
                         let mut map = hosted.lock().unwrap();
                         match map.get(&artifact) {
-                            Some(HostedState::Installing(t)) if *t == token => {
+                            Some(HostedState::Installing { token: t, .. }) if *t == token => {
                                 map.insert(
                                     artifact,
                                     HostedState::Live(LiveHosted { _cap: cap, installed }),
@@ -344,7 +416,8 @@ impl Provisioner {
                     tracing::warn!(ns = %provides.namespace, name = %provides.name, %e,
                         "provisioning failed");
                     let mut map = hosted.lock().unwrap();
-                    if matches!(map.get(&artifact), Some(HostedState::Installing(t)) if *t == token)
+                    if matches!(map.get(&artifact),
+                        Some(HostedState::Installing { token: t, .. }) if *t == token)
                     {
                         map.remove(&artifact);
                     }
@@ -684,6 +757,106 @@ mod tests {
         p2.supervise(CapFilter::new("text", "echo"), 1);
         assert_eq!(p2.provision_round(), 1, "trusted-signed artifact starts installing");
         wait_live(&p2, 1).await;
+
+        agent.shutdown().await;
+    }
+
+    /// A probe reporting fixed numbers — resource-eligibility tests must not depend on the
+    /// machine they run on.
+    struct FixedProbe {
+        mem:  u64,
+        disk: u64,
+    }
+    impl ResourceProbe for FixedProbe {
+        fn available_memory_bytes(&self) -> Option<u64> {
+            Some(self.mem)
+        }
+        fn available_disk_bytes(&self, _at: &std::path::Path) -> Option<u64> {
+            Some(self.disk)
+        }
+    }
+
+    /// A Blob runtime whose installs block on a semaphore — lets a test hold an install
+    /// in-flight while asserting what a concurrent eligibility check sees.
+    struct GatedRuntime {
+        gate: Arc<tokio::sync::Semaphore>,
+    }
+    struct NoopInstalled;
+    impl Installed for NoopInstalled {
+        fn probe(&self) -> bool {
+            true
+        }
+        fn uninstall(self: Box<Self>) {}
+    }
+    #[async_trait::async_trait]
+    impl ArtifactRuntime for GatedRuntime {
+        fn kind(&self) -> ArtifactKind {
+            ArtifactKind::Blob
+        }
+        async fn install(
+            &self,
+            _entry: InstallableEntry,
+            _source: Arc<dyn ArtifactSource + Send + Sync>,
+            _ctx: RuntimeCtx,
+            _progress: ProgressFn,
+        ) -> Result<Box<dyn Installed>, crate::runtime::InstallError> {
+            let permit = self
+                .gate
+                .acquire()
+                .await
+                .map_err(|e| crate::runtime::InstallError(e.to_string()))?;
+            permit.forget();
+            Ok(Box::new(NoopInstalled))
+        }
+    }
+
+    #[tokio::test]
+    async fn resource_requirements_gate_election_and_count_inflight_reservations() {
+        // §4.4: a node must not elect for an artifact it cannot fit — and "fit" must account
+        // for installs already in flight (two 6 GB models must not both pass a 10 GB check).
+        let agent = live_agent().await;
+        let host = Arc::new(WasmHost::new().expect("engine"));
+
+        let mut source = InMemorySource::new();
+        let a = source.insert(b"model-a".to_vec());
+        let b = source.insert(b"model-b".to_vec());
+        let c = source.insert(b"model-c".to_vec());
+
+        let mut catalog = InstallableCatalog::new();
+        catalog.add(InstallableEntry::new(Capability::new("llm", "model-a"), a)
+            .with_kind(ArtifactKind::Blob).with_requirements(0, 6_000));
+        catalog.add(InstallableEntry::new(Capability::new("llm", "model-b"), b)
+            .with_kind(ArtifactKind::Blob).with_requirements(0, 6_000));
+        catalog.add(InstallableEntry::new(Capability::new("llm", "model-c"), c)
+            .with_kind(ArtifactKind::Blob).with_requirements(0, 12_000)); // never fits alone
+
+        let mut prov =
+            Provisioner::new(Arc::clone(&agent), host, catalog, Arc::new(source), 1.0);
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        prov.register_runtime(Arc::new(GatedRuntime { gate: Arc::clone(&gate) }));
+        prov.set_resource_policy(Arc::new(FixedProbe { mem: 10_000, disk: 10_000 }), 1.0);
+        prov.supervise(CapFilter::new("llm", "model-a"), 1);
+        prov.supervise(CapFilter::new("llm", "model-b"), 1);
+        prov.supervise(CapFilter::new("llm", "model-c"), 1);
+
+        // Round 1: model-a starts (reserves 6_000); model-b would joint-exceed (6k + 6k > 10k)
+        // and is skipped; model-c exceeds alone (12k > 10k) and is skipped.
+        assert_eq!(prov.provision_round(), 1, "only the first model fits");
+        assert_eq!(prov.installing_count(), 1);
+        assert_eq!(prov.ineligible_skips(), 2, "joint-exceed + exceeds-alone each ticked");
+
+        // While model-a is still installing, nothing changes on a re-round.
+        assert_eq!(prov.provision_round(), 0, "reservation still holds the headroom");
+        assert!(prov.ineligible_skips() >= 3, "model-b (and c) keep ticking while blocked");
+
+        // Let model-a finish: its reservation clears (real consumption is the probe's business,
+        // and this probe is fixed) → model-b now fits; model-c still never does.
+        gate.add_permits(1);
+        wait_live(&prov, 1).await;
+        assert_eq!(prov.provision_round(), 1, "freed headroom admits the second model");
+        gate.add_permits(1);
+        wait_live(&prov, 2).await;
+        assert_eq!(prov.provision_round(), 0, "model-c can never fit on this node");
 
         agent.shutdown().await;
     }

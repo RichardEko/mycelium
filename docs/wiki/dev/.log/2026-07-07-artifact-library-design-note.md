@@ -10,6 +10,13 @@ lock-order rows 20–22; full coop smoke + make check green. **Open: step 6 (obj
 via PrefetchingSource — needs a per-node credentials story) and step 7 (async ArtifactSource
 revisit).** Ledger entry: [dev/history](../history.md); companion entry updated.
 
+**Step 4b added later the same day** (requirements review with Richard): **resource-aware
+eligibility** (design §4.4) — signed `requires: {disk, mem}` in the entry (safety claims inside
+provenance; hints stay unsigned), `ResourceProbe` + headroom fraction (default system probe at
+0.8), in-flight reservations counted (two 6 GB models can't both pass a 10 GB check),
+unmeasurable→permissive, `BlobRuntime` fail-fast disk check. Explicitly rejected: resource
+gossip + best-fit ranking — resource-aware self-election *is* the placement algorithm.
+
 Original note (morning), for the record:
 
 A session probing "dynamic component install at runtime" verified a gap in the artifact pipeline
