@@ -1,0 +1,34 @@
+[package]
+name = "mycelium-guardrails"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Dr. Richard Nicholson <tathatasystems@proton.me>"]
+description = "Structural, coordinator-free guardrails for Mycelium (v3.0): a self-imposed, tier-labelled policy — what an agent may do — compiled to boundary + AgentPolicy + authorized_callers, on the public API only"
+license = "AGPL-3.0-only"
+repository = "https://github.com/RichardEko/mycelium"
+keywords = ["guardrails", "policy", "multi-agent", "distributed-systems", "governance"]
+categories = ["network-programming", "asynchronous"]
+
+[features]
+default = []
+# Tier C — the hard-prevention surface: `authorized_callers` invoke-time gating plus the
+# tamper-evident denial seal. Forwards `mycelium/compliance` (which pulls `tls`: an audit
+# record is Ed25519-signed and `req.sender()` is only trustworthy under the tls identity).
+compliance = ["mycelium/compliance"]
+
+[dependencies]
+# Companion-crate contract: only Mycelium's PUBLIC API is used — no internal access.
+# This dependency line is itself the composability proof.
+mycelium = { path = "..", default-features = false }
+
+tokio   = { version = "1.35", features = ["rt", "time", "sync"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tokio    = { version = "1.35", features = ["full"] }
+tempfile = "3"
+
+[[test]]
+name = "guardrails"
+required-features = ["compliance"]

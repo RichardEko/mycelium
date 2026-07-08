@@ -2193,6 +2193,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mycelium-guardrails"
+version = "0.1.0"
+dependencies = [
+ "mycelium",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "mycelium-reason"
 version = "0.1.0"
 dependencies = [
