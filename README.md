@@ -1,31 +1,33 @@
 # Mycelium
 
-A broker-less mesh runtime for AI agent fleets, embedded as a Rust library. Agents discover
-each other's capabilities, route tool calls, exchange events, and reach consensus — all without
-a coordinator, central registry, or single point of failure.
+A **broker-less mesh runtime for AI agent fleets**, embedded as a Rust library. Agents discover
+each other's capabilities, route tool calls, exchange events, and reach consensus — with **no
+coordinator, central registry, or single point of failure**. State converges by gossip; work is
+claimed, not dispatched; roles are discovered, not assigned.
 
-Built on TCP epidemic propagation with last-write-wins conflict resolution. Layer 1 carries
-persistent state; Layer 2 carries ephemeral events. Higher layers provide async RPC, Actor/Event
-mailboxes, MCP tool routing, SkillRunner LLM nodes, and a Python bridge — each agent chooses
-its own payload serialisation.
+## Hello, mesh — 30 seconds, no setup
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20665238.svg)](https://doi.org/10.5281/zenodo.20665238)
+```sh
+cargo run --example hello_mesh
+```
 
-The architectural argument is published as: R. Nicholson, *"The Coordinator Trap: Structural
-Scaling Liabilities in Mediated Multi-Agent Architectures and a Substrate-Based Alternative,"*
-Tathata Systems Ltd, 2026 — [doi:10.5281/zenodo.20665238](https://doi.org/10.5281/zenodo.20665238)
-(CC BY 4.0; source in [`docs/publications/`](docs/publications/), reproducible at tag
-[`paper-submission-v2`](https://github.com/RichardEko/mycelium/tree/paper-submission-v2)).
+Two embedded agents on loopback: one writes a value, the other learns it **by gossip** — no
+broker, no config, no LLM, no features to enable. That's Layer I, the shared KV store everything
+else builds on. It's ~25 readable lines — start there: [`examples/hello_mesh.rs`](examples/hello_mesh.rs).
 
-It is the lead paper of a **four-part corpus** (all CC BY 4.0; full read-order, dependency
-graph, and DOIs in [`docs/publications/README.md`](docs/publications/README.md)):
+## Where next?
 
-- **Heterogeneous Local Knowledge Systems (HLKS)** — the cross-domain convergence argument
-  (`mycelium-tuple-space` is its constructive evidence) — [doi:10.5281/zenodo.20813058](https://doi.org/10.5281/zenodo.20813058)
-- **The Capture Problem** — power vs knowledge; closes the sequence — [doi:10.5281/zenodo.20813463](https://doi.org/10.5281/zenodo.20813463)
-- **Monetary Ecology** — the MCB/P/S/Î evaluation framework the distributive argument draws on — [doi:10.5281/zenodo.20811062](https://doi.org/10.5281/zenodo.20811062)
+| You are… | Go to |
+|---|---|
+| **New here** — is this for me? which primitive? which demo? why-not-X? | the **[FAQ](docs/guide/faq.md)** — your map, and the intended first read |
+| **Building a use case *on* Mycelium** | [Building on Mycelium](docs/guide/building-on-mycelium.md) — the integrator contract (dependency, public-API rule, reserved KV prefixes, a copyable `CLAUDE.md`) |
+| **Wanting the guided depth** | the **[developer guide](docs/guide/README.md)** — 17 chapters, each with a runnable example |
 
-## Getting Started
+> **The rest of this page is single-file reference** (architecture, full API, every subsystem).
+> For a *guided* path, follow the [FAQ](docs/guide/faq.md) → [guide](docs/guide/README.md) instead —
+> this README is the deep dive, not the on-ramp.
+
+## What it is
 
 Mycelium is three layers: a broker-less gossip KV store (Layer I), an ephemeral
 scoped event mesh (Layer II), and an opt-in consensus overlay (Layer III). The
@@ -33,17 +35,8 @@ capability system sits across all three layers and provides broker-less service
 discovery. Four application patterns build on this substrate: Skills (LLM agents
 as mesh nodes), MCP tool discovery (LLM finds tools dynamically from the KV
 store), fluid pipelines (Agentic Flow Networks), and A2A interop (LangChain /
-AutoGen).
-
-**New to Mycelium?** [→ Start with the FAQ](docs/guide/faq.md) — is this for me?
-which primitive do I use? which example do I run? why-not-X? — then dive into the
-[developer guide](docs/guide/README.md) for concept explanations, diagrams, and
-dev notes for each pattern.
-
-**Building a use case *on* Mycelium?** [→ Building on Mycelium](docs/guide/building-on-mycelium.md)
-— the integrator contract: the dependency, the public-API-only rule, which KV
-prefixes to avoid, the invariants you must respect, and a copyable `CLAUDE.md`
-snippet for agent-driven downstream projects.
+AutoGen). Built on TCP epidemic propagation with last-write-wins conflict
+resolution; each agent chooses its own payload serialisation.
 
 ### Which crate? — `mycelium` vs `mycelium-core`
 
@@ -1715,6 +1708,25 @@ Environment variables override both — `GOSSIP_<FIELD_NAME>` for every field.
 | `intern_keys` | `true` | Intern received keys in a process-wide pool so all connection handlers share one `Arc<str>` per distinct key. Disable for workloads with unbounded key spaces (e.g. UUID keys). |
 | `intern_max_keys` | `0` (unlimited) | Maximum keys in the intern pool. New keys bypass interning once reached. Only meaningful when `intern_keys = true`. |
 | `health_check_max_jitter_ms` | `0` | Startup jitter cap (ms) before the first health-check ping. `0` = up to `health_check_interval_secs × 500` ms. Set to a small value (e.g. `50`) in test configs. |
+
+## Research & citation
+
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20665238.svg)](https://doi.org/10.5281/zenodo.20665238)
+
+Mycelium is the working implementation behind a published architectural argument. The lead paper:
+R. Nicholson, *"The Coordinator Trap: Structural Scaling Liabilities in Mediated Multi-Agent
+Architectures and a Substrate-Based Alternative,"* Tathata Systems Ltd, 2026 —
+[doi:10.5281/zenodo.20665238](https://doi.org/10.5281/zenodo.20665238) (CC BY 4.0; source in
+[`docs/publications/`](docs/publications/), reproducible at tag
+[`paper-submission-v2`](https://github.com/RichardEko/mycelium/tree/paper-submission-v2)).
+
+It is the lead of a **four-part corpus** (all CC BY 4.0; full read-order, dependency graph, and
+DOIs in [`docs/publications/README.md`](docs/publications/README.md)):
+
+- **Heterogeneous Local Knowledge Systems (HLKS)** — the cross-domain convergence argument
+  (`mycelium-tuple-space` is its constructive evidence) — [doi:10.5281/zenodo.20813058](https://doi.org/10.5281/zenodo.20813058)
+- **The Capture Problem** — power vs knowledge; closes the sequence — [doi:10.5281/zenodo.20813463](https://doi.org/10.5281/zenodo.20813463)
+- **Monetary Ecology** — the MCB/P/S/Î evaluation framework the distributive argument draws on — [doi:10.5281/zenodo.20811062](https://doi.org/10.5281/zenodo.20811062)
 
 ## License
 

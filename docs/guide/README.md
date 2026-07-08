@@ -106,10 +106,15 @@ Five application patterns build on this substrate:
 
 ## Example portfolio
 
-The [**Food-Rescue Co-op suite**](../../examples/coop/) (`examples/coop/`, 11
-demos) is the capability tour — one runnable demo per capability area, composed
-in one constructive world, each calling out a [pattern & pitfall](14-patterns-and-pitfalls.md).
-Start there. The other examples are specialised:
+**First run this** — the 30-second, zero-setup starting point:
+`cargo run --example hello_mesh` ([`examples/hello_mesh.rs`](../../examples/hello_mesh.rs), ~25
+readable lines) — two agents share a value by gossip, no broker, no LLM. It's the smallest
+complete Mycelium program.
+
+Then, for the **capability tour**, the [**Food-Rescue Co-op suite**](../../examples/coop/)
+(`examples/coop/`, 12 demos) is one runnable demo per capability area, composed in one
+constructive world, each calling out a [pattern & pitfall](14-patterns-and-pitfalls.md). The other
+examples are specialised:
 
 | Example | What it's for |
 |---|---|
