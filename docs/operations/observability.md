@@ -42,10 +42,15 @@ curl -s http://node:8080/stats | jq
 
 ### Prometheus
 
-With `--features metrics`, `/metrics` exposes gossip hot-path gauges/counters
+With `--features metrics`, `/metrics` exposes the gossip hot-path gauges/counters
 (`gossip_store_entries`, `gossip_anti_entropy_rounds_total`,
 `gossip_messages_received_total`, `gossip_signals_delivered_total` /
-`_rejected_total`, `gossip_rpc_latency_ms`, …). Scrape it like any service.
+`_rejected_total`, `gossip_rpc_latency_ms`, …) plus the emergent-diagnosis, governor,
+artifact-library, guardrails, and reason-routing families. Scrape it like any service.
+
+**Full reference → [metrics.md](metrics.md)** — the canonical, complete list of every
+emitted series (type, feature, meaning, and what to watch for), one section per family.
+The gossip names above are just a teaser.
 
 ## Naming environments & monitoring many clusters
 
@@ -113,9 +118,19 @@ you can `curl` the printed gateway port to inspect it live.
 
 ## Dashboards
 
-The `llm_agent` / `three_node_demo` examples ship a live management UI (a mesh
-view + KV inspector) on their gateway port — the quickest visual into a running
-cluster. SkillRunner exposes `/mgmt` (the audit + skill dashboard); see
+**A Grafana dashboard ships in-repo:**
+[`dashboards/mycelium-grafana.json`](../../dashboards/mycelium-grafana.json). Import it
+into Grafana (it prompts for a Prometheus datasource) for KV-store, gossip-transport,
+signal-mesh, and RPC-latency panels over the `gossip_*` family. It is a **starting point**,
+not the whole picture — it covers the gossip hot path plus a header row of emergent /
+guardrails / reason panels; the *full* metric set (governor, artifact library, and the rest)
+is in **[metrics.md](metrics.md)**, ready to add as panels. Point its datasource at a
+Prometheus scraping every cluster's `/metrics` and use the `cluster` label as a dashboard
+variable to switch environments.
+
+For a quick visual without Grafana: the `llm_agent` / `three_node_demo` examples ship a
+live management UI (a mesh view + KV inspector) on their gateway port — the quickest visual
+into a running cluster. SkillRunner exposes `/mgmt` (the audit + skill dashboard); see
 [guide 05 · Skills](../guide/05-skills.md).
 
 ## Logs & tracing
