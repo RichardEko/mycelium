@@ -20,6 +20,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   can hold either id. Canary: `liveness_filter_drops_a_non_peer_cap`.
 
 ### Added
+- **`mycelium-guardrails`** (new companion crate, PR 1 — the policy API; strategy + code-verified
+  bindings in [`docs/plans/mycelium-guardrails.md`](docs/plans/mycelium-guardrails.md)): a
+  self-imposed, **tier-labelled** structural-guardrail declaration on the public API only. One
+  `Policy` compiles to boundary groups (Tier A), `AgentPolicy` transition guards (Tier B), and
+  provider-side `authorized_callers` (Tier C — hard prevention); `Policy::strength_report()`
+  discloses which clause is hard-prevented vs self-imposed vs detection. `apply()` configures
+  **this** node (no remote policy authority); under `compliance`, `check_caller`/`guarded_rpc_serve`
+  gate a served RPC and **seal** each `Invoke`/`Denied` into the tamper-evident audit chain (the
+  "prove X was stopped" foundation). The wedge demo, verification tool, and examples are later PRs.
 - **`mycelium-reason`** (new companion crate; strategy + code-verified bindings in
   [`docs/plans/mycelium-reason.md`](docs/plans/mycelium-reason.md)): the v3.0 Tier-3
   differentiators on the public API only — **capability-routed inference**

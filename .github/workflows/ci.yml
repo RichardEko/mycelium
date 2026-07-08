@@ -150,6 +150,25 @@ jobs:
       # The fleet-reasoning worked example (all three wedges, three-node mesh), Docker-free.
       - run: ./mycelium-reason/ci_smoke.sh
 
+  guardrails:
+    # v3.0 guardrails companion (docs/plans/mycelium-guardrails.md), PR 1 — the ergonomic,
+    # self-imposed, tier-labelled policy API: one declaration compiled to boundary + AgentPolicy +
+    # authorized_callers, with the Tier-C denial sealed into the tamper-evident chain (compliance).
+    # Public-API only; its own job for parallelism + caching.
+    name: Guardrails (v3.0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # Cross-node integration suites bind real sockets — route through the flake tier.
+      - run: ./scripts/ci-retest.sh -p mycelium-guardrails
+      - run: ./scripts/ci-retest.sh -p mycelium-guardrails --features compliance
+      - run: cargo clippy -p mycelium-guardrails --all-targets -- -D warnings
+      - run: cargo clippy -p mycelium-guardrails --features compliance --all-targets -- -D warnings
+
   python-sdk:
     # The repo's first Python CI job: mycelium-py (call_typed) + the LangGraph
     # checkpointer, run as real integration tests against a two-node reason mesh
