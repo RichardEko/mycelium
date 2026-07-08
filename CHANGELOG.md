@@ -26,6 +26,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   single-shot `/gateway/llm/call`) and `mycelium.ReasonClient` in `mycelium-py`
   (`route`/`trace`/`blob_put`/`blob_get`), unblocking a load-aware, failover LLM node
   for the LangGraph ladder (rung 4).
+- **The deploy/reheal flagship (rung 6, echo variant)** — `mycelium-reason`'s
+  `reheal_node` example (`SERVE_MODEL` publishes a content-addressed model artifact +
+  advertises its id in KV; `REHEAL` declares the demand via `require_model`, fetches the
+  artifact over the mesh with `MeshBlobStore`, and bridges it into a live `serve_model`
+  skill) plus a self-contained Python driver `examples/langgraph/06_deploy_reheal.py`,
+  wired into the `python-sdk` CI job. Proves end to end, deterministically, that a
+  LangGraph graph's model dependency follows it across a node failure: a thread
+  checkpointed on node A resumes on node B — which rehealed the model from the mesh —
+  after A is killed. Echo fixture (the artifact is a blob, "serving" is `EchoBackend`);
+  the real seam (`require_model` → mesh fetch + verify → `serve_model` bridge → routed
+  resume) is exercised for real.
 - **The Python tier of `mycelium-reason` (v3.0 Tiers 1+2)**:
   **`langgraph-checkpoint-mycelium`** (new package) — a LangGraph `BaseCheckpointSaver`
   backed by the mesh (index rows in gossiped KV under `ckpt/`/`ckptw/`, payloads as

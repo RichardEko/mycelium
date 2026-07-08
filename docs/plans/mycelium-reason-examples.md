@@ -71,14 +71,38 @@ Homes: a new `examples/langgraph/` dir (the LangGraph ladder) — distinct from 
 | 3 | cross-node resume — kill A, resume on B | `03_cross_node.py` | ✅ echo |
 | 4 | **routed inference** — LLM calls fail over to a healthy node | `POST /gateway/reason/route` + `ReasonClient.route` ✅ shipped; `04_routed.py` | ✅ echo |
 | 5 | **fleet-reasoning traces** — replay/narrate why the graph reasoned | `ReasonClient.trace` (GET `/gateway/reason/trace`); `05_traces.py` | ✅ echo |
-| 6 | **deploy/reheal** — model follows the thread across node death | Rust reheal-node + `06_deploy_reheal.py`; the install→serve bridge | ✅ echo · manual Ollama |
+| 6 | **deploy/reheal** — model follows the thread across node death | Rust reheal-node + `06_deploy_reheal.py`; the install→serve bridge | ✅ echo (shipped) · manual Ollama (TODO) |
 | — | teach it | `docs/guide/15-reasoning-and-langgraph.md` (chapter 15) + the `examples/langgraph/README.md` ladder index | — |
 
 ## Build sequence (flagship-first, per the 2026-07-08 decision)
 
 1. **PR A — the routing surface + reheal foundation** (unblocks the flagship): `POST
    /gateway/reason/route` (InferenceRouter-backed) ✅ + `ReasonClient.{route,trace}` in `mycelium-py` ✅ +
-   the Rust *reheal node* (require_model → install → `serve_model` bridge) + the echo-CI flagship demo.
+   the Rust *reheal node* (require_model → mesh blob fetch → `serve_model` bridge —
+   `mycelium-reason/examples/reheal_node.rs`) ✅ + the echo-CI flagship demo
+   (`examples/langgraph/06_deploy_reheal.py`, in the `python-sdk` job) ✅ **shipped**.
+
+   Seam findings the echo flagship surfaced (bind them into the Ollama variant + chapter 15):
+   - **A killed node lingers ~90s in a peer's capability view** — the pheromone-freshness
+     window (3× the 30s refresh): a dead node stops refreshing but there is no instant
+     tombstone, so it stays a *candidate*. The `InferenceRouter` ranks equal-load providers
+     by ascending node-id, and an RPC to a dead node blocks the full 30s per-attempt
+     timeout (the mesh RPC waits for a reply, no connection-refused fast-fail). So if the
+     dead node has the lower id, **every post-kill route eats a 30s dead-RPC penalty**
+     before failing over. Fix in the demo: give the *surviving* node (B) the lower gossip
+     bind port so it ranks itself first and post-kill routes land on it immediately. This
+     is the load-bearing seam lesson — the Ollama variant and any real reheal deployment
+     want the same "survivor ranks first" property (or a faster liveness signal than
+     freshness). Cross-node routing to a *live* remote provider is fine once the mesh has
+     settled (verified: instant, correct provider) — it is only the *dead*-candidate case
+     that is slow, and only until evaporation.
+   - **Honest ordering, enforced structurally.** The checkpoint gossips A→B, and B fetches
+     the model artifact from A over the mesh, both *before* A is killed (once A is dead it
+     can serve neither). B's reheal task runs from B's startup and prints a marker on its
+     own stdout — the pre-kill structural signal the driver waits on (no routing needed).
+     The graph interrupts *before* its LLM node, so node A never calls the model; the only
+     inference runs on B after A is dead — the cleanest expression of "the model followed
+     the thread."
 2. **PR B — the Ollama-manual flagship** variant (real GGUF; `model_deploy` machinery; manual, not CI)
    + guide chapter 15's flagship section.
 3. **PR C — backfill rungs 0–5** (Python demos over proven pieces) + the `examples/langgraph/` README
