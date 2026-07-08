@@ -189,6 +189,11 @@ jobs:
         env:
           MYCELIUM_TEST_PORT: 8101
           MYCELIUM_TEST_PORT_B: 8102
+      # The rung-6 deploy/reheal flagship (echo variant): manages its OWN two-node mesh
+      # (ports 73xx/83xx — disjoint from the shared A/B above) because it kills a node
+      # mid-run. Proves a LangGraph graph's model dependency follows it across node death.
+      - run: cargo build -p mycelium-reason --features llm,gateway --example reheal_node
+      - run: python examples/langgraph/06_deploy_reheal.py
       - name: Stop reason nodes
         if: always()
         run: |
