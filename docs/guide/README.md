@@ -106,10 +106,13 @@ Five application patterns build on this substrate:
 
 ## Example portfolio
 
-**First run this** — the 30-second, zero-setup starting point:
-`cargo run --example hello_mesh` ([`examples/hello_mesh.rs`](../../examples/hello_mesh.rs), ~25
-readable lines) — two agents share a value by gossip, no broker, no LLM. It's the smallest
-complete Mycelium program.
+**First run these two** — the zero-setup starting ladder (no features, no LLM, ~25–45 readable lines each):
+
+1. `cargo run --example hello_mesh` ([source](../../examples/hello_mesh.rs)) — two agents share a
+   value **by gossip**. The whole Layer-I substrate: a shared KV store, no broker.
+2. `cargo run --example hello_capability` ([source](../../examples/hello_capability.rs)) — one node
+   **advertises** what it does; another **resolves** it by name and **calls** it over RPC. That's
+   the value proposition — broker-less service discovery, no registry, no configured addresses.
 
 Then, for the **capability tour**, the [**Food-Rescue Co-op suite**](../../examples/coop/)
 (`examples/coop/`, 12 demos) is one runnable demo per capability area, composed in one
@@ -143,7 +146,7 @@ examples are specialised:
 |---|---------|-----------------|------|
 | [00](00-concepts.md) | **Concepts & vocabulary** — Capability vs Skill vs A2A/MCP/AgentFacts; native model vs edge standards. **Read first.** | — | 5 min |
 | [01](01-gossip-kv.md) | Gossip KV — shared state without a broker | `cargo run --example conway` | 30 s |
-| [02](02-capabilities.md) | Capability discovery — find nodes by what they do | `cargo run --example llm_agent` | 1 min |
+| [02](02-capabilities.md) | Capability discovery — find nodes by what they do | `cargo run --example hello_capability` | 30 s |
 | [03](03-signals.md) | Signal mesh — ephemeral scoped events | `cargo run -p mycelium-coop-examples --bin mailbox_llm` | 30 s |
 | [04](04-consensus.md) | Consensus overlay — strong consistency on demand | overlay scenarios in `three_node_demo` | 2 min |
 | [05](05-skills.md) | Skills — LLM agents on the mesh | `cd examples/community && ./demo.sh` | 5 min |
