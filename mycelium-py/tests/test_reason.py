@@ -8,6 +8,7 @@ is unset. The served model is ``MYCELIUM_TEST_MODEL`` (default ``fable-mini``).
 """
 
 import os
+import uuid
 
 import pytest
 
@@ -55,3 +56,22 @@ async def test_trace_unknown_run_is_empty() -> None:
         trace = await reason.trace("nonexistent-run")
         assert trace["run_id"] == "nonexistent-run"
         assert trace["events"] == []
+
+
+@pytest.mark.asyncio
+async def test_route_with_run_id_records_trace() -> None:
+    """Routing with a run_id makes the route endpoint record a trace: after two
+    routed calls, trace(run_id) yields a non-empty event list that includes a
+    ``route`` event (the routing decision) — the surface rung 5 stands on."""
+    run_id = f"rung5-{uuid.uuid4()}"
+    async with ReasonClient(TEST_HOST, int(TEST_PORT)) as reason:
+        for i in range(2):
+            result = await reason.route(TEST_MODEL, f"trace-me-{i}", run_id=run_id)
+            assert f"trace-me-{i}" in result["output"]
+
+        trace = await reason.trace(run_id)
+        assert trace["run_id"] == run_id
+        events = trace["events"]
+        assert events, "a routed call under a run_id must record at least one event"
+        kinds = {e["kind"] for e in events}
+        assert "route" in kinds, f"expected a route event, got kinds {kinds}"
