@@ -1,11 +1,12 @@
 # mycelium-reason — LLM DX strategy (design sketch)
 
-**Status:** 🔵 **PROPOSED — v3.0 candidate, not started.** Build-vs-adopt resolved to a **three-tier
+**Status:** 🟡 **IN PROGRESS — implementation started 2026-07-08.** Build-vs-adopt resolved to a **three-tier
 strategy** (build / adopt / interop) with a **Tier-3-first** sequence. The substrate needs no new
 capability. Positioning source: [`../wiki/domain/pattern-coverage.md`](../wiki/domain/pattern-coverage.md)
 → the LLM-authoring DX axis. **Amended 2026-07-07** (artifact-library implications — see the
 dated addendum §below): checkpoint storage pattern fixed, wedge ③ added, Tier-3 ① partially
-de-risked.
+de-risked. **Amended 2026-07-08** (pre-implementation reassessment, code-verified — five
+binding findings incl. one correction to the 07-07 addendum; see §below).
 
 ## The question this settles
 
@@ -152,6 +153,59 @@ KV/gateway access; wedge ③'s py surface is `declare_requirement`, which the SD
 The flagship also inherits this session's delivery machinery: the ADR-first template, the CI
 flake tier (its cross-node integration tests will want it), and the honest-demo bar (a real
 LangGraph graph, never a simulated one).
+
+## Addendum (2026-07-08) — pre-implementation reassessment (code-verified)
+
+Written at implementation start, after a code-level verification pass over every surface this
+sketch composes from. Five findings are **binding on the implementation**; the strategy,
+tiers, and sequencing stand.
+
+1. **Resolution is load-blind — wedge ① is a real routing layer, not a byproduct.** The
+   original wedge ① line said "via capability resolution **+ opacity back-pressure**", but
+   `resolve`/`resolve_for_caller` rank only by freshness, attribute constraints, and locality;
+   opacity/load influence provider selection **only indirectly** (an overloaded node's `cap/`
+   entry ages out) or via the separate `suggest_leader*` API. So the wedge is exactly the "new:
+   resilience/routing policy" the sketch predicted, now concrete: *resolve → drop opaque nodes
+   (`is_node_opaque`) → rank by `peer_load` fill → failover retry down the candidate list.*
+2. **Correction: no attributed inference-capability convention exists yet.** The 2026-07-07
+   addendum's "now … attribute-advertised (`cap/{node}/llm/inference` with model/context
+   attrs)" overstated what shipped: `model_deploy` advertises a plain `llm/storyteller`
+   capability (no attributes), and `register_prompt_skill` advertises `Capability::new(ns,name)`
+   with no attribute support. Convention bound now: **a model is a prompt skill** — cap
+   `llm/{model-id}` (matching the `model_deploy` precedent) — plus a parallel **attributed
+   metadata ad** `llm-meta/{model-id}` (ctx window, family), RAII-tied to the skill
+   registration. (A second ad is needed because re-advertising the *same* `(node,ns,name)` key
+   with attributes would LWW-churn against the skill's own 30 s persist task.) Upstream
+   candidate, deliberately not taken — zero-core-changes stands: an attributed
+   `register_prompt_skill` overload.
+3. **Wedge ② rides the log overlay, not the `EventRing`.** `EventRing`/`record_event` are
+   `pub(crate)` — a companion cannot extend `/gateway/explain`. Bound: trace records go through
+   `kv().append("reason/{run_id}", …)` (`log/reason/{run_id}` — HLC-ordered, gossip-replicated,
+   replayable via `scan_log`); the crate mounts its own `GET /gateway/reason/trace/{run_id}`
+   via `with_http_routes` (the wiki precedent); tamper-evidence is optional **anchoring of the
+   running trace hash into the WS2 audit chain** (`GossipAgent::audit`, `compliance` feature).
+4. **The checkpointer's content-addressed tier needs a mesh-reachable blob surface — and
+   `mycelium-reason` must provide it.** Nothing exposes artifact storage over the gateway
+   today, and `mycelium-wasm-host` carries wasmtime **unconditionally**, so reusing
+   `FsLibrarySource` would drag wasmtime into this crate. Bound: a minimal content-addressed
+   `FsBlobStore` (SHA-256 id, temp-write+rename, verify-on-read — `FsLibrarySource` semantics)
+   + peer fetch over RPC (`reason.blob.fetch`; providers discovered via a `reason/blob-cache`
+   capability — the `MeshArtifactSource` pattern) + gateway blob PUT/GET routes. Cross-node
+   resume *requires* this: metadata gossips everywhere, but payloads must be fetchable from
+   wherever the thread lands. v1 limit, stated honestly: one blob ≤ 8 MiB (single-frame RPC;
+   chunked transfer is a follow-up). Consequence: the artifact library's storage half now has a
+   **second consumer** that cannot accept wasmtime — direct evidence for resolving the open
+   crate-naming/extraction question; `FsBlobStore` swaps out for the extracted crate when that
+   lands.
+5. **Wedge ③ ships its demand half only.** `declare_requirement(CapFilter llm/{model})` +
+   structural await-ready polling + surfacing the `{ns}/loading` `pct` tier. The install half
+   (provisioner, probes, self-election) stays deployment wiring in `mycelium-wasm-host` —
+   already shipped.
+
+Delivery shape for this pass: **PR 1** — the `mycelium-reason` companion crate (wedges ① ② ③,
+blob tier, gateway routes, multi-node tests, `ci_smoke` example, CI job, lock-order rows).
+**PR 2** — `langgraph-checkpoint-mycelium` (Tier 2) + `call_typed` in `mycelium-py` (Tier 1) +
+the repo's **first Python CI job** (none exists today; the SDK's tests are run-manually-only).
 
 ## Expressible ≠ validated
 
