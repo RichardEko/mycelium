@@ -84,6 +84,39 @@ The three-verb operator spine — **localize** (`/fleet`) · **explain** (`/expl
   stay simulated by decision (wasmtime must not enter `make check` via root dev-deps) and say so.
   Lock-order rows 20–22. **Complete** — step 6 shipped (`BlobFetcher`/`PrefetchingSource`/`HttpLibrarySource`: any HTTP(S) blob store, egress-gated, vendor SDKs via the trait); step 7 declined-with-evidence (three async faces already serve every consumer — note §10). **Session tail (same day):** the coverage review found `Installed::probe` was exposed but consumed by nothing — a **probe health pass** now opens every `provision_round` (fail → withdraw → the normal machinery reinstalls once the retracted ad clears the local view; probes are cheap-under-lock by contract); four lifecycle/concurrency tests landed (full per-kind lifecycles incl. blob probe-self-heal + shed-deletes-the-file; failed-install reservation-drop-retry; withdraw-during-install stale teardown), and the **`model_deploy` manual demo** proves the Blob path with a real 19 MB GGUF — **weights + deployment profile as two signed artifacts** (profile → weights by content address; failed-activation-retry is the ordering — note §4.3.1), streamed with honest percent, resolved + activated via `ollama create` (with `ollama show` asserting the arrived SYSTEM prompt is the one running), probe-gated, then generating real tokens (`ArtifactKind` note: a closed crate-owned enum — custom *runtimes* are the open axis, not custom kinds). Open: the crate-naming question only. **Run-38 floor fixed same day** (typed `InstallError` by stage; `mycelium_artifact_*` metrics-facade tripwires + recorder-backed test; the CI **flake tier** — `scripts/ci-retest.sh`, failed-tests-only retry with mandatory flake annotations, the class-level prevention Run 37 asked for).
 
+- **`mycelium-reason` — v3.0 Tier-3 wedges + the Python tier, first two workstreams SHIPPED**
+  (2026-07-08, PRs #130/#131; plan `docs/plans/mycelium-reason.md`, positioning
+  `docs/wiki/domain/pattern-coverage.md` → the LLM-DX axis). The first *built* v3.0 deliverable — the
+  DX companion turned from PROPOSED to shipped-and-tested for its Tier-3/1/2 tranche (guardrails, the
+  other v3.0 primary, stays PROPOSED). Preceded by a **code-verified pre-implementation reassessment**
+  (five bindings; corrected the 2026-07-07 addenda's overstatement that an attributed
+  `cap/{node}/llm/inference` convention existed — it did not; and that resolution consults opacity — it
+  does not). **PR #130 — the `mycelium-reason` crate** (public-API-only companion, no `mycelium-wasm-host`
+  dep): ① **capability-routed inference** (`serve_model` = model-is-a-prompt-skill `llm/{model}` + a
+  parallel attributed `llm-meta/{model}` ad; `InferenceRouter` = resolve → drop opaque nodes → rank by
+  pheromone `peer_load` fill → failover — the routing layer the load-blind `resolve` deliberately
+  omits), ② **fleet-reasoning traces** (`TraceRecorder`/`replay`/`narrate` on the log overlay, optional
+  WS2 audit-chain anchoring under `compliance`), ③ **artifact-aware resume** (demand half:
+  `require_model` + structural `await_ready` + `llm/loading` progress), plus the **content-addressed
+  blob tier** (`FsBlobStore`/`MeshBlobStore`/`spawn_blob_server` — SHA-256 ids, verify-on-read, verified
+  peer fetch, ≤ 8 MiB single-frame v1) and `/gateway/reason/{blob,trace}` routes. Implementation caught a
+  real plan error — a single shared trace stream collides same-millisecond HLC keys across writers (the
+  HLC's per-node logical counter) and LWW-drops records — fixed with **per-writer substreams**
+  `reason/{run_id}/{node}`, merged on HLC at replay. Zero new locks. **PR #131 — the Python tier**
+  (Tiers 1+2): **`langgraph-checkpoint-mycelium`** (a `BaseCheckpointSaver` — index rows in gossiped KV
+  `ckpt/`/`ckptw/` with metadata inline for payload-free `list`, payloads in the blob tier with one blob
+  per channel value so unchanged values dedup across super-steps; sync + async; **cross-node `StateGraph`
+  resume proven in CI** — node B continues what node A checkpointed) and **`mycelium.call_typed`** (a
+  through-the-mesh prompt-skill call with a balanced-brace JSON scanner + pydantic validation-feedback
+  retry; pydantic via the `typed` extra). Landed the repo's **first Python CI job** (`python-sdk`: builds
+  the `reason_node` example, boots a two-node mesh, runs both pytest suites — 14 tests). A checkpointer
+  edge exposed and fixed the crate's empty-blob path (a typed `None` serializes to zero bytes = `SHA-256("")`;
+  an empty fetch reply means *miss*, so `MeshBlobStore::get` answers it from the address alone). Reserved
+  prefixes claimed: KV `ckpt/`·`ckptw/`·`log/reason/`, capability `reason/blob-cache`, RPC
+  `reason.blob.fetch`. Both PRs CI-green; docs-only ledger/positioning follow-up committed same day. Open:
+  the harder Tier-3 demos (real LLM backend beyond `EchoBackend`; chunked blob transfer past 8 MiB) and
+  the `mycelium-reason` crate-naming question shared with the artifact library.
+
 ## v2.0 (2026-06-21) — all 16 milestones M1–M16, acceptance gate met, no deferrals
 
 | Workstream | Delivered | PRs |

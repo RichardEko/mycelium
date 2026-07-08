@@ -126,25 +126,33 @@ Coordination-pattern coverage (above) is orthogonal to how *pleasant it is to au
 that rides on the mesh. Mycelium has real pieces (`PromptTemplate`, `LlmBackend` + streaming, MCP tools,
 the Layer-V `AgentStateMachine` with `max_turns`/`tool_budget`, HLC audit + `/gateway/explain`) but its
 design center is the substrate, so the reasoning-framework ergonomics — reasoning-graph authoring,
-typed-output + retry, model-call resilience, conversation memory, run-level evals — are **gaps on this
-axis**.
+typed-output + retry, model-call resilience, conversation memory, run-level evals — were **gaps on this
+axis**. The first tranche is now **shipped and tested** (2026-07-08, `mycelium-reason` PRs #130/#131) —
+the caveat below is discharged for what shipped.
 
 **Strategy — build-vs-adopt resolved to three tiers (don't roll a full framework).** The popular DX
 (LangGraph, Instructor, Pydantic AI) is almost all **Python** and sits *above* a substrate, so:
 - **BUILD** only the un-adoptable, substrate-native differentiators — ① **capability-routed inference**
-  (route to a healthy model-advertising node; no central proxy) and ② **fleet-reasoning traces**
-  (tamper-evident causal traces via HLC audit + `/gateway/explain`).
-- **ADOPT** the commodity layer — typed output via **Instructor** / Pydantic AI, wrapped in `mycelium-py`.
-- **INTEROP / be-the-backend** — flagship a **`langgraph-checkpoint-mycelium`** on LangGraph's pluggable
-  checkpointer protocol: one-line swap → coordinator-free, resumable-across-nodes agent state (the
-  strongest "why not just LangGraph?" rebuttal).
+  (`InferenceRouter`: resolve → drop opaque → rank by pheromone fill → failover; resolution is
+  load-blind, so this is a real routing layer, not a byproduct), ② **fleet-reasoning traces**
+  (`TraceRecorder`/`replay`/`narrate` on per-node log substreams `reason/{run_id}/{node}`, optional
+  WS2 audit-chain anchoring), and ③ **artifact-aware resume** (`require_model` demand half; install
+  half is `model_deploy`). **✅ shipped** — `mycelium-reason` crate, #130.
+- **ADOPT** the commodity layer — typed output via **Instructor** / Pydantic AI; `mycelium.call_typed`
+  wraps a *through-the-mesh* skill call with a pydantic contract + validation-feedback retry. **✅ #131.**
+- **INTEROP / be-the-backend** — **`langgraph-checkpoint-mycelium`** on LangGraph's pluggable
+  checkpointer protocol: one-line swap → coordinator-free, resumable-across-nodes agent state (index
+  rows in gossiped KV, payloads in the content-addressed blob tier — never blobs-in-KV; cross-node
+  `StateGraph` resume proven in CI). The strongest "why not just LangGraph?" rebuttal. **✅ #131.**
 
-**Sequence: Tier 3 first — to a CI-tested wedge — then Tier 1 ∥ Tier 2** (the differentiator is what
-gives the adopt/interop its *pull*; Tier 2 is built to *expose* the wedges). Raises `mycelium-py` to
-first-class; the Rust core needs zero changes. Home: the **`mycelium-reason`** DX companion —
+**Sequence delivered: Tier 3 first (to CI-tested wedges), then Tiers 1 ∥ 2** — the differentiator gave
+the adopt/interop its *pull*; the checkpointer stores payloads through the same blob tier a Tier-3 wedge
+introduced. Raised `mycelium-py` to first-class (its first CI job landed with #131); the Rust core took
+zero changes. Home: the **`mycelium-reason`** DX companion —
 [`ROADMAP.md`](../../../ROADMAP.md) → v3.0 · full strategy in the sketch
-[`../../plans/mycelium-reason.md`](../../plans/mycelium-reason.md). Same caveat: expressible until each
-wedge (and the checkpointer fit) has a tested example.
+[`../../plans/mycelium-reason.md`](../../plans/mycelium-reason.md). Remaining on this axis (still
+*expressible until tested*): conversation memory, run-level evals, and the Tier-3 wedges' harder demos
+(a real LLM backend beyond `EchoBackend`; ≤ 8 MiB blob → chunked transfer).
 
 ## Deliberate non-goal (not a gap)
 
