@@ -1,6 +1,8 @@
 # mycelium-guardrails — structural, coordinator-free guardrails (design sketch)
 
-**Status:** 🟡 **IN PROGRESS — v3.0 *primary* deliverable (alongside `mycelium-reason` DX).**
+**Status:** ✅ **SHIPPED — v3.0 *primary* deliverable (alongside `mycelium-reason` DX).** All
+planned deliverables landed (policy API, wedge demo + verification tool, broader fleet example,
+guide chapter); only the crate-naming question and any broader-refinements stay open.
 PR 1 shipped (the policy API): the `mycelium-guardrails` crate with the self-imposed, tier-labelled
 `Policy` → `apply()` (boundary + `AgentPolicy` + `authorized_callers`), `Policy::strength_report()`,
 and the Tier-C `check_caller`/`guarded_rpc_serve` gate that seals `Invoke`/`Denied` into the audit
@@ -10,8 +12,12 @@ tamper-evident chain and prove the guardrail fired (honest framing — *provable
 sealed denials, **not** a global "X could not have done Y"; the chain is per-node and only gated
 capabilities seal denials); the self-contained `examples/guardrail_wedge.rs` (unauthorized agent
 structurally stopped at the provider gate, proof reconstructed by a neutral observer node) +
-`ci_smoke.sh` earn it at the smoke bar. Still forthcoming: the broader worked examples + a guide
-chapter.
+`ci_smoke.sh` earn it at the smoke bar. ✅ **PR 3 shipped: the broader worked example + the guide
+chapter** — `examples/guardrail_fleet.rs` composes all three strength tiers in one constructive
+co-op fleet with each tier *actually firing* (Tier A boundary drop, Tier B denied-tool transition,
+Tier C rejected-sealed-proven), gated by `ci_smoke.sh` alongside the wedge; and `docs/guide/16-guardrails.md`
+is the guide chapter. This completes the guardrails track's planned deliverables (the crate-naming
+question and any broader-refinements remain open).
 Mostly packaging + worked examples over existing substrate mechanisms; a small ergonomic policy layer
 is the only new code. Positioning: [`../wiki/domain/pattern-coverage.md`](../wiki/domain/pattern-coverage.md)
 → Structural guardrails. **Amended 2026-07-08** (pre-implementation reassessment, code-verified — see

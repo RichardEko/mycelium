@@ -37,6 +37,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   capabilities seal denials). The self-contained `guardrail_wedge` example (an unauthorized agent
   structurally stopped at the provider gate; the proof reconstructed by a neutral observer node) +
   `ci_smoke.sh` earn the wedge at the smoke bar.
+- **`mycelium-guardrails` broader worked example + guide chapter 16** (feature `compliance`): the
+  self-contained `guardrail_fleet` example composes all three strength tiers in one constructive
+  surplus-food-rescue / community-energy co-op fleet and shows each one *actually firing* — a
+  region-scoped agent that structurally drops another region's dispatch at its boundary (Tier A), an
+  agent refused a denied tool at its `→ Invoking` state transition (Tier B), and an unauthorized
+  caller rejected + sealed + proven at a settlement provider (Tier C); `ci_smoke.sh` now gates both
+  demos. (Guide chapter 16 · Guardrails is already committed on this branch.)
 - **`mycelium-reason`** (new companion crate; strategy + code-verified bindings in
   [`docs/plans/mycelium-reason.md`](docs/plans/mycelium-reason.md)): the v3.0 Tier-3
   differentiators on the public API only — **capability-routed inference**
