@@ -1,0 +1,52 @@
+[package]
+name = "mycelium-reason"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Dr. Richard Nicholson <tathatasystems@proton.me>"]
+description = "LLM-authoring DX companion for Mycelium (v3.0): capability-routed inference, fleet-reasoning traces, artifact-aware resume — the Tier-3 differentiators, composed from the public API only"
+license = "AGPL-3.0-only"
+repository = "https://github.com/RichardEko/mycelium"
+keywords = ["llm", "inference", "multi-agent", "distributed-systems", "tracing"]
+categories = ["network-programming", "asynchronous"]
+
+[features]
+default = []
+# The serve side of wedge ① (ModelProfile / serve_model) — everything that touches
+# PromptTemplate / LlmBackend. The call side (InferenceRouter) is core-only and
+# deliberately ungated: a node can route inference without serving any model.
+llm = ["mycelium/llm"]
+# The HTTP gateway edge: /gateway/reason/{blob,trace} as an axum Router the app
+# mounts via GossipAgent::with_http_routes — the JSON/bytes boundary the Python
+# LangGraph checkpointer speaks.
+gateway = ["mycelium/gateway", "dep:axum"]
+# Wedge ② tamper-evidence: anchor a trace's running hash into the WS2 audit chain.
+compliance = ["mycelium/compliance"]
+
+[dependencies]
+# Companion-crate contract: only Mycelium's PUBLIC API is used — no internal
+# access. This dependency line is itself the composability proof.
+mycelium = { path = "..", default-features = false }
+
+tokio      = { version = "1.35", features = ["rt", "time", "sync"] }
+bytes      = "1"
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2       = "0.10"
+tracing    = "0.1"
+
+# Gateway feature only
+axum = { version = "0.8", optional = true }
+
+[dev-dependencies]
+tokio    = { version = "1.35", features = ["full"] }
+tempfile = "3"
+reqwest  = { version = "0.12", features = ["json"] }
+
+[[test]]
+name = "reason"
+required-features = ["llm"]
+
+[[test]]
+name = "gateway"
+required-features = ["gateway", "llm"]
