@@ -46,6 +46,8 @@ mod apply;
 mod policy;
 #[cfg(feature = "compliance")]
 mod guard;
+#[cfg(feature = "compliance")]
+mod verify;
 
 pub use apply::{apply, AppliedPolicy};
 pub use policy::{Clause, Policy, Strength};
@@ -55,3 +57,11 @@ pub use policy::{Clause, Policy, Strength};
 /// spawns the loop for you. [`AppliedPolicy::guard`] stamps the allowlist onto a capability.
 #[cfg(feature = "compliance")]
 pub use guard::{check_caller, guarded_rpc_serve, CallerVerdict, GuardHandle};
+
+/// The policy-audit **verification tool** (feature `compliance`): reconstruct a provider's
+/// tamper-evident chain and prove which unauthorized invocations it sealed as denied.
+/// [`prove_denials`] returns a [`DenialProof`] of [`SealedDenial`]s; [`narrate_proof`] renders it
+/// with the honest framing (provable-*stopping* of these denials — **not** a global "X could not
+/// have done Y" claim; the chain is per-node and only gated capabilities seal denials).
+#[cfg(feature = "compliance")]
+pub use verify::{narrate_proof, prove_denials, DenialProof, SealedDenial};
