@@ -60,3 +60,10 @@ required-features = ["llm"]
 # drive: gateway + reason_router + blob server + an EchoBackend prompt skill.
 name = "reason_node"
 required-features = ["llm", "gateway"]
+
+[[example]]
+# The deploy/reheal flagship node (rung 6, echo variant): SERVE_MODEL publishes a
+# content-addressed model artifact; REHEAL fetches it over the mesh and bridges it
+# into a live serve_model skill — the model follows a thread across node death.
+name = "reheal_node"
+required-features = ["llm", "gateway"]
