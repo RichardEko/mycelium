@@ -129,6 +129,27 @@ jobs:
       # grounded in the wiki, over both use-case corpora (UC1 org twin + UC2 council). Docker-free.
       - run: ./mycelium-wiki/ci_smoke.sh
 
+  reason:
+    # v3.0 Tier-3 companion crate (docs/plans/mycelium-reason.md): capability-routed
+    # inference, fleet-reasoning traces, artifact-aware resume, plus the content-addressed
+    # blob tier + /gateway/reason routes the Python LangGraph checkpointer consumes.
+    # Public-API only; its own job for parallelism + caching.
+    name: Reason (v3.0 Tier-3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # Cross-node integration suites bind real sockets — route through the flake tier.
+      - run: ./scripts/ci-retest.sh -p mycelium-reason --features llm
+      - run: ./scripts/ci-retest.sh -p mycelium-reason --features llm,gateway
+      - run: cargo clippy -p mycelium-reason --all-targets -- -D warnings
+      - run: cargo clippy -p mycelium-reason --features llm,gateway --all-targets -- -D warnings
+      # The fleet-reasoning worked example (all three wedges, three-node mesh), Docker-free.
+      - run: ./mycelium-reason/ci_smoke.sh
+
   conway-gpu:
     # Standalone GPU demo (examples/conway-gpu): excluded from the workspace so its
     # wgpu stack is NOT a mycelium dev-dependency (it used to drag the whole GPU
