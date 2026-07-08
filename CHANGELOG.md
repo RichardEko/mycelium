@@ -18,6 +18,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   30s inference budget (the last/lone candidate still gets `call_timeout`). Surfaced by the
   deploy/reheal flagship, which consequently drops its node-id rigging — the surviving node
   can hold either id. Canary: `liveness_filter_drops_a_non_peer_cap`.
+- **Run-39 floor fixes (test architecture + observability).** The core's bind-verified,
+  process-unique loopback port allocator (`test_util::alloc_port`, confined below the OS ephemeral
+  floor) is now exposed under a new **test-only `test-util` cargo feature** and adopted by every
+  companion's real-agent integration tests (`mycelium::test_util::alloc_port()` replaces the
+  per-crate `free_port` bind-`:0`-read-drop helper) — retiring the `AddrInUse` TOCTOU flake class
+  at the source instead of only at the CI retry tier. And `mycelium-reason`/`mycelium-guardrails`
+  gained `metrics`-facade counters (route attempts/failovers/no-provider/exhausted; guardrail
+  denials-sealed/admits) so inference failovers and Tier-C denials are visible on `/metrics`
+  (no-op without a recorder). The `test-util` feature carries no runtime deps and never enters a
+  production build.
 
 ### Added
 - **`mycelium-guardrails`** (new companion crate, PR 1 — the policy API; strategy + code-verified

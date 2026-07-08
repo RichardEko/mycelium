@@ -34,6 +34,11 @@ serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2       = "0.10"
 tracing    = "0.1"
+# Operator-visible tripwires through the `metrics` facade (Run-39 floor fix): the router emits
+# route attempt/failover/no-provider/exhausted counters. Tiny, unconditional (like wasm-host); a
+# no-op without a recorder, and it flows to the node's /metrics when the embedder enables
+# mycelium's `metrics` feature.
+metrics    = "0.24"
 
 # Gateway feature only
 axum = { version = "0.8", optional = true }

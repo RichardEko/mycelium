@@ -2196,6 +2196,7 @@ dependencies = [
 name = "mycelium-guardrails"
 version = "0.1.0"
 dependencies = [
+ "metrics",
  "mycelium",
  "tempfile",
  "tokio",
@@ -2208,6 +2209,7 @@ version = "0.1.0"
 dependencies = [
  "axum 0.8.9",
  "bytes",
+ "metrics",
  "mycelium",
  "reqwest",
  "serde",
