@@ -249,6 +249,12 @@ async fn blob_mesh_fetch_verifies_and_caches() {
     drop(_server);
     assert_eq!(mesh_b.get(&id).await.unwrap().as_ref(), payload.as_ref());
 
+    // The empty blob (a typed None payload — the checkpointer mints it) is answered
+    // from its content address alone: no local file, no provider, still a hit.
+    let empty_id = mycelium_reason::BlobId::of(b"");
+    assert!(!store_b.contains(&empty_id));
+    assert_eq!(mesh_b.get(&empty_id).await.expect("empty blob resolves").len(), 0);
+
     agent_a.shutdown_with_timeout(Duration::from_secs(5)).await;
     agent_b.shutdown_with_timeout(Duration::from_secs(5)).await;
 }

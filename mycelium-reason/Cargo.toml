@@ -54,3 +54,9 @@ required-features = ["gateway", "llm"]
 [[example]]
 name = "fleet_reasoning"
 required-features = ["llm"]
+
+[[example]]
+# The env-configured long-running node the Python CI job (and local pytest runs)
+# drive: gateway + reason_router + blob server + an EchoBackend prompt skill.
+name = "reason_node"
+required-features = ["llm", "gateway"]
