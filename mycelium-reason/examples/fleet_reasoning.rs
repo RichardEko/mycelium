@@ -38,7 +38,7 @@ async fn try_start(port: u16, boot: Vec<u16>) -> Option<Arc<GossipAgent>> {
 /// the bind-:0 race (mutual bootstrap fixes all ports before any agent starts).
 async fn start_trio() -> (Arc<GossipAgent>, Arc<GossipAgent>, Arc<GossipAgent>) {
     for _ in 0..16 {
-        let free = || std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let free = || mycelium::test_util::alloc_port();
         let (pa, pb, pc) = (free(), free(), free());
         let Some(a) = try_start(pa, vec![pb, pc]).await else { continue };
         let Some(b) = try_start(pb, vec![pa, pc]).await else {

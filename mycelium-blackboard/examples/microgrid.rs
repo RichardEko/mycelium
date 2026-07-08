@@ -23,7 +23,7 @@ const SURPLUS_FACTS: u64 = 12;
 
 #[tokio::main]
 async fn main() {
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let port = mycelium::test_util::alloc_port();
     let agent = Arc::new(GossipAgent::new(
         NodeId::new("127.0.0.1", port).unwrap(),
         GossipConfig { bind_port: port, ..Default::default() },

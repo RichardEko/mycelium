@@ -31,7 +31,7 @@ const KIND: &str = "agent.tool.invoke";
 /// A free TCP port (bind :0, read it, drop) — reused across a retrying mesh start, so the
 /// drop-then-rebind TOCTOU window is covered by the whole-set retry.
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    mycelium::test_util::alloc_port()
 }
 
 /// Start one tls agent sharing `cert_dir` (shared CA), `None` if the bind lost the port race.
