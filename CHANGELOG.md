@@ -40,6 +40,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   spread across hosts, so the O(N²) chain never forms on any one host. Cloud-agnostic (same
   manifests on kind / EKS / GKE / AKS). Validated offline (`kubectl kustomize` → 7 well-formed
   resources); not applied in CI — see [`deploy/kubernetes/README.md`](deploy/kubernetes/README.md).
+- **Reference Terraform for the cluster ([`deploy/terraform/`](deploy/terraform/)).** Closes the
+  cluster-provisioning gap the manifests assume: `aws/` stands up **EKS + ECR** (via the
+  `terraform-aws-modules` VPC/EKS modules), `gcp/` stands up a regional **GKE cluster + Artifact
+  Registry**. Full path becomes `terraform apply` → push image → `kubectl apply -k`. Reference
+  scaffolding, not hardened product IaC (single node group, public endpoint, local state).
+  Authored against AWS/Google provider `~> 5.0` + EKS module `~> 20.0`; **not machine-validated**
+  (no `terraform` binary in the authoring env) and **not applied** (needs cloud creds) — run
+  `terraform validate && terraform plan` before apply. See [`deploy/terraform/README.md`](deploy/terraform/README.md).
 - **Operator docs: metrics reference + audit/transparency tail.** New
   [`docs/operations/metrics.md`](docs/operations/metrics.md) is the single, complete reference for
   every emitted Prometheus series (gossip · emergent · governor · artifact · guardrails · reason),
