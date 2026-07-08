@@ -1,6 +1,11 @@
 # mycelium-guardrails — structural, coordinator-free guardrails (design sketch)
 
-**Status:** 🔵 **PROPOSED — v3.0 *primary* deliverable (alongside `mycelium-reason` DX), not started.**
+**Status:** 🟡 **IN PROGRESS — v3.0 *primary* deliverable (alongside `mycelium-reason` DX).**
+PR 1 shipped (the policy API): the `mycelium-guardrails` crate with the self-imposed, tier-labelled
+`Policy` → `apply()` (boundary + `AgentPolicy` + `authorized_callers`), `Policy::strength_report()`,
+and the Tier-C `check_caller`/`guarded_rpc_serve` gate that seals `Invoke`/`Denied` into the audit
+chain (feature `compliance`). Still forthcoming: the worked wedge demo, the policy-audit verification
+tool, and the examples.
 Mostly packaging + worked examples over existing substrate mechanisms; a small ergonomic policy layer
 is the only new code. Positioning: [`../wiki/domain/pattern-coverage.md`](../wiki/domain/pattern-coverage.md)
 → Structural guardrails. **Amended 2026-07-08** (pre-implementation reassessment, code-verified — see
