@@ -2931,9 +2931,10 @@ evolution needing field-level migration.
 
 ## v3.0 — two primaries (one shipped its first tranche) · packaging candidates · one adapter
 
-**Two primary deliverables** (each its own design sketch, each a substrate-native differentiator):
-**`mycelium-reason`** (LLM-authoring DX — **Tiers 3/1/2 ✅ shipped 2026-07-08**, PRs #130/#131) and
-**`mycelium-guardrails`** (structural, coordinator-free guardrails — **still proposed**) — see the two
+**Two primary deliverables** (each its own design sketch, each a substrate-native differentiator) —
+**both ✅ shipped 2026-07-08**: **`mycelium-reason`** (LLM-authoring DX — the crate + Python tier + the
+full LangGraph example ladder, PRs #130–#136) and **`mycelium-guardrails`** (structural, coordinator-free
+guardrails — the tier-labelled policy API + verification tool + examples, PRs #137–#139) — see the two
 paragraphs after the table. The rest below are demand-driven packaging candidates + the one ANP adapter.
 
 ### Packaging candidates + one adapter
@@ -2999,17 +3000,22 @@ to first-class. Sketch: [`docs/plans/mycelium-reason.md`](docs/plans/mycelium-re
 this axis (not yet built): conversation memory, run-level evals, and the harder Tier-3 demos (a real LLM
 backend beyond `EchoBackend`; chunked blob transfer past the 8 MiB single-frame v1 ceiling).
 
-**Structural guardrails — `mycelium-guardrails` (proposed; primary v3.0 deliverable alongside the DX
-companion).** *What an agent may do* — which tools / data / spend / groups — enforced at **every
-receiver's `Boundary`** with **no central chokepoint** (the mainstream "guardrail proxy" is itself a
-coordinator; compromising one node can't lift fleet policy), backed by **tamper-evident per-node audit**.
-Mostly packaging of existing mechanisms (`Boundary` + capability authz + CT revocation + `tool_budget` +
-audit); the only new code is an ergonomic **policy API** that compiles one declaration down to them.
-**Lead wedge:** an agent structurally stopped at a boundary, with the audit proving it. Distinct from
-*content* guardrails (toxicity / PII — a use-case function, external service via the mesh). Honest
-limits: **promise-strength** (per-node enforcement + legible violations, not a central mandate) and
-**eventually-consistent policy** (gossip-speed revocation). Sketch:
-[`docs/plans/mycelium-guardrails.md`](docs/plans/mycelium-guardrails.md).
+**Structural guardrails — `mycelium-guardrails` (✅ shipped 2026-07-08, PRs #137–#139; primary v3.0
+deliverable alongside the DX companion).** *What an agent may do* — which tools / data / spend / groups —
+enforced with **no central chokepoint** (the mainstream "guardrail proxy" is itself a coordinator;
+compromising one node can't lift fleet policy), backed by **tamper-evident per-node audit**. A code-verified
+reassessment reframed it around **three strength tiers** (the design's honesty, surfaced by
+`Policy::strength_report()`): **Tier C** `authorized_callers` = hard prevention (unauthorized invoke
+rejected at the provider + the denial sealed into the chain); **Tier A** `Boundary` = self-imposed
+prevention (drop-before-handler for an honest node); **Tier B** `AgentPolicy` = self-imposed at state
+transitions. Delivered: the tier-labelled `Policy`/`apply`, the reusable Tier-C gate + denial sealing, the
+**`prove_denials` verification tool** (*provable-stopping* — proves the provider tamper-evidently sealed
+stopping X, not global negative proof), the `guardrail_wedge`/`guardrail_fleet` examples, and guide
+**chapter 16**. **Self-imposed by design** (no remote policy authority — a central policy server is the
+chokepoint non-goal). Distinct from *content* guardrails (a use-case function, external service via the
+mesh). Honest limits: **promise-strength** (Tiers A/B) and **eventually-consistent policy** (gossip-speed).
+Plan: [`docs/plans/mycelium-guardrails.md`](docs/plans/mycelium-guardrails.md) · guide
+[`docs/guide/16-guardrails.md`](docs/guide/16-guardrails.md).
 
 ## Deferred Patterns
 

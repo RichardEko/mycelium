@@ -43,8 +43,21 @@ via wasm-host).
   routes. Zero core changes, zero new locks. **Python tier** (separate packages): the
   **`langgraph-checkpoint-mycelium`** `BaseCheckpointSaver` (index rows in KV `ckpt/`/`ckptw/`,
   payloads in the blob tier, cross-node `StateGraph` resume proven in CI) and `mycelium.call_typed`.
-  PRs #130/#131 (Tiers 3/1/2 shipped 2026-07-08); the repo's first Python CI job landed with it. Plan:
-  `docs/plans/mycelium-reason.md`.
+  **COMPLETE (PRs #130–#136, 2026-07-08):** the crate + Python tier, the LangGraph example ladder
+  (`examples/langgraph/` rungs 0–6 incl. the echo-CI **deploy/reheal flagship** + a router-robustness
+  fix it surfaced — live-SWIM filter + fast failover, #134), the repo's first Python CI job, and guide
+  chapter 15 + an Ollama-manual real-model variant. Plans: `docs/plans/mycelium-reason.md` +
+  `…-examples.md`.
+- **`mycelium-guardrails/`** — the **v3.0 structural-guardrails companion** (the second primary;
+  *different axis* again — [pattern-coverage](../../domain/pattern-coverage.md) → Structural guardrails).
+  *What an agent may do*, one tier-labelled `Policy` → `apply()` compiling to **Tier A** boundary
+  (self-imposed prevention) · **Tier B** `AgentPolicy` (self-imposed at state transitions) · **Tier C**
+  `authorized_callers` (hard prevention — unauthorized invoke rejected at the provider + the denial
+  **sealed** into the tamper-evident chain). `Policy::strength_report()` discloses each clause's tier —
+  the design's honesty; the **`prove_denials` verification tool** reconstructs the chain and proves the
+  guardrail fired (*provable-stopping*, not global negative proof). Self-imposed (no remote policy
+  authority — the chokepoint non-goal). Examples `guardrail_wedge`/`guardrail_fleet`, guide chapter 16.
+  PRs #137–#139; zero new locks. Plan: `docs/plans/mycelium-guardrails.md`.
 
 Both tuple-space and blackboard implement the **exactly-once-effect contract** — the shared
 artifact is the *contract*, not code (`docs/design/exactly-once-effect.md`; a shared overlay

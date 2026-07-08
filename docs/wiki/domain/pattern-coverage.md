@@ -113,12 +113,21 @@ mTLS identity + tamper-evident hash-chained audit (WS1/WS2). The point: a coordi
 enforces guardrails at the coordinator — **a chokepoint that is also a single point of bypass** (the
 "guardrail proxy in front of the model" *is* a coordinator); coordinator-free, enforcement is at
 **every receiver's boundary** with **no central policy engine to bypass**, and audit is per-node and
-tamper-evident. Caveats (honest): it is *action*, not *content*, guardrails; it is **promise-strength**
-(each node enforces; the substrate makes violations *legible* rather than centrally *prevented* — on
-thesis); and it is a **reframe of existing mechanisms** — a strong hypothesis until a worked example
-exists (an agent structurally stopped from an out-of-boundary action, with the audit proving it).
-**Now a primary v3.0 deliverable** — `mycelium-guardrails`, alongside the DX companion:
-[`ROADMAP.md`](../../../ROADMAP.md) → v3.0 · sketch [`../../plans/mycelium-guardrails.md`](../../plans/mycelium-guardrails.md).
+tamper-evident. Caveats (honest): it is *action*, not *content*, guardrails; and enforcement falls in
+**three distinct strength tiers** — the design's core honesty, surfaced by `Policy::strength_report()`:
+**Tier C** `authorized_callers` = *hard prevention* (an unauthorized invoke is rejected at the provider
+and the denial is sealed into the tamper-evident chain); **Tier A** boundary = self-imposed prevention
+(drop-before-handler for an honest node, coarse and promise-strength against a malicious one); **Tier B**
+`AgentPolicy` = self-imposed at state transitions. Collapsing these would over-claim central,
+malicious-proof enforcement the coordinator-free model deliberately doesn't provide.
+**✅ SHIPPED as `mycelium-guardrails` (v3.0 primary, 2026-07-08, PRs #137–#139)** — the tier-labelled
+`Policy`/`apply`, the reusable Tier-C gate + denial sealing, the **policy-audit verification tool**
+(`prove_denials` — proves *the provider sealed stopping X* tamper-evidently, NOT global negative proof),
+the `guardrail_wedge`/`guardrail_fleet` examples, and guide **chapter 16**. Self-imposed by design (no
+remote policy authority — the chokepoint non-goal). Homes: [`ROADMAP.md`](../../../ROADMAP.md) → v3.0 ·
+[`../../plans/mycelium-guardrails.md`](../../plans/mycelium-guardrails.md) ·
+[`../../guide/16-guardrails.md`](../../guide/16-guardrails.md). Content guardrails stay a use-case
+function (external service through the mesh).
 
 ## A distinct axis — LLM-authoring DX (not coordination)
 
@@ -147,12 +156,18 @@ the caveat below is discharged for what shipped.
 
 **Sequence delivered: Tier 3 first (to CI-tested wedges), then Tiers 1 ∥ 2** — the differentiator gave
 the adopt/interop its *pull*; the checkpointer stores payloads through the same blob tier a Tier-3 wedge
-introduced. Raised `mycelium-py` to first-class (its first CI job landed with #131); the Rust core took
-zero changes. Home: the **`mycelium-reason`** DX companion —
-[`ROADMAP.md`](../../../ROADMAP.md) → v3.0 · full strategy in the sketch
-[`../../plans/mycelium-reason.md`](../../plans/mycelium-reason.md). Remaining on this axis (still
-*expressible until tested*): conversation memory, run-level evals, and the Tier-3 wedges' harder demos
-(a real LLM backend beyond `EchoBackend`; ≤ 8 MiB blob → chunked transfer).
+introduced. **The full LangGraph example ladder shipped 2026-07-08 (#132–#136):** the routing gateway
+surface + `ReasonClient` (#132), the echo-CI **deploy/reheal flagship** (a graph's model dependency
+follows it across node death, #133), a real **router-robustness fix** the flagship surfaced (live-SWIM
+filter + fast failover — a dead node no longer poisons routing for the 90 s freshness window, #134),
+rungs 0–5 + the ladder README (#135), and guide **chapter 15** + the Ollama-manual real-model variant
+(#136). Raised `mycelium-py` to first-class (its first CI job landed with #131); the Rust core took zero
+changes. Home: the **`mycelium-reason`** DX companion —
+[`ROADMAP.md`](../../../ROADMAP.md) → v3.0 · strategy in [`../../plans/mycelium-reason.md`](../../plans/mycelium-reason.md)
++ [`../../plans/mycelium-reason-examples.md`](../../plans/mycelium-reason-examples.md) · guide
+[`../../guide/15-reasoning-and-langgraph.md`](../../guide/15-reasoning-and-langgraph.md). Remaining on
+this axis: conversation memory, run-level evals, and the harder demos (a real LLM backend beyond
+`EchoBackend` — the Ollama variant is compile-verified but unrun; chunked blob transfer past 8 MiB).
 
 ## Deliberate non-goal (not a gap)
 

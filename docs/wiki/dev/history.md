@@ -52,16 +52,16 @@ The three-verb operator spine — **localize** (`/fleet`) · **explain** (`/expl
   regression `ops::delivery_shed_tests::boundary_transition_signals_are_never_locally_shed` (verified to
   fail without the fix). Root-caused by a deliberate dig (analysis Run 37, Major) after three prior
   "resolutions" mis-treated it as scheduling latency.
-- **v3.0 positioning — PROPOSED, not started** (2026-07-05/06): a pattern-landscape scan established the
+- **v3.0 positioning** (2026-07-05/06): a pattern-landscape scan established the
   substrate covers the *coordination* pattern space **natively or by composition of native primitives**
-  (only ANP wire-protocol conformance needs new code; orchestrator is a non-goal). Recorded as **two
-  primary v3.0 deliverables** — `mycelium-reason` (LLM-authoring DX; a three-tier *build the
-  differentiators / adopt Instructor / be the LangGraph checkpointer backend* strategy) and
-  `mycelium-guardrails` (structural, coordinator-free guardrails — per-receiver `Boundary` enforcement,
-  no central chokepoint) — plus packaging candidates. RAG / HITL / *content* guardrails are framed as
-  **use-case functions** (external services accessed *through* the mesh — the wiki precedent), not
-  substrate work. Homes: `ROADMAP.md` → v3.0 · `docs/wiki/domain/pattern-coverage.md` ·
-  `docs/plans/mycelium-{reason,guardrails}.md`. Nothing built — positioning + design sketches only.
+  (only ANP wire-protocol conformance needs new code; orchestrator is a non-goal). Recorded **two
+  primary v3.0 deliverables** — `mycelium-reason` (LLM-authoring DX) and `mycelium-guardrails`
+  (structural, coordinator-free guardrails) — plus packaging candidates. RAG / HITL / *content*
+  guardrails are framed as **use-case functions** (external services accessed *through* the mesh — the
+  wiki precedent), not substrate work. Homes: `ROADMAP.md` → v3.0 · `docs/wiki/domain/pattern-coverage.md`
+  · `docs/plans/mycelium-{reason,guardrails}.md`. **Both primaries shipped 2026-07-08 (#130–#139) — see
+  the two entries below;** this bullet records the positioning that preceded them (was "PROPOSED, not
+  started" when written).
 
 - **Artifact library — steps 1–5 shipped** (2026-07-07, commits `910c1ff`…`22ac02b`; design record
   `docs/design/artifact-library.md`): the durable origin tier + install generalization for
@@ -84,11 +84,10 @@ The three-verb operator spine — **localize** (`/fleet`) · **explain** (`/expl
   stay simulated by decision (wasmtime must not enter `make check` via root dev-deps) and say so.
   Lock-order rows 20–22. **Complete** — step 6 shipped (`BlobFetcher`/`PrefetchingSource`/`HttpLibrarySource`: any HTTP(S) blob store, egress-gated, vendor SDKs via the trait); step 7 declined-with-evidence (three async faces already serve every consumer — note §10). **Session tail (same day):** the coverage review found `Installed::probe` was exposed but consumed by nothing — a **probe health pass** now opens every `provision_round` (fail → withdraw → the normal machinery reinstalls once the retracted ad clears the local view; probes are cheap-under-lock by contract); four lifecycle/concurrency tests landed (full per-kind lifecycles incl. blob probe-self-heal + shed-deletes-the-file; failed-install reservation-drop-retry; withdraw-during-install stale teardown), and the **`model_deploy` manual demo** proves the Blob path with a real 19 MB GGUF — **weights + deployment profile as two signed artifacts** (profile → weights by content address; failed-activation-retry is the ordering — note §4.3.1), streamed with honest percent, resolved + activated via `ollama create` (with `ollama show` asserting the arrived SYSTEM prompt is the one running), probe-gated, then generating real tokens (`ArtifactKind` note: a closed crate-owned enum — custom *runtimes* are the open axis, not custom kinds). Open: the crate-naming question only. **Run-38 floor fixed same day** (typed `InstallError` by stage; `mycelium_artifact_*` metrics-facade tripwires + recorder-backed test; the CI **flake tier** — `scripts/ci-retest.sh`, failed-tests-only retry with mandatory flake annotations, the class-level prevention Run 37 asked for).
 
-- **`mycelium-reason` — v3.0 Tier-3 wedges + the Python tier, first two workstreams SHIPPED**
-  (2026-07-08, PRs #130/#131; plan `docs/plans/mycelium-reason.md`, positioning
-  `docs/wiki/domain/pattern-coverage.md` → the LLM-DX axis). The first *built* v3.0 deliverable — the
-  DX companion turned from PROPOSED to shipped-and-tested for its Tier-3/1/2 tranche (guardrails, the
-  other v3.0 primary, stays PROPOSED). Preceded by a **code-verified pre-implementation reassessment**
+- **`mycelium-reason` — v3.0 primary #1, LLM-authoring DX, COMPLETE**
+  (2026-07-08, PRs #130–#136; plan `docs/plans/mycelium-reason.md` + `…-examples.md`, positioning
+  `docs/wiki/domain/pattern-coverage.md` → the LLM-DX axis, guide **chapter 15**). The first *built* v3.0
+  deliverable. Preceded by a **code-verified pre-implementation reassessment**
   (five bindings; corrected the 2026-07-07 addenda's overstatement that an attributed
   `cap/{node}/llm/inference` convention existed — it did not; and that resolution consults opacity — it
   does not). **PR #130 — the `mycelium-reason` crate** (public-API-only companion, no `mycelium-wasm-host`
@@ -113,9 +112,45 @@ The three-verb operator spine — **localize** (`/fleet`) · **explain** (`/expl
   edge exposed and fixed the crate's empty-blob path (a typed `None` serializes to zero bytes = `SHA-256("")`;
   an empty fetch reply means *miss*, so `MeshBlobStore::get` answers it from the address alone). Reserved
   prefixes claimed: KV `ckpt/`·`ckptw/`·`log/reason/`, capability `reason/blob-cache`, RPC
-  `reason.blob.fetch`. Both PRs CI-green; docs-only ledger/positioning follow-up committed same day. Open:
-  the harder Tier-3 demos (real LLM backend beyond `EchoBackend`; chunked blob transfer past 8 MiB) and
-  the `mycelium-reason` crate-naming question shared with the artifact library.
+  `reason.blob.fetch`. **PRs #132–#136 completed the LangGraph example ladder** (`docs/plans/mycelium-reason-examples.md`,
+  built flagship-first): **#132** the routing gateway surface (`POST /gateway/reason/route` + Python
+  `ReasonClient`) — needed because `/gateway/llm/call` is single-shot; **#133** the echo-CI **deploy/reheal
+  flagship** (a graph's model dependency follows it across node death: checkpoint on A → gossip to B →
+  kill A → B reheals the model via the mesh blob fetch + `serve_model` bridge → resume routes to B);
+  **#134** a real router-robustness fix the flagship's de-risking surfaced — a killed node poisoned
+  routing for ~90 s (capability-freshness window; mesh RPC has no fast-fail), fixed with a **live-SWIM-membership
+  filter** (`InferenceRouter` routes only to `peers()`+self) + a **`RouterConfig::failover_timeout`** (8 s;
+  non-final attempts fail over fast, the last gets the full budget); canary `liveness_filter_drops_a_non_peer_cap`;
+  **#135** rungs 0/1/2/3/5 (`examples/langgraph/`) + the ladder README + a small trace-recording surface
+  (`run_id` on the route endpoint); **#136** guide chapter 15 + the **Ollama-manual** real-model variant
+  (`examples/coop/src/bin/reheal_deploy.rs` — real GGUF via `model_deploy`'s `BlobRuntime`, `supervise(min=1)`-driven
+  reheal, node-unique Ollama names; manual/not-CI, compile-verified only). All CI-green. Open: the
+  `mycelium-reason` crate-naming question (shared with the artifact library); the Ollama variant is
+  compile-verified but unrun (needs a live Ollama + GGUF).
+
+- **`mycelium-guardrails` — v3.0 primary #2, structural coordinator-free guardrails, COMPLETE**
+  (2026-07-08, PRs #137–#139; plan `docs/plans/mycelium-guardrails.md`, positioning
+  `docs/wiki/domain/pattern-coverage.md` → Structural guardrails, guide **chapter 16**). *What an agent
+  may do* — packaged on the public API only. Preceded by a **code-verified reassessment** (six bindings)
+  whose headline reshaped the plan: the mechanisms are real but deliver **three distinct strength tiers**,
+  so an honest policy must say which clause compiles to which. **PR #137 — the crate**: a tier-labelled
+  `Policy` → `apply()` compiling one declaration to **Tier A** boundary (`join_group` — drop-before-handler,
+  self-imposed prevention), **Tier B** `AgentPolicy` (tool allow/deny + budgets, self-imposed at state
+  transitions), **Tier C** `authorized_callers` (**hard prevention** — an unauthorized invoke is rejected
+  at the provider, the one gate that's real prevention not promise-strength); `Policy::strength_report()`
+  is the legibility (it discloses each clause's tier); the **self-imposed stance** is a decision (no remote
+  policy authority — a central policy server is the chokepoint non-goal). It ships the reusable Tier-C gate
+  + **denial sealing** (`check_caller`/`guarded_rpc_serve` seal `Invoke`/`Denied` into the tamper-evident
+  chain) that previously only SkillRunner had. **PR #138 — the policy-audit verification tool**
+  (`prove_denials`/`narrate_proof`): reconstruct a provider's chain, re-verify it, and prove the guardrail
+  fired — with **honest framing** encoded in the output (it PROVES *this provider tamper-evidently sealed
+  stopping X*; it DOES NOT prove *X could not have done Y anywhere* — per-node chains, only guarded caps
+  seal) + the watchable `guardrail_wedge` example. **PR #139 — chapter 16 + `guardrail_fleet`** (all three
+  tiers *actually firing* in a constructive co-op fleet; the Tier-A boundary *drop* — a non-event — proven
+  by a positive/bounded-negative/bracket sequence). Revocation is **self-sovereign** (`revoke_identity_key`
+  — a node revokes only its own keys; the levers over a misbehaving peer are narrowing its allowlist or
+  dropping its role, never pushing policy in). All CI-green; a `Guardrails (v3.0)` CI job. Zero new locks.
+  Open: broader packaging refinements + the crate-naming question.
 
 ## v2.0 (2026-06-21) — all 16 milestones M1–M16, acceptance gate met, no deferrals
 
