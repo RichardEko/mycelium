@@ -14,7 +14,10 @@ path = "src/lib.rs"
 # three demos. Off by default so the other nine (and the coop lib) build fast; the three enable it via
 # `required-features`.
 [features]
-wasm = ["dep:mycelium-wasm-host"]
+# `wasm` also pulls `mycelium-reason` (the InferenceRouter + serve_model bridge) because the only
+# demo that needs the reasoning crate — `reheal_deploy` — also needs the WASM provisioner host, so
+# the two travel together behind one gate.
+wasm = ["dep:mycelium-wasm-host", "dep:mycelium-reason"]
 
 # Each demo is its own bin.
 [[bin]]
@@ -70,6 +73,15 @@ name = "model_deploy"
 path = "src/bin/model_deploy.rs"
 required-features = ["wasm"]
 
+# Manual demo (needs a local Ollama daemon + a GGUF file) — deliberately NOT in ci_smoke.sh.
+# The deploy/reheal flagship, real-model half: a governed GGUF reheals onto the survivor and
+# generates real tokens through routed inference after the origin dies. Combines model_deploy's
+# artifact-library machinery with mycelium-reason's serve_model bridge + InferenceRouter.
+[[bin]]
+name = "reheal_deploy"
+path = "src/bin/reheal_deploy.rs"
+required-features = ["wasm"]
+
 [dependencies]
 # The full substrate (gateway is default-on; tls for node identity / the facts lens; llm for the
 # Prompt Skills used by the mailbox-llm demo).
@@ -83,6 +95,9 @@ mycelium-tuple-space = { path = "../../mycelium-tuple-space" }
 # — e.g. `cargo run --bin diagnostics` — build WITHOUT compiling wasmtime. The three demos that need it
 # declare `required-features = ["wasm"]`; CI enables it explicitly for those (examples/coop/ci_smoke.sh).
 mycelium-wasm-host   = { path = "../../mycelium-wasm-host", optional = true }
+# Optional behind `wasm`: the reasoning companion (InferenceRouter + serve_model) — only the
+# `reheal_deploy` manual demo uses it, and it needs the WASM host anyway, so they share one gate.
+mycelium-reason      = { path = "../../mycelium-reason", features = ["llm", "gateway"], optional = true }
 
 tokio              = { version = "1.35", features = ["full"] }
 bytes              = "1"

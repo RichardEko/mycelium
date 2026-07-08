@@ -2152,6 +2152,7 @@ dependencies = [
  "ed25519-dalek",
  "mycelium",
  "mycelium-agentfacts",
+ "mycelium-reason",
  "mycelium-tuple-space",
  "mycelium-wasm-host",
  "reqwest",

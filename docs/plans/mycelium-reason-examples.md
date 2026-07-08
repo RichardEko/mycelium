@@ -71,7 +71,7 @@ Homes: a new `examples/langgraph/` dir (the LangGraph ladder) — distinct from 
 | 3 | cross-node resume — kill A, resume on B | `03_cross_node.py` ✅ shipped | ✅ echo |
 | 4 | **routed inference** — LLM calls fail over to a healthy node | `POST /gateway/reason/route` + `ReasonClient.route` ✅ shipped; `04_routed.py` | ✅ echo |
 | 5 | **fleet-reasoning traces** — replay/narrate why the graph reasoned | `ReasonClient.trace` (GET `/gateway/reason/trace`); `05_traces.py` ✅ shipped | ✅ echo |
-| 6 | **deploy/reheal** — model follows the thread across node death | Rust reheal-node + `06_deploy_reheal.py`; the install→serve bridge | ✅ echo (shipped) · manual Ollama (TODO) |
+| 6 | **deploy/reheal** — model follows the thread across node death | Rust reheal-node + `06_deploy_reheal.py`; the install→serve bridge | ✅ echo (shipped) · ✅ manual Ollama (`examples/coop/src/bin/reheal_deploy.rs`, shipped) |
 | — | teach it | `docs/guide/15-reasoning-and-langgraph.md` (chapter 15) + the `examples/langgraph/README.md` ladder index | — |
 
 ## Build sequence (flagship-first, per the 2026-07-08 decision)
@@ -111,8 +111,16 @@ Homes: a new `examples/langgraph/` dir (the LangGraph ladder) — distinct from 
      The graph interrupts *before* its LLM node, so node A never calls the model; the only
      inference runs on B after A is dead — the cleanest expression of "the model followed
      the thread."
-2. **PR B — the Ollama-manual flagship** variant (real GGUF; `model_deploy` machinery; manual, not CI)
-   + guide chapter 15's flagship section.
+2. **PR B — the Ollama-manual flagship** variant ✅ **shipped**: `examples/coop/src/bin/reheal_deploy.rs`
+   (real GGUF; `model_deploy` machinery + the `serve_model` bridge + `InferenceRouter`; manual, not CI)
+   + guide chapter 15's flagship section. Two provider depots each run a `Provisioner` that
+   `supervise(profile, 1)`s the model; the origin wins the single-provider election first (a
+   structural stagger, so the reheal is unambiguous), and when it is killed the survivor elects,
+   streams the GGUF afresh, `ollama create`s it under its own node-unique name, and re-serves the
+   routable `llm/{model}` — the app routes real tokens from the survivor. Honest single-machine
+   caveat: A and B share one local Ollama daemon, so each `ollama create`s under `{model}-{port}`;
+   the streamed bytes + the Mycelium capability follow the thread (per-node Ollama for the true
+   multi-machine story). Compile-verified; unrun here (no Ollama in the build env).
 3. **PR C — backfill rungs 0–5** ✅ **shipped** (2026-07-08): the five Python demos
    (`00_hello_skill`/`01_typed`/`02_durable_state`/`03_cross_node`/`05_traces`) over the
    proven pieces + the `examples/langgraph/` README ladder index + the echo-rung loop folded

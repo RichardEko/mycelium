@@ -47,6 +47,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   after A is killed. Echo fixture (the artifact is a blob, "serving" is `EchoBackend`);
   the real seam (`require_model` → mesh fetch + verify → `serve_model` bridge → routed
   resume) is exercised for real.
+- **The deploy/reheal flagship, real-model half (rung 6, Ollama-manual)** —
+  `examples/coop/src/bin/reheal_deploy.rs`: a governed GGUF reheals onto the surviving node and
+  generates real tokens through routed inference after the origin dies. Composes `model_deploy`'s
+  artifact-library machinery (signed weights + profile as content-addressed Blobs, `Provisioner` +
+  `BlobRuntime`, live `llm/loading` percent) with `mycelium-reason`'s `serve_model` bridge and
+  `InferenceRouter`: two provider depots each `supervise(profile, 1)` the model, so when the origin
+  is killed the survivor elects on the bare `min=1` invariant, streams the weights afresh,
+  `ollama create`s them, and re-serves the routable `llm/{model}` the app routes to. Manual (needs
+  Ollama + a GGUF), excluded from `ci_smoke.sh` exactly like `model_deploy`. Honest single-machine
+  caveat: A and B share one local Ollama daemon, so each creates under `{model}-{port}` — the
+  streamed bytes + the Mycelium capability follow the thread (per-node Ollama for true multi-machine).
 - **The LangGraph example ladder, rungs 0–5 (echo)** — five runnable, self-checking Python
   demos under `examples/langgraph/` completing the series below the flagship: `00_hello_skill`
   (a mesh skill is a LangChain `Runnable`), `01_typed` (`call_typed` through the mesh),
