@@ -13,7 +13,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+dev   = ["pytest>=8", "pytest-asyncio>=0.23"]
+typed = ["pydantic>=2"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mycelium"]
