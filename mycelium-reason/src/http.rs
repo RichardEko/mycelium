@@ -6,6 +6,7 @@
 //! the Python LangGraph checkpointer speaks: blob PUT/GET carry **raw bytes** (checkpoint
 //! payloads — no base64 inflation), the trace endpoint returns JSON events + narrative.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,12 +14,14 @@ use axum::Json;
 use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, put};
+use axum::routing::{get, post, put};
+use serde::Deserialize;
 use serde_json::json;
 
 use mycelium::GossipAgent;
 
 use crate::blob::{BlobId, FsBlobStore, MAX_BLOB_BYTES, MeshBlobStore};
+use crate::route::{InferenceRouter, ModelQuery, RouteError, RouterConfig};
 use crate::trace::{narrate, replay};
 
 /// Shared route state: the agent (trace replay) + the local-first/mesh-fallback store.
@@ -45,7 +48,20 @@ pub fn reason_router(agent: Arc<GossipAgent>, store: Arc<FsBlobStore>) -> axum::
         )
         .route("/gateway/reason/blob/{id}", get(gw_blob_get))
         .route("/gateway/reason/trace/{run_id}", get(gw_trace_get))
+        .route("/gateway/reason/route", post(gw_route))
         .with_state(state)
+}
+
+/// Body of `POST /gateway/reason/route`. Gateway v1 is intentionally
+/// constraint-free — `ModelQuery::constraints` (typed metadata filtering over the
+/// `llm-meta/{model}` ad) is a Rust-API-only feature; the JSON boundary carries just
+/// model + input + context.
+#[derive(Deserialize)]
+struct RouteBody {
+    model: String,
+    input: String,
+    #[serde(default)]
+    context: HashMap<String, String>,
 }
 
 fn error_json(status: StatusCode, error: &str) -> Response {
@@ -92,4 +108,33 @@ async fn gw_trace_get(State(s): State<ReasonState>, Path(run_id): Path<String>) 
         .map(|e| json!({ "hlc": e.hlc, "node": e.node, "kind": e.kind, "detail": e.detail }))
         .collect();
     Json(json!({ "run_id": run_id, "events": events_json, "narrative": narrative })).into_response()
+}
+
+/// `POST /gateway/reason/route` — load-aware, failover-capable inference routing over
+/// `llm/{model}` providers (wedge ①), the mesh-native counterpart to the single-shot
+/// `/gateway/llm/call`. The [`InferenceRouter`] call side is core-only, so this route
+/// compiles under `gateway` alone (no `llm`): a gateway node can route inference to
+/// models served elsewhere without serving any itself.
+///
+/// Success → `200 {"output","model_used","tokens_used","provider":"<node>","attempt"}`.
+/// No live provider → `404 {"error":"no_provider"}`; every candidate failed →
+/// `502 {"error":"exhausted","detail":"<per-node failures>"}`.
+async fn gw_route(State(s): State<ReasonState>, Json(body): Json<RouteBody>) -> Response {
+    let router = InferenceRouter::new(Arc::clone(&s.agent), RouterConfig::default());
+    let query = ModelQuery::new(body.model);
+    match router.call(&query, &body.input, &body.context, None).await {
+        Ok(routed) => Json(json!({
+            "output": routed.output,
+            "model_used": routed.model_used,
+            "tokens_used": routed.tokens_used,
+            "provider": routed.provider.to_string(),
+            "attempt": routed.attempt,
+        }))
+        .into_response(),
+        Err(RouteError::NoProvider) => error_json(StatusCode::NOT_FOUND, "no_provider"),
+        Err(e @ RouteError::Exhausted(_)) => {
+            (StatusCode::BAD_GATEWAY, Json(json!({ "error": "exhausted", "detail": e.to_string() })))
+                .into_response()
+        }
+    }
 }
