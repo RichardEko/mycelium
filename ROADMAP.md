@@ -2929,12 +2929,12 @@ evolution needing field-level migration.
 
 ---
 
-## v3.0 — proposed deliverables (two primaries · packaging candidates · one adapter, not started)
+## v3.0 — two primaries (one shipped its first tranche) · packaging candidates · one adapter
 
 **Two primary deliverables** (each its own design sketch, each a substrate-native differentiator):
-**`mycelium-reason`** (LLM-authoring DX) and **`mycelium-guardrails`** (structural, coordinator-free
-guardrails) — see the two paragraphs after the table. The rest below are demand-driven packaging
-candidates + the one ANP adapter.
+**`mycelium-reason`** (LLM-authoring DX — **Tiers 3/1/2 ✅ shipped 2026-07-08**, PRs #130/#131) and
+**`mycelium-guardrails`** (structural, coordinator-free guardrails — **still proposed**) — see the two
+paragraphs after the table. The rest below are demand-driven packaging candidates + the one ANP adapter.
 
 ### Packaging candidates + one adapter
 
@@ -2973,20 +2973,31 @@ authz + `tool_budget` + tamper-evident audit, enforced per-receiver with no cent
 **primary v3.0 deliverable** (`mycelium-guardrails`, below). See
 [`docs/wiki/domain/pattern-coverage.md`](docs/wiki/domain/pattern-coverage.md).
 
-**DX companion — `mycelium-reason` (proposed).** A *separate axis* from the coordination candidates
-above: the LLM-**authoring** DX layer. Build-vs-adopt resolved to a **three-tier strategy** —
-**build** the substrate-native differentiators (① capability-routed inference — no central proxy; ②
-tamper-evident *fleet*-reasoning traces; ③ **artifact-aware resume** — added 2026-07-07, the
-artifact library lets a resumed graph's *model dependencies follow it* via resource-aware
-self-election + demand-driven install), **adopt** the commodity layer (Instructor / Pydantic AI for
-typed output), and **interop / be-the-backend** for the orchestration frameworks — flagship: a
-**`langgraph-checkpoint-mycelium`** backend on LangGraph's pluggable checkpointer protocol (one-line
-swap → coordinator-free, resumable-across-nodes agent state **plus model logistics**; the strongest
-"why not just LangGraph?" rebuttal). Storage is bound by the 2026-07-07 addendum in the sketch:
-checkpoint metadata in KV, immutable payloads in a content-addressed tier — never blobs-in-KV. **Sequence: Tier 3 (differentiators) first — to a CI-tested wedge — then Tier 1 ∥ Tier 2**,
-with Tier 2 built to *expose* the Tier-3 wedges so the interop lands differentiated, not commoditised.
-Core needs zero changes; much of the integration is in `mycelium-py` (raising the SDK to first-class).
-Sketch: [`docs/plans/mycelium-reason.md`](docs/plans/mycelium-reason.md).
+**DX companion — `mycelium-reason` (✅ Tiers 3/1/2 shipped 2026-07-08, PRs #130/#131).** A *separate
+axis* from the coordination candidates above: the LLM-**authoring** DX layer. Build-vs-adopt resolved to
+a **three-tier strategy**, delivered Tier-3-first:
+- **BUILD** the substrate-native differentiators — ① **capability-routed inference** (`InferenceRouter`:
+  resolve → drop opaque → rank by pheromone `peer_load` fill → failover; resolution is load-blind, so
+  this is a real routing layer, not a byproduct — one of five code-verified corrections in the plan's
+  2026-07-08 reassessment), ② **fleet-reasoning traces** (`TraceRecorder`/`replay`/`narrate` on per-node
+  log substreams `reason/{run_id}/{node}`, optional WS2 audit-chain anchoring), ③ **artifact-aware
+  resume** (`require_model` demand half; install half is the artifact library's `model_deploy`). Plus a
+  content-addressed **blob tier** + `/gateway/reason/{blob,trace}` routes. **✅ the `mycelium-reason`
+  crate, #130** (public-API-only companion, zero core changes).
+- **ADOPT** the commodity layer — `mycelium.call_typed` wraps a *through-the-mesh* prompt-skill call with
+  a pydantic contract + validation-feedback retry (Instructor / Pydantic AI stay the adopted path for
+  *direct* provider calls). **✅ #131.**
+- **INTEROP / be-the-backend** — **`langgraph-checkpoint-mycelium`**, a `BaseCheckpointSaver` on
+  LangGraph's pluggable protocol: one-line swap → coordinator-free, resumable-across-nodes agent state.
+  Storage split per the sketch's 2026-07-07 addendum: metadata in gossiped KV, immutable payloads in the
+  content-addressed blob tier (never blobs-in-KV); **cross-node `StateGraph` resume proven in CI**. The
+  strongest "why not just LangGraph?" rebuttal. **✅ #131**, landing the repo's **first Python CI job**.
+
+Delivered the intended sequence (differentiators first, giving the adopt/interop its pull; the
+checkpointer stores payloads through the same blob tier a Tier-3 wedge introduced). Raised `mycelium-py`
+to first-class. Sketch: [`docs/plans/mycelium-reason.md`](docs/plans/mycelium-reason.md). Remaining on
+this axis (not yet built): conversation memory, run-level evals, and the harder Tier-3 demos (a real LLM
+backend beyond `EchoBackend`; chunked blob transfer past the 8 MiB single-frame v1 ceiling).
 
 **Structural guardrails — `mycelium-guardrails` (proposed; primary v3.0 deliverable alongside the DX
 companion).** *What an agent may do* — which tools / data / spend / groups — enforced at **every
