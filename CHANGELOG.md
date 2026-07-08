@@ -47,6 +47,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   after A is killed. Echo fixture (the artifact is a blob, "serving" is `EchoBackend`);
   the real seam (`require_model` → mesh fetch + verify → `serve_model` bridge → routed
   resume) is exercised for real.
+- **The LangGraph example ladder, rungs 0–5 (echo)** — five runnable, self-checking Python
+  demos under `examples/langgraph/` completing the series below the flagship: `00_hello_skill`
+  (a mesh skill is a LangChain `Runnable`), `01_typed` (`call_typed` through the mesh),
+  `02_durable_state` (graph state survives a fresh client), `03_cross_node` (any node resumes
+  any thread by gossip), and `05_traces` (replay/narrate routed inference) — plus a
+  `examples/langgraph/README.md` ladder index and the echo-rung loop folded into the
+  `python-sdk` CI job. Enabling surface for rung 5: `POST /gateway/reason/route` gained an
+  optional `run_id` (mirrored by `ReasonClient.route(run_id=…)`) so a Python-driven routed
+  call **records** its route + `llm_call` trace, fetchable via `/gateway/reason/trace`.
 - **The Python tier of `mycelium-reason` (v3.0 Tiers 1+2)**:
   **`langgraph-checkpoint-mycelium`** (new package) — a LangGraph `BaseCheckpointSaver`
   backed by the mesh (index rows in gossiped KV under `ckpt/`/`ckptw/`, payloads as

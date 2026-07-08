@@ -22,7 +22,7 @@ use mycelium::GossipAgent;
 
 use crate::blob::{BlobId, FsBlobStore, MAX_BLOB_BYTES, MeshBlobStore};
 use crate::route::{InferenceRouter, ModelQuery, RouteError, RouterConfig};
-use crate::trace::{narrate, replay};
+use crate::trace::{TraceRecorder, narrate, replay};
 
 /// Shared route state: the agent (trace replay) + the local-first/mesh-fallback store.
 #[derive(Clone)]
@@ -62,6 +62,12 @@ struct RouteBody {
     input: String,
     #[serde(default)]
     context: HashMap<String, String>,
+    /// When set, the route decision + each `llm_call` attempt are recorded to the run's
+    /// trace (log stream `reason/{run_id}/{node}`), fetchable via `GET
+    /// /gateway/reason/trace/{run_id}` — so a Python driver can produce a replayable,
+    /// causal trace of routed inference (rung 5). Omitted → no trace (back-compat).
+    #[serde(default)]
+    run_id: Option<String>,
 }
 
 fn error_json(status: StatusCode, error: &str) -> Response {
@@ -122,7 +128,10 @@ async fn gw_trace_get(State(s): State<ReasonState>, Path(run_id): Path<String>) 
 async fn gw_route(State(s): State<ReasonState>, Json(body): Json<RouteBody>) -> Response {
     let router = InferenceRouter::new(Arc::clone(&s.agent), RouterConfig::default());
     let query = ModelQuery::new(body.model);
-    match router.call(&query, &body.input, &body.context, None).await {
+    // Record a trace only when the caller supplied a run_id (rung 5); otherwise the
+    // route is untraced, exactly as before.
+    let recorder = body.run_id.map(|id| TraceRecorder::new(Arc::clone(&s.agent), id));
+    match router.call(&query, &body.input, &body.context, recorder.as_ref()).await {
         Ok(routed) => Json(json!({
             "output": routed.output,
             "model_used": routed.model_used,

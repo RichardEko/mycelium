@@ -81,6 +81,7 @@ class ReasonClient:
         input: str,
         *,
         context: Optional[dict[str, str]] = None,
+        run_id: Optional[str] = None,
         timeout_ms: int = 30_000,
     ) -> dict[str, Any]:
         """
@@ -98,6 +99,9 @@ class ReasonClient:
         :param model:      The model id (capability ``llm/{model}``).
         :param input:      The value rendered into the served prompt template.
         :param context:    Optional extra ``{{variable}}`` substitutions.
+        :param run_id:     When set, the route decision + each attempt are
+            recorded to this run's trace (fetchable via :meth:`trace`) — the
+            replayable, causal story of the routed inference (rung 5).
         :param timeout_ms: Per-attempt RPC timeout in milliseconds.
 
         :raises NoProviderError:    no live provider serves the model (404).
@@ -108,6 +112,8 @@ class ReasonClient:
             "input": input,
             "context": context or {},
         }
+        if run_id is not None:
+            body["run_id"] = run_id
         resp = await self._client.post(
             "/gateway/reason/route",
             json=body,

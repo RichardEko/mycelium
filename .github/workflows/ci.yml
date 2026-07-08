@@ -189,6 +189,15 @@ jobs:
         env:
           MYCELIUM_TEST_PORT: 8101
           MYCELIUM_TEST_PORT_B: 8102
+      # The LangGraph example ladder, rungs 0–5 (echo variant): each runs against the
+      # shared A/B mesh above and prints `RUNG N OK`. Rung 03 needs the second node
+      # (MYCELIUM_TEST_PORT_B); the rest ignore it. Rung 06 has its own step below.
+      - name: LangGraph ladder rungs 0–5 (echo)
+        run: |
+          for rung in 00_hello_skill 01_typed 02_durable_state 03_cross_node 04_routed 05_traces; do
+            echo "── $rung ──"
+            MYCELIUM_TEST_PORT=8101 MYCELIUM_TEST_PORT_B=8102 python examples/langgraph/$rung.py || exit 1
+          done
       # The rung-6 deploy/reheal flagship (echo variant): manages its OWN two-node mesh
       # (ports 73xx/83xx — disjoint from the shared A/B above) because it kills a node
       # mid-run. Proves a LangGraph graph's model dependency follows it across node death.
