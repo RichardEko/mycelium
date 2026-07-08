@@ -50,3 +50,7 @@ required-features = ["llm"]
 [[test]]
 name = "gateway"
 required-features = ["gateway", "llm"]
+
+[[example]]
+name = "fleet_reasoning"
+required-features = ["llm"]
