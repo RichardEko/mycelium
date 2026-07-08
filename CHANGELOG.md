@@ -10,6 +10,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **`mycelium-reason`** (new companion crate; strategy + code-verified bindings in
+  [`docs/plans/mycelium-reason.md`](docs/plans/mycelium-reason.md)): the v3.0 Tier-3
+  differentiators on the public API only — **capability-routed inference**
+  (`serve_model`/`InferenceRouter`: model-is-a-prompt-skill `llm/{model}` + attributed
+  `llm-meta/{model}` ad; resolve → drop opaque → rank by pheromone fill → failover),
+  **fleet-reasoning traces** (`TraceRecorder`/`replay`/`narrate` on per-node log
+  substreams `reason/{run_id}/{node}`, optional audit-chain anchoring under
+  `compliance`), **artifact-aware resume** (demand half: `require_model` +
+  structural `await_ready` + `llm/loading` progress), and the content-addressed
+  blob tier (`FsBlobStore`/`MeshBlobStore`/`spawn_blob_server`, ≤ 8 MiB single-frame
+  v1) with `/gateway/reason/{blob,trace}` routes for the LangGraph checkpointer.
 - **The artifact library** (`mycelium-wasm-host`; design record
   [`docs/design/artifact-library.md`](docs/design/artifact-library.md)): a durable origin tier for
   content-addressed artifacts — `FsLibrarySource` (blob dir + signed `Manifest`;

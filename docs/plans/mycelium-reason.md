@@ -180,10 +180,17 @@ tiers, and sequencing stand.
    `register_prompt_skill` overload.
 3. **Wedge ② rides the log overlay, not the `EventRing`.** `EventRing`/`record_event` are
    `pub(crate)` — a companion cannot extend `/gateway/explain`. Bound: trace records go through
-   `kv().append("reason/{run_id}", …)` (`log/reason/{run_id}` — HLC-ordered, gossip-replicated,
-   replayable via `scan_log`); the crate mounts its own `GET /gateway/reason/trace/{run_id}`
-   via `with_http_routes` (the wiki precedent); tamper-evidence is optional **anchoring of the
-   running trace hash into the WS2 audit chain** (`GossipAgent::audit`, `compliance` feature).
+   `kv().append(…)` (HLC-ordered, gossip-replicated, replayable via `scan_log`); the crate
+   mounts its own `GET /gateway/reason/trace/{run_id}` via `with_http_routes` (the wiki
+   precedent); tamper-evidence is optional **anchoring of the running trace hash into the WS2
+   audit chain** (`GossipAgent::audit`, `compliance` feature).
+   *Corrected during implementation (2026-07-08):* the originally-bound **single shared stream
+   `reason/{run_id}` cannot host multiple writers** — the HLC packs 48-bit milliseconds + a
+   16-bit *per-node* logical counter, so two nodes appending in the same millisecond mint
+   identical `log/…/{hlc:016x}` keys and LWW silently drops a record (caught by the cross-node
+   trace test on its first run). Shipped shape: **one substream per writer**,
+   `reason/{run_id}/{node}`, merged on HLC at replay with a node-id tiebreak (equal stamps are
+   concurrent by definition).
 4. **The checkpointer's content-addressed tier needs a mesh-reachable blob surface — and
    `mycelium-reason` must provide it.** Nothing exposes artifact storage over the gateway
    today, and `mycelium-wasm-host` carries wasmtime **unconditionally**, so reusing

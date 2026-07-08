@@ -2192,6 +2192,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "mycelium-reason"
+version = "0.1.0"
+dependencies = [
+ "axum 0.8.9",
+ "bytes",
+ "mycelium",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "mycelium-tuple-space"
 version = "2.0.0"
 dependencies = [
