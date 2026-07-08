@@ -82,20 +82,28 @@ Homes: a new `examples/langgraph/` dir (the LangGraph ladder) — distinct from 
    `mycelium-reason/examples/reheal_node.rs`) ✅ + the echo-CI flagship demo
    (`examples/langgraph/06_deploy_reheal.py`, in the `python-sdk` job) ✅ **shipped**.
 
-   Seam findings the echo flagship surfaced (bind them into the Ollama variant + chapter 15):
-   - **A killed node lingers ~90s in a peer's capability view** — the pheromone-freshness
-     window (3× the 30s refresh): a dead node stops refreshing but there is no instant
-     tombstone, so it stays a *candidate*. The `InferenceRouter` ranks equal-load providers
-     by ascending node-id, and an RPC to a dead node blocks the full 30s per-attempt
-     timeout (the mesh RPC waits for a reply, no connection-refused fast-fail). So if the
-     dead node has the lower id, **every post-kill route eats a 30s dead-RPC penalty**
-     before failing over. Fix in the demo: give the *surviving* node (B) the lower gossip
-     bind port so it ranks itself first and post-kill routes land on it immediately. This
-     is the load-bearing seam lesson — the Ollama variant and any real reheal deployment
-     want the same "survivor ranks first" property (or a faster liveness signal than
-     freshness). Cross-node routing to a *live* remote provider is fine once the mesh has
-     settled (verified: instant, correct provider) — it is only the *dead*-candidate case
-     that is slow, and only until evaporation.
+   Seam finding the echo flagship surfaced — **found, then fixed in the router** (a real
+   improvement, not a demo workaround; the de-risking earned its keep):
+   - **The problem.** A killed node lingers ~90s in a peer's *capability freshness* view
+     (3× the 30s re-advertise; it stops refreshing but there is no instant tombstone), so
+     `resolve` kept returning it. A mesh RPC to a dead peer has no connection-refused
+     fast-fail, so routing to it blocked the full 30s per-attempt timeout. With the router
+     ranking equal-load providers by ascending node-id, a dead *lower-id* node poisoned
+     **every** post-kill route for ~90s. The first cut of the demo hid this by rigging the
+     survivor to hold the lower id — a smell.
+   - **The fix (`mycelium-reason/src/route.rs`), two principled changes:**
+     1. **Liveness filter** — `candidates()` now intersects with live SWIM membership
+        (`GossipAgent::peers()`, plus self), from which a departed node drops near-instantly
+        on a graceful close and within SWIM's detection window otherwise — an order of
+        magnitude faster than freshness. Canary: `liveness_filter_drops_a_non_peer_cap`
+        (injects a fresh cap for a ghost non-peer; fails without the filter).
+     2. **Fast failover timeout** — a new `RouterConfig::failover_timeout` (default 8s) caps
+        every *non-final* attempt; only the last candidate (or a lone one) gets the full
+        `call_timeout`. So a candidate that died inside the detection window costs ~8s, not
+        30s, and a genuinely-slow *sole* provider is still not cut off.
+     Result: the demo needs **no** node-id rigging — the survivor B keeps the *higher* id
+     (the case that used to be slow) and post-kill routes land on it in ≤ ~22s across runs.
+     Cross-node routing to a *live* remote provider was never the issue (verified: instant).
    - **Honest ordering, enforced structurally.** The checkpoint gossips A→B, and B fetches
      the model artifact from A over the mesh, both *before* A is killed (once A is dead it
      can serve neither). B's reheal task runs from B's startup and prints a marker on its

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use mycelium::{EchoBackend, GossipAgent, GossipConfig, NodeId, PromptTemplate};
+use mycelium::{CapEntry, CapFilter, Capability, EchoBackend, GossipAgent, GossipConfig, NodeId, PromptTemplate};
 use mycelium_reason::{
     FsBlobStore, InferenceRouter, MeshBlobStore, ModelProfile, ModelQuery, RouterConfig,
     TraceRecorder, replay, require_model, serve_model, spawn_blob_server,
@@ -92,6 +92,7 @@ async fn route_and_failover_across_providers() {
     let cfg = RouterConfig {
         max_attempts: 3,
         call_timeout: Duration::from_secs(2), // fast per-attempt failover under test
+        failover_timeout: Duration::from_secs(1),
         load_max_age: Duration::from_secs(10),
     };
     let router_a = InferenceRouter::new(Arc::clone(&agent_a), cfg.clone());
@@ -126,6 +127,66 @@ async fn route_and_failover_across_providers() {
 
     agent_a.shutdown_with_timeout(Duration::from_secs(5)).await;
     agent_b.shutdown_with_timeout(Duration::from_secs(5)).await;
+}
+
+/// The liveness filter, tested against exactly the case that matters: a **fresh cap ad
+/// for a node that is not a live SWIM member** — what an ungracefully-dead node leaves
+/// behind (its `cap/` ad lingers ~90 s, but it is gone from `peers()` at once, and its
+/// death may have raced its own cap-tombstone gossip). `resolve()` is liveness-blind, so
+/// it returns the ghost; `candidates()` must drop it, leaving only self.
+///
+/// A graceful in-process `shutdown` cannot reproduce this — shutdown retracts the cap, so
+/// `resolve()` alone would drop it and the filter would never be exercised. Here the cap
+/// deliberately lingers, so **only** the liveness filter can prune it: this FAILS without
+/// the filter (the ghost stays a candidate) and passes with it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn liveness_filter_drops_a_non_peer_cap() {
+    let agent = {
+        let mut started = None;
+        for _ in 0..16 {
+            if let Some(a) = try_start(free_port(), vec![]).await {
+                started = Some(a);
+                break;
+            }
+        }
+        started.expect("single agent start")
+    };
+    let _reg = serve_model(&agent, profile("fable-mini"), echo_template(), Arc::new(EchoBackend))
+        .await
+        .unwrap();
+
+    // Inject a fresh cap ad for a ghost node that is NOT (and never was) a peer — the
+    // ungracefully-dead-node residue. `refresh_interval_ms = 30_000` ⇒ fresh for ~90 s,
+    // far longer than this test runs.
+    let ghost = NodeId::new("127.0.0.1", 59999).unwrap();
+    let entry = CapEntry {
+        capability: Capability::new("llm", "fable-mini"),
+        refresh_interval_ms: 30_000,
+    };
+    assert!(
+        agent.kv().set(format!("cap/{ghost}/llm/fable-mini"), entry.encode()),
+        "ghost cap injected"
+    );
+
+    let router = InferenceRouter::new(Arc::clone(&agent), RouterConfig::default());
+    let q = ModelQuery::new("fable-mini");
+
+    // resolve() is liveness-blind → it sees BOTH self and the injected ghost.
+    assert!(
+        poll_until(
+            || agent.capabilities().resolve(&CapFilter::new("llm", "fable-mini")).len() == 2,
+            Duration::from_secs(5),
+        )
+        .await,
+        "resolve() sees self + the ghost (it is liveness-blind)"
+    );
+
+    // candidates() is liveness-filtered → only self; the non-peer ghost is pruned.
+    let c = router.candidates(&q);
+    assert_eq!(c.len(), 1, "the non-peer ghost is pruned by liveness");
+    assert_eq!(c[0].0, *agent.node_id(), "only self remains");
+
+    agent.shutdown_with_timeout(Duration::from_secs(5)).await;
 }
 
 /// Wedge ① constraints: a query whose `llm-meta` constraint no provider satisfies
