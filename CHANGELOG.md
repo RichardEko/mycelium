@@ -30,6 +30,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   production build.
 
 ### Added
+- **Operator docs: metrics reference + audit/transparency tail.** New
+  [`docs/operations/metrics.md`](docs/operations/metrics.md) is the single, complete reference for
+  every emitted Prometheus series (gossip · emergent · governor · artifact · guardrails · reason),
+  wired into `observability.md`; the shipped Grafana dashboard gains emergent/guardrails/reason
+  panels; `audit.md` documents `/gateway/transparency` revocation proofs and proving a guardrail
+  stopped an agent; `deployment.md` gains a backup/restore note; the operations index gains a
+  "Start here" funnel.
 - **`mycelium-guardrails`** (new companion crate, PR 1 — the policy API; strategy + code-verified
   bindings in [`docs/plans/mycelium-guardrails.md`](docs/plans/mycelium-guardrails.md)): a
   self-imposed, **tier-labelled** structural-guardrail declaration on the public API only. One
