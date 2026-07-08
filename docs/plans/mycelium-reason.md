@@ -95,8 +95,11 @@ adopt-first land-grab would. For a thesis-led, pre-adoption project that is the 
 | Tier | Deliverable | Home | Nature |
 |---|---|---|---|
 | 3 (first) | capability-routed inference · fleet-reasoning traces · artifact-aware resume | `mycelium-reason` crate + `mycelium-py` | build (mostly composes) |
-| 1 (∥) | `call_typed` over Instructor / Pydantic AI | `mycelium-py` | adopt |
-| 2 (∥) | `langgraph-checkpoint-mycelium` | new Python package | interop / be-the-backend |
+| 1 (∥) | `call_typed` over Instructor / Pydantic AI | `mycelium-py` | adopt — ✅ shipped 2026-07-08 |
+| 2 (∥) | `langgraph-checkpoint-mycelium` | new Python package | interop / be-the-backend — ✅ shipped 2026-07-08 |
+
+Tier 3 shipped as PR 1 (the `mycelium-reason` crate); Tiers 1+2 shipped as PR 2 with the
+repo's first Python CI job (two-node mesh, real `StateGraph` cross-node resume).
 
 ## What already exists (the composition base — mostly packaging)
 

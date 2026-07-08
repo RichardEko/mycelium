@@ -21,6 +21,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   structural `await_ready` + `llm/loading` progress), and the content-addressed
   blob tier (`FsBlobStore`/`MeshBlobStore`/`spawn_blob_server`, ≤ 8 MiB single-frame
   v1) with `/gateway/reason/{blob,trace}` routes for the LangGraph checkpointer.
+- **The Python tier of `mycelium-reason` (v3.0 Tiers 1+2)**:
+  **`langgraph-checkpoint-mycelium`** (new package) — a LangGraph `BaseCheckpointSaver`
+  backed by the mesh (index rows in gossiped KV under `ckpt/`/`ckptw/`, payloads as
+  content-addressed blobs with free channel-value dedup; sync + async; cross-node resume
+  of a real `StateGraph` proven in CI) — and **`mycelium.call_typed`** in `mycelium-py`
+  (pydantic-validated skill output with a validation-feedback retry loop; pydantic via
+  the `typed` extra). Driven by the repo's **first Python CI job** (`python-sdk`: a
+  two-node `reason_node` mesh + pytest). The mesh blob fetch now answers the empty blob
+  from its content address alone (a typed `None` payload serializes to zero bytes; an
+  empty RPC reply means "miss", so it could never travel the wire).
 - **The artifact library** (`mycelium-wasm-host`; design record
   [`docs/design/artifact-library.md`](docs/design/artifact-library.md)): a durable origin tier for
   content-addressed artifacts — `FsLibrarySource` (blob dir + signed `Manifest`;
