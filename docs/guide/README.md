@@ -152,6 +152,7 @@ Start there. The other examples are specialised:
 | [13](13-cluster-topology.md) | Cluster topology — seeds, partial mesh, sizing, partition recovery | — | 10 min |
 | [14](14-patterns-and-pitfalls.md) | **Patterns & pitfalls** — the right way vs the anti-pattern, grounded in the coop examples (with the *why*) | the [coop suite](../../examples/coop/) | 10 min |
 | [15](15-reasoning-and-langgraph.md) | **Reasoning & LangGraph** — LangGraph *on* Mycelium: routed inference, fleet traces, the checkpointer, and the deploy/reheal flagship (a model that follows its thread across node death) | the [`examples/langgraph/`](../../examples/langgraph/) ladder | 15 min |
+| [16](16-guardrails.md) | **Guardrails** — structural, coordinator-free guardrails: *what an agent may do*, the three strength tiers (hard-prevention / self-imposed / transition), the policy API, and proving a guardrail fired from the tamper-evident chain | `cargo run -p mycelium-guardrails --features compliance --example guardrail_wedge` | 12 min |
 | [Error handling](error-handling.md) | Error type taxonomy, recoverability, propagation strategy | — | — |
 
 Read chapters 01–04 to build the mental model. Jump to 05–08 for the application
