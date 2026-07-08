@@ -21,6 +21,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   structural `await_ready` + `llm/loading` progress), and the content-addressed
   blob tier (`FsBlobStore`/`MeshBlobStore`/`spawn_blob_server`, ≤ 8 MiB single-frame
   v1) with `/gateway/reason/{blob,trace}` routes for the LangGraph checkpointer.
+- **Reason routing gateway + Python client**: `POST /gateway/reason/route`
+  (`InferenceRouter`-backed — load-aware, failover; the mesh-native counterpart to
+  single-shot `/gateway/llm/call`) and `mycelium.ReasonClient` in `mycelium-py`
+  (`route`/`trace`/`blob_put`/`blob_get`), unblocking a load-aware, failover LLM node
+  for the LangGraph ladder (rung 4).
 - **The Python tier of `mycelium-reason` (v3.0 Tiers 1+2)**:
   **`langgraph-checkpoint-mycelium`** (new package) — a LangGraph `BaseCheckpointSaver`
   backed by the mesh (index rows in gossiped KV under `ckpt/`/`ckptw/`, payloads as
