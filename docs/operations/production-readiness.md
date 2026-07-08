@@ -44,6 +44,9 @@ this page is the index + the gate.
 - ☐ **Restart rehearsed** — single-node WAL replay **and** full-cluster cold restart (anti-entropy
   recovery) both verified in staging. A restarted node re-bootstraps with no rejoin ceremony.
 - ☐ **Snapshot cadence** (`snapshot_interval_secs`) tuned so replay time is bounded.
+- ☐ **Backup covers the identity** — the data dir (WAL + snapshot) *and* `auto_cert_dir` are
+  backed up; restore = put the dirs back + restart (WAL replays, mesh re-syncs the rest). The
+  identity dir is the one part that can't be regenerated. → [deployment.md §Backup & restore](deployment.md#backup--restore)
 
 ## 4 · Sizing & back-pressure (the scale sweep)
 

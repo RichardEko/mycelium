@@ -111,3 +111,80 @@ still pass — it won't, and that is by design (the chain is meant to notice).
 | `verified: false`, `UnknownSigner` | owner's identity key not learned | confirm peering + shared CA; the key arrives via `sys/identity/` gossip |
 | `verified: false`, `BrokenLink`/`BadSignature` | records tampered or store hand-edited | treat as an incident; cite the offending `seq` + `content_hash` |
 | trail not shrinking | by design — no time-eviction of live keys | export + size the store; see §4 |
+
+---
+
+## 6. `/gateway/transparency` — revocation proofs
+
+Key **revocations** get their own tamper-evident surface: a Merkle transparency log over
+each node's validated revocation list, served at `GET /gateway/transparency` (scope
+`transparency:read`; `compliance` feature). It answers a different question from §2's audit
+trail — not "what happened" but "**can I prove this key was revoked fleet-wide, without
+trusting the server that told me?**"
+
+Two modes:
+
+```bash
+# Head mode (no query) — every node's revocation-log Merkle root + count:
+curl -H 'Authorization: Bearer <transparency-token>' \
+     'http://NODE:PORT/gateway/transparency'
+# → { "nodes": [ { "node": "10.0.0.7:8080", "root": "<64-hex>", "count": 3 }, … ] }
+
+# Inclusion-proof mode (?node=&key=<64-hex of the revoked verifying key>):
+curl -H 'Authorization: Bearer <transparency-token>' \
+     'http://NODE:PORT/gateway/transparency?node=10.0.0.7:8080&key=<64-hex>'
+# → { "node": "…", "revoked_key": "…", "included": true,
+#     "root": "<64-hex>", "leaf": "<64-hex>", "index": 1,
+#     "proof": [ { "sibling": "<64-hex>", "on_right": true }, … ] }
+```
+
+**What it proves.** The inclusion `proof` is the Merkle audit path from the `leaf` (the
+revocation record's hash) up to the `root`. The operator verifies it **client-side** —
+recompute the root from `leaf` + `proof` and check it equals `root` (the
+`transparency::verify_inclusion` function, exposed for exactly this). Because the root is
+recomputable on any node from its own gossiped view, a matching proof shows the key was
+revoked *and* that the node's revocation log can't have been forged or silently altered —
+no trust in the responding server is required. `included: false` means that node has no
+validated revocation for the key.
+
+The head `count` is also the cheap fleet-wide sanity check: if nodes disagree on a node's
+`root`/`count`, revocations haven't fully propagated yet (or one view is partitioned).
+
+*Code: `src/agent/http.rs::gw_transparency` (~708), `src/agent/transparency.rs`
+(`inclusion_proof`, `revocation_head`, `verify_inclusion`), `src/agent/revocation.rs`.*
+
+---
+
+## 7. Proving a guardrail stopped an agent
+
+When a node runs the `mycelium-guardrails` **Tier-C** invoke gate (feature `compliance`),
+every *unauthorized* invocation it blocks is sealed as an `Invoke`/`Denied` record into
+**this same** per-node, signed, hash-chained audit trail (§1) — verified caller as
+`principal`, the RPC kind as `target`. So "prove agent X was stopped from doing Y" reduces
+to reconstructing and re-verifying that chain and citing the sealed denials.
+
+The [`prove_denials` / `narrate_proof`](../guide/16-guardrails.md#proving-a-guardrail-fired)
+tool (guide 16) does exactly that — for a compliance officer, the flow is:
+
+```rust
+use mycelium_guardrails::{prove_denials, narrate_proof};
+// provider = the node that ran the gate; caller = the agent you want to prove was stopped.
+let proof = prove_denials(&any_node, provider.node_id(), Some("10.0.0.3:8080"));
+for line in narrate_proof(&proof) { println!("{line}"); }
+```
+
+It pulls `provider`'s stream, runs the full §3 chain verification (`chain_verified` +
+`verify_error`), and lists every matching sealed denial with its citable `content_hash`.
+**Any node can run it** — the audit chain gossips fleet-wide, so a neutral third party
+proves the denial exactly as the provider would.
+
+**Read the claim honestly** (the tool prints this framing itself): it proves the provider
+*tamper-evidently sealed stopping* those specific calls — **provable-stopping**, not a
+global "X could not have done Y *anywhere*." The [honest limits](../guide/16-guardrails.md#proving-a-guardrail-fired)
+carry straight over from §3: the chain is **per-node**, so absence in one provider's chain
+is not proof of absence elsewhere; only *guarded* capabilities that reach the gate seal
+denials; and if the chain doesn't verify, the proof is **voided**, not asserted. Verify the
+underlying chain with §3 before citing any denial.
+
+*Code: `mycelium-guardrails/src/verify.rs` (`prove_denials`, `narrate_proof`),
+`mycelium-guardrails/src/guard.rs` (the sealing gate).*

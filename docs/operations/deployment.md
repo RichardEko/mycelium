@@ -116,3 +116,24 @@ and re-advertises its capabilities — there is no rejoin ceremony. With a
 persisted `auto_cert_dir` it keeps its identity; with persistence enabled it
 replays its WAL. Capability advertisements evaporate while a node is down and
 reappear on restart (see [00 · Concepts](../guide/00-concepts.md) on evaporation).
+
+## Backup & restore
+
+Persistence is a **WAL + periodic snapshot** in the node's data directory, and identity is
+the Ed25519 key/cert under `auto_cert_dir`. Both are plain on-disk state, so backup and
+restore are just directory operations:
+
+- **Back up** the persistence data dir *and* the `auto_cert_dir` (the identity). Snapshot
+  the volume, or copy the dirs while the node runs — the WAL makes a copy taken mid-write
+  self-consistent on replay.
+- **Restore** = put the dirs back where the node expects them and start it. On boot it
+  replays the WAL up to the latest snapshot, then re-bootstraps and re-learns any newer KV
+  from peers via anti-entropy (same path as [restart](#restart-behaviour)). Keeping
+  `auto_cert_dir` means the node comes back with the *same* identity — no re-issue, no
+  signature churn, and its audit/consensus history stays attributable to it.
+
+Because state also lives redundantly across the mesh, a single node's data dir is not the
+only copy of the cluster's KV — but it **is** the only copy of that node's identity and its
+per-node audit chain ([audit.md](audit.md)), so the `auto_cert_dir` is the part you cannot
+regenerate. Back it up. (There is no snapshot/restore *API* — Mycelium is a library; the
+data dir is the interface.)
