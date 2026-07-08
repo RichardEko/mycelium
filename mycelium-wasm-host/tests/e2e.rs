@@ -13,8 +13,10 @@ use std::sync::Arc;
 
 const ECHO_COMPONENT: &[u8] = include_bytes!("fixtures/echo_component.wasm");
 
+/// The core's bind-verified, process-unique loopback allocator (`mycelium::test_util::alloc_port`,
+/// the `test-util` feature) — retires the old bind-:0-and-drop TOCTOU flake class.
 fn alloc_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    mycelium::test_util::alloc_port()
 }
 
 async fn live_agent() -> Arc<GossipAgent> {

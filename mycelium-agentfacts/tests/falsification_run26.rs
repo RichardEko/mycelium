@@ -40,11 +40,8 @@ async fn read_verified_fields_for_unknown_node_is_empty_not_panic() {
     use std::sync::Arc;
     use std::time::Duration;
 
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
+    // Bind-verified, process-unique loopback port (retires the free_port TOCTOU flake class).
+    let port = mycelium::test_util::alloc_port();
     let cert_dir = std::env::temp_dir().join(format!("myc-fals26-{port}"));
     let _ = std::fs::remove_dir_all(&cert_dir);
     let cfg = GossipConfig {

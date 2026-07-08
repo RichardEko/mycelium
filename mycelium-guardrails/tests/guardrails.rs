@@ -22,10 +22,12 @@ use mycelium::{
 };
 use mycelium_guardrails::{apply, guarded_rpc_serve, Policy};
 
-/// A free TCP port (bind :0, read it, drop). The drop opens a TOCTOU window against parallel
-/// test binaries — which is why agents start via a retry, never a bare unwrap.
+/// A free loopback port from the core's bind-verified, process-unique allocator
+/// (`mycelium::test_util::alloc_port`, the `test-util` feature) — candidates sit below the OS
+/// ephemeral floor, retiring the old bind-:0-and-drop TOCTOU flake class. Agents still start via
+/// a retry, never a bare unwrap.
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    mycelium::test_util::alloc_port()
 }
 
 /// Start one tls agent sharing `cert_dir` (so the mesh shares a CA), `None` if the bind lost the

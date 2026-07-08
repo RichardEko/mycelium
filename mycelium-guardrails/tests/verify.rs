@@ -18,8 +18,10 @@ use mycelium_guardrails::{apply, guarded_rpc_serve, prove_denials, Policy};
 
 const KIND: &str = "agent.tool.invoke";
 
+/// The core's bind-verified, process-unique loopback allocator (`mycelium::test_util::alloc_port`,
+/// the `test-util` feature) — retires the old bind-:0-and-drop TOCTOU flake class.
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    mycelium::test_util::alloc_port()
 }
 
 async fn try_start(port: u16, boot: Vec<u16>, cert_dir: &std::path::Path) -> Option<Arc<GossipAgent>> {

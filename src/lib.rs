@@ -315,11 +315,18 @@ pub mod fuzz_internals {
     }
 }
 
+/// test-only: a bind-verified, process-unique loopback port allocator for companion
+/// integration tests — retires the `free_port` TOCTOU flake class.
+#[cfg(feature = "test-util")]
+pub use test_util::alloc_port;
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 
-#[cfg(test)]
-mod test_util;
+// Public under `test-util` (feature-gated, test-only) so companion integration tests can call
+// `mycelium::test_util::alloc_port()`; a plain module for the core's own `#[cfg(test)]` build.
+#[cfg(any(test, feature = "test-util"))]
+pub mod test_util;
 
 #[cfg(test)]
 mod lib_tests;

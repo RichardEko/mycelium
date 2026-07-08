@@ -15,8 +15,9 @@ fn b64(data: &[u8]) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn gateway_claim_lifecycle_and_race() {
-    let base = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let http_port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    // Bind-verified, process-unique loopback ports (retires the free_port TOCTOU flake class).
+    let base = mycelium::test_util::alloc_port();
+    let http_port = mycelium::test_util::alloc_port();
 
     let cfg = GossipConfig { bind_port: base, http_port: Some(http_port), health_check_max_jitter_ms: 50, ..Default::default() };
     let agent = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", base).unwrap(), cfg));

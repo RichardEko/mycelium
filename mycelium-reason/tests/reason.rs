@@ -16,10 +16,12 @@ use mycelium_reason::{
     TraceRecorder, replay, require_model, serve_model, spawn_blob_server,
 };
 
-/// A free TCP port (bind :0, read it, drop). The drop opens a TOCTOU window against
-/// parallel test binaries — which is why agents start via [`start_pair`]'s retry.
+/// A free loopback port from the core's bind-verified, process-unique allocator
+/// (`mycelium::test_util::alloc_port`, the `test-util` feature) — candidates sit below the OS
+/// ephemeral floor, retiring the old bind-:0-and-drop TOCTOU flake class. Agents still start via
+/// [`start_pair`]'s retry for any residual loss.
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    mycelium::test_util::alloc_port()
 }
 
 /// Start one agent, `None` if the bind lost the port race.

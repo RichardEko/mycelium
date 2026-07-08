@@ -44,6 +44,7 @@ impl AppliedPolicy {
 pub fn check_caller(applied: &AppliedPolicy, req: &RpcRequest) -> CallerVerdict {
     let agent = applied.agent();
     if agent.caller_authorized(req.sender(), applied.authorized_callers()) {
+        metrics::counter!("mycelium_guardrails_admits_total").increment(1);
         CallerVerdict::Admitted
     } else {
         seal_denial(agent, req);
@@ -87,6 +88,7 @@ where
         let mut rx = agent.service().rpc_rx(Arc::clone(&kind));
         while let Some(req) = rx.recv().await {
             if agent.caller_authorized(req.sender(), &allow) {
+                metrics::counter!("mycelium_guardrails_admits_total").increment(1);
                 let h = Arc::clone(&handler);
                 let a = Arc::clone(&agent);
                 tokio::spawn(async move {
@@ -107,6 +109,9 @@ where
 /// target. Best-effort: a node without a tls identity cannot sign, so the seal is dropped (the
 /// gate itself still denies).
 fn seal_denial(agent: &Arc<GossipAgent>, req: &RpcRequest) {
+    // Operator signal: how many unauthorized invokes the Tier-C gate stopped (visible on the
+    // node's /metrics when the embedder enables mycelium's `metrics` feature; a no-op otherwise).
+    metrics::counter!("mycelium_guardrails_denials_sealed_total").increment(1);
     let detail = format!(
         r#"{{"nonce":{},"reason":"authorized_callers"}}"#,
         req.nonce()

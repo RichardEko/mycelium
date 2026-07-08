@@ -41,6 +41,11 @@ async-trait = { version = "0.1", optional = true }
 axum        = { version = "0.8", optional = true }
 
 [dev-dependencies]
+# test-only: the bind-verified, process-unique port allocator (retires the free_port TOCTOU
+# flake class). Mirrors control-plane's `mycelium` (default-features = false) + adds `test-util`;
+# the integration tests already require `control-plane`, so this only widens the mycelium feature
+# set for the test target — the library build is unaffected.
+mycelium = { path = "..", default-features = false, features = ["test-util"] }
 tempfile = "3"
 tokio    = { version = "1.35", features = ["full"] }
 reqwest  = { version = "0.12", features = ["json"] }

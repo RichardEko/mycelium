@@ -1,4 +1,6 @@
-//! Shared, test-only helpers (crate-internal).
+//! Shared, test-only helpers. Crate-internal for the core's own tests, and additionally
+//! exposed under the `test-util` cargo feature so companion integration tests can share the
+//! bind-verified port allocator (retiring the `free_port` TOCTOU flake class).
 
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -25,7 +27,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 /// `AddrInUse`. Confining candidates to 16000..32000 (all `< 32768`) means the OS never
 /// auto-assigns a colliding port; the only remaining loss is an unrelated process holding a port,
 /// which bind-verify skips.
-pub(crate) fn alloc_port() -> u16 {
+pub fn alloc_port() -> u16 {
     const LO: u32 = 16_000;
     const SPAN: u32 = 16_000; // 16000..32000 — wholly below the OS ephemeral floor (32768)
     static NEXT: AtomicU32 = AtomicU32::new(0);

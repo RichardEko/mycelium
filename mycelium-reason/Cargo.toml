@@ -34,11 +34,19 @@ serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2       = "0.10"
 tracing    = "0.1"
+# Operator-visible tripwires through the `metrics` facade (Run-39 floor fix): the router emits
+# route attempt/failover/no-provider/exhausted counters. Tiny, unconditional (like wasm-host); a
+# no-op without a recorder, and it flows to the node's /metrics when the embedder enables
+# mycelium's `metrics` feature.
+metrics    = "0.24"
 
 # Gateway feature only
 axum = { version = "0.8", optional = true }
 
 [dev-dependencies]
+# test-only: the bind-verified, process-unique port allocator (retires the free_port TOCTOU
+# flake class). Cargo unions this with the normal `mycelium` dep for the test target only.
+mycelium = { path = "..", default-features = false, features = ["test-util"] }
 tokio    = { version = "1.35", features = ["full"] }
 tempfile = "3"
 reqwest  = { version = "0.12", features = ["json"] }

@@ -51,5 +51,8 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 metrics = "0.24"
 
 [dev-dependencies]
+# test-only: the bind-verified, process-unique port allocator (retires the free_port TOCTOU
+# flake class). Cargo unions this with the normal `mycelium` dep for the test target only.
+mycelium = { path = "..", default-features = false, features = ["test-util"] }
 metrics-util = "0.20.4"
 tokio = { version = "1.35", features = ["full"] }

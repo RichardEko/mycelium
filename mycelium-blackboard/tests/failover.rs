@@ -13,8 +13,10 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// The core's bind-verified, process-unique loopback allocator (`mycelium::test_util::alloc_port`,
+/// the `test-util` feature) — retires the old bind-:0-and-drop TOCTOU flake class.
 fn alloc_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    mycelium::test_util::alloc_port()
 }
 
 fn alloc_two_sorted_ports() -> (u16, u16) {

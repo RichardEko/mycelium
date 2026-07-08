@@ -250,6 +250,7 @@ impl InferenceRouter {
     ) -> Result<Routed, RouteError> {
         let candidates = self.candidates(q);
         let Some((chosen, _)) = candidates.first() else {
+            metrics::counter!("mycelium_reason_route_no_provider_total").increment(1);
             return Err(RouteError::NoProvider);
         };
         if let Some(t) = trace {
@@ -271,6 +272,7 @@ impl InferenceRouter {
         let to_try = candidates.len().min(self.cfg.max_attempts);
         let mut failures: Vec<(NodeId, String)> = Vec::new();
         for (attempt, (node, _fill)) in candidates.iter().take(self.cfg.max_attempts).enumerate() {
+            metrics::counter!("mycelium_reason_route_attempts_total").increment(1);
             let per_attempt_timeout = if attempt + 1 == to_try {
                 self.cfg.call_timeout
             } else {
@@ -314,7 +316,12 @@ impl InferenceRouter {
                 t.llm_call(node, false, 0, duration_ms, Some(&err));
             }
             failures.push((node.clone(), err));
+            // Failover: this attempt failed and at least one candidate remains to try.
+            if attempt + 1 < to_try {
+                metrics::counter!("mycelium_reason_route_failovers_total").increment(1);
+            }
         }
+        metrics::counter!("mycelium_reason_route_exhausted_total").increment(1);
         Err(RouteError::Exhausted(failures))
     }
 }
