@@ -29,6 +29,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   **this** node (no remote policy authority); under `compliance`, `check_caller`/`guarded_rpc_serve`
   gate a served RPC and **seal** each `Invoke`/`Denied` into the tamper-evident audit chain (the
   "prove X was stopped" foundation). The wedge demo, verification tool, and examples are later PRs.
+- **`mycelium-guardrails` policy-audit verification tool + worked wedge demo** (PR 2, feature
+  `compliance`): `prove_denials`/`narrate_proof` reconstruct a provider's tamper-evident chain and
+  prove which unauthorized invocations it sealed as `Invoke`/`Denied` — the honest claim is
+  *provable-stopping* (these denials cannot have been forged/reordered/removed without the chain
+  failing to verify), **not** a global "X could not have done Y" (the chain is per-node; only gated
+  capabilities seal denials). The self-contained `guardrail_wedge` example (an unauthorized agent
+  structurally stopped at the provider gate; the proof reconstructed by a neutral observer node) +
+  `ci_smoke.sh` earn the wedge at the smoke bar.
 - **`mycelium-reason`** (new companion crate; strategy + code-verified bindings in
   [`docs/plans/mycelium-reason.md`](docs/plans/mycelium-reason.md)): the v3.0 Tier-3
   differentiators on the public API only — **capability-routed inference**

@@ -168,6 +168,10 @@ jobs:
       - run: ./scripts/ci-retest.sh -p mycelium-guardrails --features compliance
       - run: cargo clippy -p mycelium-guardrails --all-targets -- -D warnings
       - run: cargo clippy -p mycelium-guardrails --features compliance --all-targets -- -D warnings
+      # PR 2 — the guardrail-wedge worked example + policy-audit verification tool: an unauthorized
+      # agent structurally stopped at the provider gate, with a tamper-evident cryptographic proof
+      # reconstructed by a neutral observer node (honest framing — provable-stopping, not global).
+      - run: ./mycelium-guardrails/ci_smoke.sh
 
   python-sdk:
     # The repo's first Python CI job: mycelium-py (call_typed) + the LangGraph
