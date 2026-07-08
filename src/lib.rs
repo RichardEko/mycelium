@@ -23,13 +23,14 @@
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let node_id = NodeId::new("127.0.0.1", 7946)?;
 //!     let mut config = GossipConfig::default();
+//!     config.bind_port = 7946;   // the agent listens on `bind_port`, not the NodeId's port — set both
 //!     config.bootstrap_peers = vec![NodeId::new("127.0.0.1", 7947)?];
 //!
 //!     let agent = Arc::new(GossipAgent::new(node_id, config));
 //!     agent.start().await?;
 //!
 //!     // Layer 1 — KV state
-//!     agent.kv().set("load/self", Bytes::from_static(b"queue=0"));
+//!     let _ = agent.kv().set("load/self", Bytes::from_static(b"queue=0"));
 //!     let val = agent.kv().get("load/self");
 //!
 //!     // Layer 2 — signals

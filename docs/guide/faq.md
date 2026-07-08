@@ -50,14 +50,15 @@ Two `mycelium` vs `mycelium-core` crate-choice questions are answered in the
 
 ## Where do I start — hello world?
 
-1. Run a two-node mesh from the README [Run](../../README.md#run) section
-   (`cargo run -- --port 7946`, then a second node with `--peers`).
+1. **`cargo run --example hello_mesh`** — two agents share a value by gossip, no setup, no LLM.
+   Read the ~25 lines ([`examples/hello_mesh.rs`](../../examples/hello_mesh.rs)): that's the whole
+   Layer-I substrate everything else builds on.
 2. Read guide [00-concepts.md](00-concepts.md) for the three-layer model and the
    sub-handle API (`kv()`, `mesh()`, `capabilities()`, `consensus()`).
 3. Skim a runnable example close to your problem from the table above.
 
-The minimal embed (start an agent, set a key, emit a signal, opt into consensus)
-is at the top of the [guide README](README.md).
+For an interactive two-node REPL (`set`/`get` keys by hand) see the README
+[Run](../../README.md#run) section.
 
 **Building a use case *on top* of Mycelium** (a coordinator, an agent fleet, your
 own companion crate)? Go to **[Building on Mycelium](building-on-mycelium.md)** — the
