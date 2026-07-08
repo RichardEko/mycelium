@@ -150,6 +150,52 @@ jobs:
       # The fleet-reasoning worked example (all three wedges, three-node mesh), Docker-free.
       - run: ./mycelium-reason/ci_smoke.sh
 
+  python-sdk:
+    # The repo's first Python CI job: mycelium-py (call_typed) + the LangGraph
+    # checkpointer, run as real integration tests against a two-node reason mesh
+    # (the reason_node example) — node B resumes what node A checkpointed.
+    name: Python SDK + LangGraph checkpointer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p mycelium-reason --features llm,gateway --example reason_node
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Start reason nodes (A + B, meshed)
+        run: |
+          mkdir -p "$RUNNER_TEMP/blobs-a" "$RUNNER_TEMP/blobs-b"
+          BIND_PORT=7101 HTTP_PORT=8101 MODEL=fable-mini BLOB_DIR="$RUNNER_TEMP/blobs-a" \
+            ./target/debug/examples/reason_node > "$RUNNER_TEMP/node-a.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/node-a.pid"
+          BIND_PORT=7102 HTTP_PORT=8102 BOOTSTRAP=127.0.0.1:7101 MODEL=fable-mini BLOB_DIR="$RUNNER_TEMP/blobs-b" \
+            ./target/debug/examples/reason_node > "$RUNNER_TEMP/node-b.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/node-b.pid"
+          for port in 8101 8102; do
+            for i in $(seq 1 60); do
+              curl -sf "http://127.0.0.1:$port/health" > /dev/null && break
+              if [ "$i" -eq 60 ]; then
+                echo "node on port $port never became healthy"
+                cat "$RUNNER_TEMP"/node-*.log
+                exit 1
+              fi
+              sleep 1
+            done
+          done
+      - run: pip install './mycelium-py[typed]' ./langgraph-checkpoint-mycelium pytest pytest-asyncio langgraph httpx-sse
+      - run: pytest langgraph-checkpoint-mycelium/tests mycelium-py/tests/test_typed.py -v
+        env:
+          MYCELIUM_TEST_PORT: 8101
+          MYCELIUM_TEST_PORT_B: 8102
+      - name: Stop reason nodes
+        if: always()
+        run: |
+          for n in a b; do
+            [ -f "$RUNNER_TEMP/node-$n.pid" ] && kill "$(cat "$RUNNER_TEMP/node-$n.pid")" 2>/dev/null || true
+          done
+
   conway-gpu:
     # Standalone GPU demo (examples/conway-gpu): excluded from the workspace so its
     # wgpu stack is NOT a mycelium dev-dependency (it used to drag the whole GPU

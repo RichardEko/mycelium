@@ -1,0 +1,22 @@
+[build-system]
+requires      = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name        = "langgraph-checkpoint-mycelium"
+version     = "0.1.0"
+description = "LangGraph checkpointer backed by the Mycelium mesh — metadata in gossiped KV, payloads in the content-addressed blob tier"
+requires-python = ">=3.10"
+dependencies = [
+    "langgraph-checkpoint>=2",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "langgraph>=1"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/langgraph_checkpoint_mycelium"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

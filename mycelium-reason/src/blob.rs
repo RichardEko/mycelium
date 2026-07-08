@@ -154,10 +154,11 @@ impl Drop for BlobServerHandle {
 }
 
 /// Advertise this node as a blob provider and serve [`BLOB_FETCH_KIND`] RPCs against
-/// `store`. Reply is the blob bytes, or **empty bytes** for a miss / malformed id (the
-/// caller verifies the hash anyway, so empty is unambiguous — no valid blob is empty
-/// with a non-empty id... a zero-length blob's id is the SHA-256 of "" and callers
-/// verify, so even that degenerate case round-trips correctly).
+/// `store`. Reply is the blob bytes, or **empty bytes** for a miss / malformed id —
+/// unambiguous because the one blob whose bytes ARE empty (id = SHA-256 of `""`) is
+/// never fetched over the mesh: [`MeshBlobStore::get`] answers it from the content
+/// address alone (the LangGraph checkpointer stores `None` channel values as exactly
+/// this blob, so the degenerate case is a real path, not a curiosity).
 pub fn spawn_blob_server(agent: &Arc<GossipAgent>, store: Arc<FsBlobStore>) -> BlobServerHandle {
     let cap = agent
         .capabilities()
@@ -206,7 +207,15 @@ impl MeshBlobStore {
 
     /// Local hit, else fetch from mesh providers. Every mesh reply is verified against
     /// the content address before being cached or returned — providers are untrusted.
+    ///
+    /// The **empty blob** (id = SHA-256 of `""`) is answered from the address alone:
+    /// its bytes are fully determined by its id, and it *cannot* travel the fetch RPC,
+    /// whose empty reply means "miss". Serializers do mint it (a typed `None` payload
+    /// serializes to zero bytes), so this is a load-bearing case.
     pub async fn get(&self, id: &BlobId) -> Option<Bytes> {
+        if *id == BlobId::of(&[]) {
+            return Some(Bytes::new());
+        }
         if let Some(bytes) = self.local.get(id) {
             return Some(bytes);
         }

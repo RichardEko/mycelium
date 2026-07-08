@@ -34,3 +34,5 @@ docs/publications/**/*.out
 docs/publications/**/*.log
 docs/publications/**/*.pdf
 docs/publications/paper2a/main.html
+.pytest_cache/
+*.egg-info/
