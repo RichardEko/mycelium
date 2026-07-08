@@ -12,7 +12,7 @@
 //! re-advertising the same `(node, ns, name)` key with attributes would LWW-churn
 //! against the skill's own persist task.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -80,8 +80,17 @@ pub async fn serve_model(
 pub struct RouterConfig {
     /// How many candidates to try before giving up (failover depth).
     pub max_attempts: usize,
-    /// Per-attempt RPC timeout.
+    /// RPC timeout for the **final** attempt (or a lone candidate): the full inference
+    /// budget, since there is no one left to fail over to.
     pub call_timeout: Duration,
+    /// RPC timeout for any **non-final** attempt, i.e. while failover candidates remain.
+    /// Deliberately shorter than `call_timeout`: a mesh RPC to a dead peer has no fast
+    /// connection-refused, so without this a candidate that died inside the SWIM detection
+    /// window (still in `peers()` for a beat) would burn the full inference budget before
+    /// failing over. Failing *over* fast is the right call when an alternative exists;
+    /// the last candidate still gets `call_timeout` so a genuinely slow lone provider is
+    /// not cut off.
+    pub failover_timeout: Duration,
     /// Freshness window for opacity + pheromone load reads.
     pub load_max_age: Duration,
 }
@@ -91,6 +100,7 @@ impl Default for RouterConfig {
         Self {
             max_attempts: 3,
             call_timeout: Duration::from_secs(30),
+            failover_timeout: Duration::from_secs(8),
             load_max_age: Duration::from_secs(10),
         }
     }
@@ -167,10 +177,22 @@ impl InferenceRouter {
     }
 
     /// The ranked candidate list for `q`: resolve `llm/{model}`, intersect with the
-    /// `llm-meta` ad when constraints are given, drop opaque nodes, then sort by
-    /// (pheromone fill, node id) — the id tiebreak makes the order deterministic.
-    /// Fill is the max `fill_ratio` across the node's fresh load entries; a node with
-    /// no pheromone trail is 0.0 (transparent).
+    /// `llm-meta` ad when constraints are given, **drop nodes SWIM believes are dead**,
+    /// drop opaque nodes, then sort by (pheromone fill, node id) — the id tiebreak makes
+    /// the order deterministic. Fill is the max `fill_ratio` across the node's fresh load
+    /// entries; a node with no pheromone trail is 0.0 (transparent).
+    ///
+    /// The liveness filter is load-bearing for failover. A killed node lingers in the
+    /// capability *freshness* window for ~90 s (3× the 30 s re-advertise interval) — it
+    /// stops refreshing but there is no instant tombstone, so `resolve` keeps returning
+    /// it. Routing to it is expensive: a mesh RPC to a dead peer has no fast connection-
+    /// refused, so it blocks the whole per-attempt timeout. `peers()` is the SWIM
+    /// live-membership view, from which a failed node departs within its detection window
+    /// (~`swim_probe_interval + swim_suspicion_timeout`, a few seconds by default) — an
+    /// order of magnitude faster than freshness. So the router routes only to nodes SWIM
+    /// currently believes are alive (plus **self**, always live and never in `peers()`).
+    /// A brief window remains between a node's death and SWIM detecting it, bounded by one
+    /// per-attempt timeout; that is inherent to the failure detector, not the router.
     pub fn candidates(&self, q: &ModelQuery) -> Vec<(NodeId, f32)> {
         let caps = self.agent.capabilities();
         let mut nodes: Vec<NodeId> =
@@ -185,6 +207,13 @@ impl InferenceRouter {
                 caps.resolve(&meta_filter).into_iter().map(|(n, _)| n).collect();
             nodes.retain(|n| meta_nodes.contains(n));
         }
+
+        // Liveness: keep self (always live, never listed in its own peer set) + nodes SWIM
+        // currently believes are alive. Drops a killed peer an order of magnitude sooner
+        // than the capability freshness window would.
+        let self_id = self.agent.node_id();
+        let live: HashSet<NodeId> = self.agent.peers().into_iter().collect();
+        nodes.retain(|n| n == self_id || live.contains(n));
 
         nodes.retain(|n| !caps.is_node_opaque(n, signal_kind::LLM_INVOKE, self.cfg.load_max_age));
 
@@ -236,13 +265,22 @@ impl InferenceRouter {
         });
         let payload = Bytes::from(request.to_string().into_bytes());
 
+        // How many we will actually try — the last of these gets the full `call_timeout`,
+        // earlier ones the shorter `failover_timeout` (fail over fast, don't burn the
+        // inference budget on a candidate that may have just died).
+        let to_try = candidates.len().min(self.cfg.max_attempts);
         let mut failures: Vec<(NodeId, String)> = Vec::new();
         for (attempt, (node, _fill)) in candidates.iter().take(self.cfg.max_attempts).enumerate() {
+            let per_attempt_timeout = if attempt + 1 == to_try {
+                self.cfg.call_timeout
+            } else {
+                self.cfg.failover_timeout
+            };
             let started = std::time::Instant::now();
             let reply = self
                 .agent
                 .service()
-                .rpc_call(node.clone(), signal_kind::LLM_INVOKE, payload.clone(), self.cfg.call_timeout)
+                .rpc_call(node.clone(), signal_kind::LLM_INVOKE, payload.clone(), per_attempt_timeout)
                 .await;
             let duration_ms = started.elapsed().as_millis() as u64;
 

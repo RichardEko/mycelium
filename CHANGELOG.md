@@ -9,6 +9,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **`InferenceRouter` is now robust to dead nodes** (`mycelium-reason`): routing candidates
+  are filtered to live SWIM members (`GossipAgent::peers()`, plus self), so a departed node
+  is dropped an order of magnitude faster than the ~90s capability-freshness window; and a
+  new `RouterConfig::failover_timeout` (default 8s) caps non-final attempts, so a candidate
+  that died inside the failure-detection window costs ~8s to fail over past, not the full
+  30s inference budget (the last/lone candidate still gets `call_timeout`). Surfaced by the
+  deploy/reheal flagship, which consequently drops its node-id rigging — the surviving node
+  can hold either id. Canary: `liveness_filter_drops_a_non_peer_cap`.
+
 ### Added
 - **`mycelium-reason`** (new companion crate; strategy + code-verified bindings in
   [`docs/plans/mycelium-reason.md`](docs/plans/mycelium-reason.md)): the v3.0 Tier-3

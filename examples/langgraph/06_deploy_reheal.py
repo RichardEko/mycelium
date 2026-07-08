@@ -67,17 +67,18 @@ MODEL = "reheal-demo"
 # Node A serves the model; node B reheals it. Distinct gossip + HTTP ports so both run on
 # one host; B bootstraps off A.
 #
-# SEAM NOTE (a real finding — see the plan's rung-6 notes): a killed node lingers in a
-# peer's capability view for the ~90s pheromone-freshness window (it simply stops
-# refreshing; there is no instant tombstone), and the InferenceRouter ranks equal-load
-# providers by ascending node-id. If the SURVIVING node had the higher gossip id, every
-# post-kill route would try the dead A first and eat the 30s per-attempt RPC timeout
-# before failing over. So the survivor B is given the LOWER gossip bind port (7301) — it
-# ranks itself first and routes land on it immediately. The HTTP ports keep the plan's
-# A=8301 / B=8302 assignment (those are what the driver + narrative speak to). This is a
-# deliberate deviation from the plan's literal BIND 7301(A)/7302(B), for robustness.
-A_BIND, A_HTTP = 7302, 8301
-B_BIND, B_HTTP = 7301, 8302
+# SEAM NOTE (a real finding, now FIXED in the router): a killed node lingers in a peer's
+# *capability freshness* view for ~90s (it stops refreshing; there is no instant
+# tombstone), so the router used to keep routing to it — and a mesh RPC to a dead peer has
+# no fast connection-refused, so each attempt ate the full per-attempt timeout. The fix
+# (mycelium-reason/src/route.rs): InferenceRouter now filters candidates to live SWIM
+# members (`peers()`), from which a departed node drops near-instantly on a graceful close
+# and within SWIM's detection window otherwise — an order of magnitude faster than
+# freshness. So this demo needs NO node-id rigging: A keeps the lower id (7301) and the
+# SURVIVOR B has the *higher* id (7302) — exactly the case that used to be slow — and the
+# router still lands post-kill routes on B immediately.
+A_BIND, A_HTTP = 7301, 8301
+B_BIND, B_HTTP = 7302, 8302
 
 # Generous CI-safe deadlines for the structural polls (kill/gossip races are real).
 HEALTH_TIMEOUT = 60.0
