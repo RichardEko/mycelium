@@ -15,6 +15,10 @@ Two embedded agents on loopback: one writes a value, the other learns it **by go
 broker, no config, no LLM, no features to enable. That's Layer I, the shared KV store everything
 else builds on. It's ~25 readable lines — start there: [`examples/hello_mesh.rs`](examples/hello_mesh.rs).
 
+Then `cargo run --example hello_capability` ([source](examples/hello_capability.rs)) shows the value
+proposition itself — one node advertises what it *does*, another finds it *by name* and calls it over
+RPC, **no registry and no configured addresses**.
+
 ## Where next?
 
 | You are… | Go to |

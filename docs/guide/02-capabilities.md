@@ -1,5 +1,11 @@
 # 02 — Capabilities: find nodes by what they do
 
+> **Run it first (30 s, no LLM):** `cargo run --example hello_capability`
+> ([`examples/hello_capability.rs`](../../examples/hello_capability.rs), ~45 readable lines) — one
+> node advertises `math/double` and serves it; another resolves it *by name* and calls it over RPC,
+> with no address ever configured. This chapter explains what that example does. (`llm_agent` is the
+> richer, LLM-driven version.)
+
 ## Concept
 
 In a traditional microservice architecture you resolve a service by its address
