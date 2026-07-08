@@ -36,3 +36,7 @@ required-features = ["compliance"]
 [[test]]
 name = "verify"
 required-features = ["compliance"]
+
+[[example]]
+name = "guardrail_wedge"
+required-features = ["compliance"]
