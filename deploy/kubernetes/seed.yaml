@@ -1,0 +1,71 @@
+# The seed — the bootstrap anchor a fresh cluster forms around. One replica, a stable
+# pod DNS name (StatefulSet + headless Service) that every worker bootstraps to. After
+# formation the seed is not special: membership spreads by gossip + SWIM, and a seed
+# restart only re-anchors *new* joiners (existing peers already know each other).
+apiVersion: v1
+kind: Service
+metadata:
+  name: mycelium-seed
+  labels: { app: mycelium, role: seed }
+spec:
+  clusterIP: None            # headless → gives the seed pod a stable DNS name
+  selector: { app: mycelium, role: seed }
+  ports:
+    - { name: gossip, port: 57000 }
+    - { name: gateway, port: 8300 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mycelium-seed
+  labels: { app: mycelium, role: seed }
+spec:
+  serviceName: mycelium-seed
+  replicas: 1
+  selector:
+    matchLabels: { app: mycelium, role: seed }
+  template:
+    metadata:
+      labels: { app: mycelium, role: seed }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8300"
+        prometheus.io/path: "/metrics"
+    spec:
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: mycelium
+          image: mycelium-demo:latest     # kustomization overrides this; see deploy/kubernetes/README.md
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: gossip, containerPort: 57000 }
+            - { name: gateway, containerPort: 8300 }
+          env:
+            - name: MYCELIUM_ROLE
+              value: "node"
+            - name: MYCELIUM_PORT
+              value: "57000"
+            - name: MYCELIUM_HTTP_PORT
+              value: "8300"
+            # node_id = advertised host:port. Use the routable pod IP (as the Docker scale
+            # harness uses `hostname -I`); SWIM handles the identity churn on a restart.
+            - name: MYCELIUM_HOSTNAME
+              valueFrom: { fieldRef: { fieldPath: status.podIP } }
+            # The seed is the root: no bootstrap peer. Workers bootstrap to it.
+            - name: MYCELIUM_PEERS
+              value: ""
+            - name: GOSSIP_CLUSTER_NAME
+              value: "mycelium-k8s"
+            - name: GOSSIP_SWIM_FAILURE_DETECTOR
+              value: "1"
+          readinessProbe:
+            httpGet: { path: /ready, port: 8300 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: 8300 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: "100m", memory: "64Mi" }
+            limits: { memory: "256Mi" }

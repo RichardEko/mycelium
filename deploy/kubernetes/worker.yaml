@@ -1,0 +1,81 @@
+# The workers — the horizontally-scaled body of the cluster. `kubectl scale statefulset
+# mycelium-worker --replicas=N` is the scale knob. On a multi-node k8s cluster the pods
+# spread across hosts, so each host carries its own share of the gossip connections — this
+# is what escapes the single-host Docker-bridge iptables ceiling documented in the scale
+# harness (docs/wiki/dev/testing/scale-tests.md). Every worker bootstraps to the seed's
+# stable pod DNS; the full topology then spreads by Ping peer-exchange + SWIM.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mycelium
+  labels: { app: mycelium, role: worker }
+spec:
+  clusterIP: None            # headless → stable per-pod DNS for the StatefulSet
+  selector: { app: mycelium, role: worker }
+  ports:
+    - { name: gossip, port: 57000 }
+    - { name: gateway, port: 8300 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mycelium-worker
+  labels: { app: mycelium, role: worker }
+spec:
+  serviceName: mycelium
+  replicas: 3                # the scale knob — `kubectl scale ... --replicas=N`
+  podManagementPolicy: Parallel   # bring workers up concurrently, not one-at-a-time
+  selector:
+    matchLabels: { app: mycelium, role: worker }
+  template:
+    metadata:
+      labels: { app: mycelium, role: worker }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8300"
+        prometheus.io/path: "/metrics"
+    spec:
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: mycelium
+          image: mycelium-demo:latest     # kustomization overrides this; see deploy/kubernetes/README.md
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: gossip, containerPort: 57000 }
+            - { name: gateway, containerPort: 8300 }
+          env:
+            - name: MYCELIUM_ROLE
+              value: "node"
+            - name: MYCELIUM_PORT
+              value: "57000"
+            - name: MYCELIUM_HTTP_PORT
+              value: "8300"
+            - name: MYCELIUM_HOSTNAME
+              valueFrom: { fieldRef: { fieldPath: status.podIP } }
+            # POD_NAMESPACE is referenced by MYCELIUM_PEERS below — k8s expands $(POD_NAMESPACE)
+            # in a later env value because it is defined earlier in this same list. This keeps the
+            # seed DNS name correct no matter what namespace kustomize deploys into.
+            - name: POD_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            # Bootstrap to the seed's stable StatefulSet pod DNS: <pod>.<svc>.<ns>.svc.cluster.local
+            - name: MYCELIUM_PEERS
+              value: "mycelium-seed-0.mycelium-seed.$(POD_NAMESPACE).svc.cluster.local:57000"
+            - name: GOSSIP_CLUSTER_NAME
+              value: "mycelium-k8s"
+            - name: GOSSIP_SWIM_FAILURE_DETECTOR
+              value: "1"
+            # Partial-mesh cap: bound each node's connection fan-out so a large cluster does not
+            # form a full O(N²) mesh (the same knob the Docker scale harness sets).
+            - name: GOSSIP_MAX_ACTIVE_CONNECTIONS
+              value: "16"
+          readinessProbe:
+            httpGet: { path: /ready, port: 8300 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: 8300 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: "100m", memory: "64Mi" }
+            limits: { memory: "256Mi" }

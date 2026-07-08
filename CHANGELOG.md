@@ -30,6 +30,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   production build.
 
 ### Added
+- **Reference Kubernetes deployment ([`deploy/kubernetes/`](deploy/kubernetes/)).** The multi-host
+  cluster `deployment.md` describes, now shipped as ready-to-apply manifests: a seed StatefulSet +
+  headless Service, a horizontally-scalable worker StatefulSet bootstrapping to the seed's stable
+  pod DNS (namespace-correct via downward-API env expansion), `/ready`+`/health` probes, `/metrics`
+  scrape annotations, and a management dashboard. `kubectl apply -k deploy/kubernetes`, then
+  `kubectl scale statefulset mycelium-worker --replicas=N`. This is the structural escape from the
+  single-host Docker-bridge iptables ceiling (`scale-tests.md`): on a multi-node cluster the pods
+  spread across hosts, so the O(N²) chain never forms on any one host. Cloud-agnostic (same
+  manifests on kind / EKS / GKE / AKS). Validated offline (`kubectl kustomize` → 7 well-formed
+  resources); not applied in CI — see [`deploy/kubernetes/README.md`](deploy/kubernetes/README.md).
 - **Operator docs: metrics reference + audit/transparency tail.** New
   [`docs/operations/metrics.md`](docs/operations/metrics.md) is the single, complete reference for
   every emitted Prometheus series (gossip · emergent · governor · artifact · guardrails · reason),
