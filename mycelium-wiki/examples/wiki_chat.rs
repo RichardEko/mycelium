@@ -226,7 +226,7 @@ async fn chat(store_dir: &Path, group: &str, mock: bool) {
 // ── plumbing ─────────────────────────────────────────────────────────────────────
 
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    mycelium::test_util::alloc_port()
 }
 
 /// Minimal flag parsing: `--key value` pairs + `--mock`, plus a trailing positional (the question).
