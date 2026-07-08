@@ -15,10 +15,12 @@ use mycelium_wiki::{
 };
 
 /// A free TCP port (bind :0, read it, drop). The drop opens a TOCTOU window against parallel
-/// test binaries — agents start via [`start_pair`]'s retry, never a bare unwrap (an
-/// `AddrInUse` flaked the sibling failover test in CI, 2026-07-07).
+/// test binaries — retired here by delegating to the core's bind-verified, process-unique
+/// allocator (`mycelium::test_util::alloc_port`, the `test-util` feature). Agents still start via
+/// [`start_pair`]'s retry for any residual loss (an `AddrInUse` flaked the sibling failover test
+/// in CI, 2026-07-07).
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    mycelium::test_util::alloc_port()
 }
 
 /// Start one agent, `None` if the bind lost the port race.

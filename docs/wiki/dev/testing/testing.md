@@ -87,10 +87,18 @@ opacity shed bug were both found that way), and "fixing" a flake by widening a t
 forbidden. Deterministic unit gates stay on bare `cargo test`. This is the class-level
 prevention Run 37 asked for: a wall-clock flake can no longer red main *or* hide silently.
 
-Companion-crate integration tests that can't reach `test_util` and bind real agents must
-**retry the bind, never bare-`unwrap` it**: the bind-`:0`-read-drop idiom (`free_port()`)
-opens a TOCTOU window against parallel test binaries (`AddrInUse` flaked
-`mycelium-wiki/tests/failover.rs` in CI, 2026-07-07). Retry at the granularity the topology
+Companion integration tests now reach the same allocator: `alloc_port` is exposed under the
+core's `test-util` cargo feature (Run-39 floor fix), and every companion with a real-agent
+`tests/` suite pulls `mycelium = { path = "..", features = ["test-util"] }` as a **dev-dependency**
+and calls `mycelium::test_util::alloc_port()` in place of its old `free_port()`. That is the
+class-level prevention — the bind-`:0`-read-drop idiom is gone from the `tests/` surface, so no
+companion re-opens the TOCTOU window (only the `examples/` `free_port` remain, a follow-up).
+
+The bind retry stays as defense-in-depth for the residual case — an agent under test binds a port
+`alloc_port` returned but a foreign process grabbed it first: **retry the bind, never bare-`unwrap`
+it**. The old bind-`:0`-read-drop idiom (`free_port()`) opened a TOCTOU window against parallel
+test binaries (`AddrInUse` flaked `mycelium-wiki/tests/failover.rs` in CI, 2026-07-07). Retry at
+the granularity the topology
 forces: per-agent with fresh ports when nodes join one at a time (the wasm-host tests'
 16-attempt loop), **per-pair** when mutual bootstrap fixes both ports before either agent
 starts (`start_pair()` in the wiki tests — shut the half-started survivor down before

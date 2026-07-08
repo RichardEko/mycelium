@@ -51,6 +51,9 @@ llm = ["gateway"]
 # `gateway` (the auth/audit HTTP surface) + `tls` (signed identity + roles) and
 # pulls in `sha2` for the audit hash-chain (already in the tree via ed25519-dalek).
 compliance = ["mycelium-core/compliance", "gateway", "tls", "dep:sha2", "dep:jsonwebtoken"]
+# Exposes `test_util::alloc_port` (a bind-verified port allocator) for companion integration
+# tests. Test-only — no runtime deps, never enable in a production build.
+test-util = []
 
 # The `fuzz/` directory is its own cargo-fuzz crate; keep it out of any
 # implicit-workspace traversal from this parent manifest.

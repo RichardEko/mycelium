@@ -11,9 +11,10 @@ use std::time::Duration;
 
 /// A free ephemeral port (kernel-assigned), avoiding the PID-derived fixed-port collisions that
 /// flaked under parallel CI / re-runs (lingering TIME_WAIT sockets, two test processes landing on
-/// the same `pid % 400` base).
+/// the same `pid % 400` base) — retired here by delegating to the core's bind-verified,
+/// process-unique allocator (`mycelium::test_util::alloc_port`, the `test-util` feature).
 fn alloc_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    mycelium::test_util::alloc_port()
 }
 
 /// Two distinct free ports, lower first — so "lowest candidate id wins" stays deterministic
