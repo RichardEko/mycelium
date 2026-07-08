@@ -104,9 +104,9 @@
 //! | `sys/identity/{node}`              | mTLS — 32-byte Ed25519 verifying key; written at startup by TLS-enabled nodes |
 //! | `cap/{node}/llm/inference`         | LLM backend capability (model, context, backend, endpoint attrs) |
 //! | `cap/{node}/llm/installable`       | LLM models that can be pulled (model, size_gb, est_mins attrs) |
-//! | `cap/{node}/llm/loading`           | LLM model pull in progress (model, progress 0–100 attrs)     |
+//! | `cap/{node}/llm/loading`           | LLM model pull in progress; the shipped provisioner writes a `pct` (0–100) attr (the `llm_agent` example's *simulated* pull uses `progress`) |
 //! | `cap/{node}/{ns}/installable`      | Any dynamically provisionable software capability             |
-//! | `cap/{node}/{ns}/loading`          | Provisioning in progress; `progress` attr 0–100              |
+//! | `cap/{node}/{ns}/loading`          | Provisioning in progress; `pct` attr 0–100, written by `mycelium-wasm-host`'s `Provisioner` (read by `mycelium-reason`'s `ModelDependency::loading_progress`) |
 //! | `svc/{kind}/{node}`                | Persistent capability advertisements (`advertise_persistent`; tombstoned on handle drop) |
 //! | `log/{stream}/{hlc_hex}`           | Append-only KV log entries (`KvHandle::append`)              |
 //! | `clog/{…}`                         | Consumer positions for group log subscription (`subscribe_log_group`) |
@@ -118,6 +118,12 @@
 //! | `wiki/{group}/proposal/{id}`       | `mycelium-wiki` companion — evaporating edit proposals (drained by the curator) |
 //! | `tuple/inflight/{ns}/{id}`         | `mycelium-tuple-space` companion — advisory in-flight claim (JSON value; expiry is read-side, swept by the primary) |
 //! | `sys/tuple/{node}/{ns}/…`          | `mycelium-tuple-space` companion — monitoring counters, role, and the backpressure pheromone (`…/pressure/{stage}`) |
+//! | `cap/{node}/llm/{model}`           | `mycelium-reason` companion — a served model *is a prompt skill* (`serve_model` → `register_prompt_skill`); the presence cap for `llm/{model}` (template in `prompts/`) |
+//! | `cap/{node}/llm-meta/{model}`      | `mycelium-reason` companion — the parallel **attributed** model-metadata ad (`ctx_window`, `family`, extras); separate cap so attribute updates don't LWW-churn the skill's own persist task |
+//! | `cap/{node}/reason/blob-cache`     | `mycelium-reason` companion — this node serves content-addressed blobs (RPC `reason.blob.fetch`); `MeshBlobStore` discovers providers via this cap |
+//! | `log/reason/{run_id}/{node}/{hlc}` | `mycelium-reason` companion — fleet-reasoning trace substreams (one per writer; a shared stream would collide same-ms HLC keys — `TraceRecorder`/`replay`) |
+//! | `ckpt/{thread}/{ns}/{id}`          | `langgraph-checkpoint-mycelium` — LangGraph checkpoint **index** rows (metadata inline; payloads in the blob tier). Written by the Python saver via the gateway KV endpoint |
+//! | `ckptw/{thread}/{ns}/{id}/{task}/{idx}` | `langgraph-checkpoint-mycelium` — LangGraph pending-write index rows (one blob per write) |
 //!
 //! Layer-III writes that read or write KV (consensus engine,
 //! `sys/topology-override` reads) are documented at their call sites as

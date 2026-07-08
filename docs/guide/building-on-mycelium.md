@@ -57,11 +57,15 @@ collision, so the discipline is yours to keep. The substrate and its layers own 
 prefixes; **do not write under them:**
 
 > `grp/` · `sys/` · `consensus/` · `cap/` · `req/` · `cap-group/` · `gcap/` · `mailbox/` ·
-> `schemas/` · `tools/` · `agent/` · `tuple/` (the full authoritative table with per-key
-> semantics is in [`src/lib.rs`](../../src/lib.rs) → *KV namespace ownership*).
+> `schemas/` · `tools/` · `agent/` · `svc/` · `log/` · `clog/` · `lock/` · `prompts/` ·
+> `skills/` (the full authoritative table with per-key semantics is in
+> [`src/lib.rs`](../../src/lib.rs) → *KV namespace ownership*). Note `log/` in particular:
+> `KvHandle::append` writes `log/{stream}/…`, so give your streams an app-scoped name —
+> don't write raw `log/` keys.
 >
-> Companion claims: `ckpt/` + `ckptw/` (checkpoint index rows — `langgraph-checkpoint-mycelium`)
-> · `log/reason/` (fleet-reasoning trace substreams — `mycelium-reason`). The
+> Companion claims: `tuple/` (`mycelium-tuple-space`) · `wiki/` (`mycelium-wiki`) ·
+> `installable/` + `comp/` (`mycelium-wasm-host`) · `ckpt/` + `ckptw/` (checkpoint index rows,
+> `langgraph-checkpoint-mycelium`) · `log/reason/` (trace substreams, `mycelium-reason`). The
 > `reason/blob-cache` **capability** marks blob-tier providers (`mycelium-reason`).
 
 Pick a distinct top-level prefix for your app's state (e.g. `myapp/…`) and keep all your

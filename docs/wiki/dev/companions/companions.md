@@ -30,6 +30,21 @@ via wasm-host).
   document (superset of the A2A AgentCard), CRDT-assembled domain endpoint, schema
   migrations. PRs #44–#49, #83–#88. Domain positioning:
   [coordinator-free-recursion](../../domain/theory/coordinator-free-recursion.md).
+- **`mycelium-reason/`** — the **v3.0 LLM-authoring DX companion** (a *different axis* from the
+  coordination crates above — see [pattern-coverage](../../domain/pattern-coverage.md) → the LLM-DX
+  axis). Three Tier-3 wedges: ① **capability-routed inference** (`InferenceRouter`: resolve → drop
+  opaque → rank by `peer_load` fill → failover — resolution is load-blind, so the routing is a real
+  layer, not a byproduct; `serve_model` = model-is-a-prompt-skill `llm/{model}` + attributed
+  `llm-meta/{model}`), ② **fleet-reasoning traces** (`TraceRecorder`/`replay`/`narrate` on per-writer
+  log substreams `reason/{run_id}/{node}` — a shared stream collides same-ms HLC keys; optional WS2
+  audit-chain anchoring under `compliance`), ③ **artifact-aware resume** (`require_model` demand half;
+  install half is wasm-host's `model_deploy`). Plus a content-addressed **blob tier**
+  (`FsBlobStore`/`MeshBlobStore`/`spawn_blob_server`, ≤ 8 MiB v1) + `/gateway/reason/{blob,trace}`
+  routes. Zero core changes, zero new locks. **Python tier** (separate packages): the
+  **`langgraph-checkpoint-mycelium`** `BaseCheckpointSaver` (index rows in KV `ckpt/`/`ckptw/`,
+  payloads in the blob tier, cross-node `StateGraph` resume proven in CI) and `mycelium.call_typed`.
+  PRs #130/#131 (Tiers 3/1/2 shipped 2026-07-08); the repo's first Python CI job landed with it. Plan:
+  `docs/plans/mycelium-reason.md`.
 
 Both tuple-space and blackboard implement the **exactly-once-effect contract** — the shared
 artifact is the *contract*, not code (`docs/design/exactly-once-effect.md`; a shared overlay
