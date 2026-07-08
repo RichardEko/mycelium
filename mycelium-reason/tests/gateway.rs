@@ -5,11 +5,12 @@
 #![cfg(all(feature = "gateway", feature = "llm"))]
 #![allow(clippy::field_reassign_with_default)]
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use mycelium::{GossipAgent, GossipConfig, NodeId};
-use mycelium_reason::{FsBlobStore, TraceRecorder, reason_router};
+use mycelium::{EchoBackend, GossipAgent, GossipConfig, NodeId, PromptTemplate};
+use mycelium_reason::{FsBlobStore, ModelProfile, TraceRecorder, reason_router, serve_model};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn gateway_blob_roundtrip_and_trace_endpoint() {
@@ -111,6 +112,87 @@ async fn gateway_blob_roundtrip_and_trace_endpoint() {
     assert_eq!(narrative.len(), 2);
     assert!(narrative[0].contains("tool checkpoint-write (ok)"));
     assert!(narrative[1].contains("resumed with fable-mini"));
+
+    agent.shutdown_with_timeout(Duration::from_secs(5)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn gateway_route_endpoint_routes_and_reports_no_provider() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(FsBlobStore::open(dir.path()).unwrap());
+
+    // Same bind-race hardening as the blob test.
+    let mut started = None;
+    for _ in 0..16 {
+        let base = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let http_port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = base;
+        cfg.http_port = Some(http_port);
+        let agent = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", base).unwrap(), cfg));
+        agent.with_http_routes(reason_router(Arc::clone(&agent), Arc::clone(&store)));
+        if agent.start().await.is_ok() {
+            started = Some((agent, base, http_port));
+            break;
+        }
+    }
+    let (agent, base, http_port) = started.expect("could not bind agent + gateway after 16 attempts");
+
+    let url = format!("http://127.0.0.1:{http_port}");
+    let http = reqwest::Client::new();
+    for _ in 0..100 {
+        if http.get(format!("{url}/health")).send().await.is_ok() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // Serve `fable-mini` on this node with an EchoBackend + `{{input}}` template — so a
+    // routed call echoes the input back (output is `echo: {input}`).
+    let template = PromptTemplate {
+        system: "deterministic echo".into(),
+        user_template: "{{input}}".into(),
+        max_tokens: 512,
+        temperature: 0.0,
+        metadata: HashMap::new(),
+    };
+    let profile =
+        ModelProfile { model: "fable-mini".into(), ctx_window: Some(8192), family: Some("echo".into()), extra: Vec::new() };
+    let _model = serve_model(&agent, profile, template, Arc::new(EchoBackend)).await.unwrap();
+
+    // The skill's `llm/fable-mini` capability must resolve locally before a route can land;
+    // poll structurally rather than sleep a fixed interval.
+    let mut routed: Option<serde_json::Value> = None;
+    for _ in 0..100 {
+        let resp = http
+            .post(format!("{url}/gateway/reason/route"))
+            .json(&serde_json::json!({ "model": "fable-mini", "input": "hello-mesh" }))
+            .send()
+            .await
+            .unwrap();
+        if resp.status().as_u16() == 200 {
+            routed = Some(resp.json().await.unwrap());
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let routed = routed.expect("a provider answered the route within the poll window");
+    assert!(routed["output"].as_str().unwrap().contains("hello-mesh"), "echo output carries the input");
+    assert!(routed["model_used"].as_str().is_some(), "model_used reported");
+    assert_eq!(routed["provider"].as_str(), Some(format!("127.0.0.1:{base}").as_str()));
+    assert_eq!(routed["attempt"].as_u64(), Some(1));
+
+    // A model nobody serves → 404 no_provider.
+    let missing = http
+        .post(format!("{url}/gateway/reason/route"))
+        .json(&serde_json::json!({ "model": "no-such-model", "input": "x" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status().as_u16(), 404);
+    let body: serde_json::Value = missing.json().await.unwrap();
+    assert_eq!(body["error"].as_str(), Some("no_provider"));
 
     agent.shutdown_with_timeout(Duration::from_secs(5)).await;
 }

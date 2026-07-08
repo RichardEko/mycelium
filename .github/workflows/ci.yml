@@ -185,7 +185,7 @@ jobs:
             done
           done
       - run: pip install './mycelium-py[typed]' ./langgraph-checkpoint-mycelium pytest pytest-asyncio langgraph httpx-sse
-      - run: pytest langgraph-checkpoint-mycelium/tests mycelium-py/tests/test_typed.py -v
+      - run: pytest langgraph-checkpoint-mycelium/tests mycelium-py/tests/test_typed.py mycelium-py/tests/test_reason.py -v
         env:
           MYCELIUM_TEST_PORT: 8101
           MYCELIUM_TEST_PORT_B: 8102

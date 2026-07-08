@@ -69,7 +69,7 @@ Homes: a new `examples/langgraph/` dir (the LangGraph ladder) — distinct from 
 | 1 | typed output through the mesh | `01_typed.py` (`call_typed`) | ✅ echo |
 | 2 | LangGraph **on** Mycelium — state survives restart | `02_durable_state.py` (`MyceliumCheckpointSaver`) | ✅ echo |
 | 3 | cross-node resume — kill A, resume on B | `03_cross_node.py` | ✅ echo |
-| 4 | **routed inference** — LLM calls fail over to a healthy node | `POST /gateway/reason/route` + `ReasonClient.route`; `04_routed.py` | ✅ echo |
+| 4 | **routed inference** — LLM calls fail over to a healthy node | `POST /gateway/reason/route` + `ReasonClient.route` ✅ shipped; `04_routed.py` | ✅ echo |
 | 5 | **fleet-reasoning traces** — replay/narrate why the graph reasoned | `ReasonClient.trace` (GET `/gateway/reason/trace`); `05_traces.py` | ✅ echo |
 | 6 | **deploy/reheal** — model follows the thread across node death | Rust reheal-node + `06_deploy_reheal.py`; the install→serve bridge | ✅ echo · manual Ollama |
 | — | teach it | `docs/guide/15-reasoning-and-langgraph.md` (chapter 15) + the `examples/langgraph/README.md` ladder index | — |
@@ -77,7 +77,7 @@ Homes: a new `examples/langgraph/` dir (the LangGraph ladder) — distinct from 
 ## Build sequence (flagship-first, per the 2026-07-08 decision)
 
 1. **PR A — the routing surface + reheal foundation** (unblocks the flagship): `POST
-   /gateway/reason/route` (InferenceRouter-backed) + `ReasonClient.{route,trace}` in `mycelium-py` +
+   /gateway/reason/route` (InferenceRouter-backed) ✅ + `ReasonClient.{route,trace}` in `mycelium-py` ✅ +
    the Rust *reheal node* (require_model → install → `serve_model` bridge) + the echo-CI flagship demo.
 2. **PR B — the Ollama-manual flagship** variant (real GGUF; `model_deploy` machinery; manual, not CI)
    + guide chapter 15's flagship section.
