@@ -77,6 +77,17 @@ existed. This is the framework's own report card.
   (built at most). The decoder DoS above is exactly what they exist to catch;
   it sat uncaught for the life of the series. Found by promoting an in-suite
   mini-fuzz in Run 20.
+- 2026-07-09: **Concurrency Correctness** scored 8 across recent runs (≈32–39) while the
+  gateway consumer-group endpoint's `subscribe_log_group` "distributed lock" was a bare LWW
+  gossip-KV write with **no cross-node mutual exclusion** — every consumer "held" the claim and
+  drained the whole stream (100% double-delivery). Found by the #147 CI-gating attempt → fixed #151.
+- 2026-07-09: **Semantic Correctness** scored 8 across recent runs (≈32–39) while that same
+  endpoint **violated its exact-once delivery contract** (double-delivery across nodes; overlay
+  S11 "got 10" for 5 tasks). Found by gating the overlay suite (#149) → fixed #151.
+- 2026-07-09: **Test Architecture** scored 7–8 in Runs 1–39 while the correctness **Docker suites
+  ran manual-only** (overlay S11–S13, integration `make test`), never gating CI — which is *why*
+  the exact-once bug above went undetected. Gating them (#147) surfaced both it and the S13 ~50%
+  flake (#150, still unfixed on `main`).
 - 2026-06-11: **Resource Management** scored 8 in Runs 16–20 while tombstone
   GC never fired — the GC predicate compared packed-HLC entry timestamps
   against a wall-clock-ms cutoff, unsatisfiable since the v9 HLC migration
@@ -2428,3 +2439,42 @@ None — all three falsification probes passed. **Probe A (Architecture/Modulari
 | 25 | Dependency Hygiene | 8 | **Deep-dive:** the new crates add minimal, well-chosen deps (`mycelium-reason`: tokio/bytes/serde/sha2/tracing/+axum; `mycelium-guardrails`: tokio/tracing only). `--no-default-features` compiles (Probe B); `Cargo.lock` present; `cargo audit` green in CI. No supply-chain expansion of note. |
 | — | **Floor (lowest 3)** | **7, 7, 7** | Error Handling (wasm-host stringly app-layer regression, persists from Run 38) · Test Architecture (structural no-class-level-prevention weakness + Ollama variant unrun) · Observability (companion tripwires programmatic-only, persists). All three are *current, actionable, and orthogonal to the v3.0 work* — the audit correctly not crediting the primaries for fixing them. |
 | — | Mean (continuity footnote) | 7.9 | not a target (sum 197/25 = 7.88). Down from 8.04 **not because the project regressed** — the floor is identical (same three structural 7s) and two v3.0 primaries shipped clean with fresh passing evidence — but because Run 38's four fresh-evidence 9s (Philosophy/Resource-Mgmt/Testability/Documentation, all artifact-library-day-specific) decayed to 8 under the execution-evidence gate: this cycle's fresh evidence is companion-specific and honestly supports solid 8s, not re-earned 9s. The mean is a footnote; the floor is the headline. |
+
+## 2026-07-09 — Run 40 (M2)
+
+Deep-dive dimensions this run: **9 Concurrency Correctness, 11 Semantic Correctness, 12 Robustness, 18 Test Architecture, 21 Operational Readiness** — the band the #151 exact-once fix + the deploy scaffolding most touched. Execution evidence (all this run): `make test-overlay` **6/6** (S11 exact-once got-5 + S12/S13 green each run); lib suite **354 passed / 0 failed**; `make check` green (feature-matrix clippy incl. `--no-default-features`); falsification probes — LWW (3) + HLC (1) + framing (1) + oversized (1) all pass; and earlier this session: langgraph rungs 0–6 **7/7** end-to-end, coop `ci_smoke` **12/12**, `hello_mesh`/`hello_capability`/`conway` run. Context: #140–#151 since Run 39 (test-util floor fix, examples standard, k8s+terraform deploy scaffolding, and the **#151 exact-once correctness fix**).
+
+### Findings
+- **Major (fixed this run) — Concurrency/Semantic Correctness.** `subscribe_log_group`'s gateway consumer-group endpoint had a bare-LWW "distributed lock" with **no cross-node mutual exclusion** → 100% double-delivery (overlay S11 "got 10" for 5 tasks). Found by gating the manual-only overlay suite (#147). **Fixed (#151):** single-active consumer via a leased consensus claim with **converged-holder confirmation** (the propose return is optimistic; read the LWW-by-HLC converged committed holder). Verified `make test-overlay` **6/6**; contract clarified + pinned in `runtime-invariants`. Regression gate: overlay S11 (deterministic, not yet CI — overlay job is on the held #147 branch). Ledger: 2 entries.
+- **Minor (unfixed on `main`) — Test Architecture.** S13 (integration tuple-space) is ~50% flaky; `main`'s `run.sh` is one-shot (retry-hardening stuck on held #147). Tracked #150. Caps the dimension.
+- Falsification probes (3, all passed, kept as gates): LWW/HLC convergence, framing malformed/oversized frame survival, overlay exact-once under concurrent cross-node consumers.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 8 | The #151 contract clarity (single-active log consumer vs tuple-space work queue) *reinforces* coordinator-free/library-not-platform; deploy scaffolding is explicitly "reference, not platform". No drift. Read-based → 8. |
+| 2 | Conceptual Integrity | 8 | Consistent idiom; `SubscribeHandle` removed cleanly. One honest ding surfaced+fixed: "consumer group" naming implied load-balancing while the contract is single-active — now disambiguated in docs. |
+| 3 | Architecture | 8 | Layers respected; the exact-once fix uses Layer-III consensus correctly at the overlay endpoint; companions still public-API-only. Carried (v39) + fix examined. |
+| 4 | Modularity | 8 | `SubscribeHandle` module deleted with no coupling fallout (lib 354/0). Carried (v39). |
+| 5 | API Design | 8 | `subscribe_log_group` contract now legible; surface stable. Carried (v39), stale on the un-touched handles. |
+| 6 | Error Handling Model | 7 | **Carried (v39), stale.** The Run-38/39 finding — stringly `InstallError(String)` in `mycelium-wasm-host` app layer — **persists untouched** this cycle. Current-state weakness. |
+| 7 | Configurability | 8 | Carried (v39), stale — not re-examined; no config surface change of note. |
+| 8 | Language Best Practices | 8 | Carried (v39), stale. `#151` code is idiomatic (matches!/`let-else`, no new unsafe); the 433 `unwrap/expect` in core+agent are dominated by poison-recovering lock idioms + serde-on-known-good, not re-audited line-by-line this run. |
+| 9 | Concurrency Correctness | 8 | **Deep-dive.** A real cross-node race (exact-once double-delivery) found **and fixed + verified 6/6** this run — current-state improves, not drops (fix + deterministic gate). Held at 8 not 9: ledger-heaviest dimension (now +2 entries), and the fix just shipped — "solid + verified", not "excellent". |
+| 10 | Resource Management | 8 | Carried (v39), stale. The leased claim adds a lease-renew loop that exits on lost-claim (no leak path found on read); not lifecycle-probed beyond the endpoint. |
+| 11 | Semantic Correctness | 8 | **Deep-dive.** Exact-once (a semantic contract) was violated, now fixed + gated; the consensus optimistic-commit semantics are correctly handled (converged-holder read). LWW/HLC probes pass (3+1). Held 8 — just-shipped fix + ledger history temper from 9. |
+| 12 | Robustness | 8 | **Deep-dive + probe.** Malformed/oversized framing tests pass this run; the consensus optimistic-commit edge (two proposers both commit) is now *handled by design* rather than a latent hazard. 9 would need the whole hostile-input surface freshly swept → 8. |
+| 13 | Security | 8 | Carried (v39), stale. Guardrails Tier-C + tamper-evident chain unchanged; Run-38 publisher-key-rotation-posture gap still open. Not re-probed this run. |
+| 14 | Failure Mode Legibility | 8 | Carried (v39), stale. `#151`'s honest doc + the runtime-invariants "do not fix these" note improve legibility of *this* subsystem; broader surface not re-swept. |
+| 15 | Performance | 8 | Carried (v39), stale — no fresh perf run. Leased-claim adds a periodic consensus renew (bounded, ~2/s standby retries), not on the data hot path. |
+| 16 | Scalability | 7 | **Decayed (was v39 8), stale.** No fresh scale-suite run in two cycles; the single-host Docker-bridge ~100-node cliff persists (documented). Multi-host k8s is a real *mitigation path* but **validated-offline, not applied** — an unverified escape, so the carried 8 decays to an honest 7. |
+| 17 | Testability | 8 | Carried (v39). `test-util`/`alloc_port` feature (merged #141) genuinely improved cross-crate injectability; not re-deep-dived this run. |
+| 18 | Test Architecture | 6 | **Deep-dive — floor + headline.** The Run-39 structural weakness (no class-level prevention of timing-flaky tests) **manifested concretely**: S13 is ~50% flaky and **unfixed on `main`** (one-shot `run.sh`; retry stuck on held #147, #150). And the exact-once bug hid precisely *because* the correctness Docker suites (overlay) run **manual-only, never gating CI** — a structural gap this session exposed. Real strengths too (test-util, coop 12/12, overlay now a real gate) — but a live/unfixed flaky scenario caps at 6. |
+| 19 | Observability | 8 | **Lifted from v39 7.** The Run-38/39 finding (companion/artifact tripwire counters programmatic-only) is addressed: #140/#144 emit route + guardrail counters through the `metrics` facade (`/metrics`) and ship `docs/operations/metrics.md` as the single reference. Merged artifacts; the facade is no-op without a recorder (not live-scraped this run) → 8 not 9. |
+| 20 | Debuggability | 8 | Carried (v39), stale. `/gateway/explain`+`/diagnose`, mesh dashboard, `/ready` unchanged. |
+| 21 | Operational Readiness | 8 | **Deep-dive.** Real addition: the reference **k8s manifests** (rendered, 7 resources) + **Terraform** (EKS/GKE) making `deployment.md`'s prose real — but **validated-offline / not-applied** (honest labels). Core `is_ready`/`shutdown`/`sys/load` solid; coop+overlay+langgraph op-adjacent suites ran green. The unverified-on-a-real-cluster caveat holds it at 8. |
+| 22 | Evolvability | 8 | Carried (v39). Wire v12/PREV 11 policy intact (framing untouched by #151); CHANGELOG `[Unreleased]` actively maintained; #151 removed a module cleanly. |
+| 23 | Documentation | 8 | Examples-doc **standard + index** (#146, 5 READMEs normalized), the #151 contract clarity across library+gateway docs + the S11 docstring, three wiki-lints this session (incl. today's post-#151 doc-vs-code fixes). Read+lint-verified → 8. |
+| 24 | Developer Experience | 8 | `hello_mesh`/`hello_capability` starters + the funnel (#142/#143) and the examples standard genuinely smooth onboarding; `make check` is the one-command gate. Carried+examined → 8. |
+| 25 | Dependency Hygiene | 8 | Carried (v39). `--no-default-features` compiles (`make check` this run); `Cargo.lock` present; no new deps from #151 (fix is pure std/existing). `cargo audit` green in CI. |
+| — | **Floor (lowest 3)** | **6, 7, 7** | **Test Architecture** (S13 ~50% flake unfixed on `main` + correctness suites manual-only — the gap that hid #151) · **Error Handling** (wasm-host stringly app-layer, persists from Run 38) · **Scalability** (single-host cliff; multi-host escape validated-offline-not-applied). |
+| — | Mean (continuity footnote) | 7.8 | not a target (sum 196/25 = 7.84). Essentially flat vs Run 39's 7.88, but the *shape* moved: Observability lifted 7→8 (#144 addressed its finding), Test Architecture dropped 7→6 (its structural weakness manifested concretely as an unfixed flaky scenario), Scalability decayed 8→7 (stale + unverified escape). The floor **worsened** (6 vs 7) — correctly: the headline is that gating the manual-only suites found a real exact-once bug (now fixed, ledger-recorded) and a still-unfixed flake. The mean is a footnote; the floor is the story. |
