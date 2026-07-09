@@ -257,11 +257,11 @@ loop on freshly shipped work.
 Each step is independently shippable (its own PR), so the suite lands
 incrementally rather than as one mega-PR.
 
-## Open decisions for approval
-1. **Crate membership** — workspace `member` (covered by `cargo build`) vs
-   `exclude` (built explicitly, like `conway-gpu`). Default: member, fall back to
-   exclude if build time regresses CI.
-2. **Scope of first PR** — Step 0 + Step 1 together (proves the harness *and* a
-   real demo), then one PR per subsequent example. (Recommended.)
-3. **Naming** — `examples/coop/` vs `examples/food-rescue/`. Default: `coop`
-   (shorter; the README sets the scene).
+## Decisions (resolved at ship, 2026-06-20)
+All three pre-approval decisions were taken as their recommended defaults:
+1. **Crate membership** → **workspace member** — `examples/coop` is in `Cargo.toml`
+   `members`, built by `cargo build` and CI-gated via `coop-smoke`. Build time never
+   regressed enough to force `exclude` (unlike `conway-gpu`).
+2. **Scope of first PR** → **incremental** — the harness + first demo, then one PR per
+   subsequent example (see the *Shipped status* table above: PRs #52–#65).
+3. **Naming** → **`coop`** (`examples/coop/`; the README sets the scene).

@@ -426,12 +426,11 @@ sentinel). **G4 green** (`make test-scale-entries`: 30 nodes, 5000 entries, 100%
   `docs/operations/tuning.md` (UDP port, fan-out, probe knobs); this plan doc gets a
   per-phase execution record appended as work lands (mirrors `v2-m1/m2/m3` plan docs).
 
-## 5. Open decisions
+## 5. Decisions (resolved)
 
-1. **UDP port strategy** — reuse the gossip port number on a separate UDP socket, or a
-   dedicated configurable UDP port? (Affects ops/firewall docs.)
-2. **Phase 3 granularity** — land M11 + Merkle truly together in one v12 PR (one break, larger
-   PR), or M11 first as a pure codec swap with no semantic change, then Merkle as a second
-   v12-window change (smaller blast radius per PR)?
+1. **UDP port strategy** → **dedicated configurable UDP port** — `swim_udp_port`
+   (`GOSSIP_SWIM_UDP_PORT`, `mycelium-core/src/config.rs`), not a reuse of the gossip port.
+2. **Phase 3 granularity** → landed in the **wire v12** window (`WIRE_VERSION = 12`): anti-entropy
+   switched to a Merkle digest (`mycelium-core/src/framing.rs` top).
 
-*(Resolved 2026-06-16: DoD retargeted to 100 nodes; M4 ships standalone-first.)*
+*(Also resolved 2026-06-16: DoD retargeted to 100 nodes; M4 shipped standalone-first.)*
