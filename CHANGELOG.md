@@ -180,7 +180,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   failed tests once — a deterministic failure still reds the build (fails twice); a flake
   keeps it green but emits a loud annotation (a bug report, never silence).
 
-### Fixed
+- **`subscribe_log_group` exact-once delivery across nodes** (#149; gate: overlay S11, verified
+  6/6 green locally). The gateway consumer-group endpoint's "distributed lock" was a bare LWW
+  gossip-KV write that returned a guard unconditionally — no mutual exclusion, so every cross-node
+  subscriber "held" the claim and each drained the whole stream (100% double-delivery). Reworked to
+  a **single-active** consumer chosen by a **leased consensus claim with converged-holder
+  confirmation**: two near-simultaneous proposers can both *optimistically* commit (each checks only
+  its local committed view), so the propose return isn't trusted — after committing, the node reads
+  the **converged** committed holder (commit-keys are LWW-by-HLC, so exactly one converges) and only
+  that node consumes; losers stand by without releasing (a tombstone would clear the winner's claim).
+  The winner drains with a **private local offset** (exact-once by construction) and renews the
+  lease; on its death the lease lapses and a standby takes over (failover). `SubscribeHandle` and its
+  bare-LWW "lock" are removed. Contract clarified: `subscribe_log_group` is a single-active *log
+  consumer*, **not** a load-balanced work queue (that is the `mycelium-tuple-space` companion) —
+  pinned in the `runtime-invariants` "do not fix these" note so the dead-end isn't re-attempted.
 - `mycelium-wiki` integration tests: the `free_port()` bind-race flake class retired
   (pair-granularity bind retries; `AddrInUse` CI failure 2026-07-07).
 - `crossbeam-epoch` 0.9.18 → 0.9.20 (RUSTSEC-2026-0204; bench-only dependency path).

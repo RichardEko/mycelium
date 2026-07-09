@@ -305,12 +305,20 @@ impl KvHandle {
         rx
     }
 
-    /// Coordinated consumer group subscription. At most one consumer at a time
-    /// processes entries; offset is persisted at `clog/{stream}/{group}/offset`.
+    /// **Single-active** log-group subscription — the contract is *at most one consumer
+    /// processes a stream at a time* (an exact-once ordered consumer with failover), **not**
+    /// load-balanced work-sharing across the group. For competitive, load-balanced
+    /// exactly-once *work distribution* (each item claimed by exactly one of many workers),
+    /// use a work queue — the [`mycelium-tuple-space`] companion, which claims each item
+    /// atomically. A single shared, advancing offset (this API) fundamentally cannot do
+    /// competitive per-item consumption; that is a different pattern. See the
+    /// `log-group vs work-queue` architecture note and issue #149.
     ///
-    /// Uses a best-effort LWW claim rather than full consensus, which is sufficient
-    /// for consumer-group coordination: only one consumer will hold the freshest
-    /// offset at a time.
+    /// **Consistency here is best-effort.** This core path coordinates via an LWW claim, which
+    /// is *not* mutually exclusive: under concurrent cross-node consumers it can briefly admit
+    /// two active consumers, so an entry may be delivered more than once. For a *consensus*-backed
+    /// single-active claim (true exact-once), use the gateway endpoint
+    /// `GET /gateway/overlay/log/group/subscribe`. Offset is persisted at `clog/{stream}/{group}/offset`.
     pub async fn subscribe_log_group(
         &self,
         stream: &str,

@@ -1,13 +1,20 @@
-"""S11 — Task Auction (exact-once delivery).
+"""S11 — exact-once log consumption (single-active consumer group).
 
-A coordinator appends 5 tasks to the "tasks" log stream on node-a.
-Two workers (talking to node-b and node-c respectively) race to claim
-each task using the consumer-group API (subscribe_log_group).
+A coordinator appends 5 tasks to a log stream on node-a. Two subscribers (on node-b and
+node-c) join the same ``subscribe_log_group(stream, "workers")`` group. The group is
+**single-active**: one subscriber wins the consensus claim and drains the stream; the other
+stands by (it would take over on failover). This is *not* a load-balanced work queue — the
+group does not split entries across active consumers (for that, use the tuple-space companion,
+which claims each item atomically). So one worker may receive all 5 and the other 0; what the
+test enforces is **exact-once**, not distribution.
 
 Verification:
-  - All 5 tasks are received in total across both workers.
-  - Each task value is received exactly once (no duplicates).
-  - Workers see tasks in HLC order (monotonically non-decreasing HLC).
+  - 5 tasks received in total across both workers (no loss, no duplication).
+  - Each task value received exactly once.
+  - Each worker sees its tasks in HLC order (monotonically non-decreasing).
+
+The exact-once guarantee rests on the consensus-backed claim (issue #149): a bare-LWW claim
+admitted multiple active consumers and double-delivered (got 10 for 5 tasks).
 """
 
 from __future__ import annotations

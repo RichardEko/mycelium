@@ -22,11 +22,9 @@ mod kv;
 pub(crate) mod kv_quorum;
 mod kv_quorum_ext;
 // kv_handle + mesh_handle moved to mycelium-core (v2 M3); the GossipAgent-driven
-// tests stay here. SubscribeHandle (consensus overlay) stays upper too.
+// tests stay here.
 #[cfg(test)]
 mod kv_handle_tests;
-#[cfg(all(feature = "gateway", feature = "consensus"))]
-mod subscribe_handle;
 #[cfg(test)]
 mod mesh_handle_tests;
 #[cfg(feature = "consensus")]

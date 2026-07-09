@@ -89,3 +89,28 @@ per-peer writer drops a `FrameTooLarge` frame *without* tearing down the connect
 `test_late_joiner_converges_past_frame_sized_store_via_chunked_anti_entropy`,
 `test_oversized_value_is_rejected_outright_and_cluster_stays_healthy`. History: analysis
 Run 28 Finding 1 (`docs/analysis/ratings.md`).
+
+## `subscribe_log_group` is single-active — do NOT turn it into a load-balanced work queue (#149)
+
+Two different patterns keep getting conflated because the word "consumer group" (and the S11
+"task auction" framing) implies work-sharing. They are distinct, and the substrate has a
+**separate correct primitive for each**:
+
+- **Exact-once *ordered log consumption*** → `subscribe_log_group` / the gateway
+  `/gateway/overlay/log/group/subscribe`. Contract: **at most one active consumer at a time**,
+  failover on death. Achieved by holding the group claim `clog/{stream}/{group}/claim` as a
+  **consensus** lock *for the whole session* — the sole holder drains with a **private** offset,
+  so exact-once is by construction (`src/agent/http.rs`; gate: overlay S11). The `mycelium-core`
+  library `KvHandle::subscribe_log_group` is the **best-effort** version (LWW claim, no
+  consensus — can briefly double-deliver under contention; documented as such).
+- **Load-balanced exactly-once *work distribution*** (each item claimed by exactly one of many
+  competing workers) → the **`mycelium-tuple-space`** companion (O(1) FIFO `take`, single-owner
+  claim). `examples/fluid_pipeline` is the worked demo.
+
+**The trap (do not re-attempt):** making the log-group *load-balance* by handing entries off
+between consumers per-item. It cannot work with a single advancing offset. A **bare LWW offset**
+lets a peer read stale and re-drain (double-delivery); a **consensus offset** can't be
+re-advanced (a second `system_propose` to the same slot returns `Superseded`, not a new value)
+and per-item consensus floods the engine (starves other consensus users — it broke overlay S12).
+Competitive per-item consumption is the *tuple-space's* job, by design; don't rebuild it on a
+log. History: #149 (the full got-10 → got-1 → got-10 dead-end is on the issue).
