@@ -1,13 +1,15 @@
 # MCP Tool Discovery — Interactive Chat Demo
 
-## Concept
+## Objective
 
-This demo shows what "the mesh is the registry" means in practice. Seven nodes
-start up: four tool providers, one LLM planner, one management dashboard, and
-one claims verifier. The LLM discovers available tools by scanning the gossip
-KV store at the start of every planning cycle — not from a config file. Start
-a new tool node mid-session and the LLM sees it on the next message. No
-restart. No config change. No coordinator.
+Live MCP tool discovery: the LLM finds its tools by scanning the gossip KV store
+at the start of every planning cycle — not from a config file. Start a new tool
+node mid-session and the LLM sees it on the next message. No restart, no config
+change, no coordinator. This is what "the mesh is the registry" means in practice.
+
+Seven roles run in a single binary (`three_node_demo`), selected by the
+`MYCELIUM_ROLE` environment variable: four tool providers, one LLM planner, one
+management dashboard, one claims verifier.
 
 ```mermaid
 graph TD
@@ -32,34 +34,21 @@ graph TD
     LLM -->|gossip| MGT
 ```
 
-All seven roles live in a single binary (`three_node_demo`), selected by the
-`MYCELIUM_ROLE` environment variable. Tools register under
-`tools/{name}/{node_id}` in the KV store; the planner's `discover_tools()`
-is `scan_prefix("tools/")` — a local read, no network hop.
+## How to run
 
-The **verifier** is a claims-checking pipeline guard (Microsoft Research-style).
-After the LLM produces a draft answer from tool results, the verifier
-decomposes it into atomic factual claims, checks each against the tool
-evidence, and removes any not grounded in the results. It is filtered from
-the LLM's visible tool list — the LLM cannot call it directly.
-
----
-
-## Prerequisites
+See [shared setup](../README.md#shared-setup) for the Rust toolchain and Ollama.
+This example also uses a second, optional model for the verifier:
 
 ```bash
 cargo build --example three_node_demo
-ollama serve            # in a separate terminal
-ollama pull llama3.2
 ollama pull llama3.1:8b  # verifier model (optional; falls back to llama3.2)
 ```
 
-Any OpenAI-compatible endpoint works — set `OLLAMA_BASE_URL` and
-`OLLAMA_MODEL` to use a different backend.
+Any OpenAI-compatible endpoint works — set `OLLAMA_BASE_URL` and `OLLAMA_MODEL`
+to use a different backend.
 
----
-
-## Run — automated demo
+**Automated demo** — starts the base cluster, prints the tool list, then joins
+two tools live:
 
 ```bash
 cd examples/chat
@@ -76,7 +65,7 @@ cd examples/chat
 
 Open http://localhost:8080 while it runs to try the tools interactively.
 
-## Run — manual cluster
+**Manual cluster:**
 
 ```bash
 cd examples/chat
@@ -86,9 +75,18 @@ cd examples/chat
 ./stop.sh
 ```
 
----
+## What it demonstrates
 
-## What to try
+The demo inverts the usual static-MCP model: the planner queries the mesh at
+call time instead of holding a fixed tool list. See the guide chapter
+[`docs/guide/06-tool-discovery.md`](../../docs/guide/06-tool-discovery.md) for
+the concept. Tools register under `tools/{name}/{node_id}` in the KV store; the
+mechanism is `discover_tools()` — a `scan_prefix("tools/")` local read, no
+network hop — in the example source
+[`examples/three_node_demo.rs`](../three_node_demo.rs) (see `fn discover_tools`
+and `fn register`).
+
+Try each tool from the chat UI:
 
 ```
 "what's the weather in Tokyo?"              → tool-a: weather
@@ -98,20 +96,30 @@ cd examples/chat
 "fetch https://example.com"                 → tool-a: web_fetch
 ```
 
-Check what tools the LLM currently sees:
+Watch the live-join: `sf_lookup` and `book_plot` only answer after `demo.sh`
+starts their nodes — the LLM picks them up on the next planning cycle, with no
+restart. Check what tools the LLM currently sees:
 
 ```bash
 curl -s http://localhost:8080/mesh | python3 -m json.tool
 ```
 
----
+The **verifier** is a claims-checking pipeline guard (Microsoft Research-style).
+After the LLM produces a draft answer from tool results, the verifier decomposes
+it into atomic factual claims, checks each against the tool evidence, and removes
+any not grounded in the results. It is filtered from the LLM's visible tool list
+— the LLM cannot call it directly.
 
-## Dev Notes
+For the skills equivalent (LLM agents calling other LLM agents), see
+[`examples/community/`](../community/README.md) and
+[`docs/guide/05-skills.md`](../../docs/guide/05-skills.md).
+
+## Dev notes
 
 **Adding a new tool node live.** Add a handler function in
-`examples/three_node_demo.rs`, register it with the `register()` helper, and
-add a new role branch in `main()`. Start the node; the LLM discovers it on the
-next planning cycle.
+[`examples/three_node_demo.rs`](../three_node_demo.rs), register it with the
+`register()` helper, and add a new role branch in `main()`. Start the node; the
+LLM discovers it on the next planning cycle.
 
 The `register()` helper writes `tools/{name}/{node_id}` to the KV store and
 returns a `CapabilityReg`. Dropping the handle deregisters the tool:
@@ -145,8 +153,3 @@ OLLAMA_MODEL=llama3.2 \
 VERIFIER_MODEL=llama3.1:8b \
   ./start.sh
 ```
-
-→ For the skills equivalent (LLM agents calling other LLM agents), see
-  [`examples/community/`](../community/) and [`docs/guide/05-skills.md`](../../docs/guide/05-skills.md).
-
-→ For the full guide: [`docs/guide/06-tool-discovery.md`](../../docs/guide/06-tool-discovery.md)

@@ -1,0 +1,92 @@
+# Mycelium examples
+
+Every example is a real, runnable program built on the **public API** — no private hooks. This
+page is the index, the shared setup (so no example re-explains it), and the **doc template** all
+example READMEs follow.
+
+New here? Start with the zero-setup ladder, then pick a cluster below.
+
+## The index
+
+**Starter ladder (zero LLM, one file each — the junior-dev entry point):**
+
+| Example | What it demonstrates | Run |
+|---|---|---|
+| [`hello_mesh.rs`](hello_mesh.rs) | Two agents share a KV value by gossip — the substrate in ~25 lines | `cargo run --example hello_mesh` |
+| [`hello_capability.rs`](hello_capability.rs) | Broker-less discovery + RPC: advertise `math/double`, resolve it *by name*, call it | `cargo run --example hello_capability` |
+
+**Clusters & suites** (each links to its own README; see [shared setup](#shared-setup) first):
+
+| Cluster | What it demonstrates | LLM? | Doc |
+|---|---|:--:|---|
+| **Food-Rescue Co-op** — 12 demos | The full pattern catalogue in one constructive world (stigmergy, elastic intent, autonomic provisioning ⭐, federation, consensus, the durable artifact library) | some | [`coop/`](coop/README.md) |
+| **Mesh Control UI** — `llm_agent` | Capability emergence across 3 nodes with a live topology UI | mock ok | [root example](llm_agent.rs) · [README §Demos](../README.md) |
+| **Interactive Chat** — `three_node_demo` | Live MCP tool discovery — tools join a running mesh and the LLM finds them without restart | yes | [`chat/`](chat/README.md) |
+| **Skills** — SkillRunner community cluster | LLM agents as first-class mesh citizens (skills as capabilities, live load-balancing) | yes | [`community/`](community/README.md) |
+| **Agentic Flow Networks** — fluid pipeline | Tuple-space pull pipeline (stigmergic backpressure) vs a push baseline, 10 workers | no | [`fluid_pipeline/`](fluid_pipeline/README.md) |
+| **A2A interop** — LangChain / AutoGen | External agents auto-discover Mycelium skills via `/.well-known/agent.json` | yes | [`a2a_langchain/`](a2a_langchain/README.md) |
+| **Reasoning ladder** — LangGraph-on-Mycelium | 7 rungs from a local checkpointer to a cross-node deploy/reheal flagship | echo model | [`langgraph/`](langgraph/README.md) |
+
+## Shared setup
+
+Every cluster below assumes some subset of these. An example's README names which it needs and its
+own one-line build; it does **not** re-explain the install — it links here.
+
+**Rust toolchain** (all examples). The pinned toolchain builds automatically:
+```bash
+cargo build --example hello_mesh     # or the specific --example / --bin an example names
+```
+
+**Ollama** (LLM examples — free, no API key). Any OpenAI-compatible endpoint works instead.
+```bash
+ollama serve                 # in its own terminal
+ollama pull llama3.2         # the common default; some examples name a stronger model
+```
+To use a non-Ollama backend, set `OLLAMA_BASE_URL` + `OLLAMA_MODEL` (or `OPENAI_API_KEY` +
+`OPENAI_MODEL` where the README says so). Small models sometimes mis-pick tools — for reliable
+tool-calling use a stronger local model (`qwen3:14b` is verified) or `gpt-4o-mini`.
+
+**Python tier** (the A2A + LangGraph examples). Python ≥ 3.11, in a venv:
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install './mycelium-py[typed]' ./langgraph-checkpoint-mycelium   # + any per-example deps
+```
+
+**Docker Compose v2** (only the containerised examples, e.g. `fluid_pipeline`): `docker compose version`.
+
+---
+
+## The doc template (for contributors)
+
+Example READMEs drifted into three names for the same section ("Run"/"Quick start", "What you'll
+see"/"What to observe") and re-typed setup. **New and edited example docs follow the layout below.**
+There are two variants; both share the same **per-example block**.
+
+### Per-example block (the reusable unit)
+
+1. **Objective** — 1–3 sentences: what this example demonstrates and *why it matters*. Lead with the
+   capability, not the plumbing.
+2. **How to run** — the exact commands. Link to [shared setup](#shared-setup) for the toolchain;
+   show only this example's build + run + expected first output.
+3. **What it demonstrates** — the walkthrough: what to watch, tied back to the concept, **with links
+   into the guide/wiki for the idea and into `src/` (or the example source) for the mechanism**. This
+   is where a reader connects "what I saw" to "how it works" — the section that earns the example.
+4. **Dev notes** *(optional)* — gotchas, tuning knobs, "when NOT to use this."
+
+Standard section names: `## Objective` · `## How to run` · `## What it demonstrates` · `## Dev notes`.
+Retire the variants (`Concept`, `Quick start`, `What you'll see`, `What to try`).
+
+### Variant A — single example
+
+Title → **Objective** → **How to run** → **What it demonstrates** → *Dev notes*. One block, top to
+bottom. (`chat/`, `fluid_pipeline/`, `a2a_langchain/`.)
+
+### Variant B — suite / cluster (many examples under one theme)
+
+Title → **Objective** (the cluster's theme + shared harness) → **How to run** (the one bring-up every
+member shares) → a **per-example block** for each demo (Objective · Run · What it demonstrates+links)
+→ **CI**. (`coop/` is the reference implementation of this shape; `community/`, `langgraph/`.)
+
+> **Where narrative lives:** walkthroughs stay *in the example README* (a developer running it wants
+> them right there); link *out* to the guide/wiki for the concept and to `src/` for the mechanism —
+> don't duplicate either.

@@ -76,161 +76,24 @@ facts → blackboard.
 
 ## Demos
 
-### Mesh Control UI — `llm_agent`
+The full, runnable set — each with an objective, setup, and a walkthrough — lives in
+**[`examples/`](examples/README.md)** (start there; it has the shared setup and the doc index).
+The highlights:
 
-A three-node gossip mesh with a live management UI. No Ollama required for the quick start.
-
-```sh
-# Quick start — mock LLM, no Ollama needed
-MOCK_LLM=1 cargo run --example llm_agent
-
-# With a real LLM (set OPENAI_BASE_URL / OPENAI_MODEL for non-Ollama endpoints)
-cargo run --example llm_agent
-```
-
-Open **http://127.0.0.1:8100** in your browser.
-
-| What you get | Detail |
-|---|---|
-| Three gossip nodes | Ports 56000 – 56002, fully meshed |
-| Management UI | http://127.0.0.1:8100 – 8102 |
-| Emergent manager election | Lexicographically smallest live node-id becomes manager; browser auto-redirects |
-| Simulated failure | n-0 fails at T+35 s; n-1 becomes manager; n-0 recovers at T+50 s |
-| Preset gallery | 11 topology presets — click **Apply** and the manifest propagates to all nodes via gossip |
-| Manifest upload | Paste or load any TOML manifest; semver-gated, gossip-propagated |
-| Soft stop/start | Stop a group or the whole system; capabilities tombstone within one health interval |
-| Hybrid tool discovery | MCP tools (`register_mcp_tool`) and SkillRunner skills (`.skill.toml` nodes) are merged automatically — any skill joining the mesh is immediately available to the LLM planner |
-
-**Preset topologies available in the UI:**
-
-| Preset | Description |
-|---|---|
-| LLM Agent Demo | Real-time data · compute tools · LLM inference |
-| MCP Tool Mesh | Tool providers · data sources · LLM reasoning |
-| Compute Cluster | Parallel compute workers with real-time data feed |
-| Minimal Mesh | Single data node — development and testing |
-| Epidemic Ring | 16-node ring split into alpha/beta signal partitions |
-| Consensus Cluster | 7 voters + rotating proposers — two-phase ballot |
-| Dispatch Pool | Fast/slow worker tiers with adaptive dispatchers |
-| Emergent GPU Pool | 20 workers self-assemble; jobs route via `signal_wired_via` |
-| Capability Market | 4 capability kinds — compute/gpu, cpu, storage, ai/agent |
-| Locality Mesh | East/west providers — `resolve_with_locality` picks nearest |
-| Watchdog Cluster | Heartbeat services + `quorum_persistent` circuit breaker |
-
-**Automated Docker test (no Ollama needed):**
-
-```sh
-make test-llm-agent   # 11 scenarios: mesh health · tool discovery · planning cycle · spare failover
-```
-
----
-
-### Interactive Chat — `three_node_demo`
-
-Three nodes with distinct roles — two tool providers and one LLM node with a real-time browser chat UI. The LLM plans tool calls across nodes using the gossip mesh for discovery and routing.
-
-| Role | Tools | HTTP port |
+| Demo | What it shows | Start |
 |---|---|---|
-| `tool-a` | `weather(city)`, `web_fetch(url)` | 8300 |
-| `tool-b` | `calculate(expr)`, `wiki(topic)` | 8300 |
-| `tool-sf` | `sf_lookup(query)` — SF Encyclopedia scholarly lookup | 8300 |
-| `tool-book` | `book_plot(query)` — Wikipedia full article, Plot section | 8300 |
-| `llm` | Browser chat UI + LLM planner | 8080 |
-| `mgmt` | Management dashboard | 8090 |
+| **Mesh Control UI** — `llm_agent` | Capability emergence across 3 nodes + a live topology UI (11 presets, emergent manager election, simulated failover) | `MOCK_LLM=1 cargo run --example llm_agent` → http://127.0.0.1:8100 |
+| **Interactive Chat** — `three_node_demo` | Live MCP tool discovery — tools join a running mesh and the LLM finds them without a restart | [`examples/chat/`](examples/chat/README.md) |
+| **Skills cluster** — SkillRunner | LLM agents as mesh citizens; skills as capabilities, live load-balancing | [`examples/community/`](examples/community/README.md) |
+| **Food-Rescue Co-op** — 12 demos | The whole pattern catalogue in one constructive world | [`examples/coop/`](examples/coop/README.md) |
+| **Agentic Flow Networks** | Tuple-space pull pipeline (stigmergic backpressure) vs a push baseline | [`examples/fluid_pipeline/`](examples/fluid_pipeline/README.md) |
+| **Reasoning ladder** — LangGraph | Local checkpointer → cross-node deploy/reheal, 7 rungs | [`examples/langgraph/`](examples/langgraph/README.md) |
+| **A2A interop** — LangChain / AutoGen | External agents auto-discover skills via `/.well-known/agent.json` | [`examples/a2a_langchain/`](examples/a2a_langchain/README.md) |
+| **Consistency Overlay** — `three_node_demo` (overlay) | Consensus REST cluster + copy-paste Python scenarios | [`tests/overlay/`](tests/overlay/README.md) |
+| **Conway's Game of Life** | The substrate itself — 256 gossip agents coordinate a 16×16 grid | `cargo run --example conway` |
 
-**HTTP endpoints on the `llm` node:**
-
-| Endpoint | Description |
-|---|---|
-| `GET /` | Browser chat UI (HTML) |
-| `POST /chat` | Send `{"message":"..."}` — returns 202, planning runs async |
-| `GET /stream` | SSE stream: `Thinking`, `ToolCall`, `ToolResult`, `Assistant`, `Idle` events |
-| `GET /mesh` | Tool list visible to the planner + current model name |
-
-**Docker (recommended):**
-
-```sh
-make test-llm-demo     # interactive — open http://localhost:8080 to chat (requires Ollama)
-make test-three-node   # automated test — 4 scenarios, uses real llama3.2 via Ollama
-                       # (~2 GB model download on first run; cached in ollama-models volume)
-```
-
-**Local quick start (no Docker):**
-
-```sh
-# terminal 1
-MYCELIUM_ROLE=tool-a MYCELIUM_PEERS=127.0.0.1:57001,127.0.0.1:57002,127.0.0.1:57003,127.0.0.1:57004 \
-  MYCELIUM_PORT=57000 cargo run --example three_node_demo
-
-# terminal 2
-MYCELIUM_ROLE=tool-b MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57002,127.0.0.1:57003,127.0.0.1:57004 \
-  MYCELIUM_PORT=57001 cargo run --example three_node_demo
-
-# terminal 3 — requires Ollama running on localhost:11434 with llama3.2 pulled
-MYCELIUM_ROLE=llm MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57003,127.0.0.1:57004 \
-  MYCELIUM_PORT=57002 OLLAMA_BASE_URL=http://localhost:11434/v1 \
-  cargo run --example three_node_demo
-# open http://localhost:8080
-
-# terminal 4 — management dashboard (optional)
-MYCELIUM_ROLE=mgmt MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57002 \
-  MYCELIUM_PORT=57003 cargo run --example three_node_demo
-# open http://localhost:8090
-
-# terminal 5 — SF Encyclopedia (start any time; llm discovers it live)
-MYCELIUM_ROLE=tool-sf MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57002 \
-  MYCELIUM_PORT=57004 cargo run --example three_node_demo
-# ask: "how does Dan Simmons fit into 1990s SF?" → uses sf_lookup
-
-# terminal 6 — book plot tool (start any time; llm discovers it live)
-MYCELIUM_ROLE=tool-book MYCELIUM_PEERS=127.0.0.1:57000,127.0.0.1:57001,127.0.0.1:57002 \
-  MYCELIUM_PORT=57005 cargo run --example three_node_demo
-# ask: "what happens in Hyperion?" → uses book_plot
-```
-
----
-
-### Consistency Overlay Cluster — `three_node_demo` (overlay role)
-
-Three consensus-voting nodes that expose the full overlay REST API. Designed as an
-integration test cluster and developer template — the Python scenario scripts are
-copy-paste starting points for production patterns.
-
-| Scenario | Pattern |
-|---|---|
-| S11 Task Auction | Exact-once delivery via `subscribe_log_group` |
-| S12 Leader Election | Concurrent `elect_leader` + consensus-durable `consistent_set` |
-| S13 Shared Reasoning Log | Multi-writer `append`, HLC ordering, `compact_log` |
-
-```sh
-make test-overlay   # Docker cluster — 3 nodes, 3 Python scenarios (~3 min, no Ollama needed)
-```
-
-```sh
-# Local — 3 terminals, no Docker
-MYCELIUM_ROLE=overlay MYCELIUM_PEERS=127.0.0.1:57001,127.0.0.1:57002 \
-  MYCELIUM_PORT=57000 MYCELIUM_HTTP_PORT=8300 cargo run --example three_node_demo
-# then talk to it: python -c "
-#   from mycelium import MyceliumAgent
-#   a = MyceliumAgent('127.0.0.1', 8300)
-#   a.consistent_set('x', b'hello')
-#   print(a.consistent_get('x'))
-# "
-```
-
-See [`tests/overlay/README.md`](tests/overlay/README.md) for the full developer guide.
-
----
-
-### Conway's Game of Life
-
-A separate standalone demo that shows the epidemic substrate itself rather than a service topology. 256 gossip agents (one per cell in a 16×16 grid) coordinate cell state via gossip KV; a tick signal drives each generation.
-
-```sh
-cargo run --example conway          # CPU renderer (terminal / HTTP canvas)
-# GPU renderer (Metal / wgpu) — standalone crate so its GPU stack isn't a mycelium dev-dep:
-cargo run --release --manifest-path examples/conway-gpu/Cargo.toml
-```
+Docker one-liners (no local setup): `make test-llm-agent` (11 scenarios, no Ollama) ·
+`make test-llm-demo` (interactive chat, needs Ollama) · `make test-overlay` (3-node consensus).
 
 ---
 
