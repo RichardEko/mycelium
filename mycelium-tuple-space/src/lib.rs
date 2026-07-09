@@ -440,6 +440,12 @@ impl TupleSpace {
                     payload.extend_from_slice(&epoch.to_le_bytes());
                     payload.extend_from_slice(&head.to_le_bytes());
                     for node in me.resolve_role("secondary") {
+                        // Pin a direct route to each secondary: the primary sends it Individual-
+                        // scoped traffic both ways — this heartbeat AND every RPC *reply* (take/
+                        // put/complete responses). Without the pin those degrade to flood-relay and
+                        // the secondary's client RPC round-trip times out (#150). Symmetric with the
+                        // secondary pinning the primary in `resolve_primary`.
+                        me.agent.connect_peer(node.clone());
                         let _ = me.agent.mesh().emit(
                             Arc::clone(&kind),
                             SignalScope::Individual(node),
@@ -581,6 +587,32 @@ impl TupleSpace {
                         let head = u64::from_le_bytes(p[8..16].try_into().unwrap());
                         *me.replay_cursor.lock() = (epoch, head);
                         *me.last_heartbeat_sender.lock() = Some(sig.sender.clone());
+                    }
+                }
+            }));
+        }
+
+        // Warm-keeper: keep the secondary→primary *direct* link established ahead of client ops.
+        // Writers connect lazily on first frame, so an un-warmed link makes the first
+        // take/put/complete pay TCP(+TLS) setup on its own deadline — the S13 cold-start miss
+        // (#150). `connect_peer` both pins the direct route and sends a warmup Ping; ticking below
+        // the writer idle-timeout keeps the link hot, and starting now means it is up before the
+        // first client op after readiness. Skips self (a primary co-resolving its own role).
+        {
+            let me = Arc::clone(self);
+            // A short cadence gives fast startup convergence and stays well under the 30 s writer
+            // idle-timeout; `cap_refresh` is the floor for unusually slow rings.
+            let interval = self.cfg.cap_refresh.min(Duration::from_secs(2));
+            tasks.push(tokio::spawn(async move {
+                let mut tick = tokio::time::interval(interval);
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                let me_id = me.agent.node_id().clone();
+                loop {
+                    tick.tick().await;
+                    for primary in me.resolve_role("primary") {
+                        if primary != me_id {
+                            me.agent.connect_peer(primary);
+                        }
                     }
                 }
             }));
@@ -952,7 +984,12 @@ impl TupleSpace {
         // Deterministic pick if more than one claims primary (split-brain is
         // at-least-once-acceptable; the watch task converges it).
         providers.sort_by_key(NodeId::to_string);
-        Ok(providers.remove(0))
+        let primary = providers.remove(0);
+        // Pin a direct forwarding route to the primary: client ops (put/take/complete) are
+        // Individual-scoped RPCs, and an unpinned non-active peer would degrade them to
+        // flood-relay latency → request-response timeouts (#150). Idempotent + cheap.
+        self.agent.connect_peer(primary.clone());
+        Ok(primary)
     }
 
     /// Resolve the primary, **waiting** (bounded) for its capability to appear.
