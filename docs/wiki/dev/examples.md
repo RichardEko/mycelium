@@ -2,6 +2,12 @@
 
 ↑ [dev/](dev.md)
 
+**Index + doc standard:** [`examples/README.md`](../../../examples/README.md) is the front-door
+index of every example, the shared-setup section (toolchain / Ollama / Python tier — so no README
+re-explains it), and the **doc template** all example READMEs follow (`## Objective` · `## How to
+run` · `## What it demonstrates` · `## Dev notes`; two variants — single-example and suite — sharing
+one per-example block). `coop/` is the reference implementation of the suite shape.
+
 - **Starter ladder (zero-LLM, the junior-dev entry point).** `hello_mesh`
   (`examples/hello_mesh.rs`, ~25 lines: two agents on loopback share a KV value by gossip) →
   `hello_capability` (`examples/hello_capability.rs`, ~45 lines: one node advertises `math/double`
