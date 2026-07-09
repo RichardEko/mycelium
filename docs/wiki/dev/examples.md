@@ -34,5 +34,6 @@ one per-example block). `coop/` is the reference implementation of the suite sha
   `afn-smoke`. Concept essay: `flow_networks.html`.
 - **A2A LangChain/AutoGen** (`examples/a2a_langchain/`): external agents auto-discover
   Mycelium skills via `/.well-known/agent.json`.
-- Integration suite: **13 Docker scenarios** (`make test-integration`); scale suites in
+- Integration suite: **13 Docker scenarios** (`make test`, 4-node cluster) + the consistency
+  overlay (`make test-overlay`, 3-node consensus); scale suites in
   [testing/scale-tests](testing/scale-tests.md).

@@ -98,11 +98,18 @@ Two different patterns keep getting conflated because the word "consumer group" 
 
 - **Exact-once *ordered log consumption*** → `subscribe_log_group` / the gateway
   `/gateway/overlay/log/group/subscribe`. Contract: **at most one active consumer at a time**,
-  failover on death. Achieved by holding the group claim `clog/{stream}/{group}/claim` as a
-  **consensus** lock *for the whole session* — the sole holder drains with a **private** offset,
-  so exact-once is by construction (`src/agent/http.rs`; gate: overlay S11). The `mycelium-core`
-  library `KvHandle::subscribe_log_group` is the **best-effort** version (LWW claim, no
-  consensus — can briefly double-deliver under contention; documented as such).
+  failover on death. Achieved (`src/agent/http.rs`; gate: overlay S11) by a **leased consensus
+  claim with converged-holder confirmation**: `system_propose` commits **optimistically against a
+  node's *local* committed view** (`src/consensus.rs`), so two near-simultaneous proposers can
+  both commit — the return is **not** trustworthy for mutual exclusion. But commit-keys are
+  LWW-by-HLC, so the *converged* holder is deterministic: after committing, read the converged
+  committed holder (`live_committed_value`) and only that node consumes; losers stand by **without
+  releasing** (a tombstone would clear the winner's claim). The winner drains a **private** offset
+  (exact-once by construction) and renews the lease → a standby takes over on death.
+  **Reusable lesson:** a consensus-backed lock is not mutually exclusive on the *propose return* —
+  confirm via the converged committed value. The `mycelium-core` library
+  `KvHandle::subscribe_log_group` is the **best-effort** version (LWW claim, no consensus — can
+  double-deliver under contention; documented as such).
 - **Load-balanced exactly-once *work distribution*** (each item claimed by exactly one of many
   competing workers) → the **`mycelium-tuple-space`** companion (O(1) FIFO `take`, single-owner
   claim). `examples/fluid_pipeline` is the worked demo.
