@@ -955,6 +955,32 @@ impl TupleSpace {
         Ok(providers.remove(0))
     }
 
+    /// Resolve the primary, **waiting** (bounded) for its capability to appear.
+    ///
+    /// The `tuple/{ns}/primary` advertisement gossips at the `cap_refresh` cadence, so a client op
+    /// issued before it has propagated to this node would otherwise fail immediately with
+    /// `NoProvider` — a race the secondary loses right after startup/failover. `put` already
+    /// tolerates this via `BackpressureMode::Block`; `take` and `complete` use this so they behave
+    /// consistently instead of racing discovery (found via integration scenario S13, #150). Bounded
+    /// at the capability evaporation window (3× refresh): beyond that a genuinely absent primary
+    /// should surface `NoProvider`, not block forever.
+    async fn resolve_primary_blocking(&self) -> Result<NodeId, TupleError> {
+        let deadline = tokio::time::Instant::now() + self.cfg.cap_refresh * 3;
+        let mut backoff = Duration::from_millis(100);
+        loop {
+            match self.resolve_primary() {
+                Ok(p) => return Ok(p),
+                Err(TupleError::NoProvider)
+                    if tokio::time::Instant::now() + backoff < deadline =>
+                {
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(Duration::from_secs(1));
+                }
+                other => return other,
+            }
+        }
+    }
+
     fn serving_locally(&self) -> Option<Arc<TupleStore>> {
         if self.is_primary.load(Ordering::Acquire) {
             self.store()
@@ -1029,7 +1055,7 @@ impl TupleSpace {
             let me = self.agent.node_id().clone();
             return self.serve_take(stage, timeout, &me).await;
         }
-        let primary = self.resolve_primary()?;
+        let primary = self.resolve_primary_blocking().await?;
         let resp = self
             .agent
             .service()
@@ -1058,7 +1084,7 @@ impl TupleSpace {
         if self.serving_locally().is_some() {
             return self.serve_complete(id, next_stage, payload);
         }
-        let primary = self.resolve_primary()?;
+        let primary = self.resolve_primary_blocking().await?;
         let resp = self
             .agent
             .service()
