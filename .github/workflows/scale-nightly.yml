@@ -1,0 +1,66 @@
+# Nightly scale suites — the 100-node coverage hosted CI structurally can't run.
+#
+# The hosted `Cluster suites (Docker)` workflow gates the small (3–4 node) correctness suites; it
+# deliberately stops there because a 2-core GitHub-hosted runner hits the single-host Docker-bridge
+# iptables ceiling above ~50 nodes (docs/wiki/dev/testing/scale-tests.md). The real 100-node runs
+# need a bigger box — so they run here, on a **self-hosted** runner, nightly and on demand only
+# (never on PRs: each suite stands up dozens-to-100 containers and takes many minutes).
+#
+# ── Runner setup (one-time) ───────────────────────────────────────────────────────────────────
+# Register the scale box as a repo self-hosted runner (Settings → Actions → Runners → New) and
+# give it the label `mycelium-scale` in addition to the default `self-hosted`. This job is scoped
+# to that label so it ONLY ever runs on the designated machine — it will never fall onto some other
+# self-hosted runner. The runner needs Docker + docker-compose + make + the Rust toolchain. Because
+# it is self-hosted, each suite tears its cluster down (`down -v`) before and after, and an
+# always-run cleanup step below removes anything a mid-run failure orphaned, so the box stays clean
+# for the next run.
+name: Scale suites (nightly, self-hosted)
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # nightly 06:00 UTC — after the hosted cluster suites (05:00)
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Which scale suite to run'
+        type: choice
+        default: all
+        options: [all, scale, resilience, entries]
+
+# One scale run at a time on the single self-hosted box — never let a nightly and a manual dispatch
+# collide over the same Docker daemon.
+concurrency:
+  group: scale-nightly
+  cancel-in-progress: false
+
+jobs:
+  scale:
+    name: Scale suites (100-node + resilience + entries)
+    runs-on: [self-hosted, mycelium-scale]
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      # 100 nodes: 1 seed + 99 workers + mgmt + runner. The convergence/anti-entropy hot path at
+      # the scale the small suites can't reach.
+      - name: Scale — 100 nodes (make test-scale)
+        if: ${{ github.event_name == 'schedule' || inputs.suite == 'all' || inputs.suite == 'scale' }}
+        run: make test-scale
+
+      # ~22 nodes: crash / rejoin / anti-entropy / churn.
+      - name: Scale — resilience (make test-scale-resilience)
+        if: ${{ github.event_name == 'schedule' || inputs.suite == 'all' || inputs.suite == 'resilience' }}
+        run: make test-scale-resilience
+
+      # ~30 nodes: entry-volume axis (large KV corpus, write pressure).
+      - name: Scale — entries (make test-scale-entries)
+        if: ${{ github.event_name == 'schedule' || inputs.suite == 'all' || inputs.suite == 'entries' }}
+        run: make test-scale-entries
+
+      # Always leave the box clean — the make targets clean on success, this catches a mid-run abort.
+      - name: Tear down scale clusters (always)
+        if: always()
+        run: |
+          make test-scale-clean || true
+          make test-scale-resilience-clean || true
+          make test-scale-entries-clean || true
