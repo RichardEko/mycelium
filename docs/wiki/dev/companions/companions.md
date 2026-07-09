@@ -39,8 +39,8 @@ via wasm-host).
   log substreams `reason/{run_id}/{node}` — a shared stream collides same-ms HLC keys; optional WS2
   audit-chain anchoring under `compliance`), ③ **artifact-aware resume** (`require_model` demand half;
   install half is wasm-host's `model_deploy`). Plus a content-addressed **blob tier**
-  (`FsBlobStore`/`MeshBlobStore`/`spawn_blob_server`, ≤ 8 MiB v1) + `/gateway/reason/{blob,trace}`
-  routes. Zero core changes, zero new locks. **Python tier** (separate packages): the
+  (`FsBlobStore`/`MeshBlobStore`/`spawn_blob_server`, ≤ 8 MiB v1) + `/gateway/reason/{blob,trace,route}`
+  routes (`route` is the load-aware routing surface, #132). Zero core changes, zero new locks. **Python tier** (separate packages): the
   **`langgraph-checkpoint-mycelium`** `BaseCheckpointSaver` (index rows in KV `ckpt/`/`ckptw/`,
   payloads in the blob tier, cross-node `StateGraph` resume proven in CI) and `mycelium.call_typed`.
   **COMPLETE (PRs #130–#136, 2026-07-08):** the crate + Python tier, the LangGraph example ladder

@@ -29,6 +29,17 @@ The v1 mitigation is `GOSSIP_MAX_ACTIVE_CONNECTIONS` (O(N×K)); the v2 structura
 SWIM (below). Anti-entropy has been `O(divergence)` since wire v12 (Merkle buckets) and
 frame-chunked since 2026-07-02 ([runtime-invariants](../architecture/runtime-invariants.md)).
 
+**Beyond the ceiling: go multi-host.** Every mitigation above is a *single-host* tweak — the
+ceiling itself is that all N containers share one host's bridge/conntrack/iptables. The
+structural escape is to spread nodes across **multiple hosts**, where each host carries only
+its share of the connections and its own iptables state, so the O(N²) chain never forms on
+any one host. The [`deploy/kubernetes/`](../../../../deploy/kubernetes/) reference cluster is
+the path: `kubectl scale statefulset mycelium-worker --replicas=N` across a multi-node cluster
+(confirm the spread with `kubectl get pods -o wide`). The in-repo Docker harness stays the
+single-host *baseline* (fast, CI-adjacent, no cluster needed); multi-host k8s is the
+next-level axis for node counts past ~100. Note the k8s manifests are validated offline only
+(rendered, not applied in CI) — see their README.
+
 ## The WSB-M5 SWIM divergence saga — lessons that outlive the bug
 
 Stage-4 SWIM cutover showed a long in-process/Docker divergence (in-process flat, Docker

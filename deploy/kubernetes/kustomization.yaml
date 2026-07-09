@@ -1,0 +1,31 @@
+# Mycelium reference cluster for Kubernetes.
+#
+#   kubectl apply -k deploy/kubernetes           # deploy: seed + 3 workers + mgmt, ns "mycelium"
+#   kubectl -n mycelium scale statefulset mycelium-worker --replicas=50   # scale out
+#
+# Override the image once, here, for the whole cluster:
+#   images:
+#     - name: mycelium-demo
+#       newName: ghcr.io/you/mycelium
+#       newTag:  v2.0.0
+#
+# See deploy/kubernetes/README.md for building/pushing the image and the multi-host scale story.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: mycelium
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: mycelium
+    includeSelectors: false   # must not mutate StatefulSet .spec.selector (immutable)
+
+resources:
+  - namespace.yaml
+  - seed.yaml
+  - worker.yaml
+  - mgmt.yaml
+
+images:
+  - name: mycelium-demo
+    newTag: latest

@@ -76,10 +76,16 @@ WAL/persistence path if enabled. Reference multi-node setups:
 
 ## Cloud / Kubernetes / bare metal
 
-Mycelium ships **no Helm chart, Terraform module, or systemd unit** — and that is
-deliberate: a node is just a binary/container, and packaging would only track cloud
-churn while every org's topology differs. Deploy it like any **stateful** service,
-minding two requirements that follow from the design:
+Mycelium ships **no Helm chart** and no opinionated, hardened product packaging — and that
+is deliberate: a node is just a binary/container, and packaging would only track cloud churn
+while every org's topology differs. It *does* ship **reference deployment scaffolding** to
+copy and adapt: Kubernetes manifests —
+[`deploy/kubernetes/`](../../deploy/kubernetes/) (`kubectl apply -k deploy/kubernetes`): a
+seed StatefulSet + headless Service, a scalable worker StatefulSet, and a mgmt dashboard,
+wired exactly as this section describes — and Terraform for the cluster itself —
+[`deploy/terraform/`](../../deploy/terraform/) (EKS + ECR, or GKE + Artifact Registry), so
+the whole path is `terraform apply` → push image → `kubectl apply -k`. Deploy it (or your
+own) like any **stateful** service, minding two requirements that follow from the design:
 
 1. **Stable network identity.** A node's `node_id` is its `host:port`; peers
    bootstrap to it by address. Each node needs an address that survives a restart
@@ -92,9 +98,12 @@ minding two requirements that follow from the design:
 
 **Kubernetes:** a **StatefulSet** (stable pod identity + per-pod PVC) behind a
 **headless Service** (stable per-pod DNS for bootstrap) is the natural fit; set
-`GOSSIP_BOOTSTRAP_PEERS` to a seed pod's DNS name, `readinessProbe` → `/ready`,
-`livenessProbe` → `/health`, and `GOSSIP_CLUSTER_NAME` to the environment. Scrape
-`/metrics` with a `ServiceMonitor`. **AWS/GCP/bare metal:** an instance/ECS-task
+`GOSSIP_BOOTSTRAP_PEERS` (or the demo image's `MYCELIUM_PEERS`) to a seed pod's DNS
+name, `readinessProbe` → `/ready`, `livenessProbe` → `/health`, and
+`GOSSIP_CLUSTER_NAME` to the environment. Scrape `/metrics` with a `ServiceMonitor`.
+The ready-to-apply manifests in [`deploy/kubernetes/`](../../deploy/kubernetes/) do
+exactly this — start there rather than from scratch, and see
+[`deploy/terraform/`](../../deploy/terraform/) to provision the EKS/GKE cluster they run on. **AWS/GCP/bare metal:** an instance/ECS-task
 per node with a stable address (Elastic IP / internal DNS) + a durable disk (EBS /
 PD) for `auto_cert_dir` + WAL; a sample systemd unit is just `ExecStart=mycelium`
 with the `GOSSIP_*` env in the unit's `Environment=`. Elastic membership (add/remove
