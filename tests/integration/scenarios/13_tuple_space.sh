@@ -12,6 +12,12 @@
 #   (IV)  Monitoring aggregation — /api/tuple reports both roles and the
 #         put/take counters
 #   (V)   Empty take times out with 408 (the blocking-pull contract)
+#
+# Timing note (#150): this runs *after* scenario 04's full-cluster restart, so node-b's
+# secondary role + monitoring counters must RE-converge and re-gossip into node-a's /api/tuple
+# view. The poll windows below (45/30/60s) are sized for that post-restart re-convergence under
+# Docker load — the roles are correct (S13 passes clean on a fresh cluster); the old 30/15/30s
+# windows sat right at the edge and flaked ~50%.
 set -euo pipefail
 source /tests/lib/helpers.sh
 
@@ -29,7 +35,7 @@ primary_visible() {
         2>/dev/null | head -1)
     [ "$role" = "primary" ]
 }
-poll_until 30 primary_visible || {
+poll_until 45 primary_visible || {
     printf 'FAIL: ts13 primary not visible in /api/tuple within 30s\n' >&2
     false
 }
@@ -73,7 +79,7 @@ inflight_after() {
         | jq -r '.stages[0].inflight' 2>/dev/null || echo -1)
     [ "$n" = "0" ]
 }
-poll_until 15 inflight_after || {
+poll_until 30 inflight_after || {
     printf 'FAIL: inflight count did not return to 0 after acks\n' >&2
     false
 }
@@ -90,7 +96,7 @@ counters_visible() {
         | select(.role=="secondary")] | length')
     [ "$puts" -ge 10 ] && [ "$takes" -ge 10 ] && [ "$secondary" -ge 1 ]
 }
-poll_until 30 counters_visible || {
+poll_until 60 counters_visible || {
     printf 'FAIL: /api/tuple never showed primary counters and a secondary\n' >&2
     false
 }
