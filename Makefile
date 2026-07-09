@@ -17,6 +17,10 @@ test:
 	$(COMPOSE) up -d --build
 	@$(COMPOSE) logs -f runner & \
 	EXIT=$$(docker wait mycelium-test-runner); \
+	if [ "$$EXIT" != "0" ]; then \
+	    echo "── runner failed: node logs (last 200 lines each, for CI diagnosis) ──"; \
+	    $(COMPOSE) logs --tail 200 node-a node-b node-c mgmt 2>/dev/null || true; \
+	fi; \
 	$(COMPOSE) down -v --remove-orphans 2>/dev/null || true; \
 	exit $$EXIT
 

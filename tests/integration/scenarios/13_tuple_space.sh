@@ -46,11 +46,20 @@ put_count=$(echo "$put_ids" | tr ' ' '\n' | grep -c '^[0-9]' || true)
 assert_eq "$put_count" 10 "10 puts must return 10 ids"
 
 take_ids=""
-for _ in $(seq 0 9); do
-    body=$(curl -sf --max-time 10 -X POST -H "Content-Type: application/json" \
+for i in $(seq 0 9); do
+    # Same request as before, but capture the HTTP code + body instead of -f's silent death:
+    # a failing take must say WHICH iteration and WHAT the gateway answered (408 = the take RPC
+    # timed out server-side vs 5xx = provider/plumbing error) — the first hosted CI failure was
+    # undiagnosable without this (#150).
+    code=$(curl -s --max-time 10 -o /tmp/take_body.json -w '%{http_code}' \
+        -X POST -H "Content-Type: application/json" \
         -d "{\"ns\":\"$NS\",\"stage\":\"s13-work\",\"timeout_secs\":5}" \
-        "${H_B}/gateway/tuple/take")
-    take_ids="$take_ids $(echo "$body" | jq -r '.id')"
+        "${H_B}/gateway/tuple/take") || code=000
+    if [ "$code" != "200" ]; then
+        echo "FAIL: take #$i on node-b: HTTP $code body='$(head -c 200 /tmp/take_body.json 2>/dev/null)'" >&2
+        exit 1
+    fi
+    take_ids="$take_ids $(jq -r '.id' /tmp/take_body.json)"
 done
 # Every put id was taken exactly once (set equality, order-independent).
 sorted_put=$(echo "$put_ids"  | tr ' ' '\n' | grep '^[0-9]' | sort -n | tr '\n' ',')
