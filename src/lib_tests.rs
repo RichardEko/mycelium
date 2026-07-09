@@ -2221,6 +2221,61 @@ async fn test_consensus_simultaneous_proposers_resolve() {
     agent_b.shutdown().await;
 }
 
+/// Regression gate for #149 (`subscribe_log_group` exact-once). The gateway consumer-group
+/// endpoint picks a **single active consumer** by claiming a slot under a lease and reading the
+/// **converged committed holder** — `system_propose` commits *optimistically* (two
+/// near-simultaneous proposers can both return `Committed`), so the propose return is NOT mutual
+/// exclusion; but commit-keys are LWW-by-HLC, so exactly one holder converges. The old bare-LWW
+/// "lock" handed every consumer a guard (no exclusion) → 100% double-delivery.
+///
+/// This is the **deterministic in-process** gate the flaky Docker overlay S11 could not be. With
+/// `quorum_size = 1` each node self-commits its own claim, reproducing the double-optimistic-commit
+/// exactly; the assertion is that the *converged* holder is single and identical on both nodes.
+#[tokio::test]
+#[cfg(feature = "consensus")]
+async fn test_leased_claim_converges_to_single_active_holder() {
+    use crate::consensus::ConsensusConfig;
+    use bytes::Bytes;
+
+    let ConsensusPair { a, b, _la, _lb } = consensus_pair().await;
+    let slot     = "clog/regress/single-active/claim";
+    let holder_a = Bytes::from(a.node_id().to_string().into_bytes());
+    let holder_b = Bytes::from(b.node_id().to_string().into_bytes());
+    let cfg = || ConsensusConfig { quorum_size: 1, committed_lease_secs: Some(30), ..Default::default() };
+
+    // Both claim the SAME slot concurrently, no stagger — the adversarial case the bug lived in.
+    // Bind the handles so the async futures don't borrow temporaries dropped at the `;`.
+    let (ca, cb) = (a.consensus(), b.consensus());
+    let _ = tokio::join!(
+        ca.system_propose(slot, holder_a.clone(), cfg()),
+        cb.system_propose(slot, holder_b.clone(), cfg()),
+    );
+
+    // Wait for the commit-key LWW to converge so both nodes agree on the holder.
+    poll_until(|| {
+        matches!(
+            (a.consensus().consensus_get(slot), b.consensus().consensus_get(slot)),
+            (Some(ha), Some(hb)) if ha == hb
+        )
+    }, 3_000).await;
+
+    let ha = a.consensus().consensus_get(slot).expect("node a sees a committed holder");
+    let hb = b.consensus().consensus_get(slot).expect("node b sees a committed holder");
+    assert_eq!(ha, hb, "both nodes must converge to the SAME committed holder (single-active)");
+
+    // The converged holder is exactly ONE of the two claimants — never both (the #149 bug was that
+    // both "held" the claim and both drained → double-delivery).
+    let a_holds = ha == holder_a;
+    let b_holds = ha == holder_b;
+    assert!(
+        a_holds ^ b_holds,
+        "exactly one claimant must be the converged holder; a_holds={a_holds} b_holds={b_holds} holder={ha:?}",
+    );
+
+    a.shutdown().await;
+    b.shutdown().await;
+}
+
 #[tokio::test]
 #[cfg(feature = "consensus")]
 async fn test_system_propose_commits() {
