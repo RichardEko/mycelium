@@ -35,6 +35,27 @@ silent drop, which broke RPC and ballot voting in partial meshes. Only *admissio
 `test_individual_signal_reaches_unpeered_target_via_relay`,
 `test_individual_consumers_over_random_partial_meshes` (both in `src/lib_tests.rs`).
 
+**Flood-relay is correct but slow for RPC — pin RPC-heavy pairs.** The direct-send path only
+fires for a peer in the *forwarding-target set*, and that set **deliberately de-pins non-active
+peers** (seed-scalability, WS-B M4: avoid O(N) pinning on shared seeds — `src/agent/tasks.rs`,
+the target rebuild on peer-list change). So an Individual-scoped frame to a peer that isn't a
+current forwarding target degrades to flood-relay: fine for a one-shot signal, but a
+request-response **RPC** pays a multi-hop round-trip and can miss its deadline (this was the S13
+tuple-space flake — a secondary→primary `take` timing out at HTTP 408, grounded in node logs;
+#150). The fix is **`GossipAgent::connect_peer(peer)` / `disconnect_peer(peer)`** (`src/agent/kv.rs`):
+a `pinned_peers` set (papaya, lock-free — no lock-order row) that the flood-fallback honours
+(`targets.contains(t) || pinned_peers.contains(t)`) on *every* rebuild, so a specifically-pinned
+peer keeps a direct route without undoing the seed de-pinning. `connect_peer` also **actively
+warms** the link — writers connect lazily on first frame (`mycelium-core/src/writer.rs`
+`run_peer_writer`), so it spawns the writer and sends a Ping on call, establishing the connection
+*ahead* of the first RPC rather than on its deadline. Call it a little ahead of the RPC (a
+background keeper), not inline — the tuple-space secondary runs exactly such a warm-keeper in
+`become_secondary` (`mycelium-tuple-space/src/lib.rs`). Any RPC-heavy relationship toward a
+specific peer should pin it; general signalling should not (that is what the seed de-pinning
+protects). Reusable lesson: **an Individual-scoped RPC's latency depends on whether its target is
+a direct forwarding target — for a hot pair, pin the route and warm it, don't rely on flood-relay.**
+Regression gate: `make test-overlay` S13 (was ~50% flaky → 100% after the pin + warm).
+
 ## KV floods the cluster — a group is not a data-isolation boundary
 
 `WireMessage::Data` (the KV path) always forwards `ForwardHint::All`
