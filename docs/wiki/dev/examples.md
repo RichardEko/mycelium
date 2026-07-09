@@ -2,6 +2,12 @@
 
 ↑ [dev/](dev.md)
 
+- **Starter ladder (zero-LLM, the junior-dev entry point).** `hello_mesh`
+  (`examples/hello_mesh.rs`, ~25 lines: two agents on loopback share a KV value by gossip) →
+  `hello_capability` (`examples/hello_capability.rs`, ~45 lines: one node advertises `math/double`
+  and serves it, another resolves it *by name* and calls it over RPC — broker-less discovery in one
+  file) → `llm_agent` (the richer, LLM-driven capability version). The README front-door leads with
+  `hello_mesh`; guide chapters 01–02 explain them. Added #142/#143.
 - **Food-Rescue Co-op suite** (`examples/coop/`, workspace member
   `mycelium-coop-examples`): **twelve** CI demos composed in one constructive world (depot
   nodes rescuing surplus food, no dispatcher) — mailbox_llm · stigmergy · elastic_intent ·
