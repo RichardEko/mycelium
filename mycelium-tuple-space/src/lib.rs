@@ -592,6 +592,32 @@ impl TupleSpace {
             }));
         }
 
+        // Warm-keeper: keep the secondary→primary *direct* link established ahead of client ops.
+        // Writers connect lazily on first frame, so an un-warmed link makes the first
+        // take/put/complete pay TCP(+TLS) setup on its own deadline — the S13 cold-start miss
+        // (#150). `connect_peer` both pins the direct route and sends a warmup Ping; ticking below
+        // the writer idle-timeout keeps the link hot, and starting now means it is up before the
+        // first client op after readiness. Skips self (a primary co-resolving its own role).
+        {
+            let me = Arc::clone(self);
+            // A short cadence gives fast startup convergence and stays well under the 30 s writer
+            // idle-timeout; `cap_refresh` is the floor for unusually slow rings.
+            let interval = self.cfg.cap_refresh.min(Duration::from_secs(2));
+            tasks.push(tokio::spawn(async move {
+                let mut tick = tokio::time::interval(interval);
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                let me_id = me.agent.node_id().clone();
+                loop {
+                    tick.tick().await;
+                    for primary in me.resolve_role("primary") {
+                        if primary != me_id {
+                            me.agent.connect_peer(primary);
+                        }
+                    }
+                }
+            }));
+        }
+
         // Promotion watch: the capability ring IS the failure detector. Two
         // consecutive empty resolves (one advertisement interval apart, per
         // the plan's split-brain guard) → catch up from the old primary's

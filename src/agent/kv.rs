@@ -124,9 +124,36 @@ impl GossipAgent {
     /// then times out. A relationship that is *RPC-heavy* toward a specific peer (e.g. a
     /// tuple-space secondary calling its primary) should pin that peer so its RPCs keep a direct
     /// route. Idempotent; the pin is honoured on every forwarding-target rebuild until
-    /// [`disconnect_peer`](Self::disconnect_peer). See #150.
+    /// [`disconnect_peer`](Self::disconnect_peer). Beyond pinning, this *actively warms* the link
+    /// — writers connect lazily on first frame, so it spawns the writer and sends a Ping now,
+    /// establishing the connection ahead of the first RPC rather than on its deadline. Call it a
+    /// little ahead of the RPC (e.g. from a background keeper), not inline on the hot path, for
+    /// the warm to win the race. See #150.
     pub fn connect_peer(&self, peer: crate::node_id::NodeId) {
-        self.pinned_peers.pin().insert(peer, ());
+        self.pinned_peers.pin().insert(peer.clone(), ());
+        // Actively warm the direct link. Writers connect *lazily* on their first frame
+        // (`mycelium_core::writer::run_peer_writer`), so an RPC to a freshly-pinned peer would
+        // otherwise pay TCP(+TLS) setup on its own critical path and can miss its deadline — the
+        // S13 cold-start miss (#150). Spawn the writer now and push a Ping so the connection is
+        // established ahead of the first real RPC; on an already-live link this is just a cheap
+        // keepalive that resets the writer's idle deadline. Best-effort — a full channel or
+        // shutdown simply skips the warm (the pin still stands for the next rebuild).
+        if let Some(tx) = mycelium_core::writer::get_or_spawn_writer(
+            &peer,
+            &self.peer_writers,
+            self.task_ctx.hot.writer_depth(),
+            std::time::Duration::from_secs(self.config.reconnect_backoff_secs),
+            std::time::Duration::from_secs(self.config.writer_idle_timeout_secs),
+            &self.shutdown_tx,
+            &self.kv_state.dropped_frames,
+            self.task_ctx.tls.get().cloned(),
+        ) {
+            let ping = mycelium_core::codec::wire_to_bytes(&crate::framing::WireMessage::Ping {
+                sender: self.node_id.clone(),
+                known_peers: Vec::new(),
+            });
+            let _ = tx.try_send(ping);
+        }
     }
 
     /// Drop a direct-route pin previously set by [`connect_peer`](Self::connect_peer). The peer
