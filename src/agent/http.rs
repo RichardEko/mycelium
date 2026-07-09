@@ -65,7 +65,6 @@ use tracing::info;
 
 use crate::LogEntry;
 #[cfg(feature = "consensus")]
-use super::subscribe_handle::SubscribeHandle;
 #[cfg(feature = "consensus")]
 use super::overlay_consistent::LockGuard;
 
@@ -2298,7 +2297,27 @@ async fn gw_overlay_log_subscribe(
 #[cfg(feature = "consensus")]
 struct LogGroupSubscribeQuery { stream: String, group: String }
 
-/// `GET /gateway/overlay/log/group/subscribe?stream=S&group=G` — consumer-group SSE.
+/// `GET /gateway/overlay/log/group/subscribe?stream=S&group=G` — **single-active, exact-once**
+/// ordered log consumption over SSE.
+///
+/// **Contract:** at most one consumer of `(stream, group)` is active at a time; it receives every
+/// entry in HLC order, exactly once, and another subscriber takes over if it dies (failover). This
+/// is *not* a load-balanced work queue — the group does not share entries across active consumers.
+/// (For competitive, load-balanced exactly-once *work distribution*, use the `mycelium-tuple-space`
+/// companion, which claims each item atomically. A single advancing offset cannot do per-item
+/// competitive consumption — that is a different pattern; see the `log-group vs work-queue` note.)
+///
+/// **How it's achieved (#149):** the claim `clog/{stream}/{group}/claim` is a **leased consensus
+/// commitment** (`committed_lease_secs`). Because two near-simultaneous proposers can both
+/// *optimistically* commit — each checks only its *local* committed view at commit time (the
+/// ~40% double-acquire race) — the propose return is not trusted for exclusivity. Instead, after a
+/// commit we read the **converged committed holder** (`live_committed_value`): commit-keys are
+/// LWW-resolved by HLC, so exactly one holder converges, and only that node proceeds; losers stand
+/// by *without releasing* (their losing commit is LWW-overwritten by the winner's — a tombstone
+/// would clear the winner's claim). The winner drains with a **private local offset** (exact-once
+/// by construction — no cross-consumer offset hand-off) and **renews the lease** while active; on
+/// its death the lease lapses and a standby takes over (failover). The earlier code used a
+/// bare-LWW "lock" (no mutual exclusion → every consumer drained the whole stream).
 #[cfg(feature = "consensus")]
 async fn gw_overlay_log_group_subscribe(
     Query(q):   Query<LogGroupSubscribeQuery>,
@@ -2311,23 +2330,64 @@ async fn gw_overlay_log_group_subscribe(
 
     let (tx, rx) = tokio::sync::mpsc::channel::<Event>(64);
     tokio::spawn(async move {
-        let handle = SubscribeHandle::from_task_ctx(Arc::clone(&task_ctx));
-        loop {
-            let lock_name  = format!("clog/{stream_name}/{group_name}/claim");
-            let _guard = match handle.distributed_lock(&lock_name, Duration::from_secs(30)).await {
-                Ok(g)  => g,
-                Err(_) => {
-                    tokio::time::sleep(Duration::from_millis(200)).await;
-                    continue;
-                }
-            };
-            let offset_key = format!("clog/{stream_name}/{group_name}/offset");
-            let offset: u64 = kv_state.store.pin().get(offset_key.as_str())
-                .and_then(|e| e.data.clone())
-                .and_then(|b| std::str::from_utf8(&b).ok().and_then(|s| u64::from_str_radix(s, 16).ok()))
-                .unwrap_or(0);
+        let claim_slot = format!("clog/{stream_name}/{group_name}/claim");
+        let offset_key = format!("clog/{stream_name}/{group_name}/offset");
+        let prefix     = format!("log/{stream_name}/");
+        // Stable claim value = holder id only (no expiry inside the value), so a re-propose is the
+        // "same value" the lease path re-endorses; the lease governs expiry + failover.
+        let holder: Bytes = Bytes::from(task_ctx.node_id.to_string().into_bytes());
+        let lease_secs: u64 = 30;
+        let mk_cfg = || crate::consensus::ConsensusConfig {
+            committed_lease_secs: Some(lease_secs),
+            ..crate::consensus::ConsensusConfig::default()
+        };
 
-            let prefix = format!("log/{stream_name}/");
+        // Exact-once across a consumer group = a SINGLE active consumer (issue #149). The claim is a
+        // *leased* consensus commitment. Two near-simultaneous proposers can both *optimistically*
+        // commit (each checks only its local committed view at commit time), so the propose return
+        // cannot be trusted for exclusivity — that is the ~40% double-acquire race. But the
+        // commit-keys are LWW-resolved by HLC, so the CONVERGED holder is deterministic: propose,
+        // let it converge, then read the authoritative committed holder. Exactly one wins; losers
+        // stand by WITHOUT releasing (their losing commit is LWW-overwritten by the winner's —
+        // tombstoning would clear the winner's claim). The lease gives failover if the holder dies.
+        'acquire: loop {
+            if tx.is_closed() { return; }
+            let won = matches!(
+                overlay_system_propose(&task_ctx, &claim_slot, holder.clone(), mk_cfg()).await,
+                crate::consensus::ConsensusResult::Committed { .. },
+            );
+            if won {
+                tokio::time::sleep(Duration::from_millis(1000)).await; // let the winning commit converge
+                let is_me = crate::consensus::live_committed_value(
+                        &kv_state, &claim_slot, crate::consensus::wall_now_ms())
+                    .as_deref() == Some(holder.as_ref());
+                if is_me { break 'acquire; }
+            }
+            // Lost the race, or a live lease is held elsewhere — stand by; retry after it may lapse.
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+
+        // Resume from the persisted offset (LWW read; the sole holder is the only writer).
+        let mut offset: u64 = kv_state.store.pin().get(offset_key.as_str())
+            .and_then(|e| e.data.clone())
+            .and_then(|b| std::str::from_utf8(&b).ok().and_then(|s| u64::from_str_radix(s, 16).ok()))
+            .unwrap_or(0);
+        let renew_every = Duration::from_secs((lease_secs / 3).max(1));
+        let mut last_renew = std::time::Instant::now();
+
+        loop {
+            // Renew the lease while active (re-propose the SAME holder value → re-endorsed while
+            // live; a different proposer is superseded). If we somehow lost the claim (a partition
+            // let another win), stop — a single active consumer is the invariant.
+            if last_renew.elapsed() >= renew_every {
+                let _ = overlay_system_propose(&task_ctx, &claim_slot, holder.clone(), mk_cfg()).await;
+                last_renew = std::time::Instant::now();
+                let still_me = crate::consensus::live_committed_value(
+                        &kv_state, &claim_slot, crate::consensus::wall_now_ms())
+                    .as_deref() == Some(holder.as_ref());
+                if !still_me { return; }
+            }
+
             let mut entries: Vec<LogEntry> = crate::store::scan_kv_prefix(&kv_state, &prefix)
                 .into_iter()
                 .filter_map(|(k, v)| {
@@ -2339,11 +2399,13 @@ async fn gw_overlay_log_group_subscribe(
             entries.sort_by_key(|e| e.hlc);
 
             if let Some(entry) = entries.into_iter().next() {
-                let new_offset = format!("{:016x}", entry.hlc);
+                offset = entry.hlc;
+                // Persist the offset (LWW; sole writer) so a replacement consumer resumes on failover.
                 let offset_key_arc: Arc<str> = Arc::from(offset_key.as_str());
                 let update = crate::framing::make_gossip_update(
                     &task_ctx.node_id, task_ctx.default_ttl,
-                    offset_key_arc, Bytes::from(new_offset.into_bytes()), false, &task_ctx.hlc,
+                    offset_key_arc, Bytes::from(format!("{:016x}", entry.hlc).into_bytes()),
+                    false, &task_ctx.hlc,
                 );
                 crate::store::apply_and_notify(&task_ctx.kv_state, &update);
                 crate::framing::dispatch_gossip_try_send(
