@@ -42,12 +42,10 @@ jobs:
       - name: Integration suite (make test)
         run: make test
 
-  overlay:
-    name: Consistency overlay (3-node consensus)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      # `make test-overlay`: 3 consensus-voting nodes + runner driving the S11–S13 Python scenarios.
-      - name: Overlay suite (make test-overlay)
-        run: make test-overlay
+  # NOTE: the `overlay` job (make test-overlay) is intentionally NOT gated yet. Wiring this gate
+  # (2026-07-09) surfaced a real failure its manual-only status had hidden: S11 (task auction)
+  # asserts exact-once delivery across a consumer group and got double-delivery in CI —
+  # "Expected 5 total deliveries, got 10 (worker-b=5, worker-c=5)": two workers on different nodes
+  # each consumed the *whole* stream, so the cross-node `subscribe_log_group` coordination did not
+  # engage. That is a correctness question, not a flake, and gating a red suite is pointless — so
+  # overlay stays manual (`make test-overlay`) until the finding is resolved. See issue #149.

@@ -10,14 +10,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Changed
-- **CI now gates the Docker-compose cluster suites** ([`.github/workflows/cluster-suites.yml`](.github/workflows/cluster-suites.yml)).
-  The 13-scenario integration cluster (`make test`, 4 nodes) and the consistency overlay
-  (`make test-overlay`, 3-node consensus) — the cross-node suites that exercise real TCP +
-  anti-entropy the in-process smokes can't reach — were manual-only; they now run on
-  substrate/harness-touching PRs, nightly, on merge to main, and on demand. Kept off trivial PRs
-  (the image build is heavy) and distinct from the 100-node scale suites (deliberately CI-excluded
-  — single-host Docker-bridge ceiling). Wiki `dev/examples.md` updated (and its stale
-  `make test-integration` → `make test`).
+- **CI now gates the 13-scenario integration cluster** ([`.github/workflows/cluster-suites.yml`](.github/workflows/cluster-suites.yml)).
+  `make test` (4-node Docker cluster) — the cross-node suite that exercises real TCP + anti-entropy
+  the in-process smokes can't reach — was manual-only; it now runs on substrate/harness-touching
+  PRs, nightly, on merge to main, and on demand. Kept off trivial PRs (the image build is heavy)
+  and distinct from the 100-node scale suites (deliberately CI-excluded — single-host Docker-bridge
+  ceiling). Wiki `dev/examples.md` updated (and its stale `make test-integration` → `make test`).
+  The **overlay** suite (`make test-overlay`) is *not* gated yet: wiring it surfaced a real
+  exact-once-delivery failure it had been hiding (S11 double-delivery across a `subscribe_log_group`
+  consumer group) — tracked as a finding, gate deferred until resolved.
 - **`InferenceRouter` is now robust to dead nodes** (`mycelium-reason`): routing candidates
   are filtered to live SWIM members (`GossipAgent::peers()`, plus self), so a departed node
   is dropped an order of magnitude faster than the ~90s capability-freshness window; and a
