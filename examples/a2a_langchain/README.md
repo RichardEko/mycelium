@@ -1,65 +1,27 @@
 # Mycelium × LangChain / AutoGen — A2A auto-discovery
 
-## Concept
+## Objective
 
-The A2A (Agent-to-Agent) protocol lets any framework discover what an agent
-cluster can do via a standard HTTP endpoint (`/.well-known/agent.json`), then
-call skills via a task endpoint (`/a2a`). Mycelium implements both sides when
-built with `--features a2a`.
+External LangChain and AutoGen agents auto-discover what a Mycelium skill
+cluster can do via the standard A2A endpoint (`/.well-known/agent.json`) and
+call those skills as native tools — with **no Mycelium client**, no SDK, and no
+hardcoded knowledge of which skills exist or where they run. Discovery is live:
+add or remove SkillRunner nodes and the next agent-card fetch reflects the
+change, no restart of the Python agent.
 
-From the Python agent's perspective: it calls one tool and gets back a
-finished result. The mesh-internal routing — orchestrator calling researcher
-calling writer — is completely invisible. Neither agent has any hardcoded
-knowledge of what skills exist or where they run.
+## How to run
 
-```mermaid
-sequenceDiagram
-    participant PY as LangChain / AutoGen<br/>(Python)
-    participant GW as SkillRunner Gateway<br/>:9050
-    participant O as orchestrator
-    participant R as researcher
-    participant W as writer
+See [shared setup](../README.md#shared-setup) for the Rust toolchain, Ollama,
+and the Python tier. This example's specifics follow.
 
-    PY->>GW: GET /.well-known/agent.json
-    GW-->>PY: {skills: [orchestrator, researcher, writer]}
-    PY->>PY: wrap each as a native tool
-    PY->>GW: POST /a2a tasks/send {skill: llm/orchestrator, input: {topic: "..."}}
-    GW->>O: rpc_call skill.invoke
-    O->>R: rpc_call (mesh-internal)
-    R-->>O: {findings: [...]}
-    O->>W: rpc_call (mesh-internal)
-    W-->>O: {title, article, tldr}
-    O-->>GW: article
-    GW-->>PY: {status: completed, result: {...}}
-```
-
-Discovery is live: add or remove SkillRunner nodes and the next
-`/.well-known/agent.json` call reflects the change — no code changes, no
-restart of the Python agent.
-
----
-
-## Prerequisites
-
-| Requirement | Notes |
-|---|---|
-| Rust toolchain | `cargo build --bin skillrunner --features a2a` |
-| Python ≥ 3.11 | LangChain ≥ 1.0 API (`create_agent`); see `requirements.txt` |
-| Ollama (recommended) | `ollama pull llama3.2` — free, no API key |
-| OpenAI key (optional) | Set `OPENAI_API_KEY` to use `gpt-4o-mini` instead |
-
-> **Model quality matters for tool selection.** The agent card now carries
-> each skill's input schema (`inputSchema`), and both demo agents build
+> **Model quality matters for tool selection.** The agent card carries each
+> skill's input schema (`inputSchema`), and both demo agents build
 > properly-typed tools from it — so a capable tool-calling model drives the
 > whole pipeline correctly. `llama3.2` (3B) works but sometimes picks the
 > wrong tool or fabricates arguments; pydantic validation catches this
 > client-side before it reaches the mesh. For reliable runs use a stronger
 > local model (`OLLAMA_MODEL=qwen3:14b` verified end-to-end) or
-> `gpt-4o-mini`.
-
----
-
-## Quick start
+> `gpt-4o-mini` (set `OPENAI_API_KEY`).
 
 ### 1 — Build SkillRunner with A2A support
 
@@ -103,9 +65,21 @@ QUERY="Explain Byzantine fault tolerance in one paragraph" \
 python examples/a2a_langchain/autogen_agent.py
 ```
 
----
+## What it demonstrates
 
-## What you'll see
+The A2A (Agent-to-Agent) protocol lets any framework discover what an agent
+cluster can do via a standard HTTP endpoint, then call skills via a task
+endpoint (`/a2a`). Mycelium implements both sides when built with
+`--features a2a` — the full concept is in the
+[A2A interop guide](../../docs/guide/08-a2a-interop.md), and the mechanism is
+the Axum route table in
+[`src/agent/a2a.rs`](../../src/agent/a2a.rs) (`/.well-known/agent.json` →
+`agent_card_handler`, `/a2a` → the task handler).
+
+**Discovery.** `A2aClient.fetch_card()` does a single
+`GET /.well-known/agent.json`. The response lists every capability currently
+advertised on the mesh — scanned from the KV store at request time, so it is
+always current:
 
 ```
 Connecting to Mycelium at http://localhost:9050 ...
@@ -115,7 +89,23 @@ Connecting to Mycelium at http://localhost:9050 ...
     · llm/orchestrator  Coordinates research and writing to produce articles
     · llm/researcher    Researches a topic and returns structured findings
     · llm/writer        Writes a polished article from research findings
+```
 
+**Wrapping.** Each skill becomes a Python callable wrapped as a framework tool:
+
+```python
+def tool_fn(message: str) -> str:
+    return client.send(skill_id, message, timeout_secs=120.0)
+```
+
+**Invocation.** `client.send()` posts a `tasks/send` JSON-RPC request to
+`/a2a`. Mycelium resolves the skill to a live node, calls it via nonce RPC, and
+returns the result; if multiple nodes advertise the same skill, Mycelium picks
+one automatically. From the Python agent's perspective it calls one tool and
+gets back a finished result — the mesh-internal routing (orchestrator calling
+researcher calling writer) is completely invisible:
+
+```
 Query: Write a short technical article about gossip protocols.
 
 > Entering new AgentExecutor chain...
@@ -126,28 +116,28 @@ Query: Write a short technical article about gossip protocols.
   Final Answer: ...
 ```
 
----
+```mermaid
+sequenceDiagram
+    participant PY as LangChain / AutoGen<br/>(Python)
+    participant GW as SkillRunner Gateway<br/>:9050
+    participant O as orchestrator
+    participant R as researcher
+    participant W as writer
 
-## How it works
-
-`A2aClient.fetch_card()` does a single `GET /.well-known/agent.json`.
-The response lists every capability currently advertised on the mesh — scanned
-from the KV store at request time, so it is always current.
-
-Each skill becomes a Python callable wrapped as a framework tool:
-
-```python
-def tool_fn(message: str) -> str:
-    return client.send(skill_id, message, timeout_secs=120.0)
+    PY->>GW: GET /.well-known/agent.json
+    GW-->>PY: {skills: [orchestrator, researcher, writer]}
+    PY->>PY: wrap each as a native tool
+    PY->>GW: POST /a2a tasks/send {skill: llm/orchestrator, input: {topic: "..."}}
+    GW->>O: rpc_call skill.invoke
+    O->>R: rpc_call (mesh-internal)
+    R-->>O: {findings: [...]}
+    O->>W: rpc_call (mesh-internal)
+    W-->>O: {title, article, tldr}
+    O-->>GW: article
+    GW-->>PY: {status: completed, result: {...}}
 ```
 
-`client.send()` posts `tasks/send` JSON-RPC to `/a2a`. Mycelium resolves
-the skill to a live node, calls it via nonce RPC, and returns the result.
-If multiple nodes advertise the same skill, Mycelium picks one automatically.
-
----
-
-## Dev Notes
+## Dev notes
 
 **`--features a2a` is required.** Without it the gateway starts but `/a2a`
 and `/.well-known/agent.json` return 404.
@@ -175,5 +165,3 @@ The Python agent discovers it on the next `fetch_card()` call.
 **AutoGen tool naming.** AutoGen requires `name` to be a valid Python
 identifier. `autogen_agent.py` strips `/` from skill ids when registering
 (`llm/orchestrator` → `llm_orchestrator`).
-
-→ Full concept guide: [`docs/guide/08-a2a-interop.md`](../../docs/guide/08-a2a-interop.md)

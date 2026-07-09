@@ -30,6 +30,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   production build.
 
 ### Added
+- **Example-doc standard + index ([`examples/README.md`](examples/README.md)).** The example READMEs
+  had drifted into three names for the same section and re-typed setup in each file; there was no
+  index. Now: a front-door index of every example, one **shared-setup** section (Rust / Ollama /
+  Python / Docker), and a **doc template** (`Objective` · `How to run` · `What it demonstrates` ·
+  `Dev notes`; single-example + suite variants sharing one per-example block). The five drifted
+  READMEs (`chat`, `fluid_pipeline`, `a2a_langchain`, `community`, `langgraph`) were normalized to it,
+  duplicated setup replaced by a link, and each given verified concept + mechanism links; the root
+  README's ~160-line embedded demo walkthroughs (which duplicated `examples/`) collapsed to a
+  pointer table (1742 → ~1605 lines). `coop/` is the reference suite shape.
 - **Reference Kubernetes deployment ([`deploy/kubernetes/`](deploy/kubernetes/)).** The multi-host
   cluster `deployment.md` describes, now shipped as ready-to-apply manifests: a seed StatefulSet +
   headless Service, a horizontally-scalable worker StatefulSet bootstrapping to the seed's stable

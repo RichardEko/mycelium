@@ -1,51 +1,27 @@
 # Skills — LLM Agents as Mesh Citizens
 
-## Concept
+## Objective
 
-A **Skill** is an LLM agent that lives permanently in the mesh as its own
-node. It has a network identity, a capability advertisement, and a prompt.
-You define it entirely in a TOML manifest — no code required.
+LLM agents become first-class mesh citizens: each **Skill** advertises its
+prompt as a capability, and skills are discovered and load-balanced across the
+mesh with no orchestrator holding a routing table. A skill is an LLM agent that
+lives permanently in the mesh as its own node — network identity, capability
+advertisement, prompt — defined entirely in a TOML manifest, no code. Unlike an
+MCP tool, a skill can call other skills: it lists sub-skills in `tools = [...]`,
+and SkillRunner resolves those names against live capability advertisements in
+the KV store at inference time and dispatches via mesh RPC. Because resolution
+happens at call time through the gossip layer, starting a second provider
+load-balances automatically — no configuration change.
 
-The key difference from an MCP tool: a Skill can call other Skills. The
-orchestrator lists sub-skills in its `tools = [...]` array; SkillRunner
-resolves those names against live capability advertisements in the KV store
-at inference time and dispatches via mesh RPC. No node knows the address of
-any other — each resolves its collaborators through the gossip layer.
+## How to run
 
-```mermaid
-sequenceDiagram
-    participant You
-    participant O as orchestrator :7950
-    participant R as researcher :7952
-    participant W as writer :7953
-
-    You->>O: POST /invoke {"topic":"gossip protocols"}
-    O->>O: LLM planning: tools=[researcher, writer]
-    O->>R: rpc_call skill.invoke {"topic":"gossip protocols"}
-    R->>R: LLM generates findings
-    R-->>O: {"findings":[...], "summary":"..."}
-    O->>W: rpc_call skill.invoke {"topic":..., "findings":[...]}
-    W->>W: LLM writes article
-    W-->>O: {"title":"...", "article":"...", "tldr":"..."}
-    O-->>You: writer's output
-```
-
-Because the orchestrator resolves `llm/researcher` from the mesh at call
-time, starting a second researcher causes automatic load-balancing — no
-configuration change.
-
----
-
-## Prerequisites
+See [shared setup](../README.md#shared-setup) for the Rust toolchain and Ollama.
 
 ```bash
 cargo build --bin skillrunner
-ollama pull llama3.2   # or set skill.llm.endpoint to any OpenAI-compatible URL
 ```
 
----
-
-## Run
+(Uses `llama3.2` by default — or point any skill's `skill.llm.endpoint` at an OpenAI-compatible URL.)
 
 ### End-to-end demo (recommended)
 
@@ -73,9 +49,44 @@ sleep 3              # wait for gossip to converge
 ./stop.sh
 ```
 
----
+### Scaling — add a second researcher
 
-## What to observe
+```bash
+cp researcher.skill.toml researcher2.skill.toml
+# Edit: bind_port = 7954
+../../target/debug/skillrunner --skill researcher2.skill.toml &
+```
+
+Within one gossip interval (~5 s) the orchestrator sees two providers for
+`llm/researcher` and load-balances across both automatically.
+
+## What it demonstrates
+
+The concept — skills as capabilities and skill-to-skill composition — is
+covered in the guide: [`docs/guide/05-skills.md`](../../docs/guide/05-skills.md).
+The mechanism lives in the SkillRunner binary
+([`src/bin/skillrunner/runner.rs`](../../src/bin/skillrunner/runner.rs) —
+`resolve_tools` and the `rpc_call` dispatch).
+
+```mermaid
+sequenceDiagram
+    participant You
+    participant O as orchestrator :7950
+    participant R as researcher :7952
+    participant W as writer :7953
+
+    You->>O: POST /invoke {"topic":"gossip protocols"}
+    O->>O: LLM planning: tools=[researcher, writer]
+    O->>R: rpc_call skill.invoke {"topic":"gossip protocols"}
+    R->>R: LLM generates findings
+    R-->>O: {"findings":[...], "summary":"..."}
+    O->>W: rpc_call skill.invoke {"topic":..., "findings":[...]}
+    W->>W: LLM writes article
+    W-->>O: {"title":"...", "article":"...", "tldr":"..."}
+    O-->>You: writer's output
+```
+
+### The causal chain (what to observe)
 
 Follow logs across all nodes in a second terminal:
 
@@ -104,9 +115,7 @@ You'll see the full causal chain as it happens:
 
 Each arrow is a real RPC call through the Mycelium gossip layer.
 
----
-
-## How It Works
+### How resolution works
 
 Each `.skill.toml` has four sections: `[node]` (gossip config), `[capability]`
 (what the skill advertises), `[skill]` (prompt + tools), `[skill.llm]`
@@ -128,9 +137,7 @@ because OpenAI function names cannot contain `/`.
 When the LLM calls `researcher`, SkillRunner scans the KV for the `llm`
 namespace, resolves the live node, and dispatches via `rpc_call`.
 
----
-
-## Skill reference
+### Skill reference
 
 | Skill | Port | Prompt focus | max_tokens |
 |-------|------|-------------|------------|
@@ -142,31 +149,14 @@ namespace, resolves the live node, and dispatches via `rpc_call`.
 The orchestrator's low token budget is intentional: it coordinates cheaply
 and leaves the substantive LLM work to specialist skills.
 
----
-
-## Management dashboard
+### Management dashboard
 
 The orchestrator exposes a live mesh dashboard at http://localhost:9050/mgmt.
 It shows every skill advertising on the mesh, provider count, and the recent
 invocation audit trail — all from the local KV store, auto-refreshing every
 4 s.
 
----
-
-## Scaling — add a second researcher
-
-```bash
-cp researcher.skill.toml researcher2.skill.toml
-# Edit: bind_port = 7954
-../../target/debug/skillrunner --skill researcher2.skill.toml &
-```
-
-Within one gossip interval (~5 s) the orchestrator sees two providers for
-`llm/researcher` and load-balances across both automatically.
-
----
-
-## Audit trail
+### Audit trail
 
 Every invocation writes a signed audit record to the KV store:
 
@@ -178,9 +168,13 @@ agent.scan_prefix("audit/")
 Records are HLC-ordered, Ed25519-signed by the invoking node, and replicated
 to every node in the cluster via gossip.
 
----
+### Sample output
 
-## Dev Notes
+[`sample-output/gossip-protocols.md`](sample-output/gossip-protocols.md) and
+[`sample-output/rust-ownership.md`](sample-output/rust-ownership.md) show
+real pipeline output including per-step traces and final articles.
+
+## Dev notes
 
 **Access control.** To restrict who can call a skill:
 
@@ -202,21 +196,11 @@ manifest for Jaeger/Grafana spans per invocation.
 Reference tools by bare name. Set `temperature = 0.1` for deterministic routing.
 For better reliability use `llama3.1:8b` as the orchestrator model.
 
----
+### Next steps
 
-## Sample output
-
-[`sample-output/gossip-protocols.md`](sample-output/gossip-protocols.md) and
-[`sample-output/rust-ownership.md`](sample-output/rust-ownership.md) show
-real pipeline output including per-step traces and final articles.
-
----
-
-## Next steps
-
-- **A2A integration** — [`examples/a2a_langchain/`](../a2a_langchain/): LangChain
+- **A2A integration** — [`examples/a2a_langchain/`](../a2a_langchain/README.md): LangChain
   and AutoGen agents auto-discover these skills via `/.well-known/agent.json`
-- **MCP tool discovery** — [`examples/chat/`](../chat/): the simpler
+- **MCP tool discovery** — [`examples/chat/`](../chat/README.md): the simpler
   alternative where tools are functions, not LLM agents
 - **Full guide** — [`docs/guide/05-skills.md`](../../docs/guide/05-skills.md)
 - **Skill manifest reference** — [`docs/reference/skillrunner.html`](../../docs/reference/skillrunner.html)
