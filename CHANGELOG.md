@@ -10,6 +10,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Changed
+- **CI now gates the Docker-compose cluster suites** ([`.github/workflows/cluster-suites.yml`](.github/workflows/cluster-suites.yml)).
+  The 13-scenario integration cluster (`make test`, 4 nodes) and the consistency overlay
+  (`make test-overlay`, 3-node consensus) — the cross-node suites that exercise real TCP +
+  anti-entropy the in-process smokes can't reach — were manual-only; they now run on
+  substrate/harness-touching PRs, nightly, on merge to main, and on demand. Kept off trivial PRs
+  (the image build is heavy) and distinct from the 100-node scale suites (deliberately CI-excluded
+  — single-host Docker-bridge ceiling). Wiki `dev/examples.md` updated (and its stale
+  `make test-integration` → `make test`).
 - **`InferenceRouter` is now robust to dead nodes** (`mycelium-reason`): routing candidates
   are filtered to live SWIM members (`GossipAgent::peers()`, plus self), so a departed node
   is dropped an order of magnitude faster than the ~90s capability-freshness window; and a
