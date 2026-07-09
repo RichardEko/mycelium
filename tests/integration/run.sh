@@ -38,6 +38,18 @@ converged() {
     [ "$count" -ge 3 ]
 }
 poll_until 30 converged || true  # warn but don't block; scenario 02 will fail descriptively
+
+# Data-plane readiness barrier: health + mgmt visibility prove the control plane, but on a
+# cold CPU-starved host (2-core CI runner) the gossip/anti-entropy paths can still be settling
+# — scenario 01 then measures bring-up lag, not convergence (it failed exactly this way on the
+# first hosted cluster-suites runs). Prove one KV round-trip in each direction before starting;
+# bounded, structural, and scenario windows stay honest.
+kv_put "${NODE_A_HOST:-node-a}" "test/ready/a" "barrier-a" || true
+kv_put "${NODE_B_HOST:-node-b}" "test/ready/b" "barrier-b" || true
+poll_until 60 kv_check "${NODE_B_HOST:-node-b}" "test/ready/a" "barrier-a" \
+    || echo "  WARN: a→b KV barrier not met in 60s — scenarios may hit bring-up lag" >&2
+poll_until 60 kv_check "${NODE_A_HOST:-node-a}" "test/ready/b" "barrier-b" \
+    || echo "  WARN: b→a KV barrier not met in 60s — scenarios may hit bring-up lag" >&2
 echo "  Core nodes healthy — starting scenarios"
 
 # ── Scenarios ─────────────────────────────────────────────────────────────────
