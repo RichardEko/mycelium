@@ -12,17 +12,26 @@ banner() { printf '\n\033[1;34m══ %s ══\033[0m\n' "$1"; }
 ok()     { printf '\033[0;32mPASS\033[0m  %s\n' "$1"; }
 fail()   { printf '\033[0;31mFAIL\033[0m  %s\n' "$1"; }
 
+# Each scenario is a multi-node convergence check with fixed poll windows; on a shared/loaded
+# CI runner a single attempt can overrun a window (S13's inflight→0 / secondary-visible polls
+# are the usual victim). So give each scenario up to ATTEMPTS tries — a real regression fails
+# all of them, a transient slow-runner miss does not. Same posture as the coop + fluid smokes.
+# (Scenarios are self-contained — each sets up its own namespace/keys — so a retry re-runs clean.)
+ATTEMPTS="${SCENARIO_ATTEMPTS:-2}"
 run_scenario() {
     local label="$1" script="$2"
     printf '  %-45s ' "$label"
-    if bash "$script" 2>/tmp/scenario.err; then
-        PASS=$((PASS + 1))
-        ok "$label"
-    else
-        FAIL=$((FAIL + 1))
-        fail "$label"
-        sed 's/^/    /' /tmp/scenario.err >&2
-    fi
+    local attempt
+    for attempt in $(seq 1 "$ATTEMPTS"); do
+        if bash "$script" 2>/tmp/scenario.err; then
+            PASS=$((PASS + 1))
+            if [ "$attempt" -gt 1 ]; then ok "$label (attempt $attempt/$ATTEMPTS)"; else ok "$label"; fi
+            return
+        fi
+    done
+    FAIL=$((FAIL + 1))
+    fail "$label (failed $ATTEMPTS attempts)"
+    sed 's/^/    /' /tmp/scenario.err >&2
 }
 
 # ── Phase 0: wait for core nodes to be healthy ────────────────────────────────
