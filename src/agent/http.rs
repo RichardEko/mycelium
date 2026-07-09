@@ -2311,34 +2311,41 @@ async fn gw_overlay_log_group_subscribe(
 
     let (tx, rx) = tokio::sync::mpsc::channel::<Event>(64);
     tokio::spawn(async move {
-        let handle = SubscribeHandle::from_task_ctx(Arc::clone(&task_ctx));
+        let handle     = SubscribeHandle::from_task_ctx(Arc::clone(&task_ctx));
+        let lock_name  = format!("clog/{stream_name}/{group_name}/claim");
+        let offset_key = format!("clog/{stream_name}/{group_name}/offset");
+        let prefix     = format!("log/{stream_name}/");
         loop {
-            let lock_name  = format!("clog/{stream_name}/{group_name}/claim");
-            let _guard = match handle.distributed_lock(&lock_name, Duration::from_secs(30)).await {
+            // Acquire the consumer-group claim once, then drain the whole backlog past the
+            // offset while holding it. The claim is a *consensus* lock now (real cross-node
+            // mutual exclusion — #149); re-acquiring a consensus lock per entry stalls a
+            // fine-grained loop, so batch-drain under one acquisition and only release when
+            // the backlog is empty (then idle without the lock so peers can take a turn).
+            let guard = match handle.distributed_lock(&lock_name, Duration::from_secs(30)).await {
                 Ok(g)  => g,
                 Err(_) => {
                     tokio::time::sleep(Duration::from_millis(200)).await;
                     continue;
                 }
             };
-            let offset_key = format!("clog/{stream_name}/{group_name}/offset");
-            let offset: u64 = kv_state.store.pin().get(offset_key.as_str())
-                .and_then(|e| e.data.clone())
-                .and_then(|b| std::str::from_utf8(&b).ok().and_then(|s| u64::from_str_radix(s, 16).ok()))
-                .unwrap_or(0);
+            loop {
+                let offset: u64 = kv_state.store.pin().get(offset_key.as_str())
+                    .and_then(|e| e.data.clone())
+                    .and_then(|b| std::str::from_utf8(&b).ok().and_then(|s| u64::from_str_radix(s, 16).ok()))
+                    .unwrap_or(0);
 
-            let prefix = format!("log/{stream_name}/");
-            let mut entries: Vec<LogEntry> = crate::store::scan_kv_prefix(&kv_state, &prefix)
-                .into_iter()
-                .filter_map(|(k, v)| {
-                    let suffix = k.strip_prefix(&prefix)?;
-                    let hlc    = u64::from_str_radix(suffix, 16).ok()?;
-                    if hlc > offset { Some(LogEntry { hlc, value: v }) } else { None }
-                })
-                .collect();
-            entries.sort_by_key(|e| e.hlc);
+                let mut entries: Vec<LogEntry> = crate::store::scan_kv_prefix(&kv_state, &prefix)
+                    .into_iter()
+                    .filter_map(|(k, v)| {
+                        let suffix = k.strip_prefix(&prefix)?;
+                        let hlc    = u64::from_str_radix(suffix, 16).ok()?;
+                        if hlc > offset { Some(LogEntry { hlc, value: v }) } else { None }
+                    })
+                    .collect();
+                entries.sort_by_key(|e| e.hlc);
 
-            if let Some(entry) = entries.into_iter().next() {
+                let Some(entry) = entries.into_iter().next() else { break };
+
                 let new_offset = format!("{:016x}", entry.hlc);
                 let offset_key_arc: Arc<str> = Arc::from(offset_key.as_str());
                 let update = crate::framing::make_gossip_update(
@@ -2360,9 +2367,9 @@ async fn gw_overlay_log_group_subscribe(
                     "value_b64": base64::engine::general_purpose::STANDARD.encode(&entry.value),
                 });
                 if tx.send(Event::default().data(data.to_string())).await.is_err() { return; }
-            } else {
-                tokio::time::sleep(Duration::from_millis(100)).await;
             }
+            drop(guard);   // release the claim before idling so other consumers can take a turn
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
     });
 
