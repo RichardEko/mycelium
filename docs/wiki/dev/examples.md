@@ -34,12 +34,12 @@ one per-example block). `coop/` is the reference implementation of the suite sha
   `afn-smoke`. Concept essay: `flow_networks.html`.
 - **A2A LangChain/AutoGen** (`examples/a2a_langchain/`): external agents auto-discover
   Mycelium skills via `/.well-known/agent.json`.
-- Cross-node Docker-compose suites, both now **CI-gated** via
-  [`.github/workflows/cluster-suites.yml`](../../../.github/workflows/cluster-suites.yml) (on
-  substrate/harness PRs + nightly + on-merge; not per-PR, since the image build is heavy): the
-  **13-scenario integration** cluster (`make test`, 4 nodes) and the **consistency overlay**
-  (`make test-overlay`, 3-node consensus). Real TCP + anti-entropy the in-process smokes can't
-  reach. Gating them earned its keep — it surfaced a real exact-once-delivery bug in
-  `subscribe_log_group` (S11; fixed) and an integration timing flake (S13; `run_scenario` now
-  retries via `SCENARIO_ATTEMPTS`). Scale suites (100-node, deliberately not in CI) in
+- Integration suite: **13 Docker scenarios** (`make test`, 4-node cluster) — a *cross-node*
+  Docker-compose suite (real TCP + anti-entropy the in-process smokes can't reach), now **CI-gated**
+  via [`.github/workflows/cluster-suites.yml`](../../../.github/workflows/cluster-suites.yml) (on
+  substrate/harness PRs + nightly + on-merge; not per-PR, since the image build is heavy;
+  `run_scenario` retries via `SCENARIO_ATTEMPTS` to absorb CI convergence flakes). The **consistency
+  overlay** (`make test-overlay`, 3-node consensus) stays **manual-only**: gating it surfaced a
+  deeper exact-once-delivery bug in `subscribe_log_group` (#149 — needs a consensus-backed offset,
+  not just a lock). Scale suites (100-node, deliberately not in CI) in
   [testing/scale-tests](testing/scale-tests.md).
