@@ -299,6 +299,7 @@ impl GossipAgent {
                 gossip_rx,
                 Arc::clone(&bootstrap_peers),
                 Arc::clone(&peer_writers),
+                Arc::clone(&self.pinned_peers),
                 Arc::clone(&shutdown_tx),
                 self.peer_list_tx.subscribe(),
                 Arc::clone(&self.shard_alive[shard_idx]),

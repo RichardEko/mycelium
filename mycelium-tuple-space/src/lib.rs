@@ -440,6 +440,12 @@ impl TupleSpace {
                     payload.extend_from_slice(&epoch.to_le_bytes());
                     payload.extend_from_slice(&head.to_le_bytes());
                     for node in me.resolve_role("secondary") {
+                        // Pin a direct route to each secondary: the primary sends it Individual-
+                        // scoped traffic both ways — this heartbeat AND every RPC *reply* (take/
+                        // put/complete responses). Without the pin those degrade to flood-relay and
+                        // the secondary's client RPC round-trip times out (#150). Symmetric with the
+                        // secondary pinning the primary in `resolve_primary`.
+                        me.agent.connect_peer(node.clone());
                         let _ = me.agent.mesh().emit(
                             Arc::clone(&kind),
                             SignalScope::Individual(node),
@@ -952,7 +958,12 @@ impl TupleSpace {
         // Deterministic pick if more than one claims primary (split-brain is
         // at-least-once-acceptable; the watch task converges it).
         providers.sort_by_key(NodeId::to_string);
-        Ok(providers.remove(0))
+        let primary = providers.remove(0);
+        // Pin a direct forwarding route to the primary: client ops (put/take/complete) are
+        // Individual-scoped RPCs, and an unpinned non-active peer would degrade them to
+        // flood-relay latency → request-response timeouts (#150). Idempotent + cheap.
+        self.agent.connect_peer(primary.clone());
+        Ok(primary)
     }
 
     /// Resolve the primary, **waiting** (bounded) for its capability to appear.

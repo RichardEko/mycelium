@@ -116,6 +116,25 @@ impl GossipAgent {
         self.peers.pin().iter().map(|(k, _)| k.clone()).collect()
     }
 
+    /// Pin a **direct forwarding route** to `peer`.
+    ///
+    /// The forwarding target set de-pins non-active peers (the seed-scalability design), so an
+    /// Individual-scoped RPC to a peer that isn't currently a forwarding target degrades to
+    /// flood-relay — fine for one-shot signals, but too slow for a request-response RPC, which
+    /// then times out. A relationship that is *RPC-heavy* toward a specific peer (e.g. a
+    /// tuple-space secondary calling its primary) should pin that peer so its RPCs keep a direct
+    /// route. Idempotent; the pin is honoured on every forwarding-target rebuild until
+    /// [`disconnect_peer`](Self::disconnect_peer). See #150.
+    pub fn connect_peer(&self, peer: crate::node_id::NodeId) {
+        self.pinned_peers.pin().insert(peer, ());
+    }
+
+    /// Drop a direct-route pin previously set by [`connect_peer`](Self::connect_peer). The peer
+    /// reverts to normal forwarding-target eligibility (flood-relay when not active).
+    pub fn disconnect_peer(&self, peer: &crate::node_id::NodeId) {
+        self.pinned_peers.pin().remove(peer);
+    }
+
     /// Returns the groups this node has currently joined.
     ///
     /// Reflects the local [`Boundary`] state at the moment of the call. Useful for

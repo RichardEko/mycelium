@@ -182,6 +182,7 @@ pub(super) async fn run_gossip_shard(
     mut gossip_rx:          mpsc::Receiver<(Bytes, u64, ForwardHint)>,
     bootstrap_peers:        Arc<[NodeId]>,
     peer_writers:           Arc<papaya::HashMap<NodeId, WriterEntry>>,
+    pinned_peers:           Arc<papaya::HashMap<NodeId, ()>>,
     shutdown_tx:            Arc<watch::Sender<bool>>,
     mut peer_list_rx:       watch::Receiver<Arc<[NodeId]>>,
     alive:                  Arc<AtomicBool>,
@@ -301,7 +302,12 @@ pub(super) async fn run_gossip_shard(
                         }
                         ForwardHint::Individual(target) => {
                             if target.id_hash() != sender_hash {
-                                if targets.contains(target) {
+                                // A direct route exists if the target is an active forwarding target
+                                // OR was explicitly pinned via `connect_peer` (RPC-heavy pairs, e.g.
+                                // a tuple-space secondary → primary — #150). The pin survives the
+                                // seed-de-pinning target rebuild, so those RPCs keep a direct route
+                                // instead of degrading to flood-relay latency.
+                                if targets.contains(target) || pinned_peers.pin().contains_key(target) {
                                     // Direct route: the targeted-send optimization.
                                     send_to_peer!(target, data);
                                 } else {

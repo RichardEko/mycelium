@@ -485,6 +485,11 @@ pub struct GossipAgent {
     pub(super) bootstrap_peers: Arc<[NodeId]>,
     pub(super) gossip_rxs: GossipRxs,
     pub(super) peer_writers: Arc<papaya::HashMap<NodeId, WriterEntry>>,
+    /// Peers pinned as **direct forwarding routes** via [`GossipAgent::connect_peer`]. The
+    /// forwarding target set otherwise de-pins non-active peers (the seed-scalability design),
+    /// which degrades RPC-heavy Individual-scoped traffic to flood-relay; a pinned peer keeps a
+    /// direct route so those RPCs (e.g. tuple-space secondary → primary) don't time out (#150).
+    pub(super) pinned_peers: Arc<papaya::HashMap<NodeId, ()>>,
     /// Cached count of live (non-tombstone) store entries. Updated by the GC task;
     /// up to one GC interval stale but O(1) to read via system_stats().
     pub(super) live_entries: Arc<AtomicUsize>,
@@ -833,6 +838,7 @@ impl GossipAgent {
             peer_list_tx,
             gossip_rxs: std::sync::Mutex::new(Some(gossip_rxs_inner)),
             peer_writers: Arc::new(papaya::HashMap::new()),
+            pinned_peers: Arc::new(papaya::HashMap::new()),
             live_entries: Arc::new(AtomicUsize::new(0)),
             state: AtomicU8::new(AgentState::Idle as u8),
             shutdown_tx: shutdown_tx_arc,
