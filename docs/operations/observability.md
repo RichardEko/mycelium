@@ -119,7 +119,8 @@ and [sso.md](sso.md).
 ## Viewing AgentFacts
 
 AgentFacts is the node's self-certified, federation-facing metadata (see
-[00 · Concepts](../guide/00-concepts.md) and the
+[00 · Concepts](../guide/00-concepts.md), the developer how-to in
+[17 · Federation](../guide/17-federation.md) — serve/verify + the domain board — and the
 [`federation_facts`](../../examples/coop/src/bin/federation_facts.rs) demo). Mount
 the lens (from the `mycelium-agentfacts` crate) before `start`:
 

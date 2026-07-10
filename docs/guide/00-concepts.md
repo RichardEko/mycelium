@@ -67,7 +67,8 @@ They are **external interop standards**, each for a different audience:
   document — no shared CA, trust is the fetcher's decision.
 
 A Capability/Skill is the thing; A2A/MCP/AgentFacts are three different windows
-onto it for three different outside callers.
+onto it for three different outside callers. The federation window has its own
+how-to: [17 · Federation](17-federation.md) (serve + verify the edge doc, no shared CA).
 
 ---
 
