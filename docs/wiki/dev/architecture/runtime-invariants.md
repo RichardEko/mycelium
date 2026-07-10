@@ -35,6 +35,18 @@ silent drop, which broke RPC and ballot voting in partial meshes. Only *admissio
 `test_individual_signal_reaches_unpeered_target_via_relay`,
 `test_individual_consumers_over_random_partial_meshes` (both in `src/lib_tests.rs`).
 
+**The one legitimate termination: the frame's own target (2026-07-10, #162).** An Individual
+frame addressed to *this* node has nowhere further to route — admission already delivered it
+locally. Pre-fix it still entered the forward path (both self-emits like mailbox
+deliver-to-self and relayed frames arriving at their destination traverse the gossip queue),
+found no route to itself, and **flooded the cluster** until seen-set/TTL death — plus a
+topology-pressure warn naming the node itself and spurious `individual_flood_fallbacks`
+counts (this noise complicated the #161 diagnosis). The gossip shard now terminates
+self-addressed Individual frames before any forwarding logic (`src/agent/tasks.rs`). This is
+**routing at the terminal, not scope admission** — do not cite it as precedent for
+conditional forwarding: any frame addressed *elsewhere* still forwards unconditionally.
+Gate: `self_targeted_signal_does_not_flood` (`src/lib_tests.rs`, verified failing pre-fix).
+
 **Flood-relay is correct but slow for RPC — pin RPC-heavy pairs.** The direct-send path only
 fires for a peer in the *forwarding-target set*, and that set **deliberately de-pins non-active
 peers** (seed-scalability, WS-B M4: avoid O(N) pinning on shared seeds — `src/agent/tasks.rs`,

@@ -40,3 +40,14 @@ listener without SO_REUSEADDR** — restart on a fixed port panicked the node on
 `AddrInUse` (scenario 03 killed node-a, 11 scenarios cascaded); fixed in PR #160, mirroring the
 gossip listener's socket options. Week's tally: five substrate/companion defects, all surfaced by
 executing claims (CI gates + probe tests) rather than reading code.
+
+**Addendum 2 (Run 41 follow-through, #162):** working the analysis floor fixed two more:
+(1) **self-targeted Individual frames flooded the cluster** — terminated locally but still
+entered the forward path (found in #161's node logs via scenario 10's deliver-to-self);
+fixed with a terminal check in the gossip shard — the one legitimate Individual termination,
+documented in runtime-invariants as routing-not-admission. (2) **Discovery-wait made
+symmetric across the tuple-space API** — five ops (put/put_keyed/take_by_key/complete_keyed/
+ack) raced capability gossip where take/complete waited (#154 half-fix; Run 41's API
+finding); `depth` deliberately stays fail-fast (it IS the discovery probe). Both gates
+canary-verified failing pre-fix. #161 stays open with the diagnosis recorded (anti-entropy
+tail + the now-removed self-flood contributor; errtrace names any recurrence).
