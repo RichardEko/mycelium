@@ -26,6 +26,12 @@ is part of a cluster if two things hold:
 > authenticate each other. To *isolate* clusters, run a **separate mesh** — its own CA (or an
 > unreachable network) — **not** a different name. (The cluster is also the data-isolation
 > boundary: KV floods every node in it. See the guide on [security](09-security.md).)
+>
+> **Setting it** (optional; default = unlabelled): `GOSSIP_CLUSTER_NAME=prod-eu`, or
+> `GossipConfig { cluster_name: Some("prod-eu".into()), .. }`. Read it back with
+> `agent.cluster_name()`. Its whole job is telling *one* Prometheus/Grafana apart from several
+> Mycelium environments (the `cluster="prod-eu"` metric label) — see
+> [operations/observability](../operations/observability.md#naming-environments--monitoring-many-clusters).
 
 ## Scope vocabulary: `Cluster · Group · Individual`
 
