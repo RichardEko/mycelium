@@ -2207,4 +2207,56 @@ mod tests {
             }
         }
     }
+
+    /// Run-41 falsification probe (semantic correctness): `state_chunk` pagination must
+    /// neither lose nor duplicate live items across chunks, must drop items acked
+    /// mid-scan, and must report done on an exhausted cursor.
+    #[tokio::test]
+    async fn state_chunk_paginates_without_loss_or_duplication() {
+        let store = TupleStore::transient(500);
+        let mut ids = Vec::new();
+        for i in 0..10u32 {
+            ids.push(store.put("s", b(&format!("x{i}"))).unwrap());
+        }
+        // Paginate with max_entries=3: collect all ids across chunks.
+        let mut got = Vec::new();
+        let mut cursor = 0u64;
+        for _ in 0..10 {
+            let (raw, next, done) = store.state_chunk(cursor, 3, usize::MAX);
+            let records = decode_records(&raw);
+            for r in &records {
+                if let Record::Put { id, .. } = r {
+                    got.push(*id);
+                }
+            }
+            cursor = next;
+            if done {
+                break;
+            }
+        }
+        got.sort_unstable();
+        assert_eq!(got, ids, "pagination lost or duplicated live items");
+
+        // Items acked mid-scan drop out of later chunks (at-least-once, never resurrection
+        // *within* one scan): take+ack two items, rescan from 0.
+        let (a, _) = store.take("s", Duration::from_millis(200)).await.unwrap();
+        let (b2, _) = store.take("s", Duration::from_millis(200)).await.unwrap();
+        store.ack(a).unwrap();
+        store.ack(b2).unwrap();
+        let (raw, _, done) = store.state_chunk(0, usize::MAX, usize::MAX);
+        let live: Vec<u64> = decode_records(&raw)
+            .iter()
+            .filter_map(|r| match r {
+                Record::Put { id, .. } => Some(*id),
+                _ => None,
+            })
+            .collect();
+        assert!(done);
+        assert_eq!(live.len(), 8, "acked items must drop out of the state chunk");
+        assert!(!live.contains(&a) && !live.contains(&b2), "acked ids resurrected");
+
+        // Exhausted cursor → empty + done.
+        let (raw, _, done) = store.state_chunk(u64::MAX, 10, usize::MAX);
+        assert!(done && decode_records(&raw).is_empty());
+    }
 }

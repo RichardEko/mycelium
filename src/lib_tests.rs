@@ -5020,3 +5020,43 @@ async fn probe_r31_diagnosis_is_idempotent_no_accumulating_state() {
     }
     a.shutdown_with_timeout(Duration::from_secs(5)).await;
 }
+
+/// Run-41 falsification probe (concurrency): `connect_peer` hammered from concurrent tasks
+/// while the agent shuts down must neither panic nor wedge shutdown. The warm path spawns a
+/// writer + sends a Ping; `get_or_spawn_writer` refuses during shutdown (returns None) — this
+/// asserts that guard holds under a real race, not just in isolation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn connect_peer_racing_shutdown_is_safe() {
+    let port = crate::test_util::alloc_port();
+    let agent = std::sync::Arc::new(GossipAgent::new(
+        NodeId::new("127.0.0.1", port).unwrap(),
+        GossipConfig { bind_port: port, ..Default::default() },
+    ));
+    agent.start().await.unwrap();
+
+    // 8 tasks hammering connect/disconnect against distinct (dead) peers…
+    let mut tasks = Vec::new();
+    for t in 0..8u16 {
+        let a = std::sync::Arc::clone(&agent);
+        tasks.push(tokio::spawn(async move {
+            for i in 0..200u16 {
+                let peer = NodeId::new("127.0.0.1", 40000 + t * 300 + (i % 250)).unwrap();
+                a.connect_peer(peer.clone());
+                if i % 3 == 0 {
+                    a.disconnect_peer(&peer);
+                }
+                tokio::task::yield_now().await;
+            }
+        }));
+    }
+    // …while shutdown lands mid-hammer.
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    agent.shutdown_with_timeout(Duration::from_secs(5)).await;
+
+    // All hammer tasks finish without panic (a panicked task returns Err here).
+    for t in tasks {
+        t.await.expect("connect_peer task panicked during shutdown race");
+    }
+    // And post-shutdown calls are inert, not panicking.
+    agent.connect_peer(NodeId::new("127.0.0.1", 41999).unwrap());
+}

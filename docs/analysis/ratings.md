@@ -27,6 +27,10 @@ such finding.
 Records bugs later found in dimensions that scored ≥ 8 while the bug already
 existed. This is the framework's own report card.
 
+- 2026-07-10 (Run 41): **API Design** scored 8 in Runs 39–40 while the put-vs-take discovery
+  asymmetry existed (default-config `put` fails `NoProvider` instantly during capability
+  discovery; #154 fixed only `take`/`complete`) — found by the Run-41 deep-dive after the
+  succession test hit it in practice.
 - 2026-07-10: **Semantic Correctness / Robustness** scored 8 through Run 40 while
   (a) the tuple-space promotion watch treated never-saw-a-primary as evaporated —
   permanent split-brain on slow hosts (found by the hosted cluster-suites gate, #158),
@@ -2484,3 +2488,45 @@ Deep-dive dimensions this run: **9 Concurrency Correctness, 11 Semantic Correctn
 | 25 | Dependency Hygiene | 8 | Carried (v39). `--no-default-features` compiles (`make check` this run); `Cargo.lock` present; no new deps from #151 (fix is pure std/existing). `cargo audit` green in CI. |
 | — | **Floor (lowest 3)** | **6, 7, 7** | **Test Architecture** (S13 ~50% flake unfixed on `main` + correctness suites manual-only — the gap that hid #151) · **Error Handling** (wasm-host stringly app-layer, persists from Run 38) · **Scalability** (single-host cliff; multi-host escape validated-offline-not-applied). |
 | — | Mean (continuity footnote) | 7.8 | not a target (sum 196/25 = 7.84). Essentially flat vs Run 39's 7.88, but the *shape* moved: Observability lifted 7→8 (#144 addressed its finding), Test Architecture dropped 7→6 (its structural weakness manifested concretely as an unfixed flaky scenario), Scalability decayed 8→7 (stale + unverified escape). The floor **worsened** (6 vs 7) — correctly: the headline is that gating the manual-only suites found a real exact-once bug (now fixed, ledger-recorded) and a still-unfixed flake. The mean is a footnote; the floor is the story. |
+
+## 2026-07-10 — Run 41 (M2)
+
+Deep-dive dimensions this run: **1 Philosophy, 2 Conceptual Integrity, 3 Architecture, 4 Modularity, 5 API Design** (new rotation cycle). Execution evidence (all this run): `make check` green (feature-matrix clippy incl. `--no-default-features`); local `make test` **13/13**; hosted cluster-suites **green ×4** (runs 29071006043 + 2 stability reruns + combined-build 29074990753 — Integration 13/13 + Overlay 3/3 each); tuple-space failover suite **6/6** (incl. the 3 new promotion/succession gates, one canary-verified failing on pre-fix code); probes `state_chunk_paginates_without_loss_or_duplication` **1/1** and `connect_peer_racing_shutdown_is_safe` **1/1** (both kept as permanent tests); wiki lint 10 doc-vs-code sweep clean; RUSTSEC audit green on every PR. Context: #152–#160 since Run 40 — connect_peer (+active warm), spurious-promotion fix, join-time backfill, HTTP reuseaddr, the Docker cluster-suites CI gate (no retries), and the self-hosted scale nightly.
+
+### Findings
+- **Major, live — 18 Test Architecture:** integration scenario 11 (AFN) **flaked once on the hosted no-retries gate** (main-push run `ead3f6d`: died ~5 s in, empty stderr, 12/13; adjacent runs green) and the **red main run went unnoticed** at the time — found by this run's P-18 probe checking the path filter. Cause unknown; filed **#161**. Caps 18 at 6.
+- **Minor, live — 5 API Design:** `put` under the default `BackpressureMode::Raise` fails `NoProvider` *instantly* during capability discovery while `take`/`complete` wait (`resolve_primary_blocking` — #154 fixed only the read side). Hit in practice writing the succession test. Caps 5 at 6.
+- **Minor, fixed this run — harness:** the scenario ERR trap did not fire inside shell *functions* (`set -o errtrace` missing) — the direct reason the AFN failure is undiagnosed. Fixed in `helpers.sh` + verified with a function-internal failure naming its line; the next AFN occurrence self-diagnoses.
+- Probes P-11 (state_chunk pagination: no loss/duplication, acks drop, cursor terminates) and P-9 (`connect_peer` hammered across shutdown: no panic, clean teardown, post-shutdown inert) both **passed**.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 8 | **Deep-dive.** `connect_peer` litmus-checked against the Holland model: forwarding stays unconditional (pin ≠ withholding; flood fallback intact); detection-not-prevention upheld through a heavy week (tripwires + warns, no Layer-I laws). Philosophy re-read this run. |
+| 2 | Conceptual Integrity | 7 | **Deep-dive.** New API naming consistent (`connect_peer`/`disconnect_peer`, `state_chunk` beside `wal_read_chunk`). Warts: `connect_peer` housed in `kv.rs` though it is routing, not KV; `run_gossip_shard` at 18 hand-threaded params and growing. |
+| 3 | Architecture | 8 | **Deep-dive.** The pin lives at the right layer (routing latency, not admission/semantics); backfill is companion-internal over the public RPC; lint 10 verified namespace + lock tables against code. |
+| 4 | Modularity | 7 | **Deep-dive.** Sub-handles clean; internal plumbing accretes — `pinned_peers` hand-threaded through mod/lifecycle/tasks is the third such shared-set (peers, writers, pins). |
+| 5 | API Design | 6 | **Deep-dive — finding (live, Minor).** put-vs-take discovery asymmetry under default config (above). Otherwise the week's additions are good citizens (idempotent, paired, documented call-ahead contract). |
+| 6 | Error Handling Model | 7 | Typed errors held under this week's failures (lib surfaced `AddrInUse` as typed Io; the panic was the example's `expect`). Un-swept handles stale. |
+| 7 | Configurability | 7 | Orphan grace deliberately hardcoded (10 ticks, documented); `cap_refresh` doc updated. Carried elsewhere (v40), stale. |
+| 8 | Language Best Practices | 8 | `make check` clean across the matrix this run; clippy caught + fixed type-complexity in new code. |
+| 9 | Concurrency Correctness | 8 | P-9 shutdown-race probe passed + kept as gate; lock-order table reconciled name-by-name (lint 10); `pinned_peers` correctly lock-free. Ledger-heaviest dimension — 8, not 9. |
+| 10 | Resource Management | 8 | P-9 doubles as lifecycle evidence: new warm-keeper/backfill/promotion tasks tear down cleanly under a shutdown race; post-shutdown calls inert. |
+| 11 | Semantic Correctness | 8 | P-11 passed; failover 6/6 (canary-verified gates); hosted suites green ×4. Held from 9: the undiagnosed AFN flake (#161) could yet land here. |
+| 12 | Robustness | 8 | Restart robustness materially improved (reuseaddr #160) and verified on hosted restart scenarios ×4; hostile-input surface not re-swept this run. |
+| 13 | Security | 7 | Carried (v38) — stalest carried dimension; unverified this run, read as possibly optimistic. |
+| 14 | Failure Mode Legibility | 8 | The week's diagnostics *worked in anger*: node-log dump named the split-brain + AddrInUse directly; errtrace fix verified live. |
+| 15 | Performance | 7 | Carried (v39), stale. |
+| 16 | Scalability | 7 | Carried (v39), stale; 100-node nightly queued on runner registration (#157). |
+| 17 | Testability | 8 | 3-agent succession chains + both probes constructed rapidly against public APIs — fresh usage evidence of the harness. |
+| 18 | Test Architecture | 6 | **Finding (live, Major) — floor + headline.** The pyramid is the strongest it has ever been (unit → deterministic gates → Docker PR gate, no retries → scale nightly), and it is *catching everything* — but a once-flaked, undiagnosed scenario (#161) sits live on the no-retries gate, and its red main run went unnoticed. Cap lifts when AFN is diagnosed (errtrace now makes that self-serve). |
+| 19 | Observability | 7 | Carried (v40), stale. |
+| 20 | Debuggability | 8 | Trap + node-log dump + take instrumentation diagnosed three real failures this week from CI logs alone (named runs). |
+| 21 | Operational Readiness | 8 | Hosted restart scenarios green ×4; succession failover (operator story: replace a dead node, no restarts) now executed + gated. |
+| 22 | Evolvability | 8 | CHANGELOG discipline held across 6 merges; wire v12 stable; dead-end branches cleaned. |
+| 23 | Documentation | 8 | Lint 10 same-day clean (3 findings fixed); cluster-suites page files the week's knowledge; front-door prefix list corrected. |
+| 24 | Developer Experience | 8 | `make check` (~3 min) used throughout; red gates now name their dying line + dump node logs. |
+| 25 | Dependency Hygiene | 8 | RUSTSEC audit green on every PR this week; `--no-default-features` clippy clean this run. No new deps for any of the six merges. |
+| — | **Floor (lowest 3)** | **6, 6, 7** | API Design · Test Architecture · (Security, stalest of the 7s) |
+| — | Mean (continuity footnote) | 7.52 | not a target; see M2 preamble |
+
+**Delta vs Run 40:** floor unchanged in shape (6/6/7 vs 6/7/7) but the 6s moved — Run 40's S13 flake is *fixed at the substrate* (two root causes, both gated), and 18's cap is now a single undiagnosed flake (#161) rather than a structural gap; 5 drops 8→6 on a live finding the succession work exposed. The week validated M2's core bet: every hosted red decomposed into a real defect (five fixed since Run 40), and both of this run's passing probes are now permanent gates.

@@ -6,6 +6,10 @@
 # (this hid the S13 failure detail on the first hosted cluster-suites run; #150/#156). The ERR
 # trap names the dying command and line, so a red gate is diagnosable from the runner log alone.
 # (ERR skips `if`/`&&`/`||`-guarded commands — the poll_until/kv_get internals stay silent.)
+# `errtrace` (-E) makes functions/subshells inherit the trap — without it a curl inside a
+# scenario helper (e.g. gw_kv_set) dies silently, which is exactly what made the one AFN
+# hosted failure (run ead3f6d, 2026-07-10) undiagnosable: ~5s in, empty stderr, no ERR line.
+set -o errtrace
 trap 'echo "ERR ${0##*/}:${LINENO}: \`${BASH_COMMAND}\` exited $?" >&2' ERR
 
 # wait_for_health HOST HTTP_PORT [TIMEOUT_SECS]
