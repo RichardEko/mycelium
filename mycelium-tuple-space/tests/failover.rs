@@ -477,3 +477,37 @@ async fn succession_chain_late_secondary_joins_promoted_primary() {
     ts_c.shutdown().await;
     a3.shutdown().await;
 }
+
+/// Run-41 API-finding gate: pipeline ops must wait (bounded) for capability discovery under
+/// the DEFAULT config — `BackpressureMode::Raise` means "don't block on a saturated primary",
+/// not "race capability gossip". Pre-fix, `put` on a fresh client failed `NoProvider`
+/// instantly while `take`/`complete` waited (#154 fixed only the read side; the succession
+/// test needed a hand-rolled readiness poll to work around it).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn client_ops_wait_for_discovery_under_default_config() {
+    let (pa, pb) = alloc_two_sorted_ports();
+    let a1 = start_agent(pa, None).await;
+    let a2 = start_agent(pb, Some(pa)).await;
+    wait_peered(&[&a1, &a2]).await;
+
+    let ts1 = TupleSpace::new(Arc::clone(&a1), ts_cfg("disc", TupleRole::Primary))
+        .await
+        .expect("primary");
+    // Fresh client puts IMMEDIATELY — no readiness poll. Default mode (Raise): must still
+    // succeed, because discovery-wait is not backpressure.
+    let ts2 = TupleSpace::new(Arc::clone(&a2), ts_cfg("disc", TupleRole::Client))
+        .await
+        .expect("client");
+    let id = ts2
+        .put("work", Bytes::from_static(b"first"))
+        .await
+        .expect("immediate put after client creation must ride out discovery");
+    let (got, _) = ts2.take("work", Duration::from_secs(5)).await.expect("take");
+    assert_eq!(got, id);
+    ts2.ack(id).await.expect("ack");
+
+    ts1.shutdown().await;
+    ts2.shutdown().await;
+    a2.shutdown().await;
+    a1.shutdown().await;
+}

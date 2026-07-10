@@ -26,6 +26,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   nightly for the 100-node scale suites is staged separately (#157).
 
 ### Fixed
+- **Self-targeted Individual signals no longer flood the cluster**: a frame whose target is
+  the local node (a self-emit like mailbox deliver-to-self, or a relayed frame arriving at
+  its destination) terminated locally but still entered the forward path — no route to self
+  → cluster-wide flood until seen-set/TTL killed it, plus a misleading topology-pressure
+  warn naming the node itself and spurious `individual_flood_fallbacks` counts. The gossip
+  shard now terminates Individual frames addressed to itself (admission already delivered
+  them; this is routing, not scope admission). Found diagnosing #161's node logs. Gate:
+  `self_targeted_signal_does_not_flood` (verified failing pre-fix).
+- **All tuple-space pipeline ops wait for capability discovery** (`mycelium-tuple-space`):
+  `put`/`put_keyed`/`take_by_key`/`complete_keyed`/`ack` failed `NoProvider` *instantly*
+  when issued before the primary's advertisement propagated, while `take`/`complete` waited
+  (#154 fixed only the read side) — analysis Run 41's API-design finding. All pipeline ops
+  now resolve via the bounded blocking path (`BackpressureMode::Raise` means "don't block on
+  a *saturated* primary", not "race capability gossip"); `depth` deliberately stays
+  fail-fast — it is the discovery probe monitors poll. Gate:
+  `client_ops_wait_for_discovery_under_default_config` (verified failing pre-fix).
 - **HTTP listener sets `SO_REUSEADDR`**: a fast process restart on a fixed port could hit
   `AddrInUse` from lingering TIME_WAIT tuples and panic the node at `agent.start()` — the
   gossip listener always set it; the HTTP bind did not. Timing-dependent, so fast hardware

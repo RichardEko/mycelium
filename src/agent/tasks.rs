@@ -179,6 +179,7 @@ pub(super) async fn run_listener_task(mut listener: TcpListener, lctx: ListenerC
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_gossip_shard(
     shard_idx:              usize,
+    self_id:                NodeId,
     mut gossip_rx:          mpsc::Receiver<(Bytes, u64, ForwardHint)>,
     bootstrap_peers:        Arc<[NodeId]>,
     peer_writers:           Arc<papaya::HashMap<NodeId, WriterEntry>>,
@@ -273,6 +274,19 @@ pub(super) async fn run_gossip_shard(
                     sender_cache.retain(|k, _| targets.contains(k));
                 }
 
+                // An Individual frame whose target is THIS node terminated here: both a local
+                // self-emit (e.g. mailbox deliver-to-self) and a relayed frame arriving at its
+                // destination traverse this queue, because forwarding is unconditional.
+                // Forwarding past the target is pure waste — no other node can terminate it, so
+                // it floods until seen-set/TTL kill it, and it counts/warns as topology pressure
+                // against ourselves (observed in the #161 hosted run, from scenario 10's
+                // deliver-to-self). Terminating an *arrived* frame is not a scope-admission
+                // decision — admission already delivered it locally; there is nowhere to route.
+                if let ForwardHint::Individual(target) = &hint
+                    && *target == self_id {
+                        continue;
+                    }
+
                 if targets.is_empty() {
                     // A flood frame with no peers is normal during startup;
                     // an Individual frame (RPC/vote) dropped with zero peers
@@ -301,6 +315,7 @@ pub(super) async fn run_gossip_shard(
                             }
                         }
                         ForwardHint::Individual(target) => {
+                            // (self-targeted frames already terminated via the early continue above)
                             if target.id_hash() != sender_hash {
                                 // A direct route exists if the target is an active forwarding target
                                 // OR was explicitly pinned via `connect_peer` (RPC-heavy pairs, e.g.

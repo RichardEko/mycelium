@@ -5060,3 +5060,51 @@ async fn connect_peer_racing_shutdown_is_safe() {
     // And post-shutdown calls are inert, not panicking.
     agent.connect_peer(NodeId::new("127.0.0.1", 41999).unwrap());
 }
+
+/// Run-41 follow-up (#161 diagnosis): an Individual-scoped signal whose target is the
+/// emitting node itself must be delivered locally and NEVER enter the flood-fallback —
+/// pre-fix, a self-emit (e.g. mailbox deliver-to-self) flooded the cluster with a frame no
+/// other node can terminate (seen-set/TTL bounded, pure waste) and fired the
+/// topology-pressure warn against the node itself.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn self_targeted_signal_does_not_flood() {
+    let (pa, pb) = (crate::test_util::alloc_port(), crate::test_util::alloc_port());
+    let a = std::sync::Arc::new(GossipAgent::new(
+        NodeId::new("127.0.0.1", pa).unwrap(),
+        GossipConfig { bind_port: pa, ..Default::default() },
+    ));
+    let b = std::sync::Arc::new(GossipAgent::new(
+        NodeId::new("127.0.0.1", pb).unwrap(),
+        GossipConfig {
+            bind_port: pb,
+            bootstrap_peers: vec![NodeId::new("127.0.0.1", pa).unwrap()],
+            ..Default::default()
+        },
+    ));
+    a.start().await.unwrap();
+    b.start().await.unwrap();
+    for _ in 0..100 {
+        if !a.peers().is_empty() && !b.peers().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let mut rx = a.mesh().signal_rx("self.test");
+    let self_target = a.node_id().clone();
+    assert!(a.mesh().emit("self.test", SignalScope::Individual(self_target), Bytes::from_static(b"x")));
+
+    // Local delivery works…
+    let got = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await;
+    assert!(matches!(got, Ok(Some(_))), "self-targeted signal not delivered locally");
+
+    // …and the emitter never took the flood fallback for it (pre-fix this was ≥1).
+    tokio::time::sleep(Duration::from_millis(300)).await; // let the gossip shard drain
+    assert_eq!(
+        a.system_stats().individual_flood_fallbacks, 0,
+        "self-targeted emit entered the flood fallback"
+    );
+
+    a.shutdown_with_timeout(Duration::from_secs(5)).await;
+    b.shutdown_with_timeout(Duration::from_secs(5)).await;
+}
