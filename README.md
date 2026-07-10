@@ -27,9 +27,9 @@ RPC, **no registry and no configured addresses**.
 | **Building a use case *on* Mycelium** | [Building on Mycelium](docs/guide/building-on-mycelium.md) — the integrator contract (dependency, public-API rule, reserved KV prefixes, a copyable `CLAUDE.md`) |
 | **Wanting the guided depth** | the **[developer guide](docs/guide/README.md)** — 17 chapters, each with a runnable example |
 
-> **The rest of this page is single-file reference** (architecture, full API, every subsystem).
-> For a *guided* path, follow the [FAQ](docs/guide/faq.md) → [guide](docs/guide/README.md) instead —
-> this README is the deep dive, not the on-ramp.
+> The rest of this page is a **short orientation** — what the system is, the demos, and a
+> layers-at-a-glance table. Every deep dive lives one link away in the
+> [guide](docs/guide/README.md) and [operations](docs/operations/README.md) docs.
 
 ## What it is
 
