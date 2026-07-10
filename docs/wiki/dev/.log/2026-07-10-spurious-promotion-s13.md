@@ -31,3 +31,12 @@ hosted runs failed integration S13 identically while overlay passed and local pa
 Pages touched: `dev/companions/tuple-space.md` (promotion semantics + lesson),
 `dev/architecture/runtime-invariants.md` (regression-gate correction — earlier note cited the
 wrong suite).
+
+**Addendum (same day):** the gate found two more defects on PR #159's run. (1) **Succession-chain
+data loss** — a late-joining secondary never backfilled pre-join items (forward-only mirror);
+fixed with join-time backfill driving `wal_replay` (+ *state chunks* for transient primaries) —
+`mycelium-tuple-space`, PR #159, prompted by the user's "but we don't test this?". (2) **HTTP
+listener without SO_REUSEADDR** — restart on a fixed port panicked the node on TIME_WAIT
+`AddrInUse` (scenario 03 killed node-a, 11 scenarios cascaded); fixed in PR #160, mirroring the
+gossip listener's socket options. Week's tally: five substrate/companion defects, all surfaced by
+executing claims (CI gates + probe tests) rather than reading code.

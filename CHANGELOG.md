@@ -26,6 +26,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   nightly for the 100-node scale suites is staged separately (#157).
 
 ### Fixed
+- **HTTP listener sets `SO_REUSEADDR`**: a fast process restart on a fixed port could hit
+  `AddrInUse` from lingering TIME_WAIT tuples and panic the node at `agent.start()` — the
+  gossip listener always set it; the HTTP bind did not. Timing-dependent, so fast hardware
+  never saw it; a CPU-starved CI runner did (scenario 03's restart killed node-a and 11
+  downstream scenarios — named directly by the gate's node-log dump).
 - **Tuple-space late-joining secondary now backfills** (`mycelium-tuple-space`): live
   replication only ships records put while a secondary is present, so a secondary joining an
   established (or promoted) primary held a *partial* mirror — a succession chain (A dies → B
