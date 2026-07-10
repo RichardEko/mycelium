@@ -41,6 +41,13 @@ signals (`SignalScope`) and consensus:
 The relationship: `node ∈ group(s) ⊆ cluster`. **Cluster-scope = the whole cluster** — it is an
 *addressing mode*, not a fourth topology level; there is nothing between cluster and group.
 
+**Defining and monitoring a group** (who's in it, is it healthy): see the cookbook recipe
+[*"How do I define a group, and monitor who's in it?"*](cookbook.md#how-do-i-define-a-group-and-monitor-whos-in-it)
+— `join_group` / `define_capability_group` to define; `mesh().group_members(name)`,
+`capabilities().resolve(filter)`, and `fleet_snapshot().governed_groups` to monitor.
+**Monitoring the whole cluster** is `/stats` · `/metrics` · `/gateway/fleet` · `/gateway/diagnose`
+→ [operations/observability](../operations/observability.md).
+
 > **Note on "system".** Before 2026-07-10 cluster-scope was called `System` (`SignalScope::System`,
 > `system_propose`, scope string `"system"`) — renamed to `Cluster` because it kept getting
 > confused with the *cluster*. The old names still work: `system_propose` is a `#[deprecated]`

@@ -95,6 +95,36 @@ equality + presence (not unification). Demo:
 storage executors compete for finite surplus). When to use which:
 [00 · Concepts](00-concepts.md) ("tuple space vs. blackboard").
 
+### How do I define a group, and monitor who's in it?
+
+**Scope terms first:** the mesh has three scopes — `Cluster · Group · Individual` (all / subset /
+one), with `node ∈ group(s) ⊆ cluster`. See [13 · Cluster Topology](13-cluster-topology.md#scope-vocabulary-cluster--group--individual).
+
+**Define** — two ways, by intent:
+- *Plain membership* — `agent.mesh().join_group("nlp")` (and `leave_group`). This node now acts on
+  `SignalScope::Group("nlp")` signals and votes in `group_propose("nlp", …)`. Membership gossips to
+  Layer I at `grp/nlp/{node}`.
+- *Emergent (capability) group* — `agent.capabilities().define_capability_group("nlp",
+  CapabilityGroupDef { filter, provides, requires, … }, ttl)`. Every node whose capabilities match
+  `filter` **self-joins** — no coordinator, no join call. This is the one you usually want for agent
+  fleets. Chapter: [02 · Capabilities](02-capabilities.md#emergent-capability-groups).
+
+**Monitor** — three angles for the three kinds of group:
+- *Who's in it* — `agent.mesh().group_members("nlp")` → `Vec<NodeId>` (live members from
+  `grp/nlp/`). For a capability group, `agent.capabilities().resolve(&filter)` lists the matching
+  providers directly.
+- *Is it at its target size* — a **governed** group (one under a `MembershipIntent` /
+  `MembershipGovernor`) reports `GroupStatus { group, min, max, observed, conflict }` via
+  `agent.fleet_snapshot().governed_groups`, on `GET /gateway/fleet`, and as the
+  `mycelium_emergent_governed_group_conflicts` metric. Runbook:
+  [diagnostics.md](../operations/diagnostics.md#governed-group-conflict--thrash-the-56-pattern).
+- *This node's own groups* — `agent.groups()`.
+
+> **Gap (honest):** an **ungoverned** group has no per-group Prometheus gauge — you have
+> `group_members().len()` from the API, but no first-class "size of group X" metric or dashboard
+> panel unless it's under a governor. Tracked separately; use `group_members` + your own gauge if
+> you need it scraped today.
+
 ### How do I give a group a durable, curated knowledge canon (wiki)?
 
 When the group needs **durable, curated** shared knowledge — not transient work —

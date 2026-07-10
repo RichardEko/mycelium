@@ -68,6 +68,26 @@ each cluster a name so one Prometheus / Grafana can tell them apart:
 GOSSIP_CLUSTER_NAME=prod-eu    # or set GossipConfig::cluster_name
 ```
 
+**`cluster_name` is a label, not a boundary** — it disambiguates dashboards; it does *not* define
+membership (that's reachability + the CA). See
+[guide 13 · what makes a cluster](../guide/13-cluster-topology.md#what-actually-makes-a-node-part-of-a-cluster).
+
+## Monitoring a group (vs the whole cluster)
+
+Cluster-wide health is `/stats` + `/metrics` + `/gateway/fleet` (above). For a **single group**:
+
+- **Membership** — `agent.mesh().group_members("nlp")` → live members (`Vec<NodeId>`); for a
+  capability group, `agent.capabilities().resolve(&filter)` lists matching providers.
+- **Size vs. intent** — a **governed** group (under a `MembershipGovernor`) surfaces
+  `GroupStatus { min, max, observed, conflict }` on `GET /gateway/fleet` (`governed_groups`) and as
+  the `mycelium_emergent_governed_group_conflicts` gauge → alert on it (see
+  [diagnostics.md](diagnostics.md#governed-group-conflict--thrash-the-56-pattern)).
+- **Ungoverned groups have no per-group gauge yet** — scrape `group_members().len()` via your own
+  exporter if you need it, or put the group under a governor. (Tracked as a metrics gap.)
+
+Full how-to (define + monitor): the cookbook recipe
+[*"define a group, and monitor who's in it"*](../guide/cookbook.md#how-do-i-define-a-group-and-monitor-whos-in-it).
+
 When set, the name is a **pure operator label** (no effect on gossip, identity, or
 membership) and propagates to all three surfaces:
 
