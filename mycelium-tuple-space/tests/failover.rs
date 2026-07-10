@@ -511,3 +511,35 @@ async fn client_ops_wait_for_discovery_under_default_config() {
     a2.shutdown().await;
     a1.shutdown().await;
 }
+
+/// Run-42 falsification probe (resource management): `shutdown` with a take waiter PARKED on
+/// an empty stage must complete promptly — a parked oneshot must not wedge the drain. The
+/// parked take itself resolves by its own timeout contract (documented at-least-once
+/// boundary; a shutdown is not a delivery).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn shutdown_with_parked_take_waiter_is_prompt() {
+    let base = alloc_port();
+    let agent = start_agent(base, None).await;
+    let ts = TupleSpace::new(Arc::clone(&agent), ts_cfg("park", TupleRole::Primary))
+        .await
+        .expect("primary");
+
+    // Park a waiter on an empty stage (2 s take timeout bounds the test).
+    let ts2 = Arc::clone(&ts);
+    let waiter = tokio::spawn(async move { ts2.take("empty", Duration::from_secs(2)).await });
+    tokio::time::sleep(Duration::from_millis(200)).await; // let it park
+
+    // Shutdown must complete well under the waiter's timeout.
+    let t0 = std::time::Instant::now();
+    ts.shutdown().await;
+    agent.shutdown_with_timeout(Duration::from_secs(5)).await;
+    assert!(
+        t0.elapsed() < Duration::from_secs(4),
+        "shutdown wedged on a parked take waiter: {:?}",
+        t0.elapsed()
+    );
+
+    // The parked take resolves (Err) without panicking.
+    let r = waiter.await.expect("parked take panicked");
+    assert!(r.is_err(), "parked take on an empty stage cannot succeed");
+}

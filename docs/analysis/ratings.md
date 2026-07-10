@@ -2530,3 +2530,42 @@ Deep-dive dimensions this run: **1 Philosophy, 2 Conceptual Integrity, 3 Archite
 | — | Mean (continuity footnote) | 7.52 | not a target; see M2 preamble |
 
 **Delta vs Run 40:** floor unchanged in shape (6/6/7 vs 6/7/7) but the 6s moved — Run 40's S13 flake is *fixed at the substrate* (two root causes, both gated), and 18's cap is now a single undiagnosed flake (#161) rather than a structural gap; 5 drops 8→6 on a live finding the succession work exposed. The week validated M2's core bet: every hosted red decomposed into a real defect (five fixed since Run 40), and both of this run's passing probes are now permanent gates.
+
+## 2026-07-10 — Run 42 (M2)
+
+Deep-dive dimensions this run: **6 Error Handling, 7 Configurability, 8 Language Best Practices, 9 Concurrency Correctness, 10 Resource Management** (rotation). Execution evidence (all this run): probes `keyed_and_unkeyed_takes_never_interfere`, `probe_framed_but_corrupt_message_survives`, `shutdown_with_parked_take_waiter_is_prompt` — **3/3 pass**, all kept as permanent tests; clippy clean (main matrix + tuple-space `--all-targets`); #162's full CI green earlier today (incl. both Docker suites on the PR *and* the main-push combined run; lib 357/0; failover 7/7). Context: second run today — justified by #162's material diff (self-flood routing fix + discovery symmetry, both canary-verified). **Transparency flag:** dims 5/18 concern fixes authored this same session in direct response to Run 41 — the loop working as designed (findings → fixes → gates), but same-day re-scoring is noted, not hidden. Carried scores are hours old, not decayed.
+
+### Findings
+None new — all three probes passed. Standing finding from Run 41 remains live: **#161** (AFN flaked once on the hosted gate, cause unknown; a real contributor — the self-targeted flood — was removed in #162, but that is not claimed as the fix). It keeps dim 18 capped.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 8 | carried (v41, hours old) |
+| 2 | Conceptual Integrity | 7 | carried (v41) — kv.rs housing + 18-param spawn warts stand |
+| 3 | Architecture | 8 | carried (v41); the #162 carve-out documented as routing-not-admission with not-precedent framing (lint 11) |
+| 4 | Modularity | 7 | carried (v41) |
+| 5 | API Design | 8 | Run 41's live finding **fixed + canary-verified gate** (#162: all five racing ops now wait; `depth` deliberately fail-fast, documented); full CI green. Fixed end-state per current-state rule; same-session flag above |
+| 6 | Error Handling Model | 8 | **Deep-dive.** Typed enums both layers; non-test unwrap/expect across hot files ≈4, each justified (guarded parse ×2, fail-fast recorder init, infallible local_addr); this week's real failures surfaced as typed errors (AddrInUse → typed Io; NoProvider contract now symmetric) |
+| 7 | Configurability | 7 | **Deep-dive.** 47 validation/InvalidConfig sites incl. cross-knob tuning invariants; orphan grace deliberately hardcoded (documented). Env-var story spread across examples keeps it at 7 |
+| 8 | Language Best Practices | 8 | **Deep-dive.** `unsafe` only in env-test helpers (`config.rs` tests); clippy `-D warnings` clean incl. `--all-targets` this run |
+| 9 | Concurrency Correctness | 8 | **Deep-dive.** New tasks re-read (warm-keeper/backfill guards correct: `is_primary` exit, bounded per-tick work); P-C exercises waiter×shutdown interplay. Ledger-heaviest — stays 8 |
+| 10 | Resource Management | 8 | **Deep-dive + probe.** P-C passed: shutdown prompt with a parked take waiter (no wedge), waiter resolves by its own timeout contract. Pins bounded by cluster size (deliberate no-disconnect, documented) |
+| 11 | Semantic Correctness | 8 | P-A passed: keyed/unkeyed lane isolation holds (documented invariant, now gated) |
+| 12 | Robustness | 8 | P-B passed: framed-but-corrupt codec input rejected cleanly (0 dead shards, serviceable) — one layer deeper than Run 40's framing probes |
+| 13 | Security | 7 | carried (v38) — **stalest carry; deep-dive next run by rotation (dims 11–15)** |
+| 14 | Failure Mode Legibility | 8 | carried (v41) |
+| 15 | Performance | 7 | carried (v39), stale |
+| 16 | Scalability | 7 | carried (v39), stale; scale nightly still queued on runner registration |
+| 17 | Testability | 8 | carried (v41); three probes again constructed rapidly on public APIs |
+| 18 | Test Architecture | 6 | **Standing Run-41 finding (#161) still live** — one undiagnosed flake on the no-retries gate. Contributor removed (#162), errtrace armed; cap lifts on diagnosis or a clean nightly stretch (nightly hasn't run yet) |
+| 19 | Observability | 7 | carried (v40), stale |
+| 20 | Debuggability | 8 | carried (v41) |
+| 21 | Operational Readiness | 8 | carried (v41) |
+| 22 | Evolvability | 8 | carried (v41); CHANGELOG discipline held through #162 |
+| 23 | Documentation | 8 | lint 11 same-day (3 staleness fixes: CLAUDE.md carve-out clause, errtrace lesson, discovery-symmetry contract) |
+| 24 | Developer Experience | 8 | carried (v41) |
+| 25 | Dependency Hygiene | 8 | carried (v41); RUSTSEC green on #162 |
+| — | **Floor (lowest 3)** | **6, 7, 7** | Test Architecture · Security (stalest) · Conceptual Integrity |
+| — | Mean (continuity footnote) | 7.64 | not a target; see M2 preamble |
+
+**Delta vs Run 41 (same day):** API Design 6→8 (finding fixed + gated, #162 green); everything else carried or confirmed by deep-dive/probe. 18 stays 6 honestly — #161 is not resolved by having removed one contributor. The three probes grew the suite by three permanent gates (lane isolation, codec-layer hostility, waiter×shutdown lifecycle).

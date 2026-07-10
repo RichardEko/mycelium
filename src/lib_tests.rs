@@ -5108,3 +5108,48 @@ async fn self_targeted_signal_does_not_flood() {
     a.shutdown_with_timeout(Duration::from_secs(5)).await;
     b.shutdown_with_timeout(Duration::from_secs(5)).await;
 }
+
+/// Run-42 falsification probe (robustness): a WELL-FRAMED but interior-corrupted message —
+/// passes the frame-length layer (which Run 40's garbage/oversized probes covered) and dies
+/// inside the codec decoder instead. The agent must reject it cleanly: no shard death, still
+/// serviceable, connection handling intact.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn probe_framed_but_corrupt_message_survives() {
+    use tokio::io::AsyncWriteExt;
+
+    let port = alloc_port();
+    let id = NodeId::new("127.0.0.1", port).unwrap();
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = port;
+    let agent = GossipAgent::new(id, cfg);
+    agent.start().await.unwrap();
+
+    // A legitimate Ping, corrupted in the interior while keeping valid framing.
+    let nid = NodeId::new("127.0.0.1", 9999).unwrap();
+    let good = wire_to_bytes(&WireMessage::Ping {
+        sender: nid.clone(),
+        known_peers: vec![nid.clone(), nid.clone(), nid],
+    });
+    let mut corrupt = good.to_vec();
+    // Flip every third byte after the first (keep the message-type byte plausible).
+    for i in (1..corrupt.len()).step_by(3) {
+        corrupt[i] ^= 0xA5;
+    }
+    let mut s = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    write_frame(&mut s, &corrupt).await.unwrap();
+    // And a second variant: truncate the tail but frame the truncated bytes correctly.
+    let truncated = &good[..good.len() / 2];
+    write_frame(&mut s, truncated).await.unwrap();
+    let _ = s.shutdown().await;
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    assert!(agent.kv().set("probe/after-corrupt", Bytes::from_static(b"ok")));
+    assert_eq!(
+        agent.kv().get("probe/after-corrupt").as_deref(),
+        Some(b"ok".as_slice()),
+        "agent must remain serviceable after framed-but-corrupt input"
+    );
+    assert_eq!(agent.system_stats().dead_shards, 0, "no shard may die from corrupt codec input");
+    agent.shutdown().await;
+}

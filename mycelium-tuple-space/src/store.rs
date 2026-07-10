@@ -2259,4 +2259,29 @@ mod tests {
         let (raw, _, done) = store.state_chunk(u64::MAX, 10, usize::MAX);
         assert!(done && decode_records(&raw).is_empty());
     }
+
+    /// Run-42 falsification probe (semantic correctness): the documented lane invariant —
+    /// "a keyed `take_by_key` and an unkeyed `take` on the same stage never interfere".
+    /// An unkeyed take must never claim a keyed item (even when the FIFO is empty), and a
+    /// keyed take claims exactly its key.
+    #[tokio::test]
+    async fn keyed_and_unkeyed_takes_never_interfere() {
+        let store = TupleStore::transient(500);
+        let keyed_id = store.put_keyed("s", Arc::from("k1"), b("keyed")).unwrap();
+        let fifo_id = store.put("s", b("fifo")).unwrap();
+
+        // Unkeyed take claims the FIFO item, never the keyed one.
+        let (got, _) = store.take("s", Duration::from_millis(200)).await.unwrap();
+        assert_eq!(got, fifo_id, "unkeyed take must claim the FIFO item");
+
+        // FIFO now empty: an unkeyed take must TIME OUT rather than steal the keyed item.
+        assert!(
+            store.take("s", Duration::from_millis(200)).await.is_err(),
+            "unkeyed take stole a keyed item"
+        );
+
+        // The keyed take claims exactly its item.
+        let (got, _) = store.take_by_key("s", "k1", Duration::from_millis(200)).await.unwrap();
+        assert_eq!(got, keyed_id);
+    }
 }
