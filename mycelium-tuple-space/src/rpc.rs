@@ -470,8 +470,16 @@ pub(crate) fn spawn_primary_handlers(
                 let reply = match (parse_wal_replay_req(&p), me.store()) {
                     (Some((epoch, from, max_e, max_b)), Some(store)) => {
                         match store.wal_read_chunk(epoch, from, max_e, max_b) {
-                            // Transient store: nothing to replay; report done.
-                            Ok(None) => enc_wal_replay_ok(0, true, 0, &[]),
+                            // Transient store: no WAL history to page — serve a *state*
+                            // chunk instead (a joiner needs live items, not history; the
+                            // succession-chain test found the old done-empty reply silently
+                            // left late secondaries with a partial mirror). Offsets are
+                            // id-cursors here; the epoch of a transient store is always 0,
+                            // matching wal_position(), so the driver's epoch check holds.
+                            Ok(None) => {
+                                let (raw, next, done) = store.state_chunk(from, max_e, max_b);
+                                enc_wal_replay_ok(0, done, next, &raw)
+                            }
                             Ok(Some(c)) => {
                                 enc_wal_replay_ok(c.epoch, c.done, c.next_offset, &c.raw)
                             }

@@ -26,6 +26,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   nightly for the 100-node scale suites is staged separately (#157).
 
 ### Fixed
+- **Tuple-space late-joining secondary now backfills** (`mycelium-tuple-space`): live
+  replication only ships records put while a secondary is present, so a secondary joining an
+  established (or promoted) primary held a *partial* mirror — a succession chain (A dies → B
+  promotes → C joins → B dies) silently lost the pre-join backlog while redundancy *looked*
+  restored. A joining secondary now drives the paginated `wal_replay` RPC (WAL primary → WAL
+  pages; transient primary → new *state chunks*: live items as `Put` records with id-cursor
+  pagination); the mirror's idempotent apply dedupes overlap with concurrent replication.
+  Gate: `succession_chain_late_secondary_joins_promoted_primary`, which also executes the
+  full ring-driven succession topology (late C pins promoted B, client ops through C,
+  C's own second-generation promotion).
 - **Tuple-space spurious promotion on startup lag** (`mycelium-tuple-space`): the promotion
   watch treated *never-saw-a-primary* as *primary-evaporated*, so on a CPU-starved host a
   freshly-started secondary promoted on cap-propagation lag — and, never demoting, held a

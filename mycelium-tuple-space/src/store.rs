@@ -773,6 +773,59 @@ impl TupleStore {
         self.wal.as_ref().map_or((0, 0), WalWriter::position)
     }
 
+    /// Current-state chunk for the join-time backfill of a **transient** (WAL-less) store:
+    /// live items (queued FIFO + keyed + inflight) with `id >= from_id`, encoded as `Put`
+    /// records, ordered by id, bounded by `max_entries`/`max_bytes`. The id is the pagination
+    /// cursor (ids are monotone from `next_id`), so items put mid-scan are still picked up and
+    /// items acked mid-scan simply drop out — at-least-once, deduped by the mirror's apply.
+    /// Returns `(raw, next_id, done)`. Lock discipline: one stage lock at a time, then the
+    /// inflight lock — sequential, never nested.
+    pub(crate) fn state_chunk(
+        &self,
+        from_id: u64,
+        max_entries: usize,
+        max_bytes: usize,
+    ) -> (Vec<u8>, u64, bool) {
+        // (id, stage, payload, correlation key) — one live item's snapshot.
+        type LiveItem = (u64, Arc<str>, Bytes, Option<Arc<str>>);
+        let mut items: Vec<LiveItem> = Vec::new();
+        {
+            let guard = self.stages.pin();
+            for (stage, st) in guard.iter() {
+                let g = st.inner.lock();
+                for (id, payload, _) in g.entries.iter() {
+                    if *id >= from_id {
+                        items.push((*id, Arc::clone(stage), payload.clone(), None));
+                    }
+                }
+                for (key, (id, payload, _)) in g.keyed_entries.iter() {
+                    if *id >= from_id {
+                        items.push((*id, Arc::clone(stage), payload.clone(), Some(Arc::clone(key))));
+                    }
+                }
+            }
+        }
+        {
+            let g = self.inflight.lock();
+            for (id, inf) in g.iter() {
+                if *id >= from_id {
+                    items.push((*id, Arc::clone(&inf.stage), inf.payload.clone(), inf.key.clone()));
+                }
+            }
+        }
+        items.sort_unstable_by_key(|(id, ..)| *id);
+        let mut raw = Vec::new();
+        let mut next = from_id;
+        for (n, (id, stage, payload, key)) in items.into_iter().enumerate() {
+            if n >= max_entries || raw.len() >= max_bytes {
+                return (raw, next, false);
+            }
+            Record::Put { id, stage, payload, key }.encode(&mut raw);
+            next = id + 1;
+        }
+        (raw, next, true)
+    }
+
     /// Serves a replay chunk from the WAL. `None` for a transient store.
     pub(crate) fn wal_read_chunk(
         &self,
