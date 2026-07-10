@@ -200,7 +200,7 @@ mod tests {
         a.start().await.unwrap();
 
         let custom = ConsensusConfig { quorum_size: 2, max_ballots: 1, ..ConsensusConfig::default() };
-        match a.consensus().system_propose("test/slot", Bytes::from_static(b"x"), custom).await {
+        match a.consensus().cluster_propose("test/slot", Bytes::from_static(b"x"), custom).await {
             crate::consensus::ConsensusResult::Timeout { .. } => {}
             other => panic!("expected Timeout, got {other:?}"),
         }

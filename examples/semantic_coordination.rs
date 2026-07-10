@@ -198,7 +198,7 @@ async fn main() {
 
     let make_task_signal = |sender: &NodeId| mycelium::Signal {
         kind:    Arc::from("task.assign"),
-        scope:   SignalScope::System,
+        scope:   SignalScope::Cluster,
         payload: Bytes::from_static(b"summarise https://example.com/doc"),
         sender:  sender.clone(),
         nonce:   fastrand::u64(1..),
@@ -209,7 +209,7 @@ async fn main() {
 
     // Emit from agent_a (sender = node_a) — admitted by rx_all, admitted by
     // rx_trusted only if node_a is in the trusted list.
-    let _ = agent_a.mesh().emit("task.assign", SignalScope::System, Bytes::from_static(b"legitimate task"));
+    let _ = agent_a.mesh().emit("task.assign", SignalScope::Cluster, Bytes::from_static(b"legitimate task"));
 
     // For the attacker/orchestrator distinction, verify the filter directly
     // since in-process agents can only emit as themselves.
@@ -234,7 +234,7 @@ async fn main() {
 
     // empty-trusted-list delegates to unrestricted path (no FilteredSender overhead)
     let mut rx_empty = agent_a.mesh().signal_rx_from("task.assign", vec![]);
-    let _ = agent_a.mesh().emit("task.assign", SignalScope::System, Bytes::from_static(b"test"));
+    let _ = agent_a.mesh().emit("task.assign", SignalScope::Cluster, Bytes::from_static(b"test"));
     tokio::time::sleep(Duration::from_millis(10)).await;
     let _ = rx_empty.try_recv(); // should receive (no filter)
 

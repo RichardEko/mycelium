@@ -1343,7 +1343,7 @@ async fn node_emit(
     Path(kind): Path<String>,
     body: String,
 ) -> StatusCode {
-    let _ = s.agent.mesh().emit(kind.as_str(), SignalScope::System, Bytes::from(body.into_bytes()));
+    let _ = s.agent.mesh().emit(kind.as_str(), SignalScope::Cluster, Bytes::from(body.into_bytes()));
     StatusCode::ACCEPTED
 }
 

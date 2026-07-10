@@ -458,7 +458,7 @@ mod tests {
         let sender = NodeId::new("127.0.0.1", 1).unwrap();
         let sig = Signal {
             kind: Arc::clone(&kind),
-            scope: SignalScope::System,
+            scope: SignalScope::Cluster,
             payload: Bytes::new(),
             sender,
             nonce: 1,
@@ -487,7 +487,7 @@ mod tests {
         assert_eq!(agent.opacity("task"), 0.0, "no handler: fully transparent");
         let _rx = agent.mesh().signal_rx_with_capacity("task", 1);
         assert_eq!(agent.opacity("task"), 0.0, "empty channel: fully transparent");
-        let _ = agent.mesh().emit("task", SignalScope::System, Bytes::new());
+        let _ = agent.mesh().emit("task", SignalScope::Cluster, Bytes::new());
         assert_eq!(agent.opacity("task"), 1.0, "full channel: fully opaque");
     }
 }

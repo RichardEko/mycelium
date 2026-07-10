@@ -451,7 +451,7 @@ pub async fn handle_connection(
                 }
                 // Boundary check: act if admitted (forwarding is unconditional below).
                 // Individual signals bypass opacity — no routing alternative exists.
-                // System/Group signals are subject to load-adaptive opacity: when handler
+                // Cluster/Group signals are subject to load-adaptive opacity: when handler
                 // channels fill up the boundary probabilistically blocks admission,
                 // shedding load to less-busy peers without coordination.
                 if signal_boundary.read().admits(&scope) {
@@ -521,7 +521,7 @@ pub async fn handle_connection(
                 // in-place at a fixed offset (unlike Data frames). Full re-encode required.
                 if ttl > 1 {
                     let hint = match &scope {
-                        SignalScope::System             => ForwardHint::All,
+                        SignalScope::Cluster             => ForwardHint::All,
                         SignalScope::Group(name)        => ForwardHint::Group(Arc::clone(name)),
                         SignalScope::Individual(peer)   => ForwardHint::Individual(peer.clone()),
                         SignalScope::Groups(_)          => ForwardHint::All,

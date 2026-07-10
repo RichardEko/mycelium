@@ -1,7 +1,7 @@
 //! Consensus operations — [`ConsensusHandle`].
 //!
 //! Wraps the epidemic two-phase agreement primitives (Layer III):
-//! group proposals, system-wide proposals, cross-group proposals,
+//! group proposals, cluster-wide proposals, cross-group proposals,
 //! distributed locks, leader election, trust-slice declarations,
 //! and the consistent KV overlay.
 //!
@@ -37,7 +37,7 @@ pub use super::overlay_consistent::{ConsistencyError, LockGuard};
 
 /// Domain handle for consensus operations. Obtained via [`GossipAgent::consensus()`].
 ///
-/// Provides group proposals, system-wide proposals, cross-group proposals,
+/// Provides group proposals, cluster-wide proposals, cross-group proposals,
 /// distributed locks, leader election, trust-slice declarations,
 /// and the consistent KV overlay.
 ///
@@ -204,12 +204,14 @@ impl ConsensusHandle {
             .await
     }
 
-    /// Proposes `value` for system-wide consensus (all known peers vote).
+    /// Proposes `value` for **cluster-wide** consensus (all known peers vote) — the consensus
+    /// mirror of [`SignalScope::Cluster`](crate::SignalScope::Cluster). For a subset, use
+    /// [`group_propose`](Self::group_propose).
     ///
     /// Quorum defaults to `floor(N/2)+1` where N is `peers + 1` (including self).
     /// Set `config.quorum_size > 0` to override.
     #[tracing::instrument(level = "debug", skip(self, value), fields(node = %self.ctx.node_id))]
-    pub async fn system_propose(
+    pub async fn cluster_propose(
         &self,
         slot:   &str,
         value:  Bytes,
@@ -260,8 +262,21 @@ impl ConsensusHandle {
             config.abstain_when_opaque, config.use_trust_slices, config.max_abstain_ballots,
             None,
         )
-            .propose(SignalScope::System, Arc::from(slot), value, quorum, config, opaque_recompute)
+            .propose(SignalScope::Cluster, Arc::from(slot), value, quorum, config, opaque_recompute)
             .await
+    }
+
+    /// Deprecated alias for [`cluster_propose`](Self::cluster_propose) — renamed 2026-07-10 so the
+    /// consensus method matches its scope (`SignalScope::Cluster`). Will be removed in a future
+    /// release.
+    #[deprecated(since = "2.1.0", note = "renamed to `cluster_propose` (matches SignalScope::Cluster)")]
+    pub async fn system_propose(
+        &self,
+        slot:   &str,
+        value:  Bytes,
+        config: ConsensusConfig,
+    ) -> ConsensusResult {
+        self.cluster_propose(slot, value, config).await
     }
 
     /// Proposes `value` for `slot` requiring independent quorum from each group in `groups`.
@@ -349,7 +364,7 @@ impl ConsensusHandle {
         let value: Bytes   = value.into();
         let slot = format!("consistent/{key}");
 
-        match self.system_propose(&slot, value.clone(), ConsensusConfig::default()).await {
+        match self.cluster_propose(&slot, value.clone(), ConsensusConfig::default()).await {
             ConsensusResult::Committed { .. } => {
                 kv_set(&self.ctx, key, value);
                 Ok(())
@@ -421,7 +436,7 @@ impl ConsensusHandle {
             ..ConsensusConfig::default()
         };
 
-        match self.system_propose(&slot, value.clone(), cfg).await {
+        match self.cluster_propose(&slot, value.clone(), cfg).await {
             ConsensusResult::Committed { .. } => {
                 // #164 bug A: two proposers can both *optimistically* commit against their own
                 // local view — the propose return is NOT mutually exclusive. Commit-keys are
@@ -527,7 +542,7 @@ mod tests {
         a.start().await.unwrap();
 
         let custom = ConsensusConfig { quorum_size: 2, max_ballots: 1, ..ConsensusConfig::default() };
-        match a.consensus().system_propose("test/slot", Bytes::from_static(b"x"), custom).await {
+        match a.consensus().cluster_propose("test/slot", Bytes::from_static(b"x"), custom).await {
             crate::consensus::ConsensusResult::Timeout { .. } => {}
             other => panic!("expected Timeout, got {other:?}"),
         }
@@ -548,7 +563,7 @@ mod tests {
 
         // Commit with a 0-second lease: expires as soon as the wall clock moves.
         let leased = ConsensusConfig { committed_lease_secs: Some(0), ..ConsensusConfig::default() };
-        match c.system_propose("lease/slot", Bytes::from_static(b"v1"), leased).await {
+        match c.cluster_propose("lease/slot", Bytes::from_static(b"v1"), leased).await {
             ConsensusResult::Committed { .. } => {}
             other => panic!("expected Committed, got {other:?}"),
         }
@@ -557,7 +572,7 @@ mod tests {
 
         // The slot has reopened: a different value commits (no Superseded), and
         // committing without a lease clears the stale lease entry → permanent.
-        match c.system_propose("lease/slot", Bytes::from_static(b"v2"), ConsensusConfig::default()).await {
+        match c.cluster_propose("lease/slot", Bytes::from_static(b"v2"), ConsensusConfig::default()).await {
             ConsensusResult::Committed { .. } => {}
             other => panic!("expected Committed on reopened slot, got {other:?}"),
         }
@@ -576,28 +591,28 @@ mod tests {
         let c = a.consensus();
 
         let leased = ConsensusConfig { committed_lease_secs: Some(3600), ..ConsensusConfig::default() };
-        match c.system_propose("lease/renew", Bytes::from_static(b"leader-a"), leased.clone()).await {
+        match c.cluster_propose("lease/renew", Bytes::from_static(b"leader-a"), leased.clone()).await {
             ConsensusResult::Committed { .. } => {}
             other => panic!("expected Committed, got {other:?}"),
         }
         // Same value while the lease is live: renewal — allowed.
-        match c.system_propose("lease/renew", Bytes::from_static(b"leader-a"), leased.clone()).await {
+        match c.cluster_propose("lease/renew", Bytes::from_static(b"leader-a"), leased.clone()).await {
             ConsensusResult::Committed { .. } => {}
             other => panic!("expected Committed (renewal), got {other:?}"),
         }
         // Different value while the lease is live: superseded, value unchanged.
-        match c.system_propose("lease/renew", Bytes::from_static(b"leader-b"), leased).await {
+        match c.cluster_propose("lease/renew", Bytes::from_static(b"leader-b"), leased).await {
             ConsensusResult::Superseded { .. } => {}
             other => panic!("expected Superseded while lease live, got {other:?}"),
         }
         assert_eq!(c.consensus_get("lease/renew").as_deref(), Some(b"leader-a".as_slice()));
 
         // Without a lease there is no renewal: even the same value is Superseded.
-        match c.system_propose("perm/slot", Bytes::from_static(b"x"), crate::consensus::ConsensusConfig::default()).await {
+        match c.cluster_propose("perm/slot", Bytes::from_static(b"x"), crate::consensus::ConsensusConfig::default()).await {
             ConsensusResult::Committed { .. } => {}
             other => panic!("expected Committed, got {other:?}"),
         }
-        match c.system_propose("perm/slot", Bytes::from_static(b"x"), crate::consensus::ConsensusConfig::default()).await {
+        match c.cluster_propose("perm/slot", Bytes::from_static(b"x"), crate::consensus::ConsensusConfig::default()).await {
             ConsensusResult::Superseded { .. } => {}
             other => panic!("permanent slots must stay commit-once, got {other:?}"),
         }
@@ -615,7 +630,7 @@ mod tests {
         let a = make_agent(alloc_port(), &[]).await;
         let _listener = a.consensus().start_consensus_listener(ConsensusConfig::default());
 
-        match a.consensus().system_propose("trip/slot", Bytes::from_static(b"genuine"), ConsensusConfig::default()).await {
+        match a.consensus().cluster_propose("trip/slot", Bytes::from_static(b"genuine"), ConsensusConfig::default()).await {
             ConsensusResult::Committed { .. } => {}
             other => panic!("expected Committed, got {other:?}"),
         }
@@ -628,7 +643,7 @@ mod tests {
             ballot: 42,
             value:  Bytes::from_static(b"clobber"),
         };
-        assert!(a.mesh().emit(consensus_kind::COMMIT, SignalScope::System, encode_consensus_msg(&forged)));
+        assert!(a.mesh().emit(consensus_kind::COMMIT, SignalScope::Cluster, encode_consensus_msg(&forged)));
 
         // Structural poll: the tripwire must fire and refuse to endorse.
         // 15 s budget: 4 s expired once on a loaded 4-vCPU CI runner
@@ -651,7 +666,7 @@ mod tests {
             ballot: 43,
             value:  Bytes::from_static(b"genuine"),
         };
-        assert!(a.mesh().emit(consensus_kind::COMMIT, SignalScope::System, encode_consensus_msg(&idempotent)));
+        assert!(a.mesh().emit(consensus_kind::COMMIT, SignalScope::Cluster, encode_consensus_msg(&idempotent)));
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         assert_eq!(a.system_stats().commit_conflicts, 1, "same-value COMMIT must not count as a conflict");
         a.shutdown().await;

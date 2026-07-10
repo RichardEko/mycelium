@@ -54,7 +54,7 @@ moment a runner picks up a newer stable than a dev has locally — it bit twice 
 
 ## Multi-node consensus tests need listeners everywhere
 
-`system_propose`/`consistent_set` compute quorum from live peers; peers without
+`cluster_propose`/`consistent_set` compute quorum from live peers; peers without
 `start_consensus_listener` never vote and every ballot times out. A test omitting this
 passes only via accidental single-node quorum. Pattern (and the peer-ready poll) in
 `src/lib_tests.rs::consensus_pair`.

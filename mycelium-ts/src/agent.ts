@@ -170,7 +170,7 @@ export class MyceliumAgent {
 
   /**
    * Fires a signal into the mesh.
-   * @param scope `"system"` (default), `"group:NAME"`, or `"node:IP:PORT"`
+   * @param scope `"cluster"` (every node; default), `"group:NAME"`, or `"node:IP:PORT"`. `"system"` is a deprecated alias.
    * @returns `true` if queued for gossip; `false` if the shard was full (local delivery still occurred).
    */
   async emit(
@@ -181,7 +181,7 @@ export class MyceliumAgent {
     const data = await this._post("/gateway/signal/emit", {
       kind,
       payload_b64: b64(payload),
-      scope: options.scope ?? "system",
+      scope: options.scope ?? "cluster",
     }) as { queued: boolean };
     return data.queued;
   }

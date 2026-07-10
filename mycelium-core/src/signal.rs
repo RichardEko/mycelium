@@ -5,7 +5,7 @@
 //! signal. Forwarding is always unconditional — the boundary only controls local delivery.
 //!
 //! Key types:
-//! - [`SignalScope`] — System (every node), Group (members only), Individual (one node)
+//! - [`SignalScope`] — Cluster (every node), Group (members only), Individual (one node)
 //! - [`Signal`] — the delivered event: kind, scope, payload, sender, nonce
 //! - [`AdvertiseHandle`] — cancels a periodic `advertise()` task on drop
 //!
@@ -46,13 +46,13 @@ pub const SENDER_LOG_WINDOW: Duration = Duration::from_secs(600);
 /// only cells with the matching receptor respond.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum SignalScope {
-    /// Every node acts.
+    /// Every node in the cluster acts.
     ///
     /// **Best-effort epidemic delivery.** Under high message volume the opacity
     /// mechanism may shed signals at boundaries before they propagate to all nodes.
     /// Do not use for coordination that requires exactly-once or guaranteed delivery
     /// — use application-level timers with gossip KV state propagation instead.
-    System,
+    Cluster,
     /// Only nodes that have joined the named group act.
     Group(Arc<str>),
     /// Only the named node acts.
@@ -122,7 +122,7 @@ impl Boundary {
     #[inline]
     pub fn admits(&self, scope: &SignalScope) -> bool {
         match scope {
-            SignalScope::System => true,
+            SignalScope::Cluster => true,
             SignalScope::Group(name) => self.groups.contains(name),
             SignalScope::Individual(id) => *id == self.node_id,
             SignalScope::Groups(names) => names.iter().any(|n| self.groups.contains(n)),
@@ -1044,7 +1044,7 @@ mod reorder_tests {
     fn make_signal(sender: &NodeId, kind: &str, nonce: u64) -> Signal {
         Signal {
             kind:    Arc::from(kind),
-            scope:   crate::signal::SignalScope::System,
+            scope:   crate::signal::SignalScope::Cluster,
             payload: Bytes::new(),
             sender:  sender.clone(),
             nonce,

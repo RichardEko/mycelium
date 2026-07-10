@@ -52,7 +52,7 @@ async fn spawn_worker(name: &str, zone: &str, ports: (u16, u16), seed: u16, cert
     // Hold an (undrained) queue for WORK so flooding it raises the fill ratio.
     let work_rx = depot.agent.mesh().signal_rx_with_capacity(WORK, QUEUE_CAP);
     // The adaptive governor: it writes the is_opaque pheromone once fill crosses threshold.
-    let _gov = depot.agent.capabilities().manage_opacity(WORK, SignalScope::System, OpacityHint::default());
+    let _gov = depot.agent.capabilities().manage_opacity(WORK, SignalScope::Cluster, OpacityHint::default());
     // Advertise the capability the dispatcher resolves.
     let _advert = depot.agent.capabilities()
         .advertise_capability(Capability::new("depot", "intake"), Duration::from_secs(30));

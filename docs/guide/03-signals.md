@@ -34,7 +34,7 @@ graph LR
 
 | Scope | Who acts |
 |-------|---------|
-| `SignalScope::System` | All nodes in the cluster |
+| `SignalScope::Cluster` | All nodes in the cluster |
 | `SignalScope::Group(name)` | Only nodes that have joined the named group |
 | `SignalScope::Individual(id)` | Only the specific target node (point-to-point) |
 | `SignalScope::Groups(names)` | Union membership — nodes in *any* of the named groups (used by `cross_group_propose`) |
@@ -253,7 +253,7 @@ let reply = agent.mesh().signal_once("invoke.result", Duration::from_secs(5), |s
 }).await;  // → Option<Signal>; None on timeout
 
 // ── Scopes ─────────────────────────────────────────────────────────────────
-SignalScope::System              // every node acts; shed under load by opacity
+SignalScope::Cluster              // every node acts; shed under load by opacity
 SignalScope::Group("name")       // nodes that called join_group("name")
 SignalScope::Individual(node_id) // exactly one node; bypasses opacity shedding
 ```

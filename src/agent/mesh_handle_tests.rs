@@ -24,7 +24,7 @@ fn quorum_false_initially() {
 #[test]
 fn quorum_true_after_delivery() {
     let agent = make_agent();
-    let _ = agent.mesh().emit("contract.available", SignalScope::System, Bytes::new());
+    let _ = agent.mesh().emit("contract.available", SignalScope::Cluster, Bytes::new());
     assert!(
         agent.mesh().quorum("contract.available", 1, Duration::from_secs(10)),
         "quorum(k, 1, 10s) must be true after one delivery",
