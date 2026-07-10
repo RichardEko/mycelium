@@ -177,30 +177,51 @@ pub(super) async fn run_listener_task(mut listener: TcpListener, lctx: ListenerC
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Shared context for the gossip-shard family — built once in `start_gossip_loop`, cloned
+/// per shard (every field is `Arc`/`Copy`/cheap-`Clone`). Same idiom as `ListenerContext`:
+/// field-name initialization makes the silent positional swap impossible (`dropped_frames`
+/// vs `individual_flood_fallbacks` and `backoff` vs `idle_timeout` are same-typed pairs
+/// that would compile swapped as positional args), and the next `pinned_peers`-style
+/// addition is one field + one init line instead of a multi-file positional thread.
+/// Per-spawn values (`shard_idx`, `gossip_rx`, `peer_list_rx`, `alive`) stay positional.
+#[derive(Clone)]
+pub(super) struct GossipShardContext {
+    // identity + routing state
+    pub(super) self_id:         NodeId,
+    pub(super) bootstrap_peers: Arc<[NodeId]>,
+    pub(super) peer_writers:    Arc<papaya::HashMap<NodeId, WriterEntry>>,
+    pub(super) pinned_peers:    Arc<papaya::HashMap<NodeId, ()>>,
+    pub(super) prefix_index:    Arc<crate::store::PrefixIndex>,
+    pub(super) grp_generation:  Arc<AtomicU64>,
+    pub(super) self_locality:   Option<LocalityPath>,
+    pub(super) peer_localities: Arc<papaya::HashMap<NodeId, LocalityPath>>,
+    // policy knobs
+    pub(super) backoff:                Duration,
+    pub(super) idle_timeout:           Duration,
+    pub(super) max_forwarding_peers:   usize,
+    pub(super) group_aware_forwarding: bool,
+    pub(super) epidemic_extra_peers:   usize,
+    // counters + lifecycle
+    pub(super) dropped_frames:             Arc<AtomicU64>,
+    pub(super) individual_flood_fallbacks: Arc<AtomicU64>,
+    pub(super) shutdown_tx:                Arc<watch::Sender<bool>>,
+    pub(super) hot:                        Arc<mycelium_core::context::HotConfig>,
+    pub(super) tls:                        Option<Arc<NodeTls>>,
+}
+
 pub(super) async fn run_gossip_shard(
-    shard_idx:              usize,
-    self_id:                NodeId,
-    mut gossip_rx:          mpsc::Receiver<(Bytes, u64, ForwardHint)>,
-    bootstrap_peers:        Arc<[NodeId]>,
-    peer_writers:           Arc<papaya::HashMap<NodeId, WriterEntry>>,
-    pinned_peers:           Arc<papaya::HashMap<NodeId, ()>>,
-    shutdown_tx:            Arc<watch::Sender<bool>>,
-    mut peer_list_rx:       watch::Receiver<Arc<[NodeId]>>,
-    alive:                  Arc<AtomicBool>,
-    hot:                    Arc<mycelium_core::context::HotConfig>,
-    backoff:                Duration,
-    idle_timeout:           Duration,
-    max_forwarding_peers:   usize,
-    dropped_frames:         Arc<AtomicU64>,
-    individual_flood_fallbacks: Arc<AtomicU64>,
-    group_aware_forwarding: bool,
-    epidemic_extra_peers:   usize,
-    prefix_index:           Arc<crate::store::PrefixIndex>,
-    grp_generation:         Arc<AtomicU64>,
-    self_locality:          Option<LocalityPath>,
-    peer_localities:        Arc<papaya::HashMap<NodeId, LocalityPath>>,
-    tls:                    Option<Arc<NodeTls>>,
+    shard_idx:        usize,
+    mut gossip_rx:    mpsc::Receiver<(Bytes, u64, ForwardHint)>,
+    mut peer_list_rx: watch::Receiver<Arc<[NodeId]>>,
+    alive:            Arc<AtomicBool>,
+    ctx:              GossipShardContext,
 ) {
+    let GossipShardContext {
+        self_id, bootstrap_peers, peer_writers, pinned_peers, prefix_index, grp_generation,
+        self_locality, peer_localities, backoff, idle_timeout, max_forwarding_peers,
+        group_aware_forwarding, epidemic_extra_peers, dropped_frames,
+        individual_flood_fallbacks, shutdown_tx, hot, tls,
+    } = ctx;
     alive.store(true, Ordering::Relaxed);
     let _alive_guard = AliveGuard(Arc::clone(&alive));
     let mut shutdown_rx = shutdown_tx.subscribe();
@@ -484,32 +505,46 @@ fn reconcile_active_targets(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn run_health_monitor(
-    node_id:               NodeId,
-    bootstrap_peers:       Arc<[NodeId]>,
-    peers:                 Arc<papaya::HashMap<NodeId, Instant>>,
-    peer_writers:          Arc<papaya::HashMap<NodeId, WriterEntry>>,
-    peer_list_tx:          watch::Sender<Arc<[NodeId]>>,
-    shutdown_tx:           Arc<watch::Sender<bool>>,
-    hlc:                   Arc<crate::hlc::Hlc>,
-    kv_state:              Arc<crate::store::KvState>,
-    interval_secs:         u64,
-    hot:                   Arc<mycelium_core::context::HotConfig>,
-    backoff:               Duration,
-    idle_timeout:          Duration,
-    peer_eviction_intervals: u64,
-    health_monitor_alive:    Arc<AtomicBool>,
-    ping_peer_sample_size:    usize,
-    max_active_connections:   usize,
-    gossip_fanout:            usize,
-    swim_enabled:             bool,
-    health_check_max_jitter:  u64,
-    hash_acc:                 Arc<AtomicU64>,
-    dropped_frames:          Arc<AtomicU64>,
-    signal_handlers:         Arc<SignalHandlers>,
-    signal_window_secs:      u64,
-    tls:                     Option<Arc<NodeTls>>,
-) {
+/// Context for the health monitor (spawned once) — same idiom as `GossipShardContext`.
+pub(super) struct HealthMonitorContext {
+    // identity + peer state
+    pub(super) node_id:         NodeId,
+    pub(super) bootstrap_peers: Arc<[NodeId]>,
+    pub(super) peers:           Arc<papaya::HashMap<NodeId, Instant>>,
+    pub(super) peer_writers:    Arc<papaya::HashMap<NodeId, WriterEntry>>,
+    pub(super) peer_list_tx:    watch::Sender<Arc<[NodeId]>>,
+    // shared substrate state
+    pub(super) hlc:             Arc<crate::hlc::Hlc>,
+    pub(super) kv_state:        Arc<crate::store::KvState>,
+    pub(super) hash_acc:        Arc<AtomicU64>,
+    pub(super) dropped_frames:  Arc<AtomicU64>,
+    pub(super) signal_handlers: Arc<SignalHandlers>,
+    // policy knobs
+    pub(super) interval_secs:            u64,
+    pub(super) backoff:                  Duration,
+    pub(super) idle_timeout:             Duration,
+    pub(super) peer_eviction_intervals:  u64,
+    pub(super) ping_peer_sample_size:    usize,
+    pub(super) max_active_connections:   usize,
+    pub(super) gossip_fanout:            usize,
+    pub(super) swim_enabled:             bool,
+    pub(super) health_check_max_jitter:  u64,
+    pub(super) signal_window_secs:       u64,
+    // lifecycle
+    pub(super) shutdown_tx:          Arc<watch::Sender<bool>>,
+    pub(super) hot:                  Arc<mycelium_core::context::HotConfig>,
+    pub(super) health_monitor_alive: Arc<AtomicBool>,
+    pub(super) tls:                  Option<Arc<NodeTls>>,
+}
+
+pub(super) async fn run_health_monitor(ctx: HealthMonitorContext) {
+    let HealthMonitorContext {
+        node_id, bootstrap_peers, peers, peer_writers, peer_list_tx, hlc, kv_state, hash_acc,
+        dropped_frames, signal_handlers, interval_secs, backoff, idle_timeout,
+        peer_eviction_intervals, ping_peer_sample_size, max_active_connections, gossip_fanout,
+        swim_enabled, health_check_max_jitter, signal_window_secs, shutdown_tx, hot,
+        health_monitor_alive, tls,
+    } = ctx;
     let bootstrap_set: AHashSet<NodeId> = bootstrap_peers.iter().cloned().collect();
     let mut shutdown_rx = shutdown_tx.subscribe();
     health_monitor_alive.store(true, Ordering::Relaxed);
@@ -865,21 +900,31 @@ pub(super) async fn new_listener(addr: SocketAddr, backlog: u32) -> Result<TcpLi
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn run_gc_task(
-    kv_state:          Arc<crate::store::KvState>,
-    shutdown_tx:       Arc<watch::Sender<bool>>,
-    interval_secs:     u64,
-    default_ttl:       u8,
-    propagation_window: u64,
-    live_entries:      Arc<AtomicUsize>,
-    seen:              Arc<ShardedSeen>,
-    max_seen_entries:  usize,
-    gc_alive:          Arc<AtomicBool>,
-    peer_writers:      Arc<papaya::HashMap<NodeId, WriterEntry>>,
-    intern_max_keys:   usize,
-    signal_boundary:   Arc<parking_lot::RwLock<crate::signal::Boundary>>,
-    node_id:           NodeId,
-) {
+/// Context for the GC task (spawned once) — same idiom as `GossipShardContext`.
+pub(super) struct GcContext {
+    pub(super) node_id:            NodeId,
+    pub(super) kv_state:           Arc<crate::store::KvState>,
+    pub(super) live_entries:       Arc<AtomicUsize>,
+    pub(super) seen:               Arc<ShardedSeen>,
+    pub(super) peer_writers:       Arc<papaya::HashMap<NodeId, WriterEntry>>,
+    pub(super) signal_boundary:    Arc<parking_lot::RwLock<crate::signal::Boundary>>,
+    // policy knobs
+    pub(super) interval_secs:      u64,
+    pub(super) default_ttl:        u8,
+    pub(super) propagation_window: u64,
+    pub(super) max_seen_entries:   usize,
+    pub(super) intern_max_keys:    usize,
+    // lifecycle
+    pub(super) shutdown_tx:        Arc<watch::Sender<bool>>,
+    pub(super) gc_alive:           Arc<AtomicBool>,
+}
+
+pub(super) async fn run_gc_task(ctx: GcContext) {
+    let GcContext {
+        node_id, kv_state, live_entries, seen, peer_writers, signal_boundary, interval_secs,
+        default_ttl, propagation_window, max_seen_entries, intern_max_keys, shutdown_tx,
+        gc_alive,
+    } = ctx;
     let store         = &kv_state.store;
     let subscriptions = &kv_state.subscriptions;
     gc_alive.store(true, Ordering::Relaxed);

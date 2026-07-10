@@ -30,7 +30,7 @@ use super::helpers::{
     group_members_ctx, kv_get, kv_subscribe,
     kv_subscribe_prefix_with_predicate, self_locality_ctx,
 };
-use super::kv::run_kv_persist_task;
+use mycelium_core::kv_persist::run_kv_persist_task;
 use super::opacity::{
     effective_opacity_ctx, manage_opacity_ctx, manage_opacity_gated_ctx,
     opacity_ctx, peer_load_ctx,
@@ -78,7 +78,7 @@ impl CapabilitiesHandle {
         ).as_str());
         let interval_ms = interval.as_millis() as u64;
         let entry = Arc::new(CapEntry { capability, refresh_interval_ms: interval_ms });
-        let payload_fn: super::kv::PersistPayloadFn = {
+        let payload_fn: mycelium_core::kv_persist::PersistPayloadFn = {
             let e = Arc::clone(&entry);
             Arc::new(move || e.encode())
         };
@@ -245,7 +245,7 @@ impl CapabilitiesHandle {
         ).as_str());
         let interval_ms = interval.as_millis() as u64;
         let filter_arc = Arc::new(filter);
-        let payload_fn: super::kv::PersistPayloadFn = {
+        let payload_fn: mycelium_core::kv_persist::PersistPayloadFn = {
             let e = Arc::new(ReqEntry { filter: (*filter_arc).clone(), refresh_interval_ms: interval_ms });
             Arc::new(move || e.encode())
         };
@@ -371,7 +371,7 @@ impl CapabilitiesHandle {
         let ctx: Arc<TaskCtx>      = Arc::clone(&self.ctx);
         let kv_key: Arc<str>       = Arc::from(format!("cap-group/{}", group).as_str());
         let def_arc                = Arc::new(def);
-        let payload_fn: super::kv::PersistPayloadFn = {
+        let payload_fn: mycelium_core::kv_persist::PersistPayloadFn = {
             let def = Arc::clone(&def_arc);
             Arc::new(move || def.encode())
         };

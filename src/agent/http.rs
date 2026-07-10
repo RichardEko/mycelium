@@ -1199,14 +1199,14 @@ async fn gw_cap_advertise(
         format!("cap/{}/{}/{}", ctx.agent_ctx.node_id, cap.namespace, cap.name).as_str()
     );
     let cap_arc = Arc::new(cap);
-    let payload_fn: super::kv::PersistPayloadFn = {
+    let payload_fn: mycelium_core::kv_persist::PersistPayloadFn = {
         let cap = Arc::clone(&cap_arc);
         Arc::new(move || cap.encode())
     };
 
     let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
     let shutdown_rx = ctx.shutdown_rx.clone();
-    tokio::spawn(super::kv::run_kv_persist_task(
+    tokio::spawn(mycelium_core::kv_persist::run_kv_persist_task(
         Arc::clone(&ctx.agent_ctx.core), cancel_rx, shutdown_rx, kv_key, interval, payload_fn, None,
     ));
 

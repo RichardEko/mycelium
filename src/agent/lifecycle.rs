@@ -276,17 +276,26 @@ impl GossipAgent {
     }
 
     fn start_gossip_loop(&self) {
-        let bootstrap_peers        = Arc::clone(&self.bootstrap_peers);
-        let peer_writers           = Arc::clone(&self.peer_writers);
-        let shutdown_tx            = Arc::clone(&self.shutdown_tx);
-        let backoff                = Duration::from_secs(self.config.reconnect_backoff_secs);
-        let idle_timeout           = Duration::from_secs(self.config.writer_idle_timeout_secs);
-        let group_aware_forwarding = self.config.group_aware_forwarding;
-        let epidemic_extra_peers   = self.config.epidemic_extra_peers;
-        let prefix_index           = std::sync::Arc::<papaya::HashMap<std::sync::Arc<str>, std::sync::Arc<papaya::HashMap<std::sync::Arc<str>, ()>>>>::clone(&self.kv_state.prefix_index);
-        let grp_generation         = Arc::clone(&self.kv_state.grp_generation);
-        let peer_localities        = Arc::clone(&self.kv_state.peer_localities);
-        let self_locality          = self.self_locality();
+        let ctx = super::tasks::GossipShardContext {
+            self_id:         self.node_id.clone(),
+            bootstrap_peers: Arc::clone(&self.bootstrap_peers),
+            peer_writers:    Arc::clone(&self.peer_writers),
+            pinned_peers:    Arc::clone(&self.pinned_peers),
+            prefix_index:    Arc::clone(&self.kv_state.prefix_index),
+            grp_generation:  Arc::clone(&self.kv_state.grp_generation),
+            self_locality:   self.self_locality(),
+            peer_localities: Arc::clone(&self.kv_state.peer_localities),
+            backoff:         Duration::from_secs(self.config.reconnect_backoff_secs),
+            idle_timeout:    Duration::from_secs(self.config.writer_idle_timeout_secs),
+            max_forwarding_peers:   self.config.max_forwarding_peers,
+            group_aware_forwarding: self.config.group_aware_forwarding,
+            epidemic_extra_peers:   self.config.epidemic_extra_peers,
+            dropped_frames:             Arc::clone(&self.kv_state.dropped_frames),
+            individual_flood_fallbacks: Arc::clone(&self.kv_state.individual_flood_fallbacks),
+            shutdown_tx:    Arc::clone(&self.shutdown_tx),
+            hot:            Arc::clone(&self.task_ctx.hot),
+            tls:            self.task_ctx.tls.get().cloned(),
+        };
 
         let rxs = self.gossip_rxs
             .lock()
@@ -296,27 +305,10 @@ impl GossipAgent {
         for (shard_idx, gossip_rx) in rxs.into_iter().enumerate() {
             self.spawn_task(run_gossip_shard(
                 shard_idx,
-                self.node_id.clone(),
                 gossip_rx,
-                Arc::clone(&bootstrap_peers),
-                Arc::clone(&peer_writers),
-                Arc::clone(&self.pinned_peers),
-                Arc::clone(&shutdown_tx),
                 self.peer_list_tx.subscribe(),
                 Arc::clone(&self.shard_alive[shard_idx]),
-                Arc::clone(&self.task_ctx.hot),
-                backoff,
-                idle_timeout,
-                self.config.max_forwarding_peers,
-                Arc::clone(&self.kv_state.dropped_frames),
-                Arc::clone(&self.kv_state.individual_flood_fallbacks),
-                group_aware_forwarding,
-                epidemic_extra_peers,
-                std::sync::Arc::<papaya::HashMap<std::sync::Arc<str>, std::sync::Arc<papaya::HashMap<std::sync::Arc<str>, ()>>>>::clone(&prefix_index),
-                Arc::clone(&grp_generation),
-                self_locality.clone(),
-                Arc::clone(&peer_localities),
-                self.task_ctx.tls.get().cloned(),
+                ctx.clone(),
             ));
         }
     }
@@ -364,50 +356,50 @@ impl GossipAgent {
     }
 
     fn start_health_monitor(&self) {
-        self.spawn_task(run_health_monitor(
-            self.node_id.clone(),
-            Arc::clone(&self.bootstrap_peers),
-            Arc::clone(&self.peers),
-            Arc::clone(&self.peer_writers),
-            self.peer_list_tx.clone(),
-            Arc::clone(&self.shutdown_tx),
-            Arc::clone(&self.task_ctx.hlc),
-            Arc::clone(&self.kv_state),
-            self.config.health_check_interval_secs,
-            Arc::clone(&self.task_ctx.hot),
-            Duration::from_secs(self.config.reconnect_backoff_secs),
-            Duration::from_secs(self.config.writer_idle_timeout_secs),
-            self.config.peer_eviction_intervals,
-            Arc::clone(&self.health_monitor_alive),
-            self.config.ping_peer_sample_size,
-            self.config.max_active_connections,
-            self.config.gossip_fanout,
-            self.config.swim_failure_detector,
-            self.config.health_check_max_jitter_ms,
-            Arc::clone(&self.kv_state.hash_acc),
-            Arc::clone(&self.kv_state.dropped_frames),
-            Arc::clone(&self.task_ctx.signal_handlers),
-            self.config.signal_window_secs,
-            self.task_ctx.tls.get().cloned(),
-        ));
+        self.spawn_task(run_health_monitor(super::tasks::HealthMonitorContext {
+            node_id:         self.node_id.clone(),
+            bootstrap_peers: Arc::clone(&self.bootstrap_peers),
+            peers:           Arc::clone(&self.peers),
+            peer_writers:    Arc::clone(&self.peer_writers),
+            peer_list_tx:    self.peer_list_tx.clone(),
+            hlc:             Arc::clone(&self.task_ctx.hlc),
+            kv_state:        Arc::clone(&self.kv_state),
+            hash_acc:        Arc::clone(&self.kv_state.hash_acc),
+            dropped_frames:  Arc::clone(&self.kv_state.dropped_frames),
+            signal_handlers: Arc::clone(&self.task_ctx.signal_handlers),
+            interval_secs:           self.config.health_check_interval_secs,
+            backoff:                 Duration::from_secs(self.config.reconnect_backoff_secs),
+            idle_timeout:            Duration::from_secs(self.config.writer_idle_timeout_secs),
+            peer_eviction_intervals: self.config.peer_eviction_intervals,
+            ping_peer_sample_size:   self.config.ping_peer_sample_size,
+            max_active_connections:  self.config.max_active_connections,
+            gossip_fanout:           self.config.gossip_fanout,
+            swim_enabled:            self.config.swim_failure_detector,
+            health_check_max_jitter: self.config.health_check_max_jitter_ms,
+            signal_window_secs:      self.config.signal_window_secs,
+            shutdown_tx:          Arc::clone(&self.shutdown_tx),
+            hot:                  Arc::clone(&self.task_ctx.hot),
+            health_monitor_alive: Arc::clone(&self.health_monitor_alive),
+            tls:                  self.task_ctx.tls.get().cloned(),
+        }));
     }
 
     fn start_gc_task(&self) {
-        self.spawn_task(run_gc_task(
-            Arc::clone(&self.kv_state),
-            Arc::clone(&self.shutdown_tx),
-            self.config.health_check_interval_secs,
-            self.config.default_ttl,
-            self.config.propagation_window_secs,
-            Arc::clone(&self.live_entries),
-            Arc::clone(&self.task_ctx.seen),
-            self.config.max_seen_entries,
-            Arc::clone(&self.gc_alive),
-            Arc::clone(&self.peer_writers),
-            self.config.intern_max_keys,
-            Arc::clone(&self.task_ctx.signal_boundary),
-            self.node_id.clone(),
-        ));
+        self.spawn_task(run_gc_task(super::tasks::GcContext {
+            node_id:         self.node_id.clone(),
+            kv_state:        Arc::clone(&self.kv_state),
+            live_entries:    Arc::clone(&self.live_entries),
+            seen:            Arc::clone(&self.task_ctx.seen),
+            peer_writers:    Arc::clone(&self.peer_writers),
+            signal_boundary: Arc::clone(&self.task_ctx.signal_boundary),
+            interval_secs:      self.config.health_check_interval_secs,
+            default_ttl:        self.config.default_ttl,
+            propagation_window: self.config.propagation_window_secs,
+            max_seen_entries:   self.config.max_seen_entries,
+            intern_max_keys:    self.config.intern_max_keys,
+            shutdown_tx: Arc::clone(&self.shutdown_tx),
+            gc_alive:    Arc::clone(&self.gc_alive),
+        }));
     }
 
     /// Seeds `signal_handlers.sender_log` from `sys/quorum/` Layer I entries written
