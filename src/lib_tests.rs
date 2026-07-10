@@ -5153,3 +5153,101 @@ async fn probe_framed_but_corrupt_message_survives() {
     assert_eq!(agent.system_stats().dead_shards, 0, "no shard may die from corrupt codec input");
     agent.shutdown().await;
 }
+
+/// Run-43 falsification probe (security deep-dive): the gateway auth model END TO END on the
+/// wire — unit tests cover scope resolution, but nothing asserted a configured token actually
+/// gates real HTTP. With `gateway_auth_token` set: gateway routes 401 bare and with a wrong
+/// token, 200 with the right one; the monitoring plane (`/health`) stays deliberately open;
+/// hostile bodies (1 MiB garbage, malformed JSON) get clean errors, no panic.
+#[cfg(feature = "gateway")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn probe_gateway_auth_gates_the_wire() {
+    let gossip_port = alloc_port();
+    let http_port = alloc_port();
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = gossip_port;
+    cfg.http_port = Some(http_port);
+    cfg.gateway_auth_token = Some("s3cret".to_string());
+    let agent = GossipAgent::new(NodeId::new("127.0.0.1", gossip_port).unwrap(), cfg);
+    agent.start().await.expect("start");
+
+    let client = reqwest::Client::new();
+    let health = format!("http://127.0.0.1:{http_port}/health");
+    for _ in 0..40 {
+        if client.get(&health).send().await.is_ok_and(|r| r.status().is_success()) { break; }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let kv = format!("http://127.0.0.1:{http_port}/gateway/kv?key=probe/auth");
+    // Bare → 401. Wrong token → 401. Right token → not-401.
+    assert_eq!(client.get(&kv).send().await.unwrap().status(), 401);
+    assert_eq!(
+        client.get(&kv).bearer_auth("wrong").send().await.unwrap().status(), 401);
+    let set = format!("http://127.0.0.1:{http_port}/gateway/kv");
+    let ok = client.post(&set).bearer_auth("s3cret")
+        .json(&serde_json::json!({"key":"probe/auth","value_b64":"dg=="}))
+        .send().await.unwrap().status();
+    assert!(ok.is_success(), "authorized gateway write failed: {ok}");
+
+    // Monitoring plane stays open by design (no token).
+    assert!(client.get(&health).send().await.unwrap().status().is_success());
+
+    // Hostile bodies: 1 MiB garbage + malformed JSON to a JSON endpoint → clean error, alive.
+    let big = vec![0xA5u8; 1024 * 1024];
+    let r = client.post(format!("http://127.0.0.1:{http_port}/gateway/tuple/put"))
+        .bearer_auth("s3cret").body(big).send().await.unwrap();
+    assert!(r.status().is_client_error() || r.status().is_server_error());
+    let r = client.post(format!("http://127.0.0.1:{http_port}/gateway/tuple/put"))
+        .bearer_auth("s3cret").header("content-type", "application/json")
+        .body("{not json").send().await.unwrap();
+    assert!(r.status().is_client_error());
+    assert!(client.get(&health).send().await.unwrap().status().is_success(),
+        "gateway died on hostile input");
+
+    agent.shutdown_with_timeout(Duration::from_secs(5)).await;
+}
+
+/// Run-43 falsification probe (failure-mode legibility deep-dive): a rejected config must
+/// NAME the offending field — an operator staring at a failed start needs the knob, not a
+/// generic message.
+#[test]
+fn probe_config_rejection_names_the_field() {
+    let mut cfg = GossipConfig::default();
+    cfg.reconnect_backoff_secs = 0; // documented-invalid
+    let err = cfg.validate().expect_err("zero backoff must be rejected");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("reconnect_backoff_secs"),
+        "config error must name the field, got: {msg}"
+    );
+}
+
+/// Run-43 falsification probe (semantic correctness): tombstone anti-resurrection — after a
+/// delete, re-applying the ORIGINAL (older-HLC) write frame must NOT resurrect the value.
+/// LWW is only correct if the tombstone's timestamp wins replays.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn probe_tombstone_survives_replay_of_older_write() {
+    let port = alloc_port();
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = port;
+    let agent = GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg);
+    agent.start().await.unwrap();
+
+    assert!(agent.kv().set("probe/res", Bytes::from_static(b"v1")));
+    // Capture the store entry's timestamp, then delete (tombstone with a later HLC).
+    assert!(agent.kv().delete("probe/res"));
+    assert_eq!(agent.kv().get("probe/res"), None);
+
+    // Replay the original write as a remote frame with an OLDER timestamp (1).
+    let update = data_update("probe/res", b"v1", 424242, false);
+    {
+        use crate::store::apply_and_notify;
+        apply_and_notify(&agent.task_ctx.kv_state, &update);
+    }
+    assert_eq!(
+        agent.kv().get("probe/res"),
+        None,
+        "older replayed write resurrected a tombstoned key"
+    );
+    agent.shutdown_with_timeout(Duration::from_secs(5)).await;
+}

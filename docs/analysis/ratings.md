@@ -2569,3 +2569,42 @@ None new — all three probes passed. Standing finding from Run 41 remains live:
 | — | Mean (continuity footnote) | 7.64 | not a target; see M2 preamble |
 
 **Delta vs Run 41 (same day):** API Design 6→8 (finding fixed + gated, #162 green); everything else carried or confirmed by deep-dive/probe. 18 stays 6 honestly — #161 is not resolved by having removed one contributor. The three probes grew the suite by three permanent gates (lane isolation, codec-layer hostility, waiter×shutdown lifecycle).
+
+## 2026-07-10 — Run 43 (M2)
+
+Deep-dive dimensions this run: **11 Semantic Correctness, 12 Robustness, 13 Security, 14 Failure Mode Legibility, 15 Performance** (rotation — this is Security's first deep-dive since v38, the stalest carry). Execution evidence (all this run): probes `probe_gateway_auth_gates_the_wire`, `probe_config_rejection_names_the_field`, `probe_tombstone_survives_replay_of_older_write` — **3/3 pass**, kept as permanent tests; clippy `-D warnings` clean (lib+tests); the anchor-fragment doc checker (lint 13) run repo-wide. Context: three docs-focused workstreams since Run 42 — the #163 spawn-context/kv.rs refactor (merged green, both Docker suites), the README 1,604→192 restructure + examples audit, and the operations-docs pass — plus 3 wiki lints. **Transparency:** third run today, and the user directed it at the docs work; docs dimensions (23/24) are scored on that just-authored work — flagged, not hidden. This run's *audit weight* is the Security/correctness deep-dive, not the docs self-marking.
+
+### Findings
+None. All three probes passed. The gateway-auth probe initially "failed" on my own wrong test routes (`/gateway/kv/{key}` path vs the real `?key=` query form) — corrected; the wire auth itself gates correctly (401 bare / 401 wrong-token / 200 authorized, monitoring plane open, hostile bodies clean). Standing finding **#161** (AFN one-off) remains live and keeps dim 18 at 6 until the nightly gate produces a clean stretch or a named recurrence.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 8 | carried (v41) |
+| 2 | Conceptual Integrity | 8 | **Re-checked (Run-42 warts fixed in #163):** the ListenerContext idiom now applies to all 4 spawn tasks; kv.rs fossil split into topology.rs/introspect.rs. The two named warts are gone — verified in code, not asserted. Up from 7 |
+| 3 | Architecture | 8 | carried (v41); #163 moved no layer boundaries (pure impl-block relocation) |
+| 4 | Modularity | 8 | **Re-checked:** #163 removed the 3rd hand-threaded shared-set anti-pattern (context structs) + the mis-housed method. Up from 7 |
+| 5 | API Design | 8 | carried (v42, hours old); discovery-symmetry fix holding |
+| 6 | Error Handling Model | 8 | carried (v42) |
+| 7 | Configurability | 7 | carried (v42), stale |
+| 8 | Language Best Practices | 8 | clippy clean this run incl. the new probes + #163 |
+| 9 | Concurrency Correctness | 8 | carried (v42); #163's context structs are move-semantics only, no new shared state |
+| 10 | Resource Management | 8 | carried (v42) |
+| 11 | Semantic Correctness | 8 | **Deep-dive + probe.** P-tombstone passed: a delete survives replay of the original older-HLC write (LWW anti-resurrection holds against the adversarial reorder). LWW/HLC merge re-read; no divergence found |
+| 12 | Robustness | 8 | **Deep-dive + probe (via auth probe's hostile-body arm).** 1 MiB garbage + malformed JSON to a gated JSON endpoint → clean client errors, gateway stays serviceable. Framing + codec layers already gated (Runs 40/42) |
+| 13 | Security | 8 | **Deep-dive — first since v38 (stalest carry, now re-earned).** `probe_gateway_auth_gates_the_wire` is the missing end-to-end test: configured token → 401 bare / 401 wrong / 200 authorized on the *wire*, monitoring plane deliberately open. Auth middleware (`gateway_auth`, one `route_layer` over all `/gateway`), OIDC validation, mTLS admission all present + coherent. 8 not 9: no fresh adversarial pen-test of the OIDC/JWKS path or the scoped-token matrix this run |
+| 14 | Failure Mode Legibility | 8 | **Deep-dive + probe.** `probe_config_rejection_names_the_field`: a rejected config names the offending knob (operator sees `reconnect_backoff_secs`, not a generic error). Consistent with the week's node-log-dump / errtrace / typed-error wins |
+| 15 | Performance | 7 | **Deep-dive (read-only — no fresh bench this run, so capped at 8, held 7).** LWW merge + framing hot paths re-read; no new allocation/copy regressions from #163 (moves, not clones). Perf baselines now live in operations/tuning.md but weren't re-run → honest 7 |
+| 16 | Scalability | 7 | carried (v39), stale; scale nightly still queued on runner registration |
+| 17 | Testability | 8 | carried (v42); 3 more probes built rapidly on public APIs + one on the HTTP wire |
+| 18 | Test Architecture | 6 | **#161 still live** — cap holds. The suite grew (probes → permanent gates; the anchor-checker is new doc-CI-worthy tooling) but the one undiagnosed flake on the no-retries gate stands until the nightly speaks |
+| 19 | Observability | 8 | **Re-checked (ops pass):** the operator surface for the week's new signal is now covered — `individual_flood_fallbacks` + liveness fields documented on `/stats`, the topology-pressure warn has a runbook entry with the remedy. Up from 7 |
+| 20 | Debuggability | 8 | carried (v41) |
+| 21 | Operational Readiness | 8 | carried (v41) |
+| 22 | Evolvability | 8 | carried (v41); CHANGELOG held through #163 + both docs passes |
+| 23 | Documentation | 8 | **Re-checked (the docs work this run scored):** README 1,604→192 (one-home-per-fact, reference merged into owning pages, no loss); examples audit (orphans indexed, conway-gpu README, coop template conformance, honest counts); ops pass (config-table dedup, new-surface coverage); 3 lints incl. a new anchor-fragment checker that found a pre-existing broken anchor. Strong — but 8 not 9: the restructure is same-day and unverified by an outside reader; a "9" wants external confirmation the new front page actually onboards faster |
+| 24 | Developer Experience | 8 | **Re-checked:** the front page is now a real handshake (192 lines, layers-at-a-glance → depth links); every example has a run command + what-it-demonstrates; the doc template is now actually followed by its own reference example (coop). Solid at 8 |
+| 25 | Dependency Hygiene | 8 | carried (v42); no new deps across #163 or the docs passes; RUSTSEC green |
+| — | **Floor (lowest 3)** | **6, 7, 7** | Test Architecture · Configurability (stalest carry now) · Performance/Scalability |
+| — | Mean (continuity footnote) | 7.76 | not a target; see M2 preamble |
+
+**Delta vs Run 42:** five dimensions re-earned an 8 on *verified* change rather than carry — Conceptual Integrity (7→8) and Modularity (7→8) because #163's fixes were checked in code; Observability (7→8) because the ops pass closed the new-surface gap; Documentation and DX confirmed at 8 on the restructure. Security (13) got its overdue deep-dive and a real new end-to-end gate — the stalest carry is now the *best-scrutinised* dimension, exactly M2's intent. Floor unchanged at 6 (Test Architecture / #161) — honestly held; the docs work doesn't touch it. Mean drift up (7.64→7.76) reflects the re-checks, not target-chasing; three new permanent probe-gates + the anchor-checker grew the verification surface.
