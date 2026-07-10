@@ -23,6 +23,17 @@ name: Cluster suites (Docker)
 on:
   push:
     branches: [main]
+    # Same filter as pull_request: docs-only pushes (wiki ingests, CHANGELOG) can't break the
+    # Docker suites, and this repo pushes docs to main often. The nightly still covers drift.
+    paths:
+      - 'src/**'
+      - 'mycelium-core/**'
+      - 'mycelium-tuple-space/**'
+      - 'tests/integration/**'
+      - 'tests/overlay/**'
+      - 'docker/**'
+      - 'examples/three_node_demo.rs'
+      - '.github/workflows/cluster-suites.yml'
   pull_request:
     paths:
       - 'src/**'
