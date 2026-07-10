@@ -9,6 +9,32 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **`GossipAgent::connect_peer` / `disconnect_peer`** — pin (and actively warm) a direct
+  forwarding route to an RPC-heavy peer. The forwarding-target set deliberately de-pins
+  non-active peers (seed scalability), which silently degrades Individual-scoped
+  request-response RPC to flood-relay latency; a pin survives every target rebuild, and the
+  call also spawns the writer + sends a Ping so the connection is established *ahead* of the
+  first RPC rather than on its deadline. The tuple-space pins both directions (secondary
+  warm-keeper + primary heartbeat). First half of the integration-S13 CI flake (#150, #155).
+- **Docker cluster suites are CI-gated** (`cluster-suites.yml`): `make test` (13 integration
+  scenarios, 4-node) + `make test-overlay` (S11–S13, 3-node) run on substrate PRs
+  (path-filtered), merges to main, nightly, and on demand — no retries by design. Wiring this
+  gate is what surfaced both #150 root causes. Harness hardening alongside: scenario ERR trap
+  (a red scenario names its dying line), S13 take-loop HTTP-code instrumentation, node-log
+  dump on runner failure, and a Phase-0 data-plane readiness barrier (#156). A self-hosted
+  nightly for the 100-node scale suites is staged separately (#157).
+
+### Fixed
+- **Tuple-space spurious promotion on startup lag** (`mycelium-tuple-space`): the promotion
+  watch treated *never-saw-a-primary* as *primary-evaporated*, so on a CPU-starved host a
+  freshly-started secondary promoted on cap-propagation lag — and, never demoting, held a
+  permanent split-brain (takes 408 off the impostor's empty mirror while puts landed on the
+  real primary; the hosted-CI integration-S13 signature). "Evaporated" now requires prior
+  sight; never-seen promotes only after a 10-interval orphan grace (bounded availability).
+  Canary-verified gates: `secondary_startup_lag_is_not_evaporation`,
+  `never_seen_primary_promotes_after_orphan_grace` (#150, #158).
+
 ### Changed
 - **`InferenceRouter` is now robust to dead nodes** (`mycelium-reason`): routing candidates
   are filtered to live SWIM members (`GossipAgent::peers()`, plus self), so a departed node
