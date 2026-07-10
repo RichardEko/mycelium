@@ -622,25 +622,53 @@ impl TupleSpace {
         // consecutive empty resolves (one advertisement interval apart, per
         // the plan's split-brain guard) → catch up from the old primary's
         // WAL if reachable, fence next_id, and take over.
+        //
+        // "Evaporated" means *was there, then gone*. An empty resolve before this
+        // watch has ever SEEN the primary's advertisement is startup propagation
+        // lag, not failure — on a CPU-starved host the first sighting can take many
+        // intervals, and promoting on lag creates a split-brain primary that never
+        // demotes (the hosted-CI S13 failure, #150: node-b promoted 2 s after
+        // startup while node-a was serving the whole time). Before first sight the
+        // watch only promotes after a much longer orphan grace — the primary may
+        // genuinely be dead while this secondary (re)starts, so availability still
+        // needs a bounded path; propagation lag does not survive 10 intervals.
         {
             let me = Arc::clone(self);
             let interval = self.cfg.cap_refresh;
             tasks.push(tokio::spawn(async move {
                 let mut tick = tokio::time::interval(interval);
                 tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                let mut seen_primary = false;
+                let mut unseen_ticks: u32 = 0;
+                const ORPHAN_GRACE_TICKS: u32 = 10;
                 loop {
                     tick.tick().await;
                     if !me.resolve_role("primary").is_empty() {
+                        seen_primary = true;
                         continue;
                     }
-                    tokio::time::sleep(interval).await;
-                    if !me.resolve_role("primary").is_empty() {
-                        continue;
+                    if seen_primary {
+                        // Was there, now gone — confirm one interval later.
+                        tokio::time::sleep(interval).await;
+                        if !me.resolve_role("primary").is_empty() {
+                            continue;
+                        }
+                        tracing::warn!(
+                            ns = %me.cfg.namespace,
+                            "tuple-space: primary evaporated — promoting"
+                        );
+                    } else {
+                        // Never seen: propagation lag until the orphan grace expires.
+                        unseen_ticks += 1;
+                        if unseen_ticks < ORPHAN_GRACE_TICKS {
+                            continue;
+                        }
+                        tracing::warn!(
+                            ns = %me.cfg.namespace,
+                            ticks = ORPHAN_GRACE_TICKS,
+                            "tuple-space: no primary ever seen within the orphan grace — promoting"
+                        );
                     }
-                    tracing::warn!(
-                        ns = %me.cfg.namespace,
-                        "tuple-space: primary evaporated — promoting"
-                    );
                     me.replay_from_old_primary().await;
                     me.become_primary();
                     return;
