@@ -6,6 +6,10 @@ Each companion depends on `mycelium` **only through its public API** — the com
 proof. Workspace members; scope builds with `-p` (a workspace-wide build pulls `wasmtime`
 via wasm-host).
 
+> These pages are maintainer-facing (design + rationale + gates). The **operator** runbook —
+> durability/WAL, capability-ring failover, the wiki's node-independent store, teardown — is
+> [operations/companions.md](../../../operations/companions.md).
+
 - **[tuple-space.md](tuple-space.md)** — `mycelium-tuple-space/`: pull-based pipeline buffer
   (Linda-style lanes). The load-bearing artifact for Paper 2a's pull-vs-push argument.
 - **[blackboard.md](blackboard.md)** — `mycelium-blackboard/`: content-routed shared working
