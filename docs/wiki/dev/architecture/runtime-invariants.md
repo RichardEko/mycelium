@@ -54,7 +54,13 @@ background keeper), not inline — the tuple-space secondary runs exactly such a
 specific peer should pin it; general signalling should not (that is what the seed de-pinning
 protects). Reusable lesson: **an Individual-scoped RPC's latency depends on whether its target is
 a direct forwarding target — for a hot pair, pin the route and warm it, don't rely on flood-relay.**
-Regression gate: `make test-overlay` S13 (was ~50% flaky → 100% after the pin + warm).
+Regression gate: integration scenario 13 (`make test`, `13_tuple_space.sh`) plus the hosted
+cluster-suites CI workflow. *Correction (2026-07-10):* an earlier version of this note cited
+`make test-overlay` S13 — a different scenario (consensus shared-log) that never exercised this
+path; the flaky test was always **integration** S13. The pin+warm was also only half the fix:
+the other half was the tuple-space spurious-promotion split-brain
+([companions/tuple-space](../companions/tuple-space.md), #158) — flood-relay latency masked it
+locally, the hosted 2-core runner exposed it.
 
 ## KV floods the cluster — a group is not a data-isolation boundary
 

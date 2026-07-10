@@ -17,6 +17,17 @@ Design: `docs/plans/mycelium-tuple-space.md`. Key facts:
 - **Roles** (`TupleRole`): `Primary` serves; `Secondary` mirrors (replicate RPCs +
   heartbeat) and promotes when the primary's capability evaporates — the ring *is* the
   failure detector; `Auto` elects (lowest-candidate-id tie-break); `Client` never serves.
+  **"Evaporated" requires prior sight** (#158): an empty resolve before the watch has ever
+  *seen* the primary's advertisement is startup propagation lag, not failure — on a
+  CPU-starved host the first sighting can take many intervals, and a promoted node never
+  demotes, so promoting on lag is *permanent split-brain* (takes 408 off the impostor's
+  empty mirror while puts land on the real primary — the hosted-CI S13 signature, #150).
+  Seen-then-empty×2 promotes (unchanged failover latency); never-seen promotes only after
+  a 10-interval orphan grace (bounded availability for a primary that died first). Gates:
+  `secondary_startup_lag_is_not_evaporation` (fails on pre-fix code),
+  `never_seen_primary_promotes_after_orphan_grace` (both `tests/failover.rs`). The reusable
+  lesson generalizes: **in a gossip-visibility failure detector, absence-at-birth is not
+  failure** — require one positive observation before treating absence as evaporation.
 - **Durability:** single-lock hot path (no waiter/store TOCTOU); WAL with indivisible
   `Complete` records; compaction bumps a WAL *epoch* so a secondary's byte-offset cursor
   can't dangle.
