@@ -36,12 +36,17 @@ impl std::error::Error for ConsistencyError {}
 
 /// RAII guard for a distributed lock acquired via [`ConsensusHandle::distributed_lock`].
 ///
-/// Tombstones `lock/{name}` in the gossip KV when dropped.
-/// `token` is the consensus ballot number — a monotonically increasing fencing
-/// token across successive acquisitions of the same lock name.
+/// On drop (or [`release`](Self::release)) it clears the lock's authoritative consensus slot
+/// (`consensus/committed/lock/{name}` + its lease) — **but only if this guard is still the
+/// converged holder** (#164). `token` is the consensus ballot: a monotonically increasing fencing
+/// token for resource-side checks.
 pub struct LockGuard {
     pub(super) ctx:      Arc<TaskCtx>,
     pub(super) name:     Arc<str>,
+    /// The exact committed value this guard holds (`{holder}:{nonce}`). Release only clears the
+    /// slot if the converged value still equals this — so a stale guard (lease lapsed, another
+    /// acquire won, or even the same node re-acquiring under a fresh nonce) is a safe no-op.
+    pub(super) value:    Bytes,
     /// Fencing token (consensus ballot at commit time).
     pub token: u64,
     pub(super) released: bool,
@@ -52,15 +57,38 @@ impl LockGuard {
     pub fn release(mut self) { self.do_release(); }
 
     fn do_release(&mut self) {
-        if !self.released {
-            self.released = true;
-            let key: Arc<str> = Arc::from(format!("lock/{}", self.name).as_str());
+        if self.released {
+            return;
+        }
+        self.released = true;
+        let slot = format!("lock/{}", self.name);
+
+        // #164 bug B: release the AUTHORITATIVE consensus slot (`consensus/committed/lock/{name}`
+        // + its lease), token-guarded. The pre-fix code tombstoned the plain `lock/{name}` key —
+        // which acquire never writes — so release was a total no-op and locks were permanently
+        // unreleasable. Guard: only clear the slot if the converged committed value is still
+        // EXACTLY ours (`{holder}:{nonce}`). A stale guard — lease lapsed, another acquire won, or
+        // even the same node re-acquiring under a fresh nonce — sees a different value and no-ops,
+        // so it can never clear the live holder's claim (the "losers stand by without releasing"
+        // rule, #149/#151).
+        let still_ours = crate::consensus::live_committed_value(
+                &self.ctx.kv_state, &slot, crate::consensus::wall_now_ms())
+            .as_deref() == Some(self.value.as_ref());
+        if !still_ours {
+            return;
+        }
+
+        // Tombstone the committed value + its lease so the slot reopens for the next acquirer.
+        for key in [
+            format!("consensus/committed/{slot}"),
+            format!("consensus/lease/{slot}"),
+        ] {
             let update = make_gossip_update(
                 &self.ctx.node_id,
                 self.ctx.default_ttl,
-                key,
+                Arc::from(key.as_str()),
                 Bytes::new(),
-                true,   // tombstone
+                true, // tombstone
                 &self.ctx.hlc,
             );
             apply_and_notify(&self.ctx.kv_state, &update);
@@ -166,6 +194,68 @@ mod tests {
         }
         a.shutdown().await;
     }
+
+
+    /// #164 bug A regression gate: two nodes racing for the same lock must yield exactly one
+    /// holder. Pre-fix this observed `winners == 2` (no mutual exclusion — both got a guard).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn distributed_lock_grants_single_holder_under_race() {
+        let pair = consensus_pair().await;
+        let (ca, cb) = (pair.a.consensus(), pair.b.consensus());
+        let ta = tokio::spawn(async move { ca.distributed_lock("x", std::time::Duration::from_secs(60)).await });
+        let tb = tokio::spawn(async move { cb.distributed_lock("x", std::time::Duration::from_secs(60)).await });
+        let (ra, rb) = (ta.await.unwrap(), tb.await.unwrap());
+        let winners = [ra.is_ok(), rb.is_ok()].iter().filter(|x| **x).count();
+        std::mem::forget(ra);
+        std::mem::forget(rb);
+        assert_eq!(winners, 1, "lock granted to {winners} holders concurrently — not mutually exclusive");
+        pair.a.shutdown().await;
+        pair.b.shutdown().await;
+    }
+
+    /// #164 bug B regression gate: a released lock must be re-acquirable. Pre-fix, release
+    /// tombstoned the wrong key (no-op), so re-acquire returned `Superseded` forever.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn distributed_lock_release_frees_for_reacquire() {
+        let a = make_agent(alloc_port(), &[]).await;
+        let _la = a.consensus().start_consensus_listener(crate::consensus::ConsensusConfig::default());
+        let g1 = a.consensus().distributed_lock("y", std::time::Duration::from_secs(60)).await
+            .expect("first acquire");
+        g1.release();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let g2 = a.consensus().distributed_lock("y", std::time::Duration::from_secs(60)).await;
+        assert!(g2.is_ok(), "re-acquire after release failed: {:?}", g2.err());
+        std::mem::forget(g2);
+        a.shutdown().await;
+    }
+
+    /// #164 bug B token-guard: a stale guard whose lease lapsed must NOT clear a later holder's
+    /// claim on drop. Acquire with a short-but-safe lease (must exceed the ~1 s acquire settle),
+    /// let it lapse, re-acquire (higher ballot), then drop the stale guard and assert the lock is
+    /// still held. Same node re-acquires here, so the ballot/token guard — not holder-match — is
+    /// what must save it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn distributed_lock_stale_release_does_not_clobber() {
+        let a = make_agent(alloc_port(), &[]).await;
+        let _la = a.consensus().start_consensus_listener(crate::consensus::ConsensusConfig::default());
+        // 2 s lease: survives the 1 s acquire-settle, then lapses within the test.
+        let g1 = a.consensus().distributed_lock("z", std::time::Duration::from_secs(2)).await
+            .expect("first acquire");
+        // Wait past the 2 s lease so the slot reopens.
+        tokio::time::sleep(std::time::Duration::from_millis(2300)).await;
+        // Re-acquire (same node) — wins a fresh nonce, distinct from g1's.
+        let g2 = a.consensus().distributed_lock("z", std::time::Duration::from_secs(60)).await
+            .expect("re-acquire after lease lapse");
+        // Drop the STALE first guard — must no-op (its value/nonce is no longer the converged one).
+        drop(g1);
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let held = crate::consensus::live_committed_value(
+            &a.task_ctx.kv_state, "lock/z", crate::consensus::wall_now_ms()).is_some();
+        assert!(held, "stale guard's drop cleared the live holder's claim");
+        std::mem::forget(g2);
+        a.shutdown().await;
+    }
+
 
     // Suppress unused variant warning — ConsistencyError::Timeout is tested above.
     #[allow(dead_code)]
