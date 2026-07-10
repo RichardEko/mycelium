@@ -327,18 +327,18 @@
   <div class="slide-top"><span class="eyebrow eyebrow-orange">The Fair Objection</span><span class="slide-num">·· / ··</span></div>
   <div class="slide-body">
     <div class="slide-title">"Can I operate something with <em>no control plane?"</em></div>
-    <div class="slide-sub">The honest objection, and we take it seriously. An emergent system can feel hard to reason about — there is no single dashboard that "runs" the fleet. Here is exactly where we are on it.</div>
+    <div class="slide-sub">The honest objection, and we take it seriously. An emergent system can feel hard to reason about — there is no single dashboard that "runs" the fleet. So we built the answer at both levels, and kept it coordinator-free.</div>
     <div class="cols2">
       <div class="card card-accent-green">
-        <div class="card-title">Today — node-level legibility</div>
+        <div class="card-title">Node-level legibility — shipped</div>
         <div class="card-body">Every node explains itself: <em>why</em> it is busy, <em>why</em> it shed load, <em>why</em> it is unavailable. A tamper-evident, signed audit trail. Standard health, readiness, and metrics endpoints that drop into your existing monitoring.</div>
       </div>
-      <div class="card card-accent-orange">
-        <div class="card-title">Next — fleet-level legibility</div>
-        <div class="card-body"><strong>Legible Emergence</strong>: a designed roadmap for fleet-level "why did it do that" diagnostics — computed <em>without</em> a central collector, so the diagnostics stay coordinator-free too. A planned programme, not a promise.</div>
+      <div class="card card-accent-green">
+        <div class="card-title">Fleet-level legibility — shipped</div>
+        <div class="card-body"><strong>Legible Emergence</strong> (complete): <em>Detect → Localize → Explain → Intervene</em> for the whole fleet — computed from each node's local view + HLC causal order, with <strong>no central collector</strong>, so the diagnostics stay coordinator-free too. <code>GET /gateway/diagnose</code> narrates why the fleet is in its state; <code>/gateway/explain</code> reconstructs a key's cross-node causal history.</div>
       </div>
     </div>
-    <div class="callout callout-orange">We would rather show you the honest gap <strong>and</strong> the plan to close it than pretend emergence is free to operate. The fear is real; the answer is on the roadmap.</div>
+    <div class="callout callout-green">The fear is real — and it is already answered. Not "the plan to close the gap": the gap is closed, at node <em>and</em> fleet level, and the diagnostics never needed a control plane to see the fleet either.</div>
   </div>
 </div>
 
@@ -351,7 +351,7 @@
     <div class="cols3">
       <div class="card card-accent-green">
         <div class="card-title">✓ Built</div>
-        <div class="card-body" style="line-height:1.75;">Three-layer substrate. Security &amp; compliance: signed identity, role-based access, OIDC single sign-on, tamper-evident audit, data-at-rest encryption, live key rotation. Sovereign federation. Polyglot SDKs (Rust · Python · TypeScript). Feature-complete v2.</div>
+        <div class="card-body" style="line-height:1.75;">Three-layer substrate. Security &amp; compliance: signed identity, role-based access, OIDC single sign-on, tamper-evident audit, data-at-rest encryption, live key rotation. Sovereign federation. Coordinator-free fleet diagnosis (detect → localize → explain → intervene, no central collector). Polyglot SDKs (Rust · Python · TypeScript). Feature-complete v2.</div>
       </div>
       <div class="card card-accent-blue">
         <div class="card-title">✓ Demonstrated</div>
@@ -359,7 +359,7 @@
       </div>
       <div class="card card-accent-orange">
         <div class="card-title">→ Honest next</div>
-        <div class="card-body" style="line-height:1.75;">Sustained real-network and load validation. The measured "federate-at-N" threshold. Fleet-level diagnostics. <strong>No third-party production deployment yet</strong> — that is the gap a design partnership closes.</div>
+        <div class="card-body" style="line-height:1.75;">Sustained real-network and load validation. The measured "federate-at-N" threshold. <strong>No third-party production deployment yet</strong> — that is the gap a design partnership closes.</div>
       </div>
     </div>
     <div class="callout callout-blue">We are looking for <strong>design partners</strong>, not selling shrink-wrap at 10,000 nodes. The honesty is deliberate — it is the same discipline that produced the architecture.</div>
