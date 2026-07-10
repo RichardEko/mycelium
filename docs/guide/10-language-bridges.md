@@ -88,7 +88,7 @@ async for req in agent.rpc_serve("process"):
     agent.rpc_respond(req, json.dumps(response).encode())
 
 # ── Signals ───────────────────────────────────────────────────────────────────
-agent.emit("task.ready", b"payload", scope="system")
+agent.emit("task.ready", b"payload", scope="cluster")
 agent.emit("task.ready", b"payload", scope="group:workers")   # scope is a string
 agent.emit("task.ready", b"payload", scope="node:127.0.0.1:7000")
 

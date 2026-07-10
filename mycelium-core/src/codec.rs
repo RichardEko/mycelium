@@ -152,7 +152,7 @@ fn get_node_id(r: &mut Reader) -> Result<NodeId, CodecError> {
 
 fn put_scope(b: &mut BytesMut, s: &SignalScope) {
     match s {
-        SignalScope::System          => put_u32(b, 0),
+        SignalScope::Cluster          => put_u32(b, 0),
         SignalScope::Group(g)        => { put_u32(b, 1); put_str(b, g); }
         SignalScope::Individual(n)   => { put_u32(b, 2); put_node_id(b, n); }
         SignalScope::Groups(gs)      => {
@@ -164,7 +164,7 @@ fn put_scope(b: &mut BytesMut, s: &SignalScope) {
 }
 fn get_scope(r: &mut Reader) -> Result<SignalScope, CodecError> {
     Ok(match r.u32()? {
-        0 => SignalScope::System,
+        0 => SignalScope::Cluster,
         1 => SignalScope::Group(r.arc_str()?),
         2 => SignalScope::Individual(get_node_id(r)?),
         3 => {
@@ -432,7 +432,7 @@ mod tests {
                 SyncEntry { key: Arc::from("k1"), value: Bytes::from_static(b"v1"), timestamp: 5, is_tombstone: false },
                 SyncEntry { key: Arc::from("k2"), value: Bytes::new(), timestamp: 6, is_tombstone: true },
             ] },
-            WireMessage::Signal { ttl: 3, nonce: 1, sender: nid(7000), scope: SignalScope::System,
+            WireMessage::Signal { ttl: 3, nonce: 1, sender: nid(7000), scope: SignalScope::Cluster,
                 kind: Arc::from("sys.x"), payload: Bytes::from_static(b"p"), hlc_seq: None },
             WireMessage::Signal { ttl: 4, nonce: 2, sender: nid(7000), scope: SignalScope::Group(Arc::from("g")),
                 kind: Arc::from("g.x"), payload: Bytes::new(), hlc_seq: Some(123) },

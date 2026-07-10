@@ -293,14 +293,15 @@ class MyceliumAgent:
         kind:        str,
         payload:     bytes = b"",
         *,
-        scope:       str = "system",
+        scope:       str = "cluster",
     ) -> bool:
         """Emit a signal into the mesh.
 
         Args:
             kind:    Signal kind string (e.g. ``"render-job"``).
             payload: Raw bytes payload.
-            scope:   ``"system"``, ``"group:NAME"``, or ``"node:IP:PORT"``.
+            scope:   ``"cluster"`` (every node; default), ``"group:NAME"``, or
+                     ``"node:IP:PORT"``. ``"system"`` still works as a deprecated alias.
 
         Returns:
             ``True`` if the signal was queued; ``False`` if the gossip shard

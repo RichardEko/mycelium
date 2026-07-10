@@ -136,7 +136,7 @@ impl HostState {
 
     /// `mesh.emit` — broadcast a signal into the mesh (`System` scope for v0).
     pub fn emit(&mut self, kind: &str, payload: Vec<u8>) {
-        let _ = self.mesh.emit(kind.to_string(), SignalScope::System, Bytes::from(payload));
+        let _ = self.mesh.emit(kind.to_string(), SignalScope::Cluster, Bytes::from(payload));
     }
 }
 

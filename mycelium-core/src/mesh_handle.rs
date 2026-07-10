@@ -397,7 +397,7 @@ mod tests {
         let sender_a = NodeId::new("127.0.0.1", 1001).unwrap();
         let sender_b = NodeId::new("127.0.0.1", 1002).unwrap();
         let sig = |sender: NodeId, nonce: u64| Signal {
-            kind: Arc::clone(&kind), scope: SignalScope::System,
+            kind: Arc::clone(&kind), scope: SignalScope::Cluster,
             payload: Bytes::new(), sender, nonce,
         };
         handlers.deliver(&sig(sender_a.clone(), 1));

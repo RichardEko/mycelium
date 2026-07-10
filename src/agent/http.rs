@@ -1292,8 +1292,9 @@ fn capvalue_to_json(v: &crate::capability::CapValue) -> serde_json::Value {
 
 /// `POST /gateway/signal/emit`
 ///
-/// Fires a signal into the mesh. `scope` is `"system"`, `"group:NAME"`, or
-/// `"node:IP:PORT"`. `payload_b64` is the base64-encoded signal payload.
+/// Fires a signal into the mesh. `scope` is `"cluster"` (every node; default), `"group:NAME"`,
+/// or `"node:IP:PORT"`. `"system"` is still accepted as a deprecated alias for `"cluster"`.
+/// `payload_b64` is the base64-encoded signal payload.
 async fn gw_signal_emit(
     State(ctx): State<Arc<HttpCtx>>,
     Json(body):  Json<serde_json::Value>,
@@ -1306,9 +1307,10 @@ async fn gw_signal_emit(
         None    => return (StatusCode::BAD_REQUEST, Json(json!({"error":"missing kind"}))).into_response(),
     };
 
-    let scope_str = body["scope"].as_str().unwrap_or("system");
-    let scope = if scope_str == "system" {
-        SignalScope::System
+    let scope_str = body["scope"].as_str().unwrap_or("cluster");
+    // "cluster" is the name; "system" stays accepted as a deprecated alias (2026-07-10 rename).
+    let scope = if scope_str == "cluster" || scope_str == "system" {
+        SignalScope::Cluster
     } else if let Some(rest) = scope_str.strip_prefix("group:") {
         SignalScope::Group(Arc::from(rest))
     } else if let Some(rest) = scope_str.strip_prefix("node:") {
@@ -1317,7 +1319,7 @@ async fn gw_signal_emit(
             Err(_)  => return (StatusCode::BAD_REQUEST, Json(json!({"error":"invalid node id"}))).into_response(),
         }
     } else {
-        SignalScope::System
+        SignalScope::Cluster
     };
 
     let payload = if let Some(b64) = body["payload_b64"].as_str() {
@@ -1876,7 +1878,7 @@ fn overlay_make_engine(ctx: &Arc<TaskCtx>) -> crate::consensus::ConsensusEngine 
 
 /// Thin system-wide propose from `TaskCtx` (quorum = floor(N/2)+1 over live peers).
 #[cfg(feature = "consensus")]
-async fn overlay_system_propose(
+async fn overlay_cluster_propose(
     ctx:    &Arc<TaskCtx>,
     slot:   &str,
     value:  Bytes,
@@ -1886,7 +1888,7 @@ async fn overlay_system_propose(
     let quorum  = super::helpers::compute_quorum_size(config.quorum_size, n_nodes);
     overlay_make_engine(ctx)
         .propose(
-            crate::signal::SignalScope::System,
+            crate::signal::SignalScope::Cluster,
             Arc::from(slot),
             value,
             quorum,
@@ -1998,7 +2000,7 @@ async fn gw_overlay_consistent_set(
     };
 
     let slot = format!("consistent/{key}");
-    let result = overlay_system_propose(
+    let result = overlay_cluster_propose(
         &ctx.agent_ctx, &slot, value.clone(),
         crate::consensus::ConsensusConfig::default(),
     ).await;
@@ -2080,7 +2082,7 @@ async fn gw_overlay_lock_acquire(
         ..crate::consensus::ConsensusConfig::default()
     };
 
-    let result = overlay_system_propose(&ctx.agent_ctx, &slot, value.clone(), cfg).await;
+    let result = overlay_cluster_propose(&ctx.agent_ctx, &slot, value.clone(), cfg).await;
 
     match result {
         crate::consensus::ConsensusResult::Committed { .. } => {
@@ -2376,7 +2378,7 @@ async fn gw_overlay_log_group_subscribe(
         'acquire: loop {
             if tx.is_closed() { return; }
             let won = matches!(
-                overlay_system_propose(&task_ctx, &claim_slot, holder.clone(), mk_cfg()).await,
+                overlay_cluster_propose(&task_ctx, &claim_slot, holder.clone(), mk_cfg()).await,
                 crate::consensus::ConsensusResult::Committed { .. },
             );
             if won {
@@ -2403,7 +2405,7 @@ async fn gw_overlay_log_group_subscribe(
             // live; a different proposer is superseded). If we somehow lost the claim (a partition
             // let another win), stop — a single active consumer is the invariant.
             if last_renew.elapsed() >= renew_every {
-                let _ = overlay_system_propose(&task_ctx, &claim_slot, holder.clone(), mk_cfg()).await;
+                let _ = overlay_cluster_propose(&task_ctx, &claim_slot, holder.clone(), mk_cfg()).await;
                 last_renew = std::time::Instant::now();
                 let still_me = crate::consensus::live_committed_value(
                         &kv_state, &claim_slot, crate::consensus::wall_now_ms())
@@ -3001,7 +3003,7 @@ mod tests {
         assert_eq!(resp.status(), 200);
 
         // Emit a signal to self.
-        let _ = agent.mesh().emit("sse-probe", SignalScope::System, Bytes::from_static(b"payload"));
+        let _ = agent.mesh().emit("sse-probe", SignalScope::Cluster, Bytes::from_static(b"payload"));
 
         // Read SSE chunks until we see the expected event or timeout.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(2);

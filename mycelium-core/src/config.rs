@@ -510,7 +510,7 @@ pub struct GossipConfig {
     /// When `true`, gossip shards apply scope-aware forwarding for Signal frames:
     /// Group-scoped signals are forwarded only to known group members (plus up to
     /// `epidemic_extra_peers` random non-members for epidemic coverage), and
-    /// Individual-scoped signals are forwarded only to the target peer. System signals
+    /// Individual-scoped signals are forwarded only to the target peer. Cluster-scoped signals
     /// and Data frames are always broadcast to all targets regardless of this setting.
     ///
     /// Requires that group membership be published to the KV store (via `join_group`)

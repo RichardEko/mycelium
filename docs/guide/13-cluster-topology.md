@@ -5,6 +5,51 @@ structure the seed set for different deployment shapes.
 
 ---
 
+## What actually makes a node part of a cluster
+
+There is **no cluster object, no join API, and no registry** — membership is *emergent*. A node
+is part of a cluster if two things hold:
+
+1. **It can reach and gossip with the cluster's nodes.** You bootstrap by connecting to
+   `bootstrap_peers`; gossip **peer-exchange** then spreads the full membership (nodes learn
+   about peers they were never told about). You're in the cluster if the gossip reaches you.
+2. **It passes admission** — with the `tls` feature, a peer is admitted only if it presents a
+   certificate signed by the cluster's **CA** (`tls.ca_cert`). *That CA is the real definition
+   of "this cluster"*: the set of mutually-reachable nodes holding a cert from the same CA.
+   Without TLS there is no cryptographic gate — any node that can reach the port and speak wire
+   v12 joins.
+
+> **`cluster_name` does NOT define membership.** It is a **label only** — surfaced on `/stats`,
+> as a `/metrics` `cluster` label, and in AgentFacts. It has *no effect on gossip or identity*.
+> Two nodes with **different** `cluster_name`s on the same reachable network still form **one**
+> cluster; the **same** `cluster_name` does **not** join two nodes that can't reach or
+> authenticate each other. To *isolate* clusters, run a **separate mesh** — its own CA (or an
+> unreachable network) — **not** a different name. (The cluster is also the data-isolation
+> boundary: KV floods every node in it. See the guide on [security](09-security.md).)
+
+## Scope vocabulary: `Cluster · Group · Individual`
+
+The mesh has exactly three addressing scopes — a nesting, all → subset → one — used by both
+signals (`SignalScope`) and consensus:
+
+| Scope | Reaches | Signal | Consensus |
+|---|---|---|---|
+| **`Cluster`** | every node in the cluster | `SignalScope::Cluster` | `cluster_propose` |
+| **`Group(name)`** | only nodes that joined the named group | `SignalScope::Group` | `group_propose` / `cross_group_propose` |
+| **`Individual(node)`** | one specific node (RPC, votes) | `SignalScope::Individual` | — |
+
+The relationship: `node ∈ group(s) ⊆ cluster`. **Cluster-scope = the whole cluster** — it is an
+*addressing mode*, not a fourth topology level; there is nothing between cluster and group.
+
+> **Note on "system".** Before 2026-07-10 cluster-scope was called `System` (`SignalScope::System`,
+> `system_propose`, scope string `"system"`) — renamed to `Cluster` because it kept getting
+> confused with the *cluster*. The old names still work: `system_propose` is a `#[deprecated]`
+> alias, and the gateway/SDKs still accept `"system"`. The **one** surviving "system" is
+> `system_stats()` — that is deliberate: it reports *this node's* runtime/protocol state, which is
+> node-local, not a scope.
+
+---
+
 ## How bootstrap works
 
 `bootstrap_peers` is not a coordinator or a single point of truth. It is

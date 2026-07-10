@@ -138,7 +138,7 @@ Two different patterns keep getting conflated because the word "consumer group" 
 - **Exact-once *ordered log consumption*** → `subscribe_log_group` / the gateway
   `/gateway/overlay/log/group/subscribe`. Contract: **at most one active consumer at a time**,
   failover on death. Achieved (`src/agent/http.rs`; gate: overlay S11) by a **leased consensus
-  claim with converged-holder confirmation**: `system_propose` commits **optimistically against a
+  claim with converged-holder confirmation**: `cluster_propose` commits **optimistically against a
   node's *local* committed view** (`src/consensus.rs`), so two near-simultaneous proposers can
   both commit — the return is **not** trustworthy for mutual exclusion. But commit-keys are
   LWW-by-HLC, so the *converged* holder is deterministic: after committing, read the converged
@@ -156,7 +156,7 @@ Two different patterns keep getting conflated because the word "consumer group" 
 **The trap (do not re-attempt):** making the log-group *load-balance* by handing entries off
 between consumers per-item. It cannot work with a single advancing offset. A **bare LWW offset**
 lets a peer read stale and re-drain (double-delivery); a **consensus offset** can't be
-re-advanced (a second `system_propose` to the same slot returns `Superseded`, not a new value)
+re-advanced (a second `cluster_propose` to the same slot returns `Superseded`, not a new value)
 and per-item consensus floods the engine (starves other consensus users — it broke overlay S12).
 Competitive per-item consumption is the *tuple-space's* job, by design; don't rebuild it on a
 log. History: #149 (the full got-10 → got-1 → got-10 dead-end is on the issue).

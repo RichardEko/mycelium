@@ -436,7 +436,7 @@ impl AgentStateMachine {
         emit_signal(
             &self.ctx,
             signal_kind::AGENT_APPROVE.into(),
-            SignalScope::System,
+            SignalScope::Cluster,
             Bytes::from(payload.to_string()),
         );
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
@@ -477,7 +477,7 @@ impl AgentStateMachine {
         emit_signal(
             &self.ctx,
             signal_kind::AGENT_STATE.into(),
-            SignalScope::System,
+            SignalScope::Cluster,
             Bytes::from(payload.to_string()),
         );
     }

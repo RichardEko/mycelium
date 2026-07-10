@@ -369,7 +369,7 @@ where
 /// Data frames always use `ForwardHint::All`.
 #[derive(Clone, Debug)]
 pub enum ForwardHint {
-    /// Forward to all targets — System signals and Data frames.
+    /// Forward to all targets — Cluster-scoped signals and Data frames.
     All,
     /// Forward to known group members plus up to `epidemic_extra_peers` random non-members.
     Group(Arc<str>),

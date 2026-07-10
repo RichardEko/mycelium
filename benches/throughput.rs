@@ -139,7 +139,7 @@ fn signal_fanout(c: &mut Criterion) {
 
         g.bench_with_input(BenchmarkId::new("handlers", n), &n, |b, _| {
             b.iter(|| {
-                let _ = agent.mesh().emit(kind.as_str(), SignalScope::System, payload.clone());
+                let _ = agent.mesh().emit(kind.as_str(), SignalScope::Cluster, payload.clone());
                 // Drain to keep channels empty — ensures opacity stays at 0.0
                 // and subsequent iterations hit the same hot path.
                 for rx in &mut rxs {

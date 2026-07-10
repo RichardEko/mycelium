@@ -1139,7 +1139,7 @@ impl GossipAgent {
     ) -> crate::consensus::ConsensusResult {
         let policy = capauthz::CapAuthzPolicy { required_roles: roles }.encode();
         let slot = format!("capauthz/{ns}/{name}");
-        let result = self.consensus().system_propose(&slot, policy.clone(), config).await;
+        let result = self.consensus().cluster_propose(&slot, policy.clone(), config).await;
         if matches!(result, crate::consensus::ConsensusResult::Committed { .. }) {
             // Apply the agreed policy to the key resolvers enforce on (D4). Idempotent under LWW.
             let _ = self.kv().set(capauthz::capauthz_key(ns, name), policy);

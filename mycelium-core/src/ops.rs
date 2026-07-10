@@ -146,7 +146,7 @@ pub async fn emit_signal_async(
 
 fn forward_hint(scope: &SignalScope) -> ForwardHint {
     match scope {
-        SignalScope::System           => ForwardHint::All,
+        SignalScope::Cluster           => ForwardHint::All,
         SignalScope::Group(name)      => ForwardHint::Group(Arc::clone(name)),
         SignalScope::Individual(peer) => ForwardHint::Individual(peer.clone()),
         SignalScope::Groups(_)        => ForwardHint::All,
@@ -156,7 +156,7 @@ fn forward_hint(scope: &SignalScope) -> ForwardHint {
 #[cfg(feature = "metrics")]
 fn scope_label(scope: &SignalScope) -> &'static str {
     match scope {
-        SignalScope::System        => "system",
+        SignalScope::Cluster        => "system",
         SignalScope::Group(_)      => "group",
         SignalScope::Individual(_) => "node",
         SignalScope::Groups(_)     => "groups",
@@ -381,16 +381,16 @@ mod delivery_shed_tests {
         let mut clear_rx  = handlers.register_with_capacity(Arc::from(signal_kind::BOUNDARY_TRANSPARENT), 4);
         let mut work_rx   = handlers.register_with_capacity(Arc::from("work"), 4);
 
-        // Sanity: an ordinary System-scoped signal IS shed deterministically at fill 1.0.
-        deliver_locally(&boundary, &handlers, &sig("work", SignalScope::System, node.clone()), 1.0);
-        assert!(work_rx.try_recv().is_err(), "ordinary System signal is shed at fill 1.0");
+        // Sanity: an ordinary Cluster-scoped signal IS shed deterministically at fill 1.0.
+        deliver_locally(&boundary, &handlers, &sig("work", SignalScope::Cluster, node.clone()), 1.0);
+        assert!(work_rx.try_recv().is_err(), "ordinary Cluster signal is shed at fill 1.0");
 
         // The fix: boundary-transition control signals must still be delivered locally at fill 1.0.
-        deliver_locally(&boundary, &handlers, &sig(signal_kind::BOUNDARY_OPAQUE, SignalScope::System, node.clone()), 1.0);
+        deliver_locally(&boundary, &handlers, &sig(signal_kind::BOUNDARY_OPAQUE, SignalScope::Cluster, node.clone()), 1.0);
         assert!(opaque_rx.try_recv().is_ok(),
             "BOUNDARY_OPAQUE must be delivered locally even at fill 1.0 (control signals are not load-shed)");
 
-        deliver_locally(&boundary, &handlers, &sig(signal_kind::BOUNDARY_TRANSPARENT, SignalScope::System, node.clone()), 1.0);
+        deliver_locally(&boundary, &handlers, &sig(signal_kind::BOUNDARY_TRANSPARENT, SignalScope::Cluster, node.clone()), 1.0);
         assert!(clear_rx.try_recv().is_ok(),
             "BOUNDARY_TRANSPARENT must be delivered locally even at fill 1.0");
     }

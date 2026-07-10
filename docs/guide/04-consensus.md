@@ -220,7 +220,7 @@ election, shard/config ownership, and migrations, **not** high-rate fine-grained
 ## Dev Notes
 
 **Quorum sizing.** Quorum is always a majority — `floor(n/2)+1` — computed
-from live membership at proposal time: `system_propose`/`consistent_set` count
+from live membership at proposal time: `cluster_propose`/`consistent_set` count
 `peers + self`, `group_propose` counts the emergent group's current members.
 For a 3-node cluster that's 2; for 5, it's 3. There is no "any-1" escape
 hatch by design: if you can tolerate non-majority confirmation you want
@@ -310,7 +310,7 @@ match agent.group_propose("workers", "coordinator", Bytes::from("node-7"), cfg).
 }
 
 // System-wide proposal (all known peers vote).
-let _ = agent.system_propose("global/epoch", Bytes::from("42"), ConsensusConfig::default()).await;
+let _ = agent.cluster_propose("global/epoch", Bytes::from("42"), ConsensusConfig::default()).await;
 
 // Subscribe to a slot — fires whenever the slot is committed.
 let mut rx = agent.consensus_rx("coordinator");
