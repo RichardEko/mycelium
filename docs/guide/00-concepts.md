@@ -109,6 +109,15 @@ by a `MembershipIntent` the `MembershipGovernor` reconciles toward. →
 [`consensus`](../../examples/coop/src/bin/consensus.rs) (consensus group),
 [`elastic_intent`](../../examples/coop/src/bin/elastic_intent.rs) (governed).
 
+**Governed vs. ungoverned.** By default a group is **ungoverned**: it just self-organises — nodes
+join/leave by capability, and the size is whatever it is. A group becomes **governed** only when
+someone publishes a `MembershipIntent` for it; then a `MembershipGovernor` actively holds it to a
+`min`/`max` band (spinning members up/down or flagging a `conflict`). Govern a group when you need
+a *bounded pool* ("keep 5–10 render workers") or want it observable against a target; leave it
+ungoverned when self-organisation is enough (most groups). Governance is additive — the *same*
+group is just being watched by a governor. **Why create a group at all** →
+[cookbook: "why (and when) create a group"](cookbook.md#why-and-when-would-i-create-a-group-within-a-cluster).
+
 **Consensus vs. LWW vs. tuple-space rendezvous — "how do agents agree?"**
 **LWW** (last-write-wins, the default) — no agreement, newest timestamp wins;
 use for soft state. **Consensus** (Layer III) — real agreement via quorum; use

@@ -95,6 +95,30 @@ equality + presence (not unification). Demo:
 storage executors compete for finite surplus). When to use which:
 [00 · Concepts](00-concepts.md) ("tuple space vs. blackboard").
 
+### Why (and when) would I create a group within a cluster?
+
+A cluster is *everyone*; a **group is a named subset you address as a unit**. You create one when
+"all nodes" is the wrong audience. Four reasons, all on the same substrate:
+
+- **Scope *agreement* to the nodes that should decide.** `cluster_propose` asks the *whole
+  cluster* for quorum; `group_propose("compliance", …)` asks only the compliance nodes. Cheaper
+  (fewer voters), and *meaningful* — a policy is ratified by the bloc that owns it, not by unrelated
+  workers. Same for a **scoped lock / leader**: `elect_leader("shard-0")` or a lock whose name is
+  per-subsystem gives you one owner *within* that function, not one across the fleet.
+- **Partition the fleet by function.** `nlp-workers`, `render-pool`, `storage` — each an emergent
+  group by capability. Then `SignalScope::Group("nlp")` fires an event only nodes in that function
+  act on, and `resolve(filter)` finds exactly that function's providers. The cluster stays one mesh;
+  the *work* is organised into functional sets.
+- **Bound a pool's size** — make the group *governed* (a `MembershipIntent`): "keep 5–10 render
+  workers", and the `MembershipGovernor` converges it. (Ungoverned = self-organising, no cap; see
+  [00 · Concepts](00-concepts.md#the-other-concept-pairs-people-conflate).)
+- **Span failure domains for durability** — `cross_group_propose` makes each availability zone an
+  independent voting bloc, so a commit must clear *every* zone (multi-AZ quorum) — see
+  [04 · Consensus](04-consensus.md).
+
+Rule of thumb: **cluster-scope for "everyone"; a group when a *subset* is the right audience for a
+signal, a vote, a lock, or a functional role.** How to actually make one ↓.
+
 ### How do I define a group, and monitor who's in it?
 
 **Scope terms first:** the mesh has three scopes — `Cluster · Group · Individual` (all / subset /
