@@ -363,7 +363,8 @@ let val = agent.consensus().consistent_get("config/endpoint"); // local read, ev
 #### Distributed Lock (`distributed_lock`)
 
 Consensus-backed named lock. The returned `LockGuard` releases (tombstones the lock key)
-on drop. The `token` field is a monotonic fencing token drawn from the ballot number.
+on drop. The `token` field is a monotonic fencing token drawn from the commit's HLC (not the
+ballot, which can regress under gossip lag — see the fencing-token discipline above).
 
 ```rust
 let guard = agent.distributed_lock("job-42", Duration::from_secs(30)).await?;

@@ -42,8 +42,10 @@
 //! > A leased lock cannot guarantee you *still* hold it at the moment you touch the resource — a
 //! > GC pause or slow syscall can outlast your lease. **The fencing token is the real
 //! > protection:** stamp every write to the protected resource with [`LockGuard::token`] (a
-//! > per-name monotonically increasing consensus ballot) and have the resource **reject a token
-//! > lower than the highest it has seen.** Then a stale holder's late write is refused.
+//! > per-name monotonically increasing token drawn from the **commit HLC** — not the consensus
+//! > ballot, which can regress under gossip lag; see the #164 finding + the monotonicity test)
+//! > and have the resource **reject a token lower than the highest it has seen.** Then a stale
+//! > holder's late write is refused.
 //!
 //! Practically: pick `ttl` comfortably larger than your critical section, keep the section short,
 //! and fence the resource. Coarse-grained by design — a consensus round per acquire (~1 s to let
