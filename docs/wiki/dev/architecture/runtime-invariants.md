@@ -54,7 +54,7 @@ the target rebuild on peer-list change). So an Individual-scoped frame to a peer
 current forwarding target degrades to flood-relay: fine for a one-shot signal, but a
 request-response **RPC** pays a multi-hop round-trip and can miss its deadline (this was the S13
 tuple-space flake — a secondary→primary `take` timing out at HTTP 408, grounded in node logs;
-#150). The fix is **`GossipAgent::connect_peer(peer)` / `disconnect_peer(peer)`** (`src/agent/kv.rs`):
+#150). The fix is **`GossipAgent::connect_peer(peer)` / `disconnect_peer(peer)`** (`src/agent/topology.rs`):
 a `pinned_peers` set (papaya, lock-free — no lock-order row) that the flood-fallback honours
 (`targets.contains(t) || pinned_peers.contains(t)`) on *every* rebuild, so a specifically-pinned
 peer keeps a direct route without undoing the seed de-pinning. `connect_peer` also **actively

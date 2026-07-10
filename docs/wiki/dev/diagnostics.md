@@ -114,7 +114,7 @@ healthy fleet. Gates: five unit rules + `test_fleet_diagnosis_names_a_real_gover
 **localize** (`/fleet`) · **explain** (`/explain`) · **diagnose** (`/diagnose`).
 
 **Phase 5 is complete** — the **operator surface**. Diagnostics as *data*: public
-`GossipAgent::fleet_snapshot()` / `fleet_diagnosis()` (`src/agent/kv.rs`) — the same content as the
+`GossipAgent::fleet_snapshot()` / `fleet_diagnosis()` (`src/agent/introspect.rs`) — the same content as the
 `/gateway/fleet` / `/gateway/diagnose` endpoints, callable with no HTTP/auth (types re-exported from
 `lib.rs`). Two-audience docs: operator — [`operations/diagnostics.md`](../../operations/diagnostics.md)
 (one runbook entry per pathology + Prometheus alert recipes); developer — guide/14 pattern 11.
