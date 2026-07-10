@@ -259,3 +259,82 @@ async fn inflight_keys_track_claims() {
     primary.shutdown().await;
     agent.shutdown().await;
 }
+
+/// A secondary that starts before the primary's advertisement has propagated must NOT
+/// promote — "evaporated" means *was there, then gone*, and never-seen is startup lag.
+/// The pre-fix watch promoted after 2 empty resolves, which on a CPU-starved host created
+/// a split-brain primary that never demoted (hosted-CI S13, #150). Once the primary
+/// appears, the secondary must stay secondary and serve client ops through it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn secondary_startup_lag_is_not_evaporation() {
+    let (pa, pb) = alloc_two_sorted_ports();
+    let a1 = start_agent(pa, None).await;
+    let a2 = start_agent(pb, Some(pa)).await;
+    wait_peered(&[&a1, &a2]).await;
+
+    // Secondary first, with no primary anywhere on the ring.
+    let ts2 = TupleSpace::new(Arc::clone(&a2), ts_cfg("lag", TupleRole::Secondary))
+        .await
+        .expect("ts2");
+
+    // The pre-fix watch promoted after ~2 × cap_refresh; sit past that, inside the
+    // orphan grace (10 ticks), and assert no spurious promotion.
+    tokio::time::sleep(Duration::from_millis(300 * 4)).await;
+    assert!(
+        !ts2.is_primary(),
+        "secondary promoted on startup propagation lag (never saw a primary)"
+    );
+
+    // Primary appears late. The secondary must see it and stay secondary.
+    let ts1 = TupleSpace::new(Arc::clone(&a1), ts_cfg("lag", TupleRole::Primary))
+        .await
+        .expect("ts1");
+    tokio::time::sleep(Duration::from_millis(300 * 4)).await;
+    assert!(!ts2.is_primary(), "secondary promoted despite a live primary");
+    assert!(ts2.is_secondary(), "secondary lost its role");
+
+    // And it functions: client ops through the secondary route to the primary.
+    let id = ts2.put("s", Bytes::from_static(b"x")).await.expect("put");
+    let (got, _) = ts2.take("s", Duration::from_secs(5)).await.expect("take");
+    assert_eq!(got, id);
+
+    ts1.shutdown().await;
+    ts2.shutdown().await;
+    a2.shutdown().await;
+    a1.shutdown().await;
+}
+
+/// Bounded availability for the genuine orphan: a secondary whose primary NEVER appears
+/// (dead before this process started — nothing to sight) must still promote once the
+/// orphan grace (10 × cap_refresh) expires, not wait forever.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn never_seen_primary_promotes_after_orphan_grace() {
+    let (pa, pb) = alloc_two_sorted_ports();
+    let a1 = start_agent(pa, None).await;
+    let a2 = start_agent(pb, Some(pa)).await;
+    wait_peered(&[&a1, &a2]).await;
+
+    let ts2 = TupleSpace::new(Arc::clone(&a2), ts_cfg("orph", TupleRole::Secondary))
+        .await
+        .expect("ts2");
+
+    // Grace is 10 ticks of cap_refresh (300 ms) ≈ 3 s; poll well past it.
+    let mut promoted = false;
+    for _ in 0..40 {
+        if ts2.is_primary() {
+            promoted = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    assert!(promoted, "orphaned secondary never promoted (availability hole)");
+
+    // The promoted space serves.
+    let id = ts2.put("s", Bytes::from_static(b"x")).await.expect("put");
+    let (got, _) = ts2.take("s", Duration::from_secs(5)).await.expect("take");
+    assert_eq!(got, id);
+
+    ts2.shutdown().await;
+    a2.shutdown().await;
+    a1.shutdown().await;
+}
