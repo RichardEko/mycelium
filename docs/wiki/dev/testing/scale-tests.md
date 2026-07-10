@@ -40,6 +40,13 @@ single-host *baseline* (fast, CI-adjacent, no cluster needed); multi-host k8s is
 next-level axis for node counts past ~100. Note the k8s manifests are validated offline only
 (rendered, not applied in CI) — see their README.
 
+**CI status (2026-07-10):** the scale suites run **nightly on a self-hosted runner**
+(`.github/workflows/scale-nightly.yml`, 06:00 UTC, runner label `mycelium-scale` — queued
+until the runner is registered). They stay off hosted runners and off the PR path on purpose:
+a 2-core hosted runner hits the iptables ceiling above ~50 nodes, and each suite is
+dozens-to-100 containers. The small correctness suites are the PR-path gate —
+[cluster-suites](cluster-suites.md).
+
 ## The WSB-M5 SWIM divergence saga — lessons that outlive the bug
 
 Stage-4 SWIM cutover showed a long in-process/Docker divergence (in-process flat, Docker

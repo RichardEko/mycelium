@@ -12,8 +12,9 @@ pages here cite `src/` / `mycelium-core/src/` rather than paraphrasing it.
 - **[concurrency/](concurrency/concurrency.md)** — the lock-order table, lock-free (papaya)
   mutation rules, atomics ordering policy. The discipline that the calibration ledger shows
   is this codebase's recurring bug family.
-- **[testing/](testing/testing.md)** — test conventions, the feature matrix, scale-test +
-  Docker-bridge lore, the SWIM divergence saga.
+- **[testing/](testing/testing.md)** — test conventions, the feature matrix, the CI-gated
+  Docker cluster suites (+ their self-diagnosing harness), scale-test + Docker-bridge lore,
+  the SWIM divergence saga.
 - **[companions/](companions/companions.md)** — the companion crates built on the public API
   (tuple-space, blackboard, wasm-host, agentfacts).
 

@@ -1,6 +1,7 @@
 # dev/testing — conventions
 
-↑ [dev/](../dev.md) · child page: [scale-tests.md](scale-tests.md)
+↑ [dev/](../dev.md) · child pages: [scale-tests.md](scale-tests.md) ·
+[cluster-suites.md](cluster-suites.md)
 
 ## Run the full feature matrix before pushing
 
