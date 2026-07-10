@@ -16,7 +16,7 @@ uncredentialed:
 |---|---|
 | `GET /health` | `200` = process alive (liveness probe) |
 | `GET /ready` | `200` = capabilities advertised + no dead shards (readiness probe) |
-| `GET /stats` | `node_id`, `cluster_name`, `store_entries`, `dropped_frames`, `task_count`, and the tripwire counters (`commit_conflicts`, `sys_namespace_violations`, `cap_authz_violations`, `schema_mismatch`, `rate_limited_senders`) |
+| `GET /stats` | `node_id`, `cluster_name`, `store_entries`, `dropped_frames`, `task_count`, and the tripwire counters (`commit_conflicts`, `sys_namespace_violations`, `cap_authz_violations`, `schema_mismatch`, `rate_limited_senders`, `individual_flood_fallbacks`), plus liveness (`dead_shards`, `gc_alive`, `health_monitor_alive`) |
 | `GET /metrics` | Prometheus scrape (requires the `metrics` feature). Carries a `cluster` label on every series when `cluster_name` is set |
 | `GET /.well-known/agent-facts.json` | this node's self-certified AgentFacts (when the [facts lens](#viewing-agentfacts) is mounted) |
 | `GET /consensus/{slot}` | a consensus slot's committed value + ballot + lease state |
@@ -34,6 +34,12 @@ curl -s http://node:8080/stats | jq
   fatal; sustained growth means raise `GOSSIP_WRITER_CHANNEL_DEPTH` ([tuning.md](tuning.md)).
 - `task_count` — Tokio tasks in the JoinSet (~17–20 on a 3-node cluster).
   Unbounded growth = a task leak (usually a per-peer writer not exiting).
+- `individual_flood_fallbacks` — Individual-scoped frames (RPC, votes) that had **no direct
+  route** and fell back to flooding. Persistent growth on a stable topology means an
+  RPC-heavy pair isn't directly peered — the node also logs
+  `Individual-scoped frame has no direct route; flooding via relay (topology pressure …)`.
+  Remedy: pin the pair with `GossipAgent::connect_peer` — see
+  [tuning §RPC-heavy pairs](tuning.md#rpc-heavy-pairs--the-topology-pressure-warn).
 - `commit_conflicts` / `sys_namespace_violations` — the **detection-not-prevention
   tripwires**. A non-zero value means someone wrote to a `consensus/` slot or a
   `sys/{identity,load,role,tuple}/{node}` key they don't own; the write was

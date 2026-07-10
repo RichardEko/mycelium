@@ -67,6 +67,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `never_seen_primary_promotes_after_orphan_grace` (#150, #158).
 
 ### Changed
+- **Operations docs pass** (same DX lens, 2026-07-10): the topology-pressure warn /
+  `connect_peer` / `individual_flood_fallbacks` — this week's new operator surface — gained
+  runbook coverage (`tuning.md` §RPC-heavy pairs + `observability.md` counter docs with the
+  remedy link); the restructure's config-table append was merged into tuning's canonical
+  quick-reference (env-var precedence note + 10 missing fields) instead of duplicating it;
+  `/stats` docs now list all tripwire + liveness counters.
 - **Docs restructure for third-party DX** (front-page audit, 2026-07-10): `README.md` cut from
   **1,604 → 192 lines** — it is now a true front page (hero, 30-second hello, demos, build/run,
   a layers-at-a-glance table, pointers) and the ~1,100 lines of subsystem reference moved to

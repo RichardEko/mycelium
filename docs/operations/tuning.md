@@ -7,6 +7,11 @@ hold between them, and how to scale them safely as cluster size grows.
 
 ## Quick-reference table
 
+Precedence (lowest → highest): TOML config file (`-c <path>`) → CLI flags → environment
+variables (`GOSSIP_<FIELD_NAME>` exists for every field). The authoritative field list with
+full doc comments is the rustdoc on `mycelium-core/src/config.rs`; this table is the
+operator's working set.
+
 | Parameter | Default | Env var | Unit |
 |---|---:|---|---|
 | `health_check_interval_secs` | `10` | `GOSSIP_HEALTH_CHECK_INTERVAL_SECS` | s |
@@ -32,6 +37,16 @@ hold between them, and how to scale them safely as cluster size grows.
 | `swim_indirect_probes` | `3` | `GOSSIP_SWIM_INDIRECT_PROBES` | peers |
 | `swim_gossip_updates` | `12` | `GOSSIP_SWIM_GOSSIP_UPDATES` | updates/datagram |
 | `swim_suspicion_timeout_ms` | `4000` | `GOSSIP_SWIM_SUSPICION_TIMEOUT_MS` | ms |
+| `bind_address` | `127.0.0.1` | `GOSSIP_BIND_ADDRESS` | TCP listen address |
+| `bind_port` | `8080` | `GOSSIP_BIND_PORT` | TCP listen port |
+| `bootstrap_peers` | `[]` | `GOSSIP_BOOTSTRAP_PEERS` | Peers to contact on startup |
+| `epidemic_extra_peers` | `3` | `GOSSIP_EPIDEMIC_EXTRA_PEERS` | Extra random non-member peers added to Group-scoped signal fan-out when `group_aware_forwarding = true`. Ensures epidemic coverage beyond the group. Raise to 5–7 for clusters > 1 000 nodes. |
+| `group_aware_forwarding` | `true` | `GOSSIP_GROUP_AWARE_FORWARDING` | When true, Group signals are forwarded only to known group members plus `epidemic_extra_peers` random non-members. Set to `false` to revert to pre-v0.2 broadcast forwarding. |
+| `signal_window_secs` | `600` | `GOSSIP_SIGNAL_WINDOW_SECS` | Retention window for the in-memory sender log and `quorum_written` rate-limit tracker. |
+| `max_store_entries` | `0` (unlimited) | `GOSSIP_MAX_STORE_ENTRIES` | Hard cap on live KV entries. New live writes are silently dropped once reached; tombstones always accepted. |
+| `intern_keys` | `true` | `GOSSIP_INTERN_KEYS` | Intern received keys in a process-wide pool so all connection handlers share one `Arc<str>` per distinct key. Disable for workloads with unbounded key spaces (e.g. UUID keys). |
+| `intern_max_keys` | `0` (unlimited) | `GOSSIP_INTERN_MAX_KEYS` | Maximum keys in the intern pool. New keys bypass interning once reached. Only meaningful when `intern_keys = true`. |
+| `health_check_max_jitter_ms` | `0` | `GOSSIP_HEALTH_CHECK_MAX_JITTER_MS` | Startup jitter cap (ms) before the first health-check ping. `0` = up to `health_check_interval_secs × 500` ms. Set to a small value (e.g. `50`) in test configs. |
 
 ---
 
@@ -404,6 +419,25 @@ transport (v2 roadmap item) is the structural fix.  In the meantime:
 
 ---
 
+## RPC-heavy pairs & the topology-pressure warn
+
+The forwarding-target set deliberately de-pins non-active peers (seed scalability), so an
+Individual-scoped **request-response RPC** between two specific nodes can degrade to
+flood-relay latency and time out. The node tells you when this happens:
+
+```
+WARN Individual-scoped frame has no direct route; flooding via relay
+     (topology pressure — consider peering RPC-heavy pairs directly) target_node=…
+```
+
+and `individual_flood_fallbacks` grows on `/stats`. **Remedy:** the side that initiates the
+RPCs pins the route — `agent.connect_peer(peer)` (idempotent; also pre-warms the TCP
+connection so the first RPC doesn't pay setup on its own deadline; `disconnect_peer`
+reverts). One-shot signals never need this — flooding is correct for them; pin only *hot
+request-response pairs* (the tuple-space does this automatically for secondary↔primary —
+the pattern to copy is its warm-keeper, `mycelium-tuple-space/src/lib.rs`). Background:
+[runtime-invariants](../wiki/dev/architecture/runtime-invariants.md).
+
 ## Reconnect storm mitigation
 
 After a network partition heals, all partitioned nodes simultaneously try to
@@ -508,38 +542,3 @@ Measured on the development machine, release build (`cargo bench`). Local hot-pa
 | `signal_fanout` 16 handlers | ~1.4 µs | Very flat — mpsc try_send is cheap |
 
 `scan_prefix` uses a prefix index for a fast O(|segment_keys|) path when the prefix segment is known (e.g. `"load/"`, `"grp/"`, `"svc/"`). Unknown prefixes fall back to an O(store_size) full scan. At typical pheromone-trail sizes (100–1,000 entries per segment) the cost is negligible relative to network latency.
-
----
-
-## Configuration reference (`GossipConfig`)
-
-*Moved from the repo README (2026-07-10). The authoritative field list is the rustdoc on `mycelium-core/src/config.rs`.*
-
-Pass a TOML config file with `-c <path>`. CLI flags override file values.
-Environment variables override both — `GOSSIP_<FIELD_NAME>` for every field.
-
-| Field | Default | Description |
-|---|---|---|
-| `bind_address` | `127.0.0.1` | TCP listen address |
-| `bind_port` | `8080` | TCP listen port |
-| `bootstrap_peers` | `[]` | Peers to contact on startup |
-| `default_ttl` | `5` | Hops before a message expires |
-| `health_check_interval_secs` | `10` | Ping interval and peer eviction cadence |
-| `propagation_window_secs` | `60` | Tombstone retention window |
-| `max_connections` | `1024` | Inbound connection limit |
-| `writer_channel_depth` | `1024` | Per-peer outbound channel depth (ring buffer). **Correctness threshold** — frames silently dropped when full. Covers `N × fan_out` up to N = 256 at the default fan-out of 4; size up for larger fleets or bulk-write bursts. A saturation warning fires every 1 000th cumulative dropped frame. |
-| `max_forwarding_peers` | unlimited | Cap gossip fan-out targets. Set to `bootstrap_peers.len()` for fixed-topology meshes |
-| `max_peers` | unlimited | Cap the peer table. Prevents O(N²) persistent connections when piggybacked peer lists would otherwise expand every node's view of the full cluster. Set to `bootstrap_peers.len()` for grid or ring topologies |
-| `gossip_channel_capacity` | `1024` | Per-shard gossip channel depth |
-| `gossip_shards` | `min(CPU,16)` | Gossip worker tasks. Set to `1` for demos/debug to cut task count |
-| `max_seen_entries` | `100000` | Dedup cache size before eviction |
-| `peer_eviction_intervals` | `3` | Missed ping intervals before a peer is evicted |
-| `reconnect_backoff_secs` | `5` | Cooldown after a failed connect |
-| `epidemic_extra_peers` | `3` | Extra random non-member peers added to Group-scoped signal fan-out when `group_aware_forwarding = true`. Ensures epidemic coverage beyond the group. Raise to 5–7 for clusters > 1 000 nodes. |
-| `group_aware_forwarding` | `true` | When true, Group signals are forwarded only to known group members plus `epidemic_extra_peers` random non-members. Set to `false` to revert to pre-v0.2 broadcast forwarding. |
-| `writer_idle_timeout_secs` | `0` (disabled) | Seconds of inactivity before a peer writer closes its TCP connection. Reconnects transparently on the next frame. `0` = no timeout. |
-| `signal_window_secs` | `600` | Retention window for the in-memory sender log and `quorum_written` rate-limit tracker. |
-| `max_store_entries` | `0` (unlimited) | Hard cap on live KV entries. New live writes are silently dropped once reached; tombstones always accepted. |
-| `intern_keys` | `true` | Intern received keys in a process-wide pool so all connection handlers share one `Arc<str>` per distinct key. Disable for workloads with unbounded key spaces (e.g. UUID keys). |
-| `intern_max_keys` | `0` (unlimited) | Maximum keys in the intern pool. New keys bypass interning once reached. Only meaningful when `intern_keys = true`. |
-| `health_check_max_jitter_ms` | `0` | Startup jitter cap (ms) before the first health-check ping. `0` = up to `health_check_interval_secs × 500` ms. Set to a small value (e.g. `50`) in test configs. |

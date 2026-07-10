@@ -25,7 +25,7 @@ vocabulary is in [00 · Concepts](../guide/00-concepts.md).
 | [diagnostics.md](diagnostics.md) | **diagnosing a coordinator-free fleet** — localize/explain/diagnose, one runbook entry per emergent pathology, Prometheus alert recipes |
 | [dynamic-scaling.md](dynamic-scaling.md) | elastic membership + capacity via `/gateway/govern`; **seeing scaling** live; live tuning |
 | [artifacts.md](artifacts.md) | the cluster-wide **artifact catalogue** — where it lives, registering, authoring + publishing a deployable |
-| [tuning.md](tuning.md) | the config knobs (shards, channel depth, intervals, connection cap) |
+| [tuning.md](tuning.md) | the full config reference + env-var precedence, auto-derivation, hard invariants, per-size scaling profiles, RPC-heavy-pair pinning, performance baselines |
 | [rbac.md](rbac.md) | signed role claims, capability authz, OAuth2 gateway ACLs |
 | [sso.md](sso.md) | generic-OIDC SSO at the gateway |
 | [audit.md](audit.md) | the tamper-evident, hash-chained audit trail |

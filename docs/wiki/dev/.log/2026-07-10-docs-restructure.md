@@ -24,3 +24,15 @@ incredibly long." Findings + actions:
 Pages touched: README.md, guide 00/01/02/03/04/05/12/13 + cookbook + guide/README,
 operations/tuning.md, docs/README.md, examples/{README, coop, conway-gpu, langgraph},
 wiki dev/examples.md.
+
+**Part 2 — operations docs pass (same lens, same day):** the ops set was already strong (a
+real persona-routed funnel, 84–250-line runbooks, consistent numbered checklists where it
+matters). Three findings, fixed: (1) the README restructure's own config-table append
+duplicated tuning.md's quick-reference — merged (10 unique rows + the precedence note folded
+into the canonical table, duplicate section removed); (2) **the week's new operator surface
+had zero runbook coverage** — the topology-pressure warn, `connect_peer`, and
+`individual_flood_fallbacks` now have a tuning.md runbook entry + observability.md counter
+docs with a remedy link (`dead_shards`/liveness fields added to the /stats row too); (3) the
+funnel's tuning row understated the file's grown scope. Verified current: deployment.md knows
+deploy/ (k8s+terraform), production-readiness documents the iptables scale ceiling, link
+sweep clean.
