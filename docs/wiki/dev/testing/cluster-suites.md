@@ -37,9 +37,12 @@ claim (calibration ledger, 2026-07-10).
 
 Added 2026-07-10 after a bare "FAIL" with empty stderr cost several diagnosis rounds:
 
-- **ERR trap** (`tests/integration/lib/helpers.sh`): every scenario runs `set -euo pipefail`
-  with `curl -sf`, which dies silently — the trap prints `script:line: command exited N` for
-  any unguarded failure (`if`/`&&`/`||`-guarded helper internals stay silent).
+- **ERR trap + errtrace** (`tests/integration/lib/helpers.sh`): every scenario runs
+  `set -euo pipefail` with `curl -sf`, which dies silently — the trap prints
+  `script:line: command exited N` for any unguarded failure (`if`/`&&`/`||`-guarded helper
+  internals stay silent). `set -o errtrace` is load-bearing: without it the trap is NOT
+  inherited by shell *functions*, so a curl inside a helper (e.g. `gw_kv_set`) still died
+  silently — exactly the undiagnosable AFN failure (#161). Any new harness lib must set both.
 - **Node-log dump**: `make test` dumps the last 200 log lines per node when the runner fails
   — this is what named the spurious-promotion split-brain and the AddrInUse panic directly.
 - **Phase-0 data-plane barrier** (`tests/integration/run.sh`): health + mgmt visibility prove

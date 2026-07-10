@@ -39,6 +39,12 @@ Design: `docs/plans/mycelium-tuple-space.md`. Key facts:
   was. Gate: `succession_chain_late_secondary_joins_promoted_primary` (`tests/failover.rs`),
   which also executes the full ring-driven re-pairing (C pins promoted B, ops through C,
   C's own promotion) that was previously asserted only from code-reading.
+- **Discovery-wait is symmetric across the API** (#162, Run 41's API finding): every pipeline
+  op (`put`/`put_keyed`/`take`/`take_by_key`/`complete`/`complete_keyed`/`ack`) resolves the
+  primary via the bounded blocking path (3× `cap_refresh`) — `BackpressureMode::Raise` means
+  "don't block on a *saturated* primary", never "race capability gossip". Only `depth` is
+  fail-fast, deliberately: it *is* the discovery probe monitors poll. Gate:
+  `client_ops_wait_for_discovery_under_default_config` (`tests/failover.rs`).
 - **Naming/prefixes:** capability segments must not contain `/` → flat
   `{ns}.primary|secondary|candidate`. Owns `tuple/inflight/{ns}/{id}` +
   `sys/tuple/{node}/{ns}/…` (backpressure pheromone — deliberately NOT `sys/load/` opacity:

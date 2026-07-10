@@ -75,7 +75,8 @@ the suite. Scale suites: `make test-scale` (100 nodes), `test-scale-resilience`,
   recurring race family, rules + reference impls in
   [lock-free-and-atomics](docs/wiki/dev/concurrency/lock-free-and-atomics.md).
 - **Individual-scope forwarding is unconditional** (flood fallback); only *admission* is
-  scoped. Do not "optimize" it away —
+  scoped. Do not "optimize" it away. The one carve-out is not precedent: a frame addressed
+  to *this* node terminates here (routing at the terminal, #162) —
   [runtime-invariants](docs/wiki/dev/architecture/runtime-invariants.md).
 - **Detection, not prevention:** never teach Layer I a higher-layer law (no prefix write
   guards in `apply_and_notify`) — tripwires + counters instead.
