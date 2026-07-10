@@ -38,8 +38,7 @@ impl std::error::Error for ConsistencyError {}
 ///
 /// On drop (or [`release`](Self::release)) it clears the lock's authoritative consensus slot
 /// (`consensus/committed/lock/{name}` + its lease) — **but only if this guard is still the
-/// converged holder** (#164). `token` is the consensus ballot: a monotonically increasing fencing
-/// token for resource-side checks.
+/// converged holder** (#164). `token` is a monotonic fencing token (the commit's HLC).
 pub struct LockGuard {
     pub(super) ctx:      Arc<TaskCtx>,
     pub(super) name:     Arc<str>,
@@ -47,7 +46,10 @@ pub struct LockGuard {
     /// slot if the converged value still equals this — so a stale guard (lease lapsed, another
     /// acquire won, or even the same node re-acquiring under a fresh nonce) is a safe no-op.
     pub(super) value:    Bytes,
-    /// Fencing token (consensus ballot at commit time).
+    /// Fencing token: the **HLC timestamp** of the winning commit. Monotonic across
+    /// successive holders of this lock name — stamp resource writes with it and have the
+    /// resource reject a lower token (Kleppmann fencing). (The consensus *ballot* is NOT used —
+    /// it regresses under gossip lag; #164.)
     pub token: u64,
     pub(super) released: bool,
 }
@@ -104,6 +106,16 @@ impl LockGuard {
 }
 
 impl Drop for LockGuard { fn drop(&mut self) { self.do_release(); } }
+
+impl std::fmt::Debug for LockGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LockGuard")
+            .field("name", &self.name)
+            .field("token", &self.token)
+            .field("released", &self.released)
+            .finish_non_exhaustive()
+    }
+}
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
 

@@ -2060,7 +2060,8 @@ struct LockAcquireBody { name: String, ttl_secs: Option<u64> }
 /// `POST /gateway/overlay/lock/acquire` — acquire a named distributed lock.
 ///
 /// Body: `{"name": "N", "ttl_secs": 30}`.
-/// Returns `{"guard_id": "…", "token": N}`.
+/// Returns `{"guard_id": "…", "token": "N"}` — the token is a **decimal string** (the
+/// fencing HLC exceeds JS safe-integer range; compare it as a big integer).
 #[cfg(feature = "consensus")]
 async fn gw_overlay_lock_acquire(
     State(ctx): State<Arc<HttpCtx>>,
@@ -2082,26 +2083,27 @@ async fn gw_overlay_lock_acquire(
     let result = overlay_system_propose(&ctx.agent_ctx, &slot, value.clone(), cfg).await;
 
     match result {
-        crate::consensus::ConsensusResult::Committed { ballot, .. } => {
-            // Confirm the converged holder before handing out a guard (bug A).
+        crate::consensus::ConsensusResult::Committed { .. } => {
+            // Confirm the converged holder before handing out a guard (bug A); the token is the
+            // commit's HLC (a monotonic fencing token — the ballot is not, #164).
             tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-            let is_me = crate::consensus::live_committed_value(
+            let confirmed = crate::consensus::live_committed_with_hlc(
                     &ctx.agent_ctx.kv_state, &slot, crate::consensus::wall_now_ms())
-                .as_deref() == Some(value.as_ref());
-            if !is_me {
+                .filter(|(v, _)| v.as_ref() == value.as_ref());
+            let Some((_, token)) = confirmed else {
                 return (StatusCode::CONFLICT,
                     Json(json!({ "ok": false, "error": "superseded" }))).into_response();
-            }
+            };
             let guard = LockGuard {
                 ctx:      Arc::clone(&ctx.agent_ctx),
                 name:     Arc::from(body.name.as_str()),
                 value,
-                token:    ballot,
+                token,
                 released: false,
             };
             let guard_id = format!("{:016x}", fastrand::u64(..));
             ctx.lock_guards.lock().unwrap_or_else(|e| e.into_inner()).insert(guard_id.clone(), guard);
-            Json(json!({ "ok": true, "guard_id": guard_id, "token": ballot })).into_response()
+            Json(json!({ "ok": true, "guard_id": guard_id, "token": token.to_string() })).into_response()
         }
         crate::consensus::ConsensusResult::Timeout { ballots_tried, .. } =>
             (StatusCode::GATEWAY_TIMEOUT, Json(json!({ "ok": false, "error": format!("timeout after {ballots_tried} ballot(s)") }))).into_response(),

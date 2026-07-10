@@ -166,7 +166,7 @@ class LockGuard:
 
     _agent:   "MyceliumAgent"
     guard_id: str
-    token:    int  # fencing token (consensus ballot)
+    token:    int  # monotonic fencing token (commit HLC); compare with >= to fence stale writers
 
     def release(self) -> None:
         """Release the lock synchronously."""
@@ -697,7 +697,7 @@ class MyceliumAgent:
             data = c.post("/gateway/overlay/lock/acquire", json=body).raise_for_status().json()
         if not data.get("ok"):
             raise RuntimeError(data.get("error", "lock acquisition failed"))
-        return LockGuard(_agent=self, guard_id=data["guard_id"], token=data["token"])
+        return LockGuard(_agent=self, guard_id=data["guard_id"], token=int(data["token"]))
 
     # ── Overlay: leader election ────────────────────────────────────────────
 

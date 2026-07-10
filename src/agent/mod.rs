@@ -31,6 +31,8 @@ mod mesh_handle_tests;
 #[cfg(feature = "consensus")]
 mod consensus_handle;
 #[cfg(feature = "consensus")]
+mod lock_service;
+#[cfg(feature = "consensus")]
 mod overlay_consistent;
 mod overlay_reliable;
 mod rpc;
@@ -122,6 +124,8 @@ pub use membership_governor::{MembershipAction, MembershipIntent, MEMBERSHIP_INT
 pub use emergent::{
     FleetDiagnosis, FleetSnapshot, Finding, Severity, StoreConvergence, ThrottleEdge, ViewConfidence,
 };
+#[cfg(feature = "consensus")]
+pub use lock_service::LockService;
 #[cfg(feature = "consensus")]
 pub use overlay_consistent::{ConsistencyError, LockGuard};
 #[cfg(feature = "consensus")]

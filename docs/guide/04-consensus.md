@@ -166,6 +166,57 @@ over the group definition's own `topology_policy`.
 
 ---
 
+## The distributed lock service
+
+`agent.consensus().distributed_lock(name, ttl)` is the raw **try-lock**. Most callers want the
+ergonomic layer, `agent.consensus().locks()` — a [`LockService`](../../src/agent/lock_service.rs)
+that adds **blocking acquire** and a **scoped critical section**:
+
+```rust
+let locks = agent.consensus().locks();
+
+// Blocking: wait up to 10 s for the lock, hold it for at most 30 s.
+let guard = locks.lock("shard-7", Duration::from_secs(30), Duration::from_secs(10)).await?;
+do_exclusive_work(guard.token);   // stamp resource writes with the fencing token (below)
+drop(guard);                       // release (or let the 30 s lease expire)
+
+// Recommended: scoped — release is guaranteed on every exit path (return, `?`, panic).
+locks.with_lock("shard-7", Duration::from_secs(30), Duration::from_secs(10), |g| async move {
+    do_exclusive_work(g.token);
+}).await?;
+```
+
+**Runnable:** [`examples/distributed_lock.rs`](../../examples/distributed_lock.rs) — three nodes
+contend for one lock and fence a shared resource (`cargo run --example distributed_lock`).
+
+### The two rules that make it correct
+
+1. **It's a *leased* lock.** You hold it for `ttl`, then it auto-expires — the safety net so a
+   crashed holder never wedges the cluster. Pick `ttl` comfortably larger than your critical
+   section; keep the section short.
+2. **Fence the resource with the token.** A leased lock can't promise you *still* hold it at the
+   instant you touch the resource (a pause can outlast the lease). `LockGuard::token` is a
+   **monotonic fencing token** (the commit's HLC — strictly increasing across successive
+   holders). Stamp every write to the protected resource with it and have the resource **reject a
+   token lower than the highest it has seen.** Then a stale holder's late write is refused. This
+   is the standard leased-lock discipline (Kleppmann).
+
+### Which primitive? (don't reach for a lock when you want something else)
+
+| You want… | Use |
+|---|---|
+| Exclusive access to a named resource, willing to wait | `locks().lock` / `with_lock` |
+| Take-it-now-or-move-on | `locks().try_lock` / `distributed_lock` |
+| Elect one leader/owner for a group | `elect_leader` |
+| Hand each **work item** to exactly one of many workers | `mycelium-tuple-space` (`take`) — a lock *serialises*, a queue *distributes*; don't build a queue from one lock |
+| One active consumer of an ordered log | `subscribe_log_group` |
+| Agree a **value** under contention (config, a decision) | `consistent_set` |
+
+Coarse-grained by design — a consensus round per acquire (~1 s to converge) — so it fits leader
+election, shard/config ownership, and migrations, **not** high-rate fine-grained locking.
+
+---
+
 ## Dev Notes
 
 **Quorum sizing.** Quorum is always a majority — `floor(n/2)+1` — computed
@@ -191,9 +242,12 @@ Each call gets a monotonically increasing sequence number. Use `append` for
 audit logs, event sourcing, and task queues. Use `consistent_set` for config
 that has a well-defined key.
 
-**`distributed_lock` TTL.** Always set a TTL shorter than your operation's
-expected completion time. The TTL is a safety net for crashes — it is not a
-lease renewal mechanism. If your operation takes up to 5 s, set TTL to 10–15 s.
+**`distributed_lock` TTL + fencing.** The `ttl` is the lease — a safety net for crashes, not a
+renewal mechanism — so set it *longer* than your operation (5 s work → 10–15 s ttl). Because a
+lease can still lapse under a pause, correctness comes from the **fencing token** (`LockGuard::token`,
+a monotonic HLC): stamp resource writes with it and reject stale tokens. Prefer the
+[lock service](#the-distributed-lock-service) (`agent.consensus().locks()`) for blocking acquire +
+a scoped `with_lock` that guarantees release.
 
 **Hard topology.** `TopologyEnforcement::Hard` (in a group's
 `GroupTopologyPolicy`) rejects a quorum whose votes don't satisfy the
@@ -297,7 +351,7 @@ ordered by ballot number; the highest-ballot value is the authoritative committe
 
 `consistent_get` is a **local read** — it returns the latest committed value that has
 anti-entropy-propagated to this node, which may lag by up to one gossip round. This is
-suitable for leader election and distributed locks where ballot-based fencing tokens protect
+suitable for leader election and distributed locks where HLC-based fencing tokens protect
 against lower-ballot writers; it is not a substitute for linearizable reads.
 
 ```rust

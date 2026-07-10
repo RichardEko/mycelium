@@ -345,19 +345,32 @@ pub(crate) fn live_committed_value(
     slot:   &str,
     now_ms: u64,
 ) -> Option<Bytes> {
+    live_committed_with_hlc(kv, slot, now_ms).map(|(v, _)| v)
+}
+
+/// Like [`live_committed_value`] but also returns the committed entry's **HLC timestamp** — the
+/// value used as a lock's fencing token. The HLC is monotonic-respecting-causality, so successive
+/// holders of a slot see strictly increasing tokens (unlike the ballot, which is per-node-local
+/// and gossip-lagged — it can regress across acquisitions and must NOT be used for fencing).
+pub(crate) fn live_committed_with_hlc(
+    kv:     &crate::store::KvState,
+    slot:   &str,
+    now_ms: u64,
+) -> Option<(Bytes, u64)> {
     let commit_key = format!("{}{}", consensus_ns::COMMITTED, slot);
     let guard = kv.store.pin();
     let entry = guard.get(commit_key.as_str())?;
     let data  = entry.data.clone()?;
+    let hlc   = entry.timestamp;
     let lease_key = format!("{}{}", consensus_ns::LEASE, slot);
     let Some(lease_bytes) = guard.get(lease_key.as_str()).and_then(|e| e.data.clone()) else {
-        return Some(data); // no lease (or tombstoned lease) → permanent
+        return Some((data, hlc)); // no lease (or tombstoned lease) → permanent
     };
     let Some(lease_ms) = decode_lease_ms(&lease_bytes) else {
-        return Some(data); // malformed lease → treat as permanent
+        return Some((data, hlc)); // malformed lease → treat as permanent
     };
     let written_ms = crate::hlc::physical_ms(entry.timestamp);
-    (now_ms.saturating_sub(written_ms) <= lease_ms).then_some(data)
+    (now_ms.saturating_sub(written_ms) <= lease_ms).then_some((data, hlc))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
