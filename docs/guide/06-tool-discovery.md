@@ -190,6 +190,38 @@ OLLAMA_MODEL=llama3.2 VERIFIER_MODEL=llama3.1:8b ./start.sh
 60-second timeout. If your tool calls a slow external API or runs heavy
 computation, increase this in the `rpc_call` invocation in `planning_cycle`.
 
+## Bridging an external MCP server
+
+Everything above registers *your* tools for the mesh to discover. The **client** side is the
+mirror image: pull a **real external MCP server's** tools (a filesystem server, a GitHub server, …)
+into the same `tools/` namespace, so the LLM discovers and calls them by the *identical* mechanism —
+it never learns the tool lives outside the mesh.
+
+```rust
+// feature = "gateway"
+let bridge = agent.mcp().connect_mcp_server("http://localhost:9000/mcp").await?;
+// each of the server's tools now appears under tools/{name}/{node_id};
+// the planner discovers them next cycle, exactly like a local tool.
+```
+
+`connect_mcp_server`:
+1. handshakes (`initialize`) and enumerates the server's tools (`tools/list`);
+2. writes each tool's schema under `tools/{name}/{node_id}` — the **same KV namespace** this
+   chapter's discovery uses, so bridged tools are indistinguishable from local ones to the planner;
+3. subscribes to `mcp.invoke` and proxies matching calls out to the server over HTTP (`tools/call`).
+
+Drop the returned `McpClientHandle` to tombstone every bridged entry and stop the proxy task.
+
+**Egress is gated.** The bridge is the "twin reaches an external tool server" boundary, so it passes
+through the node-local egress allowlist (`GossipConfig::egress`). A URL the policy doesn't permit is
+refused with `McpError::Transport("egress denied by policy: …")` **before any outbound request** —
+see [crown-jewel · outbound egress](../operations/crown-jewel.md#2-outbound-egress-allowlist). The
+default (empty) allowlist permits all; lock it down in production.
+
+> **Two directions — don't conflate them.** `register_mcp_tool` publishes *your* Skill **as** an MCP
+> tool for an outside LLM to call (server role); `connect_mcp_server` pulls an *outside* server's
+> tools **into** your mesh (client role). This section is the latter.
+
 **Multi-turn tool calling.** The planning cycle loops until the LLM emits a
 final answer (no more tool calls). A `max_turns` limit prevents infinite loops.
 The SSE stream emits `Thinking`, `ToolCall`, `ToolResult`, and `Assistant`

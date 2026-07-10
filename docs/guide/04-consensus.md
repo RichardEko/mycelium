@@ -166,6 +166,29 @@ over the group definition's own `topology_policy`.
 
 ---
 
+## Leased commits — decisions that expire
+
+By default a commit is **permanent**: the value stays authoritative until a higher-ballot commit
+replaces it. Set `ConsensusConfig::committed_lease_secs` to make it **self-expiring** — the commit
+carries an epoch-lease window (written to `consensus/lease/{slot}`, gossiped like any entry), and
+once it lapses the slot **reopens**: the value stops being served and the next proposer wins a
+fresh round.
+
+```rust
+let cfg = ConsensusConfig { committed_lease_secs: Some(30), ..Default::default() };
+agent.consensus().group_propose("workers", "epoch/leader", value, cfg).await;
+```
+
+The read side is **lease-aware**: `consistent_get` / `live_committed_value` return `None` once the
+lease has lapsed — even though the raw committed entry lingers in KV until anti-entropy GCs it (the
+`GET /consensus/{slot}` endpoint distinguishes the two with `lease_expired: true`). Leases are the
+basis for the [distributed lock](#the-distributed-lock-service)'s `ttl` — a crashed holder's lock
+clears when its commit lease lapses — and for any "reopen after N seconds" pattern (time-boxed
+config epochs, auto-reopening leader election). A permanent commit (`None`, the default) never
+reopens.
+
+---
+
 ## The distributed lock service
 
 `agent.consensus().distributed_lock(name, ttl)` is the raw **try-lock**. Most callers want the
@@ -328,6 +351,7 @@ let slices = agent.group_trust("workers");
 | Group-scoped votes | All members hear all votes → any member reaching quorum can commit; proposer crash does not stall the slot |
 | Proposer self-votes | Proposer always counts as one voter; no listener required for single-node quorum |
 | LWW commit idempotency | Two simultaneous commits of the same value are safe; higher-ballot commit wins via LWW timestamp |
+| Optimistic commit / converged-holder | `group_propose` commits against a node's *local* committed view, so under gossip lag two proposers can both return `Committed`. Only the LWW-by-HLC **converged** value (`live_committed_value`) is authoritative — confirm the holder there; don't treat a `Committed` return as exclusive on its own. This is why locks fence on the commit HLC (see [the two rules](#the-two-rules-that-make-it-correct)) |
 | No ordering log | Each slot is an independent KV entry (CASPaxos-style); no WAL required |
 | Signing | With `tls` feature: all consensus payloads are Ed25519-signed; forged ballots are dropped. Without: trusted-domain only; Byzantine fault tolerance is out of scope |
 

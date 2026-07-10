@@ -73,7 +73,9 @@ let (_h, mut rx) = agent.service().open_mailbox("kind", 64);             // drai
 ```
 
 When to use which: [00 · Concepts](00-concepts.md) (Mailbox vs Signal vs RPC vs
-Bulk vs Scatter). Demo: [`mailbox_llm`](../../examples/coop/src/bin/mailbox_llm.rs).
+Bulk vs Scatter). Full API (RPC, bulk, scatter-gather, mailbox):
+[the service-layer reference](#reference--the-service-layer-rpc-bulk-scatter-gather-mailbox)
+below. Demo: [`mailbox_llm`](../../examples/coop/src/bin/mailbox_llm.rs).
 
 ### How do I coordinate work without a dispatcher (pull)?
 
@@ -189,11 +191,14 @@ neighbouring domain pulls and verifies it with no shared CA. Demo:
 
 ### How do I author and ship a deployable artifact (WASM tool)?
 
-Build a WASM component, content-address it, sign it, and `publish_installable` to
-the gossip catalogue; another node discovers it, pulls it over the mesh, and
-provisions it. Full guide (both audiences): [operations/artifacts.md](../operations/artifacts.md).
-Demos: [`catalog`](../../examples/coop/src/bin/catalog.rs) (the catalogue),
-[`provisioning`](../../examples/coop/src/bin/provisioning.rs) (autonomic).
+Build a WASM component, content-address it (`library.store`), sign it, and
+`publish_installable` to the gossip catalogue; another node discovers it
+(`InstallableCatalog::from_kv`), pulls it over the mesh (`MeshArtifactSource`), and
+provisions it. Full how-to:
+[operations/artifacts.md § Solution/Dev](../operations/artifacts.md#solutiondev--authoring--publishing-an-artifact)
+(authoring/publishing) and its [§ DevOps](../operations/artifacts.md#devops--operating-the-catalogue)
+half (operating the catalogue). Demos: [`catalog`](../../examples/coop/src/bin/catalog.rs) (the
+catalogue), [`provisioning`](../../examples/coop/src/bin/provisioning.rs) (autonomic).
 
 ### How do I make a decision that must be singular (consensus)?
 
