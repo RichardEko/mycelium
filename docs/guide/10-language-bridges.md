@@ -169,7 +169,7 @@ for await (const req of agent.rpcServe("process")) {
 }
 
 // ── Signals ───────────────────────────────────────────────────────────────────
-await agent.emit("task.ready", Buffer.from("payload"), { scope: "system" });
+await agent.emit("task.ready", Buffer.from("payload"), { scope: "cluster" });
 await agent.emit("task.ready", Buffer.from("payload"), { scope: "group:workers" });
 for await (const sig of agent.onSignal("task.ready")) {
     console.log(sig.sender, sig.payload.toString());
