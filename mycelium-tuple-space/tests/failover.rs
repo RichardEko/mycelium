@@ -338,3 +338,142 @@ async fn never_seen_primary_promotes_after_orphan_grace() {
     a2.shutdown().await;
     a1.shutdown().await;
 }
+
+/// The succession chain the pinning design claims but nothing executed until now (asked
+/// 2026-07-10): A (primary) + B (secondary); A dies; B promotes; a NEW node C joins as
+/// secondary of the *promoted* B — with no restart of B — and the pair must fully function:
+/// C stays secondary (it sights B), client ops through C route to B, replication reaches C,
+/// and when B later dies C promotes (second-generation failover) and serves surviving items
+/// under their original ids. Pins are ring-driven, so none of this needs configuration.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn succession_chain_late_secondary_joins_promoted_primary() {
+    let (pa, pb) = alloc_two_sorted_ports();
+    let pc = loop {
+        let p = alloc_port();
+        if p != pa && p != pb {
+            break p;
+        }
+    };
+    let a1 = start_agent(pa, None).await;
+    let a2 = start_agent(pb, Some(pa)).await;
+    wait_peered(&[&a1, &a2]).await;
+
+    let ts_a = TupleSpace::new(Arc::clone(&a1), ts_cfg("succ", TupleRole::Primary))
+        .await
+        .expect("ts_a");
+    let ts_b = TupleSpace::new(Arc::clone(&a2), ts_cfg("succ", TupleRole::Secondary))
+        .await
+        .expect("ts_b");
+
+    // Wait until B can see the primary (cap discovery, same pattern as the other tests).
+    for _ in 0..100 {
+        if ts_b.depth(None).await.is_ok() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // Two items in generation 1 (A primary), put THROUGH B (client-op routing).
+    let mut ids = HashSet::new();
+    for i in 0..2u32 {
+        let id = ts_b
+            .put("work", Bytes::from(format!("gen1-{i}")))
+            .await
+            .expect("gen1 put");
+        ids.insert(id);
+    }
+    // Wait for replication to B's mirror so gen-1 items survive A's death.
+    for _ in 0..100 {
+        let depth: u32 = ts_b
+            .local_depth(Some("work"))
+            .map(|d| d.iter().map(|s| s.depth).sum())
+            .unwrap_or(0);
+        if depth == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // Generation 2: A dies, B promotes (fast path — B sighted A).
+    ts_a.shutdown().await;
+    a1.shutdown().await;
+    for _ in 0..200 {
+        if ts_b.is_primary() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(ts_b.is_primary(), "B never promoted after A died");
+
+    // C joins fresh, bootstrapped to B (A is gone), as secondary — NO restart of B.
+    let a3 = start_agent(pc, Some(pb)).await;
+    wait_peered(&[&a2, &a3]).await;
+    let ts_c = TupleSpace::new(Arc::clone(&a3), ts_cfg("succ", TupleRole::Secondary))
+        .await
+        .expect("ts_c");
+
+    // C must sight the promoted B and stay secondary (well past the old 2-tick trigger).
+    tokio::time::sleep(Duration::from_millis(300 * 4)).await;
+    assert!(!ts_c.is_primary(), "C spuriously promoted next to a live promoted B");
+    assert!(ts_c.is_secondary(), "C lost its role");
+
+    // Wait until C can see the promoted primary before using it.
+    for _ in 0..100 {
+        if ts_c.depth(None).await.is_ok() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // Client ops through C route to the promoted B: two gen-2 items.
+    for i in 0..2u32 {
+        let id = ts_c
+            .put("work", Bytes::from(format!("gen2-{i}")))
+            .await
+            .expect("gen2 put through C");
+        ids.insert(id);
+    }
+    assert_eq!(ids.len(), 4, "ids must be unique across generations");
+
+    // Replication must reach the late-joined C before B dies.
+    for _ in 0..100 {
+        let depth: u32 = ts_c
+            .local_depth(Some("work"))
+            .map(|d| d.iter().map(|s| s.depth).sum())
+            .unwrap_or(0);
+        if depth == 4 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // Generation 3: B dies, C promotes and serves ALL items under original ids.
+    ts_b.shutdown().await;
+    a2.shutdown().await;
+    for _ in 0..200 {
+        if ts_c.is_primary() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(ts_c.is_primary(), "C never promoted after B died (second-generation failover)");
+
+    let mut survived = HashSet::new();
+    let mut attempts = 0;
+    while survived.len() < 4 {
+        match ts_c.take("work", Duration::from_secs(2)).await {
+            Ok((id, _)) => {
+                survived.insert(id);
+            }
+            Err(_) => {
+                attempts += 1;
+                assert!(attempts < 30, "promoted C never served all items: got {survived:?} want {ids:?}");
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        }
+    }
+    assert_eq!(survived, ids, "items must survive two failovers under original ids");
+
+    ts_c.shutdown().await;
+    a3.shutdown().await;
+}

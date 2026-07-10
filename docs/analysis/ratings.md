@@ -27,6 +27,12 @@ such finding.
 Records bugs later found in dimensions that scored ≥ 8 while the bug already
 existed. This is the framework's own report card.
 
+- 2026-07-10: **Semantic Correctness / Robustness** scored 8 through Run 40 while
+  (a) the tuple-space promotion watch treated never-saw-a-primary as evaporated —
+  permanent split-brain on slow hosts (found by the hosted cluster-suites gate, #158),
+  and (b) a late-joining secondary never backfilled pre-join items, silently losing
+  the backlog on the next failover (found by the succession-chain probe prompted by
+  a direct user question — "but we don't test this?"; fixed with join-time backfill).
 - 2026-06-10: **Concurrency Correctness** scored 8–9 in Runs 9–15 while the
   consensus listener registration race existed (handlers registered on the
   task's first poll, so proposals racing listener startup were silently

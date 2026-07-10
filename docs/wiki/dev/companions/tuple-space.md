@@ -30,7 +30,15 @@ Design: `docs/plans/mycelium-tuple-space.md`. Key facts:
   failure** — require one positive observation before treating absence as evaporation.
 - **Durability:** single-lock hot path (no waiter/store TOCTOU); WAL with indivisible
   `Complete` records; compaction bumps a WAL *epoch* so a secondary's byte-offset cursor
-  can't dangle.
+  can't dangle. **A joining secondary backfills** (2026-07-10): live replication only ships
+  records put while the secondary is present, so a late joiner drives the paginated
+  `wal_replay` RPC at join (WAL-backed primary → WAL pages; transient primary → *state
+  chunks*: live items as `Put` records, id-cursor pagination; `apply_records` dedupes overlap
+  with concurrent replicates). Without this, a succession chain (A dies → B promotes → C
+  joins → B dies) silently lost the pre-join backlog — redundancy looked restored but never
+  was. Gate: `succession_chain_late_secondary_joins_promoted_primary` (`tests/failover.rs`),
+  which also executes the full ring-driven re-pairing (C pins promoted B, ops through C,
+  C's own promotion) that was previously asserted only from code-reading.
 - **Naming/prefixes:** capability segments must not contain `/` → flat
   `{ns}.primary|secondary|candidate`. Owns `tuple/inflight/{ns}/{id}` +
   `sys/tuple/{node}/{ns}/…` (backpressure pheromone — deliberately NOT `sys/load/` opacity:

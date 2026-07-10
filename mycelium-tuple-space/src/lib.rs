@@ -592,6 +592,44 @@ impl TupleSpace {
             }));
         }
 
+        // Join-time WAL backfill: live replication only ships records put while this
+        // secondary is present, so a late joiner otherwise holds a *partial* mirror and a
+        // subsequent failover silently loses the pre-join backlog — the operator believes
+        // redundancy is restored when it never was (found by
+        // tests/failover.rs::succession_chain_late_secondary_joins_promoted_primary). Drive
+        // the same paginated wal_replay the promotion path uses, against the live primary,
+        // starting blind at (0,0): the first response corrects the epoch, and apply_records
+        // dedupes overlap with concurrent live replicate RPCs. Retries each interval until
+        // drained once; exits if this node promotes meanwhile.
+        {
+            let me = Arc::clone(self);
+            let interval = self.cfg.cap_refresh;
+            tasks.push(tokio::spawn(async move {
+                let me_id = me.agent.node_id().clone();
+                let mut tick = tokio::time::interval(interval);
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    tick.tick().await;
+                    if me.is_primary() {
+                        return; // promoted while waiting — the replay path owns catch-up now
+                    }
+                    let Some(primary) =
+                        me.resolve_role("primary").into_iter().find(|p| *p != me_id)
+                    else {
+                        continue;
+                    };
+                    if me.drive_wal_replay(primary, 0, 0).await {
+                        tracing::info!(
+                            ns = %me.cfg.namespace,
+                            "tuple-space: join-time wal backfill drained"
+                        );
+                        return;
+                    }
+                    // Unreachable / partial: retry next tick.
+                }
+            }));
+        }
+
         // Warm-keeper: keep the secondary→primary *direct* link established ahead of client ops.
         // Writers connect lazily on first frame, so an un-warmed link makes the first
         // take/put/complete pay TCP(+TLS) setup on its own deadline — the S13 cold-start miss
@@ -742,7 +780,27 @@ impl TupleSpace {
             self.last_heartbeat_sender.lock().clone()
         };
         let Some(target) = old_primary else { return };
-        let (mut epoch, mut offset) = *self.replay_cursor.lock();
+        let (epoch, offset) = *self.replay_cursor.lock();
+        if self.drive_wal_replay(target, epoch, offset).await {
+            tracing::info!("tuple-space: wal replay drained before promotion");
+        } else {
+            tracing::warn!(
+                "tuple-space: old primary unreachable during replay; promoting with mirrored state"
+            );
+        }
+    }
+
+    /// Drive the paginated `wal_replay` RPC against `target`, applying records into the
+    /// mirror (idempotent — the id→stage map dedupes overlap with live `replicate` RPCs
+    /// and epoch restarts). Shared by the promotion replay and the join-time backfill.
+    /// Returns `true` when the target's WAL reported drained, `false` on unreachable /
+    /// undecodable / loop-exhausted (callers decide the log severity).
+    async fn drive_wal_replay(
+        self: &Arc<Self>,
+        target: NodeId,
+        mut epoch: u64,
+        mut offset: u64,
+    ) -> bool {
         let kind = rpc::rpc_kind(&self.cfg.namespace, "wal_replay");
         for _ in 0..10_000 {
             let req = rpc::enc_wal_replay_req(
@@ -756,13 +814,8 @@ impl TupleSpace {
                 .service()
                 .rpc_call(target.clone(), Arc::clone(&kind), req, Duration::from_secs(10))
                 .await;
-            let Ok(resp) = resp else {
-                tracing::warn!(
-                    "tuple-space: old primary unreachable during replay; promoting with mirrored state"
-                );
-                return;
-            };
-            let Ok(chunk) = rpc::dec_wal_replay_resp(&resp) else { return };
+            let Ok(resp) = resp else { return false };
+            let Ok(chunk) = rpc::dec_wal_replay_resp(&resp) else { return false };
             if chunk.epoch != epoch {
                 // Compaction reset the offsets — restart from 0; the mirror
                 // map dedupes re-applied puts.
@@ -773,10 +826,10 @@ impl TupleSpace {
             self.apply_records(&store::decode_records(&chunk.raw));
             offset = chunk.next_offset;
             if chunk.done {
-                tracing::info!("tuple-space: wal replay drained before promotion");
-                return;
+                return true;
             }
         }
+        false
     }
 
     /// Mirror application of replicated/replayed records. Identical for the
