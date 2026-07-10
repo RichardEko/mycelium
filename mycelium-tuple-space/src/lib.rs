@@ -1077,11 +1077,15 @@ impl TupleSpace {
     ///
     /// The `tuple/{ns}/primary` advertisement gossips at the `cap_refresh` cadence, so a client op
     /// issued before it has propagated to this node would otherwise fail immediately with
-    /// `NoProvider` — a race the secondary loses right after startup/failover. `put` already
-    /// tolerates this via `BackpressureMode::Block`; `take` and `complete` use this so they behave
-    /// consistently instead of racing discovery (found via integration scenario S13, #150). Bounded
-    /// at the capability evaporation window (3× refresh): beyond that a genuinely absent primary
-    /// should surface `NoProvider`, not block forever.
+    /// `NoProvider` — a race the secondary loses right after startup/failover. **Every pipeline op
+    /// resolves through this** (`put`/`put_keyed`/`take`/`take_by_key`/`complete`/`complete_keyed`/
+    /// `ack`) so discovery-wait is symmetric across the API — `BackpressureMode::Raise` means
+    /// "don't block on a *saturated* primary", not "race capability gossip" (the put-vs-take
+    /// asymmetry was analysis Run 41's API finding; take/complete alone got this in #154, found via
+    /// scenario S13/#150). Only [`depth`](Self::depth) stays fail-fast: it *is* the discovery probe
+    /// monitors poll, so blocking it would hide the very state it reports. Bounded at the
+    /// capability evaporation window (3× refresh): beyond that a genuinely absent primary should
+    /// surface `NoProvider`, not block forever.
     async fn resolve_primary_blocking(&self) -> Result<NodeId, TupleError> {
         let deadline = tokio::time::Instant::now() + self.cfg.cap_refresh * 3;
         let mut backoff = Duration::from_millis(100);
@@ -1139,7 +1143,7 @@ impl TupleSpace {
         if self.serving_locally().is_some() {
             return self.serve_put(stage, payload.clone());
         }
-        let primary = self.resolve_primary()?;
+        let primary = self.resolve_primary_blocking().await?;
         // The pressure pheromone lets producers back off without spending an
         // RPC on a saturated primary; the store's watermark check remains
         // the authoritative gate behind it.
@@ -1227,7 +1231,7 @@ impl TupleSpace {
         if self.serving_locally().is_some() {
             return self.serve_put_keyed(stage, Arc::from(key), payload);
         }
-        let primary = self.resolve_primary()?;
+        let primary = self.resolve_primary_blocking().await?;
         if self.pressure_fresh(&primary, stage) {
             return Err(TupleError::Backpressure { retry_after_ms: 500 });
         }
@@ -1257,7 +1261,7 @@ impl TupleSpace {
             let me = self.agent.node_id().clone();
             return self.serve_take_by_key(stage, key, timeout, &me).await;
         }
-        let primary = self.resolve_primary()?;
+        let primary = self.resolve_primary_blocking().await?;
         let resp = self
             .agent
             .service()
@@ -1284,7 +1288,7 @@ impl TupleSpace {
         if self.serving_locally().is_some() {
             return self.serve_complete_keyed(id, next_stage, Arc::from(key), payload);
         }
-        let primary = self.resolve_primary()?;
+        let primary = self.resolve_primary_blocking().await?;
         let resp = self
             .agent
             .service()
@@ -1304,7 +1308,7 @@ impl TupleSpace {
         if self.serving_locally().is_some() {
             return self.serve_ack(id);
         }
-        let primary = self.resolve_primary()?;
+        let primary = self.resolve_primary_blocking().await?;
         let resp = self
             .agent
             .service()
@@ -1331,6 +1335,8 @@ impl TupleSpace {
             let resp = Bytes::from(rpc::enc_depth_resp_from_store(&store, stage));
             return rpc::dec_depth_resp(&resp);
         }
+        // Deliberately NON-blocking resolve (unlike every pipeline op): `depth` is the
+        // discovery probe monitors poll — an instant `NoProvider` here *is* the signal.
         let primary = self.resolve_primary()?;
         let resp = self
             .agent

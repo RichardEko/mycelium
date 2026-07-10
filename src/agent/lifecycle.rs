@@ -296,6 +296,7 @@ impl GossipAgent {
         for (shard_idx, gossip_rx) in rxs.into_iter().enumerate() {
             self.spawn_task(run_gossip_shard(
                 shard_idx,
+                self.node_id.clone(),
                 gossip_rx,
                 Arc::clone(&bootstrap_peers),
                 Arc::clone(&peer_writers),
