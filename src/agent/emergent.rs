@@ -811,6 +811,13 @@ pub async fn run_emergent_detectors(
                     metrics::gauge!("mycelium_emergent_peers_heard").set(vc.peers_heard as f64);
                     metrics::gauge!("mycelium_emergent_peers_known").set(vc.peers_known as f64);
                     metrics::gauge!("mycelium_emergent_max_staleness_ms").set(vc.max_staleness_ms as f64);
+                    // Consensus/lock family: mirror the `/stats`-only tripwire scalars onto the
+                    // Prometheus surface so consensus is alertable like every other pathology
+                    // (the `_timeouts_total` counter is event-emitted from `consensus.rs`).
+                    metrics::gauge!("mycelium_consensus_commit_conflicts")
+                        .set(ctx.commit_conflicts.load(Ordering::Relaxed) as f64);
+                    metrics::gauge!("mycelium_schema_mismatch")
+                        .set(ctx.schema_mismatch.load(Ordering::Relaxed) as f64);
                 }
             }
             _ = shutdown.wait_for(|v| *v) => break,

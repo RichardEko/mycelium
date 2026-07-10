@@ -723,6 +723,9 @@ impl ConsensusEngine {
             if let Some(ref or) = opaque_recompute {
                 let opaque = (or.count_opaque)();
                 if opaque >= or.total_members {
+                    #[cfg(feature = "metrics")]
+                    metrics::counter!("mycelium_consensus_timeouts_total", "reason" => "all_opaque")
+                        .increment(1);
                     return ConsensusResult::Timeout {
                         slot,
                         ballots_tried: 0,
@@ -833,6 +836,10 @@ impl ConsensusEngine {
             };
         }
 
+        #[cfg(feature = "metrics")]
+        metrics::counter!("mycelium_consensus_timeouts_total",
+            "reason" => if votes_last_ballot == 0 { "no_voters" } else { "quorum_short" })
+            .increment(1);
         ConsensusResult::Timeout {
             slot,
             ballots_tried: config.max_ballots,
@@ -856,6 +863,9 @@ impl ConsensusEngine {
         config: ConsensusConfig,
     ) -> ConsensusResult {
         if groups.is_empty() {
+            #[cfg(feature = "metrics")]
+            metrics::counter!("mycelium_consensus_timeouts_total", "reason" => "empty_groups")
+                .increment(1);
             return ConsensusResult::Timeout {
                 slot,
                 ballots_tried: 0, votes_last_ballot: 0, quorum_required: 0,
@@ -1016,10 +1026,15 @@ impl ConsensusEngine {
             ballot = nack_ballot.max(self.read_ballot(&ballot_key)).max(ballot) + 1;
         }
 
+        let votes_last_ballot: usize = group_states.values().map(|gs| gs.accepts).sum();
+        #[cfg(feature = "metrics")]
+        metrics::counter!("mycelium_consensus_timeouts_total",
+            "reason" => if votes_last_ballot == 0 { "no_voters" } else { "quorum_short" })
+            .increment(1);
         ConsensusResult::Timeout {
             slot,
             ballots_tried:     config.max_ballots,
-            votes_last_ballot: group_states.values().map(|gs| gs.accepts).sum(),
+            votes_last_ballot,
             quorum_required:   groups.len(),
         }
     }

@@ -23,6 +23,7 @@ The families:
 |---|---|---|---|
 | [Gossip transport](#gossip-transport) | `gossip_*` | `mycelium-core` | — |
 | [Emergent / diagnosis](#emergent--diagnosis) | `mycelium_emergent_*` | node (`src/agent/emergent.rs`) | detector loop on |
+| [Consensus / locks](#consensus--locks) | `mycelium_consensus_*`, `mycelium_schema_mismatch` | node (`src/consensus.rs`, `src/agent/emergent.rs`) | `consensus`; detector loop for the two gauges |
 | [Governor](#governor) | `mycelium_governor_*` | node (`src/agent/tuning_governor.rs`) | — |
 | [Artifact library](#artifact-library) | `mycelium_artifact_*` | `mycelium-wasm-host` | — |
 | [Guardrails](#guardrails) | `mycelium_guardrails_*` | `mycelium-guardrails` | `compliance` (the Tier-C gate) |
@@ -75,6 +76,29 @@ The full per-pathology PromQL alert recipes (including the `_peers_heard`/`_peer
 partial-view qualifier) live in
 [diagnostics.md §Prometheus alert recipes](diagnostics.md#prometheus-alert-recipes) — not
 duplicated here.
+
+## Consensus / locks
+
+The Layer-III / distributed-lock surface. Consensus is a **CP** overlay: when quorum is
+unavailable it *blocks* (a `propose` returns `ConsensusResult::Timeout`; a `consistent_get`
+serves the last committed value) — it never fabricates a commit. These series make that
+blocking, plus the two detection-not-prevention tripwires, alertable. The two `*_conflicts` /
+`_mismatch` gauges mirror the `/stats` scalars onto Prometheus (set on the emergent detector
+tick — so they need `GOSSIP_EMERGENT_DETECTORS=1`, like the emergent family; the `/stats`
+scalars themselves are always present). `_timeouts_total` is event-emitted at each no-quorum
+exit and needs only `consensus` + `metrics`. Distributed locks are
+consensus slots (`lock/{name}`), so they ride these metrics — there is deliberately **no
+per-lock gauge** (cardinality); inspect an individual lock with `GET /consensus/lock/{name}`.
+
+| Metric | Type | Labels | Meaning | Watch for / alert |
+|---|---|---|---|---|
+| `mycelium_consensus_timeouts_total` | counter | `reason` | consensus rounds that timed out without committing (no quorum) | `rate > 0` = the overlay is blocking → [consensus stalled](diagnostics.md#consensus-stalled--quorum-unavailable). `reason`: `no_voters` (partition), `quorum_short` (members heard but quorum not met — overload / quorum set too high), `all_opaque` (every member shedding load), `empty_groups` (misuse) |
+| `mycelium_consensus_commit_conflicts` | gauge | — | cumulative split-brain double-commits (mirrors `/stats` `commit_conflicts`) | `delta > 0` = a slot was committed twice → [consensus commit conflict](diagnostics.md#consensus-commit-conflict) |
+| `mycelium_schema_mismatch` | gauge | — | cumulative capability payloads routed around for schema version skew (mirrors `/stats` `schema_mismatch`) | `delta > 0` = a provider has an unmigrated schema version → [schema mismatch](diagnostics.md#schema-mismatch) |
+
+The `*_conflicts` / `_mismatch` gauges are cumulative running totals surfaced as gauges (the
+underlying `/stats` scalars only ever increment), so alert with `delta(metric[10m]) > 0`, not
+`increase()`.
 
 ## Governor
 

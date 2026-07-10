@@ -88,9 +88,58 @@ alertable scalar, the snapshot field is the relational detail, and the diagnosis
 
 - **Means:** two proposals committed for the same slot — a sign of split-brain proposing or a
   partition healing.
-- **Read:** tripwire counter `commit_conflicts` on `/stats`; snapshot `commit_conflict_slots[]` (the
-  hot slots).
+- **Read:** gauge `mycelium_consensus_commit_conflicts` (`delta > 0`) or the `commit_conflicts`
+  tripwire on `/stats`; snapshot `commit_conflict_slots[]` (the hot slots).
 - **Do:** check consensus membership and whether the cluster recently rejoined after a split.
+
+### Consensus stalled — quorum unavailable
+
+- **Means:** proposals are timing out without committing — fewer than `⌊n/2⌋+1` voters of the
+  consensus group are contributing. Consensus is **CP**: the overlay *blocks* rather than lie — a
+  `propose` returns `ConsensusResult::Timeout` and a `consistent_get` serves the last committed
+  value; neither fabricates a commit. This is the common production failure (distinct from a
+  *commit conflict*, which is the opposite — two commits, not zero).
+- **Read:** counter `mycelium_consensus_timeouts_total` by `reason` — `no_voters` ⇒ likely a
+  **partition** (no votes heard at all); `quorum_short` ⇒ members heard but **quorum not met**
+  (overloaded members, or the quorum set is larger than live membership); `all_opaque` ⇒ every
+  member is shedding load (cross-check [fleet-opacity storm](#fleet-opacity-storm)). Dev-side, the
+  returned `ConsensusResult::Timeout { ballots_tried, votes_last_ballot, quorum_required }` carries
+  the same distinction per call.
+- **Do:** for `no_voters`, restore member reachability / heal the partition (membership is
+  peer-exchange + CA admission — check both); for `quorum_short`, add capacity or confirm the
+  quorum is `⌊n/2⌋+1` of the **consensus group**, not the whole cluster; for `all_opaque`, relieve
+  load. A **leased** commit self-heals on the next round once quorum returns — no manual repair.
+
+### Stuck / contended distributed lock
+
+- **Means:** callers block on `lock(name, …)` or repeatedly get `Superseded` for the same lock.
+  Either the holder crashed mid-section (the lock clears at **lease expiry**, not before), the
+  critical section is overrunning its `ttl`, or there is genuine high contention on one lock.
+- **Read:** inspect the lock's authoritative slot — `GET /consensus/lock/{name}` →
+  `{committed, ballot, lease_ms, lease_expired}`. A non-null `committed` with a live `lease_ms` ⇒
+  **held**; `lease_expired: true` ⇒ the lease lapsed and the slot has **reopened** — the lock is
+  effectively free (a stale holder cannot win). Repeated `Superseded` in caller logs is
+  contention, **not** a bug — the converged-holder discipline rejecting a loser. Watch
+  `mycelium_consensus_timeouts_total{reason="quorum_short"}` if acquisition itself is timing out
+  (a consensus-throughput problem, not lock semantics).
+- **Do:** a crashed holder's lock **self-clears at lease expiry** — wait up to the `ttl` you set;
+  don't force it. If sections routinely overrun, raise `ttl` above the observed hold time and keep
+  sections short. If many callers queue on one lock, that is the wrong shape — a lock is
+  coarse-grained mutual exclusion, not a work queue; re-check the
+  [when-to-use guidance](../guide/04-consensus.md#which-primitive-dont-reach-for-a-lock-when-you-want-something-else).
+
+### Schema mismatch
+
+- **Means:** a consumer saw a capability whose schema version has **no registered migration path**
+  to what it expects (`NoMigrationPath`) — real version skew across nodes, not additive drift. The
+  consumer **routes around** the mismatched provider (detection-not-prevention); it never silently
+  coerces.
+- **Read:** gauge `mycelium_schema_mismatch` (`delta > 0`), or the `schema_mismatch` tripwire on
+  `/stats`. Cross-reference registered schemas/migrations across nodes (`list_schemas()`).
+- **Do:** publish the missing `vN → vN+1`
+  [`SchemaMigration`](../guide/12-schema-lifecycle.md#detection-tier-2-and-registered-migrations-tier-3),
+  or roll the lagging producer/consumer to a compatible version. Never force-coerce across an
+  unregistered gap.
 
 ## Prometheus alert recipes
 
@@ -143,6 +192,33 @@ groups:
     labels: { severity: info }
     annotations:
       summary: "{{ $labels.instance }} hears < half its peers — diagnoses from here are partial"
+
+- name: mycelium-consensus
+  rules:
+  # Consensus rounds timing out — the CP overlay is blocking (no quorum). Partition if reason=no_voters.
+  - alert: MyceliumConsensusStalled
+    expr: rate(mycelium_consensus_timeouts_total[5m]) > 0
+    for: 3m
+    labels: { severity: warning }
+    annotations:
+      summary: "Consensus timing out on {{ $labels.cluster }} (reason={{ $labels.reason }})"
+      runbook: "docs/operations/diagnostics.md#consensus-stalled--quorum-unavailable"
+
+  # Split-brain double-commit (healed partition). Gauge mirrors the /stats scalar → alert on delta.
+  - alert: MyceliumCommitConflict
+    expr: delta(mycelium_consensus_commit_conflicts[10m]) > 0
+    for: 1m
+    labels: { severity: warning }
+    annotations:
+      runbook: "docs/operations/diagnostics.md#consensus-commit-conflict"
+
+  # Schema version skew — a provider is being routed around.
+  - alert: MyceliumSchemaMismatch
+    expr: delta(mycelium_schema_mismatch[10m]) > 0
+    for: 2m
+    labels: { severity: warning }
+    annotations:
+      runbook: "docs/operations/diagnostics.md#schema-mismatch"
 ```
 
 Because the diagnosis is coordinator-free, **scrape every node** and let the `cluster` label group
