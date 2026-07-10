@@ -294,3 +294,25 @@ seed_config.persistence = Some(PersistenceConfig {
     sync_mode: SyncMode::Flush,
 });
 ```
+
+---
+
+## Reference — the Docker integration-test cluster as a developer template
+
+*Moved from the repo README (2026-07-10).*
+
+The overlay scenarios in `tests/overlay/` are designed as copy-paste templates:
+
+| Scenario | Pattern demonstrated |
+|---|---|
+| [`s11_task_auction.py`](../../tests/overlay/scenarios/s11_task_auction.py) | Exact-once task delivery — coordinator queues work, workers race via `subscribe_log_group` |
+| [`s12_leader_election.py`](../../tests/overlay/scenarios/s12_leader_election.py) | Leader election + consensus-durable config — 3 concurrent `elect_leader` calls must converge, winner writes `consistent_set` |
+| [`s13_shared_reasoning_log.py`](../../tests/overlay/scenarios/s13_shared_reasoning_log.py) | Multi-writer append — 3 nodes each write observations, all verify HLC ordering and gossip convergence |
+
+```sh
+make test-overlay   # 3-node Docker cluster, runs all three scenarios (~3 min on warm cache)
+```
+
+See [`tests/overlay/README.md`](../../tests/overlay/README.md) for the full developer guide.
+
+---

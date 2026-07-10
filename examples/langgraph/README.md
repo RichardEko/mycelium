@@ -60,7 +60,7 @@ MYCELIUM_TEST_PORT=8101 MYCELIUM_TEST_PORT_B=8102 python examples/langgraph/03_c
 Rung 6 does **not** use the shared mesh — it boots and tears down its own nodes
 (see its block below).
 
-## The rungs
+## What it demonstrates — the rungs
 
 ### 0 — `00_hello_skill.py`
 

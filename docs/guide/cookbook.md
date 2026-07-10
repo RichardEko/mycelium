@@ -173,3 +173,58 @@ Chapter: [09 · Security](09-security.md); ops: [rbac.md](../operations/rbac.md)
 
 **Hit a "why won't this converge / why is this flaky" wall?**
 [14 · Patterns & Pitfalls](14-patterns-and-pitfalls.md) collects the real ones.
+
+---
+
+## Reference — the service layer (RPC, bulk, scatter-gather, mailbox)
+
+*Moved from the repo README (2026-07-10).*
+
+Layer 3 delivers the service primitives used by the language bridges and the MCP integration.
+
+#### Point-to-Point RPC
+
+```rust
+// Caller
+let reply = agent.rpc_call(target, "echo", payload, Duration::from_secs(5)).await?;
+
+// Responder
+let mut rx = agent.rpc_rx("echo");
+while let Some(req) = rx.recv().await {
+    agent.rpc_respond(&req, req.payload());
+}
+```
+
+#### Bulk Payload Transfer
+
+For payloads too large to gossip through every node, `bulk_call` stages the data at a local
+HTTP endpoint and sends only a lightweight ticket over the mesh:
+
+```rust
+// Set http_port in GossipConfig so the target can fetch the staged bytes
+let reply = agent.bulk_call(target, "process", large_bytes, Duration::from_secs(30)).await?;
+```
+
+#### Scatter-Gather
+
+Fan out an identical request to multiple targets concurrently; return as soon as `min_ok` replies arrive:
+
+```rust
+let results = agent.scatter_gather(targets, "vote", payload, Duration::from_secs(5), 2).await?;
+```
+
+#### Actor/Event Mailboxes
+
+KV-backed durable event delivery. Events survive crashes and are delivered in HLC-causal order:
+
+```rust
+// Sender (any node)
+agent.deliver_event(&target_id, "task.result", result_bytes);
+
+// Receiver — events delivered at-least-once within TTL, tombstoned after delivery
+let (handle, mut rx) = agent.open_mailbox("task.result", 64);
+while let Some(event) = rx.recv().await {
+    process(&event.payload);
+}
+// drop(handle) to cancel the watcher
+```

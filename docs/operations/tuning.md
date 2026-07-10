@@ -485,3 +485,61 @@ seconds, raise `propagation_window_secs` rather than relying on this multiplier.
 | Warn log `Write to X failed` | occasional on restart | persistent — peer unreachable |
 | Warn log `Gossip shard N full` | none | writer_channel_depth or gossip_channel_capacity too small |
 | Warn log `bulk_serve: handler concurrency limit reached` | none | active_bulk_handlers at ceiling — incoming bulk signals being dropped |
+
+---
+
+## Performance baselines
+
+*Moved from the repo README (2026-07-10).*
+
+Measured on the development machine, release build (`cargo bench`). Local hot-path only — no network I/O. Run `cargo bench` to regenerate on target hardware.
+
+| Benchmark | Median | Notes |
+|---|---|---|
+| `kv/set` | 151 ns | Local store write + gossip channel dispatch |
+| `kv/get` hit | 16 ns | Lock-free papaya read |
+| `kv/get` miss | 13 ns | Same path, no allocation |
+| `scan_prefix` 100 entries | 332 ns | Typical pheromone-trail store size |
+| `scan_prefix` 1,000 entries | 2.7 µs | |
+| `scan_prefix` 10,000 entries | 41 µs | |
+| `scan_prefix` 100,000 entries | 622 µs | **~1 ms — monitor if store grows here** |
+| `signal_fanout` 1 handler | ~700 ns | emit + boundary check + deliver + drain |
+| `signal_fanout` 4 handlers | ~1.0 µs | |
+| `signal_fanout` 16 handlers | ~1.4 µs | Very flat — mpsc try_send is cheap |
+
+`scan_prefix` uses a prefix index for a fast O(|segment_keys|) path when the prefix segment is known (e.g. `"load/"`, `"grp/"`, `"svc/"`). Unknown prefixes fall back to an O(store_size) full scan. At typical pheromone-trail sizes (100–1,000 entries per segment) the cost is negligible relative to network latency.
+
+---
+
+## Configuration reference (`GossipConfig`)
+
+*Moved from the repo README (2026-07-10). The authoritative field list is the rustdoc on `mycelium-core/src/config.rs`.*
+
+Pass a TOML config file with `-c <path>`. CLI flags override file values.
+Environment variables override both — `GOSSIP_<FIELD_NAME>` for every field.
+
+| Field | Default | Description |
+|---|---|---|
+| `bind_address` | `127.0.0.1` | TCP listen address |
+| `bind_port` | `8080` | TCP listen port |
+| `bootstrap_peers` | `[]` | Peers to contact on startup |
+| `default_ttl` | `5` | Hops before a message expires |
+| `health_check_interval_secs` | `10` | Ping interval and peer eviction cadence |
+| `propagation_window_secs` | `60` | Tombstone retention window |
+| `max_connections` | `1024` | Inbound connection limit |
+| `writer_channel_depth` | `1024` | Per-peer outbound channel depth (ring buffer). **Correctness threshold** — frames silently dropped when full. Covers `N × fan_out` up to N = 256 at the default fan-out of 4; size up for larger fleets or bulk-write bursts. A saturation warning fires every 1 000th cumulative dropped frame. |
+| `max_forwarding_peers` | unlimited | Cap gossip fan-out targets. Set to `bootstrap_peers.len()` for fixed-topology meshes |
+| `max_peers` | unlimited | Cap the peer table. Prevents O(N²) persistent connections when piggybacked peer lists would otherwise expand every node's view of the full cluster. Set to `bootstrap_peers.len()` for grid or ring topologies |
+| `gossip_channel_capacity` | `1024` | Per-shard gossip channel depth |
+| `gossip_shards` | `min(CPU,16)` | Gossip worker tasks. Set to `1` for demos/debug to cut task count |
+| `max_seen_entries` | `100000` | Dedup cache size before eviction |
+| `peer_eviction_intervals` | `3` | Missed ping intervals before a peer is evicted |
+| `reconnect_backoff_secs` | `5` | Cooldown after a failed connect |
+| `epidemic_extra_peers` | `3` | Extra random non-member peers added to Group-scoped signal fan-out when `group_aware_forwarding = true`. Ensures epidemic coverage beyond the group. Raise to 5–7 for clusters > 1 000 nodes. |
+| `group_aware_forwarding` | `true` | When true, Group signals are forwarded only to known group members plus `epidemic_extra_peers` random non-members. Set to `false` to revert to pre-v0.2 broadcast forwarding. |
+| `writer_idle_timeout_secs` | `0` (disabled) | Seconds of inactivity before a peer writer closes its TCP connection. Reconnects transparently on the next frame. `0` = no timeout. |
+| `signal_window_secs` | `600` | Retention window for the in-memory sender log and `quorum_written` rate-limit tracker. |
+| `max_store_entries` | `0` (unlimited) | Hard cap on live KV entries. New live writes are silently dropped once reached; tombstones always accepted. |
+| `intern_keys` | `true` | Intern received keys in a process-wide pool so all connection handlers share one `Arc<str>` per distinct key. Disable for workloads with unbounded key spaces (e.g. UUID keys). |
+| `intern_max_keys` | `0` (unlimited) | Maximum keys in the intern pool. New keys bypass interning once reached. Only meaningful when `intern_keys = true`. |
+| `health_check_max_jitter_ms` | `0` | Startup jitter cap (ms) before the first health-check ping. `0` = up to `health_check_interval_secs × 500` ms. Set to a small value (e.g. `50`) in test configs. |

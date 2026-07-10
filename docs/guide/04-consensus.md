@@ -210,3 +210,166 @@ Design your system so only the operations that truly need it use the overlay;
 the rest uses gossip.
 
 → Next: [05-skills.md](05-skills.md) — LLM agents as first-class mesh citizens.
+
+---
+
+## Reference — Layer III protocol & API
+
+*Moved from the repo README (2026-07-10).*
+
+Lightweight epidemic two-phase agreement built directly on top of the signal mesh — no extra
+wire format, no separate consensus port. All consensus messages ride existing `Signal` frames.
+
+#### Protocol sketch
+
+```
+Propose → (votes from group members) → Commit → KV committed/{slot}
+```
+
+Committed values are written to `consensus/committed/{slot}` and anti-entropy-synced to
+late joiners automatically via the existing KV mechanism.
+
+#### API
+
+```rust
+use mycelium::{ConsensusConfig, ConsensusResult};
+use bytes::Bytes;
+
+// Every node that should vote calls this once.
+let _listener = agent.start_consensus_listener();
+
+// Propose within a group — blocks until quorum or timeout.
+let cfg = ConsensusConfig { quorum_size: 0, ..ConsensusConfig::default() };
+match agent.group_propose("workers", "coordinator", Bytes::from("node-7"), cfg).await {
+    ConsensusResult::Committed { slot, value, ballot } => {
+        println!("committed: {} = {:?} @ ballot {}", slot, value, ballot);
+    }
+    ConsensusResult::Timeout { ballots_tried, votes_last_ballot, quorum_required, .. } => {
+        println!("no quorum after {} ballots; last ballot got {}/{} votes",
+                 ballots_tried, votes_last_ballot, quorum_required);
+    }
+    ConsensusResult::Superseded { slot, ballot } => {
+        // Another node reached quorum first; read the committed value.
+        let v = agent.consensus_get(&slot).unwrap();
+        println!("superseded at ballot {}: {:?}", ballot, v);
+    }
+}
+
+// System-wide proposal (all known peers vote).
+let _ = agent.system_propose("global/epoch", Bytes::from("42"), ConsensusConfig::default()).await;
+
+// Subscribe to a slot — fires whenever the slot is committed.
+let mut rx = agent.consensus_rx("coordinator");
+
+// Quorum trust slices (SCP §3.1 — optional, stored for future slice-aware extensions).
+agent.declare_trust("workers", &[peer_a, peer_b]);
+let slices = agent.group_trust("workers");
+```
+
+#### Key design decisions
+
+| Decision | Rationale |
+|---|---|
+| Ballot numbering (SCP §6.2) | Monotonic counter at `consensus/ballot/{slot}`; higher ballot supersedes stale commits |
+| Group-scoped votes | All members hear all votes → any member reaching quorum can commit; proposer crash does not stall the slot |
+| Proposer self-votes | Proposer always counts as one voter; no listener required for single-node quorum |
+| LWW commit idempotency | Two simultaneous commits of the same value are safe; higher-ballot commit wins via LWW timestamp |
+| No ordering log | Each slot is an independent KV entry (CASPaxos-style); no WAL required |
+| Signing | With `tls` feature: all consensus payloads are Ed25519-signed; forged ballots are dropped. Without: trusted-domain only; Byzantine fault tolerance is out of scope |
+
+`quorum_size = 0` uses `floor(N/2) + 1` (simple majority). `max_peers` cap and
+`phase1_timeout` are tunable via `ConsensusConfig`.
+
+---
+
+## Reference — the opt-in consistency & ordering overlay
+
+*Moved from the repo README (2026-07-10): `consistent_set`/`consistent_get`, the distributed lock, leader election, the durable log + consumer groups, reliable delivery.*
+
+Mycelium's thesis is **consistency as a service, not a foundation** — the epidemic substrate
+is always fast; stronger guarantees are opt-in per operation. The overlay layer surfaces these
+as first-class APIs without touching the gossip core.
+
+#### Consensus KV (`consistent_set` / `consistent_get`)
+
+Runs a ballot-voting round before writing. Concurrent writes to the same key are totally
+ordered by ballot number; the highest-ballot value is the authoritative committed entry.
+
+`consistent_get` is a **local read** — it returns the latest committed value that has
+anti-entropy-propagated to this node, which may lag by up to one gossip round. This is
+suitable for leader election and distributed locks where ballot-based fencing tokens protect
+against lower-ballot writers; it is not a substitute for linearizable reads.
+
+```rust
+// Any node can write — concurrent writers are ordered by ballot number
+agent.consensus().consistent_set("config/endpoint", b"https://api.v2/").await?;
+let val = agent.consensus().consistent_get("config/endpoint"); // local read, eventually consistent
+```
+
+#### Distributed Lock (`distributed_lock`)
+
+Consensus-backed named lock. The returned `LockGuard` releases (tombstones the lock key)
+on drop. The `token` field is a monotonic fencing token drawn from the ballot number.
+
+```rust
+let guard = agent.distributed_lock("job-42", Duration::from_secs(30)).await?;
+println!("fencing token: {}", guard.token);
+// exclusive work here
+drop(guard); // or guard.release()
+```
+
+#### Leader Election (`elect_leader`)
+
+One-shot election per group. If this node loses it reads the committed winner and returns
+that `NodeId` — so all nodes converge on the same answer.
+
+```rust
+let leader = agent.elect_leader("shard-0").await?;
+if leader == *agent.node_id() {
+    // I won — start serving shard-0
+}
+```
+
+#### Ordered Durable Log (`append` / `scan_log` / `subscribe_log`)
+
+HLC-keyed entries written to the gossip KV under `log/{stream}/{hlc:016x}`. Lexicographic
+key order equals causal time order.
+
+```rust
+// Producer
+let cursor = agent.kv().append("events", b"order-placed");
+
+// Consumer — one-shot scan
+let entries = agent.kv().scan_log("events", 0, u64::MAX);
+
+// Live subscriber — mpsc channel, new entries arrive on each gossip tick
+let mut rx = agent.kv().subscribe_log("events", 0);
+while let Some(entry) = rx.recv().await {
+    println!("{} {:?}", entry.hlc, entry.value);
+}
+
+// Trim old entries
+agent.kv().compact_log("events", checkpoint_hlc);
+```
+
+#### Consumer Groups (`subscribe_log_group`)
+
+At most one consumer per group advances at a time. The offset (`clog/{stream}/{group}/offset`)
+is persisted in the gossip KV so any node can take over if the current holder fails.
+
+```rust
+let mut rx = agent.kv().subscribe_log_group("events", "workers").await;
+while let Some(entry) = rx.recv().await {
+    process(&entry);
+    // offset committed before next entry is delivered
+}
+```
+
+#### Reliable Delivery (`emit_reliable`)
+
+Send a payload to a specific node and wait for an explicit application-level ACK (the
+receiver calls `rpc_respond`). Returns `AckResult::Acknowledged` or `AckResult::Timeout`.
+
+```rust
+let ack = agent.emit_reliable(target, "task.assign", payload, Duration::from_secs(5)).await;
+```

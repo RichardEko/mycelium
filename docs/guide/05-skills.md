@@ -236,3 +236,229 @@ durable-state-vs-presence separation the [concepts chapter](00-concepts.md)
 draws: tune prompts live in production without touching the serving binary.
 
 → Next: [06-tool-discovery.md](06-tool-discovery.md) — the MCP-style alternative where tools are functions, not agents.
+
+---
+
+## Reference — SkillRunner
+
+*Moved from the repo README (2026-07-10): how a skill works, the minimal manifest, composition, calling from any node. Full manual: [`docs/reference/skillrunner.html`](../reference/skillrunner.html).*
+
+`skillrunner` is a standalone binary that turns a `.skill.toml` manifest into
+a live LLM agent node on the mesh. No Rust required. Write a manifest, point it
+at any OpenAI-compatible LLM server, and the node self-advertises its capability,
+handles invocations via RPC, and writes a signed audit trail — all automatically.
+
+```sh
+cargo build --bin skillrunner
+./target/debug/skillrunner --skill examples/skills/hello.skill.toml
+```
+
+#### How a skill works
+
+When a skill node starts:
+1. It joins the mesh and **advertises its capability** (`ns`/`name`) into the gossip KV store
+2. Any caller that wants `llm/chat` does `resolve("llm", "chat")` — the mesh returns the node's address
+3. The caller sends an RPC with the input JSON; the skill runs its LLM prompt with that input and returns the result
+4. An audit record (signed with the node's Ed25519 key, HLC-timestamped) is written to the mesh
+
+No service registry. No coordinator for discovery or routing. The mesh *is* the registry.
+
+> **Scope of "no coordinator":** The gossip KV layer and signal mesh are fully
+> coordinator-free. The opt-in consistency overlay (`consistent_set`, `distributed_lock`,
+> `elect_leader`) uses epidemic Paxos and requires a live majority — those specific
+> operations have a proposer and will stall under partition. `bootstrap_peers` acts as a
+> soft coordinator for initial cluster discovery; keep 2–3 long-lived seed nodes for
+> reliable join behaviour.
+
+#### Minimal skill manifest
+
+```toml
+[node]
+bind_port       = 7947
+bootstrap_peers = ["127.0.0.1:7946"]   # address of any existing mesh node
+
+[capability]
+ns          = "llm"
+name        = "chat"
+description = "Responds to any message"
+
+[capability.input]
+type = "object"
+required = ["message"]
+[capability.input.properties]
+message = { type = "string", description = "The user's message" }
+
+[capability.output]
+type = "object"
+[capability.output.properties]
+reply = { type = "string" }
+
+[skill]
+prompt = "You are a helpful assistant. Return JSON: {\"reply\": \"<response>\"}."
+tools  = []
+
+[skill.llm]
+endpoint = "http://localhost:11434/v1"   # Ollama or any OpenAI-compatible endpoint
+model    = "llama3.2"
+```
+
+#### Skill composition — skills calling skills
+
+A skill can declare other skills as `tools`. The orchestrator below calls a
+researcher and a writer without knowing their addresses:
+
+```toml
+[skill]
+prompt = "Coordinate llm/researcher and llm/writer to produce an article on the topic."
+tools  = ["llm/researcher", "llm/writer"]   # resolved at inference time via gossip
+```
+
+At inference time SkillRunner resolves `llm/researcher` against live capability
+advertisements in the KV store, dispatches the sub-invocation through the mesh,
+and injects the result back into the LLM context. Start a second researcher node
+and the orchestrator automatically load-balances across both.
+
+This is the composition story — see [`examples/community/`](../../examples/community/)
+for a full 3-skill walkthrough with live monitoring instructions.
+
+#### Calling a skill from any node
+
+**Rust:**
+```rust
+let (node_id, _) = agent.resolve(&CapFilter::new("llm", "chat"))[0];
+let payload = serde_json::to_vec(&json!({"message": "Hello!"}))?;
+let result = agent.rpc_call(node_id, "skill.invoke", payload, Duration::from_secs(30)).await?;
+```
+
+**Python (`mycelium-py`):**
+```python
+from mycelium import MyceliumAgent
+import json
+
+agent = MyceliumAgent("127.0.0.1", 8300)
+providers = agent.resolve_capability("llm", "chat")
+result = agent.rpc_call(providers[0].node_id, "skill.invoke",
+                        json.dumps({"message": "Hello!"}).encode())
+```
+
+#### Ready-to-run examples
+
+| Example | What it shows |
+|---|---|
+| [`examples/skills/hello.skill.toml`](../../examples/skills/hello.skill.toml) | Minimal single-skill smoke test |
+| [`examples/skills/summarizer.skill.toml`](../../examples/skills/summarizer.skill.toml) | Structured JSON output with input schema |
+| [`examples/community/`](../../examples/community/) | 3-skill composition: orchestrator → researcher → writer |
+| [`examples/a2a_langchain/`](../../examples/a2a_langchain/) | LangChain + AutoGen auto-discovering skills via A2A |
+
+See [`docs/reference/skillrunner.html`](../reference/skillrunner.html) for the full manifest
+reference, A2A auto-discovery, OTEL integration, concurrency controls, and the audit trail format.
+
+---
+
+---
+
+## Reference — prompt skills (LLM-backed capabilities via the KV substrate)
+
+*Moved from the repo README (2026-07-10).*
+
+The `llm` feature turns any `GossipAgent` into a host for LLM-backed skills. Prompt templates
+are stored in the gossip KV store (`prompts/{ns}/{name}`) and replicated cluster-wide — any
+other node can call the skill without knowing which node hosts the model.
+
+```toml
+mycelium = { version = "…", features = ["llm"] }
+```
+
+#### Registering a skill
+
+```rust
+use mycelium::{GossipAgent, PromptTemplate, OpenAiBackend};
+
+let backend = OpenAiBackend::new(
+    "http://localhost:11434/v1",   // any OpenAI-compatible endpoint
+    "",                             // API key (empty for Ollama)
+    "llama3.2",                    // model baked in at construction
+);
+
+let template = PromptTemplate {
+    system: "You are a helpful assistant. Reply concisely.".into(),
+    user_template: "{{input}}".into(),
+    max_tokens: 512,
+    temperature: 0.7,
+    metadata: Default::default(),
+};
+
+// Advertises cap `llm/chat` on the mesh; template stored in KV with TTL=1 week.
+let _handle = agent.register_prompt_skill("llm", "chat", template, backend).await?;
+// Drop _handle to retract the capability and stop the dispatch loop.
+```
+
+#### Calling from Rust
+
+```rust
+let output = agent
+    .call_prompt_skill("llm", "chat", "Hello!", Default::default(), Duration::from_secs(30))
+    .await?;
+println!("{output}");
+```
+
+#### HTTP gateway
+
+```sh
+# List all templates visible to this node
+curl http://localhost:8300/gateway/prompts
+
+# Read a specific template
+curl http://localhost:8300/gateway/prompts/llm/chat
+
+# Write / update a template
+curl -X PUT http://localhost:8300/gateway/prompts/llm/chat \
+     -H 'Content-Type: application/json' \
+     -d '{"system":"You are a helpful assistant.","user_template":"{{input}}","max_tokens":512,"temperature":0.7}'
+
+# Invoke (blocking)
+curl -X POST http://localhost:8300/gateway/llm/call \
+     -H 'Content-Type: application/json' \
+     -d '{"ns":"llm","name":"chat","input":"What is 2+2?"}'
+
+# Invoke (SSE stream — v1 emits a single `done` event)
+curl -N http://localhost:8300/gateway/llm/stream \
+     -H 'Content-Type: application/json' \
+     -d '{"ns":"llm","name":"chat","input":"Hello!"}'
+```
+
+#### Python (`mycelium-py`)
+
+```python
+from mycelium.prompt_skill import PromptSkillClient, PromptTemplate
+
+client = PromptSkillClient("http://localhost:8300")
+
+template = PromptTemplate(
+    system="You are a helpful assistant.",
+    user_template="{{input}}",
+    max_tokens=512,
+    temperature=0.7,
+)
+client.register("llm", "chat", template)
+
+result = client.call("llm", "chat", "What is 2+2?")
+print(result.output)          # "4" or similar
+print(result.model_used)      # "llama3.2"
+print(result.tokens_used)     # 12
+```
+
+#### Template variables
+
+In `user_template`, `{{input}}` is always replaced with the caller's input string.
+`{{node_id}}` and `{{skill_name}}` are injected automatically. Additional key-value
+pairs can be passed in the `context` map and referenced as `{{key}}`.
+
+#### Model placement
+
+The `model` field is **not** in `PromptTemplate` — model availability is node-local knowledge
+that the template author cannot predict. Each hosting node bakes the model into its `LlmBackend`
+at construction. The `LlmResult.model_used` field reports what was actually used, so callers
+have full observability without requiring central coordination.
+
+---

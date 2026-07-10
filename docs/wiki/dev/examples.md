@@ -15,12 +15,12 @@ one per-example block). `coop/` is the reference implementation of the suite sha
   file) → `llm_agent` (the richer, LLM-driven capability version). The README front-door leads with
   `hello_mesh`; guide chapters 01–02 explain them. Added #142/#143.
 - **Food-Rescue Co-op suite** (`examples/coop/`, workspace member
-  `mycelium-coop-examples`): **twelve** CI demos composed in one constructive world (depot
+  `mycelium-coop-examples`): **fourteen** demos (twelve CI + two manual real-model) composed in one constructive world (depot
   nodes rescuing surplus food, no dispatcher) — mailbox_llm · stigmergy · elastic_intent ·
   provisioning ⭐ (the autonomic loop) · federation_facts · rotation · consensus ·
   llm_pipeline · mcp_toolgrowth (real **code arrival**, bridged over MCP) · llm_council ·
   catalog (the durable **library**: runtime-read origin, librarian, origin-death →
-  peer-cache install) · diagnostics. `ci_smoke.sh` runs all twelve Docker-free (CI
+  peer-cache install) · diagnostics. `ci_smoke.sh` runs the twelve CI demos Docker-free (CI
   `coop-smoke`). Plus one **manual** demo, `model_deploy` — real GGUF weights **and their
   deployment profile** (system prompt + parameters, referencing the weights by content
   address — design §4.3.1) deployed through the artifact library into Ollama, generating

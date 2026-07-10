@@ -1,5 +1,7 @@
 # Food-Rescue Co-op — example suite
 
+## Objective
+
 A cohesive set of runnable demos for Mycelium's newer capabilities — the **mailbox**, **governance
 (management-as-intent)**, **autonomic provisioning**, **federation (AgentFacts)**, and the
 **tuple-space** — composed in *one constructive world* rather than as isolated API toys.
@@ -9,8 +11,22 @@ A cohesive set of runnable demos for Mycelium's newer capabilities — the **mai
 > spoils. There is **no central dispatcher** — depots advertise capabilities, claim work when
 > ready, and self-organise. A neighbouring co-op is a separate *domain* the federation demo talks to.
 
-Full design + the six-example roadmap: [`docs/plans/example-suite.md`](../../docs/plans/example-suite.md).
-**All eleven examples are shipped** — run them all Docker-free with [`ci_smoke.sh`](ci_smoke.sh).
+Full design + roadmap history: [`docs/plans/example-suite.md`](../../docs/plans/example-suite.md).
+
+## How to run
+
+**Fourteen demos are shipped: twelve run Docker-free in CI, two are manual** (they need real
+model weights). Everything shares the [repo setup](../README.md#shared-setup); then:
+
+```bash
+./ci_smoke.sh          # the twelve CI demos, in order, with assertions (also the CI job)
+# or any single demo:
+cargo run -p mycelium-coop-examples --bin stigmergy
+```
+
+The two manual demos — [`model_deploy`](#m--model_deploy-manual--a-real-llm-through-the-library)
+and [`reheal_deploy`](#m--reheal_deploy-manual--the-real-model-reheal-flagship) — are documented
+below with their own run steps.
 
 ## Shared harness (`src/common/`)
 
@@ -316,6 +332,26 @@ the artifact library move something real.
 
 **Philosophy beat:** the same demand→provision loop as 04/09/11 — but the artifact is a
 neural network, the progress bar is honest, and the proof is the story it tells you.
+
+
+### M+ — `reheal_deploy` (manual — the real-model reheal flagship)
+
+**Objective.** The composition of `model_deploy` and the LangGraph rung-6 flagship, with a
+*real* neural network: **a governed GGUF model reheals onto the surviving node and generates
+real tokens through routed inference after its origin dies.** The one story that beats a
+commodity checkpoint store on non-commodity terms (the echo-model CI variant is
+[`langgraph/`](../langgraph/README.md) rung 6; this is the same choreography with real weights).
+
+**Run** (needs Ollama + a GGUF, like `model_deploy`):
+```bash
+cargo run -p mycelium-coop-examples --features wasm --bin reheal_deploy
+```
+
+**What it demonstrates.** The full artifact-library pipeline (profile → weights by content
+address → resource-checked election → streamed activation) *plus* origin death: the library's
+durable tier re-serves the artifacts, the survivor self-elects, reheals the model, and the
+routed inference call returns real tokens — deploy, kill, reheal, generate, all coordinator-free.
+See the header of [`src/bin/reheal_deploy.rs`](src/bin/reheal_deploy.rs) for the design notes.
 
 ## CI
 

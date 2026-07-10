@@ -67,6 +67,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `never_seen_primary_promotes_after_orphan_grace` (#150, #158).
 
 ### Changed
+- **Docs restructure for third-party DX** (front-page audit, 2026-07-10): `README.md` cut from
+  **1,604 → 192 lines** — it is now a true front page (hero, 30-second hello, demos, build/run,
+  a layers-at-a-glance table, pointers) and the ~1,100 lines of subsystem reference moved to
+  their owning pages as clearly-marked "Reference —" sections (guide ch. 00/01/02/03/04/05/13,
+  cookbook, `operations/tuning.md` — which gains the performance baselines + `GossipConfig`
+  reference). One home per fact; nothing deleted. Examples fixes alongside: five orphan
+  examples indexed (`conway`, `invoke_skill`, `semantic_coordination`, + the two paper
+  runners), `conway-gpu/` gains a README, `coop/` gains Objective/How-to-run + the missing
+  `reheal_deploy` (M+) block and honest counts (**14 demos: 12 CI + 2 manual** — was
+  "eleven"/"12"), the guide's duplicate example table now defers to the canonical
+  `examples/README.md` index, and a long-dead `#durability-contract` link in ch. 12 was
+  found and repointed.
 - **Internal: spawn-task context structs + the `kv.rs` fossil split** (analysis Run 42's
   Conceptual Integrity warts, validated then fixed). `run_gossip_shard` (20 positional
   params), `run_health_monitor` (24), and `run_gc_task` (13) now take

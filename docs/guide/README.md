@@ -106,34 +106,14 @@ Five application patterns build on this substrate:
 
 ## Example portfolio
 
-**First run these two** — the zero-setup starting ladder (no features, no LLM, ~25–45 readable lines each):
-
-1. `cargo run --example hello_mesh` ([source](../../examples/hello_mesh.rs)) — two agents share a
-   value **by gossip**. The whole Layer-I substrate: a shared KV store, no broker.
-2. `cargo run --example hello_capability` ([source](../../examples/hello_capability.rs)) — one node
-   **advertises** what it does; another **resolves** it by name and **calls** it over RPC. That's
-   the value proposition — broker-less service discovery, no registry, no configured addresses.
-
-Then, for the **capability tour**, the [**Food-Rescue Co-op suite**](../../examples/coop/)
-(`examples/coop/`, 12 demos) is one runnable demo per capability area, composed in one
-constructive world, each calling out a [pattern & pitfall](14-patterns-and-pitfalls.md). The other
-examples are specialised:
+**The canonical index lives at [`examples/README.md`](../../examples/README.md)** — every
+example with what-it-demonstrates and the run command, plus the shared setup. Two entries that
+live outside `examples/` and are easy to miss:
 
 | Example | What it's for |
 |---|---|
-| [`examples/coop/`](../../examples/coop/) | the capability tour (mailbox, stigmergy, governance, provisioning, federation, rotation, consensus, LLM/MCP coordination, **catalog**) |
 | [`mycelium-blackboard/examples/microgrid`](../../mycelium-blackboard/examples/microgrid.rs) | the blackboard **`rd`/`in`** split — shared reads, competitive exactly-once claims (a finite-resource co-op) |
-| `llm_agent` · `three_node_demo` | live **management-UI** clusters (the headless versions are in coop) |
-| `examples/community` · `examples/chat` | SkillRunner skill clusters + MCP tool discovery |
-| `examples/a2a_langchain` | external-framework (LangChain/AutoGen) A2A interop |
-| `examples/fluid_pipeline` | the AFN **push-vs-pull** contrast |
-| `coordinator_comparison` · `three_arm_workdist` | research artifacts (Paper 1/2a) |
-| `conway` | a gossip-KV convergence visual (chapter 01) |
-
-> `prompt_skill_demo` and `mesh_demo` were **retired** into this portfolio —
-> the first into the coop suite (`mailbox_llm` + the live-template-update section
-> of [05 · Skills](05-skills.md)), the second into `llm_agent`'s manifest-driven
-> management UI.
+| overlay scenarios (`tests/overlay/`) | task auction / leader election / shared log against a real 3-node cluster (`make test-overlay`) |
 
 ## Chapters
 

@@ -14,18 +14,27 @@ New here? Start with the zero-setup ladder, then pick a cluster below.
 |---|---|---|
 | [`hello_mesh.rs`](hello_mesh.rs) | Two agents share a KV value by gossip — the substrate in ~25 lines | `cargo run --example hello_mesh` |
 | [`hello_capability.rs`](hello_capability.rs) | Broker-less discovery + RPC: advertise `math/double`, resolve it *by name*, call it | `cargo run --example hello_capability` |
+| [`conway.rs`](conway.rs) | Conway's Life on a 16×16 gossip mesh — *watch* KV convergence (guide ch. 01) | `cargo run --example conway` |
+| [`invoke_skill.rs`](invoke_skill.rs) | Minimal SkillRunner caller — the smallest skills client (pairs with `community/`) | `cargo run --example invoke_skill` |
+| [`semantic_coordination.rs`](semantic_coordination.rs) | Agents coordinating via semantic capability matching | `cargo run --example semantic_coordination` |
 
 **Clusters & suites** (each links to its own README; see [shared setup](#shared-setup) first):
 
 | Cluster | What it demonstrates | LLM? | Doc |
 |---|---|:--:|---|
-| **Food-Rescue Co-op** — 12 demos | The full pattern catalogue in one constructive world (stigmergy, elastic intent, autonomic provisioning ⭐, federation, consensus, the durable artifact library) | some | [`coop/`](coop/README.md) |
+| **Food-Rescue Co-op** — 14 demos (12 CI + 2 manual) | The full pattern catalogue in one constructive world (stigmergy, elastic intent, autonomic provisioning ⭐, federation, consensus, the durable artifact library, real-model deploy/reheal) | some | [`coop/`](coop/README.md) |
 | **Mesh Control UI** — `llm_agent` | Capability emergence across 3 nodes with a live topology UI | mock ok | [root example](llm_agent.rs) · [README §Demos](../README.md) |
-| **Interactive Chat** — `three_node_demo` | Live MCP tool discovery — tools join a running mesh and the LLM finds them without restart | yes | [`chat/`](chat/README.md) |
+| **Interactive Chat** — `three_node_demo` | Live MCP tool discovery — tools join a running mesh and the LLM finds them without restart (the same binary drives the Docker integration cluster) | yes | [`chat/`](chat/README.md) |
+| **Conway on GPU** — `conway-gpu/` | The 01-chapter visual at 256 agents with a Metal/wgpu compute shader | no | [`conway-gpu/`](conway-gpu/README.md) |
 | **Skills** — SkillRunner community cluster | LLM agents as first-class mesh citizens (skills as capabilities, live load-balancing) | yes | [`community/`](community/README.md) |
 | **Agentic Flow Networks** — fluid pipeline | Tuple-space pull pipeline (stigmergic backpressure) vs a push baseline, 10 workers | no | [`fluid_pipeline/`](fluid_pipeline/README.md) |
 | **A2A interop** — LangChain / AutoGen | External agents auto-discover Mycelium skills via `/.well-known/agent.json` | yes | [`a2a_langchain/`](a2a_langchain/README.md) |
 | **Reasoning ladder** — LangGraph-on-Mycelium | 7 rungs from a local checkpointer to a cross-node deploy/reheal flagship | echo model | [`langgraph/`](langgraph/README.md) |
+
+**Research artifacts** (Paper 1 / 2a experiment runners — reproducible, not tutorials):
+[`coordinator_comparison.rs`](coordinator_comparison.rs) (+ [runner](coordinator_comparison_runner.sh)/[plot](coordinator_comparison_plot.py)) ·
+[`three_arm_workdist.rs`](three_arm_workdist.rs) (+ [runner](three_arm_runner.sh)/[plot](three_arm_plot.py)) —
+see each file's header for the experiment design.
 
 ## Shared setup
 

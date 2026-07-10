@@ -222,3 +222,56 @@ coordinator-free system can offer. → [`consensus`](../../examples/coop/src/bin
 
 **Next:** [01 · Gossip KV](01-gossip-kv.md). For the full design argument behind
 this vocabulary, see [philosophy.html](../philosophy.html).
+
+---
+
+## Reference — Skills vs MCP tools: choosing the right primitive
+
+*Moved from the repo README (2026-07-10).*
+
+Mycelium supports two ways to extend what an LLM agent can do. They solve
+different problems and compose naturally together.
+
+#### Mental model
+
+> **MCP tool** = a function in the mesh. The LLM calls it to look something
+> up, run a calculation, or fetch data. Written in any language.
+>
+> **Skill** = an LLM agent in the mesh. It has its own identity, prompt, and
+> capability declaration. It can be called by any node — including other skills.
+
+#### Comparison
+
+| | MCP Tool | Skill |
+|---|---|---|
+| What it is | A function registered on a node | An LLM agent node |
+| Written in | Any language | TOML manifest — no code |
+| Calls an LLM | Optionally | Always |
+| Can call other skills | No | Yes — composition |
+| Discovered via | `tools/` KV prefix | Capability system (`ns`/`name`) |
+| Started with | Any binary / language | `skillrunner --skill manifest.toml` |
+| Live chat example | `three_node_demo` — `wiki`, `weather`, `calculate` | `examples/community/` — researcher, writer, orchestrator |
+| Guide | [06-tool-discovery.md](06-tool-discovery.md) | [05-skills.md](05-skills.md) |
+
+#### When to use each
+
+Use an **MCP tool** when:
+- You need to call an external API (weather, Wikipedia, a database)
+- You need deterministic computation (arithmetic, format conversion)
+- You want to write the tool in Python, TypeScript, Go, or any language
+- The operation is stateless and fast
+
+Use a **Skill** when:
+- You need an LLM reasoning step in a pipeline
+- You want to compose agents — an orchestrator that calls a researcher that calls a writer
+- You want a persistent, named agent role that any node on the mesh can discover and invoke
+- You want to scale a reasoning step horizontally (run two researchers; the orchestrator uses both)
+
+#### They compose naturally
+
+The `three_node_demo` LLM node uses MCP tools for external lookups (`wiki`,
+`weather`, `sf_lookup`, `book_plot`). The `examples/community/` orchestrator
+uses Skills for LLM reasoning steps (`researcher`, `writer`). There is no
+conflict — a single planner can have both in scope simultaneously.
+
+---

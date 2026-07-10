@@ -223,8 +223,9 @@ Schema KV entries follow the same durability rules as all other KV writes:
 - Schema entries have no TTL — they remain until explicitly deleted or
   force-overwritten.
 
-See the [Durability contract](../../README.md#durability-contract) section of the
-README for the full persistence model.
+See [ch. 01's Layer I reference](01-gossip-kv.md#reference--layer-i-api--observability) and the
+`mycelium-core/src/persistence.rs` module docs for the full persistence model. *(This previously
+pointed at a README section that no longer exists — found dead in the 2026-07-10 docs restructure.)*
 
 ---
 

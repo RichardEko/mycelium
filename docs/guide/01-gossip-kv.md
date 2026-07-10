@@ -170,3 +170,96 @@ embed needs last-write-wins KV propagation and scoped events but not RPC,
 consensus, the capability system, or the HTTP gateway, depend on `mycelium-core`
 directly instead of `mycelium`. The full `mycelium` crate re-exports it, so the
 API is identical. See the README's *Which crate?* section and ROADMAP §v2.0 M1.
+
+---
+
+## Reference — Layer I API & observability
+
+*Moved from the repo README (2026-07-10) — the front page now links here; this is the single home.*
+
+```rust
+use mycelium::{GossipAgent, GossipConfig, NodeId};
+use std::sync::Arc;
+
+let mut config = GossipConfig::default();
+config.bootstrap_peers = vec!["127.0.0.1:7947".parse()?];
+
+let agent = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", 7946)?, config));
+agent.start().await?;
+
+// Write — local store always updated; returns false if gossip channel full
+agent.kv().set("key", Bytes::from("value"));
+
+// Read
+if let Some(bytes) = agent.kv().get("key") { /* ... */ }
+
+// Delete (propagates a tombstone)
+agent.kv().delete("key");
+
+// Enumerate live keys
+let keys: Vec<Arc<str>> = agent.kv().keys();
+
+// Scan by prefix — capability discovery, pheromone trail reads
+let entries = agent.kv().scan_prefix("load/");
+
+// Subscribe — watch::Receiver fires on every change (local or gossiped)
+let mut rx = agent.kv().subscribe("load/my-node");
+rx.changed().await?;
+println!("{:?}", *rx.borrow());  // None = tombstoned; Some(bytes) = current value
+
+agent.shutdown().await;
+```
+
+#### Layer I Observability
+
+`system_stats()` is the primary diagnostic surface. Poll it periodically or on anomalies:
+
+```rust
+let stats = agent.system_stats();
+
+// Propagation health — the most important number.
+// dropped_frames > 0 means gossip writes were silently lost.
+// Cause: writer_channel_depth or gossip_channel_capacity too small for the burst rate.
+// Fix: raise the limiting field (documented sizing formula in GossipConfig).
+assert_eq!(stats.dropped_frames, 0);
+
+// Topology
+println!("peers: {}", stats.peers);             // live peers in the ping table
+println!("store: {}", stats.store_entries);     // live KV entries (tombstones excluded)
+
+// Internal health — alert if false while agent is running
+assert!(stats.gc_alive);                        // tombstone expiry and subscription cleanup
+assert!(stats.health_monitor_alive);            // peer pings and eviction
+
+// Shard backpressure — non-zero means gossip workers are falling behind
+println!("shard depths: {:?}", stats.gossip_shard_queue_depths);
+println!("dead shards: {}", stats.dead_shards); // should always be 0
+```
+
+**Diagnostic flow when writes stop propagating:**
+
+```
+dropped_frames > 0?
+  YES → writer_channel_depth or gossip_channel_capacity too small
+        Size writer_channel_depth to N_agents × fan_out (default fan_out = 4)
+  NO  → peers == 0?  bootstrap_peers misconfigured or all peers unreachable
+        health_monitor_alive == false?  internal task failure — restart agent
+        shard_queue_depths saturated?   gossip_shards too low for write rate
+```
+
+**Topology introspection — is the store visible from the outside?**
+
+`scan_prefix` doubles as a topology query. After the cluster settles, every node's pheromone
+trail is visible from every other node via anti-entropy sync:
+
+```rust
+// Count live workers in the "nlp" pool
+let live_workers: Vec<LoadState> = agent.kv().scan_prefix("load/nlp/")
+    .into_iter()
+    .filter_map(|(_, b)| decode::<LoadState>(&b))
+    .filter(|s| unix_ms_now() - s.written_at_ms < 30_000)  // evaporation window
+    .collect();
+println!("{} live nlp workers", live_workers.len());
+```
+
+---
