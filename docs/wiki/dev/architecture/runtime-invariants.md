@@ -160,3 +160,30 @@ re-advanced (a second `system_propose` to the same slot returns `Superseded`, no
 and per-item consensus floods the engine (starves other consensus users — it broke overlay S12).
 Competitive per-item consumption is the *tuple-space's* job, by design; don't rebuild it on a
 log. History: #149 (the full got-10 → got-1 → got-10 dead-end is on the issue).
+
+## Distributed locks — the same converged-holder discipline, and the HLC fencing token (#164–#166)
+
+`ConsensusHandle::distributed_lock` (and its ergonomic layer `LockService`,
+`agent.consensus().locks()` — blocking `lock`, scoped `with_lock`) was the reusable lesson
+above **failing in shipping code**, found live #164 (probes, not review): (a) it returned on the
+*local* optimistic commit → **no mutual exclusion** (two racers both got a guard, `winners == 2`);
+(b) `do_release` tombstoned the plain `lock/{name}` key while the authoritative lock lives at
+`consensus/committed/lock/{name}` → release was a **no-op** and the lock was permanently
+unreleasable. Fixed #165 with the identical discipline: acquire confirms the converged committed
+value before returning; release clears the **authoritative** slot + lease, guarded on the exact
+committed value (`{holder}:{nonce}`) so a stale guard never clears a live holder's claim. The
+`ttl` is now a real consensus **lease** (`committed_lease_secs`), not a decorative JSON field.
+
+**The fencing token must be the commit HLC, not the ballot (#166).** A fencing token must be
+**monotonic** across successive holders (Kleppmann). The consensus *ballot* is not: it is
+per-node-local and gossip-lagged, so a later holder can commit at a *lower* ballot — the
+`distributed_lock` example showed it regressing (a legitimate write wrongly fenced). `LockGuard::token`
+is therefore the winning commit's **HLC** (`live_committed_with_hlc`) — strictly increasing across
+holders, because each holder causally observes the prior release. The gateway returns it as a
+**decimal string** (the HLC exceeds JS `MAX_SAFE_INTEGER`; the TS SDK already expected a string,
+Python parses it to `int`). **Reusable lesson:** when you need a monotonic token out of consensus,
+reach for the HLC of the commit, never the ballot. Gates: `distributed_lock_grants_single_holder_under_race`,
+`distributed_lock_release_frees_for_reacquire`, `distributed_lock_stale_release_does_not_clobber`
+(`src/agent/overlay_consistent.rs`), `fencing_token_is_monotonic_across_acquisitions`
+(`src/agent/lock_service.rs`).
+The runnable demo is `examples/distributed_lock.rs`.
