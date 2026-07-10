@@ -18,7 +18,8 @@ use std::{
 use tokio::{sync::{mpsc, watch}, task::JoinSet};
 
 mod lifecycle;
-mod kv;
+mod introspect;
+mod topology;
 pub(crate) mod kv_quorum;
 mod kv_quorum_ext;
 // kv_handle + mesh_handle moved to mycelium-core (v2 M3); the GossipAgent-driven

@@ -67,6 +67,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `never_seen_primary_promotes_after_orphan_grace` (#150, #158).
 
 ### Changed
+- **Internal: spawn-task context structs + the `kv.rs` fossil split** (analysis Run 42's
+  Conceptual Integrity warts, validated then fixed). `run_gossip_shard` (20 positional
+  params), `run_health_monitor` (24), and `run_gc_task` (13) now take
+  `GossipShardContext`/`HealthMonitorContext`/`GcContext` — the codebase's own
+  `ListenerContext` idiom, applied consistently. Field-name initialization eliminates the
+  silent same-typed positional-swap class (`dropped_frames`/`individual_flood_fallbacks` and
+  `backoff`/`idle_timeout` were adjacent identical types), and the next field addition is one
+  struct line instead of a multi-file positional thread. `src/agent/kv.rs` — which contained
+  zero KV methods (its name was a fossil from the v2 M3 core migration) — is split by concern
+  into `topology.rs` (peers, connect_peer/disconnect_peer, groups, drop counts) and
+  `introspect.rs` (identity, hot tunables, govern_timing, readiness, system_stats, fleet
+  views). Pure mechanical moves: no public API, behavior, wire, or lock changes.
 - **`InferenceRouter` is now robust to dead nodes** (`mycelium-reason`): routing candidates
   are filtered to live SWIM members (`GossipAgent::peers()`, plus self), so a departed node
   is dropped an order of magnitude faster than the ~90s capability-freshness window; and a
