@@ -248,7 +248,19 @@ pub(super) async fn run_http_server(
         app
     };
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    // SO_REUSEADDR, like the gossip listener (`tasks::new_listener`): without it, a fast
+    // process restart on a fixed port can hit AddrInUse from lingering TIME_WAIT tuples
+    // (server-side-closed HTTP connections linger ~60 s) and panic the whole node — seen as
+    // scenario 03's restart killing node-a on a CPU-starved hosted runner (#156 gate, PR
+    // #159 run). Plain `TcpListener::bind` sets no socket options; do it explicitly.
+    let sock = if addr.is_ipv6() {
+        tokio::net::TcpSocket::new_v6()
+    } else {
+        tokio::net::TcpSocket::new_v4()
+    }?;
+    sock.set_reuseaddr(true)?;
+    sock.bind(addr)?;
+    let listener = sock.listen(1024)?;
     info!(addr = %listener.local_addr().unwrap(), "HTTP server listening");
 
     axum::serve(listener, app)
