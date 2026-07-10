@@ -1156,6 +1156,32 @@
         posture the philosophy recommends for leadership and configuration decisions.
       </p>
     </div>
+
+    <h3>Legible emergence — reading the emergent level</h3>
+
+    <p>
+      If coordinators are emergent broken-symmetry states rather than designed-in machinery, a
+      practical worry follows: an emergent level with no coordinator has no console — nowhere to
+      ask "is the fleet healthy?" Anderson's own point answers it. The emergent level has its own
+      laws, so it has its own <em>observables</em>: opacity storms, a group whose roster has left
+      its governed band, a capability with no live provider, back-pressure oscillating. These are
+      properties of the higher level, invisible in any single node's local rules — yet every node
+      holds the same gossiped substrate the level emerged from, so <strong>every node can compute
+      the diagnosis itself</strong>. There is no collector to deploy and no privileged observer to
+      make load-bearing; the diagnosis is as coordinator-free as the thing it diagnoses. This is
+      <em>legible emergence</em>: the fleet is diagnosable without a fleet manager.
+    </p>
+
+    <p>
+      The honesty is in the qualifier. A node diagnoses from <em>its own</em> view, which may be
+      partial — so each diagnosis carries a view-confidence caveat (how many peers it is hearing,
+      how stale its inputs are), and at convergence independent nodes agree while a
+      <em>disagreement</em> between them is itself the signal that one is partitioned. A per-node
+      estimate labelled as such, not a false single source of truth — the same discipline this
+      document applies to leases and mandates, turned on observability. The taxonomy and detection
+      tiers are in <a href="design/legible-emergence-taxonomy.md">the legible-emergence design
+      record</a>; the operator runbook is <a href="operations/diagnostics.md">diagnostics.md</a>.
+    </p>
   </div>
 
   <!-- ── 6. What This Is Not ───────────────────────────────────────── -->

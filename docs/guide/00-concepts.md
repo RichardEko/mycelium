@@ -109,6 +109,9 @@ from. A **membership-governed group** is an emergent group whose size is bounded
 by a `MembershipIntent` the `MembershipGovernor` reconciles toward. →
 [`consensus`](../../examples/coop/src/bin/consensus.rs) (consensus group),
 [`elastic_intent`](../../examples/coop/src/bin/elastic_intent.rs) (governed).
+That is the split by *governance role*; groups also split by *API* — a **signal group**
+(`mesh().join_group`) vs a **capability group** (`capabilities().define_capability_group`), an
+orthogonal distinction covered in [the group-API note](README.md#groups--two-distinct-concepts).
 
 **Governed vs. ungoverned.** By default a group is **ungoverned**: it just self-organises — nodes
 join/leave by capability, and the size is whatever it is. A group becomes **governed** only when

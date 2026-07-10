@@ -228,7 +228,10 @@ pub use agent::{
 };
 // Elastic group sizing (Track 2a).
 pub use agent::{MembershipAction, MembershipIntent, MEMBERSHIP_INTENT_TTL_MS, MEMBERSHIP_PREFIX};
-// Legible Emergence — fleet diagnostics as data (localize · explain · diagnose). `GroupStatus`
+// Legible Emergence — fleet diagnostics as data (localize · explain · diagnose). `localize`
+// (`fleet_snapshot`) and `diagnose` (`fleet_diagnosis`) are node-local reads exposed here;
+// `explain` is intentionally gateway-only (`GET /gateway/explain`) — it is a cross-node `sys.explain`
+// RPC fan-out, not a local read, so it has no in-process accessor by design. `GroupStatus`
 // stays crate-internal (bare name is the mesh type); reach it via `FleetSnapshot.governed_groups`.
 pub use agent::{
     FleetDiagnosis, FleetSnapshot, Finding, Severity, StoreConvergence, ThrottleEdge, ViewConfidence,

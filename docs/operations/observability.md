@@ -58,6 +58,16 @@ artifact-library, guardrails, and reason-routing families. Scrape it like any se
 emitted series (type, feature, meaning, and what to watch for), one section per family.
 The gossip names above are just a teaser.
 
+### A note on the `system` scope name
+
+Signals and consensus proposals carry a **scope** — `Cluster`, `Group`, or `Individual` (you'll see
+it as the `scope` label on `gossip_signals_*` and as the `scope` field on a gateway signal emit).
+**`Cluster` was called `System` before 2026-07-10.** The wire is unchanged and the gateway + SDKs
+still accept `"system"` as a deprecated alias, so an old dashboard, config, or client that says
+`"system"` still works and means `Cluster`. (`system_stats()` is unrelated — that is node-local
+runtime state, not a scope.) Full vocabulary:
+[guide 13 · Scope vocabulary](../guide/13-cluster-topology.md#scope-vocabulary-cluster--group--individual).
+
 ## Naming environments & monitoring many clusters
 
 **A cluster has no built-in name** — a node is identified by its `node_id`

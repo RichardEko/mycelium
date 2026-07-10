@@ -47,6 +47,12 @@ signals (`SignalScope`) and consensus:
 The relationship: `node ∈ group(s) ⊆ cluster`. **Cluster-scope = the whole cluster** — it is an
 *addressing mode*, not a fourth topology level; there is nothing between cluster and group.
 
+**Why one vocabulary for both signals and consensus?** Reach is reach: "this concerns the whole
+cluster / this group / one node" is the same question whether you are *emitting a signal* or
+*proposing a consensus value*. Sharing the three scopes across `SignalScope` and the `*_propose`
+family — rather than inventing two parallel sets — is what lets you reason about addressing once and
+apply it everywhere.
+
 **Defining and monitoring a group** (who's in it, is it healthy): see the cookbook recipe
 [*"How do I define a group, and monitor who's in it?"*](cookbook.md#how-do-i-define-a-group-and-monitor-whos-in-it)
 — `join_group` / `define_capability_group` to define; `mesh().group_members(name)`,

@@ -5,13 +5,22 @@ unhealthy. Instead **every node computes the diagnosis itself**, from the gossip
 holds — no collector, no daemon. Kill any node and you lose nothing; ask any surviving node and it
 answers. This is the operator surface for that.
 
-Three verbs, three endpoints (all scope `fleet:read`; all also available programmatically):
+Three verbs, three endpoints (all scope `fleet:read`; `localize` + `diagnose` are also in-process —
+`explain` is gateway-only by design, see below):
 
 | Verb | "…" | Endpoint | API |
 |---|---|---|---|
 | **localize** | *what* is off, and *where* | `GET /gateway/fleet` | `agent.fleet_snapshot()` |
 | **explain** | the *sequence* that produced it | `GET /gateway/explain?since=` | *(cross-node event ring)* |
 | **diagnose** | *why*, and what to do | `GET /gateway/diagnose` | `agent.fleet_diagnosis()` |
+
+> **`explain` is gateway-scoped by design.** `localize` and `diagnose` are pure node-local reads,
+> exposed in-process as `agent.fleet_snapshot()` / `agent.fleet_diagnosis()`. `explain` is
+> different: it is a **best-effort cross-node fan-out** (a bounded `sys.explain` RPC to peers) that
+> stitches the causal event sequence together fleet-wide, so it lives at the gateway
+> (`GET /gateway/explain?since=`) rather than as an in-process call — the temporal fan-out is an
+> HTTP-scoped operation, not a local read. In-process you have a node's *own* event ring (the local
+> slice); the cross-node stitch is the endpoint's job.
 
 Start with **diagnose**. It runs a rule engine over the snapshot and returns a plain-English,
 most-severe-first list of findings — the artifact an on-call engineer who did not build the system
