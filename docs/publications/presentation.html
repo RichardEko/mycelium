@@ -470,7 +470,7 @@
       <div class="sp-card sp-card-3">
         <div class="sp-icon">🧠</div>
         <div class="sp-title">Consensus Without Coordinators</div>
-        <div class="sp-body">Distributed locks, leader election, and ballot-serialized writes via epidemic consensus. No Raft leader, no ZooKeeper, no quorum node you can't lose.</div>
+        <div class="sp-body">A distributed-lock service (blocking acquire, scoped critical sections, monotonic HLC fencing tokens), leader election, and ballot-serialized writes via epidemic consensus. No Raft leader, no ZooKeeper, no quorum node you can't lose.</div>
       </div>
       <div class="sp-card sp-card-4">
         <div class="sp-icon">🌊</div>
@@ -972,12 +972,12 @@ providers = agent.<span class="cs">resolve_capability</span>(<span class="cv">"c
 <div class="slide" id="s11">
   <div class="slide-top"><span class="eyebrow">Production Ready</span><span class="slide-num">12 / 25</span></div>
   <div class="slide-body">
-    <div class="slide-title">Battle-tested.<br><em>Shipping-ready.</em></div>
+    <div class="slide-title">Execution-gated.<br><em>Every fix leaves a regression gate.</em></div>
     <div class="cols2" style="gap:20px;margin-top:8px;">
       <div style="display:flex;flex-direction:column;gap:12px;">
         <div class="card card-accent-green">
-          <div class="card-title">Tested across five crates · 13/13 integration scenarios</div>
-          <div class="card-body">Lib tests across the full feature matrix and the workspace crates (core substrate, full crate, tuple-space, blackboard, AgentFacts, WASM-host, wiki), plus 13 end-to-end Docker scenarios and time-boxed libFuzzer runs of the wire/capability decoders. KV propagation, gossip boundaries, consensus, anti-entropy, AFN, Prompt Skills, TupleSpace, the wiki curator + gateway — all automated, all passing.</div>
+          <div class="card-title">CI-gated cross-node suites · 13 integration + 3 overlay scenarios</div>
+          <div class="card-body">Lib tests across the full feature matrix and the workspace crates (core, full, tuple-space, blackboard, AgentFacts, WASM-host, wiki), plus the multi-container Docker suites — <strong>now CI-gated, no retries</strong>: a real regression turns the gate red. Wiring them in is what surfaced (and fixed, each with a permanent gate) real defects the in-process tests couldn't reach — the discipline is honesty, not green-by-retry. Time-boxed libFuzzer runs cover the wire/capability decoders.</div>
         </div>
         <div class="card card-accent-blue">
           <div class="card-title">Wire version policy</div>
@@ -988,8 +988,8 @@ providers = agent.<span class="cs">resolve_capability</span>(<span class="cv">"c
           <div class="card-body">WAL-backed KV store with <code>SyncMode::Flush</code>. State survives unclean shutdowns. Anti-entropy ensures late joiners and restarters converge to the same state.</div>
         </div>
         <div class="card card-accent-orange">
-          <div class="card-title">100-node scale tested</div>
-          <div class="card-body"><code>make test-scale</code> spins 100 Docker nodes: cluster formation, KV write propagation seed→mgmt, zero dropped frames. Validated at production scale.</div>
+          <div class="card-title">100-node scale suites</div>
+          <div class="card-body"><code>make test-scale</code> spins 100 Docker nodes: cluster formation, KV write propagation seed→mgmt, dropped-frame accounting. Single-host runs hit a known Docker-bridge iptables ceiling (documented) — true 100-node coverage runs nightly on self-hosted hardware; multi-host k8s is the axis past that.</div>
         </div>
         <div class="card card-accent-green">
           <div class="card-title">v1.x compliance layer (<code>compliance</code> feature)</div>
@@ -1022,16 +1022,16 @@ providers = agent.<span class="cs">resolve_capability</span>(<span class="cv">"c
 <div class="slide" id="sCoop">
   <div class="slide-top"><span class="eyebrow">Showcase</span><span class="slide-num">·· / ··</span></div>
   <div class="slide-body">
-    <div class="slide-title">One world. <em>Eleven demos.</em></div>
-    <div class="slide-sub">The <strong>Food-Rescue Co-op</strong> (<code>examples/coop/</code>) — depot nodes rescuing surplus food, no central dispatcher. Not isolated API toys: one runnable demo per capability area, composed in a single constructive world, each calling out a pattern &amp; pitfall. The whole suite runs Docker-free and is CI-gated (<code>coop-smoke</code>).</div>
+    <div class="slide-title">One world. <em>Fourteen demos.</em></div>
+    <div class="slide-sub">The <strong>Food-Rescue Co-op</strong> (<code>examples/coop/</code>) — depot nodes rescuing surplus food, no central dispatcher. Not isolated API toys: one runnable demo per capability area, composed in a single constructive world, each calling out a pattern &amp; pitfall. Twelve run Docker-free and CI-gated (<code>coop-smoke</code>); two are manual real-model deploys.</div>
     <div class="cols3" style="gap:12px;">
       <div class="card card-accent-blue" style="padding:14px 16px;">
         <div class="card-title">Self-organising fabric</div>
-        <div class="card-body"><strong>01</strong> actor↔LLM via the HLC-ordered mailbox · <strong>02</strong> stigmergic load-shed (<code>sys/load</code> pheromone) · <strong>03</strong> elastic intent (operator-optional governor)</div>
+        <div class="card-body"><strong>01</strong> actor↔LLM via the HLC-ordered mailbox · <strong>02</strong> stigmergic load-shed (<code>sys/load</code> pheromone) · <strong>03</strong> elastic intent (operator-optional governor) · <strong>12</strong> coordinator-free diagnostics</div>
       </div>
       <div class="card card-accent-orange" style="padding:14px 16px;">
         <div class="card-title">Mobility &amp; federation</div>
-        <div class="card-body"><strong>04</strong> ⭐ the autonomic loop (tuple-space + WASM self-provision + failover) · <strong>05</strong> cross-domain AgentFacts · <strong>06</strong> zero-disruption identity rotation · <strong>11</strong> the cluster artifact catalogue</div>
+        <div class="card-body"><strong>04</strong> ⭐ the autonomic loop (tuple-space + WASM self-provision + failover) · <strong>05</strong> cross-domain AgentFacts · <strong>06</strong> zero-disruption identity rotation · <strong>11</strong> the cluster artifact catalogue · <strong>M/M+</strong> a real GGUF model deployed &amp; rehealed through the library</div>
       </div>
       <div class="card card-accent-purple" style="padding:14px 16px;">
         <div class="card-title">Agreement &amp; LLM coordination</div>
@@ -1039,7 +1039,7 @@ providers = agent.<span class="cs">resolve_capability</span>(<span class="cv">"c
       </div>
     </div>
     <div class="callout callout-green" style="font-size:12.5px;">
-      <strong>Why one world, not eleven toys.</strong> Stress-testing the suite is how the fabric is hardened in anger — it surfaced and fixed the governor-vs-auto-join race, the retained-key gap, and the cross-node Individual-signal relay. The examples don't just <em>demonstrate</em> the substrate; they <em>exercise</em> it. <code>cargo run -p mycelium-coop-examples --bin provisioning</code>
+      <strong>Why one world, not fourteen toys.</strong> Executing the suite — and the CI gate that now runs it — is how the fabric is hardened in anger: it has surfaced and fixed, each with a permanent regression gate, the governor-vs-auto-join race, the retained-key gap, the cross-node Individual-signal relay, a consumer-group split-brain, and — most tellingly — two <em>Critical</em> bugs in the distributed lock (no mutual exclusion; unreleasable) that reading the code never caught. The examples don't just <em>demonstrate</em> the substrate; they <em>exercise</em> it. <code>cargo run -p mycelium-coop-examples --bin provisioning</code>
     </div>
   </div>
 </div>
@@ -1138,18 +1138,18 @@ docker compose up --build --scale worker=10
       <div style="display:flex;flex-direction:column;gap:12px;">
         <div class="card card-accent-green">
           <div class="card-title">Developer guide</div>
-          <div class="card-body"><code>docs/guide/README.md</code> — 12 chapters covering every pattern from basic KV through Agentic Flow Networks and cross-group consensus. Runnable examples throughout.</div>
+          <div class="card-body"><code>docs/guide/README.md</code> — 17 chapters (00–16) covering every pattern from basic KV through Agentic Flow Networks, cross-group consensus, and the distributed lock service. Runnable examples throughout.</div>
         </div>
         <div class="card card-accent-blue">
           <div class="card-title">Integration scenarios</div>
-          <div class="card-body"><code>make test</code> runs all 13 Docker scenarios unattended. Each scenario is a runnable reference implementation of a specific pattern.</div>
+          <div class="card-body"><code>make test</code> runs all 13 Docker scenarios unattended — now CI-gated. Each scenario is a runnable reference implementation of a specific pattern.</div>
         </div>
         <div class="card card-accent-purple">
           <div class="card-title">Federation (shipped)</div>
           <div class="card-body">Mount the <code>mycelium-agentfacts</code> lens: each node serves a self-certified, signed AgentFacts quilt-patch at <code>/.well-known/agent-facts.json</code>. Sovereign discovery on the agent internet — no issuer authority.</div>
         </div>
         <div class="callout callout-green">
-          <strong>Philosophy:</strong> if you need to manage infrastructure to use Mycelium, something has gone wrong. The goal is zero ops — embed it, start it, forget it.
+          <strong>Philosophy:</strong> if you need to manage infrastructure to use Mycelium, something has gone wrong — embed it, start it, forget it. Agent fleets are churny, heterogeneous, and partially-trusted: exactly the envelope this substrate commits to, so new coordination patterns become <em>packaging exercises, not substrate changes</em>. A foundation for next-generation agentic AI — not another framework to outgrow.
         </div>
       </div>
     </div>
@@ -1350,10 +1350,10 @@ agent.<span class="cs">mesh</span>().<span class="cs">suppress</span>(<span clas
 agent.<span class="cs">consensus</span>().<span class="cs">consistent_set</span>(<span class="cv">"key"</span>, val).await?;
 <span class="ck">let</span> v = agent.<span class="cs">consensus</span>().<span class="cs">consistent_get</span>(<span class="cv">"key"</span>);
 
-<span class="cm">// Distributed lock with fencing token</span>
-<span class="ck">let</span> lock = agent.<span class="cs">consensus</span>()
-  .<span class="cs">distributed_lock</span>(<span class="cv">"job-42"</span>, ttl_secs=<span class="cn">30</span>).await?;
-println!(<span class="cv">"token: {}"</span>, lock.token); <span class="cm">// monotonic fencing token</span>
+<span class="cm">// Distributed lock service — blocking acquire + monotonic fencing token</span>
+<span class="ck">let</span> lock = agent.<span class="cs">consensus</span>().<span class="cs">locks</span>()
+  .<span class="cs">lock</span>(<span class="cv">"job-42"</span>, ttl, wait).await?;
+<span class="cs">stamp_resource</span>(lock.token); <span class="cm">// resource rejects a lower token → stale writers fenced</span>
 
 <span class="cm">// Leader election</span>
 <span class="ck">let</span> leader = agent.<span class="cs">consensus</span>().<span class="cs">elect_leader</span>(<span class="cv">"shard-0"</span>).await?;
