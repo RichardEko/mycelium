@@ -219,7 +219,7 @@ pub use agent::{
 };
 // Layer III consensus + the consistency overlay built on it (v2 M2 feature gate).
 #[cfg(feature = "consensus")]
-pub use agent::{ConsensusHandle, ConsistencyError, LockGuard};
+pub use agent::{ConsensusHandle, ConsistencyError, LockGuard, LockService};
 // WS-C M9: self-managing-metabolism config tuner + governance.
 pub use agent::{accept_all, clamped, reject_all, ConfigPolicy, CONFIG_PREFIX};
 pub use agent::{

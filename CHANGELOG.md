@@ -10,6 +10,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **`LockService` — the distributed-lock service** (`agent.consensus().locks()`): the ergonomic
+  layer over `distributed_lock` with **blocking acquire** (`lock(name, ttl, wait)` waits out
+  contention instead of failing immediately) and a **scoped critical section**
+  (`with_lock(...)`, release guaranteed on every exit path). Ships with a runnable
+  `examples/distributed_lock.rs` (three nodes contend + fence a resource), a when-to-use table
+  (lock vs work-queue vs leader-election vs consistent_set), and the leased-lock/fencing-token
+  discipline in guide ch. 04. Gates: `lock_blocks_then_acquires_when_freed`,
+  `with_lock_releases_after_section`, `lock_times_out_while_held`.
+- **Lock fencing token is now the commit HLC, not the ballot** (found by the new example): the
+  ballot regresses under gossip lag (a later holder could get a *lower* token, wrongly fencing a
+  legitimate write), so `LockGuard::token` is now the winning commit's HLC — **monotonic across
+  successive holders**. Gate: `fencing_token_is_monotonic_across_acquisitions`. The gateway
+  returns it as a decimal **string** (the HLC exceeds JS safe-integer range; the TS SDK already
+  expected a string, the Python SDK parses it to `int`).
+
+### Added
 - **`GossipAgent::connect_peer` / `disconnect_peer`** — pin (and actively warm) a direct
   forwarding route to an RPC-heavy peer. The forwarding-target set deliberately de-pins
   non-active peers (seed scalability), which silently degrades Individual-scoped

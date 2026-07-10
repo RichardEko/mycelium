@@ -15,6 +15,7 @@ New here? Start with the zero-setup ladder, then pick a cluster below.
 | [`hello_mesh.rs`](hello_mesh.rs) | Two agents share a KV value by gossip — the substrate in ~25 lines | `cargo run --example hello_mesh` |
 | [`hello_capability.rs`](hello_capability.rs) | Broker-less discovery + RPC: advertise `math/double`, resolve it *by name*, call it | `cargo run --example hello_capability` |
 | [`conway.rs`](conway.rs) | Conway's Life on a 16×16 gossip mesh — *watch* KV convergence (guide ch. 01) | `cargo run --example conway` |
+| [`distributed_lock.rs`](distributed_lock.rs) | Mutual exclusion across 3 nodes + a **fencing token** that refuses stale writers (guide ch. 04) | `cargo run --example distributed_lock` |
 | [`invoke_skill.rs`](invoke_skill.rs) | Minimal SkillRunner caller — the smallest skills client (pairs with `community/`) | `cargo run --example invoke_skill` |
 | [`semantic_coordination.rs`](semantic_coordination.rs) | Agents coordinating via semantic capability matching | `cargo run --example semantic_coordination` |
 

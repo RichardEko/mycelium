@@ -380,6 +380,14 @@ impl ConsensusHandle {
             .or_else(|| kv_get(&self.ctx, key))
     }
 
+    /// The [distributed lock **service**](super::LockService) — blocking acquire, scoped critical
+    /// sections, and the when-to-use guidance — over this handle's [`distributed_lock`](Self::distributed_lock).
+    ///
+    /// `distributed_lock` is the raw try-lock; `locks()` is the ergonomic layer most callers want.
+    pub fn locks(&self) -> super::LockService {
+        super::LockService { ctx: std::sync::Arc::clone(&self.ctx) }
+    }
+
     /// Acquire a named distributed lock via cluster consensus.
     ///
     /// A **leased, mutually-exclusive** lock: exactly one holder cluster-wide until it releases
@@ -414,26 +422,28 @@ impl ConsensusHandle {
         };
 
         match self.system_propose(&slot, value.clone(), cfg).await {
-            ConsensusResult::Committed { ballot, .. } => {
+            ConsensusResult::Committed { .. } => {
                 // #164 bug A: two proposers can both *optimistically* commit against their own
                 // local view — the propose return is NOT mutually exclusive. Commit-keys are
                 // LWW-resolved by HLC, so let the winning commit converge, then read the
                 // authoritative converged value; only the node whose value survived holds the
                 // lock. Losers get `Superseded` and never receive a guard.
                 tokio::time::sleep(Duration::from_millis(1000)).await;
-                let is_me = crate::consensus::live_committed_value(
-                        &self.ctx.kv_state, &slot, crate::consensus::wall_now_ms())
-                    .as_deref() == Some(value.as_ref());
-                if is_me {
-                    Ok(LockGuard {
-                        ctx:      Arc::clone(&self.ctx),
-                        name:     Arc::from(name),
-                        value,
-                        token:    ballot,
-                        released: false,
-                    })
-                } else {
-                    Err(ConsistencyError::Superseded)
+                match crate::consensus::live_committed_with_hlc(
+                        &self.ctx.kv_state, &slot, crate::consensus::wall_now_ms()) {
+                    // Fencing token is the commit's HLC, not the ballot: the HLC is monotonic
+                    // across successive holders (each observes the prior release), so a resource
+                    // that rejects a lower token is actually fenced. The ballot regresses under
+                    // gossip lag and is unsafe for fencing (#164 example finding).
+                    Some((converged, hlc)) if converged.as_ref() == value.as_ref() =>
+                        Ok(LockGuard {
+                            ctx:      Arc::clone(&self.ctx),
+                            name:     Arc::from(name),
+                            value,
+                            token:    hlc,
+                            released: false,
+                        }),
+                    _ => Err(ConsistencyError::Superseded),
                 }
             }
             ConsensusResult::Timeout { ballots_tried, .. } =>
