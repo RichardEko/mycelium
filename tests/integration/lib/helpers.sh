@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # Sourced by every scenario script — do NOT execute directly.
 
+# Every scenario runs `set -euo pipefail` with `curl -sf` calls, so a failing request kills the
+# script with *empty stderr* — in CI that surfaces as a bare FAIL with no clue which phase died
+# (this hid the S13 failure detail on the first hosted cluster-suites run; #150/#156). The ERR
+# trap names the dying command and line, so a red gate is diagnosable from the runner log alone.
+# (ERR skips `if`/`&&`/`||`-guarded commands — the poll_until/kv_get internals stay silent.)
+trap 'echo "ERR ${0##*/}:${LINENO}: \`${BASH_COMMAND}\` exited $?" >&2' ERR
+
 # wait_for_health HOST HTTP_PORT [TIMEOUT_SECS]
 wait_for_health() {
     local host="$1" port="$2" timeout="${3:-30}"

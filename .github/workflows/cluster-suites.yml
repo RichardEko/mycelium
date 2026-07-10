@@ -1,0 +1,64 @@
+# Docker-compose cluster suites — the cross-node tests the in-process smokes can't cover.
+#
+# The main CI (ci.yml) gates the *in-process* example smokes (coop, fluid_pipeline, community,
+# the langgraph ladder) — fast, no Docker. These two suites are different: they stand up a real
+# multi-container cluster over a Docker bridge and exercise real TCP, real anti-entropy, a
+# late-joiner rejoin, and the overlay task-auction / leader-election / shared-log paths —
+# behaviour the in-process smokes structurally cannot reach. They were manual-only
+# (`make test` / `make test-overlay`); this gates them.
+#
+# Cadence is deliberate. The Docker image build is heavy (~10–15 min), so we do NOT run these on
+# every PR — only on PRs that actually touch the substrate or the cluster harness (path filter
+# below), plus every merge to main, nightly, and on demand. Doc-only PRs skip them entirely. (The
+# 100-node *scale* suites stay out of hosted CI on purpose — the single-host Docker-bridge iptables
+# ceiling makes them flaky above ~50 nodes on a 2-core hosted runner; see
+# docs/wiki/dev/testing/scale-tests.md. These two are small — 4 and 3 nodes — and converge cleanly.)
+#
+# No retries. Each scenario runs once: a real regression turns the gate red, which is the point.
+# The suites were manual-only precisely because wiring them found real defects (#149 exact-once,
+# #150 S13 flood-relay latency) — both now fixed at the substrate layer, so the gate stands on a
+# deterministic base rather than papering over a flake with re-runs.
+name: Cluster suites (Docker)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'mycelium-core/**'
+      - 'mycelium-tuple-space/**'
+      - 'tests/integration/**'
+      - 'tests/overlay/**'
+      - 'docker/**'
+      - 'examples/three_node_demo.rs'
+      - '.github/workflows/cluster-suites.yml'
+  schedule:
+    - cron: '0 5 * * *'   # nightly 05:00 UTC — catches drift even with no code change
+  workflow_dispatch: {}   # run on demand before a risky merge
+
+jobs:
+  integration:
+    name: Integration scenarios (13, 4-node Docker cluster)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # `make test`: docker-compose up --build (node-a/b, late-joiner node-c, mgmt, runner),
+      # runner drives tests/integration/scenarios/*, exit code is the runner's.
+      - name: Integration suite (make test)
+        run: make test
+
+  overlay:
+    name: Overlay scenarios (S11/S12/S13, 3-node Docker cluster)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # `make test-overlay`: 3-node overlay cluster (task auction / leader election / shared
+      # reasoning log). Un-held 2026-07-09 — the two defects that wiring it surfaced are fixed:
+      #   #149  subscribe_log_group exact-once — leased consensus claim + converged-holder read.
+      #   #150  S13 secondary→primary RPC flood-relay latency — connect_peer pins + warms the
+      #         direct route; verified `make test-overlay` 5/5 clean before this gate landed.
+      - name: Overlay suite (make test-overlay)
+        run: make test-overlay
