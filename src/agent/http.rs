@@ -2066,27 +2066,36 @@ async fn gw_overlay_lock_acquire(
     State(ctx): State<Arc<HttpCtx>>,
     Json(body):  Json<LockAcquireBody>,
 ) -> impl IntoResponse {
-    use std::time::{SystemTime, UNIX_EPOCH};
     let ttl_secs = body.ttl_secs.unwrap_or(30).clamp(1, 3600);
-    let now_ms   = SystemTime::now().duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64).unwrap_or(0);
-    let lock_json = serde_json::json!({
-        "holder":     ctx.agent_ctx.node_id.to_string(),
-        "expires_ms": now_ms + ttl_secs * 1000,
-    });
-    let value = Bytes::from(serde_json::to_vec(&lock_json).unwrap_or_default());
     let slot  = format!("lock/{}", body.name);
+    // #164: `{holder}:{nonce}` value + a real consensus lease from ttl + converged-holder
+    // confirmation — the same fix as the Rust `distributed_lock`. The pre-fix gateway lock had
+    // all three bugs (no mutual exclusion, decorative ttl, unreleasable slot).
+    let value = Bytes::from(
+        format!("{}:{:016x}", ctx.agent_ctx.node_id, fastrand::u64(..)).into_bytes(),
+    );
+    let cfg = crate::consensus::ConsensusConfig {
+        committed_lease_secs: Some(ttl_secs),
+        ..crate::consensus::ConsensusConfig::default()
+    };
 
-    let result = overlay_system_propose(
-        &ctx.agent_ctx, &slot, value,
-        crate::consensus::ConsensusConfig::default(),
-    ).await;
+    let result = overlay_system_propose(&ctx.agent_ctx, &slot, value.clone(), cfg).await;
 
     match result {
         crate::consensus::ConsensusResult::Committed { ballot, .. } => {
+            // Confirm the converged holder before handing out a guard (bug A).
+            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+            let is_me = crate::consensus::live_committed_value(
+                    &ctx.agent_ctx.kv_state, &slot, crate::consensus::wall_now_ms())
+                .as_deref() == Some(value.as_ref());
+            if !is_me {
+                return (StatusCode::CONFLICT,
+                    Json(json!({ "ok": false, "error": "superseded" }))).into_response();
+            }
             let guard = LockGuard {
                 ctx:      Arc::clone(&ctx.agent_ctx),
                 name:     Arc::from(body.name.as_str()),
+                value,
                 token:    ballot,
                 released: false,
             };

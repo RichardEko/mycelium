@@ -26,6 +26,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   nightly for the 100-node scale suites is staged separately (#157).
 
 ### Fixed
+- **`distributed_lock` is now a correct mutually-exclusive, releasable lock** (#164). Two
+  execution-confirmed bugs: (A) acquire returned on its *local optimistic* consensus commit
+  without confirming the LWW-converged holder, so two racers both got a guard (no mutual
+  exclusion — reproduced `winners == 2`); (B) release tombstoned the plain key `lock/{name}`
+  while the authoritative lock lives at `consensus/committed/lock/{name}`, so release was a
+  no-op and a lock, once taken, was **permanently unreleasable**. Fixes (the #151 converged-
+  holder discipline): the value is `{holder}:{nonce}` with a real consensus **lease** derived
+  from `ttl` (the old `expires_ms` field was never enforced); acquire confirms the converged
+  value before returning a guard (losers get `Superseded`); release clears the authoritative
+  slot + lease, guarded so a stale guard (lease lapsed / another acquire won / same node
+  re-acquired) can never clear the live holder's claim. The HTTP gateway lock
+  (`POST /gateway/overlay/lock/acquire`) had the same three bugs and gets the same fix. Gates:
+  `distributed_lock_grants_single_holder_under_race`,
+  `distributed_lock_release_frees_for_reacquire`,
+  `distributed_lock_stale_release_does_not_clobber` (all verified failing pre-fix). Coarse-
+  grained by design: a consensus round per acquire, ~1 s to let the commit converge.
 - **Self-targeted Individual signals no longer flood the cluster**: a frame whose target is
   the local node (a self-emit like mailbox deliver-to-self, or a relayed frame arriving at
   its destination) terminated locally but still entered the forward path — no route to self

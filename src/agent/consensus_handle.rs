@@ -382,33 +382,60 @@ impl ConsensusHandle {
 
     /// Acquire a named distributed lock via cluster consensus.
     ///
-    /// Returns a [`LockGuard`] that releases the lock on drop.
-    /// `ttl` is advisory — stored in the lock record for fencing-token expiry checks.
+    /// A **leased, mutually-exclusive** lock: exactly one holder cluster-wide until it releases
+    /// (drop / [`release`](LockGuard::release)) or `ttl` elapses (the lock auto-expires — the
+    /// commit carries a consensus lease). The returned [`LockGuard::token`] is a monotonic fencing
+    /// token for resource-side checks.
+    ///
+    /// Coarse-grained by design (a consensus round per acquire, ~1 s to let the commit converge) —
+    /// suited to leader election, shard/config ownership, not high-rate fine-grained locking.
+    ///
+    /// Returns [`ConsistencyError::Superseded`] if another holder won the lock (or a live lease is
+    /// held elsewhere). #164: the pre-2026-07-10 implementation returned on the *local* optimistic
+    /// commit (no mutual exclusion under a race) and its release tombstoned the wrong key (locks
+    /// were permanently unreleasable) — both fixed here via the converged-holder discipline (#151).
     #[tracing::instrument(level = "debug", skip(self), fields(node = %self.ctx.node_id))]
     pub async fn distributed_lock(
         &self,
         name: &str,
         ttl:  Duration,
     ) -> Result<LockGuard, ConsistencyError> {
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+        let slot = format!("lock/{name}");
+        // Value = `{holder}:{nonce}` (#164). Expiry is the consensus commit-*lease* below, not a
+        // JSON `expires_ms` field: the old field was never enforced (the lock never expired). The
+        // per-acquire nonce makes each guard's value unique, so release can tell this acquisition
+        // apart from any later one (even the same node re-acquiring after its lease lapsed).
+        let value = Bytes::from(
+            format!("{}:{:016x}", self.ctx.node_id, fastrand::u64(..)).into_bytes(),
+        );
+        let cfg = ConsensusConfig {
+            committed_lease_secs: Some(ttl.as_secs().max(1)),
+            ..ConsensusConfig::default()
+        };
 
-        let lock_json = serde_json::json!({
-            "holder":     self.ctx.node_id.to_string(),
-            "expires_ms": now_ms + ttl.as_millis() as u64,
-        });
-        let value = Bytes::from(serde_json::to_vec(&lock_json).unwrap_or_default());
-        let slot  = format!("lock/{name}");
-
-        match self.system_propose(&slot, value, ConsensusConfig::default()).await {
-            ConsensusResult::Committed { ballot, .. } => Ok(LockGuard {
-                ctx:      Arc::clone(&self.ctx),
-                name:     Arc::from(name),
-                token:    ballot,
-                released: false,
-            }),
+        match self.system_propose(&slot, value.clone(), cfg).await {
+            ConsensusResult::Committed { ballot, .. } => {
+                // #164 bug A: two proposers can both *optimistically* commit against their own
+                // local view — the propose return is NOT mutually exclusive. Commit-keys are
+                // LWW-resolved by HLC, so let the winning commit converge, then read the
+                // authoritative converged value; only the node whose value survived holds the
+                // lock. Losers get `Superseded` and never receive a guard.
+                tokio::time::sleep(Duration::from_millis(1000)).await;
+                let is_me = crate::consensus::live_committed_value(
+                        &self.ctx.kv_state, &slot, crate::consensus::wall_now_ms())
+                    .as_deref() == Some(value.as_ref());
+                if is_me {
+                    Ok(LockGuard {
+                        ctx:      Arc::clone(&self.ctx),
+                        name:     Arc::from(name),
+                        value,
+                        token:    ballot,
+                        released: false,
+                    })
+                } else {
+                    Err(ConsistencyError::Superseded)
+                }
+            }
             ConsensusResult::Timeout { ballots_tried, .. } =>
                 Err(ConsistencyError::Timeout { ballots_tried }),
             ConsensusResult::Superseded { .. } =>
