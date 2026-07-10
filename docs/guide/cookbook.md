@@ -29,7 +29,7 @@ The [example portfolio](README.md#example-portfolio) lists what each one teaches
 
 ### How do I embed Mycelium in my service?
 
-Pick the crate ([guide intro](README.md#which-crate)): `mycelium` (full) or
+Pick the crate ([guide intro](README.md#which-crate--mycelium-vs-mycelium-core)): `mycelium` (full) or
 `mycelium-core` (Layers I+II only). Then:
 
 ```rust
