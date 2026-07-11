@@ -17,6 +17,19 @@ actionable next step, in a doc addressed to that persona or cross-linked) · **T
 partial / wrong-audience / HOW missing) · **Missing** · **N/A** (legitimately not that persona's
 concern). WHY is usually shared Dev+Ops.
 
+## Changelog
+
+- **2026-07-11 (run 2)** — diff-gated re-audit. Nothing in the existing matrix's *concept* cells
+  changed since the seed (the post-seed commits were the wire-compat gate, wiki ingests, the two new
+  skills, and persuasion-surface fixes) — those rows **carry**. One **new concept row** was surfaced
+  by the wire-compat gate: **Rolling upgrade**. WHY/WHAT/HOW·Dev were covered (`building-on-mycelium`,
+  `faq`, `09-security`, `error-handling`); **HOW·Ops was Thin** — only a one-line "supported"
+  assurance in `production-readiness`, no procedure. *Fixed:* added `operations/deployment.md §
+  Rolling upgrades` (node-by-node procedure + the two-step-gap tripwire) with cross-links from
+  `09-security` and `production-readiness`. Also fixed a **staleness the seed missed** —
+  `09-security.md` cited wire **v10/v9** as current → **v12/v11** (logged under Calibration).
+- **2026-07-10 (run 1, seed)** — the full four-auditor audit + Tier 1–3 remediation (below).
+
 ## Headline
 
 The architecture holds up: `docs/README.md` assigns every area a document *type* and each doc a
@@ -50,8 +63,9 @@ closed it.
 | Federation / AgentFacts | ✓ | ✓ | ✓ ᵀ¹ | ✓ | ✓ |
 | Reasoning / LLM / MCP / guardrails | ✓ | ✓ | ✓ ᵀ² | ✓ | ✓ |
 | Companions | ✓ | ✓ | ✓ | ✓ | ✓ ᵀ² |
+| Rolling upgrade (wire compat) | ✓ | ✓ | ✓ | ✓ | ✓ ᴿ² |
 
-ᵀ¹ closed in Tier 1 · ᵀ² Tier 2 · ᵀ³ Tier 3.
+ᵀ¹ closed in Tier 1 · ᵀ² Tier 2 · ᵀ³ Tier 3 · ᴿ² closed in run 2 (2026-07-11).
 
 ## What was found, and how it was closed
 
@@ -111,6 +125,20 @@ verifying-against-code finds real problems:
 - `docs/operations/companions.md` (new runbook)
 - `mycelium_consensus_*` + `mycelium_schema_mismatch` metric family (`metrics.md` §Consensus/locks)
 - Three new `diagnostics.md` pathologies + a `mycelium-consensus` Prometheus rule group
+- **Run 2:** `operations/deployment.md § Rolling upgrades` (new operator procedure)
+
+## Calibration
+
+Prior `Clear` cells later found Thin/Missing — the ledger that scores this audit's own verdicts (the
+doc analogue of `ratings.md`'s calibration ledger). A cell with repeated hits deserves structural
+skepticism, not a re-asserted ✓.
+
+- **2026-07-11 — Security · WHAT/HOW·Dev** was `Clear` in run 1 (seed) while `09-security.md` cited
+  the wire version as **v10 "(current)"** and framed the rolling-upgrade window as **v10 ↔ v9** —
+  both stale (current is v12/v11). Found by run 2's rolling-upgrade diff-audit. Root cause: the seed
+  auditor confirmed the *concept* was explained but did not spot-check the *version constant* in the
+  prose. Lesson for future runs: a `Clear` verdict on a doc that pins a constant/version must verify
+  the value against code, not just its presence.
 
 ## Re-run guidance
 

@@ -116,8 +116,9 @@ node that doesn't hold the private key.
 
 ## Wire-level KV signing (v10)
 
-Wire version 10 (current) adds `WireMessage::SignedData`. When a node writes
-a KV entry with `set_signed()`, the wire message includes:
+Wire version 10 added `WireMessage::SignedData` (the wire is at **v12** now; signing has
+been present since v10). When a node writes a KV entry with `set_signed()`, the wire message
+includes:
 
 ```
 SignedData {
@@ -313,10 +314,12 @@ cfg.tls = Some(TlsConfig {
 });
 ```
 
-**Rolling upgrade window.** Wire v10 is backward-compatible with v9 peers
-via the rolling upgrade window (`PREV_WIRE_VERSION = 9` in `src/framing.rs`).
-A v9 node that receives a `SignedData` message simply drops it — it doesn't
-crash or corrupt its state.
+**Rolling upgrade window.** Each wire version is backward-compatible with the previous one:
+`read_frame` accepts both `WIRE_VERSION` and `PREV_WIRE_VERSION` (currently **12** and **11**
+in `src/framing.rs`), so nodes one step apart interoperate. A node that receives a frame type or
+version it can't decode simply drops it — it doesn't crash or corrupt its state (this back-compat
+is regression-gated: `decode_wire_v11_*`). Operator procedure:
+[operations/deployment.md § Rolling upgrades](../operations/deployment.md#rolling-upgrades).
 
 **Audit TTL.** SkillRunner audit records use the default KV TTL (24 h for
 cross-node visibility). For regulatory retention (e.g. 7-year HIPAA

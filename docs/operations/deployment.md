@@ -126,6 +126,30 @@ persisted `auto_cert_dir` it keeps its identity; with persistence enabled it
 replays its WAL. Capability advertisements evaporate while a node is down and
 reappear on restart (see [00 · Concepts](../guide/00-concepts.md) on evaporation).
 
+## Rolling upgrades
+
+Mycelium tolerates a **mixed-version cluster** during an upgrade: `read_frame` accepts both the
+current and previous wire version (`WIRE_VERSION` / `PREV_WIRE_VERSION`, currently **12 / 11** in
+`src/framing.rs`). There is no cluster-wide upgrade command — it's a library, so rolling a fleet is
+your orchestrator's job (restart the processes); Mycelium's contract is that the mixed window is
+safe. The procedure:
+
+1. **One wire step per rollout.** Nodes one wire version apart interoperate; **two apart do not**. If
+   a release bumps `WIRE_VERSION`, get the whole fleet onto it before the next bump. Most releases
+   don't touch the wire — when `PREV_WIRE_VERSION == WIRE_VERSION` there is no live window and any
+   order is safe.
+2. **Upgrade node-by-node.** Replace one node's binary and restart it; it re-bootstraps and re-learns
+   state via anti-entropy (the [restart](#restart-behaviour) path). The window is safe because a
+   new-version node re-encodes forwarded frames at `WIRE_VERSION`, so the cluster converges toward
+   the new format as you progress.
+3. **Verify before the next node.** `GET /stats` on the just-upgraded node — `dropped_frames` steady
+   (not climbing) and it is hearing peers. A climbing `dropped_frames` or an `UnsupportedWireVersion`
+   in logs means a **two-step** gap: stop and reconcile before continuing.
+
+The back-compat this relies on is regression-gated — the wire corpus + `decode_wire_v11_*` gate
+(see the [testing page](../wiki/dev/testing/testing.md)) — so a release that would break the mixed
+window fails CI, not your rollout.
+
 ## Backup & restore
 
 Persistence is a **WAL + periodic snapshot** in the node's data directory, and identity is

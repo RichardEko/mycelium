@@ -82,7 +82,8 @@ this page is the index + the gate.
 
 - ☐ **Wire-version policy understood** — current `WIRE_VERSION = 12`, `PREV_WIRE_VERSION = 11`;
   `read_frame` accepts both for rolling upgrades. A mixed-version cluster during upgrade is supported;
-  a two-version jump is not. → `mycelium-core/src/framing.rs` (top).
+  a two-version jump is not. → procedure: [deployment.md § Rolling upgrades](deployment.md#rolling-upgrades);
+  policy: `mycelium-core/src/framing.rs` (top).
 - ☐ **`cargo audit` clean** — CI gates it (fails on vulnerabilities; unmaintained advisories surface as
   warnings). Re-run against your locked build.
 - ☐ **Feature set pinned** — you build exactly the features you run (`tls` / `metrics` / `a2a` / `llm`
