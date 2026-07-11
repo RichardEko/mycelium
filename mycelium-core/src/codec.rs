@@ -516,6 +516,43 @@ mod tests {
         assert_eq!(x, y, "Signal layout is identical across v11/v12");
     }
 
+    /// Wire back-compat gate — `decode_wire_v11` must decode **every shared variant** identically to
+    /// the current decoder, not just `Signal`. The v11 layout equals v12 for all variants except
+    /// `StateRequest` (tag 2 — the deliberate Merkle-digest change, covered by
+    /// `decode_wire_v11_downgrades_state_request`), so a current golden re-decoded through the
+    /// previous-version path must re-encode byte-for-byte the same. This is what protects a
+    /// rolling upgrade: a v12 node must understand a v11 peer's frames for every message type.
+    ///
+    /// **Corpus discipline (read before bumping `WIRE_VERSION`):** on a bump to N+1, (1) `GOLDENS`
+    /// regenerates to the new format; (2) freeze the *outgoing* version's bytes as `V{N}_*` fixtures;
+    /// (3) add a `decode_wire_v{N}` and extend this gate so the new code still decodes vN frames.
+    #[test]
+    fn decode_wire_v11_agrees_with_v12_on_every_shared_variant() {
+        const STATE_REQUEST_TAG: u32 = 2; // deliberate v11↔v12 format change; covered separately
+        let mut tags_covered = std::collections::BTreeSet::new();
+        for (i, golden) in GOLDENS.iter().enumerate() {
+            let tag = u32::from_le_bytes(golden[0..4].try_into().unwrap());
+            if tag == STATE_REQUEST_TAG {
+                continue;
+            }
+            let via_v12 = decode_wire(golden).unwrap_or_else(|e| panic!("v12 decode sample {i}: {e:?}"));
+            let via_v11 =
+                decode_wire_v11(golden).unwrap_or_else(|e| panic!("v11 decode sample {i}: {e:?}"));
+            let (mut a, mut b) = (BytesMut::new(), BytesMut::new());
+            encode_wire(&mut a, &via_v12);
+            encode_wire(&mut b, &via_v11);
+            assert_eq!(a, b, "v11 and v12 decoders disagree on shared sample {i} (tag {tag})");
+            tags_covered.insert(tag);
+        }
+        // Every shared wire variant (all but StateRequest=2) must actually be exercised — a corpus
+        // that silently stopped covering one would otherwise pass vacuously.
+        assert_eq!(
+            tags_covered,
+            std::collections::BTreeSet::from([0, 1, 3, 4, 5]),
+            "expected Data/Ping/StateResponse/Signal/SignedData all exercised through decode_wire_v11"
+        );
+    }
+
     #[test]
     fn decode_rejects_truncation_and_trailing_garbage() {
         let m = WireMessage::Ping { sender: nid(7000), known_peers: vec![nid(7001)] };

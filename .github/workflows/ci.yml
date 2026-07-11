@@ -22,6 +22,12 @@ jobs:
       # flake no longer reds main, but every flake is a loud annotation — never silent.
       - run: ./scripts/ci-retest.sh --lib
       - run: ./scripts/ci-retest.sh --lib --features tls,metrics,a2a,llm
+      # mycelium-core (the substrate: codec/framing/hlc/store/swim) — its unit suite was
+      # clippy-COMPILED (`clippy -p mycelium-core --lib --tests`) but never RUN: `--lib` above
+      # tests only the root `mycelium` package (core is a compiled dependency there, so its
+      # `#[cfg(test)]` code is invisible). Same class of gap as the mini-fuzz below (M2 Run-20).
+      # Includes the wire back-compat gate (`decode_wire_v11_*`) — the rolling-upgrade contract.
+      - run: ./scripts/ci-retest.sh -p mycelium-core
       # In-suite decoder mini-fuzz (gated behind fuzz-internals). The fuzz/
       # targets existed for the whole project's life but were never executed
       # in CI, and an unbounded-allocation decode DoS sat uncaught (M2 Run-20).

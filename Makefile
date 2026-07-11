@@ -164,6 +164,7 @@ check:
 check-full: check
 	cargo test  --lib --features tls,metrics,a2a,llm
 	cargo test  --lib --no-default-features --features gateway
+	cargo test  -p mycelium-core          # the substrate suite (codec/framing/hlc/store/swim) + the wire back-compat gate
 	cargo clippy -p mycelium-wasm-host --all-targets -- -D warnings
 
 ## help
