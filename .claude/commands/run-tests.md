@@ -2,8 +2,11 @@ Run the full Mycelium test suite across all three levels and report a structured
 
 ## Levels
 
-**Level 1 — Unit tests** `cargo test --lib`
-Fast. Runs the 200+ in-process tests. Should finish in under 10 s.
+**Level 1 — Unit tests** `cargo test --lib` **and** `cargo test -p mycelium-core`
+Fast. The root `mycelium` package (200+ tests) **and** the substrate crate `mycelium-core` (131:
+codec/framing/hlc/store/swim) — the latter is a **separate** test binary; `--lib` alone does *not*
+run it (core is a compiled dependency there). Both finish in seconds. Core also carries the wire
+back-compat gate (`decode_wire_v11_*`), so never skip it.
 
 **Level 2 — Lint** `cargo clippy --lib --tests -- -D warnings`
 Fast. Treat any new warning as a failure. The baseline is 61 pre-existing

@@ -32,5 +32,5 @@ all 16 milestones (2026-06-21) + the v1.x production-readiness workstreams, now 
 | `docs/plans/README.md` | Execution-record index (all engineering plans shipped as of 2026-06-21) |
 | `docs/publications/README.md` | Paper corpus index (read order, DOIs, dependency graph) |
 | `docs/analysis/ratings.md` | The M2 self-audit series + calibration ledger |
-| `docs/analysis/doc-coverage-2026-07-10.md` | Documentation-coverage audit (WHAT/WHY/HOW × Dev/Ops matrix + remediation; a re-run diff target) |
+| `docs/analysis/doc-coverage.md` | Documentation-coverage audit (WHAT/WHY/HOW × Dev/Ops matrix + remediation; a re-run diff target) |
 | `CLAUDE.md` | Session on-ramp: build/test gates + hot invariants + pointers here |

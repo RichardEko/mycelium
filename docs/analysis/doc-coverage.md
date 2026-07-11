@@ -1,4 +1,9 @@
-# Documentation coverage audit — 2026-07-10
+# Documentation coverage audit
+
+> **Living matrix**, maintained by the `/doc-coverage` skill — refresh it as a *diff*, not a
+> re-derivation. Seed run: **2026-07-10** (below). On each run, prepend a dated changelog entry, update
+> the matrix cells that moved, and append to the calibration section any prior `Clear` cell later
+> found thin.
 
 A systematic audit of whether every core Mycelium concept has a clear landing across a
 **WHAT · WHY · HOW × Dev · Ops** matrix — the doc analogue of `ratings.md`'s code audit. Run with
