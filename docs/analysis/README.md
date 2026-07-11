@@ -47,6 +47,46 @@ code still says what the page claims — so documentation drift is caught mechan
 doesn't make) as its highest severity, because that is the direction that misleads an outside reader
 — it is the one lint whose failure mode is *external*.
 
+## Running them
+
+The four audits are **Claude Code skills** (`.claude/commands/*.md`) — LLM-assisted, so an agent runs
+them; there is no `make audit`. With this repository open in Claude Code, invoke them by name:
+
+| Command | Runs | Writes |
+|---|---|---|
+| `/mycelium-analysis` | the 25-dimension code audit + falsification quota | a new run in [`ratings.md`](ratings.md) |
+| `/wiki-lint` | the four doc-vs-code checks over `docs/wiki/` | dated `.log/` entries + the miss-log |
+| `/doc-coverage` | the WHAT/WHY/HOW × Dev/Ops matrix (diff-gated) | refreshes [`doc-coverage.md`](doc-coverage.md) |
+| `/publication-lint` | the claims-vs-reality sweep of decks/papers | fixes + the overclaim ledger |
+
+Two caveats a reviewer should know up front:
+
+- **They need an agent, not just a toolchain.** Re-running an audit requires Claude Code (or an
+  equivalent harness) with the repo. What needs *no* tooling is *reading the outputs*: the ledgers,
+  `ratings.md`, and the coverage matrix are plain files.
+- **They are not bit-reproducible.** An LLM audit may surface different findings on different runs —
+  which is exactly why each keeps a calibration ledger (to record when a run's verdict was later shown
+  wrong). The *methodology*, however, is fully inspectable and versioned: each skill's `.md` file is
+  the precise instruction set the run follows.
+
+## What a reviewer can reproduce *deterministically*
+
+Separate from the LLM audits, the correctness gates are ordinary commands — same result for anyone,
+no agent required. This is the part you can independently reproduce:
+
+```bash
+make check           # clippy across the CI feature matrix (~3 min)
+make check-full      # + the test suites, incl. `cargo test -p mycelium-core`
+cargo test -p mycelium-core   # the substrate suite (codec/framing/hlc/store/swim) + the wire back-compat gate
+make test            # the 4-node Docker integration suite (no-retry)
+make test-overlay    # the 3-node consensus / overlay suite
+make test-scale      # the 100-node scale suite (heavier)
+cargo audit          # dependency advisories
+```
+
+CI runs these on every push (`.github/workflows/`). The audits *reason about* quality; these gates
+*enforce* correctness — and unlike the audits, they are deterministic and yours to run.
+
 ## The property that makes it credible: calibration
 
 Any audit can say "clean." The question a reviewer should ask is *how often "clean" is wrong* — and
@@ -78,11 +118,10 @@ thing being offered for scrutiny.
 
 - **The ledgers are real, dated, and in git.** `git log` any of the files above; the calibration
   entries carry the run/date at which a verdict was wrong and how it was found.
-- **The code side is deterministic, not LLM-judged.** Correctness is enforced by CI gates, separate
-  from the audits: the feature-matrix clippy set (`make check`), per-crate test jobs (including
-  `mycelium-core`, whose whole suite runs since 2026-07-11), the no-retry Docker cluster suites, a
-  nightly 100-node scale suite, `cargo audit`, and a wire back-compat gate that fails a release which
-  would break a rolling upgrade. The audits reason about quality; CI *enforces* correctness.
+- **The code side is deterministic, not LLM-judged.** Correctness is enforced by the CI gates above
+  (yours to run), separate from the audits — e.g. a wire back-compat gate fails any release that would
+  break a rolling upgrade, and `mycelium-core`'s whole suite runs on every push (since 2026-07-11).
+  The audits *reason about* quality; CI *enforces* correctness.
 - **The methodology is versioned and in-repo.** The skill definitions (`.claude/commands/`) are the
   exact instructions each run follows; the analysis methodology (`ratings.md` preamble) is dated and
   refined in place, never retro-edited.
