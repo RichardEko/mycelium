@@ -30,7 +30,7 @@ graph LR
     KP --> SIGN
     KP --> ID
     ID -->|gossip| VK
-    SIGN -->|wire v10| VER
+    SIGN -->|wire v12| VER
     VK --> VER
     VER --> HLC
 ```

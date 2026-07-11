@@ -2,6 +2,21 @@ Run a lint pass over the LLM wiki (`docs/wiki/` — schema at `docs/wiki/AGENTS.
 what it finds. Four checks, most-valuable first. Record the pass as a dated
 `.log/YYYY-MM-DD-lint.md` entry in each section touched.
 
+## 0. Review the calibration ledger (before the checks)
+
+Read [`docs/wiki/dev/.log/lint-calibration.md`](../../docs/wiki/dev/.log/lint-calibration.md) — the
+**miss-log**: every drift a *prior* lint declared clean, or a scope gap that let drift persist, with
+the sharpening it produced. This is to `wiki-lint` what `ratings.md`'s calibration ledger is to
+`mycelium-analysis` — it is what turns this from a checklist into an audit. Rules:
+
+- A check with **repeated misses in one area** needs a *structural* fix, not another point patch —
+  the ledger tells you which checks have been optimistic (the lock-order table and the reserved-prefix
+  list each shipped drift twice before the check was widened).
+- **Append to the ledger** whenever *this* pass — or anything since the last one (analysis,
+  `doc-coverage`, a code review, a support question) — reveals drift a prior lint should have caught.
+  A miss you fix silently is a miss the framework can't learn from. Every seeded sharpening below came
+  from a real ledger entry; keep that loop closed.
+
 ## 1. Doc-vs-code verification (the load-bearing check)
 
 For every wiki-page claim that cites code, confirm the code still says it. Minimum sweep:
@@ -21,6 +36,10 @@ For every wiki-page claim that cites code, confirm the code still says it. Minim
   A renamed/deleted gate = a finding.
 - **Cited constants/flags** (e.g. `MAX_KV_WRITE_BYTES`, `WIRE_VERSION`/`PREV_WIRE_VERSION`,
   `swim_failure_detector` default): read the cited file and confirm the stated value/default.
+  **Scope includes guide *chapters*, not just the front-door docs** — grep every guide page that pins
+  the wire version (`grep -rlnE "wire v[0-9]|WIRE_VERSION" docs/guide/`) and diff against
+  `framing.rs`. `09-security.md` carried a stale `v10 "(current)"` / `v10↔v9` window through many
+  passes because this check stopped at `building-on`/`faq` (ledger 2026-07-11).
 - **KV-namespace table** (`src/lib.rs` §KV namespace ownership — code canon, but it drifts
   like a doc): grep the workspace for KV prefix writers
   (`kv_ns::` constants in `mycelium-core/src/signal.rs`, `format!("…/` keys in `kv.set`/
@@ -30,6 +49,11 @@ For every wiki-page claim that cites code, confirm the code still says it. Minim
   because it was only ever diffed against this table, not against code.
 - **Endpoint/feature lists** (`docs/wiki/dev/operations.md`): spot-check against
   `src/agent/http.rs` routes and `Cargo.toml` features.
+- **CI-gate list** (`docs/wiki/dev/testing/testing.md`): diff the documented gate block against the
+  *actual* `run:` steps in `.github/workflows/*.yml`. A page that lists the *clippy* of a crate's
+  tests can imply coverage CI doesn't provide — `mycelium-core`'s whole suite was clippy-compiled but
+  never *run* (no `-p mycelium-core` test job), and `testing.md` read as if it were covered (ledger
+  2026-07-11). Confirm every gate the page names has a live `run:` line.
 - **External front-door docs that *restate* code facts** — `docs/guide/building-on-mycelium.md`
   (and lightly `docs/guide/faq.md`). These live outside `docs/wiki/` but duplicate code by
   design, so they drift like a wiki page and are higher-stakes (downstream integrators act on
@@ -69,3 +93,11 @@ was fixed, and report: findings by check, pages touched, anything needing a user
 (e.g. a new top-level section — never add one unprompted). If a doc-vs-code finding reveals
 the *code* is wrong rather than the page, stop and report it as a code bug instead of
 "fixing" the wiki to match.
+
+**Close the loop.** If this pass found drift a *prior* lint declared clean (or you learned of such
+drift from analysis / `doc-coverage` / a review since the last pass), append a line to
+[`.log/lint-calibration.md`](../../docs/wiki/dev/.log/lint-calibration.md): the check, the drift, how
+it was found, and the **sharpening** — and, where the sharpening is a concrete check change, fold it
+into the checks above (as the 2026-07-11 entries did). A miss recorded but not turned into a sharper
+check is a lesson half-learned. A clean pass that surfaced no misses needs no ledger entry — don't
+manufacture one.
