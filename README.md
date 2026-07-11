@@ -164,6 +164,15 @@ Python (`mycelium-py`) and TypeScript (`mycelium-ts`) clients drive a node throu
 gateway — capabilities, signals, RPC, KV, mailboxes, tuple space. [Guide ch. 10](docs/guide/10-language-bridges.md)
 has the API tour; each package README has the quick start.
 
+## How the project keeps itself honest
+
+Mycelium runs an adversarial **self-audit system**: four LLM-assisted audits (code · internal docs ·
+documentation coverage · external claims) plus deterministic CI gates — and each audit keeps a dated
+**ledger of its own misses**, a verdict it once declared clean that later proved wrong. The
+mechanisms cross-correct. For reviewers doing technical diligence,
+[`docs/analysis/README.md`](docs/analysis/README.md) explains the system and links the real, in-repo
+ledgers (candid by design — a self-audit is only worth the failures it records).
+
 ## Research & citation
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20665238.svg)](https://doi.org/10.5281/zenodo.20665238)
