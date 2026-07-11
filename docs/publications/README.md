@@ -65,3 +65,17 @@ Cite the lead paper as:
 > R. Nicholson, "The Coordinator Trap: Structural Scaling Liabilities in
 > Mediated Multi-Agent Architectures and a Substrate-Based Alternative,"
 > Tathata Systems Ltd, 2026. DOI: [10.5281/zenodo.20665238](https://doi.org/10.5281/zenodo.20665238)
+
+## Overclaim ledger
+
+Dated record of persuasion-surface claims found drifting from shipped reality — the calibration
+signal for the `/publication-lint` skill (is it catching overclaims before humans do?).
+
+- 2026-07-11 (lint run 1): **`presentation.html:926` — unsourced perf number.** "~1 ms overhead"
+  for the language-bridge HTTP gateway has no backing benchmark (`benches/` covers kv / scan_prefix
+  / signal_fanout / capability_resolve, not gateway overhead). FLAGGED, not auto-edited (author's
+  perf copy): either add a gateway-overhead bench or soften to "sub-millisecond / negligible next to
+  LLM inference latency." Severity: Major.
+- 2026-07-11 (lint run 1): fixed two version/terminology staleness (not overclaims):
+  `presentation.html:1298` stale "wire v11" → v12; `:1210` non-canonical "Broadcast" scope →
+  "Cluster" (the code/guide/wiki vocabulary is Cluster·Group·Individual).

@@ -1207,7 +1207,7 @@ docker compose up --build --scale worker=10
       </div>
       <div class="card card-accent-blue">
         <div class="card-title">Layer II — Signal Mesh</div>
-        <div class="card-body">Ephemeral scoped events. Broadcast / group / individual scopes. Opacity composition for admission control. Pheromone attenuation at group boundaries.</div>
+        <div class="card-body">Ephemeral scoped events. Cluster / group / individual scopes. Opacity composition for admission control. Pheromone attenuation at group boundaries.</div>
       </div>
       <div class="card card-accent-purple">
         <div class="card-title">Layer III — Consensus</div>
@@ -1295,7 +1295,7 @@ agent.<span class="cs">kv</span>().<span class="cs">set_with_min_acks</span>(<sp
         </div>
         <div class="card card-accent-orange">
           <div class="card-title">Ordered delivery</div>
-          <div class="card-body"><code>emit_ordered()</code> — HLC sequence numbers in wire v11. Reorder buffer on receiver reconstructs causal order across gossiped signals.</div>
+          <div class="card-body"><code>emit_ordered()</code> — HLC sequence numbers on the wire (<code>hlc_seq</code>, wire v12). Reorder buffer on receiver reconstructs causal order across gossiped signals.</div>
         </div>
       </div>
       <div>
