@@ -17,6 +17,7 @@ cargo test --lib --features tls,metrics,a2a,llm
 cargo clippy --lib --tests --features tls,metrics,a2a,llm -- -D warnings
 cargo test --lib --features compliance          # WS1 RBAC + WS2 audit + WS4 OIDC + WS5 rotation
 cargo test --lib --no-default-features --features gateway   # consensus-free embed
+cargo test -p mycelium-core                                 # the substrate suite (codec/framing/hlc/store/swim) — RUNS as of 2026-07-11
 cargo clippy -p mycelium-core --lib --tests -- -D warnings  # core's own tests are a separate lint scope
 cargo clippy --lib --no-default-features -- -D warnings     # minimal embed — catches feature-gated dead code
 cargo clippy -p mycelium-wasm-host --all-targets -- -D warnings   # wasm-host embeds mycelium default-features=false
@@ -28,6 +29,22 @@ only under `gateway`/`metrics` is *dead* in a `--no-default-features` build (the
 feature-matrix gates pass. **The fast catcher is `cargo clippy --lib --no-default-features`** (in
 `make check`) — it lints the same gateway/metrics-off mycelium lib the slow wasm-host job compiles,
 so you rarely need the wasmtime build to catch the trap.
+
+**mycelium-core's suite runs in CI as of 2026-07-11.** Before that it was clippy-*compiled*
+(`clippy -p mycelium-core --lib --tests`) but never *run*: `cargo test --lib` tests only the root
+`mycelium` package (core is a compiled dependency there, its `#[cfg(test)]` invisible), and there was
+no `-p mycelium-core` test job — every *companion* crate had one, core didn't. So the whole substrate
+suite (codec/framing/hlc/store/swim, 131 tests), including the wire back-compat tests, was unenforced.
+Same class of gap as the decoder mini-fuzz that sat uncaught until M2 Run-20. Now in the CI `Test`
+job + `make check-full`.
+
+**Wire back-compat gate.** `codec::tests::decode_wire_v11_agrees_with_v12_on_every_shared_variant`
+proves the current decoder reads a **PREV-version (v11)** frame for every shared `WireMessage` variant
+— the rolling-upgrade contract (`StateRequest`'s deliberate Merkle-digest change is covered separately
+by `decode_wire_v11_downgrades_state_request`). **Corpus discipline** on a `WIRE_VERSION` bump:
+regenerate `GOLDENS`, freeze the *outgoing* version's bytes as `V{N}_*` fixtures, add a
+`decode_wire_v{N}`, and extend the gate so new code still decodes vN frames. A live two-binary
+mixed-version *cluster* test remains a documented (unbuilt) nightly-tier follow-up.
 
 ## Coop demos: wasm is opt-in (fast non-wasm builds)
 
