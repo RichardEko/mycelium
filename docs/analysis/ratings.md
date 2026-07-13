@@ -82,6 +82,18 @@ existed. This is the framework's own report card.
   or a bit-flip on a non-TLS link — kills the node; the 10 MiB `read_frame`
   cap bounds the frame, not the element counts inside it. Found by the M2
   Run-20 decoder mini-fuzz; fixed same run with `.with_limit::<MAX_FRAME_BYTES>()`.
+- 2026-07-13 (Run 44): **Concurrency Correctness / Semantic Correctness** scored 8 in Runs 40–43
+  while the `mycelium-wiki` curator's whole-page `write_page` could **lose a concurrent edit** during a
+  transient dual-curator window: the read-modify-write rewrote the *entire* page from the curator's
+  in-memory snapshot, so two curators editing *different sections of the same page* clobbered each
+  other, and the lost proposal was already tombstoned → unrecoverable. Per-object atomic writes stopped
+  torn reads but not this lost update in the R-M-W. Found by a design-review question about whether the
+  companions should adopt the new lock-manager (which surfaced the wiki's coordination as the one real
+  exposure); fixed with **section-granular compare-and-swap** (immutable versioned objects published by
+  atomic `hard_link`, `WikiError::Conflict` → re-reconcile) + a multithreaded stress gate + a
+  concurrent-create gate. The store is now at-least-once/never-lose; exactly-once *effect* via the
+  idempotent reconcile. (Companion-crate defect — these two dimensions are project-wide since the
+  2026-07-07 lock-table scope widening.)
 - 2026-06-11: **Test Architecture** scored 8–9 in Runs 1–19 while the two
   fuzz targets were counted in the pyramid but **never executed** in any run
   (built at most). The decoder DoS above is exactly what they exist to catch;
@@ -2608,3 +2620,42 @@ None. All three probes passed. The gateway-auth probe initially "failed" on my o
 | — | Mean (continuity footnote) | 7.76 | not a target; see M2 preamble |
 
 **Delta vs Run 42:** five dimensions re-earned an 8 on *verified* change rather than carry — Conceptual Integrity (7→8) and Modularity (7→8) because #163's fixes were checked in code; Observability (7→8) because the ops pass closed the new-surface gap; Documentation and DX confirmed at 8 on the restructure. Security (13) got its overdue deep-dive and a real new end-to-end gate — the stalest carry is now the *best-scrutinised* dimension, exactly M2's intent. Floor unchanged at 6 (Test Architecture / #161) — honestly held; the docs work doesn't touch it. Mean drift up (7.64→7.76) reflects the re-checks, not target-chasing; three new permanent probe-gates + the anchor-checker grew the verification surface.
+
+## 2026-07-13 — Run 44 (M2)
+
+Deep-dive dimensions this run: 5 API Design · 9 Concurrency Correctness · 11 Semantic Correctness · 15 Performance · 18 Test Architecture. Execution evidence: `cargo test -p mycelium-core --lib` **131 pass** (the suite the CI-gap fix now *runs*, not just clippy-compiles); `distributed_lock` (3) + `overlay_consistent` (6) regression pass; `cargo test -p mycelium-wiki --features control-plane` **28 pass** incl. the new `concurrent_creates_of_the_same_new_section_elect_exactly_one` probe run **20× under load, 0 fail**; the earlier-this-session `concurrent_idempotent_appends…` stress gate (25× 0-fail) + `a_stale_write_into_a_gc_gap…` head-check gate; `cargo bench --bench gateway_overhead` (loopback ~40 µs); clippy clean across the feature matrix.
+
+### Findings
+None — all Run-44 falsification probes passed (the concurrent-create race, the lock mutual-exclusion regression, the mycelium-core suite). **Note:** the `mycelium-wiki` dual-curator lost-update defect was found + fixed + gated *earlier this session* (section-granular CAS); it existed while Concurrency/Semantic scored 8 in Runs 40–43, so it is recorded in the **Calibration Ledger**, not as a live Run-44 finding — the current state is *fixed with a deterministic stress gate*, which is the fixed-end-state M2 scores.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 8 | carried (v41); the new `coordination-approaches.md` + CAP deck slide reinforce the coordinator-free/CFT thesis (AP default, opt-in CP) — nothing contradicts philosophy. Stale otherwise |
+| 2 | Conceptual Integrity | 8 | System→Cluster scope rename (#167, wire-compatible) unified the scope vocabulary across `SignalScope`/consensus/gateway; companions all share the ring-election idiom. Verified in commits |
+| 3 | Architecture | 8 | carried (v43), stale; the lock service is Layer III, the wiki CAS is companion-level — no layer boundary crossed, namespace ownership intact |
+| 4 | Modularity | 8 | carried (v43); re-confirmed the three companions depend on `mycelium` **public API only** (`default-features=false`, no consensus) while adding the CAS surface |
+| 5 | API Design | 8 | **Deep-dive.** New `WikiStore` CAS surface (`read_versioned`/`write_section`/`update_manifest`, typed `WikiError::Conflict`) + `LockService` (`try_lock`/`lock`/`with_lock` scoped section, fencing token public). Hard to misuse; the "Conflict → re-read" contract is explicit. 8, no fresh whole-surface misuse-fuzz |
+| 6 | Error Handling Model | 8 | carried (v42); `WikiError::Conflict` is a typed, actionable "retry" signal, not a stringly error |
+| 7 | Configurability | 7 | carried (v42), **stale — not re-examined**; floor |
+| 8 | Language Best Practices | 8 | clippy clean across the feature matrix incl. the new bench + probes; the CAS is idiomatic (`hard_link`, no `unsafe`, no lib `unwrap`) |
+| 9 | Concurrency Correctness | 8 | **Deep-dive.** Found+fixed+gated the wiki dual-curator lost-update (ledger); section-CAS stress 25× + concurrent-create 20× (0 fail), lock #164 mutual-exclusion/release regression passes, core suite 131 pass. Best-scrutinised dimension this run — but **held at 8, not 9**: the ledger has 3 prior concurrency entries *and this run found a fresh one*, i.e. the surface keeps harbouring defects; and connection/tasks/capability_ops were not freshly probed |
+| 10 | Resource Management | 8 | carried (v42); `hard_link` temp is unlinked after publish (no leak), lock guard is RAII (`Drop` releases), curator task-cycle `shutdown` gate holds |
+| 11 | Semantic Correctness | 8 | **Deep-dive.** CAS **never-lose** proven (30-run min = target, never under); at-least-once + idempotent reconcile = exactly-once *effect* (matches `exactly-once-effect.md`); lock mutual-exclusion holds. **8 not 9**: ledger has 4 entries (LWW/HLC/promotion/backfill); LWW/HLC/anti-entropy not freshly re-probed this run |
+| 12 | Robustness | 7 | carried (v43) but **not re-probed this run**; new attack surface (the gateway bench's live server, the CAS store) went un-fuzzed, and the ledger has 2 entries → treated as a decaying claim, marked down to 7. Floor |
+| 13 | Security | 8 | carried (v43, deep-dived last run — mTLS/OIDC/`gateway_auth`), **stale**; not re-probed this run |
+| 14 | Failure Mode Legibility | 8 | carried (v43); the new `mycelium_consensus_*` metric family + consensus/lock runbooks *add* operator legibility but were **not probed to fire** — held at 8 on last run's earned probe, not raised on unproven artifacts |
+| 15 | Performance | 8 | **Deep-dive + fresh bench.** `benches/gateway_overhead.rs` measures the HTTP-gateway overhead at **~40 µs loopback** (was an unsourced "~1 ms" claim → 25× pessimistic; now a reproducible gate). Up from 7. **8 not 9**: the KV/framing/fanout hot-path throughput benches were not re-run this session |
+| 16 | Scalability | 7 | carried (v39), **stalest carry — 5 runs, no scale test run this session**; floor |
+| 17 | Testability | 8 | the new probes build on the public `WikiStore` API + tempdirs (no cluster); the gateway bench boots a single node — injectable, deterministic where it counts |
+| 18 | Test Architecture | 7 | **Deep-dive.** Up from 6: the cap reason (**#161 undiagnosed flake**) is resolved — root-caused + fixed via #162, documented in `cluster-suites.md` — and the **mycelium-core CI coverage gap is closed** (its 131-test suite was clippy-compiled but never *run*; now `ci-retest.sh -p mycelium-core`, verified green). New deterministic gates added (wiki stress/create, mixed-version wire-compat). **Not 8**: the socket-binding *retry-tier* (`ci-retest.sh`) and the still-**un-built live two-binary mixed-version test** are structural residuals |
+| 19 | Observability | 8 | carried (v43); the `mycelium_consensus_timeouts_total{reason}` counter + mirror gauges are a real new operator surface (cardinality-safe, no per-lock gauge) |
+| 20 | Debuggability | 8 | carried (v41), **stale — 3 runs unverified**; possibly optimistic per the decay rule |
+| 21 | Operational Readiness | 8 | carried (v41); new consensus/lock diagnostics runbooks + the rolling-upgrade procedure touch it, but the core `/ready`/shutdown/back-pressure mechanisms were not re-probed |
+| 22 | Evolvability | 8 | the **mixed-version wire-compat gate** (v11↔v12 `decode_wire_v11` + a CI job asserting cross-version decode) is a concrete backwards-compat win; `WIRE_VERSION=12`/`PREV=11` policy honoured; CHANGELOG maintained |
+| 23 | Documentation | 8 | heavy verified churn this session (coordination-approaches decision note, CAP slide, doc-coverage run 3, 2 wiki-lint + 2 publication-lint passes, the bench-sourced perf number) — all lint-clean. 8 not 9: same-day, no external-reader validation |
+| 24 | Developer Experience | 8 | carried; `make check`/`CLAUDE.md` on-ramp intact; clippy clean; the new bench is one `cargo bench` command |
+| 25 | Dependency Hygiene | 8 | carried (v42); the gateway bench reuses existing `reqwest`/`criterion` (async_tokio) — **no new deps**; `--no-default-features` compiles per CI |
+| — | **Floor (lowest 3)** | **7, 7, 7** | Configurability · Scalability · Robustness (Test Architecture also 7, lifted from 6) |
+| — | Mean (continuity footnote) | 7.84 | not a target; see M2 preamble |
+
+**Delta vs Run 43:** the floor lifts 6→7 (**Test Architecture 6→7**) because both things capping it are resolved — #161 root-caused+fixed (#162) and the mycelium-core suite now *runs* in CI (a real M2-Run-20-class coverage gap closed), verified green this run — held at 7 not 8 by the socket-binding retry-tier + the un-built live mixed-version test. **Performance 7→8** on the first fresh gateway bench (the "~1 ms" claim was 25× pessimistic; now a sourced gate). **Concurrency (9) and Semantic (11)** held at 8 on deep-dive + probes despite a *found+fixed+gated* defect — the fix makes the current state better (per the current-state principle), and the ledger entry, not a score drop, is where the past over-scoring is accounted; kept off 9 by their combined 7-entry ledger history. **Robustness 8→7** honestly decayed (new surface un-fuzzed this run). Mean 7.76→7.84 reflects the two earned rises, not target-chasing; two new permanent probe-gates (concurrent-create, and the earlier stress/head-check gates) + the sourced perf bench grew the verification surface. No live findings this run.

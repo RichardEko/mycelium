@@ -311,6 +311,39 @@ fn many_threads_editing_different_sections_all_survive() {
 }
 
 #[test]
+fn concurrent_creates_of_the_same_new_section_elect_exactly_one() {
+    // Falsification probe (Run 44): the sequential create-conflict test proves the CAS *contract*;
+    // this races two threads that both create the SAME brand-new section (expected = None) at once.
+    // hard_link's create-exclusivity must give exactly one winner — no panic, no double-create, and
+    // the survivor is one of the two written values (never a torn blend).
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dir = tempfile::tempdir().unwrap();
+    let s = Arc::new(FsStore::open(dir.path(), "ops").unwrap());
+    s.write_page("p", &[sec("seed", "S", "s", &[])], &BTreeMap::new()).unwrap();
+
+    let wins = Arc::new(AtomicUsize::new(0));
+    std::thread::scope(|scope| {
+        for who in ["A", "B"] {
+            let s = Arc::clone(&s);
+            let wins = Arc::clone(&wins);
+            scope.spawn(move || {
+                // expected = None ⇒ "this section must not exist yet"; exactly one create can win.
+                match s.write_section("p", &sec("z", "Z", who, &[]), None) {
+                    Ok(_) => { wins.fetch_add(1, Ordering::SeqCst); }
+                    Err(WikiError::Conflict) => {} // lost the create race — correct
+                    Err(e) => panic!("unexpected store error: {e:?}"),
+                }
+            });
+        }
+    });
+
+    assert_eq!(wins.load(Ordering::SeqCst), 1, "exactly one create won the race");
+    let body = s.read_versioned("p").unwrap().unwrap().sections.get(&SectionId::from("z")).map(|(_, sec)| sec.body.clone());
+    assert!(matches!(body.as_deref(), Some("A") | Some("B")), "survivor is one clean value, not torn: {body:?}");
+}
+
+#[test]
 fn section_ids_are_stable_opaque_and_unique() {
     let a = mint_section_id("ops", "p", 42, 7);
     assert_eq!(a, mint_section_id("ops", "p", 42, 7), "same coordinates → same id (stable)");
