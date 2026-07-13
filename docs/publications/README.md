@@ -79,3 +79,25 @@ signal for the `/publication-lint` skill (is it catching overclaims before human
 - 2026-07-11 (lint run 1): fixed two version/terminology staleness (not overclaims):
   `presentation.html:1298` stale "wire v11" → v12; `:1210` non-canonical "Broadcast" scope →
   "Cluster" (the code/guide/wiki vocabulary is Cluster·Group·Individual).
+- 2026-07-13 (lint run 2): **clean re: overclaim — no new finding.** Targeted the delta since run 1
+  (this session's wiki section-CAS + `coordination-approaches.md`). Verified honest:
+  the two Byzantine references in `paper1` are proper **CFT-not-BFT disclaimers** (§291, §367); the
+  `presentation.html:1042` distributed-lock "two Critical bugs (no mutual exclusion; unreleasable)"
+  is **self-audit framing of #164 as *found & fixed* with regression gates**, not a live defect; all
+  `guarantee` uses are qualified (CAP/at-least-once), and every "platform / control-plane / cluster
+  manager" hit is the *"Mycelium is **not** a platform"* contrast, not a self-description. **Avoided a
+  bad auto-fix:** `paper1.md` §367/§373 pin `(wire version 10)` / `(wire version 11)` — these are
+  **provenance-correct** (signing landed at v10, `hlc_seq` at v11, per `framing.rs`), *not* stale
+  current-version claims; "fixing" to v12 would have been wrong. Two carried/notable, neither
+  auto-edited:
+    - **Carried (Major, still open):** `presentation.html:926` "~1 ms overhead" — still unsourced (no
+      gateway-overhead bench in `benches/`); now reads "invisible next to LLM inference" (context
+      added) but the bare number persists. Same recommendation as run 1: add a bench or drop the number.
+    - **Minor (fixed 2026-07-13, at user request):** `presentation.html:1797` said "the
+      concurrent-prose-merge problem dissolves into single-writer-curator + a **dumb store**" — which
+      trailed shipped reality after the store gained **section-granular compare-and-swap** on
+      2026-07-13 (the eventual-single curator alone had a lost-update window; the CAS is what makes it
+      airtight). Updated to "a single-writer curator + *per-section compare-and-swap* on the store — the
+      curator serialises edits, and the CAS keeps even a transient dual-curator (mid-failover) from
+      losing one." Keeps the slide's "the hard problem dissolves" thrust while naming the real mechanism.
+  §6 relative links in both decks + `philosophy.html` all resolve.

@@ -386,6 +386,51 @@
   </div>
 </div>
 
+<!-- 04b The CAP choice -->
+<div class="slide" id="s4cap">
+  <div class="slide-top"><span class="eyebrow">The CAP Choice</span><span class="slide-num">·· / ··</span></div>
+  <div class="slide-body">
+    <div class="slide-title" style="margin-bottom:10px;">Made per operation,<br><em>not per cluster.</em></div>
+    <div class="slide-sub">Partition forces a choice — stay <strong style="color:#3fb950;">available</strong> (AP) or stay <strong style="color:#d2a8ff;">consistent</strong> (CP). Most systems pick one for you, cluster-wide. Mycelium is AP by default, opts into CP exactly where you ask — and adds a third path: <em>coordinated single-writers that stay available.</em></div>
+
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Pattern</th>
+            <th>Under partition</th>
+            <th style="color:var(--accent2);">Services</th>
+            <th>Mechanism</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="td-my"><strong style="color:#3fb950;">AP — always available</strong></td>
+            <td class="td-yes">both sides keep serving</td>
+            <td class="td-my">gossip KV · signal mesh · capability ring</td>
+            <td>LWW + HLC · no quorum</td>
+          </tr>
+          <tr>
+            <td class="td-my"><strong style="color:#3fb950;">AP — coordinated single-writer</strong></td>
+            <td class="td-yes">keeps serving; <em>safe</em>, not linearizable</td>
+            <td class="td-my">tuple-space · blackboard · wiki</td>
+            <td>ring election + id-fencing / section-CAS → exactly-once <em>effect</em></td>
+          </tr>
+          <tr>
+            <td class="td-my"><strong style="color:#d2a8ff;">CP — opt-in</strong></td>
+            <td class="td-no">minority partition stalls (<em>blocks ≠ fails</em>)</td>
+            <td class="td-my"><code>consistent_set</code> · <code>distributed_lock</code> · <code>elect_leader</code> · consensus</td>
+            <td>epidemic quorum + fencing token</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout callout-blue" style="margin-top:10px;">
+      <strong>You don't need a lock to <em>prevent</em> two writers — a fencing token / CAS makes two writers <em>harmless</em>.</strong> That middle row — <em>coordinated single-writers</em> — is how the companions coordinate without paying the CP tax of the bottom row. Which to reach for, and why each service chose it → <code>docs/design/coordination-approaches.md</code> · <code>guide/04-consensus.md</code>.
+    </div>
+  </div>
+</div>
+
 <!-- 05 Theoretical Foundations -->
 <div class="slide" id="s5cas">
   <div class="slide-top"><span class="eyebrow">Theoretical Foundations</span><span class="slide-num">05 / 25</span></div>
@@ -1794,7 +1839,7 @@ wiki.<span class="cs">propose</span>(<span class="cv">"decisions/elm-street"</sp
 <span class="ck">let</span> grant = wiki.<span class="cs">request_store_access</span>().await?;  <span class="cm">// StoreGrant { location }</span>
         </div>
         <div class="callout callout-blue" style="margin-top:10px;font-size:12px;">
-          <strong>The wiki pattern, recursively.</strong> Files + an LLM curator + direct reads — exactly how Mycelium's own <code>docs/wiki/</code> works. The concurrent-prose-merge problem dissolves into single-writer-curator + a <em>dumb</em> store. Worked example: <code>mycelium-wiki/examples/wiki_chat</code> — import documents, then chat grounded in the wiki (one template for the org-twin <em>and</em> council use cases).
+          <strong>The wiki pattern, recursively.</strong> Files + an LLM curator + direct reads — exactly how Mycelium's own <code>docs/wiki/</code> works. The concurrent-prose-merge problem dissolves into a single-writer curator + <em>per-section compare-and-swap</em> on the store — the curator serialises edits, and the CAS keeps even a transient dual-curator (mid-failover) from losing one. Worked example: <code>mycelium-wiki/examples/wiki_chat</code> — import documents, then chat grounded in the wiki (one template for the org-twin <em>and</em> council use cases).
         </div>
       </div>
     </div>
