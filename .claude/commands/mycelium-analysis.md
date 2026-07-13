@@ -221,7 +221,12 @@ carried 7. Two evidence sources close that, in preference order:
    produced-this-run, so it supports 8, **not** 9. **Read the `scale` row honestly:** a `scale` FAIL
    is often the documented Docker-bridge *formation-variance ceiling*, not a regression
    (`docs/wiki/dev/testing/scale-tests.md`) — `resilience`/`entries` are the reliable pass/fail signal;
-   weight those. A recent nightly where `resilience`/`entries` FAIL is a real finding (cap 6).
+   weight those. **But classify every FAIL by opening its log — don't trust the result column alone:**
+   a suite that *couldn't start* (`Cannot connect to the Docker daemon`, an image-build error, or
+   VM/conntrack exhaustion after a preceding 100-node round — exit code 2 / `make: *** Error`) is an
+   **environmental/runner** failure, **not** a substrate finding (the local runner restarts Colima
+   between rounds to avoid exactly this). Only a suite that *ran and failed an assertion* (the runner
+   reported a convergence/integrity/succession check failing) is a real finding → cap 6.
 2. **Produced-this-run (for a 9-eligible number):** run the in-process SWIM oracle *this run* —
    `SWIM_ORACLE_N=100 cargo test --lib swim_scale_oracle -- --ignored --nocapture` — and cite it. It
    exercises the membership/failure-detection protocol at N=100 in-process (no Docker), so it is a

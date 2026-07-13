@@ -34,13 +34,26 @@ git -C "${REPO}" pull --ff-only >/dev/null 2>&1 \
   && log "runner checkout updated to $(git -C "${REPO}" rev-parse --short HEAD)" \
   || log "git pull skipped (offline / no auth) — running current checkout"
 
-# ── Ensure a Docker runtime is up (Colima; headless, unlike Docker Desktop) ─────────────────
-if ! docker info >/dev/null 2>&1; then
-  log "Docker not reachable — starting Colima (8 CPU / 16 GB / 60 GB disk)…"
-  colima start --cpu 8 --memory 16 --disk 60 || { log "colima start FAILED"; exit 1; }
+# ── Docker runtime (Colima; headless, unlike Docker Desktop) ────────────────────────────────
+# A 100-node run saturates the VM's conntrack/iptables; the documented remedy is to restart the VM
+# between rounds (docs/wiki/dev/testing/scale-tests.md) — otherwise the daemon can go unreachable and
+# the *next* suite fails to even start ("Cannot connect to the Docker daemon", make Error 1). So we
+# bring Colima up once, then hand each SUBSEQUENT suite a freshly-restarted VM.
+COLIMA_ARGS="--cpu 8 --memory 16 --disk 60"
+DOCKER_UP=0
+wait_docker() { local i; for i in $(seq 1 45); do docker info >/dev/null 2>&1 && return 0; sleep 2; done; return 1; }
+ensure_docker() {   # arg "fresh" ⇒ restart the VM to clear between-round fatigue
+  if [ "${1:-}" = "fresh" ] && [ "${DOCKER_UP}" = "1" ]; then
+    log "Restarting Colima for a clean VM (clears between-round conntrack/iptables fatigue)…"
+    colima restart >/dev/null 2>&1 || colima start ${COLIMA_ARGS} >/dev/null 2>&1
+  elif ! docker info >/dev/null 2>&1; then
+    log "Starting Colima (${COLIMA_ARGS})…"
+    colima start ${COLIMA_ARGS} >/dev/null 2>&1 || true
+  fi
   docker context use colima >/dev/null 2>&1 || true
-fi
-docker info >/dev/null 2>&1 || { log "Docker still unreachable after colima start — aborting"; exit 1; }
+  wait_docker || { log "Docker unreachable — aborting"; exit 1; }
+  DOCKER_UP=1
+}
 
 # CSV header once.
 [ -f "${CSV}" ] || echo "timestamp,suite,exit_code,result,note,log" > "${CSV}"
@@ -67,7 +80,12 @@ case "${SUITE}" in
   *) log "unknown suite '${SUITE}' — use: all|scale|resilience|entries"; exit 2 ;;
 esac
 
+FIRST=1
 for s in ${SUITES}; do
+  # First suite: bring Docker up. Subsequent suites: restart the VM first (clears the 100-node
+  # conntrack/iptables fatigue that otherwise leaves the daemon unreachable).
+  [ "${FIRST}" = 1 ] && ensure_docker || ensure_docker fresh
+  FIRST=0
   case "${s}" in
     scale)      run_suite scale      test-scale ;;
     resilience) run_suite resilience test-scale-resilience ;;
