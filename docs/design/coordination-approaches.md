@@ -31,6 +31,37 @@ So "lock or ring?" is really "can this tolerate blocking when quorum is lost, or
 available?" For a work pipeline, a fact pool, or a shared wiki, the answer is *stay available* — which
 is why none of the three uses the lock.
 
+## The consistency you get (the other face of the choice)
+
+CAP is a **theorem**, not a tax you can route around: under a partition you give up C **or** A, and
+nothing here bypasses that. The AP choices above pay in the **C** column, not the **A** column — they
+stay available and give up *linearizability*, not the reverse. But "eventually consistent" both over-
+and under-states what the three approaches actually deliver. The real spectrum:
+
+```
+  eventual (KV)  →  single-writer-serialized, eventual-under-partition + exactly-once effect (companions)  →  quorum-agreed, blocks-without-quorum (consensus)
+```
+
+- **Gossip KV** — genuinely *eventual*, always. Local reads may be stale until anti-entropy converges;
+  two writers resolve by LWW+HLC, so a write can be lost. The weak end.
+- **Coordinated single-writers (companions)** — **not flatly eventual.** In the reachable case there is
+  *one writer of record* imposing an order, so you get read-your-writes and a well-defined sequence
+  *through that writer* (the tuple space's single-owner `take`, the wiki's per-section CAS version
+  order) — stronger than plain eventual. It *degrades* to eventual only under a partition or the
+  transient dual-writer election window, where the two sides diverge and reconcile on heal. Orthogonally,
+  they carry an **action-level** guarantee that state-convergence language misses entirely:
+  **exactly-once effect** — the item is *processed* once (at-least-once delivery + idempotent ack),
+  which holds even across the reconcile.
+- **Consensus** — quorum agreement on committed values; the strong end, at the price of blocking without
+  quorum. Note even this is **not** "immediate linearizable reads": consensus reads are lease-aware and
+  local, so linearizability is not on the menu by default anywhere — you pick your point on the line
+  per operation.
+
+The upshot: the companions are **not** a CAP loophole. They are AP, same as the substrate — but they
+recover *coordination* (a safe single-writer + exactly-once effect) that naive AP/last-writer-wins
+throws away, without moving to CP. "Coordination without the CP tax" means the tax is paid in weaker
+consistency, not in availability — it is relocated, never escaped.
+
 ## The decision matrix
 
 | Approach | Primitive | Availability | Dual-writer window closed by | Reach for it when |
