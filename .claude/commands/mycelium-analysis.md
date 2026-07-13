@@ -208,6 +208,28 @@ How does behaviour change as node count or data volume grows? Check
 anti-entropy round complexity, gossip fan-out strategy. Does the system have
 a known cliff edge?
 
+**Scale evidence (the standing gap this dimension has carried at 7 for many runs).** Code-reading
+alone caps this at 8, and there is no scale execution in a normal run — which is *why* it stays a
+carried 7. Two evidence sources close that, in preference order:
+
+1. **The local nightly scale results** — if `~/mycelium-scale-results/results.csv` exists (the
+   `scale-nightly-local.sh` launchd runner, macOS/Apple-Silicon — `scripts/launchd/`), **read it** and
+   cite the latest rows. Format: `timestamp,suite,exit_code,result,note,log` for `scale` (100-node),
+   `resilience` (~22-node crash/rejoin), `entries` (~30-node entry-volume). A recent green nightly is
+   real 100-node-cluster evidence → an **evidenced 8** (cite the date + per-suite result, e.g. "2026-
+   07-14 nightly: resilience PASS 11/11, entries integrity PASS"). This is *prior* evidence, not
+   produced-this-run, so it supports 8, **not** 9. **Read the `scale` row honestly:** a `scale` FAIL
+   is often the documented Docker-bridge *formation-variance ceiling*, not a regression
+   (`docs/wiki/dev/testing/scale-tests.md`) — `resilience`/`entries` are the reliable pass/fail signal;
+   weight those. A recent nightly where `resilience`/`entries` FAIL is a real finding (cap 6).
+2. **Produced-this-run (for a 9-eligible number):** run the in-process SWIM oracle *this run* —
+   `SWIM_ORACLE_N=100 cargo test --lib swim_scale_oracle -- --ignored --nocapture` — and cite it. It
+   exercises the membership/failure-detection protocol at N=100 in-process (no Docker), so it is a
+   *narrower* slice than the Docker nightly — a 9 on the oracle alone should note that caveat.
+
+If neither is available (no nightly file, oracle not run), carry the prior score and mark it
+**stale/unverified** — do not assert an evidenced score without one of the above.
+
 ### Verification
 
 **17. Testability**
