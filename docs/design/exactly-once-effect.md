@@ -29,6 +29,11 @@ The load-bearing invariants:
 - **Bounded in-flight.** An unacked claim is reclaimed after a timeout — no item is lost to a dead
   consumer.
 
+> This discipline is the tuple-space/blackboard half of a broader coordination story: a **capability-ring
+> single-writer** made safe by a fencing discipline instead of a distributed lock. For when to use this
+> vs the wiki's store-CAS vs the (CP) `LockService`, see
+> [design/coordination-approaches.md](coordination-approaches.md).
+
 ## The reference implementation
 
 **`mycelium-tuple-space/src/store.rs` is the canonical implementation.** Build new consumers against
