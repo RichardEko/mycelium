@@ -425,8 +425,18 @@
         </tbody>
       </table>
     </div>
+    <div style="margin-top:12px;padding:10px 12px;border:1px solid #30363d;border-radius:8px;background:rgba(139,148,158,.05);text-align:center;">
+      <div style="font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#8b949e;margin-bottom:6px;">Consistency — pick your point, per operation</div>
+      <div style="font-size:12px;line-height:1.5;">
+        <span style="color:#8b949e;">eventual <span style="opacity:.7;">(KV)</span></span>
+        <span style="color:#586069;">&nbsp;→&nbsp;</span>
+        <span style="color:#3fb950;font-weight:600;">single-writer-serialized · eventual under partition · exactly-once effect <span style="opacity:.8;">(companions)</span></span>
+        <span style="color:#586069;">&nbsp;→&nbsp;</span>
+        <span style="color:#d2a8ff;font-weight:600;">quorum-agreed · blocks without quorum <span style="opacity:.8;">(consensus)</span></span>
+      </div>
+    </div>
     <div class="callout callout-blue" style="margin-top:10px;">
-      <strong>You don't need a lock to <em>prevent</em> two writers — a fencing token / CAS makes two writers <em>harmless</em>.</strong> That middle row — <em>coordinated single-writers</em> — is how the companions coordinate without paying the CP tax of the bottom row. Which to reach for, and why each service chose it → <code>docs/design/coordination-approaches.md</code> · <code>guide/04-consensus.md</code>.
+      <strong>You don't need a lock to <em>prevent</em> two writers — a fencing token / CAS makes two writers <em>harmless</em>.</strong> That middle row — <em>coordinated single-writers</em> — is how the companions coordinate without paying the CP tax of the bottom row. CAP isn't bypassed: they stay <strong style="color:#3fb950;">AP</strong>, paying in <em>weaker consistency</em>, not availability. Which to reach for, and why each service chose it → <code>docs/design/coordination-approaches.md</code> · <code>guide/04-consensus.md</code>.
     </div>
   </div>
 </div>
