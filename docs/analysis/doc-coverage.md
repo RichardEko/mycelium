@@ -19,6 +19,21 @@ concern). WHY is usually shared Dev+Ops.
 
 ## Changelog
 
+- **2026-07-13 (run 3)** — diff-gated re-audit. The only material diff since run 2 is this session's
+  two commits: `8456dc4` (wiki-store **section-granular CAS** — the dual-curator lost-update fix) and
+  `d316cdf` (the **`coordination-approaches.md`** design note + cross-links). **No concept cell
+  regressed.** The wiki-store CAS is an internal correctness fix, documented in `companions/wiki.md`
+  and `wiki-concurrent-edit.md §3.5` (agent/WHY-facing — no new persona gap). The design note **closes
+  a latent WHY gap** and produced a **calibration hit** (below): runs 1–2 scored **Distributed
+  locks · WHY** and **Companions · WHY** as ✓, but the *cross-cutting* decision — *when to reach for
+  the distributed lock vs the capability ring, and why all three companions reject it* — had no
+  user-facing home. Each primitive's own rationale was covered; the **comparison spanning
+  Locks+Companions+Consensus fell between the matrix rows** (a structural blind spot the row-by-row
+  scoring cannot see). *Fixed:* `docs/design/coordination-approaches.md` (CP-vs-AP decision matrix +
+  the rule + a fourth-companion checklist), cross-linked so **both** personas reach it — Dev via
+  `04-consensus.md` / `faq.md`, Ops via `companions.md`, plus `exactly-once-effect.md`,
+  `wiki-concurrent-edit.md`, and `docs/README.md`. All rows carry; WHY for Locks/Companions/Consensus
+  is now genuinely — not nominally — Clear.
 - **2026-07-11 (run 2)** — diff-gated re-audit. Nothing in the existing matrix's *concept* cells
   changed since the seed (the post-seed commits were the wire-compat gate, wiki ingests, the two new
   skills, and persuasion-surface fixes) — those rows **carry**. One **new concept row** was surfaced
@@ -126,6 +141,10 @@ verifying-against-code finds real problems:
 - `mycelium_consensus_*` + `mycelium_schema_mismatch` metric family (`metrics.md` §Consensus/locks)
 - Three new `diagnostics.md` pathologies + a `mycelium-consensus` Prometheus rule group
 - **Run 2:** `operations/deployment.md § Rolling upgrades` (new operator procedure)
+- **Run 3:** `docs/design/coordination-approaches.md` (new WHY decision guide — when to use the
+  distributed lock vs the capability ring, and why the three companions reject it; cross-linked from
+  `04-consensus.md`, `companions.md`, `exactly-once-effect.md`, `wiki-concurrent-edit.md`, the guide
+  FAQ, and `docs/README.md`)
 
 ## Calibration
 
@@ -139,11 +158,25 @@ skepticism, not a re-asserted ✓.
   auditor confirmed the *concept* was explained but did not spot-check the *version constant* in the
   prose. Lesson for future runs: a `Clear` verdict on a doc that pins a constant/version must verify
   the value against code, not just its presence.
+- **2026-07-13 — Distributed locks · WHY + Companions · WHY (cross-cutting)** were `Clear` in runs 1–2,
+  but the decision *"which coordination primitive do I reach for, and why not the lock?"* had **no
+  user-facing landing** — each primitive's own rationale existed (`04-consensus.md` for the lock,
+  `exactly-once-effect.md` for the companions), yet the *comparison* lived nowhere: `companions.md`
+  only **asserted** "no distributed lock" without the why. Found by a user question ("is the
+  lock-vs-ring design decision documented anywhere?") + a doc audit that confirmed the absence. Root
+  cause is **structural, not an oversight**: the matrix scores each concept's cells independently, so a
+  cross-cutting decision guide that spans several concepts (here the CP-vs-AP coordination axis over
+  Locks/Companions/Consensus) falls *between* rows and reads as covered when every individual cell is
+  ✓. **Sharpening (a method change, not a point patch):** when two or more concepts share a decision
+  axis, audit whether the *comparison itself* has a home — add a "cross-cutting decisions" pass that
+  asks "if a reader must choose between these N concepts, where do they learn how?", distinct from
+  scoring each concept's own WHY. Fixed: `coordination-approaches.md`.
 
 ## Re-run guidance
 
 The audit was a one-time systematic sweep; a re-run should be a **diff**. Re-audit a concept only
-when its code/docs changed since this date (`git log --since=2026-07-10 -- docs/ src/`). The matrix
+when its code/docs changed since the last run (run 3: `git log --since=2026-07-13 -- docs/ src/
+mycelium-*/src/`). The matrix
 above is the baseline: any cell dropping below ✓ is a regression. The method (four auditors, the
 Clear/Thin/Missing rubric, the exact prompts) is reproducible from this session's transcript. New
 concepts (a new sub-handle, a new companion, a new external standard) each need a fresh row audited
