@@ -46,6 +46,10 @@ The companions are opinionated coordination patterns on top of the **public API*
 Two `mycelium` vs `mycelium-core` crate-choice questions are answered in the
 [README](../../README.md#which-crate--mycelium-vs-mycelium-core).
 
+Building your *own* coordinated service (a fourth companion)? The choice underneath these — a
+capability-ring single-writer vs the consensus-backed distributed lock, and why the three companions
+all pick the ring — is the [coordination-approaches design note](../design/coordination-approaches.md).
+
 ---
 
 ## Where do I start — hello world?

@@ -238,6 +238,12 @@ contend for one lock and fence a shared resource (`cargo run --example distribut
 Coarse-grained by design — a consensus round per acquire (~1 s to converge) — so it fits leader
 election, shard/config ownership, and migrations, **not** high-rate fine-grained locking.
 
+> **Deciding lock-vs-ring?** The lock is **CP** (blocks without quorum); the capability ring is
+> **AP** (always elects). Mycelium's own companions — tuple space, blackboard, wiki — each need a
+> single writer and **deliberately don't use the lock**, choosing the ring so they stay
+> partition-available. When to reach for the lock and when not, and why each companion chose as it
+> did: **[design/coordination-approaches.md](../design/coordination-approaches.md)**.
+
 ---
 
 ## Dev Notes

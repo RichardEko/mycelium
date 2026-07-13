@@ -15,7 +15,9 @@ gate; this is the detail behind it.
   (`{ns}.primary` / `.curator`); a watcher promotes when that capability *evaporates*. Lowest-node-id
   wins, reconciled continuously — there is no leader-election consensus and no distributed lock.
   Promotion latency ≈ the capability refresh/evaporation window (`cap_refresh`): failover is
-  **seconds**, not instantaneous.
+  **seconds**, not instantaneous. *Why the ring and not the (CP) distributed lock — and how the
+  eventual-single election is made safe rather than merely convergent:*
+  [design/coordination-approaches.md](../design/coordination-approaches.md).
 - **Durability is opt-in.** Tuple-space and blackboard ship with their WAL **off** (`persist: false`);
   the wiki needs a node-independent store. A `persist: false` primary that crashes with no secondary
   **loses un-mirrored state**. Provision durability before you depend on it.

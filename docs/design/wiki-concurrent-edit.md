@@ -23,7 +23,10 @@ Capability / Skill / Group, and the normative "competence is a capability, knowl
 shape). Written *before* the crate exists so the mechanism is settled and reviewable; promotes to the
 crate's `lib.rs` doc + a `v2-…-wiki.md` build plan when the demand trigger fires. Nothing here
 changes core — it is a discipline over the public KV/signal/capability API, the way
-[`exactly-once-effect.md`](exactly-once-effect.md) is.
+[`exactly-once-effect.md`](exactly-once-effect.md) is. For how the wiki's ring-election + section-CAS
+sits alongside the tuple-space/blackboard approach and the (CP) `LockService` — i.e. *which*
+coordination approach to reach for and why the wiki takes this one — see
+[`coordination-approaches.md`](coordination-approaches.md).
 
 The whole record exists to answer one question: **how does a group of LLM agents edit a shared prose
 wiki concurrently without either losing edits (naive LWW on whole pages) or diverging forever
