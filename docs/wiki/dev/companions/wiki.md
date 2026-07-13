@@ -16,10 +16,13 @@ lives in a **node-independent, pluggable store**. Two planes, each used the way 
 intends — and the worked example demonstrates both:
 
 - **Data plane** (`WikiStore` trait + `FsStore` ref impl): the pluggable backing store, deliberately
-  **Mycelium-agnostic**. `read`/`query`/`write_page`/`list_pages`/`location`. Torn-read-safe for
-  readers via **manifest-last** writes + per-object atomicity; `read` is manifest-authoritative (a
-  stray unreferenced section is invisible). **Readers go direct to the store, in parallel — no node,
-  no curator.** That node-independence is what makes the wiki a *store, not a service*.
+  **Mycelium-agnostic**. `read`/`read_versioned`/`query`/`write_section`/`update_manifest`/`write_page`/
+  `list_pages`/`location`. The concurrent write path is a **section-granular compare-and-swap**
+  (`read_versioned` → reconcile → `write_section`/`update_manifest`, each keyed on the version read);
+  `write_page` is a non-CAS full-replace convenience. Torn-read-safe for readers; `read` is
+  manifest-authoritative (a stray unreferenced section is invisible). **Readers go direct to the store,
+  in parallel — no node, no curator.** That node-independence is what makes the wiki a *store, not a
+  service*.
 - **Control plane** (feature `control-plane`, the Mycelium side): a single elected **curator**
   discovered on the capability ring, the single writer of record.
 
@@ -64,8 +67,31 @@ location; one outside the allowlist is denied.
 - **Evaporating proposal queue:** any agent (any role) `propose`s → an evaporating
   `wiki/{group}/proposal/{id}` KV entry. Coordinator-free.
 - **Single-writer apply:** only the curator drains, **grouping proposals by target section** so a
-  same-section conflict reaches the reconcile as *one* batch held by *one* writer — the single-writer
-  dividend: **no CRDT, no lost update**. Tombstones the proposal only after the store write lands.
+  same-section conflict reaches the reconcile as *one* batch — no CRDT. Tombstones the proposal only
+  after the store write lands.
+- **CAS-airtight, not single-writer-*assuming* (2026-07-13):** the apply is a **section-granular
+  compare-and-swap**, so **no lost update even during a dual-curator blip** — not merely as the
+  single-writer dividend. The old whole-page `write_page` let two transient curators editing *different
+  sections of one page* clobber each other (B's full-page snapshot reverting A's section, proposal
+  already tombstoned → unrecoverable). Now each section is an independent CAS slot: a stale-based write
+  returns `WikiError::Conflict`, the curator re-reads + re-reconciles, and different sections don't
+  contend. `FsStore` implements the CAS with immutable versioned objects published by atomic `hard_link`
+  (no lock files → **no stale-lock deadlock**); `S3Store`'s conditional `PUT`/`If-Match` is the same
+  contract. The ring's eventual-single *election* is now liveness/efficiency, **not** a correctness
+  dependency — a partition running two curators is safe (that is what keeps the write path
+  coordinator-free, no distributed lock).
+- **The store CAS is at-least-once/never-lose, *not* store-level exactly-once** — the important nuance a
+  concurrency stress test (`concurrent_idempotent_appends_deliver_every_edit_exactly_once`) surfaced. A
+  version can be consumed by a follower and then re-applied on the original writer's retry, so a
+  `Conflict` caller may apply an edit more than once; nothing is ever *lost*. Exactly-once **effect**
+  comes from the reconcile being **idempotent** (the append-merge skips an already-contained body) —
+  the *same* at-least-once + idempotent-merge = exactly-once-effect contract the tuple space and
+  blackboard use (`docs/design/exactly-once-effect.md`). Bounded disk (old versions GC'd) is why the
+  store cannot promise exactly-once at its own layer. Regression gates (`fs/tests.rs`):
+  `concurrent_curators_editing_different_sections_dont_clobber`, `same_section_stale_write_is_rejected_not_silently_lost`,
+  `manifest_membership_is_compare_and_swap`, `a_stale_write_into_a_gc_gap_is_rejected_not_shadowed`,
+  and the multithreaded `concurrent_idempotent_appends_deliver_every_edit_exactly_once` +
+  `many_threads_editing_different_sections_all_survive`.
 - **Reconcile** (`Reconciler`, dyn-safe `#[async_trait]`): `DirectReconciler` (default, no LLM) is a
   **lossless append-merge** that skips an already-contained body → **idempotent**, so crash-mid-drain
   re-drains to the same result. `LlmReconciler` (feature `llm`) is a real **3-way merge** over

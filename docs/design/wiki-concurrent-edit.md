@@ -365,8 +365,24 @@ Why each step is safe, against the invariants (§0):
 Shrink it by lowering `cap_refresh` (at the cost of more advertisement gossip); it is the same
 promotion-latency tradeoff the tuple space and blackboard already make. A *transiently* slow X
 (GC pause > 3× cap_refresh) can cause a spurious dual-candidacy blip, but the total-order tie-break
-converges to one curator and the idempotent reconcile makes a doubled drain harmless — the same
-"eventual-single, not strict-single" posture WS-E accepted for provisioning.
+converges to one curator.
+
+**Update (2026-07-13) — the store is now *strict*-single, not merely eventual-single.** The posture
+above (a doubled drain is *harmless* because reconcile is idempotent) leaned on the reconcile being
+the only safety net; it wasn't airtight. The old `write_page` rewrote the **whole page** from the
+curator's in-memory snapshot, so during a dual-curator blip two curators editing *different sections
+of the same page* could still clobber each other — B's full-page write reverting A's section, and the
+lost proposal was already tombstoned (unrecoverable). The store now enforces a single writer *per
+object* rather than assuming one: the curator write path is a **section-granular compare-and-swap**
+(`read_versioned` → reconcile → `write_section`/`update_manifest`, each keyed on the version it read).
+A stale-based write returns `WikiError::Conflict` — the curator re-reads and re-reconciles — so a
+doubled drain cannot lose an edit even under a persistent dual-curator window. Different sections are
+independent CAS slots (no false contention); the idempotent reconcile still makes the *retry* safe.
+The `FsStore` implements the CAS with immutable versioned objects published by atomic `hard_link`
+(no lock files → no stale-lock deadlock); an `S3Store`'s conditional `PUT`/`If-Match` is the same
+contract. So the ring's eventual-single *election* is now a liveness/efficiency property, not a
+correctness dependency — a partition that briefly runs two curators is safe, which is what lets the
+wiki keep the coordinator-free, partition-available posture (no distributed lock on the write path).
 
 ---
 

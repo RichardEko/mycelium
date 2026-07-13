@@ -80,6 +80,13 @@ pub enum WikiError {
     Serde(serde_json::Error),
     /// A page path that escapes the store root (`..`, absolute) — rejected.
     BadPath(String),
+    /// A compare-and-swap write lost the race: the object's on-store version moved since the
+    /// `expected` version the caller read (or the object already exists for an `expected = None`
+    /// create). **Not an error to log-and-drop** — the caller must re-read the committed state and
+    /// re-apply (idempotently), so a concurrent writer (e.g. a transient split-brain curator) can never
+    /// silently clobber a landed edit. The store is at-least-once/never-lose without a distributed lock;
+    /// exactly-once *effect* comes from the caller's idempotent reconcile.
+    Conflict,
 }
 
 impl std::fmt::Display for WikiError {
@@ -88,6 +95,7 @@ impl std::fmt::Display for WikiError {
             WikiError::Io(e)      => write!(f, "wiki store io: {e}"),
             WikiError::Serde(e)   => write!(f, "wiki store serde: {e}"),
             WikiError::BadPath(p) => write!(f, "wiki store: unsafe page path {p:?}"),
+            WikiError::Conflict   => write!(f, "wiki store: compare-and-swap version conflict (re-read and retry)"),
         }
     }
 }
