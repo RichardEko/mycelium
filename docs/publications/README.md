@@ -101,3 +101,16 @@ signal for the `/publication-lint` skill (is it catching overclaims before human
       curator serialises edits, and the CAS keeps even a transient dual-curator (mid-failover) from
       losing one." Keeps the slide's "the hard problem dissolves" thrust while naming the real mechanism.
   §6 relative links in both decks + `philosophy.html` all resolve.
+- 2026-07-13 (lint run 3): **clean — verified the newly-added persuasion content, not a fresh
+  finding.** Diff-gated to the deck edits made since run 2 (the new "The CAP Choice" slide + its
+  consistency spectrum + the `dumb store`→section-CAS fix). Verified against code: the slide's **CP
+  row** (`consistent_set` / `distributed_lock` / `elect_leader`) is consensus-backed
+  (`consensus_handle.rs`, routes through `cluster_propose`/`group_propose`); the **companions row**
+  (tuple-space / blackboard / wiki) calls **no** consensus (ring-elected) — the classification is
+  correct. Honest ceiling held: the slide says "safe, not linearizable", "blocks ≠ fails",
+  "exactly-once *effect*" (not delivery), and "**CAP isn't bypassed**… paying in weaker consistency,
+  not availability" — the CAP claim is stated as *relocated, not escaped*, matching
+  `coordination-approaches.md` (§5 cross-artifact consistent). Noted-and-kept (defensible, not a
+  finding): "a fencing token / CAS makes two writers **harmless**" — strong wording, but true in the
+  no-lost-update sense the section-CAS guarantees (never-lose). **Carried (Major, still open):** the
+  `presentation.html:926` "~1 ms" gateway number remains unsourced.
