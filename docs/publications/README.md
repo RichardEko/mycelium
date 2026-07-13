@@ -76,6 +76,15 @@ signal for the `/publication-lint` skill (is it catching overclaims before human
   / signal_fanout / capability_resolve, not gateway overhead). FLAGGED, not auto-edited (author's
   perf copy): either add a gateway-overhead bench or soften to "sub-millisecond / negligible next to
   LLM inference latency." Severity: Major.
+  **RESOLVED 2026-07-13:** added `benches/gateway_overhead.rs` (gateway HTTP path vs. direct
+  in-process call, + a `/health` pure-transport floor). Measured on loopback: `/health` **≈40 µs**,
+  `POST /gateway/kv` **≈44 µs** vs. direct `kv().set` **≈0.36 µs**, `GET /gateway/kv` **≈42 µs** vs.
+  direct `kv().get` **≈0.02 µs** — so the real per-call gateway overhead is **~40 µs (0.04 ms)**, i.e.
+  the "~1 ms" placeholder was **~25× pessimistic** (an *undersell*, the safe direction). Slide updated
+  to "~40 µs loopback overhead (bench-measured, `benches/gateway_overhead.rs`)". The number is now
+  reproducible: `cargo bench --bench gateway_overhead --features gateway,test-util`. Caveat kept
+  honest by the bench's own doc — loopback, single node, so it isolates the axum+serde+reqwest
+  round-trip, which is exactly what a single-node "overhead" figure should mean.
 - 2026-07-11 (lint run 1): fixed two version/terminology staleness (not overclaims):
   `presentation.html:1298` stale "wire v11" → v12; `:1210` non-canonical "Broadcast" scope →
   "Cluster" (the code/guide/wiki vocabulary is Cluster·Group·Individual).

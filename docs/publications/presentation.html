@@ -978,7 +978,7 @@ POST /gateway/govern/timing      { <span class="cv">"health_secs"</span>:<span c
   <div class="slide-top"><span class="eyebrow">Language Bridges</span><span class="slide-num">11 / 25</span></div>
   <div class="slide-body">
     <div class="slide-title">Your team writes <em>Python or TypeScript.</em><br>Mycelium speaks gossip.</div>
-    <div class="slide-sub">A thin Rust sidecar exposes the full mesh API over a local HTTP gateway. No native extension. No version matrix. ~1 ms overhead — invisible next to LLM inference latency.</div>
+    <div class="slide-sub">A thin Rust sidecar exposes the full mesh API over a local HTTP gateway. No native extension. No version matrix. ~40 µs loopback overhead (bench-measured, <code>benches/gateway_overhead.rs</code>) — invisible next to LLM inference latency.</div>
     <div class="cols2" style="gap:20px;">
       <div style="display:flex;flex-direction:column;gap:12px;">
         <div class="card card-accent-green">

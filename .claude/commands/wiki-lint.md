@@ -84,7 +84,13 @@ when a chapter or example is renamed/moved.
 
 Durable knowledge with no wiki home: scan recent merged work (plans marked complete,
 analysis findings, new invariants in code comments) and file what's missing under the right
-section (routing test in `AGENTS.md`).
+section (routing test in `AGENTS.md`). **Not just "does the knowledge exist somewhere" — does the
+*wiki cite* it?** The wiki's contract is "code is canon, the wiki cites it", so a new authoritative
+`docs/design/` decision (or ADR) whose subject the wiki already covers must be *linked* from the
+relevant wiki page/folder-note, not merely exist in `docs/design/`. A merged design doc that the
+companion/architecture pages embody but never reference = a coverage finding (add the pointer). This
+is a scope gap a prior pass hit: it counted `coordination-approaches.md` as "covered" because it
+existed user-facing, without checking the wiki linked it (ledger 2026-07-13).
 
 ## Output
 

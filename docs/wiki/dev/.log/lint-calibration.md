@@ -42,3 +42,12 @@ Entry format:
   in CI (no `-p mycelium-core` test job); §1 spot-checked `operations.md` endpoints but never diffed
   `testing.md`'s CI-gate block against `.github/workflows` (found by the mixed-version compat work).
   Sharpening: §1 now diffs the `testing.md` CI-gate list against the workflow `run:` steps.
+- 2026-07-13: **scope gap — §4 treated "the knowledge has a home" as "covered."** The earlier
+  2026-07-13 lint declared coverage complete for `coordination-approaches.md` on the grounds that the
+  doc *exists* (user-facing) — but never checked that the **wiki cites it**. A cross-cutting decision
+  the three companions all embody was reachable from guide/operations/design docs yet invisible from
+  the wiki's own companions synthesis, contradicting the wiki's "code is canon, the wiki cites it"
+  contract (found by the 2nd 2026-07-13 lint). Sharpening: §4 now asks not just "does durable knowledge
+  have a home?" but "does the **wiki** cite that home?" — a new authoritative `docs/design/` decision
+  the wiki's subject matter embodies must be linked from the relevant wiki page/folder-note, not merely
+  exist elsewhere. Folded into the skill's §4.
