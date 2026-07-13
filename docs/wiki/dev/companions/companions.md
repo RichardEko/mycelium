@@ -8,7 +8,11 @@ via wasm-host).
 
 > These pages are maintainer-facing (design + rationale + gates). The **operator** runbook —
 > durability/WAL, capability-ring failover, the wiki's node-independent store, teardown — is
-> [operations/companions.md](../../../operations/companions.md).
+> [operations/companions.md](../../../operations/companions.md). The **cross-cutting coordination
+> decision** all three share — a ring-elected single-writer made safe by id-fencing / section-CAS,
+> deliberately *not* the (CP, quorum-blocking) distributed lock, and the CAP framing (AP, paying in
+> weaker consistency not availability) — is
+> [design/coordination-approaches.md](../../../design/coordination-approaches.md).
 
 - **[tuple-space.md](tuple-space.md)** — `mycelium-tuple-space/`: pull-based pipeline buffer
   (Linda-style lanes). The load-bearing artifact for Paper 2a's pull-vs-push argument.

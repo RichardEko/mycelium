@@ -164,6 +164,11 @@ path = "src/bin/skillrunner/main.rs"
 name    = "throughput"
 harness = false
 
+[[bench]]
+name              = "gateway_overhead"
+harness           = false
+required-features = ["gateway", "test-util"]
+
 [profile.release]
 lto = true
 codegen-units = 1
