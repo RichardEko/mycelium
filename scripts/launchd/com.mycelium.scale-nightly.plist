@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Local nightly scale-suite runner (Option B). Copy to ~/Library/LaunchAgents/ and register
+  with launchctl bootstrap (see scripts/scale-nightly-local.sh header + the repo docs).
+  Edit the script path and the Hour/Minute if your checkout or preferred time differs.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mycelium.scale-nightly</string>
+
+    <!-- Boot-volume runner clone (~/Mycelium) so the background launchd session can read it —
+         a non-boot volume like /Volumes/Scratch is blocked by macOS TCC for background agents. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/serenity/Mycelium/scripts/scale-nightly-local.sh</string>
+        <string>all</string>
+    </array>
+
+    <!-- Nightly at 02:00 local. Change Hour/Minute to taste. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>2</integer>
+        <key>Minute</key><integer>0</integer>
+    </dict>
+
+    <!-- Wait for the schedule; do not fire on load/boot. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- launchd's own stdout/stderr (the script also writes per-suite logs). -->
+    <key>StandardOutPath</key>
+    <string>/Users/serenity/mycelium-scale-results/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/serenity/mycelium-scale-results/launchd.err.log</string>
+
+    <!-- launchd's minimal env — Homebrew (arm64) + cargo on PATH (script sets this too). -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/Users/serenity/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
