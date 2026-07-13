@@ -21,12 +21,16 @@
 //!
 //! The pluggable backing store, deliberately **Mycelium-agnostic** (the store is plain infrastructure;
 //! the control plane arrives in Phase 2 behind the `control-plane` feature):
-//! - the [`WikiStore`] trait — `read` / `query` / `write_page` / `list_pages` / `location`;
+//! - the [`WikiStore`] trait — `read` / `read_versioned` / `query` / `write_section` / `update_manifest`
+//!   / `write_page` / `list_pages` / `location`. The concurrent write path is a **section-granular
+//!   compare-and-swap** (`read_versioned` → reconcile → `write_section` / `update_manifest`): airtight
+//!   under two writers without a distributed lock. `write_page` is a non-CAS full-replace convenience;
 //! - the record model — [`Section`] (heading + body + join-key/scope [`Section::attributes`]),
 //!   [`Manifest`] (order, written last), [`Page`], [`Predicate`] (structured attribute filter, not
 //!   similarity search), and stable opaque [`mint_section_id`];
-//! - [`FsStore`] — a filesystem-directory reference implementation (atomic per-object writes,
-//!   manifest-last for torn-read safety, manifest-authoritative reads). An `S3Store` is a parallel impl.
+//! - [`FsStore`] — a filesystem-directory reference implementation (immutable versioned objects,
+//!   atomic hard-link CAS publish, manifest-authoritative reads). An `S3Store` is a parallel impl
+//!   (its conditional `PUT`/`If-Match` is the same CAS contract).
 
 mod model;
 mod store;

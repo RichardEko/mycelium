@@ -489,30 +489,61 @@ impl<S: WikiStore + 'static> Wiki<S> {
         }
     }
 
-    /// Reconcile one section's batch of proposals against its current text and write the page back
-    /// (manifest-last). The reconcile is [`DirectReconciler`] by default (lossless append-merge) or the
-    /// injected LLM curator.
+    /// Reconcile one section's batch of proposals against its current text and write it back with a
+    /// **section-granular compare-and-swap** — the airtight write path. Two curators (a transient
+    /// split-brain the ring hasn't reconciled yet) editing the same page no longer clobber each other:
+    /// each section is an independent CAS slot, and a stale-based write is rejected ([`WikiError::Conflict`])
+    /// so we re-read the committed state and re-reconcile. The reconcile is idempotent (the append-merge
+    /// skips already-contained edits), so a retry never drops or double-applies a proposal. On exhausted
+    /// retries we return `Err`, leaving the proposals un-tombstoned for the next drain — we never delete
+    /// a proposal we did not land. The reconcile is [`DirectReconciler`] by default or the injected LLM
+    /// curator.
     async fn apply_group(&self, page: &str, section: &SectionId, edits: &[ProposalEdit]) -> Result<(), WikiError> {
-        let existing = self.store.read(page)?;
-        let (mut sections, page_attrs) = match existing {
-            Some(pg) => (pg.sections, pg.attributes),
-            None      => (Vec::new(), BTreeMap::new()),
-        };
-        // Clone the current section so the immutable borrow ends before the reconcile await + the upsert.
-        let current = sections.iter().find(|s| &s.id == section).cloned();
-        let merged = self.reconciler.reconcile(page, section, current.as_ref(), edits).await;
-        let sec = Section {
-            id: section.clone(), heading: merged.heading, body: merged.body, attributes: merged.attributes,
-        };
-        match sections.iter_mut().find(|s| &s.id == section) {
-            Some(slot) => *slot = sec,          // edit an existing section
-            None        => sections.push(sec),  // new section
+        const MAX_TRIES: usize = 8;
+        for _ in 0..MAX_TRIES {
+            let vp = self.store.read_versioned(page)?;
+            let cur = vp.as_ref().and_then(|v| v.sections.get(section));
+            let cur_section = cur.map(|(_, s)| s.clone());
+            let cur_version = cur.map(|(v, _)| *v);
+            let is_member = vp.as_ref().is_some_and(|v| v.order.contains(section));
+
+            let merged = self.reconciler.reconcile(page, section, cur_section.as_ref(), edits).await;
+            let sec = Section {
+                id: section.clone(), heading: merged.heading, body: merged.body, attributes: merged.attributes,
+            };
+
+            let mut changed = false;
+            // 1. Write the section body — but only if the reconcile actually changed it. An already-merged
+            //    re-drain is a no-op here (idempotent) and just falls through to the membership check.
+            if cur_section.as_ref() != Some(&sec) {
+                match self.store.write_section(page, &sec, cur_version) {
+                    Ok(_)                      => changed = true,
+                    Err(WikiError::Conflict)   => continue, // another writer advanced this section — re-read
+                    Err(e)                     => return Err(e),
+                }
+            }
+            // 2. Splice a new section into the manifest order (a separate, page-level CAS — body edits do
+            //    not touch the manifest). A concurrent membership change conflicts; we retry the whole
+            //    apply, and the section write above is idempotent so the retry is safe.
+            if !is_member {
+                let (mut order, attrs, mver) = match &vp {
+                    Some(v) => (v.order.clone(), v.attributes.clone(), Some(v.manifest_version)),
+                    None    => (Vec::new(), BTreeMap::new(), None),
+                };
+                if !order.contains(section) { order.push(section.clone()); }
+                match self.store.update_manifest(page, &order, &attrs, mver) {
+                    Ok(_)                    => changed = true,
+                    Err(WikiError::Conflict) => continue,
+                    Err(e)                   => return Err(e),
+                }
+            }
+
+            if changed {
+                self.lint_dirty.store(true, Ordering::Release); // the corpus changed → re-lint next tick
+            }
+            return Ok(());
         }
-        let r = self.store.write_page(page, &sections, &page_attrs);
-        if r.is_ok() {
-            self.lint_dirty.store(true, Ordering::Release); // the corpus changed → re-lint next tick
-        }
-        r
+        Err(WikiError::Conflict) // lost every attempt — leave the proposals queued for the next drain
     }
 }
 
