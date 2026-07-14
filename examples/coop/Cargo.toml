@@ -67,6 +67,10 @@ name = "llm_council"
 path = "src/bin/llm_council.rs"
 
 [[bin]]
+name = "llm_council_viz"
+path = "src/bin/llm_council_viz.rs"
+
+[[bin]]
 name = "catalog"
 path = "src/bin/catalog.rs"
 required-features = ["wasm"]

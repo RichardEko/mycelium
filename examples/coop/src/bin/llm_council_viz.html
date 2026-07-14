@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LLM Council — Fan-out · Synthesis · Iterative Refinement</title>
+<style>
+  :root {
+    --bg:       #0d1117;
+    --surface:  #161b22;
+    --surface2: #1c2128;
+    --border:   #30363d;
+    --accent:   #58a6ff;
+    --green:    #3fb950;
+    --amber:    #ffa657;
+    --red:      #ff7b72;
+    --purple:   #d2a8ff;
+    --muted:    #8b949e;
+    --text:     #e6edf3;
+    --radius:   10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 14px; line-height: 1.6;
+  }
+  .header {
+    background: radial-gradient(ellipse at 55% 0%, rgba(210,168,255,0.09) 0%, transparent 55%), var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 22px 32px 18px;
+    display: flex; align-items: flex-start; gap: 16px;
+  }
+  .badge {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--purple); background: rgba(210,168,255,0.1);
+    border: 1px solid rgba(210,168,255,0.25); border-radius: 20px;
+    padding: 4px 12px; white-space: nowrap; margin-top: 3px;
+  }
+  .htext { flex: 1; }
+  .htitle { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+  .htitle em { font-style: normal; color: var(--purple); }
+  .hsub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .hsub code { color: var(--accent); }
+
+  .wrap { max-width: 1160px; margin: 0 auto; padding: 22px 32px 40px; }
+
+  .statusbar { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+  .chip {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 8px 14px;
+  }
+  .chip .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); }
+  .chip .val { font-size: 15px; font-weight: 700; font-family: "SF Mono","Fira Code",monospace; }
+  .dot-live {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--green); box-shadow: 0 0 6px var(--green);
+    animation: blink 1.6s ease-in-out infinite;
+  }
+  .dot-off { background: var(--amber); box-shadow: none; animation: none; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
+
+  .canvas-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+  #stage { display: block; width: 100%; }
+
+  .caption { font-size: 12px; color: var(--muted); padding: 12px 18px; border-top: 1px solid var(--border); background: var(--surface2); }
+  .caption em { font-style: normal; color: var(--text); }
+
+  .legend { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 16px; font-size: 11px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <span class="badge">Tuple Space · Multi-agent</span>
+  <div class="htext">
+    <div class="htitle">LLM Council — <em>fan-out · synthesis · iterative refinement</em></div>
+    <div class="hsub">
+      A food-rescue co-op. Each donation evolves into an approved distribution plan by passing through
+      three collaboration modes — differentiated specialists (<code>perish/route/allergen</code>) fan out,
+      a synthesizer joins by donation id, a critic and reviser ratchet quality past the bar.
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="statusbar">
+    <div class="chip"><span class="lbl">Link</span> <span class="dot-live" id="conn"></span></div>
+    <div class="chip"><span class="lbl">Tick</span> <span class="val" style="color:var(--accent)" id="s-tick">0</span></div>
+    <div class="chip"><span class="lbl">In-flight</span> <span class="val" style="color:var(--amber)" id="s-inflight">0</span></div>
+    <div class="chip"><span class="lbl">Approved</span> <span class="val" style="color:var(--green)" id="s-approved">0</span></div>
+    <div class="chip"><span class="lbl">Recent</span> <span class="val" style="color:var(--purple);font-size:12px" id="s-recent">—</span></div>
+  </div>
+
+  <div class="canvas-panel">
+    <canvas id="stage"></canvas>
+    <div class="caption" id="caption">
+      <em>Differentiated specialists, fan-out · synthesis · iterative refinement</em> — coordinated only by
+      the tuple space, no orchestrator.
+    </div>
+  </div>
+
+  <div class="legend">
+    <span><span class="sw" style="background:var(--accent)"></span> fan-out / forward edge</span>
+    <span><span class="sw" style="background:var(--purple)"></span> join (3 partials → 1 draft)</span>
+    <span><span class="sw" style="background:var(--amber)"></span> critic ↔ reviser back-edge (refinement)</span>
+    <span><span class="sw" style="background:var(--green)"></span> approved plan</span>
+    <span>token label = <em style="color:var(--text)">quality</em> · ring fills toward the 0.9 bar</span>
+  </div>
+</div>
+
+<script>
+const HTTP_PORT = 8094;
+const QUALITY_BAR = 0.9;
+
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d');
+const dpr = window.devicePixelRatio || 1;
+let W = 1000, H = 520;
+
+function sizeCanvas() {
+  const cssW = canvas.clientWidth || 1000;
+  W = cssW; H = Math.round(cssW * 0.5);
+  canvas.style.height = H + 'px';
+  canvas.width  = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', sizeCanvas);
+
+// ── Live state, updated by polling /state ──────────────────────────────
+let state = { tick: 0, lanes: [], in_flight: [], approved_total: 0, recent_approved: [] };
+let connected = false;
+
+// ── DAG node layout (fractions of W/H) ─────────────────────────────────
+// The `key` matches an in_flight `stage`; `lane` (if set) matches a /state lane name for the depth badge.
+const NODES = {
+  assess:   { fx: 0.075, fy: 0.44, r: 34, label: 'seeder',   sub: 'assess',       lane: 'assess',       col: '#58a6ff' },
+  perish:   { fx: 0.31,  fy: 0.17, r: 30, label: 'perish',   sub: 'shelf life',   lane: 'spec.perish',  col: '#58a6ff' },
+  route:    { fx: 0.31,  fy: 0.44, r: 30, label: 'route',    sub: 'kitchen',      lane: 'spec.route',   col: '#58a6ff' },
+  allergen: { fx: 0.31,  fy: 0.71, r: 30, label: 'allergen', sub: 'dietary',      lane: 'spec.allergen',col: '#58a6ff' },
+  synth:    { fx: 0.52,  fy: 0.44, r: 34, label: 'synth',    sub: 'join by id',   lane: 'partials',     col: '#d2a8ff' },
+  draft:    { fx: 0.675, fy: 0.44, r: 32, label: 'draft',    sub: 'plan',         lane: 'draft',        col: '#e6edf3' },
+  critic:   { fx: 0.83,  fy: 0.44, r: 32, label: 'critic',   sub: 'vs 0.9 bar',   lane: null,           col: '#ffa657' },
+  approved: { fx: 0.95,  fy: 0.20, r: 30, label: 'approved', sub: 'distribute',   lane: 'approved',     col: '#3fb950' },
+  reviser:  { fx: 0.675, fy: 0.80, r: 30, label: 'reviser',  sub: '+0.2 quality', lane: 'revise',       col: '#ffa657' },
+};
+function pos(n) { return { x: NODES[n].fx * W, y: NODES[n].fy * H }; }
+
+// Which node a token sits on, keyed by its `stage`.
+const STAGE_NODE = {
+  assess: 'assess', specialists: 'route', partials: 'synth',
+  draft: 'draft', revise: 'reviser', approved: 'approved',
+};
+
+function laneDepth(name) {
+  const l = state.lanes.find(x => x.name === name);
+  return l ? l.depth : 0;
+}
+
+// ── Drawing ────────────────────────────────────────────────────────────
+let animT = 0;
+function edge(a, b, color, opts = {}) {
+  const pa = pos(a), pb = pos(b);
+  const ra = NODES[a].r, rb = NODES[b].r;
+  const ang = Math.atan2(pb.y - pa.y, pb.x - pa.x);
+  const x1 = pa.x + Math.cos(ang) * ra, y1 = pa.y + Math.sin(ang) * ra;
+  const x2 = pb.x - Math.cos(ang) * rb, y2 = pb.y - Math.sin(ang) * rb;
+
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = opts.width || 2;
+  if (opts.dash) { ctx.setLineDash(opts.dash); ctx.lineDashOffset = -(animT * (opts.flow || 40)) % 100; }
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  ctx.restore();
+
+  // Arrowhead
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.translate(x2, y2); ctx.rotate(ang);
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-8, -4); ctx.lineTo(-8, 4); ctx.closePath(); ctx.fill();
+  ctx.restore();
+
+  // Flowing packets along forward edges (subtle sense of motion, independent of tokens).
+  if (opts.packets) {
+    for (let k = 0; k < opts.packets; k++) {
+      const t = ((animT * 0.45 + k / opts.packets) % 1);
+      const px = x1 + (x2 - x1) * t, py = y1 + (y2 - y1) * t;
+      ctx.beginPath(); ctx.arc(px, py, 2.2, 0, Math.PI * 2);
+      ctx.fillStyle = color; ctx.globalAlpha = 0.5; ctx.fill(); ctx.globalAlpha = 1;
+    }
+  }
+}
+
+function draw(ts) {
+  animT = ts / 1000;
+  ctx.clearRect(0, 0, W, H);
+
+  // ── Edges ────────────────────────────────────────────────────────────
+  // 1 → 3 fan-out
+  edge('assess', 'perish',   'rgba(88,166,255,0.5)', { dash: [6, 8], flow: 42, packets: 2 });
+  edge('assess', 'route',    'rgba(88,166,255,0.5)', { dash: [6, 8], flow: 42, packets: 2 });
+  edge('assess', 'allergen', 'rgba(88,166,255,0.5)', { dash: [6, 8], flow: 42, packets: 2 });
+  // 3 → 1 join
+  edge('perish',   'synth', 'rgba(210,168,255,0.5)', { dash: [6, 8], flow: 42, packets: 2 });
+  edge('route',    'synth', 'rgba(210,168,255,0.5)', { dash: [6, 8], flow: 42, packets: 2 });
+  edge('allergen', 'synth', 'rgba(210,168,255,0.5)', { dash: [6, 8], flow: 42, packets: 2 });
+  // pipeline
+  edge('synth',  'draft',  'rgba(230,237,243,0.4)', { dash: [6, 8], flow: 38, packets: 2 });
+  edge('draft',  'critic', 'rgba(230,237,243,0.4)', { dash: [6, 8], flow: 38, packets: 2 });
+  // pass → approved
+  edge('critic', 'approved', 'rgba(63,185,80,0.65)', { width: 2.5, dash: [6, 8], flow: 40, packets: 2 });
+  // ── the refinement back-edge: critic → reviser → draft (highlighted, pulsing) ──
+  const pulse = 0.55 + 0.45 * Math.sin(animT * 2.6);
+  edge('critic',  'reviser', `rgba(255,166,87,${0.4 + 0.4 * pulse})`, { width: 2.5, dash: [5, 6], flow: -34 });
+  edge('reviser', 'draft',   `rgba(255,166,87,${0.4 + 0.4 * pulse})`, { width: 2.5, dash: [5, 6], flow: -34 });
+  labelMid('critic', 'reviser', 'fail', '#ffa657');
+  labelMid('critic', 'approved', 'pass', '#3fb950');
+
+  // ── Nodes ────────────────────────────────────────────────────────────
+  for (const key of Object.keys(NODES)) drawNode(key);
+
+  // ── Fan-out / join brackets to make 1→3 and 3→1 explicit ─────────────
+  bracketLabel(pos('assess').x + 46, pos('route').y, 'fan-out 1→3', '#58a6ff');
+  bracketLabel(pos('synth').x - 46, pos('route').y, '3→1 join', '#d2a8ff', true);
+
+  // ── Tokens (donations flowing through the DAG) ───────────────────────
+  drawTokens();
+
+  requestAnimationFrame(draw);
+}
+
+function labelMid(a, b, text, color) {
+  const pa = pos(a), pb = pos(b);
+  const mx = (pa.x + pb.x) / 2, my = (pa.y + pb.y) / 2;
+  ctx.save();
+  ctx.font = '600 10px -apple-system, sans-serif';
+  ctx.fillStyle = color; ctx.textAlign = 'center';
+  const w = ctx.measureText(text).width + 10;
+  ctx.fillStyle = 'rgba(13,17,23,0.85)';
+  roundRect(mx - w / 2, my - 8, w, 15, 4); ctx.fill();
+  ctx.fillStyle = color;
+  ctx.fillText(text, mx, my + 3);
+  ctx.restore();
+}
+
+function bracketLabel(x, y, text, color) {
+  ctx.save();
+  ctx.font = '600 9px -apple-system, sans-serif';
+  ctx.fillStyle = color; ctx.textAlign = 'center';
+  ctx.globalAlpha = 0.75;
+  ctx.fillText(text, x, y - 44);
+  ctx.restore();
+}
+
+function drawNode(key) {
+  const n = NODES[key], p = pos(key);
+  const depth = n.lane ? laneDepth(n.lane) : null;
+  const active = depth && depth > 0;
+
+  ctx.save();
+  // Glow when the lane holds work.
+  if (active) {
+    const g = ctx.createRadialGradient(p.x, p.y, n.r * 0.5, p.x, p.y, n.r + 16);
+    g.addColorStop(0, hexA(n.col, 0.30));
+    g.addColorStop(1, hexA(n.col, 0));
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(p.x, p.y, n.r + 16, 0, Math.PI * 2); ctx.fill();
+  }
+  // Body
+  ctx.beginPath(); ctx.arc(p.x, p.y, n.r, 0, Math.PI * 2);
+  ctx.fillStyle = '#161b22'; ctx.fill();
+  ctx.lineWidth = 2.4; ctx.strokeStyle = n.col; ctx.stroke();
+
+  // Labels
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#e6edf3'; ctx.font = '600 12px -apple-system, sans-serif';
+  ctx.fillText(n.label, p.x, p.y - 1);
+  ctx.fillStyle = '#8b949e'; ctx.font = '9px -apple-system, sans-serif';
+  ctx.fillText(n.sub, p.x, p.y + 12);
+
+  // Depth badge
+  if (depth !== null && depth > 0) {
+    const bx = p.x + n.r - 4, by = p.y - n.r + 4;
+    ctx.beginPath(); ctx.arc(bx, by, 9, 0, Math.PI * 2);
+    ctx.fillStyle = n.col; ctx.fill();
+    ctx.fillStyle = '#0d1117'; ctx.font = '700 10px -apple-system, sans-serif';
+    ctx.fillText(String(depth), bx, by + 3.5);
+  }
+  ctx.restore();
+}
+
+// Position tokens on their stage node, spreading multiple tokens around it.
+function drawTokens() {
+  // Group tokens by their node so we can fan them out.
+  const groups = {};
+  for (const tok of state.in_flight) {
+    const node = STAGE_NODE[tok.stage] || 'assess';
+    (groups[node] = groups[node] || []).push(tok);
+  }
+  for (const node of Object.keys(groups)) {
+    const list = groups[node];
+    const p = pos(node);
+    const R = NODES[node].r + 20;
+    list.forEach((tok, i) => {
+      // Distribute around an arc just outside the node.
+      const spread = Math.min(list.length, 6);
+      const a = -Math.PI / 2 + (i - (spread - 1) / 2) * 0.5;
+      const tx = p.x + Math.cos(a) * R;
+      const ty = p.y + Math.sin(a) * R - 2;
+      drawToken(tx, ty, tok);
+    });
+  }
+}
+
+function drawToken(x, y, tok) {
+  const q = tok.quality || 0;
+  const r = 13;
+  ctx.save();
+
+  // Quality ring: fills from 0 → 1, turns green once it clears the bar.
+  ctx.beginPath(); ctx.arc(x, y, r + 3, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 3; ctx.stroke();
+  if (q > 0) {
+    const frac = Math.min(1, q);
+    ctx.beginPath();
+    ctx.arc(x, y, r + 3, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
+    ctx.strokeStyle = q >= QUALITY_BAR ? '#3fb950' : '#ffa657';
+    ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.stroke();
+  }
+
+  // Token body
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = tok.stage === 'approved' ? '#12331f'
+               : tok.stage === 'revise'   ? '#3a2a12'
+               : '#1c2f4a';
+  ctx.fill();
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = tok.stage === 'approved' ? '#3fb950'
+                 : tok.stage === 'revise'   ? '#ffa657'
+                 : '#58a6ff';
+  ctx.stroke();
+
+  // id + quality label
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#e6edf3'; ctx.font = '700 10px -apple-system, sans-serif';
+  ctx.fillText('#' + tok.id, x, y - 1);
+  ctx.fillStyle = '#c9d1d9'; ctx.font = '8px "SF Mono", monospace';
+  ctx.fillText(q > 0 ? q.toFixed(1) : '·', x, y + 9);
+
+  // Revision pips under the token (how many refinement cycles it has been through).
+  if (tok.revisions > 0) {
+    for (let i = 0; i < Math.min(tok.revisions, 3); i++) {
+      ctx.beginPath(); ctx.arc(x - 5 + i * 5, y + r + 6, 1.8, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffa657'; ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+function hexA(hex, a) {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.substring(0, 2), 16);
+  const g = parseInt(h.substring(2, 4), 16);
+  const b = parseInt(h.substring(4, 6), 16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+function roundRect(x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// ── Polling ────────────────────────────────────────────────────────────
+function setConnected(ok) {
+  connected = ok;
+  document.getElementById('conn').className = ok ? 'dot-live' : 'dot-live dot-off';
+}
+
+function applyState(d) {
+  state = d;
+  document.getElementById('s-tick').textContent = d.tick;
+  document.getElementById('s-inflight').textContent = d.in_flight.length;
+  document.getElementById('s-approved').textContent = d.approved_total;
+  const recent = (d.recent_approved || []).map(r => `#${r.id}·${r.revisions}rev`).join('  ');
+  document.getElementById('s-recent').textContent = recent || '—';
+
+  // Caption reflects whatever the council is doing right now.
+  const cap = document.getElementById('caption');
+  const revising = d.in_flight.filter(t => t.stage === 'revise').length;
+  if (revising > 0) {
+    cap.innerHTML = `<em>${revising} plan(s) sent back to the reviser.</em> The critic scored them below the 0.9 bar — watch the quality ring climb 0.6 → 0.8 → 1.0 as they cycle draft ↔ revise, no orchestrator.`;
+  } else if (d.in_flight.length > 0) {
+    cap.innerHTML = `<em>${d.in_flight.length} donation(s) deliberating.</em> Differentiated specialists fan out, the synthesizer joins their partials by id, the critic scores the draft — coordinated only by the tuple space.`;
+  } else {
+    cap.innerHTML = `<em>Differentiated specialists, fan-out · synthesis · iterative refinement</em> — coordinated only by the tuple space, no orchestrator. ${d.approved_total} plans approved so far.`;
+  }
+}
+
+async function poll() {
+  try {
+    const res = await fetch(`http://127.0.0.1:${HTTP_PORT}/state`, { signal: AbortSignal.timeout(2000) });
+    if (!res.ok) throw new Error();
+    applyState(await res.json());
+    if (!connected) setConnected(true);
+  } catch {
+    if (connected) setConnected(false);
+  }
+}
+
+// ── Init ───────────────────────────────────────────────────────────────
+sizeCanvas();
+setConnected(false);
+poll();
+setInterval(poll, 500);
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>

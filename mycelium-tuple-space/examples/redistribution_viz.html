@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Redistribution Pipeline — Live</title>
+<style>
+  :root {
+    --bg:       #0d1117;
+    --surface:  #161b22;
+    --surface2: #1c2128;
+    --border:   #30363d;
+    --accent:   #58a6ff;
+    --green:    #3fb950;
+    --purple:   #d2a8ff;
+    --amber:    #ffa657;
+    --red:      #ff7b72;
+    --muted:    #8b949e;
+    --text:     #e6edf3;
+    --text2:    #c9d1d9;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 14px; line-height: 1.6;
+  }
+
+  /* ── Header ─────────────────────────────────────────────── */
+  .header {
+    background: radial-gradient(ellipse at 60% 0%, rgba(63,185,80,0.07) 0%, transparent 55%), var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 22px 32px 18px;
+    display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap;
+  }
+  .header-badge {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--green); background: rgba(63,185,80,0.1);
+    border: 1px solid rgba(63,185,80,0.25); border-radius: 20px;
+    padding: 4px 12px; white-space: nowrap; margin-top: 4px;
+  }
+  .header-text { flex: 1; min-width: 240px; }
+  .header-title { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+  .header-title em { font-style: normal; color: var(--green); }
+  .header-sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+
+  /* ── Counter strip ──────────────────────────────────────── */
+  .counters { display: flex; gap: 10px; flex-wrap: wrap; align-items: stretch; }
+  .counter {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 8px 16px; min-width: 92px;
+  }
+  .counter-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  .counter-val { font-size: 22px; font-weight: 700; line-height: 1.15; font-family: "SF Mono","Fira Code",monospace; }
+  .badge-ok {
+    display: flex; align-items: center; gap: 7px;
+    background: rgba(63,185,80,0.12); border: 1px solid rgba(63,185,80,0.35);
+    color: var(--green); border-radius: 10px; padding: 8px 16px;
+    font-weight: 700; font-size: 13px; white-space: nowrap;
+  }
+  .badge-ok.bad {
+    background: rgba(255,123,114,0.12); border-color: rgba(255,123,114,0.4); color: var(--red);
+  }
+  .dot-live {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green); box-shadow: 0 0 6px var(--green);
+    animation: blink 1.6s ease-in-out infinite;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
+  .conn { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+  .conn-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+
+  /* ── Canvas ─────────────────────────────────────────────── */
+  .stage-wrap { max-width: 1180px; margin: 20px auto 8px; padding: 0 24px; }
+  #stage {
+    width: 100%; display: block;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  }
+  .legend {
+    max-width: 1180px; margin: 4px auto 10px; padding: 0 24px;
+    display: flex; gap: 18px; flex-wrap: wrap; font-size: 11px; color: var(--muted);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+  .caption {
+    max-width: 1180px; margin: 0 auto 28px; padding: 0 24px;
+    font-size: 12.5px; color: var(--text2); font-style: italic;
+  }
+  footer {
+    text-align: center; padding: 26px; font-size: 11px; color: var(--muted);
+    border-top: 1px solid var(--border);
+  }
+  footer code { background: var(--surface2); padding: 1px 6px; border-radius: 4px; color: var(--text2); }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <span class="header-badge">Tuple space · take + complete</span>
+  <div class="header-text">
+    <div class="header-title">Food Redistribution — <em>Sorting Pipeline</em></div>
+    <div class="header-sub">
+      One tuple space, no dispatcher · dock posts donations on <em>intake</em> · 2 sorters &amp; 2 routers
+      <em>take</em> competitively · dispatch delivers exactly once
+      · <span class="conn"><span class="conn-dot" id="conn-dot"></span><span id="conn-label">connecting…</span></span>
+    </div>
+  </div>
+  <div class="counters">
+    <div class="counter"><div class="counter-label">Posted</div><div class="counter-val" style="color:var(--amber)" id="c-posted">0</div></div>
+    <div class="counter"><div class="counter-label">In pipeline</div><div class="counter-val" style="color:var(--accent)" id="c-pipeline">0</div></div>
+    <div class="counter"><div class="counter-label">Delivered</div><div class="counter-val" style="color:var(--green)" id="c-delivered">0</div></div>
+    <div class="badge-ok" id="badge"><span class="dot-live"></span><span id="badge-txt">exactly-once ✓</span></div>
+  </div>
+</header>
+
+<div class="stage-wrap"><canvas id="stage" width="1400" height="620"></canvas></div>
+
+<div class="legend">
+  <span><span class="swatch" style="background:#ffa657"></span> donation crate (queued)</span>
+  <span><span class="swatch" style="background:#58a6ff"></span> sorter (intake → sorted)</span>
+  <span><span class="swatch" style="background:#d2a8ff"></span> router (sorted → routed)</span>
+  <span><span class="swatch" style="background:#3fb950"></span> dispatch (delivered)</span>
+</div>
+<div class="caption">
+  workers pull, never pushed — queue depth is the only signal; each item advances exactly once (atomic complete).
+</div>
+
+<footer>
+  mycelium-tuple-space · live at <code>:8093/state</code> · run <code>cargo run -p mycelium-tuple-space --example redistribution_viz</code>
+</footer>
+
+<script>
+const PORT = 8093;
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+// ── Layout: four stage columns left→right, workers between them ────────
+const COL_Y = 300;                 // vertical centre of the stage bins
+const COL_X = [160, 540, 920, 1290];  // intake, sorted, routed, delivered
+const STAGE_META = [
+  { key: 'intake',    label: 'intake',    color: '#ffa657' },
+  { key: 'sorted',    label: 'sorted',    color: '#58a6ff' },
+  { key: 'routed',    label: 'routed',    color: '#d2a8ff' },
+  { key: 'delivered', label: 'delivered', color: '#3fb950' },
+];
+const BIN_W = 116, BIN_H = 210;
+
+// Workers sit on the gaps between the columns they serve.
+const WORKER_POS = {
+  'sorter-A': { x: (COL_X[0]+COL_X[1])/2, y: COL_Y - 90, color: '#58a6ff' },
+  'sorter-B': { x: (COL_X[0]+COL_X[1])/2, y: COL_Y + 90, color: '#58a6ff' },
+  'router-A': { x: (COL_X[1]+COL_X[2])/2, y: COL_Y - 90, color: '#d2a8ff' },
+  'router-B': { x: (COL_X[1]+COL_X[2])/2, y: COL_Y + 90, color: '#d2a8ff' },
+  'dispatch': { x: (COL_X[2]+COL_X[3])/2, y: COL_Y,      color: '#3fb950' },
+};
+
+// ── Live state from server ─────────────────────────────────
+let state = {
+  tick: 0, posted_total: 0, delivered_total: 0,
+  stages: [], workers: [], recent: [], exactly_once_ok: true,
+};
+let connected = false;
+
+// ── Transient animations ───────────────────────────────────
+let tokens = [];   // {fromX, fromY, toX, toY, color, t}  a crate sliding a lane
+// Per-worker glow timers (seconds remaining) keyed by name.
+const glow = {};
+let seenMoves = new Set();
+
+// ── Fetch loop ─────────────────────────────────────────────
+async function poll() {
+  try {
+    const res = await fetch(`http://127.0.0.1:${PORT}/state`, { signal: AbortSignal.timeout(2000) });
+    if (!res.ok) throw new Error();
+    ingest(await res.json());
+    setConn(true);
+  } catch {
+    setConn(false);
+  }
+}
+
+// Column index for a stage key.
+function colOf(key) { return STAGE_META.findIndex(s => s.key === key); }
+
+function ingest(data) {
+  // New moves in recent[] → launch a crate token gliding along the lane.
+  for (const m of data.recent) {
+    const key = m.id + ':' + m.from + '>' + m.to;
+    if (seenMoves.has(key)) continue;
+    seenMoves.add(key);
+    const wp = WORKER_POS[m.worker];
+    const ci = colOf(m.from), cj = colOf(m.to);
+    if (ci < 0 || cj < 0) continue;
+    // Crate travels from the source bin, via the worker, to the destination bin.
+    tokens.push({ fromX: COL_X[ci], fromY: COL_Y, midX: wp ? wp.x : (COL_X[ci]+COL_X[cj])/2,
+                  midY: wp ? wp.y : COL_Y, toX: COL_X[cj], toY: COL_Y,
+                  color: wp ? wp.color : '#3fb950', t: 0 });
+    if (m.worker) glow[m.worker] = 0.7;
+  }
+  if (seenMoves.size > 400) seenMoves = new Set([...seenMoves].slice(-200));
+
+  state = data;
+  // Header counters.
+  const inPipe = data.stages.reduce((a, s) => a + s.depth, 0);
+  document.getElementById('c-posted').textContent    = data.posted_total;
+  document.getElementById('c-pipeline').textContent  = inPipe;
+  document.getElementById('c-delivered').textContent = data.delivered_total;
+  const badge = document.getElementById('badge');
+  const btxt  = document.getElementById('badge-txt');
+  if (data.exactly_once_ok) { badge.classList.remove('bad'); btxt.textContent = 'exactly-once ✓'; }
+  else { badge.classList.add('bad'); btxt.textContent = 'exactly-once ✗ VIOLATED'; }
+}
+
+function setConn(ok) {
+  connected = ok;
+  document.getElementById('conn-dot').style.background = ok ? 'var(--green)' : 'var(--amber)';
+  document.getElementById('conn-dot').style.boxShadow = ok ? '0 0 6px var(--green)' : 'none';
+  document.getElementById('conn-label').textContent = ok ? 'live' : 'waiting for server…';
+}
+
+// ── Drawing helpers ────────────────────────────────────────
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.arcTo(x+w, y, x+w, y+h, r);
+  ctx.arcTo(x+w, y+h, x, y+h, r);
+  ctx.arcTo(x, y+h, x, y, r);
+  ctx.arcTo(x, y, x+w, y, r);
+  ctx.closePath();
+}
+
+function depthOf(key) {
+  const s = state.stages.find(x => x.name === key);
+  return s ? s.depth : 0;
+}
+function workerOf(name) {
+  return state.workers.find(w => w.name === name) || { processed: 0, active: false };
+}
+
+// Draw a stage column: a labelled bin filling from the bottom with crates.
+function drawBin(i) {
+  const meta = STAGE_META[i];
+  const x = COL_X[i] - BIN_W/2, y = COL_Y - BIN_H/2;
+  // Terminal 'delivered' is a tally, not a queue.
+  const isTerminal = meta.key === 'delivered';
+  const depth = isTerminal ? state.delivered_total : depthOf(meta.key);
+
+  ctx.save();
+  ctx.fillStyle = '#1c2128';
+  roundRect(x, y, BIN_W, BIN_H, 12); ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = meta.color; ctx.globalAlpha = 0.55; ctx.lineWidth = 1.5;
+  roundRect(x, y, BIN_W, BIN_H, 12); ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  // Stacked crates (cap the drawn count; number is authoritative).
+  const shown = Math.min(depth, 8);
+  const cw = 74, ch = 17, gap = 5;
+  for (let k = 0; k < shown; k++) {
+    const cx = COL_X[i] - cw/2;
+    const cy = y + BIN_H - 14 - (k+1)*(ch+gap);
+    ctx.fillStyle = meta.color; ctx.globalAlpha = isTerminal ? 0.9 : (0.35 + 0.5*(k/8));
+    roundRect(cx, cy, cw, ch, 4); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // Label + depth number.
+  ctx.fillStyle = meta.color; ctx.textAlign = 'center';
+  ctx.font = '600 15px -apple-system, sans-serif';
+  ctx.fillText(meta.label, COL_X[i], y - 16);
+  ctx.fillStyle = '#e6edf3';
+  ctx.font = '700 26px "SF Mono", monospace';
+  ctx.fillText(depth, COL_X[i], y - 38);
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '10px "SF Mono", monospace';
+  ctx.fillText(isTerminal ? 'delivered' : 'queued', COL_X[i], y + BIN_H + 22);
+}
+
+// Draw a worker puck between the stages it serves.
+function drawWorker(name) {
+  const p = WORKER_POS[name];
+  const w = workerOf(name);
+  const g = glow[name] || 0;
+  const r = 30;
+  ctx.save();
+  if (w.active || g > 0) {
+    ctx.shadowColor = p.color;
+    ctx.shadowBlur = 6 + Math.max(g/0.7, w.active ? 0.6 : 0) * 26;
+  }
+  ctx.fillStyle = '#1c2128';
+  ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI*2); ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = p.color; ctx.lineWidth = (w.active || g > 0) ? 2.4 : 1.4;
+  ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI*2); ctx.stroke();
+
+  ctx.fillStyle = p.color; ctx.textAlign = 'center';
+  ctx.font = '600 12px -apple-system, sans-serif';
+  ctx.fillText(name, p.x, p.y - 2);
+  ctx.fillStyle = '#e6edf3';
+  ctx.font = '700 14px "SF Mono", monospace';
+  ctx.fillText(w.processed, p.x, p.y + 15);
+}
+
+// ── Render frame ───────────────────────────────────────────
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.05);
+  last = now;
+  ctx.clearRect(0, 0, W, H);
+
+  // Lane rails connecting the columns (behind everything).
+  ctx.strokeStyle = '#30363d'; ctx.lineWidth = 3;
+  for (let i = 0; i < COL_X.length - 1; i++) {
+    ctx.beginPath(); ctx.moveTo(COL_X[i]+BIN_W/2, COL_Y); ctx.lineTo(COL_X[i+1]-BIN_W/2, COL_Y); ctx.stroke();
+  }
+
+  // Decay worker glow timers.
+  for (const k in glow) { glow[k] = Math.max(0, glow[k] - dt); }
+
+  // Stage bins.
+  for (let i = 0; i < STAGE_META.length; i++) drawBin(i);
+
+  // Crate tokens gliding along their lanes (source → worker → destination).
+  tokens = tokens.filter(tk => {
+    tk.t += dt / 0.75;
+    if (tk.t >= 1) return false;
+    // Two-leg quadratic-ish path via the worker puck.
+    let x, y;
+    if (tk.t < 0.5) {
+      const u = tk.t / 0.5;
+      x = tk.fromX + (tk.midX - tk.fromX) * u;
+      y = tk.fromY + (tk.midY - tk.fromY) * u;
+    } else {
+      const u = (tk.t - 0.5) / 0.5;
+      x = tk.midX + (tk.toX - tk.midX) * u;
+      y = tk.midY + (tk.toY - tk.midY) * u;
+    }
+    ctx.save();
+    ctx.shadowColor = tk.color; ctx.shadowBlur = 12;
+    ctx.fillStyle = tk.color;
+    roundRect(x - 9, y - 7, 18, 14, 3); ctx.fill();
+    ctx.restore();
+    return true;
+  });
+
+  // Workers on top.
+  for (const name in WORKER_POS) drawWorker(name);
+
+  // Footer caption inside the canvas.
+  ctx.fillStyle = '#8b949e'; ctx.font = '11px "SF Mono", monospace'; ctx.textAlign = 'center';
+  ctx.fillText(`competitive take · atomic complete · tick ${state.tick}`, W/2, H - 20);
+
+  requestAnimationFrame(frame);
+}
+
+// ── Boot ───────────────────────────────────────────────────
+setConn(false);
+poll();
+setInterval(poll, 400);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
