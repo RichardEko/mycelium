@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mycelium — Ops Console</title>
+<style>
+  :root{--bg:#0d1117;--panel:#161b22;--panel2:#1c2230;--border:#30363d;--fg:#c9d1d9;--muted:#8b949e;
+        --accent:#a78bfa;--green:#3fb950;--amber:#d29922;--red:#f85149;--blue:#58a6ff;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  header{display:flex;align-items:center;gap:14px;padding:12px 20px;border-bottom:1px solid var(--border);background:var(--panel);position:sticky;top:0;z-index:5;flex-wrap:wrap}
+  .brand{font-weight:700;letter-spacing:.02em}.brand b{color:var(--accent)}
+  .tag{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:2px 7px}
+  header input{background:#0b0f16;border:1px solid var(--border);border-radius:7px;color:var(--fg);font:12px var(--mono);padding:6px 9px;width:180px}
+  header .status{margin-left:auto;font-size:12px;color:var(--muted);font-family:var(--mono)}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);margin-right:5px;vertical-align:middle}
+  .dot.ok{background:var(--green)}.dot.bad{background:var(--red)}
+  nav{display:flex;gap:4px;padding:10px 20px 0;border-bottom:1px solid var(--border);background:var(--panel)}
+  nav button{background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer}
+  nav button.active{color:var(--fg);border-bottom-color:var(--accent)}
+  main{padding:20px;max-width:1100px;margin:0 auto}
+  .tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:18px}
+  .tile{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 16px}
+  .tile .v{font-size:1.7rem;font-weight:700;color:var(--accent);line-height:1;font-family:var(--mono)}
+  .tile .l{font-size:.72rem;color:var(--muted);margin-top:6px;text-transform:uppercase;letter-spacing:.06em}
+  h3{font-size:.75rem;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin:22px 0 10px}
+  .trip{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px}
+  .trip .row{display:flex;justify-content:space-between;align-items:center;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:12px}
+  .trip .n{color:var(--muted);font-family:var(--mono)}
+  .trip .c{font-family:var(--mono);font-weight:700}
+  .trip .c.zero{color:var(--green)}.trip .c.hot{color:var(--red)}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-bottom:12px}
+  .diag-summary{font-size:1.05rem;line-height:1.45;padding:18px 20px;border-radius:12px;border:1px solid var(--border);margin-bottom:14px}
+  .diag-summary.nominal{background:rgba(63,185,80,.08);border-color:rgba(63,185,80,.35)}
+  .diag-summary.pathology{background:rgba(248,81,73,.08);border-color:rgba(248,81,73,.35)}
+  .finding{border-left:3px solid var(--amber);padding:10px 14px;background:var(--panel2);border-radius:0 8px 8px 0;margin-bottom:8px}
+  .finding .h{font-weight:700}.finding .d{color:var(--muted);font-size:12px;margin-top:3px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  td,th{text-align:left;padding:6px 10px;border-bottom:1px solid var(--border)}
+  th{color:var(--muted);font-size:.72rem;text-transform:uppercase;letter-spacing:.06em}
+  .kv-ns{font-family:var(--mono);color:var(--blue)}
+  .keys{font-family:var(--mono);font-size:11px;color:var(--muted);max-height:120px;overflow:auto;margin-top:6px;white-space:pre-wrap}
+  pre.metrics{font-family:var(--mono);font-size:11px;color:var(--fg);background:#0b0f16;border:1px solid var(--border);border-radius:10px;padding:14px;overflow:auto;max-height:70vh}
+  .muted{color:var(--muted)}.err{color:var(--red)}
+  .badge{font-size:11px;font-family:var(--mono);padding:2px 8px;border-radius:6px;border:1px solid var(--border)}
+  .badge.ok{color:var(--green);border-color:rgba(63,185,80,.4)}.badge.bad{color:var(--red);border-color:rgba(248,81,73,.4)}
+</style>
+</head>
+<body>
+<header>
+  <span class="brand"><b>Mycelium</b> · Ops Console</span>
+  <span class="tag">read-only · dev tool</span>
+  <label class="muted" style="font-size:12px">target <input id="host" value="127.0.0.1:9050" spellcheck="false"></label>
+  <span class="status"><span id="dot" class="dot"></span><span id="stat">connecting…</span></span>
+</header>
+<nav id="tabs"></nav>
+<main id="view"><p class="muted">Loading…</p></main>
+
+<script>
+const TABS = ["Overview","Fleet","Diagnose","KV","Metrics"];
+let active = "Overview";
+const $ = s => document.querySelector(s);
+const el = (t,c,h)=>{const e=document.createElement(t); if(c)e.className=c; if(h!=null)e.innerHTML=h; return e;};
+const host = () => $("#host").value.trim() || "127.0.0.1:9050";
+
+async function api(path){
+  try{
+    const r = await fetch(`/api?host=${encodeURIComponent(host())}&path=${path}`);
+    const ct = r.headers.get("content-type")||"";
+    if(ct.includes("json")){ const j = await r.json(); if(j && j.__ops_error__) throw new Error(j.__ops_error__); return j; }
+    return await r.text();
+  }catch(e){ return {__err:String(e.message||e)}; }
+}
+function setStatus(ok,txt){ $("#dot").className = "dot "+(ok?"ok":"bad"); $("#stat").textContent = txt; }
+
+function renderTabs(){
+  const nav = $("#tabs"); nav.innerHTML="";
+  TABS.forEach(t=>{ const b=el("button",t===active?"active":"",t); b.onclick=()=>{active=t;renderTabs();refresh();}; nav.appendChild(b); });
+}
+
+// ── Overview: /stats ────────────────────────────────────────────────────────
+const HEADLINE = ["node_id","peers","store_entries","task_count","cluster_name"];
+const TRIPWIRES = ["dropped_frames","membership_flaps","commit_conflicts","schema_mismatch",
+  "opacity_oscillations","individual_flood_fallbacks","rate_limited_senders","cap_authz_violations",
+  "sys_namespace_violations","governed_group_conflicts","capability_coverage_gaps"];
+function overview(s){
+  if(s.__err) return `<p class="err">unreachable — ${s.__err}</p><p class="muted">Is a gateway-enabled node listening on <code>${host()}</code>? (set <code>http_port</code>)</p>`;
+  const v = document.createElement("div");
+  const tiles = el("div","tiles");
+  HEADLINE.forEach(k=>{ const val = s[k]===null||s[k]===undefined ? "—" : s[k];
+    tiles.appendChild(el("div","tile",`<div class="v">${val}</div><div class="l">${k.replace(/_/g,' ')}</div>`)); });
+  v.appendChild(tiles);
+  v.appendChild(el("h3",null,"Tripwires &amp; counters (green = clean)"));
+  const grid = el("div","trip");
+  TRIPWIRES.forEach(k=>{ const c = Number(s[k]||0); const cls = c>0?"hot":"zero";
+    grid.appendChild(el("div","row",`<span class="n">${k.replace(/_/g,' ')}</span><span class="c ${cls}">${c}</span>`)); });
+  v.appendChild(grid);
+  return v.outerHTML;
+}
+
+// ── Fleet: /gateway/fleet ───────────────────────────────────────────────────
+function fleet(f){
+  if(f.__err) return `<p class="err">unreachable — ${f.__err}</p>`;
+  const vc = f.view_confidence||{};
+  const tiles = [
+    ["observer",f.observer||"—"],["peers heard",`${vc.peers_heard??"—"} / ${vc.peers_known??"—"}`],
+    ["max staleness", (vc.max_staleness_ms!=null? vc.max_staleness_ms+" ms":"—")],
+    ["opaque nodes", (f.opaque_node_pct!=null? f.opaque_node_pct+"%":"—")],
+    ["store entries", f.store_entries??"—"],["commit conflicts", f.commit_conflicts??0],
+  ].map(([l,v])=>`<div class="tile"><div class="v" style="font-size:1.2rem">${v}</div><div class="l">${l}</div></div>`).join("");
+  const flags = [
+    ["self-degraded", !!vc.self_degraded],["membership flaps", (f.membership_flaps||0)>0],
+    ["opacity oscillations",(f.opacity_oscillations||0)>0],
+    ["coverage gaps",(f.capability_coverage_gaps||[]).length>0],["governed groups",(f.governed_groups||[]).length>0]
+  ].map(([l,bad])=>`<span class="badge ${l==='governed groups'?'':(bad?'bad':'ok')}">${l}: ${Array.isArray(f[l.replace(/ /g,'_')])?'':''}${bad?'⚠':'ok'}</span>`).join(" ");
+  const conv = f.store_convergence||{};
+  return `<div class="tiles">${tiles}</div>
+    <h3>Fleet health</h3><div class="card">${flags}</div>
+    <h3>Store convergence</h3><div class="card muted">nodes reporting: ${conv.nodes_reporting??0} · min/max entries: ${conv.min_entries??0} / ${conv.max_entries??0} · store hash: <code>${f.store_hash??"—"}</code></div>
+    ${(f.opaque_pairs||[]).length? `<h3>Opaque pairs</h3><div class="card"><pre class="keys">${JSON.stringify(f.opaque_pairs,null,2)}</pre></div>`:""}`;
+}
+
+// ── Diagnose: /gateway/diagnose (the narrative) ─────────────────────────────
+function diagnose(d){
+  if(d.__err) return `<p class="err">unreachable — ${d.__err}</p>`;
+  const findings = d.findings||[];
+  const nominal = findings.length===0;
+  let h = `<div class="diag-summary ${nominal?'nominal':'pathology'}">${d.summary||"(no summary)"}</div>`;
+  h += `<div class="muted" style="margin-bottom:14px">observer: <code>${d.observer||"—"}</code></div>`;
+  findings.forEach(x=>{
+    const title = x.pathology||x.name||x.kind||"finding";
+    const detail = x.detail||x.narrative||x.message||JSON.stringify(x);
+    h += `<div class="finding"><div class="h">${title}${x.severity?` · ${x.severity}`:""}</div><div class="d">${detail}</div></div>`;
+  });
+  if(d.caveat) h += `<div class="card muted" style="margin-top:12px">caveat — ${d.caveat}</div>`;
+  return h;
+}
+
+// ── KV: /gateway/kv/keys (namespace map) ────────────────────────────────────
+function kv(k){
+  if(k.__err) return `<p class="err">unreachable — ${k.__err}</p>`;
+  const keys = k.keys||[];
+  const byNs = {};
+  keys.forEach(key=>{ const ns=(key.split("/")[0]||"(root)")+"/"; (byNs[ns]=byNs[ns]||[]).push(key); });
+  const rows = Object.keys(byNs).sort().map(ns=>{
+    const list = byNs[ns];
+    return `<tr><td class="kv-ns">${ns}</td><td>${list.length}</td><td><details><summary class="muted" style="cursor:pointer">keys</summary><div class="keys">${list.join("\n")}</div></details></td></tr>`;
+  }).join("");
+  return `<div class="muted" style="margin-bottom:10px">${keys.length} live keys across ${Object.keys(byNs).length} namespaces</div>
+    <table><thead><tr><th>prefix</th><th>count</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+// ── Metrics: /metrics (Prometheus) ──────────────────────────────────────────
+function metrics(t){
+  if(typeof t!=="string"){ if(t.__err) return `<p class="err">unreachable — ${t.__err}</p>`; t=JSON.stringify(t); }
+  const lines = t.split("\n").filter(l=>l && !l.startsWith("#"));
+  if(!lines.length) return `<p class="muted">No Prometheus series exposed by this node right now (metrics populate as work flows). Raw <code>/metrics</code> was empty.</p>`;
+  return `<pre class="metrics">${t.replace(/</g,"&lt;")}</pre>`;
+}
+
+async function refresh(){
+  const view = $("#view");
+  try{
+    let data, html;
+    if(active==="Overview"){ data = await api("/stats"); html = overview(data); }
+    else if(active==="Fleet"){ data = await api("/gateway/fleet"); html = fleet(data); }
+    else if(active==="Diagnose"){ data = await api("/gateway/diagnose"); html = diagnose(data); }
+    else if(active==="KV"){ data = await api("/gateway/kv/keys"); html = kv(data); }
+    else if(active==="Metrics"){ data = await api("/metrics"); html = metrics(data); }
+    view.innerHTML = html;
+    const bad = data && data.__err;
+    setStatus(!bad, bad? `unreachable @ ${host()}` : `${host()} · ${new Date().toLocaleTimeString()}`);
+  }catch(e){ setStatus(false, String(e)); }
+}
+
+renderTabs();
+refresh();
+setInterval(refresh, 2500);
+$("#host").addEventListener("change", refresh);
+</script>
+</body>
+</html>

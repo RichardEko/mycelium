@@ -53,6 +53,9 @@ const GRID: usize = 16;
 // 52xxx block (e.g. Roon's UDP 52240, which used to collide with this demo's old 52000 base).
 const BASE_PORT: u16 = 40000;
 const HTTP_PORT: u16 = 8090;
+/// The viewer agent also exposes the mycelium gateway here, so the Ops Console can watch the
+/// 256-node mesh (`/stats` · `/gateway/fleet` · `/gateway/diagnose`).
+const OPS_PORT: u16 = 9090;
 const TICK_MS: u64 = 300;
 const RENDER_OFFSET_MS: u64 = 180;
 const SETTLE_MS: u64 = 3_000;
@@ -120,6 +123,7 @@ async fn serve_http(snapshot: Arc<Mutex<GridSnapshot>>) {
     };
     eprintln!("╔══════════════════════════════════════════════════╗");
     eprintln!("║  Open in browser → http://127.0.0.1:{HTTP_PORT}       ║");
+    eprintln!("║  Ops Console     → http://127.0.0.1:{OPS_PORT}       ║");
     eprintln!("║  Switch to  Live (Rust)  to see the real mesh    ║");
     eprintln!("╚══════════════════════════════════════════════════╝");
 
@@ -225,6 +229,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut cfg = GossipConfig::default();
             cfg.bind_address             = "127.0.0.1".to_string();
             cfg.bind_port                = p;
+            // The viewer agent (0,0) also serves the mycelium gateway for the Ops Console.
+            if p == BASE_PORT { cfg.http_port = Some(OPS_PORT); }
             // In-process demo: 256 localhost agents that never fail, so SWIM's failure detector —
             // and its per-agent UDP bind on the same port — is pointless here. Disabling it drops
             // the UDP bind that otherwise races any app already holding a port in the range.

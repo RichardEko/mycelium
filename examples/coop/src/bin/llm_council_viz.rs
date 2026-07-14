@@ -313,6 +313,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
     let seed = buffer.gossip_port;
     println!("[buffer] up — tuple-space primary (ns council)");
+    println!("[ops] buffer gateway is live — point the Ops Console at http://127.0.0.1:{}/  (/stats · /gateway/fleet · /gateway/diagnose)", p[1]);
 
     let mk = |name: &str, gp: u16, hp: u16| DepotOpts {
         name: name.into(),

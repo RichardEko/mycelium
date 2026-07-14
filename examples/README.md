@@ -43,6 +43,21 @@ New here? Start with the zero-setup ladder, then pick a cluster below.
 
 (`conway`/`conway-gpu` above are the original visual demos — terminal+canvas and GPU. The four `*_viz` are visual variants of the batch demos, which stay the CI-gated versions.)
 
+**Ops Console** — a generic, read-only dashboard over *any* gateway-enabled node's operational
+endpoints, in one place: `/stats` (node runtime + tripwires), `/gateway/fleet` (cluster snapshot),
+`/gateway/diagnose` (the Legible-Emergence **fleet narrative** — "why is the fleet in this state", in
+plain English), `/gateway/kv/keys`, `/metrics`. It's a *dev/reference* tool — **not** a shipped
+control plane (library, not platform); a customer forks it or points Grafana at `/metrics`.
+
+```
+cargo run --example ops_console            # → http://127.0.0.1:8099/  (default target 127.0.0.1:9050)
+```
+Then set the host box to any cluster: the **community** skills cluster (`:9050`), a **coop** demo, or a
+**showcase** — `conway` (`:9090`), `stigmergy_viz` / `llm_council_viz` (they print their gateway URL at
+startup), or `microgrid_viz` (`:9091`) / `redistribution_viz` (`:9093`) *run with `--features gateway`*
+(those companion crates have the gateway off by default). The proxy sidesteps CORS, so the browser
+just points at the console.
+
 **Research artifacts** (Paper 1 / 2a experiment runners — reproducible, not tutorials):
 [`coordinator_comparison.rs`](coordinator_comparison.rs) (+ [runner](coordinator_comparison_runner.sh)/[plot](coordinator_comparison_plot.py)) ·
 [`three_arm_workdist.rs`](three_arm_workdist.rs) (+ [runner](three_arm_runner.sh)/[plot](three_arm_plot.py)) —

@@ -45,6 +45,15 @@ one per-example block). `coop/` is the reference implementation of the suite sha
   the two coop `*_viz` bins are *additional* to the fourteen above. A showcase paces its loop so the
   emergence is legible (e.g. a `THINK` dwell for the instant `EchoBackend`) — the batch demos race to
   completion, a showcase must be *watchable*.
+- **Ops Console** (`examples/ops_console.rs` + `.html`, `:8099`): a generic, read-only dashboard over
+  **any** gateway-enabled node's operational endpoints — `/stats` (runtime + tripwires),
+  `/gateway/fleet` (cluster snapshot), `/gateway/diagnose` (the Legible-Emergence *fleet narrative*),
+  `/gateway/kv/keys`, `/metrics` — with a server-side proxy so the browser skips CORS. `cargo run
+  --example ops_console`, then point the host box at the community cluster (`:9050`), a coop demo, or a
+  showcase's printed gateway URL (`conway` `:9090`; `stigmergy_viz`/`llm_council_viz` print theirs;
+  `microgrid_viz` `:9091` / `redistribution_viz` `:9093` need `--features gateway`, off by default in
+  those companion crates). **Dev/reference tool, explicitly *not* a shipped control plane** — the
+  library-not-platform line holds; a customer forks it or scrapes `/metrics` into Grafana.
 - **Agentic Flow Networks** (`examples/fluid_pipeline/`): 10-worker pool, 4-stage pipeline,
   `PIPELINE_MODE=pull` (canonical, tuple-space) vs `push` (baseline comparison). CI
   `afn-smoke`. Concept essay: `flow_networks.html`.
