@@ -48,7 +48,10 @@ fn raise_fd_limit(target: u64) {
 fn raise_fd_limit(_: u64) {}
 
 const GRID: usize = 16;
-const BASE_PORT: u16 = 52000;
+// Below the OS ephemeral port range (macOS starts at 49152, Linux at ~32768) so the 256 fixed
+// binds never race a transient outbound connection — and clear of apps that squat ports in the
+// 52xxx block (e.g. Roon's UDP 52240, which used to collide with this demo's old 52000 base).
+const BASE_PORT: u16 = 40000;
 const HTTP_PORT: u16 = 8090;
 const TICK_MS: u64 = 300;
 const RENDER_OFFSET_MS: u64 = 180;
@@ -222,6 +225,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut cfg = GossipConfig::default();
             cfg.bind_address             = "127.0.0.1".to_string();
             cfg.bind_port                = p;
+            // In-process demo: 256 localhost agents that never fail, so SWIM's failure detector —
+            // and its per-agent UDP bind on the same port — is pointless here. Disabling it drops
+            // the UDP bind that otherwise races any app already holding a port in the range.
+            cfg.swim_failure_detector    = false;
             cfg.default_ttl              = 20;
             cfg.reconnect_backoff_secs   = 1;
             // Each cell writes once per generation, then epidemic-forwards through the mesh.
