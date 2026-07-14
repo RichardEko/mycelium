@@ -245,7 +245,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let port = mycelium::test_util::alloc_port();
     let agent = Arc::new(GossipAgent::new(
         NodeId::new("127.0.0.1", port)?,
-        GossipConfig { bind_port: port, http_port: Some(OPS_PORT), ..Default::default() },
+        GossipConfig {
+            bind_port: port,
+            http_port: Some(OPS_PORT),
+            // Always name the cluster (never null on /stats); overridable via GOSSIP_CLUSTER_NAME.
+            cluster_name: Some(std::env::var("GOSSIP_CLUSTER_NAME").unwrap_or_else(|_| "redistribution".to_string())),
+            ..Default::default()
+        },
     ));
     agent.start().await?;
     #[cfg(feature = "gateway")]
