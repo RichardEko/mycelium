@@ -19,6 +19,17 @@ concern). WHY is usually shared Dev+Ops.
 
 ## Changelog
 
+- **2026-07-14 (run 4)** — diff-gated: **no material diff to the matrix; carried unchanged from run 3.**
+  Zero product-core (`src/` · `mycelium-*/src/`) change since run 3. The whole delta is
+  examples/tooling/docs: four browser **visual showcases** (`microgrid_viz` · `stigmergy_viz` ·
+  `redistribution_viz` · `llm_council_viz`, the `/state`+canvas pattern) plus their discoverability
+  across all three surfaces (wiki `dev/examples.md`, `examples/README.md`, the presentation deck), the
+  conway bind/URL fixes, and the local scale-nightly runner. This **enriches** the
+  Companions (tuple-space/blackboard) and coordination **HOW·Dev** cells — a reader now has runnable
+  visual demos — but those cells were already ✓, so **no verdict moves**. No new concept (a visual
+  showcase is an example *category*, not a substrate concept warranting a row). Not re-audited; the
+  next scored re-audit waits for a concept-cell-moving change (product code, a new sub-handle/companion,
+  or a found gap).
 - **2026-07-13 (run 3)** — diff-gated re-audit. The only material diff since run 2 is this session's
   two commits: `8456dc4` (wiki-store **section-granular CAS** — the dual-curator lost-update fix) and
   `d316cdf` (the **`coordination-approaches.md`** design note + cross-links). **No concept cell
