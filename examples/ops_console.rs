@@ -26,6 +26,35 @@ use tokio::net::TcpListener;
 
 const CONSOLE_PORT: u16 = 8099;
 
+/// Percent-decode a query-param value (the browser `encodeURIComponent`s the host, so `:` arrives
+/// as `%3A`). Without this, reqwest gets an invalid URL and returns a "builder error".
+fn pct_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2]))
+        {
+            out.push(h * 16 + l);
+            i += 3;
+            continue;
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+fn hex(c: u8) -> Option<u8> {
+    match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        b'A'..=b'F' => Some(c - b'A' + 10),
+        _ => None,
+    }
+}
+
 #[tokio::main]
 async fn main() {
     // Default target gateway (host:port, no scheme). Override with a positional arg or the UI box.
@@ -69,9 +98,12 @@ async fn main() {
             let (path, query) = target.split_once('?').unwrap_or((target, ""));
 
             let (ctype, body): (String, Vec<u8>) = if path == "/" {
+                // Inject the launch target so the host box defaults to whatever we were pointed at.
                 (
                     "text/html; charset=utf-8".into(),
-                    include_str!("ops_console.html").as_bytes().to_vec(),
+                    include_str!("ops_console.html")
+                        .replace("__DEFAULT_TARGET__", &default_target)
+                        .into_bytes(),
                 )
             } else if path == "/api" {
                 // /api?host=<host:port>&path=<gateway-path>  (values carry no & or =)
@@ -79,11 +111,12 @@ async fn main() {
                 let mut gpath = "/stats".to_string();
                 for kv in query.split('&') {
                     if let Some(v) = kv.strip_prefix("host=") {
+                        let v = pct_decode(v);
                         if !v.is_empty() {
-                            host = v.to_string();
+                            host = v;
                         }
                     } else if let Some(v) = kv.strip_prefix("path=") {
-                        gpath = v.to_string();
+                        gpath = pct_decode(v);
                     }
                 }
                 let host = host
