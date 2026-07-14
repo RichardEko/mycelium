@@ -17,6 +17,15 @@
 //!   cargo run --example ops_console                    # target defaults to 127.0.0.1:9050
 //!   cargo run --example ops_console -- 127.0.0.1:8091  # or any host:port
 //! Then open http://127.0.0.1:8099/  (the host box in the UI switches targets live).
+//!
+//! **Two-way linking with the visual showcases (`ui/viz` convention).** A node can self-advertise
+//! its own browser UI by writing two KV keys — `ui/viz` = `http://host:port/` (the visualiser URL)
+//! and `ui/label` = a short human name. The console reads those from whatever node it targets and
+//! shows a live "↗ label" link; a node that advertises nothing simply hides it (the console stays
+//! generic — it hard-codes no demo). The reverse link is the "⚙ Ops Console" button each showcase
+//! injects into its dashboard, pre-targeted at its own gateway (`?target=host:port`), so the console
+//! then auto-discovers that node's `ui/viz` and closes the loop. Any gateway example with a UI opts
+//! in with the two `kv().set(...)` writes — see `redistribution_viz.rs` for the reference.
 
 use std::sync::Arc;
 use std::time::Duration;

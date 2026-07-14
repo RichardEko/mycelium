@@ -39,6 +39,12 @@
     border: 1px solid rgba(63,185,80,0.25); border-radius: 20px;
     padding: 4px 12px; white-space: nowrap; margin-top: 4px;
   }
+  .opsbtn {
+    align-self: center; font-size: 12px; font-family: var(--mono, monospace); text-decoration: none;
+    color: var(--accent); border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 11px; white-space: nowrap; transition: background .15s;
+  }
+  .opsbtn:hover { background: rgba(255,255,255,0.05); }
   .header-text { flex: 1; min-width: 240px; }
   .header-title { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
   .header-title em { font-style: normal; color: var(--green); }
@@ -111,6 +117,7 @@
     <div class="counter"><div class="counter-label">Delivered</div><div class="counter-val" style="color:var(--green)" id="c-delivered">0</div></div>
     <div class="badge-ok" id="badge"><span class="dot-live"></span><span id="badge-txt">exactly-once ✓</span></div>
   </div>
+  __OPS_CONSOLE_LINK__
 </header>
 
 <div class="stage-wrap"><canvas id="stage" width="1400" height="620"></canvas></div>

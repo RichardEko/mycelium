@@ -44,6 +44,8 @@
   .muted{color:var(--muted)}.err{color:var(--red)}
   .badge{font-size:11px;font-family:var(--mono);padding:2px 8px;border-radius:6px;border:1px solid var(--border)}
   .badge.ok{color:var(--green);border-color:rgba(63,185,80,.4)}.badge.bad{color:var(--red);border-color:rgba(248,81,73,.4)}
+  a.vizlink{display:none;align-items:center;gap:5px;font-size:12px;font-family:var(--mono);color:var(--green);text-decoration:none;border:1px solid rgba(63,185,80,.4);border-radius:7px;padding:5px 9px}
+  a.vizlink:hover{background:rgba(63,185,80,.1)}
 </style>
 </head>
 <body>
@@ -51,6 +53,7 @@
   <span class="brand"><b>Mycelium</b> · Ops Console</span>
   <span class="tag">read-only · dev tool</span>
   <label class="muted" style="font-size:12px">target <input id="host" value="__DEFAULT_TARGET__" spellcheck="false"></label>
+  <a id="vizlink" class="vizlink" target="_blank" rel="noopener" title="Open this node's visualiser (advertised by the node as ui/viz)"></a>
   <span class="status"><span id="dot" class="dot"></span><span id="stat">connecting…</span></span>
 </header>
 <nav id="tabs"></nav>
@@ -65,11 +68,27 @@ const host = () => $("#host").value.trim() || "127.0.0.1:9050";
 
 async function api(path){
   try{
-    const r = await fetch(`/api?host=${encodeURIComponent(host())}&path=${path}`);
+    const r = await fetch(`/api?host=${encodeURIComponent(host())}&path=${encodeURIComponent(path)}`);
     const ct = r.headers.get("content-type")||"";
     if(ct.includes("json")){ const j = await r.json(); if(j && j.__ops_error__) throw new Error(j.__ops_error__); return j; }
     return await r.text();
   }catch(e){ return {__err:String(e.message||e)}; }
+}
+
+// Discover the target node's own browser UI (the `ui/viz` + `ui/label` KV convention any
+// gateway node with a UI can opt into) and offer a one-click "↗ visualiser" link. A plain
+// node that advertises nothing simply hides the link — the console stays generic.
+async function discoverViz(){
+  const link = $("#vizlink");
+  try{
+    const v = await api("/gateway/kv?key=ui/viz");
+    if(!v || v.__err || !v.found){ link.style.display="none"; return; }
+    const url = atob(v.value_b64);
+    let label = "visualiser";
+    const l = await api("/gateway/kv?key=ui/label");
+    if(l && !l.__err && l.found) label = atob(l.value_b64);
+    link.href = url; link.textContent = "↗ "+label; link.style.display="inline-flex";
+  }catch(e){ link.style.display="none"; }
 }
 function setStatus(ok,txt){ $("#dot").className = "dot "+(ok?"ok":"bad"); $("#stat").textContent = txt; }
 
@@ -175,8 +194,9 @@ async function refresh(){
 
 renderTabs();
 refresh();
+discoverViz();
 setInterval(refresh, 2500);
-$("#host").addEventListener("change", refresh);
+$("#host").addEventListener("change", ()=>{ refresh(); discoverViz(); });
 </script>
 </body>
 </html>
