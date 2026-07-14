@@ -98,9 +98,10 @@ is the coordinator:
   the mesh node it ran against, resuming on a peer — the claim above, demonstrated.*
 - **Temporal / durable workflow engines** — give you a durable *scheduler you
   operate*. Mycelium removes the scheduler; there is nothing central to run.
-- **NATS / Kafka / a broker** — a broker *is* the coordinator (and the thing you
-  scale and page on). Mycelium's mesh is the bus, registry, and scheduler at once,
-  with no broker process.
+- **NATS / Kafka / a broker** — a broker *is* the coordinator: a separate process
+  you provision, scale, and monitor, and a single point of failure everything routes
+  through (when it degrades, so does every producer and consumer). Mycelium's mesh is
+  the bus, registry, and scheduler at once, with no broker process to run.
 - **Erlang/OTP, Akka** — closest in spirit (supervision, location transparency),
   but still a managed cluster with explicit process addressing. Mycelium adds
   receiver-side signal boundaries, gossip-convergent state, and roles discovered
