@@ -10,7 +10,9 @@ one per-example block). `coop/` is the reference implementation of the suite sha
 
 **Layer map — which example demonstrates which stack layer.** A by-layer lens over the suites below
 (the three-layer substrate — I gossip-KV · II signal-mesh · III consensus — plus the capability/agent
-layer the `mycelium` crate adds on top). Use it to answer "I want to *see* Layer N in action":
+layer the `mycelium` crate adds on top). Use it to answer "I want to *see* Layer N in action". A
+scannable ●/○ matrix version (self-contained, opens offline) is
+[`examples-layer-matrix.html`](examples-layer-matrix.html):
 
 - **Layer I · gossip-KV** ([ch01](../../guide/01-gossip-kv.md)) — `hello_mesh` (the canonical intro:
   two agents share a KV value by gossip) · `conway` / `conway-gpu` (256-agent / 512×512-GPU

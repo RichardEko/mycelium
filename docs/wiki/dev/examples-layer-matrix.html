@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Standalone copy of the "Examples × stack layers" matrix. Source of truth for the data:
+     docs/wiki/dev/examples.md § Layer map. Self-contained (no external assets); opens offline. -->
+<title>Mycelium · examples × stack layers</title>
+<style>
+  :root{
+    --bg:#f6f8fa; --panel:#ffffff; --panel-2:#f0f3f6; --border:#d5dbe2;
+    --fg:#1f2328; --muted:#5c6570; --faint:#b3bcc6;
+    --l1:#0969da; --l2:#9a6700; --l3:#1a7f37; --l4:#8250df;
+    --shadow:0 1px 2px rgba(31,35,40,.06),0 4px 16px rgba(31,35,40,.05);
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0d1117; --panel:#161b22; --panel-2:#1c2230; --border:#2b3240;
+      --fg:#e6edf3; --muted:#8b949e; --faint:#414a56;
+      --l1:#58a6ff; --l2:#d29922; --l3:#3fb950; --l4:#a78bfa;
+      --shadow:0 1px 2px rgba(1,4,9,.5),0 8px 24px rgba(1,4,9,.4);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0d1117; --panel:#161b22; --panel-2:#1c2230; --border:#2b3240;
+    --fg:#e6edf3; --muted:#8b949e; --faint:#414a56;
+    --l1:#58a6ff; --l2:#d29922; --l3:#3fb950; --l4:#a78bfa;
+    --shadow:0 1px 2px rgba(1,4,9,.5),0 8px 24px rgba(1,4,9,.4);
+  }
+  :root[data-theme="light"]{
+    --bg:#f6f8fa; --panel:#ffffff; --panel-2:#f0f3f6; --border:#d5dbe2;
+    --fg:#1f2328; --muted:#5c6570; --faint:#b3bcc6;
+    --l1:#0969da; --l2:#9a6700; --l3:#1a7f37; --l4:#8250df;
+    --shadow:0 1px 2px rgba(31,35,40,.06),0 4px 16px rgba(31,35,40,.05);
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);
+    font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased;
+    padding:clamp(20px,4vw,52px) clamp(16px,4vw,52px) 64px}
+  .wrap{max-width:1080px;margin:0 auto}
+
+  /* ── Masthead ── */
+  header{margin-bottom:26px}
+  .eyebrow{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);
+    font-weight:600;display:flex;align-items:center;gap:9px}
+  .eyebrow::before{content:"";width:22px;height:2px;background:var(--l4);border-radius:2px}
+  h1{font-size:clamp(1.5rem,3.2vw,2.15rem);line-height:1.1;margin:.35em 0 .3em;
+    font-weight:680;letter-spacing:-.02em;text-wrap:balance}
+  .lede{color:var(--muted);max-width:64ch;font-size:15px;margin:0}
+  .lede code{font-family:var(--mono);font-size:.86em;color:var(--fg);
+    background:var(--panel-2);padding:.05em .38em;border-radius:5px;border:1px solid var(--border)}
+
+  /* ── Summary strip ── */
+  .summary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:26px 0 18px}
+  .lcard{background:var(--panel);border:1px solid var(--border);border-radius:13px;
+    padding:15px 16px;box-shadow:var(--shadow);position:relative;overflow:hidden}
+  .lcard::before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:var(--hue)}
+  .lcard .rn{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--hue);letter-spacing:.04em}
+  .lcard .gloss{font-size:15px;font-weight:640;margin:2px 0 1px;letter-spacing:-.01em}
+  .lcard .sub{font-size:11.5px;color:var(--muted);font-family:var(--mono)}
+  .lcard .count{position:absolute;top:13px;right:15px;font-size:1.7rem;font-weight:720;
+    color:var(--hue);line-height:1;font-variant-numeric:tabular-nums}
+  .lcard .count small{font-size:.5em;font-weight:600;color:var(--muted);display:block;
+    text-align:right;letter-spacing:.04em;margin-top:3px}
+
+  /* ── Legend ── */
+  .legend{display:flex;flex-wrap:wrap;gap:18px;align-items:center;margin:0 2px 14px;
+    font-size:12.5px;color:var(--muted)}
+  .legend .k{display:inline-flex;align-items:center;gap:7px}
+  .swatch{--hue:var(--l1)}
+  .dot{width:13px;height:13px;border-radius:50%;display:inline-block;flex:none}
+  .dot.p{background:var(--hue);box-shadow:0 0 0 3px color-mix(in srgb,var(--hue) 20%,transparent)}
+  .dot.t{background:transparent;border:1.6px solid color-mix(in srgb,var(--hue) 62%,transparent)}
+
+  /* ── Matrix ── */
+  .scroll{overflow-x:auto;border:1px solid var(--border);border-radius:15px;
+    box-shadow:var(--shadow);background:var(--panel)}
+  table{border-collapse:separate;border-spacing:0;width:100%;min-width:660px}
+  thead th{position:sticky;top:0;z-index:3;background:var(--panel-2);
+    border-bottom:1px solid var(--border);padding:0;text-align:center}
+  .lh{padding:12px 6px 11px;border-bottom:3px solid var(--hue)}
+  .lh .rn{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--hue)}
+  .lh .name{font-size:12.5px;font-weight:640;margin-top:1px;letter-spacing:-.01em}
+  thead th.exhead{text-align:left;padding:12px 16px;border-bottom:1px solid var(--border);
+    font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:600}
+  .exhead.sticky,td.ex{position:sticky;left:0;z-index:2;background:var(--panel)}
+  thead .exhead.sticky{z-index:4;background:var(--panel-2)}
+
+  tbody tr:hover td{background:var(--panel-2)}
+  tbody tr:hover td.ex{background:var(--panel-2)}
+  td{padding:0;border-bottom:1px solid var(--border);vertical-align:middle}
+  tbody tr:last-child td{border-bottom:none}
+  td.ex{padding:10px 16px;min-width:230px;box-shadow:1px 0 0 var(--border)}
+  .exname{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--fg);letter-spacing:-.01em}
+  .focus{font-size:12px;color:var(--muted);margin-top:2px;line-height:1.35}
+  .tag{font-family:var(--mono);font-size:10px;font-weight:600;padding:1px 6px;border-radius:5px;
+    border:1px solid var(--border);color:var(--muted);margin-left:7px;vertical-align:1px;white-space:nowrap}
+  td.cell{text-align:center;width:88px}
+  td.cell .dot{margin:0 auto}
+  td.cell .none{color:var(--faint);font-weight:700;font-size:14px}
+
+  /* group rows */
+  tr.group td{background:var(--bg);padding:16px 16px 7px;border-bottom:1px solid var(--border);
+    position:sticky;left:0}
+  tr.group .gname{font-size:11px;letter-spacing:.14em;text-transform:uppercase;font-weight:700;color:var(--fg)}
+  tr.group .gmeta{font-size:11.5px;color:var(--muted);font-weight:500;font-family:var(--mono);
+    text-transform:none;letter-spacing:0;margin-left:9px}
+
+  tr.full td.ex{box-shadow:1px 0 0 var(--border),inset 3px 0 0 var(--l4)}
+
+  footer{margin-top:26px;color:var(--muted);font-size:12.5px;line-height:1.6;max-width:74ch}
+  footer code{font-family:var(--mono);font-size:.88em;color:var(--fg)}
+  footer .src{margin-top:9px;font-family:var(--mono);font-size:11.5px;color:var(--faint)}
+
+  @media (max-width:640px){
+    .summary{grid-template-columns:repeat(2,1fr)}
+    td.cell{width:60px}
+  }
+  @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Mycelium · runnable examples</div>
+    <h1>Examples&nbsp;×&nbsp;stack layers</h1>
+    <p class="lede">Which example demonstrates which layer of the substrate — the three-layer
+      model (<code>I</code> gossip-KV · <code>II</code> signal-mesh · <code>III</code> consensus)
+      plus the capability / agent layer the <code>mycelium</code> crate adds on top.
+      <strong>●</strong> = primarily demonstrates it; <strong>○</strong> = also exercises it.</p>
+  </header>
+
+  <section class="summary" id="summary" aria-label="primary demonstrators per layer"></section>
+
+  <div class="legend">
+    <span class="k"><span class="dot p swatch"></span> primarily demonstrates</span>
+    <span class="k"><span class="dot t swatch"></span> also exercises</span>
+    <span class="k" style="color:var(--faint)">·&nbsp;&nbsp;not involved</span>
+    <span class="k" style="margin-left:auto;font-family:var(--mono);font-size:11.5px">
+      34 examples · fingerprinted by layer-API usage</span>
+  </div>
+
+  <div class="scroll">
+    <table id="matrix">
+      <thead>
+        <tr>
+          <th class="exhead sticky">Example</th>
+          <th style="--hue:var(--l1)"><div class="lh"><div class="rn">LAYER I</div><div class="name">State</div></div></th>
+          <th style="--hue:var(--l2)"><div class="lh"><div class="rn">LAYER II</div><div class="name">Signal</div></div></th>
+          <th style="--hue:var(--l3)"><div class="lh"><div class="rn">LAYER III</div><div class="name">Consensus</div></div></th>
+          <th style="--hue:var(--l4)"><div class="lh"><div class="rn">LAYER IV</div><div class="name">Agent</div></div></th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+
+  <footer>
+    <strong style="color:var(--fg)">Reading the shape.</strong> Layers&nbsp;I–III are a deliberately
+    small substrate — 6 · 5 · 3 dedicated demos. The <span style="color:var(--l4)">Agent layer</span>
+    carries ~24, because that's where the AI-fleet value lives: capabilities, RPC, LLM/MCP, artifacts,
+    federation, security. <code>three_node_demo</code> (purple rail) is the one full-stack integration
+    touching all four. The <em>companions</em> (tuple-space · blackboard) are application coordination
+    built <em>atop</em> I/II; <code>ops_console</code> observes every layer's HTTP surface rather than
+    teaching one.
+    <div class="src">source · docs/wiki/dev/examples.md § Layer map</div>
+  </footer>
+</div>
+
+<script>
+const P="p", T="t", N="";
+const LHUE=["var(--l1)","var(--l2)","var(--l3)","var(--l4)"];
+const LMETA=[
+  {rn:"LAYER I",gloss:"State",sub:"gossip-KV"},
+  {rn:"LAYER II",gloss:"Signal",sub:"signal-mesh"},
+  {rn:"LAYER III",gloss:"Consensus",sub:"agreement"},
+  {rn:"LAYER IV",gloss:"Agent",sub:"capability / LLM"},
+];
+
+// cells: [I, II, III, IV]  ·  "p"=primary ●  "t"=touches ○  ""=none
+const GROUPS=[
+  {name:"Top-level", meta:"examples/*.rs", rows:[
+    {ex:"hello_mesh",             c:[P,N,N,N], f:"two agents share a KV value by gossip"},
+    {ex:"hello_capability",       c:[N,N,N,P], f:"advertise + resolve by need, RPC"},
+    {ex:"conway",                 c:[P,T,N,N], f:"256-agent gossip-KV Game of Life", tag:"viz"},
+    {ex:"conway-gpu",             c:[P,N,N,N], f:"512×512 GPU-scale convergence", tag:"viz"},
+    {ex:"distributed_lock",       c:[N,N,P,N], f:"consensus lock + fencing token"},
+    {ex:"invoke_skill",           c:[T,N,N,P], f:"minimal SkillRunner caller"},
+    {ex:"llm_agent",              c:[T,T,N,P], f:"capability provisioning + Mesh Control UI", tag:"viz"},
+    {ex:"semantic_coordination",  c:[N,P,N,T], f:"signal sender authorization + schema"},
+    {ex:"coordinator_comparison", c:[P,N,N,P], f:"broker-RPC vs gossip-KV load", tag:"paper"},
+    {ex:"three_arm_workdist",     c:[P,N,N,P], f:"broker vs gossip vs tuple-space pull", tag:"paper"},
+    {ex:"three_node_demo",        c:[P,P,P,P], f:"the full-stack integration", tag:"all", full:true},
+    {ex:"ops_console",            c:[T,T,T,T], f:"observes every layer's HTTP surface", tag:"observer"},
+  ]},
+  {name:"Food-Rescue Co-op", meta:"examples/coop/src/bin/*", rows:[
+    {ex:"mailbox_llm",     c:[T,N,N,P], f:"actor↔LLM RPC over the KV mailbox"},
+    {ex:"stigmergy",       c:[N,P,N,T], f:"backpressure as an evaporating opacity pheromone"},
+    {ex:"stigmergy_viz",   c:[N,P,N,T], f:"↑ animated dashboard", tag:"viz"},
+    {ex:"elastic_intent",  c:[N,N,N,P], f:"MembershipIntent — governors self-elect into a band"},
+    {ex:"provisioning",    c:[N,N,N,P], f:"the autonomic self-provision loop", tag:"artifacts"},
+    {ex:"federation_facts",c:[N,N,N,P], f:"cross-domain AgentFacts discovery"},
+    {ex:"rotation",        c:[N,N,N,P], f:"zero-disruption Ed25519 identity rotation", tag:"security"},
+    {ex:"consensus",       c:[N,T,P,N], f:"cross-group quorum, epoch-leased commit"},
+    {ex:"llm_pipeline",    c:[N,N,N,P], f:"LLM workers pull from tuple-space lanes", tag:"companion"},
+    {ex:"mcp_toolgrowth",  c:[T,N,N,P], f:"code arrives over the mesh, bridged as an MCP tool"},
+    {ex:"llm_council",     c:[N,N,N,P], f:"fan-out · synthesis · critic/reviser", tag:"companion"},
+    {ex:"llm_council_viz", c:[N,N,N,P], f:"↑ animated dashboard", tag:"viz"},
+    {ex:"catalog",         c:[T,N,N,P], f:"durable artifact library (gossip-KV catalogue)", tag:"artifacts"},
+    {ex:"model_deploy",    c:[T,N,N,P], f:"a real GGUF model as a signed artifact", tag:"artifacts"},
+    {ex:"reheal_deploy",   c:[T,N,N,P], f:"the model follows the thread across node death", tag:"artifacts"},
+    {ex:"diagnostics",     c:[N,P,N,T], f:"the legible-emergence fleet narrative", tag:"observer"},
+  ]},
+  {name:"Companions", meta:"blackboard · tuple-space — atop I/II", rows:[
+    {ex:"microgrid_viz",     c:[T,N,N,P], f:"blackboard energy co-op, exactly-once", tag:"viz"},
+    {ex:"redistribution_viz",c:[T,N,N,P], f:"tuple-space redistribution pipeline", tag:"viz"},
+    {ex:"fluid_pipeline",    c:[N,N,N,P], f:"AFN push-vs-pull (tuple-space, Python)", tag:"companion"},
+  ]},
+  {name:"Python interop", meta:"examples/{a2a_langchain,langgraph,community}", rows:[
+    {ex:"a2a_langchain", c:[N,N,N,P], f:"LangChain / AutoGen agents via A2A"},
+    {ex:"langgraph",     c:[T,N,T,P], f:"LangGraph on Mycelium; deploy/reheal ladder"},
+    {ex:"community",     c:[N,N,N,P], f:"skillrunner research cluster (:9050)"},
+  ]},
+];
+
+// ── summary strip: count primaries per layer ──
+const counts=[0,0,0,0];
+GROUPS.forEach(g=>g.rows.forEach(r=>r.c.forEach((v,i)=>{if(v===P)counts[i]++})));
+document.getElementById("summary").innerHTML = LMETA.map((m,i)=>`
+  <div class="lcard" style="--hue:${LHUE[i]}">
+    <div class="count">${counts[i]}<small>PRIMARY</small></div>
+    <div class="rn">${m.rn}</div>
+    <div class="gloss">${m.gloss}</div>
+    <div class="sub">${m.sub}</div>
+  </div>`).join("");
+
+// ── matrix rows ──
+const dot=(state,i)=> state===N
+  ? `<span class="none">·</span>`
+  : `<span class="dot ${state}" style="--hue:${LHUE[i]}"></span>`;
+const rowsHTML = GROUPS.map(g=>{
+  const head=`<tr class="group"><td colspan="5"><span class="gname">${g.name}</span><span class="gmeta">${g.meta}</span></td></tr>`;
+  const body=g.rows.map(r=>`
+    <tr class="${r.full?'full':''}">
+      <td class="ex"><span class="exname">${r.ex}</span>${r.tag?`<span class="tag">${r.tag}</span>`:''}<div class="focus">${r.f}</div></td>
+      ${r.c.map((v,i)=>`<td class="cell">${dot(v,i)}</td>`).join("")}
+    </tr>`).join("");
+  return head+body;
+}).join("");
+document.getElementById("rows").innerHTML = rowsHTML;
+</script>
+</body>
+</html>
