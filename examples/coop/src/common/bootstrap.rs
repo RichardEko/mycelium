@@ -83,6 +83,10 @@ pub async fn spawn_depot(opts: DepotOpts) -> Result<Depot, Box<dyn std::error::E
         http_port: Some(opts.http_port),
         bootstrap_peers,
         tls: Some(TlsConfig { auto_cert_dir: opts.cert_dir.clone(), ..TlsConfig::default() }),
+        // Every coop node carries a cluster name (never null on /stats or the `cluster=` metric
+        // label) — a "coop" default, overridable with GOSSIP_CLUSTER_NAME so one Prometheus/Grafana
+        // can tell environments apart. It is a *label*, not a membership boundary.
+        cluster_name: Some(std::env::var("GOSSIP_CLUSTER_NAME").unwrap_or_else(|_| "coop".to_string())),
         ..Default::default()
     };
     if let Some(h) = opts.health_secs {

@@ -229,6 +229,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut cfg = GossipConfig::default();
             cfg.bind_address             = "127.0.0.1".to_string();
             cfg.bind_port                = p;
+            // Always name the cluster (never null on /stats); overridable via GOSSIP_CLUSTER_NAME.
+            cfg.cluster_name             = Some(std::env::var("GOSSIP_CLUSTER_NAME").unwrap_or_else(|_| "conway".to_string()));
             // The viewer agent (0,0) also serves the mycelium gateway for the Ops Console.
             if p == BASE_PORT { cfg.http_port = Some(OPS_PORT); }
             // In-process demo: 256 localhost agents that never fail, so SWIM's failure detector —
