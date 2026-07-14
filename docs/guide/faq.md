@@ -92,7 +92,10 @@ is the coordinator:
 
 - **LangGraph / AutoGen** — great for a *defined* graph of steps driven by one
   process. Mycelium has no central graph: topology is emergent and survives the
-  loss of any node, including "the orchestrator."
+  loss of any node, including "the orchestrator." *You don't have to choose: you can
+  run a LangGraph graph **on** Mycelium — the [langgraph ladder](../../examples/langgraph/)
+  does, and its **deploy/reheal** rung shows a graph's reasoning surviving the death of
+  the mesh node it ran against, resuming on a peer — the claim above, demonstrated.*
 - **Temporal / durable workflow engines** — give you a durable *scheduler you
   operate*. Mycelium removes the scheduler; there is nothing central to run.
 - **NATS / Kafka / a broker** — a broker *is* the coordinator (and the thing you
