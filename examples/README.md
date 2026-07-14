@@ -61,7 +61,9 @@ just points at the console.
 **Research artifacts** (Paper 1 / 2a experiment runners — reproducible, not tutorials):
 [`coordinator_comparison.rs`](coordinator_comparison.rs) (+ [runner](coordinator_comparison_runner.sh)/[plot](coordinator_comparison_plot.py)) ·
 [`three_arm_workdist.rs`](three_arm_workdist.rs) (+ [runner](three_arm_runner.sh)/[plot](three_arm_plot.py)) —
-see each file's header for the experiment design.
+complementary, not redundant: `coordinator_comparison` is the two-arm *decision-level* probe (broker vs
+gossip prediction, staleness/misroute), `three_arm_workdist` adds the **pull** arm and measures
+*outcomes* (latency/throughput/fairness). See each file's header for the experiment design.
 
 ## Shared setup
 

@@ -18,6 +18,12 @@
 //! compared **only on outcomes**: end-to-end job latency, throughput,
 //! idle-while-work-exists, and fairness (Jain index over worker utilisation).
 //!
+//! Complement, not superset in every axis: [`coordinator_comparison.rs`](coordinator_comparison.rs)
+//! is the two-arm *decision-level* probe (broker vs gossip prediction, measured
+//! on staleness/misroute — the vocabulary pull removes). It is the harness Paper 1
+//! cites for the two prediction arms already run; this binary adds the pull arm and
+//! the outcome-level instruments. Keep both.
+//!
 //! ## Workload knobs (env)
 //!
 //! | Var | Default | Meaning |
