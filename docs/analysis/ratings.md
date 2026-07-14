@@ -2667,3 +2667,42 @@ Cadence gate: the diff on `src/` · `mycelium-*/src/` · `tests/` · `benches/` 
 ## 2026-07-14 — Run 46 (M2) — skipped, tree mid-build + no product-core diff
 
 Cadence gate: (1) the **working tree is inconsistent** — two showcase-example builds (`mycelium-blackboard/examples/microgrid_viz.*`, `examples/coop/src/bin/stigmergy_viz.*` + a `coop/Cargo.toml` edit) are in-flight and uncommitted, so any 25-dim measurement would be against a half-built, possibly-non-compiling tree; (2) **product core is unchanged** since Run 45 (`src/` · `mycelium-*/src/` · `tests/` · `benches/` · `Cargo.toml` diff empty — the committed delta is the conway example fixes `9047b02`/`038ec48` and the colima-recover tooling `4616e52`). **Not scored.** *Notable for the next run:* the Scalability (16) evidence pathway is now **clean** — the `20260714-100247` local run shows **`resilience` PASS + `entries` PASS** (the reliable signals, both green on real Docker clusters via the fixed restart-between-suites runner); the `scale` (100-node) row is `FAIL` (exit 2) and must be classified from its log (formation-variance ceiling vs. a real assertion failure) before citing. Once the viz builds land and the tree is stable, a real run should lift **Scalability off its long-carried 7 to an evidenced 8** on the resilience+entries pass — the first scale evidence the loop has ever had.
+
+## 2026-07-14 — Run 47 (M2)
+
+Deep-dive dimensions this run: 16 Scalability (the real one — classified the scale-FAIL log + ran the oracle) · 9 Concurrency · 11 Semantic Correctness · 23 Documentation · 24 Developer Experience. Execution evidence: **SWIM oracle N=100** (`SWIM_ORACLE_N=100 … swim_scale_oracle`, produced this run — `canary_seen=100/100`, `peers_med=99`, seed connections bounded at 25); `cargo test -p mycelium-core --lib` **131 pass**; `cargo test -p mycelium-wiki --features control-plane` **28 pass** (incl. the Run-44 CAS/concurrent-create gates); plus the **2026-07-14 local Docker nightly** — `resilience` PASS + `entries` PASS.
+
+### Findings
+None. The SWIM-oracle probe passed at N=100. The `20260714-100247` Docker `scale` row is `FAIL` (exit 2) — **classified from its log as the documented Docker-bridge formation-variance ceiling** (`TIMEOUT: cluster_converged did not succeed within 240s` on a single-host 100-node Colima VM; containers all started + seed/mgmt healthy, i.e. *not* a daemon/build/VM-exhaustion infra failure, and *not* a substrate convergence/integrity **assertion** that ran and failed). Per `scale-tests.md` (8–94/100 formation variance is the ceiling, not a regression) and corroborated by the oracle converging 100/100 in-process, this is **environmental, not a substrate finding** — it does not cap Scalability.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 8 | carried (v44), stale; nothing since contradicts the coordinator-free/CFT thesis (delta is examples/docs) |
+| 2 | Conceptual Integrity | 8 | carried (v44), stale |
+| 3 | Architecture | 8 | carried (v44), stale; no product-core change since Run 44 |
+| 4 | Modularity | 8 | carried (v44), stale |
+| 5 | API Design | 8 | carried (v44), stale |
+| 6 | Error Handling Model | 8 | carried (v44), stale |
+| 7 | Configurability | 7 | carried (v42), **stale — floor** |
+| 8 | Language Best Practices | 8 | clippy clean this session incl. the four new showcase examples (fresh, but example-code not product) |
+| 9 | Concurrency Correctness | 8 | **fresh execution:** core 131 + wiki 28 (the CAS/concurrent-create gates) pass; no product-core change since Run 44. Ledger history keeps it at 8 |
+| 10 | Resource Management | 8 | carried (v44), stale |
+| 11 | Semantic Correctness | 8 | **fresh execution:** core suite 131 pass (LWW/HLC/store/codec). Ledger (4 entries) keeps it at 8; LWW/HLC not adversarially re-probed this run |
+| 12 | Robustness | 7 | carried (v43), **stale — not re-probed; floor** |
+| 13 | Security | 8 | carried (v43), stale |
+| 14 | Failure Mode Legibility | 8 | carried (v43), stale |
+| 15 | Performance | 8 | carried (v44); the gateway bench stands, but no fresh bench this run |
+| 16 | Scalability | 8 | **7→8, evidenced — first scale evidence in the series.** 2026-07-14 Docker nightly `resilience` PASS (~22-node crash/rejoin/anti-entropy) + `entries` PASS (~30-node entry-volume integrity); **SWIM oracle N=100 produced this run** (canary 100/100, peers_med 99). Docker `scale`-100 FAIL = the documented single-host formation ceiling (classified from log), not a regression. **8 not 9:** no green full-stack 100-node Docker run (formation is single-host-ceiling-limited), and the oracle is a protocol-only slice |
+| 17 | Testability | 8 | carried (v44); the showcase examples build on the public API + a single node, no cluster needed |
+| 18 | Test Architecture | 7 | carried (v44), **stale — floor;** the socket-binding retry-tier + the still-un-built live two-binary mixed-version test remain the structural residuals |
+| 19 | Observability | 8 | carried (v44), stale |
+| 20 | Debuggability | 8 | carried (v41), **stale — 5 runs unverified; possibly optimistic** per the decay rule |
+| 21 | Operational Readiness | 8 | carried (v41); the local scale-nightly runner is *dev tooling* (not a product op-readiness change) — no bearing on `/ready`/shutdown/back-pressure |
+| 22 | Evolvability | 8 | carried (v44); wire policy + CHANGELOG intact |
+| 23 | Documentation | 8 | **Re-checked (this session's docs work):** four visual-showcase examples now discoverable across all three surfaces (wiki `dev/examples.md`, `examples/README.md`, the deck) — verified by wiki-lint (§4 category fix) + publication-lint (clean). Enriches HOW·Dev; **8 not 9** — same-day, no external-reader validation |
+| 24 | Developer Experience | 8 | **Re-checked:** four runnable browser showcases (`:8090`–`:8094`) added — the batch-vs-showcase pacing lesson captured; `make check`/`CLAUDE.md` intact. Solid at 8 |
+| 25 | Dependency Hygiene | 8 | carried (v42); the showcases reuse existing `bytes`/`tokio`/`serde_json`/`reqwest` — **no new deps**; `--no-default-features` compiles per CI |
+| — | **Floor (lowest 3)** | **7, 7, 7** | Configurability · Robustness · Test Architecture |
+| — | Mean (continuity footnote) | 7.88 | not a target; see M2 preamble |
+
+**Delta vs Run 44:** one earned rise — **Scalability 7→8**, the first evidenced score this dimension has ever had (carried at 7 since Run 39 with "no scale test run"). The evidence is real and multi-source: a Docker nightly's `resilience` + `entries` suites both PASS on real clusters, *and* a produced-this-run SWIM oracle converging 100/100 in-process — with the Docker `scale`-100 FAIL honestly classified from its log as the single-host formation ceiling (environmental), not a substrate regression, so it doesn't cap the score. Held at 8 not 9 because there is no green *full-stack* 100-node Docker run and the oracle is a protocol-only slice. Everything else carries from Run 44 (no product-core change since; the delta is the four showcase examples + docs) with explicit staleness labels — Debuggability (v41, 5 runs) flagged possibly-optimistic per the decay rule. Floor holds at 7/7/7 (Configurability · Robustness · Test Architecture); mean 7.84→7.88 reflects the single evidenced lift, not target-chasing. No findings, no new ledger entry (the oracle passed; the scale FAIL is environmental).
