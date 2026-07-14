@@ -19,6 +19,17 @@ concern). WHY is usually shared Dev+Ops.
 
 ## Changelog
 
+- **2026-07-14 (run 5)** — diff-gated. Delta since run 4 is the `cluster_name` work (`f5c7f6c`,
+  `15a33eb`): every example now sets a cluster name, and `guide/13-cluster-topology.md` gained the
+  `apply_env_overrides()` caveat. **Calibration hit** (below): **Membership + cluster_name · HOW·Dev**
+  was ✓ in run 1 (the seed called this corner *"the strongest, Clear on every cell"*), yet the
+  documented `GOSSIP_CLUSTER_NAME=…` way to set it **silently no-ops** unless the app calls
+  `apply_env_overrides()` — a real user hit exactly this. The instruction was *present* but did not
+  *work when followed literally*. **Fixed** (`13-cluster-topology.md` ⚠️ caveat + build→apply→new
+  sequence); the cell is now genuinely ✓. Separately, the **Ops Console** (`examples/ops_console.rs`)
+  enriches **Observability · HOW·Ops** (a live dashboard over `/stats`·`/gateway/fleet`·
+  `/gateway/diagnose`·`/metrics`) but that cell was already ✓ — no verdict move. No other concept
+  touched; the rest carry from runs 3–4.
 - **2026-07-14 (run 4)** — diff-gated: **no material diff to the matrix; carried unchanged from run 3.**
   Zero product-core (`src/` · `mycelium-*/src/`) change since run 3. The whole delta is
   examples/tooling/docs: four browser **visual showcases** (`microgrid_viz` · `stigmergy_viz` ·
@@ -182,11 +193,23 @@ skepticism, not a re-asserted ✓.
   axis, audit whether the *comparison itself* has a home — add a "cross-cutting decisions" pass that
   asks "if a reader must choose between these N concepts, where do they learn how?", distinct from
   scoring each concept's own WHY. Fixed: `coordination-approaches.md`.
+- **2026-07-14 — Membership + cluster_name · HOW·Dev** was `Clear` in run 1 (the seed called this
+  corner *"the strongest, Clear on every cell"*) while the documented way to set it via
+  `GOSSIP_CLUSTER_NAME` **silently did nothing** — env vars only apply if the binary calls
+  `cfg.apply_env_overrides()`, which `13-cluster-topology.md` never mentioned. Found by a user question
+  ("cluster name is unset — how do I set it?"). Root cause: the auditor confirmed the instruction was
+  *present*, not that it *works when followed literally*. **This is the 2nd hit of the same class**
+  (Security wire-version, 2026-07-11 was the 1st): a cell marked Clear on the *presence* of an
+  instruction/value whose content was actually stale or silently-failing. **Sharpening:** a `Clear`
+  verdict on any doc that gives a **setting / config / run instruction** must verify the steps,
+  followed literally, actually *succeed* (or trace to code that makes them succeed) — presence is not
+  sufficiency; a silently-no-op instruction is **Thin**, not Clear. Folded into the skill's adversarial
+  rule. Fixed: `guide/13-cluster-topology.md`.
 
 ## Re-run guidance
 
 The audit was a one-time systematic sweep; a re-run should be a **diff**. Re-audit a concept only
-when its code/docs changed since the last run (run 3: `git log --since=2026-07-13 -- docs/ src/
+when its code/docs changed since the last run (run 5: `git log --since=2026-07-14 -- docs/ src/
 mycelium-*/src/`). The matrix
 above is the baseline: any cell dropping below ✓ is a regression. The method (four auditors, the
 Clear/Thin/Missing rubric, the exact prompts) is reproducible from this session's transcript. New
