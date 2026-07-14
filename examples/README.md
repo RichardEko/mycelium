@@ -32,6 +32,17 @@ New here? Start with the zero-setup ladder, then pick a cluster below.
 | **A2A interop** — LangChain / AutoGen | External agents auto-discover Mycelium skills via `/.well-known/agent.json` | yes | [`a2a_langchain/`](a2a_langchain/README.md) |
 | **Reasoning ladder** — LangGraph-on-Mycelium | 7 rungs from a local checkpointer to a cross-node deploy/reheal flagship | echo model | [`langgraph/`](langgraph/README.md) |
 
+**Browser showcases** (a `/state` feed behind an HTML canvas — the `conway` pattern; run continuously, open `http://127.0.0.1:80xx/`, Ctrl-C to stop; **not** in any CI smoke):
+
+| Showcase | What you see | Run |
+|---|---|---|
+| [`microgrid_viz`](../mycelium-blackboard/examples/microgrid_viz.rs) | Energy co-op: surplus packets, non-destructive reads, competitive **exactly-once** claims (`:8091`) | `cargo run -p mycelium-blackboard --example microgrid_viz` |
+| [`stigmergy_viz`](coop/src/bin/stigmergy_viz.rs) | Pheromone reroute: opacity glow + dispatch routing **around** the busy depot (`:8092`) | `cargo run -p mycelium-coop-examples --bin stigmergy_viz` |
+| [`redistribution_viz`](../mycelium-tuple-space/examples/redistribution_viz.rs) | Pipeline flow: `intake→sorted→routed→delivered`, competitive take (`:8093`) | `cargo run -p mycelium-tuple-space --example redistribution_viz` |
+| [`llm_council_viz`](coop/src/bin/llm_council_viz.rs) | Deliberation DAG: fan-out · synthesis · critic↔reviser refinement, no LLM key (`:8094`) | `cargo run -p mycelium-coop-examples --bin llm_council_viz` |
+
+(`conway`/`conway-gpu` above are the original visual demos — terminal+canvas and GPU. The four `*_viz` are visual variants of the batch demos, which stay the CI-gated versions.)
+
 **Research artifacts** (Paper 1 / 2a experiment runners — reproducible, not tutorials):
 [`coordinator_comparison.rs`](coordinator_comparison.rs) (+ [runner](coordinator_comparison_runner.sh)/[plot](coordinator_comparison_plot.py)) ·
 [`three_arm_workdist.rs`](three_arm_workdist.rs) (+ [runner](three_arm_runner.sh)/[plot](three_arm_plot.py)) —

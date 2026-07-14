@@ -123,3 +123,4 @@ signal for the `/publication-lint` skill (is it catching overclaims before human
   finding): "a fencing token / CAS makes two writers **harmless**" — strong wording, but true in the
   no-lost-update sense the section-CAS guarantees (never-lose). **Carried (Major, still open):** the
   `presentation.html:926` "~1 ms" gateway number remains unsourced.
+- 2026-07-14 (deck edit, not a lint run): fixed a stale internal count — `presentation.html` said the Food-Rescue Co-op was "eleven-demo" in the interop-slide footnote while its own "Fourteen demos" slide (and the wiki) say fourteen → corrected to `fourteen-demo`. Caught while adding the **Visual showcases** pointer (the four `*_viz` + conway, `:8090`–`:8094`) to the deck + `examples/README.md`. Staleness, not an overclaim.
