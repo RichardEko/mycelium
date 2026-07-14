@@ -169,6 +169,11 @@ name              = "gateway_overhead"
 harness           = false
 required-features = ["gateway", "test-util"]
 
+
+[[example]]
+name              = "ops_console"
+required-features = ["gateway"]
+
 [profile.release]
 lto = true
 codegen-units = 1

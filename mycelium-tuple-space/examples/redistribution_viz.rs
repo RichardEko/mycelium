@@ -39,6 +39,9 @@ use tokio::net::TcpListener;
 use tokio::{signal, time};
 
 const HTTP_PORT: u16 = 8093;
+/// The mycelium gateway (for the Ops Console) — served only when built `--features gateway`
+/// (this companion crate has default-features off). `/stats` · `/gateway/fleet` · `/gateway/diagnose`.
+const OPS_PORT: u16 = 9093;
 const RENDER_MS: u64 = 400;
 const RECENT_CAP: usize = 8;
 
@@ -242,9 +245,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let port = mycelium::test_util::alloc_port();
     let agent = Arc::new(GossipAgent::new(
         NodeId::new("127.0.0.1", port)?,
-        GossipConfig { bind_port: port, ..Default::default() },
+        GossipConfig { bind_port: port, http_port: Some(OPS_PORT), ..Default::default() },
     ));
     agent.start().await?;
+    #[cfg(feature = "gateway")]
+    eprintln!("║  Ops Console     → http://127.0.0.1:{OPS_PORT}/      ║");
     let ts = TupleSpace::new(
         Arc::clone(&agent),
         TupleConfig {

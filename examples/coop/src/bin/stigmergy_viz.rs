@@ -354,6 +354,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
     .await?;
     println!("[{}] up — will route intake by reading pheromone trails", dispatch.name);
+    println!("[ops] dispatch gateway is live — point the Ops Console at http://127.0.0.1:{}/  (/stats · /gateway/fleet · /gateway/diagnose)", p[1]);
     let seed = dispatch.gossip_port;
 
     // ── three worker depots ─────────────────────────────────────────────────────
