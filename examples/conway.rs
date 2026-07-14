@@ -192,7 +192,7 @@ fn read_alive(agent: &GossipAgent, x: usize, y: usize) -> bool {
 fn render_terminal(viewer: &GossipAgent, epoch: u64, live: usize) {
     print!("\x1b[H");
     println!("  Conway's Life — {GRID}×{GRID} gossip mesh   \x1b[36mgen {epoch}\x1b[0m   \x1b[33mlive {live:3}\x1b[0m          ");
-    println!("  {} TCP agents · KV epidemic propagation · http://127.0.0.1:{HTTP_PORT}/state\n", GRID*GRID);
+    println!("  {} TCP agents · KV epidemic propagation · visualiser http://127.0.0.1:{HTTP_PORT}/  (JSON: /state)\n", GRID*GRID);
     for y in 0..GRID {
         print!("  ");
         for x in 0..GRID {
