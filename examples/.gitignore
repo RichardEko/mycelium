@@ -1,0 +1,8 @@
+# Demo runtime artifacts — regenerated on each run, never commit.
+# (fluid_pipeline/logs holds ~100MB+ of worker logs after a Docker run.)
+fluid_pipeline/logs/
+fluid_pipeline/**/venv/
+community/logs/
+chat/logs/
+*.pid
+*.log

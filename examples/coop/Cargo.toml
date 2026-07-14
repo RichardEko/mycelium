@@ -54,6 +54,10 @@ name = "consensus"
 path = "src/bin/consensus.rs"
 
 [[bin]]
+name = "diagnostics"
+path = "src/bin/diagnostics.rs"
+
+[[bin]]
 name = "llm_pipeline"
 path = "src/bin/llm_pipeline.rs"
 
