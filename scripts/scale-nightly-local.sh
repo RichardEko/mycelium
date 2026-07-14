@@ -51,7 +51,16 @@ ensure_docker() {   # arg "fresh" ⇒ restart the VM to clear between-round fati
     colima start ${COLIMA_ARGS} >/dev/null 2>&1 || true
   fi
   docker context use colima >/dev/null 2>&1 || true
-  wait_docker || { log "Docker unreachable — aborting"; exit 1; }
+  if ! wait_docker; then
+    # Colima can wedge in a "Running-but-broken" state (empty runtime/address) after a heavy round
+    # or the box sleeping — `colima start` then no-ops ("already running, ignoring") and never
+    # recovers. A forced stop+start is the only fix; escalate to it before giving up.
+    log "Docker still unreachable — force-recovering Colima (stop -f + start)…"
+    colima stop -f >/dev/null 2>&1 || true
+    colima start ${COLIMA_ARGS} >/dev/null 2>&1 || true
+    docker context use colima >/dev/null 2>&1 || true
+    wait_docker || { log "Docker unreachable after force-recover — aborting"; exit 1; }
+  fi
   DOCKER_UP=1
 }
 
