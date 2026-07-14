@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stigmergy — Backpressure as a Pheromone</title>
+<style>
+  :root {
+    --bg:       #0d1117;
+    --surface:  #161b22;
+    --surface2: #1c2128;
+    --border:   #30363d;
+    --accent:   #58a6ff;
+    --green:    #3fb950;
+    --amber:    #ffa657;
+    --red:      #ff7b72;
+    --purple:   #d2a8ff;
+    --muted:    #8b949e;
+    --text:     #e6edf3;
+    --radius:   10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 14px; line-height: 1.6;
+  }
+  .header {
+    background: radial-gradient(ellipse at 55% 0%, rgba(88,166,255,0.08) 0%, transparent 55%), var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 22px 32px 18px;
+    display: flex; align-items: flex-start; gap: 16px;
+  }
+  .badge {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--green); background: rgba(63,185,80,0.1);
+    border: 1px solid rgba(63,185,80,0.25); border-radius: 20px;
+    padding: 4px 12px; white-space: nowrap; margin-top: 3px;
+  }
+  .htext { flex: 1; }
+  .htitle { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+  .htitle em { font-style: normal; color: var(--accent); }
+  .hsub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 22px 32px 40px; }
+
+  .statusbar {
+    display: flex; gap: 14px; flex-wrap: wrap; align-items: center;
+    margin-bottom: 16px;
+  }
+  .chip {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 8px 14px;
+  }
+  .chip .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); }
+  .chip .val { font-size: 15px; font-weight: 700; font-family: "SF Mono","Fira Code",monospace; }
+  .dot-live {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--green); box-shadow: 0 0 6px var(--green);
+    animation: blink 1.6s ease-in-out infinite;
+  }
+  .dot-off { background: var(--amber); box-shadow: none; animation: none; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
+
+  .canvas-panel {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; overflow: hidden;
+  }
+  #stage { display: block; width: 100%; }
+
+  .caption {
+    font-size: 12px; color: var(--muted);
+    padding: 12px 18px; border-top: 1px solid var(--border);
+    background: var(--surface2);
+  }
+  .caption em { font-style: normal; color: var(--text); }
+
+  .legend {
+    display: flex; gap: 20px; flex-wrap: wrap;
+    margin-top: 16px; font-size: 11px; color: var(--muted);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <span class="badge">Layer II · Signal Mesh</span>
+  <div class="htext">
+    <div class="htitle">Stigmergy — <em>Backpressure as a Pheromone</em></div>
+    <div class="hsub">
+      A food-rescue co-op. <code>depot-dispatch</code> routes intake by reading the trail each
+      depot leaves in the medium — no coordinator, no message to the busy depot.
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="statusbar">
+    <div class="chip"><span class="lbl">Link</span> <span class="dot-live" id="conn"></span></div>
+    <div class="chip"><span class="lbl">Tick</span> <span class="val" style="color:var(--accent)" id="s-tick">0</span></div>
+    <div class="chip"><span class="lbl">Loading</span> <span class="val" style="color:var(--amber)" id="s-busy">—</span></div>
+    <div class="chip"><span class="lbl">Eligible</span> <span class="val" style="color:var(--green)" id="s-elig">0 / 3</span></div>
+  </div>
+
+  <div class="canvas-panel">
+    <canvas id="stage"></canvas>
+    <div class="caption" id="caption">
+      <em>dispatch routes by reading the pheromone trail</em> — no coordinator, no message to the busy depot.
+    </div>
+  </div>
+
+  <div class="legend">
+    <span><span class="sw" style="background:var(--green)"></span> transparent · eligible</span>
+    <span><span class="sw" style="background:var(--amber)"></span> filling · nearing threshold</span>
+    <span><span class="sw" style="background:var(--red)"></span> opaque · dispatch routes around</span>
+    <span><span class="sw" style="background:var(--accent)"></span> active route (work flowing)</span>
+  </div>
+</div>
+
+<script>
+const HTTP_PORT = 8092;
+const OPAQUE_THRESHOLD = 0.75;   // governor default — the pheromone line
+
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d');
+const dpr = window.devicePixelRatio || 1;
+let W = 1000, H = 460;
+
+function sizeCanvas() {
+  const cssW = canvas.clientWidth || 1000;
+  W = cssW; H = Math.round(cssW * 0.46);
+  canvas.style.height = H + 'px';
+  canvas.width  = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', sizeCanvas);
+
+// ── Live state, updated by polling /state ──────────────────────────────
+let state = { tick: 0, depots: [], eligible: [], busy: null };
+let connected = false;
+
+// Per-depot smoothed render fill (eases toward the real fill for a fluid bar).
+let renderFill = {};
+
+// ── Layout ─────────────────────────────────────────────────────────────
+function hubPos()  { return { x: W / 2, y: 78 }; }
+function depotPos(i, n) {
+  const margin = 150, span = W - margin * 2;
+  const x = n === 1 ? W / 2 : margin + span * (i / (n - 1));
+  return { x, y: H - 130 };
+}
+
+// ── Colour helpers ─────────────────────────────────────────────────────
+function fillColor(ratio, opaque) {
+  if (opaque) return '#ff7b72';
+  if (ratio >= OPAQUE_THRESHOLD) return '#ffa657';
+  if (ratio >= 0.4) return '#d9c15a';
+  return '#3fb950';
+}
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+// ── Drawing ────────────────────────────────────────────────────────────
+let animT = 0;
+function draw(ts) {
+  animT = ts / 1000;
+  ctx.clearRect(0, 0, W, H);
+
+  const depots = state.depots;
+  const n = depots.length || 3;
+  const hub = hubPos();
+
+  // ── Edges: dispatch → each eligible depot, pulsing; opaque depots get a crossed, faded edge. ──
+  for (let i = 0; i < n; i++) {
+    const d = depots[i]; if (!d) continue;
+    const p = depotPos(i, n);
+    const isElig = state.eligible.includes(d.name);
+    const isBusy = state.busy && state.busy.includes(d.name);
+
+    if (isElig) {
+      // Solid routed edge with animated flowing dashes.
+      ctx.save();
+      ctx.strokeStyle = 'rgba(88,166,255,0.55)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([7, 9]);
+      ctx.lineDashOffset = -(animT * 42) % 16;
+      ctx.beginPath(); ctx.moveTo(hub.x, hub.y + 34); ctx.lineTo(p.x, p.y - 40); ctx.stroke();
+      ctx.restore();
+
+      // Travelling work packet(s) along the edge.
+      const pkts = isBusy ? 3 : 2;
+      for (let k = 0; k < pkts; k++) {
+        const t = ((animT * 0.5 + k / pkts) % 1);
+        const px = lerp(hub.x, p.x, t);
+        const py = lerp(hub.y + 34, p.y - 40, t);
+        ctx.beginPath(); ctx.arc(px, py, 3.4, 0, Math.PI * 2);
+        ctx.fillStyle = '#79c0ff'; ctx.shadowColor = '#58a6ff'; ctx.shadowBlur = 8;
+        ctx.fill(); ctx.shadowBlur = 0;
+      }
+    } else {
+      // Opaque / unavailable: faint dead edge with an X — dispatch is visibly routing around.
+      ctx.save();
+      ctx.strokeStyle = 'rgba(139,148,158,0.18)';
+      ctx.lineWidth = 1.5; ctx.setLineDash([3, 5]);
+      ctx.beginPath(); ctx.moveTo(hub.x, hub.y + 34); ctx.lineTo(p.x, p.y - 40); ctx.stroke();
+      ctx.restore();
+      const mx = (hub.x + p.x) / 2, my = (hub.y + 34 + p.y - 40) / 2;
+      ctx.strokeStyle = 'rgba(255,123,114,0.7)'; ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(mx - 7, my - 7); ctx.lineTo(mx + 7, my + 7);
+      ctx.moveTo(mx + 7, my - 7); ctx.lineTo(mx - 7, my + 7);
+      ctx.stroke();
+    }
+  }
+
+  // ── Hub node (depot-dispatch) ──────────────────────────────────────────
+  drawHub(hub);
+
+  // ── Depot nodes ────────────────────────────────────────────────────────
+  for (let i = 0; i < n; i++) {
+    const d = depots[i]; if (!d) continue;
+    drawDepot(depotPos(i, n), d);
+  }
+
+  requestAnimationFrame(draw);
+}
+
+function drawHub(hub) {
+  ctx.save();
+  const glow = ctx.createRadialGradient(hub.x, hub.y, 4, hub.x, hub.y, 46);
+  glow.addColorStop(0, 'rgba(88,166,255,0.35)');
+  glow.addColorStop(1, 'rgba(88,166,255,0)');
+  ctx.fillStyle = glow;
+  ctx.beginPath(); ctx.arc(hub.x, hub.y, 46, 0, Math.PI * 2); ctx.fill();
+
+  ctx.beginPath(); ctx.arc(hub.x, hub.y, 30, 0, Math.PI * 2);
+  ctx.fillStyle = '#1c2f4a'; ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = '#58a6ff'; ctx.stroke();
+
+  ctx.fillStyle = '#e6edf3'; ctx.textAlign = 'center';
+  ctx.font = '600 12px -apple-system, sans-serif';
+  ctx.fillText('dispatch', hub.x, hub.y + 4);
+  ctx.fillStyle = '#8b949e'; ctx.font = '10px -apple-system, sans-serif';
+  ctx.fillText('reads the trail', hub.x, hub.y + 58);
+  ctx.restore();
+}
+
+function drawDepot(p, d) {
+  const cap = d.cap || 8;
+  const target = (d.fill || 0) / cap;
+  const rf = renderFill[d.name] ?? 0;
+  const eased = rf + (target - rf) * 0.18;
+  renderFill[d.name] = eased;
+  const ratio = eased;
+  const col = fillColor(ratio, d.opaque);
+  const R = 40;
+
+  ctx.save();
+  // Pheromone halo — grows with fill; red + pulsing when opaque.
+  if (d.opaque) {
+    const pulse = 0.5 + 0.5 * Math.sin(animT * 3.2);
+    const hr = R + 14 + pulse * 8;
+    const g = ctx.createRadialGradient(p.x, p.y, R, p.x, p.y, hr);
+    g.addColorStop(0, 'rgba(255,123,114,0.45)');
+    g.addColorStop(1, 'rgba(255,123,114,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(p.x, p.y, hr, 0, Math.PI * 2); ctx.fill();
+  } else if (ratio > 0.05) {
+    // Soft pheromone glow, tinted by fill (green→amber as the queue climbs toward threshold).
+    ctx.fillStyle = hexGlow(col, 0.28);
+    ctx.beginPath(); ctx.arc(p.x, p.y, R + 4 + ratio * 20, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // Node body
+  ctx.beginPath(); ctx.arc(p.x, p.y, R, 0, Math.PI * 2);
+  ctx.fillStyle = d.opaque ? '#262223' : '#161b22';
+  ctx.fill();
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = d.opaque ? '#ff7b72' : col;
+  ctx.stroke();
+
+  // Name + zone
+  ctx.textAlign = 'center';
+  ctx.fillStyle = d.opaque ? '#8b949e' : '#e6edf3';
+  ctx.font = '600 12px -apple-system, sans-serif';
+  ctx.fillText(d.zone || d.name, p.x, p.y - 2);
+  ctx.fillStyle = '#8b949e'; ctx.font = '10px -apple-system, sans-serif';
+  ctx.fillText(`${d.fill}/${cap}`, p.x, p.y + 13);
+
+  // Queue-fill bar under the node
+  const barW = 92, barH = 9, bx = p.x - barW / 2, by = p.y + R + 14;
+  ctx.fillStyle = '#0d1117'; ctx.strokeStyle = '#30363d'; ctx.lineWidth = 1;
+  roundRect(bx, by, barW, barH, 4); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = col;
+  roundRect(bx, by, Math.max(0, Math.min(1, ratio)) * barW, barH, 4); ctx.fill();
+  // Threshold tick
+  const tx = bx + OPAQUE_THRESHOLD * barW;
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(tx, by - 2); ctx.lineTo(tx, by + barH + 2); ctx.stroke();
+
+  // Status label
+  ctx.font = '600 10px -apple-system, sans-serif';
+  if (d.opaque) {
+    ctx.fillStyle = '#ff7b72';
+    ctx.fillText('◈ OPAQUE — pheromone set', p.x, by + barH + 18);
+  } else if (state.eligible.includes(d.name)) {
+    ctx.fillStyle = '#3fb950';
+    ctx.fillText('● eligible', p.x, by + barH + 18);
+  } else {
+    ctx.fillStyle = '#8b949e';
+    ctx.fillText('○ …', p.x, by + barH + 18);
+  }
+  ctx.restore();
+}
+
+function hexGlow(hex, a) {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.substring(0, 2), 16);
+  const g = parseInt(h.substring(2, 4), 16);
+  const b = parseInt(h.substring(4, 6), 16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+function roundRect(x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// ── Polling ────────────────────────────────────────────────────────────
+function setConnected(ok) {
+  connected = ok;
+  const el = document.getElementById('conn');
+  el.className = ok ? 'dot-live' : 'dot-live dot-off';
+}
+
+function applyState(d) {
+  state = d;
+  document.getElementById('s-tick').textContent = d.tick;
+  document.getElementById('s-busy').textContent = d.busy || '—';
+  document.getElementById('s-elig').textContent = `${d.eligible.length} / ${d.depots.length}`;
+
+  const cap = document.getElementById('caption');
+  if (d.busy) {
+    const opaqueNames = d.depots.filter(x => x.opaque).map(x => x.zone || x.name);
+    if (opaqueNames.length) {
+      cap.innerHTML = `<em>${opaqueNames.join(', ')} went opaque.</em> dispatch read the pheromone and routed to the ${d.eligible.length} transparent depot(s) — it never asked ${opaqueNames.join(', ')} anything.`;
+    } else {
+      cap.innerHTML = `<em>${d.busy} is filling its own intake queue.</em> Watch the bar cross the threshold — the governor will write the pheromone on its own.`;
+    }
+  } else {
+    cap.innerHTML = `<em>dispatch routes by reading the pheromone trail</em> — no coordinator, no message to the busy depot. All ${d.eligible.length} depots transparent.`;
+  }
+}
+
+async function poll() {
+  try {
+    const res = await fetch(`http://127.0.0.1:${HTTP_PORT}/state`, { signal: AbortSignal.timeout(2000) });
+    if (!res.ok) throw new Error();
+    applyState(await res.json());
+    if (!connected) setConnected(true);
+  } catch {
+    if (connected) setConnected(false);
+  }
+}
+
+// ── Init ───────────────────────────────────────────────────────────────
+sizeCanvas();
+setConnected(false);
+poll();
+setInterval(poll, 500);
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>

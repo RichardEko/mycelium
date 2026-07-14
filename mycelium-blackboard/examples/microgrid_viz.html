@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Microgrid Blackboard — Live</title>
+<style>
+  :root {
+    --bg:       #0d1117;
+    --surface:  #161b22;
+    --surface2: #1c2128;
+    --surface3: #21262d;
+    --border:   #30363d;
+    --accent:   #58a6ff;
+    --green:    #3fb950;
+    --purple:   #d2a8ff;
+    --amber:    #ffa657;
+    --red:      #ff7b72;
+    --muted:    #8b949e;
+    --text:     #e6edf3;
+    --text2:    #c9d1d9;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 14px; line-height: 1.6;
+  }
+
+  /* ── Header ─────────────────────────────────────────────── */
+  .header {
+    background: radial-gradient(ellipse at 60% 0%, rgba(63,185,80,0.07) 0%, transparent 55%), var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 22px 32px 18px;
+    display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap;
+  }
+  .header-badge {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--green); background: rgba(63,185,80,0.1);
+    border: 1px solid rgba(63,185,80,0.25); border-radius: 20px;
+    padding: 4px 12px; white-space: nowrap; margin-top: 4px;
+  }
+  .header-text { flex: 1; min-width: 240px; }
+  .header-title { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+  .header-title em { font-style: normal; color: var(--green); }
+  .header-sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+
+  /* ── Counter strip ──────────────────────────────────────── */
+  .counters {
+    display: flex; gap: 10px; flex-wrap: wrap; align-items: stretch;
+  }
+  .counter {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 8px 16px; min-width: 92px;
+  }
+  .counter-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  .counter-val { font-size: 22px; font-weight: 700; line-height: 1.15; font-family: "SF Mono","Fira Code",monospace; }
+  .badge-ok {
+    display: flex; align-items: center; gap: 7px;
+    background: rgba(63,185,80,0.12); border: 1px solid rgba(63,185,80,0.35);
+    color: var(--green); border-radius: 10px; padding: 8px 16px;
+    font-weight: 700; font-size: 13px; white-space: nowrap;
+  }
+  .badge-ok.bad {
+    background: rgba(255,123,114,0.12); border-color: rgba(255,123,114,0.4); color: var(--red);
+  }
+  .dot-live {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green); box-shadow: 0 0 6px var(--green);
+    animation: blink 1.6s ease-in-out infinite;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
+  .conn {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted);
+  }
+  .conn-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+
+  /* ── Canvas ─────────────────────────────────────────────── */
+  .stage-wrap {
+    max-width: 980px; margin: 20px auto 8px; padding: 0 24px;
+  }
+  #stage {
+    width: 100%; display: block;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  }
+
+  .legend {
+    max-width: 980px; margin: 4px auto 28px; padding: 0 24px;
+    display: flex; gap: 18px; flex-wrap: wrap; font-size: 11px; color: var(--muted);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+  .dash { width: 16px; border-top: 2px dashed var(--muted); display: inline-block; }
+
+  footer {
+    text-align: center; padding: 26px; font-size: 11px; color: var(--muted);
+    border-top: 1px solid var(--border);
+  }
+  footer code { background: var(--surface2); padding: 1px 6px; border-radius: 4px; color: var(--text2); }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <span class="header-badge">Blackboard · rd + in</span>
+  <div class="header-text">
+    <div class="header-title">Community Microgrid — <em>Shared Fact Pool</em></div>
+    <div class="header-sub">
+      One blackboard, no dispatcher · inverter posts surplus on feeder 4 · forecaster + tariff
+      <em>read</em> concurrently (non-destructive) · battery + EV-charger <em>claim</em> competitively (exactly-once)
+      · <span class="conn"><span class="conn-dot" id="conn-dot"></span><span id="conn-label">connecting…</span></span>
+    </div>
+  </div>
+  <div class="counters">
+    <div class="counter"><div class="counter-label">Posted</div><div class="counter-val" style="color:var(--amber)" id="c-posted">0</div></div>
+    <div class="counter"><div class="counter-label">Available</div><div class="counter-val" style="color:var(--accent)" id="c-avail">0</div></div>
+    <div class="counter"><div class="counter-label">Battery</div><div class="counter-val" style="color:var(--green)" id="c-battery">0</div></div>
+    <div class="counter"><div class="counter-label">EV charger</div><div class="counter-val" style="color:var(--purple)" id="c-charger">0</div></div>
+    <div class="badge-ok" id="badge"><span class="dot-live"></span><span id="badge-txt">exactly-once ✓</span></div>
+  </div>
+</header>
+
+<div class="stage-wrap"><canvas id="stage" width="1300" height="720"></canvas></div>
+
+<div class="legend">
+  <span><span class="swatch" style="background:#ffa657"></span> surplus fact (dot size ∝ kWh)</span>
+  <span><span class="dash"></span> non-destructive read (rd)</span>
+  <span><span class="swatch" style="background:#3fb950"></span> claim pulled to battery</span>
+  <span><span class="swatch" style="background:#d2a8ff"></span> claim pulled to EV charger</span>
+</div>
+
+<footer>
+  mycelium-blackboard · live at <code>:8091/state</code> · run <code>cargo run -p mycelium-blackboard --example microgrid_viz</code>
+</footer>
+
+<script>
+const PORT = 8091;
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+// ── Layout coordinates (canvas space) ──────────────────────
+const INVERTER = { x: W/2, y: 70 };
+const FEEDER_Y = 250;
+const FEEDER_X0 = 150, FEEDER_X1 = W - 150;
+const BATTERY = { x: W*0.30, y: 560, color: '#3fb950', name: 'community-battery' };
+const CHARGER = { x: W*0.70, y: 560, color: '#d2a8ff', name: 'ev-charger' };
+const FORECASTER = { x: 150, y: 400, color: '#58a6ff', name: 'forecaster' };
+const TARIFF     = { x: W-150, y: 400, color: '#58a6ff', name: 'tariff' };
+
+// ── Live state from server ─────────────────────────────────
+let state = {
+  generation: 0, posted_total: 0, available: 0, pool: [],
+  battery_claimed: 0, charger_claimed: 0,
+  forecaster_sees: 0, tariff_sees: 0, recent: [], exactly_once_ok: true,
+};
+let connected = false;
+
+// ── Transient animations ───────────────────────────────────
+// Energy packets falling from the inverter onto the feeder.
+let drops = [];        // {x, t}  t: 0→1 travel down to feeder
+// Claim pulls: a packet sliding from feeder to a storage node.
+let pulls = [];        // {fromX, to, color, t, kwh}
+let seenRecentIds = new Set();
+let lastPosted = 0;
+
+// Stable horizontal slot for each pool id so dots don't jump around.
+const slotFor = (() => {
+  const map = new Map(); let n = 0;
+  return (id) => {
+    if (!map.has(id)) { map.set(id, n++); }
+    return map.get(id);
+  };
+})();
+
+// ── Fetch loop ─────────────────────────────────────────────
+async function poll() {
+  try {
+    const res = await fetch(`http://127.0.0.1:${PORT}/state`, { signal: AbortSignal.timeout(2000) });
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    ingest(data);
+    setConn(true);
+  } catch {
+    setConn(false);
+  }
+}
+
+function ingest(data) {
+  // New posts → drop packets from the inverter.
+  const newPosts = data.posted_total - lastPosted;
+  if (lastPosted !== 0) {
+    for (let i = 0; i < Math.min(newPosts, 6); i++) {
+      drops.push({ x: INVERTER.x + (Math.random()-0.5)*60, t: 0 });
+    }
+  }
+  lastPosted = data.posted_total;
+
+  // New claims (from recent[]) → pull packets toward the claiming node.
+  for (const r of data.recent) {
+    const key = r.id + ':' + r.by;
+    if (!seenRecentIds.has(key)) {
+      seenRecentIds.add(key);
+      const to = r.by === 'community-battery' ? BATTERY : CHARGER;
+      pulls.push({ fromX: feederXFor(r.id), to, color: to.color, t: 0, kwh: r.kwh });
+    }
+  }
+  if (seenRecentIds.size > 200) seenRecentIds = new Set([...seenRecentIds].slice(-100));
+
+  state = data;
+  // Update header counters.
+  document.getElementById('c-posted').textContent  = data.posted_total;
+  document.getElementById('c-avail').textContent   = data.available;
+  document.getElementById('c-battery').textContent = data.battery_claimed;
+  document.getElementById('c-charger').textContent = data.charger_claimed;
+  const badge = document.getElementById('badge');
+  const btxt  = document.getElementById('badge-txt');
+  if (data.exactly_once_ok) { badge.classList.remove('bad'); btxt.textContent = 'exactly-once ✓'; }
+  else { badge.classList.add('bad'); btxt.textContent = 'exactly-once ✗ VIOLATED'; }
+}
+
+function setConn(ok) {
+  connected = ok;
+  document.getElementById('conn-dot').style.background = ok ? 'var(--green)' : 'var(--amber)';
+  document.getElementById('conn-dot').style.boxShadow = ok ? '0 0 6px var(--green)' : 'none';
+  document.getElementById('conn-label').textContent = ok ? 'live' : 'waiting for server…';
+}
+
+// Horizontal position on the feeder for a pool slot.
+function feederXFor(id) {
+  const slot = slotFor(id);
+  const span = FEEDER_X1 - FEEDER_X0 - 40;
+  return FEEDER_X0 + 30 + (slot % 18) * (span / 18);
+}
+
+// ── Drawing helpers ────────────────────────────────────────
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.arcTo(x+w, y, x+w, y+h, r);
+  ctx.arcTo(x+w, y+h, x, y+h, r);
+  ctx.arcTo(x, y+h, x, y, r);
+  ctx.arcTo(x, y, x+w, y, r);
+  ctx.closePath();
+}
+
+function node(n, title, sub, glow) {
+  const w = 210, h = 74, x = n.x - w/2, y = n.y - h/2;
+  ctx.save();
+  if (glow > 0) {
+    ctx.shadowColor = n.color;
+    ctx.shadowBlur = 4 + glow * 26;
+  }
+  ctx.fillStyle = '#1c2128';
+  roundRect(x, y, w, h, 12); ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = n.color; ctx.lineWidth = 1.5;
+  roundRect(x, y, w, h, 12); ctx.stroke();
+  ctx.fillStyle = n.color;
+  ctx.font = '600 15px -apple-system, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(title, n.x, n.y - 6);
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '12px "SF Mono", monospace';
+  ctx.fillText(sub, n.x, n.y + 16);
+}
+
+function dashedLine(x1, y1, x2, y2, color) {
+  ctx.save();
+  ctx.strokeStyle = color; ctx.globalAlpha = 0.4; ctx.lineWidth = 1.4;
+  ctx.setLineDash([6, 6]);
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  ctx.restore();
+}
+
+// kWh → dot radius + colour (small/cool → large/warm)
+function kwhRadius(k) { return 5 + Math.min(k, 5) * 3.2; }
+function kwhColor(k) {
+  const t = Math.min(k / 5, 1);
+  const r = Math.round(255), g = Math.round(200 - t*70), b = Math.round(120 - t*80);
+  return `rgb(${r},${g},${b})`;
+}
+
+// ── Render frame ───────────────────────────────────────────
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.05);
+  last = now;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Feeder bus.
+  ctx.strokeStyle = '#30363d'; ctx.lineWidth = 6;
+  ctx.beginPath(); ctx.moveTo(FEEDER_X0, FEEDER_Y); ctx.lineTo(FEEDER_X1, FEEDER_Y); ctx.stroke();
+  ctx.fillStyle = '#8b949e'; ctx.font = '11px "SF Mono", monospace'; ctx.textAlign = 'left';
+  ctx.fillText('feeder 4  ·  shared blackboard pool', FEEDER_X0, FEEDER_Y - 16);
+
+  // Inverter → feeder trunk.
+  ctx.strokeStyle = '#30363d'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(INVERTER.x, INVERTER.y + 30); ctx.lineTo(INVERTER.x, FEEDER_Y); ctx.stroke();
+
+  // Dashed observer lines (non-destructive reads).
+  dashedLine(FORECASTER.x, FORECASTER.y - 30, FORECASTER.x, FEEDER_Y, FORECASTER.color);
+  dashedLine(TARIFF.x, TARIFF.y - 30, TARIFF.x, FEEDER_Y, TARIFF.color);
+  // Storage trunk lines.
+  ctx.strokeStyle = '#30363d'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(BATTERY.x, FEEDER_Y); ctx.lineTo(BATTERY.x, BATTERY.y - 40); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(CHARGER.x, FEEDER_Y); ctx.lineTo(CHARGER.x, CHARGER.y - 40); ctx.stroke();
+
+  // Falling energy packets from the inverter.
+  drops = drops.filter(d => {
+    d.t += dt / 0.7;
+    if (d.t >= 1) return false;
+    const y = INVERTER.y + 30 + (FEEDER_Y - INVERTER.y - 30) * d.t;
+    ctx.fillStyle = `rgba(255,166,87,${0.85*(1-d.t)+0.15})`;
+    ctx.beginPath(); ctx.arc(d.x, y, 4, 0, Math.PI*2); ctx.fill();
+    return true;
+  });
+
+  // Pool dots on the feeder (glowing, sized by kWh).
+  for (const f of state.pool) {
+    const x = feederXFor(f.id);
+    const r = kwhRadius(f.kwh);
+    const col = kwhColor(f.kwh);
+    const pulse = 0.6 + 0.4 * Math.sin(now/400 + (f.id % 10));
+    ctx.save();
+    ctx.shadowColor = col; ctx.shadowBlur = 8 + pulse*8;
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(x, FEEDER_Y, r, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+
+  // Claim pulls: packet sliding from feeder to storage node.
+  let batteryGlow = 0, chargerGlow = 0;
+  pulls = pulls.filter(p => {
+    p.t += dt / 0.6;
+    if (p.t >= 1) return false;
+    const x = p.fromX + (p.to.x - p.fromX) * p.t;
+    const y = FEEDER_Y + (p.to.y - 40 - FEEDER_Y) * p.t;
+    ctx.save();
+    ctx.shadowColor = p.color; ctx.shadowBlur = 12;
+    ctx.fillStyle = p.color;
+    ctx.beginPath(); ctx.arc(x, y, kwhRadius(p.kwh)*(1-p.t*0.4), 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+    const g = 1 - p.t;
+    if (p.to === BATTERY) batteryGlow = Math.max(batteryGlow, g);
+    else chargerGlow = Math.max(chargerGlow, g);
+    return true;
+  });
+
+  // Nodes.
+  node(INVERTER, '☀ inverter', 'posts surplus', drops.length ? 0.5 : 0);
+  node(FORECASTER, 'forecaster', `rd · sees ${state.forecaster_sees}`, 0.12);
+  node(TARIFF, 'tariff', `rd · sees ${state.tariff_sees}`, 0.12);
+  node(BATTERY, '🔋 community-battery', `claimed ${state.battery_claimed}`, batteryGlow);
+  node(CHARGER, '⚡ ev-charger', `claimed ${state.charger_claimed}`, chargerGlow);
+
+  // Availability caption under the feeder.
+  ctx.fillStyle = '#8b949e'; ctx.font = '12px "SF Mono", monospace'; ctx.textAlign = 'center';
+  ctx.fillText(`${state.available} surplus fact${state.available===1?'':'s'} available  ·  gen ${state.generation}`,
+               W/2, FEEDER_Y + 34);
+
+  requestAnimationFrame(frame);
+}
+
+// ── Boot ───────────────────────────────────────────────────
+setConn(false);
+poll();
+setInterval(poll, 500);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
