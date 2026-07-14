@@ -230,7 +230,7 @@ async fn main() {
         // wedging each for the full RPC deadline — observed as a ~7 s global
         // stall poisoning ~20% of runs.
         for _ in 0..100 {
-            if space.peers().len() >= n + 1 {
+            if space.peers().len() > n {
                 break;
             }
             sleep(Duration::from_millis(100)).await;

@@ -555,7 +555,7 @@ async fn tool_sf_lookup(args: Value) -> Result<Value, String> {
         let text = sfe_extract_text(&html);
         // Skip the header boilerplate (nav + search form) — content starts after "Tagged:"
         let content = if let Some(i) = text.find("Tagged:") {
-            text[i..].splitn(2, '.').nth(1).unwrap_or(&text).trim().to_string()
+            text[i..].split_once('.').map_or(text.trim(), |(_, rest)| rest.trim()).to_string()
         } else {
             text
         };
@@ -916,19 +916,19 @@ async fn llm_step(cfg: &LlmCfg, messages: &[Value], tool_defs: &[Value]) -> Resu
         return Err(format!("LLM error: {}", err["message"].as_str().unwrap_or("unknown")));
     }
     let msg = &resp["choices"][0]["message"];
-    if let Some(tcs) = msg["tool_calls"].as_array() {
-        if !tcs.is_empty() {
-            let calls: Vec<ToolCallReq> = tcs.iter().filter_map(|tc| {
-                let id   = tc["id"].as_str()?.to_string();
-                let name = tc["function"]["name"].as_str()?.to_string();
-                let args: Value = serde_json::from_str(
-                    tc["function"]["arguments"].as_str().unwrap_or("{}"),
-                ).unwrap_or(json!({}));
-                Some(ToolCallReq { id, name, args })
-            }).collect();
-            if !calls.is_empty() {
-                return Ok(LlmStep::ToolCalls(calls));
-            }
+    if let Some(tcs) = msg["tool_calls"].as_array()
+        && !tcs.is_empty()
+    {
+        let calls: Vec<ToolCallReq> = tcs.iter().filter_map(|tc| {
+            let id   = tc["id"].as_str()?.to_string();
+            let name = tc["function"]["name"].as_str()?.to_string();
+            let args: Value = serde_json::from_str(
+                tc["function"]["arguments"].as_str().unwrap_or("{}"),
+            ).unwrap_or(json!({}));
+            Some(ToolCallReq { id, name, args })
+        }).collect();
+        if !calls.is_empty() {
+            return Ok(LlmStep::ToolCalls(calls));
         }
     }
     Ok(LlmStep::Answer(msg["content"].as_str().unwrap_or("").to_string()))
