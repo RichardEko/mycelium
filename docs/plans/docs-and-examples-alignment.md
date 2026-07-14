@@ -7,7 +7,7 @@ of the remaining v2 engineering (WS-D security, WS-F schema-evolution).
 |---|---|---|
 | WS0 | Concepts & Glossary (`guide/00-concepts.md`) | #70 |
 | WS2 | Patterns & Pitfalls grounded in examples (`guide/14-patterns-and-pitfalls.md`) | #71 |
-| WS1 | Retire-but-preserve (`prompt_skill_demo`, `mesh_demo`) | #72 |
+| WS1 | ✅ Retire-but-preserve (`prompt_skill_demo`, `mesh_demo`) — done 2026-07-14 | #72 |
 | WS5 | Cluster artifact catalogue (example 11 `catalog` + `operations/artifacts.md`) | #73 |
 | WS3+WS4 | Developer cookbook + two-audience ops docs | #74 |
 | WS6 | Reconcile (CLAUDE.md, plan status, stale-ref sweep) | this |
@@ -115,7 +115,13 @@ coop example header & README entry, all cross-linked.
 
 ---
 
-## WS1 · Example-portfolio rationalization (retire-but-preserve)
+## WS1 · Example-portfolio rationalization (retire-but-preserve) — ✅ COMPLETE (2026-07-14)
+
+**Status:** both retirements executed. `prompt_skill_demo` retired into the coop suite (its
+reference in guide ch03 / `03-signals.md` repointed to the coop example portfolio); `mesh_demo.html`
+deleted after `llm_agent` + coop `provisioning` covered capability-selected behaviour and no
+guide/README refs remained. Verified: neither example is present in the tree and no dangling
+references exist.
 
 **Rule (per direction):** if a coop example is *broader than and subsumes* an earlier example,
 **retire the earlier one** — but **first** ensure the replacement example **and** the dev docs
@@ -126,8 +132,8 @@ Keep / merge / retire matrix:
 
 | Example | Unique value | Decision | Coverage to preserve / action |
 |---|---|---|---|
-| `prompt_skill_demo` | **live prompt-template update via KV** (`update_prompt`→peer reads new version), `list_prompts`/`get_prompt` | **RETIRE** → coop | First add a *live template-update* beat to `mailbox_llm` (or a coop demo) + cover it in the Skills chapter; repoint guide ch03 + README index; then delete |
-| `mesh_demo` | manifest-driven virgin-agent provisioning + mgmt UI (behaviour by capability) | **RETIRE** → `llm_agent` + coop `provisioning` | Ensure `llm_agent`'s UI + `provisioning` cover capability-selected behaviour; repoint ch02/ch03 header refs; then delete |
+| `prompt_skill_demo` | **live prompt-template update via KV** (`update_prompt`→peer reads new version), `list_prompts`/`get_prompt` | ✅ **RETIRED** → coop | Done: retired into the coop suite; `03-signals.md` repoints to the coop example portfolio |
+| `mesh_demo` | manifest-driven virgin-agent provisioning + mgmt UI (behaviour by capability) | ✅ **RETIRED** → `llm_agent` + coop `provisioning` | Done: `mesh_demo.html` deleted; `llm_agent`'s UI + `provisioning` cover capability-selected behaviour; no dangling refs |
 | `invoke_skill` | minimal SkillRunner caller / driver | **KEEP (utility)** | Re-label as a *driver/utility*, not a portfolio example |
 | `llm_agent` | live **management UI** + probe/health + dynamic provisioning | **KEEP** | The README front-door UI demo; note coop `provisioning` for the headless autonomic version |
 | `three_node_demo` | multi-role chat + **consistency overlay** cluster + UI | **KEEP** | README front-door; unique consistency-overlay surface |
