@@ -16,6 +16,15 @@ addressed to them or explicitly cross-linked from one — and you verified it by
 by trusting a title. This is the doc analogue of M2's execution-evidence gate: reading a table of
 contents inflates coverage; opening the page is the evidence.
 
+**Presence is not sufficiency — a HOW instruction must *work if followed literally*.** For any cell
+whose doc gives a **setting / config / run instruction** (an env var, a config field, a command, a
+version constant), a `Clear` verdict requires that the documented steps, followed literally, actually
+*succeed* — or trace to code that makes them succeed. An instruction that is *present but silently
+no-ops* is **Thin**, not Clear. Two calibration hits are of exactly this class: the stale wire-version
+constant (2026-07-11) and `GOSSIP_CLUSTER_NAME` documented without the `apply_env_overrides()` it
+requires (2026-07-14, a user hit it). So: spot-check the *value/behaviour* against code, not just its
+presence in the prose.
+
 ## Step 0 — Baseline & diff gate
 
 Read the current `docs/analysis/doc-coverage.md` first (the living matrix + its changelog). Then
