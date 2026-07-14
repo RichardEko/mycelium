@@ -113,6 +113,7 @@ fn fmt_time(ms: u64) -> String {
 fn make_agent(port: u16, peers: &[u16]) -> Arc<GossipAgent> {
     let nid = NodeId::new("127.0.0.1", port).unwrap();
     let mut cfg = GossipConfig::default();
+    cfg.cluster_name               = Some(std::env::var("GOSSIP_CLUSTER_NAME").unwrap_or_else(|_| "mesh-control".to_string()));
     cfg.bind_address               = "127.0.0.1".to_string();
     cfg.bind_port                  = port;
     cfg.default_ttl                = 20;

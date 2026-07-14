@@ -38,9 +38,13 @@ async fn main() {
     let node_b = NodeId::new("127.0.0.1", 19101).unwrap();
     let node_c = NodeId::new("127.0.0.1", 19102).unwrap();
 
-    let agent_a = GossipAgent::new(node_a.clone(), GossipConfig::default());
-    let agent_b = GossipAgent::new(node_b.clone(), GossipConfig::default());
-    let agent_c = GossipAgent::new(node_c.clone(), GossipConfig::default());
+    let cfg = || GossipConfig {
+        cluster_name: Some(std::env::var("GOSSIP_CLUSTER_NAME").unwrap_or_else(|_| "semantic".to_string())),
+        ..Default::default()
+    };
+    let agent_a = GossipAgent::new(node_a.clone(), cfg());
+    let agent_b = GossipAgent::new(node_b.clone(), cfg());
+    let agent_c = GossipAgent::new(node_c.clone(), cfg());
 
     // ── Section 1: Capability schema versioning ───────────────────────────────
     //

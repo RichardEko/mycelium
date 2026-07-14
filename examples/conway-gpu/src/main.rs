@@ -388,6 +388,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seed_port = port(0, 0);
     let seed_id   = NodeId::new("127.0.0.1", seed_port)?;
     let mut seed_cfg = GossipConfig::default();
+    seed_cfg.cluster_name = Some(std::env::var("GOSSIP_CLUSTER_NAME").unwrap_or_else(|_| "conway-gpu".to_string()));
     seed_cfg.bind_address = "127.0.0.1".to_string();
     seed_cfg.bind_port    = seed_port;
     let seed = Arc::new(GossipAgent::new(seed_id.clone(), seed_cfg));
@@ -399,6 +400,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let p   = port(x, y);
             let nid = NodeId::new("127.0.0.1", p)?;
             let mut cfg = GossipConfig::default();
+            cfg.cluster_name    = Some(std::env::var("GOSSIP_CLUSTER_NAME").unwrap_or_else(|_| "conway-gpu".to_string()));
             cfg.bind_address    = "127.0.0.1".to_string();
             cfg.bind_port       = p;
             cfg.bootstrap_peers            = vec![seed_id.clone()];

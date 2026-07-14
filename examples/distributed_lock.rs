@@ -66,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (i, &port) in ports.iter().enumerate() {
         let bootstrap: Vec<NodeId> = if i == 0 { vec![] }
             else { vec![NodeId::new("127.0.0.1", base)?] };
-        let cfg = GossipConfig { bind_port: port, bootstrap_peers: bootstrap, ..Default::default() };
+        let cfg = GossipConfig { bind_port: port, bootstrap_peers: bootstrap, cluster_name: Some(std::env::var("GOSSIP_CLUSTER_NAME").unwrap_or_else(|_| "lock-demo".to_string())), ..Default::default() };
         let agent = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port)?, cfg));
         agent.start().await?;
         // Every node that should vote on the lock needs a consensus listener.

@@ -46,6 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let skill_node = NodeId::new("127.0.0.1", node_port)?;
 
     let mut cfg = GossipConfig::default();
+    cfg.cluster_name = Some(std::env::var("GOSSIP_CLUSTER_NAME").unwrap_or_else(|_| "invoke-skill".to_string()));
     cfg.bind_port = caller_port;
     cfg.bootstrap_peers = vec![skill_node.clone()];
 

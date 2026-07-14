@@ -26,7 +26,7 @@ async fn main() {
     let port = mycelium::test_util::alloc_port();
     let agent = Arc::new(GossipAgent::new(
         NodeId::new("127.0.0.1", port).unwrap(),
-        GossipConfig { bind_port: port, ..Default::default() },
+        GossipConfig { bind_port: port, cluster_name: Some(std::env::var("GOSSIP_CLUSTER_NAME").unwrap_or_else(|_| "microgrid".to_string())), ..Default::default() },
     ));
     agent.start().await.unwrap();
     let bb = Blackboard::new(
