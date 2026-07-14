@@ -92,6 +92,12 @@ const PORT_SPARE2:     u16 = 56005;
 const HTTP_PORT_N0:    u16 = 8100;
 const HTTP_PORT_N1:    u16 = 8101;
 const HTTP_PORT_N2:    u16 = 8102;
+// Mycelium gateway ports (distinct from the control-UI ports above) — these expose
+// /stats · /gateway/fleet · /gateway/diagnose · /gateway/kv so the generic Ops Console
+// can target this cluster and discover its UI via the `ui/viz` KV convention.
+const GW_PORT_N0:      u16 = 9100;
+const GW_PORT_N1:      u16 = 9101;
+const GW_PORT_N2:      u16 = 9102;
 const SETTLE_MS:       u64 = 2_000;
 const HEALTH_SECS:     u64 = 10;
 const FAILURE_ONSET_S: u64 = 35;
@@ -110,12 +116,13 @@ fn fmt_time(ms: u64) -> String {
     format!("{:02}:{:02}:{:02}.{:03}", s / 3600 % 24, s / 60 % 60, s % 60, m)
 }
 
-fn make_agent(port: u16, peers: &[u16]) -> Arc<GossipAgent> {
+fn make_agent(port: u16, peers: &[u16], gateway_port: Option<u16>) -> Arc<GossipAgent> {
     let nid = NodeId::new("127.0.0.1", port).unwrap();
     let mut cfg = GossipConfig::default();
     cfg.cluster_name               = Some(std::env::var("GOSSIP_CLUSTER_NAME").unwrap_or_else(|_| "mesh-control".to_string()));
     cfg.bind_address               = "127.0.0.1".to_string();
     cfg.bind_port                  = port;
+    cfg.http_port                  = gateway_port;
     cfg.default_ttl                = 20;
     cfg.reconnect_backoff_secs     = 1;
     cfg.gossip_shards              = 1;
@@ -1609,17 +1616,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // ── Spawn nodes ───────────────────────────────────────────────────────────
-    let agent_n0 = make_agent(PORT_N0, &[PORT_N1, PORT_N2]);
-    let agent_n1 = make_agent(PORT_N1, &[PORT_N0, PORT_N2]);
-    let agent_n2 = make_agent(PORT_N2, &[PORT_N0, PORT_N1]);
+    let agent_n0 = make_agent(PORT_N0, &[PORT_N1, PORT_N2], Some(GW_PORT_N0));
+    let agent_n1 = make_agent(PORT_N1, &[PORT_N0, PORT_N2], Some(GW_PORT_N1));
+    let agent_n2 = make_agent(PORT_N2, &[PORT_N0, PORT_N1], Some(GW_PORT_N2));
     agent_n0.start().await?;
     agent_n1.start().await?;
     agent_n2.start().await?;
 
+    // Self-advertise the Mesh Control UI so the generic Ops Console can offer a live
+    // "↗ Mesh Control" click-through — the `ui/viz` + `ui/label` KV convention (see conway.rs /
+    // ops_console.rs). `ui/viz` is a single shared cluster KV key, so write it once (not per node);
+    // it points at n-0's control port, which 307-redirects to whichever node is the elected manager.
+    // Point the console at any node's gateway (9100/9101/9102) and it discovers this URL.
+    let _ = agent_n0.kv().set("ui/viz", format!("http://localhost:{HTTP_PORT_N0}/"));
+    let _ = agent_n0.kv().set("ui/label", "Mesh Control".to_string());
+    println!("Ops Console → cargo run --example ops_console -- 127.0.0.1:{GW_PORT_N0}   (or :{GW_PORT_N1}/:{GW_PORT_N2})");
+
     // Spare pool — join the gossip ring but start idle (no capabilities advertised)
-    let agent_spare0 = make_agent(PORT_SPARE0, &[PORT_N0, PORT_N1, PORT_N2]);
-    let agent_spare1 = make_agent(PORT_SPARE1, &[PORT_N0, PORT_N1, PORT_N2]);
-    let agent_spare2 = make_agent(PORT_SPARE2, &[PORT_N0, PORT_N1, PORT_N2]);
+    let agent_spare0 = make_agent(PORT_SPARE0, &[PORT_N0, PORT_N1, PORT_N2], None);
+    let agent_spare1 = make_agent(PORT_SPARE1, &[PORT_N0, PORT_N1, PORT_N2], None);
+    let agent_spare2 = make_agent(PORT_SPARE2, &[PORT_N0, PORT_N1, PORT_N2], None);
     agent_spare0.start().await?;
     agent_spare1.start().await?;
     agent_spare2.start().await?;
