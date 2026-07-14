@@ -146,6 +146,7 @@ async fn import(store_dir: &Path, group: &str, corpus: &Path) {
     // A pinned curator (no election wait — this is a single-node importer) over the shared store.
     let port = free_port();
     let mut cfg = GossipConfig::default();
+    cfg.cluster_name = Some(std::env::var("GOSSIP_CLUSTER_NAME").unwrap_or_else(|_| "wiki".to_string()));
     cfg.bind_port = port;
     let agent = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg));
     agent.start().await.unwrap();

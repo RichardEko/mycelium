@@ -37,6 +37,7 @@ fn free_port() -> u16 {
 /// Start one tls agent sharing `cert_dir` (shared CA), `None` if the bind lost the port race.
 async fn try_start(port: u16, boot: Vec<u16>, cert_dir: &std::path::Path) -> Option<Arc<GossipAgent>> {
     let mut cfg = GossipConfig::default();
+    cfg.cluster_name = Some(std::env::var("GOSSIP_CLUSTER_NAME").unwrap_or_else(|_| "guardrails".to_string()));
     cfg.bind_port = port;
     cfg.bootstrap_peers = boot.into_iter().map(|p| NodeId::new("127.0.0.1", p).unwrap()).collect();
     cfg.reconnect_backoff_secs = 1;

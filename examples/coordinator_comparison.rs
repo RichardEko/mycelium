@@ -269,6 +269,7 @@ async fn build_cluster(mode: &str, n: usize, port_base: u16) -> Cluster {
         let port = port_base + i as u16;
         let id   = NodeId::new("127.0.0.1", port).expect("worker port");
         let mut cfg = GossipConfig::default();
+        cfg.cluster_name = Some(std::env::var("GOSSIP_CLUSTER_NAME").unwrap_or_else(|_| "coordinator".to_string()));
         cfg.bind_port = port;
         cfg.health_check_max_jitter_ms = 50;
         if i != 0 {
@@ -285,6 +286,7 @@ async fn build_cluster(mode: &str, n: usize, port_base: u16) -> Cluster {
     let client_port = port_base + n as u16;
     let client_id   = NodeId::new("127.0.0.1", client_port).expect("client port");
     let mut cfg = GossipConfig::default();
+    cfg.cluster_name = Some(std::env::var("GOSSIP_CLUSTER_NAME").unwrap_or_else(|_| "coordinator".to_string()));
     cfg.bind_port = client_port;
     // Bootstrap client from all workers — guarantees direct peering with every
     // worker so probe RPCs are one hop. Peer-exchange is slower to converge at
@@ -300,6 +302,7 @@ async fn build_cluster(mode: &str, n: usize, port_base: u16) -> Cluster {
         let broker_port = port_base + n as u16 + 1;
         let broker_id   = NodeId::new("127.0.0.1", broker_port).expect("broker port");
         let mut cfg = GossipConfig::default();
+        cfg.cluster_name = Some(std::env::var("GOSSIP_CLUSTER_NAME").unwrap_or_else(|_| "coordinator".to_string()));
         cfg.bind_port = broker_port;
         // Bootstrap broker with rendezvous AND client — guarantees direct peering
         // between broker and client without relying on peer-exchange latency.

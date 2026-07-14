@@ -50,6 +50,7 @@ async fn main() {
         bind_port,
         http_port: Some(http_port),
         bootstrap_peers,
+        cluster_name: Some(std::env::var("GOSSIP_CLUSTER_NAME").unwrap_or_else(|_| "reason".to_string())),
         ..Default::default()
     };
 

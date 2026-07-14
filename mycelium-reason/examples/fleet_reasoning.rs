@@ -28,6 +28,7 @@ async fn try_start(port: u16, boot: Vec<u16>) -> Option<Arc<GossipAgent>> {
     let cfg = GossipConfig {
         bind_port: port,
         bootstrap_peers: boot.into_iter().map(|p| NodeId::new("127.0.0.1", p).unwrap()).collect(),
+        cluster_name: Some(std::env::var("GOSSIP_CLUSTER_NAME").unwrap_or_else(|_| "reason".to_string())),
         ..Default::default()
     };
     let agent = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg));

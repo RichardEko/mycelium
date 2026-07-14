@@ -310,6 +310,7 @@ async fn make_agent(
 ) -> Arc<GossipAgent> {
     let nid = NodeId::new(my_ip, port).expect("valid self NodeId");
     let mut cfg = GossipConfig::default();
+    cfg.cluster_name               = Some(std::env::var("GOSSIP_CLUSTER_NAME").unwrap_or_else(|_| "three-node".to_string()));
     cfg.bind_address               = my_ip.to_string();
     cfg.bind_port                  = port;
     cfg.http_port                  = http_port;

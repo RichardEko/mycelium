@@ -700,6 +700,7 @@ async fn build_cluster(mode: &str, n: usize, port_base: u16) -> Cluster {
 
     let mk = |port: u16, boots: Vec<NodeId>| {
         let mut cfg = GossipConfig::default();
+        cfg.cluster_name = Some(std::env::var("GOSSIP_CLUSTER_NAME").unwrap_or_else(|_| "workdist".to_string()));
         cfg.bind_port = port;
         cfg.bootstrap_peers = boots;
         cfg.health_check_max_jitter_ms = 50;

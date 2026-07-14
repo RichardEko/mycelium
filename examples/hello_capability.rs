@@ -71,6 +71,7 @@ async fn start_agent(port: u16, peers: &[u16]) -> Result<Arc<GossipAgent>, Box<d
     let config = GossipConfig {
         bind_port: port, // an agent listens on `bind_port`, not the NodeId's port — set both
         bootstrap_peers: peers.iter().map(|p| NodeId::new("127.0.0.1", *p).unwrap()).collect(),
+        cluster_name: Some(std::env::var("GOSSIP_CLUSTER_NAME").unwrap_or_else(|_| "hello-capability".to_string())),
         ..Default::default()
     };
     let agent = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port)?, config));
