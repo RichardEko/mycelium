@@ -1747,6 +1747,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     agent.start().await.expect("agent start");
     info!("[{role}] node_id={}", agent.node_id());
 
+    // Self-advertise this node's browser UI (if the role has one) so the Ops Console can offer a
+    // live "↗ visualiser" click-through — the `ui/viz` + `ui/label` KV convention (see conway.rs /
+    // ops_console.rs). Only the two UI-serving roles have a page to link to; point the console at
+    // this node's gateway (`http_port`) and it discovers the URL below.
+    match role.as_str() {
+        "llm" => {
+            let _ = agent.kv().set("ui/viz", format!("http://localhost:{chat_port}/"));
+            let _ = agent.kv().set("ui/label", "MCP Chat UI".to_string());
+        }
+        "mgmt" => {
+            let _ = agent.kv().set("ui/viz", format!("http://localhost:{mgmt_port}/"));
+            let _ = agent.kv().set("ui/label", "Mesh Management".to_string());
+        }
+        _ => {}
+    }
+
     // For the `node` role, register a test/echo prompt skill backed by EchoBackend so
     // integration scenario 12 can verify cross-node KV propagation and invocation.
     #[cfg(feature = "llm")]
