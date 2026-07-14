@@ -1044,7 +1044,7 @@ providers = agent.<span class="cs">resolve_capability</span>(<span class="cv">"c
         </div>
         <div class="card card-accent-orange">
           <div class="card-title">100-node scale suites</div>
-          <div class="card-body"><code>make test-scale</code> spins 100 Docker nodes: cluster formation, KV write propagation seed→mgmt, dropped-frame accounting. Single-host runs hit a known Docker-bridge iptables ceiling (documented) — true 100-node coverage runs nightly on self-hosted hardware; multi-host k8s is the axis past that.</div>
+          <div class="card-body"><code>make test-scale</code> spins 100 Docker nodes: cluster formation, KV write propagation seed→mgmt, dropped-frame accounting. Single-host runs hit a known Docker-bridge iptables ceiling (documented); a nightly self-hosted scale workflow is wired for full 100-node coverage (<code>scale-nightly.yml</code>, awaiting runner registration), and multi-host k8s is the axis past the ceiling.</div>
         </div>
         <div class="card card-accent-green">
           <div class="card-title">v1.x compliance layer (<code>compliance</code> feature)</div>

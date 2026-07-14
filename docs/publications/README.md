@@ -125,3 +125,23 @@ signal for the `/publication-lint` skill (is it catching overclaims before human
   `presentation.html:926` "~1 ms" gateway number remains unsourced.
 - 2026-07-14 (deck edit, not a lint run): fixed a stale internal count — `presentation.html` said the Food-Rescue Co-op was "eleven-demo" in the interop-slide footnote while its own "Fourteen demos" slide (and the wiki) say fourteen → corrected to `fourteen-demo`. Caught while adding the **Visual showcases** pointer (the four `*_viz` + conway, `:8090`–`:8094`) to the deck + `examples/README.md`. Staleness, not an overclaim.
 - 2026-07-14 (lint run 4): **clean — verified the new Visual-showcases deck pointer.** Diff-gated to the one persuasion-surface change since run 3 (the showcase callout on the interop slide). Verified against the built examples: the ports cited (`:8090`–`:8094`) match what `conway`/`microgrid_viz`/`stigmergy_viz`/`redistribution_viz`/`llm_council_viz` actually bind; `llm_council_viz` is `EchoBackend`-only (zero key/Ollama refs) so "no LLM key" holds; no absolute/BFT/platform language introduced; the `examples/README.md` § Browser-showcases reference resolves. The eleven→fourteen count staleness was already caught+fixed in the same edit (`536f360`, logged above). No findings.
+- 2026-07-14 (lint run 5): **`presentation.html:1047` — status overclaim (roadmap sold as active).**
+  The 100-node scale card claimed *"true 100-node coverage runs nightly on self-hosted hardware."* But
+  the self-hosted runner is **"queued until the runner is registered"** (`.github/workflows/scale-
+  nightly.yml` header + `docs/wiki/dev/testing/scale-tests.md:43-45`), so the CI nightly does **not
+  actually run** — the deck dropped the *awaiting-registration* caveat the wiki carries and presented
+  wired infrastructure as active coverage. Survived lint runs 1–4 undetected. Severity: **Major**.
+  **FIXED**: reworded to *"a nightly self-hosted scale workflow is wired for full 100-node coverage
+  (`scale-nightly.yml`, awaiting runner registration)."* **Calibration (2nd hit of a class):** like
+  the wire-`v11` staleness (run 1), the deck restated an internal-doc fact but **shed the internal
+  doc's own hedge** — a status verb (`runs`/`gated`/`nightly`) asserted more than the wiki/workflow it
+  derives from. **Sharpening folded into §1:** status claims must be reconciled not only against
+  `ROADMAP`/`plans` milestones but against the *hedge in the source doc/workflow itself* — if the wiki
+  says "queued until registered" and the deck says "runs", that gap is the finding. Cross-checked the
+  customer-pitch's "100-node cluster formation … runs on every change" — **defensible, left as-is**:
+  "✓ Demonstrated" is honest (`make test-scale` forms 100 nodes) and the "CI-gated with no retries"
+  scenarios are the AFN/coop *smokes*, not the 100-node scale suite. Separately confirmed the decks'
+  `/gateway/diagnose` + "no control plane to see the fleet" claims (`customer-pitch.html:330-341`,
+  `presentation.html:1511`) are now *demonstrable* via the read-only Ops Console (`examples/ops_
+  console.rs`) — consistent, no drift. Sole finding fixed; rest of the persuasion surface unchanged
+  since run 4.
