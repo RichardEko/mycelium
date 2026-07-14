@@ -54,12 +54,15 @@ one per-example block). `coop/` is the reference implementation of the suite sha
   `microgrid_viz` `:9091` / `redistribution_viz` `:9093` need `--features gateway`, off by default in
   those companion crates). **Dev/reference tool, explicitly *not* a shipped control plane** — the
   library-not-platform line holds; a customer forks it or scrapes `/metrics` into Grafana.
-  *Two-way linking (the `ui/viz` convention):* each showcase self-advertises its browser UI as two KV
+  *Two-way linking (the `ui/viz` convention):* every browser demo self-advertises its UI as two KV
   keys — `ui/viz` = `http://host:port/`, `ui/label` = a short name — which the console reads from the
   target and surfaces as a live "↗ label" link; each dashboard carries the reverse "⚙ Ops Console"
-  button pre-targeted at its own gateway. One KV convention closes the loop both ways, and the console
-  hard-codes no demo (a node that advertises nothing just hides the link). Any gateway example with a
-  UI opts in with two `kv().set(...)` writes — reference: `redistribution_viz.rs`.
+  button pre-targeted at its own gateway. This spans both the visual showcases above **and** the
+  browser *operator* demos brought onto the same dark theme — `three_node_demo` (chat `:8080`, mgmt
+  `:8090`) and `llm_agent` (Mesh Control `:8100`, gateways `:9100`–`:9102`). One KV convention closes
+  the loop both ways, and the console hard-codes no demo (a node that advertises nothing just hides the
+  link). Any gateway example with a UI opts in with two `kv().set(...)` writes — reference:
+  `redistribution_viz.rs`.
 - **Agentic Flow Networks** (`examples/fluid_pipeline/`): 10-worker pool, 4-stage pipeline,
   `PIPELINE_MODE=pull` (canonical, tuple-space) vs `push` (baseline comparison). CI
   `afn-smoke`. Concept essay: `flow_networks.html`.
