@@ -13,9 +13,20 @@
 //! does NOT test the paper's strongest claim. The pull grade (self-resolved
 //! action, where no participant predicts any other's state and the misroute
 //! metric is undefined by construction) is instantiated and behaviourally
-//! tested in the `mycelium-tuple-space` companion crate; the planned
-//! three-arm experiment (broker / gossip / pull, outcome-level metrics)
-//! is described in Paper 2a § "What Remains Open Empirically".
+//! tested in the `mycelium-tuple-space` companion crate; the three-arm
+//! experiment (broker / gossip / pull, outcome-level metrics) is implemented
+//! in [`three_arm_workdist.rs`](three_arm_workdist.rs) and described in
+//! Paper 2a § "What Remains Open Empirically".
+//!
+//! ## Relationship to `three_arm_workdist.rs` (not redundant)
+//!
+//! These are complementary instruments, not duplicates. THIS binary is the
+//! two-arm, *decision-level* probe: broker vs gossip prediction, measured on
+//! **staleness and misroute rate** — the vocabulary that only exists while
+//! someone is predicting. `three_arm_workdist.rs` adds the **pull** arm and,
+//! because pull abolishes that vocabulary, measures **outcomes** instead
+//! (latency, throughput, idle-while-work, fairness). Cited by Paper 1 as the
+//! harness for the two prediction arms already run head-to-head.
 //!
 //! ## Two modes from one substrate
 //!
