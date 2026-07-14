@@ -92,6 +92,14 @@ companion/architecture pages embody but never reference = a coverage finding (ad
 is a scope gap a prior pass hit: it counted `coordination-approaches.md` as "covered" because it
 existed user-facing, without checking the wiki linked it (ledger 2026-07-13).
 
+**Enumeration pages: audit by *category*, not by pinned count.** For pages that list a set
+(`dev/examples.md`, the sub-handle list, the feature list), a re-checked count is not coverage — a
+whole *category* can be missing while the count it pins is still "right." `examples.md` enumerated the
+coop demo count for many passes while the entire **visual-showcase** category (`conway`, `conway-gpu`,
+the `*_viz` set) was absent (ledger 2026-07-14). So verify the enumeration covers every category that
+exists in the tree (for examples: starter · coop · AFN · a2a · integration · visual-showcases), and
+that newly-merged examples/handles/features each land in it.
+
 ## Output
 
 Fix findings directly (they're doc edits), write the dated `.log/` lint entries naming what
