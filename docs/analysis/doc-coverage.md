@@ -19,6 +19,16 @@ concern). WHY is usually shared Dev+Ops.
 
 ## Changelog
 
+- **2026-07-14 (run 6)** — diff-gated: **no cell moves; carried from run 5.** Since run 5 the only
+  concept-touching docs delta is on **Reasoning / LLM / LangGraph**: the FAQ now cites the langgraph
+  `deploy/reheal` rung for its "survives the loss of the orchestrator node" claim (`eb89232`), and
+  `15-reasoning-and-langgraph.md`'s flagship section links back to that FAQ positioning (`28ad9b1`) —
+  so FAQ-claim ↔ ch15-how-to ↔ example are now three-way connected. That row was already `✓✓✓✓✓`, so
+  this is a **Tier-3 discoverability improvement** (WHY↔HOW connectivity, shown-not-told), not a
+  verdict change. Everything else in the delta is examples hygiene (orphan `mesh_demo` deleted,
+  `diagnostics` registered, operator demos re-themed + ops-linked) and non-concept prose (the broker
+  bullet de-jargon) — no concept's landing gained or lost. Zero `src/`·`mycelium-*/src/` change. No
+  calibration hit (no prior-Clear cell found Thin).
 - **2026-07-14 (run 5)** — diff-gated. Delta since run 4 is the `cluster_name` work (`f5c7f6c`,
   `15a33eb`): every example now sets a cluster name, and `guide/13-cluster-topology.md` gained the
   `apply_env_overrides()` caveat. **Calibration hit** (below): **Membership + cluster_name · HOW·Dev**
@@ -209,7 +219,7 @@ skepticism, not a re-asserted ✓.
 ## Re-run guidance
 
 The audit was a one-time systematic sweep; a re-run should be a **diff**. Re-audit a concept only
-when its code/docs changed since the last run (run 5: `git log --since=2026-07-14 -- docs/ src/
+when its code/docs changed since the last run (run 6 baseline commit `bcd235a`: `git log bcd235a..HEAD -- docs/ src/
 mycelium-*/src/`). The matrix
 above is the baseline: any cell dropping below ✓ is a regression. The method (four auditors, the
 Clear/Thin/Missing rubric, the exact prompts) is reproducible from this session's transcript. New
