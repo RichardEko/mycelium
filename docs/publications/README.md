@@ -145,3 +145,14 @@ signal for the `/publication-lint` skill (is it catching overclaims before human
   `presentation.html:1511`) are now *demonstrable* via the read-only Ops Console (`examples/ops_
   console.rs`) — consistent, no drift. Sole finding fixed; rest of the persuasion surface unchanged
   since run 4.
+- 2026-07-14 (lint run 6): **clean — no persuasion-surface change since run 5, and the session's
+  shipped work introduced no drift.** Diff-gated: no `docs/publications/` or `philosophy.html` commit
+  since run 5. Verified the deltas that *could* have staled a deck claim: (a) the examples audit
+  registered `diagnostics` — re-counted the coop suite (16 bins − 2 `*_viz` = **14 non-viz batch
+  demos**), so `presentation.html`'s **"fourteen-demo"** is still exact (registration made an existing
+  autobin explicit, adding no bin); (b) the deleted `mesh_demo` has **no** deck/paper reference; (c)
+  the browser-showcase ports (`:8090`–`:8094`) are unchanged by the audit (the newly dark-themed
+  *operator* demos `three_node_demo`/`llm_agent` are `:8080`/`:8100`, correctly *not* in the deck's
+  pitch-showcase set); (d) the FAQ↔ch15 langgraph node-survival cross-linking is *consistent with* —
+  and now better-demonstrated by — the papers'/philosophy's "no orchestrator" positioning, no
+  overclaim. No findings.
