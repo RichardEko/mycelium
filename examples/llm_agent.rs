@@ -249,12 +249,15 @@ fn probe_tool(_name: &str, fail_flag: &Arc<AtomicBool>) -> bool {
     !fail_flag.load(Ordering::Relaxed)
 }
 
+/// An async tool handler: `Value` in, boxed future of `Value` out.
+type ToolHandlerFn = fn(Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = Value> + Send + 'static>>;
+
 struct FixedToolNode {
     agent:     Arc<GossipAgent>,
     tools:     Vec<ToolDef>,
     fail_flag: Arc<AtomicBool>,
     log:       SharedLog,
-    handlers:  Vec<fn(Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = Value> + Send + 'static>>>,
+    handlers:  Vec<ToolHandlerFn>,
 }
 
 struct ToolHandle { _tool: McpToolHandle }
@@ -940,7 +943,7 @@ fn build_state_json(app: &AppState) -> String {
         (&app.agent_n2, "n-2"),
     ].iter().map(|(agent, label)| {
         let nid   = agent.node_id();
-        let alive = agent.peers().len() > 0 || *label == "n-2";
+        let alive = !agent.peers().is_empty() || *label == "n-2";
         let paused = match *label {
             "n-0" => app.pause_n0.load(Ordering::Relaxed),
             "n-1" => app.pause_n1.load(Ordering::Relaxed),
@@ -1948,9 +1951,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             let mut rx = agent.capabilities().watch_capabilities(CapFilter::new("system", "manager"));
             loop {
-                match rx.recv().await {
-                    None    => break,
-                    Some(_) => {}
+                if rx.recv().await.is_none() {
+                    break;
                 }
                 let candidates = agent.capabilities().resolve(&CapFilter::new("system", "manager"));
                 let new_port   = compute_manager_port(&candidates);
@@ -1993,7 +1995,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     "consensus-cluster" => {
-                        if tick % 3 == 0 {
+                        if tick.is_multiple_of(3) {
                             push_traffic(&app.traffic, 2, 0, "gossip");
                             push_traffic(&app.traffic, 2, 1, "gossip");
                         } else {
@@ -2001,7 +2003,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     "dispatch-pool" => {
-                        push_traffic(&app.traffic, if tick % 2 == 0 { 0 } else { 1 }, 2, "gossip");
+                        push_traffic(&app.traffic, if tick.is_multiple_of(2) { 0 } else { 1 }, 2, "gossip");
                     }
                     "llm-agent-demo" | "mcp-tool-mesh" => {
                         // Quiet: already animated by real tool-call events

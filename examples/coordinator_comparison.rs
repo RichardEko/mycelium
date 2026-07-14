@@ -49,8 +49,8 @@
 //! For each routing decision:
 //!   * `perceived_load` — value the decision was made on
 //!   * `true_load`      — worker's actual current load at action time
-//!                        (measured by an immediate probe RPC to the selected
-//!                        worker right after the decision)
+//!     (measured by an immediate probe RPC to the selected worker right
+//!     after the decision)
 //!   * `decision_us`    — wall-clock microseconds for the decision step
 //!   * `is_misroute`    — `true_load >= perceived_load + MISROUTE_GAP`
 //!
@@ -203,17 +203,17 @@ async fn main() {
             let probe = cluster.client.service().rpc_call(
                 target_node.clone(), RPC_PROBE, Bytes::new(), Duration::from_millis(300),
             ).await;
-            if let Ok(reply) = probe {
-                if reply.len() == 4 {
-                    let true_load = u32::from_le_bytes(reply[..].try_into().unwrap());
-                    let staleness = (true_load as i64 - perceived_load as i64).unsigned_abs();
-                    let is_misroute = true_load >= perceived_load + MISROUTE_GAP;
-                    if is_misroute { misroute_count += 1; }
-                    total_staleness += staleness;
-                    considered += 1;
-                    println!("{},{},{},{},{},{},{}",
-                        mode, n, idx, perceived_load, true_load, decision_us, is_misroute);
-                }
+            if let Ok(reply) = probe
+                && reply.len() == 4
+            {
+                let true_load = u32::from_le_bytes(reply[..].try_into().unwrap());
+                let staleness = (true_load as i64 - perceived_load as i64).unsigned_abs();
+                let is_misroute = true_load >= perceived_load + MISROUTE_GAP;
+                if is_misroute { misroute_count += 1; }
+                total_staleness += staleness;
+                considered += 1;
+                println!("{},{},{},{},{},{},{}",
+                    mode, n, idx, perceived_load, true_load, decision_us, is_misroute);
             }
         } else {
             nones += 1;
