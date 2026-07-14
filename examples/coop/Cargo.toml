@@ -29,6 +29,10 @@ name = "stigmergy"
 path = "src/bin/stigmergy.rs"
 
 [[bin]]
+name = "stigmergy_viz"
+path = "src/bin/stigmergy_viz.rs"
+
+[[bin]]
 name = "elastic_intent"
 path = "src/bin/elastic_intent.rs"
 
