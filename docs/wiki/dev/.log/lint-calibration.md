@@ -51,3 +51,11 @@ Entry format:
   have a home?" but "does the **wiki** cite that home?" — a new authoritative `docs/design/` decision
   the wiki's subject matter embodies must be linked from the relevant wiki page/folder-note, not merely
   exist elsewhere. Folded into the skill's §4.
+- 2026-07-14: **scope gap — `examples.md` audited by count, not by category.** The examples-page checks
+  had focused on the pinned *coop demo count* (the 2026-07-07 "eleven"→"twelve" miss) and never
+  verified the page enumerates every example **category**. So the whole **visual-showcase** category
+  (`conway`, `conway-gpu`) was absent from `dev/examples.md` for many passes, and this session's four
+  new `*_viz` showcases had no home either (found by this lint after the showcase examples were added).
+  Sharpening: §4/§1 examples-page check now verifies **category completeness** — starter · coop · AFN ·
+  a2a · integration · **visual-showcases** — a whole category missing is a coverage finding, not just a
+  wrong count. Fixed: added the *Visual showcases* bullet to `examples.md`.
