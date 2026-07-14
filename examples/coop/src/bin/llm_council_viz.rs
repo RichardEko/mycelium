@@ -218,7 +218,7 @@ async fn specialist(
 }
 
 // ── Minimal HTTP server (mirrors stigmergy_viz.rs) — no deps beyond tokio ──
-async fn serve_http(state: Arc<Mutex<VizState>>) {
+async fn serve_http(state: Arc<Mutex<VizState>>, gw_port: u16) {
     let listener = match TcpListener::bind(format!("127.0.0.1:{HTTP_PORT}")).await {
         Ok(l) => l,
         Err(e) => {
@@ -265,7 +265,14 @@ async fn serve_http(state: Arc<Mutex<VizState>>) {
                 );
                 let _ = stream.write_all(response.as_bytes()).await;
             } else {
-                let html = include_str!("llm_council_viz.html");
+                // Inject the "⚙ Ops Console" back-link, pre-targeted at the buffer node's gateway.
+                // A coop depot always runs the gateway, so this is unconditional.
+                let console_link = format!(
+                    "<a class=\"opsbtn\" href=\"http://127.0.0.1:8099/?target=127.0.0.1:{gw_port}\" \
+                     title=\"Open this cluster in the Mycelium Ops Console\">⚙ Ops Console</a>"
+                );
+                let html =
+                    include_str!("llm_council_viz.html").replace("__OPS_CONSOLE_LINK__", &console_link);
                 let response = format!(
                     "HTTP/1.1 200 OK\r\n\
                      Content-Type: text/html; charset=utf-8\r\n\
@@ -312,6 +319,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
     let seed = buffer.gossip_port;
+    // Self-advertise this node's browser UI so the Ops Console can offer a live "↗ visualiser"
+    // click-through (the `ui/viz` + `ui/label` KV convention). The reverse link (the "⚙ Ops
+    // Console" button on the dashboard) is injected into the HTML in serve_http.
+    let _ = buffer.agent.kv().set("ui/viz", format!("http://127.0.0.1:{HTTP_PORT}/"));
+    let _ = buffer.agent.kv().set("ui/label", "LLM council".to_string());
+    let gw_port = p[1]; // buffer's gateway HTTP port — the Ops Console back-link target
     println!("[buffer] up — tuple-space primary (ns council)");
     println!("[ops] buffer gateway is live — point the Ops Console at http://127.0.0.1:{}/  (/stats · /gateway/fleet · /gateway/diagnose)", p[1]);
 
@@ -369,7 +382,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Shared snapshot + HTTP dashboard (start early so the browser connects immediately) ──
     let state = Arc::new(Mutex::new(VizState::new()));
     let state_for_server = state.clone();
-    tokio::spawn(async move { serve_http(state_for_server).await });
+    tokio::spawn(async move { serve_http(state_for_server, gw_port).await });
 
     let running = Arc::new(AtomicBool::new(true));
     let backend: Arc<dyn LlmBackend> = Arc::new(EchoBackend);

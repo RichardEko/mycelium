@@ -37,6 +37,12 @@
     border: 1px solid rgba(63,185,80,0.25); border-radius: 20px;
     padding: 4px 12px; white-space: nowrap; margin-top: 3px;
   }
+  .opsbtn {
+    align-self: center; font-size: 12px; font-family: monospace; text-decoration: none;
+    color: var(--accent); border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 11px; white-space: nowrap; transition: background .15s;
+  }
+  .opsbtn:hover { background: rgba(255,255,255,0.05); }
   .htext { flex: 1; }
   .htitle { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
   .htitle em { font-style: normal; color: var(--accent); }
@@ -95,6 +101,7 @@
       depot leaves in the medium — no coordinator, no message to the busy depot.
     </div>
   </div>
+  __OPS_CONSOLE_LINK__
 </header>
 
 <div class="wrap">

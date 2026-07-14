@@ -139,7 +139,19 @@ async fn serve_http(state: Arc<Mutex<VizState>>) {
                 );
                 let _ = stream.write_all(response.as_bytes()).await;
             } else {
-                let html = include_str!("microgrid_viz.html");
+                // Inject the "⚙ Ops Console" back-link, pre-targeted at this node's gateway.
+                // Empty (button hidden) unless built `--features gateway`, since the console
+                // reads this node through that gateway.
+                let console_link = if cfg!(feature = "gateway") {
+                    format!(
+                        "<a class=\"opsbtn\" href=\"http://127.0.0.1:8099/?target=127.0.0.1:{OPS_PORT}\" \
+                         title=\"Open this cluster in the Mycelium Ops Console\">⚙ Ops Console</a>"
+                    )
+                } else {
+                    String::new()
+                };
+                let html =
+                    include_str!("microgrid_viz.html").replace("__OPS_CONSOLE_LINK__", &console_link);
                 let response = format!(
                     "HTTP/1.1 200 OK\r\n\
                      Content-Type: text/html; charset=utf-8\r\n\
@@ -192,7 +204,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
     agent.start().await?;
     #[cfg(feature = "gateway")]
-    eprintln!("║  Ops Console     → http://127.0.0.1:{OPS_PORT}/      ║");
+    {
+        // Self-advertise this node's browser UI so the Ops Console can offer a live
+        // "↗ visualiser" click-through (the `ui/viz` + `ui/label` KV convention — any
+        // gateway node with a UI opts in with these two writes). The reverse link (the
+        // "⚙ Ops Console" button on the dashboard) is injected into the HTML below.
+        let _ = agent.kv().set("ui/viz", format!("http://127.0.0.1:{HTTP_PORT}/"));
+        let _ = agent.kv().set("ui/label", "Microgrid balancing".to_string());
+        eprintln!("║  Ops Console     → http://127.0.0.1:{OPS_PORT}/      ║");
+    }
     let bb = Blackboard::new(
         Arc::clone(&agent),
         BoardConfig {

@@ -156,7 +156,18 @@ async fn serve_http(snapshot: Arc<Mutex<GridSnapshot>>) {
                 );
                 let _ = stream.write_all(response.as_bytes()).await;
             } else {
-                let html = include_str!("conway.html");
+                // Inject the "⚙ Ops Console" back-link, pre-targeted at the viewer node's gateway.
+                // Empty (button hidden) unless built `--features gateway`, since the console reads
+                // this node through that gateway.
+                let console_link = if cfg!(feature = "gateway") {
+                    format!(
+                        "<a class=\"opsbtn\" href=\"http://127.0.0.1:8099/?target=127.0.0.1:{OPS_PORT}\" \
+                         title=\"Open this cluster in the Mycelium Ops Console\">⚙ Ops Console</a>"
+                    )
+                } else {
+                    String::new()
+                };
+                let html = include_str!("conway.html").replace("__OPS_CONSOLE_LINK__", &console_link);
                 let response = format!(
                     "HTTP/1.1 200 OK\r\n\
                      Content-Type: text/html; charset=utf-8\r\n\
@@ -274,6 +285,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         agents.len(), BASE_PORT, BASE_PORT + (GRID * GRID) as u16 - 1);
     for a in &agents {
         a.start().await?;
+    }
+    #[cfg(feature = "gateway")]
+    {
+        // Self-advertise the viewer agent's browser UI so the Ops Console can offer a live
+        // "↗ visualiser" click-through (the `ui/viz` + `ui/label` KV convention). agents[0] is
+        // the port==BASE_PORT node — the one that got `http_port = Some(OPS_PORT)`. The reverse
+        // link (the "⚙ Ops Console" button on the page) is injected into the HTML in serve_http.
+        let _ = agents[0].kv().set("ui/viz", format!("http://127.0.0.1:{HTTP_PORT}/"));
+        let _ = agents[0].kv().set("ui/label", "Conway's Life".to_string());
     }
 
     // ── Initial state ─────────────────────────────────────────────────
