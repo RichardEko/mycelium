@@ -131,8 +131,11 @@ window, family) for constraint-based routing.
 
 ## The flagship — deploy/reheal (rung 6)
 
-This is the story that beats a commodity checkpoint store on non-commodity terms. The
-choreography, all of it real substrate machinery:
+This is the story that beats a commodity checkpoint store on non-commodity terms. It is also
+the concrete answer to the [FAQ's positioning](faq.md#why-not-langgraph--temporal--nats--)
+— *"Mycelium survives the loss of any node, including the orchestrator"* — shown rather than
+asserted: run a LangGraph graph **on** Mycelium and its reasoning outlives the death of the
+node it ran against. The choreography, all of it real substrate machinery:
 
 1. A LangGraph graph whose LLM node calls the mesh via the routed endpoint runs on **node A**
    (which serves the model), reaches an interrupt, and **checkpoints** — state gossips, the
