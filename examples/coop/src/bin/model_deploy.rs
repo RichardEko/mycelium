@@ -46,12 +46,21 @@
 //! durable store, per node** — the mesh `artifact.fetch` RPC rides the gossip frame
 //! (10 MiB cap) and is for typical WASM components. A model blob streams from the library
 //! via ranged reads, which is also what makes the loading-tier percent honest.
+//!
+//! ## Loads
+//! - **Content** — a real GGUF LLM model (genuine weights, not a stub)
+//! - **Type** — `ArtifactKind::Blob`
+//! - **From** — library → gossip catalogue → resource-checked election → chunked mesh pull (live percent) → placement → ollama create → probe-gated
+//!
+//! - **Content** — the model's deployment profile (system prompt + parameters)
+//! - **Type** — `profile artifact (references the weights by content address)`
+//! - **From** — library → catalogue → resolved against the placed weights
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use coop::common::{alloc_ports, spawn_depot, DepotOpts};
+use coop::common::{alloc_ports, announce_loads, spawn_depot, DepotOpts, Loads};
 use ed25519_dalek::SigningKey;
 use mycelium::{CapFilter, CapValue, Capability, LlmBackend, OpenAiBackend};
 use mycelium_wasm_host::{
@@ -99,8 +108,23 @@ fn preflight() -> Result<std::path::PathBuf, String> {
     Ok(path)
 }
 
+const LOADS: &[Loads] = &[
+    Loads {
+        content: "a real GGUF LLM model (genuine weights, not a stub)",
+        kind: "ArtifactKind::Blob",
+        from: "library → gossip catalogue → resource-checked election → chunked mesh pull \
+               (live percent) → placement → ollama create → probe-gated",
+    },
+    Loads {
+        content: "the model's deployment profile (system prompt + parameters)",
+        kind: "profile artifact (references the weights by content address)",
+        from: "library → catalogue → resolved against the placed weights",
+    },
+];
+
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    announce_loads(LOADS);
     tracing_subscriber::fmt().with_max_level(tracing::Level::ERROR).init();
 
     let gguf_path = match preflight() {

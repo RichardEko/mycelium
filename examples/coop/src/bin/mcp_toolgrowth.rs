@@ -23,12 +23,17 @@
 //!     the arrived component and offers it as an MCP tool.
 //!   • `llm-agent` — declares the requirement, waits, invokes the tool, composes the result.
 //!
+//! ## Loads
+//! - **Content** — a unit-convert tool — the converter's arithmetic as a WASM component
+//! - **Type** — `ArtifactKind::WasmComponent (then bridged as an MCP tool)`
+//! - **From** — FsLibrarySource → gossip catalogue → MeshArtifactSource (peer pull, content-verified) → instantiated + bridged over MCP
+//!
 //! Run:  cargo run -p mycelium-coop-examples --features wasm --bin mcp_toolgrowth
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use coop::common::{alloc_ports, spawn_depot, DepotOpts};
+use coop::common::{alloc_ports, announce_loads, spawn_depot, DepotOpts, Loads};
 use ed25519_dalek::SigningKey;
 use mycelium::{Capability, CapFilter, EchoBackend, LlmBackend, signal_kind};
 use mycelium_wasm_host::{
@@ -64,8 +69,16 @@ fn tool_offered(agent: &mycelium::GossipAgent) -> Option<mycelium::NodeId> {
     })
 }
 
+const LOADS: &[Loads] = &[Loads {
+    content: "a unit-convert tool — the converter's arithmetic as a WASM component",
+    kind: "ArtifactKind::WasmComponent (then bridged as an MCP tool)",
+    from: "FsLibrarySource → gossip catalogue → MeshArtifactSource (peer pull, content-verified) \
+           → instantiated + bridged over MCP",
+}];
+
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    announce_loads(LOADS);
     tracing_subscriber::fmt().with_max_level(tracing::Level::WARN).init();
 
     let cert_dir = std::env::temp_dir().join(format!("coop-mcp-{}", std::process::id()));

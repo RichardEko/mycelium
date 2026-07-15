@@ -66,13 +66,18 @@
 //! ```
 //!
 //! Optional: `OLLAMA_URL` (default `http://localhost:11434`).
+//!
+//! ## Loads
+//! - **Content** — a governed GGUF model — a real neural network, not the CI echo fixture
+//! - **Type** — `ArtifactKind::Blob (weights) + deployment profile`
+//! - **From** — streamed GGUF bytes + profile over the mesh; reheals onto a standby node via peer pull after the origin node dies (reuses the model_deploy machinery)
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use coop::common::{alloc_ports, spawn_depot, Depot, DepotOpts};
+use coop::common::{alloc_ports, announce_loads, spawn_depot, Depot, DepotOpts, Loads};
 use ed25519_dalek::SigningKey;
 use mycelium::{CapFilter, CapValue, Capability, LlmBackend, OpenAiBackend, PromptTemplate};
 use mycelium_reason::{
@@ -329,8 +334,16 @@ async fn route_story(
         .await
 }
 
+const LOADS: &[Loads] = &[Loads {
+    content: "a governed GGUF model — a real neural network, not the CI echo fixture",
+    kind: "ArtifactKind::Blob (weights) + deployment profile",
+    from: "streamed GGUF bytes + profile over the mesh; reheals onto a standby node via peer \
+           pull after the origin node dies (reuses the model_deploy machinery)",
+}];
+
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    announce_loads(LOADS);
     tracing_subscriber::fmt().with_max_level(tracing::Level::ERROR).init();
 
     let gguf_path = match preflight() {

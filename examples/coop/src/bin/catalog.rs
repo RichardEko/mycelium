@@ -25,11 +25,16 @@
 //!   • `caller` — invokes the installed capability.
 //!   • `late` — joins **after the librarian is dead and the library deleted**; still installs.
 //!
+//! ## Loads
+//! - **Content** — route/optimize — a WASM component (the echo fixture stands in for a router)
+//! - **Type** — `ArtifactKind::WasmComponent`
+//! - **From** — FsLibrarySource (disk) → signed manifest → librarian → gossip catalogue → MeshArtifactSource (peer pull, content-verified); survives publisher death via a peer cache
+//!
 //! Run:  cargo run -p mycelium-coop-examples --bin catalog
 use std::sync::Arc;
 use std::time::Duration;
 
-use coop::common::{alloc_ports, spawn_depot, DepotOpts};
+use coop::common::{alloc_ports, announce_loads, spawn_depot, DepotOpts, Loads};
 use ed25519_dalek::SigningKey;
 use mycelium::{CapFilter, Capability};
 use mycelium_wasm_host::{
@@ -57,8 +62,16 @@ async fn wait_until(secs: u64, mut cond: impl FnMut() -> bool) -> bool {
     cond()
 }
 
+const LOADS: &[Loads] = &[Loads {
+    content: "route/optimize — a WASM component (the echo fixture stands in for a router)",
+    kind: "ArtifactKind::WasmComponent",
+    from: "FsLibrarySource (disk) → signed manifest → librarian → gossip catalogue → \
+           MeshArtifactSource (peer pull, content-verified); survives publisher death via a peer cache",
+}];
+
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    announce_loads(LOADS);
     tracing_subscriber::fmt().with_max_level(tracing::Level::ERROR).init();
 
     let cert_dir = std::env::temp_dir().join(format!("coop-catalog-{}", std::process::id()));
