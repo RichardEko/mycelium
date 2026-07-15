@@ -66,11 +66,21 @@ C = __CONCEPTS__; … })()` renderer with the `COL` tag→colour map.
 - **`three_node_demo`** builds its chat page as an inline `&'static str` (not an `include_str!`'d
   file), so rule 4's *injected* concepts mechanism doesn't fit; it carries an equivalent **static**
   concepts panel instead. Content, not mechanism, is what the rule is really about.
+- **`ops_console`** is the **console itself** — the *consumer/observer* of the `ui/viz` convention, not
+  a showcase that advertises it. It serves an HTML dashboard (so it matches the `include_str!`
+  enumeration) but by nature does not advertise its own `ui/viz`, inject an `⚙ Ops Console` back-link
+  into itself, or carry a "what you're seeing" concepts box — it is the thing rules 2 & 4 exist to
+  *serve*. Exempt from rules 2–4 (it does use the `gateway` feature — rule 1). Its own docs live in
+  [`examples/ops_console/README.md`](../../../examples/ops_console/README.md).
 
 Every other browser example complies with all four rules via the injected mechanism.
 
 ## Lint
 
-`/wiki-lint` §4 checks the contract: for each browser example (a `.rs` that `include_str!`s an
-`.html`), verify it advertises `ui/viz`, injects `__OPS_CONSOLE_LINK__` **and** `__CONCEPTS__`, and
-that its documented run command carries `gateway,metrics`. A UI example missing any is a finding.
+`/wiki-lint` §4 checks the contract: enumerate browser examples the tree-derived way
+(`grep -rl 'include_str!.*\.html' examples mycelium-*/examples`) and **classify every hit** as either
+*compliant* (advertises `ui/viz`, injects `__OPS_CONSOLE_LINK__` **and** `__CONCEPTS__`, run command
+carries `gateway,metrics`) **or** a *documented exception* above (`conway-gpu` · `three_node_demo` ·
+`ops_console`). A hit that is neither — a browser example missing the mechanism **and** absent from the
+exceptions list — is a finding (either fix it or classify it). An unclassified hit is the gap the
+`ops_console` move exposed (ledger 2026-07-15).
