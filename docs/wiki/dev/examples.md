@@ -58,10 +58,15 @@ Layer explainers: gossip-KV [ch01](../../guide/01-gossip-kv.md) · signal-mesh
   glow + dispatch routing around the busy depot) · `redistribution_viz` (`cargo run -p
   mycelium-tuple-space --example redistribution_viz` → `:8093`, the intake→sorted→routed→delivered
   pipeline flow) · `llm_council_viz` (`cargo run -p mycelium-coop-examples --bin llm_council_viz --features metrics` →
-  `:8094`, the fan-out · synthesis · critic↔reviser-refinement DAG; `EchoBackend`, **no LLM key**).
-  Each opens `http://127.0.0.1:80xx/`. The four `*_viz` are **visual variants** of the batch demos
-  (`microgrid` / `stigmergy` / `redistribution` / `llm_council`), which remain the CI-gated versions;
-  the two coop `*_viz` bins are *additional* to the fourteen above. A showcase paces its loop so the
+  `:8094`, the fan-out · synthesis · critic↔reviser-refinement DAG; `EchoBackend`, **no LLM key**) ·
+  `provisioning_viz` (`cargo run -p mycelium-coop-examples --features wasm,metrics --bin provisioning_viz`
+  → `:8097`, the **autonomic self-heal** loop — a capability self-provisions then heals onto a standby
+  when the active node is killed, no coordinator) · `catalog_viz` (`… --bin catalog_viz` → `:8098`,
+  **origin-death survival** — the librarian dies + its library is deleted, yet a late node still installs
+  from a verified peer cache). Each opens `http://127.0.0.1:80xx/`. The six `*_viz` are **visual
+  variants** of the batch demos (`microgrid` / `stigmergy` / `redistribution` / `llm_council` /
+  `provisioning` / `catalog`), which remain the CI-gated versions; the four coop `*_viz` bins are
+  *additional* to the fourteen above. A showcase paces its loop so the
   emergence is legible (e.g. a `THINK` dwell for the instant `EchoBackend`) — the batch demos race to
   completion, a showcase must be *watchable*.
 - **Ops Console** (`examples/ops_console/` — `main.rs` + `.html` + README, `:8099`): a generic, read-only dashboard over

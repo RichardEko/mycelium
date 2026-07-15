@@ -45,6 +45,7 @@ not to raw source. The suite READMEs carry the per-example walkthrough + the exa
 | [`stigmergy_viz`](coop/README.md) | · | ● | · | ○ | Adv | Web | · | · | ✓ |
 | [`elastic_intent`](coop/README.md) | · | · | · | ● | Adv | CLI | · | · | · |
 | [`provisioning`](coop/README.md) ★ | · | · | · | ● | Adv | CLI | · | · | · |
+| [`provisioning_viz`](coop/README.md) ★ | · | · | · | ● | Adv | Web | · | · | ✓ |
 | [`federation_facts`](coop/README.md) | · | · | · | ● | Adv | CLI | · | · | · |
 | [`rotation`](coop/README.md) | · | · | · | ● | Adv | CLI | · | · | · |
 | [`consensus`](coop/README.md) | · | ○ | ● | · | Adv | CLI | · | · | · |
@@ -53,6 +54,7 @@ not to raw source. The suite READMEs carry the per-example walkthrough + the exa
 | [`llm_council`](coop/README.md) | · | · | · | ● | Adv | CLI | mock | · | · |
 | [`llm_council_viz`](coop/README.md) | · | · | · | ● | Adv | Web | mock | · | ✓ |
 | [`catalog`](coop/README.md) | ○ | · | · | ● | Adv | CLI | · | · | · |
+| [`catalog_viz`](coop/README.md) | ○ | · | · | ● | Adv | Web | · | · | ✓ |
 | [`model_deploy`](coop/README.md) | ○ | · | · | ● | Adv | CLI | real | · | · |
 | [`reheal_deploy`](coop/README.md) | ○ | · | · | ● | Adv | CLI | mock | · | · |
 | [`diagnostics`](coop/README.md) | · | ● | · | ○ | Adv | CLI | · | · | · |
@@ -96,6 +98,8 @@ links to its walkthrough README.
 | [`stigmergy_viz`](coop/README.md) | `:8092` | `cargo run -p mycelium-coop-examples --bin stigmergy_viz --features metrics` |
 | [`redistribution_viz`](../mycelium-tuple-space/examples/README.md) | `:8093` | `cargo run -p mycelium-tuple-space --example redistribution_viz --features gateway,metrics` |
 | [`llm_council_viz`](coop/README.md) | `:8094` | `cargo run -p mycelium-coop-examples --bin llm_council_viz --features metrics` |
+| [`provisioning_viz`](coop/README.md) ★ | `:8097` | `cargo run -p mycelium-coop-examples --features wasm,metrics --bin provisioning_viz` |
+| [`catalog_viz`](coop/README.md) | `:8098` | `cargo run -p mycelium-coop-examples --features wasm,metrics --bin catalog_viz` |
 | [`wiki_council_viz`](../mycelium-wiki/examples/README.md) ★ | `:8095` | `cargo run -p mycelium-wiki --example wiki_council_viz --features gateway,llm,metrics` |
 | [`guardrail_viz`](../mycelium-guardrails/examples/README.md) ★ | `:8096` | `cargo run -p mycelium-guardrails --example guardrail_viz --features compliance,gateway,metrics-export` |
 | [`conway`](../docs/guide/01-gossip-kv.md) | `:8090` | `cargo run --example conway --features metrics` |
@@ -103,8 +107,12 @@ links to its walkthrough README.
 
 `wiki_council_viz` phrases each specialist's grounded answer via a **local model served on the mesh**
 (Ollama), falling back to grounded extraction if absent — no cloud, no key. `guardrail_viz` fires
-invocations at a Tier-C gate and rebuilds the **cryptographic denial proof** live. The four `*_viz` are
-visual variants of the batch coop/companion demos, which stay the CI-gated versions.
+invocations at a Tier-C gate and rebuilds the **cryptographic denial proof** live. The two
+**artifact-library** showcases make the deploy/install flow watchable: `provisioning_viz` — a capability
+**self-provisions** from unmet demand, then **heals onto a standby** when you kill the active node (no
+coordinator); `catalog_viz` — the origin (librarian) **dies and its library is deleted**, yet a late
+node still **installs from a verified peer cache**. The `*_viz` set are visual variants of the batch
+coop/companion demos, which stay the CI-gated versions.
 
 **Everything else** — the starter ladder, the Food-Rescue Co-op suite, guardrails, the community
 skills cluster, reasoning/LangGraph, AFN, A2A, and the interactive chat — is in the
