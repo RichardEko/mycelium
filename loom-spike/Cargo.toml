@@ -1,0 +1,20 @@
+[package]
+name = "loom-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "SPIKE: loom model of the mycelium-core exactly-once `spawned: AtomicBool` init guard"
+
+# Intentionally has NO tokio / papaya / mycelium-core in its dependency tree.
+# tokio gates `net`/`fs` behind `#![cfg(not(loom))]`, so any crate that links
+# tokio cannot compile under a global `--cfg loom`. Keeping this crate
+# tokio-free is what lets loom actually run here.
+
+# loom is cfg(loom)-gated: a normal `cargo build`/`test` sees an empty crate
+# with zero dependencies. It is only pulled and compiled under `--cfg loom`.
+[target.'cfg(loom)'.dependencies]
+loom = "0.7"
+
+# `--cfg loom` is set via RUSTFLAGS, not a Cargo feature — teach rustc it's expected.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }

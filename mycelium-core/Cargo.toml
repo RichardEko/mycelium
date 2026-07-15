@@ -59,5 +59,14 @@ metrics = { version = "0.24", optional = true }
 [dev-dependencies]
 proptest = "1"
 
+# ── loom concurrency-model-checker spike ────────────────────────────────────
+# The runnable loom model lives in the sibling workspace crate `loom-spike/`
+# (loom-spike/tests/once_guard.rs), NOT here: tokio gates its `net`/`fs` modules
+# with `#![cfg(not(loom))]`, so a global `--cfg loom` strips tokio's runtime and
+# this crate (a hard tokio dependent) cannot compile under loom at all. The
+# tokio-free model there checks the exactly-once `AtomicBool` init pattern used by
+# `spawned` in the `mycelium` crate's `agent/capability_ops.rs` — the interleaving
+# bug class the calibration ledger (docs/analysis/ratings.md) keeps recording.
+
 [lints.clippy]
 field_reassign_with_default = "allow"
