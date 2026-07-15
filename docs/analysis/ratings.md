@@ -27,6 +27,40 @@ such finding.
 Records bugs later found in dimensions that scored ≥ 8 while the bug already
 existed. This is the framework's own report card.
 
+- 2026-07-15 (audit, recorded Run 50): the 2026-07-15 adversarial consensus/concurrency audit
+  found **nine** defects in dimensions that scored 8 through Run 49 — the single largest ledger
+  entry, and empirical proof that Run 49's own "carried 8, **possibly optimistic**, not re-probed
+  this run" note on Concurrency (9) was exactly right (the audit was prompted by a direct user
+  challenge — "so you found no problems with the present code base???"). Each was confirmed by an
+  executable probe (failed pre-fix, passed post-fix) and fixed + gated:
+  - **Concurrency (9) / Semantic (11)** — `cross_group_quorum` used `floor(N·frac)+1` with no
+    `N/2+1` floor, so on even N two disjoint quorums could each commit → split-brain in
+    `cluster_propose`/`group_propose` (batch1 `2bea71c`; gate `regression_even_n_quorum_intersects`).
+  - **Semantic (11)** — `elect_leader` returned `Ok(self.node_id)` on `Committed` without rereading
+    the LWW-converged slot, so two racing proposers both "won" the same election (batch1; converge-
+    sleep + reread committed slot; the gateway `gw_overlay_elect` path too).
+  - **Semantic (11) / Concurrency (9)** — the anti-entropy digest folded `hash(key) ^ timestamp`
+    only, never the value, so two nodes holding the same (key, HLC) with *different bytes* were
+    certified **converged** → permanent silent divergence (batch1; fold `entry_value_hash`; gates
+    `regression_anti_entropy_digest_reflects_value`, `regression_incremental_digest_matches_recompute_with_value`).
+  - **Semantic (11)** — `append()` keyed log entries by HLC alone, so two nodes appending in the
+    same millisecond collided and one write was silently lost under LWW (`79b319f`; salt the key
+    with the node id; gate `regression_same_hlc_cross_node_log_appends_coexist`).
+  - **Semantic (11)** — `cross_propose` counted a voter's accept on every receipt, so a
+    re-delivered vote could double-count toward quorum (batch1; per-voter `seen` set).
+  - **Concurrency (9)** — `grp_generation` was bumped *before* the prefix-index reconcile it
+    guards and loaded `Relaxed`, so a reader could observe the new generation before the index it
+    advertises (batch1; move the `fetch_add` after the stripe-locked reconcile, `Acquire` load).
+  - **Semantic (11) / Concurrency (9)** — `Hlc::tick()` was not strictly monotonic at logical
+    saturation (returned an equal stamp rather than carrying into physical) (batch1 `10bd680`;
+    carry into physical; gate `regression_tick_strictly_monotonic_at_saturation`).
+  - **Concurrency (9) / Semantic (11)** — lease liveness compared the reader's raw wall clock
+    against the writer's HLC physical (two clock domains), so skewed nodes could both hold a
+    `distributed_lock` (documented `26b84bf`, fully fixed `3f88023`; `causal_now_ms` at all 9
+    production sites; gate `regression_causal_now_reads_on_hlc_domain_not_raw_wall`).
+  - **Concurrency (9) / Resource Management (10)** — the writer-claim `compute` upgrade could
+    clobber another task's live writer entry → leaked abort handle + a second connection to the
+    same peer (`1b81610`; `Arc::ptr_eq` identity guard + abort-on-loss).
 - 2026-07-10 (Run 41): **API Design** scored 8 in Runs 39–40 while the put-vs-take discovery
   asymmetry existed (default-config `put` fails `NoProvider` instantly during capability
   discovery; #154 fixed only `take`/`complete`) — found by the Run-41 deep-dive after the
@@ -2754,3 +2788,110 @@ Deep-dive dimensions this run: 23 Documentation · 24 Developer Experience · 19
 | — | Mean (continuity footnote) | 7.88 | not a target; see M2 preamble |
 
 **Delta vs Run 47:** **pure carry — no product-core change.** Like Run 47 (whose own delta was "showcase examples + docs"), the entire diff since is **examples + documentation**: the single faceted capability matrix, the `philosophy.html`→`.md` port (verbatim, publication-lint-clean), the artifact deploy/install surfacing, the `## Loads` banner across the 5 runtime-loading demos, and **two new artifact-library browser showcases** (`provisioning_viz` self-heal, `catalog_viz` origin-death survival — both UI-contract-compliant, verified live). **Zero `src/`·`mycelium-*/src/`·`tests/` change** → every substrate dimension carries from Run 47 with staleness decay; the Run-47 evidenced 9s (Resource Management, Operational Readiness) decay to carried 8 as their execution evidence is now stale, and **Scalability (16)** loses evidence-freshness (the 2026-07-15 nightly FAILed *environmentally* at exit 2; last good evidence is the 2026-07-14 `entries` PASS). The doc/example-facing five got fresh *non-substrate* evidence (build + run + clippy + curl) and correctly **hold at 8** — the M2 gate refuses to lift a substrate dimension on example code + a dashboard-over-existing-endpoints, which is the artifact-counting inflation the methodology exists to kill. Floor holds **7/7/7** (Configurability · Robustness · Test Architecture); mean **7.88** unchanged. One finding (Documentation, found + fixed) + one ledger line. *For the next run:* the substrate is genuinely untouched — the honest lift pathways remain a green full-stack 100-node Docker `scale` run (16→9) and paying down the floor trio, neither of which moves without product-core work.
+
+## 2026-07-15 — Run 50 (M2)
+
+**Audit-recording run** (not a blind re-score). Run 49 flagged Concurrency (9) as "carried 8,
+possibly optimistic, not re-probed"; a direct user challenge — *"so you found no problems with the
+present code base???"* — then triggered a full adversarial audit of the consensus/concurrency paths.
+It found **nine** confirmed defects, all now fixed + gated. This entry records them; because it
+documents an audit already conducted (with its scores following mechanically from the current-state
+principle), I read Run 49 before writing — the blind-scoring rule is waived for a recording run and
+the waiver is stated here.
+
+Deep-dive dimensions this run: **9 Concurrency · 11 Semantic Correctness · 10 Resource Management**
+(the audit-touched trio — full source-level adversarial treatment, which *is* the audit). Execution
+evidence produced this session: nine falsification probes, each failing pre-fix and passing post-fix;
+**~10 new deterministic regression gates** added (`regression_even_n_quorum_intersects`,
+`regression_anti_entropy_digest_reflects_value`, `regression_incremental_digest_matches_recompute_with_value`,
+`regression_same_hlc_cross_node_log_appends_coexist`, `regression_tick_strictly_monotonic_at_saturation`,
+`regression_causal_now_reads_on_hlc_domain_not_raw_wall`, + the writer-claim + elect-leader probes);
+**`make check-full` green** (all four suites pass, clippy feature-matrix + wasm-host + `--lib --tests`
+clean, real exit 0). Commits `2bea71c`·`79b319f`·`26b84bf`·`3b69d34`·`3f88023` (merges `10bd680`·
+`685f482`·`1b81610`·`26261c5`).
+
+### Findings
+
+All nine are **found + fixed + gated this run** — per the current-state principle they do not lower
+their dimensions (a removed defect + a new regression is a *better* end-state); accountability for the
+prior over-scoring is the nine Calibration-Ledger lines dated 2026-07-15. Severity is the pre-fix
+blast radius.
+
+- **Critical — Concurrency (9) / Semantic (11).** `cross_group_quorum` had no `N/2+1` floor → two
+  disjoint quorums could each commit on even N (split-brain in `cluster_propose`/`group_propose`).
+  Repro: N=6, frac=0.5 → required 3, two disjoint sets of 3 both reach quorum. Fixed: floor at
+  `N/2+1`; gate `regression_even_n_quorum_intersects`.
+- **Critical — Semantic (11).** `elect_leader` returned the local node id on `Committed` without
+  rereading the converged slot → two racing proposers both report themselves leader. Repro: two
+  nodes `elect_leader` concurrently, both observe their own `Committed`. Fixed: converge-sleep +
+  reread committed slot (Rust `elect_leader` + gateway `gw_overlay_elect`).
+- **Major — Semantic (11) / Concurrency (9).** Anti-entropy digest hashed `key ^ timestamp`, never
+  the value → two nodes with the same (key, HLC) but different bytes certified *converged*, diverging
+  permanently. Repro: apply same-(key,ts) different-value on two nodes; digests match. Fixed: fold
+  `entry_value_hash` into bucket + incremental + full-store digest; 2 gates.
+- **Major — Semantic (11).** `append()` keyed by HLC alone → same-millisecond appends on two nodes
+  collide, one lost under LWW. Repro: two nodes append to one stream within 1 ms. Fixed: salt the key
+  with the node id; gate `regression_same_hlc_cross_node_log_appends_coexist`.
+- **Major — Semantic (11).** `cross_propose` counted each accept-receipt → a re-delivered vote
+  double-counts toward quorum (false quorum from < N/2 distinct voters). Fixed: per-voter `seen` set.
+- **Major — Concurrency (9).** `grp_generation` bumped *before* the prefix-index reconcile it guards,
+  loaded `Relaxed` → a reader sees the new generation before the index it advertises. Fixed: bump
+  after the stripe-locked reconcile; `Acquire` load in the reader.
+- **Minor — Semantic (11) / Concurrency (9).** `Hlc::tick()` not strictly monotonic at logical
+  saturation. Repro: pin to `pack(t, LOGICAL_MASK)`, tick → equal stamp. Fixed: carry into physical;
+  gate `regression_tick_strictly_monotonic_at_saturation`.
+- **Major — Concurrency (9) / Semantic (11).** Lease liveness compared the reader's raw wall clock
+  against the writer's HLC physical (two clock domains) → skewed nodes both hold a `distributed_lock`.
+  Fixed: `causal_now_ms = max(wall, HLC physical)` at all 9 production lease-read sites; the fencing
+  token was always the correctness guard; gate `regression_causal_now_reads_on_hlc_domain_not_raw_wall`.
+- **Minor — Concurrency (9) / Resource Management (10).** Writer-claim `compute` upgrade could clobber
+  another task's live writer entry → leaked abort handle + double connection to one peer. Fixed:
+  `Arc::ptr_eq` identity guard + abort-on-loss.
+
+*Not bugs (documented tradeoffs, no ledger line):* the tombstone-GC reclaim window and `emit_reliable`
+at-least-once delivery are intended semantics, documented in place.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 8 | carried (v47), stale — no philosophy/roadmap change this run |
+| 2 | Conceptual Integrity | 8 | carried (v49), stale — the fixes are internal, idiom untouched |
+| 3 | Architecture | 8 | carried (v47), stale — layer boundaries unchanged by the fixes (all within-layer) |
+| 4 | Modularity | 8 | carried (v47), stale |
+| 5 | API Design | 8 | carried (v47), stale — no public-surface change (all `pub(crate)`/internal) |
+| 6 | Error Handling Model | 8 | carried (v47), stale |
+| 7 | Configurability | 7 | carried (v42), **stale — floor** |
+| 8 | Language Best Practices | 8 | carried (v49) — the fixes are idiomatic (per-voter set, `Acquire`/`Release`, `ptr_eq`); clippy `--lib --tests` clean across the matrix this run |
+| 9 | Concurrency Correctness | 8 | **Deep-dive + audit.** Five of the nine findings land here (quorum floor, `grp_generation` ordering, HLC monotonicity, lease clock-domain, writer-claim clobber) — all fixed + gated, fresh `make check-full` evidence. Holds **8, now evidenced not stale**; *deliberately not 9* despite qualifying execution evidence — this run is itself empirical proof the unknown-unknown reserve is real (one pass found 9), so the honest posture is "no known defect, freshly hardened," not near-certain |
+| 10 | Resource Management | 8 | Audit-touched: the writer-claim clobber (leaked abort handle + double connection) is fixed + guarded. Holds 8 (was decayed-from-9); now has fresh fix evidence rather than stale |
+| 11 | Semantic Correctness | 8 | **Deep-dive + audit.** Seven of nine land here (quorum, elect-leader, value-blind digest, append collision, vote double-count, HLC, lease). All fixed + gated; convergence re-validated by the full suite. Holds **8, evidenced**; not 9 for the same unknown-unknown reason as (9) |
+| 12 | Robustness | 7 | carried (v43), **stale — floor** |
+| 13 | Security | 8 | carried (v47), stale |
+| 14 | Failure Mode Legibility | 8 | carried (v47), stale |
+| 15 | Performance | 8 | carried (v47), stale — the value-hash fold adds one `hash_one` per live entry on the digest path; no bench this run, but O(1) per entry |
+| 16 | Scalability | 8 | carried (v49), **stale + evidence-degraded** (2026-07-15 nightly FAILed environmentally; last good = 2026-07-14 `entries` PASS) |
+| 17 | Testability | 8 | carried (v47) — the audit *demonstrated* testability: every finding got a deterministic in-process probe with no cluster spin-up (the clock-injection seam on `live_committed_with_hlc` is exactly this). Holds 8 |
+| 18 | Test Architecture | 7 | carried (v44), **stale — floor;** +10 regression gates grow the unit tier but the structural CI-gating gap is unchanged |
+| 19 | Observability | 8 | carried (v49), stale |
+| 20 | Debuggability | 8 | carried (v41), possibly optimistic per decay rule |
+| 21 | Operational Readiness | 8 | carried (v47, decayed) |
+| 22 | Evolvability | 8 | carried (v47) — wire unchanged (v12/PREV 11); the fixes are wire-compatible (digest is local, key-salting is forward-only) |
+| 23 | Documentation | 8 | carried (v49) — the lease bounded-skew assumption is now documented in code + the fix, closing the one open doc gap from the audit |
+| 24 | Developer Experience | 8 | carried (v49), stale |
+| 25 | Dependency Hygiene | 8 | carried (v47), stale — no `Cargo.toml` change |
+| — | **Floor (lowest 3)** | **7, 7, 7** | Configurability · Robustness · Test Architecture |
+| — | Mean (continuity footnote) | 7.88 | unchanged; not a target |
+
+**Delta vs Run 49:** the headline is **not a number move — it is an epistemic one**. Nine real
+consensus/convergence defects (2 Critical split-brains, 5 Major, 2 Minor) were found and fixed with
+deterministic gates, yet Concurrency (9), Semantic (11) and Resource Management (10) hold at **8**,
+not higher and not lower. That is the current-state principle working as designed: the score reflects
+end-state, so a found+fixed+gated defect keeps the dimension solid (dropping it would perversely
+punish the digging M2 exists to reward), while the *accountability* for the prior stale-8s lives in
+the nine ledger lines. Run 49's 8s on these dims were "carried, stale, **possibly optimistic**"; Run
+50's 8s are "freshly + adversarially probed, nine defects removed, full suite green" — the same
+number, the opposite confidence. I explicitly declined to lift (9)/(11) to **9** despite qualifying
+`make check-full` evidence: this run is itself the proof that one audit pass extracts nine bugs, so
+claiming near-certainty the day the bugs were found would be the exact miscalibration the ledger
+measures. Floor holds **7/7/7**; mean **7.88** unchanged. *For the next run:* the highest-value probe
+is now a **second** adversarial pass on the same paths (the reserve says more remain), and the still-
+open structural lift is CI actually *running* `mycelium-core`'s suite + the floor trio.
