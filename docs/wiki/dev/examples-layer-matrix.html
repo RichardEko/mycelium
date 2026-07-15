@@ -3,14 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<!-- Standalone copy of the "Examples × stack layers" matrix. Source of truth for the data:
-     examples/README.md § Find one by layer. Self-contained (no external assets); opens offline. -->
-<title>Mycelium · examples × stack layers</title>
+<!-- The examples capability matrix: one row per runnable example, fingerprinted by the stack
+     layer(s) it teaches AND its facets (level · surface · LLM · audit · metrics).
+     Source of truth for the data: examples/README.md § The capability matrix.
+     Self-contained (no external assets); opens offline. Filename kept (examples-layer-matrix.html)
+     so existing links resolve; content is the full faceted matrix. -->
+<title>Mycelium · examples capability matrix</title>
 <style>
   :root{
     --bg:#f6f8fa; --panel:#ffffff; --panel-2:#f0f3f6; --border:#d5dbe2;
     --fg:#1f2328; --muted:#5c6570; --faint:#b3bcc6;
     --l1:#0969da; --l2:#9a6700; --l3:#1a7f37; --l4:#8250df;
+    --web:#0969da; --real:#1a7f37; --mock:#9a6700; --audit:#cf222e; --metric:#57606a;
     --shadow:0 1px 2px rgba(31,35,40,.06),0 4px 16px rgba(31,35,40,.05);
     --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
     --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
@@ -20,6 +24,7 @@
       --bg:#0d1117; --panel:#161b22; --panel-2:#1c2230; --border:#2b3240;
       --fg:#e6edf3; --muted:#8b949e; --faint:#414a56;
       --l1:#58a6ff; --l2:#d29922; --l3:#3fb950; --l4:#a78bfa;
+      --web:#58a6ff; --real:#3fb950; --mock:#d29922; --audit:#f85149; --metric:#8b949e;
       --shadow:0 1px 2px rgba(1,4,9,.5),0 8px 24px rgba(1,4,9,.4);
     }
   }
@@ -27,12 +32,14 @@
     --bg:#0d1117; --panel:#161b22; --panel-2:#1c2230; --border:#2b3240;
     --fg:#e6edf3; --muted:#8b949e; --faint:#414a56;
     --l1:#58a6ff; --l2:#d29922; --l3:#3fb950; --l4:#a78bfa;
+    --web:#58a6ff; --real:#3fb950; --mock:#d29922; --audit:#f85149; --metric:#8b949e;
     --shadow:0 1px 2px rgba(1,4,9,.5),0 8px 24px rgba(1,4,9,.4);
   }
   :root[data-theme="light"]{
     --bg:#f6f8fa; --panel:#ffffff; --panel-2:#f0f3f6; --border:#d5dbe2;
     --fg:#1f2328; --muted:#5c6570; --faint:#b3bcc6;
     --l1:#0969da; --l2:#9a6700; --l3:#1a7f37; --l4:#8250df;
+    --web:#0969da; --real:#1a7f37; --mock:#9a6700; --audit:#cf222e; --metric:#57606a;
     --shadow:0 1px 2px rgba(31,35,40,.06),0 4px 16px rgba(31,35,40,.05);
   }
   *{box-sizing:border-box}
@@ -40,21 +47,21 @@
   body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);
     font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased;
     padding:clamp(20px,4vw,52px) clamp(16px,4vw,52px) 64px}
-  .wrap{max-width:1080px;margin:0 auto}
+  .wrap{max-width:1180px;margin:0 auto}
 
   /* ── Masthead ── */
-  header{margin-bottom:26px}
+  header{margin-bottom:24px}
   .eyebrow{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);
     font-weight:600;display:flex;align-items:center;gap:9px}
   .eyebrow::before{content:"";width:22px;height:2px;background:var(--l4);border-radius:2px}
   h1{font-size:clamp(1.5rem,3.2vw,2.15rem);line-height:1.1;margin:.35em 0 .3em;
     font-weight:680;letter-spacing:-.02em;text-wrap:balance}
-  .lede{color:var(--muted);max-width:64ch;font-size:15px;margin:0}
+  .lede{color:var(--muted);max-width:70ch;font-size:15px;margin:0}
   .lede code{font-family:var(--mono);font-size:.86em;color:var(--fg);
     background:var(--panel-2);padding:.05em .38em;border-radius:5px;border:1px solid var(--border)}
 
   /* ── Summary strip ── */
-  .summary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:26px 0 18px}
+  .summary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:24px 0 16px}
   .lcard{background:var(--panel);border:1px solid var(--border);border-radius:13px;
     padding:15px 16px;box-shadow:var(--shadow);position:relative;overflow:hidden}
   .lcard::before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:var(--hue)}
@@ -67,43 +74,60 @@
     text-align:right;letter-spacing:.04em;margin-top:3px}
 
   /* ── Legend ── */
-  .legend{display:flex;flex-wrap:wrap;gap:18px;align-items:center;margin:0 2px 14px;
+  .legend{display:flex;flex-wrap:wrap;gap:16px 20px;align-items:center;margin:0 2px 14px;
     font-size:12.5px;color:var(--muted)}
-  .legend .k{display:inline-flex;align-items:center;gap:7px}
+  .legend .grp{display:inline-flex;align-items:center;gap:9px;flex-wrap:wrap}
+  .legend .k{display:inline-flex;align-items:center;gap:6px}
+  .legend .sep{width:1px;height:15px;background:var(--border)}
   .swatch{--hue:var(--l1)}
   .dot{width:13px;height:13px;border-radius:50%;display:inline-block;flex:none}
   .dot.p{background:var(--hue);box-shadow:0 0 0 3px color-mix(in srgb,var(--hue) 20%,transparent)}
   .dot.t{background:transparent;border:1.6px solid color-mix(in srgb,var(--hue) 62%,transparent)}
+  .facetcount{margin-left:auto;font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+
+  /* ── chips (facet cells) ── */
+  .chip{font-family:var(--mono);font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:6px;
+    letter-spacing:.02em;display:inline-block;white-space:nowrap;
+    border:1px solid color-mix(in srgb,var(--hue,var(--muted)) 40%,transparent);
+    color:var(--hue,var(--muted));background:color-mix(in srgb,var(--hue,var(--muted)) 11%,transparent)}
+  .chip.ghost{border-color:var(--border);background:transparent;color:var(--faint);font-weight:600}
+  .yes{color:var(--hue);font-weight:800;font-size:14px}
+  .no{color:var(--faint);font-weight:700;font-size:14px}
 
   /* ── Matrix ── */
   .scroll{overflow-x:auto;border:1px solid var(--border);border-radius:15px;
     box-shadow:var(--shadow);background:var(--panel)}
-  table{border-collapse:separate;border-spacing:0;width:100%;min-width:660px}
+  table{border-collapse:separate;border-spacing:0;width:100%;min-width:900px}
   thead th{position:sticky;top:0;z-index:3;background:var(--panel-2);
     border-bottom:1px solid var(--border);padding:0;text-align:center}
-  .lh{padding:12px 6px 11px;border-bottom:3px solid var(--hue)}
-  .lh .rn{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--hue)}
-  .lh .name{font-size:12.5px;font-weight:640;margin-top:1px;letter-spacing:-.01em}
+  .lh{padding:11px 4px 10px;border-bottom:3px solid var(--hue)}
+  .lh .rn{font-family:var(--mono);font-size:10.5px;font-weight:700;color:var(--hue)}
+  .lh .name{font-size:12px;font-weight:640;margin-top:1px;letter-spacing:-.01em}
+  .fh{padding:11px 4px 10px;border-bottom:3px solid var(--metric)}
+  .fh .rn{font-family:var(--mono);font-size:10.5px;font-weight:700;color:var(--muted);letter-spacing:.06em}
   thead th.exhead{text-align:left;padding:12px 16px;border-bottom:1px solid var(--border);
     font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:600}
   .exhead.sticky,td.ex{position:sticky;left:0;z-index:2;background:var(--panel)}
   thead .exhead.sticky{z-index:4;background:var(--panel-2)}
+  .divider{border-left:1px solid var(--border)}
 
   tbody tr:hover td{background:var(--panel-2)}
   tbody tr:hover td.ex{background:var(--panel-2)}
   td{padding:0;border-bottom:1px solid var(--border);vertical-align:middle}
   tbody tr:last-child td{border-bottom:none}
-  td.ex{padding:10px 16px;min-width:230px;box-shadow:1px 0 0 var(--border)}
+  td.ex{padding:9px 16px;min-width:238px;box-shadow:1px 0 0 var(--border)}
   .exname{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--fg);letter-spacing:-.01em}
+  .star{color:var(--l2);font-size:11px;margin-left:5px;vertical-align:1px}
   .focus{font-size:12px;color:var(--muted);margin-top:2px;line-height:1.35}
   .tag{font-family:var(--mono);font-size:10px;font-weight:600;padding:1px 6px;border-radius:5px;
     border:1px solid var(--border);color:var(--muted);margin-left:7px;vertical-align:1px;white-space:nowrap}
-  td.cell{text-align:center;width:88px}
+  td.cell{text-align:center;width:52px}
   td.cell .dot{margin:0 auto}
   td.cell .none{color:var(--faint);font-weight:700;font-size:14px}
+  td.facet{text-align:center;width:70px;padding:0 6px}
 
   /* group rows */
-  tr.group td{background:var(--bg);padding:16px 16px 7px;border-bottom:1px solid var(--border);
+  tr.group td{background:var(--bg);padding:15px 16px 6px;border-bottom:1px solid var(--border);
     position:sticky;left:0}
   tr.group .gname{font-size:11px;letter-spacing:.14em;text-transform:uppercase;font-weight:700;color:var(--fg)}
   tr.group .gmeta{font-size:11.5px;color:var(--muted);font-weight:500;font-family:var(--mono);
@@ -111,13 +135,14 @@
 
   tr.full td.ex{box-shadow:1px 0 0 var(--border),inset 3px 0 0 var(--l4)}
 
-  footer{margin-top:26px;color:var(--muted);font-size:12.5px;line-height:1.6;max-width:74ch}
+  footer{margin-top:26px;color:var(--muted);font-size:12.5px;line-height:1.6;max-width:80ch}
   footer code{font-family:var(--mono);font-size:.88em;color:var(--fg)}
   footer .src{margin-top:9px;font-family:var(--mono);font-size:11.5px;color:var(--faint)}
+  footer b{color:var(--fg)}
 
   @media (max-width:640px){
     .summary{grid-template-columns:repeat(2,1fr)}
-    td.cell{width:60px}
+    td.cell{width:40px}
   }
   @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
 </style>
@@ -127,21 +152,38 @@
 <div class="wrap">
   <header>
     <div class="eyebrow">Mycelium · runnable examples</div>
-    <h1>Examples&nbsp;×&nbsp;stack layers</h1>
-    <p class="lede">Which example demonstrates which layer of the substrate — the three-layer
-      model (<code>I</code> gossip-KV · <code>II</code> signal-mesh · <code>III</code> consensus)
-      plus the capability / agent layer the <code>mycelium</code> crate adds on top.
-      <strong>●</strong> = primarily demonstrates it; <strong>○</strong> = also exercises it.</p>
+    <h1>The examples capability matrix</h1>
+    <p class="lede">Every runnable example on one grid — fingerprinted by the stack
+      <strong>layer(s)</strong> it teaches (<code>I</code> gossip-KV · <code>II</code> signal-mesh ·
+      <code>III</code> consensus · <code>IV</code> capability/agent) <strong>and</strong> its facets:
+      how deep (<em>Level</em>), how you watch it (<em>Surface</em>), whether it needs a model
+      (<em>LLM</em>), and which operational surfaces it lights up (<em>Audit</em>, <em>Metrics</em>).
+      Pick a column, read down. <strong>●</strong> primary · <strong>○</strong> also exercises.</p>
   </header>
 
   <section class="summary" id="summary" aria-label="primary demonstrators per layer"></section>
 
   <div class="legend">
-    <span class="k"><span class="dot p swatch"></span> primarily demonstrates</span>
-    <span class="k"><span class="dot t swatch"></span> also exercises</span>
-    <span class="k" style="color:var(--faint)">·&nbsp;&nbsp;not involved</span>
-    <span class="k" style="margin-left:auto;font-family:var(--mono);font-size:11.5px">
-      <span id="total"></span> examples · fingerprinted by layer-API usage</span>
+    <span class="grp">
+      <span class="k"><span class="dot p swatch"></span> primary</span>
+      <span class="k"><span class="dot t swatch"></span> touches</span>
+      <span class="k" style="color:var(--faint)">·&nbsp;none</span>
+    </span>
+    <span class="sep"></span>
+    <span class="grp">
+      <span class="k"><span class="chip" style="--hue:var(--web)">Web</span> browser UI</span>
+      <span class="k"><span class="chip ghost">CLI</span> terminal</span>
+    </span>
+    <span class="sep"></span>
+    <span class="grp">
+      <span class="k"><span class="chip" style="--hue:var(--real)">real</span> needs a model</span>
+      <span class="k"><span class="chip" style="--hue:var(--mock)">mock</span> echo, no key</span>
+    </span>
+    <span class="sep"></span>
+    <span class="grp">
+      <span class="k"><span class="chip" style="--hue:var(--l2)">★</span> flagship</span>
+    </span>
+    <span class="facetcount"><span id="total"></span> examples</span>
   </div>
 
   <div class="scroll">
@@ -149,10 +191,15 @@
       <thead>
         <tr>
           <th class="exhead sticky">Example</th>
-          <th style="--hue:var(--l1)"><div class="lh"><div class="rn">LAYER I</div><div class="name">State</div></div></th>
-          <th style="--hue:var(--l2)"><div class="lh"><div class="rn">LAYER II</div><div class="name">Signal</div></div></th>
-          <th style="--hue:var(--l3)"><div class="lh"><div class="rn">LAYER III</div><div class="name">Consensus</div></div></th>
-          <th style="--hue:var(--l4)"><div class="lh"><div class="rn">LAYER IV</div><div class="name">Agent</div></div></th>
+          <th style="--hue:var(--l1)"><div class="lh"><div class="rn">I</div><div class="name">State</div></div></th>
+          <th style="--hue:var(--l2)"><div class="lh"><div class="rn">II</div><div class="name">Signal</div></div></th>
+          <th style="--hue:var(--l3)"><div class="lh"><div class="rn">III</div><div class="name">Consensus</div></div></th>
+          <th style="--hue:var(--l4)"><div class="lh"><div class="rn">IV</div><div class="name">Agent</div></div></th>
+          <th class="divider"><div class="fh"><div class="rn">LEVEL</div></div></th>
+          <th><div class="fh"><div class="rn">SURFACE</div></div></th>
+          <th><div class="fh"><div class="rn">LLM</div></div></th>
+          <th><div class="fh"><div class="rn">AUDIT</div></div></th>
+          <th><div class="fh"><div class="rn">METRICS</div></div></th>
         </tr>
       </thead>
       <tbody id="rows"></tbody>
@@ -160,14 +207,17 @@
   </div>
 
   <footer>
-    <strong style="color:var(--fg)">Reading the shape.</strong> Layers&nbsp;I–III are a deliberately
-    small substrate — 6 · 5 · 3 dedicated demos. The <span style="color:var(--l4)">Agent layer</span>
-    carries ~24, because that's where the AI-fleet value lives: capabilities, RPC, LLM/MCP, artifacts,
-    federation, security. <code>three_node_demo</code> (purple rail) is the one full-stack integration
-    touching all four. The <em>companions</em> (tuple-space · blackboard) are application coordination
-    built <em>atop</em> I/II; <code>ops_console</code> observes every layer's HTTP surface rather than
+    <b>Reading the shape.</b> Layers&nbsp;I–III are a deliberately small substrate — a handful of
+    dedicated demos each. The <span style="color:var(--l4)">Agent layer&nbsp;(IV)</span> carries most
+    rows, because that's where the AI-fleet value lives: capabilities, RPC, LLM/MCP, artifacts,
+    federation, security. Read the <b>facet columns</b> for the practical filter: <b>Surface&nbsp;Web</b>
+    = open a browser and watch; <b>LLM&nbsp;·</b> = zero setup, no model; <b>Audit&nbsp;✓</b> = emits a
+    tamper-evident signed trail (<code>community</code> + the guardrails); <b>Metrics&nbsp;✓</b> = built
+    with the Prometheus recorder so the Ops Console <em>Metrics</em> tab climbs live.
+    <code>three_node_demo</code> (purple rail) is the one full-stack integration touching all four
+    layers; <code>ops_console</code> <em>observes</em> every layer and both ops surfaces rather than
     teaching one.
-    <div class="src">source · docs/wiki/dev/examples.md § Layer map</div>
+    <div class="src">source · examples/README.md § The capability matrix · docs/wiki/dev/examples.md</div>
   </footer>
 </div>
 
@@ -181,71 +231,75 @@ const LMETA=[
   {rn:"LAYER IV",gloss:"Agent",sub:"capability / LLM"},
 ];
 
-// cells: [I, II, III, IV]  ·  "p"=primary ●  "t"=touches ○  ""=none
+// cells c:[I,II,III,IV] "p"=● "t"=○ ""=·  ·  facets: lvl I(ntro)/A(dv) · star · ui web/cli ·
+// llm ''/mock/real · au(dit) · me(trics)
 const GROUPS=[
-  {name:"Top-level", meta:"examples/*.rs", rows:[
-    {ex:"hello_mesh",             c:[P,N,N,N], f:"two agents share a KV value by gossip"},
-    {ex:"hello_capability",       c:[N,N,N,P], f:"advertise + resolve by need, RPC"},
-    {ex:"conway",                 c:[P,T,N,N], f:"256-agent gossip-KV Game of Life", tag:"viz"},
-    {ex:"conway-gpu",             c:[P,N,N,N], f:"512×512 GPU-scale convergence", tag:"viz"},
-    {ex:"distributed_lock",       c:[N,N,P,N], f:"consensus lock + fencing token"},
-    {ex:"invoke_skill",           c:[T,N,N,P], f:"minimal SkillRunner caller"},
-    {ex:"llm_agent",              c:[T,T,N,P], f:"capability provisioning + Mesh Control UI", tag:"viz"},
-    {ex:"semantic_coordination",  c:[N,P,N,T], f:"signal sender authorization + schema"},
-    {ex:"coordinator_comparison", c:[P,N,N,P], f:"broker-RPC vs gossip-KV load", tag:"paper"},
-    {ex:"three_arm_workdist",     c:[P,N,N,P], f:"broker vs gossip vs tuple-space pull", tag:"paper"},
-    {ex:"three_node_demo",        c:[P,P,P,P], f:"the full-stack integration", tag:"all", full:true},
-    {ex:"ops_console",            c:[T,T,T,T], f:"observes every layer's HTTP surface", tag:"observer"},
+  {name:"Start here", meta:"examples/*.rs — the zero-setup ladder", rows:[
+    {ex:"hello_mesh",       c:[P,N,N,N], f:"two agents share a KV value by gossip", lvl:"I", ui:"cli"},
+    {ex:"hello_capability", c:[N,N,N,P], f:"advertise + resolve by name, RPC", lvl:"I", ui:"cli"},
+    {ex:"conway",           c:[P,T,N,N], f:"256-agent gossip-KV Game of Life", lvl:"I", ui:"web", me:1, tag:"viz"},
+    {ex:"distributed_lock", c:[N,N,P,N], f:"consensus lock + fencing token", lvl:"I", ui:"cli"},
+    {ex:"invoke_skill",     c:[T,N,N,P], f:"minimal SkillRunner caller", lvl:"I", ui:"cli"},
+    {ex:"semantic_coordination", c:[N,P,N,T], f:"signal sender authorization + schema", lvl:"I", ui:"cli"},
   ]},
-  {name:"Food-Rescue Co-op", meta:"examples/coop/src/bin/*", rows:[
-    {ex:"mailbox_llm",     c:[T,N,N,P], f:"actor↔LLM RPC over the KV mailbox"},
-    {ex:"stigmergy",       c:[N,P,N,T], f:"backpressure as an evaporating opacity pheromone"},
-    {ex:"stigmergy_viz",   c:[N,P,N,T], f:"↑ animated dashboard", tag:"viz"},
-    {ex:"elastic_intent",  c:[N,N,N,P], f:"MembershipIntent — governors self-elect into a band"},
-    {ex:"provisioning",    c:[N,N,N,P], f:"the autonomic self-provision loop", tag:"artifacts"},
-    {ex:"federation_facts",c:[N,N,N,P], f:"cross-domain AgentFacts discovery"},
-    {ex:"rotation",        c:[N,N,N,P], f:"zero-disruption Ed25519 identity rotation", tag:"security"},
-    {ex:"consensus",       c:[N,T,P,N], f:"cross-group quorum, epoch-leased commit"},
-    {ex:"llm_pipeline",    c:[N,N,N,P], f:"LLM workers pull from tuple-space lanes", tag:"companion"},
-    {ex:"mcp_toolgrowth",  c:[T,N,N,P], f:"code arrives over the mesh, bridged as an MCP tool"},
-    {ex:"llm_council",     c:[N,N,N,P], f:"fan-out · synthesis · critic/reviser", tag:"companion"},
-    {ex:"llm_council_viz", c:[N,N,N,P], f:"↑ animated dashboard", tag:"viz"},
-    {ex:"catalog",         c:[T,N,N,P], f:"durable artifact library (gossip-KV catalogue)", tag:"artifacts"},
-    {ex:"model_deploy",    c:[T,N,N,P], f:"a real GGUF model as a signed artifact", tag:"artifacts"},
-    {ex:"reheal_deploy",   c:[T,N,N,P], f:"the model follows the thread across node death", tag:"artifacts"},
-    {ex:"diagnostics",     c:[N,P,N,T], f:"the legible-emergence fleet narrative", tag:"observer"},
+  {name:"Top-level", meta:"examples/*.rs — beyond the ladder", rows:[
+    {ex:"llm_agent",        c:[T,T,N,P], f:"capability provisioning + Mesh Control UI", lvl:"A", ui:"web", llm:"mock", tag:"viz"},
+    {ex:"coordinator_comparison", c:[P,N,N,P], f:"broker-RPC vs gossip-KV load", lvl:"A", ui:"cli", tag:"paper"},
+    {ex:"three_arm_workdist", c:[P,N,N,P], f:"broker vs gossip vs tuple-space pull", lvl:"A", ui:"cli", tag:"paper"},
+    {ex:"three_node_demo",  c:[P,P,P,P], f:"the full-stack integration — MCP tools join live", lvl:"A", star:1, ui:"web", llm:"real", tag:"all", full:true},
+    {ex:"ops_console",      c:[T,T,T,T], f:"observes every layer + /audit + /metrics", lvl:"A", ui:"web", tag:"observer"},
+  ]},
+  {name:"Food-Rescue Co-op", meta:"examples/coop/src/bin/* — one constructive world", rows:[
+    {ex:"mailbox_llm",     c:[T,N,N,P], f:"actor↔LLM RPC over the KV mailbox", lvl:"A", ui:"cli", llm:"mock"},
+    {ex:"stigmergy",       c:[N,P,N,T], f:"backpressure as an evaporating opacity pheromone", lvl:"A", ui:"cli"},
+    {ex:"stigmergy_viz",   c:[N,P,N,T], f:"↑ animated dashboard", lvl:"A", ui:"web", me:1, tag:"viz"},
+    {ex:"elastic_intent",  c:[N,N,N,P], f:"MembershipIntent — governors self-elect into a band", lvl:"A", ui:"cli"},
+    {ex:"provisioning",    c:[N,N,N,P], f:"the autonomic self-provision loop", lvl:"A", star:1, ui:"cli", tag:"artifacts"},
+    {ex:"federation_facts",c:[N,N,N,P], f:"cross-domain AgentFacts discovery", lvl:"A", ui:"cli"},
+    {ex:"rotation",        c:[N,N,N,P], f:"zero-disruption Ed25519 identity rotation", lvl:"A", ui:"cli", tag:"security"},
+    {ex:"consensus",       c:[N,T,P,N], f:"cross-group quorum, epoch-leased commit", lvl:"A", ui:"cli"},
+    {ex:"llm_pipeline",    c:[N,N,N,P], f:"LLM workers pull from tuple-space lanes", lvl:"A", ui:"cli", llm:"mock", tag:"companion"},
+    {ex:"mcp_toolgrowth",  c:[T,N,N,P], f:"code arrives over the mesh, bridged as an MCP tool", lvl:"A", ui:"cli", llm:"mock"},
+    {ex:"llm_council",     c:[N,N,N,P], f:"fan-out · synthesis · critic/reviser", lvl:"A", ui:"cli", llm:"mock", tag:"companion"},
+    {ex:"llm_council_viz", c:[N,N,N,P], f:"↑ animated deliberation DAG", lvl:"A", ui:"web", llm:"mock", me:1, tag:"viz"},
+    {ex:"catalog",         c:[T,N,N,P], f:"durable artifact library (gossip-KV catalogue)", lvl:"A", ui:"cli", tag:"artifacts"},
+    {ex:"model_deploy",    c:[T,N,N,P], f:"a real GGUF model as a signed artifact (manual)", lvl:"A", ui:"cli", llm:"real", tag:"artifacts"},
+    {ex:"reheal_deploy",   c:[T,N,N,P], f:"the model follows the thread across node death", lvl:"A", ui:"cli", llm:"mock", tag:"artifacts"},
+    {ex:"diagnostics",     c:[N,P,N,T], f:"the legible-emergence fleet narrative", lvl:"A", ui:"cli", tag:"observer"},
   ]},
   {name:"Companions", meta:"blackboard · tuple-space · wiki — atop I/II", rows:[
-    {ex:"microgrid",         c:[T,N,N,P], f:"blackboard rd/in energy co-op (CI batch version)"},
-    {ex:"microgrid_viz",     c:[T,N,N,P], f:"↑ animated: surplus packets, exactly-once claims", tag:"viz"},
-    {ex:"redistribution",    c:[T,N,N,P], f:"tuple-space take+complete pipeline (CI batch version)"},
-    {ex:"redistribution_viz",c:[T,N,N,P], f:"↑ animated: intake→sorted→routed→delivered", tag:"viz"},
-    {ex:"fluid_pipeline",    c:[N,N,N,P], f:"AFN push-vs-pull (tuple-space, Python)", tag:"companion"},
-    {ex:"wiki_chat",         c:[T,N,N,P], f:"wiki companion — import docs, chat grounded in the wiki", tag:"wiki"},
-    {ex:"wiki_council_viz",  c:[T,N,N,P], f:"live chat over a fleet of wiki-grounded specialists", tag:"viz"},
+    {ex:"microgrid",         c:[T,N,N,P], f:"blackboard rd/in energy co-op (CI batch)", lvl:"A", ui:"cli"},
+    {ex:"microgrid_viz",     c:[T,N,N,P], f:"↑ animated: surplus packets, exactly-once claims", lvl:"A", ui:"web", me:1, tag:"viz"},
+    {ex:"redistribution",    c:[T,N,N,P], f:"tuple-space take+complete pipeline (CI batch)", lvl:"A", ui:"cli"},
+    {ex:"redistribution_viz",c:[T,N,N,P], f:"↑ animated: intake→sorted→routed→delivered", lvl:"A", ui:"web", me:1, tag:"viz"},
+    {ex:"fluid_pipeline",    c:[N,N,N,P], f:"AFN push-vs-pull (tuple-space, Python)", lvl:"A", ui:"cli", tag:"companion"},
+    {ex:"wiki_chat",         c:[T,N,N,P], f:"import docs, chat grounded in the shared wiki", lvl:"A", ui:"cli", llm:"mock", tag:"wiki"},
+    {ex:"wiki_council_viz",  c:[T,N,N,P], f:"live chat over wiki-grounded specialists · LLM on the mesh", lvl:"A", star:1, ui:"web", llm:"real", me:1, tag:"viz"},
   ]},
   {name:"Reasoning", meta:"mycelium-reason/examples/*", rows:[
-    {ex:"fleet_reasoning", c:[N,N,N,P], f:"all three Tier-3 reasoning wedges in one in-process mesh"},
-    {ex:"reason_node",     c:[T,N,N,P], f:"the long-running reason node the langgraph rungs drive"},
-    {ex:"reheal_node",     c:[T,N,T,P], f:"the deploy/reheal flagship node (rung 6, echo)"},
+    {ex:"fleet_reasoning", c:[N,N,N,P], f:"all three Tier-3 reasoning wedges in one mesh", lvl:"A", ui:"cli", llm:"mock"},
+    {ex:"reason_node",     c:[T,N,N,P], f:"the long-running reason node the rungs drive", lvl:"A", ui:"cli", llm:"mock"},
+    {ex:"reheal_node",     c:[T,N,T,P], f:"the deploy/reheal flagship node (rung 6)", lvl:"A", ui:"cli", llm:"mock"},
   ]},
   {name:"Guardrails", meta:"mycelium-guardrails/examples/*", rows:[
-    {ex:"guardrail_fleet", c:[N,N,N,P], f:"all three policy tiers firing in a co-op fleet", tag:"security"},
-    {ex:"guardrail_wedge", c:[N,N,N,P], f:"off-allowlist caller structurally stopped — Tier-C proof", tag:"security"},
-    {ex:"guardrail_viz",   c:[N,N,N,P], f:"watch an agent stopped at the gate + the tamper-evident proof", tag:"viz"},
+    {ex:"guardrail_fleet", c:[N,N,N,P], f:"all three policy tiers firing in a co-op fleet", lvl:"A", ui:"cli", au:1, tag:"security"},
+    {ex:"guardrail_wedge", c:[N,N,N,P], f:"off-allowlist caller stopped — Tier-C proof", lvl:"A", ui:"cli", au:1, tag:"security"},
+    {ex:"guardrail_viz",   c:[N,N,N,P], f:"watch an agent stopped at the gate + tamper-evident proof", lvl:"A", star:1, ui:"web", au:1, me:1, tag:"viz"},
   ]},
   {name:"Python interop", meta:"examples/{a2a_langchain,langgraph,community}", rows:[
-    {ex:"a2a_langchain", c:[N,N,N,P], f:"LangChain / AutoGen agents via A2A"},
-    {ex:"langgraph",     c:[T,N,T,P], f:"LangGraph on Mycelium; deploy/reheal ladder"},
-    {ex:"community",     c:[N,N,N,P], f:"skillrunner cluster + signed audit trail (:9050)"},
+    {ex:"a2a_langchain", c:[N,N,N,P], f:"LangChain / AutoGen agents via A2A", lvl:"A", ui:"cli", llm:"real"},
+    {ex:"langgraph",     c:[T,N,T,P], f:"LangGraph on Mycelium; deploy/reheal ladder", lvl:"A", ui:"cli", llm:"mock"},
+    {ex:"community",     c:[N,N,N,P], f:"skillrunner cluster + signed audit trail (:9050)", lvl:"A", ui:"web", llm:"real", au:1, tag:"observer"},
   ]},
 ];
 
 // ── summary strip: count primaries per layer ──
 const counts=[0,0,0,0];
-let total=0;
-GROUPS.forEach(g=>g.rows.forEach(r=>{total++;r.c.forEach((v,i)=>{if(v===P)counts[i]++})}));
-document.getElementById("total").textContent=total;
+let total=0, web=0, real=0, au=0, me=0;
+GROUPS.forEach(g=>g.rows.forEach(r=>{total++;r.c.forEach((v,i)=>{if(v===P)counts[i]++});
+  if(r.ui==="web")web++; if(r.llm==="real")real++; if(r.au)au++; if(r.me)me++;}));
+document.getElementById("total").textContent=
+  `${total} examples · ${web} Web · ${real} real-LLM · ${au} audit · ${me} metrics`;
 document.getElementById("summary").innerHTML = LMETA.map((m,i)=>`
   <div class="lcard" style="--hue:${LHUE[i]}">
     <div class="count">${counts[i]}<small>PRIMARY</small></div>
@@ -254,16 +308,28 @@ document.getElementById("summary").innerHTML = LMETA.map((m,i)=>`
     <div class="sub">${m.sub}</div>
   </div>`).join("");
 
-// ── matrix rows ──
+// ── cell + facet renderers ──
 const dot=(state,i)=> state===N
   ? `<span class="none">·</span>`
   : `<span class="dot ${state}" style="--hue:${LHUE[i]}"></span>`;
+const chip=(txt,hue,ghost)=> `<span class="chip${ghost?' ghost':''}"${hue?` style="--hue:${hue}"`:''}>${txt}</span>`;
+const yesno=(on,hue)=> on ? `<span class="yes" style="--hue:${hue}">✓</span>` : `<span class="no">·</span>`;
+const lvlCell=(r)=> r.lvl==="I" ? chip("Intro","var(--l3)") : chip("Adv","",true);
+const uiCell=(r)=> r.ui==="web" ? chip("Web","var(--web)") : chip("CLI","",true);
+const llmCell=(r)=> !r.llm ? `<span class="no">·</span>`
+  : r.llm==="real" ? chip("real","var(--real)") : chip("mock","var(--mock)");
+
 const rowsHTML = GROUPS.map(g=>{
-  const head=`<tr class="group"><td colspan="5"><span class="gname">${g.name}</span><span class="gmeta">${g.meta}</span></td></tr>`;
+  const head=`<tr class="group"><td colspan="9"><span class="gname">${g.name}</span><span class="gmeta">${g.meta}</span></td></tr>`;
   const body=g.rows.map(r=>`
     <tr class="${r.full?'full':''}">
-      <td class="ex"><span class="exname">${r.ex}</span>${r.tag?`<span class="tag">${r.tag}</span>`:''}<div class="focus">${r.f}</div></td>
+      <td class="ex"><span class="exname">${r.ex}</span>${r.star?'<span class="star">★</span>':''}${r.tag?`<span class="tag">${r.tag}</span>`:''}<div class="focus">${r.f}</div></td>
       ${r.c.map((v,i)=>`<td class="cell">${dot(v,i)}</td>`).join("")}
+      <td class="facet divider">${lvlCell(r)}</td>
+      <td class="facet">${uiCell(r)}</td>
+      <td class="facet">${llmCell(r)}</td>
+      <td class="facet">${yesno(r.au,"var(--audit)")}</td>
+      <td class="facet">${yesno(r.me,"var(--metric)")}</td>
     </tr>`).join("");
   return head+body;
 }).join("");
