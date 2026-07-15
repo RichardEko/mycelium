@@ -97,8 +97,14 @@ existed user-facing, without checking the wiki linked it (ledger 2026-07-13).
 whole *category* can be missing while the count it pins is still "right." `examples.md` enumerated the
 coop demo count for many passes while the entire **visual-showcase** category (`conway`, `conway-gpu`,
 the `*_viz` set) was absent (ledger 2026-07-14). So verify the enumeration covers every category that
-exists in the tree (for examples: starter · coop · AFN · a2a · integration · visual-showcases), and
-that newly-merged examples/handles/features each land in it.
+exists in the tree. **Derive the category set from the tree — never a fixed list** (a hardcoded
+category set is the same drift-bug one level up: it went stale the moment `mycelium-guardrails`,
+`mycelium-reason`, and `mycelium-wiki` examples existed but sat outside the swept scope — ledger
+2026-07-15). For examples that means `find . -path '*/examples/*.rs'` across **all** crates (not just
+`examples/` + coop) plus the coop bins; group into categories; diff against the page. The durable fix
+for recurrence: `dev/examples.md` should **cite `examples/README.md` § The suites** (the front-door
+index) as the canonical list, so the wiki synthesizes rather than maintaining a parallel enumeration
+that silently falls behind.
 
 ## Output
 

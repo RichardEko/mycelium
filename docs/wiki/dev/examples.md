@@ -77,6 +77,20 @@ Layer explainers: gossip-KV [ch01](../../guide/01-gossip-kv.md) · signal-mesh
   `afn-smoke`. Concept essay: `flow_networks.html`.
 - **A2A LangChain/AutoGen** (`examples/a2a_langchain/`): external agents auto-discover
   Mycelium skills via `/.well-known/agent.json`.
+- **Skills / community cluster** (`examples/community/`, the `skillrunner` bin at `:9050`): LLM agents
+  as first-class mesh citizens (skills = capabilities, live load-balancing). The de-facto **audit**
+  demo — every invocation writes a signed audit record; the mgmt UI (`:9050/mgmt`) shows the trail
+  (also `GET /gateway/audit` on `compliance`-built nodes).
+- **Reasoning / LangGraph** (`examples/langgraph/` + `mycelium-reason/examples/`): the 7-rung
+  LangGraph-on-Mycelium ladder (Python) over a Rust reason mesh — `reason_node` (the long-running
+  gateway node the rungs drive), `reheal_node` (the deploy/reheal flagship, rung 6), `fleet_reasoning`
+  (all three Tier-3 wedges in-process). Guide:
+  [15-reasoning-and-langgraph](../../guide/15-reasoning-and-langgraph.md).
+- **Guardrails** (`mycelium-guardrails/examples/`): `guardrail_wedge` (an off-allowlist caller
+  structurally stopped at a Tier-C gate, with a cryptographic denial proof) + `guardrail_fleet` (all
+  three policy tiers composed in one co-op fleet).
+- **Wiki companion** (`mycelium-wiki/examples/wiki_chat.rs`): import documents, then chat grounded in
+  the shared wiki (the wiki companion's Phase-5 worked example).
 - Integration suite: **13 Docker scenarios** (`make test`, 4-node cluster) + the consistency
   overlay (`make test-overlay`, 3-node consensus); scale suites in
   [testing/scale-tests](testing/scale-tests.md).
