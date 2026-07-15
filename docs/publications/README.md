@@ -186,3 +186,7 @@ signal for the `/publication-lint` skill (is it catching overclaims before human
   five new run-doc READMEs touched `examples/`, `docs/wiki/`, and `docs/guide/09-security.md` — no
   `docs/publications/` or `philosophy.html` commit since run 10, and no deck/paper links into the renamed
   `examples/README.md` sections. Nothing to reconcile. No findings.
+- 2026-07-15 (lint run 12): **clean — no persuasion-surface change.** The matrix-offpage-links +
+  ops_console externalization + slimmed showcases touched `examples/`, `docs/wiki/`, `docs/guide/`, and
+  `docs/plans/` — no `docs/publications/` or `philosophy.html` commit since run 11, and no deck/paper
+  links into the renamed `examples/README.md` sections. Nothing to reconcile. No findings.

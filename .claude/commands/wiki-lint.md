@@ -108,17 +108,22 @@ category set is the same drift-bug one level up: it went stale the moment `mycel
 `mycelium-reason`, and `mycelium-wiki` examples existed but sat outside the swept scope — ledger
 2026-07-15). For examples that means `find . -path '*/examples/*.rs'` across **all** crates (not just
 `examples/` + coop) plus the coop bins; group into categories; diff against the page. The durable fix
-for recurrence: `dev/examples.md` should **cite `examples/README.md` § The suites** (the front-door
+for recurrence: `dev/examples.md` should **cite `examples/README.md` § The capability matrix** (the front-door
 index) as the canonical list, so the wiki synthesizes rather than maintaining a parallel enumeration
 that silently falls behind.
 
 **UI-example contract** ([`dev/ui-example-contract.md`](../../docs/wiki/dev/ui-example-contract.md)).
 For every **browser** example (a `.rs` that `include_str!`s an `.html`, or serves inline HTML), verify
 it: (1) advertises `ui/viz` + injects `__OPS_CONSOLE_LINK__`; (2) injects `__CONCEPTS__` (or, for the
-documented inline-HTML/no-gateway exceptions `three_node_demo`/`conway-gpu`, carries the equivalent
-static panel); (3) has a documented run command carrying `gateway,metrics` (or `metrics` where gateway
-is default). A UI example missing the concepts box, the Ops Console link, or the metrics feature is a
-finding. Enumerate them the tree-derived way: `grep -rl 'include_str!.*\.html' … examples`.
+documented inline-HTML/no-gateway/console exceptions `three_node_demo`/`conway-gpu`/`ops_console`,
+carries the equivalent static panel or is exempt); (3) has a documented run command carrying
+`gateway,metrics` (or `metrics` where gateway is default). A UI example missing the concepts box, the
+Ops Console link, or the metrics feature is a finding. Enumerate them the tree-derived way: `grep -rl
+'include_str!.*\.html' examples mycelium-*/examples` — and **classify every hit** as *compliant* or a
+*documented exception*. An **unclassified** hit is itself a finding: the earlier check verified a known
+list of 9 + named 2 exceptions but never reconciled against the full grep, so `ops_console` (a browser
+example that is the *consumer* of `ui/viz`, not an advertiser) sat unclassified until its 2026-07-15
+move re-ran the enumeration (ledger).
 
 ## Output
 

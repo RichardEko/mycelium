@@ -88,3 +88,16 @@ Entry format:
   "examples/README\.md#[a-z-]+"` (and the same for any front-door doc whose headings changed) across
   `docs/` + crate READMEs, and confirms each `#anchor` still matches a live heading. Folded into §3. Fixed:
   repointed `09-security.md` → `#ops-console`.
+- 2026-07-15: **UI-contract check verified a *known list*, never reconciled against the full tree-derived
+  grep — so `ops_console` sat unclassified.** The §4 UI-example-contract check enumerates browser examples
+  as `grep -rl 'include_str!.*\.html' examples` and had been verifying the 9 showcases + naming 2
+  exceptions (`conway-gpu`, `three_node_demo`). But `examples/ops_console.rs` also `include_str!`s an
+  `.html` — it matched the grep every pass — and was neither in the compliant-9 nor the exception list: it
+  was silently skipped because it "obviously isn't a showcase." That is the count-vs-category bug again in
+  a new place — the check trusted a curated list instead of reconciling every grep hit. Found when
+  `ops_console`'s move to its own directory (2026-07-15) made me re-run the raw enumeration. `ops_console`
+  is legitimately an **exception** — it is the *console itself*, the consumer/observer of `ui/viz`, not a
+  showcase that advertises it, so rules 2 & 4 don't apply. **Sharpening (structural):** the check now
+  requires **classifying every `include_str! html` hit** as *compliant* or *documented-exception* — an
+  unclassified hit is itself a finding. Folded into §4 + the contract doc's Lint section. Fixed: added
+  `ops_console` to the exceptions in `ui-example-contract.md`.
