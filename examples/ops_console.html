@@ -60,7 +60,8 @@
 <main id="view"><p class="muted">Loading…</p></main>
 
 <script>
-const TABS = ["Overview","Fleet","Diagnose","KV","Metrics"];
+const TABS = ["Overview","Fleet","Diagnose","Audit","KV","Metrics"];
+const esc = s => String(s==null?"":s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 let active = "Overview";
 const $ = s => document.querySelector(s);
 const el = (t,c,h)=>{const e=document.createElement(t); if(c)e.className=c; if(h!=null)e.innerHTML=h; return e;};
@@ -155,6 +156,44 @@ function diagnose(d){
   return h;
 }
 
+// ── Audit: /gateway/audit (the tamper-evident, signed trail) ────────────────
+function audit(d){
+  if(d && d.__err) return `<p class="err">unreachable — ${d.__err}</p>`;
+  // No `streams` array ⇒ the endpoint isn't there (a 404 from a node built without `compliance`).
+  if(!d || typeof d!=="object" || !Array.isArray(d.streams)) return `<p class="muted">No audit trail
+    on this node. <code>/gateway/audit</code> is served only when the node is built with
+    <code>--features compliance</code> — the signed, causally-ordered record every governed action
+    (skill invocation, guardrail decision) writes; the mesh is the audit store.</p>`;
+  if(!d.streams.length) return `<p class="muted">Audit enabled, but no records on this node yet —
+    they accrue as governed actions flow (e.g. run the <code>community</code> skills cluster and
+    invoke a skill).</p>`;
+  return d.streams.map(s=>{
+    const ok = !!s.verified;
+    const badge = `<span class="badge ${ok?'ok':'bad'}">${ok?'chain verified ✓':'VERIFY FAILED ✗'}</span>`;
+    const recs = s.records||[];
+    const rows = recs.map(r=>{
+      const out = String(r.outcome||"");
+      const denied = /den|reject|fail|block/i.test(out);
+      return `<tr>
+        <td class="n" style="font-family:var(--mono)">${esc(r.seq)}</td>
+        <td>${esc(r.principal)}</td>
+        <td><code>${esc(r.action)}</code></td>
+        <td class="muted">${esc(r.target??"—")}</td>
+        <td><span class="badge ${denied?'bad':'ok'}">${esc(out)}</span></td>
+        <td class="muted" style="font-family:var(--mono);font-size:11px">${esc((r.content_hash||"").slice(0,12))}…</td>
+      </tr>`;
+    }).join("");
+    return `<div class="card">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+        <code>${esc(s.node)}</code> ${badge}
+        <span class="muted" style="margin-left:auto;font-size:12px">${esc(s.count)} record(s)${s.head_hash?` · head <code>${esc(s.head_hash.slice(0,12))}…</code>`:""}</span>
+      </div>
+      ${s.verify_error?`<div class="finding" style="border-left-color:var(--red)"><div class="d err">${esc(s.verify_error)}</div></div>`:""}
+      ${recs.length?`<table><thead><tr><th>seq</th><th>principal</th><th>action</th><th>target</th><th>outcome</th><th>content hash</th></tr></thead><tbody>${rows}</tbody></table>`:`<div class="muted">chain verified; no individual records returned (raise <code>?limit=</code>).</div>`}
+    </div>`;
+  }).join("");
+}
+
 // ── KV: /gateway/kv/keys (namespace map) ────────────────────────────────────
 function kv(k){
   if(k.__err) return `<p class="err">unreachable — ${k.__err}</p>`;
@@ -184,6 +223,7 @@ async function refresh(){
     if(active==="Overview"){ data = await api("/stats"); html = overview(data); }
     else if(active==="Fleet"){ data = await api("/gateway/fleet"); html = fleet(data); }
     else if(active==="Diagnose"){ data = await api("/gateway/diagnose"); html = diagnose(data); }
+    else if(active==="Audit"){ data = await api("/gateway/audit"); html = audit(data); }
     else if(active==="KV"){ data = await api("/gateway/kv/keys"); html = kv(data); }
     else if(active==="Metrics"){ data = await api("/metrics"); html = metrics(data); }
     view.innerHTML = html;

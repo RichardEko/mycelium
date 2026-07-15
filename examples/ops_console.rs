@@ -3,8 +3,9 @@
 //! Point it at ANY gateway-enabled node (`http_port` set) and it surfaces the substrate's own
 //! operational views in one place: `/stats` (node runtime + tripwires), `/gateway/fleet` (the
 //! cluster-wide snapshot), `/gateway/diagnose` (the Legible-Emergence *fleet narrative* — "why is
-//! the fleet in this state", in plain English), `/gateway/kv/keys` (the KV namespace map), and
-//! `/metrics` (Prometheus). Read-only, auto-refreshing, one console for any cluster.
+//! the fleet in this state", in plain English), `/gateway/audit` (the tamper-evident signed audit
+//! trail — shown only for nodes built `--features compliance`), `/gateway/kv/keys` (the KV namespace
+//! map), and `/metrics` (Prometheus). Read-only, auto-refreshing, one console for any cluster.
 //!
 //! This is a **dev / reference** tool, not a shipped control plane — Mycelium is a *library, not a
 //! platform*. It builds nothing new; it just renders the endpoints every node already exposes. A
