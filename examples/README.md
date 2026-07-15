@@ -38,7 +38,7 @@ not to raw source. The suite READMEs carry the per-example walkthrough + the exa
 | [`coordinator_comparison`](../docs/plans/three_arm_workdist.md) | ● | · | · | ● | Adv | CLI | · | · | · |
 | [`three_arm_workdist`](../docs/plans/three_arm_workdist.md) | ● | · | · | ● | Adv | CLI | · | · | · |
 | [`three_node_demo`](chat/README.md) ★ | ● | ● | ● | ● | Adv | Web | real | · | · |
-| [`ops_console`](#ops-console) † | ○ | ○ | ○ | ○ | Adv | Web | · | · | · |
+| [`ops_console`](ops_console/README.md) † | ○ | ○ | ○ | ○ | Adv | Web | · | · | · |
 | **Food-Rescue Co-op** — [`coop/README.md`](coop/README.md), one constructive world | | | | | | | | | |
 | [`mailbox_llm`](coop/README.md) | ○ | · | · | ● | Adv | CLI | mock | · | · |
 | [`stigmergy`](coop/README.md) | · | ● | · | ○ | Adv | CLI | · | · | · |
@@ -140,23 +140,17 @@ commands); see [shared setup](#shared-setup) first.
 
 ## Ops Console
 
-A generic, read-only dashboard over *any* gateway-enabled node's operational endpoints, in one place:
-`/stats` (node runtime + tripwires), `/gateway/fleet` (cluster snapshot), `/gateway/diagnose` (the
-Legible-Emergence **fleet narrative** — "why is the fleet in this state", in plain English),
-`/gateway/audit` (the tamper-evident signed audit trail — nodes built `--features compliance`),
-`/gateway/kv/keys`, `/metrics`. It's a *dev/reference* tool — **not** a shipped control plane (library,
-not platform); a customer forks it or points Grafana at `/metrics`.
+A generic, read-only dashboard over *any* gateway-enabled node's operational endpoints — `/stats` ·
+`/gateway/fleet` · `/gateway/diagnose` (the Legible-Emergence fleet narrative) · `/gateway/audit` ·
+`/gateway/kv/keys` · `/metrics` — in one place. A *dev/reference* tool, **not** a shipped control plane
+(library, not platform); a customer forks it or points Grafana at `/metrics`.
 
 ```
 cargo run --example ops_console            # → http://127.0.0.1:8099/  (default target 127.0.0.1:9050)
 ```
 
-Then set the host box to any cluster: the **community** skills cluster (`:9050`), a **coop** demo, or a
-**showcase** — `conway` (`:9090`), `stigmergy_viz` / `llm_council_viz` (they print their gateway URL at
-startup), or `microgrid_viz` (`:9091`) / `redistribution_viz` (`:9093`) *run with `--features gateway`*
-(those companion crates have the gateway off by default). Every browser demo self-advertises its UI via
-two KV keys (`ui/viz` = its URL, `ui/label` = a short name) which the console surfaces as a live "↗ label"
-link; each dashboard carries the reverse "⚙ Ops Console" button. The proxy sidesteps CORS.
+Full docs — the tab-by-tab endpoint map, the `ui/viz` two-way linking convention, and which host box to
+point at each demo/showcase — are in **[`ops_console/README.md`](ops_console/README.md)**.
 
 ## Research artifacts
 

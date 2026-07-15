@@ -172,6 +172,7 @@ required-features = ["gateway", "test-util"]
 
 [[example]]
 name              = "ops_console"
+path              = "examples/ops_console/main.rs"
 required-features = ["gateway"]
 
 [profile.release]
