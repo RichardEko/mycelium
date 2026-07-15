@@ -24,10 +24,11 @@ RPC, **no registry and no configured addresses**.
 | You are… | Go to |
 |---|---|
 | **New here** — is this for me? which primitive? which demo? why-not-X? | the **[FAQ](docs/guide/faq.md)** — your map, and the intended first read |
+| **Wanting to see it run** — which demo? | the **[examples](examples/README.md)** — the capability matrix: every runnable example fingerprinted by layer + facet (level · surface · LLM · audit · metrics), each linking to its run-doc |
 | **Building a use case *on* Mycelium** | [Building on Mycelium](docs/guide/building-on-mycelium.md) — the integrator contract (dependency, public-API rule, reserved KV prefixes, a copyable `CLAUDE.md`) |
 | **Wanting the guided depth** | the **[developer guide](docs/guide/README.md)** — 17 chapters, each with a runnable example |
 
-> The rest of this page is a **short orientation** — what the system is, the demos, and a
+> The rest of this page is a **short orientation** — what the system is and a
 > layers-at-a-glance table. Every deep dive lives one link away in the
 > [guide](docs/guide/README.md) and [operations](docs/operations/README.md) docs.
 
@@ -82,29 +83,6 @@ facts → blackboard.
 They compose naturally; the full comparison and when-to-use guide is in
 [guide ch. 00 — Concepts](docs/guide/00-concepts.md#reference--skills-vs-mcp-tools-choosing-the-right-primitive).
 
-## Demos
-
-The full, runnable set — each with an objective, setup, and a walkthrough — lives in
-**[`examples/`](examples/README.md)** (start there; it has the shared setup and the doc index).
-The highlights:
-
-| Demo | What it shows | Start |
-|---|---|---|
-| **Mesh Control UI** — `llm_agent` | Capability emergence across 3 nodes + a live topology UI (11 presets, emergent manager election, simulated failover) | `MOCK_LLM=1 cargo run --example llm_agent --features metrics` → http://127.0.0.1:8100 |
-| **Interactive Chat** — `three_node_demo` | Live MCP tool discovery — tools join a running mesh and the LLM finds them without a restart | [`examples/chat/`](examples/chat/README.md) |
-| **Skills cluster** — SkillRunner | LLM agents as mesh citizens; skills as capabilities, live load-balancing | [`examples/community/`](examples/community/README.md) |
-| **Food-Rescue Co-op** — 12 demos | The whole pattern catalogue in one constructive world | [`examples/coop/`](examples/coop/README.md) |
-| **Agentic Flow Networks** | Tuple-space pull pipeline (stigmergic backpressure) vs a push baseline | [`examples/fluid_pipeline/`](examples/fluid_pipeline/README.md) |
-| **Reasoning ladder** — LangGraph | Local checkpointer → cross-node deploy/reheal, 7 rungs | [`examples/langgraph/`](examples/langgraph/README.md) |
-| **A2A interop** — LangChain / AutoGen | External agents auto-discover skills via `/.well-known/agent.json` | [`examples/a2a_langchain/`](examples/a2a_langchain/README.md) |
-| **Consistency Overlay** — `three_node_demo` (overlay) | Consensus REST cluster + copy-paste Python scenarios | [`tests/overlay/`](tests/overlay/README.md) |
-| **Conway's Game of Life** | The substrate itself — 256 gossip agents coordinate a 16×16 grid | `cargo run --example conway` |
-
-Docker one-liners (no local setup): `make test-llm-agent` (11 scenarios, no Ollama) ·
-`make test-llm-demo` (interactive chat, needs Ollama) · `make test-overlay` (3-node consensus).
-
----
-
 ## Build
 
 ```
@@ -126,6 +104,10 @@ cargo run -- --port 7947 --peers 127.0.0.1:7946   # joins via the first
 Type `set k v` / `get k` in either terminal and watch the other converge. The richer
 interactive cluster (HTTP dashboards, MCP tools, chat) is
 [`three_node_demo`](examples/chat/README.md).
+
+**No local setup** — Docker one-liners: `make test-llm-agent` (11 scenarios, no Ollama) ·
+`make test-llm-demo` (interactive chat, needs Ollama) · `make test-overlay` (3-node consensus).
+The full runnable set — objective, setup, walkthrough each — is the [examples](examples/README.md).
 
 ## The system, layer by layer
 
