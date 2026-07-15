@@ -36,7 +36,8 @@ Bigger, self-contained worlds — each links to its own README; see [shared setu
 | **Guardrails** — `guardrail_fleet` / `guardrail_wedge` | The three policy tiers (soft-warn → hard-**prevent**): an off-allowlist caller structurally stopped at the provider's Tier-C gate, with a cryptographic denial proof | no | [`mycelium-guardrails/examples/`](../mycelium-guardrails/examples/) |
 | **Agentic Flow Networks** — fluid pipeline | Tuple-space pull pipeline (stigmergic backpressure) vs a push baseline, 10 workers | no | [`fluid_pipeline/`](fluid_pipeline/README.md) |
 | **A2A interop** — LangChain / AutoGen | External agents auto-discover Mycelium skills via `/.well-known/agent.json` | yes | [`a2a_langchain/`](a2a_langchain/README.md) |
-| **Reasoning ladder** — LangGraph-on-Mycelium | 7 rungs from a local checkpointer to a cross-node deploy/reheal flagship | echo model | [`langgraph/`](langgraph/README.md) |
+| **Reasoning ladder** — LangGraph-on-Mycelium | 7 rungs from a local checkpointer to a cross-node deploy/reheal flagship; the Rust mesh side is `mycelium-reason/examples/` (`reason_node` · `reheal_node` · `fleet_reasoning`) | echo model | [`langgraph/`](langgraph/README.md) |
+| **Wiki companion** — `wiki_chat` | Import documents, then chat grounded in the shared wiki (the wiki companion's worked example) | echo model | [`mycelium-wiki/examples/`](../mycelium-wiki/examples/) |
 
 **Browser showcases** (a `/state` feed behind an HTML canvas — the `conway` pattern; run continuously, open `http://127.0.0.1:80xx/`, Ctrl-C to stop; **not** in any CI smoke):
 
@@ -83,12 +84,13 @@ The examples above, re-sorted by which layer of the stack they teach — the thr
 | **I · gossip-KV** (state) | `hello_mesh` · `conway` / `conway-gpu` |
 | **II · signal-mesh** (events, opacity) | `semantic_coordination` (sender auth) · `stigmergy` / `stigmergy_viz` (opacity pheromone) · `diagnostics` (emergent state) |
 | **III · consensus** | `distributed_lock` (lock + fencing) · coop `consensus` (cross-group quorum) · `three_node_demo` (overlay) |
-| **IV · capability / agent** | `hello_capability` · `invoke_skill` · `llm_agent` · coop artifacts (`catalog` · `provisioning` · `model_deploy` · `reheal_deploy`) · `federation_facts` · `mcp_toolgrowth` · `elastic_intent` · LLM (`mailbox_llm` · `llm_pipeline` · `llm_council`) · **security / policy** (`rotation` identity · `guardrail_fleet` / `guardrail_wedge` policy tiers · the signed **audit trail** via `community`) · Python (`a2a_langchain` · `langgraph` · `community`) |
+| **IV · capability / agent** | `hello_capability` · `invoke_skill` · `llm_agent` · coop artifacts (`catalog` · `provisioning` · `model_deploy` · `reheal_deploy`) · `federation_facts` · `mcp_toolgrowth` · `elastic_intent` · LLM (`mailbox_llm` · `llm_pipeline` · `llm_council`) · reasoning (`reason_node` · `reheal_node` · `fleet_reasoning`) · **security / policy** (`rotation` identity · `guardrail_fleet` / `guardrail_wedge` policy tiers · the signed **audit trail** via `community`) · Python (`a2a_langchain` · `langgraph` · `community`) |
 
 **Full-stack / cross-layer:** `three_node_demo` touches all four; `three_arm_workdist` &
 `coordinator_comparison` set the layers *against* each other (broker-RPC vs gossip-KV vs tuple-space
-**pull**). The companions (`redistribution_viz` tuple-space, `microgrid_viz` blackboard,
-`fluid_pipeline`) build *atop* I/II; `ops_console` observes every layer's HTTP surface.
+**pull**). The companions build *atop* I/II — tuple-space (`redistribution` / `redistribution_viz`),
+blackboard (`microgrid` / `microgrid_viz`), and wiki (`wiki_chat`); `ops_console` observes every
+layer's HTTP surface.
 
 ## Shared setup
 
