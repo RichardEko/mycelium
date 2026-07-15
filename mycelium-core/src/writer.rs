@@ -270,18 +270,31 @@ pub fn get_or_spawn_writer(
     let abort_handle = join_handle.abort_handle();
     drop(join_handle); // detach — task exits via peer_shutdown or global shutdown signal
 
-    // Upgrade the pending entry to a live entry with the real abort handle.
-    guard.compute(peer.clone(), |existing| match existing {
-        Some((_, e)) if e.abort_handle.is_none() => papaya::Operation::Insert(WriterEntry {
-            tx: tx.clone(),
-            peer_shutdown: Arc::clone(&peer_shutdown),
-            abort_handle: Some(abort_handle.clone()),
-            dropped: Arc::clone(&e.dropped),
-        }),
+    // Upgrade *my own* pending sentinel to a live entry — identified by the unique `peer_shutdown`
+    // Arc this call created. Matching on `abort_handle.is_none()` alone (the old code) let a
+    // concurrent evict + re-claim (a DIFFERENT caller's fresh pending, also handle == None) be
+    // clobbered: the map then advertised a channel whose task was already told to die, while the
+    // successor's task ran orphaned — a leaked task + a second connection to the peer (audit 2026-07-15).
+    let upgraded = guard.compute(peer.clone(), |existing| match existing {
+        Some((_, e)) if e.abort_handle.is_none() && Arc::ptr_eq(&e.peer_shutdown, &peer_shutdown) =>
+            papaya::Operation::Insert(WriterEntry {
+                tx: tx.clone(),
+                peer_shutdown: Arc::clone(&peer_shutdown),
+                abort_handle: Some(abort_handle.clone()),
+                dropped: Arc::clone(&e.dropped),
+            }),
         _ => papaya::Operation::Abort(()),
     });
 
-    Some(tx)
+    if matches!(upgraded, papaya::Compute::Inserted(..) | papaya::Compute::Updated { .. }) {
+        Some(tx)
+    } else {
+        // My pending was evicted/replaced before I could upgrade — I no longer own the slot. Tear
+        // down the task I spawned so it doesn't run orphaned, and hand back the live winner's sender.
+        let _ = peer_shutdown.send(true);
+        abort_handle.abort();
+        guard.get(peer).map(|e| e.tx.clone())
+    }
 }
 
 /// Removes `peer`'s writer from the map and signals its task to exit.

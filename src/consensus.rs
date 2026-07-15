@@ -370,6 +370,16 @@ pub(crate) fn live_committed_with_hlc(
         return Some((data, hlc)); // malformed lease → treat as permanent
     };
     let written_ms = crate::hlc::physical_ms(entry.timestamp);
+    // BOUNDED-CLOCK-SKEW ASSUMPTION (audit 2026-07-15). This compares the caller's clock (`now_ms`,
+    // currently a wall-clock reading) against the writer's HLC physical component — two clock
+    // *domains*. Under clock skew two nodes can disagree on whether the SAME lease is still live, so
+    // both can briefly believe they hold a `distributed_lock`. Like every lease-based lock (Chubby,
+    // etcd), correctness for a *lease* holds only while skew < lease. The **skew-proof** guard for
+    // correctness-critical writes is the FENCING TOKEN returned alongside — the commit's HLC, which is
+    // monotonic across successive holders (each observes the prior release); a resource that rejects a
+    // lower token is fenced even if two nodes momentarily both think they hold the lock. FOLLOW-UP: put
+    // both sides of this comparison on the causal HLC clock (pass `hlc.current()` physical, not raw
+    // wall time) at all call sites to shrink the window to true unsynchronised skew.
     (now_ms.saturating_sub(written_ms) <= lease_ms).then_some((data, hlc))
 }
 
