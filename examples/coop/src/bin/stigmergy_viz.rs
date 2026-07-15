@@ -42,6 +42,15 @@ const QUEUE_CAP: usize = 8;
 const HTTP_PORT: u16 = 8092;
 /// TTL for reading a pheromone — matches `stigmergy.rs`.
 const PHEROMONE_TTL: Duration = Duration::from_secs(10);
+/// The Mycelium concepts + services this demo exercises — injected into the dashboard's "what you're
+/// seeing" box (the UI-example contract; see docs/wiki/dev/ui-example-contract.md). `tag` is a
+/// layer/service key the shared panel colour-codes (I·II·III·IV · companion · gateway · audit).
+const CONCEPTS: &str = r#"[
+  {"tag":"II","name":"signal-mesh","gloss":"backpressure as an evaporating opacity pheromone (is_opaque)"},
+  {"tag":"IV","name":"capabilities","gloss":"dispatch routes by reading the medium — no coordinator"},
+  {"tag":"companion","name":"tuple-space","gloss":"the work lanes the sorters take from"},
+  {"tag":"gateway","name":"gateway + metrics","gloss":"/stats · /gateway/diagnose · /metrics — this Ops Console"}
+]"#;
 
 // ── Shared snapshot served to the browser ─────────────────────────────
 struct DepotView {
@@ -211,8 +220,9 @@ async fn serve_http(state: Arc<Mutex<VizState>>, gw_port: u16) {
                     "<a class=\"opsbtn\" href=\"http://127.0.0.1:8099/?target=127.0.0.1:{gw_port}\" \
                      title=\"Open this cluster in the Mycelium Ops Console\">⚙ Ops Console</a>"
                 );
-                let html =
-                    include_str!("stigmergy_viz.html").replace("__OPS_CONSOLE_LINK__", &console_link);
+                let html = include_str!("stigmergy_viz.html")
+                    .replace("__OPS_CONSOLE_LINK__", &console_link)
+                    .replace("__CONCEPTS__", CONCEPTS);
                 let response = format!(
                     "HTTP/1.1 200 OK\r\n\
                      Content-Type: text/html; charset=utf-8\r\n\

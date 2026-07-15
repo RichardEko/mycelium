@@ -56,6 +56,14 @@ const HTTP_PORT: u16 = 8090;
 /// The viewer agent also exposes the mycelium gateway here, so the Ops Console can watch the
 /// 256-node mesh (`/stats` · `/gateway/fleet` · `/gateway/diagnose`).
 const OPS_PORT: u16 = 9090;
+/// The Mycelium concepts + services this demo exercises — injected into the dashboard's "what you're
+/// seeing" box (the UI-example contract; see docs/wiki/dev/ui-example-contract.md). `tag` is a
+/// layer/service key the shared panel colour-codes (I·II·III·IV · companion · gateway · audit).
+const CONCEPTS: &str = r#"[
+  {"tag":"I","name":"gossip-KV","gloss":"each cell is a KV entry — the grid converges by gossip (LWW · HLC)"},
+  {"tag":"I","name":"anti-entropy","gloss":"Merkle anti-entropy heals divergence between the 256 agents"},
+  {"tag":"gateway","name":"gateway + metrics","gloss":"/stats · /gateway/fleet · /metrics — this Ops Console"}
+]"#;
 const TICK_MS: u64 = 300;
 const RENDER_OFFSET_MS: u64 = 180;
 const SETTLE_MS: u64 = 3_000;
@@ -167,7 +175,9 @@ async fn serve_http(snapshot: Arc<Mutex<GridSnapshot>>) {
                 } else {
                     String::new()
                 };
-                let html = include_str!("conway.html").replace("__OPS_CONSOLE_LINK__", &console_link);
+                let html = include_str!("conway.html")
+                    .replace("__OPS_CONSOLE_LINK__", &console_link)
+                    .replace("__CONCEPTS__", CONCEPTS);
                 let response = format!(
                     "HTTP/1.1 200 OK\r\n\
                      Content-Type: text/html; charset=utf-8\r\n\

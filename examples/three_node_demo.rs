@@ -1458,6 +1458,15 @@ header h1{font-size:1.05rem;font-weight:600;color:#a78bfa}
   <h1>&#127812; Mycelium Chat</h1>
   <div id="mesh-info">connecting…</div>
 </header>
+<details style="margin:12px auto;max-width:760px;border:1px solid #30363d;border-radius:10px;padding:0 14px;color:#8b949e;font-size:12.5px;background:rgba(255,255,255,.02)">
+  <summary style="cursor:pointer;padding:9px 0;font-size:11px;text-transform:uppercase;letter-spacing:.08em">What you're seeing &middot; Mycelium concepts</summary>
+  <div style="padding:2px 0 12px;line-height:1.75">
+    <b style="color:#58a6ff">gossip-KV</b> — MCP tools discovered via KV; tools join a running mesh &middot;
+    <b style="color:#a78bfa">capabilities</b> — broker-less tool discovery + specialised routing &middot;
+    <b style="color:#3fb950">consensus</b> — the consistency-overlay cluster (overlay role) &middot;
+    <b style="color:#a78bfa">LLM / MCP</b> — the chat agent finds + calls tools without restart
+  </div>
+</details>
 <div id="chat"></div>
 <div id="input-area">
   <textarea id="msg" rows="1" placeholder="Ask anything — weather, maths, Wikipedia, web…"></textarea>

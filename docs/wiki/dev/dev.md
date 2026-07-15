@@ -28,6 +28,9 @@ pages here cite `src/` / `mycelium-core/src/` rather than paraphrasing it.
   `/metrics` surface.
 - **[operations.md](operations.md)** — diagnostics endpoints, task-count reference, feature
   gates, the ops label.
-- **[examples.md](examples.md)** — the coop suite, AFN pipeline, A2A community demos.
+- **[examples.md](examples.md)** — the coop suite, AFN pipeline, A2A community demos; the by-layer
+  map and the browser-showcase set.
+- **[ui-example-contract.md](ui-example-contract.md)** — what every browser (UI) example must do:
+  gateway+metrics features, Ops Console linking, opt-in audit, and the "what you're seeing" concepts box.
 - **[history.md](history.md)** — the delivery ledger: v1.x + v2.0 workstreams, PR ranges,
   what was declined-with-evidence.

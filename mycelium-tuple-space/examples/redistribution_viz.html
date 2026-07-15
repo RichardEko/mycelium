@@ -97,6 +97,16 @@
     border-top: 1px solid var(--border);
   }
   footer code { background: var(--surface2); padding: 1px 6px; border-radius: 4px; color: var(--text2); }
+  /* ── UI-example contract: the "what you're seeing" concepts box ── */
+  .explains{margin:14px 20px 0;border:1px solid var(--border);border-radius:12px;background:rgba(255,255,255,.02);padding:0 16px}
+  .explains summary{cursor:pointer;list-style:none;padding:11px 0;font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted)}
+  .explains summary b{color:var(--text);text-transform:none;letter-spacing:0;font-size:13px}
+  .explains summary::-webkit-details-marker{display:none}
+  .concepts{display:flex;flex-direction:column;gap:7px;padding:2px 0 14px}
+  .concept{display:flex;align-items:baseline;gap:10px;font-size:13px;flex-wrap:wrap}
+  .ctag{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;font-weight:700;border:1px solid;border-radius:5px;padding:1px 7px;min-width:38px;text-align:center;flex:none}
+  .cname{font-weight:600;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;color:var(--text)}
+  .cgloss{color:var(--muted)}
 </style>
 </head>
 <body>
@@ -119,6 +129,24 @@
   </div>
   __OPS_CONSOLE_LINK__
 </header>
+
+<details class="explains" open>
+  <summary>What you're seeing · <b>Mycelium concepts &amp; services</b></summary>
+  <div class="concepts" id="concepts"></div>
+</details>
+<script>
+  // UI-example contract: render the injected concept list as colour-coded chips (shared snippet).
+  (function(){
+    const C = __CONCEPTS__;
+    const COL = {I:"#58a6ff",II:"#d29922",III:"#3fb950",IV:"#a78bfa",companion:"#39c5bb",gateway:"#8b949e",audit:"#f85149",security:"#f85149"};
+    const box = document.getElementById("concepts");
+    if(box && Array.isArray(C)) box.innerHTML = C.map(function(c){
+      const col = COL[c.tag] || "#8b949e";
+      return '<div class="concept"><span class="ctag" style="border-color:'+col+';color:'+col+'">'+c.tag+
+        '</span><span class="cname">'+c.name+'</span><span class="cgloss">'+c.gloss+'</span></div>';
+    }).join("");
+  })();
+</script>
 
 <div class="stage-wrap"><canvas id="stage" width="1400" height="620"></canvas></div>
 

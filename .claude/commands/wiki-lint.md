@@ -106,6 +106,14 @@ for recurrence: `dev/examples.md` should **cite `examples/README.md` § The suit
 index) as the canonical list, so the wiki synthesizes rather than maintaining a parallel enumeration
 that silently falls behind.
 
+**UI-example contract** ([`dev/ui-example-contract.md`](../../docs/wiki/dev/ui-example-contract.md)).
+For every **browser** example (a `.rs` that `include_str!`s an `.html`, or serves inline HTML), verify
+it: (1) advertises `ui/viz` + injects `__OPS_CONSOLE_LINK__`; (2) injects `__CONCEPTS__` (or, for the
+documented inline-HTML/no-gateway exceptions `three_node_demo`/`conway-gpu`, carries the equivalent
+static panel); (3) has a documented run command carrying `gateway,metrics` (or `metrics` where gateway
+is default). A UI example missing the concepts box, the Ops Console link, or the metrics feature is a
+finding. Enumerate them the tree-derived way: `grep -rl 'include_str!.*\.html' … examples`.
+
 ## Output
 
 Fix findings directly (they're doc edits), write the dated `.log/` lint entries naming what

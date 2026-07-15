@@ -36,6 +36,15 @@ const HTTP_PORT: u16 = 8091;
 /// The mycelium gateway (for the Ops Console) — served only when built `--features gateway`
 /// (this companion crate has default-features off). `/stats` · `/gateway/fleet` · `/gateway/diagnose`.
 const OPS_PORT: u16 = 9091;
+/// The Mycelium concepts + services this demo exercises — injected into the dashboard's "what you're
+/// seeing" box (the UI-example contract; see docs/wiki/dev/ui-example-contract.md). `tag` is a
+/// layer/service key the shared panel colour-codes (I·II·III·IV · companion · gateway · audit).
+const CONCEPTS: &str = r#"[
+  {"tag":"I","name":"gossip-KV","gloss":"the blackboard is KV entries — LWW · HLC"},
+  {"tag":"companion","name":"blackboard","gloss":"rd/in non-destructive reads + competitive exactly-once claims"},
+  {"tag":"IV","name":"capabilities","gloss":"depots advertise; work resolves by need, no dispatcher"},
+  {"tag":"gateway","name":"gateway + metrics","gloss":"/stats · /gateway/fleet · /metrics — this Ops Console"}
+]"#;
 const RENDER_MS: u64 = 500;
 const POST_BASE_MS: u64 = 800;
 const READ_MS: u64 = 600;
@@ -150,8 +159,9 @@ async fn serve_http(state: Arc<Mutex<VizState>>) {
                 } else {
                     String::new()
                 };
-                let html =
-                    include_str!("microgrid_viz.html").replace("__OPS_CONSOLE_LINK__", &console_link);
+                let html = include_str!("microgrid_viz.html")
+                    .replace("__OPS_CONSOLE_LINK__", &console_link)
+                    .replace("__CONCEPTS__", CONCEPTS);
                 let response = format!(
                     "HTTP/1.1 200 OK\r\n\
                      Content-Type: text/html; charset=utf-8\r\n\

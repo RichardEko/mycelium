@@ -40,6 +40,16 @@ const HTTP_PORT: u16 = 8095;
 /// The Mycelium gateway port (distinct from the dashboard) — lets the Ops Console target this node.
 const OPS_PORT: u16 = 9095;
 const GROUP: &str = "council";
+/// The Mycelium concepts + services this demo exercises — injected into the dashboard's "what you're
+/// seeing" box (the UI-example contract; see docs/wiki/dev/ui-example-contract.md). `tag` is a
+/// layer/service key the shared panel colour-codes (I·II·III·IV · companion · gateway · audit).
+const CONCEPTS: &str = r#"[
+  {"tag":"companion","name":"wiki","gloss":"the shared decision store — data-plane readers, no node, no curator"},
+  {"tag":"IV","name":"LLM on the mesh","gloss":"a local Ollama model served as llm/{model}; call_prompt_skill routes over the mesh"},
+  {"tag":"IV","name":"capabilities","gloss":"specialists routed by domain; a synthesizer merges"},
+  {"tag":"I","name":"gossip-KV","gloss":"the served-model capability + ui/viz live in KV"},
+  {"tag":"gateway","name":"gateway + metrics","gloss":"/stats · /gateway/kv · /metrics — this Ops Console"}
+]"#;
 
 /// Is `model` actually pulled on a local Ollama? `None` = Ollama isn't running on :11434; `Some(false)`
 /// = it's running but that model isn't pulled. We only serve (and claim) the model when it's really
@@ -436,7 +446,9 @@ async fn serve_http(
                     String::new()
                 };
                 ("text/html; charset=utf-8",
-                 include_str!("wiki_council_viz.html").replace("__OPS_CONSOLE_LINK__", &console))
+                 include_str!("wiki_council_viz.html")
+                     .replace("__OPS_CONSOLE_LINK__", &console)
+                     .replace("__CONCEPTS__", CONCEPTS))
             };
 
             let resp = format!(
