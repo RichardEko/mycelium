@@ -41,7 +41,7 @@ promote durable project knowledge to the wiki.
 | Wire format + version policy | `mycelium-core/src/framing.rs` (top) |
 | HLC design + limits | `mycelium-core/src/hlc.rs` module doc |
 | Capability model | `src/capability.rs` |
-| Purpose / roadmap | `docs/philosophy.html` · `ROADMAP.md` |
+| Purpose / roadmap | `docs/philosophy.md` · `ROADMAP.md` |
 | Docs map (guide, operations, design, plans, publications, analysis) | `docs/README.md` |
 | Architecture, concurrency, testing lore, security, companions, history | the wiki: [`docs/wiki/`](docs/wiki/wiki.md) |
 

@@ -4,7 +4,7 @@ changelog) so drift is a diff, not a re-derivation. This is the documentation an
 `mycelium-analysis`: it measures the *absence of explanation gaps*, not the presence of pages.
 
 **Why a matrix.** The framework is Diátaxis (Procida) crossed with audience: **WHAT** = Reference
-(`00-concepts`, `src/lib.rs` canon), **WHY** = Explanation (`philosophy.html`, `design/` ADRs,
+(`00-concepts`, `src/lib.rs` canon), **WHY** = Explanation (`philosophy.md`, `design/` ADRs,
 papers), **HOW** = Tutorial + How-to (`guide/` chapters, `cookbook`, `examples/`, `operations/`
 runbooks). The audience axis (**Dev** = integrator building on the public API · **Ops** = operator
 running a cluster) is the crossing Diátaxis lacks and where most real gaps hide (a concept with a
@@ -49,7 +49,7 @@ Cross-check against `src/lib.rs` (public re-exports) so nothing shipped is missi
 
 | Cell | Home |
 |---|---|
-| WHY (shared Dev+Ops) | `docs/philosophy.html` · `docs/design/*.md` ADRs · `docs/publications/` |
+| WHY (shared Dev+Ops) | `docs/philosophy.md` · `docs/design/*.md` ADRs · `docs/publications/` |
 | WHAT · Dev | `docs/guide/00-concepts.md` · `src/lib.rs` crate doc · `docs/reference/` |
 | HOW · Dev | `docs/guide/*.md` chapters · `docs/guide/cookbook.md` · `examples/` |
 | WHAT/HOW · Ops | `docs/operations/*.md` runbooks (+ its `README.md` funnel) |

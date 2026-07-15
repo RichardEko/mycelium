@@ -30,7 +30,7 @@ flatlines at 9.)
 
 Read the following files before rating anything. They are the canonical sources:
 
-- `docs/philosophy.html` — the authoritative definition of purpose; anchor for
+- `docs/philosophy.md` — the authoritative definition of purpose; anchor for
   dimensions 1 and 2. Read this first.
 - `README.md`, `ROADMAP.md`, `CLAUDE.md` — architecture, layer model, active plans.
 - `Cargo.toml` — features, dependencies, description.
@@ -101,7 +101,7 @@ know we did not know. So:
 ### Identity
 
 **1. Philosophy / Coherence with Goal**
-Anchor: `docs/philosophy.html`. Does the implemented feature set serve the stated
+Anchor: `docs/philosophy.md`. Does the implemented feature set serve the stated
 purpose without drift? Is anything present that contradicts or dilutes what the
 philosophy document says the system is? Check README and ROADMAP for any claims
 that conflict with the philosophy.
@@ -276,7 +276,7 @@ Check `CHANGELOG.md`, the wire version policy at the top of `src/framing.rs`
 Is technical debt being paid down or accruing?
 
 **23. Documentation**
-Read `docs/guide/` chapters 01–12, `docs/philosophy.html`, `README.md`. Are
+Read `docs/guide/` chapters 01–12, `docs/philosophy.md`, `README.md`. Are
 the guide's code examples consistent with the current API (sub-handle syntax)?
 Are they runnable? Is the philosophy document current? Is there a clear path
 from zero to productive for a newcomer?

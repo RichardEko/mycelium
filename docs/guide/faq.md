@@ -22,7 +22,7 @@ you already operate. Reach for a workflow engine (LangGraph, Temporal) or a brok
 The sweet spot: coordination **at scale, without a single point of control** —
 fleets that partition and heal, edge/on-prem meshes, systems where "who is in
 charge" must be emergent and recallable. The rationale is in
-[`philosophy.html`](../philosophy.html) and [`ROADMAP.md`](../../ROADMAP.md)
+[`philosophy.md`](../philosophy.md) and [`ROADMAP.md`](../../ROADMAP.md)
 ("The Structural Inversion").
 
 ---

@@ -234,7 +234,7 @@ coordinator-free system can offer. → [`consensus`](../../examples/coop/src/bin
 | AgentFacts | standard | self-certified cross-domain federation (`/.well-known/agent-facts.json`) | `federation_facts` |
 
 **Next:** [01 · Gossip KV](01-gossip-kv.md). For the full design argument behind
-this vocabulary, see [philosophy.html](../philosophy.html).
+this vocabulary, see [philosophy.md](../philosophy.md).
 
 ---
 

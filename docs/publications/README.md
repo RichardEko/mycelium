@@ -109,7 +109,7 @@ signal for the `/publication-lint` skill (is it catching overclaims before human
       airtight). Updated to "a single-writer curator + *per-section compare-and-swap* on the store — the
       curator serialises edits, and the CAS keeps even a transient dual-curator (mid-failover) from
       losing one." Keeps the slide's "the hard problem dissolves" thrust while naming the real mechanism.
-  §6 relative links in both decks + `philosophy.html` all resolve.
+  §6 relative links in both decks + `philosophy.md` all resolve.
 - 2026-07-13 (lint run 3): **clean — verified the newly-added persuasion content, not a fresh
   finding.** Diff-gated to the deck edits made since run 2 (the new "The CAP Choice" slide + its
   consistency spectrum + the `dumb store`→section-CAS fix). Verified against code: the slide's **CP
@@ -146,7 +146,7 @@ signal for the `/publication-lint` skill (is it catching overclaims before human
   console.rs`) — consistent, no drift. Sole finding fixed; rest of the persuasion surface unchanged
   since run 4.
 - 2026-07-14 (lint run 6): **clean — no persuasion-surface change since run 5, and the session's
-  shipped work introduced no drift.** Diff-gated: no `docs/publications/` or `philosophy.html` commit
+  shipped work introduced no drift.** Diff-gated: no `docs/publications/` or `philosophy.md` commit
   since run 5. Verified the deltas that *could* have staled a deck claim: (a) the examples audit
   registered `diagnostics` — re-counted the coop suite (16 bins − 2 `*_viz` = **14 non-viz batch
   demos**), so `presentation.html`'s **"fourteen-demo"** is still exact (registration made an existing
@@ -157,7 +157,7 @@ signal for the `/publication-lint` skill (is it catching overclaims before human
   and now better-demonstrated by — the papers'/philosophy's "no orchestrator" positioning, no
   overclaim. No findings.
 - 2026-07-15 (lint run 7): **one Minor staleness — the deck's browser-showcase list fell behind the
-  tree.** No `docs/publications/`/`philosophy.html` commit since run 6, but the session shipped a
+  tree.** No `docs/publications/`/`philosophy.md` commit since run 6, but the session shipped a
   **new browser showcase**, `wiki_council_viz` (`:8095`, a live chat over a fleet of wiki-grounded
   specialists, no LLM key), and `presentation.html`'s "Want to watch it?" callout enumerated only
   `:8090`–`:8094` — a *pinned list that goes stale the moment the set grows* (the same class as the
@@ -180,16 +180,16 @@ signal for the `/publication-lint` skill (is it catching overclaims before human
   an overclaim. The separate showcase-metrics change touched no persuasion surface. No findings.
 - 2026-07-15 (lint run 10): **clean — no persuasion-surface change.** The UI-example-contract work
   (the contract page, the concepts box on nine browser examples, the wiki-lint check) touched
-  `examples/`, `docs/wiki/`, and the skill — no `docs/publications/` or `philosophy.html` commit since
+  `examples/`, `docs/wiki/`, and the skill — no `docs/publications/` or `philosophy.md` commit since
   run 9. Nothing to reconcile. No findings.
 - 2026-07-15 (lint run 11): **clean — no persuasion-surface change.** The examples capability-matrix +
   five new run-doc READMEs touched `examples/`, `docs/wiki/`, and `docs/guide/09-security.md` — no
-  `docs/publications/` or `philosophy.html` commit since run 10, and no deck/paper links into the renamed
+  `docs/publications/` or `philosophy.md` commit since run 10, and no deck/paper links into the renamed
   `examples/README.md` sections. Nothing to reconcile. No findings.
 - 2026-07-15 (lint run 12): **clean — no persuasion-surface change.** The matrix-offpage-links +
   ops_console externalization + slimmed showcases touched `examples/`, `docs/wiki/`, `docs/guide/`, and
-  `docs/plans/` — no `docs/publications/` or `philosophy.html` commit since run 11, and no deck/paper
+  `docs/plans/` — no `docs/publications/` or `philosophy.md` commit since run 11, and no deck/paper
   links into the renamed `examples/README.md` sections. Nothing to reconcile. No findings.
 - 2026-07-15 (lint run 13): **clean — no persuasion-surface change.** The README Demos→nav change touched
-  only root `README.md`; no `docs/publications/` or `philosophy.html` commit since run 12, no deck/paper
+  only root `README.md`; no `docs/publications/` or `philosophy.md` commit since run 12, no deck/paper
   links into the removed `#demos` anchor. Nothing to reconcile. No findings.

@@ -12,4 +12,4 @@ inversion a compile-time guarantee. Pages:
   event-driven fan-out. Read before "optimizing" anything in the gossip loop.
 
 Canon: `src/lib.rs` crate doc (API + KV-namespace ownership table), `ROADMAP.md` (layer
-model + milestones), `docs/philosophy.html` (purpose).
+model + milestones), `docs/philosophy.md` (purpose).

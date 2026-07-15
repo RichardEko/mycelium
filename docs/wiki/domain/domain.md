@@ -4,7 +4,7 @@
 
 Knowledge that survives a rewrite (routing test → *yes*): the theory Mycelium implements,
 the published corpus, and the commercial strategy built on both. Purpose anchor:
-`docs/philosophy.html`.
+`docs/philosophy.md`.
 
 ## Areas
 

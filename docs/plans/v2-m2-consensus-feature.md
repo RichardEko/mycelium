@@ -12,7 +12,7 @@ an opt-in Cargo feature so minimal embeds can drop ~2,200 LOC of Paxos-style mac
 
 ## Philosophy binding
 
-Sanctioned directly by `docs/philosophy.html` §2: *"Consensus is an emergent higher-order
+Sanctioned directly by `docs/philosophy.md` §2: *"Consensus is an emergent higher-order
 concern, not a substrate primitive."* Gating it out removes an optional layer; it never
 touches the substrate (Layers I+II, in `mycelium-core`). Mixed clusters are
 philosophy-consistent: forwarding lives in `mycelium-core` (unconditional), so a

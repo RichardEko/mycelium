@@ -9,7 +9,7 @@
 //! The split (ROADMAP §v2.0 M1) lets bare-metal / embedded callers depend on the
 //! substrate without pulling in the Layer III+ dependency tree, and draws the crate
 //! boundary at the documented II↔III seam. The substrate never references a
-//! higher-layer type (the inverted-dependency invariant — see `docs/philosophy.html`).
+//! higher-layer type (the inverted-dependency invariant — see `docs/philosophy.md`).
 
 pub mod codec;
 pub mod config;

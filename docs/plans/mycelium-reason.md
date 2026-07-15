@@ -114,7 +114,7 @@ application-layer, much of it in `mycelium-py`.
 
 ## Non-goals
 
-- A first-class **orchestrator** (the substrate's deliberate non-goal — `docs/philosophy.html`).
+- A first-class **orchestrator** (the substrate's deliberate non-goal — `docs/philosophy.md`).
 - **Declarative prompt optimization** (DSPy-style compile-from-examples) — research-track, watch-only.
 - Reimplementing a provider SDK, or a typed-output library — Tier 1 adopts those.
 

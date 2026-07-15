@@ -11,7 +11,7 @@ persuasion and reality, and neither `wiki-lint` nor `doc-coverage` looks at thes
 
 **Targets.** `docs/publications/presentation.html` (engineer-facing deck), `docs/publications/
 customer-pitch.html` (buyer-facing deck), `docs/publications/paper1/`, `docs/publications/paper2a/`,
-and `docs/philosophy.html`. Rendered PDFs are derived — lint the source.
+and `docs/philosophy.md`. Rendered PDFs are derived — lint the source.
 
 ## 1. Claim-vs-reality (the load-bearing check)
 
@@ -36,7 +36,7 @@ direction. And never fix an *undersell* by deleting a true capability; state it 
 
 ## 2. Overclaim & the honesty of the ceiling
 
-The substrate's own honest limits are in `philosophy.html` §"What This Architecture Is Not" — every
+The substrate's own honest limits are in `philosophy.md` §"What This Architecture Is Not" — every
 deck/paper must stay inside them. Flag:
 
 - **CFT, not BFT.** Mycelium is coordinator-free / crash-fault-tolerant; **Byzantine fault
@@ -64,7 +64,7 @@ shape of the caught bug — flag every unlabelled forward-looking claim.
 
 ## 5. Cross-artifact consistency
 
-The two decks, the papers, and `philosophy.html` must agree with each other and with the wiki on the
+The two decks, the papers, and `philosophy.md` must agree with each other and with the wiki on the
 core facts: the layer model, the scope vocabulary, the coordinator-free-CFT thesis, and the
 "emergence of coordination is a prediction, not an embarrassment" argument. A number or claim that
 differs across two artifacts is a finding (fix both to the code-canonical value).

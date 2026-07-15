@@ -18,7 +18,7 @@ across the tree, deliberately at the root rather than filed under one area.
 
 | Doc | The stance it anchors |
 |---|---|
-| [`philosophy.html`](philosophy.html) | **Purpose** — what Mycelium *is* and why (the coordinator-free thesis). The authoritative definition of intent. |
+| [`philosophy.md`](philosophy.md) | **Purpose** — what Mycelium *is* and why (the coordinator-free thesis). The authoritative definition of intent. |
 | [`threat-model.md`](threat-model.md) | **Security posture** — the crown-jewel blast-radius model: what an attacker gains at each trust boundary, the mitigations, the residual risk an operator owns. A standing posture (updated as the system evolves), not a point-in-time decision. |
 
 ## The seven areas
@@ -36,7 +36,7 @@ across the tree, deliberately at the root rather than filed under one area.
 
 ## Which area answers which question?
 
-- *"What is this / why coordinator-free?"* → `philosophy.html`, then [guide 00](guide/00-concepts.md).
+- *"What is this / why coordinator-free?"* → `philosophy.md`, then [guide 00](guide/00-concepts.md).
 - *"How do I build with it?"* → [`guide/`](guide/) + the [cookbook](guide/cookbook.md).
 - *"How do I deploy / monitor / scale / secure a cluster?"* → [`operations/`](operations/).
 - *"Why was X designed this way (and not Y)?"* → [`design/`](design/) (decisions) + [`plans/`](plans/) (the execution record's reasoning).

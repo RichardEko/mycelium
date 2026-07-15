@@ -10,7 +10,7 @@ mycelium-analysis / wiki-lint family.
   and carries a **calibration** section (a `Clear` cell later found thin → a ledger line — the
   discipline that makes it compound, borrowed from M2).
 - **`/publication-lint`** (`.claude/commands/publication-lint.md`) — the honesty-lint for the
-  **persuasion surface** (decks, papers, `philosophy.html`). Claims-vs-code, overclaim (CFT-not-BFT,
+  **persuasion surface** (decks, papers, `philosophy.md`). Claims-vs-code, overclaim (CFT-not-BFT,
   unearned absolutes), roadmap-vs-shipped labelling, binding-framing compliance (library-not-platform,
   constructive examples), cross-artifact consistency. Weights *overclaim* (roadmap-sold-as-shipped) as
   Critical — the class of bug a human caught in the customer pitch, not a mechanism. Keeps an

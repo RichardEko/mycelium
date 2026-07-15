@@ -3,7 +3,7 @@
 Branch: `v2/m1-mycelium-core`. Milestone: ROADMAP §v2.0 M1 (WS-A keystone). This is the
 execution record; the canonical milestone design is in `ROADMAP.md`.
 
-## Philosophy binding (reviewed against `docs/philosophy.html`)
+## Philosophy binding (reviewed against `docs/philosophy.md`)
 
 M1 is the **Layering Principle made physical**: the substrate = Layers I + II (KV + signal
 mesh), which "has no concept of agreement, coordination, or workflow"; everything else *uses*
@@ -140,7 +140,7 @@ classified core fields.
 
 ## Stage 6 — philosophy compliance review (PASS, 2026-06-15)
 
-Reviewed against `docs/philosophy.html` (Layering Principle, litmus tests, inverted
+Reviewed against `docs/philosophy.md` (Layering Principle, litmus tests, inverted
 dependency §5a, library-not-platform) with evidence:
 
 | Criterion | Result | Evidence |

@@ -8,7 +8,7 @@ record** is [`v2-wsg-g3-blackboard.md`](v2-wsg-g3-blackboard.md), and the API do
 is the crate's `lib.rs`. Kept as the *why* behind the crate.
 
 *(Originally recorded 2026-06-12 as a deferred sketch alongside the
-boundary-of-validity analysis in Paper 1 §9.4 and `docs/philosophy.html`, "Where
+boundary-of-validity analysis in Paper 1 §9.4 and `docs/philosophy.md`, "Where
 associative matching earns its keep" — promote-when-the-trigger-fires. It fired.)*
 
 ## What it is

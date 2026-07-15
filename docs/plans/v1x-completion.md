@@ -25,7 +25,7 @@ A workstream is *done* only when all of:
    unauthorized capability assertion → rejected; forged role write → rejected).
 3. **Documented** across all four surfaces (see Workstream 7): dev (`CLAUDE.md`,
    `docs/guide/`, `README.md`), operations (`docs/operations/`, security/threat model),
-   presentation (`docs/publications/`, `philosophy.html`, positioning), roadmap
+   presentation (`docs/publications/`, `philosophy.md`, positioning), roadmap
    (flip the Gap Summary row to **Complete (date)**, update the four-sub-gates prose).
 4. **Compliance-gated** — verified against the **Core Principles** (no coordinator;
    detection-not-prevention; single substrate; layer discipline) and the **M16
@@ -182,7 +182,7 @@ four surfaces never drift (the lesson from this session's stale-prose finds):
   `compliance` feature now real not stub).
 - **Operations:** `docs/operations/` runbooks (RBAC, audit/evidence, SSO, cert rotation,
   data-at-rest, egress), `tuning.md` if new knobs.
-- **Presentation:** `docs/publications/`, `philosophy.html`, the compliance-evidence /
+- **Presentation:** `docs/publications/`, `philosophy.md`, the compliance-evidence /
   crown-jewel positioning narratives, [[project_compliance_strategy]] alignment.
 - **Roadmap:** flip each **Gap Summary** row Pending → **Complete (date)**; update the
   four-sub-gates prose from "*In flight*"/"*Still to design*" to done; reconcile the

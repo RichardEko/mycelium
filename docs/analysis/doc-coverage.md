@@ -164,7 +164,7 @@ scalars. Deliberately **no per-lock gauge** (cardinality) — locks are consensu
 - **RPC** discoverability → cookbook recipe links the service-layer reference.
 
 ### Tier 3 — WHY / discoverability polish
-- **Legible Emergence** got a WHY landing in `philosophy.html` (under Emergent Levels / Anderson).
+- **Legible Emergence** got a WHY landing in `philosophy.md` (under Emergent Levels / Anderson).
 - **`explain` gateway-only** made intentional in `diagnostics.md` + `src/lib.rs` (it is a cross-node
   `sys.explain` RPC fan-out, not a local read — no in-process accessor by design).
 - **System→Cluster** ops note in `observability.md` (the gateway still accepts `"system"`).

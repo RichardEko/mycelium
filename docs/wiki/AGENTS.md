@@ -23,7 +23,7 @@ compiler, where rustdoc renders it and drift is closest to detection:
 | Wire format + version policy | `mycelium-core/src/framing.rs` (top) |
 | HLC design + limits | `mycelium-core/src/hlc.rs` module doc |
 | Capability/requirement model | `src/capability.rs` |
-| Purpose / philosophy | `docs/philosophy.html` |
+| Purpose / philosophy | `docs/philosophy.md` |
 | Security posture | `docs/threat-model.md` |
 
 **The wiki never duplicates canon — it cites it** (path, or `path § heading`), the way the other

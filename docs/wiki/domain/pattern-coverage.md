@@ -173,5 +173,5 @@ this axis: conversation memory, run-level evals, and the harder demos (a real LL
 
 A first-class **orchestrator / coordinator primitive**. The thesis is coordinator-free: you can
 *build* one on the public API, but the substrate will not hand you one. Counting it as missing
-coverage contradicts [`philosophy.html`](../../philosophy.html) — it is the pattern the project
+coverage contradicts [`philosophy.md`](../../philosophy.md) — it is the pattern the project
 exists to make unnecessary.

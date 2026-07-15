@@ -33,7 +33,7 @@ whether it *acts* on a signal; forwarding is always unconditional. Opacity,
 load-shedding, and demand pressure all emerge from the same mechanism: nodes
 write to their own `sys/load/` prefix, and anything scanning that prefix sees
 a consistent picture without any coordination. See
-[docs/philosophy.html](../philosophy.html) for the full argument.
+[docs/philosophy.md](../philosophy.md) for the full argument.
 
 The third principle is substrate unity: every higher-layer feature — capability
 advertisements, consensus ballots, audit records, tool registrations — is
