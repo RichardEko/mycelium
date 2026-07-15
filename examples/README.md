@@ -79,64 +79,36 @@ not to raw source. The suite READMEs carry the per-example walkthrough + the exa
 
 ★ **flagship** — the marquee demo of its world. † `ops_console` *observes* every layer and both ops
 surfaces (`/audit`, `/metrics`) rather than emitting them — point it at any node below. Every link above
-goes to a **run doc** (README or guide chapter), never raw source; the run commands themselves are in
-[The worlds](#the-worlds) and each suite README.
+goes to a **run doc** (README or guide chapter), never raw source; the exact commands live in each suite
+README (and, for the visual demos, [Browser showcases](#browser-showcases) below).
 
-## The worlds
+## Browser showcases
 
-The suites, in the order a newcomer meets them — each links to its own README (walkthrough + the exact
-commands); see [shared setup](#shared-setup) first.
+Open-and-watch demos — the `/state`-feed-behind-a-canvas pattern `conway` established: run continuously
+(Ctrl-C to stop; **not** in any CI smoke), open `http://127.0.0.1:80xx/`. All follow the
+[UI-example contract](../docs/wiki/dev/ui-example-contract.md) — gateway+metrics on, Ops Console linked,
+opt-in audit, a "what you're seeing" concepts box. See [shared setup](#shared-setup) first; each name
+links to its walkthrough README.
 
-- **The ladder** (Intro rows). One file each, zero LLM, each rung building on the last:
-  `hello_mesh` (the substrate in ~25 lines) → `hello_capability` (broker-less discovery + RPC) →
-  `conway` (*watch* KV convergence) → `distributed_lock` (consensus + a fencing token). Guide chapters
-  01–05 & 11 explain them. Run any with `cargo run --example <name>` — e.g. `cargo run --example
-  hello_mesh` (`conway` wants `--features metrics`); `invoke_skill` pairs with the `community/` cluster.
-- **Food-Rescue Co-op** — [`coop/`](coop/README.md), 14 demos (12 CI + 2 manual real-model) composed in
-  one constructive world: depot nodes rescuing surplus food, no dispatcher. The full pattern catalogue —
-  stigmergy, elastic intent, the autonomic **provisioning ⭐** loop, federation, consensus, the durable
-  **artifact library** (`catalog` · `model_deploy` · `reheal_deploy`), real-model deploy/reheal.
-  `ci_smoke.sh` runs the twelve CI demos Docker-free.
-- **Browser showcases** — the `/state`-feed-behind-a-canvas pattern `conway` established: pitch/booth
-  demos you *open and watch*, run continuously (Ctrl-C to stop; **not** in any CI smoke). All follow the
-  [UI-example contract](../docs/wiki/dev/ui-example-contract.md) — gateway+metrics on, Ops Console linked,
-  opt-in audit, a "what you're seeing" concepts box. Run reference:
+| Showcase | Port | Run |
+|---|:--:|---|
+| [`microgrid_viz`](../mycelium-blackboard/examples/README.md) | `:8091` | `cargo run -p mycelium-blackboard --example microgrid_viz --features gateway,metrics` |
+| [`stigmergy_viz`](coop/README.md) | `:8092` | `cargo run -p mycelium-coop-examples --bin stigmergy_viz --features metrics` |
+| [`redistribution_viz`](../mycelium-tuple-space/examples/README.md) | `:8093` | `cargo run -p mycelium-tuple-space --example redistribution_viz --features gateway,metrics` |
+| [`llm_council_viz`](coop/README.md) | `:8094` | `cargo run -p mycelium-coop-examples --bin llm_council_viz --features metrics` |
+| [`wiki_council_viz`](../mycelium-wiki/examples/README.md) ★ | `:8095` | `cargo run -p mycelium-wiki --example wiki_council_viz --features gateway,llm,metrics` |
+| [`guardrail_viz`](../mycelium-guardrails/examples/README.md) ★ | `:8096` | `cargo run -p mycelium-guardrails --example guardrail_viz --features compliance,gateway,metrics-export` |
+| [`conway`](../docs/guide/01-gossip-kv.md) | `:8090` | `cargo run --example conway --features metrics` |
+| [`conway-gpu`](conway-gpu/README.md) | — | `cargo run --release -p conway-gpu` (GPU/wgpu; no gateway) |
 
-  | Showcase | Port | Run |
-  |---|:--:|---|
-  | [`microgrid_viz`](../mycelium-blackboard/examples/microgrid_viz.rs) | `:8091` | `cargo run -p mycelium-blackboard --example microgrid_viz --features gateway,metrics` |
-  | [`stigmergy_viz`](coop/src/bin/stigmergy_viz.rs) | `:8092` | `cargo run -p mycelium-coop-examples --bin stigmergy_viz --features metrics` |
-  | [`redistribution_viz`](../mycelium-tuple-space/examples/redistribution_viz.rs) | `:8093` | `cargo run -p mycelium-tuple-space --example redistribution_viz --features gateway,metrics` |
-  | [`llm_council_viz`](coop/src/bin/llm_council_viz.rs) | `:8094` | `cargo run -p mycelium-coop-examples --bin llm_council_viz --features metrics` |
-  | [`wiki_council_viz`](../mycelium-wiki/examples/wiki_council_viz.rs) ★ | `:8095` | `cargo run -p mycelium-wiki --example wiki_council_viz --features gateway,llm,metrics` |
-  | [`guardrail_viz`](../mycelium-guardrails/examples/guardrail_viz.rs) ★ | `:8096` | `cargo run -p mycelium-guardrails --example guardrail_viz --features compliance,gateway,metrics-export` |
-  | [`conway`](conway.rs) | `:8090` | `cargo run --example conway --features metrics` |
-  | [`conway-gpu`](conway-gpu/README.md) | — | `cargo run --release -p conway-gpu` (GPU/wgpu; no gateway) |
+`wiki_council_viz` phrases each specialist's grounded answer via a **local model served on the mesh**
+(Ollama), falling back to grounded extraction if absent — no cloud, no key. `guardrail_viz` fires
+invocations at a Tier-C gate and rebuilds the **cryptographic denial proof** live. The four `*_viz` are
+visual variants of the batch coop/companion demos, which stay the CI-gated versions.
 
-  `wiki_council_viz` phrases each specialist's grounded answer via a **local model served on the mesh**
-  (Ollama — `register`/`call_prompt_skill`), falling back to grounded extraction if Ollama is absent —
-  no cloud, no key. `guardrail_viz` lets you fire invocations at a Tier-C gate and watch the
-  **cryptographic denial proof** rebuilt live by a neutral observer. The four `*_viz` above are visual
-  variants of the batch coop/companion demos, which stay the CI-gated versions.
-- **Guardrails** — [`mycelium-guardrails/examples/`](../mycelium-guardrails/examples/): the three policy
-  tiers (soft-warn → hard-**prevent**). `guardrail_wedge` stops an off-allowlist caller at a Tier-C gate
-  with a cryptographic denial proof; `guardrail_fleet` composes all three in a co-op fleet; `guardrail_viz`
-  is the browser showcase. Its `/gateway/audit` **is** the seal — the de-facto **audit** surface alongside
-  `community`.
-- **Skills / community cluster** — [`community/`](community/README.md), the `skillrunner` at `:9050`:
-  LLM agents as first-class mesh citizens (skills = capabilities, live load-balancing). Every invocation
-  writes a **signed audit record**; the mgmt UI (`:9050/mgmt`) shows the trail.
-- **Reasoning / LangGraph** — [`langgraph/`](langgraph/README.md) (Python) over a Rust reason mesh
-  ([`mycelium-reason/examples/`](../mycelium-reason/examples/)): the 7-rung LangGraph-on-Mycelium ladder,
-  `reason_node` · `reheal_node` (the deploy/reheal flagship) · `fleet_reasoning`. Guide
-  [ch. 15](../docs/guide/15-reasoning-and-langgraph.md).
-- **Agentic Flow Networks** — [`fluid_pipeline/`](fluid_pipeline/README.md): a tuple-space **pull**
-  pipeline (stigmergic backpressure) vs a **push** baseline, 10 workers. Concept essay: `flow_networks.html`.
-- **A2A interop** — [`a2a_langchain/`](a2a_langchain/README.md): external LangChain / AutoGen agents
-  auto-discover Mycelium skills via `/.well-known/agent.json`.
-- **Interactive chat** — [`chat/`](chat/README.md), `three_node_demo`: live MCP tool discovery — tools
-  join a running mesh and the LLM finds them without restart (the same binary drives the Docker
-  integration cluster).
+**Everything else** — the starter ladder, the Food-Rescue Co-op suite, guardrails, the community
+skills cluster, reasoning/LangGraph, AFN, A2A, and the interactive chat — is in the
+[capability matrix](#the-capability-matrix) above; click any row for its walkthrough + exact command.
 
 ## Ops Console
 
