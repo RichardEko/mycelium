@@ -6,7 +6,9 @@
 index of every example, the shared-setup section (toolchain / Ollama / Python tier — so no README
 re-explains it), and the **doc template** all example READMEs follow (`## Objective` · `## How to
 run` · `## What it demonstrates` · `## Dev notes`; two variants — single-example and suite — sharing
-one per-example block). `coop/` is the reference implementation of the suite shape.
+one per-example block). `coop/` is the reference implementation of the suite shape. **Every example
+directory now carries a README** following this template — including the companion/reason/guardrails
+`examples/` dirs (added 2026-07-15), so the capability-matrix links land on run-docs, never raw source.
 
 **Capability matrix — the single faceted index.** The front-door
 [`examples/README.md` § The capability matrix](../../../examples/README.md#the-capability-matrix) is the

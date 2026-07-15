@@ -76,3 +76,15 @@ Entry format:
   (the front-door index, now workspace-complete) as the canonical list, so the wiki synthesizes rather
   than maintains a parallel enumeration that silently falls behind. Folded into §4. Fixed: added the
   four missing category bullets to `examples.md`.
+- 2026-07-15: **README section renames broke inbound `#anchor` links silently — twice in one restructure.**
+  The capability-matrix restructure renamed `examples/README.md` sections (`Start here`/`The suites`/`Find
+  one by layer` → `The capability matrix`/`The worlds`, plus `#ops-console`, `#research-artifacts`). Two
+  cross-repo links that pointed *into* the old headings broke: `ui-example-contract.md` → `#find-one-by-layer`
+  (fixed inline during the matrix commit) and `docs/guide/09-security.md` → `#the-suites` (shipped in the
+  matrix commit; caught by *this* lint's §3). §3's dead-link check historically swept **outbound** links
+  from the front-door docs (faq/building-on) but never **inbound** `README.md#anchor` links from the guide
+  and wiki, so a heading rename in a heavily-linked front-door doc broke them with no check watching.
+  **Sharpening (structural):** §3 now sweeps **inbound anchor links** — `grep -rnoE
+  "examples/README\.md#[a-z-]+"` (and the same for any front-door doc whose headings changed) across
+  `docs/` + crate READMEs, and confirms each `#anchor` still matches a live heading. Folded into §3. Fixed:
+  repointed `09-security.md` → `#ops-console`.

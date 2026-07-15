@@ -78,7 +78,13 @@ Every page reachable from its folder-note chain up to `wiki.md`; every relative 
 resolves; every folder has its `<folder>/<folder>.md` folder-note. Also resolve every
 relative link in the external front-door docs (`docs/guide/faq.md`,
 `docs/guide/building-on-mycelium.md`) — they route into the guide/examples and break silently
-when a chapter or example is renamed/moved.
+when a chapter or example is renamed/moved. **Sweep inbound `#anchor` links too, not just
+outbound** — when a heavily-linked front-door doc's *headings* change (e.g. an
+`examples/README.md` section rename), links that point *into* the old heading break silently
+across the repo. `grep -rnoE "examples/README\.md#[a-z-]+" docs/ README.md mycelium-*/` (and the
+same for any front-door doc whose headings you changed) and confirm each `#anchor` still matches a
+live heading. A README restructure shipped two such dead anchors (`#find-one-by-layer`, `#the-suites`)
+before this sweep existed (ledger 2026-07-15).
 
 ## 4. Coverage
 

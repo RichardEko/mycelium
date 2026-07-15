@@ -276,7 +276,7 @@ self-attestation layer references.
 **See it live.** To watch the trail fill rather than read about it: run the
 [`community`](../../examples/community/README.md) skills cluster and invoke a skill — every invocation
 writes a record, and its mgmt UI at `:9050/mgmt` shows the trail — or point the
-[Ops Console](../../examples/README.md#the-suites)'s **Audit** tab at any `compliance`-built node (it
+[Ops Console](../../examples/README.md#ops-console)'s **Audit** tab at any `compliance`-built node (it
 renders each stream's verified badge, chain-tip hash, and records over `GET /gateway/audit`).
 
 → Operator querying, evidence verification, and retention:

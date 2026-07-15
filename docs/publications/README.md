@@ -182,3 +182,7 @@ signal for the `/publication-lint` skill (is it catching overclaims before human
   (the contract page, the concepts box on nine browser examples, the wiki-lint check) touched
   `examples/`, `docs/wiki/`, and the skill — no `docs/publications/` or `philosophy.html` commit since
   run 9. Nothing to reconcile. No findings.
+- 2026-07-15 (lint run 11): **clean — no persuasion-surface change.** The examples capability-matrix +
+  five new run-doc READMEs touched `examples/`, `docs/wiki/`, and `docs/guide/09-security.md` — no
+  `docs/publications/` or `philosophy.html` commit since run 10, and no deck/paper links into the renamed
+  `examples/README.md` sections. Nothing to reconcile. No findings.
