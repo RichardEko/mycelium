@@ -1758,7 +1758,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Self-advertise this node's browser UI (if the role has one) so the Ops Console can offer a
     // live "↗ visualiser" click-through — the `ui/viz` + `ui/label` KV convention (see conway.rs /
-    // ops_console.rs). Only the two UI-serving roles have a page to link to; point the console at
+    // ops_console/main.rs). Only the two UI-serving roles have a page to link to; point the console at
     // this node's gateway (`http_port`) and it discovers the URL below.
     match role.as_str() {
         "llm" => {

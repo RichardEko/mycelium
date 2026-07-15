@@ -59,7 +59,7 @@ Layer explainers: gossip-KV [ch01](../../guide/01-gossip-kv.md) · signal-mesh
   the two coop `*_viz` bins are *additional* to the fourteen above. A showcase paces its loop so the
   emergence is legible (e.g. a `THINK` dwell for the instant `EchoBackend`) — the batch demos race to
   completion, a showcase must be *watchable*.
-- **Ops Console** (`examples/ops_console.rs` + `.html`, `:8099`): a generic, read-only dashboard over
+- **Ops Console** (`examples/ops_console/` — `main.rs` + `.html` + README, `:8099`): a generic, read-only dashboard over
   **any** gateway-enabled node's operational endpoints — `/stats` (runtime + tripwires),
   `/gateway/fleet` (cluster snapshot), `/gateway/diagnose` (the Legible-Emergence *fleet narrative*),
   `/gateway/audit` (the signed audit trail — `compliance`-built nodes), `/gateway/kv/keys`, `/metrics`

@@ -1645,7 +1645,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Self-advertise the Mesh Control UI so the generic Ops Console can offer a live
     // "↗ Mesh Control" click-through — the `ui/viz` + `ui/label` KV convention (see conway.rs /
-    // ops_console.rs). `ui/viz` is a single shared cluster KV key, so write it once (not per node);
+    // ops_console/main.rs). `ui/viz` is a single shared cluster KV key, so write it once (not per node);
     // it points at n-0's control port, which 307-redirects to whichever node is the elected manager.
     // Point the console at any node's gateway (9100/9101/9102) and it discovers this URL.
     let _ = agent_n0.kv().set("ui/viz", format!("http://localhost:{HTTP_PORT_N0}/"));
