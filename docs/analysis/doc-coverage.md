@@ -19,6 +19,19 @@ concern). WHY is usually shared Dev+Ops.
 
 ## Changelog
 
+- **2026-07-15 (run 7)** — diff-gated: **no cell moves; carried from run 6.** The delta is the
+  examples completeness sweep (guardrails · `mycelium-reason` · `wiki_chat` indexed; README restructured
+  into one flow) + the Ops Console **Audit** tab. Concept impact lands on two already-`✓✓✓✓✓` rows:
+  - **Reasoning / LLM / MCP / guardrails · HOW·Dev** — genuinely Clear before: `guide/16-guardrails.md`
+    links the runnable `guardrail_fleet` / `guardrail_wedge`. The user's "no examples for guardrails"
+    gap was examples-*index* discoverability (`examples/README.md` didn't list them), fixed under
+    wiki-lint — **not** a concept-doc gap. No move.
+  - **Security (TLS/RBAC/SSO/audit) · HOW·Dev** — Clear at the **API** level (`09-security.md`
+    § "in practice" already has write/verify + a `GET /gateway/audit` curl), but it cross-linked **no
+    runnable way to *see* the trail** — the "no examples for viewing audit" the user actually hit.
+    **Fixed** (Tier-3 discoverability): a "See it live" pointer to the `community` mgmt UI + the new
+    Ops Console Audit tab. Cell stays ✓. Calibration entry below.
+  Zero `src/`·`mycelium-*/src/` change.
 - **2026-07-14 (run 6)** — diff-gated: **no cell moves; carried from run 5.** Since run 5 the only
   concept-touching docs delta is on **Reasoning / LLM / LangGraph**: the FAQ now cites the langgraph
   `deploy/reheal` rung for its "survives the loss of the orchestrator node" claim (`eb89232`), and
@@ -215,11 +228,23 @@ skepticism, not a re-asserted ✓.
   followed literally, actually *succeed* (or trace to code that makes them succeed) — presence is not
   sufficiency; a silently-no-op instruction is **Thin**, not Clear. Folded into the skill's adversarial
   rule. Fixed: `guide/13-cluster-topology.md`.
+- **2026-07-15 — Security (audit) · HOW·Dev** read `Clear` across runs 1–6: `09-security.md`
+  § "The audit trail in practice" covers the trail's write / verify / query API thoroughly (incl. a
+  `GET /gateway/audit` curl). But it cross-linked **no runnable demo or browser view** of the trail, so
+  a dev's "how do I *watch* this fill?" had no landing. Found by a user question ("we have no examples
+  for viewing audit or guardrails?"). **A lighter hit than a full Clear-found-Thin:** the API-level HOW
+  *was* Clear (curl present), so this is a **runnable-landing** gap, not a mental-model gap. Root cause
+  shares this session's theme — the example that would *be* that landing (`community`, the audit
+  producer) wasn't cross-linked from the concept doc, and the companion examples (guardrails, reason)
+  weren't indexed at all (the examples audit only swept `examples/` + coop). Fixed: a "See it live"
+  pointer in `09-security.md` → the `community` mgmt UI + the new Ops Console **Audit** tab.
+  **Sharpening:** a HOW·Dev `Clear` on a mechanism a reader would want to *watch* (audit, emergence,
+  convergence) should confirm a **runnable / visual landing** is cross-linked, not just the API + a curl.
 
 ## Re-run guidance
 
 The audit was a one-time systematic sweep; a re-run should be a **diff**. Re-audit a concept only
-when its code/docs changed since the last run (run 6 baseline commit `bcd235a`: `git log bcd235a..HEAD -- docs/ src/
+when its code/docs changed since the last run (run 7 baseline commit `a29e8d7`: `git log a29e8d7..HEAD -- docs/ src/
 mycelium-*/src/`). The matrix
 above is the baseline: any cell dropping below ✓ is a regression. The method (four auditors, the
 Clear/Thin/Missing rubric, the exact prompts) is reproducible from this session's transcript. New
