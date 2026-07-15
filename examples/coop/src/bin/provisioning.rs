@@ -22,13 +22,18 @@
 //! optimizer (it echoes its input — a deterministic "optimized route"), so CI needs no wasm
 //! toolchain.
 //!
+//! ## Loads
+//! - **Content** — route/optimize — a WASM component (echo_component.wasm fixture)
+//! - **Type** — `ArtifactKind::WasmComponent`
+//! - **From** — InMemorySource (build-embedded fixture, single-process shortcut — see catalog for the cross-node path) → catalogue → autonomic Provisioner
+//!
 //! Run:  cargo run -p mycelium-coop-examples --bin provisioning
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use coop::common::{alloc_ports, spawn_depot, Donation, DepotOpts};
+use coop::common::{alloc_ports, announce_loads, spawn_depot, Donation, DepotOpts, Loads};
 use mycelium::{CapFilter, Capability};
 use mycelium_tuple_space::{TupleConfig, TupleRole, TupleSpace};
 use mycelium_wasm_host::{
@@ -88,8 +93,16 @@ async fn process_one(
     Ok(())
 }
 
+const LOADS: &[Loads] = &[Loads {
+    content: "route/optimize — a WASM component (echo_component.wasm fixture)",
+    kind: "ArtifactKind::WasmComponent",
+    from: "InMemorySource (build-embedded fixture, single-process shortcut — see catalog for \
+           the cross-node path) → catalogue → autonomic Provisioner",
+}];
+
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    announce_loads(LOADS);
     tracing_subscriber::fmt().with_max_level(tracing::Level::WARN).init();
 
     let cert_dir = std::env::temp_dir().join(format!("coop-provisioning-{}", std::process::id()));
