@@ -658,7 +658,20 @@ impl ConsensusEngine {
                 tracing::warn!("dropping consensus msg: bad/unknown signature from {}", signed.signer);
                 return None;
             }
-            return decode_consensus_msg(&signed.msg_bytes);
+            let msg = decode_consensus_msg(&signed.msg_bytes)?;
+            // Bind the message's CLAIMED authority to the VERIFIED signer. The signature proves only
+            // that `signed.signer` produced the bytes — not that the `voter`/`proposer` named INSIDE
+            // is that same node. Without this, one node holding one valid identity key could sign N
+            // votes each naming a different `voter` and forge a quorum with zero peers agreeing
+            // (audit 2026-07-15 pass 2). This closes the vote/propose impersonation vector.
+            if !signer_authorized(&msg, &signed.signer) {
+                tracing::warn!(
+                    signer = %signed.signer,
+                    "dropping consensus msg: signer does not match the vote/propose identity it claims",
+                );
+                return None;
+            }
+            return Some(msg);
         }
         decode_consensus_msg(payload)
     }
@@ -1263,6 +1276,38 @@ pub(crate) fn decode_consensus_msg(bytes: &Bytes) -> Option<ConsensusMsg> {
     mycelium_core::serde_fixint::from_slice(bytes).ok()
 }
 
+/// Binds a signed consensus message's claimed authority to the verified signer: a node may only
+/// PROPOSE and VOTE **as itself**. A signature proves who produced the bytes, not that the identity
+/// named *inside* the message is that node — so without this check one node holding one valid key
+/// could sign N votes each naming a different `voter` and forge a quorum (audit 2026-07-15 pass 2).
+/// `Commit`/`Nack` carry no per-node authority field and are not bound here: a fully Byzantine-safe
+/// commit needs a quorum certificate, which is out of scope — Mycelium is CFT, not BFT. This closes
+/// the vote/propose *impersonation* vector, not all insider misbehaviour.
+fn signer_authorized(msg: &ConsensusMsg, signer: &NodeId) -> bool {
+    match msg {
+        ConsensusMsg::Vote { voter, .. }             => voter == signer,
+        ConsensusMsg::VoteWithLocality { voter, .. } => voter == signer,
+        ConsensusMsg::Propose { proposer, .. }       => proposer == signer,
+        ConsensusMsg::Commit { .. } | ConsensusMsg::Nack { .. } => true,
+    }
+}
+
+/// Acceptor anti-equivocation rule (single-decree safety): a voter must never accept two DIFFERENT
+/// values at the same ballot. Returns `true` if this node may cast a vote for `(ballot, value)` given
+/// the highest ballot it has voted at (`local_ballot`) and the value it accepted there (`prior_value`,
+/// `None` if it has not voted this slot). At a strictly higher ballot it may always vote; at the same
+/// ballot only for the *same* value (idempotent re-vote); at a lower ballot never. Without this, two
+/// proposers racing the same fresh slot both get a ballot-1 vote from an overlapping voter and both
+/// reach quorum with different values (audit 2026-07-15 pass 2).
+fn may_cast_vote(local_ballot: u64, prior_value: Option<&Bytes>, ballot: u64, value: &Bytes) -> bool {
+    use std::cmp::Ordering::*;
+    match ballot.cmp(&local_ballot) {
+        Less    => false,
+        Greater => true,
+        Equal   => prior_value.is_none_or(|pv| pv == value),
+    }
+}
+
 pub(crate) fn encode_ballot(ballot: u64) -> Bytes {
     Bytes::copy_from_slice(&ballot.to_le_bytes())
 }
@@ -1279,9 +1324,13 @@ pub(crate) fn decode_ballot(bytes: &Bytes) -> u64 {
 /// Ed25519 signature over them, so forged ballots can be detected and dropped.
 /// Encoded/decoded with the same `bincode_cfg()` as `ConsensusMsg` itself.
 ///
-/// The TLS transport already prevents unauthenticated TCP connections; this
-/// adds a second layer so a compromised insider node cannot inject false
-/// consensus messages into an established connection.
+/// The TLS transport already prevents unauthenticated TCP connections; this adds a second layer that
+/// authenticates the *origin* of each consensus message and binds a `Vote`/`Propose` to the signer's
+/// identity (`signer_authorized`) — so a node cannot impersonate another when voting, and a relayed
+/// or replayed ballot with a bad/unknown signature is dropped. It is **not** full Byzantine
+/// tolerance: it does not require a quorum certificate on `Commit`, so a compromised insider can
+/// still emit other malformed protocol messages. Mycelium is CFT, not BFT (`framing.rs` signing
+/// doc); this raises the bar against impersonation, it does not make consensus BFT.
 #[cfg(feature = "tls")]
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct SignedConsensusMsg {
@@ -1312,6 +1361,9 @@ pub(crate) async fn run_consensus_listener(
     mut rx_commit:   mpsc::Receiver<Signal>,
 ) {
     let mut seen_ballot: AHashMap<Arc<str>, u64> = AHashMap::new();
+    // The value this node voted for at `seen_ballot[slot]` — the acceptor's anti-equivocation memory
+    // (see `may_cast_vote`). Cleared alongside `seen_ballot` on commit (audit 2026-07-15 pass 2).
+    let mut voted_value: AHashMap<Arc<str>, Bytes> = AHashMap::new();
     let mut consecutive_abstains: u32 = 0;
 
     loop {
@@ -1331,12 +1383,16 @@ pub(crate) async fn run_consensus_listener(
                 }
                 consecutive_abstains = 0;
 
-                let Some(ConsensusMsg::Propose { slot, ballot, value: _, proposer }) =
+                let Some(ConsensusMsg::Propose { slot, ballot, value, proposer }) =
                     ctx.decode_verify(&sig.payload)
                 else { continue };
 
                 let local = *seen_ballot.get(&slot).unwrap_or(&0);
-                if ballot < local {
+                // NACK a stale ballot OR an equal-ballot proposal for a DIFFERENT value than we
+                // already accepted: casting a second vote at the same ballot for another value lets
+                // two proposers each reach quorum with an overlapping voter and both Commit different
+                // values at one ballot — a single-decree safety violation (audit 2026-07-15 pass 2).
+                if !may_cast_vote(local, voted_value.get(&slot), ballot, &value) {
                     let nack = ConsensusMsg::Nack { slot, seen_ballot: local };
                     ctx.emit(
                         Arc::from(consensus_kind::NACK),
@@ -1345,6 +1401,7 @@ pub(crate) async fn run_consensus_listener(
                     );
                 } else {
                     seen_ballot.insert(Arc::clone(&slot), ballot);
+                    voted_value.insert(Arc::clone(&slot), value.clone());
                     ctx.kv_set(
                         format!("{}{}", consensus_ns::BALLOT, &*slot),
                         encode_ballot(ballot),
@@ -1419,6 +1476,7 @@ pub(crate) async fn run_consensus_listener(
                     // Remove instead of insert: once a slot is committed it cannot
                     // receive a valid higher ballot, so we don't need to track it.
                     seen_ballot.remove(&slot);
+                    voted_value.remove(&slot); // drop the anti-equivocation memory with it
                 }
                 ctx.kv_set(
                     format!("{}{}", consensus_ns::COMMITTED, &*slot),
@@ -1724,5 +1782,55 @@ mod cross_group_tests {
         assert_eq!(gq.group, "compliance");
         assert!((gq.quorum - 0.75).abs() < f32::EPSILON);
         assert!(gq.veto);
+    }
+}
+
+#[cfg(test)]
+mod consensus_msg_auth_tests {
+    use super::*;
+
+    fn id(p: u16) -> NodeId { NodeId::new("127.0.0.1", p).unwrap() }
+
+    // ── F1: signer must match the vote/propose identity (audit 2026-07-15 pass 2) ──
+    #[test]
+    fn regression_signer_must_match_vote_and_propose_identity() {
+        let a = id(1);
+        let b = id(2);
+        // A vote naming `b` as voter is authorised ONLY when signed by `b` — an impersonated vote
+        // (signed by `a`, claiming voter `b`) is rejected, which is what killed the forged-quorum
+        // vector (one key signing N distinct voters).
+        let vote = ConsensusMsg::Vote { slot: "s".into(), ballot: 1, voter: b.clone() };
+        assert!(signer_authorized(&vote, &b), "a node may vote as itself");
+        assert!(!signer_authorized(&vote, &a), "a node may NOT vote as another identity");
+
+        let vwl = ConsensusMsg::VoteWithLocality { slot: "s".into(), ballot: 1, voter: b.clone(), locality: None };
+        assert!(signer_authorized(&vwl, &b));
+        assert!(!signer_authorized(&vwl, &a), "VoteWithLocality impersonation must be rejected too");
+
+        let prop = ConsensusMsg::Propose { slot: "s".into(), ballot: 1, value: Bytes::from_static(b"v"), proposer: b.clone() };
+        assert!(signer_authorized(&prop, &b));
+        assert!(!signer_authorized(&prop, &a), "a node may not propose as another identity");
+
+        // Commit/Nack carry no per-node authority field (not bound here — CFT, not BFT).
+        let commit = ConsensusMsg::Commit { slot: "s".into(), ballot: 1, value: Bytes::from_static(b"v") };
+        assert!(signer_authorized(&commit, &a));
+        assert!(signer_authorized(&ConsensusMsg::Nack { slot: "s".into(), seen_ballot: 1 }, &a));
+    }
+
+    // ── F2: acceptor must not equivocate at the same ballot (audit 2026-07-15 pass 2) ──
+    #[test]
+    fn regression_voter_never_accepts_two_values_at_one_ballot() {
+        let a = Bytes::from_static(b"A");
+        let b = Bytes::from_static(b"B");
+        // Never voted this slot (prior None): any ballot >= 0 is votable.
+        assert!(may_cast_vote(0, None, 1, &a));
+        // Voted A at ballot 1. A second ballot-1 proposal for a DIFFERENT value B must be refused.
+        assert!(!may_cast_vote(1, Some(&a), 1, &b), "equivocation at the same ballot must be refused");
+        // Re-voting for the SAME value at the same ballot is idempotent and allowed.
+        assert!(may_cast_vote(1, Some(&a), 1, &a));
+        // A strictly higher ballot supersedes — vote for whatever value it carries.
+        assert!(may_cast_vote(1, Some(&a), 2, &b));
+        // A stale (lower) ballot is never votable.
+        assert!(!may_cast_vote(2, Some(&a), 1, &a));
     }
 }
