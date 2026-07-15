@@ -8,11 +8,14 @@ re-explains it), and the **doc template** all example READMEs follow (`## Object
 run` · `## What it demonstrates` · `## Dev notes`; two variants — single-example and suite — sharing
 one per-example block). `coop/` is the reference implementation of the suite shape.
 
-**Layer map — which example demonstrates which stack layer.** The by-layer lens (I gossip-KV · II
-signal-mesh · III consensus · the capability/agent layer on top) is the front-door's
-[`examples/README.md` § Find one by layer](../../../examples/README.md#find-one-by-layer) — that table is the
-**source of truth** (front-door canon; update it when an example's primary layer changes). A scannable
-●/○ matrix (self-contained, opens offline) is [`examples-layer-matrix.html`](examples-layer-matrix.html).
+**Capability matrix — the single faceted index.** The front-door
+[`examples/README.md` § The capability matrix](../../../examples/README.md#the-capability-matrix) is the
+**source of truth**: one row per example, fingerprinted by stack layer (I gossip-KV · II signal-mesh ·
+III consensus · IV capability/agent) **and** facet — *Level* (Intro/Adv, ★ flagship) · *Surface*
+(Web/CLI) · *LLM* (real/mock/none) · *Audit* · *Metrics*. Update it when an example's layer **or** a
+facet changes (a demo gains a browser UI, the metrics feature, a signed-audit surface). The same grid
+rendered — colour-coded dots + facet chips + a per-layer summary strip, self-contained, opens offline —
+is [`examples-layer-matrix.html`](examples-layer-matrix.html).
 Layer explainers: gossip-KV [ch01](../../guide/01-gossip-kv.md) · signal-mesh
 [ch03](../../guide/03-signals.md) · consensus [ch04](../../guide/04-consensus.md).
 
