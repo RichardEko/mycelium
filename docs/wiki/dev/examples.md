@@ -8,31 +8,13 @@ re-explains it), and the **doc template** all example READMEs follow (`## Object
 run` · `## What it demonstrates` · `## Dev notes`; two variants — single-example and suite — sharing
 one per-example block). `coop/` is the reference implementation of the suite shape.
 
-**Layer map — which example demonstrates which stack layer.** A by-layer lens over the suites below
-(the three-layer substrate — I gossip-KV · II signal-mesh · III consensus — plus the capability/agent
-layer the `mycelium` crate adds on top). Use it to answer "I want to *see* Layer N in action". A
-scannable ●/○ matrix version (self-contained, opens offline) is
-[`examples-layer-matrix.html`](examples-layer-matrix.html):
-
-- **Layer I · gossip-KV** ([ch01](../../guide/01-gossip-kv.md)) — `hello_mesh` (the canonical intro:
-  two agents share a KV value by gossip) · `conway` / `conway-gpu` (256-agent / 512×512-GPU
-  convergence). Pure state-convergence demos.
-- **Layer II · signal-mesh** ([ch03](../../guide/03-signals.md)) — `semantic_coordination` (signal
-  **sender authorization** — the admission boundary) · `stigmergy` / `stigmergy_viz` (backpressure as
-  an evaporating `is_opaque` pheromone) · `diagnostics` (reads the *emergent* L2 state).
-- **Layer III · consensus** ([ch04](../../guide/04-consensus.md)) — `distributed_lock` (lock +
-  **fencing token**) · coop `consensus` (cross-group quorum) · `three_node_demo` (overlay role).
-- **Capability / agent layer (atop I–III)** — `hello_capability` (the intro: resolve by *need*, RPC) ·
-  `invoke_skill` · `llm_agent` · the coop L4 family: *artifacts* (`catalog` · `provisioning` ·
-  `model_deploy` · `reheal_deploy`), *federation* (`federation_facts`), *identity* (`rotation`),
-  *membership* (`elastic_intent`), *MCP* (`mcp_toolgrowth`), *LLM* (`mailbox_llm` · `llm_pipeline` ·
-  `llm_council`) · Python: `a2a_langchain` · `langgraph` · `community`.
-- **Cross-layer / full-stack** — `three_node_demo` is the only example touching **all four** (KV
-  tool-discovery + signals + consensus overlay + LLM chat); `three_arm_workdist` and
-  `coordinator_comparison` set the layers *against* each other (broker-RPC vs gossip-KV vs tuple-space
-  **pull**). The **companions** (`redistribution_viz` tuple-space, `microgrid_viz` blackboard,
-  `fluid_pipeline`) are application-coordination built *atop* I/II. `ops_console` observes every
-  layer's HTTP surface — an observer, not a layer demo.
+**Layer map — which example demonstrates which stack layer.** The by-layer lens (I gossip-KV · II
+signal-mesh · III consensus · the capability/agent layer on top) is the front-door's
+[`examples/README.md` § By layer](../../../examples/README.md#by-layer) — that table is the
+**source of truth** (front-door canon; update it when an example's primary layer changes). A scannable
+●/○ matrix (self-contained, opens offline) is [`examples-layer-matrix.html`](examples-layer-matrix.html).
+Layer explainers: gossip-KV [ch01](../../guide/01-gossip-kv.md) · signal-mesh
+[ch03](../../guide/03-signals.md) · consensus [ch04](../../guide/04-consensus.md).
 
 - **Starter ladder (zero-LLM, the junior-dev entry point).** `hello_mesh`
   (`examples/hello_mesh.rs`, ~25 lines: two agents on loopback share a KV value by gossip) →

@@ -6,6 +6,25 @@ example READMEs follow.
 
 New here? Start with the zero-setup ladder, then pick a cluster below.
 
+## By layer
+
+Which example demonstrates which layer of the stack — the three-layer substrate (**I** gossip-KV ·
+**II** signal-mesh · **III** consensus) plus the capability / agent layer the `mycelium` crate adds on
+top. A scannable ●/○ matrix version (self-contained, opens offline) is
+[`docs/wiki/dev/examples-layer-matrix.html`](../docs/wiki/dev/examples-layer-matrix.html).
+
+| Layer | Primarily demonstrated by |
+|---|---|
+| **I · gossip-KV** (state) | `hello_mesh` · `conway` / `conway-gpu` |
+| **II · signal-mesh** (events, opacity) | `semantic_coordination` (sender auth) · `stigmergy` / `stigmergy_viz` (opacity pheromone) · `diagnostics` (emergent state) |
+| **III · consensus** | `distributed_lock` (lock + fencing) · coop `consensus` (cross-group quorum) · `three_node_demo` (overlay) |
+| **IV · capability / agent** | `hello_capability` · `invoke_skill` · `llm_agent` · coop artifacts (`catalog` · `provisioning` · `model_deploy` · `reheal_deploy`) · `federation_facts` · `rotation` · `elastic_intent` · `mcp_toolgrowth` · LLM (`mailbox_llm` · `llm_pipeline` · `llm_council`) · Python (`a2a_langchain` · `langgraph` · `community`) |
+
+**Full-stack / cross-layer:** `three_node_demo` touches all four; `three_arm_workdist` &
+`coordinator_comparison` set the layers *against* each other (broker-RPC vs gossip-KV vs tuple-space
+**pull**). The companions (`redistribution_viz` tuple-space, `microgrid_viz` blackboard,
+`fluid_pipeline`) build *atop* I/II; `ops_console` observes every layer's HTTP surface.
+
 ## The index
 
 **Starter ladder (zero LLM, one file each — the junior-dev entry point):**
