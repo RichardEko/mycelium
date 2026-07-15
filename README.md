@@ -90,7 +90,7 @@ The highlights:
 
 | Demo | What it shows | Start |
 |---|---|---|
-| **Mesh Control UI** — `llm_agent` | Capability emergence across 3 nodes + a live topology UI (11 presets, emergent manager election, simulated failover) | `MOCK_LLM=1 cargo run --example llm_agent` → http://127.0.0.1:8100 |
+| **Mesh Control UI** — `llm_agent` | Capability emergence across 3 nodes + a live topology UI (11 presets, emergent manager election, simulated failover) | `MOCK_LLM=1 cargo run --example llm_agent --features metrics` → http://127.0.0.1:8100 |
 | **Interactive Chat** — `three_node_demo` | Live MCP tool discovery — tools join a running mesh and the LLM finds them without a restart | [`examples/chat/`](examples/chat/README.md) |
 | **Skills cluster** — SkillRunner | LLM agents as mesh citizens; skills as capabilities, live load-balancing | [`examples/community/`](examples/community/README.md) |
 | **Food-Rescue Co-op** — 12 demos | The whole pattern catalogue in one constructive world | [`examples/coop/`](examples/coop/README.md) |
