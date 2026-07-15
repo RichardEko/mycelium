@@ -165,3 +165,10 @@ signal for the `/publication-lint` skill (is it catching overclaims before human
   a **Minor undersell/staleness**. **Fixed**: appended `wiki_council_viz` to the callout. Re-verified
   `"fourteen-demo"` is untouched (the new showcase is a `mycelium-wiki` example, not a coop bin). No
   other drift.
+- 2026-07-15 (lint run 8): **clean — deck kept current with the new capability, not caught stale.**
+  `wiki_council_viz` gained a real on-mesh local LLM (Ollama served as the `llm/{model}` capability,
+  phrased over the mesh; grounded-extraction fallback). The deck's showcase line was updated *in the
+  same commit* from "no LLM key" to "each phrasing via a **local model served on the mesh** — Ollama,
+  no cloud/key" — verified accurate against the code (`register`/`call_prompt_skill`), and **not an
+  overclaim** (the LLM path genuinely works; the fallback is noted in README/examples). Pre-empted the
+  "no LLM key" staleness that would otherwise have surfaced at the next lint.
