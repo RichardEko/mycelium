@@ -172,3 +172,9 @@ signal for the `/publication-lint` skill (is it catching overclaims before human
   no cloud/key" — verified accurate against the code (`register`/`call_prompt_skill`), and **not an
   overclaim** (the LLM path genuinely works; the fallback is noted in README/examples). Pre-empted the
   "no LLM key" staleness that would otherwise have surfaced at the next lint.
+- 2026-07-15 (lint run 9): **clean — deck showcase enumeration kept complete + accurate.** The new
+  `guardrail_viz` browser showcase was added to the "Want to watch it?" callout *in its own commit*
+  (`:8096` — "watch an agent structurally stopped at a Tier-C gate, with the tamper-evident denial
+  proof"); the callout now lists all seven showcases `:8090`–`:8096`. Verified the claim against the
+  running demo (unauthorized invocation → STOPPED + a sealed, chain-verified denial) — accurate, not
+  an overclaim. The separate showcase-metrics change touched no persuasion surface. No findings.
