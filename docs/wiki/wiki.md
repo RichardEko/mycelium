@@ -6,9 +6,11 @@ canon, the wiki cites it**). Start here, follow links down.
 Mycelium is an embedded, broker-less Rust library: a three-layer substrate (gossip KV /
 signal mesh / epidemic consensus) for AI agent fleets and storage replication, built on the
 thesis that a coordinator is not just slower but *epistemically incapable* for heterogeneous
-fleets. Purpose anchor: `docs/philosophy.md`. Version state: **v2.0.0 released** (tag `v2.0.0`) —
-all 16 milestones (2026-06-21) + the v1.x production-readiness workstreams, now on a unified
-2.0.0 workspace version train; wire v12.
+fleets. Purpose anchor: `docs/philosophy.md`. Version state: **v2.1.0 released** (2026-07-15, tag
+`v2.1.0`) — the unified workspace version train (2.1.0), adding `LockService`, CI-gated Docker
+cluster suites, and the #164 distributed-lock correctness fixes over **v2.0.0** (all 16 milestones,
+2026-06-21, + the v1.x production-readiness workstreams). Wire **v12** (PREV 11) — unchanged from
+v2.0.0, a backwards-compatible rolling upgrade. See [dev/history](dev/history.md) for the ledger.
 
 ## Sections
 
