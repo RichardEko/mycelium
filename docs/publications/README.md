@@ -193,3 +193,9 @@ signal for the `/publication-lint` skill (is it catching overclaims before human
 - 2026-07-15 (lint run 13): **clean — no persuasion-surface change.** The README Demos→nav change touched
   only root `README.md`; no `docs/publications/` or `philosophy.md` commit since run 12, no deck/paper
   links into the removed `#demos` anchor. Nothing to reconcile. No findings.
+- 2026-07-15 (lint run 14): **clean — persuasion surface preserved verbatim through the philosophy port.**
+  `docs/philosophy.html` (a publication-lint target) was retired and ported to `docs/philosophy.md`. The
+  content is a **verbatim** port (pandoc + unwrap + formatting-only polish; HTML-vs-MD body-word delta +4,
+  fully explained), so **no claim changed**: 0 `Byzantine`/`BFT`/`tamper-proof` overclaim, the "What This
+  Architecture Is Not" honest-limits ceiling intact, CFT-not-BFT framing unchanged. The skill's targets +
+  the doc-map now name `philosophy.md` (0 stale `.html` refs). Decks and papers untouched. No findings.

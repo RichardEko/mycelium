@@ -33,7 +33,12 @@ Layer explainers: gossip-KV [ch01](../../guide/01-gossip-kv.md) · signal-mesh
   provisioning ⭐ (the autonomic loop) · federation_facts · rotation · consensus ·
   llm_pipeline · mcp_toolgrowth (real **code arrival**, bridged over MCP) · llm_council ·
   catalog (the durable **library**: runtime-read origin, librarian, origin-death →
-  peer-cache install) · diagnostics. `ci_smoke.sh` runs the twelve CI demos Docker-free (CI
+  peer-cache install) · diagnostics. The five **runtime-loading** demos (`catalog` ·
+  `mcp_toolgrowth` · `provisioning` · `model_deploy` · `reheal_deploy`) each print a
+  **`dynamically loaded artifact` banner** at startup via `coop::common::announce_loads`
+  (a `LOADS: &[Loads]` const, mirrored in a `## Loads` doc block) — the CLI analogue of the
+  browser [concepts box](ui-example-contract.md), declaring **content · type · loaded-from**.
+  `ci_smoke.sh` runs the twelve CI demos Docker-free (CI
   `coop-smoke`). Plus one **manual** demo, `model_deploy` — real GGUF weights **and their
   deployment profile** (system prompt + parameters, referencing the weights by content
   address — design §4.3.1) deployed through the artifact library into Ollama, generating
