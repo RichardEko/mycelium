@@ -73,9 +73,13 @@ cargo build --example llm_agent
 **Run**
 
 ```bash
-cargo run --example llm_agent
+MOCK_LLM=1 cargo run --example llm_agent --features metrics
 # Open: http://localhost:8100  (mesh control UI)
 ```
+
+`MOCK_LLM=1` skips the Ollama probe (no model needed); drop it to drive the presets with a real local
+model. `--features metrics` installs the Prometheus recorder so the [Ops Console](../../examples/README.md#ops-console)'s
+**Metrics** tab populates when pointed at the demo's gateways (`:9100`–`:9102`).
 
 **What to observe**
 

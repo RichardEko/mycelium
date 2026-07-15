@@ -34,9 +34,9 @@ not to raw source. The suite READMEs carry the per-example walkthrough + the exa
 | [`invoke_skill`](../docs/guide/05-skills.md) | ○ | · | · | ● | Intro | CLI | · | · | · |
 | [`semantic_coordination`](../docs/guide/11-semantic-coordination.md) | · | ● | · | ○ | Intro | CLI | · | · | · |
 | **Top-level** — beyond the ladder | | | | | | | | | |
-| [`llm_agent`](#mesh-control-llm_agent) | ○ | ○ | · | ● | Adv | Web | mock | · | ✓ |
-| [`coordinator_comparison`](#research-artifacts) | ● | · | · | ● | Adv | CLI | · | · | · |
-| [`three_arm_workdist`](#research-artifacts) | ● | · | · | ● | Adv | CLI | · | · | · |
+| [`llm_agent`](../docs/guide/02-capabilities.md) | ○ | ○ | · | ● | Adv | Web | mock | · | ✓ |
+| [`coordinator_comparison`](../docs/plans/three_arm_workdist.md) | ● | · | · | ● | Adv | CLI | · | · | · |
+| [`three_arm_workdist`](../docs/plans/three_arm_workdist.md) | ● | · | · | ● | Adv | CLI | · | · | · |
 | [`three_node_demo`](chat/README.md) ★ | ● | ● | ● | ● | Adv | Web | real | · | · |
 | [`ops_console`](#ops-console) † | ○ | ○ | ○ | ○ | Adv | Web | · | · | · |
 | **Food-Rescue Co-op** — [`coop/README.md`](coop/README.md), one constructive world | | | | | | | | | |
@@ -137,22 +137,6 @@ commands); see [shared setup](#shared-setup) first.
 - **Interactive chat** — [`chat/`](chat/README.md), `three_node_demo`: live MCP tool discovery — tools
   join a running mesh and the LLM finds them without restart (the same binary drives the Docker
   integration cluster).
-
-## Mesh Control (`llm_agent`)
-
-The **Mesh Control UI** — capability emergence across three nodes with a live topology view: 11 preset
-scenarios, emergent manager election, and simulated failover, all driven from the browser. A browser
-example under the [UI-example contract](../docs/wiki/dev/ui-example-contract.md) — a "what you're seeing"
-concepts box, an Ops Console back-link, and (with `--features metrics`) a live Metrics tab.
-
-```
-MOCK_LLM=1 cargo run --example llm_agent --features metrics   # → http://127.0.0.1:8100
-```
-
-`MOCK_LLM=1` skips the Ollama probe (no model needed); drop it to drive the presets with a real local
-model (see [shared setup](#shared-setup)). The three nodes expose Mycelium gateways on `:9100`–`:9102`,
-so point the [Ops Console](#ops-console) at any of them to watch `/stats` · `/gateway/fleet` · `/metrics`.
-Automated coverage: `make test-llm-agent` (11 scenarios, Dockerized, `MOCK_LLM=1`).
 
 ## Ops Console
 
