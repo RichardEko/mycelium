@@ -18,6 +18,10 @@
   .brand{font-weight:700;letter-spacing:-.01em}.brand b{color:var(--accent)}
   .tag{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);
     border:1px solid var(--border);border-radius:20px;padding:3px 10px}
+  .modelbadge{font-size:11px;font-family:var(--mono);border-radius:20px;padding:3px 11px;
+    display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+  .modelbadge.on{color:#3fb950;border:1px solid rgba(63,185,80,.4);background:rgba(63,185,80,.08)}
+  .modelbadge.off{color:var(--muted);border:1px solid var(--border)}
   .sub{color:var(--muted);font-size:13px;width:100%;margin-top:-4px}
   .opsbtn{margin-left:auto;align-self:center;font-size:12px;font-family:var(--mono);text-decoration:none;
     color:var(--accent);border:1px solid var(--border);border-radius:8px;padding:6px 11px;white-space:nowrap}
@@ -78,6 +82,7 @@
 <header>
   <span class="brand"><b>Wiki</b> Council</span>
   <span class="tag">specialists · one shared wiki</span>
+  <span id="model" class="modelbadge off" title="Which LLM is answering — a local model served on the mesh, or the deterministic grounded fallback"></span>
   __OPS_CONSOLE_LINK__
   <div class="sub">Ask a question — it fans out to the relevant specialists, each answers grounded in the
     shared wiki with citations, and a synthesizer merges them.</div>
@@ -151,7 +156,12 @@ function renderThread(thread){
   box.scrollTop = box.scrollHeight;
 }
 
-function render(st){ renderFleet(st.fleet||[]); renderThread(st.thread||[]); }
+function renderModel(model){
+  const b = $("#model");
+  if(model){ b.className = "modelbadge on"; b.textContent = "🧠 "+model+" · on mesh"; }
+  else { b.className = "modelbadge off"; b.textContent = "◦ grounded extraction (no model)"; }
+}
+function render(st){ renderModel(st.model||""); renderFleet(st.fleet||[]); renderThread(st.thread||[]); }
 
 async function refresh(){ try{ render(await (await fetch("/state")).json()); }catch(e){} }
 
