@@ -30,7 +30,7 @@
 //! - **Type** — `ArtifactKind::WasmComponent`
 //! - **From** — FsLibrarySource (disk) → signed manifest → librarian → gossip catalogue → MeshArtifactSource (peer pull, content-verified); survives publisher death via a peer cache
 //!
-//! Run:  cargo run -p mycelium-coop-examples --bin catalog
+//! Run:  cargo run -p mycelium-coop-examples --features wasm --bin catalog
 use std::sync::Arc;
 use std::time::Duration;
 
