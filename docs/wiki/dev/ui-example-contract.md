@@ -13,7 +13,7 @@ implementation: [`redistribution_viz`](../../../mycelium-tuple-space/examples/re
    (so the Ops Console can target it) *and* installs the Prometheus recorder (so the console's
    **Metrics** tab populates). The example's run command carries `--features …,gateway,metrics` (or
    just `metrics` where gateway is default-on, e.g. the main crate / coop). See
-   [examples/README.md § The worlds](../../../examples/README.md#the-worlds) for per-showcase run commands.
+   [examples/README.md § Browser showcases](../../../examples/README.md#browser-showcases) for per-showcase run commands.
 2. **Be Ops-Console-present.** After start, advertise the two `ui/viz` KV keys —
    `ui/viz = http://host:port/`, `ui/label = <short name>` — and inject a `⚙ Ops Console` back-link
    into the page (`__OPS_CONSOLE_LINK__`, `cfg!(feature = "gateway")`-gated). This is the two-way
