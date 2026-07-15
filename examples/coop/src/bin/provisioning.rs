@@ -27,7 +27,7 @@
 //! - **Type** — `ArtifactKind::WasmComponent`
 //! - **From** — InMemorySource (build-embedded fixture, single-process shortcut — see catalog for the cross-node path) → catalogue → autonomic Provisioner
 //!
-//! Run:  cargo run -p mycelium-coop-examples --bin provisioning
+//! Run:  cargo run -p mycelium-coop-examples --features wasm --bin provisioning
 
 use std::sync::Arc;
 use std::time::Duration;
