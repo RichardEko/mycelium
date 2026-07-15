@@ -131,7 +131,7 @@ to own a group under intent — see #56 / the emergent-defers-to-governor fix.)
 ### 04 — `provisioning` ⭐ (the flagship)
 
 ```bash
-cargo run -p mycelium-coop-examples --bin provisioning
+cargo run -p mycelium-coop-examples --features wasm --bin provisioning
 ```
 
 The whole thesis in one process. A surge of donations needs a `route/optimize` capability **no depot
@@ -281,7 +281,7 @@ synthesizers would each grab fragments of one donation's partial set, which need
 ### 11 — `catalog`
 
 ```bash
-cargo run -p mycelium-coop-examples --bin catalog
+cargo run -p mycelium-coop-examples --features wasm --bin catalog
 ```
 
 The **cluster-wide artifact catalogue**, end to end — the real path that demo 04's node-local

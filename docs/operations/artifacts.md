@@ -13,7 +13,7 @@ Two audiences:
   author a deployable artifact and publish it.
 
 Runnable reference: [`examples/coop/src/bin/catalog.rs`](../../examples/coop/src/bin/catalog.rs)
-(`cargo run -p mycelium-coop-examples --bin catalog`).
+(`cargo run -p mycelium-coop-examples --features wasm --bin catalog`).
 
 ---
 

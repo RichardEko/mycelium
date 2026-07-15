@@ -19,6 +19,21 @@ concern). WHY is usually shared Dev+Ops.
 
 ## Changelog
 
+- **2026-07-15 (run 9)** — diff-gated. Delta since run 8: the examples **capability-matrix**
+  restructure (discoverability; rows already ✓), the **artifact deploy/install surfacing** (a guide
+  ladder "Artifacts & deploy" row → `operations/artifacts.md § Solution/Dev`), the **`## Loads`
+  banner** across the 5 runtime-loading demos, and the **philosophy `.html`→`.md` port** (WHY home
+  renamed; content verbatim — WHY cells carry). Concept impact lands on **Artifacts / library ·
+  HOW·Dev** (was `✓ ᵀ²`, mis-homed):
+  - The surfacing + Loads banner make the Dev walkthrough **cross-linked from the Dev guide** and the
+    5 demos self-declare **content · type · loaded-from** — the mis-homing is resolved.
+  - **But the "must work if followed literally" check surfaced a real bug:** the `catalog` and
+    `provisioning` run commands **omitted `--features wasm`** in **5 places** (the new guide-ladder row,
+    `operations/artifacts.md`, `coop/README.md` ×2, and `presentation.html`), so following them
+    literally fails with `error: target … requires the features: wasm`. **Fixed all 5** — the cell is
+    now *genuinely* ✓ (cross-linked walkthrough + working commands + the Loads banner). Calibration
+    entry below. *(`presentation.html` — a persuasion surface — was edited for the run-command fix only;
+    flagged for the next publication-lint.)*
 - **2026-07-15 (run 8)** — diff-gated: **no cell moves; carried from run 7.** The only concept-touching
   delta is the new `wiki_council_viz` browser showcase, which enriches the **Companions** row's
   wiki-companion HOW·Dev landing (a watchable specialist-fleet demo alongside the `wiki_chat` CLI). That
@@ -125,13 +140,13 @@ closed it.
 | Groups (three kinds) | ✓ | ✓ ᵀ³ | ✓ | ✓ | ✓ |
 | Legible Emergence | ✓ ᵀ³ | ✓ | ✓ ᵀ³ | ✓ | ✓ |
 | Security (TLS/RBAC/SSO/audit) | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Artifacts / library | ✓ | ✓ | ✓ ᵀ² | ✓ | ✓ |
+| Artifacts / library | ✓ | ✓ | ✓ ᵀ² ᴿ⁹ | ✓ | ✓ |
 | Federation / AgentFacts | ✓ | ✓ | ✓ ᵀ¹ | ✓ | ✓ |
 | Reasoning / LLM / MCP / guardrails | ✓ | ✓ | ✓ ᵀ² | ✓ | ✓ |
 | Companions | ✓ | ✓ | ✓ | ✓ | ✓ ᵀ² |
 | Rolling upgrade (wire compat) | ✓ | ✓ | ✓ | ✓ | ✓ ᴿ² |
 
-ᵀ¹ closed in Tier 1 · ᵀ² Tier 2 · ᵀ³ Tier 3 · ᴿ² closed in run 2 (2026-07-11).
+ᵀ¹ closed in Tier 1 · ᵀ² Tier 2 · ᵀ³ Tier 3 · ᴿ² closed in run 2 (2026-07-11) · ᴿ⁹ run-command fix + re-verified, run 9 (2026-07-15).
 
 ## What was found, and how it was closed
 
@@ -246,6 +261,19 @@ skepticism, not a re-asserted ✓.
   pointer in `09-security.md` → the `community` mgmt UI + the new Ops Console **Audit** tab.
   **Sharpening:** a HOW·Dev `Clear` on a mechanism a reader would want to *watch* (audit, emergence,
   convergence) should confirm a **runnable / visual landing** is cross-linked, not just the API + a curl.
+- **2026-07-15 — Artifacts / library · HOW·Dev** read `✓ (ᵀ²)` across runs 1–8 while the `catalog` and
+  `provisioning` demo **run commands silently failed** — documented without the `--features wasm` those
+  bins require (`coop/README.md` ×2, `operations/artifacts.md`, and — introduced in run 9's own diff —
+  the new guide-ladder row + `presentation.html`), so a dev following any of them hit `error: target …
+  requires the features: wasm`. **The 3rd hit of the "instruction present but no-ops/fails" class**
+  (wire-version 2026-07-11; `GOSSIP_CLUSTER_NAME` 2026-07-14). Found by run 9's must-work-if-followed
+  spot-check — and notably by *running the binary*, which is how the missing feature first surfaced.
+  Root cause: prior `Clear` verdicts confirmed the *walkthrough prose + API* but never *ran the demo
+  command*; the three bins that **did** carry `--features wasm`
+  (`mcp_toolgrowth`/`model_deploy`/`reheal_deploy`) masked the two that didn't. **Reinforces the
+  2026-07-14 sharpening** rather than adding a new one — the existing "verify the steps succeed" rule
+  already covers this; the gap was applying it to the *run command*, not just env-vars/constants. Fixed
+  all five.
 
 ## Re-run guidance
 
