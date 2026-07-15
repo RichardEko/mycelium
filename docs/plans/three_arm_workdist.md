@@ -51,6 +51,14 @@ real RPC machinery the push arms use — no colocation shortcut.
 
 ## Outcome metrics (decision-level metrics deliberately absent)
 
+> **Companion — the decision-level probe.** The *decision-level* metrics this outcome study
+> omits (staleness, misroute rate: how wrong each prediction was) are measured by the two-arm
+> **`examples/coordinator_comparison.rs`** — broker-mediated vs locally-evaluated prediction on
+> the identical substrate (the broker + gossip arms here, without the pull arm). Run it via
+> `examples/coordinator_comparison_runner.sh` (+ `_plot.py`); see its file header for the design.
+> The two are complementary: `coordinator_comparison` quantifies *how wrong* the prediction is,
+> this harness measures *what that costs* in latency/throughput/fairness once pull is added.
+
 Pull has no staleness/misroute vocabulary, so arms are compared only on what
 the *jobs* and the *fleet* experience:
 
