@@ -1114,6 +1114,25 @@ mod tests {
             "incremental accumulator must equal a full recompute after overwrite + delete");
     }
 
+    /// Regression (audit 2026-07-15): log appends salt the key with the node id, so two nodes
+    /// appending in the same wall-ms (both stamping the same HLC) write DISTINCT keys and both
+    /// survive — the old un-salted `log/{stream}/{hlc}` collided on one key and LWW silently
+    /// dropped one append (digest-invisible). Same HLC, two node salts ⇒ two live entries.
+    #[test]
+    fn regression_same_hlc_cross_node_log_appends_coexist() {
+        let kv = KvState::new(0);
+        let hlc = 0x0000_0100_0000_0000u64;
+        apply_and_notify(&kv, &GossipUpdate { sender: 1,
+            key: Arc::from(format!("log/s/{hlc:016x}/10.0.0.1:5001").as_str()),
+            value: Bytes::from_static(b"a"), timestamp: hlc, nonce: 1, ttl: 1, is_tombstone: false });
+        apply_and_notify(&kv, &GossipUpdate { sender: 2,
+            key: Arc::from(format!("log/s/{hlc:016x}/10.0.0.1:5002").as_str()),
+            value: Bytes::from_static(b"b"), timestamp: hlc, nonce: 2, ttl: 1, is_tombstone: false });
+        let live = kv.store.pin().iter()
+            .filter(|(k, v)| k.starts_with("log/s/") && v.data.is_some()).count();
+        assert_eq!(live, 2, "both same-HLC cross-node appends must survive (no key collision)");
+    }
+
     // `concurrent_quorum_trackers_coexist_and_remove_only_self` moved to the upper
     // crate (`agent::kv_quorum` tests) with the quorum overlay — it exercises
     // `install_tracker`/`remove_tracker`, which live there (ROADMAP §v2.0 M1 Stage 3b).

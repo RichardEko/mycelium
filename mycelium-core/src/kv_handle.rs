@@ -246,7 +246,12 @@ impl KvHandle {
     /// gossip KV. Returns the HLC timestamp of the written entry.
     pub fn append(&self, stream: &str, value: impl Into<Bytes>) -> u64 {
         let hlc = self.ctx.hlc.tick();
-        let _   = kv_set(&self.ctx, Arc::from(format!("log/{stream}/{hlc:016x}").as_str()), value.into());
+        // Salt the key with the node id. Two nodes appending in the same wall-ms both stamp
+        // `pack(ms, 0)`; without the salt they collide on ONE key and LWW silently drops one
+        // append (and the loss is anti-entropy-digest-invisible) — audit 2026-07-15. The HLC is
+        // still the first key segment, so ordering + range scans are unchanged.
+        let node = &self.ctx.node_id;
+        let _ = kv_set(&self.ctx, Arc::from(format!("log/{stream}/{hlc:016x}/{node}").as_str()), value.into());
         hlc
     }
 
@@ -255,16 +260,19 @@ impl KvHandle {
     /// `from = 0` means from the beginning; `to = u64::MAX` means to the end.
     pub fn scan_log(&self, stream: &str, from: u64, to: u64) -> Vec<LogEntry> {
         let prefix = format!("log/{stream}/");
-        let mut entries: Vec<LogEntry> = kv_scan_prefix(&self.ctx, &prefix)
+        let mut rows: Vec<(u64, Arc<str>, Bytes)> = kv_scan_prefix(&self.ctx, &prefix)
             .into_iter()
             .filter_map(|(k, v)| {
                 let suffix = k.strip_prefix(&prefix)?;
-                let hlc    = u64::from_str_radix(suffix, 16).ok()?;
-                if hlc >= from && hlc < to { Some(LogEntry { hlc, value: v }) } else { None }
+                // HLC is the first key segment; a `/{node}` salt may follow it (see `append`).
+                let hlc = u64::from_str_radix(suffix.split('/').next()?, 16).ok()?;
+                if hlc >= from && hlc < to { Some((hlc, Arc::from(k.as_ref()), v)) } else { None }
             })
             .collect();
-        entries.sort_by_key(|e| e.hlc);
-        entries
+        // Stable total order every node agrees on: (hlc, key). The key carries the node salt, so
+        // two same-HLC appends from different nodes get a deterministic order (not scan order).
+        rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        rows.into_iter().map(|(hlc, _, value)| LogEntry { hlc, value }).collect()
     }
 
     /// Tombstones all entries in `stream` with HLC < `before_hlc`.
@@ -272,7 +280,7 @@ impl KvHandle {
         let prefix = format!("log/{stream}/");
         for (k, _) in kv_scan_prefix(&self.ctx, &prefix) {
             let suffix = k.strip_prefix(&prefix).unwrap_or("");
-            if let Ok(hlc) = u64::from_str_radix(suffix, 16)
+            if let Some(hlc) = suffix.split('/').next().and_then(|s| u64::from_str_radix(s, 16).ok())
                 && hlc < before_hlc {
                     let _ = kv_delete(&self.ctx, k);
                 }

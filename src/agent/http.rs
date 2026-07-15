@@ -2201,7 +2201,10 @@ async fn gw_overlay_log_append(
     };
 
     let hlc = ctx.agent_ctx.hlc.tick();
-    let key: Arc<str> = Arc::from(format!("log/{}/{hlc:016x}", body.stream).as_str());
+    // Salt with the node id so two nodes appending in the same wall-ms don't collide on one key
+    // and silently drop an entry via LWW (audit 2026-07-15); HLC stays the first key segment.
+    let node = &ctx.agent_ctx.node_id;
+    let key: Arc<str> = Arc::from(format!("log/{}/{hlc:016x}/{node}", body.stream).as_str());
     let update = crate::framing::make_gossip_update(
         &ctx.agent_ctx.node_id, ctx.agent_ctx.default_ttl,
         key, value, false, &ctx.agent_ctx.hlc,
@@ -2235,7 +2238,7 @@ async fn gw_overlay_log_scan(
         .into_iter()
         .filter_map(|(k, v)| {
             let suffix = k.strip_prefix(&prefix)?;
-            let hlc    = u64::from_str_radix(suffix, 16).ok()?;
+            let hlc    = u64::from_str_radix(suffix.split('/').next()?, 16).ok()?;
             if hlc >= from && hlc < to { Some(LogEntry { hlc, value: v }) } else { None }
         })
         .collect();
@@ -2258,7 +2261,7 @@ async fn gw_overlay_log_compact(
     let prefix = format!("log/{}/", body.stream);
     for (k, _) in crate::store::scan_kv_prefix(&ctx.agent_ctx.kv_state, &prefix) {
         let suffix = k.strip_prefix(&prefix).unwrap_or("");
-        if let Ok(hlc) = u64::from_str_radix(suffix, 16)
+        if let Some(hlc) = suffix.split('/').next().and_then(|s| u64::from_str_radix(s, 16).ok())
             && hlc < body.before_hlc {
                 let update = crate::framing::make_gossip_update(
                     &ctx.agent_ctx.node_id, ctx.agent_ctx.default_ttl,
@@ -2300,7 +2303,7 @@ async fn gw_overlay_log_subscribe(
                     .into_iter()
                     .filter_map(|(k, v)| {
                         let suffix = k.strip_prefix(&prefix)?;
-                        let hlc    = u64::from_str_radix(suffix, 16).ok()?;
+                        let hlc    = u64::from_str_radix(suffix.split('/').next()?, 16).ok()?;
                         if hlc >= last_seen { Some(LogEntry { hlc, value: v }) } else { None }
                     })
                     .collect();
@@ -2423,7 +2426,7 @@ async fn gw_overlay_log_group_subscribe(
                 .into_iter()
                 .filter_map(|(k, v)| {
                     let suffix = k.strip_prefix(&prefix)?;
-                    let hlc    = u64::from_str_radix(suffix, 16).ok()?;
+                    let hlc    = u64::from_str_radix(suffix.split('/').next()?, 16).ok()?;
                     if hlc > offset { Some(LogEntry { hlc, value: v }) } else { None }
                 })
                 .collect();
