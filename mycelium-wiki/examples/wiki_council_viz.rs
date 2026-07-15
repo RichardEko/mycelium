@@ -10,14 +10,22 @@
 //! no curator, no service (the node-independence the wiki architecture intends). In a distributed
 //! deployment each specialist is a separate mesh agent advertising its `domain` as a capability, and
 //! the question routes by capability rather than being dispatched; here they run in one process so the
-//! whole fleet is watchable in one dashboard. The answering LLM is a deterministic **grounded mock**
-//! (no key, no network) — every claim is verbatim from the wiki, so the demo is honest offline.
+//! whole fleet is watchable in one dashboard.
+//!
+//! **The LLM runs locally, on the mesh.** At startup, if a local **Ollama** is listening on `:11434`
+//! the node serves its model as an `llm/{model}` capability (`register_prompt_skill`), and each
+//! specialist *phrases* its grounded answer over the mesh (`call_prompt_skill` → resolve the provider
+//! on the capability ring → RPC). No cloud, no API key. If Ollama isn't running, each specialist falls
+//! back to **deterministic grounded extraction** (the top wiki sentence / the £ figure) so the demo
+//! always runs offline — and even with the model, the answer is grounded in wiki records only.
+//! Model: `WIKI_COUNCIL_MODEL` (default `llama3.2:1b`).
 //!
 //! ```text
-//! cargo run -p mycelium-wiki --example wiki_council_viz --features gateway   # → http://127.0.0.1:8095/
+//! # phrased answers (local, on-mesh): ollama serve && ollama pull llama3.2:1b, then:
+//! cargo run -p mycelium-wiki --example wiki_council_viz --features gateway,llm   # → http://127.0.0.1:8095/
 //! ```
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -25,13 +33,21 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-use mycelium::{GossipAgent, GossipConfig, NodeId};
+use mycelium::{GossipAgent, GossipConfig, LlmBackend, NodeId, OpenAiBackend, PromptTemplate};
 use mycelium_wiki::{FsStore, Wiki, WikiConfig, WikiRole, WikiStore};
 
 const HTTP_PORT: u16 = 8095;
 /// The Mycelium gateway port (distinct from the dashboard) — lets the Ops Console target this node.
 const OPS_PORT: u16 = 9095;
 const GROUP: &str = "council";
+
+/// Is `model` actually pulled on a local Ollama? `None` = Ollama isn't running on :11434; `Some(false)`
+/// = it's running but that model isn't pulled. We only serve (and claim) the model when it's really
+/// there, so the UI never advertises a model whose calls would silently fall back to extraction.
+async fn ollama_has(model: &str) -> Option<bool> {
+    let body = reqwest::get("http://127.0.0.1:11434/api/tags").await.ok()?.text().await.ok()?;
+    Some(body.contains(&format!("\"{model}\"")))
+}
 
 // ── the reader's grounding: retrieval (reused from wiki_chat) ────────────────────
 
@@ -165,8 +181,24 @@ struct Turn {
     synthesis:     String,
 }
 
-/// Fan out one question to the fleet, ground each engaged specialist, and synthesize.
-fn run_council(store: &FsStore, question: &str) -> Turn {
+/// Phrase a grounded prompt via the model served on the mesh (`llm/{model}` capability, resolved +
+/// RPC'd by `call_prompt_skill`). Returns `None` on any failure so the caller uses the extractive
+/// baseline — no model served, model not pulled, or a slow/broken backend all degrade gracefully.
+async fn phrase(agent: &Arc<GossipAgent>, model: &str, prompt: &str) -> Option<String> {
+    match agent
+        .llm()
+        .call_prompt_skill("llm", model, prompt, HashMap::new(), Duration::from_secs(45))
+        .await
+    {
+        Ok(out) if !out.trim().is_empty() => Some(out.trim().to_string()),
+        _ => None,
+    }
+}
+
+/// Fan out one question to the fleet, ground each engaged specialist, and synthesize. When a model is
+/// served on the mesh (`model = Some`), each specialist *phrases* its grounded answer through it;
+/// otherwise (and on any per-call failure) it falls back to deterministic extraction.
+async fn run_council(store: &FsStore, agent: &Arc<GossipAgent>, model: Option<&str>, question: &str) -> Turn {
     let all = retrieve(store, question, 8);
     // Engage only on the strongest-matching tier: a single shared word (a stray "cost" or "street")
     // shouldn't pull an off-topic specialist in. Ties (a genuinely multi-decision question) survive.
@@ -183,7 +215,8 @@ fn run_council(store: &FsStore, question: &str) -> Turn {
         if eng.is_empty() {
             continue;
         }
-        let answer = if spec.money {
+        // The extractive baseline — also the fallback whenever the mesh LLM isn't reachable.
+        let extractive = if spec.money {
             let figs = pounds(&eng);
             if figs.is_empty() {
                 continue;
@@ -191,6 +224,27 @@ fn run_council(store: &FsStore, question: &str) -> Turn {
             format!("The cost on record: {}.", figs.join("; "))
         } else {
             first_sentence(&eng[0].body)
+        };
+        let answer = match model {
+            Some(m) => {
+                let records = eng
+                    .iter()
+                    .map(|h| format!("[{}] {}", h.heading, h.body.trim()))
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                let role = if spec.money {
+                    "the council's Budget analyst — state the £ cost and its funding source"
+                } else {
+                    spec.name
+                };
+                let prompt = format!(
+                    "You are {role} for a neighbourhood council. Using ONLY these records, answer in \
+                     one or two sentences and name the resolution.\n\nRECORDS:\n{records}\n\n\
+                     QUESTION: {question}"
+                );
+                phrase(agent, m, &prompt).await.unwrap_or(extractive)
+            }
+            None => extractive,
         };
         let citations = eng
             .iter()
@@ -206,21 +260,30 @@ fn run_council(store: &FsStore, question: &str) -> Turn {
         });
     }
 
-    let synthesis = match contributions.len() {
-        0 => "No specialist holds a record of that. Ask about transport, energy, planning, or the \
-              budget of a specific decision."
-            .to_string(),
-        1 => format!("{} answered, grounded in the wiki.", contributions[0].specialist),
-        n => {
-            let who = contributions
-                .iter()
-                .map(|c| c.specialist)
-                .collect::<Vec<_>>()
-                .join(" + ");
-            format!(
-                "Synthesized from {n} specialists ({who}): each cited its own wiki record above — \
-                 together they give the decision and its cost."
-            )
+    let synthesis = if contributions.is_empty() {
+        "No specialist holds a record of that. Ask about transport, energy, planning, or the budget \
+         of a specific decision."
+            .to_string()
+    } else {
+        let who = contributions.iter().map(|c| c.specialist).collect::<Vec<_>>().join(" + ");
+        let base = format!(
+            "Synthesized from {} specialist(s) ({who}): each cited its own wiki record above.",
+            contributions.len()
+        );
+        match model {
+            Some(m) => {
+                let joined = contributions
+                    .iter()
+                    .map(|c| format!("{}: {}", c.specialist, c.answer))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let prompt = format!(
+                    "Combine these council-specialist answers into one short, plain paragraph for a \
+                     resident. Add no new facts.\n\n{joined}"
+                );
+                phrase(agent, m, &prompt).await.unwrap_or(base)
+            }
+            None => base,
         }
     };
 
@@ -234,6 +297,8 @@ struct CouncilState {
     thread: Vec<Turn>,
     /// per-specialist: how many turns it has engaged (for the fleet activity view).
     engaged: BTreeMap<&'static str, u64>,
+    /// the model served on the mesh, if any (for the UI badge); `None` = grounded extraction.
+    model: Option<String>,
 }
 
 fn esc(s: &str) -> String {
@@ -279,7 +344,8 @@ fn state_json(st: &CouncilState) -> String {
         })
         .collect::<Vec<_>>()
         .join(",");
-    format!(r#"{{"fleet":[{fleet}],"thread":[{thread}]}}"#)
+    let model = st.model.as_deref().unwrap_or("");
+    format!(r#"{{"model":"{}","fleet":[{fleet}],"thread":[{thread}]}}"#, esc(model))
 }
 
 fn pct_decode(s: &str) -> String {
@@ -313,7 +379,12 @@ fn pct_decode(s: &str) -> String {
 
 // ── HTTP dashboard ─────────────────────────────────────────────────────────────────
 
-async fn serve_http(store: Arc<FsStore>, state: Arc<Mutex<CouncilState>>) {
+async fn serve_http(
+    store: Arc<FsStore>,
+    agent: Arc<GossipAgent>,
+    model: Option<String>,
+    state: Arc<Mutex<CouncilState>>,
+) {
     let listener = match TcpListener::bind(format!("127.0.0.1:{HTTP_PORT}")).await {
         Ok(l) => l,
         Err(e) => {
@@ -324,6 +395,8 @@ async fn serve_http(store: Arc<FsStore>, state: Arc<Mutex<CouncilState>>) {
     loop {
         let Ok((mut stream, _)) = listener.accept().await else { continue };
         let store = Arc::clone(&store);
+        let agent = Arc::clone(&agent);
+        let model = model.clone();
         let state = Arc::clone(&state);
         tokio::spawn(async move {
             let mut buf = vec![0u8; 8192];
@@ -342,7 +415,7 @@ async fn serve_http(store: Arc<FsStore>, state: Arc<Mutex<CouncilState>>) {
                     .map(|(_, v)| pct_decode(v))
                     .unwrap_or_default();
                 if !q.trim().is_empty() {
-                    let turn = run_council(&store, q.trim());
+                    let turn = run_council(&store, &agent, model.as_deref(), q.trim()).await;
                     let mut st = state.lock().unwrap();
                     for c in &turn.contributions {
                         *st.engaged.entry(c.specialist).or_insert(0) += 1;
@@ -464,8 +537,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = gw.kv().set("ui/label", "Council specialists".to_string());
     }
 
-    let state = Arc::new(Mutex::new(CouncilState::default()));
-    tokio::spawn(serve_http(Arc::clone(&store), Arc::clone(&state)));
+    // Local LLM on the mesh: serve a local Ollama model as the `llm/{model}` capability, so each
+    // specialist phrases its grounded answer over the mesh (`call_prompt_skill` → resolve + RPC).
+    // No Ollama listening on :11434? The specialists fall back to deterministic grounded extraction,
+    // so the demo always runs. Override the model with WIKI_COUNCIL_MODEL.
+    let model_name = std::env::var("WIKI_COUNCIL_MODEL").unwrap_or_else(|_| "llama3.2:1b".into());
+    let mut _skill = None;
+    let probe = ollama_has(&model_name).await;
+    match probe {
+        None => eprintln!("(Ollama not running on :11434 — using grounded extraction. `ollama serve` for phrased answers.)"),
+        Some(false) => eprintln!("(Ollama is up but '{model_name}' isn't pulled — `ollama pull {model_name}` or set WIKI_COUNCIL_MODEL. Using grounded extraction.)"),
+        Some(true) => {}
+    }
+    let model: Option<String> = if matches!(probe, Some(true)) {
+        let template = PromptTemplate {
+            system: "You are an assistant for a neighbourhood council's shared wiki. Answer ONLY from \
+                     the records in the prompt, concisely, and name the resolution. Never invent \
+                     figures."
+                .into(),
+            user_template: "{{input}}".into(),
+            max_tokens: 220,
+            temperature: 0.2,
+            metadata: HashMap::new(),
+        };
+        let backend: Arc<dyn LlmBackend> =
+            Arc::new(OpenAiBackend::new("http://localhost:11434/v1", "ollama", &model_name));
+        match gw.llm().register_prompt_skill("llm", &model_name, template, backend).await {
+            Ok(h) => {
+                _skill = Some(h);
+                Some(model_name.clone())
+            }
+            Err(e) => {
+                eprintln!("register_prompt_skill failed ({e}); using grounded extraction");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let state = Arc::new(Mutex::new(CouncilState { model: model.clone(), ..Default::default() }));
+    tokio::spawn(serve_http(Arc::clone(&store), Arc::clone(&gw), model.clone(), Arc::clone(&state)));
 
     println!("╔══════════════════════════════════════════════════════╗");
     println!("║  Wiki Council — specialists over a shared wiki        ║");
@@ -473,6 +585,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "gateway")]
     println!("║  Ops Console     → point it at 127.0.0.1:{gwport}       ║");
     println!("╚══════════════════════════════════════════════════════╝");
+    match &model {
+        Some(m) => println!("  LLM: {m} — local Ollama, served on the mesh; specialists phrase their grounded answers."),
+        None => println!("  LLM: none — grounded extraction. For phrased answers: `ollama serve` + `ollama pull llama3.2:1b`."),
+    }
     println!("Try: \"what was decided about the Elm Street bike lane, and what did it cost?\"");
 
     tokio::signal::ctrl_c().await?;

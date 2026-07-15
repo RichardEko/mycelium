@@ -92,7 +92,10 @@ Layer explainers: gossip-KV [ch01](../../guide/01-gossip-kv.md) · signal-mesh
 - **Wiki companion** (`mycelium-wiki/examples/`): `wiki_chat` — import documents, then chat grounded in
   the shared wiki (Phase-5 worked example) · `wiki_council_viz` — the browser showcase: a **live chat**
   over a fleet of wiki-grounded specialists (Transport · Energy · Planning · Budget), fan-out +
-  synthesis with citations, gateway + `ui/viz` (`:8095`, `--features gateway`).
+  synthesis with citations. Each specialist *phrases* its grounded answer via a **local model served on
+  the mesh** — a local Ollama registered as the `llm/{model}` capability (`register_prompt_skill`),
+  invoked over the mesh (`call_prompt_skill` → resolve + RPC); deterministic grounded-extraction
+  fallback when Ollama is absent. Gateway + `ui/viz` (`:8095`, `--features gateway,llm`).
 - Integration suite: **13 Docker scenarios** (`make test`, 4-node cluster) + the consistency
   overlay (`make test-overlay`, 3-node consensus); scale suites in
   [testing/scale-tests](testing/scale-tests.md).

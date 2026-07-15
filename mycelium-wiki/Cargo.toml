@@ -69,7 +69,8 @@ name = "wiki_chat"
 required-features = ["llm"]
 
 # The browser showcase: a fleet of wiki-grounded council specialists + a live chat, fan-out +
-# synthesis, gateway + ui/viz for the Ops Console. Needs `gateway` (pulls in `control-plane`).
+# synthesis, gateway + ui/viz for the Ops Console. `llm` lets each specialist phrase its grounded
+# answer via a local model served *on the mesh* (Ollama, with a deterministic grounded fallback).
 [[example]]
 name = "wiki_council_viz"
-required-features = ["gateway"]
+required-features = ["gateway", "llm"]
