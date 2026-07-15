@@ -89,7 +89,18 @@ impl SwimMembership {
         if u.node == self.self_id {
             return match u.status {
                 MemberStatus::Suspect | MemberStatus::Dead if u.incarnation >= self.self_incarnation => {
-                    self.self_incarnation = u.incarnation + 1;
+                    // Refute by out-incarnating (`>=` also lets a restarted node reclaim its identity
+                    // when the cluster remembers it at a higher incarnation). `saturating_add`, NOT
+                    // `+ 1`: SWIM datagrams are unauthenticated UDP, so a *corrupted* frame (UDP's
+                    // checksum is weak) carrying `incarnation == u64::MAX` must never (a) panic under
+                    // overflow-checks — the fire-and-forget listener task would die and the failure
+                    // detector silently stop — nor (b) wrap to 0 under the release profile (which sets
+                    // `panic = "abort"`, overflow-checks off), which would RESET our refutation power
+                    // and get this live node evicted cluster-wide. Saturating pins us high instead —
+                    // degraded but alive. (A *malicious* peer forging a high incarnation can still pin
+                    // us at the ceiling; that is a Byzantine action, outside Mycelium's CFT-not-BFT
+                    // threat model — the guard here is against corruption-induced crash/eviction.)
+                    self.self_incarnation = u.incarnation.saturating_add(1);
                     ApplyEffect::RefutedSelf(self.self_incarnation)
                 }
                 _ => ApplyEffect::None,
@@ -275,6 +286,20 @@ mod tests {
         assert_eq!(m.apply(&suspect(1, 0), now), ApplyEffect::None);
         // An Alive rumour about ourselves never refutes.
         assert_eq!(m.apply(&alive(1, 5), now), ApplyEffect::None);
+    }
+
+    #[test]
+    fn regression_self_refute_saturates_at_max_incarnation_no_overflow() {
+        // Audit 2026-07-15 (pass 2): a corrupted/forged unauthenticated SWIM datagram carrying a
+        // self-rumour at incarnation u64::MAX must NOT `u.incarnation + 1` → panic (overflow-checks
+        // build: kills the fire-and-forget listener task) or wrap to 0 (release: resets our
+        // refutation power and gets us evicted cluster-wide). Saturating pins us high — degraded but
+        // alive and non-panicking.
+        let mut m = SwimMembership::new(id(1));
+        let now = Instant::now();
+        let effect = m.apply(&suspect(1, u64::MAX), now); // must not panic
+        assert_eq!(effect, ApplyEffect::RefutedSelf(u64::MAX));
+        assert_eq!(m.self_incarnation(), u64::MAX, "must saturate, not wrap to 0");
     }
 
     #[test]
