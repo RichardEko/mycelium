@@ -32,7 +32,8 @@ Bigger, self-contained worlds — each links to its own README; see [shared setu
 | **Mesh Control UI** — `llm_agent` | Capability emergence across 3 nodes with a live topology UI | mock ok | [root example](llm_agent.rs) · [README §Demos](../README.md) |
 | **Interactive Chat** — `three_node_demo` | Live MCP tool discovery — tools join a running mesh and the LLM finds them without restart (the same binary drives the Docker integration cluster) | yes | [`chat/`](chat/README.md) |
 | **Conway on GPU** — `conway-gpu/` | The 01-chapter visual at 256 agents with a Metal/wgpu compute shader | no | [`conway-gpu/`](conway-gpu/README.md) |
-| **Skills** — SkillRunner community cluster | LLM agents as first-class mesh citizens (skills as capabilities, live load-balancing) | yes | [`community/`](community/README.md) |
+| **Skills** — SkillRunner community cluster | LLM agents as first-class mesh citizens (skills as capabilities, live load-balancing); every invocation writes a **signed audit record** — the mgmt UI at `:9050/mgmt` shows the **audit trail** | yes | [`community/`](community/README.md) |
+| **Guardrails** — `guardrail_fleet` / `guardrail_wedge` | The three policy tiers (soft-warn → hard-**prevent**): an off-allowlist caller structurally stopped at the provider's Tier-C gate, with a cryptographic denial proof | no | [`mycelium-guardrails/examples/`](../mycelium-guardrails/examples/) |
 | **Agentic Flow Networks** — fluid pipeline | Tuple-space pull pipeline (stigmergic backpressure) vs a push baseline, 10 workers | no | [`fluid_pipeline/`](fluid_pipeline/README.md) |
 | **A2A interop** — LangChain / AutoGen | External agents auto-discover Mycelium skills via `/.well-known/agent.json` | yes | [`a2a_langchain/`](a2a_langchain/README.md) |
 | **Reasoning ladder** — LangGraph-on-Mycelium | 7 rungs from a local checkpointer to a cross-node deploy/reheal flagship | echo model | [`langgraph/`](langgraph/README.md) |
@@ -82,7 +83,7 @@ The examples above, re-sorted by which layer of the stack they teach — the thr
 | **I · gossip-KV** (state) | `hello_mesh` · `conway` / `conway-gpu` |
 | **II · signal-mesh** (events, opacity) | `semantic_coordination` (sender auth) · `stigmergy` / `stigmergy_viz` (opacity pheromone) · `diagnostics` (emergent state) |
 | **III · consensus** | `distributed_lock` (lock + fencing) · coop `consensus` (cross-group quorum) · `three_node_demo` (overlay) |
-| **IV · capability / agent** | `hello_capability` · `invoke_skill` · `llm_agent` · coop artifacts (`catalog` · `provisioning` · `model_deploy` · `reheal_deploy`) · `federation_facts` · `rotation` · `elastic_intent` · `mcp_toolgrowth` · LLM (`mailbox_llm` · `llm_pipeline` · `llm_council`) · Python (`a2a_langchain` · `langgraph` · `community`) |
+| **IV · capability / agent** | `hello_capability` · `invoke_skill` · `llm_agent` · coop artifacts (`catalog` · `provisioning` · `model_deploy` · `reheal_deploy`) · `federation_facts` · `mcp_toolgrowth` · `elastic_intent` · LLM (`mailbox_llm` · `llm_pipeline` · `llm_council`) · **security / policy** (`rotation` identity · `guardrail_fleet` / `guardrail_wedge` policy tiers · the signed **audit trail** via `community`) · Python (`a2a_langchain` · `langgraph` · `community`) |
 
 **Full-stack / cross-layer:** `three_node_demo` touches all four; `three_arm_workdist` &
 `coordinator_comparison` set the layers *against* each other (broker-RPC vs gossip-KV vs tuple-space
