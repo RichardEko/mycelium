@@ -9,6 +9,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.1.0] — 2026-07-15
+
+Wire **v12** (PREV 11) — unchanged from v2.0.0; a fully backwards-compatible rolling upgrade.
+
 ### Added
 - **`LockService` — the distributed-lock service** (`agent.consensus().locks()`): the ergonomic
   layer over `distributed_lock` with **blocking acquire** (`lock(name, ttl, wait)` waits out
@@ -24,8 +28,6 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   successive holders**. Gate: `fencing_token_is_monotonic_across_acquisitions`. The gateway
   returns it as a decimal **string** (the HLC exceeds JS safe-integer range; the TS SDK already
   expected a string, the Python SDK parses it to `int`).
-
-### Added
 - **`GossipAgent::connect_peer` / `disconnect_peer`** — pin (and actively warm) a direct
   forwarding route to an RPC-heavy peer. The forwarding-target set deliberately de-pins
   non-active peers (seed scalability), which silently degrades Individual-scoped
@@ -40,6 +42,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (a red scenario names its dying line), S13 take-loop HTTP-code instrumentation, node-log
   dump on runner failure, and a Phase-0 data-plane readiness barrier (#156). A self-hosted
   nightly for the 100-node scale suites is staged separately (#157).
+- **Examples & docs, substantially reworked** — a single faceted **capability matrix** as the
+  examples front door (every example fingerprinted by stack layer + facet — level · surface · LLM ·
+  audit · metrics — each linking to its run-doc); the artifact library made **watchable** with two new
+  browser showcases (`provisioning_viz` — a capability self-provisions then heals onto a standby with
+  no coordinator; `catalog_viz` — the origin dies + its library is deleted, yet a late node installs
+  from a verified peer cache); a `## Loads` banner on every runtime-loading demo declaring **what it
+  installs** (content · type · source); a **UI-example contract** standardising every browser demo
+  (gateway+metrics, an Ops Console two-way link, a "what you're seeing" concepts box); and
+  `docs/philosophy.html` ported to a GitHub-readable **`philosophy.md`** as the single canonical source.
 
 ### Fixed
 - **`distributed_lock` is now a correct mutually-exclusive, releasable lock** (#164). Two
