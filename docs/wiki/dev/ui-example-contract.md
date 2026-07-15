@@ -58,6 +58,15 @@ uses; the gloss is one honest line each.
 `<details class="explains" open>` block containing `<div id="concepts">`, and the `(function(){ const
 C = __CONCEPTS__; … })()` renderer with the `COL` tag→colour map.
 
+## The CLI analogue — the `Loads` banner
+
+CLI examples have no page to inject a concepts box into, but the **runtime-loading artifact demos**
+(`catalog` · `mcp_toolgrowth` · `provisioning` · `model_deploy` · `reheal_deploy`) carry the same idea
+as a **printed startup banner**: each declares a `LOADS: &[Loads]` const and calls
+`coop::common::announce_loads` (`examples/coop/src/common/loads.rs`) to print a `dynamically loaded
+artifact(s)` box stating **content · type · loaded-from**, mirrored in the example's `## Loads`
+doc-comment block. Same contract-4 intent (say what the demo really exercises), different surface.
+
 ## The exceptions
 
 - **`conway-gpu`** serves its canvas over a **raw `TcpListener`, not a Mycelium gateway** (the GPU
