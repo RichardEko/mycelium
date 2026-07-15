@@ -178,3 +178,7 @@ signal for the `/publication-lint` skill (is it catching overclaims before human
   proof"); the callout now lists all seven showcases `:8090`–`:8096`. Verified the claim against the
   running demo (unauthorized invocation → STOPPED + a sealed, chain-verified denial) — accurate, not
   an overclaim. The separate showcase-metrics change touched no persuasion surface. No findings.
+- 2026-07-15 (lint run 10): **clean — no persuasion-surface change.** The UI-example-contract work
+  (the contract page, the concepts box on nine browser examples, the wiki-lint check) touched
+  `examples/`, `docs/wiki/`, and the skill — no `docs/publications/` or `philosophy.html` commit since
+  run 9. Nothing to reconcile. No findings.
