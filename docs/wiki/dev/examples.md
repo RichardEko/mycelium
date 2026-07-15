@@ -89,8 +89,10 @@ Layer explainers: gossip-KV [ch01](../../guide/01-gossip-kv.md) · signal-mesh
 - **Guardrails** (`mycelium-guardrails/examples/`): `guardrail_wedge` (an off-allowlist caller
   structurally stopped at a Tier-C gate, with a cryptographic denial proof) + `guardrail_fleet` (all
   three policy tiers composed in one co-op fleet).
-- **Wiki companion** (`mycelium-wiki/examples/wiki_chat.rs`): import documents, then chat grounded in
-  the shared wiki (the wiki companion's Phase-5 worked example).
+- **Wiki companion** (`mycelium-wiki/examples/`): `wiki_chat` — import documents, then chat grounded in
+  the shared wiki (Phase-5 worked example) · `wiki_council_viz` — the browser showcase: a **live chat**
+  over a fleet of wiki-grounded specialists (Transport · Energy · Planning · Budget), fan-out +
+  synthesis with citations, gateway + `ui/viz` (`:8095`, `--features gateway`).
 - Integration suite: **13 Docker scenarios** (`make test`, 4-node cluster) + the consistency
   overlay (`make test-overlay`, 3-node consensus); scale suites in
   [testing/scale-tests](testing/scale-tests.md).

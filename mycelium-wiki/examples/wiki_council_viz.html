@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wiki Council — specialists over a shared wiki</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --border:#30363d; --fg:#e6edf3;
+    --muted:#8b949e; --faint:#484f58; --accent:#58a6ff;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:15px;line-height:1.55}
+  header{display:flex;align-items:center;gap:14px;padding:14px 24px;border-bottom:1px solid var(--border);
+    background:radial-gradient(ellipse at 30% 0%,rgba(88,166,255,.08),transparent 60%),var(--panel);flex-wrap:wrap}
+  .brand{font-weight:700;letter-spacing:-.01em}.brand b{color:var(--accent)}
+  .tag{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);
+    border:1px solid var(--border);border-radius:20px;padding:3px 10px}
+  .sub{color:var(--muted);font-size:13px;width:100%;margin-top:-4px}
+  .opsbtn{margin-left:auto;align-self:center;font-size:12px;font-family:var(--mono);text-decoration:none;
+    color:var(--accent);border:1px solid var(--border);border-radius:8px;padding:6px 11px;white-space:nowrap}
+  .opsbtn:hover{background:rgba(255,255,255,.05)}
+
+  .layout{display:grid;grid-template-columns:236px 1fr;gap:0;min-height:calc(100vh - 62px)}
+  @media(max-width:720px){.layout{grid-template-columns:1fr}}
+
+  /* fleet sidebar */
+  aside{border-right:1px solid var(--border);padding:18px 16px;background:var(--panel)}
+  aside h3{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin:0 0 12px}
+  .spec{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);
+    border-radius:11px;margin-bottom:9px;background:var(--panel2);transition:border-color .2s,box-shadow .2s}
+  .spec.hot{border-color:var(--c);box-shadow:0 0 0 1px var(--c),0 0 14px -4px var(--c)}
+  .spec .em{font-size:19px;width:26px;text-align:center}
+  .spec .nm{font-weight:600;font-size:14px}
+  .spec .dm{font-size:11px;color:var(--muted)}
+  .spec .ct{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--c);font-weight:700}
+  aside .note{font-size:11px;color:var(--faint);margin-top:14px;line-height:1.5}
+
+  /* chat */
+  main{display:flex;flex-direction:column;height:calc(100vh - 62px)}
+  .thread{flex:1;overflow-y:auto;padding:22px 24px;display:flex;flex-direction:column;gap:20px}
+  .empty{color:var(--muted);max-width:56ch;margin:auto;text-align:center}
+  .empty .chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:16px}
+  .chip{font-size:12.5px;color:var(--fg);background:var(--panel2);border:1px solid var(--border);
+    border-radius:20px;padding:6px 13px;cursor:pointer}
+  .chip:hover{border-color:var(--accent);color:var(--accent)}
+
+  .turn{display:flex;flex-direction:column;gap:11px}
+  .q{align-self:flex-end;max-width:80%;background:var(--accent);color:#04101f;font-weight:550;
+    padding:9px 15px;border-radius:14px 14px 3px 14px}
+  .contrib{border:1px solid var(--border);border-left:3px solid var(--c);border-radius:0 11px 11px 0;
+    background:var(--panel);padding:11px 15px}
+  .contrib .h{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+  .contrib .h .em{font-size:16px}.contrib .h .nm{font-weight:650;color:var(--c);font-size:13.5px}
+  .contrib .ans{color:var(--fg);font-size:14px}
+  .cites{margin-top:7px;display:flex;flex-wrap:wrap;gap:6px}
+  .cite{font-family:var(--mono);font-size:10.5px;color:var(--muted);background:var(--panel2);
+    border:1px solid var(--border);border-radius:6px;padding:2px 7px}
+  .cite b{color:var(--fg);font-weight:600}
+  .synth{background:var(--panel2);border:1px solid var(--border);border-radius:11px;padding:11px 15px;
+    font-size:13.5px;color:var(--muted)}
+  .synth b{color:var(--fg)}
+  .synth .lbl{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--faint);
+    display:block;margin-bottom:3px}
+
+  form{display:flex;gap:10px;padding:16px 24px;border-top:1px solid var(--border);background:var(--panel)}
+  input[type=text]{flex:1;background:#0b0f16;border:1px solid var(--border);border-radius:10px;
+    color:var(--fg);font:15px var(--sans);padding:11px 15px}
+  input[type=text]:focus{outline:none;border-color:var(--accent)}
+  button{background:var(--accent);color:#04101f;border:none;border-radius:10px;font-weight:650;
+    font-size:14px;padding:0 20px;cursor:pointer}
+  button:disabled{opacity:.5;cursor:default}
+</style>
+</head>
+<body>
+<header>
+  <span class="brand"><b>Wiki</b> Council</span>
+  <span class="tag">specialists · one shared wiki</span>
+  __OPS_CONSOLE_LINK__
+  <div class="sub">Ask a question — it fans out to the relevant specialists, each answers grounded in the
+    shared wiki with citations, and a synthesizer merges them.</div>
+</header>
+
+<div class="layout">
+  <aside>
+    <h3>The fleet</h3>
+    <div id="fleet"></div>
+    <div class="note">Each specialist is a <b>reader</b> against the shared wiki — no node, no curator.
+      Budget is cross-cutting: it reads the £ figures across every decision.</div>
+  </aside>
+  <main>
+    <div class="thread" id="thread"></div>
+    <form id="form">
+      <input type="text" id="q" placeholder="Ask the council…" autocomplete="off" spellcheck="false">
+      <button type="submit" id="send">Ask</button>
+    </form>
+  </main>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const el = (t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
+const EXAMPLES = [
+  "What was decided about the Elm Street bike lane, and what did it cost?",
+  "Tell me about the community solar array",
+  "How much have we spent from the climate reserve?",
+  "What's changing with recycling collection?",
+];
+let busy = false;
+
+function renderFleet(fleet){
+  const box = $("#fleet"); box.innerHTML = "";
+  fleet.forEach(s=>{
+    const d = el("div","spec"+(s.engaged>0?" hot":""));
+    d.style.setProperty("--c", s.color);
+    d.innerHTML = `<span class="em">${s.emoji}</span>
+      <div><div class="nm">${s.name}</div><div class="dm">${s.engaged>0?s.engaged+" answered":"idle"}</div></div>
+      <span class="ct">${s.engaged||""}</span>`;
+    box.appendChild(d);
+  });
+}
+
+function renderThread(thread){
+  const box = $("#thread");
+  if(!thread.length){
+    box.innerHTML = "";
+    const e = el("div","empty",`<div style="font-size:15px">A neighbourhood council's decisions, answered by
+      four specialists over one shared wiki.</div><div class="chips">${
+        EXAMPLES.map(q=>`<span class="chip">${q}</span>`).join("")}</div>`);
+    box.appendChild(e);
+    box.querySelectorAll(".chip").forEach((c,i)=>c.onclick=()=>ask(EXAMPLES[i]));
+    return;
+  }
+  box.innerHTML = "";
+  thread.forEach(t=>{
+    const turn = el("div","turn");
+    turn.appendChild(el("div","q",t.question));
+    t.contributions.forEach(c=>{
+      const div = el("div","contrib");
+      div.style.setProperty("--c", c.color);
+      const cites = c.citations.map(x=>`<span class="cite">📄 <b>${x.heading}</b></span>`).join("");
+      div.innerHTML = `<div class="h"><span class="em">${c.emoji}</span><span class="nm">${c.specialist}</span></div>
+        <div class="ans">${c.answer}</div>${cites?`<div class="cites">${cites}</div>`:""}`;
+      turn.appendChild(div);
+    });
+    turn.appendChild(el("div","synth",`<span class="lbl">Synthesizer</span>${t.synthesis}`));
+    box.appendChild(turn);
+  });
+  box.scrollTop = box.scrollHeight;
+}
+
+function render(st){ renderFleet(st.fleet||[]); renderThread(st.thread||[]); }
+
+async function refresh(){ try{ render(await (await fetch("/state")).json()); }catch(e){} }
+
+async function ask(q){
+  if(busy || !q.trim()) return;
+  busy = true; $("#send").disabled = true; $("#q").value = q;
+  try{ render(await (await fetch("/ask?q="+encodeURIComponent(q))).json()); }
+  catch(e){}
+  $("#q").value = ""; busy = false; $("#send").disabled = false; $("#q").focus();
+}
+
+$("#form").addEventListener("submit", e=>{ e.preventDefault(); ask($("#q").value); });
+refresh();
+setInterval(()=>{ if(!busy) refresh(); }, 4000);
+</script>
+</body>
+</html>

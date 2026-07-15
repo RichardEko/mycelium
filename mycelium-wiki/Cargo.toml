@@ -67,3 +67,9 @@ required-features = ["gateway"]
 [[example]]
 name = "wiki_chat"
 required-features = ["llm"]
+
+# The browser showcase: a fleet of wiki-grounded council specialists + a live chat, fan-out +
+# synthesis, gateway + ui/viz for the Ops Console. Needs `gateway` (pulls in `control-plane`).
+[[example]]
+name = "wiki_council_viz"
+required-features = ["gateway"]
