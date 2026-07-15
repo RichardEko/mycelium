@@ -47,6 +47,7 @@ Bigger, self-contained worlds — each links to its own README; see [shared setu
 | [`stigmergy_viz`](coop/src/bin/stigmergy_viz.rs) | Pheromone reroute: opacity glow + dispatch routing **around** the busy depot (`:8092`) | `cargo run -p mycelium-coop-examples --bin stigmergy_viz` |
 | [`redistribution_viz`](../mycelium-tuple-space/examples/redistribution_viz.rs) | Pipeline flow: `intake→sorted→routed→delivered`, competitive take (`:8093`) | `cargo run -p mycelium-tuple-space --example redistribution_viz` |
 | [`llm_council_viz`](coop/src/bin/llm_council_viz.rs) | Deliberation DAG: fan-out · synthesis · critic↔reviser refinement, no LLM key (`:8094`) | `cargo run -p mycelium-coop-examples --bin llm_council_viz` |
+| [`wiki_council_viz`](../mycelium-wiki/examples/wiki_council_viz.rs) | **Live chat** over a fleet of wiki-grounded specialists (Transport · Energy · Planning · Budget): a question fans out to the relevant experts, each answers *cited from the shared wiki*, a synthesizer merges — no LLM key (`:8095`) | `cargo run -p mycelium-wiki --example wiki_council_viz --features gateway` |
 
 (`conway`/`conway-gpu` above are the original visual demos — terminal+canvas and GPU. The four `*_viz` are visual variants of the batch demos, which stay the CI-gated versions.)
 
@@ -90,8 +91,8 @@ The examples above, re-sorted by which layer of the stack they teach — the thr
 **Full-stack / cross-layer:** `three_node_demo` touches all four; `three_arm_workdist` &
 `coordinator_comparison` set the layers *against* each other (broker-RPC vs gossip-KV vs tuple-space
 **pull**). The companions build *atop* I/II — tuple-space (`redistribution` / `redistribution_viz`),
-blackboard (`microgrid` / `microgrid_viz`), and wiki (`wiki_chat`); `ops_console` observes every
-layer's HTTP surface.
+blackboard (`microgrid` / `microgrid_viz`), and wiki (`wiki_chat` · `wiki_council_viz`); `ops_console`
+observes every layer's HTTP surface.
 
 ## Shared setup
 
