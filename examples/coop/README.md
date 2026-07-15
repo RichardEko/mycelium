@@ -62,6 +62,24 @@ curl http://127.0.0.1:<printed-port>/.well-known/agent-facts.json
 | 11 | `catalog` | ✅ shipped | the **cluster-wide artifact catalogue** — register a deployable, discover it via gossip, pull bytes over the mesh, provision & invoke (no registry server) |
 | M | `model_deploy` | ✅ shipped (manual) | **a real LLM model deployed through the artifact library** — weights (GGUF) **and** their deployment **profile** as two signed artifacts, profile → weights by content address → library → catalogue → resource-checked election → streamed with live percent → resolved + `ollama create` → probe-gated → real tokens under the governed profile. Needs Ollama; not in `ci_smoke` |
 
+## Browser showcases
+
+Four demos have **watchable browser variants** (the `/state`-feed-behind-a-canvas pattern; run
+continuously, Ctrl-C to stop; **not** in CI). All follow the
+[UI-example contract](../../docs/wiki/dev/ui-example-contract.md) — gateway+metrics on, Ops Console
+linked (`ui/viz` + a `⚙ Ops Console` back-link), and a "what you're seeing" concepts box; the two
+artifact ones also print the `## Loads` banner.
+
+| Showcase | Port | Run | What you watch |
+|---|:--:|---|---|
+| `stigmergy_viz` | `:8092` | `… --bin stigmergy_viz --features metrics` | dispatch reroutes around a busy depot (opacity pheromone) |
+| `llm_council_viz` | `:8094` | `… --bin llm_council_viz --features metrics` | fan-out · synthesis · critic↔reviser DAG (`EchoBackend`, no key) |
+| `provisioning_viz` ⭐ | `:8097` | `… --features wasm,metrics --bin provisioning_viz` | a capability **self-provisions**, then **heals onto a standby** when the active node is killed — no coordinator |
+| `catalog_viz` | `:8098` | `… --features wasm,metrics --bin catalog_viz` | the origin (librarian) **dies + its library is deleted**, yet a late node **installs from a verified peer cache** |
+
+(`…` = `cargo run -p mycelium-coop-examples`.) Each is the visual variant of its batch demo
+(`stigmergy` / `llm_council` / `provisioning` / `catalog`), which stay the CI-gated versions.
+
 ## Patterns & pitfalls
 
 Each demo also teaches a **pitfall** — the right way vs. the anti-pattern, with the *why*. The full

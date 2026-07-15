@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Catalogue — Origin-Death Survival</title>
+<style>
+  :root {
+    --bg:       #0d1117;
+    --surface:  #161b22;
+    --surface2: #1c2128;
+    --border:   #30363d;
+    --accent:   #58a6ff;
+    --green:    #3fb950;
+    --amber:    #ffa657;
+    --red:      #ff7b72;
+    --purple:   #d2a8ff;
+    --muted:    #8b949e;
+    --text:     #e6edf3;
+    --radius:   10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 14px; line-height: 1.6;
+  }
+  .header {
+    background: radial-gradient(ellipse at 55% 0%, rgba(210,168,255,0.08) 0%, transparent 55%), var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 22px 32px 18px;
+    display: flex; align-items: flex-start; gap: 16px;
+  }
+  .badge {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--purple); background: rgba(210,168,255,0.1);
+    border: 1px solid rgba(210,168,255,0.25); border-radius: 20px;
+    padding: 4px 12px; white-space: nowrap; margin-top: 3px;
+  }
+  .opsbtn {
+    align-self: center; font-size: 12px; font-family: monospace; text-decoration: none;
+    color: var(--accent); border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 11px; white-space: nowrap; transition: background .15s;
+  }
+  .opsbtn:hover { background: rgba(255,255,255,0.05); }
+  .htext { flex: 1; }
+  .htitle { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+  .htitle em { font-style: normal; color: var(--purple); }
+  .hsub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 22px 32px 40px; }
+
+  .statusbar {
+    display: flex; gap: 14px; flex-wrap: wrap; align-items: center;
+    margin-bottom: 16px;
+  }
+  .chip {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 8px 14px;
+  }
+  .chip .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); }
+  .chip .val { font-size: 15px; font-weight: 700; font-family: "SF Mono","Fira Code",monospace; }
+  .dot-live {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--green); box-shadow: 0 0 6px var(--green);
+    animation: blink 1.6s ease-in-out infinite;
+  }
+  .dot-off { background: var(--amber); box-shadow: none; animation: none; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
+
+  .canvas-panel {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; overflow: hidden;
+  }
+  #stage { display: block; width: 100%; }
+
+  .caption {
+    font-size: 12px; color: var(--muted);
+    padding: 12px 18px; border-top: 1px solid var(--border);
+    background: var(--surface2);
+  }
+  .caption em { font-style: normal; color: var(--text); }
+
+  .lower { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 16px; }
+  .legend {
+    display: flex; gap: 20px; flex-wrap: wrap; flex: 1;
+    font-size: 11px; color: var(--muted); align-content: flex-start;
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+  .feed {
+    flex: 1 1 320px; min-width: 300px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 10px 14px;
+  }
+  .feed h4 { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 6px; }
+  #events { list-style: none; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: 11.5px; }
+  #events li { padding: 2px 0; color: var(--muted); border-bottom: 1px solid rgba(255,255,255,0.03); }
+  #events li:last-child { color: var(--text); }
+
+  /* ── UI-example contract: the "what you're seeing" concepts box ── */
+  .explains{margin:14px 20px 0;border:1px solid var(--border);border-radius:12px;background:rgba(255,255,255,.02);padding:0 16px}
+  .explains summary{cursor:pointer;list-style:none;padding:11px 0;font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted)}
+  .explains summary b{color:var(--text);text-transform:none;letter-spacing:0;font-size:13px}
+  .explains summary::-webkit-details-marker{display:none}
+  .concepts{display:flex;flex-direction:column;gap:7px;padding:2px 0 14px}
+  .concept{display:flex;align-items:baseline;gap:10px;font-size:13px;flex-wrap:wrap}
+  .ctag{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;font-weight:700;border:1px solid;border-radius:5px;padding:1px 7px;min-width:38px;text-align:center;flex:none}
+  .cname{font-weight:600;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;color:var(--text)}
+  .cgloss{color:var(--muted)}
+</style>
+</head>
+<body>
+
+<header class="header">
+  <span class="badge">Layer IV · Artifact Library</span>
+  <div class="htext">
+    <div class="htitle">Catalogue — <em>Origin-Death Survival</em></div>
+    <div class="hsub">
+      A signed component is published, discovered, pulled peer-to-peer and installed. Then the
+      <code>librarian</code> (origin) dies and its library is deleted — and a late-joining node
+      still installs, from a peer's <em>verified cache</em>.
+    </div>
+  </div>
+  __OPS_CONSOLE_LINK__
+</header>
+
+<details class="explains" open>
+  <summary>What you're seeing · <b>Mycelium concepts &amp; services</b></summary>
+  <div class="concepts" id="concepts"></div>
+</details>
+<script>
+  // UI-example contract: render the injected concept list as colour-coded chips (shared snippet).
+  (function(){
+    const C = __CONCEPTS__;
+    const COL = {I:"#58a6ff",II:"#d29922",III:"#3fb950",IV:"#a78bfa",companion:"#39c5bb",gateway:"#8b949e",audit:"#f85149",security:"#f85149"};
+    const box = document.getElementById("concepts");
+    if(box && Array.isArray(C)) box.innerHTML = C.map(function(c){
+      const col = COL[c.tag] || "#8b949e";
+      return '<div class="concept"><span class="ctag" style="border-color:'+col+';color:'+col+'">'+c.tag+
+        '</span><span class="cname">'+c.name+'</span><span class="cgloss">'+c.gloss+'</span></div>';
+    }).join("");
+  })();
+</script>
+
+<div class="wrap">
+
+  <div class="statusbar">
+    <div class="chip"><span class="lbl">Link</span> <span class="dot-live" id="conn"></span></div>
+    <div class="chip"><span class="lbl">Phase</span> <span class="val" style="color:var(--purple)" id="s-phase">—</span></div>
+    <div class="chip"><span class="lbl">Origin</span> <span class="val" id="s-origin">—</span></div>
+    <div class="chip"><span class="lbl">Catalogue</span> <span class="val" id="s-cat">—</span></div>
+    <div class="chip"><span class="lbl">Cache holders</span> <span class="val" style="color:var(--green)" id="s-hold">0</span></div>
+  </div>
+
+  <div class="canvas-panel">
+    <canvas id="stage"></canvas>
+    <div class="caption" id="caption">
+      <em>Any holder is interchangeable</em> — content addressing lets an install survive the origin's death.
+    </div>
+  </div>
+
+  <div class="lower">
+    <div class="legend">
+      <span><span class="sw" style="background:var(--accent)"></span> serving</span>
+      <span><span class="sw" style="background:var(--amber)"></span> installing (pulling + verifying)</span>
+      <span><span class="sw" style="background:var(--green)"></span> installed · verified cache holder</span>
+      <span><span class="sw" style="background:var(--red)"></span> origin dead · library deleted</span>
+      <span><span class="sw" style="background:var(--muted)"></span> idle</span>
+    </div>
+    <div class="feed">
+      <h4>Event log</h4>
+      <ul id="events"></ul>
+    </div>
+  </div>
+</div>
+
+<script>
+const HTTP_PORT = 8098;
+
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d');
+const dpr = window.devicePixelRatio || 1;
+let W = 1000, H = 480;
+
+function sizeCanvas() {
+  const cssW = canvas.clientWidth || 1000;
+  W = cssW; H = Math.round(cssW * 0.50);
+  canvas.style.height = H + 'px';
+  canvas.width  = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', sizeCanvas);
+
+// ── Live state, updated by polling /state ──────────────────────────────
+let state = {
+  nodes: [], catalogue_present: false, origin_alive: true, library_deleted: false,
+  holders: [], phase: '—', caption: '', flow: null, events: [], tick: 0
+};
+let connected = false;
+
+// ── Node layout keyed by name ──────────────────────────────────────────
+function nodePos(name) {
+  switch (name) {
+    case 'librarian': return { x: W * 0.5,  y: 82 };
+    case 'installer': return { x: W * 0.26, y: H * 0.60 };
+    case 'caller':    return { x: W * 0.74, y: H * 0.60 };
+    case 'late':      return { x: W * 0.5,  y: H - 74 };
+    default:          return { x: W * 0.5,  y: H * 0.5 };
+  }
+}
+function catalogPos() { return { x: W * 0.5, y: H * 0.40 }; }
+
+const COL = {
+  idle:       '#8b949e',
+  serving:    '#58a6ff',
+  installing: '#ffa657',
+  installed:  '#3fb950',
+  dead:       '#ff7b72',
+};
+
+function lerp(a, b, t) { return a + (b - a) * t; }
+function hexGlow(hex, a) {
+  const h = hex.replace('#', '');
+  return `rgba(${parseInt(h.substring(0,2),16)},${parseInt(h.substring(2,4),16)},${parseInt(h.substring(4,6),16)},${a})`;
+}
+function roundRect(x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// ── Drawing ────────────────────────────────────────────────────────────
+let animT = 0;
+function draw(ts) {
+  animT = ts / 1000;
+  ctx.clearRect(0, 0, W, H);
+
+  const nodes = state.nodes || [];
+  const byName = {};
+  nodes.forEach(n => byName[n.name] = n);
+
+  // ── Static edges (backbone). librarian→installer, installer→caller, installer→late. ──
+  drawEdge('librarian', 'installer', byName);
+  drawEdge('installer', 'caller', byName);
+  drawEdge('installer', 'late', byName);
+
+  // ── The catalogue entry chip in the centre (gossip KV — survives the origin). ──
+  drawCatalogue();
+
+  // ── Active flow packets (bytes / rpc travelling along an edge). ──
+  if (state.flow && state.flow.from && state.flow.to) {
+    drawFlow(nodePos(state.flow.from), nodePos(state.flow.to), state.flow.label);
+  }
+
+  // ── Nodes ──
+  nodes.forEach(n => drawNode(n));
+
+  requestAnimationFrame(draw);
+}
+
+function edgeLive(a, b, byName) {
+  // An edge is "live" only when the flow is currently travelling along it.
+  return state.flow && ((state.flow.from === a && state.flow.to === b) ||
+                        (state.flow.from === b && state.flow.to === a));
+}
+
+function drawEdge(a, b, byName) {
+  const pa = nodePos(a), pb = nodePos(b);
+  // The librarian→installer edge goes dead once the origin is gone.
+  const originEdge = (a === 'librarian' || b === 'librarian');
+  const dead = originEdge && !state.origin_alive;
+  ctx.save();
+  if (dead) {
+    ctx.strokeStyle = 'rgba(255,123,114,0.18)';
+    ctx.lineWidth = 1.4; ctx.setLineDash([3, 6]);
+  } else if (edgeLive(a, b, byName)) {
+    ctx.strokeStyle = 'rgba(88,166,255,0.5)';
+    ctx.lineWidth = 2; ctx.setLineDash([7, 9]);
+    ctx.lineDashOffset = -(animT * 42) % 16;
+  } else {
+    ctx.strokeStyle = 'rgba(139,148,158,0.16)';
+    ctx.lineWidth = 1.4; ctx.setLineDash([2, 6]);
+  }
+  ctx.beginPath(); ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y); ctx.stroke();
+  ctx.restore();
+
+  // A crossed-out mark on the dead origin edge.
+  if (dead) {
+    const mx = (pa.x + pb.x) / 2, my = (pa.y + pb.y) / 2;
+    ctx.strokeStyle = 'rgba(255,123,114,0.7)'; ctx.lineWidth = 2; ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(mx - 7, my - 7); ctx.lineTo(mx + 7, my + 7);
+    ctx.moveTo(mx + 7, my - 7); ctx.lineTo(mx - 7, my + 7);
+    ctx.stroke();
+  }
+}
+
+function drawFlow(pa, pb, label) {
+  for (let k = 0; k < 3; k++) {
+    const t = ((animT * 0.6 + k / 3) % 1);
+    const px = lerp(pa.x, pb.x, t), py = lerp(pa.y, pb.y, t);
+    ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI * 2);
+    ctx.fillStyle = '#79c0ff'; ctx.shadowColor = '#58a6ff'; ctx.shadowBlur = 9;
+    ctx.fill(); ctx.shadowBlur = 0;
+  }
+  if (label) {
+    const mx = (pa.x + pb.x) / 2, my = (pa.y + pb.y) / 2;
+    ctx.font = '10px ui-monospace, monospace'; ctx.textAlign = 'center';
+    ctx.fillStyle = '#79c0ff';
+    ctx.fillText(label, mx, my - 10);
+  }
+}
+
+function drawCatalogue() {
+  const c = catalogPos();
+  const present = state.catalogue_present;
+  const w = 186, h = 40, x = c.x - w / 2, y = c.y - h / 2;
+  ctx.save();
+  if (present) {
+    ctx.fillStyle = hexGlow('#3fb950', 0.10);
+    roundRect(x - 4, y - 4, w + 8, h + 8, 12); ctx.fill();
+  }
+  ctx.fillStyle = present ? '#132a1c' : '#161b22';
+  ctx.strokeStyle = present ? '#3fb950' : '#30363d';
+  ctx.lineWidth = 1.5; ctx.setLineDash(present ? [] : [4, 4]);
+  roundRect(x, y, w, h, 10); ctx.fill(); ctx.stroke(); ctx.setLineDash([]);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = present ? '#e6edf3' : '#8b949e';
+  ctx.font = '600 11px ui-monospace, monospace';
+  ctx.fillText('installable/route/optimize', c.x, c.y - 1);
+  ctx.fillStyle = '#8b949e'; ctx.font = '9px -apple-system, sans-serif';
+  ctx.fillText(present ? 'gossip-KV catalogue · content-addressed' : 'not yet replicated', c.x, c.y + 12);
+  ctx.restore();
+}
+
+function drawNode(n) {
+  const p = nodePos(n.name);
+  const dead = n.status === 'dead';
+  const col = COL[n.status] || COL.idle;
+  const R = 34;
+  const isHolder = (state.holders || []).includes(n.name);
+
+  ctx.save();
+
+  // Pulsing halo while installing; steady soft ring for holders.
+  if (n.status === 'installing') {
+    const pulse = 0.5 + 0.5 * Math.sin(animT * 3.4);
+    const g = ctx.createRadialGradient(p.x, p.y, R, p.x, p.y, R + 16 + pulse * 8);
+    g.addColorStop(0, hexGlow(col, 0.42)); g.addColorStop(1, hexGlow(col, 0));
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(p.x, p.y, R + 22, 0, Math.PI * 2); ctx.fill();
+  } else if (isHolder && !dead) {
+    ctx.fillStyle = hexGlow('#3fb950', 0.14);
+    ctx.beginPath(); ctx.arc(p.x, p.y, R + 9, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // Body
+  ctx.beginPath(); ctx.arc(p.x, p.y, R, 0, Math.PI * 2);
+  ctx.fillStyle = dead ? '#241b1c' : '#161b22';
+  ctx.fill();
+  ctx.lineWidth = 2.5; ctx.strokeStyle = col;
+  if (dead) ctx.setLineDash([4, 4]);
+  ctx.stroke(); ctx.setLineDash([]);
+
+  // Skull-ish dead marker: an X through the origin.
+  if (dead) {
+    ctx.strokeStyle = 'rgba(255,123,114,0.85)'; ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(p.x - 13, p.y - 13); ctx.lineTo(p.x + 13, p.y + 13);
+    ctx.moveTo(p.x + 13, p.y - 13); ctx.lineTo(p.x - 13, p.y + 13);
+    ctx.stroke();
+  }
+
+  // Name + role
+  ctx.textAlign = 'center';
+  ctx.fillStyle = dead ? '#8b949e' : '#e6edf3';
+  ctx.font = '600 12px -apple-system, sans-serif';
+  ctx.fillText(n.name, p.x, p.y + (dead ? 0 : -1));
+  if (!dead) {
+    ctx.fillStyle = '#8b949e'; ctx.font = '9px -apple-system, sans-serif';
+    ctx.fillText(n.role, p.x, p.y + 12);
+  }
+
+  // Status label under the node
+  ctx.font = '600 10px -apple-system, sans-serif';
+  ctx.fillStyle = col;
+  let label = n.status;
+  if (n.status === 'installed') label = isHolder ? '✔ installed · cache' : '✔ installed';
+  else if (dead) label = '✖ origin gone';
+  ctx.fillText(label, p.x, p.y + R + 16);
+
+  // "library deleted" tag under the dead librarian.
+  if (dead && state.library_deleted) {
+    ctx.fillStyle = '#8b949e'; ctx.font = '9px -apple-system, sans-serif';
+    ctx.fillText('library directory deleted', p.x, p.y + R + 30);
+  }
+  ctx.restore();
+}
+
+// ── Polling ────────────────────────────────────────────────────────────
+function setConnected(ok) {
+  connected = ok;
+  document.getElementById('conn').className = ok ? 'dot-live' : 'dot-live dot-off';
+}
+
+function applyState(d) {
+  state = d;
+  document.getElementById('s-phase').textContent = d.phase || '—';
+  const origin = document.getElementById('s-origin');
+  origin.textContent = d.origin_alive ? 'alive' : 'dead';
+  origin.style.color = d.origin_alive ? 'var(--accent)' : 'var(--red)';
+  const cat = document.getElementById('s-cat');
+  cat.textContent = d.catalogue_present ? 'present' : '—';
+  cat.style.color = d.catalogue_present ? 'var(--green)' : 'var(--muted)';
+  document.getElementById('s-hold').textContent = (d.holders || []).length;
+
+  document.getElementById('caption').innerHTML = '<em>' + (d.caption || '') + '</em>';
+
+  const ul = document.getElementById('events');
+  ul.innerHTML = (d.events || []).map(e => '<li>' + escapeHtml(e) + '</li>').join('');
+}
+function escapeHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+async function poll() {
+  try {
+    const res = await fetch(`http://127.0.0.1:${HTTP_PORT}/state`, { signal: AbortSignal.timeout(2000) });
+    if (!res.ok) throw new Error();
+    applyState(await res.json());
+    if (!connected) setConnected(true);
+  } catch {
+    if (connected) setConnected(false);
+  }
+}
+
+// ── Init ───────────────────────────────────────────────────────────────
+sizeCanvas();
+setConnected(false);
+poll();
+setInterval(poll, 400);
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>

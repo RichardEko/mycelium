@@ -36,6 +36,16 @@ name = "stigmergy_viz"
 path = "src/bin/stigmergy_viz.rs"
 
 [[bin]]
+name = "provisioning_viz"
+path = "src/bin/provisioning_viz.rs"
+required-features = ["wasm"]
+
+[[bin]]
+name = "catalog_viz"
+path = "src/bin/catalog_viz.rs"
+required-features = ["wasm"]
+
+[[bin]]
 name = "elastic_intent"
 path = "src/bin/elastic_intent.rs"
 

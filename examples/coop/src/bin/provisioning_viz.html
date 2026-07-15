@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Autonomic Self-Heal — A Capability Provisions Itself</title>
+<style>
+  :root {
+    --bg:       #0d1117;
+    --surface:  #161b22;
+    --surface2: #1c2128;
+    --border:   #30363d;
+    --accent:   #58a6ff;
+    --green:    #3fb950;
+    --amber:    #ffa657;
+    --red:      #ff7b72;
+    --purple:   #d2a8ff;
+    --muted:    #8b949e;
+    --text:     #e6edf3;
+    --radius:   10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 14px; line-height: 1.6;
+  }
+  .header {
+    background: radial-gradient(ellipse at 55% 0%, rgba(210,168,255,0.09) 0%, transparent 55%), var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 22px 32px 18px;
+    display: flex; align-items: flex-start; gap: 16px;
+  }
+  .badge {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--purple); background: rgba(210,168,255,0.1);
+    border: 1px solid rgba(210,168,255,0.25); border-radius: 20px;
+    padding: 4px 12px; white-space: nowrap; margin-top: 3px;
+  }
+  .opsbtn {
+    align-self: center; font-size: 12px; font-family: monospace; text-decoration: none;
+    color: var(--accent); border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 11px; white-space: nowrap; transition: background .15s;
+  }
+  .opsbtn:hover { background: rgba(255,255,255,0.05); }
+  .htext { flex: 1; }
+  .htitle { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+  .htitle em { font-style: normal; color: var(--purple); }
+  .hsub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 22px 32px 40px; }
+
+  .statusbar {
+    display: flex; gap: 14px; flex-wrap: wrap; align-items: center;
+    margin-bottom: 16px;
+  }
+  .chip {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 8px 14px;
+  }
+  .chip .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); }
+  .chip .val { font-size: 15px; font-weight: 700; font-family: "SF Mono","Fira Code",monospace; }
+  .dot-live {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--green); box-shadow: 0 0 6px var(--green);
+    animation: blink 1.6s ease-in-out infinite;
+  }
+  .dot-off { background: var(--amber); box-shadow: none; animation: none; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
+
+  .canvas-panel {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; overflow: hidden;
+  }
+  #stage { display: block; width: 100%; }
+
+  .caption {
+    font-size: 12px; color: var(--muted);
+    padding: 12px 18px; border-top: 1px solid var(--border);
+    background: var(--surface2);
+  }
+  .caption em { font-style: normal; color: var(--text); }
+
+  .legend {
+    display: flex; gap: 20px; flex-wrap: wrap;
+    margin-top: 16px; font-size: 11px; color: var(--muted);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+
+  .log {
+    margin-top: 16px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 12px 16px;
+    font-family: "SF Mono","Fira Code",ui-monospace,monospace; font-size: 11.5px;
+    color: var(--muted); max-height: 150px; overflow-y: auto;
+  }
+  .log div { padding: 1px 0; white-space: pre-wrap; }
+  .log div:last-child { color: var(--text); }
+
+  /* ── UI-example contract: the "what you're seeing" concepts box ── */
+  .explains{margin:14px 20px 0;border:1px solid var(--border);border-radius:12px;background:rgba(255,255,255,.02);padding:0 16px}
+  .explains summary{cursor:pointer;list-style:none;padding:11px 0;font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted)}
+  .explains summary b{color:var(--text);text-transform:none;letter-spacing:0;font-size:13px}
+  .explains summary::-webkit-details-marker{display:none}
+  .concepts{display:flex;flex-direction:column;gap:7px;padding:2px 0 14px}
+  .concept{display:flex;align-items:baseline;gap:10px;font-size:13px;flex-wrap:wrap}
+  .ctag{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;font-weight:700;border:1px solid;border-radius:5px;padding:1px 7px;min-width:38px;text-align:center;flex:none}
+  .cname{font-weight:600;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;color:var(--text)}
+  .cgloss{color:var(--muted)}
+</style>
+</head>
+<body>
+
+<header class="header">
+  <span class="badge">Layer IV · Capabilities</span>
+  <div class="htext">
+    <div class="htitle">Autonomic Self-Heal — <em>A Capability Provisions Itself</em></div>
+    <div class="hsub">
+      A food-rescue co-op. Unmet <code>route/optimize</code> demand makes a depot self-elect, pull +
+      verify a WASM component, and serve it. Kill the active one and a standby re-provisions — no coordinator.
+    </div>
+  </div>
+  __OPS_CONSOLE_LINK__
+</header>
+
+<details class="explains" open>
+  <summary>What you're seeing · <b>Mycelium concepts &amp; services</b></summary>
+  <div class="concepts" id="concepts"></div>
+</details>
+<script>
+  // UI-example contract: render the injected concept list as colour-coded chips (shared snippet).
+  (function(){
+    const C = __CONCEPTS__;
+    const COL = {I:"#58a6ff",II:"#d29922",III:"#3fb950",IV:"#a78bfa",companion:"#39c5bb",gateway:"#8b949e",audit:"#f85149",security:"#f85149"};
+    const box = document.getElementById("concepts");
+    if(box && Array.isArray(C)) box.innerHTML = C.map(function(c){
+      const col = COL[c.tag] || "#8b949e";
+      return '<div class="concept"><span class="ctag" style="border-color:'+col+';color:'+col+'">'+c.tag+
+        '</span><span class="cname">'+c.name+'</span><span class="cgloss">'+c.gloss+'</span></div>';
+    }).join("");
+  })();
+</script>
+
+<div class="wrap">
+
+  <div class="statusbar">
+    <div class="chip"><span class="lbl">Link</span> <span class="dot-live" id="conn"></span></div>
+    <div class="chip"><span class="lbl">Phase</span> <span class="val" style="color:var(--purple);font-size:12px" id="s-phase">—</span></div>
+    <div class="chip"><span class="lbl">Active optimizer</span> <span class="val" style="color:var(--green)" id="s-active">—</span></div>
+    <div class="chip"><span class="lbl">Buffered</span> <span class="val" style="color:var(--amber)" id="s-buf">0</span></div>
+    <div class="chip"><span class="lbl">Optimized</span> <span class="val" style="color:var(--accent)" id="s-opt">0</span></div>
+  </div>
+
+  <div class="canvas-panel">
+    <canvas id="stage"></canvas>
+    <div class="caption" id="caption">
+      <em>a capability self-provisions from unmet demand</em> — then re-provisions on a standby when the active provider dies.
+    </div>
+  </div>
+
+  <div class="legend">
+    <span><span class="sw" style="background:var(--green)"></span> serving · live route/optimize</span>
+    <span><span class="sw" style="background:var(--amber)"></span> provisioning · pull → verify → serve</span>
+    <span><span class="sw" style="background:var(--muted)"></span> standby · idle until demand is unmet</span>
+    <span><span class="sw" style="background:var(--red)"></span> dead · capability evaporated</span>
+  </div>
+
+  <div class="log" id="log"></div>
+</div>
+
+<script>
+const HTTP_PORT = 8097;
+
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d');
+const dpr = window.devicePixelRatio || 1;
+let W = 1000, H = 480;
+
+function sizeCanvas() {
+  const cssW = canvas.clientWidth || 1000;
+  W = cssW; H = Math.round(cssW * 0.50);
+  canvas.style.height = H + 'px';
+  canvas.width  = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', sizeCanvas);
+
+// ── Live state, updated by polling /state ──────────────────────────────
+let state = { nodes: [], active_optimizer: null, demand_pending: false, buffered: 0, optimized: 0, phase: '', events: [] };
+let connected = false;
+
+// ── Layout: seeder · buffer · worker across the top; the two providers below. ──
+function nodePos(name) {
+  const topY = 96, botY = H - 118;
+  switch (name) {
+    case 'buffer':     return { x: W * 0.50, y: topY };
+    case 'seeder':     return { x: W * 0.15, y: topY };
+    case 'worker':     return { x: W * 0.85, y: topY };
+    case 'provider-a': return { x: W * 0.32, y: botY };
+    case 'provider-b': return { x: W * 0.68, y: botY };
+    default:           return { x: W * 0.5, y: H * 0.5 };
+  }
+}
+function nodeByName(name) { return state.nodes.find(n => n.name === name); }
+
+// ── Colour per status ───────────────────────────────────────────────────
+function statusColor(status) {
+  switch (status) {
+    case 'serving':      return '#3fb950';
+    case 'provisioning': return '#ffa657';
+    case 'dead':         return '#ff7b72';
+    default:             return '#8b949e';
+  }
+}
+
+function lerp(a, b, t) { return a + (b - a) * t; }
+function hexGlow(hex, a) {
+  const h = hex.replace('#', '');
+  return `rgba(${parseInt(h.substring(0,2),16)},${parseInt(h.substring(2,4),16)},${parseInt(h.substring(4,6),16)},${a})`;
+}
+
+// ── Drawing ─────────────────────────────────────────────────────────────
+let animT = 0;
+function draw(ts) {
+  animT = ts / 1000;
+  ctx.clearRect(0, 0, W, H);
+
+  const seeder = nodePos('seeder'), buffer = nodePos('buffer'), worker = nodePos('worker');
+  const active = state.active_optimizer;
+
+  // ── Edge: seeder → buffer (donations arriving; flows while demand is pending). ──
+  drawEdge(seeder, buffer, state.demand_pending || state.buffered > 0, '#ffa657', state.buffered > 0 ? 3 : 0);
+  // ── Edge: buffer → worker (the worker takes from the lane). ──
+  drawEdge(buffer, worker, state.buffered > 0, '#58a6ff', state.buffered > 0 ? 3 : 0);
+
+  // ── Edge: worker ↔ active provider (RPC invoke → optimized result). ──
+  if (active) {
+    const ap = nodePos(active);
+    drawEdge(worker, ap, true, '#3fb950', 2);   // invoke down
+    drawEdge(ap, worker, true, '#3fb950', 2);   // result up
+  }
+
+  // ── Faint structural links to the standby / dead providers. ──
+  for (const nm of ['provider-a', 'provider-b']) {
+    if (nm === active) continue;
+    const nd = nodeByName(nm); if (!nd) continue;
+    const p = nodePos(nm);
+    ctx.save();
+    ctx.strokeStyle = nd.status === 'dead' ? 'rgba(255,123,114,0.16)' : 'rgba(139,148,158,0.16)';
+    ctx.lineWidth = 1.5; ctx.setLineDash([3, 6]);
+    ctx.beginPath(); ctx.moveTo(worker.x, worker.y + 6); ctx.lineTo(p.x, p.y - 44); ctx.stroke();
+    ctx.restore();
+  }
+
+  // ── Nodes ────────────────────────────────────────────────────────────
+  for (const n of state.nodes) drawNode(nodePos(n.name), n, n.name === active);
+
+  requestAnimationFrame(draw);
+}
+
+// A structural edge with optional animated travelling packets.
+function drawEdge(a, b, live, color, packets) {
+  const ax = a.x, ay = a.y + 8, bx = b.x, by = b.y - 8;
+  ctx.save();
+  if (live) {
+    ctx.strokeStyle = hexGlow(color, 0.5);
+    ctx.lineWidth = 2; ctx.setLineDash([7, 9]);
+    ctx.lineDashOffset = -(animT * 42) % 16;
+  } else {
+    ctx.strokeStyle = 'rgba(139,148,158,0.16)';
+    ctx.lineWidth = 1.5; ctx.setLineDash([3, 6]);
+  }
+  ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+  ctx.restore();
+
+  for (let k = 0; k < packets; k++) {
+    const t = ((animT * 0.55 + k / Math.max(1, packets)) % 1);
+    const px = lerp(ax, bx, t), py = lerp(ay, by, t);
+    ctx.beginPath(); ctx.arc(px, py, 3.2, 0, Math.PI * 2);
+    ctx.fillStyle = color; ctx.shadowColor = color; ctx.shadowBlur = 8;
+    ctx.fill(); ctx.shadowBlur = 0;
+  }
+}
+
+function drawNode(p, n, isActive) {
+  const col = statusColor(n.status);
+  const isProvider = n.role === 'provisioner';
+  const R = isProvider ? 42 : 34;
+
+  ctx.save();
+
+  // Halo — serving glow (green), provisioning pulse (amber), dead has none.
+  if (n.status === 'serving') {
+    const g = ctx.createRadialGradient(p.x, p.y, R, p.x, p.y, R + 26);
+    g.addColorStop(0, 'rgba(63,185,80,0.40)');
+    g.addColorStop(1, 'rgba(63,185,80,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(p.x, p.y, R + 26, 0, Math.PI * 2); ctx.fill();
+  } else if (n.status === 'provisioning') {
+    const pulse = 0.5 + 0.5 * Math.sin(animT * 3.4);
+    const hr = R + 12 + pulse * 12;
+    const g = ctx.createRadialGradient(p.x, p.y, R, p.x, p.y, hr);
+    g.addColorStop(0, 'rgba(255,166,87,0.42)');
+    g.addColorStop(1, 'rgba(255,166,87,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(p.x, p.y, hr, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // Node body.
+  ctx.beginPath(); ctx.arc(p.x, p.y, R, 0, Math.PI * 2);
+  ctx.fillStyle = n.status === 'dead' ? '#241d1e' : (n.name === 'buffer' ? '#1c2f4a' : '#161b22');
+  ctx.fill();
+  ctx.lineWidth = isActive ? 3 : 2.4;
+  ctx.strokeStyle = col;
+  ctx.stroke();
+
+  // Provisioning arc sweep — a little "pulling / verifying" spinner.
+  if (n.status === 'provisioning') {
+    ctx.strokeStyle = '#ffd7ad'; ctx.lineWidth = 2.6;
+    const a0 = animT * 4 % (Math.PI * 2);
+    ctx.beginPath(); ctx.arc(p.x, p.y, R + 6, a0, a0 + Math.PI * 0.6); ctx.stroke();
+  }
+
+  // Dead — a red cross.
+  if (n.status === 'dead') {
+    ctx.strokeStyle = 'rgba(255,123,114,0.85)'; ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(p.x - 13, p.y - 13); ctx.lineTo(p.x + 13, p.y + 13);
+    ctx.moveTo(p.x + 13, p.y - 13); ctx.lineTo(p.x - 13, p.y + 13);
+    ctx.stroke();
+  }
+
+  // Labels.
+  ctx.textAlign = 'center';
+  ctx.fillStyle = n.status === 'dead' ? '#8b949e' : '#e6edf3';
+  ctx.font = '600 12px -apple-system, sans-serif';
+  ctx.fillText(n.name, p.x, p.y - 3);
+  ctx.fillStyle = '#8b949e'; ctx.font = '10px -apple-system, sans-serif';
+  ctx.fillText(n.zone, p.x, p.y + 12);
+
+  // Status caption below providers (the important nodes).
+  if (isProvider) {
+    ctx.font = '600 10px -apple-system, sans-serif';
+    ctx.fillStyle = col;
+    let label = '○ standby';
+    if (n.status === 'serving')      label = '● SERVING — route/optimize';
+    else if (n.status === 'provisioning') label = '◈ PROVISIONING — pull → verify → serve';
+    else if (n.status === 'dead')    label = '✕ DEAD — capability evaporated';
+    ctx.fillText(label, p.x, p.y + R + 18);
+  } else {
+    ctx.font = '10px -apple-system, sans-serif';
+    ctx.fillStyle = '#8b949e';
+    const role = n.name === 'buffer' ? 'tuple-space lane' : (n.name === 'seeder' ? 'seeds donations' : 'declares demand · drains');
+    ctx.fillText(role, p.x, p.y + R + 16);
+  }
+
+  ctx.restore();
+}
+
+// ── Polling ─────────────────────────────────────────────────────────────
+function setConnected(ok) {
+  connected = ok;
+  document.getElementById('conn').className = ok ? 'dot-live' : 'dot-live dot-off';
+}
+
+function applyState(d) {
+  state = d;
+  document.getElementById('s-phase').textContent  = (d.phase || '—').split(' — ')[0];
+  document.getElementById('s-active').textContent = d.active_optimizer || '—';
+  document.getElementById('s-active').style.color = d.active_optimizer ? 'var(--green)' : 'var(--muted)';
+  document.getElementById('s-buf').textContent    = d.buffered;
+  document.getElementById('s-opt').textContent    = d.optimized;
+
+  const cap = document.getElementById('caption');
+  if (d.active_optimizer) {
+    cap.innerHTML = `<em>${d.active_optimizer} is serving route/optimize.</em> ${d.phase || ''}`;
+  } else if (d.buffered > 0) {
+    cap.innerHTML = `<em>${d.buffered} donation(s) buffered — no live optimizer.</em> A standby will read the unmet demand and self-provision. ${d.phase || ''}`;
+  } else {
+    cap.innerHTML = `<em>a capability self-provisions from unmet demand</em> — then re-provisions on a standby when the active provider dies.`;
+  }
+
+  const log = document.getElementById('log');
+  if (Array.isArray(d.events)) {
+    log.innerHTML = d.events.map(e => `<div>${e.replace(/</g,'&lt;')}</div>`).join('');
+    log.scrollTop = log.scrollHeight;
+  }
+}
+
+async function poll() {
+  try {
+    const res = await fetch(`http://127.0.0.1:${HTTP_PORT}/state`, { signal: AbortSignal.timeout(2000) });
+    if (!res.ok) throw new Error();
+    applyState(await res.json());
+    if (!connected) setConnected(true);
+  } catch {
+    if (connected) setConnected(false);
+  }
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────
+sizeCanvas();
+setConnected(false);
+poll();
+setInterval(poll, 400);
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>
