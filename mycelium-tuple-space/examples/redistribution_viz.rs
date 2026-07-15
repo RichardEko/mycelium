@@ -39,6 +39,15 @@ use tokio::net::TcpListener;
 use tokio::{signal, time};
 
 const HTTP_PORT: u16 = 8093;
+/// The Mycelium concepts + services this demo exercises — injected into the dashboard's "what you're
+/// seeing" box (the UI-example contract; see docs/wiki/dev/ui-example-contract.md). `tag` is a
+/// layer/service key the shared panel colour-codes (I·II·III·IV · companion · gateway · audit).
+const CONCEPTS: &str = r#"[
+  {"tag":"I","name":"gossip-KV","gloss":"the tuple space is KV entries — LWW · HLC · anti-entropy"},
+  {"tag":"companion","name":"tuple-space","gloss":"take/complete competitive claims — exactly-once effect"},
+  {"tag":"IV","name":"capabilities","gloss":"sorters & routers advertise; the dock resolves work by need"},
+  {"tag":"gateway","name":"gateway + metrics","gloss":"/stats · /gateway/fleet · /metrics — this Ops Console"}
+]"#;
 /// The mycelium gateway (for the Ops Console) — served only when built `--features gateway`
 /// (this companion crate has default-features off). `/stats` · `/gateway/fleet` · `/gateway/diagnose`.
 const OPS_PORT: u16 = 9093;
@@ -212,8 +221,9 @@ async fn serve_http(state: Arc<Mutex<VizState>>) {
                 } else {
                     String::new()
                 };
-                let html =
-                    include_str!("redistribution_viz.html").replace("__OPS_CONSOLE_LINK__", &console_link);
+                let html = include_str!("redistribution_viz.html")
+                    .replace("__OPS_CONSOLE_LINK__", &console_link)
+                    .replace("__CONCEPTS__", CONCEPTS);
                 let response = format!(
                     "HTTP/1.1 200 OK\r\n\
                      Content-Type: text/html; charset=utf-8\r\n\

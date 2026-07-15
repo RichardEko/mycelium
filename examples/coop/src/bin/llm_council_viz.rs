@@ -72,6 +72,15 @@ const SEED_EVERY: Duration = Duration::from_secs(4);
 /// End-to-end (~fan-out + 3 specialists + synth + two critic↔reviser cycles) stays under the seed
 /// cadence, so the DAG usually holds one or two donations without ever backlogging.
 const THINK: Duration = Duration::from_millis(420);
+/// The Mycelium concepts + services this demo exercises — injected into the dashboard's "what you're
+/// seeing" box (the UI-example contract; see docs/wiki/dev/ui-example-contract.md). `tag` is a
+/// layer/service key the shared panel colour-codes (I·II·III·IV · companion · gateway · audit).
+const CONCEPTS: &str = r#"[
+  {"tag":"companion","name":"tuple-space","gloss":"the council's shared work lanes"},
+  {"tag":"IV","name":"LLM prompt-skill","gloss":"fan-out · synthesis · critic↔reviser refinement (EchoBackend, no key)"},
+  {"tag":"IV","name":"capabilities","gloss":"specialists advertise; the DAG resolves by role"},
+  {"tag":"gateway","name":"gateway + metrics","gloss":"/stats · /gateway/fleet · /metrics — this Ops Console"}
+]"#;
 
 // ── Shared snapshot served to the browser ─────────────────────────────────
 struct DonView {
@@ -271,8 +280,9 @@ async fn serve_http(state: Arc<Mutex<VizState>>, gw_port: u16) {
                     "<a class=\"opsbtn\" href=\"http://127.0.0.1:8099/?target=127.0.0.1:{gw_port}\" \
                      title=\"Open this cluster in the Mycelium Ops Console\">⚙ Ops Console</a>"
                 );
-                let html =
-                    include_str!("llm_council_viz.html").replace("__OPS_CONSOLE_LINK__", &console_link);
+                let html = include_str!("llm_council_viz.html")
+                    .replace("__OPS_CONSOLE_LINK__", &console_link)
+                    .replace("__CONCEPTS__", CONCEPTS);
                 let response = format!(
                     "HTTP/1.1 200 OK\r\n\
                      Content-Type: text/html; charset=utf-8\r\n\

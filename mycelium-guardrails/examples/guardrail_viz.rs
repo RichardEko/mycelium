@@ -33,6 +33,16 @@ const KIND: &str = "agent.tool.invoke";
 const HTTP_PORT: u16 = 8096;
 /// The Mycelium gateway port on the provider node — target it with the Ops Console.
 const OPS_PORT: u16 = 9096;
+/// The Mycelium concepts + services this demo exercises — injected into the dashboard's "what you're
+/// seeing" box (the UI-example contract; see docs/wiki/dev/ui-example-contract.md). `tag` is a
+/// layer/service key the shared panel colour-codes (I·II·III·IV · companion · gateway · audit).
+const CONCEPTS: &str = r#"[
+  {"tag":"IV","name":"capability gate","gloss":"the governed tool served behind a Tier-C authorized_callers gate"},
+  {"tag":"security","name":"guardrails","gloss":"three policy tiers — soft-warn → hard-prevent (provider-rejected)"},
+  {"tag":"audit","name":"audit chain","gloss":"Ed25519-signed, hash-linked denial seals — /gateway/audit"},
+  {"tag":"security","name":"TLS identity","gloss":"the sealed principal is the signature-verified caller"},
+  {"tag":"gateway","name":"gateway + metrics","gloss":"/stats · /gateway/audit · /metrics — this Ops Console"}
+]"#;
 
 // ── the tls mesh (from guardrail_wedge) ─────────────────────────────────────────
 
@@ -297,7 +307,9 @@ async fn serve_http(ctx: Arc<Ctx>, state: Arc<Mutex<VizState>>) {
                     String::new()
                 };
                 ("text/html; charset=utf-8",
-                 include_str!("guardrail_viz.html").replace("__OPS_CONSOLE_LINK__", &console))
+                 include_str!("guardrail_viz.html")
+                     .replace("__OPS_CONSOLE_LINK__", &console)
+                     .replace("__CONCEPTS__", CONCEPTS))
             };
 
             let resp = format!(

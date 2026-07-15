@@ -39,7 +39,8 @@ Layer explainers: gossip-KV [ch01](../../guide/01-gossip-kv.md) · signal-mesh
   redistribution), never war-room/crisis.
 - **Visual showcases** (the `/state`-JSON + polling-canvas pattern `examples/conway.rs` established):
   browser-animated demos for pitch/booth/onboarding, run **continuously** (Ctrl-C to stop; **not** in
-  any CI smoke). `conway` (`cargo run --example conway --features metrics` → `:8090`, a 256-agent gossip-KV Game of Life,
+  any CI smoke). All browser examples follow the [UI-example contract](ui-example-contract.md):
+  gateway+metrics on, Ops Console linked, opt-in audit, and a "what you're seeing" concepts box. `conway` (`cargo run --example conway --features metrics` → `:8090`, a 256-agent gossip-KV Game of Life,
   terminal ANSI **and** an HTML canvas) · `conway-gpu` (`cargo run --release -p conway-gpu`, a 512×512
   GPU/wgpu render) · `microgrid_viz` (`cargo run -p mycelium-blackboard --example microgrid_viz --features gateway,metrics` →
   `:8091`, the blackboard `rd`/`in` energy co-op with a live exactly-once badge) · `stigmergy_viz`

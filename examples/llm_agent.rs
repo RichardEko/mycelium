@@ -98,6 +98,14 @@ const HTTP_PORT_N2:    u16 = 8102;
 const GW_PORT_N0:      u16 = 9100;
 const GW_PORT_N1:      u16 = 9101;
 const GW_PORT_N2:      u16 = 9102;
+/// UI-example contract: the Mycelium concepts this demo exercises (see docs/wiki/dev/ui-example-contract.md).
+const CONCEPTS: &str = r#"[
+  {"tag":"IV","name":"capabilities","gloss":"config-driven caps, probe-gated advertisement, resolve by need"},
+  {"tag":"IV","name":"provisioning","gloss":"dynamic capability provisioning across 3 nodes (install % simulated)"},
+  {"tag":"IV","name":"manager election","gloss":"system/manager = smallest live node-id — no coordinator"},
+  {"tag":"I","name":"gossip-KV","gloss":"caps + manifests live in KV; the control UI reads them"},
+  {"tag":"gateway","name":"gateway + metrics","gloss":"/stats · /metrics — the Ops Console (gateways :9100-:9102)"}
+]"#;
 const SETTLE_MS:       u64 = 2_000;
 const HEALTH_SECS:     u64 = 10;
 const FAILURE_ONSET_S: u64 = 35;
@@ -1570,9 +1578,18 @@ async fn handle_http(mut stream: tokio::net::TcpStream, app: Arc<AppState>, my_p
             let label = path.trim_start_matches("/spares/").trim_end_matches("/release");
             handle_spare_release(&app, label)
         }
-        _ =>
-            (200, "text/html; charset=utf-8",
-             include_str!("mesh_control.html").to_string()),
+        _ => {
+            // UI-example contract: inject the concepts box + the Ops Console back-link (targeting
+            // n-0's gateway; the control UI redirects to the live manager).
+            let console = format!(
+                "<a class=\"opsbtn\" href=\"http://127.0.0.1:8099/?target=127.0.0.1:{GW_PORT_N0}\" \
+                 title=\"Open this cluster in the Mycelium Ops Console\">⚙ Ops Console</a>"
+            );
+            let html = include_str!("mesh_control.html")
+                .replace("__OPS_CONSOLE_LINK__", &console)
+                .replace("__CONCEPTS__", CONCEPTS);
+            (200, "text/html; charset=utf-8", html)
+        }
     };
 
     let response = format!(
