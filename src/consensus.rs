@@ -1631,7 +1631,7 @@ mod cross_group_tests {
         // exactly matches the main path (compute_quorum_size) at 0.5, every n:
         for n in 1..=12 { assert_eq!(super::cross_group_quorum(n, 0.5), n / 2 + 1, "n={n}"); }
         // supermajority fractions stay at or above strict majority (still safe):
-        assert!(super::cross_group_quorum(6, 0.67) >= 6 / 2 + 1);
+        assert!(super::cross_group_quorum(6, 0.67) > 6 / 2);
     }
 
     #[test]
