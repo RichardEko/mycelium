@@ -93,6 +93,44 @@ guard's lifetime (added Run 28 after exactly this race).
 Use `crate::test_util::alloc_port` (process-unique, bind-verified, confined below the OS
 ephemeral floor — PR #110 retired the parallel-suite flake family). Never hardcode.
 
+## Loom: permutation model-checking of the atomic patterns
+
+Deterministic unit tests and stress loops surface a lock-free bug only by luck — the buggy
+interleaving is a narrow window. The `loom-spike` crate model-checks the project's recurring
+"act on a stale read" bug family (the one the calibration ledger keeps re-recording) by
+exhaustively exploring **every** thread interleaving and weak-memory execution, turning a
+probabilistic race into a deterministic, reproducible failure with a printed schedule.
+
+**Why a sibling crate.** `--cfg loom` is global to a build, and tokio gates its `net`/`fs`
+modules behind `#![cfg(not(loom))]`, so any tokio-linked crate (`mycelium-core`, `mycelium`)
+fails to compile under it. `loom-spike` is deliberately tokio-/papaya-/mycelium-free so loom
+can actually run; the models re-implement the pattern with loom's instrumented atomics
+(production code is intentionally NOT retrofitted — it isn't loom-instrumentable). Without
+`--cfg loom` the crate compiles to an empty crate with zero dependencies, so it is invisible
+to a normal `cargo build`/`test`.
+
+**Patterns modelled** (`loom-spike/tests/`, each `#![cfg(loom)]`, each citing the real code):
+- `once_guard.rs` — the exactly-once `AtomicBool` init guard (`FilterOpacityRegistry::spawned`
+  `swap`/CAS; `capability_handle.rs:265`).
+- `unique_id.rs` — the monotonic `fetch_add` unique-ID allocator (`next_pred_watcher_id`;
+  `mycelium-core/src/ops.rs:237`, `kv_handle.rs:183`).
+- `publish.rs` — publish-then-observe release/acquire (`soft_state_advertised.store(true,
+  Release)` at `kv_persist.rs:57` paired with the `Acquire` load in `is_ready()`,
+  `introspect.rs:125`). loom's weak-memory model **does** surface the all-`Relaxed` variant:
+  the reader sees the flag set while reading stale data.
+
+**Run it:**
+
+```bash
+RUSTFLAGS="--cfg loom" cargo test -p loom-spike --release   # CI's `loom:` job (LOOM_MAX_PREEMPTIONS: 3)
+```
+
+This runs only the CORRECT tests, which pass — so the `loom:` CI job is green. Each model also
+ships a `#[ignore]`d **broken twin** (a `load`-then-`store` allocator, an all-`Relaxed`
+publish) kept as **executable proof loom catches the race**: run one with `-- --ignored` and it
+FAILS with the offending schedule. `#[ignore]` keeps the default run green while the bug-catch
+stays one command away.
+
 ## The CI flake tier (structural, Run-38 floor fix)
 
 Socket-binding / multi-node suites run in CI through `scripts/ci-retest.sh`, not bare

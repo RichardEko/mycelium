@@ -827,6 +827,153 @@ mod tests {
         assert_eq!(scanned, vec![(key, value)],
             "the converged v11 write must be readable via scan_kv_prefix");
     }
+
+    /// **Rolling-upgrade policy clause 4** — *"Forwarding always re-encodes at
+    /// `WIRE_VERSION` so the cluster converges quickly."* The invariant: whatever
+    /// version a frame arrived at, when a node re-broadcasts it the outbound frame is
+    /// stamped the CURRENT version (v12). That is what lets a v11 write injected
+    /// anywhere pull the whole cluster to v12 — the first v12 node to forward it
+    /// re-stamps it current.
+    ///
+    /// [`write_frame`] is the sole frame-writer and takes no version parameter: it
+    /// hard-codes `header[4] = WIRE_VERSION` unconditionally, so the
+    /// `write_frame`-always-stamps-current property *is* the forwarding guarantee —
+    /// there is no higher-level re-forward path that stamps a different version. We
+    /// prove it along the real forward shape: take the bytes a v11 peer put on the
+    /// wire, decode them through the previous-version path, re-encode with the current
+    /// codec (what a forwarding node emits), frame them with `write_frame`, and assert
+    /// byte 4 is `WIRE_VERSION` (12) — not the arrival version.
+    #[tokio::test]
+    async fn rolling_upgrade_forwarding_re_encodes_at_current_version() {
+        use crate::hlc::Hlc;
+        use crate::node_id::NodeId;
+
+        // A KV write as a v11 peer would originate it (the Data layout is v11/v12-identical).
+        let sender = NodeId::new("127.0.0.1", 7011).unwrap();
+        let hlc = Hlc::new();
+        let update = make_gossip_update(
+            &sender, 4, Arc::from("fwd/reencode"), Bytes::from_static(b"payload"), false, &hlc,
+        );
+        let v11_bytes = crate::codec::wire_to_bytes(&WireMessage::Data(update));
+
+        // Receive-side of a forward: decode via the previous-version path, then
+        // re-encode with the current codec — exactly what a forwarding node does.
+        let decoded = crate::codec::decode_wire_v11(&v11_bytes)
+            .expect("v11 Data must decode on the current node");
+        let reencoded = crate::codec::wire_to_bytes(&decoded);
+
+        // Frame it for the outbound hop. write_frame stamps the version byte itself.
+        let mut out: Vec<u8> = Vec::new();
+        write_frame(&mut out, &reencoded).await.expect("write_frame must succeed");
+
+        assert_eq!(out[4], WIRE_VERSION,
+            "a forwarded frame must be stamped at WIRE_VERSION (current), not the arrival version");
+        assert_eq!(WIRE_VERSION, 12, "current wire version is v12");
+    }
+
+    /// **Rolling-upgrade data-plane interchangeability.** Clause 4 (lossless
+    /// re-encode on forward) and cluster-wide convergence only hold if a v11 peer's
+    /// KV write and a v12 peer's KV write are the *same bytes* on the data plane.
+    /// Two directions, one test:
+    ///   (a) a v12-encoded `Data` frame decodes via the CURRENT decoder
+    ///       ([`crate::codec::decode_wire`]) with key/value intact — the ordinary
+    ///       same-version receive path.
+    ///   (b) that same `Data` payload decoded via BOTH `decode_wire` and
+    ///       [`crate::codec::decode_wire_v11`] recovers a byte-identical update
+    ///       (nonce, sender, ttl, is_tombstone, HLC timestamp, key, value). This is
+    ///       what makes a v11 peer's write and a v12 peer's write interchangeable, so
+    ///       either can be re-encoded on forward without perturbing any Data field.
+    #[test]
+    fn rolling_upgrade_data_round_trips_losslessly_both_directions() {
+        use crate::hlc::Hlc;
+        use crate::node_id::NodeId;
+
+        let sender = NodeId::new("127.0.0.1", 7012).unwrap();
+        let hlc = Hlc::new();
+        let key: Arc<str> = Arc::from("rt/lossless");
+        let value = Bytes::from_static(b"interchangeable-across-v11-v12");
+        let update = make_gossip_update(&sender, 4, Arc::clone(&key), value.clone(), false, &hlc);
+        let encoded = crate::codec::wire_to_bytes(&WireMessage::Data(update.clone()));
+
+        // (a) The current decoder recovers key/value intact.
+        let cur = match crate::codec::decode_wire(&encoded).expect("current decode must succeed") {
+            WireMessage::Data(u) => u,
+            other => panic!("expected WireMessage::Data, got {other:?}"),
+        };
+        assert_eq!(&*cur.key, &*key, "current decoder must recover the key");
+        assert_eq!(cur.value, value, "current decoder must recover the value");
+
+        // (b) Both decoders recover an identical update — every Data field.
+        let prev = match crate::codec::decode_wire_v11(&encoded).expect("previous decode must succeed") {
+            WireMessage::Data(u) => u,
+            other => panic!("expected WireMessage::Data, got {other:?}"),
+        };
+        for (label, u) in [("current", &cur), ("previous", &prev)] {
+            assert_eq!(u.nonce, update.nonce, "{label}: nonce survives the version boundary");
+            assert_eq!(u.sender, update.sender, "{label}: sender survives");
+            assert_eq!(u.ttl, update.ttl, "{label}: ttl survives");
+            assert_eq!(u.is_tombstone, update.is_tombstone, "{label}: tombstone flag survives");
+            assert_eq!(u.timestamp, update.timestamp, "{label}: HLC timestamp survives (LWW-critical)");
+            assert_eq!(&*u.key, &*key, "{label}: key survives");
+            assert_eq!(u.value, value, "{label}: value survives");
+        }
+    }
+
+    /// **Rolling-upgrade accept-window boundaries.** Policy: [`read_frame`] accepts
+    /// frames at both `WIRE_VERSION` and `PREV_WIRE_VERSION`; everything else is
+    /// rejected. Pins all three boundary cases in one place so the accept window
+    /// cannot silently widen or narrow:
+    ///   - a `PREV_WIRE_VERSION` (v11) frame → [`FrameVersion::Previous`];
+    ///   - a `WIRE_VERSION` (v12) frame → [`FrameVersion::Current`];
+    ///   - a frame *below* `PREV_WIRE_VERSION` (v10) → rejected with
+    ///     [`GossipError::UnsupportedWireVersion`], carrying the "significantly older
+    ///     version" hint that `read_frame` attaches when `header[4] < PREV_WIRE_VERSION`.
+    #[tokio::test]
+    async fn rolling_upgrade_read_frame_version_boundaries() {
+        // Frame `payload` stamped with `version`, then read it back through read_frame.
+        async fn read_stamped(
+            version: u8,
+            payload: &[u8],
+        ) -> Result<FrameVersion, GossipError> {
+            let (mut w, mut r) = tokio::io::duplex(64 * 1024);
+            let total = (1u32 + payload.len() as u32).to_be_bytes();
+            w.write_all(&total).await.unwrap();
+            w.write_all(&[version]).await.unwrap();
+            w.write_all(payload).await.unwrap();
+            drop(w);
+            let mut buf = BytesMut::new();
+            read_frame(&mut r, &mut buf).await
+        }
+
+        let payload = b"boundary-probe";
+
+        // PREV_WIRE_VERSION (v11) sits at the low edge of the accept window → Previous.
+        let fv_prev = read_stamped(PREV_WIRE_VERSION, payload).await
+            .expect("a PREV_WIRE_VERSION frame must be accepted");
+        assert_eq!(fv_prev, FrameVersion::Previous,
+            "a PREV_WIRE_VERSION frame must be reported as FrameVersion::Previous");
+
+        // WIRE_VERSION (v12) is the current version → Current.
+        let fv_cur = read_stamped(WIRE_VERSION, payload).await
+            .expect("a WIRE_VERSION frame must be accepted");
+        assert_eq!(fv_cur, FrameVersion::Current,
+            "a WIRE_VERSION frame must be reported as FrameVersion::Current");
+
+        // One below the window (v10) → rejected with the documented error + hint.
+        let older = PREV_WIRE_VERSION - 1;
+        let err = read_stamped(older, payload).await
+            .expect_err("a version below PREV_WIRE_VERSION must be rejected");
+        match err {
+            GossipError::UnsupportedWireVersion { received, current, prev, hint } => {
+                assert_eq!(received, older, "error must report the received version");
+                assert_eq!(current, WIRE_VERSION, "error must report the current version");
+                assert_eq!(prev, PREV_WIRE_VERSION, "error must report the accepted previous version");
+                assert_eq!(hint, "peer is running a significantly older version",
+                    "a sub-PREV_WIRE_VERSION frame must get the 'significantly older' hint");
+            }
+            other => panic!("expected UnsupportedWireVersion, got {other:?}"),
+        }
+    }
 }
 
 #[cfg(test)]
