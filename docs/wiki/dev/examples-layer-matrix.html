@@ -215,10 +215,18 @@ const GROUPS=[
     {ex:"reheal_deploy",   c:[T,N,N,P], f:"the model follows the thread across node death", tag:"artifacts"},
     {ex:"diagnostics",     c:[N,P,N,T], f:"the legible-emergence fleet narrative", tag:"observer"},
   ]},
-  {name:"Companions", meta:"blackboard · tuple-space — atop I/II", rows:[
-    {ex:"microgrid_viz",     c:[T,N,N,P], f:"blackboard energy co-op, exactly-once", tag:"viz"},
-    {ex:"redistribution_viz",c:[T,N,N,P], f:"tuple-space redistribution pipeline", tag:"viz"},
+  {name:"Companions", meta:"blackboard · tuple-space · wiki — atop I/II", rows:[
+    {ex:"microgrid",         c:[T,N,N,P], f:"blackboard rd/in energy co-op (CI batch version)"},
+    {ex:"microgrid_viz",     c:[T,N,N,P], f:"↑ animated: surplus packets, exactly-once claims", tag:"viz"},
+    {ex:"redistribution",    c:[T,N,N,P], f:"tuple-space take+complete pipeline (CI batch version)"},
+    {ex:"redistribution_viz",c:[T,N,N,P], f:"↑ animated: intake→sorted→routed→delivered", tag:"viz"},
     {ex:"fluid_pipeline",    c:[N,N,N,P], f:"AFN push-vs-pull (tuple-space, Python)", tag:"companion"},
+    {ex:"wiki_chat",         c:[T,N,N,P], f:"wiki companion — import docs, chat grounded in the wiki", tag:"wiki"},
+  ]},
+  {name:"Reasoning", meta:"mycelium-reason/examples/*", rows:[
+    {ex:"fleet_reasoning", c:[N,N,N,P], f:"all three Tier-3 reasoning wedges in one in-process mesh"},
+    {ex:"reason_node",     c:[T,N,N,P], f:"the long-running reason node the langgraph rungs drive"},
+    {ex:"reheal_node",     c:[T,N,T,P], f:"the deploy/reheal flagship node (rung 6, echo)"},
   ]},
   {name:"Guardrails", meta:"mycelium-guardrails/examples/*", rows:[
     {ex:"guardrail_fleet", c:[N,N,N,P], f:"all three policy tiers firing in a co-op fleet", tag:"security"},
