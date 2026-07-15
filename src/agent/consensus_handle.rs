@@ -79,7 +79,7 @@ impl ConsensusHandle {
     /// re-proposal. Permanent commitments (the default) never expire.
     pub fn consensus_get(&self, slot: &str) -> Option<Bytes> {
         crate::consensus::live_committed_value(
-            &self.ctx.kv_state, slot, crate::consensus::wall_now_ms(),
+            &self.ctx.kv_state, slot, crate::consensus::causal_now_ms(&self.ctx.hlc),
         )
     }
 
@@ -390,7 +390,7 @@ impl ConsensusHandle {
     /// For read-after-write guarantees, poll until the expected value appears.
     pub fn consistent_get(&self, key: &str) -> Option<Bytes> {
         crate::consensus::live_committed_value(
-            &self.ctx.kv_state, &format!("consistent/{key}"), crate::consensus::wall_now_ms(),
+            &self.ctx.kv_state, &format!("consistent/{key}"), crate::consensus::causal_now_ms(&self.ctx.hlc),
         )
             .or_else(|| kv_get(&self.ctx, key))
     }
@@ -445,7 +445,7 @@ impl ConsensusHandle {
                 // lock. Losers get `Superseded` and never receive a guard.
                 tokio::time::sleep(Duration::from_millis(1000)).await;
                 match crate::consensus::live_committed_with_hlc(
-                        &self.ctx.kv_state, &slot, crate::consensus::wall_now_ms()) {
+                        &self.ctx.kv_state, &slot, crate::consensus::causal_now_ms(&self.ctx.hlc)) {
                     // Fencing token is the commit's HLC, not the ballot: the HLC is monotonic
                     // across successive holders (each observes the prior release), so a resource
                     // that rejects a lower token is actually fenced. The ballot regresses under

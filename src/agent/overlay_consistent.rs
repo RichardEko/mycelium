@@ -74,7 +74,7 @@ impl LockGuard {
         // so it can never clear the live holder's claim (the "losers stand by without releasing"
         // rule, #149/#151).
         let still_ours = crate::consensus::live_committed_value(
-                &self.ctx.kv_state, &slot, crate::consensus::wall_now_ms())
+                &self.ctx.kv_state, &slot, crate::consensus::causal_now_ms(&self.ctx.hlc))
             .as_deref() == Some(self.value.as_ref());
         if !still_ours {
             return;

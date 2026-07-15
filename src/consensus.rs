@@ -332,6 +332,20 @@ pub(crate) fn wall_now_ms() -> u64 {
         .as_millis() as u64
 }
 
+/// The reader's **causal now** on the HLC physical domain: `max(wall clock, HLC physical)`.
+///
+/// This is the correct clock to compare a lease against (see [`live_committed_with_hlc`]). A lease's
+/// written timestamp is the writer's *HLC physical* — the causal max of its wall clock and every peer
+/// time it has observed. Comparing that against a reader's raw wall clock mixes two clock domains, so
+/// two nodes can disagree on whether the same lease is live (audit 2026-07-15, BUG 8). Reading on the
+/// same HLC domain — at least this node's wall clock, and at least any peer HLC it has observed —
+/// puts both sides in one frame, shrinking the disagreement window to *true unsynchronised wall skew*
+/// (which the fencing token then covers). It never reads *behind* wall time, so single-node lease
+/// timing is unchanged; the HLC term only ever pulls it forward toward a peer the node has heard from.
+pub(crate) fn causal_now_ms(hlc: &crate::hlc::Hlc) -> u64 {
+    wall_now_ms().max(crate::hlc::physical_ms(hlc.current()))
+}
+
 /// Returns the **live** committed value for `slot`, applying the epoch-lease
 /// convention: a committed entry whose `consensus/lease/{slot}` window has
 /// elapsed (measured against the committed entry's HLC timestamp) reads as
@@ -370,16 +384,17 @@ pub(crate) fn live_committed_with_hlc(
         return Some((data, hlc)); // malformed lease → treat as permanent
     };
     let written_ms = crate::hlc::physical_ms(entry.timestamp);
-    // BOUNDED-CLOCK-SKEW ASSUMPTION (audit 2026-07-15). This compares the caller's clock (`now_ms`,
-    // currently a wall-clock reading) against the writer's HLC physical component — two clock
-    // *domains*. Under clock skew two nodes can disagree on whether the SAME lease is still live, so
-    // both can briefly believe they hold a `distributed_lock`. Like every lease-based lock (Chubby,
-    // etcd), correctness for a *lease* holds only while skew < lease. The **skew-proof** guard for
-    // correctness-critical writes is the FENCING TOKEN returned alongside — the commit's HLC, which is
-    // monotonic across successive holders (each observes the prior release); a resource that rejects a
-    // lower token is fenced even if two nodes momentarily both think they hold the lock. FOLLOW-UP: put
-    // both sides of this comparison on the causal HLC clock (pass `hlc.current()` physical, not raw
-    // wall time) at all call sites to shrink the window to true unsynchronised skew.
+    // BOUNDED-CLOCK-SKEW ASSUMPTION (audit 2026-07-15, BUG 8). `now_ms` is compared against the
+    // writer's HLC physical component. Production callers pass [`causal_now_ms`] (`max(wall, HLC
+    // physical)`), so both sides sit on the *same* causal-HLC domain — the earlier bug, comparing a
+    // reader's raw wall clock against the writer's HLC, let two nodes disagree on whether the SAME
+    // lease was live and both briefly believe they held a `distributed_lock`. On the shared domain the
+    // disagreement window shrinks to *true unsynchronised wall skew*. (Tests inject a raw `now_ms`
+    // directly — that is the intended clock-injection seam for lease-expiry unit tests.) Like every
+    // lease-based lock (Chubby, etcd), correctness for a *lease* holds only while skew < lease; the
+    // **skew-proof** guard for correctness-critical writes is the FENCING TOKEN returned alongside —
+    // the commit's HLC, monotonic across successive holders (each observes the prior release), so a
+    // resource that rejects a lower token is fenced even if two nodes momentarily both think they hold.
     (now_ms.saturating_sub(written_ms) <= lease_ms).then_some((data, hlc))
 }
 
@@ -498,7 +513,7 @@ impl ConsensusEngine {
     /// Lease-aware committed read — see [`live_committed_value`]. An expired
     /// lease reads as `None`: the slot has reopened for re-proposal.
     fn live_committed(&self, slot: &str) -> Option<Bytes> {
-        live_committed_value(&self.task_ctx.kv_state, slot, wall_now_ms())
+        live_committed_value(&self.task_ctx.kv_state, slot, causal_now_ms(&self.task_ctx.hlc))
     }
 
     /// Applies a KV update from within a consensus task.
@@ -1558,6 +1573,39 @@ mod lease_tests {
         assert!(live_committed_value(&kv, "cfg", 1_005_000).is_some());
         // One ms past the window — the slot has reopened.
         assert!(live_committed_value(&kv, "cfg", 1_005_001).is_none());
+    }
+
+    #[test]
+    fn regression_causal_now_reads_on_hlc_domain_not_raw_wall() {
+        // BUG 8 (audit 2026-07-15). A lease's written timestamp is the WRITER's HLC physical, so a
+        // reader must measure elapsed lease time on that same causal-HLC domain — not its raw wall
+        // clock, or two skewed nodes disagree on whether the SAME lease is still live and both can
+        // briefly hold a `distributed_lock`. `causal_now_ms` folds in any peer HLC this node has
+        // observed. Simulate hearing a peer ~1 h ahead and assert the reader's lease clock jumps to
+        // the peer's frame rather than staying on this node's (relatively lagging) wall clock.
+        use crate::hlc::{Hlc, pack, physical_ms};
+        let wall = wall_now_ms();
+        let peer_ahead_ms = 3_600_000; // 1 h ahead of this node's wall clock
+        let hlc = Hlc::with_max_drift(86_400_000); // 24 h drift budget: accept the observe unclamped
+        hlc.observe(pack(wall + peer_ahead_ms, 0)); // hear a peer from the (near) future
+        assert_eq!(
+            physical_ms(hlc.current()),
+            wall + peer_ahead_ms,
+            "sanity: observing the peer pulled the HLC physical to the peer's time",
+        );
+        let now = causal_now_ms(&hlc);
+        assert!(
+            now >= wall + peer_ahead_ms,
+            "causal_now_ms ({now}) must fold in the observed peer HLC ({}), not read raw wall ({wall})",
+            wall + peer_ahead_ms,
+        );
+
+        // And it never reads BEHIND wall time — single-node lease timing is unchanged: a fresh HLC
+        // that has heard from nobody still reports at least this node's own wall clock.
+        assert!(
+            causal_now_ms(&Hlc::new()) >= wall,
+            "causal_now_ms must never read behind wall time",
+        );
     }
 
     #[test]
