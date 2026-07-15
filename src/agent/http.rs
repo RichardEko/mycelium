@@ -547,7 +547,7 @@ async fn consensus_slot_handler(
     let lease_key     = format!("{}{}", crate::consensus::consensus_ns::LEASE,     slot);
     let ballot_key    = format!("{}{}", crate::consensus::consensus_ns::BALLOT,    slot);
     let live = crate::consensus::live_committed_value(
-        &ctx.agent_ctx.kv_state, &slot, crate::consensus::wall_now_ms(),
+        &ctx.agent_ctx.kv_state, &slot, crate::consensus::causal_now_ms(&ctx.agent_ctx.hlc),
     );
     let store = ctx.agent_ctx.kv_state.store.pin();
     let raw_present = store.get(committed_key.as_str())
@@ -2090,7 +2090,7 @@ async fn gw_overlay_lock_acquire(
             // commit's HLC (a monotonic fencing token — the ballot is not, #164).
             tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
             let confirmed = crate::consensus::live_committed_with_hlc(
-                    &ctx.agent_ctx.kv_state, &slot, crate::consensus::wall_now_ms())
+                    &ctx.agent_ctx.kv_state, &slot, crate::consensus::causal_now_ms(&ctx.agent_ctx.hlc))
                 .filter(|(v, _)| v.as_ref() == value.as_ref());
             let Some((_, token)) = confirmed else {
                 return (StatusCode::CONFLICT,
@@ -2393,7 +2393,7 @@ async fn gw_overlay_log_group_subscribe(
             if won {
                 tokio::time::sleep(Duration::from_millis(1000)).await; // let the winning commit converge
                 let is_me = crate::consensus::live_committed_value(
-                        &kv_state, &claim_slot, crate::consensus::wall_now_ms())
+                        &kv_state, &claim_slot, crate::consensus::causal_now_ms(&task_ctx.hlc))
                     .as_deref() == Some(holder.as_ref());
                 if is_me { break 'acquire; }
             }
@@ -2417,7 +2417,7 @@ async fn gw_overlay_log_group_subscribe(
                 let _ = overlay_cluster_propose(&task_ctx, &claim_slot, holder.clone(), mk_cfg()).await;
                 last_renew = std::time::Instant::now();
                 let still_me = crate::consensus::live_committed_value(
-                        &kv_state, &claim_slot, crate::consensus::wall_now_ms())
+                        &kv_state, &claim_slot, crate::consensus::causal_now_ms(&task_ctx.hlc))
                     .as_deref() == Some(holder.as_ref());
                 if !still_me { return; }
             }
