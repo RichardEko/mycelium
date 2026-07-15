@@ -19,6 +19,9 @@ path = "src/lib.rs"
 # the two travel together behind one gate.
 wasm = ["dep:mycelium-wasm-host", "dep:mycelium-reason"]
 
+# Prometheus /metrics on the gateway — populates the Ops Console Metrics tab for the viz showcases.
+metrics = ["mycelium/metrics"]
+
 # Each demo is its own bin.
 [[bin]]
 name = "mailbox_llm"

@@ -22,7 +22,7 @@
 //!
 //! ```text
 //! # phrased answers (local, on-mesh): ollama serve && ollama pull llama3.2:1b, then:
-//! cargo run -p mycelium-wiki --example wiki_council_viz --features gateway,llm   # → http://127.0.0.1:8095/
+//! cargo run -p mycelium-wiki --example wiki_council_viz --features gateway,llm,metrics   # → http://127.0.0.1:8095/
 //! ```
 
 use std::collections::{BTreeMap, HashMap};

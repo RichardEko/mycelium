@@ -19,6 +19,8 @@ compliance = ["mycelium/compliance"]
 # The HTTP gateway edge (`/stats`, `/gateway/*`) so a node can be observed by the Ops Console — used
 # by the `guardrail_viz` browser showcase; not needed by the headless examples.
 gateway = ["mycelium/gateway"]
+# Prometheus /metrics on the gateway — populates the Ops Console Metrics tab for guardrail_viz.
+metrics-export = ["mycelium/metrics"]
 
 [dependencies]
 # Companion-crate contract: only Mycelium's PUBLIC API is used — no internal access.

@@ -19,7 +19,7 @@
 //! over. The whole point, made legible: dispatch NEVER asks a depot its state. It routes by
 //! reading the pheromone trail in the medium.
 //!
-//! Run:  cargo run -p mycelium-coop-examples --bin stigmergy_viz
+//! Run:  cargo run -p mycelium-coop-examples --bin stigmergy_viz --features metrics
 //! Then open http://127.0.0.1:8092/
 
 use std::sync::{Arc, Mutex};

@@ -22,7 +22,7 @@
 //! consumes the terminal `routed` stage, delivering each donation exactly once.
 //!
 //! Run:
-//!   cargo run -p mycelium-tuple-space --example redistribution_viz
+//!   cargo run -p mycelium-tuple-space --example redistribution_viz --features gateway,metrics
 //!
 //! Then open http://127.0.0.1:8093/ — no external dependencies, works offline. Ctrl-C to exit.
 

@@ -17,7 +17,7 @@
 //! and drains — the glowing dots on the feeder bus.
 //!
 //! Run:
-//!   cargo run -p mycelium-blackboard --example microgrid_viz
+//!   cargo run -p mycelium-blackboard --example microgrid_viz --features gateway,metrics
 //!
 //! Then open http://127.0.0.1:8091/ — no external dependencies, works offline. Ctrl-C to exit.
 

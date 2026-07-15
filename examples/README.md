@@ -17,7 +17,7 @@ junior-dev entry point.
 |---|---|---|
 | [`hello_mesh.rs`](hello_mesh.rs) | Two agents share a KV value by gossip — the substrate in ~25 lines | `cargo run --example hello_mesh` |
 | [`hello_capability.rs`](hello_capability.rs) | Broker-less discovery + RPC: advertise `math/double`, resolve it *by name*, call it | `cargo run --example hello_capability` |
-| [`conway.rs`](conway.rs) | Conway's Life on a 16×16 gossip mesh — *watch* KV convergence (guide ch. 01) | `cargo run --example conway` |
+| [`conway.rs`](conway.rs) | Conway's Life on a 16×16 gossip mesh — *watch* KV convergence (guide ch. 01) | `cargo run --example conway --features metrics` |
 | [`distributed_lock.rs`](distributed_lock.rs) | Mutual exclusion across 3 nodes + a **fencing token** that refuses stale writers (guide ch. 04) | `cargo run --example distributed_lock` |
 | [`invoke_skill.rs`](invoke_skill.rs) | Minimal SkillRunner caller — the smallest skills client (pairs with `community/`) | `cargo run --example invoke_skill` |
 | [`semantic_coordination.rs`](semantic_coordination.rs) | Agents coordinating via semantic capability matching | `cargo run --example semantic_coordination` |
@@ -39,16 +39,16 @@ Bigger, self-contained worlds — each links to its own README; see [shared setu
 | **Reasoning ladder** — LangGraph-on-Mycelium | 7 rungs from a local checkpointer to a cross-node deploy/reheal flagship; the Rust mesh side is `mycelium-reason/examples/` (`reason_node` · `reheal_node` · `fleet_reasoning`) | echo model | [`langgraph/`](langgraph/README.md) |
 | **Wiki companion** — `wiki_chat` | Import documents, then chat grounded in the shared wiki (the wiki companion's worked example) | echo model | [`mycelium-wiki/examples/`](../mycelium-wiki/examples/) |
 
-**Browser showcases** (a `/state` feed behind an HTML canvas — the `conway` pattern; run continuously, open `http://127.0.0.1:80xx/`, Ctrl-C to stop; **not** in any CI smoke):
+**Browser showcases** (a `/state` feed behind an HTML canvas — the `conway` pattern; run continuously, open `http://127.0.0.1:80xx/`, Ctrl-C to stop; **not** in any CI smoke). Each runs with `--features …,metrics` so the **Ops Console Metrics tab** populates live — Prometheus series that climb as the mesh works (`gossip_kv_writes_total`, signals, `guardrails_denials_sealed_total`, …):
 
 | Showcase | What you see | Run |
 |---|---|---|
-| [`microgrid_viz`](../mycelium-blackboard/examples/microgrid_viz.rs) | Energy co-op: surplus packets, non-destructive reads, competitive **exactly-once** claims (`:8091`) | `cargo run -p mycelium-blackboard --example microgrid_viz` |
-| [`stigmergy_viz`](coop/src/bin/stigmergy_viz.rs) | Pheromone reroute: opacity glow + dispatch routing **around** the busy depot (`:8092`) | `cargo run -p mycelium-coop-examples --bin stigmergy_viz` |
-| [`redistribution_viz`](../mycelium-tuple-space/examples/redistribution_viz.rs) | Pipeline flow: `intake→sorted→routed→delivered`, competitive take (`:8093`) | `cargo run -p mycelium-tuple-space --example redistribution_viz` |
-| [`llm_council_viz`](coop/src/bin/llm_council_viz.rs) | Deliberation DAG: fan-out · synthesis · critic↔reviser refinement, no LLM key (`:8094`) | `cargo run -p mycelium-coop-examples --bin llm_council_viz` |
-| [`wiki_council_viz`](../mycelium-wiki/examples/wiki_council_viz.rs) | **Live chat** over a fleet of wiki-grounded specialists (Transport · Energy · Planning · Budget): a question fans out to the relevant experts, each *phrases* its answer via a **local model served on the mesh** (Ollama — `register`/`call_prompt_skill`) cited from the shared wiki, a synthesizer merges — **no cloud, no API key**; falls back to grounded extraction if Ollama is absent (`:8095`) | `cargo run -p mycelium-wiki --example wiki_council_viz --features gateway,llm` |
-| [`guardrail_viz`](../mycelium-guardrails/examples/guardrail_viz.rs) | **Watch an agent get structurally stopped:** fire tool invocations at a Tier-C gate — authorized admitted, unauthorized *refused and tamper-evidently sealed* — and see the **cryptographic denial proof** reconstructed live by a neutral observer (its `/gateway/audit` is the same seal — point the Ops Console there) (`:8096`) | `cargo run -p mycelium-guardrails --example guardrail_viz --features compliance,gateway` |
+| [`microgrid_viz`](../mycelium-blackboard/examples/microgrid_viz.rs) | Energy co-op: surplus packets, non-destructive reads, competitive **exactly-once** claims (`:8091`) | `cargo run -p mycelium-blackboard --example microgrid_viz --features gateway,metrics` |
+| [`stigmergy_viz`](coop/src/bin/stigmergy_viz.rs) | Pheromone reroute: opacity glow + dispatch routing **around** the busy depot (`:8092`) | `cargo run -p mycelium-coop-examples --bin stigmergy_viz --features metrics` |
+| [`redistribution_viz`](../mycelium-tuple-space/examples/redistribution_viz.rs) | Pipeline flow: `intake→sorted→routed→delivered`, competitive take (`:8093`) | `cargo run -p mycelium-tuple-space --example redistribution_viz --features gateway,metrics` |
+| [`llm_council_viz`](coop/src/bin/llm_council_viz.rs) | Deliberation DAG: fan-out · synthesis · critic↔reviser refinement, no LLM key (`:8094`) | `cargo run -p mycelium-coop-examples --bin llm_council_viz --features metrics` |
+| [`wiki_council_viz`](../mycelium-wiki/examples/wiki_council_viz.rs) | **Live chat** over a fleet of wiki-grounded specialists (Transport · Energy · Planning · Budget): a question fans out to the relevant experts, each *phrases* its answer via a **local model served on the mesh** (Ollama — `register`/`call_prompt_skill`) cited from the shared wiki, a synthesizer merges — **no cloud, no API key**; falls back to grounded extraction if Ollama is absent (`:8095`) | `cargo run -p mycelium-wiki --example wiki_council_viz --features gateway,llm,metrics` |
+| [`guardrail_viz`](../mycelium-guardrails/examples/guardrail_viz.rs) | **Watch an agent get structurally stopped:** fire tool invocations at a Tier-C gate — authorized admitted, unauthorized *refused and tamper-evidently sealed* — and see the **cryptographic denial proof** reconstructed live by a neutral observer (its `/gateway/audit` is the same seal — point the Ops Console there) (`:8096`) | `cargo run -p mycelium-guardrails --example guardrail_viz --features compliance,gateway,metrics-export` |
 
 (`conway`/`conway-gpu` above are the original visual demos — terminal+canvas and GPU. The four `*_viz` are visual variants of the batch demos, which stay the CI-gated versions.)
 

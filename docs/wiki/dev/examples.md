@@ -39,14 +39,14 @@ Layer explainers: gossip-KV [ch01](../../guide/01-gossip-kv.md) · signal-mesh
   redistribution), never war-room/crisis.
 - **Visual showcases** (the `/state`-JSON + polling-canvas pattern `examples/conway.rs` established):
   browser-animated demos for pitch/booth/onboarding, run **continuously** (Ctrl-C to stop; **not** in
-  any CI smoke). `conway` (`cargo run --example conway` → `:8090`, a 256-agent gossip-KV Game of Life,
+  any CI smoke). `conway` (`cargo run --example conway --features metrics` → `:8090`, a 256-agent gossip-KV Game of Life,
   terminal ANSI **and** an HTML canvas) · `conway-gpu` (`cargo run --release -p conway-gpu`, a 512×512
-  GPU/wgpu render) · `microgrid_viz` (`cargo run -p mycelium-blackboard --example microgrid_viz` →
+  GPU/wgpu render) · `microgrid_viz` (`cargo run -p mycelium-blackboard --example microgrid_viz --features gateway,metrics` →
   `:8091`, the blackboard `rd`/`in` energy co-op with a live exactly-once badge) · `stigmergy_viz`
-  (`cargo run -p mycelium-coop-examples --bin stigmergy_viz` → `:8092`, pheromone reroute — opacity
+  (`cargo run -p mycelium-coop-examples --bin stigmergy_viz --features metrics` → `:8092`, pheromone reroute — opacity
   glow + dispatch routing around the busy depot) · `redistribution_viz` (`cargo run -p
   mycelium-tuple-space --example redistribution_viz` → `:8093`, the intake→sorted→routed→delivered
-  pipeline flow) · `llm_council_viz` (`cargo run -p mycelium-coop-examples --bin llm_council_viz` →
+  pipeline flow) · `llm_council_viz` (`cargo run -p mycelium-coop-examples --bin llm_council_viz --features metrics` →
   `:8094`, the fan-out · synthesis · critic↔reviser-refinement DAG; `EchoBackend`, **no LLM key**).
   Each opens `http://127.0.0.1:80xx/`. The four `*_viz` are **visual variants** of the batch demos
   (`microgrid` / `stigmergy` / `redistribution` / `llm_council`), which remain the CI-gated versions;
@@ -91,14 +91,14 @@ Layer explainers: gossip-KV [ch01](../../guide/01-gossip-kv.md) · signal-mesh
   three policy tiers composed in one co-op fleet) + `guardrail_viz` — the **browser showcase**: fire
   invocations at the gate and watch admit/deny + the tamper-evident denial proof reconstructed live by
   a neutral observer; gateway + `ui/viz` (its `/gateway/audit` *is* the seal — `:8096`,
-  `--features compliance,gateway`).
+  `--features compliance,gateway,metrics-export`).
 - **Wiki companion** (`mycelium-wiki/examples/`): `wiki_chat` — import documents, then chat grounded in
   the shared wiki (Phase-5 worked example) · `wiki_council_viz` — the browser showcase: a **live chat**
   over a fleet of wiki-grounded specialists (Transport · Energy · Planning · Budget), fan-out +
   synthesis with citations. Each specialist *phrases* its grounded answer via a **local model served on
   the mesh** — a local Ollama registered as the `llm/{model}` capability (`register_prompt_skill`),
   invoked over the mesh (`call_prompt_skill` → resolve + RPC); deterministic grounded-extraction
-  fallback when Ollama is absent. Gateway + `ui/viz` (`:8095`, `--features gateway,llm`).
+  fallback when Ollama is absent. Gateway + `ui/viz` (`:8095`, `--features gateway,llm,metrics`).
 - Integration suite: **13 Docker scenarios** (`make test`, 4-node cluster) + the consistency
   overlay (`make test-overlay`, 3-node consensus); scale suites in
   [testing/scale-tests](testing/scale-tests.md).
