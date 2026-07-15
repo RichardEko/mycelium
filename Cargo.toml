@@ -58,7 +58,7 @@ test-util = []
 # The `fuzz/` directory is its own cargo-fuzz crate; keep it out of any
 # implicit-workspace traversal from this parent manifest.
 [workspace]
-members = ["mycelium-core", "mycelium-tuple-space", "mycelium-blackboard", "mycelium-wiki", "mycelium-wasm-host", "mycelium-agentfacts", "mycelium-reason", "mycelium-guardrails", "examples/coop"]
+members = ["mycelium-core", "mycelium-tuple-space", "mycelium-blackboard", "mycelium-wiki", "mycelium-wasm-host", "mycelium-agentfacts", "mycelium-reason", "mycelium-guardrails", "examples/coop", "loom-spike"]
 # `fuzz/` is its own cargo-fuzz crate; the wasm guest fixture is a wasm32 cdylib
 # built out-of-band (its prebuilt .wasm is committed as a test fixture).
 exclude = ["fuzz", "mycelium-wasm-host/tests/fixtures/echo-component", "examples/conway-gpu"]

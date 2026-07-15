@@ -744,6 +744,89 @@ mod tests {
             other => panic!("expected WireMessage::StateRequest, got {other:?}"),
         }
     }
+
+    /// **Rolling-upgrade interop spike.** Proves the claim v2.1.0's release notes make:
+    /// a node at the CURRENT wire version (`WIRE_VERSION = 12`) *accepts AND APPLIES* a KV
+    /// write from a peer speaking the PREVIOUS wire version (`PREV_WIRE_VERSION = 11`), so
+    /// the two converge across the version boundary — end-to-end, not just codec-parse.
+    ///
+    /// This drives the exact path a live peer connection uses when it receives a v11 frame:
+    ///   1. a real `WireMessage::Data` KV `set` is built via [`make_gossip_update`] (HLC
+    ///      timestamp and all), then serialized. The `Data` payload is byte-identical across
+    ///      v11 and v12 — only `StateRequest` changed at v12 (full key→timestamp index →
+    ///      Merkle `bucket_hashes`), so these bytes *are* valid v11 wire bytes. (There is no
+    ///      `encode_wire_v11`; none is needed for `Data`.)
+    ///   2. the frame is written with `header[4] = PREV_WIRE_VERSION` — a v11 peer's stamp.
+    ///   3. [`read_frame`] accepts it and reports [`FrameVersion::Previous`] (the v11 path).
+    ///   4. the payload is decoded through the live [`crate::codec::decode_wire_v11`] path.
+    ///   5. the decoded update is applied via [`crate::store::apply_and_notify`] — the same
+    ///      LWW-merge apply a connection handler performs.
+    ///   6. the receiving node's store now returns the value → **converged across v11↔v12**.
+    ///
+    /// This *exceeds* `read_frame_accepts_prev_wire_version` (which only asserts a v11 frame
+    /// parses and downgrades a `StateRequest` to the no-digest sentinel): here a v11-encoded
+    /// KV value is decoded AND merged so the v12 store is readable at the key.
+    ///
+    /// Productionization step this spike de-risks: a *full two-binary cluster* — git-worktree
+    /// an old (`WIRE_VERSION = 11`) binary, run it alongside a v12 binary, and observe a real
+    /// gossip round converge over TCP. This test isolates the decode→apply boundary that a
+    /// two-binary run would exercise, with real v11 bytes, without the process orchestration.
+    #[tokio::test]
+    async fn prev_wire_version_kv_write_is_applied_and_converges() {
+        use crate::hlc::Hlc;
+        use crate::node_id::NodeId;
+        use crate::store::{scan_kv_prefix, KvState};
+
+        // (1) Build a genuine KV `set` the way every local write site does: through the
+        // canonical factory, which stamps an HLC timestamp. This is a v11-originated write.
+        let sender = NodeId::new("127.0.0.1", 7011).unwrap();
+        let hlc = Hlc::new();
+        let key: Arc<str> = Arc::from("spike/rolling-upgrade");
+        let value = Bytes::from_static(b"converged-across-v11-v12");
+        let update = make_gossip_update(&sender, 4, Arc::clone(&key), value.clone(), false, &hlc);
+        // The `Data` payload layout is identical in v11 and v12, so encoding the current
+        // message yields the exact bytes a v11 peer would put on the wire.
+        let payload = crate::codec::wire_to_bytes(&WireMessage::Data(update));
+
+        // (2) Write a frame stamped with PREV_WIRE_VERSION (write_frame hard-codes the
+        // CURRENT version, so we stamp the header by hand to impersonate a v11 peer).
+        let (mut w, mut r) = tokio::io::duplex(64 * 1024);
+        let total = (1u32 + payload.len() as u32).to_be_bytes();
+        w.write_all(&total).await.unwrap();
+        w.write_all(&[PREV_WIRE_VERSION]).await.unwrap();
+        w.write_all(&payload).await.unwrap();
+        drop(w);
+
+        // (3) The v12 receiver accepts the frame and routes it to the previous-version path.
+        let mut buf = BytesMut::new();
+        let frame_ver = read_frame(&mut r, &mut buf).await
+            .expect("v12 node must accept a PREV_WIRE_VERSION frame during a rolling upgrade");
+        assert_eq!(frame_ver, FrameVersion::Previous,
+            "the v11 frame must be reported as FrameVersion::Previous (the decode_wire_v11 path)");
+
+        // (4) Decode via the live v11 codec path a connection handler uses for Previous frames.
+        let decoded = crate::codec::decode_wire_v11(&buf)
+            .expect("v11 KV write must decode on the current node");
+        let recovered = match decoded {
+            WireMessage::Data(u) => u,
+            other => panic!("expected WireMessage::Data from the v11 KV write, got {other:?}"),
+        };
+        assert_eq!(&*recovered.key, &*key, "decoded key must survive the version boundary");
+        assert_eq!(recovered.value, value, "decoded value must survive the version boundary");
+
+        // (5) Apply through the real LWW-merge apply path onto a fresh (empty) v12 store.
+        let kv = KvState::new(0);
+        crate::store::apply_and_notify(&kv, &recovered);
+
+        // (6) Convergence: the v12 store now returns the value the v11 peer wrote.
+        let stored = kv.store.pin().get(key.as_ref()).and_then(|e| e.data.clone());
+        assert_eq!(stored, Some(value.clone()),
+            "v12 store must converge to the v11-encoded value (rolling-upgrade interop)");
+        // …and it is visible to the read path higher layers use.
+        let scanned = scan_kv_prefix(&kv, "spike/");
+        assert_eq!(scanned, vec![(key, value)],
+            "the converged v11 write must be readable via scan_kv_prefix");
+    }
 }
 
 #[cfg(test)]
