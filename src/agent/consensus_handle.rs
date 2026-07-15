@@ -478,16 +478,23 @@ impl ConsensusHandle {
         let slot  = format!("leader/{group}");
         let value = Bytes::from(self.ctx.node_id.to_string().into_bytes());
 
+        // Read the AUTHORITATIVE leader from the converged slot — never assume "I committed → I won".
+        let leader_from_slot = |this: &Self| -> Option<NodeId> {
+            this.consensus_get(&slot)
+                .and_then(|raw| std::str::from_utf8(&raw).ok()?.parse::<NodeId>().ok())
+        };
         match self.group_propose(group, &slot, value, ConsensusConfig::default()).await {
-            ConsensusResult::Committed { .. } => Ok(self.ctx.node_id.clone()),
-            ConsensusResult::Superseded { .. } => {
-                if let Some(raw) = self.consensus_get(&slot)
-                    && let Ok(s) = std::str::from_utf8(&raw)
-                        && let Ok(id) = s.parse::<NodeId>() {
-                            return Ok(id);
-                        }
-                Err(ConsistencyError::Superseded)
+            ConsensusResult::Committed { .. } => {
+                // #164 class: an optimistic `Committed` is NOT mutually exclusive — two proposers
+                // can both commit against their local view. Returning `self` here split-brained the
+                // election (both nodes reported themselves leader). Mirror `distributed_lock`: let
+                // the winning commit converge (the committed key is HLC-LWW resolved), then return
+                // the converged leader — which may not be this node (audit 2026-07-15).
+                tokio::time::sleep(Duration::from_millis(1000)).await;
+                leader_from_slot(self).ok_or(ConsistencyError::Superseded)
             }
+            ConsensusResult::Superseded { .. } =>
+                leader_from_slot(self).ok_or(ConsistencyError::Superseded),
             ConsensusResult::Timeout { ballots_tried, .. } =>
                 Err(ConsistencyError::Timeout { ballots_tried }),
             ConsensusResult::TopologyUnsatisfied { .. } =>

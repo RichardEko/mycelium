@@ -169,11 +169,17 @@ impl Hlc {
             let prev_log  = prev & LOGICAL_MASK;
             let now_ms    = wall_now_ms();
 
-            let next_phys = prev_phys.max(now_ms);
-            let next_log  = if next_phys == prev_phys {
-                // Saturating bump — if a node manages 64k events in a single ms
-                // the next tick still advances physical instead of wrapping.
-                prev_log.saturating_add(1).min(LOGICAL_MASK)
+            let mut next_phys = prev_phys.max(now_ms);
+            let next_log = if next_phys == prev_phys {
+                if prev_log >= LOGICAL_MASK {
+                    // Logical component saturated within this physical ms (>64k events).
+                    // Carry into physical so `tick()` stays *strictly* monotonic — it must
+                    // never return a value equal to the previous tick (causal happens-before).
+                    next_phys += 1;
+                    0
+                } else {
+                    prev_log + 1
+                }
             } else {
                 0
             };
@@ -266,6 +272,19 @@ mod tests {
             max_drift_ms:       0,
             last_drift_warn_ms: AtomicU64::new(0),
         }
+    }
+
+    /// Regression (audit 2026-07-15): `tick()` must be *strictly* monotonic even when the
+    /// logical counter has saturated within a physical ms — the old code returned a value
+    /// EQUAL to the previous tick (carry into physical was documented but never done).
+    #[test]
+    fn regression_tick_strictly_monotonic_at_saturation() {
+        let far = wall_now_ms() + 60_000; // future physical so the loop stays on the saturation branch
+        let hlc = pinned(pack(far, LOGICAL_MASK));
+        let a = hlc.tick();
+        let b = hlc.tick();
+        assert!(b > a, "tick not strictly monotonic at logical saturation: a={a} b={b}");
+        assert_eq!(physical_ms(a), far + 1, "the saturated tick must carry into physical");
     }
 
     #[test]
