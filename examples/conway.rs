@@ -18,7 +18,7 @@
 //! problem. These are different concerns.
 //!
 //! Run:
-//!   cargo run --example conway
+//!   cargo run --example conway --features metrics
 //!
 //! Then open http://127.0.0.1:8090 and switch to "Live (Rust)".
 //!

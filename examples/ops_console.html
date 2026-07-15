@@ -212,7 +212,11 @@ function kv(k){
 function metrics(t){
   if(typeof t!=="string"){ if(t.__err) return `<p class="err">unreachable — ${t.__err}</p>`; t=JSON.stringify(t); }
   const lines = t.split("\n").filter(l=>l && !l.startsWith("#"));
-  if(!lines.length) return `<p class="muted">No Prometheus series exposed by this node right now (metrics populate as work flows). Raw <code>/metrics</code> was empty.</p>`;
+  if(!lines.length) return `<p class="muted"><code>/metrics</code> is empty — this node was built
+    <b>without <code>--features metrics</code></b>, so no Prometheus recorder is installed and the
+    substrate's counters are silent no-ops. Rebuild the example with metrics on (e.g. append
+    <code>,metrics</code> to its <code>--features</code>) and the series appear here — and climb as
+    the mesh does work.</p>`;
   return `<pre class="metrics">${t.replace(/</g,"&lt;")}</pre>`;
 }
 

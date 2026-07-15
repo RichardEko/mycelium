@@ -16,7 +16,7 @@
 //! tab** (point it at `:9096`) shows the very same denial seals.
 //!
 //! ```text
-//! cargo run -p mycelium-guardrails --example guardrail_viz --features compliance,gateway  # → :8096
+//! cargo run -p mycelium-guardrails --example guardrail_viz --features compliance,gateway,metrics-export  # → :8096
 //! ```
 #![allow(clippy::field_reassign_with_default)]
 

@@ -15,6 +15,9 @@ default = []
 # HTTP gateway endpoints (/gateway/tuple/*, /api/tuple) registered onto the
 # Mycelium embedded gateway via GossipAgent::with_http_routes.
 gateway = ["mycelium/gateway", "dep:axum", "dep:serde", "dep:serde_json", "dep:base64"]
+# Prometheus /metrics on the node's gateway — so the Ops Console Metrics tab populates for the
+# browser showcase. Installs Mycelium's Prometheus recorder; the substrate counters then export.
+metrics = ["mycelium/metrics"]
 
 [dependencies]
 # Companion-crate contract: only Mycelium's PUBLIC API is used — no internal

@@ -32,7 +32,7 @@
 //! (lane depths, in-flight donations + their stage/quality/revisions, an approved tally) that the
 //! `/state` handler serves as JSON; the canvas polls it and animates the DAG.
 //!
-//! Run:  cargo run -p mycelium-coop-examples --bin llm_council_viz
+//! Run:  cargo run -p mycelium-coop-examples --bin llm_council_viz --features metrics
 //! Then open http://127.0.0.1:8094/
 
 use std::collections::{BTreeMap, VecDeque};

@@ -24,6 +24,8 @@ llm = ["control-plane", "mycelium/llm"]
 # Phase 4 — the HTTP gateway edge: `/gateway/wiki/{read,query,propose}` as an axum Router the app mounts
 # via GossipAgent::with_http_routes. The JSON boundary the Python/TS WikiClients speak.
 gateway = ["control-plane", "mycelium/gateway", "dep:axum"]
+# Prometheus /metrics on the gateway — populates the Ops Console Metrics tab for the showcase.
+metrics = ["mycelium/metrics"]
 
 [dependencies]
 # `rc` so `Arc<str>` section ids (de)serialise (each Arc round-trips to a fresh allocation — fine, ids

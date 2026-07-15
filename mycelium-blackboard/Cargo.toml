@@ -15,6 +15,8 @@ default = []
 # HTTP gateway endpoints (/gateway/bb/*) registered onto the Mycelium embedded
 # gateway via GossipAgent::with_http_routes. (Wired in a later phase.)
 gateway = ["mycelium/gateway", "dep:axum", "dep:serde", "dep:serde_json", "dep:base64"]
+# Prometheus /metrics on the gateway — populates the Ops Console Metrics tab for the showcase.
+metrics = ["mycelium/metrics"]
 
 [dependencies]
 # Companion-crate contract: only Mycelium's PUBLIC API is used — no internal
