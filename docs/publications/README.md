@@ -156,3 +156,12 @@ signal for the `/publication-lint` skill (is it catching overclaims before human
   pitch-showcase set); (d) the FAQ↔ch15 langgraph node-survival cross-linking is *consistent with* —
   and now better-demonstrated by — the papers'/philosophy's "no orchestrator" positioning, no
   overclaim. No findings.
+- 2026-07-15 (lint run 7): **one Minor staleness — the deck's browser-showcase list fell behind the
+  tree.** No `docs/publications/`/`philosophy.html` commit since run 6, but the session shipped a
+  **new browser showcase**, `wiki_council_viz` (`:8095`, a live chat over a fleet of wiki-grounded
+  specialists, no LLM key), and `presentation.html`'s "Want to watch it?" callout enumerated only
+  `:8090`–`:8094` — a *pinned list that goes stale the moment the set grows* (the same class as the
+  wiki examples-page by-category drift). Not an overclaim (the deck was accurate for what it listed);
+  a **Minor undersell/staleness**. **Fixed**: appended `wiki_council_viz` to the callout. Re-verified
+  `"fourteen-demo"` is untouched (the new showcase is a `mycelium-wiki` example, not a coop bin). No
+  other drift.
