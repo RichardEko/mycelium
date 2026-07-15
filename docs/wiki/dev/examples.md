@@ -10,7 +10,7 @@ one per-example block). `coop/` is the reference implementation of the suite sha
 
 **Layer map — which example demonstrates which stack layer.** The by-layer lens (I gossip-KV · II
 signal-mesh · III consensus · the capability/agent layer on top) is the front-door's
-[`examples/README.md` § By layer](../../../examples/README.md#by-layer) — that table is the
+[`examples/README.md` § Find one by layer](../../../examples/README.md#find-one-by-layer) — that table is the
 **source of truth** (front-door canon; update it when an example's primary layer changes). A scannable
 ●/○ matrix (self-contained, opens offline) is [`examples-layer-matrix.html`](examples-layer-matrix.html).
 Layer explainers: gossip-KV [ch01](../../guide/01-gossip-kv.md) · signal-mesh

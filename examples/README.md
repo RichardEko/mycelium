@@ -4,30 +4,14 @@ Every example is a real, runnable program built on the **public API** — no pri
 page is the index, the shared setup (so no example re-explains it), and the **doc template** all
 example READMEs follow.
 
-New here? Start with the zero-setup ladder, then pick a cluster below.
+Three ways in: **by step** (the starter ladder just below), **by what you're building** (the suites),
+or **by layer** (the [cross-index](#find-one-by-layer) at the end, which re-sorts everything by the
+part of the stack it teaches).
 
-## By layer
+## Start here
 
-Which example demonstrates which layer of the stack — the three-layer substrate (**I** gossip-KV ·
-**II** signal-mesh · **III** consensus) plus the capability / agent layer the `mycelium` crate adds on
-top. A scannable ●/○ matrix version (self-contained, opens offline) is
-[`docs/wiki/dev/examples-layer-matrix.html`](../docs/wiki/dev/examples-layer-matrix.html).
-
-| Layer | Primarily demonstrated by |
-|---|---|
-| **I · gossip-KV** (state) | `hello_mesh` · `conway` / `conway-gpu` |
-| **II · signal-mesh** (events, opacity) | `semantic_coordination` (sender auth) · `stigmergy` / `stigmergy_viz` (opacity pheromone) · `diagnostics` (emergent state) |
-| **III · consensus** | `distributed_lock` (lock + fencing) · coop `consensus` (cross-group quorum) · `three_node_demo` (overlay) |
-| **IV · capability / agent** | `hello_capability` · `invoke_skill` · `llm_agent` · coop artifacts (`catalog` · `provisioning` · `model_deploy` · `reheal_deploy`) · `federation_facts` · `rotation` · `elastic_intent` · `mcp_toolgrowth` · LLM (`mailbox_llm` · `llm_pipeline` · `llm_council`) · Python (`a2a_langchain` · `langgraph` · `community`) |
-
-**Full-stack / cross-layer:** `three_node_demo` touches all four; `three_arm_workdist` &
-`coordinator_comparison` set the layers *against* each other (broker-RPC vs gossip-KV vs tuple-space
-**pull**). The companions (`redistribution_viz` tuple-space, `microgrid_viz` blackboard,
-`fluid_pipeline`) build *atop* I/II; `ops_console` observes every layer's HTTP surface.
-
-## The index
-
-**Starter ladder (zero LLM, one file each — the junior-dev entry point):**
+The zero-setup ladder — one file each, zero LLM, each rung building on the last. This is the
+junior-dev entry point.
 
 | Example | What it demonstrates | Run |
 |---|---|---|
@@ -38,7 +22,9 @@ top. A scannable ●/○ matrix version (self-contained, opens offline) is
 | [`invoke_skill.rs`](invoke_skill.rs) | Minimal SkillRunner caller — the smallest skills client (pairs with `community/`) | `cargo run --example invoke_skill` |
 | [`semantic_coordination.rs`](semantic_coordination.rs) | Agents coordinating via semantic capability matching | `cargo run --example semantic_coordination` |
 
-**Clusters & suites** (each links to its own README; see [shared setup](#shared-setup) first):
+## The suites
+
+Bigger, self-contained worlds — each links to its own README; see [shared setup](#shared-setup) first.
 
 | Cluster | What it demonstrates | LLM? | Doc |
 |---|---|:--:|---|
@@ -83,6 +69,25 @@ just points at the console.
 complementary, not redundant: `coordinator_comparison` is the two-arm *decision-level* probe (broker vs
 gossip prediction, staleness/misroute), `three_arm_workdist` adds the **pull** arm and measures
 *outcomes* (latency/throughput/fairness). See each file's header for the experiment design.
+
+## Find one by layer
+
+The examples above, re-sorted by which layer of the stack they teach — the three-layer substrate
+(**I** gossip-KV · **II** signal-mesh · **III** consensus) plus the capability / agent layer the
+`mycelium` crate adds on top. A scannable ●/○ matrix (self-contained, opens offline) is
+[`docs/wiki/dev/examples-layer-matrix.html`](../docs/wiki/dev/examples-layer-matrix.html).
+
+| Layer | Primarily demonstrated by |
+|---|---|
+| **I · gossip-KV** (state) | `hello_mesh` · `conway` / `conway-gpu` |
+| **II · signal-mesh** (events, opacity) | `semantic_coordination` (sender auth) · `stigmergy` / `stigmergy_viz` (opacity pheromone) · `diagnostics` (emergent state) |
+| **III · consensus** | `distributed_lock` (lock + fencing) · coop `consensus` (cross-group quorum) · `three_node_demo` (overlay) |
+| **IV · capability / agent** | `hello_capability` · `invoke_skill` · `llm_agent` · coop artifacts (`catalog` · `provisioning` · `model_deploy` · `reheal_deploy`) · `federation_facts` · `rotation` · `elastic_intent` · `mcp_toolgrowth` · LLM (`mailbox_llm` · `llm_pipeline` · `llm_council`) · Python (`a2a_langchain` · `langgraph` · `community`) |
+
+**Full-stack / cross-layer:** `three_node_demo` touches all four; `three_arm_workdist` &
+`coordinator_comparison` set the layers *against* each other (broker-RPC vs gossip-KV vs tuple-space
+**pull**). The companions (`redistribution_viz` tuple-space, `microgrid_viz` blackboard,
+`fluid_pipeline`) build *atop* I/II; `ops_console` observes every layer's HTTP surface.
 
 ## Shared setup
 
