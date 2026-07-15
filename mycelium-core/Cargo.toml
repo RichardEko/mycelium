@@ -60,13 +60,17 @@ metrics = { version = "0.24", optional = true }
 proptest = "1"
 
 # ── loom concurrency-model-checker spike ────────────────────────────────────
-# The runnable loom model lives in the sibling workspace crate `loom-spike/`
-# (loom-spike/tests/once_guard.rs), NOT here: tokio gates its `net`/`fs` modules
-# with `#![cfg(not(loom))]`, so a global `--cfg loom` strips tokio's runtime and
-# this crate (a hard tokio dependent) cannot compile under loom at all. The
-# tokio-free model there checks the exactly-once `AtomicBool` init pattern used by
-# `spawned` in the `mycelium` crate's `agent/capability_ops.rs` — the interleaving
-# bug class the calibration ledger (docs/analysis/ratings.md) keeps recording.
+# The runnable loom models live in the sibling workspace crate `loom-spike/`
+# (loom-spike/tests/*.rs), NOT here: tokio gates its `net`/`fs` modules with
+# `#![cfg(not(loom))]`, so a global `--cfg loom` strips tokio's runtime and this
+# crate (a hard tokio dependent) cannot compile under loom at all. The tokio-free
+# models there check the atomic patterns this codebase uses — exactly-once
+# `AtomicBool` init (`once_guard.rs`; `spawned` in `mycelium`'s
+# `agent/capability_ops.rs`), the `fetch_add` unique-ID allocator (`unique_id.rs`;
+# `next_pred_watcher_id` at `ops.rs:237`/`kv_handle.rs:183`), and publish-then-
+# observe release/acquire (`publish.rs`; `soft_state_advertised` at
+# `kv_persist.rs:57`) — the interleaving bug class the calibration ledger
+# (docs/analysis/ratings.md) keeps recording. CI runs them in the `loom:` job.
 
 [lints.clippy]
 field_reassign_with_default = "allow"

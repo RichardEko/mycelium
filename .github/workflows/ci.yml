@@ -360,3 +360,24 @@ jobs:
       # statically linked libc ("can't find crate for core" on musl).
       - run: cargo +nightly fuzz run --target x86_64-unknown-linux-gnu wire_decode -- -max_total_time=120
       - run: cargo +nightly fuzz run --target x86_64-unknown-linux-gnu capability_decode -- -max_total_time=120
+
+  loom:
+    # Permutation model-checking of the lock-free/atomic patterns (the
+    # calibration ledger's recurring "act on a stale read" bug family). `loom-spike`
+    # is a deliberately tokio-free sibling crate: `--cfg loom` is global to a build
+    # and tokio gates net/fs behind `#![cfg(not(loom))]`, so any tokio-linked crate
+    # fails to compile under it. The suite compiles to an EMPTY crate without the cfg;
+    # only `--cfg loom` (via RUSTFLAGS) pulls loom in and runs the models. This runs
+    # the CORRECT tests only — the `#[ignore]`d broken twins (executable proof loom
+    # catches the race) stay out of the default run, so CI is green.
+    name: Loom (concurrency model-check)
+    runs-on: ubuntu-latest
+    env:
+      # Bound the exploration (loom is exponential in preemptions). The models
+      # are tiny (2–3 threads, 1–2 atomics); this is belt-and-braces headroom.
+      LOOM_MAX_PREEMPTIONS: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: Swatinem/rust-cache@v2
+      - run: RUSTFLAGS="--cfg loom" cargo test -p loom-spike --release
