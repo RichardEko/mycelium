@@ -190,3 +190,6 @@ signal for the `/publication-lint` skill (is it catching overclaims before human
   ops_console externalization + slimmed showcases touched `examples/`, `docs/wiki/`, `docs/guide/`, and
   `docs/plans/` — no `docs/publications/` or `philosophy.html` commit since run 11, and no deck/paper
   links into the renamed `examples/README.md` sections. Nothing to reconcile. No findings.
+- 2026-07-15 (lint run 13): **clean — no persuasion-surface change.** The README Demos→nav change touched
+  only root `README.md`; no `docs/publications/` or `philosophy.html` commit since run 12, no deck/paper
+  links into the removed `#demos` anchor. Nothing to reconcile. No findings.
