@@ -56,7 +56,8 @@ Layer explainers: gossip-KV [ch01](../../guide/01-gossip-kv.md) · signal-mesh
 - **Ops Console** (`examples/ops_console.rs` + `.html`, `:8099`): a generic, read-only dashboard over
   **any** gateway-enabled node's operational endpoints — `/stats` (runtime + tripwires),
   `/gateway/fleet` (cluster snapshot), `/gateway/diagnose` (the Legible-Emergence *fleet narrative*),
-  `/gateway/kv/keys`, `/metrics` — with a server-side proxy so the browser skips CORS. `cargo run
+  `/gateway/audit` (the signed audit trail — `compliance`-built nodes), `/gateway/kv/keys`, `/metrics`
+  — with a server-side proxy so the browser skips CORS. `cargo run
   --example ops_console`, then point the host box at the community cluster (`:9050`), a coop demo, or a
   showcase's printed gateway URL (`conway` `:9090`; `stigmergy_viz`/`llm_council_viz` print theirs;
   `microgrid_viz` `:9091` / `redistribution_viz` `:9093` need `--features gateway`, off by default in

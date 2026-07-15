@@ -53,7 +53,8 @@ Bigger, self-contained worlds — each links to its own README; see [shared setu
 **Ops Console** — a generic, read-only dashboard over *any* gateway-enabled node's operational
 endpoints, in one place: `/stats` (node runtime + tripwires), `/gateway/fleet` (cluster snapshot),
 `/gateway/diagnose` (the Legible-Emergence **fleet narrative** — "why is the fleet in this state", in
-plain English), `/gateway/kv/keys`, `/metrics`. It's a *dev/reference* tool — **not** a shipped
+plain English), `/gateway/audit` (the tamper-evident signed audit trail — nodes built `--features
+compliance`), `/gateway/kv/keys`, `/metrics`. It's a *dev/reference* tool — **not** a shipped
 control plane (library, not platform); a customer forks it or points Grafana at `/metrics`.
 
 ```
