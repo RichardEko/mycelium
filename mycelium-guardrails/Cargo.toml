@@ -16,6 +16,9 @@ default = []
 # tamper-evident denial seal. Forwards `mycelium/compliance` (which pulls `tls`: an audit
 # record is Ed25519-signed and `req.sender()` is only trustworthy under the tls identity).
 compliance = ["mycelium/compliance"]
+# The HTTP gateway edge (`/stats`, `/gateway/*`) so a node can be observed by the Ops Console — used
+# by the `guardrail_viz` browser showcase; not needed by the headless examples.
+gateway = ["mycelium/gateway"]
 
 [dependencies]
 # Companion-crate contract: only Mycelium's PUBLIC API is used — no internal access.
@@ -51,3 +54,10 @@ required-features = ["compliance"]
 [[example]]
 name = "guardrail_fleet"
 required-features = ["compliance"]
+
+# The browser showcase: fire tool invocations at a Tier-C gate and watch an agent get structurally
+# stopped, with the tamper-evident denial proof (reconstructed by a neutral observer) growing live.
+# gateway + ui/viz for the Ops Console. Needs compliance (the audit-sealed proof) + gateway.
+[[example]]
+name = "guardrail_viz"
+required-features = ["compliance", "gateway"]

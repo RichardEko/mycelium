@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guardrail wedge — structural stop + cryptographic proof</title>
+<style>
+  :root{
+    --bg:#0d1117;--panel:#161b22;--panel2:#1c2230;--border:#30363d;--fg:#e6edf3;--muted:#8b949e;
+    --faint:#484f58;--green:#3fb950;--red:#f85149;--amber:#d29922;--violet:#a78bfa;--blue:#58a6ff;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:15px;line-height:1.5}
+  header{display:flex;align-items:center;gap:13px;padding:14px 24px;border-bottom:1px solid var(--border);
+    background:radial-gradient(ellipse at 25% 0%,rgba(248,81,73,.09),transparent 60%),var(--panel);flex-wrap:wrap}
+  .brand{font-weight:700}.brand b{color:var(--red)}
+  .tag{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);border:1px solid var(--border);border-radius:20px;padding:3px 10px}
+  .opsbtn{margin-left:auto;font-size:12px;font-family:var(--mono);text-decoration:none;color:var(--blue);
+    border:1px solid var(--border);border-radius:8px;padding:6px 11px;white-space:nowrap}
+  .opsbtn:hover{background:rgba(255,255,255,.05)}
+  main{max-width:1080px;margin:0 auto;padding:22px 24px 60px}
+  h3{font-size:11px;text-transform:uppercase;letter-spacing:.11em;color:var(--muted);margin:26px 0 11px;font-weight:600}
+
+  /* fleet */
+  .fleet{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  @media(max-width:680px){.fleet{grid-template-columns:repeat(2,1fr)}}
+  .node{background:var(--panel);border:1px solid var(--border);border-left:3px solid var(--c);border-radius:12px;padding:13px 15px}
+  .node .em{font-size:20px}
+  .node .role{font-weight:650;color:var(--c);margin-top:5px}
+  .node .id{font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .node .note{font-size:11.5px;color:var(--faint);margin-top:5px;line-height:1.4}
+
+  /* policy */
+  .policy{display:flex;flex-direction:column;gap:8px}
+  .clause{display:flex;gap:12px;align-items:baseline;background:var(--panel);border:1px solid var(--border);
+    border-radius:10px;padding:10px 14px}
+  .clause .tier{font-family:var(--mono);font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px;white-space:nowrap;flex:none}
+  .clause .nm{font-family:var(--mono);font-weight:600;font-size:13px}
+  .clause .dt{color:var(--muted);font-size:12.5px}
+  .tierA{color:var(--blue);background:rgba(88,166,255,.12)}
+  .tierB{color:var(--amber);background:rgba(210,153,34,.14)}
+  .tierC{color:var(--red);background:rgba(248,81,73,.14)}
+
+  /* action bar */
+  .bar{display:flex;gap:12px;flex-wrap:wrap;margin:8px 0 4px}
+  .btn{font-size:14px;font-weight:600;border:none;border-radius:10px;padding:11px 18px;cursor:pointer;
+    display:inline-flex;align-items:center;gap:8px}
+  .btn.ok{background:rgba(63,185,80,.15);color:var(--green);border:1px solid rgba(63,185,80,.4)}
+  .btn.bad{background:rgba(248,81,73,.15);color:var(--red);border:1px solid rgba(248,81,73,.4)}
+  .btn:hover:not(:disabled){filter:brightness(1.25)}
+  .btn:disabled{opacity:.5;cursor:default}
+
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:4px}
+  @media(max-width:760px){.cols{grid-template-columns:1fr}}
+
+  /* action log */
+  .log{display:flex;flex-direction:column;gap:9px}
+  .empty{color:var(--muted);font-size:13px;padding:8px 0}
+  .act{border:1px solid var(--border);border-left:3px solid var(--c);border-radius:0 10px 10px 0;background:var(--panel);padding:10px 14px}
+  .act .h{display:flex;align-items:center;gap:8px;font-weight:600}
+  .act .h .verdict{margin-left:auto;font-family:var(--mono);font-size:11px;font-weight:700;color:var(--c)}
+  .act .id{font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .act .dt{font-size:12.5px;color:var(--muted);margin-top:4px}
+
+  /* proof */
+  .proofbox{border:1px solid var(--border);border-radius:12px;background:var(--panel);overflow:hidden}
+  .proofhead{padding:11px 15px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  .proofhead .lock{font-size:15px}
+  .proofhead .ttl{font-weight:650;font-size:13.5px}
+  .verified{font-family:var(--mono);font-size:11px;font-weight:700;padding:2px 9px;border-radius:6px;margin-left:auto}
+  .verified.yes{color:var(--green);background:rgba(63,185,80,.14)}
+  .verified.no{color:var(--muted);background:var(--panel2)}
+  .seals{padding:6px 15px 12px}
+  .seal{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;
+    font-family:var(--mono);font-size:12px;padding:8px 0;border-bottom:1px solid var(--border)}
+  .seal:last-child{border-bottom:none}
+  .seal .seq{color:var(--faint)}
+  .seal .who{color:var(--red)}.seal .who b{color:var(--fg)}
+  .seal .hash{color:var(--muted);font-size:11px}
+  .proofnote{font-size:11.5px;color:var(--faint);padding:0 15px 14px;line-height:1.5}
+  .proofnote b{color:var(--muted)}
+  .noseal{color:var(--muted);font-size:13px;padding:12px 15px}
+</style>
+</head>
+<body>
+<header>
+  <span class="brand"><b>Guardrail</b> wedge</span>
+  <span class="tag">Tier-C gate · tamper-evident proof</span>
+  __OPS_CONSOLE_LINK__
+</header>
+<main>
+  <h3>The fleet</h3>
+  <div class="fleet" id="fleet"></div>
+
+  <h3>The provider's policy — legible: which clause is which guarantee</h3>
+  <div class="policy" id="policy"></div>
+
+  <h3>Fire an invocation at the governed tool</h3>
+  <div class="bar">
+    <button class="btn ok"  id="b-ok"  onclick="invoke('authorized')">✅ Invoke as the authorized agent</button>
+    <button class="btn bad" id="b-bad" onclick="invoke('unauthorized')">⛔ Invoke as the unauthorized agent</button>
+  </div>
+
+  <div class="cols">
+    <div>
+      <h3>Gate decisions</h3>
+      <div class="log" id="log"></div>
+    </div>
+    <div>
+      <h3>Cryptographic proof</h3>
+      <div class="proofbox">
+        <div class="proofhead">
+          <span class="lock">🔒</span>
+          <span class="ttl">Reconstructed by the <span style="color:var(--blue)">observer</span> — <span id="obs" style="font-family:var(--mono)"></span></span>
+          <span class="verified no" id="verified">—</span>
+        </div>
+        <div class="seals" id="seals"></div>
+        <div class="proofnote"><b>Proves:</b> the provider tamper-evidently sealed <em>stopping</em> these callers — the records can't be forged, reordered, or removed without the chain failing to verify. <b>Does not prove</b> a caller "couldn't act anywhere" — the chain is per-node.</div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+const $=s=>document.querySelector(s);
+const el=(t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
+let busy=false;
+
+function tierClass(t){ if(t.includes('A'))return'tierA'; if(t.includes('B'))return'tierB'; return'tierC'; }
+
+function render(st){
+  // fleet
+  const f=$("#fleet");f.innerHTML="";
+  (st.fleet||[]).forEach(n=>{const d=el("div","node");d.style.setProperty("--c",n.color);
+    d.innerHTML=`<div class="em">${n.emoji}</div><div class="role">${n.role}</div>
+      <div class="id">${n.id}</div><div class="note">${n.note}</div>`;f.appendChild(d);});
+  // policy
+  const p=$("#policy");p.innerHTML="";
+  (st.policy||[]).forEach(c=>{const d=el("div","clause");
+    d.innerHTML=`<span class="tier ${tierClass(c.tier)}">${c.tier.split('—')[0].trim()}</span>
+      <span><span class="nm">${c.name}</span> <span class="dt">— ${c.detail}</span></span>`;p.appendChild(d);});
+  // log (newest first)
+  const lg=$("#log");lg.innerHTML="";
+  const log=(st.log||[]).slice().reverse();
+  if(!log.length){lg.appendChild(el("div","empty","No invocations yet — fire one above."));}
+  log.forEach(a=>{const c=a.admitted?"var(--green)":"var(--red)";const d=el("div","act");d.style.setProperty("--c",c);
+    d.innerHTML=`<div class="h">${a.emoji} ${a.role} <span class="id">${a.caller}</span>
+      <span class="verdict">${a.admitted?"ADMITTED":"STOPPED"}</span></div><div class="dt">${a.detail}</div>`;lg.appendChild(d);});
+  // proof
+  const pr=st.proof||{denials:[],verified:false};
+  $("#obs").textContent=pr.observer||"";
+  const v=$("#verified");
+  if(pr.denials.length && pr.verified){ v.className="verified yes"; v.textContent="✓ chain verifies"; }
+  else if(pr.denials.length){ v.className="verified no"; v.textContent="verifying…"; }
+  else { v.className="verified no"; v.textContent="no seals yet"; }
+  const s=$("#seals");s.innerHTML="";
+  if(!pr.denials.length){ s.innerHTML=`<div class="noseal">Nothing sealed yet. An unauthorized invocation is stopped <em>and sealed</em> here — tamper-evidently.</div>`; }
+  pr.denials.forEach(d=>{const row=el("div","seal");
+    row.innerHTML=`<span class="seq">seq ${d.seq}</span>
+      <span class="who">DENIED <b>${d.caller}</b> → ${d.target}</span>
+      <span class="hash">🔒 ${d.hash}…</span>`;s.appendChild(row);});
+}
+
+async function refresh(){ try{ render(await (await fetch("/state")).json()); }catch(e){} }
+async function invoke(as){
+  if(busy)return; busy=true; $("#b-ok").disabled=$("#b-bad").disabled=true;
+  try{ render(await (await fetch("/invoke?as="+as)).json()); }catch(e){}
+  busy=false; $("#b-ok").disabled=$("#b-bad").disabled=false;
+}
+refresh(); setInterval(()=>{if(!busy)refresh();},3500);
+</script>
+</body>
+</html>

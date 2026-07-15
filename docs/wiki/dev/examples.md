@@ -88,7 +88,10 @@ Layer explainers: gossip-KV [ch01](../../guide/01-gossip-kv.md) · signal-mesh
   [15-reasoning-and-langgraph](../../guide/15-reasoning-and-langgraph.md).
 - **Guardrails** (`mycelium-guardrails/examples/`): `guardrail_wedge` (an off-allowlist caller
   structurally stopped at a Tier-C gate, with a cryptographic denial proof) + `guardrail_fleet` (all
-  three policy tiers composed in one co-op fleet).
+  three policy tiers composed in one co-op fleet) + `guardrail_viz` — the **browser showcase**: fire
+  invocations at the gate and watch admit/deny + the tamper-evident denial proof reconstructed live by
+  a neutral observer; gateway + `ui/viz` (its `/gateway/audit` *is* the seal — `:8096`,
+  `--features compliance,gateway`).
 - **Wiki companion** (`mycelium-wiki/examples/`): `wiki_chat` — import documents, then chat grounded in
   the shared wiki (Phase-5 worked example) · `wiki_council_viz` — the browser showcase: a **live chat**
   over a fleet of wiki-grounded specialists (Transport · Energy · Planning · Budget), fan-out +
