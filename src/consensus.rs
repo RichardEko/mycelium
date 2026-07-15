@@ -892,6 +892,7 @@ impl ConsensusEngine {
             members:     ahash::AHashSet<NodeId>,
             quorum_frac: f32,
             accepts:     usize,
+            seen:        ahash::AHashSet<NodeId>, // distinct voters — each counts once
         }
 
         let mut group_states: AHashMap<Arc<str>, CrossState> = AHashMap::new();
@@ -905,6 +906,7 @@ impl ConsensusEngine {
                 members,
                 quorum_frac: gq.quorum.clamp(0.001, 1.0),
                 accepts: 0,
+                seen: ahash::AHashSet::new(),
             });
         }
 
@@ -965,15 +967,19 @@ impl ConsensusEngine {
                         if let Some(gnames) = node_groups.get(&voter) {
                             for gname in gnames {
                                 if let Some(gs) = group_states.get_mut(gname) {
-                                    gs.accepts += 1;
+                                    // Count each DISTINCT voter once — a re-delivered vote
+                                    // (gossip re-flood / duplicate PROPOSE) must not inflate
+                                    // the tally (the sibling `propose` path is NodeId-keyed too).
+                                    if gs.seen.insert(voter.clone()) {
+                                        gs.accepts += 1;
+                                    }
                                 }
                             }
                         }
 
                         // Commit when every group has independently reached its fraction.
                         let all_ready = group_states.values().all(|gs| {
-                            let needed = ((gs.members.len() as f32 * gs.quorum_frac).ceil() as usize).max(1);
-                            gs.accepts >= needed
+                            gs.accepts >= cross_group_quorum(gs.members.len(), gs.quorum_frac)
                         });
                         if all_ready {
                             // Lost race with another proposer mid-ballot: refuse
@@ -1583,14 +1589,39 @@ mod lease_tests {
     }
 }
 
+/// Distinct accepts a group of `n` members needs at fraction `frac` for a **safe
+/// (intersecting)** quorum. `floor(n·frac)+1`, floored at strict majority so a small
+/// fraction can never yield two disjoint quorums (which would split-brain the slot).
+/// At `frac == 0.5` this is exactly `n/2 + 1` — matching the main path's
+/// `compute_quorum_size`; the old `ceil(n·frac)` under-counted on even n (`ceil(4·0.5)=2`
+/// allowed disjoint `{A,B}`/`{C,D}` — audit 2026-07-15).
+pub(crate) fn cross_group_quorum(n: usize, frac: f32) -> usize {
+    (((n as f32) * frac).floor() as usize + 1)
+        .max(n / 2 + 1)
+        .min(n.max(1))
+}
+
 #[cfg(test)]
 mod cross_group_tests {
     use super::GroupQuorum;
 
-    // Helper: mirrors the quorum check in ConsensusEngine::cross_propose.
+    // Helper: mirrors the quorum check in ConsensusEngine::cross_propose (shared code).
     fn quorum_met(accepts: usize, member_count: usize, frac: f32) -> bool {
-        let needed = ((member_count as f32 * frac).ceil() as usize).max(1);
-        accepts >= needed
+        accepts >= super::cross_group_quorum(member_count, frac)
+    }
+
+    /// Regression (audit 2026-07-15): a fraction-0.5 quorum on EVEN n must exceed n/2 so any
+    /// two quorums intersect — the old `ceil(n·0.5)` allowed disjoint majorities to both commit.
+    #[test]
+    fn regression_even_n_quorum_intersects() {
+        assert!(!quorum_met(2, 4, 0.5), "2 of 4 is a non-intersecting quorum (split-brain)");
+        assert!( quorum_met(3, 4, 0.5), "3 of 4 is strict majority");
+        assert!(!quorum_met(1, 2, 0.5), "1 of 2 is a minority");
+        assert!( quorum_met(2, 2, 0.5));
+        // exactly matches the main path (compute_quorum_size) at 0.5, every n:
+        for n in 1..=12 { assert_eq!(super::cross_group_quorum(n, 0.5), n / 2 + 1, "n={n}"); }
+        // supermajority fractions stay at or above strict majority (still safe):
+        assert!(super::cross_group_quorum(6, 0.67) >= 6 / 2 + 1);
     }
 
     #[test]

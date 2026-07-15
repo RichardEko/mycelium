@@ -2153,10 +2153,16 @@ async fn gw_overlay_elect(
         crate::consensus::ConsensusConfig::default(),
     ).await;
 
+    // #164 class: an optimistic `Committed` is NOT mutually exclusive — never return `self`.
+    // Let the winning commit converge, then read the AUTHORITATIVE leader from the committed slot
+    // (mirrors `elect_leader` + `distributed_lock`; returning self split-brained — audit 2026-07-15).
+    let converge = matches!(result, crate::consensus::ConsensusResult::Committed { .. });
     match result {
-        crate::consensus::ConsensusResult::Committed { .. } =>
-            Json(json!({ "ok": true, "leader": ctx.agent_ctx.node_id.to_string() })).into_response(),
-        crate::consensus::ConsensusResult::Superseded { .. } => {
+        crate::consensus::ConsensusResult::Committed { .. }
+        | crate::consensus::ConsensusResult::Superseded { .. } => {
+            if converge {
+                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+            }
             let committed_key = format!("consensus/committed/{slot}");
             if let Some(raw) = ctx.agent_ctx.kv_state.store.pin().get(committed_key.as_str()).and_then(|e| e.data.clone())
                 && let Ok(s) = std::str::from_utf8(&raw) {

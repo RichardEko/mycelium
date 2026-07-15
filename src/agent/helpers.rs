@@ -53,7 +53,9 @@ pub(crate) fn cached_group_members_ctx(
 ) -> Arc<super::RosterEntry> {
     use std::sync::atomic::Ordering;
     let group_key: Arc<str> = Arc::from(group);
-    let current_gen = ctx.kv_state.grp_generation.load(Ordering::Relaxed);
+    // Acquire (not Relaxed): pairs with the Release bump in store::apply_and_notify so observing
+    // a new generation guarantees the prefix_index membership it advertises is visible (audit 2026-07-15).
+    let current_gen = ctx.kv_state.grp_generation.load(Ordering::Acquire);
     let guard = ctx.group_roster_cache.pin();
     if let Some(entry) = guard.get(&group_key)
         && entry.grp_gen == current_gen && entry.fetched_at.elapsed() < ttl {

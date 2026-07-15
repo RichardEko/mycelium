@@ -346,6 +346,20 @@ fn hash_seed() -> &'static RandomState {
     HASH_SEED.get_or_init(|| RandomState::with_seeds(1, 2, 3, 4))
 }
 
+/// The value's contribution to the anti-entropy digest. Folding the value in (not just
+/// `hash(key) ^ timestamp`) is what makes two entries with the *same* `(key, timestamp)` but
+/// *different* values produce *different* digests — otherwise the equal-digest fast-path in
+/// anti-entropy certifies a value-only divergence as "converged" and never repairs it, leaving
+/// permanent silent divergence (audit 2026-07-15). Deterministic (fixed `hash_seed`) so every
+/// node computes the same term. `None` (a tombstone) contributes 0 — it is not folded live.
+#[inline]
+fn entry_value_hash(data: &Option<Bytes>) -> u64 {
+    match data {
+        Some(b) => hash_seed().hash_one(b.as_ref()),
+        None    => 0,
+    }
+}
+
 /// O(1) store hash read — returns the value of the incremental XOR accumulator.
 ///
 /// The accumulator is maintained by `apply_and_notify` on every live write or
@@ -374,7 +388,7 @@ pub fn store_hash(store: &papaya::HashMap<Arc<str>, StoreEntry>) -> u64 {
     let mut combined: u64 = 0;
     for (k, v) in guard.iter() {
         if v.data.is_some() {
-            combined ^= rs.hash_one(k.as_bytes()) ^ v.timestamp;
+            combined ^= rs.hash_one(k.as_bytes()) ^ v.timestamp ^ entry_value_hash(&v.data);
         }
     }
     combined
@@ -400,7 +414,7 @@ pub fn store_bucket_hashes(kv: &KvState) -> Vec<u64> {
     for (k, v) in guard.iter() {
         if v.data.is_some() {
             let h = rs.hash_one(k.as_bytes());
-            buckets[(h as usize) & (ANTI_ENTROPY_BUCKETS - 1)] ^= h ^ v.timestamp;
+            buckets[(h as usize) & (ANTI_ENTROPY_BUCKETS - 1)] ^= h ^ v.timestamp ^ entry_value_hash(&v.data);
         }
     }
     buckets
@@ -503,18 +517,18 @@ pub fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
 
     // Capture the old live timestamp inside the compute callback so there is no
     // TOCTOU window between reading the old entry and performing the CAS.
-    let mut old_ts_if_live: Option<u64> = None;
+    let mut old_live: Option<(u64, u64)> = None; // (timestamp, value_hash) of an overwritten live entry
 
     let changed = {
         let guard = kv.store.pin();
         let result = guard.compute(Arc::clone(&update.key), |existing| {
-            old_ts_if_live = None; // reset on each CAS retry
+            old_live = None; // reset on each CAS retry
             match existing {
                 None => Operation::Insert(StoreEntry { data: val.clone(), timestamp: ts }),
                 Some((_, curr)) => {
                     if lww_wins(ts, is_tombstone, &val, curr) {
                         if curr.data.is_some() {
-                            old_ts_if_live = Some(curr.timestamp);
+                            old_live = Some((curr.timestamp, entry_value_hash(&curr.data)));
                         }
                         Operation::Insert(StoreEntry { data: val.clone(), timestamp: ts })
                     } else {
@@ -529,20 +543,18 @@ pub fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
     if changed {
         // Maintain the incremental XOR hash.
         let key_hash = hash_seed().hash_one(update.key.as_bytes());
-        if let Some(old_ts) = old_ts_if_live {
-            kv.hash_acc.fetch_xor(key_hash ^ old_ts, Ordering::Relaxed);
+        if let Some((old_ts, old_vh)) = old_live {
+            kv.hash_acc.fetch_xor(key_hash ^ old_ts ^ old_vh, Ordering::Relaxed);
         }
         if !is_tombstone {
-            kv.hash_acc.fetch_xor(key_hash ^ ts, Ordering::Relaxed);
+            kv.hash_acc.fetch_xor(key_hash ^ ts ^ entry_value_hash(&val), Ordering::Relaxed);
         }
-        // Bump the group-roster generation counter so cached_group_members knows
-        // to re-fetch when any peer joins or leaves a group.
-        // Release: pairs with Acquire in the gossip-loop cache reader (tasks.rs).
-        // Guarantees that when the reader observes the new gen value, the grp/ KV
-        // write that caused the bump is already visible in the papaya store.
-        if update.key.starts_with("grp/") {
-            kv.grp_generation.fetch_add(1, Ordering::Release);
-        }
+        // (Group-roster generation is bumped AFTER the prefix-index reconcile below, not here.
+        // A reader that observes the new gen rebuilds its roster from `prefix_index` — which is
+        // only populated in the stripe-locked section below. Bumping here published the counter
+        // *ahead* of the index it advertises, so a reader in that window rebuilt a stale roster
+        // and dropped a just-joined member from group forwarding until the next membership
+        // change — audit 2026-07-15.)
         // (Capability/requirement watchers use `prefix_watchers` below, not a
         // generation counter — a previous design held a `cap_generation` here
         // but it had no readers and was removed.)
@@ -606,6 +618,13 @@ pub fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
                                 },
                             }
                         }
+        }
+        // Publish the group-roster generation ONLY now — after the prefix-index reconcile above,
+        // so a reader that observes the new gen is guaranteed to see the grp/ membership it
+        // rebuilds its roster from. Release pairs with Acquire in the cache readers (tasks.rs,
+        // helpers.rs::cached_group_members_ctx).
+        if update.key.starts_with("grp/") {
+            kv.grp_generation.fetch_add(1, Ordering::Release);
         }
         let subs_guard = kv.subscriptions.pin();
         if let Some(tx) = subs_guard.get(&update.key) {
@@ -1059,6 +1078,40 @@ mod tests {
             timestamp: 200, nonce: 2, ttl: 1, is_tombstone: true });
         assert!(store_bucket_hashes(&kv).iter().all(|&b| b == 0),
             "a tombstone-only store yields an all-zero digest");
+    }
+
+    /// Regression (audit 2026-07-15): the anti-entropy digest must reflect the VALUE, not just
+    /// `(key, timestamp)`. Two nodes holding the same key at the same HLC but different values
+    /// (reachable — see the module doc) used to digest identically, so the equal-digest fast-path
+    /// certified a permanent value-only divergence as "converged" and never repaired it.
+    #[test]
+    fn regression_anti_entropy_digest_reflects_value() {
+        let a = KvState::new(0);
+        let b = KvState::new(0);
+        apply_and_notify(&a, &GossipUpdate { sender: 1, key: Arc::from("k"),
+            value: Bytes::from_static(b"aaa"), timestamp: 500, nonce: 1, ttl: 1, is_tombstone: false });
+        apply_and_notify(&b, &GossipUpdate { sender: 2, key: Arc::from("k"),
+            value: Bytes::from_static(b"bbb"), timestamp: 500, nonce: 1, ttl: 1, is_tombstone: false });
+        assert_ne!(store_bucket_hashes(&a), store_bucket_hashes(&b),
+            "value-divergent stores must NOT share a digest — else anti-entropy never repairs them");
+    }
+
+    /// Regression (audit 2026-07-15): with the value folded in, the incremental accumulator must
+    /// still equal a full recompute across set / overwrite / tombstone — i.e. the XOR-OUT on
+    /// overwrite/delete must use the OLD value's hash, not just its timestamp.
+    #[test]
+    fn regression_incremental_digest_matches_recompute_with_value() {
+        let kv = KvState::new(0);
+        let up = |k: &str, v: &[u8], ts: u64, n: u64, tomb: bool| GossipUpdate {
+            sender: 1, key: Arc::from(k), value: Bytes::copy_from_slice(v),
+            timestamp: ts, nonce: n, ttl: 1, is_tombstone: tomb };
+        apply_and_notify(&kv, &up("x", b"one", 10, 1, false));
+        apply_and_notify(&kv, &up("y", b"yy",  10, 2, false));
+        apply_and_notify(&kv, &up("x", b"two", 20, 3, false)); // overwrite → XOR out old value
+        apply_and_notify(&kv, &up("y", b"",    30, 4, true));  // tombstone → XOR out old value
+        let folded = store_bucket_hashes(&kv).iter().fold(0u64, |a, b| a ^ b);
+        assert_eq!(folded, store_hash_acc(&kv.hash_acc),
+            "incremental accumulator must equal a full recompute after overwrite + delete");
     }
 
     // `concurrent_quorum_trackers_coexist_and_remove_only_self` moved to the upper
