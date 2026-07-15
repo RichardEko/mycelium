@@ -9,7 +9,7 @@ use crate::seen::ShardedSeen;
 use crate::signal::SignalHandlers;
 use crate::store::intern_pool_len;
 use crate::config::resolved_fanout;
-use crate::writer::{evict_peer_writer, get_or_spawn_writer, request_state, WriterEntry};
+use crate::writer::{evict_peer_writer, get_or_spawn_writer, reap_finished_writers, request_state, WriterEntry};
 use ahash::{AHashMap, AHashSet};
 use bytes::Bytes;
 use std::{
@@ -1066,8 +1066,10 @@ pub(super) async fn run_gc_task(ctx: GcContext) {
                             .map(|(k, _)| k.clone())
                             .collect()
                     };
-                    let guard = peer_writers.pin();
-                    for id in finished { guard.remove(&id); }
+                    // Re-checks liveness under the map guard so a peer re-claimed with a fresh LIVE
+                    // writer between the collect above and here is not blind-removed (audit
+                    // 2026-07-15 pass 2). peer_writers was the one blind `remove` in this GC pass.
+                    reap_finished_writers(&peer_writers, finished);
                 }
 
                 // Boundary reconcile — catch-all for updates missed by the push-based path.

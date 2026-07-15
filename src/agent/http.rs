@@ -705,7 +705,11 @@ struct TransparencyQuery {
 
 #[cfg(feature = "compliance")]
 fn parse_hex32(s: &str) -> Option<[u8; 32]> {
-    if s.len() != 64 {
+    // `s.len()` is a BYTE length; the loop below byte-slices `&s[i*2..i*2+2]` assuming 1 byte/char.
+    // Without the ASCII guard a 64-byte string containing a multibyte UTF-8 char panics on a
+    // non-char-boundary slice — and with `panic = "abort"` (release) that aborts the node. Hex is
+    // ASCII, so reject non-ASCII up front (audit 2026-07-15 pass 2).
+    if s.len() != 64 || !s.is_ascii() {
         return None;
     }
     let mut out = [0u8; 32];
@@ -1319,7 +1323,12 @@ async fn gw_signal_emit(
             Err(_)  => return (StatusCode::BAD_REQUEST, Json(json!({"error":"invalid node id"}))).into_response(),
         }
     } else {
-        SignalScope::Cluster
+        // Reject an unrecognized scope instead of silently widening it to a cluster-wide broadcast:
+        // a typo'd prefix (`grp:`, `individual:`) would otherwise emit to the WHOLE cluster rather
+        // than the intended narrow scope (audit 2026-07-15 pass 2).
+        return (StatusCode::BAD_REQUEST, Json(json!({
+            "error": "unknown scope; expected \"cluster\" | \"group:<name>\" | \"node:<id>\""
+        }))).into_response();
     };
 
     let payload = if let Some(b64) = body["payload_b64"].as_str() {
@@ -1574,7 +1583,15 @@ async fn gw_kv_quorum(
     };
 
     let key: Arc<str> = Arc::from(body.key.as_str());
-    let timeout        = Duration::from_secs_f64(body.timeout_secs);
+    // `try_from_secs_f64`, NOT `from_secs_f64`: the latter PANICS on a negative, non-finite, or
+    // over-large value. `timeout_secs` is an untrusted client `f64`, and with `panic = "abort"` in
+    // the release profile a panic aborts the whole node — so `{"timeout_secs":-1}` on the (default
+    // loopback-open) gateway was an unauthenticated single-request node kill (audit 2026-07-15 pass 2).
+    let timeout = match Duration::try_from_secs_f64(body.timeout_secs) {
+        Ok(d)  => d,
+        Err(_) => return (StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "timeout_secs must be a finite, non-negative number" }))).into_response(),
+    };
     let tc             = Arc::clone(&ctx.agent_ctx);
 
     if body.min_acks == 0 {
@@ -1909,7 +1926,11 @@ async fn overlay_group_propose(
 ) -> crate::consensus::ConsensusResult {
     let prefix  = crate::signal::grp_prefix(group);
     let members = crate::store::scan_kv_prefix(ctx.kv_state.as_ref(), &prefix);
-    let n       = (members.len() + 1).max(1);
+    // NO `+ 1`: the `grp/{group}/` roster already includes self (a node joins by writing its own
+    // member key), so `+ 1` double-counts self and over-sizes the quorum — a solo group `{self}`
+    // then needs 2 votes and can only ever cast 1 → spurious Timeout where the library path
+    // (`member_ids.len().max(1)`, consensus_handle.rs) commits at quorum 1 (audit 2026-07-15 pass 2).
+    let n       = members.len().max(1);
     let quorum  = super::helpers::compute_quorum_size(config.quorum_size, n);
     overlay_make_engine(ctx)
         .propose(
@@ -3237,6 +3258,21 @@ mod tests {
         assert_eq!(resolve_token_scopes(&cfg, "nope"), None);
     }
 
+    #[cfg(feature = "compliance")]
+    #[test]
+    fn regression_parse_hex32_rejects_non_ascii_without_panic() {
+        use super::parse_hex32;
+        // 64 BYTES but not 64 chars: one 3-byte '€' + 61 ASCII. The old code byte-sliced after a
+        // BYTE-length check and panicked on the non-char-boundary (node-abort under panic=abort).
+        // Must return None, never panic (audit 2026-07-15 pass 2).
+        let s = format!("€{}", "a".repeat(61));
+        assert_eq!(s.len(), 64, "precondition: 64 bytes, <64 chars");
+        assert_eq!(parse_hex32(&s), None, "non-ASCII 64-byte input must be rejected, not panic");
+        // Valid 64-hex still parses; wrong lengths rejected.
+        assert!(parse_hex32(&"ab".repeat(32)).is_some());
+        assert_eq!(parse_hex32("abcd"), None);
+    }
+
     /// End-to-end: a scoped token is admitted on routes within its grant,
     /// denied (403) on routes outside it, the wildcard token passes scope
     /// gating everywhere, an unknown token is 401, and public routes stay open
@@ -3298,6 +3334,54 @@ mod tests {
             .send().await.unwrap();
         assert_ne!(r.status(), 401, "wildcard token must authenticate");
         assert_ne!(r.status(), 403, "wildcard token must pass scope gating");
+
+        agent.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn regression_gateway_rejects_hostile_inputs_without_crashing() {
+        // Two untrusted-input fixes on the (default loopback-open) gateway (audit 2026-07-15 pass 2):
+        //   1. gw_kv_quorum: an out-of-range `timeout_secs` f64 fed `Duration::from_secs_f64`, which
+        //      PANICS → node-abort under the release profile's panic="abort". Must be a clean 400.
+        //   2. gw_signal_emit: an unknown `scope` string silently widened to a cluster-wide broadcast.
+        //      Must be a 400, not a silent whole-cluster emit.
+        let gossip_port = alloc_port();
+        let http_port   = alloc_port();
+        let id  = NodeId::new("127.0.0.1", gossip_port).unwrap();
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = gossip_port;
+        cfg.http_port = Some(http_port);
+        let agent = Arc::new(GossipAgent::new(id, cfg));
+        agent.start().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let client = reqwest::Client::new();
+        let base = format!("http://127.0.0.1:{http_port}");
+
+        // 1. Hostile timeout_secs (finite, JSON-serialisable — NaN/Inf aren't valid JSON so can't
+        //    reach the handler) → clean 400, and the node stays up to serve the next request.
+        for bad in [-1.0f64, -0.5, 1e300] {
+            let r = client.post(format!("{base}/gateway/kv/quorum"))
+                .json(&serde_json::json!({"key":"k","min_acks":1,"timeout_secs":bad}))
+                .send().await.unwrap();
+            assert_eq!(r.status(), 400, "hostile timeout_secs={bad} must be a clean 400, not a crash");
+        }
+        // A valid timeout still reaches the handler (min_acks=0 fast path → 200), proving the node
+        // survived the hostile requests above.
+        let r = client.post(format!("{base}/gateway/kv/quorum"))
+            .json(&serde_json::json!({"key":"k","min_acks":0,"timeout_secs":1.0}))
+            .send().await.unwrap();
+        assert_eq!(r.status(), 200, "node must survive and still serve a valid quorum request");
+
+        // 2. Unknown scope → 400; a valid scope is accepted (not 400).
+        let r = client.post(format!("{base}/gateway/signal/emit"))
+            .json(&serde_json::json!({"kind":"k","scope":"grp:typo","payload_b64":""}))
+            .send().await.unwrap();
+        assert_eq!(r.status(), 400, "unknown scope must be rejected, not widened to cluster-wide");
+        let r = client.post(format!("{base}/gateway/signal/emit"))
+            .json(&serde_json::json!({"kind":"k","scope":"cluster","payload_b64":""}))
+            .send().await.unwrap();
+        assert_ne!(r.status(), 400, "a valid 'cluster' scope must be accepted");
 
         agent.shutdown().await;
     }

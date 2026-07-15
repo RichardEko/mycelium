@@ -5,7 +5,7 @@ use ahash::RandomState;
 use bytes::Bytes;
 use papaya::Operation;
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicU64, AtomicUsize, Ordering},
     Arc, Mutex, OnceLock, PoisonError,
 };
 use tokio::sync::watch;
@@ -65,6 +65,15 @@ pub struct KvStore {
     /// without direct peering pay relay latency.
     pub individual_flood_fallbacks: Arc<AtomicU64>,
     pub max_store_entries: usize,
+    /// Exact count of **live** (non-tombstone) entries, maintained inline by
+    /// [`apply_and_notify`] on every winning CAS. Authoritative for the `max_store_entries`
+    /// cap, which the config contract defines over *live* entries — tombstones occupy map
+    /// slots but must not count toward it, and an overwrite of an already-live key must not be
+    /// capped (dropping a newer overwrite freezes a stale value that anti-entropy re-applies
+    /// then re-drops every round → permanent silent divergence; audit 2026-07-15 pass 2). The
+    /// GC task's separate periodic recount (`tasks.rs`) feeds `system_stats`; this counter is
+    /// the write-path-exact one the gate consults.
+    pub live_count:        Arc<AtomicUsize>,
     /// Monotonic counter bumped whenever a `grp/` key is written or tombstoned.
     /// `cached_group_members` uses this to detect remote membership changes without
     /// scanning the store — the cached roster is stale if the counter has advanced.
@@ -153,6 +162,7 @@ impl KvState {
                 dropped_frames:    Arc::new(AtomicU64::new(0)),
                 individual_flood_fallbacks: Arc::new(AtomicU64::new(0)),
                 max_store_entries,
+                live_count:        Arc::new(AtomicUsize::new(0)),
                 grp_generation:    Arc::new(AtomicU64::new(0)),
                 prefix_watchers:           Arc::new(papaya::HashMap::new()),
                 prefix_predicate_watchers: Arc::new(papaya::HashMap::new()),
@@ -502,13 +512,27 @@ pub fn apply_to_store(store: &papaya::HashMap<Arc<str>, StoreEntry>, update: &Go
 /// factory for every higher layer — see that function's doc comment for the
 /// placement rationale and the layers it serves.
 pub fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
-    if kv.max_store_entries > 0 && !update.is_tombstone && kv.store.len() >= kv.max_store_entries {
-        warn!(
-            key = %update.key,
-            cap = kv.max_store_entries,
-            "KV store cap reached; live write dropped",
+    if kv.max_store_entries > 0 && !update.is_tombstone {
+        // The cap is defined over LIVE entries (config contract), so only a write that would
+        // INCREASE the live count is subject to it: a live value for a key currently absent or
+        // tombstoned. Two things must escape the gate regardless of `store.len()` — which counts
+        // tombstone slots and cannot see this distinction (audit 2026-07-15 pass 2):
+        //   1. An overwrite of an already-live key (does not grow the live set). Dropping it would
+        //      freeze a stale value that anti-entropy re-applies-then-re-drops every round — a
+        //      permanent, self-perpetuating silent divergence.
+        //   2. (Tombstones already escape via the `!is_tombstone` guard — they only reduce live.)
+        let overwrites_live = matches!(
+            kv.store.pin().get(update.key.as_ref()),
+            Some(e) if e.data.is_some(),
         );
-        return;
+        if !overwrites_live && kv.live_count.load(Ordering::Relaxed) >= kv.max_store_entries {
+            warn!(
+                key = %update.key,
+                cap = kv.max_store_entries,
+                "KV store live-entry cap reached; new live write dropped",
+            );
+            return;
+        }
     }
 
     let ts           = update.timestamp;
@@ -541,6 +565,16 @@ pub fn apply_and_notify(kv: &KvState, update: &GossipUpdate) {
     };
 
     if changed {
+        // Maintain the exact live-entry count for the cap. `old_live` is Some iff this winning CAS
+        // overwrote a LIVE entry; the new entry is live iff `!is_tombstone`. Computed from the
+        // post-CAS `old_live` (not inside the retry-able closure), so it is exact under concurrent
+        // winning CASes (papaya serialises them; each thread's `old_live` reflects the state it
+        // overwrote). fetch_add/sub are atomic regardless of ordering, so the count never drifts.
+        match (!is_tombstone, old_live.is_some()) {
+            (true, false) => { kv.live_count.fetch_add(1, Ordering::Relaxed); }
+            (false, true) => { kv.live_count.fetch_sub(1, Ordering::Relaxed); }
+            _ => {}
+        }
         // Maintain the incremental XOR hash.
         let key_hash = hash_seed().hash_one(update.key.as_bytes());
         if let Some((old_ts, old_vh)) = old_live {
@@ -980,6 +1014,54 @@ mod tests {
     /// worst-case stripe contention (64 hot keys) must both stay far above
     /// any realistic gossip ingest rate. Run explicitly:
     /// `cargo test --release --lib -- --ignored apply_and_notify_throughput_smoke --nocapture`
+    // Audit 2026-07-15 pass 2: the `max_store_entries` cap is defined over LIVE entries (config
+    // contract). The old gate used `store.len()` (which counts tombstone slots) and did not exempt
+    // overwrites of existing keys — two silent-divergence bugs.
+    #[test]
+    fn regression_cap_admits_overwrite_of_live_key_at_capacity() {
+        // Store full of live keys; a strictly-newer overwrite of an existing key must apply — it
+        // does not grow the live set. Dropping it would freeze a stale value that anti-entropy
+        // re-applies-then-re-drops every round → permanent silent divergence.
+        let kv = KvState::new(2);
+        apply_and_notify(&kv, &GossipUpdate { sender: 1, key: "k1".into(), value: Bytes::from_static(b"old"), timestamp: 10, nonce: 1, ttl: 1, is_tombstone: false });
+        apply_and_notify(&kv, &GossipUpdate { sender: 1, key: "k2".into(), value: Bytes::from_static(b"v2"),  timestamp: 10, nonce: 2, ttl: 1, is_tombstone: false });
+        assert_eq!(kv.live_count.load(Ordering::Relaxed), 2);
+        // At cap (2/2). Overwrite k1 with a newer value — must NOT be dropped.
+        apply_and_notify(&kv, &GossipUpdate { sender: 1, key: "k1".into(), value: Bytes::from_static(b"new"), timestamp: 20, nonce: 3, ttl: 1, is_tombstone: false });
+        let got = kv.store.pin().get("k1").map(|e| (e.timestamp, e.data.clone()));
+        assert_eq!(got, Some((20, Some(Bytes::from_static(b"new")))), "overwrite at cap must apply (no live growth)");
+        assert_eq!(kv.live_count.load(Ordering::Relaxed), 2, "overwrite must not change the live count");
+    }
+
+    #[test]
+    fn regression_cap_counts_live_not_tombstones() {
+        // A store whose slots are all tombstones has ZERO live entries and must accept a new live
+        // write — tombstones must not wedge the live cap (they only ever reduce the live count).
+        let kv = KvState::new(2);
+        // Two live keys, then tombstone both → 2 tombstone slots, 0 live.
+        apply_and_notify(&kv, &GossipUpdate { sender: 1, key: "a".into(), value: Bytes::from_static(b"x"), timestamp: 10, nonce: 1, ttl: 1, is_tombstone: false });
+        apply_and_notify(&kv, &GossipUpdate { sender: 1, key: "b".into(), value: Bytes::from_static(b"x"), timestamp: 10, nonce: 2, ttl: 1, is_tombstone: false });
+        apply_and_notify(&kv, &GossipUpdate { sender: 1, key: "a".into(), value: Bytes::from_static(b""), timestamp: 20, nonce: 3, ttl: 1, is_tombstone: true });
+        apply_and_notify(&kv, &GossipUpdate { sender: 1, key: "b".into(), value: Bytes::from_static(b""), timestamp: 20, nonce: 4, ttl: 1, is_tombstone: true });
+        assert_eq!(kv.live_count.load(Ordering::Relaxed), 0, "tombstones are not live");
+        assert!(kv.store.len() >= 2, "tombstone slots still occupy the map");
+        // A brand-new live key must be accepted (0 live < cap 2), not wedged by the tombstone slots.
+        apply_and_notify(&kv, &GossipUpdate { sender: 1, key: "c".into(), value: Bytes::from_static(b"live"), timestamp: 30, nonce: 5, ttl: 1, is_tombstone: false });
+        assert_eq!(kv.store.pin().get("c").and_then(|e| e.data.clone()), Some(Bytes::from_static(b"live")),
+            "a live write must be accepted when 0 live entries exist");
+        assert_eq!(kv.live_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn regression_cap_rejects_genuinely_new_live_key_over_cap() {
+        // The cap must still bind: a brand-new live key beyond the live cap is dropped.
+        let kv = KvState::new(1);
+        apply_and_notify(&kv, &GossipUpdate { sender: 1, key: "k1".into(), value: Bytes::from_static(b"v"), timestamp: 10, nonce: 1, ttl: 1, is_tombstone: false });
+        apply_and_notify(&kv, &GossipUpdate { sender: 1, key: "k2".into(), value: Bytes::from_static(b"v"), timestamp: 10, nonce: 2, ttl: 1, is_tombstone: false });
+        assert!(kv.store.pin().get("k2").is_none(), "new live key beyond cap must be dropped");
+        assert_eq!(kv.live_count.load(Ordering::Relaxed), 1);
+    }
+
     #[test]
     #[ignore = "perf smoke; run explicitly with --release --ignored --nocapture"]
     fn apply_and_notify_throughput_smoke() {

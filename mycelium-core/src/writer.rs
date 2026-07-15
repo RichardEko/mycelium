@@ -299,11 +299,40 @@ pub fn get_or_spawn_writer(
 
 /// Removes `peer`'s writer from the map and signals its task to exit.
 pub fn evict_peer_writer(writers: &papaya::HashMap<NodeId, WriterEntry>, peer: &NodeId) {
+    // Remove-and-capture atomically, then signal *exactly the entry we removed*. The old
+    // `get`-then-blind-`remove` had a TOCTOU: between reading the entry (to send its shutdown) and
+    // the unconditional `remove`, a concurrent `get_or_spawn_writer` could re-claim the slot with a
+    // fresh LIVE writer — which `remove` then deleted from the map *without signaling its task*,
+    // orphaning it (leaked task + a second connection to the peer, unreachable by any later evict or
+    // shutdown drain). Mirror of the get_or_spawn_writer upgrade-clobber guard (audit 2026-07-15
+    // pass 2). Killing whatever writer is currently installed is the intended semantics — evict means
+    // "stop writing to this peer" — the fix only ensures the removed task is always told to die.
     let guard = writers.pin();
-    if let Some(entry) = guard.get(peer) {
+    if let papaya::Compute::Removed(_, entry) = guard.compute(peer.clone(), |existing| match existing {
+        Some(_) => papaya::Operation::Remove,
+        None    => papaya::Operation::Abort(()),
+    }) {
         let _ = entry.peer_shutdown.send(true);
     }
-    guard.remove(peer);
+}
+
+/// Reaps writer entries for peers whose task has already finished (idle-exit). Re-checks liveness
+/// **inside** the map's `compute` guard, so a peer re-claimed with a fresh LIVE writer between the
+/// caller's collection of `finished` and this removal is never blind-removed — a blind `remove`
+/// would delete the live entry from the map without signaling its task, orphaning it (leaked task +
+/// a second connection to the peer). Signals nothing: a finished task needs no shutdown. This is the
+/// passive-reap counterpart to [`evict_peer_writer`]'s active eviction (audit 2026-07-15 pass 2).
+pub fn reap_finished_writers(
+    writers:  &papaya::HashMap<NodeId, WriterEntry>,
+    finished: impl IntoIterator<Item = NodeId>,
+) {
+    let guard = writers.pin();
+    for peer in finished {
+        guard.compute(peer, |existing| match existing {
+            Some((_, e)) if !e.is_live() => papaya::Operation::Remove,
+            _                            => papaya::Operation::Abort(()),
+        });
+    }
 }
 
 /// Serialises and enqueues a `StateRequest` into `peer`'s writer channel,
@@ -357,4 +386,72 @@ async fn tls_connect(
     }
     let _ = tls; // suppress unused warning when feature is disabled
     Ok(GossipStream::Plain(stream))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicU64;
+    use tokio::sync::{mpsc, watch};
+
+    fn id(p: u16) -> NodeId { NodeId::new("127.0.0.1", p).unwrap() }
+
+    /// A LIVE entry (pending sentinel: `abort_handle == None` ⇒ `is_live()`), returning a receiver on
+    /// its `peer_shutdown` so a test can assert whether the entry's task was told to exit.
+    fn live_entry() -> (WriterEntry, watch::Receiver<bool>) {
+        let (tx, _rx) = mpsc::channel(1);
+        let (ps, ps_rx) = watch::channel(false);
+        (WriterEntry { tx, peer_shutdown: Arc::new(ps), abort_handle: None, dropped: Arc::new(AtomicU64::new(0)) }, ps_rx)
+    }
+
+    /// A NOT-live entry: the abort handle of a task that has already run to completion.
+    async fn finished_entry() -> WriterEntry {
+        let (tx, _rx) = mpsc::channel(1);
+        let (ps, _ps_rx) = watch::channel(false);
+        let jh = tokio::spawn(async {});
+        let ah = jh.abort_handle();
+        jh.await.unwrap();
+        assert!(ah.is_finished(), "precondition: task finished ⇒ entry not live");
+        WriterEntry { tx, peer_shutdown: Arc::new(ps), abort_handle: Some(ah), dropped: Arc::new(AtomicU64::new(0)) }
+    }
+
+    #[tokio::test]
+    async fn regression_evict_signals_exactly_the_entry_it_removes() {
+        // evict must remove-and-signal atomically: the removed entry's task is always told to exit.
+        // The old get-then-blind-`remove` could signal one entry and remove another (a re-claimed
+        // successor), leaving the removed task orphaned (audit 2026-07-15 pass 2).
+        let writers: papaya::HashMap<NodeId, WriterEntry> = papaya::HashMap::new();
+        let (e, mut ps_rx) = live_entry();
+        writers.pin().insert(id(1), e);
+        evict_peer_writer(&writers, &id(1));
+        assert!(writers.pin().get(&id(1)).is_none(), "entry must be removed");
+        assert!(*ps_rx.borrow_and_update(), "the removed entry's task must be signaled to exit");
+    }
+
+    #[tokio::test]
+    async fn regression_reap_keeps_reclaimed_live_writer() {
+        // The GC collects finished peers, then reaps under a fresh guard. If the slot was re-claimed
+        // with a LIVE writer in between, the reap must NOT remove it — a blind remove orphaned the
+        // live task (audit 2026-07-15 pass 2).
+        let writers: papaya::HashMap<NodeId, WriterEntry> = papaya::HashMap::new();
+        // 1. A finished entry, "collected" into `finished`.
+        writers.pin().insert(id(1), finished_entry().await);
+        let finished = vec![id(1)];
+        // 2. Peer re-claimed with a fresh LIVE writer before the reap runs.
+        let (live, _ps_rx) = live_entry();
+        writers.pin().insert(id(1), live);
+        // 3. The real reap path.
+        reap_finished_writers(&writers, finished);
+        assert!(writers.pin().get(&id(1)).is_some(), "reap must not remove the re-claimed LIVE writer");
+        assert!(writers.pin().get(&id(1)).unwrap().is_live());
+    }
+
+    #[tokio::test]
+    async fn reap_removes_a_still_finished_writer() {
+        // The common case still works: a peer that is still finished at reap time is removed.
+        let writers: papaya::HashMap<NodeId, WriterEntry> = papaya::HashMap::new();
+        writers.pin().insert(id(1), finished_entry().await);
+        reap_finished_writers(&writers, vec![id(1)]);
+        assert!(writers.pin().get(&id(1)).is_none(), "a still-finished writer must be reaped");
+    }
 }
