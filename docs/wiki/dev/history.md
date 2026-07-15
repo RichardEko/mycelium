@@ -22,6 +22,37 @@ As of 2026-06-21 all v1.x/v2.0 engineering plans were shipped. Since then, **Leg
 The three-verb operator spine — **localize** (`/fleet`) · **explain** (`/explain`) · **diagnose**
 (`/diagnose`) — is shipped, tested, and documented for both audiences.
 
+## v2.1.0 release — 2026-07-15 (tag `v2.1.0`)
+
+The first MINOR since v2.0.0 (tag 2026-07-04). Wire **v12** (PREV 11) unchanged — a fully
+backwards-compatible rolling upgrade. Cut from CHANGELOG `[Unreleased]`; release gate `make
+check-full` green (clippy feature-matrix + wasm-host clippy + **794 tests, 0 failed**). Highlights:
+
+- **`LockService`** (`agent.consensus().locks()`) — the ergonomic distributed-lock service: blocking
+  acquire (`lock(name, ttl, wait)`), scoped `with_lock(...)` (release guaranteed on every exit path),
+  and a **monotonic-HLC fencing token** (the ballot regressed under gossip lag; the token is now the
+  winning commit's HLC — monotonic across successive holders).
+- **#164 — `distributed_lock` correctness** (two *Critical*, execution-confirmed): (A) acquire
+  returned on the local optimistic commit, so two racers both got a guard (no mutual exclusion,
+  reproduced `winners == 2`); (B) release tombstoned the plain key while the authoritative lock lives
+  at `consensus/committed/lock/{name}`, so a taken lock was **permanently unreleasable**. Fixed with
+  the converged-holder discipline + a real consensus lease; the HTTP gateway lock got the same fix.
+  Three regression gates, all verified failing pre-fix.
+- **`connect_peer` / `disconnect_peer`** — pin + actively warm a direct forwarding route to an
+  RPC-heavy peer (survives forwarding-target rebuilds); the tuple-space pins both directions. Plus
+  the other Fixed items: self-targeted Individual-signal flood, tuple-space discovery-wait +
+  late-secondary backfill, HTTP `SO_REUSEADDR`.
+- **CI-gated Docker cluster suites** (`cluster-suites.yml`) — `make test` (13 scenarios) +
+  `make test-overlay` on substrate PRs/merges/nightly, no retries by design.
+- **Examples/docs rework** — the single faceted **capability matrix** front door (every example
+  fingerprinted by layer + facet, each linking to its run-doc); two artifact-library **browser
+  showcases** (`provisioning_viz` autonomic self-heal · `catalog_viz` origin-death survival); the
+  `## Loads` banner (each runtime-loading demo declares what it installs); the **UI-example contract**
+  (every browser demo: gateway+metrics, Ops Console link, concepts box); and `philosophy.html` →
+  GitHub-readable `philosophy.md`.
+
+Full notes: `CHANGELOG.md` § [2.1.0].
+
 ## Post-v2.0: downstream on-ramp + hardening (2026-07-04/06)
 
 - **`mycelium-wiki` curator step-down** (#127): the companion (group-scoped LLM-curated wiki,

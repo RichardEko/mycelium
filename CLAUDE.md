@@ -13,7 +13,8 @@ consensus. Layers I+II are the `mycelium-core` crate; `mycelium` adds III, capab
 services, gateway, tls. It is a **library, not a platform** — no daemon, no control plane;
 a cluster is emergent from network reachability (peer-exchange + CA admission — **not**
 `cluster_name`, which is a cosmetic label). v2.0 complete (all 16 milestones, 2026-06-21);
-wire **v12** (`PREV = 11`). Scopes are **`Cluster · Group · Individual`** (all / subset / one),
+**v2.1.0 released 2026-07-15** (tag `v2.1.0` — `LockService`, CI-gated Docker suites, the #164
+distributed-lock correctness fixes; wire unchanged); wire **v12** (`PREV = 11`). Scopes are **`Cluster · Group · Individual`** (all / subset / one),
 shared by `SignalScope` and consensus (`cluster_propose` / `group_propose`). *Renamed 2026-07-10:*
 `System` → `Cluster` (wire-compatible; `system_propose` kept as a `#[deprecated]` alias, gateway
 still accepts `"system"`); `system_stats()` is unrelated — node-local runtime state, not a scope.
