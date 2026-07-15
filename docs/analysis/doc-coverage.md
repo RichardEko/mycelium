@@ -19,6 +19,12 @@ concern). WHY is usually shared Dev+Ops.
 
 ## Changelog
 
+- **2026-07-15 (run 8)** — diff-gated: **no cell moves; carried from run 7.** The only concept-touching
+  delta is the new `wiki_council_viz` browser showcase, which enriches the **Companions** row's
+  wiki-companion HOW·Dev landing (a watchable specialist-fleet demo alongside the `wiki_chat` CLI). That
+  row was already `✓✓✓✓✓`, so this is a Tier-3 discoverability add, not a verdict change — the same
+  shape as runs 6–7 (a new/better landing for an already-Clear concept). Zero `src/`·`mycelium-*/src/`
+  change; no calibration hit.
 - **2026-07-15 (run 7)** — diff-gated: **no cell moves; carried from run 6.** The delta is the
   examples completeness sweep (guardrails · `mycelium-reason` · `wiki_chat` indexed; README restructured
   into one flow) + the Ops Console **Audit** tab. Concept impact lands on two already-`✓✓✓✓✓` rows:
@@ -244,7 +250,7 @@ skepticism, not a re-asserted ✓.
 ## Re-run guidance
 
 The audit was a one-time systematic sweep; a re-run should be a **diff**. Re-audit a concept only
-when its code/docs changed since the last run (run 7 baseline commit `a29e8d7`: `git log a29e8d7..HEAD -- docs/ src/
+when its code/docs changed since the last run (run 8 baseline commit `6ff383f`: `git log 6ff383f..HEAD -- docs/ src/
 mycelium-*/src/`). The matrix
 above is the baseline: any cell dropping below ✓ is a regression. The method (four auditors, the
 Clear/Thin/Missing rubric, the exact prompts) is reproducible from this session's transcript. New
