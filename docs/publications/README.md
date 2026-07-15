@@ -199,3 +199,9 @@ signal for the `/publication-lint` skill (is it catching overclaims before human
   fully explained), so **no claim changed**: 0 `Byzantine`/`BFT`/`tamper-proof` overclaim, the "What This
   Architecture Is Not" honest-limits ceiling intact, CFT-not-BFT framing unchanged. The skill's targets +
   the doc-map now name `philosophy.md` (0 stale `.html` refs). Decks and papers untouched. No findings.
+- 2026-07-15 (lint run 15): **clean — a deck run-command correction, no claim change.** The only
+  persuasion-surface delta since run 14 is `presentation.html`'s provisioning demo command gaining
+  `--features wasm` (doc-coverage run 9's must-work-if-followed fix). The slide's argument (the suite
+  *exercises* the substrate) is unchanged — only the trailing `<code>` run command was corrected. No
+  overclaim, no roadmap-vs-shipped drift. The two new artifact-library showcases are examples, not a
+  persuasion surface. No findings.

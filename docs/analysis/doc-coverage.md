@@ -19,6 +19,13 @@ concern). WHY is usually shared Dev+Ops.
 
 ## Changelog
 
+- **2026-07-15 (run 10)** — diff-gated: **no cell moves; carried from run 9.** The delta is the two new
+  **artifact-library browser showcases** (`provisioning_viz` :8097 — autonomic self-heal; `catalog_viz`
+  :8098 — origin-death survival), both UI-contract compliant (verified live). Concept impact lands on the
+  already-✓ **Artifacts / library · HOW·Dev**: a **visual landing** now exists alongside the CLI demos +
+  the operations walkthrough — a Tier-3 discoverability add (same shape as runs 6–8), not a verdict
+  change. Their run commands carry `--features wasm,metrics` (no repeat of the run-9 gap). Zero
+  `src/`·`mycelium-*/src/` change.
 - **2026-07-15 (run 9)** — diff-gated. Delta since run 8: the examples **capability-matrix**
   restructure (discoverability; rows already ✓), the **artifact deploy/install surfacing** (a guide
   ladder "Artifacts & deploy" row → `operations/artifacts.md § Solution/Dev`), the **`## Loads`
