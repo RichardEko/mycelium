@@ -59,3 +59,20 @@ Entry format:
   Sharpening: §4/§1 examples-page check now verifies **category completeness** — starter · coop · AFN ·
   a2a · integration · **visual-showcases** — a whole category missing is a coverage finding, not just a
   wrong count. Fixed: added the *Visual showcases* bullet to `examples.md`.
+- 2026-07-15: **the by-category check's own list was incomplete — a hardcoded category set is the
+  same bug one level up.** The 2026-07-14 sharpening pinned the category list to `starter · coop · AFN
+  · a2a · integration · visual-showcases`, so lints 3–4 applied it and declared the enumeration
+  complete while **three whole categories were absent** from `dev/examples.md`: **Guardrails**
+  (`mycelium-guardrails/examples/`), **Reasoning / LangGraph** (`mycelium-reason/examples/` + the Rust
+  reason nodes the FAQ now cites), and the **Wiki companion** (`mycelium-wiki/examples/wiki_chat.rs`) —
+  plus the **Skills / community** cluster as its own category. Found by a **user question** ("no
+  examples for viewing audit or guardrails?") that triggered a workspace-wide example sweep. Root cause
+  is identical to the count-vs-category miss, just one level up: a *fixed enumeration* (of categories,
+  as before of counts) drifts the moment the tree grows past it — every companion crate's `examples/`
+  was outside the scope the audit ever swept. **Sharpening (structural):** the category set must be
+  **derived from the tree**, not hardcoded — enumerate `find . -path '*/examples/*.rs'` across **all**
+  crates (not just `examples/` + coop) and diff the resulting categories against the page. And the
+  durable fix for the recurrence: `dev/examples.md` should **cite `examples/README.md` § The suites**
+  (the front-door index, now workspace-complete) as the canonical list, so the wiki synthesizes rather
+  than maintains a parallel enumeration that silently falls behind. Folded into §4. Fixed: added the
+  four missing category bullets to `examples.md`.
