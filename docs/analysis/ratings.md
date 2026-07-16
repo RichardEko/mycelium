@@ -3335,3 +3335,47 @@ the next run:* the lesson is that a *targeted* fuzz gate (a few functions) does 
 highest-leverage structural lift; the `/ready` semantics + `sys/identity` authentication remain the two named
 design decisions; and a **fifth** pass is still warranted (four passes, four non-empty hauls — the reserve
 has not run dry, though the severity is trending toward Medium as the obvious surfaces are cleared).
+
+## 2026-07-15 — Run 55 (M2)
+
+**Hardening + design-decision run** (not a hunting pass). Run 54 named a structural lift (a comprehensive
+fuzz sweep) and two design decisions (`/ready` semantics, `sys/identity` auth). This run delivers the sweep
+and the `/ready` decision. No new defects were hunted, so **no new ledger lines**; the entry records the two
+artifacts and re-scores only the dimensions they touch. `make check-full` green on both (377 + 300 + 154
+tests, clippy feature-matrix + wasm-host + `--lib --tests` clean; the `--no-default-features --features
+fuzz-internals` build clean). Merges `1d41d32` (fuzz sweep) · `de6cd23` (`/ready`).
+
+### What shipped
+
+- **Comprehensive input-fuzz sweep** — the Run-54 Robustness residual. CI-gating proptests (run under
+  overflow-checks in `cargo test`, so an unguarded op on an untrusted value fails the build) now cover the
+  three surfaces the four passes kept finding corners in: **config values** (`config_fuzz::fuzz_validate_never_panics`
+  — arbitrary numeric config → `validate()` returns, never panics), **arbitrary decoded gossip frames**
+  (`store::prop_tests::fuzz_apply_observe_tick_never_panics` — peer-controlled key/value/timestamp/ttl/tombstone
+  driven through `hlc.observe → apply_and_notify → hlc.tick` at `max_drift_ms=0`), and **decode→process**
+  (`CapEntry::decode → is_fresh`), joined with the pass-2/3/4 gates into one no-panic-on-untrusted-input
+  suite. Nightly cargo-fuzz gains a `frame_apply` target (decode_wire → observe → apply → tick), wired into CI.
+- **`/ready` semantics** — the design decision (made explicitly): readiness now means "started and serving"
+  (KV/signals/membership), NOT "has gossiped a capability." A pure KV/signal node that advertises no soft
+  state is ready once `start()` completes — previously it returned 503 forever and was undeployable behind a
+  k8s readiness gate. The old "advertise-gated" test (which asserted that trap as intended behavior) is
+  rewritten; docs corrected.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 21 | Operational Readiness | **8** | **↑ from floor 7.** The live `is_ready`-false-forever trap that pulled this to 7 in Run 54 is fixed + gated (`ready_reflects_startup_not_advertisement`): readiness = started/serving, a decoupling from capability-discovery that also fixes the no-soft-state deploy shape. Current-state weakness resolved → 8 |
+| 12 | Robustness | 7 | **held at floor — deliberately.** The comprehensive fuzz sweep is done (config-value + arbitrary-frame + decode→process proptests + a nightly `frame_apply` target), which is genuinely broader than the Run-53 "few functions." But Run 54's lesson was that I scored the Run-53 lift on *writing* a gate, not on it proving itself — so I will NOT re-lift to 8 until a **fifth hunting pass finds no new arithmetic-family member**. The gate earns the score by catching nothing, not by existing. Artifact recorded; lift deferred to validation |
+| 23 | Documentation | 8 | carried — the `is_ready`/`/ready` docs corrected to the new semantics; no drift introduced |
+| — | (all other dims) | 8/7 | carried from Run 54 (Config 7, Security 7, Test-Arch 7, rest 8) |
+| — | **Floor (lowest 3)** | **7, 7, 7** | Configurability · Robustness · Security · Test Architecture (four tied at 7; Op-Readiness left the floor) |
+| — | Mean (continuity footnote) | 7.84 | up from 7.80 (Op-Readiness 7→8); not a target |
+
+**Delta vs Run 54:** two of Run 54's three named next-steps delivered. **Op-Readiness 7→8** — a clean recovery,
+the flagged live trap fixed + gated. **Robustness held at 7 on purpose** — the sweep that would justify the lift
+is built, but the calibration discipline from Run 54 (don't score a fuzz lift until a pass validates it) says the
+score waits for a clean fifth pass, not for the gate's existence. This is the Run-54 lesson applied to my own hand:
+having been burned once scoring a gate on faith, I don't do it twice. Mean **7.80 → 7.84**; floor stays three-at-7
+(now Config · Robustness · Security · Test-Arch). *Remaining named work:* a **fifth hunting pass** (would validate
+or refute the Robustness lift, and the reserve has not run dry), and **`sys/identity` rotation authentication**
+(the last named design decision — Security 7→8, closes the pass-3 poisoning residual; a trust-root change that
+still deserves its own focused effort, not a momentum patch).
