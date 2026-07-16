@@ -423,13 +423,19 @@ async fn do_snapshot(
     let entries: Vec<SyncEntry> = {
         let guard = kv_state.store.pin();
         guard.iter()
-            .filter_map(|(k, v)| {
-                v.data.as_ref().map(|data| SyncEntry {
-                    key:          Arc::clone(k),
-                    value:        data.clone(),
-                    timestamp:    v.timestamp,
-                    is_tombstone: false,
-                })
+            // Include TOMBSTONES, not just live entries. The in-memory store retains a tombstone for
+            // a propagation window (the GC sweeps only older ones, tasks.rs), so a delete is remembered
+            // long enough to reach every peer. The old `filter_map` on `v.data` dropped every tombstone
+            // from the snapshot and then truncated the WAL, so after a restart the deleted key existed
+            // NOWHERE on disk — and a stale peer that missed the delete resurrected it via anti-entropy
+            // (no tombstone to win the LWW tie). Persist what the store holds: the GC has already
+            // bounded the tombstone set, so this is exactly the in-window anti-resurrection set. Replay
+            // re-applies `is_tombstone` (lifecycle.rs apply_fn). Audit 2026-07-15 pass 3.
+            .map(|(k, v)| SyncEntry {
+                key:          Arc::clone(k),
+                value:        v.data.clone().unwrap_or_default(),
+                timestamp:    v.timestamp,
+                is_tombstone: v.data.is_none(),
             })
             .collect()
     };
@@ -465,4 +471,67 @@ async fn do_snapshot(
     apply_and_notify(kv_state, &lower_upd);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod persist_tests {
+    use super::*;
+    use crate::framing::{make_gossip_update, GossipUpdate};
+    use crate::store::KvState;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn unique_dir() -> std::path::PathBuf {
+        static N: AtomicU64 = AtomicU64::new(0);
+        let d = std::env::temp_dir().join(format!(
+            "myc-persist-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed),
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[tokio::test]
+    async fn regression_snapshot_retains_tombstone_no_resurrection_across_restart() {
+        // Audit 2026-07-15 pass 3: do_snapshot dropped ALL tombstones then truncated the WAL, so a
+        // deleted key existed NOWHERE on disk — after a restart a stale peer's ancient value
+        // resurrected it (no tombstone to win the LWW tie). The snapshot must retain the tombstone.
+        let dir  = unique_dir();
+        let node = NodeId::new("127.0.0.1", 1).unwrap();
+        let hlc  = Arc::new(crate::hlc::Hlc::new());
+
+        // Source store: write "k", then delete it → a fresh-HLC tombstone.
+        let src = KvState::new(0);
+        apply_and_notify(&src, &make_gossip_update(&node, 1, Arc::from("k"), bytes::Bytes::from_static(b"v1"), false, &hlc));
+        apply_and_notify(&src, &make_gossip_update(&node, 1, Arc::from("k"), bytes::Bytes::new(), true, &hlc));
+
+        // Snapshot to disk (truncates the WAL), then replay into a FRESH store — a restart.
+        let mut wal = tfs::OpenOptions::new().create(true).read(true).write(true)
+            .open(dir.join("wal.log")).await.unwrap();
+        do_snapshot(&dir, &src, &node, &hlc, 1, &mut wal, None).await.unwrap();
+
+        let restored = KvState::new(0);
+        {
+            let r = Arc::clone(&restored);
+            let apply = move |e: SyncEntry| {
+                apply_and_notify(&r, &GossipUpdate {
+                    nonce: crate::framing::ANTI_ENTROPY_NONCE, sender: 0, ttl: 1,
+                    is_tombstone: e.is_tombstone, timestamp: e.timestamp, key: e.key, value: e.value,
+                });
+            };
+            replay(&dir, None, apply).await.unwrap();
+        }
+
+        // The tombstone survived: "k" present as a tombstone (data None), NOT absent.
+        let after = restored.store.pin().get("k").map(|e| e.data.is_none());
+        assert_eq!(after, Some(true), "snapshot+replay must retain the tombstone, not drop it");
+
+        // A stale peer re-delivers the ancient value → must NOT resurrect (tombstone wins LWW).
+        apply_and_notify(&restored, &GossipUpdate {
+            nonce: 7, sender: 0, ttl: 1, is_tombstone: false,
+            timestamp: crate::hlc::pack(1, 0), key: Arc::from("k"), value: bytes::Bytes::from_static(b"v1"),
+        });
+        assert!(restored.store.pin().get("k").unwrap().data.is_none(),
+            "an ancient replayed write must not resurrect the deleted key");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
