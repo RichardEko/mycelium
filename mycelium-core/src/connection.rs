@@ -570,11 +570,21 @@ pub async fn handle_connection(
                 // Push-based boundary sync: if the received key is grp/{group}/{this_node},
                 // update the boundary immediately rather than waiting for the GC-tick reconcile.
                 if let Some(group_str) = parse_own_grp_key(&update.key, &node_id_str) {
+                    // Gate on the STORE'S post-apply (LWW-resolved) value, NOT `update.is_tombstone`:
+                    // apply_and_notify returns () and resolves LWW internally, so a stale reordered
+                    // frame (e.g. a tombstone@50 losing to the stored live@100) is correctly rejected by
+                    // the store — but trusting `update.is_tombstone` would still flip the boundary the
+                    // wrong way (member↔non-member), silently mis-admitting Group signals until the next
+                    // GC reconcile. Re-read the store so the boundary always matches the winning value,
+                    // exactly as `reconcile_boundary_from_store` does (audit 2026-07-15 pass 4).
+                    let is_member = kv_state.store.pin()
+                        .get(update.key.as_ref())
+                        .is_some_and(|e| e.data.is_some());
                     let mut bnd = signal_boundary.write();
-                    if update.is_tombstone {
-                        bnd.groups.remove(group_str);
-                    } else {
+                    if is_member {
                         bnd.groups.insert(Arc::from(group_str));
+                    } else {
+                        bnd.groups.remove(group_str);
                     }
                 }
 
