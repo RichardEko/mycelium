@@ -27,6 +27,14 @@ such finding.
 Records bugs later found in dimensions that scored ≥ 8 while the bug already
 existed. This is the framework's own report card.
 
+- 2026-07-15 (input-fuzz gate, recorded Run 53): a **third** instance of the peer-supplied-arithmetic
+  family — `KvHandle` log-consumer `offset + 1` on the corruptible `clog/.../offset` KV value
+  (`u64::MAX` → panic under overflow-checks / wrap-to-0 → silent re-scan in release) — existed while
+  Robustness (12) scored 7 and Semantic (11) scored 8. Found by the *sweep that built the input-fuzz
+  gate* (grep for non-saturating arithmetic on decoded numeric fields), not another hunting pass;
+  fixed (`saturating_add`) and now covered by the deterministic proptest gate that runs under
+  overflow-checks. The gate is the structural answer to this recurring family (SWIM `incarnation + 1`,
+  Run 51; `is_fresh` `3 × interval`, Run 52; this).
 - 2026-07-15 (audit **pass 3**, recorded Run 52): a *third* adversarial pass — five hunters over the
   subsystems the first two passes never reached (persistence/WAL/restore, TLS/identity/crypto,
   capability/federation, the three companion crates, the gateway auth/JWT/SSE path) — found **seven**
@@ -3176,3 +3184,48 @@ warranted (config/env, metrics, the signal reorder buffer, the scale/SWIM paths 
 probed); the highest-leverage *structural* lifts are now an **input-fuzz gate** (would finally move
 Robustness off the floor) and **authenticating `sys/identity/` rotation writes** (would move Security back
 toward 8 and close the identity-poisoning residual).
+
+## 2026-07-15 — Run 53 (M2)
+
+**Structural-lift run** (not a hunting pass). Run 52 named the highest-leverage lift: "an **input-fuzz
+gate** (would finally move Robustness off the floor)." This run builds it — the first time in this series
+a run's purpose is to *close a structural gap the ledger identified* rather than find or fix a specific
+defect. One dimension moves, on fresh executed artifacts.
+
+The recurring failure mode across three passes was one family: **arithmetic on a peer-supplied numeric
+value that panics (overflow-checks) or wraps (release)** — SWIM `incarnation + 1` (Run 51), `is_fresh`
+`3 × interval` (Run 52). Rather than keep finding instances one at a time, this run: (1) **swept** for
+other instances — grep for non-saturating `+`/`*` on decoded numeric fields — and found a third,
+`KvHandle`'s `scan_log(offset + 1, …)` on the corruptible `clog/.../offset` KV value, fixed with
+`saturating_add`; (2) added **deterministic CI-gating proptests** (`cargo test`, under overflow-checks, so
+an unguarded op on a peer field fails the build) — `swim_membership::fuzz_apply_never_panics_on_arbitrary_update`
+(arbitrary node/incarnation/status), `capability::fuzz_is_fresh_never_panics` (arbitrary interval/clock),
+and `capability::fuzz_decoded_cap_entry_is_fresh_never_panics` (arbitrary bytes → `CapEntry::decode` →
+`is_fresh`, closing the **decode→process** gap the decode-only cargo-fuzz targets miss); (3) extended the
+nightly cargo-fuzz depth (`fuzz_internals::cap_entry_is_fresh` + the `capability_decode` target now drive a
+decoded `CapEntry` through `is_fresh`). Execution evidence: `make check-full` green (376 + 299 + 148 tests,
+clippy feature-matrix + wasm-host + `--lib --tests` clean; the real `--no-default-features --features
+fuzz-internals` build clean). Commit `ea1a9d1` / merge `94d07ed`.
+
+Only the touched dimensions are re-scored; the rest carry from Run 52.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 11 | Semantic Correctness | 8 | carried (v52) — the `offset` fix is robustness-family; convergence unchanged and full suite green |
+| 12 | Robustness | **8** | **↑ from floor 7.** The peer-supplied-arithmetic family — the *specific* structural gap that pinned this at 7 across Runs 51–52 (it recurred three times) — now has a **deterministic proptest gate that runs under overflow-checks in CI**, all three known instances are fixed, and cargo-fuzz reaches the value-processing paths. Fixed structural weakness + deterministic gate → fixed end-state 8 (M2). *Honest residual, not floor-pinning:* the gate covers the arithmetic/decode→process family, not yet a comprehensive HTTP-body + full gossip-frame proptest sweep — the next increment, but the *recurring* failure mode is now gated, so it no longer reads as "systematically under-tested" |
+| 8 | Language Best Practices | 8 | carried (v52) — saturating_add is idiomatic; clippy clean incl. the feature-gated `fuzz-internals` build |
+| 18 | Test Architecture | 7 | carried (v44), **floor** — +3 proptest gates grow the property tier, but the CI-gating structural residuals (mycelium-core suite not run in CI, the live mixed-version test) are unchanged |
+| — | **Floor (lowest 3)** | **7, 7, 7** | Configurability · Security · Test Architecture |
+| — | Mean (continuity footnote) | 7.88 | up from 7.84 (Robustness 7→8); not a target |
+
+**Delta vs Run 52:** the first *structural* move of the series. Robustness **7→8** — not on a discovery,
+but on closing the exact gap the ledger had been flagging: the family that recurred in Runs 51, 52 and
+(swept out this run) again now has a deterministic CI gate + all known instances fixed + cargo-fuzz depth,
+which is the fixed-end-state M2 scores at 8. The increase cites verifiable new artifacts (three executed
+proptest gates + the `offset` fix + the fuzz-target extension), as the "increase only on a new artifact"
+rule requires. Floor returns to **three** at 7 (Configurability · Security · Test Architecture); mean
+**7.84 → 7.88**. The ledger's own next-lift list now reads: **authenticating `sys/identity/` rotation
+writes** (Security 7→8, closes the identity-poisoning residual — the remaining named structural lift), a
+comprehensive **HTTP-body/full-frame fuzz sweep** (the Robustness residual), and a **fourth** hunting pass
+(config/env, metrics, the signal reorder buffer, scale/SWIM under load remain lightly probed — and three
+passes have each returned a non-empty haul, so the reserve is not exhausted).
