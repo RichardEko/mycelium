@@ -686,7 +686,13 @@ pub fn encode_load_state(s: &LoadState) -> Bytes {
 }
 
 pub fn decode_load_state(b: &Bytes) -> Option<LoadState> {
-    crate::serde_fixint::from_slice(b).ok()
+    let mut ls: LoadState = crate::serde_fixint::from_slice(b).ok()?;
+    // Clamp the peer-supplied `fill_ratio` to [0,1] (NaN → 0). It is gossiped raw under `sys/load/`
+    // (no write guard), and consumers multiply/compare it — the consensus retry-jitter turned an
+    // unclamped `1e30`/`Inf` into `(1e30 * jitter) as u64` = `u64::MAX` → a ~584-million-year
+    // `Duration::from_millis` sleep that stalls a poisoned node's consensus (audit 2026-07-15 pass 5).
+    ls.fill_ratio = if ls.fill_ratio.is_nan() { 0.0 } else { ls.fill_ratio.clamp(0.0, 1.0) };
+    Some(ls)
 }
 
 /// Cancels the associated `advertise` task on drop.
@@ -1154,5 +1160,25 @@ mod reorder_tests {
         assert!(buf.pending.is_empty());
         let _ = buf.flush_expired(); // no-op on empty buffer
         assert!(buf.pending.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod load_state_tests {
+    use super::{decode_load_state, encode_load_state, LoadState};
+
+    #[test]
+    fn regression_decode_clamps_hostile_fill_ratio() {
+        // Audit 2026-07-15 pass 5: fill_ratio is gossiped raw under sys/load/ (no write guard) and
+        // multiplied downstream (the consensus retry-jitter sleep). decode must clamp it to [0,1]
+        // (NaN → 0) so a poisoned 1e30/Inf/NaN cannot drive a ~584M-year Duration or a NaN.
+        for (hostile, want) in [(1e30f32, 1.0f32), (f32::INFINITY, 1.0), (-5.0, 0.0), (0.5, 0.5)] {
+            let enc = encode_load_state(&LoadState { fill_ratio: hostile, is_opaque: false, written_at_ms: 1 });
+            let got = decode_load_state(&enc).expect("decode").fill_ratio;
+            assert_eq!(got, want, "fill_ratio {hostile} must clamp to {want}");
+        }
+        // NaN clamps to 0 (not propagated).
+        let enc = encode_load_state(&LoadState { fill_ratio: f32::NAN, is_opaque: false, written_at_ms: 1 });
+        assert_eq!(decode_load_state(&enc).expect("decode").fill_ratio, 0.0, "NaN fill_ratio must decode to 0");
     }
 }

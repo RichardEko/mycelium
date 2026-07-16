@@ -240,7 +240,16 @@ pub async fn handle_connection(
                 let now = Instant::now();
                 let sender_is_new = {
                     let guard = peers.pin();
-                    let is_new = guard.insert(sender.clone(), now).is_none();
+                    // Never peer with OURSELVES. A spoofed/reflected Ping carrying this node's own
+                    // NodeId must not enter the `peers` table — it would create a standing
+                    // self-connection + inflate the fan-out counts, and persist (self never becomes
+                    // Dead under SWIM). Mirrors the `known_peers` self-filter below; the direct
+                    // `sender` was the one unguarded insert (audit 2026-07-15 pass 5).
+                    let is_new = if sender == node_id {
+                        false
+                    } else {
+                        guard.insert(sender.clone(), now).is_none()
+                    };
                     // Only add piggybacked peers while the table has room.
                     // The direct sender is always admitted (inserted above); only
                     // the forwarded list is capped.
