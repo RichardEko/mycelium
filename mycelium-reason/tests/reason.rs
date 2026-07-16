@@ -321,3 +321,36 @@ async fn blob_mesh_fetch_verifies_and_caches() {
     agent_a.shutdown_with_timeout(Duration::from_secs(5)).await;
     agent_b.shutdown_with_timeout(Duration::from_secs(5)).await;
 }
+
+/// Regression (2026-07-16): a `TraceRecorder::record` → `replay` round-trip over a real agent must
+/// return the recorded events. This guards the `log/` key-layout contract between `kv().append`
+/// (which salts the key with the node id — core BUG 4, `log/{stream}/{hlc:016x}/{node}`) and
+/// `replay`'s key parser: a stale parser read the node salt as the HLC and dropped every event, so
+/// `replay` returned empty. No such round-trip test existed (the unit tests covered only `narrate`
+/// formatting + JSON tolerance), so `cargo test -p mycelium-reason` was green while replay was broken
+/// — only the live Python/reason CI job caught it. This closes that gap in-crate.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trace_record_replay_round_trips() {
+    let port = free_port();
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = port;
+    let agent = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg));
+    agent.start().await.expect("agent start");
+
+    let run_id = "rung5-roundtrip";
+    let rec = TraceRecorder::new(Arc::clone(&agent), run_id);
+    rec.record("route", serde_json::json!({ "model": "m", "candidates": 1 }));
+    rec.record("llm_call", serde_json::json!({ "provider": "127.0.0.1:9001", "ok": true }));
+
+    let ok = poll_until(|| !replay(&agent, run_id).is_empty(), Duration::from_secs(5)).await;
+    assert!(ok, "replay must return the recorded events, not empty (the BUG-4 key-salt regression)");
+
+    let events = replay(&agent, run_id);
+    assert_eq!(events.len(), 2, "both records must replay; got {events:?}");
+    let kinds: std::collections::HashSet<&str> = events.iter().map(|e| e.kind.as_str()).collect();
+    assert!(kinds.contains("route") && kinds.contains("llm_call"), "kinds: {kinds:?}");
+    // HLC-ordered.
+    assert!(events[0].hlc <= events[1].hlc, "events must be HLC-ordered");
+
+    agent.shutdown_with_timeout(Duration::from_secs(5)).await;
+}

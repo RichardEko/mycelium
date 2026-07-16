@@ -158,15 +158,19 @@ impl TraceRecorder {
 /// Tolerant of undecodable entries (a foreign writer, a truncated record): skipped
 /// with a warning, never a panic — replay is a read path.
 pub fn replay(agent: &GossipAgent, run_id: &str) -> Vec<TraceEvent> {
-    // Keys are `log/reason/{run_id}/{node}/{hlc:016x}` — a prefix scan over the run
-    // sees every substream; the HLC is the segment after the last `/`.
+    // `kv().append`'s on-disk key contract is `log/{stream}/{hlc:016x}/{node}` — it salts the key
+    // with the appending node id so two nodes appending in the same millisecond don't collide under
+    // LWW (core audit 2026-07-15, BUG 4). Our stream is `reason/{run_id}/{node}`, so the full key is
+    // `log/reason/{run_id}/{node}/{hlc:016x}/{node}` and the HLC is the **second-to-last** segment,
+    // not the last. (Before the salt it was the last segment; a stale `rsplit().next()` here read the
+    // node salt as the HLC, `from_str_radix` failed, and every trace event was dropped → empty replay.)
     let prefix = format!("log/reason/{run_id}/");
     let mut events: Vec<TraceEvent> = agent
         .kv()
         .scan_prefix(&prefix)
         .into_iter()
         .filter_map(|(key, value)| {
-            let hlc_hex = key.rsplit('/').next()?;
+            let hlc_hex = key.rsplit('/').nth(1)?;
             let Ok(hlc) = u64::from_str_radix(hlc_hex, 16) else {
                 tracing::warn!(run_id, %key, "skipping trace key with a non-HLC suffix");
                 return None;
