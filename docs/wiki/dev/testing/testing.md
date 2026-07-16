@@ -38,6 +38,21 @@ suite (codec/framing/hlc/store/swim, 131 tests), including the wire back-compat 
 Same class of gap as the decoder mini-fuzz that sat uncaught until M2 Run-20. Now in the CI `Test`
 job + `make check-full`.
 
+**Input-fuzz gate (no panic on untrusted input).** The most-repeated bug family across the 2026-07-15
+audit series (`docs/analysis/ratings.md`, Runs 50–58) is a *peer- or operator-supplied numeric value*
+— a SWIM incarnation, an `is_fresh` interval, an `hlc`/`offset`/rate aggregate, a `fill_ratio`, a live
+`TimingIntent` — put through unchecked `+`/`*`/`<<` that overflows → panics (debug/CI; kills the task or
+node) or wraps (release; a silent-divergence / limiter-bypass class). **Invariant: arithmetic on any
+untrusted (gossiped or config) value must be `saturating`/`checked`/`clamp`ed.** The structural gate is
+a suite of proptests that run **under overflow-checks in `cargo test`**, so an unguarded op fails the
+build: `store::prop_tests::fuzz_apply_observe_tick_never_panics`,
+`config::config_fuzz::fuzz_validate_never_panics`, `capability::tests::fuzz_is_fresh_never_panics`,
+`rate::tests::fuzz_reconcile_throttle_never_panics`, `hlc::prop_tests::observe_then_tick_never_wraps`,
+`swim_membership::tests::fuzz_apply_never_panics_on_arbitrary_update` — plus the nightly cargo-fuzz
+`frame_apply` decode→process target. It is **not yet comprehensive** (rate/opacity/timing internals were
+only added in pass 5, after a fifth audit pass found the un-fuzzed `rate.rs` overflow) — the Robustness
+dimension in `ratings.md` stays at its floor until a pass validates the sweep by finding nothing.
+
 **Wire back-compat gate.** `codec::tests::decode_wire_v11_agrees_with_v12_on_every_shared_variant`
 proves the current decoder reads a **PREV-version (v11)** frame for every shared `WireMessage` variant
 — the rolling-upgrade contract (`StateRequest`'s deliberate Merkle-digest change is covered separately
