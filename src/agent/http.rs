@@ -2333,7 +2333,11 @@ async fn gw_overlay_log_subscribe(
             };
             for entry in entries {
                 use base64::Engine as _;
-                last_seen = entry.hlc + 1;
+                // `saturating_add`: the HLC is parsed from the (any-node-writable) log key, so a
+                // crafted `log/{stream}/ffffffffffffffff/...` entry gives `hlc == u64::MAX`; `+ 1`
+                // panicked (overflow-checks → node-abort) or wrapped to 0 (release → the cursor resets
+                // and the subscriber re-floods the whole stream on every change) (audit 2026-07-15 pass 4).
+                last_seen = entry.hlc.saturating_add(1);
                 let data  = json!({
                     "stream":    stream_name,
                     "hlc":       entry.hlc,
@@ -2478,6 +2482,13 @@ async fn gw_overlay_log_group_subscribe(
                 });
                 if tx.send(Event::default().data(data.to_string())).await.is_err() { return; }
             } else {
+                // Idle: the drain loop otherwise only notices a disconnected client via a failed
+                // `tx.send`, which never fires while the stream is idle — so the task looped forever
+                // RENEWING the exclusive `clog/{stream}/{group}/claim` lease, permanently blocking
+                // failover to a standby consumer (audit 2026-07-15 pass 4). Check the channel here so a
+                // client that disconnects during an idle stream releases the claim (task returns → lease
+                // stops renewing → it expires and a standby can acquire).
+                if tx.is_closed() { return; }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
