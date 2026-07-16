@@ -245,7 +245,7 @@ mod imp {
             .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: parse PKCS8 key: {e}") })
     }
 
-    fn generate_node_cert(
+    pub(super) fn generate_node_cert(
         node_id: &NodeId,
         signing_key: &SigningKey,
         ca_key_pair: &KeyPair,
@@ -286,6 +286,27 @@ mod imp {
             .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: sign node cert: {e}") })?;
 
         Ok(CertificateDer::from(node_cert.der().to_vec()))
+    }
+
+    /// Extract the Ed25519 public key from a node cert's `SubjectPublicKeyInfo` (audit 2026-07-15,
+    /// identity-authentication Phase 1a — `docs/design/identity-authentication.md`).
+    ///
+    /// The trust anchor for peer identity is the **CA-signed cert**: rustls validates the peer's cert
+    /// against the cluster CA during the handshake, so by the time this runs the DER is a well-formed,
+    /// CA-issued Ed25519 cert produced by [`generate_node_cert`]. That makes a targeted, length-checked
+    /// scan for the fixed Ed25519 SPKI prefix both safe (the input is validated) and dependency-free
+    /// (no x509 parser needed). The Ed25519 SPKI is exactly
+    /// `30 2A 30 05 06 03 2B 65 70 03 21 00 ‖ key[32]` — OID `1.3.101.112` then a 33-byte BIT STRING
+    /// (0 unused bits + the 32-byte key). Returns `None` for a non-Ed25519 or malformed input (never
+    /// panics — the slice access is bounds-checked).
+    pub fn ed25519_key_from_cert_der(der: &[u8]) -> Option<[u8; 32]> {
+        // OID 1.3.101.112 (Ed25519) followed by BIT STRING tag+len+unused-bits: `06 03 2B 65 70 03 21 00`.
+        const SPKI_PREFIX: &[u8] = &[0x06, 0x03, 0x2B, 0x65, 0x70, 0x03, 0x21, 0x00];
+        let start = der.windows(SPKI_PREFIX.len()).position(|w| w == SPKI_PREFIX)? + SPKI_PREFIX.len();
+        let bytes = der.get(start..start + 32)?;
+        let mut key = [0u8; 32];
+        key.copy_from_slice(bytes);
+        Some(key)
     }
 
     fn build_rustls_configs(
@@ -381,4 +402,35 @@ mod imp {
 }
 
 #[cfg(feature = "tls")]
-pub use imp::{generate_rotation, load_or_generate, sign_bytes, verify_bytes};
+pub use imp::{ed25519_key_from_cert_der, generate_rotation, load_or_generate, sign_bytes, verify_bytes};
+
+#[cfg(all(test, feature = "tls"))]
+mod key_extract_tests {
+    use super::imp::{ed25519_key_from_cert_der, generate_node_cert};
+    use crate::node_id::NodeId;
+    use ed25519_dalek::SigningKey;
+    use rcgen::KeyPair;
+
+    /// Round-trip against a REAL generated node cert: the key extracted from the cert's SPKI must
+    /// equal the signing key's verifying key (audit 2026-07-15 identity-auth Phase 1a). This is the
+    /// primitive Phase 1b wires into the handshake to anchor a peer's CA-authenticated key.
+    #[test]
+    fn extracts_the_key_from_a_real_generated_cert() {
+        let signing = SigningKey::from_bytes(&[7u8; 32]);
+        let expected = signing.verifying_key().to_bytes();
+        let ca = KeyPair::generate().unwrap();
+        let node = NodeId::new("127.0.0.1", 9000).unwrap();
+        let cert = generate_node_cert(&node, &signing, &ca).unwrap();
+        assert_eq!(ed25519_key_from_cert_der(cert.as_ref()), Some(expected),
+            "extracted SPKI key must equal the cert's Ed25519 verifying key");
+    }
+
+    #[test]
+    fn returns_none_on_absent_or_truncated_pattern_without_panic() {
+        assert_eq!(ed25519_key_from_cert_der(&[0u8; 8]), None); // no SPKI prefix
+        // Prefix present but fewer than 32 key bytes follow → None, no panic (bounds-checked).
+        let truncated = [0x06, 0x03, 0x2B, 0x65, 0x70, 0x03, 0x21, 0x00, 0x01, 0x02];
+        assert_eq!(ed25519_key_from_cert_der(&truncated), None);
+        assert_eq!(ed25519_key_from_cert_der(&[]), None);
+    }
+}
