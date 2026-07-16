@@ -27,6 +27,51 @@ such finding.
 Records bugs later found in dimensions that scored ≥ 8 while the bug already
 existed. This is the framework's own report card.
 
+- 2026-07-15 (audit **pass 2**, recorded Run 51): a *second* adversarial pass — five parallel
+  hunters over the just-fixed consensus paths **plus** subsystems pass 1 never reached (SWIM,
+  wire framing, the per-peer writer, the HTTP gateway's untrusted-input surface) — found **seven**
+  more real defects, including **three more Criticals** and an entirely new bug family the first
+  pass never probed: **crash-on-hostile-input**. Direct proof the unknown-unknown reserve is not
+  rhetorical — one more pass on the same+adjacent code found seven bugs the Run-50 8s did not know
+  about. All fixed + gated (merge `9c17317`):
+  - **Robustness (12) / Security (13)** — SWIM self-refutation computed `u.incarnation + 1` on an
+    incarnation taken straight off an unauthenticated UDP datagram; `u64::MAX` PANICS the listener
+    task (overflow-checks build) or WRAPS to 0 (release), resetting refutation power so the live
+    node is evicted cluster-wide. A *corrupted* frame suffices (UDP checksum is weak). Critical.
+    Fix: `saturating_add` (`07f5aca`; gate `regression_self_refute_saturates_at_max_incarnation_no_overflow`).
+  - **Robustness (12) / Security (13)** — `gw_kv_quorum` fed an untrusted `timeout_secs: f64` to
+    `Duration::from_secs_f64`, which panics on negative/non-finite/too-large; with `panic="abort"`
+    (release) a single unauthenticated request (`{"timeout_secs":-1}`) on the default loopback-open
+    gateway **aborts the whole node**. Critical. Fix: `try_from_secs_f64` → 400 (`43b9731`; gate
+    `regression_gateway_rejects_hostile_inputs_without_crashing`).
+  - **Semantic Correctness (11)** — the `max_store_entries` cap gated on `store.len()` (counts
+    tombstone slots) and did not exempt overwrites: at cap a strictly-newer overwrite was dropped,
+    and anti-entropy re-dropped it every round → **permanent silent divergence** (also: a
+    tombstone-full store wedged all live writes). Contradicted its own config contract. Critical.
+    Fix: exact inline live-count + overwrite exemption (`a479d12`; three `regression_cap_*` gates).
+  - **Resource Management (10) / Concurrency (9)** — the writer-claim clobber fixed in pass 1 on the
+    *upgrade* path still lived on the *removal* paths: the GC reap and `evict_peer_writer`
+    blind-removed, orphaning a concurrently re-claimed LIVE writer (leaked task + a second
+    connection to the peer). Major. Fix: compute-with-recheck reap + atomic remove-and-signal
+    (`2f5d6f6`; `writer::tests::regression_reap_keeps_reclaimed_live_writer`, `..._evict_signals_...`).
+  - **Security (13)** — signed consensus verified the SIGNER but never bound the `voter`/`proposer`
+    named INSIDE the message to that signer, so one node with one valid key could sign N votes each
+    naming a different voter and **forge a quorum**. Major. Fix: `signer_authorized` binds
+    vote/propose identity; `SignedConsensusMsg` doc corrected to stop overclaiming insider-resistance
+    (`52ef664`; gate `regression_signer_must_match_vote_and_propose_identity`).
+  - **Robustness (12) / Security (13)** — `parse_hex32` checked BYTE length then byte-sliced
+    assuming ASCII → a 64-byte multibyte string panicked on a non-char-boundary (node-abort under
+    `panic="abort"`). Major. Fix: `is_ascii()` guard (`43b9731`; gate
+    `regression_parse_hex32_rejects_non_ascii_without_panic`).
+  - **Semantic Correctness (11)** — the consensus acceptor tracked `seen_ballot` but not the value
+    it voted for, so at an equal ballot it would vote for a *second* proposer's different value →
+    two proposers both reach quorum and Commit different values at one ballot (single-decree safety;
+    mitigated in practice by the #164 reread, but `consistent_set` did not reread and overclaimed
+    "totally ordered by ballot"). Major. Fix: `may_cast_vote` anti-equivocation + doc correction
+    (`52ef664`; gate `regression_voter_never_accepts_two_values_at_one_ballot`).
+  - *(Minor/Low, same pass, same commits):* `gw_signal_emit` silently widened an unknown scope to a
+    cluster-wide broadcast (now 400); `overlay_group_propose` sized quorum as `members.len()+1`,
+    double-counting self (the roster already includes self) → spurious Timeout on a solo group.
 - 2026-07-15 (audit, recorded Run 50): the 2026-07-15 adversarial consensus/concurrency audit
   found **nine** defects in dimensions that scored 8 through Run 49 — the single largest ledger
   entry, and empirical proof that Run 49's own "carried 8, **possibly optimistic**, not re-probed
@@ -2895,3 +2940,100 @@ claiming near-certainty the day the bugs were found would be the exact miscalibr
 measures. Floor holds **7/7/7**; mean **7.88** unchanged. *For the next run:* the highest-value probe
 is now a **second** adversarial pass on the same paths (the reserve says more remain), and the still-
 open structural lift is CI actually *running* `mycelium-core`'s suite + the floor trio.
+
+## 2026-07-15 — Run 51 (M2)
+
+**Audit-recording run (pass 2).** Run 50 closed by naming the highest-value next probe: "a **second**
+adversarial pass on the same paths (the reserve says more remain)." This run *is* that pass — five
+parallel hunters over the just-fixed consensus paths **plus** subsystems pass 1 never reached (SWIM
+membership, wire framing, the per-peer writer, the HTTP gateway's untrusted-input surface). It found
+**seven** more real defects. As in Run 50 this is a recording run (blind-scoring waived, stated here);
+scores follow the current-state principle.
+
+Deep-dive dimensions this run: **12 Robustness · 13 Security · 11 Semantic Correctness · 10 Resource
+Management · 9 Concurrency** (the five the seven findings land in — each got the full adversarial
+treatment, which *is* the audit). Execution evidence produced this session: seven falsification probes
+(each failing pre-fix, passing post-fix); **~11 new deterministic gates** (SWIM saturation, three
+`regression_cap_*`, writer reap/evict ×3, the gateway e2e hostile-input + `parse_hex32`, the two
+consensus-auth unit gates); **`make check-full` green** — real exit 0, four suites (373 + 296 + 146 +
+doctests) pass, clippy feature-matrix + wasm-host + `--lib --tests` clean. Merge `9c17317` (commits
+`07f5aca`·`a479d12`·`2f5d6f6`·`43b9731`·`52ef664`).
+
+### Findings
+
+Seven confirmed, all **found + fixed + gated this run** (per the current-state principle they do not
+lower their dimensions; the accountability for the prior 8s lives in the seven Run-51 ledger lines).
+The headline is a **new bug family pass 1 never probed — crash-on-hostile-input** — reachable because
+the release profile sets `panic = "abort"`, so a handler/listener panic aborts the whole node.
+
+- **Critical — Robustness (12)/Security (13).** SWIM self-refutation `u.incarnation + 1` on an
+  unauthenticated-UDP incarnation: `u64::MAX` panics the listener (overflow-checks) or wraps to 0
+  (release) → live node evicted cluster-wide. A *corrupted* frame suffices. Fixed: `saturating_add`.
+- **Critical — Robustness (12)/Security (13).** `gw_kv_quorum` `Duration::from_secs_f64(untrusted f64)`
+  panics on `-1` → unauthenticated single-request node-abort on the default loopback-open gateway.
+  Fixed: `try_from_secs_f64` → 400.
+- **Critical — Semantic Correctness (11).** `max_store_entries` gated on `store.len()` (counts
+  tombstones) and dropped overwrites → permanent silent divergence (anti-entropy re-drops every
+  round); tombstone-full store wedged live writes. Fixed: exact inline live-count + overwrite exempt.
+- **Major — Resource Management (10)/Concurrency (9).** Writer GC reap + `evict_peer_writer`
+  blind-removed a concurrently re-claimed LIVE writer → orphaned task + second connection (pass-1's
+  clobber fix covered only the upgrade path). Fixed: compute-with-recheck reap + atomic remove-signal.
+- **Major — Security (13).** Signed consensus bound the signature to the signer but not the `voter`
+  named inside → one key forges N distinct voters → forged quorum. Fixed: `signer_authorized` binds
+  vote/propose identity; insider-resistance doc de-overclaimed (CFT-not-BFT stated).
+- **Major — Robustness (12)/Security (13).** `parse_hex32` byte-sliced after a byte-length check →
+  non-char-boundary panic (node-abort). Fixed: `is_ascii()` guard.
+- **Major — Semantic Correctness (11).** Consensus acceptor equivocated at equal ballot (voted a
+  second value) → two proposers both Commit different values at one ballot. Fixed: `may_cast_vote`
+  anti-equivocation; `consistent_set` "totally ordered by ballot" doc corrected to HLC-LWW-on-ties.
+- *(Minor/Low)* `gw_signal_emit` unknown-scope→cluster-wide widening (now 400); `overlay_group_propose`
+  self-double-counting quorum (`members.len()+1`, roster already includes self) → solo-group Timeout.
+
+*Not new bugs:* the framing/codec decode surface was probed hard (20k-input fuzz, `u64::MAX`
+length-prefix, unknown wire version) and found **sound**; F4 fencing-token non-monotonicity across a
+partition is the documented lease limitation, not a defect.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 8 | carried (v47), stale — no philosophy change |
+| 2 | Conceptual Integrity | 8 | carried (v49), stale — fixes are internal |
+| 3 | Architecture | 8 | carried (v47), stale — layer boundaries unchanged (the store-cap fix stays within Layer I; the vote-identity binding within Layer III) |
+| 4 | Modularity | 8 | carried (v47), stale |
+| 5 | API Design | 8 | carried (v47), stale — no public-surface change |
+| 6 | Error Handling Model | 8 | carried (v47) — the gateway now returns typed 400s where it previously panicked; input errors are recoverable + named |
+| 7 | Configurability | 7 | carried (v42), **stale — floor** |
+| 8 | Language Best Practices | 8 | carried (v49) — fixes idiomatic (`saturating_add`, `try_from_secs_f64`, `is_ascii`, compute-with-recheck); clippy `--lib --tests` clean across the matrix |
+| 9 | Concurrency Correctness | 8 | **Deep-dive + audit.** The writer removal-path orphan (sibling of pass-1's upgrade clobber) fixed + gated; the SWIM self-refute race fixed. Holds **8, evidenced**; *not 9* for the same unknown-unknown reason — two passes have now each found bugs here |
+| 10 | Resource Management | 8 | Audit-touched: the writer orphan (leaked task + connection) fixed + gated. Holds 8 |
+| 11 | Semantic Correctness | 8 | **Deep-dive + audit.** Three findings here (store-cap permanent divergence, acceptor equivocation, group-quorum liveness) all fixed + gated; convergence re-validated by the full suite. Holds **8, evidenced**; not 9 (reserve) |
+| 12 | Robustness | 7 | **Deep-dive + audit — floor.** Three crash-on-hostile-input defects (SWIM, gw_kv_quorum, parse_hex32) + scope-widening fixed + gated with fresh e2e/probe evidence. Held at **7 not lifted**: the *structural* weakness persists — there is no systematic input-fuzz gate over the SWIM/HTTP surface, and a single hand-probing pass found three node-crashes, so the surface is demonstrably under-tested (the honest current-state read, not a discovery penalty). No longer *stale*, though — freshly probed + hardened; the lift to 8 is an HTTP/UDP fuzz-gate |
+| 13 | Security | 8 | **Deep-dive + audit.** The vote-impersonation quorum-forge closed (`signer_authorized`) and two unauthenticated node-crash DoSes removed; the `SignedConsensusMsg` insider-resistance overclaim corrected to the honest CFT-not-BFT ceiling. Found-live-then-fixed+gated → holds 8; the residual (no quorum certificate on Commit) is the documented BFT-out-of-scope boundary, not an unfixed defect |
+| 14 | Failure Mode Legibility | 8 | carried (v47) — the new 400s name the bad field; unchanged otherwise |
+| 15 | Performance | 8 | carried (v47), stale — the inline live-count is one atomic add/sub per winning CAS (O(1)); no bench this run |
+| 16 | Scalability | 8 | carried (v49), stale + evidence-degraded (last good = 2026-07-14 `entries` PASS) |
+| 17 | Testability | 8 | carried (v47) — the audit again *demonstrated* it: every finding got a deterministic in-process probe (pure `may_cast_vote`/`signer_authorized`, papaya-map reap unit tests, an axum e2e for the gateway) with no cluster spin-up |
+| 18 | Test Architecture | 7 | carried (v44), **stale — floor;** +11 regression gates grow the unit tier but the structural CI-gating residuals are unchanged |
+| 19 | Observability | 8 | carried (v49), stale |
+| 20 | Debuggability | 8 | carried (v41), possibly optimistic per decay rule |
+| 21 | Operational Readiness | 8 | carried (v47, decayed) |
+| 22 | Evolvability | 8 | carried (v47) — wire unchanged (v12/PREV 11); the new `KvStore.live_count` field is internal, the fixes wire-compatible |
+| 23 | Documentation | 8 | carried (v49) — two overclaims corrected in code doc (insider-resistance, `consistent_set` ballot-ordering) as part of the fixes |
+| 24 | Developer Experience | 8 | carried (v49), stale |
+| 25 | Dependency Hygiene | 8 | carried (v47), stale — no `Cargo.toml` change |
+| — | **Floor (lowest 3)** | **7, 7, 7** | Configurability · Robustness · Test Architecture |
+| — | Mean (continuity footnote) | 7.88 | unchanged; not a target |
+
+**Delta vs Run 50:** the pattern from Run 50 repeats and *strengthens*. A second adversarial pass found
+**seven** more real defects — 3 Critical, 4 Major — yet the numbers hold (floor **7/7/7**, mean **7.88**):
+found + fixed + gated dimensions keep their score (dropping the just-hardened, best-scrutinised dimension
+would punish the digging), and accountability lives in the seven new ledger lines. The two passes together
+have now found **16 bugs** (9 + 7) in dimensions that read 8 — the calibration ledger is the loudest signal
+in this file, and it says the 8s systematically over-predict. Two specifics worth stating plainly: (1) pass
+2 found a bug family pass 1 *never looked at* — **crash-on-hostile-input** across SWIM/HTTP, made
+node-fatal by `panic="abort"` — which is why **Robustness (12) stays a floor 7** (no input-fuzz gate; one
+hand-pass found three node-crashes ⇒ under-tested surface, a current-state structural fact, not a discovery
+penalty); and (2) I again declined to lift any hardened dimension to 9 despite qualifying `make check-full`
+evidence — the reserve is now empirically doubled. *For the next run:* the highest-value probes are a
+**fuzz gate** over the HTTP-body + SWIM-datagram decode surface (would lift 12 off the floor), a **third**
+consensus pass (the reserve has not run dry — two passes, two non-empty hauls), and the standing structural
+lifts (CI running `mycelium-core`'s suite; the live mixed-version two-binary test; the floor trio).
