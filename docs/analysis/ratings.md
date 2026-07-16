@@ -27,6 +27,16 @@ such finding.
 Records bugs later found in dimensions that scored ≥ 8 while the bug already
 existed. This is the framework's own report card.
 
+- 2026-07-15 (identity-auth design, recorded Run 56): **Security (13)** and **Documentation (23)**
+  carried 8 for many runs while the `rotate_identity` code comments (`mod.rs:990`, `~1022`) and the
+  wiki (`dev/security.md` WS5) both claimed `sys/identity/{self}` is "signed by the **old** key" —
+  but the code writes it **unsigned** (`kv().set` of a raw `encode_identity_history` concatenation,
+  no Ed25519 signature over the entry). The signature was design *intent* that was never implemented;
+  the false "signed" claim is precisely what masked the pass-3 identity-poisoning gap (an unsigned,
+  accumulate-forever KV key set). Found while writing `docs/design/identity-authentication.md`.
+  Another overclaim hiding a gap — the class this ledger keeps catching (cf. pass-2 signer==voter,
+  Run 52; the Run-53 fuzz lift, Run 54). Corrected in code + wiki; the vector's fix is the phased
+  design doc.
 - 2026-07-15 (audit **pass 4**, recorded Run 54): a *fourth* adversarial pass — five hunters over the
   last unprobed subsystems (config/env, the signal reorder buffer/admission, HLC arithmetic + gossip
   forwarding, metrics/introspection/readiness, the fleet/shard/log gateway endpoints) — found **eight**
@@ -3379,3 +3389,42 @@ having been burned once scoring a gate on faith, I don't do it twice. Mean **7.8
 or refute the Robustness lift, and the reserve has not run dry), and **`sys/identity` rotation authentication**
 (the last named design decision — Security 7→8, closes the pass-3 poisoning residual; a trust-root change that
 still deserves its own focused effort, not a momentum patch).
+
+## 2026-07-15 — Run 56 (M2)
+
+**Design + doc-honesty run** (not a hunting pass, no code-behavior change). Addresses the last named
+design decision from Run 55: **`sys/identity` rotation authentication**. A security trust-root change is
+not something to land ad-hoc, so the deliverable is a reviewed, implementable **design** —
+[`docs/design/identity-authentication.md`](../design/identity-authentication.md) — specifying the phased
+fix (CA-cert anchor → signed identity proofs in a sibling `sys/identity-proof/` key, old-reader-compatible →
+rotation chained to a prior trusted key → a gated reject-unsigned migration), with threat-model framing
+(Byzantine-insider, formally outside CFT-not-BFT, closed as defense-in-depth), a per-phase security table,
+failure-mode tests, a code-impact map, and sequencing (Phase 1 = the safe next step).
+
+Writing it surfaced a finding: **both the `rotate_identity` code comments and the wiki claimed
+`sys/identity/{self}` is "signed by the old key" — while the code writes it unsigned.** The signature was
+design intent never implemented, and the false claim is exactly what masked the pass-3 poisoning gap.
+Corrected in `mod.rs` + `dev/security.md`, and ledgered — another overclaim-hiding-a-gap, the recurring
+class. `make` build clean (comment/doc-only).
+
+No scores move. **Security holds at floor 7** — the vector is now *designed and honestly documented*, but
+**not closed**; a design doc does not fix a live weakness, and scoring it up would repeat the exact
+"scored the gate on faith" error Run 54 corrected. Security earns 8 when Phase 1+ ships and a poisoning-
+rejection gate is green — not before. **Documentation (23) holds 8**: the correction removes a real
+overclaim (net-honest), and the design doc is now linked from the wiki security page (coverage closed).
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 13 | Security | 7 | **held — floor.** Identity-poisoning is now designed + honestly documented (the "signed" overclaim corrected), but the live vector is unclosed. A design ≠ a fix; scored up only when Phase 1+ ships with a poisoning-rejection gate |
+| 23 | Documentation | 8 | held — corrected the `rotate_identity`/WS5 "signed by old key" overclaim (net more honest); new design doc linked from `dev/security.md` (wiki coverage closed) |
+| — | (all others) | 8/7 | carried from Run 55 (Config · Robustness · Security · Test-Arch at 7; rest 8) |
+| — | **Floor (lowest 3)** | **7, 7, 7** | Configurability · Robustness · Security · Test Architecture |
+| — | Mean (continuity footnote) | 7.84 | unchanged; not a target |
+
+**Delta vs Run 55:** the last named design decision is now *unblocked, not done* — the honest state for a
+trust-root security change. What shipped is the reviewed design + the correction of a "signed"-that-wasn't
+overclaim (ledgered). What did **not** move: Security stays floor 7, because a spec is not a fix — the same
+discipline that held Robustness at 7 in Run 55 (don't score on faith). *Remaining work, now fully scoped:*
+**Phase 1 of the identity design** (CA-cert anchor + conflict tripwire — the safe, high-value next code
+step, pending the x509-parser dependency call), and a **fifth hunting pass** (validates the deferred
+Robustness lift; reserve not yet dry). Both are concrete; neither is a momentum patch.
