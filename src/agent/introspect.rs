@@ -113,14 +113,13 @@ impl GossipAgent {
     /// after startup or restart.
     ///
     /// Hard state (WAL replay) completes before `start()` returns, so
-    /// `kv().get`/`kv().scan_prefix` are accurate immediately. Soft state — capability
-    /// keys, locality, and other periodically re-advertised keys — is only
-    /// written after the first advertisement tick. Use this to implement a
-    /// readiness probe that distinguishes "process up" from "fully hydrated."
+    /// Returns `true` once [`start`](crate::GossipAgent::start) has completed and the node's HARD
+    /// state (KV, signals, membership) is serving — i.e. it is ready to receive traffic.
     ///
-    /// Returns `false` until the first call to `advertise_capability`,
-    /// `advertise_locality`, or any other `run_kv_persist_task`-driven
-    /// advertisement has completed its initial tick.
+    /// Capability/locality discovery gossips incrementally and is the resolver's eventually-consistent
+    /// concern (freshness + retry), so it does NOT gate readiness: a node that advertises no soft state
+    /// is still ready as soon as it has started (a k8s readiness gate on such a node previously never
+    /// routed to it — audit 2026-07-15 pass 4). `false` before `start()` completes.
     pub fn is_ready(&self) -> bool {
         self.task_ctx.soft_state_advertised.load(std::sync::atomic::Ordering::Acquire)
     }

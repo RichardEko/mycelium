@@ -3138,13 +3138,13 @@ async fn forwarding_is_unconditional_through_non_member_relay() {
     member.shutdown().await;
 }
 
-/// M2 Run-20 quota probe (#21 Operational Readiness): the documented /ready
-/// gate — NOT ready before the first capability advertisement, ready after.
-/// A readiness endpoint that returns 200 early routes traffic to a node with
-/// no soft-state on the mesh yet; one that never flips blocks deploys.
+/// Audit 2026-07-15 pass 4 (#21 Operational Readiness): `/ready` reflects STARTUP COMPLETION, not
+/// soft-state advertisement. A node that advertises no capability (a pure KV/signal node) is ready
+/// as soon as it has started — previously it returned 503 forever, so a k8s readiness gate never
+/// routed to a healthy node, blocking deploys of that shape. Advertising later must not un-ready it.
 #[cfg(feature = "gateway")]
 #[tokio::test]
-async fn ready_gate_flips_on_first_capability_advertisement() {
+async fn ready_reflects_startup_not_advertisement() {
     let gossip_port = alloc_port();
     let http_port   = alloc_port();
     let mut cfg = GossipConfig::default();
@@ -3155,34 +3155,29 @@ async fn ready_gate_flips_on_first_capability_advertisement() {
 
     let client = reqwest::Client::new();
     let url = format!("http://127.0.0.1:{http_port}/ready");
-    // Wait for the HTTP server itself, via the liveness endpoint.
     let health = format!("http://127.0.0.1:{http_port}/health");
     for _ in 0..40 {
         if client.get(&health).send().await.is_ok_and(|r| r.status().is_success()) { break; }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
-    let before = client.get(&url).send().await.expect("ready before");
-    assert!(
-        !before.status().is_success(),
-        "/ready must NOT be 200 before any capability is advertised (got {})",
-        before.status(),
-    );
+    // Ready with NO capability advertised — the shape that used to block forever.
+    let mut ready = false;
+    for _ in 0..40 {
+        if client.get(&url).send().await.is_ok_and(|r| r.status().is_success()) { ready = true; break; }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(ready, "/ready must be 200 once startup completes, even with no soft state advertised");
 
+    // Advertising a capability afterwards is incremental — it must not un-ready a started node.
     let _reg = agent.capabilities().advertise_capability(
         Capability::new("probe", "ready"),
         Duration::from_secs(5),
     );
-    let mut flipped = false;
-    for _ in 0..60 {
-        if client.get(&url).send().await.is_ok_and(|r| r.status().is_success()) {
-            flipped = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    let after = client.get(&url).send().await.expect("ready after advertise");
+    assert!(after.status().is_success(), "advertising a capability must not un-ready a started node");
+
     agent.shutdown().await;
-    assert!(flipped, "/ready must flip to 200 after the first advertisement tick");
 }
 
 /// M2 Run-20 quota probe (#18 Test Architecture): in-suite mini-fuzz of the
