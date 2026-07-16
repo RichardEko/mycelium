@@ -145,6 +145,18 @@ impl BlobFetcher for HttpLibrarySource {
         let resp = req.send().await.map_err(|e| format!("GET {url}: {e}"))?;
         match resp.status() {
             s if s.is_success() => {
+                // Bound the in-memory materialization: this source has no ranged streaming (design §5),
+                // so a huge body OOMs the node BEFORE the content-hash check. The mesh path is bounded
+                // by the 10 MiB frame cap; bound the HTTP path via Content-Length (audit 2026-07-15
+                // pass 5). RESIDUAL: a chunked response with no/lying Content-Length is not bounded
+                // here — the complete fix is streaming via `RangedArtifactSource` (needs reqwest's
+                // `stream` feature + futures); tracked, not silently added.
+                const MAX_HTTP_BLOB_BYTES: u64 = 512 * 1024 * 1024;
+                if let Some(len) = resp.content_length()
+                    && len > MAX_HTTP_BLOB_BYTES
+                {
+                    return Err(format!("GET {url}: declared body {len} B exceeds cap {MAX_HTTP_BLOB_BYTES} B"));
+                }
                 let bytes = resp.bytes().await.map_err(|e| format!("read {url}: {e}"))?;
                 Ok(Some(bytes))
             }

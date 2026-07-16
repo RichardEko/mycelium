@@ -95,7 +95,12 @@ fn reconcile_throttle(
         }
         let fps: u64 = std::str::from_utf8(&val).ok().and_then(|s| s.parse().ok()).unwrap_or(0);
         let s: Arc<str> = Arc::from(sender);
-        *total.entry(Arc::clone(&s)).or_default() += fps;
+        // `saturating_add`: `fps` is parsed from a peer-forgeable `sys/rate/{observer}/{sender}` KV
+        // value (no write guard). Two `u64::MAX` entries overflowed the plain `+=` → panic (debug →
+        // the rate-decider task dies, limiting silently stops) or wrap (release → the aggregate wraps
+        // BELOW threshold, a rate-limit bypass) (audit 2026-07-15 pass 5, the arithmetic family on the
+        // previously-unfuzzed rate path).
+        total.entry(Arc::clone(&s)).and_modify(|t| *t = t.saturating_add(fps)).or_insert(fps);
         *observers.entry(s).or_default() += 1;
     }
 
@@ -148,6 +153,19 @@ mod tests {
         assert_eq!(get(&map, "noisy"), 300);
         assert_eq!(get(&map, "calm"), 0);
         assert_eq!(map.pin().len(), 1);
+    }
+
+    #[test]
+    fn regression_aggregate_saturates_on_forged_max_fps_no_overflow() {
+        // Audit 2026-07-15 pass 5: fps is parsed from a peer-forgeable sys/rate KV value. Two u64::MAX
+        // entries for one sender overflowed the aggregate `+=` → panic (debug → decider task dies) or
+        // wrap (release → aggregate wraps BELOW threshold, a rate-limit bypass). Must saturate.
+        let map = papaya::HashMap::new();
+        let max = u64::MAX.to_string();
+        let evidence = vec![ev("127.0.0.1:1", "victim", &max), ev("127.0.0.1:2", "victim", &max)];
+        reconcile_throttle(evidence, 900, &map); // must not panic
+        // A saturated (u64::MAX) over-threshold aggregate must still THROTTLE, not wrap below.
+        assert!(get(&map, "victim") > 0, "saturated over-threshold aggregate must throttle, not wrap below");
     }
 
     #[test]

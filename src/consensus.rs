@@ -1468,15 +1468,21 @@ pub(crate) async fn run_consensus_listener(
                         ctx.task_ctx.commit_conflicts.fetch_add(
                             1, std::sync::atomic::Ordering::Relaxed,
                         );
-                        // Legible-Emergence Phase 2: record the "hot slot". Retry-safe compute —
-                        // recompute the count from `existing` on papaya CAS retry.
-                        ctx.task_ctx.commit_conflict_slots.pin().compute(
-                            std::sync::Arc::clone(&slot),
-                            |existing| {
-                                let n = existing.map(|(_, v)| *v).unwrap_or(0) + 1;
-                                papaya::Operation::<u64, ()>::Insert(n)
-                            },
-                        );
+                        // Legible-Emergence Phase 2: record the "hot slot" — but ONLY when detectors
+                        // are enabled (RT4 zero-overhead-when-off; previously this insert ran
+                        // unconditionally while only the ring below was gated) and BOUNDED, so an
+                        // attacker committing conflicts to unbounded distinct slot names cannot grow
+                        // the map without limit (audit 2026-07-15 pass 5). Retry-safe compute.
+                        if ctx.task_ctx.config.emergent_detectors_enabled {
+                            const MAX_HOT_SLOTS: usize = 4096;
+                            let map = ctx.task_ctx.commit_conflict_slots.pin();
+                            if map.get(&slot).is_some() || map.len() < MAX_HOT_SLOTS {
+                                map.compute(std::sync::Arc::clone(&slot), |existing| {
+                                    let n = existing.map(|(_, v)| *v).unwrap_or(0).saturating_add(1);
+                                    papaya::Operation::<u64, ()>::Insert(n)
+                                });
+                            }
+                        }
                         // Phase 3 explain: record the event (gated — the ring only records when
                         // the diagnostics feature is on; RT4 zero-overhead-off).
                         if ctx.task_ctx.config.emergent_detectors_enabled {
