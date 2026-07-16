@@ -730,6 +730,38 @@ mod tests {
         assert!(req.is_fresh(ts, 2_000));
     }
 
+    // ── Input-fuzz gate (audit 2026-07-15): the peer-supplied-arithmetic family, deterministically.
+    // refresh_interval_ms / hlc_ts / now all arrive inside a gossiped CapEntry/ReqEntry, so is_fresh
+    // must never panic on ANY of them (the `3 × interval` overflow was one instance). Runs under
+    // overflow-checks, so an unguarded `*`/`+` on a peer field fails it — the CI guard the individual
+    // regression generalises.
+    proptest::proptest! {
+        #[test]
+        fn fuzz_is_fresh_never_panics(
+            interval in proptest::prelude::any::<u64>(),
+            hlc_ts   in proptest::prelude::any::<u64>(),
+            now      in proptest::prelude::any::<u64>(),
+        ) {
+            let cap = CapEntry { capability: Capability::new("a", "b"), refresh_interval_ms: interval };
+            let _ = cap.is_fresh(hlc_ts, now);
+            let req = ReqEntry { filter: CapFilter::new("a", "b"), refresh_interval_ms: interval };
+            let _ = req.is_fresh(hlc_ts, now);
+        }
+
+        // Decode→process: arbitrary bytes that happen to decode as a CapEntry must not panic when the
+        // decoded value is then USED (is_fresh) — the gap the decode-only fuzz targets miss (the
+        // decoder can be safe while the downstream value-processing overflows).
+        #[test]
+        fn fuzz_decoded_cap_entry_is_fresh_never_panics(
+            bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..256),
+        ) {
+            if let Some(entry) = CapEntry::decode(&bytes) {
+                let _ = entry.is_fresh(0, u64::MAX);
+                let _ = entry.is_fresh(u64::MAX, 0);
+            }
+        }
+    }
+
     #[test]
     fn req_entry_freshness() {
         use crate::hlc::Hlc;

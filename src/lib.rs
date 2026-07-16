@@ -317,6 +317,16 @@ pub mod fuzz_internals {
         let b = Bytes::copy_from_slice(bytes);
         crate::signal::decode_load_state(&b).is_some()
     }
+
+    /// Decode→process: decode `bytes` as a `CapEntry` and, on success, drive the decoded value through
+    /// `is_fresh` at extreme clock inputs. Reaches the value-processing arithmetic (`3 × interval`) the
+    /// decode-only targets miss — the peer-supplied-arithmetic family (audit 2026-07-15).
+    pub fn cap_entry_is_fresh(bytes: &[u8]) -> bool {
+        match crate::CapEntry::decode(bytes) {
+            Some(e) => e.is_fresh(0, u64::MAX) | e.is_fresh(u64::MAX, 0),
+            None => false,
+        }
+    }
 }
 
 /// test-only: a bind-verified, process-unique loopback port allocator for companion

@@ -288,6 +288,35 @@ mod tests {
         assert_eq!(m.apply(&alive(1, 5), now), ApplyEffect::None);
     }
 
+    // ── Input-fuzz gate (audit 2026-07-15): the peer-supplied-arithmetic family, deterministically.
+    // `MemberUpdate` is decoded from an unauthenticated UDP datagram, so `apply` must never panic on
+    // ANY incarnation (incl. u64::MAX — the SWIM overflow was one instance) or status. This proptest
+    // is the CI guard the individual regressions generalise; it runs under overflow-checks, so an
+    // unguarded `+`/`*` on a peer field would fail it.
+    proptest::proptest! {
+        #[test]
+        fn fuzz_apply_never_panics_on_arbitrary_update(
+            self_port in 1u16..=u16::MAX,
+            port       in 1u16..=u16::MAX,
+            inc        in proptest::prelude::any::<u64>(),
+            status_sel in 0u8..3,
+        ) {
+            let status = match status_sel { 0 => MemberStatus::Alive, 1 => MemberStatus::Suspect, _ => MemberStatus::Dead };
+            let mut m = SwimMembership::new(NodeId::new("127.0.0.1", self_port).unwrap());
+            let now = std::time::Instant::now();
+            // A rumour about some other node, and (the overflow-prone path) a rumour about SELF.
+            let other = MemberUpdate { node: NodeId::new("127.0.0.1", port).unwrap(), incarnation: inc, status };
+            let mine  = MemberUpdate { node: NodeId::new("127.0.0.1", self_port).unwrap(), incarnation: inc, status };
+            let _ = m.apply(&other, now);   // must not panic
+            let _ = m.apply(&mine, now);    // self-refute at u64::MAX must saturate, not wrap/panic
+            // A Suspect/Dead self-rumour refutes by bumping strictly PAST the rumour (or saturating at
+            // the ceiling) — never wrapping to a low value. An Alive self-rumour never bumps.
+            if matches!(status, MemberStatus::Suspect | MemberStatus::Dead) {
+                proptest::prelude::prop_assert!(m.self_incarnation() > inc || m.self_incarnation() == u64::MAX);
+            }
+        }
+    }
+
     #[test]
     fn regression_self_refute_saturates_at_max_incarnation_no_overflow() {
         // Audit 2026-07-15 (pass 2): a corrupted/forged unauthenticated SWIM datagram carrying a
