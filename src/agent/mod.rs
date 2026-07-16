@@ -987,8 +987,14 @@ impl GossipAgent {
     ///
     /// 1. Generate a new key + CA-signed cert (reusing the cluster CA), persisted
     ///    to disk — but do not activate it yet.
-    /// 2. Publish `sys/identity/{self}` = `new ‖ old`, signed by the **old** key
-    ///    (which peers still trust), so peers' retained key sets accept both.
+    /// 2. Publish `sys/identity/{self}` = `new ‖ old` (the raw key history) so peers'
+    ///    retained key sets accept both. **NOTE (2026-07-15):** this entry is currently
+    ///    written UNSIGNED — a plain Layer-I KV value, not signed by the old key. The
+    ///    original design intent was an old-key signature (so peers could authenticate the
+    ///    rotation); it was never implemented, which is the identity-poisoning gap the audit
+    ///    found (pass 3). Any admitted node can LWW-overwrite `sys/identity/{V}` to inject a
+    ///    key. Byzantine-scope (CFT-not-BFT), tracked for a fix in
+    ///    `docs/design/identity-authentication.md`.
     /// 3. Wait `propagation` for that to gossip.
     /// 4. Cut over: atomically swap the active key + cert ([`tls::NodeTls::activate`]).
     ///    New gossip signatures and new TLS handshakes use the new key (configs are
@@ -1019,8 +1025,10 @@ impl GossipAgent {
 
         // 2. Publish new ‖ (every previously-published key) — the full rotation
         //    history, so historical signatures stay verifiable across any number
-        //    of rotations. Signed by the still-active OLD key (peers trust it), so
-        //    their retained sets accept the new key before the cutover.
+        //    of rotations. NOTE: written UNSIGNED (a plain KV value) — the intended
+        //    old-key signature over this entry was never implemented; peers accept the
+        //    new key purely because the KV entry is unauthenticated and accumulated. See
+        //    docs/design/identity-authentication.md (audit 2026-07-15 pass 3).
         let id_key = format!("sys/identity/{}", self.node_id);
         let existing = self
             .kv()

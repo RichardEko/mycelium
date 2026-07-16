@@ -52,9 +52,20 @@ their broker IS the crown jewel). Two opt-in controls:
 
 `NodeTls` contents live behind `ArcSwap` (read via accessors per connection — never cache a
 config past a rotation; no listener drain-swap needed). `rotate_identity`: generate →
-publish `sys/identity/{self}` = `new‖old` signed by the **old** key → wait → activate.
+publish `sys/identity/{self}` = `new‖old` → wait → activate.
 **Retained-key verification (option B):** `peer_keys` accumulates a per-node key set
 (union via `merge_peer_keys` — see [concurrency](concurrency/lock-free-and-atomics.md));
 every verify path tries the set. Caveat: a retired key still verifies — compromise needs
 explicit **revocation** (WS-D shipped the CT-style revocation log + `/gateway/transparency`
-inclusion proofs, PRs #77–#82).
+inclusion proofs, PRs #77–#82; revocation is now also applied on the consensus verify path,
+audit 2026-07-15 pass 3).
+
+> **`sys/identity` is NOT authenticated (open gap, tracked).** Despite the older "signed by the
+> old key" phrasing, `sys/identity/{node}` is a plain Layer-I KV value with **no signature**, and
+> `merge_peer_keys` **accumulates** any key that appears there. So a compromised — or merely buggy
+> — admitted node can LWW-poison a peer's verifying-key set for a victim, defeating the pass-2
+> `signer_authorized` bind. This is a **Byzantine-insider** vector, formally outside CFT-not-BFT,
+> but worth closing as defense-in-depth (the signing layer exists precisely to add insider-
+> resistance). Full phased fix — CA-cert anchor → signed identity proofs → rotation chained to a
+> prior trusted key — designed in
+> [`docs/design/identity-authentication.md`](../../design/identity-authentication.md).
