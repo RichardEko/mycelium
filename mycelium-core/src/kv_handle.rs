@@ -365,7 +365,11 @@ impl KvHandle {
                     })
                     .unwrap_or(0);
 
-                let next = handle.scan_log(&stream, offset + 1, u64::MAX)
+                // `saturating_add`: `offset` is parsed from the `clog/.../offset` KV value, which any
+                // node can write under detection-not-prevention. A corrupt/hostile `u64::MAX` must not
+                // panic here (overflow-checks) or wrap to 0 (release → silent re-scan from the start) —
+                // the peer-supplied-arithmetic family (audit 2026-07-15; cf. is_fresh, SWIM incarnation).
+                let next = handle.scan_log(&stream, offset.saturating_add(1), u64::MAX)
                     .into_iter()
                     .next();
 
