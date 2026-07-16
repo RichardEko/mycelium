@@ -227,8 +227,12 @@ pub fn membership_snapshot(kv_state: &crate::store::KvState) -> MembershipSnapsh
         if bytes.is_empty() {
             continue; // tombstone = left the group
         }
+        // `rfind`, not `find`: the key is `grp/{group}/{node}` and the NODE is the last segment, so
+        // a group name containing `/` (`grp/a/b/{node}`) must split at the LAST slash → group `a/b`,
+        // member `{node}`. `find` split at the first slash → group `a`, member `b/{node}`, disagreeing
+        // with `membership_governor::group_members` (audit 2026-07-15 pass 5).
         let tail = key.strip_prefix("grp/").unwrap_or("");
-        let Some(slash) = tail.find('/') else { continue };
+        let Some(slash) = tail.rfind('/') else { continue };
         out.entry(tail[..slash].to_string()).or_default().insert(tail[slash + 1..].to_string());
     }
     out
@@ -1156,6 +1160,22 @@ mod tests {
         // Blind observer: roster (live_nodes) = 1. Pre-fix: 1*100/1 = 100. Post-fix: max(1,3 seen)=3 → 33.
         assert_eq!(opaque_node_pct(&kv, 1, now, OPAQUE_MAX_AGE_MS), 33,
             "% must be over the observed population (1 of 3), not pinned at 100% by roster mismatch");
+    }
+
+    /// Audit 2026-07-15 pass 5: `grp/{group}/{node}` must split at the LAST slash so a group name
+    /// containing `/` is parsed as the group (not truncated) and the node as the last segment —
+    /// matching `membership_governor::group_members`.
+    #[test]
+    fn regression_membership_snapshot_splits_group_at_last_slash() {
+        let kv = KvState::new(0);
+        let hlc = Hlc::new();
+        let node = NodeId::new("127.0.0.1", 9000).unwrap();
+        let key: Arc<str> = Arc::from(format!("grp/team/alpha/{node}").as_str());
+        apply_and_notify(&kv, &make_gossip_update(&node, 4, key, bytes::Bytes::from_static(b"x"), false, &hlc));
+        let snap = membership_snapshot(&kv);
+        assert!(snap.contains_key("team/alpha"),
+            "group must split at the last slash; got {:?}", snap.keys().collect::<Vec<_>>());
+        assert!(snap.get("team/alpha").unwrap().contains(&node.to_string()));
     }
 
     /// P4 storm gate — most of the fleet shedding shows a high percentage.

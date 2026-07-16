@@ -155,6 +155,24 @@ mod tests {
         assert_eq!(map.pin().len(), 1);
     }
 
+    proptest::proptest! {
+        // Input-fuzz gate (audit 2026-07-15 pass 5): reconcile_throttle aggregates a peer-forgeable
+        // `fps` parsed from sys/rate/ KV. ANY fps values (incl. u64::MAX) must never panic — the
+        // arithmetic family, extended to the rate path the pass-4 fuzz gate did not reach. Runs under
+        // overflow-checks, so an unguarded `+`/`*` here fails the build.
+        #[test]
+        fn fuzz_reconcile_throttle_never_panics(
+            fps_vals  in proptest::collection::vec(proptest::prelude::any::<u64>(), 0..8),
+            threshold in proptest::prelude::any::<u64>(),
+        ) {
+            let map = papaya::HashMap::new();
+            let evidence: Vec<(Arc<str>, Bytes)> = fps_vals.iter().enumerate()
+                .map(|(i, v)| ev(&format!("obs{i}"), "victim", &v.to_string()))
+                .collect();
+            reconcile_throttle(evidence, threshold, &map); // must not panic
+        }
+    }
+
     #[test]
     fn regression_aggregate_saturates_on_forged_max_fps_no_overflow() {
         // Audit 2026-07-15 pass 5: fps is parsed from a peer-forgeable sys/rate KV value. Two u64::MAX
