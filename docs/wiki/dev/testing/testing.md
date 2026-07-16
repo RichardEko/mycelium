@@ -23,6 +23,37 @@ cargo clippy --lib --no-default-features -- -D warnings     # minimal embed — 
 cargo clippy -p mycelium-wasm-host --all-targets -- -D warnings   # wasm-host embeds mycelium default-features=false
 ```
 
+**`make check-full` is NOT the whole CI gate — a green local run does not prove CI is green.** The
+block above is the *Rust lib + clippy* set. CI **also** runs **live-node / cross-language integration
+jobs** that `make check-full` does not: **Reason (v3.0 Tier-3)** and **Python SDK + LangGraph** (spin
+up real `reason_node` binaries and drive them over HTTP/Python), the **Food-Rescue coop demo suite**
+(`examples/coop/ci_smoke.sh` — 12 multi-node demos), **Blackboard / WASM-host / AFN** smokes, the
+**Docker cluster suites**, and the nightly **fuzz** job. These exercise *runtime behaviour across the
+network and across crates* that no `cargo test --lib` reaches.
+
+**The lesson (2026-07-16, cost ~25 red commits reported "green").** A pass-1 audit fix salted the
+`kv().append` on-disk key with the node id (`log/{stream}/{hlc:016x}/{node}` — core BUG 4). That
+changed a **shared core *contract***, and `mycelium-reason::replay` — a **separate crate** with its
+**own** `log/`-key parser — read the HLC from the (now wrong) last segment and silently dropped every
+trace event. `make check-full` was green the whole time (reason's unit tests covered only formatting,
+never a `record→replay` round-trip); only CI's live reason/Python jobs caught it, and it sat red for
+~25 commits while each was reported "green" off the local gate alone. Two durable rules fall out:
+- **After pushing, check `gh run list` — CI green is the real bar, not `make check-full`.** The local
+  gate is necessary, not sufficient.
+- **When you change a shared contract** (an on-disk/wire key layout, a KV-prefix convention, an encode
+  format), **grep the *whole workspace* for other consumers** — companion crates and integration
+  surfaces parse these too, and their parser may not be in any lib test. (The BUG-4 commit fixed the
+  `kv_handle`/http log parsers it knew about; reason's was the blind spot.) Fixed by parsing the HLC
+  from the salted layout + adding `mycelium-reason` `trace_record_replay_round_trips` (a real
+  round-trip gate that fails on the old parser).
+
+**Corollary — a *correct* substrate change can make a timing-sensitive demo flakier.** Same session:
+the stricter (correct) `cross_group_quorum` made a 2-node bloc's quorum unanimous, and TLS-signed
+consensus drops a vote until the signer's `sys/identity/` gossips in — together they made the coop
+`07 · consensus` demo occasionally `Timeout`. The fix is in the **demo's readiness gate** (wait for
+identity propagation before proposing + a little ballot headroom), **not** the substrate. A flaky
+example demo can be a *correct* substrate change meeting a demo whose startup gate predates it.
+
 **Feature-gated dead code is a real trap** (bit the diagnostics work, 2026-07-03): an item used
 only under `gateway`/`metrics` is *dead* in a `--no-default-features` build (the CI "Gateway-free"
 + "WASM host" jobs run exactly that), and `-D warnings` fails there even though the default and
