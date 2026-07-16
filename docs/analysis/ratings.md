@@ -27,6 +27,36 @@ such finding.
 Records bugs later found in dimensions that scored ≥ 8 while the bug already
 existed. This is the framework's own report card.
 
+- 2026-07-15 (audit **pass 4**, recorded Run 54): a *fourth* adversarial pass — five hunters over the
+  last unprobed subsystems (config/env, the signal reorder buffer/admission, HLC arithmetic + gossip
+  forwarding, metrics/introspection/readiness, the fleet/shard/log gateway endpoints) — found **eight**
+  more real defects, the largest single-pass haul. **The headline is a calibration hit against Run 53's
+  own structural lift:** three of the eight are *more members of the peer-supplied-arithmetic family*
+  that Run 53 claimed to have gated (`Robustness` was moved 7→8 on that claim) — the Run-53 fuzz gate
+  covered `is_fresh`/`SWIM::apply` but NOT `tokio::interval(Duration::ZERO)`, the HLC `pack`/carry, or
+  the http log path. **This is the second ledger entry against a prior audit run's own output** (Run 52
+  was the first, against pass-2's signer==voter). Merge `b0ac83c`:
+  - **Robustness (12)** *(the Run-53 calibration)* — three more arithmetic-family members existed while
+    Run 53 scored Robustness **8** on the claim the family was gated: (a) `GOSSIP_SWIM_PROBE_INTERVAL_MS=0`
+    → `tokio::time::interval(0)` PANICS → node-abort (validate() waved it through); (b) HLC `observe(u64::MAX)`
+    under `max_drift_ms=0` → `pack(2^48<<16)` overflow → HLC WRAPS TO 0, corrupting all LWW; (c) http
+    `gw_overlay_log_subscribe` `hlc + 1` overflow on a crafted log key. All fixed + gated; the fuzz gate
+    is **extended to the HLC surface** it had missed. Robustness returns to floor 7 (see Run 54).
+  - **Semantic Correctness (11)** — the signal reorder buffer was INERT: `flush_expired` force-drained the
+    whole buffer before every ingest, so `signal_ordered_delivery` delivered out of order and silently
+    dropped reordered signals (opt-in/default-off). Fixed (honor max_hold/max_depth).
+  - **Test Architecture (18)** — the test `flush_expired_delivers_held_signals` **asserted the force-drain
+    bug** ("force=true releases them"), a green test guarding a broken feature — which is why it shipped.
+    Corrected to assert held-then-released.
+  - **Resource Management (10) / Operational Readiness (21)** — `gw_overlay_log_group_subscribe` leaked its
+    task AND held the exclusive `clog` consensus claim forever on an idle-stream client disconnect,
+    permanently blocking failover. Fixed (check `tx.is_closed()` in the idle branch).
+  - **Semantic (11)** — the boundary push-path applied `update.is_tombstone` unconditionally (ignoring
+    LWW), so a stale reordered grp frame flipped Group admission wrong until the GC reconcile. Fixed
+    (re-read the store's post-apply value).
+  - **Observability (19)** *(a second self-audit hit)* — `system_stats().store_entries` read the GC's
+    periodic recount (lags ≥60s), not the exact `kv.live_count` added in pass 2 — two counters that never
+    reconciled. Fixed (read `live_count`).
 - 2026-07-15 (input-fuzz gate, recorded Run 53): a **third** instance of the peer-supplied-arithmetic
   family — `KvHandle` log-consumer `offset + 1` on the corruptible `clog/.../offset` KV value
   (`u64::MAX` → panic under overflow-checks / wrap-to-0 → silent re-scan in release) — existed while
@@ -3229,3 +3259,79 @@ writes** (Security 7→8, closes the identity-poisoning residual — the remaini
 comprehensive **HTTP-body/full-frame fuzz sweep** (the Robustness residual), and a **fourth** hunting pass
 (config/env, metrics, the signal reorder buffer, scale/SWIM under load remain lightly probed — and three
 passes have each returned a non-empty haul, so the reserve is not exhausted).
+
+## 2026-07-15 — Run 54 (M2)
+
+**Audit-recording run (pass 4).** Run 53 named the next hunting targets ("config/env, metrics, the signal
+reorder buffer, scale/SWIM"). This pass hit exactly those + the HLC/forwarding and fleet/shard/log gateway
+paths. Five hunters found **eight** more real defects — the largest single-pass haul — and, most important,
+**a calibration hit against Run 53's own structural lift.** Recording run (blind-scoring waived).
+
+Deep-dive dimensions this run: **12 Robustness · 11 Semantic Correctness · 21 Operational Readiness · 18
+Test Architecture · 19 Observability**. Execution evidence: eight falsification probes; **~7 new/corrected
+gates** (HLC ceiling regression + the observe∘tick fuzz proptest, SWIM-zero validate rejection, reorder
+hold-and-reorder + the *corrected* codified-bug test, store_entries-immediacy); `make check-full` green
+(377 + 300 + 152 tests, clippy feature-matrix + wasm-host + `--lib --tests` clean). Merge `b0ac83c`.
+
+### The Run-53 calibration (the headline)
+
+Run 53 moved **Robustness 7→8** claiming the peer-supplied-arithmetic family "now has a deterministic gate."
+Pass 4 immediately found **three more members** the gate did not cover — a zero-`Duration` panic
+(`tokio::interval`), the HLC `pack`/carry wrap-to-0, and an http log `hlc + 1` overflow. The Run-53 lift was
+**premature**: the gate reached `is_fresh`/`SWIM::apply` but not these surfaces. This is the second time the
+loop caught an overclaim in its *own* prior output (Run 52 caught pass-2's signer==voter). The correct
+response is **Robustness → floor 7** — not as a discovery penalty, but because the structural claim ("the
+family is gated") is false while the input surface still has un-fuzzed corners that each pass keeps finding.
+The three new members are fixed and the fuzz gate is now **extended to the HLC surface**, but "comprehensively
+fuzzed" remains unearned.
+
+### Findings
+
+Eight confirmed; six fixed + gated, one config-validation gap closed, and one (`/ready` false-forever) left
+as a **live design decision flagged for the user**, not silently changed.
+
+- **High — Robustness (12)/Config (7).** `GOSSIP_SWIM_PROBE_INTERVAL_MS=0` → `tokio::interval(0)` panic →
+  node-abort; validate() waved it through. Fixed: `.max(1ms)` at the site + validate() rejects zero SWIM
+  timing fields.
+- **High — Semantic (11).** Signal reorder buffer inert (`flush_expired` force-drained) → ordered delivery
+  dropped/misordered reordered signals. Fixed.
+- **Med-High — Robustness (12)/Semantic (11).** HLC `observe(u64::MAX)` @ `max_drift_ms=0` → pack/carry
+  overflow → clock wraps to 0. Fixed: saturate physical at `PHYS_MAX`.
+- **High — Robustness (12).** http `gw_overlay_log_subscribe` `hlc + 1` overflow on a crafted log key.
+  Fixed: `saturating_add`.
+- **Med-High — Resource (10)/Op-Readiness (21).** `gw_overlay_log_group_subscribe` leaked task + held the
+  exclusive `clog` claim forever on idle-disconnect → failover blocked. Fixed.
+- **Medium — Semantic (11).** Boundary push-path ignored LWW → transient wrong Group admission. Fixed.
+- **Medium — Observability (19).** `store_entries` read the stale GC counter, not the exact `live_count`
+  (self-audit hit). Fixed.
+- **Medium — Op-Readiness (21).** `is_ready()`/`/ready` stays false forever for a node advertising no soft
+  state (a healthy node a k8s gate never routes to). Documented behavior; **flagged for a design decision**,
+  not changed (readiness semantics are the user's call).
+- *(Cleared / low, noted:* the framing/codec, TTL/hop-count, seen-set dedup all sound; `swim_udp_port=0`,
+  bool-env leniency, watermarks map growth, fill_ratio div-by-zero-unreachable, cross-stream namespace via
+  detection-not-prevention KV — low/inherent, flagged.)*
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 7  | Configurability | 7 | carried (v42), **floor** — validate() now rejects zero SWIM timing (a real gap closed), but the field-coverage of validate() is still partial (swim_udp_port=0, bool-env leniency unaddressed) |
+| 10 | Resource Management | 8 | Audit-touched: the group-subscribe task+claim leak fixed + reasoned. Holds 8 |
+| 11 | Semantic Correctness | 8 | **Deep-dive + audit.** Three fixed+gated (reorder-inert, HLC-wrap, boundary-LWW). Holds **8, evidenced**; not 9 (reserve — four passes, four hauls) |
+| 12 | Robustness | 7 | **↓ from 8 — the Run-53 calibration.** Three more arithmetic-family members found (zero-Duration, HLC pack, http hlc+1) that Run 53's gate missed; all fixed + the gate extended to HLC, but "comprehensively fuzzed" is unearned while each pass keeps finding a corner. Structural weakness persists → floor 7 (and a ledger line vs Run 53) |
+| 18 | Test Architecture | 7 | **Deep-dive — floor.** Found a test that *codified* the reorder force-drain bug (green test guarding a broken feature) — corrected. The structural gap (nothing catches bug-asserting tests; no mutation testing) persists → 7 |
+| 19 | Observability | 8 | Audit-touched: store_entries now reads the exact live_count + gated; the metric is correct. Holds 8 |
+| 21 | Operational Readiness | 7 | **↓ from 8.** The group-subscribe failover-block fixed (good), but the `is_ready()`-false-forever trap is a **live, unfixed** serve-ability false-negative (flagged for a design call) → a current operational weakness pulls it to floor 7 |
+| — | (dims 1–6, 8–9, 13–17, 20, 22–25) | 8/7 | carried from Runs 52–53 (Security 7, others 8); not re-examined this pass |
+| — | **Floor (lowest 3)** | **7, 7, 7** | now FIVE dims tied at 7: Configurability · Robustness · Security · Test Architecture · Operational Readiness |
+| — | Mean (continuity footnote) | 7.80 | down from 7.88 (Robustness 8→7, Op-Readiness 8→7); not a target |
+
+**Delta vs Run 53:** the largest haul (eight) and the first run whose **mean moves down** — the honest
+direction when a pass both finds new defects AND invalidates a prior run's optimism. **Robustness 8→7** is the
+centrepiece: Run 53's structural lift was premature, caught by the very next pass, so the score is corrected
+and a ledger line recorded — the loop auditing its own output for the second time. **Op-Readiness 8→7** on a
+live unfixed trap. The cumulative ledger is now **31 defects across four passes** (9+7+7+8) in dimensions that
+read 8, with **two** entries against the audit's own prior runs. Floor is now **five** dimensions at 7. *For
+the next run:* the lesson is that a *targeted* fuzz gate (a few functions) does not lift Robustness — only a
+**comprehensive HTTP-body + gossip-frame + config-value fuzz sweep** will, and it is now the single
+highest-leverage structural lift; the `/ready` semantics + `sys/identity` authentication remain the two named
+design decisions; and a **fifth** pass is still warranted (four passes, four non-empty hauls — the reserve
+has not run dry, though the severity is trending toward Medium as the obvious surfaces are cleared).
