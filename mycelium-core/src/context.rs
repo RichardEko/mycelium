@@ -45,10 +45,14 @@ pub struct HotConfig {
     /// substrate doesn't need). `0` means "leave at the static config value" for that param.
     pub health_check_interval_secs: AtomicU64,
     pub reconnect_backoff_secs: AtomicU64,
-    /// Set by a node-local timing setter (`set_health_check_interval_secs` / `set_reconnect_backoff_secs`).
-    /// While set, a cluster-wide `TimingIntent` is **not** applied — local always wins (M10.2). The
-    /// node owns its own config; an operator's explicit override is sovereign over fleet governance.
-    pub timing_locally_pinned: std::sync::atomic::AtomicBool,
+    /// Per-param local pins, set by the corresponding node-local setter
+    /// (`set_health_check_interval_secs` / `set_reconnect_backoff_secs`). While a param is pinned, a
+    /// cluster-wide `TimingIntent` does **not** govern THAT param — local always wins (M10.2) — but
+    /// pinning one no longer freezes the other (a single shared flag did; audit 2026-07-15 pass 5).
+    /// The node owns its own config; an operator's explicit override is sovereign over fleet
+    /// governance, per param.
+    pub health_locally_pinned:    std::sync::atomic::AtomicBool,
+    pub reconnect_locally_pinned: std::sync::atomic::AtomicBool,
 }
 
 impl HotConfig {
@@ -60,7 +64,8 @@ impl HotConfig {
             max_concurrent_bulk_handlers: AtomicUsize::new(c.max_concurrent_bulk_handlers),
             health_check_interval_secs:   AtomicU64::new(c.health_check_interval_secs),
             reconnect_backoff_secs:       AtomicU64::new(c.reconnect_backoff_secs),
-            timing_locally_pinned:        std::sync::atomic::AtomicBool::new(false),
+            health_locally_pinned:        std::sync::atomic::AtomicBool::new(false),
+            reconnect_locally_pinned:     std::sync::atomic::AtomicBool::new(false),
         }
     }
     #[inline] pub fn inbound_fps(&self) -> u64 { self.max_inbound_frames_per_sec.load(Ordering::Relaxed) }

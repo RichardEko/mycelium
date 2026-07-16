@@ -63,14 +63,18 @@ impl GossipAgent {
     pub fn set_health_check_interval_secs(&self, secs: u64) {
         self.task_ctx.hot.health_check_interval_secs
             .store(secs, std::sync::atomic::Ordering::Relaxed);
-        self.task_ctx.hot.timing_locally_pinned.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.task_ctx.hot.health_locally_pinned.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     /// Live-set the **reconnect backoff** (secs, WS-C / M10). `0` ⇒ revert to the static config value.
-    /// Pins timing locally (local-wins over fleet governance).
+    /// Pins the reconnect-backoff param locally (local-wins over fleet governance); does NOT pin the
+    /// health interval (per-param since pass 5). **Applies to connections established AFTER the change**
+    /// — an existing per-peer writer loops with the backoff captured at its spawn (audit 2026-07-15
+    /// pass 5: this was previously advertised as a live retune but read only by diagnostics; the
+    /// writer/RPC spawn sites now read this hot value, so new connections honor it).
     pub fn set_reconnect_backoff_secs(&self, secs: u64) {
         self.task_ctx.hot.reconnect_backoff_secs
             .store(secs, std::sync::atomic::Ordering::Relaxed);
-        self.task_ctx.hot.timing_locally_pinned.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.task_ctx.hot.reconnect_locally_pinned.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     /// Current live timing values (WS-C / M10), as `(health_check_interval_secs, reconnect_backoff_secs)`.
     /// `0` for a field means "using the static config value".

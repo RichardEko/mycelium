@@ -44,7 +44,7 @@ impl GossipAgent {
             &peer,
             &self.peer_writers,
             self.task_ctx.hot.writer_depth(),
-            std::time::Duration::from_secs(self.config.reconnect_backoff_secs),
+            std::time::Duration::from_secs(self.task_ctx.hot.reconnect_backoff_secs(self.config.reconnect_backoff_secs)),
             std::time::Duration::from_secs(self.config.writer_idle_timeout_secs),
             &self.shutdown_tx,
             &self.kv_state.dropped_frames,
