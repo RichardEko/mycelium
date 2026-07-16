@@ -65,10 +65,14 @@ fn apply(ctx: &Arc<TaskCtx>, intent: &TimingIntent) {
     if ctx.hot.timing_locally_pinned.load(Ordering::Relaxed) {
         return; // local override is sovereign
     }
-    if intent.health_check_interval_secs > 0 {
+    // Bound live intent values to the same ranges `config::validate()` enforces — the live
+    // TimingIntent path SKIPS validate(), so a hostile `{health: u64::MAX}` otherwise stalls the
+    // health/eviction/fan-out loop fleet-wide until the intent evaporates (audit 2026-07-15 pass 5).
+    // (`validate()`: health ∈ [1,3600], reconnect ∈ [1,300].)
+    if (1..=3600).contains(&intent.health_check_interval_secs) {
         ctx.hot.health_check_interval_secs.store(intent.health_check_interval_secs, Ordering::Relaxed);
     }
-    if intent.reconnect_backoff_secs > 0 {
+    if (1..=300).contains(&intent.reconnect_backoff_secs) {
         ctx.hot.reconnect_backoff_secs.store(intent.reconnect_backoff_secs, Ordering::Relaxed);
     }
 }

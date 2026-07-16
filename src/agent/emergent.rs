@@ -298,20 +298,29 @@ impl FlapTracker {
 /// heavy alerting is their stack), so no contestable in-code bound is baked here.
 pub fn opaque_node_pct(kv_state: &crate::store::KvState, live_nodes: usize, now: u64, max_age_ms: u64) -> u64 {
     let mut opaque: HashSet<String> = HashSet::new();
+    let mut seen:   HashSet<String> = HashSet::new(); // all nodes with a FRESH load entry
     for (key, bytes) in scan_prefix_kv(kv_state, crate::signal::kv_ns::LOAD) {
         let tail = key.strip_prefix(crate::signal::kv_ns::LOAD).unwrap_or("");
         let node = &tail[..tail.find('/').unwrap_or(tail.len())];
         if let Some(s) = crate::signal::decode_load_state(&bytes)
-            && s.is_opaque
             && now.saturating_sub(s.written_at_ms) <= max_age_ms
         {
-            opaque.insert(node.to_string());
+            seen.insert(node.to_string());
+            if s.is_opaque {
+                opaque.insert(node.to_string());
+            }
         }
     }
-    if live_nodes == 0 {
+    // Denominator over a CONSISTENT population: max(roster, nodes with fresh load data). The old code
+    // used only the local roster while the numerator was drawn from unbounded `sys/load/` KV, so the
+    // ratio could structurally exceed 100% (masked by `.min(100)`) — a blind observer with a few
+    // forged opaque keys pinned a Critical `opacity_storm` at 100% (audit 2026-07-15 pass 5). Now
+    // `opaque ⊆ seen ⊆ denom`, so the percentage is a real proportion.
+    let denom = live_nodes.max(seen.len());
+    if denom == 0 {
         return 0;
     }
-    ((opaque.len() as u64 * 100) / live_nodes as u64).min(100)
+    ((opaque.len() as u64 * 100) / denom as u64).min(100)
 }
 
 /// Compute the current opacity-storm gauge (P4) — cheap, on-demand (called by `/stats`). The
@@ -1130,6 +1139,23 @@ mod tests {
         let ls = crate::signal::LoadState { fill_ratio: if is_opaque { 1.0 } else { 0.1 }, is_opaque, written_at_ms: now };
         apply_and_notify(kv, &make_gossip_update(
             node, 4, key, crate::signal::encode_load_state(&ls), false, hlc));
+    }
+
+    /// Audit 2026-07-15 pass 5: the % must be over a CONSISTENT population. A blind observer (small
+    /// roster) that holds fresh `sys/load/` entries for more nodes than its roster used to pin the
+    /// gauge at 100% (numerator from unbounded KV, denominator = roster only) → a false Critical
+    /// `opacity_storm`. Now `denom = max(roster, seen)`, so it's a real proportion.
+    #[test]
+    fn regression_opaque_pct_consistent_population_not_pinned_at_100() {
+        let kv = KvState::new(0);
+        let hlc = Hlc::new();
+        let now = 1_000_000_000_000;
+        seed_opacity(&kv, &hlc, &NodeId::new("127.0.0.1", 40001).unwrap(), "work", true,  now);
+        seed_opacity(&kv, &hlc, &NodeId::new("127.0.0.1", 40002).unwrap(), "work", false, now);
+        seed_opacity(&kv, &hlc, &NodeId::new("127.0.0.1", 40003).unwrap(), "work", false, now);
+        // Blind observer: roster (live_nodes) = 1. Pre-fix: 1*100/1 = 100. Post-fix: max(1,3 seen)=3 → 33.
+        assert_eq!(opaque_node_pct(&kv, 1, now, OPAQUE_MAX_AGE_MS), 33,
+            "% must be over the observed population (1 of 3), not pinned at 100% by roster mismatch");
     }
 
     /// P4 storm gate — most of the fleet shedding shows a high percentage.
