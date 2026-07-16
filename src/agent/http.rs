@@ -2,7 +2,7 @@
 //!
 //! ## Library-level endpoints
 //! - `GET  /health`                — liveness probe
-//! - `GET  /ready`                 — readiness probe (caps advertised + no dead shards)
+//! - `GET  /ready`                 — readiness probe (startup complete → serving; caps gossip independently)
 //! - `GET  /stats`                 — KV store metrics (node_id, store_entries, dropped_frames, task_count)
 //! - `GET  /consensus/{slot}`      — inspect committed value + ballot for a consensus slot
 //! - `GET  /signals/{kind}`        — SSE stream of admitted signals
@@ -498,8 +498,9 @@ async fn health_handler(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
 /// Returns 503 while WAL replay is still pending or the first advertisement
 /// tick has not yet fired.
 ///
-/// Use `/health` for liveness; use `/ready` before sending traffic that
-/// depends on accurate capability or membership state.
+/// Use `/health` for liveness; use `/ready` before routing traffic. Ready = the node has completed
+/// startup and serves KV/signals/membership; capability discovery gossips independently and does not
+/// gate readiness (so a node advertising no soft state is still ready — audit 2026-07-15 pass 4).
 async fn ready_handler(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
     if ctx.agent_ctx.soft_state_advertised.load(std::sync::atomic::Ordering::Acquire) {
         (StatusCode::OK, Json(json!({ "status": "ready", "node_id": ctx.agent_ctx.node_id.to_string() }))).into_response()

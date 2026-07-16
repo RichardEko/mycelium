@@ -212,6 +212,15 @@ impl GossipAgent {
         // M10.2 (WS-C) live timing reconfiguration — the TimingIntent reconciler. Inert until an
         // intent is published; an evaporated intent self-heals to the static baseline.
         super::timing_governor::spawn_timing_reconciler(&self.task_ctx);
+        // Readiness: the node has completed startup and its HARD state (KV, signals, membership)
+        // serves now, so it is ready to receive traffic. Previously this flag flipped only on the
+        // first `run_kv_persist_task` advertisement tick, so a node that advertises NO soft state (a
+        // pure KV/signal node — no capabilities, no locality) was never ready and `/ready` returned
+        // 503 forever, blocking deploys of that shape (audit 2026-07-15 pass 4). Soft-state discovery
+        // (capabilities) is the resolver's eventually-consistent concern — freshness + retry — not a
+        // precondition for routing traffic to a node that already serves. Set here so *every* started
+        // node reports ready; capability advertisement remains an independent, incremental gossip.
+        self.task_ctx.soft_state_advertised.store(true, Ordering::Release);
         info!("Gossip agent started: {}", self.node_id);
         Ok(())
     }
