@@ -145,7 +145,12 @@ impl GossipAgent {
         SystemStats {
             peers: self.peers.len(),
             store_entries: if running {
-                self.live_entries.load(Ordering::Relaxed)
+                // The EXACT inline live-entry counter, maintained on every winning CAS
+                // (`store.rs`) — not the GC task's periodic recount, which lags reality by up to a
+                // full GC interval (≥60 s) under write load, so `store_entries` misreported to any
+                // operator/autoscaler (audit 2026-07-15 pass 4). The stopped branch full-scans
+                // (the GC is not running to maintain either counter).
+                self.kv_state.live_count.load(Ordering::Relaxed)
             } else {
                 self.kv_state.store.pin().iter().filter(|(_, v)| v.data.is_some()).count()
             },

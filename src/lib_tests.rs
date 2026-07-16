@@ -1173,6 +1173,26 @@ async fn test_system_stats_liveness_flags_while_running() {
     assert!(stats.health_monitor_alive, "health_monitor_alive should read true after clean shutdown");
 }
 
+#[tokio::test]
+async fn regression_store_entries_reflects_writes_immediately() {
+    // Audit 2026-07-15 pass 4: system_stats().store_entries read the GC task's periodic recount,
+    // which lags reality by up to a full GC interval (≥60 s) under write load — so an operator/
+    // autoscaler saw a stale count. It must read the exact inline `kv.live_count` (maintained on
+    // every winning CAS), reflecting writes at once.
+    let port = alloc_port();
+    let mut cfg = GossipConfig::default();
+    cfg.bind_port = port;
+    let agent = Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg));
+    agent.start().await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let before = agent.system_stats().store_entries;
+    for i in 0..5 { let _ = agent.kv().set(format!("probe/k{i}"), b"v".to_vec()); }
+    let after = agent.system_stats().store_entries;
+    assert!(after >= before + 5,
+        "store_entries must reflect the 5 writes immediately (exact live_count), not lag a GC tick: {before} -> {after}");
+    agent.shutdown().await;
+}
+
 // ── shutdown_with_timeout ─────────────────────────────────────────────────
 
 #[tokio::test]
