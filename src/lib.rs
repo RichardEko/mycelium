@@ -327,6 +327,24 @@ pub mod fuzz_internals {
             None => false,
         }
     }
+
+    /// Decode→process for a full wire frame: decode `bytes`, and for a `Data` frame drive the decoded
+    /// update end-to-end through `hlc.observe → apply_and_notify → hlc.tick` with the drift bound
+    /// disabled (the HLC-poison-prone config). Exercises the peer-supplied-arithmetic + LWW +
+    /// secondary-index + live-count surfaces the decode-only targets never reach (audit 2026-07-15 sweep).
+    pub fn wire_frame_apply(bytes: &[u8]) -> bool {
+        match mycelium_core::codec::decode_wire(bytes) {
+            Ok(mycelium_core::framing::WireMessage::Data(upd)) => {
+                let kv  = mycelium_core::store::KvState::new(0);
+                let hlc = mycelium_core::hlc::Hlc::with_max_drift(0);
+                hlc.observe(upd.timestamp);
+                mycelium_core::store::apply_and_notify(&kv, &upd);
+                let _ = hlc.tick();
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 /// test-only: a bind-verified, process-unique loopback port allocator for companion

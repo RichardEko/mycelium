@@ -33,3 +33,10 @@ path             = "fuzz_targets/capability_decode.rs"
 test             = false
 doc              = false
 bench            = false
+
+[[bin]]
+name             = "frame_apply"
+path             = "fuzz_targets/frame_apply.rs"
+test             = false
+doc              = false
+bench            = false
