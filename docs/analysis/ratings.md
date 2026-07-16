@@ -3524,3 +3524,33 @@ plane (LWW/HLC/consensus/gossip/framing/store) has been swept hard and the new f
 path); `sys/identity` Phase 1b + 2 (Security lift); and the four flagged design/Low items. A **sixth** pass would
 still likely find peripheral Mediums, but the marginal value is now clearly declining — the reserve is nearly dry
 for the data plane, richer only in opt-in features.
+
+## 2026-07-15 — Run 58 (M2)
+
+**Cleanup run** — resolves the four items Run 57 flagged rather than fixed. No hunting, no new defects, **no
+new ledger lines**; `make check-full` green (378 + 302 + 157 tests, clippy matrix clean). Merge `942f123`.
+
+- **`reconnect_backoff` dead-effect → fixed.** It was advertised (setter, HTTP endpoint, `TimingIntent`)
+  but every reconnect path read the *static* config; the hot value fed only diagnostics. The writer/RPC
+  spawn sites (`lifecycle.rs` ×3, `topology.rs`) now read `hot.reconnect_backoff_secs(fallback)`, so a
+  retune reaches connections established after it; the docstring is corrected to that honest scope
+  (existing per-peer writers keep their spawn-time backoff — no overclaim).
+- **Coarse timing pin → per-param.** A single `timing_locally_pinned` froze both params; split into
+  `health_locally_pinned` / `reconnect_locally_pinned`, checked per-param in `apply`/`revert`.
+- **`membership_snapshot` group split → `rfind`** (last slash), matching `group_members`.
+- **Rate-path fuzz extension:** a proptest over `reconcile_throttle` with arbitrary `fps` — extends the
+  input-fuzz gate to the path pass 5 proved unfuzzed.
+
+**No scores move.** Configurability **holds floor 7**: the timing knobs are now correct + validated, but the
+structural gap that pins it (`validate()`'s partial field coverage — `swim_udp_port=0`, bool-env leniency)
+persists independent of these. Robustness **holds floor 7**: the fuzz extension hardens coverage but — per the
+Run-54/55 discipline, applied a fourth time here — a written gate does **not** earn the lift; only a pass that
+then finds nothing does. Documentation holds 8 (the `reconnect_backoff` overclaim corrected). Mean **7.84**,
+floor **7/7/7** — unchanged.
+
+**Delta vs Run 57:** the pass-5 tail is now fully closed (8 fixes in Run 57 + these 4 = all ~13 pass-5 items
+resolved or honestly scoped), and every "advertised-but-doesn't-work" finding this session — `/ready`, the
+reorder buffer, the `sys/identity` "signed" claim, and now `reconnect_backoff` — has been either wired to work
+or corrected to stop overclaiming. *Remaining, all scoped:* the honest Robustness-lift path (a sweep-plus-clean-
+pass, not just the gate now written), `sys/identity` Phase 1b/2 (Security lift), and the live-retune
+window-desync (Low, self-healing, documented residual).
