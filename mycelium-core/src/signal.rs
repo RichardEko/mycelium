@@ -977,7 +977,7 @@ impl SignalReorderBuffer {
         }
         self.pending.entry(key.clone()).or_default()
             .push(Reverse(PendingSignal { hlc_seq, signal, received_at: Instant::now() }));
-        self.drain(&key, false)
+        self.drain(&key)
     }
 
     /// Delivers any signals older than `max_hold` or in buffers deeper than
@@ -985,19 +985,24 @@ impl SignalReorderBuffer {
     pub fn flush_expired(&mut self) -> Vec<Signal> {
         let keys: Vec<_> = self.pending.keys().cloned().collect();
         let mut out = Vec::new();
-        for key in keys { out.extend(self.drain(&key, true)); }
+        for key in keys { out.extend(self.drain(&key)); }
         out
     }
 
-    fn drain(&mut self, key: &(NodeId, Arc<str>), force: bool) -> Vec<Signal> {
+    // `drain` honors `max_hold`/`max_depth` — it must NOT unconditionally force-flush. `flush_expired`
+    // used to call it with `force=true`, which drained the entire buffer on every receive-loop
+    // iteration (it is called before each `ingest`), so nothing was ever held: a lower HLC seq
+    // arriving after a higher one was delivered out of order and then dropped as stale — the exact
+    // reordering the buffer exists to prevent (audit 2026-07-15 pass 4). The `force` param had no
+    // other caller and is removed so it cannot be reintroduced.
+    fn drain(&mut self, key: &(NodeId, Arc<str>)) -> Vec<Signal> {
         let Some(heap) = self.pending.get_mut(key) else { return vec![] };
         let wm = self.watermarks.entry(key.clone()).or_insert(0);
         let now = Instant::now();
 
         // Determine flush policy once, before any pops change the depth.
         let depth_overflow = heap.len() > self.max_depth;
-        let flush = force
-            || depth_overflow
+        let flush = depth_overflow
             || heap.peek().is_some_and(|Reverse(t)| {
                 now.duration_since(t.received_at) >= self.max_hold
             });
@@ -1006,7 +1011,7 @@ impl SignalReorderBuffer {
             return vec![];
         }
 
-        if depth_overflow && !force {
+        if depth_overflow {
             tracing::warn!(
                 sender = %key.0, kind = %key.1,
                 depth = heap.len(), max_depth = self.max_depth,
@@ -1076,6 +1081,29 @@ mod reorder_tests {
     }
 
     #[test]
+    fn regression_flush_expired_holds_and_reorders_not_force_drains() {
+        // Audit 2026-07-15 pass 4: the connection handler calls flush_expired() before EVERY ingest.
+        // flush_expired used to force-drain the whole buffer, so a lower seq (10) arriving after a
+        // higher one (20) was delivered out of order and then dropped as stale — the exact reordering
+        // the buffer exists to prevent. Post-fix flush_expired honors max_hold, so the buffer holds
+        // and reorders. (nonce == seq here.)
+        let mut buf = SignalReorderBuffer::new(Duration::from_millis(50), 64);
+        let n = node();
+        let mut delivered: Vec<u64> = Vec::new();
+        for seq in [20u64, 10, 30] {
+            for s in buf.flush_expired() { delivered.push(s.nonce); }
+            for s in buf.ingest(seq, make_signal(&n, "test", seq)) { delivered.push(s.nonce); }
+        }
+        // Within max_hold nothing is force-drained. Pre-fix this vec would already be [20, 30] with
+        // seq=10 lost; post-fix it is empty (all three held pending reorder).
+        assert!(delivered.is_empty(), "young signals must be held, not force-drained: {delivered:?}");
+        // Once max_hold elapses, a single flush delivers ALL buffered signals in ascending HLC order.
+        std::thread::sleep(Duration::from_millis(70));
+        let ordered: Vec<u64> = buf.flush_expired().into_iter().map(|s| s.nonce).collect();
+        assert_eq!(ordered, vec![10, 20, 30], "must deliver in ascending HLC order, none dropped");
+    }
+
+    #[test]
     fn stale_signal_discarded() {
         // max_hold=0ms so hlc_seq=20 is delivered immediately; hlc_seq=10 then stale.
         let mut buf = SignalReorderBuffer::new(Duration::from_millis(0), 64);
@@ -1105,13 +1133,16 @@ mod reorder_tests {
 
     #[test]
     fn flush_expired_delivers_held_signals() {
-        // With a large max_hold, signals are held; flush_expired (force=true) releases them.
-        let mut buf = SignalReorderBuffer::new(Duration::from_secs(60), 64);
+        // flush_expired releases a signal only once it exceeds max_hold — it must NOT force-drain a
+        // young one. (Before the pass-4 fix this test asserted the opposite, codifying the very
+        // force-drain bug that broke ordered delivery — which is why the bug shipped green.)
+        let mut buf = SignalReorderBuffer::new(Duration::from_millis(40), 64);
         let n = node();
         let out = buf.ingest(10, make_signal(&n, "test", 1));
         assert!(out.is_empty(), "signal should be held before flush");
-        let out = buf.flush_expired();
-        assert_eq!(out.len(), 1);
+        assert!(buf.flush_expired().is_empty(), "a young signal must stay held, not be force-drained");
+        std::thread::sleep(Duration::from_millis(60));
+        assert_eq!(buf.flush_expired().len(), 1, "a signal past max_hold must be delivered");
     }
 
     #[test]

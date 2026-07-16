@@ -383,7 +383,11 @@ pub async fn run_swim_prober(
 ) {
     alive.store(true, Ordering::Relaxed);
     let mut shutdown_rx = shutdown_tx.subscribe();
-    let mut ticker = tokio::time::interval(interval);
+    // `.max(1ms)`: `tokio::time::interval(Duration::ZERO)` PANICS ("period must be non-zero"), and
+    // this task is spawned fire-and-forget, so a zero `swim_probe_interval_ms` (env-settable, and NOT
+    // caught by `validate()` before the pass-4 fix) aborts the whole node under the release
+    // `panic="abort"` profile. Defense-in-depth mirroring the GC/health tickers (audit 2026-07-15 pass 4).
+    let mut ticker = tokio::time::interval(interval.max(Duration::from_millis(1)));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
