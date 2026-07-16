@@ -93,17 +93,37 @@ to its Ed25519 key. That binding is the authenticated anchor the KV layer lacks.
 
 On a completed mTLS handshake, extract the peer's Ed25519 key from its **validated** cert and
 record it in `peer_keys[peer]` as an **anchored** key (a key we obtained from the CA, not from
-KV). Concretely:
+KV). Implementation split this into two steps:
 
-- `GossipStream::{TlsServer,TlsClient}` expose the rustls connection; `peer_certificates()`
-  returns the validated chain (rustls already verified it against the CA via
-  `WebPkiClientVerifier`, so no *trust* decision is re-made here — only extraction).
-- Parse the leaf cert's `SubjectPublicKeyInfo` for the Ed25519 key (OID `1.3.101.112`). This
-  needs a DER/x509 parse — **decision point:** add a small parser dep (`x509-parser` or `der`)
-  or extract the fixed-layout 32-byte key from the Ed25519 SPKI with a hardened, length-checked
-  helper. (Recommend `x509-parser`: robust, widely used, avoids offset fragility.)
-- Store anchored keys distinctly from KV-mirrored keys — either a parallel
-  `peer_anchor_keys: papaya::HashMap<NodeId, HashSet<[u8;32]>>`, or tag entries in `peer_keys`.
+**Phase 1a — the extraction primitive (SHIPPED 2026-07-15, `tls::ed25519_key_from_cert_der`).**
+The cert is validated by rustls against the cluster CA *before* we ever see it, so the DER is a
+well-formed, CA-issued Ed25519 cert from `generate_node_cert`. A targeted, **length-checked** scan
+for the fixed Ed25519 SPKI (`06 03 2B 65 70 03 21 00 ‖ key[32]`) is therefore both safe and
+**dependency-free** — the mooted `x509-parser` dep is **not needed**. Gated by a real-cert
+round-trip test (`key_extract_tests::extracts_the_key_from_a_real_generated_cert`) that proves it
+against actual generated certs, plus a no-panic-on-malformed test.
+
+**Phase 1b — the wiring (not yet done; more invasive than first estimated).** Implementation
+surfaced two constraints the first draft missed:
+- **Cross-crate direction.** The handshake completes inside `mycelium-core`'s `run_peer_writer`,
+  which cannot call the `mycelium`-side `merge_peer_keys`. So the harvest must go through a
+  **callback** — `anchor_sink: Option<Arc<dyn Fn(&NodeId, [u8;32]) + Send + Sync>>` — built in
+  `mycelium` (capturing `peer_keys`) and stored on `TaskCtx`, then threaded through
+  `get_or_spawn_writer` → `run_peer_writer` and its ~10 hot-path call sites (`tasks.rs`,
+  `connection.rs`, `topology.rs`, the `send_to_peer!` macro). The harvest itself is **non-fatal**
+  (runs after `conn` is established, only calls the sink) so it cannot break connectivity — the
+  risk is compile-time threading, not runtime.
+- **cert↔NodeId correlation.** The node cert's SAN carries only the **IP** (`generate_node_cert`
+  sets `SanType::IpAddress`), not the full `NodeId` (IP:port). Clean correlation exists only on the
+  **outbound** path, where we dialed a known `NodeId`; inbound accept would need to correlate the
+  cert with a later-learned `NodeId`. Phase 1b therefore anchors outbound peers (our writer set);
+  peers we only ever verify via forwarded consensus (never directly connected) stay on the
+  Phase-2 signed-proof path.
+- Store anchored keys distinctly from KV-mirrored keys — a parallel
+  `peer_anchor_keys: papaya::HashMap<NodeId, HashSet<[u8;32]>>` on `TaskCtx` — so Phase 2 can chain
+  signed rotations to a CA-authenticated root and so the conflict tripwire below is accurate. (In
+  1b the anchor is also merged into `peer_keys` so a peer's authentic key is present for
+  verification even if its `sys/identity` is absent or poisoned-to-omit-it.)
 
 **What Phase 1 buys, alone:** every *directly-connected* peer now has a CA-authenticated key in
 its set. It does **not** yet reject poisoned KV keys (accumulate still unions them), but it
@@ -189,8 +209,8 @@ are operational choices to document, not code.
 
 ## 7. Code impact map
 
-- `mycelium-core/src/tls.rs` — extract Ed25519 key from a peer cert DER (new helper; parser-dep
-  decision).
+- `mycelium-core/src/tls.rs` — extract Ed25519 key from a peer cert DER
+  (**done, 1a:** `ed25519_key_from_cert_der`, zero-dep length-checked SPKI scan; no parser dep).
 - `mycelium-core/src/stream.rs` / `connection.rs` / `writer.rs` — surface the validated peer cert
   post-handshake to the connection setup so the key can be harvested.
 - `src/agent/context.rs` (`TaskCtx`) — an anchored-keys map (or a tag on `peer_keys`).
@@ -206,8 +226,12 @@ are operational choices to document, not code.
 
 ## 8. Sequencing & effort
 
-- **Phase 1** (anchor + tripwire): ~1 focused change + the parser-dep decision + multi-node test.
-  Safe, additive, high foundational value. **Recommended next concrete step.**
+- **Phase 1a** (extraction primitive): **shipped 2026-07-15** — zero-dep, unit-tested against a real
+  cert. No dependency added.
+- **Phase 1b** (harvest wiring + anchor set + tripwire): a `TaskCtx.anchor_sink` callback threaded
+  through the writer subsystem (~10 hot-path sites) + `peer_anchor_keys` + a multi-node test that a
+  peer's anchor is recorded on connect. Non-fatal harvest (compile-time risk only). **The next
+  concrete step.**
 - **Phase 2** (signed proofs + rotation chain): the core; needs careful multi-node rotation +
   poisoning tests. Medium.
 - **Phase 3** (require proofs): a gated migration release; small code, real rollout coordination.
