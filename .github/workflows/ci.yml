@@ -360,6 +360,7 @@ jobs:
       # statically linked libc ("can't find crate for core" on musl).
       - run: cargo +nightly fuzz run --target x86_64-unknown-linux-gnu wire_decode -- -max_total_time=120
       - run: cargo +nightly fuzz run --target x86_64-unknown-linux-gnu capability_decode -- -max_total_time=120
+      - run: cargo +nightly fuzz run --target x86_64-unknown-linux-gnu frame_apply -- -max_total_time=120
 
   loom:
     # Permutation model-checking of the lock-free/atomic patterns (the

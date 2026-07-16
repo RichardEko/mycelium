@@ -1385,5 +1385,31 @@ mod prop_tests {
                 }
             }
         }
+
+        /// Comprehensive input-fuzz gate (audit 2026-07-15, pass-4 sweep): the decode→PROCESS surface
+        /// the decode-only cargo-fuzz targets miss. An arbitrary decoded gossip frame (peer-controlled
+        /// key/value/timestamp/ttl/tombstone) driven through `hlc.observe` → `apply_and_notify` →
+        /// `hlc.tick` must never panic. `max_drift_ms = 0` exercises the HLC observe→tick wrap path
+        /// (a u64::MAX timestamp with the drift bound disabled), and `apply_and_notify` covers the
+        /// LWW/index/hash/live-count arithmetic. Runs under overflow-checks, so any unguarded op fails.
+        #[test]
+        fn fuzz_apply_observe_tick_never_panics(
+            key   in "[a-z0-9/]{0,40}",
+            value in proptest::collection::vec(any::<u8>(), 0..64),
+            ts    in any::<u64>(),
+            tomb  in any::<bool>(),
+            ttl   in any::<u8>(),
+            nonce in any::<u64>(),
+        ) {
+            let kv  = KvState::new(0);
+            let hlc = crate::hlc::Hlc::with_max_drift(0);
+            let upd = GossipUpdate {
+                sender: 0, key: Arc::from(key.as_str()), value: Bytes::from(value),
+                timestamp: ts, nonce, ttl, is_tombstone: tomb,
+            };
+            hlc.observe(upd.timestamp); // HLC poison path (u64::MAX ts, drift disabled)
+            apply_and_notify(&kv, &upd); // apply / LWW / secondary-index / hash / live-count
+            let _ = hlc.tick();          // pack/carry wrap path after a poisoned observe
+        }
     }
 }

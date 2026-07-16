@@ -1789,3 +1789,52 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod config_fuzz {
+    use super::GossipConfig;
+    use proptest::prelude::*;
+
+    proptest! {
+        // Comprehensive input-fuzz gate (audit 2026-07-15, pass-4 sweep): validate() must never PANIC
+        // on ANY numeric config — it returns Ok/Err. Runs under overflow-checks, so an unguarded `*`/`+`
+        // on a config field (the SWIM-zero / config-arithmetic family) fails it. Coverage is the point:
+        // no operator-supplied value should crash validation or the arithmetic it performs.
+        #[test]
+        fn fuzz_validate_never_panics(
+            ttl           in any::<u8>(),
+            max_conn      in any::<usize>(),
+            probe_int     in any::<u64>(),
+            probe_to      in any::<u64>(),
+            susp_to       in any::<u64>(),
+            hc_int        in any::<u64>(),
+            jitter        in any::<u64>(),
+            drift         in any::<u64>(),
+            reorder_hold  in any::<u64>(),
+            reorder_depth in any::<usize>(),
+            store_cap     in any::<usize>(),
+            window        in any::<u64>(),
+            frames_sec    in any::<u64>(),
+            fanout        in any::<usize>(),
+            detector      in any::<bool>(),
+        ) {
+            let mut cfg = GossipConfig::default();
+            cfg.default_ttl                = ttl;
+            cfg.max_connections            = max_conn;
+            cfg.swim_failure_detector      = detector;
+            cfg.swim_probe_interval_ms     = probe_int;
+            cfg.swim_probe_timeout_ms      = probe_to;
+            cfg.swim_suspicion_timeout_ms  = susp_to;
+            cfg.health_check_interval_secs = hc_int;
+            cfg.health_check_max_jitter_ms = jitter;
+            cfg.max_clock_drift_ms         = drift;
+            cfg.signal_reorder_max_hold_ms = reorder_hold;
+            cfg.signal_reorder_max_depth   = reorder_depth;
+            cfg.max_store_entries          = store_cap;
+            cfg.signal_window_secs         = window;
+            cfg.max_inbound_frames_per_sec = frames_sec;
+            cfg.gossip_fanout              = fanout;
+            let _ = cfg.validate(); // must return, never panic
+        }
+    }
+}
