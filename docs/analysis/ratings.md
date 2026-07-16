@@ -27,6 +27,49 @@ such finding.
 Records bugs later found in dimensions that scored ≥ 8 while the bug already
 existed. This is the framework's own report card.
 
+- 2026-07-15 (audit **pass 3**, recorded Run 52): a *third* adversarial pass — five hunters over the
+  subsystems the first two passes never reached (persistence/WAL/restore, TLS/identity/crypto,
+  capability/federation, the three companion crates, the gateway auth/JWT/SSE path) — found **seven**
+  more real defects, a **third consecutive non-empty haul**. Every one sat in code the earlier passes
+  walked past, two recurring families crystallised further, and one caught an **overclaim in a pass-2
+  fix**. Merge `28330ee`:
+  - **Robustness (12) / Semantic (11)** — `CapEntry::is_fresh` computed `3 * refresh_interval_ms` on a
+    peer-supplied, ingest-unvalidated value (carried in a gossiped `cap/`/`req/` entry); `u64::MAX`
+    panics the resolver task (debug/CI) or wraps to a ~584-million-year window (release) → a dead
+    node's capability stays resolvable forever, defeating the failure detector on the *correct*
+    freshness-checking path. The pass-2 SWIM-overflow family, on the freshness path (`e2bce53`; gate
+    `regression_is_fresh_saturates_on_huge_refresh_interval`).
+  - **Security (13)** — OIDC `validate_token` used `set_issuer`/`set_audience`, which validate a claim
+    only WHEN PRESENT; jsonwebtoken requires only `exp` by default, so a token that OMITS `aud` (or
+    `iss`) bypassed the check → audience/issuer-confusion to the `["*"]` admin grant in shared-IdP
+    deployments, despite the module doc claiming "issuer, audience, and expiry are all checked"
+    (`e2bce53`; gates `regression_missing_audience_is_rejected` / `_missing_issuer_`).
+  - **Security (13)** — key revocation (WS-D) was NOT applied on the consensus verify path.
+    `decode_verify` built its own key set and never consulted `revoked_key_set`, so a key an operator
+    rotated away from AND revoked still validated `Vote`/`Propose` — defeating the remediation, though
+    the revocation module's doc claims a revoked key "fails verification cluster-wide" (`cb51d30`).
+  - **Security (13)** — identity-key poisoning defeats the **pass-2** signer==voter bind. `sys/identity/
+    {V}` is a plain Layer-I KV key under detection-not-prevention, so a compromised admitted node can
+    LWW-overwrite it to append its own key to V's verifying set and then sign votes as V. That is a
+    Byzantine-insider attack (outside CFT-not-BFT), so the fix is doc-honesty — the pass-2 claim
+    "closes the impersonation vector" over-claimed; corrected, with the authenticate-identity-rotation
+    follow-up recorded (`cb51d30`). *This is the first ledger entry against a fix from a prior audit
+    pass in this series — the loop auditing itself.*
+  - **Semantic Correctness (11)** — `do_snapshot` dropped ALL tombstones (scan `filter_map`ped to live
+    entries) then truncated the WAL, so a deleted key existed nowhere on disk; after a restart a stale
+    peer's ancient value resurrected it via anti-entropy (no tombstone to win the LWW tie). The durable
+    store had a strictly weaker anti-resurrection guarantee than the in-memory one (`abcffa6`; gate
+    `regression_snapshot_retains_tombstone_no_resurrection_across_restart`).
+  - **Semantic (11) / Robustness (12)** — the **blackboard** secondary promoted on startup lag: its
+    promotion watch had neither the tuple-space `seen_primary` gate nor the orphan grace, so a
+    secondary starting before the primary's ad propagated promoted → split-brain with diverged stores
+    and no convergence mechanism. An unported sibling of the shipped #150/S13 tuple-space fix
+    (`22c9e27`; gate `secondary_startup_lag_is_not_evaporation`).
+  - **Semantic (11)** — the blackboard `sync_from_primary` was single-shot with no retry, so a
+    secondary that hit a transient-unresolvable primary held a partial mirror permanently → failover
+    silently lost the pre-join backlog. Unported sibling of the tuple-space join-time backfill
+    (`22c9e27`; gate `never_seen_primary_promotes_after_orphan_grace` covers the guard; retry covered
+    by the drained-once contract).
 - 2026-07-15 (audit **pass 2**, recorded Run 51): a *second* adversarial pass — five parallel
   hunters over the just-fixed consensus paths **plus** subsystems pass 1 never reached (SWIM,
   wire framing, the per-peer writer, the HTTP gateway's untrusted-input surface) — found **seven**
@@ -3037,3 +3080,99 @@ evidence — the reserve is now empirically doubled. *For the next run:* the hig
 **fuzz gate** over the HTTP-body + SWIM-datagram decode surface (would lift 12 off the floor), a **third**
 consensus pass (the reserve has not run dry — two passes, two non-empty hauls), and the standing structural
 lifts (CI running `mycelium-core`'s suite; the live mixed-version two-binary test; the floor trio).
+
+## 2026-07-15 — Run 52 (M2)
+
+**Audit-recording run (pass 3).** Run 51 named the next probe: "a **third** consensus pass (the reserve
+has not run dry)." This run is that pass, aimed at the subsystems the first two never touched —
+persistence/WAL/restore, TLS/identity/crypto, capability/federation, the three companion crates, and the
+gateway auth/JWT/SSE path. Five hunters found **seven** more real defects. Recording run (blind-scoring
+waived, stated here); scores follow the current-state principle.
+
+Deep-dive dimensions this run: **13 Security · 11 Semantic Correctness · 12 Robustness · 21 Operational
+Readiness · 2 Conceptual Integrity** (the companions). Execution evidence produced this session: seven
+falsification probes (each failing pre-fix, passing post-fix); **~8 new deterministic gates** (is_fresh
+saturation, JWT missing-aud/iss ×2, snapshot tombstone-retention, two ported blackboard failover guards);
+plus a **verified self-audit** that my pass-2 `KvStore.live_count` field is correctly maintained across
+restore (restore replays through `apply_and_notify` — no desync). **`make check-full` green** — real exit
+0, four suites (374 + 297 + 147 + doctests) pass, clippy feature-matrix + wasm-host + `--lib --tests` clean;
+the full `mycelium-blackboard` suite (incl. the two new guards + the existing failover/election tests) green
+independently. Merge `28330ee` (`e2bce53`·`cb51d30`·`abcffa6`·`22c9e27`·`65f1ca5`).
+
+### Findings
+
+Seven confirmed. Six fixed + gated this run; one (identity poisoning) is a Byzantine-insider attack
+outside CFT-not-BFT, resolved by doc-honesty + a recorded follow-up. Accountability for the prior 8s lives
+in the seven Run-52 ledger lines. The standout: pass 3 found an **overclaim in a pass-2 fix** — the loop
+auditing its own output, the first such ledger entry in this series.
+
+- **High — Security (13).** JWT `validate_token` accepted tokens OMITTING `aud`/`iss` (set_audience/
+  set_issuer validate only when present) → audience-confusion to admin. Fixed: `set_required_spec_claims`.
+- **High — Security (13).** Identity-key poisoning: `sys/identity/{V}` is unauthenticated KV, so a
+  compromised insider can inject its key into V's verifying set and defeat the pass-2 signer==voter bind.
+  Byzantine-scope; fixed by correcting the pass-2 overclaim + recording the authenticate-identity follow-up.
+- **High — Semantic (11)/Robustness (12).** Blackboard secondary promotes on startup lag → split-brain
+  (unported #150/S13 tuple-space guard). Fixed: port seen_primary gate + orphan grace.
+- **Med-High — Robustness (12)/Semantic (11).** `is_fresh` `3 × refresh_interval_ms` overflow on
+  peer-supplied input → resolver panic (debug) / never-evaporating dead-node cap (release). Fixed:
+  saturating_mul. Same family as the pass-2 SWIM overflow.
+- **Med-High — Security (13).** Revocation not applied on the consensus verify path → a revoked key still
+  validates votes. Fixed: filter `decode_verify`'s key set through `revoked_key_set`.
+- **Med-High — Semantic (11).** Blackboard single-shot `sync_from_primary` → partial mirror → failover
+  data loss (unported tuple-space backfill). Fixed: retry until drained once.
+- **Major — Semantic (11).** Snapshot dropped tombstones → deleted keys resurrect across a restart. Fixed:
+  retain in-window tombstones in the snapshot (the store's GC already bounds the set).
+
+*Cleared / not new bugs:* the framing/codec decode surface (pass 2), `verify_bytes`/`parse_identity_keys`
+hostile-input handling, mTLS CA-admission, the tuple-space and wiki (prior fixes verified still-holding),
+`render_template`, LLM/A2A dispatch. Design-level items flagged for a decision (not silently changed):
+`/mcp` is a deliberately-public mutating surface; the public `/signals/{kind}` SSE endpoint can grow the
+handler table unboundedly; sharding/ranking routing is not `is_fresh`-filtered (consistency vs the
+pass-2 note); no cross-protocol signing domain-separation.
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 1 | Philosophy / Coherence with Goal | 8 | carried (v47), stale |
+| 2 | Conceptual Integrity | 8 | Deep-dive (companions). The blackboard now shares the tuple-space's promotion-guard + backfill discipline — *more* unified than before; two unported siblings closed. The wiki/tuple-space prior fixes verified still-holding. 8 |
+| 3 | Architecture | 8 | carried (v47), stale |
+| 4 | Modularity | 8 | carried (v47), stale |
+| 5 | API Design | 8 | carried (v47) — added `Blackboard::is_primary/is_secondary` (parity with the tuple-space); minimal, no footgun |
+| 6 | Error Handling Model | 8 | carried (v49) — the gateway/OIDC now return typed rejections where a missing claim previously passed |
+| 7 | Configurability | 7 | carried (v42), **stale — floor** |
+| 8 | Language Best Practices | 8 | carried (v49) — fixes idiomatic (saturating_mul, let-else, ported patterns); clippy `--lib --tests` clean incl. the `truncate` lint fix |
+| 9 | Concurrency Correctness | 8 | carried (v51) — not the focus this pass; the companion promotion races are scored under 11/2 |
+| 10 | Resource Management | 8 | carried (v51) |
+| 11 | Semantic Correctness | 8 | **Deep-dive + audit.** Four findings here (snapshot resurrection, blackboard split-brain, blackboard partial-mirror, is_fresh failure-detector) all fixed + gated; the live_count self-audit came back clean. Holds **8, evidenced**; not 9 (reserve — three passes, three hauls) |
+| 12 | Robustness | 7 | **Deep-dive + audit — floor.** Another peer-supplied-arithmetic-overflow (is_fresh) — the *same family* as the pass-2 SWIM/HTTP crashes — fixed + gated, but it **reinforces** the structural fact keeping this at floor: there is still no systematic input-fuzz gate over the gossip/HTTP decode surface, and each pass keeps finding a fresh instance. Held at 7 (current-state structural, not a discovery penalty); the lift remains a fuzz gate |
+| 13 | Security | 7 | **Deep-dive + audit — new floor member (was 8).** Two real holes fixed + gated (JWT missing-claim bypass; revocation-not-on-consensus). But the pass revealed the pass-2 signer==voter bind rests on an **unauthenticated identity→key map** (identity poisoning) — a *structural weakness that persists* (documented, Byzantine-scope, follow-up recorded), and the pass-2 8 rested partly on that now-corrected overclaim. Freshly + deeply probed, but a confident 8 while identity-auth is open would repeat the miscalibration the ledger measures → **7** |
+| 14 | Failure Mode Legibility | 8 | carried (v47) — the is_fresh fix keeps a dead node's cap evaporating (detector legibility preserved); JWT now names the rejection |
+| 15 | Performance | 8 | carried (v47), stale — saturating_mul is free; snapshot now carries in-window tombstones (bounded by GC) |
+| 16 | Scalability | 8 | carried (v49), stale + evidence-degraded |
+| 17 | Testability | 8 | carried (v47) — again demonstrated: pure-fn gates (is_fresh), a direct snapshot+replay harness, ported failover integration tests, an OIDC token-mint harness |
+| 18 | Test Architecture | 7 | carried (v44), **stale — floor;** +8 gates grow the unit/integration tiers; structural CI residuals unchanged |
+| 19 | Observability | 8 | carried (v49), stale |
+| 20 | Debuggability | 8 | carried (v41), possibly optimistic per decay rule |
+| 21 | Operational Readiness | 8 | Audit-touched: the restart-resurrection (persistence) and the blackboard failover-data-loss are both operational-correctness bugs, fixed + gated → the restart/failover story is *more* honest now. Holds 8 |
+| 22 | Evolvability | 8 | carried (v47) — wire unchanged; snapshot format already carried `is_tombstone` (no format bump needed) |
+| 23 | Documentation | 8 | carried (v49) — three code-doc overclaims corrected this pass (SignedConsensusMsg insider-resistance, is_fresh, and the JWT "all checked" claim now true) |
+| 24 | Developer Experience | 8 | carried (v49), stale |
+| 25 | Dependency Hygiene | 8 | carried (v47), stale — no Cargo.toml change |
+| — | **Floor (lowest 3)** | **7, 7, 7** | Configurability · Robustness · Security · Test Architecture (four tied at 7) |
+| — | Mean (continuity footnote) | 7.84 | down from 7.88 (Security 8→7); not a target |
+
+**Delta vs Run 51:** the pattern holds for a **third** consecutive pass — seven more real defects (2 High,
+3 Med-High, 1 Major, + the Byzantine-scope doc case), every one in a subsystem the first two passes never
+opened. The cumulative ledger is now **23 bugs across three passes** (9 + 7 + 7) in dimensions that read 8.
+Two things move the *scores* this run, both down or held-at-floor — the honest direction when a probe finds
+a persisting structural gap: **Security 8→7** (the pass-2 signer==voter bind was shown to rest on an
+unauthenticated identity map — a structural weakness that persists, and the kind of overclaim this ledger
+exists to catch; two in-scope holes were fixed, but a confident 8 would repeat the miscalibration), and
+**Robustness held at floor 7** (a third peer-supplied-arithmetic-overflow reinforces that the input surface
+has no fuzz gate). Mean **7.88 → 7.84**; floor now **four** dimensions tied at 7. The single most important
+finding is meta: pass 3 caught an **overclaim in a pass-2 fix** — the audit auditing its own output — which
+is exactly why 9 stays unreachable from inside the loop and why I again declined to lift any dimension to 9.
+*For the next run:* the reserve still has not run dry (three passes, three hauls), so a **fourth** pass is
+warranted (config/env, metrics, the signal reorder buffer, the scale/SWIM paths under load remain lightly
+probed); the highest-leverage *structural* lifts are now an **input-fuzz gate** (would finally move
+Robustness off the floor) and **authenticating `sys/identity/` rotation writes** (would move Security back
+toward 8 and close the identity-poisoning residual).
