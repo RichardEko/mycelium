@@ -519,8 +519,8 @@ impl CapEntry {
         // failure detector, for the full drift duration (M2 Run-19 finding).
         // A writer whose clock is persistently ahead by more than
         // 3 × refresh_interval quarantines itself — the correct outcome.
-        now_ms.saturating_sub(written_ms) <= 3 * self.refresh_interval_ms
-            && written_ms.saturating_sub(now_ms) <= 3 * self.refresh_interval_ms
+        now_ms.saturating_sub(written_ms) <= 3u64.saturating_mul(self.refresh_interval_ms)
+            && written_ms.saturating_sub(now_ms) <= 3u64.saturating_mul(self.refresh_interval_ms)
     }
 }
 
@@ -536,8 +536,8 @@ impl ReqEntry {
     pub fn is_fresh(&self, hlc_ts: u64, now_ms: u64) -> bool {
         let written_ms = crate::hlc::physical_ms(hlc_ts);
         // Symmetric window — see CapEntry::is_fresh for the rationale.
-        now_ms.saturating_sub(written_ms) <= 3 * self.refresh_interval_ms
-            && written_ms.saturating_sub(now_ms) <= 3 * self.refresh_interval_ms
+        now_ms.saturating_sub(written_ms) <= 3u64.saturating_mul(self.refresh_interval_ms)
+            && written_ms.saturating_sub(now_ms) <= 3u64.saturating_mul(self.refresh_interval_ms)
     }
 }
 
@@ -714,6 +714,20 @@ mod tests {
         let written_ms = crate::hlc::physical_ms(ts);
         assert!( entry.is_fresh(ts, written_ms + 2_500)); // 2.5 s < 3×1 s = 3 s
         assert!(!entry.is_fresh(ts, written_ms + 4_000)); // 4.0 s > 3 s
+    }
+
+    #[test]
+    fn regression_is_fresh_saturates_on_huge_refresh_interval() {
+        // A gossiped `CapEntry`/`ReqEntry` carrying `refresh_interval_ms == u64::MAX` (peer-supplied,
+        // unvalidated on ingest) must NOT panic (debug/CI overflow-checks) or wrap (release) in the
+        // `3 × interval` window computation — the pass-2 SWIM-overflow family, here on the freshness
+        // path (audit 2026-07-15 pass 3). `saturating_mul` makes it a large but well-defined window.
+        let ts = crate::hlc::pack(1_000, 0);
+        let cap = CapEntry { capability: Capability::new("ai", "llm"), refresh_interval_ms: u64::MAX };
+        assert!(cap.is_fresh(ts, 2_000));    // must not panic
+        assert!(cap.is_fresh(ts, u64::MAX)); // extreme `now` — still no panic/wrap
+        let req = ReqEntry { filter: CapFilter::new("ai", "llm"), refresh_interval_ms: u64::MAX };
+        assert!(req.is_fresh(ts, 2_000));
     }
 
     #[test]

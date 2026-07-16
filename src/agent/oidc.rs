@@ -94,6 +94,11 @@ pub(crate) fn validate_token(
     validation.set_issuer(&[cfg.issuer.as_str()]);
     validation.set_audience(&[cfg.audience.as_str()]);
     validation.validate_exp = true;
+    // `set_issuer`/`set_audience` only validate the claim WHEN PRESENT; jsonwebtoken requires only
+    // `exp` by default, so a token that simply OMITS `aud`/`iss` sails past both checks — an
+    // audience/issuer-confusion bypass in shared-IdP deployments (audit 2026-07-15 pass 3). Require
+    // all three to be present so a missing claim is rejected, not silently skipped.
+    validation.set_required_spec_claims(&["exp", "iss", "aud"]);
 
     let data = decode::<RawClaims>(token, key, &validation).map_err(|_| OidcError::Invalid)?;
     let claims = data.claims;
@@ -290,6 +295,24 @@ mod tests {
     fn wrong_audience_is_rejected() {
         let mut c = valid_claims();
         c["aud"] = json!("some-other-app");
+        assert_eq!(validate_token(&cfg(), &keys(), &mint(c, Algorithm::RS256, "test-kid", TEST_PRIV)), Err(OidcError::Invalid));
+    }
+
+    #[test]
+    fn regression_missing_audience_is_rejected() {
+        // audit 2026-07-15 pass 3: `set_audience` only validates `aud` WHEN PRESENT, and jsonwebtoken
+        // requires only `exp` by default — so a token that OMITS `aud` bypassed the audience check
+        // (audience-confusion in shared-IdP deployments). `set_required_spec_claims` now rejects it.
+        let mut c = valid_claims();
+        c.as_object_mut().unwrap().remove("aud");
+        assert_eq!(validate_token(&cfg(), &keys(), &mint(c, Algorithm::RS256, "test-kid", TEST_PRIV)), Err(OidcError::Invalid));
+    }
+
+    #[test]
+    fn regression_missing_issuer_is_rejected() {
+        // Same bypass on the issuer claim — a token omitting `iss` must be rejected.
+        let mut c = valid_claims();
+        c.as_object_mut().unwrap().remove("iss");
         assert_eq!(validate_token(&cfg(), &keys(), &mint(c, Algorithm::RS256, "test-kid", TEST_PRIV)), Err(OidcError::Invalid));
     }
 
