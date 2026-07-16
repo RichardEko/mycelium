@@ -27,6 +27,31 @@ such finding.
 Records bugs later found in dimensions that scored ≥ 8 while the bug already
 existed. This is the framework's own report card.
 
+- 2026-07-15 (audit **pass 5**, recorded Run 57): a *fifth* adversarial pass — five hunters over the
+  last barely-probed subsystems (rate/opacity/backpressure, emergent/explain diagnostics, the artifact
+  library, bootstrap/topology, the timing governor) — found **~9** more defects. **The load-bearing
+  result: it refuted the Robustness fuzz-gate's "comprehensive" claim** — the `rate.rs:98` aggregate
+  overflow (found independently by *two* hunters) is a peer-supplied-arithmetic member the pass-4 gate
+  never reached (it fuzzed config `validate()` + gossip frames + HLC, not the rate/opacity/timing
+  internals). This is exactly the signal Run 55 said to watch for; the deferred Robustness lift stays
+  deferred, **validated by evidence** (the third time the loop's discipline caught an over-optimistic
+  claim, this one its own from Run 53). Merge `7caee23`:
+  - **Semantic Correctness (11)** — the artifact provisioner's demand loop deduped installs by
+    `ArtifactId`, not capability, so two catalog entries providing one `(ns,name)` via different
+    artifacts both install → two runtimes serve the same RPC kind and `deliver_to_handlers` runs every
+    invocation on BOTH (double side effects). Verified probe. Fixed: dedup by capability.
+  - **Semantic (11) / Robustness (12)** — `decode_load_state` returned a peer-supplied `fill_ratio`
+    unvalidated; the consensus retry-jitter turned an unclamped `1e30` into a `u64::MAX`-ms
+    (~584-M-year) sleep. Fixed: clamp to [0,1].
+  - **Observability (19)** — `opaque_node_pct` mixed populations (opaque count from unbounded
+    `sys/load/` KV over the local roster), so a blind observer with a few forged opaque keys pinned a
+    Critical `opacity_storm` at 100%. Verified probe. Fixed: consistent `max(roster, seen)` denominator.
+  - **Resource Management (10)** — `commit_conflict_slots` was inserted into unconditionally (only the
+    sibling event ring was `emergent_detectors_enabled`-gated) with no cap → unbounded growth on
+    attacker-chosen distinct slot names, collected+sorted per `/gateway/fleet`. Fixed: gate + cap 4096.
+  - **Concurrency (9)** — the Ping handler filtered `known_peers` against self but not the direct
+    `sender`, so a spoofed/reflected self-Ping made a node peer with itself (standing self-connection,
+    permanent under SWIM). Fixed: guard the sender insert.
 - 2026-07-15 (identity-auth design, recorded Run 56): **Security (13)** and **Documentation (23)**
   carried 8 for many runs while the `rotate_identity` code comments (`mod.rs:990`, `~1022`) and the
   wiki (`dev/security.md` WS5) both claimed `sys/identity/{self}` is "signed by the **old** key" —
@@ -3428,3 +3453,74 @@ discipline that held Robustness at 7 in Run 55 (don't score on faith). *Remainin
 **Phase 1 of the identity design** (CA-cert anchor + conflict tripwire — the safe, high-value next code
 step, pending the x509-parser dependency call), and a **fifth hunting pass** (validates the deferred
 Robustness lift; reserve not yet dry). Both are concrete; neither is a momentum patch.
+
+## 2026-07-15 — Run 57 (M2)
+
+**Audit-recording run (pass 5).** Run 55/56 named a fifth hunting pass as the way to validate-or-refute
+the deferred Robustness lift. This is that pass — five hunters over rate/opacity, emergent/explain, the
+artifact library, bootstrap/topology, and the timing governor. It found **~9** defects (8 fixed, 1 left as
+a design decision). Recording run (blind-scoring waived).
+
+Deep-dive dimensions: **12 Robustness · 11 Semantic Correctness · 19 Observability · 10 Resource Management
+· 7 Configurability**. Execution evidence: 4 verified probes (rate overflow ×2 hunters, opaque_pct storm,
+artifact double-install) + reasoned findings; **~4 new gates** (rate saturation, fill_ratio clamp, opaque_pct
+population, plus the wasm-host suite still green); **`make check-full` green** (378 + 301 + 156 tests, clippy
+matrix clean). Merge `7caee23`.
+
+### The Robustness verdict (the point of this pass)
+
+Run 55 deferred re-lifting Robustness to 8 "until a fifth pass finds no new arithmetic-family member — the
+gate earns the score by catching nothing." **The pass found one:** `rate.rs:98`'s aggregate `+=` on a
+peer-forgeable `fps` (two hunters, verified panic + release-mode rate-limit bypass), on a path the pass-4
+"comprehensive" gate never fuzzed. So the lift is **refuted, not granted** — Robustness holds floor 7. This
+is the discipline working a third time: Run 53 scored a gate on faith → Run 54 caught it → Run 55 withheld
+the re-lift → Run 57 confirms withholding was right. The rate/opacity/timing paths are now hardened
+(saturation, clamps, validate-bounds) — but "comprehensively fuzzed" remains unearned; the honest lift path
+is extending the fuzz sweep to these internals *and* a pass that then finds nothing.
+
+### Findings (8 fixed, 1 flagged)
+
+- **High — Robustness (12)/Security (13).** `rate.rs` aggregate overflow on forged `sys/rate/` evidence →
+  panic (limiter task dies) or wrap (rate-limit bypass). Fixed: `saturating_add` + gate.
+- **Med-High — Semantic (11).** Artifact demand loop double-installs one capability from two artifacts →
+  double-executed invocations. Verified. Fixed: dedup by capability.
+- **Medium — Semantic (11).** Unclamped peer `fill_ratio` → ~584-M-year consensus sleep. Fixed: clamp + gate.
+- **Medium — Observability (19).** `opaque_node_pct` population mismatch → false Critical `opacity_storm`.
+  Verified. Fixed + gate.
+- **Medium — Resource (10).** `commit_conflict_slots` unbounded + ungated. Fixed: gate + cap.
+- **Medium — Configurability (7).** Live `TimingIntent` skipped `validate()` → a hostile interval stalls the
+  health loop fleet-wide. Fixed: bound to validate()'s ranges.
+- **Medium — Robustness (12).** HTTP artifact blob read unbounded → OOM. Fixed: Content-Length cap (residual:
+  chunked/absent-length needs streaming via reqwest `stream` feature — flagged, not dep-changed).
+- **Low-Med — Concurrency (9).** Self-peering on a spoofed Ping `sender`. Fixed.
+- **Low — Configurability (7)/Documentation (23) — FLAGGED, not fixed.** `reconnect_backoff` live-retune is a
+  **dead effect**: advertised across `set_reconnect_backoff_secs`, the HTTP endpoint, and `TimingIntent`, but
+  every reconnect path reads the *static* config — the hot value is only read by diagnostics. A wire-vs-
+  document **design decision** (like `/ready` was), left for the user. Plus three Lows (coarse timing pin,
+  live-retune window desync, `membership_snapshot` group-slash mis-parse).
+
+| # | Dimension | Score | Notes |
+|---|-----------|:-----:|-------|
+| 7  | Configurability | 7 | **floor.** The live-timing `validate()` bypass fixed; but the `reconnect_backoff` dead-effect + coarse pin remain (flagged) → holds 7 |
+| 9  | Concurrency Correctness | 8 | self-peering fixed; holds 8 |
+| 10 | Resource Management | 8 | `commit_conflict_slots` unbounded fixed + gated; holds 8 |
+| 11 | Semantic Correctness | 8 | **Deep-dive.** Artifact double-install (verified) + fill_ratio clamp, both fixed + gated; holds **8, evidenced**; not 9 (reserve — five passes, five hauls) |
+| 12 | Robustness | 7 | **floor — the verdict.** A new arithmetic-family member (`rate.rs`) refutes the pass-4 gate's comprehensiveness → the deferred lift stays deferred. The found members are fixed + the rate/opacity/timing paths hardened, but "comprehensively fuzzed" is unearned. 7 |
+| 13 | Security | 7 | floor — the rate-limit bypass fixed; the identity-poisoning residual (design-only) still open → 7 |
+| 19 | Observability | 8 | `opaque_node_pct` false-storm fixed + gated; the metric is now honest. Holds 8 |
+| 23 | Documentation | 8 | held — but the `reconnect_backoff` overclaim (advertised-but-dead) is flagged for correction with the design decision |
+| — | (all others) | 8/7 | carried from Run 56 |
+| — | **Floor (lowest 3)** | **7, 7, 7** | Configurability · Robustness · Security · Test Architecture |
+| — | Mean (continuity footnote) | 7.84 | unchanged; not a target |
+
+**Delta vs Run 56:** the fifth pass did its job — it **answered the deferred Robustness question with evidence**
+(refuted; holds 7) and hardened four more dimensions without moving any score (found+fixed+gated stays put; the
+honest state is "hardened, not lifted"). Cumulative ledger: **~40 defects across five passes** in dimensions that
+read 8, with **three** entries now against the audit's own prior optimism. Mean **7.84**, floor **7/7/7** — a
+plateau that is itself signal: five passes deep, severity has settled to **Medium/Low concentrated in opt-in and
+diagnostic paths** (rate M7-gated, emergent-detector-gated, artifact HTTP source, live-timing) — the core data
+plane (LWW/HLC/consensus/gossip/framing/store) has been swept hard and the new findings are in the periphery.
+*Remaining, all scoped:* extend the fuzz sweep to rate/opacity/timing internals (the honest Robustness-lift
+path); `sys/identity` Phase 1b + 2 (Security lift); and the four flagged design/Low items. A **sixth** pass would
+still likely find peripheral Mediums, but the marginal value is now clearly declining — the reserve is nearly dry
+for the data plane, richer only in opt-in features.
