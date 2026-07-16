@@ -504,7 +504,7 @@ mod persist_tests {
         apply_and_notify(&src, &make_gossip_update(&node, 1, Arc::from("k"), bytes::Bytes::new(), true, &hlc));
 
         // Snapshot to disk (truncates the WAL), then replay into a FRESH store — a restart.
-        let mut wal = tfs::OpenOptions::new().create(true).read(true).write(true)
+        let mut wal = tfs::OpenOptions::new().create(true).truncate(false).read(true).write(true)
             .open(dir.join("wal.log")).await.unwrap();
         do_snapshot(&dir, &src, &node, &hlc, 1, &mut wal, None).await.unwrap();
 
