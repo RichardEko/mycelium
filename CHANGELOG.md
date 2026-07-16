@@ -9,6 +9,105 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-07-16
+
+Wire **v12** (PREV 11) — unchanged from v2.1.0; a fully backwards-compatible rolling upgrade
+(rolling-upgrade + prev-wire gates green). This release is dominated by a **five-pass adversarial
+self-audit** (`docs/analysis/ratings.md`, Runs 50–58): ~40 correctness fixes across the consensus,
+gossip, membership, persistence, gateway, and companion surfaces, plus a structural input-fuzz gate.
+The minor bump reflects a small amount of additive public API and one behaviour change (`/ready`).
+
+### Fixed
+
+**Consensus & convergence (audit passes 1–2).**
+- **Cross-group quorum split-brain on even N** — `cross_group_quorum` had no `N/2+1` floor, so two
+  disjoint quorums could each commit. Now floored; gate `regression_even_n_quorum_intersects`.
+- **`elect_leader` / overlay-elect split-brain** — returned the local node id on `Committed` without
+  re-reading the LWW-converged slot; two racing proposers both "won". Now converge-then-reread.
+- **Acceptor equivocation** — a voter could vote for a *second* value at the same ballot; two
+  proposers could both commit different values at one ballot. Fixed (`may_cast_vote`); gate
+  `regression_voter_never_accepts_two_values_at_one_ballot`.
+- **Vote double-count** — `cross_propose` counted a re-delivered vote twice toward quorum. Per-voter
+  `seen` set.
+- **Vote impersonation** — signed consensus verified the signer but not that the `voter`/`proposer`
+  named *inside* the message was that signer; one key could forge N votes. Now bound
+  (`signer_authorized`). **Key revocation is now applied on the consensus verify path** too.
+- **Lease clock-domain** — lease liveness compared a reader's wall clock against the writer's HLC
+  physical (two domains); skewed nodes could both hold a `distributed_lock`. Now `causal_now_ms` at
+  all lease-read sites; the fencing token (commit HLC) remains the correctness guard.
+
+**Anti-entropy, HLC & store.**
+- **Value-blind anti-entropy digest** — the digest folded `hash(key) ^ timestamp` only, so two nodes
+  holding the same `(key, HLC)` with *different bytes* were certified converged → permanent silent
+  divergence. Now folds the value hash; gates `regression_anti_entropy_digest_reflects_value` +
+  incremental-matches-recompute.
+- **HLC monotonicity** — `tick()` was not strictly monotonic at logical saturation, and a poisoned
+  `observe(u64::MAX)` under `max_drift_ms=0` could wrap the clock to 0 via the `pack` left-shift. Both
+  fixed (carry-into-physical; `pack`/carry saturate at `PHYS_MAX`).
+- **Store live-entry cap** — the `max_store_entries` gate counted tombstones and dropped overwrites,
+  freezing a stale value that anti-entropy re-dropped every round (permanent divergence). Now an exact
+  inline live count + overwrite exemption.
+- **`grp_generation` published before its index**; **`append()` same-ms cross-node key collision**;
+  **`KvHandle` log-consumer `offset + 1` overflow** — all fixed (`Acquire`/`Release`, node-salted keys,
+  `saturating_add`).
+
+**Membership, connection & persistence.**
+- **SWIM self-incarnation overflow/wrap** — a self-`Suspect`/`Dead` rumour at `u64::MAX` (an
+  unauthenticated UDP datagram) panicked the listener (overflow-checks) or wrapped to 0 (release),
+  getting a live node evicted cluster-wide. Now `saturating_add`.
+- **Self-peering** — a spoofed/reflected Ping carrying a node's own id made it peer with itself. Guarded.
+- **Writer reap/evict orphaned a re-claimed live writer** (leaked task + double connection). Now
+  compute-with-recheck + atomic remove-and-signal.
+- **Snapshot dropped tombstones** → deleted keys resurrected across a restart (a stale peer's ancient
+  value won LWW against an absent entry). Snapshot now retains in-window tombstones.
+
+**Gateway, rate, opacity & diagnostics.**
+- **Unauthenticated node-abort inputs** — `gw_kv_quorum`'s `Duration::from_secs_f64(negative)` and
+  `parse_hex32`'s non-char-boundary slice both panicked (a node abort under the release `panic=abort`).
+  Now validated → `400`.
+- **JWT `aud`/`iss` bypass** — tokens *omitting* the claim passed (jsonwebtoken validates only when
+  present); an audience-confusion path to the `*` grant. Now `set_required_spec_claims`.
+- **Rate-aggregate overflow** (a forged `sys/rate/` value) — panic or a rate-limit *bypass* on wrap.
+  Saturating.
+- **Unclamped peer `fill_ratio`** → a `~584M-year` consensus retry sleep. Clamped to `[0,1]` at decode.
+- **Signal reorder buffer was inert** — `flush_expired` force-drained the whole buffer, so
+  `signal_ordered_delivery` delivered out of order and dropped reordered signals. Now honours
+  `max_hold`/`max_depth`.
+- **Boundary push-path ignored LWW** (transient wrong Group admission); **`gw_signal_emit` widened an
+  unknown scope to cluster-wide**; **`overlay_group_propose` double-counted self** in the quorum;
+  **`gw_overlay_log_subscribe` `hlc + 1` overflow** and a **group-subscribe idle-disconnect task+claim
+  leak**; **`commit_conflict_slots` unbounded/ungated**; **`opaque_node_pct` false storm**;
+  **`system_stats().store_entries` read a stale counter**; **live `TimingIntent` skipped `validate()`**
+  (a fleet-wide health-loop stall) — all fixed + (where unit-testable) gated.
+
+**Companions & examples.**
+- **Blackboard startup-lag split-brain + single-shot sync** — ported the tuple-space promotion guard
+  (`seen_primary` + orphan grace) and the join-time backfill retry it never received.
+- **`mycelium-reason` trace replay** — the pass-1 `append`-key salt (`log/{stream}/{hlc}/{node}`) broke
+  reason's own `log/`-key parser, silently dropping every trace event (CI-red until caught). Fixed +
+  `trace_record_replay_round_trips` gate.
+
+### Added
+
+- **Input-fuzz gate (no panic on untrusted input)** — a suite of proptests that run under
+  overflow-checks in `cargo test`, so unchecked arithmetic on a gossiped/config value fails the build:
+  `store::fuzz_apply_observe_tick_never_panics`, `config::fuzz_validate_never_panics`,
+  `capability::fuzz_is_fresh_never_panics`, `rate::fuzz_reconcile_throttle_never_panics`,
+  `hlc::observe_then_tick_never_wraps`, `swim_membership::fuzz_apply_never_panics_on_arbitrary_update`,
+  plus the nightly cargo-fuzz `frame_apply` decode→process target.
+- **Identity-authentication — Phase 1a** (`tls::ed25519_key_from_cert_der`): extract a peer's
+  CA-authenticated Ed25519 key from its validated cert (the anchor for the phased fix of the
+  `sys/identity` poisoning gap, designed in `docs/design/identity-authentication.md`). Zero new
+  dependency.
+- **`Blackboard::is_primary()` / `is_secondary()`** — public role introspection (tuple-space parity).
+
+### Changed
+
+- **`/ready` now reflects startup completion, not soft-state advertisement.** A node that advertises no
+  capability (a pure KV/signal node) is ready once `start()` completes, instead of returning `503`
+  forever — it was previously undeployable behind a Kubernetes readiness gate. Capability discovery
+  gossips independently and no longer gates readiness.
+
 ## [2.1.0] — 2026-07-15
 
 Wire **v12** (PREV 11) — unchanged from v2.0.0; a fully backwards-compatible rolling upgrade.

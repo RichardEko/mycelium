@@ -22,6 +22,39 @@ As of 2026-06-21 all v1.x/v2.0 engineering plans were shipped. Since then, **Leg
 The three-verb operator spine — **localize** (`/fleet`) · **explain** (`/explain`) · **diagnose**
 (`/diagnose`) — is shipped, tested, and documented for both audiences.
 
+## v2.2.0 release — 2026-07-16 (tag `v2.2.0`)
+
+A hardening MINOR since v2.1.0. Wire **v12** (PREV 11) unchanged — a fully backwards-compatible
+rolling upgrade (rolling-upgrade + prev-wire gates green). Release gate **CI-green** — *not* just
+`make check-full`: this cycle taught that the local gate misses the live-node/cross-language CI jobs
+(see [testing](testing/testing.md) § "`make check-full` is NOT the whole CI gate"), which is how a
+`mycelium-reason` trace-replay regression sat red for ~25 commits. Highlights:
+
+- **Five-pass adversarial self-audit** (`docs/analysis/ratings.md` Runs 50–58) — ~40 correctness fixes,
+  each with an executable regression gate. Consensus: cross-group quorum split-brain on even N,
+  `elect_leader`/overlay split-brain, acceptor equivocation, vote double-count + impersonation, lease
+  clock-domain. Convergence: **value-blind anti-entropy digest** (certified diverged nodes as
+  converged → permanent silent divergence), HLC saturation/wrap, the store live-entry cap
+  (tombstone-counting + overwrite-drop). Membership/connection: SWIM self-incarnation overflow,
+  self-peering, writer reap/evict orphan, **snapshot tombstone-resurrection across restart**. Gateway:
+  two unauthenticated **node-abort** inputs (`from_secs_f64`, `parse_hex32`), **JWT `aud`/`iss`
+  bypass**, rate-aggregate overflow (limiter bypass), unclamped `fill_ratio` (584M-year sleep), the
+  inert signal reorder buffer, and more. Companions: blackboard startup-lag split-brain + backfill,
+  and the reason trace-replay CI regression.
+- **Input-fuzz gate** — a proptest suite under overflow-checks (`store`/`config`/`capability`/`rate`/
+  `hlc`/`swim_membership`) + the nightly `frame_apply` cargo-fuzz target: unchecked arithmetic on a
+  gossiped/config value fails the build. The invariant: *arithmetic on untrusted values must
+  saturate/clamp*. Not yet comprehensive — Robustness in `ratings.md` stays floored pending a clean pass.
+- **Identity-authentication — Phase 1a** (`tls::ed25519_key_from_cert_der`, zero-dep) + the phased
+  design `docs/design/identity-authentication.md` (the anchor for closing the `sys/identity` poisoning
+  gap; CFT-not-BFT, defense-in-depth). The "signed by the old key" overclaim in the rotation docs was
+  corrected — the entry is unsigned.
+- **`/ready` semantics changed** — startup-complete, not soft-state-advertised; a no-capability node is
+  no longer un-deployable behind a k8s readiness gate. Plus new public API `Blackboard::is_primary`/
+  `is_secondary`.
+
+Full notes: `CHANGELOG.md` § [2.2.0].
+
 ## v2.1.0 release — 2026-07-15 (tag `v2.1.0`)
 
 The first MINOR since v2.0.0 (tag 2026-07-04). Wire **v12** (PREV 11) unchanged — a fully
