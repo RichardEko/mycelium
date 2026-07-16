@@ -19,6 +19,22 @@ concern). WHY is usually shared Dev+Ops.
 
 ## Changelog
 
+- **2026-07-15 (run 11)** — diff-gated, after the five-pass code audit (Runs 50–58, ~40 fixes) + the
+  identity-auth work. **No cell verdict moves** (all stay ✓), but **two "must-be-accurate-if-followed-
+  literally" staleness fixes** in the *scored* Ops runbooks, both created by this session's own code
+  changes:
+  - **Security · HOW·Ops** — `operations/cert-rotation.md` step 2 claimed `sys/identity` is "signed by
+    the **old** key"; the code writes it **unsigned** (the identity-poisoning gap). Corrected to state
+    unsigned + linked the new **`design/identity-authentication.md`** ADR — which also **enriches
+    Security · WHY** (the identity trust-model + the phased fix). Calibration entry added (the **4th**
+    claim-present-but-false hit — the **1st a *security guarantee***, not a setting/command).
+  - **Operational readiness (HOW·Ops)** — `operations/observability.md`'s `/ready` row said "capabilities
+    advertised + no dead shards"; this session changed `/ready` to reflect **startup completion** (a node
+    advertising no soft state is now ready). Corrected. (Same drift also fixed in `wiki/dev/operations.md`
+    during this session's wiki-lint.)
+  The ~40 other code fixes are **bug-fixes that do not move concept landings** — a diff-gated carry for
+  every other row. Zero new concepts (identity-auth is a *design* for the existing Security concept, not
+  a new sub-handle/companion/standard).
 - **2026-07-15 (run 10)** — diff-gated: **no cell moves; carried from run 9.** The delta is the two new
   **artifact-library browser showcases** (`provisioning_viz` :8097 — autonomic self-heal; `catalog_viz`
   :8098 — origin-death survival), both UI-contract compliant (verified live). Concept impact lands on the
@@ -281,6 +297,20 @@ skepticism, not a re-asserted ✓.
   2026-07-14 sharpening** rather than adding a new one — the existing "verify the steps succeed" rule
   already covers this; the gap was applying it to the *run command*, not just env-vars/constants. Fixed
   all five.
+- **2026-07-15 (run 11) — Security · HOW·Ops** read `✓` across runs 1–10 while `operations/cert-rotation.md`
+  step 2 asserted `sys/identity/{self}` is **"signed by the old key"** — **false in code**: the entry is
+  written UNSIGNED (`encode_identity_history` → raw `32×N` bytes; the publish is a bare `kv().set`, no
+  Ed25519 signature). The signature was design intent that was never implemented, and the false claim
+  masked the identity-poisoning gap (a compromised admitted node can LWW-inject a verifying key; code
+  audit pass 3, 2026-07-15). Found by this session's code audit + this run's diff-check of the identity
+  docs. **The 4th "claim present but false-in-code" hit — and the first where the false claim is a
+  *security guarantee* ("signed"), not a setting/command** (wire-version 2026-07-11; `GOSSIP_CLUSTER_NAME`
+  2026-07-14; artifact run-commands 2026-07-15). **Sharpening (extends the 2026-07-14 rule):** the
+  value-vs-code check must also cover **asserted guarantees** — "signed" / "authenticated" / "verified" /
+  "validated" — a `Clear` verdict on a doc claiming a crypto or safety property must confirm the code
+  *performs* it, not merely that the property is described. Fixed: `cert-rotation.md` step 2 (states
+  unsigned + links `design/identity-authentication.md`); also this session, the `rotate_identity` code
+  comments + `wiki/dev/security.md`, and the stale `/ready` row in `observability.md`.
 
 ## Re-run guidance
 

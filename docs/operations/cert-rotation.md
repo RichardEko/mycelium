@@ -13,8 +13,13 @@ both at once. See [`../guide/09-security.md`](../guide/09-security.md).
 
 1. Generates a new key + a fresh node cert **signed by the existing cluster CA**
    (the CA is *not* rotated), persisted to disk.
-2. Publishes `sys/identity/{self}` = `new ‖ old` (64 bytes), signed by the
-   **old** key — which peers still trust — so their retained key sets accept both.
+2. Publishes `sys/identity/{self}` = `new ‖ old` (the raw `32×N`-byte key history),
+   so peers' retained key sets accept both. **NOTE (2026-07-15):** this entry is
+   written **unsigned** — a plain Layer-I KV value, *not* signed by the old key (that
+   was the original design intent; it was never implemented). Peers accept the new key
+   because the KV is unauthenticated and accumulated — the identity-poisoning gap tracked
+   in [`docs/design/identity-authentication.md`](../design/identity-authentication.md)
+   (CFT-not-BFT: a compromised admitted node can inject a key; out of the base threat model).
 3. Waits `propagation` for that to gossip cluster-wide.
 4. Atomically cuts over the active key + rustls configs. New gossip signatures
    and **new** TLS handshakes use the new key immediately; **existing**

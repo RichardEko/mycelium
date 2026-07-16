@@ -15,7 +15,7 @@ uncredentialed:
 | Endpoint | Tells you |
 |---|---|
 | `GET /health` | `200` = process alive (liveness probe) |
-| `GET /ready` | `200` = capabilities advertised + no dead shards (readiness probe) |
+| `GET /ready` | `200` = startup complete → serving KV/signals/membership (readiness probe). Capability discovery gossips independently and does **not** gate readiness — a node advertising no soft state is still ready (changed 2026-07-15) |
 | `GET /stats` | `node_id`, `cluster_name`, `store_entries`, `dropped_frames`, `task_count`, and the tripwire counters (`commit_conflicts`, `sys_namespace_violations`, `cap_authz_violations`, `schema_mismatch`, `rate_limited_senders`, `individual_flood_fallbacks`), plus liveness (`dead_shards`, `gc_alive`, `health_monitor_alive`) |
 | `GET /metrics` | Prometheus scrape (requires the `metrics` feature). Carries a `cluster` label on every series when `cluster_name` is set |
 | `GET /.well-known/agent-facts.json` | this node's self-certified AgentFacts (when the [facts lens](#viewing-agentfacts) is mounted) |
