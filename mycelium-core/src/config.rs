@@ -980,6 +980,23 @@ impl GossipConfig {
         if self.bind_port == 0 {
             return Err(GossipError::InvalidField { field: "bind_port", reason: "cannot be zero".into() });
         }
+        // SWIM timing fields (audit 2026-07-15 pass 4): a zero probe interval PANICS
+        // `tokio::time::interval` — a node-abort under the release `panic="abort"` profile — and zero
+        // timeouts cause instant false peer eviction. Enforced only when the detector is active (the
+        // fields are inert otherwise). The prober also `.max(1ms)`-guards the interval as belt-and-braces.
+        if self.swim_failure_detector {
+            for (field, val) in [
+                ("swim_probe_interval_ms",    self.swim_probe_interval_ms),
+                ("swim_probe_timeout_ms",     self.swim_probe_timeout_ms),
+                ("swim_suspicion_timeout_ms", self.swim_suspicion_timeout_ms),
+            ] {
+                if val == 0 {
+                    return Err(GossipError::InvalidField {
+                        field, reason: "cannot be zero when swim_failure_detector is enabled".into(),
+                    });
+                }
+            }
+        }
         if self.max_connections == 0 {
             return Err(GossipError::InvalidField { field: "max_connections", reason: "cannot be zero".into() });
         }
@@ -1476,6 +1493,27 @@ mod tests {
         let mut cfg = GossipConfig::default();
         cfg.default_ttl = 0;
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_zero_swim_timing_when_detector_on() {
+        // Audit 2026-07-15 pass 4: a zero swim_probe_interval_ms PANICS tokio::time::interval →
+        // node-abort under panic=abort; validate() must reject it (SWIM is on by default).
+        for setter in [
+            |c: &mut GossipConfig| c.swim_probe_interval_ms = 0,
+            |c: &mut GossipConfig| c.swim_probe_timeout_ms = 0,
+            |c: &mut GossipConfig| c.swim_suspicion_timeout_ms = 0,
+        ] {
+            let mut cfg = GossipConfig::default();
+            assert!(cfg.swim_failure_detector, "precondition: detector on by default");
+            setter(&mut cfg);
+            assert!(cfg.validate().is_err(), "zero SWIM timing must be rejected when the detector is on");
+        }
+        // Inert when the detector is off → accepted.
+        let mut off = GossipConfig::default();
+        off.swim_failure_detector = false;
+        off.swim_probe_interval_ms = 0;
+        assert!(off.validate().is_ok(), "a zero interval is inert when the detector is off");
     }
 
     #[test]
