@@ -102,6 +102,11 @@ const DRIFT_WARN_INTERVAL_MS: u64 = 10_000;
 pub const LOGICAL_BITS: u32 = 16;
 /// Mask covering the logical portion of a packed HLC value.
 pub const LOGICAL_MASK: u64 = (1 << LOGICAL_BITS) - 1;
+/// Maximum representable physical-ms value — the top `64 - LOGICAL_BITS` bits. Packing a larger
+/// physical component would shift bits out of the `u64` and silently wrap (audit 2026-07-15 pass 4);
+/// `pack` saturates to this and `tick`'s carry stops here. `2^48 - 1` ms ≈ year 8901, so wall time
+/// never reaches it — only a poisoned `observe` (a `u64::MAX` remote stamp with `max_drift_ms = 0`) can.
+pub const PHYS_MAX: u64 = (1 << (64 - LOGICAL_BITS)) - 1;
 
 /// Extracts the physical-ms portion of a packed HLC timestamp.
 #[inline]
@@ -109,10 +114,12 @@ pub fn physical_ms(packed: u64) -> u64 {
     packed >> LOGICAL_BITS
 }
 
-/// Packs `(phys_ms, logical)` into a single `u64` HLC value.
+/// Packs `(phys_ms, logical)` into a single `u64` HLC value. `phys_ms` is saturated to [`PHYS_MAX`]
+/// so the left-shift can never drop high bits and wrap to a small value (audit 2026-07-15 pass 4) —
+/// a total function for any input.
 #[inline]
 pub fn pack(phys_ms: u64, logical: u64) -> u64 {
-    (phys_ms << LOGICAL_BITS) | (logical & LOGICAL_MASK)
+    (phys_ms.min(PHYS_MAX) << LOGICAL_BITS) | (logical & LOGICAL_MASK)
 }
 
 /// Returns the current wall-clock time in milliseconds since the Unix epoch.
@@ -172,11 +179,20 @@ impl Hlc {
             let mut next_phys = prev_phys.max(now_ms);
             let next_log = if next_phys == prev_phys {
                 if prev_log >= LOGICAL_MASK {
-                    // Logical component saturated within this physical ms (>64k events).
-                    // Carry into physical so `tick()` stays *strictly* monotonic — it must
-                    // never return a value equal to the previous tick (causal happens-before).
-                    next_phys += 1;
-                    0
+                    if next_phys >= PHYS_MAX {
+                        // At the physical ceiling — carrying (`next_phys += 1` → `pack(2^48 << 16)`)
+                        // OVERFLOWS the u64 and WRAPS TO 0, corrupting every subsequent LWW comparison
+                        // and fencing token (audit 2026-07-15 pass 4, reachable via a poisoned
+                        // `observe` under `max_drift_ms = 0`). No strictly-larger stamp exists at the
+                        // ceiling, so saturate at `u64::MAX` (pack(PHYS_MAX, LOGICAL_MASK)) instead.
+                        LOGICAL_MASK
+                    } else {
+                        // Logical component saturated within this physical ms (>64k events).
+                        // Carry into physical so `tick()` stays *strictly* monotonic — it must
+                        // never return a value equal to the previous tick (causal happens-before).
+                        next_phys += 1;
+                        0
+                    }
                 } else {
                     prev_log + 1
                 }
@@ -218,7 +234,7 @@ impl Hlc {
                 {
                     warn!(
                         remote_phys_ms = remote_phys,
-                        ahead_ms = remote_phys - now,
+                        ahead_ms = remote_phys.saturating_sub(now), // wall may advance past remote between the two reads (pass 4)
                         max_drift_ms = self.max_drift_ms,
                         "remote HLC stamp exceeds the clock-drift bound; clamping — \
                          a peer's clock is far ahead (check NTP on the sending node). \
@@ -413,6 +429,24 @@ mod tests {
         assert!(physical_ms(next) > 0);
         assert_eq!(next & LOGICAL_MASK, 0);
     }
+
+    #[test]
+    fn regression_tick_at_ceiling_saturates_no_wrap_to_zero() {
+        // Audit 2026-07-15 pass 4: a poisoned observe (a u64::MAX remote stamp with max_drift_ms=0)
+        // drives the clock to the physical ceiling; the next tick's carry (`next_phys += 1`) then did
+        // `pack(2^48 << 16)` → u64 overflow → WRAP TO 0, corrupting every subsequent LWW comparison
+        // and fencing token. tick() must saturate at u64::MAX at the ceiling instead of wrapping.
+        let hlc = pinned(pack(PHYS_MAX, LOGICAL_MASK)); // == u64::MAX
+        let next = hlc.tick();
+        assert_eq!(next, u64::MAX, "tick at the ceiling must saturate at u64::MAX, not wrap to 0");
+
+        // The reachable path: observe a u64::MAX remote with the drift bound disabled, then tick.
+        let hlc = Hlc::with_max_drift(0);
+        let after_observe = hlc.observe(u64::MAX);
+        let after_tick    = hlc.tick();
+        assert!(after_tick >= after_observe, "tick after a poisoned observe must not wrap below");
+        assert_ne!(after_tick, 0, "must not wrap to 0");
+    }
 }
 
 #[cfg(test)]
@@ -432,6 +466,22 @@ mod prop_tests {
                     "tick must be strictly monotonic: {} <= {}", next, prev);
                 prev = next;
             }
+        }
+
+        /// Input-fuzz gate (audit 2026-07-15 pass 4): observe() of ANY remote stamp (incl. u64::MAX)
+        /// under ANY drift bound (incl. 0 = disabled) followed by tick() must never WRAP BELOW the
+        /// observed value — the pack/carry overflow that wrapped the clock to 0. This is the HLC
+        /// surface the Run-53 fuzz gate did not reach; it runs under overflow-checks, so the wrap fails
+        /// the assertion. Unlike `tick_after_observe_beats_remote`, remote is unbounded so it reaches
+        /// the physical ceiling where the clock must SATURATE (>=), not strictly advance.
+        #[test]
+        fn observe_then_tick_never_wraps(remote in any::<u64>(), drift in any::<u64>()) {
+            let hlc = Hlc::with_max_drift(drift);
+            let observed = hlc.observe(remote);   // must not panic
+            let t1 = hlc.tick();                  // the pass-4 overflow site
+            let t2 = hlc.tick();
+            prop_assert!(t1 >= observed, "tick wrapped below observe: {t1:#x} < {observed:#x}");
+            prop_assert!(t2 >= t1, "second tick regressed: {t2:#x} < {t1:#x}");
         }
 
         /// After observe(remote), a subsequent tick() must produce a value strictly
