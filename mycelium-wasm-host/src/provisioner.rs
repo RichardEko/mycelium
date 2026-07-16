@@ -486,9 +486,19 @@ impl Provisioner {
 
         // ── Demand-driven (M15) ──────────────────────────────────────────────
         let entries: Vec<InstallableEntry> = self.catalog.entries().to_vec();
+        // Dedup by CAPABILITY within a round, not just by ArtifactId. Two catalog entries providing
+        // the same `(ns,name)` via DIFFERENT artifacts would both read demand as unmet this round
+        // (neither install has advertised yet) and both start → two runtimes both `rpc_rx` the same
+        // `cap.invoke/{ns}/{name}` kind, and `deliver_to_handlers` fans out to BOTH, so every
+        // invocation executes on both components (double side effects) (audit 2026-07-15 pass 5).
+        let mut started_caps: std::collections::HashSet<(String, String)> = Default::default();
         for entry in entries {
             if self.is_hosted(&entry.artifact) || !self.provenance_ok(&entry) {
                 continue;
+            }
+            let cap_key = (entry.provides.namespace.to_string(), entry.provides.name.to_string());
+            if started_caps.contains(&cap_key) {
+                continue; // a sibling artifact for this capability already started this round
             }
             let filter =
                 CapFilter::new(entry.provides.namespace.clone(), entry.provides.name.clone());
@@ -501,6 +511,7 @@ impl Provisioner {
             // idle catalog must not tick the tripwire every round.
             if self.eligible(&entry) && self.self_elects() && self.start_install(entry) {
                 started += 1;
+                started_caps.insert(cap_key);
             }
         }
 
