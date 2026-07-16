@@ -57,22 +57,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!("[depot-0..3] up — north = {{0,1}}, south = {{2,3}}");
 
+    // Phase-1 config: a few more ballots than the default 3. Each 2-depot bloc at `quorum: 0.5` needs
+    // a **unanimous** vote (correct quorum: 1-of-2 would permit a split-brain — a majority of a 2-set
+    // is 2), so both depots must vote within the ballot budget; a little headroom absorbs a delayed
+    // vote-gossip on a loaded CI runner. (Phase 2 below deliberately keeps a tight 1-ballot config to
+    // *demonstrate* a timeout — don't touch it.)
+    let robust = || ConsensusConfig { max_ballots: 6, ..ConsensusConfig::default() };
+
     // Every depot joins its bloc and runs a consensus listener (a voter). Multi-node consensus
     // requires a listener on every node, else votes never arrive and ballots time out.
     let _listeners: Vec<_> = depots.iter().map(|d| {
         let bloc = if d.name.ends_with('0') || d.name.ends_with('1') { "north" } else { "south" };
         d.agent.mesh().join_group(bloc);
-        d.agent.consensus().start_consensus_listener(ConsensusConfig::default())
+        d.agent.consensus().start_consensus_listener(robust())
     }).collect();
 
-    // Form the cluster + let group membership gossip so every voter sees both rosters.
+    // Form the cluster + let group membership AND identity keys gossip so every voter can (a) see both
+    // rosters and (b) VERIFY every other voter's signed vote. With TLS on, consensus messages are
+    // signed and a voter drops a peer's vote ("bad/unknown signature — identity not yet received")
+    // until that peer's `sys/identity/{node}` has propagated. Waiting only for peers+rosters (not
+    // identity) let a propose race ahead of identity gossip → dropped votes → `Timeout` on a slow
+    // runner. Gate on every depot seeing all four `sys/identity/` entries too.
     let dref: &[Depot] = &depots;
     wait_until(20, || {
         dref.iter().all(|d| d.agent.peers().len() >= 3)
             && dref[0].agent.mesh().group_members("north").len() >= 2
             && dref[0].agent.mesh().group_members("south").len() >= 2
+            && dref.iter().all(|d| d.agent.kv().scan_prefix("sys/identity/").len() >= 4)
     }).await;
-    println!("cluster peered; north & south rosters each have 2 voters");
+    println!("cluster peered; north & south rosters each have 2 voters; identity keys propagated");
 
     // ── Phase 1 — both blocs required; each reaches quorum → COMMIT ─────────────
     println!("\n[phase 1] proposing acceptance of a cross-bloc donation (north AND south must agree)");
@@ -82,7 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
     let r1 = depots[0].agent.consensus()
         .cross_group_propose("donation/cross-bloc-42", Bytes::from_static(b"accept:5000kg"),
-                             both, ConsensusConfig::default())
+                             both, robust())
         .await;
     println!("[phase 1] result: {}", describe(&r1));
     assert!(matches!(r1, ConsensusResult::Committed { .. }),
