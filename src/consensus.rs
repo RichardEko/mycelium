@@ -652,6 +652,19 @@ impl ConsensusEngine {
                     key_set = crate::agent::helpers::parse_identity_keys(&b);
                 }
             }
+            // WS-D: exclude validly-revoked keys on the consensus verify path too. The revocation
+            // module's guarantee — "a key signed by a revoked key fails verification cluster-wide" —
+            // was applied only by `helpers::known_verifying_keys` (role-claim / audit paths); consensus
+            // built its own `key_set` and skipped it, so a key an operator rotated away from AND revoked
+            // still validated `Vote`/`Propose` messages, defeating the operator's remediation (audit
+            // 2026-07-15 pass 3). Mirror `known_verifying_keys` here.
+            #[cfg(feature = "compliance")]
+            {
+                let revoked = crate::agent::revocation::revoked_key_set(&self.task_ctx);
+                if !revoked.is_empty() {
+                    key_set.retain(|k| !revoked.contains(k));
+                }
+            }
             if key_set.is_empty()
                 || !key_set.iter().any(|k| crate::tls::verify_bytes(k, &signed.msg_bytes, &signed.signature))
             {
@@ -1283,6 +1296,16 @@ pub(crate) fn decode_consensus_msg(bytes: &Bytes) -> Option<ConsensusMsg> {
 /// `Commit`/`Nack` carry no per-node authority field and are not bound here: a fully Byzantine-safe
 /// commit needs a quorum certificate, which is out of scope — Mycelium is CFT, not BFT. This closes
 /// the vote/propose *impersonation* vector, not all insider misbehaviour.
+///
+/// LIMITATION (audit 2026-07-15 pass 3): this bind is only as strong as the `signer → key` map it
+/// verifies against, and that map (`peer_keys` / the `sys/identity/{node}` KV entry) is populated
+/// from *unauthenticated* Layer-I gossip under the detection-not-prevention model. A **compromised
+/// admitted** node can LWW-overwrite `sys/identity/{victim}` to append its own key to the victim's
+/// verifying set and then sign votes as the victim — defeating this bind. That is a Byzantine-insider
+/// attack, outside the CFT-not-BFT threat model; closing it needs authenticated identity-rotation
+/// writes (mirroring how `sys/revocation/` validates signatures at read) and is tracked as a
+/// follow-up. The bind still prevents impersonation among honest nodes and by any node that does not
+/// hold a key present in the (possibly poisoned) target set — do not read it as insider-proof.
 fn signer_authorized(msg: &ConsensusMsg, signer: &NodeId) -> bool {
     match msg {
         ConsensusMsg::Vote { voter, .. }             => voter == signer,

@@ -155,3 +155,62 @@ async fn auto_election_lowest_candidate_becomes_primary() {
     agent_lo.shutdown().await;
     agent_hi.shutdown().await;
 }
+
+/// Audit 2026-07-15 pass 3: a secondary that starts before the primary's advertisement has
+/// propagated must NOT promote — "evaporated" means *was there, then gone*; never-seen is startup
+/// lag. The pre-fix blackboard watch promoted after two empty resolves with neither a seen-primary
+/// gate nor an orphan grace, creating a split-brain primary that never demoted. Ported from the
+/// tuple-space guard (`secondary_startup_lag_is_not_evaporation`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn secondary_startup_lag_is_not_evaporation() {
+    let fast = |ns: &str, role| BoardConfig { cap_refresh: Duration::from_millis(300), ..bb_cfg(ns, role) };
+    let (pa, pb) = alloc_two_sorted_ports();
+    let a1 = start_agent(pa, None).await;
+    let a2 = start_agent(pb, Some(pa)).await;
+    wait_peered(&[&a1, &a2]).await;
+
+    // Secondary first, with no primary anywhere on the ring.
+    let bb2 = Blackboard::new(Arc::clone(&a2), fast("lag", BoardRole::Secondary)).await.unwrap();
+
+    // Past the pre-fix ~2×cap_refresh promotion point, well inside the 10-tick orphan grace.
+    tokio::time::sleep(Duration::from_millis(300 * 4)).await;
+    assert!(!bb2.is_primary(), "secondary promoted on startup propagation lag (never saw a primary)");
+
+    // Primary appears late — the secondary must see it and stay secondary.
+    let bb1 = Blackboard::new(Arc::clone(&a1), fast("lag", BoardRole::Primary)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300 * 4)).await;
+    assert!(!bb2.is_primary(), "secondary promoted despite a live primary");
+    assert!(bb2.is_secondary(), "secondary lost its role");
+
+    bb1.shutdown().await;
+    bb2.shutdown().await;
+    a2.shutdown().await;
+    a1.shutdown().await;
+}
+
+/// Audit 2026-07-15 pass 3: bounded availability for the genuine orphan — a secondary whose primary
+/// NEVER appears (dead before this process started) must still promote once the orphan grace
+/// (10 × cap_refresh) expires, not wait forever. Ported from the tuple-space
+/// `never_seen_primary_promotes_after_orphan_grace`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn never_seen_primary_promotes_after_orphan_grace() {
+    let fast = |ns: &str, role| BoardConfig { cap_refresh: Duration::from_millis(300), ..bb_cfg(ns, role) };
+    let (pa, pb) = alloc_two_sorted_ports();
+    let a1 = start_agent(pa, None).await;
+    let a2 = start_agent(pb, Some(pa)).await;
+    wait_peered(&[&a1, &a2]).await;
+
+    let bb2 = Blackboard::new(Arc::clone(&a2), fast("orph", BoardRole::Secondary)).await.unwrap();
+
+    // Grace ≈ 10 × 300 ms = 3 s; poll well past it.
+    let mut promoted = false;
+    for _ in 0..40 {
+        if bb2.is_primary() { promoted = true; break; }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    assert!(promoted, "orphaned secondary never promoted (availability hole)");
+
+    bb2.shutdown().await;
+    a2.shutdown().await;
+    a1.shutdown().await;
+}

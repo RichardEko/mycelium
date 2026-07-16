@@ -370,17 +370,13 @@ impl Blackboard {
         );
         *self.role_reg.lock() = Some(reg);
 
-        // Initial sync: pull the primary's current live facts so the mirror is complete, then live
-        // Post/Ack replication keeps it current.
-        {
-            let me = Arc::clone(self);
-            tasks.push(tokio::spawn(async move {
-                me.sync_from_primary().await;
-            }));
-        }
-
-        // Promotion watch: the capability ring IS the failure detector. Two consecutive empty
-        // resolves of `.primary` (one ad interval apart — split-brain guard) → take over.
+        // Initial sync: pull the primary's current live facts so the mirror is COMPLETE before this
+        // secondary could ever be promoted. Live Post/Ack replication only ships facts posted *while
+        // this secondary is present*, so a single-shot sync that hit a transient-unresolvable primary
+        // (fresh ring / just-elected primary) left a PARTIAL mirror — and a later failover silently
+        // lost the pre-join backlog while the operator believed redundancy was restored. Retry each
+        // interval until it drains once, or until this node promotes. Ported from the tuple-space
+        // join-time backfill after audit 2026-07-15 pass 3 found the blackboard lacked the retry.
         {
             let me = Arc::clone(self);
             let interval = self.cfg.cap_refresh;
@@ -389,14 +385,60 @@ impl Blackboard {
                 tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 loop {
                     tick.tick().await;
+                    if me.is_primary() {
+                        return; // promoted while waiting — it now owns the full board
+                    }
+                    if me.sync_from_primary().await {
+                        tracing::info!(ns = %me.cfg.namespace, "blackboard: initial mirror sync drained");
+                        return;
+                    }
+                    // Unreachable / partial: retry next tick.
+                }
+            }));
+        }
+
+        // Promotion watch: the capability ring IS the failure detector.
+        //
+        // "Evaporated" means *was there, then gone*. An empty resolve of `.primary` before this watch
+        // has ever SEEN the primary's advertisement is startup propagation lag, not failure — on a
+        // CPU-starved host the first sighting can take many intervals, and promoting on lag creates a
+        // split-brain primary that never demotes (the tuple-space #150/S13 failure). Audit 2026-07-15
+        // pass 3 found the blackboard promoted after just two empty resolves with neither a
+        // seen-primary gate nor an orphan grace — porting the tuple-space guard. Before first sight
+        // the watch promotes only after a much longer orphan grace: the primary may genuinely be dead
+        // while this secondary (re)starts, so availability still needs a bounded path; propagation lag
+        // does not survive 10 intervals.
+        {
+            let me = Arc::clone(self);
+            let interval = self.cfg.cap_refresh;
+            tasks.push(tokio::spawn(async move {
+                let mut tick = tokio::time::interval(interval);
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                let mut seen_primary = false;
+                let mut unseen_ticks: u32 = 0;
+                const ORPHAN_GRACE_TICKS: u32 = 10;
+                loop {
+                    tick.tick().await;
                     if !me.resolve_role("primary").is_empty() {
+                        seen_primary = true;
                         continue;
                     }
-                    tokio::time::sleep(interval).await;
-                    if !me.resolve_role("primary").is_empty() {
-                        continue;
+                    if seen_primary {
+                        // Was there, now gone — confirm one interval later (split-brain guard).
+                        tokio::time::sleep(interval).await;
+                        if !me.resolve_role("primary").is_empty() {
+                            continue;
+                        }
+                        tracing::warn!(ns = %me.cfg.namespace, "blackboard: primary evaporated — promoting");
+                    } else {
+                        // Never seen: propagation lag until the orphan grace expires.
+                        unseen_ticks += 1;
+                        if unseen_ticks < ORPHAN_GRACE_TICKS {
+                            continue;
+                        }
+                        tracing::warn!(ns = %me.cfg.namespace, ticks = ORPHAN_GRACE_TICKS,
+                            "blackboard: no primary ever seen within the orphan grace — promoting");
                     }
-                    tracing::warn!(ns = %me.cfg.namespace, "blackboard: primary evaporated — promoting");
                     me.become_primary();
                     return;
                 }
@@ -441,9 +483,11 @@ impl Blackboard {
         }
     }
 
-    /// Pull the primary's current live facts into the mirror (one snapshot RPC).
-    async fn sync_from_primary(self: &Arc<Self>) {
-        let Ok(primary) = self.resolve_primary() else { return };
+    /// Pull the primary's current live facts into the mirror (one snapshot RPC). Returns `true` iff a
+    /// full snapshot was fetched and applied — the caller retries until this drains once, so a
+    /// transient-unresolvable primary cannot leave a partial mirror (audit 2026-07-15 pass 3).
+    async fn sync_from_primary(self: &Arc<Self>) -> bool {
+        let Ok(primary) = self.resolve_primary() else { return false };
         let kind = rpc::rpc_kind(&self.cfg.namespace, "snapshot");
         let Ok(resp) = self
             .agent
@@ -451,15 +495,17 @@ impl Blackboard {
             .rpc_call(primary, kind, Bytes::new(), Duration::from_secs(10))
             .await
         else {
-            return;
+            return false;
         };
-        if let (Ok(facts), Some(store)) = (rpc::dec_facts_resp(&resp), self.store()) {
-            for f in facts {
-                if self.mark_mirrored(f.id) {
-                    let _ = store.post_with_id(f.id, f.attributes, f.payload);
-                }
+        let (Ok(facts), Some(store)) = (rpc::dec_facts_resp(&resp), self.store()) else {
+            return false;
+        };
+        for f in facts {
+            if self.mark_mirrored(f.id) {
+                let _ = store.post_with_id(f.id, f.attributes, f.payload);
             }
         }
+        true // a full snapshot (possibly empty) was applied — the mirror is now complete
     }
 
     // ── Serving paths (primary) ──────────────────────────────────────────────
@@ -525,6 +571,16 @@ impl Blackboard {
     }
     fn serving_locally(&self) -> bool {
         self.is_primary.load(Ordering::Acquire)
+    }
+
+    /// `true` if this node is currently serving as the namespace **primary**.
+    pub fn is_primary(&self) -> bool {
+        self.is_primary.load(Ordering::Acquire)
+    }
+
+    /// `true` if this node is currently mirroring as a **secondary**.
+    pub fn is_secondary(&self) -> bool {
+        self.is_secondary.load(Ordering::Acquire)
     }
 
     // ── Public API ───────────────────────────────────────────────────────────
