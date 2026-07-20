@@ -195,17 +195,35 @@ function audit(d){
 }
 
 // ── KV: /gateway/kv/keys (namespace map) ────────────────────────────────────
+// The 2.5 s poll replaces the whole view's innerHTML, which would collapse every
+// open <details> — so each render snapshots the open/scroll state per namespace
+// and the next render restores it (scroll via kvScroll, applied after insertion).
+let kvScroll = {};
 function kv(k){
   if(k.__err) return `<p class="err">unreachable — ${k.__err}</p>`;
   const keys = k.keys||[];
   const byNs = {};
   keys.forEach(key=>{ const ns=(key.split("/")[0]||"(root)")+"/"; (byNs[ns]=byNs[ns]||[]).push(key); });
+  const open = new Set(); kvScroll = {};
+  document.querySelectorAll("#view details[data-ns]").forEach(d=>{
+    if(!d.open) return;
+    open.add(d.dataset.ns);
+    const kdiv = d.querySelector(".keys");
+    if(kdiv) kvScroll[d.dataset.ns] = kdiv.scrollTop;
+  });
   const rows = Object.keys(byNs).sort().map(ns=>{
     const list = byNs[ns];
-    return `<tr><td class="kv-ns">${ns}</td><td>${list.length}</td><td><details><summary class="muted" style="cursor:pointer">keys</summary><div class="keys">${list.join("\n")}</div></details></td></tr>`;
+    const attr = esc(ns).replace(/"/g,"&quot;");
+    return `<tr><td class="kv-ns">${esc(ns)}</td><td>${list.length}</td><td><details data-ns="${attr}"${open.has(ns)?" open":""}><summary class="muted" style="cursor:pointer">keys</summary><div class="keys">${esc(list.join("\n"))}</div></details></td></tr>`;
   }).join("");
   return `<div class="muted" style="margin-bottom:10px">${keys.length} live keys across ${Object.keys(byNs).length} namespaces</div>
     <table><thead><tr><th>prefix</th><th>count</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+function kvRestoreScroll(){
+  document.querySelectorAll("#view details[data-ns][open] .keys").forEach(kdiv=>{
+    const ns = kdiv.closest("details").dataset.ns;
+    if(ns in kvScroll) kdiv.scrollTop = kvScroll[ns];
+  });
 }
 
 // ── Metrics: /metrics (Prometheus) ──────────────────────────────────────────
@@ -231,6 +249,7 @@ async function refresh(){
     else if(active==="KV"){ data = await api("/gateway/kv/keys"); html = kv(data); }
     else if(active==="Metrics"){ data = await api("/metrics"); html = metrics(data); }
     view.innerHTML = html;
+    if(active==="KV") kvRestoreScroll();
     const bad = data && data.__err;
     setStatus(!bad, bad? `unreachable @ ${host()}` : `${host()} · ${new Date().toLocaleTimeString()}`);
   }catch(e){ setStatus(false, String(e)); }
