@@ -44,3 +44,11 @@ reqwest    = { version = "0.12", features = ["json"] }
 serde_json = "1.0"
 base64     = "0.22"
 proptest   = "1"
+
+[[example]]
+name = "scrape_fleet_node"
+required-features = ["gateway"]
+
+[[example]]
+name = "scrape_worker_node"
+required-features = ["gateway"]
