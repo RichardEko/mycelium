@@ -113,12 +113,19 @@ export class MyceliumAgent {
    * Advertises a capability on the mesh. Re-asserted every `intervalSecs` so
    * late joiners discover it. Returns a `CapabilityHandle`; call `.drop()` or
    * use `await using` to retract.
+   *
+   * Pass `leaseSecs` to bind the advertisement to THIS process's liveness:
+   * the node retracts it unless `handle.heartbeat()` is called within every
+   * `leaseSecs` window (beat at `leaseSecs / 3` for margin). Without it the
+   * node's refresh task keeps the advert alive until `.drop()` or node
+   * shutdown — which outlives a crashed client.
    */
   async advertiseCapability(
     ns: string,
     name: string,
     options: {
       intervalSecs?: number;
+      leaseSecs?: number;
       attributes?: Record<string, unknown>;
       authorizedCallers?: string[];
     } = {},
@@ -127,13 +134,22 @@ export class MyceliumAgent {
       ns,
       name,
       interval_secs: options.intervalSecs ?? 30,
+      ...(options.leaseSecs !== undefined ? { lease_secs: options.leaseSecs } : {}),
       attributes: options.attributes ?? {},
       authorized_callers: options.authorizedCallers ?? [],
     }) as { handle_id: string };
     const handleId = data.handle_id;
-    return new CapabilityHandle(handleId, async () => {
-      await this._delete(`/gateway/capability/${handleId}`);
-    });
+    return new CapabilityHandle(
+      handleId,
+      async () => {
+        await this._delete(`/gateway/capability/${handleId}`);
+      },
+      options.leaseSecs !== undefined
+        ? async () => {
+            await this._post(`/gateway/capability/${handleId}/heartbeat`, {});
+          }
+        : undefined,
+    );
   }
 
   /**

@@ -70,15 +70,35 @@ export class CapabilityHandle {
   /** Opaque handle ID used to retract via HTTP. */
   readonly handleId: string;
   private readonly _drop: () => Promise<void>;
+  private readonly _heartbeat?: () => Promise<void>;
 
-  constructor(handleId: string, drop: () => Promise<void>) {
+  constructor(
+    handleId: string,
+    drop: () => Promise<void>,
+    heartbeat?: () => Promise<void>,
+  ) {
     this.handleId = handleId;
     this._drop = drop;
+    this._heartbeat = heartbeat;
   }
 
   /** Retracts (tombstones) the capability. */
   async drop(): Promise<void> {
     return this._drop();
+  }
+
+  /**
+   * Renews the lease on an advertisement made with `leaseSecs`. Must be
+   * called within every `leaseSecs` window or the node retracts the advert.
+   * Throws if the advertisement was made without a lease.
+   */
+  async heartbeat(): Promise<void> {
+    if (!this._heartbeat) {
+      throw new Error(
+        "capability advertised without leaseSecs — no lease to renew",
+      );
+    }
+    return this._heartbeat();
   }
 
   async [Symbol.asyncDispose](): Promise<void> {

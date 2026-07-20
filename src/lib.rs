@@ -85,6 +85,9 @@
 //! | `sys/load/{node}/group-req/{g}/{i}` | Group-requirement opacity; written by the emergent-group membership task when a `CapabilityGroupDef::requires` filter is unsatisfied |
 //! | `sys/quorum/{kind}/{sender}`        | Persistent quorum evidence                                   |
 //! | `sys/topology-override/{group}`     | Consensus — operator escape hatch (value: `b"true"`)         |
+//! | `sys/health/{node}`                 | Emergent detectors (Phase 2) — periodic store self-report feeding cross-node store-convergence |
+//! | `sys/rate/{observer}/{sender}`      | Distributed rate observation (WS-C M7) — per-observer rate evidence, fps as ASCII u64, short-TTL |
+//! | `sys/role/{node}`                   | RBAC — signature-verified role claim (checked against `sys/identity/{node}` at read) |
 //! | `consensus/committed/{slot}`        | Consensus — committed slot state                             |
 //! | `consensus/ballot/{slot}`           | Consensus — ballot tracking                                  |
 //! | `consensus/lease/{slot}`            | Consensus — epoch-lease window (u64 LE ms); written when `ConsensusConfig::committed_lease_secs` is set; expiry is evaluated read-side |
@@ -125,6 +128,8 @@
 //! | `log/reason/{run_id}/{node}/{hlc}` | `mycelium-reason` companion — fleet-reasoning trace substreams (one per writer; a shared stream would collide same-ms HLC keys — `TraceRecorder`/`replay`) |
 //! | `ckpt/{thread}/{ns}/{id}`          | `langgraph-checkpoint-mycelium` — LangGraph checkpoint **index** rows (metadata inline; payloads in the blob tier). Written by the Python saver via the gateway KV endpoint |
 //! | `ckptw/{thread}/{ns}/{id}/{task}/{idx}` | `langgraph-checkpoint-mycelium` — LangGraph pending-write index rows (one blob per write) |
+//! | `facts/{node}/{field}`             | `mycelium-agentfacts` companion — node-signed per-field AgentFacts CRDT publication (`publish_field`; LWW-assembled by readers) |
+//! | `manifest/…`                       | Mesh manifest (`mesh_manifest::manifest_keys`) — `current` · `version` · `history/{ver}` · `control/system` · `control/group/{g}`; the namespace is defined here, written by operator/app code through the public KV API |
 //!
 //! Layer-III writes that read or write KV (consensus engine,
 //! `sys/topology-override` reads) are documented at their call sites as

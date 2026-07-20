@@ -82,6 +82,22 @@ class CapabilityHandle:
         async with httpx.AsyncClient(base_url=self._agent._base_url, timeout=5.0) as c:
             await c.delete(f"/gateway/capability/{self.handle_id}")
 
+    def heartbeat(self) -> None:
+        """Renew the lease on an advertisement made with ``lease_secs``.
+
+        Must be called within every ``lease_secs`` window or the node
+        retracts the advert.  Raises :class:`httpx.HTTPStatusError` on a
+        retracted handle (404) or one advertised without a lease (409).
+        """
+        import httpx as _httpx
+        with _httpx.Client(base_url=self._agent._base_url, timeout=5.0) as c:
+            c.post(f"/gateway/capability/{self.handle_id}/heartbeat").raise_for_status()
+
+    async def aheartbeat(self) -> None:
+        """Async variant of :meth:`heartbeat`."""
+        async with httpx.AsyncClient(base_url=self._agent._base_url, timeout=5.0) as c:
+            (await c.post(f"/gateway/capability/{self.handle_id}/heartbeat")).raise_for_status()
+
     def __enter__(self) -> "CapabilityHandle":
         return self
 
@@ -222,6 +238,7 @@ class MyceliumAgent:
         name:               str,
         *,
         interval_secs:      int                    = 30,
+        lease_secs:         int                    | None = None,
         attributes:         dict[str, Any]         | None = None,
         authorized_callers: list[str]              | None = None,
     ) -> CapabilityHandle:
@@ -235,6 +252,15 @@ class MyceliumAgent:
             ns:                 Capability namespace (e.g. ``"compute"``).
             name:               Capability name (e.g. ``"gpu"``).
             interval_secs:      Re-assertion interval.
+            lease_secs:         If set, binds the advertisement to THIS
+                                process's liveness: the node retracts it
+                                unless :meth:`CapabilityHandle.heartbeat` is
+                                called within every ``lease_secs`` window
+                                (beat at ``lease_secs / 3`` for margin).
+                                Without it, the node's refresh task keeps the
+                                advert alive until :meth:`CapabilityHandle.drop`
+                                or node shutdown — which outlives a crashed
+                                client.
             attributes:         Typed key-value annotations.
             authorized_callers: If non-empty, only callers whose identity is
                                 in this list will see the capability via
@@ -246,6 +272,8 @@ class MyceliumAgent:
             or use as a context manager to retract.
         """
         body: dict[str, Any] = {"ns": ns, "name": name, "interval_secs": interval_secs}
+        if lease_secs is not None:
+            body["lease_secs"] = lease_secs
         if attributes:
             body["attributes"] = attributes
         if authorized_callers:

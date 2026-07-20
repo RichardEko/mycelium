@@ -14,6 +14,7 @@
 //! the Layer 4 architecture.
 //!
 //! - `POST   /gateway/capability/advertise`    — advertise a capability; returns handle_id
+//! - `POST   /gateway/capability/{handle_id}/heartbeat` — renew a leased advertisement
 //! - `DELETE /gateway/capability/{handle_id}`  — retract (tombstone) a capability
 //! - `GET    /gateway/capability/resolve`      — filter-match with optional caller_id scoping
 //! - `POST   /gateway/signal/emit`             — fire a signal into the mesh
@@ -58,10 +59,10 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{oneshot, watch, Notify};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt as _;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::LogEntry;
 #[cfg(feature = "consensus")]
@@ -75,8 +76,8 @@ struct HttpCtx {
     agent_ctx:       Arc<TaskCtx>,
     /// Capability handle table for the language gateway.
     /// Key: opaque handle_id string returned to the caller.
-    /// Value: cancel sender — dropping it tombstones the capability.
-    gateway_caps:    Arc<Mutex<HashMap<String, oneshot::Sender<()>>>>,
+    /// Value: dropping it (map removal) tombstones the capability.
+    gateway_caps:    Arc<Mutex<HashMap<String, GatewayCapHandle>>>,
     /// Distributed lock guards held on behalf of HTTP clients.
     /// Key: opaque guard_id returned to the caller.
     /// Drop-on-remove tombstones `lock/{name}` in the gossip KV.
@@ -91,6 +92,20 @@ struct HttpCtx {
     /// JWT bearers against the IdP JWKS and maps groups to gateway scopes.
     #[cfg(feature = "compliance")]
     oidc:            Option<Arc<super::oidc::OidcVerifier>>,
+}
+
+/// One gateway-advertised capability. In-process advertisers get liveness
+/// coupling for free (their refresh loop dies with them); a *bridged*
+/// advertiser's refresh loop runs in this node, so its advert would outlive
+/// the client process — the lease closes that gap.
+struct GatewayCapHandle {
+    /// Dropped on map removal → the persist task exits and tombstones the
+    /// KV entry. Never read; its `Drop` is the retraction mechanism.
+    _cancel:   oneshot::Sender<()>,
+    /// `Some` when the advertiser passed `lease_secs`: each notification
+    /// restarts the lease watchdog's window; a full window with no beat
+    /// retracts the advert exactly as `DELETE /gateway/capability/{id}` would.
+    heartbeat: Option<Arc<Notify>>,
 }
 
 /// Returns the process-wide Prometheus scrape handle, installing the recorder
@@ -155,6 +170,7 @@ pub(super) async fn run_http_server(
     let gateway = Router::new()
         .route("/capability/advertise",   post(gw_cap_advertise))
         .route("/capability/{handle_id}", delete(gw_cap_drop))
+        .route("/capability/{handle_id}/heartbeat", post(gw_cap_heartbeat))
         .route("/capability/resolve",     get(gw_cap_resolve))
         .route("/signal/emit",            post(gw_signal_emit))
         .route("/signal/sse/{kind}",      get(gw_signal_sse))
@@ -414,6 +430,7 @@ fn required_scope(method: &axum::http::Method, matched_path: &str) -> &'static s
         // Capabilities
         "/gateway/capability/advertise"   => "cap:write",
         "/gateway/capability/{handle_id}" => "cap:write",
+        "/gateway/capability/{handle_id}/heartbeat" => "cap:write",
         "/gateway/capability/resolve"     => "cap:read",
         "/gateway/shard/{ns}/{name}"      => "cap:read",
         // Layer II mesh messaging
@@ -1159,10 +1176,18 @@ async fn mcp_handler(
 /// ```json
 /// { "ns": "compute", "name": "gpu",
 ///   "interval_secs": 30,
+///   "lease_secs": 90,
 ///   "attributes": { "model": "A100" },
 ///   "authorized_callers": ["orchestrator"] }
 /// ```
 /// Response: `{ "handle_id": "<uuid>" }`
+///
+/// `lease_secs` (optional) binds the advertisement to the *client's* liveness,
+/// not this node's: the caller must `POST /gateway/capability/{handle_id}/heartbeat`
+/// within every `lease_secs` window or the advert is retracted (tombstoned) as if
+/// DELETEd. Beat at `lease_secs / 3` for margin — mirroring the mesh's own 3×
+/// evaporation convention. Without it, the refresh task keeps the advert fresh
+/// until DELETE or node shutdown — which outlives a crashed bridge client.
 async fn gw_cap_advertise(
     State(ctx): State<Arc<HttpCtx>>,
     Json(body):  Json<serde_json::Value>,
@@ -1216,9 +1241,59 @@ async fn gw_cap_advertise(
     ));
 
     let handle_id = format!("{:x}", fastrand::u128(..));
-    ctx.gateway_caps.lock().unwrap_or_else(|e| e.into_inner()).insert(handle_id.clone(), cancel_tx);
+
+    // Lease mode: the watchdog retracts through the same path as DELETE (map
+    // removal drops the cancel sender). `remove` returning `None` means the
+    // caller already retracted — exit without noise.
+    let heartbeat = body["lease_secs"].as_u64().map(|secs| {
+        let lease = Duration::from_secs(secs.max(1));
+        let hb = Arc::new(Notify::new());
+        let watchdog_hb = Arc::clone(&hb);
+        let caps = Arc::clone(&ctx.gateway_caps);
+        let hid = handle_id.clone();
+        let mut wshutdown = ctx.shutdown_rx.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = wshutdown.wait_for(|v| *v) => return,
+                    beat = tokio::time::timeout(lease, watchdog_hb.notified()) => {
+                        if beat.is_ok() { continue; }
+                        if caps.lock().unwrap_or_else(|e| e.into_inner()).remove(&hid).is_some() {
+                            warn!(handle = %hid, "gateway capability lease expired without heartbeat — retracting");
+                        }
+                        return;
+                    }
+                }
+            }
+        });
+        hb
+    });
+
+    ctx.gateway_caps.lock().unwrap_or_else(|e| e.into_inner())
+        .insert(handle_id.clone(), GatewayCapHandle { _cancel: cancel_tx, heartbeat });
 
     Json(json!({ "handle_id": handle_id })).into_response()
+}
+
+/// `POST /gateway/capability/{handle_id}/heartbeat`
+///
+/// Renews the lease on a capability advertised with `lease_secs`. `404` for an
+/// unknown or already-retracted handle (a client seeing this should re-advertise);
+/// `409` when the handle was advertised without `lease_secs` and has no lease.
+async fn gw_cap_heartbeat(
+    Path(handle_id): Path<String>,
+    State(ctx):      State<Arc<HttpCtx>>,
+) -> impl IntoResponse {
+    let guard = ctx.gateway_caps.lock().unwrap_or_else(|e| e.into_inner());
+    match guard.get(&handle_id) {
+        None => (StatusCode::NOT_FOUND, Json(json!({ "error": "handle not found" }))).into_response(),
+        Some(GatewayCapHandle { heartbeat: None, .. }) =>
+            (StatusCode::CONFLICT, Json(json!({ "error": "handle has no lease (advertised without lease_secs)" }))).into_response(),
+        Some(GatewayCapHandle { heartbeat: Some(hb), .. }) => {
+            hb.notify_one();
+            Json(json!({ "ok": true })).into_response()
+        }
+    }
 }
 
 /// `DELETE /gateway/capability/{handle_id}`
@@ -2922,6 +2997,110 @@ mod tests {
         let body: serde_json::Value = resp.json().await.unwrap();
         assert!(body["store_entries"].is_number());
         assert!(body["dropped_frames"].is_number());
+
+        agent.shutdown().await;
+    }
+
+    /// Providers currently resolvable for `(scrape, worker)` on this gateway.
+    async fn provider_count(client: &reqwest::Client, base: &str) -> usize {
+        let v: serde_json::Value = client
+            .get(format!("{base}/gateway/capability/resolve?ns=scrape&name=worker"))
+            .send().await.unwrap().json().await.unwrap();
+        v["providers"].as_array().map(|a| a.len()).unwrap_or(0)
+    }
+
+    async fn start_test_agent() -> (Arc<GossipAgent>, String, reqwest::Client) {
+        let gossip_port = alloc_port();
+        let http_port   = alloc_port();
+        let id  = NodeId::new("127.0.0.1", gossip_port).unwrap();
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = gossip_port;
+        cfg.http_port = Some(http_port);
+        cfg.http_addr = "127.0.0.1".to_string();
+        let agent = Arc::new(GossipAgent::new(id, cfg));
+        agent.start().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        (agent, format!("http://127.0.0.1:{http_port}"), reqwest::Client::new())
+    }
+
+    /// Lease mode (2026-07-20): a bridged advertiser's refresh loop runs in
+    /// THIS node's process, so without a lease the advert outlives a crashed
+    /// client — provider liveness decoupled from refresher liveness (the w15
+    /// stale-advert fingerprint). With `lease_secs`, a full window without a
+    /// heartbeat must retract the advert exactly as DELETE would.
+    #[tokio::test]
+    async fn test_gateway_cap_lease_expires_without_heartbeat() {
+        let (agent, base, client) = start_test_agent().await;
+
+        let resp = client.post(format!("{base}/gateway/capability/advertise"))
+            .json(&serde_json::json!({ "ns": "scrape", "name": "worker",
+                                       "interval_secs": 1, "lease_secs": 1 }))
+            .send().await.unwrap();
+        assert_eq!(resp.status(), 200);
+        let handle_id = resp.json::<serde_json::Value>().await.unwrap()
+            ["handle_id"].as_str().unwrap().to_string();
+
+        // Advert appears (first persist tick is immediate).
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while provider_count(&client, &base).await == 0 {
+            assert!(std::time::Instant::now() < deadline, "advert never appeared");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        // No heartbeats → the watchdog tombstones the advert.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while provider_count(&client, &base).await != 0 {
+            assert!(std::time::Instant::now() < deadline, "leased advert was never retracted");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        // The handle died with the lease: DELETE now 404s.
+        let del = client.delete(format!("{base}/gateway/capability/{handle_id}"))
+            .send().await.unwrap();
+        assert_eq!(del.status(), 404);
+
+        agent.shutdown().await;
+    }
+
+    /// The complement: heartbeats within the window keep a leased advert alive
+    /// past many lease periods, and a lease-less handle rejects heartbeats (409).
+    #[tokio::test]
+    async fn test_gateway_cap_lease_heartbeat_keeps_alive() {
+        let (agent, base, client) = start_test_agent().await;
+
+        let resp = client.post(format!("{base}/gateway/capability/advertise"))
+            .json(&serde_json::json!({ "ns": "scrape", "name": "worker",
+                                       "interval_secs": 1, "lease_secs": 1 }))
+            .send().await.unwrap();
+        let handle_id = resp.json::<serde_json::Value>().await.unwrap()
+            ["handle_id"].as_str().unwrap().to_string();
+
+        // Beat every 300 ms for 2.4 s — several full lease windows.
+        for _ in 0..8 {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let hb = client.post(format!("{base}/gateway/capability/{handle_id}/heartbeat"))
+                .send().await.unwrap();
+            assert_eq!(hb.status(), 200);
+        }
+        assert_eq!(provider_count(&client, &base).await, 1,
+                   "heartbeated advert must stay live across lease windows");
+
+        // Heartbeats stop → retraction.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while provider_count(&client, &base).await != 0 {
+            assert!(std::time::Instant::now() < deadline, "advert not retracted after heartbeats stopped");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        // A handle advertised WITHOUT lease_secs has no lease to renew: 409.
+        let resp = client.post(format!("{base}/gateway/capability/advertise"))
+            .json(&serde_json::json!({ "ns": "scrape", "name": "worker", "interval_secs": 1 }))
+            .send().await.unwrap();
+        let durable_id = resp.json::<serde_json::Value>().await.unwrap()
+            ["handle_id"].as_str().unwrap().to_string();
+        let hb = client.post(format!("{base}/gateway/capability/{durable_id}/heartbeat"))
+            .send().await.unwrap();
+        assert_eq!(hb.status(), 409);
 
         agent.shutdown().await;
     }

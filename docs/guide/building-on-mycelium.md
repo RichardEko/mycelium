@@ -58,13 +58,14 @@ prefixes; **do not write under them:**
 
 > `grp/` · `sys/` · `consensus/` · `cap/` · `req/` · `cap-group/` · `gcap/` · `mailbox/` ·
 > `schemas/` · `tools/` · `agent/` · `svc/` · `log/` · `clog/` · `lock/` · `prompts/` ·
-> `skills/` (the full authoritative table with per-key semantics is in
+> `skills/` · `manifest/` (the full authoritative table with per-key semantics is in
 > [`src/lib.rs`](../../src/lib.rs) → *KV namespace ownership*). Note `log/` in particular:
 > `KvHandle::append` writes `log/{stream}/…`, so give your streams an app-scoped name —
 > don't write raw `log/` keys.
 >
 > Companion claims: `tuple/` (`mycelium-tuple-space`) · `wiki/` (`mycelium-wiki`) ·
-> `installable/` + `comp/` (`mycelium-wasm-host`) · `ckpt/` + `ckptw/` (checkpoint index rows,
+> `installable/` + `comp/` (`mycelium-wasm-host`) · `facts/` (per-field AgentFacts CRDT,
+> `mycelium-agentfacts`) · `ckpt/` + `ckptw/` (checkpoint index rows,
 > `langgraph-checkpoint-mycelium`) · `log/reason/` (trace substreams, `mycelium-reason`). The
 > `reason/blob-cache` **capability** marks blob-tier providers (`mycelium-reason`).
 

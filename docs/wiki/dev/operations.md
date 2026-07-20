@@ -35,6 +35,16 @@ Governance surface: `POST /gateway/govern/{timing,tuning,membership}` + `GET /ga
 (deny-by-default scopes, WS2-audited) — see
 [management-as-intent](../domain/theory/management-as-intent.md) for the model.
 
+**Bridged capability adverts need a lease.** `POST /gateway/capability/advertise` spawns the
+refresh loop *in the node*, so a bridge client's advert survives the client's crash and never
+evaporates (the 2026-07-20 scraper-fleet "stale w15 advert" finding: provider liveness decoupled
+from refresher liveness). Pass `lease_secs` and beat `POST /gateway/capability/{handle_id}/heartbeat`
+within every window (beat at `lease_secs/3`); a missed window retracts exactly as DELETE would.
+Omitting `lease_secs` keeps the old durable-until-DELETE semantics — correct only when the
+advertised capability's lifetime really is the node's. Canon: `src/agent/http.rs`
+(`gw_cap_advertise`); both SDK bridges expose it (`leaseSecs` + `handle.heartbeat()` in
+`mycelium-ts`, `lease_secs` + `handle.heartbeat()` in `mycelium-py`).
+
 ## task_count reference (leak triage)
 
 Steady state after `start()`: 7 core loops (GC, health, anti-entropy, WAL-flush, reorder
@@ -49,7 +59,9 @@ a per-peer writer not exiting on disconnect.
 `cli` (default; tracing-subscriber for binaries) · `gateway` (default; disable for embedded: `default-features = false` — gossip, KV, signals,
 consensus, typed handles all remain) · `consensus` (default; drop for minimal embeds — a
 consensus-free node still *forwards* PROPOSE/VOTE/COMMIT) · `tls` · `metrics` · `a2a` ·
-`llm` · `compliance` (= gateway+tls). `mycelium-core` builds standalone (≈48 deps vs ≈140).
+`llm` · `otel` (OTEL span export from `SkillRunner`) · `compliance` (= gateway+tls).
+`mycelium-core` builds standalone (≈48 deps vs ≈140). (`fuzz-internals` / `test-util` are
+test-only, deliberately not listed here.)
 
 ## Framing discipline
 

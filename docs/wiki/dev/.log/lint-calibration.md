@@ -101,3 +101,29 @@ Entry format:
   requires **classifying every `include_str! html` hit** as *compliant* or *documented-exception* — an
   unclassified hit is itself a finding. Folded into §4 + the contract doc's Lint section. Fixed: added
   `ops_console` to the exceptions in `ui-example-contract.md`.
+- 2026-07-20: **CI-gate list check was applied optimistically — three of the eight block commands had
+  no live `run:` line.** `testing.md`'s "the full CI gate (for reference) is:" block lists
+  `cargo test --lib --features compliance` (WS1 RBAC/WS2 audit/WS4 OIDC/WS5 rotation — **never** in any
+  workflow, main crate), `cargo test --lib --no-default-features --features gateway` (consensus-free
+  embed — never in any workflow), and `cargo clippy -p mycelium-core --lib --tests` (exists only inside
+  a ci.yml *comment* since 979f8d6, 2026-07-11). All three ARE in `make check`, so local green masked
+  the gap — the exact make-check-vs-CI family ingested 2026-07-16. The 2026-07-11 sharpening (diff the
+  block against workflow `run:` steps) existed through the 2026-07-13/14/15 passes yet none flagged it
+  (found by the 2026-07-20 lint delegating the diff to a fresh-eyes sweep that string-matched every
+  command). Sharpening: the diff must match each command's *distinguishing flag set* against live
+  `run:` lines **and the scripts they invoke** (`ci-retest.sh` args count; a workflow comment does
+  not; a similar step on a different crate — `-p mycelium-guardrails --features compliance` — does
+  not). Escalated as a **CI gap (code bug)**, per the report-don't-paper-over rule, not patched into
+  the page.
+- 2026-07-20: **KV-namespace table check missed two live prefixes — the 2026-07-07 nine-prefix family
+  recurring.** `facts/{node}/{field}` (agentfacts per-field CRDT, live since the companion shipped) and
+  `manifest/…` (the `mesh_manifest::manifest_keys` public module) were absent from BOTH the `src/lib.rs`
+  ownership table and the guide's reserved list through every pass since 2026-07-07 (found by the
+  2026-07-20 lint's fresh-eyes workspace sweep). Root cause: the 2026-07-07 sharpening greps
+  `format!("…/` writer literals — but agentfacts writes through a helper built on a `FACTS_PREFIX`
+  constant, and `manifest/` is defined as a public keys module whose writers are *application* code
+  (the shipped example), so neither surfaced as a raw key literal. Sharpening: the sweep must also
+  grep prefix **constants** (`grep -rnE '(PREFIX|_NS)[: ].*&str.*"[a-z-]+/"'`) and public `*_keys`
+  modules across all crates — a namespace is reserved by its *definition*, not only by an in-crate
+  writer. Fixed: both rows added to `src/lib.rs` + the guide; `sys/health` / `sys/rate` / `sys/role`
+  subkey rows added while there.
