@@ -29,6 +29,15 @@ await or a lock release — the `AgentStateMachine::transition` budget race (Run
 check-then-act with the counters incremented after commit; the fix is `try_commit`
 (validate-and-swap + reserve under the state lock, `src/agent/state_machine.rs`).
 
+And it reappears on **`tokio::sync::watch` channels**: `borrow()` → clone/modify → `send()`
+is the same unserialised read-modify-write — two writers each borrow the same snapshot and
+the second `send()` silently drops the first's update. The event-driven peer-list publish in
+`handle_connection` lost a concurrently-dialing peer exactly this way (unsendable until the
+health monitor's first reconcile; found via the `mailbox_llm` flake, 2026-07-21, `1ffe9ea`).
+Rule: **mutate watch state only inside `send_modify` / `send_if_modified`** — the closure
+holds the channel's internal lock, making the RMW atomic (reference:
+`mycelium-core/src/connection.rs`, the `peer_list_tx.send_if_modified` site).
+
 ## Memory-ordering policy for atomics
 
 - **`Relaxed` — purely diagnostic counters** (`dropped_frames`, `hash_acc`,

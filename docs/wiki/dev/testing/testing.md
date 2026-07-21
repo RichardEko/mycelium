@@ -54,6 +54,17 @@ consensus drops a vote until the signer's `sys/identity/` gossips in — togethe
 identity propagation before proposing + a little ballot headroom), **not** the substrate. A flaky
 example demo can be a *correct* substrate change meeting a demo whose startup gate predates it.
 
+**Second corollary — KV-level gates prove *visibility*, not *deliverability*** (the `01 ·
+mailbox_llm` flake, 2026-07-21, `1ffe9ea`): a demo can see peers, capabilities, and all
+`sys/identity/` keys and *still* drop its first Individual-scoped RPC leg, because each hop's
+active forwarding set is published event-driven in the first seconds (the health monitor's first
+reconcile is ~`health_check_interval` out). A demo that asserts on an RPC must **warm-up-probe
+the exact round-trip it asserts** (retry a throwaway call until one succeeds — a structural gate
+at the layer under test), never let the first asserted call double as the path's first exercise.
+Any TLS demo doing early Individual-scoped sends needs **both** gates: identity propagation *and*
+the round-trip probe. (`catalog` / `provisioning` / `mcp_toolgrowth` make early Individual sends
+with neither — same theoretical exposure, so far unexpressed.)
+
 **Feature-gated dead code is a real trap** (bit the diagnostics work, 2026-07-03): an item used
 only under `gateway`/`metrics` is *dead* in a `--no-default-features` build (the CI "Gateway-free"
 + "WASM host" jobs run exactly that), and `-D warnings` fails there even though the default and
