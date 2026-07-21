@@ -118,6 +118,24 @@ receipt); waiting for the health monitor's next tick left inbound-only nodes (se
 primaries) mute for live sends for up to 2× `health_check_interval`. The health monitor
 remains the reconciler/evictor, not the activator.
 
+Three corollaries hardened 2026-07-21 (the cold-start saga —
+[full log](../.log/2026-07-21-mailbox-llm-flake.md)); each ships a regression when forgotten:
+
+- **Peer learning is Ping-borne** — only `Ping` carries a full `NodeId`; `Data`/`SignedData`
+  carry an id-hash and *cannot* admit or activate a peer. Both activation twins must stay in
+  sync: the TCP Ping arm (`connection.rs`) and SWIM's `ApplyEffect::BecameAlive` (`swim.rs`).
+  Gates: `test_cold_start_rpc_both_directions_before_first_tick_{swim,no_swim}` (health
+  interval cranked so no tick can rescue the handshake).
+- **Every Ping carries the peer-exchange sample** — startup pings and ping-backs included. An
+  empty-`known_peers` ping breaks cluster *introduction*: a fresh trio whose hub dies pre-tick
+  ends mutually unknown and staleness-evicts to total isolation (the failover regression).
+- **Activation caps size by the union** (`known.max(current + 1)`), never the peers map alone —
+  the watch is bootstrap-seeded before those peers surface in the map, and map-only sizing let
+  an early activation refuse the only *live* member. Gate:
+  `became_alive_activates_despite_bootstrap_seeded_watch`.
+- Watch publishes are RMW-atomic (`send_if_modified` only) — rule + loom model in
+  [lock-free-and-atomics](../concurrency/lock-free-and-atomics.md).
+
 ## Anti-entropy is chunked; KV writes are size-gated (2026-07-02)
 
 `StateResponse` is sent as multiple frames under a per-chunk byte budget
