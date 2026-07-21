@@ -22,6 +22,15 @@ jobs:
       # flake no longer reds main, but every flake is a loud annotation — never silent.
       - run: ./scripts/ci-retest.sh --lib
       - run: ./scripts/ci-retest.sh --lib --features tls,metrics,a2a,llm
+      # WS1 RBAC + WS2 audit + WS4 OIDC + WS5 rotation. Listed as a gate in
+      # testing.md and run by `make check` since v2.1 — but never in CI until
+      # 2026-07-21 (wiki-lint finding: local green masked the gap, the exact
+      # make-check-vs-CI-green family).
+      - run: ./scripts/ci-retest.sh --lib --features compliance
+      # Consensus-free embed: gateway without the consensus feature must still
+      # test green (a minimal-embed node forwards PROPOSE/VOTE/COMMIT without
+      # running them). Same 2026-07-21 gap closure.
+      - run: ./scripts/ci-retest.sh --lib --no-default-features --features gateway
       # mycelium-core (the substrate: codec/framing/hlc/store/swim) — its unit suite was
       # clippy-COMPILED (`clippy -p mycelium-core --lib --tests`) but never RUN: `--lib` above
       # tests only the root `mycelium` package (core is a compiled dependency there, so its
@@ -51,6 +60,11 @@ jobs:
       # #[cfg(feature = "tls")] etc. (same set CLAUDE.md mandates locally).
       - run: cargo clippy --lib --tests --features tls,metrics,a2a,llm -- -D warnings
       - run: cargo clippy -p mycelium-tuple-space --features gateway --all-targets -- -D warnings
+      # Core's own test code is a separate lint scope (`-p mycelium-core --lib
+      # --tests`): the Test job RUNS core's suite but nothing linted it after
+      # the 2026-07-11 restructure left this only in a comment (2026-07-21
+      # wiki-lint finding; `make check` had it all along).
+      - run: cargo clippy -p mycelium-core --lib --tests -- -D warnings
 
   embedded:
     name: Gateway-free build (no default features)
