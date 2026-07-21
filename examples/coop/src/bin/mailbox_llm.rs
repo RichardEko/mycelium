@@ -140,15 +140,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the health monitor's first reconcile) — the response leg failed ~1-in-10 cold starts when
     // the first real donation doubled as the path's first exercise. Probing until one echo returns
     // gates on the exact capability the demo then asserts.
+    // The probe is belt-and-braces since the substrate cold-start fixes (2026-07-21, deterministic
+    // gates in lib_tests) — kept deliberately, but LOUD when it takes load: a retrying probe on a
+    // healthy substrate is a bug report (flake-tier philosophy), never silent absorption.
     tokio::time::timeout(Duration::from_secs(15), async {
+        let mut probe_attempts = 0u32;
         loop {
             let probe = triage.agent.llm()
                 .call_prompt_skill("routing", "suggest", "warm-up probe",
                                    HashMap::new(), Duration::from_secs(2))
                 .await;
             if probe.is_ok() {
+                if probe_attempts > 0 {
+                    println!("[depot-triage] warm-up probe needed {} retr{} — cold-start path \
+                              slower than expected, worth a look",
+                             probe_attempts, if probe_attempts == 1 { "y" } else { "ies" });
+                }
                 return;
             }
+            probe_attempts += 1;
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
     })

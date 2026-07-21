@@ -59,3 +59,20 @@ every downstream assumption timed against the old, slower gate — grep for gate
 silently strengthened. Companion artifacts: `loom-spike/tests/bounded_append.rs` (models the
 borrow+send lost update; broken twin fails with a printed schedule) and the `/wiki-lint` §1
 watch-RMW mechanical sweep.
+
+**Epilogue — the workarounds stay (deliberate decision, 2026-07-21).** With the substrate fixed,
+the question was whether to strip the demo-level gates/probes and the older pinning workarounds.
+Decision: **keep all of them** — do not remove as "dead" in a future cleanup pass:
+- The **identity gates** guard TLS's fail-closed unknown-signer drop — a live precondition, not
+  the fixed bug.
+- The **warm-up probes / RPC retries** now defend only inherent timing (loaded runners, gossip
+  latency). They cannot mask a substrate regression because the deterministic gates
+  (`test_cold_start_rpc_*`, the failover suite, the loom models) detect one directly — masking
+  requires being the sole detector. Cost on a healthy substrate ≈ zero. Requirement: the belt is
+  **loud when it takes load** (the mailbox probe now prints its retry count; the RPC retries
+  already did) — a retrying probe is a bug report, never silent absorption.
+- **`connect_peer` / primary pinning (#150)**: never only a workaround — under bounded fan-out a
+  de-pinned peer legitimately degrades to flood-relay, too slow for RPC-heavy relationships at
+  steady state. The cold-start motivation evaporated; the steady-state one is permanent.
+- The **consensus demo's ballot headroom** serves the stricter correct quorum on slow runners —
+  unrelated family, stays.
