@@ -14,7 +14,17 @@ CI failed 3/3 smoke attempts on `01 · mailbox_llm` (~1-in-10 locally). Three fi
    one of two concurrently-dialing peers. Fixed with `send_if_modified`; rule ingested to
    [lock-free-and-atomics](../concurrency/lock-free-and-atomics.md).
 
-**Open question (not closed by this):** what leaves a node's sendable set empty seconds into life
-with peering + identity established? The probe makes the demo immune; the substrate cold-start
-liveness question deserves an instrumented session. `catalog` / `provisioning` / `mcp_toolgrowth`
-share the exposure (no gate, no probe), so far unexpressed.
+**Open question — NARROWED same day (follow-up session):** what leaves a node's sendable set empty
+seconds into life with peering + identity established? Root cause localized to a structural fact:
+**fan-out activation is exclusively Ping-borne.** The `sender_is_new` → `peer_list_tx` publish
+lives only in the `Ping` arm (`connection.rs`), and necessarily so — `Data`/`SignedData` carry
+only the sender's `u64` id-hash, not a `NodeId`, so those arms *cannot* activate a peer even
+after signature verification. KV-level state (identities, caps — what readiness gates can see)
+arrives gossip-borne and races ahead of Ping-borne activation; until a Ping lands, the node is
+mute toward that peer (worst case ~one `health_check_interval`). **Remaining fix is a design
+decision, not a patch** — candidates, each with M4-boundedness / self-connection-guard
+implications: (1) a hello frame carrying the full `NodeId` at connection-open that runs the same
+bounded activation; (2) seed the watch with bootstrap peers at `start()`; (3) a zero-jitter
+immediate first health tick. Deserves its own session. Meanwhile all four susceptible demos
+(`mailbox_llm` · `catalog` · `provisioning` · `mcp_toolgrowth`) now carry the identity gate, and
+the RPC-asserting ones a round-trip probe/retry.

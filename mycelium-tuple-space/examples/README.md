@@ -66,3 +66,12 @@ Then open **http://127.0.0.1:8093/** — no external dependencies, works offline
 - The **`metrics` feature** makes the Ops Console **Metrics** tab populate live while the demo runs.
 
 See the header of [`redistribution_viz.rs`](redistribution_viz.rs) for the design notes.
+
+## Deployment launchers (not showcases)
+
+`scrape_fleet_node.rs` / `scrape_worker_node.rs` are **operational launchers** for an external
+scraper-fleet deployment (a WAL-backed Primary and per-worker Client sidecars for a real workload),
+not pedagogical examples — they demonstrate nothing the pair above doesn't, so they are deliberately
+absent from the [capability matrix](../../examples/README.md#the-capability-matrix). Deployment
+knobs come from `GossipConfig` env overrides (`GOSSIP_CLUSTER_NAME` et al.); both require
+`--features gateway` (registered in `Cargo.toml` so feature-less builds skip them).

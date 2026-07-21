@@ -87,8 +87,22 @@ async fn process_one(
     let (id, payload) = ts.take(LANE, Duration::from_secs(10)).await?;
     let providers = worker.capabilities().resolve(&CapFilter::new("route", "optimize"));
     let (opt_node, _) = providers.into_iter().next().ok_or("no route/optimize provider")?;
-    let optimized: Bytes = worker.service()
-        .rpc_call(opt_node, Arc::clone(invoke_kind), payload, Duration::from_secs(5)).await?;
+    // Retried per testing.md's deliverability corollary: the worker→provider leg's first
+    // exercise can precede the sendable-set convergence on a cold start.
+    let mut optimized: Option<Bytes> = None;
+    for attempt in 1..=3u32 {
+        match worker.service()
+            .rpc_call(opt_node.clone(), Arc::clone(invoke_kind), payload.clone(),
+                      Duration::from_secs(5))
+            .await
+        {
+            Ok(b) => { optimized = Some(b); break; }
+            Err(e) if attempt < 3 =>
+                println!("[worker] optimize RPC attempt {attempt} failed ({e}); retrying"),
+            Err(e) => return Err(e.into()),
+        }
+    }
+    let optimized = optimized.expect("optimize reply after retries");
     ts.complete(id, DONE, optimized).await?;
     Ok(())
 }
@@ -138,7 +152,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let worker_ts = TupleSpace::new(Arc::clone(&worker.agent), TupleConfig {
         namespace: Arc::from("rescue"), role: TupleRole::Client, persist: false, ..Default::default()
     }).await?;
-    wait_until(30, || !worker.agent.peers().is_empty() && !seeder.agent.peers().is_empty()).await;
+    // Peers + identity keys (TLS: signed frames from a not-yet-known signer are dropped —
+    // testing.md's identity-readiness gate; 5 nodes ⇒ 5 sys/identity/ entries everywhere).
+    wait_until(30, || {
+        !worker.agent.peers().is_empty() && !seeder.agent.peers().is_empty()
+            && [&buffer.agent, &seeder.agent, &provider_a.agent, &provider_b.agent, &worker.agent]
+                .iter().all(|a| a.kv().scan_prefix("sys/identity/").len() >= 5)
+    }).await;
     // Structural: wait until the client can reach the tuple-space primary (depth() succeeds).
     // Generous budget (30 s) — a constrained CI runner peers + elects the primary more slowly.
     let mut primary_ready = false;

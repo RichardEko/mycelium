@@ -137,7 +137,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }).await?;
     println!("[llm-agent] up — needs to report a donation weight in tonnes");
 
-    wait_until(20, || !agent.agent.peers().is_empty() && !host.agent.peers().is_empty()).await;
+    // Peers + identity keys (TLS: a receiver drops signed frames from a sender whose
+    // sys/identity/ has not gossiped in — testing.md's identity-readiness gate).
+    wait_until(20, || {
+        !agent.agent.peers().is_empty() && !host.agent.peers().is_empty()
+            && [&library.agent, &host.agent, &agent.agent]
+                .iter().all(|a| a.kv().scan_prefix("sys/identity/").len() >= 3)
+    }).await;
 
     // ── tool-host watches demand; INSTALLS the tool when the fabric asks ─────────
     let host_agent = Arc::clone(&host.agent);
@@ -228,9 +234,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": TOOL, "arguments": {"kg": 5000.0}},
     });
-    let reply = agent.agent.service()
-        .rpc_call(provider, signal_kind::MCP_INVOKE, call.to_string().into_bytes(), Duration::from_secs(5))
-        .await?;
+    // First Individual-scoped exercise of the agent→host path — retried per testing.md's
+    // deliverability corollary (KV visibility ≠ sendable-set convergence on a cold start).
+    let mut reply = None;
+    for attempt in 1..=3u32 {
+        match agent.agent.service()
+            .rpc_call(provider.clone(), signal_kind::MCP_INVOKE,
+                      call.to_string().into_bytes(), Duration::from_secs(5))
+            .await
+        {
+            Ok(r) => { reply = Some(r); break; }
+            Err(e) if attempt < 3 =>
+                println!("[llm-agent] invoke attempt {attempt} failed ({e}); retrying"),
+            Err(e) => return Err(e.into()),
+        }
+    }
+    let reply = reply.expect("MCP invoke reply after retries");
     let resp: serde_json::Value = serde_json::from_slice(&reply)?;
     let tool_text = resp["result"]["content"][0]["text"].as_str().unwrap_or("");
     println!("[llm-agent] MCP tool returned: {tool_text}");

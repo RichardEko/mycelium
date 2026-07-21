@@ -122,7 +122,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let caller    = spawn_depot(mk("caller",    p[4], p[5], seed)).await?;
     println!("[installer|caller] up");
 
-    wait_until(20, || !installer.agent.peers().is_empty() && !caller.agent.peers().is_empty()).await;
+    // Peers + identity keys (TLS: signed frames from a not-yet-known signer are dropped —
+    // testing.md's identity-readiness gate; 3 nodes up ⇒ 3 sys/identity/ entries everywhere).
+    wait_until(20, || {
+        !installer.agent.peers().is_empty() && !caller.agent.peers().is_empty()
+            && [&librarian.agent, &installer.agent, &caller.agent]
+                .iter().all(|a| a.kv().scan_prefix("sys/identity/").len() >= 3)
+    }).await;
 
     // ── Phase 1 — the catalogue is cluster-wide: the installer sees the entry ────
     let filter = CapFilter::new("route", "optimize");
@@ -210,7 +216,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Phase 6 — a late joiner still installs, from the peer cache ──────────────
     let late = spawn_depot(mk("late", p[6], p[7], installer.gossip_port)).await?;
-    wait_until(20, || !late.agent.peers().is_empty()).await;
+    // The librarian is dead by now, but identity keys are durable KV — the late joiner needs
+    // the LIVE nodes' identities (installer, caller, its own) before its signed frames land.
+    wait_until(20, || {
+        !late.agent.peers().is_empty()
+            && late.agent.kv().scan_prefix("sys/identity/").len() >= 3
+    }).await;
 
     let seen_late = wait_until(20, || {
         InstallableCatalog::from_kv(&late.agent.kv()).resolve_best(&filter).is_some()
