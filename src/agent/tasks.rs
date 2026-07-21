@@ -563,6 +563,24 @@ pub(super) async fn run_health_monitor(ctx: HealthMonitorContext) {
     // is instead pulled via anti-entropy on the first forwarding-set members (uniform
     // random), so the seed is not a universal anti-entropy target.
     if !swim_enabled {
+        // Ping-before-pull (2026-07-21): announce our NodeId FIRST. Peer learning is
+        // Ping-borne — only Ping carries a full NodeId, and the StateRequest below is
+        // IGNORED by a receiver that does not know us yet (trusted-domain check). Without
+        // this frame, the dialer stayed invisible to its bootstrap until this tick loop's
+        // first ping and mute toward it until the bootstrap's — the mailbox_llm cold-start
+        // RPC drop. FIFO on the writer channel guarantees the peer processes the Ping
+        // (learns us, ping-backs — see the Ping arm) before the StateRequest (now trusted).
+        let hello = mycelium_core::codec::wire_to_bytes(
+            &WireMessage::Ping { sender: node_id.clone(), known_peers: Vec::new() });
+        for peer in &bootstrap_set {
+            if *peer == node_id { continue; }
+            if let Some(tx) = mycelium_core::writer::get_or_spawn_writer(
+                peer, &peer_writers, hot.writer_depth(), backoff, idle_timeout,
+                &shutdown_tx, &dropped_frames, tls.clone(),
+            ) {
+                let _ = tx.try_send(hello.clone());
+            }
+        }
         // Send our current Merkle digest so any state restored from WAL/snapshot is not
         // re-pulled; an empty store yields an all-zero digest ⇒ responder full-dumps.
         let digest = crate::store::store_bucket_hashes(&kv_state);

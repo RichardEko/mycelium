@@ -341,6 +341,9 @@ impl GossipAgent {
             Arc::clone(&self.peers),
             Arc::clone(&self.peer_writers),
             self.config.swim_gossip_updates,
+            self.peer_list_tx.clone(),
+            self.config.gossip_fanout,
+            self.config.max_active_connections,
         );
         let probe_timeout = Duration::from_millis(self.config.swim_probe_timeout_ms);
 

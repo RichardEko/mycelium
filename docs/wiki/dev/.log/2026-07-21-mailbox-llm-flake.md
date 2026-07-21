@@ -21,10 +21,22 @@ lives only in the `Ping` arm (`connection.rs`), and necessarily so — `Data`/`S
 only the sender's `u64` id-hash, not a `NodeId`, so those arms *cannot* activate a peer even
 after signature verification. KV-level state (identities, caps — what readiness gates can see)
 arrives gossip-borne and races ahead of Ping-borne activation; until a Ping lands, the node is
-mute toward that peer (worst case ~one `health_check_interval`). **Remaining fix is a design
-decision, not a patch** — candidates, each with M4-boundedness / self-connection-guard
-implications: (1) a hello frame carrying the full `NodeId` at connection-open that runs the same
-bounded activation; (2) seed the watch with bootstrap peers at `start()`; (3) a zero-jitter
-immediate first health tick. Deserves its own session. Meanwhile all four susceptible demos
-(`mailbox_llm` · `catalog` · `provisioning` · `mcp_toolgrowth`) now carry the identity gate, and
-the RPC-asserting ones a round-trip probe/retry.
+mute toward that peer (worst case ~one `health_check_interval`). **RESOLVED (same day, follow-up session — option 1 implemented).** Instrumentation overturned
+part of the narrowing: with `swim_failure_detector: true` (the DEFAULT), the TCP Ping arm never
+runs at all — discovery rides SWIM UDP — and the true mechanism was that **SWIM's
+`ApplyEffect::BecameAlive` updated the peers map but never published to the forwarding watch**;
+only a health-monitor tick reconcile did, and the first tick lands at startup-jitter (0–5 s).
+The watch is bootstrap-seeded at creation, so only the SEED node (no bootstrap) sat mute — its
+RPC *responses* dropped when its jitter exceeded the caller's RPC budget: the exact 1-in-10.
+Fix (all shipped):
+- **SWIM path:** `BecameAlive` now runs the same bounded fan-out activation as the TCP Ping arm
+  (`swim.rs::apply_effect`; `resolved_fanout`-capped, health monitor stays the reconciler).
+- **Non-SWIM path:** ping-before-pull (startup Ping announcing our `NodeId` ahead of the
+  StateRequest, which is ignored from unknown peers) + a Ping-arm ping-back on first learn
+  (loop-safe via `sender_is_new`; ≤3 frames/pair).
+- **Deterministic gates:** `test_cold_start_rpc_both_directions_before_first_tick_{swim,no_swim}`
+  — health interval cranked to 3600 s so no tick can rescue the handshake; red on the old code,
+  both directions RPC-green in <1 s on the new.
+The demo-level identity gates + round-trip probes (all four susceptible demos) stay as defensive
+practice — the testing.md deliverability corollary still applies to any demo asserting on a
+freshly-formed path.

@@ -1461,6 +1461,91 @@ async fn test_individual_consumers_over_random_partial_meshes() {
     }
 }
 
+/// Cold-start sendability (2026-07-21, the mailbox_llm 1-in-10 RPC drop made
+/// deterministic): with the health interval cranked so no tick reconcile can rescue the
+/// handshake, both peer maps must converge and an Individual-scoped RPC must succeed in
+/// BOTH directions within seconds of startup. Two distinct mechanisms are under test:
+/// - SWIM on (default): `ApplyEffect::BecameAlive` runs the bounded fan-out activation
+///   (the SWIM twin of the TCP Ping arm's append) — before the fix, the SEED's watch
+///   stayed empty until its first tick (up to jitter + interval) and its RPC responses
+///   dropped with "no peers at all".
+/// - SWIM off: ping-before-pull (the startup Ping announcing our NodeId ahead of the
+///   StateRequest, which is ignored from unknown peers) + the Ping arm's ping-back.
+#[tokio::test]
+async fn test_cold_start_rpc_both_directions_before_first_tick_swim() {
+    cold_start_rpc_case(true).await;
+}
+
+#[tokio::test]
+async fn test_cold_start_rpc_both_directions_before_first_tick_no_swim() {
+    cold_start_rpc_case(false).await;
+}
+
+async fn cold_start_rpc_case(swim: bool) {
+    let pa = crate::test_util::alloc_port();
+    let pb = crate::test_util::alloc_port();
+    let mk = |port: u16, boot: Vec<NodeId>| {
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = port;
+        cfg.bootstrap_peers = boot;
+        cfg.swim_failure_detector = swim;
+        cfg.health_check_interval_secs = 3600; // first tick ~an hour away
+        cfg.health_check_max_jitter_ms = 1;    // startup block acts at t≈0
+        Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg))
+    };
+    let a = mk(pa, vec![]);
+    let b = mk(pb, vec![NodeId::new("127.0.0.1", pa).unwrap()]);
+    a.start().await.unwrap();
+    b.start().await.unwrap();
+
+    for ag in [&a, &b] {
+        let mut rx = ag.service().rpc_rx("cold.echo");
+        let me = Arc::clone(ag);
+        tokio::spawn(async move {
+            while let Some(req) = rx.recv().await {
+                let payload = req.payload();
+                me.service().rpc_respond(&req, payload);
+            }
+        });
+    }
+
+    // Ping + ping-back converge both maps with no health tick involved.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while a.peers().is_empty() || b.peers().is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "peer maps never converged without a health tick (startup ping / ping-back missing)"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // The cold-start assertion: an Individual-scoped RPC succeeds immediately, both ways.
+    let ida = NodeId::new("127.0.0.1", pa).unwrap();
+    let idb = NodeId::new("127.0.0.1", pb).unwrap();
+    let r = match b.service()
+        .rpc_call(ida, "cold.echo", Bytes::from_static(b"b->a"), Duration::from_secs(5))
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            for (name, ag) in [("a", &a), ("b", &b)] {
+                let s = ag.system_stats();
+                eprintln!("POSTMORTEM {name}: peers={:?} flood_fallbacks={} dropped={}",
+                    ag.peers(), s.individual_flood_fallbacks, s.dropped_frames);
+            }
+            panic!("b->a cold-start rpc failed: {e:?}");
+        }
+    };
+    assert_eq!(&r[..], b"b->a");
+    let r = a.service()
+        .rpc_call(idb, "cold.echo", Bytes::from_static(b"a->b"), Duration::from_secs(5))
+        .await.expect("a->b cold-start rpc");
+    assert_eq!(&r[..], b"a->b");
+
+    a.shutdown().await;
+    b.shutdown().await;
+}
+
 // ── Layer 2: Signal / Boundary ───────────────────────────────────────────
 
 #[tokio::test]

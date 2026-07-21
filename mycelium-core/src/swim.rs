@@ -104,15 +104,30 @@ pub struct SwimState {
     peer_writers: Arc<papaya::HashMap<NodeId, WriterEntry>>,
     /// How many membership updates to piggyback on each `Ping`/`Ack` (bounded for MTU).
     gossip_updates: usize,
+    /// The forwarding fan-out watch (same channel the health monitor publishes). A member
+    /// learned Alive must become *sendable* immediately — mirroring the TCP Ping arm's
+    /// event-driven activation. Without this, a SWIM-learned member was sendable only
+    /// after the health monitor's next tick reconcile (up to startup-jitter + interval),
+    /// and an early Individual-scoped RPC response hit "no peers at all" (the mailbox_llm
+    /// cold-start drop, 2026-07-21).
+    peer_list_tx: tokio::sync::watch::Sender<Arc<[NodeId]>>,
+    /// Fan-out resolution inputs for the bounded activation (same `resolved_fanout` as
+    /// the Ping arm — activation never un-bounds the active set).
+    gossip_fanout: usize,
+    max_active_connections: usize,
 }
 
 impl SwimState {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         socket: Arc<UdpSocket>,
         self_id: NodeId,
         peers: Arc<papaya::HashMap<NodeId, Instant>>,
         peer_writers: Arc<papaya::HashMap<NodeId, WriterEntry>>,
         gossip_updates: usize,
+        peer_list_tx: tokio::sync::watch::Sender<Arc<[NodeId]>>,
+        gossip_fanout: usize,
+        max_active_connections: usize,
     ) -> Arc<Self> {
         let membership = Mutex::new(SwimMembership::new(self_id.clone()));
         Arc::new(Self {
@@ -124,6 +139,9 @@ impl SwimState {
             peers,
             peer_writers,
             gossip_updates,
+            peer_list_tx,
+            gossip_fanout,
+            max_active_connections,
         })
     }
 
@@ -160,7 +178,23 @@ impl SwimState {
         match eff {
             ApplyEffect::BecameAlive(node) => {
                 if node != self.self_id {
-                    self.peers.pin().get_or_insert(node, now);
+                    self.peers.pin().get_or_insert(node.clone(), now);
+                    // Event-driven fan-out activation — the SWIM twin of the TCP Ping
+                    // arm's append. Bounded by the same resolved fan-out `k`; the health
+                    // monitor remains the steady-state reconciler/evictor. Without this,
+                    // an Alive member was unsendable until the next tick reconcile.
+                    let known_len = self.peers.pin().len();
+                    let k = crate::config::resolved_fanout(
+                        self.gossip_fanout, self.max_active_connections, known_len);
+                    self.peer_list_tx.send_if_modified(|current| {
+                        if current.contains(&node) || current.len() >= k.max(1) {
+                            return false;
+                        }
+                        let mut next: Vec<NodeId> = current.to_vec();
+                        next.push(node.clone());
+                        *current = next.into();
+                        true
+                    });
                 }
             }
             ApplyEffect::BecameDead(node) => {
@@ -480,7 +514,9 @@ mod tests {
         let node = NodeId::new("127.0.0.1", port).unwrap();
         let peers = Arc::new(papaya::HashMap::new());
         let writers = Arc::new(papaya::HashMap::new());
-        let state = SwimState::new(Arc::clone(&socket), node.clone(), Arc::clone(&peers), writers, 6);
+        let (peer_list_tx, _) = watch::channel::<Arc<[NodeId]>>(Vec::new().into());
+        let state = SwimState::new(Arc::clone(&socket), node.clone(), Arc::clone(&peers), writers, 6,
+                                   peer_list_tx, 0, 0);
         let (sh, _) = watch::channel(false);
         let sh = Arc::new(sh);
         let alive = Arc::new(AtomicBool::new(false));

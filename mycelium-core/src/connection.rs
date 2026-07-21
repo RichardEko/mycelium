@@ -297,6 +297,23 @@ pub async fn handle_connection(
                         *current = next.into();
                         true
                     });
+                    // Ping-back on first learn (2026-07-21): the reverse half of
+                    // ping-before-pull. The activation above makes `sender` sendable
+                    // FROM us, but they may not know US yet — their map fills only via
+                    // *their* Ping arm. One Ping back closes both directions immediately.
+                    // Loop-safe: fires only on `sender_is_new`, and after this frame we
+                    // are no longer new to them (worst case three pings per pair). Under
+                    // SWIM no TCP pings arrive, so this stays inert there.
+                    let pong = crate::codec::wire_to_bytes(&WireMessage::Ping {
+                        sender: node_id.clone(),
+                        known_peers: Vec::new(),
+                    });
+                    if let Some(tx) = crate::writer::get_or_spawn_writer(
+                        &sender, &peer_writers, task_ctx.hot.writer_depth(), backoff,
+                        writer_idle_timeout, &shutdown, &kv_state.dropped_frames, tls.clone(),
+                    ) {
+                        let _ = tx.try_send(pong);
+                    }
                     let bucket_hashes = crate::store::store_bucket_hashes(&kv_state);
                     request_state(&sender, &peer_writers, task_ctx.hot.writer_depth(), backoff, writer_idle_timeout, &shutdown, &node_id, &kv_state.hash_acc, &kv_state.dropped_frames, bucket_hashes, tls.clone());
                 }
