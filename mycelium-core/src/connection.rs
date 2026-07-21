@@ -282,12 +282,21 @@ pub async fn handle_connection(
                     let known_len = peers.pin().len();
                     let k = crate::config::resolved_fanout(
                         task_ctx.config.gossip_fanout, task_ctx.config.max_active_connections, known_len);
-                    let current = peer_list_tx.borrow().clone();
-                    if !current.contains(&sender) && current.len() < k.max(1) {
+                    // send_if_modified, NOT borrow()+send(): two connection handlers racing
+                    // through here (two peers dialing in at once — a fresh seed's normal
+                    // startup) each saw the same borrowed snapshot and the second send()
+                    // overwrote the first's peer — a lost update that left the loser
+                    // unsendable until the health monitor's first reconcile (~10 s), which
+                    // an early Individual-scoped RPC response then hit as a drop/timeout.
+                    peer_list_tx.send_if_modified(|current| {
+                        if current.contains(&sender) || current.len() >= k.max(1) {
+                            return false;
+                        }
                         let mut next: Vec<NodeId> = current.to_vec();
                         next.push(sender.clone());
-                        let _ = peer_list_tx.send(next.into());
-                    }
+                        *current = next.into();
+                        true
+                    });
                     let bucket_hashes = crate::store::store_bucket_hashes(&kv_state);
                     request_state(&sender, &peer_writers, task_ctx.hot.writer_depth(), backoff, writer_idle_timeout, &shutdown, &node_id, &kv_state.hash_acc, &kv_state.dropped_frames, bucket_hashes, tls.clone());
                 }

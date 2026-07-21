@@ -106,9 +106,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[{}] up — gossip :{}", intake.name, intake.gossip_port);
 
     // Wait for the cluster to form structurally (CLAUDE.md convention — not a fixed sleep): the
-    // routing skill must be visible to triage, and every node must have ≥1 peer so the skill RPC's
-    // Individual-scoped frame can be delivered (or flood-relayed). Gating only on capability
-    // visibility races the RPC ahead of peering ("Individual-scoped frame dropped: no peers").
+    // routing skill must be visible to triage, every node must have ≥1 peer so the skill RPC's
+    // Individual-scoped frame can be delivered (or flood-relayed), AND every node must hold all
+    // three `sys/identity/` keys. With TLS on, the mailbox events / skill RPC / replies are signed,
+    // and a receiver drops a frame from a sender whose identity has not yet gossiped in
+    // ("SignedData from unknown signer") — gating only on capability visibility + peering let the
+    // first donation race ahead of identity gossip on a slow CI runner (same flake family as the
+    // consensus demo's identity-readiness gate).
     let triage_id = triage.node_id();
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
@@ -117,15 +121,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let peered = !router.agent.peers().is_empty()
                 && !triage.agent.peers().is_empty()
                 && !intake.agent.peers().is_empty();
-            if skill_visible && peered {
+            let identities = [&router.agent, &triage.agent, &intake.agent]
+                .iter()
+                .all(|a| a.kv().scan_prefix("sys/identity/").len() >= 3);
+            if skill_visible && peered && identities {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(150)).await;
         }
     })
     .await
-    .map_err(|_| "timed out: routing/suggest + peering never converged")?;
-    println!("[{}] cluster peered; routing/suggest visible to triage", intake.name);
+    .map_err(|_| "timed out: routing/suggest + peering + identity keys never converged")?;
+    println!("[{}] cluster peered; routing/suggest visible; identity keys propagated", intake.name);
+
+    // Warm-up probe: one throwaway skill call, retried until a round-trip succeeds. The KV-level
+    // gates above prove *visibility*, but an Individual-scoped RPC additionally needs every hop's
+    // active forwarding set published (writer spin-up is event-driven in the first seconds before
+    // the health monitor's first reconcile) — the response leg failed ~1-in-10 cold starts when
+    // the first real donation doubled as the path's first exercise. Probing until one echo returns
+    // gates on the exact capability the demo then asserts.
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let probe = triage.agent.llm()
+                .call_prompt_skill("routing", "suggest", "warm-up probe",
+                                   HashMap::new(), Duration::from_secs(2))
+                .await;
+            if probe.is_ok() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .map_err(|_| "timed out: routing/suggest RPC round-trip never became ready")?;
 
     // Open the reply mailbox BEFORE delivering, so replies are caught as they arrive.
     let (_reply_mbox, mut reply_rx) = intake.agent.service().open_mailbox("triage.reply", 64);
