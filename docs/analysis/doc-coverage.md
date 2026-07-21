@@ -19,7 +19,20 @@ concern). WHY is usually shared Dev+Ops.
 
 ## Changelog
 
-- **2026-07-15 (run 11)** — diff-gated, after the five-pass code audit (Runs 50–58, ~40 fixes) + the
+- **2026-07-20 (run 12)** — diff-gated. Delta since run 11: **v2.2.0** (tag only — hardening fixes,
+  no landing moves), the **scrape-fleet launcher examples** (deployment utilities; cluster-name row
+  re-verified: `13-cluster-topology.md`'s `apply_env_overrides()` warning is accurate and the new
+  launchers comply — carried ✓), and the **capability lease** (`lease_secs` +
+  `/gateway/capability/{id}/heartbeat`, this session) — a new API surface on the Capabilities row
+  that also *exposed a pre-existing doc falsehood*: for **gateway-bridged** advertisers the refresh
+  loop runs in the node, so `02-capabilities.md`'s "stops refreshing → evaporates" claim and
+  `10-language-bridges.md`'s "`handle` keeps the advertisement alive" comment silently inverted the
+  crash semantics (a crashed bridge client left a permanently-live advert — the scraper-fleet w15
+  incident). Three cells briefly Thin, **all fixed in-run**: `10-language-bridges.md` (lease +
+  heartbeat in both SDK blocks with the liveness warning — HOW·Dev), `02-capabilities.md` (refresher-
+  liveness nuance callout — WHAT·Dev), `operations/diagnostics.md` (new "Stale bridged advert"
+  pathology entry, the inverse of the coverage gap — HOW·Ops). Verdicts re-land ✓. Calibration entry
+  appended (the 6th — 2nd found by a live incident rather than an audit). All other rows carried. — diff-gated, after the five-pass code audit (Runs 50–58, ~40 fixes) + the
   identity-auth work. **No cell verdict moves** (all stay ✓), but **two "must-be-accurate-if-followed-
   literally" staleness fixes** in the *scored* Ops runbooks, both created by this session's own code
   changes:
@@ -241,6 +254,17 @@ Prior `Clear` cells later found Thin/Missing — the ledger that scores this aud
 doc analogue of `ratings.md`'s calibration ledger). A cell with repeated hits deserves structural
 skepticism, not a re-asserted ✓.
 
+- **2026-07-20 — Capabilities · WHAT·Dev + HOW·Dev (bridge)** were `Clear` in runs 1–11 while the
+  evaporation story was **false for gateway-bridged advertisers**: `02-capabilities.md` claimed "a
+  node that stops refreshing simply evaporates" and `10-language-bridges.md` said the handle "keeps
+  the advertisement alive" — but the bridge's refresh loop runs in the *node*, so a crashed
+  Python/TS client left a permanently-live advert (no evaporation, ever). Found by a **live
+  incident** (scraper-fleet worker w15's stale advert, 2026-07-20), which then drove both the code
+  fix (the capability lease) and the doc fixes. Root cause: the audits verified the evaporation
+  claim against the in-process path only — the claim was *true for the persona the chapter had in
+  mind* and silently wrong for the bridge persona one chapter over. Lesson: a liveness/consistency
+  claim must be checked against **every advertise path** (in-process, gateway, SDK), not the default
+  one.
 - **2026-07-11 — Security · WHAT/HOW·Dev** was `Clear` in run 1 (seed) while `09-security.md` cited
   the wire version as **v10 "(current)"** and framed the rolling-upgrade window as **v10 ↔ v9** —
   both stale (current is v12/v11). Found by run 2's rolling-upgrade diff-audit. Root cause: the seed

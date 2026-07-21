@@ -86,6 +86,19 @@ alertable scalar, the snapshot field is the relational detail, and the diagnosis
   If the observer's `caveat` shows a partial view, confirm from a node that *should* hear the
   provider before concluding it is gone.
 
+### Stale bridged advert (provider shows live but is dead)
+
+- **Means:** the *inverse* of a coverage gap — a `cap/…` advert stays fresh though its real provider
+  (a gateway-bridge client: a Python/TS worker behind `POST /gateway/capability/advertise`) has
+  crashed. The refresh task runs in the **node**, so evaporation tracks the node's liveness, not the
+  client's.
+- **Read:** the capability resolves but RPCs to it fail / its queue stalls, while the advertising
+  node's own `/health` is fine.
+- **Do:** restart the advertising node (kills the refresh task and tombstones on shutdown), or
+  `DELETE /gateway/capability/{handle_id}` if the handle survived. **Prevent:** bridge clients
+  advertise with `lease_secs` and heartbeat (`POST /gateway/capability/{handle_id}/heartbeat`,
+  beat at ~`lease_secs`/3) so a crashed client's advert retracts within one lease window.
+
 ### Opacity oscillation
 
 - **Means:** node/kind pairs are flipping in and out of the overload state — unstable back-pressure

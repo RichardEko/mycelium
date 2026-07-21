@@ -21,6 +21,13 @@ so every node can resolve locally without a network hop. A node that stops
 refreshing its advertisement simply evaporates: readers discard entries older
 than 3× the refresh interval, so failure detection needs no coordinator either.
 
+> **Nuance:** evaporation tracks the *refresher's* liveness. An in-process
+> advertiser's refresh loop dies with its process; an advert made **through the
+> HTTP gateway** is refreshed by the *node*, so a crashed bridge client leaves a
+> permanently-live advert. Bridge clients should advertise with `lease_secs` and
+> heartbeat to bind the advert to their own liveness — see
+> [Language bridges](10-language-bridges.md).
+
 ```mermaid
 graph LR
     A["Node A<br/>advertise: llm/inference<br/>attrs: model=llama3.2, ctx=8192"]

@@ -69,7 +69,14 @@ handle = agent.advertise_capability("compute", "gpu",
     interval_secs=30, attributes={"model": "A100", "vram_gb": 80})
 providers = agent.resolve_capability("compute", "gpu")
 # providers: list of {node_id, attributes, ...} dicts
-# `handle` keeps the advertisement alive — drop()/context-manage it to retract
+# `handle` keeps the advertisement alive — drop()/context-manage it to retract.
+# ⚠️ The refresh loop runs in the NODE, not in your process: if this process
+# crashes without drop(), the advert stays live until the node restarts. Bind
+# it to YOUR liveness with a lease — the node retracts it unless you heartbeat
+# within every lease_secs window (beat at ~lease_secs/3):
+leased = agent.advertise_capability("compute", "gpu",
+    interval_secs=30, lease_secs=90)
+leased.heartbeat()   # every ~30 s from your main loop (async: aheartbeat())
 
 # ── KV store ──────────────────────────────────────────────────────────────────
 # Note: no TTL parameter — the store never time-evicts live keys. Liveness
@@ -152,6 +159,12 @@ const handle = await agent.advertiseCapability("compute", "gpu", {
     attributes: { model: "A100", vram_gb: 80 },
 });
 const providers = await agent.resolveCapability("compute", "gpu");
+// Same liveness rule as Python: without a lease the NODE keeps the advert
+// alive even if this process crashes. Pass leaseSecs and heartbeat within
+// every window (beat at ~leaseSecs/3) to bind it to this process instead:
+const leased = await agent.advertiseCapability("compute", "gpu", {
+    intervalSecs: 30, leaseSecs: 90 });
+await leased.heartbeat();   // a missed window retracts the advert node-side
 
 // ── KV store ──────────────────────────────────────────────────────────────────
 // No TTL option — the store never time-evicts live keys.
