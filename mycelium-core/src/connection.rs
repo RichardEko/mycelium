@@ -280,8 +280,6 @@ pub async fn handle_connection(
                     // is at `k`, new peers are reached via multi-hop flooding instead. The
                     // health monitor remains the steady-state reconciler/evictor.
                     let known_len = peers.pin().len();
-                    let k = crate::config::resolved_fanout(
-                        task_ctx.config.gossip_fanout, task_ctx.config.max_active_connections, known_len);
                     // send_if_modified, NOT borrow()+send(): two connection handlers racing
                     // through here (two peers dialing in at once — a fresh seed's normal
                     // startup) each saw the same borrowed snapshot and the second send()
@@ -289,6 +287,12 @@ pub async fn handle_connection(
                     // unsendable until the health monitor's first reconcile (~10 s), which
                     // an early Individual-scoped RPC response then hit as a drop/timeout.
                     peer_list_tx.send_if_modified(|current| {
+                        // Cap sizing includes the published set, not just the map — the
+                        // watch is bootstrap-seeded before those peers appear in the map
+                        // (see the SWIM twin in swim.rs::apply_effect for the failure).
+                        let sizing = known_len.max(current.len() + 1);
+                        let k = crate::config::resolved_fanout(
+                            task_ctx.config.gossip_fanout, task_ctx.config.max_active_connections, sizing);
                         if current.contains(&sender) || current.len() >= k.max(1) {
                             return false;
                         }
@@ -304,9 +308,24 @@ pub async fn handle_connection(
                     // Loop-safe: fires only on `sender_is_new`, and after this frame we
                     // are no longer new to them (worst case three pings per pair). Under
                     // SWIM no TCP pings arrive, so this stays inert there.
+                    //
+                    // The ping-back MUST carry the peer-exchange sample like every tick
+                    // ping: a seed's ping-back is often the newcomer's only introduction
+                    // to the rest of the cluster before the first health tick — an
+                    // empty-`known_peers` ping-back left a fresh trio mutually unknown
+                    // when the introducer died pre-tick (the failover regression,
+                    // 2026-07-21: client + secondary isolated, maps evicted to zero).
+                    let pong_known: Vec<NodeId> = {
+                        let guard = peers.pin();
+                        guard.iter()
+                            .filter(|(id, _)| **id != sender)
+                            .map(|(id, _)| id.clone())
+                            .take(task_ctx.config.ping_peer_sample_size)
+                            .collect()
+                    };
                     let pong = crate::codec::wire_to_bytes(&WireMessage::Ping {
                         sender: node_id.clone(),
-                        known_peers: Vec::new(),
+                        known_peers: pong_known,
                     });
                     if let Some(tx) = crate::writer::get_or_spawn_writer(
                         &sender, &peer_writers, task_ctx.hot.writer_depth(), backoff,

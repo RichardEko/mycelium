@@ -36,7 +36,10 @@ the second `send()` silently drops the first's update. The event-driven peer-lis
 health monitor's first reconcile; found via the `mailbox_llm` flake, 2026-07-21, `1ffe9ea`).
 Rule: **mutate watch state only inside `send_modify` / `send_if_modified`** — the closure
 holds the channel's internal lock, making the RMW atomic (reference:
-`mycelium-core/src/connection.rs`, the `peer_list_tx.send_if_modified` site).
+`mycelium-core/src/connection.rs`, the `peer_list_tx.send_if_modified` site). Model-checked:
+`loom-spike/tests/bounded_append.rs` proves the lost-update schedule against the broken shape
+and the single-hold shape's correctness; `/wiki-lint` §1 now runs a mechanical
+`borrow()`-then-`send(` sweep so the next such site is a lint finding, not an incident.
 
 ## Memory-ordering policy for atomics
 

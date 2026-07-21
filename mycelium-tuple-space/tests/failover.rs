@@ -157,8 +157,16 @@ async fn failover_preserves_items_and_ids() {
             Ok((id, _)) => {
                 survived.insert(id);
             }
-            Err(_) => {
+            Err(e) => {
                 attempts += 1;
+                let provs = a_client
+                    .capabilities()
+                    .resolve(&mycelium::CapFilter::new("tuple", "fo.primary"));
+                eprintln!(
+                    "[failover diag] attempt {attempts}: take err: {e} | primary-cap providers: {:?} | client peers: {:?}",
+                    provs.iter().map(|(n, _)| n.to_string()).collect::<Vec<_>>(),
+                    a_client.peers().iter().map(|p| p.to_string()).collect::<Vec<_>>(),
+                );
                 assert!(attempts < 30, "new primary never served the mirrored items");
                 tokio::time::sleep(Duration::from_millis(200)).await;
             }

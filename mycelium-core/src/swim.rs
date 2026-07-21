@@ -184,9 +184,17 @@ impl SwimState {
                     // monitor remains the steady-state reconciler/evictor. Without this,
                     // an Alive member was unsendable until the next tick reconcile.
                     let known_len = self.peers.pin().len();
-                    let k = crate::config::resolved_fanout(
-                        self.gossip_fanout, self.max_active_connections, known_len);
                     self.peer_list_tx.send_if_modified(|current| {
+                        // Size the cap by everything we're acquainted with: the live map
+                        // PLUS what already sits in the published set — the watch is
+                        // bootstrap-seeded before those peers surface in the map. Sizing
+                        // by the map alone let an early BecameAlive find k=1 already
+                        // "filled" by the bootstrap seed and refuse the only LIVE member
+                        // (failover client stuck on a dead primary until the first tick
+                        // reconcile — CI failover_preserves_items_and_ids, 2026-07-21).
+                        let sizing = known_len.max(current.len() + 1);
+                        let k = crate::config::resolved_fanout(
+                            self.gossip_fanout, self.max_active_connections, sizing);
                         if current.contains(&node) || current.len() >= k.max(1) {
                             return false;
                         }
@@ -476,6 +484,30 @@ mod tests {
 
     fn id(p: u16) -> NodeId { NodeId::new("127.0.0.1", p).unwrap() }
     fn upd(p: u16) -> MemberUpdate { MemberUpdate { node: id(p), incarnation: 0, status: MemberStatus::Alive } }
+
+    /// The bootstrap-seeded-watch trap (CI `failover_preserves_items_and_ids`,
+    /// 2026-07-21): the forwarding watch already holds a bootstrap entry that has not
+    /// yet surfaced in the peers map. An early `BecameAlive` must still activate the
+    /// live member — sizing the fan-out cap by the map alone found k=1 already
+    /// "filled" by the seed and refused the only live peer, leaving the node sending
+    /// to a dead primary until the first tick reconcile.
+    #[tokio::test]
+    async fn became_alive_activates_despite_bootstrap_seeded_watch() {
+        let socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let port = socket.local_addr().unwrap().port();
+        let me = NodeId::new("127.0.0.1", port).unwrap();
+        let peers = Arc::new(papaya::HashMap::new());
+        let writers = Arc::new(papaya::HashMap::new());
+        let bootstrap = id(9101);
+        let live = id(9102);
+        let (plt, rx) = watch::channel::<Arc<[NodeId]>>(vec![bootstrap.clone()].into());
+        let state = SwimState::new(socket, me, Arc::clone(&peers), writers, 6, plt, 0, 0);
+        state.apply_effect(ApplyEffect::BecameAlive(live.clone()), Instant::now());
+        let published = rx.borrow().clone();
+        assert!(published.contains(&live),
+            "BecameAlive must activate the live member even with a bootstrap-seeded watch");
+        assert!(published.contains(&bootstrap), "activation appends, never replaces");
+    }
 
     #[test]
     fn datagram_round_trips_all_variants() {

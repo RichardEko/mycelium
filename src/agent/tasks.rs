@@ -570,8 +570,15 @@ pub(super) async fn run_health_monitor(ctx: HealthMonitorContext) {
         // first ping and mute toward it until the bootstrap's — the mailbox_llm cold-start
         // RPC drop. FIFO on the writer channel guarantees the peer processes the Ping
         // (learns us, ping-backs — see the Ping arm) before the StateRequest (now trusted).
+        // Carry the peer-exchange sample like every tick ping does (usually empty this
+        // early) — an empty-`known_peers` ping is the anomaly that broke introduction
+        // (failover_preserves_items_and_ids, 2026-07-21).
+        let startup_known: Vec<NodeId> = {
+            let guard = peers.pin();
+            guard.iter().map(|(id, _)| id.clone()).take(ping_peer_sample_size).collect()
+        };
         let hello = mycelium_core::codec::wire_to_bytes(
-            &WireMessage::Ping { sender: node_id.clone(), known_peers: Vec::new() });
+            &WireMessage::Ping { sender: node_id.clone(), known_peers: startup_known });
         for peer in &bootstrap_set {
             if *peer == node_id { continue; }
             if let Some(tx) = mycelium_core::writer::get_or_spawn_writer(

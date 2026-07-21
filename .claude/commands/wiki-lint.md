@@ -31,6 +31,16 @@ For every wiki-page claim that cites code, confirm the code still says it. Minim
   against the table's rows — grouped rows list every field name, so the diff is by name.
   Any undeclared site = a finding (this drift shipped once — analysis Run 28, calibration
   ledger 2026-07-02).
+- **Watch-channel RMW sweep** (the `borrow()`+`send()` lost-update family —
+  [lock-free-and-atomics](docs/wiki/dev/concurrency/lock-free-and-atomics.md) rule: mutate watch
+  state only inside `send_modify`/`send_if_modified`): grep the workspace for watch senders read
+  then written in separate holds —
+  `grep -rn -A8 '\.borrow()' src/ mycelium-core/src/ mycelium-*/src/ --include='*.rs'` filtered to
+  hits whose following lines contain `.send(` on the same sender (exclude `#[cfg(test)]`,
+  `borrow_and_update`, and receivers). Any hit = a finding: it is the exact unserialised
+  read-modify-write that lost a concurrently-dialing peer in the fan-out activation
+  (`peer_list_tx`, found live 2026-07-21; loom model `loom-spike/tests/bounded_append.rs` proves
+  the schedule). The rule predated the bug — this sweep is what makes it mechanical.
 - **Named regression gates**: every test cited by name in a wiki page still exists
   (`grep -rn "<test_name>" src/ mycelium-core/src/ mycelium-*/src/ mycelium-*/tests/`).
   A renamed/deleted gate = a finding.

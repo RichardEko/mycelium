@@ -40,3 +40,22 @@ Fix (all shipped):
 The demo-level identity gates + round-trip probes (all four susceptible demos) stay as defensive
 practice — the testing.md deliverability corollary still applies to any demo asserting on a
 freshly-formed path.
+
+**Act 3 (same day): the fix's own regression, caught by CI.** The startup ping and ping-back
+shipped with `known_peers: Vec::new()` — the tick ping's peer-exchange piggyback was the part of
+the protocol the new pings didn't copy. Consequence: peering gates now pass in milliseconds on
+direct links alone, compressing test/startup timelines *inside* the first health interval — and
+in `failover_preserves_items_and_ids` (non-SWIM) the primary, sole introducer of client↔secondary,
+died before its first tick ping ever carried the introduction. Both survivors knew only the dead
+node; staleness eviction then emptied their maps to zero — total isolation, no rediscovery.
+Root-caused via in-test diagnostics (client peers `[dead-primary]` → `[]`). Fix: **every Ping
+carries the peer-exchange sample** — the empty-`known_peers` ping was the anomaly, not the norm.
+Also fixed en route: the activation cap sized by the map alone could refuse the only live member
+when the watch was bootstrap-seeded (`sizing = known.max(current+1)`, unit-gated by
+`became_alive_activates_despite_bootstrap_seeded_watch`). Verified: failover 8/8 (was ~1-in-3
+green), cold-start pair 0.25 s (peer exchange restored instant convergence), full suites + make
+check green. Meta-lesson for the ledger: a liveness fix that *accelerates* a gate can invalidate
+every downstream assumption timed against the old, slower gate — grep for gates whose semantics
+silently strengthened. Companion artifacts: `loom-spike/tests/bounded_append.rs` (models the
+borrow+send lost update; broken twin fails with a printed schedule) and the `/wiki-lint` §1
+watch-RMW mechanical sweep.
