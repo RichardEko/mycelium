@@ -318,15 +318,133 @@ pub(crate) fn seal_and_write(
     // SOC 2 WS-C: mirror the sealed record to the external sink (SIEM/WORM), off the write
     // path via a bounded drain channel. The KV chain stays authoritative — a full channel
     // drops the mirror copy (re-exportable from the chain), never the chain record.
-    if let Some(tx) = ctx.audit_sink_tx.get() {
-        if tx.try_send(signed).is_err() {
-            tracing::warn!(
-                "audit export sink channel full or closed; a record was not mirrored \
-                 (the hash-chain remains authoritative — re-export from KV)"
-            );
-        }
+    if let Some(tx) = ctx.audit_sink_tx.get()
+        && tx.try_send(signed).is_err()
+    {
+        tracing::warn!(
+            "audit export sink channel full or closed; a record was not mirrored \
+             (the hash-chain remains authoritative — re-export from KV)"
+        );
     }
     Ok(content)
+}
+
+// ── Checkpointing & retention (SOC 2 WS-D) ──────────────────────────────────
+//
+// Verification runs from genesis, so old records can't just be deleted (the head then
+// reads `SequenceGap`/`BrokenLink`). A **signed checkpoint** attests a trusted mid-chain
+// boundary — "records [0..N) verified; the running hash after record N-1 is P" — so records
+// [0..N) can be exported (WS-C) and pruned, and verification resumes from the checkpoint.
+
+/// KV prefix for signed audit checkpoints — a **separate** namespace from `sys/audit/` so
+/// pruning the trail never touches checkpoints. One sub-stream per node.
+pub const AUDIT_CHECKPOINT_PREFIX: &str = "sys/audit-checkpoint/";
+
+/// KV key for a checkpoint at boundary `seq`: `sys/audit-checkpoint/{node}/{seq:016x}`.
+pub fn checkpoint_key(node: &NodeId, seq: u64) -> String {
+    format!("{AUDIT_CHECKPOINT_PREFIX}{node}/{seq:016x}")
+}
+
+/// A signed statement that a node's chain is verified through a boundary: records
+/// `[0..checkpoint_seq)` are attested, and `prev_hash` is the running content-hash after
+/// record `checkpoint_seq - 1` (i.e. record `checkpoint_seq`'s `prev_hash`). Signed by the
+/// node's identity key — as trustworthy as the records it summarises.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuditCheckpoint {
+    pub node_id: NodeId,
+    pub checkpoint_seq: u64,
+    pub prev_hash: [u8; 32],
+    pub hlc: u64,
+}
+
+impl AuditCheckpoint {
+    fn canonical(&self) -> Vec<u8> {
+        mycelium_core::serde_fixint::to_vec(self).unwrap_or_default()
+    }
+}
+
+/// An [`AuditCheckpoint`] plus the writer's Ed25519 signature.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignedAuditCheckpoint {
+    pub checkpoint: AuditCheckpoint,
+    pub sig: Vec<u8>,
+}
+
+impl SignedAuditCheckpoint {
+    pub fn sign(checkpoint: AuditCheckpoint, signing_key: &ed25519_dalek::SigningKey) -> Self {
+        let sig = crate::tls::sign_bytes(signing_key, &checkpoint.canonical()).to_vec();
+        Self { checkpoint, sig }
+    }
+    /// True if the signature verifies under any of `verifying_keys` (the WS5 retained set).
+    pub fn verify_any(&self, verifying_keys: &[[u8; 32]]) -> bool {
+        verifying_keys.iter().any(|k| crate::tls::verify_bytes(k, &self.checkpoint.canonical(), &self.sig))
+    }
+    pub fn encode(&self) -> Bytes {
+        Bytes::from(mycelium_core::serde_fixint::to_vec(self).unwrap_or_default())
+    }
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        mycelium_core::serde_fixint::from_slice(bytes).ok()
+    }
+}
+
+/// Seal a checkpoint at the current chain boundary (records sealed so far) and write it to
+/// `sys/audit-checkpoint/{self}/{seq}`. Returns `(checkpoint_seq, prev_hash)`. Requires `tls`.
+pub(crate) fn create_checkpoint(ctx: &TaskCtx) -> Result<(u64, [u8; 32]), crate::error::GossipError> {
+    let tls = ctx.tls.get().ok_or(crate::error::GossipError::InvalidField {
+        field:  "tls",
+        reason: "audit checkpoint requires the tls identity (set GossipConfig::tls)".into(),
+    })?;
+    let hlc = ctx.hlc.tick();
+    let (seq, prev) = {
+        let guard = ctx.audit_chain.lock().unwrap_or_else(|e| e.into_inner());
+        (guard.next_seq, guard.last_hash)
+    };
+    let cp = AuditCheckpoint { node_id: ctx.node_id.clone(), checkpoint_seq: seq, prev_hash: prev, hlc };
+    let signed = SignedAuditCheckpoint::sign(cp, &tls.signing_key());
+    let _ = mycelium_core::kv_handle::KvHandle::from_core(std::sync::Arc::clone(&ctx.core))
+        .set(checkpoint_key(&ctx.node_id, seq), signed.encode());
+    Ok((seq, prev))
+}
+
+/// Validated checkpoints for `node`, sorted ascending by `checkpoint_seq`.
+fn read_checkpoints(ctx: &TaskCtx, node: &NodeId, keys: &[[u8; 32]]) -> Vec<AuditCheckpoint> {
+    let prefix = format!("{AUDIT_CHECKPOINT_PREFIX}{node}/");
+    let mut cps: Vec<AuditCheckpoint> = crate::store::scan_kv_prefix(&ctx.kv_state, &prefix)
+        .iter()
+        .filter_map(|(_, v)| SignedAuditCheckpoint::decode(v))
+        .filter(|sc| sc.verify_any(keys) && &sc.checkpoint.node_id == node)
+        .map(|sc| sc.checkpoint)
+        .collect();
+    cps.sort_by_key(|c| c.checkpoint_seq);
+    cps
+}
+
+/// Parse the `seq` out of an audit record key `sys/audit/{node}/{seq:016x}`.
+fn parse_audit_seq(key: &str, node: &NodeId) -> Option<u64> {
+    let stream = audit_stream_prefix(node);
+    let hex = key.strip_prefix(&stream)?;
+    u64::from_str_radix(hex, 16).ok()
+}
+
+/// Prune this node's local audit records below the newest validated checkpoint boundary.
+/// Records `[0..checkpoint_seq)` are removed (tombstoned) — export them via an [`AuditSink`]
+/// first; verification then resumes from the checkpoint. No-op (returns 0) if no checkpoint
+/// exists. Returns the number of records pruned. Only prunes **this node's own** stream.
+pub(crate) fn prune_to_checkpoint(ctx: &TaskCtx, node: &NodeId) -> usize {
+    let keys = super::helpers::known_verifying_keys(ctx, node);
+    let cps = read_checkpoints(ctx, node, &keys);
+    let Some(boundary) = cps.iter().map(|c| c.checkpoint_seq).max() else { return 0 };
+    let kv = mycelium_core::kv_handle::KvHandle::from_core(std::sync::Arc::clone(&ctx.core));
+    let mut pruned = 0;
+    for (key, _) in crate::store::scan_kv_prefix(&ctx.kv_state, &audit_stream_prefix(node)) {
+        if let Some(seq) = parse_audit_seq(&key, node)
+            && seq < boundary
+            && kv.delete(key)
+        {
+            pruned += 1;
+        }
+    }
+    pruned
 }
 
 /// Read `node`'s audit stream from the local KV view, decoded and ordered by seq.
@@ -344,7 +462,22 @@ pub(crate) fn verify_stream(ctx: &TaskCtx, node: &NodeId) -> Result<(), AuditVer
     if keys.is_empty() {
         return Err(AuditVerifyError::UnknownSigner);
     }
-    verify_chain_keys(&read_stream(ctx, node), node, &keys, 0, [0u8; 32])
+    let records = read_stream(ctx, node);
+    // WS-D: if the stream has been pruned (first present record isn't seq 0), resume from a
+    // signed checkpoint at that exact boundary; otherwise verify from genesis. A first record
+    // > 0 with no matching checkpoint is a genuine gap (unchanged behaviour).
+    let (start_seq, start_prev) = match records.first() {
+        None => return Ok(()),
+        Some(first) if first.record.seq == 0 => (0u64, [0u8; 32]),
+        Some(first) => {
+            let cps = read_checkpoints(ctx, node, &keys);
+            match cps.iter().find(|c| c.checkpoint_seq == first.record.seq) {
+                Some(cp) => (cp.checkpoint_seq, cp.prev_hash),
+                None => return Err(AuditVerifyError::SequenceGap { expected: 0, found: first.record.seq }),
+            }
+        }
+    };
+    verify_chain_keys(&records, node, &keys, start_seq, start_prev)
 }
 
 /// Distinct node ids with an audit stream in the local KV view, sorted by their

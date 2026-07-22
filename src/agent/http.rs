@@ -3286,6 +3286,49 @@ mod tests {
         let _ = std::fs::remove_dir_all(&cert_dir);
     }
 
+    /// SOC 2 WS-D: after a checkpoint, pruned records still verify from the signed
+    /// checkpoint boundary (not genesis) — the mechanism that makes retention safe.
+    #[cfg(feature = "compliance")]
+    #[tokio::test]
+    async fn test_audit_checkpoint_prune_and_verify() {
+        let gossip_port = alloc_port();
+        let cert_dir = std::env::temp_dir().join(format!("wsd-ckpt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&cert_dir);
+
+        let id = NodeId::new("127.0.0.1", gossip_port).unwrap();
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = gossip_port;
+        cfg.tls = Some(crate::TlsConfig { auto_cert_dir: cert_dir.clone(), ..Default::default() });
+        let agent = Arc::new(GossipAgent::new(id.clone(), cfg));
+        agent.start().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        for i in 0..6u32 {
+            agent.audit(crate::AuditAction::Write, "op", format!("t-{i}"),
+                        crate::AuditOutcome::Success, None).unwrap();
+        }
+        assert_eq!(agent.audit_verify(&id), Ok(()), "full chain verifies before checkpoint");
+
+        // Checkpoint at the current boundary (6), then prune the exported prefix.
+        let (cp_seq, _) = agent.audit_checkpoint().unwrap();
+        assert_eq!(cp_seq, 6);
+        // Seal 2 more, then prune everything below the checkpoint (records 0..6).
+        for i in 6..8u32 {
+            agent.audit(crate::AuditAction::Write, "op", format!("t-{i}"),
+                        crate::AuditOutcome::Success, None).unwrap();
+        }
+        let pruned = agent.audit_prune_to_checkpoint();
+        assert_eq!(pruned, 6, "records 0..6 pruned");
+        assert_eq!(agent.audit_stream(&id).len(), 2, "records 6,7 remain");
+
+        // The pruned stream still verifies — from the checkpoint boundary, not genesis.
+        assert_eq!(agent.audit_verify(&id), Ok(()),
+                   "pruned stream verifies from the signed checkpoint");
+
+        agent.shutdown().await;
+        let _ = std::fs::remove_dir_all(&cert_dir);
+    }
+
     /// SOC 2 WS-C: an attached AuditSink receives every sealed record, off the write
     /// path. Seal a few audit events and assert the sink captured them in order, while
     /// the authoritative chain still verifies.

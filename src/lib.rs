@@ -88,6 +88,10 @@
 //! | `sys/health/{node}`                 | Emergent detectors (Phase 2) — periodic store self-report feeding cross-node store-convergence |
 //! | `sys/rate/{observer}/{sender}`      | Distributed rate observation (WS-C M7) — per-observer rate evidence, fps as ASCII u64, short-TTL |
 //! | `sys/role/{node}`                   | RBAC — signature-verified role claim (checked against `sys/identity/{node}` at read) |
+//! | `sys/audit/{node}/{seq}`            | WS2 audit — per-node hash-chained, Ed25519-signed tamper-evident record (`compliance`) |
+//! | `sys/audit-checkpoint/{node}/{seq}` | WS-D audit — signed mid-chain boundary enabling export-then-prune retention (`compliance`) |
+//! | `sys/revocation/{node}/{key-hex}`   | WS-D — signed key revocation; excluded on all verify paths incl. consensus (`compliance`) |
+//! | `sys/capauthz/{ns}/{name}`          | Gossip-level capability-authz policy (`required_roles`; resolve-time enforcement) (`compliance`) |
 //! | `consensus/committed/{slot}`        | Consensus — committed slot state                             |
 //! | `consensus/ballot/{slot}`           | Consensus — ballot tracking                                  |
 //! | `consensus/lease/{slot}`            | Consensus — epoch-lease window (u64 LE ms); written when `ConsensusConfig::committed_lease_secs` is set; expiry is evaluated read-side |
@@ -255,7 +259,8 @@ pub use agent::{
 };
 #[cfg(feature = "compliance")]
 pub use agent::{
-    leaf_hash, merkle_root, verify_inclusion, ProofStep, RevocationEvent, SignedRevocation,
+    checkpoint_key, leaf_hash, merkle_root, verify_inclusion, AuditCheckpoint, ProofStep,
+    RevocationEvent, SignedAuditCheckpoint, SignedRevocation, AUDIT_CHECKPOINT_PREFIX,
     REVOCATION_PREFIX,
 };
 #[cfg(feature = "compliance")]

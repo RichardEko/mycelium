@@ -52,7 +52,7 @@ board. Mycelium contributes only as a well-documented **vendor** in your CC9 ven
 | Coordinator-free diagnosis | **M** | `/gateway/{fleet,explain,diagnose}` — plain-English fleet findings | Consume in your ops flow |
 | Audit trail | **M** | Per-node hash-chained, Ed25519-signed records + verification API (`compliance`) | Requires `tls` to seal; **instrument application-level events yourself** |
 | Audit export | **S** | `AuditSink` streams every sealed record to your SIEM/WORM off the write path (WS-C ✅) | Implement the sink → your SIEM/WORM; chain stays authoritative on a slow sink. → [audit](audit.md) |
-| Audit retention | **S** ⚠ | Unbounded, no pruning yet; **checkpointing** is **WS-D** (pending) | Size the store; export-then-archive for 7-yr-class retention |
+| Audit retention | **S** | Signed **checkpoints** (`audit_checkpoint` + `audit_prune_to_checkpoint`) let exported records be pruned while the rest still verifies (WS-D ✅) | Schedule checkpoint→export→prune; WORM is your 7-yr system of record. → [audit](audit.md) |
 | Incident response | **D** | Signals + revocation as building blocks | Your IR runbooks, on-call, drills |
 
 ## CC8 — Change management

@@ -147,7 +147,18 @@ through which every record funnels.
 
 ---
 
-## Workstream D — Audit retention / checkpointing
+## Workstream D — Audit retention / checkpointing — ✅ SHIPPED 2026-07-22
+
+**Delivered:** signed `AuditCheckpoint` under `sys/audit-checkpoint/{node}/{seq}` (separate prefix);
+`audit_checkpoint()` seals the current boundary; `audit_prune_to_checkpoint()` tombstones records
+below it; `verify_stream` resumes from the newest covering checkpoint (genesis when unpruned). Gate:
+`test_audit_checkpoint_prune_and_verify` (checkpoint → prune 0..6 → the remaining stream still
+verifies). KV table rows added (`sys/audit/`, `sys/audit-checkpoint/`, `sys/revocation/`,
+`sys/capauthz/`). Docs: audit runbook §Retention. Matrix cell: audit retention → **Shared**.
+
+**Process fix (same day):** the guardrails CI job (which builds `mycelium` with `compliance`) caught
+a `collapsible_if` that `make check` missed — `make check`'s clippy runs *without* `compliance`, so
+compliance-gated code went un-linted locally. Added a compliance clippy to `make check`.
 
 **Gap.** Retention is unbounded; you can't prune, because `verify_stream` verifies **from genesis**
 (deleting record 0 → `SequenceGap` + `BrokenLink`, proven by `removing_a_record_breaks_the_chain`).

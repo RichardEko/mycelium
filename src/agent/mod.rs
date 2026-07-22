@@ -142,6 +142,8 @@ pub use audit::{
 };
 #[cfg(feature = "compliance")]
 pub use revocation::{RevocationEvent, SignedRevocation, REVOCATION_PREFIX};
+#[cfg(feature = "compliance")]
+pub use audit::{checkpoint_key, AuditCheckpoint, SignedAuditCheckpoint, AUDIT_CHECKPOINT_PREFIX};
 // WS-D / D2: the client-side revocation inclusion-proof verifier + Merkle primitives, so an SDK or
 // external auditor can check a `/gateway/transparency` proof without trusting the server.
 #[cfg(feature = "compliance")]
@@ -1255,8 +1257,29 @@ impl GossipAgent {
     /// Verify `node`'s full audit stream against its identity key. `Ok(())` means
     /// the stream is intact from genesis; an [`AuditVerifyError`](crate::AuditVerifyError)
     /// names the first violation, or `UnknownSigner` if `node`'s key is not known.
+    /// After [`audit_checkpoint`](Self::audit_checkpoint) + pruning, verification of a pruned
+    /// stream resumes from the signed checkpoint boundary instead of genesis.
     pub fn audit_verify(&self, node: &NodeId) -> Result<(), audit::AuditVerifyError> {
         audit::verify_stream(&self.task_ctx, node)
+    }
+
+    /// Seal a signed **audit checkpoint** at the current chain boundary (SOC 2 WS-D): a trusted
+    /// mid-chain statement that lets already-exported records be pruned while the remaining
+    /// stream still verifies. Returns `(checkpoint_seq, prev_hash)`. Requires `tls`. Typical
+    /// retention flow: export `[0..checkpoint_seq)` via an [`AuditSink`], `audit_checkpoint()`,
+    /// then [`audit_prune_to_checkpoint`](Self::audit_prune_to_checkpoint).
+    #[cfg(feature = "compliance")]
+    pub fn audit_checkpoint(&self) -> Result<(u64, [u8; 32]), crate::error::GossipError> {
+        audit::create_checkpoint(&self.task_ctx)
+    }
+
+    /// Prune this node's own local audit records below the newest checkpoint boundary
+    /// (SOC 2 WS-D). Export them first — pruning is irreversible locally. Returns the number
+    /// pruned; `0` if no checkpoint exists. Verification of the pruned stream then resumes from
+    /// the checkpoint.
+    #[cfg(feature = "compliance")]
+    pub fn audit_prune_to_checkpoint(&self) -> usize {
+        audit::prune_to_checkpoint(&self.task_ctx, &self.node_id)
     }
 
     /// Distinct node ids that have an audit stream in the local KV view

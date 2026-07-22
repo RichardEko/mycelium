@@ -110,20 +110,34 @@ Semantics: the drain channel is bounded; if your sink can't keep up, the **mirro
 dropped with a `warn!` — never the chain record, which you can always re-export from
 `sys/audit/`. So a slow sink degrades to "re-export from the chain", never to lost audit data.
 
-## 5. Retention (checkpointing — WS-D, in progress)
+## 5. Retention — checkpoint, export, prune (SOC 2 WS-D)
 
 Audit records are normal replicated KV entries; the trail grows unbounded. Pruning a hash
 chain is **not** as simple as deleting old keys: verification runs from genesis, so removing
-record 0 makes the whole stream read as `SequenceGap`. **Checkpointing (WS-D)** lands a signed
-mid-chain boundary so exported records can be pruned and verification resumes from the
-checkpoint; until it ships:
+record 0 makes the whole stream read `SequenceGap`. A **signed checkpoint** fixes this — it
+attests a trusted mid-chain boundary, so pruned-below records verify from the checkpoint
+instead of genesis.
 
-- Leave the trail in-cluster and size `GOSSIP_MAX_STORE_ENTRIES` accordingly.
-- Use the `AuditSink` above to mirror to WORM/SIEM and treat the in-cluster trail as a hot
-  window (for 7-yr-class HIPAA retention the WORM archive is the system of record).
+The scheduled retention flow (run it from a maintenance task, e.g. daily):
 
-Do **not** hand-delete `sys/audit/` keys on a live node expecting verification to
-still pass — it won't, and that is by design (the chain is meant to notice).
+```rust
+// 1. Records are already mirrored to your WORM/SIEM by the AuditSink (§4).
+// 2. Seal a checkpoint at the current boundary:
+let (seq, _prev) = agent.audit_checkpoint()?;          // sys/audit-checkpoint/{node}/{seq}
+// 3. Prune this node's records below the newest checkpoint (irreversible locally):
+let pruned = agent.audit_prune_to_checkpoint();
+```
+
+- The checkpoint lives under a **separate** prefix (`sys/audit-checkpoint/`), so pruning
+  `sys/audit/` never touches it.
+- `audit_verify(node)` now resumes from the newest covering checkpoint automatically; the pruned
+  stream still verifies. Full genesis verification remains possible **offline** against the
+  exported WORM archive.
+- Export **before** you prune — pruning is irreversible on the node. For 7-yr-class HIPAA
+  retention the WORM archive is the system of record; the in-cluster trail is the hot window.
+
+Do **not** hand-delete `sys/audit/` keys without a covering checkpoint — verification will fail,
+by design (the chain is meant to notice).
 
 ---
 

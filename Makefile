@@ -156,6 +156,7 @@ build:
 ## wasmtime). Run it before every push.
 check:
 	cargo clippy --lib --tests --features tls,metrics,a2a,llm -- -D warnings
+	cargo clippy --lib --tests --features compliance -- -D warnings
 	cargo clippy --lib --no-default-features -- -D warnings
 	cargo clippy -p mycelium-core --lib --tests -- -D warnings
 
