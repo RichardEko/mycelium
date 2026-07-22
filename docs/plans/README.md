@@ -63,9 +63,16 @@ future contributor needs so they don't re-litigate a settled choice — lives he
 
 ## Proposed — not yet started
 
-_None._ Both previously-proposed plans (Legible Emergence; mycelium-wiki) have shipped — see the
-execution-records table above. The only open engineering slice is the **additive** disconnected
-KV-native wiki variant (design record [`../design/wiki-concurrent-edit.md`](../design/wiki-concurrent-edit.md)),
+- [`soc2-audit-gap-closure.md`](soc2-audit-gap-closure.md) — **DRAFT (2026-07-22).** Close the five
+  gaps a pentest / SOC 2 control walkthrough surfaces in an adopter's audit (gateway TLS · audit
+  export + retention/checkpointing · `sys/identity` authentication phases 1b/2/3 · rotation→revocation
+  glue · GDPR/erasure design), with the adopter-facing shared-responsibility matrix as the spine.
+  Pure-library path; each workstream flips a matrix cell. Awaiting decisions (gateway-TLS shape,
+  the Phase-3 v13 wire bump, GDPR scope, audit-sink in-lib).
+
+Prior proposed plans (Legible Emergence; mycelium-wiki) have shipped — see the execution-records
+table above. The other open engineering slice is the **additive** disconnected KV-native wiki
+variant (design record [`../design/wiki-concurrent-edit.md`](../design/wiki-concurrent-edit.md)),
 started only if a no-external-store deployment needs it. Research-track work (Paper 1's three-arm
 experiment) is tracked in [`docs/wiki/domain/publications.md`](../wiki/domain/publications.md).
 
