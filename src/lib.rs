@@ -287,6 +287,9 @@ pub use locality::LocalityPreference;
 #[cfg(feature = "consensus")]
 pub use consensus::{ConsensusConfig, ConsensusListenerHandle, ConsensusResult, GroupQuorum, consensus_kind, consensus_ns};
 pub use mycelium_core::error::GossipError;
+/// Crypto-shredding helper for GDPR right-to-erasure (WS-F) — see [`mycelium_core::erasure`].
+#[cfg(feature = "tls")]
+pub use mycelium_core::erasure::SubjectKeyRegistry;
 pub use node_id::NodeId;
 pub use signal::{
     AdvertiseHandle, OpacityHandle, OpacityHint, OpacityState,

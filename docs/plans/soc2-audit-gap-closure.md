@@ -266,7 +266,17 @@ enforced after v13)*.
 
 ---
 
-## Workstream F — GDPR / erasure / data-residency (design-first) — 🟡 DESIGN LANDED 2026-07-22
+## Workstream F — GDPR / erasure / data-residency — ✅ SHIPPED 2026-07-22
+
+**Delivered:** `SubjectKeyRegistry` crypto-shred helper (`mycelium_core::erasure`, `tls` — AES-256-GCM
+via ring, no new compiled crate): per-subject DEK, `encrypt_for`/`decrypt_for`/`destroy`, `install_key`
+seam for KMS custody. Erase = destroy the DEK → all ciphertext undecryptable. Gates: 4 tests
+(round-trip + subject isolation; destroy makes ciphertext unrecoverable and re-encrypt never revives
+it; AEAD tamper rejection; KMS-custody seam). Runbook `operations/data-erasure.md` with the honest
+limits (plaintext escapes, DEK-in-backup, residency = node placement). Matrix cell → **Shared**.
+
+### (design record, superseded by the above)
+🟡 DESIGN LANDED 2026-07-22
 
 **Design:** [`docs/design/data-lifecycle-and-erasure.md`](../design/data-lifecycle-and-erasure.md) —
 crypto-shredding (per-subject DEK; erase = destroy the key), why physical deletion isn't guaranteeable

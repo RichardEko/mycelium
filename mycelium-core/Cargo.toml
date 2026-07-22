@@ -17,7 +17,7 @@ categories = ["network-programming", "asynchronous"]
 [features]
 default = []
 # mTLS transport, Ed25519 node identity, signed KV/consensus payloads, hot rotation.
-tls = ["dep:tokio-rustls", "dep:rustls", "dep:rcgen", "dep:rustls-pemfile", "dep:ed25519-dalek", "dep:rand_core", "dep:arc-swap"]
+tls = ["dep:tokio-rustls", "dep:rustls", "dep:rcgen", "dep:rustls-pemfile", "dep:ed25519-dalek", "dep:rand_core", "dep:arc-swap", "dep:ring"]
 # Prometheus gauge/counter emission from the store/connection paths (no-op without).
 metrics = ["dep:metrics"]
 # Signed-identity surface the compliance layer builds on (audit/RBAC live upstream).
@@ -52,6 +52,9 @@ rustls-pemfile = { version = "2",    optional = true }
 ed25519-dalek  = { version = "2",    features = ["rand_core", "pkcs8"], optional = true }
 rand_core      = { version = "0.6",  features = ["getrandom"],         optional = true }
 arc-swap       = { version = "1",    optional = true }
+# AES-256-GCM for the crypto-shred erasure helper (WS-F). Already in-tree via rustls's
+# ring backend — declaring it direct adds no new compiled crate.
+ring           = { version = "0.17", optional = true }
 
 # Prometheus metrics (optional — "metrics" feature)
 metrics = { version = "0.24", optional = true }

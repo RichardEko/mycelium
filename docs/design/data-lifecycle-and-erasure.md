@@ -1,6 +1,8 @@
 # Data lifecycle & erasure (GDPR / right-to-erasure) — design
 
-**Status: DESIGN (2026-07-22).** SOC 2 audit-gap **WS-F** — see
+**Status: SHIPPED (2026-07-22).** Reference helper `mycelium_core::erasure::SubjectKeyRegistry`
+(re-exported as `mycelium::SubjectKeyRegistry`, `tls` feature) + runbook
+[operations/data-erasure.md](../operations/data-erasure.md). SOC 2 audit-gap **WS-F** — see
 [soc2-audit-gap-closure](../plans/soc2-audit-gap-closure.md). Not SOC 2 core, but every
 enterprise/privacy review asks; genuinely absent today. This design lands the mechanism + the honest
 limits; a reference helper follows.
