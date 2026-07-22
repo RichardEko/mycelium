@@ -18,6 +18,12 @@ pub struct NodeTls {
     client_config: arc_swap::ArcSwap<rustls::ClientConfig>,
     #[cfg(feature = "tls")]
     signing_key: arc_swap::ArcSwap<ed25519_dalek::SigningKey>,
+    /// Server-only rustls config for the HTTP gateway (SOC 2 WS-A): same node
+    /// identity cert, but built `.with_no_client_auth()` so ordinary HTTP clients
+    /// (no client cert) can connect. Built here so it rotates with the identity;
+    /// used only when `GossipConfig::gateway_tls` reuses the node cert.
+    #[cfg(feature = "tls")]
+    gateway_server_config: arc_swap::ArcSwap<rustls::ServerConfig>,
 }
 
 #[cfg(feature = "tls")]
@@ -29,6 +35,11 @@ impl NodeTls {
     /// The current rustls client config (connect side).
     pub fn client_config(&self) -> std::sync::Arc<rustls::ClientConfig> {
         self.client_config.load_full()
+    }
+    /// The current server-only rustls config for the HTTP gateway (node-cert reuse
+    /// path). Rotates with the identity via [`activate`](NodeTls::activate).
+    pub fn gateway_server_config(&self) -> std::sync::Arc<rustls::ServerConfig> {
+        self.gateway_server_config.load_full()
     }
     /// The current Ed25519 signing/identity key.
     pub fn signing_key(&self) -> std::sync::Arc<ed25519_dalek::SigningKey> {
@@ -49,6 +60,7 @@ impl NodeTls {
         self.signing_key.store(m.signing_key);
         self.server_config.store(m.server_config);
         self.client_config.store(m.client_config);
+        self.gateway_server_config.store(m.gateway_server_config);
     }
 }
 
@@ -60,6 +72,7 @@ pub struct RotationMaterial {
     server_config: std::sync::Arc<rustls::ServerConfig>,
     client_config: std::sync::Arc<rustls::ClientConfig>,
     signing_key: std::sync::Arc<ed25519_dalek::SigningKey>,
+    gateway_server_config: std::sync::Arc<rustls::ServerConfig>,
 }
 
 #[cfg(feature = "tls")]
@@ -150,13 +163,14 @@ mod imp {
         let node_cert_der = generate_node_cert(node_id, &signing_key, &ca_key_pair)?;
 
         // ── 4. Build rustls configs ───────────────────────────────────────
-        let (server_config, client_config) =
+        let (server_config, client_config, gateway_server_config) =
             build_rustls_configs(node_cert_der, &signing_key, ca_cert_der)?;
 
         Ok(NodeTls {
             server_config: arc_swap::ArcSwap::from_pointee(server_config),
             client_config: arc_swap::ArcSwap::from_pointee(client_config),
             signing_key: arc_swap::ArcSwap::from_pointee(signing_key),
+            gateway_server_config: arc_swap::ArcSwap::from_pointee(gateway_server_config),
         })
     }
 
@@ -180,7 +194,7 @@ mod imp {
 
         let (ca_cert_der, ca_key_pair) = load_existing_ca(cfg)?;
         let node_cert_der = generate_node_cert(node_id, &signing_key, &ca_key_pair)?;
-        let (server_config, client_config) =
+        let (server_config, client_config, gateway_server_config) =
             build_rustls_configs(node_cert_der, &signing_key, ca_cert_der)?;
 
         Ok(super::RotationMaterial {
@@ -188,6 +202,7 @@ mod imp {
             server_config: Arc::new(server_config),
             client_config: Arc::new(client_config),
             signing_key: Arc::new(signing_key),
+            gateway_server_config: Arc::new(gateway_server_config),
         })
     }
 
@@ -309,24 +324,52 @@ mod imp {
         Some(key)
     }
 
-    fn build_rustls_configs(
-        node_cert_der: CertificateDer<'static>,
-        signing_key: &SigningKey,
-        ca_cert_der: CertificateDer<'static>,
-    ) -> Result<(ServerConfig, ClientConfig), GossipError> {
-        use ed25519_dalek::pkcs8::EncodePrivateKey;
-
-        // rustls 0.23 resolves a *process-level* CryptoProvider when a
-        // ServerConfig/ClientConfig builder runs, and panics if none is set.
-        // We build with `default-features = false, features = ["ring"]`, so the
-        // aws-lc-rs auto-install never happens — we must pin the ring provider
-        // ourselves, exactly once per process. `install_default` returns Err if
-        // a provider is already set (a second agent in the same process, or a
-        // host that installed one first); that is the desired idempotent no-op.
+    /// Install the process-wide ring crypto provider exactly once (idempotent).
+    /// rustls 0.23 resolves a process-level `CryptoProvider` when any config builder
+    /// runs and panics if none is set; we pin ring (default-features off) rather than
+    /// let aws-lc-rs auto-install. A second call — another agent, or a host that
+    /// installed one first — is the desired no-op.
+    fn ensure_crypto_provider() {
         static INSTALL_CRYPTO_PROVIDER: std::sync::Once = std::sync::Once::new();
         INSTALL_CRYPTO_PROVIDER.call_once(|| {
             let _ = rustls::crypto::ring::default_provider().install_default();
         });
+    }
+
+    /// Build a **server-only** rustls config (no client-cert demand) from a cert chain
+    /// and key — the gateway TLS path. Operators call this indirectly via
+    /// `GatewayTlsConfig { cert_pem_path, key_pem_path }`; the node-cert-reuse path uses
+    /// the config built inside [`build_rustls_configs`].
+    pub fn gateway_server_config_from_pem(
+        cert_pem: &str,
+        key_pem: &str,
+    ) -> Result<ServerConfig, GossipError> {
+        ensure_crypto_provider();
+        let mut cert_cursor = std::io::Cursor::new(cert_pem.as_bytes());
+        let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_cursor)
+            .collect::<Result<_, _>>()
+            .map_err(|e| GossipError::InvalidField { field: "gateway_tls", reason: format!("gateway TLS: parse cert PEM: {e}") })?;
+        if certs.is_empty() {
+            return Err(GossipError::InvalidField { field: "gateway_tls", reason: "gateway TLS: cert PEM contained no certificates".into() });
+        }
+        let mut key_cursor = std::io::Cursor::new(key_pem.as_bytes());
+        let key = rustls_pemfile::private_key(&mut key_cursor)
+            .map_err(|e| GossipError::InvalidField { field: "gateway_tls", reason: format!("gateway TLS: parse key PEM: {e}") })?
+            .ok_or_else(|| GossipError::InvalidField { field: "gateway_tls", reason: "gateway TLS: key PEM contained no private key".into() })?;
+        ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .map_err(|e| GossipError::InvalidField { field: "gateway_tls", reason: format!("gateway TLS: build server config: {e}") })
+    }
+
+    fn build_rustls_configs(
+        node_cert_der: CertificateDer<'static>,
+        signing_key: &SigningKey,
+        ca_cert_der: CertificateDer<'static>,
+    ) -> Result<(ServerConfig, ClientConfig, ServerConfig), GossipError> {
+        use ed25519_dalek::pkcs8::EncodePrivateKey;
+
+        ensure_crypto_provider();
 
         // Convert signing key to rustls PrivateKeyDer
         let pkcs8 = signing_key
@@ -352,13 +395,20 @@ mod imp {
             .with_single_cert(vec![node_cert_der.clone()], key_der.clone_key())
             .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: build server config: {e}") })?;
 
+        // Gateway server config: SAME node cert/key, but NO client-cert demand, so
+        // ordinary HTTP clients can connect (the node-cert-reuse gateway-TLS path).
+        let gateway_server_config = ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![node_cert_der.clone()], key_der.clone_key())
+            .map_err(|e| GossipError::InvalidField { field: "gateway_tls", reason: format!("gateway TLS: build server config: {e}") })?;
+
         // Client config: present node cert, verify server against CA
         let client_config = ClientConfig::builder()
             .with_root_certificates(root_store)
             .with_client_auth_cert(vec![node_cert_der], key_der)
             .map_err(|e| GossipError::InvalidField { field: "tls", reason: format!("TLS: build client config: {e}") })?;
 
-        Ok((server_config, client_config))
+        Ok((server_config, client_config, gateway_server_config))
     }
 
     fn pem_cert_to_der(pem: &str) -> Result<CertificateDer<'static>, GossipError> {
@@ -402,7 +452,7 @@ mod imp {
 }
 
 #[cfg(feature = "tls")]
-pub use imp::{ed25519_key_from_cert_der, generate_rotation, load_or_generate, sign_bytes, verify_bytes};
+pub use imp::{ed25519_key_from_cert_der, gateway_server_config_from_pem, generate_rotation, load_or_generate, sign_bytes, verify_bytes};
 
 #[cfg(all(test, feature = "tls"))]
 mod key_extract_tests {

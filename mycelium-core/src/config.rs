@@ -94,6 +94,28 @@ impl Default for TlsConfig {
     }
 }
 
+/// Native TLS for the embedded HTTP **gateway** (SOC 2 audit-gap WS-A, 2026-07-22).
+///
+/// Distinct from [`TlsConfig`], which is the mutually-authenticated **gossip** transport.
+/// The gateway serves ordinary HTTP clients (SDKs, curl, browsers) that do not present a
+/// client cert, so this is **server-side TLS only** (no client-cert demand). Set it so bearer
+/// tokens / JWTs are never sent in cleartext; leave `GossipConfig::gateway_tls` `None`
+/// (default) to keep today's plaintext behaviour and front the gateway with a TLS-terminating
+/// proxy instead. See `docs/operations/gateway-tls.md`.
+///
+/// Both fields `None` = **reuse the node identity cert** from [`TlsConfig`] (requires the
+/// `tls` feature and `GossipConfig::tls`). That cert carries an IP SAN, so it fits CA-pinning
+/// SDK clients and proxied setups but not hostname/browser trust; supply `cert_pem_path` +
+/// `key_pem_path` with a real hostname SAN for that.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GatewayTlsConfig {
+    /// Server cert chain (PEM). `None` = reuse the node identity cert.
+    pub cert_pem_path: Option<PathBuf>,
+    /// Private key (PEM, PKCS8). Required iff `cert_pem_path` is `Some`.
+    pub key_pem_path: Option<PathBuf>,
+}
+
 /// A gateway bearer token paired with its OAuth2-style scope grants.
 ///
 /// Scopes follow the `resource:verb` convention (`kv:read`, `kv:write`,
@@ -656,6 +678,10 @@ pub struct GossipConfig {
     /// connections on all interfaces. Only meaningful when `http_port` is `Some`.
     pub http_addr: String,
 
+    /// Native server-side TLS for the HTTP gateway. `None` (default) = plaintext HTTP.
+    /// See [`GatewayTlsConfig`]. Only meaningful when `http_port` is `Some`.
+    pub gateway_tls: Option<GatewayTlsConfig>,
+
     /// Local KV persistence configuration.
     ///
     /// `None` (the default) keeps the current in-memory-only behaviour — no files
@@ -844,6 +870,7 @@ impl Default for GossipConfig {
             topology_policies: HashMap::new(),
             http_port:               None,
             http_addr:               "127.0.0.1".to_string(),
+            gateway_tls:             None,
             persistence:             None,
             bulk_fetch_timeout_secs:       30,
             max_concurrent_bulk_handlers:  64,

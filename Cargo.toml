@@ -26,7 +26,7 @@ consensus = []
 # Embedded HTTP gateway: REST/SSE/WebSocket bridge, MCP over HTTP, bulk staging.
 # Pulls in Axum and related deps. Disable for bare-metal / WASM / no-std targets:
 #   mycelium = { version = "1", default-features = false }
-gateway = ["dep:axum", "dep:tower-http", "dep:tokio-stream", "dep:futures-util", "dep:reqwest"]
+gateway = ["dep:axum", "dep:tower-http", "dep:tokio-stream", "dep:futures-util", "dep:reqwest", "dep:hyper-util", "dep:tower-service"]
 # Exposes the `fuzz_internals` module re-exporting internal decoders to the
 # cargo-fuzz harness under `fuzz/`. NOT part of the stable public API — only
 # enable when building fuzz targets.
@@ -103,6 +103,10 @@ axum         = { version = "0.8",  optional = true }
 tower-http   = { version = "0.6",  features = ["cors"], optional = true }
 tokio-stream = { version = "0.1",  features = ["sync"], optional = true }
 futures-util = { version = "0.3",  optional = true }
+# Native gateway-TLS serve loop (SOC 2 WS-A): both are already in the tree
+# transitively via axum, so declaring them adds no new compiled crate.
+hyper-util   = { version = "0.1",  features = ["server-auto", "tokio", "service"], optional = true }
+tower-service = { version = "0.3", optional = true }
 # JSON / HTTP utilities used beyond just the gateway
 serde_json   = "1.0"
 base64       = "0.22"

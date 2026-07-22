@@ -29,6 +29,9 @@ this page is the index + the gate.
   `gateway_auth_token`, or front it with the OIDC/OAuth2 ACLs. `/health` `/ready` `/metrics` are
   intentionally public for probes; everything else must be gated. → [rbac.md](rbac.md),
   [sso.md](sso.md)
+- ☐ **Gateway TLS** — the gateway is **plaintext HTTP by default**; bearer tokens/JWTs are then sent
+  in the clear. Set `gateway_tls` for native HTTPS, or terminate TLS with a proxy. Never expose a
+  plaintext gateway on a routable interface. → [gateway-tls.md](gateway-tls.md)
 - ☐ **RBAC / capability authz** configured if multi-tenant — signed role claims + capability ACLs.
   → [rbac.md](rbac.md)
 - ☐ **Egress allowlist** set if nodes reach external tool/LLM/MCP servers (WS3 egress gate). →

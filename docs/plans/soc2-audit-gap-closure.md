@@ -38,7 +38,13 @@ a condensed version fit for the compliance-tier evidence package.
 
 ---
 
-## Workstream A — Gateway TLS (native, optional)
+## Workstream A — Gateway TLS (native, optional) — ✅ SHIPPED 2026-07-22
+
+**Delivered:** `GossipConfig::gateway_tls` (`GatewayTlsConfig`) — reuse-node-cert (rotates with
+identity) or operator-supplied PEM; server-only rustls (`with_no_client_auth`); hand-rolled
+`tokio-rustls` + `hyper-util` serve loop (no new compiled crate); plaintext stays the default/opt-out.
+Gate: `test_gateway_serves_native_tls`. Runbook: `docs/operations/gateway-tls.md`. Matrix cell
+flipped: encryption-in-transit (gateway) → **Shared (native or proxy)**.
 
 **Gap.** The gateway HTTP server is plaintext (`axum::serve` over a plain `TcpListener`,
 `src/agent/http.rs:282`); bearer tokens / JWTs traverse cleartext. Sharpest single pentest finding.

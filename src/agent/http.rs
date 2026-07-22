@@ -150,6 +150,10 @@ pub(super) async fn run_http_server(
         .clone()
         .map(|c| Arc::new(super::oidc::OidcVerifier::new(c)));
 
+    // Keep a ctx handle for the gateway-TLS branch below (`state` is moved into the router).
+    #[cfg(feature = "tls")]
+    let tls_ctx = Arc::clone(&ctx);
+
     let state = Arc::new(HttpCtx {
         agent_ctx:    ctx,
         gateway_caps: Arc::new(Mutex::new(HashMap::new())),
@@ -277,12 +281,90 @@ pub(super) async fn run_http_server(
     sock.set_reuseaddr(true)?;
     sock.bind(addr)?;
     let listener = sock.listen(1024)?;
-    info!(addr = %listener.local_addr().unwrap(), "HTTP server listening");
 
+    // Native gateway TLS (SOC 2 WS-A): when GossipConfig::gateway_tls is set, serve HTTPS
+    // over a hand-rolled tokio-rustls accept loop; otherwise the plain axum::serve path.
+    #[cfg(feature = "tls")]
+    if let Some(gw_tls) = tls_ctx.config.gateway_tls.clone() {
+        let server_config = build_gateway_server_config(&tls_ctx, &gw_tls)?;
+        info!(addr = %listener.local_addr().unwrap(), "HTTPS gateway listening (native TLS)");
+        return serve_https(listener, app, server_config, shutdown_rx).await;
+    }
+
+    info!(addr = %listener.local_addr().unwrap(), "HTTP server listening");
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal(shutdown_rx))
         .await
         .map_err(|e| std::io::Error::other(e.to_string()))
+}
+
+/// Resolve the gateway's rustls `ServerConfig` from `GatewayTlsConfig`: an operator-supplied
+/// cert/key PEM pair, or (both `None`) the node identity cert built with no client-cert demand.
+#[cfg(feature = "tls")]
+fn build_gateway_server_config(
+    ctx:    &Arc<TaskCtx>,
+    gw_tls: &crate::config::GatewayTlsConfig,
+) -> Result<std::sync::Arc<rustls::ServerConfig>, std::io::Error> {
+    match (&gw_tls.cert_pem_path, &gw_tls.key_pem_path) {
+        (Some(cert_path), Some(key_path)) => {
+            let cert_pem = std::fs::read_to_string(cert_path)?;
+            let key_pem  = std::fs::read_to_string(key_path)?;
+            mycelium_core::tls::gateway_server_config_from_pem(&cert_pem, &key_pem)
+                .map(std::sync::Arc::new)
+                .map_err(|e| std::io::Error::other(e.to_string()))
+        }
+        (None, None) => {
+            // Reuse the node identity cert (requires GossipConfig::tls).
+            let tls = ctx.tls.get().ok_or_else(|| std::io::Error::other(
+                "gateway_tls reuses the node identity cert but GossipConfig::tls is not set; \
+                 either set tls, or provide cert_pem_path + key_pem_path"))?;
+            Ok(tls.gateway_server_config())
+        }
+        _ => Err(std::io::Error::other(
+            "gateway_tls: cert_pem_path and key_pem_path must both be set or both unset")),
+    }
+}
+
+/// Hand-rolled TLS accept loop: terminate rustls per connection, then serve the axum app over
+/// the TLS stream via hyper-util (both already in-tree via axum — no new compiled crate).
+/// Stops accepting on shutdown; in-flight connections drain on their own tasks.
+#[cfg(feature = "tls")]
+async fn serve_https(
+    listener:      tokio::net::TcpListener,
+    app:           axum::Router,
+    server_config: std::sync::Arc<rustls::ServerConfig>,
+    mut shutdown_rx: watch::Receiver<bool>,
+) -> Result<(), std::io::Error> {
+    use hyper_util::rt::{TokioExecutor, TokioIo};
+    use hyper_util::server::conn::auto::Builder as ConnBuilder;
+    use hyper_util::service::TowerToHyperService;
+
+    let acceptor = tokio_rustls::TlsAcceptor::from(server_config);
+    loop {
+        tokio::select! {
+            _ = shutdown_rx.wait_for(|v| *v) => break,
+            accepted = listener.accept() => {
+                let (tcp, _peer) = match accepted {
+                    Ok(pair) => pair,
+                    Err(e)   => { warn!("gateway TLS accept error: {e}"); continue; }
+                };
+                let acceptor = acceptor.clone();
+                let app = app.clone();
+                tokio::spawn(async move {
+                    let tls_stream = match acceptor.accept(tcp).await {
+                        Ok(s)  => s,
+                        Err(_) => return, // handshake failure (no client cert needed) — drop quietly
+                    };
+                    let io  = TokioIo::new(tls_stream);
+                    let svc = TowerToHyperService::new(app);
+                    let _ = ConnBuilder::new(TokioExecutor::new())
+                        .serve_connection_with_upgrades(io, svc)
+                        .await;
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn shutdown_signal(mut rx: watch::Receiver<bool>) {
@@ -3103,6 +3185,69 @@ mod tests {
         assert_eq!(hb.status(), 409);
 
         agent.shutdown().await;
+    }
+
+    /// Native gateway TLS (SOC 2 WS-A, 2026-07-22): with `gateway_tls` set (node-cert
+    /// reuse), the gateway serves HTTPS — bearer tokens/JWTs never traverse cleartext.
+    /// A faithful client (rustls, trusting the generated cluster CA, IP-SAN match) must
+    /// complete a real handshake and get `/health` 200; a plaintext client must fail.
+    #[cfg(feature = "tls")]
+    #[tokio::test]
+    async fn test_gateway_serves_native_tls() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let gossip_port = alloc_port();
+        let http_port   = alloc_port();
+        let cert_dir = std::env::temp_dir().join(format!("gw-tls-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&cert_dir);
+
+        let id = NodeId::new("127.0.0.1", gossip_port).unwrap();
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = gossip_port;
+        cfg.http_port = Some(http_port);
+        cfg.http_addr = "127.0.0.1".to_string();
+        cfg.tls = Some(crate::TlsConfig { auto_cert_dir: cert_dir.clone(), ..Default::default() });
+        cfg.gateway_tls = Some(crate::GatewayTlsConfig::default()); // reuse node cert
+
+        let agent = Arc::new(GossipAgent::new(id, cfg));
+        agent.start().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        // Build a rustls client that trusts the cluster CA the node just generated.
+        let ca_pem = std::fs::read(cert_dir.join("ca-cert.pem")).expect("ca-cert.pem written");
+        let mut roots = rustls::RootCertStore::empty();
+        for c in rustls_pemfile::certs(&mut std::io::Cursor::new(&ca_pem)) {
+            roots.add(c.unwrap()).unwrap();
+        }
+        let client_config = rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        let connector = tokio_rustls::TlsConnector::from(std::sync::Arc::new(client_config));
+        let tcp = tokio::net::TcpStream::connect(("127.0.0.1", http_port)).await.unwrap();
+        let server_name = rustls::pki_types::ServerName::IpAddress(
+            std::net::Ipv4Addr::new(127, 0, 0, 1).into());
+        let mut tls = connector.connect(server_name, tcp).await
+            .expect("TLS handshake against the gateway (server must speak TLS)");
+        tls.write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await.unwrap();
+        let mut buf = Vec::new();
+        tls.read_to_end(&mut buf).await.unwrap();
+        let resp = String::from_utf8_lossy(&buf);
+        assert!(resp.contains("200 OK"), "expected 200 over HTTPS, got: {resp}");
+        assert!(resp.contains("\"status\":\"ok\""), "health body over HTTPS: {resp}");
+
+        // Negative: a plaintext HTTP client must NOT get a valid HTTP response — the
+        // server now expects a TLS ClientHello, so a raw GET yields no "200 OK".
+        let mut plain = tokio::net::TcpStream::connect(("127.0.0.1", http_port)).await.unwrap();
+        plain.write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await.unwrap();
+        let mut pbuf = Vec::new();
+        let _ = tokio::time::timeout(Duration::from_secs(2), plain.read_to_end(&mut pbuf)).await;
+        assert!(!String::from_utf8_lossy(&pbuf).contains("200 OK"),
+            "plaintext HTTP must fail against a TLS gateway");
+
+        agent.shutdown().await;
+        let _ = std::fs::remove_dir_all(&cert_dir);
     }
 
     /// Operational-readiness invariant: shutdown must actually close the
