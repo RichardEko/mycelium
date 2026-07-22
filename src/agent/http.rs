@@ -697,6 +697,8 @@ async fn stats_handler(State(ctx): State<Arc<HttpCtx>>) -> impl IntoResponse {
             .load(std::sync::atomic::Ordering::Relaxed),
         "sys_namespace_violations": ctx.agent_ctx.sys_namespace_violations
             .load(std::sync::atomic::Ordering::Relaxed),
+        "identity_anchor_conflicts": ctx.agent_ctx.identity_anchor_conflicts
+            .load(std::sync::atomic::Ordering::Relaxed),
         "cap_authz_violations": ctx.agent_ctx.cap_authz_violations
             .load(std::sync::atomic::Ordering::Relaxed),
         "schema_mismatch": ctx.agent_ctx.schema_mismatch
@@ -3283,6 +3285,64 @@ mod tests {
             "plaintext HTTP must fail against a TLS gateway");
 
         agent.shutdown().await;
+        let _ = std::fs::remove_dir_all(&cert_dir);
+    }
+
+    /// Identity-auth Phase 1b (SOC 2 WS-E): a directly-connected TLS peer's CA-validated
+    /// key is harvested from its cert into an authenticated anchor; a `sys/identity` KV entry
+    /// introducing a *different* key then trips the conflict counter (the poisoning signal).
+    #[cfg(feature = "tls")]
+    #[tokio::test]
+    async fn test_identity_anchor_recorded_and_conflict_flagged() {
+        let cert_dir = std::env::temp_dir().join(format!("wse-anchor-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&cert_dir);
+        let pa = alloc_port();
+        let pb = alloc_port();
+        let mk = |port: u16, boot: Vec<NodeId>| {
+            let mut cfg = GossipConfig::default();
+            cfg.bind_port = port;
+            cfg.bootstrap_peers = boot;
+            cfg.tls = Some(crate::TlsConfig { auto_cert_dir: cert_dir.clone(), ..Default::default() });
+            Arc::new(GossipAgent::new(NodeId::new("127.0.0.1", port).unwrap(), cfg))
+        };
+        let a = mk(pa, vec![]);
+        let b = mk(pb, vec![NodeId::new("127.0.0.1", pa).unwrap()]);
+        a.start().await.unwrap();
+        b.start().await.unwrap();
+
+        // Wait until B has anchored A (B dialed A, so B's outbound writer harvested A's cert key).
+        let ida = NodeId::new("127.0.0.1", pa).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let anchored = loop {
+            if b.task_ctx.peer_anchor_keys.pin().get(&ida).is_some_and(|s| !s.is_empty()) {
+                break true;
+            }
+            if std::time::Instant::now() > deadline { break false; }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        };
+        assert!(anchored, "B must anchor A's CA-validated key after dialing it");
+
+        // The anchored key equals A's real identity key.
+        let a_real = a.task_ctx.tls.get().unwrap().verifying_key_bytes();
+        assert!(b.task_ctx.peer_anchor_keys.pin().get(&ida).unwrap().contains(&a_real),
+                "the anchor is A's actual identity key");
+
+        // Poisoning: write a sys/identity/{A} entry on B introducing a foreign key. The watcher's
+        // tripwire must flag the conflict (anchored key known, KV key differs).
+        let before = b.system_stats().identity_anchor_conflicts;
+        let foreign = [0x42u8; 32];
+        let mut poisoned = a_real.to_vec();
+        poisoned.extend_from_slice(&foreign);
+        let _ = b.kv().set(format!("sys/identity/{ida}"), bytes::Bytes::from(poisoned));
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if b.system_stats().identity_anchor_conflicts > before { break; }
+            assert!(std::time::Instant::now() < deadline, "conflict tripwire never fired");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        a.shutdown().await;
+        b.shutdown().await;
         let _ = std::fs::remove_dir_all(&cert_dir);
     }
 

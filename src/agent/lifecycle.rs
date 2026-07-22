@@ -154,6 +154,20 @@ impl GossipAgent {
                     let value = Bytes::from(super::helpers::encode_identity_history(vk, &existing));
                     let _ = kv_set(&self.task_ctx, Arc::from(id_key.as_str()), value);
                     let _ = self.task_ctx.tls.set(arc_tls);
+                    // identity-auth Phase 1b: install the anchor sink so the outbound writer
+                    // records each directly-connected peer's CA-validated key into the anchor
+                    // maps + peer_keys. Installed before any writer spawns.
+                    {
+                        let peer_keys = Arc::clone(&self.task_ctx.peer_keys);
+                        let anchor_keys = Arc::clone(&self.task_ctx.peer_anchor_keys);
+                        let sink: mycelium_core::tls::AnchorSink =
+                            Arc::new(move |peer: &crate::node_id::NodeId, key: [u8; 32]| {
+                                super::helpers::record_peer_anchor(&anchor_keys, &peer_keys, peer, key);
+                            });
+                        if let Some(t) = self.task_ctx.tls.get() {
+                            t.set_anchor_sink(sink);
+                        }
+                    }
                     // Seed peer_keys from any sys/identity/ entries already in the local store.
                     self.prewarm_peer_keys();
                     // Watch for future identity publications from peers.
@@ -515,6 +529,9 @@ impl GossipAgent {
             // 32 bytes = one key, 64 = current‖previous (rotation window).
             let keys = super::helpers::parse_identity_keys(&bytes);
             if !keys.is_empty() {
+                super::helpers::flag_identity_anchor_conflict(
+                    &self.task_ctx.peer_anchor_keys, &self.task_ctx.identity_anchor_conflicts,
+                    &node_id, &keys);
                 super::helpers::merge_peer_keys(&self.task_ctx.peer_keys, &node_id, &keys);
             }
         }
@@ -529,6 +546,8 @@ impl GossipAgent {
         let mut rx      = kv_subscribe_prefix(&self.task_ctx, Arc::<str>::from(kv_ns::IDENTITY));
         let shutdown_rx = self.shutdown_tx.subscribe();
         let peer_keys   = Arc::clone(&self.task_ctx.peer_keys);
+        let anchor_keys = Arc::clone(&self.task_ctx.peer_anchor_keys);
+        let conflicts   = Arc::clone(&self.task_ctx.identity_anchor_conflicts);
         let kv_state    = Arc::clone(&self.kv_state);
         self.spawn_task(async move {
             let mut shutdown_rx = shutdown_rx;
@@ -548,6 +567,8 @@ impl GossipAgent {
                         Some(b) => {
                             let keys = super::helpers::parse_identity_keys(b);
                             if !keys.is_empty() {
+                                super::helpers::flag_identity_anchor_conflict(
+                                    &anchor_keys, &conflicts, &node_id, &keys);
                                 super::helpers::merge_peer_keys(&peer_keys, &node_id, &keys);
                             }
                         }

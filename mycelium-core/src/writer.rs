@@ -105,6 +105,16 @@ pub async fn run_peer_writer(
                     let stream = tls_connect(s, &peer, &tls).await;
                     match stream {
                         Ok(gs) => {
+                            // Identity-auth Phase 1b: harvest the peer's CA-validated Ed25519 key
+                            // from its cert (outbound side, so it correlates to the NodeId we
+                            // dialed) and record it as an authenticated anchor. Non-fatal — a
+                            // missing key never affects connectivity.
+                            #[cfg(feature = "tls")]
+                            if let Some(ref t) = tls
+                                && let Some(anchor_key) = gs.peer_ed25519_key()
+                            {
+                                t.record_anchor(&peer, anchor_key);
+                            }
                             // 16 KB buffer coalesces a full burst of small gossip frames into
                             // one or two kernel write calls; explicit flush sends after drain.
                             conn = Some(BufWriter::with_capacity(16_384, gs));

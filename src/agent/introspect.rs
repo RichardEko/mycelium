@@ -174,6 +174,8 @@ impl GossipAgent {
             commit_conflicts:     self.task_ctx.commit_conflicts.load(Ordering::Relaxed),
             sys_namespace_violations:
                 self.task_ctx.sys_namespace_violations.load(Ordering::Relaxed),
+            identity_anchor_conflicts:
+                self.task_ctx.identity_anchor_conflicts.load(Ordering::Relaxed),
             cap_authz_violations: self.task_ctx.cap_authz_violations.load(Ordering::Relaxed),
             schema_mismatch: self.task_ctx.schema_mismatch.load(Ordering::Relaxed),
             rate_limited_senders: mycelium_core::rate::throttled_sender_count(&self.task_ctx.core),

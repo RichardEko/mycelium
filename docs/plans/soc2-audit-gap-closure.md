@@ -199,7 +199,17 @@ and a robustness fix against buggy nodes — it does **not** make consensus BFT 
 **Phase 1a — SHIPPED.** `ed25519_key_from_cert_der` (`tls.rs:302`) exists + tested, but is called
 **only from its own test module** — unwired.
 
-**Phase 1b — harvest wiring + anchor + tripwire. Size M. No wire change.**
+**Phase 1b — ✅ SHIPPED 2026-07-22 (harvest + anchor + tripwire).** Implementation deviated from the
+design's callback-threading (simpler): `peer_keys` is on `CoreCtx`, and `tls: Option<Arc<NodeTls>>`
+is already threaded through all 10 `get_or_spawn_writer` sites — so the anchor recorder hangs off
+`NodeTls` (`set_anchor_sink`/`record_anchor`), the writer harvests via `GossipStream::peer_ed25519_key`
+after the outbound handshake, and the maps (`peer_anchor_keys`, `identity_anchor_conflicts`) live on
+`CoreCtx`. **Zero new threading through the writer callers.** The `flag_identity_anchor_conflict`
+tripwire fires at both KV-merge sites; counter surfaced on `/stats` + `SystemStats`. Gate:
+`test_identity_anchor_recorded_and_conflict_flagged` (2-node TLS: B anchors A's real key; a foreign
+KV key trips the counter). No wire change.
+
+**Phase 1b (design's original framing) — harvest wiring + anchor + tripwire. Size M. No wire change.**
 On a completed handshake, record the CA-derived key as an **anchored** key in a new
 `peer_anchor_keys` on `TaskCtx`, via an `anchor_sink` callback threaded from
 `mycelium-core::run_peer_writer` up to the `mycelium`-side merge (cross-crate direction forces the

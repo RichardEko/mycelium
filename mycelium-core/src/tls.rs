@@ -11,6 +11,11 @@
 /// signing/handshake paths keep reading the current value via the accessor
 /// methods. Read the key/configs through the methods, never a cached clone, so
 /// a rotation is observed.
+/// The identity-anchor sink: records a directly-connected peer's CA-validated Ed25519 key
+/// (identity-auth Phase 1b). Installed once via [`NodeTls::set_anchor_sink`].
+#[cfg(feature = "tls")]
+pub type AnchorSink = std::sync::Arc<dyn Fn(&crate::node_id::NodeId, [u8; 32]) + Send + Sync>;
+
 pub struct NodeTls {
     #[cfg(feature = "tls")]
     server_config: arc_swap::ArcSwap<rustls::ServerConfig>,
@@ -24,6 +29,13 @@ pub struct NodeTls {
     /// used only when `GossipConfig::gateway_tls` reuses the node cert.
     #[cfg(feature = "tls")]
     gateway_server_config: arc_swap::ArcSwap<rustls::ServerConfig>,
+    /// Identity-anchor sink (identity-auth Phase 1b): records a directly-connected peer's
+    /// CA-validated Ed25519 key. Installed once at agent start with a closure capturing the
+    /// `CoreCtx` anchor maps; the outbound writer calls it after each handshake. `OnceLock` so
+    /// the hot connect path reads it lock-free and it is set exactly once. Not rotated (the sink
+    /// captures long-lived map `Arc`s, independent of the swapped cert/config).
+    #[cfg(feature = "tls")]
+    peer_anchor_sink: std::sync::OnceLock<AnchorSink>,
 }
 
 #[cfg(feature = "tls")]
@@ -40,6 +52,21 @@ impl NodeTls {
     /// path). Rotates with the identity via [`activate`](NodeTls::activate).
     pub fn gateway_server_config(&self) -> std::sync::Arc<rustls::ServerConfig> {
         self.gateway_server_config.load_full()
+    }
+
+    /// Install the identity-anchor sink (identity-auth Phase 1b) — called once at agent start
+    /// with a closure that records a peer's CA-validated key into the `CoreCtx` anchor maps.
+    /// Idempotent (first wins).
+    pub fn set_anchor_sink(&self, sink: AnchorSink) {
+        let _ = self.peer_anchor_sink.set(sink);
+    }
+
+    /// Record a directly-connected peer's CA-validated key via the installed sink; no-op if none
+    /// is installed. Called by the outbound writer after a completed handshake.
+    pub fn record_anchor(&self, peer: &crate::node_id::NodeId, key: [u8; 32]) {
+        if let Some(sink) = self.peer_anchor_sink.get() {
+            sink(peer, key);
+        }
     }
     /// The current Ed25519 signing/identity key.
     pub fn signing_key(&self) -> std::sync::Arc<ed25519_dalek::SigningKey> {
@@ -171,6 +198,7 @@ mod imp {
             client_config: arc_swap::ArcSwap::from_pointee(client_config),
             signing_key: arc_swap::ArcSwap::from_pointee(signing_key),
             gateway_server_config: arc_swap::ArcSwap::from_pointee(gateway_server_config),
+            peer_anchor_sink: std::sync::OnceLock::new(),
         })
     }
 

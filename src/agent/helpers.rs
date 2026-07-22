@@ -244,6 +244,55 @@ pub(crate) fn merge_peer_keys(
     });
 }
 
+/// Record a directly-connected peer's **CA-validated** key (identity-auth Phase 1b): add it to
+/// the peer's anchor set, and merge it into `peer_keys` so it is usable for verification even if
+/// the peer's `sys/identity` KV entry is absent or poisoned to omit it. Both updates use
+/// retry-safe papaya `compute` closures (the lock-free-op-then-effect family). Idempotent.
+#[cfg(feature = "tls")]
+pub(crate) fn record_peer_anchor(
+    anchor_keys: &papaya::HashMap<crate::node_id::NodeId, std::collections::HashSet<[u8; 32]>>,
+    peer_keys: &papaya::HashMap<crate::node_id::NodeId, Vec<[u8; 32]>>,
+    peer: &crate::node_id::NodeId,
+    key: [u8; 32],
+) {
+    anchor_keys.pin().compute(peer.clone(), |existing| {
+        let mut set = existing.map(|(_, s)| s.clone()).unwrap_or_default();
+        let was_new = set.insert(key);
+        if existing.is_some() && !was_new {
+            papaya::Operation::Abort(())
+        } else {
+            papaya::Operation::Insert(set)
+        }
+    });
+    merge_peer_keys(peer_keys, peer, &[key]);
+}
+
+/// Detection tripwire (identity-auth Phase 1b): given the KV-asserted keys for `node` about to be
+/// merged, warn + count if `node` has a **CA-anchored** key and the KV set introduces one that is
+/// not in the anchor set — the poisoning signal. Detection-only (accumulate still happens in 1b);
+/// may briefly trip on a legitimate rotation until the new key is re-anchored on reconnect.
+#[cfg(feature = "tls")]
+pub(crate) fn flag_identity_anchor_conflict(
+    anchor_keys: &papaya::HashMap<crate::node_id::NodeId, std::collections::HashSet<[u8; 32]>>,
+    conflict_counter: &std::sync::atomic::AtomicU64,
+    node: &crate::node_id::NodeId,
+    kv_keys: &[[u8; 32]],
+) {
+    let Some(anchors) = anchor_keys.pin().get(node).cloned() else { return };
+    if anchors.is_empty() {
+        return;
+    }
+    if kv_keys.iter().any(|k| !anchors.contains(k)) {
+        conflict_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        tracing::warn!(
+            node = %node,
+            "sys/identity anchor conflict: a KV identity key differs from this peer's \
+             CA-anchored key (see SystemStats::identity_anchor_conflicts) — poisoning signal, \
+             or a rotation not yet re-anchored"
+        );
+    }
+}
+
 /// All verifying keys known for `node`: the retained set in `peer_keys`, plus
 /// this node's own current key when `node` is self (covers the gap before the
 /// node's own `sys/identity` write has cycled back through the watcher). Used by

@@ -30,7 +30,7 @@ board. Mycelium contributes only as a well-documented **vendor** in your CC9 ven
 | Control | Who | Mycelium provides | You own / configure |
 |---|---|---|---|
 | Node authentication | **M** | mTLS mutual admission against a cluster CA; Ed25519 node identity (`tls`) | Distribute + protect the CA; file-protect on-disk keys |
-| Peer-identity integrity | **S** ⚠ | Retained-key set; anchor primitive (`ed25519_key_from_cert_der`) | `sys/identity` is not yet authenticated (key-poisoning by a compromised/buggy admitted node) — **WS-E** in progress; until then, treat identity integrity as CFT-bounded |
+| Peer-identity integrity | **S** ⚠ | Directly-connected peers now carry a **CA-anchored** key harvested from their mTLS cert; a conflicting `sys/identity` KV key trips `identity_anchor_conflicts` (WS-E Phase 1b ✅ — detection). Signed-proof **prevention** is Phase 2 (pending) | Alert on `identity_anchor_conflicts` > 0; identity integrity is CFT-bounded until Phase 2/3 land |
 | Operator authentication (SSO) | **M** | OIDC/JWT validation, alg-confusion-safe (`compliance`) | Wire your IdP; `group_scopes` mapping |
 | Authorization (RBAC) | **M** | Signed role claims + L1/L2/L3 clearance; forged KV role reads back `None` | Issue/rotate role claims; set clearances |
 | Capability authorization | **M** | `authorized_callers` allowlists; resolve-time `capauthz` (route around unauthorised advertisers) | Define policies; empty = open by design |

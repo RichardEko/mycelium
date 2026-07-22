@@ -73,3 +73,30 @@ impl AsyncWrite for GossipStream {
 }
 
 impl Unpin for GossipStream {}
+
+impl GossipStream {
+    /// The peer's **CA-validated** Ed25519 identity key, harvested from its cert after the
+    /// handshake (identity-auth Phase 1b, `docs/design/identity-authentication.md`).
+    ///
+    /// `Some` only for an **outbound** TLS connection (the client side), where we dialed a known
+    /// `NodeId` so the key can be correlated to it; `None` for plaintext or the inbound (server)
+    /// side (whose peer `NodeId` isn't yet known — the cert SAN carries only the IP). rustls has
+    /// already validated the cert against the cluster CA before this runs, so the DER is a
+    /// well-formed CA-issued Ed25519 cert and the length-checked SPKI scan is safe.
+    #[cfg(feature = "tls")]
+    pub fn peer_ed25519_key(&self) -> Option<[u8; 32]> {
+        match self {
+            GossipStream::TlsClient(s) => {
+                let (_, conn) = s.get_ref();
+                let cert = conn.peer_certificates()?.first()?;
+                crate::tls::ed25519_key_from_cert_der(cert.as_ref())
+            }
+            _ => None,
+        }
+    }
+
+    #[cfg(not(feature = "tls"))]
+    pub fn peer_ed25519_key(&self) -> Option<[u8; 32]> {
+        None
+    }
+}

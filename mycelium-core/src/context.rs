@@ -141,6 +141,22 @@ pub struct CoreCtx {
     #[cfg_attr(not(feature = "tls"), allow(dead_code))]
     pub peer_keys: Arc<papaya::HashMap<NodeId, Vec<[u8; 32]>>>,
 
+    /// **CA-authenticated** identity keys, harvested from each *directly-connected* peer's
+    /// validated mTLS cert (identity-auth Phase 1b). Distinct from `peer_keys` (which mirrors
+    /// the unauthenticated `sys/identity/` KV) so the merge path can tell a CA-anchored key from
+    /// a KV-asserted one — the basis of the conflict tripwire now and the signed-proof chain in
+    /// Phase 2. Populated on the outbound writer path (see `writer::run_peer_writer`); a set per
+    /// peer because a peer's anchor accumulates across rotations/reconnects.
+    #[cfg_attr(not(feature = "tls"), allow(dead_code))]
+    pub peer_anchor_keys: Arc<papaya::HashMap<NodeId, std::collections::HashSet<[u8; 32]>>>,
+
+    /// Cumulative identity-anchor conflicts (see `SystemStats::identity_anchor_conflicts`): a
+    /// `sys/identity/{V}` KV entry introduced a key for a `V` whose CA-anchored key is known and
+    /// differs. Detection-only in Phase 1b (poisoning signal; may briefly trip on a legitimate
+    /// rotation until the new key is re-anchored). Relaxed — diagnostic.
+    #[cfg_attr(not(feature = "tls"), allow(dead_code))]
+    pub identity_anchor_conflicts: Arc<AtomicU64>,
+
     /// Cumulative `sys/` namespace-ownership violations (see
     /// `SystemStats::sys_namespace_violations`). Incremented by the connection
     /// handler's inbound-apply tripwire when a remote write targets a `sys/`

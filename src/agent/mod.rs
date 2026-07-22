@@ -285,6 +285,12 @@ pub struct SystemStats {
     /// at read; unsigned keys (`load`, `tuple`) rely on this signal alone.
     pub sys_namespace_violations: u64,
 
+    /// Cumulative identity-anchor conflicts (identity-auth Phase 1b): a `sys/identity/{V}` KV
+    /// entry introduced a key differing from `V`'s CA-anchored (mTLS-cert) key. A poisoning
+    /// signal; may briefly rise on a legitimate rotation until the new key is re-anchored.
+    /// `0` unless the `tls` feature is active and peers have been directly connected.
+    pub identity_anchor_conflicts: u64,
+
     /// Cumulative count of capability advertisements this node **declined to
     /// resolve** because the advertiser did not hold a role required by the
     /// `sys/capauthz/{ns}/{name}` policy (WS-D / M6 · D5).
@@ -779,6 +785,8 @@ impl GossipAgent {
             sys_namespace_violations: Arc::new(AtomicU64::new(0)),
             tls: std::sync::OnceLock::new(),
             peer_keys: Arc::new(papaya::HashMap::new()),
+            peer_anchor_keys: Arc::new(papaya::HashMap::new()),
+            identity_anchor_conflicts: Arc::new(AtomicU64::new(0)),
             peers: Arc::clone(&peers_arc),
             rate_throttle: Arc::new(papaya::HashMap::new()),
             reorder_buf: if config.signal_ordered_delivery {
