@@ -70,7 +70,7 @@ board. Mycelium contributes only as a well-documented **vendor** in your CC9 ven
 | Data classification | **M** | L1/L2/L3 clearance in RBAC | Classify + assign |
 | Data isolation | **S** | Single cluster **isolated by construction** (no cross-cluster feature) | One cluster = one confidentiality/residency boundary; run per-tenant/region as needed |
 | Data residency | **D** | Isolation property + docs | **Where nodes run is yours** — placement, borders |
-| Right to erasure (GDPR) | **S** ⚠ | Tombstones; at-rest hook | **WS-F** (pending): crypto-shred reference; physical erasure isn't guaranteeable in a gossip+WAL mesh — the honest mechanism is per-subject key destruction |
+| Right to erasure (GDPR) | **S** ⚠ | Tombstones; at-rest hook | **WS-F** ([design](../design/data-lifecycle-and-erasure.md)): crypto-shred (destroy the per-subject key) — physical erasure isn't guaranteeable in a gossip+WAL mesh; reference helper pending |
 | Availability | **S** | AP design (partition-tolerant), epidemic redundancy, anti-entropy repair | Capacity, backups, multi-AZ, DR |
 | Egress control | **S** | `EgressPolicy` fail-closed allowlist (per node) | Set `allow_hosts`; network-layer enforcement |
 

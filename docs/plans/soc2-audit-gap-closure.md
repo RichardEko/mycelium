@@ -212,7 +212,13 @@ enforced after v13)*.
 
 ---
 
-## Workstream F — GDPR / erasure / data-residency (design-first)
+## Workstream F — GDPR / erasure / data-residency (design-first) — 🟡 DESIGN LANDED 2026-07-22
+
+**Design:** [`docs/design/data-lifecycle-and-erasure.md`](../design/data-lifecycle-and-erasure.md) —
+crypto-shredding (per-subject DEK; erase = destroy the key), why physical deletion isn't guaranteeable
+in a gossip+WAL mesh, DEK custody options (KMS-first), composition with `DataAtRestCipher`, residency
+as deployer-owned node placement, and the honest limits (plaintext escapes, DEK-in-backup). Reference
+helper implementation pending.
 
 **Gap.** No treatment anywhere. Not SOC 2 core, but every enterprise/privacy review asks.
 
