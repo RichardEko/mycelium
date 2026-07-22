@@ -53,9 +53,32 @@ rotation are signed by different keys.
   available. The entry grows 32 bytes per rotation (rotations are rare).
 - **Compromise caveat:** a retired key remains *accepted for verification* — good
   for history, but it means rotating away from a **compromised** key does not by
-  itself stop the attacker's old signatures from verifying. Compromise response
-  needs explicit revocation (e.g. re-issue the cluster CA / rebuild the trust
-  set), which is a heavier operation than hygiene rotation.
+  itself stop the attacker's old signatures from verifying. Rotation is **hygiene**;
+  compromise response needs explicit **revocation**.
+
+### Compromise remediation — rotate *and* revoke (SOC 2 WS-B)
+
+A signed revocation of the old key is validated cluster-wide and excluded on **every**
+verify path — role claims, the audit chain, **and consensus** — so the old key stops
+verifying everywhere. Two ways:
+
+- **One call:** `agent.rotate_identity_on_compromise(propagation)` — rotates to a fresh key,
+  then revokes the outgoing one *with the new key*. Use this when the current key may be
+  compromised.
+- **Operator trigger (no code):** `POST /gateway/identity/revoke` (scope `identity:write`,
+  `compliance`), body `{"revoked_key":"<64 hex>","reason":"..."}` — after a plain
+  `rotate_identity`, revoke the old key over HTTP.
+
+```bash
+curl -X POST https://gateway:9443/gateway/identity/revoke \
+  -H "authorization: Bearer $TOKEN" \
+  -d '{"revoked_key":"<old-verifying-key-hex>","reason":"suspected compromise"}'
+```
+
+**Ownership limit (by design):** only the node itself, holding its *current* key, can revoke
+its own keys — the coordinator-free trade-off. A **fully-compromised or offline** node cannot
+be force-revoked by a fleet operator without a separate operator-authority mechanism (not yet
+provided). Re-issuing the cluster CA remains the heavier fallback for that case.
 
 ---
 

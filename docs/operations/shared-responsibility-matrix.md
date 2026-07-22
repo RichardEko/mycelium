@@ -39,7 +39,7 @@ board. Mycelium contributes only as a well-documented **vendor** in your CC9 ven
 | Encryption in transit (gateway) | **S** | **Native gateway TLS** (`gateway_tls`, WS-A ✅) **or** front with a TLS proxy | Pick one — never leave the gateway plaintext on a routable interface. → [gateway-tls](gateway-tls.md) |
 | Encryption in transit (SWIM UDP) | **D** | Liveness only (no KV/data); plaintext, unauthenticated | Network-segment it if your policy requires |
 | Key management — rotation | **M** | Hot Ed25519 identity/cert rotation, no dropped frames | Operate the rotation cadence |
-| Key management — compromise | **S** ⚠ | Signed revocation, consulted on all verify paths incl. consensus | Rotation alone doesn't defend a compromised key — **revoke**; operator-trigger + rotate→revoke chain is **WS-B** (pending). → [cert-rotation](cert-rotation.md) |
+| Key management — compromise | **M** | Signed revocation consulted on all verify paths incl. consensus; `rotate_identity_on_compromise` + `POST /gateway/identity/revoke` (WS-B ✅) | Trigger it on compromise. Force-revoking a *dead/fully-compromised* node's key needs a separate operator authority (not provided). → [cert-rotation](cert-rotation.md) |
 | Key custody (CA, at-rest KMS) | **D** | `DataAtRestCipher` hook (disk boundaries) | CA-key custody; wrap a KMS/HSM for at-rest |
 | Encryption at rest | **S** | Optional at-rest cipher hook (WS3) | Supply the cipher + key custody |
 

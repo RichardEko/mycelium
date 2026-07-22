@@ -81,7 +81,14 @@ assert plain HTTP path unchanged when `None`; assert no client cert is demanded.
 
 ---
 
-## Workstream B — Rotation defends a compromised key
+## Workstream B — Rotation defends a compromised key — ✅ SHIPPED 2026-07-22
+
+**Delivered:** `GossipAgent::rotate_identity_on_compromise` (rotate → revoke the old key with the
+new key) + operator route `POST /gateway/identity/revoke` (scope `identity:write`). The revocation
+crypto + cluster-wide exclusion (incl. consensus) already existed; this added the missing triggers.
+Gate: `test_rotate_on_compromise_revokes_old_key`. Docs: cert-rotation compromise section. Matrix
+cell flipped: key-compromise → **Mycelium-provides**. (Open, by design: force-revoking a dead node's
+key needs a separate operator authority.)
 
 **Gap.** Rotation is hygiene, not remediation: the retired key stays accepted (retained-set model),
 and `rotate_identity` (`src/agent/mod.rs:1010`) publishes `sys/identity` **unsigned** and never

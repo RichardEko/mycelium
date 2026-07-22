@@ -47,6 +47,8 @@ scope **or** `"*"`. Unmapped routes require `admin` (deny-by-default).
 | `mesh:read` / `mesh:write` | signal SSE, mailbox/rpc-serve, demand / signal emit, rpc call, scatter |
 | `consensus:read` / `consensus:write` | overlay log scan, consistent get / consistent set, lock, elect, log append, cross-group propose |
 | `llm:read` / `llm:write` / `llm:invoke` | prompt get/list / prompt put,delete / llm call,stream |
+| `audit:read` / `transparency:read` | audit-trail query / revocation transparency log |
+| `identity:write` | key revocation (`POST /gateway/identity/revoke`) |
 | `*` | everything (the legacy `gateway_auth_token` is equivalent) |
 | `admin` | the deny-by-default fallback for any route not in the table |
 

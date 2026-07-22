@@ -239,6 +239,11 @@ pub(super) async fn run_http_server(
     #[cfg(feature = "compliance")]
     let gateway = gateway.route("/transparency", get(gw_transparency));
 
+    // SOC 2 WS-B: operator-facing key revocation (compromise remediation). The crypto +
+    // cluster-wide exclusion already exist; this is the missing trigger surface.
+    #[cfg(feature = "compliance")]
+    let gateway = gateway.route("/identity/revoke", post(gw_identity_revoke));
+
     // Apply auth middleware to all gateway routes in one shot.
     let gateway = gateway
         .route_layer(middleware::from_fn_with_state(Arc::clone(&state), gateway_auth));
@@ -547,6 +552,7 @@ fn required_scope(method: &axum::http::Method, matched_path: &str) -> &'static s
         // Audit trail (WS2)
         "/gateway/audit"               => "audit:read",
         "/gateway/transparency"        => "transparency:read",
+        "/gateway/identity/revoke"     => "identity:write",
         // WS-C governance (intent publish + effective-state snapshot)
         "/gateway/govern"              => "govern:read",
         "/gateway/govern/tuning"       => "govern:write",
@@ -817,6 +823,36 @@ fn parse_hex32(s: &str) -> Option<[u8; 32]> {
         *b = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
     }
     Some(out)
+}
+
+/// `POST /gateway/identity/revoke` (scope `identity:write`, `compliance`) — SOC 2 WS-B.
+///
+/// Operator-facing key revocation, the compromise-remediation trigger. Body:
+/// `{ "revoked_key": "<64 hex>", "reason": "..."? }`. Writes a signed revocation (signed by this
+/// node's **current** key) which all verify paths — roles, audit, **and consensus** — then exclude
+/// cluster-wide. Only this node's own historical keys can be revoked (the signer must hold the
+/// current key), so this remediates *this* node's compromised key: rotate to a fresh key first,
+/// then revoke the old one (or use `rotate_identity_on_compromise`, which does both).
+#[cfg(feature = "compliance")]
+async fn gw_identity_revoke(
+    State(ctx): State<Arc<HttpCtx>>,
+    Json(body):  Json<serde_json::Value>,
+) -> Response {
+    let key_s = match body["revoked_key"].as_str() {
+        Some(s) => s,
+        None => return (StatusCode::BAD_REQUEST,
+            Json(json!({"error": "missing revoked_key (64 hex chars)"}))).into_response(),
+    };
+    let Some(revoked_key) = parse_hex32(key_s) else {
+        return (StatusCode::BAD_REQUEST,
+            Json(json!({"error": "revoked_key must be 64 hex chars"}))).into_response();
+    };
+    let reason = body["reason"].as_str().map(|s| s.to_string());
+    match super::revocation::revoke_key(&ctx.agent_ctx, revoked_key, reason) {
+        Ok(())  => Json(json!({"ok": true, "revoked_key": key_s})).into_response(),
+        Err(e)  => (StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({"error": e.to_string()}))).into_response(),
+    }
 }
 
 #[cfg(feature = "compliance")]
@@ -3245,6 +3281,37 @@ mod tests {
         let _ = tokio::time::timeout(Duration::from_secs(2), plain.read_to_end(&mut pbuf)).await;
         assert!(!String::from_utf8_lossy(&pbuf).contains("200 OK"),
             "plaintext HTTP must fail against a TLS gateway");
+
+        agent.shutdown().await;
+        let _ = std::fs::remove_dir_all(&cert_dir);
+    }
+
+    /// SOC 2 WS-B: rotation alone is hygiene (the old key stays accepted); the
+    /// compromise flow rotates AND revokes the old key, so it stops verifying
+    /// cluster-wide. A revocation must be recorded after `rotate_identity_on_compromise`
+    /// and none before.
+    #[cfg(feature = "compliance")]
+    #[tokio::test]
+    async fn test_rotate_on_compromise_revokes_old_key() {
+        let gossip_port = alloc_port();
+        let cert_dir = std::env::temp_dir().join(format!("wsb-compromise-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&cert_dir);
+
+        let id = NodeId::new("127.0.0.1", gossip_port).unwrap();
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = gossip_port;
+        cfg.tls = Some(crate::TlsConfig { auto_cert_dir: cert_dir.clone(), ..Default::default() });
+        let agent = Arc::new(GossipAgent::new(id, cfg));
+        agent.start().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        assert!(agent.revocation_head().is_none(), "no revocations before the compromise rotation");
+
+        agent.rotate_identity_on_compromise(Duration::from_millis(50)).await.unwrap();
+
+        let (_root, count) = agent.revocation_head()
+            .expect("the outgoing key must be revoked by the compromise flow");
+        assert_eq!(count, 1, "exactly the old key revoked");
 
         agent.shutdown().await;
         let _ = std::fs::remove_dir_all(&cert_dir);

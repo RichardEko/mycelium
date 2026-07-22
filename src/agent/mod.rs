@@ -1105,6 +1105,31 @@ impl GossipAgent {
         revocation::revoke_key(&self.task_ctx, revoked_key, None)
     }
 
+    /// Rotate identity **and revoke the outgoing key** — the compromise-remediation flow (SOC 2
+    /// WS-B). [`rotate_identity`](Self::rotate_identity) alone is *hygiene*: the retired key stays
+    /// accepted (WS5 retained-set), so it does **not** contain a compromise. This rotates to a
+    /// fresh key, then revokes the old one *with the new key*, so the old key stops verifying
+    /// cluster-wide (roles, audit, **and consensus**). Use when the current key may be compromised.
+    /// Returns the new verifying key.
+    #[cfg(feature = "compliance")]
+    pub async fn rotate_identity_on_compromise(
+        &self,
+        propagation: std::time::Duration,
+    ) -> Result<[u8; 32], crate::error::GossipError> {
+        let old_vk = self
+            .task_ctx
+            .tls
+            .get()
+            .ok_or(crate::error::GossipError::InvalidField {
+                field:  "tls",
+                reason: "rotate_identity_on_compromise requires the tls identity".into(),
+            })?
+            .verifying_key_bytes();
+        let new_vk = self.rotate_identity(propagation).await?;
+        self.revoke_identity_key(old_vk)?;
+        Ok(new_vk)
+    }
+
     /// This node's **revocation-log head** (WS-D / D3): `(merkle_root_hex, count)` over its validated
     /// revocations — the same root `/gateway/transparency` serves. Surfacing it in the federation
     /// edge (e.g. the `mycelium-agentfacts` AgentFacts `certification`) lets a NANDA-quilt fetcher
