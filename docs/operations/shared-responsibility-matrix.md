@@ -51,7 +51,7 @@ board. Mycelium contributes only as a well-documented **vendor** in your CC9 ven
 | Metrics / observability | **M** | Prometheus `/metrics` (`metrics`); emergent-pathology + view-health gauges | Scrape; Grafana; alert recipes → [diagnostics](diagnostics.md) |
 | Coordinator-free diagnosis | **M** | `/gateway/{fleet,explain,diagnose}` — plain-English fleet findings | Consume in your ops flow |
 | Audit trail | **M** | Per-node hash-chained, Ed25519-signed records + verification API (`compliance`) | Requires `tls` to seal; **instrument application-level events yourself** |
-| Audit export | **S** ⚠ | In-cluster chain is a hot window; **export sink** is **WS-C** (pending) | Stream to your SIEM/WORM; today via `/gateway/audit` polling |
+| Audit export | **S** | `AuditSink` streams every sealed record to your SIEM/WORM off the write path (WS-C ✅) | Implement the sink → your SIEM/WORM; chain stays authoritative on a slow sink. → [audit](audit.md) |
 | Audit retention | **S** ⚠ | Unbounded, no pruning yet; **checkpointing** is **WS-D** (pending) | Size the store; export-then-archive for 7-yr-class retention |
 | Incident response | **D** | Signals + revocation as building blocks | Your IR runbooks, on-call, drills |
 

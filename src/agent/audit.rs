@@ -248,6 +248,20 @@ pub fn verify_stream_from_genesis(
 
 use super::TaskCtx;
 
+/// An external destination for sealed audit records — a SIEM / WORM archive (SOC 2 WS-C).
+///
+/// Provide one via [`GossipAgent::with_audit_sink`](super::GossipAgent::with_audit_sink); every
+/// record sealed by [`seal_and_write`] is then streamed to it on a dedicated background drain task,
+/// **off the write path**. The in-cluster hash-chain remains the **authoritative** trail — the sink
+/// is a mirror for long-term / tamper-evident retention outside the cluster. `export` runs on the
+/// drain task: keep it non-blocking (buffer internally, or do your own `spawn_blocking`). If the
+/// bounded drain channel is full the record is dropped with a `warn!` and can be re-exported from
+/// the chain (the chain never drops it).
+pub trait AuditSink: Send + Sync + 'static {
+    /// Called once per sealed record, in seal order, on the drain task.
+    fn export(&self, record: &SignedAuditRecord);
+}
+
 /// Seal one event into `ctx`'s tamper-evident audit chain and write it to
 /// `sys/audit/{self}/{seq}`. Returns the record's content hash.
 ///
@@ -300,6 +314,18 @@ pub(crate) fn seal_and_write(
     // anti-entropy-syncs, so a queue-full `false` here is not an error.
     let _ = mycelium_core::kv_handle::KvHandle::from_core(std::sync::Arc::clone(&ctx.core))
         .set(key, signed.encode());
+
+    // SOC 2 WS-C: mirror the sealed record to the external sink (SIEM/WORM), off the write
+    // path via a bounded drain channel. The KV chain stays authoritative — a full channel
+    // drops the mirror copy (re-exportable from the chain), never the chain record.
+    if let Some(tx) = ctx.audit_sink_tx.get() {
+        if tx.try_send(signed).is_err() {
+            tracing::warn!(
+                "audit export sink channel full or closed; a record was not mirrored \
+                 (the hash-chain remains authoritative — re-export from KV)"
+            );
+        }
+    }
     Ok(content)
 }
 

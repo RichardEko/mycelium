@@ -3286,6 +3286,54 @@ mod tests {
         let _ = std::fs::remove_dir_all(&cert_dir);
     }
 
+    /// SOC 2 WS-C: an attached AuditSink receives every sealed record, off the write
+    /// path. Seal a few audit events and assert the sink captured them in order, while
+    /// the authoritative chain still verifies.
+    #[cfg(feature = "compliance")]
+    #[tokio::test]
+    async fn test_audit_sink_mirrors_sealed_records() {
+        use std::sync::Mutex as StdMutex;
+
+        struct CapturingSink(Arc<StdMutex<Vec<u64>>>);
+        impl crate::AuditSink for CapturingSink {
+            fn export(&self, record: &crate::SignedAuditRecord) {
+                self.0.lock().unwrap().push(record.record.seq);
+            }
+        }
+
+        let gossip_port = alloc_port();
+        let cert_dir = std::env::temp_dir().join(format!("wsc-sink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&cert_dir);
+
+        let id = NodeId::new("127.0.0.1", gossip_port).unwrap();
+        let mut cfg = GossipConfig::default();
+        cfg.bind_port = gossip_port;
+        cfg.tls = Some(crate::TlsConfig { auto_cert_dir: cert_dir.clone(), ..Default::default() });
+        let agent = Arc::new(GossipAgent::new(id, cfg));
+
+        let captured = Arc::new(StdMutex::new(Vec::new()));
+        agent.with_audit_sink(Arc::new(CapturingSink(Arc::clone(&captured))));
+        agent.start().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        for i in 0..5u32 {
+            agent.audit(crate::AuditAction::Write, "op", format!("target-{i}"),
+                        crate::AuditOutcome::Success, None).unwrap();
+        }
+
+        // Drain task runs off-path — poll until the sink has all 5, in seal order.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if captured.lock().unwrap().len() >= 5 { break; }
+            assert!(std::time::Instant::now() < deadline, "sink never received all records");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(*captured.lock().unwrap(), vec![0, 1, 2, 3, 4], "records mirrored in seal order");
+
+        agent.shutdown().await;
+        let _ = std::fs::remove_dir_all(&cert_dir);
+    }
+
     /// SOC 2 WS-B: rotation alone is hygiene (the old key stays accepted); the
     /// compromise flow rotates AND revokes the old key, so it stops verifying
     /// cluster-wide. A revocation must be recorded after `rotate_identity_on_compromise`

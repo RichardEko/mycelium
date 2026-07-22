@@ -193,6 +193,27 @@ impl GossipAgent {
             });
         }
         self.start_capability_group_watcher();
+        // SOC 2 WS-C: audit-export drain. If an AuditSink was attached, wire the bounded channel
+        // seal_and_write mirrors into, and drain it to the sink on a dedicated task (off the write
+        // path). The hash-chain stays authoritative; the sink is a SIEM/WORM mirror.
+        #[cfg(feature = "compliance")]
+        if let Some(sink) = self.task_ctx.audit_sink.get().cloned() {
+            let (tx, mut rx) =
+                tokio::sync::mpsc::channel::<super::audit::SignedAuditRecord>(4096);
+            let _ = self.task_ctx.audit_sink_tx.set(tx);
+            let mut srx = self.shutdown_tx.subscribe();
+            self.spawn_task(async move {
+                loop {
+                    tokio::select! {
+                        _ = srx.wait_for(|v| *v) => break,
+                        rec = rx.recv() => match rec {
+                            Some(r) => sink.export(&r),
+                            None    => break,
+                        }
+                    }
+                }
+            });
+        }
         // M7 (WS-C) distributed rate-limiting decider — only when rate observation is enabled.
         if self.task_ctx.config.rate_observation_enabled {
             let ctx = Arc::clone(&self.task_ctx.core);

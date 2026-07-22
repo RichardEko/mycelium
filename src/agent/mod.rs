@@ -137,7 +137,8 @@ pub use rbac::{role_key, RoleClaim, SignedRoleClaim, ROLE_PREFIX};
 #[cfg(feature = "compliance")]
 pub use audit::{
     audit_key, audit_stream_prefix, verify_chain, verify_chain_keys, verify_stream_from_genesis,
-    AuditAction, AuditOutcome, AuditRecord, AuditVerifyError, SignedAuditRecord, AUDIT_PREFIX,
+    AuditAction, AuditOutcome, AuditRecord, AuditSink, AuditVerifyError, SignedAuditRecord,
+    AUDIT_PREFIX,
 };
 #[cfg(feature = "compliance")]
 pub use revocation::{RevocationEvent, SignedRevocation, REVOCATION_PREFIX};
@@ -419,6 +420,13 @@ pub(crate) struct TaskCtx {
     /// it before writing to KV. Lock #8 in the lock-order table (leaf).
     #[cfg(feature = "compliance")]
     pub(crate) audit_chain: Arc<std::sync::Mutex<audit::AuditChainState>>,
+    /// Optional external audit sink (SOC 2 WS-C), set via `with_audit_sink`.
+    #[cfg(feature = "compliance")]
+    pub(crate) audit_sink: std::sync::OnceLock<Arc<dyn audit::AuditSink>>,
+    /// Sender into the audit-export drain channel; set at `start()` when a sink is present.
+    /// `seal_and_write` mirrors each sealed record here (bounded, drop-on-full).
+    #[cfg(feature = "compliance")]
+    pub(crate) audit_sink_tx: std::sync::OnceLock<tokio::sync::mpsc::Sender<audit::SignedAuditRecord>>,
 }
 
 impl std::ops::Deref for TaskCtx {
@@ -826,6 +834,10 @@ impl GossipAgent {
             schema_mismatch: Arc::new(AtomicU64::new(0)),
             #[cfg(feature = "compliance")]
             audit_chain: Arc::new(std::sync::Mutex::new(audit::AuditChainState::new())),
+            #[cfg(feature = "compliance")]
+            audit_sink: std::sync::OnceLock::new(),
+            #[cfg(feature = "compliance")]
+            audit_sink_tx: std::sync::OnceLock::new(),
             filter_opacity_registry: Arc::new(capability_ops::FilterOpacityRegistry::new()),
             group_roster_cache:  Arc::clone(&group_roster_cache),
             tuning_governor:     Arc::new(tuning_governor::TuningGovernor::default()),
@@ -877,6 +889,17 @@ impl GossipAgent {
     ) {
         if self.data_at_rest_cipher.set(cipher).is_err() {
             tracing::warn!("with_data_at_rest_cipher called more than once; keeping the first cipher");
+        }
+    }
+
+    /// Attach an external audit sink (SOC 2 WS-C) — a SIEM / WORM destination. Every record
+    /// sealed after `start()` is mirrored to it on a background drain task, off the write path.
+    /// The in-cluster hash-chain remains authoritative. Call before `start()`; idempotent
+    /// (first sink wins). Needs the `compliance` feature and `GossipConfig::tls`.
+    #[cfg(feature = "compliance")]
+    pub fn with_audit_sink(&self, sink: Arc<dyn audit::AuditSink>) {
+        if self.task_ctx.audit_sink.set(sink).is_err() {
+            tracing::warn!("with_audit_sink called more than once; keeping the first sink");
         }
     }
 }

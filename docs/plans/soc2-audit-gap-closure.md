@@ -121,7 +121,13 @@ a role claim (extend the existing revocation-exclusion tests with the chained fl
 
 ---
 
-## Workstream C — Audit export sink
+## Workstream C — Audit export sink — ✅ SHIPPED 2026-07-22
+
+**Delivered:** `AuditSink` trait + `GossipAgent::with_audit_sink`; `seal_and_write` mirrors each
+sealed record into a bounded channel drained to the sink on a background task (off the write path);
+drop-on-full is loud and the chain stays authoritative. Gate:
+`test_audit_sink_mirrors_sealed_records`. Docs: audit runbook §Export. Matrix cell: audit export →
+**Shared (hook provided)**.
 
 **Gap.** No built-in export; the in-cluster hash-chain is a hot window only.
 

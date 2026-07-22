@@ -157,6 +157,10 @@ fn spawn_handler(
         schema_mismatch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         #[cfg(feature = "compliance")]
         audit_chain: Arc::new(std::sync::Mutex::new(crate::agent::audit::AuditChainState::new())),
+        #[cfg(feature = "compliance")]
+        audit_sink: std::sync::OnceLock::new(),
+        #[cfg(feature = "compliance")]
+        audit_sink_tx: std::sync::OnceLock::new(),
         filter_opacity_registry: Arc::new(crate::agent::FilterOpacityRegistry::new()),
         group_roster_cache: Arc::new(papaya::HashMap::new()),
         tuning_governor: Arc::new(crate::agent::TuningGovernor::default()),
@@ -868,6 +872,10 @@ async fn test_subscribe_notified_via_gossip() {
             schema_mismatch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             #[cfg(feature = "compliance")]
             audit_chain: Arc::new(std::sync::Mutex::new(crate::agent::audit::AuditChainState::new())),
+            #[cfg(feature = "compliance")]
+            audit_sink: std::sync::OnceLock::new(),
+            #[cfg(feature = "compliance")]
+            audit_sink_tx: std::sync::OnceLock::new(),
             filter_opacity_registry: Arc::new(crate::agent::FilterOpacityRegistry::new()),
             group_roster_cache: Arc::new(papaya::HashMap::new()),
             tuning_governor: Arc::new(crate::agent::TuningGovernor::default()),

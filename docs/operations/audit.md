@@ -86,16 +86,41 @@ stable for the logical record and changes if any field is altered.
 
 ---
 
-## 4. Retention (known limitation)
+## 4. Export to an external SIEM / WORM (SOC 2 WS-C)
 
-Audit records are normal replicated KV entries; the trail grows unbounded, as the
-pre-WS2 trail did. Pruning a hash chain is **not** as simple as deleting old keys:
-verification runs from genesis, so removing record 0 makes the whole stream read
-as `SequenceGap`. Until checkpointing lands (a later WS), options are:
+Attach an `AuditSink` and every sealed record is streamed to your external store on a
+background drain task, **off the write path**. The in-cluster hash-chain stays
+authoritative; the sink is the long-term / tamper-evident mirror.
+
+```rust
+use mycelium::{AuditSink, SignedAuditRecord};
+
+struct SiemSink { /* your client / buffer */ }
+impl AuditSink for SiemSink {
+    fn export(&self, rec: &SignedAuditRecord) {
+        // push rec.encode() to your SIEM/WORM. Runs on the drain task — keep it
+        // non-blocking (buffer, or spawn_blocking your own IO).
+    }
+}
+
+agent.with_audit_sink(std::sync::Arc::new(SiemSink { /* … */ })); // before start()
+```
+
+Semantics: the drain channel is bounded; if your sink can't keep up, the **mirror** copy is
+dropped with a `warn!` — never the chain record, which you can always re-export from
+`sys/audit/`. So a slow sink degrades to "re-export from the chain", never to lost audit data.
+
+## 5. Retention (checkpointing — WS-D, in progress)
+
+Audit records are normal replicated KV entries; the trail grows unbounded. Pruning a hash
+chain is **not** as simple as deleting old keys: verification runs from genesis, so removing
+record 0 makes the whole stream read as `SequenceGap`. **Checkpointing (WS-D)** lands a signed
+mid-chain boundary so exported records can be pruned and verification resumes from the
+checkpoint; until it ships:
 
 - Leave the trail in-cluster and size `GOSSIP_MAX_STORE_ENTRIES` accordingly.
-- Periodically **export** streams to an external WORM store / SIEM (scan
-  `sys/audit/`, verify, archive) and treat the in-cluster trail as a hot window.
+- Use the `AuditSink` above to mirror to WORM/SIEM and treat the in-cluster trail as a hot
+  window (for 7-yr-class HIPAA retention the WORM archive is the system of record).
 
 Do **not** hand-delete `sys/audit/` keys on a live node expecting verification to
 still pass — it won't, and that is by design (the chain is meant to notice).
