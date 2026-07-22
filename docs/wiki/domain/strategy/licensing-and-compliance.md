@@ -2,6 +2,12 @@
 
 ↑ [strategy](strategy.md)
 
+**Confirmed strategic path (2026-07-22, user): pure library — no managed service.** "SOC 2"
+here always means a SOC 2 on our **own corporate/SDLC systems** (how we build), never a runtime
+certification of the library, and never a hosted cluster we operate. The managed-service path
+(which *would* yield a runtime SOC 2) is considered and **rejected** — it would break
+[deployment-framing](deployment-framing.md). Revisit only if that framing ever changes.
+
 **Three tiers:** **AGPL** (free; seeds adoption) · **Commercial Embed** (removes copyleft
 for proprietary embedding) · **Compliance** (a vendor-assurance *programme* — same code,
 different accountability; a services contract, not gated features). RBAC/SSO/audit are in ALL

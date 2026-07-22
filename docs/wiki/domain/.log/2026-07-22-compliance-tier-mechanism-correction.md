@@ -33,3 +33,15 @@ of the report was wrong.
 - Business-associate determination + the actual contract instruments (BAA/DPA/indemnity) want a
   compliance consultant / counsel — outside what the wiki should assert.
 - The consolidated adopter-facing shared-responsibility matrix is still unbuilt (offered).
+
+## Path confirmed (2026-07-22, same day)
+
+User confirmed the **pure-library path**: corp/SDLC SOC 2 + pentest + evidence, **no managed
+service** ("unlikely to change in the near future"). This resolves the fork the mechanics doc
+(`TathataSystems/docs/compliance_audit_mechanics.html`) had left open — that doc previously
+*recommended* the managed-service path as "primary scope." Reconciled: its two-path list now
+marks development-practices as "our path — confirmed" and managed-service as "NOT our path
+(considered and rejected — would break library-not-platform)." The `commercial.html` deck was
+already corrected to the pure-library framing; `licensing-and-compliance.md` now carries the
+confirmed-path note at the top. All three surfaces (deck · mechanics doc · wiki tier page) are
+now consistent. (TathataSystems `docs/` is not a git repo — those two edits are loose-file saves.)
