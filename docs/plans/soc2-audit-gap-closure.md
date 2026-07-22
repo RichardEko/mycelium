@@ -23,7 +23,12 @@ matrix cell flipped with evidence citation.
 
 ---
 
-## Workstream 0 — the shared-responsibility matrix
+## Workstream 0 — the shared-responsibility matrix — ✅ DRAFTED 2026-07-22
+
+**Delivered:** `docs/operations/shared-responsibility-matrix.md` — the CC1–CC9 +
+Confidentiality/Availability control map (M / Shared / Deployer-owns), with the ⚠ gap rows linked to
+their workstreams. Living doc: cells flip as each WS lands (WS-A already shown shipped). Linked from
+the operations README.
 
 **Objective.** One adopter-facing table: for each SOC 2 Common Criterion (CC1–CC9) + the
 Confidentiality/Availability criteria, state **Mycelium-provides / Shared / Deployer-owns**, the

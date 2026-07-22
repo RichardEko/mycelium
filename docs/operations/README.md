@@ -30,6 +30,7 @@ vocabulary is in [00 · Concepts](../guide/00-concepts.md).
 | [rbac.md](rbac.md) | signed role claims, capability authz, OAuth2 gateway ACLs |
 | [sso.md](sso.md) | generic-OIDC SSO at the gateway |
 | [gateway-tls.md](gateway-tls.md) | native HTTPS for the gateway (so tokens aren't cleartext) |
+| [shared-responsibility-matrix.md](shared-responsibility-matrix.md) | SOC 2 control map — what Mycelium provides vs. what you own (adopter/auditor evidence) |
 | [audit.md](audit.md) | the tamper-evident, hash-chained audit trail |
 | [cert-rotation.md](cert-rotation.md) | hot Ed25519 identity/cert rotation with no disruption |
 | [crown-jewel.md](crown-jewel.md) | data-at-rest cipher hook + egress allowlist + threat model |
