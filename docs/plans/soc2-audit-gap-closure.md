@@ -1,6 +1,11 @@
 # SOC 2 audit-gap closure — plan
 
-**Status: DRAFT for review (2026-07-22).** Scope = the five gaps a pentest / auditor control
+**Status: ✅ COMPLETE (2026-07-22).** All workstreams shipped and CI-verified —
+WS-0 (matrix) · A (gateway TLS) · B (rotate+revoke) · C (audit sink) · D (checkpointing) ·
+E (identity auth 1a/1b/2/3) · F (crypto-shred). The four decisions below were resolved as
+recommended, except **Phase 3's mechanism** — implementation showed a `WIRE_VERSION` bump was the
+wrong instrument (no frame-format change), so it's gated by the config flag `require_identity_proofs`
+with the same two-release rollout discipline. Scope = the five gaps a pentest / auditor control
 walkthrough surfaces in an adopter's SOC 2, plus the adopter-facing shared-responsibility matrix
 that frames them. Path context: **pure library** (confirmed 2026-07-22 — no managed service; see
 [licensing-and-compliance](../wiki/domain/strategy/licensing-and-compliance.md)). Every "fix" here
@@ -317,19 +322,15 @@ Erasure/residency from *absent* → *Mycelium-provides (crypto-shred reference) 
 
 Matrix updated continuously; each phase flips its cells.
 
-## Decisions needed from you
+## Decisions — all resolved (2026-07-22)
 
-1. **Gateway TLS (WS-A):** native optional HTTPS (recommended — kills the sharpest finding, size M)
-   vs. document-only. And: add `axum-server` (smaller/correct code, one new dep) vs. hand-roll a
-   `tokio_rustls` acceptor (no new dep, more code)? *Lean: native + hand-rolled, to keep the dep tree
-   lean given the `cargo audit` discipline.*
-2. **Identity Phase 3 (WS-E):** commit to a **v13 wire bump** + two-release migration? 1b+2 get most
-   of the integrity value without it; Phase 3 is the only thing that *closes* the gap. *Lean: yes,
-   scheduled one release after Phase 2.*
-3. **GDPR scope (WS-F):** design doc + reference crypto-shred helper + limits doc (recommended) vs.
-   documentation-only of the deployer pattern? *Lean: the reference helper — it's what makes the
-   matrix cell defensible.*
-4. **Audit export (WS-C):** ship the sink in-lib (recommended) vs. leave entirely to the deployer.
+1. **Gateway TLS (WS-A):** ✅ native HTTPS, hand-rolled `tokio_rustls` + `hyper-util` acceptor
+   (no new compiled crate). Shipped.
+2. **Identity Phase 3 (WS-E):** ✅ shipped — but **not** a v13 wire bump. Implementation confirmed
+   Phase 3 changes no frame format, so the gate is the config flag `require_identity_proofs`
+   (default off) with the same two-release rollout discipline (documented like `PREV_WIRE_VERSION`).
+3. **GDPR scope (WS-F):** ✅ reference crypto-shred helper (`SubjectKeyRegistry`) + limits doc. Shipped.
+4. **Audit export (WS-C):** ✅ sink shipped in-lib (`AuditSink`).
 
 ## What stays deployer-owned by design (not gaps to "fix")
 

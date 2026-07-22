@@ -36,6 +36,7 @@ future contributor needs so they don't re-litigate a settled choice — lives he
 
 | Plan | Workstream / scope | PRs |
 |---|---|---|
+| [`soc2-audit-gap-closure.md`](soc2-audit-gap-closure.md) | ✅ **COMPLETE 2026-07-22.** The five pentest/SOC 2 gaps closed + the shared-responsibility matrix: WS-0 matrix · A gateway TLS · B rotate+revoke · C audit sink · D checkpointing · E identity auth (1a/1b/2/3) · F crypto-shred. Pure-library path; every matrix cell flipped. All CI-verified | — |
 | [`v2.0.md`](v2.0.md) | The v2 master plan + acceptance scorecard (all 16 milestones) | — |
 | [`v2-m1-mycelium-core.md`](v2-m1-mycelium-core.md) | WS-A M1 — workspace split → `mycelium-core` | — |
 | [`v2-m2-consensus-feature.md`](v2-m2-consensus-feature.md) | WS-A M2 — `consensus` feature gate | — |
@@ -63,12 +64,8 @@ future contributor needs so they don't re-litigate a settled choice — lives he
 
 ## Proposed — not yet started
 
-- [`soc2-audit-gap-closure.md`](soc2-audit-gap-closure.md) — **DRAFT (2026-07-22).** Close the five
-  gaps a pentest / SOC 2 control walkthrough surfaces in an adopter's audit (gateway TLS · audit
-  export + retention/checkpointing · `sys/identity` authentication phases 1b/2/3 · rotation→revocation
-  glue · GDPR/erasure design), with the adopter-facing shared-responsibility matrix as the spine.
-  Pure-library path; each workstream flips a matrix cell. Awaiting decisions (gateway-TLS shape,
-  the Phase-3 v13 wire bump, GDPR scope, audit-sink in-lib).
+_None._ The SOC 2 audit-gap plan (previously here) shipped complete 2026-07-22 — see the
+execution-records table above.
 
 Prior proposed plans (Legible Emergence; mycelium-wiki) have shipped — see the execution-records
 table above. The other open engineering slice is the **additive** disconnected KV-native wiki
